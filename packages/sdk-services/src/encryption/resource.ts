@@ -102,7 +102,8 @@ export type ParsedEncryptionResource =
   | ParsedKeyResource
   | ParsedPrefixResource;
 
-function assertCanonicalOwner(ownerDid: string): void {
+/** Validate the owner DID shape and return its canonical form (EIP-55 for did:pkh:eip155). */
+function canonicalOwner(ownerDid: string): string {
   const parts = ownerDid.split(":");
   if (parts.length < 3 || parts.some((p) => p.length === 0)) {
     throw new EncryptionResourceError(
@@ -111,17 +112,19 @@ function assertCanonicalOwner(ownerDid: string): void {
     );
   }
   const pkh = PKH_EIP155_DID_RE.exec(ownerDid);
-  if (pkh === null) return;
-  const chainId = Number(pkh[1]);
-  let canonical: string;
+  if (pkh === null) return ownerDid;
   try {
-    canonical = pkhDid(pkh[2]!, chainId);
+    return pkhDid(pkh[2]!, Number(pkh[1]));
   } catch {
     throw new EncryptionResourceError(
       "bad_owner",
       `owner DID is not a valid did:pkh:eip155 (got ${JSON.stringify(ownerDid)})`,
     );
   }
+}
+
+function assertCanonicalOwner(ownerDid: string): void {
+  const canonical = canonicalOwner(ownerDid);
   if (canonical !== ownerDid) {
     throw new EncryptionResourceError(
       "non_canonical_owner",
@@ -171,20 +174,22 @@ export function parseEncryptionResource(uri: string): ParsedEncryptionResource {
   const ownerDid = match[1]!;
   const network = match[2]!;
   const rawPath = match[3];
-  assertCanonicalOwner(ownerDid);
-  const networkId = `${ENCRYPTION_NETWORK_URN_PREFIX}${ownerDid}:${network}`;
-
   if (rawPath === undefined) {
+    // Bare networks are normalized (the node does the same); key ids never are.
+    const canonicalOwnerDid = canonicalOwner(ownerDid);
+    const bareId = `${ENCRYPTION_NETWORK_URN_PREFIX}${canonicalOwnerDid}:${network}`;
     try {
-      parseNetworkId(networkId);
+      parseNetworkId(bareId);
     } catch (error) {
       if (error instanceof NetworkIdError) {
         throw new EncryptionResourceError("bad_network", error.message);
       }
       throw error;
     }
-    return { kind: "network", ownerDid, network, networkId };
+    return { kind: "network", ownerDid: canonicalOwnerDid, network, networkId: bareId };
   }
+  assertCanonicalOwner(ownerDid);
+  const networkId = `${ENCRYPTION_NETWORK_URN_PREFIX}${ownerDid}:${network}`;
 
   if (rawPath.endsWith("/")) {
     const prefix = rawPath.slice(0, -1);

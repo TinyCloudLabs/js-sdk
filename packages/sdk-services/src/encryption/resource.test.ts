@@ -18,87 +18,87 @@ const NET = `urn:tinycloud:encryption:${OWNER}:default`;
 const res = (path: string): string => `${NET}/${path}`;
 const seg = (n: number): string => "a".repeat(n);
 
+const LOWER_OWNER = OWNER.toLowerCase();
+const key = (path: string, network = "default", ownerDid = OWNER): ParsedEncryptionResource => ({
+  kind: "key",
+  ownerDid,
+  network,
+  networkId: `urn:tinycloud:encryption:${ownerDid}:${network}`,
+  path,
+});
+const prefixOf = (prefix: string): ParsedEncryptionResource => ({
+  kind: "prefix",
+  ownerDid: OWNER,
+  network: "default",
+  networkId: NET,
+  prefix,
+});
+const seg255 = Array(8).fill(seg(31)).join("/");
+const seg256 = [...Array(7).fill(seg(31)), seg(32)].join("/");
+
+// Shared grammar vectors (numbered as in the contract vector list).
 const validVectors: Array<[string, string, ParsedEncryptionResource]> = [
-  ["network", NET, { kind: "network", ownerDid: OWNER, network: "default", networkId: NET }],
+  ["#1 network", NET, { kind: "network", ownerDid: OWNER, network: "default", networkId: NET }],
+  ["#2 key", res("secrets/software-factory"), key("secrets/software-factory")],
   [
-    "key",
-    res("secrets/software-factory"),
-    { kind: "key", ownerDid: OWNER, network: "default", networkId: NET, path: "secrets/software-factory" },
-  ],
-  [
-    "key with did:key owner",
+    "#3 key with did:key owner",
     `urn:tinycloud:encryption:${KEY_OWNER}:default/apps/tinychat`,
-    {
-      kind: "key",
-      ownerDid: KEY_OWNER,
-      network: "default",
-      networkId: `urn:tinycloud:encryption:${KEY_OWNER}:default`,
-      path: "apps/tinychat",
-    },
+    key("apps/tinychat", "default", KEY_OWNER),
+  ],
+  ["#4 prefix", res("apps/tinychat/"), prefixOf("apps/tinychat")],
+  ["#5 8 segments, 255 bytes", res(seg255), key(seg255)],
+  ["#6 dot, underscore, dash inside a segment", res("apps/v1.2_x-y"), key("apps/v1.2_x-y")],
+  [
+    "#24 bare network with lowercase pkh owner is normalized",
+    `urn:tinycloud:encryption:${LOWER_OWNER}:default`,
+    { kind: "network", ownerDid: OWNER, network: "default", networkId: NET },
   ],
   [
-    "prefix",
-    res("apps/tinychat/"),
-    { kind: "prefix", ownerDid: OWNER, network: "default", networkId: NET, prefix: "apps/tinychat" },
+    "#31 did:web owner with colons",
+    "urn:tinycloud:encryption:did:web:example.com:user:alice:default/apps/x",
+    key("apps/x", "default", "did:web:example.com:user:alice"),
   ],
-  [
-    "8 segments, 255 bytes",
-    res(Array(8).fill(seg(31)).join("/")),
-    { kind: "key", ownerDid: OWNER, network: "default", networkId: NET, path: Array(8).fill(seg(31)).join("/") },
-  ],
-  [
-    "dot, underscore, dash inside a segment",
-    res("apps/v1.2_x-y"),
-    { kind: "key", ownerDid: OWNER, network: "default", networkId: NET, path: "apps/v1.2_x-y" },
-  ],
-  [
-    "node-rule network name when parsing a key",
-    `urn:tinycloud:encryption:${OWNER}:My_Net/a`,
-    {
-      kind: "key",
-      ownerDid: OWNER,
-      network: "My_Net",
-      networkId: `urn:tinycloud:encryption:${OWNER}:My_Net`,
-      path: "a",
-    },
-  ],
+  ["#32 node-rule network name in a key", `urn:tinycloud:encryption:${OWNER}:Default/apps/x`, key("apps/x", "Default")],
+  ["#33 prefix with a 255-byte path", res(`${seg255}/`), prefixOf(seg255)],
+  // #35 is a valid GRANT; the parser reports kind "prefix" so a caller can refuse it as an invocation target.
+  ["#35 prefix parses as a prefix, never a key", res("apps/x/"), prefixOf("apps/x")],
 ];
 
 const rejectVectors: Array<[string, string]> = [
-  ["two trailing slashes", res("apps/x//")],
-  ["empty segment", res("apps//x")],
-  ["leading slash", res("/apps")],
-  ["uppercase", res("Apps/x")],
-  ["'..' segment", res("apps/../x")],
-  ["'.' segment", res("apps/./x")],
-  ["percent", res("apps/a%2Fb")],
-  ["colon in path", res("apps/a:b")],
-  ["space", res("apps/a b")],
-  ["non-ASCII", res("apps/café")],
-  ["9 segments", res("a/a/a/a/a/a/a/a/a")],
-  ["segment of 65 bytes", res(seg(65))],
-  ["total 256 bytes", res([...Array(7).fill(seg(31)), seg(32)].join("/"))],
-  ["segment starting with '.'", res(".hidden")],
-  ["segment starting with '-'", res("-x")],
+  ["#7 two trailing slashes", res("apps/x//")],
+  ["#8 empty segment", res("apps//x")],
+  ["#9 leading slash", res("/apps")],
+  ["#10 uppercase", res("Apps/x")],
+  ["#11 '..' segment", res("apps/../x")],
+  ["#12 '.' segment", res("apps/./x")],
+  ["#13 percent", res("apps/a%2Fb")],
+  ["#14 colon in path", res("apps/a:b")],
+  ["#15 space", res("apps/a b")],
+  ["#16 non-ASCII", res("apps/café")],
+  ["#17 9 segments", res("a/a/a/a/a/a/a/a/a")],
+  ["#18 segment of 65 bytes", res(seg(65))],
+  ["#19 total 256 bytes", res(seg256)],
+  ["#20 segment starting with '.'", res(".hidden")],
+  ["#21 segment starting with '-'", res("-x")],
+  ["#22 empty prefix", `${NET}/`],
+  ["#23 key with lowercase pkh owner", `urn:tinycloud:encryption:${LOWER_OWNER}:default/apps/x`],
+  ["#25 '#' in owner", `urn:tinycloud:encryption:${KEY_OWNER}#x:default/apps/x`],
+  ["#26 '#' in network", `urn:tinycloud:encryption:${OWNER}:default#x/apps/x`],
+  ["#27 '?' in network", `urn:tinycloud:encryption:${OWNER}:default?x/apps/x`],
+  ["#28 '%' in owner", "urn:tinycloud:encryption:did:web:example.com%3A8443:default/apps/x"],
+  ["#29 uppercase URN scheme", `URN:tinycloud:encryption:${OWNER}:default/apps/x`],
+  ["#30 mixed-case URN namespace", `urn:TinyCloud:encryption:${OWNER}:default/apps/x`],
+  ["#34 prefix path over 255 bytes", res(`${seg256}/`)],
   // Beyond the shared vectors.
-  ["empty path after slash", `${NET}/`],
   ["prefix with a '..' segment", res("apps/../")],
   ["prefix with an empty segment", res("apps//x/")],
-  ["lowercase pkh owner", `urn:tinycloud:encryption:${OWNER.toLowerCase().replace("0x", "0x")}:default/a`],
-  ["lowercase pkh owner on a bare network", `urn:tinycloud:encryption:${OWNER.toLowerCase()}:default`],
-  ["slash inside the owner part", `urn:tinycloud:encryption:did:web:a/b:default/c`],
+  ["slash inside the owner part", "urn:tinycloud:encryption:did:web:a/b:default/c"],
   ["wrong URN prefix", `urn:tinycloud:other:${OWNER}:default/a`],
   ["bare network with uppercase name", `urn:tinycloud:encryption:${OWNER}:Default`],
+  ["bare network with '#' in name", `urn:tinycloud:encryption:${OWNER}:de#fault`],
   ["newline in path", res("a\nb")],
-  ["owner containing '%'", `urn:tinycloud:encryption:did:web:a%3Ab:default/a`],
-  ["owner containing '#'", `urn:tinycloud:encryption:did:web:a#b:default/a`],
-  ["owner containing '/'", `urn:tinycloud:encryption:did:web:a/b:default/a/`],
-  ["owner method with uppercase", `urn:tinycloud:encryption:did:Web:example.com:default/a`],
-  ["network containing '#'", `urn:tinycloud:encryption:${OWNER}:de#fault/a`],
-  ["network containing '?'", `urn:tinycloud:encryption:${OWNER}:de?fault/a`],
+  ["owner method with uppercase", "urn:tinycloud:encryption:did:Web:example.com:default/a"],
   ["network containing '%'", `urn:tinycloud:encryption:${OWNER}:de%66ault/a`],
-  ["empty prefix", `${NET}/`],
-  ["prefix path of 256 bytes", res(`${[...Array(7).fill(seg(31)), seg(32)].join("/")}/`)],
 ];
 
 describe("parseEncryptionResource", () => {
@@ -108,18 +108,6 @@ describe("parseEncryptionResource", () => {
 
   test.each(rejectVectors)("rejects %s", (_name, uri) => {
     expect(() => parseEncryptionResource(uri)).toThrow(EncryptionResourceError);
-  });
-
-  test("accepts a prefix whose path is exactly 255 bytes plus the trailing slash", () => {
-    const prefix = Array(8).fill(seg(31)).join("/");
-    expect(prefix).toHaveLength(255);
-    expect(parseEncryptionResource(res(`${prefix}/`))).toEqual({
-      kind: "prefix",
-      ownerDid: OWNER,
-      network: "default",
-      networkId: NET,
-      prefix,
-    });
   });
 
   test("a prefix result never carries a key path", () => {
@@ -184,6 +172,14 @@ describe("encryptionResourceContains", () => {
     ["same path on other network", res("a/"), `${other}/a/b`, false],
     ["unparseable granted", `${NET}/A/`, res("a"), false],
     ["unparseable requested", res("a/"), `${NET}/a//b`, false],
+    // Contract containment vectors.
+    ["V1 apps/foo/ vs apps/foobar/x", res("apps/foo/"), res("apps/foobar/x"), false],
+    ["V2 apps/foo/ vs apps/foo", res("apps/foo/"), res("apps/foo"), false],
+    ["V3 apps/ covers apps/foo/", res("apps/"), res("apps/foo/"), true],
+    ["V4 apps/foo/ covers apps/foo/a/b", res("apps/foo/"), res("apps/foo/a/b"), true],
+    ["V5 bare vs key", NET, res("apps/x"), false],
+    ["V6 key vs bare", res("apps/x"), NET, false],
+    ["bare with lowercase owner equals the canonical bare network", `urn:tinycloud:encryption:${LOWER_OWNER}:default`, NET, true],
   ];
   test.each(table)("%s", (_name, granted, requested, expected) => {
     expect(encryptionResourceContains(granted, requested)).toBe(expected);
