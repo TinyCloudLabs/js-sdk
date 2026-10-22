@@ -1034,4 +1034,21 @@ describe("SharingService non-transferable shares", () => {
       error: { code: "PERMISSION_DENIED", message: "Sharing link does not allow delegation" },
     });
   });
+
+  test("keeps allowSubDelegation:false through encodeLink/decodeLink and refuses the re-encoded link", async () => {
+    const { service } = makeService();
+
+    const decoded = service.decodeLink(shareLink(service, { allowSubDelegation: false }));
+    const reencoded = service.encodeLink(decoded);
+
+    expect(service.decodeLink(reencoded)).toEqual(decoded);
+    expect(service.decodeLink(reencoded).delegation.allowSubDelegation).toBe(false);
+    expect(await service.delegateReceivedShare(reencoded, {
+      delegateDID: "did:key:z6MkFeedHost",
+      actions: ["tinycloud.kv/get"],
+    })).toMatchObject({
+      ok: false,
+      error: { code: "PERMISSION_DENIED", message: "Sharing link does not allow delegation" },
+    });
+  });
 });
