@@ -284,6 +284,15 @@ describe("buildSharePresentation fail-closed rejections (one per code)", () => {
     expect(error.code).toBe("REQUIREMENT_MISMATCH");
   });
 
+  test("REQUIREMENT_MISMATCH when the requirement is malformed and cannot be digested", async () => {
+    const f = await fixture();
+    const error = await rejectionOf(buildSharePresentation({
+      ...f.input,
+      requirement: {} as CredentialRequirement,
+    }));
+    expect(error.code).toBe("REQUIREMENT_MISMATCH");
+  });
+
   test("PRESENTATION_REJECTED when the sdk-core builder rejects the challenge binding", async () => {
     const f = await fixture();
     const error = await rejectionOf(buildSharePresentation({
