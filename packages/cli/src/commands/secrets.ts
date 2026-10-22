@@ -50,6 +50,8 @@ import { resolveSpaceUri } from "../lib/space.js";
 import { tryOpenBrowser, warnBrowserNotOpened } from "../lib/browser.js";
 import { runProbeChild, type ProbeRequest } from "../lib/probe-child.js";
 import { abortableSleep, DEFAULT_WAIT_TIMEOUT, parseWaitTimeout, runSecretsWait } from "../lib/secrets-wait.js";
+import { DECRYPT_EXPIRY_TOO_LONG_MESSAGE, DECRYPT_MAX_LIFETIME_MS } from "../lib/decrypt-cap.js";
+import { parseDuration } from "../lib/duration.js";
 import { resolveProfilePosture, type CLIContext, type ProfileConfig } from "../config/types.js";
 import {
   ensureDelegationAuthority,
@@ -1580,12 +1582,23 @@ export function registerSecretsCommand(
 
   network
     .command("grant <recipientDid> [name]")
-    .description("Grant decrypt permission for a secrets encryption network")
+    .description("Grant decrypt permission for a secrets encryption network (lasts at most one hour)")
+    .option("--expiry <duration>", "How long the grant lasts (e.g., 30m, 1h); decrypt access lasts at most one hour", "1h")
     .option("--private-key <hex>", "Ethereum private key override (or set TC_PRIVATE_KEY)")
     .action(async (recipientDid: string, name: string | undefined, options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
+        // Refuse before any sign-in, signature or request: decrypt never lasts over one hour.
+        let expiryMs: number;
+        try {
+          expiryMs = parseDuration(options.expiry);
+        } catch (error) {
+          throw new CLIError("USAGE_ERROR", error instanceof Error ? error.message : String(error), ExitCode.USAGE_ERROR);
+        }
+        if (expiryMs > DECRYPT_MAX_LIFETIME_MS) {
+          throw new CLIError("DECRYPT_EXPIRY_TOO_LONG", DECRYPT_EXPIRY_TOO_LONG_MESSAGE, ExitCode.USAGE_ERROR);
+        }
         const node = await ensureAuthenticated(ctx, authOptions(options));
         const networkName = name ?? "default";
         const descriptor = await withSpinner(
@@ -1598,8 +1611,8 @@ export function registerSecretsCommand(
           actions: ["decrypt"],
         };
         const result = await withSpinner(
-          `Granting decrypt permission to ${recipientDid}...`,
-          () => node.delegateTo(recipientDid, [permission]),
+          `Granting decrypt permission to ${recipientDid} for ${options.expiry}...`,
+          () => node.delegateTo(recipientDid, [permission], { expiry: expiryMs }),
         );
 
         outputJson({
@@ -1609,6 +1622,7 @@ export function registerSecretsCommand(
           prompted: result.prompted,
           path: result.delegation.path,
           actions: result.delegation.actions,
+          expiry: result.delegation.expiry.toISOString(),
         });
       } catch (error) {
         return handleError(error);

@@ -96,7 +96,7 @@ No `del` anywhere and no `list` on the bearer prefix: no `tinycloud share` comma
 "$TC" delegation revoke <cid>
 ```
 
-Actions are auto-prefixed with `tinycloud.` if not already.
+Actions are auto-prefixed with `tinycloud.` if not already. A delegation that includes decrypt (`encryption/decrypt`) lasts at most one hour; `--expiry` over one hour is refused.
 
 `delegation revoke <cid>` is a generic exact-CID operation. When `<cid>` is
 the current sign-in session, it requires `--yes` or an interactive confirmation
@@ -162,7 +162,9 @@ identifiers such as `FIREFLIES_API_KEY`. `tinycloud secrets network show` accept
 either a short network name or a full
 `urn:tinycloud:encryption:<ownerDid>:<network>` identifier, and `tinycloud secrets
 network grant` takes the short name, resolves the network, and issues
-`tinycloud.encryption/decrypt` on that network. Share the decrypt grant
+`tinycloud.encryption/decrypt` on that network. Decrypt grants last at most
+one hour: `secrets network grant` takes `--expiry` (default `1h`) and refuses a
+longer value. Share the decrypt grant
 separately from any KV or SQL reads the app also needs.
 
 ```bash

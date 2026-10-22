@@ -204,7 +204,7 @@ async function main(): Promise<void> {
         path: networkDescriptor.networkId,
         actions: ["tinycloud.encryption/decrypt"],
       },
-    ]);
+    ], { expiry: "1h" });
 
     const delegationFile = join(tempHome, "delegation.json");
     await writeFile(

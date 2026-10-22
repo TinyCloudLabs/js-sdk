@@ -93,11 +93,13 @@ type FakeNode = {
       path: string;
       actions: string[];
     }>,
+    options?: { expiry?: number },
   ): Promise<{
     delegation: {
       cid: string;
       path: string;
       actions: string[];
+      expiry: Date;
     };
     prompted: boolean;
   }>;
@@ -123,6 +125,7 @@ const recorded = {
       path: string;
       actions: string[];
     }>;
+    options?: { expiry?: number };
   }>,
   permissionRequests: [] as Array<{
     profile: string;
@@ -233,7 +236,7 @@ function makeFakeNode(overrides: {
   deleteResult?: SecretResult<undefined> | SecretResult<undefined>[];
   networkShowResult?: NetworkDescriptorLike | null;
   networkInitResult?: NetworkDescriptorLike;
-  delegateResult?: { delegation: { cid: string; path: string; actions: string[] }; prompted: boolean };
+  delegateResult?: { delegation: { cid: string; path: string; actions: string[]; expiry: Date }; prompted: boolean };
   delegatedKvResult?: { ok: true; data: { data: string } } | { ok: false; error: { code: string; message: string } };
   decryptResult?: SecretResult<Uint8Array>;
 } = {}): FakeNode {
@@ -325,14 +328,15 @@ function makeFakeNode(overrides: {
       recorded.networkInitCalls.push(name);
       return overrides.networkInitResult ?? descriptor;
     },
-    async delegateTo(recipientDid: string, permissions) {
-      recorded.delegateCalls.push({ recipientDid, permissions });
+    async delegateTo(recipientDid: string, permissions, options) {
+      recorded.delegateCalls.push({ recipientDid, permissions, options });
       return (
         overrides.delegateResult ?? {
           delegation: {
             cid: "bafy-delegation",
             path: permissions[0]?.path ?? "",
             actions: permissions[0]?.actions ?? [],
+            expiry: new Date(Date.now() + (options?.expiry ?? 0)),
           },
           prompted: false,
         }
@@ -1348,6 +1352,7 @@ describe("CLI secrets commands", () => {
             actions: ["decrypt"],
           },
         ],
+        options: { expiry: 60 * 60 * 1000 },
       },
     ]);
     expect(recorded.outputs).toEqual([
@@ -1358,6 +1363,7 @@ describe("CLI secrets commands", () => {
         prompted: false,
         path: descriptor.networkId,
         actions: ["decrypt"],
+        expiry: expect.any(String),
       },
     ]);
   });

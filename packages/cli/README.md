@@ -137,7 +137,7 @@ tc delegation create --to did:pkh:eip155:1:0x...
 | `tc secrets` | Manage network-encrypted secrets |
 | `tc secrets network show` | Show a secrets decryption network |
 | `tc secrets network init` | Create or fetch the default secrets network |
-| `tc secrets network grant` | Grant `tinycloud.encryption/decrypt` on a secrets network |
+| `tc secrets network grant` | Grant `tinycloud.encryption/decrypt` on a secrets network (lasts at most one hour; `--expiry`, default `1h`) |
 | `tc secrets request` | Print a Secret Manager link asking the owner to add secrets (offline) |
 | `tc secrets wait` | Wait until secrets exist and are readable (never signs in; needs a stored session; exit 8 pending, 130 interrupted) |
 | `tc secrets manage` | Print or open the Secret Manager page, `{url, opened}` |
@@ -150,7 +150,9 @@ Secret names are env-style uppercase identifiers such as `FIREFLIES_API_KEY`.
 `tc secrets network show` accepts either a short network name or a full
 `urn:tinycloud:encryption:<ownerDid>:<network>` identifier. `tc secrets
 network grant` takes the short name, resolves the network, and grants
-`tinycloud.encryption/decrypt`.
+`tinycloud.encryption/decrypt` for at most one hour (`--expiry` defaults to
+`1h`; a longer value is refused). `tc delegation create` refuses a delegation
+that includes decrypt with `--expiry` over one hour.
 
 `tc apps install` re-creates the pinned views on every run (reported as
 `viewsRecreated`). Knowledge notes whose bytes differ from the pinned version

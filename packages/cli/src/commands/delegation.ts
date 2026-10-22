@@ -8,6 +8,7 @@ import { ExitCode } from "../config/constants.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
 import { revokeDelegationOnNode } from "../lib/revoke-delegation.js";
 import { parseExpiry } from "../lib/duration.js";
+import { DECRYPT_EXPIRY_TOO_LONG_MESSAGE, DECRYPT_MAX_LIFETIME_MS, includesDecrypt } from "../lib/decrypt-cap.js";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { PermissionNotInManifestError, type AccountDelegationRecord, type TinyCloudNode } from "@tinycloud/node-sdk";
 
@@ -106,6 +107,16 @@ export function registerDelegationCommand(
         }
 
         const expiry = parseExpiry(options.expiry);
+        const entries = Object.entries(byService).map(([service, serviceActions]) => ({
+          service,
+          space: "default",
+          path: options.path,
+          actions: serviceActions,
+        }));
+        // Decrypt never lasts over one hour: refuse before anything is signed.
+        if (includesDecrypt(entries) && expiry.getTime() - Date.now() > DECRYPT_MAX_LIFETIME_MS) {
+          throw new CLIError("DECRYPT_EXPIRY_TOO_LONG", DECRYPT_EXPIRY_TOO_LONG_MESSAGE, ExitCode.USAGE_ERROR);
+        }
         // `tc profile show` prints a did:key with a #fragment; the node wants the bare DID.
         const recipient = options.to.split("#")[0];
 
@@ -115,12 +126,7 @@ export function registerDelegationCommand(
         // "applications" space, not the session's default space.
         const { delegation: created } = await node.delegateTo(
           recipient,
-          Object.entries(byService).map(([service, serviceActions]) => ({
-            service,
-            space: "default",
-            path: options.path,
-            actions: serviceActions,
-          })),
+          entries,
           { expiry: expiry.getTime() - Date.now(), requireActivation: true },
         ).catch((error: unknown) => {
           if (error instanceof PermissionNotInManifestError) {
