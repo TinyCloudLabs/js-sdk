@@ -198,7 +198,7 @@ import {
   type RequestLogReader,
   type RequestSink,
 } from "@tinycloud/sdk-services";
-import { RequestLog, observeReplicaReads } from "@tinycloud/sdk-services/telemetry/requestLog";
+import { RequestLog, observeReplicaReads, readOnlyRequestLog } from "@tinycloud/sdk-services/telemetry/requestLog";
 import { NodeUserAuthorization } from "./authorization/NodeUserAuthorization";
 import type { SignStrategy } from "./authorization/strategies";
 import { AccountService } from "./account/AccountService";
@@ -1953,7 +1953,7 @@ export class TinyCloudNode {
 
   /** Sanitized developer request events; undefined unless the node was built with `requestLog: true`. */
   get requests(): RequestLogReader | undefined {
-    return this._requestLog;
+    return this._requestLog === undefined ? undefined : readOnlyRequestLog(this._requestLog);
   }
 
   private createServiceGraphLifetime(): ServiceGraphLifetime {

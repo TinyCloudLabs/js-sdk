@@ -343,3 +343,12 @@ export class RequestLog implements RequestSink, RequestLogReader {
     }
   }
 }
+
+/** The public view of a log: reads and subscriptions only. `record` and `clear` stay with the owner. */
+export function readOnlyRequestLog(log: RequestLog): RequestLogReader {
+  return Object.freeze({
+    snapshot: () => log.snapshot(),
+    subscribe: (cb: (event: RequestEvent) => void) => log.subscribe(cb),
+    onClear: (cb: () => void) => log.onClear(cb),
+  });
+}

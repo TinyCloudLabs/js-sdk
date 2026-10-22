@@ -73,13 +73,25 @@ describe("TinyCloudNode request log", () => {
     expect(node.requests).toBeUndefined();
   });
 
+  test("requests exposes a read-only view: no record or clear on the returned object", () => {
+    const node = new TinyCloudNode({
+      host: HOST,
+      wasmBindings: makeFakeWasmBindings(),
+      requestLog: true,
+    });
+    const view = node.requests as unknown as Record<string, unknown>;
+    expect(typeof view.snapshot).toBe("function");
+    expect(view.record).toBeUndefined();
+    expect(view.clear).toBeUndefined();
+  });
+
   test("sign-out clears recorded requests and notifies onClear listeners", async () => {
     const node = new TinyCloudNode({
       host: HOST,
       wasmBindings: makeFakeWasmBindings(),
       requestLog: true,
     });
-    const log = node.requests as RequestLog;
+    const log = Reflect.get(node, "_requestLog") as RequestLog;
     log.record(EVENT);
     expect(node.requests!.snapshot()).toHaveLength(1);
 
