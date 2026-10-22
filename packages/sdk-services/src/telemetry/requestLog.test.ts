@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { buildRequestEvent, byteLengthOf, declaredLengthOf, observeReplicaReads, RequestLog, type RawRequest } from "./requestLog";
+import { buildRequestEvent, byteLengthOf, declaredLengthOf, observeFetch, observeReplicaReads, RequestLog, type RawRequest, type RequestDraft } from "./requestLog";
 import type { IServiceContext } from "../types";
 
 const base: RawRequest = { durationMs: 4.6, ok: true, at: 1_700_000_000_000 };
@@ -210,6 +210,34 @@ test("declared Content-Length is a byte count only for plain digits", () => {
   expect(declaredLengthOf("12abc")).toBeNull();
   expect(declaredLengthOf(null)).toBeNull();
   expect(declaredLengthOf(undefined)).toBeNull();
+});
+
+test("observeFetch: a sent body sets bytes, never the response Content-Length", () => {
+  const observe = (requestBody: unknown, responseContentLength: string | null) => {
+    const events: RequestDraft[] = [];
+    observeFetch(
+      {
+        url: "https://node.example/invoke",
+        requestHeaders: {},
+        requestBody,
+        responseContentLength,
+        ok: true,
+        code: "ok",
+        durationMs: 1,
+        attempts: 1,
+        at: 1_700_000_000_000,
+      },
+      (event) => events.push(event),
+    );
+    return events[0]!.bytes;
+  };
+  // A stream body cannot be measured without consuming it: null, not the response's 7.
+  expect(observe(new ReadableStream(), "7")).toBeNull();
+  // A string body is measured; the response length is ignored.
+  expect(observe("abc", "7")).toBe(3);
+  // No body was sent: the declared response length is the byte count.
+  expect(observe(undefined, "7")).toBe(7);
+  expect(observe(undefined, null)).toBeNull();
 });
 
 test("observeReplicaReads records replica-served reads and ignores network and none reads", () => {

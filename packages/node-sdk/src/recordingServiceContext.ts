@@ -9,9 +9,8 @@ import {
 } from "@tinycloud/sdk-services";
 import {
   buildRequestEvent,
-  byteLengthOf,
-  declaredLengthOf,
   invocationMetaOf,
+  requestBytesOf,
   type InvocationMeta,
   type RequestDraft,
   type RequestSink,
@@ -73,7 +72,7 @@ function replicationEvent(sample: AttemptSample, op: string): RequestDraft {
     service: "sync",
     op,
     url: sample.url,
-    bytes: byteLengthOf(sample.init?.body) ?? declaredLengthOf(sample.response?.headers.get("content-length")),
+    bytes: requestBytesOf(sample.init?.body, sample.response?.headers.get("content-length")),
     durationMs: performance.now() - sample.clock,
     attempts: sample.attempts ?? 1,
     ok: sample.response?.ok === true,

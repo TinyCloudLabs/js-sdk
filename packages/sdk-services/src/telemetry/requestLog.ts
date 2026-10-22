@@ -207,11 +207,11 @@ export function buildRequestEvent(raw: RawRequest): RequestDraft {
 
 /**
  * Derives one event from one transport attempt. Invocation metadata comes from the
- * request headers; bytes are measured for known body types, else the declared length.
+ * request headers. Bytes are the request body length when a body was sent (null for
+ * streams); with no request body, the declared response length.
  */
 export function observeFetch(observation: FetchObservation, emit: (event: RequestDraft) => void): void {
   const meta = invocationMetaOf(observation.requestHeaders);
-  const declared = declaredLengthOf(observation.responseContentLength);
   emit(
     buildRequestEvent({
       service: meta?.service ?? "other",
@@ -219,7 +219,7 @@ export function observeFetch(observation: FetchObservation, emit: (event: Reques
       path: meta?.path ?? null,
       spaceId: meta?.spaceId ?? null,
       url: observation.url,
-      bytes: byteLengthOf(observation.requestBody) ?? declared,
+      bytes: requestBytesOf(observation.requestBody, observation.responseContentLength),
       durationMs: observation.durationMs,
       attempts: observation.attempts,
       ok: observation.ok,
@@ -227,6 +227,15 @@ export function observeFetch(observation: FetchObservation, emit: (event: Reques
       at: observation.at,
     }),
   );
+}
+
+/**
+ * Request bytes: the body length when a body was sent (null when it cannot be measured
+ * without consuming it); with no body, the declared response Content-Length.
+ */
+export function requestBytesOf(body: unknown, responseContentLength: string | null | undefined): number | null {
+  if (body === undefined || body === null) return declaredLengthOf(responseContentLength);
+  return byteLengthOf(body);
 }
 
 /**
