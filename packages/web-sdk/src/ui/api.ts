@@ -1,9 +1,16 @@
 import { canRenderUi } from "./frame-guard";
+import type { SectionId } from "./slots";
 
 /** Public `tc.ui` surface. */
 export interface TinyCloudUI {
-  /** Clears the hidden flag, shows the button (if `ui.button !== false`), and opens the panel. */
-  open(): void;
+  /**
+   * Clears the hidden flag, shows the button (if `ui.button !== false`), and opens
+   * the sidebar. `section` picks the starting section; unknown or unavailable ids
+   * fall back to the first available section. `ui.mode: "page"` opens the full page.
+   */
+  open(section?: SectionId): void;
+  /** Like `open()` but opens the full page. Under `ui.mode: "sidebar"` it opens the sidebar. */
+  openPage(section?: SectionId): void;
   /** Closes the panel only. Never changes the hidden flag. */
   close(): void;
   toggle(): void;
@@ -13,7 +20,8 @@ export interface TinyCloudUI {
 }
 
 export interface UiTarget {
-  open(): void;
+  open(section?: SectionId): void;
+  openPage(section?: SectionId): void;
   close(): void;
   isOpen(): boolean;
 }
@@ -30,10 +38,15 @@ export function createUiApi(getTarget: () => UiTarget | undefined): TinyCloudUI 
     get isOpen() {
       return getTarget()?.isOpen() ?? false;
     },
-    open() {
+    open(section) {
       const target = getTarget();
       if (!target || !canRenderUi()) return;
-      target.open();
+      target.open(section);
+    },
+    openPage(section) {
+      const target = getTarget();
+      if (!target || !canRenderUi()) return;
+      target.openPage(section);
     },
     close() {
       getTarget()?.close();

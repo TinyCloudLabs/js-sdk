@@ -133,7 +133,12 @@ function stylesheetText(root: ShadowRoot): string {
 describe("panel stylesheet targets", () => {
   test("every class a rule targets is applied to a rendered element", () => {
     openPanel();
-    const applied = new Set([...shadow().querySelectorAll("[class]")].flatMap((el) => [...el.classList]));
+    // Only one section mounts at a time, so visit each one to see the classes they render.
+    const applied = new Set<string>();
+    for (const nav of shadow().querySelectorAll<HTMLButtonElement>(".nav-i")) {
+      nav.click();
+      for (const el of shadow().querySelectorAll("[class]")) for (const cls of el.classList) applied.add(cls);
+    }
     for (const cls of appliedClassesAcrossKinds()) applied.add(cls);
     const missing = [...targetedClasses(stylesheetText(shadow()))].filter((cls) => !applied.has(cls)).sort();
     expect(missing).toEqual([]);
@@ -292,7 +297,7 @@ for (const scheme of ["light", "dark"] as const) {
 }
 
 /** Interactive controls the panel renders. Each needs its own focus ring rule. */
-const FOCUS_SELECTORS = [".button", ".action", ".switch", ".toast a", ".toast__close"] as const;
+const FOCUS_SELECTORS = [".button", ".action", ".switch", ".nav-i", ".toast a", ".toast__close"] as const;
 const RING_COLOUR: Record<"light" | "dark", string> = { light: "#111827", dark: "#fafafa" };
 /**
  * Page surfaces a ring can sit on: a light host page and a dark one. A ring is

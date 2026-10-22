@@ -83,7 +83,8 @@ export function registerUiClient(options: UiClientOptions): UiClientHandle {
   });
 
   let target: UiTarget | undefined = {
-    open: () => runtime.open(),
+    open: (section) => runtime.open(section),
+    openPage: (section) => runtime.openPage(section),
     close: () => runtime.close(),
     isOpen: () => runtime.isOpen(),
   };

@@ -1,14 +1,13 @@
 import { createButton, type ButtonView } from "./button";
 import type { PanelClientHandle } from "./client";
 import type { ResolvedUiConfig } from "./config";
-import { createPanel, type PanelView } from "./panel";
-import { publishHeight } from "./layout";
+import { createPanel, type PanelHandle, type ShellLayout } from "./panel";
 import { HOST_PARTS } from "./parts";
 import { toastStore } from "./parts/toasts";
 import type { ToastRequest } from "./toast-store";
 import { createButtonHideStore, defaultLocalStorage, resolveUiAppId, type HideScope } from "./persistence";
 import { PANEL_SECTIONS } from "./sections";
-import type { HostContext, StatusCode } from "./slots";
+import type { HostContext, SectionId, StatusCode } from "./slots";
 import { createStatusBoard } from "./status";
 import { text } from "./strings";
 import { HOST_CSS } from "./styles";
@@ -31,7 +30,8 @@ export interface HostRuntime {
   register(id: number, registration: ClientRegistration): void;
   unregister(id: number): void;
   reset(id: number): void;
-  open(): void;
+  open(section?: SectionId): void;
+  openPage(section?: SectionId): void;
   close(): void;
   isOpen(): boolean;
   toast(request: ToastRequest, owner?: number): boolean;
@@ -47,7 +47,7 @@ interface ClientEntry {
 interface Mounted {
   readonly host: HTMLElement;
   readonly layer: HTMLElement;
-  readonly panel: PanelView;
+  readonly panel: PanelHandle;
   readonly button: ButtonView | undefined;
   readonly stopParts: Array<() => void>;
 }
@@ -80,6 +80,8 @@ export function createHostRuntime(): HostRuntime {
   let nextId = 1;
   let signInSeq = 0;
   let isPanelOpen = false;
+  let layout: ShellLayout = "drawer";
+  let activeSection: SectionId | undefined;
   let buttonHidden = false;
   let mounted: Mounted | undefined;
   let disposers: Array<() => void> = [];
@@ -115,7 +117,7 @@ export function createHostRuntime(): HostRuntime {
     return best ?? latest;
   }
 
-  /** The first registered client wins for button, position, and appId. */
+  /** The first registered client wins for button, position, mode, and appId. */
   function primaryConfig(): ResolvedUiConfig | undefined {
     return [...clients.values()][0]?.registration.config;
   }
@@ -125,6 +127,14 @@ export function createHostRuntime(): HostRuntime {
       origin: globalThis.location.origin,
       appId: resolveUiAppId(primaryConfig()?.appId, activeEntry()?.registration.manifestAppId()),
     };
+  }
+
+  /** `ui.mode` decides the layout: `sidebar` and `page` are fixed; `both` honours the request. */
+  function resolveLayout(requested: ShellLayout): ShellLayout {
+    const mode = primaryConfig()?.mode ?? "both";
+    if (mode === "page") return "page";
+    if (mode === "sidebar") return "drawer";
+    return requested;
   }
 
   const context: HostContext = {
@@ -146,8 +156,6 @@ export function createHostRuntime(): HostRuntime {
     },
     toastsEnabled: () => primaryConfig()?.toasts !== false,
     toast: (t) => (context.toastsEnabled() ? toastStore.push(t) : null),
-    openPanel: () => setOpen(true),
-    closePanel: () => setOpen(false),
     text,
   };
 
@@ -156,47 +164,74 @@ export function createHostRuntime(): HostRuntime {
     disposers = [];
   }
 
-  /** Sections are mounted only while the panel is open. */
-  function renderSections(): void {
+  /** Lays out the shell and mounts exactly one available section while open. */
+  function renderPanel(): void {
     closeSections();
-    if (!mounted || !isPanelOpen) return;
-    for (const section of PANEL_SECTIONS) {
-      if (!section.isAvailable(context)) continue;
-      const el = document.createElement("section");
-      el.className = "section";
-      el.dataset.section = section.id;
-      mounted.panel.body.append(el);
-      const dispose = section.mount(el, context);
-      disposers.push(() => {
-        dispose();
-        el.remove();
-      });
-    }
+    if (!mounted) return;
+    const available = PANEL_SECTIONS.filter((section) => section.isAvailable(context));
+    const current = available.find((section) => section.id === activeSection) ?? available[0];
+    activeSection = current?.id;
+    mounted.panel.setLayout(layout, (primaryConfig()?.mode ?? "both") === "both");
+    mounted.panel.setNav(available, activeSection);
+    if (!isPanelOpen || !current) return;
+    const el = document.createElement("section");
+    el.className = "section";
+    el.dataset.section = current.id;
+    mounted.panel.main.replaceChildren(el);
+    const dispose = current.mount(el, context);
+    disposers.push(() => {
+      dispose();
+      el.remove();
+    });
   }
 
   function syncDom(): void {
     if (!mounted) return;
     mounted.host.setAttribute("data-tinycloud-ui", isPanelOpen ? "open" : buttonHidden ? "hidden" : "closed");
-    mounted.panel.setOpen(isPanelOpen);
+    mounted.layer.setAttribute("data-layout", layout);
     mounted.layer.toggleAttribute("data-panel-open", isPanelOpen);
+    mounted.panel.setOpen(isPanelOpen);
     mounted.button?.setExpanded(isPanelOpen);
     mounted.button?.setHidden(buttonHidden);
   }
 
-  function setOpen(next: boolean): void {
-    if (next && !mounted) return;
+  /** Opens (or switches to) the requested layout. The mode may override the request. */
+  function openAt(requested: ShellLayout, section?: SectionId): void {
+    if (!mounted) return;
     const wasOpen = isPanelOpen;
-    isPanelOpen = next;
+    const previous = layout;
+    layout = resolveLayout(requested);
+    if (section !== undefined) activeSection = section;
+    isPanelOpen = true;
     syncDom();
-    renderSections();
-    if (next && !wasOpen) mounted?.panel.focusFirst();
+    renderPanel();
+    if (!wasOpen || layout !== previous) mounted.panel.focusFirst();
+  }
+
+  /** Closing never changes the hidden flag. Focus returns to the button only when the shell owned focus. */
+  function closeShell(returnFocus: boolean): void {
+    if (!isPanelOpen) return;
+    isPanelOpen = false;
+    syncDom();
+    renderPanel();
+    if (returnFocus) mounted?.button?.focus();
   }
 
   /** The panel's hide control: persists the flag and closes. */
   function hideFromPanel(): void {
     hideStore.write(hideScope(), true);
     buttonHidden = true;
-    setOpen(false);
+    closeShell(false);
+  }
+
+  /** `open()` and `openPage()`: clear the hidden flag, restore the button, then open. */
+  function reveal(requested: ShellLayout, section?: SectionId): void {
+    if (!mounted) return;
+    if (primaryConfig()?.button) {
+      hideStore.write(hideScope(), false);
+      buttonHidden = false;
+    }
+    openAt(requested, section);
   }
 
   function mount(config: ResolvedUiConfig): Mounted {
@@ -214,24 +249,22 @@ export function createHostRuntime(): HostRuntime {
     const panel = createPanel({
       hideAvailable: config.button,
       onHide: hideFromPanel,
-      onClose: () => setOpen(false),
-      onEscape: () => {
-        setOpen(false);
-        mounted?.button?.focus();
+      onClose: () => closeShell(true),
+      onEscape: () => closeShell(true),
+      onLayout: (target) => openAt(target),
+      onNavigate(id) {
+        activeSection = id;
+        renderPanel();
       },
     });
-    layer.append(panel.el);
-
-    const button = config.button ? createButton(() => setOpen(!isPanelOpen)) : undefined;
+    const button = config.button ? createButton(() => (isPanelOpen ? closeShell(true) : openAt("drawer"))) : undefined;
     if (button) layer.append(button.el);
+    layer.append(panel.el);
 
     root.append(style, layer);
     (document.body ?? document.documentElement).append(host);
 
-    const stopParts = [
-      publishHeight(panel.el, layer, "--tinycloud-ui-panel-height"),
-      ...HOST_PARTS.map((part) => part.start(context, layer)),
-    ];
+    const stopParts = HOST_PARTS.map((part) => part.start(context, layer));
     return { host, layer, panel, button, stopParts };
   }
 
@@ -255,11 +288,12 @@ export function createHostRuntime(): HostRuntime {
     mounted = undefined;
     isPanelOpen = false;
     buttonHidden = false;
+    layout = "drawer";
   }
 
   function notifyClientChange(): void {
     for (const listener of [...clientListeners]) listener();
-    renderSections();
+    renderPanel();
   }
 
   return {
@@ -290,22 +324,15 @@ export function createHostRuntime(): HostRuntime {
       const wasActive = activeEntry()?.id === id;
       entry.signedIn = false;
       entry.registration.handle.reset();
-      if (wasActive) setOpen(false);
+      if (wasActive) closeShell(false);
       notifyClientChange();
     },
 
-    /** Clears the hide flag, shows the button (unless button is disabled), and opens the panel. */
-    open() {
-      if (!mounted) return;
-      if (primaryConfig()?.button) {
-        hideStore.write(hideScope(), false);
-        buttonHidden = false;
-      }
-      setOpen(true);
-    },
+    open: (section) => reveal("drawer", section),
+    openPage: (section) => reveal("page", section),
 
     close() {
-      setOpen(false);
+      closeShell(false);
     },
 
     isOpen: () => isPanelOpen,

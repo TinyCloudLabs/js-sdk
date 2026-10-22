@@ -59,8 +59,6 @@ export interface HostContext {
   toastsEnabled(): boolean;
   /** Returns the toast id, or null when `ui.toasts` is false. */
   toast(t: ToastRequest): string | null;
-  openPanel(): void;
-  closePanel(): void;
   /** strings.ts lookup. Unknown codes return the neutral line, never raw text. */
   text(code: string): string;
 }
