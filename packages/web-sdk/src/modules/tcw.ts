@@ -1220,6 +1220,10 @@ export class TinyCloudWeb {
    * permissions are requested. Permissions already covered by the session
    * or an existing runtime grant return without a new delegation, so
    * `expiryMs` does not apply to them.
+   *
+   * Decrypt grants (including wildcards) with `expiryMs` over one hour
+   * reject with `DECRYPT_EXPIRY_TOO_LONG` before the modal opens. Covered
+   * permissions skip this check.
    */
   async requestPermissions(
     additional: PermissionEntry[],
