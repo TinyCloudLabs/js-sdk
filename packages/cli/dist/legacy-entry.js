@@ -32540,7 +32540,7 @@ ${scope.text}
 `);
       let confirmedExtras = false;
       if (scope.extras.length > 0 && options2.yes !== true) {
-        if (!isInteractive()) {
+        if (!process.stdin.isTTY || !process.stderr.isTTY) {
           throw new CLIError(
             "CONFIRMATION_REQUIRED",
             `This request asks for more than the apps-agent preset (${scope.extras.length} entr${scope.extras.length === 1 ? "y" : "ies"} marked ! in the list above). Nothing was signed. Read the list, then re-run with --yes to sign it.`,
