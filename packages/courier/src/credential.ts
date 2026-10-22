@@ -104,13 +104,16 @@ async function readStdinFirstLine(): Promise<string> {
 
 async function acquire(args: ParsedArgs, deps: Resolved): Promise<void> {
   const address = requireFlag(args, 'email', acquireUsage()).trim();
-  if (args.has('code') && args.has('code-stdin')) throw new CourierError('usage', acquireUsage());
+  if (args.has('code')) throw new CourierError('usage', `--code is refused: it puts the code on argv. Enter the code with --code-stdin. ${acquireUsage()}`);
   const key = deps.loadKey(deps.home);
   const holder = holderFor(key);
   const store: FileEmailProofPendingStore = createFileEmailProofPendingStore({ home: deps.home });
 
-  if (!args.has('code') && !args.has('code-stdin')) {
+  if (!args.has('code-stdin')) {
     // Step 1: the witness emails an 8-digit code. Pending state persists until the owner supplies it.
+    // The older live request for this address is deleted only after the new one is stored, so a
+    // failed request never destroys a still-valid pending record.
+    const older = await withStoreErrors(() => store.findLive(address, deps.now()));
     let pending: EmailProofPending;
     try {
       pending = await deps.requestCode({ address, holder, fetch: deps.fetch, now: deps.now });
@@ -118,17 +121,15 @@ async function acquire(args: ParsedArgs, deps: Resolved): Promise<void> {
       throw mapEmailProofError(error, 'request');
     }
     await withStoreErrors(async () => {
-      // At most one live request per address: the older request is replaced.
-      const existing = await store.findLive(address, deps.now());
-      if (existing) await store.delete(existing.requestId);
       await store.put(pending);
+      if (older && older.requestId !== pending.requestId) await store.delete(older.requestId);
     });
     deps.out(`Verification code sent to ${address}. Run \`${cmd(`credential acquire --email ${address} --code-stdin`)}\` and enter the code within 15 minutes.\n`);
     return;
   }
 
   // Step 2: the code is validated before any store or network access, then used once and never written.
-  const code = args.has('code-stdin') ? (await deps.readStdinLine()).trim() : (args.get('code') ?? '');
+  const code = (await deps.readStdinLine()).trim();
   if (!/^\d{8}$/.test(code)) throw new CourierError('credential.code.CODE_INVALID', 'Verification code must be 8 digits.');
 
   const pending = await withStoreErrors(() => store.findLive(address, deps.now()));

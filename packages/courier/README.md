@@ -79,8 +79,12 @@ the JWK must carry no private fields. An expired or unknown code fails with
 address and stores a pending request under `COURIER_HOME/credentials/` (owner-only).
 Run it again with `--code-stdin` and enter the code on stdin, for example
 `courier credential acquire --email <addr> --code-stdin < code.txt`. The code is
-never passed on argv. A pending request expires after 15 minutes; a new request
-for the same address replaces the older one.
+never passed on argv: `--code <value>` and a bare `--code` are refused with a usage
+error that names `--code-stdin`, before any network call or credential directory is
+created. A pending request expires after 15 minutes. A new request for the same
+address replaces the older pending request only after the new request succeeds; if
+the new request fails, the older pending request is kept and `--code-stdin` still
+completes it.
 
 `courier credential show --email <addr>` prints the stored credential's `email`,
 `credentialId`, `issuedAt`, `expiresAt` and `status`. The credential itself is

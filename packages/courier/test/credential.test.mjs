@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from '../dist/args.js';
@@ -15,6 +16,8 @@ const credDir = (home) => join(home, 'credentials');
 const modeOf = (p) => statSync(p).mode & 0o777;
 const pendingFiles = (home) => readdirSync(credDir(home)).filter((f) => f.startsWith('pending-'));
 const credentialFiles = (home) => readdirSync(credDir(home)).filter((f) => f.startsWith('credential-'));
+/** The store names each pending file after the hash of its request id. */
+const pendingFileFor = (requestId) => `pending-${createHash('sha256').update(requestId).digest('hex')}.json`;
 
 /** A fresh Courier agent key: private JWK plus the bare did:key the store and witness use. */
 function identity() {
@@ -137,11 +140,63 @@ test('a code that is not 8 digits is rejected before any network or store access
   assert.equal(existsSync(credDir(home)), false);
 });
 
-test('--code and --code-stdin together are a usage error', async () => {
+test('--code is refused before any network or store access, and the usage error points to --code-stdin', async () => {
   const home = freshHome();
   const { loadKey } = identity();
-  const r = runner(home, { loadKey });
-  await assert.rejects(r.run(['acquire', '--email', ADDRESS, '--code', '12345678', '--code-stdin']), { code: 'usage' });
+  const witness = makeWitness();
+  const r = runner(home, { loadKey, fetch: witness.fetch });
+  for (const argv of [['acquire', '--email', ADDRESS, '--code', '12345678'], ['acquire', '--email', ADDRESS, '--code']]) {
+    await assert.rejects(r.run(argv), (error) => {
+      assert.equal(error.code, 'usage');
+      assert.match(error.message, /--code-stdin/);
+      return true;
+    });
+  }
+  assert.equal(witness.reqs.size, 0);
+  assert.equal(existsSync(credDir(home)), false);
+});
+
+test('a failed new request keeps the still-valid older pending request', async () => {
+  const home = freshHome();
+  const { holder, loadKey } = identity();
+  const witness = makeWitness();
+  await runner(home, { loadKey, fetch: witness.fetch }).run(['acquire', '--email', ADDRESS]);
+  const [originalId] = witness.reqs.keys();
+
+  // Only the POST that starts the new request fails; the older pending record must stay on disk.
+  const failingWitness = async (input, init = {}) => {
+    const url = new URL(typeof input === 'object' && 'url' in input ? input.url : String(input));
+    if (url.pathname === '/v1/acquisitions' && init.method === 'POST') return new Response('unavailable', { status: 503 });
+    return witness.fetch(input, init);
+  };
+  await assert.rejects(runner(home, { loadKey, fetch: failingWitness }).run(['acquire', '--email', ADDRESS]), { code: /^credential\.request\./ });
+  assert.deepEqual(pendingFiles(home), [pendingFileFor(originalId)]);
+
+  const seen = {};
+  const complete = runner(home, {
+    loadKey,
+    fetch: witness.fetch,
+    readStdinLine: async () => witness.code,
+    completeProof: async (input) => {
+      seen.requestId = input.pending.requestId;
+      return issuedResult(holder.bare);
+    },
+  });
+  await complete.run(['acquire', '--email', ADDRESS, '--code-stdin']);
+  assert.equal(seen.requestId, originalId, 'the older pending request must still complete');
+  assert.match(complete.out(), /Email credential stored for qa\.owner@example\.test/);
+});
+
+test('a successful new request removes the older pending request', async () => {
+  const home = freshHome();
+  const { loadKey } = identity();
+  const witness = makeWitness();
+  await runner(home, { loadKey, fetch: witness.fetch }).run(['acquire', '--email', ADDRESS]);
+  const [originalId] = witness.reqs.keys();
+  await runner(home, { loadKey, fetch: witness.fetch }).run(['acquire', '--email', ADDRESS]);
+  assert.equal(witness.reqs.size, 2);
+  const [newId] = [...witness.reqs.keys()].filter((id) => id !== originalId);
+  assert.deepEqual(pendingFiles(home), [pendingFileFor(newId)]);
 });
 
 test('a wrong code keeps the pending request for retry and says so', async () => {
