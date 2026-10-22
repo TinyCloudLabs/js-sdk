@@ -14,6 +14,8 @@ import {
   ENCRYPTION,
   type PermissionEntry,
   parseExpiry,
+  isNetworkId,
+  parseNetworkId,
   SiweMessage,
   EXPIRY,
 } from "@tinycloud/sdk-core";
@@ -74,16 +76,35 @@ export function legacyParamsToPermissionEntries(
 export const DEFAULT_DELEGATION_EXPIRY_MS = EXPIRY.SESSION_MS;
 
 /**
- * Whether any entry grants the decrypt action: by its literal URN or through a
- * wildcard that covers it (`*`, `tinycloud.encryption/*`), per
- * `actionContains`. Entries must already be expanded (`expandPermissionEntries`)
- * so short names are full URNs. Internal only: not re-exported from the package
- * index.
+ * Per-share network name `share-<shareId>`, with the shareId shape share-sdk
+ * enforces (`packages/share-sdk/src/share-network.ts`). node-sdk does not depend
+ * on share-sdk, so the shape is mirrored here; keep the two in step.
+ */
+const SHARE_NETWORK_NAME_RE = /^share-[a-z0-9][a-z0-9-]{15,35}$/;
+
+/**
+ * Whether `actions` on the network id `path` grant decrypt subject to the
+ * one-hour cap. Decrypt on a per-share network (`share-<shareId>`) lasts as
+ * long as that share's own grant, so it is exempt. Decrypt on any other
+ * network, including `:default`, and any `path` that is not a network id, is
+ * capped. Decrypt is matched by literal URN or covering wildcard, per
+ * `actionContains`.
+ */
+export function grantsCappedDecrypt(path: string, actions: readonly string[]): boolean {
+  if (!actions.some((action) => actionContains(action, ENCRYPTION.DECRYPT))) {
+    return false;
+  }
+  return !(isNetworkId(path) && SHARE_NETWORK_NAME_RE.test(parseNetworkId(path).name));
+}
+
+/**
+ * Whether any entry needs the one-hour decrypt cap (see {@link grantsCappedDecrypt}).
+ * Entries must already be expanded (`expandPermissionEntries`) so short names
+ * are full URNs. The cap is call-wide: one capped entry caps the whole call.
+ * Internal only: not re-exported from the package index.
  */
 export function includesDecrypt(entries: readonly PermissionEntry[]): boolean {
-  return entries.some((entry) =>
-    entry.actions.some((action) => actionContains(action, ENCRYPTION.DECRYPT)),
-  );
+  return entries.some((entry) => grantsCappedDecrypt(entry.path, entry.actions));
 }
 
 /**
