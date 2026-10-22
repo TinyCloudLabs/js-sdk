@@ -327,6 +327,49 @@ describe("StorageFullMonitor on a full space", () => {
     expect(episodes).toEqual([true, false]);
   });
 
+  /** An own full space with one rejection observed, so the own episode is on. */
+  async function ownFullEpisode() {
+    const node = fullSpaceNode("tinycloud:pkh:eip155:1:0xaaa:default");
+    const monitor = new StorageFullMonitor(
+      (spaceId) => spaceId.split(":").slice(0, 5).join(":"),
+      () => "tinycloud:pkh:eip155:1:0xaaa",
+    );
+    monitor.observe(node.context);
+    const episodes: boolean[] = [];
+    monitor.onEpisode(() => episodes.push(monitor.rejection !== undefined));
+    await node.kv.put("y", "1");
+    expect(monitor.rejection).toBeDefined();
+    return { node, monitor, episodes };
+  }
+
+  test("a committed vault put ends the own episode; a vault get does not", async () => {
+    const { node, monitor, episodes } = await ownFullEpisode();
+
+    node.context.emit(TelemetryEvents.SERVICE_RESPONSE, { service: "vault", action: "get", ok: true });
+    expect(monitor.rejection).toBeDefined();
+    expect(episodes).toEqual([true]);
+
+    node.context.emit(TelemetryEvents.SERVICE_RESPONSE, { service: "vault", action: "put", ok: true });
+    expect(monitor.rejection).toBeUndefined();
+    expect(episodes).toEqual([true, false]);
+  });
+
+  test("a committed SQL execute ends the own episode", async () => {
+    const { node, monitor, episodes } = await ownFullEpisode();
+
+    node.context.emit(TelemetryEvents.SERVICE_RESPONSE, { service: "sql", action: "execute", ok: true });
+    expect(monitor.rejection).toBeUndefined();
+    expect(episodes).toEqual([true, false]);
+  });
+
+  test("a committed DuckDB execute ends the own episode", async () => {
+    const { node, monitor, episodes } = await ownFullEpisode();
+
+    node.context.emit(TelemetryEvents.SERVICE_RESPONSE, { service: "duckdb", action: "execute", ok: true });
+    expect(monitor.rejection).toBeUndefined();
+    expect(episodes).toEqual([true, false]);
+  });
+
   test("a rejection whose space is unknown counts for every owner", async () => {
     const node = fullSpaceNode();
     node.context.setSession(null);
