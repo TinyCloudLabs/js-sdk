@@ -34,7 +34,7 @@ export const EMAIL_PROOF_CREDENTIAL_TYPE = { id: "opencredentials.email/v1", ver
 export const EMAIL_PROOF_PENDING_MAX_MS = 15 * 60_000;
 
 const DISCOVERY_URL = `${EMAIL_PROOF_PINS.witnessOrigin}/.well-known/opencredentials`;
-const EMAIL_PROOF_ISSUER_KEYS: readonly IssuerVerificationKey[] = [
+export const EMAIL_PROOF_ISSUER_KEYS: readonly IssuerVerificationKey[] = [
   {
     kid: EMAIL_PROOF_PINS.issuerKid,
     alg: "EdDSA",
@@ -70,7 +70,7 @@ export type EmailProofStep = "request" | "code" | "credential" | "session";
  * | ADDRESS_INVALID         | false       | input is malformed; the same address cannot succeed |
  * | HOLDER_INVALID          | false       | holder key is not an Ed25519 did:key with a matching kid |
  * | CODE_INVALID            | true        | local format check (8 digits); no network; pending kept |
- * | RATE_LIMITED            | false       | witness refuses new codes for this address until retryAfterMs |
+ * | RATE_LIMITED            | witness     | witness `recoverable` flag decides (defaults to true); retryAfterMs set |
  * | ISSUER_UNAVAILABLE      | true        | transient issuer outage (503); witness flag is honoured |
  * | NETWORK                 | true        | transport failure or step timeout; pending kept |
  * | PROFILE_UNAVAILABLE     | false       | catalog or descriptor does not match the pinned profile |
@@ -104,7 +104,7 @@ const RECOVERABILITY: Readonly<Record<EmailProofErrorCode, boolean>> = {
   ADDRESS_INVALID: false,
   HOLDER_INVALID: false,
   CODE_INVALID: true,
-  RATE_LIMITED: false,
+  RATE_LIMITED: true,
   ISSUER_UNAVAILABLE: true,
   NETWORK: true,
   PROFILE_UNAVAILABLE: false,
@@ -136,9 +136,10 @@ const MESSAGES: Record<Exclude<EmailProofErrorCode, "RATE_LIMITED">, string> = {
 };
 
 function rateLimitMessage(retryAfterMs: number | undefined): string {
-  if (retryAfterMs === undefined || !Number.isFinite(retryAfterMs) || retryAfterMs <= 0) return "Too many codes were requested for this address. Try again later.";
+  const head = "Too many codes were requested for this address.";
+  if (retryAfterMs === undefined || !Number.isFinite(retryAfterMs) || retryAfterMs <= 0) return `${head} Try again in about an hour.`;
   const minutes = Math.max(1, Math.ceil(retryAfterMs / 60_000));
-  return `Too many codes were requested for this address. Try again in ${minutes} minutes.`;
+  return `${head} Try again in ${minutes} ${minutes === 1 ? "minute" : "minutes"}.`;
 }
 
 /** Stable, redaction-safe error. The message never includes the code, verifier, or key material. */
@@ -224,6 +225,8 @@ export interface EmailProofPendingStore {
   findLive(address: string, now: Date): Promise<EmailProofPending | undefined>;
   put(pending: EmailProofPending): Promise<void>;
   delete(requestId: string): Promise<void>;
+  /** Pending request by id, or undefined if absent or past its deadline. */
+  get(requestId: string, now: Date): Promise<EmailProofPending | undefined>;
 }
 
 /**
@@ -277,6 +280,7 @@ export function createMemoryEmailProofPendingStore(): EmailProofPendingStore {
     },
     async put(pending) { byRequest.set(pending.requestId, pending); },
     async delete(requestId) { byRequest.delete(requestId); },
+    async get(requestId, now) { prune(now); return byRequest.get(requestId); },
   };
 }
 
@@ -488,9 +492,10 @@ async function acquireWithIssuerKeys(input: EmailProofAcquireInput, issuerKeys: 
     pending = await requestEmailProofCode({ ...input, address });
     await store?.put(pending);
   }
-  if (!input.getCode) return { status: "code-requested", pending };
+  const shown = restoreEmailProofPending(pending);
+  if (!input.getCode) return { status: "code-requested", pending: shown };
 
-  const code = await input.getCode({ pending });
+  const code = await input.getCode({ pending: shown });
   try {
     const result = await completeWithIssuerKeys({ ...input, pending, code }, issuerKeys);
     const warnings: string[] = [];
@@ -616,26 +621,28 @@ function isPending(value: unknown): value is EmailProofPending {
 /** Maps any failure to a stable code. Caller aborts map to CANCELED; transient network failures stay recoverable. */
 function mapError(value: unknown, step: EmailProofStep, signal?: AbortSignal): EmailProofError {
   if (value instanceof EmailProofError) return value;
-  if (value instanceof DOMException && value.name === "TimeoutError") return new EmailProofError(step, "NETWORK", undefined, true);
+  if (value instanceof DOMException && value.name === "TimeoutError") return new EmailProofError(step, "NETWORK");
   const error = credentialError(value);
   const details = error.details;
   switch (error.code) {
     case "ISSUER_UNREADY":
       return details.state === "rate_limited"
-        ? new EmailProofError(step, "RATE_LIMITED", details.retryAfterMs, false)
+        ? new EmailProofError(step, "RATE_LIMITED", details.retryAfterMs, error.recoverable)
         : new EmailProofError(step, "ISSUER_UNAVAILABLE", undefined, error.recoverable);
     case "OFFLINE":
       if (signal?.aborted && (signal.reason as { name?: string } | undefined)?.name !== "TimeoutError") return new EmailProofError(step, "CANCELED");
-      return new EmailProofError(step, "NETWORK", undefined, true);
+      return new EmailProofError(step, "NETWORK");
     case "UNSUPPORTED_PROFILE":
     case "DESCRIPTOR_INVALID":
       return new EmailProofError(step, "PROFILE_UNAVAILABLE");
     case "PROOF_REJECTED":
-      return new EmailProofError("code", "CODE_REJECTED", undefined, error.recoverable);
+      // The transport emits PROOF_REJECTED only for a server recoverable:true response.
+      return new EmailProofError("code", "CODE_REJECTED", undefined, true);
     case "VERIFICATION_FAILED":
       if (details.state === "proof_attempts_exhausted") return new EmailProofError("code", "CODE_ATTEMPTS_EXHAUSTED");
       if (step === "credential") return new EmailProofError("credential", "CREDENTIAL_INVALID");
-      if (step === "code") return new EmailProofError("code", "CODE_REJECTED");
+      // Unclassified rejection at the code step: not recoverable, so the pending is deleted.
+      if (step === "code") return new EmailProofError("code", "CODE_REJECTED", undefined, false);
       return new EmailProofError(step, "FAILED");
     case "HOLDER_MISMATCH":
       return new EmailProofError("credential", "CREDENTIAL_INVALID");
@@ -644,7 +651,7 @@ function mapError(value: unknown, step: EmailProofStep, signal?: AbortSignal): E
     case "REQUEST_SUBSTITUTED":
       return new EmailProofError("session", "SESSION_INVALID");
     case "SIGNATURE_REJECTED":
-      return new EmailProofError("credential", "SIGNATURE_REJECTED");
+      return new EmailProofError("credential", "SIGNATURE_REJECTED", undefined, error.recoverable);
     case "CANCELED":
       return new EmailProofError(step, "CANCELED");
     default:

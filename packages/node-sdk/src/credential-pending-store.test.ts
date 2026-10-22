@@ -206,6 +206,32 @@ describe('file pending store: addressing and expiry', () => {
     expect((got as unknown as Record<string, unknown>).polluted).toBeUndefined();
     expect(Object.prototype).not.toHaveProperty('polluted');
   });
+
+  test('after the newest record is deleted, findLive falls back to the older one; get is per id', async () => {
+    const now = new Date();
+    await store().put(pendingFor('req-old', 'a@example.com', new Date(now.getTime() - 3 * MINUTE)));
+    await store().put(pendingFor('req-new', 'a@example.com', new Date(now.getTime() - 1 * MINUTE)));
+    expect((await store().findLive('a@example.com', now))?.requestId).toBe('req-new');
+    expect((await store().get('req-old', now))?.requestId).toBe('req-old');
+    await store().delete('req-new');
+    expect((await store().findLive('a@example.com', now))?.requestId).toBe('req-old');
+    expect(await store().get('req-new', now)).toBeUndefined();
+    expect(fs.readdirSync(dirOf()).length).toBe(1);
+  });
+
+  test('get deletes a record once its expiry passes', async () => {
+    const created = new Date();
+    await store().put(pendingFor('req-10g', 'a@example.com', created, 10 * MINUTE));
+    expect(await store().get('req-10g', new Date(created.getTime() + 11 * MINUTE))).toBeUndefined();
+    expect(fs.existsSync(fileFor('req-10g'))).toBe(false);
+  });
+
+  test('get refuses a file on disk that expires beyond the window and deletes it', async () => {
+    const created = new Date();
+    writeRaw(fileFor('req-16g'), JSON.stringify(fieldsOf('req-16g', 'a@example.com', created, 16 * MINUTE), null, 2));
+    await expect(store().get('req-16g', created)).rejects.toMatchObject({ code: 'credential-store-invalid' });
+    expect(fs.existsSync(fileFor('req-16g'))).toBe(false);
+  });
 });
 
 describe('file pending store: owner-only storage', () => {
@@ -215,6 +241,15 @@ describe('file pending store: owner-only storage', () => {
     await createFileEmailProofPendingStore({ home: fresh }).put(pendingFor('req-u', 'a@example.com', new Date()));
     expect(fs.statSync(path.join(fresh, 'credentials')).mode & 0o777).toBe(0o700);
     expect(fs.statSync(path.join(fresh, 'credentials', path.basename(fileFor('req-u')))).mode & 0o777).toBe(0o600);
+  });
+
+  test('a fresh home created under umask 0 is pinned to 0700 with a 0600 record', async () => {
+    const fresh = path.join(root, 'umask-zero');
+    process.umask(0o000);
+    await createFileEmailProofPendingStore({ home: fresh }).put(pendingFor('req-z', 'a@example.com', new Date()));
+    expect(fs.statSync(fresh).mode & 0o777).toBe(0o700);
+    expect(fs.statSync(path.join(fresh, 'credentials')).mode & 0o777).toBe(0o700);
+    expect(fs.statSync(path.join(fresh, 'credentials', path.basename(fileFor('req-z')))).mode & 0o777).toBe(0o600);
   });
 
   test('permissions are re-checked on every read, not cached', async () => {
@@ -229,7 +264,7 @@ describe('file pending store: owner-only storage', () => {
 
   test('group- or world-readable files are refused and left in place', async () => {
     const now = new Date();
-    for (const mode of [0o640, 0o644]) {
+    for (const mode of [0o604, 0o640, 0o644]) {
       await store().put(pendingFor('req-m', 'a@example.com', now));
       fs.chmodSync(fileFor('req-m'), mode);
       await expect(store().get('req-m', now)).rejects.toMatchObject({ code: 'credential-permissions' });
@@ -244,6 +279,15 @@ describe('file pending store: owner-only storage', () => {
       fs.chmodSync(dirOf(), mode);
       await expect(store().findLive('a@example.com', now)).rejects.toMatchObject({ code: 'credential-permissions' });
     }
+  });
+
+  test('a loose pre-existing credentials directory is refused and its mode is left unchanged', async () => {
+    fs.mkdirSync(dirOf(), { mode: 0o755 });
+    await expect(store().put(pendingFor('req-loose', 'a@example.com', new Date()))).rejects.toMatchObject({ code: 'credential-permissions' });
+    expect(fs.statSync(dirOf()).mode & 0o777).toBe(0o755);
+    expect(fs.existsSync(fileFor('req-loose'))).toBe(false);
+    await expect(store().findLive('a@example.com', new Date())).rejects.toMatchObject({ code: 'credential-permissions' });
+    expect(fs.statSync(dirOf()).mode & 0o777).toBe(0o755);
   });
 
   test('a symlinked pending file (live or dangling) is refused', async () => {
@@ -266,6 +310,19 @@ describe('file pending store: owner-only storage', () => {
     await expect(store().get('req-h', now)).rejects.toMatchObject({ code: 'credential-permissions' });
   });
 
+  test('put never writes through a symlink at the pending path, live or dangling', async () => {
+    fs.mkdirSync(dirOf(), { mode: 0o700 });
+    const victim = path.join(home, 'victim.txt');
+    fs.writeFileSync(victim, 'KEEP', { mode: 0o600 });
+    fs.symlinkSync(victim, fileFor('req-live-link'));
+    await expect(store().put(pendingFor('req-live-link', 'a@example.com', new Date()))).rejects.toMatchObject({ code: 'credential-permissions' });
+    expect(fs.readFileSync(victim, 'utf8')).toBe('KEEP');
+    const missing = path.join(home, 'nx.txt');
+    fs.symlinkSync(missing, fileFor('req-dangle-link'));
+    await expect(store().put(pendingFor('req-dangle-link', 'a@example.com', new Date()))).rejects.toMatchObject({ code: 'credential-permissions' });
+    expect(fs.existsSync(missing)).toBe(false);
+  });
+
   test('a symlinked credentials directory is refused on save and load', async () => {
     const target = path.join(root, 'elsewhere');
     fs.mkdirSync(target, { mode: 0o700 });
@@ -274,6 +331,7 @@ describe('file pending store: owner-only storage', () => {
       code: 'credential-permissions',
     });
     await expect(store().findLive('a@example.com', new Date())).rejects.toMatchObject({ code: 'credential-permissions' });
+    expect(fs.readdirSync(target)).toEqual([]);
   });
 
   test('a symlinked home is refused', async () => {
@@ -282,19 +340,22 @@ describe('file pending store: owner-only storage', () => {
     await expect(createFileEmailProofPendingStore({ home: link }).put(pendingFor('req-sh', 'a@example.com', new Date()))).rejects.toMatchObject({
       code: 'credential-permissions',
     });
+    expect(fs.existsSync(dirOf())).toBe(false);
   });
 
-  test('a home below a symlinked ancestor is refused', async () => {
+  test('a home below a symlinked ancestor stores under the real directory', async () => {
     const parentLink = path.join(root, 'parent-link');
     fs.symlinkSync(root, parentLink);
     const underLink = path.join(parentLink, 'profile');
-    await expect(createFileEmailProofPendingStore({ home: underLink }).put(pendingFor('req-an', 'a@example.com', new Date()))).rejects.toMatchObject({
-      code: 'credential-permissions',
-    });
+    const now = new Date();
+    await createFileEmailProofPendingStore({ home: underLink }).put(pendingFor('req-an', 'a@example.com', now));
+    expect(fs.existsSync(fileFor('req-an'))).toBe(true);
+    expect(await store().findLive('a@example.com', now)).toMatchObject({ requestId: 'req-an' });
   });
 
   test('a relative or empty home is refused at construction', () => {
     expect(() => createFileEmailProofPendingStore({ home: 'relative/profile' })).toThrow(PendingStoreError);
+    expect(() => createFileEmailProofPendingStore({ home: './x' })).toThrow(PendingStoreError);
     expect(() => createFileEmailProofPendingStore({ home: '' })).toThrow(PendingStoreError);
   });
 
@@ -303,6 +364,18 @@ describe('file pending store: owner-only storage', () => {
     await expect(store().put(pendingFor('req-dir', 'a@example.com', new Date()))).rejects.toMatchObject({
       code: 'credential-permissions',
     });
+  });
+
+  test('a regular file where the credentials directory belongs is refused on save and load', async () => {
+    fs.writeFileSync(dirOf(), 'not a directory', { mode: 0o600 });
+    await expect(store().put(pendingFor('req-fd', 'a@example.com', new Date()))).rejects.toMatchObject({ code: 'credential-permissions' });
+    await expect(store().findLive('a@example.com', new Date())).rejects.toMatchObject({ code: 'credential-permissions' });
+    expect(fs.readFileSync(dirOf(), 'utf8')).toBe('not a directory');
+  });
+
+  test('a directory at a record path is refused on read, not parsed', async () => {
+    fs.mkdirSync(fileFor('req-dr'), { recursive: true, mode: 0o700 });
+    await expect(store().get('req-dr', new Date())).rejects.toMatchObject({ code: 'credential-permissions' });
   });
 
   test('a stale temp file from a killed writer is swept on read; a fresh one is kept', async () => {

@@ -1,7 +1,7 @@
 {
   "allowance": {
     "replica.mjs": 51925,
-    "replica.cjs": 67140,
+    "replica.cjs": 67141,
     "activation.mjs": 23117,
     "activation.cjs": 24700
   },
@@ -209,6 +209,15 @@
       "activation.mjs": 0,
       "activation.cjs": 0,
       "note": "Optional first-import and IDB activation gzip deltas against this PR's merge base"
+    },
+    {
+      "pr": "#667",
+      "ticket": "TC-848",
+      "replica.mjs": -1,
+      "replica.cjs": 1,
+      "activation.mjs": 0,
+      "activation.cjs": 1,
+      "note": "sdk-services pin to 3.3.1 after the release; module path change only, no code change"
     }
   ]
 }

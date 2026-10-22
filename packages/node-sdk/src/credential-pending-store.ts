@@ -133,24 +133,20 @@ function assertOwnerOnly(st: fs.Stats, label: string): void {
   if ((mode & 0o077) !== 0) {
     throw new PendingStoreError('credential-permissions', `${label} must be owner-only; found mode ${mode.toString(8)}.`);
   }
+  // Owner check: a file owned by another user is untrusted even at mode 0600.
   assertOwnedByCurrentUser(st, label);
 }
 
-/** Refuses a symlinked `home` and any symlink among its ancestors. A missing `home` is fine: the caller creates it. */
+/**
+ * Refuses a symlinked `home`. Ancestors may be symlinks (macOS `/var` is `/private/var`), so the resolved
+ * `home` must be owned by the current user instead. A missing `home` is fine: the caller creates it.
+ */
 function assertHomeSafe(home: string): void {
   const st = lstatOrUndefined(home);
   if (st?.isSymbolicLink()) {
     throw new PendingStoreError('credential-permissions', `${home} is a symlink; refusing to store credentials through it.`);
   }
-  let current = path.dirname(home);
-  for (;;) {
-    if (lstatOrUndefined(current)?.isSymbolicLink()) {
-      throw new PendingStoreError('credential-permissions', `${current} is a symlink; refusing to store credentials below it.`);
-    }
-    const parent = path.dirname(current);
-    if (parent === current) return;
-    current = parent;
-  }
+  if (st) assertOwnedByCurrentUser(fs.statSync(fs.realpathSync(home)), home);
 }
 
 /**
@@ -170,13 +166,15 @@ function mkdirOwnerOnly(target: string): void {
     try {
       fs.mkdirSync(dir, { mode: 0o700 });
     } catch (error) {
+      // A pre-existing directory is not ours to chmod; ensureSecureDir checks it instead.
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      continue;
     }
     fs.chmodSync(dir, 0o700);
   }
 }
 
-/** Creates the store directory 0700 if absent and pins its mode, whatever the umask. */
+/** Creates the store directory 0700 if absent. A pre-existing directory must already be owner-only; it is never chmodded. */
 function ensureSecureDir(home: string): void {
   assertHomeSafe(home);
   const dir = credentialsDir(home);
@@ -186,8 +184,8 @@ function ensureSecureDir(home: string): void {
   if (!st.isDirectory()) {
     throw new PendingStoreError('credential-permissions', `${dir} must be a real directory, not a symlink or file.`);
   }
-  assertOwnedByCurrentUser(st, dir);
-  fs.chmodSync(dir, 0o700);
+  // A loose pre-existing directory is refused, never chmodded: it may not be ours. assertOwnerOnly also checks the owner.
+  assertOwnerOnly(st, dir);
 }
 
 /** Returns false when the store directory does not exist. Re-checks symlink, owner, and mode on every call. */
@@ -215,6 +213,7 @@ function writeOwnerOnly(home: string, file: string, record: FileRecord): void {
   }
   const temp = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
   let fd: number | undefined;
+  // O_EXCL: never reuse an existing temp name. O_NOFOLLOW: a symlink planted at the temp name fails the open.
   try {
     fd = fs.openSync(temp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
     fs.writeFileSync(fd, JSON.stringify(record, null, 2) + '\n');
@@ -245,7 +244,9 @@ function readOwnerOnly(home: string, file: string): unknown {
   if (!before.isFile()) {
     throw new PendingStoreError('credential-permissions', `${label} must be a regular file; symlinks are refused.`);
   }
+  // lstat and owner check run before the open; the fstat below compares the opened inode.
   assertOwnerOnly(before, label);
+  // O_NOFOLLOW: a symlink swapped in after the lstat fails the open instead of being read.
   const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
   let text: string;
   try {

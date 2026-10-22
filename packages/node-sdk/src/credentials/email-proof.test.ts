@@ -13,6 +13,7 @@ import {
   completeEmailProofWithIssuerKeys,
   createEd25519HolderSigner,
   createMemoryEmailProofPendingStore,
+  EMAIL_PROOF_ISSUER_KEYS,
   EMAIL_PROOF_PENDING_MAX_MS,
   EMAIL_PROOF_PINS,
   EmailProofError,
@@ -22,6 +23,7 @@ import {
   requestEmailProofCode,
   restoreEmailProofPending,
 } from "./email-proof";
+import { OpenCredentialsHttpTransport } from "./transport";
 import { makeWitness } from "./test-support/witness-stub.mjs";
 
 const DISCOVERY_URL = "https://witness.credentials.org/.well-known/opencredentials";
@@ -30,6 +32,11 @@ const REQUEST = "R".repeat(32);
 const BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 const fixture = await Bun.file(new URL("../../../sdk-core/test-fixtures/opencredentials-v1/golden-descriptor-digests.json", import.meta.url)).json() as { vectors: { descriptor: CredentialFlowDescriptor }[] };
 const email = fixture.vectors[0]!.descriptor;
+
+/** Types a fetch implementation as `typeof globalThis.fetch` without a cast: Bun's fetch type includes `preconnect`. */
+function asFetch(impl: (url: string | URL | Request, init?: RequestInit) => Promise<Response>): typeof globalThis.fetch {
+  return Object.assign(impl, { preconnect: (_url?: string | URL) => {} });
+}
 
 /** did:key for an Ed25519 public key: multicodec 0xed01 followed by the key, base58btc. */
 function didKeyFor(publicKey: Uint8Array): string {
@@ -79,6 +86,32 @@ test("step 1 surfaces witness RATE_LIMITED as a stable code with the retry hint"
     : new Response(JSON.stringify({ type: "tinycloud.credentials/error/v1", code: "RATE_LIMITED", recoverable: false, state: "rate_limited", correlationId: "C".repeat(16) }), { status: 429, headers: { "content-type": "application/json", "retry-after": "150" } }));
   await expect(requestEmailProofCode({ address: ADDRESS, holder: HOLDER, fetch: fetch as typeof globalThis.fetch }))
     .rejects.toMatchObject({ name: "EmailProofError", step: "request", code: "RATE_LIMITED", retryAfterMs: 150_000, recoverable: false });
+});
+
+function rateLimitedWith(headers: Record<string, string>, recoverable = false): typeof globalThis.fetch {
+  return async (url) => (String(url) === DISCOVERY_URL
+    ? catalogFor(email)
+    : Response.json({ type: "tinycloud.credentials/error/v1", code: "RATE_LIMITED", recoverable, state: "rate_limited", correlationId: "C".repeat(16) }, { status: 429, headers }));
+}
+
+test("RATE_LIMITED keeps the witness recoverable flag when the witness sets it", async () => {
+  await expect(requestEmailProofCode({ address: ADDRESS, holder: HOLDER, fetch: rateLimitedWith({ "retry-after": "60" }, true) }))
+    .rejects.toMatchObject({ code: "RATE_LIMITED", recoverable: true });
+});
+
+test("RATE_LIMITED message says one minute for a 60 second wait", async () => {
+  await expect(requestEmailProofCode({ address: ADDRESS, holder: HOLDER, fetch: rateLimitedWith({ "retry-after": "60" }) }))
+    .rejects.toMatchObject({ message: "Too many codes were requested for this address. Try again in 1 minute." });
+});
+
+test("RATE_LIMITED message rounds a 61 second wait up to two minutes", async () => {
+  await expect(requestEmailProofCode({ address: ADDRESS, holder: HOLDER, fetch: rateLimitedWith({ "retry-after": "61" }) }))
+    .rejects.toMatchObject({ message: "Too many codes were requested for this address. Try again in 2 minutes." });
+});
+
+test("RATE_LIMITED message falls back to about an hour without retry-after", async () => {
+  await expect(requestEmailProofCode({ address: ADDRESS, holder: HOLDER, fetch: rateLimitedWith({}) }))
+    .rejects.toMatchObject({ message: "Too many codes were requested for this address. Try again in about an hour." });
 });
 
 test("step 1 refuses a catalog descriptor whose issuer is not the pinned email issuer and never creates a request", async () => {
@@ -159,6 +192,110 @@ test("a recoverable failure keeps the pending record for a retry", async () => {
   expect(error).toBeInstanceOf(EmailProofError);
   expect(error).toMatchObject({ code: "NETWORK", recoverable: true });
   expect(await store.findLive(ADDRESS, new Date())).toMatchObject({ requestId: REQUEST });
+});
+
+function unknownCode(recoverable: boolean): Response {
+  return Response.json({ type: "tinycloud.credentials/error/v1", code: "SOMETHING_NEW", recoverable, state: "proof_required", correlationId: "C".repeat(16) }, { status: 400 });
+}
+
+/** Creates a pending request, then submits a code whose proof response is produced by `refusal`. */
+async function acquireWithProofRefusal(refusal: () => Response) {
+  const store = createMemoryEmailProofPendingStore();
+  const witness = makeWitness({ code: CODE });
+  const seeded = await requestEmailProofCode({ address: ADDRESS, holder: HOLDER, fetch: asFetch(witness.fetch) });
+  await store.put(seeded);
+  const refused = asFetch(async (url, init) => (String(url).endsWith("/proof") ? refusal() : witness.fetch(url, init)));
+  const error: unknown = await acquireEmailProofWithIssuerKeys({ address: ADDRESS, holder: HOLDER, getCode: async () => CODE, fetch: refused, pendingStore: store }, witness.issuerKeys)
+    .catch((caught: unknown) => caught);
+  return { error, pending: await store.findLive(ADDRESS, new Date()), requestId: seeded.requestId };
+}
+
+test.each([
+  ["a bare 403", () => new Response(null, { status: 403 })],
+  ["a bare 500", () => new Response(null, { status: 500 })],
+  ["an HTML 502", () => new Response("<html>bad gateway</html>", { status: 502, headers: { "content-type": "text/html" } })],
+  ["a bare 429", () => new Response(null, { status: 429 })],
+  ["an unrecognised code with recoverable:false", () => unknownCode(false)],
+  ["an unrecognised code with recoverable:true", () => unknownCode(true)],
+])("a proof refused as %s is not recoverable and deletes the pending record", async (_label, refusal) => {
+  const { error, pending } = await acquireWithProofRefusal(refusal);
+  expect(error).toBeInstanceOf(EmailProofError);
+  expect(error).toMatchObject({ step: "code", code: "CODE_REJECTED", recoverable: false });
+  expect(pending).toBeUndefined();
+});
+
+test("a server PROOF_REJECTED with recoverable:true keeps the pending record", async () => {
+  const { error, pending, requestId } = await acquireWithProofRefusal(() => Response.json({ type: "tinycloud.credentials/error/v1", code: "PROOF_REJECTED", recoverable: true, state: "proof_required", correlationId: "C".repeat(16) }, { status: 400 }));
+  expect(error).toMatchObject({ step: "code", code: "CODE_REJECTED", recoverable: true });
+  expect(pending).toMatchObject({ requestId });
+});
+
+test("a bare 503 at the proof step is a recoverable outage and keeps the pending record", async () => {
+  const { error, pending, requestId } = await acquireWithProofRefusal(() => new Response(null, { status: 503 }));
+  expect(error).toMatchObject({ code: "ISSUER_UNAVAILABLE", recoverable: true });
+  expect(pending).toMatchObject({ requestId });
+});
+
+test("the holder signature posts alg EdDSA and a kid equal to the did's own key fragment", async () => {
+  const witness = makeWitness({ code: CODE });
+  const bodies: string[] = [];
+  const recording = async (url: string | URL | Request, init?: RequestInit) => {
+    if (String(url).endsWith("/holder-signature")) bodies.push(String(init?.body));
+    return witness.fetch(url, init);
+  };
+  await acquireEmailProofWithIssuerKeys({ address: ADDRESS, holder: HOLDER, getCode: async () => CODE, fetch: asFetch(recording) }, witness.issuerKeys);
+  expect(bodies).toHaveLength(1);
+  expect(JSON.parse(bodies[0] ?? "")).toEqual({ alg: "EdDSA", kid: `${HOLDER.did}#${HOLDER.did.slice("did:key:".length)}`, signature: expect.any(String) });
+});
+
+test("a holder fragment that is not the did's own key is refused as HOLDER_INVALID", () => {
+  let thrown: unknown;
+  try {
+    createEd25519HolderSigner(`${FRAGMENT_BARE}#z6MkWrongKeyFragment`, async () => new Uint8Array(64));
+  } catch (error) {
+    thrown = error;
+  }
+  expect(thrown).toMatchObject({ name: "EmailProofError", step: "request", code: "HOLDER_INVALID" });
+});
+
+test("the memory store drops a pending request at the 15-minute cap, from both findLive and get", async () => {
+  const t0 = new Date();
+  const pending = await requestEmailProofCode({ address: ADDRESS, holder: HOLDER, fetch: asFetch(witnessExpiringIn(email, 3_600_000)), now: () => t0 });
+  const before = new Date(t0.getTime() + 14 * 60_000);
+  const after = new Date(t0.getTime() + 16 * 60_000);
+  const byAddress = createMemoryEmailProofPendingStore();
+  await byAddress.put(pending);
+  expect(await byAddress.findLive(ADDRESS, before)).toMatchObject({ requestId: pending.requestId });
+  expect(await byAddress.findLive(ADDRESS, after)).toBeUndefined();
+  const byId = createMemoryEmailProofPendingStore();
+  await byId.put(pending);
+  expect(await byId.get(pending.requestId, before)).toMatchObject({ requestId: pending.requestId });
+  expect(await byId.get(pending.requestId, after)).toBeUndefined();
+});
+
+test("each request draws a fresh verifier", async () => {
+  const fetch = asFetch(happyWitness(email));
+  const first = await requestEmailProofCode({ address: ADDRESS, holder: HOLDER, fetch });
+  const second = await requestEmailProofCode({ address: ADDRESS, holder: HOLDER, fetch });
+  expect(first.verifier).not.toBe(second.verifier);
+});
+
+test("a padded address is trimmed and stored under the trimmed address", async () => {
+  const store = createMemoryEmailProofPendingStore();
+  await acquireEmailProof({ address: `  ${ADDRESS}  `, holder: HOLDER, fetch: asFetch(happyWitness(email)), pendingStore: store });
+  expect(await store.findLive(ADDRESS, new Date())).toMatchObject({ address: ADDRESS });
+});
+
+test("the code-requested acquisition hides the verifier from its JSON, inspection, and enumerable pending keys", async () => {
+  const store = createMemoryEmailProofPendingStore();
+  const acquisition = await acquireEmailProof({ address: ADDRESS, holder: HOLDER, fetch: asFetch(happyWitness(email)), pendingStore: store });
+  const verifier = (await store.findLive(ADDRESS, new Date()))?.verifier;
+  expect(verifier).toEqual(expect.any(String));
+  expect(JSON.stringify(acquisition)).not.toContain(String(verifier));
+  expect(inspect(acquisition)).not.toContain(String(verifier));
+  expect(acquisition.status).toBe("code-requested");
+  if (acquisition.status !== "code-requested") throw new Error("expected code-requested");
+  expect(Object.keys(acquisition.pending)).not.toContain("verifier");
 });
 
 const CODE = "12345678";
@@ -248,28 +385,36 @@ test("a malformed code is refused locally, recoverable, with zero network calls"
   expect(calls).toBe(0);
 });
 
-test("production pins are the literal values and the fixture descriptor matches the descriptor pin", async () => {
-  expect(EMAIL_PROOF_PINS).toEqual({
-    witnessOrigin: "https://witness.credentials.org",
-    issuerDid: "did:web:issuer.credentials.org",
-    issuerKid: "did:web:issuer.credentials.org#controller",
-    issuerX: "eEJI4xEobto4HtQ7Pg9R1vBOwcpfGRTlXDG5QfqLnGQ",
-    descriptorDigest: "1tg-qphmKBVtNwzVg9xyz-xxqt_xtMXAsQyXw46m8S0",
-  });
-  expect(await canonicalDigest(email)).toBe("1tg-qphmKBVtNwzVg9xyz-xxqt_xtMXAsQyXw46m8S0");
-});
+function withIssuer(patch: Partial<CredentialFlowDescriptor["issuer"]>): CredentialFlowDescriptor {
+  return { ...email, issuer: { ...email.issuer, ...patch } };
+}
 
-test("step 1 refuses a descriptor from the pinned issuer whose digest is not the pinned digest", async () => {
+/** Discovery returns `descriptor`. The pin check must refuse it: no create call may follow discovery. */
+async function refusedBeforeCreate(descriptor: CredentialFlowDescriptor): Promise<void> {
   const calls: string[] = [];
-  const drifted = { ...email, title: "Email proof, drifted" } as CredentialFlowDescriptor;
   const fetch = async (url: string | URL | Request) => {
-    const href = String(url);
-    calls.push(href);
-    return href === DISCOVERY_URL ? catalogFor(drifted) : Response.json({ requestId: REQUEST }, { status: 201 });
+    calls.push(String(url));
+    return String(url) === DISCOVERY_URL ? catalogFor(descriptor) : Response.json({ requestId: REQUEST }, { status: 201 });
   };
   await expect(requestEmailProofCode({ address: ADDRESS, holder: HOLDER, fetch: fetch as typeof globalThis.fetch }))
     .rejects.toMatchObject({ step: "request", code: "PROFILE_UNAVAILABLE" });
-  expect(calls.every((href) => href === DISCOVERY_URL)).toBe(true);
+  expect(calls).toEqual([DISCOVERY_URL]);
+}
+
+test("pin: an issuer origin other than the pinned witness origin is refused before create", async () => {
+  await refusedBeforeCreate(withIssuer({ origin: "https://evil.example" }));
+});
+
+test("pin: an issuer did other than the pinned issuer is refused before create", async () => {
+  await refusedBeforeCreate(withIssuer({ did: "did:web:evil.example", kid: "did:web:evil.example#controller" }));
+});
+
+test("pin: a descriptor without the pinned mailbox step is refused before create", async () => {
+  await refusedBeforeCreate({ ...email, steps: email.steps.filter((step) => step.type !== "mailbox_otp") });
+});
+
+test("pin: a descriptor whose digest is not the pinned digest is refused before create", async () => {
+  await refusedBeforeCreate({ ...email, display: { ...email.display, title: "Email proof, drifted" } });
 });
 
 function witnessExpiringIn(descriptor: CredentialFlowDescriptor, ms: number) {
@@ -441,3 +586,127 @@ test("a credential issued to a holder other than the one that opened the request
     .rejects.toMatchObject({ step: "credential", code: "CREDENTIAL_INVALID" });
 });
 
+test("the pinned issuer key table matches the published issuer identity", async () => {
+  const identity = await Bun.file(new URL("./test-support/issuer-did.json", import.meta.url)).json() as { id: string; verificationMethod: { id: string; publicKeyJwk: { x: string } }[] };
+  const method = identity.verificationMethod[0]!;
+  expect(EMAIL_PROOF_PINS).toMatchObject({ issuerDid: identity.id, issuerKid: method.id, issuerX: method.publicKeyJwk.x });
+  expect(EMAIL_PROOF_ISSUER_KEYS).toEqual([expect.objectContaining({ kid: method.id, alg: "EdDSA", jwk: { kty: "OKP", crv: "Ed25519", x: method.publicKeyJwk.x } })]);
+});
+
+test("public completion refuses a credential signed by a key that is not pinned", async () => {
+  const witness = makeWitness({ code: CODE });
+  const fetch = asFetch(witness.fetch);
+  const pending = await requestEmailProofCode({ address: ADDRESS, holder: HOLDER, fetch });
+  await expect(completeEmailProof({ pending, code: CODE, holder: HOLDER, fetch }))
+    .rejects.toMatchObject({ code: "CREDENTIAL_INVALID", step: "credential" });
+});
+
+test("public acquisition ignores caller-supplied issuer keys", async () => {
+  const witness = makeWitness({ code: CODE });
+  const input = { address: ADDRESS, holder: HOLDER, getCode: async () => CODE, fetch: asFetch(witness.fetch), issuerKeys: witness.issuerKeys };
+  await expect(acquireEmailProof(input)).rejects.toMatchObject({ code: "CREDENTIAL_INVALID" });
+});
+
+test("caller abort during discovery is reported as CANCELED", async () => {
+  const controller = new AbortController();
+  const fetch = asFetch(async () => {
+    controller.abort();
+    throw new DOMException("The operation was aborted.", "AbortError");
+  });
+  await expect(requestEmailProofCode({ address: ADDRESS, holder: HOLDER, fetch, signal: controller.signal }))
+    .rejects.toMatchObject({ code: "CANCELED", step: "request", recoverable: false });
+});
+
+test("caller abort wins over a discovery body that fails to parse", async () => {
+  const controller = new AbortController();
+  const fetch = asFetch(async () => {
+    controller.abort();
+    return new Response("<html>not a catalog</html>", { status: 200 });
+  });
+  await expect(requestEmailProofCode({ address: ADDRESS, holder: HOLDER, fetch, signal: controller.signal }))
+    .rejects.toMatchObject({ code: "CANCELED", step: "request", recoverable: false });
+});
+
+test("caller abort during a network failure is reported as CANCELED", async () => {
+  const controller = new AbortController();
+  const fetch = asFetch(async (url) => {
+    if (String(url) === DISCOVERY_URL) return catalogFor(email);
+    controller.abort();
+    throw new TypeError("fetch failed");
+  });
+  await expect(requestEmailProofCode({ address: ADDRESS, holder: HOLDER, fetch, signal: controller.signal }))
+    .rejects.toMatchObject({ code: "CANCELED", recoverable: false });
+});
+
+test("a fetch timeout during discovery is a recoverable NETWORK failure", async () => {
+  const fetch = asFetch(async () => {
+    throw new DOMException("The operation timed out.", "TimeoutError");
+  });
+  await expect(requestEmailProofCode({ address: ADDRESS, holder: HOLDER, fetch }))
+    .rejects.toMatchObject({ code: "NETWORK", step: "request", recoverable: true });
+});
+
+test("a recoverable SIGNATURE_REJECTED keeps the server's recoverable flag", async () => {
+  const witness = makeWitness({ code: CODE });
+  const fetch = asFetch(async (url, init) => {
+    const response = await witness.fetch(url, init);
+    if (response.status !== 400) return response;
+    return Response.json({ ...(await response.json()), recoverable: true }, { status: 400 });
+  });
+  const pending = await requestEmailProofCode({ address: ADDRESS, holder: HOLDER, fetch });
+  const badSigner = createEd25519HolderSigner(HOLDER.did, async () => new Uint8Array(64));
+  const error = await completeEmailProof({ pending, code: CODE, holder: badSigner, fetch }).catch((caught: unknown) => caught);
+  expect(error).toMatchObject({ code: "SIGNATURE_REJECTED", recoverable: true });
+});
+
+test("a restored pending record cannot outlive the 15-minute cap", async () => {
+  const store = createMemoryEmailProofPendingStore();
+  const pending = await requestEmailProofCode({ address: ADDRESS, holder: HOLDER, fetch: asFetch(happyWitness(email)) });
+  const created = Date.parse(pending.createdAt);
+  await store.put({ ...pending, expiresAt: new Date(created + 60 * 60_000).toISOString() });
+  expect(await store.findLive(ADDRESS, new Date(created + EMAIL_PROOF_PENDING_MAX_MS - 1))).toMatchObject({ requestId: pending.requestId });
+  expect(await store.findLive(ADDRESS, new Date(created + EMAIL_PROOF_PENDING_MAX_MS))).toBeUndefined();
+});
+
+test.each([
+  ["RATE_LIMITED", "ISSUER_UNREADY"],
+  ["CHALLENGE_EXPIRED", "REQUEST_EXPIRED"],
+  ["SIGNATURE_REJECTED", "SIGNATURE_REJECTED"],
+] as const)("a transport without honorServerRecoverable ignores the server flag on %s", async (serverCode, expected) => {
+  const body = { type: "tinycloud.credentials/error/v1", code: serverCode, recoverable: false, state: "state", correlationId: "corr-aaaaaaaaaaaaaaaa" };
+  const fetch = asFetch(async () => Response.json(body, { status: 400 }));
+  await expect(new OpenCredentialsHttpTransport(email, fetch).issue("req-aaaaaaaaaaaaaaaa", "verifier"))
+    .rejects.toMatchObject({ code: expected, recoverable: true });
+  await expect(new OpenCredentialsHttpTransport(email, fetch, { honorServerRecoverable: true }).issue("req-aaaaaaaaaaaaaaaa", "verifier"))
+    .rejects.toMatchObject({ code: expected, recoverable: false });
+});
+
+test("a discovery body that times out mid-read is a recoverable NETWORK failure", async () => {
+  const fetch = asFetch(async () => new Response(new ReadableStream({
+    start(stream) { stream.error(new DOMException("The operation timed out.", "TimeoutError")); },
+  }), { status: 200, headers: { "content-type": "application/json" } }));
+  await expect(requestEmailProofCode({ address: ADDRESS, holder: HOLDER, fetch }))
+    .rejects.toMatchObject({ code: "NETWORK", step: "request", recoverable: true });
+});
+
+test("a caller abort during the discovery body read is CANCELED at the request step", async () => {
+  const controller = new AbortController();
+  const fetch = asFetch(async () => new Response(new ReadableStream({
+    start(stream) {
+      controller.abort();
+      stream.error(new DOMException("The operation was aborted.", "AbortError"));
+    },
+  }), { status: 200, headers: { "content-type": "application/json" } }));
+  await expect(requestEmailProofCode({ address: ADDRESS, holder: HOLDER, fetch, signal: controller.signal }))
+    .rejects.toMatchObject({ code: "CANCELED", step: "request", recoverable: false });
+});
+
+test("a holder whose kid is not its own did key id is refused before any request", async () => {
+  let calls = 0;
+  const fetch = asFetch(async () => { calls += 1; return new Response(null, { status: 500 }); });
+  const pending = await requestEmailProofCode({ address: ADDRESS, holder: HOLDER, fetch: asFetch(happyWitness(email)) });
+  const custom = { ...HOLDER, kid: `${HOLDER.did}#custom-key` };
+  await expect(completeEmailProof({ pending, code: CODE, holder: custom, fetch }))
+    .rejects.toMatchObject({ code: "HOLDER_INVALID" });
+  expect(calls).toBe(0);
+});
