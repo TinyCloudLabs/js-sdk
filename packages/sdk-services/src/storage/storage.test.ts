@@ -165,6 +165,24 @@ describe("StorageFullMonitor on a full space", () => {
     expect(events).toHaveLength(2);
   });
 
+  test("clear() ends the own episode and forgets the rejection", async () => {
+    const node = fullSpaceNode("tinycloud:pkh:eip155:1:0xaaa:default");
+    const monitor = new StorageFullMonitor(
+      (spaceId) => spaceId.split(":").slice(0, 5).join(":"),
+      () => "tinycloud:pkh:eip155:1:0xaaa",
+    );
+    monitor.observe(node.context);
+    const episodes: boolean[] = [];
+    monitor.onEpisode(() => episodes.push(monitor.rejection !== undefined));
+
+    await node.kv.put("x", "1");
+    expect(monitor.rejection).toBeDefined();
+
+    monitor.clear();
+    expect(monitor.rejection).toBeUndefined();
+    expect(episodes).toEqual([true, false]);
+  });
+
   test("other failures and a throwing handler do not trip or break it", async () => {
     const node = fullSpaceNode();
     const monitor = new StorageFullMonitor();
