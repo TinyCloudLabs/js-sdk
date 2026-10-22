@@ -40,6 +40,12 @@
       "require": "./dist/share-index.cjs",
       "default": "./dist/share-index.js"
     },
+    "./web-recipient": {
+      "types": "./dist/web-recipient.d.ts",
+      "import": "./dist/web-recipient.js",
+      "require": "./dist/web-recipient.cjs",
+      "default": "./dist/web-recipient.js"
+    },
     "./package.json": "./package.json"
   },
   "sideEffects": false,
