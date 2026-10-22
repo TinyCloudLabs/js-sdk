@@ -112,6 +112,8 @@ interface FakeOptions {
   readonly putNotOk?: boolean;
   readonly putThrows?: boolean;
   readonly corruptReadback?: boolean;
+  readonly getThrows?: boolean;
+  readonly readbackPatch?: Readonly<Record<string, unknown>>;
 }
 
 interface FakeKv {
@@ -149,9 +151,11 @@ function fakeKv(options: FakeOptions = {}): FakeKv {
       };
     },
     async get(key: string) {
+      if (options.getThrows) throw new Error("kv get failed");
       if (!data.has(key)) return { ok: false, error: { code: "NOT_FOUND" } };
       const stored = data.get(key) as HeldCredentialRecord;
-      return { ok: true, data: { data: options.corruptReadback ? { ...stored, credentialDigest: "x" } : stored } };
+      const served = options.corruptReadback ? { ...stored, credentialDigest: "x" } : { ...stored, ...options.readbackPatch };
+      return { ok: true, data: { data: served } };
     },
     async batchPut(items: Array<{ key: string; value: unknown }>) {
       calls.batchPut += 1;
@@ -252,6 +256,24 @@ describe("store verifies the SD-JWT before writing", () => {
     expect(fake.calls.batchPut).toBe(0);
   });
 
+  test("refuses a credential that expires exactly at the reuse margin and accepts one second later", async () => {
+    const fake = fakeKv();
+    const atMargin = NOW_S + HELD_REUSE_MARGIN_MS / 1000;
+    const error = await failureOf(() => store(fake, { sdJwt: makeSdJwt({ exp: atMargin }) }));
+    expect(error.code).toBe("VERIFICATION_FAILED");
+    expect(fake.calls.batchPut).toBe(0);
+    await store(fake, { sdJwt: makeSdJwt({ exp: atMargin + 1 }) });
+    expect(fake.calls.batchPut).toBe(1);
+  });
+
+  test("refuses a signed credential that does not disclose an email claim", async () => {
+    const fake = fakeKv();
+    const sdJwt = makeSdJwt({ disclosures: [["emailDomain", "example.com"]] });
+    const error = await failureOf(() => store(fake, { sdJwt }));
+    expect(error.code).toBe("VERIFICATION_FAILED");
+    expect(fake.calls.batchPut).toBe(0);
+  });
+
   test("refuses an email that the signed disclosure does not canonically carry", async () => {
     const fake = fakeKv();
     const sdJwt = makeSdJwt({
@@ -331,6 +353,26 @@ describe("round trip", () => {
     expect(await verifyHeldStorageReceipt(record, receipt, lowerOwner)).toBe(true);
     expect(await verifyHeldStorageReceipt(record, receipt, OWNER_B)).toBe(false);
   });
+
+  test("receipt refuses a record owned by another account even when the receipt names the checked owner", async () => {
+    const { record } = await store(fakeKv());
+    const receipt = await createHeldStorageReceipt(record);
+    const foreign = { ...record, ownerDid: OWNER_B };
+    const forged = { ...receipt, ownerDid: OWNER_A, recordDigest: await canonicalDigest(foreign) };
+    expect(await verifyHeldStorageReceipt(foreign, forged, OWNER_A)).toBe(false);
+  });
+
+  test("receipt refuses a changed storedAt", async () => {
+    const { record } = await store(fakeKv());
+    const receipt = await createHeldStorageReceipt(record);
+    expect(await verifyHeldStorageReceipt(record, { ...receipt, storedAt: "2001-01-01T00:00:00.000Z" }, OWNER_A)).toBe(false);
+  });
+
+  test("receipt refuses a digest that does not cover the record", async () => {
+    const { record } = await store(fakeKv());
+    const receipt = await createHeldStorageReceipt(record);
+    expect(await verifyHeldStorageReceipt(record, { ...receipt, recordDigest: "A".repeat(43) }, OWNER_A)).toBe(false);
+  });
 });
 
 describe("readback confirms the credential, not the timestamp", () => {
@@ -358,6 +400,32 @@ describe("readback confirms the credential, not the timestamp", () => {
   test("a readback that does not match the written credential is VERIFIED_NOT_SAVED", async () => {
     const error = await failureOf(() => store(fakeKv({ corruptReadback: true })));
     expect(error.code).toBe("VERIFIED_NOT_SAVED");
+  });
+
+  test("a readback that names another recordId is VERIFIED_NOT_SAVED", async () => {
+    const error = await failureOf(() => store(fakeKv({ readbackPatch: { recordId: "A".repeat(43) } })));
+    expect(error.code).toBe("VERIFIED_NOT_SAVED");
+  });
+
+  test("a readback that names another owner is VERIFIED_NOT_SAVED", async () => {
+    const error = await failureOf(() => store(fakeKv({ readbackPatch: { ownerDid: OWNER_B } })));
+    expect(error.code).toBe("VERIFIED_NOT_SAVED");
+  });
+
+  test("a readback that names the same owner in a different letter case is accepted", async () => {
+    const lowerOwner = OWNER_A.replace(/0x[0-9a-fA-F]{40}$/, (address) => address.toLowerCase());
+    const { record } = await store(fakeKv({ readbackPatch: { ownerDid: lowerOwner } }));
+    expect(record.ownerDid).toBe(lowerOwner);
+  });
+
+  test("a get that throws is VERIFIED_NOT_SAVED", async () => {
+    const error = await failureOf(() => store(fakeKv({ getThrows: true })));
+    expect(error.code).toBe("VERIFIED_NOT_SAVED");
+  });
+
+  test("a readback with a different storedAt is accepted, because storedAt is not part of the confirmed identity", async () => {
+    const { record } = await store(fakeKv({ readbackPatch: { storedAt: "2001-01-01T00:00:00.000Z" } }));
+    expect(record.storedAt).toBe("2001-01-01T00:00:00.000Z");
   });
 });
 
@@ -397,6 +465,45 @@ describe("find re-verifies every stored record", () => {
     expect(await findFor(fake, "alice@example.com")).toBeUndefined();
   });
 
+  test("a record that expires exactly at the reuse margin is not offered; one second later is", async () => {
+    const fake = fakeKv();
+    await placeRaw(fake, OWNER_A, makeSdJwt({ exp: NOW_S + HELD_REUSE_MARGIN_MS / 1000 }));
+    expect(await findFor(fake, "alice@example.com")).toBeUndefined();
+    const later = NOW_S + HELD_REUSE_MARGIN_MS / 1000 + 1;
+    await placeRaw(fake, OWNER_A, makeSdJwt({ exp: later }));
+    expect((await findFor(fake, "alice@example.com"))?.verified.expiresAt.getTime()).toBe(later * 1000);
+  });
+
+  test("a non-ASCII letter that lowercases to an ASCII letter does not match the stored email", async () => {
+    const fake = fakeKv();
+    await placeRaw(fake, OWNER_A, makeSdJwt({ disclosures: [["email", "kelly@example.com"], ["emailDomain", "example.com"]] }));
+    expect((await findFor(fake, "kelly@example.com"))?.verified.claims.email).toBe("kelly@example.com");
+    expect(await findFor(fake, "\u212Aelly@example.com")).toBeUndefined();
+  });
+
+  test("a record whose credentialDigest does not match its credential is ignored", async () => {
+    const fake = fakeKv();
+    const { record, key } = await placeRaw(fake, OWNER_A, makeSdJwt());
+    fake.data.set(key, { ...record, credentialDigest: "A".repeat(43) });
+    expect(await findFor(fake, "alice@example.com")).toBeUndefined();
+  });
+
+  test("a record whose recordId does not match its credential is ignored, even under its own key", async () => {
+    const fake = fakeKv();
+    const { record, key } = await placeRaw(fake, OWNER_A, makeSdJwt());
+    fake.data.set(key, { ...record, recordId: "A".repeat(43) });
+    expect(await findFor(fake, "alice@example.com")).toBeUndefined();
+  });
+
+  test("a listing that needs more pages than the limit is refused after the limit", async () => {
+    const fake = fakeKv({ pageSize: 1 });
+    const prefix = heldRecordKey(OWNER_A, "A".repeat(43)).slice(0, -43);
+    for (let i = 0; i < 60; i += 1) fake.data.set(`${prefix}${String(i).padStart(43, "B")}`, {});
+    const error = await failureOf(() => findFor(fake, "alice@example.com"));
+    expect(error.code).toBe("VERIFICATION_FAILED");
+    expect(fake.calls.list.length).toBe(50);
+  });
+
   test("returns the verified record with the latest expiry", async () => {
     const fake = fakeKv();
     await placeRaw(fake, OWNER_A, makeSdJwt({ exp: NOW_S + 2 * DAY }));
@@ -426,6 +533,7 @@ describe("find re-verifies every stored record", () => {
     await placeRaw(fake, OWNER_A, makeSdJwt({ disclosures: [["email", "bob@example.com"], ["emailDomain", "example.com"]] }));
     const error = await failureOf(() => findFor(fake, "alice@example.com"));
     expect(error.code).toBe("VERIFICATION_FAILED");
+    expect(fake.calls.list.length).toBe(1);
   });
 });
 
@@ -461,6 +569,15 @@ describe("prune deletes only verified expired records and keeps the newest per e
     const removed = await pruneHeldCredentials({ kv: fake.kv, ownerDid: OWNER_A, now: NOW, ...POLICY });
     expect(removed).toEqual([older.key]);
     expect(fake.data.has(newer.key)).toBe(true);
+  });
+
+  test("on equal expiry keeps the record with the greater recordId", async () => {
+    const fake = fakeKv();
+    const first = await placeRaw(fake, OWNER_A, makeSdJwt({ exp: NOW_S + 10 * DAY }));
+    const second = await placeRaw(fake, OWNER_A, makeSdJwt({ exp: NOW_S + 10 * DAY }));
+    const loser = [first, second].sort((a, b) => (a.record.recordId < b.record.recordId ? -1 : 1))[0];
+    const removed = await pruneHeldCredentials({ kv: fake.kv, ownerDid: OWNER_A, now: NOW, ...POLICY });
+    expect(removed).toEqual([loser.key]);
   });
 });
 

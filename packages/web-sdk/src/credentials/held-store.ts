@@ -293,7 +293,7 @@ export async function findHeldCredential(input: FindHeldCredentialInput): Promis
     const reading = await readHeld(input.kv, key, owner, input, now);
     if (reading.kind !== "verified" || reading.email !== wanted) continue;
     const expiresAt = reading.match.verified.expiresAt.getTime();
-    if (expiresAt - now.getTime() < HELD_REUSE_MARGIN_MS) continue;
+    if (expiresAt - now.getTime() <= HELD_REUSE_MARGIN_MS) continue;
     if (best === undefined || expiresAt > best.verified.expiresAt.getTime()) best = reading.match;
   }
   return best;
