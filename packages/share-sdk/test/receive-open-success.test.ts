@@ -240,4 +240,28 @@ describe("receiveShare open flow, success path", () => {
     expect((error as ShareReceiveError).code).toBe("max-bytes-exceeded");
     expect(node.calls).toEqual(["POST /policy/v3/challenges", "POST /policy/v3/delegations", "POST /delegate", "POST /invoke get"]);
   });
+
+  it("refuses to open without a presentation builder before any network call", async () => {
+    const published = await publishOpenShare();
+    const node = fakeNode(published.envelope, published.stored);
+    const transport: string[] = [];
+    const spy: typeof fetch = async (input, init) => {
+      transport.push(String(input));
+      return node.fetchFn(input, init);
+    };
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = spy;
+    try {
+      // Same valid link and holder as the success path; only the presentation builder is missing.
+      // The builder is a required runtime input that TypeScript callers can omit at the JS boundary.
+      const withoutBuilder = { holderDid, sign: async (bytes: Uint8Array) => ed25519.sign(bytes, holderSeed), fetchFn: spy } as unknown as ShareOpenOptions;
+      const error = await receiveShare(published.link, { open: withoutBuilder }).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(ShareReceiveError);
+      expect((error as ShareReceiveError).code).toBe("authorization-denied");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    expect(transport).toEqual([]);
+    expect(node.calls).toEqual([]);
+  });
 });
