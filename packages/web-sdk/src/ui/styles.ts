@@ -17,7 +17,7 @@ export const HOST_CSS = `
 .layer[data-position="bottom-right"] .button{right:var(--tinycloud-ui-offset-inline,12px)}
 .layer[data-position="bottom-left"] .button{left:var(--tinycloud-ui-offset-inline,12px)}
 .layer[data-position="bottom-center"] .button{left:50%;transform:translateX(-50%)}
-.panel{position:fixed;top:12px;bottom:calc(var(--b) + 60px);right:12px;box-sizing:border-box;width:min(420px,calc(100vw - 24px));display:grid;grid-template-rows:auto auto minmax(0,1fr);overflow:hidden;border:1px solid #e4e4e7;border-radius:20px;background:#fff;color:#111827;box-shadow:0 8px 24px rgba(0,0,0,.18);pointer-events:auto;animation:tc-in .42s cubic-bezier(.2,.7,.2,1)}
+.panel{position:fixed;top:12px;bottom:calc(var(--b) + 60px);right:12px;box-sizing:border-box;width:min(420px,calc(100vw - 24px));display:grid;grid-template-rows:auto auto minmax(0,1fr);grid-template-areas:"head" "nav" "main";overflow:hidden;border:1px solid #e4e4e7;border-radius:20px;background:#fff;color:#111827;box-shadow:0 8px 24px rgba(0,0,0,.18);pointer-events:auto;animation:tc-in .42s cubic-bezier(.2,.7,.2,1)}
 .layer[data-position="bottom-right"] .panel,.layer[data-position="bottom-center"] .panel{right:var(--tinycloud-ui-offset-inline,12px)}
 .layer[data-position="bottom-left"] .panel{left:var(--tinycloud-ui-offset-inline,12px);right:auto}
 .layer .panel[data-layout="page"]{top:0;bottom:0;left:0;right:0;width:auto;border:0;border-radius:0;box-shadow:none;grid-template-rows:auto minmax(0,1fr);grid-template-columns:288px minmax(0,1fr);grid-template-areas:"head head" "nav main"}

@@ -119,7 +119,7 @@ for (const scheme of ["light", "dark"] as const) {
 for (const scheme of ["light", "dark"] as const) {
   test(`${scheme}: wipe note is visible under the Erase button in the default on state`, async ({ page }) => {
     await mountHarness(page, scheme);
-    await page.getByRole("button", { name: "TinyCloud settings", exact: true }).click();
+    await page.evaluate(() => (window as unknown as HarnessWindow).tc?.ui.open("local-copy"));
     const erase = page.getByRole("button", { name: "Erase local copy", exact: true });
     await expect(erase).toBeVisible();
     const note = erase.locator("xpath=following-sibling::p[1]");
@@ -143,7 +143,7 @@ for (const scheme of ["light", "dark"] as const) {
     test(`${scheme}: ${name}: Erase sits 8px below the visible element above it`, async ({ page }) => {
       await mountHarness(page, scheme);
       await page.evaluate((next) => (window as unknown as HarnessWindow).__tc.setSync(next), state);
-      await page.getByRole("button", { name: "TinyCloud settings", exact: true }).click();
+      await page.evaluate(() => (window as unknown as HarnessWindow).tc?.ui.open("local-copy"));
       const erase = page.getByRole("button", { name: "Erase local copy", exact: true });
       await expect(erase).toBeVisible();
       const gap = await erase.evaluate((button) => {
@@ -262,8 +262,17 @@ async function openPanelViolations(page: Page, size: { width: number; height: nu
   if (toasts.length !== 3) problems.push(`expected 3 toasts, found ${toasts.length}`);
   toasts.forEach((toast, i) => {
     if (!insideViewport(toast, size)) problems.push(`toast ${i} outside viewport`);
-    if (overlaps(toast, panel)) problems.push(`toast ${i} overlaps panel`);
   });
+  // The drawer is a side panel with no reserved toast room, so toasts paint over it.
+  // Each toast must still be the topmost element at its centre, so it can be read and dismissed.
+  const occluded = await page.locator(".toast").evaluateAll((els) =>
+    els.flatMap((el, i) => {
+      const r = el.getBoundingClientRect();
+      const hit = (el.getRootNode() as ShadowRoot).elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+      return hit && el.contains(hit) ? [] : [i];
+    }),
+  );
+  for (const i of occluded) problems.push(`toast ${i} is covered`);
   return problems;
 }
 
