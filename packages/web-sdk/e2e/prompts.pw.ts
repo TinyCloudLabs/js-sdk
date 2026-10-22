@@ -139,6 +139,19 @@ function focusedLabel(page: Page) {
   });
 }
 
+// True when the focus chain, descending through open shadow roots, passes through
+// the prompt host. Focus inside a closed overlay is not visible here, so it reads false.
+function focusInside(page: Page, selector: string) {
+  return page.evaluate((sel) => {
+    let el: Element | null = document.activeElement;
+    while (el) {
+      if (el.matches(sel)) return true;
+      el = el.shadowRoot?.activeElement ?? null;
+    }
+    return false;
+  }, selector);
+}
+
 for (const scheme of ["light", "dark"] as const) {
   // These locators mirror the ones apps/openkey-example/e2e uses for the space
   // prompt (the tag selector is used 21 times there). Quote style differs; the
@@ -382,6 +395,38 @@ for (const scheme of ["light", "dark"] as const) {
         [box!.x + box!.width / 2, box!.y + box!.height / 2],
       );
       expect(hit).toBe("e2e-openkey-stand-in");
+    });
+  }
+
+  // A Tab pressed in an overlay above the prompt must not pull focus into the prompt.
+  // The overlay comes after the prompt host in the DOM, so the browser's own Tab
+  // order does not reach the prompt; only the dialog's Tab trap could move focus in.
+  for (const [name, selector, open, result] of [
+    ["space", SPACE, openSpaceCreation, spaceResult],
+    ["permission", PERMISSION, openPermission, permResult],
+  ] as const) {
+    test(`${scheme}: ${name} prompt does not take focus from a Tab pressed in an overlay above it`, async ({ page }) => {
+      await mountHarness(page, scheme);
+      await open(page);
+      await expect(page.locator(`${selector} .modal-content`)).toBeVisible();
+      await page.evaluate(() => {
+        const overlay = document.createElement("div");
+        overlay.id = "e2e-openkey-focus-stand-in";
+        overlay.setAttribute("style", "position:fixed;inset:0;z-index:999999;background:rgba(0,0,0,.5);");
+        const shadow = overlay.attachShadow({ mode: "closed" });
+        shadow.innerHTML = '<button type="button">Close overlay</button>';
+        document.body.appendChild(overlay);
+        (shadow.querySelector("button") as HTMLButtonElement).focus();
+      });
+      expect(await page.evaluate(() => document.activeElement?.id)).toBe("e2e-openkey-focus-stand-in");
+
+      await page.keyboard.press("Tab");
+      expect(await focusInside(page, selector), "Tab moved focus into the covered prompt").toBe(false);
+      await page.keyboard.press("Enter");
+      // Give a stray confirm time to land before asserting that none did.
+      await page.waitForTimeout(300);
+      await expect(page.locator(selector)).toHaveCount(1);
+      expect(await result(page)).toBeUndefined();
     });
   }
 

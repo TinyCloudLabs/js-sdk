@@ -396,8 +396,10 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
     }
   };
 
-  // Keeps Tab and Shift+Tab on this dialog's controls.
+  // Keeps Tab and Shift+Tab on this dialog's controls. Tabs that start outside
+  // the dialog (for example from an overlay above it) are left to the browser.
   private trapTab(e: KeyboardEvent): void {
+    if (!e.composedPath().includes(this)) return;
     const root = this.shadowRoot!;
     const controls = focusableControls(root);
     const current = controls.indexOf(root.activeElement as HTMLElement);
