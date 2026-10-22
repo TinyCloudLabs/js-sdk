@@ -7,6 +7,7 @@ import {
   authorizationVerdictOf,
   CaveatedDelegationUnsupportedError,
   canonicalHashHex,
+  buildNetworkId,
   hexEncode,
   encryptionBase64Decode,
   encryptionBase64Encode,
@@ -19,6 +20,7 @@ import {
   type NetworkDescriptor,
   type PermissionEntry,
   ServiceContext,
+  parseNetworkId,
   PermissionNotInManifestError,
 } from "@tinycloud/sdk-core";
 import { NodeWasmBindings } from "./NodeWasmBindings";
@@ -1431,6 +1433,86 @@ test("runtime grants that include decrypt honour an explicit expiry of one hour 
   expect(Math.abs(lastPrepareExpiryMs(node) - target)).toBeLessThanOrEqual(5_000);
   expect(delegations).toHaveLength(1);
   expect(Math.abs(delegations[0].expiry.getTime() - target)).toBeLessThanOrEqual(5_000);
+});
+
+/** A per-share network of the node's own owner: `share-<shareId>`, the shape share-sdk mints. */
+const SHARE_NETWORK_ID_SUFFIX = "abcdef0123456789";
+function shareNetworkIdFor(node: TinyCloudNode): string {
+  const { ownerDid } = parseNetworkId(node.getDefaultEncryptionNetworkId());
+  return buildNetworkId(ownerDid, `share-${SHARE_NETWORK_ID_SUFFIX}`);
+}
+
+test("decrypt on a per-share network may last seven days", async () => {
+  const node = makeExpiryTestNode();
+  const permission: PermissionEntry = {
+    service: "tinycloud.encryption",
+    path: shareNetworkIdFor(node),
+    actions: DECRYPT_EXPIRY_TEST_ACTIONS,
+  };
+
+  const before = Date.now();
+  let delegations: Array<{ expiry: Date }> = [];
+  await withActivatedDelegations(async () => {
+    delegations = await node.grantRuntimePermissions([permission], { expiry: "7d" });
+  });
+
+  const target = before + 7 * 24 * 60 * 60_000;
+  expect(Math.abs(lastPrepareExpiryMs(node) - target)).toBeLessThanOrEqual(5_000);
+  expect(delegations).toHaveLength(1);
+});
+
+test("decrypt on a per-share network may last thirty days", async () => {
+  const node = makeExpiryTestNode();
+  const permission: PermissionEntry = {
+    service: "tinycloud.encryption",
+    path: shareNetworkIdFor(node),
+    actions: DECRYPT_EXPIRY_TEST_ACTIONS,
+  };
+
+  const before = Date.now();
+  await withActivatedDelegations(async () => {
+    await node.grantRuntimePermissions([permission], { expiry: "30d" });
+  });
+
+  const target = before + 30 * 24 * 60 * 60_000;
+  expect(Math.abs(lastPrepareExpiryMs(node) - target)).toBeLessThanOrEqual(5_000);
+});
+
+test("decrypt on a per-share network keeps the 30-day default", async () => {
+  const node = makeExpiryTestNode();
+  const permission: PermissionEntry = {
+    service: "tinycloud.encryption",
+    path: shareNetworkIdFor(node),
+    actions: DECRYPT_EXPIRY_TEST_ACTIONS,
+  };
+
+  const before = Date.now();
+  await withActivatedDelegations(async () => {
+    await node.grantRuntimePermissions([permission]);
+  });
+
+  const target = before + 30 * 24 * 60 * 60_000;
+  expect(Math.abs(lastPrepareExpiryMs(node) - target)).toBeLessThanOrEqual(5_000);
+});
+
+test("a call that mixes default-network and per-share decrypt is capped as a whole", async () => {
+  const node = makeExpiryTestNode();
+  const defaultDecrypt: PermissionEntry = {
+    service: "tinycloud.encryption",
+    path: node.getDefaultEncryptionNetworkId(),
+    actions: DECRYPT_EXPIRY_TEST_ACTIONS,
+  };
+  const shareDecrypt: PermissionEntry = {
+    service: "tinycloud.encryption",
+    path: shareNetworkIdFor(node),
+    actions: DECRYPT_EXPIRY_TEST_ACTIONS,
+  };
+
+  await withActivatedDelegations(async () => {
+    await expect(node.grantRuntimePermissions([defaultDecrypt, shareDecrypt], { expiry: "7d" }))
+      .rejects.toMatchObject({ code: "DECRYPT_EXPIRY_TOO_LONG" });
+  });
+  expect(allPrepareExpiryMs(node)).toHaveLength(0);
 });
 
 test("runtime grants without decrypt keep the 30-day default", async () => {
