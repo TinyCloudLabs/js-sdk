@@ -812,6 +812,18 @@ export function activeRootCeiling(root: Ledger): { row: string; ceiling: GzipSiz
 }
 
 /**
+ * The active root ceiling for one format, or an error when there is none. A ledger with no root row, or an active
+ * row without a number for `format`, must fail the gate rather than silently skip it.
+ */
+export function rootCeilingFor(root: Ledger, format: keyof GzipSizes): { row: string; ceiling: number } | { error: string } {
+  const active = activeRootCeiling(root);
+  if (active === undefined) return { error: `${format}: no active root ceiling in the ledger; the absolute root gate cannot be skipped.` };
+  const ceiling = active.ceiling[format];
+  if (typeof ceiling !== "number") return { error: `${format}: active root row ${active.row} has no ceiling for this format; the absolute root gate cannot be skipped.` };
+  return { row: active.row, ceiling };
+}
+
+/**
  * #606 (security dependency updates), approved by Naomi, 2026-10-19: the kv-storage worker is admitted at exactly the 822,753 B
  * GitHub measured on master 54a2408d (+86 over TC-1475's 822,667). Worker only; nothing else moves.
  */
