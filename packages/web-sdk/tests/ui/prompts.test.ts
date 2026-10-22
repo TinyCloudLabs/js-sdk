@@ -15,6 +15,7 @@ import { createPromptScope, dismissPrompts, mountPrompt, prompts } from "../../s
 // ---------------------------------------------------------------------------
 
 class FakeNode {
+  focus(): void {}
   children: FakeNode[] = [];
   parent: FakeNode | undefined;
   innerHTML = "";
