@@ -26,6 +26,7 @@ import {
 } from "./scoped-login.js";
 import { assertNotLocalOwner, assertSessionReplaceable, commitLogin, readProfileSnapshot } from "./login-commit.js";
 import { announceFirstOwner, openKeyPrimaryFlag, warnIfNotPrimaryKey, withOwnerKeyPrimary } from "./owner-key.js";
+import { admitsSharePublishingDecrypt, isDeviceRestrictedPermission } from "../share/publishing-manifest.js";
 
 /** OpenKey caps device-approved delegations at 30 days. */
 const DEVICE_DELEGATION_MAX_SECONDS = 30 * 24 * 60 * 60;
@@ -88,6 +89,8 @@ export interface DeviceAuthorizationInput {
   shareOrigin: string;
   /** Manifest permissions: one space, fully qualified services and actions. */
   permissions: PermissionEntry[];
+  /** Set only by the builtin share-publishing flow: admits its one decrypt entry. */
+  sharePublishingDecrypt?: boolean;
   /** Requested lifetime or absolute deadline; defaults to the 30-day maximum. */
   expiry?: RequestedExpiry;
   reason?: string;
@@ -425,10 +428,8 @@ function writeApprovalPrompt(prompt: DeviceApprovalPrompt): void {
  */
 export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): Promise<DeviceAuthorizationResult> {
   validateLoginPermissions(input.permissions);
-  if (input.permissions.some((permission) =>
-    permission.service === "tinycloud.encryption" ||
-    permission.space === "secrets" ||
-    (permission.space?.startsWith("tinycloud:") && permission.space.endsWith(":secrets")))) {
+  const restricted = input.permissions.some(isDeviceRestrictedPermission);
+  if (restricted && !(input.sharePublishingDecrypt === true && admitsSharePublishingDecrypt(input.permissions))) {
     throw new CLIError(
       "DEVICE_AUTH_UNSUPPORTED_SCOPE",
       "--device cannot authorize tinycloud.encryption or the secrets space. Use another OpenKey approval method for this manifest.",

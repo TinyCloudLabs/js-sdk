@@ -681,6 +681,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             nodeOrigin: ctx.host,
             shareOrigin: DEFAULT_SHARE_ORIGIN,
             permissions: loginPermissions!,
+            sharePublishingDecrypt: options.manifest === SHARE_PUBLISHING_MANIFEST_REF,
             ...(options.expiry === undefined ? {} : { expiry: parseRequestedExpiry(parseExpiryOption(options.expiry)!) }),
             reason: "Allow this TinyCloud CLI profile to use the permissions in the requested manifest.",
             expectedOwner: owner,

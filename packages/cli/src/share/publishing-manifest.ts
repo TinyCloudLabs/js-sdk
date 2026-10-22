@@ -28,6 +28,10 @@ export const SHARE_PUBLISHING_MANIFEST_REF = "builtin:share-publishing";
  *   - `list` finds the next version number and backs `share versions`.
  *   Profiles signed in before this entry need `auth login --device --manifest builtin:share-publishing` again.
  *
+ * - `tinycloud.encryption/decrypt` (path `""`, the owner's default network):
+ *   decrypts network-encrypted shares. `--device` admits this entry for this
+ *   manifest only; see {@link admitsSharePublishingDecrypt}.
+ *
  * Not requested:
  * - `del`: no `tc share` command deletes stored sources.
  * - `list` on the bearer prefix: bearer links are single files.
@@ -65,6 +69,12 @@ export const SHARE_PUBLISHING_MANIFEST = {
       skipPrefix: true,
       actions: ["tinycloud.kv/get", "tinycloud.kv/metadata", "tinycloud.kv/put", "tinycloud.kv/list"],
     },
+    {
+      service: "tinycloud.encryption",
+      path: "",
+      skipPrefix: true,
+      actions: ["tinycloud.encryption/decrypt"],
+    },
   ],
 } as const;
 
@@ -76,4 +86,38 @@ export function sharePublishingPermissions(): PermissionEntry[] {
     path: permission.path,
     actions: [...permission.actions],
   }));
+}
+
+/** Device login refuses encryption entries and the secrets space, except as admitted below. */
+export function isDeviceRestrictedPermission(permission: PermissionEntry): boolean {
+  return permission.service === "tinycloud.encryption" ||
+    permission.space === "secrets" ||
+    (permission.space?.startsWith("tinycloud:") === true && permission.space.endsWith(":secrets"));
+}
+
+/**
+ * The one entry the builtin share-publishing device login may carry:
+ * `tinycloud.encryption/decrypt` on path `""` in the owner's default space,
+ * with exactly these four keys. The owner's space may arrive resolved to its
+ * `tinycloud:` URI.
+ */
+export function isSharePublishingDecryptPermission(permission: PermissionEntry): boolean {
+  const keys = Object.keys(permission).filter((key) => permission[key as keyof PermissionEntry] !== undefined).sort();
+  const space = permission.space ?? "";
+  return keys.join(",") === "actions,path,service,space" &&
+    permission.service === "tinycloud.encryption" &&
+    (space === "default" || (space.startsWith("tinycloud:") && space.endsWith(":default"))) &&
+    permission.path === "" &&
+    permission.actions.length === 1 &&
+    permission.actions[0] === "tinycloud.encryption/decrypt";
+}
+
+/**
+ * Whether a device request's only restricted entry is {@link isSharePublishingDecryptPermission}.
+ * Callers also check that the request came from the builtin manifest.
+ */
+export function admitsSharePublishingDecrypt(permissions: readonly PermissionEntry[]): boolean {
+  const restricted = permissions.filter(isDeviceRestrictedPermission);
+  const [only] = restricted;
+  return restricted.length === 1 && only !== undefined && isSharePublishingDecryptPermission(only);
 }
