@@ -10,4 +10,6 @@ Prompts are announced as modal dialogs (`role="dialog"`, `aria-modal="true"`, na
 
 Approve and Create act only when they are the topmost element at their centre at the moment they are activated (click, or Enter or Space on the focused button). An element covering them blocks the action, including a translucent one; the check is a hit test, so an element with `pointer-events: none` does not block it. Decline, close, Escape, and the backdrop are not gated.
 
+Prompts scroll inside their backdrop when the window is shorter than the prompt, so Approve and Create stay reachable by keyboard and mouse at any window height. Clicking or dragging the backdrop's scrollbar neither approves nor declines the prompt.
+
 The unused node selection modal is removed (`NodeSelectionModal.ts`, and its re-exports from the internal `notifications` barrel). The package entry point never exported it. Selectors that matched `tinycloud-space-modal` in the light DOM no longer match, because prompts are inside the host's open shadow root (`host.shadowRoot`).

@@ -201,13 +201,14 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
         backdrop-filter: blur(8px);
         -webkit-backdrop-filter: blur(8px);
         z-index: 2000000;
-        display: flex; align-items: center; justify-content: center;
+        display: flex; align-items: flex-start; justify-content: center; overflow-y: auto;
         padding: 20px; opacity: 0;
         transition: opacity 0.2s cubic-bezier(0.4, 0, 0.2, 1);
         pointer-events: none;
       }
       .modal-backdrop[data-state="visible"] { opacity: 1; pointer-events: auto; }
       .modal-container {
+        margin: auto;
         transform: scale(0.95) translateY(10px);
         transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
       }

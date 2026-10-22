@@ -130,8 +130,9 @@ export class TinyCloudSpaceModal extends HTMLElement {
         -webkit-backdrop-filter: blur(8px);
         z-index: 2000000;
         display: flex;
-        align-items: center;
+        align-items: flex-start;
         justify-content: center;
+        overflow-y: auto;
         padding: 20px;
         opacity: 0;
         transition: opacity 0.2s cubic-bezier(0.4, 0, 0.2, 1);
@@ -144,6 +145,7 @@ export class TinyCloudSpaceModal extends HTMLElement {
       }
 
       .modal-container {
+        margin: auto;
         transform: scale(0.95) translateY(10px);
         transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
       }

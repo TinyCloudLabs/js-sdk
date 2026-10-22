@@ -15,7 +15,7 @@ interface PromptWindow {
     mountWithKeeper(): boolean;
     mountWithConfig(legacy: Record<string, unknown>): boolean;
     openSpaceCreation(): boolean;
-    openPermission(): boolean;
+    openPermission(extraEntries?: number): boolean;
     openThrowingSpaceCreation(): boolean;
     reset(): boolean;
     unregister(): boolean;
@@ -61,8 +61,8 @@ async function openSpaceCreation(page: Page) {
   await page.evaluate(() => (window as unknown as PromptWindow).__tc.openSpaceCreation());
 }
 
-async function openPermission(page: Page) {
-  await page.evaluate(() => (window as unknown as PromptWindow).__tc.openPermission());
+async function openPermission(page: Page, extraEntries = 0) {
+  await page.evaluate((n) => (window as unknown as PromptWindow).__tc.openPermission(n), extraEntries);
 }
 
 async function openThrowingSpaceCreation(page: Page) {
@@ -790,4 +790,68 @@ for (const scheme of ["light", "dark"] as const) {
     await expect(permissionModal).toHaveCount(0);
     await expect.poll(() => permResult(page)).toBe(false);
   });
+}
+
+// Small-height prompts. The backdrop scrolls, so Approve and Create stay reachable
+// by keyboard and mouse at every window height. The permission prompt gets two extra
+// entries (three in all), so it is taller than the window at the short heights.
+const SWEEP_HEIGHTS = [140, 200, 260, 360, 480, 700];
+const CONFIRM = { space: "create", permission: "approve" } as const;
+const CONFIRM_SELECTOR = { space: '[data-action="create"]', permission: '[data-action="approve"]' } as const;
+
+function openSized(page: Page, kind: "space" | "permission") {
+  return kind === "space" ? openSpaceCreation(page) : openPermission(page, 2);
+}
+
+// Presses `key` until the confirm control has focus. A Tab from an overlay does not
+// reach the prompt in browser order, so the overlay tests use Shift+Tab.
+async function focusConfirm(page: Page, kind: "space" | "permission", key: "Tab" | "Shift+Tab") {
+  const want = CONFIRM[kind];
+  for (let i = 0; i < 12; i++) {
+    if ((await focusedLabel(page)) === want) return;
+    await page.keyboard.press(key);
+  }
+  expect(await focusedLabel(page), `${key} never reached ${want}`).toBe(want);
+}
+
+for (const scheme of ["light", "dark"] as const) {
+  for (const kind of ["space", "permission"] as const) {
+    const selector = PROMPTS[kind].selector;
+    const result = PROMPTS[kind].result;
+
+    // The 1024x200 space prompt and 1024x360 three-entry permission prompt are both in the sweep.
+    for (const height of SWEEP_HEIGHTS) {
+      test(`${scheme}: ${kind} at 1024x${height}: Tab to confirm and Enter approves`, async ({ page }) => {
+        await page.setViewportSize({ width: 1024, height });
+        await mountHarness(page, scheme);
+        await openSized(page, kind);
+        await focusConfirm(page, kind, "Tab");
+        await page.keyboard.press("Enter");
+        await expect.poll(() => result(page)).toBe(true);
+      });
+
+      test(`${scheme}: ${kind} at 1024x${height}: Shift+Tab under a covering overlay is blocked`, async ({ page }) => {
+        await page.setViewportSize({ width: 1024, height });
+        await mountHarness(page, scheme);
+        await openSized(page, kind);
+        await addOverlay(page, "cover", "background:rgba(0,0,0,.5)", true);
+        await focusConfirm(page, kind, "Shift+Tab");
+        await page.keyboard.press("Enter");
+        await expect(page.locator(selector)).toHaveCount(1);
+        expect(await result(page)).toBeUndefined();
+      });
+    }
+
+    // The mouse must reach the clipped confirm control after Playwright scrolls it into view.
+    test(`${scheme}: ${kind}: mouse click on the clipped confirm control approves`, async ({ page }) => {
+      const height = kind === "space" ? 200 : 360;
+      await page.setViewportSize({ width: 1024, height });
+      await mountHarness(page, scheme);
+      await openSized(page, kind);
+      const confirm = page.locator(`${selector} ${CONFIRM_SELECTOR[kind]}`);
+      await expect(confirm).not.toBeInViewport();
+      await confirm.click();
+      await expect.poll(() => result(page)).toBe(true);
+    });
+  }
 }

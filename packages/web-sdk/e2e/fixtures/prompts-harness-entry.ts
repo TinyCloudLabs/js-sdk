@@ -116,11 +116,17 @@ w.__tc = {
       );
     return true;
   },
-  openPermission() {
+  openPermission(extraEntries = 0) {
     if (handle === undefined) throw new Error("mount() must run first");
     delete w.__permResult;
     delete w.__permError;
-    showPermissionRequestModal({ appName: "E2E App", additional: [] }, handle.promptScope).then(
+    const additional = Array.from({ length: extraEntries }, (_, i) => ({
+      service: "tinycloud.kv",
+      space: "e2e",
+      path: `extra-${i}/`,
+      actions: ["tinycloud.kv/get"],
+    }));
+    showPermissionRequestModal({ appName: "E2E App", additional }, handle.promptScope).then(
       (result) => {
         w.__permResult = result.approved;
       },
