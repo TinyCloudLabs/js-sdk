@@ -176,6 +176,17 @@ test("snapshot is a copy; mutating it does not change the log", () => {
   expect(log.snapshot().length).toBe(1);
 });
 
+test("a recorded event is frozen: a returned event cannot change later snapshots", () => {
+  const log = new RequestLog();
+  log.record(build({ service: "kv", op: "kv/get", path: "notes/a" }));
+  const first = log.snapshot()[0]!;
+  expect(Object.isFrozen(first)).toBe(true);
+  expect(() => {
+    (first as { path: string | null }).path = "TAMPERED/";
+  }).toThrow(TypeError);
+  expect(log.snapshot()[0]!.path).toBe("notes/");
+});
+
 test("a throwing subscriber does not stop other subscribers or the record call", () => {
   const log = new RequestLog();
   const seen: number[] = [];

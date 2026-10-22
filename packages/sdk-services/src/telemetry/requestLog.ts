@@ -285,7 +285,7 @@ export class RequestLog implements RequestSink, RequestLogReader {
   readonly #clearListeners = new Set<Listener<[]>>();
 
   record(draft: RequestDraft): void {
-    const event: RequestEvent = { ...draft, id: this.#nextId++ };
+    const event: RequestEvent = Object.freeze({ ...draft, id: this.#nextId++ });
     this.#slots[this.#head] = event;
     this.#head = (this.#head + 1) % RING_SIZE;
     if (this.#count < RING_SIZE) this.#count++;
