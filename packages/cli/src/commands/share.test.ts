@@ -3,7 +3,7 @@ import { Command } from "commander";
 import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { MemorySenderShareRecordStorage, revokeShare, ShareNotifyError, type PublishedShare, type SenderShareRecord, type ShareTarget } from "@tinycloud/share-sdk";
+import { MemorySenderShareRecordStorage, revokeShare, ShareNotifyError, ShareReceiveError, type PublishedShare, type SenderShareRecord, type ShareTarget } from "@tinycloud/share-sdk";
 import { ProfileLockTimeoutError } from "@tinycloud/operations/state";
 import { configureShareCommandServices, inspectShareInputOnce, registerShareCommand, parseShareTarget, shareCliError, shareHistoryRecoverError } from "./share.js";
 import { ShareHistoryReadError, ShareHistoryRetryError, ShareHistoryUnreadableError, SharePublishAuthorityError } from "../share/errors.js";
@@ -43,6 +43,39 @@ describe("tc share command contract", () => {
     expect(() => parseShareTarget("email:a%b@example.com")).toThrow("recipient email is invalid");
     expect(() => parseShareTarget("domain:example.123")).toThrow("recipient email domain is invalid");
     expect(() => parseShareTarget("unknown-target")).toThrow();
+  });
+  test("refuses email-addressed shares from a sign-in without decrypt with a clear message and exit 5 (TC-1753)", () => {
+    const refusal = shareCliError(new SharePublishAuthorityError({ kind: "decrypt-not-held" }));
+    expect([refusal.code, refusal.exitCode]).toEqual(["PERMISSION_DENIED", 5]);
+    expect(refusal.message).toBe("this sign-in can't create email-addressed shares: it has no permission to decrypt with the account's key. Nothing was shared.");
+    expect(refusal.metadata?.hint).toBe("Share it from https://share.tinycloud.xyz while signed in as the account owner, or ask the owner to share it. A link anyone can open works from this sign-in: --to anyone.");
+  });
+  test("an untrusted-origin inline link exits 5 ORIGIN_MISMATCH and a malformed link exits 2 INVALID_LINK (TC-1737)", () => {
+    const mismatch = shareCliError(new ShareReceiveError("origin-mismatch", "share link origin does not match the trusted viewer origin"));
+    expect([mismatch.code, mismatch.exitCode]).toEqual(["ORIGIN_MISMATCH", 5]);
+    const malformed = shareCliError(new ShareReceiveError("invalid-link", "share link format is invalid"));
+    expect([malformed.code, malformed.exitCode]).toEqual(["INVALID_LINK", 2]);
+  });
+  test("share list prints a status column: active, revoked, expired (TC-1754)", async () => {
+    const records = new MemorySenderShareRecordStorage();
+    await records.put({ ...reviewRecord, shareId: "active-share", expiresAt: "2099-01-01T00:00:00.000Z" });
+    await records.put({ ...reviewRecord, shareId: "revoked-share", expiresAt: "2099-01-01T00:00:00.000Z", revokedAt: "2026-01-01T00:00:00.000Z" });
+    await records.put({ ...reviewRecord, shareId: "expired-share", expiresAt: "2000-01-01T00:00:00.000Z" });
+    configureShareCommandServices({ records });
+    try {
+      const output = await runShareCaptured(["share", "list"]);
+      expect(output.exitCode).toBe(0);
+      const rows = new Map(output.stdout.trimEnd().split("\n").map((line) => line.split("\t")).map((cells) => [cells[0], cells]));
+      expect(rows.size).toBe(3);
+      expect(rows.get("active-share")).toEqual(["active-share", "email-domain", "2099-01-01T00:00:00.000Z", "active"]);
+      expect(rows.get("revoked-share")?.[3]).toBe("revoked");
+      expect(rows.get("expired-share")?.[3]).toBe("expired");
+      expect([...rows.values()].every((cells) => cells.length === 4)).toBe(true);
+      const json = await runShareCaptured(["share", "list", "--json"]);
+      expect(JSON.parse(json.stdout).shares.map((item: { shareId: string; revoked: boolean }) => [item.shareId, item.revoked]).sort()).toEqual([["active-share", false], ["expired-share", false], ["revoked-share", true]]);
+    } finally {
+      configureShareCommandServices({});
+    }
   });
   test("maps authority failures to profile-aware actionable CLI codes", () => {
     const localAuth = shareCliError(new SharePublishAuthorityError({
@@ -833,6 +866,20 @@ describe("tc share command contract", () => {
     expect(reads).toBe(1);
     expect(inspected).toBe("https://share.example/s/inline#v=2&p=sealed");
     expect(result).toMatchObject({ protocol: "tinycloud-share", version: 1 });
+  });
+
+  test("an inline link at an untrusted origin is an origin mismatch before any inspection; one that does not parse is left to share-sdk", async () => {
+    let inspected = 0;
+    const inspect = (async () => { inspected += 1; throw new ShareReceiveError("invalid-link", "share link format is invalid"); }) as never;
+    for (const link of [
+      "https://share.example.evil.example/s/inline#v=2&p=AAAA",
+      "http://share.example/s/inline#v=2&p=AAAA",
+    ]) {
+      await expect(inspectShareInputOnce(link, false, "https://share.example", { inspect })).rejects.toMatchObject({ code: "origin-mismatch" });
+    }
+    expect(inspected).toBe(0);
+    await expect(inspectShareInputOnce("not a url", false, "https://share.example", { inspect })).rejects.toMatchObject({ code: "invalid-link" });
+    expect(inspected).toBe(1);
   });
 });
 
