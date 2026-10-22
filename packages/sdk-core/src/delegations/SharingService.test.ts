@@ -5,7 +5,8 @@ import { ed25519 } from "@noble/curves/ed25519";
 import { CapabilityKeyRegistry } from "../authorization/CapabilityKeyRegistry";
 import { CaveatedDelegationUnsupportedError } from "../capabilities";
 import { SharingService, type EncodedShareData } from "./SharingService";
-import type { CreateDelegationParams, CreateDelegationWasmParams, Delegation, DelegationError, KeyProvider, Result } from "./types";
+import type { CreateDelegationWasmParams, Delegation, DelegationError, KeyProvider } from "./types";
+import type { CreateDelegationParams, Result } from "./types";
 
 const OWNER = "0xd559CCd9EB87c530A9a349262669386dE93cf412";
 const SPACE = `tinycloud:pkh:eip155:1:${OWNER}:applications`;
