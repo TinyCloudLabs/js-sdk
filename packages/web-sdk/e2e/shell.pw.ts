@@ -1,10 +1,7 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { expect, test, type Page } from "@playwright/test";
 import { textRow } from "./fixtures/contrast";
+import { defaultDocument, routeUiHarness } from "./fixtures/ui-route";
 
-// Built by `bun run build:e2e-ui`; the test scripts run from the package root.
-const BUNDLE = readFileSync(resolve("e2e/.build/ui.bundle.js"), "utf8");
 const ORIGIN = "http://tinycloud-ui.test";
 
 // Every test fails on an uncaught page error or a console error (errors=0).
@@ -34,17 +31,7 @@ interface HarnessWindow {
 async function mountHarness(page: Page, scheme: "light" | "dark", ui?: Record<string, unknown>) {
   await page.emulateMedia({ colorScheme: scheme });
   await page.setViewportSize({ width: 1280, height: 800 });
-  await page.route(`${ORIGIN}/**`, (route) => {
-    const path = new URL(route.request().url()).pathname;
-    if (path === "/ui.bundle.js") {
-      return route.fulfill({ status: 200, contentType: "application/javascript", body: BUNDLE });
-    }
-    return route.fulfill({
-      status: 200,
-      contentType: "text/html",
-      body: '<!doctype html><html><body><script src="/ui.bundle.js"></script></body></html>',
-    });
-  });
+  await routeUiHarness(page);
   await page.goto(`${ORIGIN}/`);
   await page.evaluate((option) => (window as unknown as HarnessWindow).__tc.mount(option), ui);
 }
@@ -270,18 +257,7 @@ for (const [name, path] of [
   ["sandboxed frame", "/sandboxed"],
 ] as const) {
   test(`nothing renders inside a ${name}`, async ({ page }) => {
-    await page.route(`${ORIGIN}/**`, (route) => {
-      const url = new URL(route.request().url()).pathname;
-      if (url === "/ui.bundle.js") {
-        return route.fulfill({ status: 200, contentType: "application/javascript", body: BUNDLE });
-      }
-      const frameTag = url === "/framed" ? '<iframe src="/"></iframe>' : url === "/sandboxed" ? '<iframe sandbox="allow-scripts" src="/"></iframe>' : "";
-      return route.fulfill({
-        status: 200,
-        contentType: "text/html",
-        body: `<!doctype html><html><body>${frameTag}<script src="/ui.bundle.js"></script></body></html>`,
-      });
-    });
+    await routeUiHarness(page, (requestPath) => defaultDocument(requestPath === "/framed" ? '<iframe src="/"></iframe>' : requestPath === "/sandboxed" ? '<iframe sandbox="allow-scripts" src="/"></iframe>' : ""));
     await page.goto(`${ORIGIN}${path}`);
     const handle = await page.locator("iframe").elementHandle();
     const frame = await handle?.contentFrame();

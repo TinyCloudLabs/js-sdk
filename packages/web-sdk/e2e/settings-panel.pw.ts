@@ -1,9 +1,6 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { expect, test, type Page } from "@playwright/test";
+import { entryBundle, isPanelChunk, PANEL_ONLY_MARKER, routeUiHarness } from "./fixtures/ui-route";
 
-// Built by `bun run build:e2e-ui`; the test scripts run from the package root.
-const BUNDLE = readFileSync(resolve("e2e/.build/ui.bundle.js"), "utf8");
 const ORIGIN = "http://tinycloud-ui.test";
 
 // Every test fails on an uncaught page error or a console error (errors=0).
@@ -33,19 +30,10 @@ const PANEL_BACKGROUND = {
 
 async function mountHarness(page: Page, scheme: "light" | "dark", ui?: Record<string, unknown>) {
   await page.emulateMedia({ colorScheme: scheme });
-  await page.route(`${ORIGIN}/**`, (route) => {
-    const path = new URL(route.request().url()).pathname;
-    if (path === "/ui.bundle.js") {
-      return route.fulfill({ status: 200, contentType: "application/javascript", body: BUNDLE });
-    }
-    return route.fulfill({
-      status: 200,
-      contentType: "text/html",
-      body: '<!doctype html><html><body><script src="/ui.bundle.js"></script></body></html>',
-    });
-  });
+  const requested = await routeUiHarness(page);
   await page.goto(`${ORIGIN}/`);
   await page.evaluate((option) => (window as unknown as HarnessWindow).__tc.mount(option), ui);
+  return requested;
 }
 
 for (const scheme of ["light", "dark"] as const) {
@@ -79,6 +67,17 @@ for (const scheme of ["light", "dark"] as const) {
     await expect(launcher).toBeVisible();
   });
 }
+
+test("the settings panel is fetched on first open, not with the page", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const requested = await mountHarness(page, "light");
+  expect(entryBundle()).not.toContain(PANEL_ONLY_MARKER);
+  expect(requested.filter(isPanelChunk)).toEqual([]);
+
+  await page.getByRole("button", { name: "TinyCloud settings", exact: true }).click();
+  await expect(page.locator("#tinycloud-ui-panel")).toBeVisible();
+  expect(requested.filter(isPanelChunk)).toHaveLength(1);
+});
 
 // The launcher's focus ring must clear 3:1 on a light and a dark page. Its
 // outline sits outside the element, so the 6px halo of the opposite ink covers
