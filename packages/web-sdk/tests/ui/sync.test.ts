@@ -129,6 +129,7 @@ function makeCtx(facade: SyncFacade | undefined, header: HeaderFake = makeHeader
     setStatus: () => undefined,
     topStatus: header.topStatus,
     onStatusChange: header.onStatusChange,
+    toastsEnabled: () => true,
     toast: () => "",
     openPanel: () => undefined,
     closePanel: () => undefined,

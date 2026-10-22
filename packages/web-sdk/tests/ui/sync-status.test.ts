@@ -50,6 +50,7 @@ function makeHost(initial: SyncFacade | undefined) {
     },
     topStatus: () => null,
     onStatusChange: () => () => undefined,
+    toastsEnabled: () => true,
     toast: () => "",
     openPanel: () => undefined,
     closePanel: () => undefined,

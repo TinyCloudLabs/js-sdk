@@ -130,6 +130,7 @@ function ctxFor(client: PanelClient): HostContext {
     setStatus: () => undefined,
     topStatus: () => null,
     onStatusChange: () => () => undefined,
+    toastsEnabled: () => true,
     toast: () => "",
     openPanel: () => undefined,
     closePanel: () => undefined,

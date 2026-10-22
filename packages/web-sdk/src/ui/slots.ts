@@ -46,6 +46,8 @@ export interface HostContext {
   topStatus(): StatusCode | null;
   /** Fires whenever `topStatus()` changes. Returns the unsubscribe function. */
   onStatusChange(cb: () => void): () => void;
+  /** False when `ui.toasts` is false. Parts check it before any work that only feeds a toast. */
+  toastsEnabled(): boolean;
   /** Returns the toast id, or null when `ui.toasts` is false. */
   toast(t: ToastRequest): string | null;
   openPanel(): void;

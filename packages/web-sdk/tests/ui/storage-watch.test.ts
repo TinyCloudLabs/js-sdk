@@ -61,7 +61,7 @@ function makeEpisode(initiallyOn: boolean): EpisodeStub {
   };
 }
 
-function makeHost(initial: EpisodeStub | undefined, status: StatusRead = failedStatus) {
+function makeHost(initial: EpisodeStub | undefined, status: StatusRead = failedStatus, toastsOn = true) {
   let episode = initial;
   const clientListeners = new Set<() => void>();
   const statuses: Array<StatusCode | null> = [];
@@ -76,6 +76,7 @@ function makeHost(initial: EpisodeStub | undefined, status: StatusRead = failedS
       };
     },
     developerMode: () => false,
+    toastsEnabled: () => toastsOn,
     setStatus: (source, status) => {
       if (source === "storage") statuses.push(status);
     },
@@ -261,6 +262,45 @@ describe("storage-watch part", () => {
       href: STORAGE_MANAGE_URL,
     });
     expect(host.statuses).not.toContain("storage_full");
+  });
+
+  test("with ui.toasts off, a full episode shows the status and makes no status request", async () => {
+    let reads = 0;
+    const episode = makeEpisode(true);
+    const host = makeHost(
+      episode,
+      () => {
+        reads += 1;
+        return failedStatus();
+      },
+      false,
+    );
+    storageWatch.start(host.ctx, layer);
+    await settle();
+
+    expect(host.statuses).toEqual(["storage_full"]);
+    expect(reads).toBe(0);
+    expect(host.toasts).toHaveLength(0);
+  });
+
+  test("with ui.toasts off, a delegated owner found full makes no status request", async () => {
+    let reads = 0;
+    const episode = makeEpisode(false);
+    const host = makeHost(
+      episode,
+      () => {
+        reads += 1;
+        return failedStatus();
+      },
+      false,
+    );
+    storageWatch.start(host.ctx, layer);
+
+    episode.delegated();
+    await settle();
+
+    expect(reads).toBe(0);
+    expect(host.toasts).toHaveLength(0);
   });
 
   test("a delegated toast whose status read finishes after a client switch is dropped", async () => {

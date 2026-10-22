@@ -55,7 +55,7 @@ export const storageWatch: HostPart = {
         return;
       }
       ctx.setStatus(SOURCE, "storage_full");
-      if (announced) return;
+      if (announced || !ctx.toastsEnabled()) return;
       announced = true;
       const mine = epoch;
       void manageLink(ctx.client()).then((href) => {
@@ -65,6 +65,7 @@ export const storageWatch: HostPart = {
     }
 
     function onDelegated(): void {
+      if (!ctx.toastsEnabled()) return;
       const gen = clientGen;
       void manageLink(ctx.client()).then((href) => {
         if (gen !== clientGen) return;
