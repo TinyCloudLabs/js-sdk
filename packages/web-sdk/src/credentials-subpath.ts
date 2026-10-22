@@ -9,3 +9,25 @@ export type {
   PrimitiveStepHandler,
   PrimitiveStepResult,
 } from "./credentials/types";
+export {
+  acquireEmailProof,
+  completeEmailProof,
+  createEd25519HolderSigner,
+  createMemoryEmailProofPendingStore,
+  EmailProofError,
+  requestEmailProofCode,
+} from "./credentials/email-proof";
+export type {
+  EmailProofAcquireInput,
+  EmailProofAcquisition,
+  EmailProofErrorCode,
+  EmailProofOptions,
+  EmailProofPending,
+  EmailProofPendingStore,
+  EmailProofProfileId,
+  EmailProofRequestInput,
+  EmailProofResult,
+  EmailProofStep,
+  HolderAlgorithm,
+  HolderSigner,
+} from "./credentials/email-proof";

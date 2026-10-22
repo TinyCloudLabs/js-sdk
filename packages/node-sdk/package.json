@@ -19,6 +19,11 @@
       "import": "./dist/core.js",
       "require": "./dist/core.cjs"
     },
+    "./credential-pending-store": {
+      "types": "./dist/credential-pending-store.d.ts",
+      "import": "./dist/credential-pending-store.js",
+      "require": "./dist/credential-pending-store.cjs"
+    },
     "./replication/runtime": {
       "import": {
         "types": "./dist/replication/runtime.d.ts",

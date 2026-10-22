@@ -4,6 +4,7 @@ export default defineConfig({
   entry: {
     index: 'src/index.ts',
     core: 'src/core.ts',
+    'credential-pending-store': 'src/credential-pending-store.ts',
     'replication/runtime': 'src/replication/runtime.ts',
     'replication/authority': 'src/replication/authority.ts',
     'replication/gated-network': 'src/replication/gated-network.ts',
