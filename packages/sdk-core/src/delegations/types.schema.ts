@@ -528,6 +528,7 @@ export const GenerateShareParamsSchema = z.object({
    * Whether the recipient may re-delegate the share. Default `true`.
    * `false` issues a terminal delegation: the node refuses onward `/delegate`.
    * Without a session-key delegation that covers the path, `false` fails with PERMISSION_DENIED.
+   * Receive such a share with `receive(link, { autoSubdelegate: false })`; the default auto-subdelegation is refused for it.
    */
   allowSubDelegation: z.boolean().optional(),
 });

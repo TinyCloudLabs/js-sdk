@@ -1052,4 +1052,14 @@ describe("SharingService non-transferable shares", () => {
       error: { code: "PERMISSION_DENIED", message: "Sharing link does not allow delegation" },
     });
   });
+
+  test("receives a non-transferable share with autoSubdelegate:false", async () => {
+    const { service } = makeGenerateService();
+
+    const result = await service.receive(shareLink(service, { allowSubDelegation: false }), {
+      autoSubdelegate: false,
+    });
+
+    expect(result.ok).toBe(true);
+  });
 });
