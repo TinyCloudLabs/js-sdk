@@ -120,9 +120,16 @@ export interface LocalNodeState extends Tagged {
 // have no facade field today; they need a replication status read.
 // ---------------------------------------------------------------------------
 
+/**
+ * One replicated folder. `items`, `bytes` and `waiting` are STUB in P1: no real
+ * per-folder status read exists yet (W4). Real records leave them absent.
+ */
 export interface LocalFolder {
   readonly prefix: string;
   readonly state: "syncing" | "ok" | "paused";
+  readonly items?: number;
+  readonly bytes?: number;
+  readonly waiting?: number;
 }
 
 export interface LocalCopyStatus extends Tagged, SyncState {
