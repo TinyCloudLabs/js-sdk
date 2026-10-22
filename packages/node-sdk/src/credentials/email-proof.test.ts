@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { format, inspect } from "node:util";
 import { createFileEmailProofPendingStore } from "../credential-pending-store";
 import { ed25519 } from "@noble/curves/ed25519";
-import { canonicalDigest, type CredentialFlowDescriptor } from "@tinycloud/sdk-core";
+import { CredentialError, canonicalDigest, holderBindingSigningBytes, type CredentialFlowDescriptor } from "@tinycloud/sdk-core";
 import {
   acquireEmailProof,
   acquireEmailProofWithIssuerKeys,
@@ -709,4 +709,45 @@ test("a holder whose kid is not its own did key id is refused before any request
   await expect(completeEmailProof({ pending, code: CODE, holder: custom, fetch }))
     .rejects.toMatchObject({ code: "HOLDER_INVALID" });
   expect(calls).toBe(0);
+});
+
+/** Moves a requested acquisition to holder_binding_required and returns a holder signature over the binding the witness issued. */
+async function signHolderBinding(transport: OpenCredentialsHttpTransport, pending: EmailProofPending): Promise<string> {
+  await transport.beginStep(pending.requestId, pending.verifier, "mailbox_otp");
+  await transport.submitStep(pending.requestId, pending.verifier, "mailbox_otp", { otp: CODE });
+  const binding = await transport.holderBinding(pending.requestId, pending.verifier);
+  return Buffer.from(await HOLDER.sign(holderBindingSigningBytes(binding))).toString("base64url");
+}
+
+test("the transport posts an explicit holder key's kid verbatim, and the did's own kid when none is given", async () => {
+  const witness = makeWitness({ code: CODE });
+  const bodies: { alg: string; kid: string }[] = [];
+  const fetch = asFetch(async (url, init) => {
+    if (String(url).endsWith("/holder-signature")) bodies.push(JSON.parse(String(init?.body)));
+    return witness.fetch(url, init);
+  });
+  const pending = await requestEmailProofCode({ address: ADDRESS, holder: HOLDER, fetch });
+  const transport = new OpenCredentialsHttpTransport(email, fetch, { honorServerRecoverable: true });
+  const signature = await signHolderBinding(transport, pending);
+  await expect(transport.submitHolderSignature(pending.requestId, pending.verifier, signature, undefined, { alg: "EdDSA", kid: "custom-kid#x" }))
+    .rejects.toMatchObject({ code: "SIGNATURE_REJECTED" });
+  await transport.submitHolderSignature(pending.requestId, pending.verifier, signature);
+  expect(bodies).toEqual([
+    { alg: "EdDSA", kid: "custom-kid#x", signature },
+    { alg: "EdDSA", kid: `${HOLDER.did}#${HOLDER.did.slice("did:key:".length)}`, signature },
+  ]);
+});
+
+test("the transport keeps the witness's recoverable:false on SIGNATURE_REJECTED when it honors the flag", async () => {
+  const witness = makeWitness({ code: CODE });
+  const fetch = asFetch((url, init) => witness.fetch(url, init));
+  const pending = await requestEmailProofCode({ address: ADDRESS, holder: HOLDER, fetch });
+  const transport = new OpenCredentialsHttpTransport(email, fetch, { honorServerRecoverable: true });
+  await signHolderBinding(transport, pending);
+  const error = await transport.submitHolderSignature(pending.requestId, pending.verifier, Buffer.alloc(64).toString("base64url")).catch((caught: unknown) => caught);
+  expect(error).toMatchObject({ code: "SIGNATURE_REJECTED", recoverable: false });
+});
+
+test("an explicit recoverable flag on CredentialError overrides the per-code default", () => {
+  expect(new CredentialError("ISSUER_UNREADY", "Credential issuer is not ready", { recoverable: false }).recoverable).toBe(false);
 });
