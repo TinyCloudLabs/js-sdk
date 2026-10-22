@@ -207,6 +207,11 @@ import {
   resolveExpiryMs,
   extractSiweExpiration,
   includesDecrypt,
+  actionsIncludeDecrypt,
+  abilitiesIncludeDecrypt,
+  DECRYPT_GRANT_MAX_EXPIRY_MS,
+  decryptExpiryTooLongError,
+  isDecryptExpiryTooLongError,
 } from "./delegateToHelpers";
 import { NodeSecretsService } from "./NodeSecretsService";
 
@@ -1011,8 +1016,6 @@ export interface DelegateToResult {
   delegation: PortableDelegation;
   prompted: boolean;
 }
-
-const DECRYPT_GRANT_MAX_EXPIRY_MS = 60 * 60 * 1000;
 
 /**
  * Options for runtime permission escalation.
@@ -5637,6 +5640,13 @@ export class TinyCloudNode {
    * @internal
    */
   private createDelegationWrapper(params: CreateDelegationWasmParams, terminal = false): CreateDelegationWasmResult {
+    // Decrypt grants last at most one hour. Backstop for every WASM issuer,
+    // including the SharingService session path, which does not pass through
+    // the delegateTo guard.
+    if (abilitiesIncludeDecrypt(params.abilities)
+      && params.expirationSecs * 1000 - Date.now() > DECRYPT_GRANT_MAX_EXPIRY_MS) {
+      throw decryptExpiryTooLongError();
+    }
     // Convert ServiceSession to the format WASM expects
     const wasmSession = {
       delegationHeader: params.session.delegationHeader,
@@ -5690,6 +5700,10 @@ export class TinyCloudNode {
     const now = new Date();
     if (!(params.expiresAt instanceof Date) || params.expiresAt.getTime() <= now.getTime() || params.expiresAt.getTime() - now.getTime() > EXPIRY.MAX_MS) {
       throw new Error("Owner delegation expiry must be explicit, future, and within EXPIRY.MAX_MS");
+    }
+    if (permissions.some((permission) => actionsIncludeDecrypt(permission.actions))
+      && params.expiresAt.getTime() - now.getTime() > DECRYPT_GRANT_MAX_EXPIRY_MS) {
+      throw decryptExpiryTooLongError();
     }
     if (!this.signer) throw new Error("Owner wallet signer is required");
     const session = this.currentTinyCloudSession();
@@ -5882,7 +5896,8 @@ export class TinyCloudNode {
         actions: params.actions,
         expiresAt: params.requestedExpiry,
       }, assertActive)).delegation;
-    } catch {
+    } catch (err) {
+      if (isDecryptExpiryTooLongError(err)) throw err;
       assertActive?.();
       return undefined;
     }
@@ -7127,7 +7142,13 @@ export class TinyCloudNode {
     //    expiry so we never emit a UCAN whose validity exceeds the parent
     //    chain, which makes the default the longest the session allows.
     const now = new Date();
-    const expiryMs = resolveExpiryMs(options?.expiry);
+    const requestsDecrypt = includesDecrypt(expandedEntries);
+    const expiryMs = requestsDecrypt && options?.expiry === undefined
+      ? DECRYPT_GRANT_MAX_EXPIRY_MS
+      : resolveExpiryMs(options?.expiry);
+    if (requestsDecrypt && expiryMs > DECRYPT_GRANT_MAX_EXPIRY_MS) {
+      throw decryptExpiryTooLongError();
+    }
     const expirationTime = new Date(now.getTime() + expiryMs);
     let effectiveExpiration = expirationTime;
     if (sessionExpiry !== undefined && sessionExpiry < expirationTime) {
@@ -7331,7 +7352,13 @@ export class TinyCloudNode {
       return { refused: "SESSION_EXPIRING", expiredAt: sessionExpiry };
     }
     const expandedEntries = this.expandPermissionEntries(entries);
-    const expiryMs = resolveExpiryMs(options?.expiry);
+    const requestsDecrypt = includesDecrypt(expandedEntries);
+    const expiryMs = requestsDecrypt && options?.expiry === undefined
+      ? DECRYPT_GRANT_MAX_EXPIRY_MS
+      : resolveExpiryMs(options?.expiry);
+    if (requestsDecrypt && expiryMs > DECRYPT_GRANT_MAX_EXPIRY_MS) {
+      throw decryptExpiryTooLongError();
+    }
     const expirationTime = new Date(nowMs + expiryMs);
     const effectiveExpiration =
       sessionExpiry !== undefined && sessionExpiry < expirationTime
@@ -8950,10 +8977,28 @@ export class TinyCloudNode {
       );
     }
 
-    // Default to the longest a sub-delegation may last: its parent's expiry.
+    // Decrypt grants last at most one hour (same rule as delegateTo). An explicit
+    // longer expiryMs is refused, not clamped; with no expiryMs a decrypt-bearing
+    // sub-delegation defaults to one hour instead of the parent's expiry.
     const now = new Date();
+    const requestsDecrypt = includesDecrypt(
+      requestedResources.map((resource) => ({
+        service: resource.service,
+        space: resource.space ?? "default",
+        path: resource.path,
+        actions: resource.actions,
+      })),
+    );
+    if (requestsDecrypt && params.expiryMs !== undefined && params.expiryMs > DECRYPT_GRANT_MAX_EXPIRY_MS) {
+      throw decryptExpiryTooLongError();
+    }
+    // Default to the longest a sub-delegation may last: its parent's expiry,
+    // further capped at one hour when it carries decrypt.
+    const decryptCap = new Date(now.getTime() + DECRYPT_GRANT_MAX_EXPIRY_MS);
+    const defaultExpiry =
+      requestsDecrypt && parentDelegation.expiry > decryptCap ? decryptCap : parentDelegation.expiry;
     const requestedExpiry = params.expiryMs === undefined
-      ? parentDelegation.expiry
+      ? defaultExpiry
       : new Date(now.getTime() + params.expiryMs);
     // Sub-delegation cannot outlive parent, so cap at parent's expiry
     const actualExpiry =

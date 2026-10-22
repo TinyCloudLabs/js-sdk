@@ -73,6 +73,25 @@ export function legacyParamsToPermissionEntries(
  */
 export const DEFAULT_DELEGATION_EXPIRY_MS = EXPIRY.SESSION_MS;
 
+/** Longest a decrypt-bearing grant may last. Decrypt grants over this are refused, never clamped. */
+export const DECRYPT_GRANT_MAX_EXPIRY_MS = 60 * 60 * 1000;
+
+/** `code` carried by the decrypt expiry refusal. */
+export const DECRYPT_EXPIRY_TOO_LONG = "DECRYPT_EXPIRY_TOO_LONG";
+
+/** The refusal every decrypt-expiry guard throws, before any prepare, sign, or network call. */
+export function decryptExpiryTooLongError(): Error {
+  return Object.assign(new Error("decrypt grants last at most one hour"), {
+    code: DECRYPT_EXPIRY_TOO_LONG,
+  });
+}
+
+/** Whether `err` is the decrypt expiry refusal. */
+export function isDecryptExpiryTooLongError(err: unknown): boolean {
+  return typeof err === "object" && err !== null
+    && (err as { code?: unknown }).code === DECRYPT_EXPIRY_TOO_LONG;
+}
+
 /**
  * Whether any entry grants the decrypt action: by its literal URN or through a
  * wildcard that covers it (`*`, `tinycloud.encryption/*`), per
@@ -80,9 +99,23 @@ export const DEFAULT_DELEGATION_EXPIRY_MS = EXPIRY.SESSION_MS;
  * so short names are full URNs. Internal only: not re-exported from the package
  * index.
  */
+export function actionsIncludeDecrypt(actions: readonly string[]): boolean {
+  return actions.some((action) => actionContains(action, ENCRYPTION.DECRYPT));
+}
+
 export function includesDecrypt(entries: readonly PermissionEntry[]): boolean {
-  return entries.some((entry) =>
-    entry.actions.some((action) => actionContains(action, ENCRYPTION.DECRYPT)),
+  return entries.some((entry) => actionsIncludeDecrypt(entry.actions));
+}
+
+/**
+ * Whether a wasm `abilities` map (service -> path -> actions) grants decrypt.
+ * Internal only: the sink guard in `createDelegationWrapper` uses it.
+ */
+export function abilitiesIncludeDecrypt(
+  abilities: Readonly<Record<string, Readonly<Record<string, readonly string[]>>>>,
+): boolean {
+  return Object.values(abilities).some((paths) =>
+    Object.values(paths).some((actions) => actionsIncludeDecrypt(actions)),
   );
 }
 
