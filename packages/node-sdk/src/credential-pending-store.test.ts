@@ -1,10 +1,10 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { format, inspect } from 'node:util';
-import { createFileEmailProofPendingStore, PendingStoreError, storedSecret } from './credential-pending-store';
+import { createFileEmailProofPendingStore, PendingStoreError, storedSecret, type FileEmailProofPendingStoreOptions } from './credential-pending-store';
 import { restoreEmailProofPending, type EmailProofPending } from './credentials/email-proof';
 
 const MINUTE = 60_000;
@@ -451,6 +451,39 @@ describe('file pending store: owner-only storage', () => {
     expect(logged.join('\n')).toContain('req-redact');
     for (const surface of [JSON.stringify(found), JSON.stringify({ ...found }), JSON.stringify(byId), inspect(found), inspect(byId), ...logged]) {
       expect(surface).not.toContain('verifier-req-redact');
+    }
+  });
+});
+
+describe('file pending store: ownership and construction', () => {
+  test('a pending file not owned by the current user is refused and left in place, even at mode 0600', async () => {
+    const now = new Date();
+    await createFileEmailProofPendingStore({ home }).put(pendingFor('req-o', 'a@example.com', now));
+    const file = fileFor('req-o');
+    const realLstat = fs.lstatSync;
+    const spy = spyOn(fs, 'lstatSync').mockImplementation(((target: fs.PathLike, options?: fs.StatOptions) => {
+      const st = realLstat(target, options);
+      if (String(target) === file) Object.assign(st, { uid: st.uid + 1 });
+      return st;
+    }) as typeof fs.lstatSync);
+    try {
+      await expect(createFileEmailProofPendingStore({ home }).get('req-o', now))
+        .rejects.toMatchObject({ code: 'credential-permissions', message: expect.stringContaining(path.basename(file)) });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(fs.existsSync(file)).toBe(true);
+  });
+
+  test('an absent options object or an absent home is refused as credential-store-invalid', () => {
+    for (const options of [undefined, {}]) {
+      let thrown: unknown;
+      try {
+        createFileEmailProofPendingStore(options as FileEmailProofPendingStoreOptions);
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toMatchObject({ name: 'PendingStoreError', code: 'credential-store-invalid' });
     }
   });
 });

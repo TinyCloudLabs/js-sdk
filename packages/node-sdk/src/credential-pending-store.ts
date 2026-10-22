@@ -16,6 +16,7 @@ import {
  * address. A record holds a bearer verifier and optionally a base64 secret, so the store is owner-only:
  * a 0700 directory, 0600 files, and symlink, hard-link, and owner checks on every read. A record may
  * not expire more than 15 minutes after its `createdAt`; records expire on read.
+ * Only a symlinked final `home` is refused. Ancestors may be symlinks; the resolved `home` must be owned by the current user.
  *
  * Unsafe files throw and are left in place. Malformed or over-long files are deleted and throw.
  * One unsafe file therefore makes `findLive` throw for every address until the file is removed.
@@ -381,8 +382,8 @@ function wrapFsErrors<T>(run: () => T): T {
  * address, so a second process can complete a request it did not create.
  */
 export function createFileEmailProofPendingStore(options: FileEmailProofPendingStoreOptions): FileEmailProofPendingStore {
-  assertAbsoluteHome(options.home);
-  const { home } = options;
+  const home: unknown = options?.home;
+  assertAbsoluteHome(home);
   return {
     async get(requestId, now) {
       return wrapFsErrors(() => {
