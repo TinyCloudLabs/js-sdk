@@ -157,6 +157,13 @@
       "index.mjs": 0,
       "index.cjs": 0,
       "note": "Replica gzip growth measured against this PR's merge base"
+    },
+    {
+      "pr": "#667",
+      "ticket": "TC-848",
+      "index.mjs": 0,
+      "index.cjs": 0,
+      "note": "sdk-services pin to 3.3.1 after the release; module path change only, no code change"
     }
   ],
   "phase2Ratchet": {
