@@ -7,6 +7,7 @@ import {
   authorizationVerdictOf,
   CaveatedDelegationUnsupportedError,
   canonicalHashHex,
+  DecryptExpiryTooLongError,
   hexEncode,
   encryptionBase64Decode,
   encryptionBase64Encode,
@@ -1370,14 +1371,13 @@ test("runtime grants that include decrypt refuse an explicit expiry over one hou
 
   await withActivatedDelegations(async () => {
     await expect(node.grantRuntimePermissions([permission], { expiry: "2h" }))
-      .rejects.toThrow(/limited to one hour/);
+      .rejects.toBeInstanceOf(DecryptExpiryTooLongError);
+    await expect(node.grantRuntimePermissions([permission], { expiry: "2h" }))
+      .rejects.toMatchObject({ code: "DECRYPT_EXPIRY_TOO_LONG" });
     await expect(node.grantRuntimePermissions([permission], { expiry: 60 * 60_000 + 1 }))
-      .rejects.toThrow(/limited to one hour/);
+      .rejects.toMatchObject({ code: "DECRYPT_EXPIRY_TOO_LONG" });
   });
-  expect(
-    (node as unknown as { wasmBindings: { prepareSession: { mock: { calls: unknown[] } } } })
-      .wasmBindings.prepareSession.mock.calls,
-  ).toHaveLength(0);
+  expect(allPrepareExpiryMs(node)).toHaveLength(0);
 });
 
 test("runtime grants that include decrypt honour an explicit expiry of one hour or less", async () => {
@@ -1389,13 +1389,15 @@ test("runtime grants that include decrypt honour an explicit expiry of one hour 
   };
 
   const before = Date.now();
+  let delegations: Array<{ expiry: Date }> = [];
   await withActivatedDelegations(async () => {
-    await node.grantRuntimePermissions([permission], { expiry: 3_540_000 });
+    delegations = await node.grantRuntimePermissions([permission], { expiry: 3_540_000 });
   });
 
-  const expirationTime = lastPrepareExpiryMs(node);
-  expect(expirationTime).toBeGreaterThanOrEqual(before + 3_540_000);
-  expect(expirationTime).toBeLessThanOrEqual(Date.now() + 3_540_000);
+  const target = before + 3_540_000;
+  expect(Math.abs(lastPrepareExpiryMs(node) - target)).toBeLessThanOrEqual(5_000);
+  expect(delegations).toHaveLength(1);
+  expect(Math.abs(delegations[0].expiry.getTime() - target)).toBeLessThanOrEqual(5_000);
 });
 
 test("runtime grants without decrypt keep the 30-day default", async () => {
@@ -1433,6 +1435,72 @@ test("runtime grants that include decrypt stay capped at a shorter session expir
   });
 
   expect(lastPrepareExpiryMs(node)).toBe(sessionEnd.getTime());
+});
+
+function allPrepareExpiryMs(node: TinyCloudNode): number[] {
+  const wasm = node as unknown as {
+    wasmBindings: { prepareSession: { mock: { calls: Array<[{ expirationTime: string }]> } } };
+  };
+  return wasm.wasmBindings.prepareSession.mock.calls.map(([call]) => new Date(call.expirationTime).getTime());
+}
+
+function expectEveryExpiryNear(
+  node: TinyCloudNode,
+  delegations: Array<{ expiry: Date }>,
+  expectedMs: number,
+): void {
+  const expiries = [...allPrepareExpiryMs(node), ...delegations.map((d) => d.expiry.getTime())];
+  expect(expiries.length).toBeGreaterThan(0);
+  for (const expiry of expiries) {
+    expect(Math.abs(expiry - expectedMs)).toBeLessThanOrEqual(5_000);
+  }
+}
+
+const MIXED_DECRYPT_KV_PERMISSIONS = (node: TinyCloudNode): PermissionEntry[] => [
+  {
+    service: "tinycloud.kv",
+    space: "secrets",
+    path: "vault/",
+    actions: ["tinycloud.kv/get"],
+  },
+  {
+    service: "tinycloud.encryption",
+    path: node.getDefaultEncryptionNetworkId(),
+    actions: DECRYPT_EXPIRY_TEST_ACTIONS,
+  },
+];
+
+test("mixed kv and decrypt runtime grants default every delegation to one hour", async () => {
+  const node = makeExpiryTestNode();
+  const before = Date.now();
+  let delegations: Array<{ expiry: Date }> = [];
+  await withActivatedDelegations(async () => {
+    delegations = await node.grantRuntimePermissions(MIXED_DECRYPT_KV_PERMISSIONS(node));
+  });
+
+  expectEveryExpiryNear(node, delegations, before + 60 * 60_000);
+});
+
+test("mixed kv and decrypt runtime grants honour an explicit one-hour expiry for every delegation", async () => {
+  const node = makeExpiryTestNode();
+  const before = Date.now();
+  let delegations: Array<{ expiry: Date }> = [];
+  await withActivatedDelegations(async () => {
+    delegations = await node.grantRuntimePermissions(MIXED_DECRYPT_KV_PERMISSIONS(node), {
+      expiry: 3_600_000,
+    });
+  });
+
+  expectEveryExpiryNear(node, delegations, before + 3_600_000);
+});
+
+test("mixed kv and decrypt runtime grants refuse an explicit 7d expiry with the typed code", async () => {
+  const node = makeExpiryTestNode();
+  await withActivatedDelegations(async () => {
+    await expect(node.grantRuntimePermissions(MIXED_DECRYPT_KV_PERMISSIONS(node), { expiry: "7d" }))
+      .rejects.toMatchObject({ code: "DECRYPT_EXPIRY_TOO_LONG" });
+  });
+  expect(allPrepareExpiryMs(node)).toHaveLength(0);
 });
 
   test("grants mixed KV and raw encryption permissions in one runtime delegation", async () => {

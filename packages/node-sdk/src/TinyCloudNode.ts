@@ -120,6 +120,7 @@ import {
   ErrorCodes,
   ENCRYPTION_PERMISSION_SERVICE,
   CaveatedDelegationUnsupportedError,
+  DecryptExpiryTooLongError,
   PermissionNotInManifestError,
   SessionExpiredError,
   canonicalizeRecapCaveats,
@@ -6590,9 +6591,7 @@ export class TinyCloudNode {
       ? undefined
       : resolveExpiryMs(options.expiry);
     if (requestsDecrypt && explicitExpiryMs !== undefined && explicitExpiryMs > DECRYPT_GRANT_MAX_EXPIRY_MS) {
-      throw new Error(
-        `Runtime grants that include decrypt are limited to one hour; requested ${explicitExpiryMs} ms.`,
-      );
+      throw new DecryptExpiryTooLongError(explicitExpiryMs);
     }
     if (this.sessionCoversPermissionEntries(session, expanded)) {
       return [];

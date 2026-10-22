@@ -77,6 +77,23 @@ export class CaveatedDelegationUnsupportedError extends Error {
   }
 }
 
+/**
+ * Thrown when a runtime grant that includes `tinycloud.encryption/decrypt`
+ * requests an explicit expiry longer than one hour.
+ */
+export class DecryptExpiryTooLongError extends Error {
+  /** Stable machine-readable error code for over-long decrypt grants. */
+  code = "DECRYPT_EXPIRY_TOO_LONG" as const;
+  /** The explicit expiry that was refused, in milliseconds. */
+  requestedExpiryMs: number;
+
+  constructor(requestedExpiryMs: number) {
+    super("decrypt grants last at most one hour");
+    this.name = "DecryptExpiryTooLongError";
+    this.requestedExpiryMs = requestedExpiryMs;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Space normalization
 // ---------------------------------------------------------------------------

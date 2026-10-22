@@ -207,6 +207,7 @@ export {
   DEFAULT_MANIFEST_VERSION,
   VAULT_PERMISSION_SERVICE,
   CaveatedDelegationUnsupportedError,
+  DecryptExpiryTooLongError,
   PermissionNotInManifestError,
   SessionExpiredError,
   ManifestValidationError,
