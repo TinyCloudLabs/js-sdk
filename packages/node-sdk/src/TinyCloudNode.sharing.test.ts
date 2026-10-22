@@ -533,7 +533,7 @@ describe("TinyCloudNode sharing", () => {
       delegateDid: "did:key:z6MkExternalCaller",
       spaceId: SPACE,
       permissions,
-      expiresAt: new Date(Date.now() + 30 * 60 * 1000),
+      expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
     });
 
     const prepared = (wasmBindings.prepareSession as any).mock.calls[0][0];
@@ -567,7 +567,7 @@ describe("TinyCloudNode sharing", () => {
     const base = {
       delegateDid: "did:key:z6MkExternalCaller",
       spaceId: SPACE,
-      expiresAt: new Date(Date.now() + 30 * 60 * 1000),
+      expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
     };
     const kv = { service: "tinycloud.kv", path, actions: ["tinycloud.kv/get"] };
     const cases: Array<readonly [Record<string, unknown>, RegExp]> = [
