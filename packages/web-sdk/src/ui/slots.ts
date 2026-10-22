@@ -4,9 +4,18 @@
  */
 
 import type { IStorageService } from "@tinycloud/sdk-core";
+import type { StringKey } from "./strings";
 import type { ToastRequest } from "./toast-store";
 
-export type SectionId = "sync" | "storage" | "developer";
+/** Panel sections, in nav order. Ids match the full-page and sidebar mockup. */
+export type SectionId =
+  | "account"
+  | "local-tinycloud"
+  | "local-copy"
+  | "delegations"
+  | "nodes"
+  | "storage"
+  | "activity";
 
 /** Priority order lives in status.ts. */
 export type StatusCode = "storage_full" | "sync_pending" | "sync_attention";
@@ -59,6 +68,8 @@ export interface HostContext {
 /** A body section in the panel. Mounted only while the panel is open and `isAvailable`. */
 export interface PanelSection {
   readonly id: SectionId;
+  /** strings.ts key for the nav label. */
+  readonly labelCode: StringKey;
   isAvailable(ctx: HostContext): boolean;
   /** Returns dispose. May touch only `el`. */
   mount(el: HTMLElement, ctx: HostContext): () => void;

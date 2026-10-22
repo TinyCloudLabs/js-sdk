@@ -22,7 +22,8 @@ function codeOf(err: unknown): string {
  * Reason and error codes render only through `ctx.text`; unknown codes show the neutral line.
  */
 export const syncSection: PanelSection = {
-  id: "sync",
+  id: "local-copy",
+  labelCode: "nav.local-copy",
   isAvailable: (ctx) => ctx.client()?.sync !== undefined,
   mount(el, ctx: HostContext) {
     const facade = ctx.client()?.sync;

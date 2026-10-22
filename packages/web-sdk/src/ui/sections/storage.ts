@@ -66,6 +66,7 @@ function manageHref(read: StorageRead): string {
  */
 export const storageSection: PanelSection = {
   id: "storage",
+  labelCode: "nav.storage",
   isAvailable: (ctx) => ctx.client()?.signedIn() === true,
   mount(el, ctx: HostContext) {
     const client = ctx.client();
