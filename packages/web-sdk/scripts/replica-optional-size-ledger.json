@@ -218,6 +218,15 @@
       "activation.mjs": 0,
       "activation.cjs": 1,
       "note": "sdk-services pin to 3.3.1 after the release; module path change only, no code change"
+    },
+    {
+      "pr": "#686",
+      "ticket": "TC-1777",
+      "replica.mjs": 0,
+      "replica.cjs": 0,
+      "activation.mjs": 0,
+      "activation.cjs": 0,
+      "note": "Optional first-import and IDB activation gzip deltas against this PR's merge base"
     }
   ]
 }
