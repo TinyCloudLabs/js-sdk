@@ -37,6 +37,7 @@ export async function approveShareDecrypt(input: { readonly profileName: string;
     reason: DECRYPT_APPROVAL_MESSAGES.reason,
     expectedOwner: pinnedOwner(profile),
     openkeyHost: resolveDeviceApiHost(profile),
+    decryptOnly: true,
   });
   const delegation = portableFromOpenKeyDelegation(approval.session, permissions, profile.host, {
     key,
@@ -44,6 +45,7 @@ export async function approveShareDecrypt(input: { readonly profileName: string;
     expectedOwner: pinnedOwner(profile),
     expiry,
     exactApproval: true,
+    decryptOnly: true,
   });
   await activateAndStoreOpenKeyGrants(
     input.profileName,

@@ -182,18 +182,37 @@ describe("OpenKey device authorization", () => {
     expect(new Set(requested.map((permission) => permission.space))).toEqual(new Set(["default"]));
   });
 
-  test("enable share posts the builtin manifest without any encryption entry", async () => {
+  // The four base publishing entries, as the (service, path, action) tuples OpenKey receives.
+  const BASE_SHARE_PUBLISHING_TUPLES = [
+    "tinycloud.capabilities||tinycloud.capabilities/read",
+    "tinycloud.kv|xyz.tinycloud.share/shares/|tinycloud.kv/get",
+    "tinycloud.kv|xyz.tinycloud.share/shares/|tinycloud.kv/put",
+    "tinycloud.kv|shares/|tinycloud.kv/get",
+    "tinycloud.kv|shares/|tinycloud.kv/metadata",
+    "tinycloud.kv|shares/|tinycloud.kv/put",
+    "tinycloud.kv|shares/|tinycloud.kv/list",
+    "tinycloud.kv|artifacts/|tinycloud.kv/get",
+    "tinycloud.kv|artifacts/|tinycloud.kv/metadata",
+    "tinycloud.kv|artifacts/|tinycloud.kv/put",
+    "tinycloud.kv|artifacts/|tinycloud.kv/list",
+  ];
+  function expectBasePublishingEntries(wire: PermissionEntry[]) {
+    expect(wire.flatMap((p) => p.actions.map((a) => `${p.service}|${p.path}|${a}`)).sort())
+      .toEqual([...BASE_SHARE_PUBLISHING_TUPLES].sort());
+  }
+
+  test("enable share posts exactly the four base publishing entries and no encryption entry", async () => {
     const openkey = fakeOpenKey((start, id) => approved(start, id, { signed: requested }));
     await acquire(openkey, { permissions: sharePublishingPermissions() });
-    expect((openkey.startBodies[0]!.permissions as PermissionEntry[]).some((p) => p.service === "tinycloud.encryption")).toBe(false);
+    expectBasePublishingEntries(openkey.startBodies[0]!.permissions as PermissionEntry[]);
   });
 
-  test("auth login --device --manifest builtin:share-publishing posts no encryption entry", async () => {
+  test("auth login --device --manifest builtin:share-publishing posts exactly the four base publishing entries", async () => {
     await ProfileManager.setProfile("agent", { name: "agent", host: NODE, chainId: 1, spaceName: "default", ownerDid, did: sessionDid, createdAt: "2026-10-01T00:00:00.000Z" });
     const manifestPermissions = await loadManifestPermissions("builtin:share-publishing", "agent", { device: true, allowLogicalSpaces: true });
     const openkey = fakeOpenKey((start, id) => approved(start, id, { signed: manifestPermissions }));
     await acquire(openkey, { permissions: manifestPermissions });
-    expect((openkey.startBodies[0]!.permissions as PermissionEntry[]).some((p) => p.service === "tinycloud.encryption")).toBe(false);
+    expectBasePublishingEntries(openkey.startBodies[0]!.permissions as PermissionEntry[]);
   });
 
   test("refuses encryption or secrets-space device scopes before starting the device API", async () => {

@@ -186,6 +186,26 @@ function actionTuples(permission: PermissionEntry, ownerDid: string): string[] {
     JSON.stringify([service, space, path, action.includes("/") ? action : `${service}/${action}`]));
 }
 
+/**
+ * Verification only. A decrypt-only request is one short entry, and OpenKey
+ * approves it as the raw network URN of the signing owner. This maps that one
+ * entry onto its signed form so the comparison sees the same resource. Any
+ * other request is returned unchanged; the wire request is never rewritten.
+ */
+export function signedFormOfDecryptOnlyRequest(requested: readonly PermissionEntry[], ownerDid: string): PermissionEntry[] {
+  const [only] = requested;
+  const isDecryptOnlyRequest = requested.length === 1 && only !== undefined &&
+    only.service === "tinycloud.encryption" && only.space === "default" && only.path === "" &&
+    only.actions.length === 1 && only.actions[0] === "tinycloud.encryption/decrypt";
+  if (!isDecryptOnlyRequest) return [...requested];
+  return [{
+    service: "tinycloud.encryption",
+    space: "encryption",
+    path: canonicalNetworkUrn(`urn:tinycloud:encryption:${ownerDid}:default`),
+    actions: ["tinycloud.encryption/decrypt"],
+  }];
+}
+
 /** Old OpenKey's signed space-prefixed decrypt is not a usable raw network grant. */
 export function isLegacyNestedDecrypt(
   permission: PermissionEntry,
@@ -374,6 +394,8 @@ export interface SignedSessionExpectations {
   purpose?: "grant";
   /** Agent grant: the approval must cover every requested action, or no grant is stored. */
   exactApproval?: boolean;
+  /** Share decrypt approval: decrypt-only, so it is verified as a grant with no space ReCap. */
+  decryptOnly?: boolean;
 }
 
 /** What the WASM verifier returns (its binding is untyped). Caveats arrive as `Map`s. */
@@ -412,12 +434,16 @@ export function verifySignedSession(
       !data.delegationHeader || typeof data.delegationHeader !== "object" ||
       typeof data.verificationMethod !== "string" ||
       data.verificationMethod.split("#")[0] !== sessionDid.split("#")[0]) throw new Error();
-    const proof: VerifiedSessionProof = new NodeWasmBindings().validatePersistedSession({
+    const input = {
       delegationHeader: data.delegationHeader as { Authorization: string },
       delegationCid: data.delegationCid, spaceId: data.spaceId,
       jwk: key, address: data.address, chainId: data.chainId as number,
       siwe: data.siwe, signature: data.signature,
-    });
+    };
+    const bindings = new NodeWasmBindings();
+    const proof: VerifiedSessionProof = expected.decryptOnly
+      ? bindings.validateSessionGrant(input)
+      : bindings.validatePersistedSession(input);
     if (!proof.verifiedRecap?.length || !proof.expiresAt || !Number.isFinite(Date.parse(proof.expiresAt))) throw new Error();
     // One entry per signed action, with its caveats. Dropping them would
     // record a restricted action as unrestricted.
@@ -477,8 +503,9 @@ export function verifyScopedLogin(
     }
     throw error;
   }
+  const asked = expected.decryptOnly ? signedFormOfDecryptOnlyRequest(requested, signed.ownerDid) : requested;
   const spaceId = data.spaceId as string;
-  for (const permission of requested) {
+  for (const permission of asked) {
     if (isRawEncryptionPermission(permission) || isRawCidRevocationPermission(permission)) continue;
     if (normalizePkhIdentifier(ownerSpaceId(permission.space ?? "", signed.ownerDid)) !== normalizePkhIdentifier(spaceId)) {
       throw new CLIError("OPENKEY_SCOPE_MISMATCH", `The approved space differs from the requested space. ${notStored}`, ExitCode.PERMISSION_DENIED);
@@ -490,7 +517,7 @@ export function verifyScopedLogin(
   const legacyNested: PermissionEntry[] = [];
   const approved: PermissionEntry[] = [];
   for (const permission of signed.permissions) {
-    (isLegacyNestedDecrypt(permission, requested, signed.ownerDid, spaceId) ? legacyNested : approved).push(permission);
+    (isLegacyNestedDecrypt(permission, asked, signed.ownerDid, spaceId) ? legacyNested : approved).push(permission);
   }
   for (const permission of signed.permissions) {
     if (isVerifiedRawEncryptionPermission(permission) &&
@@ -500,12 +527,12 @@ export function verifyScopedLogin(
   }
   // A signed action is inside the request when a requested one covers it: the
   // same action, unrestricted or with the same caveats (OpenKey may narrow).
-  if (!scopeCovers(requested, approved, signed.ownerDid)) {
+  if (!scopeCovers(asked, approved, signed.ownerDid)) {
     throw new CLIError("OPENKEY_GRANT_BROADENED", `The signed grant contains authority beyond the requested ${expected.purpose === "grant" ? "grant" : "manifest"}. ${notStored}`, ExitCode.PERMISSION_DENIED);
   }
   // An agent grant stands for the whole request. An action the owner unchecked
   // is not granted, and the grant must not be recorded as if it were.
-  if (expected.exactApproval && !scopeCovers(approved, requested, signed.ownerDid)) {
+  if (expected.exactApproval && !scopeCovers(approved, asked, signed.ownerDid)) {
     throw new CLIError("OPENKEY_APPROVAL_NARROWER", `The approval was narrower than the request. Approve all of it, or ask the agent to request less. ${notStored}`, ExitCode.PERMISSION_DENIED);
   }
   // The SIWE proof stays intact for validation/diagnostics. Only effective,

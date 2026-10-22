@@ -15,6 +15,7 @@ import { publicJwkForDelegation, validateDelegationCallbackPayload } from "./bro
 import {
   declinedPermissions,
   expiryLimit,
+  signedFormOfDecryptOnlyRequest,
   permissionTuples,
   permissionsFromTuples,
   expectedOwnerFor,
@@ -94,6 +95,8 @@ export interface DeviceAuthorizationInput {
   reason?: string;
   /** Primary DID the approving identity must match, when known. */
   expectedOwner?: string;
+  /** Decrypt-only approval (share publishing): verified without a space ReCap. */
+  decryptOnly?: boolean;
   openkeyHost?: string;
   fetchFn?: typeof globalThis.fetch;
   emitInstructions?: (prompt: DeviceApprovalPrompt) => void;
@@ -354,6 +357,7 @@ async function verifyApproval(input: {
   requested: PermissionEntry[];
   expiry: RequestedExpiry;
   expectedOwner?: string;
+  decryptOnly?: boolean;
 }): Promise<DeviceAuthorizationResult> {
   const { binding, delegation } = input;
   if (
@@ -383,6 +387,7 @@ async function verifyApproval(input: {
   const { session } = verifyScopedLogin(delegation, input.key, input.sessionDid, input.requested, {
     expectedOwner: input.expectedOwner,
     expiry: input.expiry,
+    decryptOnly: input.decryptOnly,
   });
   const { ownerDid } = session;
   if (Math.abs(Date.parse(session.expiresAt) - expiresAt) > 1000) {
@@ -392,10 +397,13 @@ async function verifyApproval(input: {
   // The signed ReCap is the authority. OpenKey's unsigned statements of the
   // approved set (binding and relayed delegation) must match it exactly, so
   // neither can over- or under-report what was granted.
+  // A decrypt-only approval is reported unsigned as the short request entry;
+  // map that one entry onto its signed form before comparing.
+  const statement = (list: PermissionEntry[]) => input.decryptOnly ? signedFormOfDecryptOnlyRequest(list, ownerDid) : list;
   const signed = permissionTuples(session.permissions, ownerDid);
   if (
-    !sameTuples(signed, permissionTuples(permissionList(binding.permissions, "approved"), ownerDid)) ||
-    !sameTuples(signed, permissionTuples(permissionList(delegation.permissions, "delegated"), ownerDid))
+    !sameTuples(signed, permissionTuples(statement(permissionList(binding.permissions, "approved")), ownerDid)) ||
+    !sameTuples(signed, permissionTuples(statement(permissionList(delegation.permissions, "delegated")), ownerDid))
   ) {
     throw new CLIError("DEVICE_AUTH_BINDING_MISMATCH", "OpenKey's approved permissions differ from the signed grant. No session was saved.", ExitCode.PERMISSION_DENIED);
   }
@@ -405,7 +413,7 @@ async function verifyApproval(input: {
     spaceId: delegation.spaceId as string,
     expiresAt: session.expiresAt,
     approved: permissionsFromTuples(signed),
-    declined: declinedPermissions(input.requested, session.permissions, ownerDid),
+    declined: declinedPermissions(statement(input.requested), session.permissions, ownerDid),
     ...(openKeyPrimaryFlag(delegation) === undefined ? {} : { primary: openKeyPrimaryFlag(delegation) }),
   };
 }
@@ -568,6 +576,7 @@ export async function runDeviceAuthorization(input: DeviceAuthorizationInput): P
       requested: input.permissions,
       expiry,
       expectedOwner: input.expectedOwner,
+      decryptOnly: input.decryptOnly,
     });
   }
   throw new CLIError("DEVICE_AUTH_EXPIRED", "OpenKey device authorization expired before approval. Run the command again.", ExitCode.AUTH_REQUIRED);
