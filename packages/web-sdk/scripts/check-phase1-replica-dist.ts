@@ -11,7 +11,7 @@ import {
   validateOptionalEntryTransition, validateOptionalLedger, type OptionalLedger,
 } from "./replica-optional-size-policy";
 import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedPhase2, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, preexistingS3EntryCommit, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateLogoutRatchetTransition, validateMasterMergeResolutionTransition, validateTc1413RatchetTransition, validateTc1424RatchetTransition, validateTc1448RatchetTransition, validateTc1432RatchetTransition, validateTc1436RatchetTransition, validateTc1443RatchetTransition, validateTc1443bRatchetTransition, validateTc1428RatchetTransition, validateTc1475RatchetTransition, validateTc606WorkerRatchetTransition, validateMasterDriftRatchetTransition, validateTc1789RatchetTransition, validateTc1476RatchetTransition, validateTc1466RatchetTransition, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
-import { rootCeilingFor, validateTc1757RatchetTransition } from "./replica-size-policy";
+import { rootCeilingFor, validateTc1757RatchetTransition, validateTc1777RatchetTransition } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 type Baseline = {
   webSdkTestBaseline: { ref: string; unhandledErrors: number; failingNames: string[]; unhandledSignatures: string[] };
@@ -304,6 +304,13 @@ if (prBaseSha) {
   if (tc1757 !== undefined && baseLedger.tc1757Ratchet === undefined &&
       (baseLedger.tc1789Ratchet === undefined || !hasAncestor(repoRoot, tc1757.sourceCommits.at(-1)!))) {
     console.error("The web-recipient entry ratchet requires the merged sdk-services pin ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc1777RatchetTransition(baseLedger.tc1777Ratchet, ledger.tc1777Ratchet);
+  const tc1777 = ledger.tc1777Ratchet;
+  if (tc1777 !== undefined && baseLedger.tc1777Ratchet === undefined &&
+      (baseLedger.tc1757Ratchet === undefined || !hasAncestor(repoRoot, tc1777.sourceCommits.at(-1)!))) {
+    console.error("The expiryMs / hasPermissions ratchet requires the merged web-recipient entry ratchet and its measured source commit.");
     failed = true;
   }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";

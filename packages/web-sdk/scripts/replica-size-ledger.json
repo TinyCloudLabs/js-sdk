@@ -164,6 +164,13 @@
       "index.mjs": 0,
       "index.cjs": 0,
       "note": "sdk-services pin to 3.3.1 after the release; module path change only, no code change"
+    },
+    {
+      "pr": "#668",
+      "ticket": "TC-1777",
+      "index.mjs": 175,
+      "index.cjs": 175,
+      "note": "Replica gzip growth measured against this PR's merge base"
     }
   ],
   "phase2Ratchet": {
@@ -890,5 +897,55 @@
       "ceiling": 822753
     },
     "reason": "web-sdk imports share-sdk's narrow web-recipient entry; root ceiling lowered to measured CI bytes (TC-1757)"
+  },
+  "tc1777Ratchet": {
+    "label": "expiryMs, hasPermissions and pre-modal decrypt check (#668): root ceiling raised to the measured CI bytes",
+    "ruling": "Approved by Naomi (2026-10-22, policy review relayed by Amos)",
+    "base": "bc49820c1417a449041e9801b60c86a63485b55d",
+    "sourceCommits": [
+      "293f193350cafb340d2109c088d19f208ca1dcb8"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39847387859",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39847387859/job/120064154378",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39847387859/job/120064155031"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 175,
+        "index.cjs": 175
+      },
+      "ceiling": {
+        "index.mjs": 1459018,
+        "index.cjs": 1402093
+      }
+    },
+    "firstImport": {
+      "delta": {
+        "replica.mjs": 0,
+        "replica.cjs": 0
+      },
+      "ceiling": {
+        "replica.mjs": 51925,
+        "replica.cjs": 67141
+      }
+    },
+    "activation": {
+      "delta": {
+        "activation.mjs": 0,
+        "activation.cjs": 0
+      },
+      "ceiling": {
+        "activation.mjs": 23117,
+        "activation.cjs": 24700
+      }
+    },
+    "worker": {
+      "delta": 0,
+      "ceiling": 822753
+    },
+    "reason": "expiryMs, hasPermissions and the pre-modal decrypt check add 175 B gzip to each web-sdk root bundle (TC-1777)"
   }
 }
