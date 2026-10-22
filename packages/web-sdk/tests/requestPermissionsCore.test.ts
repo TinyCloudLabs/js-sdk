@@ -356,6 +356,18 @@ describe("requestPermissionsCore: decrypt expiry cap", () => {
     expect(grantPermissions).toHaveBeenCalledWith([decryptEntry], { expiryMs: 3_540_000 });
   });
 
+  test("allows a decrypt grant at exactly one hour and reaches the modal", async () => {
+    const showModal = mock(() => Promise.resolve({ approved: true }));
+    const grantPermissions = mock(async () => {});
+    await requestPermissionsCore(
+      [decryptEntry],
+      { manifest: baseManifest, showModal, grantPermissions },
+      { expiryMs: 3_600_000 },
+    );
+    expect(showModal).toHaveBeenCalledTimes(1);
+    expect(grantPermissions).toHaveBeenCalledWith([decryptEntry], { expiryMs: 3_600_000 });
+  });
+
   test("leaves a non-decrypt grant over one hour unchanged", async () => {
     const grantPermissions = mock(async () => {});
     await requestPermissionsCore(
