@@ -37,12 +37,18 @@ export interface RequestPermissionsCoreDeps {
   /** Store approved permissions as runtime delegations. */
   grantPermissions: (
     additional: PermissionEntry[],
+    options?: RequestPermissionsOptions,
   ) => Promise<readonly PortableDelegation[] | void>;
 }
 
 export interface RequestPermissionsCoreResult {
   approved: boolean;
   delegations?: readonly PortableDelegation[];
+}
+
+export interface RequestPermissionsOptions {
+  /** Requested lifetime of the issued delegation, in milliseconds. */
+  expiryMs?: number;
 }
 
 /**
@@ -63,12 +69,28 @@ export function validateAdditionalPermissions(
 /**
  * Core escalation flow. See the TinyCloudWeb.requestPermissions JSDoc
  * for the full spec-level description — this function is the plumbing.
+ *
+ * `options.expiryMs` requests the lifetime of the issued step-up
+ * delegation. The node clamps it to the session expiry, so the issued
+ * delegation never outlives the session.
  */
 export async function requestPermissionsCore(
   additional: PermissionEntry[],
   deps: RequestPermissionsCoreDeps,
+  options?: RequestPermissionsOptions,
 ): Promise<RequestPermissionsCoreResult> {
   validateAdditionalPermissions(additional);
+  const expiryMs = options?.expiryMs;
+  if (expiryMs !== undefined && !(expiryMs > 0 && Number.isFinite(expiryMs))) {
+    throw new Error("requestPermissions expiryMs must be a positive finite number");
+  }
+  if (
+    expiryMs !== undefined &&
+    expiryMs > 3_600_000 &&
+    additional.some((e) => e.service === "tinycloud.encryption" && e.actions.some((a) => /decrypt|\*/.test(a)))
+  ) {
+    throw Object.assign(new Error("decrypt grants last at most one hour"), { code: "DECRYPT_EXPIRY_TOO_LONG" });
+  }
 
   let shouldSuppressPrompt = false;
   if (deps.isPromptSuppressed?.() !== true) {
@@ -85,7 +107,10 @@ export async function requestPermissionsCore(
     shouldSuppressPrompt = modalResult.suppressPromptFor30Days === true;
   }
 
-  const delegations = await deps.grantPermissions(additional);
+  const delegations =
+    options === undefined
+      ? await deps.grantPermissions(additional)
+      : await deps.grantPermissions(additional, options);
 
   if (shouldSuppressPrompt) {
     deps.suppressPromptFor30Days?.();

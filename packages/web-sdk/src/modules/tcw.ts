@@ -83,6 +83,7 @@ import { showPermissionRequestModal } from "../notifications/ModalManager";
 import {
   requestPermissionsCore,
   validateAdditionalPermissions,
+  type RequestPermissionsOptions,
 } from "./requestPermissionsCore";
 import {
   isPermissionPromptSuppressed,
@@ -410,6 +411,7 @@ export class TinyCloudWeb {
     hasRuntimePermissions?: (additional: PermissionEntry[]) => boolean;
     grantPermissions?: (
       additional: PermissionEntry[],
+      options?: RequestPermissionsOptions,
     ) => Promise<readonly PortableDelegation[] | void>;
   };
 
@@ -955,6 +957,11 @@ export class TinyCloudWeb {
   address = (): string | undefined => this._node?.address;
   chainId = (): number | undefined => this._node?.session?.chainId;
 
+  /** Returns whether the session or an unexpired runtime grant covers all entries. Never prompts. */
+  hasPermissions(entries: PermissionEntry[]): boolean {
+    return this._node?.hasRuntimePermissions(entries) ?? false;
+  }
+
   get did(): string { return this.node.did; }
   get sessionDid(): string { return this.node.sessionDid; }
   get credentialHolderDid(): string { return this.node.credentialHolderDid; }
@@ -1176,13 +1183,23 @@ export class TinyCloudWeb {
    * On approve, this does not mutate the manifest or force a new sign-in.
    * The underlying node creates a secondary delegation to the current
    * session key and records it in the invocation permission map.
+   *
+   * `options.expiryMs` sets the requested lifetime of the issued step-up
+   * delegation, in milliseconds. Omitted, the node's default applies. The
+   * node clamps the lifetime to the session expiry, so the issued
+   * delegation never outlives the session. The expiry applies when new
+   * permissions are requested. Permissions already covered by the session
+   * or an existing runtime grant return without a new delegation, so
+   * `expiryMs` does not apply to them.
+   *
+   * Decrypt grants (including wildcards) with `expiryMs` over one hour
+   * reject with `DECRYPT_EXPIRY_TOO_LONG` before the modal opens. Covered
+   * permissions skip this check.
    */
   async requestPermissions(
     additional: PermissionEntry[],
+    options?: RequestPermissionsOptions,
   ): Promise<RequestPermissionsResult> {
-    // Shared validation (also called by the core). Keeping the guard
-    // here short-circuits before any manifest lookup so the error text
-    // is unambiguous.
     validateAdditionalPermissions(additional);
 
     const manifest = Array.isArray(this._manifest)
@@ -1215,8 +1232,14 @@ export class TinyCloudWeb {
       suppressPromptFor30Days: () =>
         suppressPermissionPromptFor30Days(manifest),
       grantPermissions: this._testHooks?.grantPermissions ??
-        ((approved) => node.grantRuntimePermissions(approved)),
-    });
+        ((approved, grantOptions) =>
+          node.grantRuntimePermissions(
+            approved,
+            grantOptions?.expiryMs !== undefined
+              ? { expiry: grantOptions.expiryMs }
+              : undefined,
+          )),
+    }, options);
     return result.approved
       ? {
           approved: true,
