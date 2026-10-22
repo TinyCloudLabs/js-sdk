@@ -157,6 +157,13 @@
       "index.mjs": 0,
       "index.cjs": 0,
       "note": "Replica gzip growth measured against this PR's merge base"
+    },
+    {
+      "pr": "#667",
+      "ticket": "TC-848",
+      "index.mjs": 0,
+      "index.cjs": 0,
+      "note": "sdk-services pin to 3.3.1 after the release; module path change only, no code change"
     }
   ],
   "phase2Ratchet": {
@@ -783,5 +790,55 @@
       "ceiling": 822753
     },
     "reason": "The Phase 1 dist step had not run on master since the kv-storage worker step began aborting first at #606 (78aec0e0); when it ran on #608 it measured root index.mjs 1,475,571 and index.cjs 1,403,924 against the TC-1475 ceilings 1,475,166 and 1,403,595 (+405/+329) and activation.cjs 24,700 against 24,699 (+1). Candidates #606 (security dependency updates), #605, #552; attribution not bisected. The worker is already admitted by tc606WorkerRatchet."
+  },
+  "tc1789Ratchet": {
+    "label": "sdk-services 3.3.1 pin (#667): replica.cjs first-import +1 B, exact canonical delta",
+    "ruling": "Approved by Naomi (2026-10-22, policy review relayed by Amos)",
+    "base": "772940d8",
+    "sourceCommits": [
+      "193b594eee3f0f9c3f0fe9157f74267f8c03f3bf"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39775125638",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39775125638/job/119812005984",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39775125638/job/119812005960"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 0,
+        "index.cjs": 0
+      },
+      "ceiling": {
+        "index.mjs": 1475571,
+        "index.cjs": 1403924
+      }
+    },
+    "firstImport": {
+      "delta": {
+        "replica.mjs": 0,
+        "replica.cjs": 1
+      },
+      "ceiling": {
+        "replica.mjs": 51925,
+        "replica.cjs": 67141
+      }
+    },
+    "activation": {
+      "delta": {
+        "activation.mjs": 0,
+        "activation.cjs": 0
+      },
+      "ceiling": {
+        "activation.mjs": 23117,
+        "activation.cjs": 24700
+      }
+    },
+    "worker": {
+      "delta": 0,
+      "ceiling": 822753
+    },
+    "reason": "CI PR-side build +1 B with no code change (sdk-services 3.3.1 pin; TC-1789 investigation)"
   }
 }
