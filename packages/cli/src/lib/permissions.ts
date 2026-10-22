@@ -535,6 +535,7 @@ export async function loadManifestPermissions(
       throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", "--device cannot authorize tinycloud.encryption or the secrets space. Use browser or --paste login.", ExitCode.USAGE_ERROR);
     }
     // The admitted device entry keeps its logical `default` space. Resolving it would send the owner's full URI.
+    // Device requests emit only the short `default` form; the predicate also accepts the URI-spaced form, which is never sent from this path.
     const admittedDecrypt = options.device === true && source === SHARE_PUBLISHING_MANIFEST_REF
       ? permissions.filter(isSharePublishingDecryptPermission)
       : [];
