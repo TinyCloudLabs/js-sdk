@@ -168,9 +168,9 @@
     {
       "pr": "#668",
       "ticket": "TC-1777",
-      "index.mjs": 175,
-      "index.cjs": 175,
-      "note": "Replica gzip growth measured against this PR's merge base"
+      "index.mjs": 0,
+      "index.cjs": 0,
+      "note": "expiryMs, hasPermissions and the pre-modal decrypt check; the +175 B root growth is carried by the tc1777Ratchet row, not additive headroom"
     }
   ],
   "phase2Ratchet": {
