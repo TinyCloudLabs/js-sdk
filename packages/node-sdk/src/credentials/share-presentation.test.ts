@@ -392,6 +392,19 @@ describe("buildSharePresentation fail-closed rejections (one per code)", () => {
     expect(calls.n).toBe(0);
   });
 
+  test("CHALLENGE_ACTION_MISMATCH when the expected action is empty, even if the challenge action is also empty", async () => {
+    const f = await fixture();
+    const { holderSigner, calls } = countingSigner(f);
+    const error = await rejectionOf(buildSharePresentation({
+      ...f.input,
+      holderSigner,
+      expectedAction: "",
+      challenge: { ...f.challenge, action: "" },
+    }));
+    expect(error.code).toBe("CHALLENGE_ACTION_MISMATCH");
+    expect(calls.n).toBe(0);
+  });
+
   test("CHALLENGE_ACTION_MISMATCH when expectedAction is missing at runtime", async () => {
     const f = await fixture();
     const { holderSigner, calls } = countingSigner(f);
