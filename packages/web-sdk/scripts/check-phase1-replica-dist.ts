@@ -11,7 +11,7 @@ import {
   validateOptionalEntryTransition, validateOptionalLedger, type OptionalLedger,
 } from "./replica-optional-size-policy";
 import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedPhase2, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, preexistingS3EntryCommit, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateLogoutRatchetTransition, validateMasterMergeResolutionTransition, validateTc1413RatchetTransition, validateTc1424RatchetTransition, validateTc1448RatchetTransition, validateTc1432RatchetTransition, validateTc1436RatchetTransition, validateTc1443RatchetTransition, validateTc1443bRatchetTransition, validateTc1428RatchetTransition, validateTc1475RatchetTransition, validateTc606WorkerRatchetTransition, validateMasterDriftRatchetTransition, validateTc1789RatchetTransition, validateTc1476RatchetTransition, validateTc1466RatchetTransition, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
-import { rootCeilingFor, validateTc1757RatchetTransition, validateTc1777RatchetTransition } from "./replica-size-policy";
+import { rootCeilingFor, validateTc1757RatchetTransition, validateTc1777ExpiryRatchetTransition, validateTc1777RatchetTransition } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 import { replicaOwnedPath } from "./replica-owned-path";
 type Baseline = {
@@ -299,6 +299,13 @@ if (prBaseSha) {
   if (tc1777 !== undefined && baseLedger.tc1777Ratchet === undefined &&
       (baseLedger.tc1757Ratchet === undefined || !hasAncestor(repoRoot, tc1777.sourceCommits.at(-1)!))) {
     console.error("The replication-wiring boundary ratchet requires the merged web-recipient entry ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc1777ExpiryRatchetTransition(baseLedger.tc1777ExpiryRatchet, ledger.tc1777ExpiryRatchet);
+  const tc1777Expiry = ledger.tc1777ExpiryRatchet;
+  if (tc1777Expiry !== undefined && baseLedger.tc1777ExpiryRatchet === undefined &&
+      (baseLedger.tc1777Ratchet === undefined || !hasAncestor(repoRoot, tc1777Expiry.sourceCommits.at(-1)!))) {
+    console.error("The expiryMs / hasPermissions ratchet requires the merged replication-wiring boundary ratchet and its measured source commit.");
     failed = true;
   }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
