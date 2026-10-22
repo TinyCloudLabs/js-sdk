@@ -1,5 +1,6 @@
 import { createUiApi, type TinyCloudUI, type UiTarget } from "./api";
 import { createPanelClient, type ClientSource } from "./client";
+import type { PanelDataFactory } from "./data";
 import { resolveUiConfig, type UiConfig } from "./config";
 import { canRenderUi } from "./frame-guard";
 import { HOST_API_VERSION, REGISTRY_KEY, createHostRuntime, type HostRuntime } from "./host";
@@ -27,6 +28,8 @@ export interface UiClientOptions {
   readonly source: ClientSource;
   /** manifest.app_id, read lazily so setManifest() re-keys the hide flag. */
   readonly manifestAppId: () => string | undefined;
+  /** Panel data factory. Only the harness and preview pass one; production panels show placeholders. */
+  readonly data?: PanelDataFactory;
 }
 
 interface Registry {
@@ -75,7 +78,7 @@ export function registerUiClient(options: UiClientOptions): UiClientHandle {
 
   const id = runtime.nextClientId();
   const promptScope = createPromptScope(true);
-  const panel = createPanelClient(id, options.source);
+  const panel = createPanelClient(id, options.source, options.data);
   runtime.register(id, {
     handle: panel,
     config: resolveUiConfig(options.ui),

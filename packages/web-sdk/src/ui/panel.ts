@@ -1,4 +1,4 @@
-import { PANEL_ID } from "./button";
+import { PANEL_ID } from "./ids";
 import type { SectionId, StatusCode } from "./slots";
 import { text, type StringKey } from "./strings";
 

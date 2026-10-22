@@ -7,6 +7,7 @@ import { REGISTRY_KEY } from "../../src/ui/host";
 import { toastStore } from "../../src/ui/parts/toasts";
 import type { SyncFacade, SyncState } from "../../src/ui/slots";
 import type { ToastKind, ToastView } from "../../src/ui/toast-store";
+import { panelMounted } from "./panel-ready";
 
 // Checks the shipped DOM against the stylesheet text the same shadow root carries.
 // jsdom does not apply pointer-events or cascade styles, so the checks read the
@@ -79,7 +80,7 @@ function facade(state: SyncState): SyncFacade {
 }
 
 /** Registers a client with a sync facade and opens the panel. */
-function openPanel(): void {
+function mountPanel(): void {
   const src = {
     signedIn: () => false,
     storage: { status: () => undefined },
@@ -88,6 +89,11 @@ function openPanel(): void {
   const handle = registerUiClient({ source: src, manifestAppId: () => undefined });
   handles.push(handle);
   handle.api.open();
+}
+
+async function openPanel(): Promise<void> {
+  mountPanel();
+  await panelMounted();
 }
 
 /**
@@ -131,10 +137,13 @@ function stylesheetText(root: ShadowRoot): string {
 }
 
 describe("panel stylesheet targets", () => {
-  test("every class a rule targets is applied to a rendered element", () => {
-    openPanel();
+  test("every class a rule targets is applied to a rendered element", async () => {
+    mountPanel();
     // Only one section mounts at a time, so visit each one to see the classes they render.
     const applied = new Set<string>();
+    // The pending stand-in is the only panel markup until the lazy chunk replaces it.
+    for (const el of shadow().querySelectorAll("[class]")) for (const cls of el.classList) applied.add(cls);
+    await panelMounted();
     for (const nav of shadow().querySelectorAll<HTMLButtonElement>(".nav-i")) {
       nav.click();
       for (const el of shadow().querySelectorAll("[class]")) for (const cls of el.classList) applied.add(cls);
@@ -144,15 +153,15 @@ describe("panel stylesheet targets", () => {
     expect(missing).toEqual([]);
   });
 
-  test("the dialog element carries the panel class its pointer-events rule targets", () => {
-    openPanel();
+  test("the dialog element carries the panel class its pointer-events rule targets", async () => {
+    await openPanel();
     const dialog = shadow().querySelector("[role='dialog']");
     expect(dialog).not.toBeNull();
     expect(dialog?.classList.contains("panel")).toBe(true);
   });
 
-  test("every control sits under a pointer-events:auto element", () => {
-    openPanel();
+  test("every control sits under a pointer-events:auto element", async () => {
+    await openPanel();
     toastStore.push({ kind: "info", textCode: "panel.title", href: "https://example.com/docs", hrefLabelCode: "panel.close" });
     const root = shadow();
     const auto = pointerEventsAutoClasses(stylesheetText(root));
@@ -260,15 +269,15 @@ const CONTRAST_CHECKS: readonly ContrastCheck[] = [
 ];
 
 /** Stylesheet text with a warning toast rendered, so every toast rule is present. */
-function renderedCss(): string {
-  openPanel();
+async function renderedCss(): Promise<string> {
+  await openPanel();
   toastStore.push({ kind: "warning", textCode: "panel.title", href: "https://example.com/docs", hrefLabelCode: "panel.close" });
   return stylesheetText(shadow());
 }
 
 describe("panel colour scheme", () => {
-  test("dark scheme paints the panel, toasts and text on the dark surface", () => {
-    const css = renderedCss();
+  test("dark scheme paints the panel, toasts and text on the dark surface", async () => {
+    const css = await renderedCss();
     expect(resolvedDeclarations(css, "dark", ".panel").get("background")).toBe("#151517");
     expect(resolvedDeclarations(css, "dark", ".layer").get("color")).toBe("#fafafa");
     expect(resolvedDeclarations(css, "dark", ".toast").get("background")).toBe("#151517");
@@ -276,8 +285,8 @@ describe("panel colour scheme", () => {
     expect(resolvedDeclarations(css, "dark", ".toast--warning").get("border-left-color")).toBe("#fbbd23");
   });
 
-  test("light scheme keeps the light palette when no dark rule applies", () => {
-    const css = renderedCss();
+  test("light scheme keeps the light palette when no dark rule applies", async () => {
+    const css = await renderedCss();
     expect(resolvedDeclarations(css, "light", ".panel").get("background")).toBe("#fff");
     expect(resolvedDeclarations(css, "light", ".layer").get("color")).toBe("#111827");
   });
@@ -286,8 +295,8 @@ describe("panel colour scheme", () => {
 for (const scheme of ["light", "dark"] as const) {
   describe(`panel contrast, ${scheme} scheme`, () => {
     for (const check of CONTRAST_CHECKS) {
-      test(`${check.name} is at least ${check.min}:1`, () => {
-        const css = renderedCss();
+      test(`${check.name} is at least ${check.min}:1`, async () => {
+        const css = await renderedCss();
         const fg = resolvedDeclarations(css, scheme, check.fg[0]).get(check.fg[1]) ?? "";
         const bg = resolvedDeclarations(css, scheme, check.bg[0]).get(check.bg[1]) ?? "";
         expect(contrastRatio(fg, bg)).toBeGreaterThanOrEqual(check.min);
@@ -307,8 +316,8 @@ const RING_COLOUR: Record<"light" | "dark", string> = { light: "#111827", dark: 
 const BACKGROUNDS = ["#ffffff", "#0b0c10"] as const;
 
 describe("focus ring coverage", () => {
-  test("every rendered interactive element matches a focus-ring selector", () => {
-    openPanel();
+  test("every rendered interactive element matches a focus-ring selector", async () => {
+    await openPanel();
     toastStore.push({ kind: "warning", textCode: "panel.title", href: "https://example.com/docs", hrefLabelCode: "panel.close" });
     const found = [...shadow().querySelectorAll("button, a[href], [role='switch'], input, select, textarea")];
     expect(found.length).toBeGreaterThan(0);
@@ -320,8 +329,8 @@ describe("focus ring coverage", () => {
 for (const scheme of ["light", "dark"] as const) {
   describe(`focus ring, ${scheme} scheme`, () => {
     for (const sel of FOCUS_SELECTORS) {
-      test(`${sel} draws a 2px solid ring at 2px offset`, () => {
-        const decl = resolvedDeclarations(renderedCss(), scheme, `${sel}:focus-visible`);
+      test(`${sel} draws a 2px solid ring at 2px offset`, async () => {
+        const decl = resolvedDeclarations(await renderedCss(), scheme, `${sel}:focus-visible`);
         const shorthand = decl.get("outline") ?? "";
         // A later outline-color (the dark rule) overrides the colour of the shorthand.
         const colour = decl.get("outline-color") ?? shorthand.split(/\s+/).at(-1);
@@ -329,8 +338,8 @@ for (const scheme of ["light", "dark"] as const) {
         expect(colour).toBe(RING_COLOUR[scheme]);
         expect(decl.get("outline-offset")).toBe("2px");
       });
-      test(`${sel} ring or halo is at least ${GRAPHIC_MIN}:1 on each page background`, () => {
-        const decl = resolvedDeclarations(renderedCss(), scheme, `${sel}:focus-visible`);
+      test(`${sel} ring or halo is at least ${GRAPHIC_MIN}:1 on each page background`, async () => {
+        const decl = resolvedDeclarations(await renderedCss(), scheme, `${sel}:focus-visible`);
         const ring = decl.get("outline-color") ?? decl.get("outline")?.split(/\s+/).at(-1) ?? "";
         const halo = /0 0 0 6px (#[0-9a-fA-F]{3,6})/.exec(decl.get("box-shadow") ?? "")?.[1];
         if (!halo) throw new Error(`${sel} has no 6px halo for ${scheme}`);
@@ -343,8 +352,8 @@ for (const scheme of ["light", "dark"] as const) {
 }
 
 describe("host shadow root", () => {
-  test("the host root is open and reachable from document", () => {
-    openPanel();
+  test("the host root is open and reachable from document", async () => {
+    await openPanel();
     const host = document.querySelector<HTMLElement>("[data-tinycloud-ui]");
     expect(host?.shadowRoot).not.toBeNull();
     expect(host?.shadowRoot?.querySelector("#tinycloud-ui-panel")).not.toBeNull();

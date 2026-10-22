@@ -1,7 +1,6 @@
 import type { StatusCode } from "./slots";
+import { PANEL_ID } from "./ids";
 import { text } from "./strings";
-
-export const PANEL_ID = "tinycloud-ui-panel";
 
 /** Neutral sliders glyph. currentColor, no fills. */
 const GLYPH_SVG =
@@ -19,7 +18,7 @@ export interface ButtonView {
   focus(): void;
 }
 
-export function createButton(onActivate: () => void): ButtonView {
+export function createButton(onActivate: () => void, onPreload: () => void): ButtonView {
   const el = document.createElement("button");
   el.type = "button";
   el.className = "button";
@@ -34,6 +33,9 @@ export function createButton(onActivate: () => void): ButtonView {
   el.append(dot);
 
   el.addEventListener("click", () => onActivate());
+  // Hover or focus starts the panel chunk early; the click still does the real work.
+  el.addEventListener("pointerenter", () => onPreload());
+  el.addEventListener("focus", () => onPreload());
 
   return {
     el,

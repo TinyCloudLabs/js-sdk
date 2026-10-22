@@ -1,5 +1,6 @@
 import type { IStorageService } from "@tinycloud/sdk-core";
 
+import type { PanelDataFactory, PanelDataSource } from "./data";
 import type { PanelClient, SyncFacade } from "./slots";
 
 /**
@@ -19,8 +20,14 @@ export interface PanelClientHandle {
   reset(): void;
 }
 
-export function createPanelClient(id: number, source: ClientSource): PanelClientHandle {
+export function createPanelClient(
+  id: number,
+  source: ClientSource,
+  dataFactory?: PanelDataFactory,
+): PanelClientHandle {
   const resetListeners = new Set<() => void>();
+  // Built on first read and dropped on reset, so a sign-out never keeps the previous account's rows.
+  let panelData: PanelDataSource | undefined;
 
   const client: PanelClient = {
     id,
@@ -40,6 +47,10 @@ export function createPanelClient(id: number, source: ClientSource): PanelClient
     get storageEpisode() {
       return source.storageEpisode;
     },
+    get data() {
+      if (panelData === undefined && dataFactory !== undefined) panelData = dataFactory(client);
+      return panelData;
+    },
     requestAuthority: undefined,
     requests: undefined,
   };
@@ -47,6 +58,7 @@ export function createPanelClient(id: number, source: ClientSource): PanelClient
   return {
     client,
     reset() {
+      panelData = undefined;
       for (const cb of [...resetListeners]) {
         try {
           cb();

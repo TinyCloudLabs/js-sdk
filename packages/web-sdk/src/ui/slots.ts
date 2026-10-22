@@ -5,6 +5,7 @@
 
 import type { IStorageService } from "@tinycloud/sdk-core";
 import type { StringKey } from "./strings";
+import type { PanelDataSource } from "./data";
 import type { ToastRequest } from "./toast-store";
 
 /** Panel sections, in nav order. Ids match the full-page and sidebar mockup. */
@@ -112,4 +113,6 @@ export interface PanelClient {
     | undefined;
   /** E: request log, present only in developer mode. */
   readonly requests?: RequestLogReader | undefined;
+  /** Panel data for the views. Undefined unless the host supplied a data factory (harness or preview); production panels show placeholders. */
+  readonly data?: PanelDataSource | undefined;
 }

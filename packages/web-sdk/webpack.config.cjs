@@ -220,4 +220,54 @@ const gatedCjsConfig = {
   output: { ...replicaCjsConfig.output, filename: "replica-gated.cjs" },
 };
 
-module.exports = [esmConfig, cjsConfig, replicaEsmConfig, replicaCjsConfig, gatedEsmConfig, gatedCjsConfig];
+// The lazy panel is its own entry (contracts-ade §1.4 budget applies to the eager root only).
+// The root loads it by relative sibling path, at first open, and never bundles it.
+const PANEL_REQUEST = "./panel-entry";
+const panelLoaderExternals = (type, file) => ({ context, request }, callback) => {
+  if (request === PANEL_REQUEST && context === path.resolve(__dirname, "src/ui")) {
+    callback(null, `${type} ./${file}`);
+    return;
+  }
+  callback();
+};
+
+// The panel keeps every @tinycloud/* package external, like the replica entries.
+const panelExternals = (moduleType) => ({ request }, callback) => {
+  if (request && /^@tinycloud\//.test(request)) {
+    callback(null, `${moduleType} ${request}`);
+    return;
+  }
+  callback();
+};
+
+const rootEsmConfig = { ...esmConfig, externals: panelLoaderExternals("import", "panel.mjs") };
+const rootCjsConfig = {
+  ...cjsConfig,
+  externals: panelLoaderExternals("commonjs", "panel.cjs"),
+  output: { ...cjsConfig.output, environment: { dynamicImport: true } },
+};
+
+const panelEsmConfig = {
+  ...esmConfig,
+  entry: "./src/ui/panel-entry.ts",
+  externals: panelExternals("module"),
+  output: { ...esmConfig.output, filename: "panel.mjs" },
+};
+
+const panelCjsConfig = {
+  ...cjsConfig,
+  entry: "./src/ui/panel-entry.ts",
+  externals: panelExternals("commonjs"),
+  output: { ...cjsConfig.output, filename: "panel.cjs" },
+};
+
+module.exports = [
+  rootEsmConfig,
+  rootCjsConfig,
+  replicaEsmConfig,
+  replicaCjsConfig,
+  gatedEsmConfig,
+  gatedCjsConfig,
+  panelEsmConfig,
+  panelCjsConfig,
+];

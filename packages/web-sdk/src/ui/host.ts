@@ -1,12 +1,13 @@
 import { createButton, type ButtonView } from "./button";
 import type { PanelClientHandle } from "./client";
 import type { ResolvedUiConfig } from "./config";
-import { createPanel, type PanelHandle, type ShellLayout } from "./panel";
+import type { PanelHandle, ShellLayout } from "./panel";
+import type * as PanelEntry from "./panel-entry";
+import { createPendingPanel, type PendingPanel } from "./pending";
 import { HOST_PARTS } from "./parts";
 import { toastStore } from "./parts/toasts";
 import type { ToastRequest } from "./toast-store";
 import { createButtonHideStore, defaultLocalStorage, FALLBACK_APP_ID, resolveUiAppId, type HideScope } from "./persistence";
-import { PANEL_SECTIONS } from "./sections";
 import type { HostContext, SectionId, StatusCode } from "./slots";
 import { createStatusBoard } from "./status";
 import { text } from "./strings";
@@ -18,6 +19,8 @@ export const HOST_API_VERSION = 1;
 
 /** Below OpenKey (999999); the host stacking context contains every panel element. */
 const HOST_STYLE = "position:fixed;inset:0;pointer-events:none;z-index:999990;isolation:isolate;";
+
+type PanelEntryModule = typeof PanelEntry;
 
 export interface ClientRegistration {
   readonly handle: PanelClientHandle;
@@ -46,8 +49,11 @@ interface ClientEntry {
 
 interface Mounted {
   readonly host: HTMLElement;
+  readonly root: ShadowRoot;
   readonly layer: HTMLElement;
-  readonly panel: PanelHandle;
+  readonly pending: PendingPanel;
+  /** Set once the lazy panel chunk has attached to this mount. */
+  panel?: PanelHandle;
   readonly button: ButtonView | undefined;
   readonly stopParts: Array<() => void>;
 }
@@ -73,7 +79,7 @@ export function createHostRuntime(): HostRuntime {
   const hideStore = createButtonHideStore(defaultLocalStorage);
   const board = createStatusBoard((top) => {
     mounted?.button?.setStatus(top);
-    mounted?.panel.setStatus(top);
+    mounted?.panel?.setStatus(top);
     for (const cb of [...statusListeners]) cb();
   });
 
@@ -86,6 +92,10 @@ export function createHostRuntime(): HostRuntime {
   let mounted: Mounted | undefined;
   let disposers: Array<() => void> = [];
   let rejectionListening = false;
+  /** Cached per page: the panel chunk loads once, then attaches to each mount. */
+  let panelModule: PanelEntryModule | undefined;
+  /** The mount whose panel chunk is in flight; cleared when that load settles. */
+  let loadingFor: Mounted | undefined;
 
   /** Host-owned: listens while a client is registered and the primary client allows toasts. */
   function syncRejectionListener(): void {
@@ -170,21 +180,22 @@ export function createHostRuntime(): HostRuntime {
     disposers = [];
   }
 
-  /** Lays out the shell and mounts exactly one available section while open. */
+  /** Lays out the shell and mounts exactly one available section while open. Needs the panel attached. */
   function renderPanel(): void {
     closeSections();
-    if (!mounted) return;
-    const available = PANEL_SECTIONS.filter((section) => section.isAvailable(context));
+    const panel = mounted?.panel;
+    if (!panel || !panelModule) return;
+    const available = panelModule.availableSections(context);
     const current = available.find((section) => section.id === activeSection) ?? available[0];
     activeSection = current?.id;
-    mounted.panel.setLayout(layout, (primaryConfig()?.mode ?? "both") === "both");
-    mounted.panel.setAppLabel(context.appLabel());
-    mounted.panel.setNav(available, activeSection);
+    panel.setLayout(layout, (primaryConfig()?.mode ?? "both") === "both");
+    panel.setAppLabel(context.appLabel());
+    panel.setNav(available, activeSection);
     if (!isPanelOpen || !current) return;
     const el = document.createElement("section");
     el.className = "section";
     el.dataset.section = current.id;
-    mounted.panel.main.replaceChildren(el);
+    panel.main.replaceChildren(el);
     const dispose = current.mount(el, context);
     disposers.push(() => {
       dispose();
@@ -197,7 +208,7 @@ export function createHostRuntime(): HostRuntime {
     mounted.host.setAttribute("data-tinycloud-ui", isPanelOpen ? "open" : buttonHidden ? "hidden" : "closed");
     mounted.layer.setAttribute("data-layout", layout);
     mounted.layer.toggleAttribute("data-panel-open", isPanelOpen);
-    mounted.panel.setOpen(isPanelOpen);
+    (mounted.panel ?? mounted.pending).setOpen(isPanelOpen);
     mounted.button?.setExpanded(isPanelOpen);
     mounted.button?.setHidden(buttonHidden);
   }
@@ -211,8 +222,13 @@ export function createHostRuntime(): HostRuntime {
     if (section !== undefined) activeSection = section;
     isPanelOpen = true;
     syncDom();
+    const panel = mounted.panel;
+    if (!panel) {
+      requestPanel();
+      return;
+    }
     renderPanel();
-    if (!wasOpen || layout !== previous) mounted.panel.focusFirst();
+    if (!wasOpen || layout !== previous) panel.focusFirst();
   }
 
   /** Closing never changes the hidden flag. Focus returns to the button only when the shell owned focus. */
@@ -241,6 +257,53 @@ export function createHostRuntime(): HostRuntime {
     openAt(requested, section);
   }
 
+  /**
+   * Loads the panel chunk on first open or launcher hover/focus. The module is
+   * cached for the page; each mount attaches its own panel. The pending
+   * stand-in shows loading, then a neutral error with Retry if the chunk fails.
+   */
+  function requestPanel(): void {
+    const owner = mounted;
+    if (!owner || owner.panel || loadingFor === owner) return;
+    if (panelModule) {
+      attachPanel(owner, panelModule);
+      return;
+    }
+    loadingFor = owner;
+    owner.pending.showLoading();
+    // ts-no-dynamic-import: a static import would put the panel shell, sections and
+    // PANEL_CSS into the eager root and break its 12 KiB gzip budget (contracts-ade §1.4).
+    import("./panel-entry")
+      .then((entry) => {
+        panelModule = entry;
+        if (loadingFor === owner) loadingFor = undefined;
+        if (mounted === owner) attachPanel(owner, entry);
+      })
+      .catch(() => {
+        if (loadingFor === owner) loadingFor = undefined;
+        if (mounted === owner) owner.pending.showError(requestPanel);
+      });
+  }
+
+  /** Replaces the pending stand-in with the real panel. Focuses it if it opened meanwhile. */
+  function attachPanel(owner: Mounted, entry: PanelEntryModule): void {
+    const panel = entry.mountPanel(owner.root, {
+      onClose: () => closeShell(true),
+      onEscape: () => closeShell(true),
+      onLayout: (target) => openAt(target),
+      onNavigate(id) {
+        activeSection = id;
+        renderPanel();
+      },
+    });
+    owner.pending.el.replaceWith(panel.el);
+    owner.panel = panel;
+    panel.setStatus(board.top());
+    syncDom();
+    renderPanel();
+    if (isPanelOpen) panel.focusFirst();
+  }
+
   function mount(config: ResolvedUiConfig): Mounted {
     const host = document.createElement("div");
     host.setAttribute("style", HOST_STYLE);
@@ -253,24 +316,18 @@ export function createHostRuntime(): HostRuntime {
     layer.className = "layer";
     layer.setAttribute("data-position", config.position);
 
-    const panel = createPanel({
-      onClose: () => closeShell(true),
-      onEscape: () => closeShell(true),
-      onLayout: (target) => openAt(target),
-      onNavigate(id) {
-        activeSection = id;
-        renderPanel();
-      },
-    });
-    const button = config.button ? createButton(() => (isPanelOpen ? closeShell(true) : openAt("drawer"))) : undefined;
+    const pending = createPendingPanel(() => closeShell(true));
+    const button = config.button
+      ? createButton(() => (isPanelOpen ? closeShell(true) : openAt("drawer")), requestPanel)
+      : undefined;
     if (button) layer.append(button.el);
-    layer.append(panel.el);
+    layer.append(pending.el);
 
     root.append(style, layer);
     (document.body ?? document.documentElement).append(host);
 
     const stopParts = HOST_PARTS.map((part) => part.start(context, layer));
-    return { host, layer, panel, button, stopParts };
+    return { host, root, layer, pending, button, stopParts };
   }
 
   function ensureMounted(): void {
@@ -279,7 +336,6 @@ export function createHostRuntime(): HostRuntime {
     if (!config) return;
     mounted = mount(config);
     mounted.button?.setStatus(board.top());
-    mounted.panel.setStatus(board.top());
     buttonHidden = config.button && hideStore.read(hideScope());
     syncDom();
   }

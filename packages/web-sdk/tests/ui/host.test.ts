@@ -11,6 +11,7 @@ import { toastStore, toasts } from "../../src/ui/parts/toasts";
 import { mountPrompt } from "../../src/ui/parts/prompts";
 import type { ToastView } from "../../src/ui/toast-store";
 import type { UiPosition } from "../../src/ui/config";
+import { panelMounted } from "./panel-ready";
 
 type Loose = Record<PropertyKey, unknown>;
 
@@ -232,18 +233,20 @@ describe("open, close, hide", () => {
     expect(ui.api.isOpen).toBe(true);
   });
 
-  test("the panel hide control sets the flag and closes", () => {
+  test("the panel hide control sets the flag and closes", async () => {
     const ui = mountClient();
     ui.api.open();
+    await panelMounted();
     actionEl(text("panel.hide"))?.click();
     expect(page.localStorage.getItem(hideKey())).toBe("1");
     expect(hostState()).toBe("hidden");
     expect(ui.api.isOpen).toBe(false);
   });
 
-  test("close never changes the hidden flag", () => {
+  test("close never changes the hidden flag", async () => {
     const ui = mountClient();
     ui.api.open();
+    await panelMounted();
     actionEl(text("panel.hide"))?.click();
     ui.api.close();
     expect(page.localStorage.getItem(hideKey())).toBe("1");
@@ -258,19 +261,21 @@ describe("open, close, hide", () => {
     expect(ui.api.isOpen).toBe(false);
   });
 
-  test("Escape on the panel element closes it", () => {
+  test("Escape on the panel element closes it", async () => {
     const ui = mountClient();
     ui.api.open();
+    await panelMounted();
     const panel = shadow().querySelector("[role='dialog']") as HTMLElement;
     panel.dispatchEvent(new page.KeyboardEvent("keydown", { key: "Escape", bubbles: true, composed: true }));
     expect(ui.api.isOpen).toBe(false);
   });
 
-  test("the layer carries data-panel-open only while the panel is open", () => {
+  test("the layer carries data-panel-open only while the panel is open", async () => {
     const ui = mountClient();
     const layer = () => shadow().querySelector(".layer") as HTMLElement;
     expect(layer().hasAttribute("data-panel-open")).toBe(false);
     ui.api.open();
+    await panelMounted();
     expect(layer().hasAttribute("data-panel-open")).toBe(true);
     buttonEl()?.click();
     expect(layer().hasAttribute("data-panel-open")).toBe(false);
