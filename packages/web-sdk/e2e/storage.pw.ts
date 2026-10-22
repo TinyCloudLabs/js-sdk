@@ -252,12 +252,13 @@ for (const scheme of SCHEMES) {
       const manage = section(page).getByRole("link", { name: STRINGS["storage.manage"], exact: true });
       await expect(manage).toBeVisible();
 
-      // The toast appears after an async status read and the panel shrinks through a ResizeObserver,
-      // so a single sample can catch a transient frame. Poll until the geometry settles, then assert on the settled sample.
+      // The panel animates in (tc-in/tc-up) and resizes through a ResizeObserver. Sample only after its
+      // animations finish, so the hit-test measures the resting layout rather than a transient frame.
       let geometry: ToastGeometry | undefined;
       await expect
         .poll(
           async () => {
+            await panel(page).evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
             geometry = await readToastGeometry(toast, panel(page), manage);
             return geometry.settled;
           },
