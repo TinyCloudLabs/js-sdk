@@ -241,7 +241,7 @@ describe("receiveShare open flow, success path", () => {
     expect(node.calls).toEqual(["POST /policy/v3/challenges", "POST /policy/v3/delegations", "POST /delegate", "POST /invoke get"]);
   });
 
-  it("refuses to open without a presentation builder before any network call", async () => {
+  it("throws authorization-denied when no presentation builder is given", async () => {
     const published = await publishOpenShare();
     const node = fakeNode(published.envelope, published.stored);
     const transport: string[] = [];
@@ -261,6 +261,7 @@ describe("receiveShare open flow, success path", () => {
     } finally {
       globalThis.fetch = realFetch;
     }
+    // Plain extra check. recipient.ts:485 (the builder check in establishV3) is what stops the network here, not the guard in receiveShare; the error-class assertion above pins the guard.
     expect(transport).toEqual([]);
     expect(node.calls).toEqual([]);
   });
