@@ -1095,6 +1095,23 @@ describe("TinyCloud share authority adapter", () => {
     expect(encryptions).toBe(0);
   });
 
+  it("uploads nothing and sends no Share request when the decrypt approval times out", async () => {
+    holdsDecrypt = false;
+    const requests: string[] = [];
+    const adapter = stepUpAdapter(async () => {
+      throw new Error("device authorization timed out");
+    }, (async (input: string | URL | Request) => {
+      requests.push(String(input instanceof Request ? input.url : input));
+      return new Response(null, { status: 503 });
+    }) as unknown as typeof globalThis.fetch);
+    const error = await adapter.publish(addressedInput({ kind: "email", address: "owner@example.com" })).then(() => undefined, (caught: unknown) => caught);
+    expect((error as InstanceType<typeof SharePublishAuthorityError>).failure).toEqual({ kind: "decrypt-approval-not-completed" });
+    expect(requests).toEqual([]);
+    expect(publishEvents).toEqual([]);
+    expect(uploadedPaths).toEqual([]);
+    expect(encryptions).toBe(0);
+  });
+
   it("refuses with decrypt-not-held when the approval completes but decrypt is still missing", async () => {
     holdsDecrypt = false;
     const error = await stepUpAdapter(async () => undefined)
