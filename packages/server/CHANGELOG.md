@@ -1,5 +1,12 @@
 # @tinycloud/server
 
+## 2.5.9-beta.1
+
+### Patch Changes
+
+- @tinycloud/sdk-core@3.3.2-beta.1
+- @tinycloud/node-sdk@3.3.2-beta.1
+
 ## 2.5.9-beta.0
 
 ### Patch Changes

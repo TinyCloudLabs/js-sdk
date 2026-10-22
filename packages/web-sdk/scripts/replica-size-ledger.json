@@ -869,5 +869,55 @@
       "ceiling": 822753
     },
     "reason": "CI PR-side build +1 B with no code change (sdk-services 3.3.1 pin; TC-1789 investigation)"
+  },
+  "tc1757Ratchet": {
+    "label": "web-recipient entry (#678): root ceiling lowered to the measured CI bytes",
+    "ruling": "Approved by Naomi (2026-10-22, policy review relayed by Amos)",
+    "base": "368a3d3e7075c0538f0ced9b26d3870c590c81f0",
+    "sourceCommits": [
+      "e244be2c5d83d94b1c1a505b4ea85301f393b4a3"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39817449009",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39817449009/job/119959550450",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39817449009/job/119959550040"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": -16712,
+        "index.cjs": -1996
+      },
+      "ceiling": {
+        "index.mjs": 1458843,
+        "index.cjs": 1401918
+      }
+    },
+    "firstImport": {
+      "delta": {
+        "replica.mjs": 0,
+        "replica.cjs": 0
+      },
+      "ceiling": {
+        "replica.mjs": 51925,
+        "replica.cjs": 67141
+      }
+    },
+    "activation": {
+      "delta": {
+        "activation.mjs": 0,
+        "activation.cjs": 0
+      },
+      "ceiling": {
+        "activation.mjs": 23117,
+        "activation.cjs": 24700
+      }
+    },
+    "worker": {
+      "delta": 0,
+      "ceiling": 822753
+    },
+    "reason": "web-sdk imports share-sdk's narrow web-recipient entry; root ceiling lowered to measured CI bytes (TC-1757)"
   }
 }

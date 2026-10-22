@@ -13,7 +13,7 @@ import {
   type CredentialRequirement,
   type UnifiedPolicyV2,
 } from "@tinycloud/sdk-core";
-import { inspectShare, ShareRecipientClient, type ShareMetadata } from "@tinycloud/share-sdk";
+import { inspectShare, ShareRecipientClient, type ShareMetadata } from "@tinycloud/share-sdk/web-recipient";
 import { ed25519PublicKeyFromDidKey, type ShareEnvelopeV3 } from "@tinycloud/share-envelope";
 import { CredentialsService, type CredentialClient } from "../credentials";
 import { SessionReceiverCredentialCustody } from "./receiver-credentials";

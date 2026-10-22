@@ -1,5 +1,18 @@
 # @tinycloudlabs/web-sdk
 
+## 3.3.2-beta.1
+
+### Patch Changes
+
+- 666f60b: Import the share recipient surface from `@tinycloud/share-sdk/web-recipient` instead of the share-sdk package root, so the built bundle no longer carries the rest of share-sdk. No runtime API change.
+
+  Details: TC-1757
+
+- Updated dependencies [666f60b]
+  - @tinycloud/share-sdk@1.3.0-beta.0
+  - @tinycloud/sdk-core@3.3.2-beta.1
+  - @tinycloud/node-sdk@3.3.2-beta.1
+
 ## 3.3.2-beta.0
 
 ### Patch Changes

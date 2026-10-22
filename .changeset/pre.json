@@ -29,6 +29,9 @@
     "@tinycloud/sdk-services-test": "19.0.0"
   },
   "changesets": [
-    "replica-sdk-services-3-3-1"
+    "cli-revoke-authority-expiry",
+    "replica-sdk-services-3-3-1",
+    "tc1757-web-recipient-entry-share-sdk",
+    "tc1757-web-recipient-entry-web-sdk"
   ]
 }
