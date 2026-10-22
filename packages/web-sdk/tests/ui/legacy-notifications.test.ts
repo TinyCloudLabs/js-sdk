@@ -4,6 +4,11 @@ import { JSDOM } from "jsdom";
 import type { TinyCloudWeb as TinyCloudWebType } from "../../src/modules/tcw";
 import { REGISTRY_KEY } from "../../src/ui/host";
 import { toastStore } from "../../src/ui/parts/toasts";
+import { mountPrompt, type PromptScope } from "../../src/ui/parts/prompts";
+
+type ModalsModule = typeof import("../../src/notifications/ModalManager");
+let showPermissionRequestModal: ModalsModule["showPermissionRequestModal"];
+let showSpaceCreationModal: ModalsModule["showSpaceCreationModal"];
 
 type Config = NonNullable<ConstructorParameters<typeof TinyCloudWebType>[0]>;
 type Loose = Record<PropertyKey, unknown>;
@@ -21,6 +26,7 @@ const GLOBAL_NAMES = [
   "Element",
   "Event",
   "KeyboardEvent",
+  "requestAnimationFrame",
 ];
 
 let page: Window;
@@ -48,8 +54,12 @@ beforeAll(async () => {
   g.Element = page.Element;
   g.Event = page.Event;
   g.KeyboardEvent = page.KeyboardEvent;
+  // JSDOM has no requestAnimationFrame; the modal's connectedCallback calls it.
+  g.requestAnimationFrame = (callback: () => void) => setTimeout(callback, 0);
 
   TinyCloudWeb = (await import("../../src/modules/tcw.ts?legacy-notifications")).TinyCloudWeb;
+  // Loaded after the globals exist: the modal modules extend HTMLElement at import time.
+  ({ showPermissionRequestModal, showSpaceCreationModal } = await import("../../src/notifications/ModalManager"));
 });
 
 afterAll(() => {
@@ -111,6 +121,11 @@ function layerPosition(): string | null {
   return layer.getAttribute("data-position");
 }
 
+// The scope the instance hands to its modal call sites, as tcw.ts does.
+function promptScopeOf(tc: Loose): PromptScope {
+  return (tc.uiClient as { promptScope: PromptScope }).promptScope;
+}
+
 // Constructor tests share one module instance, so they assert behaviour only, never warnings.
 describe("legacy notifications.popups", () => {
   test("popups: false keeps the host and no button, and the UI stays available for prompts", () => {
@@ -150,6 +165,52 @@ describe("legacy notifications.popups", () => {
     const tc = create({ notifications: { popups: false }, ui: { button: true } });
     expect(shadow().querySelector("button[aria-controls]")).not.toBeNull();
     expect(showError(tc)).toBe(true);
+  });
+});
+
+// Every modal goes through mountPrompt, so this checks the gate the modals hit.
+// Modals are not used here: bun shares one module cache across test files, and
+// prompts.test.ts loads ModalManager against its fake HTMLElement, which real
+// jsdom nodes reject. The real modal path runs in the e2e specs.
+function expectPromptMounts(tc: Loose): void {
+  const layer = shadow().querySelector(".layer") as Element;
+  const before = layer.childElementCount;
+  const mount = mountPrompt(promptScopeOf(tc), document.createElement("div"), () => {});
+  expect("refusal" in mount).toBe(false);
+  expect(layer.childElementCount).toBe(before + 1);
+  expect(warnings.filter((w) => w.includes("ui-"))).toEqual([]);
+  if (!("refusal" in mount)) mount.release();
+}
+
+describe("legacy notifications.popups keeps SDK prompts", () => {
+  test("popups: false mounts SDK prompts in the host layer with no refusal warning", () => {
+    expectPromptMounts(create({ notifications: { popups: false } }));
+  });
+
+  test("ui: false refuses a space creation prompt: resolves dismissed, mounts nothing, warns once", async () => {
+    const tc = create({ ui: false });
+    const result = await showSpaceCreationModal(
+      { onCreateSpace: async () => {}, onDismiss: () => {} },
+      promptScopeOf(tc),
+    );
+    expect(result).toEqual({ success: false, dismissed: true });
+    expect(hostEl()).toBeNull();
+    expect(warnings.filter((w) => w.includes("ui-"))).toEqual(["[tinycloud] ui-disabled"]);
+  });
+
+  test("ui: false refuses a permission prompt: resolves declined, mounts nothing, warns once", async () => {
+    const tc = create({ ui: false });
+    const result = await showPermissionRequestModal(
+      { appName: "Test App", additional: [], onDismiss: () => {} },
+      promptScopeOf(tc),
+    );
+    expect(result).toEqual({ approved: false });
+    expect(hostEl()).toBeNull();
+    expect(warnings.filter((w) => w.includes("ui-"))).toEqual(["[tinycloud] ui-disabled"]);
+  });
+
+  test("ui button and toasts off still mounts SDK prompts in the host layer", () => {
+    expectPromptMounts(create({ ui: { button: false, toasts: false } }));
   });
 });
 

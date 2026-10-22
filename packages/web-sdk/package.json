@@ -50,7 +50,8 @@
     "clean": "rimraf dist && rimraf temp",
     "build:e2e-ui": "bun build ./e2e/fixtures/harness-entry.ts --target=browser --format=iife --outfile=./e2e/.build/ui.bundle.js",
     "build:e2e-storage": "bun build ./e2e/fixtures/storage-harness-entry.ts --target=browser --format=iife --outfile=./e2e/.build/storage.bundle.js",
-    "test:e2e": "bun run build:e2e-ui && bun run build:e2e-storage && playwright test -c playwright.e2e.config.ts",
+    "build:e2e-prompts": "bun build ./e2e/fixtures/prompts-harness-entry.ts --target=browser --format=iife --outfile=./e2e/.build/prompts.bundle.js",
+    "test:e2e": "bun run build:e2e-ui && bun run build:e2e-storage && bun run build:e2e-prompts && playwright test -c playwright.e2e.config.ts",
     "test": "jest"
   },
   "dependencies": {
