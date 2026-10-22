@@ -15,7 +15,8 @@ if (!tinycloudHomePath().startsWith(home)) {
 }
 const { ProfileManager } = await import("../config/profiles.js");
 const { DEFAULT_SHARE_ORIGIN } = await import("../config/constants.js");
-const { loadAdditionalDelegations } = await import("../lib/permissions.js");
+const { loadAdditionalDelegations, replayAdditionalDelegations } = await import("../lib/permissions.js");
+const { sessionHoldsEncryptionDecrypt } = await import("./adapters.js");
 const { keyToDID } = await import("../auth/local-key.js");
 const { approveShareDecrypt, DECRYPT_APPROVAL_TTL_SECONDS } = await import("./decrypt-approval.js");
 
@@ -157,5 +158,31 @@ describe("share decrypt approval against the OpenKey relay", () => {
     expect(stored).toHaveLength(1);
     expect(stored[0]!.delegation.cid).toBe(openkey.delegationCid);
     expect(stored[0]!.permissions).toContainEqual(signedRaw[0]);
+  });
+
+  it("replays the stored approval onto a restored base session, so the next publish needs no prompt", async () => {
+    const openkey = await openKeyApprovingDecryptOnly();
+    const node = await restoredBaseNode();
+    const approveSpy = spyOn(globalThis, "fetch").mockImplementation(openkey.fetchFn as typeof fetch);
+    try {
+      await approveShareDecrypt({ profileName: "test", node });
+    } finally {
+      approveSpy.mockRestore();
+    }
+    const requestsAfterApproval = openkey.requests.length;
+
+    const fresh = await restoredBaseNode();
+    expect(sessionHoldsEncryptionDecrypt(fresh, networkUrn)).toBe(false);
+    const replaySpy = spyOn(globalThis, "fetch").mockImplementation((async (url: string | URL | Request) => {
+      if (String(url) === `${NODE}/delegate`) return Response.json({ activated: [], skipped: [] });
+      throw new Error(`unexpected request during replay: ${String(url)}`);
+    }) as typeof fetch);
+    try {
+      await replayAdditionalDelegations(fresh, "test", { host: NODE, migrate: false });
+    } finally {
+      replaySpy.mockRestore();
+    }
+    expect(openkey.requests).toHaveLength(requestsAfterApproval);
+    expect(sessionHoldsEncryptionDecrypt(fresh, networkUrn)).toBe(true);
   });
 });
