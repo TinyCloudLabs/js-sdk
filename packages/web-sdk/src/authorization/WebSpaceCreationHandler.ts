@@ -13,11 +13,11 @@ import {
   ModalManager,
   showSpaceCreationModal,
 } from "../notifications/ModalManager";
-import { dispatchSDKEvent } from "../notifications/ErrorHandler";
 import {
   beginAwaitingUserInput,
   formatDuration,
 } from "../notifications/awaitingUserInput";
+import type { ToastSink } from "../ui/toast-store";
 
 /**
  * How long {@link ModalSpaceCreationHandler} waits for the user to answer the
@@ -69,6 +69,8 @@ export interface ModalSpaceCreationHandlerOptions {
    * dialog is actually reachable in your UI.
    */
   timeoutMs?: number;
+  /** Shows the space-creation outcome toasts. Omit to stay silent. */
+  toast?: ToastSink;
 }
 
 /**
@@ -91,9 +93,11 @@ export interface ModalSpaceCreationHandlerOptions {
  */
 export class ModalSpaceCreationHandler implements ISpaceCreationHandler {
   private readonly timeoutMs: number;
+  private readonly toast: ToastSink | undefined;
 
   constructor(options: ModalSpaceCreationHandlerOptions = {}) {
     this.timeoutMs = options.timeoutMs ?? DEFAULT_SPACE_CREATION_TIMEOUT_MS;
+    this.toast = options.toast;
   }
 
   /**
@@ -150,11 +154,7 @@ export class ModalSpaceCreationHandler implements ISpaceCreationHandler {
         // not left with an invisible modal trapping scroll and focus.
         ModalManager.getInstance().closeActiveModal();
         endBeacon("timeout");
-        dispatchSDKEvent.error(
-          "storage.space_creation_timeout",
-          "Setting up your TinyCloud Space timed out",
-          error.message
-        );
+        this.toast?.({ kind: "error", textCode: "toast.space_creation_timeout" });
       } else {
         endBeacon("error");
       }
@@ -168,18 +168,14 @@ export class ModalSpaceCreationHandler implements ISpaceCreationHandler {
    * Show success notification after space creation.
    */
   onSpaceCreated(context: SpaceCreationContext): void {
-    dispatchSDKEvent.success("TinyCloud Space created successfully");
+    this.toast?.({ kind: "success", textCode: "toast.space_created" });
   }
 
   /**
    * Show error notification if space creation fails.
    */
   onSpaceCreationFailed(context: SpaceCreationContext, error: Error): void {
-    dispatchSDKEvent.error(
-      "storage.space_creation_failed",
-      "Failed to create your TinyCloud Space",
-      error.message
-    );
+    this.toast?.({ kind: "error", textCode: "toast.space_creation_failed" });
   }
 }
 
@@ -199,6 +195,8 @@ export interface SpaceCreationHandlerConfig {
   spaceCreationHandler?: ISpaceCreationHandler;
   /** See `TinyCloudWeb.Config.spaceCreationTimeoutMs`. */
   spaceCreationTimeoutMs?: number;
+  /** Shows the space-creation outcome toasts. Omit to stay silent. */
+  toast?: ToastSink;
 }
 
 /**
@@ -227,5 +225,6 @@ export function resolveSpaceCreationHandler(
   if (config.autoCreateSpace === false) return undefined;
   return new ModalSpaceCreationHandler({
     timeoutMs: config.spaceCreationTimeoutMs,
+    toast: config.toast,
   });
 }

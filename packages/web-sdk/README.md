@@ -271,6 +271,36 @@ and [Postgres Node size job 117210798348](https://github.com/TinyCloudLabs/js-sd
 independently reported identical root and optional gzip bytes on `e5b080d5`;
 the historical local measurements cannot set ledger ceilings.
 
+## Floating button and panel
+
+`TinyCloudWeb` adds a floating button and a panel to the page. The panel is rendered in an open shadow root, so host page styles do not reach it. It is not rendered inside an iframe or an opaque origin. In those cases, and with `ui: false`, nothing is added to the page.
+
+```typescript
+const tc = new TinyCloudWeb({
+  ui: {
+    button: true,         // default true; false hides the button only
+    toasts: true,         // default true; false shows no toasts and stops the unhandled-rejection listener; prompts still render
+    developerMode: false, // default false; shows the developer section
+    position: "bottom-right", // "bottom-right" | "bottom-left" | "bottom-center"; each "top-*" value places at the matching bottom position; an unrecognised value falls back to "bottom-right"
+    appId: "my-app",      // identity for the hide flag when no manifest is set
+  },
+});
+
+tc.ui.open();
+tc.ui.close();
+tc.ui.toggle();
+tc.ui.isOpen;    // boolean
+tc.ui.available; // false in iframes, opaque origins, SSR, or when ui is false
+```
+
+`open()` also clears the user's hidden flag for the button. The hidden flag is stored per origin and app id under `tinycloud:ui:button-hidden:v1:`. The panel shows sections only for capabilities the client exposes.
+
+### Toasts and notification errors
+
+Toasts render in the host panel layer and follow the same `ui` options. `ui: false` creates no host, button, toasts, or listeners. `ui: { toasts: false }` shows no toasts and stops the unhandled-rejection listener, and prompts still render. `ui.position` sets placement. Toast copy is fixed text per error kind. The raw error message is written to the console. A toast auto-dismisses after 5 seconds, at most 3 show at once, and an identical visible toast is not shown twice.
+
+`notifications.throwErrors: true` rethrows the raw error message asynchronously, so global error handlers see it. Identical errors within 200 ms collapse into one throw; distinct errors each throw. It applies whenever `ui` is enabled and `ui.toasts` is not `false`, including on a framed page where the toast is dropped. It never applies with `ui: false` or `ui: { toasts: false }`. The legacy `popups`, `position`, `duration`, and `maxVisible` keys under `notifications` are removed from the TypeScript types. JavaScript callers that still pass them are mapped onto `ui` once per page load, with a console warning per key: `popups: false` becomes `ui: { button: false, toasts: false }` only when `ui` is not set. An explicit `ui` replaces that mapping as a whole, so `popups: false` with `ui: { position: 'bottom-left' }` keeps the button and toasts. `position` becomes `ui.position` unless `ui.position` is set. `duration` and `maxVisible` are ignored, and their warning says so. Migrate to `ui`.
+
 ## Basic Storage Operations
 
 ### Storing Data

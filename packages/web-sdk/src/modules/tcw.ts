@@ -78,6 +78,7 @@ import {
   type IStorageService,
 } from "@tinycloud/sdk-core";
 import { showPermissionRequestModal } from "../notifications/ModalManager";
+import { applyLegacyNotificationKeys } from "../notifications/legacy-config";
 import {
   requestPermissionsCore,
   validateAdditionalPermissions,
@@ -98,6 +99,8 @@ import {
 
 import { BrowserWalletSigner } from "../adapters/BrowserWalletSigner";
 import { BrowserNotificationHandler } from "../adapters/BrowserNotificationHandler";
+import { registerUiClient, type TinyCloudUI, type UiClientHandle, type UiConfig } from "../ui";
+import type { ToastSink } from "../ui/toast-store";
 import { BrowserWasmBindings } from "../adapters/BrowserWasmBindings";
 import { BrowserENSResolver } from "../adapters/BrowserENSResolver";
 import {
@@ -127,7 +130,7 @@ declare global {
  * Extends ClientConfig with browser-specific options.
  */
 export interface Config extends ClientConfig {
-  /** Notification configuration for error popups and toasts */
+  /** Notifications. `throwErrors` rethrows each error's raw message asynchronously, once per burst of identical errors (200 ms window). It applies unless `ui: false` or `ui.toasts: false`, which turn off toasts and throws together, as the old `popups: false` did; `ui.button: false` leaves throws on. Toast placement and visibility are set through `ui`. */
   notifications?: NotificationConfig;
 
   /** Optional prefix for KV service keys */
@@ -246,6 +249,8 @@ export interface Config extends ClientConfig {
   retryPolicy?: Partial<RetryPolicy>;
   /** Accountless share receiver transport and session-custody configuration. */
   shareReceiver?: ShareReceiverServiceOptions;
+  /** Floating button, panel, and toasts. `false` creates no host, button, toasts, or listeners. See {@link UiConfig}. */
+  ui?: UiConfig | false;
 }
 
 /**
@@ -367,6 +372,10 @@ export class TinyCloudWeb {
 
   /** Underlying TinyCloudNode (created after WASM init) */
   private _node: TinyCloudNode | null = null;
+  private readonly uiClient: UiClientHandle;
+
+  /** Shows a toast in this instance's host. Returns false when nothing was shown. */
+  private readonly showToast: ToastSink = (request) => this.uiClient.toast(request);
 
   /** Browser notification handler */
   private notificationHandler: BrowserNotificationHandler;
@@ -434,7 +443,8 @@ export class TinyCloudWeb {
     ) => Promise<readonly PortableDelegation[] | void>;
   };
 
-  constructor(config: Config = {}) {
+  constructor(callerConfig: Config = {}) {
+    const config = applyLegacyNotificationKeys(callerConfig);
     if (config.replication?.enabled) {
       if (!registeredBrowserReplica) {
         throw new Error("Call registerBrowserReplica from @tinycloud/web-sdk with the @tinycloud/web-sdk/replica plugin before constructing TinyCloudWeb with replication enabled.");
@@ -445,8 +455,25 @@ export class TinyCloudWeb {
     this._manifest = config.manifest;
     this._capabilityRequest = config.capabilityRequest;
 
+    this.uiClient = registerUiClient({
+      ui: config.ui,
+      source: {
+        signedIn: () => this.session() !== undefined,
+        storage: { status: () => this.storage.status() },
+      },
+      manifestAppId: () => {
+        const manifest = this._manifest;
+        const fromManifest = (Array.isArray(manifest) ? manifest[0] : manifest)?.app_id;
+        return fromManifest ?? this._capabilityRequest?.manifests[0]?.app_id;
+      },
+    });
+
     // Initialize browser notification handler
-    this.notificationHandler = new BrowserNotificationHandler(config.notifications);
+    // With `notifications.throwErrors`, error events rethrow even when no toast is shown.
+    this.notificationHandler = new BrowserNotificationHandler(
+      this.showToast,
+      this.config.notifications?.throwErrors === true && this.config.ui !== false && this.config.ui?.toasts !== false,
+    );
 
     // Create browser WASM bindings
     this.wasmBindings = new BrowserWasmBindings();
@@ -537,7 +564,7 @@ export class TinyCloudWeb {
     // explicit handler precedence over `autoCreateSpace`, so always setting one
     // made `autoCreateSpace` dead config in the browser and forced every app
     // through a dialog it may have opted out of.
-    nodeConfig.spaceCreationHandler = resolveSpaceCreationHandler(this.config);
+    nodeConfig.spaceCreationHandler = resolveSpaceCreationHandler({ ...this.config, toast: this.showToast });
 
     this._node = new TinyCloudNode(nodeConfig);
     this._node.on("storage.full", (event) => {
@@ -617,6 +644,9 @@ export class TinyCloudWeb {
 
   /** The owner's TinyCloud storage; `storage.status()` reads usage and plan from the node. */
   get storage(): IStorageService { return this.node.storage; }
+
+  /** Browser UI API: `open`, `close`, `toggle`, `isOpen`, and `available`. Inert when `ui: false` or the page cannot render UI. */
+  get ui(): TinyCloudUI { return this.uiClient.api; }
 
   /** Space-scoped SQL service for a non-primary space (e.g. the owner's `applications` space). */
   sqlForSpace(spaceId: string): ISQLService { return this.node.sqlForSpace(spaceId); }
@@ -953,7 +983,7 @@ export class TinyCloudWeb {
         this._credentialsService = undefined;
         this._shareReceiverService = undefined;
         this._sessionRestoreStatus = "idle";
-        this.notificationHandler.cleanup?.();
+        this.uiClient.reset();
         const address = liveAddress ?? await this.resolveRestoreAddress().catch(() => undefined);
         if (address) await this.clearPersistedSession(address);
         for (const pendingAddress of pendingAddresses ?? []) {
@@ -1044,7 +1074,8 @@ export class TinyCloudWeb {
   }
 
   cleanup(): void {
-    this.notificationHandler.cleanup?.();
+    this.uiClient.unregister();
+    this.notificationHandler.cancelPendingThrows();
   }
 
   connectWallet(

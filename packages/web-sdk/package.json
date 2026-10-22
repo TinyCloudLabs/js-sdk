@@ -48,6 +48,8 @@
     "lint": "eslint --ext .ts src/",
     "lint:fix": "eslint --ext .ts src/ --fix",
     "clean": "rimraf dist && rimraf temp",
+    "build:e2e-ui": "bun build ./e2e/fixtures/harness-entry.ts --target=browser --format=iife --outfile=./e2e/.build/ui.bundle.js",
+    "test:e2e": "bun run build:e2e-ui && playwright test -c playwright.e2e.config.ts",
     "test": "jest"
   },
   "dependencies": {
@@ -68,6 +70,7 @@
     "@babel/preset-env": "^7.26.7",
     "@microsoft/api-documenter": "^7.26.5",
     "@microsoft/api-extractor": "^7.49.1",
+    "@playwright/test": "1.58.2",
     "@types/jest": "^30.0.0",
     "@types/node": "^18.19.74",
     "@types/webpack": "^5.28.5",
@@ -90,6 +93,7 @@
     "events": "^3.3.0",
     "gh-pages": "^6.3.0",
     "https-browserify": "^1.0.0",
+    "jsdom": "26.1.0",
     "os-browserify": "^0.3.0",
     "path-browserify": "^1.0.1",
     "process": "^0.11.10",
