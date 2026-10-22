@@ -28,6 +28,7 @@ import {
   NetworkIdError,
   parseNetworkId,
 } from "./networkId";
+import { DECRYPT_ACTION } from "./types";
 
 /** Path grammar. This is the only place the key-path charset/limits live. */
 const SEGMENT_SOURCE = "[a-z0-9][a-z0-9._-]{0,63}";
@@ -36,7 +37,8 @@ const KEY_PATH_RE = new RegExp(`^${PATH_SOURCE}$`);
 /** `<ownerDid>:<network>` head, then the raw path (prefix keeps its trailing `/`). */
 const RESOURCE_RE = /^(did:[a-z0-9]+:[A-Za-z0-9._:-]+):([^:/#?%\s]+)(?:\/(.*))?$/s;
 const MAX_PATH_BYTES = 255;
-const PKH_EIP155_DID_RE = /^did:pkh:eip155:(\d+):(0x[a-fA-F0-9]{40})$/;
+const PKH_EIP155_PREFIX = "did:pkh:eip155:";
+const MAX_U64 = 18446744073709551615n;
 
 /** Ability URNs for named encryption keys. */
 export const KEY_CREATE_ABILITY = "tinycloud.encryption/key.create";
@@ -44,8 +46,9 @@ export const KEY_BLOCK_ABILITY = "tinycloud.encryption/key.block";
 export const KEY_UNBLOCK_ABILITY = "tinycloud.encryption/key.unblock";
 export const KEY_DELETE_ABILITY = "tinycloud.encryption/key.delete";
 
-/** Key abilities that may appear in a delegation. `key.delete` never does. */
+/** Key abilities that may appear in a delegation: decrypt, create, block, unblock. `key.delete` never does. */
 export const DELEGABLE_KEY_ABILITIES: readonly string[] = Object.freeze([
+  DECRYPT_ACTION,
   KEY_CREATE_ABILITY,
   KEY_BLOCK_ABILITY,
   KEY_UNBLOCK_ABILITY,
@@ -102,25 +105,33 @@ export type ParsedEncryptionResource =
   | ParsedKeyResource
   | ParsedPrefixResource;
 
-/** Validate the owner DID shape and return its canonical form (EIP-55 for did:pkh:eip155). */
+/**
+ * Canonical form of an owner DID, matching the node: `did:pkh:eip155:<chain>:<address>`
+ * needs a positive u64 decimal chain id and a 20-byte hex address (rendered EIP-55);
+ * every other DID that passed the owner grammar is returned as is.
+ */
 function canonicalOwner(ownerDid: string): string {
-  const parts = ownerDid.split(":");
-  if (parts.length < 3 || parts.some((p) => p.length === 0)) {
-    throw new EncryptionResourceError(
-      "bad_owner",
-      `owner DID is not well formed (got ${JSON.stringify(ownerDid)})`,
-    );
-  }
-  const pkh = PKH_EIP155_DID_RE.exec(ownerDid);
-  if (pkh === null) return ownerDid;
-  try {
-    return pkhDid(pkh[2]!, Number(pkh[1]));
-  } catch {
+  if (!ownerDid.startsWith(PKH_EIP155_PREFIX)) return ownerDid;
+  const rest = ownerDid.slice(PKH_EIP155_PREFIX.length);
+  const colon = rest.indexOf(":");
+  const chain = colon === -1 ? "" : rest.slice(0, colon);
+  const address = colon === -1 ? "" : rest.slice(colon + 1);
+  if (!/^\d+$/.test(chain) || !/^0x[a-fA-F0-9]{40}$/.test(address)) {
     throw new EncryptionResourceError(
       "bad_owner",
       `owner DID is not a valid did:pkh:eip155 (got ${JSON.stringify(ownerDid)})`,
     );
   }
+  const chainId = BigInt(chain);
+  if (chainId === 0n || chainId > MAX_U64) {
+    throw new EncryptionResourceError(
+      "bad_owner",
+      `did:pkh:eip155 chain id must be a positive u64 (got ${JSON.stringify(chain)})`,
+    );
+  }
+  // Checksum through chain 1 so the chain id is never narrowed to a Number.
+  const checksummed = pkhDid(address, 1).slice(PKH_EIP155_PREFIX.length + 2);
+  return `${PKH_EIP155_PREFIX}${chainId}:${checksummed}`;
 }
 
 function assertCanonicalOwner(ownerDid: string): void {
@@ -214,18 +225,35 @@ function canonicalNetworkId(networkId: string): string {
   return parsed.networkId;
 }
 
+/**
+ * Builders re-parse their output so they can never emit a URN the parser
+ * would reject (for example an owner outside the owner grammar).
+ */
+function parseBuilt(resource: string, networkId: string): void {
+  if (parseEncryptionResource(resource).networkId !== networkId) {
+    throw new EncryptionResourceError(
+      "malformed",
+      `built resource does not round-trip (got ${JSON.stringify(resource)})`,
+    );
+  }
+}
+
 /** Build the exact canonical URN of a named key. */
 export function formatKeyResource(networkId: string, path: string): string {
   const id = canonicalNetworkId(networkId);
   assertPath(path, "key path");
-  return `${id}/${path}`;
+  const resource = `${id}/${path}`;
+  parseBuilt(resource, id);
+  return resource;
 }
 
 /** Build the exact canonical URN of a key prefix grant (one trailing `/`). */
 export function formatPrefixResource(networkId: string, prefix: string): string {
   const id = canonicalNetworkId(networkId);
   assertPath(prefix, "prefix");
-  return `${id}/${prefix}/`;
+  const resource = `${id}/${prefix}/`;
+  parseBuilt(resource, id);
+  return resource;
 }
 
 /**
