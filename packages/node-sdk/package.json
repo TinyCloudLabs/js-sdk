@@ -24,6 +24,11 @@
       "import": "./dist/credential-pending-store.js",
       "require": "./dist/credential-pending-store.cjs"
     },
+    "./credentials": {
+      "types": "./dist/credentials.d.ts",
+      "import": "./dist/credentials.js",
+      "require": "./dist/credentials.cjs"
+    },
     "./replication/runtime": {
       "import": {
         "types": "./dist/replication/runtime.d.ts",
@@ -76,6 +81,7 @@
     "siwe": "^3.0.0"
   },
   "devDependencies": {
+    "@noble/curves": "^1.9.7",
     "@types/node": "^20",
     "tsup": "^8.0.0",
     "typescript": "^5.9.3"

@@ -1,14 +1,14 @@
-// Subpath entry for headless clients (e.g. the CLI). Keeps the credential
-// transport and interpreter out of the root `index` bundle so the root graph is unchanged.
-export { OpenCredentialsHttpTransport } from "./credentials/transport";
-export { interpretCredentialFlow } from "./credentials/interpreter";
+// Subpath entry for headless clients (e.g. the CLI). Re-exports the single
+// credential driver from @tinycloud/node-sdk/credentials; the export list is unchanged.
+export { OpenCredentialsHttpTransport } from "@tinycloud/node-sdk/credentials";
+export { interpretCredentialFlow } from "@tinycloud/node-sdk/credentials";
 export type {
   CredentialAcquisitionTransport,
   CredentialRequestState,
   CredentialSigningAdapter,
   PrimitiveStepHandler,
   PrimitiveStepResult,
-} from "./credentials/types";
+} from "@tinycloud/node-sdk/credentials";
 export {
   acquireEmailProof,
   completeEmailProof,
@@ -16,7 +16,7 @@ export {
   createMemoryEmailProofPendingStore,
   EmailProofError,
   requestEmailProofCode,
-} from "./credentials/email-proof";
+} from "@tinycloud/node-sdk/credentials";
 export type {
   EmailProofAcquireInput,
   EmailProofAcquisition,
@@ -30,4 +30,4 @@ export type {
   EmailProofStep,
   HolderAlgorithm,
   HolderSigner,
-} from "./credentials/email-proof";
+} from "@tinycloud/node-sdk/credentials";

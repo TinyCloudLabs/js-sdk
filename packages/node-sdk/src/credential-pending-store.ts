@@ -1,32 +1,25 @@
 import { createHash, randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import {
+  EMAIL_PROOF_PENDING_MAX_MS,
+  pendingDeadlineMs,
+  restoreEmailProofPending,
+  type EmailProofPending,
+  type EmailProofPendingStore,
+} from './credentials/email-proof';
 
 /**
- * File-backed pending store for the email-proof flow (`@tinycloud/web-sdk/credentials`).
+ * File-backed pending store for the email-proof flow (`@tinycloud/node-sdk/credential-pending-store`).
  *
- * A pending record holds a bearer verifier, so the store is owner-only: a 0700 directory,
- * 0600 files, and symlink, hard-link, and owner checks on every read. Records expire on
- * read and are capped at 15 minutes from creation.
+ * One file per request, named `pending-<sha256(requestId)>.json`. No file name contains a mailbox
+ * address. A record holds a bearer verifier and optionally a base64 secret, so the store is owner-only:
+ * a 0700 directory, 0600 files, and symlink, hard-link, and owner checks on every read. A record may
+ * not expire more than 15 minutes after its `createdAt`; records expire on read.
  *
- * Structural: the store needs only `requestId`, `address`, and `expiresAt` from a record.
- * The core's `EmailProofPendingStore` is satisfied without importing web-sdk, which depends on this package.
+ * Unsafe files throw and are left in place. Malformed or over-long files are deleted and throw.
+ * One unsafe file therefore makes `findLive` throw for every address until the file is removed.
  */
-
-/** Longest a pending record may live, measured from the moment it is written. */
-export const EMAIL_PROOF_PENDING_MAX_MS = 15 * 60 * 1000;
-
-export interface PendingRecord {
-  readonly requestId: string;
-  readonly address: string;
-  readonly expiresAt: string;
-}
-
-export interface PendingStore<P extends PendingRecord> {
-  load(address: string, now: Date): Promise<P | undefined>;
-  save(pending: P): Promise<void>;
-  delete(pending: P): Promise<void>;
-}
 
 export type PendingStoreErrorCode = 'credential-permissions' | 'credential-store-invalid';
 
@@ -41,15 +34,66 @@ export class PendingStoreError extends Error {
 }
 
 export interface FileEmailProofPendingStoreOptions {
-  /** Profile directory. Pending files live under `<home>/credentials`. Must be an absolute path. */
+  /** Absolute profile directory. Pending files live under `<home>/credentials`. */
   readonly home: string;
 }
 
+export interface PutEmailProofPendingOptions {
+  /** Optional caller secret, stored base64 in the owner-only file. Read it back with `storedSecret`. Never serialized. */
+  readonly secret?: Uint8Array;
+}
+
+export interface FileEmailProofPendingStore extends EmailProofPendingStore {
+  get(requestId: string, now: Date): Promise<EmailProofPending | undefined>;
+  put(pending: EmailProofPending, options?: PutEmailProofPendingOptions): Promise<void>;
+}
+
+/** The secret stored with a pending record, or undefined. Returns a copy; the record keeps its own. */
+export function storedSecret(pending: EmailProofPending): Uint8Array | undefined {
+  const secret = secrets.get(pending);
+  return secret === undefined ? undefined : new Uint8Array(secret);
+}
+
 const DIR_NAME = 'credentials';
-/** Pending files are named by a hash of the request id, so mailbox addresses never appear in file names. */
 const PENDING_FILE_PATTERN = /^pending-[0-9a-f]{64}\.json$/;
 /** Temp files from `writeOwnerOnly`: `<pending file>.<pid>.<12 hex>.tmp`. */
 const PENDING_TEMP_PATTERN = /^pending-[0-9a-f]{64}\.json\.\d+\.[0-9a-f]{12}\.tmp$/;
+const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+const FILE_TEXT_FIELDS = [
+  'profile',
+  'address',
+  'requestId',
+  'verifier',
+  'holderDid',
+  'descriptorDigest',
+  'requirementDigest',
+  'openerOrigin',
+  'createdAt',
+  'expiresAt',
+] as const;
+
+interface FileRecord {
+  readonly type: 'TinyCloudEmailProofPending';
+  readonly version: 1;
+  readonly profile: string;
+  readonly address: string;
+  readonly requestId: string;
+  readonly verifier: string;
+  readonly holderDid: string;
+  readonly descriptorDigest: string;
+  readonly requirementDigest: string;
+  readonly openerOrigin: string;
+  readonly createdAt: string;
+  readonly expiresAt: string;
+  readonly secret?: string;
+}
+
+interface Entry {
+  readonly pending: EmailProofPending;
+  readonly expired: boolean;
+}
+
+const secrets = new WeakMap<EmailProofPending, Uint8Array>();
 
 function sha256Hex(text: string): string {
   return createHash('sha256').update(text).digest('hex');
@@ -61,6 +105,12 @@ function credentialsDir(home: string): string {
 
 function pendingFile(home: string, requestId: string): string {
   return path.join(credentialsDir(home), `pending-${sha256Hex(requestId)}.json`);
+}
+
+function assertAbsoluteHome(home: unknown): asserts home is string {
+  if (typeof home !== 'string' || home.length === 0 || !path.isAbsolute(home)) {
+    throw new PendingStoreError('credential-store-invalid', 'Credential store home must be a non-empty absolute path.');
+  }
 }
 
 function lstatOrUndefined(file: string): fs.Stats | undefined {
@@ -86,19 +136,52 @@ function assertOwnerOnly(st: fs.Stats, label: string): void {
   assertOwnedByCurrentUser(st, label);
 }
 
-/** Refuses a symlinked profile directory. A missing one is fine: the caller creates it. */
-function assertHomeNotSymlink(home: string): void {
+/** Refuses a symlinked `home` and any symlink among its ancestors. A missing `home` is fine: the caller creates it. */
+function assertHomeSafe(home: string): void {
   const st = lstatOrUndefined(home);
   if (st?.isSymbolicLink()) {
     throw new PendingStoreError('credential-permissions', `${home} is a symlink; refusing to store credentials through it.`);
   }
+  let current = path.dirname(home);
+  for (;;) {
+    if (lstatOrUndefined(current)?.isSymbolicLink()) {
+      throw new PendingStoreError('credential-permissions', `${current} is a symlink; refusing to store credentials below it.`);
+    }
+    const parent = path.dirname(current);
+    if (parent === current) return;
+    current = parent;
+  }
 }
 
-/** Creates the store directory 0700 if absent, then pins its mode (umask may have narrowed the create). */
+/**
+ * Creates each missing directory on `target` with mode 0700 and pins it, so a restrictive umask cannot
+ * leave the store unwritable. Existing directories are not touched.
+ */
+function mkdirOwnerOnly(target: string): void {
+  const missing: string[] = [];
+  let current = target;
+  while (lstatOrUndefined(current) === undefined) {
+    missing.unshift(current);
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  for (const dir of missing) {
+    try {
+      fs.mkdirSync(dir, { mode: 0o700 });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    }
+    fs.chmodSync(dir, 0o700);
+  }
+}
+
+/** Creates the store directory 0700 if absent and pins its mode, whatever the umask. */
 function ensureSecureDir(home: string): void {
-  assertHomeNotSymlink(home);
+  assertHomeSafe(home);
   const dir = credentialsDir(home);
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  mkdirOwnerOnly(home);
+  mkdirOwnerOnly(dir);
   const st = fs.lstatSync(dir);
   if (!st.isDirectory()) {
     throw new PendingStoreError('credential-permissions', `${dir} must be a real directory, not a symlink or file.`);
@@ -109,7 +192,7 @@ function ensureSecureDir(home: string): void {
 
 /** Returns false when the store directory does not exist. Re-checks symlink, owner, and mode on every call. */
 function checkSecureDir(home: string): boolean {
-  assertHomeNotSymlink(home);
+  assertHomeSafe(home);
   const dir = credentialsDir(home);
   const st = lstatOrUndefined(dir);
   if (!st) return false;
@@ -124,7 +207,7 @@ function checkSecureDir(home: string): boolean {
  * Atomic owner-only write: O_EXCL|O_NOFOLLOW temp file at 0600, fsync, then rename.
  * Refuses to replace a destination that is not a regular file.
  */
-function writeOwnerOnly(home: string, file: string, record: unknown): void {
+function writeOwnerOnly(home: string, file: string, record: FileRecord): void {
   ensureSecureDir(home);
   const existing = lstatOrUndefined(file);
   if (existing && !existing.isFile()) {
@@ -181,6 +264,7 @@ function readOwnerOnly(home: string, file: string): unknown {
   try {
     return JSON.parse(text) as unknown;
   } catch {
+    removeFile(file);
     throw new PendingStoreError('credential-store-invalid', `Invalid credential store file ${label}.`);
   }
 }
@@ -195,35 +279,56 @@ function sweepAbandonedTemp(file: string, now: Date): void {
   if (st && now.getTime() - st.mtimeMs > EMAIL_PROOF_PENDING_MAX_MS) removeFile(file);
 }
 
-function assertWithinWindow(record: PendingRecord, now: Date): void {
-  if (Date.parse(record.expiresAt) > now.getTime() + EMAIL_PROOF_PENDING_MAX_MS) {
-    throw new PendingStoreError('credential-store-invalid', 'Pending record expires beyond the 15-minute window and was rejected.');
-  }
+function exceedsWindow(record: { readonly createdAt: string; readonly expiresAt: string }): boolean {
+  return Date.parse(record.expiresAt) > Date.parse(record.createdAt) + EMAIL_PROOF_PENDING_MAX_MS;
 }
 
-function isPendingRecord(value: unknown): value is PendingRecord {
-  if (typeof value !== 'object' || value === null) return false;
+function isFileRecord(value: unknown): value is FileRecord {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
-  return typeof record.requestId === 'string'
-    && typeof record.address === 'string'
-    && typeof record.expiresAt === 'string'
-    && !Number.isNaN(Date.parse(record.expiresAt));
+  if (record.type !== 'TinyCloudEmailProofPending' || record.version !== 1) return false;
+  if (!FILE_TEXT_FIELDS.every((field) => typeof record[field] === 'string')) return false;
+  if (record.secret !== undefined && (typeof record.secret !== 'string' || !BASE64.test(record.secret))) return false;
+  return Number.isFinite(Date.parse(record.createdAt as string)) && Number.isFinite(Date.parse(record.expiresAt as string));
 }
 
-interface Entry<P extends PendingRecord> {
-  readonly file: string;
-  readonly record: P;
-  readonly expired: boolean;
+/** Builds the pending object from named fields only. Unknown keys in the file (including `__proto__`) are ignored. */
+function restoreFromFile(record: FileRecord): EmailProofPending {
+  return restoreEmailProofPending({
+    type: record.type,
+    version: record.version,
+    profile: record.profile as EmailProofPending['profile'],
+    address: record.address,
+    requestId: record.requestId,
+    verifier: record.verifier,
+    holderDid: record.holderDid,
+    descriptorDigest: record.descriptorDigest,
+    requirementDigest: record.requirementDigest,
+    openerOrigin: record.openerOrigin,
+    createdAt: record.createdAt,
+    expiresAt: record.expiresAt,
+  });
 }
 
-/**
- * Every pending file in the store. Throws on unsafe files (left in place) and on malformed
- * files (deleted). Expired files are deleted and returned with `expired: true`.
- */
-function loadEntries<P extends PendingRecord>(home: string, now: Date): Entry<P>[] {
+/** Reads one pending file. Deletes expired files, and malformed or over-long files before throwing. */
+function readEntry(home: string, file: string, now: Date): Entry | undefined {
+  const value = readOwnerOnly(home, file);
+  if (value === undefined) return undefined;
+  if (!isFileRecord(value) || pendingFile(home, value.requestId) !== file || exceedsWindow(value)) {
+    removeFile(file);
+    throw new PendingStoreError('credential-store-invalid', 'Pending verification file is invalid and was deleted.');
+  }
+  const pending = restoreFromFile(value);
+  if (value.secret !== undefined) secrets.set(pending, Buffer.from(value.secret, 'base64'));
+  const expired = pendingDeadlineMs(pending) <= now.getTime();
+  if (expired) removeFile(file);
+  return { pending, expired };
+}
+
+function liveEntries(home: string, now: Date): Entry[] {
   if (!checkSecureDir(home)) return [];
   const dir = credentialsDir(home);
-  const entries: Entry<P>[] = [];
+  const entries: Entry[] = [];
   for (const name of fs.readdirSync(dir)) {
     const file = path.join(dir, name);
     if (PENDING_TEMP_PATTERN.test(name)) {
@@ -231,46 +336,82 @@ function loadEntries<P extends PendingRecord>(home: string, now: Date): Entry<P>
       continue;
     }
     if (!PENDING_FILE_PATTERN.test(name)) continue;
-    const value = readOwnerOnly(home, file);
-    if (value === undefined) continue;
-    if (!isPendingRecord(value) || pendingFile(home, value.requestId) !== file || Date.parse(value.expiresAt) > now.getTime() + EMAIL_PROOF_PENDING_MAX_MS) {
-      removeFile(file);
-      throw new PendingStoreError('credential-store-invalid', 'Pending verification file is invalid and was deleted.');
-    }
-    const expired = Date.parse(value.expiresAt) <= now.getTime();
-    if (expired) removeFile(file);
-    entries.push({ file, record: value as P, expired });
+    const entry = readEntry(home, file, now);
+    if (entry) entries.push(entry);
   }
   return entries;
 }
 
+function toFileRecord(pending: EmailProofPending, secret: Uint8Array | undefined): FileRecord {
+  return {
+    type: pending.type,
+    version: pending.version,
+    profile: pending.profile,
+    address: pending.address,
+    requestId: pending.requestId,
+    verifier: pending.verifier,
+    holderDid: pending.holderDid,
+    descriptorDigest: pending.descriptorDigest,
+    requirementDigest: pending.requirementDigest,
+    openerOrigin: pending.openerOrigin,
+    createdAt: pending.createdAt,
+    expiresAt: pending.expiresAt,
+    ...(secret === undefined ? {} : { secret: Buffer.from(secret).toString('base64') }),
+  };
+}
+
+/** Converts raw permission failures (for example EACCES under a restrictive umask) into a stable store error. */
+function wrapFsErrors<T>(run: () => T): T {
+  try {
+    return run();
+  } catch (error) {
+    if (error instanceof PendingStoreError) throw error;
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'EACCES' || code === 'EPERM') {
+      throw new PendingStoreError('credential-permissions', 'Credential store is not accessible to this process; check the profile directory permissions.');
+    }
+    throw error;
+  }
+}
+
 /**
- * File-backed `PendingStore`. At most one live record per address: `save` replaces an earlier
- * one, and `load` treats two live records for one address as corruption and deletes both.
+ * File-backed `EmailProofPendingStore`, keyed by request id: one file per request, named by a hash of the
+ * id. `put` never touches another request's file. `findLive` returns the newest unexpired record for an
+ * address, so a second process can complete a request it did not create.
  */
-export function createFileEmailProofPendingStore<P extends PendingRecord>(options: FileEmailProofPendingStoreOptions): PendingStore<P> {
+export function createFileEmailProofPendingStore(options: FileEmailProofPendingStoreOptions): FileEmailProofPendingStore {
+  assertAbsoluteHome(options.home);
   const { home } = options;
   return {
-    async load(address, now) {
-      const live = loadEntries<P>(home, now).filter((entry) => !entry.expired && entry.record.address === address);
-      if (live.length === 0) return undefined;
-      if (live.length > 1) {
-        for (const entry of live) removeFile(entry.file);
-        throw new PendingStoreError('credential-store-invalid', 'Multiple pending verifications existed for one address and were deleted. Request a new code.');
-      }
-      return live[0]!.record;
+    async get(requestId, now) {
+      return wrapFsErrors(() => {
+        const entry = readEntry(home, pendingFile(home, requestId), now);
+        return entry === undefined || entry.expired ? undefined : entry.pending;
+      });
     },
-    async save(pending) {
-      const now = new Date();
-      assertWithinWindow(pending, now);
-      for (const entry of loadEntries<P>(home, now)) {
-        if (entry.record.address === pending.address) removeFile(entry.file);
-      }
-      writeOwnerOnly(home, pendingFile(home, pending.requestId), pending);
+    async put(pending, putOptions) {
+      return wrapFsErrors(() => {
+        if (exceedsWindow(pending)) {
+          throw new PendingStoreError('credential-store-invalid', 'Pending record expires beyond the 15-minute window and was rejected.');
+        }
+        writeOwnerOnly(home, pendingFile(home, pending.requestId), toFileRecord(pending, putOptions?.secret));
+      });
     },
-    async delete(pending) {
-      if (!checkSecureDir(home)) return;
-      removeFile(pendingFile(home, pending.requestId));
+    async delete(requestId) {
+      return wrapFsErrors(() => {
+        if (!checkSecureDir(home)) return;
+        removeFile(pendingFile(home, requestId));
+      });
+    },
+    async findLive(address, now) {
+      return wrapFsErrors(() => {
+        let newest: EmailProofPending | undefined;
+        for (const entry of liveEntries(home, now)) {
+          if (entry.expired || entry.pending.address !== address) continue;
+          if (!newest || Date.parse(entry.pending.createdAt) > Date.parse(newest.createdAt)) newest = entry.pending;
+        }
+        return newest;
+      });
     },
   };
 }
