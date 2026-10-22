@@ -13,6 +13,7 @@ import {
 import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedPhase2, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, preexistingS3EntryCommit, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateLogoutRatchetTransition, validateMasterMergeResolutionTransition, validateTc1413RatchetTransition, validateTc1424RatchetTransition, validateTc1448RatchetTransition, validateTc1432RatchetTransition, validateTc1436RatchetTransition, validateTc1443RatchetTransition, validateTc1443bRatchetTransition, validateTc1428RatchetTransition, validateTc1475RatchetTransition, validateTc606WorkerRatchetTransition, validateMasterDriftRatchetTransition, validateTc1789RatchetTransition, validateTc1476RatchetTransition, validateTc1466RatchetTransition, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
 import { rootCeilingFor, validateTc1757RatchetTransition } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
+import { replicaOwnedPath } from "./replica-owned-path";
 type Baseline = {
   webSdkTestBaseline: { ref: string; unhandledErrors: number; failingNames: string[]; unhandledSignatures: string[] };
 };
@@ -38,7 +39,9 @@ type Baseline = {
  *
  * Replica-owned paths: packages/replica/**, packages/sdk-services/src/kv/replication/**,
  * packages/sdk-core/src/replication/** (when present), packages/node-sdk/src/replication/**,
- * and packages/web-sdk/src/** paths containing "replica" or "replication".
+ * packages/web-sdk/src/modules/replica-wiring.ts (the only web-sdk replication wiring;
+ * tcw.ts and index.ts only call into it and are not replica-owned), and
+ * packages/web-sdk/src/** paths containing "replica" or "replication".
  * Test files (`*.test.*`) under those paths are not replica-owned: they never
  * reach a web bundle, so a test-only edit cannot grow it.
  * Ordinary per-PR core rows retain the existing 64 B build-noise tolerance.
@@ -50,21 +53,6 @@ type Baseline = {
  * Phase 1's 388/861 allowance was Sam's 6,144 B gzip budget minus its
  * measured growth of 5,756 B ESM / 5,283 B CJS against cbfe21ee.
  */
-// web-sdk files that wire replication into the client bundle; their bytes are replica-owned
-// even though the filenames do not match the regex below.
-const replicationWiringPaths = new Set([
-  "packages/web-sdk/src/index.ts",
-  "packages/web-sdk/src/modules/tcw.ts",
-]);
-const replicaOwnedPath = (path: string) =>
-  !/\.test\.[cm]?[jt]sx?$/.test(path) && (
-    path.startsWith("packages/replica/") ||
-    path.startsWith("packages/sdk-services/src/kv/replication/") ||
-    path.startsWith("packages/sdk-core/src/replication/") ||
-    path.startsWith("packages/node-sdk/src/replication/") ||
-    replicationWiringPaths.has(path) ||
-    (path.startsWith("packages/web-sdk/src/") && /replica|replication/i.test(path))
-  );
 const distDir = resolve(import.meta.dir, "../dist");
 const repoRoot = resolve(import.meta.dir, "../../..");
 const baseline = JSON.parse(await readFile(resolve(import.meta.dir, "phase1-replica-baseline.json"), "utf8")) as Baseline;
