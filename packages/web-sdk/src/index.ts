@@ -476,7 +476,6 @@ export {
   VAULT_PERMISSION_SERVICE,
   // Errors raised by delegateTo / requestPermissions.
   CaveatedDelegationUnsupportedError,
-  DecryptExpiryTooLongError,
   PermissionNotInManifestError,
   SessionExpiredError,
   ManifestValidationError,

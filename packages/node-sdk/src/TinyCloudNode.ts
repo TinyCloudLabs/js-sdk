@@ -120,7 +120,6 @@ import {
   ErrorCodes,
   ENCRYPTION_PERMISSION_SERVICE,
   CaveatedDelegationUnsupportedError,
-  DecryptExpiryTooLongError,
   PermissionNotInManifestError,
   SessionExpiredError,
   canonicalizeRecapCaveats,
@@ -1013,11 +1012,7 @@ export interface DelegateToResult {
   prompted: boolean;
 }
 
-/**
- * Maximum expiry for runtime grants that include decrypt. Automatic
- * escalations default to this; longer explicit expiries are refused.
- */
-export const DECRYPT_GRANT_MAX_EXPIRY_MS = 60 * 60 * 1000;
+const DECRYPT_GRANT_MAX_EXPIRY_MS = 60 * 60 * 1000;
 
 /**
  * Options for runtime permission escalation.
@@ -6588,11 +6583,13 @@ export class TinyCloudNode {
 
     const expanded = this.expandPermissionEntries(permissions);
     const requestsDecrypt = includesDecrypt(expanded);
-    const explicitExpiryMs = options?.expiry === undefined
-      ? undefined
-      : resolveExpiryMs(options.expiry);
-    if (requestsDecrypt && explicitExpiryMs !== undefined && explicitExpiryMs > DECRYPT_GRANT_MAX_EXPIRY_MS) {
-      throw new DecryptExpiryTooLongError(explicitExpiryMs);
+    const requestedExpiryMs = requestsDecrypt && options?.expiry === undefined
+      ? DECRYPT_GRANT_MAX_EXPIRY_MS
+      : resolveExpiryMs(options?.expiry);
+    if (requestsDecrypt && requestedExpiryMs > DECRYPT_GRANT_MAX_EXPIRY_MS) {
+      throw Object.assign(new Error("decrypt grants last at most one hour"), {
+        code: "DECRYPT_EXPIRY_TOO_LONG",
+      });
     }
     if (this.sessionCoversPermissionEntries(session, expanded)) {
       return [];
@@ -6628,9 +6625,6 @@ export class TinyCloudNode {
     }
 
     const now = new Date();
-    const requestedExpiryMs = explicitExpiryMs ?? (requestsDecrypt
-      ? DECRYPT_GRANT_MAX_EXPIRY_MS
-      : resolveExpiryMs(undefined));
     let expiresAt = new Date(now.getTime() + requestedExpiryMs);
     if (sessionExpiry !== undefined && sessionExpiry < expiresAt) {
       expiresAt = sessionExpiry;

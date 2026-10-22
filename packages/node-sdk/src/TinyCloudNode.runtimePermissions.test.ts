@@ -7,7 +7,6 @@ import {
   authorizationVerdictOf,
   CaveatedDelegationUnsupportedError,
   canonicalHashHex,
-  DecryptExpiryTooLongError,
   hexEncode,
   encryptionBase64Decode,
   encryptionBase64Encode,
@@ -1370,8 +1369,6 @@ test("runtime grants that include decrypt refuse an explicit expiry over one hou
   };
 
   await withActivatedDelegations(async () => {
-    await expect(node.grantRuntimePermissions([permission], { expiry: "2h" }))
-      .rejects.toBeInstanceOf(DecryptExpiryTooLongError);
     await expect(node.grantRuntimePermissions([permission], { expiry: "2h" }))
       .rejects.toMatchObject({ code: "DECRYPT_EXPIRY_TOO_LONG" });
     await expect(node.grantRuntimePermissions([permission], { expiry: 60 * 60_000 + 1 }))
