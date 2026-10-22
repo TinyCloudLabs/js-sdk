@@ -71,6 +71,9 @@ export interface HostPart {
   start(ctx: HostContext, layer: HTMLElement): () => void;
 }
 
+/** Authority kinds a client can be asked for. The bridge is internal; views without it show a neutral line. */
+export type AuthorityKind = "kv/sync" | "space/info" | "delegation/list" | "space/list";
+
 /** Narrow adapter built by ui/client.ts from TinyCloudWeb. */
 export interface PanelClient {
   readonly id: number;
@@ -90,7 +93,7 @@ export interface PanelClient {
     | undefined;
   /** Authority request for storage and sync prompts. Undefined when the client does not expose it. */
   readonly requestAuthority?:
-    | ((kind: "kv/sync" | "space/info") => Promise<{ approved: boolean; code?: FacadeErrorCode }>)
+    | ((kind: AuthorityKind) => Promise<{ approved: boolean; code?: FacadeErrorCode }>)
     | undefined;
   /** E: request log, present only in developer mode. */
   readonly requests?: RequestLogReader | undefined;
