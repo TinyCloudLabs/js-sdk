@@ -2,11 +2,12 @@ import { createRequire } from "node:module";
 import { join } from "node:path";
 
 import { fromJsonSchema, type McpServer, type ToolAnnotations } from "@modelcontextprotocol/server";
-import { addFormats, Ajv, AjvJsonSchemaValidator } from "@modelcontextprotocol/server/validators/ajv";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/server/validators/ajv";
 import { invokeOperation } from "@tinycloud/operations";
 
 import { toMcpToolResult, type McpToolResult } from "./results.js";
 import { logToolCall } from "./logging.js";
+import { toMcpJsonSchema } from "./schemas.js";
 
 export const TOOL_NAMES = [
   "tinycloud_status",
@@ -345,10 +346,18 @@ export const TOOL_BINDINGS: readonly ToolBinding[] = [
   },
 ] as const;
 
+// Project once per process; never mutate the catalog shared with non-MCP consumers.
+const definitions = new Map(generatedCatalog.operations.map((operation) => [
+  `${operation.id}@${operation.version}`,
+  {
+    ...operation,
+    input: toMcpJsonSchema(operation.input),
+    result: toMcpJsonSchema(operation.result),
+  },
+]));
+
 export function createJsonSchemaValidator(): AjvJsonSchemaValidator {
-  const ajv = new Ajv({ strict: false });
-  addFormats(ajv);
-  return new AjvJsonSchemaValidator(ajv);
+  return new AjvJsonSchemaValidator();
 }
 
 export function registerTinyCloudTools(
@@ -356,13 +365,6 @@ export function registerTinyCloudTools(
   selection: McpStartupSelection,
   validator: AjvJsonSchemaValidator,
 ): void {
-  const definitions = new Map(
-    generatedCatalog.operations.map((operation) => [
-      `${operation.id}@${operation.version}`,
-      operation,
-    ]),
-  );
-
   const bindings = TOOL_BINDINGS.filter((binding) => bindingSurfaces(binding).includes(selection.surface));
   for (const binding of bindings) {
     const operation = definitions.get(`${binding.operationId}@${binding.operationVersion}`);

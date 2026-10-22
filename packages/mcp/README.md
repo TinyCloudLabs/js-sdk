@@ -269,6 +269,11 @@ call once before retrying status.
 A missing secret's `setup` is the canonical Secret Manager `/request` link
 (`{url, names, scope?, owner, action: "add_secret"}`).
 
+MCP advertises JSON Schema 2020-12 inputs and results, compatible with the
+official v2 client's default validator. The shared operations catalog remains
+Draft-07 for non-MCP consumers; MCP projects its equivalent schemas without
+modifying that catalog or requiring a client-side validator override.
+
 Results use canonical structured envelopes with `ok`, `authority_required`,
 `setup_required`, or `error` status. Generic data operations plan authority for
 the exact space and key, prefix, or database supplied by the caller; apps use
