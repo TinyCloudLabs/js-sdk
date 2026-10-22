@@ -1,9 +1,7 @@
 ---
-"@tinycloud/sdk-core": minor
-"@tinycloud/web-sdk": minor
 "@tinycloud/node-sdk": minor
 ---
 
-`grantRuntimePermissions` now limits runtime grants that include decrypt to one hour. Decrypt is `tinycloud.encryption/decrypt`, or any action that covers it such as `tinycloud.encryption/*`. Automatic grants default to one hour instead of 30 days. An explicit `expiry` longer than one hour for a decrypt grant is refused with an error whose `code` is `DECRYPT_EXPIRY_TOO_LONG`. Grants without decrypt keep their previous default and accept explicit expiries as before.
+`grantRuntimePermissions` limits runtime grants that include decrypt (`tinycloud.encryption/decrypt`, or an action covering it such as `tinycloud.encryption/*`) to one hour. Without an `expiry`, such grants default to one hour instead of 30 days. An explicit `expiry` over one hour is refused with an error whose `code` is `DECRYPT_EXPIRY_TOO_LONG`. Grants without decrypt are unchanged.
 
 Details: TC-1781

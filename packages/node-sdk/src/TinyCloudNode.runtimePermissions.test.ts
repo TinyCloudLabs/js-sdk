@@ -1377,6 +1377,42 @@ test("runtime grants that include decrypt refuse an explicit expiry over one hou
   expect(allPrepareExpiryMs(node)).toHaveLength(0);
 });
 
+test("the one-hour decrypt guard runs before the covering-session early return", async () => {
+  const node = makeExpiryTestNode();
+  const permission: PermissionEntry = {
+    service: "tinycloud.encryption",
+    path: node.getDefaultEncryptionNetworkId(),
+    actions: DECRYPT_EXPIRY_TEST_ACTIONS,
+  };
+  // A primary session whose recap already covers decrypt: the early return
+  // would report success, so only a guard that runs first can refuse.
+  (node as any).wasmBindings.parseRecapFromSiwe = mock(() => [
+    {
+      service: "encryption",
+      space: "encryption",
+      path: permission.path,
+      actions: DECRYPT_EXPIRY_TEST_ACTIONS,
+    },
+  ]);
+  expect(node.hasRuntimePermissions([permission])).toBe(true);
+
+  const signMessage = (node as any).signer.signMessage;
+  const originalFetch = globalThis.fetch;
+  const fetchSpy = mock(async () => new Response("{}", { status: 200 }));
+  globalThis.fetch = fetchSpy as any;
+  try {
+    await expect(node.grantRuntimePermissions([permission], { expiry: 60 * 60_000 + 1 }))
+      .rejects.toMatchObject({ code: "DECRYPT_EXPIRY_TOO_LONG" });
+    await expect(node.grantRuntimePermissions([permission], { expiry: "61m" }))
+      .rejects.toMatchObject({ code: "DECRYPT_EXPIRY_TOO_LONG" });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  expect(allPrepareExpiryMs(node)).toHaveLength(0);
+  expect(signMessage).not.toHaveBeenCalled();
+  expect(fetchSpy).not.toHaveBeenCalled();
+});
+
 test("runtime grants that include decrypt honour an explicit expiry of one hour or less", async () => {
   const node = makeExpiryTestNode();
   const permission: PermissionEntry = {
