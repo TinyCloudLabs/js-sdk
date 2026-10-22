@@ -739,7 +739,7 @@ export class SharingService implements ISharingService {
 
     if (canSatisfyFromRegistry) {
       // An existing key can satisfy this request - use session delegation (no prompt)
-      const delegationResult = await this.createSessionDelegation(plainDID, fullPath, actions, expiry);
+      const delegationResult = await this.createSessionDelegation(plainDID, fullPath, actions, expiry, params.allowSubDelegation !== false);
       const childDelegationActiveError = this.retiredGraphError();
       if (childDelegationActiveError) return { ok: false, error: childDelegationActiveError };
       const parsed = handleDelegationResult(delegationResult);
@@ -747,6 +747,16 @@ export class SharingService implements ISharingService {
         return parsed;
       }
       delegation = parsed as Delegation;
+    } else if (params.allowSubDelegation === false) {
+      // Wallet root delegations cannot carry the terminal fact, so a
+      // non-transferable share must be covered by a session-key delegation.
+      return {
+        ok: false,
+        error: createError(
+          DelegationErrorCodes.PERMISSION_DENIED,
+          "A non-transferable share requires a session-key delegation that covers it; the wallet root path cannot issue one.",
+        ),
+      };
     } else if (this.onRootDelegationNeeded) {
       // No existing key can satisfy the request - try root delegation
       try {
@@ -944,7 +954,8 @@ export class SharingService implements ISharingService {
     delegateDID: string,
     path: string,
     actions: string[],
-    expiry: Date
+    expiry: Date,
+    allowSubDelegation: boolean
   ): Promise<Delegation | Result<never, DelegationError>> {
     const activeError = this.retiredGraphError();
     if (activeError) return { ok: false, error: activeError };
@@ -1004,6 +1015,7 @@ export class SharingService implements ISharingService {
             },
           },
           expirationSecs: Math.floor(expiry.getTime() / 1000),
+          disableSubDelegation: !allowSubDelegation,
         });
         const childSigningActiveError = this.retiredGraphError();
         if (childSigningActiveError) return { ok: false, error: childSigningActiveError };
@@ -1067,7 +1079,7 @@ export class SharingService implements ISharingService {
           expiry: wasmResult.expiry,
           isRevoked: false,
           authHeader: wasmResult.delegation,
-          allowSubDelegation: true,
+          allowSubDelegation,
           createdAt: new Date(),
         };
       } catch (err) {
@@ -1087,7 +1099,7 @@ export class SharingService implements ISharingService {
         path,
         actions,
         expiry,
-        disableSubDelegation: false,
+        disableSubDelegation: !allowSubDelegation,
       };
 
       const delegationResult = await this.createDelegationFn!(delegationParams);

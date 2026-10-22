@@ -5633,7 +5633,7 @@ export class TinyCloudNode {
    *
    * @internal
    */
-  private createDelegationWrapper(params: CreateDelegationWasmParams, terminal = false): CreateDelegationWasmResult {
+  private createDelegationWrapper(params: CreateDelegationWasmParams, terminal = params.disableSubDelegation === true): CreateDelegationWasmResult {
     // Convert ServiceSession to the format WASM expects
     const wasmSession = {
       delegationHeader: params.session.delegationHeader,

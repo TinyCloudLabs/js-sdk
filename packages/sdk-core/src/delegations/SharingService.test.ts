@@ -5,7 +5,7 @@ import { ed25519 } from "@noble/curves/ed25519";
 import { CapabilityKeyRegistry } from "../authorization/CapabilityKeyRegistry";
 import { CaveatedDelegationUnsupportedError } from "../capabilities";
 import { SharingService, type EncodedShareData } from "./SharingService";
-import type { CreateDelegationWasmParams, Delegation, DelegationError, KeyProvider } from "./types";
+import type { CreateDelegationParams, CreateDelegationWasmParams, Delegation, DelegationError, KeyProvider, Result } from "./types";
 
 const OWNER = "0xd559CCd9EB87c530A9a349262669386dE93cf412";
 const SPACE = `tinycloud:pkh:eip155:1:${OWNER}:applications`;
@@ -874,6 +874,164 @@ describe("SharingService.generate root-delegation signing failures", () => {
         { path: "", actions: [action] },
       ]));
       expect(named.preflightGenerate(explicitRequest)).toBe("ok");
+    });
+  });
+});
+
+describe("SharingService non-transferable shares", () => {
+  const PATH = "shared";
+  const ACTIONS = ["tinycloud.kv/get"];
+
+  function makeGenerateService(options: { wasm?: boolean; registryCoverage?: boolean } = {}) {
+    const registry = new CapabilityKeyRegistry();
+    if (options.registryCoverage !== false) {
+      registry.registerKey({
+        id: "parent-key",
+        did: "did:key:z6MkParent",
+        type: "session",
+        priority: 0,
+      }, [{
+        cid: "bafy-parent",
+        delegateDID: "did:key:z6MkParent",
+        spaceId: SPACE,
+        path: PATH,
+        actions: ACTIONS,
+        expiry: PARENT_EXPIRY,
+        isRevoked: false,
+        allowSubDelegation: true,
+      }]);
+    }
+    const session: ServiceSession = {
+      delegationHeader: { Authorization: "parent.header.signature" },
+      delegationCid: "bafy-parent",
+      spaceId: SPACE,
+      verificationMethod: "did:key:z6MkParent#z6MkParent",
+      jwk: { kty: "OKP", crv: "Ed25519", x: "parent-x", d: "parent-d" },
+    };
+    const createDelegationWasm = mock((params: CreateDelegationWasmParams) => ({
+      delegation: childToken(params, ACTIONS),
+      cid: "bafy-child",
+      delegateDID: params.delegateDID,
+      expiry: new Date(params.expirationSecs * 1000),
+      resources: [{ service: "kv", space: params.spaceId, path: PATH, actions: ACTIONS }],
+    }));
+    const createDelegation = mock(async (params: CreateDelegationParams): Promise<Result<Delegation, DelegationError>> => ({
+      ok: true as const,
+      data: {
+        cid: "bafy-fallback",
+        delegateDID: params.delegateDID,
+        spaceId: SPACE,
+        path: params.path,
+        actions: params.actions,
+        expiry: params.expiry ?? PARENT_EXPIRY,
+        isRevoked: false,
+        authHeader: "fallback.header.signature",
+        allowSubDelegation: !params.disableSubDelegation,
+        createdAt: new Date(),
+      },
+    }));
+    const onRootDelegationNeeded = mock(async () => {
+      throw new Error("root delegation path must not run for a non-transferable share");
+    });
+    const service = new SharingService({
+      hosts: [HOST],
+      session,
+      invoke: mock(async () => ({ ok: true, data: undefined })) as never,
+      fetch: mock(async () => new Response(null, { status: 200 })) as unknown as typeof globalThis.fetch,
+      keyProvider: {
+        createSessionKey: mock(async () => "share-key"),
+        getDID: mock(async () => "did:key:z6MkShare#z6MkShare"),
+        getJWK: mock(() => ({ kty: "OKP", crv: "Ed25519", x: "share-x", d: "share-d" })),
+      } as unknown as KeyProvider,
+      registry,
+      createKVService: mock(() => ({})) as never,
+      createDelegationWasm: options.wasm === false ? undefined : createDelegationWasm,
+      createDelegation,
+      onRootDelegationNeeded,
+      computeCid: () => "bafy-child",
+    });
+    return { service, createDelegationWasm, createDelegation, onRootDelegationNeeded };
+  }
+
+  test("defaults to a transferable share with the terminal fact absent", async () => {
+    const { service, createDelegationWasm } = makeGenerateService();
+
+    const result = await service.generate({ path: PATH, actions: ACTIONS });
+
+    expect(result.ok).toBe(true);
+    expect(createDelegationWasm.mock.calls[0]?.[0].disableSubDelegation).toBe(false);
+    if (!result.ok) throw new Error("expected share");
+    expect(result.data.delegation.allowSubDelegation).toBe(true);
+  });
+
+  test("mints a terminal delegation through the WASM path when allowSubDelegation is false", async () => {
+    const { service, createDelegationWasm } = makeGenerateService();
+
+    const result = await service.generate({ path: PATH, actions: ACTIONS, allowSubDelegation: false });
+
+    expect(result.ok).toBe(true);
+    expect(createDelegationWasm.mock.calls[0]?.[0].disableSubDelegation).toBe(true);
+    if (!result.ok) throw new Error("expected share");
+    expect(result.data.delegation.allowSubDelegation).toBe(false);
+  });
+
+  test("mints a terminal delegation through the fallback path when allowSubDelegation is false", async () => {
+    const { service, createDelegation } = makeGenerateService({ wasm: false });
+
+    const result = await service.generate({ path: PATH, actions: ACTIONS, allowSubDelegation: false });
+
+    expect(result.ok).toBe(true);
+    expect(createDelegation.mock.calls[0]?.[0].disableSubDelegation).toBe(true);
+    if (!result.ok) throw new Error("expected share");
+    expect(result.data.delegation.allowSubDelegation).toBe(false);
+  });
+
+  test("keeps the fallback delegation transferable by default", async () => {
+    const { service, createDelegation } = makeGenerateService({ wasm: false });
+
+    const result = await service.generate({ path: PATH, actions: ACTIONS });
+
+    expect(result.ok).toBe(true);
+    expect(createDelegation.mock.calls[0]?.[0].disableSubDelegation).toBe(false);
+  });
+
+  test("refuses a non-transferable share the session key registry does not cover, without the wallet root path", async () => {
+    const { service, createDelegationWasm, onRootDelegationNeeded } = makeGenerateService({ registryCoverage: false });
+
+    const result = await service.generate({ path: PATH, actions: ACTIONS, allowSubDelegation: false });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "PERMISSION_DENIED",
+        message: expect.stringContaining("non-transferable"),
+      },
+    });
+    expect(createDelegationWasm).not.toHaveBeenCalled();
+    expect(onRootDelegationNeeded).not.toHaveBeenCalled();
+  });
+
+  test("round-trips allowSubDelegation through the encoded link", () => {
+    const { service } = makeService();
+
+    const terminal = service.decodeLink(shareLink(service, { allowSubDelegation: false }));
+    const transferable = service.decodeLink(shareLink(service, { allowSubDelegation: true }));
+
+    expect(terminal.delegation.allowSubDelegation).toBe(false);
+    expect(transferable.delegation.allowSubDelegation).toBe(true);
+  });
+
+  test("viewer refuses to onward-delegate a link issued as non-transferable", async () => {
+    const { service } = makeService();
+
+    const result = await service.delegateReceivedShare(
+      shareLink(service, { allowSubDelegation: false }),
+      { delegateDID: "did:key:z6MkFeedHost", actions: ["tinycloud.kv/get"] },
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "PERMISSION_DENIED", message: "Sharing link does not allow delegation" },
     });
   });
 });
