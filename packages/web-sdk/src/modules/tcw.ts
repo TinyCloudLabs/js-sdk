@@ -13,8 +13,6 @@
 import {
   activateCompactRuntimeDelegation as activateCompactRuntimeDelegationOnNode,
   TinyCloudNode,
-  registerReplicationLoaders as registerNodeReplicationLoaders,
-  type ReplicationModuleLoaders,
   TinyCloudNodeConfig,
   type BootstrapWarning,
   type DelegateToOptions,
@@ -28,6 +26,10 @@ import {
   type RegisterPolicyV3Input,
   type RegisterPolicyV3Receipt,
 } from "@tinycloud/node-sdk/core";
+import {
+  resolveReplicationConfig,
+  validateReplicationConfig,
+} from "./replica-wiring";
 import {
   IKVService,
   ISQLService,
@@ -278,29 +280,6 @@ export interface SessionRestoreResult {
   error?: Error;
 }
 
-/** Supplied by the optional web replica entry; importing that entry does not register it. */
-export interface BrowserReplicaPlugin {
-  readonly loaders: ReplicationModuleLoaders;
-  readonly validateConfig: (replication: NonNullable<TinyCloudNodeConfig["replication"]>) => void;
-  readonly recover: (
-    replication: NonNullable<TinyCloudNodeConfig["replication"]>,
-    signer?: BrowserWalletSigner,
-  ) => Promise<NonNullable<TinyCloudNodeConfig["replication"]>>;
-}
-
-let registeredBrowserReplica: BrowserReplicaPlugin | undefined;
-
-/**
- * Register in the root bundle so a separately built plugin shares its Node loader registry. The
- * registry keeps a frozen copy, so mutating the supplied plugin later changes nothing.
- */
-export function registerBrowserReplica(plugin: BrowserReplicaPlugin): void {
-  if (registeredBrowserReplica) throw new Error("Browser replica is already registered.");
-  const loaders = Object.freeze({ ...plugin.loaders });
-  registerNodeReplicationLoaders(loaders);
-  registeredBrowserReplica = Object.freeze({ ...plugin, loaders });
-}
-
 
 // Share Link Utilities (static, no auth required)
 
@@ -435,12 +414,7 @@ export class TinyCloudWeb {
   };
 
   constructor(config: Config = {}) {
-    if (config.replication?.enabled) {
-      if (!registeredBrowserReplica) {
-        throw new Error("Call registerBrowserReplica from @tinycloud/web-sdk with the @tinycloud/web-sdk/replica plugin before constructing TinyCloudWeb with replication enabled.");
-      }
-      registeredBrowserReplica.validateConfig(config.replication);
-    }
+    validateReplicationConfig(config);
     this.config = config;
     this._manifest = config.manifest;
     this._capabilityRequest = config.capabilityRequest;
@@ -519,11 +493,8 @@ export class TinyCloudWeb {
       telemetry: this.config.telemetry,
       retryPolicy: this.config.retryPolicy,
     };
-    if (this.config.replication) {
-      nodeConfig.replication = this.config.replication.enabled
-        ? await registeredBrowserReplica!.recover(this.config.replication, this.walletSigner)
-        : this.config.replication;
-    }
+    const resolved = await resolveReplicationConfig(this.config, this.walletSigner);
+    if (resolved) nodeConfig.replication = resolved;
 
     // Wire up signer if available
     if (this.walletSigner) {
