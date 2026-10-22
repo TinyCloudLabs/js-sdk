@@ -1212,7 +1212,10 @@ export class TinyCloudWeb {
    * `options.expiryMs` sets the requested lifetime of the issued step-up
    * delegation, in milliseconds. Omitted, the node's default applies. The
    * node clamps the lifetime to the session expiry, so the issued
-   * delegation never outlives the session.
+   * delegation never outlives the session. The expiry applies when new
+   * permissions are requested. Permissions already covered by the session
+   * or an existing runtime grant return without a new delegation, so
+   * `expiryMs` does not apply to them.
    */
   async requestPermissions(
     additional: PermissionEntry[],
