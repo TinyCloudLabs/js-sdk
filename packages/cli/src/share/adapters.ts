@@ -1,5 +1,6 @@
 import type { IKVService } from "@tinycloud/node-sdk";
 import { kvArtifactStore } from "./artifact-store.js";
+import { createShareShortLinks, type ShareShortLinks } from "./short-links.js";
 import { artifactSpaceNotReady, failIfSpaceNotReady } from "./space-not-ready.js";
 import { ShareHistoryReadError, ShareHistoryRetryError, ShareHistoryUnreadableError, SharePublishAuthorityError } from "./errors.js";
 import { storageRejection } from "../output/storage.js";
@@ -492,6 +493,8 @@ export function createShareAuthorityAdapters(input: {
   readonly nativeReader: (link: string) => Promise<{ readonly bytes: Uint8Array; readonly filename: string }>;
   /** The authenticated owner's artifact storage (`tc share versions`). */
   readonly artifactStore: () => Promise<ArtifactStore>;
+  /** Short links for addressed shares (TC-1737). */
+  readonly shortLinks: ShareShortLinks;
 } {
   const origin = input.origin ?? DEFAULT_SHARE_ORIGIN;
   const fetchFn = input.fetchFn ?? globalThis.fetch;
@@ -506,13 +509,21 @@ export function createShareAuthorityAdapters(input: {
   };
   let configPromise: Promise<SharePublicConfig> | undefined;
   const publicConfig = async (): Promise<SharePublicConfig> => configPromise ??= (async () => {
-    const response = await fetchFn(`${origin}/.well-known/tinycloud-share/config.json`, {
-      headers: { accept: "application/json" },
-      credentials: "omit",
-      redirect: "error",
-      referrerPolicy: "no-referrer",
-    });
-    if (!response.ok) throw new Error("share public config is unavailable");
+    // The first request of every publish. Without it nothing can be shared, so a failure here names the Share
+    // service rather than the node, and a blackholed host cannot hang the command.
+    let response: Response;
+    try {
+      response = await fetchFn(`${origin}/.well-known/tinycloud-share/config.json`, {
+        headers: { accept: "application/json" },
+        credentials: "omit",
+        redirect: "error",
+        referrerPolicy: "no-referrer",
+        signal: AbortSignal.timeout(10_000),
+      });
+    } catch (error) {
+      throw new SharePublishAuthorityError({ kind: "share-service-unavailable", origin }, { cause: error });
+    }
+    if (!response.ok) throw new SharePublishAuthorityError({ kind: "share-service-unavailable", origin });
     const value = await response.json() as unknown;
     if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("share public config is invalid");
     const object = value as Record<string, unknown>;
@@ -1023,6 +1034,10 @@ export function createShareAuthorityAdapters(input: {
       list: (prefix) => mapped(() => store.list(prefix)),
     };
   };
+  const shortLinks = createShareShortLinks({
+    kvForSpace: async (spaceId) => (await authenticatedNode()).kvForSpace(spaceId),
+    fetchFn,
+  });
   return {
     targetAdapter,
     records: input.profileName === undefined ? createEncryptedSessionHistory() : createEncryptedProfileHistory(profileName, signShareHistoryBytes),
@@ -1031,6 +1046,7 @@ export function createShareAuthorityAdapters(input: {
     assertDomainDelivery,
     nativeReader,
     artifactStore,
+    shortLinks,
   };
 }
 
