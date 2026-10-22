@@ -101,7 +101,7 @@ async function mapNodeErrors<T>(run: () => Promise<T>): Promise<T> {
     return await run();
   } catch (error) {
     if (error instanceof EmailProofError) {
-      throw new EmailProofGateError(gateCodeFor(error.code), `email proof step failed: ${error.code}`, error.retryAfterMs);
+      throw new EmailProofGateError(gateCodeFor(error.code), `email proof step failed: ${error.code}`, error.retryAfterMs, error.recoverable);
     }
     throw new EmailProofGateError("UNAVAILABLE", "email proof step failed");
   }
@@ -148,7 +148,10 @@ export function createNodeEmailProofGate(options: NodeEmailProofGateOptions): Em
       const pending = await options.store.get(requestId, now());
       if (pending === undefined) throw new EmailProofGateError("REQUEST_EXPIRED", "the code request expired; start again with --request-code");
       const secret = storedSecret(pending);
-      if (secret === undefined) throw new EmailProofGateError("UNAVAILABLE", "pending email proof request is unreadable");
+      if (secret === undefined) {
+        await options.store.delete(requestId);
+        throw new EmailProofGateError("UNAVAILABLE", "pending email proof request is unreadable");
+      }
       const holderSigner = holderSignerFor(secret, pending.holderDid);
       try {
         const credential = await mapNodeErrors(() =>
@@ -161,10 +164,12 @@ export function createNodeEmailProofGate(options: NodeEmailProofGateOptions): Em
             ...(signal === undefined ? {} : { signal }),
           }),
         );
-        return { holderDid: pending.holderDid, holderSigner, credential };
-      } finally {
-        // Single use: removed on every outcome after load, matching the CLI pending file.
         await options.store.delete(requestId);
+        return { holderDid: pending.holderDid, holderSigner, credential };
+      } catch (error) {
+        // Mirrors node-sdk acquireWithIssuerKeys: a recoverable failure (wrong code, network) keeps the holder pending for a retry.
+        if (!(error instanceof EmailProofGateError && error.recoverable)) await options.store.delete(requestId);
+        throw error;
       }
     },
   };

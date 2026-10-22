@@ -46,7 +46,7 @@ function fakeGate(overrides: Partial<EmailProofGate> = {}): EmailProofGate {
   return {
     requestCode: async () => ({ state: { nonce: "n1" }, expiresAt: new Date(NOW + 600_000).toISOString() }),
     completeEmailProof: async ({ code }) => {
-      if (code !== CODE) throw new EmailProofGateError("CODE_REJECTED", "bad code");
+      if (code !== CODE) throw new EmailProofGateError("CODE_REJECTED", "bad code", undefined, true);
       return { holderDid: "did:key:z6Mk-test" } as unknown as EmailProofMaterial;
     },
     ...overrides,
@@ -104,6 +104,43 @@ describe("requestHeadlessCode", () => {
     expect(error.message).toBe("rate limited for this mailbox; try again in 15 minutes");
     expect(await pendingFiles()).toEqual([]);
   });
+
+  test("a second request for the same share reuses the live pending and sends no new code", async () => {
+    let sends = 0;
+    const gate = fakeGate({ requestCode: async () => { sends += 1; return { state: {}, expiresAt: new Date(NOW + 600_000).toISOString() }; } });
+    const store = filePendingStore(dir);
+    const first = await requestHeadlessCode({ envelope: ENVELOPE, recipient: "owner@example.com", gate, store, now: NOW, randomId: () => RESUME });
+    const second = await requestHeadlessCode({
+      envelope: ENVELOPE, recipient: "owner@example.com", gate, store, now: NOW + 1000,
+      randomId: () => { throw new Error("a reused pending must not mint an id"); },
+    });
+    expect(sends).toBe(1);
+    expect(second).toEqual(first);
+    expect(await pendingFiles()).toEqual([`${RESUME}.json`]);
+  });
+
+  test("a different share to the same mailbox gets its own code and never another share's id", async () => {
+    const OTHER = "fedcba9876543210fedcba9876543210";
+    let sends = 0;
+    const gate = fakeGate({ requestCode: async () => { sends += 1; return { state: {}, expiresAt: new Date(NOW + 600_000).toISOString() }; } });
+    const store = filePendingStore(dir);
+    await requestHeadlessCode({ envelope: ENVELOPE, recipient: "owner@example.com", gate, store, now: NOW, randomId: () => RESUME });
+    const other = { v: 3, recipient: "other-share@example.com" } as unknown as ShareEnvelopeV3;
+    const second = await requestHeadlessCode({ envelope: other, recipient: "owner@example.com", gate, store, now: NOW + 1000, randomId: () => OTHER });
+    expect(sends).toBe(2);
+    expect(second.id).toBe(OTHER);
+  });
+
+  test("an expired pending is not reused: the next request sends a new code", async () => {
+    const OTHER = "fedcba9876543210fedcba9876543210";
+    let sends = 0;
+    const gate = fakeGate({ requestCode: async () => { sends += 1; return { state: {}, expiresAt: new Date(NOW + 86_400_000).toISOString() }; } });
+    const store = filePendingStore(dir);
+    await requestHeadlessCode({ envelope: ENVELOPE, recipient: "owner@example.com", gate, store, now: NOW, randomId: () => RESUME });
+    const second = await requestHeadlessCode({ envelope: ENVELOPE, recipient: "owner@example.com", gate, store, now: NOW + PENDING_RECEIVE_MAX_AGE_MS, randomId: () => OTHER });
+    expect(sends).toBe(2);
+    expect(second.id).toBe(OTHER);
+  });
 });
 
 describe("completeHeadlessReceive", () => {
@@ -123,14 +160,27 @@ describe("completeHeadlessReceive", () => {
     expect(await pendingFiles()).toEqual([]);
   });
 
-  test("wrong code is refused with exit 3, deletes state, and never echoes the code", async () => {
+  test("wrong code is refused with exit 3, keeps the pending file, and never echoes the code", async () => {
     await requestOne();
     const error = await expectHeadless(
       completeHeadlessReceive({ id: RESUME, code: "11111111", gate: fakeGate(), store: filePendingStore(dir), access: fakeAccess(), now: NOW + 1000 }),
       "CODE_REJECTED",
     );
     expect(error.exitCode).toBe(3);
+    expect(error.recoverable).toBe(true);
+    expect(error.message).toContain("--resume");
     expect(error.message).not.toContain("11111111");
+    expect(await pendingFiles()).toEqual([`${RESUME}.json`]);
+  });
+
+  test("after a wrong code, a retry with the correct code succeeds and then deletes the pending file", async () => {
+    await requestOne();
+    await expectHeadless(
+      completeHeadlessReceive({ id: RESUME, code: "11111111", gate: fakeGate(), store: filePendingStore(dir), access: fakeAccess(), now: NOW + 1000 }),
+      "CODE_REJECTED",
+    );
+    const bytes = await completeHeadlessReceive({ id: RESUME, code: CODE, gate: fakeGate(), store: filePendingStore(dir), access: fakeAccess(), now: NOW + 2000 });
+    expect(bytes).toBeDefined();
     expect(await pendingFiles()).toEqual([]);
   });
 
@@ -229,6 +279,18 @@ describe("completeHeadlessReceive", () => {
     expect(error.message).not.toContain("witness.internal");
     expect(error.message).not.toContain(CODE);
     expect(await pendingFiles()).toEqual([]);
+  });
+
+  test("a network failure at completion is recoverable: exits 6, keeps the pending file for a retry", async () => {
+    await requestOne();
+    const gate = fakeGate({ completeEmailProof: async () => { throw new EmailProofGateError("UNAVAILABLE", "dns failure at witness.internal", undefined, true); } });
+    const error = await expectHeadless(
+      completeHeadlessReceive({ id: RESUME, code: CODE, gate, store: filePendingStore(dir), access: fakeAccess(), now: NOW + 1000 }),
+      "UNAVAILABLE",
+    );
+    expect(error.exitCode).toBe(6);
+    expect(error.message).not.toContain("witness.internal");
+    expect(await pendingFiles()).toEqual([`${RESUME}.json`]);
   });
 
   test("a request the gate reports as expired exits 3 and deletes the pending file", async () => {

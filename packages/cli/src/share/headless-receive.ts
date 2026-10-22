@@ -1,4 +1,4 @@
-import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { EmailProofResult, HolderSigner } from "@tinycloud/node-sdk/credentials";
 import { shareEnvelopeV3Schema, type ShareEnvelopeV3 } from "@tinycloud/share-envelope";
@@ -40,11 +40,14 @@ export type EmailProofGateErrorCode = "RATE_LIMITED" | "CODE_REJECTED" | "REQUES
 export class EmailProofGateError extends Error {
   readonly code: EmailProofGateErrorCode;
   readonly retryAfterMs?: number;
-  constructor(code: EmailProofGateErrorCode, message: string, retryAfterMs?: number) {
+  /** Mirrors node-sdk `EmailProofError.recoverable`: a wrong code or network failure keeps the pending receive. */
+  readonly recoverable: boolean;
+  constructor(code: EmailProofGateErrorCode, message: string, retryAfterMs?: number, recoverable = false) {
     super(message);
     this.name = "EmailProofGateError";
     this.code = code;
     this.retryAfterMs = retryAfterMs;
+    this.recoverable = recoverable;
   }
 }
 
@@ -94,12 +97,15 @@ export class HeadlessReceiveError extends Error {
   readonly code: HeadlessReceiveErrorCode;
   readonly exitCode: number;
   readonly retryAfterMs?: number;
-  constructor(code: HeadlessReceiveErrorCode, message: string, retryAfterMs?: number) {
+  /** True when the pending receive must survive the failure (wrong code, network). Mirrors node-sdk `EmailProofError.recoverable`. */
+  readonly recoverable: boolean;
+  constructor(code: HeadlessReceiveErrorCode, message: string, retryAfterMs?: number, recoverable = false) {
     super(message);
     this.name = "HeadlessReceiveError";
     this.code = code;
     this.exitCode = EXIT_CODE[code];
     this.retryAfterMs = retryAfterMs;
+    this.recoverable = recoverable;
   }
 }
 
@@ -115,6 +121,8 @@ export interface PendingReceive {
 export interface PendingStore {
   save(pending: PendingReceive): Promise<void>;
   load(id: string, now: number): Promise<PendingReceive>;
+  /** The unexpired pending receive for this exact share envelope, if any. Expired matches are removed. */
+  findLive(envelope: ShareEnvelopeV3, now: number): Promise<PendingReceive | undefined>;
   remove(id: string): Promise<void>;
 }
 
@@ -175,6 +183,21 @@ export function filePendingStore(dir: string, parseEnvelope: (value: unknown) =>
       }
       return { ...parsed, envelope };
     },
+    async findLive(envelope, now) {
+      const names: readonly string[] = await readdir(dir).catch(() => []);
+      for (const name of names) {
+        const id = name.endsWith(".json") ? name.slice(0, -".json".length) : "";
+        if (!RESUME_ID.test(id)) continue;
+        const path = join(dir, name);
+        let parsed: unknown;
+        try { parsed = JSON.parse(await readFile(path, "utf8")); } catch { continue; }
+        if (!isPending(parsed) || parsed.id !== id) continue;
+        if (parsed.expiresAt <= now) { await rm(path, { force: true }); continue; }
+        const stored = parseEnvelope(parsed.envelope);
+        if (stored !== undefined && JSON.stringify(stored) === JSON.stringify(envelope)) return { ...parsed, envelope: stored };
+      }
+      return undefined;
+    },
     async remove(id) {
       await rm(pathFor(id), { force: true });
     },
@@ -198,15 +221,16 @@ async function gateCall<T>(call: () => Promise<T>): Promise<T> {
 }
 
 function gateFailure(error: EmailProofGateError): HeadlessReceiveError {
+  const recoverable = error.recoverable;
   switch (error.code) {
     case "RATE_LIMITED":
-      return new HeadlessReceiveError("RATE_LIMITED", `rate limited for this mailbox; try again in ${retryMinutes(error.retryAfterMs)} minutes`, error.retryAfterMs);
+      return new HeadlessReceiveError("RATE_LIMITED", `rate limited for this mailbox; try again in ${retryMinutes(error.retryAfterMs)} minutes`, error.retryAfterMs, recoverable);
     case "CODE_REJECTED":
-      return new HeadlessReceiveError("CODE_REJECTED", "the code was not accepted; start again with --request-code to get a new code");
+      return new HeadlessReceiveError("CODE_REJECTED", recoverable ? "the code was not accepted; retry --resume with the correct code" : "the code was not accepted; start again with --request-code to get a new code", undefined, recoverable);
     case "REQUEST_EXPIRED":
-      return new HeadlessReceiveError("REQUEST_EXPIRED", "the code request expired; start again with --request-code");
+      return new HeadlessReceiveError("REQUEST_EXPIRED", "the code request expired; start again with --request-code", undefined, recoverable);
     case "UNAVAILABLE":
-      return new HeadlessReceiveError("UNAVAILABLE", "could not reach the credential service; try again later");
+      return new HeadlessReceiveError("UNAVAILABLE", "could not reach the credential service; try again later", undefined, recoverable);
   }
 }
 
@@ -254,8 +278,11 @@ export interface RequestCodeInput {
   readonly randomId: () => string;
 }
 
-/** Process 1 of the headless flow: sends the code email and persists the pending receive. */
+/** Process 1 of the headless flow: sends the code email and persists the pending receive. A live pending for the same share is reused and no email is sent. */
 export async function requestHeadlessCode(input: RequestCodeInput): Promise<{ readonly id: string; readonly expiresAt: number }> {
+  // A live pending for this exact share already has a code in flight. Reuse it: a new send spends the owner's per-hour budget.
+  const live = await input.store.findLive(input.envelope, input.now);
+  if (live !== undefined) return { id: live.id, expiresAt: live.expiresAt };
   const requested = await gateCall(() => input.gate.requestCode({ recipient: input.recipient }));
   const parsed = Date.parse(requested.expiresAt);
   const ceiling = input.now + PENDING_RECEIVE_MAX_AGE_MS;
@@ -277,18 +304,22 @@ export interface CompleteHeadlessInput {
 }
 
 /**
- * Process 2 of the headless flow. The pending file is deleted on every outcome after it is loaded
- * (success, rejected code, rate limit, node refusal). A malformed code leaves it in place.
+ * Process 2 of the headless flow. Success deletes the pending file (single use). A recoverable gate
+ * failure (wrong code, network) keeps it so the owner can retry with the same id; any other failure
+ * deletes it. A malformed code leaves it in place.
  */
 export async function completeHeadlessReceive(input: CompleteHeadlessInput): Promise<ReceivedContent> {
   validateCode(input.code);
   const pending = await input.store.load(input.id, input.now);
+  let material: EmailProofMaterial;
   try {
-    const material = await gateCall(() => input.gate.completeEmailProof({ state: pending.gateState, code: input.code }));
-    return await accessCall(() => input.access.receive(pending.envelope, material));
-  } finally {
-    await input.store.remove(input.id);
+    material = await gateCall(() => input.gate.completeEmailProof({ state: pending.gateState, code: input.code }));
+  } catch (error) {
+    if (!(error instanceof HeadlessReceiveError && error.recoverable)) await input.store.remove(input.id);
+    throw error;
   }
+  await input.store.remove(input.id);
+  return accessCall(() => input.access.receive(pending.envelope, material));
 }
 
 export interface PromptReceiveInput {
