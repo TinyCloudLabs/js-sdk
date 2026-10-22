@@ -179,6 +179,11 @@ export type WorkerRatchet = {
  * ledger row because the kv-storage worker step aborted first and hid the Phase 1 dist step.
  */
 export type MasterDriftRatchet = HardeningRatchet;
+/**
+ * One reviewed exact-delta admission of the sdk-services 3.3.1 pin (js-sdk #667): the PR-side CI build
+ * measured replica.cjs first-import +1 B with no code change. Same shape as the #565 hardening row.
+ */
+export type Tc1789Ratchet = HardeningRatchet;
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -201,6 +206,7 @@ export type Ledger = {
   tc1475Ratchet?: Tc1475Ratchet;
   tc606WorkerRatchet?: WorkerRatchet;
   masterDriftRatchet?: MasterDriftRatchet;
+  tc1789Ratchet?: Tc1789Ratchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -753,6 +759,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc1475Ratchet !== undefined) pins.push({ row: "tc1475Ratchet", pin: root.tc1475Ratchet.sourceCommits.at(-1)! });
   if (root.tc606WorkerRatchet !== undefined) pins.push({ row: "tc606WorkerRatchet", pin: root.tc606WorkerRatchet.sourceCommits.at(-1)! });
   if (root.masterDriftRatchet !== undefined) pins.push({ row: "masterDriftRatchet", pin: root.masterDriftRatchet.sourceCommits.at(-1)! });
+  if (root.tc1789Ratchet !== undefined) pins.push({ row: "tc1789Ratchet", pin: root.tc1789Ratchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -814,6 +821,41 @@ export const approvedMasterDriftRatchet: MasterDriftRatchet = {
   reason: "The Phase 1 dist step had not run on master since the kv-storage worker step began aborting first at #606 (78aec0e0); when it ran on #608 it measured root index.mjs 1,475,571 and index.cjs 1,403,924 against the TC-1475 ceilings 1,475,166 and 1,403,595 (+405/+329) and activation.cjs 24,700 against 24,699 (+1). Candidates #606 (security dependency updates), #605, #552; attribution not bisected. The worker is already admitted by tc606WorkerRatchet.",
 };
 
+/**
+ * sdk-services 3.3.1 pin, approved by Naomi, 2026-10-22: replica.cjs first-import +1 B (the 51,925 / 67,140 /
+ * 23,117 / 24,700 optional allowance becomes 51,925 / 67,141 / 23,117 / 24,700) at the bytes canonical CI printed
+ * on the #667 head 6bdf2064. Root and worker stay at the master-drift ceilings: both measured with zero delta.
+ */
+export const approvedTc1789Ratchet: Tc1789Ratchet = {
+  label: "sdk-services 3.3.1 pin (#667): replica.cjs first-import +1 B, exact canonical delta",
+  ruling: "Approved by Naomi (2026-10-22, policy review relayed by Amos)",
+  base: "772940d8",
+  sourceCommits: [
+    "193b594eee3f0f9c3f0fe9157f74267f8c03f3bf",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39775125638",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39775125638/job/119812005984",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39775125638/job/119812005960",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 0, "index.cjs": 0 },
+    ceiling: { "index.mjs": 1475571, "index.cjs": 1403924 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 1 },
+    ceiling: { "replica.mjs": 51925, "replica.cjs": 67141 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23117, "activation.cjs": 24700 },
+  },
+  worker: { delta: 0, ceiling: 822753 },
+  reason: "CI PR-side build +1 B with no code change (sdk-services 3.3.1 pin; TC-1789 investigation)",
+};
+
 export type GatedOnlyRatchet = {
   label: string;
   sourceCommit: string;
@@ -846,7 +888,7 @@ const historicalToolchain = "Bun 1.4.3; production webpack; gzip -9 -c";
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
 export function validateLedger(value: Ledger, historicalBase = false): void {
   if (!value || !value.allowance || !Array.isArray(value.entries) ||
-      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet" && key !== "tc1436Ratchet" && key !== "tc1432Ratchet" && key !== "tc1424Ratchet" && key !== "tc1448Ratchet" && key !== "tc1443Ratchet" && key !== "tc1466Ratchet" && key !== "tc1443bRatchet" && key !== "tc1428Ratchet" && key !== "tc1476Ratchet" && key !== "tc1475Ratchet" && key !== "tc606WorkerRatchet" && key !== "masterDriftRatchet")) {
+      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet" && key !== "tc1436Ratchet" && key !== "tc1432Ratchet" && key !== "tc1424Ratchet" && key !== "tc1448Ratchet" && key !== "tc1443Ratchet" && key !== "tc1466Ratchet" && key !== "tc1443bRatchet" && key !== "tc1428Ratchet" && key !== "tc1476Ratchet" && key !== "tc1475Ratchet" && key !== "tc606WorkerRatchet" && key !== "masterDriftRatchet" && key !== "tc1789Ratchet")) {
     throw new Error("Invalid packages/web-sdk/scripts/replica-size-ledger.json shape");
   }
   if (Object.keys(value.allowance).some((key) => !formats.includes(key as typeof formats[number]))) {
@@ -962,6 +1004,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc606WorkerRatchet || JSON.stringify(value.masterDriftRatchet) !== JSON.stringify(approvedMasterDriftRatchet))) {
     throw new Error("Only Naomi's exact canonical master-drift ratchet is approved.");
   }
+  if (value.tc1789Ratchet !== undefined &&
+      (!value.masterDriftRatchet || JSON.stringify(value.tc1789Ratchet) !== JSON.stringify(approvedTc1789Ratchet))) {
+    throw new Error("Only Naomi's exact canonical sdk-services 3.3.1 pin ratchet is approved.");
+  }
 }
 
 /** The #606 worker ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
@@ -977,6 +1023,14 @@ export function validateMasterDriftRatchetTransition(base?: MasterDriftRatchet, 
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedMasterDriftRatchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact master-drift ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The sdk-services 3.3.1 pin ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc1789RatchetTransition(base?: Tc1789Ratchet, current?: Tc1789Ratchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1789Ratchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact sdk-services 3.3.1 pin ratchet may be introduced once and cannot change later.");
   }
 }
 
