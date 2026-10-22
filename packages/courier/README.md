@@ -73,6 +73,19 @@ local agent key: the verification method and the public `jwk.x` must match, and
 the JWK must carry no private fields. An expired or unknown code fails with
 `[code-not-found]`; paste the full grant code instead.
 
+### Email credentials
+
+`courier credential acquire --email <addr>` sends a verification code to the
+address and stores a pending request under `COURIER_HOME/credentials/` (owner-only).
+Run it again with `--code-stdin` and enter the code on stdin, for example
+`courier credential acquire --email <addr> --code-stdin < code.txt`. The code is
+never passed on argv. A pending request expires after 15 minutes; a new request
+for the same address replaces the older one.
+
+`courier credential show --email <addr>` prints the stored credential's `email`,
+`credentialId`, `issuedAt`, `expiresAt` and `status`. The credential itself is
+never printed.
+
 ### Settings
 
 | Setting | Flag | Env | Stored | Default |

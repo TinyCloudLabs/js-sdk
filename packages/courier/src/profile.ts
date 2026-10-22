@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { cmd } from './program.js';
 import { CourierError } from './errors.js';
@@ -57,7 +58,7 @@ export interface Profile {
 }
 
 export function profileDir(): string {
-  return process.env.COURIER_HOME || path.join(process.env.HOME ?? '.', '.courier');
+  return process.env.COURIER_HOME || path.join(os.homedir(), '.courier');
 }
 
 function profilePath(name: string, home = profileDir()): string {
@@ -68,10 +69,14 @@ export function profileExists(): boolean {
   return fs.existsSync(profilePath('profile.json'));
 }
 
-function ensureSecureDir(): void {
-  const dir = profileDir();
+export function mkdirOwnerOnly(dir: string): void {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  // mkdir's mode is masked by umask; chmod sets the final bits explicitly.
   fs.chmodSync(dir, 0o700);
+}
+
+function ensureSecureDir(): void {
+  mkdirOwnerOnly(profileDir());
 }
 
 export function writeSecure(file: string, obj: unknown): void {
