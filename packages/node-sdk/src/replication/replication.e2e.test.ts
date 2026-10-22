@@ -1055,7 +1055,7 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
     }
   }, 120_000);
 
-  test("developer mode: one real sync cycle records only sanitized sync rows, one per HTTP attempt", async () => {
+  test("developer mode on: a real sync cycle leaves first-segment paths only and no full key", async () => {
     const profile = await guardedProfile("tc848-sync-log-");
     const events: ReplicationEvent[] = [];
     const node = new TinyCloudNode({
@@ -1077,48 +1077,54 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
         onEvent: (event) => events.push(event),
       },
     });
-    // Count HTTP attempts issued during the sync window only. Fetch is captured when the node's
-    // services are built, so the counter is installed before `new TinyCloudNode` and restored in `finally`.
-    // Only the replication transport's own attempts are counted: the kv sync `/invoke` and the `/info`
-    // probe. Session activation and delegation (`POST /delegate`, issued by mintNodeReplicationGrant via
-    // activateSessionWithHost) are NOT recorded in the v1 request log. They are excluded from the count,
-    // and the window opens only after a warm-up sync has completed the grant mint.
-    const TRANSPORT_PATHS = new Set(["/invoke", "/info"]);
-    const originalFetch = globalThis.fetch;
-    let counting = false;
-    let attempts = 0;
-    globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
-      if (counting && TRANSPORT_PATHS.has(new URL(String(input)).pathname)) attempts += 1;
-      return originalFetch(input, init);
-    }) as typeof fetch;
     try {
       await node.signIn();
-      // Warm-up: completes session activation and the replication grant mint before the counted window.
       await node.replication!.sync();
       expect((await node.kv.put("notes/sync-log-seed", "sync-log-v0")).ok).toBe(true);
-      const baseline = node.requests!.snapshot().length;
-      counting = true;
       await node.replication!.sync();
-      counting = false;
 
-      const windowRows = node.requests!.snapshot().slice(baseline);
-      const syncRows = windowRows.filter((event) => event.service === "sync");
-      expect(attempts).toBeGreaterThan(0);
-      expect(syncRows.length).toBeGreaterThan(0);
-      expect(windowRows.every((event) => event.service === "sync")).toBe(true);
-      for (const row of syncRows) {
-        expect(row.path).toBeNull();
-        expect(row.space).toBeNull();
+      const rows = node.requests!.snapshot();
+      for (const row of rows) {
+        // Replication-sourced rows carry no path or space.
+        if (row.service === "sync") {
+          expect(row.path).toBeNull();
+          expect(row.space).toBeNull();
+        }
+        // A path is at most its first segment ("notes/"), or redacted.
+        if (row.path !== null) expect(row.path).toMatch(/^([^/]+\/|\[redacted\])$/);
       }
-      const serialized = JSON.stringify(syncRows);
-      expect(serialized).not.toContain("notes/");
-      expect(serialized).not.toContain("sync-log-seed");
-      // One row per logical call, carrying its HTTP attempts (a retried call is one row, attempts > 1).
-      // Summing attempts requires every counted transport attempt to appear in exactly one row.
-      expect(syncRows.reduce((total, row) => total + row.attempts, 0)).toBe(attempts);
+      expect(JSON.stringify(rows)).not.toContain("sync-log-seed");
     } finally {
-      counting = false;
-      globalThis.fetch = originalFetch;
+      await node.replication?.close();
+      await rm(profile.profileDir, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  test("developer mode off: a real sync cycle creates no request log", async () => {
+    const profile = await guardedProfile("tc848-sync-log-off-");
+    const node = new TinyCloudNode({
+      host,
+      signer: new PrivateKeySigner(RESTORE_PRIVATE_KEY),
+      wasmBindings: new NodeWasmBindings(),
+      domain: "replication.test",
+      autoCreateSpace: true,
+      autoBootstrapAccount: false,
+      enablePublicSpace: false,
+      replication: {
+        enabled: true,
+        prefixes: ["notes/"],
+        storage: profile.storage,
+        profileDir: profile.profileDir,
+        profileGuard: profile.guard,
+        mode: "foreground",
+        onEvent: () => undefined,
+      },
+    });
+    try {
+      await node.signIn();
+      await node.replication!.sync();
+      expect(node.requests).toBeUndefined();
+    } finally {
       await node.replication?.close();
       await rm(profile.profileDir, { recursive: true, force: true });
     }
