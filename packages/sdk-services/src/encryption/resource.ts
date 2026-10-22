@@ -18,7 +18,7 @@
  *   never normalized: wrong case, bad characters, empty segments, a
  *   non-canonical owner (EIP-55 for `did:pkh:eip155`).
  * - Bare networks follow `parseNetworkId` unchanged. When PARSING a key or
- *   prefix the network name follows the node rule (`[^:/\s]+`); builders take a
+ *   prefix the network name follows the node rule (`[^:/#?%\s]+`); builders take a
  *   network id that `parseNetworkId` produced, so emitted names stay strict.
  */
 
@@ -34,7 +34,7 @@ const SEGMENT_SOURCE = "[a-z0-9][a-z0-9._-]{0,63}";
 const PATH_SOURCE = `${SEGMENT_SOURCE}(?:/${SEGMENT_SOURCE}){0,7}`;
 const KEY_PATH_RE = new RegExp(`^${PATH_SOURCE}$`);
 /** `<ownerDid>:<network>` head, then the raw path (prefix keeps its trailing `/`). */
-const RESOURCE_RE = /^(did:[^/\s]+):([^:/\s]+)(?:\/(.*))?$/s;
+const RESOURCE_RE = /^(did:[a-z0-9]+:[A-Za-z0-9._:-]+):([^:/#?%\s]+)(?:\/(.*))?$/s;
 const MAX_PATH_BYTES = 255;
 const PKH_EIP155_DID_RE = /^did:pkh:eip155:(\d+):(0x[a-fA-F0-9]{40})$/;
 

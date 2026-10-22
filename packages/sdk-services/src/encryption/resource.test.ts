@@ -90,6 +90,15 @@ const rejectVectors: Array<[string, string]> = [
   ["wrong URN prefix", `urn:tinycloud:other:${OWNER}:default/a`],
   ["bare network with uppercase name", `urn:tinycloud:encryption:${OWNER}:Default`],
   ["newline in path", res("a\nb")],
+  ["owner containing '%'", `urn:tinycloud:encryption:did:web:a%3Ab:default/a`],
+  ["owner containing '#'", `urn:tinycloud:encryption:did:web:a#b:default/a`],
+  ["owner containing '/'", `urn:tinycloud:encryption:did:web:a/b:default/a/`],
+  ["owner method with uppercase", `urn:tinycloud:encryption:did:Web:example.com:default/a`],
+  ["network containing '#'", `urn:tinycloud:encryption:${OWNER}:de#fault/a`],
+  ["network containing '?'", `urn:tinycloud:encryption:${OWNER}:de?fault/a`],
+  ["network containing '%'", `urn:tinycloud:encryption:${OWNER}:de%66ault/a`],
+  ["empty prefix", `${NET}/`],
+  ["prefix path of 256 bytes", res(`${[...Array(7).fill(seg(31)), seg(32)].join("/")}/`)],
 ];
 
 describe("parseEncryptionResource", () => {
@@ -99,6 +108,18 @@ describe("parseEncryptionResource", () => {
 
   test.each(rejectVectors)("rejects %s", (_name, uri) => {
     expect(() => parseEncryptionResource(uri)).toThrow(EncryptionResourceError);
+  });
+
+  test("accepts a prefix whose path is exactly 255 bytes plus the trailing slash", () => {
+    const prefix = Array(8).fill(seg(31)).join("/");
+    expect(prefix).toHaveLength(255);
+    expect(parseEncryptionResource(res(`${prefix}/`))).toEqual({
+      kind: "prefix",
+      ownerDid: OWNER,
+      network: "default",
+      networkId: NET,
+      prefix,
+    });
   });
 
   test("a prefix result never carries a key path", () => {
