@@ -277,7 +277,7 @@ exact, resumable request instead of widening access.
 
 Hosted text blocks contain the status and canonical JSON so clients that ignore
 `structuredContent` can read the result. Successful `tinycloud_secrets_get`
-values remain structured-only. Read-only and personal-record query results
+values remain structured-only. Read-only and personal-record context/query results
 exceeding 100,000 characters return a nonretryable SQL/KV size error with
 narrowing guidance. Canonical write outcomes are never cut off by this cap,
 so a completed record write is not misreported as a retryable failure.
