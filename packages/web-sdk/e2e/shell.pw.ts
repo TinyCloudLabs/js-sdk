@@ -59,11 +59,19 @@ for (const scheme of ["light", "dark"] as const) {
       await expect(dialog).toHaveAttribute("aria-label", "TinyCloud settings");
       await expect(dialog).toHaveAttribute("data-layout", "drawer");
 
-      // The harness is signed in and developer mode is off, so Activity is not offered.
-      await expect(dialog.locator(".nav-l")).toHaveText(["Overview", "Local TinyCloud", "Local copy", "Delegations", "Nodes", "Storage"]);
-      await expect(dialog.getByRole("button", { name: "Activity", exact: true })).toHaveCount(0);
+      // The harness is signed in and developer mode is on, so Activity is offered last.
+      await expect(dialog.locator(".nav-l")).toHaveText(["Overview", "Local TinyCloud", "Local copy", "Delegations", "Nodes", "Storage", "Activity"]);
+      await expect(dialog.getByRole("button", { name: "Activity", exact: true })).toBeVisible();
       await expect(dialog.getByRole("button", { name: "Overview", exact: true })).toHaveAttribute("aria-current", "page");
       await expect(dialog.locator('section[data-section="account"]')).toBeVisible();
+    });
+
+    test("Activity is not offered when developer mode is off", async ({ page }) => {
+      await mountHarness(page, scheme, { developerMode: false });
+      await openDrawer(page);
+
+      await expect(panel(page).locator(".nav-l")).toHaveText(["Overview", "Local TinyCloud", "Local copy", "Delegations", "Nodes", "Storage"]);
+      await expect(panel(page).getByRole("button", { name: "Activity", exact: true })).toHaveCount(0);
     });
 
     test("nav switches the visible section and moves aria-current", async ({ page }) => {

@@ -62,8 +62,9 @@ w.__tc = {
   // `ui` is passed through as given, so a spec can mount with toasts or the button off.
   mount(ui?: Parameters<typeof registerUiClient>[0]["ui"]) {
     handle?.unregister();
+    // Developer mode is on by default so Activity is mounted; a spec overrides it by passing `developerMode: false`.
     handle = registerUiClient({
-      ui,
+      ui: { developerMode: true, ...ui },
       source: source as never,
       manifestAppId: () => "e2e-settings-smoke",
     });
