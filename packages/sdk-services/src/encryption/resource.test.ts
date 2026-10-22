@@ -124,6 +124,64 @@ describe("parseEncryptionResource", () => {
   });
 });
 
+const ADDR = "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed";
+const netOf = (ownerDid: string): string => `urn:tinycloud:encryption:${ownerDid}:default`;
+
+describe("owner grammar", () => {
+  test("generic owner with an empty colon component is accepted", () => {
+    const uri = `${netOf("did:web:a::b")}/apps/x`;
+    expect(parseEncryptionResource(uri)).toEqual(key("apps/x", "default", "did:web:a::b"));
+  });
+
+  test.each(["9007199254740992", "18446744073709551615"])("accepts did:pkh:eip155 chain id %s above 2^53 or at u64 max", (chain) => {
+    const owner = `did:pkh:eip155:${chain}:${ADDR}`;
+    expect(parseEncryptionResource(`${netOf(owner)}/apps/x`)).toEqual(key("apps/x", "default", owner));
+  });
+
+  test.each([
+    ["chain id 0", `did:pkh:eip155:0:${ADDR}`],
+    ["chain id above u64", `did:pkh:eip155:18446744073709551616:${ADDR}`],
+    ["short address", "did:pkh:eip155:1:0x1234"],
+    ["non-numeric chain id", `did:pkh:eip155:abc:${ADDR}`],
+    ["extra component", `did:pkh:eip155:1:${ADDR}:extra`],
+    ["missing address", "did:pkh:eip155:1"],
+  ])("rejects malformed did:pkh:eip155 owner: %s", (_name, owner) => {
+    expect(() => parseEncryptionResource(`${netOf(owner)}/apps/x`)).toThrow(EncryptionResourceError);
+    expect(() => parseEncryptionResource(`${netOf(owner)}/apps/`)).toThrow(EncryptionResourceError);
+    expect(() => parseEncryptionResource(netOf(owner))).toThrow(EncryptionResourceError);
+    expect(
+      encryptionResourceContains(`${netOf(owner)}/apps/`, `${netOf(owner)}/apps/x`),
+    ).toBe(false);
+  });
+});
+
+describe("builder output always parses", () => {
+  test.each([
+    ["uppercase method", "did:Web:example.com"],
+    ["'#' in owner", "did:web:example.com#x"],
+    ["'%' in owner", "did:web:example.com%3A8443"],
+    ["empty colon component (parseNetworkId refuses it)", "did:web:a::b"],
+  ])("throws for owner with %s", (_name, owner) => {
+    expect(() => formatKeyResource(netOf(owner), "a")).toThrow(EncryptionResourceError);
+    expect(() => formatPrefixResource(netOf(owner), "a")).toThrow(EncryptionResourceError);
+  });
+
+  test.each([
+    ["large chain id", `did:pkh:eip155:9007199254740992:${ADDR}`],
+  ])("output parses back to the same fields for owner with %s", (_name, owner) => {
+    expect(parseEncryptionResource(formatKeyResource(netOf(owner), "a/b"))).toEqual(
+      key("a/b", "default", owner),
+    );
+    expect(parseEncryptionResource(formatPrefixResource(netOf(owner), "a/b"))).toEqual({
+      kind: "prefix",
+      ownerDid: owner,
+      network: "default",
+      networkId: netOf(owner),
+      prefix: "a/b",
+    });
+  });
+});
+
 describe("formatKeyResource / formatPrefixResource", () => {
   test("return the exact canonical strings and round-trip through the parser", () => {
     expect(formatKeyResource(NET, "secrets/software-factory")).toBe(res("secrets/software-factory"));
@@ -189,7 +247,14 @@ describe("encryptionResourceContains", () => {
 describe("abilities", () => {
   test("key.delete is not delegable", () => {
     expect(DELEGABLE_KEY_ABILITIES).not.toContain(KEY_DELETE_ABILITY);
-    expect(DELEGABLE_KEY_ABILITIES).toHaveLength(3);
+    for (const ability of [
+      "tinycloud.encryption/key.create",
+      "tinycloud.encryption/decrypt",
+      "tinycloud.encryption/key.block",
+      "tinycloud.encryption/key.unblock",
+    ]) {
+      expect(DELEGABLE_KEY_ABILITIES).toContain(ability);
+    }
   });
 });
 
