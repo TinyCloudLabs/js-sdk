@@ -7,6 +7,7 @@ interface DelegateToCall { did: string; permissions: Permission[]; options: { ex
 const errors: unknown[] = [];
 const delegateToCalls: DelegateToCall[] = [];
 let delegateToFailure: Error | undefined;
+let authenticateCalls = 0;
 
 const fakeNode = {
   delegateTo: async (did: string, permissions: Permission[], options: { expiry: number; requireActivation?: boolean }) => {
@@ -43,7 +44,12 @@ const actualErrors = await import("../output/errors.js");
 mock.module("../config/profiles.js", () => ({
   ProfileManager: { resolveContext: async () => ({ profile: "owner", host: "https://node.example.test" }) },
 }));
-mock.module("../lib/sdk.js", () => ({ ensureAuthenticated: async () => fakeNode }));
+mock.module("../lib/sdk.js", () => ({
+  ensureAuthenticated: async () => {
+    authenticateCalls += 1;
+    return fakeNode;
+  },
+}));
 mock.module("./auth.js", () => ({ finishProfileLogout: async () => 0, prepareProfileRemoteLogout: async () => undefined }));
 mock.module("../lib/revoke-delegation.js", () => ({ revokeDelegationOnNode: async () => ({}) }));
 mock.module("../output/formatter.js", () => ({
@@ -71,6 +77,7 @@ beforeEach(() => {
   errors.length = 0;
   delegateToCalls.length = 0;
   delegateToFailure = undefined;
+  authenticateCalls = 0;
 });
 
 describe("tc delegation create with decrypt", () => {
@@ -78,6 +85,7 @@ describe("tc delegation create with decrypt", () => {
     await create("kv/get,encryption/decrypt", "--expiry", "2h");
     expect(errors).toEqual([expect.objectContaining({ code: "DECRYPT_EXPIRY_TOO_LONG", exitCode: 2 })]);
     expect(delegateToCalls).toEqual([]);
+    expect(authenticateCalls).toBe(0);
   });
 
   test("the default lifetime is one hour", async () => {
@@ -113,5 +121,13 @@ describe("tc delegation create without decrypt", () => {
     await create("encryption/network.create", "--expiry", "2h");
     expect(errors).toEqual([]);
     expect(delegateToCalls).toHaveLength(1);
+  });
+
+  test("a garbage --expiry still signs in first and then reports the same usage error", async () => {
+    await create("kv/get", "--expiry", "soon");
+    expect(authenticateCalls).toBe(1);
+    expect(delegateToCalls).toEqual([]);
+    expect(errors).toHaveLength(1);
+    expect(String((errors[0] as Error).message)).toContain('Invalid duration: "soon"');
   });
 });

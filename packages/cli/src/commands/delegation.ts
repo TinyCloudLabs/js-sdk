@@ -91,32 +91,49 @@ export function registerDelegationCommand(
       try {
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
-        const node = await ensureAuthenticated(ctx);
 
-        const actions: string[] = options.actions.split(",").map((a: string) => {
-          const trimmed = a.trim();
-          return trimmed.startsWith("tinycloud.") ? trimmed : `tinycloud.${trimmed}`;
-        });
-        const byService: Record<string, string[]> = {};
-        for (const action of actions) {
-          const slash = action.indexOf("/");
-          if (slash <= "tinycloud.".length || slash === action.length - 1) {
-            throw new CLIError("USAGE_ERROR", `Invalid action "${action}"; use service/action, e.g. kv/get`, ExitCode.USAGE_ERROR);
+        // Validate first so a decrypt delegation over one hour is refused before any
+        // sign-in. A validation failure is held until after sign-in, so every other
+        // request keeps today's order of effects and errors.
+        let prepared: {
+          actions: string[];
+          entries: Array<{ service: string; space: string; path: string; actions: string[] }>;
+          expiry: Date;
+        } | undefined;
+        let validationError: unknown;
+        try {
+          const actions: string[] = options.actions.split(",").map((a: string) => {
+            const trimmed = a.trim();
+            return trimmed.startsWith("tinycloud.") ? trimmed : `tinycloud.${trimmed}`;
+          });
+          const byService: Record<string, string[]> = {};
+          for (const action of actions) {
+            const slash = action.indexOf("/");
+            if (slash <= "tinycloud.".length || slash === action.length - 1) {
+              throw new CLIError("USAGE_ERROR", `Invalid action "${action}"; use service/action, e.g. kv/get`, ExitCode.USAGE_ERROR);
+            }
+            (byService[action.slice(0, slash)] ??= []).push(action);
           }
-          (byService[action.slice(0, slash)] ??= []).push(action);
+          const expiry = parseExpiry(options.expiry);
+          const entries = Object.entries(byService).map(([service, serviceActions]) => ({
+            service,
+            space: "default",
+            path: options.path,
+            actions: serviceActions,
+          }));
+          prepared = { actions, entries, expiry };
+        } catch (error) {
+          validationError = error;
         }
-
-        const expiry = parseExpiry(options.expiry);
-        const entries = Object.entries(byService).map(([service, serviceActions]) => ({
-          service,
-          space: "default",
-          path: options.path,
-          actions: serviceActions,
-        }));
         // Decrypt never lasts over one hour: refuse before anything is signed.
-        if (includesDecrypt(entries) && expiry.getTime() - Date.now() > DECRYPT_MAX_LIFETIME_MS) {
+        if (prepared && includesDecrypt(prepared.entries) && prepared.expiry.getTime() - Date.now() > DECRYPT_MAX_LIFETIME_MS) {
           throw new CLIError("DECRYPT_EXPIRY_TOO_LONG", DECRYPT_EXPIRY_TOO_LONG_MESSAGE, ExitCode.USAGE_ERROR);
         }
+
+        const node = await ensureAuthenticated(ctx);
+        if (prepared === undefined) throw validationError;
+        const { actions, entries, expiry } = prepared;
+
         // `tc profile show` prints a did:key with a #fragment; the node wants the bare DID.
         const recipient = options.to.split("#")[0];
 
