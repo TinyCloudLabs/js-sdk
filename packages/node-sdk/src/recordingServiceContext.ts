@@ -7,7 +7,15 @@ import {
   type InvokeFunction,
   type ServiceContextConfig,
 } from "@tinycloud/sdk-services";
-import type { InvocationMeta, RequestSink } from "@tinycloud/sdk-services/telemetry/requestLog";
+import {
+  buildRequestEvent,
+  byteLengthOf,
+  declaredLengthOf,
+  invocationMetaOf,
+  type InvocationMeta,
+  type RequestDraft,
+  type RequestSink,
+} from "@tinycloud/sdk-services/telemetry/requestLog";
 import { registerRecording } from "./recordingRegistry";
 
 /**
@@ -31,6 +39,49 @@ interface AttemptSample {
   attempts?: number;
 }
 
+const SYNC_ABILITY = "tinycloud.kv/sync";
+const INFO_PATH = "/info";
+
+/** Outcome code for every request row: `ok`, `HTTP_<status>`, or `ERROR` when no response arrived. */
+function outcomeCodeOf(response: FetchResponse | undefined): string {
+  return response === undefined ? "ERROR" : response.ok ? "ok" : `HTTP_${response.status}`;
+}
+
+/**
+ * Replication traffic, keyed on endpoint shape only: the `/info` feature probe and
+ * `tinycloud.kv/sync` invocations. Returns the op for a relabelled row, or undefined for other calls.
+ */
+function replicationOp(url: string, meta: InvocationMeta | undefined): string | undefined {
+  if (meta !== undefined) return meta.action === SYNC_ABILITY ? `${meta.service}/sync` : undefined;
+  return isInfoUrl(url) ? "sync/info" : undefined;
+}
+
+function isInfoUrl(url: string): boolean {
+  try {
+    return new URL(url).pathname.replace(/\/+$/, "") === INFO_PATH;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * One row per HTTP attempt. Only the host survives (buildRequestEvent's host rule): path, space,
+ * and key text are never passed in, so no endpoint or key text reaches a `sync` row.
+ */
+function replicationEvent(sample: AttemptSample, op: string): RequestDraft {
+  return buildRequestEvent({
+    service: "sync",
+    op,
+    url: sample.url,
+    bytes: byteLengthOf(sample.init?.body) ?? declaredLengthOf(sample.response?.headers.get("content-length")),
+    durationMs: performance.now() - sample.clock,
+    attempts: sample.attempts ?? 1,
+    ok: sample.response?.ok === true,
+    code: outcomeCodeOf(sample.response),
+    at: sample.at,
+  });
+}
+
 /** Plain `ServiceContext` without a sink; a recording context when a sink is given. */
 export function createServiceContext(config: RecordingServiceContextConfig): ServiceContext {
   const { requestSink, ...base } = config;
@@ -52,7 +103,7 @@ class RecordingServiceContext extends ServiceContext {
     });
     this.requestSink = sink;
     this.pending = pending;
-    registerRecording(this, { requestSink: sink, unrecordedFetch: () => this.unrecordedFetch });
+    registerRecording(this, () => this.unrecordedFetch);
   }
 
   /** Per-call recording; `_fetch` is read at access time, so overrides apply. */
@@ -123,6 +174,11 @@ class RecordingServiceContext extends ServiceContext {
 
   private observeAttempt(sample: AttemptSample): void {
     try {
+      const replication = replicationOp(sample.url, sample.meta ?? invocationMetaOf(sample.init?.headers));
+      if (replication !== undefined) {
+        this.requestSink.record(replicationEvent(sample, replication));
+        return;
+      }
       const headers = sample.init?.headers;
       if (sample.meta !== undefined && typeof headers === "object" && headers !== null) {
         this.requestSink.remember(headers, sample.meta);
@@ -133,12 +189,7 @@ class RecordingServiceContext extends ServiceContext {
         requestBody: sample.init?.body,
         responseContentLength: sample.response?.headers.get("content-length"),
         ok: sample.response?.ok === true,
-        code:
-          sample.response === undefined
-            ? "ERROR"
-            : sample.response.ok
-              ? "ok"
-              : `HTTP_${sample.response.status}`,
+        code: outcomeCodeOf(sample.response),
         durationMs: performance.now() - sample.clock,
         attempts: sample.attempts ?? 1,
         at: sample.at,

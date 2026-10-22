@@ -19,7 +19,7 @@ import { chmod, lstat, mkdir, open as openFile, readFile, readdir, realpath, ren
 import { basename, dirname, join, parse, resolve, sep } from "node:path";
 
 
-import { KVService, principalDid } from "@tinycloud/sdk-core";
+import { KVService, ServiceContext, principalDid } from "@tinycloud/sdk-core";
 import {
   canonicalReplicationIdentity,
   replicationIdentityKey,
@@ -74,8 +74,6 @@ import type {
   SqliteRuntime,
 } from "./replica-contract";
 import { ucanAttUnconstrainedFor } from "./authority";
-import { recordingInfoFetch, requestSinkOfFetch, syncRequestSink } from "./syncRequestLog";
-import { createServiceContext } from "../recordingServiceContext";
 export type { ProfileReplicaDeferredToken, ProfileReplicaPurge };
 
 /** CLI-only crash fence; generic SQLite stores do not opt in to this path. */
@@ -1442,16 +1440,12 @@ class SqliteReplicaHandle implements KVReplicaHandle {
       const spec = this.spec;
       const device = this.#device;
       const fetch = spec.fetch ?? globalThis.fetch.bind(globalThis);
-      const recordSink = requestSinkOfFetch(spec.fetch);
-      const syncSink = recordSink && syncRequestSink(recordSink);
-      const infoFetch = recordSink && recordingInfoFetch(globalThis.fetch.bind(globalThis), recordSink);
       return (grant: GrantRecord): ReplicaTransport => {
-        const context = createServiceContext({
+        const context = new ServiceContext({
           invoke: wasm.invoke,
           invokeAny: wasm.invokeAny,
           fetch,
           hosts: [spec.identity.host],
-          ...(syncSink ? { requestSink: syncSink } : {}),
         });
         const kv = new KVService({});
         kv.initialize(context);
@@ -1463,7 +1457,7 @@ class SqliteReplicaHandle implements KVReplicaHandle {
           verificationMethod: device.did,
           jwk: device.jwk,
         });
-        return kvSyncTransport(kv, infoFetch ? { fetch: infoFetch } : {});
+        return kvSyncTransport(kv);
       };
     })();
     return this.#transportFactory;

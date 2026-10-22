@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
-import type { FetchResponse, ServiceSession } from "@tinycloud/sdk-services";
+import { ServiceContext, type FetchResponse, type ServiceSession } from "@tinycloud/sdk-services";
 import { invocationMetaOf, RequestLog } from "@tinycloud/sdk-services/telemetry/requestLog";
 import { createServiceContext } from "./recordingServiceContext";
-import { requestSinkOf, unrecordedFetchOf } from "./recordingRegistry";
+import { unrecordedFetchOf } from "./recordingRegistry";
 
 const SPACE = "tinycloud:pkh:eip155:1:0x1234:default";
 const session = {
@@ -72,7 +72,7 @@ test("a failed response is coded HTTP_<status> and a thrown fetch is coded ERROR
 test("developer off: no sink leaves requestSink unset, no invocation metadata, and globalThis.fetch untouched", async () => {
   const before = globalThis.fetch;
   const context = contextWith(undefined, async () => reply(200, "ok"));
-  expect(requestSinkOf(context)).toBeUndefined();
+  expect(context.constructor).toBe(ServiceContext);
   expect(globalThis.fetch).toBe(before);
   const headers = context.invoke(session, "kv", "notes/a", "tinycloud.kv/get");
   expect(invocationMetaOf(headers)).toBeUndefined();
@@ -90,7 +90,7 @@ test("developer off: a plain context passes every response through unchanged", a
     return response;
   });
   // Identity: with no sink the caller's fetch is the transport, so no recording wrapper runs.
-  expect(context.fetch).toBe(unrecordedFetchOf(context));
+  expect(context.constructor).toBe(ServiceContext);
 
   const received: unknown[] = [];
   for (let i = 0; i < 50; i++) received.push(await context.fetch(`https://node.example/kv/${i}`, { method: "GET" }));
@@ -151,4 +151,87 @@ test("an attempt that throws still counts toward attempts", async () => {
   ).rejects.toThrow("socket reset");
   expect(calls).toBe(2);
   expect(log.snapshot().map((event) => [event.attempts, event.code])).toEqual([[2, "ERROR"]]);
+});
+
+const SYNC = "tinycloud.kv/sync";
+
+test("replication rows are service sync with path and space dropped and no key or prefix text", async () => {
+  const log = new RequestLog();
+  const context = contextWith(log, async () => reply(200, "{}"));
+  await context.fetch("https://node.example/info", { method: "GET" });
+  const headers = context.invoke(session, "kv", "notes/secret-key", SYNC);
+  await context.invokeWithRetry("https://node.example/invoke", () => ({
+    method: "POST",
+    headers,
+    body: "notes/secret-key payload",
+  }));
+  const rows = log.snapshot();
+  expect(rows).toHaveLength(2);
+  for (const row of rows) {
+    expect(row).toMatchObject({ service: "sync", path: null, space: null, host: "node.example" });
+  }
+  const text = JSON.stringify(rows);
+  expect(text).not.toContain("notes");
+  expect(text).not.toContain("secret-key");
+  expect(text).not.toContain("payload");
+});
+
+test("a replication cycle records exactly one row per HTTP attempt counted at the transport", async () => {
+  const log = new RequestLog();
+  let transportCalls = 0;
+  let invokeCalls = 0;
+  const context = contextWith(log, async (url) => {
+    transportCalls += 1;
+    if (url.endsWith("/info")) return reply(200, "{}");
+    invokeCalls += 1;
+    return invokeCalls === 1 ? reply(503, BUSY, "0") : reply(200, "{}");
+  });
+  const cycle = async () => {
+    await context.fetch("https://node.example/info", { method: "GET" });
+    const headers = context.invoke(session, "kv", "notes/", SYNC);
+    await context.invokeWithRetry("https://node.example/invoke", () => ({ method: "GET", headers }));
+  };
+  await cycle();
+  await cycle();
+  const rows = log.snapshot();
+  expect(rows.map((row) => [row.op, row.attempts])).toEqual([
+    ["sync/info", 1],
+    ["kv/sync", 2],
+    ["sync/info", 1],
+    ["kv/sync", 1],
+  ]);
+  expect(rows.reduce((total, row) => total + row.attempts, 0)).toBe(transportCalls);
+});
+
+test("user kv calls and user requests to the same host are never relabelled sync", async () => {
+  const log = new RequestLog();
+  const context = contextWith(log, async () => reply(200, "{}"));
+  const listHeaders = context.invoke(session, "kv", "notes/secret", "tinycloud.kv/list");
+  await context.invokeWithRetry("https://node.example/invoke", () => ({ method: "POST", headers: listHeaders }));
+  const getHeaders = context.invoke(session, "kv", "notes/secret", "tinycloud.kv/get");
+  await context.invokeWithRetry("https://node.example/invoke", () => ({ method: "POST", headers: getHeaders }));
+  await context.fetch("https://node.example/kv/list?prefix=notes/secret", { method: "GET" });
+  await context.fetch("https://node.example/info/notes/secret", { method: "GET" });
+  const rows = log.snapshot();
+  expect(rows.map((row) => [row.service, row.op])).toEqual([
+    ["kv", "kv/list"],
+    ["kv", "kv/get"],
+    ["other", "other"],
+    ["other", "other"],
+  ]);
+});
+
+test("a sync-looking /info URL from a plain fetch cannot smuggle path, space, or query text into its row", async () => {
+  const log = new RequestLog();
+  const context = contextWith(log, async () => reply(200, "{}"));
+  await context.fetch(
+    "https://node.example/info?prefix=notes/secret-key&space=tinycloud:pkh:eip155:1:0x1234:default",
+    { method: "GET" },
+  );
+  const [row] = log.snapshot();
+  expect(row).toMatchObject({ service: "sync", op: "sync/info", path: null, space: null, host: "node.example" });
+  const text = JSON.stringify(row);
+  expect(text).not.toContain("notes");
+  expect(text).not.toContain("secret-key");
+  expect(text).not.toContain("0x1234");
 });
