@@ -218,6 +218,27 @@ describe("buildSharePresentation golden and differential", () => {
     await buildSharePresentation({ ...f.input, holderSigner: recording });
     expect(seen).toEqual([32]);
   });
+
+  test("material.sign is a raw holder signature over exactly the bytes given", async () => {
+    const f = await fixture();
+    const material = await buildSharePresentation(f.input);
+    const publicKey = ed25519.getPublicKey(seed);
+    const digest = Uint8Array.from({ length: 32 }, (_, i) => i);
+    const binding = Uint8Array.from({ length: 64 }, (_, i) => 255 - i);
+    expect(typeof material.sign).toBe("function");
+    expect(ed25519.verify(await material.sign(digest), digest, publicKey)).toBe(true);
+    const bindingSig = await material.sign(binding);
+    expect(ed25519.verify(bindingSig, binding, publicKey)).toBe(true);
+    expect(ed25519.verify(bindingSig, digest, publicKey)).toBe(false);
+  });
+
+  test("material never serialises or inspects the holder seed", async () => {
+    const f = await fixture();
+    const material = await buildSharePresentation(f.input);
+    expect(JSON.stringify(material)).not.toContain(golden.holderSeedBase64Url);
+    expect(Bun.inspect(material)).not.toContain(golden.holderSeedBase64Url);
+    expect(Object.keys(material)).not.toContain("holderSigner");
+  });
 });
 
 describe("buildSharePresentation fail-closed rejections (one per code)", () => {

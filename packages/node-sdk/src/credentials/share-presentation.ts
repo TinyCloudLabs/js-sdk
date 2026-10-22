@@ -56,6 +56,11 @@ export interface SharePresentationMaterial {
   readonly credentialEnvelope: IssuedCredentialEnvelope;
   readonly requirement: CredentialRequirement;
   readonly presentation: PolicyCredentialPresentationV4;
+  /**
+   * Raw holder signature over exactly the bytes given (no hashing or prefixing). Bound to
+   * the holder key from `holderSigner`; the signer object itself is not exposed.
+   */
+  readonly sign: (bytes: Uint8Array) => Promise<Uint8Array>;
 }
 
 /**
@@ -131,5 +136,6 @@ export async function buildSharePresentation(
     credentialEnvelope: result.envelope,
     requirement,
     presentation,
+    sign: holderSigner.sign,
   });
 }
