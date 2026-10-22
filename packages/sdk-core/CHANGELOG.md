@@ -1,5 +1,108 @@
 # @tinycloudlabs/sdk-core
 
+## 3.3.1
+
+### Patch Changes
+
+- Updated dependencies [f8c2967]
+  - @tinycloud/share-envelope@1.2.1
+  - @tinycloud/share-sdk@1.2.1
+  - @tinycloud/sdk-services@3.3.1
+
+## 3.3.1-beta.0
+
+### Patch Changes
+
+- Updated dependencies [f8c2967]
+  - @tinycloud/share-envelope@1.2.1-beta.0
+  - @tinycloud/share-sdk@1.2.1-beta.0
+
+## 3.3.0
+
+### Minor Changes
+
+- d2ad845: `tc delegation create` now signs and activates the delegation through `delegateTo`, reads it back through the node's account delegation query, and prints its CID only once the node lists it as active (`DELEGATION_NOT_CONFIRMED` otherwise). `tc delegation list` and `tc delegation info` use that query (`POST /delegation/query`) via `account.delegations.query()`, which includes delegations signed by the session key; `list` gains `--space`, and `--to` accepts a `did:key` with a `#fragment`. Previously `create` and `list` sent `tinycloud.delegation/create` and `tinycloud.delegation/list` invocations that the node does not handle (it answered an empty 200, surfaced as a JSON parse error), and `info` called a method that did not exist.
+
+  A plain `tc auth login` now also requests `tinycloud.delegation/list` on the default space (OpenKey's default grant omits it). A session that lacks it, on the account space and its own space, gets a `PERMISSION_DENIED` error saying to run `tc auth login` again. `DelegationManager.query()` signs for the account space and falls back to the session's own space when the node refuses (403).
+
+  Breaking: removed `DelegationManager.create()` (use `TinyCloudNode.delegateTo()`), `DelegationManager.list()` (use `account.delegations.query()`), `TinyCloudNode.delegate()` (use `delegateTo()`), `TinyCloudNode.listDelegations()` (use `account.delegations.query()`), and the web-sdk `TinyCloudWeb.delegate()` (use `delegateTo()`) and `TinyCloudWeb.listDelegations()` (use `account.delegations.query()`). They sent invocations the node never handled, so they never worked. `account.delegations.list()` is not a replacement: it reads the SQL index and omits session-signed delegations. Also removed the `delegationManager` option from `SharingService` config; sharing uses `createDelegation` or `createDelegationWasm`.
+
+  `TinyCloudNode.delegateTo()` takes a new `requireActivation` option: when set, it throws when the node answers 200 but lists a target space under `skipped` (a space it does not host), naming that space; this used to look like success. It is off by default, since grants to a not-yet-hosted space (e.g. secrets) are valid. `tc delegation create` sets it. `DelegationManager.getChain()` and `checkPermission()` now return an `UNSUPPORTED_OPERATION` error when the node answers with an empty body.
+
+- 9592d3d: Add `ORG_MEMBERSHIP_ROW` (`tinycloud.org-membership/v1`, 365-day lifetime), `ORG_MEMBERSHIP_FREE_ROW` (`tinycloud.org-membership-free/v1`, 30-day lifetime) and `ORG_MEMBERSHIP_ROWS` to `@tinycloud/sdk-core/held-credentials`. Pass the rows as `rows` to `parseIssuerSet` and `verifyHeldPresentation`; the default remains the email row. Each row decides which issuer DIDs it permits: org rows permit opaque org-family DIDs only, and the email row does not permit org-family DIDs. The issuer set loader applies the shipped rows in addition to any rows passed. The shipped rows are frozen. A row's `permitsIssuer` is optional; a row that omits it accepts any issuer its issuer entry permits. `assertValidAudience` is exported for callers that validate audience values. Details: TC-1553
+- 4aae658: Add `@tinycloud/sdk-core/held-credentials`: an off-node, Worker-safe verifier for held `tinycloud.email-held/v1` credentials (SD-JWT VC, EdDSA) with a SIWE holder proof, a pinned issuer set, a `NonceStore` interface and the shared `normaliseEmail` (ASCII addresses). Deployments supply a shared `NonceStore`; `InMemoryNonceStore` is for tests and single-process tools. Nothing existing changes. Details: TC-1540
+- 4ac7592: An issuer set that lists the email profile for any issuer other than `did:web:issuer.credentials.org` now fails to load with `bad-issuer-set`.
+- fc88c48: Add `listMatching(kv, prefix, options?)`, a standalone client-side helper for "keys whose name starts with a partial segment", imported from `@tinycloud/sdk-core/kv-list-matching`. Since node 1.19.0 (TC-731) the node matches list prefixes on whole path segments only (`qa/b` matches `qa/b` and `qa/b/...`, not `qa/b00`), so a grant on `docs` cannot enumerate `docsecret/...`. The helper splits the prefix at its last `/`, lists that folder with the normal `list` across every page, and filters the keys locally; it never lists more than the folder, so delegated sessions see only what their grant allows. It accepts a KV service or a `withPrefix` view. It reads the whole folder, so use it for type-ahead and small folders, not large ones. It is a separate entry (like `@tinycloud/sdk-core/held-credentials`), not part of `IKVService` or of any package root, so nothing in the interface changes and bundles that don't import it, including web-sdk's, don't include it. From TypeScript, the subpath's types resolve only with `moduleResolution` set to `node16`, `nodenext` or `bundler`; with `"node"` (as in `@tinycloud/node-sdk`'s own tsconfig) `tsc` reports TS2307, although the runtime CJS/ESM import works.
+- ac612c0: Update the held-credential verifier: input size and nesting limits, strict UTF-8 and integer-only JSON numbers, `jti` as a urn:uuid v4, header members limited to `alg`, `typ` and `kid`, cofactorless Ed25519 verification, EIP-55 SIWE addresses, exact RFC 3339 SIWE dates, canonical `result.subject`. `IssuerSet` is created only by `parseIssuerSet`, and `verifyHeldPresentation` accepts only that type. Import one build (ESM or CJS) of `@tinycloud/sdk-core/held-credentials` per process. Details: TC-1540
+- cce8b26: Add an opt-in `registryPolicy: "fail-closed"` for host resolution and automatic space creation (TC-1443). The default does not change.
+
+  **Default (`"legacy-fallback"`, deprecated).** Sign-in resolves hosts exactly as before: when the location registry has no record or cannot be reached, the session silently uses the fallback host (`https://node.tinycloud.xyz` unless `tinycloudFallbackHosts` says otherwise). The first time a process takes that fallback it logs one `console.warn`; the fallback will be removed in a future major release. The default policy adds no registry request anywhere and no space-creation check.
+
+  **`registryPolicy: "fail-closed"`** (`TinyCloudNodeConfig`, `NodeUserAuthorizationConfig`, web `Config`):
+  - Sign-in without a configured host looks up the signer address in the registry first and acts on the three-state verdict. `registered`: the record's hosts, in record order. `unregistered`: `newUserHost` (default `https://node.tinycloud.xyz`; `null` refuses unregistered owners with `NodeNotFoundError`). `unavailable` (unreachable, timeout, bad status, oversize or malformed body, bad signature, a sequence below the remembered one, a not-found after a registration was seen, a failed read of the remembered sequence, or no registry configured): `RegistryUnavailableError`, never the new-user host. A record with no usable host is `NodeNotFoundError`. `newUserHost` governs routing only; a pinned host may still create spaces for an unregistered owner.
+  - One host-scheme rule: hosts from a signed record are used for routing and for space creation only if they are HTTPS or HTTP on loopback, the same rule as `newUserHost` and `use-host`. The default policy is unchanged.
+  - Local discovery probes the configured `localNodeUrl` / `localLinkName` and `*.local.tinycloud.link` hosts from a `registered` verdict; it no longer reads the registry itself, so an older or invalid record cannot route a session.
+  - The lookup key is the signer address, never the session chain. The v1 registry keys records on an exact `did:pkh:eip155:<chain>:<EIP-55 address>`, so v1 lookups use `registryOwnerSubjectV1(address, registryChainId)` (`registryChainId` default 1). Registry v2 will key on the address alone.
+  - `onNodeNotFound({ error, attempt })` decides what sign-in does instead of throwing: `{ action: "retry" }`, `{ action: "use-host", host }` (an HTTPS or loopback HTTP origin) or `{ action: "abort" }`. The SDK does not verify a `use-host` host's identity, and the choice persists with the session like any resolved host.
+  - Automatic space creation is guarded: `ensureSpaceExists` (before asking the creation handler), account bootstrap host steps, sign-in's owned-space hosting, `ensureOwnedSpaceHosted`, and `ensurePublicSpace` (which the vault calls on unlock). Creating a space is refused with `NodeRegistryEntryExistsError` when the owner's registry record does not list the host (including a record with no hosts), and with `RegistryUnavailableError` when the registry gives no verdict. The space-creation handler's `onSpaceCreationFailed` receives the error. Pinned-host apps look the verdict up once, at creation. An explicit `hostOwnedSpace()` call is not guarded.
+  - The highest record sequence seen per owner is remembered in `registrySequenceStore` (default in memory; web-sdk defaults to `localStorage` under `tinycloud.registrySequences.v1`). A failed write (full or read-only storage) logs one warning and keeps the verdict in hand, and the `localStorage` store still remembers the sequence for the page. A failed read or a corrupt stored value fails that lookup closed; remove the key to reset.
+
+  New sdk-core exports: `resolveOwnerHosts`, `lookupOwnerRegistryVerdict`, `resolveFailClosedTinyCloudHosts`, `assertSpaceCreationAllowed`, `registryOwnerSubjectV1`, `createInMemoryRegistrySequenceStore`, `createLocalStorageRegistrySequenceStore`, the errors `NodeNotFoundError` (`code: "node_not_found"`), `RegistryUnavailableError` (`"registry_unavailable"`) and `NodeRegistryEntryExistsError` (`"node_registry_entry_exists"`), their option and callback types, and `DEFAULT_NEW_USER_HOST`, `DEFAULT_REGISTRY_OWNER_CHAIN_ID`, `DEFAULT_REGISTRY_LOOKUP_TIMEOUT_MS` (3 s) and `DEFAULT_REGISTRY_SEQUENCE_STORAGE_KEY`. Match errors on `error.code`: web-sdk bundles its own sdk-core, so `instanceof` against an app's separate sdk-core copy does not hold.
+
+- eb9defd: Add the three-state registry verdict (TC-1443, TC-1444): `registered`, `unregistered` or `unavailable`.
+
+  New export `classifyRegistryLookup(subject, response, { rememberedSequence })` classifies one location registry response without doing I/O:
+  - `unregistered` only for a 404 whose body, without surrounding whitespace, is exactly the registry's `{"error":"location record not found"}`, and only when no sequence is remembered for the subject.
+  - `registered` for a 200 with a valid v1 record for the exact subject, a verifying signature and a sequence not below the remembered one. Each host is an HTTP(S) origin from a plain host multiaddr; a record with no such entry is `registered` with `hosts: []`.
+  - `unavailable`, with a `reason`, for everything else: network error, timeout, other statuses, oversize or malformed bodies, subject mismatch, bad signature, an older sequence than remembered, or a not-found for a subject remembered as registered.
+
+  The subject must be a canonical `did:pkh:eip155:<chainId>:<EIP-55 address>` or an Ed25519 `did:key`; anything else throws `RegistryLookupInputError`.
+
+  Also exported: the verdict types, `RegistryLookupInputError`, `REGISTRY_LOOKUP_MAX_BODY_BYTES` and `REGISTRY_NOT_FOUND_BODY`. Shared test vectors and their rules are in `packages/sdk-core/test-vectors/registry-verdict/`.
+
+  Nothing changes in host resolution: `resolveTinyCloudHosts` and the hosted fallback behave as before.
+
+- f97d73d: `disableSubDelegation: true` now sets the node's terminal marker (the UCAN fact `xyz.tinycloud.policy/delegationMode: "terminal"`), so the node refuses any delegation that cites the result as a parent. It applies to `createDelegation`, the `space.delegations.create` wiring, and the new `delegateTo` option of the same name; the returned delegation reports `disableSubDelegation: true`. sdk-core exports `TERMINAL_DELEGATION_FACT` and `markDelegationTerminal` (TC-1436).
+
+  Behaviour change, released as `minor` because the repository's versioning rule allows agents only `minor` or `patch` (a major needs a maintainer's sign-off). What breaks:
+  - `disableSubDelegation: true` now throws instead of issuing a wallet-signed delegation that can still be re-delegated: in `createSubDelegation`, in `delegateTo` with `forceWalletSign`, and in `createDelegation` when the requested capabilities are outside the current session.
+  - A terminal delegation still works for a delegate that uses it directly, but a wallet-mode `useDelegation`, which chains a new session from it, is refused by the node.
+
+### Patch Changes
+
+- c92953f: Encode account-scoped `tinycloud.space/list` permissions in manifest-backed sessions.
+- 6ad58de: Consolidated dependency update: bump `@modelcontextprotocol/{node,server,client}` to 2.0.0-beta.5, `zod-to-json-schema` to ^3.25.2, `@openkey/sdk` to 0.9.0 in the example apps, and refresh the tokio entry in Cargo.lock.
+- 29440be: Wallet-backed `TinyCloudNode.revokeDelegation(cid)` now signs a direct owner revocation for the target CID. Session-only clients continue to use their delegated revocation authority; the node receipt must confirm the requested CID (TC-721, TC-821).
+- 94566db: Persist the replica session stamp with browser sessions and forward it on restore.
+- Updated dependencies [a7cdfe0]
+- Updated dependencies [94566db]
+- Updated dependencies [94566db]
+- Updated dependencies [9891ed9]
+- Updated dependencies [87a137e]
+- Updated dependencies [9067edd]
+- Updated dependencies [daf8561]
+- Updated dependencies [370a8e4]
+- Updated dependencies [ef49c14]
+- Updated dependencies [90bc0ae]
+- Updated dependencies [e68e911]
+- Updated dependencies [6e7ad8f]
+- Updated dependencies [d84e379]
+- Updated dependencies [c2fd94b]
+- Updated dependencies [02c0a44]
+- Updated dependencies [116b214]
+- Updated dependencies [0c4c6b2]
+- Updated dependencies [2292db7]
+  - @tinycloud/sdk-services@3.3.0
+  - @tinycloud/share-sdk@1.2.0
+  - @tinycloud/share-envelope@1.2.0
+
+## 3.3.0-beta.39
+
+### Patch Changes
+
+- Updated dependencies [ef49c14]
+  - @tinycloud/sdk-services@3.3.0-beta.39
+
 ## 3.3.0-beta.38
 
 ### Patch Changes

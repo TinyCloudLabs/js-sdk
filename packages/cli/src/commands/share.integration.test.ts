@@ -41,6 +41,23 @@ describe("tc share command integration", () => {
     expect((await records.list()).length).toBe(1);
   });
 
+  test("refuses a native link from another origin with ORIGIN_MISMATCH before reading it, in receive and inspect", async () => {
+    let reads = 0;
+    configureShareCommandServices({ nativeReader: async () => { reads += 1; return { bytes: new Uint8Array([1]), filename: "x.md" }; } });
+    const link = "https://evil.example/viewer#tc1=opaque-native-delegation";
+    for (const command of ["receive", "inspect"]) {
+      // handleError ends the process; record its exit code and let the action return instead.
+      const originalExit = process.exit;
+      let exitCode: number | undefined;
+      process.exit = ((code?: number) => { exitCode = code; }) as typeof process.exit;
+      let stderr: string;
+      try { ({ stderr } = await runShareCaptured(["share", command, link, "--json"])); }
+      finally { process.exit = originalExit; }
+      expect({ command, exitCode, origin: stderr.includes("ORIGIN_MISMATCH") }).toEqual({ command, exitCode: 5, origin: true });
+    }
+    expect(reads).toBe(0);
+  });
+
   test("redacts token-bearing publish and receive authorization results in JSON", async () => {
     const root = await mkdtemp(join(tmpdir(), "tc-share-auth-output-"));
     const input = join(root, "report.md");
