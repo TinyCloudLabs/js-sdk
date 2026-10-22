@@ -174,6 +174,74 @@ describe("completeHeadlessReceive", () => {
     expect(error.message).not.toContain("node said no");
     expect(await pendingFiles()).toEqual([]);
   });
+
+  test("resume hands the gate the state saved at request time, read back from a fresh store", async () => {
+    const gate = fakeGate({ requestCode: async () => ({ state: { requestId: "req-1" }, expiresAt: new Date(NOW + 600_000).toISOString() }) });
+    await requestHeadlessCode({ envelope: ENVELOPE, recipient: "owner@example.com", gate, store: filePendingStore(dir), now: NOW, randomId: () => RESUME });
+    const seen: unknown[] = [];
+    const resumed = fakeGate({
+      completeEmailProof: async ({ state }) => {
+        seen.push(state);
+        return { holderDid: "did:key:z6Mk-test" } as unknown as EmailProofMaterial;
+      },
+    });
+    await completeHeadlessReceive({ id: RESUME, code: CODE, gate: resumed, store: filePendingStore(dir), access: fakeAccess(), now: NOW + 1000 });
+    expect(seen).toEqual([{ requestId: "req-1" }]);
+  });
+
+  test("success hands the access port the envelope and the exact material the gate returned", async () => {
+    await requestOne();
+    const material = { holderDid: "did:key:z6Mk-test", holderSigner: { did: "did:key:z6Mk-test" }, credential: { credentialId: "c1" } } as unknown as EmailProofMaterial;
+    const seen: unknown[] = [];
+    const access: ShareAccessPort = {
+      receive: async (envelope, received) => {
+        seen.push({ envelope, received });
+        return { bytes: new TextEncoder().encode("ok") };
+      },
+    };
+    await completeHeadlessReceive({ id: RESUME, code: CODE, gate: fakeGate({ completeEmailProof: async () => material }), store: filePendingStore(dir), access, now: NOW + 1000 });
+    expect(seen).toEqual([{ envelope: ENVELOPE, received: material }]);
+  });
+
+  test("a rate limit at completion keeps its wait, exits 6, and never shows the code", async () => {
+    await requestOne();
+    const gate = fakeGate({ completeEmailProof: async () => { throw new EmailProofGateError("RATE_LIMITED", `429 for ${CODE}`, 90_000); } });
+    const error = await expectHeadless(
+      completeHeadlessReceive({ id: RESUME, code: CODE, gate, store: filePendingStore(dir), access: fakeAccess(), now: NOW + 1000 }),
+      "RATE_LIMITED",
+    );
+    expect(error.exitCode).toBe(6);
+    expect(error.retryAfterMs).toBe(90_000);
+    expect(error.message).toBe("rate limited for this mailbox; try again in 2 minutes");
+    expect(error.message).not.toContain(CODE);
+    expect(await pendingFiles()).toEqual([]);
+  });
+
+  test("an unavailable credential service exits 6 and shows neither the gate detail nor the code", async () => {
+    await requestOne();
+    const gate = fakeGate({ completeEmailProof: async () => { throw new EmailProofGateError("UNAVAILABLE", `dns failure at witness.internal for ${CODE}`); } });
+    const error = await expectHeadless(
+      completeHeadlessReceive({ id: RESUME, code: CODE, gate, store: filePendingStore(dir), access: fakeAccess(), now: NOW + 1000 }),
+      "UNAVAILABLE",
+    );
+    expect(error.exitCode).toBe(6);
+    expect(error.message).toBe("could not reach the credential service; try again later");
+    expect(error.message).not.toContain("witness.internal");
+    expect(error.message).not.toContain(CODE);
+    expect(await pendingFiles()).toEqual([]);
+  });
+
+  test("a request the gate reports as expired exits 3 and deletes the pending file", async () => {
+    await requestOne();
+    const gate = fakeGate({ completeEmailProof: async () => { throw new EmailProofGateError("REQUEST_EXPIRED", "session gone"); } });
+    const error = await expectHeadless(
+      completeHeadlessReceive({ id: RESUME, code: CODE, gate, store: filePendingStore(dir), access: fakeAccess(), now: NOW + 1000 }),
+      "REQUEST_EXPIRED",
+    );
+    expect(error.exitCode).toBe(3);
+    expect(error.message).toBe("the code request expired; start again with --request-code");
+    expect(await pendingFiles()).toEqual([]);
+  });
 });
 
 describe("credential source seam", () => {
