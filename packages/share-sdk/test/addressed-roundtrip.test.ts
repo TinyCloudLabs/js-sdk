@@ -137,26 +137,6 @@ describe("canonical addressed publication", () => {
     await expect(inspectShare("https://share.tinycloud.xyz/viewer?tc2=legacy-plaintext-envelope")).rejects.toMatchObject({ code: "invalid-link" });
   });
 
-  it("reports a well-formed link at an untrusted origin as origin-mismatch before any request, and keeps malformed links invalid-link", async () => {
-    const originalFetch = globalThis.fetch;
-    let requests = 0;
-    globalThis.fetch = (async () => { requests += 1; throw new Error("no request expected"); }) as unknown as typeof fetch;
-    try {
-      const expectedOrigin = "https://share.tinycloud.xyz";
-      for (const link of [
-        "https://share.tinycloud.xyz.evil.example/s/inline#v=2&p=AAAA",
-        "http://share.tinycloud.xyz/s/inline#v=2&p=AAAA",
-      ]) {
-        await expect(inspectShare(link, { expectedOrigin })).rejects.toMatchObject({ code: "origin-mismatch" });
-      }
-      await expect(inspectShare("not a url", { expectedOrigin })).rejects.toMatchObject({ code: "invalid-link" });
-      await expect(inspectShare(`${expectedOrigin}/s/inline#v=2&p=!!!`, { expectedOrigin })).rejects.toMatchObject({ code: "invalid-link" });
-      expect(requests).toBe(0);
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
-  });
-
   it("does not accept a substituted fragment key or tampered sealed envelope", async () => {
     const { published } = await fixture();
     const material = published.deliveryMaterial!;

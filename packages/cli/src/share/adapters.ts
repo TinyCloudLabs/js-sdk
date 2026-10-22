@@ -1,4 +1,4 @@
-import type { IKVService, TinyCloudNode } from "@tinycloud/node-sdk";
+import type { IKVService } from "@tinycloud/node-sdk";
 import { kvArtifactStore } from "./artifact-store.js";
 import { artifactSpaceNotReady, failIfSpaceNotReady } from "./space-not-ready.js";
 import { ShareHistoryReadError, ShareHistoryRetryError, ShareHistoryUnreadableError, SharePublishAuthorityError } from "./errors.js";

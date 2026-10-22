@@ -863,6 +863,20 @@ describe("tc share command contract", () => {
     expect(inspected).toBe("https://share.example/s/inline#v=2&p=sealed");
     expect(result).toMatchObject({ protocol: "tinycloud-share", version: 1 });
   });
+
+  test("an inline link at an untrusted origin is an origin mismatch before any inspection; one that does not parse is left to share-sdk", async () => {
+    let inspected = 0;
+    const inspect = (async () => { inspected += 1; throw new ShareReceiveError("invalid-link", "share link format is invalid"); }) as never;
+    for (const link of [
+      "https://share.example.evil.example/s/inline#v=2&p=AAAA",
+      "http://share.example/s/inline#v=2&p=AAAA",
+    ]) {
+      await expect(inspectShareInputOnce(link, false, "https://share.example", { inspect })).rejects.toMatchObject({ code: "origin-mismatch" });
+    }
+    expect(inspected).toBe(0);
+    await expect(inspectShareInputOnce("not a url", false, "https://share.example", { inspect })).rejects.toMatchObject({ code: "invalid-link" });
+    expect(inspected).toBe(1);
+  });
 });
 
 describe("safe Share output", () => {

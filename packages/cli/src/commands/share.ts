@@ -285,6 +285,17 @@ function inputUrl(value: string | undefined, stdin: boolean): Promise<string> {
   return Promise.resolve(value);
 }
 
+/**
+ * A link that parses as a URL but is not at the trusted Share origin is an origin mismatch (exit 5),
+ * refused before any request, as for short links. Checked here rather than in share-sdk, so the
+ * browser SDK bundle does not grow; anything that does not parse is left to share-sdk (invalid-link).
+ */
+function assertTrustedShareOrigin(link: string, expectedOrigin: string): void {
+  if (URL.canParse(link) && new URL(link).origin !== expectedOrigin) {
+    throw new ShareReceiveError("origin-mismatch", "share link origin is not the trusted Share origin");
+  }
+}
+
 /** @internal Command seam that guarantees stdin is consumed exactly once. */
 export async function inspectShareInputOnce(
   value: string | undefined,
@@ -301,6 +312,7 @@ export async function inspectShareInputOnce(
   try {
     parseNativeShareUrl(link);
   } catch {
+    assertTrustedShareOrigin(link, expectedOrigin);
     return (dependencies.inspect ?? inspectShare)(link, { expectedOrigin });
   }
   throw new CLIError("UNSUPPORTED_LINK", "native bearer links are opaque; receive the link to verify access", 2);
@@ -586,6 +598,7 @@ export function registerShareCommand(program: Command): void {
           if (json) writeJson({ protocol: "tinycloud-share", version: 1, path: output, transport: "native" }); else receiveHuman(output);
           return;
         }
+        assertTrustedShareOrigin(link, options.viewerOrigin);
         const result = await receiveShare(link, {
           expectedOrigin: options.viewerOrigin,
           ...(maxBytes === undefined ? {} : { maxContentBlobBytes: maxBytes }),
