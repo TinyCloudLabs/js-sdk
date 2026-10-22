@@ -1,3 +1,4 @@
+import { secp256k1 } from "@noble/curves/secp256k1";
 import { recoverEip191Address } from "./crypto";
 import { HELD_LIMITS, sdHash } from "./credential";
 import { parsePkhDid, pkhPrincipalsEqual, toChecksumAddress } from "./did";
@@ -6,7 +7,7 @@ import { refuse } from "./errors";
 import { PRESENTATION_STATEMENT, SD_HASH_RESOURCE_PREFIX, assertValidAudience, parseRfc3339, parseStrictSiwe } from "./siwe";
 import type { HeldPresentation } from "./verify";
 
-/** Signs an EIP-191 `personal_sign` message. Returns `0x` + 130 hex (r, s, v). Called once per presentation. */
+/** Signs an EIP-191 `personal_sign` message. Returns `0x` + 130 hex (r, s, v) with low-S. Called once per presentation. */
 export type HeldPresentationSigner = (message: string) => Promise<string>;
 
 export interface HeldPresentationSiwe {
@@ -23,7 +24,9 @@ export interface BuildHeldPresentationSiweInput {
   sdHash: string;
   /** The holder's `did:pkh:eip155:1:<address>`. */
   account: string;
+  /** Whole seconds only, as RFC 3339 `Z`. Sub-second precision is refused, not truncated. */
   issuedAt: Date;
+  /** Whole seconds only, as RFC 3339 `Z`. Must be after `issuedAt`. */
   expirationTime?: Date;
   /** Produces the signature. Each call builds a fresh message; nothing is cached. */
   sign: HeldPresentationSigner;
@@ -41,9 +44,21 @@ export interface CheckReturnedPresentationOptions {
 const NONCE_FORMAT = /^[0-9A-Za-z]{22,}$/;
 const SD_HASH_FORMAT = /^[A-Za-z0-9_-]{43}$/;
 const SIGNATURE_FORMAT = /^0x[0-9a-fA-F]{130}$/;
+const SECP256K1_HALF_ORDER = secp256k1.CURVE.n / 2n;
 
 function isValidDate(value: unknown): value is Date {
   return value instanceof Date && !Number.isNaN(value.getTime());
+}
+
+/** The node accepts only low-S signatures (`recover_from_prehash`). A high-S twin is refused, not normalised. */
+function hasLowS(signature: string): boolean {
+  return BigInt(`0x${signature.slice(66, 130)}`) <= SECP256K1_HALF_ORDER;
+}
+
+/** RFC 3339 UTC with whole seconds, the form the node fixtures use. Sub-second precision is refused, not dropped. */
+function wholeSecondRfc3339(value: Date, field: string): string {
+  if (value.getUTCMilliseconds() !== 0) refuse("bad-config", `${field} must be a whole second`);
+  return value.toISOString().replace(".000Z", "Z");
 }
 
 function rfc3339Millis(value: string): number {
@@ -59,14 +74,16 @@ function rfc3339Millis(value: string): number {
  */
 export async function buildHeldPresentationSiwe(input: BuildHeldPresentationSiweInput): Promise<HeldPresentationSiwe> {
   const { audience, nonce, sdHash: hash, account, issuedAt, expirationTime, sign } = input;
+  if (typeof audience !== "string") refuse("bad-config", "audience must be a string");
   assertValidAudience(audience);
   const subject = parsePkhDid(account);
   if (subject === null) refuse("bad-config", "account must be a did:pkh:eip155 account");
   if (subject.chainId !== "1") refuse("bad-config", "held presentations are on chain 1");
-  if (!NONCE_FORMAT.test(nonce)) refuse("bad-config", "nonce must be at least 22 base62 characters");
+  if (typeof nonce !== "string" || !NONCE_FORMAT.test(nonce)) refuse("bad-config", "nonce must be at least 22 base62 characters");
   if (typeof hash !== "string" || !SD_HASH_FORMAT.test(hash)) refuse("bad-config", "sdHash must be a base64url SHA-256");
   if (!isValidDate(issuedAt)) refuse("bad-config", "issuedAt must be a valid Date");
   if (expirationTime !== undefined && !isValidDate(expirationTime)) refuse("bad-config", "expirationTime must be a valid Date");
+  if (expirationTime !== undefined && expirationTime.getTime() <= issuedAt.getTime()) refuse("bad-config", "expirationTime must be after issuedAt");
   if (typeof sign !== "function") refuse("bad-config", "sign is required");
 
   const message = [
@@ -79,15 +96,17 @@ export async function buildHeldPresentationSiwe(input: BuildHeldPresentationSiwe
     "Version: 1",
     "Chain ID: 1",
     `Nonce: ${nonce}`,
-    `Issued At: ${issuedAt.toISOString()}`,
-    ...(expirationTime === undefined ? [] : [`Expiration Time: ${expirationTime.toISOString()}`]),
+    `Issued At: ${wholeSecondRfc3339(issuedAt, "issuedAt")}`,
+    ...(expirationTime === undefined ? [] : [`Expiration Time: ${wholeSecondRfc3339(expirationTime, "expirationTime")}`]),
     "Resources:",
     `- ${SD_HASH_RESOURCE_PREFIX}${hash}`,
   ].join("\n");
   parseStrictSiwe(message);
+  if (message.length > HELD_LIMITS.siweMessageChars) refuse("bad-config", "SIWE message exceeds the node limit");
 
   const signature = await sign(message);
   if (typeof signature !== "string" || !SIGNATURE_FORMAT.test(signature)) refuse("bad-config", "signer must return 0x-prefixed 65-byte hex");
+  if (!hasLowS(signature)) refuse("bad-siwe-signature", "signer must return a low-S signature");
   const recovered = recoverEip191Address(message, hexToBytes(signature.slice(2), "bad-siwe-signature"));
   if (recovered !== subject.address) refuse("bad-siwe-signature", "signer does not control the account");
   return { message, signature };
@@ -111,7 +130,7 @@ export function checkReturnedPresentation(presentation: unknown, options: CheckR
   const siweMessage = siwe.message as string;
   const siweSignature = siwe.signature as string;
   if (siweMessage.length > HELD_LIMITS.siweMessageChars) refuse("bad-presentation", "siwe message is too long");
-  if (!SIGNATURE_FORMAT.test(siweSignature)) refuse("bad-siwe-signature", "signature must be 0x-prefixed 65-byte hex");
+  if (!SIGNATURE_FORMAT.test(siweSignature) || !hasLowS(siweSignature)) refuse("bad-siwe-signature", "signature must be 0x-prefixed 65-byte low-S hex");
 
   const parsed = parseStrictSiwe(siweMessage);
   if (parsed.domain !== audience) refuse("bad-siwe", "domain is not the audience");
