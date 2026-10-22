@@ -27,9 +27,10 @@ import {
 import { MAX_JSON_DEPTH, decodeBase64Url, decodeUtf8, asciiBytes, bytesToHex, encodeBase64Url, parseStrictJson } from "./encoding";
 import { HELD_LIMITS } from "./verify";
 import { verifyEd25519Strict } from "./crypto";
-import { parseRfc3339 } from "./siwe";
+import { parseRfc3339, parseStrictSiwe } from "./siwe";
 import { DEFAULT_ROWS, EMAIL_HELD_ROW, ORG_MEMBERSHIP_FREE_ROW, ORG_MEMBERSHIP_ROW, SHIPPED_ROWS, rowPermitsIssuer } from "./rows";
 import { selectDisclosures, sdHash, verifyHeldEmailCredential, type HeldEmailCredentialOptions } from "./credential";
+import { buildHeldPresentationSiwe, checkReturnedPresentation, type BuildHeldPresentationSiweInput, type CheckReturnedPresentationOptions } from "./presentation";
 
 const enc = (value: unknown) => encodeBase64Url(new TextEncoder().encode(typeof value === "string" ? value : JSON.stringify(value)));
 const seed = (n: number) => Uint8Array.from({ length: 32 }, (_, i) => (i + n) & 0xff);
@@ -1366,5 +1367,122 @@ describe("verifyHeldEmailCredential and selectDisclosures (credential only)", ()
     const sdJwt = makeCredential().sdJwt;
     expect(selectCode(sdJwt, ["phone"])).toBe("bad-disclosure");
     expect(selectCode(`${sdJwt}a.b.c`, ["email"])).toBe("bad-presentation");
+  });
+});
+
+// Held presentation builder (S3.4 goal 1) and returned-presentation check (goal 2).
+const PRESENT_NONCE = "AbCdEfGhIjKlMnOpQrSt12";
+const CHECK = { now: NOW, audience: AUDIENCE, account: SUB };
+const otherAddress = () => toChecksumAddress(addressOf(otherKey));
+const holderSign = async (message: string) => personalSign(message, holderKey);
+const fullSdJwt = () => makeCredential().sdJwt;
+const selectedSdJwt = () => selectDisclosures(fullSdJwt(), ["email"]);
+function buildInput(sdJwt: string, extra: Partial<BuildHeldPresentationSiweInput> = {}): BuildHeldPresentationSiweInput {
+  return { audience: AUDIENCE, nonce: PRESENT_NONCE, sdHash: sdHash(sdJwt), account: SUB, issuedAt: new Date(NOW.getTime() - 60_000), sign: holderSign, ...extra };
+}
+function refused(spec: SiweSpec, sdJwt = selectedSdJwt()) {
+  return { sdJwt, siwe: makeSiwe(sdJwt, PRESENT_NONCE, spec) };
+}
+async function checkCode(presentation: unknown, extra: Partial<CheckReturnedPresentationOptions> = {}): Promise<string> {
+  return code(Promise.resolve().then(() => checkReturnedPresentation(presentation, { ...CHECK, ...extra })));
+}
+
+describe("held presentation builder", () => {
+  test("P1: built SIWE passes verifyHeldPresentation and returns the email row", async () => {
+    const h = harness();
+    const nonce = h.store.issue(AUDIENCE, SUB);
+    const sdJwt = selectedSdJwt();
+    const siwe = await buildHeldPresentationSiwe(buildInput(sdJwt, { nonce }));
+    const result = await verifyHeldPresentation({ sdJwt, siwe }, h.options);
+    expect(result.profile).toBe(PROFILE);
+    expect(result.subject).toBe(SUB);
+    expect(result.claims).toEqual({ email: "alice@example.com" });
+  });
+
+  test("P3: resources[0] is the sd_hash of the selected presentation and the address is the holder", async () => {
+    const sdJwt = selectedSdJwt();
+    const siwe = await buildHeldPresentationSiwe(buildInput(sdJwt));
+    const parsed = parseStrictSiwe(siwe.message);
+    expect(parsed.resources).toEqual([`urn:tinycloud:sd-hash:${sdHash(sdJwt)}`]);
+    expect(parsed.address).toBe(HOLDER);
+    expect(parsed.chainId).toBe("1");
+  });
+
+  test("P4: checkReturnedPresentation accepts a presentation signed by the fixture account", async () => {
+    const sdJwt = selectedSdJwt();
+    const siwe = await buildHeldPresentationSiwe(buildInput(sdJwt));
+    expect(checkReturnedPresentation({ sdJwt, siwe }, CHECK)).toEqual({ sdJwt, siwe });
+  });
+
+  test("refuses an account off chain 1", async () => {
+    expect(await code(buildHeldPresentationSiwe(buildInput(selectedSdJwt(), { account: `did:pkh:eip155:137:${HOLDER}` })))).toBe("bad-config");
+  });
+
+  test("refuses a signer that does not control the account", async () => {
+    const sign = async (message: string) => personalSign(message, otherKey);
+    expect(await code(buildHeldPresentationSiwe(buildInput(selectedSdJwt(), { sign })))).toBe("bad-siwe-signature");
+  });
+
+  test("refuses a short nonce and a scheme-prefixed audience", async () => {
+    expect(await code(buildHeldPresentationSiwe(buildInput(selectedSdJwt(), { nonce: "short" })))).toBe("bad-config");
+    expect(await code(buildHeldPresentationSiwe(buildInput(selectedSdJwt(), { audience: `https://${AUDIENCE}` })))).toBe("bad-config");
+  });
+
+  test("signs every build fresh; nothing is cached", async () => {
+    let calls = 0;
+    const sign = async (message: string) => {
+      calls += 1;
+      return personalSign(message, holderKey);
+    };
+    const sdJwt = selectedSdJwt();
+    const first = await buildHeldPresentationSiwe(buildInput(sdJwt, { sign }));
+    const second = await buildHeldPresentationSiwe(buildInput(sdJwt, { sign }));
+    expect(calls).toBe(2);
+    expect(second).toEqual(first);
+  });
+});
+
+describe("returned presentation check", () => {
+  test.each<[string, SiweSpec, string]>([
+    ["wrong statement (N1)", { statement: "Sign in to something else" }, "bad-siwe"],
+    ["domain is not the audience (N2)", { domain: "evil.example.com" }, "bad-siwe"],
+    ["uri is a different origin", { uri: "https://evil.example.com" }, "bad-siwe"],
+    ["uri is not https", { uri: `http://${AUDIENCE}` }, "bad-siwe"],
+    ["version 2", { version: "2" }, "bad-siwe"],
+    ["chain 137 (N4)", { chainId: "137" }, "bad-siwe"],
+    ["resource is the sd_hash of the full credential (N3)", { resources: [`urn:tinycloud:sd-hash:${sdHash(fullSdJwt())}`] }, "bad-siwe"],
+    ["two resources", { resources: [`urn:tinycloud:sd-hash:${sdHash(selectedSdJwt())}`, "urn:tinycloud:sd-hash:x"] }, "bad-siwe"],
+    ["expired", { expirationTime: "2026-10-19T00:00:00.000Z" }, "bad-siwe"],
+    ["not yet valid", { notBefore: "2026-10-21T00:00:00.000Z" }, "bad-siwe"],
+    ["signed by another key (N5)", { signer: otherKey }, "bad-siwe-signature"],
+    ["address is another account", { address: otherAddress(), signer: otherKey }, "bad-siwe"],
+    ["nonce under 22 characters", { nonce: "shortnonce1" }, "bad-nonce"],
+  ])("refuses %s", async (_name, spec, expected) => {
+    expect(await checkCode(refused(spec))).toBe(expected);
+  });
+
+  test("refuses a returned presentation with no siwe signature (N9)", async () => {
+    const sdJwt = selectedSdJwt();
+    const { message } = makeSiwe(sdJwt, PRESENT_NONCE, {});
+    expect(await checkCode({ sdJwt, siwe: { message } })).toBe("bad-presentation");
+  });
+
+  test("refuses extra presentation fields and a non-ASCII sdJwt", async () => {
+    const sdJwt = selectedSdJwt();
+    const siwe = makeSiwe(sdJwt, PRESENT_NONCE, {});
+    expect(await checkCode({ sdJwt, siwe, extra: 1 })).toBe("bad-presentation");
+    expect(await checkCode({ sdJwt: `${sdJwt}é`, siwe })).toBe("bad-presentation");
+  });
+
+  test("refuses a presentation whose SIWE address is not the caller account", async () => {
+    const sdJwt = selectedSdJwt();
+    const siwe = await buildHeldPresentationSiwe(buildInput(sdJwt));
+    expect(await checkCode({ sdJwt, siwe }, { account: `did:pkh:eip155:1:${otherAddress()}` })).toBe("bad-siwe");
+  });
+
+  test("refuses a chain-137 SIWE even when the caller account is also chain 137 (N4, explicit guard)", async () => {
+    const sdJwt = selectedSdJwt();
+    const siwe = makeSiwe(sdJwt, PRESENT_NONCE, { chainId: "137" });
+    expect(await checkCode({ sdJwt, siwe }, { account: `did:pkh:eip155:137:${HOLDER}` })).toBe("bad-siwe");
   });
 });
