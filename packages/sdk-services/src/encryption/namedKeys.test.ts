@@ -398,7 +398,11 @@ describe("error mapping", () => {
 
 describe("envelopes", () => {
   /** Fake node for `/invoke`: unwraps with the key secret and rewraps to the receiver key. */
-  const invokeNode = (secrets: Record<string, Uint8Array>, seen: Recorded[]): Handler => (req) => {
+  const invokeNode = (
+    secrets: Record<string, Uint8Array>,
+    seen: Recorded[],
+    tweak: (response: Record<string, unknown>) => Record<string, unknown> = (r) => r,
+  ): Handler => (req) => {
     if (req.url === `${HOST}/invoke`) {
       seen.push(req);
       const body = JSON.parse(req.body!) as Record<string, string>;
@@ -406,7 +410,7 @@ describe("envelopes", () => {
       const receiver = base64Decode(body.receiverPublicKey!);
       const invocationCid = `cid${/Bearer (\d+)/.exec(req.headers.Authorization!)![1]}`;
       const bodyHash = hexEncode(sha256(utf8Encode(req.body!)));
-      return json({
+      return json(tweak({
         type: DECRYPT_RESULT_TYPE,
         targetNode: NODE,
         networkId: body.networkId,
@@ -419,7 +423,7 @@ describe("envelopes", () => {
         requestHash: hexEncode(sha256(utf8Encode(`${invocationCid}${bodyHash}`))),
         nodeId: NODE,
         nodeSignature: "AA==",
-      });
+      }));
     }
     if (req.url.startsWith(`${KEYS_URL}/`)) {
       const path = req.url.slice(KEYS_URL.length + 1);
@@ -534,5 +538,68 @@ describe("envelopes", () => {
     const h = harness((req) => (req.url === `${HOST}/invoke` ? text("key_blocked: blocked", 403) : req.url.startsWith(KEYS_URL) ? json({ ...descriptor(), state: undefined, kind: undefined }) : undefined));
     const env = await h.client.encrypt(PATH, utf8Encode("x"));
     await expect(h.client.decrypt(env)).rejects.toMatchObject({ code: "KEY_BLOCKED", status: 403 });
+  });
+
+  it("verifies requestHash against its own invocation CID and body hash", async () => {
+    const h = harness(invokeNode({ [PATH]: KEY_PUB }, [], (r) => ({ ...r, requestHash: "0".repeat(64) })));
+    const env = await h.client.encrypt(PATH, utf8Encode("x"));
+    await expect(h.client.decrypt(env)).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
+  });
+
+  it("rejects a response bound to a different invocation CID", async () => {
+    const h = harness(invokeNode({ [PATH]: KEY_PUB }, [], (r) => ({ ...r, invocationCid: "cid-other" })));
+    const env = await h.client.encrypt(PATH, utf8Encode("x"));
+    await expect(h.client.decrypt(env)).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
+  });
+
+  it("encrypt takes keyVersion from the key descriptor, never the network, and decrypt requires the response to echo it", async () => {
+    const h = harness((req) =>
+      req.url === `${KEYS_URL}/${PATH}`
+        ? json({ ...descriptor({ keyVersion: 3 }), state: undefined, kind: undefined })
+        : undefined,
+    );
+    const env = await h.client.encrypt(PATH, utf8Encode("x"));
+    expect(env.keyVersion).toBe(3);
+    // Only /info and the key GET were read: the network descriptor is never consulted.
+    expect(h.requests.map((r) => r.url)).toEqual([`${HOST}/info`, `${KEYS_URL}/${PATH}`]);
+
+    const mismatched = harness(
+      invokeNode({ [PATH]: KEY_PUB }, [], (r) => ({ ...r, keyVersion: 1 })),
+    );
+    await expect(mismatched.client.decrypt(env)).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
+  });
+});
+
+describe("/info caching", () => {
+  const infoCount = (rs: Recorded[]) => rs.filter((r) => r.url === `${HOST}/info`).length;
+
+  it("reads /info once per client across calls, and again after an explicit refresh", async () => {
+    const h = harness(() => json(descriptor()));
+    await h.client.describeKey(PATH);
+    await h.client.describeKey(PATH);
+    await h.client.createKey(PATH);
+    await h.client.getPublicKey(PATH);
+    expect(infoCount(h.requests)).toBe(1);
+    h.client.refreshNodeInfo();
+    await h.client.describeKey(PATH);
+    expect(infoCount(h.requests)).toBe(2);
+  });
+
+  it("coalesces concurrent first calls into one /info read", async () => {
+    const h = harness(() => json(descriptor()));
+    await Promise.all([h.client.describeKey(PATH), h.client.describeKey(PATH), h.client.describeKey(PATH)]);
+    expect(infoCount(h.requests)).toBe(1);
+  });
+
+  it("does not cache a feature-off answer: the retry re-reads and sees an upgraded node", async () => {
+    let features = ["sql"];
+    const h = harness(() => json(descriptor()), {
+      info: () => json({ nodeId: NODE, features }),
+    });
+    await expect(h.client.ensureKey(PATH)).rejects.toMatchObject({ code: "NAMED_KEYS_UNSUPPORTED" });
+    expect(keyRequests(h.requests)).toHaveLength(0);
+    features = ["encryption-named-keys-v1"];
+    expect((await h.client.ensureKey(PATH)).state).toBe("active");
+    expect(infoCount(h.requests)).toBe(2);
   });
 });

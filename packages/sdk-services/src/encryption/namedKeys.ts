@@ -74,7 +74,9 @@ export type NamedKeyErrorCode =
   /** `ensureKey` found a key that is not deterministic. */
   | "KEY_KIND_MISMATCH"
   | "DECRYPT_FAILED"
-  | "NODE_ERROR";
+  | "NODE_ERROR"
+  /** The node object lacks an invocation hook the node-sdk wiring needs. */
+  | "NODE_HOOK_MISSING";
 
 export interface NamedKeyErrorInit {
   status?: number;
@@ -376,7 +378,8 @@ const REQUIRED_ENVELOPE_STRINGS = [
 ] as const;
 
 export class NamedKeyClient {
-  private supported = false;
+  /** One `/info` read per client: the node DID once the feature is confirmed. */
+  private nodeId?: Promise<string>;
 
   constructor(private readonly config: NamedKeyClientConfig) {}
 
@@ -397,18 +400,36 @@ export class NamedKeyClient {
   }
 
   /**
-   * Read `/info` and require the named-keys feature. Returns the node DID.
-   * This is the only request made before the gate passes. A positive answer is
-   * cached; a negative one is re-read on the next call.
+   * Require the named-keys feature and return the node DID. The first call
+   * reads `/info`; a positive answer is cached for the life of this client, so
+   * later calls make no `/info` request. A node without the feature is NOT
+   * cached: the typed `NAMED_KEYS_UNSUPPORTED` error is thrown and the next
+   * call re-reads (so a retry sees an upgraded node). No key request is made
+   * before the gate passes.
    */
-  private async requireNode(): Promise<string> {
+  private requireNode(): Promise<string> {
+    if (this.nodeId === undefined) {
+      const pending = this.readNodeInfo();
+      this.nodeId = pending;
+      pending.catch(() => {
+        if (this.nodeId === pending) this.nodeId = undefined;
+      });
+    }
+    return this.nodeId;
+  }
+
+  /** Drop the cached `/info` answer; the next call reads it again. */
+  refreshNodeInfo(): void {
+    this.nodeId = undefined;
+  }
+
+  private async readNodeInfo(): Promise<string> {
     const response = await this.config.fetch(`${this.config.host}/info`);
     if (!response.ok) {
       throw mapNodeKeyError(response.status, await safeText(response), "failed to read node info");
     }
     const info = (await response.json()) as { nodeId?: unknown; features?: unknown };
     if (!nodeSupportsNamedKeys(info)) {
-      this.supported = false;
       throw new NamedKeyError(
         "NAMED_KEYS_UNSUPPORTED",
         "this node does not support named encryption keys",
@@ -417,7 +438,6 @@ export class NamedKeyClient {
     if (typeof info.nodeId !== "string" || info.nodeId.length === 0) {
       throw invalidResponse("/info response (nodeId missing)");
     }
-    this.supported = true;
     return info.nodeId;
   }
 

@@ -13,6 +13,7 @@
 
 import {
   NamedKeyClient,
+  NamedKeyError,
   type NamedKeyClientConfig,
 } from "@tinycloud/sdk-services/encryption/named-keys";
 import type { EncryptionCrypto } from "@tinycloud/sdk-services";
@@ -61,11 +62,13 @@ export function createNamedKeyClient(
   options: CreateNamedKeyClientOptions = {},
 ): NamedKeyClient {
   const internals = node as unknown as Partial<NodeSigningInternals>;
-  if (
-    typeof internals.signRawNetworkAuthorization !== "function" ||
-    typeof internals.createEncryptionCrypto !== "function"
-  ) {
-    throw new Error("TinyCloudNode does not expose the invocation signer required for named keys");
+  for (const hook of ["signRawNetworkAuthorization", "createEncryptionCrypto"] as const) {
+    if (typeof internals[hook] !== "function") {
+      throw new NamedKeyError(
+        "NODE_HOOK_MISSING",
+        `TinyCloudNode.${hook} is not available; named keys cannot sign invocations`,
+      );
+    }
   }
   const signer = internals as NodeSigningInternals;
   const host = node.hosts[0];

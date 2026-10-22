@@ -213,3 +213,35 @@ test("v1 envelopes decrypt through the node's existing root-key service, with no
   expect(seen).toHaveLength(0);
   expect(signRaw).not.toHaveBeenCalled();
 });
+
+test("createNamedKeyClient resolves both signing hooks on an unstubbed TinyCloudNode", () => {
+  // A rename of either private hook on TinyCloudNode fails here, not in production.
+  const node = new TinyCloudNode({
+    host: HOST,
+    signer: {
+      getAddress: async () => ADDRESS,
+      getChainId: async () => 1,
+      signMessage: mock(async () => "0xsig"),
+    } as never,
+    wasmBindings: makeWasmBindings(),
+  });
+  const hooks = node as unknown as Record<string, unknown>;
+  expect(typeof hooks.signRawNetworkAuthorization).toBe("function");
+  expect(typeof hooks.createEncryptionCrypto).toBe("function");
+  expect(() => createNamedKeyClient(node)).not.toThrow();
+});
+
+test("a node missing a hook throws a typed error naming it", () => {
+  for (const hook of ["signRawNetworkAuthorization", "createEncryptionCrypto"]) {
+    const { node } = makeNode();
+    Object.defineProperty(node, hook, { value: undefined });
+    let thrown: unknown;
+    try {
+      createNamedKeyClient(node);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toMatchObject({ name: "NamedKeyError", code: "NODE_HOOK_MISSING" });
+    expect((thrown as Error).message).toContain(hook);
+  }
+});
