@@ -29,6 +29,7 @@
     "@tinycloud/sdk-services-test": "19.0.0"
   },
   "changesets": [
+    "cli-revoke-authority-expiry",
     "replica-sdk-services-3-3-1"
   ]
 }

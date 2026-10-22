@@ -32276,6 +32276,7 @@ async function lookupOwnerSpaceOnNode(node, cid, ownerDid) {
 }
 
 // src/lib/revoke-delegation.ts
+var REVOKE_AUTHORITY_EXPIRY = "5m";
 function normalizeDid2(input) {
   const trimmed = input.trim();
   const fragment = trimmed.indexOf("#");
@@ -32400,7 +32401,7 @@ async function revokeDelegationOnNode(params) {
         profile,
         node,
         requested: [revokePermission],
-        expiryOption: void 0,
+        expiryOption: REVOKE_AUTHORITY_EXPIRY,
         reason: `Revoke delegation ${cid}`,
         yes: params.yes,
         consentAlreadyGiven: true,
@@ -32446,7 +32447,7 @@ async function revokeDelegationOnNode(params) {
           path: "",
           actions: ["tinycloud.delegation/revoke"]
         }],
-        expiryOption: void 0,
+        expiryOption: REVOKE_AUTHORITY_EXPIRY,
         reason: fallback.source === "node-delegation-record" ? `Revoke delegation ${cid} using the node's record of the owner's grant` : `Revoke delegation ${cid} using its CID-bound owner-signed grant ${fallback.source === "local-stored-grant" ? "record" : "artifact"}`,
         yes: params.yes,
         consentAlreadyGiven: true,
@@ -34599,6 +34600,13 @@ async function ensureDelegationAuthority(params) {
   }
   if (params.profile.authMethod === "openkey") {
     if (params.persist === false) {
+      if (params.expiryOption === void 0) {
+        throw new CLIError(
+          "AUTHORITY_EXPIRY_REQUIRED",
+          "One-use command authority needs an explicit lifetime; none was given, so no approval was requested.",
+          ExitCode.ERROR
+        );
+      }
       const { delegation } = await acquireOpenKeyApproval(params);
       await params.node.useRuntimeDelegation(delegation);
       return delegation;
