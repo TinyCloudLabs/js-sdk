@@ -9,6 +9,13 @@ export type UiPosition =
 
 type BottomPosition = "bottom-right" | "bottom-left" | "bottom-center";
 
+/**
+ * Which layouts the settings panel offers. `"both"` (default) opens the sidebar
+ * with an "Open full page" control. `"sidebar"` offers the sidebar only. `"page"`
+ * opens the full page directly.
+ */
+export type UiMode = "sidebar" | "page" | "both";
+
 /** Config passed as `ui` on TinyCloudWeb. `ui: false` disables the UI entirely (see index.ts). */
 export interface UiConfig {
   /** Default true. false hides the button only; the panel, prompts, and open() still work. */
@@ -21,6 +28,8 @@ export interface UiConfig {
   position?: UiPosition;
   /** Explicit identity for the hide flag when no manifest is set. */
   appId?: string;
+  /** Default "both". Which layouts the panel offers. */
+  mode?: UiMode;
 }
 
 export interface ResolvedUiConfig {
@@ -29,6 +38,7 @@ export interface ResolvedUiConfig {
   readonly developerMode: boolean;
   readonly position: BottomPosition;
   readonly appId: string | undefined;
+  readonly mode: UiMode;
 }
 
 const PLACEMENT: Record<UiPosition, BottomPosition> = {
@@ -52,5 +62,6 @@ export function resolveUiConfig(ui: UiConfig | undefined): ResolvedUiConfig {
     developerMode: ui?.developerMode === true,
     position,
     appId: ui?.appId,
+    mode: ui?.mode === "sidebar" || ui?.mode === "page" ? ui.mode : "both",
   };
 }
