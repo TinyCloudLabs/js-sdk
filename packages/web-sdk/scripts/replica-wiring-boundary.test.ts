@@ -11,7 +11,7 @@ import { replicaOwnedPath } from "./replica-owned-path";
  * parses the real files with the TypeScript compiler; it never matches text in a diff.
  */
 const REPLICA_NAME = /replica|replication/i;
-const FORBIDDEN_NAMES = ["registerNodeReplicationLoaders", "registeredBrowserReplica"];
+const NEVER_OUTSIDE_WIRING = ["registerNodeReplicationLoaders", "registeredBrowserReplica"];
 
 type Kind = "tcw" | "index";
 type Rule = {
@@ -19,6 +19,8 @@ type Rule = {
   wiring: string;
   /** Replica-named identifiers allowed in the file, and where. */
   allowed: Record<string, "property" | "wiring-import-or-call" | "wiring-reexport">;
+  /** Names that must not appear at all, even as strings or where they would be allow-listed. */
+  forbidden: string[];
 };
 const RULES: Record<Kind, Rule> = {
   tcw: {
@@ -30,6 +32,8 @@ const RULES: Record<Kind, Rule> = {
       validateReplicationConfig: "wiring-import-or-call",
       resolveReplicationConfig: "wiring-import-or-call",
     },
+    // The plugin type and its registration live only in the wiring module; index.ts re-exports them, tcw.ts never names them.
+    forbidden: [...NEVER_OUTSIDE_WIRING, "registerBrowserReplica", "BrowserReplicaPlugin"],
   },
   index: {
     wiring: "./modules/replica-wiring",
@@ -46,6 +50,7 @@ const RULES: Record<Kind, Rule> = {
       __replicaPrincipalDid: "wiring-reexport",
       __replicaSiweMessage: "wiring-reexport",
     },
+    forbidden: NEVER_OUTSIDE_WIRING,
   },
 };
 
@@ -106,9 +111,35 @@ export function replicaWiringViolations(kind: Kind, source: string): string[] {
         report(node, `replica module loaded from "${target.text}"`);
       }
     }
+    // `import r = require("…")` and `type X = import("…").Y` load modules like an import declaration.
+    if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference) &&
+        ts.isStringLiteralLike(node.moduleReference.expression)) {
+      const target = node.moduleReference.expression.text;
+      if (target !== rule.wiring && (REPLICA_NAME.test(target) || REPLICA_NAME.test(node.name.text))) {
+        report(node, `replica import-equals from "${target}"; only ${rule.wiring} may supply replica names`);
+      }
+    }
+    if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument) && ts.isStringLiteral(node.argument.literal)) {
+      const target = node.argument.literal.text;
+      if (target !== rule.wiring && REPLICA_NAME.test(target)) {
+        report(node, `replica type import from "${target}"; only ${rule.wiring} may supply replica names`);
+      }
+    }
+    // A replica-named string used as a key (`core["registerReplicationLoaders"]`, `Config["replication"]`,
+    // `{ "replication": … }`) is a property name like an identifier and follows the same allow-list.
+    if (ts.isStringLiteralLike(node) && REPLICA_NAME.test(node.text)) {
+      const parent = node.parent;
+      const isKey = (ts.isElementAccessExpression(parent) && parent.argumentExpression === node) ||
+        (ts.isLiteralTypeNode(parent) && ts.isIndexedAccessTypeNode(parent.parent) && parent.parent.indexType === parent) ||
+        ((ts.isPropertyAssignment(parent) || ts.isPropertySignature(parent) || ts.isPropertyDeclaration(parent) ||
+          ts.isMethodDeclaration(parent) || ts.isGetAccessorDeclaration(parent)) && parent.name === node);
+      if (isKey && !(Object.hasOwn(rule.allowed, node.text) && rule.allowed[node.text] === "property")) {
+        report(node, `replica key "${node.text}" is not allow-listed in this position`);
+      }
+    }
     // (c) The wiring's private state and the Node loader registration never appear here.
     const literal = ts.isIdentifier(node) || ts.isStringLiteralLike(node) ? node.text : undefined;
-    if (literal !== undefined && FORBIDDEN_NAMES.some((name) => literal.includes(name))) {
+    if (literal !== undefined && rule.forbidden.some((name) => literal.includes(name))) {
       report(node, `"${literal}" belongs to replica-wiring`);
     }
     // (b) Replica-named identifiers outside the explicit allow-list.
@@ -199,6 +230,41 @@ describe("replica wiring is a file boundary", () => {
 
     it("fails on the wiring's private names even inside strings", () => {
       expect(replicaWiringViolations("tcw", `${allowListedOnly}\nconst s = "registeredBrowserReplica";`)).not.toEqual([]);
+    });
+
+    it("never names the plugin type or its registration, even where they would be imported from the wiring module", () => {
+      const registration = replicaWiringViolations("tcw", `${allowListedOnly}\nimport { registerBrowserReplica } from "./replica-wiring";`);
+      expect(registration.some((v) => v.includes('"registerBrowserReplica" belongs to replica-wiring'))).toBe(true);
+      const plugin = replicaWiringViolations("tcw", `${allowListedOnly}\nimport type { BrowserReplicaPlugin } from "./replica-wiring";`);
+      expect(plugin.some((v) => v.includes('"BrowserReplicaPlugin" belongs to replica-wiring'))).toBe(true);
+      const asString = replicaWiringViolations("tcw", `${allowListedOnly}\nconst s = "registerBrowserReplica";`);
+      expect(asString.some((v) => v.includes("belongs to replica-wiring"))).toBe(true);
+    });
+
+    it("fails on `import r = require(...)` of a replica module or name", () => {
+      const module = replicaWiringViolations("tcw", `import r = require("../replica");\n${allowListedOnly}`);
+      expect(module.some((v) => v.includes("replica import-equals"))).toBe(true);
+      const name = replicaWiringViolations("tcw", `import registerReplica = require("@tinycloud/node-sdk/core");\n${allowListedOnly}`);
+      expect(name.some((v) => v.includes("replica import-equals"))).toBe(true);
+      expect(replicaWiringViolations("tcw", `import core = require("@tinycloud/node-sdk/core");\n${allowListedOnly}`)).toEqual([]);
+    });
+
+    it("fails on a type import of a replica module or name", () => {
+      const module = replicaWiringViolations("tcw", `type P = import("../replica").Plugin;\n${allowListedOnly}`);
+      expect(module.some((v) => v.includes("replica type import"))).toBe(true);
+      const name = replicaWiringViolations("tcw", `type L = import("@tinycloud/node-sdk/core").ReplicationModuleLoaders;\n${allowListedOnly}`);
+      expect(name.some((v) => v.includes("ReplicationModuleLoaders"))).toBe(true);
+      expect(replicaWiringViolations("tcw", `type N = import("@tinycloud/node-sdk/core").TinyCloudNode;\n${allowListedOnly}`)).toEqual([]);
+    });
+
+    it("fails on a replica name used as an element-access or indexed-type key, but allows the `replication` key", () => {
+      const call = replicaWiringViolations("tcw", `${allowListedOnly}\ncore["registerReplicationLoaders"](loaders);`);
+      expect(call.some((v) => v.includes('replica key "registerReplicationLoaders"'))).toBe(true);
+      const indexed = replicaWiringViolations("tcw", `${allowListedOnly}\ntype R = Plugin["replicaThing"];`);
+      expect(indexed.some((v) => v.includes('replica key "replicaThing"'))).toBe(true);
+      const keyed = replicaWiringViolations("tcw", `${allowListedOnly}\nconst o = { "replicaStatus": 1 };`);
+      expect(keyed.some((v) => v.includes('replica key "replicaStatus"'))).toBe(true);
+      expect(replicaWiringViolations("tcw", `${allowListedOnly}\nconst r = config["replication"];`)).toEqual([]);
     });
   });
 
