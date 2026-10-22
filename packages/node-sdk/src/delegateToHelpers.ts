@@ -10,6 +10,8 @@
  */
 
 import {
+  actionContains,
+  ENCRYPTION,
   type PermissionEntry,
   parseExpiry,
   SiweMessage,
@@ -70,6 +72,19 @@ export function legacyParamsToPermissionEntries(
  * even if a caller asks. See `@tinycloud/sdk-core/expiry.ts`.
  */
 export const DEFAULT_DELEGATION_EXPIRY_MS = EXPIRY.SESSION_MS;
+
+/**
+ * Whether any entry grants the decrypt action: by its literal URN or through a
+ * wildcard that covers it (`*`, `tinycloud.encryption/*`), per
+ * `actionContains`. Entries must already be expanded (`expandPermissionEntries`)
+ * so short names are full URNs. Internal only: not re-exported from the package
+ * index.
+ */
+export function includesDecrypt(entries: readonly PermissionEntry[]): boolean {
+  return entries.some((entry) =>
+    entry.actions.some((action) => actionContains(action, ENCRYPTION.DECRYPT)),
+  );
+}
 
 /**
  * Resolve the `expiry` option of {@link DelegateToOptions} into a concrete

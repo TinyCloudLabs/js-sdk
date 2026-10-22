@@ -207,6 +207,7 @@ import {
   legacyParamsToPermissionEntries,
   resolveExpiryMs,
   extractSiweExpiration,
+  includesDecrypt,
 } from "./delegateToHelpers";
 import { NodeSecretsService } from "./NodeSecretsService";
 
@@ -6586,7 +6587,7 @@ export class TinyCloudNode {
     }
 
     const expanded = this.expandPermissionEntries(permissions);
-    const requestsDecrypt = expanded.some((entry) => entry.actions.includes(DECRYPT_ACTION));
+    const requestsDecrypt = includesDecrypt(expanded);
     const explicitExpiryMs = options?.expiry === undefined
       ? undefined
       : resolveExpiryMs(options.expiry);

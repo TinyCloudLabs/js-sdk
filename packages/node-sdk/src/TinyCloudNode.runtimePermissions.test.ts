@@ -1481,6 +1481,67 @@ test("mixed kv and decrypt runtime grants default every delegation to one hour",
   expectEveryExpiryNear(node, delegations, before + 60 * 60_000);
 });
 
+const DECRYPT_WILDCARD_KV_PERMISSION: PermissionEntry = {
+  service: "tinycloud.kv",
+  space: "secrets",
+  path: "vault/",
+  actions: ["tinycloud.encryption/*"],
+};
+
+test("decrypt wildcard runtime grants default to a one-hour expiry", async () => {
+  const node = makeExpiryTestNode();
+  const before = Date.now();
+  let delegations: Array<{ expiry: Date }> = [];
+  await withActivatedDelegations(async () => {
+    delegations = await node.grantRuntimePermissions([DECRYPT_WILDCARD_KV_PERMISSION]);
+  });
+
+  expectEveryExpiryNear(node, delegations, before + 60 * 60_000);
+});
+
+test("decrypt wildcard runtime grants refuse an explicit expiry over one hour", async () => {
+  const node = makeExpiryTestNode();
+  await withActivatedDelegations(async () => {
+    await expect(node.grantRuntimePermissions([DECRYPT_WILDCARD_KV_PERMISSION], { expiry: "7d" }))
+      .rejects.toMatchObject({ code: "DECRYPT_EXPIRY_TOO_LONG" });
+  });
+  expect(allPrepareExpiryMs(node)).toHaveLength(0);
+});
+
+test("non-encryption wildcard runtime grants keep the 30-day default", async () => {
+  const node = makeExpiryTestNode();
+  const permission: PermissionEntry = {
+    service: "tinycloud.kv",
+    space: "secrets",
+    path: "vault/",
+    actions: ["tinycloud.kv/*"],
+  };
+  const before = Date.now();
+  let delegations: Array<{ expiry: Date }> = [];
+  await withActivatedDelegations(async () => {
+    delegations = await node.grantRuntimePermissions([permission]);
+  });
+
+  expectEveryExpiryNear(node, delegations, before + 30 * 24 * 60 * 60_000);
+});
+
+test("non-encryption wildcard runtime grants accept an explicit 7d expiry", async () => {
+  const node = makeExpiryTestNode();
+  const permission: PermissionEntry = {
+    service: "tinycloud.kv",
+    space: "secrets",
+    path: "vault/",
+    actions: ["tinycloud.kv/*"],
+  };
+  const before = Date.now();
+  let delegations: Array<{ expiry: Date }> = [];
+  await withActivatedDelegations(async () => {
+    delegations = await node.grantRuntimePermissions([permission], { expiry: "7d" });
+  });
+
+  expectEveryExpiryNear(node, delegations, before + 7 * 24 * 60 * 60_000);
+});
+
 test("mixed kv and decrypt runtime grants honour an explicit one-hour expiry for every delegation", async () => {
   const node = makeExpiryTestNode();
   const before = Date.now();
