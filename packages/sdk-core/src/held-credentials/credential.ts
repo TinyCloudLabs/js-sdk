@@ -41,6 +41,7 @@ const JTI_UUID_V4 = /^urn:uuid:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-
 
 /** Base64url of SHA-256 over the ASCII bytes of the whole SD-JWT text (the sd_hash the SIWE resource binds). */
 export function sdHash(sdJwt: string): string {
+  if (typeof sdJwt !== "string" || !isAscii(sdJwt)) refuse("bad-presentation", "sdJwt must be an ASCII string");
   return encodeBase64Url(sha256(asciiBytes(sdJwt)));
 }
 
@@ -226,6 +227,7 @@ export interface HeldEmailCredentialOptions {
  * Verifies a held email credential on its own. No presentation proof and no nonce: the caller must
  * already hold the SD-JWT and have authenticated `owner`. Refuses an owner mismatch with the same
  * code as the presentation path. Synchronous; the email row is fixed.
+ * The code `nonce-account-mismatch` is kept for parity with the presentation path. This path spends no nonce.
  */
 export function verifyHeldEmailCredential(sdJwt: unknown, options: HeldEmailCredentialOptions): VerifiedHeldCredential {
   const { now, issuerSet, acceptedIssuers, didMethods, owner } = options;
@@ -264,6 +266,7 @@ export function selectDisclosures(sdJwt: string, names: readonly string[]): stri
     if (!Array.isArray(decoded) || decoded.length !== 3 || typeof decoded[1] !== "string") refuse("bad-disclosure", "disclosure must be [salt, name, value]");
     const name = decoded[1] as string;
     if (names.includes(name)) {
+      if (found.has(name)) refuse("bad-disclosure", `duplicate disclosure for ${name}`);
       kept.push(disclosure);
       found.add(name);
     }

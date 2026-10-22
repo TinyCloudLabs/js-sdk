@@ -1207,6 +1207,28 @@ function credentialCode(sdJwt: unknown, overrides: Partial<HeldEmailCredentialOp
   }
 }
 
+/** Sync counterpart for `sdHash`, which refuses with a HeldCredentialError. */
+function hashCode(value: unknown): string {
+  try {
+    sdHash(value as string);
+    return "ok";
+  } catch (error) {
+    if (error instanceof HeldCredentialError) return error.code;
+    throw error;
+  }
+}
+
+/** Sync counterpart for `selectDisclosures`. */
+function selectCode(sdJwt: string, names: string[]): string {
+  try {
+    selectDisclosures(sdJwt, names);
+    return "ok";
+  } catch (error) {
+    if (error instanceof HeldCredentialError) return error.code;
+    throw error;
+  }
+}
+
 describe("verifyHeldEmailCredential and selectDisclosures (credential only)", () => {
   test("P1: the shipped Node vector verifies", async () => {
     const vector = await Bun.file(new URL("vector.json", VECTOR_DIR)).json();
@@ -1313,5 +1335,36 @@ describe("verifyHeldEmailCredential and selectDisclosures (credential only)", ()
   test("N17 a flipped signature byte is refused with bad-signature", () => {
     const sdJwt = makeCredential({ signature: (sig) => { const flipped = sig.slice(); flipped[0] ^= 1; return flipped; } }).sdJwt;
     expect(credentialCode(sdJwt)).toBe("bad-signature");
+  });
+
+  test("M2 owner in lowercase form for the EIP-55 subject is accepted", () => {
+    expect(credentialCode(makeCredential().sdJwt, { owner: `did:pkh:eip155:1:${HOLDER_LOWER}` })).toBe("ok");
+  });
+
+  test("M2b the same address on chain 137 is refused with nonce-account-mismatch", () => {
+    expect(credentialCode(makeCredential().sdJwt, { owner: `did:pkh:eip155:137:${HOLDER}` })).toBe("nonce-account-mismatch");
+  });
+
+  test("S1 sdHash refuses non-ASCII and non-string input with bad-presentation", () => {
+    expect(hashCode("\u0169")).toBe("bad-presentation");
+    expect(hashCode(42)).toBe("bad-presentation");
+    expect(hashCode(undefined)).toBe("bad-presentation");
+  });
+
+  test("S2 selectDisclosures refuses a repeated disclosure for a requested name with bad-disclosure", () => {
+    const sdJwt = makeCredential({ rawDisclosures: [disclosure("email", "alice@example.com").text] }).sdJwt;
+    expect(selectCode(sdJwt, ["email"])).toBe("bad-disclosure");
+  });
+
+  test("S3 selectDisclosures refuses empty or duplicate names with bad-config", () => {
+    const sdJwt = makeCredential().sdJwt;
+    expect(selectCode(sdJwt, [])).toBe("bad-config");
+    expect(selectCode(sdJwt, ["email", "email"])).toBe("bad-config");
+  });
+
+  test("S4 selectDisclosures refuses an absent name with bad-disclosure and a key-binding suffix with bad-presentation", () => {
+    const sdJwt = makeCredential().sdJwt;
+    expect(selectCode(sdJwt, ["phone"])).toBe("bad-disclosure");
+    expect(selectCode(`${sdJwt}a.b.c`, ["email"])).toBe("bad-presentation");
   });
 });
