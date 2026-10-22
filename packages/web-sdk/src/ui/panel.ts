@@ -16,19 +16,26 @@ export interface PanelHandle {
   readonly main: HTMLElement;
   setOpen(open: boolean): void;
   setLayout(layout: ShellLayout, showLayoutToggle: boolean): void;
+  /** App name shown after "TinyCloud". Undefined hides it and the page back label. */
+  setAppLabel(label: string | undefined): void;
   setNav(items: readonly NavItem[], active: SectionId | undefined): void;
   setStatus(status: StatusCode | null): void;
   focusFirst(): void;
 }
 
 export interface PanelOptions {
-  readonly hideAvailable: boolean;
-  onHide(): void;
   onClose(): void;
   onEscape(): void;
   onLayout(target: ShellLayout): void;
   onNavigate(id: SectionId): void;
 }
+
+interface NavEntry {
+  readonly btn: HTMLButtonElement;
+  readonly index: HTMLSpanElement;
+}
+
+const SVG_NS = "http://www.w3.org/2000/svg";
 
 function actionButton(label: string, onClick: () => void): HTMLButtonElement {
   const el = document.createElement("button");
@@ -58,49 +65,84 @@ export function createPanel(options: PanelOptions): PanelHandle {
     options.onEscape();
   });
 
+  let layout: ShellLayout = "drawer";
+  let appLabel: string | undefined;
   let nextLayout: ShellLayout = "page";
+
   const title = document.createElement("h2");
   title.className = "title";
   title.textContent = text("panel.title");
+  const ctx = document.createElement("span");
+  ctx.className = "ctx";
+  ctx.hidden = true;
+  const brand = document.createElement("div");
+  brand.className = "brand";
+  brand.append(title, ctx);
+
   const status = document.createElement("span");
   status.className = "status";
   status.hidden = true;
 
   const layoutToggle = actionButton("", () => options.onLayout(nextLayout));
   layoutToggle.hidden = true;
-  const hide = options.hideAvailable ? actionButton(text("panel.hide"), () => options.onHide()) : undefined;
-  const close = actionButton(text("panel.close"), () => options.onClose());
+
+  // One close control. Drawer: icon button. Page: text action that returns to the host app.
+  const close = document.createElement("button");
+  close.type = "button";
+  close.addEventListener("click", () => options.onClose());
+  const glyph = document.createElementNS(SVG_NS, "svg");
+  glyph.setAttribute("viewBox", "0 0 24 24");
+  glyph.setAttribute("aria-hidden", "true");
+  const glyphPath = document.createElementNS(SVG_NS, "path");
+  glyphPath.setAttribute("d", "M6 6l12 12M18 6L6 18");
+  glyph.append(glyphPath);
+
+  function paintClose(): void {
+    if (layout === "drawer") {
+      close.className = "icon-btn ring";
+      close.setAttribute("aria-label", text("panel.close"));
+      close.replaceChildren(glyph);
+      return;
+    }
+    close.className = "action";
+    close.removeAttribute("aria-label");
+    close.textContent = appLabel === undefined ? text("panel.close") : `${text("panel.back")} ${appLabel}`;
+  }
+  paintClose();
+
   const actions = document.createElement("div");
   actions.className = "head-actions";
-  actions.append(layoutToggle);
-  if (hide) actions.append(hide);
-  actions.append(close);
+  actions.append(layoutToggle, close);
 
   const head = document.createElement("header");
   head.className = "head";
-  head.append(title, status, actions);
+  head.append(brand, status, actions);
 
   const nav = document.createElement("nav");
   nav.className = "nav";
   nav.setAttribute("aria-label", text("panel.sections"));
-  const navButtons = new Map<SectionId, HTMLButtonElement>();
+  const navButtons = new Map<SectionId, NavEntry>();
 
   const main = document.createElement("div");
   main.className = "main";
 
   el.append(head, nav, main);
 
-  function navButton(item: NavItem): HTMLButtonElement {
+  function navButton(item: NavItem): NavEntry {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "nav-i";
     btn.dataset.section = item.id;
+    // Index is decorative (page rail only); aria-hidden keeps the accessible name equal to the label.
+    const index = document.createElement("span");
+    index.className = "nav-n";
+    index.setAttribute("aria-hidden", "true");
     const label = document.createElement("span");
     label.className = "nav-l";
     label.textContent = text(item.labelCode);
-    btn.append(label);
+    btn.append(index, label);
     btn.addEventListener("click", () => options.onNavigate(item.id));
-    return btn;
+    return { btn, index };
   }
 
   return {
@@ -109,30 +151,39 @@ export function createPanel(options: PanelOptions): PanelHandle {
     setOpen(open) {
       el.hidden = !open;
     },
-    setLayout(layout, showLayoutToggle) {
-      el.dataset.layout = layout;
-      nextLayout = layout === "drawer" ? "page" : "drawer";
-      layoutToggle.textContent = text(layout === "drawer" ? "panel.open_page" : "panel.show_sidebar");
+    setLayout(next, showLayoutToggle) {
+      layout = next;
+      el.dataset.layout = next;
+      nextLayout = next === "drawer" ? "page" : "drawer";
+      layoutToggle.textContent = text(next === "drawer" ? "panel.open_page" : "panel.show_sidebar");
       layoutToggle.hidden = !showLayoutToggle;
+      paintClose();
+    },
+    setAppLabel(label) {
+      appLabel = label;
+      ctx.hidden = label === undefined;
+      ctx.textContent = label === undefined ? "" : `${text("panel.in")} ${label}`;
+      paintClose();
     },
     setNav(items, active) {
       const wanted = new Set(items.map((item) => item.id));
-      for (const [id, btn] of navButtons) {
+      for (const [id, entry] of navButtons) {
         if (wanted.has(id)) continue;
-        btn.remove();
+        entry.btn.remove();
         navButtons.delete(id);
       }
-      items.forEach((item, index) => {
-        let btn = navButtons.get(item.id);
-        if (!btn) {
-          btn = navButton(item);
-          navButtons.set(item.id, btn);
+      items.forEach((item, position) => {
+        let entry = navButtons.get(item.id);
+        if (!entry) {
+          entry = navButton(item);
+          navButtons.set(item.id, entry);
         }
+        entry.index.textContent = String(position + 1).padStart(2, "0");
         // Reorder only when a new item lands out of place, so focus on a
         // mounted button is not disturbed by unrelated updates.
-        if (nav.children[index] !== btn) nav.insertBefore(btn, nav.children[index] ?? null);
-        if (item.id === active) btn.setAttribute("aria-current", "page");
-        else btn.removeAttribute("aria-current");
+        if (nav.children[position] !== entry.btn) nav.insertBefore(entry.btn, nav.children[position] ?? null);
+        if (item.id === active) entry.btn.setAttribute("aria-current", "page");
+        else entry.btn.removeAttribute("aria-current");
       });
     },
     setStatus(next) {

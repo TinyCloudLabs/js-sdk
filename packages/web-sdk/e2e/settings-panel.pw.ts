@@ -307,7 +307,8 @@ for (const scheme of ["light", "dark"] as const) {
 
       await expect.poll(() => openPanelViolations(page, size)).toEqual([]);
 
-      await launcher.click();
+      // The open drawer covers the launcher, so close it through its own control.
+      await page.locator("#tinycloud-ui-panel").getByRole("button", { name: "Close", exact: true }).click();
       await expect(page.locator("#tinycloud-ui-panel")).toBeHidden();
       await expect.poll(() => closedLauncherViolations(page, size)).toEqual([]);
     });

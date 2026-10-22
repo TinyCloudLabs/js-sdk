@@ -61,6 +61,12 @@ export interface HostContext {
   toast(t: ToastRequest): string | null;
   /** strings.ts lookup. Unknown codes return the neutral line, never raw text. */
   text(code: string): string;
+  /** App name for the header ("in <app>"). Undefined when the app id is the page fallback. */
+  appLabel(): string | undefined;
+  /** True when the launcher button exists, so Overview can offer to hide it. */
+  canHideButton(): boolean;
+  /** Hides the launcher button, persists it, and closes the panel. */
+  hideButton(): void;
 }
 
 /** A body section in the panel. Mounted only while the panel is open and `isAvailable`. */

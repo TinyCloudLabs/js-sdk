@@ -5,7 +5,7 @@ import { createPanel, type PanelHandle, type ShellLayout } from "./panel";
 import { HOST_PARTS } from "./parts";
 import { toastStore } from "./parts/toasts";
 import type { ToastRequest } from "./toast-store";
-import { createButtonHideStore, defaultLocalStorage, resolveUiAppId, type HideScope } from "./persistence";
+import { createButtonHideStore, defaultLocalStorage, FALLBACK_APP_ID, resolveUiAppId, type HideScope } from "./persistence";
 import { PANEL_SECTIONS } from "./sections";
 import type { HostContext, SectionId, StatusCode } from "./slots";
 import { createStatusBoard } from "./status";
@@ -157,6 +157,12 @@ export function createHostRuntime(): HostRuntime {
     toastsEnabled: () => primaryConfig()?.toasts !== false,
     toast: (t) => (context.toastsEnabled() ? toastStore.push(t) : null),
     text,
+    appLabel() {
+      const appId = hideScope().appId;
+      return appId === FALLBACK_APP_ID ? undefined : appId;
+    },
+    canHideButton: () => primaryConfig()?.button === true,
+    hideButton: hideFromPanel,
   };
 
   function closeSections(): void {
@@ -172,6 +178,7 @@ export function createHostRuntime(): HostRuntime {
     const current = available.find((section) => section.id === activeSection) ?? available[0];
     activeSection = current?.id;
     mounted.panel.setLayout(layout, (primaryConfig()?.mode ?? "both") === "both");
+    mounted.panel.setAppLabel(context.appLabel());
     mounted.panel.setNav(available, activeSection);
     if (!isPanelOpen || !current) return;
     const el = document.createElement("section");
@@ -217,7 +224,7 @@ export function createHostRuntime(): HostRuntime {
     if (returnFocus) mounted?.button?.focus();
   }
 
-  /** The panel's hide control: persists the flag and closes. */
+  /** Overview's hide control: persists the flag and closes. */
   function hideFromPanel(): void {
     hideStore.write(hideScope(), true);
     buttonHidden = true;
@@ -247,8 +254,6 @@ export function createHostRuntime(): HostRuntime {
     layer.setAttribute("data-position", config.position);
 
     const panel = createPanel({
-      hideAvailable: config.button,
-      onHide: hideFromPanel,
       onClose: () => closeShell(true),
       onEscape: () => closeShell(true),
       onLayout: (target) => openAt(target),
