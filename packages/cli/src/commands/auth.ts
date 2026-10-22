@@ -32,7 +32,12 @@ import {
   isInteractive,
   withSpinner,
 } from "../output/formatter.js";
-import { boundDecryptExpiryWithNotice } from "../lib/decrypt-cap.js";
+import {
+  boundDecryptExpiryWithNotice,
+  DECRYPT_REQUEST_TOO_LONG_MESSAGE,
+  exceedsDecryptLifetime,
+  includesDecrypt,
+} from "../lib/decrypt-cap.js";
 import { handleError, CLIError, cliErrorFromService } from "../output/errors.js";
 import { ExitCode, DEFAULT_CHAIN_ID, DEFAULT_OPENKEY_HOST, DEFAULT_SHARE_ORIGIN } from "../config/constants.js";
 import {
@@ -1315,6 +1320,12 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           );
         }
         assertRequestFields(parsed);
+        // Decrypt never lasts longer than one hour: refuse (never shorten) before any prompt,
+        // approval, signature or network request.
+        const decryptRequest = includesDecrypt(parsed.requested as PermissionEntry[]);
+        if (decryptRequest && exceedsDecryptLifetime(parsed.requestedExpiry)) {
+          throw new CLIError("DECRYPT_EXPIRY_TOO_LONG", DECRYPT_REQUEST_TOO_LONG_MESSAGE, ExitCode.USAGE_ERROR);
+        }
 
         // One resolved list is described, gated and signed. The signer's own defaults (an entry with
         // no space is in the owner's `applications` space) and the profile's name resolution are
@@ -1394,7 +1405,11 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           // The grant logic lives in the SDK (grantAuthRequest) so it is callable
           // programmatically; this command is a thin wrapper. The CLI request
           // artifact is a structural superset of AuthRequestArtifact.
-          grant = await grantAuthRequest(node, resolvedRequest);
+          grant = await grantAuthRequest(
+            node,
+            resolvedRequest,
+            decryptRequest ? { expiry: parsed.requestedExpiry } : undefined,
+          );
         }
         await appendLocalGrantArtifact(ctx.profile, grant.delegation);
         await appendGrantHistory(ctx.profile, {

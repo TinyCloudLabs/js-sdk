@@ -7,6 +7,7 @@ import { CLIError } from "../output/errors.js";
 import { safeClipped, safeClippedList, safeInline } from "../output/safe-text.js";
 import { isRawEncryptionPermission } from "./raw-encryption.js";
 import { normalizePkhIdentifier } from "./space.js";
+import { DECRYPT_CONSENT_NOTE, includesDecrypt } from "./decrypt-cap.js";
 
 /**
  * The `auth request --preset apps-agent` grants: the one place that defines
@@ -507,10 +508,13 @@ export function describeGrantScope(
     .filter((ms): ms is number => ms !== undefined)
     .map((ms) => Math.min(ms, maxLifetimeMs ?? Number.POSITIVE_INFINITY));
   const longest = Math.max(...durations);
+  const revoke = `revoke it any time with \`${CLI_NAME} delegation revoke <id>\`.`;
   lines.push(
     durations.length === 0 || !Number.isFinite(longest)
       ? "Its lifetime could not be read from the request."
-      : `It lasts up to ${lifetimePhrase(longest)}${requestedExpiry === undefined ? " (no lifetime was requested; this is the default)" : ""}; revoke it any time with \`${CLI_NAME} delegation revoke <id>\`.`,
+      : includesDecrypt(requested)
+      ? `It lasts up to ${lifetimePhrase(longest)}. ${DECRYPT_CONSENT_NOTE} ${revoke}`
+      : `It lasts up to ${lifetimePhrase(longest)}${requestedExpiry === undefined ? " (no lifetime was requested; this is the default)" : ""}; ${revoke}`,
   );
   return { text: lines.join("\n"), entries: requested, extras };
 }

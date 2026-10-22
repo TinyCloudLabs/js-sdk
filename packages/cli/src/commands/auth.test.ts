@@ -101,7 +101,7 @@ const recorded = {
   spinners: [] as string[],
   generateKeyCalls: 0,
   grantedRequests: [] as Array<Record<string, unknown>>,
-  grantedExpiries: [] as Array<number | undefined>,
+  grantedExpiries: [] as Array<number | string | undefined>,
   runtimeGrantCalls: [] as Array<{ requested: unknown[]; expiry: string | number | undefined }>,
   grantHistory: [] as Array<{ profile: string; entry: Record<string, unknown> }>,
   localGrantArtifacts: [] as Array<{ profile: string; delegation: Record<string, unknown> }>,
@@ -2142,28 +2142,96 @@ describe("local-key decrypt grants last at most one hour", () => {
     expect(notices()).toEqual([]);
   });
 
-  test("auth grant of a request with decrypt and requestedExpiry 7d is capped at one hour, with one notice", async () => {
-    const source = await writeRequest([decrypt], "7d");
+  const secretsManifestEntries = [
+    { service: "tinycloud.kv", space: "secrets", path: "vault/secrets/ANTHROPIC_API_KEY", actions: ["tinycloud.kv/get"] },
+    { service: "tinycloud.encryption", space: "encryption", path: "urn:tinycloud:encryption:did:pkh:eip155:1:0xOwner:default", actions: ["tinycloud.encryption/decrypt"] },
+  ];
+  const wildcard = { service: "tinycloud.encryption", space: "default", path: "", actions: ["tinycloud.encryption/*"] };
 
-    await runAuthCommand(["auth", "grant", source, "--yes"]);
+  test("auth request --grant with a tinycloud.encryption/* entry is capped like decrypt, with one notice", async () => {
+    manifestPermissions = [wildcard];
+
+    await runAuthCommand(["auth", "request", "--grant", "--yes", "--manifest", "m.json", "--expiry", "7d"]);
+
+    expect(recorded.runtimeGrantCalls).toEqual([{ requested: [wildcard], expiry: HOUR_MS }]);
+    expect(notices()).toHaveLength(1);
+  });
+
+  test("auth request --grant of a secrets manifest is capped at one hour", async () => {
+    manifestPermissions = secretsManifestEntries;
+
+    await runAuthCommand(["auth", "request", "--grant", "--yes", "--manifest", "m.json", "--expiry", "7d"]);
+
+    expect(recorded.runtimeGrantCalls).toEqual([{ requested: secretsManifestEntries, expiry: HOUR_MS }]);
+    expect(notices()).toHaveLength(1);
+  });
+
+  test.each([
+    ["decrypt, 7d", [decrypt], "7d"],
+    ["decrypt, no lifetime (the default is longer)", [decrypt], undefined],
+    ["tinycloud.encryption/*, 7d", [wildcard], "7d"],
+    ["a secrets manifest request, 30d", secretsManifestEntries, "30d"],
+  ])("auth grant of %s is refused before any signing", async (_name, requested, requestedExpiry) => {
+    await runAuthCommand(["auth", "grant", await writeRequest(requested, requestedExpiry), "--yes"]);
+
+    expect(recorded.errors).toEqual([expect.objectContaining({
+      code: "DECRYPT_EXPIRY_TOO_LONG",
+      exitCode: 2,
+      message: "This request includes decrypt access, which lasts at most one hour. Nothing was signed. Ask for a new request of one hour or less.",
+    })]);
+    expect(recorded.runtimeGrantCalls).toEqual([]);
+    expect(recorded.grantedRequests).toEqual([]);
+    expect(recorded.localGrantArtifacts).toEqual([]);
+    expect(stderrLines).toEqual([]);
+  });
+
+  test("auth grant of decrypt at 30m is signed with 30m, and the consent line says decrypt never lasts longer than one hour", async () => {
+    await runAuthCommand(["auth", "grant", await writeRequest([decrypt], "30m"), "--yes"]);
 
     expect(recorded.errors).toEqual([]);
-    expect(recorded.runtimeGrantCalls).toHaveLength(1);
-    expect(recorded.runtimeGrantCalls[0]?.expiry).toBe(HOUR_MS);
-    expect(notices()).toHaveLength(1);
+    expect(recorded.runtimeGrantCalls.map((call) => call.expiry)).toEqual(["30m"]);
+    expect(recorded.grantedExpiries).toEqual(["30m"]);
+    expect(notices()).toEqual([]);
+    expect(stderrLines.join("")).toContain(
+      "It lasts up to 1 hour. Decrypt access never lasts longer than one hour; revoke it any time with `tc delegation revoke <id>`.",
+    );
+  });
+
+  test("auth grant without decrypt is unchanged: same signer arguments and the same consent text", async () => {
+    const request = [{ service: "tinycloud.kv", space: "secrets", path: "vault/secrets/ANTHROPIC_API_KEY", actions: ["tinycloud.kv/get"] }];
+    await runAuthCommand(["auth", "grant", await writeRequest(request, "7d"), "--yes"]);
+
+    expect(recorded.errors).toEqual([]);
+    expect(recorded.runtimeGrantCalls.map((call) => call.expiry)).toEqual(["7d"]);
+    expect(recorded.grantedRequests).toEqual([{
+      kind: "tinycloud.auth.request",
+      version: 1,
+      requestId: "req_decrypt_cap",
+      sessionDid: "did:key:z6MkSession",
+      requested: [{ ...request[0], space: "tinycloud:pkh:eip155:1:0xOwner:secrets" }],
+      requestedExpiry: "7d",
+    }]);
+    expect(recorded.grantedExpiries).toEqual([undefined]);
+    expect(notices()).toEqual([]);
+    expect(stderrLines.join("")).toBe(
+      "\nThis request asks for:\n" +
+      "- read files on `vault/secrets/ANTHROPIC_API_KEY` in space `tinycloud:pkh:eip155:1:0xOwner:secrets` (tinycloud.kv)\n" +
+      "It lasts up to 7 days; revoke it any time with `tc delegation revoke <id>`.\n\n",
+    );
   });
 
   test("every grant call made with decrypt carries an explicit lifetime of at most one hour", async () => {
     manifestPermissions = [kvGet, decrypt];
     await runAuthCommand(["auth", "request", "--grant", "--yes", "--manifest", "m.json", "--expiry", "7d"]);
     await runAuthCommand(["auth", "request", "--grant", "--yes", "--manifest", "m.json"]);
-    await runAuthCommand(["auth", "grant", await writeRequest([decrypt], "30d"), "--yes"]);
-    await runAuthCommand(["auth", "grant", await writeRequest([kvGet, decrypt]), "--yes"]);
+    manifestPermissions = [wildcard];
+    await runAuthCommand(["auth", "request", "--grant", "--yes", "--manifest", "m.json"]);
+    await runAuthCommand(["auth", "grant", await writeRequest([kvGet, decrypt], "30m"), "--yes"]);
 
-    const withDecrypt = recorded.runtimeGrantCalls.filter((call) => JSON.stringify(call.requested).includes("encryption/decrypt"));
-    expect(withDecrypt).toHaveLength(4);
-    for (const call of withDecrypt) {
-      expect(typeof call.expiry === "number" ? call.expiry : Number.NaN).toBeLessThanOrEqual(HOUR_MS);
+    expect(recorded.runtimeGrantCalls).toHaveLength(4);
+    for (const call of recorded.runtimeGrantCalls) {
+      const ms = call.expiry === "30m" ? 30 * 60 * 1000 : call.expiry;
+      expect(typeof ms === "number" ? ms : Number.NaN).toBeLessThanOrEqual(HOUR_MS);
     }
   });
 });
@@ -2574,6 +2642,62 @@ describe("auth grant for an OpenKey owner gets a fresh owner approval per agent 
     expect(recorded.errors).toEqual([expect.objectContaining({ code: "OPENKEY_APPROVAL_NARROWER" })]);
     expect(recorded.grantedRequests).toEqual([]);
     expect(recorded.localGrantArtifacts).toEqual([]);
+  });
+
+  describe("decrypt requests (one-hour rule)", () => {
+    const ownerSpace = `tinycloud:${primaryOwner.slice("did:".length)}:secrets`;
+    const decryptEntry = { service: "tinycloud.encryption", space: ownerSpace, path: "", actions: ["tinycloud.encryption/decrypt"] };
+    const wildcardEntry = { ...decryptEntry, actions: ["tinycloud.encryption/*"] };
+
+    async function writeDecryptRequest(entry: Record<string, unknown>, requestedExpiry?: string): Promise<string> {
+      const source = join(tempDir, "openkey-decrypt.json");
+      await writeFile(source, JSON.stringify(makeStoredImportRequest({
+        posture: "delegate-session",
+        operatorType: "agent",
+        sessionDid,
+        requested: [entry],
+        ...(requestedExpiry === undefined ? {} : { requestedExpiry }),
+      })), "utf8");
+      return source;
+    }
+
+    test.each([
+      ["decrypt, 7d", decryptEntry, "7d"],
+      ["decrypt, no lifetime (the default is longer)", decryptEntry, undefined],
+      ["tinycloud.encryption/*, 7d", wildcardEntry, "7d"],
+    ])("%s is refused with no approval, signature or grant", async (_name, entry, requestedExpiry) => {
+      openKeyDelegation = approvalBy(primaryOwner, 2 * DAY_MS);
+      const source = await writeDecryptRequest(entry, requestedExpiry);
+
+      await runAuthCommand(["auth", "grant", source, "--yes"]);
+
+      expect(recorded.errors).toEqual([expect.objectContaining({ code: "DECRYPT_EXPIRY_TOO_LONG", exitCode: 2 })]);
+      expect(recorded.startAuthFlows).toEqual([]);
+      expect(recorded.grantedRequests).toEqual([]);
+      expect(recorded.localGrantArtifacts).toEqual([]);
+    });
+
+    test("decrypt at 30m asks OpenKey for 30 minutes", async () => {
+      openKeyDelegation = approvalBy(primaryOwner, 30 * 60 * 1000);
+      const source = await writeDecryptRequest(decryptEntry, "30m");
+
+      await runAuthCommand(["auth", "grant", source, "--yes"]);
+
+      expect(recorded.startAuthFlows.map((flow) => flow.options.expiry)).toEqual(["1800s"]);
+      expect(recorded.errors).not.toContainEqual(expect.objectContaining({ code: "DECRYPT_EXPIRY_TOO_LONG" }));
+    });
+
+    test("a request without decrypt keeps today's OpenKey request and grant arguments", async () => {
+      openKeyDelegation = approvalBy(primaryOwner, 2 * DAY_MS);
+      const source = await writeAgentRequest("openkey-agent-kv-only.json", "7d");
+
+      await runAuthCommand(["auth", "grant", source, "--yes"]);
+
+      expect(recorded.errors).toEqual([]);
+      expect(recorded.startAuthFlows.map((flow) => flow.options.expiry)).toEqual(["604800s"]);
+      expect(recorded.grantedExpiries).toHaveLength(1);
+      expect(recorded.grantedExpiries[0]).toBeGreaterThan(2 * DAY_MS - 60_000);
+    });
   });
 });
 
