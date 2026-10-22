@@ -268,6 +268,34 @@ describe("decrypt grants last at most one hour", () => {
       expect(lifetimeMs).toBeGreaterThan(HOUR_MS - TOLERANCE_MS);
     });
 
+    test("a mixed kv and decrypt grant is refused when its explicit expiry exceeds one hour", async () => {
+      const wasm = makeSessionWasm([KV_GRANTED, DECRYPT_GRANTED]);
+      const node = new TinyCloudNode({ wasmBindings: wasm });
+      installFakeSession(node, new Date(inMs(30 * 24 * HOUR_MS)));
+
+      const code = await rejectedCode(
+        node.delegateTo(BOB_DID, [KV_REQUEST, DECRYPT_REQUEST], { expiry: 2 * HOUR_MS }),
+      );
+      expect(code).toBe("DECRYPT_EXPIRY_TOO_LONG");
+      expect(wasm.createDelegation).toHaveBeenCalledTimes(0);
+      expect(wasm.prepareSession).toHaveBeenCalledTimes(0);
+      expect(fetchMock).toHaveBeenCalledTimes(0);
+    });
+
+    test("a mixed kv and decrypt grant with no expiry defaults the whole call to one hour", async () => {
+      const wasm = makeSessionWasm([KV_GRANTED, DECRYPT_GRANTED]);
+      const node = new TinyCloudNode({ wasmBindings: wasm });
+      installFakeSession(node, new Date(inMs(30 * 24 * HOUR_MS)));
+
+      await node.delegateTo(BOB_DID, [KV_REQUEST, DECRYPT_REQUEST]);
+
+      expect(wasm.createDelegation).toHaveBeenCalledTimes(1);
+      const expirationSecs = wasm.createDelegation.mock.calls[0][4] as number;
+      const lifetimeMs = expirationSecs * 1000 - Date.now();
+      expect(lifetimeMs).toBeLessThanOrEqual(HOUR_MS);
+      expect(lifetimeMs).toBeGreaterThan(HOUR_MS - TOLERANCE_MS);
+    });
+
     test("a non-decrypt grant with no expiry keeps the long default", async () => {
       const wasm = makeSessionWasm([KV_GRANTED]);
       const node = new TinyCloudNode({ wasmBindings: wasm });
