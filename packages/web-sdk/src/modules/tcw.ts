@@ -81,7 +81,6 @@ import { showPermissionRequestModal } from "../notifications/ModalManager";
 import {
   requestPermissionsCore,
   validateAdditionalPermissions,
-  validateRequestPermissionsOptions,
   type RequestPermissionsOptions,
 } from "./requestPermissionsCore";
 import {
@@ -1226,11 +1225,7 @@ export class TinyCloudWeb {
     additional: PermissionEntry[],
     options?: RequestPermissionsOptions,
   ): Promise<RequestPermissionsResult> {
-    // Shared validation (also called by the core). Keeping the guard
-    // here short-circuits before any manifest lookup so the error text
-    // is unambiguous.
     validateAdditionalPermissions(additional);
-    validateRequestPermissionsOptions(options);
 
     const manifest = Array.isArray(this._manifest)
       ? this._manifest[0]

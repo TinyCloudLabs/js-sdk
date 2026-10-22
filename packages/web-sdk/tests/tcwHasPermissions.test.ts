@@ -1,14 +1,20 @@
 import "./support/browserGlobalsShim";
 import { describe, expect, mock, test } from "bun:test";
 import type { PermissionEntry } from "@tinycloud/sdk-core";
-import { TinyCloudWeb } from "../src/modules/tcw";
+import type { TinyCloudWeb as TinyCloudWebType } from "../src/modules/tcw";
+
+// Loaded from the built bundle, like tcw-spaceId.test.js: other test files
+// mock "../src/modules/tcw" process-wide under bun test.
+const { TinyCloudWeb } = require("../dist/index.cjs") as {
+  TinyCloudWeb: typeof TinyCloudWebType;
+};
 
 const entries: PermissionEntry[] = [
   { service: "tinycloud.kv", space: "secrets", path: "vault/secrets/API_KEY", actions: ["get"] },
 ];
 
-function instanceWith(state: Record<string, unknown>): TinyCloudWeb {
-  const tcw = Object.create(TinyCloudWeb.prototype) as TinyCloudWeb;
+function instanceWith(state: Record<string, unknown>): TinyCloudWebType {
+  const tcw = Object.create(TinyCloudWeb.prototype) as TinyCloudWebType;
   Object.assign(tcw, state);
   return tcw;
 }
