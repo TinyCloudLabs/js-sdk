@@ -207,11 +207,9 @@ import {
   resolveExpiryMs,
   extractSiweExpiration,
   includesDecrypt,
-  actionsIncludeDecrypt,
   abilitiesIncludeDecrypt,
   DECRYPT_GRANT_MAX_EXPIRY_MS,
   decryptExpiryTooLongError,
-  isDecryptExpiryTooLongError,
 } from "./delegateToHelpers";
 import { NodeSecretsService } from "./NodeSecretsService";
 
@@ -5701,10 +5699,6 @@ export class TinyCloudNode {
     if (!(params.expiresAt instanceof Date) || params.expiresAt.getTime() <= now.getTime() || params.expiresAt.getTime() - now.getTime() > EXPIRY.MAX_MS) {
       throw new Error("Owner delegation expiry must be explicit, future, and within EXPIRY.MAX_MS");
     }
-    if (permissions.some((permission) => actionsIncludeDecrypt(permission.actions))
-      && params.expiresAt.getTime() - now.getTime() > DECRYPT_GRANT_MAX_EXPIRY_MS) {
-      throw decryptExpiryTooLongError();
-    }
     if (!this.signer) throw new Error("Owner wallet signer is required");
     const session = this.currentTinyCloudSession();
     if (!session) throw new Error("Owner session is required");
@@ -5897,7 +5891,6 @@ export class TinyCloudNode {
         expiresAt: params.requestedExpiry,
       }, assertActive)).delegation;
     } catch (err) {
-      if (isDecryptExpiryTooLongError(err)) throw err;
       assertActive?.();
       return undefined;
     }

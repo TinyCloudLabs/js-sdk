@@ -254,6 +254,19 @@ describe("decrypt grants last at most one hour", () => {
       expect(fetchMock).toHaveBeenCalledTimes(0);
     });
 
+    test("a forceWalletSign decrypt grant above one hour is refused before any prepare or sign", async () => {
+      const wasm = makeSessionWasm([DECRYPT_GRANTED]);
+      const node = new TinyCloudNode({ wasmBindings: wasm });
+      installFakeSession(node, new Date(inMs(30 * 24 * HOUR_MS)));
+
+      const code = await rejectedCode(
+        node.delegateTo(BOB_DID, [DECRYPT_REQUEST], { expiry: 7 * 24 * HOUR_MS, forceWalletSign: true }),
+      );
+      expect(code).toBe("DECRYPT_EXPIRY_TOO_LONG");
+      expect(wasm.prepareSession).toHaveBeenCalledTimes(0);
+      expect(wasm.createDelegation).toHaveBeenCalledTimes(0);
+    });
+
     test("an explicit decrypt expiry of exactly one hour is honoured", async () => {
       const wasm = makeSessionWasm([DECRYPT_GRANTED]);
       const node = new TinyCloudNode({ wasmBindings: wasm });
@@ -266,6 +279,19 @@ describe("decrypt grants last at most one hour", () => {
       const lifetimeMs = expirationSecs * 1000 - Date.now();
       expect(lifetimeMs).toBeLessThanOrEqual(HOUR_MS);
       expect(lifetimeMs).toBeGreaterThan(HOUR_MS - TOLERANCE_MS);
+    });
+
+    test("an explicit decrypt expiry of one hour and one second is refused before any prepare", async () => {
+      const wasm = makeSessionWasm([DECRYPT_GRANTED]);
+      const node = new TinyCloudNode({ wasmBindings: wasm });
+      installFakeSession(node, new Date(inMs(30 * 24 * HOUR_MS)));
+
+      const code = await rejectedCode(
+        node.delegateTo(BOB_DID, [DECRYPT_REQUEST], { expiry: HOUR_MS + 1000 }),
+      );
+      expect(code).toBe("DECRYPT_EXPIRY_TOO_LONG");
+      expect(wasm.prepareSession).toHaveBeenCalledTimes(0);
+      expect(wasm.createDelegation).toHaveBeenCalledTimes(0);
     });
 
     test("a mixed kv and decrypt grant is refused when its explicit expiry exceeds one hour", async () => {
@@ -465,6 +491,25 @@ describe("decrypt grants last at most one hour", () => {
       expect(expirationTime).toBe(now + HOUR_MS);
     });
 
+    test("an explicit decrypt sub-delegation of one hour and one second is refused before any prepare", async () => {
+      const now = 1_700_000_000_000;
+      setSystemTime(new Date(now));
+      const wasm = makeSigningWasm();
+      const { node } = makeSigningNode(wasm);
+
+      const code = await rejectedCode(
+        node.createSubDelegation(parentWithExpiry(new Date(now + 3 * 24 * HOUR_MS)), {
+          path: "docs",
+          actions: ["tinycloud.kv/get"],
+          delegateDID: "did:key:z6MkChild",
+          resources: decryptResources,
+          expiryMs: HOUR_MS + 1000,
+        } as any),
+      );
+      expect(code).toBe("DECRYPT_EXPIRY_TOO_LONG");
+      expect(wasm.prepareSession).toHaveBeenCalledTimes(0);
+    });
+
     test("a non-decrypt sub-delegation with an explicit expiry above one hour is honoured", async () => {
       const now = 1_700_000_000_000;
       setSystemTime(new Date(now));
@@ -496,21 +541,6 @@ describe("decrypt grants last at most one hour", () => {
       actions: [DECRYPT_ACTION],
     };
 
-    test("an owner decrypt delegation above one hour is refused before preparing or signing", async () => {
-      const wasm = makeSigningWasm();
-      const { node, signMessage } = makeSigningNode(wasm);
-
-      const code = await rejectedCode(
-        (node as any).createOwnerDelegation({
-          ...OWNER_DECRYPT,
-          expiresAt: new Date(inMs(2 * HOUR_MS)),
-        }),
-      );
-      expect(code).toBe("DECRYPT_EXPIRY_TOO_LONG");
-      expect(wasm.prepareSession).toHaveBeenCalledTimes(0);
-      expect(signMessage).toHaveBeenCalledTimes(0);
-    });
-
     test("an owner decrypt delegation of thirty minutes is prepared with its explicit expiry", async () => {
       const wasm = makeSigningWasm();
       const { node } = makeSigningNode(wasm);
@@ -541,41 +571,36 @@ describe("decrypt grants last at most one hour", () => {
       expect(wasm.prepareSession.mock.calls[0][0].expirationTime).toBe(expiresAt.toISOString());
     });
 
-    test("a sharing root for decrypt above one hour rejects with the decrypt code, not undefined", async () => {
-      const wasm = makeSigningWasm();
-      const { node, signMessage } = makeSigningNode(wasm);
+    const SHARE_PATH = `urn:tinycloud:encryption:did:pkh:eip155:1:${OWNER}:share-abcdef0123456789`;
+    const SHARE_ACTIONS = [
+      "tinycloud.encryption/network.create",
+      "tinycloud.encryption/network.revoke",
+      DECRYPT_ACTION,
+    ];
 
-      const code = await rejectedCode(
-        (node as any).createRootDelegationForSharing({
-          shareKeyDID: "did:key:z6MkShare",
+    for (const days of [7, 30]) {
+      test(`a share-network root with decrypt is prepared and signed at ${days} days`, async () => {
+        const now = 1_700_000_000_000;
+        setSystemTime(new Date(now));
+        const wasm = makeSigningWasm();
+        const { node, signMessage } = makeSigningNode(wasm);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (node as any)._restoredTcSession = { address: OWNER, chainId: 1, spaceId: SPACE };
+        const expiresAt = new Date(now + days * 24 * HOUR_MS);
+
+        await (node as any).createOwnerDelegation({
+          delegateDid: "did:key:z6MkShare",
           spaceId: SPACE,
-          path: DECRYPT_PATH,
-          actions: [DECRYPT_ACTION],
-          requestedExpiry: new Date(inMs(2 * HOUR_MS)),
-        }),
-      );
-      expect(code).toBe("DECRYPT_EXPIRY_TOO_LONG");
-      expect(wasm.prepareSession).toHaveBeenCalledTimes(0);
-      expect(signMessage).toHaveBeenCalledTimes(0);
-    });
+          path: SHARE_PATH,
+          actions: SHARE_ACTIONS,
+          expiresAt,
+        });
 
-    test("an owner decrypt delegation of exactly one hour is accepted and one second more is refused", async () => {
-      const now = 1_700_000_000_000;
-      setSystemTime(new Date(now));
-      const wasm = makeSigningWasm();
-      const { node } = makeSigningNode(wasm);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (node as any)._restoredTcSession = { address: OWNER, chainId: 1, spaceId: SPACE };
-
-      await (node as any).createOwnerDelegation({ ...OWNER_DECRYPT, expiresAt: new Date(now + HOUR_MS) });
-      expect(wasm.prepareSession.mock.calls[0][0].expirationTime).toBe(new Date(now + HOUR_MS).toISOString());
-
-      const code = await rejectedCode(
-        (node as any).createOwnerDelegation({ ...OWNER_DECRYPT, expiresAt: new Date(now + HOUR_MS + 1000) }),
-      );
-      expect(code).toBe("DECRYPT_EXPIRY_TOO_LONG");
-      expect(wasm.prepareSession).toHaveBeenCalledTimes(1);
-    });
+        expect(wasm.prepareSession).toHaveBeenCalledTimes(1);
+        expect(wasm.prepareSession.mock.calls[0][0].expirationTime).toBe(expiresAt.toISOString());
+        expect(signMessage).toHaveBeenCalledTimes(1);
+      });
+    }
   });
 
   describe("WASM sink (createDelegationWrapper)", () => {
@@ -682,6 +707,58 @@ describe("decrypt grants last at most one hour", () => {
         ),
       ).toBe("DECRYPT_EXPIRY_TOO_LONG");
       expect(wasm.createDelegation).toHaveBeenCalledTimes(1);
+    });
+
+    const SHARE_SINK_PATH = `urn:tinycloud:encryption:did:pkh:eip155:1:${OWNER}:share-abcdef0123456789`;
+
+    test("the sink passes a share-network decrypt grant above one hour to WASM", () => {
+      const { wasm, node } = sinkNode();
+
+      node.createDelegationWrapper({
+        session: sinkSession,
+        delegateDID: BOB_DID,
+        spaceId: SPACE,
+        abilities: { encryption: { [SHARE_SINK_PATH]: [DECRYPT_ACTION] } },
+        expirationSecs: Math.floor(inMs(7 * 24 * HOUR_MS) / 1000),
+      });
+
+      expect(wasm.createDelegation).toHaveBeenCalledTimes(1);
+    });
+
+    test("the sink passes a share-network wildcard encryption grant above one hour to WASM", () => {
+      const { wasm, node } = sinkNode();
+
+      node.createDelegationWrapper({
+        session: sinkSession,
+        delegateDID: BOB_DID,
+        spaceId: SPACE,
+        abilities: { encryption: { [SHARE_SINK_PATH]: ["tinycloud.encryption/*"] } },
+        expirationSecs: Math.floor(inMs(7 * 24 * HOUR_MS) / 1000),
+      });
+
+      expect(wasm.createDelegation).toHaveBeenCalledTimes(1);
+    });
+
+    test("the sink caps a mixed call across default and share networks call-wide", () => {
+      const { wasm, node } = sinkNode();
+
+      expect(
+        thrownCode(() =>
+          node.createDelegationWrapper({
+            session: sinkSession,
+            delegateDID: BOB_DID,
+            spaceId: SPACE,
+            abilities: {
+              encryption: {
+                [DECRYPT_PATH]: [DECRYPT_ACTION],
+                [SHARE_SINK_PATH]: [DECRYPT_ACTION],
+              },
+            },
+            expirationSecs: Math.floor(inMs(2 * HOUR_MS) / 1000),
+          }),
+        ),
+      ).toBe("DECRYPT_EXPIRY_TOO_LONG");
+      expect(wasm.createDelegation).toHaveBeenCalledTimes(0);
     });
   });
 });

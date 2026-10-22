@@ -88,12 +88,6 @@ export function decryptExpiryTooLongError(): Error {
   });
 }
 
-/** Whether `err` is the decrypt expiry refusal. */
-export function isDecryptExpiryTooLongError(err: unknown): boolean {
-  return typeof err === "object" && err !== null
-    && (err as { code?: unknown }).code === DECRYPT_EXPIRY_TOO_LONG;
-}
-
 /**
  * Per-share network name `share-<shareId>`, with the shareId shape share-sdk
  * enforces (`packages/share-sdk/src/share-network.ts`). node-sdk does not depend
@@ -114,11 +108,6 @@ export function grantsCappedDecrypt(path: string, actions: readonly string[]): b
     return false;
   }
   return !(isNetworkId(path) && SHARE_NETWORK_NAME_RE.test(parseNetworkId(path).name));
-}
-
-/** Whether any action in `actions` is decrypt, matched per `actionContains`. Internal only. */
-export function actionsIncludeDecrypt(actions: readonly string[]): boolean {
-  return actions.some((action) => actionContains(action, ENCRYPTION.DECRYPT));
 }
 
 /**
