@@ -17,7 +17,7 @@ process.env.TC_HOME = home;
 const { ProfileManager } = await import("../config/profiles.js");
 const { refreshOpenKeySession } = await import("../commands/auth.js");
 const { loadManifestPermissions } = await import("../lib/permissions.js");
-const { declinedPermissions, permissionTuples, sessionExpiresAt, validateLoginPermissions, verifySignedSession } = await import("./scoped-login.js");
+const { declinedPermissions, permissionTuples, sessionExpiresAt, signedFormOfDecryptOnlyRequest, validateLoginPermissions, verifySignedSession } = await import("./scoped-login.js");
 const host = "https://node.example.test";
 const wasm = new NodeWasmBindings();
 const signer = new PrivateKeySigner("4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d9c5c1b5605dce6f");
@@ -512,5 +512,22 @@ describe("scoped first login", () => {
     await expect(refreshOpenKeySession("scoped", host, { permissions, openKeyAcquisition: async () => response }))
       .rejects.toMatchObject({ code: "OPENKEY_SCOPE_MISMATCH" });
     expect(await ProfileManager.getSession("scoped")).toBeNull();
+  });
+
+  test("maps only the one-entry decrypt request onto its signed form; any other request is compared as sent", () => {
+    const shortDecrypt: PermissionEntry = { service: "tinycloud.encryption", space: "default", path: "", actions: ["tinycloud.encryption/decrypt"] };
+    expect(signedFormOfDecryptOnlyRequest([shortDecrypt], ownerDid)).toEqual([
+      { service: "tinycloud.encryption", space: "encryption", path: network, actions: ["tinycloud.encryption/decrypt"] },
+    ]);
+    const notDecryptOnly: PermissionEntry[][] = [
+      [{ ...shortDecrypt, actions: ["tinycloud.encryption/decrypt", "tinycloud.encryption/encrypt"] }],
+      [{ ...shortDecrypt, path: "example/" }],
+      [{ ...shortDecrypt, space: "applications" }],
+      [shortDecrypt, requested[0]!],
+      requested,
+    ];
+    for (const request of notDecryptOnly) {
+      expect(signedFormOfDecryptOnlyRequest(request, ownerDid)).toEqual(request);
+    }
   });
 });

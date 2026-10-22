@@ -4,6 +4,7 @@
  * login graph. The wording is not approved yet; every string for this step is here.
  */
 export const DECRYPT_APPROVAL_MESSAGES = {
-  reason: "Approve about one hour of decrypt access so this share can be sent.",
+  reason: "Approve about one hour of decrypt access to your default key, including your Secrets, so this share can be sent.",
+  notice: "This addressed share needs one hour of decrypt access to your default key.",
   notCompleted: "The decrypt approval wasn't completed; nothing was sent.",
 } as const;
