@@ -25,7 +25,7 @@
       "require": "./dist/replica-gated.cjs"
     },
     "./credentials": {
-      "types": "./dist/credentials-subpath.d.ts",
+      "types": "./dist/credentials-subpath-MISSING.d.ts",
       "import": "./dist/credentials.mjs",
       "require": "./dist/credentials.cjs"
     },
