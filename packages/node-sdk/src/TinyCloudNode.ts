@@ -6205,6 +6205,8 @@ export class TinyCloudNode {
         getManifest: () => this.manifest,
         hasPermissions: (permissions) => this.hasRuntimePermissions(permissions),
         grantPermissions: (additional) => this.grantRuntimePermissions(additional),
+        uncoveredEntries: (permissions) =>
+          permissions.filter((entry) => !this.hasRuntimePermissions([entry])),
         canEscalate: () => this.signer !== undefined && this.tc !== undefined,
         getEncryptionNetworkId: () => this.getEncryptionNetworkIdForSpace(resolvedSpace),
         resolveSpace: (space) => space.startsWith("tinycloud:") ? space : this.ownedSpaceId(space),
@@ -6379,15 +6381,12 @@ export class TinyCloudNode {
       return false;
     }
 
-    // Coverage is judged per entry: the session and runtime grants may each
-    // cover part of the request, and every entry must be covered by one of them.
-    return permissions.every((entry) => {
-      const expanded = this.expandPermissionEntries([entry]);
-      return (
-        this.sessionCoversPermissionEntries(session, expanded) ||
-        this.findRuntimeGrantsForPermissionEntries(expanded, session).length > 0
-      );
-    });
+    const expanded = this.expandPermissionEntries(permissions);
+    if (this.sessionCoversPermissionEntries(session, expanded)) {
+      return true;
+    }
+
+    return this.findRuntimeGrantsForPermissionEntries(expanded, session).length > 0;
   }
 
   /**
@@ -6620,11 +6619,10 @@ export class TinyCloudNode {
 
     const expanded = this.expandPermissionEntries(permissions);
     const requestsDecrypt = includesDecrypt(expanded);
-    if (
-      requestsDecrypt &&
-      options?.expiry !== undefined &&
-      resolveExpiryMs(options.expiry) > DECRYPT_GRANT_MAX_EXPIRY_MS
-    ) {
+    const requestedExpiryMs = requestsDecrypt && options?.expiry === undefined
+      ? DECRYPT_GRANT_MAX_EXPIRY_MS
+      : resolveExpiryMs(options?.expiry);
+    if (requestsDecrypt && requestedExpiryMs > DECRYPT_GRANT_MAX_EXPIRY_MS) {
       throw Object.assign(new Error("decrypt grants last at most one hour"), {
         code: "DECRYPT_EXPIRY_TOO_LONG",
       });
@@ -6633,31 +6631,21 @@ export class TinyCloudNode {
       return [];
     }
 
-    // Sign only the entries that neither the session nor a live runtime grant
-    // covers. Each entry is judged on its own, so a held entry is never re-signed.
-    const uncovered = permissions.filter((entry) => !this.hasRuntimePermissions([entry]));
-    if (uncovered.length === 0) {
-      const delegations = permissions.flatMap((entry) =>
-        this.findRuntimeGrantsForPermissionEntries(this.expandPermissionEntries([entry]), session)
-          .map((grant) => grant.delegation)
-      );
-      return [...new Set(delegations)];
+    const existingGrants = this.findRuntimeGrantsForPermissionEntries(expanded, session);
+    if (existingGrants.length > 0) {
+      return existingGrants.map((grant) => grant.delegation);
     }
-    const signed = this.expandPermissionEntries(uncovered);
-    const requestedExpiryMs = includesDecrypt(signed) && options?.expiry === undefined
-      ? DECRYPT_GRANT_MAX_EXPIRY_MS
-      : resolveExpiryMs(options?.expiry);
     if (!this.signer) {
       throw new Error(
         "grantRuntimePermissions requires wallet mode with a signer or privateKey.",
       );
     }
-    this.assertDelegationCaveatsPreservable(signed);
+    this.assertDelegationCaveatsPreservable(expanded);
 
-    const rawEntries = signed.filter((entry) =>
+    const rawEntries = expanded.filter((entry) =>
       this.isEncryptionPermissionEntry(entry) || this.isRawRevocationPermissionEntry(entry)
     );
-    const spaceEntries = signed.filter((entry) =>
+    const spaceEntries = expanded.filter((entry) =>
       !this.isEncryptionPermissionEntry(entry) && !this.isRawRevocationPermissionEntry(entry)
     );
 

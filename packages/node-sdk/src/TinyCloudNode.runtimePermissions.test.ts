@@ -3381,11 +3381,29 @@ describe("TinyCloudNode per-entry permission coverage (TC-1781)", () => {
     expect(node.hasRuntimePermissions([KV_GET_ENTRY, decryptEntry])).toBe(false);
   });
 
+  test("a split set, kv from the session and decrypt from a runtime grant, is not covered jointly", async () => {
+    const node = nodeWithSessionRecap(KV_GET_RECAP);
+    const decryptEntry = decryptEntryFor(node);
+    await withFetchActivated(() => node.grantRuntimePermissions([decryptEntry]));
+
+    expect(node.hasRuntimePermissions([KV_GET_ENTRY])).toBe(true);
+    expect(node.hasRuntimePermissions([decryptEntry])).toBe(true);
+    expect(node.hasRuntimePermissions([KV_GET_ENTRY, decryptEntry])).toBe(false);
+  });
+
+  test("a joint set held by one live runtime grant counts as covered", async () => {
+    const node = nodeWithSessionRecap([]);
+    const decryptEntry = decryptEntryFor(node);
+    await withFetchActivated(() => node.grantRuntimePermissions([KV_GET_ENTRY, decryptEntry]));
+
+    expect(node.hasRuntimePermissions([KV_GET_ENTRY, decryptEntry])).toBe(true);
+  });
+
   test("an entry covered only by an expired runtime grant does not count as covered", async () => {
     const node = nodeWithSessionRecap(KV_GET_RECAP);
     const decryptEntry = decryptEntryFor(node);
     await withFetchActivated(() => node.grantRuntimePermissions([decryptEntry]));
-    expect(node.hasRuntimePermissions([KV_GET_ENTRY, decryptEntry])).toBe(true);
+    expect(node.hasRuntimePermissions([decryptEntry])).toBe(true);
 
     const grants = (node as any).runtimePermissionGrants as Array<{ expiresAt: Date }>;
     for (const grant of grants) grant.expiresAt = new Date(Date.now() - 1);

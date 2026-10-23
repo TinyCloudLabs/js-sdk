@@ -118,6 +118,11 @@ export interface NodeSecretsServiceConfig {
   hasPermissions?: (permissions: PermissionEntry[]) => boolean;
   grantPermissions: (additional: PermissionEntry[]) => Promise<unknown>;
   canEscalate: () => boolean;
+  /**
+   * Returns the entries that neither the session nor a live runtime grant
+   * covers. When absent, every requested entry is escalated.
+   */
+  uncoveredEntries?: (permissions: PermissionEntry[]) => PermissionEntry[];
   getEncryptionNetworkId?: () => string;
   resolveSpace?: (space: string) => string;
   getUnlockSigner?: () => unknown;
@@ -247,8 +252,11 @@ export class NodeSecretsService implements ISecretsService {
     }
 
     try {
-      // Only entries the runtime confirms as covered are dropped from the request.
-      const uncovered = permissionEntries.filter((entry) => !this.config.hasPermissions?.([entry]));
+      const uncovered =
+        this.config.uncoveredEntries?.(permissionEntries) ?? permissionEntries;
+      if (uncovered.length === 0) {
+        return ok();
+      }
       await this.config.grantPermissions(uncovered);
       return this.restoreUnlockAfterEscalation();
     } catch (error) {
