@@ -15,7 +15,7 @@ export function refuseCaveated(
 ): void {
   const caveated = [input ?? []]
     .flat()
-    .flatMap((item) => ("permissions" in item ? item.permissions ?? [] : [item as PermissionEntry]))
+    .flatMap((item) => [item as PermissionEntry, ...((item as Manifest).permissions ?? [])])
     .filter(({ caveats }) => {
       try {
         return caveats === null || !recapCaveatsEqual(caveats, undefined);

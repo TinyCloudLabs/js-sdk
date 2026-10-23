@@ -148,6 +148,17 @@ describe("refuseCaveated", () => {
       expect(error.entries.map((refused) => refused.path)).toEqual(["b/"]);
     }
   });
+
+  test("checks an entry's own caveats even when it carries a permissions key", () => {
+    const nested = { ...entry([{ kind: "prefix" }]), permissions: [] };
+    expect(() => refuseCaveated([nested])).toThrow(CaveatedDelegationUnsupportedError);
+  });
+
+  test("accepts a manifest with empty or absent permissions, and absent input", () => {
+    expect(() => refuseCaveated({ app_id: "xyz.tinycloud.refuse-caveats", name: "Refuse caveats", permissions: [] })).not.toThrow();
+    expect(() => refuseCaveated({ app_id: "xyz.tinycloud.refuse-caveats", name: "Refuse caveats" })).not.toThrow();
+    expect(() => refuseCaveated(undefined)).not.toThrow();
+  });
 });
 
 function manifest(caveats: Caveats): Manifest {
@@ -381,7 +392,7 @@ describe("NodeUserAuthorization.createBootstrapSession", () => {
 });
 
 describe("TinyCloudNode.createOwnerDelegation", () => {
-  function ownerDelegation(caveats: Caveats) {
+  function ownerDelegation(caveats: Caveats, extra: Record<string, unknown> = {}) {
     const { wasm, prepareSession } = fakeWasm();
     const { signer, calls } = spySigner();
     const node = new TinyCloudNode({
@@ -395,6 +406,7 @@ describe("TinyCloudNode.createOwnerDelegation", () => {
       path: "notes/",
       actions: ["tinycloud.kv/get"],
       ...(caveats === undefined ? {} : { caveats }),
+      ...extra,
     };
     return {
       run: () =>
@@ -430,10 +442,20 @@ describe("TinyCloudNode.createOwnerDelegation", () => {
       expect(await rejection(run)).not.toBeInstanceOf(CaveatedDelegationUnsupportedError);
     }
   });
+
+  test("refuses a permission that carries its own permissions key next to caveats", async () => {
+    const { run, prepareSession, calls } = ownerDelegation([{ kind: "prefix" }], { permissions: [] });
+    const before = calls();
+
+    expectCaveatRefusal(await rejection(run));
+
+    expect(calls()).toBe(before);
+    expect(prepareSession).not.toHaveBeenCalled();
+  });
 });
 
 describe("TinyCloudNode.createSubDelegation", () => {
-  function subDelegation(caveats: Caveats) {
+  function subDelegation(caveats: Caveats, extra: Record<string, unknown> = {}) {
     const { wasm, prepareSession } = fakeWasm();
     const { signer, calls } = spySigner();
     const node = new TinyCloudNode({
@@ -466,6 +488,7 @@ describe("TinyCloudNode.createSubDelegation", () => {
               path: "notes/",
               actions: ["tinycloud.kv/get"],
               ...(caveats === undefined ? {} : { caveats }),
+              ...extra,
             },
           ],
         }),
@@ -494,5 +517,15 @@ describe("TinyCloudNode.createSubDelegation", () => {
       // Not signed in, so it stops later for an unrelated reason.
       expect(await rejection(run)).not.toBeInstanceOf(CaveatedDelegationUnsupportedError);
     }
+  });
+
+  test("refuses a resource that carries its own permissions key next to caveats", async () => {
+    const { run, prepareSession, calls } = subDelegation([{ kind: "prefix" }], { permissions: [] });
+    const before = calls();
+
+    expectCaveatRefusal(await rejection(run));
+
+    expect(calls()).toBe(before);
+    expect(prepareSession).not.toHaveBeenCalled();
   });
 });
