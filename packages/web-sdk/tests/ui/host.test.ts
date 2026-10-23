@@ -371,6 +371,66 @@ describe("phone layout", () => {
     expect(ui.api.isOpen).toBe(false);
     expect(layer()?.hasAttribute("data-phone")).toBe(false);
   });
+
+  describe("section menu", () => {
+    const menuButton = () => shadow().querySelector(".menu-btn") as HTMLButtonElement;
+    const menuPanel = () => shadow().querySelector(".menu") as HTMLElement;
+    const menuItems = () => [...shadow().querySelectorAll<HTMLButtonElement>(".menu-i")];
+
+    test("the menu button is labelled, controls the menu, and reports its state", async () => {
+      setPhone(true);
+      const ui = mountClient();
+      ui.api.open();
+      await panelMounted();
+      expect(menuButton().getAttribute("aria-label")).toBe("Sections");
+      expect(menuButton().getAttribute("aria-controls")).toBe(menuPanel().id);
+      expect(menuButton().getAttribute("aria-expanded")).toBe("false");
+      expect(menuPanel().hidden).toBe(true);
+      menuButton().click();
+      expect(menuButton().getAttribute("aria-expanded")).toBe("true");
+      expect(menuPanel().hidden).toBe(false);
+    });
+
+    test("choosing a section closes the menu, marks it current, and focuses its heading", async () => {
+      setPhone(true);
+      const ui = mountClient();
+      ui.api.open();
+      await panelMounted();
+      menuButton().click();
+      menuItems()[1]?.click();
+      expect(menuPanel().hidden).toBe(true);
+      expect(menuButton().getAttribute("aria-expanded")).toBe("false");
+      expect(menuItems()[1]?.getAttribute("aria-current")).toBe("page");
+      expect(navItems()[1]?.getAttribute("aria-current")).toBe("page");
+      expect(shadow().activeElement?.classList.contains("sec-title")).toBe(true);
+    });
+
+    test("Escape closes the menu first, then the page", async () => {
+      setPhone(true);
+      const ui = mountClient();
+      ui.api.open();
+      await panelMounted();
+      menuButton().click();
+      const panel = shadow().querySelector("[role='dialog']") as HTMLElement;
+      panel.dispatchEvent(new page.KeyboardEvent("keydown", { key: "Escape", bubbles: true, composed: true }));
+      expect(menuPanel().hidden).toBe(true);
+      expect(shadow().activeElement).toBe(menuButton());
+      expect(ui.api.isOpen).toBe(true);
+      panel.dispatchEvent(new page.KeyboardEvent("keydown", { key: "Escape", bubbles: true, composed: true }));
+      expect(ui.api.isOpen).toBe(false);
+    });
+
+    test("crossing back to desktop closes the menu", async () => {
+      setPhone(true);
+      const ui = mountClient();
+      ui.api.open();
+      await panelMounted();
+      menuButton().click();
+      setPhone(false);
+      expect(menuPanel().hidden).toBe(true);
+      expect(menuButton().getAttribute("aria-expanded")).toBe("false");
+    });
+  });
 });
 
 describe("headless modes", () => {

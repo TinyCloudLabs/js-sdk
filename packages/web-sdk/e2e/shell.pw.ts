@@ -220,10 +220,110 @@ test.describe("host layer, targets, and motion", () => {
     await panel(page).locator(".nav-i", { hasText: "Nodes" }).click();
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(panel(page)).toHaveAttribute("data-layout", "page");
-    await expect(panel(page).locator(".nav-i", { hasText: "Nodes" })).toHaveAttribute("aria-current", "page");
+    await expect(panel(page).locator(".menu-i", { hasText: "Nodes" })).toHaveAttribute("aria-current", "page");
     await page.setViewportSize({ width: 1280, height: 800 });
     await expect(panel(page)).toHaveAttribute("data-layout", "drawer");
     await expect(panel(page).locator(".nav-i", { hasText: "Nodes" })).toHaveAttribute("aria-current", "page");
+  });
+
+  test.describe("phone section menu", () => {
+    const menuButton = (page: Page) => panel(page).getByRole("button", { name: "Sections", exact: true });
+    const menuItems = (page: Page) => panel(page).locator(".menu-i");
+    // Focus lands on the section heading when rendered, else on the section container; both are inside `.main` with tabindex -1.
+    const focusInMain = (page: Page) =>
+      panel(page).locator(".main").evaluate((main) => {
+        const active = (main.getRootNode() as ShadowRoot | Document).activeElement;
+        return main.contains(active) && active?.getAttribute("tabindex") === "-1";
+      });
+
+    test("at 390 and 360px the pills are gone and the menu lists every section without clipping", async ({ page }) => {
+      await mountHarness(page, "light");
+      await openDrawer(page);
+      const sections = await panel(page).locator(".nav-i").count();
+      expect(sections).toBeGreaterThanOrEqual(7);
+      for (const width of [390, 360]) {
+        await page.setViewportSize({ width, height: 844 });
+        await expect(panel(page).locator(".nav-i").first()).toBeHidden();
+        await expect(menuButton(page)).toHaveAttribute("aria-expanded", "false");
+        const trigger = await menuButton(page).boundingBox();
+        expect(trigger!.width, `${width}px trigger width`).toBeGreaterThanOrEqual(44);
+        expect(trigger!.height, `${width}px trigger height`).toBeGreaterThanOrEqual(44);
+        await menuButton(page).click();
+        await expect(menuButton(page)).toHaveAttribute("aria-expanded", "true");
+        await expect(menuItems(page)).toHaveCount(sections);
+        for (let i = 0; i < sections; i += 1) {
+          const item = menuItems(page).nth(i);
+          const box = await item.boundingBox();
+          expect(box, `${width}px item ${i}`).not.toBeNull();
+          expect(box!.height, `${width}px item ${i} height`).toBeGreaterThanOrEqual(44);
+          expect(box!.x + box!.width, `${width}px item ${i} overflows the viewport`).toBeLessThanOrEqual(width);
+          const clipped = await item.evaluate((el) => el.scrollWidth > el.clientWidth);
+          expect(clipped, `${width}px item ${i} label is clipped`).toBe(false);
+        }
+        await menuButton(page).click();
+        await expect(menuButton(page)).toHaveAttribute("aria-expanded", "false");
+      }
+    });
+
+    test("keyboard: Enter opens the menu, Enter on a section closes it and moves focus into the section", async ({ page }) => {
+      await mountHarness(page, "light");
+      await page.setViewportSize({ width: 390, height: 844 });
+      await openDrawer(page);
+      await menuButton(page).focus();
+      await page.keyboard.press("Enter");
+      await expect(menuButton(page)).toHaveAttribute("aria-expanded", "true");
+      await menuItems(page).filter({ hasText: "Nodes" }).focus();
+      await page.keyboard.press("Enter");
+      await expect(menuButton(page)).toHaveAttribute("aria-expanded", "false");
+      await expect(menuItems(page).filter({ hasText: "Nodes" })).toHaveAttribute("aria-current", "page");
+      await expect.poll(() => focusInMain(page)).toBe(true);
+    });
+
+    test("Escape closes the menu first and the page on the second press", async ({ page }) => {
+      await mountHarness(page, "light");
+      await page.setViewportSize({ width: 390, height: 844 });
+      await openDrawer(page);
+      await menuButton(page).focus();
+      await page.keyboard.press("Enter");
+      await expect(menuButton(page)).toHaveAttribute("aria-expanded", "true");
+      await page.keyboard.press("Escape");
+      await expect(menuButton(page)).toHaveAttribute("aria-expanded", "false");
+      await expect(panel(page)).toBeVisible();
+      await page.keyboard.press("Escape");
+      await expect(panel(page)).toBeHidden();
+    });
+
+    test("focus leaving the menu closes it", async ({ page }) => {
+      await mountHarness(page, "light");
+      await page.setViewportSize({ width: 390, height: 844 });
+      await openDrawer(page);
+      await menuButton(page).click();
+      await expect(menuButton(page)).toHaveAttribute("aria-expanded", "true");
+      await panel(page).locator(".menu").evaluate((menu) => ((menu.getRootNode() as ShadowRoot).activeElement as HTMLElement | null)?.blur());
+      await expect(menuButton(page)).toHaveAttribute("aria-expanded", "false");
+    });
+
+    test("desktop keeps the rail and hides the menu trigger at 1280px", async ({ page }) => {
+      await mountHarness(page, "light");
+      await openDrawer(page);
+      await expect(panel(page).locator(".nav-i").first()).toBeVisible();
+      await expect(menuButton(page)).toBeHidden();
+    });
+
+    test.describe("touch", () => {
+      test.use({ hasTouch: true });
+
+      test("touch: tapping the trigger and a section works", async ({ page }) => {
+        await mountHarness(page, "light");
+        await page.setViewportSize({ width: 390, height: 844 });
+        await openDrawer(page);
+        await menuButton(page).tap();
+        await expect(menuButton(page)).toHaveAttribute("aria-expanded", "true");
+        await menuItems(page).filter({ hasText: "Nodes" }).tap();
+        await expect(menuButton(page)).toHaveAttribute("aria-expanded", "false");
+        await expect(menuItems(page).filter({ hasText: "Nodes" })).toHaveAttribute("aria-current", "page");
+      });
+    });
   });
 
   test("the drawer animates in when reduced motion is not requested", async ({ page }) => {

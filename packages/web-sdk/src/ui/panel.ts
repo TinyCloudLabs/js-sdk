@@ -40,6 +40,7 @@ export interface PanelOptions {
 interface NavEntry {
   readonly btn: HTMLButtonElement;
   readonly index: HTMLSpanElement;
+  readonly pick: HTMLButtonElement;
 }
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -66,16 +67,12 @@ export function createPanel(options: PanelOptions): PanelHandle {
   el.setAttribute("aria-modal", "false");
   el.setAttribute("aria-label", text("button.aria"));
   el.hidden = true;
-  el.addEventListener("keydown", (event) => {
-    if (event.key !== "Escape") return;
-    event.stopPropagation();
-    options.onEscape();
-  });
 
   let layout: ShellLayout = "drawer";
   let phone = false;
   let appLabel: string | undefined;
   let nextLayout: ShellLayout = "page";
+  let menuOpen = false;
 
   const title = document.createElement("h2");
   title.className = "title";
@@ -118,9 +115,35 @@ export function createPanel(options: PanelOptions): PanelHandle {
   }
   paintClose();
 
+  // Phone section menu: a 44px button that opens a list of the sections.
+  // Hidden on desktop by CSS; shown only under `.layer[data-phone]`.
+  const menuId = `${PANEL_ID}-menu`;
+  const menuBtn = document.createElement("button");
+  menuBtn.type = "button";
+  menuBtn.className = "icon-btn ring menu-btn";
+  menuBtn.setAttribute("aria-label", text("panel.sections"));
+  menuBtn.setAttribute("aria-controls", menuId);
+  menuBtn.setAttribute("aria-expanded", "false");
+  const burger = document.createElementNS(SVG_NS, "svg");
+  burger.setAttribute("viewBox", "0 0 24 24");
+  burger.setAttribute("aria-hidden", "true");
+  const burgerPath = document.createElementNS(SVG_NS, "path");
+  burgerPath.setAttribute("d", "M4 7h16M4 12h16M4 17h16");
+  burger.append(burgerPath);
+  menuBtn.append(burger);
+
+  const menu = document.createElement("div");
+  menu.id = menuId;
+  menu.className = "menu";
+  menu.hidden = true;
+
+  const menuWrap = document.createElement("div");
+  menuWrap.className = "menu-wrap";
+  menuWrap.append(menuBtn, menu);
+
   const actions = document.createElement("div");
   actions.className = "head-actions";
-  actions.append(layoutToggle, close);
+  actions.append(menuWrap, layoutToggle, close);
 
   const head = document.createElement("header");
   head.className = "head";
@@ -136,6 +159,26 @@ export function createPanel(options: PanelOptions): PanelHandle {
 
   el.append(head, nav, main);
 
+  function setMenuOpen(open: boolean): void {
+    menuOpen = open;
+    menu.hidden = !open;
+    menuBtn.setAttribute("aria-expanded", String(open));
+  }
+
+  function focusSection(): void {
+    // Some sections render no heading; the section container is always mounted.
+    const target = main.querySelector<HTMLElement>(".sec-title") ?? main.firstElementChild;
+    if (!(target instanceof HTMLElement)) return;
+    target.tabIndex = -1;
+    target.focus();
+  }
+
+  function choose(id: SectionId): void {
+    setMenuOpen(false);
+    options.onNavigate(id);
+    focusSection();
+  }
+
   function navButton(item: NavItem): NavEntry {
     const btn = document.createElement("button");
     btn.type = "button";
@@ -150,14 +193,50 @@ export function createPanel(options: PanelOptions): PanelHandle {
     label.textContent = text(item.labelCode);
     btn.append(index, label);
     btn.addEventListener("click", () => options.onNavigate(item.id));
-    return { btn, index };
+
+    const pick = document.createElement("button");
+    pick.type = "button";
+    pick.className = "menu-i";
+    pick.dataset.section = item.id;
+    pick.textContent = text(item.labelCode);
+    pick.addEventListener("click", () => choose(item.id));
+    return { btn, index, pick };
   }
+
+  menuBtn.addEventListener("click", () => {
+    if (menuOpen) {
+      setMenuOpen(false);
+      return;
+    }
+    setMenuOpen(true);
+    const target = menu.querySelector<HTMLElement>('[aria-current="page"]') ?? menu.querySelector<HTMLElement>("button");
+    target?.focus();
+  });
+  // Tabbing out of the menu closes it; focus moving inside the wrapper keeps it open.
+  menuWrap.addEventListener("focusout", (event) => {
+    if (!menuOpen) return;
+    if (event.relatedTarget instanceof Node && menuWrap.contains(event.relatedTarget)) return;
+    setMenuOpen(false);
+  });
+
+  el.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    event.stopPropagation();
+    // Escape closes the section menu first; a second Escape closes the page.
+    if (menuOpen) {
+      menuBtn.focus();
+      setMenuOpen(false);
+      return;
+    }
+    options.onEscape();
+  });
 
   return {
     el,
     main,
     setOpen(open) {
       el.hidden = !open;
+      if (!open) setMenuOpen(false);
     },
     setLayout(next, options) {
       layout = next;
@@ -166,6 +245,7 @@ export function createPanel(options: PanelOptions): PanelHandle {
       nextLayout = next === "drawer" ? "page" : "drawer";
       layoutToggle.textContent = text(next === "drawer" ? "panel.open_page" : "panel.show_sidebar");
       layoutToggle.hidden = !options.showLayoutToggle;
+      if (!phone) setMenuOpen(false);
       paintClose();
     },
     setAppLabel(label) {
@@ -179,6 +259,7 @@ export function createPanel(options: PanelOptions): PanelHandle {
       for (const [id, entry] of navButtons) {
         if (wanted.has(id)) continue;
         entry.btn.remove();
+        entry.pick.remove();
         navButtons.delete(id);
       }
       items.forEach((item, position) => {
@@ -191,8 +272,12 @@ export function createPanel(options: PanelOptions): PanelHandle {
         // Reorder only when a new item lands out of place, so focus on a
         // mounted button is not disturbed by unrelated updates.
         if (nav.children[position] !== entry.btn) nav.insertBefore(entry.btn, nav.children[position] ?? null);
-        if (item.id === active) entry.btn.setAttribute("aria-current", "page");
-        else entry.btn.removeAttribute("aria-current");
+        if (menu.children[position] !== entry.pick) menu.insertBefore(entry.pick, menu.children[position] ?? null);
+        const current = item.id === active;
+        for (const node of [entry.btn, entry.pick]) {
+          if (current) node.setAttribute("aria-current", "page");
+          else node.removeAttribute("aria-current");
+        }
       });
     },
     setStatus(next) {
@@ -200,7 +285,11 @@ export function createPanel(options: PanelOptions): PanelHandle {
       status.textContent = next === null ? "" : text(`status.${next}`);
     },
     focusFirst() {
-      (nav.querySelector<HTMLElement>('[aria-current="page"]') ?? close).focus();
+      if (phone) {
+        menuBtn.focus();
+      } else {
+        (nav.querySelector<HTMLElement>('[aria-current="page"]') ?? close).focus();
+      }
     },
   };
 }

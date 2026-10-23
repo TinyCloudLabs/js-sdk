@@ -7,7 +7,7 @@
  * The drawer edge (#e4e4e7 / #69696b) is decorative, not a 3:1 target.
  */
 export const PANEL_CSS = `
-.nav-i:focus-visible,.action:focus-visible,.switch:focus-visible,.icon-btn:focus-visible{outline:2px solid #111827;outline-offset:2px;box-shadow:0 0 0 6px #fafafa}
+.nav-i:focus-visible,.action:focus-visible,.switch:focus-visible,.icon-btn:focus-visible,.menu-i:focus-visible{outline:2px solid #111827;outline-offset:2px;box-shadow:0 0 0 6px #fafafa}
 .panel{position:fixed;top:0;bottom:0;right:0;box-sizing:border-box;width:min(420px,100%);display:grid;grid-template-rows:auto auto minmax(0,1fr);grid-template-areas:"head" "nav" "main";overflow:hidden;border-left:1px solid #e4e4e7;background:#fff;color:#111827;box-shadow:-18px 0 48px -18px rgba(0,0,0,.35);pointer-events:auto;animation:tc-in .42s cubic-bezier(.22,1,.36,1)}
 .layer[data-position="bottom-left"] .panel{left:0;right:auto;border-left:0;border-right:1px solid #e4e4e7;box-shadow:18px 0 48px -18px rgba(0,0,0,.35);animation-name:tc-in-l}
 .layer .panel[data-layout="page"]{top:0;bottom:0;left:0;right:0;width:auto;border:0;box-shadow:none;grid-template-rows:auto minmax(0,1fr);grid-template-columns:288px minmax(0,1fr);grid-template-areas:"head head" "nav main"}
@@ -51,17 +51,21 @@ export const PANEL_CSS = `
 .layer .panel[data-layout="page"] .sec-title{font-size:1.75rem}
 @keyframes tc-in{from{transform:translateX(104%)}to{transform:none}}
 @keyframes tc-in-l{from{transform:translateX(-104%)}to{transform:none}}
-@media (max-width:639px){
-.layer .panel[data-layout="page"]{grid-template-columns:minmax(0,1fr);grid-template-rows:auto auto minmax(0,1fr);grid-template-areas:"head" "nav" "main"}
-.layer .panel[data-layout="page"] .nav{flex-direction:row;flex-wrap:wrap;width:auto;border-right:0;border-bottom:1px solid #e4e4e7}
-.layer .panel[data-layout="page"] .nav-i{width:auto;min-height:44px;border-radius:999px}
-.layer .panel[data-layout="page"] .nav-n{display:none}
-}
+.menu-wrap{display:none;position:relative}
+.menu{position:absolute;top:calc(100% + 6px);right:0;z-index:2;box-sizing:border-box;width:min(280px,calc(100vw - 24px));padding:6px;border-radius:16px;background:#fff;box-shadow:inset 0 0 0 1px #e4e4e7,0 12px 32px -8px rgba(0,0,0,.3)}
+.menu[hidden]{display:none}
+.menu-i{display:flex;align-items:center;width:100%;min-height:44px;padding:0 12px;border:0;border-radius:12px;background:transparent;color:inherit;font:inherit;text-align:left;white-space:nowrap;cursor:pointer}
+.menu-i[aria-current="page"]{font-weight:700;background:#f4f4f5}
+.layer[data-phone] .menu-wrap{display:block}
+.layer[data-phone] .nav{display:none}
+.layer[data-phone] .panel[data-layout="page"]{grid-template-columns:minmax(0,1fr);grid-template-areas:"head" "main"}
+.layer[data-phone] .panel[data-layout="page"] .head{padding:12px 12px 12px 16px}
+.layer[data-phone] .panel[data-layout="page"] .main{padding:24px 16px 56px}
 @media (prefers-reduced-motion:reduce){
 .panel,.knob::after{animation:none;transition:none}
 }
 @media (prefers-color-scheme: dark){
-.nav-i:focus-visible,.action:focus-visible,.switch:focus-visible,.icon-btn:focus-visible{outline-color:#fafafa;box-shadow:0 0 0 6px #111827}
+.nav-i:focus-visible,.action:focus-visible,.switch:focus-visible,.icon-btn:focus-visible,.menu-i:focus-visible{outline-color:#fafafa;box-shadow:0 0 0 6px #111827}
 .panel{border-left-color:#69696b;background:#151517;color:#fafafa}
 .head,.nav{background:#151517}
 .main{border-top-color:#fafafa}
@@ -80,5 +84,7 @@ export const PANEL_CSS = `
 .layer .panel[data-layout="page"] .nav-i{background:transparent}
 .layer .panel[data-layout="page"] .nav-i[aria-current="page"]{background:#27272a}
 .layer .panel[data-layout="page"] .nav-n{color:#a1a1aa}
+.menu{background:#151517;box-shadow:inset 0 0 0 1px #69696b,0 12px 32px -8px rgba(0,0,0,.6)}
+.menu-i[aria-current="page"]{background:#27272a}
 }
 `;
