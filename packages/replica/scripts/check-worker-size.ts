@@ -23,7 +23,10 @@ import { join, resolve } from "node:path";
 // run 39943720009 (head 7a7303a8, merge base 6076581d); approved by Naomi, 2026-10-23; the ledger's tc1827WorkerRatchet row records it.
 // Zero additional headroom; independent of the web-sdk ledger, including WASM.
 export const MAX_WORKER_GZIP_BYTES = 776_128;
+// TC-1827 follow-up: `replica.worker.js` (the @tinycloud/replica/browser worker) is measured here before its reviewed ceiling lands.
+export const MAX_REPLICA_WORKER_GZIP_BYTES = Number.MAX_SAFE_INTEGER;
 const canonicalName = /^kv-storage\.worker\.([0-9a-f]{64})\.js$/;
+const replicaWorkerName = "replica.worker.js";
 
 export function assertWorkerSizeToolchain(bunVersion: string, rustcOutput: string): void {
   const rustcVersion = /^rustc (\d+\.\d+\.\d+)(?:\s|$)/.exec(rustcOutput)?.[1];
@@ -32,10 +35,26 @@ export function assertWorkerSizeToolchain(bunVersion: string, rustcOutput: strin
   }
 }
 
-export function checkWorkerSize(distDir: string, maxBytes = MAX_WORKER_GZIP_BYTES): { bytes: number; headroom: number } {
+function measureGzip(label: string, name: string, bytes: Buffer, maxBytes: number): { bytes: number; headroom: number } {
+  // Feed the bytes on stdin: gzip -9's file-name header would otherwise
+  // charge the 64-character hash as growth despite identical shipped JS/WASM.
+  const size = execFileSync("gzip", ["-9", "-c"], { input: bytes, maxBuffer: 16 * 1024 * 1024 }).byteLength;
+  const headroom = maxBytes - size;
+  console.log(`${name}: ${size} gzip -9 bytes (stdin, filename-independent); threshold=${maxBytes}; headroom=${headroom} bytes`);
+  if (headroom < 0) {
+    throw new Error(`${label} exceeds reviewed gzip threshold by ${-headroom} bytes; change threshold only after review`);
+  }
+  return { bytes: size, headroom };
+}
+
+function assertThreshold(maxBytes: number): void {
   if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
     throw new Error(`Invalid worker gzip threshold: ${maxBytes}`);
   }
+}
+
+export function checkWorkerSize(distDir: string, maxBytes = MAX_WORKER_GZIP_BYTES): { bytes: number; headroom: number } {
+  assertThreshold(maxBytes);
 
   const candidates = readdirSync(distDir).filter((name) => canonicalName.test(name));
   if (candidates.length !== 1) {
@@ -52,21 +71,26 @@ export function checkWorkerSize(distDir: string, maxBytes = MAX_WORKER_GZIP_BYTE
     throw new Error("Stable kv-storage.worker.js alias differs from the canonical hashed worker");
   }
 
-  // Feed canonical bytes on stdin: gzip -9's file-name header would otherwise
-  // charge the 64-character hash as growth despite identical shipped JS/WASM.
-  const size = execFileSync("gzip", ["-9", "-c"], { input: bytes, maxBuffer: 16 * 1024 * 1024 }).byteLength;
-  const headroom = maxBytes - size;
-  console.log(`${name}: ${size} gzip -9 bytes (stdin, filename-independent); threshold=${maxBytes}; headroom=${headroom} bytes`);
-  if (headroom < 0) {
-    throw new Error(`Canonical kv-storage worker exceeds reviewed gzip threshold by ${-headroom} bytes; change threshold only after review`);
-  }
-  return { bytes: size, headroom };
+  return measureGzip("Canonical kv-storage worker", name, bytes, maxBytes);
+}
+
+export function checkReplicaWorkerSize(distDir: string, maxBytes = MAX_REPLICA_WORKER_GZIP_BYTES): { bytes: number; headroom: number } {
+  assertThreshold(maxBytes);
+  return measureGzip("Replica worker", replicaWorkerName, readFileSync(join(distDir, replicaWorkerName)), maxBytes);
 }
 
 if (import.meta.main) {
   try {
     assertWorkerSizeToolchain(Bun.version, execFileSync("rustc", ["--version"], { encoding: "utf8" }).trim());
-    checkWorkerSize(resolve(import.meta.dir, "../dist"));
+    const dist = resolve(import.meta.dir, "../dist");
+    for (const check of [checkWorkerSize, checkReplicaWorkerSize]) {
+      try {
+        check(dist);
+      } catch (error) {
+        console.error(error);
+        process.exitCode = 1;
+      }
+    }
   } catch (error) {
     console.error(error);
     process.exitCode = 1;
