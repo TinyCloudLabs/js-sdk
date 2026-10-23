@@ -2,14 +2,14 @@ import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { inviteRecordsFor } from '../dist/invite-commands.js';
-import { InviteWatcher, readRecord, recordPath, welcomeTier } from '../dist/invite-watch.js';
+import { inviteRecordsFor, storedRecord } from '../dist/invite-commands.js';
+import { InviteWatcher, readRecord, recordPath } from '../dist/invite-watch.js';
 import { inviteFolder, parseWelcome } from '../dist/invite-schema.js';
 import { newInviteId } from '../dist/invite-blob.js';
 import { writeSecure } from '../dist/profile.js';
 import { memoryKv } from './memory-kv.mjs';
 
-// A record exactly as `invite create` writes it (inviteRecordsFor + oneTimeKeyHash) must be accepted by the watcher.
+// A record exactly as `invite create` writes it (inviteRecordsFor + storedRecord) must be accepted by the watcher.
 const NOW = Date.parse('2026-10-21T12:00:00.000Z');
 const ISSUED = '2026-10-21T00:00:00.000Z';
 const SAM_ADDR = '0x1234567890abcdef1234567890abcdef12345678';
@@ -56,7 +56,7 @@ function createdRecord(over) {
     publicDir: undefined,
     ...over,
   });
-  writeSecure(recordPath(inviteId), { ...record, oneTimeKeyHash: 'hash-of-one-time-key' });
+  writeSecure(recordPath(inviteId), storedRecord(record, 'hash-of-one-time-key'));
   return inviteId;
 }
 
@@ -92,15 +92,9 @@ function watcher() {
 
 const welcomeOf = (id) => kv.rows.get(`${inviteFolder(id)}out/welcome.json`)?.value;
 
-test('welcomeTier carries a requested trusted as trusted-requested and leaves the other tiers alone', () => {
-  assert.equal(welcomeTier('trusted'), 'trusted-requested');
-  assert.equal(welcomeTier('strict'), 'strict');
-  assert.equal(welcomeTier('trusted-requested'), 'trusted-requested');
-});
-
 test('a created record with no owner check and --tier strict pairs on a valid hello', async () => {
   const id = createdRecord({});
-  assert.equal(readRecord(id).expectOwner, null);
+  assert.equal(Object.hasOwn(readRecord(id), 'expectOwner'), false);
   await helloFor(id);
   await watcher().onHello(id);
   assert.equal(readRecord(id).status, 'completed');
@@ -109,7 +103,7 @@ test('a created record with no owner check and --tier strict pairs on a valid he
 
 test('a created --tier trusted record pairs with a Welcome the invitee parses as trusted-requested, never trusted', async () => {
   const id = createdRecord({ tier: 'trusted' });
-  assert.equal(readRecord(id).tier, 'trusted');
+  assert.equal(readRecord(id).tier, 'trusted-requested');
   await helloFor(id);
   await watcher().onHello(id);
   assert.equal(readRecord(id).status, 'completed');

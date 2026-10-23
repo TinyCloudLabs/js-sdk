@@ -5,7 +5,7 @@ import { acceptB, fail } from './commands.js';
 import { CourierError } from './errors.js';
 import { deleteSealed as deleteSealedReal, inviteOrigin } from './invite-link.js';
 import { readPublicStatus, updatePublicInvite, type PublicInvite } from './invite-public.js';
-import { inviteFolder, ownerMatches, parseHello, type Hello, type RequestedTier, type Tier, type Welcome } from './invite-schema.js';
+import { inviteFolder, ownerMatches, parseHello, type Hello, type Tier, type Welcome } from './invite-schema.js';
 import type { Notice, Notifier } from './notify.js';
 import type { WatchLog } from './wake.js';
 import { saveProfile, secureSubdir, writeSecure, type Profile } from './profile.js';
@@ -19,8 +19,6 @@ export function requestedTier(flag: string): AcceptedTier {
   if (flag === 'trusted') return 'trusted-requested';
   return fail('usage', '--tier must be strict or trusted.');
 }
-/** The tier a record carries into the Welcome and notices. The create-time request `trusted` travels as `trusted-requested`; nothing here grants it. */
-export const welcomeTier = (tier: AcceptedTier | RequestedTier): AcceptedTier => (tier === 'trusted' ? 'trusted-requested' : tier);
 export type InviteStatus = 'open' | 'consumed' | 'held' | 'completed' | 'failed' | 'denied' | 'revoked' | 'expired';
 export type Log = (entry: Record<string, unknown>) => void;
 /** Adapts the wake log's `(event, fields)` form to the record-style log the watcher calls. */
@@ -33,15 +31,14 @@ export interface InviteRecord {
   handle: string;
   callMe: string;
   email: string;
-  /** Requested tier: `trusted` from `invite --tier trusted`, or what `invite approve --tier` set. */
-  tier: AcceptedTier | RequestedTier;
+  tier: AcceptedTier;
   alsoAsk: boolean;
   expiresAt: string;
   store: { id: string; cid: string; deleteToken: string };
   /** SHA-256 of the one-time public key, fixed at create. Verification binds the credential to it. */
   oneTimeKeyHash: string;
   /** Owner DID the peer must match when set. Unset means no owner check. */
-  expectOwner?: string | null;
+  expectOwner?: string;
   status: InviteStatus;
   /** Public record directory, resolved from --invites-public-dir or the env at create. Unset means no public copy. */
   publicDir?: string;
@@ -330,7 +327,7 @@ export class InviteWatcher {
     });
     if (!verified.ok) return { ok: false, reason: verified.reason };
     if (verified.address !== record.email) return { ok: false, reason: 'address-mismatch' };
-    if (typeof record.expectOwner === 'string' && !ownerMatches(record.expectOwner, hello.artifactB.from.owner)) {
+    if (record.expectOwner !== undefined && !ownerMatches(record.expectOwner, hello.artifactB.from.owner)) {
       return { ok: false, reason: 'owner-mismatch' };
     }
     if (record.alsoAsk) return { ok: false, reason: 'also-ask' };
@@ -366,7 +363,7 @@ export class InviteWatcher {
         writeRecord(record);
       }
       this.env.fault?.('before-welcome');
-      await this.writeWelcome({ v: 1, inviteId: record.inviteId, tier: welcomeTier(record.tier), artifactC: record.artifactC, sentAt: this.now().toISOString() });
+      await this.writeWelcome({ v: 1, inviteId: record.inviteId, tier: record.tier, artifactC: record.artifactC, sentAt: this.now().toISOString() });
       record.status = 'completed';
       record.completedPeer = { handle: record.handle, courierDid: hello.artifactB.from.courier, ownerDid: hello.artifactB.from.owner };
       delete record.held;
@@ -516,5 +513,5 @@ export class InviteWatcher {
 }
 
 function inviteFacts(record: InviteRecord, hello: Hello, reason: string): NonNullable<Notice['invite']> {
-  return { id: record.inviteId, handle: record.handle, label: hello.claimedLabel, owner: hello.artifactB.from.owner, courierDid: hello.artifactB.from.courier, reason, tier: welcomeTier(record.tier) };
+  return { id: record.inviteId, handle: record.handle, label: hello.claimedLabel, owner: hello.artifactB.from.owner, courierDid: hello.artifactB.from.courier, reason, tier: record.tier };
 }

@@ -100,7 +100,7 @@ export function inviteRecordsFor(input: {
 }
 
 /** The record the watcher reads: the requested tier in its stored form (`requestedTier`), no `expectOwner` key when there is no owner check, and the one-time key hash. */
-function storedRecord(created: CreatedInviteRecord, keyHash: string): InviteRecord {
+export function storedRecord(created: CreatedInviteRecord, keyHash: string): InviteRecord {
   const { expectOwner, tier, ...rest } = created;
   return { ...rest, tier: requestedTier(tier), oneTimeKeyHash: keyHash, ...(expectOwner === null ? {} : { expectOwner }) };
 }
