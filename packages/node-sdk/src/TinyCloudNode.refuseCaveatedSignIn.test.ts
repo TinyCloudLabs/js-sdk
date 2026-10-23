@@ -1,11 +1,11 @@
 /**
- * TC-1855: a sign-in or session preparation asked for a permission with a
- * non-empty caveat must refuse (typed `CAVEATED_DELEGATION_UNSUPPORTED`)
- * before any request or signature. `prepareSession` takes action-only
- * abilities, so signing would otherwise produce a WIDER session than asked.
+ * TC-1855: a sign-in or session preparation given a permission with a
+ * non-empty caveat refuses with the typed `CAVEATED_DELEGATION_UNSUPPORTED`
+ * error before any request or signature, because `prepareSession` takes
+ * action-only abilities.
  *
- * Absent, `[]`, `[{}]` and `[{}, {}]` caveats are unconstrained and keep
- * reaching `prepareSession` exactly as before.
+ * Absent, `[]`, `[{}]` and `[{}, {}]` caveats are unconstrained and reach
+ * `prepareSession`.
  */
 
 import { afterEach, beforeEach, describe, expect, mock, test, type Mock } from "bun:test";
@@ -375,6 +375,71 @@ describe("TinyCloudNode.createOwnerDelegation", () => {
   test("unconstrained caveats are not refused", async () => {
     for (const [, caveats] of UNCONSTRAINED) {
       const { run } = ownerDelegation(caveats);
+
+      // Not signed in, so it stops later for an unrelated reason.
+      expect(await rejection(run)).not.toBeInstanceOf(CaveatedDelegationUnsupportedError);
+    }
+  });
+});
+
+describe("TinyCloudNode.createSubDelegation", () => {
+  function subDelegation(caveats: Caveats) {
+    const { wasm, prepareSession } = fakeWasm();
+    const { signer, calls } = spySigner();
+    const node = new TinyCloudNode({
+      wasmBindings: wasm,
+      signer,
+      host: "https://tinycloud.test",
+      autoBootstrapAccount: false,
+    });
+    const parent = {
+      cid: "bafyparent",
+      delegationHeader: { Authorization: "Bearer parent" },
+      spaceId: `tinycloud:pkh:eip155:1:${ADDRESS}:default`,
+      path: "notes/",
+      actions: ["tinycloud.kv/get"],
+      disableSubDelegation: false,
+      expiry: new Date(Date.now() + 60_000),
+      delegateDID: "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+      ownerAddress: ADDRESS,
+      chainId: 1,
+    };
+    return {
+      run: () =>
+        node.createSubDelegation(parent, {
+          path: "notes/",
+          actions: ["tinycloud.kv/get"],
+          delegateDID: "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+          resources: [
+            {
+              service: "tinycloud.kv",
+              path: "notes/",
+              actions: ["tinycloud.kv/get"],
+              ...(caveats === undefined ? {} : { caveats }),
+            },
+          ],
+        }),
+      prepareSession,
+      calls,
+    };
+  }
+
+  for (const [label, caveats] of CAVEATED) {
+    test(`refuses ${label} before any signature`, async () => {
+      const { run, prepareSession, calls } = subDelegation(caveats);
+      const before = calls();
+
+      expectCaveatRefusal(await rejection(run));
+
+      expect(calls()).toBe(before);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(prepareSession).not.toHaveBeenCalled();
+    });
+  }
+
+  test("unconstrained caveats are not refused", async () => {
+    for (const [, caveats] of UNCONSTRAINED) {
+      const { run } = subDelegation(caveats);
 
       // Not signed in, so it stops later for an unrelated reason.
       expect(await rejection(run)).not.toBeInstanceOf(CaveatedDelegationUnsupportedError);

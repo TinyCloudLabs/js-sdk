@@ -25,7 +25,6 @@ import {
   AbilitiesMap,
   DEFAULT_MANIFEST_SPACE,
   ENCRYPTION_PERMISSION_SERVICE,
-  assertNoCaveatedManifestPermissions,
   composeManifestRequest,
   parseNetworkId,
   principalDidEquals,
@@ -66,6 +65,7 @@ import {
 import type { ReplicationOptions } from "@tinycloud/sdk-core";
 import type { PermissionEntry } from "@tinycloud/sdk-core";
 import { augmentSignInEntriesWithReplication } from "../replication/authority-sign-in";
+import { refuseCaveatedManifests } from "./caveatRefusal";
 import {
   SignStrategy,
   SignRequest,
@@ -829,19 +829,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
     return this._capabilityRequest;
   }
 
-  /**
-   * Refuse, before any request or signature, a manifest request whose
-   * permissions carry a non-empty caveat. The abilities map handed to
-   * `prepareSession` is action-only, so signing such a request would grant a
-   * wider session than the one asked for.
-   *
-   * @internal
-   */
-  assertNoCaveatedSignInRequest(): void {
-    const request = this.getCapabilityRequest();
-    if (request !== undefined) {
-      assertNoCaveatedManifestPermissions(request.manifests);
-    }
+  private assertNoCaveatedSignInRequest(): void {
+    refuseCaveatedManifests(this.getCapabilityRequest()?.manifests);
   }
 
   private resolveSpaceName(space: string, address: string, chainId: number): string {
@@ -1458,7 +1447,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   async createBootstrapSession(
     options: CreateBootstrapSessionOptions,
   ): Promise<TinyCloudSession> {
-    assertNoCaveatedManifestPermissions(options.capabilityRequest.manifests);
+    refuseCaveatedManifests(options.capabilityRequest.manifests);
     if (!this._address || !this._chainId) {
       throw new Error("Must be signed in before creating bootstrap sessions");
     }

@@ -17,7 +17,6 @@
 import {
   DEFAULT_MANIFEST_SPACE,
   type PermissionEntry,
-  type Manifest,
   SERVICE_SHORT_TO_LONG,
   expandActionShortNames,
 } from "./manifest";
@@ -79,44 +78,16 @@ export class CaveatedDelegationUnsupportedError extends Error {
 }
 
 /**
- * Whether `caveats` constrain anything: the array holds at least one object
- * with at least one key. Absent, `[]`, `[{}]` and `[{}, {}]` are unconstrained.
- * A value that is not an array of objects is treated as constrained
- * (fail closed).
+ * True unless `caveats` is absent or holds only plain empty objects; any other
+ * shape fails closed.
  */
 export function hasNonEmptyCaveat(caveats: unknown): boolean {
-  if (caveats === undefined) return false;
-  if (!Array.isArray(caveats)) return true;
-  return caveats.some((caveat) =>
+  return caveats !== undefined && (!Array.isArray(caveats) || caveats.some((caveat) =>
     caveat === null
     || typeof caveat !== "object"
-    || Array.isArray(caveat)
+    || (Object.getPrototypeOf(caveat) ?? Object.prototype) !== Object.prototype
     || Object.keys(caveat).length > 0
-  );
-}
-
-/**
- * Refuse requester-supplied permission entries that carry a non-empty caveat.
- * Session preparation encodes action-only abilities, so signing such an entry
- * would grant wider authority than requested. Throws
- * {@link CaveatedDelegationUnsupportedError} before any request or signature.
- */
-export function assertNoCaveatedPermissions(
-  entries: readonly PermissionEntry[],
-): void {
-  const caveated = entries.filter((entry) => hasNonEmptyCaveat(entry.caveats));
-  if (caveated.length > 0) {
-    throw new CaveatedDelegationUnsupportedError(caveated);
-  }
-}
-
-/** {@link assertNoCaveatedPermissions} over every explicit permission of the given manifests. */
-export function assertNoCaveatedManifestPermissions(
-  manifests: readonly Pick<Manifest, "permissions">[],
-): void {
-  assertNoCaveatedPermissions(
-    manifests.flatMap((manifest) => manifest.permissions ?? []),
-  );
+  ));
 }
 
 // ---------------------------------------------------------------------------

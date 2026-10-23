@@ -121,7 +121,6 @@ import {
   type PermissionEntry,
   ErrorCodes,
   ENCRYPTION_PERMISSION_SERVICE,
-  assertNoCaveatedPermissions,
   CaveatedDelegationUnsupportedError,
   PermissionNotInManifestError,
   SessionExpiredError,
@@ -201,6 +200,7 @@ import {
 } from "@tinycloud/sdk-services";
 import { RequestLog, observeReplicaReads, readOnlyRequestLog } from "@tinycloud/sdk-services/telemetry/requestLog";
 import { NodeUserAuthorization } from "./authorization/NodeUserAuthorization";
+import { refuseCaveatedEntries, refuseCaveatedManifests } from "./authorization/caveatRefusal";
 import type { SignStrategy } from "./authorization/strategies";
 import { AccountService } from "./account/AccountService";
 import { FileSessionStorage } from "./storage/FileSessionStorage";
@@ -735,9 +735,8 @@ function ownerDelegationPermissions(
     if (!Array.isArray(params.permissions)) {
       throw new Error("Owner delegation permissions are invalid");
     }
-    // `OwnerDelegationPermission` has no caveat field, but a caller can still
-    // spread a `PermissionEntry` in; this path signs action-only abilities.
-    assertNoCaveatedPermissions(params.permissions as readonly PermissionEntry[]);
+    // `OwnerDelegationPermission` has no caveat field, but a spread argument can carry one.
+    refuseCaveatedEntries(params.permissions as readonly PermissionEntry[]);
     permissions.push(...params.permissions.map((permission) => ({
       service: permission.service,
       path: permission.path,
@@ -2430,7 +2429,7 @@ export class TinyCloudNode {
 
   private async signInWith(performSignIn: () => Promise<unknown>): Promise<void> {
     // Refuse a caveated manifest before any signer, registry or host call.
-    this.auth?.assertNoCaveatedSignInRequest();
+    refuseCaveatedManifests(this.auth?.capabilityRequest?.manifests);
     // Read synchronously: a sign-out called after this sign-in started wins,
     // while a sign-out already in progress finishes before it starts.
     const epoch = this.sessionEpoch;
@@ -8830,6 +8829,8 @@ export class TinyCloudNode {
     // every grant in `delegation.resources[]`; the flat `path`/`actions`
     // mirror only the first resource. Building from the flat fields alone
     // silently drops every other resource from the activated session.
+    // Activation replays an already-signed delegation: this map restates that
+    // delegation's resources and is not a new permission request.
     const { abilities, rawAbilities } = this.buildActivationAbilities(delegation);
 
     const now = new Date();
@@ -8959,6 +8960,8 @@ export class TinyCloudNode {
     }
   ): Promise<PortableDelegation> {
     this.assertPortableDelegationCaveatsPreservable(parentDelegation);
+    // Requested resources have no caveat field; a spread argument can still carry one.
+    refuseCaveatedEntries(params.resources ?? []);
 
     if (!this.signer) {
       throw new Error("Cannot createSubDelegation() in session-only mode. Requires wallet mode.");
