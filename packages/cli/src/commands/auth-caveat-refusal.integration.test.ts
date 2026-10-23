@@ -1,5 +1,5 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PermissionEntry } from "@tinycloud/node-sdk";
@@ -44,9 +44,10 @@ interface CliResult {
 }
 
 /** A TinyCloud node and OpenKey stand-in that records every request it receives. */
-async function runCli(args: string[]): Promise<CliResult> {
+async function runCli(args: string[], files: Record<string, string> = {}): Promise<CliResult> {
   const home = await mkdtemp(join(tmpdir(), "tc1856-"));
   homes.push(home);
+  for (const [name, content] of Object.entries(files)) await writeFile(join(home, name), content);
   const requests: string[] = [];
   const server = Bun.serve({ port: 0, fetch(request) {
     requests.push(`${request.method} ${new URL(request.url).pathname}`);
@@ -58,7 +59,7 @@ async function runCli(args: string[]): Promise<CliResult> {
     ownerDid: OWNER_DID, posture: "owner-openkey", authMethod: "openkey",
     createdAt: "2026-10-01T00:00:00.000Z",
   }));
-  const child = Bun.spawn([process.execPath, cliEntry, "--quiet", "--json", "--profile", PROFILE, ...args], {
+  const child = Bun.spawn([process.execPath, cliEntry, "--quiet", "--json", "--profile", PROFILE, ...args.map((arg) => arg.replace("$HOME", home))], {
     env: { ...process.env, HOME: home, TC_HOME: home, TC_OPENKEY_HOST: server.url.origin, TC_OPENKEY_API_HOST: server.url.origin },
     stdin: "ignore", stdout: "pipe", stderr: "pipe",
   });
@@ -92,6 +93,22 @@ for (const [name, manifest] of Object.entries(limitedManifests)) {
     expectRefused(await runCli(["auth", "request", "--grant", "--manifest", manifest, "--no-popup"]));
   });
 }
+
+test("login refuses a manifest whose caveats are several empty objects", async () => {
+  const manifest = manifestSource({ app_id: "tc1856-app", space: "default", permissions: [kvEntry([{}, {}])] });
+  expectRefused(await runCli(["auth", "login", "--method", "openkey", "--manifest", manifest, "--no-popup", "--owner", OWNER_DID]));
+});
+
+test("auth grant on an OpenKey owner profile refuses a limited request before printing a scope, prompting or any request", async () => {
+  const artifact = JSON.stringify({
+    kind: "tinycloud.auth.request", version: 1, requestId: "tc1856-request",
+    sessionDid: "did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH",
+    requested: [{ service: "tinycloud.kv", space: SPACE, path: "notes", actions: ["tinycloud.kv/get"], caveats: [{ tenant: "alpha" }] }],
+  });
+  const result = await runCli(["auth", "grant", "$HOME/request.json"], { "request.json": artifact });
+  expectRefused(result);
+  expect(result.output).not.toContain("notes");
+});
 
 const limited: PermissionEntry = {
   service: "tinycloud.kv", space: SPACE, path: "notes", actions: ["tinycloud.kv/get"], caveats: [{ tenant: "alpha" }],

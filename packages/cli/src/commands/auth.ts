@@ -1322,6 +1322,8 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         const requested = finalizeSigningEntries(
           await resolvePermissionSpaces(entriesForSigning(parsed.requested as PermissionEntry[]), ctx.profile),
         );
+        // Before the scope is printed, the session is checked or any prompt is shown.
+        if (profile.authMethod === "openkey") assertNoCaveatLimits(requested);
         const [applications] = await resolvePermissionSpaces(
           [{ service: "tinycloud.kv", space: APPS_AGENT_SPACE, path: "", actions: ["tinycloud.kv/get"] }],
           ctx.profile,

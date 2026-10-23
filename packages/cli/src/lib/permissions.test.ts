@@ -419,7 +419,7 @@ describe("loadManifestPermissions", () => {
     ["string id", { id: "tc1856-id", app_id: "tc1856-id", name: "Limited" }],
     ["app_id only", { app_id: "tc1856-app" }],
   ])("refuses a %s manifest whose permission carries a limit", async (_name, base) => {
-    for (const caveats of [[{ tenant: "alpha" }], [{}, { tenant: "alpha" }], [null], ["x"], [[]], "tenant", null]) {
+    for (const caveats of [[{ tenant: "alpha" }], [{}, { tenant: "alpha" }], [{}, {}], [null], ["x"], [[]], "tenant", null]) {
       await expect(loadManifestPermissions(
         manifestSource({ ...base, space: "default", permissions: [caveatedEntry(caveats)] }),
         "default",
@@ -429,16 +429,22 @@ describe("loadManifestPermissions", () => {
   });
 
   test.each([
-    ["string id", { id: "tc1856-id", app_id: "tc1856-id", name: "Open" }],
-    ["app_id only", { app_id: "tc1856-app" }],
-  ])("still loads a %s manifest whose caveats are absent or empty", async (_name, base) => {
-    for (const caveats of [undefined, [], [{}], [{}, {}]]) {
+    ["string id", { id: "tc1856-id", app_id: "tc1856-id", name: "Open" }, false],
+    ["app_id only", { app_id: "tc1856-app" }, true],
+  ])("still loads a %s manifest whose caveats are absent, [] or [{}]", async (_name, base, keepsCaveats) => {
+    for (const caveats of [undefined, [], [{}]]) {
       const permissions = await loadManifestPermissions(
         manifestSource({ ...base, space: "default", permissions: [caveatedEntry(caveats)] }),
         "default",
         { allowLogicalSpaces: true },
       );
-      expect(permissions.some((permission) => permission.path.endsWith("notes"))).toBe(true);
+      expect(permissions).toContainEqual({
+        service: "tinycloud.kv",
+        space: `tinycloud:pkh:eip155:1:${OWNER_ADDRESS}:default`,
+        path: "notes",
+        actions: ["tinycloud.kv/get"],
+        ...(keepsCaveats && caveats !== undefined ? { caveats } : {}),
+      });
     }
   });
 
