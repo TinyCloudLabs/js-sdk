@@ -29,6 +29,8 @@
     "@tinycloud/sdk-services-test": "19.0.0"
   },
   "changesets": [
-    "developer-request-log"
+    "developer-request-log",
+    "node-decrypt-grant-expiry",
+    "node-permission-per-entry-coverage"
   ]
 }
