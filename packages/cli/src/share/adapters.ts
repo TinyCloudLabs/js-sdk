@@ -862,7 +862,6 @@ export function createShareAuthorityAdapters(input: {
       encryptionNetwork: addressedEncryptionNetwork!,
       actions,
       policyActions,
-      ...(prepared.credentialRequirement === undefined ? {} : { credentialRequirement: prepared.credentialRequirement }),
       ...(deliveryEmail === undefined ? {} : { deliveryEmail }),
       filename: targetInput.filename,
       mediaType,

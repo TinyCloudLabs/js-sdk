@@ -618,7 +618,6 @@ export interface AddressedShareBoundInput extends AddressedShareRequest {
   readonly storage: { readonly path: string } | { readonly artifactId: string; readonly storageName: string };
   /** The owner's encryption network for the space. */
   readonly encryptionNetwork: string;
-  readonly credentialRequirement?: PolicyCredentialRequirementV1;
   readonly mediaType: string;
   readonly byteLength: number;
   readonly artifact?: "html";
@@ -634,7 +633,10 @@ export interface AddressedShareBoundInput extends AddressedShareRequest {
  * are taken at their largest.
  */
 export async function addressedShareBodyUpperBound(input: AddressedShareBoundInput): Promise<number> {
-  const { target } = prepareAddressedShare(input);
+  // The requirement and the delivery address are derived exactly as the publish derives them, so the bound carries
+  // every field the sealed envelope can: a caller cannot leave one out, and a mailbox target always has its commitment.
+  const { target, credentialRequirement } = prepareAddressedShare(input);
+  const deliveryEmail = input.deliveryEmail ?? (target.kind === "email" && isEnvelopeDeliveryEmail(target.address) ? target.address : undefined);
   const artifactStorage = "artifactId" in input.storage ? input.storage : undefined;
   const path = "path" in input.storage
     ? input.storage.path
@@ -651,8 +653,8 @@ export async function addressedShareBodyUpperBound(input: AddressedShareBoundInp
     shareId: input.shareId, nodeOrigin: input.nodeOrigin, nodeAudience: input.nodeAudience, enforcerDid: input.enforcerDid, spaceId: input.spaceId,
     actions: input.actions, policyActions: input.policyActions, resource: { kind: input.resource.kind, path },
     contentSource, ...(artifactPin === undefined ? {} : { artifactPin }),
-    ...(input.credentialRequirement === undefined ? {} : { credentialRequirement: input.credentialRequirement }),
-    ...(target.kind === "email" && input.deliveryEmail !== undefined ? { deliveryEmail: input.deliveryEmail } : {}),
+    ...(credentialRequirement === undefined ? {} : { credentialRequirement }),
+    ...(deliveryEmail === undefined ? {} : { deliveryEmail }),
     ...(input.artifact === undefined ? {} : { artifact: input.artifact }),
     filename: canonicalShareFilename(input.filename), mediaType: input.mediaType, byteLength: input.byteLength, expiresAt: input.expiresAt,
     matcher: targetMatcher(target), ownerDid: input.ownerDid,

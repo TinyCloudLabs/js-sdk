@@ -169,3 +169,49 @@ describe("addressed share size bound", () => {
     expect(materialCalls).toBe(0);
   });
 });
+
+describe("addressed share size bound: every field the envelope can carry", () => {
+  const PATH = `shares/${SHARE_ID}/note.md`;
+  const longMailbox = `${"reader-".repeat(8)}name@example.com`;
+
+  /** The bound input a sender holds before any write: it names no credential requirement and no pin of its own. */
+  function boundFor(target: Target, deliveryEmail?: string): AddressedShareBoundInput {
+    return {
+      shareId: SHARE_ID, ownerDid, nodeOrigin: "https://node.example", nodeAudience: nodeDid, enforcerDid: nodeDid, spaceId: SPACE, target,
+      resource: { kind: "exact" }, storage: { path: PATH }, encryptionNetwork: NETWORK,
+      actions: ["read"], policyActions: ["tinycloud.kv/get", "tinycloud.kv/metadata"],
+      ...(deliveryEmail === undefined ? {} : { deliveryEmail }),
+      filename: "note.md", mediaType: "text/markdown", byteLength: 4096, expiresAt: EXPIRES_AT,
+    };
+  }
+
+  const cases: readonly { readonly name: string; readonly target: Target; readonly deliveryEmail?: string }[] = [
+    { name: "an email address, pinned by default", target: { kind: "email", address: "alice@example.com" } },
+    { name: "an email domain with a pinned mailbox", target: { kind: "emailDomain", domain: "example.com" }, deliveryEmail: "reader@example.com" },
+    { name: "an email domain without a pinned mailbox", target: { kind: "emailDomain", domain: "example.com" } },
+    { name: "a DID with a pinned mailbox", target: { kind: "recipientDid", did: didFor(foreignSeed) }, deliveryEmail: longMailbox },
+    { name: "a DID without a pinned mailbox", target: { kind: "recipientDid", did: didFor(foreignSeed) } },
+  ];
+
+  for (const { name, target, deliveryEmail } of cases) {
+    it(`covers the sealed envelope of a share to ${name}`, async () => {
+      const { options } = share(target, PATH);
+      const real = await realSize(await publishAddressedShare({ ...options, ...(deliveryEmail === undefined ? {} : { deliveryEmail }) }));
+      const upper = await addressedShareBodyUpperBound(boundFor(target, deliveryEmail));
+      expect(real).toBeLessThanOrEqual(upper);
+      expect(upper - real).toBeLessThan(400);
+    });
+  }
+
+  it("grows with the credential requirement a mailbox target derives and with a pinned mailbox", async () => {
+    const did: Target = { kind: "recipientDid", did: didFor(foreignSeed) };
+    const plain = await addressedShareBodyUpperBound(boundFor(did));
+    // A mailbox target carries the Policy/v2 commitment: some 400 bytes a DID target does not.
+    expect(await addressedShareBodyUpperBound(boundFor({ kind: "emailDomain", domain: "example.com" }))).toBeGreaterThan(plain + 300);
+    // A pinned mailbox is carried in the envelope whatever the target kind.
+    expect(await addressedShareBodyUpperBound(boundFor(did, longMailbox))).toBeGreaterThanOrEqual(plain + longMailbox.length);
+    // An email target is pinned to its own address even when the caller names none.
+    const email: Target = { kind: "email", address: `${"a".repeat(60)}@example.com` };
+    expect(await addressedShareBodyUpperBound(boundFor(email))).toBeGreaterThanOrEqual(await addressedShareBodyUpperBound(boundFor({ kind: "email", address: "a@example.com" })) + 59);
+  });
+});
