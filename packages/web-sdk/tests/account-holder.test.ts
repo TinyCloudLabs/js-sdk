@@ -28,6 +28,15 @@ async function refusedCode(run: () => Promise<unknown>): Promise<unknown> {
   return "no-throw";
 }
 
+function codeOf(run: () => unknown): unknown {
+  try {
+    run();
+  } catch (error) {
+    return error instanceof EmailProofError ? error.code : error;
+  }
+  return "no-throw";
+}
+
 /** The wallet's personal_sign over the exact bytes: the one place the EIP-191 prefix is applied in these tests. */
 async function personalSign(account: typeof OWNER, bytes: Uint8Array): Promise<Uint8Array> {
   return hexToBytes(await account.signMessage({ message: new TextDecoder().decode(bytes) }));
@@ -55,7 +64,7 @@ function withV(signature: Uint8Array, v: number): Uint8Array {
 }
 
 test("account signer is EIP191 with the EIP-55 did and the blockchainAccountId kid", () => {
-  const signer = createAccountHolderSigner(ACCOUNT.toLowerCase(), wallet(OWNER).sign);
+  const signer = createAccountHolderSigner(ACCOUNT.toLowerCase(), sign);
   expect(signer.alg).toBe("EIP191");
   expect(signer.did).toBe(ACCOUNT);
   expect(signer.kid).toBe(`${ACCOUNT}#blockchainAccountId`);
@@ -68,6 +77,31 @@ test("signer accepts domain-prefixed bytes, calls the wallet once with the exact
   expect(signature.length).toBe(65);
   expect(calls.count).toBe(1);
   expect(signature).toEqual(await personalSign(OWNER, bindingBytes()));
+});
+
+test("signer hands the wallet the very bytes it was given and returns the wallet's own signature object", async () => {
+  const message = bindingBytes();
+  const signature = await personalSign(OWNER, message);
+  const seen: Uint8Array[] = [];
+  const signer = createAccountHolderSigner(ACCOUNT, async (bytes) => {
+    seen.push(bytes);
+    return signature;
+  });
+  expect(await signer.sign(message)).toBe(signature);
+  expect(seen[0]).toBe(message);
+});
+
+test("the wallet receives UTF8(domain), one 0x00 byte, then the JCS binding, byte for byte", async () => {
+  const jcs = `{"did":"${ACCOUNT}","signingDomain":"${DOMAIN}"}`;
+  const expected = new Uint8Array([...new TextEncoder().encode(DOMAIN), 0x00, ...new TextEncoder().encode(jcs)]);
+  const seen: Uint8Array[] = [];
+  const signer = createAccountHolderSigner(ACCOUNT, async (bytes) => {
+    seen.push(bytes);
+    return personalSign(OWNER, bytes);
+  });
+  await signer.sign(new TextEncoder().encode(`${DOMAIN}\u0000${jcs}`));
+  expect(seen[0]).toEqual(expected);
+  expect(seen[0]?.[DOMAIN.length]).toBe(0);
 });
 
 test("signer refuses every input outside the account-binding domain before the wallet is called", async () => {
@@ -105,6 +139,12 @@ test("account signer propagates a wallet rejection", async () => {
     throw new Error("wallet rejected");
   });
   await expect(signer.sign(bindingBytes())).rejects.toThrow("wallet rejected");
+});
+
+test("account signer refuses anything that is not a did:pkh:eip155 account", () => {
+  for (const did of [DID_KEY, "did:pkh:solana:1:abc", "not-a-did"]) {
+    expect(codeOf(() => createAccountHolderSigner(did, sign))).toBe("HOLDER_INVALID");
+  }
 });
 
 test("signer refuses a signature from another key", async () => {
@@ -170,7 +210,7 @@ test("signer refuses every owner that is not an Ethereum mainnet account", () =>
   };
   const results: Record<string, unknown> = {};
   for (const [name, did] of Object.entries(dids)) {
-    results[name] = refusedCodeSync(() => createAccountHolderSigner(did, sign));
+    results[name] = codeOf(() => createAccountHolderSigner(did, sign));
   }
   expect(results).toEqual({
     "chain 137": "HOLDER_INVALID",
@@ -182,15 +222,6 @@ test("signer refuses every owner that is not an Ethereum mainnet account", () =>
     "not a did": "HOLDER_INVALID",
   });
 });
-
-function refusedCodeSync(run: () => unknown): unknown {
-  try {
-    run();
-  } catch (error) {
-    return error instanceof EmailProofError ? error.code : error;
-  }
-  return "no-throw";
-}
 
 test("email-proof refuses an account holder under the v1 profile before any network call", async () => {
   let calls = 0;
