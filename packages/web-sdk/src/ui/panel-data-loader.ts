@@ -47,7 +47,7 @@ export function lazyRealPanelData(host: PanelDataHost, appName: () => string): P
       delegations: async (cursor) => (await ready()).delegations(cursor),
       revoke: async (cid) => (await ready()).revoke(cid),
       nodes: async () => (await ready()).nodes(),
-      storage: async () => (await ready()).storage(),
+      storage: async (options) => (await ready()).storage(options),
     };
   };
 }

@@ -1,3 +1,4 @@
+import type { StorageView, ViewResult } from "../data";
 import { STORAGE_MANAGE_URL } from "../manage-url";
 import type { HostContext, PanelClient, PanelSection } from "../slots";
 import { text } from "../strings";
@@ -42,8 +43,17 @@ function formatBytes(bytes: number): string {
   }).format(value);
 }
 
+/** Maps an awaited panel data view onto the reducer's result. An awaited read never yields `loading`, so it maps to `unknown`. */
+function resultFromView(view: ViewResult<StorageView>): StorageResult {
+  if (view.state === "ready") return { ok: true, value: view.data };
+  if (view.state === "needs-permission") return { ok: false, code: "PERMISSION_DENIED" };
+  if (view.state === "error") return { ok: false, code: view.code };
+  return { ok: false, code: "unknown" };
+}
+
 /** The SDK `Result` is `{data}` / `{error.code}`; the reducer reads `{value}` / `{code}`. */
-async function readStatus(client: PanelClient): Promise<StorageResult> {
+async function readStatus(client: PanelClient, fresh: boolean): Promise<StorageResult> {
+  if (client.data) return resultFromView(await client.data.storage({ fresh }));
   try {
     const result = await client.storage.status();
     if ("error" in result) return { ok: false, code: result.error.code };
@@ -145,14 +155,14 @@ export const storageSection: PanelSection = {
       manage.href = manageHref(read);
     }
 
-    async function load(): Promise<void> {
+    async function load(fresh: boolean): Promise<void> {
       const token = ++seq;
       busy = true;
       // A refetch keeps the previous result on screen; `loading` shows only with none.
       read = { signedIn: true, result: read.signedIn ? read.result : undefined };
       view = reduceStorage(read);
       render();
-      const result = await readStatus(client);
+      const result = await readStatus(client, fresh);
       busy = false;
       if (disposed || token !== seq) return;
       read = { signedIn: true, result };
@@ -175,7 +185,7 @@ export const storageSection: PanelSection = {
       busy = false;
       if (disposed) return;
       if (outcome.approved) {
-        void load();
+        void load(true);
         return;
       }
       view = afterAuthority(outcome);
@@ -185,18 +195,18 @@ export const storageSection: PanelSection = {
     action.addEventListener("click", (event) => {
       if (!event.isTrusted || busy) return;
       if (view.kind === "error") {
-        void load();
+        void load(true);
         return;
       }
       void askAuthority();
     });
 
     const unsubscribe = client.storageEpisode?.subscribe(() => {
-      void load();
+      void load(true);
     });
 
     el.append(style, word, usage, bar, note, action, manage);
-    void load();
+    void load(false);
 
     return () => {
       disposed = true;

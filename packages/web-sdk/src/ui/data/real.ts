@@ -117,9 +117,10 @@ export function createRealPanelData(
     key: SectionKey,
     ttlMs: number,
     fetch: () => Promise<ViewResult<T>>,
+    force = false,
   ): Promise<ViewResult<T>> {
     const snap = snapFor(key);
-    if (snap.value === undefined) {
+    if (snap.value === undefined || force) {
       await refresh(key, fetch);
       return snap.value === undefined
         ? viewLoading<T>()
@@ -268,6 +269,6 @@ export function createRealPanelData(
       );
     },
 
-    storage: () => read("storage", STORAGE_TTL_MS, fetchStorage),
+    storage: (options) => read("storage", STORAGE_TTL_MS, fetchStorage, options?.fresh === true),
   };
 }

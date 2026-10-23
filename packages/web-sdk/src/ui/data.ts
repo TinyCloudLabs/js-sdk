@@ -354,7 +354,8 @@ export interface PanelDataSource {
 
   nodes(): Promise<ViewResult<readonly NodeRow[]>>;
 
-  storage(): Promise<ViewResult<StorageView>>;
+  /** `fresh` awaits a network read now. Otherwise a cached value is returned, refreshed in the background only when stale. */
+  storage(options?: { readonly fresh?: boolean }): Promise<ViewResult<StorageView>>;
 
   /** Present only when developer mode is on. Absent otherwise. */
   requests?(): RequestsView;
