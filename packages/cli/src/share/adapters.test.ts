@@ -1840,6 +1840,30 @@ describe("TinyCloud share authority adapter", () => {
     expect(invitations).toHaveLength(1);
   });
 
+  it("treats a 422 and a 400 from the delivery authorization as one refusal that names neither the link nor the key", async () => {
+    const adapters = deliveringAdapters();
+    const published = await adapters.targetAdapter.publish(addressedInput({ kind: "email", address: "alice@example.com" }));
+    if ("state" in published) throw new Error("expected addressed publication");
+    const record = recordWithShortLink(published);
+    const original = node.authorizeShareDeliveryV3;
+    const outcomes: unknown[] = [];
+    try {
+      for (const status of [422, 400]) {
+        const refusal = async (input: { readonly shareUrl: string; readonly envelopeKey: string }): Promise<never> => {
+          throw Object.assign(new Error(`V3 share delivery authorization failed: HTTP ${status} - ${input.shareUrl} ${input.envelopeKey}`), { status });
+        };
+        Object.defineProperty(node, "authorizeShareDeliveryV3", { value: refusal, configurable: true, writable: true });
+        outcomes.push(await notifyShare({ shareId: record.shareId, recipient: "alice@example.com", record, adapter: adapters.delivery }));
+      }
+    } finally {
+      Object.defineProperty(node, "authorizeShareDeliveryV3", { value: original, configurable: true, writable: true });
+    }
+    expect(outcomes[0]).toMatchObject({ state: "partial-failure", retryable: true });
+    expect(outcomes[1]).toEqual(outcomes[0]);
+    expect(JSON.stringify(outcomes)).not.toContain(record.link ?? "no link");
+    expect(JSON.stringify(outcomes)).not.toContain(published.deliveryMaterial!.envelopeKey);
+  });
+
   it("publishes mailboxes the envelope cannot pin unpinned; node 1.17.3 still delivers them", async () => {
     for (const address of ["a/b@example.com", "alice@example.xn--p1ai"]) {
       const uploadsBefore = uploadedPaths.length;

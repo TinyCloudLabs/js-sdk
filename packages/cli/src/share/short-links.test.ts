@@ -425,6 +425,30 @@ describe("tc share with links", () => {
     expect(delivered).toBe(shortRecord.link);
   });
 
+  test("a 422 and a 400 from the node's delivery authorization give the same notify result, exit code and output, and name neither link nor key", async () => {
+    const api = fakeApi();
+    const short = await publish([], { fetchFn: api.fetchFn });
+    const record: SenderShareRecord = { ...short.records.get("share-cmd")!, actions: ["tinycloud.kv/get"] };
+    const outputs: { readonly stdout: string; readonly stderr: string; readonly exitCode: number | undefined }[] = [];
+    for (const status of [422, 400]) {
+      const delivery = {
+        deliver: async (): Promise<"delivered"> => {
+          throw Object.assign(new Error(`V3 share delivery authorization failed: HTTP ${status} - ${record.link} ${short.published.key}`), { status });
+        },
+      };
+      outputs.push(await run(["notify", "share-cmd", "--to", "alice@example.com", "--json"], { records: memoryRecordsWith(record).storage, delivery, shortLinkInvitations: true }));
+    }
+    expect(outputs[0]!.exitCode).toBe(9);
+    expect(outputs[1]).toEqual(outputs[0]!);
+    expect(JSON.parse(outputs[0]!.stdout)).toMatchObject({ state: "partial-failure" });
+    for (const text of [outputs[0]!.stdout, outputs[0]!.stderr]) {
+      expect(text).not.toContain(record.link!);
+      expect(text).not.toContain(short.published.key);
+    }
+    // A partial failure sets exit 9, and Bun keeps a numeric exit code that is assigned undefined: clear it for the next test.
+    process.exitCode = 0;
+  });
+
   test("an over-limit share is MAX_BYTES_EXCEEDED (exit 7) with the approved text, and names what stays behind after a removal", async () => {
     const directory = await mkdtemp(join(tmpdir(), "tc-share-limit-"));
     const file = join(directory, "note.md");
