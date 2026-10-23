@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { ed25519 } from "@noble/curves/ed25519";
 import {
+  credentialRequirementDigest,
   issuedCredentialEnvelopeFromVerified,
   jcsCanonicalize,
   policyCidFromCanonicalBytes,
@@ -74,7 +75,19 @@ interface Fixture {
   readonly holderSigner: HolderSigner;
 }
 
-async function fixture(): Promise<Fixture> {
+/** Fixture knobs. requirement: replacement requirement, committed into the policy digest. issuedMsAgo: credential age. */
+interface FixtureOptions {
+  readonly requirement?: CredentialRequirement;
+  readonly issuedMsAgo?: number;
+}
+
+async function fixture(opts: FixtureOptions = {}): Promise<Fixture> {
+  const requirement = opts.requirement ?? requirementVector.sdkRequirement;
+  const policyProjection = opts.requirement
+    ? { ...requirementVector.policyProjection, requirementDigest: await credentialRequirementDigest(opts.requirement) }
+    : requirementVector.policyProjection;
+  const issuedAt = new Date(Date.now() - (opts.issuedMsAgo ?? 60_000)).toISOString();
+  const checkedAt = new Date().toISOString();
   const unsigned: UnsignedUnifiedPolicyV2 = {
     schema: POLICY_V2_SCHEMA,
     ownerDid: "did:key:zOwner",
@@ -89,7 +102,7 @@ async function fixture(): Promise<Fixture> {
       mode: "immutable",
     },
     capabilityCeiling: [capability],
-    credentialRequirement: requirementVector.policyProjection,
+    credentialRequirement: policyProjection,
   };
   const policy = policyFor(unsigned);
   const policyCid = cidOf(policy);
@@ -110,14 +123,14 @@ async function fixture(): Promise<Fixture> {
     claimsDigest: requirementVector.policyProjection.requirementDigest,
     descriptorDigest: requirementVector.policyProjection.descriptorDigest,
     credentialId: "credential",
-    issuedAt: "2026-10-04T00:00:00Z",
-    notBefore: "2026-10-04T00:00:00Z",
+    issuedAt,
+    notBefore: issuedAt,
     expiresAt: future(),
     status: { method: "none", freshnessSeconds: 3600 },
     credential: credentialText,
     credentialDigest: await sha256Base64Url(credentialText),
-    verifiedAt: "2026-10-04T00:00:00Z",
-    statusCheckedAt: "2026-10-04T00:00:00Z",
+    verifiedAt: checkedAt,
+    statusCheckedAt: checkedAt,
   };
   const result: EmailProofResult = {
     envelope: issuedCredentialEnvelopeFromVerified(verified),
@@ -144,7 +157,7 @@ async function fixture(): Promise<Fixture> {
     input: {
       holderSigner,
       result,
-      requirement: requirementVector.sdkRequirement,
+      requirement,
       challenge,
       policy,
       expectedNodeAudience: "did:key:zNode",
@@ -456,6 +469,86 @@ describe("buildSharePresentation fail-closed rejections (one per code)", () => {
     });
     expect(material.presentation.challengeId).toBe("0123456789abcdef");
     expect(material.presentation.nonce).toBe("fedcba9876543210");
+  });
+});
+
+describe("buildSharePresentation holder algorithm and credential freshness (signer never called on rejection)", () => {
+  test("HOLDER_ALG_UNSUPPORTED when the holder signer alg is not EdDSA; nothing is signed", async () => {
+    const f = await fixture();
+    for (const alg of ["EIP191", undefined]) {
+      const { holderSigner, calls } = countingSigner(f);
+      const error = await rejectionOf(buildSharePresentation({
+        ...f.input,
+        holderSigner: { ...holderSigner, alg: alg as unknown as HolderSigner["alg"] },
+      }));
+      expect(error.code).toBe("HOLDER_ALG_UNSUPPORTED");
+      expect(calls.n).toBe(0);
+    }
+  });
+
+  test("CREDENTIAL_EXPIRED when the credential expiry is in the past; nothing is signed", async () => {
+    const f = await fixture();
+    const { holderSigner, calls } = countingSigner(f);
+    const result = { ...f.result, verified: { ...f.result.verified, expiresAt: new Date(Date.now() - 1000).toISOString() } };
+    const error = await rejectionOf(buildSharePresentation({ ...f.input, holderSigner, result }));
+    expect(error.code).toBe("CREDENTIAL_EXPIRED");
+    expect(calls.n).toBe(0);
+  });
+
+  test("CREDENTIAL_EXPIRED when the credential expires 59 s out, inside the 60 s margin; nothing is signed", async () => {
+    const f = await fixture();
+    const { holderSigner, calls } = countingSigner(f);
+    const result = { ...f.result, verified: { ...f.result.verified, expiresAt: new Date(Date.now() + 59_000).toISOString() } };
+    const error = await rejectionOf(buildSharePresentation({ ...f.input, holderSigner, result }));
+    expect(error.code).toBe("CREDENTIAL_EXPIRED");
+    expect(calls.n).toBe(0);
+  });
+
+  test("CREDENTIAL_EXPIRED when the credential expiry is unparseable; fails closed, nothing is signed", async () => {
+    const f = await fixture();
+    const { holderSigner, calls } = countingSigner(f);
+    const result = { ...f.result, verified: { ...f.result.verified, expiresAt: "not-a-date" } };
+    const error = await rejectionOf(buildSharePresentation({ ...f.input, holderSigner, result }));
+    expect(error.code).toBe("CREDENTIAL_EXPIRED");
+    expect(calls.n).toBe(0);
+  });
+
+  test("a credential expiring 61 s out is accepted (just outside the margin)", async () => {
+    const f = await fixture();
+    const result = { ...f.result, verified: { ...f.result.verified, expiresAt: new Date(Date.now() + 61_000).toISOString() } };
+    const material = await buildSharePresentation({ ...f.input, result });
+    expect(material.credentialDigest).toBe(f.result.verified.credentialDigest);
+  });
+
+  test("CREDENTIAL_TOO_OLD when issuedAt is older than the requirement maxAgeSeconds (3600 s); nothing is signed", async () => {
+    const f = await fixture({ issuedMsAgo: 3_610_000 });
+    const { holderSigner, calls } = countingSigner(f);
+    const error = await rejectionOf(buildSharePresentation({ ...f.input, holderSigner }));
+    expect(error.code).toBe("CREDENTIAL_TOO_OLD");
+    expect(calls.n).toBe(0);
+  });
+
+  test("a credential issued 3590 s ago, inside maxAgeSeconds, is accepted", async () => {
+    const f = await fixture({ issuedMsAgo: 3_590_000 });
+    const material = await buildSharePresentation(f.input);
+    expect(material.credentialDigest).toBe(f.result.verified.credentialDigest);
+  });
+
+  test("a requirement without maxAgeSeconds sets no age limit: a 30-day-old credential is accepted", async () => {
+    const { maxAgeSeconds, ...requirement } = requirementVector.sdkRequirement;
+    expect(maxAgeSeconds).toBe(3600);
+    const f = await fixture({ requirement: requirement as CredentialRequirement, issuedMsAgo: 30 * 86_400_000 });
+    const material = await buildSharePresentation(f.input);
+    expect(material.presentation.requirementDigest).toBe(f.policy.credentialRequirement.requirementDigest);
+  });
+
+  test("with no maxAgeSeconds, issuedAt is not checked at all: an unparseable issuedAt is accepted (no invented age limit)", async () => {
+    const { maxAgeSeconds, ...requirement } = requirementVector.sdkRequirement;
+    expect(maxAgeSeconds).toBe(3600);
+    const f = await fixture({ requirement: requirement as CredentialRequirement });
+    const result = { ...f.result, verified: { ...f.result.verified, issuedAt: "not-a-date" } };
+    const material = await buildSharePresentation({ ...f.input, result });
+    expect(material.presentation.requirementDigest).toBe(f.policy.credentialRequirement.requirementDigest);
   });
 });
 

@@ -17,7 +17,10 @@ export type SharePresentationErrorCode =
   | "CHALLENGE_AUDIENCE_MISMATCH"
   | "CHALLENGE_RECIPIENT_MISMATCH"
   | "HOLDER_MISMATCH"
+  | "HOLDER_ALG_UNSUPPORTED"
   | "CREDENTIAL_MISMATCH"
+  | "CREDENTIAL_EXPIRED"
+  | "CREDENTIAL_TOO_OLD"
   | "POLICY_INVALID"
   | "POLICY_CID_MISMATCH"
   | "REQUIREMENT_MISMATCH"
@@ -42,6 +45,14 @@ const CHALLENGE_MAX_WINDOW_MS = 60_000;
  * and its minimum length are NOT CONFIRMED from this checkout.
  */
 const CHALLENGE_IDENTIFIER_MIN_LENGTH = 16;
+
+/**
+ * Local fail-closed margin on the credential's own expiry (CREDENTIAL_EXPIRED). Courier's
+ * StoredCredentialSource.find (packages/courier/src/credential-source.ts) applies NO margin: it
+ * relies on sdk-core credentialMatchesRequirement (strict expiresAt <= now). This 60 s value is a
+ * stricter local choice, not a Courier constant.
+ */
+const CREDENTIAL_EXPIRY_MARGIN_MS = 60_000;
 
 /**
  * Policy-v3 challenge as returned by the node (policy_v3.rs:1665-1673): challengeId, nonce,
@@ -113,6 +124,10 @@ function isRouteAShaped(challenge: unknown): boolean {
  * requires it non-empty. The sdk-core builder re-checks everything else and any builder
  * rejection maps to PRESENTATION_REJECTED. Signing is delegated to the holder signer
  * over the 32-byte V4 digest; no hashing happens here.
+ *
+ * Holder algorithm must be EdDSA. The credential must expire more than 60 seconds from now and,
+ * when the requirement sets maxAgeSeconds, must have been issued no more than that long ago.
+ * A requirement without maxAgeSeconds has no age limit; this builder does not invent one.
  */
 export async function buildSharePresentation(
   input: BuildSharePresentationInput,
@@ -150,11 +165,29 @@ export async function buildSharePresentation(
   if (holderSigner.did !== holderDid) {
     throw new SharePresentationError("HOLDER_MISMATCH", "holder signer does not match the credential holder");
   }
+  if (holderSigner.alg !== "EdDSA") {
+    throw new SharePresentationError("HOLDER_ALG_UNSUPPORTED", "holder signer algorithm is not EdDSA");
+  }
   if (challenge.recipientDid !== holderSigner.did) {
     throw new SharePresentationError("CHALLENGE_RECIPIENT_MISMATCH", "policy challenge recipient is not the holder signer");
   }
   if (result.envelope.credential !== result.verified.credential) {
     throw new SharePresentationError("CREDENTIAL_MISMATCH", "credential envelope does not match verified credential");
+  }
+
+  // Credential freshness, checked on the verified credential. The expiry must be more than
+  // CREDENTIAL_EXPIRY_MARGIN_MS after now; an unparseable expiry fails closed.
+  const credentialExpiresMs = Date.parse(result.verified.expiresAt);
+  if (!Number.isFinite(credentialExpiresMs) || credentialExpiresMs - nowMs <= CREDENTIAL_EXPIRY_MARGIN_MS) {
+    throw new SharePresentationError("CREDENTIAL_EXPIRED", "credential is expired or within the expiry margin");
+  }
+  // maxAgeSeconds is measured from issuedAt (packages/sdk-core/src/credentials/requirement.ts:79).
+  // A requirement without maxAgeSeconds has no age limit; none is added here.
+  if (requirement.maxAgeSeconds !== undefined) {
+    const issuedMs = Date.parse(result.verified.issuedAt);
+    if (!Number.isFinite(issuedMs) || nowMs - issuedMs > requirement.maxAgeSeconds * 1000) {
+      throw new SharePresentationError("CREDENTIAL_TOO_OLD", "credential is older than the requirement maxAgeSeconds");
+    }
   }
 
   try {
