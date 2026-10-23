@@ -257,6 +257,13 @@ export type Tc1823SizeCodeRatchet = HardeningRatchet;
  * hardening row.
  */
 export type Tc712CredentialCoreRatchet = HardeningRatchet;
+/**
+ * One reviewed exact-delta LOWERING of the root ceilings (js-sdk #707, TC-1781): decrypt grants use the standard grant
+ * expiry again, in node and web. #707 is not a replica-owned PR, so this is a plain root row; the root ceilings fall to
+ * the bytes canonical CI measured on the #707 code head, every other ceiling stays that of the credential consumer core
+ * row. Same shape as the #565 hardening row, with negative root deltas.
+ */
+export type Tc1781DecryptStandardExpiryRatchet = HardeningRatchet;
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -291,6 +298,7 @@ export type Ledger = {
   tc1827ReplicaWorkerRatchet?: Tc1827ReplicaWorkerRatchet;
   tc1823SizeCodeRatchet?: Tc1823SizeCodeRatchet;
   tc712CredentialCoreRatchet?: Tc712CredentialCoreRatchet;
+  tc1781DecryptStandardExpiryRatchet?: Tc1781DecryptStandardExpiryRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -855,6 +863,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc1827ReplicaWorkerRatchet !== undefined) pins.push({ row: "tc1827ReplicaWorkerRatchet", pin: root.tc1827ReplicaWorkerRatchet.sourceCommits.at(-1)! });
   if (root.tc1823SizeCodeRatchet !== undefined) pins.push({ row: "tc1823SizeCodeRatchet", pin: root.tc1823SizeCodeRatchet.sourceCommits.at(-1)! });
   if (root.tc712CredentialCoreRatchet !== undefined) pins.push({ row: "tc712CredentialCoreRatchet", pin: root.tc712CredentialCoreRatchet.sourceCommits.at(-1)! });
+  if (root.tc1781DecryptStandardExpiryRatchet !== undefined) pins.push({ row: "tc1781DecryptStandardExpiryRatchet", pin: root.tc1781DecryptStandardExpiryRatchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -895,6 +904,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc1827WorkerRatchet", root.tc1827WorkerRatchet?.root.ceiling],
     ["tc1823SizeCodeRatchet", root.tc1823SizeCodeRatchet?.root.ceiling],
     ["tc712CredentialCoreRatchet", root.tc712CredentialCoreRatchet?.root.ceiling],
+    ["tc1781DecryptStandardExpiryRatchet", root.tc1781DecryptStandardExpiryRatchet?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -1398,6 +1408,42 @@ export const approvedTc712CredentialCoreRatchet: Tc712CredentialCoreRatchet = {
   reason: "credential consumer core: +76 B (mjs) / +71 B (cjs) gzip to each web-sdk root bundle (TC-712)",
 };
 
+/**
+ * Decrypt grants on the standard grant expiry (js-sdk #707, TC-1781), approved by Naomi, 2026-10-23: the root index.mjs /
+ * index.cjs ceilings fall from 1,462,632 / 1,404,864 to 1,462,319 / 1,404,635, the bytes canonical CI printed on the
+ * #707 code head 218d4a83 (Replica run 40030915569). Measured change against the previous newest row is -313 / -229.
+ * First-import, activation and worker ceilings are unchanged.
+ */
+export const approvedTc1781DecryptStandardExpiryRatchet: Tc1781DecryptStandardExpiryRatchet = {
+  label: "decrypt grants use the standard grant expiry again (node and web): root -313/-229; ceilings set to the exact CI bytes at 218d4a83 (run 40030915569)",
+  ruling: "Approved by Naomi (2026-10-23, policy review relayed by Amos)",
+  base: "f543b70ccd18bfde7324b3323af07d36450f5300",
+  sourceCommits: [
+    "218d4a83fc7771818d1f7d1f674b81e7163d6d07",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40030915569",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40030915569/job/120678658559",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40030915569/job/120678658540",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": -313, "index.cjs": -229 },
+    ceiling: { "index.mjs": 1462319, "index.cjs": 1404635 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 51925, "replica.cjs": 67141 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23117, "activation.cjs": 24700 },
+  },
+  worker: { delta: 0, ceiling: 776128 },
+  reason: "decrypt grants use the standard grant expiry again (node and web): root -313/-229; ceilings set to the exact CI bytes at 218d4a83 (run 40030915569)",
+};
+
 export type GatedOnlyRatchet = {
   label: string;
   sourceCommit: string;
@@ -1460,6 +1506,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc1827ReplicaWorkerRatchet: approvedTc1827ReplicaWorkerRatchet,
   tc1823SizeCodeRatchet: approvedTc1823SizeCodeRatchet,
   tc712CredentialCoreRatchet: approvedTc712CredentialCoreRatchet,
+  tc1781DecryptStandardExpiryRatchet: approvedTc1781DecryptStandardExpiryRatchet,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -1629,6 +1676,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc1823SizeCodeRatchet || JSON.stringify(value.tc712CredentialCoreRatchet) !== JSON.stringify(approvedTc712CredentialCoreRatchet))) {
     throw new Error("Only Naomi's exact canonical credential consumer core ratchet is approved.");
   }
+  if (value.tc1781DecryptStandardExpiryRatchet !== undefined &&
+      (!value.tc712CredentialCoreRatchet || JSON.stringify(value.tc1781DecryptStandardExpiryRatchet) !== JSON.stringify(approvedTc1781DecryptStandardExpiryRatchet))) {
+    throw new Error("Only Naomi's exact canonical decrypt standard expiry ratchet is approved.");
+  }
 }
 
 /** The #606 worker ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
@@ -1740,6 +1791,14 @@ export function validateTc712CredentialCoreRatchetTransition(base?: Tc712Credent
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc712CredentialCoreRatchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact TC-712 credential consumer core ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-1781 decrypt standard expiry ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc1781DecryptStandardExpiryRatchetTransition(base?: Tc1781DecryptStandardExpiryRatchet, current?: Tc1781DecryptStandardExpiryRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1781DecryptStandardExpiryRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-1781 decrypt standard expiry ratchet may be introduced once and cannot change later.");
   }
 }
 

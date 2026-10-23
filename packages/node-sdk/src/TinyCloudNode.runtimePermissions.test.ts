@@ -8,7 +8,6 @@ import {
   CaveatedDelegationUnsupportedError,
   ErrorCodes,
   canonicalHashHex,
-  buildNetworkId,
   hexEncode,
   encryptionBase64Decode,
   encryptionBase64Encode,
@@ -21,7 +20,6 @@ import {
   type NetworkDescriptor,
   type PermissionEntry,
   ServiceContext,
-  parseNetworkId,
   PermissionNotInManifestError,
 } from "@tinycloud/sdk-core";
 import { NodeWasmBindings } from "./NodeWasmBindings";
@@ -1371,77 +1369,6 @@ function lastPrepareExpiryMs(node: TinyCloudNode): number {
 
 const DECRYPT_EXPIRY_TEST_ACTIONS = ["tinycloud.encryption/decrypt"];
 
-test("runtime grants that include decrypt default to a one-hour expiry", async () => {
-  const node = makeExpiryTestNode();
-  const permission: PermissionEntry = {
-    service: "tinycloud.encryption",
-    path: node.getDefaultEncryptionNetworkId(),
-    actions: DECRYPT_EXPIRY_TEST_ACTIONS,
-  };
-
-  const before = Date.now();
-  await withActivatedDelegations(async () => {
-    await node.grantRuntimePermissions([permission]);
-  });
-
-  const expirationTime = lastPrepareExpiryMs(node);
-  expect(expirationTime).toBeGreaterThanOrEqual(before + 60 * 60_000);
-  expect(expirationTime).toBeLessThanOrEqual(Date.now() + 60 * 60_000);
-});
-
-test("runtime grants that include decrypt refuse an explicit expiry over one hour", async () => {
-  const node = makeExpiryTestNode();
-  const permission: PermissionEntry = {
-    service: "tinycloud.encryption",
-    path: node.getDefaultEncryptionNetworkId(),
-    actions: DECRYPT_EXPIRY_TEST_ACTIONS,
-  };
-
-  await withActivatedDelegations(async () => {
-    await expect(node.grantRuntimePermissions([permission], { expiry: "2h" }))
-      .rejects.toMatchObject({ code: "DECRYPT_EXPIRY_TOO_LONG" });
-    await expect(node.grantRuntimePermissions([permission], { expiry: 60 * 60_000 + 1 }))
-      .rejects.toMatchObject({ code: "DECRYPT_EXPIRY_TOO_LONG" });
-  });
-  expect(allPrepareExpiryMs(node)).toHaveLength(0);
-});
-
-test("the one-hour decrypt guard runs before the covering-session early return", async () => {
-  const node = makeExpiryTestNode();
-  const permission: PermissionEntry = {
-    service: "tinycloud.encryption",
-    path: node.getDefaultEncryptionNetworkId(),
-    actions: DECRYPT_EXPIRY_TEST_ACTIONS,
-  };
-  // A primary session whose recap already covers decrypt: the early return
-  // would report success, so only a guard that runs first can refuse.
-  (node as any).wasmBindings.parseRecapFromSiwe = mock(() => [
-    {
-      service: "encryption",
-      space: "encryption",
-      path: permission.path,
-      actions: DECRYPT_EXPIRY_TEST_ACTIONS,
-    },
-  ]);
-  expect(node.hasRuntimePermissions([permission])).toBe(true);
-
-  const signMessage = (node as any).signer.signMessage;
-  const originalFetch = globalThis.fetch;
-  const fetchSpy = mock(async () => new Response("{}", { status: 200 }));
-  globalThis.fetch = fetchSpy as any;
-  try {
-    await expect(node.grantRuntimePermissions([permission], { expiry: 60 * 60_000 + 1 }))
-      .rejects.toMatchObject({ code: "DECRYPT_EXPIRY_TOO_LONG" });
-    await expect(node.grantRuntimePermissions([permission], { expiry: "61m" }))
-      .rejects.toMatchObject({ code: "DECRYPT_EXPIRY_TOO_LONG" });
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-  expect(allPrepareExpiryMs(node)).toHaveLength(0);
-  expect(signMessage).not.toHaveBeenCalled();
-  expect(fetchSpy).not.toHaveBeenCalled();
-});
-
 test("runtime grants that include decrypt honour an explicit expiry of one hour or less", async () => {
   const node = makeExpiryTestNode();
   const permission: PermissionEntry = {
@@ -1462,86 +1389,6 @@ test("runtime grants that include decrypt honour an explicit expiry of one hour 
   expect(Math.abs(delegations[0].expiry.getTime() - target)).toBeLessThanOrEqual(5_000);
 });
 
-/** A per-share network of the node's own owner: `share-<shareId>`, the shape share-sdk mints. */
-const SHARE_NETWORK_ID_SUFFIX = "abcdef0123456789";
-function shareNetworkIdFor(node: TinyCloudNode): string {
-  const { ownerDid } = parseNetworkId(node.getDefaultEncryptionNetworkId());
-  return buildNetworkId(ownerDid, `share-${SHARE_NETWORK_ID_SUFFIX}`);
-}
-
-test("decrypt on a per-share network may last seven days", async () => {
-  const node = makeExpiryTestNode();
-  const permission: PermissionEntry = {
-    service: "tinycloud.encryption",
-    path: shareNetworkIdFor(node),
-    actions: DECRYPT_EXPIRY_TEST_ACTIONS,
-  };
-
-  const before = Date.now();
-  let delegations: Array<{ expiry: Date }> = [];
-  await withActivatedDelegations(async () => {
-    delegations = await node.grantRuntimePermissions([permission], { expiry: "7d" });
-  });
-
-  const target = before + 7 * 24 * 60 * 60_000;
-  expect(Math.abs(lastPrepareExpiryMs(node) - target)).toBeLessThanOrEqual(5_000);
-  expect(delegations).toHaveLength(1);
-});
-
-test("decrypt on a per-share network may last thirty days", async () => {
-  const node = makeExpiryTestNode();
-  const permission: PermissionEntry = {
-    service: "tinycloud.encryption",
-    path: shareNetworkIdFor(node),
-    actions: DECRYPT_EXPIRY_TEST_ACTIONS,
-  };
-
-  const before = Date.now();
-  await withActivatedDelegations(async () => {
-    await node.grantRuntimePermissions([permission], { expiry: "30d" });
-  });
-
-  const target = before + 30 * 24 * 60 * 60_000;
-  expect(Math.abs(lastPrepareExpiryMs(node) - target)).toBeLessThanOrEqual(5_000);
-});
-
-test("decrypt on a per-share network keeps the 30-day default", async () => {
-  const node = makeExpiryTestNode();
-  const permission: PermissionEntry = {
-    service: "tinycloud.encryption",
-    path: shareNetworkIdFor(node),
-    actions: DECRYPT_EXPIRY_TEST_ACTIONS,
-  };
-
-  const before = Date.now();
-  await withActivatedDelegations(async () => {
-    await node.grantRuntimePermissions([permission]);
-  });
-
-  const target = before + 30 * 24 * 60 * 60_000;
-  expect(Math.abs(lastPrepareExpiryMs(node) - target)).toBeLessThanOrEqual(5_000);
-});
-
-test("a call that mixes default-network and per-share decrypt is capped as a whole", async () => {
-  const node = makeExpiryTestNode();
-  const defaultDecrypt: PermissionEntry = {
-    service: "tinycloud.encryption",
-    path: node.getDefaultEncryptionNetworkId(),
-    actions: DECRYPT_EXPIRY_TEST_ACTIONS,
-  };
-  const shareDecrypt: PermissionEntry = {
-    service: "tinycloud.encryption",
-    path: shareNetworkIdFor(node),
-    actions: DECRYPT_EXPIRY_TEST_ACTIONS,
-  };
-
-  await withActivatedDelegations(async () => {
-    await expect(node.grantRuntimePermissions([defaultDecrypt, shareDecrypt], { expiry: "7d" }))
-      .rejects.toMatchObject({ code: "DECRYPT_EXPIRY_TOO_LONG" });
-  });
-  expect(allPrepareExpiryMs(node)).toHaveLength(0);
-});
-
 test("runtime grants without decrypt keep the 30-day default", async () => {
   const node = makeExpiryTestNode();
   const permission: PermissionEntry = {
@@ -1559,7 +1406,7 @@ test("runtime grants without decrypt keep the 30-day default", async () => {
   expect(lastPrepareExpiryMs(node)).toBeGreaterThanOrEqual(before + 30 * 24 * 60 * 60_000);
 });
 
-test("runtime grants that include decrypt stay capped at a shorter session expiry", async () => {
+test("runtime grants that include decrypt end within a shorter session expiry", async () => {
   const node = makeExpiryTestNode();
   const permission: PermissionEntry = {
     service: "tinycloud.encryption",
@@ -1578,13 +1425,6 @@ test("runtime grants that include decrypt stay capped at a shorter session expir
 
   expect(lastPrepareExpiryMs(node)).toBe(sessionEnd.getTime());
 });
-
-function allPrepareExpiryMs(node: TinyCloudNode): number[] {
-  const wasm = node as unknown as {
-    wasmBindings: { prepareSession: { mock: { calls: Array<[{ expirationTime: string }]> } } };
-  };
-  return wasm.wasmBindings.prepareSession.mock.calls.map(([call]) => new Date(call.expirationTime).getTime());
-}
 
 function expectEveryExpiryNear(
   node: TinyCloudNode,
@@ -1611,44 +1451,6 @@ const MIXED_DECRYPT_KV_PERMISSIONS = (node: TinyCloudNode): PermissionEntry[] =>
     actions: DECRYPT_EXPIRY_TEST_ACTIONS,
   },
 ];
-
-test("mixed kv and decrypt runtime grants default every delegation to one hour", async () => {
-  const node = makeExpiryTestNode();
-  const before = Date.now();
-  let delegations: Array<{ expiry: Date }> = [];
-  await withActivatedDelegations(async () => {
-    delegations = await node.grantRuntimePermissions(MIXED_DECRYPT_KV_PERMISSIONS(node));
-  });
-
-  expectEveryExpiryNear(node, delegations, before + 60 * 60_000);
-});
-
-const DECRYPT_WILDCARD_KV_PERMISSION: PermissionEntry = {
-  service: "tinycloud.kv",
-  space: "secrets",
-  path: "vault/",
-  actions: ["tinycloud.encryption/*"],
-};
-
-test("decrypt wildcard runtime grants default to a one-hour expiry", async () => {
-  const node = makeExpiryTestNode();
-  const before = Date.now();
-  let delegations: Array<{ expiry: Date }> = [];
-  await withActivatedDelegations(async () => {
-    delegations = await node.grantRuntimePermissions([DECRYPT_WILDCARD_KV_PERMISSION]);
-  });
-
-  expectEveryExpiryNear(node, delegations, before + 60 * 60_000);
-});
-
-test("decrypt wildcard runtime grants refuse an explicit expiry over one hour", async () => {
-  const node = makeExpiryTestNode();
-  await withActivatedDelegations(async () => {
-    await expect(node.grantRuntimePermissions([DECRYPT_WILDCARD_KV_PERMISSION], { expiry: "7d" }))
-      .rejects.toMatchObject({ code: "DECRYPT_EXPIRY_TOO_LONG" });
-  });
-  expect(allPrepareExpiryMs(node)).toHaveLength(0);
-});
 
 test("non-encryption wildcard runtime grants keep the 30-day default", async () => {
   const node = makeExpiryTestNode();
@@ -1695,15 +1497,6 @@ test("mixed kv and decrypt runtime grants honour an explicit one-hour expiry for
   });
 
   expectEveryExpiryNear(node, delegations, before + 3_600_000);
-});
-
-test("mixed kv and decrypt runtime grants refuse an explicit 7d expiry with the typed code", async () => {
-  const node = makeExpiryTestNode();
-  await withActivatedDelegations(async () => {
-    await expect(node.grantRuntimePermissions(MIXED_DECRYPT_KV_PERMISSIONS(node), { expiry: "7d" }))
-      .rejects.toMatchObject({ code: "DECRYPT_EXPIRY_TOO_LONG" });
-  });
-  expect(allPrepareExpiryMs(node)).toHaveLength(0);
 });
 
   test("grants mixed KV and raw encryption permissions in one runtime delegation", async () => {
@@ -3268,12 +3061,18 @@ describe("TinyCloudNode grantRuntimePermissions issued expiry", () => {
   });
 });
 
+function allPrepareExpiryMs(node: TinyCloudNode): number[] {
+  const wasm = node as unknown as {
+    wasmBindings: { prepareSession: { mock: { calls: Array<[{ expirationTime: string }]> } } };
+  };
+  return wasm.wasmBindings.prepareSession.mock.calls.map(([call]) => new Date(call.expirationTime).getTime());
+}
+
 describe("TinyCloudNode per-entry permission coverage (TC-1781)", () => {
   const ADDRESS = "0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
   const SECRETS_SPACE = `tinycloud:pkh:eip155:1:${ADDRESS}:secrets`;
   const KV_PATH = "vault/secrets/API_KEY";
   const DECRYPT_ACTIONS = ["decrypt"];
-  const ONE_HOUR_MS = 60 * 60 * 1000;
   const CLOCK_SLACK_MS = 5_000;
   const KV_GET_ENTRY: PermissionEntry = {
     service: "tinycloud.kv",
@@ -3342,17 +3141,15 @@ describe("TinyCloudNode per-entry permission coverage (TC-1781)", () => {
     };
   }
 
-  function expectExpiriesWithin(node: TinyCloudNode, maxMs: number): void {
+  function expectExpiriesNear(node: TinyCloudNode, expectedMs: number): void {
     const now = Date.now();
-    const wasm = (node as any).wasmBindings;
-    const prepared = wasm.prepareSession.mock.calls.map(
-      ([call]: [{ expirationTime: string }]) => new Date(call.expirationTime).getTime(),
-    );
-    const issued = node.getRuntimePermissionDelegations().map((d) => d.expiry.getTime());
-    const expiries = [...prepared, ...issued];
+    const expiries = [
+      ...allPrepareExpiryMs(node),
+      ...node.getRuntimePermissionDelegations().map((d) => d.expiry.getTime()),
+    ];
     expect(expiries.length).toBeGreaterThan(0);
     for (const expiry of expiries) {
-      expect(expiry - now).toBeLessThanOrEqual(maxMs + CLOCK_SLACK_MS);
+      expect(Math.abs(expiry - now - expectedMs)).toBeLessThanOrEqual(CLOCK_SLACK_MS);
     }
   }
 
@@ -3426,10 +3223,10 @@ describe("TinyCloudNode per-entry permission coverage (TC-1781)", () => {
 
     expect(afterFirst.signatures).toBe(1);
     expect(afterSecond).toEqual(afterFirst);
-    expectExpiriesWithin(node, 3_540_000);
+    expectExpiriesNear(node, 3_540_000);
   });
 
-  test("no prior step-up, session holds kv get: secrets.get escalates once, requesting only decrypt, at most one hour", async () => {
+  test("no prior step-up, session holds kv get: secrets.get escalates once, requesting only decrypt, on the default expiry", async () => {
     const node = nodeWithSessionRecap(KV_GET_RECAP);
     stubBaseSecrets(node);
     const grant = spyOnGrant(node);
@@ -3441,7 +3238,7 @@ describe("TinyCloudNode per-entry permission coverage (TC-1781)", () => {
     const requested = grant.mock.calls[0][0] as PermissionEntry[];
     expect(requested.map((e) => e.actions)).toEqual([DECRYPT_ACTIONS]);
     expect(node.getRuntimePermissionDelegations()).toHaveLength(1);
-    expectExpiriesWithin(node, ONE_HOUR_MS);
+    expectExpiriesNear(node, DEFAULT_DELEGATION_EXPIRY_MS);
   });
 
   test("kv get outside the session manifest, decrypt already held: escalation requests only the kv get", async () => {
@@ -3459,7 +3256,7 @@ describe("TinyCloudNode per-entry permission coverage (TC-1781)", () => {
     expect(requested.map((e) => e.service)).toEqual(["tinycloud.kv"]);
   });
 
-  test("nothing held: secrets.get grants the kv get and decrypt pair together, bounded to one hour", async () => {
+  test("nothing held: secrets.get grants the kv get and decrypt pair together, on the default expiry", async () => {
     const node = nodeWithSessionRecap([]);
     stubBaseSecrets(node);
     const grant = spyOnGrant(node);
@@ -3469,35 +3266,7 @@ describe("TinyCloudNode per-entry permission coverage (TC-1781)", () => {
     expect(grant).toHaveBeenCalledTimes(1);
     const requested = grant.mock.calls[0][0] as PermissionEntry[];
     expect(requested.map((e) => e.service)).toEqual(["tinycloud.kv", "tinycloud.encryption"]);
-    expectExpiriesWithin(node, ONE_HOUR_MS);
-  });
-
-  test("secrets.get escalation expires within 59 minutes, below the one-hour decrypt cap", async () => {
-    const node = nodeWithSessionRecap([]);
-    stubBaseSecrets(node);
-
-    await withFetchActivated(() => node.secrets.get("API_KEY"));
-
-    const delegations = node.getRuntimePermissionDelegations();
-    expect(delegations).toHaveLength(1);
-    const remaining = delegations[0].expiry.getTime() - Date.now();
-    expect(remaining).toBeLessThanOrEqual(3_540_000 + CLOCK_SLACK_MS);
-    expect(remaining).toBeGreaterThan(3_540_000 - CLOCK_SLACK_MS);
-  });
-
-  test("secrets.put escalation keeps the default expiry, not the get cap", async () => {
-    const node = nodeWithSessionRecap(KV_GET_RECAP);
-    const base: any = stubBaseSecrets(node);
-    base.put = mock(async () => ({ ok: true, data: undefined }));
-
-    const result = await withFetchActivated(() => node.secrets.put("API_KEY", "value"));
-
-    expect(result.ok).toBe(true);
-    const delegations = node.getRuntimePermissionDelegations();
-    expect(delegations.length).toBeGreaterThan(0);
-    for (const delegation of delegations) {
-      expect(delegation.expiry.getTime() - Date.now()).toBeGreaterThan(ONE_HOUR_MS - CLOCK_SLACK_MS);
-    }
+    expectExpiriesNear(node, DEFAULT_DELEGATION_EXPIRY_MS);
   });
 
   test("session-only node: a get whose entries are each covered proceeds with no grant and no signer", async () => {
