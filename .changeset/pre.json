@@ -30,6 +30,7 @@
   },
   "changesets": [
     "tc1801-share-non-transferable",
-    "tc1807-discovery-url"
+    "tc1807-discovery-url",
+    "tc1827-replica-worker-narrow-imports"
   ]
 }
