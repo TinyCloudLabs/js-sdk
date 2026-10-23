@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import { afterAll, beforeEach, describe, expect, it, setSystemTime, spyOn } from "bun:test";
 import { createCipheriv, createHmac, randomBytes, webcrypto } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -18,8 +18,10 @@ const { DEFAULT_SHARE_ORIGIN } = await import("../config/constants.js");
 const { loadAdditionalDelegations, replayAdditionalDelegations } = await import("../lib/permissions.js");
 const { sessionHoldsEncryptionDecrypt } = await import("./adapters.js");
 const { keyToDID } = await import("../auth/local-key.js");
-const { approveShareDecrypt } = await import("./decrypt-approval.js");
+const { approveShareDecrypt, DECRYPT_APPROVAL_WINDOW_MS } = await import("./decrypt-approval.js");
 const { DECRYPT_APPROVAL_MESSAGES } = await import("./decrypt-approval-messages.js");
+const { runDeviceAuthorization } = await import("../auth/device-auth.js");
+const { portableFromOpenKeyDelegation } = await import("../commands/auth.js");
 
 const NODE = "https://tee.node.tinycloud.xyz";
 const wasm = new NodeWasmBindings();
@@ -66,11 +68,16 @@ interface OpenKeyCase {
   readonly abilities?: Record<string, Record<string, string[]>>;
   /** Owner-signed raw ReCap, keyed by network URN. */
   readonly rawAbilities?: Record<string, string[]>;
+  /** Signed expiry. Defaults to what OpenKey signs: the approval time plus the requested lifetime. */
   readonly expiresAt?: string;
   /** Permissions relayed with the signed grant. Defaults to the signed raw ReCap. */
   readonly relayPermissions?: PermissionEntry[];
   /** Permissions the binding reports as approved. Defaults to the request. */
   readonly bindingPermissions?: PermissionEntry[];
+  /** How long after the request the owner approves, on the (possibly simulated) clock. Default: at the first poll. */
+  readonly approveAfterMs?: number;
+  /** OpenKey's own transaction length. Default 600. */
+  readonly transactionSeconds?: number;
 }
 
 /** OpenKey's device API for a decrypt-only request: it approves with an owner-signed raw decrypt ReCap. */
@@ -80,50 +87,62 @@ async function openKeyApprovingDecryptOnly(overrides: OpenKeyCase = {}) {
   const owner = `did:pkh:eip155:1:${signerAddress}`;
   const signedSpaceId = wasm.makeSpaceId(signerAddress, 1, "default");
   const transactionId = randomBytes(18).toString("base64url");
-  const expiresAt = overrides.expiresAt ?? sessionEnd;
   const rawAbilities = overrides.rawAbilities ?? { [networkUrn]: [DECRYPT] };
-  const prepared = wasm.prepareSession({
-    abilities: overrides.abilities ?? {},
-    rawAbilities,
-    address: signerAddress, chainId: 1, domain: "openkey.so", spaceId: signedSpaceId, jwk: key,
-    issuedAt: new Date(Date.now() - 60_000).toISOString(),
-    expirationTime: expiresAt,
-  });
-  const signature = await signing.signMessage(prepared.siwe);
-  const completed = wasm.completeSessionSetup({ ...prepared, signature });
   const signedPermissions: PermissionEntry[] = Object.keys(rawAbilities).map((path) => ({
     service: "tinycloud.encryption", space: "encryption", path, actions: [DECRYPT],
   }));
   const requests: string[] = [];
   const starts: Record<string, unknown>[] = [];
+  let startedAt = 0;
+  let delegationCid = "";
+  let signedExpiresAt = "";
   const fetchFn = async (url: string | URL | Request, init?: RequestInit) => {
     if (String(url) === `${NODE}/delegate`) return Response.json({ activated: [], skipped: [] });
     requests.push(String(url));
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
     if (String(url).endsWith("/api/device-authorizations")) {
       starts.push(body);
+      startedAt = Date.now();
       return Response.json({
         transactionId,
         userCode: "ABCD-EFGH",
         verificationUri: "https://openkey.so/device",
         verificationUriComplete: "https://openkey.so/device?user_code=ABCD-EFGH",
-        expiresIn: 600,
+        expiresIn: overrides.transactionSeconds ?? 600,
         interval: 1,
       }, { status: 201 });
     }
+    if (Date.now() - startedAt < (overrides.approveAfterMs ?? 0)) return Response.json({ status: "pending", interval: 1 });
+    // OpenKey starts the delegation's lifetime when the owner approves.
+    const approvedAt = Date.now();
     const start = starts[0]!;
+    signedExpiresAt = overrides.expiresAt ?? new Date(Math.floor(approvedAt / 1000) * 1000 + (start.delegationTtlSeconds as number) * 1000).toISOString();
+    const prepared = wasm.prepareSession({
+      abilities: overrides.abilities ?? {},
+      rawAbilities,
+      address: signerAddress, chainId: 1, domain: "openkey.so", spaceId: signedSpaceId, jwk: key,
+      issuedAt: new Date(approvedAt - 60_000).toISOString(),
+      expirationTime: signedExpiresAt,
+    });
+    const signature = await signing.signMessage(prepared.siwe);
+    const completed = wasm.completeSessionSetup({ ...prepared, signature });
+    delegationCid = completed.delegationCid;
     const relayed = {
       ...completed, jwk: start.publicJwk, verificationMethod: sessionDid, address: signerAddress, chainId: 1,
-      spaceId: signedSpaceId, ownerDid: owner, siwe: prepared.siwe, signature, expiresAt, hostActivated: true,
+      spaceId: signedSpaceId, ownerDid: owner, siwe: prepared.siwe, signature, expiresAt: signedExpiresAt, hostActivated: true,
       permissions: overrides.relayPermissions ?? signedPermissions,
     };
     return Response.json({
       status: "approved",
       relay: await encryptRelay(start.relayPublicJwk as object, transactionId, relayed),
-      binding: { transactionId, sessionDid, nodeOrigin: NODE, shareOrigin: DEFAULT_SHARE_ORIGIN, permissions: overrides.bindingPermissions ?? requested, delegationExpiresAt: expiresAt },
+      binding: { transactionId, sessionDid, nodeOrigin: NODE, shareOrigin: DEFAULT_SHARE_ORIGIN, permissions: overrides.bindingPermissions ?? requested, delegationExpiresAt: signedExpiresAt },
     });
   };
-  return { fetchFn, requests, starts, delegationCid: completed.delegationCid };
+  return {
+    fetchFn, requests, starts,
+    get delegationCid() { return delegationCid; },
+    get signedExpiresAt() { return signedExpiresAt; },
+  };
 }
 
 /** Runs one approval against a bad OpenKey response. */
@@ -183,13 +202,14 @@ async function restoredBaseNode(): Promise<TinyCloudNode> {
   return node;
 }
 
-/** End of the profile's base session, in whole seconds. An honest OpenKey signs the approval to end with it. */
+/** End of the profile's base session, in whole seconds. */
 let sessionEnd = "";
 function setSessionLifetime(lifetimeMs: number): void {
   sessionEnd = new Date(Math.floor(Date.now() / 1000) * 1000 + lifetimeMs).toISOString();
 }
 
 beforeEach(async () => {
+  setSystemTime();
   setSessionLifetime(3_600_000);
   await rm(join(home, ".tinycloud"), { recursive: true, force: true });
   await ProfileManager.setProfile("test", { name: "test", host: NODE, chainId: 1, spaceName: "default", ownerDid, did: ownerDid, sessionDid, createdAt: "2026-10-01T00:00:00.000Z" } as never);
@@ -201,6 +221,29 @@ afterAll(async () => {
   else process.env.TC_HOME = originalTcHome;
   await rm(home, { recursive: true, force: true });
 });
+
+/** Advances the simulated clock rather than sleeping, so a slow owner can be modelled. */
+async function advanceClock(milliseconds: number): Promise<void> {
+  setSystemTime(new Date(Date.now() + milliseconds));
+}
+
+/** One approval where the owner approves `approveAfterMs` after the request, on the simulated clock. */
+async function approveWithOwnerDelay(approveAfterMs: number, overrides: OpenKeyCase = {}) {
+  const openkey = await openKeyApprovingDecryptOnly({ approveAfterMs, ...overrides });
+  const node = await restoredBaseNode();
+  const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(openkey.fetchFn as typeof fetch);
+  const stderrSpy = spyOn(process.stderr, "write").mockImplementation((() => true) as typeof process.stderr.write);
+  let thrown: unknown;
+  try {
+    await approveShareDecrypt({ profileName: "test", node, wait: advanceClock });
+  } catch (error) {
+    thrown = error;
+  } finally {
+    fetchSpy.mockRestore();
+    stderrSpy.mockRestore();
+  }
+  return { openkey, node, thrown, stored: await loadAdditionalDelegations("test") };
+}
 
 describe("share decrypt approval against the OpenKey relay", () => {
   it("verifies the owner-signed decrypt approval and stores it on the profile", async () => {
@@ -255,7 +298,7 @@ describe("share decrypt approval against the OpenKey relay", () => {
   it("refuses a kv ability signed beside the requested decrypt", () =>
     expectRefused({ abilities: { kv: { default: ["tinycloud.kv/get"] } }, relayPermissions: [...signedRaw, kvGet] }, "OPENKEY_GRANT_BROADENED"));
 
-  it("requests the session's remaining lifetime, not a fixed one", async () => {
+  it("requests the time left until the sign-in ends, less the approval window and the clock allowance", async () => {
     setSessionLifetime(20 * 60_000);
     const openkey = await openKeyApprovingDecryptOnly();
     const node = await restoredBaseNode();
@@ -268,10 +311,35 @@ describe("share decrypt approval against the OpenKey relay", () => {
     }
     const after = Date.now();
     const end = Date.parse(sessionEnd);
+    const reserved = DECRYPT_APPROVAL_WINDOW_MS + 30_000;
     const ttl = openkey.starts[0]!.delegationTtlSeconds as number;
-    expect(ttl).toBeLessThanOrEqual(Math.floor((end - before) / 1000));
-    expect(ttl).toBeGreaterThanOrEqual(Math.floor((end - after) / 1000));
-    expect(ttl).toBeGreaterThan(19 * 60);
+    expect(ttl).toBeLessThanOrEqual(Math.floor((end - before - reserved) / 1000));
+    expect(ttl).toBeGreaterThanOrEqual(Math.floor((end - after - reserved) / 1000));
+    expect(ttl).toBeGreaterThan(8 * 60);
+  });
+
+  it("accepts an approval after half the window, and the grant ends within the sign-in", async () => {
+    const { openkey, node, thrown, stored } = await approveWithOwnerDelay(DECRYPT_APPROVAL_WINDOW_MS / 2);
+    expect(thrown).toBeUndefined();
+    expect(stored).toHaveLength(1);
+    expect(sessionHoldsEncryptionDecrypt(node, networkUrn)).toBe(true);
+    expect(Date.parse(openkey.signedExpiresAt)).toBeLessThanOrEqual(Date.parse(sessionEnd));
+  });
+
+  it("accepts an approval just inside the window, and the grant still ends within the sign-in", async () => {
+    const { openkey, node, thrown, stored } = await approveWithOwnerDelay(DECRYPT_APPROVAL_WINDOW_MS - 5_000);
+    expect(thrown).toBeUndefined();
+    expect(stored).toHaveLength(1);
+    expect(sessionHoldsEncryptionDecrypt(node, networkUrn)).toBe(true);
+    expect(Date.parse(openkey.signedExpiresAt)).toBeLessThanOrEqual(Date.parse(sessionEnd));
+  });
+
+  it("ends an approval after the window by the polling timeout, even while OpenKey would still accept it", async () => {
+    const { openkey, node, thrown, stored } = await approveWithOwnerDelay(DECRYPT_APPROVAL_WINDOW_MS + 10_000, { transactionSeconds: 1800 });
+    expect(thrown).toMatchObject({ code: "DEVICE_AUTH_EXPIRED" });
+    expect(openkey.signedExpiresAt).toBe("");
+    expect(stored).toHaveLength(0);
+    expect(sessionHoldsEncryptionDecrypt(node, networkUrn)).toBe(false);
   });
 
   it("refuses a signed expiry later than the session's, however slightly, storing nothing", () =>
@@ -295,6 +363,107 @@ describe("share decrypt approval against the OpenKey relay", () => {
     }
     expect(thrown).toMatchObject({ code: "DECRYPT_APPROVAL_SESSION_UNUSABLE" });
     expect(await loadAdditionalDelegations("test")).toHaveLength(0);
+  });
+
+  it("refuses before any request when the sign-in cannot outlast the approval window", async () => {
+    setSessionLifetime(11 * 60_000);
+    const node = await restoredBaseNode();
+    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async () => { throw new Error("no request expected"); }) as unknown as typeof fetch);
+    let thrown: unknown;
+    try {
+      await approveShareDecrypt({ profileName: "test", node });
+    } catch (error) {
+      thrown = error;
+    } finally {
+      expect(fetchSpy.mock.calls).toHaveLength(0);
+      fetchSpy.mockRestore();
+    }
+    expect(thrown).toMatchObject({ code: "DECRYPT_APPROVAL_SESSION_UNUSABLE" });
+    expect(await loadAdditionalDelegations("test")).toHaveLength(0);
+  });
+
+  it("refuses before any request when the sign-in records no end time", async () => {
+    const stored: string = (await restoredBaseNode()).restorableSession!.siwe!;
+    const withoutExpiry = stored.split("\n").filter((line: string) => !line.startsWith("Expiration Time:")).join("\n");
+    expect(withoutExpiry).not.toBe(stored);
+    const node = { restorableSession: { siwe: withoutExpiry } } as unknown as TinyCloudNode;
+    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async () => { throw new Error("no request expected"); }) as unknown as typeof fetch);
+    let thrown: unknown;
+    try {
+      await approveShareDecrypt({ profileName: "test", node });
+    } catch (error) {
+      thrown = error;
+    } finally {
+      expect(fetchSpy.mock.calls).toHaveLength(0);
+      fetchSpy.mockRestore();
+    }
+    expect(thrown).toMatchObject({ code: "DECRYPT_APPROVAL_SESSION_UNUSABLE" });
+    expect(await loadAdditionalDelegations("test")).toHaveLength(0);
+  });
+
+  it("requests at most the device route's maximum lifetime when the sign-in lasts longer", async () => {
+    const maxSeconds = 30 * 24 * 3600;
+    setSessionLifetime(40 * 24 * 3600 * 1000);
+    const openkey = await openKeyApprovingDecryptOnly();
+    const node = await restoredBaseNode();
+    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(openkey.fetchFn as typeof fetch);
+    try {
+      await approveShareDecrypt({ profileName: "test", node });
+    } finally {
+      fetchSpy.mockRestore();
+    }
+    expect(openkey.starts[0]!.delegationTtlSeconds).toBe(maxSeconds);
+    expect(await loadAdditionalDelegations("test")).toHaveLength(1);
+  });
+
+  it("refuses a signed expiry earlier than now, storing nothing", () =>
+    expectRefused({ expiresAt: new Date(Date.now() - 10_000).toISOString() }, "DEVICE_AUTH_BINDING_MISMATCH"));
+
+  it("refuses an approval that signs the decrypt only inside the owner's space, storing nothing", () =>
+    expectRefused({
+      abilities: { encryption: { [networkUrn]: [DECRYPT] } },
+      rawAbilities: {},
+      relayPermissions: [{ service: "tinycloud.encryption", space: "default", path: networkUrn, actions: [DECRYPT] }],
+      bindingPermissions: [{ service: "tinycloud.encryption", space: "default", path: networkUrn, actions: [DECRYPT] }],
+    }, "DEVICE_AUTH_BINDING_MISMATCH"));
+
+  /** The device request exactly as the approval sends it, optionally pinned to an owner. */
+  async function deviceApproval(openkey: { readonly fetchFn: (url: string | URL | Request, init?: RequestInit) => Promise<Response> }, expectedOwner?: string) {
+    return runDeviceAuthorization({
+      sessionDid, jwk: key, nodeOrigin: NODE, shareOrigin: DEFAULT_SHARE_ORIGIN, permissions: requested,
+      expiry: { durationMs: 3_600_000 }, decryptOnly: true, fetchFn: openkey.fetchFn as typeof fetch,
+      wait: async () => undefined, emitInstructions: () => undefined,
+      ...(expectedOwner === undefined ? {} : { expectedOwner }),
+    });
+  }
+
+  it("checks the signing owner again when the approval becomes a stored grant", async () => {
+    const openkey = await openKeyApprovingDecryptOnly({ signer: otherSigner, rawAbilities: { [`urn:tinycloud:encryption:${otherDid}:default`]: [DECRYPT] } });
+    const approval = await deviceApproval(openkey);
+    let thrown: unknown;
+    try {
+      portableFromOpenKeyDelegation(approval.session, requested, NODE, {
+        key, sessionDid, expectedOwner: ownerDid, expiry: { durationMs: 3_600_000 }, exactApproval: true, decryptOnly: true,
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toMatchObject({ code: "OPENKEY_OWNER_MISMATCH" });
+  });
+
+  it("refuses to store a grant narrower than the request when the approval must be exact", async () => {
+    const openkey = await openKeyApprovingDecryptOnly();
+    const approval = await deviceApproval(openkey, ownerDid);
+    const requestedMore: PermissionEntry[] = [...signedRaw, { service: "tinycloud.encryption", space: "encryption", path: `urn:tinycloud:encryption:${ownerDid}:other`, actions: [DECRYPT] }];
+    let thrown: unknown;
+    try {
+      portableFromOpenKeyDelegation(approval.session, requestedMore, NODE, {
+        key, sessionDid, expectedOwner: ownerDid, expiry: { durationMs: 3_600_000 }, exactApproval: true, decryptOnly: true,
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toMatchObject({ code: "OPENKEY_APPROVAL_NARROWER" });
   });
 
   it("refuses an approval signed by another owner", () =>

@@ -490,7 +490,7 @@ export function createShareAuthorityAdapters(input: {
   /** Bearer-link sharing service: `undefined` host decodes the link, a host reads from that owner Node. */
   readonly nativeSharing?: (host: string | undefined) => TinyCloudNode["sharing"];
   /**
-   * Decrypt approval for an addressed share when this session does not hold decrypt, lasting as long as the
+   * Decrypt approval for an addressed share when this session does not hold decrypt, ending no later than the
    * session. A declined or expired approval is reported as not completed; every other failure keeps its own error.
    */
   readonly approveShareDecrypt?: (input: { readonly profileName: string; readonly node: TinyCloudNode }) => Promise<void>;

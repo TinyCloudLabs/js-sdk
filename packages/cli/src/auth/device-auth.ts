@@ -30,7 +30,7 @@ import { announceFirstOwner, openKeyPrimaryFlag, warnIfNotPrimaryKey, withOwnerK
 import { isDeviceRestrictedPermission } from "../share/publishing-manifest.js";
 
 /** OpenKey caps device-approved delegations at 30 days. */
-const DEVICE_DELEGATION_MAX_SECONDS = 30 * 24 * 60 * 60;
+export const DEVICE_DELEGATION_MAX_SECONDS = 30 * 24 * 60 * 60;
 /** OpenKey's approval window is minutes; refuse a server asking us to poll for longer. */
 const DEVICE_APPROVAL_WINDOW_MAX_SECONDS = 60 * 60;
 const DEVICE_REASON_MAX_LENGTH = 200;
@@ -97,6 +97,11 @@ export interface DeviceAuthorizationInput {
   expectedOwner?: string;
   /** Decrypt-only approval (share publishing): verified without a space ReCap. */
   decryptOnly?: boolean;
+  /**
+   * Longest this command waits for the owner, counted from the start request. Polling ends with
+   * DEVICE_AUTH_EXPIRED at that point even when OpenKey would still accept an approval.
+   */
+  approvalWindowMs?: number;
   openkeyHost?: string;
   fetchFn?: typeof globalThis.fetch;
   emitInstructions?: (prompt: DeviceApprovalPrompt) => void;
@@ -462,6 +467,7 @@ export async function runDeviceAuthorization(input: DeviceAuthorizationInput): P
   const nodeOrigin = canonicalOrigin(input.nodeOrigin, "TinyCloud node origin");
   const shareOrigin = canonicalOrigin(input.shareOrigin, "Share origin");
   const fetchFn = input.fetchFn ?? globalThis.fetch;
+  const requestedAt = Date.now();
   const deviceSecret = randomBytes(32).toString("base64url");
   const codeVerifier = randomBytes(32).toString("base64url");
   const relayKey = createECDH("prime256v1");
@@ -514,7 +520,8 @@ export async function runDeviceAuthorization(input: DeviceAuthorizationInput): P
     throw new CLIError("DEVICE_AUTH_FAILED", `OpenKey device authorization failed: ${code ?? `HTTP ${startResponse.status}`}${description ? ` (${description})` : ""}`, ExitCode.ERROR);
   }
   const started = validateStart(startValue, openkeyHost);
-  const deadline = Date.now() + started.expiresIn * 1000;
+  const serverDeadline = Date.now() + started.expiresIn * 1000;
+  const deadline = input.approvalWindowMs === undefined ? serverDeadline : Math.min(serverDeadline, requestedAt + input.approvalWindowMs);
   (input.emitInstructions ?? writeApprovalPrompt)({
     verificationUri: started.verificationUri,
     ...(started.verificationUriComplete ? { verificationUriComplete: started.verificationUriComplete } : {}),
@@ -526,6 +533,7 @@ export async function runDeviceAuthorization(input: DeviceAuthorizationInput): P
   const wait = input.wait ?? ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
   while (Date.now() < deadline) {
     await wait(interval * 1000);
+    if (input.approvalWindowMs !== undefined && Date.now() >= deadline) break;
     let response: Response;
     try {
       response = await fetchFn(`${openkeyHost}/api/device-authorizations/token`, {

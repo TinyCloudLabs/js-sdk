@@ -1,7 +1,7 @@
 import { extractSiweExpiration, type PermissionEntry, type TinyCloudNode } from "@tinycloud/node-sdk";
-import { resolveDeviceApiHost, runDeviceAuthorization } from "../auth/device-auth.js";
+import { DEVICE_DELEGATION_MAX_SECONDS, resolveDeviceApiHost, runDeviceAuthorization } from "../auth/device-auth.js";
 import { keyToDID } from "../auth/local-key.js";
-import { pinnedOwner } from "../auth/scoped-login.js";
+import { CLOCK_SKEW_MS, pinnedOwner } from "../auth/scoped-login.js";
 import { activateAndStoreOpenKeyGrants, portableFromOpenKeyDelegation } from "../commands/auth.js";
 import { DEFAULT_SHARE_ORIGIN, ExitCode } from "../config/constants.js";
 import { CLIError } from "../output/errors.js";
@@ -13,21 +13,31 @@ import { DECRYPT_APPROVAL_MESSAGES } from "./decrypt-approval-messages.js";
 const MIN_APPROVAL_LIFETIME_MS = 60_000;
 
 /**
- * The approval's lifetime: what remains of the session's stored expiry, to
- * the second, with that expiry as the latest the signed grant may carry.
- * Undefined when the session has no readable expiry or too little left.
+ * The longest this step waits for the owner to approve, within OpenKey's own
+ * 10-minute transaction. OpenKey starts the delegation's lifetime when the
+ * owner approves, so a slower approval ends the wait here, and no grant is
+ * signed past the sign-in's end.
+ */
+export const DECRYPT_APPROVAL_WINDOW_MS = 10 * 60_000;
+
+/**
+ * The approval's lifetime: the time left until the session's stored expiry,
+ * less the approval window and the clock-skew allowance, to the second and at
+ * most the device route's maximum. With the owner approving no later than the
+ * window, the signed grant then ends no later than the session. `notAfterMs` is
+ * that end, held as a hard limit on the signed expiry. Undefined when the
+ * session has no expiry or the lifetime would be under a minute. An unparseable
+ * expiry throws.
  */
 function sessionLifetime(node: TinyCloudNode): { readonly durationMs: number; readonly notAfterMs: number } | undefined {
   const siwe = node.restorableSession?.siwe;
   if (siwe === undefined) return undefined;
-  let notAfterMs: number;
-  try {
-    notAfterMs = Math.floor(extractSiweExpiration(siwe).getTime() / 1000) * 1000;
-  } catch {
-    return undefined;
-  }
-  const durationMs = Math.floor((notAfterMs - Date.now()) / 1000) * 1000;
-  return durationMs < MIN_APPROVAL_LIFETIME_MS ? undefined : { durationMs, notAfterMs };
+  const sessionExpiry = extractSiweExpiration(siwe);
+  if (sessionExpiry === undefined) return undefined;
+  const notAfterMs = Math.floor(sessionExpiry.getTime() / 1000) * 1000;
+  const lifetimeMs = Math.floor((notAfterMs - Date.now() - DECRYPT_APPROVAL_WINDOW_MS - CLOCK_SKEW_MS) / 1000) * 1000;
+  if (lifetimeMs < MIN_APPROVAL_LIFETIME_MS) return undefined;
+  return { durationMs: Math.min(lifetimeMs, DEVICE_DELEGATION_MAX_SECONDS * 1000), notAfterMs };
 }
 
 /** The single entry OpenKey admits in a decrypt-only device request. */
@@ -40,7 +50,12 @@ export function shareDecryptApprovalPermissions(): PermissionEntry[] {
  * runtime grant. The existing session is not replaced. Throws when the
  * approval is refused, expires, or does not cover the whole request.
  */
-export async function approveShareDecrypt(input: { readonly profileName: string; readonly node: TinyCloudNode }): Promise<void> {
+export async function approveShareDecrypt(input: {
+  readonly profileName: string;
+  readonly node: TinyCloudNode;
+  /** Sleep between approval polls; a test seam. */
+  readonly wait?: (milliseconds: number) => Promise<void>;
+}): Promise<void> {
   const profile = await ProfileManager.getProfile(input.profileName);
   const key = await ProfileManager.getKey(input.profileName);
   if (!profile || !key) throw new Error(`No signed-in key for profile "${input.profileName}".`);
@@ -66,6 +81,8 @@ export async function approveShareDecrypt(input: { readonly profileName: string;
     expectedOwner: owner,
     openkeyHost: resolveDeviceApiHost(profile),
     decryptOnly: true,
+    approvalWindowMs: DECRYPT_APPROVAL_WINDOW_MS,
+    ...(input.wait === undefined ? {} : { wait: input.wait }),
   });
   const delegation = portableFromOpenKeyDelegation(approval.session, permissions, profile.host, {
     key,
