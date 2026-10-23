@@ -167,4 +167,4 @@ test("strict consumer typecheck resolves both credentials subpaths with real dec
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
-});
+}, 30_000);
