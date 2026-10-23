@@ -243,6 +243,13 @@ export type Tc1827WorkerRatchet = HardeningRatchet;
  * is the replica worker (`MAX_REPLICA_WORKER_GZIP_BYTES`), not the kv-storage worker.
  */
 export type Tc1827ReplicaWorkerRatchet = WorkerRatchet;
+/**
+ * One reviewed exact-delta admission of js-sdk #693 (TC-1823): SQL and DuckDB request-size error codes.
+ * #693 is not a replica-owned PR, so this is a plain root row; the root ceilings rise to the bytes canonical CI measured
+ * on the #693 code head, every other ceiling stays that of the replica worker narrow-imports row. Same shape as the #565
+ * hardening row.
+ */
+export type Tc1823SizeCodeRatchet = HardeningRatchet;
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -275,6 +282,7 @@ export type Ledger = {
   tc1807CredentialDiscoveryRatchet?: Tc1807CredentialDiscoveryRatchet;
   tc1827WorkerRatchet?: Tc1827WorkerRatchet;
   tc1827ReplicaWorkerRatchet?: Tc1827ReplicaWorkerRatchet;
+  tc1823SizeCodeRatchet?: Tc1823SizeCodeRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -837,6 +845,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc1807CredentialDiscoveryRatchet !== undefined) pins.push({ row: "tc1807CredentialDiscoveryRatchet", pin: root.tc1807CredentialDiscoveryRatchet.sourceCommits.at(-1)! });
   if (root.tc1827WorkerRatchet !== undefined) pins.push({ row: "tc1827WorkerRatchet", pin: root.tc1827WorkerRatchet.sourceCommits.at(-1)! });
   if (root.tc1827ReplicaWorkerRatchet !== undefined) pins.push({ row: "tc1827ReplicaWorkerRatchet", pin: root.tc1827ReplicaWorkerRatchet.sourceCommits.at(-1)! });
+  if (root.tc1823SizeCodeRatchet !== undefined) pins.push({ row: "tc1823SizeCodeRatchet", pin: root.tc1823SizeCodeRatchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -875,6 +884,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc1801NonTransferableShareRatchet", root.tc1801NonTransferableShareRatchet?.root.ceiling],
     ["tc1807CredentialDiscoveryRatchet", root.tc1807CredentialDiscoveryRatchet?.root.ceiling],
     ["tc1827WorkerRatchet", root.tc1827WorkerRatchet?.root.ceiling],
+    ["tc1823SizeCodeRatchet", root.tc1823SizeCodeRatchet?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -1306,6 +1316,42 @@ export const approvedTc1827ReplicaWorkerRatchet: Tc1827ReplicaWorkerRatchet = {
   reason: "replica.worker.js had no size ratchet; its ceiling is the 770093 B gzip canonical CI measured (TC-1827)",
 };
 
+/**
+ * SQL and DuckDB request-size error codes (js-sdk #693, TC-1823), approved by Naomi, 2026-10-23: the root index.mjs /
+ * index.cjs ceilings rise from 1,462,456 / 1,404,685 to 1,462,556 / 1,404,793, the bytes canonical CI printed on the #693
+ * code head c35e2688 (merge base d3da8654, master's tip). Measured growth against master is +100 / +108, shrunk from
+ * +1,273 / +331 at 198771bb. First-import, activation and worker ceilings are unchanged.
+ */
+export const approvedTc1823SizeCodeRatchet: Tc1823SizeCodeRatchet = {
+  label: "SQL and DuckDB request-size error codes (#693): root ceiling raised to the measured CI bytes; master 1462456/1404685 → 1462556/1404793; shrunk from +1273/+331 (198771bb) to +100/+108",
+  ruling: "Approved by Naomi (2026-10-23, policy review relayed by Amos)",
+  base: "d3da865460ad4b0b51bad753bddd8f89518db238",
+  sourceCommits: [
+    "c35e268879bf5e30447f9335229dda4d64361bdb",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39978157827",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39978157827/job/120498120597",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39978157827/job/120498121108",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 100, "index.cjs": 108 },
+    ceiling: { "index.mjs": 1462556, "index.cjs": 1404793 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 51925, "replica.cjs": 67141 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23117, "activation.cjs": 24700 },
+  },
+  worker: { delta: 0, ceiling: 776128 },
+  reason: "SQL and DuckDB request-size error codes: +100 B (mjs) / +108 B (cjs) gzip to each web-sdk root bundle (TC-1823)",
+};
+
 export type GatedOnlyRatchet = {
   label: string;
   sourceCommit: string;
@@ -1338,7 +1384,7 @@ const historicalToolchain = "Bun 1.4.3; production webpack; gzip -9 -c";
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
 export function validateLedger(value: Ledger, historicalBase = false): void {
   if (!value || !value.allowance || !Array.isArray(value.entries) ||
-      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet" && key !== "tc1436Ratchet" && key !== "tc1432Ratchet" && key !== "tc1424Ratchet" && key !== "tc1448Ratchet" && key !== "tc1443Ratchet" && key !== "tc1466Ratchet" && key !== "tc1443bRatchet" && key !== "tc1428Ratchet" && key !== "tc1476Ratchet" && key !== "tc1475Ratchet" && key !== "tc606WorkerRatchet" && key !== "masterDriftRatchet" && key !== "tc1789Ratchet" && key !== "tc1757Ratchet" && key !== "tc1777Ratchet" && key !== "tc1777ExpiryRatchet" && key !== "tc848PanelRatchet" && key !== "tc1781DecryptExpiryRatchet" && key !== "tc1801NonTransferableShareRatchet" && key !== "tc1807CredentialDiscoveryRatchet" && key !== "tc1827WorkerRatchet" && key !== "tc1827ReplicaWorkerRatchet")) {
+      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet" && key !== "tc1436Ratchet" && key !== "tc1432Ratchet" && key !== "tc1424Ratchet" && key !== "tc1448Ratchet" && key !== "tc1443Ratchet" && key !== "tc1466Ratchet" && key !== "tc1443bRatchet" && key !== "tc1428Ratchet" && key !== "tc1476Ratchet" && key !== "tc1475Ratchet" && key !== "tc606WorkerRatchet" && key !== "masterDriftRatchet" && key !== "tc1789Ratchet" && key !== "tc1757Ratchet" && key !== "tc1777Ratchet" && key !== "tc1777ExpiryRatchet" && key !== "tc848PanelRatchet" && key !== "tc1781DecryptExpiryRatchet" && key !== "tc1801NonTransferableShareRatchet" && key !== "tc1807CredentialDiscoveryRatchet" && key !== "tc1827WorkerRatchet" && key !== "tc1827ReplicaWorkerRatchet" && key !== "tc1823SizeCodeRatchet")) {
     throw new Error("Invalid packages/web-sdk/scripts/replica-size-ledger.json shape");
   }
   if (Object.keys(value.allowance).some((key) => !formats.includes(key as typeof formats[number]))) {
@@ -1494,6 +1540,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc1827WorkerRatchet || JSON.stringify(value.tc1827ReplicaWorkerRatchet) !== JSON.stringify(approvedTc1827ReplicaWorkerRatchet))) {
     throw new Error("Only the exact canonical replica worker ratchet is approved.");
   }
+  if (value.tc1823SizeCodeRatchet !== undefined &&
+      (!value.tc1827WorkerRatchet || JSON.stringify(value.tc1823SizeCodeRatchet) !== JSON.stringify(approvedTc1823SizeCodeRatchet))) {
+    throw new Error("Only Naomi's exact canonical request-size error code ratchet is approved.");
+  }
 }
 
 /** The #606 worker ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
@@ -1589,6 +1639,14 @@ export function validateTc1827ReplicaWorkerRatchetTransition(base?: Tc1827Replic
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1827ReplicaWorkerRatchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact TC-1827 replica worker ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-1823 request-size error code ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc1823SizeCodeRatchetTransition(base?: Tc1823SizeCodeRatchet, current?: Tc1823SizeCodeRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1823SizeCodeRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-1823 request-size error code ratchet may be introduced once and cannot change later.");
   }
 }
 
