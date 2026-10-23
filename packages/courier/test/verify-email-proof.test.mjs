@@ -82,6 +82,7 @@ function verifyArgs(overrides = {}) {
     credential,
     possession: possessionFor(credential),
     expectEmail: EMAIL,
+    holderDid,
     inviteId: INVITE_ID,
     oneTimeKeyHash: oneTimeKeyHash(ONE_TIME_KEY_X),
     now: NOW_MS,
@@ -221,4 +222,14 @@ test('verification performs no network I/O', async () => {
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test('a credential and possession for another holder than the hello names are holder-mismatch', async () => {
+  const result = await verifyEmailProofWithPin(verifyArgs({ holderDid: ed25519DidKey(otherHolder.publicJwk.x) }), TEST_PIN);
+  assert.deepEqual(result, { ok: false, reason: 'holder-mismatch' });
+});
+
+test('a holder DID with a key fragment still matches its bare did:key', async () => {
+  const result = await verifyEmailProofWithPin(verifyArgs({ holderDid: `${holderDid}#${holderDid.slice('did:key:'.length)}` }), TEST_PIN);
+  assert.equal(result.ok, true);
 });

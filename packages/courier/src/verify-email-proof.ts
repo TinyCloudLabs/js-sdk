@@ -24,6 +24,7 @@ import {
   type IssuedCredentialEnvelope,
 } from '@tinycloud/sdk-core';
 import { EMAIL_PROOF_PIN, issuerKeyFor, type CredentialPin } from './credential-pin.js';
+import { bareDid } from './authority.js';
 import { ed25519PublicKeyOfDidKey } from './did-key.js';
 import { credentialDigest, verifyPossession } from './possession.js';
 
@@ -41,6 +42,8 @@ export interface VerifyEmailProofInput {
   /** Possession proof from the same hello (see signPossession). */
   possession: string;
   expectEmail: string;
+  /** The courier DID the hello asks to pair (`artifactB.from.courier`). The credential's subject and the possession key must be this DID. */
+  holderDid: string;
   inviteId: string;
   /** sha256 hex of the one-time key `x` (see oneTimeKeyHash). */
   oneTimeKeyHash: string;
@@ -140,6 +143,7 @@ export async function verifyEmailProofWithPin(
   pin: CredentialPin,
 ): Promise<VerifyEmailProofResult> {
   const { credential, possession, expectEmail, inviteId, oneTimeKeyHash, seenCredentials } = input;
+  const holder = bareDid(input.holderDid);
   if (!credential) return { ok: false, reason: 'no-credential' };
   const nowMs = input.now ?? Date.now();
   try {
@@ -171,6 +175,7 @@ export async function verifyEmailProofWithPin(
     } catch {
       reject('holder-mismatch');
     }
+    if (bareDid(sub) !== holder) reject('holder-mismatch');
 
     const claims = { email };
     const envelope = {
@@ -184,7 +189,7 @@ export async function verifyEmailProofWithPin(
       issuerDid: pin.issuerDid,
       issuerKid: kid,
       subjectDid: sub,
-      holderDid: sub,
+      holderDid: holder,
       claims,
       claimsDigest: await canonicalDigest(claims),
       descriptorDigest: pin.descriptorDigest,
@@ -216,7 +221,7 @@ export async function verifyEmailProofWithPin(
         profile: { id: pin.descriptor.profile, version: 1 },
         credentialType: { id: pin.descriptor.format.vct, version: 1 },
       }),
-      holderDid: sub,
+      holderDid: holder,
       issuerMetadata,
       now: new Date(nowMs),
       checkStatus: async () => true,
@@ -225,7 +230,7 @@ export async function verifyEmailProofWithPin(
     const possessionResult = verifyPossession(
       possession,
       { inviteId, oneTimeKeyHash, credentialDigest: credentialDigest(credential) },
-      sub,
+      holder,
       nowMs,
     );
     if (!possessionResult.ok) reject('bad-possession');

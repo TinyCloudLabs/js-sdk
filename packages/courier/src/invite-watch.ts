@@ -320,6 +320,7 @@ export class InviteWatcher {
       credential: hello.credential,
       possession: hello.possession,
       expectEmail: record.email,
+      holderDid: hello.artifactB.from.courier,
       inviteId: record.inviteId,
       oneTimeKeyHash: record.oneTimeKeyHash,
       now: this.now().getTime(),
