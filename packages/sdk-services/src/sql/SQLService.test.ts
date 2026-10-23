@@ -1038,9 +1038,10 @@ describe("SQLService 403 refusal mapping (TC-1839)", () => {
     expect(error.meta?.responseSnippet).toBeUndefined();
   });
 
-  test("a caveat code without a colon is not a caveat refusal", async () => {
+  test("a caveat code without a colon still maps, with no arm", async () => {
     const error = await refusedWith("sql_caveat_violation");
-    expect(error.code).toBe(ErrorCodes.SQL_PERMISSION_DENIED);
+    expect(error.code).toBe(ErrorCodes.SQL_CAVEAT_VIOLATION);
+    expect(error.meta && "arm" in error.meta).toBe(false);
   });
 
   test("a caveat code on another status is not mapped", async () => {

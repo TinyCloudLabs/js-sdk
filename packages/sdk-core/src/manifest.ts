@@ -820,7 +820,9 @@ function validatePermissionEntry(p: unknown, path: string): void {
       }
     } else if (
       entry.service === "tinycloud.duckdb" &&
-      entry.caveats.some((caveat) => Object.keys(caveat).length > 0)
+      // The node reads only a lone entry (`[]` and `[{}]` are no caveats); two or
+      // more entries are refused whatever they hold.
+      (entry.caveats.length > 1 || entry.caveats.some((caveat) => Object.keys(caveat).length > 0))
     ) {
       throw new ManifestValidationError(`${path}.caveats are not defined for tinycloud.duckdb`);
     }

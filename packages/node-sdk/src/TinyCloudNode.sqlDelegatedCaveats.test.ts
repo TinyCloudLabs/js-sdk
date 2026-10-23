@@ -263,3 +263,211 @@ describe("delegated SQL caveat gate on minting paths", () => {
     expect(calls).toEqual([]);
   });
 });
+
+describe("invocation capabilities for caveated grants", () => {
+  interface InvocationSeams {
+    wasmBindings: { invoke: ReturnType<typeof mock>; invokeAny: ReturnType<typeof mock> };
+    runtimePermissionGrants: unknown[];
+    invokeWithRuntimePermissions(
+      session: unknown,
+      service: string,
+      path: string,
+      action: string,
+    ): unknown;
+    invokeAnyWithRuntimePermissions(
+      session: unknown,
+      entries: Array<Record<string, unknown>>,
+    ): unknown;
+  }
+
+  const PATH = "data.sqlite";
+  const baseSession = { spaceId: SPACE_ID, delegationHeader: { Authorization: "base" } };
+
+  /** A node holding one delegated grant of `service`/`action` on PATH with `caveats`. */
+  function nodeHolding(service: string, action: string, caveats: Record<string, unknown>[]): InvocationSeams {
+    const seams = makeNode(["sql", FEATURE]) as unknown as InvocationSeams;
+    seams.runtimePermissionGrants = [{
+      session: {
+        delegationHeader: { Authorization: "grant" },
+        delegationCid: "grant-cid",
+        spaceId: SPACE_ID,
+        verificationMethod: "did:key:default",
+        jwk: { kty: "OKP" },
+      },
+      delegation: { cid: "grant-cid" },
+      operations: [{ spaceId: SPACE_ID, service, path: PATH, action, caveats }],
+      expiresAt: new Date(Date.now() + 60_000),
+      provenance: "delegated",
+    }];
+    return seams;
+  }
+
+  /** What each invocation seam put on the capability, as a list of caveat lists (undefined = none). */
+  function caveatsSent(seams: InvocationSeams, service: string, action: string): unknown[] {
+    seams.invokeWithRuntimePermissions(baseSession, service, PATH, action);
+    seams.invokeAnyWithRuntimePermissions(baseSession, [{ spaceId: SPACE_ID, service, path: PATH, action }]);
+    const single = seams.wasmBindings.invoke.mock.calls.length > 0
+      ? undefined
+      : (seams.wasmBindings.invokeAny.mock.calls[0]?.[1] as Array<{ caveats?: unknown }>)[0]?.caveats;
+    const multi = (seams.wasmBindings.invokeAny.mock.calls.at(-1)?.[1] as Array<{ caveats?: unknown }>)[0]?.caveats;
+    return [single, multi];
+  }
+
+  const DROPPED: ReadonlyArray<readonly [string, Record<string, unknown>[]]> = [
+    ["delegated form", [{ tables: ["Notes"], columns: ["id"], readOnly: true }]],
+    ["readOnly only", [{ readOnly: true }]],
+    ["tables: []", [{ tables: [] }]],
+    ["empty-only [{},{}]", [{}, {}]],
+  ];
+
+  for (const [label, caveats] of DROPPED) {
+    test(`sql grant with ${label}: no caveats on either invocation seam`, () => {
+      const seams = nodeHolding("sql", "tinycloud.sql/read", caveats);
+      const [single, multi] = caveatsSent(seams, "sql", "tinycloud.sql/read");
+      expect(single).toBeUndefined();
+      expect(multi).toBeUndefined();
+      // The single-capability seam falls back to the plain binding, which has no caveat parameter.
+      expect(seams.wasmBindings.invoke).toHaveBeenCalledTimes(1);
+    });
+  }
+
+  test("a caller-supplied caveat equal to the grant's delegated form is dropped too", () => {
+    const delegated = [{ tables: ["Notes"] }];
+    const seams = nodeHolding("sql", "tinycloud.sql/read", delegated);
+    seams.invokeAnyWithRuntimePermissions(baseSession, [
+      { spaceId: SPACE_ID, service: "sql", path: PATH, action: "tinycloud.sql/read", caveats: delegated },
+    ]);
+    const entry = (seams.wasmBindings.invokeAny.mock.calls[0]?.[1] as Array<Record<string, unknown>>)[0]!;
+    expect("caveats" in entry).toBe(false);
+  });
+
+  test("a constrained-statements profile is echoed exactly", () => {
+    const seams = nodeHolding("sql", "tinycloud.sql/read", [profile]);
+    const [single, multi] = caveatsSent(seams, "sql", "tinycloud.sql/read");
+    expect(single).toEqual([profile]);
+    expect(JSON.stringify(single)).toBe(JSON.stringify([profile]));
+    expect(multi).toEqual([profile]);
+    expect(JSON.stringify(multi)).toBe(JSON.stringify([profile]));
+  });
+
+  test("[{}] on a sql grant is echoed as before", () => {
+    const seams = nodeHolding("sql", "tinycloud.sql/read", [{}]);
+    const [single, multi] = caveatsSent(seams, "sql", "tinycloud.sql/read");
+    expect(single).toEqual([{}]);
+    expect(multi).toEqual([{}]);
+  });
+
+  test("other services keep their caveats, even in the delegated shape", () => {
+    for (const caveats of [[{ kind: "prefix", value: "a/" }], [{ tables: ["Notes"] }], [{}, {}]]) {
+      const seams = nodeHolding("kv", "tinycloud.kv/get", caveats);
+      const [single, multi] = caveatsSent(seams, "kv", "tinycloud.kv/get");
+      expect(single).toEqual(caveats);
+      expect(multi).toEqual(caveats);
+    }
+  });
+
+  test("the long service name is treated like the short one", () => {
+    const seams = nodeHolding("sql", "tinycloud.sql/read", [{ tables: ["Notes"] }]);
+    seams.invokeAnyWithRuntimePermissions(baseSession, [
+      { spaceId: SPACE_ID, service: "tinycloud.sql", path: PATH, action: "tinycloud.sql/read" },
+    ]);
+    const entry = (seams.wasmBindings.invokeAny.mock.calls[0]?.[1] as Array<Record<string, unknown>>)[0]!;
+    expect("caveats" in entry).toBe(false);
+  });
+});
+
+describe("delegated SQL caveat gate on delegateTo, createDelegationViaWasmPath and useDelegation", () => {
+  interface PrivateSeams {
+    wasmBindings: { prepareSession: ReturnType<typeof mock> };
+    createDelegationViaWasmPath(
+      did: string,
+      entries: PermissionEntry[],
+      expirationTime: Date,
+      session: unknown,
+    ): Promise<unknown>;
+    currentTinyCloudSession(): unknown;
+  }
+
+  const entry: PermissionEntry = {
+    service: "tinycloud.sql",
+    space: "default",
+    path: "data.sqlite",
+    actions: ["tinycloud.sql/read"],
+    caveats: [{ tables: ["Notes"] }],
+  };
+  const emptyOnly: PermissionEntry = { ...entry, caveats: [{}, {}] };
+
+  for (const [label, permission] of [["delegated form", entry], ["two empty entries", emptyOnly]] as const) {
+    test(`delegateTo with ${label}: typed error, nothing signed or sent when the feature is absent`, async () => {
+      const { calls } = spyFetch();
+      for (const options of [undefined, { forceWalletSign: true }]) {
+        const node = makeNode(["sql"]);
+        await expect(node.delegateTo("did:key:other", [permission], options))
+          .rejects.toBeInstanceOf(SqlDelegatedCaveatsUnsupportedError);
+        expect((node as unknown as PrivateSeams).wasmBindings.prepareSession).not.toHaveBeenCalled();
+      }
+      expect(calls).toEqual([]);
+    });
+
+    test(`delegateTo with ${label}: features unknown is refused too`, async () => {
+      const { calls } = spyFetch();
+      await expect(makeNode(undefined).delegateTo("did:key:other", [permission]))
+        .rejects.toBeInstanceOf(SqlDelegatedCaveatsUnsupportedError);
+      expect(calls).toEqual([]);
+    });
+
+    test(`createDelegationViaWasmPath with ${label}: typed error when the feature is absent`, async () => {
+      const { calls } = spyFetch();
+      const node = makeNode(["sql"]) as unknown as PrivateSeams;
+      await expect(
+        node.createDelegationViaWasmPath("did:key:other", [permission], new Date(Date.now() + 60_000), node.currentTinyCloudSession()),
+      ).rejects.toBeInstanceOf(SqlDelegatedCaveatsUnsupportedError);
+      expect(calls).toEqual([]);
+    });
+  }
+
+  test("delegateTo and createDelegationViaWasmPath: with the feature the SDK's own caveated-mint refusal still applies, no request", async () => {
+    const { calls } = spyFetch();
+    const node = makeNode([FEATURE]);
+    await expect(node.delegateTo("did:key:other", [entry], { forceWalletSign: true }))
+      .rejects.toBeInstanceOf(CaveatedDelegationUnsupportedError);
+    const seams = node as unknown as PrivateSeams;
+    await expect(
+      seams.createDelegationViaWasmPath("did:key:other", [entry], new Date(Date.now() + 60_000), seams.currentTinyCloudSession()),
+    ).rejects.toBeInstanceOf(CaveatedDelegationUnsupportedError);
+    expect(calls).toEqual([]);
+  });
+
+  test("useDelegation in wallet mode: refused before signing or any request when the feature is absent", async () => {
+    const { calls } = spyFetch();
+    const node = makeNode(["sql"]);
+    await expect(node.useDelegation(sqlDelegation([{ tables: ["Notes"] }])))
+      .rejects.toBeInstanceOf(SqlDelegatedCaveatsUnsupportedError);
+    await expect(node.useDelegation(sqlDelegation([{}, {}])))
+      .rejects.toBeInstanceOf(SqlDelegatedCaveatsUnsupportedError);
+    expect((node as unknown as PrivateSeams).wasmBindings.prepareSession).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
+  });
+
+  test("useDelegation in wallet mode: the gate does not stop a caveat-free or profile delegation", async () => {
+    for (const caveats of [undefined, [{}], [profile]]) {
+      const { calls } = spyFetch();
+      const result = await makeNode(["sql"]).useDelegation(sqlDelegation(caveats)).catch((caught: unknown) => caught);
+      expect(result).not.toBeInstanceOf(SqlDelegatedCaveatsUnsupportedError);
+      expect(calls).toEqual([`${HOST}/delegate`]);
+    }
+  });
+
+  test("a flat caveat on a delegation that mixes kv and sql actions is checked against the sql action", async () => {
+    const { calls } = spyFetch();
+    const mixed = {
+      ...sqlDelegation(undefined),
+      actions: ["tinycloud.kv/get", "tinycloud.sql/read"],
+      caveats: [{ tables: ["Notes"] }],
+      resources: undefined,
+    };
+    await expect(makeNode(["sql"]).useRuntimeDelegation(mixed))
+      .rejects.toBeInstanceOf(SqlDelegatedCaveatsUnsupportedError);
+    expect(calls).toEqual([]);
+  });
+});

@@ -262,6 +262,12 @@ describe("TC-1839 manifest validation", () => {
     expect(() => validateManifest(manifestWith("tinycloud.duckdb", [{}, { readOnly: true }]))).toThrow("not defined for tinycloud.duckdb");
   });
 
+  it("R9 refuses a DuckDB list of two or more entries, even empty ones", () => {
+    for (const list of [[{}, {}], [{}, {}, {}]]) {
+      expect(() => validateManifest(manifestWith("tinycloud.duckdb", list))).toThrow("not defined for tinycloud.duckdb");
+    }
+  });
+
   it("R9 leaves empty DuckDB caveats alone", () => {
     expect(() => validateManifest(manifestWith("tinycloud.duckdb", []))).not.toThrow();
     expect(() => validateManifest(manifestWith("tinycloud.duckdb", [{}]))).not.toThrow();
