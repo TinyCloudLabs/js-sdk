@@ -1331,5 +1331,55 @@
       "ceiling": 776128
     },
     "reason": "SQL and DuckDB request-size error codes: +100 B (mjs) / +108 B (cjs) gzip to each web-sdk root bundle (TC-1823)"
+  },
+  "tc712CredentialCoreRatchet": {
+    "label": "credential consumer core (#679, TC-712 PR-A): root ceiling raised to the measured CI bytes; newest row 1462556/1404793 → 1462632/1404864 (+76/+71)",
+    "ruling": "Approved by Naomi (2026-10-23, policy review relayed by Amos)",
+    "base": "43c5bea9cd6e9409e2e8094de30d302de9aa94a5",
+    "sourceCommits": [
+      "20a35591ac263358270ae28fd8ad7013af74d861"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40002503111",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40002503111/job/120581943143",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40002503111/job/120581942872"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 76,
+        "index.cjs": 71
+      },
+      "ceiling": {
+        "index.mjs": 1462632,
+        "index.cjs": 1404864
+      }
+    },
+    "firstImport": {
+      "delta": {
+        "replica.mjs": 0,
+        "replica.cjs": 0
+      },
+      "ceiling": {
+        "replica.mjs": 51925,
+        "replica.cjs": 67141
+      }
+    },
+    "activation": {
+      "delta": {
+        "activation.mjs": 0,
+        "activation.cjs": 0
+      },
+      "ceiling": {
+        "activation.mjs": 23117,
+        "activation.cjs": 24700
+      }
+    },
+    "worker": {
+      "delta": 0,
+      "ceiling": 776128
+    },
+    "reason": "credential consumer core: +76 B (mjs) / +71 B (cjs) gzip to each web-sdk root bundle (TC-712)"
   }
 }
