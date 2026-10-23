@@ -1,5 +1,13 @@
 # @tinycloudlabs/node-sdk
 
+## 3.6.0-beta.6
+
+### Patch Changes
+
+- e600a1a: Runtime permission grants that include decrypt follow the same expiry handling as other grants. `secrets.get` still asks only for the permission entries that are not already covered.
+
+  Details: TC-1781
+
 ## 3.6.0-beta.5
 
 ### Minor Changes
