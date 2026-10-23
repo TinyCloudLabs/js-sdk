@@ -15,6 +15,7 @@ import {
 } from "./canonical";
 import {
   buildKeyAdminFacts,
+  buildKeyDescribeFacts,
   mapNodeKeyError,
   NamedKeyClient,
   NamedKeyError,
@@ -607,6 +608,18 @@ describe("/info caching", () => {
 describe("error messages never carry raw untrusted text", () => {
   const BIDI_OR_ZERO_WIDTH = /[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/;
   const HOSTILE = "evil\u202Enet\u200Bwork";
+
+  it("both fact builders refuse a key resource whose network contains bidi or zero-width characters", () => {
+    for (const network of ["evil\u202Enet", "net\u200Bwork"]) {
+      const resource = `urn:tinycloud:encryption:${OWNER}:${network}/${PATH}`;
+      expect(() =>
+        buildKeyAdminFacts({ crypto, targetNode: NODE, keyResource: resource, action: KEY_CREATE_ABILITY, body: {} }),
+      ).toThrow(expect.objectContaining({ code: "INVALID_KEY_TARGET" }));
+      expect(() => buildKeyDescribeFacts({ targetNode: NODE, keyResource: resource })).toThrow(
+        expect.objectContaining({ code: "INVALID_KEY_TARGET" }),
+      );
+    }
+  });
 
   it("a hostile network in a target is escaped in the message and kept raw only in `input`", async () => {
     const h = harness(() => undefined);
