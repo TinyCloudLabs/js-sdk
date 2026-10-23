@@ -166,4 +166,32 @@ describe("canonical addressed publication", () => {
     expect(outcome).toMatchObject({ code: "body_over_cap" });
     expect(delivered).toBe(false);
   });
+
+  it("carries exactly the envelope key and the sealed body's CID, also in a link whose key was substituted", async () => {
+    const { published } = await fixture();
+    const material = published.deliveryMaterial!;
+    const trustedOrigins = ["https://share.tinycloud.xyz"];
+    const recordOf = (link: string): { readonly bodyCid: unknown; readonly body: unknown } => {
+      const parsed = parseLink(link, { trustedOrigins });
+      if (parsed.form !== "full") throw new Error("expected a full link");
+      const record = parsed.record;
+      if (typeof record !== "object" || record === null || !("header" in record) || !("body" in record)) throw new Error("record shape");
+      const header = record.header;
+      if (typeof header !== "object" || header === null || !("bodyCid" in header)) throw new Error("header shape");
+      return { bodyCid: header.bodyCid, body: record.body };
+    };
+
+    const parsed = parseLink(published.url, { trustedOrigins });
+    expect(parsed.key).toEqual(fromBase64Url(material.envelopeKey));
+    expect(parsed.k).toBe(material.envelopeKey);
+    expect(new URL(published.url).hash.split("&")[1]).toBe(`k=${material.envelopeKey}`);
+    expect(recordOf(published.url)).toEqual({ bodyCid: material.shareCid, body: material.sealedEnvelope });
+
+    const substituted = published.url.replace(/&k=[A-Za-z0-9_-]{43}/, `&k=${"A".repeat(43)}`);
+    const parsedSubstituted = parseLink(substituted, { trustedOrigins });
+    expect(parsedSubstituted.key).toEqual(fromBase64Url("A".repeat(43)));
+    expect(parsedSubstituted.key).not.toEqual(fromBase64Url(material.envelopeKey));
+    expect(recordOf(substituted)).toEqual({ bodyCid: material.shareCid, body: material.sealedEnvelope });
+    expect(await verifyCid(fromBase64Url(material.sealedEnvelope), material.shareCid)).toBe(true);
+  });
 });

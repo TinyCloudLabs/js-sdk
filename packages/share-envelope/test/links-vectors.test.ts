@@ -37,6 +37,7 @@ import {
   type LinkHeaderV1,
   type LinkType,
 } from "../src/links/index.js";
+import { buildShortLink } from "../src/links/index.js";
 
 const VECTOR_PATH = new URL("./links-api-vectors.json", import.meta.url);
 // The SHA-256 printed by `node short-links-api-vectors.gen.mjs --check` in tinycloud-dev docs/specs.
@@ -404,4 +405,63 @@ describe("vectors: read", () => {
       if (readOnce) expect(calls.every((call) => call.url.endsWith("/take"))).toBe(true);
     });
   }
+});
+
+describe("vectors: a short link of a given sealed body, end to end", () => {
+  const { bodies } = JSON.parse(readFileSync(VECTOR_PATH, "utf8")) as {
+    bodies: readonly { readonly name: string; readonly plaintext: string; readonly keyB64u: string; readonly blobB64u: string; readonly cid: string }[];
+  };
+  const ID = "lqdw5iopqq2tkkvjj6gbbi5vbv";
+  const bodyNamed = (name: string) => {
+    const found = bodies.find((entry) => entry.name === name);
+    if (found === undefined) throw new Error(`vector file lacks the ${name} body`);
+    return found;
+  };
+  const validShare = () => {
+    const found = vectors.resolve.find((entry) => entry.name === "valid share short link");
+    if (found === undefined || found.serverRecord === null) throw new Error("vector file lacks the valid share short link");
+    return { ...found, serverRecord: found.serverRecord };
+  };
+  const resolveWith = (record: RecordShape, link: string, now: string) =>
+    resolveLink(link, { trustedOrigins: vectors.meta.trustedOrigins, apiOrigin: vectors.meta.audience, fetch: serviceReturning(record), now: Date.parse(now) });
+
+  it("derives the vector's short link from the sealed body and its key, and opens it again", async () => {
+    const share = bodyNamed("share");
+    const blob = fromBase64Url(share.blobB64u);
+    const bodyCid = await computeCid(blob);
+    expect(bodyCid).toBe(share.cid);
+    const href = buildShortLink({ origin: vectors.meta.trustedOrigins[0] ?? "", type: "share", id: ID, key: fromBase64Url(share.keyB64u), bodyCid });
+    const vector = validShare();
+    expect(href).toBe(vector.link);
+    const resolved = await resolveWith(vector.serverRecord, href, vector.now);
+    expect(new TextDecoder().decode(resolved.plaintext)).toBe(share.plaintext);
+    expect(resolved.header.bodyCid).toBe(share.cid);
+  });
+
+  it("refuses bytes that do not hash to the link's CID: a flipped byte, another share's bytes, and the same length of other bytes", async () => {
+    const vector = validShare();
+    const blob = fromBase64Url(bodyNamed("share").blobB64u);
+    const flippedLast = Uint8Array.from(blob, (byte, index) => (index === blob.length - 1 ? byte ^ 1 : byte));
+    const flippedFirst = Uint8Array.from(blob, (byte, index) => (index === 0 ? byte ^ 1 : byte));
+    const other = fromBase64Url(bodyNamed("share-other-signer").blobB64u);
+    const otherPadded = new Uint8Array(blob.length);
+    otherPadded.set(other);
+    const cases: readonly { readonly bytes: Uint8Array; readonly code: string }[] = [
+      { bytes: flippedLast, code: "body_hash_mismatch" },
+      { bytes: flippedFirst, code: "body_hash_mismatch" },
+      { bytes: other, code: "size_mismatch" },
+      { bytes: otherPadded, code: "body_hash_mismatch" },
+    ];
+    expect(other.length).not.toBe(blob.length);
+    for (const { bytes, code } of cases) {
+      let failure: unknown;
+      try {
+        await resolveWith({ ...vector.serverRecord, body: toBase64Url(bytes) }, vector.link, vector.now);
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toBeInstanceOf(LinkError);
+      expect(failure).toMatchObject({ code });
+    }
+  });
 });
