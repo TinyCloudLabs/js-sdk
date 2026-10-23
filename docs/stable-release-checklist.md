@@ -14,7 +14,7 @@ The cut date is set when the must-land changes below are merged.
 
 Must land:
 
-- **Short share links (TC-1737).** The CLI produces a short link by default (`@tinycloud/cli` 1.3.2). Two parts remain: the invitation email, sent through the node and OpenCredentials invitation flow, carries a short link by default; and the web composer's short links (Share `880cc30`) are confirmed deployed. Existing inline links keep working.
+- **Short share links (TC-1737).** The CLI produces a short link by default for addressed shares (`@tinycloud/cli` 1.3.2). Two parts remain: the invitation email, sent through the node and OpenCredentials invitation flow, carries a short link by default; and the web composer's short links (Share `880cc30`) are confirmed deployed.
 - **Share fixes.** A custom option in the link-expiry picker, with a short warning that a longer expiry keeps the content reachable until it expires or access is revoked. Shares made by agents appear in "Shared by me". "Load more" works.
 
 ## Steps
