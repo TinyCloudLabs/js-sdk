@@ -107,35 +107,55 @@ test("no credentials source file imports a Node builtin directly", () => {
 });
 
 test("strict consumer typecheck resolves both credentials subpaths with real declarations", () => {
-  for (const d of [join(NODE_SDK, "dist/credentials.d.ts"), join(WEB_SDK, "dist/credentials-subpath.d.ts")]) {
-    expect(existsSync(d)).toBe(true);
+  // node-sdk declarations come from its build (the authority job builds node-sdk before this suite).
+  const nodeDeclarations = join(NODE_SDK, "dist/credentials.d.ts");
+  if (!existsSync(nodeDeclarations)) {
+    throw new Error(`node-sdk declarations missing: ${nodeDeclarations}. Build @tinycloud/node-sdk before this suite.`);
   }
-  const dir = mkdtempSync(join(tmpdir(), "credentials-consumer-"));
-  const scope = join(dir, "node_modules", "@tinycloud");
-  mkdirSync(scope, { recursive: true });
-  symlinkSync(NODE_SDK, join(scope, "node-sdk"), "dir");
-  symlinkSync(WEB_SDK, join(scope, "web-sdk"), "dir");
-  writeFileSync(join(dir, "consumer.ts"), [
-    `import { acquireEmailProof, EmailProofError, type EmailProofResult } from "@tinycloud/node-sdk/credentials";`,
-    `import { createFileEmailProofPendingStore, PendingStoreError } from "@tinycloud/node-sdk/credential-pending-store";`,
-    `import { acquireEmailProof as webAcquire, EmailProofError as WebError, type EmailProofAcquisition } from "@tinycloud/web-sdk/credentials";`,
-    `export const acquire: typeof acquireEmailProof = acquireEmailProof;`,
-    `export const err: EmailProofError | undefined = undefined;`,
-    `export const result: EmailProofResult | undefined = undefined;`,
-    `export const store = createFileEmailProofPendingStore;`,
-    `export const storeErr: PendingStoreError | undefined = undefined;`,
-    `export const web: typeof webAcquire = webAcquire;`,
-    `export const webErr: WebError | undefined = undefined;`,
-    `export const acq: EmailProofAcquisition | undefined = undefined;`,
-    ``,
-  ].join("\n"));
-  writeFileSync(join(dir, "tsconfig.json"), JSON.stringify({
-    compilerOptions: { strict: true, noEmit: true, module: "esnext", moduleResolution: "bundler", target: "es2022", skipLibCheck: true, types: [] },
-    files: ["consumer.ts"],
-  }));
+  // The web-sdk subpath declaration is emitted here from its source, not read from a webpack build. The mapping is the one package.json names.
+  expect(JSON.parse(readFileSync(join(WEB_SDK, "package.json"), "utf8")).exports["./credentials"]?.types).toBe("./dist/credentials-subpath.d.ts");
   const tsc = Bun.resolveSync("typescript/lib/tsc.js", NODE_SDK);
-  const run = Bun.spawnSync([process.execPath, tsc, "-p", join(dir, "tsconfig.json")], { stdout: "pipe", stderr: "pipe" });
-  const output = `${run.stdout.toString()}${run.stderr.toString()}`;
-  expect(output).toBe("");
-  expect(run.exitCode).toBe(0);
+  const dir = mkdtempSync(join(tmpdir(), "credentials-consumer-"));
+  try {
+    const emitDir = join(dir, "web-sdk-types");
+    writeFileSync(join(dir, "emit.tsconfig.json"), JSON.stringify({
+      extends: join(WEB_SDK, "tsconfig.json"),
+      compilerOptions: { noEmit: false, declaration: true, emitDeclarationOnly: true, declarationMap: false, sourceMap: false, outDir: emitDir },
+      files: [join(WEB_SDK, "src/credentials-subpath.ts")],
+      include: [],
+    }));
+    const emit = Bun.spawnSync([process.execPath, tsc, "-p", join(dir, "emit.tsconfig.json")], { stdout: "pipe", stderr: "pipe" });
+    const emitted = join(emitDir, "credentials-subpath.d.ts");
+    if (emit.exitCode !== 0 || !existsSync(emitted)) {
+      throw new Error(`web-sdk credentials declarations did not emit (exit ${emit.exitCode}, expected ${emitted}):\n${emit.stdout.toString()}${emit.stderr.toString()}`);
+    }
+    const scope = join(dir, "node_modules", "@tinycloud");
+    mkdirSync(scope, { recursive: true });
+    symlinkSync(NODE_SDK, join(scope, "node-sdk"), "dir");
+    writeFileSync(join(dir, "consumer.ts"), [
+      `import { acquireEmailProof, EmailProofError, type EmailProofResult } from "@tinycloud/node-sdk/credentials";`,
+      `import { createFileEmailProofPendingStore, PendingStoreError } from "@tinycloud/node-sdk/credential-pending-store";`,
+      `import { acquireEmailProof as webAcquire, EmailProofError as WebError, type EmailProofAcquisition } from "@tinycloud/web-sdk/credentials";`,
+      `export const acquire: typeof acquireEmailProof = acquireEmailProof;`,
+      `export const err: EmailProofError | undefined = undefined;`,
+      `export const result: EmailProofResult | undefined = undefined;`,
+      `export const store = createFileEmailProofPendingStore;`,
+      `export const storeErr: PendingStoreError | undefined = undefined;`,
+      `export const web: typeof webAcquire = webAcquire;`,
+      `export const webErr: WebError | undefined = undefined;`,
+      `export const acq: EmailProofAcquisition | undefined = undefined;`,
+      ``,
+    ].join("\n"));
+    writeFileSync(join(dir, "tsconfig.json"), JSON.stringify({
+      compilerOptions: { strict: true, noEmit: true, module: "esnext", moduleResolution: "bundler", target: "es2022", skipLibCheck: true, types: [],
+        paths: { "@tinycloud/web-sdk/credentials": [emitted] } },
+      files: ["consumer.ts"],
+    }));
+    const run = Bun.spawnSync([process.execPath, tsc, "-p", join(dir, "tsconfig.json")], { stdout: "pipe", stderr: "pipe" });
+    const output = `${run.stdout.toString()}${run.stderr.toString()}`;
+    expect(output).toBe("");
+    expect(run.exitCode).toBe(0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
