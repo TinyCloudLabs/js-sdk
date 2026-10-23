@@ -3,6 +3,7 @@ import type { FetchFunction } from "@tinycloud/sdk-services";
 import type { DelegatedResource } from "./types";
 import { createCompactPolicyDescendant } from "../policy/unified";
 import { httpResponseError } from "../http-error";
+import { SqlDelegatedCaveatsUnsupportedError, sqlCaveatListNeedsDelegatedFeature } from "../policy/delegatedCaveats";
 
 /** Transport form shared by addressed-share recipients and normal agents. */
 export interface PortableDelegation {
@@ -76,13 +77,37 @@ export interface PortableDelegationImportReceipt {
   readonly [key: string]: unknown;
 }
 
+/** What the caller knows about the node a delegation is imported into. */
+export interface PortableDelegationImportOptions {
+  /**
+   * Whether the node lists `sql-delegated-caveats-v1`. A delegation carrying a
+   * delegated SQL caveat (or two or more empty-only entries) is refused,
+   * with no request, unless this is `true`. Unset means unsupported.
+   */
+  readonly supportsSqlDelegatedCaveats?: boolean;
+}
+
+/** Whether the delegation carries a SQL caveat list that needs `sql-delegated-caveats-v1`. */
+export function portableDelegationNeedsSqlDelegatedFeature(delegation: PortableDelegation): boolean {
+  const flat = delegation.actions.some((action) => action.startsWith("tinycloud.sql/")) &&
+    sqlCaveatListNeedsDelegatedFeature(delegation.caveats);
+  return flat || (delegation.resources ?? []).some((resource) =>
+    (resource.service === "sql" || resource.service === "tinycloud.sql") &&
+    sqlCaveatListNeedsDelegatedFeature(resource.caveats)
+  );
+}
+
 /** Admit a normal delegation through POST /delegate. */
 export async function importPortableDelegation(
   fetchFn: FetchFunction,
   host: string,
   delegation: PortableDelegation,
+  options: PortableDelegationImportOptions = {},
 ): Promise<PortableDelegationImportReceipt> {
   const parsed = parsePortableDelegation(delegation);
+  if (options.supportsSqlDelegatedCaveats !== true && portableDelegationNeedsSqlDelegatedFeature(parsed)) {
+    throw new SqlDelegatedCaveatsUnsupportedError(host);
+  }
   const response = await fetchFn(`${host.replace(/\/+$/, "")}/delegate`, {
     method: "POST",
     headers: { Authorization: parsed.delegationHeader.Authorization },

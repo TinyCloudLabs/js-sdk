@@ -581,7 +581,7 @@ export class SQLService extends BaseService implements ISQLService {
 
     // The caveat refusal names an arm and nothing else. Nothing from the node
     // body goes into the message or meta, so no SQL can travel with it.
-    if (response.status === 403 && refusal.code === "sql_caveat_violation" && refusal.detail !== undefined) {
+    if (response.status === 403 && refusal.code === "sql_caveat_violation") {
       const arm = SQL_CAVEAT_ARMS.find((candidate) => candidate === refusal.detail);
       return err(
         serviceError(

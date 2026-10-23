@@ -1582,6 +1582,17 @@ describe("TranscriptRequester delegation import and containment", () => {
       await client.readKv("notebooks/nb_project_notes/docs/alice-note.md");
     }, "requester-delegation-capability-wider");
 
+    // A delegated SQL caveat (tables/columns/readOnly) is refused before /delegate is called.
+    const delegatedTransport = new FixtureTransport([
+      challenge(),
+      resolve([{ ...sqlCapability, caveats: { tables: ["Notes"], readOnly: true } }]),
+    ]);
+    await expectRequesterFailure(async () => {
+      const client = await requester(delegatedTransport);
+      await client.readSql("listen.getConversation");
+    }, "requester-delegation-invalid");
+    expect(delegatedTransport.calls.some((call) => String(call.url).endsWith("/delegate"))).toBe(false);
+
     for (const [overrides, code] of [
       [{ holderDid: OWNER_DID }, "requester-delegation-wrong-holder"],
       [{ issuerDid: OWNER_DID }, "requester-delegation-invalid"],
