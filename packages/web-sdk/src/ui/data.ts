@@ -71,9 +71,19 @@ export interface PanelRoute {
  */
 export type PermissionAbility = "delegation/list" | "space/info" | "space/list";
 
+/** Read freshness, attached to ready results by the live adapter. */
+export interface Freshness {
+  /** When the shown data was last read successfully (epoch ms). */
+  readonly updatedAt: number;
+  /** A refresh is in flight. */
+  readonly refreshing: boolean;
+  /** Code of the last refresh that failed. Cleared by the next success. */
+  readonly lastError?: string;
+}
+
 export type ViewResult<T> =
   | { readonly state: "loading" }
-  | { readonly state: "ready"; readonly data: T }
+  | { readonly state: "ready"; readonly data: T; readonly freshness?: Freshness }
   | { readonly state: "needs-permission"; readonly ability: PermissionAbility }
   | { readonly state: "error"; readonly code: string };
 

@@ -28,7 +28,7 @@ export interface UiClientOptions {
   readonly source: ClientSource;
   /** manifest.app_id, read lazily so setManifest() re-keys the hide flag. */
   readonly manifestAppId: () => string | undefined;
-  /** Panel data factory. Only the harness and preview pass one; production panels show placeholders. */
+  /** Panel data factory. Production passes the live adapter; the harness passes its stub. */
   readonly data?: PanelDataFactory;
 }
 

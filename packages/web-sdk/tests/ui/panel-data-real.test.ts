@@ -162,6 +162,40 @@ describe("createRealPanelData delegations", () => {
     expect(after.state).toBe("ready");
   });
 
+  test("ready results carry freshness; a stale read reports refreshing until it settles", async () => {
+    const f = makeFakes();
+    const data = createRealPanelData(f.host, f.client, "app");
+    await data.delegations();
+
+    now += 10_001;
+    const during = await data.delegations();
+    expect(during.state === "ready" && during.freshness?.refreshing).toBe(true);
+
+    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+    const settled = await data.delegations();
+    expect(settled.state === "ready" && settled.freshness).toEqual({
+      updatedAt: now,
+      refreshing: false,
+      lastError: undefined,
+    });
+  });
+
+  test("a failed refresh keeps the old updatedAt and records lastError", async () => {
+    const f = makeFakes();
+    const data = createRealPanelData(f.host, f.client, "app");
+    const first = Date.now();
+    await data.delegations();
+
+    f.setQuery({ ok: false, error: { code: "NETWORK", message: "down", service: "delegation" } });
+    now += 10_001;
+    await data.delegations();
+    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+
+    const after = await data.delegations();
+    expect(after.state === "ready" && after.freshness?.lastError).toBe("NETWORK");
+    expect(after.state === "ready" && after.freshness?.updatedAt).toBe(first);
+  });
+
   test("denied list maps to needs-permission for delegation/list", async () => {
     const f = makeFakes();
     f.setQuery({

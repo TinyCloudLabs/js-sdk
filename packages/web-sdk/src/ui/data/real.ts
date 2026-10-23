@@ -27,7 +27,11 @@ type SectionKey = "account" | "delegations" | "storage";
 
 interface Snapshot {
   value?: ViewResult<unknown>;
+  /** Epoch ms of the last successful read. */
   at: number;
+  refreshing: boolean;
+  /** Code of the last failed refresh. Set while a ready value is kept. */
+  lastError?: string;
   inflight?: Promise<void>;
 }
 
@@ -62,7 +66,7 @@ export function createRealPanelData(
   const snapFor = (key: SectionKey): Snapshot => {
     let snap = snaps.get(key);
     if (!snap) {
-      snap = { at: 0 };
+      snap = { at: 0, refreshing: false };
       snaps.set(key, snap);
     }
     return snap;
@@ -78,19 +82,35 @@ export function createRealPanelData(
     const snap = snapFor(key);
     if (snap.inflight) return snap.inflight;
     const run = epoch;
-    snap.inflight = fetch()
+    const inflight = fetch()
       .catch((): ViewResult<T> => viewError("unavailable"))
       .then((result) => {
         if (run !== epoch) return;
-        if (result.state === "error" && snap.value?.state === "ready") return;
+        if (result.state === "error" && snap.value?.state === "ready") {
+          snap.lastError = result.code;
+          return;
+        }
         snap.value = result;
         snap.at = Date.now();
-        emit(key);
+        snap.lastError = undefined;
       })
       .finally(() => {
         snap.inflight = undefined;
+        snap.refreshing = false;
+        emit(key);
       });
-    return snap.inflight;
+    snap.inflight = inflight;
+    snap.refreshing = true;
+    emit(key);
+    return inflight;
+  }
+
+  function present<T>(snap: Snapshot, value: ViewResult<T>): ViewResult<T> {
+    if (value.state !== "ready") return value;
+    return {
+      ...value,
+      freshness: { updatedAt: snap.at, refreshing: snap.refreshing, lastError: snap.lastError },
+    };
   }
 
   async function read<T>(
@@ -101,10 +121,12 @@ export function createRealPanelData(
     const snap = snapFor(key);
     if (snap.value === undefined) {
       await refresh(key, fetch);
-      return (snap.value as ViewResult<T> | undefined) ?? viewLoading<T>();
+      return snap.value === undefined
+        ? viewLoading<T>()
+        : present(snap, snap.value as ViewResult<T>);
     }
     if (Date.now() - snap.at > ttlMs) void refresh(key, fetch);
-    return snap.value as ViewResult<T>;
+    return present(snap, snap.value as ViewResult<T>);
   }
 
   async function fetchDelegations(cursor?: string): Promise<ViewResult<DelegationPage>> {
