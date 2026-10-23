@@ -102,6 +102,11 @@ The `Major release guard` check fails a PR that adds a `major` changeset or rais
 without that sign-off. The Release workflow applies the same rule before publishing betas and before
 graduating them to stable (TC-615).
 
+Every changeset a PR adds or modifies needs a line that starts `Details: TC-<number>` (several
+tickets: `Details: TC-1, TC-2`); the `Changeset details` check fails the PR otherwise. It becomes
+the ticket line in the package CHANGELOG. `.changeset/README.md`, `config.json` and `pre.json` are
+exempt, as are the `dependabot-*.md` changesets that `dependabot-changeset.yml` generates.
+
 Release runs queue and never cancel each other. Each run pushes its version commit to `master` and
 then publishes from that commit; if `master` moved first, the run fails without publishing and the
 next run releases the changesets. Before publishing, it fails if npm's copy of any current version

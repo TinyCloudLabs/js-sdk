@@ -11,6 +11,7 @@ export default defineConfig({
     "html-bundle": "src/html-bundle/index.ts",
     "share-root": "src/share-root-entry.ts",
     "share-index": "src/share-index/index.ts",
+    "web-recipient": "src/web-recipient-entry.ts",
   },
   format: ["esm", "cjs"],
   target: "es2022",

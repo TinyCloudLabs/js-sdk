@@ -103,7 +103,8 @@ export class CredentialsService {
     let response: Response;
     try { response = await (options.fetch ?? globalThis.fetch.bind(globalThis))(url, { credentials: "omit", cache: "no-store", redirect: "error", referrerPolicy: "no-referrer", signal: options.signal }); } catch (cause) { throw new CredentialError("OFFLINE", "Credential discovery is unavailable", { cause }); }
     if (!response.ok) throw new CredentialError(response.status === 503 ? "ISSUER_UNREADY" : "OFFLINE", "Credential discovery is unavailable");
-    const catalog = await response.json() as Record<string, unknown>;
+    let catalog: Record<string, unknown>;
+    try { catalog = await response.json() as Record<string, unknown>; } catch { throw Object.assign(new Error("Credential discovery returned a non-JSON response"), { code: "CREDENTIAL_DISCOVERY_FAILED", host: url.host, status: response.status, contentType: response.headers.get("content-type") }); }
     if (catalog.type !== "tinycloud.credentials/catalog/v1" || catalog.protocol !== "tinycloud.credentials/acquisition/v1" || catalog.catalogVersion !== 1 || !Array.isArray(catalog.profiles)) throw new CredentialError("DESCRIPTOR_INVALID", "Credential catalog is invalid");
     for (const entryValue of catalog.profiles) {
       if (typeof entryValue !== "object" || entryValue === null || Array.isArray(entryValue)) continue;

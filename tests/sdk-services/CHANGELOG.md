@@ -1,5 +1,19 @@
 # @tinycloudlabs/sdk-services-test
 
+## 20.0.0
+
+### Patch Changes
+
+- Updated dependencies [d60f81d]
+  - @tinycloud/sdk-services@3.5.0
+
+## 20.0.0-beta.0
+
+### Patch Changes
+
+- Updated dependencies [d60f81d]
+  - @tinycloud/sdk-services@3.5.0-beta.0
+
 ## 19.0.0
 
 ### Patch Changes
