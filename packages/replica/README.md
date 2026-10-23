@@ -97,14 +97,15 @@ worker URL. Keep old hashed worker assets available while clients referencing
 them may still be cached.
 
 In the separate web SDK integration, the first local open loads the optional
-first-import chunk (51,925/67,138 gzip bytes ESM/CJS), deferred IndexedDB
-activation chunk (23,075/24,655), and worker budget (820,108). That is
-approximately 895,108/911,901 gzip bytes beyond the mandatory root on first
+first-import chunk (51,925/67,141 gzip bytes ESM/CJS), deferred IndexedDB
+activation chunk (23,117/24,700), and kv-storage worker budget (776,128). That is
+approximately 851,170/867,969 gzip bytes beyond the mandatory root on first
 use; subsequent opens reuse cacheable hashed assets when the host honors the
 immutable cache policy above. These optional costs do not waive the separate
-mandatory-root bundle budget. The worker ceiling has zero headroom against the
-GitHub Bun 1.3.14 / Rust 1.99.0 measurement; its checker rejects other
-toolchains before comparing bytes.
+mandatory-root bundle budget. The `@tinycloud/replica/browser` worker
+(`replica.worker.js`) has its own 770,093 B gzip ceiling. Both worker ceilings
+have zero headroom against the GitHub Bun 1.3.14 / Rust 1.99.0 measurement;
+their checker rejects other toolchains before comparing bytes.
 
 ## Node and SQLite
 

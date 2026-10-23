@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { MAX_WORKER_GZIP_BYTES } from "../../replica/scripts/check-worker-size";
+import { MAX_REPLICA_WORKER_GZIP_BYTES, MAX_WORKER_GZIP_BYTES } from "../../replica/scripts/check-worker-size";
 import { compactFixOptionalAllowance, mergedPinsNotLandedOn, optionalSourcePins, type OptionalLedger } from "./replica-optional-size-policy";
 import { approvedTc1428Ratchet, validateTc1428RatchetTransition, type Tc1428Ratchet } from "./replica-size-policy";
 import { approvedTc1476Ratchet, validateTc1476RatchetTransition, type Tc1476Ratchet } from "./replica-size-policy";
@@ -16,6 +16,7 @@ import { approvedTc1781DecryptExpiryRatchet, validateTc1781DecryptExpiryRatchetT
 import { approvedTc1801NonTransferableShareRatchet, validateTc1801NonTransferableShareRatchetTransition, type Tc1801NonTransferableShareRatchet } from "./replica-size-policy";
 import { approvedTc1807CredentialDiscoveryRatchet, validateTc1807CredentialDiscoveryRatchetTransition, type Tc1807CredentialDiscoveryRatchet } from "./replica-size-policy";
 import { approvedTc1827WorkerRatchet, validateTc1827WorkerRatchetTransition, type Tc1827WorkerRatchet } from "./replica-size-policy";
+import { approvedTc1827ReplicaWorkerRatchet, validateTc1827ReplicaWorkerRatchetTransition, type Tc1827ReplicaWorkerRatchet } from "./replica-size-policy";
 import { activeRootCeiling, rootCeilingFor, rootCeilings } from "./replica-size-policy";
 import { approvedTc1443Ratchet, approvedTc1443bRatchet, approvedTc1448Ratchet, approvedTc1466Ratchet, validateTc1443RatchetTransition, validateTc1443bRatchetTransition, validateTc1448RatchetTransition, validateTc1466RatchetTransition, type Tc1443Ratchet, type Tc1443bRatchet, type Tc1448Ratchet, type Tc1466Ratchet } from "./replica-size-policy";
 import { ancestryPins, assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedHardeningRatchet, approvedLogoutRatchet, approvedTc1413Ratchet, approvedTc1424Ratchet, approvedTc1432Ratchet, approvedTc1436Ratchet, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, landingCommit, pinLandedOn, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateLogoutRatchetTransition, validateMasterMergeResolutionTransition, validateTc1413RatchetTransition, validateTc1424RatchetTransition, validateTc1432RatchetTransition, validateTc1436RatchetTransition, type HardeningRatchet, type Ledger, type LogoutRatchet, type MasterMergeResolution, type Tc1413Ratchet, type Tc1424Ratchet, type Tc1432Ratchet, type Tc1436Ratchet } from "./replica-size-policy";
@@ -49,6 +50,7 @@ const historical: Ledger = {
   tc1801NonTransferableShareRatchet: undefined,
   tc1807CredentialDiscoveryRatchet: undefined,
   tc1827WorkerRatchet: undefined,
+  tc1827ReplicaWorkerRatchet: undefined,
   phase2Ratchet: {
     ...current.phase2Ratchet!,
     toolchain: "Bun 1.4.3; production webpack; gzip -9 -c",
@@ -2254,6 +2256,53 @@ describe("replica worker narrow imports (#694) lowered worker ceiling ratchet", 
   });
 });
 
+describe("replica worker (TC-1827 follow-up) first ceiling ratchet", () => {
+  const row = () => structuredClone(approvedTc1827ReplicaWorkerRatchet);
+
+  it("is the exact canonical CI bytes, is the checker's replica worker ceiling, and leaves the kv-storage worker alone", () => {
+    expect(() => validateLedger(current)).not.toThrow();
+    expect(JSON.stringify(current.tc1827ReplicaWorkerRatchet)).toBe(JSON.stringify(approvedTc1827ReplicaWorkerRatchet));
+    expect(row().worker).toEqual({ delta: 0, ceiling: 770093 });
+    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(row().worker.ceiling);
+    expect(MAX_WORKER_GZIP_BYTES).toBe(approvedTc1827WorkerRatchet.worker.ceiling);
+    expect(row().canonicalCI.run).toBe("https://github.com/TinyCloudLabs/js-sdk/actions/runs/39949887460");
+    expect(row().canonicalCI.jobs).toHaveLength(2);
+    expect(rootCeilings(current).map(({ row }) => row)).not.toContain("tc1827ReplicaWorkerRatchet");
+    expect(ancestryPins(current, false)).toContainEqual({
+      row: "tc1827ReplicaWorkerRatchet", pin: row().sourceCommits.at(-1)!,
+    });
+  });
+
+  it("refuses one extra or missing byte, other CI provenance, or a missing kv-storage worker row", () => {
+    const mutations: Array<(changed: Tc1827ReplicaWorkerRatchet) => void> = [
+      (changed) => { changed.worker.ceiling++; },
+      (changed) => { changed.worker.ceiling--; },
+      (changed) => { changed.worker.delta++; },
+      (changed) => { changed.canonicalCI.run = "https://github.com/TinyCloudLabs/js-sdk/actions/runs/1"; },
+      (changed) => { changed.sourceCommits = ["0".repeat(40)]; },
+    ];
+    for (const mutate of mutations) {
+      const ledger = copy(current);
+      const changed = row();
+      mutate(changed);
+      ledger.tc1827ReplicaWorkerRatchet = changed;
+      expect(() => validateLedger(ledger)).toThrow();
+    }
+    const withoutPrerequisite = copy(current);
+    delete withoutPrerequisite.tc1827WorkerRatchet;
+    expect(() => validateLedger(withoutPrerequisite)).toThrow();
+  });
+
+  it("may be introduced once and never changed or removed in a later base", () => {
+    expect(() => validateTc1827ReplicaWorkerRatchetTransition(undefined, row())).not.toThrow();
+    expect(() => validateTc1827ReplicaWorkerRatchetTransition(row(), row())).not.toThrow();
+    const changed = row();
+    changed.worker.ceiling++;
+    expect(() => validateTc1827ReplicaWorkerRatchetTransition(undefined, changed)).toThrow();
+    expect(() => validateTc1827ReplicaWorkerRatchetTransition(row(), undefined)).toThrow();
+  });
+});
+
 describe("the newest root ceiling is the only active one", () => {
   const rowOrder = (ledger: Ledger) => rootCeilings(ledger).map(({ row }) => row);
 
@@ -2285,6 +2334,7 @@ describe("the newest root ceiling is the only active one", () => {
   it("falls back to the newest row still present, and a lone older row is its own history", () => {
     const withoutNewest = copy(current);
     delete withoutNewest.tc1827WorkerRatchet;
+    delete withoutNewest.tc1827ReplicaWorkerRatchet; // requires the row above
     expect(activeRootCeiling(withoutNewest)).toEqual({ row: "tc1807CredentialDiscoveryRatchet", ceiling: approvedTc1807CredentialDiscoveryRatchet.root.ceiling });
     expect(() => validateLedger(withoutNewest)).not.toThrow();
     expect(activeRootCeiling(historical)).toEqual({ row: "fixRequiredRatchet", ceiling: approvedFixRequiredRatchet.rootCeiling });
