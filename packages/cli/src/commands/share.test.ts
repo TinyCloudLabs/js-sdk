@@ -5,10 +5,25 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MemorySenderShareRecordStorage, revokeShare, ShareNotifyError, ShareReceiveError, type PublishedShare, type SenderShareRecord, type ShareTarget } from "@tinycloud/share-sdk";
 import { ProfileLockTimeoutError } from "@tinycloud/operations/state";
-import { configureShareCommandServices, inspectShareInputOnce, registerShareCommand, parseShareTarget, shareCliError, shareHistoryRecoverError } from "./share.js";
+import { buildShortLink } from "@tinycloud/share-envelope/links";
+import { configureShareCommandServices as configureServices, inspectShareInputOnce, registerShareCommand, parseShareTarget, shareCliError, shareHistoryRecoverError, type ShareCommandServices } from "./share.js";
 import { ShareHistoryReadError, ShareHistoryRetryError, ShareHistoryUnreadableError, SharePublishAuthorityError } from "../share/errors.js";
 import { safeFilename, writeShareOutput } from "../share/io.js";
 import { runShareCaptured } from "./share.integration-harness.js";
+
+const SHORT_LINK = buildShortLink({
+  origin: "https://share.example", type: "share", id: "a".repeat(26), key: new Uint8Array(32).fill(7),
+  bodyCid: "bafkreibm6jg3ux5qucnwb24kinphs4b5fbc7n5t3lti2skm4du5qjn4fli",
+});
+
+/** These tests exercise the commands with short links available and invitations enabled; the gate has its own tests. */
+function configureShareCommandServices(services: ShareCommandServices): void {
+  configureServices(Object.keys(services).length === 0 ? services : {
+    links: { show: async (published) => ({ url: published.url, short: true }), unlink: async () => "deleted" },
+    shortLinkInvitations: true,
+    ...services,
+  });
+}
 
 describe("tc share command contract", () => {
   const reviewRecord: SenderShareRecord = {
@@ -21,9 +36,10 @@ describe("tc share command contract", () => {
     enforcementDelegationCid: "bafy-enforcement",
     registeredAt: new Date().toISOString(),
     expiresAt: "2030-01-01T00:00:00.000Z",
+    link: SHORT_LINK,
   };
   const reviewPublished: PublishedShare = {
-    protocol: "tinycloud-share", version: 1, url: "https://share.example/s/inline#v=2&p=sealed",
+    protocol: "tinycloud-share", version: 1, url: SHORT_LINK,
     link: { kind: "policy", cid: "bafy-review" },
     metadata: {
       protocol: "tinycloud-share", version: 1, shareId: reviewRecord.shareId, origin: "https://share.example",
@@ -248,7 +264,7 @@ describe("tc share command contract", () => {
     registerShareCommand(program);
     const share = program.commands.find((command) => command.name() === "share");
     expect(share?.commands.map((command) => command.name())).toEqual([
-      "publish", "inspect", "versions", "receive", "list", "show", "notify", "revoke", "history",
+      "publish", "inspect", "versions", "receive", "list", "show", "notify", "revoke", "unlink", "history",
     ]);
     const history = share?.commands.find((command) => command.name() === "history");
     expect(history?.commands.map((command) => command.name())).toEqual(["recover"]);
@@ -305,7 +321,7 @@ describe("tc share command contract", () => {
         const target: ShareTarget = input.target;
         if (target.kind !== "email") throw new Error("expected an email target");
         return {
-          protocol: "tinycloud-share", version: 1, url: "https://share.example/s/inline#v=2&p=sealed",
+          protocol: "tinycloud-share", version: 1, url: SHORT_LINK,
           link: { kind: "policy", cid: "bafy-share" },
           metadata: {
             protocol: "tinycloud-share", version: 1, shareId: "share-notify", origin: "https://share.example",
@@ -347,7 +363,7 @@ describe("tc share command contract", () => {
     expect(records.get("share-notify")?.recipientMatcher).toEqual({ kind: "exactEmail", value: "foo@x.com" });
     expect(records.get("share-notify")?.deliveredRecipients).toEqual(["foo@x.com"]);
     expect(delivered).toEqual(["foo@x.com", "foo@x.com"]);
-    expect(written.join("")).toContain("https://share.example/s/inline#v=2&p=sealed");
+    expect(written.join("")).toContain(SHORT_LINK);
     expect(written.at(-1)).toBe("already-delivered\n");
   });
 
@@ -361,7 +377,7 @@ describe("tc share command contract", () => {
       targetAdapter: { async publish(input) {
         published.push({ target: input.target, actions: input.actions, notify: input.notify });
         return {
-          protocol: "tinycloud-share", version: 1, url: "https://share.example/s/inline#v=2&p=sealed",
+          protocol: "tinycloud-share", version: 1, url: SHORT_LINK,
           link: { kind: "policy", cid: "bafy-domain" },
           metadata: {
             protocol: "tinycloud-share", version: 1, shareId: "share-domain", origin: "https://share.example",
@@ -460,8 +476,8 @@ describe("tc share command contract", () => {
     expect(stderr).toContain(reviewPublished.metadata.shareId);
     expect(stderr).toContain(reviewPublished.link.cid);
     expect(stderr).not.toContain(reviewPublished.url);
-    expect(stderr).not.toContain("p=sealed");
-    expect(stderr).not.toContain("#v=2");
+    expect(stderr).not.toContain("k=");
+    expect(stderr).not.toContain("#v=4");
   }
 
   test("publish --json reports HISTORY_UNREADABLE when the existing sender history cannot be decrypted", async () => {
@@ -821,6 +837,7 @@ describe("tc share command contract", () => {
       recipientMatcher: { kind: "exactEmail", value: "alice@example.com" },
       registeredAt: "2026-01-01T00:00:00.000Z",
       expiresAt: "2030-01-01T00:00:00.000Z",
+      link: SHORT_LINK,
     };
     configureShareCommandServices({
       records: {
@@ -857,14 +874,14 @@ describe("tc share command contract", () => {
     let reads = 0;
     let inspected = "";
     const result = await inspectShareInputOnce(undefined, true, "https://share.example", {
-      read: async () => { reads += 1; return "https://share.example/s/inline#v=2&p=sealed"; },
+      read: async () => { reads += 1; return SHORT_LINK; },
       inspect: (async (link: string) => {
         inspected = link;
         return { protocol: "tinycloud-share", version: 1 } as never;
       }) as never,
     });
     expect(reads).toBe(1);
-    expect(inspected).toBe("https://share.example/s/inline#v=2&p=sealed");
+    expect(inspected).toBe(SHORT_LINK);
     expect(result).toMatchObject({ protocol: "tinycloud-share", version: 1 });
   });
 
@@ -872,8 +889,8 @@ describe("tc share command contract", () => {
     let inspected = 0;
     const inspect = (async () => { inspected += 1; throw new ShareReceiveError("invalid-link", "share link format is invalid"); }) as never;
     for (const link of [
-      "https://share.example.evil.example/s/inline#v=2&p=AAAA",
-      "http://share.example/s/inline#v=2&p=AAAA",
+      SHORT_LINK.replace("https://share.example", "https://share.example.evil.example"),
+      SHORT_LINK.replace("https://share.example", "http://share.example"),
     ]) {
       await expect(inspectShareInputOnce(link, false, "https://share.example", { inspect })).rejects.toMatchObject({ code: "origin-mismatch" });
     }

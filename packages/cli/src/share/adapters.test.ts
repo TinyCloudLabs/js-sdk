@@ -3,15 +3,20 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ed25519 } from "@noble/curves/ed25519";
+import { base58btc } from "multiformats/bases/base58";
 import { profilePath, withProfileLock, withTinyCloudStateRoot } from "@tinycloud/operations/state";
-import { encodeSealedInlineShareUrl, unifiedPolicyV2Schema } from "@tinycloud/share-envelope";
-import { historyRecordForPublishedShare, notifyShare, type SenderShareRecord, type TargetPublishInput } from "@tinycloud/share-sdk";
+import { fromBase64Url, unifiedPolicyV2Schema } from "@tinycloud/share-envelope";
+import { buildShortLink } from "@tinycloud/share-envelope/links";
+import { ADDRESSED_SHARE_TOO_LARGE_MESSAGE, historyRecordForPublishedShare, notifyShare, type PublishedShare, type SenderShareRecord, type SharePolicyRootRevocation, type TargetPublishInput } from "@tinycloud/share-sdk";
 import { createEmailCredentialRequirement, createEmailDomainCredentialRequirement, credentialRequirementDigest, LocationRecordValidationError, LocationRegistryHttpError } from "@tinycloud/sdk-core";
 import { CLIError } from "../output/errors.js";
 import { ShareHistoryReadError, ShareHistoryRetryError, ShareHistoryUnreadableError, SharePublishAuthorityError, shareHistoryReason } from "./errors.js";
 
 const transportDid = "did:key:z6Mkon3Necd6NkkyfoGoHxid2znGc59LU3K7mubaRcFbLfLX";
-const credentialHolderDid = "did:key:z6Mko9hTggMwjSTEaJaPUfE6tqcy2xvU6BnNq3e3o8qVBiyH";
+/** The session key signs the envelope and every link header, so its DID is the credential holder. */
+const holderSeed = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
+const credentialHolderDid = `did:key:${base58btc.encode(Uint8Array.from([0xed, 0x01, ...ed25519.getPublicKey(holderSeed)]))}`;
 const nodeDid = "did:key:z6MkvRXNYcE7MMduynWTgeKbDaT1iijDSC8pZqXZc8rHPrf2";
 const ownerRootInputs: Array<{ readonly ownerDid: string; readonly role: string }> = [];
 const sessionSignatures: Uint8Array[] = [];
@@ -23,6 +28,8 @@ const registeredPolicies: unknown[] = [];
 /** The owner's KV as the artifact layout sees it: write-once creates, reads and prefix lists. */
 const ownerKv = new Map<string, Uint8Array>();
 let encryptions = 0;
+/** When set, the fake node's owner roots carry this authorization: a root far larger than any real one. */
+let oversizedRootAuthorization: string | undefined;
 
 let nodeSpaceId: string | undefined = "tinycloud:test-space";
 let restoredSpaceId: string | undefined = "tinycloud:test-space";
@@ -183,6 +190,11 @@ const node = {
         ? { ok: true as const }
         : { ok: false as const, error: { code: uploadErrorCode, message: "secret server response", service: "kv", meta: uploadErrorMeta ?? { status: uploadErrorCode === "STORAGE_QUOTA_EXCEEDED" ? 402 : 503, usedBytes: 387_382_794, limitBytes: 8_119_195, requiredAction: "tinycloud.kv/put" } } };
     },
+    delete: async (path: string) => {
+      publishEvents.push("delete");
+      ownerKv.delete(path);
+      return { ok: true as const };
+    },
     get: async (path: string) => {
       const value = ownerKv.get(path);
       return value === undefined
@@ -206,13 +218,13 @@ const node = {
     ownerRootInputs.push(input);
     return {
       cid: input.role === "policy-authority" ? "bafy-policy-root" : "bafy-enforcement-root",
-      delegationHeader: { Authorization: input.role === "policy-authority" ? "a.b.c" : "d.e.f" },
+      delegationHeader: { Authorization: oversizedRootAuthorization ?? (input.role === "policy-authority" ? "a.b.c" : "d.e.f") },
     };
   },
   signSessionBytes: async (bytes: Uint8Array) => {
     historyOnSign?.();
     sessionSignatures.push(bytes.slice());
-    return new Uint8Array(64).fill(7);
+    return ed25519.sign(bytes, holderSeed);
   },
   registerPolicy: async (input: { readonly policyCid: string; readonly policy: unknown; readonly policyRoot: { readonly cid: string }; readonly enforcementRoot: { readonly cid: string } }) => {
     registeredPolicies.push(input.policy);
@@ -289,6 +301,7 @@ const { assertShareHistoryAllowsKeyDrop, checkShareHistoryForKeyDrop } = await i
 afterEach(() => {
   ownerKv.clear();
   encryptions = 0;
+  oversizedRootAuthorization = undefined;
   nodeSpaceId = "tinycloud:test-space";
   restoredSpaceId = "tinycloud:test-space";
   nativeSpaceId = "tinycloud:test-space";
@@ -715,7 +728,8 @@ describe("TinyCloud share authority adapter", () => {
           signature: { suite: "Ed25519", signerDid: credentialHolderDid },
         },
       });
-      expect(sessionSignatures).toHaveLength(3);
+      // Policy, envelope and link header at publish, then the revocation.
+      expect(sessionSignatures).toHaveLength(4);
       expect(sessionSignatures.at(-1)).toHaveLength(32);
     } finally {
       globalThis.fetch = originalFetch;
@@ -760,6 +774,15 @@ describe("TinyCloud share authority adapter", () => {
     mediaType: "text/markdown",
   });
 
+  /** The history record of a share whose printed link is its short link: the only link an invitation carries. */
+  const recordWithShortLink = (published: PublishedShare): SenderShareRecord => ({
+    ...historyRecordForPublishedShare(published),
+    link: buildShortLink({
+      origin: "https://share.example", type: "share", id: "a".repeat(26),
+      key: fromBase64Url(published.deliveryMaterial!.envelopeKey), bodyCid: published.deliveryMaterial!.shareCid,
+    }),
+  });
+
   it("publishes owner-only email shares a receiver can open (TC-556)", async () => {
     const published = await addressedAdapter().publish(addressedInput({ kind: "email", address: "Owner@Example.COM" }));
     if ("state" in published) throw new Error("expected addressed publication");
@@ -776,6 +799,65 @@ describe("TinyCloud share authority adapter", () => {
     const requirement = createEmailCredentialRequirement({ email: "owner@example.com", profile: commitment.profile, credentialType: commitment.credentialType });
     expect(await credentialRequirementDigest(requirement)).toBe(commitment.requirementDigest);
     expect(commitment.descriptorDigest).toBe(await goldenDescriptorDigest("email"));
+  });
+
+  describe("link size limit", () => {
+    const config = (async () => Response.json({
+      version: "tinycloud.share/config-v2",
+      shareOrigin: "https://share.example",
+      registryOrigin: "https://registry.example",
+      credentialsOrigin: "https://credentials.example",
+    })) as unknown as typeof globalThis.fetch;
+    const email = { kind: "email", address: "alice@example.com" } as const;
+    const adapterWithRevocation = (revokePolicyRoot: (request: SharePolicyRootRevocation) => Promise<void>) => createShareAuthorityAdapters({
+      origin: "https://share.example", profileName: async () => "test", fetchFn: config, revokePolicyRoot,
+    }).targetAdapter;
+    const failureOf = (outcome: Promise<unknown>) => outcome.then(() => undefined, (error: unknown) => error);
+
+    it("refuses a share whose largest sealed envelope is over the limit before any registry, upload or policy write", async () => {
+      // The owner space id appears throughout the envelope; a very long one cannot fit in a link.
+      restoredSpaceId = `tinycloud:${"a".repeat(5_000)}`;
+      const failure = await failureOf(addressedAdapter().publish(addressedInput(email)));
+      expect(failure).toMatchObject({ code: "max-bytes-exceeded", message: ADDRESSED_SHARE_TOO_LARGE_MESSAGE });
+      expect(publishEvents).toEqual([]);
+      expect(uploadedPaths).toEqual([]);
+      expect(registeredPolicies).toEqual([]);
+      expect(ownerRootInputs).toEqual([]);
+      expect(sessionSignatures).toEqual([]);
+      expect(encryptions).toBe(0);
+    });
+
+    it("removes what a publish wrote when the sealed envelope turns out over the limit", async () => {
+      oversizedRootAuthorization = `a.${"b".repeat(70_000)}.c`;
+      const revoked: SharePolicyRootRevocation[] = [];
+      const failure = await failureOf(adapterWithRevocation(async (request) => { revoked.push(request); }).publish(addressedInput(email)));
+      if (!(failure instanceof SharePublishAuthorityError) || failure.failure.kind !== "over-limit") throw failure;
+      // Written, then removed: the object is uploaded and deleted, both roots revoked, the policy registered once.
+      expect(publishEvents).toEqual(["location https://registry.example", "upload", "delete"]);
+      expect(ownerKv.size).toBe(0);
+      expect(registeredPolicies).toHaveLength(1);
+      expect(revoked.map((request) => [request.rootCid, request.targetRole, request.ownerDid, request.nodeAudience])).toEqual([
+        ["bafy-enforcement-root", "policy-enforcement", credentialHolderDid, nodeDid],
+        ["bafy-policy-root", "policy-authority", credentialHolderDid, nodeDid],
+      ]);
+      // What cannot be removed is named; nothing else is.
+      expect(failure.failure.remaining).toEqual(["a policy record stays on your node with both of its roots revoked, so it admits no one"]);
+      // The link header was never signed: only the policy and the envelope were.
+      expect(sessionSignatures).toHaveLength(2);
+    });
+
+    it("names a root that could not be revoked, a file that could not be deleted, and an artifact version that stays", async () => {
+      oversizedRootAuthorization = `a.${"b".repeat(70_000)}.c`;
+      const failure = await failureOf(adapterWithRevocation(async (request) => {
+        if (request.targetRole === "policy-enforcement") throw new Error("node unavailable");
+      }).publish({ ...addressedInput(email), artifact: { id: "art_over" } }));
+      if (!(failure instanceof SharePublishAuthorityError) || failure.failure.kind !== "over-limit") throw failure;
+      expect(failure.failure.remaining).toEqual([
+        "the policy-enforcement root bafy-enforcement-root could not be revoked",
+        "artifact art_over version 1 stays in your space, because artifact versions are write-once",
+      ]);
+      expect(ownerKv.has("artifacts/art_over/versions/1/note.md")).toBe(true);
+    });
   });
 
   it("publishes view-only email-domain shares with the domain credential commitment", async () => {
@@ -1050,10 +1132,12 @@ describe("TinyCloud share authority adapter", () => {
     let invitationAttempts = 0;
     const invitationBodies: string[] = [];
     try {
-      const link = await encodeSealedInlineShareUrl({
+      const link = buildShortLink({
         origin: "https://share.example",
-        ciphertext: new Uint8Array([1, 2, 3]),
-        key32: new Uint8Array(32).fill(7),
+        type: "share",
+        id: "a".repeat(26),
+        key: new Uint8Array(32).fill(7),
+        bodyCid: "bafkreibm6jg3ux5qucnwb24kinphs4b5fbc7n5t3lti2skm4du5qjn4fli",
       });
       const record: SenderShareRecord = {
         shareId: "share-retry",
@@ -1176,7 +1260,7 @@ describe("TinyCloud share authority adapter", () => {
     sessionOnly = true;
     const published = await adapters.targetAdapter.publish(domain);
     if ("state" in published) throw new Error("expected addressed publication");
-    const record = historyRecordForPublishedShare(published);
+    const record = recordWithShortLink(published);
     expect(record.ownerDid).toBe(credentialHolderDid);
     const result = await notifyShare({ shareId: record.shareId, recipient: "Bob@Example.COM", record, adapter: adapters.delivery });
     expect(result.state).toBe("delivered");
@@ -1684,7 +1768,7 @@ describe("TinyCloud share authority adapter", () => {
 
     const published = await adapters.targetAdapter.publish(addressedInput({ kind: "email", address: "Alice@Example.COM" }));
     if ("state" in published) throw new Error("expected addressed publication");
-    const record = historyRecordForPublishedShare(published);
+    const record = recordWithShortLink(published);
     // The signed envelope names the canonical mailbox the Node delivers to.
     expect(record.deliveryMaterial?.envelope).toMatchObject({
       recipientMatcher: { kind: "exactEmail", value: "alice@example.com" },
@@ -1709,7 +1793,7 @@ describe("TinyCloud share authority adapter", () => {
       // One upload, one registration, and both belong to a published share.
       expect(uploadedPaths.length - uploadsBefore).toBe(1);
       expect(registeredPolicies.length - policiesBefore).toBe(1);
-      const record = historyRecordForPublishedShare(published);
+      const record = recordWithShortLink(published);
       expect(record.deliveryMaterial?.envelope).toMatchObject({ recipientMatcher: { kind: "exactEmail", value: address } });
       expect(record.deliveryMaterial?.envelope).not.toHaveProperty("deliveryEmail");
 
