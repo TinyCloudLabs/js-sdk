@@ -1,5 +1,34 @@
 # @tinycloudlabs/node-sdk
 
+## 3.5.0
+
+### Minor Changes
+
+- d60f81d: Add an opt-in, in-memory developer request log. With `requestLog: true` in `TinyCloudNode` config, the log records requests the SDK makes on your behalf: operation, path (first segment only), space (the name after the last colon), host, size, duration, attempts, result and source. Read them from `node.requests`, a read-only view with `snapshot()`, `subscribe()` and `onClear()`. The log keeps the most recent 500 entries and is cleared on sign-out, on sign-in as another account, and when a session is restored for a different owner. Entries carry sizes only; body and header content is absent from them. When the option is omitted, no log is created and no events are built.
+- 7b92156: `grantRuntimePermissions` applies a one-hour decrypt limit to decrypt grants on the account's own networks: the default network and any non-share network. Decrypt grants are those with `tinycloud.encryption/decrypt`, or an action covering it such as `tinycloud.encryption/*`. Without an `expiry`, such grants default to one hour instead of 30 days. An explicit `expiry` over one hour is refused with an error whose `code` is `DECRYPT_EXPIRY_TOO_LONG`. Decrypt grants on per-share networks keep their own lifetime. Grants without decrypt are unchanged.
+
+  Details: TC-1781
+
+### Patch Changes
+
+- 7b92156: `secrets.get` now escalates only the permission entries that are not already covered. A read whose entries are all covered completes without a signer or a new grant. Escalations made by `secrets.get` expire after 59 minutes. Details: TC-1781
+- Updated dependencies [d60f81d]
+  - @tinycloud/sdk-services@3.5.0
+  - @tinycloud/replica@0.3.2
+  - @tinycloud/sdk-core@3.5.0
+
+## 3.5.0-beta.1
+
+### Minor Changes
+
+- 7b92156: `grantRuntimePermissions` applies a one-hour decrypt limit to decrypt grants on the account's own networks: the default network and any non-share network. Decrypt grants are those with `tinycloud.encryption/decrypt`, or an action covering it such as `tinycloud.encryption/*`. Without an `expiry`, such grants default to one hour instead of 30 days. An explicit `expiry` over one hour is refused with an error whose `code` is `DECRYPT_EXPIRY_TOO_LONG`. Decrypt grants on per-share networks keep their own lifetime. Grants without decrypt are unchanged.
+
+  Details: TC-1781
+
+### Patch Changes
+
+- 7b92156: `secrets.get` now escalates only the permission entries that are not already covered. A read whose entries are all covered completes without a signer or a new grant. Escalations made by `secrets.get` expire after 59 minutes. Details: TC-1781
+
 ## 3.5.0-beta.0
 
 ### Minor Changes
