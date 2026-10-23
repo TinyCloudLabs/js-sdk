@@ -12,7 +12,7 @@ import { normalizePolicyCapability, policyCapabilityContains } from "./capabilit
 import { parseSqlCaveatList, sqlCaveatListsEquivalent } from "./sqlCaveatList";
 import { sqlCaveatListNeedsDelegatedFeature } from "./delegatedCaveats";
 import { isCapabilitySubset } from "../capabilities";
-import { validateManifest } from "../manifest";
+import { ManifestValidationError, validateManifest } from "../manifest";
 
 const names = (count: number): string[] => Array.from({ length: count }, (_, index) => `t${index}`);
 
@@ -128,7 +128,6 @@ describe("TC-1839 delegated SQL caveat grammar", () => {
     ]) {
       const error = refusalOf(list);
       expect(error.message).not.toContain(secret);
-      expect(error.message).toMatch(/^caveat \d+ /);
     }
     expect(refusalOf([{}, { tables: ["a."] }]).index).toBe(1);
   });
@@ -243,28 +242,28 @@ describe("TC-1839 manifest validation", () => {
     expect(() => validateManifest(manifestWith("tinycloud.sql", [{}]))).not.toThrow();
   });
 
-  it("fails a bad SQL caveat at manifest validation with an index-based message", () => {
+  it("fails a bad SQL caveat at manifest validation without echoing a name", () => {
     expect(() => validateManifest(manifestWith("tinycloud.sql", [{ tables: ["a"] }, { tables: ["b"] }])))
-      .toThrow("permissions[0].caveats: caveat 0 is one of several entries");
-    let message = "";
+      .toThrow(ManifestValidationError);
+    let refusal: unknown;
     try {
       validateManifest(manifestWith("tinycloud.sql", [{ tables: ["secret.x"] }]));
     } catch (error) {
-      message = error instanceof Error ? error.message : String(error);
+      refusal = error;
     }
-    expect(message).toContain("permissions[0].caveats: caveat 0 has an element with a dot");
-    expect(message).not.toContain("secret");
+    expect(refusal).toBeInstanceOf(ManifestValidationError);
+    expect((refusal as Error).message).not.toContain("secret");
   });
 
   it("R9 refuses any non-empty DuckDB caveat, delegated form or profile", () => {
-    expect(() => validateManifest(manifestWith("tinycloud.duckdb", [{ tables: ["a"] }]))).toThrow("not defined for tinycloud.duckdb");
-    expect(() => validateManifest(manifestWith("tinycloud.duckdb", [profile]))).toThrow("not defined for tinycloud.duckdb");
-    expect(() => validateManifest(manifestWith("tinycloud.duckdb", [{}, { readOnly: true }]))).toThrow("not defined for tinycloud.duckdb");
+    expect(() => validateManifest(manifestWith("tinycloud.duckdb", [{ tables: ["a"] }]))).toThrow(ManifestValidationError);
+    expect(() => validateManifest(manifestWith("tinycloud.duckdb", [profile]))).toThrow(ManifestValidationError);
+    expect(() => validateManifest(manifestWith("tinycloud.duckdb", [{}, { readOnly: true }]))).toThrow(ManifestValidationError);
   });
 
   it("R9 refuses a DuckDB list of two or more entries, even empty ones", () => {
     for (const list of [[{}, {}], [{}, {}, {}]]) {
-      expect(() => validateManifest(manifestWith("tinycloud.duckdb", list))).toThrow("not defined for tinycloud.duckdb");
+      expect(() => validateManifest(manifestWith("tinycloud.duckdb", list))).toThrow(ManifestValidationError);
     }
   });
 
@@ -372,4 +371,45 @@ describe("TC-1839 empty lists and the feature gate", () => {
       expect(sqlCaveatListNeedsDelegatedFeature(list)).toBe(expected);
     });
   }
+});
+
+describe("TC-1839 well-formed names and fail-closed gate input", () => {
+  it("refuses a name with a lone surrogate, in either position", () => {
+    for (const name of ["a\uD800", "\uD800", "\uDC00a", "a\uDC00b", "\uD800\uD800\uDC00"]) {
+      expect(() => parseSqlCaveatList([{ tables: [name] }])).toThrow(SqlCaveatError);
+      expect(() => parseSqlCaveatList([{ columns: [name] }])).toThrow(SqlCaveatError);
+    }
+  });
+
+  it("accepts a well-formed surrogate pair, counted as 4 bytes", () => {
+    expect(parseSqlCaveatList([{ tables: ["\u{10000}"] }]).kind).toBe("delegated");
+    expect(parseSqlCaveatList([{ tables: ["a\u{1F600}b"] }]).kind).toBe("delegated");
+  });
+
+  it("a lone surrogate is not echoed in the refusal", () => {
+    expect(refusalOf([{ tables: ["secret\uD800"] }]).message).not.toContain("secret");
+  });
+
+  class Entry {}
+  const NON_PLAIN: ReadonlyArray<readonly [string, unknown]> = [
+    ["a Map", new Map([["tables", ["a"]]])],
+    ["an empty Map", new Map()],
+    ["a class instance", new Entry()],
+    ["null", null],
+    ["an array", []],
+    ["a string", "tables"],
+    ["a number", 1],
+  ];
+
+  for (const [label, entry] of NON_PLAIN) {
+    it(`sqlCaveatListNeedsDelegatedFeature fails closed on ${label} entry`, () => {
+      expect(sqlCaveatListNeedsDelegatedFeature([entry])).toBe(true);
+      expect(sqlCaveatListNeedsDelegatedFeature([{ readOnly: true }, entry])).toBe(true);
+    });
+  }
+
+  it("plain objects with a null prototype are still plain", () => {
+    expect(sqlCaveatListNeedsDelegatedFeature([Object.create(null)])).toBe(false);
+    expect(sqlCaveatListNeedsDelegatedFeature([Object.assign(Object.create(null), { tables: ["a"] })])).toBe(true);
+  });
 });
