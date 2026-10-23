@@ -2,4 +2,4 @@
 "@tinycloud/node-sdk": patch
 ---
 
-Permission checks now judge each entry on its own. `secrets.get` requests only the entries that are not already covered, so a read can complete without a new signature when the session and a runtime grant together cover it. Details: TC-1781
+`secrets.get` now escalates only the permission entries that are not already covered. A read whose entries are all covered completes without a signer or a new grant. Escalations made by `secrets.get` expire after 59 minutes. Details: TC-1781

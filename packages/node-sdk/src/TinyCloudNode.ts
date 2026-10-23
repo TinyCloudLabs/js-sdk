@@ -1021,6 +1021,11 @@ export interface DelegateToResult {
 }
 
 const DECRYPT_GRANT_MAX_EXPIRY_MS = 60 * 60 * 1000;
+/**
+ * Expiry for runtime grants escalated by `secrets.get`. Kept under the one-hour
+ * decrypt cap so a secret read never leaves a grant that outlives an hour.
+ */
+const SECRET_GET_GRANT_EXPIRY_MS = 59 * 60 * 1000;
 
 /**
  * Options for runtime permission escalation.
@@ -6205,6 +6210,8 @@ export class TinyCloudNode {
         getManifest: () => this.manifest,
         hasPermissions: (permissions) => this.hasRuntimePermissions(permissions),
         grantPermissions: (additional) => this.grantRuntimePermissions(additional),
+        grantGetPermissions: (additional) =>
+          this.grantRuntimePermissions(additional, { expiry: SECRET_GET_GRANT_EXPIRY_MS }),
         uncoveredEntries: (permissions) =>
           permissions.filter((entry) => !this.hasRuntimePermissions([entry])),
         canEscalate: () => this.signer !== undefined && this.tc !== undefined,

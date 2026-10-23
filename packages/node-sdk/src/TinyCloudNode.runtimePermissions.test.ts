@@ -6,6 +6,7 @@ import { base58btc } from "multiformats/bases/base58";
 import {
   authorizationVerdictOf,
   CaveatedDelegationUnsupportedError,
+  ErrorCodes,
   canonicalHashHex,
   buildNetworkId,
   hexEncode,
@@ -3469,5 +3470,68 @@ describe("TinyCloudNode per-entry permission coverage (TC-1781)", () => {
     const requested = grant.mock.calls[0][0] as PermissionEntry[];
     expect(requested.map((e) => e.service)).toEqual(["tinycloud.kv", "tinycloud.encryption"]);
     expectExpiriesWithin(node, ONE_HOUR_MS);
+  });
+
+  test("secrets.get escalation expires within 59 minutes, below the one-hour decrypt cap", async () => {
+    const node = nodeWithSessionRecap([]);
+    stubBaseSecrets(node);
+
+    await withFetchActivated(() => node.secrets.get("API_KEY"));
+
+    const delegations = node.getRuntimePermissionDelegations();
+    expect(delegations).toHaveLength(1);
+    const remaining = delegations[0].expiry.getTime() - Date.now();
+    expect(remaining).toBeLessThanOrEqual(3_540_000 + CLOCK_SLACK_MS);
+    expect(remaining).toBeGreaterThan(3_540_000 - CLOCK_SLACK_MS);
+  });
+
+  test("secrets.put escalation keeps the default expiry, not the get cap", async () => {
+    const node = nodeWithSessionRecap(KV_GET_RECAP);
+    const base: any = stubBaseSecrets(node);
+    base.put = mock(async () => ({ ok: true, data: undefined }));
+
+    const result = await withFetchActivated(() => node.secrets.put("API_KEY", "value"));
+
+    expect(result.ok).toBe(true);
+    const delegations = node.getRuntimePermissionDelegations();
+    expect(delegations.length).toBeGreaterThan(0);
+    for (const delegation of delegations) {
+      expect(delegation.expiry.getTime() - Date.now()).toBeGreaterThan(ONE_HOUR_MS - CLOCK_SLACK_MS);
+    }
+  });
+
+  test("session-only node: a get whose entries are each covered proceeds with no grant and no signer", async () => {
+    const node = nodeWithSessionRecap(KV_GET_RECAP);
+    const decryptEntry = decryptEntryFor(node);
+    await withFetchActivated(() => node.grantRuntimePermissions([decryptEntry]));
+    (node as any).signer = undefined;
+    const base = stubBaseSecrets(node);
+    const grant = spyOnGrant(node);
+
+    const result = await node.secrets.get("API_KEY");
+
+    expect(result).toEqual({ ok: true, data: "value" });
+    expect(base.get).toHaveBeenCalledTimes(1);
+    expect(grant).not.toHaveBeenCalled();
+  });
+
+  test("session-only node: a get with an uncovered entry is denied, with no grant attempt", async () => {
+    const node = nodeWithSessionRecap([]);
+    (node as any).signer = undefined;
+    const base = stubBaseSecrets(node);
+    const grant = spyOnGrant(node);
+
+    const result = await node.secrets.get("API_KEY");
+
+    expect(result).toEqual({
+      ok: false,
+      error: expect.objectContaining({
+        code: ErrorCodes.PERMISSION_DENIED,
+        message:
+          "Cannot autosign tinycloud.kv/get for API_KEY; TinyCloudNode needs wallet mode with a signer or privateKey.",
+      }),
+    });
+    expect(base.get).not.toHaveBeenCalled();
+    expect(grant).not.toHaveBeenCalled();
   });
 });
