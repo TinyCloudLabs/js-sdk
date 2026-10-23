@@ -7,7 +7,7 @@ import type {
 import { ErrorCodes } from "../types";
 import { validatedCapabilityOf } from "../errors";
 import { SQLService } from "./SQLService";
-import { SQLAction } from "./types";
+import { SQLAction, SqlErrorCodes } from "./types";
 
 function response(
   ok: boolean,
@@ -1003,7 +1003,7 @@ describe("SQLService 403 refusal mapping (TC-1839)", () => {
   for (const arm of ["table", "column", "write", "chain"] as const) {
     test(`sql_caveat_violation: ${arm} maps to SQL_CAVEAT_VIOLATION with meta.arm`, async () => {
       const error = await refusedWith(`sql_caveat_violation: ${arm}`);
-      expect(error.code).toBe(ErrorCodes.SQL_CAVEAT_VIOLATION);
+      expect(error.code).toBe(SqlErrorCodes.SQL_CAVEAT_VIOLATION);
       expect(error.meta?.arm).toBe(arm);
       expect(error.meta?.status).toBe(403);
     });
@@ -1011,27 +1011,27 @@ describe("SQLService 403 refusal mapping (TC-1839)", () => {
 
   test("the code is also read from a JSON error field", async () => {
     const error = await refusedWith({ error: "sql_caveat_violation: table" });
-    expect(error.code).toBe(ErrorCodes.SQL_CAVEAT_VIOLATION);
+    expect(error.code).toBe(SqlErrorCodes.SQL_CAVEAT_VIOLATION);
     expect(error.meta?.arm).toBe("table");
   });
 
   test("an unknown arm still maps, with no arm", async () => {
     const error = await refusedWith("sql_caveat_violation: secret_table");
-    expect(error.code).toBe(ErrorCodes.SQL_CAVEAT_VIOLATION);
+    expect(error.code).toBe(SqlErrorCodes.SQL_CAVEAT_VIOLATION);
     expect(error.meta && "arm" in error.meta).toBe(false);
   });
 
   test("an arm that is not exactly one of the four is dropped", async () => {
     for (const detail of ["Table", "table extra", "tables", ""]) {
       const error = await refusedWith(`sql_caveat_violation: ${detail}`);
-      expect(error.code).toBe(ErrorCodes.SQL_CAVEAT_VIOLATION);
+      expect(error.code).toBe(SqlErrorCodes.SQL_CAVEAT_VIOLATION);
       expect(error.meta && "arm" in error.meta).toBe(false);
     }
   });
 
   test("the message and meta never carry node text", async () => {
     const error = await refusedWith("sql_caveat_violation: SELECT secret_col FROM secret_table");
-    expect(error.code).toBe(ErrorCodes.SQL_CAVEAT_VIOLATION);
+    expect(error.code).toBe(SqlErrorCodes.SQL_CAVEAT_VIOLATION);
     const text = JSON.stringify({ message: error.message, meta: error.meta });
     expect(text).not.toContain("secret_col");
     expect(text).not.toContain("secret_table");
@@ -1040,7 +1040,7 @@ describe("SQLService 403 refusal mapping (TC-1839)", () => {
 
   test("a caveat code without a colon still maps, with no arm", async () => {
     const error = await refusedWith("sql_caveat_violation");
-    expect(error.code).toBe(ErrorCodes.SQL_CAVEAT_VIOLATION);
+    expect(error.code).toBe(SqlErrorCodes.SQL_CAVEAT_VIOLATION);
     expect(error.meta && "arm" in error.meta).toBe(false);
   });
 
