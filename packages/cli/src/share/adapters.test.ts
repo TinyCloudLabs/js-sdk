@@ -842,7 +842,10 @@ describe("TinyCloud share authority adapter", () => {
         ["bafy-policy-root", "policy-authority", credentialHolderDid, nodeDid],
       ]);
       // What cannot be removed is named; nothing else is.
-      expect(failure.failure.remaining).toEqual(["a policy record stays on your node with both of its roots revoked, so it admits no one"]);
+      expect(failure.failure.remaining).toEqual([
+        "a policy record stays on your node with both of its roots revoked, so it admits no one",
+        "your node's location record stays in the TinyCloud registry, shared by all your shares",
+      ]);
       // The link header was never signed: only the policy and the envelope were.
       expect(sessionSignatures).toHaveLength(2);
     });
@@ -855,9 +858,19 @@ describe("TinyCloud share authority adapter", () => {
       if (!(failure instanceof SharePublishAuthorityError) || failure.failure.kind !== "over-limit") throw failure;
       expect(failure.failure.remaining).toEqual([
         "the policy-enforcement root bafy-enforcement-root could not be revoked",
+        "your node's location record stays in the TinyCloud registry, shared by all your shares",
         "artifact art_over version 1 stays in your space, because artifact versions are write-once",
       ]);
       expect(ownerKv.has("artifacts/art_over/versions/1/note.md")).toBe(true);
+    });
+
+    it("lists the registry location record among what stays behind, whatever else was removed", async () => {
+      oversizedRootAuthorization = `a.${"b".repeat(70_000)}.c`;
+      const failure = await failureOf(adapterWithRevocation(async () => {}).publish(addressedInput(email)));
+      if (!(failure instanceof SharePublishAuthorityError) || failure.failure.kind !== "over-limit") throw failure;
+      expect(failure.failure.remaining).toContain("your node's location record stays in the TinyCloud registry, shared by all your shares");
+      // The registry write came first, before any content, so the record exists whenever a cleanup runs.
+      expect(publishEvents[0]).toBe("location https://registry.example");
     });
   });
 

@@ -97,6 +97,8 @@ async function removeOverLimitShare(input: {
     }
   }
   if (rootsRevoked) remaining.push("a policy record stays on your node with both of its roots revoked, so it admits no one");
+  // The publish wrote the registry's location record before any content; the registry keeps one per owner for every share.
+  remaining.push("your node's location record stays in the TinyCloud registry, shared by all your shares");
   if (input.content.kind === "artifact") {
     remaining.push(`artifact ${input.content.id} version ${input.content.version} stays in your space, because artifact versions are write-once`);
   } else {
