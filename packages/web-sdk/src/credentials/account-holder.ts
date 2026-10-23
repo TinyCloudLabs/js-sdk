@@ -1,32 +1,63 @@
-import { jcsCanonicalize } from "@tinycloud/sdk-core";
+import { verifyEip191MessageSignature } from "@tinycloud/sdk-core";
 import { ACCOUNT_BINDING_DOMAIN, parsePkhDid, toChecksumAddress } from "@tinycloud/sdk-core/held-credentials";
 import { EmailProofError, type HolderSigner } from "@tinycloud/node-sdk/credentials";
 
 /** Kid fragment for an account (EIP-191) holder key, as the witness expects it. */
 export const ACCOUNT_KID_FRAGMENT = "blockchainAccountId";
 
-/**
- * Bytes an account holder signs over a holder binding: `UTF8(domain) ‖ 0x00 ‖ UTF8(JCS(binding))`.
- * The domain is the account-binding domain, not the did:key holder-binding domain.
- */
-export function accountBindingSigningBytes(binding: unknown): Uint8Array {
-  const encoder = new TextEncoder();
-  const domain = encoder.encode(ACCOUNT_BINDING_DOMAIN);
-  const canonical = encoder.encode(jcsCanonicalize(binding));
-  const out = new Uint8Array(domain.length + 1 + canonical.length);
-  out.set(domain, 0);
-  out[domain.length] = 0;
-  out.set(canonical, domain.length + 1);
-  return out;
+/** Held credentials are bound to Ethereum mainnet. Every other chain is refused. */
+const ACCOUNT_CHAIN_ID = "1";
+
+const SEPARATOR = 0x00;
+
+function refuse(): EmailProofError {
+  return new EmailProofError("request", "HOLDER_INVALID");
 }
 
 /**
- * Account (EIP-191) holder. The caller supplies `sign`; this module holds no key material.
- * `did` must be a did:pkh:eip155 account and is canonicalised to EIP-55 form. Anything else is refused.
+ * Refuses unless the bytes are `UTF8(ACCOUNT_BINDING_DOMAIN) ‖ 0x00 ‖ body` with a non-empty body.
+ * Runs before the caller's signer, so a refused request never reaches the wallet.
+ */
+function requireAccountBindingBytes(bytes: Uint8Array): void {
+  const domain = new TextEncoder().encode(ACCOUNT_BINDING_DOMAIN);
+  if (bytes.length <= domain.length + 1 || bytes[domain.length] !== SEPARATOR) throw refuse();
+  for (let i = 0; i < domain.length; i++) if (bytes[i] !== domain[i]) throw refuse();
+}
+
+/** Decodes the signed bytes exactly. Invalid UTF-8 is refused: the wallet message would not round-trip. */
+function messageText(bytes: Uint8Array): string {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw refuse();
+  }
+}
+
+function hexOf(bytes: Uint8Array): string {
+  return `0x${Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("")}`;
+}
+
+/**
+ * Account (EIP-191) holder. The caller supplies `sign`, which must be the wallet's `personal_sign` over the
+ * exact bytes it is given. That is the one place the EIP-191 prefix is applied. This module adds no prefix.
+ * It verifies the returned 65-byte signature by recovering the signer over the same message, and refuses
+ * unless the recovered address equals the account. `did` must be did:pkh:eip155:1, canonicalised to EIP-55.
+ * Bytes outside the account-binding domain are refused before `sign` is called.
  */
 export function createAccountHolderSigner(did: string, sign: (bytes: Uint8Array) => Promise<Uint8Array>): HolderSigner {
   const parsed = parsePkhDid(did);
-  if (parsed === null) throw new EmailProofError("request", "HOLDER_INVALID");
-  const canonical = `did:pkh:eip155:${parsed.chainId}:${toChecksumAddress(parsed.address)}`;
-  return { did: canonical, alg: "EIP191", kid: `${canonical}#${ACCOUNT_KID_FRAGMENT}`, sign };
+  if (parsed === null || parsed.chainId !== ACCOUNT_CHAIN_ID) throw refuse();
+  const address = toChecksumAddress(parsed.address);
+  const canonical = `did:pkh:eip155:${ACCOUNT_CHAIN_ID}:${address}`;
+  const guardedSign = async (bytes: Uint8Array): Promise<Uint8Array> => {
+    requireAccountBindingBytes(bytes);
+    const message = messageText(bytes);
+    const signature = await sign(bytes);
+    // Canonical personal_sign form: 65 bytes with v (the last byte) 27 or 28. Anything else is refused.
+    const v = signature[64];
+    if (signature.length !== 65 || (v !== 27 && v !== 28)) throw refuse();
+    if (!(await verifyEip191MessageSignature(message, hexOf(signature), address))) throw refuse();
+    return signature;
+  };
+  return { did: canonical, alg: "EIP191", kid: `${canonical}#${ACCOUNT_KID_FRAGMENT}`, sign: guardedSign };
 }

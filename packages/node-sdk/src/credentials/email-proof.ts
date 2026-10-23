@@ -164,10 +164,11 @@ export class EmailProofError extends Error {
 export type HolderAlgorithm = "EdDSA" | "EIP191";
 
 /**
- * Holder key adapter. `sign` MUST return a raw signature over exactly the bytes it
- * is given: the signer does no hashing, prefixing, or domain separation. `kid` names
- * the key the witness verifies against. `completeEmailProof` rejects with
+ * Holder key adapter. `kid` names the key the witness verifies against. `completeEmailProof` rejects with
  * SESSION_INVALID unless `did === pending.holderDid`.
+ * `sign` MUST return a raw signature over exactly the bytes it is given. For `EdDSA` the signer applies no
+ * prefix. For `EIP191` the adapter performs `personal_sign` over those bytes, and the wallet applies the
+ * `\x19Ethereum Signed Message:\n<len>` prefix. The prefix is applied in that one place and nowhere else.
  */
 export interface HolderSigner {
   readonly did: string;

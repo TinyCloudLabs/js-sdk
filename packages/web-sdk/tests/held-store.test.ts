@@ -606,3 +606,35 @@ describe("key layout", () => {
     expect(heldRecordKey(OWNER_A, id)).toBe(`v1/held/${address}/${id}`);
   });
 });
+
+describe("held owner is Ethereum mainnet only", () => {
+  const ADDRESS = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
+  const refusedCode = (did: unknown): string => {
+    try {
+      heldAccountOwner(did);
+    } catch (error) {
+      return error instanceof CredentialError ? error.code : String(error);
+    }
+    return "no-throw";
+  };
+
+  test("chain 1 is accepted and canonicalised to the EIP-55 address", () => {
+    expect(heldAccountOwner(`did:pkh:eip155:1:${ADDRESS.toLowerCase()}`)).toBe(`did:pkh:eip155:1:${ADDRESS}`);
+  });
+
+  test("chains 137, 0 and 5, non-numeric chains, and did:key owners are refused", () => {
+    expect({
+      "chain 137": refusedCode(`did:pkh:eip155:137:${ADDRESS}`),
+      "chain 0": refusedCode(`did:pkh:eip155:0:${ADDRESS}`),
+      "chain 5": refusedCode(`did:pkh:eip155:5:${ADDRESS}`),
+      "non-numeric chain": refusedCode(`did:pkh:eip155:one:${ADDRESS}`),
+      "did:key": refusedCode("did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH"),
+    }).toEqual({
+      "chain 137": "ACTIVE_SESSION_REQUIRED",
+      "chain 0": "ACTIVE_SESSION_REQUIRED",
+      "chain 5": "ACTIVE_SESSION_REQUIRED",
+      "non-numeric chain": "ACTIVE_SESSION_REQUIRED",
+      "did:key": "ACTIVE_SESSION_REQUIRED",
+    });
+  });
+});

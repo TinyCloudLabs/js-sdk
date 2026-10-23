@@ -16,6 +16,9 @@ export const HELD_REUSE_MARGIN_MS = 600_000;
 /** Upper bound on KV list pages under one owner prefix. Beyond it the listing is refused, not partially read. */
 const HELD_LIST_MAX_PAGES = 50;
 
+/** Held owners are Ethereum mainnet accounts. Other chains are refused in every held path. */
+const HELD_OWNER_CHAIN_ID = "1";
+
 /** A recordId is a canonicalDigest: 43 base64url characters. Anything else never reaches a key. */
 const RECORD_ID_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
@@ -52,15 +55,18 @@ export interface HeldMatch {
 }
 
 /**
- * Canonical account owner: `did:pkh:eip155:<chain>:<EIP-55 address>`.
- * Anything that is not a did:pkh (for example a did:key holder) is refused.
+ * Canonical account owner: `did:pkh:eip155:1:<EIP-55 address>`.
+ * Anything that is not a did:pkh (for example a did:key holder) is refused, and so is any chain other than 1.
  */
 export function heldAccountOwner(ownerDid: unknown): string {
   const parsed = parsePkhDid(ownerDid);
   if (parsed === null) {
     throw new CredentialError("ACTIVE_SESSION_REQUIRED", "Held credentials require a did:pkh:eip155 account owner");
   }
-  return `did:pkh:eip155:${parsed.chainId}:${toChecksumAddress(parsed.address)}`;
+  if (parsed.chainId !== HELD_OWNER_CHAIN_ID) {
+    throw new CredentialError("ACTIVE_SESSION_REQUIRED", "Held credentials require an Ethereum mainnet (chain 1) account owner");
+  }
+  return `did:pkh:eip155:${HELD_OWNER_CHAIN_ID}:${toChecksumAddress(parsed.address)}`;
 }
 
 /** Key prefix for one owner. Keyed by the lowercase address, so case variants of one owner share it. */

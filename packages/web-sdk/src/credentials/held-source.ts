@@ -3,7 +3,9 @@ import { pkhPrincipalsEqual } from "@tinycloud/sdk-core/held-credentials";
 import {
   acquireEmailProof,
   type EmailProofAcquireInput,
+  type EmailProofAcquisition,
   type EmailProofOptions,
+  type EmailProofPending,
   type EmailProofPendingStore,
   type HolderSigner,
 } from "@tinycloud/node-sdk/credentials";
@@ -86,12 +88,23 @@ export interface HeldCredentialResult {
   readonly expiresAt: Date;
 }
 
+/** Acquisition step. Production passes `acquireEmailProof`; tests inject a fake to reach the success branch. */
+export type HeldAcquireStep = (input: EmailProofAcquireInput) => Promise<EmailProofAcquisition>;
+
 /**
  * Returns a verified, stored held credential for the account and email.
  * Order: owner canonicalisation, session match, reuse lookup, acquisition, store-on-issue.
  * Stored records are returned without network. A store failure after verification is VERIFIED_NOT_SAVED.
  */
 export async function acquireHeldCredential(input: HeldAcquireInput): Promise<HeldCredentialResult> {
+  return acquireHeldCredentialWith(input, acquireEmailProof);
+}
+
+/**
+ * `acquireHeldCredential` with the acquisition step injected. Production calls `acquireHeldCredential`.
+ * This seam exists so the issued branch can be exercised while the held profile pin stays disabled.
+ */
+export async function acquireHeldCredentialWith(input: HeldAcquireInput, acquire: HeldAcquireStep): Promise<HeldCredentialResult> {
   const { kv, address, holder, sessionDid, getCode, pendingStore, fetch, signal, now: clock, ...policy } = input;
   const now = clock ?? (() => new Date());
   const holderDid = heldAccountOwner(holder.did);
@@ -104,7 +117,16 @@ export async function acquireHeldCredential(input: HeldAcquireInput): Promise<He
     return { credential: cached.record.credential, holderDid, expiresAt: cached.verified.expiresAt };
   }
 
-  const acquisition = await acquireEmailProof({ address, holder, profile: HELD_PROFILE, getCode, pendingStore, fetch, signal, now });
+  const acquisition = await acquire({
+    address,
+    holder,
+    profile: HELD_PROFILE,
+    getCode,
+    pendingStore: scopeHeldPendingStore(pendingStore, holderDid, now),
+    fetch,
+    signal,
+    now,
+  });
   if (acquisition.status !== "issued") {
     throw new CredentialError("PROOF_REJECTED", "Held acquisition did not issue a credential");
   }
@@ -115,4 +137,29 @@ export async function acquireHeldCredential(input: HeldAcquireInput): Promise<He
     throw new CredentialError("VERIFIED_NOT_SAVED", "Verified held credential could not be stored");
   }
   return { credential, holderDid, expiresAt: new Date(acquisition.result.expiresAt) };
+}
+
+/**
+ * Scopes a shared pending store to one held owner. The did:key email flow uses the same store, so a held
+ * acquisition must never resume, prompt for, or delete a pending request of another profile or holder.
+ * Pending requests are matched by profile and by holder principal, never by string equality.
+ */
+export function scopeHeldPendingStore(store: EmailProofPendingStore | undefined, holderDid: string, now: () => Date): EmailProofPendingStore | undefined {
+  if (store === undefined) return undefined;
+  const owned = (pending: EmailProofPending | undefined): pending is EmailProofPending =>
+    pending !== undefined && pending.profile === HELD_PROFILE && pkhPrincipalsEqual(pending.holderDid, holderDid);
+  return {
+    async findLive(address, now) {
+      const pending = await store.findLive(address, now);
+      return owned(pending) ? pending : undefined;
+    },
+    put: (pending) => store.put(pending),
+    async delete(requestId) {
+      if (owned(await store.get(requestId, now()))) await store.delete(requestId);
+    },
+    async get(requestId, now) {
+      const pending = await store.get(requestId, now);
+      return owned(pending) ? pending : undefined;
+    },
+  };
 }

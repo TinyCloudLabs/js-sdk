@@ -2,8 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { createHash, generateKeyPairSync, randomUUID, sign as signEd25519 } from "node:crypto";
 import { CredentialError, type IKVService } from "@tinycloud/sdk-core";
 import { parseIssuerSet } from "@tinycloud/sdk-core/held-credentials";
-import { createEd25519HolderSigner, EmailProofError } from "@tinycloud/node-sdk/credentials";
-import { acquireHeldCredential, HeldSourceError } from "../src/credentials/held-source";
+import { createEd25519HolderSigner, createMemoryEmailProofPendingStore, EmailProofError } from "@tinycloud/node-sdk/credentials";
+import type { EmailProofAcquireInput, EmailProofAcquisition, EmailProofPending, EmailProofProfileId, EmailProofResult } from "@tinycloud/node-sdk/credentials";
+import { acquireHeldCredential, acquireHeldCredentialWith, HeldSourceError, scopeHeldPendingStore } from "../src/credentials/held-source";
+import type { HeldAcquireStep } from "../src/credentials/held-source";
 import { storeHeldCredential } from "../src/credentials/held-store";
 import { createAccountHolderSigner } from "../src/credentials/account-holder";
 
@@ -286,5 +288,183 @@ describe("a listing beyond the page limit is pruned once, retried once, then ref
     expect(error).not.toBeInstanceOf(HeldSourceError);
     expect((error as CredentialError).code).toBe("VERIFICATION_FAILED");
     expect(fake.calls.list).toBe(1);
+  });
+});
+
+const V1: EmailProofProfileId = "tinycloud.email-proof/v1";
+const OLDER = "2026-10-19T23:58:00.000Z";
+const NEWER = "2026-10-19T23:59:00.000Z";
+
+/** A pending request carrying the fields the held scope reads. Live at NOW, so findLive and get return it. */
+function pendingOf(profile: EmailProofProfileId, holderDid: string, requestId: string, createdAt: string): EmailProofPending {
+  return {
+    type: "TinyCloudEmailProofPending",
+    version: 1,
+    profile,
+    address: EMAIL,
+    requestId,
+    verifier: `verifier-${requestId}`,
+    holderDid,
+    descriptorDigest: "descriptor",
+    requirementDigest: "requirement",
+    openerOrigin: "https://app.example",
+    createdAt,
+    expiresAt: "2026-10-20T00:05:00.000Z",
+  };
+}
+
+/** Acquisition step that records its input and returns the given acquisition. */
+function stepReturning(result: EmailProofAcquisition, seen: EmailProofAcquireInput[] = []): HeldAcquireStep {
+  return async (input) => {
+    seen.push(input);
+    return result;
+  };
+}
+
+/** Issued acquisition. Only `envelope.credential` and `expiresAt` are read by the held seam, so the other result fields are not built. */
+function issued(credential: string): EmailProofAcquisition {
+  const result = { envelope: { credential }, expiresAt: "2027-10-20T00:00:00.000Z" } as unknown as EmailProofResult;
+  return { status: "issued", result, warnings: [] };
+}
+
+describe("held acquisition success branch through the injected seam", () => {
+  test("issued: the held profile is used, the credential is stored, and the receipt is returned", async () => {
+    const fake = fakeKv();
+    const holder = createAccountHolderSigner(OWNER_A, sign);
+    const seen: EmailProofAcquireInput[] = [];
+    const credential = makeSdJwt(OWNER_A);
+    const receipt = await acquireHeldCredentialWith(
+      { ...POLICY, kv: fake.kv, address: EMAIL, holder, getCode: async () => "12345678", now: () => NOW },
+      stepReturning(issued(credential), seen),
+    );
+    expect(seen.map((input) => input.profile)).toEqual([PROFILE]);
+    expect(receipt.credential).toBe(credential);
+    expect(receipt.holderDid).toBe(OWNER_A);
+    expect(receipt.expiresAt).toEqual(new Date("2027-10-20T00:00:00.000Z"));
+    expect(fake.calls.batchPut).toBe(1);
+
+    const cached = await acquireHeldCredentialWith(
+      { ...POLICY, kv: fake.kv, address: EMAIL, holder, getCode: async () => "12345678", now: () => NOW },
+      async () => {
+        throw new Error("a stored credential must be reused without acquisition");
+      },
+    );
+    expect(cached.credential).toBe(credential);
+  });
+
+  test("a store failure after a verified issue surfaces VERIFIED_NOT_SAVED", async () => {
+    const fake = fakeKv();
+    const failing = { ...fake.kv, batchPut: async () => { throw new Error("write refused"); } } as unknown as IKVService;
+    const holder = createAccountHolderSigner(OWNER_A, sign);
+    const code = await codeOf(() =>
+      acquireHeldCredentialWith(
+        { ...POLICY, kv: failing, address: EMAIL, holder, getCode: async () => "12345678", now: () => NOW },
+        stepReturning(issued(makeSdJwt(OWNER_A))),
+      ),
+    );
+    expect(code).toBe("VERIFIED_NOT_SAVED");
+  });
+
+  test("a non-issued acquisition is refused as PROOF_REJECTED and nothing is stored", async () => {
+    const fake = fakeKv();
+    const holder = createAccountHolderSigner(OWNER_A, sign);
+    const code = await codeOf(() =>
+      acquireHeldCredentialWith(
+        { ...POLICY, kv: fake.kv, address: EMAIL, holder, getCode: async () => "12345678", now: () => NOW },
+        stepReturning({ status: "code-requested", pending: pendingOf(PROFILE, OWNER_A, "held-1", NEWER) }),
+      ),
+    );
+    expect(code).toBe("PROOF_REJECTED");
+    expect(fake.calls.batchPut).toBe(0);
+  });
+});
+
+describe("held pending scope shares the store with the did:key flow", () => {
+  test("a newer v1 pending for the address is not resumed by a held acquisition, and survives it", async () => {
+    const store = createMemoryEmailProofPendingStore();
+    await store.put(pendingOf(PROFILE, OWNER_A, "held-a", OLDER));
+    await store.put(pendingOf(V1, OWNER_A, "v1-a", NEWER));
+    const fake = fakeKv();
+    const holder = createAccountHolderSigner(OWNER_A, sign);
+    let prompted = 0;
+    let found: EmailProofPending | undefined;
+    const code = await codeOf(() =>
+      acquireHeldCredentialWith(
+        {
+          ...POLICY,
+          kv: fake.kv,
+          address: EMAIL,
+          holder,
+          pendingStore: store,
+          getCode: async () => {
+            prompted += 1;
+            return "12345678";
+          },
+          now: () => NOW,
+        },
+        async (input) => {
+          found = await input.pendingStore?.findLive(input.address, NOW);
+          return { status: "code-requested", pending: pendingOf(PROFILE, OWNER_A, "probe", NEWER) };
+        },
+      ),
+    );
+    expect(found).toBeUndefined();
+    expect(prompted).toBe(0);
+    expect(code).toBe("PROOF_REJECTED");
+    expect(await store.get("v1-a", NOW)).toBeDefined();
+  });
+
+  test("a held pending is found for its own holder even when an older v1 pending exists", async () => {
+    const store = createMemoryEmailProofPendingStore();
+    await store.put(pendingOf(V1, OWNER_A, "v1-a", OLDER));
+    await store.put(pendingOf(PROFILE, OWNER_A, "held-a", NEWER));
+    const scoped = scopeHeldPendingStore(store, OWNER_A, () => NOW);
+    expect((await scoped?.findLive(EMAIL, NOW))?.requestId).toBe("held-a");
+  });
+
+  test("a held pending of another holder is never returned", async () => {
+    const store = createMemoryEmailProofPendingStore();
+    await store.put(pendingOf(PROFILE, OWNER_B, "held-b", NEWER));
+    const scoped = scopeHeldPendingStore(store, OWNER_A, () => NOW);
+    expect(await scoped?.findLive(EMAIL, NOW)).toBeUndefined();
+    expect(await scoped?.get("held-b", NOW)).toBeUndefined();
+  });
+
+  test("holder match is by principal: a lowercase holder did owns the pending", async () => {
+    const store = createMemoryEmailProofPendingStore();
+    await store.put(pendingOf(PROFILE, OWNER_A.toLowerCase(), "held-a", NEWER));
+    const scoped = scopeHeldPendingStore(store, OWNER_A, () => NOW);
+    expect((await scoped?.findLive(EMAIL, NOW))?.requestId).toBe("held-a");
+  });
+
+  test("get never returns a v1 pending, and a held pending only to its own holder", async () => {
+    const store = createMemoryEmailProofPendingStore();
+    await store.put(pendingOf(V1, OWNER_A, "v1-a", NEWER));
+    await store.put(pendingOf(PROFILE, OWNER_A, "held-a", NEWER));
+    const own = scopeHeldPendingStore(store, OWNER_A, () => NOW);
+    const other = scopeHeldPendingStore(store, OWNER_B, () => NOW);
+    expect(await own?.get("v1-a", NOW)).toBeUndefined();
+    expect((await own?.get("held-a", NOW))?.requestId).toBe("held-a");
+    expect(await other?.get("held-a", NOW)).toBeUndefined();
+  });
+
+  test("delete never removes a v1 pending, nor a pending of another holder", async () => {
+    const store = createMemoryEmailProofPendingStore();
+    await store.put(pendingOf(V1, OWNER_A, "v1-a", NEWER));
+    await store.put(pendingOf(PROFILE, OWNER_A, "held-a", NEWER));
+    const own = scopeHeldPendingStore(store, OWNER_A, () => NOW);
+    const other = scopeHeldPendingStore(store, OWNER_B, () => NOW);
+    await own?.delete("v1-a");
+    await other?.delete("held-a");
+    expect(await store.get("v1-a", NOW)).toBeDefined();
+    expect(await store.get("held-a", NOW)).toBeDefined();
+  });
+
+  test("delete removes the holder's own held pending", async () => {
+    const store = createMemoryEmailProofPendingStore();
+    await store.put(pendingOf(PROFILE, OWNER_A, "held-a", NEWER));
+    const own = scopeHeldPendingStore(store, OWNER_A, () => NOW);
+    await own?.delete("held-a");
+    expect(await store.get("held-a", NOW)).toBeUndefined();
   });
 });
