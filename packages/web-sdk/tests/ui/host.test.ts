@@ -916,3 +916,21 @@ describe("host toasts", () => {
     second.unregister();
    });
 });
+
+describe("at-a-glance navigation", () => {
+  const sectionId = () => shadow().querySelector("section[data-section]")?.getAttribute("data-section") ?? null;
+  const glanceRow = (label: string) =>
+    [...shadow().querySelectorAll<HTMLButtonElement>(".glance-row")].find((row) => row.textContent?.includes(label));
+
+  test("a glance row opens its section in the open panel", async () => {
+    const ui = mountClient(undefined, true);
+    ui.api.open();
+    await panelMounted();
+    expect(sectionId()).toBe("account");
+    const row = glanceRow(text("nav.storage"));
+    expect(row).toBeDefined();
+    row?.click();
+    expect(sectionId()).toBe("storage");
+    expect(ui.api.isOpen).toBe(true);
+  });
+});
