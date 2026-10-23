@@ -27,6 +27,7 @@ export type {
   EmailProofRequestInput,
   EmailProofResult,
   StoredEmailProofRecord,
+  StoredEmailProofInput,
   EmailProofStep,
   HolderAlgorithm,
   HolderSigner,

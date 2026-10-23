@@ -607,18 +607,26 @@ export type StoredEmailProofRecord = StoredCredentialRecord & {
   readonly descriptor: CredentialFlowDescriptor;
 };
 
-/**
- * Offline re-verification of a stored email-proof credential against the pinned issuer key.
- * Rebuilds the envelope from the record, runs the issuance verifier, then cross-checks the
- * record fields the signature does not cover. Every failure throws CredentialError.
- */
-export async function verifyStoredEmailProof(input: {
+/** Input to `verifyStoredEmailProof`. */
+export type StoredEmailProofInput = {
   readonly record: StoredEmailProofRecord;
   readonly requirement: CredentialRequirement;
   readonly holderDid: string;
   readonly now: Date;
   readonly signal?: AbortSignal;
-}): Promise<VerifiedCredential> {
+};
+
+/**
+ * Offline re-verification of a stored email-proof credential against the pinned issuer key.
+ * Rebuilds the envelope from the record, runs the issuance verifier, then cross-checks the
+ * record fields the signature does not cover. Every failure throws CredentialError.
+ */
+export async function verifyStoredEmailProof(input: StoredEmailProofInput): Promise<VerifiedCredential> {
+  return verifyStoredWithIssuerKeys(input, EMAIL_PROOF_ISSUER_KEYS);
+}
+
+/** Internal test seam, same as `acquireEmailProofWithIssuerKeys`. Not re-exported from the barrel. */
+export async function verifyStoredWithIssuerKeys(input: StoredEmailProofInput, issuerKeys: readonly IssuerVerificationKey[]): Promise<VerifiedCredential> {
   const { record, requirement, holderDid } = input;
   const descriptor = record.descriptor;
   if (record.descriptorDigest !== EMAIL_PROOF_PINS.descriptorDigest || await canonicalDigest(descriptor) !== EMAIL_PROOF_PINS.descriptorDigest) {
@@ -652,7 +660,7 @@ export async function verifyStoredEmailProof(input: {
     descriptorDigest: EMAIL_PROOF_PINS.descriptorDigest,
     requirement,
     holderDid,
-    issuerMetadata: pinnedIssuerMetadata(EMAIL_PROOF_ISSUER_KEYS),
+    issuerMetadata: pinnedIssuerMetadata(issuerKeys),
     now: input.now,
     checkStatus: async (status) => status.method === "none" && status.freshnessSeconds === descriptor.status.freshnessSeconds,
     signal: input.signal,

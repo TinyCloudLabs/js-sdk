@@ -22,7 +22,7 @@ import {
 } from '@tinycloud/node-sdk/credentials';
 import {
   createStoredCredentialRecord,
-  credentialMatchesRequirement,
+  EMAIL_CREDENTIAL_MAX_AGE_SECONDS,
   type CredentialRequirement,
 } from '@tinycloud/sdk-core';
 import { CourierError } from './errors.js';
@@ -155,7 +155,11 @@ export class StoredCredentialSource {
     const record = readOwnerOnly<StoredEmailProofRecord>(this.home, file);
     if (!record) return undefined;
     const now = input.now ?? new Date();
-    if (!credentialMatchesRequirement(input.requirement, record, input.holderDid, now) || Date.parse(record.expiresAt) - EXPIRY_MARGIN_MS <= now.getTime()) {
+    // Lifecycle only: past the expiry margin, or issued outside the freshness window, the record is deleted.
+    // Anything else (a tampered field, a bad signature) is refused by the verifier below and kept for inspection.
+    const expired = Date.parse(record.expiresAt) - EXPIRY_MARGIN_MS <= now.getTime();
+    const stale = now.getTime() - Date.parse(record.issuedAt) > EMAIL_CREDENTIAL_MAX_AGE_SECONDS * 1000;
+    if (expired || stale) {
       removeFile(file);
       return undefined;
     }

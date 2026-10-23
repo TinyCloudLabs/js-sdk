@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, symlinkSync, chmodSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, chmodSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { StoredCredentialSource } from '../dist/credential-source.js';
 import { parseArgs } from '../dist/args.js';
@@ -114,6 +114,38 @@ test('find refuses a planted record the real offline verifier rejects, and does 
     { code: 'credential-record-invalid' },
   );
   assert.equal(credentialFilesIn(home).length, 1, 'a refused record is kept for inspection, not deleted');
+});
+
+test('find refuses an on-disk record tampered after store, and keeps the file', async () => {
+  const home = freshHome();
+  const holder = generateHolderKey();
+  const expiresAt = ms(T0, 3_600_000);
+  // The store-time stand-in accepts the record, so the file on disk is what `find` must re-verify.
+  await new StoredCredentialSource(home, acceptStandIn).store({
+    result: resultFor(holder.bare, ms(T0, -5_000), expiresAt),
+    requirement,
+    requirementDigest: await digest(),
+    holderDid: holder.bare,
+    now: T0,
+  });
+  const [name] = credentialFilesIn(home);
+  const file = join(home, 'credentials', name);
+  const original = JSON.parse(readFileSync(file, 'utf8'));
+  // Each edit keeps the record inside its lifecycle window (expiresAt moved later, issuedAt untouched),
+  // so only the verifier can refuse it.
+  const tampers = [
+    (r) => ({ ...r, subjectDid: 'did:web:attacker.example' }),
+    (r) => ({ ...r, descriptor: { ...r.descriptor, protocol: 'tinycloud.credentials/other/v1' } }),
+    (r) => ({ ...r, expiresAt: new Date(Date.parse(r.expiresAt) + 3_600_000).toISOString() }),
+  ];
+  for (const tamper of tampers) {
+    writeFileSync(file, JSON.stringify(tamper(original)));
+    await assert.rejects(
+      new StoredCredentialSource(home).find({ requirement, requirementDigest: await digest(), holderDid: holder.bare, now: T0 }),
+      { code: 'credential-record-invalid' },
+    );
+    assert.equal(credentialFilesIn(home).length, 1, 'a tampered record is kept for inspection, not deleted');
+  }
 });
 
 test('a symlinked credentials directory is refused and its target is never chmodded', async () => {
