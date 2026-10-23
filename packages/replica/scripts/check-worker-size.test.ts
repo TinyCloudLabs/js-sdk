@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assertWorkerSizeToolchain, checkReplicaWorkerSize, checkWorkerSize, MAX_WORKER_GZIP_BYTES } from "./check-worker-size";
+import { assertWorkerSizeToolchain, checkReplicaWorkerSize, checkWorkerSize, MAX_REPLICA_WORKER_GZIP_BYTES, MAX_WORKER_GZIP_BYTES } from "./check-worker-size";
 
 const directories: string[] = [];
 afterEach(() => {
@@ -27,8 +27,9 @@ test("measures the canonical worker exactly once at gzip level 9", () => {
   const measured = execFileSync("gzip", ["-9", "-c"], { input: bytes }).byteLength;
   expect(checkWorkerSize(dir, measured)).toEqual({ bytes: measured, headroom: 0 });
 });
-test("uses the reviewed GitHub worker ceiling without additional headroom", () => {
+test("uses the reviewed GitHub worker ceilings without additional headroom", () => {
   expect(MAX_WORKER_GZIP_BYTES).toBe(776_128);
+  expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(770_093);
 });
 
 test("refuses worker size measurements from a different Bun or Rust toolchain", () => {

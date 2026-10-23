@@ -23,8 +23,10 @@ import { join, resolve } from "node:path";
 // run 39943720009 (head 7a7303a8, merge base 6076581d); approved by Naomi, 2026-10-23; the ledger's tc1827WorkerRatchet row records it.
 // Zero additional headroom; independent of the web-sdk ledger, including WASM.
 export const MAX_WORKER_GZIP_BYTES = 776_128;
-// TC-1827 follow-up: `replica.worker.js` (the @tinycloud/replica/browser worker) is measured here before its reviewed ceiling lands.
-export const MAX_REPLICA_WORKER_GZIP_BYTES = Number.MAX_SAFE_INTEGER;
+// TC-1827 follow-up: `replica.worker.js` (the @tinycloud/replica/browser worker) is unhashed and had no ceiling. It
+// measured 770,093 in GitHub run 39949887460 (head f2e2f9fc, merge base dc615834); requested by Naomi, 2026-10-23; the
+// ledger's tc1827ReplicaWorkerRatchet row records it. Zero additional headroom.
+export const MAX_REPLICA_WORKER_GZIP_BYTES = 770_093;
 const canonicalName = /^kv-storage\.worker\.([0-9a-f]{64})\.js$/;
 const replicaWorkerName = "replica.worker.js";
 
