@@ -5,6 +5,7 @@ import {
   DelegatedResource,
   PermissionEntry,
   principalDidEquals,
+  SqlDelegatedCaveatsUnsupportedError,
 } from "@tinycloud/sdk-core";
 
 /**
@@ -760,6 +761,8 @@ export async function activateValidatedRuntimeDelegation(
       await node.useRuntimeDelegation(installedCandidate);
     }
   } catch (error) {
+    // The gate refused before any request; keep its typed error and code.
+    if (error instanceof SqlDelegatedCaveatsUnsupportedError) throw error;
     reject(
       activationRejectionReason(error),
       error instanceof Error ? error.message : String(error),

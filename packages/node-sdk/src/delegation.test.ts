@@ -4,6 +4,7 @@ import { base58btc } from "multiformats/bases/base58";
 import {
   parseCompactUcanAuthorization,
   signCompactUcanAuthorization,
+  SqlDelegatedCaveatsUnsupportedError,
 } from "@tinycloud/sdk-core";
 
 import {
@@ -454,4 +455,78 @@ describe("activation failure classification (TC-834)", () => {
       expect((error as RuntimeDelegationRejectedError).reason).toBe(reason);
     });
   }
+});
+
+describe("activateValidatedRuntimeDelegation with a delegated SQL caveat (TC-1839)", () => {
+  function delegationWithSignedCaveats(caveats: Record<string, unknown>[]): PortableDelegation {
+    const payload = {
+      iss: "did:key:signed-delegator",
+      aud: REQUESTER_DID,
+      exp: Math.floor(Date.now() / 1000) + 3600,
+      prf: ["bafy-signed-parent"],
+      fct: [{ remainingRedelegationDepth: 0 }],
+      att: {
+        "tinycloud:pkh:eip155:1:0xowner:applications/sql/docs": {
+          "tinycloud.sql/read": caveats,
+        },
+      },
+    };
+    const authorization = `header.${Buffer.from(JSON.stringify(payload)).toString("base64url")}.signature`;
+    return {
+      cid: `cid:${authorization}`,
+      delegationHeader: { Authorization: authorization },
+      ownerAddress: "0xowner",
+      chainId: 1,
+      spaceId: "tinycloud:pkh:eip155:1:0xowner:applications",
+      path: "docs",
+      actions: ["tinycloud.sql/read"],
+      expiry: new Date(payload.exp * 1000),
+      delegateDID: REQUESTER_DID,
+      resources: [{
+        service: "sql",
+        space: "tinycloud:pkh:eip155:1:0xowner:applications",
+        path: "docs",
+        actions: ["tinycloud.sql/read"],
+        caveats,
+      }],
+    } as PortableDelegation;
+  }
+
+  test("the signed caveat reaches the node and a refusal keeps its typed error", async () => {
+    const seen: PortableDelegation[] = [];
+    const node: RuntimeDelegationActivator = {
+      sessionDid: REQUESTER_DID,
+      computeDelegationCid: (value) => `cid:${value}`,
+      async useRuntimeDelegation(candidate) {
+        seen.push(candidate);
+        throw new SqlDelegatedCaveatsUnsupportedError("https://node.example");
+      },
+      getRuntimePermissionDelegations: () => [],
+    };
+
+    const error = await activateValidatedRuntimeDelegation(
+      node,
+      delegationWithSignedCaveats([{ tables: ["Notes"], readOnly: true }]),
+      { host: "https://node.example" },
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(SqlDelegatedCaveatsUnsupportedError);
+    expect(error).not.toBeInstanceOf(RuntimeDelegationRejectedError);
+    expect((error as SqlDelegatedCaveatsUnsupportedError).code).toBe("SQL_DELEGATED_CAVEATS_UNSUPPORTED");
+    expect(seen[0]?.resources?.[0]?.caveats).toEqual([{ tables: ["Notes"], readOnly: true }]);
+  });
+
+  test("other activation failures are still reported as a rejection", async () => {
+    const node: RuntimeDelegationActivator = {
+      sessionDid: REQUESTER_DID,
+      computeDelegationCid: (value) => `cid:${value}`,
+      async useRuntimeDelegation() {
+        throw new Error("boom");
+      },
+      getRuntimePermissionDelegations: () => [],
+    };
+    await expect(
+      activateValidatedRuntimeDelegation(node, delegationWithSignedCaveats([{}]), { host: "https://node.example" }),
+    ).rejects.toBeInstanceOf(RuntimeDelegationRejectedError);
+  });
 });
