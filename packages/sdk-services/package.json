@@ -26,6 +26,11 @@
       "import": "./dist/kv/index.js",
       "require": "./dist/kv/index.cjs"
     },
+    "./context": {
+      "types": "./dist/context.d.ts",
+      "import": "./dist/context.js",
+      "require": "./dist/context.cjs"
+    },
     "./telemetry/requestLog": {
       "import": {
         "types": "./dist/telemetry/requestLog.d.ts",
