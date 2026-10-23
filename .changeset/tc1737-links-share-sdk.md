@@ -9,6 +9,7 @@ Addressed publish, receive, credential invitations, the sender index and `valida
 - `deliverCredentialInvitation` accepts only the short share link (lowercase id, at most 512 bytes).
 - `validateShareLink` returns the shape `"link"` for both `v=4` forms.
 - The share index keeps a short `v=4` link beside a record's delivery material and checks that it is the link of that material (`assertLinkBoundToMaterial`). A full link is not stored in an index record. `expandShareRecord(record)` takes no origin.
+- `inspectShare`, `receiveShare`, `publishAddressedShare` and `deliverCredentialInvitation` load `@tinycloud/share-envelope/links` with `import()` when they first need it. The package build keeps it a package import, so a bundle that embeds `@tinycloud/share-sdk` holds no links code.
 
 Removed:
 

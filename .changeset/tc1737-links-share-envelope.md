@@ -9,6 +9,7 @@ Add the `@tinycloud/share-envelope/links` subpath: typed, issuer-signed link rec
 - Links: `buildShortLink`, `buildFullLink`, `parseLink` (strict grammar, both forms) and `resolveLink` (the full reader pipeline, an optional `validateBody` hook, and one `LinkError` class with a `code` per refusal).
 - Verification: `verifyEd25519Strict` applies one Ed25519 rule everywhere (`S < ℓ`, canonical and prime-order `A` and `R`).
 - The links vectors from the TC-1737 contract (`packages/share-envelope/test/links-api-vectors.json`, SHA-256 pinned in a test) drive the tests.
+- Packaging: the reader is its own file, `dist/links.js` (`dist/links.cjs`), built apart from `dist/index.js`. Its dependencies (`zod`, `@noble/curves`, `@noble/hashes`, `multiformats`) are package imports, so a bundler that already holds them adds no second copy.
 
 Removed:
 

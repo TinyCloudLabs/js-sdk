@@ -7,7 +7,7 @@ import {
   type ArtifactPin, type PolicyCredentialRequirementV1, type ShareAction, type UnifiedContentSource,
   type ShareEnvelopeV3, type UnifiedPolicy, type UnifiedPolicyCapability, type UnifiedRoot, type UnsignedShareEnvelopeV3,
 } from "@tinycloud/share-envelope";
-import { DEFAULT_LINKS_API_ORIGIN, MAX_LINK_BODY_BYTES, buildFullLink, prepareLinkRecord } from "@tinycloud/share-envelope/links";
+
 import {
   SHARE_CONTENT_LIMIT, SHARE_PUBLISH_RESULT_VERSION, SharePublishError, redactPublishedShare,
   type PublishedShare, type PublishedShareDeliveryMaterial,
@@ -441,21 +441,22 @@ export async function publishAddressedShare(input: AddressedSharePublishOptions)
   const envelopeKey = toBase64Url(envelopeKeyBytes);
   // The real check, on the sealed body itself, before any link is built or the header is signed. The caller removes what the
   // registration above wrote (see `AddressedShareOverLimitError`).
-  if (sealed.blob.length > MAX_LINK_BODY_BYTES) {
+  if (sealed.blob.length > await linkBodyLimit()) {
     throw new AddressedShareOverLimitError({ policyCid: created.policyCid, policyRootCid: policyRoot.cid, enforcementRootCid: enforcementRoot.cid });
   }
   // The link this publisher returns is the full `v=4` link: the signed record rides in the fragment, so it works
   // with no service. The header is signed by the key that signs the envelope (the envelope's signer is the issuer
   // every reader binds the record to). A caller that wants a short link posts `deliveryMaterial` with `createLink`.
-  const { record } = await prepareLinkRecord({
+  const links = await import("@tinycloud/share-envelope/links");
+  const { record } = await links.prepareLinkRecord({
     type: "share",
     sealed: { blob: sealed.blob, key: envelopeKeyBytes },
     issuerKey: { did: options.authority.ownerDid, sign: (digest) => options.authority.sign(digest) },
-    apiOrigin: options.apiOrigin ?? DEFAULT_LINKS_API_ORIGIN,
+    apiOrigin: options.apiOrigin ?? links.DEFAULT_LINKS_API_ORIGIN,
     expiresAt: new Date(expiry),
     enforceServiceLife: false,
   });
-  const url = buildFullLink({ origin: options.shareOrigin, key: envelopeKeyBytes, record });
+  const url = links.buildFullLink({ origin: options.shareOrigin, key: envelopeKeyBytes, record });
   const deliveryMaterial = {
     envelope,
     shareCid: sealed.cid,
@@ -492,6 +493,11 @@ export class AddressedShareOverLimitError extends SharePublishError {
     super("max-bytes-exceeded", ADDRESSED_SHARE_TOO_LARGE_MESSAGE);
     this.name = "AddressedShareOverLimitError";
   }
+}
+
+/** The links module loads on demand, so the limit is read from it when a check runs. */
+async function linkBodyLimit(): Promise<number> {
+  return (await import("@tinycloud/share-envelope/links")).MAX_LINK_BODY_BYTES;
 }
 
 /** Longest string an authority returns as the CID of an owner root. A blake3 CIDv1 is 59 characters; the bound leaves room for any multibase CID. */
@@ -596,7 +602,7 @@ async function sealedBodyUpperBound(options: BoundOptions): Promise<number> {
 }
 
 async function assertSealedBodyFits(options: BoundOptions): Promise<void> {
-  if (await sealedBodyUpperBound(options) > MAX_LINK_BODY_BYTES) throw new SharePublishError("max-bytes-exceeded", ADDRESSED_SHARE_TOO_LARGE_MESSAGE);
+  if (await sealedBodyUpperBound(options) > await linkBodyLimit()) throw new SharePublishError("max-bytes-exceeded", ADDRESSED_SHARE_TOO_LARGE_MESSAGE);
 }
 
 /** What a sender knows before any write; see {@link addressedShareBodyUpperBound}. */
@@ -655,5 +661,5 @@ export async function addressedShareBodyUpperBound(input: AddressedShareBoundInp
 
 /** Refuses (`SharePublishError`, code `max-bytes-exceeded`, {@link ADDRESSED_SHARE_TOO_LARGE_MESSAGE}) a share whose largest sealed envelope is over `MAX_LINK_BODY_BYTES`. Call it before any write. */
 export async function assertAddressedShareFits(input: AddressedShareBoundInput): Promise<void> {
-  if (await addressedShareBodyUpperBound(input) > MAX_LINK_BODY_BYTES) throw new SharePublishError("max-bytes-exceeded", ADDRESSED_SHARE_TOO_LARGE_MESSAGE);
+  if (await addressedShareBodyUpperBound(input) > await linkBodyLimit()) throw new SharePublishError("max-bytes-exceeded", ADDRESSED_SHARE_TOO_LARGE_MESSAGE);
 }

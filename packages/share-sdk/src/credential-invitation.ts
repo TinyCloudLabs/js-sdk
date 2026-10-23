@@ -1,4 +1,3 @@
-import { buildShortLink, parseLink } from "@tinycloud/share-envelope/links";
 
 /** The signed, app-neutral receipt accepted by OpenCredentials' invitation endpoint. */
 export interface CredentialInvitationReceipt {
@@ -64,10 +63,10 @@ function object(value: unknown): value is Record<string, unknown> {
 /** The longest link OpenCredentials accepts as a return link. */
 const MAX_INVITATION_LINK_BYTES = 512;
 
-function validateReceipt(
+async function validateReceipt(
   receipt: CredentialInvitationReceipt,
   shareUrl: string,
-): void {
+): Promise<void> {
   if (
     !object(receipt) ||
     !object(receipt.request) ||
@@ -85,16 +84,17 @@ function validateReceipt(
       "credential invitation is not bound to the share link",
     );
   }
+  const links = await import("@tinycloud/share-envelope/links");
   try {
     const origin = new URL(shareUrl).origin;
-    const parsed = parseLink(shareUrl, { trustedOrigins: [origin] });
+    const parsed = links.parseLink(shareUrl, { trustedOrigins: [origin] });
     // The email carries the short link only: a full link is too large to mail. The id is lowercase and the
     // fragment exactly `#v=4&k=&c=`, within the invitation size limit.
     if (
       parsed.form !== "short" ||
       parsed.pathType !== "share" ||
       shareUrl.length > MAX_INVITATION_LINK_BYTES ||
-      shareUrl !== buildShortLink({ origin, type: "share", id: parsed.id, key: parsed.key, bodyCid: parsed.c })
+      shareUrl !== links.buildShortLink({ origin, type: "share", id: parsed.id, key: parsed.key, bodyCid: parsed.c })
     ) {
       throw new Error("not a short share link");
     }
@@ -118,7 +118,7 @@ export async function deliverCredentialInvitation(input: {
   readonly signal?: AbortSignal;
 }): Promise<CredentialInvitationResult> {
   const credentialsOrigin = canonicalOrigin(input.credentialsOrigin);
-  validateReceipt(input.receipt, input.shareUrl);
+  await validateReceipt(input.receipt, input.shareUrl);
   const fetchFn = input.fetchFn ?? globalThis.fetch;
   let response: Response;
   try {

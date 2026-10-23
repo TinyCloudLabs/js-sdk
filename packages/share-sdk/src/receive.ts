@@ -4,7 +4,7 @@ import {
   verifyEnvelopeV3,
   type ShareEnvelopeV3,
 } from "@tinycloud/share-envelope";
-import { DEFAULT_LINKS_API_ORIGIN, LinkError, resolveLink, type ResolvedLink } from "@tinycloud/share-envelope/links";
+import type { LinkError, ResolvedLink } from "@tinycloud/share-envelope/links";
 import { ArtifactPinError, verifyArtifactShare } from "./artifact-pin.js";
 import type { ShareAuthorizationMethod } from "./authorization.js";
 
@@ -164,18 +164,20 @@ async function resolvePolicyShare(link: string, options: ShareFetchOptions): Pro
   } catch {
     throw new ShareReceiveError("invalid-link", "share link format is invalid");
   }
+  // The links module is a separate file of `@tinycloud/share-envelope`, loaded when a link is first resolved.
+  const links = await import("@tinycloud/share-envelope/links");
   let resolved: ResolvedLink;
   try {
-    resolved = await resolveLink(link, {
+    resolved = await links.resolveLink(link, {
       trustedOrigins: [options.expectedOrigin ?? url.origin],
-      apiOrigin: options.apiOrigin ?? DEFAULT_LINKS_API_ORIGIN,
+      apiOrigin: options.apiOrigin ?? links.DEFAULT_LINKS_API_ORIGIN,
       ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
       ...(options.signal === undefined ? {} : { signal: options.signal }),
       now: options.now?.() ?? Date.now(),
     });
   } catch (error) {
     options.signal?.throwIfAborted();
-    throw error instanceof LinkError ? receiveErrorFor(error) : error;
+    throw error instanceof links.LinkError ? receiveErrorFor(error) : error;
   }
   if (resolved.type !== "share") throw new ShareReceiveError("invalid-link", "share link is not a share");
   const limit = options.maxSealedBlobBytes ?? DEFAULT_MAX_SEALED_BLOB_BYTES;
