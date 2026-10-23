@@ -1,5 +1,60 @@
 # @tinycloud/courier
 
+## 0.2.4-beta.2
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.6.0-beta.3
+
+## 0.2.4-beta.1
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.6.0-beta.2
+
+## 0.2.4-beta.0
+
+### Patch Changes
+
+- Updated dependencies [0c09d7b]
+  - @tinycloud/node-sdk@3.6.0-beta.0
+
+## 0.2.3
+
+### Patch Changes
+
+- Updated dependencies [d60f81d]
+- Updated dependencies [7b92156]
+- Updated dependencies [7b92156]
+  - @tinycloud/node-sdk@3.5.0
+
+## 0.2.3-beta.1
+
+### Patch Changes
+
+- Updated dependencies [7b92156]
+- Updated dependencies [7b92156]
+  - @tinycloud/node-sdk@3.5.0-beta.1
+
+## 0.2.3-beta.0
+
+### Patch Changes
+
+- Updated dependencies [d60f81d]
+  - @tinycloud/node-sdk@3.5.0-beta.0
+
+## 0.2.2
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.4.0
+
+## 0.2.2-beta.1
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.3.2-beta.1
+
 ## 0.2.2-beta.0
 
 ### Patch Changes

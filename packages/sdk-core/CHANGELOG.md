@@ -1,5 +1,58 @@
 # @tinycloudlabs/sdk-core
 
+## 3.6.0-beta.3
+
+### Patch Changes
+
+- Updated dependencies [82cbd43]
+  - @tinycloud/sdk-services@3.6.0-beta.3
+
+## 3.6.0-beta.2
+
+### Patch Changes
+
+- Updated dependencies [dc61583]
+  - @tinycloud/sdk-services@3.6.0-beta.2
+
+## 3.6.0-beta.0
+
+### Minor Changes
+
+- 0c09d7b: Add `allowSubDelegation` to share generation. It defaults to `true`, which keeps today's behavior. Passing `false` issues a terminal delegation: the node refuses onward delegation of the share. A non-transferable share must be covered by an existing session-key delegation; it is refused when none covers it, and the wallet root path is not used for it.
+
+  A non-transferable share is received with `receive(link, { autoSubdelegate: false })`; the default auto-subdelegation is refused for it.
+
+  Details: TC-1801
+
+## 3.5.0
+
+### Patch Changes
+
+- Updated dependencies [d60f81d]
+  - @tinycloud/sdk-services@3.5.0
+
+## 3.5.0-beta.0
+
+### Patch Changes
+
+- Updated dependencies [d60f81d]
+  - @tinycloud/sdk-services@3.5.0-beta.0
+
+## 3.4.0
+
+### Patch Changes
+
+- Updated dependencies [666f60b]
+  - @tinycloud/share-sdk@1.3.0
+  - @tinycloud/sdk-services@3.3.2
+
+## 3.3.2-beta.1
+
+### Patch Changes
+
+- Updated dependencies [666f60b]
+  - @tinycloud/share-sdk@1.3.0-beta.0
+
 ## 3.3.1
 
 ### Patch Changes

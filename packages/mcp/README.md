@@ -4,12 +4,62 @@ TinyCloud MCP server for delegated operations. It supports local stdio and a
 hosted Streamable HTTP resource server. Both transports use exact, revocable
 TinyCloud capabilities and never silently fall back to owner authority.
 
-## Requirements
+## Local stdio requirements
 
 - Node.js 20 or newer
 - `@tinycloud/cli`
 - A delegated TinyCloud profile
 - A TinyCloud node running 1.6.0 or newer
+
+## Public ChatGPT release candidate
+
+The candidate is **not published**. Its separate endpoint is
+`https://mcp.tinycloud.xyz/chatgpt/mcp`, with exactly `tinycloud_connect`,
+`tinycloud_apps_context`, `tinycloud_apps_read`, `tinycloud_apps_write` and
+`tinycloud_apps_query`. Excluded tools are not callable by name. The existing
+broad `/mcp` endpoint and local stdio remain available for private integrations.
+ChatGPT users need no CLI, local profile or bundled skill.
+
+The public resource has its own OAuth audience, tenant state under
+`<TC_MCP_STATE_DIR>/chatgpt`, and `/chatgpt/connect` approval/callback paths.
+Deploy the corresponding OpenKey API audience and web callback registrations
+before testing the candidate. Existing broad-service approvals do not migrate
+into the public tenant store. Account connection, personal-record access and
+the optional derived SQL copy require their respective approvals.
+
+Context can persist an IANA timezone; query can overwrite or rebuild derived
+data. Both therefore advertise `readOnlyHint: false` and
+`destructiveHint: true`. Private personal-record operations advertise
+`openWorldHint: false`; this is not a claim that the hosted service cannot see
+plaintext. Use these tools only for requested personal-record tasks, not
+credentials, payment-card data, government identifiers or protected health
+information. Respect declined approval and the client's destructive-action
+confirmation flow. Ask for an IANA timezone, not a city or precise location.
+
+Package sources are in `plugin/package/`. From the repository root:
+
+```bash
+python3 -m venv /tmp/tinycloud-plugin-validator
+/tmp/tinycloud-plugin-validator/bin/pip install 'jsonschema>=4,<5'
+/tmp/tinycloud-plugin-validator/bin/python packages/mcp/scripts/package-plugin.py \
+  --output /tmp/tinycloud-plugin-release
+```
+
+The packager validates the canonical Agent Plugins schemas, produces a
+deterministic ZIP containing only the two manifests and logo, and reports its
+SHA-256. `plugin/review-evidence.json` is deliberately excluded: test definitions
+are not passing ChatGPT evidence, and reviewer credentials never belong in the
+ZIP. The schema-valid MCP manifest relies on OAuth discovery; verify imported
+authentication and scopes in the portal rather than adding schema-invalid
+per-server extensions.
+
+Release gates remain: explicit owner approval for default-branch merges and
+deployment; actual ChatGPT web/mobile acceptance; an independently usable
+reviewer account and synthetic fixtures; approved privacy, terms, support and
+country availability; the real walkthrough recording; publisher/domain
+verification; review approval and explicit publication. A successful local
+smoke or package validation does not satisfy those gates. Do not enable
+auto-merge or deploy around the approval requirement.
 
 ## Install and configure
 
@@ -17,7 +67,7 @@ TinyCloud capabilities and never silently fall back to owner authority.
 
 Claude web, iOS, Android and other remote clients connect to
 `https://mcp.tinycloud.xyz/mcp` and authenticate through OpenKey OAuth. The
-hosted server registers 20 tools: it adds `tinycloud_connect` and four
+hosted server registers 22 tools: it adds `tinycloud_connect` and four
 personal-record tools, and omits local-only `tinycloud_secrets_status` and
 `tinycloud_auth_import`.
 `tinycloud_connect` returns a short-lived browser approval URL on first use. Later
@@ -34,10 +84,10 @@ These tools are hosted-only and share the coding-agent skill's
 `xyz.tinycloud.agent-data/` records in the owner's `default` space without a
 local CLI or skill installation. First use requires connect and records approval.
 Records use one prefix grant with get/list/put/delete, not one grant per key.
-Generic KV tools retain their exact-input scopes. The connector asks for the
-owner's city once to store an IANA timezone. In Claude **Settings → Connectors →
-TinyCloud**, set `tinycloud_apps_write` to **Always allow** if desired; this
-does not bypass OpenKey approval.
+Generic KV tools retain their exact-input scopes. The connector asks for an
+IANA timezone once, not the owner's city or precise location. In Claude
+**Settings → Connectors → TinyCloud**, set `tinycloud_apps_write` to
+**Always allow** if desired; this does not bypass OpenKey approval.
 
 Read fresh before an edit and supply its ETag. Put without an ETag is
 create-only; stale ETags return `CHANGED`. Move requires the source ETag;
@@ -109,6 +159,12 @@ TinyCloud production uses `docker-compose.phala.yml`. The manual
 and deploys that image to the `tinycloud-mcp` Phala CVM. Its `production`
 environment requires `PHALA_CLOUD_API_KEY`, `CLOUDFLARE_API_TOKEN`, and a stable
 32-byte-or-longer `TC_MCP_STATE_SECRET`.
+
+The workflow fails, before building or deploying, unless the `tinycloud-mcp` CVM
+runs the production OS image pinned in `PHALA_OS_IMAGE` / `PHALA_OS_IMAGE_HASH`
+(`dstack-0.5.12`, not a `dstack-dev-*` image), and checks again after the deploy.
+It never changes the OS. If the check fails, set the OS by hand and re-run:
+`phala api -X PATCH /cvms/<id>/os-image -F os_image_name=dstack-0.5.12`.
 
 ### Post-deploy knowledge smoke
 
@@ -219,6 +275,11 @@ call once before retrying status.
 A missing secret's `setup` is the canonical Secret Manager `/request` link
 (`{url, names, scope?, owner, action: "add_secret"}`).
 
+MCP advertises JSON Schema 2020-12 inputs and results, compatible with the
+official v2 client's default validator. The shared operations catalog remains
+Draft-07 for non-MCP consumers; MCP projects its equivalent schemas without
+modifying that catalog or requiring a client-side validator override.
+
 Results use canonical structured envelopes with `ok`, `authority_required`,
 `setup_required`, or `error` status. Generic data operations plan authority for
 the exact space and key, prefix, or database supplied by the caller; apps use
@@ -227,9 +288,10 @@ exact, resumable request instead of widening access.
 
 Hosted text blocks contain the status and canonical JSON so clients that ignore
 `structuredContent` can read the result. Successful `tinycloud_secrets_get`
-values remain structured-only. Read-only results exceeding 100,000 characters
-return a nonretryable SQL/KV size error with narrowing guidance. Writes are never
-cut off by this cap, so a completed write is not misreported as a retryable failure.
+values remain structured-only. Read-only and personal-record context/query results
+exceeding 100,000 characters return a nonretryable SQL/KV size error with
+narrowing guidance. Canonical write outcomes are never cut off by this cap,
+so a completed record write is not misreported as a retryable failure.
 Call logs contain only tool name, outcome code, duration and successful replayed
 grant count—never keys, values, catalog text, SQL or parameters.
 

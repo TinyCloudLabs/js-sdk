@@ -1,5 +1,39 @@
 # @tinycloudlabs/sdk-services
 
+## 3.6.0-beta.3
+
+### Patch Changes
+
+- 82cbd43: A 413 from the SQL or DuckDB node is classified by side. A request rejected for size returns `SQL_REQUEST_TOO_LARGE` or `DUCKDB_REQUEST_TOO_LARGE`. A response that is too large keeps `SQL_RESPONSE_TOO_LARGE` or `DUCKDB_RESPONSE_TOO_LARGE`.
+
+  Details: TC-1823
+
+## 3.6.0-beta.2
+
+### Patch Changes
+
+- dc61583: The replica workers import only the sdk-services modules they use, so the kv-storage and replica worker bundles no longer include the SQL, DuckDB, vault, and hooks services. Adds a `./context` subpath export to `@tinycloud/sdk-services`.
+
+  Details: TC-1827
+
+## 3.5.0
+
+### Minor Changes
+
+- d60f81d: Add an opt-in, in-memory developer request log. With `requestLog: true` in `TinyCloudNode` config, the log records requests the SDK makes on your behalf: operation, path (first segment only), space (the name after the last colon), host, size, duration, attempts, result and source. Read them from `node.requests`, a read-only view with `snapshot()`, `subscribe()` and `onClear()`. The log keeps the most recent 500 entries and is cleared on sign-out, on sign-in as another account, and when a session is restored for a different owner. Entries carry sizes only; body and header content is absent from them. When the option is omitted, no log is created and no events are built.
+
+  Details: TC-848
+
+## 3.5.0-beta.0
+
+### Minor Changes
+
+- d60f81d: Add an opt-in, in-memory developer request log. With `requestLog: true` in `TinyCloudNode` config, the log records requests the SDK makes on your behalf: operation, path (first segment only), space (the name after the last colon), host, size, duration, attempts, result and source. Read them from `node.requests`, a read-only view with `snapshot()`, `subscribe()` and `onClear()`. The log keeps the most recent 500 entries and is cleared on sign-out, on sign-in as another account, and when a session is restored for a different owner. Entries carry sizes only; body and header content is absent from them. When the option is omitted, no log is created and no events are built.
+
+  Details: TC-848
+
+## 3.3.2
+
 ## 3.3.1
 
 ## 3.3.0

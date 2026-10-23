@@ -1,5 +1,90 @@
 # @tinycloud/operations
 
+## 0.7.4-beta.3
+
+### Patch Changes
+
+- 82cbd43: A 413 from the SQL or DuckDB node is classified by side. A request rejected for size returns `SQL_REQUEST_TOO_LARGE` or `DUCKDB_REQUEST_TOO_LARGE`. A response that is too large keeps `SQL_RESPONSE_TOO_LARGE` or `DUCKDB_RESPONSE_TOO_LARGE`.
+
+  Details: TC-1823
+
+- Updated dependencies [82cbd43]
+  - @tinycloud/sdk-services@3.6.0-beta.3
+  - @tinycloud/node-sdk@3.6.0-beta.3
+  - @tinycloud/sdk-core@3.6.0-beta.3
+
+## 0.7.4-beta.2
+
+### Patch Changes
+
+- e18946e: Add the separate `/chatgpt/mcp` public personal-record endpoint with exactly connect, context, read, write and query tools. Public OAuth audiences, tenant state, approvals and recovery suggestions are isolated from the existing broad `/mcp` service; excluded tools cannot be invoked by name. Preserve local/private integrations and return an inert browser recovery page for invalid approval links.
+
+  Correct context/query mutation annotations and operation effects, ask for an IANA timezone rather than location, and preserve the hosted 100,000-character context and derived-query output limit without truncating canonical write outcomes. Add reproducible MCP-only plugin packaging and explicit reviewer/publication gates.
+
+  Advertise equivalent JSON Schema 2020-12 tool inputs and results on stdio and both hosted surfaces so the official v2 client works with its default validator. Preserve the shared Draft-07 operations catalog for non-MCP consumers; reject unsupported dialect-specific forms rather than silently changing their validation.
+
+  Deploy the matching OpenKey API audience and exact web callback registrations before candidate acceptance. The package is not a published plugin: actual ChatGPT web/mobile tests, independent reviewer access, approved policies, recording and portal review remain required. Default-branch integration and deployment require explicit owner approval.
+
+## 0.7.4-beta.1
+
+### Patch Changes
+
+- Updated dependencies [dc61583]
+  - @tinycloud/sdk-services@3.6.0-beta.2
+  - @tinycloud/node-sdk@3.6.0-beta.2
+  - @tinycloud/sdk-core@3.6.0-beta.2
+
+## 0.7.4-beta.0
+
+### Patch Changes
+
+- Updated dependencies [0c09d7b]
+  - @tinycloud/sdk-core@3.6.0-beta.0
+  - @tinycloud/node-sdk@3.6.0-beta.0
+
+## 0.7.3
+
+### Patch Changes
+
+- Updated dependencies [d60f81d]
+- Updated dependencies [7b92156]
+- Updated dependencies [7b92156]
+  - @tinycloud/sdk-services@3.5.0
+  - @tinycloud/node-sdk@3.5.0
+  - @tinycloud/sdk-core@3.5.0
+
+## 0.7.3-beta.1
+
+### Patch Changes
+
+- Updated dependencies [7b92156]
+- Updated dependencies [7b92156]
+  - @tinycloud/node-sdk@3.5.0-beta.1
+
+## 0.7.3-beta.0
+
+### Patch Changes
+
+- Updated dependencies [d60f81d]
+  - @tinycloud/sdk-services@3.5.0-beta.0
+  - @tinycloud/node-sdk@3.5.0-beta.0
+  - @tinycloud/sdk-core@3.5.0-beta.0
+
+## 0.7.2
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.4.0
+- @tinycloud/sdk-core@3.4.0
+- @tinycloud/sdk-services@3.3.2
+
+## 0.7.2-beta.1
+
+### Patch Changes
+
+- @tinycloud/sdk-core@3.3.2-beta.1
+- @tinycloud/node-sdk@3.3.2-beta.1
+
 ## 0.7.2-beta.0
 
 ### Patch Changes

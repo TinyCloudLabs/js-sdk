@@ -164,6 +164,27 @@
       "index.mjs": 0,
       "index.cjs": 0,
       "note": "sdk-services pin to 3.3.1 after the release; module path change only, no code change"
+    },
+    {
+      "pr": "#686",
+      "ticket": "TC-1777",
+      "index.mjs": 15,
+      "index.cjs": 29,
+      "note": "Replica gzip growth measured against this PR's merge base"
+    },
+    {
+      "pr": "#694",
+      "ticket": "TC-1827",
+      "index.mjs": 0,
+      "index.cjs": 0,
+      "note": "replica workers import only the KV service and its context"
+    },
+    {
+      "pr": "#695",
+      "ticket": "TC-1827",
+      "index.mjs": 0,
+      "index.cjs": 0,
+      "note": "replica worker size ratchet; no measured-bundle change"
     }
   ],
   "phase2Ratchet": {
@@ -840,5 +861,525 @@
       "ceiling": 822753
     },
     "reason": "CI PR-side build +1 B with no code change (sdk-services 3.3.1 pin; TC-1789 investigation)"
+  },
+  "tc1757Ratchet": {
+    "label": "web-recipient entry (#678): root ceiling lowered to the measured CI bytes",
+    "ruling": "Approved by Naomi (2026-10-22, policy review relayed by Amos)",
+    "base": "368a3d3e7075c0538f0ced9b26d3870c590c81f0",
+    "sourceCommits": [
+      "e244be2c5d83d94b1c1a505b4ea85301f393b4a3"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39817449009",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39817449009/job/119959550450",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39817449009/job/119959550040"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": -16712,
+        "index.cjs": -1996
+      },
+      "ceiling": {
+        "index.mjs": 1458843,
+        "index.cjs": 1401918
+      }
+    },
+    "firstImport": {
+      "delta": {
+        "replica.mjs": 0,
+        "replica.cjs": 0
+      },
+      "ceiling": {
+        "replica.mjs": 51925,
+        "replica.cjs": 67141
+      }
+    },
+    "activation": {
+      "delta": {
+        "activation.mjs": 0,
+        "activation.cjs": 0
+      },
+      "ceiling": {
+        "activation.mjs": 23117,
+        "activation.cjs": 24700
+      }
+    },
+    "worker": {
+      "delta": 0,
+      "ceiling": 822753
+    },
+    "reason": "web-sdk imports share-sdk's narrow web-recipient entry; root ceiling lowered to measured CI bytes (TC-1757)"
+  },
+  "tc1777Ratchet": {
+    "label": "replication wiring in its own module (#686): root ceiling raised to the measured CI bytes",
+    "ruling": "Approved by Naomi (2026-10-22, policy review relayed by Amos)",
+    "base": "bc49820c1417a449041e9801b60c86a63485b55d",
+    "sourceCommits": [
+      "187b8a433a1c02008f066a00e41d36819acbc007"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39855300327",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39855300327/job/120091843728",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39855300327/job/120091844294"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 15,
+        "index.cjs": 29
+      },
+      "ceiling": {
+        "index.mjs": 1458858,
+        "index.cjs": 1401947
+      }
+    },
+    "firstImport": {
+      "delta": {
+        "replica.mjs": 0,
+        "replica.cjs": 0
+      },
+      "ceiling": {
+        "replica.mjs": 51925,
+        "replica.cjs": 67141
+      }
+    },
+    "activation": {
+      "delta": {
+        "activation.mjs": 0,
+        "activation.cjs": 0
+      },
+      "ceiling": {
+        "activation.mjs": 23117,
+        "activation.cjs": 24700
+      }
+    },
+    "worker": {
+      "delta": 0,
+      "ceiling": 822753
+    },
+    "reason": "replication wiring moved into its own module; +15 B (mjs) / +29 B (cjs) gzip from the module boundary (TC-1777)"
+  },
+  "tc1777ExpiryRatchet": {
+    "label": "expiryMs, hasPermissions and pre-modal decrypt check (#668): root ceiling raised to the measured CI bytes",
+    "ruling": "Approved by Naomi (2026-10-22, policy review relayed by Amos)",
+    "base": "80d387441dbe87e2309a849c653e2d0adecd400b",
+    "sourceCommits": [
+      "28585593a756f65b47f2aa60be240c5fce3dbd9d"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39861366041",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39861366041/job/120112619622",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39861366041/job/120112619857"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 172,
+        "index.cjs": 174
+      },
+      "ceiling": {
+        "index.mjs": 1459030,
+        "index.cjs": 1402121
+      }
+    },
+    "firstImport": {
+      "delta": {
+        "replica.mjs": 0,
+        "replica.cjs": 0
+      },
+      "ceiling": {
+        "replica.mjs": 51925,
+        "replica.cjs": 67141
+      }
+    },
+    "activation": {
+      "delta": {
+        "activation.mjs": 0,
+        "activation.cjs": 0
+      },
+      "ceiling": {
+        "activation.mjs": 23117,
+        "activation.cjs": 24700
+      }
+    },
+    "worker": {
+      "delta": 0,
+      "ceiling": 822753
+    },
+    "reason": "expiryMs, hasPermissions and the pre-modal decrypt check add 172 B (mjs) / 174 B (cjs) gzip to each web-sdk root bundle (TC-1777)"
+  },
+  "tc848PanelRatchet": {
+    "label": "developer request log panel (#656): root ceiling raised to the measured CI bytes",
+    "ruling": "Approved by Naomi (2026-10-22, policy review relayed by Amos)",
+    "base": "bf510d9f226c84bd6fd8d9d018c82e84b1fd2cc8",
+    "sourceCommits": [
+      "aae48af0237b05f8673321b332d533aac7fd1a9b"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39869142170",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39869142170/job/120138846942",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39869142170/job/120138847243"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 3016,
+        "index.cjs": 2224
+      },
+      "ceiling": {
+        "index.mjs": 1462046,
+        "index.cjs": 1404345
+      }
+    },
+    "firstImport": {
+      "delta": {
+        "replica.mjs": 0,
+        "replica.cjs": 0
+      },
+      "ceiling": {
+        "replica.mjs": 51925,
+        "replica.cjs": 67141
+      }
+    },
+    "activation": {
+      "delta": {
+        "activation.mjs": 0,
+        "activation.cjs": 0
+      },
+      "ceiling": {
+        "activation.mjs": 23117,
+        "activation.cjs": 24700
+      }
+    },
+    "worker": {
+      "delta": 0,
+      "ceiling": 822753
+    },
+    "reason": "developer request log (TC-848 panel): +3016 B (mjs) / +2224 B (cjs) gzip to each web-sdk root bundle"
+  },
+  "tc1781DecryptExpiryRatchet": {
+    "label": "one-hour decrypt default and secret-read coverage (#681): root ceiling raised to the measured CI bytes",
+    "ruling": "Approved by Naomi (2026-10-23, policy review relayed by Amos)",
+    "base": "e88e40e003cd2570e80b1a3cd53d0a5531838e42",
+    "sourceCommits": [
+      "0e56796c881a9a294b3c08cb69c5e351dac5855c"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39890426909",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39890426909/job/120208584548",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39890426909/job/120208584544"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 303,
+        "index.cjs": 217
+      },
+      "ceiling": {
+        "index.mjs": 1462349,
+        "index.cjs": 1404562
+      }
+    },
+    "firstImport": {
+      "delta": {
+        "replica.mjs": 0,
+        "replica.cjs": 0
+      },
+      "ceiling": {
+        "replica.mjs": 51925,
+        "replica.cjs": 67141
+      }
+    },
+    "activation": {
+      "delta": {
+        "activation.mjs": 0,
+        "activation.cjs": 0
+      },
+      "ceiling": {
+        "activation.mjs": 23117,
+        "activation.cjs": 24700
+      }
+    },
+    "worker": {
+      "delta": 0,
+      "ceiling": 822753
+    },
+    "reason": "one-hour decrypt default and secret-read coverage: +303 B (mjs) / +217 B (cjs) gzip to each web-sdk root bundle (TC-1781)"
+  },
+  "tc1801NonTransferableShareRatchet": {
+    "label": "non-transferable share option (#687): root ceiling raised to the measured CI bytes",
+    "ruling": "Approved by Naomi (2026-10-23, policy review relayed by Amos)",
+    "base": "51ee7f0e9aa7a382d5150a7f1c20e9b64b36409b",
+    "sourceCommits": [
+      "8109b636fbc6b21a56d11a17ea8d97d860a8435b"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39896378690",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39896378690/job/120227697556",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39896378690/job/120227697563"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 26,
+        "index.cjs": 35
+      },
+      "ceiling": {
+        "index.mjs": 1462375,
+        "index.cjs": 1404597
+      }
+    },
+    "firstImport": {
+      "delta": {
+        "replica.mjs": 0,
+        "replica.cjs": 0
+      },
+      "ceiling": {
+        "replica.mjs": 51925,
+        "replica.cjs": 67141
+      }
+    },
+    "activation": {
+      "delta": {
+        "activation.mjs": 0,
+        "activation.cjs": 0
+      },
+      "ceiling": {
+        "activation.mjs": 23117,
+        "activation.cjs": 24700
+      }
+    },
+    "worker": {
+      "delta": 0,
+      "ceiling": 822753
+    },
+    "reason": "non-transferable share option: +26 B (mjs) / +35 B (cjs) gzip to each web-sdk root bundle (TC-1801)"
+  },
+  "tc1807CredentialDiscoveryRatchet": {
+    "label": "credential discovery default and typed error (#690): root ceiling raised to the measured CI bytes",
+    "ruling": "Approved by Naomi (2026-10-23, policy review relayed by Amos)",
+    "base": "437ca1593cb9b41029409d154b724a64753625bc",
+    "sourceCommits": [
+      "3ca75b89172289ef1fa3d780d42ae57181e25e67"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39904276924",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39904276924/job/120252519592",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39904276924/job/120252519405"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 81,
+        "index.cjs": 88
+      },
+      "ceiling": {
+        "index.mjs": 1462456,
+        "index.cjs": 1404685
+      }
+    },
+    "firstImport": {
+      "delta": {
+        "replica.mjs": 0,
+        "replica.cjs": 0
+      },
+      "ceiling": {
+        "replica.mjs": 51925,
+        "replica.cjs": 67141
+      }
+    },
+    "activation": {
+      "delta": {
+        "activation.mjs": 0,
+        "activation.cjs": 0
+      },
+      "ceiling": {
+        "activation.mjs": 23117,
+        "activation.cjs": 24700
+      }
+    },
+    "worker": {
+      "delta": 0,
+      "ceiling": 822753
+    },
+    "reason": "credential discovery default and typed error: +81 B (mjs) / +88 B (cjs) gzip to each web-sdk root bundle (TC-1807)"
+  },
+  "tc1827WorkerRatchet": {
+    "label": "replica worker narrow imports (#694): kv-storage worker ceiling lowered to the measured CI bytes",
+    "ruling": "Approved by Naomi (2026-10-23, policy review relayed by Amos)",
+    "base": "6076581dcf13a6a0395b0f8798c6b6bf22928088",
+    "sourceCommits": [
+      "7a7303a8afdc81910adbfa7b6485d2acc07617cd"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39943720009",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39943720009/job/120381124294",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39943720009/job/120381124041"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 0,
+        "index.cjs": 0
+      },
+      "ceiling": {
+        "index.mjs": 1462456,
+        "index.cjs": 1404685
+      }
+    },
+    "firstImport": {
+      "delta": {
+        "replica.mjs": 0,
+        "replica.cjs": -1
+      },
+      "ceiling": {
+        "replica.mjs": 51925,
+        "replica.cjs": 67141
+      }
+    },
+    "activation": {
+      "delta": {
+        "activation.mjs": -1,
+        "activation.cjs": -2
+      },
+      "ceiling": {
+        "activation.mjs": 23117,
+        "activation.cjs": 24700
+      }
+    },
+    "worker": {
+      "delta": -46625,
+      "ceiling": 776128
+    },
+    "reason": "replica workers import only the KV service: -46625 B gzip to the kv-storage worker (TC-1827)"
+  },
+  "tc1827ReplicaWorkerRatchet": {
+    "label": "replica worker size ratchet (TC-1827 follow-up): first replica.worker.js ceiling at the measured CI bytes",
+    "ruling": "Requested by Naomi (2026-10-23, relayed by Amos): the exact canonical CI bytes, zero headroom",
+    "base": "dc61583428a04aa87eb0c0d6aebb656a698a5b0f",
+    "sourceCommits": [
+      "f2e2f9fcc16842bfa3e30c71eae9de271405fdae"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39949887460",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39949887460/job/120401498637",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39949887460/job/120401498914"
+      ]
+    },
+    "worker": {
+      "delta": 0,
+      "ceiling": 770093
+    },
+    "reason": "replica.worker.js had no size ratchet; its ceiling is the 770093 B gzip canonical CI measured (TC-1827)"
+  },
+  "tc1823SizeCodeRatchet": {
+    "label": "SQL and DuckDB request-size error codes (#693): root ceiling raised to the measured CI bytes; master 1462456/1404685 → 1462556/1404793; shrunk from +1273/+331 (198771bb) to +100/+108",
+    "ruling": "Approved by Naomi (2026-10-23, policy review relayed by Amos)",
+    "base": "d3da865460ad4b0b51bad753bddd8f89518db238",
+    "sourceCommits": [
+      "c35e268879bf5e30447f9335229dda4d64361bdb"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39978157827",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39978157827/job/120498120597",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39978157827/job/120498121108"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 100,
+        "index.cjs": 108
+      },
+      "ceiling": {
+        "index.mjs": 1462556,
+        "index.cjs": 1404793
+      }
+    },
+    "firstImport": {
+      "delta": {
+        "replica.mjs": 0,
+        "replica.cjs": 0
+      },
+      "ceiling": {
+        "replica.mjs": 51925,
+        "replica.cjs": 67141
+      }
+    },
+    "activation": {
+      "delta": {
+        "activation.mjs": 0,
+        "activation.cjs": 0
+      },
+      "ceiling": {
+        "activation.mjs": 23117,
+        "activation.cjs": 24700
+      }
+    },
+    "worker": {
+      "delta": 0,
+      "ceiling": 776128
+    },
+    "reason": "SQL and DuckDB request-size error codes: +100 B (mjs) / +108 B (cjs) gzip to each web-sdk root bundle (TC-1823)"
+  },
+  "tc712CredentialCoreRatchet": {
+    "label": "credential consumer core (#679, TC-712 PR-A): root ceiling raised to the measured CI bytes; newest row 1462556/1404793 → 1462632/1404864 (+76/+71)",
+    "ruling": "Approved by Naomi (2026-10-23, policy review relayed by Amos)",
+    "base": "43c5bea9cd6e9409e2e8094de30d302de9aa94a5",
+    "sourceCommits": [
+      "20a35591ac263358270ae28fd8ad7013af74d861"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40002503111",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40002503111/job/120581943143",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40002503111/job/120581942872"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 76,
+        "index.cjs": 71
+      },
+      "ceiling": {
+        "index.mjs": 1462632,
+        "index.cjs": 1404864
+      }
+    },
+    "firstImport": {
+      "delta": {
+        "replica.mjs": 0,
+        "replica.cjs": 0
+      },
+      "ceiling": {
+        "replica.mjs": 51925,
+        "replica.cjs": 67141
+      }
+    },
+    "activation": {
+      "delta": {
+        "activation.mjs": 0,
+        "activation.cjs": 0
+      },
+      "ceiling": {
+        "activation.mjs": 23117,
+        "activation.cjs": 24700
+      }
+    },
+    "worker": {
+      "delta": 0,
+      "ceiling": 776128
+    },
+    "reason": "credential consumer core: +76 B (mjs) / +71 B (cjs) gzip to each web-sdk root bundle (TC-712)"
   }
 }

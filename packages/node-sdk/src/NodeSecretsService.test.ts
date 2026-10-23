@@ -446,4 +446,134 @@ describe("NodeSecretsService", () => {
       ifAbsent: true,
     });
   });
+
+  it("escalates only the entries uncoveredEntries returns", async () => {
+    const base = makeBaseSecrets();
+    const grantPermissions = mock(async () => {});
+    const secrets = new NodeSecretsService({
+      getService: () => base,
+      getManifest: readOnlyManifest,
+      grantPermissions,
+      hasPermissions: () => false,
+      canEscalate: () => true,
+      getEncryptionNetworkId: () =>
+        "urn:tinycloud:encryption:did:key:z6MkPrincipal:default",
+      uncoveredEntries: (entries) =>
+        entries.filter((entry) => entry.service === "tinycloud.encryption"),
+    });
+
+    const result = await secrets.get("ANTHROPIC_API_KEY");
+
+    expect(result).toEqual({ ok: true, data: "stored" });
+    expect(grantPermissions).toHaveBeenCalledTimes(1);
+    expect(grantPermissions).toHaveBeenCalledWith([
+      {
+        service: "tinycloud.encryption",
+        path: "urn:tinycloud:encryption:did:key:z6MkPrincipal:default",
+        actions: ["decrypt"],
+        skipPrefix: true,
+      },
+    ] satisfies PermissionEntry[]);
+  });
+
+  it("resolves without a grant when uncoveredEntries returns nothing", async () => {
+    const base = makeBaseSecrets();
+    const grantPermissions = mock(async () => {});
+    const secrets = new NodeSecretsService({
+      getService: () => base,
+      getManifest: readOnlyManifest,
+      grantPermissions,
+      hasPermissions: () => false,
+      canEscalate: () => true,
+      getEncryptionNetworkId: () =>
+        "urn:tinycloud:encryption:did:key:z6MkPrincipal:default",
+      uncoveredEntries: () => [],
+    });
+
+    const result = await secrets.get("ANTHROPIC_API_KEY");
+
+    expect(result).toEqual({ ok: true, data: "stored" });
+    expect(grantPermissions).not.toHaveBeenCalled();
+  });
+
+  it("session-only node: a fully covered get proceeds without a grant or the signer gate", async () => {
+    const base = makeBaseSecrets();
+    const grantPermissions = mock(async () => {});
+    const grantGetPermissions = mock(async () => {});
+    const secrets = new NodeSecretsService({
+      getService: () => base,
+      getManifest: readOnlyManifest,
+      grantPermissions,
+      grantGetPermissions,
+      hasPermissions: () => false,
+      canEscalate: () => false,
+      getEncryptionNetworkId: () =>
+        "urn:tinycloud:encryption:did:key:z6MkPrincipal:default",
+      uncoveredEntries: () => [],
+    });
+
+    const result = await secrets.get("ANTHROPIC_API_KEY");
+
+    expect(result).toEqual({ ok: true, data: "stored" });
+    expect(base.get).toHaveBeenCalledTimes(1);
+    expect(grantPermissions).not.toHaveBeenCalled();
+    expect(grantGetPermissions).not.toHaveBeenCalled();
+  });
+
+  it("session-only node: an uncovered get is denied before any grant is attempted", async () => {
+    const base = makeBaseSecrets();
+    const grantPermissions = mock(async () => {});
+    const grantGetPermissions = mock(async () => {});
+    const secrets = new NodeSecretsService({
+      getService: () => base,
+      getManifest: readOnlyManifest,
+      grantPermissions,
+      grantGetPermissions,
+      hasPermissions: () => false,
+      canEscalate: () => false,
+      getEncryptionNetworkId: () =>
+        "urn:tinycloud:encryption:did:key:z6MkPrincipal:default",
+      uncoveredEntries: (entries) => entries,
+    });
+
+    const result = await secrets.get("ANTHROPIC_API_KEY");
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: ErrorCodes.PERMISSION_DENIED,
+        service: "secrets",
+        message:
+          "Cannot autosign tinycloud.kv/get for ANTHROPIC_API_KEY; TinyCloudNode needs wallet mode with a signer or privateKey.",
+      },
+    });
+    expect(base.get).not.toHaveBeenCalled();
+    expect(grantPermissions).not.toHaveBeenCalled();
+    expect(grantGetPermissions).not.toHaveBeenCalled();
+  });
+
+  it("routes get escalations to grantGetPermissions and leaves put on grantPermissions", async () => {
+    const base = makeBaseSecrets();
+    const grantPermissions = mock(async () => {});
+    const grantGetPermissions = mock(async () => {});
+    const secrets = new NodeSecretsService({
+      getService: () => base,
+      getManifest: readOnlyManifest,
+      grantPermissions,
+      grantGetPermissions,
+      hasPermissions: () => false,
+      canEscalate: () => true,
+      getEncryptionNetworkId: () =>
+        "urn:tinycloud:encryption:did:key:z6MkPrincipal:default",
+      uncoveredEntries: (entries) => entries,
+    });
+
+    await secrets.get("ANTHROPIC_API_KEY");
+    expect(grantGetPermissions).toHaveBeenCalledTimes(1);
+    expect(grantPermissions).not.toHaveBeenCalled();
+
+    await secrets.put("ANTHROPIC_API_KEY", "secret");
+    expect(grantPermissions).toHaveBeenCalledTimes(1);
+    expect(grantGetPermissions).toHaveBeenCalledTimes(1);
+  });
 });

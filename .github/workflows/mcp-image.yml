@@ -13,7 +13,7 @@ on:
         required: false
         type: string
       preflight_only:
-        description: Only check the deploy credentials (Phala can read CVM tinycloud-mcp; the Cloudflare token is active and can read the mcp.tinycloud.xyz records). Builds and deploys nothing.
+        description: Only check the deploy credentials (Phala can read CVM tinycloud-mcp and it runs the production OS image; the Cloudflare token is active and can read the mcp.tinycloud.xyz records). Builds and deploys nothing.
         required: false
         type: boolean
         default: false
@@ -21,6 +21,11 @@ on:
 permissions:
   contents: read
   packages: write
+
+env:
+  # Production dstack OS the tinycloud-mcp CVM must run (the Phala KMS only releases app keys to this image).
+  PHALA_OS_IMAGE: dstack-0.5.12
+  PHALA_OS_IMAGE_HASH: 8db40cb23008d6213668b5816702d100b37b859a8a5bfd18d938ae3a1b3715bd
 
 jobs:
   resolve:
@@ -95,6 +100,25 @@ jobs:
             exit 1
           fi
           echo "Phala: CVM tinycloud-mcp readable; status=$(jq -r '.status // .cvm_status // "unknown"' <<<"$cvm")"
+      # Fail closed before any build or deploy if the CVM is not on the pinned production OS.
+      # To fix it, set the OS by hand: `phala api -X PATCH /cvms/<id>/os-image -F os_image_name=dstack-0.5.12`.
+      - name: CVM tinycloud-mcp runs the production OS image
+        env:
+          PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
+        shell: bash
+        run: |
+          if ! cvm=$(phala cvms get tinycloud-mcp --api-token "$PHALA_CLOUD_API_KEY" --json); then
+            echo "::error::Phala could not read the OS image of CVM tinycloud-mcp"
+            exit 1
+          fi
+          os=$(jq -c '.os' <<<"$cvm")
+          if ! jq -e --arg name "$PHALA_OS_IMAGE" --arg hash "$PHALA_OS_IMAGE_HASH" \
+            '.is_dev == false and .name == $name and .os_image_hash == $hash' <<<"$os" >/dev/null; then
+            echo "::error::CVM tinycloud-mcp is not on the production OS image $PHALA_OS_IMAGE ($PHALA_OS_IMAGE_HASH). Found: $os"
+            echo "Set the OS first with PATCH /cvms/<id>/os-image (os_image_name=$PHALA_OS_IMAGE), then re-run. CI does not change the OS." >&2
+            exit 1
+          fi
+          echo "Phala: CVM tinycloud-mcp runs $PHALA_OS_IMAGE"
       - name: Cloudflare token is active and can read the mcp.tinycloud.xyz records
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -183,7 +207,25 @@ jobs:
             --env "CERTBOT_EMAIL=$CERTBOT_EMAIL" \
             --no-public-logs \
             --no-public-sysinfo \
+            --no-dev-os \
+            --image "$PHALA_OS_IMAGE" \
             --wait
+      # Fail closed if the deploy left the CVM on a different OS image.
+      - name: Verify production OS image after deploy
+        env:
+          PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
+        shell: bash
+        run: |
+          if ! cvm=$(phala cvms get tinycloud-mcp --api-token "$PHALA_CLOUD_API_KEY" --json); then
+            echo "::error::Phala could not read the OS image of CVM tinycloud-mcp after deploy"
+            exit 1
+          fi
+          os=$(jq -c '.os' <<<"$cvm")
+          if ! jq -e --arg name "$PHALA_OS_IMAGE" --arg hash "$PHALA_OS_IMAGE_HASH" \
+            '.is_dev == false and .name == $name and .os_image_hash == $hash' <<<"$os" >/dev/null; then
+            echo "::error::CVM tinycloud-mcp is not on the production OS image $PHALA_OS_IMAGE ($PHALA_OS_IMAGE_HASH) after deploy. Found: $os"
+            exit 1
+          fi
       - name: Verify public endpoints
         run: |
           curl --fail --silent --show-error \

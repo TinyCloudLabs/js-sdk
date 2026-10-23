@@ -1,5 +1,46 @@
 # @tinycloud/replica
 
+## 0.3.3-beta.1
+
+### Patch Changes
+
+- Updated dependencies [82cbd43]
+  - @tinycloud/sdk-services@3.6.0-beta.3
+
+## 0.3.3-beta.0
+
+### Patch Changes
+
+- dc61583: The replica workers import only the sdk-services modules they use, so the kv-storage and replica worker bundles no longer include the SQL, DuckDB, vault, and hooks services. Adds a `./context` subpath export to `@tinycloud/sdk-services`.
+
+  Details: TC-1827
+
+- Updated dependencies [dc61583]
+  - @tinycloud/sdk-services@3.6.0-beta.2
+
+## 0.3.2
+
+### Patch Changes
+
+- Updated dependencies [d60f81d]
+  - @tinycloud/sdk-services@3.5.0
+
+## 0.3.2-beta.0
+
+### Patch Changes
+
+- Updated dependencies [d60f81d]
+  - @tinycloud/sdk-services@3.5.0-beta.0
+
+## 0.3.1
+
+### Patch Changes
+
+- 6139879: Depend on `@tinycloud/sdk-services` 3.3.1. The 3.3.1 stable release left replica pinned to 3.3.0, so installs of replica pulled a second copy of sdk-services and the kv-storage worker bundled that older copy.
+
+  Details: TC-1789
+  - @tinycloud/sdk-services@3.3.2
+
 ## 0.3.1-beta.0
 
 ### Patch Changes

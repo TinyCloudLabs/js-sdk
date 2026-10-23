@@ -12,7 +12,8 @@ import {
   ServiceContext,
   type TelemetryConfig,
 } from "@tinycloud/sdk-core";
-import type { FetchFunction, InvokeFunction, InvokeAnyFunction } from "@tinycloud/sdk-services";
+import type { FetchFunction, InvokeFunction, InvokeAnyFunction, RequestSink } from "@tinycloud/sdk-services";
+import { createServiceContext } from "./recordingServiceContext";
 import { PortableDelegation } from "./delegation";
 
 /**
@@ -69,6 +70,7 @@ export class DelegatedAccess {
     lifetime?: {
       fetch: FetchFunction;
       track(context: ServiceContext): ServiceContext;
+      requestSink?: RequestSink;
     },
   ) {
     this.session = session;
@@ -80,12 +82,13 @@ export class DelegatedAccess {
     // migration runner batches a CREATE TABLE (ddl) with the tracking-row
     // INSERT (write)); without it those calls throw "multi-resource
     // invocations" not supported.
-    const context = new ServiceContext({
+    const context = createServiceContext({
       invoke,
       invokeAny,
       fetch: lifetime?.fetch ?? globalThis.fetch.bind(globalThis),
       hosts: [host],
       telemetry,
+      requestSink: lifetime?.requestSink,
     });
     this._serviceContext = lifetime ? lifetime.track(context) : context;
 
