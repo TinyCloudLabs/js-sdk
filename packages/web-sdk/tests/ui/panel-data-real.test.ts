@@ -196,6 +196,29 @@ describe("createRealPanelData delegations", () => {
     expect(after.state === "ready" && after.freshness?.updatedAt).toBe(first);
   });
 
+  test("a failed refresh is not retried on every read; the next attempt waits for the TTL", async () => {
+    const f = makeFakes();
+    const data = createRealPanelData(f.host, f.client, "app");
+    await data.delegations();
+
+    f.setQuery({ ok: false, error: { code: "NETWORK", message: "down", service: "delegation" } });
+    now += 10_001;
+    await data.delegations();
+    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+    expect(f.calls.query).toBe(2);
+
+    // Re-renders read again inside the TTL: no new network call.
+    await data.delegations();
+    await data.delegations();
+    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+    expect(f.calls.query).toBe(2);
+
+    now += 10_001;
+    await data.delegations();
+    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+    expect(f.calls.query).toBe(3);
+  });
+
   test("denied list maps to needs-permission for delegation/list", async () => {
     const f = makeFakes();
     f.setQuery({

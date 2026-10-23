@@ -29,6 +29,8 @@ interface Snapshot {
   value?: ViewResult<unknown>;
   /** Epoch ms of the last successful read. */
   at: number;
+  /** Epoch ms of the last completed attempt, success or failure. Gates revalidation. */
+  checkedAt: number;
   refreshing: boolean;
   /** Code of the last failed refresh. Set while a ready value is kept. */
   lastError?: string;
@@ -66,7 +68,7 @@ export function createRealPanelData(
   const snapFor = (key: SectionKey): Snapshot => {
     let snap = snaps.get(key);
     if (!snap) {
-      snap = { at: 0, refreshing: false };
+      snap = { at: 0, checkedAt: 0, refreshing: false };
       snaps.set(key, snap);
     }
     return snap;
@@ -96,6 +98,7 @@ export function createRealPanelData(
       })
       .finally(() => {
         snap.inflight = undefined;
+        snap.checkedAt = Date.now();
         snap.refreshing = false;
         emit(key);
       });
@@ -126,7 +129,7 @@ export function createRealPanelData(
         ? viewLoading<T>()
         : present(snap, snap.value as ViewResult<T>);
     }
-    if (Date.now() - snap.at > ttlMs) void refresh(key, fetch);
+    if (Date.now() - snap.checkedAt > ttlMs) void refresh(key, fetch);
     return present(snap, snap.value as ViewResult<T>);
   }
 
