@@ -101,7 +101,7 @@ import { BrowserWalletSigner } from "../adapters/BrowserWalletSigner";
 import { BrowserNotificationHandler } from "../adapters/BrowserNotificationHandler";
 import { registerUiClient, type TinyCloudUI, type UiClientHandle, type UiConfig } from "../ui";
 import type { ToastSink } from "../ui/toast-store";
-import { createRealPanelData } from "../ui/data/real";
+import { lazyRealPanelData } from "../ui/panel-data-loader";
 import { BrowserWasmBindings } from "../adapters/BrowserWasmBindings";
 import { BrowserENSResolver } from "../adapters/BrowserENSResolver";
 import {
@@ -489,7 +489,7 @@ export class TinyCloudWeb {
         storageEpisode: this.uiStorageEpisode,
       },
       manifestAppId,
-      data: (client) => createRealPanelData(this, client, manifestAppId() ?? ""),
+      data: lazyRealPanelData(this, () => manifestAppId() ?? ""),
     });
 
     // Initialize browser notification handler

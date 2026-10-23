@@ -220,12 +220,13 @@ const gatedCjsConfig = {
   output: { ...replicaCjsConfig.output, filename: "replica-gated.cjs" },
 };
 
-// The lazy panel is its own entry (contracts-ade §1.4 budget applies to the eager root only).
-// The root loads it by relative sibling path, at first open, and never bundles it.
-const PANEL_REQUEST = "./panel-entry";
-const panelLoaderExternals = (type, file) => ({ context, request }, callback) => {
-  if (request === PANEL_REQUEST && context === path.resolve(__dirname, "src/ui")) {
-    callback(null, `${type} ./${file}`);
+// The lazy panel and panel-data are their own entries (contracts-ade §1.4 budget applies to the eager root only).
+// The root loads each by relative sibling path, at first use, and never bundles it.
+const LAZY_ENTRIES = { "./panel-entry": "panel", "./panel-data-entry": "panel-data" };
+const lazyLoaderExternals = (type, ext) => ({ context, request }, callback) => {
+  const file = LAZY_ENTRIES[request];
+  if (file && context === path.resolve(__dirname, "src/ui")) {
+    callback(null, `${type} ./${file}.${ext}`);
     return;
   }
   callback();
@@ -240,10 +241,10 @@ const panelExternals = (moduleType) => ({ request }, callback) => {
   callback();
 };
 
-const rootEsmConfig = { ...esmConfig, externals: panelLoaderExternals("import", "panel.mjs") };
+const rootEsmConfig = { ...esmConfig, externals: lazyLoaderExternals("import", "mjs") };
 const rootCjsConfig = {
   ...cjsConfig,
-  externals: panelLoaderExternals("commonjs", "panel.cjs"),
+  externals: lazyLoaderExternals("commonjs", "cjs"),
   output: { ...cjsConfig.output, environment: { dynamicImport: true } },
 };
 
@@ -261,6 +262,20 @@ const panelCjsConfig = {
   output: { ...cjsConfig.output, filename: "panel.cjs" },
 };
 
+const panelDataEsmConfig = {
+  ...esmConfig,
+  entry: "./src/ui/panel-data-entry.ts",
+  externals: panelExternals("module"),
+  output: { ...esmConfig.output, filename: "panel-data.mjs" },
+};
+
+const panelDataCjsConfig = {
+  ...cjsConfig,
+  entry: "./src/ui/panel-data-entry.ts",
+  externals: panelExternals("commonjs"),
+  output: { ...cjsConfig.output, filename: "panel-data.cjs" },
+};
+
 module.exports = [
   rootEsmConfig,
   rootCjsConfig,
@@ -270,4 +285,6 @@ module.exports = [
   gatedCjsConfig,
   panelEsmConfig,
   panelCjsConfig,
+  panelDataEsmConfig,
+  panelDataCjsConfig,
 ];
