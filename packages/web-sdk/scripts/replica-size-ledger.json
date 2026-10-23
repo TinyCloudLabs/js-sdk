@@ -1147,5 +1147,55 @@
       "ceiling": 822753
     },
     "reason": "non-transferable share option: +26 B (mjs) / +35 B (cjs) gzip to each web-sdk root bundle (TC-1801)"
+  },
+  "tc1807CredentialDiscoveryRatchet": {
+    "label": "credential discovery default and typed error (#690): root ceiling raised to the measured CI bytes",
+    "ruling": "Approved by Naomi (2026-10-23, policy review relayed by Amos)",
+    "base": "437ca1593cb9b41029409d154b724a64753625bc",
+    "sourceCommits": [
+      "3ca75b89172289ef1fa3d780d42ae57181e25e67"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39904276924",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39904276924/job/120252519592",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39904276924/job/120252519405"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 81,
+        "index.cjs": 88
+      },
+      "ceiling": {
+        "index.mjs": 1462456,
+        "index.cjs": 1404685
+      }
+    },
+    "firstImport": {
+      "delta": {
+        "replica.mjs": 0,
+        "replica.cjs": 0
+      },
+      "ceiling": {
+        "replica.mjs": 51925,
+        "replica.cjs": 67141
+      }
+    },
+    "activation": {
+      "delta": {
+        "activation.mjs": 0,
+        "activation.cjs": 0
+      },
+      "ceiling": {
+        "activation.mjs": 23117,
+        "activation.cjs": 24700
+      }
+    },
+    "worker": {
+      "delta": 0,
+      "ceiling": 822753
+    },
+    "reason": "credential discovery default and typed error: +81 B (mjs) / +88 B (cjs) gzip to each web-sdk root bundle (TC-1807)"
   }
 }

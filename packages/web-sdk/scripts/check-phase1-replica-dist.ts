@@ -11,7 +11,7 @@ import {
   validateOptionalEntryTransition, validateOptionalLedger, type OptionalLedger,
 } from "./replica-optional-size-policy";
 import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedPhase2, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, preexistingS3EntryCommit, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateLogoutRatchetTransition, validateMasterMergeResolutionTransition, validateTc1413RatchetTransition, validateTc1424RatchetTransition, validateTc1448RatchetTransition, validateTc1432RatchetTransition, validateTc1436RatchetTransition, validateTc1443RatchetTransition, validateTc1443bRatchetTransition, validateTc1428RatchetTransition, validateTc1475RatchetTransition, validateTc606WorkerRatchetTransition, validateMasterDriftRatchetTransition, validateTc1789RatchetTransition, validateTc1476RatchetTransition, validateTc1466RatchetTransition, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
-import { rootCeilingFor, validateTc1757RatchetTransition, validateTc1777ExpiryRatchetTransition, validateTc1777RatchetTransition, validateTc1781DecryptExpiryRatchetTransition, validateTc1801NonTransferableShareRatchetTransition, validateTc848PanelRatchetTransition } from "./replica-size-policy";
+import { rootCeilingFor, validateTc1757RatchetTransition, validateTc1777ExpiryRatchetTransition, validateTc1777RatchetTransition, validateTc1781DecryptExpiryRatchetTransition, validateTc1801NonTransferableShareRatchetTransition, validateTc1807CredentialDiscoveryRatchetTransition, validateTc848PanelRatchetTransition } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 import { replicaOwnedPath } from "./replica-owned-path";
 type Baseline = {
@@ -327,6 +327,13 @@ if (prBaseSha) {
   if (tc1801NonTransferableShare !== undefined && baseLedger.tc1801NonTransferableShareRatchet === undefined &&
       (baseLedger.tc1781DecryptExpiryRatchet === undefined || !hasAncestor(repoRoot, tc1801NonTransferableShare.sourceCommits.at(-1)!))) {
     console.error("The non-transferable share option ratchet requires the merged one-hour decrypt default ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc1807CredentialDiscoveryRatchetTransition(baseLedger.tc1807CredentialDiscoveryRatchet, ledger.tc1807CredentialDiscoveryRatchet);
+  const tc1807CredentialDiscovery = ledger.tc1807CredentialDiscoveryRatchet;
+  if (tc1807CredentialDiscovery !== undefined && baseLedger.tc1807CredentialDiscoveryRatchet === undefined &&
+      (baseLedger.tc1801NonTransferableShareRatchet === undefined || !hasAncestor(repoRoot, tc1807CredentialDiscovery.sourceCommits.at(-1)!))) {
+    console.error("The credential discovery ratchet requires the merged non-transferable share option ratchet and its measured source commit.");
     failed = true;
   }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";

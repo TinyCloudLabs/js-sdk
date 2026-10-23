@@ -223,6 +223,13 @@ export type Tc1781DecryptExpiryRatchet = HardeningRatchet;
  * hardening row.
  */
 export type Tc1801NonTransferableShareRatchet = HardeningRatchet;
+/**
+ * One reviewed exact-delta admission of js-sdk #690 (TC-1807): the credential discovery default and typed error.
+ * #690 is not a replica-owned PR, so this is a plain root row; the root ceilings rise to the bytes canonical CI measured
+ * on the #690 code head, every other ceiling stays that of the non-transferable share option row. Same shape as the #565
+ * hardening row.
+ */
+export type Tc1807CredentialDiscoveryRatchet = HardeningRatchet;
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -252,6 +259,7 @@ export type Ledger = {
   tc848PanelRatchet?: Tc848PanelRatchet;
   tc1781DecryptExpiryRatchet?: Tc1781DecryptExpiryRatchet;
   tc1801NonTransferableShareRatchet?: Tc1801NonTransferableShareRatchet;
+  tc1807CredentialDiscoveryRatchet?: Tc1807CredentialDiscoveryRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -811,6 +819,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc848PanelRatchet !== undefined) pins.push({ row: "tc848PanelRatchet", pin: root.tc848PanelRatchet.sourceCommits.at(-1)! });
   if (root.tc1781DecryptExpiryRatchet !== undefined) pins.push({ row: "tc1781DecryptExpiryRatchet", pin: root.tc1781DecryptExpiryRatchet.sourceCommits.at(-1)! });
   if (root.tc1801NonTransferableShareRatchet !== undefined) pins.push({ row: "tc1801NonTransferableShareRatchet", pin: root.tc1801NonTransferableShareRatchet.sourceCommits.at(-1)! });
+  if (root.tc1807CredentialDiscoveryRatchet !== undefined) pins.push({ row: "tc1807CredentialDiscoveryRatchet", pin: root.tc1807CredentialDiscoveryRatchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -847,6 +856,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc848PanelRatchet", root.tc848PanelRatchet?.root.ceiling],
     ["tc1781DecryptExpiryRatchet", root.tc1781DecryptExpiryRatchet?.root.ceiling],
     ["tc1801NonTransferableShareRatchet", root.tc1801NonTransferableShareRatchet?.root.ceiling],
+    ["tc1807CredentialDiscoveryRatchet", root.tc1807CredentialDiscoveryRatchet?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -1182,6 +1192,43 @@ export const approvedTc1801NonTransferableShareRatchet: Tc1801NonTransferableSha
   reason: "non-transferable share option: +26 B (mjs) / +35 B (cjs) gzip to each web-sdk root bundle (TC-1801)",
 };
 
+/**
+ * Credential discovery default and typed error (js-sdk #690, TC-1807), approved by Naomi, 2026-10-23: the root index.mjs /
+ * index.cjs ceilings rise from 1,462,375 / 1,404,597 to 1,462,456 / 1,404,685, the bytes canonical CI printed on the #690
+ * code head 3ca75b89 (master 437ca159 merged in; 437ca159 is the merge base). Master measured 1,462,375 / 1,404,597 (runs
+ * 39900520931 on 0c09d7be and 39902544500 on 437ca159). Measured growth against master is +81 / +88. First-import,
+ * activation and worker ceilings are unchanged.
+ */
+export const approvedTc1807CredentialDiscoveryRatchet: Tc1807CredentialDiscoveryRatchet = {
+  label: "credential discovery default and typed error (#690): root ceiling raised to the measured CI bytes",
+  ruling: "Approved by Naomi (2026-10-23, policy review relayed by Amos)",
+  base: "437ca1593cb9b41029409d154b724a64753625bc",
+  sourceCommits: [
+    "3ca75b89172289ef1fa3d780d42ae57181e25e67",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39904276924",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39904276924/job/120252519592",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39904276924/job/120252519405",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 81, "index.cjs": 88 },
+    ceiling: { "index.mjs": 1462456, "index.cjs": 1404685 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 51925, "replica.cjs": 67141 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23117, "activation.cjs": 24700 },
+  },
+  worker: { delta: 0, ceiling: 822753 },
+  reason: "credential discovery default and typed error: +81 B (mjs) / +88 B (cjs) gzip to each web-sdk root bundle (TC-1807)",
+};
+
 export type GatedOnlyRatchet = {
   label: string;
   sourceCommit: string;
@@ -1214,7 +1261,7 @@ const historicalToolchain = "Bun 1.4.3; production webpack; gzip -9 -c";
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
 export function validateLedger(value: Ledger, historicalBase = false): void {
   if (!value || !value.allowance || !Array.isArray(value.entries) ||
-      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet" && key !== "tc1436Ratchet" && key !== "tc1432Ratchet" && key !== "tc1424Ratchet" && key !== "tc1448Ratchet" && key !== "tc1443Ratchet" && key !== "tc1466Ratchet" && key !== "tc1443bRatchet" && key !== "tc1428Ratchet" && key !== "tc1476Ratchet" && key !== "tc1475Ratchet" && key !== "tc606WorkerRatchet" && key !== "masterDriftRatchet" && key !== "tc1789Ratchet" && key !== "tc1757Ratchet" && key !== "tc1777Ratchet" && key !== "tc1777ExpiryRatchet" && key !== "tc848PanelRatchet" && key !== "tc1781DecryptExpiryRatchet" && key !== "tc1801NonTransferableShareRatchet")) {
+      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet" && key !== "tc1436Ratchet" && key !== "tc1432Ratchet" && key !== "tc1424Ratchet" && key !== "tc1448Ratchet" && key !== "tc1443Ratchet" && key !== "tc1466Ratchet" && key !== "tc1443bRatchet" && key !== "tc1428Ratchet" && key !== "tc1476Ratchet" && key !== "tc1475Ratchet" && key !== "tc606WorkerRatchet" && key !== "masterDriftRatchet" && key !== "tc1789Ratchet" && key !== "tc1757Ratchet" && key !== "tc1777Ratchet" && key !== "tc1777ExpiryRatchet" && key !== "tc848PanelRatchet" && key !== "tc1781DecryptExpiryRatchet" && key !== "tc1801NonTransferableShareRatchet" && key !== "tc1807CredentialDiscoveryRatchet")) {
     throw new Error("Invalid packages/web-sdk/scripts/replica-size-ledger.json shape");
   }
   if (Object.keys(value.allowance).some((key) => !formats.includes(key as typeof formats[number]))) {
@@ -1358,6 +1405,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc1781DecryptExpiryRatchet || JSON.stringify(value.tc1801NonTransferableShareRatchet) !== JSON.stringify(approvedTc1801NonTransferableShareRatchet))) {
     throw new Error("Only Naomi's exact canonical non-transferable share option ratchet is approved.");
   }
+  if (value.tc1807CredentialDiscoveryRatchet !== undefined &&
+      (!value.tc1801NonTransferableShareRatchet || JSON.stringify(value.tc1807CredentialDiscoveryRatchet) !== JSON.stringify(approvedTc1807CredentialDiscoveryRatchet))) {
+    throw new Error("Only Naomi's exact canonical credential discovery ratchet is approved.");
+  }
 }
 
 /** The #606 worker ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
@@ -1429,6 +1480,14 @@ export function validateTc1801NonTransferableShareRatchetTransition(base?: Tc180
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1801NonTransferableShareRatchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact TC-1801 non-transferable share ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-1807 credential discovery ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc1807CredentialDiscoveryRatchetTransition(base?: Tc1807CredentialDiscoveryRatchet, current?: Tc1807CredentialDiscoveryRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1807CredentialDiscoveryRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-1807 credential discovery ratchet may be introduced once and cannot change later.");
   }
 }
 
