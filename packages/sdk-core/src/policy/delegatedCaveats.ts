@@ -81,9 +81,13 @@ export function foldSqlName(name: string): string {
   return name.replace(/[A-Z]/g, (letter) => letter.toLowerCase());
 }
 
+// A lone surrogate is not text: UTF-8 encoding would silently turn it into U+FFFD.
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
 function nameRefusal(value: unknown): string | undefined {
   if (typeof value !== "string") return "has an element that is not a string";
   if (value.length === 0) return "has an empty element";
+  if (LONE_SURROGATE.test(value)) return "has an element that is not well-formed text";
   if (textEncoder.encode(value).length > SQL_CAVEAT_MAX_NAME_BYTES) return "has an element that is too long";
   if (value.includes(".")) return "has an element with a dot";
   if (CONTROL.test(value)) return "has an element with a control character";
@@ -181,21 +185,28 @@ export function sqlCaveatContains(parent: SqlCaveatList, child: SqlCaveatList): 
  * no caveats), so this is true for:
  * - some entry is a non-empty object with neither `mode` nor
  *   `constrained-statements` (the delegated form, valid or not);
- * - two or more entries, all empty (`[{}, {}]`: stored as `{"0":{},"1":{}}`).
+ * - two or more entries, all empty (`[{}, {}]`: stored as `{"0":{},"1":{}}`);
+ * - some entry is not a plain object (a `Map`, a class instance, an array, a
+ *   primitive): its keys cannot be read, so it fails closed.
  *
  * `[]`, `[{}]` and profile lists are false. Meant for gates, so it does not
  * require the list to be valid.
  */
 export function sqlCaveatListNeedsDelegatedFeature(list: unknown): boolean {
   if (!Array.isArray(list)) return false;
-  const isEntry = (entry: unknown): entry is object =>
-    entry !== null && typeof entry === "object" && !Array.isArray(entry);
-  const delegatedEntry = list.some((entry: unknown) =>
-    isEntry(entry) &&
+  const entries: unknown[] = list;
+  const plain: object[] = [];
+  for (const entry of entries) {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return true;
+    const prototype = Object.getPrototypeOf(entry);
+    if (prototype !== Object.prototype && prototype !== null) return true;
+    plain.push(entry);
+  }
+  const delegatedEntry = plain.some((entry) =>
     Object.keys(entry).length > 0 &&
     !hasOwn(entry, "mode") &&
     !hasOwn(entry, "constrained-statements")
   );
   if (delegatedEntry) return true;
-  return list.length >= 2 && list.every((entry: unknown) => isEntry(entry) && Object.keys(entry).length === 0);
+  return plain.length >= 2 && plain.every((entry) => Object.keys(entry).length === 0);
 }
