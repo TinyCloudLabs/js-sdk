@@ -669,6 +669,15 @@ function sqlServiceFailure(
 ): OperationExecutionOutcome<never> {
   const auth = authorizationFailure(error, action);
   if (auth !== undefined) return auth;
+  if (isRecord(error) && error.code === "SQL_REQUEST_TOO_LARGE") {
+    return {
+      status: "error",
+      error: operationError(
+        "INPUT_INVALID",
+        "The SQL request is too large. Split the batch into smaller requests.",
+      ),
+    };
+  }
   if (isRecord(error) && error.code === "SQL_RESPONSE_TOO_LARGE") {
     return {
       status: "error",

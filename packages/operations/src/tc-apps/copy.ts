@@ -37,6 +37,7 @@ function missingSchema(error: unknown): boolean {
 export function copyFailure(error: unknown): OperationInvocationError {
   if (isObject(error) && isObject(error.meta) && error.meta.status === 409) return new OperationInvocationError(operationError("NODE_ERROR", "The fast, searchable copy is unavailable and needs the node team. Answer from the records; do not retry or ask for another approval.", { retryable: false, details: { reason: "copy_unavailable" } }));
   if (isObject(error) && error.code === "SQL_RESPONSE_TOO_LARGE") return new OperationInvocationError(operationError("SQL_RESULT_LIMIT_EXCEEDED", "Narrow the fast-copy query to return fewer records or fields."));
+  if (isObject(error) && error.code === "SQL_REQUEST_TOO_LARGE") return new OperationInvocationError(operationError("INPUT_INVALID", "Split the fast-copy batch into smaller requests."));
   return new OperationInvocationError(appsFailure(error));
 }
 async function execute(db: AppsDatabase, sql: string, params: string[] = []): Promise<void> {

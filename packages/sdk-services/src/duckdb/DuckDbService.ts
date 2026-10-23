@@ -139,7 +139,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "query");
+          return await this.handleErrorResponse(response, "query", "read");
         }
 
         const data = (await response.json()) as QueryResponse<T>;
@@ -174,7 +174,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "queryArrow");
+          return await this.handleErrorResponse(response, "queryArrow", "read");
         }
 
         const buffer = await response.arrayBuffer();
@@ -217,7 +217,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "execute");
+          return await this.handleErrorResponse(response, "execute", duckDbSizeClass(sql));
         }
 
         const data = (await response.json()) as ExecuteResponse;
@@ -258,7 +258,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "batch");
+          return await this.handleErrorResponse(response, "batch", "write");
         }
 
         const data = (await response.json()) as BatchResponse;
@@ -300,7 +300,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "executeStatement");
+          return await this.handleErrorResponse(response, "executeStatement", "write");
         }
 
         const data = (await response.json()) as
@@ -339,7 +339,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "describe");
+          return await this.handleErrorResponse(response, "describe", "read");
         }
 
         const data = (await response.json()) as SchemaInfo;
@@ -371,7 +371,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "export");
+          return await this.handleErrorResponse(response, "export", "read");
         }
 
         const blob = await response.blob();
@@ -413,7 +413,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "import");
+          return await this.handleErrorResponse(response, "import", "write");
         }
 
         return ok(undefined);
@@ -447,7 +447,8 @@ export class DuckDbService extends BaseService implements IDuckDbService {
 
   private async handleErrorResponse(
     response: FetchResponse,
-    operation: string
+    operation: string,
+    statementClass: SizeClass,
   ): Promise<Result<never>> {
     const errorText = await response.text();
     const meta = responseErrorMeta(response.status, response.statusText, errorText);
@@ -466,17 +467,13 @@ export class DuckDbService extends BaseService implements IDuckDbService {
 
     const errorBody = parseServiceErrorBody(errorText);
 
-    const errorCode = this.mapHttpStatusToErrorCode(
-      response.status,
-      errorBody.error
-    );
-    const message = formatServiceResponseError(
-      "DuckDB",
-      operation,
-      response.status,
-      errorText,
-      errorBody,
-    );
+    const sizeKind = response.status === 413 ? duckDbSizeKind(errorText, statementClass) : undefined;
+    const errorCode = sizeKind === "request"
+      ? ErrorCodes.DUCKDB_REQUEST_TOO_LARGE
+      : this.mapHttpStatusToErrorCode(response.status, errorBody.error);
+    const message = sizeKind === "request"
+      ? requestTooLargeMessage("DuckDB", operation)
+      : formatServiceResponseError("DuckDB", operation, response.status, errorText, errorBody);
 
     if (response.status === 401) {
       const { resource, action } = parseAuthError(errorText);
@@ -513,4 +510,38 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         return ErrorCodes.NETWORK_ERROR;
     }
   }
+}
+
+type SizeClass = "read" | "write" | "ambiguous";
+
+// The node names the cause with a stable code before the first colon of a 413
+// body. Without a code (older nodes), the statement decides: reads answer with
+// the response size, writes with the request size. Ambiguous statements (WITH,
+// EXPLAIN, ...) use the node's envelope text, else the response size.
+const DUCKDB_SIZE_CODES = {
+  request: "duckdb_request_too_large",
+  response: "duckdb_response_too_large",
+} as const;
+
+function duckDbSizeClass(sql: string): SizeClass {
+  // Skip leading whitespace and comments, as the SQL path does.
+  const body = sql.replace(/^(?:\s+|--[^\n]*|\/\*[\s\S]*?\*\/)*/, "");
+  const token = /^[A-Za-z_]+/.exec(body)?.[0].toLowerCase();
+  if (token === "select" || token === "values") return "read";
+  if (token === "with" || token === "explain" || token === "show" || token === "describe") return "ambiguous";
+  return "write";
+}
+
+function duckDbSizeKind(errorText: string, statementClass: SizeClass): "request" | "response" {
+  const colon = errorText.indexOf(":");
+  const code = colon === -1 ? "" : errorText.slice(0, colon).trim();
+  if (code === DUCKDB_SIZE_CODES.request) return "request";
+  if (code === DUCKDB_SIZE_CODES.response) return "response";
+  if (statementClass === "read") return "response";
+  if (statementClass === "write") return "request";
+  return errorText.includes("envelope limit") ? "request" : "response";
+}
+
+function requestTooLargeMessage(label: string, operation: string): string {
+  return `${label} ${operation} failed: request is too large. Split the batch into smaller requests.`;
 }

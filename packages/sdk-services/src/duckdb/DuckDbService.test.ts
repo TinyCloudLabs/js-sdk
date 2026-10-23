@@ -4,6 +4,7 @@ import type {
   FetchResponse,
   IServiceContext,
 } from "../types";
+import { ErrorCodes } from "../types";
 import { DuckDbService } from "./DuckDbService";
 import { DuckDbAction } from "./types";
 
@@ -124,5 +125,93 @@ describe("DuckDbService permissions (TC-114)", () => {
       name: "insert_row",
       params: ["hello"],
     });
+  });
+});
+
+describe("DuckDbService 413 request vs response classification", () => {
+  function serviceAnswering(body: string): DuckDbService {
+    const service = new DuckDbService();
+    service.initialize(
+      createContext(
+        async () => response(false, 413, body, "Payload Too Large"),
+        [],
+      ),
+    );
+    return service;
+  }
+
+  test("coded request 413 maps to DUCKDB_REQUEST_TOO_LARGE with split guidance", async () => {
+    const service = serviceAnswering(
+      "duckdb_request_too_large: JSON body exceeds complete envelope limit (limit 1024 bytes)",
+    );
+
+    const result = await service.batch([{ sql: "INSERT INTO notes VALUES (1)" }]);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.DUCKDB_REQUEST_TOO_LARGE);
+      expect(result.error.message).toBe(
+        "DuckDB batch failed: request is too large. Split the batch into smaller requests.",
+      );
+    }
+  });
+
+  test("coded response 413 stays DUCKDB_RESPONSE_TOO_LARGE even for a write statement", async () => {
+    const service = serviceAnswering(
+      "duckdb_response_too_large: Response too large: 2048 bytes (limit 1024 bytes)",
+    );
+
+    const result = await service.execute("INSERT INTO notes VALUES (1)");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.DUCKDB_RESPONSE_TOO_LARGE);
+    }
+  });
+
+  test("uncoded 413 on a write statement maps to DUCKDB_REQUEST_TOO_LARGE", async () => {
+    const service = serviceAnswering("JSON body exceeds complete envelope limit");
+
+    const result = await service.batch([{ sql: "INSERT INTO notes VALUES (1)" }]);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.DUCKDB_REQUEST_TOO_LARGE);
+    }
+  });
+
+  test("uncoded 413 on a read statement maps to DUCKDB_RESPONSE_TOO_LARGE", async () => {
+    const service = serviceAnswering("Response too large: 2048 bytes");
+
+    const result = await service.query("SELECT * FROM big");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.DUCKDB_RESPONSE_TOO_LARGE);
+    }
+  });
+
+  test("uncoded 413 on a WITH statement uses the envelope text to pick request", async () => {
+    const service = serviceAnswering("JSON body exceeds complete envelope limit");
+
+    const result = await service.execute(
+      "WITH src AS (SELECT 1 AS id) INSERT INTO notes (id) SELECT id FROM src",
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.DUCKDB_REQUEST_TOO_LARGE);
+    }
+  });
+
+  test("uncoded 413 on a WITH statement without envelope text stays a response error", async () => {
+    const service = serviceAnswering("Response too large: 2048 bytes");
+
+    const result = await service.execute("WITH src AS (SELECT 1 AS id) SELECT id FROM src");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.DUCKDB_RESPONSE_TOO_LARGE);
+    }
   });
 });

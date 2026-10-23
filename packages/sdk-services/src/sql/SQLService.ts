@@ -178,7 +178,7 @@ export class SQLService extends BaseService implements ISQLService {
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "query", dbName, [action]);
+          return await this.handleErrorResponse(response, "query", dbName, [action], "read");
         }
 
         const data = (await response.json()) as QueryResponse<T>;
@@ -228,7 +228,7 @@ export class SQLService extends BaseService implements ISQLService {
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "execute", dbName, requestedActions);
+          return await this.handleErrorResponse(response, "execute", dbName, requestedActions, sqlSizeClass(sql));
         }
 
         const data = (await response.json()) as ExecuteResponse;
@@ -262,7 +262,7 @@ export class SQLService extends BaseService implements ISQLService {
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "batch", dbName, requestedActions);
+          return await this.handleErrorResponse(response, "batch", dbName, requestedActions, "write");
         }
 
         const data = (await response.json()) as BatchResponse;
@@ -306,7 +306,7 @@ export class SQLService extends BaseService implements ISQLService {
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "executeStatement", dbName, [SQLAction.WRITE]);
+          return await this.handleErrorResponse(response, "executeStatement", dbName, [SQLAction.WRITE], "write");
         }
 
         const data = (await response.json()) as
@@ -345,7 +345,7 @@ export class SQLService extends BaseService implements ISQLService {
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "export", dbName, [SQLAction.READ]);
+          return await this.handleErrorResponse(response, "export", dbName, [SQLAction.READ], "read");
         }
 
         // FetchResponse doesn't expose blob(), so access it from the
@@ -556,6 +556,7 @@ export class SQLService extends BaseService implements ISQLService {
     operation: string,
     dbName: string,
     requestedActions: readonly string[],
+    statementClass: SizeClass,
   ): Promise<Result<never>> {
     const errorText = await response.text();
     const meta = responseErrorMeta(response.status, response.statusText, errorText);
@@ -574,17 +575,13 @@ export class SQLService extends BaseService implements ISQLService {
 
     const errorBody = parseServiceErrorBody(errorText);
 
-    const errorCode = this.mapHttpStatusToErrorCode(
-      response.status,
-      errorBody.error
-    );
-    const message = formatServiceResponseError(
-      "SQL",
-      operation,
-      response.status,
-      errorText,
-      errorBody,
-    );
+    const sizeKind = response.status === 413 ? sqlSizeKind(errorText, statementClass) : undefined;
+    const errorCode = sizeKind === "request"
+      ? ErrorCodes.SQL_REQUEST_TOO_LARGE
+      : this.mapHttpStatusToErrorCode(response.status, errorBody.error);
+    const message = sizeKind === "request"
+      ? requestTooLargeMessage("SQL", operation)
+      : formatServiceResponseError("SQL", operation, response.status, errorText, errorBody);
 
     if (response.status === 401) {
       const { action } = parseAuthError(errorText);
@@ -656,6 +653,38 @@ function firstSqlToken(sql: string): string | undefined {
 
   const match = /^[A-Za-z_]+/.exec(sql.slice(index));
   return match?.[0].toLowerCase();
+}
+
+type SizeClass = "read" | "write" | "ambiguous";
+
+// The node names the cause with a stable code before the first colon of a 413
+// body. Without a code (older nodes), the statement decides: reads answer with
+// the response size, writes with the request size. Ambiguous statements (WITH,
+// EXPLAIN, ...) use the node's envelope text, else the response size.
+const SQL_SIZE_CODES = {
+  request: "sql_request_too_large",
+  response: "sql_response_too_large",
+} as const;
+
+function sqlSizeClass(sql: string): SizeClass {
+  const token = firstSqlToken(sql);
+  if (token === "select" || token === "values") return "read";
+  if (token === "with" || token === "explain" || token === "show" || token === "describe") return "ambiguous";
+  return "write";
+}
+
+function sqlSizeKind(errorText: string, statementClass: SizeClass): "request" | "response" {
+  const colon = errorText.indexOf(":");
+  const code = colon === -1 ? "" : errorText.slice(0, colon).trim();
+  if (code === SQL_SIZE_CODES.request) return "request";
+  if (code === SQL_SIZE_CODES.response) return "response";
+  if (statementClass === "read") return "response";
+  if (statementClass === "write") return "request";
+  return errorText.includes("envelope limit") ? "request" : "response";
+}
+
+function requestTooLargeMessage(label: string, operation: string): string {
+  return `${label} ${operation} failed: request is too large. Split the batch into smaller requests.`;
 }
 
 function validateMigrationOptions(options: SqlMigrationApplyOptions): string | null {
