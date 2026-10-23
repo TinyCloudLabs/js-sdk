@@ -134,8 +134,18 @@ tc courier join --resume
   about 10 minutes it prints the resume command and exits. `join --resume`
   continues a pending join without sending a second hello.
 - If a hello is already stored for the invite and it is not the one this
-  machine wrote, or cannot be read back, `join` stops with `hello-exists`. Ask
-  the inviter for a new invite.
+  machine wrote, or cannot be read back, `join` does not write over it. It
+  keeps polling `out/welcome.json` and pairs only if the Welcome is addressed to
+  this courier and comes from the inviter pinned when the invite was accepted.
+  A Welcome that fails those checks is ignored. If none arrives before the
+  invite expires, `join` stops with `hello-exists` and says to ask the inviter
+  for a new invite, and to run `courier revoke <handle>` first if that is
+  refused with "already exists". `join --resume` re-enters the wait and never
+  writes again.
+- A new invite from the same inviter replaces the unfinished pairing an earlier
+  failed `join` left behind (and drops that join's state); a paired peer under
+  the handle still blocks. `invite revoke` frees a handle whose pairing never
+  started.
 - A hello's credential and possession proof must belong to the courier named in
   its pairing artifact; otherwise `watch` holds it (`holder-mismatch`).
 - `join --stdin` and `join --file` read the invite string without putting it
@@ -148,9 +158,15 @@ tc courier join --resume
   holds a hello for such a handle instead of pairing it, so a new peer never
   inherits an old entry's trust. `invite approve` refuses it too. Remove the entry
   to continue. Courier checks `<COURIER_HOME>/peers.json`,
-  `<COURIER_HOME>/intake/peers.json` and a `--peers-file <path>` given to `invite`,
-  `invite approve` or `watch`. A peers file that exists but cannot be read as a
-  JSON object also refuses (`peers-unreadable`).
+  `<COURIER_HOME>/intake/peers.json` and the file named by `--peers-file <path>`
+  (on `invite`, `invite approve` or `watch`) or, without the flag, by
+  `COURIER_PEERS_FILE`; the flag wins. The named path must be absolute and the
+  file must exist, otherwise the command stops with an error (`watch
+  --install-systemd` checks it too and writes `COURIER_PEERS_FILE` into the
+  unit). A default location that is absent counts as no entry. A peers file
+  that exists but cannot be read as a JSON object, or a named file that has
+  gone missing, refuses with `peers-unreadable`. Courier has no stored setting
+  for this path.
 - `watch` also looks for a hello on every poll, so a hello written while the
   watcher was not subscribed is still picked up.
 

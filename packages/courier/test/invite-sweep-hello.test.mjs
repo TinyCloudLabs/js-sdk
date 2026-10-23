@@ -156,3 +156,30 @@ test('approve returns the tier the record carries, and the summary shows the req
   await w.sweep();
   assert.equal(await w.approve(second, 'strict'), 'strict');
 });
+
+test('a second handler that finds the invite consumed leaves the hello in place while the first is still deciding', async () => {
+  const id = invite();
+  await writeHello(id);
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const slow = new InviteWatcher({
+    node: { kv },
+    profile: () => ({ version: 3, host: 'https://openkey.example.test', openkeyHost: 'https://openkey.example.test', label: 'sam', courierDid: SAM_COURIER, ownerDid: SAM_OWNER, spaceId: `tinycloud:pkh:eip155:1:${SAM_ADDR}:agents`, status: 'ready', peers: {} }),
+    log: () => undefined,
+    notify: async () => undefined,
+    now: () => new Date(clock),
+    verify: async () => { await gate; return { ok: true, address: EMAIL, credentialId: 'cred-1', issuedAt: ISSUED }; },
+    accept: async () => { accepts += 1; return C_ARTIFACT; },
+    deleteSealed: async () => undefined,
+    peersFiles: [],
+  });
+  const first = slow.onHello(id);
+  const second = slow.onHello(id);
+  await second;
+  assert.equal(readRecord(id).status, 'consumed');
+  assert.equal(kv.rows.has(`${inviteFolder(id)}in/hello.json`), true);
+  release();
+  await first;
+  assert.equal(readRecord(id).status, 'completed');
+  assert.equal(accepts, 1);
+});

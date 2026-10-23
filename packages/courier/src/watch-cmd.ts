@@ -199,9 +199,11 @@ async function installService(args: ParsedArgs, config: WakeConfig): Promise<voi
     throw new CourierError('usage', '--install-systemd installs on Linux only; use --dry-run to print the unit and commands here.');
   }
   loadProfile(); // refuse to install a watcher for a profile that was never initialised
+  peersFilesFor(value(args, 'peers-file')); // refuse a peers file the service could not use
   const name = serviceName(value(args, 'name'));
   const env: Record<string, string> = { COURIER_HOME: profileDir(), PATH: process.env.PATH ?? '/usr/bin:/bin' };
   if (process.env.COURIER_HOST) env.COURIER_HOST = process.env.COURIER_HOST;
+  if (process.env.COURIER_PEERS_FILE) env.COURIER_PEERS_FILE = process.env.COURIER_PEERS_FILE;
   const spec: ServiceSpec = {
     argv: serviceArgv(args, config), cwd: config.cwd, env, logFile: path.join(profileDir(), `watch${name ? `-${name}` : ''}.log`), name,
   };

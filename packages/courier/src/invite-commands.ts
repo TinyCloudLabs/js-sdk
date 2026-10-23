@@ -21,7 +21,8 @@ import { cmd } from './program.js';
 import { credentialDigest, oneTimeKeyHash, signPossession, verifyPossession } from './possession.js';
 import { loadKey, saveProfile, secureSubdir, writeSecure, type Profile } from './profile.js';
 import { delIfPresent, getJson, putCreate } from './store.js';
-import { InviteWatcher, PEERS_ENTRY_MESSAGE, eventLog, listRecords, peersEntryProblem, peersFilesFor, readJson, readRecord, reasonOf, recordPath, requestedTier, writeRecord, type AcceptedTier, type InviteRecord } from './invite-watch.js';
+import { InviteWatcher, peersMessage, eventLog, listRecords, peersEntryProblem, peersFilesFor, readJson, readRecord, reasonOf, recordPath, requestedTier, writeRecord, type AcceptedTier, type InviteRecord } from './invite-watch.js';
+import { isRecord } from './a2a.js';
 import { jsonLineLog } from './wake.js';
 
 const INVITE_ID = /^[a-z2-7]{26}$/;
@@ -39,10 +40,11 @@ interface JoinState {
   inviteId: string;
   blob: string;
   helloText: string;
-  stage: 'hello-ready' | 'hello-sent';
+  /** `hello-unconfirmed`: a hello was already stored that could not be confirmed as ours; only a verified Welcome ends the wait. Never re-puts. */
+  stage: 'hello-ready' | 'hello-sent' | 'hello-unconfirmed';
 }
 
-const inviteUsage = () => `Usage: ${cmd('invite <handle> --email <address> [--tier strict|trusted] [--expect-owner <did>] [--ttl 24h] [--call-me <handle>] [--also-ask] [--invites-public-dir d]')}`;
+const inviteUsage = () => `Usage: ${cmd('invite <handle> --email <address> [--tier strict|trusted] [--expect-owner <did>] [--ttl 24h] [--call-me <handle>] [--also-ask] [--invites-public-dir d] [--peers-file f]')}`;
 
 /** Owner and tier flags. No flags: no owner check, strict. `--tier trusted` is a request the owner confirms by hand. */
 export function requestedOwnerAndTier(args: ParsedArgs): { tier: RequestedTier; expectOwner: string | null } {
@@ -137,7 +139,7 @@ export async function cmdInvite(args: ParsedArgs): Promise<void> {
 async function inviteCreate(args: ParsedArgs): Promise<void> {
   const handle = args.positional[0] ?? fail('usage', inviteUsage());
   const peersProblem = peersEntryProblem(handle, peersFilesFor(args.get('peers-file')));
-  if (peersProblem !== undefined) fail(peersProblem, PEERS_ENTRY_MESSAGE);
+  if (peersProblem !== undefined) fail(peersProblem, peersMessage(peersProblem));
   const { tier, expectOwner } = requestedOwnerAndTier(args);
   const { profile, node } = await ctx();
   const spaceId = profile.spaceId ?? fail('no-space', `No TinyCloud space yet; run \`${cmd('init')}\` first.`);
@@ -259,7 +261,7 @@ function inviteWatcher(profile: Profile, node: TinyCloudNode, peersFile?: string
 
 /** `trusted` is recorded as a request for you to decide on. It does not grant trust; the peer starts strict. */
 async function inviteApprove(args: ParsedArgs): Promise<void> {
-  const inviteId = requireInviteId(args.positional[1], `Usage: ${cmd('invite approve <invite-id> [--tier strict|trusted]')}`);
+  const inviteId = requireInviteId(args.positional[1], `Usage: ${cmd('invite approve <invite-id> [--tier strict|trusted] [--peers-file f]')}`);
   const flag = args.get('tier');
   const tier = flag === undefined ? undefined : requestedTier(flag);
   const { profile, node } = await ctx();
@@ -328,9 +330,7 @@ async function joinStart(args: ParsedArgs, input: string): Promise<void> {
   if (readJoin(blob.inviteId)) {
     fail('join-exists', `A join for this invite is already pending; run \`${cmd(`join --resume ${blob.inviteId}`)}\`.`);
   }
-  if (profile.peers[blob.artifactA.callMe]) {
-    fail('usage', `Peer "${blob.artifactA.callMe}" already exists; this invite would use the same handle.`);
-  }
+  claimCallMe(profile, blob);
 
   const credential = credentials
     ? await credentials.getEmailProof(blob.expectEmail, { courierDid: profile.courierDid, inviteId: blob.inviteId })
@@ -434,11 +434,44 @@ function possessionFor(blob: InviteBlob, holderDid: string, credential: string, 
 }
 
 /**
- * Writes hello once. Create-only. A conflict is accepted only when the object already there is byte-for-byte this hello (an earlier attempt landed).
- * Anything else, or an object this key cannot read, means another writer got there first: refused, and the join stays at hello-ready.
+ * Checks that the handle this invite asks us to use for the inviter is free. A pairing with this same inviter that never completed (awaiting-C) is what an
+ * earlier failed join left behind: the new invite replaces it and drops that join's state. A paired peer, or any other peer under the handle, still blocks.
+ * The earlier join's outgoing read grant is no longer tracked and ends at its own expiry (at most 7 days).
+ */
+export function claimCallMe(profile: Profile, blob: InviteBlob): void {
+  const leftover = profile.peers[blob.artifactA.callMe];
+  if (!leftover) return;
+  const sameInviter = leftover.status === 'awaiting-C' && leftover.courierDid === blob.artifactA.from.courier && leftover.ownerDid === blob.artifactA.from.owner;
+  if (!sameInviter) fail('usage', `Peer "${blob.artifactA.callMe}" already exists; this invite would use the same handle.`);
+  dropStaleJoins(blob);
+}
+
+/** Removes pending joins of other invites from the same inviter under the same handle: their invites are closed once a newer one exists. */
+function dropStaleJoins(blob: InviteBlob): void {
+  for (const other of listJoins()) {
+    if (other.inviteId === blob.inviteId) continue;
+    try {
+      const parsed: unknown = JSON.parse(other.blob);
+      const old = isRecord(parsed) && isRecord(parsed.artifactA) ? parsed.artifactA : undefined;
+      const oldCourier = old !== undefined && isRecord(old.from) ? old.from.courier : undefined;
+      if (old?.callMe === blob.artifactA.callMe && oldCourier === blob.artifactA.from.courier) removeJoin(other.inviteId);
+    } catch {
+      // A join file that does not parse is left for the owner.
+    }
+  }
+}
+
+const helloUnconfirmedMessage = (blob: InviteBlob): string =>
+  'Your hello could not be confirmed and no welcome arrived before the invite expired. Ask the inviter for a new invite; if that is refused with '
+  + `"already exists", ask them to run \`${cmd(`revoke ${blob.artifactA.peer}`)}\` first.`;
+
+/**
+ * Writes hello once. Create-only. A conflict is accepted as sent only when the object already there is byte-for-byte this hello (an earlier attempt landed).
+ * A different object, or one this key cannot read back, may be another writer's or our own whose response was lost: the join moves to hello-unconfirmed
+ * and waits for a Welcome that acceptC verifies. It never writes over the stored object, and a resume never writes again.
  */
 export async function sendHello(blob: InviteBlob, state: JoinState, io: JoinIO = productionIO): Promise<void> {
-  if (state.stage === 'hello-sent') return;
+  if (state.stage === 'hello-sent' || state.stage === 'hello-unconfirmed') return;
   const hello: unknown = JSON.parse(state.helloText);
   try {
     await putCreate(io.kv(blob, 'put'), blob.helloKey, hello);
@@ -451,7 +484,10 @@ export async function sendHello(blob: InviteBlob, state: JoinState, io: JoinIO =
       existing = undefined;
     }
     if (existing === undefined || JSON.stringify(existing) !== JSON.stringify(hello)) {
-      fail('hello-exists', 'A hello is already stored for this invite and it is not the one this machine wrote, or it cannot be checked. Ask the inviter for a new invite.');
+      state.stage = 'hello-unconfirmed';
+      writeJoin(state);
+      console.log("A hello is already stored for this invite and this machine cannot confirm it is its own. Waiting for the inviter's welcome; nothing is written over it.");
+      return;
     }
   }
   state.stage = 'hello-sent';
@@ -460,11 +496,30 @@ export async function sendHello(blob: InviteBlob, state: JoinState, io: JoinIO =
 
 /** Polls out/welcome.json until the inviter answers, the invite expires, or the wait cap passes. */
 export async function driveJoin(profile: Profile, node: TinyCloudNode, blob: InviteBlob, state: JoinState, io: JoinIO = productionIO): Promise<void> {
-  const deadline = Math.min(Date.now() + io.waitMs, Date.parse(blob.expiresAt));
+  const unconfirmed = state.stage === 'hello-unconfirmed';
+  const expiresAt = Date.parse(blob.expiresAt);
+  const deadline = Math.min(Date.now() + io.waitMs, expiresAt);
   const kv = io.kv(blob, 'read');
   for (;;) {
     const got = await getJson(kv, `${blob.outPrefix}welcome.json`);
-    if (got) {
+    if (got && unconfirmed) {
+      // Our hello is not confirmed to be the one stored, so the Welcome may belong to someone else's hello. Only one that acceptC accepts
+      // (this courier as audience, the pinned inviter as issuer) pairs; anything else is ignored and the wait goes on.
+      let paired: Record<string, unknown> | undefined;
+      try {
+        const welcome = parseWelcome(JSON.stringify(got.value));
+        if (welcome.inviteId === blob.inviteId && welcome.tier !== 'rejected' && welcome.artifactC !== undefined) {
+          paired = await io.acceptC(profile, node, welcome.artifactC);
+        }
+      } catch {
+        paired = undefined;
+      }
+      if (paired !== undefined) {
+        printJson(paired);
+        removeJoin(state.inviteId);
+        return;
+      }
+    } else if (got) {
       const welcome = parseWelcome(JSON.stringify(got.value));
       if (welcome.inviteId !== blob.inviteId) fail('bad-welcome', 'Welcome is for a different invite.');
       if (welcome.tier === 'rejected') {
@@ -478,6 +533,7 @@ export async function driveJoin(profile: Profile, node: TinyCloudNode, blob: Inv
       return;
     }
     if (Date.now() + io.pollMs >= deadline) {
+      if (unconfirmed && Date.now() + io.pollMs >= expiresAt) fail('hello-exists', helloUnconfirmedMessage(blob));
       console.log(`No reply yet. Run \`${cmd(`join --resume ${blob.inviteId}`)}\` to keep waiting.`);
       return;
     }

@@ -5,7 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { inviteRecordsFor, storedRecord } from '../dist/invite-commands.js';
-import { InviteWatcher, peersEntryProblem, readRecord, recordPath } from '../dist/invite-watch.js';
+import { InviteWatcher, peersEntryProblem, peersFilesFor, readRecord, recordPath } from '../dist/invite-watch.js';
 import { inviteFolder } from '../dist/invite-schema.js';
 import { newInviteId } from '../dist/invite-blob.js';
 import { writeSecure } from '../dist/profile.js';
@@ -34,7 +34,8 @@ let accepted;
 beforeEach(() => {
   home = fs.mkdtempSync(path.join('/var/tmp', 'courier-peers-guard-home-'));
   sentinel = fs.mkdtempSync(path.join('/var/tmp', 'courier-peers-guard-sentinel-'));
-  saved = { COURIER_HOME: process.env.COURIER_HOME, HOME: process.env.HOME };
+  saved = { COURIER_HOME: process.env.COURIER_HOME, HOME: process.env.HOME, COURIER_PEERS_FILE: process.env.COURIER_PEERS_FILE };
+  delete process.env.COURIER_PEERS_FILE;
   process.env.COURIER_HOME = home;
   process.env.HOME = sentinel;
   kv = memoryKv();
@@ -175,8 +176,10 @@ test('a handle without an entry still pairs on a valid hello', async () => {
   assert.deepEqual(accepted, [ALICE_COURIER]);
 });
 
-function runCli(args) {
-  return spawnSync(process.execPath, [CLI, ...args], { env: { ...process.env, COURIER_HOME: home }, encoding: 'utf8' });
+function runCli(args, extraEnv = {}) {
+  const env = { ...process.env, COURIER_HOME: home };
+  delete env.COURIER_PEERS_FILE;
+  return spawnSync(process.execPath, [CLI, ...args], { env: { ...env, ...extraEnv }, encoding: 'utf8' });
 }
 
 test('courier invite refuses a handle that has a peers.json entry before touching the profile', () => {
@@ -195,4 +198,110 @@ test('courier invite --peers-file adds a custom location to the check', () => {
   writePeers({ hunter: { tier: 'trusted' } }, custom);
   const refused = runCli(['invite', 'hunter', '--email', 'hunter@example.test', '--peers-file', custom]);
   assert.match(refused.stderr, /^courier: \[peers-entry-exists\]/);
+});
+
+// The gate's file lives outside COURIER_HOME. COURIER_PEERS_FILE lets every invite, approve and watch see it without a flag on each call.
+const gateFile = () => path.join(home, 'gate', 'peers.json');
+
+function watcherWith(files) {
+  return new InviteWatcher({
+    node: { kv },
+    profile: () => ({ version: 3, host: 'https://openkey.example.test', openkeyHost: 'https://openkey.example.test', label: 'sam', courierDid: SAM_COURIER, ownerDid: SAM_OWNER, spaceId: `tinycloud:pkh:eip155:1:${SAM_ADDR}:agents`, status: 'ready', peers: {} }),
+    log: () => undefined,
+    notify: async () => undefined,
+    now: () => new Date(NOW),
+    verify: async () => ({ ok: true, address: EMAIL, credentialId: 'cred-1', issuedAt: ISSUED }),
+    accept: async (_profile, _node, artifact) => { accepted.push(artifact.from.courier); return C_ARTIFACT; },
+    deleteSealed: async () => undefined,
+    peersFiles: files,
+  });
+}
+
+test('COURIER_PEERS_FILE: a reused handle listed in the gate file is held, both for a new DID and the same DID', async () => {
+  writePeers({ alice: { tier: 'trusted' } }, gateFile());
+  process.env.COURIER_PEERS_FILE = gateFile();
+  for (const who of [{ courier: MALLORY_COURIER, owner: MALLORY_OWNER }, { courier: ALICE_COURIER, owner: ALICE_OWNER }]) {
+    const id = openInvite();
+    await helloFrom(id, who);
+    await watcherWith(peersFilesFor()).onHello(id);
+    assert.equal(readRecord(id).status, 'held');
+    assert.equal(readRecord(id).held.reason, 'peers-entry-exists');
+  }
+  assert.deepEqual(accepted, []);
+});
+
+test('COURIER_PEERS_FILE is honoured by courier invite without any flag', () => {
+  writePeers({ hunter: { tier: 'trusted' } }, gateFile());
+  const refused = runCli(['invite', 'hunter', '--email', 'hunter@example.test'], { COURIER_PEERS_FILE: gateFile() });
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /^courier: \[peers-entry-exists\]/);
+  const unset = runCli(['invite', 'hunter', '--email', 'hunter@example.test']);
+  assert.match(unset.stderr, /^courier: \[no-profile\]/);
+});
+
+test('precedence: --peers-file wins over COURIER_PEERS_FILE; an empty COURIER_PEERS_FILE is unset', () => {
+  const fromEnv = path.join(home, 'env', 'peers.json');
+  const fromFlag = path.join(home, 'flag', 'peers.json');
+  writePeers({ hunter: { tier: 'trusted' } }, fromEnv);
+  writePeers({ other: { tier: 'strict' } }, fromFlag);
+  process.env.COURIER_PEERS_FILE = fromEnv;
+  assert.equal(peersFilesFor(fromFlag)[0].path, fromFlag);
+  assert.equal(peersFilesFor(fromFlag).some((f) => f.path === fromEnv), false);
+  assert.equal(peersFilesFor()[0].path, fromEnv);
+  const withFlag = runCli(['invite', 'hunter', '--email', 'hunter@example.test', '--peers-file', fromFlag], { COURIER_PEERS_FILE: fromEnv });
+  assert.match(withFlag.stderr, /^courier: \[no-profile\]/);
+  process.env.COURIER_PEERS_FILE = '';
+  assert.equal(peersFilesFor().length, 2);
+});
+
+test('an explicit peers file that is empty, relative or missing is an error, never ignored', () => {
+  writePeers({ hunter: { tier: 'trusted' } }, gateFile());
+  const base = ['invite', 'hunter', '--email', 'hunter@example.test'];
+  const noValue = runCli([...base, '--peers-file']);
+  assert.match(noValue.stderr, /^--peers-file needs a path/);
+  const empty = runCli([...base, '--peers-file=']);
+  assert.match(empty.stderr, /^--peers-file needs a path/);
+  const relative = runCli([...base, '--peers-file', 'gate/peers.json']);
+  assert.match(relative.stderr, /^--peers-file must be an absolute path/);
+  const missing = runCli([...base, '--peers-file', path.join(home, 'gate', 'typo.json')]);
+  assert.match(missing.stderr, /^courier: \[peers-unreadable\] --peers-file names a file that does not exist/);
+  const envRelative = runCli(base, { COURIER_PEERS_FILE: 'gate/peers.json' });
+  assert.match(envRelative.stderr, /^COURIER_PEERS_FILE must be an absolute path/);
+  const envMissing = runCli(base, { COURIER_PEERS_FILE: path.join(home, 'gate', 'typo.json') });
+  assert.match(envMissing.stderr, /^courier: \[peers-unreadable\] COURIER_PEERS_FILE names a file that does not exist/);
+  for (const result of [noValue, empty, relative, envRelative]) assert.equal(result.status, 2);
+  for (const result of [missing, envMissing]) assert.equal(result.status, 1);
+});
+
+test('a required peers file that disappears later refuses, while a missing default file is still no entry', () => {
+  const gone = path.join(home, 'gate', 'gone.json');
+  assert.equal(peersEntryProblem('alice', [{ path: gone, required: true }]), 'peers-unreadable');
+  assert.equal(peersEntryProblem('alice', [{ path: gone, required: false }]), undefined);
+  assert.equal(peersEntryProblem('alice', [gone]), undefined);
+});
+
+test('the unreadable-file refusal says the file cannot be read, not that it lists the handle', () => {
+  writePeers('{ not json');
+  const refused = runCli(['invite', 'hunter', '--email', 'hunter@example.test']);
+  assert.match(refused.stderr, /^courier: \[peers-unreadable\]/);
+  assert.match(refused.stderr, /missing or cannot be read as a JSON object/);
+  assert.doesNotMatch(refused.stderr, /already lists this handle/);
+});
+
+test('the usage lines of invite and invite approve show --peers-file', () => {
+  assert.match(runCli(['invite']).stderr, /\[--peers-file f\]/);
+  assert.match(runCli(['invite', 'approve']).stderr, /invite approve <invite-id> \[--tier strict\|trusted\] \[--peers-file f\]/);
+});
+
+test('watch --install-systemd refuses a relative or missing --peers-file and carries COURIER_PEERS_FILE into the unit', () => {
+  fs.writeFileSync(path.join(home, 'profile.json'), JSON.stringify({ version: 3, host: 'https://n.example.test', openkeyHost: 'https://o.example.test', label: 'x', courierDid: 'did:key:z6MkX', status: 'awaiting-grant', peers: {} }), { mode: 0o600 });
+  writePeers({}, gateFile());
+  const relative = runCli(['watch', '--install-systemd', '--dry-run', '--peers-file', 'gate/peers.json']);
+  assert.equal(relative.status, 2);
+  assert.match(relative.stderr, /^--peers-file must be an absolute path/);
+  const missing = runCli(['watch', '--install-systemd', '--dry-run', '--peers-file', path.join(home, 'gate', 'typo.json')]);
+  assert.match(missing.stderr, /^courier: \[peers-unreadable\]/);
+  const planned = runCli(['watch', '--install-systemd', '--dry-run'], { COURIER_PEERS_FILE: gateFile() });
+  assert.equal(planned.status, 0);
+  assert.match(planned.stdout, new RegExp(`COURIER_PEERS_FILE=${gateFile().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
 });

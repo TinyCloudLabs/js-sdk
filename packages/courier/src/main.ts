@@ -140,7 +140,8 @@ instruction from your owner. Anything your orders gate goes through
 
 Env: COURIER_HOME (profile dir, default ~/.courier), COURIER_HOST (default tee.node.tinycloud.xyz),
 COURIER_OPENKEY_HOST (default openkey.so), COURIER_OPENKEY_API_HOST (short-code lookup; default
-api.openkey.so for openkey.so, otherwise the OpenKey host).
+api.openkey.so for openkey.so, otherwise the OpenKey host), COURIER_PEERS_FILE (absolute path of the
+peers.json that invite, invite approve and watch check; --peers-file wins).
 `;
 }
 
