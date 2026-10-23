@@ -13,6 +13,7 @@ import { approvedTc1777Ratchet, validateTc1777RatchetTransition, type Tc1777Ratc
 import { approvedTc1777ExpiryRatchet, validateTc1777ExpiryRatchetTransition, type Tc1777ExpiryRatchet } from "./replica-size-policy";
 import { approvedTc848PanelRatchet, validateTc848PanelRatchetTransition, type Tc848PanelRatchet } from "./replica-size-policy";
 import { approvedTc1781DecryptExpiryRatchet, validateTc1781DecryptExpiryRatchetTransition, type Tc1781DecryptExpiryRatchet } from "./replica-size-policy";
+import { approvedTc1801NonTransferableShareRatchet, validateTc1801NonTransferableShareRatchetTransition, type Tc1801NonTransferableShareRatchet } from "./replica-size-policy";
 import { activeRootCeiling, rootCeilingFor, rootCeilings } from "./replica-size-policy";
 import { approvedTc1443Ratchet, approvedTc1443bRatchet, approvedTc1448Ratchet, approvedTc1466Ratchet, validateTc1443RatchetTransition, validateTc1443bRatchetTransition, validateTc1448RatchetTransition, validateTc1466RatchetTransition, type Tc1443Ratchet, type Tc1443bRatchet, type Tc1448Ratchet, type Tc1466Ratchet } from "./replica-size-policy";
 import { ancestryPins, assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedHardeningRatchet, approvedLogoutRatchet, approvedTc1413Ratchet, approvedTc1424Ratchet, approvedTc1432Ratchet, approvedTc1436Ratchet, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, landingCommit, pinLandedOn, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateLogoutRatchetTransition, validateMasterMergeResolutionTransition, validateTc1413RatchetTransition, validateTc1424RatchetTransition, validateTc1432RatchetTransition, validateTc1436RatchetTransition, type HardeningRatchet, type Ledger, type LogoutRatchet, type MasterMergeResolution, type Tc1413Ratchet, type Tc1424Ratchet, type Tc1432Ratchet, type Tc1436Ratchet } from "./replica-size-policy";
@@ -43,6 +44,7 @@ const historical: Ledger = {
   tc1777ExpiryRatchet: undefined,
   tc848PanelRatchet: undefined,
   tc1781DecryptExpiryRatchet: undefined,
+  tc1801NonTransferableShareRatchet: undefined,
   phase2Ratchet: {
     ...current.phase2Ratchet!,
     toolchain: "Bun 1.4.3; production webpack; gzip -9 -c",
@@ -2079,13 +2081,70 @@ describe("one-hour decrypt default and secret-read coverage (#681) raised root c
   });
 });
 
+describe("non-transferable share option (#687) raised root ceiling ratchet", () => {
+  const row = () => structuredClone(approvedTc1801NonTransferableShareRatchet);
+
+  it("raises only the root ceilings, by the exact canonical CI delta over the previous row, and nothing else", () => {
+    expect(() => validateLedger(current)).not.toThrow();
+    expect(JSON.stringify(current.tc1801NonTransferableShareRatchet)).toBe(JSON.stringify(approvedTc1801NonTransferableShareRatchet));
+    expect(row().root.delta).toEqual({ "index.mjs": 26, "index.cjs": 35 });
+    expect(row().root.ceiling).toEqual({ "index.mjs": 1462375, "index.cjs": 1404597 });
+    for (const format of ["index.mjs", "index.cjs"] as const) {
+      expect(row().root.ceiling[format]).toBe(approvedTc1781DecryptExpiryRatchet.root.ceiling[format] + row().root.delta[format]);
+    }
+    expect(row().firstImport).toEqual(approvedTc1781DecryptExpiryRatchet.firstImport);
+    expect(row().activation).toEqual(approvedTc1781DecryptExpiryRatchet.activation);
+    expect(row().worker).toEqual(approvedTc1781DecryptExpiryRatchet.worker);
+    expect(row().ruling).toBe("Approved by Naomi (2026-10-23, policy review relayed by Amos)");
+    expect(row().base).toBe("51ee7f0e9aa7a382d5150a7f1c20e9b64b36409b");
+    expect(row().canonicalCI.run).toBe("https://github.com/TinyCloudLabs/js-sdk/actions/runs/39896378690");
+    expect(row().canonicalCI.jobs).toHaveLength(2);
+    expect(ancestryPins(current, false)).toContainEqual({
+      row: "tc1801NonTransferableShareRatchet", pin: row().sourceCommits.at(-1)!,
+    });
+  });
+
+  it("refuses one extra byte in any bucket, other CI provenance, or a missing one-hour decrypt default row", () => {
+    const mutations: Array<(changed: Tc1801NonTransferableShareRatchet) => void> = [
+      (changed) => { changed.root.ceiling["index.mjs"]++; },
+      (changed) => { changed.root.ceiling["index.cjs"]++; },
+      (changed) => { changed.root.ceiling["index.cjs"]--; },
+      (changed) => { changed.root.delta["index.mjs"]++; },
+      (changed) => { changed.firstImport.ceiling["replica.cjs"]++; },
+      (changed) => { changed.activation.ceiling["activation.cjs"]++; },
+      (changed) => { changed.worker.ceiling--; },
+      (changed) => { changed.canonicalCI.run = "https://github.com/TinyCloudLabs/js-sdk/actions/runs/1"; },
+      (changed) => { changed.sourceCommits = ["0".repeat(40)]; },
+    ];
+    for (const mutate of mutations) {
+      const ledger = copy(current);
+      const changed = row();
+      mutate(changed);
+      ledger.tc1801NonTransferableShareRatchet = changed;
+      expect(() => validateLedger(ledger)).toThrow();
+    }
+    const withoutPrerequisite = copy(current);
+    delete withoutPrerequisite.tc1781DecryptExpiryRatchet;
+    expect(() => validateLedger(withoutPrerequisite)).toThrow();
+  });
+
+  it("may be introduced once and never changed or removed in a later base", () => {
+    expect(() => validateTc1801NonTransferableShareRatchetTransition(undefined, row())).not.toThrow();
+    expect(() => validateTc1801NonTransferableShareRatchetTransition(row(), row())).not.toThrow();
+    const changed = row();
+    changed.root.ceiling["index.mjs"]++;
+    expect(() => validateTc1801NonTransferableShareRatchetTransition(undefined, changed)).toThrow();
+    expect(() => validateTc1801NonTransferableShareRatchetTransition(row(), undefined)).toThrow();
+  });
+});
+
 describe("the newest root ceiling is the only active one", () => {
   const rowOrder = (ledger: Ledger) => rootCeilings(ledger).map(({ row }) => row);
 
-  it("is the one-hour decrypt default row on master, below the older index.mjs row it would otherwise be shadowed by", () => {
+  it("is the non-transferable share option row on master, below the older index.mjs row it would otherwise be shadowed by", () => {
     expect(() => validateLedger(current)).not.toThrow();
     const active = activeRootCeiling(current)!;
-    expect(active).toEqual({ row: "tc1781DecryptExpiryRatchet", ceiling: approvedTc1781DecryptExpiryRatchet.root.ceiling });
+    expect(active).toEqual({ row: "tc1801NonTransferableShareRatchet", ceiling: approvedTc1801NonTransferableShareRatchet.root.ceiling });
     const older = rootCeilings(current).slice(0, -1);
     expect(older.length).toBeGreaterThan(0);
     expect(older.some((entry) => entry.ceiling["index.mjs"] > active.ceiling["index.mjs"])).toBe(true);
@@ -2098,9 +2157,9 @@ describe("the newest root ceiling is the only active one", () => {
       ceiling["index.cjs"] += 1_000_000;
     }
     const active = activeRootCeiling(ledger)!;
-    expect(active.row).toBe("tc1781DecryptExpiryRatchet");
+    expect(active.row).toBe("tc1801NonTransferableShareRatchet");
     for (const format of ["index.mjs", "index.cjs"] as const) {
-      const newest = approvedTc1781DecryptExpiryRatchet.root.ceiling[format];
+      const newest = approvedTc1801NonTransferableShareRatchet.root.ceiling[format];
       expect(active.ceiling[format]).toBe(newest);
       expect(newest > active.ceiling[format]).toBe(false);
       expect(newest + 1 > active.ceiling[format]).toBe(true);
@@ -2109,8 +2168,8 @@ describe("the newest root ceiling is the only active one", () => {
 
   it("falls back to the newest row still present, and a lone older row is its own history", () => {
     const withoutNewest = copy(current);
-    delete withoutNewest.tc1781DecryptExpiryRatchet;
-    expect(activeRootCeiling(withoutNewest)).toEqual({ row: "tc848PanelRatchet", ceiling: approvedTc848PanelRatchet.root.ceiling });
+    delete withoutNewest.tc1801NonTransferableShareRatchet;
+    expect(activeRootCeiling(withoutNewest)).toEqual({ row: "tc1781DecryptExpiryRatchet", ceiling: approvedTc1781DecryptExpiryRatchet.root.ceiling });
     expect(() => validateLedger(withoutNewest)).not.toThrow();
     expect(activeRootCeiling(historical)).toEqual({ row: "fixRequiredRatchet", ceiling: approvedFixRequiredRatchet.rootCeiling });
     expect(activeRootCeiling({ allowance: current.allowance, entries: [] })).toBeUndefined();
@@ -2128,14 +2187,14 @@ describe("the newest root ceiling is the only active one", () => {
 
   it("fails closed when the active row has no ceiling for a format", () => {
     const missing = copy(current);
-    delete (missing.tc1781DecryptExpiryRatchet!.root.ceiling as Record<string, unknown>)["index.cjs"];
-    expect(rootCeilingFor(missing, "index.cjs")).toEqual({ error: expect.stringContaining("index.cjs: active root row tc1781DecryptExpiryRatchet has no ceiling") });
-    expect(rootCeilingFor(missing, "index.mjs")).toEqual({ row: "tc1781DecryptExpiryRatchet", ceiling: approvedTc1781DecryptExpiryRatchet.root.ceiling["index.mjs"] });
+    delete (missing.tc1801NonTransferableShareRatchet!.root.ceiling as Record<string, unknown>)["index.cjs"];
+    expect(rootCeilingFor(missing, "index.cjs")).toEqual({ error: expect.stringContaining("index.cjs: active root row tc1801NonTransferableShareRatchet has no ceiling") });
+    expect(rootCeilingFor(missing, "index.mjs")).toEqual({ row: "tc1801NonTransferableShareRatchet", ceiling: approvedTc1801NonTransferableShareRatchet.root.ceiling["index.mjs"] });
   });
 
   it("returns the newest row's number for each format on the real ledger", () => {
     for (const format of ["index.mjs", "index.cjs"] as const) {
-      expect(rootCeilingFor(current, format)).toEqual({ row: "tc1781DecryptExpiryRatchet", ceiling: approvedTc1781DecryptExpiryRatchet.root.ceiling[format] });
+      expect(rootCeilingFor(current, format)).toEqual({ row: "tc1801NonTransferableShareRatchet", ceiling: approvedTc1801NonTransferableShareRatchet.root.ceiling[format] });
     }
   });
 
@@ -2145,7 +2204,7 @@ describe("the newest root ceiling is the only active one", () => {
     const filed = Object.keys(current).filter((key) => order.includes(key));
     expect(pinned).toEqual(order);
     expect(filed).toEqual(order);
-    expect(order.at(-1)).toBe("tc1781DecryptExpiryRatchet");
+    expect(order.at(-1)).toBe("tc1801NonTransferableShareRatchet");
   });
 });
 
