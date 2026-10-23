@@ -108,6 +108,7 @@ function appliedClassesAcrossKinds(): Set<string> {
       textCode: "panel.title",
       href: "https://example.com/docs",
       hrefLabelCode: "panel.close",
+      slip: [{ labelCode: "panel.title", value: "rc-1" }],
     });
     for (const el of shadow().querySelectorAll("[class]")) for (const cls of el.classList) applied.add(cls);
     toastStore.dismiss(id);

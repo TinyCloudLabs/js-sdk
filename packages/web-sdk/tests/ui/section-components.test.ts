@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { JSDOM } from "jsdom";
 
-import { confirmBox, detailsDrawer, glanceRow, receiptSlip } from "../../src/ui/sections/ui";
+import { confirmBox, detailsDrawer, glanceRow } from "../../src/ui/sections/ui";
 
 type Loose = Record<PropertyKey, unknown>;
 
@@ -103,18 +103,5 @@ describe("detailsDrawer", () => {
     expect(text).toEqual(["First", "Second"]);
     drawer.querySelector<HTMLButtonElement>("button")?.click();
     expect(closed).toBe(1);
-  });
-});
-
-describe("receiptSlip", () => {
-  test("renders each label and value as text, never as markup", () => {
-    const slip = receiptSlip([
-      { label: "Session", value: "<b>not bold</b>" },
-      { label: "App", value: "Demo" },
-    ]);
-
-    expect(slip.querySelector("b")).toBeNull();
-    expect(slip.textContent).toContain("<b>not bold</b>");
-    expect(slip.children.length).toBe(2);
   });
 });

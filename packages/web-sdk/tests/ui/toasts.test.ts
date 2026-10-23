@@ -147,6 +147,15 @@ describe("toast store", () => {
     const view = collect(store);
     expect(view.latest().map((toast) => toast.textCode)).toEqual(["a"]);
   });
+
+  test("two toasts that differ only in receipt rows are both shown", () => {
+    const store = createToastStore({ durationMs: 10_000 });
+    const view = collect(store);
+    store.push({ kind: "success", textCode: "a", slip: [{ labelCode: "label", value: "rc-1" }] });
+    store.push({ kind: "success", textCode: "a", slip: [{ labelCode: "label", value: "rc-2" }] });
+    expect(view.latest().length).toBe(2);
+    expect(view.latest()[0]?.slip).toEqual([{ labelCode: "label", value: "rc-1" }]);
+  });
 });
 
 describe("toasts part", () => {
@@ -224,6 +233,28 @@ describe("toasts part", () => {
     expect(layer.querySelectorAll(".toast").length).toBe(0);
     jest.advanceTimersByTime(40);
     expect(view.latest().length).toBe(0);
+  });
+
+  test("renders receipt rows as label text and value text, never as markup", () => {
+    const store = createToastStore({ durationMs: 10_000 });
+    const { layer, stop } = mountPart(store);
+    store.push({ kind: "success", textCode: "a", slip: [{ labelCode: "rc", value: "<b>rc-1</b>" }] });
+    const row = layer.querySelector(".slip > div");
+    expect(row?.children.length).toBe(2);
+    expect(row?.children[0]?.textContent).toBe("T:rc");
+    expect(row?.children[1]?.textContent).toBe("<b>rc-1</b>");
+    expect(row?.querySelector("b")).toBeNull();
+    stop();
+    layer.remove();
+  });
+
+  test("a toast without a slip renders no receipt block", () => {
+    const store = createToastStore({ durationMs: 10_000 });
+    const { layer, stop } = mountPart(store);
+    store.push({ kind: "info", textCode: "a" });
+    expect(layer.querySelectorAll(".slip").length).toBe(0);
+    stop();
+    layer.remove();
   });
 });
 

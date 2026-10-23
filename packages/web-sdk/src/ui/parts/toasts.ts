@@ -15,6 +15,8 @@ const TOAST_CSS = `
 .toast--warning{border-left-color:#d97706}
 .toast--error{border-left-color:#dc2626}
 .toast__message{flex:1;min-width:0;overflow-wrap:anywhere}
+.slip{margin-top:8px;padding:8px 0;border-top:2px dashed #71717a;border-bottom:2px dashed #71717a;font:12px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere}
+.slip>div{display:flex;justify-content:space-between;gap:12px}
 .toast a{color:inherit;text-decoration:underline;white-space:nowrap}
 .toast__close{border:0;background:transparent;color:inherit;cursor:pointer;padding:0 2px;font:inherit;line-height:1}
 .toast a:focus-visible,.toast__close:focus-visible{outline:2px solid #111827;outline-offset:2px;box-shadow:0 0 0 6px #fafafa}
@@ -50,6 +52,20 @@ export function createToastsPart(store: ToastStore): HostPart {
         const message = document.createElement("div");
         message.className = "toast__message";
         message.textContent = ctx.text(view.textCode);
+        if (view.slip !== undefined) {
+          const slip = document.createElement("div");
+          slip.className = "slip";
+          for (const row of view.slip) {
+            const line = document.createElement("div");
+            const label = document.createElement("span");
+            label.textContent = ctx.text(row.labelCode);
+            const value = document.createElement("span");
+            value.textContent = row.value;
+            line.append(label, value);
+            slip.append(line);
+          }
+          message.append(slip);
+        }
         el.append(message);
 
         if (view.href !== undefined && view.hrefLabelCode !== undefined) {

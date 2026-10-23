@@ -1,6 +1,6 @@
 /**
  * Shared panel components from the settings mockup: confirm box, glance rows,
- * details drawer and receipt slip. Sections pass resolved text in; nothing here
+ * details drawer. Sections pass resolved text in; nothing here
  * reads client data or strings.ts. Each control is at least 44px tall.
  */
 
@@ -15,13 +15,10 @@ export const UI_STYLE = `
 .glance-row .gr{display:flex;align-items:center;gap:10px;color:#4b5563}
 .drawer{margin-top:12px;padding:14px 16px;border:1px solid #d4d4d8;border-radius:12px;background:#fafafa}
 .drawer>h3{margin:0 0 8px;font-size:15px;font-weight:600;overflow-wrap:anywhere}
-.slip{margin-top:8px;padding:8px 0;border-top:2px dashed #71717a;border-bottom:2px dashed #71717a;font:12px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere}
-.slip>div{display:flex;justify-content:space-between;gap:12px}
 @media (prefers-color-scheme: dark){
 .glance-row{border-bottom-color:#3f3f46}
 .glance-row .gl span,.glance-row .gr{color:#a1a1aa}
 .drawer{border-color:#3f3f46;background:#151517}
-.slip{border-color:#71717a}
 }
 `;
 
@@ -135,21 +132,5 @@ export function detailsDrawer(options: DrawerOptions): HTMLElement {
   close.addEventListener("click", options.onClose);
 
   el.append(heading, ...options.body, close);
-  return el;
-}
-
-/** Receipt slip: dashed-rule block of label/value rows. Values are text, never markup. */
-export function receiptSlip(rows: readonly { readonly label: string; readonly value: string }[]): HTMLElement {
-  const el = document.createElement("div");
-  el.className = "slip";
-  for (const row of rows) {
-    const line = document.createElement("div");
-    const label = document.createElement("span");
-    label.textContent = row.label;
-    const value = document.createElement("span");
-    value.textContent = row.value;
-    line.append(label, value);
-    el.append(line);
-  }
   return el;
 }
