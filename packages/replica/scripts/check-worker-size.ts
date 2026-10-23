@@ -17,9 +17,18 @@ import { join, resolve } from "node:path";
 // as run 39134457380 on the earlier base); the ledger's tc1432Ratchet row records it.
 // TC-1475 (automatic retry of NODE_BUSY / REQUEST_TIMEOUT in sdk-services, re-signing each attempt) measured 822,667 (+623) in
 // GitHub run 39292038037 (source 09214408, against master 5317cc78; unchanged by the master merge); the ledger's tc1475Ratchet row records it.
+// #606 (security dependency updates) measured 822,753 (+86) in GitHub run 39326132925 (master 54a2408d; #552 inherited it);
+// approved by Naomi, 2026-10-19; the ledger's tc606WorkerRatchet row records it.
+// #694 (TC-1827: replica workers import only the KV service and its ServiceContext) measured 776,128 (-46,625) in GitHub
+// run 39943720009 (head 7a7303a8, merge base 6076581d); approved by Naomi, 2026-10-23; the ledger's tc1827WorkerRatchet row records it.
 // Zero additional headroom; independent of the web-sdk ledger, including WASM.
-export const MAX_WORKER_GZIP_BYTES = 822_667;
+export const MAX_WORKER_GZIP_BYTES = 776_128;
+// TC-1827 follow-up: `replica.worker.js` (the @tinycloud/replica/browser worker) is unhashed and had no ceiling. It
+// measured 770,093 in GitHub run 39949887460 (head f2e2f9fc, merge base dc615834); requested by Naomi, 2026-10-23; the
+// ledger's tc1827ReplicaWorkerRatchet row records it. Zero additional headroom.
+export const MAX_REPLICA_WORKER_GZIP_BYTES = 770_093;
 const canonicalName = /^kv-storage\.worker\.([0-9a-f]{64})\.js$/;
+const replicaWorkerName = "replica.worker.js";
 
 export function assertWorkerSizeToolchain(bunVersion: string, rustcOutput: string): void {
   const rustcVersion = /^rustc (\d+\.\d+\.\d+)(?:\s|$)/.exec(rustcOutput)?.[1];
@@ -28,10 +37,26 @@ export function assertWorkerSizeToolchain(bunVersion: string, rustcOutput: strin
   }
 }
 
-export function checkWorkerSize(distDir: string, maxBytes = MAX_WORKER_GZIP_BYTES): { bytes: number; headroom: number } {
+function measureGzip(label: string, name: string, bytes: Buffer, maxBytes: number): { bytes: number; headroom: number } {
+  // Feed the bytes on stdin: gzip -9's file-name header would otherwise
+  // charge the 64-character hash as growth despite identical shipped JS/WASM.
+  const size = execFileSync("gzip", ["-9", "-c"], { input: bytes, maxBuffer: 16 * 1024 * 1024 }).byteLength;
+  const headroom = maxBytes - size;
+  console.log(`${name}: ${size} gzip -9 bytes (stdin, filename-independent); threshold=${maxBytes}; headroom=${headroom} bytes`);
+  if (headroom < 0) {
+    throw new Error(`${label} exceeds reviewed gzip threshold by ${-headroom} bytes; change threshold only after review`);
+  }
+  return { bytes: size, headroom };
+}
+
+function assertThreshold(maxBytes: number): void {
   if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
     throw new Error(`Invalid worker gzip threshold: ${maxBytes}`);
   }
+}
+
+export function checkWorkerSize(distDir: string, maxBytes = MAX_WORKER_GZIP_BYTES): { bytes: number; headroom: number } {
+  assertThreshold(maxBytes);
 
   const candidates = readdirSync(distDir).filter((name) => canonicalName.test(name));
   if (candidates.length !== 1) {
@@ -48,21 +73,26 @@ export function checkWorkerSize(distDir: string, maxBytes = MAX_WORKER_GZIP_BYTE
     throw new Error("Stable kv-storage.worker.js alias differs from the canonical hashed worker");
   }
 
-  // Feed canonical bytes on stdin: gzip -9's file-name header would otherwise
-  // charge the 64-character hash as growth despite identical shipped JS/WASM.
-  const size = execFileSync("gzip", ["-9", "-c"], { input: bytes, maxBuffer: 16 * 1024 * 1024 }).byteLength;
-  const headroom = maxBytes - size;
-  console.log(`${name}: ${size} gzip -9 bytes (stdin, filename-independent); threshold=${maxBytes}; headroom=${headroom} bytes`);
-  if (headroom < 0) {
-    throw new Error(`Canonical kv-storage worker exceeds reviewed gzip threshold by ${-headroom} bytes; change threshold only after review`);
-  }
-  return { bytes: size, headroom };
+  return measureGzip("Canonical kv-storage worker", name, bytes, maxBytes);
+}
+
+export function checkReplicaWorkerSize(distDir: string, maxBytes = MAX_REPLICA_WORKER_GZIP_BYTES): { bytes: number; headroom: number } {
+  assertThreshold(maxBytes);
+  return measureGzip("Replica worker", replicaWorkerName, readFileSync(join(distDir, replicaWorkerName)), maxBytes);
 }
 
 if (import.meta.main) {
   try {
     assertWorkerSizeToolchain(Bun.version, execFileSync("rustc", ["--version"], { encoding: "utf8" }).trim());
-    checkWorkerSize(resolve(import.meta.dir, "../dist"));
+    const dist = resolve(import.meta.dir, "../dist");
+    for (const check of [checkWorkerSize, checkReplicaWorkerSize]) {
+      try {
+        check(dist);
+      } catch (error) {
+        console.error(error);
+        process.exitCode = 1;
+      }
+    }
   } catch (error) {
     console.error(error);
     process.exitCode = 1;

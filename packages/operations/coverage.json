@@ -66,6 +66,8 @@
     { "command": "share revoke <id>", "status": "legacy" },
     { "command": "share show <id>", "status": "legacy" },
     { "command": "share versions <artifact-id>", "status": "legacy" },
+    { "command": "share history", "status": "legacy" },
+    { "command": "share history recover", "status": "legacy" },
     { "command": "node", "status": "legacy" },
     { "command": "node health", "status": "legacy" },
     { "command": "node version", "status": "legacy" },
@@ -157,6 +159,29 @@
     { "command": "account billing", "status": "legacy" },
     { "command": "account billing status", "status": "legacy" },
     { "command": "account billing checkout", "status": "legacy" },
-    { "command": "account billing portal", "status": "legacy" }
+    { "command": "account billing portal", "status": "legacy" },
+    { "command": "knowledge", "status": "excluded", "reason": "Command group; its subcommands project the knowledge operations." },
+    {
+      "command": "knowledge list",
+      "status": "migrated",
+      "operationId": "tinycloud.knowledge.list",
+      "operationVersion": 1
+    },
+    {
+      "command": "knowledge read <app_id> [concept]",
+      "status": "migrated",
+      "operationId": "tinycloud.knowledge.read",
+      "operationVersion": 1
+    },
+    {
+      "command": "apps",
+      "status": "excluded",
+      "reason": "Command group; its subcommands are local installer compositions."
+    },
+    {
+      "command": "apps install <app_id>",
+      "status": "excluded",
+      "reason": "Local installer: verifies pinned Share bytes, runs pinned DDL, writes knowledge files via SDK KV/SQL; not a shared operation."
+    }
   ]
 }

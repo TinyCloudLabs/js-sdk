@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/share-sdk",
-  "version": "1.2.0-beta.6",
+  "version": "1.3.0",
   "description": "Canonical headless TinyCloud Share operations for browser and Node.",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -21,6 +21,12 @@
       "require": "./dist/artifact.cjs",
       "default": "./dist/artifact.js"
     },
+    "./html-bundle": {
+      "types": "./dist/html-bundle.d.ts",
+      "import": "./dist/html-bundle.js",
+      "require": "./dist/html-bundle.cjs",
+      "default": "./dist/html-bundle.js"
+    },
     "./share-root": {
       "types": "./dist/share-root.d.ts",
       "browser": "./dist/share-root.js",
@@ -33,6 +39,12 @@
       "import": "./dist/share-index.js",
       "require": "./dist/share-index.cjs",
       "default": "./dist/share-index.js"
+    },
+    "./web-recipient": {
+      "types": "./dist/web-recipient.d.ts",
+      "import": "./dist/web-recipient.js",
+      "require": "./dist/web-recipient.cjs",
+      "default": "./dist/web-recipient.js"
     },
     "./package.json": "./package.json"
   },
@@ -48,11 +60,12 @@
   "dependencies": {
     "@noble/curves": "^1.9.2",
     "@noble/hashes": "^1.8.0",
-    "@tinycloud/share-envelope": "1.2.0-beta.0",
+    "@tinycloud/share-envelope": "1.2.1",
     "multiformats": "^13.3.6"
   },
   "devDependencies": {
     "@types/node": "^20",
+    "jsdom": "26.1.0",
     "tsup": "^8.0.0",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"

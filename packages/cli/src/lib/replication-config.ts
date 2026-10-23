@@ -6,6 +6,7 @@ import { createReplicationEventSink, REPLICATION_DIAGNOSTIC_FILES } from "./repl
 import { assertFolderPrefix } from "@tinycloud/replica";
 import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
+import { DEFAULT_GRANT_TTL_MS, MAX_GRANT_TTL_MS } from "@tinycloud/sdk-services/kv/replication/contractConstants";
 
 export interface CLIReplicationConfig extends ReplicationOptions {
   storage: KVReplicaStorage;
@@ -15,6 +16,26 @@ export interface CLIReplicationConfig extends ReplicationOptions {
 export interface ProfileReplicationSettings {
   prefixes: string[];
   allowSecrets?: boolean;
+}
+
+/**
+ * Plain decimal positive integers only. This must stay a subset of what node storage accepts, so a
+ * value the CLI takes never throws later in storage: grantTtlMs is a safe integer in (0, 7 d]
+ * (sqlite.ts resolvePolicy) and maxBytes a non-negative safe integer (sqlite.ts, quota check).
+ * The CLI is deliberately stricter for maxBytes: 0 is rejected here although storage accepts it.
+ */
+function readPositiveIntegerEnv(name: string, max: number): number | undefined {
+  const raw = process.env[name];
+  if (raw === undefined) return undefined;
+  const value = /^[1-9][0-9]*$/.test(raw) ? Number(raw) : Number.NaN;
+  if (!Number.isSafeInteger(value) || value > max) {
+    throw new CLIError(
+      "INVALID_REPLICATION_ENV",
+      `${name} must be a positive integer no greater than ${max}, got ${JSON.stringify(raw)}`,
+      ExitCode.USAGE_ERROR,
+    );
+  }
+  return value;
 }
 
 export function createCliReplicationConfig(
@@ -47,6 +68,8 @@ export function createCliReplicationConfig(
     verify: process.env.TC_REPLICATION_VERIFY === "1",
     maxStalenessMs: Number(process.env.TC_REPLICATION_MAX_STALENESS_MS ?? 60_000),
     staleSyncTimeoutMs: Number(process.env.TC_REPLICATION_SYNC_TIMEOUT_MS ?? 10_000),
+    grantTtlMs: readPositiveIntegerEnv("TC_REPLICATION_GRANT_TTL_MS", MAX_GRANT_TTL_MS) ?? DEFAULT_GRANT_TTL_MS,
+    maxBytes: readPositiveIntegerEnv("TC_REPLICATION_MAX_BYTES", Number.MAX_SAFE_INTEGER),
     storage: sqliteReplicaStorage({
       dir: join(root, "replication"),
       logoutPendingFile: join(root, REPLICA_LOGOUT_PENDING_FILE),

@@ -425,24 +425,19 @@ function signedAuthorityFromCompactUcan(
       continue;
     }
 
-    const nativeMatch = /^(tinycloud:[^/]+)\/(kv|sql|duckdb|hooks)\/(.*)$/.exec(resource);
-    const policyMatch = /^tinycloud:\/\/([^/]+)\/(kv|sql|duckdb|hooks)\/(.*)$/.exec(resource);
-    const match = nativeMatch ?? policyMatch;
+    // `<space>/kv` (no trailing slash) is the whole service in the space: path "".
+    const match = /^(?:tinycloud:\/\/([^/]+)|(tinycloud:[^/]+))\/(kv|sql|duckdb|hooks)(?:\/|$)(.*)$/.exec(resource);
     if (!match) {
       throw new Error(
         `Validated runtime delegation has an unsupported signed resource '${resource}'.`,
       );
     }
-    const [, space, shortService, path] = match;
-    const service = SERVICE_BY_SHORT_NAME[shortService!];
-    if (service === undefined) {
-      throw new Error(
-        `Validated runtime delegation has an unsupported signed service '${shortService}'.`,
-      );
-    }
+    const [, policySpace, nativeSpace, shortService, path] = match;
+    // The pattern admits only the four services in SERVICE_BY_SHORT_NAME.
+    const service = SERVICE_BY_SHORT_NAME[shortService!]!;
     permissions.push(...groupedSignedEntries(
       service,
-      space!,
+      (nativeSpace ?? policySpace)!,
       path!,
       abilities as Record<string, unknown>,
     ));

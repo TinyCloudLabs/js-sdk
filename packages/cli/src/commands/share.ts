@@ -39,10 +39,15 @@ import { canonicalMailbox } from "@tinycloud/share-envelope";
 import { ProfileLockTimeoutError } from "@tinycloud/operations/state";
 import { parseDuration } from "../lib/duration.js";
 import { CLIError, handleError, storageFullError, wrapError } from "../output/errors.js";
+import { classifyShareFailure } from "../share/failure-class.js";
 import { authorizationRequiredJson, inspectHuman, publishHuman, receiveHuman, receiveJson, writeJson } from "../share/output.js";
 import { MAX_SHARE_STDIN_BYTES, readBoundedUrlStdin, readShareInput, shareInputFilename, writeShareOutput } from "../share/io.js";
+import { quarantineUnreadableProfileHistory } from "../share/adapters.js";
+import { ProfileManager } from "../config/profiles.js";
+import { FOLDER_NOT_AVAILABLE, bundleHtmlFolder, htmlFolderNotice, isDirectoryInput } from "../share/html-folder.js";
 
-import { ShareHistoryRetryError, SharePublishAuthorityError } from "../share/errors.js";
+import { ShareHistoryReadError, ShareHistoryRetryError, ShareHistoryUnreadableError, SharePublishAuthorityError, shareHistoryReason, type ShareHistoryStatus } from "../share/errors.js";
+import { resolveShortLink, ShortLinkError, type ShareShortLinks, type ShortLinkErrorCode } from "../share/short-links.js";
 const SHARE_ORIGIN = "https://share.tinycloud.xyz";
 const NOTIFY_WINDOW_MESSAGE = "Share notification authorization expired (at share expiry or 5 minutes after publication); publish a new share and invite the recipient then.\n";
 
@@ -55,7 +60,8 @@ export interface ShareCommandServices {
   /** Probe the authenticated node before a standalone domain invitation. */
   readonly assertDomainDelivery?: () => Promise<void>;
   readonly getRecord?: (shareId: string) => Promise<SenderShareRecord | undefined>;
-  readonly linkFor?: (shareId: string) => Promise<string | undefined>;
+  /** Short links for addressed shares (TC-1737). */
+  readonly shortLinks?: ShareShortLinks;
   /** The authenticated owner's artifact storage, for `tc share versions`. */
   readonly artifactStore?: () => Promise<ArtifactStore>;
 }
@@ -109,6 +115,20 @@ function canonicalMailboxTarget(target: Extract<ShareTarget, { readonly kind: "e
   }
 }
 
+const SHARE_HISTORY_RECOVER_FS_ERRNO: Record<string, true> = { EACCES: true, EEXIST: true, EIO: true, ENOSPC: true, ENOTSUP: true, EPERM: true, EROFS: true, EXDEV: true };
+
+/** @internal Map fs failures from `share history recover`. The original history file is never deleted on these paths. */
+export function shareHistoryRecoverError(error: unknown): CLIError {
+  if (error instanceof ShareHistoryReadError) {
+    return new CLIError("SHARE_HISTORY_RECOVER_FAILED", "could not read the unreadable sender history to move it aside", 1, { hint: "The original history file was not deleted. Check read permission on the history file, then retry." });
+  }
+  const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
+  if (code !== undefined && SHARE_HISTORY_RECOVER_FS_ERRNO[code] === true) {
+    return new CLIError("SHARE_HISTORY_RECOVER_FAILED", `could not move the unreadable sender history aside (${code})`, 1, { hint: "The original history file was not deleted. Check write permission on the profile directory, then retry." });
+  }
+  return shareCliError(error);
+}
+
 /** @internal Map share failures without echoing remote error text. */
 export function shareCliError(error: unknown, operation: "publish" | "notify" = "publish"): CLIError {
   if (error instanceof CLIError) return error;
@@ -124,6 +144,14 @@ export function shareCliError(error: unknown, operation: "publish" | "notify" = 
       `sender history for profile ${JSON.stringify(error.profile)} changed or disappeared during this command`,
       1,
       { hint: `Retry this command with --profile ${JSON.stringify(error.profile)}. If this was a revoke, check its node state first: revocation may already have succeeded.` },
+    );
+  }
+  if (error instanceof ShareHistoryUnreadableError) {
+    return new CLIError(
+      "SHARE_HISTORY_UNREADABLE",
+      "sender history cannot be read with the current session key",
+      1,
+      { hint: `Run \`${CLI_NAME} share history recover\` to move the unreadable file aside. The old file is kept, not deleted.` },
     );
   }
   if (error instanceof SharePublishAuthorityError) {
@@ -173,6 +201,10 @@ export function shareCliError(error: unknown, operation: "publish" | "notify" = 
     if (failure.kind === "registry-unavailable") {
       return new CLIError("UNAVAILABLE", "the TinyCloud location registry could not be reached, so nothing was shared; try again shortly", 4);
     }
+    if (failure.kind === "share-service-unavailable") {
+      const outcome = operation === "publish" ? "nothing was shared" : "no invitation was sent";
+      return new CLIError("SHARE_SERVICE_UNAVAILABLE", `the Share service at ${failure.origin} could not be reached, so ${outcome}; try again shortly`, 4);
+    }
     if (failure.kind === "node-info-unavailable") {
       const outcome = operation === "publish" ? "nothing was shared and no invitation was sent" : "no invitation was sent";
       return new CLIError("UNAVAILABLE", `could not verify TinyCloud node 1.17.3 domain delivery support; ${outcome}. Check the node and retry`, 4);
@@ -183,9 +215,36 @@ export function shareCliError(error: unknown, operation: "publish" | "notify" = 
     if (failure.kind === "storage-full") {
       return storageFullError(failure)!;
     }
+    if (failure.kind === "space-not-ready") {
+      // The Node's own error stays on `cause`; its text never reaches output.
+      return Object.assign(
+        new CLIError(
+          "SPACE_NOT_READY",
+          "Your TinyCloud space isn't ready for this yet (SPACE_NOT_READY). This is a known node problem being fixed: retry after the node update; contact support with this code if it persists.",
+          4,
+          { hint: "Nothing was shared, and repeating the command is safe. Retries keep failing until the node is updated." },
+        ),
+        { cause: error.cause },
+      );
+    }
     if (failure.kind === "upload-failed") {
       return new CLIError("UPLOAD_FAILED", "share source upload failed; nothing was shared", 4);
     }
+    if (failure.kind === "decrypt-not-held") {
+      return new CLIError(
+        "PERMISSION_DENIED",
+        "this sign-in can't create email-addressed shares: it has no permission to decrypt with the account's key. Nothing was shared.",
+        5,
+        { hint: "Share it from https://share.tinycloud.xyz while signed in as the account owner, or ask the owner to share it. A link anyone can open works from this sign-in: --to anyone." },
+      );
+    }
+  }
+  if (error instanceof ShortLinkError) {
+    if (error.code === "not-found") return new CLIError("NOT_FOUND", "this short link has expired, was revoked, or never existed", 4);
+    if (error.code === "rejected") return new CLIError("ORIGIN_MISMATCH", "this short link is not from the trusted Share origin", 5);
+    if (error.code === "too-large") return new CLIError("MAX_BYTES_EXCEEDED", "the Share short-link service returned too many bytes", 7);
+    if (error.code === "invalid-response") return new CLIError("CID_MISMATCH", "the Share short-link service returned content that does not match the link", 5);
+    return new CLIError("UNAVAILABLE", "the Share short-link service is unavailable; try again shortly", 4);
   }
   // Fixed SDK refusals (invalid or mismatched recipient); never remote text.
   if (error instanceof ShareNotifyError) {
@@ -220,8 +279,13 @@ export function shareCliError(error: unknown, operation: "publish" | "notify" = 
   };
   if (nodeCode === "ENOENT") return new CLIError("INVALID_ARGUMENT", "share input was not found", 2);
   if (nodeCode === "EISDIR") return new CLIError("INVALID_ARGUMENT", "share input must be a Markdown file", 2);
-  if (error instanceof TypeError) return new CLIError("INVALID_ARGUMENT", "share input is invalid", 2);
   const mapped = typeof nodeCode === "string" && known[nodeCode] !== undefined ? known[nodeCode] : known[message];
+  // A node or network failure no mapping above claimed (an HTTP status from a
+  // policy, delegation, revoke or delivery call; an unreachable node) is named
+  // by class and status instead of collapsing into an invalid-argument error.
+  const classified = mapped === undefined ? classifyShareFailure(error, `\`${CLI_NAME} auth login\``) : undefined;
+  if (classified !== undefined) return Object.assign(new CLIError(classified.code, classified.reason, classified.exitCode), { cause: error });
+  if (error instanceof TypeError) return new CLIError("INVALID_ARGUMENT", "share input is invalid", 2);
   // Share adapters are external authority seams. Never echo an adapter's
   // arbitrary exception text to contract stdout/stderr; it may contain a
   // bearer URL, claim, session identifier, or provider response.
@@ -232,6 +296,47 @@ function inputUrl(value: string | undefined, stdin: boolean): Promise<string> {
   if (stdin || value === "-") return readBoundedUrlStdin();
   if (value === undefined || value.length === 0) throw new CLIError("INVALID_ARGUMENT", "a share URL or - is required", 2);
   return Promise.resolve(value);
+}
+
+/** A short link becomes the sealed-inline link it stands for; every other link passes through. */
+function resolveLink(link: string, expectedOrigin: string): Promise<string> {
+  return shareServices.shortLinks?.resolve(link, expectedOrigin) ?? resolveShortLink(link, { expectedOrigin });
+}
+
+/**
+ * A link that parses as a URL but is not at the trusted Share origin is an origin mismatch (exit 5),
+ * refused before any request, as for short links. Checked here rather than in share-sdk, so the
+ * browser SDK bundle does not grow; anything that does not parse is left to share-sdk (invalid-link).
+ * Run on the resolved link: a short link at another origin is already refused by its own resolver.
+ */
+function assertTrustedShareOrigin(link: string, expectedOrigin: string): void {
+  if (URL.canParse(link) && new URL(link).origin !== expectedOrigin) {
+    throw new ShareReceiveError("origin-mismatch", "share link origin is not the trusted Share origin");
+  }
+}
+
+const SHORT_LINK_WARNING: Record<ShortLinkErrorCode, string> = {
+  "rate-limited": "the short-link service is rate limiting this client",
+  capacity: "the short-link service is at capacity",
+  rejected: "the short-link service refused this share",
+  unavailable: "the short-link service could not be reached",
+  "invalid-response": "the short-link service answered incorrectly",
+  "not-found": "the short-link service lost the link",
+  "too-large": "this share is too large for a short link",
+  "token-store-failed": "the short link's delete token could not be saved",
+};
+
+/** The link to hand out for a published share: the short link for an addressed share, or the published link. */
+async function linkToShow(result: PublishedShare, longLink: boolean): Promise<{ readonly url: string; readonly shortLinkError?: ShortLinkErrorCode }> {
+  if (longLink || result.link.kind !== "policy" || shareServices.shortLinks === undefined) return { url: result.url };
+  try {
+    return { url: await shareServices.shortLinks.shorten(result) };
+  } catch (error) {
+    const code: ShortLinkErrorCode = error instanceof ShortLinkError ? error.code : "unavailable";
+    // Publishing never fails because of the short-link service; the share itself already exists.
+    process.stderr.write(`Warning: no short link (${SHORT_LINK_WARNING[code]}); printing the long link instead. It works, but it is long and some mail clients may break it.\n`);
+    return { url: result.url, shortLinkError: code };
+  }
 }
 
 /** @internal Command seam that guarantees stdin is consumed exactly once. */
@@ -250,8 +355,12 @@ export async function inspectShareInputOnce(
   try {
     parseNativeShareUrl(link);
   } catch {
-    return (dependencies.inspect ?? inspectShare)(link, { expectedOrigin });
+    const resolved = await resolveLink(link, expectedOrigin);
+    assertTrustedShareOrigin(resolved, expectedOrigin);
+    return (dependencies.inspect ?? inspectShare)(resolved, { expectedOrigin });
   }
+  // Native bearer links are minted at the Share origin too; one from elsewhere is refused first.
+  assertTrustedShareOrigin(link, expectedOrigin);
   throw new CLIError("UNSUPPORTED_LINK", "native bearer links are opaque; receive the link to verify access", 2);
 }
 
@@ -264,18 +373,19 @@ function expires(value: string): Date {
   catch { throw new CLIError("INVALID_ARGUMENT", "invalid expiry duration", 2); }
 }
 
-async function rememberPublishedShare(result: PublishedShare): Promise<{ record: SenderShareRecord; recorded: boolean }> {
+async function rememberPublishedShare(result: PublishedShare): Promise<{ record: SenderShareRecord; history: ShareHistoryStatus }> {
   const record = historyRecordForPublishedShare(result);
-  if (shareServices.records === undefined) return { record, recorded: false };
   try {
+    if (shareServices.records === undefined) throw new Error("sender history is not configured");
     await shareServices.records.put(record);
-    return { record, recorded: true };
-  } catch {
-    process.stderr.write("Warning: share was published but not recorded in sender history; future share list, share notify, and share revoke by ID will not find it.\n");
-    return { record, recorded: false };
+    return { record, history: { recorded: true } };
+  } catch (error) {
+    const reason = shareHistoryReason(error);
+    process.stderr.write(`Warning: share was published but not recorded in sender history (${reason}); future share list, share notify, and share revoke by ID will not find it. Keep share ID ${result.metadata.shareId} and CID ${result.link.cid}.\n`);
+    return { record, history: { recorded: false, reason } };
   }
 }
-async function notifyRecordedShare(record: SenderShareRecord, recipient: string, adapter: ShareDeliveryAdapter, storage?: SenderShareRecordStorage): Promise<ShareNotifyResult> {
+async function notifyRecordedShare(record: SenderShareRecord, recipient: string, adapter: ShareDeliveryAdapter, storage?: SenderShareRecordStorage, published?: { readonly shareId: string; readonly cid: string }): Promise<ShareNotifyResult> {
   const result = await notifyShare({ shareId: record.shareId, recipient, record, adapter, checkDeliveryWindow: true });
   if (result.state !== "partial-failure" && storage !== undefined) {
     const mailbox = canonicalMailbox(recipient)!.email;
@@ -289,8 +399,10 @@ async function notifyRecordedShare(record: SenderShareRecord, recipient: string,
             : [...(current.deliveredRecipients ?? []), mailbox],
         }));
         if (updated === undefined) throw new Error("sender history record was removed");
-      } catch {
-        process.stderr.write("Warning: delivery succeeded, but could not record its confirmation in sender history.\n");
+      } catch (error) {
+        const reason = shareHistoryReason(error);
+        const identifiers = published === undefined ? "" : ` Keep share ID ${published.shareId} and CID ${published.cid}.`;
+        process.stderr.write(`Warning: delivery succeeded, but could not record its confirmation in sender history (${reason}).${identifiers}\n`);
       }
     }
   }
@@ -312,7 +424,9 @@ function mediaTypeFor(filename: string): string {
         : extension === "json" ? "application/json"
           : extension === "css" ? "text/css"
             : extension === "js" ? "text/javascript"
-              : "application/octet-stream";
+              : extension === "jsx" ? "text/jsx"
+                : extension === "tsx" ? "text/tsx"
+                  : "application/octet-stream";
 }
 
 function requestedActions(values: readonly string[] | undefined): readonly ("read" | "list" | "edit")[] {
@@ -334,8 +448,8 @@ export function registerShareCommand(program: Command): void {
   const share = program.command("share").description("Publish and consume TinyCloud Share links");
 
   share.command("publish <files...>")
-    .description("Publish one or more bounded files as a Share")
-    .option("--name <filename>", "Filename for stdin input")
+    .description("Publish one or more bounded files as a Share, or a folder with an index.html as one self-contained page (anyone links only)")
+    .option("--name <filename>", "Filename for stdin input, or the published .html name of a folder")
     .option("--to <target>", "Share target", "anyone")
     .option("--notify", "Email an exact-email recipient, or a domain mailbox on node 1.17.3+")
     .option("--notify-to <address>", "Mailbox to invite for --to domain:<name> --notify (node 1.17.3+)")
@@ -350,6 +464,7 @@ export function registerShareCommand(program: Command): void {
     .addOption(new Option("--ongoing").hideHelp())
     .option("--note <text>", "Note stored with the artifact version")
     .option("--json", "Print versioned redacted JSON")
+    .option("--long-link", "Print the long self-contained link instead of a short link (addressed shares)")
     .option("--viewer-origin <origin>", "Canonical HTTPS viewer origin", SHARE_ORIGIN)
     .action(async (files: string[], options, command: Command) => {
       try {
@@ -362,13 +477,31 @@ export function registerShareCommand(program: Command): void {
         const maxBytes = byteLimit(options.maxBytes);
         if (files.length === 0 || (files.includes("-") && files.length > 1)) throw new CLIError("INVALID_ARGUMENT", "stdin must be the only publish input", 2);
         const name = files.length === 1 ? options.name : undefined;
-        // Refuse unsafe names before touching any source, so stdin is never awaited for one.
-        for (const file of files) shareInputFilename(file, name);
-        const inputs = await Promise.all(files.map((file) => readShareInput(file, name, maxBytes)));
-        assertAggregateInputLimit(inputs, maxBytes);
         const target = parseShareTarget(options.to);
+        // A folder with an index.html becomes one self-contained page for an anyone-with-the-link share. Addressed and
+        // --prefix publication of a folder is not offered: a directory falls through to the file reader and is refused.
+        const folder = files.length === 1 && target.kind === "bearer" && options.prefix !== true && await isDirectoryInput(files[0]!);
+        let inputs: { bytes: Uint8Array; filename: string }[];
+        if (folder) {
+          if (options.mediaType !== undefined && options.mediaType.split(";")[0]!.trim().toLowerCase() !== "text/html") {
+            throw new CLIError("INVALID_ARGUMENT", "a folder is published as text/html; drop --media-type", 2);
+          }
+          const bundle = await bundleHtmlFolder(files[0]!, { ...(name === undefined ? {} : { name }), ...(maxBytes === undefined ? {} : { maxBytes }) });
+          const notice = htmlFolderNotice(bundle);
+          if (notice !== undefined) process.stderr.write(notice);
+          inputs = [{ bytes: bundle.bytes, filename: bundle.filename }];
+        } else {
+          // A directory that is not a folder publish (addressed, --prefix, next to other inputs) gets one clear refusal.
+          for (const file of files) if (await isDirectoryInput(file)) throw new CLIError("MAX_BYTES_EXCEEDED", FOLDER_NOT_AVAILABLE, 7);
+          // Refuse unsafe names before touching any source, so stdin is never awaited for one.
+          for (const file of files) shareInputFilename(file, name);
+          inputs = await Promise.all(files.map((file) => readShareInput(file, name, maxBytes)));
+        }
+        assertAggregateInputLimit(inputs, maxBytes);
         const actions = requestedActions(options.action);
         if (options.prefix && target.kind === "bearer") throw new CLIError("INVALID_ARGUMENT", "--prefix requires an addressed target", 2);
+        // A link is read-only: the bearer delegation never carries put, so an edit request would be dropped silently.
+        if (target.kind === "bearer" && actions.includes("edit")) throw new CLIError("INVALID_ARGUMENT", `--action edit is not available with --to ${options.to}: a link can only be read; address a recipient to allow edits`, 2);
         if (inputs.length > 1 && target.kind === "bearer") throw new CLIError("UNSUPPORTED_LINK", "multiple files require an addressed target", 2);
         const artifact = artifactRequest(options, actions, inputs.length);
         if (inputs.length > 1 && !options.prefix) throw new CLIError("INVALID_ARGUMENT", "multiple files require --prefix", 2);
@@ -415,19 +548,21 @@ export function registerShareCommand(program: Command): void {
           }
           throw new CLIError(result.method === "openkey-device" ? "DEVICE_AUTH_REQUIRED" : "CLAIM_REQUIRED", "recipient authorization is required; continue through the configured authority adapter", 6);
         }
-        const { record, recorded } = await rememberPublishedShare(result);
+        const { record, history } = await rememberPublishedShare(result);
         let notification: ShareNotifyResult | undefined;
         if (notifyRecipient !== undefined) {
           if (shareServices.delivery === undefined) throw new CLIError("AUTH_REQUIRED", "delivery authority is not configured", 3);
-          notification = await notifyRecordedShare(record, notifyRecipient, shareServices.delivery, recorded ? shareServices.records : undefined);
+          notification = await notifyRecordedShare(record, notifyRecipient, shareServices.delivery, history.recorded ? shareServices.records : undefined, { shareId: result.metadata.shareId, cid: result.link.cid });
           if (notification.state === "partial-failure") process.exitCode = 9;
           if (notification.reason === "delivery-window-expired") process.stderr.write(NOTIFY_WINDOW_MESSAGE);
         }
         if (result.metadata.expiryClamped === true) process.stderr.write(`Share expiry clamped to session expiry (${result.metadata.expiresAt}).\n`);
-        if (json) writeJson({ ...redactPublishedShare(result), expiryClamped: result.metadata.expiryClamped === true, ...(artifact === undefined || result.metadata.artifact === undefined ? {} : { artifactId: result.metadata.artifact.id, version: result.metadata.artifact.version, mode: result.metadata.artifact.mode }), ...(notification === undefined ? {} : { notification }) });
+        // History and the invitation keep the long link; only the link handed out here is short.
+        const shown = await linkToShow(result, options.longLink === true);
+        if (json) writeJson({ ...redactPublishedShare(result), history, expiryClamped: result.metadata.expiryClamped === true, ...(artifact === undefined || result.metadata.artifact === undefined ? {} : { artifactId: result.metadata.artifact.id, version: result.metadata.artifact.version, mode: result.metadata.artifact.mode }), ...(notification === undefined ? {} : { notification }), ...(shown.shortLinkError === undefined ? {} : { shortLinkError: shown.shortLinkError }) });
         else {
           if (result.metadata.artifact !== undefined) process.stderr.write(`Artifact ${result.metadata.artifact.id} v${result.metadata.artifact.version} (${result.metadata.artifact.mode})\n`);
-          publishHuman(result);
+          publishHuman(shown.url);
         }
       } catch (error) { return handleError(shareCliError(error)); }
     });
@@ -504,6 +639,8 @@ export function registerShareCommand(program: Command): void {
         let nativeLink = false;
         try { parseNativeShareUrl(link); nativeLink = true; } catch { /* addressed Policy/v3 link */ }
         if (nativeLink) {
+          // Native bearer links are minted at the Share origin too; one from elsewhere is never read.
+          assertTrustedShareOrigin(link, options.viewerOrigin);
           if (shareServices.nativeReader === undefined) throw new CLIError("AUTH_REQUIRED", "native TinyCloud receive is not configured", 3);
           const native = await shareServices.nativeReader(link);
           if (maxBytes !== undefined && native.bytes.byteLength > maxBytes) throw new CLIError("MAX_BYTES_EXCEEDED", "shared content exceeds max-bytes", 7);
@@ -512,7 +649,9 @@ export function registerShareCommand(program: Command): void {
           if (json) writeJson({ protocol: "tinycloud-share", version: 1, path: output, transport: "native" }); else receiveHuman(output);
           return;
         }
-        const result = await receiveShare(link, {
+        const resolved = await resolveLink(link, options.viewerOrigin);
+        assertTrustedShareOrigin(resolved, options.viewerOrigin);
+        const result = await receiveShare(resolved, {
           expectedOrigin: options.viewerOrigin,
           ...(maxBytes === undefined ? {} : { maxContentBlobBytes: maxBytes }),
         });
@@ -543,7 +682,7 @@ export function registerShareCommand(program: Command): void {
         if (shareServices.records === undefined) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);
         const result = await listShares(shareServices.records);
         if (json) writeJson({ protocol: "tinycloud-share", version: 1, shares: result });
-        else process.stdout.write(result.map((item) => `${item.shareId}\t${item.target}\t${item.expiresAt}`).join("\n") + (result.length ? "\n" : ""));
+        else process.stdout.write(result.map((item) => `${item.shareId}\t${item.target}\t${item.expiresAt}\t${item.revoked ? "revoked" : Date.parse(item.expiresAt) < Date.now() ? "expired" : "active"}`).join("\n") + (result.length ? "\n" : ""));
       } catch (error) { return handleError(shareCliError(error)); }
     });
 
@@ -556,7 +695,10 @@ export function registerShareCommand(program: Command): void {
         const json = jsonOutput(options, command);
         if (options.revealLink && json) throw new CLIError("INVALID_ARGUMENT", "--reveal-link cannot be combined with --json", 2);
         if (shareServices.records === undefined) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);
-        const result = await showShare({ storage: shareServices.records, shareId: id, revealLink: options.revealLink === true, link: options.revealLink ? await shareServices.linkFor?.(id) : undefined });
+        const record = options.revealLink === true ? await shareServices.records.get(id) : undefined;
+        // A share published with a short link reveals that same short link.
+        const link = record === undefined ? undefined : await shareServices.shortLinks?.linkFor(record);
+        const result = await showShare({ storage: shareServices.records, shareId: id, revealLink: options.revealLink === true, ...(link === undefined ? {} : { link }) });
         if (json) writeJson({ protocol: "tinycloud-share", version: 1, share: result }); else writeJson(result);
       } catch (error) { return handleError(shareCliError(error)); }
     });
@@ -603,7 +745,24 @@ export function registerShareCommand(program: Command): void {
         if (result.state === "unsupported") {
           throw new CLIError("UNSUPPORTED_TARGET", result.reason, 2);
         }
-        if (json) writeJson({ protocol: "tinycloud-share", version: 1, result }); else process.stdout.write(`${result.state}\n`);
+        // The node revocation above is the real revocation; removing the stored envelope is hygiene and never fails the command.
+        const shortLink = await shareServices.shortLinks?.discard(record) ?? "none";
+        if (shortLink === "failed") process.stderr.write("Warning: the share is revoked, but its short link could not be removed; it stops resolving when the share expires.\n");
+        if (json) writeJson({ protocol: "tinycloud-share", version: 1, result, ...(shortLink === "none" ? {} : { shortLink }) }); else process.stdout.write(`${result.state}\n`);
       } catch (error) { return handleError(shareCliError(error)); }
+    });
+
+  const history = share.command("history").description("Inspect and repair the local sender-share history");
+  history.command("recover")
+    .description("Move an unreadable sender-share history file aside under a timestamped name. Nothing is deleted or overwritten, so a new history can start.")
+    .option("--json", "Print versioned JSON")
+    .action(async (options, command: Command) => {
+      try {
+        const json = jsonOutput(options, command);
+        const ctx = await ProfileManager.resolveContext(command.optsWithGlobals(), { storedSession: "unused" });
+        const quarantined = await quarantineUnreadableProfileHistory(ctx.profile);
+        if (json) writeJson({ protocol: "tinycloud-share", version: 1, result: { profile: ctx.profile, quarantined } });
+        else process.stdout.write(quarantined === null ? "no unreadable sender history to recover\n" : `moved unreadable sender history to ${quarantined}\n`);
+      } catch (error) { return handleError(shareHistoryRecoverError(error)); }
     });
 }

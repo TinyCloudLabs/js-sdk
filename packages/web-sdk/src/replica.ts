@@ -2,7 +2,7 @@ import { parsePkhDid, type ReplicationEvent } from "@tinycloud/sdk-core";
 import type { TinyCloudNodeConfig } from "@tinycloud/node-sdk/core";
 import { assertValidReplicationConfig } from "@tinycloud/node-sdk/replication/authority";
 import type { BrowserWalletSigner } from "./adapters/BrowserWalletSigner";
-import type { BrowserReplicaPlugin } from "./modules/tcw";
+import type { BrowserReplicaPlugin } from "./modules/replica-wiring";
 
 /** Static import cannot serve CJS: @tinycloud/replica/kv-storage exposes only an ESM entry. */
 export async function loadIndexedDbReplicaStorage() {

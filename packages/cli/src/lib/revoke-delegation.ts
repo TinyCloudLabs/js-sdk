@@ -7,8 +7,15 @@ import { ExitCode } from "../config/constants.js";
 import { CLIError, cliErrorFromService } from "../output/errors.js";
 import { ensureDelegationAuthority, requirePermissionConsent, type OpenKeyAcquisition } from "../commands/auth.js";
 import { loadLocalGrantArtifacts, readGrantHistory, type StoredAdditionalDelegation } from "./permissions.js";
+import { lookupOwnerSpaceOnNode } from "./revoke-node-record.js";
 
-type ScopeSource = "local-signed-grant-artifact" | "local-stored-grant";
+/**
+ * Lifetime of the one-use authority a revoke requests. It only has to outlast
+ * the revoke call; OpenKey's minimum is 60 seconds and its default is 7 days.
+ */
+export const REVOKE_AUTHORITY_EXPIRY = "5m";
+
+type ScopeSource = "local-signed-grant-artifact" | "local-stored-grant" | "node-delegation-record";
 type TargetSource = "node" | "local-grant-history" | ScopeSource;
 
 export interface RevocationResult {
@@ -45,7 +52,7 @@ export async function cidBoundOwnerSpace(
     try {
       const signed = parseSignedCompactUcanAttenuation(withoutBearer(authorization), delegation.cid);
       for (const resource of Object.keys(signed.payload.att)) {
-        const space = /^(tinycloud:[^/]+)\/[^/]+\/.*$/.exec(resource)?.[1];
+        const space = /^(tinycloud:[^/]+)\/[^/]+(?:\/.*)?$/.exec(resource)?.[1];
         if (space && ownerDidFromSpace(space) && normalizeDid(ownerDidFromSpace(space)!) === normalizeDid(ownerDid)) {
           return space;
         }
@@ -139,7 +146,11 @@ export async function revokeDelegationOnNode(params: {
           cid, node, host: ctx.host,
         });
         if (!boundSpace) {
-          throw new CLIError("TARGET_NOT_FOUND", `Delegation "${cid}" was not found by the node or local grant sources.`, ExitCode.NOT_FOUND);
+          throw new CLIError(
+            "TARGET_NOT_FOUND",
+            `This profile cannot list the owner's delegations on the node, so it cannot look up "${cid}", and it has no local record of that grant. Use the profile that created the grant, or revoke it from the Delegations screen of the account site (https://account.tinycloud.xyz).`,
+            ExitCode.NOT_FOUND,
+          );
         }
         targetSpaceSource = boundSpace.source;
       } else {
@@ -155,7 +166,7 @@ export async function revokeDelegationOnNode(params: {
   if (!rawAuthorityCovered) {
     try {
       const acquired = await ensureDelegationAuthority({
-        ctx, profile, node, requested: [revokePermission], expiryOption: undefined,
+        ctx, profile, node, requested: [revokePermission], expiryOption: REVOKE_AUTHORITY_EXPIRY,
         reason: `Revoke delegation ${cid}`, yes: params.yes, consentAlreadyGiven: true,
         persist: false, openKeyAcquisition: params.openKeyAcquisition,
       });
@@ -164,14 +175,19 @@ export async function revokeDelegationOnNode(params: {
       if (error === null || typeof error !== "object" || !("code" in error) || error.code !== "RAW_RECAP_RESOURCE_UNSUPPORTED") {
         throw error;
       }
-      const fallback = boundSpace ?? await resolveCidBoundTargetSpace({
-        profileName: ctx.profile, ownerDid: profile.ownerDid ?? ownerDidFromSpace(node.accountSpaceId) ?? ownerDidFromSpace(profile.spaceId),
-        cid, node, host: ctx.host, localTarget: params.localTarget,
+      const ownerDid = profile.ownerDid ?? ownerDidFromSpace(node.accountSpaceId) ?? ownerDidFromSpace(profile.spaceId);
+      let fallback = boundSpace ?? await resolveCidBoundTargetSpace({
+        profileName: ctx.profile, ownerDid, cid, node, host: ctx.host, localTarget: params.localTarget,
       });
+      if (!fallback && ownerDid) {
+        // No local record of the grant (another profile or machine signed it): the owner's node-side record may name it.
+        const space = await lookupOwnerSpaceOnNode(node, cid, ownerDid);
+        if (space) fallback = { space, source: "node-delegation-record" };
+      }
       if (!fallback) {
         throw new CLIError(
           "RAW_RECAP_RESOURCE_UNSUPPORTED",
-          `Cannot safely revoke "${cid}": raw CID ReCap resources are unavailable and no matching owner-signed local grant binds its space to the CID.`,
+          `Cannot revoke "${cid}": this CLI profile has no record of this grant and the node's record does not match the signed-in owner.`,
           ExitCode.PERMISSION_DENIED,
         );
       }
@@ -179,15 +195,19 @@ export async function revokeDelegationOnNode(params: {
       authorityScopeSource = fallback.source;
       authorityScopeReason = fallback.source === "local-signed-grant-artifact"
         ? "Raw-CID revoke authority could not be issued; the fallback space came from an owner-signed local grant whose Authorization recomputes to this CID."
-        : "Raw-CID revoke authority could not be issued; the fallback space came from a locally verified owner-signed stored grant bound to this CID.";
+        : fallback.source === "node-delegation-record"
+          ? "Raw-CID revoke authority could not be issued; the fallback space came from the node's delegation record, whose issuer chains to the signed-in owner and whose space the owner holds."
+          : "Raw-CID revoke authority could not be issued; the fallback space came from a locally verified owner-signed stored grant bound to this CID.";
       targetSpaceSource = fallback.source;
       const acquired = await ensureDelegationAuthority({
         ctx, profile, node,
         requested: [{ service: "tinycloud.delegation",
           space: profile.authMethod !== "openkey" && fallback.space === node.accountSpaceId ? "default" : fallback.space,
           path: "", actions: ["tinycloud.delegation/revoke"] }],
-        expiryOption: undefined,
-        reason: `Revoke delegation ${cid} using its CID-bound owner-signed grant ${fallback.source === "local-stored-grant" ? "record" : "artifact"}`,
+        expiryOption: REVOKE_AUTHORITY_EXPIRY,
+        reason: fallback.source === "node-delegation-record"
+          ? `Revoke delegation ${cid} using the node's record of the owner's grant`
+          : `Revoke delegation ${cid} using its CID-bound owner-signed grant ${fallback.source === "local-stored-grant" ? "record" : "artifact"}`,
         yes: params.yes, consentAlreadyGiven: true, persist: false,
         openKeyAcquisition: params.openKeyAcquisition,
       });

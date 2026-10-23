@@ -1,5 +1,43 @@
 # @tinycloud/share-envelope
 
+## 1.2.1
+
+### Patch Changes
+
+- f8c2967: `tc share publish` prints addressed shares as a short link, `https://share.tinycloud.xyz/s/<id>#v=3&k=<key>&c=<cid>`, instead of a link of about 17,000 characters. Share's short-link service stores only the sealed envelope bytes. The read key and the CID of those bytes stay in the link's fragment: the service never receives the key, and `share receive`/`share inspect` refuse bytes that do not hash to the link's CID.
+  - `--long-link` prints the long self-contained link instead.
+  - If the short-link service is unavailable, publishing still succeeds. The CLI prints the long link and warns that it is long, and `--json` adds `shortLinkError`.
+  - That includes refused connections, timeouts (10 seconds per request) and broken answers.
+  - When the Share host itself can't be reached, publishing stops before anything is shared with `SHARE_SERVICE_UNAVAILABLE` (exit 4), instead of a message blaming the TinyCloud node.
+  - `share show <id> --reveal-link` prints the same short link.
+  - `share revoke` deletes the stored envelope after the node confirms the revocation. A failed delete only warns; the envelope expires with the share.
+  - Sender history and the `--notify` invitation still carry the long link. Bearer links are unchanged.
+
+  `@tinycloud/share-envelope` adds a `@tinycloud/share-envelope/short-link` subpath export with `parseShortShareUrl`, `splitInlineToShort` and `rebuildInlineFromShort`, tested against the vectors Share's own codec uses. They are not in the package root, so bundles that import the root (such as `@tinycloud/web-sdk`) do not grow. Details: TC-1737
+
+## 1.2.1-beta.0
+
+### Patch Changes
+
+- f8c2967: `tc share publish` prints addressed shares as a short link, `https://share.tinycloud.xyz/s/<id>#v=3&k=<key>&c=<cid>`, instead of a link of about 17,000 characters. Share's short-link service stores only the sealed envelope bytes. The read key and the CID of those bytes stay in the link's fragment: the service never receives the key, and `share receive`/`share inspect` refuse bytes that do not hash to the link's CID.
+  - `--long-link` prints the long self-contained link instead.
+  - If the short-link service is unavailable, publishing still succeeds. The CLI prints the long link and warns that it is long, and `--json` adds `shortLinkError`.
+  - That includes refused connections, timeouts (10 seconds per request) and broken answers.
+  - When the Share host itself can't be reached, publishing stops before anything is shared with `SHARE_SERVICE_UNAVAILABLE` (exit 4), instead of a message blaming the TinyCloud node.
+  - `share show <id> --reveal-link` prints the same short link.
+  - `share revoke` deletes the stored envelope after the node confirms the revocation. A failed delete only warns; the envelope expires with the share.
+  - Sender history and the `--notify` invitation still carry the long link. Bearer links are unchanged.
+
+  `@tinycloud/share-envelope` adds a `@tinycloud/share-envelope/short-link` subpath export with `parseShortShareUrl`, `splitInlineToShort` and `rebuildInlineFromShort`, tested against the vectors Share's own codec uses. They are not in the package root, so bundles that import the root (such as `@tinycloud/web-sdk`) do not grow. Details: TC-1737
+
+## 1.2.0
+
+### Minor Changes
+
+- 02c0a44: Owner-signed artifact pin for addressed shares (TC-1428). The Policy/v3 envelope gains an optional `artifactPin` field (artifact id, version, sha256 of the version's `manifest.json`, and the sha256 and size of the stored ciphertext file the share reads). It is covered by the envelope signature, so the existing envelope version and the node are unchanged (the node reads the envelope as opaque JSON). `share-sdk` adds a small verification module (`verifyArtifactShare`, `assertArtifactBinding`, `verifyArtifactFileBytes`, `verifyArtifactManifestBytes`, `buildArtifactPin`): a share that reads `artifacts/` without a pin that matches its content source is refused, a pinned share cannot grant edit, and fetched bytes that do not hash to the pinned digest are refused before any decrypt request. `inspectShare` reports `artifact: { id, version }`. `share publish --artifact` signs the pin for addressed shares.
+
+  Breaking for old viewers: the envelope schema is strict, so a viewer that predates this release rejects an envelope with `artifactPin` rather than showing it. Update the viewer's `@tinycloud/share-sdk` before publishing pinned addressed shares. The owner is the trusted signer; the node has no write-once ACL, so an owner can still overwrite a version file and recipients then fail closed. Bearer artifact shares have no envelope and carry no pin yet.
+
 ## 1.2.0-beta.0
 
 ### Minor Changes

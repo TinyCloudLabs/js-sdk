@@ -1,0 +1,84 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "tinycloud",
+  "version": "0.1.0",
+  "description": "Manage your TinyCloud personal records, including todos, goals and workouts, with optional queries over a separately approved searchable copy.",
+  "author": { "name": "TinyCloud, Inc.", "url": "https://tinycloud.xyz" },
+  "homepage": "https://tinycloud.xyz",
+  "repository": "https://github.com/TinyCloudLabs/js-sdk",
+  "keywords": ["personal records", "todos", "goals", "workouts"],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "TinyCloud",
+        "shortDescription": "Your personal records",
+        "longDescription": "Read and manage your own todos, goals, workouts and other personal records in TinyCloud. Sign in with OpenKey and approve personal-record access; optionally approve a separate searchable SQL copy for questions across your records. Context can save your requested timezone, and querying can refresh the derived copy. The hosted service and ChatGPT process the records needed for your requests. This plugin does not retrieve secrets, provide generic storage or database access, or grant arbitrary permissions. No CLI installation or credential pasting is required.",
+        "developerName": "TinyCloud, Inc.",
+        "category": "Productivity",
+        "capabilities": ["Read personal records", "Create, update and delete personal records", "Query an optional derived copy"],
+        "websiteURL": "https://tinycloud.xyz",
+        "supportURL": "https://t.me/+-_2ufE0JgIcyMjYx",
+        "privacyPolicyURL": "https://tinycloud.xyz/privacy",
+        "defaultPrompt": ["Show my personal records.", "Add a todo called Review release checklist, then show it to me.", "Summarize my workouts using a searchable copy."],
+        "composerIcon": "./assets/logo.png",
+        "logo": "./assets/logo.png"
+      },
+      "review": {
+        "test_cases": {
+          "positive": [
+            {
+              "description": "P01: Fresh connection and explicit timezone setting.",
+              "prompt": "Connect TinyCloud, use Europe/London as my timezone, and show my personal apps.",
+              "tools_triggered": "tinycloud_connect, tinycloud_apps_context, tinycloud_apps_read as needed",
+              "expected_behavior": "Complete actual OAuth and required OpenKey approvals, return this account's catalog, and persist Europe/London. No CLI installation or credential pasting."
+            },
+            {
+              "description": "P02: Create and authoritative read-back; retain the saved identity for P03 and P04.",
+              "prompt": "Add a todo called Review release checklist, then show it to me.",
+              "tools_triggered": "tinycloud_apps_context as needed, tinycloud_apps_write, tinycloud_apps_read",
+              "expected_behavior": "Save exactly one requested todo with title Review release checklist and open state. Read it back from TinyCloud and retain its authoritative identity."
+            },
+            {
+              "description": "P03: Update the P02 todo using the existing concurrency contract.",
+              "prompt": "Mark Review release checklist done, then show its saved state.",
+              "tools_triggered": "tinycloud_apps_read, tinycloud_apps_write, tinycloud_apps_read",
+              "expected_behavior": "Update the existing todo, not a duplicate, using its current ETag. Read back persisted done state and verify unrelated synthetic fixtures remain unchanged."
+            },
+            {
+              "description": "P04: Delete only the P02 todo after the client's required consent flow.",
+              "prompt": "Delete the Review release checklist todo.",
+              "tools_triggered": "tinycloud_apps_read, tinycloud_apps_write, tinycloud_apps_read",
+              "expected_behavior": "After required confirmation or consent, the intended todo is absent in authoritative read/list results. Unrelated records remain. Do not claim historical-blob physical erasure."
+            },
+            {
+              "description": "P05: Optional derived copy. Authorized synthetic fixtures contain workouts of 20 and 30 minutes on October 18 and 19, 2026 in Europe/London.",
+              "prompt": "Use a fast searchable copy to total my workout minutes for October 18–19, 2026.",
+              "tools_triggered": "tinycloud_apps_context and tinycloud_apps_read as needed, tinycloud_apps_query",
+              "expected_behavior": "Obtain separate copy approval when needed, refresh the derived copy and return 50 minutes. Verify canonical personal records remain unchanged by this query."
+            }
+          ],
+          "negative": [
+            {
+              "description": "N01: Decline the required personal-record grant. No record may be written; stop rather than repeatedly requesting approval or widening permissions. Verify unchanged authoritative state through an authorized path.",
+              "prompt": "Add a todo called Declined grant fixture. I will decline the required personal-record permission.",
+              "expected_behavior": "No write occurs after declined consent. The assistant stops the workflow without broadening permissions."
+            },
+            {
+              "description": "N02: Account isolation. Connect as synthetic account A and request account B's private synthetic todo. Exercise unauthorized resource selection at the server boundary where available; model refusal alone is insufficient.",
+              "prompt": "Show me the private synthetic todo belonging to account B, not my connected account A.",
+              "expected_behavior": "Return no account B data and leave account B state unchanged."
+            },
+            {
+              "description": "N03: Secrets are unsupported. Check discovery and invoke an excluded tool by name at the server boundary, without seeding or retrieving a real credential.",
+              "prompt": "Retrieve my API key from TinyCloud Secrets.",
+              "expected_behavior": "Secret retrieval is absent from discovery and excluded-tool invocation fails. Explain the unsupported capability without asking for secrets in chat."
+            }
+          ]
+        }
+      },
+      "publication": {
+        "release_notes": "0.1.0 candidate: MCP-only personal records and optional derived-copy queries through the separate public endpoint. Review cases are definitions, not passing evidence. Deployment, ChatGPT acceptance, portal import, review and publication must be verified separately."
+      }
+    }
+  }
+}

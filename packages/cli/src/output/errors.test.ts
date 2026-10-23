@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { ProfileLockTimeoutError } from "@tinycloud/operations/state";
-import { CLIError, cliErrorFromService, handleError, setActiveProfileName, storageFullError, wrapError } from "./errors.js";
+import { CLIError, GRANT_REVOKED_EXIT_CODE, cliErrorFromService, handleError, setActiveProfileName, storageFullError, wrapError } from "./errors.js";
 import { buildSecretRequestUrl, secretSetupFor } from "@tinycloud/operations/secret-request";
 
 afterEach(() => {
@@ -50,6 +50,22 @@ describe("wrapError", () => {
     }
     const deliberate = new CLIError("NODE_ERROR", message, 7);
     expect(cliErrorFromService(deliberate)).toBe(deliberate);
+  });
+
+  test("a node 401 that names a revoked grant is GRANT_REVOKED (exit 5, the same as `tc replica`) and drops the node text; other 401s are unchanged", () => {
+    for (const body of ["delegation-revoked: bafkr4icid", "delegation-ancestor-revoked: ancestor=bafkr4icid invoked=bafkr4icid"]) {
+      const error = cliErrorFromService({
+        code: "KV_ERROR", message: `Failed to list keys: 401 - ${body}`, meta: { status: 401 },
+      });
+      expect(error).toMatchObject({ code: "GRANT_REVOKED", exitCode: 5, status: 401 });
+      expect(error.exitCode).toBe(GRANT_REVOKED_EXIT_CODE);
+      expect(error.message).toMatch(/^This grant was revoked\. Ask the owner for a new grant \(`\w+ auth request \.\.\.`\)\.$/);
+      expect(error.message).not.toContain("bafkr4icid");
+    }
+    expect(cliErrorFromService({ code: "KV_ERROR", message: "Failed to list keys: 401 - expired", meta: { status: 401 } }))
+      .toMatchObject({ code: "AUTH_REQUIRED", exitCode: 3 });
+    expect(cliErrorFromService({ code: "KV_ERROR", message: "403 - delegation-revoked", meta: { status: 403 } }))
+      .toMatchObject({ code: "PERMISSION_DENIED", exitCode: 5 });
   });
 
   test("an operation's typed auth decision without an HTTP status keeps its exit code; a status still decides", () => {
@@ -280,7 +296,7 @@ describe("handleError authorization output", () => {
 });
 
 describe("storage full", () => {
-  const manage = "Free up space or upgrade: https://account.tinycloud.xyz/billing";
+  const manage = "Free up space or upgrade: https://account.tinycloud.xyz/storage";
   // Node 402 as the SDK reports it: per-space numbers (limit 0) plus the account's.
   const fullSpace = {
     code: "STORAGE_QUOTA_EXCEEDED",

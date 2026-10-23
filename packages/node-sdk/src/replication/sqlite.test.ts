@@ -7,20 +7,23 @@
  * faked through the internal seams — no WASM, no network.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, describe, expect, setSystemTime, spyOn, test } from "bun:test";
-import { chmod, mkdir, mkdtemp, open as openFile, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, open as openFile, readFile, readdir, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import * as fsPromises from "node:fs/promises";
 import { constants as fsConstants, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { ed25519 } from "@noble/curves/ed25519";
-import type { ReplicaTransport } from "@tinycloud/replica";
+import { contentHash, type ReplicaTransport } from "@tinycloud/replica";
 import { SqliteReplicaStore } from "@tinycloud/replica/sqlite";
 import { Database } from "bun:sqlite";
 import { device, FakeNode } from "../../../replica/test/fixtures";
 import type {
+  KVReplicaHandle,
   KVReplicaSpec,
+  KVReplicaStorage,
   PendingWriteState,
   ReplicationIdentity,
 } from "@tinycloud/sdk-services";
@@ -110,6 +113,26 @@ function serialGuard(): <T>(section: () => Promise<T>) => Promise<T> {
   };
 }
 
+/**
+ * Serializing like `serialGuard`, but a call made from inside a running section
+ * rejects instead of queueing behind itself. A real re-entry would hang the
+ * profile lock; this turns that hang into a fast failure.
+ */
+function nonReentrantGuard(): <T>(section: () => Promise<T>) => Promise<T> {
+  let tail: Promise<unknown> = Promise.resolve();
+  const inside = new AsyncLocalStorage<true>();
+  return (section) => {
+    if (inside.getStore()) {
+      return Promise.reject(new Error("guard re-entered inside its own section"));
+    }
+    const run = tail.then(() => inside.run(true, section));
+    tail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  };
+}
 const sharedGuard = serialGuard();
 
 function storageOptions(over: Partial<SqliteReplicaStorageOptions> = {}): SqliteReplicaStorageOptions {
@@ -3695,6 +3718,268 @@ describe("grant reuse across restored invocations (§4.4 inputs)", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Quota admission (TC-858 S5, plan §7): `maxBytes` ledger checked in applyPage
+// ---------------------------------------------------------------------------
+
+const SIX_KB = 6_000;
+const signal = (): AbortSignal => new AbortController().signal;
+
+/** One page carrying `entries` (key, bytes) changes, content served by hash. */
+function contentTransport(entries: Array<[string, Uint8Array]>): ReplicaTransport {
+  const served = new Map<string, { bytes: Uint8Array; etag: string }>();
+  const changes = entries.map(([key, bytes]) => {
+    const etag = `"blake3-${contentHash(bytes)}"`;
+    served.set(key, { bytes, etag });
+    return { key, deleted: false as const, etag, metadata: {} };
+  });
+  return {
+    async syncPage({ prefix }) {
+      return {
+        changes,
+        more: false,
+        cursor: "1",
+        source: { nodeDid: "did:key:zTestNode", space: SPACE_A, prefix },
+        authority: { notBefore: null, expiresAt: null, retainUntil: null },
+      };
+    },
+    async fetchContent(keys) {
+      return new Map(keys.map((key) => [key, served.get(key) ?? { missing: true as const }]));
+    },
+  };
+}
+
+/** Two replicas in one profile (`notes/`, `docs/`), each one 6 KB change. */
+async function pairStorage(guard: SqliteReplicaStorageOptions["guard"]): Promise<KVReplicaStorage> {
+  const dir = await makeDir();
+  return createSqliteReplicaStorage(
+    storageOptions({
+      dir,
+      guard,
+      maxBytes: 10_000,
+      transportFor: (_grant, replicaSpec) =>
+        replicaSpec.prefix === "notes/"
+          ? contentTransport([["notes/a", new Uint8Array(SIX_KB).fill(1)]])
+          : contentTransport([["docs/a", new Uint8Array(SIX_KB).fill(2)]]),
+    }),
+  );
+}
+
+async function openPair(
+  storage: KVReplicaStorage,
+): Promise<{ notes: KVReplicaHandle; docs: KVReplicaHandle }> {
+  const notes = await storage.open(spec({ prefix: "notes/" }));
+  const docs = await storage.open(spec({ prefix: "docs/" }));
+  await notes.installGrant(await mintUcan({ audience: DEVICE_DID, prefixes: ["notes", "notes/"] }));
+  await docs.installGrant(await mintUcan({ audience: DEVICE_DID, prefixes: ["docs", "docs/"] }));
+  return { notes, docs };
+}
+
+/** Both replicas sync at once: exactly one 6 KB page fits in a 10 KB budget. */
+async function expectOneAdmitted(storage: KVReplicaStorage): Promise<void> {
+  const { notes, docs } = await openPair(storage);
+  const outcomes = await Promise.allSettled([
+    notes.sync({ signal: signal(), syncStartEpoch: 1 }),
+    docs.sync({ signal: signal(), syncStartEpoch: 1 }),
+  ]);
+  const refused = outcomes.filter((o): o is PromiseRejectedResult => o.status === "rejected");
+  expect(refused).toHaveLength(1);
+  expect(refused[0]!.reason).toMatchObject({ code: "STORAGE_BUDGET" });
+  expect((await notes.status()).bytes + (await docs.status()).bytes).toBe(SIX_KB);
+  await notes.close();
+  await docs.close();
+}
+
+/** A transport whose successive `syncPage` calls follow `script`; an `Error` entry throws. */
+function scriptedTransport(
+  script: Array<Array<[string, Uint8Array]> | Error>,
+  served: Map<string, { bytes: Uint8Array; etag: string }> = new Map(),
+): ReplicaTransport {
+  let call = 0;
+  return {
+    async syncPage({ prefix }) {
+      const step = script[call++];
+      if (step === undefined) throw new Error("script exhausted");
+      if (step instanceof Error) throw step;
+      const changes = step.map(([key, bytes]) => {
+        const etag = `"blake3-${contentHash(bytes)}"`;
+        served.set(key, { bytes, etag });
+        return { key, deleted: false as const, etag, metadata: {} };
+      });
+      return {
+        changes,
+        more: call < script.length && !(script[call] instanceof Error && false),
+        cursor: String(call),
+        source: { nodeDid: "did:key:zTestNode", space: SPACE_A, prefix },
+        authority: { notBefore: null, expiresAt: null, retainUntil: null },
+      };
+    },
+    async fetchContent(keys) {
+      return new Map(keys.map((key) => [key, served.get(key) ?? { missing: true as const }]));
+    },
+  };
+}
+
+/** One notes/ replica whose successive syncs follow `syncs` (each an array of pages). */
+async function scriptedReplica(
+  syncs: Array<Array<Array<[string, Uint8Array]> | Error>>,
+  quota: { options?: number; spec?: number },
+): Promise<{ handle: KVReplicaHandle; replicaDir: string }> {
+  const dir = await makeDir();
+  const served = new Map<string, { bytes: Uint8Array; etag: string }>();
+  let index = 0;
+  const storage = createSqliteReplicaStorage(
+    storageOptions({
+      dir,
+      guard: serialGuard(),
+      maxBytes: quota.options,
+      transportFor: () => scriptedTransport(syncs[index++]!, served),
+    }),
+  );
+  const handle = await storage.open(spec(quota.spec === undefined ? {} : { quota: { maxBytes: quota.spec } }));
+  await handle.installGrant(await mintUcan({ audience: DEVICE_DID, prefixes: ["notes", "notes/"] }));
+  const [partition] = await partitionDirs(dir);
+  const replicasDir = join(dir, partition!, "replicas");
+  const [replicaName] = await readdir(replicasDir);
+  return { handle, replicaDir: join(replicasDir, replicaName!) };
+}
+
+/** Bytes of every file under `<replica>/blobs`, measured independently of the store. */
+async function diskBlobBytes(replicaDir: string): Promise<number> {
+  let total = 0;
+  const root = join(replicaDir, "blobs");
+  for (const shard of await readdir(root).catch(() => [] as string[])) {
+    for (const name of await readdir(join(root, shard))) total += (await stat(join(root, shard, name))).size;
+  }
+  return total;
+}
+
+const bytesOf = (size: number, fill: number): Uint8Array => new Uint8Array(size).fill(fill);
+
+describe("quota admission (TC-858 S5)", () => {
+  test("replacing a value with one of equal size is a net-zero page and is admitted", async () => {
+    const { handle, replicaDir } = await scriptedReplica(
+      [[[["notes/a", bytesOf(SIX_KB, 1)]]], [[["notes/a", bytesOf(SIX_KB, 2)]]]],
+      { options: 10_000 },
+    );
+    await handle.sync({ signal: signal(), syncStartEpoch: 1 });
+    await handle.sync({ signal: signal(), syncStartEpoch: 1 });
+    expect((await handle.status()).bytes).toBe(SIX_KB);
+    expect(await diskBlobBytes(replicaDir)).toBe(SIX_KB);
+    await handle.close();
+  });
+
+  test("a sync that fails mid-way never leaves more than maxBytes of content on disk", async () => {
+    const { handle, replicaDir } = await scriptedReplica(
+      [
+        [[["notes/a", bytesOf(SIX_KB, 1)]]],
+        [[["notes/a", bytesOf(4_000, 2)]], [["notes/b", bytesOf(SIX_KB, 3)]], new Error("node went away")],
+      ],
+      { options: 10_000 },
+    );
+    await handle.sync({ signal: signal(), syncStartEpoch: 1 });
+    await expect(handle.sync({ signal: signal(), syncStartEpoch: 1 })).rejects.toBeDefined();
+    expect(await diskBlobBytes(replicaDir)).toBeLessThanOrEqual(10_000);
+    await handle.close();
+  });
+
+  test("crash orphans are counted, and collected on reopen so a profile at the cap recovers", async () => {
+    const dir = await makeDir();
+    const make = (maxBytes: number) => createSqliteReplicaStorage(
+      storageOptions({
+        dir,
+        guard: serialGuard(),
+        maxBytes,
+        transportFor: (_grant, replicaSpec) =>
+          replicaSpec.prefix === "notes/"
+            ? contentTransport([["notes/a", bytesOf(SIX_KB, 1)]])
+            : contentTransport([["docs/a", bytesOf(3_000, 2)]]),
+      }),
+    );
+    const first = make(10_000);
+    const { notes, docs } = await openPair(first);
+    await notes.sync({ signal: signal(), syncStartEpoch: 1 });
+    await notes.close();
+    await docs.close();
+    // A crash between the blob write and the commit leaves an unreferenced blob behind.
+    const [partition] = await partitionDirs(dir);
+    const replicasDir = join(dir, partition!, "replicas");
+    let firstReplica: string | undefined;
+    for (const name of await readdir(replicasDir)) {
+      if ((await diskBlobBytes(join(replicasDir, name))) > 0) firstReplica = name;
+    }
+    const orphanDir = join(replicasDir, firstReplica!, "blobs", "ff");
+    await mkdir(orphanDir, { recursive: true });
+    await writeFile(join(orphanDir, "f".repeat(64)), bytesOf(SIX_KB, 9));
+
+    // Reopening collects it: with the orphan still counted (6 + 6 KB) the docs replica's 3 KB
+    // page would be refused; collected, 6 + 3 <= 10 admits it.
+    const reopened = make(10_000);
+    const again = await openPair(reopened);
+    expect(await diskBlobBytes(join(replicasDir, firstReplica!))).toBe(SIX_KB);
+    await expect(again.docs.sync({ signal: signal(), syncStartEpoch: 1 })).resolves.toBeDefined();
+    expect((await again.docs.status()).bytes).toBe(3_000);
+    await again.notes.close();
+    await again.docs.close();
+  });
+
+  test("spec.quota.maxBytes takes precedence over the storage option", async () => {
+    const { handle } = await scriptedReplica([[[["notes/a", bytesOf(SIX_KB, 1)]]]], { options: 100_000, spec: 1_000 });
+    await expect(handle.sync({ signal: signal(), syncStartEpoch: 1 })).rejects.toMatchObject({ code: "STORAGE_BUDGET" });
+    await handle.close();
+  });
+
+  test("CLI shape: two replicas in one profile share one budget under the profile guard", async () => {
+    await expectOneAdmitted(await pairStorage(serialGuard()));
+  });
+
+  test("a refused page commits nothing: no bytes stored, fence not advanced", async () => {
+    const storage = await pairStorage(serialGuard());
+    const { notes, docs } = await openPair(storage);
+    await notes.sync({ signal: signal(), syncStartEpoch: 1 });
+    await expect(docs.sync({ signal: signal(), syncStartEpoch: 1 })).rejects.toMatchObject({
+      code: "STORAGE_BUDGET",
+    });
+    expect((await docs.status()).bytes).toBe(0);
+    expect((await docs.status()).syncedThroughEpoch).toBe(0);
+    await notes.close();
+    await docs.close();
+  });
+
+  test("identical content under two keys is counted once against the budget", async () => {
+    const same = new Uint8Array(SIX_KB).fill(3);
+    const dir = await makeDir();
+    const storage = createSqliteReplicaStorage(
+      storageOptions({
+        dir,
+        guard: serialGuard(),
+        maxBytes: 10_000,
+        transportFor: (_grant, replicaSpec) =>
+          replicaSpec.prefix === "notes/"
+            ? contentTransport([["notes/a", same], ["notes/b", same]])
+            : contentTransport([["docs/a", new Uint8Array(3_000).fill(4)]]),
+      }),
+    );
+    const { notes, docs } = await openPair(storage);
+    await notes.sync({ signal: signal(), syncStartEpoch: 1 });
+    // 6 KB is stored once, so a 3 KB page still fits (6 + 3 <= 10). Counting both
+    // keys (12 KB) would refuse it.
+    await expect(docs.sync({ signal: signal(), syncStartEpoch: 1 })).resolves.toBeDefined();
+    expect((await docs.status()).bytes).toBe(3_000);
+    await notes.close();
+    await docs.close();
+  });
+
+  test("page commit with maxBytes set completes under a non-reentrant guard (no nested lock)", async () => {
+    const storage = await pairStorage(nonReentrantGuard());
+    const { notes, docs } = await openPair(storage);
+    await notes.sync({ signal: signal(), syncStartEpoch: 1 });
+    expect((await notes.status()).bytes).toBe(SIX_KB);
+    await notes.close();
+    await docs.close();
+  });
+});
+
 // L1 (#548 security review): erase and purge refuse a replaced or symlinked root and never
 // remove recursively; a foreign tree behind a swapped path survives.
 describe("replica erase and purge refuse replaced roots", () => {
@@ -4063,4 +4348,34 @@ describe("CLI diagnostics files under the replication root", () => {
       spy.mockRestore();
     }
   });
+});
+
+test("a null-anchor reopen never raises a grant's verified consent deadline", async () => {
+  const DAY = 86_400_000;
+  const t0 = Date.now();
+  await makeDir();
+  const storage = createSqliteReplicaStorage(storageOptions());
+  const owner = { grantTtlMs: 7 * DAY, consentAnchor: { at: t0, source: "siwe" as const } };
+  const delegate = { did: DELEGATE_DID, jwk: {} };
+  try {
+    setSystemTime(new Date(t0 + 5 * DAY)); // first_install is recorded here, after the SIWE anchor
+    const first = await storage.open(spec({ grantPolicy: owner }));
+    await first.installGrant(await mintUcan({ audience: DEVICE_DID, exp: Math.floor((t0 + 30 * DAY) / 1000) }));
+    await first.close();
+    setSystemTime(new Date(t0 + 6 * DAY));
+    const provisioned = await storage.open(spec({ device: delegate, grantPolicy: owner }));
+    await provisioned.installGrant(await mintUcan({ audience: DELEGATE_DID, exp: Math.floor((t0 + 30 * DAY) / 1000) }));
+    await provisioned.sync({ signal: new AbortController().signal, syncStartEpoch: 1 });
+    await provisioned.close();
+    setSystemTime(new Date(t0 + 8 * DAY)); // past the owner deadline t0 + 7d
+    const compact = await storage.open(spec({ device: delegate, grantPolicy: { grantTtlMs: 7 * DAY, consentAnchor: null } }));
+    try {
+      expect((await compact.grant())?.consentDeadline).toBe(t0 + 7 * DAY);
+      await expect(compact.get("notes/a")).rejects.toMatchObject({ code: "GRANT_EXPIRED" });
+    } finally {
+      await compact.close();
+    }
+  } finally {
+    setSystemTime();
+  }
 });

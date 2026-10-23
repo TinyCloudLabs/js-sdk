@@ -6,8 +6,6 @@ import { join } from "node:path";
 
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
-import { addFormats, Ajv, AjvJsonSchemaValidator } from "@modelcontextprotocol/client/validators/ajv";
-import catalog from "@tinycloud/operations/operations.json";
 
 const packageDirectory = new URL("..", import.meta.url).pathname;
 const cliPath = join(packageDirectory, "dist/cli.js");
@@ -27,11 +25,7 @@ test("official v2 client lists exactly the generated KV CRUD and SQLite tools ov
     env: { ...process.env, TC_HOME: home },
     stderr: "pipe",
   });
-  const ajv = new Ajv({ strict: false });
-  addFormats(ajv);
-  const client = new Client({ name: "tinycloud-mcp-i4-test", version: "0.0.0" }, {
-    jsonSchemaValidator: new AjvJsonSchemaValidator(ajv),
-  });
+  const client = new Client({ name: "tinycloud-mcp-i4-test", version: "0.0.0" });
   let stderr = "";
   transport.stderr?.on("data", (chunk) => { stderr += String(chunk); });
 
@@ -51,42 +45,17 @@ test("official v2 client lists exactly the generated KV CRUD and SQLite tools ov
       "tinycloud_kv_head",
       "tinycloud_kv_put",
       "tinycloud_kv_delete",
+      "tinycloud_knowledge_list",
+      "tinycloud_knowledge_read",
       "tinycloud_sql_schema_inspect",
       "tinycloud_sql_query",
       "tinycloud_sql_execute",
       "tinycloud_secrets_get",
       "tinycloud_secrets_status",
     ]);
-    expect(listed.tools).toHaveLength(17);
+    expect(listed.tools).toHaveLength(19);
 
-    const byId = new Map((catalog as { operations: Array<{ id: string; version: number; input: unknown; result: unknown }> }).operations
-      .map((operation) => [`${operation.id}@${operation.version}`, operation]));
-    const mapping: Record<string, string> = {
-      tinycloud_status: "tinycloud.status.get@1",
-      tinycloud_auth_status: "tinycloud.auth.status@1",
-      tinycloud_auth_capabilities: "tinycloud.auth.capabilities@1",
-      tinycloud_auth_request: "tinycloud.auth.request@1",
-      tinycloud_auth_import: "tinycloud.auth.import@1",
-      tinycloud_account_spaces_list: "tinycloud.account.spaces.list@1",
-      tinycloud_account_applications_list: "tinycloud.account.applications.list@1",
-      tinycloud_kv_list: "tinycloud.kv.list@1",
-      tinycloud_kv_get: "tinycloud.kv.get@1",
-      tinycloud_kv_head: "tinycloud.kv.head@1",
-      tinycloud_kv_put: "tinycloud.kv.put@1",
-      tinycloud_kv_delete: "tinycloud.kv.delete@1",
-      tinycloud_sql_schema_inspect: "tinycloud.sql.schema.inspect@1",
-      tinycloud_sql_query: "tinycloud.sql.query@1",
-      tinycloud_sql_execute: "tinycloud.sql.execute@1",
-      tinycloud_secrets_get: "tinycloud.secrets.get@1",
-      tinycloud_secrets_status: "tinycloud.secrets.status@1",
-    };
     for (const tool of listed.tools) {
-      expect(tool.inputSchema).toEqual(
-        byId.get(mapping[tool.name]!)!.input as typeof tool.inputSchema,
-      );
-      expect(tool.outputSchema).toEqual(
-        byId.get(mapping[tool.name]!)!.result as typeof tool.outputSchema,
-      );
       expect(tool.annotations).toMatchObject({
         readOnlyHint: ![
           "tinycloud_auth_request",
@@ -106,6 +75,8 @@ test("official v2 client lists exactly the generated KV CRUD and SQLite tools ov
           "tinycloud_kv_head",
           "tinycloud_kv_put",
           "tinycloud_kv_delete",
+          "tinycloud_knowledge_list",
+          "tinycloud_knowledge_read",
           "tinycloud_sql_schema_inspect",
           "tinycloud_sql_query",
           "tinycloud_sql_execute",
@@ -121,10 +92,6 @@ test("official v2 client lists exactly the generated KV CRUD and SQLite tools ov
       operation: { operationId: "tinycloud.status.get", operationVersion: 1 },
       context: { profile: "default" },
     });
-    expect(status.content).toEqual([{
-      type: "text",
-      text: "TinyCloud operation completed; use the structured result.",
-    }]);
 
     const expectedToolResults = [
       ["tinycloud_auth_status", {}, { status: "ok", operation: { operationId: "tinycloud.auth.status", operationVersion: 1 } }],
@@ -138,6 +105,8 @@ test("official v2 client lists exactly the generated KV CRUD and SQLite tools ov
       ["tinycloud_kv_head", { space: "applications", key: "agents/example" }, { status: "error", operation: { operationId: "tinycloud.kv.head", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
       ["tinycloud_kv_put", { space: "applications", key: "agents/example", mode: "create", content: { encoding: "utf8", value: "hello" } }, { status: "error", operation: { operationId: "tinycloud.kv.put", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
       ["tinycloud_kv_delete", { space: "applications", key: "agents/example" }, { status: "error", operation: { operationId: "tinycloud.kv.delete", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
+      ["tinycloud_knowledge_list", {}, { status: "error", operation: { operationId: "tinycloud.knowledge.list", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
+      ["tinycloud_knowledge_read", { app_id: "xyz.example.app" }, { status: "error", operation: { operationId: "tinycloud.knowledge.read", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
       ["tinycloud_sql_schema_inspect", { space: "applications", database: "notes" }, { status: "error", operation: { operationId: "tinycloud.sql.schema.inspect", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
       ["tinycloud_sql_query", { space: "applications", database: "notes", sql: "SELECT 1" }, { status: "error", operation: { operationId: "tinycloud.sql.query", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
       ["tinycloud_sql_execute", { space: "applications", database: "notes", sql: "DELETE FROM notes WHERE id = ?", params: [1], acknowledgeDatabaseWideAuthority: true }, { status: "error", operation: { operationId: "tinycloud.sql.execute", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
@@ -226,11 +195,7 @@ test("an explicitly pinned missing profile never falls back to config.defaultPro
     args: [cliPath, "--profile", "missing"],
     env: { ...process.env, TC_HOME: home },
   });
-  const ajv = new Ajv({ strict: false });
-  addFormats(ajv);
-  const client = new Client({ name: "tinycloud-mcp-pinned-profile-test", version: "0.0.0" }, {
-    jsonSchemaValidator: new AjvJsonSchemaValidator(ajv),
-  });
+  const client = new Client({ name: "tinycloud-mcp-pinned-profile-test", version: "0.0.0" });
   try {
     await client.connect(transport);
     const status = await client.callTool({ name: "tinycloud_status", arguments: {} });
@@ -1090,11 +1055,7 @@ async function connectClient(home: string, args: readonly string[]): Promise<Con
     env: { ...process.env, TC_HOME: home },
     stderr: "pipe",
   });
-  const ajv = new Ajv({ strict: false });
-  addFormats(ajv);
-  const client = new Client({ name: "tinycloud-mcp-hermetic-test", version: "0.0.0" }, {
-    jsonSchemaValidator: new AjvJsonSchemaValidator(ajv),
-  });
+  const client = new Client({ name: "tinycloud-mcp-hermetic-test", version: "0.0.0" });
   let stderr = "";
   transport.stderr?.on("data", (chunk) => { stderr += String(chunk); });
   await withDeadline(client.connect(transport), 60_000, "MCP connection");

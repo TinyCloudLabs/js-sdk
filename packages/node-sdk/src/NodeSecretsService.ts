@@ -117,7 +117,17 @@ export interface NodeSecretsServiceConfig {
   getManifest: () => Manifest | Manifest[] | undefined;
   hasPermissions?: (permissions: PermissionEntry[]) => boolean;
   grantPermissions: (additional: PermissionEntry[]) => Promise<unknown>;
+  /**
+   * Escalation used for `get` only. Defaults to `grantPermissions`. Lets the
+   * node cap get grants below the default expiry without changing put/del.
+   */
+  grantGetPermissions?: (additional: PermissionEntry[]) => Promise<unknown>;
   canEscalate: () => boolean;
+  /**
+   * Returns the entries that neither the session nor a live runtime grant
+   * covers. When absent, every requested entry is escalated.
+   */
+  uncoveredEntries?: (permissions: PermissionEntry[]) => PermissionEntry[];
   getEncryptionNetworkId?: () => string;
   resolveSpace?: (space: string) => string;
   getUnlockSigner?: () => unknown;
@@ -239,6 +249,20 @@ export class NodeSecretsService implements ISecretsService {
       return ok();
     }
 
+    let escalation: PermissionEntry[];
+    try {
+      escalation =
+        this.config.uncoveredEntries?.(permissionEntries) ?? permissionEntries;
+    } catch (error) {
+      return this.escalationError(action, target, error);
+    }
+    // Coverage is decided before the signer gate, so a node that already covers
+    // every entry needs no signer. Only when the callback is wired; without it
+    // the gate still runs first.
+    if (this.config.uncoveredEntries !== undefined && escalation.length === 0) {
+      return ok();
+    }
+
     if (!this.config.canEscalate()) {
       return secretsError(
         ErrorCodes.PERMISSION_DENIED,
@@ -247,17 +271,29 @@ export class NodeSecretsService implements ISecretsService {
     }
 
     try {
-      await this.config.grantPermissions(permissionEntries);
+      const grant =
+        action === "get" && this.config.grantGetPermissions !== undefined
+          ? this.config.grantGetPermissions
+          : this.config.grantPermissions;
+      await grant(escalation);
       return this.restoreUnlockAfterEscalation();
     } catch (error) {
-      return secretsError(
-        ErrorCodes.PERMISSION_DENIED,
-        error instanceof Error
-          ? error.message
-          : `Autosign escalation for ${displayActionUrn(action)} on ${target} failed.`,
-        error instanceof Error ? error : undefined,
-      );
+      return this.escalationError(action, target, error);
     }
+  }
+
+  private escalationError(
+    action: SecretAction,
+    target: string,
+    error: unknown,
+  ): Result<void, ServiceError | VaultError> {
+    return secretsError(
+      ErrorCodes.PERMISSION_DENIED,
+      error instanceof Error
+        ? error.message
+        : `Autosign escalation for ${displayActionUrn(action)} on ${target} failed.`,
+      error instanceof Error ? error : undefined,
+    );
   }
 
   private async restoreUnlockAfterEscalation(): Promise<

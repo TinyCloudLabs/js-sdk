@@ -75,9 +75,9 @@
     "publish": "./scripts/publish.sh"
   },
   "devDependencies": {
-    "@changesets/cli": "^2.28.1",
-    "@docusaurus/core": "^3.7.0",
-    "@docusaurus/preset-classic": "^3.7.0",
+    "@changesets/cli": "^2.31.1",
+    "@docusaurus/core": "^3.10.2",
+    "@docusaurus/preset-classic": "^3.10.2",
     "@tinycloud/bootstrap": "workspace:*",
     "@tinycloud/sdk-core": "workspace:*",
     "@tinycloud/share-envelope": "workspace:*",
@@ -88,7 +88,7 @@
     "@tinycloud/node-sdk-wasm": "workspace:*",
     "@tinycloud/node-sdk": "workspace:*",
     "tsup": "^8.5.1",
-    "turbo": "^2.5.4"
+    "turbo": "^2.11.9"
   },
   "overrides": {
     "@types/react": "^18.3.18",

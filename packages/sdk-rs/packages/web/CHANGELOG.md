@@ -1,5 +1,24 @@
 # @tinycloudlabs/web-sdk-wasm
 
+## 1.7.7
+
+### Patch Changes
+
+- 6ad58de: Consolidated dependency update: bump `@modelcontextprotocol/{node,server,client}` to 2.0.0-beta.5, `zod-to-json-schema` to ^3.25.2, `@openkey/sdk` to 0.9.0 in the example apps, and refresh the tokio entry in Cargo.lock.
+- ba650ce: Re-publish web-sdk-wasm as a new beta: 1.7.7-beta.0 was accepted by npm but never became visible, which left @tinycloud/web-sdk@3.3.0-beta.31 uninstallable.
+
+## 1.7.7-beta.1
+
+### Patch Changes
+
+- ba650ce: Re-publish web-sdk-wasm as a new beta: 1.7.7-beta.0 was accepted by npm but never became visible, which left @tinycloud/web-sdk@3.3.0-beta.31 uninstallable.
+
+## 1.7.7-beta.0
+
+### Patch Changes
+
+- 6ad58de: Consolidated dependency update: bump `@modelcontextprotocol/{node,server,client}` to 2.0.0-beta.5, `zod-to-json-schema` to ^3.25.2, `@openkey/sdk` to 0.9.0 in the example apps, and refresh the tokio entry in Cargo.lock.
+
 ## 1.7.6
 
 ### Patch Changes

@@ -114,6 +114,10 @@ tc delegation create --to did:pkh:eip155:1:0x...
 | `tc context` | Show the selected profile, owner, host, space and session state |
 | `tc auth status` | Show authentication status |
 | `tc auth whoami` | Show current identity |
+| `tc auth request --preset apps-agent [--app <id>]... [--write]` | Request access for an agent to the user's installed apps: read-only by default, for one app, several, or all. `--write --app <id>` also lets the agent change that app's data: write its `knowledge/` and `prefs/` files and add, change or delete its table rows. For the Health Log app's catalog database, it can also create, change and drop tables (nodes before 1.21.6 do not enforce that split). It cannot change the app's code, manifest or install record |
+| `tc knowledge list` | List the installed apps that have a knowledge bundle |
+| `tc knowledge read <app_id> [concept]` | Read an app's knowledge index, or one concept with its frontmatter parsed |
+| `tc apps install <app_id>` | Install a pinned catalog app into the applications space of the profile it runs under (the owner's, for a delegate profile, through its grant): each file is verified against its pinned digest, the pinned DDL runs only if every statement is allowed, and knowledge notes are created create-only. Notes you have edited are left as they are and reported (exit 0) |
 | `tc kv get <key>` | Retrieve a value |
 | `tc kv put <key> <value>` | Store a value |
 | `tc kv list` | List all keys |
@@ -147,6 +151,13 @@ Secret names are env-style uppercase identifiers such as `FIREFLIES_API_KEY`.
 `urn:tinycloud:encryption:<ownerDid>:<network>` identifier. `tc secrets
 network grant` takes the short name, resolves the network, and grants
 `tinycloud.encryption/decrypt`.
+
+`tc apps install` re-creates the pinned views on every run (reported as
+`viewsRecreated`). Knowledge notes whose bytes differ from the pinned version
+are left as you edited them and listed under `conflicts` (JSON); the command
+still exits 0 and installs the rest. If the schema fails after notes were
+written, it says "notes saved; tables not set up: run again"; running it again
+is safe.
 
 ## Global Options
 
@@ -238,6 +249,17 @@ second `auth logout` completes it. A gate that no longer matches its logout
 record (for example, restored from an older copy) refuses logout; switch the
 default profile if needed, then run `tc profile delete <name>` and sign in
 again.
+
+`auth logout`, `auth rotate`, and replica-enabled `auth login` that replaces the
+profile's share-history key check the sender share history first. If it records
+unexpired shares, or cannot be read, the command refuses with exit 5
+(`SHARE_HISTORY_UNEXPIRED` or `SHARE_HISTORY_UNAVAILABLE`) and changes nothing.
+Pass `--force` to proceed anyway; `auth logout --revoke` also skips the check. A
+plain re-login that keeps the key is not checked, and local-owner profiles are not
+checked. `tc share history recover` moves an unreadable history file aside to
+`share-history-v2.json.unreadable-<UTC timestamp>` and reports the new path. It
+never deletes or overwrites a file. If the file exists but cannot be read,
+recover exits 1 with `SHARE_HISTORY_RECOVER_FAILED` and moves nothing.
 
 `tc auth grants list` labels the signed-in delegation CID `(current session)`.
 `tc delegation revoke <cid>` still accepts any eligible exact CID, but when

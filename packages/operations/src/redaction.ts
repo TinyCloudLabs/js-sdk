@@ -1,5 +1,6 @@
 import { RUNTIME_DELEGATION_REJECTIONS } from "@tinycloud/node-sdk";
 
+import { DELEGATION_CID_PATTERN } from "./contract.js";
 import type {
   OperationContextSummary,
   OperationDefinition,
@@ -10,6 +11,8 @@ import { isSafeRecovery } from "./recovery.js";
 import { safeOriginHost, safeSessionDid } from "./safe-values.js";
 
 export const REDACTED_VALUE = "[REDACTED]";
+const DELEGATION_CID = new RegExp(DELEGATION_CID_PATTERN);
+
 
 export interface SafeOperationDiagnostic {
   readonly operation: OperationRef;
@@ -214,6 +217,20 @@ function redactSafeErrorDetails(
     if (!hasOwn(details, key)) continue;
     const value = sanitize(details[key]);
     if (value !== undefined) safeDetails[key] = value;
+  }
+
+  if (code === "AUTH_REQUIRED") {
+    const { reason, revokedCid, ancestorCid } = details;
+    if (typeof revokedCid === "string" && DELEGATION_CID.exec(revokedCid)?.[0] === revokedCid) {
+      if (reason === "delegation_revoked") {
+        safeDetails.reason = reason;
+        safeDetails.revokedCid = revokedCid;
+      } else if (reason === "delegation_ancestor_revoked" && typeof ancestorCid === "string" && DELEGATION_CID.exec(ancestorCid)?.[0] === ancestorCid) {
+        safeDetails.reason = reason;
+        safeDetails.revokedCid = revokedCid;
+        safeDetails.ancestorCid = ancestorCid;
+      }
+    }
   }
   return Object.keys(safeDetails).length === 0 ? undefined : safeDetails;
 }

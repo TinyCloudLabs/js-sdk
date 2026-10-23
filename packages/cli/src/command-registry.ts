@@ -9,7 +9,9 @@ import { registerDelegationCommand } from "./commands/delegation.js";
 import { registerDoctorCommand } from "./commands/doctor.js";
 import { registerDuckdbCommand } from "./commands/duckdb.js";
 import { registerEnableCommand } from "./commands/enable.js";
+import { registerAppsCommand } from "./commands/apps.js";
 import { registerInitCommand } from "./commands/init.js";
+import { registerKnowledgeCommand } from "./commands/knowledge.js";
 import { registerKvCommand } from "./commands/kv.js";
 import { registerManifestCommand } from "./commands/manifest.js";
 import { registerNodeCommand } from "./commands/node.js";
@@ -46,6 +48,8 @@ export function registerTinyCloudCommands(program: Command): void {
   registerSqlCommand(program);
   registerDuckdbCommand(program);
   registerManifestCommand(program);
+  registerKnowledgeCommand(program);
+  registerAppsCommand(program);
   registerUpgradeCommand(program);
   registerStatusCommand(program);
   registerAccountCommand(program);

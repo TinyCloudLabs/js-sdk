@@ -21,7 +21,7 @@ import { isCanonicalHttpsOrigin } from "./schema.js";
  * must never leave the client (no logging, no postMessage to other origins).
  */
 
-const KEY_LENGTH = 32;
+export const KEY_LENGTH = 32;
 
 export interface ShareUrlParts {
   origin: string;
@@ -54,9 +54,9 @@ export interface ParsedSealedInlineShareUrl {
   readonly key32: Uint8Array;
 }
 
-const MAX_INLINE_BYTES = 256 * 1024;
+export const MAX_INLINE_BYTES = 256 * 1024;
 
-function assertCanonicalCid(cidString: string): void {
+export function assertCanonicalCid(cidString: string): void {
   const cid = CID.parse(cidString); // throws on garbage
   if (
     cid.version !== 1 ||

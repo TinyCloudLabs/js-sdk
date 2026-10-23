@@ -1,5 +1,206 @@
 # openkey-vite
 
+## 0.0.39-beta.5
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.6.0-beta.5
+
+## 0.0.39-beta.4
+
+### Patch Changes
+
+- Updated dependencies [e32bc41]
+  - @tinycloud/web-sdk@3.6.0-beta.4
+
+## 0.0.39-beta.3
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.6.0-beta.3
+
+## 0.0.39-beta.2
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.6.0-beta.2
+
+## 0.0.39-beta.1
+
+### Patch Changes
+
+- Updated dependencies [d867b7a]
+  - @tinycloud/web-sdk@3.6.0-beta.1
+
+## 0.0.39-beta.0
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.6.0-beta.0
+
+## 0.0.38
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.5.0
+
+## 0.0.38-beta.1
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.5.0-beta.1
+
+## 0.0.38-beta.0
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.5.0-beta.0
+
+## 0.0.37
+
+### Patch Changes
+
+- Updated dependencies [666f60b]
+- Updated dependencies [f9b7e85]
+  - @tinycloud/web-sdk@3.4.0
+
+## 0.0.37-beta.2
+
+### Patch Changes
+
+- Updated dependencies [f9b7e85]
+  - @tinycloud/web-sdk@3.4.0-beta.2
+
+## 0.0.37-beta.1
+
+### Patch Changes
+
+- Updated dependencies [666f60b]
+  - @tinycloud/web-sdk@3.3.2-beta.1
+
+## 0.0.37-beta.0
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.3.2-beta.0
+
+## 0.0.36
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.3.1
+
+## 0.0.36-beta.0
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.3.1-beta.0
+
+## 0.0.35
+
+### Patch Changes
+
+- Updated dependencies [2aa917e]
+- Updated dependencies [c92953f]
+- Updated dependencies [d2ad845]
+- Updated dependencies [41e5fca]
+- Updated dependencies [d9a412e]
+- Updated dependencies [94566db]
+- Updated dependencies [94566db]
+- Updated dependencies [87a137e]
+- Updated dependencies [d1e4c3d]
+- Updated dependencies [370a8e4]
+- Updated dependencies [cce8b26]
+- Updated dependencies [86815bd]
+- Updated dependencies [86815bd]
+- Updated dependencies [86815bd]
+- Updated dependencies [94566db]
+  - @tinycloud/web-sdk@3.3.0
+
+## 0.0.35-beta.39
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.3.0-beta.39
+
+## 0.0.35-beta.38
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.3.0-beta.38
+
+## 0.0.35-beta.37
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.3.0-beta.37
+
+## 0.0.35-beta.36
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.3.0-beta.36
+
+## 0.0.35-beta.35
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.3.0-beta.35
+
+## 0.0.35-beta.34
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.3.0-beta.34
+
+## 0.0.35-beta.33
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.3.0-beta.33
+
+## 0.0.35-beta.32
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.3.0-beta.32
+
+## 0.0.35-beta.31
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.3.0-beta.31
+
+## 0.0.35-beta.30
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.3.0-beta.30
+
+## 0.0.35-beta.29
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.3.0-beta.29
+
+## 0.0.35-beta.28
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.3.0-beta.28
+
+## 0.0.35-beta.27
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.3.0-beta.27
+
+## 0.0.35-beta.26
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.3.0-beta.26
+
 ## 0.0.35-beta.25
 
 ### Patch Changes

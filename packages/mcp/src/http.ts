@@ -1,3 +1,5 @@
+import { join } from "node:path";
+
 import {
   McpServer,
   createMcpHandler,
@@ -38,6 +40,34 @@ export interface HostedMcpApp {
 
 export function createHostedMcpApp(config: HostedMcpConfig): HostedMcpApp {
   const resourceUrl = canonicalResourceUrl(config.publicUrl);
+  const pluginUrl = new URL("./chatgpt/mcp", resourceUrl);
+  const hosted = createHostedSurface(config, resourceUrl, "hosted");
+  const plugin = createHostedSurface({
+    ...config,
+    stateDir: join(config.stateDir, "chatgpt"),
+    approvalPath: new URL("./connect", pluginUrl).pathname,
+  }, pluginUrl, "public");
+  const pluginPaths: Record<string, true> = {
+    [pluginUrl.pathname]: true,
+    [new URL("./connect", pluginUrl).pathname]: true,
+    [new URL("./connect/callback", pluginUrl).pathname]: true,
+    [new URL(getOAuthProtectedResourceMetadataUrl(pluginUrl)).pathname]: true,
+  };
+  return {
+    fetch: (request) => (pluginPaths[new URL(request.url).pathname] === true ? plugin : hosted).fetch(request),
+    close: async () => {
+      await Promise.all([hosted.close(), plugin.close()]);
+    },
+  };
+}
+
+function createHostedSurface(
+  config: HostedMcpConfig,
+  resourceUrl: URL,
+  surface: "hosted" | "public",
+): HostedMcpApp {
+  const connectPath = config.approvalPath ?? "/connect";
+  const callbackPath = `${connectPath}/callback`;
   const issuer = String(config.oauthMetadata.issuer);
   const jwksUri = String(config.oauthMetadata.jwks_uri);
   const verifier = createOpenKeyTokenVerifier({
@@ -62,18 +92,22 @@ export function createHostedMcpApp(config: HostedMcpConfig): HostedMcpApp {
       { name: MCP_SERVER_NAME, version: MCP_VERSION },
       {
         jsonSchemaValidator: validator,
-        instructions: "Call tinycloud_connect first. If an operation returns authority_required, open approval.url, then retry that operation unchanged. For personal records such as weight, workouts, goals or todos, call tinycloud_apps_context first.",
+        instructions: surface === "public"
+          ? "Use TinyCloud only for the user's requested task. Call tinycloud_connect first. If an operation returns authority_required, present approval.url and wait for the user's approval before retrying. If approval is declined, stop that operation. For personal records, call tinycloud_apps_context first. Never request or store passwords, API keys, authentication codes, government identifiers, payment-card data, or protected health information."
+          : "Call tinycloud_connect first. If an operation returns authority_required, open approval.url, then retry that operation unchanged. For personal records such as weight, workouts, goals or todos, call tinycloud_apps_context first.",
       },
     );
     registerTinyCloudTools(server, {
-      surface: "hosted",
+      surface,
       profile: "agent",
       explicitProfile: true,
       allowOwnerProfile: false,
       stateRoot,
-      transformOperationResult: (result) => store.decorateAuthorityResult(subject, ownerDids, result),
+      beforeOperation: () => store.validateTenant(subject, ownerDids),
+      transformOperationResult: (result, invocation) =>
+        store.decorateAuthorityResult(subject, ownerDids, result, invocation),
     }, validator);
-    registerConnectTool(server, validator, store, identity);
+    registerConnectTool(server, validator, store, identity, surface);
     return server;
   }, {
     legacy: "stateless",
@@ -85,7 +119,7 @@ export function createHostedMcpApp(config: HostedMcpConfig): HostedMcpApp {
     resourceServerUrl: resourceUrl,
     serviceDocumentationUrl: new URL("https://docs.tinycloud.xyz/cli/mcp"),
     scopesSupported: [REQUIRED_SCOPE],
-    resourceName: "TinyCloud hosted MCP",
+    resourceName: surface === "public" ? "TinyCloud personal records" : "TinyCloud hosted MCP",
   };
   const allowedHosts = [resourceUrl.hostname];
 
@@ -102,16 +136,32 @@ export function createHostedMcpApp(config: HostedMcpConfig): HostedMcpApp {
       const hostFailure = hostHeaderValidationResponse(request, allowedHosts);
       if (hostFailure !== undefined) return hostFailure;
 
-      if (url.pathname === "/connect") {
+      if (url.pathname === connectPath) {
         if (request.method !== "GET") return methodNotAllowed("GET");
         try {
           const destination = await store.approvalRedirect(requiredState(url));
           return Response.redirect(destination, 302);
         } catch {
+          if (request.headers.get("accept")?.includes("text/html")) {
+            return new Response(
+              "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>TinyCloud approval unavailable</title><main><h1>This approval link is unavailable</h1><p>It may have expired or already been used. No new approval was accepted through this link.</p><p>Return to the conversation that requested access. In ChatGPT, select @TinyCloud and ask it to continue your original request. If access is still needed, it can provide a fresh approval link.</p><p>If you declined access, no further approval is required. Never paste passwords, codes or approval links into support messages.</p></main></html>",
+              {
+                status: 400,
+                headers: {
+                  "content-type": "text/html; charset=utf-8",
+                  "cache-control": "no-store",
+                  "content-security-policy": "default-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+                  "referrer-policy": "no-referrer",
+                  "x-content-type-options": "nosniff",
+                  vary: "Accept",
+                },
+              },
+            );
+          }
           return json({ error: "The approval link is invalid or expired." }, 400);
         }
       }
-      if (url.pathname === "/connect/callback") {
+      if (url.pathname === callbackPath) {
         if (request.method === "OPTIONS") return callbackCors(new Response(null, { status: 204 }), config.openkeyHost);
         if (request.method !== "POST") return methodNotAllowed("POST");
         const originFailure = validateCallbackOrigin(request, config.openkeyHost);
@@ -165,17 +215,18 @@ function registerConnectTool(
   validator: ReturnType<typeof createJsonSchemaValidator>,
   store: RemoteTenantStore,
   identity: OAuthIdentity,
+  surface: "hosted" | "public",
 ): void {
   const inputSchema = fromJsonSchema({ type: "object", properties: {}, additionalProperties: false }, validator);
   const outputSchema = fromJsonSchema({
     type: "object",
     properties: {
       connected: { type: "boolean" },
-      sessionDid: { type: "string" },
+      ...(surface === "hosted" ? { sessionDid: { type: "string" } } : {}),
       approvalUrl: { type: "string", format: "uri" },
       expiresAt: { type: "string", format: "date-time" },
     },
-    required: ["connected", "sessionDid"],
+    required: surface === "hosted" ? ["connected", "sessionDid"] : ["connected"],
     additionalProperties: false,
   }, validator);
   server.registerTool(
@@ -189,7 +240,7 @@ function registerConnectTool(
         readOnlyHint: false,
         idempotentHint: true,
         destructiveHint: false,
-        openWorldHint: true,
+        openWorldHint: false,
       },
     },
     async () => {
@@ -198,6 +249,11 @@ function registerConnectTool(
       try {
         const status = await store.connectStatus(identity.subject, identity.ownerDids);
         code = status.connected ? "ok" : "authority_required";
+        const visibleStatus = surface === "hosted" ? status : {
+          connected: status.connected,
+          ...(status.approvalUrl === undefined ? {} : { approvalUrl: status.approvalUrl }),
+          ...(status.expiresAt === undefined ? {} : { expiresAt: status.expiresAt }),
+        };
         return {
           content: [{
             type: "text" as const,
@@ -205,7 +261,7 @@ function registerConnectTool(
               ? "TinyCloud is connected."
               : `TinyCloud approval is required. Open ${status.approvalUrl}, then call this tool again. This link expires at ${status.expiresAt}.`,
           }],
-          structuredContent: status,
+          structuredContent: visibleStatus,
         };
       } finally {
         logToolCall("tinycloud_connect", code, startedAt, 0);

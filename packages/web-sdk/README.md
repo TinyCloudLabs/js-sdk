@@ -239,12 +239,13 @@ squash merge, nothing needs editing. Content keys (blob hashes) were rejected:
 pinned files such as `authority.ts` legitimately change later, whereas the
 landing commit stays an ancestor for good.
 
-The opt-in first-import ceiling is 51,925 B ESM / 67,138 B CJS gzip
+The opt-in first-import ceiling is 51,925 B ESM / 67,141 B CJS gzip
 (including the replica parser and noble dependencies); awaiting the IndexedDB
-factory has a separate 23,075 B / 24,655 B ceiling. The content-hashed worker
-and WASM asset has an 820,108 B ceiling owned by `@tinycloud/replica`.
-A compliant first local open therefore costs at most 895,108 B ESM /
-911,901 B CJS incremental gzip beyond the already-loaded web root; those
+factory has a separate 23,117 B / 24,700 B ceiling. The content-hashed kv-storage
+worker and WASM asset has a 776,128 B ceiling owned by `@tinycloud/replica`
+(its `replica.worker.js`, which web-sdk does not load, has its own 770,093 B).
+A compliant first local open therefore costs at most 851,170 B ESM /
+867,969 B CJS incremental gzip beyond the already-loaded web root; those
 assets can then be cached. These byte ceilings do not replace real-worker
 Chromium acceptance of local reads, denial, expiry, and sign-out.
 
@@ -320,6 +321,38 @@ const userKeys = userKeysResponse.data;
 console.log('User keys:', userKeys); // ['profile', ...]
 ```
 
+### Listing Keys That Start With a Partial Name
+
+The node matches list prefixes on **whole path segments** (node 1.19.0, TC-731):
+`list({ prefix: 'qa/b' })` returns `qa/b` and `qa/b/...`, never `qa/b00`. This is
+deliberate: a list is the authorization scope, so a grant on `docs` cannot be used to
+enumerate `docsecret/...`.
+
+When you want "names starting with X" (UI type-ahead over a small folder), use the
+standalone `listMatching(kv, prefix, options?)` function. It lists the folder up to the
+last `/` with the normal `list`, reads **every** page, and filters client-side. It takes
+`tc.kv` or a prefixed view (`tc.kv.withPrefix('notes')`), and is not part of the KV
+service itself, so apps that don't import it don't ship it.
+
+**Browser apps import it from `@tinycloud/sdk-core/kv-list-matching`** (web-sdk already
+depends on sdk-core). It is a separate entry, not in any package root, so
+`@tinycloud/web-sdk` and `@tinycloud/sdk-core` root bundles are unchanged:
+
+```typescript
+import { listMatching } from '@tinycloud/sdk-core/kv-list-matching';
+// TypeScript: the subpath's types need `moduleResolution` node16, nodenext or
+// bundler. With "node" tsc reports TS2307 (the runtime import still works).
+
+// Keys: qa/b00, qa/b01, qa/c00
+const result = await listMatching(tc.kv, 'qa/b');
+if (result.ok) console.log(result.data.keys); // ['qa/b00', 'qa/b01']
+```
+
+It never lists more than the folder, so a delegated session sees only what its grant
+allows, and a folder outside the grant fails exactly as `list` would. The cost is the
+size of the **folder**, not the number of matches, so it is slow for large folders. For
+those, give the data a real folder structure (`users/<id>/...`) and use `list`.
+
 ### Deleting Data
 
 ```typescript
@@ -354,6 +387,12 @@ TinyCloud is built on these fundamental principles:
 - **Privacy** - Data is stored, streamed, and computed upon in ways that minimize leakage with encryption strategies that ensure users do not need to trust an external party.
 - **Interoperability** - Embracing artifact-based formats like Markdown, JSON Canvas, CSV, and SQLite so that data remains portable and future-proof.
 - **Open Innovation** - We view AI's rapid growth as an opportunity to endow individuals with new capabilities—before these capabilities are seized exclusively by large institutions.
+
+## Credential discovery
+
+Share receivers that require a credential discover the catalog at `https://witness.credentials.org/.well-known/opencredentials` by default. Set `credentialDiscoveryUrl` in the receiver config to use a different endpoint. The URL must be `https` and must be `/.well-known/opencredentials` or `/v1/credential-types`, with no query or fragment.
+
+If discovery responds with a 2xx status whose body is not JSON, the call rejects with an error whose `code` is `CREDENTIAL_DISCOVERY_FAILED`, carrying `host`, `status`, and `contentType`. A 503 response rejects with `ISSUER_UNREADY`. Any other non-2xx response, and a network failure, rejects with `OFFLINE`.
 
 ## Documentation
 

@@ -1,9 +1,11 @@
 import type { IKVService } from "@tinycloud/node-sdk";
 import { kvArtifactStore } from "./artifact-store.js";
-import { ShareHistoryRetryError, SharePublishAuthorityError } from "./errors.js";
+import { createShareShortLinks, type ShareShortLinks } from "./short-links.js";
+import { artifactSpaceNotReady, failIfSpaceNotReady } from "./space-not-ready.js";
+import { ShareHistoryReadError, ShareHistoryRetryError, ShareHistoryUnreadableError, SharePublishAuthorityError } from "./errors.js";
 import { storageRejection } from "../output/storage.js";
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { chmod, link, open, readFile, stat, unlink } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 import { ProfileManager } from "../config/profiles.js";
 import { ExitCode, PROFILE_COMMIT_LOCK_TIMEOUT_MS } from "../config/constants.js";
@@ -62,6 +64,11 @@ function throwKvUploadFailure(error: unknown): never {
   const rejection = storageRejection(error);
   if (rejection) throw new SharePublishAuthorityError({ kind: "storage-full", ...rejection });
   throw new SharePublishAuthorityError({ kind: "upload-failed" });
+}
+
+/** Whether the node's session (or an installed runtime grant) holds decrypt on the encryption network. */
+export function sessionHoldsEncryptionDecrypt(node: Pick<TinyCloudNode, "hasRuntimePermissions">, networkId: string): boolean {
+  return node.hasRuntimePermissions([{ service: "tinycloud.encryption", path: networkId, actions: ["tinycloud.encryption/decrypt"] }]);
 }
 const DEFAULT_SHARE_ORIGIN = "https://share.tinycloud.xyz";
 const MIN_DOMAIN_DELIVERY_VERSION = "1.17.3";
@@ -140,7 +147,7 @@ async function storeArtifactVersion(
   try {
     return await publishArtifactVersion(kvArtifactStore(kv), version);
   } catch (error) {
-    throw scopeDeniedFromArtifactError(error, "KV upload", authority) ?? error;
+    throw scopeDeniedFromArtifactError(error, "KV upload", authority) ?? artifactSpaceNotReady(error);
   }
 }
 
@@ -194,7 +201,29 @@ export function createEncryptedSessionHistory(): SenderShareRecordStorage {
   };
 }
 
-export function createEncryptedProfileHistory(profileName: () => Promise<string>, sessionSigner?: (bytes: Uint8Array, profile: string) => Promise<Uint8Array>): SenderShareRecordStorage {
+const SHARE_HISTORY_FILE = "share-history-v2.json";
+const SHARE_HISTORY_LEGACY_FILE = "share-history-v1.bin";
+/** Owner-only, matching the mode the history writer already uses. */
+const PRIVATE_HISTORY_MODE = 0o600;
+
+/** Signs the bytes that seed a profile's sender-history key. Shared by the publish wiring and the rotation guard. */
+export async function signShareHistoryBytes(bytes: Uint8Array, profile: string): Promise<Uint8Array> {
+  // Authentication or delegation replay can use the network. The history
+  // adapter prepares this signature before acquiring the profile lock.
+  const context = await ProfileManager.resolveContext({ profile });
+  if (context.profile !== profile) throw new ShareHistoryRetryError(profile);
+  const { ensureAuthenticated } = await import("../lib/sdk.js");
+  const signer = await ensureAuthenticated(context);
+  return signer.signSessionBytes(bytes);
+}
+
+/** Profile sender history, plus the explicit recovery of an unreadable file. */
+export type ProfileShareHistory = SenderShareRecordStorage & {
+  /** Moves an unreadable history file aside under a new name. Never deletes or overwrites. */
+  quarantineUnreadable(): Promise<string | null>;
+};
+
+export function createEncryptedProfileHistory(profileName: () => Promise<string>, sessionSigner?: (bytes: Uint8Array, profile: string) => Promise<Uint8Array>): ProfileShareHistory {
   const HISTORY_VERSION = 2;
   const identityChanged = new Error("share history profile or key changed");
   const saltChanged = new Error("share history salt changed");
@@ -202,13 +231,13 @@ export function createEncryptedProfileHistory(profileName: () => Promise<string>
   const observedProfiles = new Set<string>();
   let preparedKeys: { readonly profile: string; readonly identity: string; readonly material: CryptoKey; readonly legacyKey: CryptoKey } | undefined;
   let preparedKey: { readonly profile: string; readonly identity: string; readonly salt: string; readonly key: CryptoKey } | undefined;
-  const path = async (profile: string): Promise<string> => join(await ProfileManager.getCacheDir(profile), "share-history-v2.json");
-  const legacyPath = async (profile: string): Promise<string> => join(await ProfileManager.getCacheDir(profile), "share-history-v1.bin");
+  const path = async (profile: string): Promise<string> => join(await ProfileManager.getCacheDir(profile), SHARE_HISTORY_FILE);
+  const legacyPath = async (profile: string): Promise<string> => join(await ProfileManager.getCacheDir(profile), SHARE_HISTORY_LEGACY_FILE);
   const b64 = (value: Uint8Array): string => Buffer.from(value).toString("base64url");
   const unb64 = (value: unknown): Uint8Array => {
-    if (typeof value !== "string" || !/^[A-Za-z0-9_-]+$/.test(value)) throw new Error("share history is unavailable");
+    if (typeof value !== "string" || !/^[A-Za-z0-9_-]+$/.test(value)) throw new ShareHistoryUnreadableError();
     const bytes = new Uint8Array(Buffer.from(value, "base64url"));
-    if (b64(bytes) !== value) throw new Error("share history is unavailable");
+    if (b64(bytes) !== value) throw new ShareHistoryUnreadableError();
     return bytes;
   };
   const isStoredRecord = (value: unknown): value is SenderShareRecord =>
@@ -243,43 +272,54 @@ export function createEncryptedProfileHistory(profileName: () => Promise<string>
     const legacyKey = await crypto.subtle.importKey("raw", digest, { name: "AES-GCM" }, false, ["decrypt"]);
     return preparedKeys = { profile, identity: snapshot.fingerprint, material, legacyKey };
   };
-  const preparedSalt = async (profile: string): Promise<Uint8Array> => {
+  /** The file's bytes, or undefined when it does not exist. Any other filesystem error is a read failure. */
+  const readIfPresent = async (file: string): Promise<Buffer | undefined> => {
     try {
-      const envelope = JSON.parse(await readFile(await path(profile), "utf8")) as Record<string, unknown>;
-      if (envelope.version !== HISTORY_VERSION) throw new Error("share history is unavailable");
-      const salt = unb64(envelope.kdfSalt);
-      if (salt.length < 16) throw new Error("share history is unavailable");
-      return salt;
+      return await readFile(file);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return crypto.getRandomValues(new Uint8Array(16));
-      throw new Error("share history is unavailable");
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw new ShareHistoryReadError();
     }
   };
-  const read = async (profile: string, ready: { readonly salt: Uint8Array; readonly key: CryptoKey; readonly legacyKey: CryptoKey }): Promise<SenderShareRecord[]> => {
+  const parseEnvelope = (text: string): Record<string, unknown> => {
+    let envelope: unknown;
     try {
-      const envelope = JSON.parse(await readFile(await path(profile), "utf8")) as Record<string, unknown>;
-      if (envelope.version !== HISTORY_VERSION) throw new Error("share history is unavailable");
-      if (envelope.kdfSalt !== b64(ready.salt)) throw saltChanged;
-      const iv = unb64(envelope.iv);
-      const ciphertext = unb64(envelope.ciphertext);
-      if (iv.length !== 12 || ciphertext.length <= 16) throw new Error("share history is unavailable");
-      const bytes = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, ready.key, ciphertext);
+      envelope = JSON.parse(text);
+    } catch {
+      throw new ShareHistoryUnreadableError();
+    }
+    if (typeof envelope !== "object" || envelope === null || (envelope as Record<string, unknown>).version !== HISTORY_VERSION) throw new ShareHistoryUnreadableError();
+    return envelope as Record<string, unknown>;
+  };
+  const decryptRecords = async (key: CryptoKey, iv: Uint8Array, ciphertext: Uint8Array): Promise<SenderShareRecord[]> => {
+    try {
+      const bytes = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ciphertext);
       const values = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown;
       return Array.isArray(values) ? values.filter(isStoredRecord) : [];
-    } catch (error) {
-      if (error === saltChanged) throw error;
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new Error("share history is unavailable");
-      try {
-        const legacy = new Uint8Array(await readFile(await legacyPath(profile)));
-        if (legacy.length <= 12) return [];
-        const bytes = await crypto.subtle.decrypt({ name: "AES-GCM", iv: legacy.slice(0, 12) }, ready.legacyKey, legacy.slice(12));
-        const values = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown;
-        return Array.isArray(values) ? values.filter(isStoredRecord) : [];
-      } catch (legacyError) {
-        if ((legacyError as NodeJS.ErrnoException).code === "ENOENT") return [];
-        throw new Error("share history is unavailable");
-      }
+    } catch {
+      throw new ShareHistoryUnreadableError();
     }
+  };
+  const preparedSalt = async (profile: string): Promise<Uint8Array> => {
+    const file = await readIfPresent(await path(profile));
+    if (file === undefined) return crypto.getRandomValues(new Uint8Array(16));
+    const salt = unb64(parseEnvelope(file.toString("utf8")).kdfSalt);
+    if (salt.length < 16) throw new ShareHistoryUnreadableError();
+    return salt;
+  };
+  const read = async (profile: string, ready: { readonly salt: Uint8Array; readonly key: CryptoKey; readonly legacyKey: CryptoKey }): Promise<SenderShareRecord[]> => {
+    const file = await readIfPresent(await path(profile));
+    if (file === undefined) {
+      const legacy = await readIfPresent(await legacyPath(profile));
+      if (legacy === undefined || legacy.length <= 12) return [];
+      return decryptRecords(ready.legacyKey, new Uint8Array(legacy.subarray(0, 12)), new Uint8Array(legacy.subarray(12)));
+    }
+    const envelope = parseEnvelope(file.toString("utf8"));
+    if (envelope.kdfSalt !== b64(ready.salt)) throw saltChanged;
+    const iv = unb64(envelope.iv);
+    const ciphertext = unb64(envelope.ciphertext);
+    if (iv.length !== 12 || ciphertext.length <= 16) throw new ShareHistoryUnreadableError();
+    return decryptRecords(ready.key, iv, ciphertext);
   };
   const write = async (profile: string, values: readonly SenderShareRecord[], ready: { readonly salt: Uint8Array; readonly key: CryptoKey }): Promise<void> => {
     const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -341,6 +381,58 @@ export function createEncryptedProfileHistory(profileName: () => Promise<string>
     }
     throw new ShareHistoryRetryError(profile);
   });
+  // Runs without the profile lock: deriving the signer can replay delegations over the network.
+  const firstPresentHistoryFile = async (profile: string): Promise<{ readonly file: string; readonly bytes: Buffer } | undefined> => {
+    for (const file of [await path(profile), await legacyPath(profile)]) {
+      const bytes = await readIfPresent(file);
+      if (bytes !== undefined) return { file, bytes };
+    }
+    return undefined;
+  };
+  const readableWithCurrentKey = async (profile: string): Promise<boolean> => {
+    const snapshot = await identity(profile);
+    const keys = await prepareKeys(profile, snapshot);
+    try {
+      const salt = await preparedSalt(profile);
+      const key = await crypto.subtle.deriveKey(
+        { name: "PBKDF2", salt, iterations: 100_000, hash: "SHA-256" },
+        keys.material, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"],
+      );
+      await read(profile, { salt, key, legacyKey: keys.legacyKey });
+      return true;
+    } catch (error) {
+      if (error instanceof ShareHistoryUnreadableError) return false;
+      throw error;
+    }
+  };
+  const quarantineUnreadable = (): Promise<string | null> => serial(async () => {
+    const profile = await profileName();
+    const found = await firstPresentHistoryFile(profile);
+    if (found === undefined) return null;
+    let readable: boolean;
+    try {
+      readable = await readableWithCurrentKey(profile);
+    } catch (error) {
+      if (error === identityChanged || error === saltChanged) throw new ShareHistoryRetryError(profile);
+      throw error;
+    }
+    if (readable) return null;
+    return ProfileManager.withLock(profile, async () => {
+      // Confirm under the lock that the bytes probed above are still the bytes on disk.
+      const current = await readIfPresent(found.file);
+      if (current === undefined) return null;
+      if (!current.equals(found.bytes)) throw new ShareHistoryRetryError(profile);
+      const target = `${found.file}.unreadable-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+      // link never replaces an existing target, so a name collision fails instead of clobbering.
+      await link(found.file, target);
+      await chmod(target, PRIVATE_HISTORY_MODE);
+      await unlink(found.file);
+      const directory = await open(dirname(found.file), "r");
+      try { await directory.sync(); } finally { await directory.close(); }
+      return target;
+    });
+  });
+
   return {
     async put(record) { return locked(async (profile, ready) => { const values = await read(profile, ready); const index = values.findIndex((value) => value.shareId === record.shareId); if (index >= 0) values[index] = record; else values.push(record); await write(profile, values, ready); }, true); },
     async update(shareId, change) {
@@ -357,7 +449,27 @@ export function createEncryptedProfileHistory(profileName: () => Promise<string>
     async list() { return locked((profile, ready) => read(profile, ready)); },
     async get(shareId) { return locked(async (profile, ready) => (await read(profile, ready)).find((record) => record.shareId === shareId)); },
     async delete(shareId) { return locked(async (profile, ready) => { await write(profile, (await read(profile, ready)).filter((record) => record.shareId !== shareId), ready); }, true); },
+    quarantineUnreadable,
   };
+}
+
+/** Whether either sender-history file exists for the profile. */
+export async function profileHistoryFileExists(profileName: string): Promise<boolean> {
+  const directory = await ProfileManager.getCacheDir(profileName);
+  for (const file of [join(directory, SHARE_HISTORY_FILE), join(directory, SHARE_HISTORY_LEGACY_FILE)]) {
+    try {
+      await stat(file);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new ShareHistoryReadError();
+    }
+  }
+  return false;
+}
+
+/** Explicit recovery only: moves an unreadable profile history file aside. Returns the new path, or null when nothing was moved. */
+export function quarantineUnreadableProfileHistory(profileName: string): Promise<string | null> {
+  return createEncryptedProfileHistory(async () => profileName, signShareHistoryBytes).quarantineUnreadable();
 }
 
 /** Default noninteractive authority seams.  They return typed authorization
@@ -386,6 +498,8 @@ export function createShareAuthorityAdapters(input: {
   readonly nativeReader: (link: string) => Promise<{ readonly bytes: Uint8Array; readonly filename: string }>;
   /** The authenticated owner's artifact storage (`tc share versions`). */
   readonly artifactStore: () => Promise<ArtifactStore>;
+  /** Short links for addressed shares (TC-1737). */
+  readonly shortLinks: ShareShortLinks;
 } {
   const origin = input.origin ?? DEFAULT_SHARE_ORIGIN;
   const fetchFn = input.fetchFn ?? globalThis.fetch;
@@ -400,13 +514,21 @@ export function createShareAuthorityAdapters(input: {
   };
   let configPromise: Promise<SharePublicConfig> | undefined;
   const publicConfig = async (): Promise<SharePublicConfig> => configPromise ??= (async () => {
-    const response = await fetchFn(`${origin}/.well-known/tinycloud-share/config.json`, {
-      headers: { accept: "application/json" },
-      credentials: "omit",
-      redirect: "error",
-      referrerPolicy: "no-referrer",
-    });
-    if (!response.ok) throw new Error("share public config is unavailable");
+    // The first request of every publish. Without it nothing can be shared, so a failure here names the Share
+    // service rather than the node, and a blackholed host cannot hang the command.
+    let response: Response;
+    try {
+      response = await fetchFn(`${origin}/.well-known/tinycloud-share/config.json`, {
+        headers: { accept: "application/json" },
+        credentials: "omit",
+        redirect: "error",
+        referrerPolicy: "no-referrer",
+        signal: AbortSignal.timeout(10_000),
+      });
+    } catch (error) {
+      throw new SharePublishAuthorityError({ kind: "share-service-unavailable", origin }, { cause: error });
+    }
+    if (!response.ok) throw new SharePublishAuthorityError({ kind: "share-service-unavailable", origin });
     const value = await response.json() as unknown;
     if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("share public config is invalid");
     const object = value as Record<string, unknown>;
@@ -470,7 +592,8 @@ export function createShareAuthorityAdapters(input: {
   };
   const targetAdapter: TargetPublishAdapter = { async publish(targetInput) {
     if (input.publishTarget !== undefined) return input.publishTarget(targetInput);
-    const [config, node] = await Promise.all([publicConfig(), authenticatedNode()]);
+    // The Share config is fetched only after the local checks below, so a refusal makes no request.
+    const node = await authenticatedNode();
     const session = node.restorableSession;
     const ownerSpaceId = session?.spaceId;
     const localKey = !node.isSessionOnly;
@@ -486,7 +609,6 @@ export function createShareAuthorityAdapters(input: {
     ) {
       throw new SharePublishAuthorityError({ kind: "owner-space-unresolved", localKey, profileName: activeProfileName });
     }
-    if (targetInput.origin !== config.shareOrigin) throw new SharePublishAuthorityError({ kind: "origin-mismatch" });
     if (node.isSessionOnly && sessionExpiresAt !== undefined) {
       const roundedSessionExpiry = new Date(Math.floor(sessionExpiresAt.getTime() / 1000) * 1000);
       if (roundedSessionExpiry.getTime() <= Date.now() + 60_000) {
@@ -522,6 +644,15 @@ export function createShareAuthorityAdapters(input: {
         profileName: activeProfileName,
       });
     }
+    // An addressed share's policy ceiling includes decrypt on the owner's encryption network, which a
+    // session-only sign-in (e.g. builtin:share-publishing) deliberately lacks. Refuse before any Share
+    // or node request, registry write or upload. A signer-backed (local-key) owner has full authority.
+    const addressedEncryptionNetwork = targetInput.target.kind === "bearer" ? undefined : node.getEncryptionNetworkIdForSpace(ownerSpaceId);
+    if (addressedEncryptionNetwork !== undefined && node.isSessionOnly && !sessionHoldsEncryptionDecrypt(node, addressedEncryptionNetwork)) {
+      throw new SharePublishAuthorityError({ kind: "decrypt-not-held" });
+    }
+    const config = await publicConfig();
+    if (targetInput.origin !== config.shareOrigin) throw new SharePublishAuthorityError({ kind: "origin-mismatch" });
     const activeNode = await node.activeNodeIdentity();
     if (targetInput.notify === true && targetInput.target.kind === "emailDomain") {
       await assertDomainDeliveryForOrigin(activeNode.origin, "publish");
@@ -566,6 +697,7 @@ export function createShareAuthorityAdapters(input: {
         const written = await node.kvForSpace(ownerSpaceId).put(resourcePath, file.bytes.slice(), {
           contentType: targetInput.mediaType ?? file.mediaType ?? "application/octet-stream",
         });
+        failIfSpaceNotReady(written);
         if (!written.ok) {
           const code = typeof written.error === "object" && written.error !== null && "code" in written.error ? written.error.code : undefined;
           if (code === "AUTH_UNAUTHORIZED" || code === "PERMISSION_DENIED") {
@@ -666,7 +798,7 @@ export function createShareAuthorityAdapters(input: {
         || (error instanceof LocationRegistryHttpError && error.status >= 400 && error.status < 500 && error.status !== 408 && error.status !== 429);
       throw new SharePublishAuthorityError({ kind: rejected ? "registry-rejected" : "registry-unavailable" });
     }
-    const encryptionNetwork = node.getEncryptionNetworkIdForSpace(ownerSpaceId);
+    const encryptionNetwork = addressedEncryptionNetwork!;
     const encrypted = await node.encryption.encryptToNetwork(encryptionNetwork, file.bytes, { metadata: { contentType: mediaType } });
     if (!encrypted.ok) throw new Error("addressed source encryption was rejected");
     const storedBytes = new TextEncoder().encode(canonicalize(encrypted.data as unknown as Record<string, unknown>));
@@ -683,6 +815,7 @@ export function createShareAuthorityAdapters(input: {
       resourcePath = artifactVersionFilePath(artifact.id, artifactVersion.version, storageName);
     } else {
       const stored = await node.kvForSpace(ownerSpaceId).put(resourcePath, storedBytes, { contentType: "application/vnd.tinycloud.encrypted-envelope+json" });
+      failIfSpaceNotReady(stored);
       if (!stored.ok) {
         const code = typeof stored.error === "object" && stored.error !== null && "code" in stored.error ? stored.error.code : undefined;
         if (code === "AUTH_UNAUTHORIZED" || code === "PERMISSION_DENIED") {
@@ -907,7 +1040,7 @@ export function createShareAuthorityAdapters(input: {
     // A profile signed in before the `artifacts/` scope existed is refused by the node; say so the way publish does.
     const mapped = async <T>(operation: () => Promise<T>): Promise<T> => {
       try { return await operation(); }
-      catch (error) { throw scopeDeniedFromArtifactError(error, "artifact storage", authority) ?? error; }
+      catch (error) { throw scopeDeniedFromArtifactError(error, "artifact storage", authority) ?? artifactSpaceNotReady(error); }
     };
     return {
       put: (key, bytes, options) => mapped(() => store.put(key, bytes, options)),
@@ -915,22 +1048,19 @@ export function createShareAuthorityAdapters(input: {
       list: (prefix) => mapped(() => store.list(prefix)),
     };
   };
+  const shortLinks = createShareShortLinks({
+    kvForSpace: async (spaceId) => (await authenticatedNode()).kvForSpace(spaceId),
+    fetchFn,
+  });
   return {
     targetAdapter,
-    records: input.profileName === undefined ? createEncryptedSessionHistory() : createEncryptedProfileHistory(profileName, async (bytes, profile) => {
-      // Authentication or delegation replay can use the network. The history
-      // adapter prepares this signature before acquiring the profile lock.
-      const context = await ProfileManager.resolveContext({ profile });
-      if (context.profile !== profile) throw new ShareHistoryRetryError(profile);
-      const { ensureAuthenticated } = await import("../lib/sdk.js");
-      const signer = await ensureAuthenticated(context);
-      return signer.signSessionBytes(bytes);
-    }),
+    records: input.profileName === undefined ? createEncryptedSessionHistory() : createEncryptedProfileHistory(profileName, signShareHistoryBytes),
     delivery,
     revocation,
     assertDomainDelivery,
     nativeReader,
     artifactStore,
+    shortLinks,
   };
 }
 

@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/sdk-core",
-  "version": "3.3.0-beta.25",
+  "version": "3.6.0-beta.4",
   "description": "Core TinyCloud SDK - shared interfaces and TinyCloud class",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
@@ -37,6 +37,16 @@
       "types": "./dist/delegations/index.d.ts",
       "import": "./dist/delegations/index.js",
       "require": "./dist/delegations/index.cjs"
+    },
+    "./held-credentials": {
+      "types": "./dist/held-credentials/index.d.ts",
+      "import": "./dist/held-credentials/index.js",
+      "require": "./dist/held-credentials/index.cjs"
+    },
+    "./kv-list-matching": {
+      "types": "./dist/kv-list-matching/index.d.ts",
+      "import": "./dist/kv-list-matching/index.js",
+      "require": "./dist/kv-list-matching/index.cjs"
     }
   },
   "files": [
@@ -53,16 +63,16 @@
     "@multiformats/multiaddr-to-uri": "^12.0.0",
     "@multiformats/uri-to-multiaddr": "^10.0.0",
     "@noble/curves": "^1.9.7",
-    "@tinycloud/share-envelope": "1.2.0-beta.0",
-    "@tinycloud/share-sdk": "1.2.0-beta.6",
+    "@tinycloud/share-envelope": "1.2.1",
+    "@tinycloud/share-sdk": "1.3.0",
     "@tinycloud/bootstrap": "2.8.0",
-    "@tinycloud/sdk-services": "3.3.0-beta.25",
+    "@tinycloud/sdk-services": "3.6.0-beta.3",
     "multiformats": "^13.4.1",
     "ms": "^2.1.3",
     "siwe": "^3.0.0",
     "viem": "^2.21.53",
     "zod": "^3.22.0",
-    "zod-to-json-schema": "^3.22.0"
+    "zod-to-json-schema": "^3.25.2"
   },
   "devDependencies": {
     "@types/ms": "^0.7.34",

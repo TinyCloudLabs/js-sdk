@@ -1,5 +1,297 @@
 # @tinycloud/mcp
 
+## 0.8.0-beta.5
+
+### Patch Changes
+
+- Updated dependencies [c0acb86]
+  - @tinycloud/node-sdk@3.6.0-beta.5
+  - @tinycloud/operations@0.7.4-beta.5
+
+## 0.8.0-beta.4
+
+### Patch Changes
+
+- Updated dependencies [e32bc41]
+  - @tinycloud/node-sdk@3.6.0-beta.4
+  - @tinycloud/operations@0.7.4-beta.4
+
+## 0.8.0-beta.3
+
+### Patch Changes
+
+- Updated dependencies [82cbd43]
+  - @tinycloud/operations@0.7.4-beta.3
+  - @tinycloud/node-sdk@3.6.0-beta.3
+
+## 0.8.0-beta.2
+
+### Minor Changes
+
+- e18946e: Add the separate `/chatgpt/mcp` public personal-record endpoint with exactly connect, context, read, write and query tools. Public OAuth audiences, tenant state, approvals and recovery suggestions are isolated from the existing broad `/mcp` service; excluded tools cannot be invoked by name. Preserve local/private integrations and return an inert browser recovery page for invalid approval links.
+
+  Correct context/query mutation annotations and operation effects, ask for an IANA timezone rather than location, and preserve the hosted 100,000-character context and derived-query output limit without truncating canonical write outcomes. Add reproducible MCP-only plugin packaging and explicit reviewer/publication gates.
+
+  Advertise equivalent JSON Schema 2020-12 tool inputs and results on stdio and both hosted surfaces so the official v2 client works with its default validator. Preserve the shared Draft-07 operations catalog for non-MCP consumers; reject unsupported dialect-specific forms rather than silently changing their validation.
+
+  Deploy the matching OpenKey API audience and exact web callback registrations before candidate acceptance. The package is not a published plugin: actual ChatGPT web/mobile tests, independent reviewer access, approved policies, recording and portal review remain required. Default-branch integration and deployment require explicit owner approval.
+
+### Patch Changes
+
+- Updated dependencies [e18946e]
+  - @tinycloud/operations@0.7.4-beta.2
+
+## 0.7.4-beta.1
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.6.0-beta.2
+- @tinycloud/operations@0.7.4-beta.1
+
+## 0.7.4-beta.0
+
+### Patch Changes
+
+- Updated dependencies [0c09d7b]
+  - @tinycloud/node-sdk@3.6.0-beta.0
+  - @tinycloud/operations@0.7.4-beta.0
+
+## 0.7.3
+
+### Patch Changes
+
+- Updated dependencies [d60f81d]
+- Updated dependencies [7b92156]
+- Updated dependencies [7b92156]
+  - @tinycloud/node-sdk@3.5.0
+  - @tinycloud/operations@0.7.3
+
+## 0.7.3-beta.1
+
+### Patch Changes
+
+- Updated dependencies [7b92156]
+- Updated dependencies [7b92156]
+  - @tinycloud/node-sdk@3.5.0-beta.1
+  - @tinycloud/operations@0.7.3-beta.1
+
+## 0.7.3-beta.0
+
+### Patch Changes
+
+- Updated dependencies [d60f81d]
+  - @tinycloud/node-sdk@3.5.0-beta.0
+  - @tinycloud/operations@0.7.3-beta.0
+
+## 0.7.2
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.4.0
+- @tinycloud/operations@0.7.2
+
+## 0.7.2-beta.1
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.3.2-beta.1
+- @tinycloud/operations@0.7.2-beta.1
+
+## 0.7.2-beta.0
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.3.2-beta.0
+- @tinycloud/operations@0.7.2-beta.0
+
+## 0.7.1
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.3.1
+- @tinycloud/operations@0.7.1
+
+## 0.7.1-beta.0
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.3.1-beta.0
+- @tinycloud/operations@0.7.1-beta.0
+
+## 0.7.0
+
+### Minor Changes
+
+- a553392: Agents can pick up the apps a user installed, from their `applications` space.
+  - `tinycloud knowledge list` lists the apps that have a knowledge bundle (`<app_id>/knowledge/index.md`) with their concept files, merging the account application registry when the session can read it. `tinycloud knowledge read <app_id> [concept]` returns the index (with its links) or one concept with its frontmatter parsed. A grant that does not cover the request exits 5 and the hint lists the requests to make, with the real app id; a mistyped app id or concept exits 2 with the reason. Operations `tinycloud.knowledge.list@1` and `tinycloud.knowledge.read@1`; MCP tools `tinycloud_knowledge_list` and `tinycloud_knowledge_read` (local and hosted). Files and names come from the user's space, so they are marked untrusted in the tool result and escaped in terminal output (`--json` stays exact).
+  - `tinycloud auth request --preset apps-agent` asks for **read-only** access: KV get and list, SQL read, on the `applications` space, up to 7 days. `--app <app_id>` (repeatable, up to 5) limits it to those apps' `<app_id>/` prefixes, which is the recommended ask. `--preset apps-agent --write --app <app_id>` is a separate opt-in for the named apps: KV put only in each app's `knowledge/` and `prefs/` folders (the folders the sample apps' manifests write to) plus SQL write, which adds, changes and deletes rows. Creating, changing and dropping tables also needs `tinycloud.sql/schema`, which the preset grants only on an app's catalog database (`xyz.tinycloud.sample.healthlog` gets `healthlog`, at the exact path `<app_id>/healthlog`). Everything else under `<app_id>/` stays read-only, so the app's code and its stored `<app_id>/app/manifest.json` and `<app_id>/app/install.json` cannot be changed through it (the root-level `<app_id>/manifest.json` and `<app_id>/install.json` are refused too) (TC-1620); it is refused without `--app`. Neither variant carries KV delete, SQL admin, schema on any other database, another service or space. The preset cannot be combined with `--cap`, `--permission`, `--manifest` or `--expiry`, and `--device` is refused because device approval cannot grant SQL.
+  - `tinycloud auth grant` now resolves the request file once, the way the signer reads it (an entry with no `space` is in the owner's `applications` space; an empty space is refused; entries with the same service, space and path are merged), and prints, gates and signs that one list. Before signing it prints every permission in plain words (service, space, path, actions; delegation abilities as "can give other people or agents access on your behalf" and "can cancel access you gave"; unknown services and actions raw and marked unrecognised), once each, with the requested lifetime. The preset wording appears only when the permissions, the owner's own `applications` space and the 7-day lifetime all match. For a request that touches an `applications` space, anything the preset could never grant is marked `!`, listed first under "MORE than the apps-agent preset" and signed only after `--yes` or an interactive confirmation; without a terminal it exits 2 and signs nothing. A request with the `tinycloud.vault` shorthand, a service the signer cannot sign, or more than one space is refused with exit 2 before anything is printed or signed. The request's `sessionDid` and `requestedExpiry` are checked before anything is printed. Text from the request is escaped in the listing, the interactive prompt and every error message: on a terminal, `outputError` now escapes control characters, ANSI, bidi and zero-width characters (U+200B-200F, U+202A-202E, U+2066-2069, U+2028/2029, C1, U+FEFF) in every message and hint for every command. JSON output (stdout and the JSON error form on stderr, which a redirected `auth grant req.json > grant.json` still prints to a terminal) writes those characters as `\uXXXX` escapes: it parses to the same text. Refusal messages echo at most 5 items of 80 characters.
+  - The `tc-cli` skill has a "Pick up a user's apps" section.
+  - Fix: a delegation signed with an empty path (`tinycloud.kv:applications::get,list`, the whole service in a space) was rejected on import by the runtime validator, and `delegation revoke` could not bind its space. Both now accept it; other malformed resources are still refused. The validator now uses one pattern for both resource forms and drops an unreachable branch, so the web-sdk root bundle does not grow.
+
+### Patch Changes
+
+- 4dd842f: Update jose to 6.2.4.
+- 6ad58de: Consolidated dependency update: bump `@modelcontextprotocol/{node,server,client}` to 2.0.0-beta.5, `zod-to-json-schema` to ^3.25.2, `@openkey/sdk` to 0.9.0 in the example apps, and refresh the tokio entry in Cargo.lock.
+- 6793a14: A new sign-in after an account approval is withdrawn at the TinyCloud node offers fresh owner approval. Node refusals that identify a withdrawn per-request permission renew only the affected approval; other node errors leave stored approvals available.
+- Updated dependencies [2aa917e]
+- Updated dependencies [b6d0b9f]
+- Updated dependencies [d2ad845]
+- Updated dependencies [6ad58de]
+- Updated dependencies [29440be]
+- Updated dependencies [a553392]
+- Updated dependencies [86815bd]
+- Updated dependencies [e7f709d]
+- Updated dependencies [94566db]
+- Updated dependencies [38980b0]
+- Updated dependencies [41e5fca]
+- Updated dependencies [a7cdfe0]
+- Updated dependencies [94566db]
+- Updated dependencies [94566db]
+- Updated dependencies [f2cb165]
+- Updated dependencies [87a137e]
+- Updated dependencies [ef9653b]
+- Updated dependencies [370a8e4]
+- Updated dependencies [ef49c14]
+- Updated dependencies [cce8b26]
+- Updated dependencies [5373fa2]
+- Updated dependencies [0c4c6b2]
+- Updated dependencies [baca422]
+- Updated dependencies [e99a127]
+- Updated dependencies [f97d73d]
+- Updated dependencies [18b6c9f]
+- Updated dependencies [2292db7]
+  - @tinycloud/node-sdk@3.3.0
+  - @tinycloud/operations@0.7.0
+  - @tinycloud/node-sdk-wasm@1.7.8
+
+## 0.7.0-beta.39
+
+### Patch Changes
+
+- Updated dependencies [ef49c14]
+  - @tinycloud/operations@0.7.0-beta.38
+  - @tinycloud/node-sdk@3.3.0-beta.39
+
+## 0.7.0-beta.38
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.3.0-beta.38
+- @tinycloud/operations@0.7.0-beta.37
+
+## 0.7.0-beta.37
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.3.0-beta.37
+- @tinycloud/operations@0.7.0-beta.36
+
+## 0.7.0-beta.36
+
+### Patch Changes
+
+- 6793a14: A new sign-in after an account approval is withdrawn at the TinyCloud node offers fresh owner approval. Node refusals that identify a withdrawn per-request permission renew only the affected approval; other node errors leave stored approvals available.
+- Updated dependencies [5373fa2]
+  - @tinycloud/operations@0.7.0-beta.35
+
+## 0.7.0-beta.35
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.3.0-beta.36
+- @tinycloud/operations@0.7.0-beta.34
+
+## 0.7.0-beta.34
+
+### Patch Changes
+
+- Updated dependencies [f2cb165]
+  - @tinycloud/operations@0.7.0-beta.33
+
+## 0.7.0-beta.33
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.3.0-beta.35
+- @tinycloud/operations@0.7.0-beta.32
+
+## 0.7.0-beta.32
+
+### Minor Changes
+
+- a553392: Agents can pick up the apps a user installed, from their `applications` space.
+  - `tinycloud knowledge list` lists the apps that have a knowledge bundle (`<app_id>/knowledge/index.md`) with their concept files, merging the account application registry when the session can read it. `tinycloud knowledge read <app_id> [concept]` returns the index (with its links) or one concept with its frontmatter parsed. A grant that does not cover the request exits 5 and the hint lists the requests to make, with the real app id; a mistyped app id or concept exits 2 with the reason. Operations `tinycloud.knowledge.list@1` and `tinycloud.knowledge.read@1`; MCP tools `tinycloud_knowledge_list` and `tinycloud_knowledge_read` (local and hosted). Files and names come from the user's space, so they are marked untrusted in the tool result and escaped in terminal output (`--json` stays exact).
+  - `tinycloud auth request --preset apps-agent` asks for **read-only** access: KV get and list, SQL read, on the `applications` space, up to 7 days. `--app <app_id>` (repeatable, up to 5) limits it to those apps' `<app_id>/` prefixes, which is the recommended ask. Don't request `--write` during the tiny-apps beta. It currently also allows changes to the app's own code and manifest; the narrowed write ships in TC-1620. (The flag adds KV put and SQL write for the named apps and is refused without `--app`.) Because of how TinyCloud permissions work today, SQL write also lets the agent create, change or drop those apps' tables, and the scope text says so; TC-1581 (node-side: `sql/write` must not permit DDL) is the real cure. Neither variant carries KV delete, SQL admin or schema, another service or space. The preset cannot be combined with `--cap`, `--permission`, `--manifest` or `--expiry`, and `--device` is refused because device approval cannot grant SQL.
+  - `tinycloud auth grant` now resolves the request file once, the way the signer reads it (an entry with no `space` is in the owner's `applications` space; an empty space is refused; entries with the same service, space and path are merged), and prints, gates and signs that one list. Before signing it prints every permission in plain words (service, space, path, actions; delegation abilities as "can give other people or agents access on your behalf" and "can cancel access you gave"; unknown services and actions raw and marked unrecognised), once each, with the requested lifetime. The preset wording appears only when the permissions, the owner's own `applications` space and the 7-day lifetime all match. For a request that touches an `applications` space, anything the preset could never grant is marked `!`, listed first under "MORE than the apps-agent preset" and signed only after `--yes` or an interactive confirmation; without a terminal it exits 2 and signs nothing. A request with the `tinycloud.vault` shorthand, a service the signer cannot sign, or more than one space is refused with exit 2 before anything is printed or signed. The request's `sessionDid` and `requestedExpiry` are checked before anything is printed. Text from the request is escaped in the listing, the interactive prompt and every error message: on a terminal, `outputError` now escapes control characters, ANSI, bidi and zero-width characters (U+200B-200F, U+202A-202E, U+2066-2069, U+2028/2029, C1, U+FEFF) in every message and hint for every command. JSON output (stdout and the JSON error form on stderr, which a redirected `auth grant req.json > grant.json` still prints to a terminal) writes those characters as `\uXXXX` escapes: it parses to the same text. Refusal messages echo at most 5 items of 80 characters.
+  - The `tc-cli` skill has a "Pick up a user's apps" section.
+  - Fix: a delegation signed with an empty path (`tinycloud.kv:applications::get,list`, the whole service in a space) was rejected on import by the runtime validator, and `delegation revoke` could not bind its space. Both now accept it; other malformed resources are still refused. The validator now uses one pattern for both resource forms and drops an unreachable branch, so the web-sdk root bundle does not grow.
+
+### Patch Changes
+
+- Updated dependencies [a553392]
+  - @tinycloud/operations@0.7.0-beta.31
+  - @tinycloud/node-sdk@3.3.0-beta.34
+
+## 0.6.1-beta.31
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.3.0-beta.33
+- @tinycloud/operations@0.6.1-beta.30
+
+## 0.6.1-beta.30
+
+### Patch Changes
+
+- 6ad58de: Consolidated dependency update: bump `@modelcontextprotocol/{node,server,client}` to 2.0.0-beta.5, `zod-to-json-schema` to ^3.25.2, `@openkey/sdk` to 0.9.0 in the example apps, and refresh the tokio entry in Cargo.lock.
+- Updated dependencies [6ad58de]
+  - @tinycloud/operations@0.6.1-beta.29
+  - @tinycloud/node-sdk-wasm@1.7.8-beta.0
+  - @tinycloud/node-sdk@3.3.0-beta.31
+
+## 0.6.1-beta.29
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.3.0-beta.30
+- @tinycloud/operations@0.6.1-beta.28
+
+## 0.6.1-beta.28
+
+### Patch Changes
+
+- Updated dependencies [e99a127]
+  - @tinycloud/node-sdk@3.3.0-beta.29
+  - @tinycloud/operations@0.6.1-beta.27
+
+## 0.6.1-beta.27
+
+### Patch Changes
+
+- 4dd842f: Update jose to 6.2.4.
+
+## 0.6.1-beta.26
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.3.0-beta.28
+- @tinycloud/operations@0.6.1-beta.26
+
+## 0.6.1-beta.25
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.3.0-beta.27
+- @tinycloud/operations@0.6.1-beta.25
+
+## 0.6.1-beta.24
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.3.0-beta.26
+- @tinycloud/operations@0.6.1-beta.24
+
 ## 0.6.1-beta.23
 
 ### Patch Changes

@@ -160,6 +160,103 @@ export type Tc1476Ratchet = LogoutRatchet;
  * change moves the root, first-import, activation and worker buckets.
  */
 export type Tc1475Ratchet = HardeningRatchet;
+/**
+ * One reviewed worker-only ceiling raise: js-sdk #606 (security dependency updates) grew the kv-storage
+ * worker by 86 B, which turned the TC-858 gzip ratchet red on master.
+ */
+export type WorkerRatchet = {
+  label: string;
+  ruling: string;
+  base: string;
+  sourceCommits: string[];
+  canonicalCI: { run: string; jobs: string[] };
+  worker: { delta: number; ceiling: number };
+  reason: string;
+};
+/**
+ * One cumulative reviewed exact-delta admission of the master drift since 75eb5304 (the last green
+ * Replica Node run, #557). Same shape as the #565 hardening row: root and activation.cjs grew without a
+ * ledger row because the kv-storage worker step aborted first and hid the Phase 1 dist step.
+ */
+export type MasterDriftRatchet = HardeningRatchet;
+/**
+ * One reviewed exact-delta admission of the sdk-services 3.3.1 pin (js-sdk #667): the PR-side CI build
+ * measured replica.cjs first-import +1 B with no code change. Same shape as the #565 hardening row.
+ */
+export type Tc1789Ratchet = HardeningRatchet;
+/**
+ * One reviewed exact-delta admission of js-sdk #678 (TC-1757): web-sdk imports share-sdk's narrow web-recipient
+ * entry, so the root bundle shrinks. The root ceilings are lowered to the bytes canonical CI measured on the #678
+ * head; every other ceiling stays that of the sdk-services pin row. Same shape as the #565 hardening row.
+ */
+export type Tc1757Ratchet = HardeningRatchet;
+/**
+ * One reviewed exact-delta admission of js-sdk #686 (TC-1777): the replication wiring moved into its own module, which
+ * costs a few bytes at the module boundary. The root ceilings rise to the bytes canonical CI measured on the #686
+ * code head; every other ceiling stays that of the web-recipient row. Same shape as the #565 hardening row.
+ */
+export type Tc1777Ratchet = HardeningRatchet;
+/**
+ * One reviewed exact-delta admission of js-sdk #668 (TC-1777): requestPermissions carries expiryMs, TinyCloudWeb gains
+ * hasPermissions, and the decrypt expiry check runs before the modal. #668 is not a replica-owned PR, so this is a plain
+ * root row; the root ceilings rise to the bytes canonical CI measured on the #668 code head, every other ceiling stays
+ * that of the replication-wiring row. Same shape as the #565 hardening row.
+ */
+export type Tc1777ExpiryRatchet = HardeningRatchet;
+/**
+ * One reviewed exact-delta admission of js-sdk #656 (TC-848): the developer request log panel. #656 is not a
+ * replica-owned PR, so this is a plain root row; the root ceilings rise to the bytes canonical CI measured on the #656
+ * code head, every other ceiling stays that of the expiryMs / hasPermissions row. Same shape as the #565 hardening row.
+ */
+export type Tc848PanelRatchet = HardeningRatchet;
+/**
+ * One reviewed exact-delta admission of js-sdk #681 (TC-1781): the one-hour decrypt default and secret-read coverage.
+ * #681 is not a replica-owned PR, so this is a plain root row; the root ceilings rise to the bytes canonical CI measured
+ * on the #681 code head, every other ceiling stays that of the developer request log panel row. Same shape as the #565
+ * hardening row.
+ */
+export type Tc1781DecryptExpiryRatchet = HardeningRatchet;
+/**
+ * One reviewed exact-delta admission of js-sdk #687 (TC-1801): the non-transferable share option.
+ * #687 is not a replica-owned PR, so this is a plain root row; the root ceilings rise to the bytes canonical CI measured
+ * on the #687 code head, every other ceiling stays that of the one-hour decrypt default row. Same shape as the #565
+ * hardening row.
+ */
+export type Tc1801NonTransferableShareRatchet = HardeningRatchet;
+/**
+ * One reviewed exact-delta admission of js-sdk #690 (TC-1807): the credential discovery default and typed error.
+ * #690 is not a replica-owned PR, so this is a plain root row; the root ceilings rise to the bytes canonical CI measured
+ * on the #690 code head, every other ceiling stays that of the non-transferable share option row. Same shape as the #565
+ * hardening row.
+ */
+export type Tc1807CredentialDiscoveryRatchet = HardeningRatchet;
+/**
+ * One reviewed exact-delta admission of js-sdk #694 (TC-1827): the replica workers import only the KV service and its
+ * ServiceContext, so the hashed kv-storage worker shrinks. The worker ceiling is lowered to the bytes canonical CI
+ * measured on the #694 code head; every other ceiling stays that of the credential discovery row. Same shape as the #565
+ * hardening row.
+ */
+export type Tc1827WorkerRatchet = HardeningRatchet;
+/**
+ * The first reviewed ceiling for `replica.worker.js`, the @tinycloud/replica/browser worker (TC-1827 follow-up): the
+ * bytes canonical CI measured on the PR's code head, zero headroom. Same shape as the #606 worker row; here `worker`
+ * is the replica worker (`MAX_REPLICA_WORKER_GZIP_BYTES`), not the kv-storage worker.
+ */
+export type Tc1827ReplicaWorkerRatchet = WorkerRatchet;
+/**
+ * One reviewed exact-delta admission of js-sdk #693 (TC-1823): SQL and DuckDB request-size error codes.
+ * #693 is not a replica-owned PR, so this is a plain root row; the root ceilings rise to the bytes canonical CI measured
+ * on the #693 code head, every other ceiling stays that of the replica worker narrow-imports row. Same shape as the #565
+ * hardening row.
+ */
+export type Tc1823SizeCodeRatchet = HardeningRatchet;
+/**
+ * One reviewed exact-delta admission of js-sdk #679 (TC-712, PR-A): credential consumer core.
+ * #679 is not a replica-owned PR, so this is a plain root row; the root ceilings rise to the bytes canonical CI measured
+ * on the #679 code head, every other ceiling stays that of the request-size error code row. Same shape as the #565
+ * hardening row.
+ */
+export type Tc712CredentialCoreRatchet = HardeningRatchet;
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -180,6 +277,20 @@ export type Ledger = {
   tc1428Ratchet?: Tc1428Ratchet;
   tc1476Ratchet?: Tc1476Ratchet;
   tc1475Ratchet?: Tc1475Ratchet;
+  tc606WorkerRatchet?: WorkerRatchet;
+  masterDriftRatchet?: MasterDriftRatchet;
+  tc1789Ratchet?: Tc1789Ratchet;
+  tc1757Ratchet?: Tc1757Ratchet;
+  tc1777Ratchet?: Tc1777Ratchet;
+  tc1777ExpiryRatchet?: Tc1777ExpiryRatchet;
+  tc848PanelRatchet?: Tc848PanelRatchet;
+  tc1781DecryptExpiryRatchet?: Tc1781DecryptExpiryRatchet;
+  tc1801NonTransferableShareRatchet?: Tc1801NonTransferableShareRatchet;
+  tc1807CredentialDiscoveryRatchet?: Tc1807CredentialDiscoveryRatchet;
+  tc1827WorkerRatchet?: Tc1827WorkerRatchet;
+  tc1827ReplicaWorkerRatchet?: Tc1827ReplicaWorkerRatchet;
+  tc1823SizeCodeRatchet?: Tc1823SizeCodeRatchet;
+  tc712CredentialCoreRatchet?: Tc712CredentialCoreRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -730,9 +841,562 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc1428Ratchet !== undefined) pins.push({ row: "tc1428Ratchet", pin: root.tc1428Ratchet.sourceCommits.at(-1)! });
   if (root.tc1476Ratchet !== undefined) pins.push({ row: "tc1476Ratchet", pin: root.tc1476Ratchet.sourceCommits.at(-1)! });
   if (root.tc1475Ratchet !== undefined) pins.push({ row: "tc1475Ratchet", pin: root.tc1475Ratchet.sourceCommits.at(-1)! });
+  if (root.tc606WorkerRatchet !== undefined) pins.push({ row: "tc606WorkerRatchet", pin: root.tc606WorkerRatchet.sourceCommits.at(-1)! });
+  if (root.masterDriftRatchet !== undefined) pins.push({ row: "masterDriftRatchet", pin: root.masterDriftRatchet.sourceCommits.at(-1)! });
+  if (root.tc1789Ratchet !== undefined) pins.push({ row: "tc1789Ratchet", pin: root.tc1789Ratchet.sourceCommits.at(-1)! });
+  if (root.tc1757Ratchet !== undefined) pins.push({ row: "tc1757Ratchet", pin: root.tc1757Ratchet.sourceCommits.at(-1)! });
+  if (root.tc1777Ratchet !== undefined) pins.push({ row: "tc1777Ratchet", pin: root.tc1777Ratchet.sourceCommits.at(-1)! });
+  if (root.tc1777ExpiryRatchet !== undefined) pins.push({ row: "tc1777ExpiryRatchet", pin: root.tc1777ExpiryRatchet.sourceCommits.at(-1)! });
+  if (root.tc848PanelRatchet !== undefined) pins.push({ row: "tc848PanelRatchet", pin: root.tc848PanelRatchet.sourceCommits.at(-1)! });
+  if (root.tc1781DecryptExpiryRatchet !== undefined) pins.push({ row: "tc1781DecryptExpiryRatchet", pin: root.tc1781DecryptExpiryRatchet.sourceCommits.at(-1)! });
+  if (root.tc1801NonTransferableShareRatchet !== undefined) pins.push({ row: "tc1801NonTransferableShareRatchet", pin: root.tc1801NonTransferableShareRatchet.sourceCommits.at(-1)! });
+  if (root.tc1807CredentialDiscoveryRatchet !== undefined) pins.push({ row: "tc1807CredentialDiscoveryRatchet", pin: root.tc1807CredentialDiscoveryRatchet.sourceCommits.at(-1)! });
+  if (root.tc1827WorkerRatchet !== undefined) pins.push({ row: "tc1827WorkerRatchet", pin: root.tc1827WorkerRatchet.sourceCommits.at(-1)! });
+  if (root.tc1827ReplicaWorkerRatchet !== undefined) pins.push({ row: "tc1827ReplicaWorkerRatchet", pin: root.tc1827ReplicaWorkerRatchet.sourceCommits.at(-1)! });
+  if (root.tc1823SizeCodeRatchet !== undefined) pins.push({ row: "tc1823SizeCodeRatchet", pin: root.tc1823SizeCodeRatchet.sourceCommits.at(-1)! });
+  if (root.tc712CredentialCoreRatchet !== undefined) pins.push({ row: "tc712CredentialCoreRatchet", pin: root.tc712CredentialCoreRatchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
+
+/**
+ * The absolute root ceiling of each root row present in `root`, oldest first. The order is the one the ledger
+ * introduces rows in: validateLedger's prerequisite chain, ancestryPins, and the key order of
+ * replica-size-ledger.json. A new root row goes last here, and in those three places. masterMergeResolution and
+ * tc606WorkerRatchet set no root ceiling and are absent.
+ */
+export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSizes }> {
+  const rows: Array<[string, GzipSizes | undefined]> = [
+    ["phase2Ratchet", root.phase2Ratchet?.ceiling],
+    ["fixRequiredRatchet", root.fixRequiredRatchet?.rootCeiling],
+    ["canonicalToolchainCorrection", root.canonicalToolchainCorrection?.measured.rootCeiling],
+    ["hardeningRatchet", root.hardeningRatchet?.root.ceiling],
+    ["logoutRatchet", root.logoutRatchet?.root.ceiling],
+    ["tc1413Ratchet", root.tc1413Ratchet?.root.ceiling],
+    ["tc1436Ratchet", root.tc1436Ratchet?.root.ceiling],
+    ["tc1432Ratchet", root.tc1432Ratchet?.root.ceiling],
+    ["tc1424Ratchet", root.tc1424Ratchet?.root.ceiling],
+    ["tc1448Ratchet", root.tc1448Ratchet?.root.ceiling],
+    ["tc1443Ratchet", root.tc1443Ratchet?.root.ceiling],
+    ["tc1466Ratchet", root.tc1466Ratchet?.root.ceiling],
+    ["tc1443bRatchet", root.tc1443bRatchet?.root.ceiling],
+    ["tc1428Ratchet", root.tc1428Ratchet?.root.ceiling],
+    ["tc1476Ratchet", root.tc1476Ratchet?.root.ceiling],
+    ["tc1475Ratchet", root.tc1475Ratchet?.root.ceiling],
+    ["masterDriftRatchet", root.masterDriftRatchet?.root.ceiling],
+    ["tc1789Ratchet", root.tc1789Ratchet?.root.ceiling],
+    ["tc1757Ratchet", root.tc1757Ratchet?.root.ceiling],
+    ["tc1777Ratchet", root.tc1777Ratchet?.root.ceiling],
+    ["tc1777ExpiryRatchet", root.tc1777ExpiryRatchet?.root.ceiling],
+    ["tc848PanelRatchet", root.tc848PanelRatchet?.root.ceiling],
+    ["tc1781DecryptExpiryRatchet", root.tc1781DecryptExpiryRatchet?.root.ceiling],
+    ["tc1801NonTransferableShareRatchet", root.tc1801NonTransferableShareRatchet?.root.ceiling],
+    ["tc1807CredentialDiscoveryRatchet", root.tc1807CredentialDiscoveryRatchet?.root.ceiling],
+    ["tc1827WorkerRatchet", root.tc1827WorkerRatchet?.root.ceiling],
+    ["tc1823SizeCodeRatchet", root.tc1823SizeCodeRatchet?.root.ceiling],
+    ["tc712CredentialCoreRatchet", root.tc712CredentialCoreRatchet?.root.ceiling],
+  ];
+  return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
+}
+
+/**
+ * The newest root row's ceiling is the only active one. Older rows stay in the ledger as history and still
+ * validate, but an older, higher row can never shadow a newer, lowered one (#678 lowered the root ceiling).
+ */
+export function activeRootCeiling(root: Ledger): { row: string; ceiling: GzipSizes } | undefined {
+  return rootCeilings(root).at(-1);
+}
+
+/**
+ * The active root ceiling for one format, or an error when there is none. A ledger with no root row, or an active
+ * row without a number for `format`, must fail the gate rather than silently skip it.
+ */
+export function rootCeilingFor(root: Ledger, format: keyof GzipSizes): { row: string; ceiling: number } | { error: string } {
+  const active = activeRootCeiling(root);
+  if (active === undefined) return { error: `${format}: no active root ceiling in the ledger; the absolute root gate cannot be skipped.` };
+  const ceiling = active.ceiling[format];
+  if (typeof ceiling !== "number") return { error: `${format}: active root row ${active.row} has no ceiling for this format; the absolute root gate cannot be skipped.` };
+  return { row: active.row, ceiling };
+}
+
+/**
+ * #606 (security dependency updates), approved by Naomi, 2026-10-19: the kv-storage worker is admitted at exactly the 822,753 B
+ * GitHub measured on master 54a2408d (+86 over TC-1475's 822,667). Worker only; nothing else moves.
+ */
+export const approvedTc606WorkerRatchet: WorkerRatchet = {
+  label: "#606 security dependency updates, kv-storage worker exact canonical delta",
+  ruling: "#606 (security dependency updates), approved by Naomi, 2026-10-19: raise the kv-storage worker gzip ceiling by exactly 86 B to the canonical CI measurement; no other allowance changes",
+  base: "75eb5304",
+  sourceCommits: [
+    "78aec0e0996a24ff1a06cbcd719728e2342ba5f9",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39326132925",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39326132925/job/118312339066",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39326132925/job/118312339183",
+    ],
+  },
+  worker: { delta: 86, ceiling: 822753 },
+  reason: "#606 (security dependency updates, merge 78aec0e0) grew the kv-storage worker by 86 B; #605, #552 and #549 inherited the failure. Its Cargo.lock bumps (serde_with/darling, bs58, tinyvec, rustls, openssl) are the likely cause [inferred from the lockfile diff, not bisected]. The Enforce hashed kv-storage worker gzip ratchet step measured 822,753 gzip -9 bytes against the 822,667 ceiling (headroom -86). Last green master: 75eb5304 (#557).",
+};
+
+/**
+ * Master drift since 75eb5304, approved by Naomi, 2026-10-19: root index.mjs +405, index.cjs +329 and
+ * activation.cjs +1 at the bytes canonical CI printed on the #608 head, on top of TC-1475's ceilings (the
+ * +86 worker is the separate tc606WorkerRatchet). Candidates: #606, #605, #552; attribution not bisected.
+ */
+export const approvedMasterDriftRatchet: MasterDriftRatchet = {
+  label: "master drift since 75eb5304 (candidates #606 / #605 / #552, attribution not bisected), exact canonical delta",
+  ruling: "Naomi, 2026-10-19 (option A on #608): one cumulative reviewed row for the master drift since 75eb5304, at the bytes canonical CI prints; approved by Naomi, 2026-10-19",
+  base: "75eb5304",
+  sourceCommits: [
+    "78aec0e0996a24ff1a06cbcd719728e2342ba5f9",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39327730885",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39327730885/job/118317792683",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39327730885/job/118317792664",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 405, "index.cjs": 329 },
+    ceiling: { "index.mjs": 1475571, "index.cjs": 1403924 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 51925, "replica.cjs": 67140 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 1 },
+    ceiling: { "activation.mjs": 23117, "activation.cjs": 24700 },
+  },
+  worker: { delta: 0, ceiling: 822753 },
+  reason: "The Phase 1 dist step had not run on master since the kv-storage worker step began aborting first at #606 (78aec0e0); when it ran on #608 it measured root index.mjs 1,475,571 and index.cjs 1,403,924 against the TC-1475 ceilings 1,475,166 and 1,403,595 (+405/+329) and activation.cjs 24,700 against 24,699 (+1). Candidates #606 (security dependency updates), #605, #552; attribution not bisected. The worker is already admitted by tc606WorkerRatchet.",
+};
+
+/**
+ * sdk-services 3.3.1 pin, approved by Naomi, 2026-10-22: replica.cjs first-import +1 B (the 51,925 / 67,140 /
+ * 23,117 / 24,700 optional allowance becomes 51,925 / 67,141 / 23,117 / 24,700) at the bytes canonical CI printed
+ * on the #667 head 6bdf2064. Root and worker stay at the master-drift ceilings: both measured with zero delta.
+ */
+export const approvedTc1789Ratchet: Tc1789Ratchet = {
+  label: "sdk-services 3.3.1 pin (#667): replica.cjs first-import +1 B, exact canonical delta",
+  ruling: "Approved by Naomi (2026-10-22, policy review relayed by Amos)",
+  base: "772940d8",
+  sourceCommits: [
+    "193b594eee3f0f9c3f0fe9157f74267f8c03f3bf",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39775125638",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39775125638/job/119812005984",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39775125638/job/119812005960",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 0, "index.cjs": 0 },
+    ceiling: { "index.mjs": 1475571, "index.cjs": 1403924 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 1 },
+    ceiling: { "replica.mjs": 51925, "replica.cjs": 67141 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23117, "activation.cjs": 24700 },
+  },
+  worker: { delta: 0, ceiling: 822753 },
+  reason: "CI PR-side build +1 B with no code change (sdk-services 3.3.1 pin; TC-1789 investigation)",
+};
+
+/**
+ * web-recipient entry, approved by Naomi, 2026-10-22: the root index.mjs / index.cjs ceilings drop from
+ * 1,475,571 / 1,403,924 to 1,458,843 / 1,401,918, the bytes canonical CI printed on the #678 code head e244be2c.
+ * Master measured 1,475,555 / 1,403,914 (runs 39817162813, 39813052331, 39789112412), so the measured growth
+ * against master is -16,712 / -1,996. First-import, activation and worker ceilings are unchanged.
+ */
+export const approvedTc1757Ratchet: Tc1757Ratchet = {
+  label: "web-recipient entry (#678): root ceiling lowered to the measured CI bytes",
+  ruling: "Approved by Naomi (2026-10-22, policy review relayed by Amos)",
+  base: "368a3d3e7075c0538f0ced9b26d3870c590c81f0",
+  sourceCommits: [
+    "e244be2c5d83d94b1c1a505b4ea85301f393b4a3",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39817449009",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39817449009/job/119959550450",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39817449009/job/119959550040",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": -16712, "index.cjs": -1996 },
+    ceiling: { "index.mjs": 1458843, "index.cjs": 1401918 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 51925, "replica.cjs": 67141 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23117, "activation.cjs": 24700 },
+  },
+  worker: { delta: 0, ceiling: 822753 },
+  reason: "web-sdk imports share-sdk's narrow web-recipient entry; root ceiling lowered to measured CI bytes (TC-1757)",
+};
+
+/**
+ * Replication wiring in its own module (#686, TC-1777), approved by Naomi, 2026-10-22: the root index.mjs /
+ * index.cjs ceilings rise from 1,458,843 / 1,401,918 to 1,458,858 / 1,401,947, the bytes canonical CI printed on the
+ * #686 code head 187b8a43. Master bc49820c measured 1,458,843 / 1,401,918 (run 39844729108), so the measured
+ * growth against master is +15 / +29, the cost of the module boundary. First-import, activation and worker
+ * ceilings are unchanged.
+ */
+export const approvedTc1777Ratchet: Tc1777Ratchet = {
+  label: "replication wiring in its own module (#686): root ceiling raised to the measured CI bytes",
+  ruling: "Approved by Naomi (2026-10-22, policy review relayed by Amos)",
+  base: "bc49820c1417a449041e9801b60c86a63485b55d",
+  sourceCommits: [
+    "187b8a433a1c02008f066a00e41d36819acbc007",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39855300327",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39855300327/job/120091843728",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39855300327/job/120091844294",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 15, "index.cjs": 29 },
+    ceiling: { "index.mjs": 1458858, "index.cjs": 1401947 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 51925, "replica.cjs": 67141 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23117, "activation.cjs": 24700 },
+  },
+  worker: { delta: 0, ceiling: 822753 },
+  reason: "replication wiring moved into its own module; +15 B (mjs) / +29 B (cjs) gzip from the module boundary (TC-1777)",
+};
+
+/**
+ * expiryMs / hasPermissions / pre-modal decrypt check (#668, TC-1777), approved by Naomi, 2026-10-22: the root
+ * index.mjs / index.cjs ceilings rise from 1,458,858 / 1,401,947 to 1,459,030 / 1,402,121, the bytes canonical CI
+ * printed on the #668 code head 28585593 merged into master 80d38744, which itself measured 1,458,858 / 1,401,947
+ * (run 39859312541). Measured growth against master is +172 / +174. First-import, activation and worker ceilings
+ * are unchanged.
+ */
+export const approvedTc1777ExpiryRatchet: Tc1777ExpiryRatchet = {
+  label: "expiryMs, hasPermissions and pre-modal decrypt check (#668): root ceiling raised to the measured CI bytes",
+  ruling: "Approved by Naomi (2026-10-22, policy review relayed by Amos)",
+  base: "80d387441dbe87e2309a849c653e2d0adecd400b",
+  sourceCommits: [
+    "28585593a756f65b47f2aa60be240c5fce3dbd9d",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39861366041",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39861366041/job/120112619622",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39861366041/job/120112619857",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 172, "index.cjs": 174 },
+    ceiling: { "index.mjs": 1459030, "index.cjs": 1402121 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 51925, "replica.cjs": 67141 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23117, "activation.cjs": 24700 },
+  },
+  worker: { delta: 0, ceiling: 822753 },
+  reason: "expiryMs, hasPermissions and the pre-modal decrypt check add 172 B (mjs) / 174 B (cjs) gzip to each web-sdk root bundle (TC-1777)",
+};
+
+/**
+ * Developer request log panel (js-sdk #656, TC-848), approved by Naomi, 2026-10-22: the root index.mjs / index.cjs
+ * ceilings rise from 1,459,030 / 1,402,121 to 1,462,046 / 1,404,345, the bytes canonical CI printed on the #656 code
+ * head aae48af0 merged into master bf510d9f, which itself measured 1,459,030 / 1,402,121. Measured growth against
+ * master is +3,016 / +2,224. First-import, activation and worker ceilings are unchanged.
+ */
+export const approvedTc848PanelRatchet: Tc848PanelRatchet = {
+  label: "developer request log panel (#656): root ceiling raised to the measured CI bytes",
+  ruling: "Approved by Naomi (2026-10-22, policy review relayed by Amos)",
+  base: "bf510d9f226c84bd6fd8d9d018c82e84b1fd2cc8",
+  sourceCommits: [
+    "aae48af0237b05f8673321b332d533aac7fd1a9b",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39869142170",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39869142170/job/120138846942",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39869142170/job/120138847243",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 3016, "index.cjs": 2224 },
+    ceiling: { "index.mjs": 1462046, "index.cjs": 1404345 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 51925, "replica.cjs": 67141 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23117, "activation.cjs": 24700 },
+  },
+  worker: { delta: 0, ceiling: 822753 },
+  reason: "developer request log (TC-848 panel): +3016 B (mjs) / +2224 B (cjs) gzip to each web-sdk root bundle",
+};
+
+/**
+ * One-hour decrypt default and secret-read coverage (js-sdk #681, TC-1781), approved by Naomi, 2026-10-23: the root
+ * index.mjs / index.cjs ceilings rise from 1,462,046 / 1,404,345 to 1,462,349 / 1,404,562, the bytes canonical CI
+ * printed on the #681 code head 0e56796c merged into master e88e40e0. Master measured 1,462,046 / 1,404,345 (run
+ * 39876022752 on d60f81df, the last code commit under e88e40e0, a [skip ci] release commit). Measured growth against
+ * master is +303 / +217. First-import, activation and worker ceilings are unchanged.
+ */
+export const approvedTc1781DecryptExpiryRatchet: Tc1781DecryptExpiryRatchet = {
+  label: "one-hour decrypt default and secret-read coverage (#681): root ceiling raised to the measured CI bytes",
+  ruling: "Approved by Naomi (2026-10-23, policy review relayed by Amos)",
+  base: "e88e40e003cd2570e80b1a3cd53d0a5531838e42",
+  sourceCommits: [
+    "0e56796c881a9a294b3c08cb69c5e351dac5855c",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39890426909",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39890426909/job/120208584548",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39890426909/job/120208584544",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 303, "index.cjs": 217 },
+    ceiling: { "index.mjs": 1462349, "index.cjs": 1404562 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 51925, "replica.cjs": 67141 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23117, "activation.cjs": 24700 },
+  },
+  worker: { delta: 0, ceiling: 822753 },
+  reason: "one-hour decrypt default and secret-read coverage: +303 B (mjs) / +217 B (cjs) gzip to each web-sdk root bundle (TC-1781)",
+};
+
+/**
+ * Non-transferable share option (js-sdk #687, TC-1801), approved by Naomi, 2026-10-23: the root index.mjs / index.cjs
+ * ceilings rise from 1,462,349 / 1,404,562 to 1,462,375 / 1,404,597, the bytes canonical CI printed on the #687 code
+ * head 8109b636 merged into master 51ee7f0e (the merge base). Master measured 1,462,349 / 1,404,562 (run 39893524824
+ * on 7b92156e). Measured growth against master is +26 / +35. First-import, activation and worker ceilings are unchanged.
+ */
+export const approvedTc1801NonTransferableShareRatchet: Tc1801NonTransferableShareRatchet = {
+  label: "non-transferable share option (#687): root ceiling raised to the measured CI bytes",
+  ruling: "Approved by Naomi (2026-10-23, policy review relayed by Amos)",
+  base: "51ee7f0e9aa7a382d5150a7f1c20e9b64b36409b",
+  sourceCommits: [
+    "8109b636fbc6b21a56d11a17ea8d97d860a8435b",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39896378690",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39896378690/job/120227697556",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39896378690/job/120227697563",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 26, "index.cjs": 35 },
+    ceiling: { "index.mjs": 1462375, "index.cjs": 1404597 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 51925, "replica.cjs": 67141 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23117, "activation.cjs": 24700 },
+  },
+  worker: { delta: 0, ceiling: 822753 },
+  reason: "non-transferable share option: +26 B (mjs) / +35 B (cjs) gzip to each web-sdk root bundle (TC-1801)",
+};
+
+/**
+ * Credential discovery default and typed error (js-sdk #690, TC-1807), approved by Naomi, 2026-10-23: the root index.mjs /
+ * index.cjs ceilings rise from 1,462,375 / 1,404,597 to 1,462,456 / 1,404,685, the bytes canonical CI printed on the #690
+ * code head 3ca75b89 (master 437ca159 merged in; 437ca159 is the merge base). Master measured 1,462,375 / 1,404,597 (runs
+ * 39900520931 on 0c09d7be and 39902544500 on 437ca159). Measured growth against master is +81 / +88. First-import,
+ * activation and worker ceilings are unchanged.
+ */
+export const approvedTc1807CredentialDiscoveryRatchet: Tc1807CredentialDiscoveryRatchet = {
+  label: "credential discovery default and typed error (#690): root ceiling raised to the measured CI bytes",
+  ruling: "Approved by Naomi (2026-10-23, policy review relayed by Amos)",
+  base: "437ca1593cb9b41029409d154b724a64753625bc",
+  sourceCommits: [
+    "3ca75b89172289ef1fa3d780d42ae57181e25e67",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39904276924",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39904276924/job/120252519592",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39904276924/job/120252519405",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 81, "index.cjs": 88 },
+    ceiling: { "index.mjs": 1462456, "index.cjs": 1404685 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 51925, "replica.cjs": 67141 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23117, "activation.cjs": 24700 },
+  },
+  worker: { delta: 0, ceiling: 822753 },
+  reason: "credential discovery default and typed error: +81 B (mjs) / +88 B (cjs) gzip to each web-sdk root bundle (TC-1807)",
+};
+
+/**
+ * Replica worker narrow imports (js-sdk #694, TC-1827), approved by Naomi, 2026-10-23: the hashed kv-storage worker
+ * ceiling (`MAX_WORKER_GZIP_BYTES`) drops from 822,753 to 776,128, the bytes canonical CI printed on the #694 code head
+ * 7a7303a8 (merge base 6076581d). Master measured 822,753 (run 39908208344 on d867b7ac), so the measured growth against
+ * master is -46,625. Root, first-import and activation ceilings are unchanged; their deltas are the measured ones.
+ */
+export const approvedTc1827WorkerRatchet: Tc1827WorkerRatchet = {
+  label: "replica worker narrow imports (#694): kv-storage worker ceiling lowered to the measured CI bytes",
+  ruling: "Approved by Naomi (2026-10-23, policy review relayed by Amos)",
+  base: "6076581dcf13a6a0395b0f8798c6b6bf22928088",
+  sourceCommits: [
+    "7a7303a8afdc81910adbfa7b6485d2acc07617cd",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39943720009",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39943720009/job/120381124294",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39943720009/job/120381124041",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 0, "index.cjs": 0 },
+    ceiling: { "index.mjs": 1462456, "index.cjs": 1404685 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": -1 },
+    ceiling: { "replica.mjs": 51925, "replica.cjs": 67141 },
+  },
+  activation: {
+    delta: { "activation.mjs": -1, "activation.cjs": -2 },
+    ceiling: { "activation.mjs": 23117, "activation.cjs": 24700 },
+  },
+  worker: { delta: -46625, ceiling: 776128 },
+  reason: "replica workers import only the KV service: -46625 B gzip to the kv-storage worker (TC-1827)",
+};
+
+/**
+ * Replica worker ratchet (TC-1827 follow-up), requested by Naomi, 2026-10-23: `replica.worker.js` had no size ceiling;
+ * `MAX_REPLICA_WORKER_GZIP_BYTES` is the 770,093 gzip bytes canonical CI printed on the code head f2e2f9fc (merge base
+ * dc615834, after #694). That head changes no worker input, so the delta against the merge base is 0.
+ */
+export const approvedTc1827ReplicaWorkerRatchet: Tc1827ReplicaWorkerRatchet = {
+  label: "replica worker size ratchet (TC-1827 follow-up): first replica.worker.js ceiling at the measured CI bytes",
+  ruling: "Requested by Naomi (2026-10-23, relayed by Amos): the exact canonical CI bytes, zero headroom",
+  base: "dc61583428a04aa87eb0c0d6aebb656a698a5b0f",
+  sourceCommits: [
+    "f2e2f9fcc16842bfa3e30c71eae9de271405fdae",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39949887460",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39949887460/job/120401498637",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39949887460/job/120401498914",
+    ],
+  },
+  worker: { delta: 0, ceiling: 770093 },
+  reason: "replica.worker.js had no size ratchet; its ceiling is the 770093 B gzip canonical CI measured (TC-1827)",
+};
+
+/**
+ * SQL and DuckDB request-size error codes (js-sdk #693, TC-1823), approved by Naomi, 2026-10-23: the root index.mjs /
+ * index.cjs ceilings rise from 1,462,456 / 1,404,685 to 1,462,556 / 1,404,793, the bytes canonical CI printed on the #693
+ * code head c35e2688 (merge base d3da8654, master's tip). Measured growth against master is +100 / +108, shrunk from
+ * +1,273 / +331 at 198771bb. First-import, activation and worker ceilings are unchanged.
+ */
+export const approvedTc1823SizeCodeRatchet: Tc1823SizeCodeRatchet = {
+  label: "SQL and DuckDB request-size error codes (#693): root ceiling raised to the measured CI bytes; master 1462456/1404685 → 1462556/1404793; shrunk from +1273/+331 (198771bb) to +100/+108",
+  ruling: "Approved by Naomi (2026-10-23, policy review relayed by Amos)",
+  base: "d3da865460ad4b0b51bad753bddd8f89518db238",
+  sourceCommits: [
+    "c35e268879bf5e30447f9335229dda4d64361bdb",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39978157827",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39978157827/job/120498120597",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39978157827/job/120498121108",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 100, "index.cjs": 108 },
+    ceiling: { "index.mjs": 1462556, "index.cjs": 1404793 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 51925, "replica.cjs": 67141 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23117, "activation.cjs": 24700 },
+  },
+  worker: { delta: 0, ceiling: 776128 },
+  reason: "SQL and DuckDB request-size error codes: +100 B (mjs) / +108 B (cjs) gzip to each web-sdk root bundle (TC-1823)",
+};
+
+/**
+ * Credential consumer core (js-sdk #679, TC-712 PR-A), approved by Naomi, 2026-10-23: the root index.mjs / index.cjs
+ * ceilings rise from 1,462,556 / 1,404,793 to 1,462,632 / 1,404,864, the bytes canonical CI printed on the #679 code
+ * head 20a35591 (merge base 43c5bea9, master's tip). Measured growth against the previous newest row is +76 / +71.
+ * First-import, activation and worker ceilings are unchanged.
+ */
+export const approvedTc712CredentialCoreRatchet: Tc712CredentialCoreRatchet = {
+  label: "credential consumer core (#679, TC-712 PR-A): root ceiling raised to the measured CI bytes; newest row 1462556/1404793 → 1462632/1404864 (+76/+71)",
+  ruling: "Approved by Naomi (2026-10-23, policy review relayed by Amos)",
+  base: "43c5bea9cd6e9409e2e8094de30d302de9aa94a5",
+  sourceCommits: [
+    "20a35591ac263358270ae28fd8ad7013af74d861",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40002503111",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40002503111/job/120581943143",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40002503111/job/120581942872",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 76, "index.cjs": 71 },
+    ceiling: { "index.mjs": 1462632, "index.cjs": 1404864 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 51925, "replica.cjs": 67141 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23117, "activation.cjs": 24700 },
+  },
+  worker: { delta: 0, ceiling: 776128 },
+  reason: "credential consumer core: +76 B (mjs) / +71 B (cjs) gzip to each web-sdk root bundle (TC-712)",
+};
 
 export type GatedOnlyRatchet = {
   label: string;
@@ -763,10 +1427,45 @@ export function validateGatedOnlyRatchet(row?: GatedOnlyRatchet, base?: GatedOnl
 }
 const historicalToolchain = "Bun 1.4.3; production webpack; gzip -9 -c";
 
+/** Every ledger row, except allowance and entries, with its approved constant. A row commit wires its constant here once. */
+export const approvedLedgerRows: Record<string, unknown> = {
+  phase2Ratchet: approvedPhase2,
+  fixRequiredRatchet: approvedFixRequiredRatchet,
+  canonicalToolchainCorrection: approvedCiToolchainCorrection,
+  masterMergeResolution: approvedMasterMergeResolution,
+  hardeningRatchet: approvedHardeningRatchet,
+  logoutRatchet: approvedLogoutRatchet,
+  tc1413Ratchet: approvedTc1413Ratchet,
+  tc1436Ratchet: approvedTc1436Ratchet,
+  tc1432Ratchet: approvedTc1432Ratchet,
+  tc1424Ratchet: approvedTc1424Ratchet,
+  tc1448Ratchet: approvedTc1448Ratchet,
+  tc1443Ratchet: approvedTc1443Ratchet,
+  tc1466Ratchet: approvedTc1466Ratchet,
+  tc1443bRatchet: approvedTc1443bRatchet,
+  tc1428Ratchet: approvedTc1428Ratchet,
+  tc1476Ratchet: approvedTc1476Ratchet,
+  tc1475Ratchet: approvedTc1475Ratchet,
+  tc606WorkerRatchet: approvedTc606WorkerRatchet,
+  masterDriftRatchet: approvedMasterDriftRatchet,
+  tc1789Ratchet: approvedTc1789Ratchet,
+  tc1757Ratchet: approvedTc1757Ratchet,
+  tc1777Ratchet: approvedTc1777Ratchet,
+  tc1777ExpiryRatchet: approvedTc1777ExpiryRatchet,
+  tc848PanelRatchet: approvedTc848PanelRatchet,
+  tc1781DecryptExpiryRatchet: approvedTc1781DecryptExpiryRatchet,
+  tc1801NonTransferableShareRatchet: approvedTc1801NonTransferableShareRatchet,
+  tc1807CredentialDiscoveryRatchet: approvedTc1807CredentialDiscoveryRatchet,
+  tc1827WorkerRatchet: approvedTc1827WorkerRatchet,
+  tc1827ReplicaWorkerRatchet: approvedTc1827ReplicaWorkerRatchet,
+  tc1823SizeCodeRatchet: approvedTc1823SizeCodeRatchet,
+  tc712CredentialCoreRatchet: approvedTc712CredentialCoreRatchet,
+};
+
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
 export function validateLedger(value: Ledger, historicalBase = false): void {
   if (!value || !value.allowance || !Array.isArray(value.entries) ||
-      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet" && key !== "tc1436Ratchet" && key !== "tc1432Ratchet" && key !== "tc1424Ratchet" && key !== "tc1448Ratchet" && key !== "tc1443Ratchet" && key !== "tc1466Ratchet" && key !== "tc1443bRatchet" && key !== "tc1428Ratchet" && key !== "tc1476Ratchet" && key !== "tc1475Ratchet")) {
+      Object.keys(value).some((key) => !["allowance", "entries"].includes(key) && !Object.hasOwn(approvedLedgerRows, key))) {
     throw new Error("Invalid packages/web-sdk/scripts/replica-size-ledger.json shape");
   }
   if (Object.keys(value.allowance).some((key) => !formats.includes(key as typeof formats[number]))) {
@@ -873,6 +1572,174 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
   if (value.tc1475Ratchet !== undefined &&
       (!value.tc1428Ratchet || JSON.stringify(value.tc1475Ratchet) !== JSON.stringify(approvedTc1475Ratchet))) {
     throw new Error("Only Naomi's exact canonical TC-1475 retry ratchet is approved.");
+  }
+  if (value.tc606WorkerRatchet !== undefined &&
+      (!value.tc1475Ratchet || JSON.stringify(value.tc606WorkerRatchet) !== JSON.stringify(approvedTc606WorkerRatchet))) {
+    throw new Error("Only Naomi's exact canonical #606 worker ratchet is approved.");
+  }
+  if (value.masterDriftRatchet !== undefined &&
+      (!value.tc606WorkerRatchet || JSON.stringify(value.masterDriftRatchet) !== JSON.stringify(approvedMasterDriftRatchet))) {
+    throw new Error("Only Naomi's exact canonical master-drift ratchet is approved.");
+  }
+  if (value.tc1789Ratchet !== undefined &&
+      (!value.masterDriftRatchet || JSON.stringify(value.tc1789Ratchet) !== JSON.stringify(approvedTc1789Ratchet))) {
+    throw new Error("Only Naomi's exact canonical sdk-services 3.3.1 pin ratchet is approved.");
+  }
+  if (value.tc1757Ratchet !== undefined &&
+      (!value.tc1789Ratchet || JSON.stringify(value.tc1757Ratchet) !== JSON.stringify(approvedTc1757Ratchet))) {
+    throw new Error("Only Naomi's exact canonical web-recipient entry ratchet is approved.");
+  }
+  if (value.tc1777Ratchet !== undefined &&
+      (!value.tc1757Ratchet || JSON.stringify(value.tc1777Ratchet) !== JSON.stringify(approvedTc1777Ratchet))) {
+    throw new Error("Only Naomi's exact canonical replication-wiring boundary ratchet is approved.");
+  }
+  if (value.tc1777ExpiryRatchet !== undefined &&
+      (!value.tc1777Ratchet || JSON.stringify(value.tc1777ExpiryRatchet) !== JSON.stringify(approvedTc1777ExpiryRatchet))) {
+    throw new Error("Only Naomi's exact canonical expiryMs / hasPermissions ratchet is approved.");
+  }
+  if (value.tc848PanelRatchet !== undefined &&
+      (!value.tc1777ExpiryRatchet || JSON.stringify(value.tc848PanelRatchet) !== JSON.stringify(approvedTc848PanelRatchet))) {
+    throw new Error("Only Naomi's exact canonical developer request log panel ratchet is approved.");
+  }
+  if (value.tc1781DecryptExpiryRatchet !== undefined &&
+      (!value.tc848PanelRatchet || JSON.stringify(value.tc1781DecryptExpiryRatchet) !== JSON.stringify(approvedTc1781DecryptExpiryRatchet))) {
+    throw new Error("Only Naomi's exact canonical one-hour decrypt default ratchet is approved.");
+  }
+  if (value.tc1801NonTransferableShareRatchet !== undefined &&
+      (!value.tc1781DecryptExpiryRatchet || JSON.stringify(value.tc1801NonTransferableShareRatchet) !== JSON.stringify(approvedTc1801NonTransferableShareRatchet))) {
+    throw new Error("Only Naomi's exact canonical non-transferable share option ratchet is approved.");
+  }
+  if (value.tc1807CredentialDiscoveryRatchet !== undefined &&
+      (!value.tc1801NonTransferableShareRatchet || JSON.stringify(value.tc1807CredentialDiscoveryRatchet) !== JSON.stringify(approvedTc1807CredentialDiscoveryRatchet))) {
+    throw new Error("Only Naomi's exact canonical credential discovery ratchet is approved.");
+  }
+  if (value.tc1827WorkerRatchet !== undefined &&
+      (!value.tc1807CredentialDiscoveryRatchet || JSON.stringify(value.tc1827WorkerRatchet) !== JSON.stringify(approvedTc1827WorkerRatchet))) {
+    throw new Error("Only Naomi's exact canonical replica worker narrow-imports ratchet is approved.");
+  }
+  if (value.tc1827ReplicaWorkerRatchet !== undefined &&
+      (!value.tc1827WorkerRatchet || JSON.stringify(value.tc1827ReplicaWorkerRatchet) !== JSON.stringify(approvedTc1827ReplicaWorkerRatchet))) {
+    throw new Error("Only the exact canonical replica worker ratchet is approved.");
+  }
+  if (value.tc1823SizeCodeRatchet !== undefined &&
+      (!value.tc1827WorkerRatchet || JSON.stringify(value.tc1823SizeCodeRatchet) !== JSON.stringify(approvedTc1823SizeCodeRatchet))) {
+    throw new Error("Only Naomi's exact canonical request-size error code ratchet is approved.");
+  }
+  if (value.tc712CredentialCoreRatchet !== undefined &&
+      (!value.tc1823SizeCodeRatchet || JSON.stringify(value.tc712CredentialCoreRatchet) !== JSON.stringify(approvedTc712CredentialCoreRatchet))) {
+    throw new Error("Only Naomi's exact canonical credential consumer core ratchet is approved.");
+  }
+}
+
+/** The #606 worker ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc606WorkerRatchetTransition(base?: WorkerRatchet, current?: WorkerRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc606WorkerRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact #606 worker ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The master-drift ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateMasterDriftRatchetTransition(base?: MasterDriftRatchet, current?: MasterDriftRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedMasterDriftRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact master-drift ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The sdk-services 3.3.1 pin ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc1789RatchetTransition(base?: Tc1789Ratchet, current?: Tc1789Ratchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1789Ratchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact sdk-services 3.3.1 pin ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The web-recipient entry ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc1757RatchetTransition(base?: Tc1757Ratchet, current?: Tc1757Ratchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1757Ratchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact web-recipient entry ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The replication-wiring boundary ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc1777RatchetTransition(base?: Tc1777Ratchet, current?: Tc1777Ratchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1777Ratchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact replication-wiring boundary ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The expiryMs / hasPermissions ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc1777ExpiryRatchetTransition(base?: Tc1777ExpiryRatchet, current?: Tc1777ExpiryRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1777ExpiryRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact expiryMs / hasPermissions ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-848 developer request log panel ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc848PanelRatchetTransition(base?: Tc848PanelRatchet, current?: Tc848PanelRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc848PanelRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-848 developer request log panel ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-1781 one-hour decrypt default and secret-read coverage ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc1781DecryptExpiryRatchetTransition(base?: Tc1781DecryptExpiryRatchet, current?: Tc1781DecryptExpiryRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1781DecryptExpiryRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-1781 one-hour decrypt default ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-1801 non-transferable share option ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc1801NonTransferableShareRatchetTransition(base?: Tc1801NonTransferableShareRatchet, current?: Tc1801NonTransferableShareRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1801NonTransferableShareRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-1801 non-transferable share ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-1807 credential discovery ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc1807CredentialDiscoveryRatchetTransition(base?: Tc1807CredentialDiscoveryRatchet, current?: Tc1807CredentialDiscoveryRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1807CredentialDiscoveryRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-1807 credential discovery ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-1827 worker ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc1827WorkerRatchetTransition(base?: Tc1827WorkerRatchet, current?: Tc1827WorkerRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1827WorkerRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-1827 replica worker narrow-imports ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-1827 replica worker ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc1827ReplicaWorkerRatchetTransition(base?: Tc1827ReplicaWorkerRatchet, current?: Tc1827ReplicaWorkerRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1827ReplicaWorkerRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-1827 replica worker ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-1823 request-size error code ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc1823SizeCodeRatchetTransition(base?: Tc1823SizeCodeRatchet, current?: Tc1823SizeCodeRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1823SizeCodeRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-1823 request-size error code ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-712 credential consumer core ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc712CredentialCoreRatchetTransition(base?: Tc712CredentialCoreRatchet, current?: Tc712CredentialCoreRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc712CredentialCoreRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-712 credential consumer core ratchet may be introduced once and cannot change later.");
   }
 }
 

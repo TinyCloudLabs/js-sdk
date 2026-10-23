@@ -1,3 +1,4 @@
+import { recentNotices } from './notify.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -24,6 +25,9 @@ import {
 import { commitReceipts, collectInbound, renderInboxText, writeOut } from './inbox.js';
 import { getJson, listAll, putCreate, putMatch, del } from './store.js';
 import { DEFAULT_ORDERS } from './orders.js';
+import { requestFields, requestIds, requestShapeProblem, requestText } from './request.js';
+import { requestHash } from './canonical.js';
+import { targetHelp } from './guard/target.js';
 import type { ParsedArgs } from './args.js';
 import { requireFlag, oneOf } from './args.js';
 import { assertPeerDelegation, bareDid, durationMs, AGENT_GRANT_MAX_MS } from './authority.js';
@@ -387,22 +391,22 @@ export async function cmdRevoke(args: ParsedArgs) {
 
 // ---------- send ----------
 
-export async function cmdSend(args: ParsedArgs) {
-  const { profile, node } = await ctx();
-  const peerHandle = args.positional[0] ?? fail('usage', sendUsage());
-  const peer = getPeer(profile, peerHandle);
-  const which = oneOf(args, ['new', 'thread']);
-  const threadId = which === 'new' ? ulid() : which === 'thread' ? requireFlag(args, 'thread', sendUsage()) : fail('usage', sendUsage());
-  const subject = args.get('new');
-  const intentRaw = args.get('intent') ?? 'request';
-  if (!INTENTS.includes(intentRaw as Intent)) fail('usage', `--intent must be one of: ${INTENTS.join(', ')}`);
-  const text = readTextArg(args, '--text or --file is required (or pipe the body on stdin)');
-  if (text.length > 256 * 1024) fail('too-large', 'Message body exceeds the 256 KB inline limit (§4) — put it under files/ instead.');
+export type SendInput = {
+  which: 'new' | 'thread';
+  threadId: string;
+  subject?: string;
+  text: string;
+  intent: Intent;
+  asks: { id: string; title: string }[];
+  constraints: string[];
+  inReplyTo: string | null;
+  referenceTaskIds: string[];
+};
+
+/** Writes one outbound message (and thread meta for a new thread) to the peer's mirror. Shared by `courier send` and the outbox. */
+export async function sendMessage(node: TinyCloudNode, profile: Profile, peerHandle: string, peer: StoredPeer, input: SendInput): Promise<CourierMessage> {
+  const { which, threadId, subject, text, intent, asks, constraints, inReplyTo, referenceTaskIds } = input;
   const from = { owner: profile.ownerDid!, agent: profile.courierDid, label: profile.label };
-  const asks = args.all('ask').map((title, i) => ({ id: `a${i + 1}`, title }));
-  const constraints = args.all('constraint');
-  const inReplyTo = args.get('reply-to') ?? null;
-  const referenceTaskIds = args.all('task-ref');
   const startedByMe = which === 'new' || Boolean(await getJson(node.kv, k.threadMeta(peerHandle, threadId)));
   let refsOwnTask = false;
   let refsAnyTask = false;
@@ -419,7 +423,7 @@ export async function cmdSend(args: ParsedArgs) {
     }
   }
   const msg = buildMessage({
-    threadId, text, from, intent: intentRaw as Intent, asks, constraints, inReplyTo, referenceTaskIds,
+    threadId, text, from, intent, asks, constraints, inReplyTo, referenceTaskIds,
     role: messageRole({ startedByMe, refsOwnTask, refsAnyTask }),
   });
   if (which === 'new') {
@@ -431,12 +435,33 @@ export async function cmdSend(args: ParsedArgs) {
     await putCreate(node.kv, k.threadMeta(peerHandle, threadId), meta);
   }
   await putCreate(node.kv, k.msg(peerHandle, threadId, msg.messageId), msg);
+  return msg;
+}
+
+export async function cmdSend(args: ParsedArgs) {
+  const { profile, node } = await ctx();
+  const peerHandle = args.positional[0] ?? fail('usage', sendUsage());
+  const peer = getPeer(profile, peerHandle);
+  const which = oneOf(args, ['new', 'thread']);
+  const threadId = which === 'new' ? ulid() : which === 'thread' ? requireFlag(args, 'thread', sendUsage()) : fail('usage', sendUsage());
+  const subject = args.get('new');
+  const intentRaw = args.get('intent') ?? 'request';
+  if (!INTENTS.includes(intentRaw as Intent)) fail('usage', `--intent must be one of: ${INTENTS.join(', ')}`);
+  const text = readTextArg(args, '--text or --file is required (or pipe the body on stdin)');
+  if (text.length > 256 * 1024) fail('too-large', 'Message body exceeds the 256 KB inline limit (§4) — put it under files/ instead.');
+  const msg = await sendMessage(node, profile, peerHandle, peer, {
+    which: which === 'new' ? 'new' : 'thread', threadId, subject, text, intent: intentRaw as Intent,
+    asks: args.all('ask').map((title, i) => ({ id: `a${i + 1}`, title })),
+    constraints: args.all('constraint'),
+    inReplyTo: args.get('reply-to') ?? null,
+    referenceTaskIds: args.all('task-ref'),
+  });
   printJson({ ok: true, threadId, messageId: msg.messageId, peer: peerHandle, intent: intentRaw, role: msg.role });
 }
 
 const sendUsage = () => `Usage: ${cmd('send <peer> (--new <subject> | --thread <id>) [--text t | --file f | stdin] [--intent i] [--ask "…"]… [--reply-to id]')}`;
 
-function readTextArg(args: ParsedArgs, usage: string): string {
+export function readTextArg(args: ParsedArgs, usage: string): string {
   const t = args.get('text');
   if (t !== undefined && t !== 'true') return t;
   const file = args.get('file');
@@ -457,10 +482,12 @@ export async function cmdInbox(args: ParsedArgs) {
   });
   const output = {
     notice: COUNTERPARTY_NOTICE,
+    notifications: recentNotices(profileDir()),
     items: collection.items.map((item) => ({ authority: 'counterparty', ...item })),
     errors: collection.errors,
   };
-  await writeOut(args.has('json') ? JSON.stringify(output, null, 2) + '\n' : renderInboxText(collection.items));
+  const status = output.notifications.length ? `\nRecent notifications (delivery receipts may already be current):\n${output.notifications.map(n => `${n.title}: ${n.body}`).join('\n')}\n` : '';
+  await writeOut(args.has('json') ? JSON.stringify(output, null, 2) + '\n' : renderInboxText(collection.items) + status);
   for (const error of collection.errors) console.error(`warning: inbox ${error.peer}: ${error.message}`);
   if (!args.has('peek')) await commitReceipts(node.kv, collection.pending);
 }
@@ -609,33 +636,48 @@ const taskUsage = () => `Usage: ${cmd('task <taskId|new> --peer <p> --thread <id
 // ---------- request ----------
 
 export async function cmdRequest(args: ParsedArgs) {
-  const { profile, node } = await ctx();
   const threadId = args.positional[0] ?? fail('usage', requestUsage());
   const taskId = requireFlag(args, 'task', requestUsage());
-  const action = requireFlag(args, 'action', requestUsage());
   const why = requireFlag(args, 'why', requestUsage());
   const peerHandle = requireFlag(args, 'peer', requestUsage());
+  const flag = (name: string) => (args.get(name) === 'true' ? undefined : args.get(name));
+  const pinFlag = (name: string) => args.has(name) ? requireFlag(args, name, requestUsage()) : undefined;
+  requestIds({ threadId, taskId });
+  const fields = requestFields({ verb: flag('verb'), target: flag('target'), summary: flag('summary'), headSha: pinFlag('head-sha'), base: pinFlag('base') });
+  const { profile, node } = await ctx();
   getPeer(profile, peerHandle);
   const risk = args.get('risk');
   const id = ulid();
   const request = {
-    id, peer: peerHandle, threadId, taskId, action, reason: why,
-    risk: risk ?? 'unspecified',
+    id, peer: peerHandle, threadId, taskId, ...fields,
+    // Free text for the owner to read; nothing matches against it (the structured fields above do that).
+    ...requestText({ action: flag('action'), reason: why, risk }, fields.summary),
     requestedBy: { owner: profile.ownerDid!, agent: profile.courierDid },
     createdAt: new Date().toISOString(),
     expiresAt: new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
     status: 'pending',
   };
-  await putCreate(node.kv, k.request(id), request);
+  const hash = requestHash(request); // refuses (throws) a request that could never be hashed or approved, before anything is written
+  const problem = requestShapeProblem(request);
+  if (problem) fail('usage', `The request is malformed: ${problem}.`);
+  // The task comes first: the view names <peer> on the card only if `to/<peer>/threads/<thread>/task/<task>.json`
+  // exists in this space, so the request is not written unless that file does (created here if the agent has not yet).
   const taskKey = k.task(peerHandle, threadId, taskId);
   const existing = await getJson<CourierTask>(node.kv, taskKey);
   const task = authRequiredTask(existing?.value, threadId, taskId);
   if (existing?.etag) await putMatch(node.kv, taskKey, task, existing.etag);
   else await putCreate(node.kv, taskKey, task);
-  printJson({ ok: true, requestId: id, taskId, state: 'TASK_STATE_AUTH_REQUIRED' });
+  if (!(await getJson<CourierTask>(node.kv, taskKey))) fail('task-missing', `The task ${taskId} is not in ${taskKey}; no request was written.`);
+  await putCreate(node.kv, k.request(id), request);
+  // `requestHash` is what the view's card shows as its fingerprint (first 8 hex digits) and `courier approval` prints in full.
+  printJson({ ok: true, requestId: id, requestHash: hash, taskId, state: 'TASK_STATE_AUTH_REQUIRED' });
 }
 
-const requestUsage = () => `Usage: ${cmd('request <threadId> --peer <p> --task <id> --action "…" --why "…" [--risk "…"]')}`;
+const requestUsage = () =>
+  `Usage: ${cmd('request <threadId> --peer <p> --task <id> --verb merge|deploy|publish|spend|other --target <what> --summary "…" --why "…" [--risk "…"] [--action "…"]')}\n${targetHelp()}\nMerge requires --head-sha <40 lowercase hex> and --base <branch> (refused for other verbs).\nRead the PR at request time: gh pr view N --repo owner/repo --json headRefOid,baseRefName\nPass headRefOid as --head-sha and baseRefName as --base; branch case is preserved.\nMerge requests include headSha and base in the approval hash.`;
+
+/** `courier request --help`: the usage line and every target form. */
+export const requestHelp = () => `${requestUsage()}\n`;
 
 // ---------- orders ----------
 

@@ -102,6 +102,11 @@ The `Major release guard` check fails a PR that adds a `major` changeset or rais
 without that sign-off. The Release workflow applies the same rule before publishing betas and before
 graduating them to stable (TC-615).
 
+Every changeset a PR adds or modifies needs a line that starts `Details: TC-<number>` (several
+tickets: `Details: TC-1, TC-2`); the `Changeset details` check fails the PR otherwise. It becomes
+the ticket line in the package CHANGELOG. `.changeset/README.md`, `config.json` and `pre.json` are
+exempt, as are the `dependabot-*.md` changesets that `dependabot-changeset.yml` generates.
+
 Release runs queue and never cancel each other. Each run pushes its version commit to `master` and
 then publishes from that commit; if `master` moved first, the run fails without publishing and the
 next run releases the changesets. Before publishing, it fails if npm's copy of any current version
@@ -118,10 +123,18 @@ reads earlier Release runs' logs (read-only, `actions: read`) and stops, rather 
 version number from newer code, when a version is missing from npm but an earlier run accepted it. It
 names that run; wait until `npm view <name>@<version>` answers, then push to `master` again, or bump the
 package with a changeset. A version no run accepted is published from HEAD as before.
+The warning holds only while no current version requires the pending one. `npm publish` moves each
+package's dist-tag at once, so a published package that requires a pending (or missing) internal version
+fails `Confirm npm` red: installing it by tag fails with ETARGET (`@tinycloud/web-sdk@beta` →
+`web-sdk-wasm@1.7.7-beta.0`, 2026-10-20). The failure prints a "tag back" `npm dist-tag add` command
+(to the version pre-publish recorded) and a "roll forward" one; a maintainer runs them by hand. CI never
+moves dist-tags.
 
 Runbook: **`Confirm npm has every current version` warns "pending" for web-sdk → wait; never re-run;
 never use the `release` dispatch (that's STABLE).** If it fails for web-sdk only, the version was not
 recorded as accepted: check the publish step log and `npm view`, still never re-run or dispatch `release`.
+If it fails because a package requires a version npm does not show, hold merges; wait for the dependency
+or run the printed tag-back command, then roll forward once `npm view <dependency> version` answers.
 A beta run's pre-publish check runs before it pushes, so a stop there leaves `master` and the pending
 changesets untouched; push to `master` again once npm shows the version.
 
@@ -153,6 +166,14 @@ version metadata and make the immutable release checkout fail the clean-tree pub
   entry to `agent.changelog.md` so future agents can see what changed and why.
 - PR descriptions should list cross-repo dependencies, node/API implications, tests run, and any
   required changesets.
+- The public ChatGPT candidate is `/chatgpt/mcp`, not the broad `/mcp` service.
+  Tool bindings are public opt-in; keep recovery-tool mapping restricted to the
+  selected surface. Public approvals/state are separate and require matching
+  OpenKey audience and exact web callback registrations. Context/query mutate
+  timezone/derived data and are not read-only. Query responses remain bounded;
+  canonical write outcomes must not be truncated. Package/review state lives
+  under `packages/mcp/plugin`. Default-branch merges and deployment require
+  explicit owner approval; never enable auto-merge or bypass that gate.
 - Hosted personal apps live in `packages/operations/src/operations/apps.ts` and
   `src/tc-apps/`. The published skill is pinned under `src/tc-apps/vendor/`;
   update it with `bun scripts/sync-tc-apps-rules.ts`, then

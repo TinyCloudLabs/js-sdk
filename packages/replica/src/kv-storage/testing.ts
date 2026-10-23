@@ -9,7 +9,10 @@ import type { DenyFaultPoint } from "./lifecycle.js";
 import { denyFaults } from "./lifecycle.js";
 import { kvPartitionEraser } from "./schema.js";
 
-/** Construct a lifecycle with a test eraser without exposing fault wiring to the production entry. */
+/**
+ * Construct a lifecycle with a test eraser without exposing fault wiring to the production entry.
+ * Test seam: pass `ledger` (ledgerFor()) or denial/erase will not release the device quota bucket; production always injects one.
+ */
 export { createIndexedDbLifecycle } from "./lifecycle.js";
 /** Inspect encrypted raw-row sizes without exposing the sealed codec on the production entry. */
 export { measureSealedRow } from "./sealed.js";

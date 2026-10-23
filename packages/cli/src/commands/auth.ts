@@ -7,7 +7,7 @@ import { lstat, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import type { IncomingMessage } from "node:http";
-import { TinyCloudNode, grantAuthRequest, principalDidEquals, REPLICA_LOGOUT_PENDING_FILE, signedCompactUcanExpiry, type PermissionEntry, type PortableDelegation, type RuntimeDelegationActivator, type TinyCloudSession } from "@tinycloud/node-sdk";
+import { TinyCloudNode, grantAuthRequest, principalDidEquals, REPLICA_LOGOUT_PENDING_FILE, signedCompactUcanExpiry, type AuthDelegationArtifact, type PermissionEntry, type PortableDelegation, type RuntimeDelegationActivator, type TinyCloudSession } from "@tinycloud/node-sdk";
 import type { ProfileReplicaApprovalEntry, ProfileReplicaDeferredToken, ProfileReplicaLogoutPending, ProfileReplicaPreflight, ProfileReplicaPurge } from "@tinycloud/sdk-services/kv/replication";
 import { composeManifestRequest } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
@@ -17,6 +17,7 @@ import { isReplicaError, ReplicaErrorCode } from "@tinycloud/replica";
 import { REPLICA_GATE_FILE } from "@tinycloud/sdk-services/kv/replication/contractConstants";
 import { ProfileManager } from "../config/profiles.js";
 import { logoutInventorySnapshot, planLogoutRevocations, type LogoutRevocationPlan } from "../lib/logout-revocation.js";
+import { assertShareHistoryAllowsKeyDrop } from "../share/history-guard.js";
 import {
   assertPendingLogoutOwner, assertPendingRemoteLogoutSession, clearProfileCredentials, eraseApprovedLegacyReplicas,
   finishLegacyReplicaCleanup, gateHeldByAnotherAccount, profilePurge, recoverPendingLogout, refuseRestoredGate,
@@ -58,6 +59,7 @@ import {
   loginWithDeviceAuthorization,
   resolveDeviceApiHost,
 } from "../auth/device-auth.js";
+import { ensureSpaceSetup } from "../auth/space-setup.js";
 import {
   expectedOwnerFor,
   declinedPermissions,
@@ -67,6 +69,7 @@ import {
   scopedLoginPermissions,
   validateLoginPermissions,
   verifyScopedLogin,
+  type VerifiedScopedSession,
   isRawCidRevocationPermission,
   verifySignedSession,
   type RequestedExpiry,
@@ -123,6 +126,21 @@ import {
   type PermissionRequestArtifact,
 } from "../lib/permissions.js";
 import { approvalNotices } from "../lib/approval-notices.js";
+import {
+  APPS_AGENT_EXPIRY,
+  APPS_AGENT_EXPIRY_DAYS,
+  APPS_AGENT_MAX_APPS,
+  APPS_AGENT_PRESET,
+  APPS_AGENT_SPACE,
+  appsAgentPermissions,
+  appsAgentScopeNotice,
+  assertRequestFields,
+  describeGrantScope,
+  entriesForSigning,
+  finalizeSigningEntries,
+  resolveAppsAgentRequest,
+} from "../lib/apps-agent-preset.js";
+import { permissionConsentLine, signExtrasQuestion } from "../lib/consent-text.js";
 import { buildReplicationLoginRequest, type ReplicationLoginOptions } from "../auth/replication-login.js";
 
 /** The one function dependency used by owner OpenKey permission acquisition. */
@@ -611,6 +629,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .option("--expiry <duration>", "OpenKey session lifetime, e.g. 1h or 7d (device login: at most 30d, default 30d)")
     .option("--owner <did>", "Sign in as this owner (did:pkh:eip155:CHAIN:ADDRESS): OpenKey preselects that key, e.g. one that is not the account's primary key, and an approval by any other identity is refused. With --manifest, also names the secrets owner for a manifest's `secrets` on a profile with no recorded owner")
     .option("--replace-session", "Scoped or device login: replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)")
+    .option("--force", "Replica-enabled OpenKey login: replace the stored session key even when recorded shares could not be checked or hold unexpired shares that need the current key")
     .option("--replication-prefix <prefix>", "Add replication get+sync authority for a folder prefix ending in /, or root (repeatable)", (prefix: string, values: string[] = []) => [...values, prefix])
     .option("--replication-allow-secrets", "Allow replication of secret material (network-wide decrypt warning)")
     .action(async (options, cmd) => {
@@ -671,6 +690,8 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           await persistReplicationLogin(ctx.profile, replicationOptions);
           if (replicationOptions.allowSecrets) writeReplicationSecretsWarning();
           reportDeclined(result.declined);
+          // OpenKey hosts the space after the approval: wait for it before the first storage call can fail.
+          await ensureSpaceSetup({ profile: ctx.profile, host: ctx.host }, result.session, result.session.permissions);
           outputJson({
             authenticated: true,
             profile: ctx.profile,
@@ -726,6 +747,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             expectedOwner: owner,
             replaceSession: options.replaceSession === true,
             persistHost,
+            force: options.force === true,
           });
           if (!preparedCommitted) await persistReplicationLogin(ctx.profile, replicationOptions);
           if (replicationOptions.allowSecrets) writeReplicationSecretsWarning();
@@ -742,6 +764,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .option("--revoke", "Revoke owner-controlled grants and the session CID on the node before local logout")
     .option("--discard-local-changes", "Approve deletion of the exact local replica paths and identities listed before logout; with --revoke, deletion waits for every node receipt")
     .option("--approve-inventory <token>", "After a refused pending remote logout, confirm the exact changed paths printed by the previous command; requires --discard-local-changes")
+    .option("--force", "Log out even when recorded shares could not be checked or hold unexpired shares that need the current session key")
     .action(async (options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
@@ -762,6 +785,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             "--approve-inventory only applies to a separate plain logout after a refused pending remote revocation.",
             ExitCode.USAGE_ERROR);
         }
+        if (!options.revoke && !options.force) await assertShareHistoryAllowsKeyDrop(ctx.profile, "logout");
         const online = options.revoke ? await revokeForLogout(ctx, options.discardLocalChanges === true) : undefined;
         const replicasRemoved = await finishProfileLogout(ctx, {
           keepReplicas: options.keepReplicas,
@@ -794,6 +818,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .description("Rotate the active profile session key")
     .option("--paste", "Use manual paste mode instead of browser callback")
     .option("--no-popup", "Print the OpenKey URL without opening a browser")
+    .option("--force", "Rotate even when recorded shares could not be checked or hold unexpired shares that need the current session key")
     .action(async (options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
@@ -801,6 +826,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         await rotateAuthKey(ctx.profile, ctx.host, {
           paste: options.paste,
           noPopup: options.popup === false,
+          force: options.force === true,
         });
       } catch (error) {
         return handleError(error);
@@ -892,6 +918,17 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .option("--yes", "Skip local-key TTY confirmation", false)
     .option("--no-popup", "Print the OpenKey URL without opening a browser when granting with OpenKey")
     .option("--device", "With --grant: approve on another device (e.g. a phone) through OpenKey device authorization (KV-scoped; SQL needs browser login)")
+    .option(
+      "--preset <name>",
+      `Request a named permission set instead of --cap: ${APPS_AGENT_PRESET} is READ-ONLY on the applications space (kv get/list + sql read, ${APPS_AGENT_EXPIRY_DAYS} days); add --write --app <app_id> to also let the agent change that app's data (see --write)`,
+    )
+    .option(
+      "--app <app_id>",
+      `With --preset ${APPS_AGENT_PRESET}: limit the grant to this app's <app_id>/ prefix (recommended); repeat for up to ${APPS_AGENT_MAX_APPS} apps`,
+      (value: string, previous: string[]) => [...previous, value],
+      [],
+    )
+    .option("--write", `With --preset ${APPS_AGENT_PRESET}: also let the agent add and change the named --app apps' data: write their knowledge/ and prefs/ files (kv put) and add, change or delete their table rows (sql write). Their code, manifest and install record stay read-only. Creating, changing or dropping tables is granted only for an app's catalog database (today Health Log's healthlog)`)
     .option("--paste", "With --grant on an OpenKey profile: wait up to 5 minutes for a signed code from OpenKey on stdin instead of a browser callback (use when the browser cannot reach this CLI)")
     .action(async (options, cmd) => {
       try {
@@ -905,8 +942,13 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         if (options.device && (!options.grant || resolveProfilePosture(profile) !== "owner-openkey")) {
           throw new CLIError("INVALID_ARGUMENT", "--device requires --grant on an OpenKey owner profile.", ExitCode.USAGE_ERROR);
         }
-        const requested = await collectRequestedPermissions(options, ctx.profile);
-        const expiryOption = parseExpiryOption(options.expiry);
+        const preset = resolveAppsAgentRequest(options);
+        const requested = preset === undefined
+          ? await collectRequestedPermissions(options, ctx.profile)
+          : await resolvePermissionSpaces(appsAgentPermissions(preset.mode, preset.appIds), ctx.profile);
+        const expiryOption = preset === undefined ? parseExpiryOption(options.expiry) : APPS_AGENT_EXPIRY;
+        // Before any approval link is printed: the plain-words scope of the grant.
+        if (preset !== undefined) process.stderr.write(`\n${appsAgentScopeNotice(preset.mode, preset.appIds)}\n\n`);
 
         if (requested.length === 0) {
           throw new CLIError(
@@ -1255,7 +1297,13 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         const raw = await readAuthArtifactSource(source, {
           stdin: options.stdin === true || options.paste === true,
         });
-        const parsed = JSON.parse(raw) as unknown;
+        // The parser's own message quotes the offending text from the file, so it is not passed on.
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(raw);
+        } catch {
+          throw new CLIError("INVALID_AUTH_REQUEST", "The request file is not valid JSON.", ExitCode.USAGE_ERROR);
+        }
 
         if (!isCompatiblePermissionRequestArtifact(parsed)) {
           throw new CLIError(
@@ -1264,24 +1312,88 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             ExitCode.USAGE_ERROR,
           );
         }
+        assertRequestFields(parsed);
 
-        const requested = await resolvePermissionSpaces(parsed.requested, ctx.profile);
+        // One resolved list is described, gated and signed. The signer's own defaults (an entry with
+        // no space is in the owner's `applications` space) and the profile's name resolution are
+        // applied once, here, and the signer then consumes this list rather than re-reading the file.
+        const requested = finalizeSigningEntries(
+          await resolvePermissionSpaces(entriesForSigning(parsed.requested as PermissionEntry[]), ctx.profile),
+        );
+        const [applications] = await resolvePermissionSpaces(
+          [{ service: "tinycloud.kv", space: APPS_AGENT_SPACE, path: "", actions: ["tinycloud.kv/get"] }],
+          ctx.profile,
+        );
+        const scope = describeGrantScope(
+          requested,
+          parsed.requestedExpiry,
+          applications!.space ?? APPS_AGENT_SPACE,
+          profile.authMethod === "openkey" ? OPENKEY_AGENT_MAX_LIFETIME_MS : undefined,
+        );
+        process.stderr.write(`\n${scope.text}\n\n`);
+        // The request file comes from the agent: anything the apps-agent preset could never grant
+        // is signed only after an explicit --yes or an interactive confirmation of the list above.
+        // The question is written to stderr and answered on stdin, so those two must be a terminal;
+        // stdout may be a file (scripts capture the grant artifact there) without losing the prompt.
+        let confirmedExtras = false;
+        if (scope.extras.length > 0 && options.yes !== true) {
+          if (!process.stdin.isTTY || !process.stderr.isTTY) {
+            throw new CLIError(
+              "CONFIRMATION_REQUIRED",
+              `This request asks for more than the apps-agent preset (${scope.extras.length} entr${scope.extras.length === 1 ? "y" : "ies"} marked ! in the list above). Nothing was signed. Read the list, then re-run with --yes to sign it.`,
+              ExitCode.USAGE_ERROR,
+            );
+          }
+          await askYesNo(signExtrasQuestion(scope.extras.length), "Grant cancelled. Nothing was signed.");
+          confirmedExtras = true;
+        }
         const resolvedRequest = { ...parsed, requested };
         const node = await ensureAuthenticated(ctx);
-        await ensureDelegationAuthority({
-          ctx,
-          profile,
-          node,
-          requested,
-          expiryOption: parsed.requestedExpiry,
-          reason: "Grant permissions requested by a TinyCloud auth request artifact.",
-          yes: options.yes === true,
-        });
+        let grant: AuthDelegationArtifact;
+        if (profile.authMethod === "openkey") {
+          assertOpenKeyAgentRequest(requested);
+          // The owner approves each agent request in OpenKey, requested fresh for this command:
+          // existing runtime or persisted authority and --yes do not skip it. The approval lasts the
+          // request's lifetime, capped at the apps-agent default, and the grant lasts as long as it.
+          const approval = await acquireOpenKeyApproval({
+            ctx,
+            profile,
+            requested,
+            expiryOption: Math.min(
+              parseRequestedExpiry(parsed.requestedExpiry ?? APPS_AGENT_EXPIRY).durationMs,
+              OPENKEY_AGENT_MAX_LIFETIME_MS,
+            ),
+            reason: "Grant permissions requested by a TinyCloud auth request artifact.",
+            exactApproval: true,
+            noPopup: !(process.stdin.isTTY || process.stderr.isTTY),
+          });
+          // Sign from the approval's own session, so the grant is bounded by that approval
+          // and never takes the owner's stored authority.
+          const approvalNode = await nodeFromOpenKeyApproval(ctx.host, approval.session);
+          grant = {
+            ...(await grantAuthRequest(approvalNode, resolvedRequest, {
+              expiry: approval.delegation.expiry.getTime() - Date.now(),
+            })),
+            // The owner approved this grant on the OpenKey approval screen, so it was prompted.
+            prompted: true,
+          };
+          process.stderr.write(`Grant lasts until ${grant.expiry}, the lifetime of the OpenKey approval.\n`);
+        } else {
+          await ensureDelegationAuthority({
+            ctx,
+            profile,
+            node,
+            requested,
+            expiryOption: parsed.requestedExpiry,
+            reason: "Grant permissions requested by a TinyCloud auth request artifact.",
+            yes: options.yes === true || confirmedExtras,
+          });
 
-        // The grant logic lives in the SDK (grantAuthRequest) so it is callable
-        // programmatically; this command is a thin wrapper. The CLI request
-        // artifact is a structural superset of AuthRequestArtifact.
-        const grant = await grantAuthRequest(node, resolvedRequest);
+          // The grant logic lives in the SDK (grantAuthRequest) so it is callable
+          // programmatically; this command is a thin wrapper. The CLI request
+          // artifact is a structural superset of AuthRequestArtifact.
+          grant = await grantAuthRequest(node, resolvedRequest);
+        }
         await appendLocalGrantArtifact(ctx.profile, grant.delegation);
         await appendGrantHistory(ctx.profile, {
           addedCaps: grant.permissions,
@@ -1786,6 +1898,84 @@ async function activateAndStoreOpenKeyGrants(
   });
 }
 
+/**
+ * One OpenKey approval for an agent request, verified. Nothing is stored here;
+ * the caller decides what the approved session authorizes.
+ */
+export async function acquireOpenKeyApproval(params: {
+  ctx: { profile: string; host: string };
+  profile: ProfileConfig;
+  requested: PermissionEntry[];
+  expiryOption: string | number | undefined;
+  reason: string;
+  anchorSpace?: string;
+  /** The approval must cover every requested action, or none is returned. */
+  exactApproval?: boolean;
+  /** Print the OpenKey approval URL and wait for the callback instead of opening a browser. */
+  noPopup?: boolean;
+  /** Test seam for the browser acquisition boundary; production uses startAuthFlow. */
+  openKeyAcquisition?: OpenKeyAcquisition;
+}): Promise<OpenKeyApproval> {
+  if (params.requested.some(isRawCidRevocationPermission)) {
+    throw new CLIError(
+      "RAW_RECAP_RESOURCE_UNSUPPORTED",
+      "OpenKey cannot sign raw urn:cid revocation authority.",
+      ExitCode.PERMISSION_DENIED,
+    );
+  }
+  const key = await ProfileManager.getKey(params.ctx.profile);
+  if (!key) {
+    throw new CLIError(
+      "NO_KEY",
+      `No key found for profile "${params.ctx.profile}". Run \`${CLI_NAME} --profile ${params.ctx.profile} auth rotate\` to create a new key and sign in.`,
+      ExitCode.AUTH_REQUIRED,
+    );
+  }
+  const expiryCap = params.expiryOption === undefined ? undefined : parseRequestedExpiry(params.expiryOption);
+  const anchorSpace = params.anchorSpace ?? params.profile.spaceId ?? params.profile.spaceName;
+  const request = grantRequestPermissions(params.requested, anchorSpace);
+  const acquireOpenKey = params.openKeyAcquisition ?? startAuthFlow;
+  const delegationData = await acquireOpenKey(params.profile.did, {
+    jwk: key,
+    host: params.ctx.host,
+    permissions: request,
+    reason: permissionGrantReason(params.reason, request),
+    openkeyHost: resolveOpenKeyHost(params.profile),
+    expiry: expiryCap === undefined ? undefined : openKeyExpiryParam(expiryCap),
+    noPopup: params.noPopup,
+  });
+  return verifyOpenKeyApproval(delegationData, request, params.ctx.host, {
+    key,
+    sessionDid: params.profile.sessionDid ?? params.profile.did,
+    expectedOwner: pinnedOwner(params.profile),
+    expiry: expiryCap,
+    exactApproval: params.exactApproval === true,
+  });
+}
+
+/**
+ * A node restored from one verified OpenKey approval. It holds that approval's
+ * authority and expiry, not the owner's stored session.
+ */
+async function nodeFromOpenKeyApproval(host: string, session: VerifiedScopedSession): Promise<TinyCloudNode> {
+  const ownerParts = session.ownerDid.split(":");
+  const node = new TinyCloudNode({ host });
+  await node.restoreSession({
+    delegationHeader: session.delegationHeader as { Authorization: string },
+    delegationCid: session.delegationCid as string,
+    spaceId: session.spaceId as string,
+    jwk: session.jwk as object,
+    verificationMethod: session.verificationMethod as string,
+    address: ownerParts[4]!,
+    chainId: Number(ownerParts[3]),
+    siwe: session.siwe as string,
+    signature: session.signature as string,
+    expiresAt: session.expiresAt,
+    tinycloudHosts: [host],
+  });
+  return node;
+}
+
 export async function ensureDelegationAuthority(params: {
   ctx: { profile: string; host: string };
   profile: ProfileConfig;
@@ -1806,6 +1996,10 @@ export async function ensureDelegationAuthority(params: {
   anchorSpace?: string;
   /** Test seam for the browser acquisition boundary; production uses startAuthFlow. */
   openKeyAcquisition?: OpenKeyAcquisition;
+  /** Print the OpenKey approval URL and wait for the callback instead of opening a browser. */
+  noPopup?: boolean;
+  /** Agent request: the approval must cover every requested action, or no grant is stored. */
+  exactApproval?: boolean;
 }): Promise<PortableDelegation | undefined> {
   if (!params.force && params.node.hasRuntimePermissions(params.requested)) return undefined;
 
@@ -1817,6 +2011,18 @@ export async function ensureDelegationAuthority(params: {
   }
 
   if (params.profile.authMethod === "openkey") {
+    if (params.persist === false) {
+      if (params.expiryOption === undefined) {
+        throw new CLIError(
+          "AUTHORITY_EXPIRY_REQUIRED",
+          "One-use command authority needs an explicit lifetime; none was given, so no approval was requested.",
+          ExitCode.ERROR,
+        );
+      }
+      const { delegation } = await acquireOpenKeyApproval(params);
+      await params.node.useRuntimeDelegation(delegation);
+      return delegation;
+    }
     if (params.requested.some(isRawCidRevocationPermission)) {
       throw new CLIError(
         "RAW_RECAP_RESOURCE_UNSUPPORTED",
@@ -1840,27 +2046,9 @@ export async function ensureDelegationAuthority(params: {
       sessionDid: params.profile.sessionDid ?? params.profile.did,
       expectedOwner: pinnedOwner(params.profile),
       expiry: expiryCap,
+      exactApproval: params.exactApproval === true,
     };
     const anchorSpace = params.anchorSpace ?? params.profile.spaceId ?? params.profile.spaceName;
-    if (params.persist === false) {
-      const request = grantRequestPermissions(params.requested, anchorSpace);
-      const delegationData = await acquireOpenKey(params.profile.did, {
-        jwk: key,
-        host: params.ctx.host,
-        permissions: request,
-        reason: permissionGrantReason(params.reason, request),
-        openkeyHost,
-        expiry: expiryCap === undefined ? undefined : openKeyExpiryParam(expiryCap),
-      });
-      const delegation = portableFromOpenKeyDelegation(
-        delegationData,
-        request,
-        params.ctx.host,
-        proof,
-      );
-      await params.node.useRuntimeDelegation(delegation);
-      return delegation;
-    }
     const grants: StagedOpenKeyGrant[] = [];
     for (const group of groupPermissionsBySpace(params.requested)) {
       // capabilities/read is part of the request, so the signed proof may
@@ -1873,6 +2061,7 @@ export async function ensureDelegationAuthority(params: {
         reason: permissionGrantReason(params.reason, group),
         openkeyHost,
         expiry: expiryCap === undefined ? undefined : openKeyExpiryParam(expiryCap),
+        noPopup: params.noPopup,
       });
       const delegation = portableFromOpenKeyDelegation(delegationData, request, params.ctx.host, proof);
       grants.push({ delegation, effective: permissionsFromDelegation(delegation) });
@@ -1898,6 +2087,27 @@ export async function ensureDelegationAuthority(params: {
       delegationCid: delegation.cid,
       expiry: delegation.expiry.toISOString(),
     });
+  }
+}
+
+/** OpenKey lifetime cap for an agent grant: the apps-agent default. */
+const OPENKEY_AGENT_MAX_LIFETIME_MS = parseRequestedExpiry(APPS_AGENT_EXPIRY).durationMs;
+
+/** An agent request is approved in OpenKey only if it covers one space and no raw authority. */
+function assertOpenKeyAgentRequest(requested: PermissionEntry[]): void {
+  if (requested.some((permission) => isRawEncryptionPermission(permission) || isRawCidRevocationPermission(permission))) {
+    throw new CLIError(
+      "RAW_RECAP_RESOURCE_UNSUPPORTED",
+      "OpenKey cannot approve raw urn:cid or raw encryption authority for an agent request.",
+      ExitCode.PERMISSION_DENIED,
+    );
+  }
+  if (groupPermissionsBySpace(requested).length !== 1) {
+    throw new CLIError(
+      "AGENT_GRANT_MULTIPLE_SPACES",
+      "An agent grant must cover exactly one space. Request one space per auth request.",
+      ExitCode.PERMISSION_DENIED,
+    );
   }
 }
 
@@ -1957,28 +2167,31 @@ async function collectRequestedPermissions(
   return permissions;
 }
 
-async function confirmPermissionRequest(permissions: PermissionEntry[]): Promise<void> {
-  process.stderr.write("\n" + theme.heading("Additional Permissions") + "\n");
-  for (const permission of permissions) {
-    const dangerous = isDangerousPermission(permission);
-    const line = `  ${compactPermission(permission)}`;
-    process.stderr.write((dangerous ? theme.warn(line) : theme.value(line)) + "\n");
-  }
-  process.stderr.write("\n");
-
+async function askYesNo(question: string, cancelMessage: string): Promise<void> {
   const rl = createInterface({
     input: process.stdin,
     output: process.stderr,
   });
 
   const answer = await new Promise<string>((resolve) => {
-    rl.question("Approve local-key delegation? [y/N] ", resolve);
+    rl.question(question, resolve);
   });
   rl.close();
 
   if (!/^y(es)?$/i.test(answer.trim())) {
-    throw new CLIError("REQUEST_CANCELLED", "Permission request cancelled.", ExitCode.ERROR);
+    throw new CLIError("REQUEST_CANCELLED", cancelMessage, ExitCode.ERROR);
   }
+}
+
+async function confirmPermissionRequest(permissions: PermissionEntry[]): Promise<void> {
+  process.stderr.write("\n" + theme.heading("Additional Permissions") + "\n");
+  for (const permission of permissions) {
+    const dangerous = isDangerousPermission(permission);
+    const line = `  ${permissionConsentLine(permission)}`;
+    process.stderr.write((dangerous ? theme.warn(line) : theme.value(line)) + "\n");
+  }
+  process.stderr.write("\n");
+  await askYesNo("Approve local-key delegation? [y/N] ", "Permission request cancelled.");
 }
 
 export async function requirePermissionConsent(
@@ -2066,6 +2279,14 @@ export interface PortableGrantProof {
   sessionDid: string;
   expectedOwner?: string;
   expiry?: RequestedExpiry;
+  /** Agent request: the approval must cover every requested action, or no grant is stored. */
+  exactApproval?: boolean;
+}
+
+/** A verified OpenKey approval: the portable grant, and the signed session it was verified from. */
+export interface OpenKeyApproval {
+  delegation: PortableDelegation;
+  session: VerifiedScopedSession;
 }
 
 /** A portable grant contains only authority from the owner-signed ReCap. */
@@ -2075,10 +2296,21 @@ export function portableFromOpenKeyDelegation(
   host: string,
   proof: PortableGrantProof,
 ): PortableDelegation {
+  return verifyOpenKeyApproval(data, requested, host, proof).delegation;
+}
+
+/** Verify an OpenKey approval against the request; returns the grant and the session that restores it. */
+export function verifyOpenKeyApproval(
+  data: Record<string, unknown>,
+  requested: PermissionEntry[],
+  host: string,
+  proof: PortableGrantProof,
+): OpenKeyApproval {
   const { session, legacyNested } = verifyScopedLogin(data, proof.key, proof.sessionDid, requested, {
     expectedOwner: proof.expectedOwner,
     expiry: proof.expiry,
     purpose: "grant",
+    exactApproval: proof.exactApproval,
   });
   if (legacyNested.length > 0) {
     throw new CLIError(
@@ -2105,7 +2337,7 @@ export function portableFromOpenKeyDelegation(
     ...(permission.caveats === undefined ? {} : { caveats: structuredClone(permission.caveats) }),
   }));
   const ownerParts = session.ownerDid.split(":");
-  return {
+  const delegation: PortableDelegation = {
     cid: data.delegationCid as string,
     delegationHeader: data.delegationHeader as { Authorization: string },
     spaceId: returnedSpace,
@@ -2120,12 +2352,13 @@ export function portableFromOpenKeyDelegation(
     // Verified above; replay rebuilds the CACAO from it before trusting the grant.
     siweProof: { siwe: data.siwe as string, signature: data.signature as string },
   };
+  return { delegation, session };
 }
 
 async function rotateAuthKey(
   profileName: string,
   host: string,
-  options: { paste?: boolean; noPopup?: boolean } = {},
+  options: { paste?: boolean; noPopup?: boolean; force?: boolean } = {},
 ): Promise<void> {
   await recoverPendingLogout(profileName);
   const profile = await ProfileManager.getProfile(profileName);
@@ -2164,6 +2397,7 @@ async function rotateAuthKey(
       ExitCode.AUTH_REQUIRED);
   }
 
+  if (!options.force) await assertShareHistoryAllowsKeyDrop(profileName, "rotate");
   const { jwk, did } = await withSpinner("Generating session key...", async () => {
     return generateKey();
   });
@@ -2390,6 +2624,7 @@ async function handleOpenKeyAuth(
   const { profile, delegationData, declined, legacyNested } = await refreshOpenKeySession(profileName, host, options);
 
   reportDeclined(declined, legacyNested);
+  await ensureSpaceSetup({ profile: profileName, host }, delegationData, delegationData.permissions as PermissionEntry[] | undefined);
   outputJson({
     authenticated: true,
     profile: profileName,
@@ -2456,6 +2691,8 @@ interface OpenKeyLoginOptions {
   /** Record `host` as the profile host (an explicit `--host`). */
   persistHost?: boolean;
   openKeyAcquisition?: OpenKeyAcquisition;
+  /** Bypass the share-history check that guards replacing the stored session key. */
+  force?: boolean;
 }
 
 /** Only a fresh SDK-prepared, OpenKey-signed owner session may establish replica consent. */
@@ -2483,6 +2720,7 @@ async function refreshPreparedOpenKeySession(params: {
   if (expectedOwner && normalizePkhIdentifier(owner) !== normalizePkhIdentifier(expectedOwner)) {
     throw new CLIError("OPENKEY_OWNER_MISMATCH", "The verified owner differs from this profile. No approval was started.", ExitCode.PERMISSION_DENIED);
   }
+  if (options.force !== true) await assertShareHistoryAllowsKeyDrop(profileName, "login");
   const replicationConfig = createCliReplicationConfig(profileName, replication, { debug: false, quiet: true }, true);
   if (!replicationConfig) throw new CLIError("V2_REQUIRED", "Replica configuration is unavailable; no approval was started.", ExitCode.AUTH_REQUIRED);
   const space = permissions.find((permission) => permission.service === "tinycloud.kv")?.space ?? ownerSpaceId("default", owner);

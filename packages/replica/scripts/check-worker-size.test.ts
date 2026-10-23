@@ -1,10 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assertWorkerSizeToolchain, checkWorkerSize, MAX_WORKER_GZIP_BYTES } from "./check-worker-size";
+import { assertWorkerSizeToolchain, checkReplicaWorkerSize, checkWorkerSize, MAX_REPLICA_WORKER_GZIP_BYTES, MAX_WORKER_GZIP_BYTES } from "./check-worker-size";
 
 const directories: string[] = [];
 afterEach(() => {
@@ -27,8 +27,11 @@ test("measures the canonical worker exactly once at gzip level 9", () => {
   const measured = execFileSync("gzip", ["-9", "-c"], { input: bytes }).byteLength;
   expect(checkWorkerSize(dir, measured)).toEqual({ bytes: measured, headroom: 0 });
 });
-test("uses the reviewed GitHub worker ceiling without additional headroom", () => {
-  expect(MAX_WORKER_GZIP_BYTES).toBe(822_667);
+test("uses the reviewed GitHub worker ceilings without additional headroom", () => {
+  const ledger = JSON.parse(readFileSync(join(import.meta.dir, "../../web-sdk/scripts/replica-size-ledger.json"), "utf8")) as Record<string, { worker?: { ceiling: number } } | undefined>;
+  const kvRows = Object.keys(ledger).filter((key) => key !== "tc1827ReplicaWorkerRatchet" && ledger[key]?.worker !== undefined);
+  expect(MAX_WORKER_GZIP_BYTES).toBe(ledger[kvRows.at(-1)!]!.worker!.ceiling);
+  expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(ledger.tc1827ReplicaWorkerRatchet!.worker!.ceiling);
 });
 
 test("refuses worker size measurements from a different Bun or Rust toolchain", () => {
@@ -61,4 +64,19 @@ test("rejects excess gzip bytes and invalid thresholds", () => {
   expect(() => checkWorkerSize(dir, 1)).toThrow(/exceeds/i);
   expect(() => checkWorkerSize(dir, NaN)).toThrow(/threshold/i);
   expect(() => checkWorkerSize(dir, 0)).toThrow(/threshold/i);
+});
+
+test("measures replica.worker.js at gzip level 9 against its own threshold", () => {
+  const bytes = Buffer.from("replica worker fixture".repeat(100));
+  const { dir } = fixture(Buffer.from("kv-storage worker"));
+  writeFileSync(join(dir, "replica.worker.js"), bytes);
+  const measured = execFileSync("gzip", ["-9", "-c"], { input: bytes }).byteLength;
+  expect(checkReplicaWorkerSize(dir, measured)).toEqual({ bytes: measured, headroom: 0 });
+  expect(() => checkReplicaWorkerSize(dir, measured - 1)).toThrow(/Replica worker exceeds .* by 1 bytes/);
+  expect(() => checkReplicaWorkerSize(dir, 0)).toThrow(/threshold/i);
+});
+
+test("rejects a missing replica worker", () => {
+  const { dir } = fixture(Buffer.from("kv-storage worker"));
+  expect(() => checkReplicaWorkerSize(dir)).toThrow(/replica\.worker\.js/);
 });
