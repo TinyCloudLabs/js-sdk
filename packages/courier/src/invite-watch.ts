@@ -8,7 +8,7 @@ import { readPublicStatus, updatePublicInvite, type PublicInvite } from './invit
 import { inviteFolder, ownerMatches, parseHello, type Hello, type Tier, type Welcome } from './invite-schema.js';
 import type { Notice, Notifier } from './notify.js';
 import type { WatchLog } from './wake.js';
-import { saveProfile, secureSubdir, writeSecure, type Profile } from './profile.js';
+import { profileDir, saveProfile, secureSubdir, writeSecure, type Profile } from './profile.js';
 import { delIfPresent, getJson, listAll, putCreate } from './store.js';
 import { verifyEmailProof as verifyReal, type VerifyEmailProofInput, type VerifyEmailProofResult } from './verify-email-proof.js';
 
@@ -120,6 +120,43 @@ export function publishStatus(record: InviteRecord, log: Log): void {
   }
 }
 
+/**
+ * Where the box owner's peers.json may live: the intake and outbox defaults under COURIER_HOME, plus an explicit `--peers-file`.
+ * peers.json is keyed by handle and carries the trust tier, so Courier never pairs over a handle that has an entry there.
+ */
+export function peersFilesFor(flag?: string): string[] {
+  const home = profileDir();
+  return [...(flag !== undefined && flag !== 'true' && flag !== '' ? [flag] : []), path.join(home, 'peers.json'), path.join(home, 'intake', 'peers.json')];
+}
+
+/**
+ * `peers-entry-exists` when any peers file has an entry for `handle`; `peers-unreadable` when a file exists but cannot be read as a JSON object
+ * (fail closed: an unreadable file may hide an entry). A missing file is no entry. Reads only; never writes the file.
+ */
+export function peersEntryProblem(handle: string, files: readonly string[]): 'peers-entry-exists' | 'peers-unreadable' | undefined {
+  for (const file of files) {
+    let text: string;
+    try {
+      text = fs.readFileSync(file, 'utf8');
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') continue;
+      return 'peers-unreadable';
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return 'peers-unreadable';
+    }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return 'peers-unreadable';
+    if (Object.hasOwn(parsed, handle)) return 'peers-entry-exists';
+  }
+  return undefined;
+}
+
+export const PEERS_ENTRY_MESSAGE = 'The peers file already lists this handle, so its trust setting would carry over to the new peer. Remove the entry (or use another handle) and try again.';
+
 export interface InviteEnv {
   node: TinyCloudNode;
   profile: () => Profile;
@@ -131,6 +168,8 @@ export interface InviteEnv {
   deleteSealed?: typeof deleteSealedReal;
   /** Test seam: runs after acceptB's artifact is persisted and before the Welcome write. */
   fault?: (step: 'before-welcome') => void;
+  /** peers.json locations checked before pairing. Defaults to `peersFilesFor()`. */
+  peersFiles?: readonly string[];
 }
 
 type Check = { ok: true; replayKey: string } | { ok: false; reason: string };
@@ -174,7 +213,11 @@ export class InviteWatcher {
   private async sweepOne(record: InviteRecord): Promise<void> {
     await this.recoverConsumed(record);
     await this.reconcilePublic(record);
-    if (Date.parse(record.expiresAt) > this.now().getTime()) return;
+    if (Date.parse(record.expiresAt) > this.now().getTime()) {
+      // A missed hook must not strand a hello: the poll runs the same handler. It consumes the hello first, so a hello seen twice pairs once.
+      if (record.status === 'open') await this.onHello(record.inviteId);
+      return;
+    }
     if (record.status === 'open' || record.status === 'held' || record.status === 'failed') {
       await this.close(record, 'expired');
       return;
@@ -331,6 +374,8 @@ export class InviteWatcher {
     if (record.expectOwner !== undefined && !ownerMatches(record.expectOwner, hello.artifactB.from.owner)) {
       return { ok: false, reason: 'owner-mismatch' };
     }
+    const peersProblem = peersEntryProblem(record.handle, this.env.peersFiles ?? peersFilesFor());
+    if (peersProblem !== undefined) return { ok: false, reason: peersProblem };
     if (record.alsoAsk) return { ok: false, reason: 'also-ask' };
     return { ok: true, replayKey: `${verified.credentialId}:${record.inviteId}` };
   }
@@ -403,10 +448,12 @@ export class InviteWatcher {
   }
 
   /** Owner approves a held invite, optionally overriding the requested tier. A failure ends held again, so approve can be retried. */
-  async approve(id: string, tier?: AcceptedTier): Promise<void> {
+  async approve(id: string, tier?: AcceptedTier): Promise<AcceptedTier> {
     const record = await this.heldRecord(id);
     const hello = readHeld(id);
     if (!hello) fail('invite-not-held', 'Held hello is missing; nothing to approve.');
+    const peersProblem = peersEntryProblem(record.handle, this.env.peersFiles ?? peersFilesFor());
+    if (peersProblem !== undefined) fail(peersProblem, `${PEERS_ENTRY_MESSAGE} The invite stays held.`);
     if (tier !== undefined) record.tier = tier;
     record.status = 'consumed';
     record.consumedAt = this.now().toISOString();
@@ -414,6 +461,7 @@ export class InviteWatcher {
     publishStatus(record, this.env.log);
     const reason = await this.complete(record, hello);
     if (reason !== undefined) fail(reason, 'Pairing failed; the invite is held again. Retry approve or deny.');
+    return record.tier;
   }
 
   /** Owner denies a held invite. The invitee gets a rejected Welcome with no artifact. */

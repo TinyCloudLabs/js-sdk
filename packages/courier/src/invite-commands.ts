@@ -21,7 +21,7 @@ import { cmd } from './program.js';
 import { credentialDigest, oneTimeKeyHash, signPossession, verifyPossession } from './possession.js';
 import { loadKey, saveProfile, secureSubdir, writeSecure, type Profile } from './profile.js';
 import { delIfPresent, getJson, putCreate } from './store.js';
-import { InviteWatcher, eventLog, listRecords, readJson, readRecord, reasonOf, recordPath, requestedTier, writeRecord, type InviteRecord } from './invite-watch.js';
+import { InviteWatcher, PEERS_ENTRY_MESSAGE, eventLog, listRecords, peersEntryProblem, peersFilesFor, readJson, readRecord, reasonOf, recordPath, requestedTier, writeRecord, type AcceptedTier, type InviteRecord } from './invite-watch.js';
 import { jsonLineLog } from './wake.js';
 
 const INVITE_ID = /^[a-z2-7]{26}$/;
@@ -136,6 +136,8 @@ export async function cmdInvite(args: ParsedArgs): Promise<void> {
 
 async function inviteCreate(args: ParsedArgs): Promise<void> {
   const handle = args.positional[0] ?? fail('usage', inviteUsage());
+  const peersProblem = peersEntryProblem(handle, peersFilesFor(args.get('peers-file')));
+  if (peersProblem !== undefined) fail(peersProblem, PEERS_ENTRY_MESSAGE);
   const { tier, expectOwner } = requestedOwnerAndTier(args);
   const { profile, node } = await ctx();
   const spaceId = profile.spaceId ?? fail('no-space', `No TinyCloud space yet; run \`${cmd('init')}\` first.`);
@@ -251,8 +253,8 @@ async function inviteRevoke(id: string | undefined): Promise<void> {
   console.log(`Revoked invite ${inviteId}.`);
 }
 
-function inviteWatcher(profile: Profile, node: TinyCloudNode): InviteWatcher {
-  return new InviteWatcher({ node, profile: () => profile, log: eventLog(jsonLineLog((line) => process.stderr.write(line))) });
+function inviteWatcher(profile: Profile, node: TinyCloudNode, peersFile?: string): InviteWatcher {
+  return new InviteWatcher({ node, profile: () => profile, log: eventLog(jsonLineLog((line) => process.stderr.write(line))), peersFiles: peersFilesFor(peersFile) });
 }
 
 /** `trusted` is recorded as a request for you to decide on. It does not grant trust; the peer starts strict. */
@@ -261,8 +263,13 @@ async function inviteApprove(args: ParsedArgs): Promise<void> {
   const flag = args.get('tier');
   const tier = flag === undefined ? undefined : requestedTier(flag);
   const { profile, node } = await ctx();
-  await inviteWatcher(profile, node).approve(inviteId, tier);
-  console.log(`Invite ${inviteId} paired. Requested tier: ${tier ?? 'strict'}. The peer starts as strict until you confirm trusted status.`);
+  const approved = await inviteWatcher(profile, node, args.get('peers-file')).approve(inviteId, tier);
+  console.log(approveSummary(inviteId, approved));
+}
+
+/** What `invite approve` prints: the tier the record carries (the request, `trusted-requested` shown as `trusted`), not the flag. */
+export function approveSummary(inviteId: string, tier: AcceptedTier): string {
+  return `Invite ${inviteId} paired. Requested tier: ${tier === 'trusted-requested' ? 'trusted' : tier}. The peer starts as strict until you confirm trusted status.`;
 }
 
 async function inviteDeny(id: string | undefined): Promise<void> {

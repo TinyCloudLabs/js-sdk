@@ -9,7 +9,7 @@ import { loadProfile, profileDir, writeSecure } from './profile.js';
 import { courierNode, peerHooks, peerKv } from './node.js';
 import type { ParsedArgs } from './args.js';
 import { WATCH_DEFAULTS, Watcher, type WatchOptions } from './watch.js';
-import { InviteWatcher, eventLog } from './invite-watch.js';
+import { InviteWatcher, eventLog, peersFilesFor } from './invite-watch.js';
 import { UNGUARDED_REFUSAL, createWaker, jsonLineLog, killAllRunners, spawnRunner, type SessionStore, type WakeConfig } from './wake.js';
 import { startsAgentCli } from './guard/policy.js';
 import { guardArgv } from './guard/command.js';
@@ -59,7 +59,7 @@ export function watchOptions(args: ParsedArgs): WatchOptions {
 }
 
 export const watchUsage = () =>
-  `Usage: ${cmd('watch [--wake none|paseo|claude|exec] [--exec <cmd> --unguarded] [--env-pass NAME]… [--cwd dir] [--debounce 30] [--poll 60] [--ticket 25] [--wake-budget 12] [--notify osascript|exec|none] [--once]')}\n` +
+  `Usage: ${cmd('watch [--wake none|paseo|claude|exec] [--exec <cmd> --unguarded] [--env-pass NAME]… [--cwd dir] [--debounce 30] [--poll 60] [--ticket 25] [--wake-budget 12] [--notify osascript|exec|none] [--peers-file f] [--once]')}\n` +
   `       ${cmd('watch … (--install-launchd | --install-systemd) [--dry-run] [--name n]')}`;
 
 /** Where a bare `claude`/`paseo` resolves now, so a service with a minimal PATH still finds it. */
@@ -235,7 +235,7 @@ export async function cmdWatch(args: ParsedArgs): Promise<void> {
   const log = jsonLineLog();
   const node = await courierNode(profile);
   const notify = createNotifier(notifyConfig(args, config), { run: spawnRunner });
-  const invites = new InviteWatcher({ node, profile: () => loadProfile(), log: eventLog(log), notify });
+  const invites = new InviteWatcher({ node, profile: () => loadProfile(), log: eventLog(log), notify, peersFiles: peersFilesFor(args.get('peers-file')) });
   const watcher = new Watcher({
     notificationHome: config.home,
     notifyOnly: config.adapter === 'none',

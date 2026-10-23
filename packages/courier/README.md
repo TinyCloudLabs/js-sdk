@@ -138,6 +138,16 @@ tc courier join --resume
   in `ps` to other users on the machine.
 - Handles may not begin with `_`. The words `list` and `revoke` cannot be
   invitee handles, because they select the `invite` subcommands.
+- The box's `peers.json` is keyed by handle and carries the trust tier. `invite`
+  refuses a handle that has an entry there (`peers-entry-exists`), and `watch`
+  holds a hello for such a handle instead of pairing it, so a new peer never
+  inherits an old entry's trust. `invite approve` refuses it too. Remove the entry
+  to continue. Courier checks `<COURIER_HOME>/peers.json`,
+  `<COURIER_HOME>/intake/peers.json` and a `--peers-file <path>` given to `invite`,
+  `invite approve` or `watch`. A peers file that exists but cannot be read as a
+  JSON object also refuses (`peers-unreadable`).
+- `watch` also looks for a hello on every poll, so a hello written while the
+  watcher was not subscribed is still picked up.
 
 Details: TC-712
 
