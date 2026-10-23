@@ -189,6 +189,55 @@ describe("signed portable OpenKey grants", () => {
     expect(await loadAdditionalDelegations(profileName)).toEqual([]);
   });
 
+  describe("a delegated SQL caveat", () => {
+    const sqlRequest: PermissionEntry[] = [{
+      service: "tinycloud.sql", space: spaceId, path: "data.sqlite",
+      actions: ["tinycloud.sql/read"], caveats: [{ tables: ["Notes"], readOnly: true }],
+    }];
+
+    async function request(requestedEntries: PermissionEntry[], persist: boolean | undefined, onApproval: () => void): Promise<void> {
+      await ensureDelegationAuthority({
+        ctx: { profile: profileName, host },
+        profile: await ProfileManager.getProfile(profileName),
+        node: node as never,
+        requested: requestedEntries, expiryOption: "1h", reason: "Query notes", yes: true, persist,
+        openKeyAcquisition: async () => { onApproval(); return callback; },
+      });
+    }
+
+    test("asks for no OpenKey approval when the node cannot enforce it", async () => {
+      let approvals = 0;
+      for (const persist of [undefined, false]) {
+        for (const entries of [sqlRequest, [{ ...sqlRequest[0]!, caveats: [{}, {}] }]]) {
+          await expect(request(entries, persist, () => { approvals++; }))
+            .rejects.toMatchObject({ code: "SQL_DELEGATED_CAVEATS_UNSUPPORTED" });
+        }
+      }
+      expect(approvals).toBe(0);
+      expect(activated).toEqual([]);
+      expect(await loadAdditionalDelegations(profileName)).toEqual([]);
+    });
+
+    test("asks for the approval when the node announced the feature", async () => {
+      Object.defineProperty(node, "supportsSqlDelegatedCaveats", { get: () => true, configurable: true });
+      try {
+        callback = await signedProof();
+        let approvals = 0;
+        await request(sqlRequest, undefined, () => { approvals++; }).catch(() => undefined);
+        expect(approvals).toBe(1);
+      } finally {
+        delete (node as unknown as Record<string, unknown>).supportsSqlDelegatedCaveats;
+      }
+    });
+
+    test("leaves a caveat-free or profile request alone", async () => {
+      callback = await signedProof();
+      let approvals = 0;
+      await request(requested, undefined, () => { approvals++; });
+      expect(approvals).toBe(1);
+    });
+  });
+
   test("binds signed grant to the stored session key and DID", async () => {
     const proof = await signedProof();
     const other = wasm.createSessionManager();

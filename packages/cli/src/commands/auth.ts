@@ -9,7 +9,7 @@ import { createInterface } from "node:readline";
 import type { IncomingMessage } from "node:http";
 import { TinyCloudNode, grantAuthRequest, principalDidEquals, REPLICA_LOGOUT_PENDING_FILE, signedCompactUcanExpiry, type AuthDelegationArtifact, type PermissionEntry, type PortableDelegation, type RuntimeDelegationActivator, type TinyCloudSession } from "@tinycloud/node-sdk";
 import type { ProfileReplicaApprovalEntry, ProfileReplicaDeferredToken, ProfileReplicaLogoutPending, ProfileReplicaPreflight, ProfileReplicaPurge } from "@tinycloud/sdk-services/kv/replication";
-import { composeManifestRequest } from "@tinycloud/sdk-core";
+import { composeManifestRequest, SqlDelegatedCaveatsUnsupportedError, sqlCaveatListNeedsDelegatedFeature } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
 import { namedProfilePath, profilePath } from "@tinycloud/operations/state";
 import { principalHashOf, readGateSnapshot, REPLICA_DENY_FLOOR_FILE } from "@tinycloud/replica/profile-gate";
@@ -80,6 +80,7 @@ import {
   storedSessionState,
   type StoredSessionState,
 } from "../auth/scoped-login.js";
+import { assertHostSupportsSqlDelegatedCaveats } from "../auth/sql-caveat-gate.js";
 import { isRawEncryptionPermission, isVerifiedRawEncryptionPermission } from "../lib/raw-encryption.js";
 import { canonicalOwnerDid } from "../lib/owner-did.js";
 import { assertNotLocalOwner, assertSessionReplaceable, commitLogin, readProfileSnapshot } from "../auth/login-commit.js";
@@ -981,6 +982,8 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           return;
         }
 
+        assertSqlDelegatedCaveatsSupportedBeforeApproval(node, requested, ctx.host);
+
         if (profile.authMethod === "openkey" || options.device) {
           const key = await ProfileManager.getKey(ctx.profile);
           if (!key) {
@@ -1349,6 +1352,8 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         }
         const resolvedRequest = { ...parsed, requested };
         const node = await ensureAuthenticated(ctx);
+        // Before the owner is asked to approve: a delegated SQL caveat needs a node that can enforce it.
+        assertSqlDelegatedCaveatsSupportedBeforeApproval(node, requested, ctx.host);
         let grant: AuthDelegationArtifact;
         if (profile.authMethod === "openkey") {
           assertOpenKeyAgentRequest(requested);
@@ -1976,6 +1981,24 @@ async function nodeFromOpenKeyApproval(host: string, session: VerifiedScopedSess
   return node;
 }
 
+/**
+ * A delegated SQL caveat needs a node that can enforce it. Checked before the
+ * owner is asked to approve anything, so no approval is wasted on a grant the
+ * SDK would refuse to send.
+ */
+export function assertSqlDelegatedCaveatsSupportedBeforeApproval(
+  node: Pick<TinyCloudNode, "supportsSqlDelegatedCaveats">,
+  requested: readonly PermissionEntry[],
+  host: string,
+): void {
+  if (
+    requested.some((entry) => entry.service === "tinycloud.sql" && sqlCaveatListNeedsDelegatedFeature(entry.caveats)) &&
+    !node.supportsSqlDelegatedCaveats
+  ) {
+    throw new SqlDelegatedCaveatsUnsupportedError(host);
+  }
+}
+
 export async function ensureDelegationAuthority(params: {
   ctx: { profile: string; host: string };
   profile: ProfileConfig;
@@ -2002,6 +2025,8 @@ export async function ensureDelegationAuthority(params: {
   exactApproval?: boolean;
 }): Promise<PortableDelegation | undefined> {
   if (!params.force && params.node.hasRuntimePermissions(params.requested)) return undefined;
+
+  assertSqlDelegatedCaveatsSupportedBeforeApproval(params.node, params.requested, params.ctx.host);
 
   if (
     !params.consentAlreadyGiven &&
@@ -2851,6 +2876,8 @@ export async function refreshOpenKeySession(
     const estimatedExpiry = expiry === undefined ? undefined : new Date(Date.now() + expiry.durationMs).toISOString();
     assertSessionReplaceable(profileName, snapshot, expectedOwner, permissions, estimatedExpiry);
   }
+  // A first login has no signed-in node yet: read the node's features before the owner approves.
+  if (permissions !== undefined) await assertHostSupportsSqlDelegatedCaveats(host, permissions);
   if (replication.prefixes.length > 0) {
     return refreshPreparedOpenKeySession({
       profileName, host, profile, snapshot, options, replication, permissions, expectedOwner, expiry,

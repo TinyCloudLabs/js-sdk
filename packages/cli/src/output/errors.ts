@@ -1,3 +1,4 @@
+import { sqlCaveatErrorFields } from "./sql-caveat.js";
 import { closeReplication, registeredReplications } from "../lib/replication-registry.js";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -57,6 +58,8 @@ export function cliErrorFromService(
   if (error instanceof CLIError) return error;
   const nodeRetry = nodeRetryError(error);
   if (nodeRetry) return nodeRetry;
+  const sqlCaveat = sqlCaveatError(error, message.endsWith(error.message) ? message.slice(0, message.length - error.message.length) : "");
+  if (sqlCaveat) return sqlCaveat;
   const storageFull = storageFullError(error);
   if (storageFull) return storageFull;
   const meta = { ...error.meta };
@@ -117,10 +120,17 @@ function nodeRetryError(error: unknown): CLIError | undefined {
   );
 }
 
+function sqlCaveatError(error: unknown, prefix = ""): CLIError | undefined {
+  const fields = sqlCaveatErrorFields(error, prefix);
+  return fields && new CLIError(fields.code, fields.message, fields.exitCode, fields.metadata);
+}
+
 export function wrapError(error: unknown): CLIError {
   // A node retry signal (busy, deadline, unknown outcome) is not a network problem.
   const nodeRetry = nodeRetryError(error);
   if (nodeRetry) return nodeRetry;
+  const sqlCaveat = sqlCaveatError(error);
+  if (sqlCaveat) return sqlCaveat;
   // A write refused for storage reads the same for every command: one exit
   // code, the account totals when known, and the manage link. It is never a
   // network problem, so it never gets the switch-hosts hint.

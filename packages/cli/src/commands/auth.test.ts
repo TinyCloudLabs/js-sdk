@@ -2418,6 +2418,68 @@ describe("auth grant for an OpenKey owner gets a fresh owner approval per agent 
     expect(recorded.startAuthFlows[0]?.options.expiry).toBe("604800s");
   });
 
+  describe("a delegated SQL caveat in the request", () => {
+    async function writeSqlRequest(name: string, caveats: Record<string, unknown>[] | undefined): Promise<string> {
+      const source = join(tempDir, name);
+      await writeFile(source, JSON.stringify(makeStoredImportRequest({
+        posture: "delegate-session",
+        operatorType: "agent",
+        sessionDid,
+        requested: [{
+          service: "tinycloud.sql",
+          space: `tinycloud:${primaryOwner.slice("did:".length)}:secrets`,
+          path: "notes.sqlite",
+          actions: ["tinycloud.sql/read"],
+          ...(caveats === undefined ? {} : { caveats }),
+        }],
+      })), "utf8");
+      return source;
+    }
+    const profileCaveat = {
+      mode: "constrained-statements",
+      readOnly: true,
+      statements: [{ name: "get", sql: "SELECT 1", fixedParams: [] }],
+    };
+
+    test("asks for no OpenKey approval when the node cannot enforce it", async () => {
+      for (const [name, caveats] of [
+        ["delegated", [{ tables: ["Notes"], readOnly: true }]],
+        ["empty-only", [{}, {}]],
+      ] as const) {
+        recorded.errors.length = 0;
+        openKeyDelegation = approvalBy(primaryOwner, 2 * DAY_MS);
+        await runAuthCommand(["auth", "grant", await writeSqlRequest(`${name}.json`, [...caveats]), "--yes"]);
+        expect(recorded.errors).toEqual([expect.objectContaining({ code: "SQL_DELEGATED_CAVEATS_UNSUPPORTED" })]);
+      }
+      expect(recorded.startAuthFlows).toEqual([]);
+      expect(recorded.grantedRequests).toEqual([]);
+    });
+
+    test("asks for the approval when the node announced the feature", async () => {
+      Object.defineProperty(importedNode, "supportsSqlDelegatedCaveats", { get: () => true, configurable: true });
+      try {
+        openKeyDelegation = approvalBy(primaryOwner, 2 * DAY_MS);
+        await runAuthCommand(["auth", "grant", await writeSqlRequest("supported.json", [{ tables: ["Notes"] }]), "--yes"]);
+        expect(recorded.startAuthFlows).toHaveLength(1);
+      } finally {
+        delete (importedNode as Record<string, unknown>).supportsSqlDelegatedCaveats;
+      }
+    });
+
+    test("a profile, [{}] and no caveat still reach the approval", async () => {
+      for (const [name, caveats] of [
+        ["profile", [profileCaveat]],
+        ["single-empty", [{}]],
+        ["none", undefined],
+      ] as const) {
+        recorded.startAuthFlows.length = 0;
+        openKeyDelegation = approvalBy(primaryOwner, 2 * DAY_MS);
+        await runAuthCommand(["auth", "grant", await writeSqlRequest(`${name}.json`, caveats === undefined ? undefined : [...caveats]), "--yes"]);
+        expect(recorded.startAuthFlows).toHaveLength(1);
+      }
+    });
+  });
+
   test("an approval from another owner is refused and no grant is stored", async () => {
     openKeyDelegation = approvalBy(otherOwner, 2 * DAY_MS);
     const source = await writeAgentRequest("openkey-agent-refused.json");

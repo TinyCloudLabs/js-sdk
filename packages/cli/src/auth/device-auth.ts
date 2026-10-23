@@ -25,6 +25,7 @@ import {
   type SignedSession,
 } from "./scoped-login.js";
 import { assertNotLocalOwner, assertSessionReplaceable, commitLogin, readProfileSnapshot } from "./login-commit.js";
+import { assertHostSupportsSqlDelegatedCaveats } from "./sql-caveat-gate.js";
 import { announceFirstOwner, openKeyPrimaryFlag, warnIfNotPrimaryKey, withOwnerKeyPrimary } from "./owner-key.js";
 
 /** OpenKey caps device-approved delegations at 30 days. */
@@ -588,6 +589,8 @@ export async function loginWithDeviceAuthorization(input: Omit<DeviceAuthorizati
     const estimatedExpiry = new Date(Date.now() + (input.expiry?.durationMs ?? DEVICE_DELEGATION_MAX_SECONDS * 1000)).toISOString();
     assertSessionReplaceable(input.profileName, snapshot, expectedOwner, permissions, estimatedExpiry);
   }
+  // A first login has no signed-in node yet: read the node's features before the owner approves.
+  await assertHostSupportsSqlDelegatedCaveats(input.nodeOrigin, permissions);
   const key = snapshot.key ?? generateKey().jwk;
   const sessionDid = keyToDID(key);
   const result = await acquireDeviceDelegation({
