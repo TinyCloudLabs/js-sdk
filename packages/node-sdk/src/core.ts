@@ -121,7 +121,7 @@ export {
   NodeUserAuthorization,
   type NodeUserAuthorizationConfig,
 } from "./authorization/NodeUserAuthorization";
-export { refuseCaveatedManifests } from "./authorization/caveatRefusal";
+export { refuseCaveated } from "./authorization/caveatRefusal";
 
 // Sign strategies — value exports
 export {

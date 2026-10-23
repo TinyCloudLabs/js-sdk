@@ -21,7 +21,7 @@ import {
 } from "@tinycloud/sdk-core";
 
 import { NodeUserAuthorization } from "./authorization/NodeUserAuthorization";
-import { refuseCaveatedEntries } from "./authorization/caveatRefusal";
+import { refuseCaveated } from "./authorization/caveatRefusal";
 import { MemorySessionStorage } from "./storage/MemorySessionStorage";
 import { TinyCloudNode } from "./TinyCloudNode";
 
@@ -101,7 +101,7 @@ const UNCONSTRAINED: Array<[string, Caveats]> = [
   ["[{}]", [{}]],
 ];
 
-describe("refuseCaveatedEntries", () => {
+describe("refuseCaveated", () => {
   class Branch {}
   const entry = (caveats: unknown, service = "tinycloud.kv"): PermissionEntry => ({
     service,
@@ -112,7 +112,7 @@ describe("refuseCaveatedEntries", () => {
 
   test("accepts absent, [] and [{}]", () => {
     for (const caveats of [undefined, [], [{}]]) {
-      expect(() => refuseCaveatedEntries([entry(caveats)])).not.toThrow();
+      expect(() => refuseCaveated([entry(caveats)])).not.toThrow();
     }
   });
 
@@ -132,7 +132,7 @@ describe("refuseCaveatedEntries", () => {
     ];
     for (const service of ["tinycloud.kv", "tinycloud.sql"]) {
       for (const caveats of refused) {
-        expect(() => refuseCaveatedEntries([entry(caveats, service)])).toThrow(CaveatedDelegationUnsupportedError);
+        expect(() => refuseCaveated([entry(caveats, service)])).toThrow(CaveatedDelegationUnsupportedError);
       }
     }
   });
@@ -141,7 +141,7 @@ describe("refuseCaveatedEntries", () => {
     const plain = entry(undefined);
     const caveated = { ...entry([{ kind: "prefix" }]), path: "b/" };
     try {
-      refuseCaveatedEntries([plain, entry([{}]), caveated]);
+      refuseCaveated([plain, entry([{}]), caveated]);
       throw new Error("expected a refusal");
     } catch (error) {
       if (!(error instanceof CaveatedDelegationUnsupportedError)) throw error;

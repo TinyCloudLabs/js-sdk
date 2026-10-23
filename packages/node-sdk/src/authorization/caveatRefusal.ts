@@ -5,24 +5,23 @@ import {
   type PermissionEntry,
 } from "@tinycloud/sdk-core";
 
-// Only an absent value is unconstrained; null and malformed caveats (non-array or
-// non-plain entries) fail closed.
-function carriesCaveat(caveats: PermissionEntry["caveats"]): boolean {
-  if (caveats === null) return true;
-  try {
-    return !recapCaveatsEqual(caveats, undefined);
-  } catch {
-    return true;
-  }
-}
-
-/** Throws `CaveatedDelegationUnsupportedError` for entries that carry a caveat. */
-export function refuseCaveatedEntries(entries: readonly PermissionEntry[]): void {
-  const caveated = entries.filter((entry) => carriesCaveat(entry.caveats));
-  if (caveated.length > 0) throw new CaveatedDelegationUnsupportedError(caveated);
-}
-
-/** `refuseCaveatedEntries` over the permissions of the given manifest(s); tolerates absent input. */
-export function refuseCaveatedManifests(manifests: Manifest | readonly Manifest[] | undefined): void {
-  refuseCaveatedEntries([manifests ?? []].flat().flatMap((manifest) => manifest.permissions ?? []));
+/**
+ * Throws `CaveatedDelegationUnsupportedError` for permission entries, or the
+ * permissions of manifests, that carry a caveat. Only absent, `[]` and `[{}]`
+ * pass; `null` and malformed caveats fail closed.
+ */
+export function refuseCaveated(
+  input: Manifest | readonly (Manifest | PermissionEntry)[] | undefined,
+): void {
+  const caveated = [input ?? []]
+    .flat()
+    .flatMap((item) => ("permissions" in item ? item.permissions ?? [] : [item as PermissionEntry]))
+    .filter(({ caveats }) => {
+      try {
+        return caveats === null || !recapCaveatsEqual(caveats, undefined);
+      } catch {
+        return true;
+      }
+    });
+  if (caveated.length) throw new CaveatedDelegationUnsupportedError(caveated);
 }
