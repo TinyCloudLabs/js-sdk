@@ -127,10 +127,10 @@ for (const scheme of ["light", "dark"] as const) {
       const dialog = panel(page);
       await expect(dialog).toHaveAttribute("data-layout", "page");
 
-      await dialog.getByRole("button", { name: "Show as sidebar", exact: true }).click();
+      await dialog.getByRole("button", { name: "Sidebar", exact: true }).click();
       await expect(dialog).toHaveAttribute("data-layout", "drawer");
 
-      await dialog.getByRole("button", { name: "Open full page", exact: true }).click();
+      await dialog.getByRole("button", { name: "Full page", exact: true }).click();
       await expect(dialog).toHaveAttribute("data-layout", "page");
     });
 
@@ -140,7 +140,7 @@ for (const scheme of ["light", "dark"] as const) {
 
       const dialog = panel(page);
       await expect(dialog).toHaveAttribute("data-layout", "drawer");
-      await expect(dialog.getByRole("button", { name: "Open full page", exact: true })).toHaveCount(0);
+      await expect(dialog.getByRole("button", { name: "Full page", exact: true })).toHaveCount(0);
     });
 
     test("ui.mode page opens the full-page layout without a sidebar control", async ({ page }) => {
@@ -149,7 +149,7 @@ for (const scheme of ["light", "dark"] as const) {
 
       const dialog = panel(page);
       await expect(dialog).toHaveAttribute("data-layout", "page");
-      await expect(dialog.getByRole("button", { name: "Show as sidebar", exact: true })).toHaveCount(0);
+      await expect(dialog.getByRole("button", { name: "Sidebar", exact: true })).toHaveCount(0);
     });
   });
 }
@@ -263,6 +263,16 @@ test.describe("host layer, targets, and motion", () => {
         await menuButton(page).click();
         await expect(menuButton(page)).toHaveAttribute("aria-expanded", "false");
       }
+    });
+
+    test("on phones the layout switch is absent and the panel is a full page", async ({ page }) => {
+      await mountHarness(page, "light");
+      await page.setViewportSize({ width: 390, height: 844 });
+      await openDrawer(page);
+      const dialog = panel(page);
+      await expect(dialog).toHaveAttribute("data-layout", "page");
+      await expect(dialog.getByRole("button", { name: "Full page", exact: true })).toHaveCount(0);
+      await expect(dialog.getByRole("button", { name: "Sidebar", exact: true })).toHaveCount(0);
     });
 
     test("keyboard: Enter opens the menu, Enter on a section closes it and moves focus into the section", async ({ page }) => {

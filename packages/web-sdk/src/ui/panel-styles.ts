@@ -28,6 +28,9 @@ export const PANEL_CSS = `
 .sec-title{margin:0 0 12px;font-family:"Literata Variable","Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;font-size:1.25rem;font-weight:600;line-height:1.2}
 .section+.section{margin-top:12px;padding-top:12px;border-top:1px solid #e4e4e7}
 .action{min-width:44px;min-height:44px;padding:0 12px;border:1px solid;border-color:#71717a;border-radius:8px;background:#fff;color:#111827;font:inherit;cursor:pointer}
+.layout-switch{display:inline-flex;align-items:center;gap:8px;white-space:nowrap}
+.layout-switch[hidden]{display:none}
+.layout-switch svg{width:20px;height:20px;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
 .row{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:44px}
 .label{font-weight:500}
 .switch{display:inline-flex;align-items:center;width:52px;min-width:44px;height:44px;padding:0;border:0;background:none;cursor:pointer}

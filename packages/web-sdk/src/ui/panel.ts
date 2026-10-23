@@ -45,14 +45,15 @@ interface NavEntry {
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
-function actionButton(label: string, onClick: () => void): HTMLButtonElement {
-  const el = document.createElement("button");
-  el.type = "button";
-  el.className = "action";
-  el.textContent = label;
-  el.addEventListener("click", () => onClick());
-  return el;
-}
+/** Glyph for the layout the switch moves to: expand arrows for a full page, a sidebar frame for the drawer. */
+const SWITCH_GLYPH: Record<ShellLayout, string> = {
+  page: "M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7",
+  drawer: "M6 4h12a3 3 0 0 1 3 3v10a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3zM15 4v16",
+};
+const SWITCH_LABEL: Record<ShellLayout, StringKey> = {
+  page: "panel.full_page",
+  drawer: "panel.sidebar",
+};
 
 /**
  * Non-modal `role="dialog"` (`aria-modal="false"`). Rendered as a drawer or a
@@ -88,8 +89,24 @@ export function createPanel(options: PanelOptions): PanelHandle {
   status.className = "status";
   status.hidden = true;
 
-  const layoutToggle = actionButton("", () => options.onLayout(nextLayout));
+  // One switch to the other layout. Its label and icon name the layout it moves to.
+  const switchGlyph = document.createElementNS(SVG_NS, "svg");
+  switchGlyph.setAttribute("viewBox", "0 0 24 24");
+  switchGlyph.setAttribute("aria-hidden", "true");
+  const switchPath = document.createElementNS(SVG_NS, "path");
+  switchGlyph.append(switchPath);
+  const switchLabel = document.createElement("span");
+  const layoutToggle = document.createElement("button");
+  layoutToggle.type = "button";
+  layoutToggle.className = "action layout-switch";
+  layoutToggle.append(switchGlyph, switchLabel);
+  layoutToggle.addEventListener("click", () => options.onLayout(nextLayout));
   layoutToggle.hidden = true;
+
+  function paintSwitch(target: ShellLayout): void {
+    switchPath.setAttribute("d", SWITCH_GLYPH[target]);
+    switchLabel.textContent = text(SWITCH_LABEL[target]);
+  }
 
   // One close control. Icon on drawers and phones; on desktop pages, a text action back to the host app.
   const close = document.createElement("button");
@@ -215,7 +232,7 @@ export function createPanel(options: PanelOptions): PanelHandle {
   // Tabbing out of the menu closes it; focus moving inside the wrapper keeps it open.
   menuWrap.addEventListener("focusout", (event) => {
     if (!menuOpen) return;
-    if (event.relatedTarget instanceof Node && menuWrap.contains(event.relatedTarget)) return;
+    if (menuWrap.contains(event.relatedTarget as Node | null)) return;
     setMenuOpen(false);
   });
 
@@ -243,7 +260,7 @@ export function createPanel(options: PanelOptions): PanelHandle {
       phone = options.phone;
       el.dataset.layout = next;
       nextLayout = next === "drawer" ? "page" : "drawer";
-      layoutToggle.textContent = text(next === "drawer" ? "panel.open_page" : "panel.show_sidebar");
+      paintSwitch(nextLayout);
       layoutToggle.hidden = !options.showLayoutToggle;
       if (!phone) setMenuOpen(false);
       paintClose();
