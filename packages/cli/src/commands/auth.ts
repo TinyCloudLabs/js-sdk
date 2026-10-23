@@ -80,6 +80,7 @@ import {
   storedSessionState,
   type StoredSessionState,
 } from "../auth/scoped-login.js";
+import { assertHostSupportsSqlDelegatedCaveats } from "../auth/sql-caveat-gate.js";
 import { isRawEncryptionPermission, isVerifiedRawEncryptionPermission } from "../lib/raw-encryption.js";
 import { canonicalOwnerDid } from "../lib/owner-did.js";
 import { assertNotLocalOwner, assertSessionReplaceable, commitLogin, readProfileSnapshot } from "../auth/login-commit.js";
@@ -1351,6 +1352,8 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         }
         const resolvedRequest = { ...parsed, requested };
         const node = await ensureAuthenticated(ctx);
+        // Before the owner is asked to approve: a delegated SQL caveat needs a node that can enforce it.
+        assertSqlDelegatedCaveatsSupportedBeforeApproval(node, requested, ctx.host);
         let grant: AuthDelegationArtifact;
         if (profile.authMethod === "openkey") {
           assertOpenKeyAgentRequest(requested);
@@ -2873,6 +2876,8 @@ export async function refreshOpenKeySession(
     const estimatedExpiry = expiry === undefined ? undefined : new Date(Date.now() + expiry.durationMs).toISOString();
     assertSessionReplaceable(profileName, snapshot, expectedOwner, permissions, estimatedExpiry);
   }
+  // A first login has no signed-in node yet: read the node's features before the owner approves.
+  if (permissions !== undefined) await assertHostSupportsSqlDelegatedCaveats(host, permissions);
   if (replication.prefixes.length > 0) {
     return refreshPreparedOpenKeySession({
       profileName, host, profile, snapshot, options, replication, permissions, expectedOwner, expiry,

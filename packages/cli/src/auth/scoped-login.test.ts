@@ -107,6 +107,27 @@ describe("scoped first login", () => {
     expect((await ProfileManager.getProfile("scoped")).ownerDid).toBe(ownerDid);
   });
 
+  test("a delegated SQL caveat is refused before OpenKey is asked when the node does not list the feature", async () => {
+    const sqlRequest: PermissionEntry[] = [{ ...requested[0]!, service: "tinycloud.sql", actions: ["tinycloud.sql/read"], caveats: [{ tables: ["Notes"] }] }];
+    const originalFetch = globalThis.fetch;
+    const infoRequests: string[] = [];
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      infoRequests.push(String(input));
+      return new Response(JSON.stringify({ features: ["sql"] }), { status: 200 });
+    }) as typeof fetch;
+    let approvals = 0;
+    try {
+      await expect(refreshOpenKeySession("scoped", host, {
+        permissions: sqlRequest, openKeyAcquisition: async () => { approvals++; return await proof(); },
+      })).rejects.toMatchObject({ code: "SQL_DELEGATED_CAVEATS_UNSUPPORTED" });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+    expect(approvals).toBe(0);
+    expect(infoRequests).toEqual([`${host}/info`]);
+    expect(await ProfileManager.getSession("scoped")).toBeNull();
+  });
+
   test("refuses a signed write grant even when the unsigned callback permissions claim read-only", async () => {
     const response = { ...await proof({ write: true }), permissions: requested };
     await expect(refreshOpenKeySession("scoped", host, { permissions: requested, openKeyAcquisition: async () => response })).rejects.toMatchObject({ code: "OPENKEY_GRANT_BROADENED" });
