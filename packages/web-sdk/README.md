@@ -239,12 +239,13 @@ squash merge, nothing needs editing. Content keys (blob hashes) were rejected:
 pinned files such as `authority.ts` legitimately change later, whereas the
 landing commit stays an ancestor for good.
 
-The opt-in first-import ceiling is 51,925 B ESM / 67,138 B CJS gzip
+The opt-in first-import ceiling is 51,925 B ESM / 67,141 B CJS gzip
 (including the replica parser and noble dependencies); awaiting the IndexedDB
-factory has a separate 23,075 B / 24,655 B ceiling. The content-hashed worker
-and WASM asset has an 820,108 B ceiling owned by `@tinycloud/replica`.
-A compliant first local open therefore costs at most 895,108 B ESM /
-911,901 B CJS incremental gzip beyond the already-loaded web root; those
+factory has a separate 23,117 B / 24,700 B ceiling. The content-hashed kv-storage
+worker and WASM asset has a 776,128 B ceiling owned by `@tinycloud/replica`
+(its `replica.worker.js`, which web-sdk does not load, has its own 770,093 B).
+A compliant first local open therefore costs at most 851,170 B ESM /
+867,969 B CJS incremental gzip beyond the already-loaded web root; those
 assets can then be cached. These byte ceilings do not replace real-worker
 Chromium acceptance of local reads, denial, expiry, and sign-out.
 

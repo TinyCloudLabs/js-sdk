@@ -237,6 +237,12 @@ export type Tc1807CredentialDiscoveryRatchet = HardeningRatchet;
  * hardening row.
  */
 export type Tc1827WorkerRatchet = HardeningRatchet;
+/**
+ * The first reviewed ceiling for `replica.worker.js`, the @tinycloud/replica/browser worker (TC-1827 follow-up): the
+ * bytes canonical CI measured on the PR's code head, zero headroom. Same shape as the #606 worker row; here `worker`
+ * is the replica worker (`MAX_REPLICA_WORKER_GZIP_BYTES`), not the kv-storage worker.
+ */
+export type Tc1827ReplicaWorkerRatchet = WorkerRatchet;
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -268,6 +274,7 @@ export type Ledger = {
   tc1801NonTransferableShareRatchet?: Tc1801NonTransferableShareRatchet;
   tc1807CredentialDiscoveryRatchet?: Tc1807CredentialDiscoveryRatchet;
   tc1827WorkerRatchet?: Tc1827WorkerRatchet;
+  tc1827ReplicaWorkerRatchet?: Tc1827ReplicaWorkerRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -829,6 +836,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc1801NonTransferableShareRatchet !== undefined) pins.push({ row: "tc1801NonTransferableShareRatchet", pin: root.tc1801NonTransferableShareRatchet.sourceCommits.at(-1)! });
   if (root.tc1807CredentialDiscoveryRatchet !== undefined) pins.push({ row: "tc1807CredentialDiscoveryRatchet", pin: root.tc1807CredentialDiscoveryRatchet.sourceCommits.at(-1)! });
   if (root.tc1827WorkerRatchet !== undefined) pins.push({ row: "tc1827WorkerRatchet", pin: root.tc1827WorkerRatchet.sourceCommits.at(-1)! });
+  if (root.tc1827ReplicaWorkerRatchet !== undefined) pins.push({ row: "tc1827ReplicaWorkerRatchet", pin: root.tc1827ReplicaWorkerRatchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1275,6 +1283,29 @@ export const approvedTc1827WorkerRatchet: Tc1827WorkerRatchet = {
   reason: "replica workers import only the KV service: -46625 B gzip to the kv-storage worker (TC-1827)",
 };
 
+/**
+ * Replica worker ratchet (TC-1827 follow-up), requested by Naomi, 2026-10-23: `replica.worker.js` had no size ceiling;
+ * `MAX_REPLICA_WORKER_GZIP_BYTES` is the 770,093 gzip bytes canonical CI printed on the code head f2e2f9fc (merge base
+ * dc615834, after #694). That head changes no worker input, so the delta against the merge base is 0.
+ */
+export const approvedTc1827ReplicaWorkerRatchet: Tc1827ReplicaWorkerRatchet = {
+  label: "replica worker size ratchet (TC-1827 follow-up): first replica.worker.js ceiling at the measured CI bytes",
+  ruling: "Requested by Naomi (2026-10-23, relayed by Amos): the exact canonical CI bytes, zero headroom",
+  base: "dc61583428a04aa87eb0c0d6aebb656a698a5b0f",
+  sourceCommits: [
+    "f2e2f9fcc16842bfa3e30c71eae9de271405fdae",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39949887460",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39949887460/job/120401498637",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39949887460/job/120401498914",
+    ],
+  },
+  worker: { delta: 0, ceiling: 770093 },
+  reason: "replica.worker.js had no size ratchet; its ceiling is the 770093 B gzip canonical CI measured (TC-1827)",
+};
+
 export type GatedOnlyRatchet = {
   label: string;
   sourceCommit: string;
@@ -1307,7 +1338,7 @@ const historicalToolchain = "Bun 1.4.3; production webpack; gzip -9 -c";
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
 export function validateLedger(value: Ledger, historicalBase = false): void {
   if (!value || !value.allowance || !Array.isArray(value.entries) ||
-      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet" && key !== "tc1436Ratchet" && key !== "tc1432Ratchet" && key !== "tc1424Ratchet" && key !== "tc1448Ratchet" && key !== "tc1443Ratchet" && key !== "tc1466Ratchet" && key !== "tc1443bRatchet" && key !== "tc1428Ratchet" && key !== "tc1476Ratchet" && key !== "tc1475Ratchet" && key !== "tc606WorkerRatchet" && key !== "masterDriftRatchet" && key !== "tc1789Ratchet" && key !== "tc1757Ratchet" && key !== "tc1777Ratchet" && key !== "tc1777ExpiryRatchet" && key !== "tc848PanelRatchet" && key !== "tc1781DecryptExpiryRatchet" && key !== "tc1801NonTransferableShareRatchet" && key !== "tc1807CredentialDiscoveryRatchet" && key !== "tc1827WorkerRatchet")) {
+      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet" && key !== "tc1436Ratchet" && key !== "tc1432Ratchet" && key !== "tc1424Ratchet" && key !== "tc1448Ratchet" && key !== "tc1443Ratchet" && key !== "tc1466Ratchet" && key !== "tc1443bRatchet" && key !== "tc1428Ratchet" && key !== "tc1476Ratchet" && key !== "tc1475Ratchet" && key !== "tc606WorkerRatchet" && key !== "masterDriftRatchet" && key !== "tc1789Ratchet" && key !== "tc1757Ratchet" && key !== "tc1777Ratchet" && key !== "tc1777ExpiryRatchet" && key !== "tc848PanelRatchet" && key !== "tc1781DecryptExpiryRatchet" && key !== "tc1801NonTransferableShareRatchet" && key !== "tc1807CredentialDiscoveryRatchet" && key !== "tc1827WorkerRatchet" && key !== "tc1827ReplicaWorkerRatchet")) {
     throw new Error("Invalid packages/web-sdk/scripts/replica-size-ledger.json shape");
   }
   if (Object.keys(value.allowance).some((key) => !formats.includes(key as typeof formats[number]))) {
@@ -1459,6 +1490,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc1807CredentialDiscoveryRatchet || JSON.stringify(value.tc1827WorkerRatchet) !== JSON.stringify(approvedTc1827WorkerRatchet))) {
     throw new Error("Only Naomi's exact canonical replica worker narrow-imports ratchet is approved.");
   }
+  if (value.tc1827ReplicaWorkerRatchet !== undefined &&
+      (!value.tc1827WorkerRatchet || JSON.stringify(value.tc1827ReplicaWorkerRatchet) !== JSON.stringify(approvedTc1827ReplicaWorkerRatchet))) {
+    throw new Error("Only the exact canonical replica worker ratchet is approved.");
+  }
 }
 
 /** The #606 worker ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
@@ -1546,6 +1581,14 @@ export function validateTc1827WorkerRatchetTransition(base?: Tc1827WorkerRatchet
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1827WorkerRatchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact TC-1827 replica worker narrow-imports ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-1827 replica worker ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc1827ReplicaWorkerRatchetTransition(base?: Tc1827ReplicaWorkerRatchet, current?: Tc1827ReplicaWorkerRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1827ReplicaWorkerRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-1827 replica worker ratchet may be introduced once and cannot change later.");
   }
 }
 

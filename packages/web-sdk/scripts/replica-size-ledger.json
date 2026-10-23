@@ -178,6 +178,13 @@
       "index.mjs": 0,
       "index.cjs": 0,
       "note": "replica workers import only the KV service and its context"
+    },
+    {
+      "pr": "#695",
+      "ticket": "TC-1827",
+      "index.mjs": 0,
+      "index.cjs": 0,
+      "note": "replica worker size ratchet; no measured-bundle change"
     }
   ],
   "phase2Ratchet": {
@@ -1254,5 +1261,25 @@
       "ceiling": 776128
     },
     "reason": "replica workers import only the KV service: -46625 B gzip to the kv-storage worker (TC-1827)"
+  },
+  "tc1827ReplicaWorkerRatchet": {
+    "label": "replica worker size ratchet (TC-1827 follow-up): first replica.worker.js ceiling at the measured CI bytes",
+    "ruling": "Requested by Naomi (2026-10-23, relayed by Amos): the exact canonical CI bytes, zero headroom",
+    "base": "dc61583428a04aa87eb0c0d6aebb656a698a5b0f",
+    "sourceCommits": [
+      "f2e2f9fcc16842bfa3e30c71eae9de271405fdae"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39949887460",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39949887460/job/120401498637",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39949887460/job/120401498914"
+      ]
+    },
+    "worker": {
+      "delta": 0,
+      "ceiling": 770093
+    },
+    "reason": "replica.worker.js had no size ratchet; its ceiling is the 770093 B gzip canonical CI measured (TC-1827)"
   }
 }
