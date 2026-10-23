@@ -14,6 +14,7 @@ import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequir
 import { rootCeilingFor, validateTc1757RatchetTransition, validateTc1777ExpiryRatchetTransition, validateTc1777RatchetTransition, validateTc1781DecryptExpiryRatchetTransition, validateTc1801NonTransferableShareRatchetTransition, validateTc1807CredentialDiscoveryRatchetTransition, validateTc1823SizeCodeRatchetTransition, validateTc712CredentialCoreRatchetTransition, validateTc1827ReplicaWorkerRatchetTransition, validateTc1827WorkerRatchetTransition, validateTc848PanelRatchetTransition } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 import { replicaOwnedPath } from "./replica-owned-path";
+import { webSdkTestExitFailure } from "./web-sdk-test-exit";
 type Baseline = {
   webSdkTestBaseline: { ref: string; unhandledErrors: number; failingNames: string[]; unhandledSignatures: string[] };
 };
@@ -780,6 +781,11 @@ try {
   if (test.error) throw test.error;
   process.stdout.write(test.stdout);
   process.stderr.write(test.stderr);
+  const exitFailure = webSdkTestExitFailure(test.status, test.signal);
+  if (exitFailure) {
+    console.error(`${exitFailure}; the step fails on any non-zero exit even when the junit report is clean`);
+    failed = true;
+  }
   const xml = await readFile(report, "utf8");
   const cases = [...xml.matchAll(/<testcase\b([^>]*?)(?:\/>|>([\s\S]*?)<\/testcase>)/g)];
   const decode = (value: string) => value.replaceAll("&quot;", '"').replaceAll("&apos;", "'").replaceAll("&lt;", "<").replaceAll("&gt;", ">").replaceAll("&amp;", "&");
