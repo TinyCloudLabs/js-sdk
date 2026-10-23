@@ -25,8 +25,7 @@ import { normalizePkhIdentifier } from "./space.js";
  *
  * Neither grants KV delete, SQL admin, any other service, or any other space.
  * CREATE, ALTER and DROP TABLE need `tinycloud.sql/schema`, which SQL write does
- * not request. Nodes before 1.21.6 do not enforce that split: SQL write can run
- * those statements there too. The write variant adds `tinycloud.sql/schema` only
+ * not request. The write variant adds `tinycloud.sql/schema` only
  * for an app listed in `APPS_AGENT_SCHEMA_DATABASES`, on that app's one database,
  * at the exact path with no trailing slash (the node matches a SQL path exactly
  * unless it ends in `/`).
@@ -106,7 +105,7 @@ const ACTION_WORDS: Readonly<Record<string, string>> = {
   "tinycloud.kv/metadata": "read file metadata",
   "tinycloud.sql/read": "read table rows",
   "tinycloud.sql/write": "add, change and delete table rows",
-  "tinycloud.sql/schema": "create, change and drop tables",
+  "tinycloud.sql/schema": "create, change and delete tables",
   "tinycloud.sql/admin": "do anything in the database",
   "tinycloud.delegation/create": "can give other people or agents access on your behalf",
   "tinycloud.delegation/revoke": "can cancel access you gave",
@@ -192,8 +191,8 @@ export function appsAgentScopeNotice(mode: AppsAgentMode, appIds: readonly strin
       `It cannot change ${appIds.length === 1 ? "the app's" : "the apps'"} code, manifest or install record: files outside those folders are read-only for it.`,
       `SQL write is separate from that: it can add, change and delete ${appIds.length === 1 ? "this app's" : "these apps'"} table rows.`,
       variant.schemaForCatalogApps && schemaPaths.length > 0
-        ? `It can also create, change and drop the tables in ${schemaPaths.join(", ")}, which the app needs to set itself up. That grant names no other database for table changes. Nodes before 1.21.6 do not enforce that database limit, so the write grant may still let it change tables elsewhere there.`
-        : "This grant does not include permission to create, change or drop tables (tinycloud.sql/schema). Nodes before 1.21.6 do not enforce that split, so the write grant may still let it do so there.",
+        ? `It can also create, change and delete the tables in ${schemaPaths.join(", ")}, which the app needs to set itself up. That grant names no other database for table changes.`
+        : "This grant does not include permission to create, change or delete tables (tinycloud.sql/schema).",
       "It cannot touch other apps, other spaces or secrets.",
     );
   } else {
@@ -500,7 +499,7 @@ export function describeGrantScope(
     ...others.map((entry) => `- ${describeEntry(entry, applicationsSpace)}`),
   ];
   if (requested.some((entry) => entry.service === "tinycloud.sql" && entry.actions.some((action) => Object.hasOwn(STRUCTURE_ACTIONS, action)))) {
-    lines.push("This request can create, change and drop tables (an SQL schema, admin or wildcard entry).");
+    lines.push("This request can create, change and delete tables (an SQL schema, admin or wildcard entry).");
   }
   const entryLifetimes = requested.filter((entry) => entry.expiry !== undefined).map((entry) => lifetimeMs(entry.expiry));
   const durations = [lifetimeMs(requestedExpiry), ...entryLifetimes]
