@@ -2,8 +2,8 @@ export { canonicalShareFilename, hasUnsafeFilenameCodePoint } from "./filename-p
 export { DEFAULT_MAX_CONTENT_BLOB_BYTES, DEFAULT_MAX_SEALED_BLOB_BYTES, SHARE_RESULT_VERSION, inspectShare, receiveShare, ShareReceiveError, toShareErrorInfo, type ShareReceiveAuthorizationRequired, type ShareErrorCode, type ShareErrorInfo, type ShareFetchOptions, type ShareInspection, type ShareMetadata, type ShareReceiveOutcome, type ShareReceiveResult } from "./receive.js";
 export { DEFAULT_SHARE_LIFETIME_MS, SHARE_CONTENT_LIMIT, SHARE_PUBLISH_RESULT_VERSION, redactPublishedShare, SharePublishError, type PublishedShare, type PublishedShareDeliveryMaterial, type PublishedShareMetadata, type SharePublishErrorCode, type SharePublishOptions, type SharePublishTarget } from "./publish.js";
 export { parseAddressedEnvelope, type ParsedAddressedEnvelope } from "./addressed.js";
-export { addressedCredentialRequirement, prepareAddressedShare, publishAddressedShare } from "./addressed-publish.js";
-export type { AddressedOwnerRootInput, AddressedOwnerRootReceipt, AddressedPolicyRegistrationInput, AddressedPolicyRegistrationReceipt, AddressedPublishAuthority, AddressedShareRequest, AddressedSharePublishOptions, PreparedAddressedShare } from "./addressed-publish.js";
+export { ADDRESSED_SHARE_TOO_LARGE_MESSAGE, AddressedShareOverLimitError, addressedCredentialRequirement, addressedShareBodyUpperBound, assertAddressedShareFits, prepareAddressedShare, publishAddressedShare } from "./addressed-publish.js";
+export type { AddressedOwnerRootInput, AddressedOwnerRootReceipt, AddressedPolicyRegistrationInput, AddressedPolicyRegistrationReceipt, AddressedPublishAuthority, AddressedShareBoundInput, AddressedShareRequest, AddressedSharePublishOptions, AddressedShareWrites, PreparedAddressedShare } from "./addressed-publish.js";
 export { checkBearerDelegation, resourceUriCovers, requiredResourceUri, type CheckBearerDelegationOptions, type DelegationCheckResult } from "@tinycloud/share-envelope";
 export { canonicalize, fromBase64Url, toBase64Url } from "@tinycloud/share-envelope";
 export { MemoryShareCache } from "./cache.js";

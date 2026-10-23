@@ -7,8 +7,8 @@ import {
   open,
   verifyCid,
 } from "@tinycloud/share-envelope";
-import { LinkError, MAX_LINK_BODY_BYTES, parseLink, resolveLink } from "@tinycloud/share-envelope/links";
-import { addressedCredentialRequirement, historyRecordForPublishedShare, inspectShare, publishAddressedShare, type AddressedPolicyRegistrationInput, type AddressedSharePublishOptions } from "../src/index.js";
+import { MAX_LINK_BODY_BYTES, parseLink, resolveLink } from "@tinycloud/share-envelope/links";
+import { SharePublishError, addressedCredentialRequirement, historyRecordForPublishedShare, inspectShare, publishAddressedShare, type AddressedPolicyRegistrationInput, type AddressedSharePublishOptions } from "../src/index.js";
 
 const ownerSeed = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
 const ownerDid = `did:key:${base58btc.encode(Uint8Array.from([0xed, 0x01, ...ed25519.getPublicKey(ownerSeed)]))}`;
@@ -157,13 +157,13 @@ describe("canonical addressed publication", () => {
     await expect(inspectShare(flipped)).rejects.toMatchObject({ code: "invalid-link" });
   });
 
-  it("creates no link and returns no delivery material when the sealed envelope is over the body limit", async () => {
+  it("refuses an over-limit envelope before any write, creating no link and no delivery material", async () => {
     let delivered = false;
     const outcome = await fixture(() => {
       delivered = true;
     }, "readme.md", "x".repeat(MAX_LINK_BODY_BYTES)).catch((error: unknown) => error);
-    expect(outcome).toBeInstanceOf(LinkError);
-    expect(outcome).toMatchObject({ code: "body_over_cap" });
+    expect(outcome).toBeInstanceOf(SharePublishError);
+    expect(outcome).toMatchObject({ code: "max-bytes-exceeded" });
     expect(delivered).toBe(false);
   });
 });
