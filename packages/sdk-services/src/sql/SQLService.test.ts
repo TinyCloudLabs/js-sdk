@@ -831,7 +831,7 @@ describe("SQLService 413 request vs response classification", () => {
     return service;
   }
 
-  test("coded request 413 maps to SQL_REQUEST_TOO_LARGE with the short request-size message", async () => {
+  test("coded request 413 maps to SQL_REQUEST_TOO_LARGE and keeps the node body in the message", async () => {
     const service = serviceAnswering(
       "sql_request_too_large: JSON body exceeds complete envelope limit (limit 1024 bytes)",
     );
@@ -841,8 +841,8 @@ describe("SQLService 413 request vs response classification", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe("SQL_REQUEST_TOO_LARGE");
-      expect(result.error.message).toBe(
-        "SQL request too large. SQL batch failed: 413 - sql_request_too_large: JSON body exceeds complete envelope limit (limit 1024 bytes)",
+      expect(result.error.message).toContain(
+        "sql_request_too_large: JSON body exceeds complete envelope limit (limit 1024 bytes)",
       );
     }
   });
@@ -928,6 +928,29 @@ describe("SQLService 413 request vs response classification", () => {
     expect(explainResult.ok).toBe(false);
     if (!explainResult.ok) {
       expect(explainResult.error.code).toBe("SQL_REQUEST_TOO_LARGE");
+    }
+  });
+
+  test("a coded 413 from the other engine is not matched and falls to the operation rule", async () => {
+    const duckdbRequestBatch = serviceAnswering("duckdb_request_too_large: JSON body exceeds complete envelope limit");
+    const duckdbRequestQuery = serviceAnswering("duckdb_request_too_large: JSON body exceeds complete envelope limit");
+    const duckdbResponseBatch = serviceAnswering("duckdb_response_too_large: Response too large: 2048 bytes");
+
+    const batchResult = await duckdbRequestBatch.batch([{ sql: "INSERT INTO notes (body) VALUES ('a')" }]);
+    const queryResult = await duckdbRequestQuery.query("SELECT * FROM big");
+    const responseBatchResult = await duckdbResponseBatch.batch([{ sql: "INSERT INTO notes (body) VALUES ('a')" }]);
+
+    expect(batchResult.ok).toBe(false);
+    if (!batchResult.ok) {
+      expect(batchResult.error.code).toBe("SQL_REQUEST_TOO_LARGE");
+    }
+    expect(queryResult.ok).toBe(false);
+    if (!queryResult.ok) {
+      expect(queryResult.error.code).toBe(ErrorCodes.SQL_RESPONSE_TOO_LARGE);
+    }
+    expect(responseBatchResult.ok).toBe(false);
+    if (!responseBatchResult.ok) {
+      expect(responseBatchResult.error.code).toBe("SQL_REQUEST_TOO_LARGE");
     }
   });
 

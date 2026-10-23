@@ -3,6 +3,6 @@
 "@tinycloud/operations": patch
 ---
 
-SQL and DuckDB requests rejected for size now return `SQL_REQUEST_TOO_LARGE` or `DUCKDB_REQUEST_TOO_LARGE` with a short request-size message. Responses that are too large keep `SQL_RESPONSE_TOO_LARGE` and `DUCKDB_RESPONSE_TOO_LARGE`. Fast-copy and SQL operations map the request-side error to `INPUT_INVALID`.
+A 413 from the SQL or DuckDB node is classified by side. A request rejected for size returns `SQL_REQUEST_TOO_LARGE` or `DUCKDB_REQUEST_TOO_LARGE`. A response that is too large keeps `SQL_RESPONSE_TOO_LARGE` or `DUCKDB_RESPONSE_TOO_LARGE`.
 
 Details: TC-1823

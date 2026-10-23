@@ -575,10 +575,18 @@ export class SQLService extends BaseService implements ISQLService {
 
     const errorBody = parseServiceErrorBody(errorText);
 
-    const formatted = formatServiceResponseError("SQL", operation, response.status, errorText, errorBody);
-    const sized = requestTooLargeError("sql", operation, response.status, errorText, formatted);
-    const errorCode = sized?.code ?? this.mapHttpStatusToErrorCode(response.status, errorBody.error);
-    const message = sized?.message ?? formatted;
+    const sizeCode = requestTooLargeError("sql", operation, response.status, errorText);
+    const errorCode = sizeCode ?? this.mapHttpStatusToErrorCode(
+      response.status,
+      errorBody.error
+    );
+    const message = formatServiceResponseError(
+      "SQL",
+      operation,
+      response.status,
+      errorText,
+      errorBody,
+    );
 
     if (response.status === 401) {
       const { action } = parseAuthError(errorText);

@@ -1,39 +1,30 @@
 /**
- * Size errors for a 413 from the SQL and DuckDB nodes.
+ * Request-side size code for a 413 from the SQL and DuckDB nodes.
  *
- * This module exports one function. The node's code prefix decides the side.
- * Without a code, the requested operation decides: the write-class operations
- * (`batch`, `executeStatement`, `import`) are request-side, every other
- * operation is response-side.
- */
-
-/**
- * The size error for a 413, or undefined for any other status. `detail` is the
- * service's formatted error, appended after the short sentence unchanged. `code`
- * is set only for the request side; a response-side error keeps the HTTP mapping.
+ * Returns `SQL_REQUEST_TOO_LARGE` or `DUCKDB_REQUEST_TOO_LARGE` when the 413 is
+ * request-side, or undefined when the caller keeps its HTTP-mapped response code.
+ * The node's own code prefix decides when present, and only this engine's
+ * prefixes match; another engine's code falls through to the operation rule.
+ * Without a matching prefix, the write-class operations (`batch`,
+ * `executeStatement`, `import`) are request-side and every other operation is
+ * response-side.
  */
 export function requestTooLargeError(
   engine: "sql" | "duckdb",
   operation: string,
   status: number,
   errorText: string,
-  detail: string,
-): { code: string | undefined; message: string } | undefined {
+): string | undefined {
   if (status !== 413) return undefined;
 
   const nodeCode = errorText.split(":", 1)[0].trim();
   let request: boolean;
-  if (["sql_request_too_large", "duckdb_request_too_large"].includes(nodeCode)) {
+  if (nodeCode === `${engine}_request_too_large`) {
     request = true;
-  } else if (["sql_response_too_large", "duckdb_response_too_large"].includes(nodeCode)) {
+  } else if (nodeCode === `${engine}_response_too_large`) {
     request = false;
   } else {
     request = ["batch", "executeStatement", "import"].includes(operation);
   }
-
-  const name = engine === "sql" ? "SQL" : "DuckDB";
-  return {
-    code: request ? (engine === "sql" ? "SQL_REQUEST_TOO_LARGE" : "DUCKDB_REQUEST_TOO_LARGE") : undefined,
-    message: `${name} ${request ? "request" : "response"} too large. ${detail}`,
-  };
+  return request ? `${engine.toUpperCase()}_REQUEST_TOO_LARGE` : undefined;
 }

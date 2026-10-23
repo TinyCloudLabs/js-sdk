@@ -467,10 +467,18 @@ export class DuckDbService extends BaseService implements IDuckDbService {
 
     const errorBody = parseServiceErrorBody(errorText);
 
-    const formatted = formatServiceResponseError("DuckDB", operation, response.status, errorText, errorBody);
-    const sized = requestTooLargeError("duckdb", operation, response.status, errorText, formatted);
-    const errorCode = sized?.code ?? this.mapHttpStatusToErrorCode(response.status, errorBody.error);
-    const message = sized?.message ?? formatted;
+    const sizeCode = requestTooLargeError("duckdb", operation, response.status, errorText);
+    const errorCode = sizeCode ?? this.mapHttpStatusToErrorCode(
+      response.status,
+      errorBody.error
+    );
+    const message = formatServiceResponseError(
+      "DuckDB",
+      operation,
+      response.status,
+      errorText,
+      errorBody,
+    );
 
     if (response.status === 401) {
       const { resource, action } = parseAuthError(errorText);
