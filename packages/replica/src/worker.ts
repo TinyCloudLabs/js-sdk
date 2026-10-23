@@ -17,7 +17,8 @@
  *     `committed` events to sibling tabs' workers.
  */
 import { sha256 } from "@noble/hashes/sha2";
-import { KVService, ServiceContext } from "@tinycloud/sdk-services";
+import { KVService } from "@tinycloud/sdk-services/kv";
+import { ServiceContext } from "@tinycloud/sdk-services/context";
 import { initialized, tinycloud, tcwSession } from "@tinycloud/web-sdk-wasm";
 
 import { Replica } from "./engine.js";

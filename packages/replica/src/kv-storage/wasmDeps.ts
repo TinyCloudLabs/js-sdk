@@ -4,7 +4,8 @@
  * production worker entry and test workers that run the same signing path.
  * Call after `initialized` resolves.
  */
-import { KVService, ServiceContext } from "@tinycloud/sdk-services";
+import { KVService } from "@tinycloud/sdk-services/kv";
+import { ServiceContext } from "@tinycloud/sdk-services/context";
 import { tinycloud, tcwSession } from "@tinycloud/web-sdk-wasm";
 
 import { ReplicaError, ReplicaErrorCode } from "../errors.js";

@@ -1054,4 +1054,79 @@ describe.skipIf(!REAL_NODE_BIN)("node-sdk replication against a real node", () =
       await rm(profile.profileDir, { recursive: true, force: true });
     }
   }, 120_000);
+
+  test("developer mode on: a real sync cycle leaves first-segment paths only and no full key", async () => {
+    const profile = await guardedProfile("tc848-sync-log-");
+    const events: ReplicationEvent[] = [];
+    const node = new TinyCloudNode({
+      host,
+      signer: new PrivateKeySigner(RESTORE_PRIVATE_KEY),
+      wasmBindings: new NodeWasmBindings(),
+      domain: "replication.test",
+      autoCreateSpace: true,
+      autoBootstrapAccount: false,
+      enablePublicSpace: false,
+      requestLog: true,
+      replication: {
+        enabled: true,
+        prefixes: ["notes/"],
+        storage: profile.storage,
+        profileDir: profile.profileDir,
+        profileGuard: profile.guard,
+        mode: "foreground",
+        onEvent: (event) => events.push(event),
+      },
+    });
+    try {
+      await node.signIn();
+      await node.replication!.sync();
+      expect((await node.kv.put("notes/sync-log-seed", "sync-log-v0")).ok).toBe(true);
+      await node.replication!.sync();
+
+      const rows = node.requests!.snapshot();
+      for (const row of rows) {
+        // Replication-sourced rows carry no path or space.
+        if (row.service === "sync") {
+          expect(row.path).toBeNull();
+          expect(row.space).toBeNull();
+        }
+        // A path is at most its first segment ("notes/"), or redacted.
+        if (row.path !== null) expect(row.path).toMatch(/^([^/]+\/|\[redacted\])$/);
+      }
+      expect(JSON.stringify(rows)).not.toContain("sync-log-seed");
+    } finally {
+      await node.replication?.close();
+      await rm(profile.profileDir, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  test("developer mode off: a real sync cycle creates no request log", async () => {
+    const profile = await guardedProfile("tc848-sync-log-off-");
+    const node = new TinyCloudNode({
+      host,
+      signer: new PrivateKeySigner(RESTORE_PRIVATE_KEY),
+      wasmBindings: new NodeWasmBindings(),
+      domain: "replication.test",
+      autoCreateSpace: true,
+      autoBootstrapAccount: false,
+      enablePublicSpace: false,
+      replication: {
+        enabled: true,
+        prefixes: ["notes/"],
+        storage: profile.storage,
+        profileDir: profile.profileDir,
+        profileGuard: profile.guard,
+        mode: "foreground",
+        onEvent: () => undefined,
+      },
+    });
+    try {
+      await node.signIn();
+      await node.replication!.sync();
+      expect(node.requests).toBeUndefined();
+    } finally {
+      await node.replication?.close();
+      await rm(profile.profileDir, { recursive: true, force: true });
+    }
+  }, 120_000);
 });

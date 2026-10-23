@@ -2339,7 +2339,7 @@
       "id": "tinycloud.apps.context",
       "version": 1,
       "title": "Personal apps context",
-      "description": "Personal records kept in the user's TinyCloud: weight, workouts, goals, todos, anything they track. Use it whenever the user asks to log, record, track, add, look up, list or sum up something about their life, even without mentioning TinyCloud. Call it first: it returns the rules, the user's local time and their apps.",
+      "description": "Read the connected user's TinyCloud personal-record catalog, local time and record-handling rules. Call first when the user requests a personal-record task. Supplying an IANA timezone saves or replaces their timezone setting for later calls. Do not use personal records to store credentials, payment-card data, government identifiers or protected health information.",
       "input": {
         "type": "object",
         "properties": {
@@ -3507,7 +3507,8 @@
         "local-owner-key"
       ],
       "effects": [
-        "read"
+        "read",
+        "local_write"
       ],
       "sensitivity": {
         "input": true,
@@ -3570,7 +3571,7 @@
       "id": "tinycloud.apps.query",
       "version": 1,
       "title": "Query personal records",
-      "description": "Answer questions over many personal records using a fast, searchable copy. List every app and kind covered; the server checks and rebuilds their copy before running one SELECT or WITH query with bound params. COPY_PARTIAL means retry with the remaining kinds before answering.",
+      "description": "Answer the user's question over their personal records using an optional searchable copy. Requires separate copy approval. List every app and kind covered; the server writes or replaces their derived SQL copy before running one SELECT or WITH query with bound params. Canonical records are unchanged. COPY_PARTIAL means the answer is incomplete; continue with the remaining kinds before answering.",
       "input": {
         "type": "object",
         "properties": {
@@ -4854,7 +4855,9 @@
         "local-owner-key"
       ],
       "effects": [
-        "read"
+        "read",
+        "write",
+        "destructive"
       ],
       "sensitivity": {
         "input": true,

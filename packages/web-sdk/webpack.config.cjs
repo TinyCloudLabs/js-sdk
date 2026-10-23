@@ -220,4 +220,26 @@ const gatedCjsConfig = {
   output: { ...replicaCjsConfig.output, filename: "replica-gated.cjs" },
 };
 
-module.exports = [esmConfig, cjsConfig, replicaEsmConfig, replicaCjsConfig, gatedEsmConfig, gatedCjsConfig];
+// Headless subpath (`@tinycloud/web-sdk/credentials`). Built from the base
+// configs only: no replica externals or plugins, so index/replica are unchanged.
+const credentialsEsmConfig = {
+  ...esmConfig,
+  entry: "./src/credentials-subpath.ts",
+  output: { ...esmConfig.output, filename: "credentials.mjs" },
+};
+const credentialsCjsConfig = {
+  ...cjsConfig,
+  entry: "./src/credentials-subpath.ts",
+  output: { ...cjsConfig.output, filename: "credentials.cjs" },
+};
+
+module.exports = [
+  esmConfig,
+  cjsConfig,
+  replicaEsmConfig,
+  replicaCjsConfig,
+  gatedEsmConfig,
+  gatedCjsConfig,
+  credentialsEsmConfig,
+  credentialsCjsConfig,
+];

@@ -13,7 +13,7 @@ import {
   type CredentialRequirement,
   type UnifiedPolicyV2,
 } from "@tinycloud/sdk-core";
-import { inspectShare, ShareRecipientClient, type ShareMetadata } from "@tinycloud/share-sdk";
+import { inspectShare, ShareRecipientClient, type ShareMetadata } from "@tinycloud/share-sdk/web-recipient";
 import { ed25519PublicKeyFromDidKey, type ShareEnvelopeV3 } from "@tinycloud/share-envelope";
 import { CredentialsService, type CredentialClient } from "../credentials";
 import { SessionReceiverCredentialCustody } from "./receiver-credentials";
@@ -33,7 +33,7 @@ import type {
   ShareReceiverRecipient,
 } from "./types";
 
-const DEFAULT_CREDENTIAL_DISCOVERY = "https://credentials.org/.well-known/opencredentials";
+const DEFAULT_CREDENTIAL_DISCOVERY = "https://witness.credentials.org/.well-known/opencredentials";
 
 export interface ShareReceiverServiceOptions {
   readonly origin?: string;
