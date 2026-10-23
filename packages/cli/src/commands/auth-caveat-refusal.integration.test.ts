@@ -43,14 +43,29 @@ interface CliResult {
   exitCode: number;
 }
 
-/** A TinyCloud node and OpenKey stand-in that records every request it receives. */
+/** What the CLI prints once an approval flow has started. */
+const APPROVAL_STARTED = /\/delegate|Open this URL|Opening browser/;
+
+/**
+ * Runs the CLI against a stand-in node/OpenKey server that records every
+ * request. A request or a printed approval URL kills the CLI and fails the
+ * test immediately, so a missing refusal never waits on an approval.
+ */
 async function runCli(args: string[], files: Record<string, string> = {}): Promise<CliResult> {
   const home = await mkdtemp(join(tmpdir(), "tc1856-"));
   homes.push(home);
   for (const [name, content] of Object.entries(files)) await writeFile(join(home, name), content);
   const requests: string[] = [];
+  const violation = Promise.withResolvers<never>();
+  let kill = () => {};
+  const abort = (reason: string) => {
+    kill();
+    violation.reject(new Error(`Refusal missing: ${reason}`));
+  };
   const server = Bun.serve({ port: 0, fetch(request) {
-    requests.push(`${request.method} ${new URL(request.url).pathname}`);
+    const path = `${request.method} ${new URL(request.url).pathname}`;
+    requests.push(path);
+    abort(`the CLI contacted ${path}`);
     return new Response("unexpected request", { status: 500 });
   } });
   servers.push(server);
@@ -63,8 +78,19 @@ async function runCli(args: string[], files: Record<string, string> = {}): Promi
     env: { ...process.env, HOME: home, TC_HOME: home, TC_OPENKEY_HOST: server.url.origin, TC_OPENKEY_API_HOST: server.url.origin },
     stdin: "ignore", stdout: "pipe", stderr: "pipe",
   });
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+  kill = () => child.kill("SIGKILL");
+  const collect = async (stream: ReadableStream<Uint8Array>, watch: boolean): Promise<string> => {
+    const decoder = new TextDecoder();
+    let text = "";
+    for await (const chunk of stream) {
+      text += decoder.decode(chunk, { stream: true });
+      if (watch && APPROVAL_STARTED.test(text)) abort("an approval URL was printed");
+    }
+    return text;
+  };
+  const [stdout, stderr, exitCode] = await Promise.race([
+    Promise.all([collect(child.stdout, true), collect(child.stderr, true), child.exited]),
+    violation.promise,
   ]);
   return { requests, output: `${stdout}\n${stderr}`, exitCode };
 }
@@ -116,9 +142,14 @@ const limited: PermissionEntry = {
 const profile = { name: PROFILE, host: "http://127.0.0.1:1", chainId: 1, spaceName: "default", did: "did:key:prior", authMethod: "openkey" } as unknown as ProfileConfig;
 
 test("the secrets escalation and agent approval refuse a limited permission before any approval or fetch", async () => {
-  const fetchSpy = spyOn(globalThis, "fetch");
+  const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(() => {
+    throw new Error("Refusal missing: fetch was called");
+  });
   const acquisitions: unknown[] = [];
-  const openKeyAcquisition = async (...args: unknown[]) => { acquisitions.push(args); throw new Error("must not be called"); };
+  const openKeyAcquisition = async (...args: unknown[]): Promise<never> => {
+    acquisitions.push(args);
+    throw new Error("Refusal missing: the approval was requested");
+  };
   try {
     const node = { hasRuntimePermissions: () => false } as unknown as Parameters<typeof ensureDelegationAuthority>[0]["node"];
     const shared = {
@@ -136,11 +167,18 @@ test("the secrets escalation and agent approval refuse a limited permission befo
 });
 
 test("the browser approval flow refuses a limited permission before listening, printing a URL or fetching", async () => {
-  const fetchSpy = spyOn(globalThis, "fetch");
-  const stderrSpy = spyOn(console, "error");
+  const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(() => {
+    throw new Error("Refusal missing: fetch was called");
+  });
+  // Printing the approval URL is the first output of either flow. The callback flow prints from
+  // inside a server callback, so a missing refusal is surfaced through a rejected promise.
+  const violation = Promise.withResolvers<never>();
+  const stderrSpy = spyOn(console, "error").mockImplementation(() => {
+    violation.reject(new Error("Refusal missing: the approval flow printed output"));
+  });
   try {
     for (const paste of [false, true]) {
-      await expect(startAuthFlow("did:key:prior", { permissions: [limited], paste, noPopup: true }))
+      await expect(Promise.race([startAuthFlow("did:key:prior", { permissions: [limited], paste, noPopup: true }), violation.promise]))
         .rejects.toMatchObject({ code: "CAVEATS_UNSUPPORTED", exitCode: 2 });
     }
     expect(stderrSpy).not.toHaveBeenCalled();
