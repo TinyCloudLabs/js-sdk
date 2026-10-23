@@ -897,6 +897,7 @@ export class TinyCloudWeb {
       await node.restoreSession(restoreDataFromPersisted(loaded.data));
       assertNotSignedOut();
       this.resetSessionScopedCaches();
+      this.uiClient.armPrefetch();
       this._sessionRestoreStatus = "restored";
       return {
         status: "restored",
@@ -988,6 +989,7 @@ export class TinyCloudWeb {
     await node.signIn(options);
     assertNotSignedOut();
     this.resetSessionScopedCaches();
+    this.uiClient.armPrefetch();
     const session = node.session;
     if (!session) throw new Error("Sign-in completed but no session available");
     // Explicit logout never permits an older tab's persisted proof to satisfy the next sign-in.

@@ -1,6 +1,7 @@
 import { createUiApi, type TinyCloudUI, type UiTarget } from "./api";
 import { createPanelClient, type ClientSource } from "./client";
 import type { PanelDataFactory } from "./data";
+import { armPanelPrefetch } from "./panel-data-loader";
 import { resolveUiConfig, type UiConfig } from "./config";
 import { canRenderUi } from "./frame-guard";
 import { HOST_API_VERSION, REGISTRY_KEY, createHostRuntime, type HostRuntime } from "./host";
@@ -21,6 +22,8 @@ export interface UiClientHandle {
   toast(request: ToastRequest): boolean;
   /** Prompts this client opens. `uiEnabled` is false for `ui: false` and detached clients. */
   readonly promptScope: PromptScope;
+  /** Arms the background panel-data pull for this client. Call once sign-in or restore has produced a session. */
+  armPrefetch(): void;
 }
 
 export interface UiClientOptions {
@@ -63,6 +66,7 @@ function detachedHandle(): UiClientHandle {
     unregister() {},
     toast: () => false,
     promptScope: createPromptScope(false),
+    armPrefetch() {},
   };
 }
 
@@ -111,5 +115,8 @@ export function registerUiClient(options: UiClientOptions): UiClientHandle {
       return runtime.toast(request, id);
     },
     promptScope,
+    armPrefetch() {
+      if (target) armPanelPrefetch(panel.client, () => options.source.waitForAccountRegistrySync?.() ?? Promise.resolve());
+    },
   };
 }

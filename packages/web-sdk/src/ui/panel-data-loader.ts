@@ -5,6 +5,10 @@
  * reaches panel-data-entry, through a dynamic import() that webpack externalizes.
  */
 import type { PanelDataFactory, PanelDataHost, PanelDataSource } from "./data";
+import type { PanelClient } from "./slots";
+
+/** Code-split point. The adapter must stay out of the eager root, so a static import cannot be used here. */
+const loadEntry = () => import("./panel-data-entry");
 
 /** Production panel data: a lazy source over the real adapter. */
 export function lazyRealPanelData(host: PanelDataHost, appName: () => string): PanelDataFactory {
@@ -12,7 +16,7 @@ export function lazyRealPanelData(host: PanelDataHost, appName: () => string): P
     let source: Promise<PanelDataSource> | undefined;
     // A failed chunk load clears the memo, so the next read retries the import.
     const ready = (): Promise<PanelDataSource> => {
-      source ??= import("./panel-data-entry")
+      source ??= loadEntry()
         .then((entry) => entry.createRealPanelData(host, client, appName()))
         .catch((error: unknown) => {
           source = undefined;
@@ -46,4 +50,14 @@ export function lazyRealPanelData(host: PanelDataHost, appName: () => string): P
       storage: async () => (await ready()).storage(),
     };
   };
+}
+
+/** Sign-in or restore: arms the background pull. The state lives in the lazy entry; this wrapper is the only eager cost. */
+export function armPanelPrefetch(client: PanelClient, registrySettled: () => Promise<void>): void {
+  void loadEntry().then((entry) => entry.armPanelPrefetch(client, registrySettled), () => undefined);
+}
+
+/** Panel open or launcher hover/focus: starts an armed pull now, skipping the idle gate. */
+export function intentPanelPrefetch(client: PanelClient | undefined): void {
+  if (client) void loadEntry().then((entry) => entry.intentPanelPrefetch(client), () => undefined);
 }

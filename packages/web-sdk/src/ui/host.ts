@@ -1,5 +1,6 @@
 import { createButton, type ButtonView } from "./button";
 import type { PanelClientHandle } from "./client";
+import { intentPanelPrefetch } from "./panel-data-loader";
 import type { ResolvedUiConfig } from "./config";
 import type { PanelHandle, ShellLayout } from "./panel";
 import type * as PanelEntry from "./panel-entry";
@@ -263,6 +264,7 @@ export function createHostRuntime(): HostRuntime {
    * stand-in shows loading, then a neutral error with Retry if the chunk fails.
    */
   function requestPanel(): void {
+    intentPanelPrefetch(activeEntry()?.registration.handle.client);
     const owner = mounted;
     if (!owner || owner.panel || loadingFor === owner) return;
     if (panelModule) {
