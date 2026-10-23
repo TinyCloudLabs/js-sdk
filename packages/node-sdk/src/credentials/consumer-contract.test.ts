@@ -17,7 +17,11 @@ if (!existsSync(SDK_CORE_INDEX)) {
   }
 }
 
-/** web-sdk webpack config: unprefixed `resolve.fallback` keys whose value is `require.resolve(...)`. `false` entries are disabled, not polyfilled. */
+/**
+ * web-sdk webpack config: `resolve.fallback` keys whose value is `require.resolve(...)`. `false` entries are disabled, not polyfilled.
+ * A bare name and its `node:` spelling are treated as the same builtin here, so removing only one of the two spellings from the
+ * config is not detected by this test; the webpack build itself is what proves each spelling resolves.
+ */
 const WEB_SDK_WEBPACK_CONFIG = join(WEB_SDK, "webpack.config.cjs");
 
 function webSdkPolyfilledBuiltins(): string[] {
@@ -99,7 +103,8 @@ test("no credentials source file imports a Node builtin directly", () => {
   const offenders: string[] = [];
   for (const file of readdirSync(srcDir)) {
     if (!file.endsWith(".ts") || file.endsWith(".test.ts")) continue;
-    for (const m of readFileSync(join(srcDir, file), "utf8").matchAll(/(?:from|import)\s*\(?\s*["']([^"']+)["']/g)) {
+    // Static and dynamic imports and require() calls; a bare child_process-style import is only visible to this source scan, not to the bundle check above.
+    for (const m of readFileSync(join(srcDir, file), "utf8").matchAll(/(?:from|import|require)\s*\(?\s*["']([^"']+)["']/g)) {
       if (builtins.has(m[1]!)) offenders.push(`${file}: ${m[1]}`);
     }
   }
@@ -120,7 +125,11 @@ test("strict consumer typecheck resolves both credentials subpaths with real dec
     const emitDir = join(dir, "web-sdk-types");
     writeFileSync(join(dir, "emit.tsconfig.json"), JSON.stringify({
       extends: join(WEB_SDK, "tsconfig.json"),
-      compilerOptions: { noEmit: false, declaration: true, emitDeclarationOnly: true, declarationMap: false, sourceMap: false, outDir: emitDir },
+      // Explicit typeRoots: this tsconfig lives in the OS tmpdir, where `types: ["node"]` (web-sdk's base config) cannot be found by walking up from the config.
+      compilerOptions: {
+        noEmit: false, declaration: true, emitDeclarationOnly: true, declarationMap: false, sourceMap: false, outDir: emitDir,
+        typeRoots: [join(WEB_SDK, "node_modules/@types"), resolve(NODE_SDK, "../../node_modules/@types")],
+      },
       files: [join(WEB_SDK, "src/credentials-subpath.ts")],
       include: [],
     }));
