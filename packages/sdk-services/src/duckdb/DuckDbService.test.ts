@@ -180,6 +180,28 @@ describe("DuckDbService 413 request vs response classification", () => {
     }
   });
 
+  test("uncoded 413 on executeStatement maps to DUCKDB_REQUEST_TOO_LARGE", async () => {
+    const service = serviceAnswering("JSON body exceeds complete envelope limit");
+
+    const result = await service.executeStatementOnDb("default", "insert_row", [1]);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("DUCKDB_REQUEST_TOO_LARGE");
+    }
+  });
+
+  test("uncoded 413 on import maps to DUCKDB_REQUEST_TOO_LARGE", async () => {
+    const service = serviceAnswering("JSON body exceeds complete envelope limit");
+
+    const result = await service.importOnDb("default", new Uint8Array([1, 2, 3]));
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("DUCKDB_REQUEST_TOO_LARGE");
+    }
+  });
+
   test("uncoded 413 on a query maps to DUCKDB_RESPONSE_TOO_LARGE", async () => {
     const service = serviceAnswering("Response too large: 2048 bytes");
 

@@ -627,6 +627,39 @@ export class SQLService extends BaseService implements ISQLService {
   }
 }
 
+function firstSqlToken(sql: string): string | undefined {
+  let index = 0;
+
+  while (index < sql.length) {
+    while (index < sql.length && /\s/.test(sql[index])) {
+      index++;
+    }
+
+    if (sql.startsWith("--", index)) {
+      const newline = sql.indexOf("\n", index + 2);
+      if (newline === -1) {
+        return undefined;
+      }
+      index = newline + 1;
+      continue;
+    }
+
+    if (sql.startsWith("/*", index)) {
+      const end = sql.indexOf("*/", index + 2);
+      if (end === -1) {
+        return undefined;
+      }
+      index = end + 2;
+      continue;
+    }
+
+    break;
+  }
+
+  const match = /^[A-Za-z_]+/.exec(sql.slice(index));
+  return match?.[0].toLowerCase();
+}
+
 function validateMigrationOptions(options: SqlMigrationApplyOptions): string | null {
   if (!options || typeof options !== "object") {
     return "SQL migrations require options";
@@ -688,37 +721,4 @@ function rowValue(row: unknown, index: number): unknown {
     return values[index];
   }
   return undefined;
-}
-
-function firstSqlToken(sql: string): string | undefined {
-  let index = 0;
-
-  while (index < sql.length) {
-    while (index < sql.length && /\s/.test(sql[index])) {
-      index++;
-    }
-
-    if (sql.startsWith("--", index)) {
-      const newline = sql.indexOf("\n", index + 2);
-      if (newline === -1) {
-        return undefined;
-      }
-      index = newline + 1;
-      continue;
-    }
-
-    if (sql.startsWith("/*", index)) {
-      const end = sql.indexOf("*/", index + 2);
-      if (end === -1) {
-        return undefined;
-      }
-      index = end + 2;
-      continue;
-    }
-
-    break;
-  }
-
-  const match = /^[A-Za-z_]+/.exec(sql.slice(index));
-  return match?.[0].toLowerCase();
 }

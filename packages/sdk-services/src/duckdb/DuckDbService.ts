@@ -448,7 +448,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
 
   private async handleErrorResponse(
     response: FetchResponse,
-    operation: string,
+    operation: string
   ): Promise<Result<never>> {
     const errorText = await response.text();
     const meta = responseErrorMeta(response.status, response.statusText, errorText);

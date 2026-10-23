@@ -871,6 +871,17 @@ describe("SQLService 413 request vs response classification", () => {
     }
   });
 
+  test("uncoded 413 on executeStatement maps to SQL_REQUEST_TOO_LARGE", async () => {
+    const service = serviceAnswering("JSON body exceeds complete envelope limit");
+
+    const result = await service.executeStatementOnDb("default", "insert_note", ["a"]);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("SQL_REQUEST_TOO_LARGE");
+    }
+  });
+
   test("uncoded 413 on a query maps to SQL_RESPONSE_TOO_LARGE", async () => {
     const service = serviceAnswering("Response too large: 2048 bytes");
 
