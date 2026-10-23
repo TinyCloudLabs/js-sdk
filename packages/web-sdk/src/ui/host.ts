@@ -8,6 +8,7 @@ import { HOST_PARTS } from "./parts";
 import { toastStore } from "./parts/toasts";
 import type { ToastRequest } from "./toast-store";
 import { createButtonHideStore, defaultLocalStorage, FALLBACK_APP_ID, resolveUiAppId, type HideScope } from "./persistence";
+import { watchPhone } from "./phone";
 import type { HostContext, SectionId, StatusCode } from "./slots";
 import { createStatusBoard } from "./status";
 import { text } from "./strings";
@@ -87,6 +88,9 @@ export function createHostRuntime(): HostRuntime {
   let signInSeq = 0;
   let isPanelOpen = false;
   let layout: ShellLayout = "drawer";
+  /** Phone state while mounted. Phones show the full page; `layout` keeps the desktop choice. */
+  let phone = false;
+  let stopPhone: (() => void) | undefined;
   let activeSection: SectionId | undefined;
   let buttonHidden = false;
   let mounted: Mounted | undefined;
@@ -147,6 +151,11 @@ export function createHostRuntime(): HostRuntime {
     return requested;
   }
 
+  /** What the shell shows. Phones always get the full page; `layout` keeps the desktop choice for a resize back. */
+  function shownLayout(): ShellLayout {
+    return phone ? "page" : layout;
+  }
+
   const context: HostContext = {
     client: () => activeEntry()?.registration.handle.client,
     onClientChange(cb) {
@@ -188,7 +197,10 @@ export function createHostRuntime(): HostRuntime {
     const available = panelModule.availableSections(context);
     const current = available.find((section) => section.id === activeSection) ?? available[0];
     activeSection = current?.id;
-    panel.setLayout(layout, (primaryConfig()?.mode ?? "both") === "both");
+    panel.setLayout(shownLayout(), {
+      showLayoutToggle: !phone && (primaryConfig()?.mode ?? "both") === "both",
+      phone,
+    });
     panel.setAppLabel(context.appLabel());
     panel.setNav(available, activeSection);
     if (!isPanelOpen || !current) return;
@@ -206,7 +218,8 @@ export function createHostRuntime(): HostRuntime {
   function syncDom(): void {
     if (!mounted) return;
     mounted.host.setAttribute("data-tinycloud-ui", isPanelOpen ? "open" : buttonHidden ? "hidden" : "closed");
-    mounted.layer.setAttribute("data-layout", layout);
+    mounted.layer.setAttribute("data-layout", shownLayout());
+    mounted.layer.toggleAttribute("data-phone", phone);
     mounted.layer.toggleAttribute("data-panel-open", isPanelOpen);
     (mounted.panel ?? mounted.pending).setOpen(isPanelOpen);
     mounted.button?.setExpanded(isPanelOpen);
@@ -217,7 +230,7 @@ export function createHostRuntime(): HostRuntime {
   function openAt(requested: ShellLayout, section?: SectionId): void {
     if (!mounted) return;
     const wasOpen = isPanelOpen;
-    const previous = layout;
+    const previous = shownLayout();
     layout = resolveLayout(requested);
     if (section !== undefined) activeSection = section;
     isPanelOpen = true;
@@ -228,7 +241,7 @@ export function createHostRuntime(): HostRuntime {
       return;
     }
     renderPanel();
-    if (!wasOpen || layout !== previous) panel.focusFirst();
+    if (!wasOpen || shownLayout() !== previous) panel.focusFirst();
   }
 
   /** Closing never changes the hidden flag. Focus returns to the button only when the shell owned focus. */
@@ -335,6 +348,9 @@ export function createHostRuntime(): HostRuntime {
     const config = primaryConfig();
     if (!config) return;
     mounted = mount(config);
+    const watch = watchPhone(onPhoneChange);
+    phone = watch.phone;
+    stopPhone = watch.stop;
     mounted.button?.setStatus(board.top());
     buttonHidden = config.button && hideStore.read(hideScope());
     syncDom();
@@ -350,11 +366,24 @@ export function createHostRuntime(): HostRuntime {
     isPanelOpen = false;
     buttonHidden = false;
     layout = "drawer";
+    stopPhone?.();
+    stopPhone = undefined;
+    phone = false;
   }
 
   function notifyClientChange(): void {
     for (const listener of [...clientListeners]) listener();
     renderPanel();
+  }
+
+  /** A breakpoint crossing keeps open state and section. Focus moves to the panel if the replaced section held it. */
+  function onPhoneChange(next: boolean): void {
+    if (!mounted || phone === next) return;
+    phone = next;
+    const hadFocus = mounted.root.activeElement !== null;
+    syncDom();
+    renderPanel();
+    if (hadFocus && mounted.root.activeElement === null) mounted.panel?.focusFirst();
   }
 
   return {

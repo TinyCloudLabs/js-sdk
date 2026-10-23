@@ -9,10 +9,6 @@ const TOAST_CSS = `
 .layer[data-position="bottom-right"] .toasts{right:var(--tinycloud-ui-offset-inline,12px)}
 .layer[data-position="bottom-left"] .toasts{left:var(--tinycloud-ui-offset-inline,12px)}
 .layer[data-position="bottom-center"] .toasts{left:50%;transform:translateX(-50%)}
-/* On phones the drawer is a bottom sheet capped at 100dvh - 160px. Lift the stack above that cap. */
-@media (max-width:639px){
-.layer[data-panel-open][data-layout="drawer"] .toasts{bottom:calc(100dvh - 160px + 8px)}
-}
 .toast{display:flex;align-items:flex-start;gap:8px;padding:10px 12px;border:1px solid #d1d5db;border-left-width:4px;border-radius:8px;background:#fff;color:#111827;box-shadow:0 4px 12px rgba(0,0,0,.12);pointer-events:auto}
 .toast--info{border-left-color:#2563eb}
 .toast--success{border-left-color:#16a34a}

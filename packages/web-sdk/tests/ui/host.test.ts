@@ -17,7 +17,7 @@ type Loose = Record<PropertyKey, unknown>;
 
 const g = globalThis as unknown as Loose;
 const ORIGIN = "https://app.example";
-const GLOBAL_NAMES = ["window", "document", "location", "localStorage", "HTMLElement", "Element", "Event", "KeyboardEvent"];
+const GLOBAL_NAMES = ["window", "document", "location", "localStorage", "HTMLElement", "Element", "Event", "KeyboardEvent", "matchMedia"];
 
 let page: Window;
 const saved = new Map<string, unknown>();
@@ -26,6 +26,16 @@ const saved = new Map<string, unknown>();
 // opaque-origin tests override them through this view of the global window.
 const overrides = new Map<PropertyKey, unknown>();
 let view: Window;
+
+type PhoneListener = (event: MediaQueryListEvent) => void;
+// jsdom has no matchMedia. The stub holds one phone flag and notifies listeners on change.
+let phoneMatch = false;
+let phoneListeners = new Set<PhoneListener>();
+
+function setPhone(next: boolean): void {
+  phoneMatch = next;
+  for (const listener of [...phoneListeners]) listener({ matches: next } as MediaQueryListEvent);
+}
 
 beforeAll(() => {
   for (const name of GLOBAL_NAMES) saved.set(name, g[name]);
@@ -60,6 +70,20 @@ beforeEach(() => {
   delete g[REGISTRY_KEY];
   page.document.body.innerHTML = "";
   page.localStorage.clear();
+  phoneMatch = false;
+  phoneListeners = new Set();
+  g.matchMedia = (query: string) => ({
+    media: query,
+    get matches() {
+      return phoneMatch;
+    },
+    addEventListener: (_type: string, listener: PhoneListener) => {
+      phoneListeners.add(listener);
+    },
+    removeEventListener: (_type: string, listener: PhoneListener) => {
+      phoneListeners.delete(listener);
+    },
+  });
 });
 
 afterEach(() => {
@@ -279,6 +303,73 @@ describe("open, close, hide", () => {
     expect(layer().hasAttribute("data-panel-open")).toBe(true);
     buttonEl()?.click();
     expect(layer().hasAttribute("data-panel-open")).toBe(false);
+  });
+});
+
+describe("phone layout", () => {
+  const layer = () => shadow().querySelector(".layer") as HTMLElement;
+  const closeButton = () => shadow().querySelector("button[aria-label='Close']") as HTMLButtonElement | null;
+  const navItems = () => [...shadow().querySelectorAll<HTMLButtonElement>(".nav-i")];
+
+  test("phones open the full page, never the drawer", async () => {
+    setPhone(true);
+    const ui = mountClient();
+    ui.api.open();
+    await panelMounted();
+    expect(layer().getAttribute("data-layout")).toBe("page");
+    expect(layer().hasAttribute("data-phone")).toBe(true);
+    expect(ui.api.isOpen).toBe(true);
+  });
+
+  test("the launcher opens the full page on phones", async () => {
+    setPhone(true);
+    const ui = mountClient();
+    buttonEl()?.click();
+    await panelMounted();
+    expect(ui.api.isOpen).toBe(true);
+    expect(layer().getAttribute("data-layout")).toBe("page");
+  });
+
+  test("a phone close control closes the page", async () => {
+    setPhone(true);
+    const ui = mountClient();
+    ui.api.open();
+    await panelMounted();
+    closeButton()?.click();
+    expect(ui.api.isOpen).toBe(false);
+  });
+
+  test("Escape closes the page on a phone", async () => {
+    setPhone(true);
+    const ui = mountClient();
+    ui.api.open();
+    await panelMounted();
+    const panel = shadow().querySelector("[role='dialog']") as HTMLElement;
+    panel.dispatchEvent(new page.KeyboardEvent("keydown", { key: "Escape", bubbles: true, composed: true }));
+    expect(ui.api.isOpen).toBe(false);
+  });
+
+  test("a breakpoint crossing keeps open state and section", async () => {
+    const ui = mountClient();
+    ui.api.open();
+    await panelMounted();
+    navItems()[1]?.click();
+    setPhone(true);
+    expect(ui.api.isOpen).toBe(true);
+    expect(layer().getAttribute("data-layout")).toBe("page");
+    expect(navItems()[1]?.getAttribute("aria-current")).toBe("page");
+    setPhone(false);
+    expect(ui.api.isOpen).toBe(true);
+    expect(layer().getAttribute("data-layout")).toBe("drawer");
+    expect(navItems()[1]?.getAttribute("aria-current")).toBe("page");
+  });
+
+  test("leaving the phone breakpoint with the panel closed stays closed", () => {
+    setPhone(true);
+    const ui = mountClient();
+    setPhone(false);
+    expect(ui.api.isOpen).toBe(false);
+    expect(layer()?.hasAttribute("data-phone")).toBe(false);
   });
 });
 

@@ -10,12 +10,19 @@ export interface NavItem {
   readonly labelCode: StringKey;
 }
 
+export interface LayoutOptions {
+  /** Shows the switch control. Callers hide it on phones and when `ui.mode` fixes the layout. */
+  readonly showLayoutToggle: boolean;
+  /** Phone: the close control is a 44px icon, never the text back action. */
+  readonly phone: boolean;
+}
+
 export interface PanelHandle {
   readonly el: HTMLElement;
   /** Holds the one mounted section while the shell is open. */
   readonly main: HTMLElement;
   setOpen(open: boolean): void;
-  setLayout(layout: ShellLayout, showLayoutToggle: boolean): void;
+  setLayout(layout: ShellLayout, options: LayoutOptions): void;
   /** App name shown after "TinyCloud". Undefined hides it and the page back label. */
   setAppLabel(label: string | undefined): void;
   setNav(items: readonly NavItem[], active: SectionId | undefined): void;
@@ -66,6 +73,7 @@ export function createPanel(options: PanelOptions): PanelHandle {
   });
 
   let layout: ShellLayout = "drawer";
+  let phone = false;
   let appLabel: string | undefined;
   let nextLayout: ShellLayout = "page";
 
@@ -86,7 +94,7 @@ export function createPanel(options: PanelOptions): PanelHandle {
   const layoutToggle = actionButton("", () => options.onLayout(nextLayout));
   layoutToggle.hidden = true;
 
-  // One close control. Drawer: icon button. Page: text action that returns to the host app.
+  // One close control. Icon on drawers and phones; on desktop pages, a text action back to the host app.
   const close = document.createElement("button");
   close.type = "button";
   close.addEventListener("click", () => options.onClose());
@@ -98,7 +106,7 @@ export function createPanel(options: PanelOptions): PanelHandle {
   glyph.append(glyphPath);
 
   function paintClose(): void {
-    if (layout === "drawer") {
+    if (layout === "drawer" || phone) {
       close.className = "icon-btn ring";
       close.setAttribute("aria-label", text("panel.close"));
       close.replaceChildren(glyph);
@@ -151,12 +159,13 @@ export function createPanel(options: PanelOptions): PanelHandle {
     setOpen(open) {
       el.hidden = !open;
     },
-    setLayout(next, showLayoutToggle) {
+    setLayout(next, options) {
       layout = next;
+      phone = options.phone;
       el.dataset.layout = next;
       nextLayout = next === "drawer" ? "page" : "drawer";
       layoutToggle.textContent = text(next === "drawer" ? "panel.open_page" : "panel.show_sidebar");
-      layoutToggle.hidden = !showLayoutToggle;
+      layoutToggle.hidden = !options.showLayoutToggle;
       paintClose();
     },
     setAppLabel(label) {

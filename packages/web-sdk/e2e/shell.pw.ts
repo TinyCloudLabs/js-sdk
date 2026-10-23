@@ -199,10 +199,11 @@ test.describe("host layer, targets, and motion", () => {
     expect(box?.height).toBeGreaterThanOrEqual(44);
   });
 
-  test("phone drawer nav items and head actions are at least 44px tall", async ({ page }) => {
+  test("phone full page: opens as the page, targets at least 44px tall", async ({ page }) => {
     await mountHarness(page, "light");
     await page.setViewportSize({ width: 390, height: 844 });
     await openDrawer(page);
+    await expect(panel(page)).toHaveAttribute("data-layout", "page");
     const targets = panel(page).locator(".nav-i:visible, .head-actions button:visible");
     const count = await targets.count();
     expect(count).toBeGreaterThan(0);
@@ -211,6 +212,18 @@ test.describe("host layer, targets, and motion", () => {
       expect(box, `target ${i}`).not.toBeNull();
       expect(box!.height, `target ${i} height`).toBeGreaterThanOrEqual(44);
     }
+  });
+
+  test("a resize across the phone breakpoint keeps the open section", async ({ page }) => {
+    await mountHarness(page, "light");
+    await openDrawer(page);
+    await panel(page).locator(".nav-i", { hasText: "Nodes" }).click();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(panel(page)).toHaveAttribute("data-layout", "page");
+    await expect(panel(page).locator(".nav-i", { hasText: "Nodes" })).toHaveAttribute("aria-current", "page");
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await expect(panel(page)).toHaveAttribute("data-layout", "drawer");
+    await expect(panel(page).locator(".nav-i", { hasText: "Nodes" })).toHaveAttribute("aria-current", "page");
   });
 
   test("the drawer animates in when reduced motion is not requested", async ({ page }) => {

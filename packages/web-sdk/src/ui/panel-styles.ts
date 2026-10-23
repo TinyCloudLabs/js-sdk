@@ -51,9 +51,7 @@ export const PANEL_CSS = `
 .layer .panel[data-layout="page"] .sec-title{font-size:1.75rem}
 @keyframes tc-in{from{transform:translateX(104%)}to{transform:none}}
 @keyframes tc-in-l{from{transform:translateX(-104%)}to{transform:none}}
-@keyframes tc-up{from{transform:translateY(104%)}to{transform:none}}
 @media (max-width:639px){
-.layer .panel[data-layout="drawer"]{left:0;right:0;top:auto;width:auto;max-height:calc(100dvh - 160px);border-left:0;border-right:0;border-radius:20px 20px 0 0;box-shadow:0 -18px 48px -18px rgba(0,0,0,.35);animation-name:tc-up}
 .layer .panel[data-layout="page"]{grid-template-columns:minmax(0,1fr);grid-template-rows:auto auto minmax(0,1fr);grid-template-areas:"head" "nav" "main"}
 .layer .panel[data-layout="page"] .nav{flex-direction:row;flex-wrap:wrap;width:auto;border-right:0;border-bottom:1px solid #e4e4e7}
 .layer .panel[data-layout="page"] .nav-i{width:auto;min-height:44px;border-radius:999px}
