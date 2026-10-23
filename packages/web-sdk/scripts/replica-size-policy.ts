@@ -216,6 +216,13 @@ export type Tc848PanelRatchet = HardeningRatchet;
  * hardening row.
  */
 export type Tc1781DecryptExpiryRatchet = HardeningRatchet;
+/**
+ * One reviewed exact-delta admission of js-sdk #687 (TC-1801): the non-transferable share option.
+ * #687 is not a replica-owned PR, so this is a plain root row; the root ceilings rise to the bytes canonical CI measured
+ * on the #687 code head, every other ceiling stays that of the one-hour decrypt default row. Same shape as the #565
+ * hardening row.
+ */
+export type Tc1801NonTransferableShareRatchet = HardeningRatchet;
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -244,6 +251,7 @@ export type Ledger = {
   tc1777ExpiryRatchet?: Tc1777ExpiryRatchet;
   tc848PanelRatchet?: Tc848PanelRatchet;
   tc1781DecryptExpiryRatchet?: Tc1781DecryptExpiryRatchet;
+  tc1801NonTransferableShareRatchet?: Tc1801NonTransferableShareRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -802,6 +810,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc1777ExpiryRatchet !== undefined) pins.push({ row: "tc1777ExpiryRatchet", pin: root.tc1777ExpiryRatchet.sourceCommits.at(-1)! });
   if (root.tc848PanelRatchet !== undefined) pins.push({ row: "tc848PanelRatchet", pin: root.tc848PanelRatchet.sourceCommits.at(-1)! });
   if (root.tc1781DecryptExpiryRatchet !== undefined) pins.push({ row: "tc1781DecryptExpiryRatchet", pin: root.tc1781DecryptExpiryRatchet.sourceCommits.at(-1)! });
+  if (root.tc1801NonTransferableShareRatchet !== undefined) pins.push({ row: "tc1801NonTransferableShareRatchet", pin: root.tc1801NonTransferableShareRatchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -837,6 +846,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc1777ExpiryRatchet", root.tc1777ExpiryRatchet?.root.ceiling],
     ["tc848PanelRatchet", root.tc848PanelRatchet?.root.ceiling],
     ["tc1781DecryptExpiryRatchet", root.tc1781DecryptExpiryRatchet?.root.ceiling],
+    ["tc1801NonTransferableShareRatchet", root.tc1801NonTransferableShareRatchet?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -1136,6 +1146,42 @@ export const approvedTc1781DecryptExpiryRatchet: Tc1781DecryptExpiryRatchet = {
   reason: "one-hour decrypt default and secret-read coverage: +303 B (mjs) / +217 B (cjs) gzip to each web-sdk root bundle (TC-1781)",
 };
 
+/**
+ * Non-transferable share option (js-sdk #687, TC-1801), approved by Naomi, 2026-10-23: the root index.mjs / index.cjs
+ * ceilings rise from 1,462,349 / 1,404,562 to 1,462,375 / 1,404,597, the bytes canonical CI printed on the #687 code
+ * head 8109b636 merged into master 51ee7f0e (the merge base). Master measured 1,462,349 / 1,404,562 (run 39893524824
+ * on 7b92156e). Measured growth against master is +26 / +35. First-import, activation and worker ceilings are unchanged.
+ */
+export const approvedTc1801NonTransferableShareRatchet: Tc1801NonTransferableShareRatchet = {
+  label: "non-transferable share option (#687): root ceiling raised to the measured CI bytes",
+  ruling: "Approved by Naomi (2026-10-23, policy review relayed by Amos)",
+  base: "51ee7f0e9aa7a382d5150a7f1c20e9b64b36409b",
+  sourceCommits: [
+    "8109b636fbc6b21a56d11a17ea8d97d860a8435b",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39896378690",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39896378690/job/120227697556",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39896378690/job/120227697563",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 26, "index.cjs": 35 },
+    ceiling: { "index.mjs": 1462375, "index.cjs": 1404597 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 51925, "replica.cjs": 67141 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23117, "activation.cjs": 24700 },
+  },
+  worker: { delta: 0, ceiling: 822753 },
+  reason: "non-transferable share option: +26 B (mjs) / +35 B (cjs) gzip to each web-sdk root bundle (TC-1801)",
+};
+
 export type GatedOnlyRatchet = {
   label: string;
   sourceCommit: string;
@@ -1168,7 +1214,7 @@ const historicalToolchain = "Bun 1.4.3; production webpack; gzip -9 -c";
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
 export function validateLedger(value: Ledger, historicalBase = false): void {
   if (!value || !value.allowance || !Array.isArray(value.entries) ||
-      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet" && key !== "tc1436Ratchet" && key !== "tc1432Ratchet" && key !== "tc1424Ratchet" && key !== "tc1448Ratchet" && key !== "tc1443Ratchet" && key !== "tc1466Ratchet" && key !== "tc1443bRatchet" && key !== "tc1428Ratchet" && key !== "tc1476Ratchet" && key !== "tc1475Ratchet" && key !== "tc606WorkerRatchet" && key !== "masterDriftRatchet" && key !== "tc1789Ratchet" && key !== "tc1757Ratchet" && key !== "tc1777Ratchet" && key !== "tc1777ExpiryRatchet" && key !== "tc848PanelRatchet" && key !== "tc1781DecryptExpiryRatchet")) {
+      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet" && key !== "tc1436Ratchet" && key !== "tc1432Ratchet" && key !== "tc1424Ratchet" && key !== "tc1448Ratchet" && key !== "tc1443Ratchet" && key !== "tc1466Ratchet" && key !== "tc1443bRatchet" && key !== "tc1428Ratchet" && key !== "tc1476Ratchet" && key !== "tc1475Ratchet" && key !== "tc606WorkerRatchet" && key !== "masterDriftRatchet" && key !== "tc1789Ratchet" && key !== "tc1757Ratchet" && key !== "tc1777Ratchet" && key !== "tc1777ExpiryRatchet" && key !== "tc848PanelRatchet" && key !== "tc1781DecryptExpiryRatchet" && key !== "tc1801NonTransferableShareRatchet")) {
     throw new Error("Invalid packages/web-sdk/scripts/replica-size-ledger.json shape");
   }
   if (Object.keys(value.allowance).some((key) => !formats.includes(key as typeof formats[number]))) {
@@ -1308,6 +1354,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc848PanelRatchet || JSON.stringify(value.tc1781DecryptExpiryRatchet) !== JSON.stringify(approvedTc1781DecryptExpiryRatchet))) {
     throw new Error("Only Naomi's exact canonical one-hour decrypt default ratchet is approved.");
   }
+  if (value.tc1801NonTransferableShareRatchet !== undefined &&
+      (!value.tc1781DecryptExpiryRatchet || JSON.stringify(value.tc1801NonTransferableShareRatchet) !== JSON.stringify(approvedTc1801NonTransferableShareRatchet))) {
+    throw new Error("Only Naomi's exact canonical non-transferable share option ratchet is approved.");
+  }
 }
 
 /** The #606 worker ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
@@ -1371,6 +1421,14 @@ export function validateTc1781DecryptExpiryRatchetTransition(base?: Tc1781Decryp
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1781DecryptExpiryRatchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact TC-1781 one-hour decrypt default ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-1801 non-transferable share option ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc1801NonTransferableShareRatchetTransition(base?: Tc1801NonTransferableShareRatchet, current?: Tc1801NonTransferableShareRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1801NonTransferableShareRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-1801 non-transferable share ratchet may be introduced once and cannot change later.");
   }
 }
 
