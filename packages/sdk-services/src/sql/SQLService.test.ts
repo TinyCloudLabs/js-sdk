@@ -907,4 +907,89 @@ describe("SQLService 413 request vs response classification", () => {
       expect(result.error.code).toBe(ErrorCodes.SQL_RESPONSE_TOO_LARGE);
     }
   });
+
+  test("coded request 413 on a read query maps to SQL_REQUEST_TOO_LARGE, the prefix beats the action", async () => {
+    const service = serviceAnswering("sql_request_too_large: JSON body exceeds complete envelope limit");
+
+    const result = await service.query("SELECT * FROM big");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.SQL_REQUEST_TOO_LARGE);
+    }
+  });
+
+  test("bare request code 413 with no colon maps to SQL_REQUEST_TOO_LARGE", async () => {
+    const service = serviceAnswering("sql_request_too_large");
+
+    const result = await service.query("SELECT * FROM big");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.SQL_REQUEST_TOO_LARGE);
+    }
+  });
+
+  test("generic request_too_large code is ignored, so a read query stays SQL_RESPONSE_TOO_LARGE", async () => {
+    const service = serviceAnswering("request_too_large: JSON body exceeds complete envelope limit");
+
+    const result = await service.query("SELECT * FROM big");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.SQL_RESPONSE_TOO_LARGE);
+    }
+  });
+
+  test("coded request prefix beats response text on ambiguous WITH and EXPLAIN executes", async () => {
+    const service = serviceAnswering("sql_request_too_large: Response too large: 2048 bytes");
+
+    const withResult = await service.execute("WITH src AS (SELECT 1 AS id) SELECT id FROM src");
+    const explainResult = await service.execute("EXPLAIN SELECT 1");
+
+    expect(withResult.ok).toBe(false);
+    if (!withResult.ok) {
+      expect(withResult.error.code).toBe(ErrorCodes.SQL_REQUEST_TOO_LARGE);
+    }
+    expect(explainResult.ok).toBe(false);
+    if (!explainResult.ok) {
+      expect(explainResult.error.code).toBe(ErrorCodes.SQL_REQUEST_TOO_LARGE);
+    }
+  });
+
+  test("coded response prefix beats envelope text on an ambiguous WITH execute", async () => {
+    const service = serviceAnswering("sql_response_too_large: JSON body exceeds complete envelope limit");
+
+    const result = await service.execute(
+      "WITH src AS (SELECT 1 AS id) INSERT INTO notes (id) SELECT id FROM src",
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.SQL_RESPONSE_TOO_LARGE);
+    }
+  });
+
+  test("uncoded 413 with a node limit clause does not echo the limit in the message", async () => {
+    const service = serviceAnswering("JSON body exceeds complete envelope limit (limit 1024 bytes)");
+
+    const result = await service.batch([{ sql: "INSERT INTO notes (body) VALUES ('a')" }]);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.SQL_REQUEST_TOO_LARGE);
+      expect(result.error.message).not.toMatch(/1024/);
+    }
+  });
+
+  test("coded request 413 without a limit clause adds no digits to the message", async () => {
+    const service = serviceAnswering("sql_request_too_large: JSON body exceeds complete envelope limit");
+
+    const result = await service.batch([{ sql: "INSERT INTO notes (body) VALUES ('a')" }]);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.message).not.toMatch(/\d/);
+    }
+  });
 });

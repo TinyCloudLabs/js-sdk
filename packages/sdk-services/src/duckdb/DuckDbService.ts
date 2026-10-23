@@ -514,7 +514,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
 
 type SizeClass = "read" | "write" | "ambiguous";
 
-// The node names the cause with a stable code before the first colon of a 413
+// The node names the cause with a stable code, alone or before the first colon of a 413
 // body. Without a code (older nodes), the statement decides: reads answer with
 // the response size, writes with the request size. Ambiguous statements (WITH,
 // EXPLAIN, ...) use the node's envelope text, else the response size.
@@ -534,7 +534,7 @@ function duckDbSizeClass(sql: string): SizeClass {
 
 function duckDbSizeKind(errorText: string, statementClass: SizeClass): "request" | "response" {
   const colon = errorText.indexOf(":");
-  const code = colon === -1 ? "" : errorText.slice(0, colon).trim();
+  const code = (colon === -1 ? errorText : errorText.slice(0, colon)).trim();
   if (code === DUCKDB_SIZE_CODES.request) return "request";
   if (code === DUCKDB_SIZE_CODES.response) return "response";
   if (statementClass === "read") return "response";
