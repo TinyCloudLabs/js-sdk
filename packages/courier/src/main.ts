@@ -36,6 +36,10 @@ Setup & pairing (humans run these):
                                    (flag or COURIER_INVITES_PUBLIC_DIR) also writes a non-secret copy of the record there
                                    --tier trusted  request trusted status; the peer starts as strict until you confirm
   invite list                      Invites on this machine: status and expiry, no secrets
+  invite approve <invite-id> [--tier strict|trusted]
+                                   Pair a held invite. The peer starts as strict until you confirm trusted status;
+                                   --tier trusted only records that request for you to decide on
+  invite deny <invite-id>          Refuse a held invite: the invitee is told it was rejected and gets no access
   invite revoke <invite-id>        Delete the sealed invite and any pending hello or welcome
   join --stdin | --file f          Accept an invite read from stdin or a file, then send hello; waits for the reply
                                    Prefer --stdin or --file: an invite passed as an argument is visible in ps.

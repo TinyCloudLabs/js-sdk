@@ -259,26 +259,44 @@ export async function acceptA(profile: Profile, node: TinyCloudNode, art: PairAr
 }
 
 /** Step B received for a pending-A peer `handle`: validate, grant read back, mark paired, return artifact C. */
-export async function acceptB(profile: Profile, node: TinyCloudNode, art: PairArtifact, handle: string): Promise<PairArtifact> {
+export async function acceptB(
+  profile: Profile,
+  node: TinyCloudNode,
+  art: PairArtifact,
+  handle: string,
+  deps: { validatePeerDelegation: typeof validatePeerDelegation } = { validatePeerDelegation },
+): Promise<PairArtifact> {
   const peer = findPendingPeer(profile, handle);
   if (art.from.owner === profile.ownerDid) fail('bad-artifact', 'Refusing to pair with our own owner identity.');
-  const candidate: StoredPeer = {
-    ...peer,
-    ownerDid: art.from.owner,
-    courierDid: art.from.courier,
-    label: art.from.label,
-    spaceId: art.spaceId,
-    theirHandleForMe: art.peer,
-  };
-  const incoming = await validatePeerDelegation(node, profile, candidate, art.delegation!);
-  Object.assign(peer, candidate);
-  peer.inbound = { delegation: serializeDelegation(incoming.delegation), cid: incoming.cid, expiresAt: incoming.expiresAt };
-  const outgoing = await node.delegateTo(peer.courierDid, peerReadPermissions(peer.handle, profile.spaceId!), { expiry: PEER_DELEGATION_EXPIRY });
-  recordOutbound(peer, outgoing.delegation);
-  peer.status = 'paired';
-  saveProfile(profile);
-  await writePeerRecord(node, peer);
-  return artifactWithDelegation('C', profile, outgoing.delegation, peer.handle, art.peer);
+  // Snapshot: a failure restores the in-memory peer so a retry finds it pending-A again.
+  const before = JSON.parse(JSON.stringify(peer)) as StoredPeer;
+  try {
+    const candidate: StoredPeer = {
+      ...peer,
+      ownerDid: art.from.owner,
+      courierDid: art.from.courier,
+      label: art.from.label,
+      spaceId: art.spaceId,
+      theirHandleForMe: art.peer,
+    };
+    const incoming = await deps.validatePeerDelegation(node, profile, candidate, art.delegation!);
+    Object.assign(peer, candidate);
+    peer.inbound = { delegation: serializeDelegation(incoming.delegation), cid: incoming.cid, expiresAt: incoming.expiresAt };
+    // Orphan window: the outgoing delegation below is recorded on the peer only in memory until saveProfile. If writePeerRecord or
+    // saveProfile fails after this call, the catch restores the peer, the delegation is never listed, and a retry mints another.
+    // An orphaned outgoing delegation expires in 7 days (PEER_DELEGATION_EXPIRY).
+    const outgoing = await node.delegateTo(peer.courierDid, peerReadPermissions(peer.handle, profile.spaceId!), { expiry: PEER_DELEGATION_EXPIRY });
+    recordOutbound(peer, outgoing.delegation);
+    peer.status = 'paired';
+    await writePeerRecord(node, peer);
+    // Commit point: profile.json is saved last. A failure before this leaves the peer pending-A, so a retry re-runs.
+    saveProfile(profile);
+    return artifactWithDelegation('C', profile, outgoing.delegation, peer.handle, art.peer);
+  } catch (e) {
+    for (const key of Object.keys(peer)) delete (peer as unknown as Record<string, unknown>)[key];
+    Object.assign(peer, before);
+    throw e;
+  }
 }
 
 /** Step C received: validate against the awaiting-C peer, mark paired, return the pairing result. */

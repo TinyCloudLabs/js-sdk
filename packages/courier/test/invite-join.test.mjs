@@ -51,7 +51,7 @@ const artifactC = () => ({
   spaceId: `tinycloud:pkh:eip155:1:${OWNER_ADDRESS}:agents`, peer: 'e2e-peer', callMe: 'e2e-owner', issuedAt: SENT_AT,
   delegation: 'delegation-bytes', delegationExpiresAt: FUTURE,
 });
-const welcome = (overrides = {}) => ({ v: 1, inviteId: INVITE_ID, tier: 'trusted', artifactC: artifactC(), sentAt: SENT_AT, ...overrides });
+const welcome = (overrides = {}) => ({ v: 1, inviteId: INVITE_ID, tier: 'trusted-requested', artifactC: artifactC(), sentAt: SENT_AT, ...overrides });
 
 function makeIO(kv, extra = {}) {
   const acceptC = [];

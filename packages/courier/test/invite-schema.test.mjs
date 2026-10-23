@@ -70,7 +70,7 @@ const blob = () => ({
 });
 
 const hello = () => ({ v: 1, inviteId: INVITE_ID, artifactB: artifactB(), claimedLabel: 'Hunter Agent', sentAt: ISSUED });
-const welcome = () => ({ v: 1, inviteId: INVITE_ID, tier: 'trusted', artifactC: artifactC(), sentAt: ISSUED });
+const welcome = () => ({ v: 1, inviteId: INVITE_ID, tier: 'trusted-requested', artifactC: artifactC(), sentAt: ISSUED });
 
 function assertRejects(parse, text, pattern) {
   assert.throws(
@@ -221,7 +221,7 @@ test('welcome: trusted and strict carry artifact C; rejected carries none', () =
 const WELCOME_REJECTS = [
   ['rejected with artifactC', (d) => { d.tier = 'rejected'; return d; }, /unknown key "artifactC"/],
   ['trusted without artifactC', (d) => { delete d.artifactC; return d; }, /missing "artifactC"/],
-  ['tier open', (d) => { d.tier = 'open'; return d; }, /tier must be strict, trusted or rejected/],
+  ['tier open', (d) => { d.tier = 'open'; return d; }, /tier must be/],
   ['tier missing', (d) => { delete d.tier; return d; }, /tier must be strict/],
   ['artifactC is step B', (d) => { d.artifactC = artifactB(); return d; }, /artifactC must be a courier-pair v0 step C/],
   ['artifactC delegation missing', (d) => { delete d.artifactC.delegationExpiresAt; return d; }, /artifactC is missing "delegationExpiresAt"/],

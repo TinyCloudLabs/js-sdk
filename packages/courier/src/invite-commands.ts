@@ -21,6 +21,8 @@ import { cmd } from './program.js';
 import { credentialDigest, oneTimeKeyHash, signPossession, verifyPossession } from './possession.js';
 import { loadKey, saveProfile, secureSubdir, writeSecure, type Profile } from './profile.js';
 import { delIfPresent, getJson, putCreate } from './store.js';
+import { InviteWatcher, eventLog, listRecords, readJson, readRecord, reasonOf, recordPath, requestedTier, writeRecord, type InviteRecord } from './invite-watch.js';
+import { jsonLineLog } from './wake.js';
 
 const INVITE_ID = /^[a-z2-7]{26}$/;
 const TIERS = ['strict', 'trusted'] as const;
@@ -30,23 +32,6 @@ const WELCOME_WAIT_MS = 10 * 60_000;
 
 type Entries = Parameters<TinyCloudNode['delegateTo']>[1];
 
-/** Owner-side record of an invite. Holds the store delete token: never printed. */
-interface InviteRecord {
-  v: 1;
-  inviteId: string;
-  handle: string;
-  callMe: string;
-  email: string;
-  /** Requested tier only. The paired peer starts strict; the owner confirms trusted by hand. */
-  tier: RequestedTier;
-  /** Owner DID the invitee must match, or null for any owner. */
-  expectOwner: string | null;
-  alsoAsk: boolean;
-  expiresAt: string;
-  store: { id: string; cid: string; deleteToken: string };
-  status: 'open' | 'consumed' | 'revoked';
-  publicDir?: string;
-}
 
 /** Invitee-side join state. `d` of the one-time key lives inside `blob`: this file is 0600. */
 interface JoinState {
@@ -74,14 +59,21 @@ function requireInviteId(id: string | undefined, usage: string): string {
   return id;
 }
 
-function readJson<T>(file: string): T | undefined {
-  if (!fs.existsSync(file)) return undefined;
-  return JSON.parse(fs.readFileSync(file, 'utf8')) as T;
+/** What `invite` builds at create time: the tier as requested on the command line, `null` for no owner check. */
+interface CreatedInviteRecord {
+  v: 1;
+  inviteId: string;
+  handle: string;
+  callMe: string;
+  email: string;
+  tier: RequestedTier;
+  expectOwner: string | null;
+  alsoAsk: boolean;
+  expiresAt: string;
+  store: { id: string; cid: string; deleteToken: string };
+  status: 'open';
+  publicDir?: string;
 }
-
-const recordPath = (id: string) => path.join(secureSubdir('invites'), `${id}.json`);
-const readRecord = (id: string) => readJson<InviteRecord>(recordPath(id));
-const writeRecord = (record: InviteRecord) => writeSecure(recordPath(record.inviteId), record);
 
 /** Owner-side private record and public copy for one invite. Both carry the requested tier and owner DID that the blob carries. */
 export function inviteRecordsFor(input: {
@@ -90,7 +82,7 @@ export function inviteRecordsFor(input: {
   expiresAt: Date; createdAt: string;
   store: Pick<UploadedInvite, 'id' | 'cid' | 'deleteToken'>;
   publicDir: string | undefined;
-}): { record: InviteRecord; publicRecord: PublicInvite } {
+}): { record: CreatedInviteRecord; publicRecord: PublicInvite } {
   const expiresAt = input.expiresAt.toISOString();
   return {
     record: {
@@ -105,6 +97,12 @@ export function inviteRecordsFor(input: {
       expiresAt, status: 'open', completedPeer: null,
     },
   };
+}
+
+/** The record the watcher reads: the requested tier in its stored form (`requestedTier`), no `expectOwner` key when there is no owner check, and the one-time key hash. */
+function storedRecord(created: CreatedInviteRecord, keyHash: string): InviteRecord {
+  const { expectOwner, tier, ...rest } = created;
+  return { ...rest, tier: requestedTier(tier), oneTimeKeyHash: keyHash, ...(expectOwner === null ? {} : { expectOwner }) };
 }
 
 const joinPath = (id: string) => path.join(secureSubdir('joins'), `${id}.json`);
@@ -131,6 +129,8 @@ export async function cmdInvite(args: ParsedArgs): Promise<void> {
   const sub = args.positional[0];
   if (sub === 'list') return inviteList();
   if (sub === 'revoke') return inviteRevoke(args.positional[1]);
+  if (sub === 'approve') return inviteApprove(args);
+  if (sub === 'deny') return inviteDeny(args.positional[1]);
   return inviteCreate(args);
 }
 
@@ -143,6 +143,7 @@ async function inviteCreate(args: ParsedArgs): Promise<void> {
   const emailArg = args.get('email');
   if (emailArg === undefined || emailArg === 'true') fail('usage', `--email <address> is required. ${inviteUsage()}`);
   const expectEmail = emailAddress(emailArg.trim().toLowerCase(), '--email');
+
   const callMe = args.get('call-me') ?? profile.selfHandle ?? handle;
   if (!HANDLE.test(callMe)) fail('usage', `Handles are letters, digits, "-" or "_", not starting with "_" (got "${callMe}").`);
   const ttl = args.get('ttl') ?? DEFAULT_TTL;
@@ -199,9 +200,15 @@ async function inviteCreate(args: ParsedArgs): Promise<void> {
       inviteId, handle, callMe, expectEmail, tier, expectOwner, alsoAsk: args.has('also-ask'),
       expiresAt, createdAt, store: uploaded, publicDir,
     });
-    writeRecord(records.record);
+    writeRecord(storedRecord(records.record, oneTimeKeyHash(oneTimeKey.x)));
     recordWritten = true;
-    if (publicDir !== undefined) writePublicInvite(publicDir, records.publicRecord);
+    if (publicDir !== undefined) {
+      try {
+        writePublicInvite(publicDir, records.publicRecord);
+      } catch (e) {
+        console.error(`Public invite record not written (${reasonOf(e)}). The invite itself is unaffected.`);
+      }
+    }
     console.log(`Invite for ${expectEmail} as "${handle}" (requested tier ${tier}; the peer starts strict until you confirm), expires ${expiresAt.toISOString()}.`);
     console.log('Send this string to the invitee. It is a bearer link: keep it private until revoked or expired.');
     console.log(formatInviteString({ id: uploaded.id, key: seal.key, cid: uploaded.cid }));
@@ -216,12 +223,7 @@ async function inviteCreate(args: ParsedArgs): Promise<void> {
 
 function inviteList(): void {
   const now = Date.now();
-  const dir = secureSubdir('invites');
-  const rows = fs.readdirSync(dir).filter((n) => n.endsWith('.json')).sort().flatMap((n) => {
-    const r = readJson<InviteRecord>(path.join(dir, n));
-    return r ? [r] : [];
-  });
-  printJson(rows.map((r) => ({
+  printJson(listRecords().map((r) => ({
     inviteId: r.inviteId,
     handle: r.handle,
     callMe: r.callMe,
@@ -229,7 +231,7 @@ function inviteList(): void {
     tier: r.tier,
     alsoAsk: r.alsoAsk,
     expiresAt: r.expiresAt,
-    status: r.status === 'open' && Date.parse(r.expiresAt) <= now ? 'expired' : r.status,
+    status: (r.status === 'open' || r.status === 'held') && Date.parse(r.expiresAt) <= now ? 'expired' : r.status,
   })));
 }
 
@@ -241,26 +243,33 @@ async function inviteRevoke(id: string | undefined): Promise<void> {
     console.log(`Invite ${inviteId} is already revoked.`);
     return;
   }
-  if (record.status === 'consumed') {
-    fail('invite-not-open', `Invite ${inviteId} was already used; use \`${cmd('revoke <peer>')}\` to drop the peer.`);
+  if (record.status !== 'open' && record.status !== 'held') {
+    fail('invite-not-open', `Invite ${inviteId} was already used (${record.status}); use \`${cmd('revoke <peer>')}\` to drop the peer.`);
   }
   const { profile, node } = await ctx();
-  try {
-    await deleteSealed(inviteOrigin(), record.store.id, record.store.deleteToken);
-  } catch (e) {
-    if (!(e instanceof CourierError && e.code === 'invite-gone')) throw e;
-  }
-  const folder = inviteFolder(inviteId);
-  await delIfPresent(node.kv, `${folder}in/hello.json`);
-  await delIfPresent(node.kv, `${folder}out/welcome.json`);
-  record.status = 'revoked';
-  writeRecord(record);
-  if (record.publicDir !== undefined) updatePublicInvite(record.publicDir, inviteId, { status: 'revoked' });
-  if (profile.peers[record.handle]?.status === 'pending-A') {
-    delete profile.peers[record.handle];
-    saveProfile(profile);
-  }
+  await inviteWatcher(profile, node).revoke(record);
   console.log(`Revoked invite ${inviteId}.`);
+}
+
+function inviteWatcher(profile: Profile, node: TinyCloudNode): InviteWatcher {
+  return new InviteWatcher({ node, profile: () => profile, log: eventLog(jsonLineLog((line) => process.stderr.write(line))) });
+}
+
+/** `trusted` is recorded as a request for you to decide on. It does not grant trust; the peer starts strict. */
+async function inviteApprove(args: ParsedArgs): Promise<void> {
+  const inviteId = requireInviteId(args.positional[1], `Usage: ${cmd('invite approve <invite-id> [--tier strict|trusted]')}`);
+  const flag = args.get('tier');
+  const tier = flag === undefined ? undefined : requestedTier(flag);
+  const { profile, node } = await ctx();
+  await inviteWatcher(profile, node).approve(inviteId, tier);
+  console.log(`Invite ${inviteId} paired. Requested tier: ${tier ?? 'strict'}. The peer starts as strict until you confirm trusted status.`);
+}
+
+async function inviteDeny(id: string | undefined): Promise<void> {
+  const inviteId = requireInviteId(id, `Usage: ${cmd('invite deny <invite-id>')}`);
+  const { profile, node } = await ctx();
+  await inviteWatcher(profile, node).deny(inviteId);
+  console.log(`Invite ${inviteId} denied. The invitee receives a rejected Welcome and no artifact.`);
 }
 
 export async function cmdJoin(args: ParsedArgs): Promise<void> {

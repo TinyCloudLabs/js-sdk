@@ -26,7 +26,8 @@ const B64URL_32_BYTES = /^[A-Za-z0-9_-]{43}$/;
 const ISO_UTC_MS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const PKH_EIP155 = /^did:pkh:eip155:(\d+):(0x[a-fA-F0-9]{40})$/;
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
-const TIERS = ['strict', 'trusted', 'rejected'] as const;
+// Welcome tiers. `trusted-requested` records that the box owner was asked for trusted status; it grants nothing. Trust is set only by the owner's peers file.
+const TIERS = ['strict', 'trusted-requested', 'rejected'] as const;
 const MAX_NESTING = 8;
 
 export type Tier = (typeof TIERS)[number];
@@ -152,7 +153,7 @@ export function parseHello(text: string): Hello {
 
 export function parseWelcome(text: string): Welcome {
   const w = parseStrict(text, WELCOME_MAX_BYTES);
-  if (typeof w.tier !== 'string' || !(TIERS as readonly unknown[]).includes(w.tier)) fail('tier must be strict, trusted or rejected');
+  if (typeof w.tier !== 'string' || !(TIERS as readonly unknown[]).includes(w.tier)) fail('tier must be strict, trusted-requested or rejected');
   const tier = w.tier as Tier;
   exactKeys(w, 'welcome', tier === 'rejected' ? ['v', 'inviteId', 'tier', 'sentAt'] : ['v', 'inviteId', 'tier', 'artifactC', 'sentAt']);
   if (w.v !== 1) fail('welcome: v must be 1');
