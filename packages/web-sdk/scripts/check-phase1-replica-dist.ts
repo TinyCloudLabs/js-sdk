@@ -11,7 +11,7 @@ import {
   validateOptionalEntryTransition, validateOptionalLedger, type OptionalLedger,
 } from "./replica-optional-size-policy";
 import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedPhase2, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, preexistingS3EntryCommit, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateLogoutRatchetTransition, validateMasterMergeResolutionTransition, validateTc1413RatchetTransition, validateTc1424RatchetTransition, validateTc1448RatchetTransition, validateTc1432RatchetTransition, validateTc1436RatchetTransition, validateTc1443RatchetTransition, validateTc1443bRatchetTransition, validateTc1428RatchetTransition, validateTc1475RatchetTransition, validateTc606WorkerRatchetTransition, validateMasterDriftRatchetTransition, validateTc1789RatchetTransition, validateTc1476RatchetTransition, validateTc1466RatchetTransition, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
-import { rootCeilingFor, validateTc1757RatchetTransition, validateTc1777ExpiryRatchetTransition, validateTc1777RatchetTransition, validateTc1781DecryptExpiryRatchetTransition, validateTc1801NonTransferableShareRatchetTransition, validateTc1807CredentialDiscoveryRatchetTransition, validateTc1827WorkerRatchetTransition, validateTc848PanelRatchetTransition } from "./replica-size-policy";
+import { rootCeilingFor, validateTc1757RatchetTransition, validateTc1777ExpiryRatchetTransition, validateTc1777RatchetTransition, validateTc1781DecryptExpiryRatchetTransition, validateTc1801NonTransferableShareRatchetTransition, validateTc1807CredentialDiscoveryRatchetTransition, validateTc1823ErrorCodeRatchetTransition, validateTc1827WorkerRatchetTransition, validateTc848PanelRatchetTransition } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 import { replicaOwnedPath } from "./replica-owned-path";
 type Baseline = {
@@ -341,6 +341,13 @@ if (prBaseSha) {
   if (tc1827Worker !== undefined && baseLedger.tc1827WorkerRatchet === undefined &&
       (baseLedger.tc1807CredentialDiscoveryRatchet === undefined || !hasAncestor(repoRoot, tc1827Worker.sourceCommits.at(-1)!))) {
     console.error("The replica worker narrow-imports ratchet requires the merged credential discovery ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc1823ErrorCodeRatchetTransition(baseLedger.tc1823ErrorCodeRatchet, ledger.tc1823ErrorCodeRatchet);
+  const tc1823ErrorCode = ledger.tc1823ErrorCodeRatchet;
+  if (tc1823ErrorCode !== undefined && baseLedger.tc1823ErrorCodeRatchet === undefined &&
+      (baseLedger.tc1827WorkerRatchet === undefined || !hasAncestor(repoRoot, tc1823ErrorCode.sourceCommits.at(-1)!))) {
+    console.error("The SQL request-size error code ratchet requires the merged replica worker narrow-imports ratchet and its measured source commit.");
     failed = true;
   }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";

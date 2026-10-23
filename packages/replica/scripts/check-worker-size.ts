@@ -21,8 +21,10 @@ import { join, resolve } from "node:path";
 // approved by Naomi, 2026-10-19; the ledger's tc606WorkerRatchet row records it.
 // #694 (TC-1827: replica workers import only the KV service and its ServiceContext) measured 776,128 (-46,625) in GitHub
 // run 39943720009 (head 7a7303a8, merge base 6076581d); approved by Naomi, 2026-10-23; the ledger's tc1827WorkerRatchet row records it.
+// #693 (TC-1823: SQL request-size error code) measured 776,185 (+57) in GitHub run 39951550053 (head 5c66dd20,
+// merge base e0a9891e); approved by Naomi, 2026-10-23; the ledger's tc1823ErrorCodeRatchet row records it.
 // Zero additional headroom; independent of the web-sdk ledger, including WASM.
-export const MAX_WORKER_GZIP_BYTES = 776_128;
+export const MAX_WORKER_GZIP_BYTES = 776_185;
 const canonicalName = /^kv-storage\.worker\.([0-9a-f]{64})\.js$/;
 
 export function assertWorkerSizeToolchain(bunVersion: string, rustcOutput: string): void {

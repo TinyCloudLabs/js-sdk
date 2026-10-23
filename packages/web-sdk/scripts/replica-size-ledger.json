@@ -1254,5 +1254,55 @@
       "ceiling": 776128
     },
     "reason": "replica workers import only the KV service: -46625 B gzip to the kv-storage worker (TC-1827)"
+  },
+  "tc1823ErrorCodeRatchet": {
+    "label": "SQL request-size error code (#693): kv-storage worker ceiling raised to the measured CI bytes. Worker ceiling RAISE (+57 B); needs Naomi's explicit ruling.",
+    "ruling": "Approved by Naomi (2026-10-23, policy review relayed by Amos)",
+    "base": "e0a9891ef6fae47fcd2414127619032dc9343ae8",
+    "sourceCommits": [
+      "5c66dd2096c3c51aad0cfbd1e548d08c8d36a9be"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39951550053",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39951550053/job/120406955471",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39951550053/job/120406955682"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 0,
+        "index.cjs": 0
+      },
+      "ceiling": {
+        "index.mjs": 1462456,
+        "index.cjs": 1404685
+      }
+    },
+    "firstImport": {
+      "delta": {
+        "replica.mjs": 0,
+        "replica.cjs": 0
+      },
+      "ceiling": {
+        "replica.mjs": 51925,
+        "replica.cjs": 67141
+      }
+    },
+    "activation": {
+      "delta": {
+        "activation.mjs": 0,
+        "activation.cjs": 0
+      },
+      "ceiling": {
+        "activation.mjs": 23117,
+        "activation.cjs": 24700
+      }
+    },
+    "worker": {
+      "delta": 57,
+      "ceiling": 776185
+    },
+    "reason": "SQL request-size error code: +57 B gzip to the kv-storage worker (TC-1823)"
   }
 }
