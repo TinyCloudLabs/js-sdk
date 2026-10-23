@@ -24,6 +24,21 @@ import { approvedTc1443Ratchet, approvedTc1443bRatchet, approvedTc1448Ratchet, a
 import { ancestryPins, assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedHardeningRatchet, approvedLogoutRatchet, approvedTc1413Ratchet, approvedTc1424Ratchet, approvedTc1432Ratchet, approvedTc1436Ratchet, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, landingCommit, pinLandedOn, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateLogoutRatchetTransition, validateMasterMergeResolutionTransition, validateTc1413RatchetTransition, validateTc1424RatchetTransition, validateTc1432RatchetTransition, validateTc1436RatchetTransition, type HardeningRatchet, type Ledger, type LogoutRatchet, type MasterMergeResolution, type Tc1413Ratchet, type Tc1424Ratchet, type Tc1432Ratchet, type Tc1436Ratchet } from "./replica-size-policy";
 
 const current = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-size-ledger.json"), "utf8")) as Ledger;
+
+// Newest-row helpers. Order is the ledger file's key order and every ceiling is read from the ledger JSON, so
+// appending a row moves these assertions with it. The replica worker's own row is not a kv-storage worker row.
+const rootRowsInFileOrder = (ledger: Ledger) => {
+  const rootRows = new Set(rootCeilings(ledger).map(({ row }) => row));
+  return Object.keys(ledger).filter((key) => rootRows.has(key));
+};
+const newestRootRow = () => rootRowsInFileOrder(current).at(-1)!;
+const ceilingOfRootRow = (row: string) => rootCeilings(current).find((entry) => entry.row === row)!.ceiling;
+const newestKvWorkerCeiling = () => {
+  const rows = current as unknown as Record<string, { worker?: { ceiling: number } } | undefined>;
+  const newest = Object.keys(rows).filter((key) => key !== "tc1827ReplicaWorkerRatchet" && rows[key]?.worker !== undefined).at(-1)!;
+  return rows[newest]!.worker!.ceiling;
+};
+
 const historical: Ledger = {
   ...current,
   canonicalToolchainCorrection: undefined,
@@ -2268,7 +2283,7 @@ describe("replica worker (TC-1827 follow-up) first ceiling ratchet", () => {
     expect(JSON.stringify(current.tc1827ReplicaWorkerRatchet)).toBe(JSON.stringify(approvedTc1827ReplicaWorkerRatchet));
     expect(row().worker).toEqual({ delta: 0, ceiling: 770093 });
     expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(row().worker.ceiling);
-    expect(MAX_WORKER_GZIP_BYTES).toBe(approvedTc1827WorkerRatchet.worker.ceiling);
+    expect(MAX_WORKER_GZIP_BYTES).toBe(newestKvWorkerCeiling());
     expect(row().canonicalCI.run).toBe("https://github.com/TinyCloudLabs/js-sdk/actions/runs/39949887460");
     expect(row().canonicalCI.jobs).toHaveLength(2);
     expect(rootCeilings(current).map(({ row }) => row)).not.toContain("tc1827ReplicaWorkerRatchet");
@@ -2425,10 +2440,10 @@ describe("credential consumer core (#679, TC-712) raised root ceiling ratchet", 
 describe("the newest root ceiling is the only active one", () => {
   const rowOrder = (ledger: Ledger) => rootCeilings(ledger).map(({ row }) => row);
 
-  it("is the credential consumer core row on master, below the older index.mjs row it would otherwise be shadowed by", () => {
+  it("is the newest ledger root row, below the older index.mjs rows it would otherwise be shadowed by", () => {
     expect(() => validateLedger(current)).not.toThrow();
     const active = activeRootCeiling(current)!;
-    expect(active).toEqual({ row: "tc712CredentialCoreRatchet", ceiling: approvedTc712CredentialCoreRatchet.root.ceiling });
+    expect(active).toEqual({ row: newestRootRow(), ceiling: ceilingOfRootRow(newestRootRow()) });
     const older = rootCeilings(current).slice(0, -1);
     expect(older.length).toBeGreaterThan(0);
     expect(older.some((entry) => entry.ceiling["index.mjs"] > active.ceiling["index.mjs"])).toBe(true);
@@ -2441,9 +2456,9 @@ describe("the newest root ceiling is the only active one", () => {
       ceiling["index.cjs"] += 1_000_000;
     }
     const active = activeRootCeiling(ledger)!;
-    expect(active.row).toBe("tc712CredentialCoreRatchet");
+    expect(active.row).toBe(newestRootRow());
     for (const format of ["index.mjs", "index.cjs"] as const) {
-      const newest = approvedTc712CredentialCoreRatchet.root.ceiling[format];
+      const newest = ceilingOfRootRow(newestRootRow())[format];
       expect(active.ceiling[format]).toBe(newest);
       expect(newest > active.ceiling[format]).toBe(false);
       expect(newest + 1 > active.ceiling[format]).toBe(true);
@@ -2452,8 +2467,9 @@ describe("the newest root ceiling is the only active one", () => {
 
   it("falls back to the newest row still present, and a lone older row is its own history", () => {
     const withoutNewest = copy(current);
-    delete withoutNewest.tc712CredentialCoreRatchet;
-    expect(activeRootCeiling(withoutNewest)).toEqual({ row: "tc1823SizeCodeRatchet", ceiling: approvedTc1823SizeCodeRatchet.root.ceiling });
+    delete (withoutNewest as Record<string, unknown>)[newestRootRow()];
+    const previous = rootRowsInFileOrder(current).at(-2)!;
+    expect(activeRootCeiling(withoutNewest)).toEqual({ row: previous, ceiling: ceilingOfRootRow(previous) });
     expect(() => validateLedger(withoutNewest)).not.toThrow();
     expect(activeRootCeiling(historical)).toEqual({ row: "fixRequiredRatchet", ceiling: approvedFixRequiredRatchet.rootCeiling });
     expect(activeRootCeiling({ allowance: current.allowance, entries: [] })).toBeUndefined();
@@ -2471,14 +2487,15 @@ describe("the newest root ceiling is the only active one", () => {
 
   it("fails closed when the active row has no ceiling for a format", () => {
     const missing = copy(current);
-    delete (missing.tc712CredentialCoreRatchet!.root.ceiling as Record<string, unknown>)["index.cjs"];
-    expect(rootCeilingFor(missing, "index.cjs")).toEqual({ error: expect.stringContaining("index.cjs: active root row tc712CredentialCoreRatchet has no ceiling") });
-    expect(rootCeilingFor(missing, "index.mjs")).toEqual({ row: "tc712CredentialCoreRatchet", ceiling: approvedTc712CredentialCoreRatchet.root.ceiling["index.mjs"] });
+    const newest = newestRootRow();
+    delete (missing as unknown as Record<string, { root: { ceiling: Record<string, unknown> } }>)[newest]!.root.ceiling["index.cjs"];
+    expect(rootCeilingFor(missing, "index.cjs")).toEqual({ error: expect.stringContaining(`index.cjs: active root row ${newest} has no ceiling`) });
+    expect(rootCeilingFor(missing, "index.mjs")).toEqual({ row: newest, ceiling: ceilingOfRootRow(newest)["index.mjs"] });
   });
 
   it("returns the newest row's number for each format on the real ledger", () => {
     for (const format of ["index.mjs", "index.cjs"] as const) {
-      expect(rootCeilingFor(current, format)).toEqual({ row: "tc712CredentialCoreRatchet", ceiling: approvedTc712CredentialCoreRatchet.root.ceiling[format] });
+      expect(rootCeilingFor(current, format)).toEqual({ row: newestRootRow(), ceiling: ceilingOfRootRow(newestRootRow())[format] });
     }
   });
 
@@ -2488,7 +2505,7 @@ describe("the newest root ceiling is the only active one", () => {
     const filed = Object.keys(current).filter((key) => order.includes(key));
     expect(pinned).toEqual(order);
     expect(filed).toEqual(order);
-    expect(order.at(-1)).toBe("tc712CredentialCoreRatchet");
+    expect(order.at(-1)).toBe(newestRootRow());
   });
 });
 
