@@ -66,6 +66,7 @@ import {
   type ResourceCapability,
   type NetworkDescriptor,
   type CreateOwnerDelegationParams,
+  assertNoCaveatedManifestPermissions,
   type OwnerDelegationReceipt,
   type LocalNodeIdentityStore,
   type OnNodeNotFound,
@@ -857,6 +858,14 @@ export class TinyCloudWeb {
   }
 
   signIn = async (options?: SignInOptions): Promise<ClientSession> => {
+    // Refuse a caveated manifest up front: the restore check below composes
+    // action-only resources, so a wider persisted session could satisfy it.
+    const configuredManifests = this._capabilityRequest?.manifests ?? this._manifest;
+    if (configuredManifests !== undefined) {
+      assertNoCaveatedManifestPermissions(
+        Array.isArray(configuredManifests) ? configuredManifests : [configuredManifests],
+      );
+    }
     const signOuts = this.signOutCount;
     const assertNotSignedOut = (): void => {
       if (this.signOutCount !== signOuts || this.signOutInFlight > 0) {

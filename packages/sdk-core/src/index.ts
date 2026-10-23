@@ -1086,6 +1086,9 @@ export {
 export {
   // Errors
   CaveatedDelegationUnsupportedError,
+  assertNoCaveatedManifestPermissions,
+  assertNoCaveatedPermissions,
+  hasNonEmptyCaveat,
   PermissionNotInManifestError,
   SessionExpiredError,
   // Functions

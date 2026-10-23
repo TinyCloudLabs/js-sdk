@@ -25,6 +25,7 @@ import {
   AbilitiesMap,
   DEFAULT_MANIFEST_SPACE,
   ENCRYPTION_PERMISSION_SERVICE,
+  assertNoCaveatedManifestPermissions,
   composeManifestRequest,
   parseNetworkId,
   principalDidEquals,
@@ -828,6 +829,21 @@ export class NodeUserAuthorization implements IUserAuthorization {
     return this._capabilityRequest;
   }
 
+  /**
+   * Refuse, before any request or signature, a manifest request whose
+   * permissions carry a non-empty caveat. The abilities map handed to
+   * `prepareSession` is action-only, so signing such a request would grant a
+   * wider session than the one asked for.
+   *
+   * @internal
+   */
+  assertNoCaveatedSignInRequest(): void {
+    const request = this.getCapabilityRequest();
+    if (request !== undefined) {
+      assertNoCaveatedManifestPermissions(request.manifests);
+    }
+  }
+
   private resolveSpaceName(space: string, address: string, chainId: number): string {
     if (space.startsWith("tinycloud:")) {
       return space;
@@ -1442,6 +1458,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   async createBootstrapSession(
     options: CreateBootstrapSessionOptions,
   ): Promise<TinyCloudSession> {
+    assertNoCaveatedManifestPermissions(options.capabilityRequest.manifests);
     if (!this._address || !this._chainId) {
       throw new Error("Must be signed in before creating bootstrap sessions");
     }
@@ -1566,6 +1583,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * @param options - Optional per-call SIWE overrides for this sign-in only
    */
   async signIn(options?: SignInOptions): Promise<ClientSession> {
+    this.assertNoCaveatedSignInRequest();
     const generation = this.sessionGeneration;
     // Get signer address and chain ID
     const address = canonicalizeAddress(await this.signer.getAddress());
@@ -1786,6 +1804,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     address: string;
     chainId: number;
   }> {
+    this.assertNoCaveatedSignInRequest();
     const address = canonicalizeAddress(await this.signer.getAddress());
     const chainId = await this.signer.getChainId();
 
@@ -1995,6 +2014,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       ) => Promise<OpenKeyAuthorizationResultV1 | null>;
     },
   ): Promise<ClientSession> {
+    this.assertNoCaveatedSignInRequest();
     // A per-call host override is the host this session will actually use,
     // not merely a display hint for OpenKey. Install it before preparation so
     // the same value is bound into the authorization context and later used

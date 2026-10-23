@@ -121,6 +121,7 @@ import {
   type PermissionEntry,
   ErrorCodes,
   ENCRYPTION_PERMISSION_SERVICE,
+  assertNoCaveatedPermissions,
   CaveatedDelegationUnsupportedError,
   PermissionNotInManifestError,
   SessionExpiredError,
@@ -734,6 +735,9 @@ function ownerDelegationPermissions(
     if (!Array.isArray(params.permissions)) {
       throw new Error("Owner delegation permissions are invalid");
     }
+    // `OwnerDelegationPermission` has no caveat field, but a caller can still
+    // spread a `PermissionEntry` in; this path signs action-only abilities.
+    assertNoCaveatedPermissions(params.permissions as readonly PermissionEntry[]);
     permissions.push(...params.permissions.map((permission) => ({
       service: permission.service,
       path: permission.path,
@@ -2425,6 +2429,8 @@ export class TinyCloudNode {
   }
 
   private async signInWith(performSignIn: () => Promise<unknown>): Promise<void> {
+    // Refuse a caveated manifest before any signer, registry or host call.
+    this.auth?.assertNoCaveatedSignInRequest();
     // Read synchronously: a sign-out called after this sign-in started wins,
     // while a sign-out already in progress finishes before it starts.
     const epoch = this.sessionEpoch;

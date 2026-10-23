@@ -23,6 +23,10 @@ import {
   isExplicitOnlyAction,
   normalizeSpace,
   parseRecapCapabilities,
+  CaveatedDelegationUnsupportedError,
+  assertNoCaveatedManifestPermissions,
+  assertNoCaveatedPermissions,
+  hasNonEmptyCaveat,
   type WasmRecapEntry,
 } from "./capabilities";
 import { resolveManifest, type PermissionEntry } from "./manifest";
@@ -729,5 +733,57 @@ describe("explicit-only actions", () => {
     for (const action of EXPLICIT) {
       expect(found.some((value) => value.endsWith(action) || value === action.split("/")[1])).toBe(false);
     }
+  });
+});
+
+describe("non-empty caveat refusal (TC-1855)", () => {
+  it("treats absent, [], [{}] and [{}, {}] as unconstrained", () => {
+    for (const caveats of [undefined, [], [{}], [{}, {}]]) {
+      expect(hasNonEmptyCaveat(caveats)).toBe(false);
+    }
+  });
+
+  it("treats any branch with a key as constrained, wherever it sits", () => {
+    expect(hasNonEmptyCaveat([{ kind: "prefix" }])).toBe(true);
+    expect(hasNonEmptyCaveat([{}, { kind: "prefix" }])).toBe(true);
+    expect(hasNonEmptyCaveat([{ kind: "prefix" }, {}])).toBe(true);
+  });
+
+  it("fails closed on a value that is not an array of objects", () => {
+    for (const caveats of [null, "prefix", { kind: "prefix" }, [null], ["x"], [[]]]) {
+      expect(hasNonEmptyCaveat(caveats)).toBe(true);
+    }
+  });
+
+  it("throws the typed error naming only the caveated entries", () => {
+    const plain: PermissionEntry = { service: "tinycloud.kv", path: "a/", actions: ["tinycloud.kv/get"] };
+    const caveated: PermissionEntry = {
+      service: "tinycloud.kv",
+      path: "b/",
+      actions: ["tinycloud.kv/get"],
+      caveats: [{ kind: "prefix" }],
+    };
+    let thrown: unknown;
+    try {
+      assertNoCaveatedPermissions([plain, { ...plain, caveats: [{}] }, caveated]);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(CaveatedDelegationUnsupportedError);
+    if (!(thrown instanceof CaveatedDelegationUnsupportedError)) throw thrown;
+    expect(thrown.code).toBe("CAVEATED_DELEGATION_UNSUPPORTED");
+    expect(thrown.entries.map((entry) => entry.path)).toEqual(["b/"]);
+  });
+
+  it("does not throw for unconstrained entries, and covers every manifest permission", () => {
+    const entry: PermissionEntry = { service: "tinycloud.kv", path: "a/", actions: ["tinycloud.kv/get"] };
+    expect(() => assertNoCaveatedPermissions([entry, { ...entry, caveats: [] }, { ...entry, caveats: [{}] }])).not.toThrow();
+    expect(() => assertNoCaveatedManifestPermissions([{}, { permissions: [] }])).not.toThrow();
+    expect(() =>
+      assertNoCaveatedManifestPermissions([
+        { permissions: [entry] },
+        { permissions: [{ ...entry, caveats: [{ kind: "prefix" }] }] },
+      ]),
+    ).toThrow(CaveatedDelegationUnsupportedError);
   });
 });
