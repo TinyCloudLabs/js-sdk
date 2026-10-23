@@ -18,7 +18,7 @@ test.afterEach(({ page }) => {
 });
 
 interface HarnessWindow {
-  __tc: { mount(ui?: unknown): boolean; toast(kind: string): string; dismiss(id: string): void; rejectWithTinyCloudError(): boolean; setSync(state: unknown): boolean };
+  __tc: { mount(ui?: unknown): boolean; toast(kind: string): string; dismiss(id: string): void; rejectWithTinyCloudError(): boolean; setSync(state: unknown): boolean; signOutCalls(): number };
   tc?: { ui: { open(): void } };
 }
 
@@ -326,4 +326,35 @@ for (const scheme of ["light", "dark"] as const) {
       await expect.poll(() => closedLauncherViolations(page, size)).toEqual([]);
     });
   }
+}
+
+// Sign out: the safe action takes focus, Escape takes it too, and a confirmed
+// sign-out signs out once and keeps the panel open in the signed-out state.
+for (const scheme of ["light", "dark"] as const) {
+  test(`${scheme}: sign-out confirm focuses the safe action, Escape keeps the session, confirm signs out once`, async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await mountHarness(page, scheme);
+
+    await page.getByRole("button", { name: "TinyCloud settings", exact: true }).click();
+    const panel = page.locator("#tinycloud-ui-panel");
+    await expect(panel).toBeVisible();
+
+    const signOut = panel.getByRole("button", { name: "Sign out", exact: true });
+    await signOut.click();
+    const dialog = panel.getByRole("alertdialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Stay signed in", exact: true })).toBeFocused();
+
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+    await expect(panel).toBeVisible();
+    await expect(signOut).toBeFocused();
+    expect(await page.evaluate(() => (window as unknown as HarnessWindow).__tc.signOutCalls())).toBe(0);
+
+    await signOut.click();
+    await dialog.getByRole("button", { name: "Sign out", exact: true }).click();
+    await expect(panel.getByText("TinyCloud is signed out in this app. Sign in to see your account.")).toBeVisible();
+    await expect(panel).toBeVisible();
+    expect(await page.evaluate(() => (window as unknown as HarnessWindow).__tc.signOutCalls())).toBe(1);
+  });
 }

@@ -49,14 +49,16 @@ const storage = {
 };
 
 let signOutCount = 0;
+let signedIn = true;
 const source = {
-  signedIn: () => true,
+  signedIn: () => signedIn,
   get sync() {
     return facade;
   },
   storage,
   async signOut() {
     signOutCount += 1;
+    signedIn = false;
   },
 };
 
