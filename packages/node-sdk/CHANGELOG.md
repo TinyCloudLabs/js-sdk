@@ -1,5 +1,13 @@
 # @tinycloudlabs/node-sdk
 
+## 3.6.0-beta.5
+
+### Minor Changes
+
+- c0acb86: Adds email-proof credential acquisition as `@tinycloud/node-sdk/credentials-core` (narrow entry, no web-sdk dependency) and `@tinycloud/node-sdk/credential-pending-store` (owner-only, one file per pending request). The `@tinycloud/node-sdk/credentials` entry adds `requestEmailProofCode`, `completeEmailProof`, `acquireEmailProof`, `createEd25519HolderSigner`, `emailProofRequirement`, and `EmailProofError`. The root entry gains no email-proof exports.
+
+  Details: TC-712
+
 ## 3.6.0-beta.4
 
 ### Minor Changes
