@@ -8,4 +8,4 @@ The `web-recipient` subpath is its own build entry, and the package builds with 
 
 The credential witness answers browser requests only for the origins it is configured with, so an app on another origin can be refused until its origin is added to the witness configuration.
 
-When set, openerOrigin and completionOrigin must be https origins: web-sdk credential acquisition rejects anything else, and the witness enforces the same rule.
+openerOrigin and completionOrigin must be https origins (openerOrigin defaults to the page's own origin): web-sdk credential acquisition rejects anything else, and the witness enforces the same rule.
