@@ -34,6 +34,8 @@
     "tc1807-discovery-url",
     "tc1823-sql-request-too-large",
     "tc1827-replica-worker-narrow-imports",
-    "tc712-email-proof-acquire"
+    "tc712-courier-credential",
+    "tc712-email-proof-acquire",
+    "tc712-node-sdk-email-proof"
   ]
 }
