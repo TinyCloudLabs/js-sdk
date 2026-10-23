@@ -57,7 +57,7 @@ jobs:
           relevant=""
           while IFS= read -r f; do
             case "$f" in
-              packages/web-sdk/*|packages/bootstrap/*|packages/node-sdk/*|packages/replica/*|packages/sdk-core/*|packages/sdk-rs/*|packages/sdk-services/*|packages/share-envelope/*|packages/share-sdk/*|Cargo.toml|Cargo.lock|bun.lock|package.json|turbo.json|tsconfig.base.json|scripts/setup.sh|.github/workflows/web-sdk-tests.yml)
+              packages/web-sdk/*|packages/bootstrap/*|packages/node-sdk/*|packages/replica/*|packages/sdk-core/*|packages/sdk-rs/*|packages/sdk-services/*|packages/share-envelope/*|packages/share-sdk/*|Cargo.toml|Cargo.lock|bun.lock|package.json|turbo.json|tsconfig.base.json|scripts/setup.sh|.github/workflows/web-sdk-tests.yml|.github/scripts/check-package-exports-exist*)
                 relevant="$f"; break ;;
             esac
           done <<< "$files"

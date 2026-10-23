@@ -8,7 +8,8 @@
 //
 // Walks `exports` recursively: subpaths, every condition key (`types`,
 // `import`, `require`, `default`, nested conditions) and fallback arrays.
-// `null` targets (explicit exclusions) are ignored. Wildcard targets
+// `null` targets (explicit exclusions) are ignored; a package with no
+// checkable target at all (`exports` null, `{}`) fails rather than passing vacuously. Wildcard targets
 // (`./*`, `./features/*.js`) are not expanded: they are reported as skipped
 // and not checked.
 
@@ -63,6 +64,10 @@ export function checkExports(packageDir) {
     }
     checked.push(target);
     if (!isNonEmptyFile(file)) problems.push(`${path}: ${target} is missing or empty`);
+  }
+  // An empty map (`null`, `{}`, only `null` targets) would pass vacuously.
+  if (checked.length + skipped.length === 0 && problems.length === 0) {
+    problems.push("`exports` has no checkable targets (null, `{}`, or only null targets)");
   }
   return { checked, skipped, problems };
 }

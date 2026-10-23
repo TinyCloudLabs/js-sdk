@@ -139,6 +139,16 @@ test("a package with no exports field fails", () => {
   }
 });
 
+test("an empty `exports` (null, {}, only null targets) fails with a clear message", () => {
+  for (const empty of [null, {}, { ".": null }]) {
+    withFixture(empty, {}, (dir) => {
+      const r = spawnSync(process.execPath, [script, dir], { encoding: "utf8" });
+      assert.equal(r.status, 1, JSON.stringify(empty));
+      assert.match(r.stderr, /`exports` has no checkable targets/);
+    });
+  }
+});
+
 test("CLI: exits 0 on success and 2 without a directory", () => {
   withFixture({ ".": "./i.js" }, { "i.js": "x" }, (dir) => {
     assert.equal(spawnSync(process.execPath, [script, dir]).status, 0);
