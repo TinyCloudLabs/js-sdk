@@ -19,8 +19,10 @@ import { join, resolve } from "node:path";
 // GitHub run 39292038037 (source 09214408, against master 5317cc78; unchanged by the master merge); the ledger's tc1475Ratchet row records it.
 // #606 (security dependency updates) measured 822,753 (+86) in GitHub run 39326132925 (master 54a2408d; #552 inherited it);
 // approved by Naomi, 2026-10-19; the ledger's tc606WorkerRatchet row records it.
+// #694 (TC-1827: replica workers import only the KV service and its ServiceContext) measured 776,128 (-46,625) in GitHub
+// run 39943720009 (head 7a7303a8, merge base 6076581d); approved by Naomi, 2026-10-23; the ledger's tc1827WorkerRatchet row records it.
 // Zero additional headroom; independent of the web-sdk ledger, including WASM.
-export const MAX_WORKER_GZIP_BYTES = 822_753;
+export const MAX_WORKER_GZIP_BYTES = 776_128;
 const canonicalName = /^kv-storage\.worker\.([0-9a-f]{64})\.js$/;
 
 export function assertWorkerSizeToolchain(bunVersion: string, rustcOutput: string): void {

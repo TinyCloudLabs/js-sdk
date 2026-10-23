@@ -171,6 +171,13 @@
       "index.mjs": 15,
       "index.cjs": 29,
       "note": "Replica gzip growth measured against this PR's merge base"
+    },
+    {
+      "pr": "#694",
+      "ticket": "TC-1827",
+      "index.mjs": 0,
+      "index.cjs": 0,
+      "note": "replica workers import only the KV service and its context"
     }
   ],
   "phase2Ratchet": {
@@ -1197,5 +1204,55 @@
       "ceiling": 822753
     },
     "reason": "credential discovery default and typed error: +81 B (mjs) / +88 B (cjs) gzip to each web-sdk root bundle (TC-1807)"
+  },
+  "tc1827WorkerRatchet": {
+    "label": "replica worker narrow imports (#694): kv-storage worker ceiling lowered to the measured CI bytes",
+    "ruling": "Approved by Naomi (2026-10-23, policy review relayed by Amos)",
+    "base": "6076581dcf13a6a0395b0f8798c6b6bf22928088",
+    "sourceCommits": [
+      "7a7303a8afdc81910adbfa7b6485d2acc07617cd"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39943720009",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39943720009/job/120381124294",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39943720009/job/120381124041"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 0,
+        "index.cjs": 0
+      },
+      "ceiling": {
+        "index.mjs": 1462456,
+        "index.cjs": 1404685
+      }
+    },
+    "firstImport": {
+      "delta": {
+        "replica.mjs": 0,
+        "replica.cjs": -1
+      },
+      "ceiling": {
+        "replica.mjs": 51925,
+        "replica.cjs": 67141
+      }
+    },
+    "activation": {
+      "delta": {
+        "activation.mjs": -1,
+        "activation.cjs": -2
+      },
+      "ceiling": {
+        "activation.mjs": 23117,
+        "activation.cjs": 24700
+      }
+    },
+    "worker": {
+      "delta": -46625,
+      "ceiling": 776128
+    },
+    "reason": "replica workers import only the KV service: -46625 B gzip to the kv-storage worker (TC-1827)"
   }
 }
