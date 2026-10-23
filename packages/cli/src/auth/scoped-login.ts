@@ -1,4 +1,5 @@
 import { NodeWasmBindings, signedCompactUcanExpiry, type PermissionEntry } from "@tinycloud/node-sdk";
+import { canonicalJson, caveatRestriction } from "./caveat-restriction.js";
 import { isLocalOwnerProfile, ownerSessionLacksProof } from "@tinycloud/operations/profile";
 import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
@@ -202,24 +203,7 @@ export function isLegacyNestedDecrypt(
       permission.actions.every((action) => entry.actions.includes(action)));
 }
 
-/** JSON with object keys sorted, so equal values serialize identically. */
-export function canonicalJson(value: unknown): string {
-  const canonical = (entry: unknown): unknown => Array.isArray(entry)
-    ? entry.map(canonical)
-    : entry && typeof entry === "object"
-      ? Object.fromEntries(Object.entries(entry as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([name, inner]) => [name, canonical(inner)]))
-      : entry;
-  return JSON.stringify(canonical(value) ?? null);
-}
-
-/**
- * The restriction a permission's ReCap caveats impose: "" when unrestricted
- * (no caveats, or only empty ones), else their canonical, order-independent JSON.
- */
-function caveatRestriction(caveats: readonly Record<string, unknown>[] | undefined): string {
-  const restrictions = (caveats ?? []).filter((caveat) => Object.keys(caveat).length > 0).map(canonicalJson).sort();
-  return restrictions.length === 0 ? "" : JSON.stringify(restrictions);
-}
+export { canonicalJson };
 
 /**
  * Whether `granted` holds every action `held` holds, with no added caveat:
@@ -230,7 +214,7 @@ function caveatRestriction(caveats: readonly Record<string, unknown>[] | undefin
 export function scopeCovers(granted: readonly PermissionEntry[], held: readonly PermissionEntry[], ownerDid: string): boolean {
   const grants = new Map<string, Set<string>>();
   for (const permission of granted) {
-    const restriction = caveatRestriction(permission.caveats);
+    const restriction = caveatRestriction(permission.caveats, permission.service);
     for (const tuple of actionTuples(permission, ownerDid)) {
       const restrictions = grants.get(tuple) ?? new Set<string>();
       restrictions.add(restriction);
@@ -238,7 +222,7 @@ export function scopeCovers(granted: readonly PermissionEntry[], held: readonly 
     }
   }
   return held.every((permission) => {
-    const restriction = caveatRestriction(permission.caveats);
+    const restriction = caveatRestriction(permission.caveats, permission.service);
     return actionTuples(permission, ownerDid).every((tuple) => {
       const restrictions = grants.get(tuple);
       return restrictions !== undefined && (restrictions.has("") || restrictions.has(restriction));
