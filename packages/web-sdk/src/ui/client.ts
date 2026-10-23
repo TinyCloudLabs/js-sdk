@@ -12,6 +12,8 @@ export interface ClientSource {
   readonly sync?: SyncFacade | undefined;
   readonly storage: Pick<IStorageService, "status">;
   readonly storageEpisode?: PanelClient["storageEpisode"];
+  /** Signs out of the TinyCloud session. Undefined when the host cannot sign out. */
+  signOut?: (() => Promise<void>) | undefined;
 }
 
 export interface PanelClientHandle {
@@ -53,6 +55,7 @@ export function createPanelClient(
     },
     requestAuthority: undefined,
     requests: undefined,
+    signOut: source.signOut,
   };
 
   return {

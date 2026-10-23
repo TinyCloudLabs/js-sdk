@@ -481,6 +481,7 @@ export class TinyCloudWeb {
         signedIn: () => this.session() !== undefined,
         storage: { status: () => this.storage.status() },
         storageEpisode: this.uiStorageEpisode,
+        signOut: this.signOut,
       },
       manifestAppId: () => {
         const manifest = this._manifest;

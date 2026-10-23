@@ -70,6 +70,14 @@ export interface HostContext {
   hideButton(): void;
 }
 
+/** Context the panel shell gives sections. Only the lazy shell builds it. */
+export interface SectionContext extends HostContext {
+  /** Closes the panel. Focus returns to the launcher when the shell owned it. */
+  closePanel(): void;
+  /** Opens a section in the panel. Used by At-a-glance rows. */
+  openSection(id: SectionId): void;
+}
+
 /** A body section in the panel. Mounted only while the panel is open and `isAvailable`. */
 export interface PanelSection {
   readonly id: SectionId;
@@ -77,7 +85,7 @@ export interface PanelSection {
   readonly labelCode: StringKey;
   isAvailable(ctx: HostContext): boolean;
   /** Returns dispose. May touch only `el`. */
-  mount(el: HTMLElement, ctx: HostContext): () => void;
+  mount(el: HTMLElement, ctx: SectionContext): () => void;
 }
 
 /** Always-on part. Runs while the client is registered, even with the panel closed and button hidden. */
@@ -115,4 +123,6 @@ export interface PanelClient {
   readonly requests?: RequestLogReader | undefined;
   /** Panel data for the views. Undefined unless the host supplied a data factory (harness or preview); production panels show placeholders. */
   readonly data?: PanelDataSource | undefined;
+  /** Signs out of the TinyCloud session. Undefined when the host cannot sign out; Overview then omits the control. */
+  readonly signOut?: (() => Promise<void>) | undefined;
 }

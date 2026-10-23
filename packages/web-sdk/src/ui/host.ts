@@ -1,7 +1,7 @@
 import { createButton, type ButtonView } from "./button";
 import type { PanelClientHandle } from "./client";
 import type { ResolvedUiConfig } from "./config";
-import type { PanelHandle, ShellLayout } from "./panel";
+import type { ShellLayout } from "./panel";
 import type * as PanelEntry from "./panel-entry";
 import { createPendingPanel, type PendingPanel } from "./pending";
 import { HOST_PARTS } from "./parts";
@@ -54,7 +54,7 @@ interface Mounted {
   readonly layer: HTMLElement;
   readonly pending: PendingPanel;
   /** Set once the lazy panel chunk has attached to this mount. */
-  panel?: PanelHandle;
+  panel?: PanelEntry.ShellPanel;
   readonly button: ButtonView | undefined;
   readonly stopParts: Array<() => void>;
 }
@@ -91,10 +91,9 @@ export function createHostRuntime(): HostRuntime {
   /** Phone state while mounted. Phones show the full page; `layout` keeps the desktop choice. */
   let phone = false;
   let stopPhone: (() => void) | undefined;
-  let activeSection: SectionId | undefined;
+  let pendingSection: SectionId | undefined;
   let buttonHidden = false;
   let mounted: Mounted | undefined;
-  let disposers: Array<() => void> = [];
   let rejectionListening = false;
   /** Cached per page: the panel chunk loads once, then attaches to each mount. */
   let panelModule: PanelEntryModule | undefined;
@@ -184,34 +183,18 @@ export function createHostRuntime(): HostRuntime {
     hideButton: hideFromPanel,
   };
 
-  function closeSections(): void {
-    for (const dispose of disposers) dispose();
-    disposers = [];
-  }
-
-  /** Lays out the shell and mounts exactly one available section while open. Needs the panel attached. */
+  /** Hands the shell its view. The shell keeps the mounted section; `pendingSection` applies once. */
   function renderPanel(): void {
-    closeSections();
     const panel = mounted?.panel;
-    if (!panel || !panelModule) return;
-    const available = panelModule.availableSections(context);
-    const current = available.find((section) => section.id === activeSection) ?? available[0];
-    activeSection = current?.id;
-    panel.setLayout(shownLayout(), {
-      showLayoutToggle: !phone && (primaryConfig()?.mode ?? "both") === "both",
+    if (!panel) return;
+    const section = pendingSection;
+    pendingSection = undefined;
+    panel.render({
+      open: isPanelOpen,
+      layout: shownLayout(),
       phone,
-    });
-    panel.setAppLabel(context.appLabel());
-    panel.setNav(available, activeSection);
-    if (!isPanelOpen || !current) return;
-    const el = document.createElement("section");
-    el.className = "section";
-    el.dataset.section = current.id;
-    panel.main.replaceChildren(el);
-    const dispose = current.mount(el, context);
-    disposers.push(() => {
-      dispose();
-      el.remove();
+      showLayoutToggle: !phone && (primaryConfig()?.mode ?? "both") === "both",
+      section,
     });
   }
 
@@ -232,7 +215,7 @@ export function createHostRuntime(): HostRuntime {
     const wasOpen = isPanelOpen;
     const previous = shownLayout();
     layout = resolveLayout(requested);
-    if (section !== undefined) activeSection = section;
+    if (section !== undefined) pendingSection = section;
     isPanelOpen = true;
     syncDom();
     const panel = mounted.panel;
@@ -304,11 +287,7 @@ export function createHostRuntime(): HostRuntime {
       onClose: () => closeShell(true),
       onEscape: () => closeShell(true),
       onLayout: (target) => openAt(target),
-      onNavigate(id) {
-        activeSection = id;
-        renderPanel();
-      },
-    });
+    }, context);
     owner.pending.el.replaceWith(panel.el);
     owner.panel = panel;
     panel.setStatus(board.top());
@@ -359,7 +338,7 @@ export function createHostRuntime(): HostRuntime {
   function unmount(): void {
     syncRejectionListener();
     if (!mounted) return;
-    closeSections();
+    mounted.panel?.dispose();
     for (const stop of mounted.stopParts) stop();
     mounted.host.remove();
     mounted = undefined;
