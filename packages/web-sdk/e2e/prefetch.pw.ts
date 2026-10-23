@@ -33,6 +33,7 @@ interface HarnessWindow {
     reset(): boolean;
     open(): number;
     control(next: { rtt?: number; deny?: string[]; fail?: string[] }): boolean;
+    hold(closed: boolean): boolean;
     age(ms: number): number;
     close(): boolean;
     calls(): Call[];
@@ -49,6 +50,8 @@ const setFaults = (page: Page, next: { rtt?: number; deny?: string[]; fail?: str
   page.evaluate((n) => (window as unknown as HarnessWindow).__tc.control(n), next);
 const age = (page: Page, ms: number) => page.evaluate((m) => (window as unknown as HarnessWindow).__tc.age(m), ms);
 const close = (page: Page) => page.evaluate(() => (window as unknown as HarnessWindow).__tc.close());
+const hold = (page: Page, closed: boolean) =>
+  page.evaluate((c) => (window as unknown as HarnessWindow).__tc.hold(c), closed);
 const callCount = async (page: Page, name: string) => (await calls(page)).filter((c) => c.name === name).length;
 const delegationsNav = (page: Page) => panel(page).getByRole("button", { name: "Delegations", exact: true });
 const storageNav = (page: Page) => panel(page).getByRole("button", { name: "Storage", exact: true });
@@ -142,11 +145,12 @@ async function armAndAge(page: Page) {
 
 test("stale delegations: Updating while the revalidate is in flight, then Updated with one re-query", async ({ page }) => {
   await armAndAge(page);
-  await setFaults(page, { rtt: 1500 });
+  await hold(page, true);
   const before = await callCount(page, "delegations.query");
   await open(page);
   await delegationsNav(page).click();
   await expect(panel(page).getByText("Updating...", { exact: true })).toBeVisible();
+  await hold(page, false);
   await expect(panel(page).getByText("Updated just now", { exact: true })).toBeVisible({ timeout: 5000 });
   expect(await callCount(page, "delegations.query")).toBe(before + 1);
 });
@@ -224,7 +228,7 @@ test("freshness chip states at light and dark, desktop and phone widths", async 
     for (const size of Object.keys(sizes) as (keyof typeof sizes)[]) {
       await page.setViewportSize(sizes[size]);
 
-      await setFaults(page, { rtt: 3000 });
+      await hold(page, true);
       await age(page, 180_000);
       await close(page);
       await open(page);
@@ -232,6 +236,7 @@ test("freshness chip states at light and dark, desktop and phone widths", async 
       await expect(panel(page).getByText("Updating...", { exact: true })).toBeVisible();
       const updatingShot = testInfo.outputPath(`updating-${scheme}-${size}.png`);
       await page.screenshot({ path: updatingShot });
+      await hold(page, false);
       await expect(panel(page).getByText("Updated just now", { exact: true })).toBeVisible({ timeout: 8000 });
 
       await setFaults(page, { fail: ["delegations.query"] });

@@ -21,8 +21,15 @@ Date.now = () => realNow() + clockOffset;
 // PERMISSION_DENIED and `fail` answers NETWORK for the named reads.
 const faults = { rtt: 0, deny: new Set<string>(), fail: new Set<string>() };
 
+// Read gate. While closed, every read waits on it, so a refresh stays in flight until the test
+// calls `hold(false)`. A timed RTT alone races the test's poll: the chip can flip before it looks.
+let gate: Promise<void> | undefined;
+let openGate: (() => void) | undefined;
+
 async function respond<T>(name: string, service: string, data: T) {
   calls.push({ name, at: performance.now() });
+  const held = gate;
+  if (held) await held;
   if (faults.rtt > 0) await new Promise((resolve) => setTimeout(resolve, faults.rtt));
   if (faults.deny.has(name)) {
     return { ok: false as const, error: { code: "PERMISSION_DENIED", message: "denied", service } };
@@ -125,6 +132,20 @@ w.__tc = {
   // Sign-out path: clears this client's view state and cancels a pending pull.
   reset() {
     handle?.reset();
+    return true;
+  },
+  // `hold(true)` closes the read gate; `hold(false)` releases every read waiting on it.
+  hold(closed: boolean) {
+    if (closed && !gate) {
+      gate = new Promise<void>((resolve) => {
+        openGate = resolve;
+      });
+    } else if (!closed && gate) {
+      const release = openGate;
+      gate = undefined;
+      openGate = undefined;
+      release?.();
+    }
     return true;
   },
   control(next: { rtt?: number; deny?: string[]; fail?: string[] }) {
