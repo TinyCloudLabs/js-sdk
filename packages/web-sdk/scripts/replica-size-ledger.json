@@ -1281,5 +1281,55 @@
       "ceiling": 770093
     },
     "reason": "replica.worker.js had no size ratchet; its ceiling is the 770093 B gzip canonical CI measured (TC-1827)"
+  },
+  "tc1823SizeCodeRatchet": {
+    "label": "SQL and DuckDB request-size error codes (#693): root ceiling raised to the measured CI bytes; master 1462456/1404685 → 1462556/1404793; shrunk from +1273/+331 (198771bb) to +100/+108",
+    "ruling": "Approved by Naomi (2026-10-23, policy review relayed by Amos)",
+    "base": "d3da865460ad4b0b51bad753bddd8f89518db238",
+    "sourceCommits": [
+      "c35e268879bf5e30447f9335229dda4d64361bdb"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39978157827",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39978157827/job/120498120597",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39978157827/job/120498121108"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 100,
+        "index.cjs": 108
+      },
+      "ceiling": {
+        "index.mjs": 1462556,
+        "index.cjs": 1404793
+      }
+    },
+    "firstImport": {
+      "delta": {
+        "replica.mjs": 0,
+        "replica.cjs": 0
+      },
+      "ceiling": {
+        "replica.mjs": 51925,
+        "replica.cjs": 67141
+      }
+    },
+    "activation": {
+      "delta": {
+        "activation.mjs": 0,
+        "activation.cjs": 0
+      },
+      "ceiling": {
+        "activation.mjs": 23117,
+        "activation.cjs": 24700
+      }
+    },
+    "worker": {
+      "delta": 0,
+      "ceiling": 776128
+    },
+    "reason": "SQL and DuckDB request-size error codes: +100 B (mjs) / +108 B (cjs) gzip to each web-sdk root bundle (TC-1823)"
   }
 }
