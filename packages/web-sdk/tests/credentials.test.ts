@@ -234,10 +234,12 @@ test("discovery HTML 200 raises a typed CREDENTIAL_DISCOVERY_FAILED error withou
   expect(error.message).not.toContain("/.well-known");
 });
 
-test("discovery 404 raises a typed CREDENTIAL_DISCOVERY_FAILED error with the HTTP status", async () => {
+test("discovery 404 raises OFFLINE, not the typed discovery code", async () => {
   const error = await discoveryFailure(new Response("missing", { status: 404, headers: { "content-type": "text/plain" } })) as Error & Record<string, unknown>;
-  expect(error.code).toBe("CREDENTIAL_DISCOVERY_FAILED");
-  expect(error.host).toBe("witness.credentials.org");
-  expect(error.status).toBe(404);
-  expect(error.contentType).toBe("text/plain");
+  expect(error.code).toBe("OFFLINE");
+});
+
+test("discovery 503 raises ISSUER_UNREADY", async () => {
+  const error = await discoveryFailure(new Response("unavailable", { status: 503, headers: { "content-type": "text/plain" } })) as Error & Record<string, unknown>;
+  expect(error.code).toBe("ISSUER_UNREADY");
 });

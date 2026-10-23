@@ -102,11 +102,9 @@ export class CredentialsService {
     if (url.protocol !== "https:" || !["/.well-known/opencredentials", "/v1/credential-types"].includes(url.pathname) || url.search || url.hash) throw new CredentialError("UNSUPPORTED_PROFILE", "Discovery URL is not an allowed catalog endpoint");
     let response: Response;
     try { response = await (options.fetch ?? globalThis.fetch.bind(globalThis))(url, { credentials: "omit", cache: "no-store", redirect: "error", referrerPolicy: "no-referrer", signal: options.signal }); } catch (cause) { throw new CredentialError("OFFLINE", "Credential discovery is unavailable", { cause }); }
-    const contentType = response.headers.get("content-type");
-    const discoveryFailed = () => Object.assign(new Error("Credential discovery failed"), { code: "CREDENTIAL_DISCOVERY_FAILED", host: url.host, status: response.status, contentType });
-    if (!response.ok) throw discoveryFailed();
+    if (!response.ok) throw new CredentialError(response.status === 503 ? "ISSUER_UNREADY" : "OFFLINE", "Credential discovery is unavailable");
     let catalog: Record<string, unknown>;
-    try { catalog = await response.json() as Record<string, unknown>; } catch { throw discoveryFailed(); }
+    try { catalog = await response.json() as Record<string, unknown>; } catch { throw Object.assign(new Error("Credential discovery returned a non-JSON response"), { code: "CREDENTIAL_DISCOVERY_FAILED", host: url.host, status: response.status, contentType: response.headers.get("content-type") }); }
     if (catalog.type !== "tinycloud.credentials/catalog/v1" || catalog.protocol !== "tinycloud.credentials/acquisition/v1" || catalog.catalogVersion !== 1 || !Array.isArray(catalog.profiles)) throw new CredentialError("DESCRIPTOR_INVALID", "Credential catalog is invalid");
     for (const entryValue of catalog.profiles) {
       if (typeof entryValue !== "object" || entryValue === null || Array.isArray(entryValue)) continue;

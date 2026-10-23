@@ -391,7 +391,7 @@ TinyCloud is built on these fundamental principles:
 
 Share receivers that require a credential discover the catalog at `https://witness.credentials.org/.well-known/opencredentials` by default. Set `credentialDiscoveryUrl` in the receiver config to use a different endpoint. The URL must be `https` and must be `/.well-known/opencredentials` or `/v1/credential-types`, with no query or fragment.
 
-If discovery returns a non-2xx status or a body that is not JSON, the call rejects with an error whose `code` is `CREDENTIAL_DISCOVERY_FAILED`. The error carries `host`, `status`, and `contentType`. A network failure still rejects with `OFFLINE`.
+If discovery responds with a 2xx status whose body is not JSON, the call rejects with an error whose `code` is `CREDENTIAL_DISCOVERY_FAILED`, carrying `host`, `status`, and `contentType`. A 503 response rejects with `ISSUER_UNREADY`. Any other non-2xx response, and a network failure, rejects with `OFFLINE`.
 
 ## Documentation
 
