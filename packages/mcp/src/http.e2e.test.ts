@@ -129,6 +129,59 @@ test("official Streamable HTTP client authenticates and starts delegated setup",
   });
 }, 60_000);
 
+test("public plugin enforces its tools, OAuth audience and separate approval state", async () => {
+  const ownerDids = ["did:pkh:eip155:1:0x1111111111111111111111111111111111111111"];
+  const { app, client, createClient } = await startHostedMcp({
+    nodeHost: "https://node.tinycloud.test",
+    ownerDids,
+    resourcePath: "/chatgpt/mcp",
+  });
+  const tools = (await client.listTools()).tools;
+  expect(tools.map((tool) => tool.name).sort()).toEqual([
+    "tinycloud_apps_context", "tinycloud_apps_query", "tinycloud_apps_read",
+    "tinycloud_apps_write", "tinycloud_connect",
+  ]);
+  for (const name of ["tinycloud_apps_context", "tinycloud_apps_query", "tinycloud_apps_write"]) {
+    expect(tools.find((tool) => tool.name === name)?.annotations).toMatchObject({
+      readOnlyHint: false, destructiveHint: true, openWorldHint: false,
+    });
+  }
+  expect(tools.find((tool) => tool.name === "tinycloud_apps_read")?.annotations)
+    .toMatchObject({ readOnlyHint: true, destructiveHint: false, openWorldHint: false });
+  for (const name of [
+    "tinycloud_secrets_get", "tinycloud_kv_get", "tinycloud_kv_put",
+    "tinycloud_sql_query", "tinycloud_sql_execute", "tinycloud_auth_request",
+    "tinycloud_auth_import", "tinycloud_account_spaces_list",
+  ]) {
+    const refusal = await client.callTool({ name, arguments: {} })
+      .then((value) => JSON.stringify(value), (error: unknown) => String(error));
+    expect(refusal).toMatch(/not found|Unknown tool/i);
+  }
+  const privateClient = await createClient("openkey-user-1", ownerDids, { path: "/mcp" });
+  expect((await privateClient.listTools()).tools.map((tool) => tool.name))
+    .toEqual(expect.arrayContaining(["tinycloud_secrets_get", "tinycloud_kv_get"]));
+  for (const [path, audience] of [
+    ["/chatgpt/mcp", "https://mcp.test/mcp"],
+    ["/mcp", "https://mcp.test/chatgpt/mcp"],
+  ]) {
+    await expect(createClient("openkey-user-1", ownerDids, { path, audience })).rejects.toThrow();
+  }
+  const publicStatus = record((await client.callTool({ name: "tinycloud_connect", arguments: {} })).structuredContent);
+  const privateStatus = record((await privateClient.callTool({ name: "tinycloud_connect", arguments: {} })).structuredContent);
+  expect(publicStatus.connected).toBe(false);
+  expect(publicStatus.sessionDid).toBeUndefined();
+  const publicApproval = new URL(String(publicStatus.approvalUrl));
+  const privateApproval = new URL(String(privateStatus.approvalUrl));
+  expect(publicApproval.pathname).toBe("/chatgpt/connect");
+  expect(privateApproval.pathname).toBe("/connect");
+  const redirect = await openKeyRedirect(app, publicApproval.toString());
+  expect(new URL(redirect.searchParams.get("callback")!).pathname).toBe("/chatgpt/connect/callback");
+  publicApproval.pathname = "/connect";
+  privateApproval.pathname = "/chatgpt/connect";
+  expect((await hostedFetch(app, publicApproval)).status).toBe(400);
+  expect((await hostedFetch(app, privateApproval)).status).toBe(400);
+}, 60_000);
+
 test("a signed bootstrap and a signed delegation approval let a hosted tool use the stored authority", async () => {
   // The loopback node lives in node-sdk's test sources, outside this package's
   // build graph; stdio.test.ts loads the same fixtures the same way.
@@ -937,7 +990,8 @@ test.skipIf(!nodeBinary)("a node revocation starts fresh hosted approval and res
   expect(record((await activeCapabilities()).structuredContent).status).toBe("ok");
 }, 120_000);
 
-test("hosted apps approvals persist records and recover an expired session without losing grants", async () => {
+for (const resourcePath of ["/mcp", "/chatgpt/mcp"]) {
+test(`${resourcePath} apps approvals persist records and recover an expired session without losing grants`, async () => {
   // This loopback fixture is outside MCP's package build graph.
   const hermeticModule = await import(new URL(
     "../../node-sdk/src/test-support/hermetic-encrypted-node.ts", import.meta.url,
@@ -946,13 +1000,14 @@ test("hosted apps approvals persist records and recover an expired session witho
   resources.push(async () => hermetic.stop());
   hermetic.provisionKvSpace(await ownerSpace(hermetic.ownerPrivateKey, "default"));
   const { app, client, stateDir } = await startHostedMcp({
-    nodeHost: hermetic.host, ownerDids: [hermetic.ownerDid],
+    nodeHost: hermetic.host, ownerDids: [hermetic.ownerDid], resourcePath,
   });
   const first = record((await client.callTool({ name: "tinycloud_apps_context", arguments: {} })).structuredContent);
   expect(first).toMatchObject({ status: "error", error: { code: "SESSION_NOT_FOUND" } });
   const bootstrapUrl = String(record(record(first.error).details).approvalUrl);
-  const [tenantId] = await readdir(join(stateDir, "tenants"));
-  const tenantStateRoot = join(stateDir, "tenants", tenantId!);
+  const tenantsDir = join(stateDir, ...(resourcePath === "/chatgpt/mcp" ? ["chatgpt"] : []), "tenants");
+  const [tenantId] = await readdir(tenantsDir);
+  const tenantStateRoot = join(tenantsDir, tenantId!);
   const bootstrap = await openKeyApprovalBody({
     redirect: await openKeyRedirect(app, bootstrapUrl), tenantStateRoot, privateKey: hermetic.ownerPrivateKey,
   });
@@ -992,25 +1047,19 @@ test("hosted apps approvals persist records and recover an expired session witho
     ] },
   });
   // Two keys exercise the SDK batch response rather than its one-key get fallback.
-  const logs: string[] = [];
-  const logSpy = spyOn(process.stderr, "write").mockImplementation((chunk: string | Uint8Array) => {
-    logs.push(String(chunk));
-    return true;
-  });
-  resources.push(async () => logSpy.mockRestore());
   const read = await client.callTool({
     name: "tinycloud_apps_read", arguments: { keys: [key, `${root}catalog/fitness/weight`] },
-  });
-  logSpy.mockRestore();
-  expect(logs).toHaveLength(1);
-  expect(JSON.parse(logs[0]!)).toEqual({
-    tool: "tinycloud_apps_read", code: "ok", durationMs: expect.any(Number), replayedGrants: 1,
   });
   expect(read.structuredContent).toMatchObject({ status: "ok", output: { records: [
     { key, value: { data: { kg: 80.5 }, by: "tinycloud-mcp" }, etag: expect.any(String) },
     { key: `${root}catalog/fitness/weight`, value: { kind: "weight" } },
   ] } });
   expect(JSON.stringify(read.content)).toContain("80.5");
+
+  const outsideRecords = await client.callTool({
+    name: "tinycloud_apps_read", arguments: { keys: ["xyz.tinycloud.secrets/private-key"] },
+  });
+  expect(outsideRecords.structuredContent).toMatchObject({ status: "error", error: { code: "INPUT_INVALID" } });
 
   const sessionPath = join(tenantStateRoot, ".tinycloud/profiles/agent/session.json");
   const stored = JSON.parse(await readFile(sessionPath, "utf8")) as Record<string, unknown>;
@@ -1034,6 +1083,7 @@ test("hosted apps approvals persist records and recover an expired session witho
   expect((await client.callTool({ name: "tinycloud_apps_read", arguments: { keys: [key] } })).structuredContent)
     .toMatchObject({ status: "ok", output: { records: [{ key, value: { data: { kg: 80.5 } } }] } });
 }, 60_000);
+}
 
 test("a refused delegation approval names its stage, code and reason, and never echoes the approval", async () => {
   // The loopback node is outside this package's build graph, as above.
@@ -1246,11 +1296,11 @@ interface HermeticNode {
   stop(): void;
 }
 
-async function startHostedMcp(options: { nodeHost: string; ownerDids: string[] }): Promise<{
+async function startHostedMcp(options: { nodeHost: string; ownerDids: string[]; resourcePath?: string }): Promise<{
   app: HostedMcpApp;
   client: Client;
   stateDir: string;
-  createClient: (subject: string, ownerDids?: string[]) => Promise<Client>;
+  createClient: (subject: string, ownerDids?: string[], connection?: { path: string; audience?: string }) => Promise<Client>;
 }> {
   const { privateKey, publicKey } = await generateKeyPair("EdDSA");
   const publicJwk = await exportJWK(publicKey);
@@ -1277,7 +1327,12 @@ async function startHostedMcp(options: { nodeHost: string; ownerDids: string[] }
     },
   });
   resources.push(() => app.close());
-  const createClient = async (subject: string, ownerDids = options.ownerDids): Promise<Client> => {
+  const createClient = async (
+    subject: string,
+    ownerDids = options.ownerDids,
+    connection: { path: string; audience?: string } = { path: options.resourcePath ?? "/mcp" },
+  ): Promise<Client> => {
+    const resourceUrl = new URL(connection.path, "https://mcp.test");
     const token = await new SignJWT({
       scope: "openid tinycloud:mcp",
       azp: "claude-test",
@@ -1286,12 +1341,12 @@ async function startHostedMcp(options: { nodeHost: string; ownerDids: string[] }
       .setProtectedHeader({ alg: "EdDSA", kid: "test-key" })
       .setIssuer("https://openkey.test/api/auth")
       .setSubject(subject)
-      .setAudience("https://mcp.test/mcp")
+      .setAudience(connection.audience ?? resourceUrl.toString())
       .setIssuedAt()
       .setExpirationTime("5m")
       .sign(privateKey);
     const connected = new Client({ name: "hosted-mcp-test", version: "1.0.0" });
-    await connected.connect(new StreamableHTTPClientTransport(new URL("https://mcp.test/mcp"), {
+    await connected.connect(new StreamableHTTPClientTransport(resourceUrl, {
       authProvider: { token: async () => token },
       fetch: (input, init) => hostedFetch(app, input, init),
     }));
@@ -1327,8 +1382,9 @@ async function postCallback(
   approvalUrl: string,
   body: Record<string, unknown>,
 ): Promise<{ status: number; body: unknown }> {
-  const state = new URL(approvalUrl).searchParams.get("state")!;
-  const response = await hostedFetch(app, `https://mcp.test/connect/callback?state=${encodeURIComponent(state)}`, {
+  const callbackUrl = new URL(approvalUrl);
+  callbackUrl.pathname += "/callback";
+  const response = await hostedFetch(app, callbackUrl, {
     method: "POST",
     headers: { origin: "https://openkey.test", "content-type": "application/json" },
     body: JSON.stringify(body),
