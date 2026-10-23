@@ -117,12 +117,6 @@ export const ErrorCodes = {
   SQL_INVALID_STATEMENT: "SQL_INVALID_STATEMENT",
   SQL_SCHEMA_ERROR: "SQL_SCHEMA_ERROR",
   SQL_READONLY_VIOLATION: "SQL_READONLY_VIOLATION",
-  /**
-   * HTTP 403: the delegation's SQL caveats (tables, columns, read-only) do not
-   * allow the request. `meta.arm` is `table`, `column`, `write` or `chain`
-   * when the node named one; the message never carries SQL.
-   */
-  SQL_CAVEAT_VIOLATION: "SQL_CAVEAT_VIOLATION",
 
   // Storage quota errors
   STORAGE_QUOTA_EXCEEDED: "STORAGE_QUOTA_EXCEEDED",

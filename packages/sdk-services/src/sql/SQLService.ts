@@ -48,6 +48,7 @@ import {
   type SqlMigrationApplyOptions,
   type SqlMigrationApplyResponse,
   SQLAction,
+  SqlErrorCodes,
 } from "./types";
 
 const DDL_TOKENS = new Set(["alter", "create", "drop"]);
@@ -585,7 +586,7 @@ export class SQLService extends BaseService implements ISQLService {
       const arm = SQL_CAVEAT_ARMS.find((candidate) => candidate === refusal.detail);
       return err(
         serviceError(
-          ErrorCodes.SQL_CAVEAT_VIOLATION,
+          SqlErrorCodes.SQL_CAVEAT_VIOLATION,
           `SQL ${operation} refused: the delegation's SQL caveats do not allow this request`,
           "sql",
           { meta: { status: meta.status, statusText: meta.statusText, ...(arm === undefined ? {} : { arm }) } },

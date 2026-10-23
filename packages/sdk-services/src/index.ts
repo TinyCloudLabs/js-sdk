@@ -305,7 +305,7 @@ export {
 } from "./kv/replication";
 
 // SQL service
-export { SQLService, DatabaseHandle, SQLMigrations, SQLAction } from "./sql";
+export { SQLService, DatabaseHandle, SQLMigrations, SQLAction, SqlErrorCodes } from "./sql";
 export type { ISQLService, IDatabaseHandle, ISQLMigrations } from "./sql";
 export type {
   SQLServiceConfig,
