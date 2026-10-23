@@ -1,5 +1,5 @@
 // Subpath entry for headless clients (e.g. the CLI). Re-exports the single
-// credential driver from @tinycloud/node-sdk/credentials; the export list is unchanged.
+// credential driver from @tinycloud/node-sdk/credentials. Exports are the driver surface plus the share-presentation builder.
 export { OpenCredentialsHttpTransport } from "@tinycloud/node-sdk/credentials";
 export { interpretCredentialFlow } from "@tinycloud/node-sdk/credentials";
 export type {
@@ -30,4 +30,11 @@ export type {
   EmailProofStep,
   HolderAlgorithm,
   HolderSigner,
+} from "@tinycloud/node-sdk/credentials";
+export { buildSharePresentation, SharePresentationError } from "@tinycloud/node-sdk/credentials";
+export type {
+  BuildSharePresentationInput,
+  SharePresentationChallenge,
+  SharePresentationErrorCode,
+  SharePresentationMaterial,
 } from "@tinycloud/node-sdk/credentials";

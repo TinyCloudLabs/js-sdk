@@ -13,9 +13,9 @@ export type SharePresentationErrorCode =
   | "CHALLENGE_EXPIRED"
   | "CHALLENGE_WINDOW_TOO_LONG"
   | "CHALLENGE_IDENTIFIER_INVALID"
+  | "CHALLENGE_ROUTE_UNSUPPORTED"
   | "CHALLENGE_AUDIENCE_MISMATCH"
-  | "CHALLENGE_ACTION_MISMATCH"
-  | "RECIPIENT_MISMATCH"
+  | "CHALLENGE_RECIPIENT_MISMATCH"
   | "HOLDER_MISMATCH"
   | "CREDENTIAL_MISMATCH"
   | "POLICY_INVALID"
@@ -44,20 +44,18 @@ const CHALLENGE_MAX_WINDOW_MS = 60_000;
 const CHALLENGE_IDENTIFIER_MIN_LENGTH = 16;
 
 /**
- * Challenge as returned by the node. `expiresAt` is required here, unlike sdk-core's optional field.
- *
- * NOT CONFIRMED: sdk-core's PolicyChallengeV3 (policy/unified.ts:161-169) declares neither
- * `action` nor `enforcerDid`. This builder requires `action`, so a node challenge without it
- * fails closed with CHALLENGE_ACTION_MISMATCH.
+ * Policy-v3 challenge as returned by the node (policy_v3.rs:1665-1673): challengeId, nonce,
+ * policyCid, recipientDid, expiresAt, and an optional nodeAudience. nodeAudience is omitted for
+ * non-POLICY_V2 policies (policy_v3.rs:2095); the caller's expectedNodeAudience supplies it.
+ * Route-A (share-mint) challenges are rejected at runtime by isRouteAShaped.
  */
 export type SharePresentationChallenge = {
   readonly challengeId: string;
   readonly nonce: string;
   readonly policyCid: string;
   readonly recipientDid: string;
-  readonly nodeAudience: string;
-  readonly action: string;
   readonly expiresAt: string;
+  readonly nodeAudience?: string;
 };
 
 export interface BuildSharePresentationInput {
@@ -70,15 +68,11 @@ export interface BuildSharePresentationInput {
   /**
    * Node audience the CALLER trusts, taken from its own verified share envelope and not from the
    * relay challenge: `PublishedShareEnvelopeV2.target.nodeAudience` (sdk-core delegations/share-envelope.ts:502)
-   * or `AttestedEnforcerBindingV2.nodeAudience` (sdk-core policy/unified.ts:123). Compared to
-   * `challenge.nodeAudience`. Empty or mismatched fails closed before signing.
+   * or `AttestedEnforcerBindingV2.nodeAudience` (sdk-core policy/unified.ts:123). Empty fails closed.
+   * If challenge.nodeAudience is present and differs, fails closed with CHALLENGE_AUDIENCE_MISMATCH.
+   * Always written into the V4 body as nodeAudience.
    */
   readonly expectedNodeAudience: string;
-  /**
-   * Action the CALLER intends to present for, e.g. the action its share envelope grants.
-   * Compared to `challenge.action`. Empty or mismatched fails closed before signing.
-   */
-  readonly expectedAction: string;
 }
 
 export interface SharePresentationMaterial {
@@ -96,12 +90,27 @@ export interface SharePresentationMaterial {
 }
 
 /**
+ * Route-A (share-mint) markers. A challenge carrying any of these, or type
+ * TinyCloudSharePolicyChallenge, is share-route shaped (share_email.rs:2505-2530) and is
+ * rejected: this builder only accepts the policy-v3 challenge (policy_v3.rs:1665-1673).
+ */
+const ROUTE_A_MARKERS = ["action", "enforcerDid", "shareCid", "authorityMaterialHandle"] as const;
+
+function isRouteAShaped(challenge: unknown): boolean {
+  const fields = challenge as Record<string, unknown>;
+  return fields.type === "TinyCloudSharePolicyChallenge" ||
+    ROUTE_A_MARKERS.some((key) => fields[key] !== undefined);
+}
+
+/**
  * Build the signed V4 policy presentation for a Share mint.
  *
  * Checks run in fail-closed order; each failure throws a SharePresentationError
- * with one code. Audience and action are pinned to the caller's expectations first,
- * so a relay cannot steer the holder into signing for a node it did not name in the
- * caller's own envelope. The sdk-core builder re-checks everything else and any builder
+ * with one code. Route shape and audience are pinned first, so a relay cannot steer the
+ * holder into signing for a node it did not name in the caller's own envelope.
+ * The V4 body's nodeAudience is always expectedNodeAudience: the node omits
+ * challenge.nodeAudience for non-POLICY_V2 policies (policy_v3.rs:2095), and sdk-core
+ * requires it non-empty. The sdk-core builder re-checks everything else and any builder
  * rejection maps to PRESENTATION_REJECTED. Signing is delegated to the holder signer
  * over the 32-byte V4 digest; no hashing happens here.
  */
@@ -110,19 +119,15 @@ export async function buildSharePresentation(
 ): Promise<SharePresentationMaterial> {
   const { holderSigner, result, requirement, challenge } = input;
 
+  if (isRouteAShaped(challenge)) {
+    throw new SharePresentationError("CHALLENGE_ROUTE_UNSUPPORTED", "policy challenge is share-route shaped; only the policy-v3 route is supported");
+  }
   if (
     typeof input.expectedNodeAudience !== "string" ||
     input.expectedNodeAudience.length === 0 ||
-    challenge.nodeAudience !== input.expectedNodeAudience
+    (challenge.nodeAudience !== undefined && challenge.nodeAudience !== input.expectedNodeAudience)
   ) {
     throw new SharePresentationError("CHALLENGE_AUDIENCE_MISMATCH", "policy challenge audience is not the expected node");
-  }
-  if (
-    typeof input.expectedAction !== "string" ||
-    input.expectedAction.length === 0 ||
-    challenge.action !== input.expectedAction
-  ) {
-    throw new SharePresentationError("CHALLENGE_ACTION_MISMATCH", "policy challenge action is not the expected action");
   }
 
   const nowMs = Date.now();
@@ -145,8 +150,8 @@ export async function buildSharePresentation(
   if (holderSigner.did !== holderDid) {
     throw new SharePresentationError("HOLDER_MISMATCH", "holder signer does not match the credential holder");
   }
-  if (challenge.recipientDid !== holderDid) {
-    throw new SharePresentationError("RECIPIENT_MISMATCH", "policy challenge recipient is not the credential holder");
+  if (challenge.recipientDid !== holderSigner.did) {
+    throw new SharePresentationError("CHALLENGE_RECIPIENT_MISMATCH", "policy challenge recipient is not the holder signer");
   }
   if (result.envelope.credential !== result.verified.credential) {
     throw new SharePresentationError("CREDENTIAL_MISMATCH", "credential envelope does not match verified credential");
@@ -179,7 +184,14 @@ export async function buildSharePresentation(
     presentation = await buildPolicyCredentialPresentationV4({
       policy,
       policyCid: challenge.policyCid,
-      challenge,
+      challenge: {
+        challengeId: challenge.challengeId,
+        nonce: challenge.nonce,
+        policyCid: challenge.policyCid,
+        recipientDid: challenge.recipientDid,
+        expiresAt: challenge.expiresAt,
+        nodeAudience: input.expectedNodeAudience,
+      },
       requirement,
       credential: result.verified,
       requestedCapabilities: policy.capabilityCeiling,

@@ -132,7 +132,6 @@ async function fixture(): Promise<Fixture> {
     policyCid,
     recipientDid: holderDid,
     nodeAudience: "did:key:zNode",
-    action: "tinycloud.kv/get",
     expiresAt: soon(),
   };
   const holderSigner = createEd25519HolderSigner(holderDid, holderSign);
@@ -149,7 +148,6 @@ async function fixture(): Promise<Fixture> {
       challenge,
       policy,
       expectedNodeAudience: "did:key:zNode",
-      expectedAction: "tinycloud.kv/get",
     },
   };
 }
@@ -268,13 +266,16 @@ describe("buildSharePresentation fail-closed rejections (one per code)", () => {
     expect(error.code).toBe("CHALLENGE_EXPIRED");
   });
 
-  test("RECIPIENT_MISMATCH when the challenge recipient is not the credential holder", async () => {
+  test("CHALLENGE_RECIPIENT_MISMATCH when the challenge recipient is not the holder signer; nothing is signed", async () => {
     const f = await fixture();
+    const { holderSigner, calls } = countingSigner(f);
     const error = await rejectionOf(buildSharePresentation({
       ...f.input,
+      holderSigner,
       challenge: { ...f.challenge, recipientDid: "did:key:zAttacker" },
     }));
-    expect(error.code).toBe("RECIPIENT_MISMATCH");
+    expect(error.code).toBe("CHALLENGE_RECIPIENT_MISMATCH");
+    expect(calls.n).toBe(0);
   });
 
   test("HOLDER_MISMATCH when the holder signer DID differs from the credential holder", async () => {
@@ -368,68 +369,47 @@ describe("buildSharePresentation fail-closed rejections (one per code)", () => {
     expect(calls.n).toBe(0);
   });
 
-  test("CHALLENGE_ACTION_MISMATCH when the relay names a different action; nothing is signed", async () => {
+  test("CHALLENGE_ROUTE_UNSUPPORTED for any share-route (route-A) marker; nothing is signed", async () => {
     const f = await fixture();
-    const { holderSigner, calls } = countingSigner(f);
-    const error = await rejectionOf(buildSharePresentation({
-      ...f.input,
-      holderSigner,
-      challenge: { ...f.challenge, action: "tinycloud.kv/put" },
-    }));
-    expect(error.code).toBe("CHALLENGE_ACTION_MISMATCH");
-    expect(calls.n).toBe(0);
+    const shaped: Array<Record<string, unknown>> = [
+      { action: "tinycloud.kv/get" },
+      { enforcerDid: "did:key:zEnforcer" },
+      { shareCid: cidOf({ share: 1 }) },
+      { authorityMaterialHandle: "authority-handle-0001" },
+      { type: "TinyCloudSharePolicyChallenge" },
+    ];
+    for (const extra of shaped) {
+      const { holderSigner, calls } = countingSigner(f);
+      const challenge = { ...f.challenge, ...extra } as unknown as SharePresentationChallenge;
+      const error = await rejectionOf(buildSharePresentation({ ...f.input, holderSigner, challenge }));
+      expect(error.code).toBe("CHALLENGE_ROUTE_UNSUPPORTED");
+      expect(calls.n).toBe(0);
+    }
   });
 
-  test("CHALLENGE_ACTION_MISMATCH when the challenge carries no action", async () => {
+  test("a route-B challenge without nodeAudience is accepted; the V4 body uses expectedNodeAudience", async () => {
     const f = await fixture();
-    const { holderSigner, calls } = countingSigner(f);
-    const error = await rejectionOf(buildSharePresentation({
-      ...f.input,
-      holderSigner,
-      challenge: { ...f.challenge, action: undefined as unknown as string },
-    }));
-    expect(error.code).toBe("CHALLENGE_ACTION_MISMATCH");
-    expect(calls.n).toBe(0);
+    const challenge: SharePresentationChallenge = { ...f.challenge, nodeAudience: undefined };
+    const material = await buildSharePresentation({ ...f.input, challenge });
+    expect(material.presentation.nodeAudience).toBe(f.input.expectedNodeAudience);
   });
 
-  test("CHALLENGE_ACTION_MISMATCH when the expected action is empty, even if the challenge action is also empty", async () => {
+  test("a challenge recipient equal to holderSigner.did is accepted (no CHALLENGE_RECIPIENT_MISMATCH)", async () => {
     const f = await fixture();
-    const { holderSigner, calls } = countingSigner(f);
-    const error = await rejectionOf(buildSharePresentation({
+    const material = await buildSharePresentation({
       ...f.input,
-      holderSigner,
-      expectedAction: "",
-      challenge: { ...f.challenge, action: "" },
-    }));
-    expect(error.code).toBe("CHALLENGE_ACTION_MISMATCH");
-    expect(calls.n).toBe(0);
+      challenge: { ...f.challenge, recipientDid: f.holderSigner.did },
+    });
+    expect(material.presentation.nonce).toBe(f.challenge.nonce);
   });
 
-  test("CHALLENGE_ACTION_MISMATCH when expectedAction is missing at runtime", async () => {
-    const f = await fixture();
-    const { holderSigner, calls } = countingSigner(f);
-    const error = await rejectionOf(buildSharePresentation({
-      ...f.input,
-      holderSigner,
-      expectedAction: undefined as unknown as string,
-    }));
-    expect(error.code).toBe("CHALLENGE_ACTION_MISMATCH");
-    expect(calls.n).toBe(0);
-  });
-
-  test("expectedNodeAudience and expectedAction are required by the type (checked by tsc, not by runtime)", () => {
+  test("expectedNodeAudience is required by the type (checked by tsc, not by runtime)", () => {
     const withoutAudience = (f: Fixture) => {
       const rest: Omit<BuildSharePresentationInput, "expectedNodeAudience"> = f.input;
       // @ts-expect-error expectedNodeAudience is required
       return buildSharePresentation(rest);
     };
-    const withoutAction = (f: Fixture) => {
-      const rest: Omit<BuildSharePresentationInput, "expectedAction"> = f.input;
-      // @ts-expect-error expectedAction is required
-      return buildSharePresentation(rest);
-    };
     expect(typeof withoutAudience).toBe("function");
-    expect(typeof withoutAction).toBe("function");
   });
 
   test("CHALLENGE_WINDOW_TOO_LONG when the challenge expires 61 s out; nothing is signed", async () => {
@@ -498,7 +478,7 @@ describe("buildSharePresentation malicious-relay set", () => {
       ...f.input,
       challenge: { ...f.challenge, recipientDid: "did:key:zRelay" },
     }));
-    expect(error.code).toBe("RECIPIENT_MISMATCH");
+    expect(error.code).toBe("CHALLENGE_RECIPIENT_MISMATCH");
   });
 
   test("relay returns a challenge that is already expired", async () => {
