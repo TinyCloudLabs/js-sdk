@@ -1,4 +1,4 @@
-import { foldSqlName, parseSqlCaveatList, type SqlCaveatList } from "@tinycloud/sdk-core";
+import { foldSqlName, parseSqlCaveatList, type SqlCaveatList } from "@tinycloud/sdk-core/sql-caveats";
 
 /** JSON with object keys sorted, so equal values serialize identically. */
 export function canonicalJson(value: unknown): string {

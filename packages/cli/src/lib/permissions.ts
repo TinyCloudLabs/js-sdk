@@ -1,5 +1,7 @@
 import { appendFile, chmod, readFile } from "node:fs/promises";
 import { join } from "node:path";
+// Turns on the delegated SQL caveat grammar for the manifest validation below.
+import "@tinycloud/sdk-core/sql-caveats";
 import {
   buildPermissionRequestArtifact,
   isPermissionRequestArtifact,
