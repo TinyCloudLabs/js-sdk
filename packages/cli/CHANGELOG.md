@@ -1,5 +1,13 @@
 # @tinycloud/cli
 
+## 1.3.5-beta.6
+
+### Patch Changes
+
+- Updated dependencies [e600a1a]
+  - @tinycloud/node-sdk@3.6.0-beta.6
+  - @tinycloud/operations@0.7.4-beta.6
+
 ## 1.3.5-beta.5
 
 ### Patch Changes
