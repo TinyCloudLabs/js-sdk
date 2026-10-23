@@ -6,6 +6,7 @@ import type { ClientSource } from "../../src/ui/client";
 import { REGISTRY_KEY } from "../../src/ui/host";
 import { toastStore } from "../../src/ui/parts/toasts";
 import type { SyncFacade, SyncState } from "../../src/ui/slots";
+import { createStubPanelData } from "../../src/ui/stub";
 import type { ToastKind, ToastView } from "../../src/ui/toast-store";
 import { panelMounted } from "./panel-ready";
 
@@ -80,13 +81,18 @@ function facade(state: SyncState): SyncFacade {
 }
 
 /** Registers a client with a sync facade and opens the panel. */
-function mountPanel(): void {
+function mountPanel(signedIn = false): void {
   const src = {
-    signedIn: () => false,
+    signedIn: () => signedIn,
+    signOut: signedIn ? async () => {} : undefined,
     storage: { status: () => undefined },
     sync: facade({ requested: true, effective: "on" }),
   } as unknown as ClientSource;
-  const handle = registerUiClient({ source: src, manifestAppId: () => undefined });
+  const handle = registerUiClient({
+    source: src,
+    manifestAppId: () => undefined,
+    ...(signedIn ? { data: createStubPanelData() } : {}),
+  });
   handles.push(handle);
   handle.api.open();
 }
@@ -145,6 +151,24 @@ describe("panel stylesheet targets", () => {
     // The pending stand-in is the only panel markup until the lazy chunk replaces it.
     for (const el of shadow().querySelectorAll("[class]")) for (const cls of el.classList) applied.add(cls);
     await panelMounted();
+    for (const nav of shadow().querySelectorAll<HTMLButtonElement>(".nav-i")) {
+      nav.click();
+      for (const el of shadow().querySelectorAll("[class]")) for (const cls of el.classList) applied.add(cls);
+    }
+    for (const cls of appliedClassesAcrossKinds()) applied.add(cls);
+    const missing = [...targetedClasses(stylesheetText(shadow()))].filter((cls) => !applied.has(cls)).sort();
+    expect(missing).toEqual([]);
+  });
+
+  test("signed-in visit renders every targeted class, sign-out confirm included", async () => {
+    const applied = new Set<string>();
+    mountPanel(true);
+    // The pending stand-in is the only markup until the lazy chunk replaces it.
+    for (const el of shadow().querySelectorAll("[class]")) for (const cls of el.classList) applied.add(cls);
+    await panelMounted();
+    // Overview is open first: open the sign-out confirm there, then visit each section.
+    shadow().querySelector<HTMLButtonElement>(".account-signout")?.click();
+    for (const el of shadow().querySelectorAll("[class]")) for (const cls of el.classList) applied.add(cls);
     for (const nav of shadow().querySelectorAll<HTMLButtonElement>(".nav-i")) {
       nav.click();
       for (const el of shadow().querySelectorAll("[class]")) for (const cls of el.classList) applied.add(cls);
@@ -320,6 +344,16 @@ describe("focus ring coverage", () => {
   test("every rendered interactive element matches a focus-ring selector", async () => {
     await openPanel();
     toastStore.push({ kind: "warning", textCode: "panel.title", href: "https://example.com/docs", hrefLabelCode: "panel.close" });
+    const found = [...shadow().querySelectorAll("button, a[href], [role='switch'], input, select, textarea")];
+    expect(found.length).toBeGreaterThan(0);
+    const unmatched = found.filter((el) => !FOCUS_SELECTORS.some((sel) => el.matches(sel))).map((el) => el.outerHTML);
+    expect(unmatched).toEqual([]);
+  });
+
+  test("signed-in Overview with the sign-out confirm open matches a focus-ring selector", async () => {
+    mountPanel(true);
+    await panelMounted();
+    shadow().querySelector<HTMLButtonElement>(".account-signout")?.click();
     const found = [...shadow().querySelectorAll("button, a[href], [role='switch'], input, select, textarea")];
     expect(found.length).toBeGreaterThan(0);
     const unmatched = found.filter((el) => !FOCUS_SELECTORS.some((sel) => el.matches(sel))).map((el) => el.outerHTML);
