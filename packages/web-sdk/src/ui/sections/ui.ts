@@ -9,7 +9,6 @@ export const UI_STYLE = `
 .glance{display:flex;flex-direction:column;margin:0;padding:0;list-style:none}
 .glance-row{display:flex;align-items:center;gap:14px;width:100%;min-height:56px;padding:6px 6px 6px 0;border:0;border-bottom:1px solid #e4e4e7;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}
 .glance-row:last-child{border-bottom:0}
-.glance-row:focus-visible{outline:2px solid #111827;outline-offset:2px}
 .glance-row .gl{flex:1;min-width:0}
 .glance-row .gl b{display:block;font-size:14.5px;font-weight:600}
 .glance-row .gl span{display:block;font-size:13px;color:#4b5563}
@@ -21,7 +20,6 @@ export const UI_STYLE = `
 @media (prefers-color-scheme: dark){
 .glance-row{border-bottom-color:#3f3f46}
 .glance-row .gl span,.glance-row .gr{color:#a1a1aa}
-.glance-row:focus-visible{outline-color:#fafafa}
 .drawer{border-color:#3f3f46;background:#151517}
 .slip{border-color:#71717a}
 }

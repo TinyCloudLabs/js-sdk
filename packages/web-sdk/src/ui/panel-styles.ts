@@ -7,7 +7,7 @@
  * The drawer edge (#e4e4e7 / #69696b) is decorative, not a 3:1 target.
  */
 export const PANEL_CSS = `
-.nav-i:focus-visible,.action:focus-visible,.switch:focus-visible,.icon-btn:focus-visible,.menu-i:focus-visible{outline:2px solid #111827;outline-offset:2px;box-shadow:0 0 0 6px #fafafa}
+.glance-row:focus-visible,.nav-i:focus-visible,.action:focus-visible,.switch:focus-visible,.icon-btn:focus-visible,.menu-i:focus-visible{outline:2px solid #111827;outline-offset:2px;box-shadow:0 0 0 6px #fafafa}
 .panel{position:fixed;top:0;bottom:0;right:0;box-sizing:border-box;width:min(420px,100%);display:grid;grid-template-rows:auto auto minmax(0,1fr);grid-template-areas:"head" "nav" "main";overflow:hidden;border-left:1px solid #e4e4e7;background:#fff;color:#111827;box-shadow:-18px 0 48px -18px rgba(0,0,0,.35);pointer-events:auto;animation:tc-in .42s cubic-bezier(.22,1,.36,1)}
 .layer[data-position="bottom-left"] .panel{left:0;right:auto;border-left:0;border-right:1px solid #e4e4e7;box-shadow:18px 0 48px -18px rgba(0,0,0,.35);animation-name:tc-in-l}
 .layer .panel[data-layout="page"]{top:0;bottom:0;left:0;right:0;width:auto;border:0;box-shadow:none;grid-template-rows:auto minmax(0,1fr);grid-template-columns:288px minmax(0,1fr);grid-template-areas:"head head" "nav main"}
@@ -68,7 +68,7 @@ export const PANEL_CSS = `
 .panel,.knob::after{animation:none;transition:none}
 }
 @media (prefers-color-scheme: dark){
-.nav-i:focus-visible,.action:focus-visible,.switch:focus-visible,.icon-btn:focus-visible,.menu-i:focus-visible{outline-color:#fafafa;box-shadow:0 0 0 6px #111827}
+.glance-row:focus-visible,.nav-i:focus-visible,.action:focus-visible,.switch:focus-visible,.icon-btn:focus-visible,.menu-i:focus-visible{outline-color:#fafafa;box-shadow:0 0 0 6px #111827}
 .panel{border-left-color:#69696b;background:#151517;color:#fafafa}
 .head,.nav{background:#151517}
 .main{border-top-color:#fafafa}
