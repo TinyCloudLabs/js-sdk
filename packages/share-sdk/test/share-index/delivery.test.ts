@@ -238,6 +238,35 @@ describe("agent store and reconciler use the stored form", () => {
     }
     expect(failure).toMatchObject({ name: "AgentRecordError", reason: "size" });
   });
+
+  test("the schema refuses a full link stored beside delivery material, with a record far under the size cap", async () => {
+    const key = crypto.getRandomValues(new Uint8Array(32));
+    const small = await seal(encoder.encode("{}"), key);
+    const material = { shareCid: small.cid, sealedEnvelope: toBase64Url(small.blob), envelopeKey: toBase64Url(key) };
+    const { record } = await prepareLinkRecord({
+      type: "share",
+      sealed: { blob: small.blob, key },
+      issuerKey: signerFromSeed(Uint8Array.from({ length: 32 }, (_, index) => index + 1)),
+      apiOrigin: "https://api.tinycloud.xyz",
+      expiresAt: new Date(Date.now() + 3600_000),
+      enforceServiceLife: false,
+    });
+    const fullLink = buildFullLink({ origin: SHARE_ORIGIN, key, record });
+    const shortLink = buildShortLink({ origin: SHARE_ORIGIN, type: "share", id: "lqdw5iopqq2tkkvjj6gbbi5vbv", key, bodyCid: small.cid });
+    const stored = await compactShareRecord(await fullRecord());
+    const context = { recordV: 1, shareId: v3.shareId, accountOwnerDid: v3Fixture.ownerDid, agentDid: v3Fixture.agentDid, source: "agent" as const };
+    const withLink = (link: string): StoredShareRecord => ({ ...stored, deliveryMaterial: material, link });
+
+    const duplicate = withLink(fullLink);
+    expect(fullLink.length).toBeGreaterThan(shortLink.length);
+    expect(JSON.stringify(duplicate).length).toBeLessThan(MAX_AGENT_RECORD_BYTES / 2);
+    expect(() => checkAgentRecordSchema(JSON.parse(JSON.stringify(duplicate)), context)).toThrow("schema");
+    expect(() => checkAgentRecordSchema(JSON.parse(JSON.stringify(withLink(`${SHARE_ORIGIN}/s/inline#v=2&p=YWJj`))), context)).toThrow("schema");
+    expect(checkAgentRecordSchema(JSON.parse(JSON.stringify(withLink(shortLink))), context).link).toBe(shortLink);
+    // The same full link on a record with no delivery material (a bearer record) is not this rule's concern.
+    const { deliveryMaterial: _material, ...bearer } = duplicate;
+    expect(() => checkAgentRecordSchema(JSON.parse(JSON.stringify(bearer)), context)).not.toThrow("schema");
+  });
 });
 
 describe("the adapter refuses an oversize value before downloading it", () => {
