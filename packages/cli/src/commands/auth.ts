@@ -80,6 +80,7 @@ import {
   storedSessionState,
   type StoredSessionState,
 } from "../auth/scoped-login.js";
+import { assertNoCaveatLimits } from "../lib/caveat-refusal.js";
 import { isRawEncryptionPermission, isVerifiedRawEncryptionPermission } from "../lib/raw-encryption.js";
 import { canonicalOwnerDid } from "../lib/owner-did.js";
 import { assertNotLocalOwner, assertSessionReplaceable, commitLogin, readProfileSnapshot } from "../auth/login-commit.js";
@@ -971,6 +972,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           return;
         }
 
+        if (profile.authMethod === "openkey" || options.device) assertNoCaveatLimits(requested);
         const node = await ensureAuthenticated(ctx);
 
         // Fast path: master's grantRuntimePermissions / hasRuntimePermissions
@@ -1916,6 +1918,7 @@ export async function acquireOpenKeyApproval(params: {
   /** Test seam for the browser acquisition boundary; production uses startAuthFlow. */
   openKeyAcquisition?: OpenKeyAcquisition;
 }): Promise<OpenKeyApproval> {
+  assertNoCaveatLimits(params.requested);
   if (params.requested.some(isRawCidRevocationPermission)) {
     throw new CLIError(
       "RAW_RECAP_RESOURCE_UNSUPPORTED",
@@ -2002,6 +2005,7 @@ export async function ensureDelegationAuthority(params: {
   exactApproval?: boolean;
 }): Promise<PortableDelegation | undefined> {
   if (!params.force && params.node.hasRuntimePermissions(params.requested)) return undefined;
+  if (params.profile.authMethod === "openkey") assertNoCaveatLimits(params.requested);
 
   if (
     !params.consentAlreadyGiven &&
@@ -2708,6 +2712,7 @@ async function refreshPreparedOpenKeySession(params: {
   expiry: RequestedExpiry | undefined;
 }): Promise<{ profile: ProfileConfig; delegationData: Record<string, unknown>; declined: PermissionEntry[]; legacyNested: PermissionEntry[] }> {
   const { profileName, host, profile, snapshot, options, replication, permissions, expectedOwner, expiry } = params;
+  assertNoCaveatLimits(permissions);
   const storedOwner = snapshot.session && snapshot.key && profile.sessionDid
     ? verifySignedSession(snapshot.session, snapshot.key, profile.sessionDid).ownerDid
     : undefined;

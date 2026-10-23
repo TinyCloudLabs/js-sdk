@@ -407,32 +407,39 @@ describe("loadManifestPermissions", () => {
       ]),
     );
   });
-  test("preserves caveats from scoped app-manifest permissions", async () => {
-    const permissions = await loadManifestPermissions(
-      manifestSource({
-        app_id: "tc858-caveated-scope",
-        space: "default",
-        permissions: [
-          {
-            service: "tinycloud.kv",
-            path: "notes",
-            skipPrefix: true,
-            actions: ["tinycloud.kv/get"],
-            caveats: [{ tenant: "alpha" }],
-          },
-        ],
-      }),
-      "default",
-      { allowLogicalSpaces: true },
-    );
+  const caveatedEntry = (caveats: unknown) => ({
+    service: "tinycloud.kv",
+    path: "notes",
+    skipPrefix: true,
+    actions: ["tinycloud.kv/get"],
+    caveats,
+  });
 
-    expect(permissions).toContainEqual({
-      service: "tinycloud.kv",
-      space: `tinycloud:pkh:eip155:1:${OWNER_ADDRESS}:default`,
-      path: "notes",
-      actions: ["tinycloud.kv/get"],
-      caveats: [{ tenant: "alpha" }],
-    });
+  test.each([
+    ["string id", { id: "tc1856-id", app_id: "tc1856-id", name: "Limited" }],
+    ["app_id only", { app_id: "tc1856-app" }],
+  ])("refuses a %s manifest whose permission carries a limit", async (_name, base) => {
+    for (const caveats of [[{ tenant: "alpha" }], [{}, { tenant: "alpha" }], [null], ["x"], [[]], "tenant", null]) {
+      await expect(loadManifestPermissions(
+        manifestSource({ ...base, space: "default", permissions: [caveatedEntry(caveats)] }),
+        "default",
+        { allowLogicalSpaces: true },
+      )).rejects.toMatchObject({ code: "CAVEATS_UNSUPPORTED", exitCode: 2 });
+    }
+  });
+
+  test.each([
+    ["string id", { id: "tc1856-id", app_id: "tc1856-id", name: "Open" }],
+    ["app_id only", { app_id: "tc1856-app" }],
+  ])("still loads a %s manifest whose caveats are absent or empty", async (_name, base) => {
+    for (const caveats of [undefined, [], [{}], [{}, {}]]) {
+      const permissions = await loadManifestPermissions(
+        manifestSource({ ...base, space: "default", permissions: [caveatedEntry(caveats)] }),
+        "default",
+        { allowLogicalSpaces: true },
+      );
+      expect(permissions.some((permission) => permission.path.endsWith("notes"))).toBe(true);
+    }
   });
 
   test("checksums recorded and explicit lowercase owners in the default secrets network", async () => {
