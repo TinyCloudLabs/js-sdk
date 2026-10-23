@@ -20,7 +20,7 @@ const OTHER_OWNER = `did:pkh:eip155:1:0x${'1'.repeat(40)}`;
 const SAM_COURIER = 'did:key:z6MkSamCourier';
 const HUNTER_COURIER = 'did:key:z6MkHunterCourier';
 const EMAIL = 'hunter@example.test';
-const C_ARTIFACT = { type: 'courier-pair', v: 0, step: 'C', from: { owner: SAM_OWNER, courier: SAM_COURIER }, spaceId: `tinycloud:pkh:eip155:1:${SAM_ADDR}:agents`, peer: 'hunter', callMe: 'sam', issuedAt: ISSUED };
+const C_ARTIFACT = { type: 'courier-pair', v: 0, step: 'C', from: { owner: SAM_OWNER, courier: SAM_COURIER }, spaceId: `tinycloud:pkh:eip155:1:${SAM_ADDR}:agents`, peer: 'hunter', callMe: 'sam', delegation: 'DELEGATION-C', delegationExpiresAt: '2026-10-22T00:00:00.000Z', issuedAt: ISSUED };
 
 let home;
 let sentinel;

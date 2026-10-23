@@ -6,6 +6,8 @@ Add `courier invite <handle>`, `courier invite list`, `courier invite revoke <in
 
 - `invite` creates a one-time invite for a handle and email address and prints the invite string once. `invite list` shows metadata only. `invite revoke` deletes the sealed invite and any pending hello or welcome.
 - `--tier` is the requested tier. `--tier trusted` asks for trusted status; the paired peer starts strict until the owner confirms by hand. Self-service invites never create a trusted peer.
+- `--expect-owner <did>` (a `did:pkh:eip155` DID) records the account the invitee must pair from; a hello from another owner is held with reason `owner-mismatch`.
+- `watch` verifies the email credential in each hello: it is signed by the pinned issuer, names the invited address, was issued within the last hour, is bound to the invite's one-time key and has not been used for this invite before. A hello that passes pairs the peer as strict; `--also-ask` holds it for `invite approve` even then.
 - With `--invites-public-dir <dir>` or `COURIER_INVITES_PUBLIC_DIR`, `invite` also writes a non-secret copy of the invite record (`<invite-id>.json`, mode 0640) and `invite revoke` updates its status. The copy holds no keys, tokens or blob ids.
 - `join` reads the invite string from `--stdin` or `--file`; the positional form also works but is visible in `ps`. It sends a hello with an optional credential from `--credential-file` or `--credential-stdin`, and waits about 10 minutes for the owner's reply. `join --resume` continues a pending join without sending a second hello.
 - Handles may not begin with `_`. Stored peers whose handle begins with `_` are excluded from notice tracking in `watch`.
