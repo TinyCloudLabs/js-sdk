@@ -250,6 +250,9 @@ async function readHeld(
   return { kind: "verified", email, match: { record: value, verified } };
 }
 
+/** Listing refused beyond the page limit. Keeps the VERIFICATION_FAILED wire code; recovery callers test for this subclass. */
+export class HeldListingLimitError extends CredentialError {}
+
 /**
  * Lists every key under the owner prefix by following cursors. Returns undefined when the KV list call
  * fails. Refuses a truncated listing with no cursor, and any listing beyond the page limit.
@@ -268,7 +271,7 @@ async function listHeldKeys(kv: IKVService, prefix: string): Promise<readonly st
     }
     cursor = next;
   }
-  throw new CredentialError("VERIFICATION_FAILED", "Held listing exceeds the page limit");
+  throw new HeldListingLimitError("VERIFICATION_FAILED", "Held listing exceeds the page limit");
 }
 
 export interface FindHeldCredentialInput extends HeldIssuerPolicy {

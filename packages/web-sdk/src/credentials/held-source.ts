@@ -7,10 +7,60 @@ import {
   type EmailProofPendingStore,
   type HolderSigner,
 } from "@tinycloud/node-sdk/credentials";
-import { findHeldCredential, heldAccountOwner, storeHeldCredential, type HeldIssuerPolicy } from "./held-store";
+import {
+  findHeldCredential,
+  heldAccountOwner,
+  HeldListingLimitError,
+  pruneHeldCredentials,
+  storeHeldCredential,
+  type HeldIssuerPolicy,
+  type HeldMatch,
+} from "./held-store";
 
 /** Held profile id. Its pin is disabled, so every acquisition is refused before network until the wire path ships. */
 const HELD_PROFILE = "tinycloud.email-held/v1" as const;
+
+export type HeldSourceErrorCode = "held-store-listing-limit";
+
+/** Typed, non-retryable refusal. Its message carries no credential or email text. */
+export class HeldSourceError extends Error {
+  readonly code: HeldSourceErrorCode;
+  readonly retryable = false;
+
+  constructor(code: HeldSourceErrorCode, message: string) {
+    super(message);
+    this.name = "HeldSourceError";
+    this.code = code;
+  }
+}
+
+const LISTING_LIMIT_MESSAGE = "Saved held credentials list is too long to read; clear old ones";
+
+/**
+ * Owner-scoped find. On the listing-limit refusal it prunes the owner's expired records once and retries
+ * the find once. A refusal that survives either step is a HeldSourceError. Any other error passes through
+ * unchanged. Never re-acquires: that would spend the mailbox limit and add records to a full store.
+ */
+async function findWithListingRecovery(
+  kv: IKVService,
+  policy: HeldIssuerPolicy,
+  owner: string,
+  address: string,
+  now: () => Date,
+): Promise<HeldMatch | undefined> {
+  try {
+    return await findHeldCredential({ ...policy, kv, ownerDid: owner, email: address, now: now() });
+  } catch (error) {
+    if (!(error instanceof HeldListingLimitError)) throw error;
+  }
+  try {
+    await pruneHeldCredentials({ ...policy, kv, ownerDid: owner, now: now() });
+    return await findHeldCredential({ ...policy, kv, ownerDid: owner, email: address, now: now() });
+  } catch (error) {
+    if (error instanceof HeldListingLimitError) throw new HeldSourceError("held-store-listing-limit", LISTING_LIMIT_MESSAGE);
+    throw error;
+  }
+}
 
 export interface HeldAcquireInput extends HeldIssuerPolicy {
   readonly kv: IKVService;
@@ -49,7 +99,7 @@ export async function acquireHeldCredential(input: HeldAcquireInput): Promise<He
     throw new CredentialError("HOLDER_MISMATCH", "Held acquisition holder must be the session account");
   }
 
-  const cached = await findHeldCredential({ ...policy, kv, ownerDid: holderDid, email: address, now: now() });
+  const cached = await findWithListingRecovery(kv, policy, holderDid, address, now);
   if (cached !== undefined) {
     return { credential: cached.record.credential, holderDid, expiresAt: cached.verified.expiresAt };
   }

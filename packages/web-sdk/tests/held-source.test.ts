@@ -3,7 +3,7 @@ import { createHash, generateKeyPairSync, randomUUID, sign as signEd25519 } from
 import { CredentialError, type IKVService } from "@tinycloud/sdk-core";
 import { parseIssuerSet } from "@tinycloud/sdk-core/held-credentials";
 import { createEd25519HolderSigner, EmailProofError } from "@tinycloud/node-sdk/credentials";
-import { acquireHeldCredential } from "../src/credentials/held-source";
+import { acquireHeldCredential, HeldSourceError } from "../src/credentials/held-source";
 import { storeHeldCredential } from "../src/credentials/held-store";
 import { createAccountHolderSigner } from "../src/credentials/account-holder";
 
@@ -57,7 +57,7 @@ function disclosure(name: string, value: unknown) {
 }
 
 /** Signs a held-shaped SD-JWT for `subject` with the test issuer key. */
-function makeSdJwt(subject: string = OWNER_A): string {
+function makeSdJwt(subject: string = OWNER_A, lifetimeDays = 365): string {
   const disclosures = [["email", EMAIL], ["emailDomain", "example.com"]].map(([n, v]) => disclosure(n as string, v));
   const iat = NOW_S - 1000;
   const payload = {
@@ -65,7 +65,7 @@ function makeSdJwt(subject: string = OWNER_A): string {
     sub: subject,
     iat,
     nbf: iat,
-    exp: iat + 365 * DAY,
+    exp: iat + lifetimeDays * DAY,
     jti: `urn:uuid:${randomUUID()}`,
     vct: VCT,
     profile: PROFILE,
@@ -87,13 +87,18 @@ interface FakeKv {
   readonly calls: { batchPut: number; list: number };
 }
 
-/** Single-page KV with get, list, batchPut and delete. Records writes and listings. */
-function fakeKv(): FakeKv {
+/** Listing override. Receives the 1-based call number; returns a shaped page, or undefined to list every key. */
+type ListingOverride = (call: number) => { readonly keys: readonly string[]; readonly truncated: boolean; readonly nextCursor?: string } | undefined;
+
+/** KV with get, list, batchPut and delete. Records writes and listings; `listing` can shape or refuse a listing. */
+function fakeKv(listing: ListingOverride = () => undefined): FakeKv {
   const data = new Map<string, unknown>();
   const calls = { batchPut: 0, list: 0 };
   const kv = {
     async list(opts: { prefix?: string } = {}) {
       calls.list += 1;
+      const shaped = listing(calls.list);
+      if (shaped !== undefined) return { ok: true, data: shaped };
       const keys = [...data.keys()].filter((k) => k.startsWith(opts.prefix ?? "")).sort();
       return { ok: true, data: { keys, truncated: false, nextCursor: undefined } };
     },
@@ -215,5 +220,71 @@ describe("held reuse is owner-scoped and returns stored verified records without
     );
     expect(code).toBe("PROFILE_UNAVAILABLE");
     expect(net.calls()).toBe(0);
+  });
+});
+
+const LATER = new Date(NOW.getTime() + 2 * DAY * 1000);
+/** One page that says more keys follow, so the listing never ends within the page limit. */
+const LIMIT_PAGE = { keys: [], truncated: true, nextCursor: "more" };
+
+async function errorOf(run: () => Promise<unknown>): Promise<unknown> {
+  try {
+    await run();
+  } catch (error) {
+    return error;
+  }
+  return undefined;
+}
+
+describe("a listing beyond the page limit is pruned once, retried once, then refused typed", () => {
+  test("prune deletes the expired records and the one retry reads the store", async () => {
+    const fake = fakeKv((call) => (call <= 50 ? LIMIT_PAGE : undefined));
+    const valid = makeSdJwt(OWNER_A, 365);
+    for (const sdJwt of [makeSdJwt(OWNER_A, 1), makeSdJwt(OWNER_A, 1), valid]) {
+      await storeHeldCredential({ kv: fake.kv, ownerDid: OWNER_A, sdJwt, now: NOW, ...POLICY });
+    }
+    const stored = fake.data.size;
+    fake.calls.list = 0;
+    const net = countingFetch();
+    const holder = createAccountHolderSigner(OWNER_A, sign);
+    const result = await acquireHeldCredential({ ...POLICY, kv: fake.kv, address: EMAIL, holder, getCode, fetch: net.fetch, now: () => LATER });
+    expect(result.credential).toBe(valid);
+    expect(fake.data.size).toBe(stored - 2);
+    expect(fake.calls.list).toBe(52);
+    expect(net.calls()).toBe(0);
+  });
+
+  test("a refusal that survives the prune and the one retry is held-store-listing-limit, with no further retry", async () => {
+    const fake = fakeKv((call) => (call <= 50 || (call > 51 && call <= 101) ? LIMIT_PAGE : undefined));
+    const net = countingFetch();
+    const holder = createAccountHolderSigner(OWNER_A, sign);
+    const error = await errorOf(() =>
+      acquireHeldCredential({ ...POLICY, kv: fake.kv, address: EMAIL, holder, getCode, fetch: net.fetch, now: () => LATER }),
+    );
+    expect(error).toBeInstanceOf(HeldSourceError);
+    expect((error as HeldSourceError).code).toBe("held-store-listing-limit");
+    expect((error as HeldSourceError).retryable).toBe(false);
+    expect((error as HeldSourceError).message).not.toContain(EMAIL);
+    expect(fake.calls.list).toBe(101);
+    expect(net.calls()).toBe(0);
+  });
+
+  test("prune itself hitting the listing limit is the same typed error, and the retry never runs", async () => {
+    const fake = fakeKv((call) => (call <= 100 ? LIMIT_PAGE : undefined));
+    const holder = createAccountHolderSigner(OWNER_A, sign);
+    const error = await errorOf(() => acquireHeldCredential({ ...POLICY, kv: fake.kv, address: EMAIL, holder, getCode, now: () => LATER }));
+    expect(error).toBeInstanceOf(HeldSourceError);
+    expect((error as HeldSourceError).code).toBe("held-store-listing-limit");
+    expect(fake.calls.list).toBe(100);
+  });
+
+  test("a different find error is not swallowed: no prune, no retry, the original code surfaces", async () => {
+    const fake = fakeKv((call) => (call === 1 ? { keys: [], truncated: true } : undefined));
+    const holder = createAccountHolderSigner(OWNER_A, sign);
+    const error = await errorOf(() => acquireHeldCredential({ ...POLICY, kv: fake.kv, address: EMAIL, holder, getCode, now: () => LATER }));
+    expect(error).toBeInstanceOf(CredentialError);
+    expect(error).not.toBeInstanceOf(HeldSourceError);
+    expect((error as CredentialError).code).toBe("VERIFICATION_FAILED");
+    expect(fake.calls.list).toBe(1);
   });
 });
