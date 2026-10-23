@@ -164,6 +164,13 @@
       "index.mjs": 0,
       "index.cjs": 0,
       "note": "sdk-services pin to 3.3.1 after the release; module path change only, no code change"
+    },
+    {
+      "pr": "#686",
+      "ticket": "TC-1777",
+      "index.mjs": 15,
+      "index.cjs": 29,
+      "note": "Replica gzip growth measured against this PR's merge base"
     }
   ],
   "phase2Ratchet": {
@@ -890,5 +897,155 @@
       "ceiling": 822753
     },
     "reason": "web-sdk imports share-sdk's narrow web-recipient entry; root ceiling lowered to measured CI bytes (TC-1757)"
+  },
+  "tc1777Ratchet": {
+    "label": "replication wiring in its own module (#686): root ceiling raised to the measured CI bytes",
+    "ruling": "Approved by Naomi (2026-10-22, policy review relayed by Amos)",
+    "base": "bc49820c1417a449041e9801b60c86a63485b55d",
+    "sourceCommits": [
+      "187b8a433a1c02008f066a00e41d36819acbc007"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39855300327",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39855300327/job/120091843728",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39855300327/job/120091844294"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 15,
+        "index.cjs": 29
+      },
+      "ceiling": {
+        "index.mjs": 1458858,
+        "index.cjs": 1401947
+      }
+    },
+    "firstImport": {
+      "delta": {
+        "replica.mjs": 0,
+        "replica.cjs": 0
+      },
+      "ceiling": {
+        "replica.mjs": 51925,
+        "replica.cjs": 67141
+      }
+    },
+    "activation": {
+      "delta": {
+        "activation.mjs": 0,
+        "activation.cjs": 0
+      },
+      "ceiling": {
+        "activation.mjs": 23117,
+        "activation.cjs": 24700
+      }
+    },
+    "worker": {
+      "delta": 0,
+      "ceiling": 822753
+    },
+    "reason": "replication wiring moved into its own module; +15 B (mjs) / +29 B (cjs) gzip from the module boundary (TC-1777)"
+  },
+  "tc1777ExpiryRatchet": {
+    "label": "expiryMs, hasPermissions and pre-modal decrypt check (#668): root ceiling raised to the measured CI bytes",
+    "ruling": "Approved by Naomi (2026-10-22, policy review relayed by Amos)",
+    "base": "80d387441dbe87e2309a849c653e2d0adecd400b",
+    "sourceCommits": [
+      "28585593a756f65b47f2aa60be240c5fce3dbd9d"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39861366041",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39861366041/job/120112619622",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39861366041/job/120112619857"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 172,
+        "index.cjs": 174
+      },
+      "ceiling": {
+        "index.mjs": 1459030,
+        "index.cjs": 1402121
+      }
+    },
+    "firstImport": {
+      "delta": {
+        "replica.mjs": 0,
+        "replica.cjs": 0
+      },
+      "ceiling": {
+        "replica.mjs": 51925,
+        "replica.cjs": 67141
+      }
+    },
+    "activation": {
+      "delta": {
+        "activation.mjs": 0,
+        "activation.cjs": 0
+      },
+      "ceiling": {
+        "activation.mjs": 23117,
+        "activation.cjs": 24700
+      }
+    },
+    "worker": {
+      "delta": 0,
+      "ceiling": 822753
+    },
+    "reason": "expiryMs, hasPermissions and the pre-modal decrypt check add 172 B (mjs) / 174 B (cjs) gzip to each web-sdk root bundle (TC-1777)"
+  },
+  "tc848PanelRatchet": {
+    "label": "developer request log panel (#656): root ceiling raised to the measured CI bytes",
+    "ruling": "Approved by Naomi (2026-10-22, policy review relayed by Amos)",
+    "base": "bf510d9f226c84bd6fd8d9d018c82e84b1fd2cc8",
+    "sourceCommits": [
+      "aae48af0237b05f8673321b332d533aac7fd1a9b"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39869142170",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39869142170/job/120138846942",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39869142170/job/120138847243"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 3016,
+        "index.cjs": 2224
+      },
+      "ceiling": {
+        "index.mjs": 1462046,
+        "index.cjs": 1404345
+      }
+    },
+    "firstImport": {
+      "delta": {
+        "replica.mjs": 0,
+        "replica.cjs": 0
+      },
+      "ceiling": {
+        "replica.mjs": 51925,
+        "replica.cjs": 67141
+      }
+    },
+    "activation": {
+      "delta": {
+        "activation.mjs": 0,
+        "activation.cjs": 0
+      },
+      "ceiling": {
+        "activation.mjs": 23117,
+        "activation.cjs": 24700
+      }
+    },
+    "worker": {
+      "delta": 0,
+      "ceiling": 822753
+    },
+    "reason": "developer request log (TC-848 panel): +3016 B (mjs) / +2224 B (cjs) gzip to each web-sdk root bundle"
   }
 }

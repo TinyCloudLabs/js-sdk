@@ -11,8 +11,9 @@ import {
   validateOptionalEntryTransition, validateOptionalLedger, type OptionalLedger,
 } from "./replica-optional-size-policy";
 import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedPhase2, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, preexistingS3EntryCommit, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateLogoutRatchetTransition, validateMasterMergeResolutionTransition, validateTc1413RatchetTransition, validateTc1424RatchetTransition, validateTc1448RatchetTransition, validateTc1432RatchetTransition, validateTc1436RatchetTransition, validateTc1443RatchetTransition, validateTc1443bRatchetTransition, validateTc1428RatchetTransition, validateTc1475RatchetTransition, validateTc606WorkerRatchetTransition, validateMasterDriftRatchetTransition, validateTc1789RatchetTransition, validateTc1476RatchetTransition, validateTc1466RatchetTransition, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
-import { validateTc1757RatchetTransition } from "./replica-size-policy";
+import { rootCeilingFor, validateTc1757RatchetTransition, validateTc1777ExpiryRatchetTransition, validateTc1777RatchetTransition, validateTc848PanelRatchetTransition } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
+import { replicaOwnedPath } from "./replica-owned-path";
 type Baseline = {
   webSdkTestBaseline: { ref: string; unhandledErrors: number; failingNames: string[]; unhandledSignatures: string[] };
 };
@@ -38,7 +39,9 @@ type Baseline = {
  *
  * Replica-owned paths: packages/replica/**, packages/sdk-services/src/kv/replication/**,
  * packages/sdk-core/src/replication/** (when present), packages/node-sdk/src/replication/**,
- * and packages/web-sdk/src/** paths containing "replica" or "replication".
+ * packages/web-sdk/src/modules/replica-wiring.ts (the only web-sdk replication wiring;
+ * tcw.ts and index.ts only call into it and are not replica-owned), and
+ * packages/web-sdk/src/** paths containing "replica" or "replication".
  * Test files (`*.test.*`) under those paths are not replica-owned: they never
  * reach a web bundle, so a test-only edit cannot grow it.
  * Ordinary per-PR core rows retain the existing 64 B build-noise tolerance.
@@ -50,21 +53,6 @@ type Baseline = {
  * Phase 1's 388/861 allowance was Sam's 6,144 B gzip budget minus its
  * measured growth of 5,756 B ESM / 5,283 B CJS against cbfe21ee.
  */
-// web-sdk files that wire replication into the client bundle; their bytes are replica-owned
-// even though the filenames do not match the regex below.
-const replicationWiringPaths = new Set([
-  "packages/web-sdk/src/index.ts",
-  "packages/web-sdk/src/modules/tcw.ts",
-]);
-const replicaOwnedPath = (path: string) =>
-  !/\.test\.[cm]?[jt]sx?$/.test(path) && (
-    path.startsWith("packages/replica/") ||
-    path.startsWith("packages/sdk-services/src/kv/replication/") ||
-    path.startsWith("packages/sdk-core/src/replication/") ||
-    path.startsWith("packages/node-sdk/src/replication/") ||
-    replicationWiringPaths.has(path) ||
-    (path.startsWith("packages/web-sdk/src/") && /replica|replication/i.test(path))
-  );
 const distDir = resolve(import.meta.dir, "../dist");
 const repoRoot = resolve(import.meta.dir, "../../..");
 const baseline = JSON.parse(await readFile(resolve(import.meta.dir, "phase1-replica-baseline.json"), "utf8")) as Baseline;
@@ -143,11 +131,13 @@ for (const format of formats) {
     }
   }
   console.log(`${format}: current=${currentSizes[format]} gzip-bytes`);
-  const ceiling = ledger.tc1757Ratchet?.root.ceiling[format] ?? ledger.tc1789Ratchet?.root.ceiling[format] ?? ledger.masterDriftRatchet?.root.ceiling[format] ?? ledger.tc1475Ratchet?.root.ceiling[format] ?? ledger.tc1476Ratchet?.root.ceiling[format] ?? ledger.tc1428Ratchet?.root.ceiling[format] ?? ledger.tc1443bRatchet?.root.ceiling[format] ?? ledger.tc1466Ratchet?.root.ceiling[format] ?? ledger.tc1443Ratchet?.root.ceiling[format] ?? ledger.tc1448Ratchet?.root.ceiling[format] ?? ledger.tc1424Ratchet?.root.ceiling[format] ?? ledger.tc1432Ratchet?.root.ceiling[format] ?? ledger.tc1436Ratchet?.root.ceiling[format] ?? ledger.tc1413Ratchet?.root.ceiling[format] ?? ledger.logoutRatchet?.root.ceiling[format] ?? ledger.hardeningRatchet?.root.ceiling[format] ?? ciCorrection?.measured.rootCeiling[format] ??
-    ledger.fixRequiredRatchet?.rootCeiling[format] ?? ledger.phase2Ratchet?.ceiling[format];
-  if (ceiling !== undefined) {
-    console.log(`${format}: TC-858 Phase 2 absolute root ceiling=${ceiling} gzip-bytes`);
-    if (currentSizes[format] > ceiling) {
+  const active = rootCeilingFor(ledger, format);
+  if ("error" in active) {
+    console.error(active.error);
+    failed = true;
+  } else {
+    console.log(`${format}: TC-858 Phase 2 absolute root ceiling=${active.ceiling} gzip-bytes (newest row: ${active.row})`);
+    if (currentSizes[format] > active.ceiling) {
       console.error(`${format}: TC-858 Phase 2 absolute root ceiling exceeded; later growth requires policy review.`);
       failed = true;
     }
@@ -302,6 +292,27 @@ if (prBaseSha) {
   if (tc1757 !== undefined && baseLedger.tc1757Ratchet === undefined &&
       (baseLedger.tc1789Ratchet === undefined || !hasAncestor(repoRoot, tc1757.sourceCommits.at(-1)!))) {
     console.error("The web-recipient entry ratchet requires the merged sdk-services pin ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc1777RatchetTransition(baseLedger.tc1777Ratchet, ledger.tc1777Ratchet);
+  const tc1777 = ledger.tc1777Ratchet;
+  if (tc1777 !== undefined && baseLedger.tc1777Ratchet === undefined &&
+      (baseLedger.tc1757Ratchet === undefined || !hasAncestor(repoRoot, tc1777.sourceCommits.at(-1)!))) {
+    console.error("The replication-wiring boundary ratchet requires the merged web-recipient entry ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc1777ExpiryRatchetTransition(baseLedger.tc1777ExpiryRatchet, ledger.tc1777ExpiryRatchet);
+  const tc1777Expiry = ledger.tc1777ExpiryRatchet;
+  if (tc1777Expiry !== undefined && baseLedger.tc1777ExpiryRatchet === undefined &&
+      (baseLedger.tc1777Ratchet === undefined || !hasAncestor(repoRoot, tc1777Expiry.sourceCommits.at(-1)!))) {
+    console.error("The expiryMs / hasPermissions ratchet requires the merged replication-wiring boundary ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc848PanelRatchetTransition(baseLedger.tc848PanelRatchet, ledger.tc848PanelRatchet);
+  const tc848Panel = ledger.tc848PanelRatchet;
+  if (tc848Panel !== undefined && baseLedger.tc848PanelRatchet === undefined &&
+      (baseLedger.tc1777ExpiryRatchet === undefined || !hasAncestor(repoRoot, tc848Panel.sourceCommits.at(-1)!))) {
+    console.error("The developer request log panel ratchet requires the merged expiryMs / hasPermissions ratchet and its measured source commit.");
     failed = true;
   }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";

@@ -1,5 +1,21 @@
 # @tinycloud/replica
 
+## 0.3.2-beta.0
+
+### Patch Changes
+
+- Updated dependencies [d60f81d]
+  - @tinycloud/sdk-services@3.5.0-beta.0
+
+## 0.3.1
+
+### Patch Changes
+
+- 6139879: Depend on `@tinycloud/sdk-services` 3.3.1. The 3.3.1 stable release left replica pinned to 3.3.0, so installs of replica pulled a second copy of sdk-services and the kv-storage worker bundled that older copy.
+
+  Details: TC-1789
+  - @tinycloud/sdk-services@3.3.2
+
 ## 0.3.1-beta.0
 
 ### Patch Changes
