@@ -375,6 +375,7 @@ describe("tc share with links", () => {
     const api = fakeApi();
     const published = await publish(["--notify"], { fetchFn: api.fetchFn });
     expect(published.exitCode).toBe(4);
+    expect(published.stderr).toContain("Invitation emails are not available yet. Nothing was shared and no invitation was sent.");
     expect(published.publishCalls).toBe(0);
     expect(published.stdout).toBe("");
     expect(api.requests).toEqual([]);
@@ -384,6 +385,7 @@ describe("tc share with links", () => {
     let delivered = 0;
     const notify = await run(["notify", "share-cmd", "--to", "alice@example.com"], { records: storage, delivery: { deliver: async () => { delivered += 1; return "delivered"; } } });
     expect(notify.exitCode).toBe(4);
+    expect(notify.stderr).toContain("Invitation emails are not available yet. No invitation was sent.");
     expect(delivered).toBe(0);
   });
 

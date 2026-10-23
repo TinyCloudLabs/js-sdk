@@ -51,7 +51,7 @@ import { ShareHistoryReadError, ShareHistoryRetryError, ShareHistoryUnreadableEr
 import { linkFailureReason, shortLinkId, type ShareLinks, type ShownLink } from "../share/short-links.js";
 const SHARE_ORIGIN = "https://share.tinycloud.xyz";
 const NOTIFY_WINDOW_MESSAGE = "Share notification authorization expired (at share expiry or 5 minutes after publication); publish a new share and invite the recipient then.\n";
-const INVITATIONS_UNAVAILABLE_MESSAGE = "Invitation emails are not available in this release: they carry a short link, and the services that send them do not accept one yet.";
+const INVITATIONS_UNAVAILABLE_MESSAGE = "Invitation emails are not available yet.";
 const NOTIFY_NEEDS_SHORT_LINK_MESSAGE = "This share has no short link, and an invitation email carries only a short link, so no invitation was sent. Publish it again to get one.";
 
 export interface ShareCommandServices {
