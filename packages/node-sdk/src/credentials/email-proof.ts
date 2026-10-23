@@ -490,7 +490,10 @@ async function acquireWithIssuerKeys(input: EmailProofAcquireInput, issuerKeys: 
   const address = normalizeAddress(input.address);
   const now = input.now ?? (() => new Date());
   const store = input.pendingStore;
-  let pending = store ? await store.findLive(address, now()) : undefined;
+  const profile = input.profile ?? DEFAULT_EMAIL_PROOF_PROFILE;
+  const live = store ? await store.findLive(address, now()) : undefined;
+  // The store returns the newest live record per address across profiles. Resume only one of this profile.
+  let pending = live?.profile === profile ? live : undefined;
   if (!pending) {
     pending = await requestEmailProofCode({ ...input, address });
     await store?.put(pending);
