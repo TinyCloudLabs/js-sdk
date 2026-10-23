@@ -580,7 +580,7 @@ export class SQLService extends BaseService implements ISQLService {
       ? ErrorCodes.SQL_REQUEST_TOO_LARGE
       : this.mapHttpStatusToErrorCode(response.status, errorBody.error);
     const message = sizeKind === "request"
-      ? requestTooLargeMessage("SQL", operation)
+      ? requestTooLargeMessage("SQL", operation, sqlNodeRequestLimit(errorText))
       : formatServiceResponseError("SQL", operation, response.status, errorText, errorBody);
 
     if (response.status === 401) {
@@ -673,9 +673,21 @@ function sqlSizeClass(sql: string): SizeClass {
   return "write";
 }
 
-function sqlSizeKind(errorText: string, statementClass: SizeClass): "request" | "response" {
+function sqlSizeCode(errorText: string): string {
   const colon = errorText.indexOf(":");
-  const code = (colon === -1 ? errorText : errorText.slice(0, colon)).trim();
+  return (colon === -1 ? errorText : errorText.slice(0, colon)).trim();
+}
+
+// The node's limit, shown in the request-side message only when the node coded the cause.
+const SQL_NODE_LIMIT_CLAUSE = /\(limit (\d+) bytes\)/;
+
+function sqlNodeRequestLimit(errorText: string): string | undefined {
+  if (sqlSizeCode(errorText) !== SQL_SIZE_CODES.request) return undefined;
+  return SQL_NODE_LIMIT_CLAUSE.exec(errorText)?.[1];
+}
+
+function sqlSizeKind(errorText: string, statementClass: SizeClass): "request" | "response" {
+  const code = sqlSizeCode(errorText);
   if (code === SQL_SIZE_CODES.request) return "request";
   if (code === SQL_SIZE_CODES.response) return "response";
   if (statementClass === "read") return "response";
@@ -683,8 +695,9 @@ function sqlSizeKind(errorText: string, statementClass: SizeClass): "request" | 
   return errorText.includes("envelope limit") ? "request" : "response";
 }
 
-function requestTooLargeMessage(label: string, operation: string): string {
-  return `${label} ${operation} failed: request is too large. Split the batch into smaller requests.`;
+function requestTooLargeMessage(label: string, operation: string, nodeLimit?: string): string {
+  const limit = nodeLimit === undefined ? "" : ` (the node's limit is ${nodeLimit} bytes)`;
+  return `${label} ${operation} failed: request is too large${limit}. Split the batch into smaller requests.`;
 }
 
 function validateMigrationOptions(options: SqlMigrationApplyOptions): string | null {

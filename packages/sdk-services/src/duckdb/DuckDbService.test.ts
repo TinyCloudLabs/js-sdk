@@ -151,7 +151,23 @@ describe("DuckDbService 413 request vs response classification", () => {
     if (!result.ok) {
       expect(result.error.code).toBe(ErrorCodes.DUCKDB_REQUEST_TOO_LARGE);
       expect(result.error.message).toBe(
-        "DuckDB batch failed: request is too large. Split the batch into smaller requests.",
+        "DuckDB batch failed: request is too large (the node's limit is 1024 bytes). Split the batch into smaller requests.",
+      );
+    }
+  });
+
+  test("coded request 413 with a node limit clause names the node's limit in the message", async () => {
+    const service = serviceAnswering(
+      "duckdb_request_too_large: JSON body exceeds complete envelope limit (limit 4096 bytes)",
+    );
+
+    const result = await service.batch([{ sql: "INSERT INTO notes VALUES (1)" }]);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.message).toBe(
+        "DuckDB batch failed: request is too large (the node's limit is 4096 bytes). " +
+          "Split the batch into smaller requests.",
       );
     }
   });

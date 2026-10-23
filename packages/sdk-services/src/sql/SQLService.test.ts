@@ -842,7 +842,23 @@ describe("SQLService 413 request vs response classification", () => {
     if (!result.ok) {
       expect(result.error.code).toBe(ErrorCodes.SQL_REQUEST_TOO_LARGE);
       expect(result.error.message).toBe(
-        "SQL batch failed: request is too large. Split the batch into smaller requests.",
+        "SQL batch failed: request is too large (the node's limit is 1024 bytes). Split the batch into smaller requests.",
+      );
+    }
+  });
+
+  test("coded request 413 with a node limit clause names the node's limit in the message", async () => {
+    const service = serviceAnswering(
+      "sql_request_too_large: JSON body exceeds complete envelope limit (limit 4096 bytes)",
+    );
+
+    const result = await service.batch([{ sql: "INSERT INTO notes (body) VALUES ('a')" }]);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.message).toBe(
+        "SQL batch failed: request is too large (the node's limit is 4096 bytes). " +
+          "Split the batch into smaller requests.",
       );
     }
   });

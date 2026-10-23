@@ -472,7 +472,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
       ? ErrorCodes.DUCKDB_REQUEST_TOO_LARGE
       : this.mapHttpStatusToErrorCode(response.status, errorBody.error);
     const message = sizeKind === "request"
-      ? requestTooLargeMessage("DuckDB", operation)
+      ? requestTooLargeMessage("DuckDB", operation, duckDbNodeRequestLimit(errorText))
       : formatServiceResponseError("DuckDB", operation, response.status, errorText, errorBody);
 
     if (response.status === 401) {
@@ -532,9 +532,21 @@ function duckDbSizeClass(sql: string): SizeClass {
   return "write";
 }
 
-function duckDbSizeKind(errorText: string, statementClass: SizeClass): "request" | "response" {
+function duckDbSizeCode(errorText: string): string {
   const colon = errorText.indexOf(":");
-  const code = (colon === -1 ? errorText : errorText.slice(0, colon)).trim();
+  return (colon === -1 ? errorText : errorText.slice(0, colon)).trim();
+}
+
+// The node's limit, shown in the request-side message only when the node coded the cause.
+const DUCKDB_NODE_LIMIT_CLAUSE = /\(limit (\d+) bytes\)/;
+
+function duckDbNodeRequestLimit(errorText: string): string | undefined {
+  if (duckDbSizeCode(errorText) !== DUCKDB_SIZE_CODES.request) return undefined;
+  return DUCKDB_NODE_LIMIT_CLAUSE.exec(errorText)?.[1];
+}
+
+function duckDbSizeKind(errorText: string, statementClass: SizeClass): "request" | "response" {
+  const code = duckDbSizeCode(errorText);
   if (code === DUCKDB_SIZE_CODES.request) return "request";
   if (code === DUCKDB_SIZE_CODES.response) return "response";
   if (statementClass === "read") return "response";
@@ -542,6 +554,7 @@ function duckDbSizeKind(errorText: string, statementClass: SizeClass): "request"
   return errorText.includes("envelope limit") ? "request" : "response";
 }
 
-function requestTooLargeMessage(label: string, operation: string): string {
-  return `${label} ${operation} failed: request is too large. Split the batch into smaller requests.`;
+function requestTooLargeMessage(label: string, operation: string, nodeLimit?: string): string {
+  const limit = nodeLimit === undefined ? "" : ` (the node's limit is ${nodeLimit} bytes)`;
+  return `${label} ${operation} failed: request is too large${limit}. Split the batch into smaller requests.`;
 }
