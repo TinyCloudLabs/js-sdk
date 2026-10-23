@@ -2012,6 +2012,13 @@ export async function ensureDelegationAuthority(params: {
 
   if (params.profile.authMethod === "openkey") {
     if (params.persist === false) {
+      if (params.expiryOption === undefined) {
+        throw new CLIError(
+          "AUTHORITY_EXPIRY_REQUIRED",
+          "One-use command authority needs an explicit lifetime; none was given, so no approval was requested.",
+          ExitCode.ERROR,
+        );
+      }
       const { delegation } = await acquireOpenKeyApproval(params);
       await params.node.useRuntimeDelegation(delegation);
       return delegation;

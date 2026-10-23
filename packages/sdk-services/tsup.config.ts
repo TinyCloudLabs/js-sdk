@@ -7,6 +7,7 @@ export default defineConfig({
   entry: {
     index: "src/index.ts",
     "kv/index": "src/kv/index.ts",
+    "telemetry/requestLog": "src/telemetry/requestLog.ts",
     "kv/replication/index": "src/kv/replication/index.ts",
     "kv/replication/prefix": "src/kv/replication/prefix.ts",
     "kv/replication/contractConstants": "src/kv/replication/contractConstants.ts",

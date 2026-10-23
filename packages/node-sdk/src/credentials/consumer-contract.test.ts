@@ -1,41 +1,76 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { builtinModules } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const NODE_SDK = resolve(import.meta.dir, "../..");
 const WEB_SDK = resolve(NODE_SDK, "../web-sdk");
+const SDK_CORE = resolve(NODE_SDK, "../sdk-core");
+const SDK_CORE_INDEX = join(SDK_CORE, "dist/index.js");
+if (!existsSync(SDK_CORE_INDEX)) {
+  // Bun's bundler fails with "Unexpected reading file" when a workspace dist is missing. Build it, or
+  // throw with the build output. Never skip.
+  const build = Bun.spawnSync([process.execPath, "run", "build"], { cwd: SDK_CORE, stdout: "pipe", stderr: "pipe", timeout: 300_000 });
+  if (build.exitCode !== 0 || !existsSync(SDK_CORE_INDEX)) {
+    throw new Error(`sdk-core dist missing and build failed (exit ${build.exitCode}): ${build.stderr.toString()}`);
+  }
+}
 
-/**
- * Builtins the browser-target graph of ./credentials may leave external. Both have fallbacks in
- * web-sdk/webpack.config.cjs (`buffer` and `crypto`). Any other external builtin, or any new one,
- * fails this test.
- */
-const WEB_SDK_POLYFILLED_BUILTINS = ["buffer", "crypto"];
+/** web-sdk webpack config: unprefixed `resolve.fallback` keys whose value is `require.resolve(...)`. `false` entries are disabled, not polyfilled. */
+const WEB_SDK_WEBPACK_CONFIG = join(WEB_SDK, "webpack.config.cjs");
+
+function webSdkPolyfilledBuiltins(): string[] {
+  const names = new Set<string>();
+  for (const m of readFileSync(WEB_SDK_WEBPACK_CONFIG, "utf8").matchAll(/^\s*"?([\w:/.-]+?)"?\s*:\s*require\.resolve\(/gm)) {
+    names.add(m[1]!.replace(/^node:/, ""));
+  }
+  return [...names].sort();
+}
+
+async function unpolyfilledBuiltins(entry: string): Promise<{ errors: string[]; unpolyfilled: string[] }> {
+  const polyfilled = webSdkPolyfilledBuiltins();
+  const { externals, errors } = await browserExternalBuiltins(entry);
+  return { errors, unpolyfilled: externals.filter((b) => !polyfilled.includes(b)) };
+}
 
 interface MetaImport { path: string; external?: boolean }
 
 /** Bundles `entry` for the browser target, as a bundler would, and returns its external builtin imports. */
 async function browserExternalBuiltins(entry: string): Promise<{ externals: string[]; errors: string[] }> {
-  const result = await Bun.build({ entrypoints: [entry], target: "browser", format: "esm", write: false, metafile: true });
-  const errors = result.logs.filter((log) => log.level === "error").map((log) => log.message);
+  // Bundle in a child process. In-process Bun.build fails with "Unexpected reading file" once another
+  // test file in the same `bun test` run has loaded @tinycloud/sdk-core at runtime (email-proof.test.ts).
+  const script = `(async () => {
+    const result = await Bun.build({ entrypoints: [process.env.TC712_ENTRY], target: "browser", format: "esm", write: false, metafile: true });
+    const errors = result.logs.filter((log) => log.level === "error").map((log) => log.message);
+    const imports = Object.values(result.metafile.inputs).flatMap((input) => input.imports);
+    console.log(JSON.stringify({ errors, imports }));
+  })();`;
+  const child = Bun.spawnSync([process.execPath, "-e", script], {
+    env: { ...process.env, TC712_ENTRY: entry },
+    stdout: "pipe",
+    stderr: "pipe",
+    timeout: 120_000,
+  });
+  if (child.exitCode !== 0) throw new Error(`browser bundle of ${entry} failed (exit ${child.exitCode}): ${child.stderr.toString()}`);
+  const lines = child.stdout.toString().trim().split("\n");
+  const { errors, imports } = JSON.parse(lines[lines.length - 1]!) as { errors: string[]; imports: MetaImport[] };
   const externals = new Set<string>();
-  for (const input of Object.values(result.metafile!.inputs) as { imports: MetaImport[] }[]) {
-    for (const imp of input.imports) {
-      if (!imp.external) continue;
-      if (imp.path.startsWith("node:") || builtinModules.includes(imp.path)) externals.add(imp.path);
-    }
+  for (const imp of imports) {
+    if (!imp.external) continue;
+    if (imp.path.startsWith("node:") || builtinModules.includes(imp.path)) externals.add(imp.path.replace(/^node:/, ""));
   }
   return { externals: [...externals].sort(), errors };
 }
 
 test("the browser-target graph of ./credentials leaves only web-sdk-polyfilled builtins external", async () => {
+  expect(webSdkPolyfilledBuiltins()).toEqual(expect.arrayContaining(["buffer", "crypto", "vm"]));
+  expect(webSdkPolyfilledBuiltins()).not.toContain("fs");
   for (const entry of [join(NODE_SDK, "dist/credentials.js"), join(NODE_SDK, "dist/credentials.cjs")]) {
     expect(existsSync(entry)).toBe(true);
-    const { externals, errors } = await browserExternalBuiltins(entry);
+    const { errors, unpolyfilled } = await unpolyfilledBuiltins(entry);
     expect(errors).toEqual([]);
-    expect(externals).toEqual(WEB_SDK_POLYFILLED_BUILTINS);
+    expect(unpolyfilled).toEqual([]);
   }
 });
 
@@ -43,6 +78,32 @@ test("positive control: the file-store subpath keeps fs external under the brows
   const { externals, errors } = await browserExternalBuiltins(join(NODE_SDK, "dist/credential-pending-store.js"));
   expect(errors).toEqual([]);
   expect(externals).toEqual(expect.arrayContaining(["fs", "vm"]));
+});
+
+test("negative control: a node:fs import is external under the browser target and not polyfilled", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "browser-negative-"));
+  try {
+    const entry = join(dir, "entry.ts");
+    writeFileSync(entry, `import { readFileSync } from "node:fs";\nexport const read = readFileSync;\n`);
+    const { errors, unpolyfilled } = await unpolyfilledBuiltins(entry);
+    expect(errors).toEqual([]);
+    expect(unpolyfilled).toEqual(["fs"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("no credentials source file imports a Node builtin directly", () => {
+  const builtins = new Set(builtinModules.flatMap((m) => [m, `node:${m}`]));
+  const srcDir = join(NODE_SDK, "src/credentials");
+  const offenders: string[] = [];
+  for (const file of readdirSync(srcDir)) {
+    if (!file.endsWith(".ts") || file.endsWith(".test.ts")) continue;
+    for (const m of readFileSync(join(srcDir, file), "utf8").matchAll(/(?:from|import)\s*\(?\s*["']([^"']+)["']/g)) {
+      if (builtins.has(m[1]!)) offenders.push(`${file}: ${m[1]}`);
+    }
+  }
+  expect(offenders).toEqual([]);
 });
 
 test("strict consumer typecheck resolves both credentials subpaths with real declarations", () => {
