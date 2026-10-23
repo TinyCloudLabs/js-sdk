@@ -59,4 +59,34 @@ describe("assertHostSupportsSqlDelegatedCaveats", () => {
     await expect(assertHostSupportsSqlDelegatedCaveats(HOST, permissions, infoFetch("sql-delegated-caveats-v1", [])))
       .rejects.toMatchObject(refused);
   });
+
+  test("a node that never answers is refused once the timeout aborts the read", async () => {
+    let received: AbortSignal | null | undefined;
+    const stalled = ((_input: unknown, init?: RequestInit) => {
+      const { promise, reject } = Promise.withResolvers<Response>();
+      received = init?.signal;
+      init?.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+      return promise;
+    }) as typeof fetch;
+    await expect(assertHostSupportsSqlDelegatedCaveats(HOST, [sql([{ tables: ["a"] }])], stalled, 5))
+      .rejects.toMatchObject({ code: "SQL_DELEGATED_CAVEATS_UNSUPPORTED" });
+    expect(received?.aborted).toBe(true);
+  });
+
+  test("a fetch that rejects with an AbortError is refused", async () => {
+    const aborted = (async () => { throw new DOMException("The operation was aborted.", "AbortError"); }) as typeof fetch;
+    await expect(assertHostSupportsSqlDelegatedCaveats(HOST, [sql([{}, {}])], aborted))
+      .rejects.toMatchObject({ code: "SQL_DELEGATED_CAVEATS_UNSUPPORTED" });
+  });
+
+  test("the read carries a 5 s abort signal by default", async () => {
+    let signal: AbortSignal | null | undefined;
+    const capturing = (async (_input: unknown, init?: RequestInit) => {
+      signal = init?.signal;
+      return new Response(JSON.stringify({ features: [FEATURE] }), { status: 200 });
+    }) as typeof fetch;
+    await assertHostSupportsSqlDelegatedCaveats(HOST, [sql([{ tables: ["a"] }])], capturing);
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(signal?.aborted).toBe(false);
+  });
 });

@@ -433,6 +433,34 @@ describe("device login persistence", () => {
     expect((await stat(join(PROFILES_DIR, "agent"))).mode & 0o777).toBe(0o700);
   });
 
+  test("a delegated SQL caveat on a node without the feature makes no device-approval call", async () => {
+    await ProfileManager.setKey("agent", key);
+    await ProfileManager.setProfile("agent", { name: "agent", host: NODE, chainId: 1, spaceName: "default", did: sessionDid, createdAt: "2026-10-01T00:00:00.000Z" });
+    const openkey = fakeOpenKey((start, id) => approved(start, id, { signed: requested }));
+    const sqlRequest: PermissionEntry[] = [
+      capabilityRead,
+      { ...bearerPrefix, service: "tinycloud.sql", actions: ["tinycloud.sql/read"], caveats: [{ tables: ["Notes"], readOnly: true }] },
+    ];
+    const originalFetch = globalThis.fetch;
+    const infoRequests: string[] = [];
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      infoRequests.push(String(input));
+      return Response.json({ features: ["sql"] });
+    }) as typeof fetch;
+    try {
+      await expect(loginWithDeviceAuthorization({
+        profileName: "agent", nodeOrigin: NODE, shareOrigin: SHARE, permissions: sqlRequest,
+        fetchFn: openkey.fetchFn, emitInstructions: () => undefined, wait: async () => undefined,
+      })).rejects.toMatchObject({ code: "SQL_DELEGATED_CAVEATS_UNSUPPORTED" });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+    expect(infoRequests).toEqual([`${NODE}/info`]);
+    expect(openkey.urls).toEqual([]);
+    expect(openkey.startBodies).toEqual([]);
+    expect(await ProfileManager.getSession("agent")).toBeNull();
+  });
+
   test("records whether the approving key is the account's primary key and warns on stderr when it is not (TC-705)", async () => {
     const stderr: string[] = [];
     const write = process.stderr.write.bind(process.stderr);
