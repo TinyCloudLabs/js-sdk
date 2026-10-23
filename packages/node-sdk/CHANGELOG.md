@@ -1,5 +1,14 @@
 # @tinycloudlabs/node-sdk
 
+## 3.6.0-beta.2
+
+### Patch Changes
+
+- Updated dependencies [dc61583]
+  - @tinycloud/sdk-services@3.6.0-beta.2
+  - @tinycloud/replica@0.3.3-beta.0
+  - @tinycloud/sdk-core@3.6.0-beta.2
+
 ## 3.6.0-beta.0
 
 ### Patch Changes

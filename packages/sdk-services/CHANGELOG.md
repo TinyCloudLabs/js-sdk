@@ -1,5 +1,13 @@
 # @tinycloudlabs/sdk-services
 
+## 3.6.0-beta.2
+
+### Patch Changes
+
+- dc61583: The replica workers import only the sdk-services modules they use, so the kv-storage and replica worker bundles no longer include the SQL, DuckDB, vault, and hooks services. Adds a `./context` subpath export to `@tinycloud/sdk-services`.
+
+  Details: TC-1827
+
 ## 3.5.0
 
 ### Minor Changes
