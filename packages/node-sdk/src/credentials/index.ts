@@ -13,6 +13,7 @@ export {
   EMAIL_PROOF_PENDING_MAX_MS,
   EmailProofError,
   emailProofRequirement,
+  verifyStoredEmailProof,
   requestEmailProofCode,
 } from "./email-proof";
 export type {
@@ -25,6 +26,7 @@ export type {
   EmailProofProfileId,
   EmailProofRequestInput,
   EmailProofResult,
+  StoredEmailProofRecord,
   EmailProofStep,
   HolderAlgorithm,
   HolderSigner,

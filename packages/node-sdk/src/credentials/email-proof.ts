@@ -14,6 +14,7 @@ import {
   type CredentialRequirement,
   type IssuedCredentialEnvelope,
   type IssuerVerificationKey,
+  type StoredCredentialRecord,
   type VerifiedCredential,
 } from "@tinycloud/sdk-core";
 import { interpretCredentialFlow } from "./interpreter";
@@ -290,6 +291,8 @@ export interface EmailProofResult {
   readonly credentialId: string;
   readonly issuedAt: string;
   readonly expiresAt: string;
+  /** The descriptor the verifier checked against. Stored alongside the credential for offline re-verification. */
+  readonly descriptor: CredentialFlowDescriptor;
 }
 
 export interface EmailProofAcquireInput extends EmailProofRequestInput {
@@ -458,7 +461,7 @@ async function completeWithIssuerKeys(
       checkStatus: (status, statusSignal) => transport.checkStatus(status, statusSignal),
       signal,
     });
-    return { envelope, verified, credentialId: verified.credentialId, issuedAt: verified.issuedAt, expiresAt: verified.expiresAt };
+    return { envelope, verified, credentialId: verified.credentialId, issuedAt: verified.issuedAt, expiresAt: verified.expiresAt, descriptor };
   } catch (error) {
     throw mapError(error, "credential", signal);
   }
@@ -596,6 +599,70 @@ function discoveryFailure(error: unknown, signal: AbortSignal, step: EmailProofS
 
 function pinnedIssuerMetadata(keys: readonly IssuerVerificationKey[]): CredentialIssuerMetadata {
   return { type: "OpenCredentialsIssuerMetadata", version: 1, origin: EMAIL_PROOF_PINS.witnessOrigin, issuerDid: EMAIL_PROOF_PINS.issuerDid, keys, cache: { maxAgeSeconds: 3600, etag: "pinned" } };
+}
+
+/** A stored email-proof credential plus the descriptor it was issued under. Read back from disk, so untrusted until verified. */
+export type StoredEmailProofRecord = StoredCredentialRecord & {
+  readonly subjectDid: string;
+  readonly descriptor: CredentialFlowDescriptor;
+};
+
+/**
+ * Offline re-verification of a stored email-proof credential against the pinned issuer key.
+ * Rebuilds the envelope from the record, runs the issuance verifier, then cross-checks the
+ * record fields the signature does not cover. Every failure throws CredentialError.
+ */
+export async function verifyStoredEmailProof(input: {
+  readonly record: StoredEmailProofRecord;
+  readonly requirement: CredentialRequirement;
+  readonly holderDid: string;
+  readonly now: Date;
+  readonly signal?: AbortSignal;
+}): Promise<VerifiedCredential> {
+  const { record, requirement, holderDid } = input;
+  const descriptor = record.descriptor;
+  if (record.descriptorDigest !== EMAIL_PROOF_PINS.descriptorDigest || await canonicalDigest(descriptor) !== EMAIL_PROOF_PINS.descriptorDigest) {
+    throw new CredentialError("VERIFICATION_FAILED", "stored descriptor does not match the pinned descriptor digest");
+  }
+  const envelope: IssuedCredentialEnvelope = {
+    type: "OpenCredentialsIssuedCredential",
+    version: 1,
+    protocol: descriptor.protocol,
+    profile: record.profile,
+    credentialType: record.credentialType,
+    schema: record.schema,
+    format: "vc+sd-jwt",
+    issuerDid: record.issuerDid,
+    issuerKid: record.issuerKid,
+    subjectDid: record.subjectDid,
+    holderDid: record.holderDid,
+    claims: record.claims,
+    claimsDigest: record.claimsDigest,
+    descriptorDigest: record.descriptorDigest,
+    credentialId: record.credentialId,
+    issuedAt: record.issuedAt,
+    notBefore: record.notBefore,
+    expiresAt: record.expiresAt,
+    status: record.status,
+    credential: record.credential,
+  };
+  const verified = await verifyIssuedCredential({
+    envelope,
+    descriptor,
+    descriptorDigest: EMAIL_PROOF_PINS.descriptorDigest,
+    requirement,
+    holderDid,
+    issuerMetadata: pinnedIssuerMetadata(EMAIL_PROOF_ISSUER_KEYS),
+    now: input.now,
+    checkStatus: async (status) => status.method === "none" && status.freshnessSeconds === descriptor.status.freshnessSeconds,
+    signal: input.signal,
+  });
+  // Fields outside the signed envelope: each must agree with what the verifier just proved.
+  if (record.holderDid !== holderDid || record.ownerDid !== holderDid) throw new CredentialError("HOLDER_MISMATCH", "stored record belongs to another holder");
+  if (record.credentialDigest !== verified.credentialDigest) throw new CredentialError("VERIFICATION_FAILED", "stored credential digest does not match the verified credential");
+  if (record.requirementDigest !== await credentialRequirementDigest(requirement)) throw new CredentialError("VERIFICATION_FAILED", "stored requirement digest does not match the requirement");
+  if (record.recordId !== await canonicalDigest({ credentialDigest: verified.credentialDigest, holderDid: record.ownerDid })) throw new CredentialError("VERIFICATION_FAILED", "stored record id does not match its credential");
+  return verified;
 }
 
 /** Holder signing: the signer receives the raw binding bytes and returns a raw Ed25519 signature. The kid goes on the wire. */

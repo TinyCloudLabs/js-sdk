@@ -86,9 +86,14 @@ address replaces the older pending request only after the new request succeeds; 
 the new request fails, the older pending request is kept and `--code-stdin` still
 completes it.
 
-`courier credential show --email <addr>` prints the stored credential's `email`,
+`courier credential show --email <addr>` prints one JSON object with `address`,
 `credentialId`, `issuedAt`, `expiresAt` and `status`. The credential itself is
 never printed.
+
+`acquire` prints one JSON object on stdout. The first call (`status: "code-sent"`)
+returns `codeExpiresAt`; enter the code within 5 minutes. The second call
+(`status: "acquired"`) returns `issuedAt` and `expiresAt`, the end of the
+credential's validity. Human hints go to stderr.
 
 ### Settings
 
