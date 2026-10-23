@@ -44,11 +44,13 @@ export const EMAIL_PROOF_ISSUER_KEYS: readonly IssuerVerificationKey[] = [
   },
 ];
 
-export type EmailProofProfileId = "tinycloud.email-proof/v1";
+export type EmailProofProfileId = "tinycloud.email-proof/v1" | "tinycloud.email-held/v1";
 export const DEFAULT_EMAIL_PROOF_PROFILE: EmailProofProfileId = "tinycloud.email-proof/v1";
 /** Each profile is pinned to its descriptor digest and to the mailbox step the witness must offer. */
 const PROFILE_PINS: Readonly<Record<EmailProofProfileId, { readonly descriptorDigest: string; readonly requiredStep: "mailbox_otp"; readonly enabled: boolean }>> = {
   "tinycloud.email-proof/v1": { descriptorDigest: EMAIL_PROOF_PINS.descriptorDigest, requiredStep: "mailbox_otp", enabled: true },
+  // Held profile: disabled until the held wire path ships. Requests refuse with PROFILE_UNAVAILABLE before any network call.
+  "tinycloud.email-held/v1": { descriptorDigest: "dc3_DuvzipXwYkTfjKqTaK1c3VS0YSPnaBsYSQriC0w", requiredStep: "mailbox_otp", enabled: false },
 };
 
 const OPENER_ORIGIN = "https://localhost";
