@@ -209,6 +209,13 @@ export type Tc1777ExpiryRatchet = HardeningRatchet;
  * code head, every other ceiling stays that of the expiryMs / hasPermissions row. Same shape as the #565 hardening row.
  */
 export type Tc848PanelRatchet = HardeningRatchet;
+/**
+ * One reviewed exact-delta admission of js-sdk #681 (TC-1781): the one-hour decrypt default and secret-read coverage.
+ * #681 is not a replica-owned PR, so this is a plain root row; the root ceilings rise to the bytes canonical CI measured
+ * on the #681 code head, every other ceiling stays that of the developer request log panel row. Same shape as the #565
+ * hardening row.
+ */
+export type Tc1781DecryptExpiryRatchet = HardeningRatchet;
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -236,6 +243,7 @@ export type Ledger = {
   tc1777Ratchet?: Tc1777Ratchet;
   tc1777ExpiryRatchet?: Tc1777ExpiryRatchet;
   tc848PanelRatchet?: Tc848PanelRatchet;
+  tc1781DecryptExpiryRatchet?: Tc1781DecryptExpiryRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -793,6 +801,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc1777Ratchet !== undefined) pins.push({ row: "tc1777Ratchet", pin: root.tc1777Ratchet.sourceCommits.at(-1)! });
   if (root.tc1777ExpiryRatchet !== undefined) pins.push({ row: "tc1777ExpiryRatchet", pin: root.tc1777ExpiryRatchet.sourceCommits.at(-1)! });
   if (root.tc848PanelRatchet !== undefined) pins.push({ row: "tc848PanelRatchet", pin: root.tc848PanelRatchet.sourceCommits.at(-1)! });
+  if (root.tc1781DecryptExpiryRatchet !== undefined) pins.push({ row: "tc1781DecryptExpiryRatchet", pin: root.tc1781DecryptExpiryRatchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -827,6 +836,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc1777Ratchet", root.tc1777Ratchet?.root.ceiling],
     ["tc1777ExpiryRatchet", root.tc1777ExpiryRatchet?.root.ceiling],
     ["tc848PanelRatchet", root.tc848PanelRatchet?.root.ceiling],
+    ["tc1781DecryptExpiryRatchet", root.tc1781DecryptExpiryRatchet?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -1089,6 +1099,43 @@ export const approvedTc848PanelRatchet: Tc848PanelRatchet = {
   reason: "developer request log (TC-848 panel): +3016 B (mjs) / +2224 B (cjs) gzip to each web-sdk root bundle",
 };
 
+/**
+ * One-hour decrypt default and secret-read coverage (js-sdk #681, TC-1781), approved by Naomi, 2026-10-23: the root
+ * index.mjs / index.cjs ceilings rise from 1,462,046 / 1,404,345 to 1,462,349 / 1,404,562, the bytes canonical CI
+ * printed on the #681 code head 0e56796c merged into master e88e40e0. Master measured 1,462,046 / 1,404,345 (run
+ * 39876022752 on d60f81df, the last code commit under e88e40e0, a [skip ci] release commit). Measured growth against
+ * master is +303 / +217. First-import, activation and worker ceilings are unchanged.
+ */
+export const approvedTc1781DecryptExpiryRatchet: Tc1781DecryptExpiryRatchet = {
+  label: "one-hour decrypt default and secret-read coverage (#681): root ceiling raised to the measured CI bytes",
+  ruling: "Approved by Naomi (2026-10-23, policy review relayed by Amos)",
+  base: "e88e40e003cd2570e80b1a3cd53d0a5531838e42",
+  sourceCommits: [
+    "0e56796c881a9a294b3c08cb69c5e351dac5855c",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39890426909",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39890426909/job/120208584548",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39890426909/job/120208584544",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 303, "index.cjs": 217 },
+    ceiling: { "index.mjs": 1462349, "index.cjs": 1404562 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 51925, "replica.cjs": 67141 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23117, "activation.cjs": 24700 },
+  },
+  worker: { delta: 0, ceiling: 822753 },
+  reason: "one-hour decrypt default and secret-read coverage: +303 B (mjs) / +217 B (cjs) gzip to each web-sdk root bundle (TC-1781)",
+};
+
 export type GatedOnlyRatchet = {
   label: string;
   sourceCommit: string;
@@ -1121,7 +1168,7 @@ const historicalToolchain = "Bun 1.4.3; production webpack; gzip -9 -c";
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
 export function validateLedger(value: Ledger, historicalBase = false): void {
   if (!value || !value.allowance || !Array.isArray(value.entries) ||
-      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet" && key !== "tc1436Ratchet" && key !== "tc1432Ratchet" && key !== "tc1424Ratchet" && key !== "tc1448Ratchet" && key !== "tc1443Ratchet" && key !== "tc1466Ratchet" && key !== "tc1443bRatchet" && key !== "tc1428Ratchet" && key !== "tc1476Ratchet" && key !== "tc1475Ratchet" && key !== "tc606WorkerRatchet" && key !== "masterDriftRatchet" && key !== "tc1789Ratchet" && key !== "tc1757Ratchet" && key !== "tc1777Ratchet" && key !== "tc1777ExpiryRatchet" && key !== "tc848PanelRatchet")) {
+      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet" && key !== "tc1436Ratchet" && key !== "tc1432Ratchet" && key !== "tc1424Ratchet" && key !== "tc1448Ratchet" && key !== "tc1443Ratchet" && key !== "tc1466Ratchet" && key !== "tc1443bRatchet" && key !== "tc1428Ratchet" && key !== "tc1476Ratchet" && key !== "tc1475Ratchet" && key !== "tc606WorkerRatchet" && key !== "masterDriftRatchet" && key !== "tc1789Ratchet" && key !== "tc1757Ratchet" && key !== "tc1777Ratchet" && key !== "tc1777ExpiryRatchet" && key !== "tc848PanelRatchet" && key !== "tc1781DecryptExpiryRatchet")) {
     throw new Error("Invalid packages/web-sdk/scripts/replica-size-ledger.json shape");
   }
   if (Object.keys(value.allowance).some((key) => !formats.includes(key as typeof formats[number]))) {
@@ -1257,6 +1304,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc1777ExpiryRatchet || JSON.stringify(value.tc848PanelRatchet) !== JSON.stringify(approvedTc848PanelRatchet))) {
     throw new Error("Only Naomi's exact canonical developer request log panel ratchet is approved.");
   }
+  if (value.tc1781DecryptExpiryRatchet !== undefined &&
+      (!value.tc848PanelRatchet || JSON.stringify(value.tc1781DecryptExpiryRatchet) !== JSON.stringify(approvedTc1781DecryptExpiryRatchet))) {
+    throw new Error("Only Naomi's exact canonical one-hour decrypt default ratchet is approved.");
+  }
 }
 
 /** The #606 worker ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
@@ -1312,6 +1363,14 @@ export function validateTc848PanelRatchetTransition(base?: Tc848PanelRatchet, cu
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc848PanelRatchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact TC-848 developer request log panel ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-1781 one-hour decrypt default and secret-read coverage ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc1781DecryptExpiryRatchetTransition(base?: Tc1781DecryptExpiryRatchet, current?: Tc1781DecryptExpiryRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1781DecryptExpiryRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-1781 one-hour decrypt default ratchet may be introduced once and cannot change later.");
   }
 }
 

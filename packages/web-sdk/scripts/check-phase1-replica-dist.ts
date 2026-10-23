@@ -11,7 +11,7 @@ import {
   validateOptionalEntryTransition, validateOptionalLedger, type OptionalLedger,
 } from "./replica-optional-size-policy";
 import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedPhase2, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, preexistingS3EntryCommit, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateLogoutRatchetTransition, validateMasterMergeResolutionTransition, validateTc1413RatchetTransition, validateTc1424RatchetTransition, validateTc1448RatchetTransition, validateTc1432RatchetTransition, validateTc1436RatchetTransition, validateTc1443RatchetTransition, validateTc1443bRatchetTransition, validateTc1428RatchetTransition, validateTc1475RatchetTransition, validateTc606WorkerRatchetTransition, validateMasterDriftRatchetTransition, validateTc1789RatchetTransition, validateTc1476RatchetTransition, validateTc1466RatchetTransition, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
-import { rootCeilingFor, validateTc1757RatchetTransition, validateTc1777ExpiryRatchetTransition, validateTc1777RatchetTransition, validateTc848PanelRatchetTransition } from "./replica-size-policy";
+import { rootCeilingFor, validateTc1757RatchetTransition, validateTc1777ExpiryRatchetTransition, validateTc1777RatchetTransition, validateTc1781DecryptExpiryRatchetTransition, validateTc848PanelRatchetTransition } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 import { replicaOwnedPath } from "./replica-owned-path";
 type Baseline = {
@@ -313,6 +313,13 @@ if (prBaseSha) {
   if (tc848Panel !== undefined && baseLedger.tc848PanelRatchet === undefined &&
       (baseLedger.tc1777ExpiryRatchet === undefined || !hasAncestor(repoRoot, tc848Panel.sourceCommits.at(-1)!))) {
     console.error("The developer request log panel ratchet requires the merged expiryMs / hasPermissions ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc1781DecryptExpiryRatchetTransition(baseLedger.tc1781DecryptExpiryRatchet, ledger.tc1781DecryptExpiryRatchet);
+  const tc1781DecryptExpiry = ledger.tc1781DecryptExpiryRatchet;
+  if (tc1781DecryptExpiry !== undefined && baseLedger.tc1781DecryptExpiryRatchet === undefined &&
+      (baseLedger.tc848PanelRatchet === undefined || !hasAncestor(repoRoot, tc1781DecryptExpiry.sourceCommits.at(-1)!))) {
+    console.error("The one-hour decrypt default ratchet requires the merged developer request log panel ratchet and its measured source commit.");
     failed = true;
   }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
