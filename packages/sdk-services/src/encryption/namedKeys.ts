@@ -75,6 +75,8 @@ export type NamedKeyErrorCode =
   | "KEY_KIND_MISMATCH"
   | "DECRYPT_FAILED"
   | "NODE_ERROR"
+  /** The node rejected `receiverPublicKey` (400, invocation not consumed). */
+  | "RECEIVER_KEY_INVALID"
   /** The node object lacks an invocation hook the node-sdk wiring needs. */
   | "NODE_HOOK_MISSING";
 
@@ -154,6 +156,7 @@ const NODE_CODE_MAP: Readonly<Record<string, NamedKeyErrorCode>> = {
   shreddable_requires_paid_tier: "SHREDDABLE_REQUIRES_PAID_TIER",
   key_path_invalid: "KEY_PATH_INVALID",
   key_unwrap_failed: "KEY_UNWRAP_FAILED",
+  receiver_key_invalid: "RECEIVER_KEY_INVALID",
 };
 
 /**
@@ -168,6 +171,9 @@ const UNAVAILABLE_NODE_CODES: Record<string, true> = {
 
 const NODE_ERROR_RE = /^([a-z][a-z0-9_]*):\s?([\s\S]*)$/;
 
+/** Longest node error code kept in `nodeCode` and echoed into a message. */
+const MAX_NODE_CODE_CHARS = 64;
+
 /** Map a node plain-text `<code>: <detail>` error response to a typed error. */
 export function mapNodeKeyError(
   status: number,
@@ -175,7 +181,7 @@ export function mapNodeKeyError(
   context: string,
 ): NamedKeyError {
   const match = NODE_ERROR_RE.exec(text.trim());
-  const nodeCode = match?.[1];
+  const nodeCode = match?.[1]?.slice(0, MAX_NODE_CODE_CHARS);
   const detail = match?.[2]?.trim();
   const base = {
     status,
@@ -476,8 +482,11 @@ export class NamedKeyClient {
   }
 
   private keysUrl(networkId: string, path: string): string {
-    // keyPath segments are raw: the grammar excludes `%`, so nothing is encoded.
-    return `${this.config.host}/encryption/networks/${encodeURIComponent(networkId)}/keys/${path}`;
+    // The network id is validated by `keyUrn` (strict grammar) before any URL is
+    // built; every character it can hold (`A-Za-z0-9._:-`) is an RFC 3986 pchar
+    // and the node refuses `%`, so it goes into the path raw. keyPath segments
+    // are raw too: the grammar excludes `%`.
+    return `${this.config.host}/encryption/networks/${networkId}/keys/${path}`;
   }
 
   /** Public GET: the key's public key. Never 404s for a missing key. */
@@ -552,7 +561,7 @@ export class NamedKeyClient {
       }),
     });
     const response = await this.config.fetch(
-      `${this.config.host}/encryption/networks/${encodeURIComponent(networkId)}/${route}`,
+      `${this.config.host}/encryption/networks/${networkId}/${route}`,
       {
         method: "POST",
         headers: {
@@ -599,7 +608,7 @@ export class NamedKeyClient {
         if (descriptor === null) {
           throw new NamedKeyError(
             "KEY_NOT_FOUND",
-            `key ${path} reported as existing but could not be read back`,
+            `key ${safeEcho(path)} reported as existing but could not be read back`,
           );
         }
       }

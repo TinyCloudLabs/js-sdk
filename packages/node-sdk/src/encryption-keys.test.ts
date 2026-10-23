@@ -149,7 +149,8 @@ test("createKey signs one key.create capability on the exact key URN and hashes 
   expect(call.targetNode).toBe(NODE_DID);
 
   const post = seen.find((r) => r.method === "POST")!;
-  expect(post.url).toBe(`${HOST}/encryption/networks/${encodeURIComponent(NETWORK_ID)}/keys`);
+  expect(post.url).toBe(`${HOST}/encryption/networks/${NETWORK_ID}/keys`);
+  expect(post.url).not.toContain("%");
   expect(post.body).toBe('{"keyPath":"apps/tinychat/session","shreddable":false}');
   expect(call.facts).toEqual({
     type: "tinycloud.encryption.key-admin/v1",

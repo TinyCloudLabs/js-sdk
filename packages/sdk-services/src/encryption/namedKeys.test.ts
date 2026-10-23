@@ -139,7 +139,7 @@ function harness(handler: Handler, opts: { info?: () => Response } = {}) {
 }
 
 const keyRequests = (rs: Recorded[]) => rs.filter((r) => r.url !== `${HOST}/info`);
-const KEYS_URL = `${HOST}/encryption/networks/${encodeURIComponent(NETWORK_ID)}/keys`;
+const KEYS_URL = `${HOST}/encryption/networks/${NETWORK_ID}/keys`;
 
 describe("feature gate", () => {
   it("throws NAMED_KEYS_UNSUPPORTED and sends no key request when the node lacks the feature", async () => {
@@ -219,7 +219,7 @@ describe("admin routes", () => {
       await c.call(h.client);
       const [req] = keyRequests(h.requests);
       expect(req!.method).toBe("POST");
-      expect(req!.url).toBe(`${HOST}/encryption/networks/${encodeURIComponent(NETWORK_ID)}/${c.route}`);
+      expect(req!.url).toBe(`${HOST}/encryption/networks/${NETWORK_ID}/${c.route}`);
       expect(req!.body).toBe(c.body);
       expect(req!.headers.Authorization).toBe(`Bearer 1:${c.can}`);
       expect(h.signed).toHaveLength(1);
@@ -293,6 +293,64 @@ describe("GETs", () => {
       h.client.describeKey(PATH, { ability: "tinycloud.encryption/key.delete" }),
     ).rejects.toMatchObject({ code: "INVALID_KEY_TARGET" });
     expect(h.signed).toHaveLength(0);
+  });
+});
+
+describe("network id goes into the URL raw", () => {
+  const DK_NETWORK_ID = "urn:tinycloud:encryption:did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK:default";
+  const missingNode = () => text("key_not_found: x", 404);
+
+  for (const networkId of [NETWORK_ID, DK_NETWORK_ID]) {
+    it(`create, block, unblock, public GET and authenticated GET carry the raw id and no '%' (${networkId.slice(0, 36)}...)`, async () => {
+      const h = harness(() => json({ ...descriptor({ networkId }) }));
+      const options = { networkId };
+      await h.client.createKey(PATH, options);
+      await h.client.blockKey(PATH, options);
+      await h.client.unblockKey(PATH, options);
+      await h.client.getPublicKey(PATH, options);
+      await h.client.describeKey(PATH, options);
+      const urls = keyRequests(h.requests).map((r) => `${r.method} ${r.url}`);
+      const base = `${HOST}/encryption/networks/${networkId}`;
+      expect(urls).toEqual([
+        `POST ${base}/keys`,
+        `POST ${base}/key-actions/block`,
+        `POST ${base}/key-actions/unblock`,
+        `GET ${base}/keys/${PATH}`,
+        `GET ${base}/keys/${PATH}`,
+      ]);
+      for (const url of urls) expect(url).not.toContain("%");
+    });
+  }
+
+  it("a network id outside the grammar is refused with zero requests on every call", async () => {
+    const bad = [
+      "did:web:example.com%3A8443:default",
+      "did:web:a/b:default",
+      "did:key:z6Mk?x=1:default",
+      "did:key:z6Mk#frag:default",
+      "did:key:z6Mk z:default",
+      "did:key:z6Mk:de%66ault",
+      "did:key:z6Mk:def/ault",
+      "did:key:z6Mk:DE\u202Eault",
+    ].map((id) => `urn:tinycloud:encryption:${id}`);
+    bad.push("not-a-network", "", `${NETWORK_ID}/keys`, `${NETWORK_ID}\n`);
+    for (const networkId of bad) {
+      const h = harness(missingNode);
+      const options = { networkId };
+      const calls = [
+        () => h.client.createKey(PATH, options),
+        () => h.client.blockKey(PATH, options),
+        () => h.client.unblockKey(PATH, options),
+        () => h.client.getPublicKey(PATH, options),
+        () => h.client.describeKey(PATH, options),
+        () => h.client.ensureKey(PATH, options),
+      ];
+      for (const call of calls) {
+        await expect(call()).rejects.toMatchObject({ code: "INVALID_KEY_TARGET" });
+      }
+      expect(h.requests).toHaveLength(0);
+      expect(h.signed).toHaveLength(0);
+    }
   });
 });
 
@@ -379,6 +437,9 @@ describe("error mapping", () => {
     [403, "shreddable_requires_paid_tier: x", "SHREDDABLE_REQUIRES_PAID_TIER"],
     [400, "key_path_invalid: x", "KEY_PATH_INVALID"],
     [403, "key_unwrap_failed: x", "KEY_UNWRAP_FAILED"],
+    [400, "receiver_key_invalid: receiverPublicKey must be a 32-byte X25519 public key", "RECEIVER_KEY_INVALID"],
+    [401, "", "NODE_ERROR"],
+    [403, "", "NODE_ERROR"],
     [500, "boom", "NODE_ERROR"],
     [403, "unheard_of_code: x", "NODE_ERROR"],
   ];
@@ -394,6 +455,39 @@ describe("error mapping", () => {
       expect(error.code).toBe("KEY_UNAVAILABLE");
       expect(error.rawState).toBe(raw);
     }
+  });
+
+  it("caps the node code kept in nodeCode and echoed in the message at 64 characters", () => {
+    const long = "a".repeat(300);
+    const error = mapNodeKeyError(403, `${long}: detail`, "ctx");
+    expect(error.code).toBe("NODE_ERROR");
+    expect(error.nodeCode).toBe("a".repeat(64));
+    expect(error.message).not.toContain("a".repeat(65));
+    expect(error.status).toBe(403);
+  });
+
+  it("an empty body keeps the status and carries no nodeCode", () => {
+    for (const status of [401, 403]) {
+      const error = mapNodeKeyError(status, "", "ctx");
+      expect(error.code).toBe("NODE_ERROR");
+      expect(error.status).toBe(status);
+      expect(error.nodeCode).toBeUndefined();
+      expect(error.message).toContain(String(status));
+    }
+  });
+
+  it("block and unblock on a missing row map key_not_found to KEY_NOT_FOUND", async () => {
+    for (const call of [(c: NamedKeyClient) => c.blockKey(PATH), (c: NamedKeyClient) => c.unblockKey(PATH)]) {
+      const h = harness(() => text("key_not_found: no such key", 404));
+      await expect(call(h.client)).rejects.toMatchObject({ code: "KEY_NOT_FOUND", status: 404, nodeCode: "key_not_found" });
+    }
+  });
+
+  it("the public GET has no 404 branch: key_not_found throws, it is not null", async () => {
+    const h = harness(() => text("key_not_found: x", 404));
+    await expect(h.client.getPublicKey(PATH)).rejects.toMatchObject({ code: "KEY_NOT_FOUND", status: 404 });
+    const net = harness(() => text("network_not_found: x", 404));
+    await expect(net.client.getPublicKey(PATH)).rejects.toMatchObject({ code: "NETWORK_NOT_FOUND" });
   });
 });
 
@@ -539,6 +633,41 @@ describe("envelopes", () => {
     const h = harness((req) => (req.url === `${HOST}/invoke` ? text("key_blocked: blocked", 403) : req.url.startsWith(KEYS_URL) ? json({ ...descriptor(), state: undefined, kind: undefined }) : undefined));
     const env = await h.client.encrypt(PATH, utf8Encode("x"));
     await expect(h.client.decrypt(env)).rejects.toMatchObject({ code: "KEY_BLOCKED", status: 403 });
+  });
+
+  it("maps every named-key denial at HTTP 403 on /invoke by its code, not its status", async () => {
+    const cases: Array<[string, string]> = [
+      ["key_path_invalid", "KEY_PATH_INVALID"],
+      ["key_blocked", "KEY_BLOCKED"],
+      ["key_not_found", "KEY_NOT_FOUND"],
+      ["key_unwrap_failed", "KEY_UNWRAP_FAILED"],
+      ["network_not_active", "NETWORK_NOT_ACTIVE"],
+    ];
+    for (const [nodeCode, code] of cases) {
+      const h = harness((req) =>
+        req.url === `${HOST}/invoke`
+          ? text(`${nodeCode}: denied`, 403)
+          : req.url.startsWith(KEYS_URL)
+            ? json({ ...descriptor(), state: undefined, kind: undefined })
+            : undefined,
+      );
+      const env = await h.client.encrypt(PATH, utf8Encode("x"));
+      await expect(h.client.decrypt(env)).rejects.toMatchObject({ code, status: 403, nodeCode });
+    }
+  });
+
+  it("an empty-body 401 or 403 on /invoke is NODE_ERROR carrying the status", async () => {
+    for (const status of [401, 403]) {
+      const h = harness((req) =>
+        req.url === `${HOST}/invoke`
+          ? text("", status)
+          : req.url.startsWith(KEYS_URL)
+            ? json({ ...descriptor(), state: undefined, kind: undefined })
+            : undefined,
+      );
+      const env = await h.client.encrypt(PATH, utf8Encode("x"));
+      await expect(h.client.decrypt(env)).rejects.toMatchObject({ code: "NODE_ERROR", status });
+    }
   });
 
   it("verifies requestHash against its own invocation CID and body hash", async () => {
@@ -689,5 +818,21 @@ describe("error messages never carry raw untrusted text", () => {
     expect(error.message).toContain(`${"s".repeat(120)}...`);
     expect(error.message).not.toContain("s".repeat(121));
     expect(error.rawState).toBe(state);
+  });
+
+  it("the read-back failure message caps the echoed key path at 120 characters", async () => {
+    const seg = "a".repeat(60);
+    const longPath = [seg, seg, seg, seg].join("/");
+    const steps = [
+      () => text("key_not_found: x", 404),
+      () => text("key_exists: path exists", 409),
+      () => text("key_not_found: x", 404),
+    ];
+    let i = 0;
+    const h = harness(() => steps[i++]!());
+    const error = (await h.client.ensureKey(longPath).catch((e: unknown) => e)) as NamedKeyError;
+    expect(error.code).toBe("KEY_NOT_FOUND");
+    expect(error.message).toContain(`${longPath.slice(0, 120)}...`);
+    expect(error.message).not.toContain(longPath.slice(0, 121));
   });
 });
