@@ -26,6 +26,7 @@ const MAX_PARAMETERS = 100;
 const MAX_SQL_LENGTH = 64 * 1024;
 const SQL_WRITE_AUTHORITY_NOTICE =
   "Approving tinycloud.sql/write grants full read/write/schema mutation authority over this exact database; the MCP tool itself accepts only one parameterized INSERT, UPDATE, or DELETE.";
+const SQL_REQUEST_TOO_LARGE_MESSAGE = "The SQL request is too large. Split the batch into smaller requests.";
 
 const SCHEMA_QUERY = `SELECT type, name, tbl_name, sql
 FROM sqlite_schema
@@ -674,7 +675,7 @@ function sqlServiceFailure(
       status: "error",
       error: operationError(
         "INPUT_INVALID",
-        "The SQL request is too large. Split the batch into smaller requests.",
+        SQL_REQUEST_TOO_LARGE_MESSAGE,
       ),
     };
   }
@@ -691,6 +692,10 @@ function sqlServiceFailure(
 }
 
 function sqlMutationFailure(error: unknown): OperationExecutionOutcome<never> {
+  if (isRecord(error) && error.code === "SQL_REQUEST_TOO_LARGE") {
+    // Rejected for size before the statement runs, so nothing was written.
+    return { status: "error", error: operationError("INPUT_INVALID", SQL_REQUEST_TOO_LARGE_MESSAGE) };
+  }
   // A storage rejection leaves nothing written, so that outcome is known.
   const storageFull = storageFullOperationError(error);
   if (storageFull) return { status: "error", error: storageFull };

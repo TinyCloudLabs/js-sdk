@@ -9,6 +9,7 @@ import { appsNow, appsTimezone, withLocalOffset } from "../tc-apps/state.js";
 import type { AppsKv, KvResult, KvValue } from "../tc-apps/kv.js";
 import { appsOperationDefinitions, type ContextOutput, type ReadOutput, type WriteOutput, type QueryOutput } from "./apps.js";
 import { checkCopyKinds, copyRowChunks, COPY_INSERT, COPY_DELETE, COPY_REQUEST_LIMIT, syncCopyRows, type AppsDatabase, type CopyRow } from "../tc-apps/copy.js";
+import { copyFailure } from "../tc-apps/copy.js";
 
 const SPACE = "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:default";
 const app = { app: "fitness", title: "Fitness", about: "Health", created: "2026-10-14" };
@@ -596,6 +597,18 @@ describe("personal apps fast copy", () => {
       expect(written.output.ops[0]?.outcome).toBe("ok");
       expect(sql.calls.length).toBe(2);
       expect(kv.values.has(staleKey)).toBe(true);
+    });
+  });
+});
+
+describe("fast-copy request-size mapping", () => {
+  test("maps request-side 413 to split guidance and keeps response-side 413 as result-limit", () => {
+    expect(copyFailure({ code: "SQL_REQUEST_TOO_LARGE" }).operationError).toMatchObject({
+      code: "INPUT_INVALID",
+      message: "Split the fast-copy batch into smaller requests.",
+    });
+    expect(copyFailure({ code: "SQL_RESPONSE_TOO_LARGE" }).operationError).toMatchObject({
+      code: "SQL_RESULT_LIMIT_EXCEEDED",
     });
   });
 });
