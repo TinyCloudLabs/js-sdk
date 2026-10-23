@@ -1,0 +1,251 @@
+import type {
+  AccountInfo,
+  ActionResult,
+  DelegationPage,
+  LocalCopyStatus,
+  LocalNodeState,
+  NodeRow,
+  PanelDataHost,
+  PanelDataSource,
+  PanelView,
+  RevokeOutcome,
+  StorageView,
+  ViewResult,
+} from "../data";
+import type { PanelClient } from "../slots";
+import { viewError, viewLoading, viewNeedsPermission, viewReady } from "../view-result";
+
+import { toDelegationRow } from "./map";
+
+const ACCOUNT_TTL_MS = 60_000;
+const STORAGE_TTL_MS = 60_000;
+const DELEGATIONS_TTL_MS = 10_000;
+const PAGE_LIMIT = 50;
+
+/** Cached sections. Local node, nodes and local copy read in place (no network). */
+type SectionKey = "account" | "delegations" | "storage";
+
+interface Snapshot {
+  value?: ViewResult<unknown>;
+  at: number;
+  inflight?: Promise<void>;
+}
+
+const SECTION_VIEWS: Record<SectionKey, readonly PanelView[]> = {
+  account: ["overview"],
+  delegations: ["delegations"],
+  storage: ["storage"],
+};
+
+/**
+ * Live panel data. Every read is stale-while-revalidate per section:
+ * - no snapshot: await one attempt;
+ * - fresh snapshot (within TTL): return it;
+ * - stale snapshot: return it now and refresh in the background.
+ * A failed refresh keeps the previous ready snapshot. Reset (sign-out or
+ * account switch) drops all snapshots and discards in-flight results.
+ */
+export function createRealPanelData(
+  host: PanelDataHost,
+  client: PanelClient,
+  appName: string,
+): PanelDataSource {
+  const listeners = new Set<(view: PanelView) => void>();
+  const snaps = new Map<SectionKey, Snapshot>();
+  let epoch = 0;
+
+  client.onReset(() => {
+    epoch += 1;
+    snaps.clear();
+  });
+
+  const snapFor = (key: SectionKey): Snapshot => {
+    let snap = snaps.get(key);
+    if (!snap) {
+      snap = { at: 0 };
+      snaps.set(key, snap);
+    }
+    return snap;
+  };
+
+  const emit = (key: SectionKey): void => {
+    for (const view of SECTION_VIEWS[key]) {
+      for (const listener of listeners) listener(view);
+    }
+  };
+
+  function refresh<T>(key: SectionKey, fetch: () => Promise<ViewResult<T>>): Promise<void> {
+    const snap = snapFor(key);
+    if (snap.inflight) return snap.inflight;
+    const run = epoch;
+    snap.inflight = fetch()
+      .catch((): ViewResult<T> => viewError("unavailable"))
+      .then((result) => {
+        if (run !== epoch) return;
+        if (result.state === "error" && snap.value?.state === "ready") return;
+        snap.value = result;
+        snap.at = Date.now();
+        emit(key);
+      })
+      .finally(() => {
+        snap.inflight = undefined;
+      });
+    return snap.inflight;
+  }
+
+  async function read<T>(
+    key: SectionKey,
+    ttlMs: number,
+    fetch: () => Promise<ViewResult<T>>,
+  ): Promise<ViewResult<T>> {
+    const snap = snapFor(key);
+    if (snap.value === undefined) {
+      await refresh(key, fetch);
+      return (snap.value as ViewResult<T> | undefined) ?? viewLoading<T>();
+    }
+    if (Date.now() - snap.at > ttlMs) void refresh(key, fetch);
+    return snap.value as ViewResult<T>;
+  }
+
+  async function fetchDelegations(cursor?: string): Promise<ViewResult<DelegationPage>> {
+    const res = await host.delegations.query({
+      direction: "all",
+      limit: PAGE_LIMIT,
+      ...(cursor ? { cursor } : {}),
+    });
+    if (res.ok === false) {
+      return res.error.code === "PERMISSION_DENIED"
+        ? viewNeedsPermission("delegation/list")
+        : viewError(res.error.code);
+    }
+    const now = Date.now();
+    return viewReady({
+      rows: res.data.items.map((r) => toDelegationRow(r, host.sessionDid, now)),
+      ...(res.data.nextCursor ? { nextCursor: res.data.nextCursor } : {}),
+    });
+  }
+
+  async function fetchAccount(): Promise<ViewResult<AccountInfo>> {
+    const [spaces, applications, delegations] = await Promise.all([
+      host.account.index.spaces.list(),
+      host.account.index.applications.list(),
+      read("delegations", DELEGATIONS_TTL_MS, () => fetchDelegations()),
+    ]);
+    if (spaces.ok === false) return viewError(spaces.error.code);
+    if (applications.ok === false) return viewError(applications.error.code);
+
+    // Delegation counts come from the first page only. They are lower bounds
+    // when the delegations read is not ready, and are reported as derived.
+    const page = delegations.state === "ready" ? delegations.data.rows : undefined;
+    const granted = page?.filter((r) => r.direction === "granted").length ?? 0;
+    const received = page?.filter((r) => r.direction === "received").length ?? 0;
+
+    return viewReady({
+      source: "real",
+      fieldSources: { grantedDelegations: "derived", receivedDelegations: "derived" },
+      did: host.did,
+      host: host.hosts[0] ?? "",
+      applications: applications.data.length,
+      spaces: spaces.data.length,
+      grantedDelegations: granted,
+      receivedDelegations: received,
+      appName,
+    });
+  }
+
+  async function fetchStorage(): Promise<ViewResult<StorageView>> {
+    // The SDK fails closed locally (PERMISSION_DENIED, nothing sent) when the
+    // space/info grant cannot be confirmed, so this read never reaches the node unauthorised.
+    const res = await host.storage.status();
+    if (res.ok === false) {
+      return res.error.code === "PERMISSION_DENIED"
+        ? viewNeedsPermission("space/info")
+        : viewError(res.error.code);
+    }
+    return viewReady({ source: "real", ...res.data });
+  }
+
+  return {
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+
+    account: () => read("account", ACCOUNT_TTL_MS, fetchAccount),
+
+    async localNode(): Promise<ViewResult<LocalNodeState>> {
+      const identity = await host.activeNodeIdentity().catch(() => undefined);
+      return viewReady({
+        source: "real",
+        fieldSources: { connection: "stub", version: "stub" },
+        connection: "unavailable",
+        ...(identity ? { identity } : {}),
+      });
+    },
+
+    async setLocalNodeEnabled(): Promise<ActionResult> {
+      // Stub today: the local node connection has no toggle in the SDK yet.
+      return { ok: false, code: "unavailable" };
+    },
+
+    async localCopy(): Promise<ViewResult<LocalCopyStatus>> {
+      const sync = client.sync;
+      if (!sync) return viewError("unavailable");
+      const { requested, effective, reason } = sync.state;
+      return viewReady({
+        source: "real",
+        fieldSources: { lastSyncedAt: "stub", folders: "stub", pending: "stub", bytesOnDevice: "stub" },
+        requested,
+        effective,
+        ...(reason !== undefined ? { reason } : {}),
+        folders: [],
+        pending: 0,
+      });
+    },
+
+    delegations(cursor?: string) {
+      return cursor
+        ? fetchDelegations(cursor)
+        : read("delegations", DELEGATIONS_TTL_MS, () => fetchDelegations());
+    },
+
+    async revoke(cid: string): Promise<RevokeOutcome> {
+      // The node is the arbiter: check the current status before acting.
+      const before = await host.delegations.status(cid);
+      if (before.ok === false) return { ok: false, code: before.error.code };
+      if (before.data.status !== "active") {
+        return { ok: false, code: "not-revocable" };
+      }
+      const res = await host.delegations.revoke(cid);
+      if (res.ok === false) return { ok: false, code: res.error.code };
+
+      // Refetch after the write so the panel shows the node's state.
+      snapFor("account").at = 0;
+      await refresh("delegations", () => fetchDelegations());
+      return { ok: true, cid };
+    },
+
+    async nodes(): Promise<ViewResult<readonly NodeRow[]>> {
+      const identity = await host.activeNodeIdentity().catch(() => undefined);
+      return viewReady(
+        host.hosts.map((origin): NodeRow => {
+          const active = identity !== undefined && identity.origin === origin;
+          return {
+            source: "real",
+            fieldSources: { kind: "stub", status: "stub", spaces: "stub" },
+            origin,
+            kind: "hosted",
+            active,
+            ...(active && identity ? { nodeDid: identity.nodeDid } : {}),
+            status: "ok",
+            spaces: [],
+          };
+        }),
+      );
+    },
+
+    storage: () => read("storage", STORAGE_TTL_MS, fetchStorage),
+  };
+}

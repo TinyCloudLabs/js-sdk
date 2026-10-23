@@ -309,8 +309,8 @@ export declare function describeAbilities(
 // ---------------------------------------------------------------------------
 
 export interface PanelDataHost {
-  readonly account: Pick<AccountService, "status">;
-  readonly delegations: Pick<DelegationManager, "query" | "revoke">;
+  readonly account: Pick<AccountService, "index">;
+  readonly delegations: Pick<DelegationManager, "query" | "revoke" | "status">;
   readonly storage: Pick<IStorageService, "status">;
   readonly hosts: readonly string[];
   /** Current account DID (`tc.did`). */
