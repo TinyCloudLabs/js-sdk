@@ -603,3 +603,78 @@ describe("/info caching", () => {
     expect(infoCount(h.requests)).toBe(2);
   });
 });
+
+describe("error messages never carry raw untrusted text", () => {
+  const BIDI_OR_ZERO_WIDTH = /[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/;
+  const HOSTILE = "evil\u202Enet\u200Bwork";
+
+  it("a hostile network in a target is escaped in the message and kept raw only in `input`", async () => {
+    const h = harness(() => undefined);
+    const networkId = `urn:tinycloud:encryption:${OWNER}:${HOSTILE}`;
+    const error = (await h.client.createKey(PATH, { networkId }).catch((e: unknown) => e)) as NamedKeyError;
+    expect(error).toBeInstanceOf(NamedKeyError);
+    expect(error.code).toBe("INVALID_KEY_TARGET");
+    expect(error.message).not.toMatch(BIDI_OR_ZERO_WIDTH);
+    expect(error.input).toContain("\u202E");
+    expect(h.requests).toHaveLength(0);
+  });
+
+  it("a hostile resource passed to the target check is escaped", () => {
+    const resource = `${NETWORK_ID}/apps/ev\u202Eil\u200Bx`;
+    let thrown: unknown;
+    try {
+      buildKeyAdminFacts({ crypto, targetNode: NODE, keyResource: resource, action: KEY_CREATE_ABILITY, body: {} });
+    } catch (e) {
+      thrown = e;
+    }
+    const error = thrown as NamedKeyError;
+    expect(error.code).toBe("INVALID_KEY_TARGET");
+    expect(error.message).not.toMatch(BIDI_OR_ZERO_WIDTH);
+    expect(error.message).toContain("\\u{202E}");
+    expect(error.message).toContain("\\u{200B}");
+    expect(error.input).toBe(resource);
+  });
+
+  it("hostile node-supplied state and kind are escaped in the message and raw in their own fields", async () => {
+    const state = `act\u202Eive\u200B`;
+    const h = harness(() => json(descriptor({ state })));
+    const unavailable = (await h.client.ensureKey(PATH).catch((e: unknown) => e)) as NamedKeyError;
+    expect(unavailable.code).toBe("KEY_UNAVAILABLE");
+    expect(unavailable.message).not.toMatch(BIDI_OR_ZERO_WIDTH);
+    expect(unavailable.message).toContain("\\u{202E}");
+    expect(unavailable.rawState).toBe(state);
+
+    const k = harness(() => json(descriptor({ kind: HOSTILE })));
+    const mismatch = (await k.client.ensureKey(PATH).catch((e: unknown) => e)) as NamedKeyError;
+    expect(mismatch.code).toBe("KEY_KIND_MISMATCH");
+    expect(mismatch.message).not.toMatch(BIDI_OR_ZERO_WIDTH);
+    expect(mismatch.kind).toBe(HOSTILE);
+  });
+
+  it("a hostile envelope network is rejected without echoing it", async () => {
+    const h = harness(() => undefined);
+    const envelope = {
+      v: 2,
+      networkId: `urn:tinycloud:encryption:${OWNER}:${HOSTILE}`,
+      keyPath: PATH,
+      alg: "a",
+      keyVersion: 1,
+      encryptedSymmetricKey: "AA==",
+      encryptedSymmetricKeyHash: canonicalHashHex(sha256, "AA=="),
+      ciphertext: "AA==",
+    } as unknown as NamedKeyEnvelope;
+    const error = (await h.client.decrypt(envelope).catch((e: unknown) => e)) as NamedKeyError;
+    expect(error.code).toBe("INVALID_ENVELOPE");
+    expect(error.message).not.toMatch(BIDI_OR_ZERO_WIDTH);
+    expect(h.requests).toHaveLength(0);
+  });
+
+  it("echoed values are capped at 120 characters", async () => {
+    const state = "s".repeat(500);
+    const h = harness(() => json(descriptor({ state })));
+    const error = (await h.client.ensureKey(PATH).catch((e: unknown) => e)) as NamedKeyError;
+    expect(error.message).toContain(`${"s".repeat(120)}...`);
+    expect(error.message).not.toContain("s".repeat(121));
+    expect(error.rawState).toBe(state);
+  });
+});

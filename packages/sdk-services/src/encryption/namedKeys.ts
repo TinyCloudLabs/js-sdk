@@ -78,15 +78,45 @@ export type NamedKeyErrorCode =
   /** The node object lacks an invocation hook the node-sdk wiring needs. */
   | "NODE_HOOK_MISSING";
 
+/** Longest untrusted value echoed into an error message. */
+const MAX_ECHO_CHARS = 120;
+
+/** Escape every code point outside printable ASCII as `\u{XXXX}`. */
+function escapeNonPrintable(value: string): string {
+  let out = "";
+  for (const ch of value) {
+    const cp = ch.codePointAt(0)!;
+    out += cp >= 0x20 && cp <= 0x7e ? ch : `\\u{${cp.toString(16).toUpperCase().padStart(4, "0")}}`;
+  }
+  return out;
+}
+
+/**
+ * Render an untrusted value (resource, path, node-supplied state, parser or
+ * signer text) for an error message: capped at 120 characters, then every
+ * character outside printable ASCII escaped, so bidi, zero-width and other
+ * format or control characters can never reach a terminal or log through a
+ * message. Raw values live only in non-message fields (`input`, `rawState`,
+ * `kind`, `detail`, `cause`).
+ */
+export function safeEcho(value: unknown): string {
+  const text = typeof value === "string" ? value : String(value);
+  const chars = Array.from(text);
+  const clipped = chars.length > MAX_ECHO_CHARS ? `${chars.slice(0, MAX_ECHO_CHARS).join("")}...` : text;
+  return escapeNonPrintable(clipped);
+}
+
 export interface NamedKeyErrorInit {
   status?: number;
   /** The node's `<code>` prefix, when it sent one. */
   nodeCode?: string;
-  /** The node's `<detail>` text. */
+  /** The node's `<detail>` text. Raw: never in `message`. */
   detail?: string;
-  /** Raw state string (KEY_UNAVAILABLE). */
+  /** Raw state string (KEY_UNAVAILABLE). Raw: never in `message`. */
   rawState?: string;
   kind?: string;
+  /** The rejected caller input (resource or path), unescaped. Raw: never in `message`. */
+  input?: string;
   cause?: unknown;
 }
 
@@ -97,9 +127,11 @@ export class NamedKeyError extends Error {
   readonly detail?: string;
   readonly rawState?: string;
   readonly kind?: string;
+  readonly input?: string;
 
   constructor(code: NamedKeyErrorCode, message: string, init: NamedKeyErrorInit = {}) {
-    super(message, init.cause === undefined ? undefined : { cause: init.cause });
+    // Backstop: whatever a call site interpolated, the message is printable ASCII.
+    super(escapeNonPrintable(message), init.cause === undefined ? undefined : { cause: init.cause });
     this.name = "NamedKeyError";
     this.code = code;
     if (init.status !== undefined) this.status = init.status;
@@ -107,6 +139,7 @@ export class NamedKeyError extends Error {
     if (init.detail !== undefined) this.detail = init.detail;
     if (init.rawState !== undefined) this.rawState = init.rawState;
     if (init.kind !== undefined) this.kind = init.kind;
+    if (init.input !== undefined) this.input = init.input;
   }
 }
 
@@ -240,14 +273,15 @@ export function requireKeyTarget(resource: string): ParsedKeyResource {
   } catch (error) {
     throw new NamedKeyError(
       "INVALID_KEY_TARGET",
-      `not a valid encryption key resource: ${error instanceof Error ? error.message : String(error)}`,
-      { cause: error },
+      `not a valid encryption key resource: ${safeEcho(error instanceof Error ? error.message : error)}`,
+      { cause: error, input: resource },
     );
   }
   if (parsed.kind !== "key") {
     throw new NamedKeyError(
       "INVALID_KEY_TARGET",
       `a ${parsed.kind} resource cannot be an invocation target; an exact key is required`,
+      { input: resource },
     );
   }
   return parsed;
@@ -349,21 +383,21 @@ function parseFullDescriptor(
 /** Success only for `state: "active"` AND `kind: "deterministic"`. */
 function assertEnsuredDescriptor(descriptor: KeyDescriptor): KeyDescriptor {
   if (descriptor.state === "blocked") {
-    throw new NamedKeyError("KEY_BLOCKED", `key ${descriptor.keyPath} is blocked`, {
+    throw new NamedKeyError("KEY_BLOCKED", `key ${safeEcho(descriptor.keyPath)} is blocked`, {
       rawState: descriptor.state,
     });
   }
   if (descriptor.state !== "active") {
     throw new NamedKeyError(
       "KEY_UNAVAILABLE",
-      `key ${descriptor.keyPath} is unavailable (state ${JSON.stringify(descriptor.state)})`,
+      `key ${safeEcho(descriptor.keyPath)} is unavailable (state ${safeEcho(descriptor.state)})`,
       { rawState: descriptor.state },
     );
   }
   if (descriptor.kind !== "deterministic") {
     throw new NamedKeyError(
       "KEY_KIND_MISMATCH",
-      `key ${descriptor.keyPath} exists with kind ${JSON.stringify(descriptor.kind)}, not deterministic`,
+      `key ${safeEcho(descriptor.keyPath)} exists with kind ${safeEcho(descriptor.kind)}, not deterministic`,
       { kind: descriptor.kind },
     );
   }
@@ -393,8 +427,8 @@ export class NamedKeyClient {
     } catch (error) {
       throw new NamedKeyError(
         "INVALID_KEY_TARGET",
-        error instanceof Error ? error.message : String(error),
-        { cause: error },
+        safeEcho(error instanceof Error ? error.message : error),
+        { cause: error, input: `${networkId}/${path}` },
       );
     }
   }
@@ -470,7 +504,7 @@ export class NamedKeyClient {
     const keyResource = this.keyUrn(networkId, path);
     const ability = options?.ability ?? DECRYPT_ACTION;
     if (DESCRIBE_ABILITIES[ability] !== true) {
-      throw new NamedKeyError("INVALID_KEY_TARGET", `${ability} cannot describe a key`);
+      throw new NamedKeyError("INVALID_KEY_TARGET", `${safeEcho(ability)} cannot describe a key`, { input: ability });
     }
     const targetNode = await this.requireNode();
     const signed = await this.config.signInvocation({
@@ -650,7 +684,7 @@ export class NamedKeyClient {
     }
     const result = await this.config.decryptRoot(envelope);
     if (!result.ok) {
-      throw new NamedKeyError("DECRYPT_FAILED", result.error.message, { cause: result.error });
+      throw new NamedKeyError("DECRYPT_FAILED", safeEcho(result.error.message), { cause: result.error });
     }
     return result.data;
   }
@@ -743,7 +777,7 @@ export class NamedKeyClient {
       response: (await response.json()) as DecryptResponseBody,
     });
     if (!verified.ok) {
-      throw new NamedKeyError("INVALID_RESPONSE", verified.error.message, { cause: verified.error });
+      throw new NamedKeyError("INVALID_RESPONSE", safeEcho(verified.error.message), { cause: verified.error });
     }
     const symmetricKey = openWrappedKey(crypto, receiverKey.privateKey, verified.data);
     try {
