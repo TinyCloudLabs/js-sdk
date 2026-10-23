@@ -4,8 +4,8 @@ import { sha256 } from "@noble/hashes/sha256";
 import { base58btc } from "multiformats/bases/base58";
 import { CID } from "multiformats/cid";
 import { create as createDigest } from "multiformats/hashes/digest";
-import { canonicalize, encodeSealedInlineShareUrl, generateKey, seal, toBase64Url } from "@tinycloud/share-envelope";
-import type { AddressedOwnerRootInput } from "../../src/index.js";
+import { canonicalize, generateKey, seal, toBase64Url } from "@tinycloud/share-envelope";
+import { buildFullLink, prepareLinkRecord, signerFromSeed } from "@tinycloud/share-envelope/links";
 
 /**
  * Fixtures for a fully signed Policy/v3 envelope: real owner and node keys, real compact-UCAN roots and a signed
@@ -15,7 +15,7 @@ import type { AddressedOwnerRootInput } from "../../src/index.js";
 export const didFor = (seed: Uint8Array) => `did:key:${base58btc.encode(Uint8Array.from([0xed, 0x01, ...ed25519.getPublicKey(seed)]))}`;
 export const ownerSeed = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
 export const ownerDid = didFor(ownerSeed);
-export const attackerSeed = Uint8Array.from({ length: 32 }, (_, index) => index + 101);
+export const foreignSeed = Uint8Array.from({ length: 32 }, (_, index) => index + 101);
 export const nodeSeed = Uint8Array.from({ length: 32 }, (_, index) => index + 33);
 export const nodeDid = didFor(nodeSeed);
 export const enc = (value: string) => new TextEncoder().encode(value);
@@ -59,10 +59,25 @@ export function signedBinding(expiresAt: Date) {
   return { ...unsigned, signature: { suite: "Ed25519" as const, signerDid: nodeDid, value: toBase64Url(ed25519.sign(digest, nodeSeed)) } };
 }
 
-/** Seal an envelope into the inline link `inspectShare` opens. */
+/**
+ * Seal an envelope into the full `v=4` link `inspectShare` opens. The header is signed by whichever test key signed
+ * the envelope (the envelope's signer is the issuer every reader binds the record to).
+ */
 export async function linkFor(envelope: unknown): Promise<string> {
   const key = generateKey();
   const sealed = await seal(enc(canonicalize(envelope)), key);
-  return encodeSealedInlineShareUrl({ origin: "https://share.tinycloud.xyz", ciphertext: sealed.blob, key32: key });
+  const fields = typeof envelope === "object" && envelope !== null ? envelope : {};
+  const signature = "signature" in fields && typeof fields.signature === "object" && fields.signature !== null ? fields.signature : {};
+  const issuerSeed = "signerDid" in signature && signature.signerDid === didFor(foreignSeed) ? foreignSeed : ownerSeed;
+  const expiry = "expiry" in fields && typeof fields.expiry === "string" ? Date.parse(fields.expiry) : Number.NaN;
+  const { record } = await prepareLinkRecord({
+    type: "share",
+    sealed: { blob: sealed.blob, key },
+    issuerKey: signerFromSeed(issuerSeed),
+    apiOrigin: "https://api.tinycloud.xyz",
+    expiresAt: new Date(expiry > Date.now() ? expiry : Date.now() + 3600_000),
+    enforceServiceLife: false,
+  });
+  return buildFullLink({ origin: "https://share.tinycloud.xyz", key, record });
 }
 

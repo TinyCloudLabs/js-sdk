@@ -1,7 +1,7 @@
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-  entry: ["src/index.ts", "src/short-link.ts"],
+  entry: { index: "src/index.ts", links: "src/links/index.ts" },
   format: ["esm", "cjs"],
   target: "es2022",
   dts: true,

@@ -2,11 +2,12 @@ import { canonicalShareFilename } from "./filename-policy.js";
 import { sha256 } from "@noble/hashes/sha256";
 import { assertArtifactBinding } from "./artifact-pin.js";
 import {
-  canonicalize, computeCid, encodeSealedInlineShareUrl, generateKey, isEnvelopeDeliveryEmail, seal,
+  canonicalize, computeCid, generateKey, isEnvelopeDeliveryEmail, seal,
   shareEnvelopeV3Schema, toBase64Url, unsignedShareEnvelopeV3Schema,
   type ArtifactPin, type PolicyCredentialRequirementV1, type ShareAction, type UnifiedContentSource,
   type UnifiedPolicy, type UnifiedPolicyCapability, type UnifiedRoot,
 } from "@tinycloud/share-envelope";
+import { DEFAULT_LINKS_API_ORIGIN, buildFullLink, prepareLinkRecord } from "@tinycloud/share-envelope/links";
 import {
   SHARE_CONTENT_LIMIT, SHARE_PUBLISH_RESULT_VERSION, redactPublishedShare,
   type PublishedShare, type PublishedShareDeliveryMaterial,
@@ -81,6 +82,8 @@ export interface AddressedPublishAuthority {
 export interface AddressedSharePublishOptions {
   readonly shareId: string;
   readonly shareOrigin: string;
+  /** The links API origin written into the signed header as its audience. Defaults to `https://api.tinycloud.xyz`. */
+  readonly apiOrigin?: string;
   readonly nodeOrigin: string;
   readonly nodeAudience: string;
   readonly enforcerDid: string;
@@ -393,11 +396,18 @@ export async function publishAddressedShare(input: AddressedSharePublishOptions)
   const envelopeKeyBytes = generateKey();
   const sealed = await seal(envelopeBytes, envelopeKeyBytes);
   const envelopeKey = toBase64Url(envelopeKeyBytes);
-  const url = await encodeSealedInlineShareUrl({
-    origin: options.shareOrigin,
-    ciphertext: sealed.blob,
-    key32: envelopeKeyBytes,
+  // The link this publisher returns is the full `v=4` link: the signed record rides in the fragment, so it works
+  // with no service. The header is signed by the key that signs the envelope (the envelope's signer is the issuer
+  // every reader binds the record to). A caller that wants a short link posts `deliveryMaterial` with `createLink`.
+  const { record } = await prepareLinkRecord({
+    type: "share",
+    sealed: { blob: sealed.blob, key: envelopeKeyBytes },
+    issuerKey: { did: options.authority.ownerDid, sign: (digest) => options.authority.sign(digest) },
+    apiOrigin: options.apiOrigin ?? DEFAULT_LINKS_API_ORIGIN,
+    expiresAt: new Date(expiry),
+    enforceServiceLife: false,
   });
+  const url = buildFullLink({ origin: options.shareOrigin, key: envelopeKeyBytes, record });
   const deliveryMaterial = {
     envelope,
     shareCid: sealed.cid,

@@ -346,11 +346,11 @@ export function checkAgentRecordSchema(value: unknown, context: AgentRecordSchem
   if (record.link !== undefined && typeof record.link !== "string") return fail();
   if (record.filename !== undefined && (typeof record.filename !== "string" || record.filename.length > 512)) return fail();
   // Each blob once (stored form, `delivery.ts`): a Policy/v3 record keeps the sealed envelope and its key, never
-  // the envelope it decrypts to nor the `/s/inline` link that re-encodes it.
+  // the envelope it decrypts to. Its `link` (the printed short or full link) is kept and is checked against the
+  // sealed material when the record is accepted.
   if (record.deliveryMaterial !== undefined) {
     const material = record.deliveryMaterial;
     if (!isObject(material) || Object.keys(material).length !== STORED_DELIVERY_MATERIAL_KEYS.length || !STORED_DELIVERY_MATERIAL_KEYS.every((key) => typeof material[key] === "string")) return fail();
-    if (record.link !== undefined) return fail();
   }
   if (record.deliveredRecipients !== undefined && (!Array.isArray(record.deliveredRecipients) || !record.deliveredRecipients.every((item) => typeof item === "string"))) return fail();
   if (record.proofs !== undefined) {
