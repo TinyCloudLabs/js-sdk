@@ -984,24 +984,24 @@ describe("tc share with the default services", () => {
       delivery: { async deliver() { deliveries += 1; return "delivered"; } },
     });
     const originalExit = process.exit;
-    let exited: number | undefined;
-    process.exit = ((code?: number) => { exited = code; }) as typeof process.exit;
+    const exit: { code?: number } = {};
+    process.exit = ((code?: number) => { exit.code = code; }) as typeof process.exit;
     try {
       const notifyPublish = await runShareCaptured(["share", "publish", file, "--to", "email:alice@example.com", "--notify"]);
-      expect(exited).toBe(4);
+      expect(exit.code).toBe(4);
       expect(notifyPublish.stderr).toContain("Invitation emails are not available yet. Nothing was shared and no invitation was sent.");
       expect(publishes).toBe(0);
 
-      exited = undefined;
+      delete exit.code;
       const notify = await runShareCaptured(["share", "notify", "share-default", "--to", "alice@example.com"]);
-      expect(exited).toBe(4);
+      expect(exit.code).toBe(4);
       expect(notify.stderr).toContain("Invitation emails are not available yet. No invitation was sent.");
       expect(deliveries).toBe(0);
 
       stored.delete("share-default");
-      exited = undefined;
+      delete exit.code;
       const plain = await runShareCaptured(["share", "publish", file, "--to", "email:alice@example.com"]);
-      expect(exited).toBeUndefined();
+      expect(exit.code).toBeUndefined();
       expect(plain.exitCode).toBe(0);
       expect(plain.stdout).toBe(`${SHORT_LINK}\n`);
       expect(publishes).toBe(1);
