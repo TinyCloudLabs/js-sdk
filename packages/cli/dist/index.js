@@ -266,11 +266,11 @@ function warningLine(warnings) {
   const subject = warnings.length === 1 ? "A stored grant was" : `${warnings.length} stored grants were`;
   return `${subject} not used (${which}). Approve access again when a command needs it; remove the old grant with ${CLI_NAME2} auth grants remove <cid>.`;
 }
-function outputError(code4, message, hint, details = {}) {
+function outputError(code5, message, hint, details = {}) {
   const { meta, warnings = [], setup, recovery, progress } = details;
   if (!shouldOutputJson()) {
     process.stderr.write(
-      `${theme.error("\u2717")} ${theme.label(safeInline(code4))}: ${safeBlock(message)}
+      `${theme.error("\u2717")} ${theme.label(safeInline(code5))}: ${safeBlock(message)}
 `
     );
     if (hint) {
@@ -283,7 +283,7 @@ function outputError(code4, message, hint, details = {}) {
 `);
   } else {
     const payload = {
-      error: { code: code4, message }
+      error: { code: code5, message }
     };
     if (hint) payload.error.hint = hint;
     if (recovery) payload.error.recovery = recovery;
@@ -305,11 +305,11 @@ function operationWarnings(value) {
   if (!Array.isArray(value)) return [];
   return value.flatMap((warning) => {
     if (warning === null || typeof warning !== "object") return [];
-    const { code: code4, reason, grantCid } = warning;
-    if (typeof code4 !== "string" || !WARNING_CODE.test(code4) || typeof reason !== "string" || !WARNING_REASON.test(reason)) {
+    const { code: code5, reason, grantCid } = warning;
+    if (typeof code5 !== "string" || !WARNING_CODE.test(code5) || typeof reason !== "string" || !WARNING_REASON.test(reason)) {
       return [];
     }
-    return [{ code: code4, reason, ...typeof grantCid === "string" && DELEGATION_CID.test(grantCid) ? { grantCid } : {} }];
+    return [{ code: code5, reason, ...typeof grantCid === "string" && DELEGATION_CID.test(grantCid) ? { grantCid } : {} }];
   });
 }
 function isInteractive() {
@@ -340,17 +340,17 @@ function storageRejection(error) {
   let node = error;
   for (let depth = 0; depth < MAX_CAUSE_DEPTH && typeof node === "object" && node !== null; depth += 1) {
     const record2 = node;
-    let code4;
+    let code5;
     if (record2.code === "STORAGE_QUOTA_EXCEEDED" || record2.code === "STORAGE_LIMIT_REACHED") {
-      code4 = record2.code;
+      code5 = record2.code;
     } else if (record2.code !== void 0) {
       return void 0;
     } else if (isStorageStatus(record2)) {
-      code4 = storageCodeFromText(record2.message);
+      code5 = storageCodeFromText(record2.message);
     }
-    if (code4) {
+    if (code5) {
       const account = accountTotals(record2) ?? accountTotals(record2.meta) ?? accountTotals(record2.metadata);
-      return account ? { code: code4, account } : { code: code4 };
+      return account ? { code: code5, account } : { code: code5 };
     }
     node = record2.cause;
   }
@@ -410,7 +410,7 @@ var MANAGE_STORAGE_URL, MAX_CAUSE_DEPTH;
 var init_storage = __esm({
   "src/output/storage.ts"() {
     "use strict";
-    MANAGE_STORAGE_URL = "https://account.tinycloud.xyz/billing";
+    MANAGE_STORAGE_URL = "https://account.tinycloud.xyz/storage";
     MAX_CAUSE_DEPTH = 4;
   }
 });
@@ -434,22 +434,22 @@ function setActiveProfileName(name) {
 }
 function nodeRetryError(error) {
   if (typeof error !== "object" || error === null) return void 0;
-  const { code: code4, meta, metadata } = error;
-  if (code4 !== "NODE_BUSY" && code4 !== "REQUEST_TIMEOUT" && code4 !== "OUTCOME_UNKNOWN") return void 0;
+  const { code: code5, meta, metadata } = error;
+  if (code5 !== "NODE_BUSY" && code5 !== "REQUEST_TIMEOUT" && code5 !== "OUTCOME_UNKNOWN") return void 0;
   const details = typeof meta === "object" && meta !== null ? meta : typeof metadata === "object" && metadata !== null ? metadata : {};
   const retryAfterMs = details.retryAfterMs;
   const wait = typeof retryAfterMs === "number" && Number.isFinite(retryAfterMs) && retryAfterMs >= 0 ? `in ${Math.max(1, Math.ceil(retryAfterMs / 1e3))} s` : "shortly";
-  if (code4 === "OUTCOME_UNKNOWN") {
+  if (code5 === "OUTCOME_UNKNOWN") {
     return new CLIError(
-      code4,
+      code5,
       "Outcome unknown: the node may have applied the write. Check before retrying.",
       ExitCode.NODE_ERROR,
       { ...details, hint: "Read the data back before running the command again; repeating a write that already applied can duplicate it." }
     );
   }
   return new CLIError(
-    code4,
-    code4 === "NODE_BUSY" ? `The node is busy, try again ${wait}.` : `The node timed out before applying anything, try again ${wait}.`,
+    code5,
+    code5 === "NODE_BUSY" ? `The node is busy, try again ${wait}.` : `The node timed out before applying anything, try again ${wait}.`,
     ExitCode.NODE_ERROR,
     details
   );
@@ -661,9 +661,9 @@ var init_errors = __esm({
     init_warnings();
     GRANT_REVOKED_EXIT_CODE = ExitCode.PERMISSION_DENIED;
     CLIError = class extends Error {
-      constructor(code4, message, exitCode = ExitCode.ERROR, metadata) {
+      constructor(code5, message, exitCode = ExitCode.ERROR, metadata) {
         super(message);
-        this.code = code4;
+        this.code = code5;
         this.exitCode = exitCode;
         this.metadata = metadata;
         this.name = "CLIError";
@@ -1182,12 +1182,12 @@ var init_md = __esm({
       _cloneInto(to) {
         to || (to = new this.constructor());
         to.set(...this.get());
-        const { blockLen, buffer, length: length4, finished, destroyed, pos } = this;
+        const { blockLen, buffer, length: length5, finished, destroyed, pos } = this;
         to.destroyed = destroyed;
         to.finished = finished;
-        to.length = length4;
+        to.length = length5;
         to.pos = pos;
-        if (length4 % blockLen)
+        if (length5 % blockLen)
           to.buffer.set(buffer);
         return to;
       }
@@ -1924,13 +1924,13 @@ var init_blake2 = __esm({
         return res;
       }
       _cloneInto(to) {
-        const { buffer, length: length4, finished, destroyed, outputLen, pos } = this;
+        const { buffer, length: length5, finished, destroyed, outputLen, pos } = this;
         to || (to = new this.constructor({ dkLen: outputLen }));
         to.set(...this.get());
         to.buffer.set(buffer);
         to.destroyed = destroyed;
         to.finished = finished;
-        to.length = length4;
+        to.length = length5;
         to.pos = pos;
         to.outputLen = outputLen;
         return to;
@@ -2165,13 +2165,13 @@ function _abool2(value, title = "") {
   }
   return value;
 }
-function _abytes2(value, length4, title = "") {
+function _abytes2(value, length5, title = "") {
   const bytes = isBytes(value);
   const len = value?.length;
-  const needsLen = length4 !== void 0;
-  if (!bytes || needsLen && len !== length4) {
+  const needsLen = length5 !== void 0;
+  if (!bytes || needsLen && len !== length5) {
     const prefix = title && `"${title}" `;
-    const ofLen = needsLen ? ` of length ${length4}` : "";
+    const ofLen = needsLen ? ` of length ${length5}` : "";
     const got = bytes ? `length=${len}` : `type=${typeof value}`;
     throw new Error(prefix + "expected Uint8Array" + ofLen + ", got " + got);
   }
@@ -2787,15 +2787,15 @@ var init_curve = __esm({
         const { windows, windowSize } = calcWOpts(W, this.bits);
         const points = [];
         let p = point;
-        let base4 = p;
+        let base5 = p;
         for (let window = 0; window < windows; window++) {
-          base4 = p;
-          points.push(base4);
+          base5 = p;
+          points.push(base5);
           for (let i = 1; i < windowSize; i++) {
-            base4 = base4.add(p);
-            points.push(base4);
+            base5 = base5.add(p);
+            points.push(base5);
           }
-          p = base4.double();
+          p = base5.double();
         }
         return points;
       }
@@ -3770,10 +3770,10 @@ var init_dist = __esm({
       [REPLICA_ERROR] = true;
       code;
       detail;
-      constructor(code4, message, detail, options) {
+      constructor(code5, message, detail, options) {
         super(message, options);
         this.name = "ReplicaError";
-        this.code = code4;
+        this.code = code5;
         if (detail !== void 0) this.detail = detail;
       }
     };
@@ -4059,10 +4059,10 @@ var init_profile_gate = __esm({
       [REPLICA_ERROR2] = true;
       code;
       detail;
-      constructor(code4, message, detail, options) {
+      constructor(code5, message, detail, options) {
         super(message, options);
         this.name = "ReplicaError";
-        this.code = code4;
+        this.code = code5;
         if (detail !== void 0) this.detail = detail;
       }
     };
@@ -4083,8 +4083,8 @@ import { dirname as dirname3, join as join22, resolve as resolve2 } from "path";
 import { constants as fsConstants3 } from "fs";
 import { lstat, open as open3, readdir as readdir3, rmdir, unlink } from "fs/promises";
 import { join as join7, parse, resolve, sep } from "path";
-function isReplicaError(error, code4) {
-  return typeof error === "object" && error !== null && error[REPLICA_ERROR3] === true && (code4 === void 0 || error.code === code4);
+function isReplicaError(error, code5) {
+  return typeof error === "object" && error !== null && error[REPLICA_ERROR3] === true && (code5 === void 0 || error.code === code5);
 }
 function assertFolderPrefix3(prefix) {
   const validFolder = typeof prefix === "string" && prefix.length > 0 && !prefix.startsWith("/") && !prefix.includes("//") && prefix.endsWith("/");
@@ -4572,9 +4572,9 @@ function entryOf(row) {
 }
 function storageError(error, action) {
   if (isReplicaError(error)) return error;
-  const code4 = errnoOf(error);
+  const code5 = errnoOf(error);
   const message = error instanceof Error ? error.message : String(error);
-  if (code4 === "ENOSPC" || code4 === "EDQUOT" || /SQLITE_FULL|database or disk is full/i.test(`${String(code4)} ${message}`)) {
+  if (code5 === "ENOSPC" || code5 === "EDQUOT" || /SQLITE_FULL|database or disk is full/i.test(`${String(code5)} ${message}`)) {
     return new ReplicaError3(ReplicaErrorCode3.STORAGE_FULL, `${action}: the local disk is full.`, void 0, { cause: error });
   }
   return new ReplicaError3(ReplicaErrorCode3.STORAGE_ERROR, `${action}: ${message}`, void 0, { cause: error });
@@ -4748,10 +4748,10 @@ var init_sqlite = __esm({
       [REPLICA_ERROR3] = true;
       code;
       detail;
-      constructor(code4, message, detail, options) {
+      constructor(code5, message, detail, options) {
         super(message, options);
         this.name = "ReplicaError";
-        this.code = code4;
+        this.code = code5;
         if (detail !== void 0) this.detail = detail;
       }
     };
@@ -5327,8 +5327,8 @@ CREATE TABLE IF NOT EXISTS grant_install (
         if (this.#readonlySnapshot) {
           throw new ReplicaError3(ReplicaErrorCode3.STORAGE_ERROR, "A read-only replica snapshot cannot mutate the shared database.");
         }
-        const read4 = activeReadSection.getStore();
-        if (read4?.active && read4.controller === this) {
+        const read5 = activeReadSection.getStore();
+        if (read5?.active && read5.controller === this) {
           throw new ReplicaError3(
             ReplicaErrorCode3.STORAGE_ERROR,
             "mutation attempted on the same controller while its readTransaction section is active; this would deadlock"
@@ -6325,7 +6325,7 @@ function assertApprovedEntry(profile, path, actual, recorded) {
     throw refuseUnsafeReplicaPath(profile, `legacy path "${path}" changed since the recorded inventory`);
   }
 }
-function assertRecordedChild(profile, name, layout, inventory, empty4) {
+function assertRecordedChild(profile, name, layout, inventory, empty5) {
   const prefix = `replicas/${name}/`;
   const root = inventory.roots.get(`replicas/${name}`);
   if (!root || root.dev !== layout.rootIdentity.dev || root.ino !== layout.rootIdentity.ino) {
@@ -6344,7 +6344,7 @@ function assertRecordedChild(profile, name, layout, inventory, empty4) {
   }
   const database = [...layout.knownEntries, ...layout.unknownEntries].some((entry) => entry.path === "replica.db");
   const missingWasApproved = inventory.missingDatabases.has(prefix + "replica.db");
-  if (missingWasApproved && database || !database && !empty4 && !missingWasApproved) {
+  if (missingWasApproved && database || !database && !empty5 && !missingWasApproved) {
     throw refuseUnsafeReplicaPath(profile, `replica entry "${name}" has a different database than was approved`);
   }
 }
@@ -6426,8 +6426,8 @@ async function removeProfileReplicas(profile, options = {}) {
       const removed = [];
       const opened = [];
       try {
-        for (const { entry, identity, empty: empty4 } of checked) {
-          if (!empty4) continue;
+        for (const { entry, identity, empty: empty5 } of checked) {
+          if (!empty5) continue;
           await pinned.assertNamed();
           const current = await safeReplicaEntry(profile, root, entry);
           if (current.identity.dev !== identity.dev || current.identity.ino !== identity.ino) {
@@ -6454,8 +6454,8 @@ async function removeProfileReplicas(profile, options = {}) {
           await removeEmptyRoot(removed);
           return removed;
         }
-        for (const { entry, empty: empty4, identity, layout } of checked) {
-          if (empty4 || !layout?.knownEntries.some((item) => item.path === "replica.db")) continue;
+        for (const { entry, empty: empty5, identity, layout } of checked) {
+          if (empty5 || !layout?.knownEntries.some((item) => item.path === "replica.db")) continue;
           await pinned.assertNamed();
           const { path: entryPath, identity: expectedDirectory } = await safeReplicaEntry(profile, root, entry);
           if (expectedDirectory.dev !== identity.dev || expectedDirectory.ino !== identity.ino) {
@@ -6488,8 +6488,8 @@ async function removeProfileReplicas(profile, options = {}) {
           }
           opened[opened.length - 1].lease = lease;
         }
-        for (const { entry, empty: empty4, path, layout } of checked) {
-          if (empty4) continue;
+        for (const { entry, empty: empty5, path, layout } of checked) {
+          if (empty5) continue;
           await pinned.assertNamed();
           const replica = opened.find(({ name }) => name === entry.name);
           try {
@@ -6811,14 +6811,14 @@ async function recoverPendingLogout(name) {
   if (report.failed.length || report.remaining) {
     throw new CLIError(
       "REPLICA_PURGE_FAILED",
-      `A durable logout is pending (${report.failed.map(({ code: code4 }) => code4).join(", ") || `${report.remaining} intents remaining`}). Network restore and replica reads remain blocked; retry this command to complete credential and replica cleanup.`,
+      `A durable logout is pending (${report.failed.map(({ code: code5 }) => code5).join(", ") || `${report.remaining} intents remaining`}). Network restore and replica reads remain blocked; retry this command to complete credential and replica cleanup.`,
       ExitCode.ERROR,
       { failed: report.failed, remaining: report.remaining }
     );
   }
 }
 function refuseRestoredGate(report) {
-  if (report.failed.some(({ code: code4 }) => code4 === "gate_restored")) {
+  if (report.failed.some(({ code: code5 }) => code5 === "gate_restored")) {
     throw new CLIError("REPLICA_GATED", RESTORED_GATE_MESSAGE, ExitCode.ERROR, { failed: report.failed });
   }
 }
@@ -19891,19 +19891,19 @@ function mailboxCredentialCommitment(target) {
     credentialType: EMAIL_CREDENTIAL_TYPE
   };
 }
-function prepareAddressedShare(request) {
+function prepareAddressedShare(request2) {
   try {
-    canonicalShareFilename2(request.filename);
+    canonicalShareFilename2(request2.filename);
   } catch {
     throw new TypeError("addressed filename is invalid");
   }
-  if (request.actions.length === 0 || request.policyActions.length === 0) throw new TypeError("addressed share actions are empty");
-  if (request.policyActions.some((action) => !OWNER_SHARE_ACTIONS.has(action))) throw new TypeError("addressed share action is not supported");
-  if (request.deliveryEmail !== void 0 && !isEnvelopeDeliveryEmail(request.deliveryEmail)) throw new TypeError("delivery email is not a valid envelope address");
-  const target = normalizeShareTarget(request.target);
+  if (request2.actions.length === 0 || request2.policyActions.length === 0) throw new TypeError("addressed share actions are empty");
+  if (request2.policyActions.some((action) => !OWNER_SHARE_ACTIONS.has(action))) throw new TypeError("addressed share action is not supported");
+  if (request2.deliveryEmail !== void 0 && !isEnvelopeDeliveryEmail(request2.deliveryEmail)) throw new TypeError("delivery email is not a valid envelope address");
+  const target = normalizeShareTarget(request2.target);
   if (target.kind === "bearer") throw new TypeError("addressed target is required");
   if (target.kind === "recipientDid") return { target };
-  if (target.kind === "emailDomain" && request.deliveryEmail !== void 0 && (request.deliveryEmail !== request.deliveryEmail.toLowerCase() || !request.deliveryEmail.endsWith(`@${target.domain}`))) {
+  if (target.kind === "emailDomain" && request2.deliveryEmail !== void 0 && (request2.deliveryEmail !== request2.deliveryEmail.toLowerCase() || !request2.deliveryEmail.endsWith(`@${target.domain}`))) {
     throw new TypeError("email-domain delivery address must be a lowercase mailbox at the domain");
   }
   return { target, credentialRequirement: mailboxCredentialCommitment(target) };
@@ -20217,9 +20217,9 @@ var cache22 = /* @__PURE__ */ new WeakMap();
 function baseCache22(cid2) {
   const baseCache32 = cache22.get(cid2);
   if (baseCache32 == null) {
-    const baseCache4 = /* @__PURE__ */ new Map();
-    cache22.set(cid2, baseCache4);
-    return baseCache4;
+    const baseCache42 = /* @__PURE__ */ new Map();
+    cache22.set(cid2, baseCache42);
+    return baseCache42;
   }
   return baseCache32;
 }
@@ -20886,6 +20886,9 @@ function parseNativeShareUrl(value) {
   if (!token || fragment.size !== 1) throw new TypeError("missing native share fragment");
   return token;
 }
+
+// ../share-envelope/dist/index.js
+init_sha2();
 
 // ../../node_modules/zod/v3/external.js
 var external_exports3 = {};
@@ -21881,8 +21884,8 @@ function isValidJWT3(jwt, alg) {
     const [header] = jwt.split(".");
     if (!header)
       return false;
-    const base644 = header.replace(/-/g, "+").replace(/_/g, "/").padEnd(header.length + (4 - header.length % 4) % 4, "=");
-    const decoded = JSON.parse(atob(base644));
+    const base645 = header.replace(/-/g, "+").replace(/_/g, "/").padEnd(header.length + (4 - header.length % 4) % 4, "=");
+    const decoded = JSON.parse(atob(base645));
     if (typeof decoded !== "object" || decoded === null)
       return false;
     if ("typ" in decoded && decoded?.typ !== "JWT")
@@ -24536,23 +24539,23 @@ var ZodEffects3 = class extends ZodType3 {
     }
     if (effect.type === "transform") {
       if (ctx.common.async === false) {
-        const base4 = this._def.schema._parseSync({
+        const base5 = this._def.schema._parseSync({
           data: ctx.data,
           path: ctx.path,
           parent: ctx
         });
-        if (!isValid3(base4))
+        if (!isValid3(base5))
           return INVALID3;
-        const result = effect.transform(base4.value, checkCtx);
+        const result = effect.transform(base5.value, checkCtx);
         if (result instanceof Promise) {
           throw new Error(`Asynchronous transform encountered during synchronous parse operation. Use .parseAsync instead.`);
         }
         return { status: status.value, value: result };
       } else {
-        return this._def.schema._parseAsync({ data: ctx.data, path: ctx.path, parent: ctx }).then((base4) => {
-          if (!isValid3(base4))
+        return this._def.schema._parseAsync({ data: ctx.data, path: ctx.path, parent: ctx }).then((base5) => {
+          if (!isValid3(base5))
             return INVALID3;
-          return Promise.resolve(effect.transform(base4.value, checkCtx)).then((result) => ({
+          return Promise.resolve(effect.transform(base5.value, checkCtx)).then((result) => ({
             status: status.value,
             value: result
           }));
@@ -25785,6 +25788,10 @@ function encodeCID3(version2, code22, multihash) {
 var cidSymbol3 = /* @__PURE__ */ Symbol.for("@ipld/js-cid/CID");
 var code3 = 85;
 var SHA256_CODE3 = 18;
+async function computeCid2(bytes) {
+  const digest = create3(SHA256_CODE3, sha256(new Uint8Array(bytes)));
+  return CID3.create(1, code3, digest).toString();
+}
 function isCanonicalRawCid3(cidString) {
   let cid;
   try {
@@ -25818,6 +25825,9 @@ var base64urlpad3 = rfc46483({
   alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_=",
   bitsPerChar: 6
 });
+function toBase64Url2(bytes) {
+  return base64url3.baseEncode(bytes);
+}
 function fromBase64Url3(text) {
   const bytes = base64url3.baseDecode(text);
   if (base64url3.baseEncode(bytes) !== text) {
@@ -26315,7 +26325,71 @@ function canonicalMailbox2(value) {
   if (local.length > 64 || !/^[a-z0-9#$&'*+/=?^_`{|}~-]+(?:\.[a-z0-9#$&'*+/=?^_`{|}~-]+)*$/.test(local) || !isCanonicalEmailDomain2(domain)) return void 0;
   return Object.freeze({ email, domain });
 }
+var KEY_LENGTH22 = 32;
 var MAX_INLINE_BYTES3 = 256 * 1024;
+function assertCanonicalCid2(cidString) {
+  const cid = CID3.parse(cidString);
+  if (cid.version !== 1 || cid.code !== code3 || cid.multihash.code !== 18 || // sha2-256 (0x12) only, at the link layer too
+  cid.toString() !== cidString) {
+    throw new TypeError(`not a canonical CIDv1 raw sha2-256 base32 CID: ${cidString}`);
+  }
+}
+async function encodeSealedInlineShareUrl2(parts) {
+  if (!isCanonicalHttpsOrigin3(parts.origin)) throw new TypeError("origin must be a canonical https origin");
+  if (parts.ciphertext.byteLength === 0 || parts.ciphertext.byteLength > MAX_INLINE_BYTES3) throw new RangeError("inline ciphertext is outside the allowed size");
+  if (parts.key32.byteLength !== KEY_LENGTH22) throw new TypeError("inline key must be 32 bytes");
+  const ciphertextCid = await computeCid2(parts.ciphertext);
+  const payload = canonicalize3({
+    v: 2,
+    c: toBase64Url2(parts.ciphertext),
+    cid: ciphertextCid,
+    k: toBase64Url2(parts.key32)
+  });
+  const payloadBytes = new TextEncoder().encode(payload);
+  if (payloadBytes.byteLength > MAX_INLINE_BYTES3 * 2) throw new RangeError("inline URL is too large");
+  return `${parts.origin}/s/inline#v=2&p=${toBase64Url2(payloadBytes)}`;
+}
+async function parseSealedInlineShareUrl2(url, options = {}) {
+  const parsed = new URL(url);
+  if (parsed.protocol !== "https:" || parsed.username !== "" || parsed.password !== "") throw new TypeError("sealed inline share URL must be canonical HTTPS without userinfo");
+  if (!isCanonicalHttpsOrigin3(parsed.origin) || options.expectedOrigin !== void 0 && parsed.origin !== options.expectedOrigin) throw new TypeError("sealed inline share URL origin is not trusted");
+  if (parsed.pathname !== "/s/inline" || parsed.search !== "") throw new TypeError("not a Node sealed-inline share URL");
+  if (url !== `${parsed.origin}/s/inline${parsed.hash}`) throw new TypeError("sealed inline share URL is not lexically canonical");
+  const prefix = "#v=2&p=";
+  if (!parsed.hash.startsWith(prefix)) throw new TypeError("sealed inline URL is missing its canonical fragment");
+  const encoded = parsed.hash.slice(prefix.length);
+  if (encoded.length === 0 || parsed.hash !== `${prefix}${encoded}`) throw new TypeError("sealed inline URL fragment is not canonical");
+  let payloadBytes;
+  try {
+    payloadBytes = fromBase64Url3(encoded);
+  } catch {
+    throw new TypeError("sealed inline payload is not canonical base64url");
+  }
+  if (payloadBytes.byteLength === 0 || payloadBytes.byteLength > MAX_INLINE_BYTES3 * 2) throw new TypeError("sealed inline payload is too large");
+  const payloadText = new TextDecoder("utf-8", { fatal: true }).decode(payloadBytes);
+  let value;
+  try {
+    value = JSON.parse(payloadText);
+  } catch {
+    throw new TypeError("sealed inline payload is not valid JSON");
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value) || canonicalize3(value) !== payloadText) throw new TypeError("sealed inline payload is not canonical JSON");
+  const record2 = value;
+  if (Object.keys(record2).length !== 4 || record2.v !== 2 || typeof record2.c !== "string" || typeof record2.cid !== "string" || typeof record2.k !== "string") throw new TypeError("sealed inline payload has invalid fields");
+  let ciphertext;
+  let key32;
+  try {
+    ciphertext = fromBase64Url3(record2.c);
+    key32 = fromBase64Url3(record2.k);
+  } catch {
+    throw new TypeError("sealed inline payload has invalid base64url material");
+  }
+  if (ciphertext.byteLength === 0 || ciphertext.byteLength > MAX_INLINE_BYTES3) throw new TypeError("sealed inline ciphertext is outside the allowed size");
+  if (key32.byteLength !== KEY_LENGTH22) throw new TypeError("sealed inline key must be 32 bytes");
+  assertCanonicalCid2(record2.cid);
+  if (await computeCid2(ciphertext) !== record2.cid) throw new TypeError("sealed inline ciphertext does not match its CID");
+  return { kind: "inline", ciphertextCid: record2.cid, ciphertext, key32 };
+}
 
 // src/commands/share.ts
 import { ProfileLockTimeoutError as ProfileLockTimeoutError2 } from "@tinycloud/operations/state";
@@ -26366,16 +26440,16 @@ function statusOf(error, depth = 0) {
   return direct ?? (depth === 0 ? statusOf(fields.cause, 1) : void 0);
 }
 function codeOf(error) {
-  const code4 = record(error)?.code;
-  return typeof code4 === "string" && /^[A-Z][A-Z0-9_]{2,63}$/.test(code4) ? code4 : void 0;
+  const code5 = record(error)?.code;
+  return typeof code5 === "string" && /^[A-Z][A-Z0-9_]{2,63}$/.test(code5) ? code5 : void 0;
 }
 function classifyShareFailure(error, loginHint) {
   const status = statusOf(error);
   const verdict = authorizationVerdictOf2(error);
   const message = error instanceof Error ? error.message : "";
-  const code4 = codeOf(error);
+  const code5 = codeOf(error);
   const detail = (text) => {
-    const parts = [status === void 0 ? void 0 : `HTTP ${status}`, code4].filter((part) => part !== void 0);
+    const parts = [status === void 0 ? void 0 : `HTTP ${status}`, code5].filter((part) => part !== void 0);
     return parts.length === 0 ? text : `${text} (${parts.join(", ")})`;
   };
   if (verdict === "unauthenticated" || status === 401) {
@@ -26414,8 +26488,8 @@ function authorizationRequiredJson(result) {
     next: "complete authorization through the configured authority adapter, then retry with the required proof"
   };
 }
-function publishHuman(result) {
-  process.stdout.write(`${result.url}
+function publishHuman(url) {
+  process.stdout.write(`${url}
 `);
 }
 function inspectHuman(result) {
@@ -26584,10 +26658,10 @@ function kvArtifactStore(kv) {
       throw new ArtifactError("storage", `could not write ${key}: ${errorCode(written.error) ?? "unknown error"}`, { cause: written.error });
     },
     async get(key) {
-      const read4 = await kv.get(key, { binary: true });
-      if (read4.ok) return new Uint8Array(read4.data.data);
-      if (errorCode(read4.error) === "KV_NOT_FOUND") return void 0;
-      throw new ArtifactError("storage", `could not read ${key}: ${errorCode(read4.error) ?? "unknown error"}`, { cause: read4.error });
+      const read5 = await kv.get(key, { binary: true });
+      if (read5.ok) return new Uint8Array(read5.data.data);
+      if (errorCode(read5.error) === "KV_NOT_FOUND") return void 0;
+      throw new ArtifactError("storage", `could not read ${key}: ${errorCode(read5.error) ?? "unknown error"}`, { cause: read5.error });
     },
     async list(prefix) {
       const keys = [];
@@ -26603,6 +26677,1704 @@ function kvArtifactStore(kv) {
       throw new ArtifactError("storage", `listing ${prefix} exceeded ${MAX_LIST_PAGES} pages`);
     }
   };
+}
+
+// ../share-envelope/dist/short-link.js
+init_sha2();
+var empty4 = new Uint8Array(0);
+function equals6(aa, bb) {
+  if (aa === bb) {
+    return true;
+  }
+  if (aa.byteLength !== bb.byteLength) {
+    return false;
+  }
+  for (let ii = 0; ii < aa.byteLength; ii++) {
+    if (aa[ii] !== bb[ii]) {
+      return false;
+    }
+  }
+  return true;
+}
+function coerce6(o) {
+  if (o instanceof Uint8Array && o.constructor.name === "Uint8Array") {
+    return o;
+  }
+  if (o instanceof ArrayBuffer) {
+    return new Uint8Array(o);
+  }
+  if (ArrayBuffer.isView(o)) {
+    return new Uint8Array(o.buffer, o.byteOffset, o.byteLength);
+  }
+  throw new Error("Unknown type, must be binary type");
+}
+function base4(ALPHABET, name) {
+  if (ALPHABET.length >= 255) {
+    throw new TypeError("Alphabet too long");
+  }
+  var BASE_MAP = new Uint8Array(256);
+  for (var j = 0; j < BASE_MAP.length; j++) {
+    BASE_MAP[j] = 255;
+  }
+  for (var i = 0; i < ALPHABET.length; i++) {
+    var x = ALPHABET.charAt(i);
+    var xc = x.charCodeAt(0);
+    if (BASE_MAP[xc] !== 255) {
+      throw new TypeError(x + " is ambiguous");
+    }
+    BASE_MAP[xc] = i;
+  }
+  var BASE = ALPHABET.length;
+  var LEADER = ALPHABET.charAt(0);
+  var FACTOR = Math.log(BASE) / Math.log(256);
+  var iFACTOR = Math.log(256) / Math.log(BASE);
+  function encode33(source) {
+    if (source instanceof Uint8Array)
+      ;
+    else if (ArrayBuffer.isView(source)) {
+      source = new Uint8Array(source.buffer, source.byteOffset, source.byteLength);
+    } else if (Array.isArray(source)) {
+      source = Uint8Array.from(source);
+    }
+    if (!(source instanceof Uint8Array)) {
+      throw new TypeError("Expected Uint8Array");
+    }
+    if (source.length === 0) {
+      return "";
+    }
+    var zeroes = 0;
+    var length23 = 0;
+    var pbegin = 0;
+    var pend = source.length;
+    while (pbegin !== pend && source[pbegin] === 0) {
+      pbegin++;
+      zeroes++;
+    }
+    var size = (pend - pbegin) * iFACTOR + 1 >>> 0;
+    var b58 = new Uint8Array(size);
+    while (pbegin !== pend) {
+      var carry = source[pbegin];
+      var i2 = 0;
+      for (var it1 = size - 1; (carry !== 0 || i2 < length23) && it1 !== -1; it1--, i2++) {
+        carry += 256 * b58[it1] >>> 0;
+        b58[it1] = carry % BASE >>> 0;
+        carry = carry / BASE >>> 0;
+      }
+      if (carry !== 0) {
+        throw new Error("Non-zero carry");
+      }
+      length23 = i2;
+      pbegin++;
+    }
+    var it2 = size - length23;
+    while (it2 !== size && b58[it2] === 0) {
+      it2++;
+    }
+    var str = LEADER.repeat(zeroes);
+    for (; it2 < size; ++it2) {
+      str += ALPHABET.charAt(b58[it2]);
+    }
+    return str;
+  }
+  function decodeUnsafe(source) {
+    if (typeof source !== "string") {
+      throw new TypeError("Expected String");
+    }
+    if (source.length === 0) {
+      return new Uint8Array();
+    }
+    var psz = 0;
+    if (source[psz] === " ") {
+      return;
+    }
+    var zeroes = 0;
+    var length23 = 0;
+    while (source[psz] === LEADER) {
+      zeroes++;
+      psz++;
+    }
+    var size = (source.length - psz) * FACTOR + 1 >>> 0;
+    var b256 = new Uint8Array(size);
+    while (source[psz]) {
+      var carry = BASE_MAP[source.charCodeAt(psz)];
+      if (carry === 255) {
+        return;
+      }
+      var i2 = 0;
+      for (var it3 = size - 1; (carry !== 0 || i2 < length23) && it3 !== -1; it3--, i2++) {
+        carry += BASE * b256[it3] >>> 0;
+        b256[it3] = carry % 256 >>> 0;
+        carry = carry / 256 >>> 0;
+      }
+      if (carry !== 0) {
+        throw new Error("Non-zero carry");
+      }
+      length23 = i2;
+      psz++;
+    }
+    if (source[psz] === " ") {
+      return;
+    }
+    var it4 = size - length23;
+    while (it4 !== size && b256[it4] === 0) {
+      it4++;
+    }
+    var vch = new Uint8Array(zeroes + (size - it4));
+    var j2 = zeroes;
+    while (it4 !== size) {
+      vch[j2++] = b256[it4++];
+    }
+    return vch;
+  }
+  function decode53(string) {
+    var buffer = decodeUnsafe(string);
+    if (buffer) {
+      return buffer;
+    }
+    throw new Error(`Non-${name} character`);
+  }
+  return {
+    encode: encode33,
+    decodeUnsafe,
+    decode: decode53
+  };
+}
+var src4 = base4;
+var _brrp__multiformats_scope_baseX4 = src4;
+var base_x_default4 = _brrp__multiformats_scope_baseX4;
+var Encoder4 = class {
+  name;
+  prefix;
+  baseEncode;
+  constructor(name, prefix, baseEncode) {
+    this.name = name;
+    this.prefix = prefix;
+    this.baseEncode = baseEncode;
+  }
+  encode(bytes) {
+    if (bytes instanceof Uint8Array) {
+      return `${this.prefix}${this.baseEncode(bytes)}`;
+    } else {
+      throw Error("Unknown type, must be binary type");
+    }
+  }
+};
+var Decoder4 = class {
+  name;
+  prefix;
+  baseDecode;
+  prefixCodePoint;
+  constructor(name, prefix, baseDecode) {
+    this.name = name;
+    this.prefix = prefix;
+    const prefixCodePoint = prefix.codePointAt(0);
+    if (prefixCodePoint === void 0) {
+      throw new Error("Invalid prefix character");
+    }
+    this.prefixCodePoint = prefixCodePoint;
+    this.baseDecode = baseDecode;
+  }
+  decode(text) {
+    if (typeof text === "string") {
+      if (text.codePointAt(0) !== this.prefixCodePoint) {
+        throw Error(`Unable to decode multibase string ${JSON.stringify(text)}, ${this.name} decoder only supports inputs prefixed with ${this.prefix}`);
+      }
+      return this.baseDecode(text.slice(this.prefix.length));
+    } else {
+      throw Error("Can only multibase decode strings");
+    }
+  }
+  or(decoder) {
+    return or4(this, decoder);
+  }
+};
+var ComposedDecoder4 = class {
+  decoders;
+  constructor(decoders) {
+    this.decoders = decoders;
+  }
+  or(decoder) {
+    return or4(this, decoder);
+  }
+  decode(input) {
+    const prefix = input[0];
+    const decoder = this.decoders[prefix];
+    if (decoder != null) {
+      return decoder.decode(input);
+    } else {
+      throw RangeError(`Unable to decode multibase string ${JSON.stringify(input)}, only inputs prefixed with ${Object.keys(this.decoders)} are supported`);
+    }
+  }
+};
+function or4(left, right) {
+  return new ComposedDecoder4({
+    ...left.decoders ?? { [left.prefix]: left },
+    ...right.decoders ?? { [right.prefix]: right }
+  });
+}
+var Codec4 = class {
+  name;
+  prefix;
+  baseEncode;
+  baseDecode;
+  encoder;
+  decoder;
+  constructor(name, prefix, baseEncode, baseDecode) {
+    this.name = name;
+    this.prefix = prefix;
+    this.baseEncode = baseEncode;
+    this.baseDecode = baseDecode;
+    this.encoder = new Encoder4(name, prefix, baseEncode);
+    this.decoder = new Decoder4(name, prefix, baseDecode);
+  }
+  encode(input) {
+    return this.encoder.encode(input);
+  }
+  decode(input) {
+    return this.decoder.decode(input);
+  }
+};
+function from4({ name, prefix, encode: encode33, decode: decode53 }) {
+  return new Codec4(name, prefix, encode33, decode53);
+}
+function baseX4({ name, prefix, alphabet }) {
+  const { encode: encode33, decode: decode53 } = base_x_default4(alphabet, name);
+  return from4({
+    prefix,
+    name,
+    encode: encode33,
+    decode: (text) => coerce6(decode53(text))
+  });
+}
+function decode10(string, alphabetIdx, bitsPerChar, name) {
+  let end = string.length;
+  while (string[end - 1] === "=") {
+    --end;
+  }
+  const out = new Uint8Array(end * bitsPerChar / 8 | 0);
+  let bits = 0;
+  let buffer = 0;
+  let written = 0;
+  for (let i = 0; i < end; ++i) {
+    const value = alphabetIdx[string[i]];
+    if (value === void 0) {
+      throw new SyntaxError(`Non-${name} character`);
+    }
+    buffer = buffer << bitsPerChar | value;
+    bits += bitsPerChar;
+    if (bits >= 8) {
+      bits -= 8;
+      out[written++] = 255 & buffer >> bits;
+    }
+  }
+  if (bits >= bitsPerChar || (255 & buffer << 8 - bits) !== 0) {
+    throw new SyntaxError("Unexpected end of data");
+  }
+  return out;
+}
+function encode6(data, alphabet, bitsPerChar) {
+  const pad = alphabet[alphabet.length - 1] === "=";
+  const mask = (1 << bitsPerChar) - 1;
+  let out = "";
+  let bits = 0;
+  let buffer = 0;
+  for (let i = 0; i < data.length; ++i) {
+    buffer = buffer << 8 | data[i];
+    bits += 8;
+    while (bits > bitsPerChar) {
+      bits -= bitsPerChar;
+      out += alphabet[mask & buffer >> bits];
+    }
+  }
+  if (bits !== 0) {
+    out += alphabet[mask & buffer << bitsPerChar - bits];
+  }
+  if (pad) {
+    while ((out.length * bitsPerChar & 7) !== 0) {
+      out += "=";
+    }
+  }
+  return out;
+}
+function createAlphabetIdx4(alphabet) {
+  const alphabetIdx = {};
+  for (let i = 0; i < alphabet.length; ++i) {
+    alphabetIdx[alphabet[i]] = i;
+  }
+  return alphabetIdx;
+}
+function rfc46484({ name, prefix, bitsPerChar, alphabet }) {
+  const alphabetIdx = createAlphabetIdx4(alphabet);
+  return from4({
+    prefix,
+    name,
+    encode(input) {
+      return encode6(input, alphabet, bitsPerChar);
+    },
+    decode(input) {
+      return decode10(input, alphabetIdx, bitsPerChar, name);
+    }
+  });
+}
+var base644 = rfc46484({
+  prefix: "m",
+  name: "base64",
+  alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
+  bitsPerChar: 6
+});
+var base64pad4 = rfc46484({
+  prefix: "M",
+  name: "base64pad",
+  alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=",
+  bitsPerChar: 6
+});
+var base64url4 = rfc46484({
+  prefix: "u",
+  name: "base64url",
+  alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_",
+  bitsPerChar: 6
+});
+var base64urlpad4 = rfc46484({
+  prefix: "U",
+  name: "base64urlpad",
+  alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_=",
+  bitsPerChar: 6
+});
+function toBase64Url3(bytes) {
+  return base64url4.baseEncode(bytes);
+}
+function fromBase64Url4(text) {
+  const bytes = base64url4.baseDecode(text);
+  if (base64url4.baseEncode(bytes) !== text) {
+    throw new TypeError("non-canonical base64url input");
+  }
+  return bytes;
+}
+var base324 = rfc46484({
+  prefix: "b",
+  name: "base32",
+  alphabet: "abcdefghijklmnopqrstuvwxyz234567",
+  bitsPerChar: 5
+});
+var base32upper4 = rfc46484({
+  prefix: "B",
+  name: "base32upper",
+  alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567",
+  bitsPerChar: 5
+});
+var base32pad4 = rfc46484({
+  prefix: "c",
+  name: "base32pad",
+  alphabet: "abcdefghijklmnopqrstuvwxyz234567=",
+  bitsPerChar: 5
+});
+var base32padupper4 = rfc46484({
+  prefix: "C",
+  name: "base32padupper",
+  alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567=",
+  bitsPerChar: 5
+});
+var base32hex4 = rfc46484({
+  prefix: "v",
+  name: "base32hex",
+  alphabet: "0123456789abcdefghijklmnopqrstuv",
+  bitsPerChar: 5
+});
+var base32hexupper4 = rfc46484({
+  prefix: "V",
+  name: "base32hexupper",
+  alphabet: "0123456789ABCDEFGHIJKLMNOPQRSTUV",
+  bitsPerChar: 5
+});
+var base32hexpad4 = rfc46484({
+  prefix: "t",
+  name: "base32hexpad",
+  alphabet: "0123456789abcdefghijklmnopqrstuv=",
+  bitsPerChar: 5
+});
+var base32hexpadupper4 = rfc46484({
+  prefix: "T",
+  name: "base32hexpadupper",
+  alphabet: "0123456789ABCDEFGHIJKLMNOPQRSTUV=",
+  bitsPerChar: 5
+});
+var base32z4 = rfc46484({
+  prefix: "h",
+  name: "base32z",
+  alphabet: "ybndrfg8ejkmcpqxot1uwisza345h769",
+  bitsPerChar: 5
+});
+var base364 = baseX4({
+  prefix: "k",
+  name: "base36",
+  alphabet: "0123456789abcdefghijklmnopqrstuvwxyz"
+});
+var base36upper4 = baseX4({
+  prefix: "K",
+  name: "base36upper",
+  alphabet: "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+});
+var base58btc4 = baseX4({
+  name: "base58btc",
+  prefix: "z",
+  alphabet: "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+});
+var base58flickr4 = baseX4({
+  name: "base58flickr",
+  prefix: "Z",
+  alphabet: "123456789abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ"
+});
+var encode_14 = encode24;
+var MSB4 = 128;
+var REST4 = 127;
+var MSBALL4 = ~REST4;
+var INT4 = Math.pow(2, 31);
+function encode24(num, out, offset) {
+  out = out || [];
+  offset = offset || 0;
+  var oldOffset = offset;
+  while (num >= INT4) {
+    out[offset++] = num & 255 | MSB4;
+    num /= 128;
+  }
+  while (num & MSBALL4) {
+    out[offset++] = num & 255 | MSB4;
+    num >>>= 7;
+  }
+  out[offset] = num | 0;
+  encode24.bytes = offset - oldOffset + 1;
+  return out;
+}
+var decode24 = read4;
+var MSB$14 = 128;
+var REST$14 = 127;
+function read4(buf, offset) {
+  var res = 0, offset = offset || 0, shift = 0, counter = offset, b, l = buf.length;
+  do {
+    if (counter >= l) {
+      read4.bytes = 0;
+      throw new RangeError("Could not decode varint");
+    }
+    b = buf[counter++];
+    res += shift < 28 ? (b & REST$14) << shift : (b & REST$14) * Math.pow(2, shift);
+    shift += 7;
+  } while (b >= MSB$14);
+  read4.bytes = counter - offset;
+  return res;
+}
+var N14 = Math.pow(2, 7);
+var N24 = Math.pow(2, 14);
+var N34 = Math.pow(2, 21);
+var N44 = Math.pow(2, 28);
+var N54 = Math.pow(2, 35);
+var N64 = Math.pow(2, 42);
+var N74 = Math.pow(2, 49);
+var N84 = Math.pow(2, 56);
+var N94 = Math.pow(2, 63);
+var length4 = function(value) {
+  return value < N14 ? 1 : value < N24 ? 2 : value < N34 ? 3 : value < N44 ? 4 : value < N54 ? 5 : value < N64 ? 6 : value < N74 ? 7 : value < N84 ? 8 : value < N94 ? 9 : 10;
+};
+var varint4 = {
+  encode: encode_14,
+  decode: decode24,
+  encodingLength: length4
+};
+var _brrp_varint4 = varint4;
+var varint_default4 = _brrp_varint4;
+function decode34(data, offset = 0) {
+  const code22 = varint_default4.decode(data, offset);
+  return [code22, varint_default4.decode.bytes];
+}
+function encodeTo4(int, target, offset = 0) {
+  varint_default4.encode(int, target, offset);
+  return target;
+}
+function encodingLength4(int) {
+  return varint_default4.encodingLength(int);
+}
+function create4(code22, digest) {
+  const size = digest.byteLength;
+  const sizeOffset = encodingLength4(code22);
+  const digestOffset = sizeOffset + encodingLength4(size);
+  const bytes = new Uint8Array(digestOffset + size);
+  encodeTo4(code22, bytes, 0);
+  encodeTo4(size, bytes, sizeOffset);
+  bytes.set(digest, digestOffset);
+  return new Digest4(code22, size, digest, bytes);
+}
+function decode44(multihash) {
+  const bytes = coerce6(multihash);
+  const [code22, sizeOffset] = decode34(bytes);
+  const [size, digestOffset] = decode34(bytes.subarray(sizeOffset));
+  const digest = bytes.subarray(sizeOffset + digestOffset);
+  if (digest.byteLength !== size) {
+    throw new Error("Incorrect length");
+  }
+  return new Digest4(code22, size, digest, bytes);
+}
+function equals24(a, b) {
+  if (a === b) {
+    return true;
+  } else {
+    const data = b;
+    return a.code === data.code && a.size === data.size && data.bytes instanceof Uint8Array && equals6(a.bytes, data.bytes);
+  }
+}
+var Digest4 = class {
+  code;
+  size;
+  digest;
+  bytes;
+  /**
+   * Creates a multihash digest.
+   */
+  constructor(code22, size, digest, bytes) {
+    this.code = code22;
+    this.size = size;
+    this.digest = digest;
+    this.bytes = bytes;
+  }
+};
+function format4(link4, base23) {
+  const { bytes, version: version2 } = link4;
+  switch (version2) {
+    case 0:
+      return toStringV04(bytes, baseCache4(link4), base23 ?? base58btc4.encoder);
+    default:
+      return toStringV14(bytes, baseCache4(link4), base23 ?? base324.encoder);
+  }
+}
+var cache4 = /* @__PURE__ */ new WeakMap();
+function baseCache4(cid) {
+  const baseCache23 = cache4.get(cid);
+  if (baseCache23 == null) {
+    const baseCache32 = /* @__PURE__ */ new Map();
+    cache4.set(cid, baseCache32);
+    return baseCache32;
+  }
+  return baseCache23;
+}
+var CID4 = class _CID4 {
+  code;
+  version;
+  multihash;
+  bytes;
+  "/";
+  /**
+   * @param version - Version of the CID
+   * @param code - Code of the codec content is encoded in, see https://github.com/multiformats/multicodec/blob/master/table.csv
+   * @param multihash - (Multi)hash of the of the content.
+   */
+  constructor(version2, code22, multihash, bytes) {
+    this.code = code22;
+    this.version = version2;
+    this.multihash = multihash;
+    this.bytes = bytes;
+    this["/"] = bytes;
+  }
+  /**
+   * Signalling `cid.asCID === cid` has been replaced with `cid['/'] === cid.bytes`
+   * please either use `CID.asCID(cid)` or switch to new signalling mechanism
+   *
+   * @deprecated
+   */
+  get asCID() {
+    return this;
+  }
+  // ArrayBufferView
+  get byteOffset() {
+    return this.bytes.byteOffset;
+  }
+  // ArrayBufferView
+  get byteLength() {
+    return this.bytes.byteLength;
+  }
+  toV0() {
+    switch (this.version) {
+      case 0: {
+        return this;
+      }
+      case 1: {
+        const { code: code22, multihash } = this;
+        if (code22 !== DAG_PB_CODE4) {
+          throw new Error("Cannot convert a non dag-pb CID to CIDv0");
+        }
+        if (multihash.code !== SHA_256_CODE4) {
+          throw new Error("Cannot convert non sha2-256 multihash CID to CIDv0");
+        }
+        return _CID4.createV0(multihash);
+      }
+      default: {
+        throw Error(`Can not convert CID version ${this.version} to version 0. This is a bug please report`);
+      }
+    }
+  }
+  toV1() {
+    switch (this.version) {
+      case 0: {
+        const { code: code22, digest } = this.multihash;
+        const multihash = create4(code22, digest);
+        return _CID4.createV1(this.code, multihash);
+      }
+      case 1: {
+        return this;
+      }
+      default: {
+        throw Error(`Can not convert CID version ${this.version} to version 1. This is a bug please report`);
+      }
+    }
+  }
+  equals(other) {
+    return _CID4.equals(this, other);
+  }
+  static equals(self, other) {
+    const unknown = other;
+    return unknown != null && self.code === unknown.code && self.version === unknown.version && equals24(self.multihash, unknown.multihash);
+  }
+  toString(base23) {
+    return format4(this, base23);
+  }
+  toJSON() {
+    return { "/": format4(this) };
+  }
+  link() {
+    return this;
+  }
+  [Symbol.toStringTag] = "CID";
+  // Legacy
+  [/* @__PURE__ */ Symbol.for("nodejs.util.inspect.custom")]() {
+    return `CID(${this.toString()})`;
+  }
+  /**
+   * Takes any input `value` and returns a `CID` instance if it was
+   * a `CID` otherwise returns `null`. If `value` is instanceof `CID`
+   * it will return value back. If `value` is not instance of this CID
+   * class, but is compatible CID it will return new instance of this
+   * `CID` class. Otherwise returns null.
+   *
+   * This allows two different incompatible versions of CID library to
+   * co-exist and interop as long as binary interface is compatible.
+   */
+  static asCID(input) {
+    if (input == null) {
+      return null;
+    }
+    const value = input;
+    if (value instanceof _CID4) {
+      return value;
+    } else if (value["/"] != null && value["/"] === value.bytes || value.asCID === value) {
+      const { version: version2, code: code22, multihash, bytes } = value;
+      return new _CID4(version2, code22, multihash, bytes ?? encodeCID4(version2, code22, multihash.bytes));
+    } else if (value[cidSymbol4] === true) {
+      const { version: version2, multihash, code: code22 } = value;
+      const digest = decode44(multihash);
+      return _CID4.create(version2, code22, digest);
+    } else {
+      return null;
+    }
+  }
+  /**
+   * @param version - Version of the CID
+   * @param code - Code of the codec content is encoded in, see https://github.com/multiformats/multicodec/blob/master/table.csv
+   * @param digest - (Multi)hash of the of the content.
+   */
+  static create(version2, code22, digest) {
+    if (typeof code22 !== "number") {
+      throw new Error("String codecs are no longer supported");
+    }
+    if (!(digest.bytes instanceof Uint8Array)) {
+      throw new Error("Invalid digest");
+    }
+    switch (version2) {
+      case 0: {
+        if (code22 !== DAG_PB_CODE4) {
+          throw new Error(`Version 0 CID must use dag-pb (code: ${DAG_PB_CODE4}) block encoding`);
+        } else {
+          return new _CID4(version2, code22, digest, digest.bytes);
+        }
+      }
+      case 1: {
+        const bytes = encodeCID4(version2, code22, digest.bytes);
+        return new _CID4(version2, code22, digest, bytes);
+      }
+      default: {
+        throw new Error("Invalid version");
+      }
+    }
+  }
+  /**
+   * Simplified version of `create` for CIDv0.
+   */
+  static createV0(digest) {
+    return _CID4.create(0, DAG_PB_CODE4, digest);
+  }
+  /**
+   * Simplified version of `create` for CIDv1.
+   *
+   * @param code - Content encoding format code.
+   * @param digest - Multihash of the content.
+   */
+  static createV1(code22, digest) {
+    return _CID4.create(1, code22, digest);
+  }
+  /**
+   * Decoded a CID from its binary representation. The byte array must contain
+   * only the CID with no additional bytes.
+   *
+   * An error will be thrown if the bytes provided do not contain a valid
+   * binary representation of a CID.
+   */
+  static decode(bytes) {
+    const [cid, remainder] = _CID4.decodeFirst(bytes);
+    if (remainder.length !== 0) {
+      throw new Error("Incorrect length");
+    }
+    return cid;
+  }
+  /**
+   * Decoded a CID from its binary representation at the beginning of a byte
+   * array.
+   *
+   * Returns an array with the first element containing the CID and the second
+   * element containing the remainder of the original byte array. The remainder
+   * will be a zero-length byte array if the provided bytes only contained a
+   * binary CID representation.
+   */
+  static decodeFirst(bytes) {
+    const specs = _CID4.inspectBytes(bytes);
+    const prefixSize = specs.size - specs.multihashSize;
+    const multihashBytes = coerce6(bytes.subarray(prefixSize, prefixSize + specs.multihashSize));
+    if (multihashBytes.byteLength !== specs.multihashSize) {
+      throw new Error("Incorrect length");
+    }
+    const digestBytes = multihashBytes.subarray(specs.multihashSize - specs.digestSize);
+    const digest = new Digest4(specs.multihashCode, specs.digestSize, digestBytes, multihashBytes);
+    const cid = specs.version === 0 ? _CID4.createV0(digest) : _CID4.createV1(specs.codec, digest);
+    return [cid, bytes.subarray(specs.size)];
+  }
+  /**
+   * Inspect the initial bytes of a CID to determine its properties.
+   *
+   * Involves decoding up to 4 varints. Typically this will require only 4 to 6
+   * bytes but for larger multicodec code values and larger multihash digest
+   * lengths these varints can be quite large. It is recommended that at least
+   * 10 bytes be made available in the `initialBytes` argument for a complete
+   * inspection.
+   */
+  static inspectBytes(initialBytes) {
+    let offset = 0;
+    const next = () => {
+      const [i, length23] = decode34(initialBytes.subarray(offset));
+      offset += length23;
+      return i;
+    };
+    let version2 = next();
+    let codec = DAG_PB_CODE4;
+    if (version2 === 18) {
+      version2 = 0;
+      offset = 0;
+    } else {
+      codec = next();
+    }
+    if (version2 !== 0 && version2 !== 1) {
+      throw new RangeError(`Invalid CID version ${version2}`);
+    }
+    const prefixSize = offset;
+    const multihashCode = next();
+    const digestSize = next();
+    const size = offset + digestSize;
+    const multihashSize = size - prefixSize;
+    return { version: version2, codec, multihashCode, digestSize, multihashSize, size };
+  }
+  /**
+   * Takes cid in a string representation and creates an instance. If `base`
+   * decoder is not provided will use a default from the configuration. It will
+   * throw an error if encoding of the CID is not compatible with supplied (or
+   * a default decoder).
+   */
+  static parse(source, base23) {
+    const [prefix, bytes] = parseCIDtoBytes4(source, base23);
+    const cid = _CID4.decode(bytes);
+    if (cid.version === 0 && source[0] !== "Q") {
+      throw Error("Version 0 CID string must not include multibase prefix");
+    }
+    baseCache4(cid).set(prefix, source);
+    return cid;
+  }
+};
+function parseCIDtoBytes4(source, base23) {
+  switch (source[0]) {
+    // CIDv0 is parsed differently
+    case "Q": {
+      const decoder = base23 ?? base58btc4;
+      return [
+        base58btc4.prefix,
+        decoder.decode(`${base58btc4.prefix}${source}`)
+      ];
+    }
+    case base58btc4.prefix: {
+      const decoder = base23 ?? base58btc4;
+      return [base58btc4.prefix, decoder.decode(source)];
+    }
+    case base324.prefix: {
+      const decoder = base23 ?? base324;
+      return [base324.prefix, decoder.decode(source)];
+    }
+    case base364.prefix: {
+      const decoder = base23 ?? base364;
+      return [base364.prefix, decoder.decode(source)];
+    }
+    default: {
+      if (base23 == null) {
+        throw Error("To parse non base32, base36 or base58btc encoded CID multibase decoder must be provided");
+      }
+      return [source[0], base23.decode(source)];
+    }
+  }
+}
+function toStringV04(bytes, cache23, base23) {
+  const { prefix } = base23;
+  if (prefix !== base58btc4.prefix) {
+    throw Error(`Cannot string encode V0 in ${base23.name} encoding`);
+  }
+  const cid = cache23.get(prefix);
+  if (cid == null) {
+    const cid2 = base23.encode(bytes).slice(1);
+    cache23.set(prefix, cid2);
+    return cid2;
+  } else {
+    return cid;
+  }
+}
+function toStringV14(bytes, cache23, base23) {
+  const { prefix } = base23;
+  const cid = cache23.get(prefix);
+  if (cid == null) {
+    const cid2 = base23.encode(bytes);
+    cache23.set(prefix, cid2);
+    return cid2;
+  } else {
+    return cid;
+  }
+}
+var DAG_PB_CODE4 = 112;
+var SHA_256_CODE4 = 18;
+function encodeCID4(version2, code22, multihash) {
+  const codeOffset = encodingLength4(version2);
+  const hashOffset = codeOffset + encodingLength4(code22);
+  const bytes = new Uint8Array(hashOffset + multihash.byteLength);
+  encodeTo4(version2, bytes, 0);
+  encodeTo4(code22, bytes, codeOffset);
+  bytes.set(multihash, hashOffset);
+  return bytes;
+}
+var cidSymbol4 = /* @__PURE__ */ Symbol.for("@ipld/js-cid/CID");
+var code4 = 85;
+var SHA256_CODE4 = 18;
+async function computeCid3(bytes) {
+  const digest = create4(SHA256_CODE4, sha256(new Uint8Array(bytes)));
+  return CID4.create(1, code4, digest).toString();
+}
+function isCanonicalRawCid4(cidString) {
+  let cid;
+  try {
+    cid = CID4.parse(cidString);
+  } catch {
+    return false;
+  }
+  return cid.version === 1 && cid.code === code4 && cid.multihash.code === SHA256_CODE4 && cid.toString() === cidString;
+}
+function isPlainRecord4(value) {
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+function assertNoLoneSurrogates4(text) {
+  for (let i = 0; i < text.length; i++) {
+    const unit = text.charCodeAt(i);
+    if (unit >= 56320 && unit <= 57343) {
+      throw new TypeError(
+        `cannot canonicalize string with unpaired low surrogate at index ${i}`
+      );
+    }
+    if (unit >= 55296 && unit <= 56319) {
+      const next = text.charCodeAt(i + 1);
+      if (!(next >= 56320 && next <= 57343)) {
+        throw new TypeError(
+          `cannot canonicalize string with unpaired high surrogate at index ${i}`
+        );
+      }
+      i++;
+    }
+  }
+}
+function serializeString4(text) {
+  assertNoLoneSurrogates4(text);
+  return JSON.stringify(text);
+}
+function serialize4(value) {
+  if (value === null) return "null";
+  switch (typeof value) {
+    case "boolean":
+      return JSON.stringify(value);
+    case "string":
+      return serializeString4(value);
+    case "number":
+      if (!Number.isFinite(value)) {
+        throw new TypeError(`cannot canonicalize non-finite number: ${value}`);
+      }
+      return JSON.stringify(value);
+    case "object":
+      break;
+    default:
+      throw new TypeError(`cannot canonicalize value of type ${typeof value}`);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => serialize4(item)).join(",")}]`;
+  }
+  if (!isPlainRecord4(value)) {
+    throw new TypeError("cannot canonicalize non-plain object");
+  }
+  const keys = Object.keys(value).sort();
+  const members = [];
+  for (const key of keys) {
+    const member = value[key];
+    if (member === void 0) continue;
+    members.push(`${serializeString4(key)}:${serialize4(member)}`);
+  }
+  return `{${members.join(",")}}`;
+}
+function canonicalize4(value) {
+  return serialize4(value);
+}
+function decodeBase64UrlOrNull4(value) {
+  try {
+    return fromBase64Url4(value);
+  } catch {
+    return null;
+  }
+}
+var base64UrlString4 = () => external_exports3.string().refine((value) => decodeBase64UrlOrNull4(value) !== null, {
+  message: "expected strictly-decodable unpadded base64url"
+});
+function isCanonicalHttpsOrigin4(value) {
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  return url.protocol === "https:" && url.origin === value;
+}
+var sessionJwkCommonFields4 = {
+  alg: external_exports3.string().min(1).optional(),
+  use: external_exports3.string().min(1).optional(),
+  key_ops: external_exports3.array(external_exports3.string().min(1)).optional(),
+  kid: external_exports3.string().min(1).optional(),
+  ext: external_exports3.boolean().optional()
+};
+var okpPrivateJwkSchema4 = external_exports3.object({
+  kty: external_exports3.literal("OKP"),
+  crv: external_exports3.string().min(1),
+  x: base64UrlString4(),
+  d: base64UrlString4(),
+  ...sessionJwkCommonFields4
+}).strict();
+var ecPrivateJwkSchema4 = external_exports3.object({
+  kty: external_exports3.literal("EC"),
+  crv: external_exports3.string().min(1),
+  x: base64UrlString4(),
+  y: base64UrlString4(),
+  d: base64UrlString4(),
+  ...sessionJwkCommonFields4
+}).strict();
+var sessionJwkSchema4 = external_exports3.discriminatedUnion("kty", [
+  okpPrivateJwkSchema4,
+  ecPrivateJwkSchema4
+]);
+var policyTargetSchema4 = external_exports3.object({
+  kind: external_exports3.literal("policy"),
+  policyCid: external_exports3.string().min(1),
+  /** Canonical policy bytes, base64url-encoded (bytes are not JSON). */
+  policyBytes: base64UrlString4()
+}).strict();
+var bearerKeyTargetSchema4 = external_exports3.object({
+  kind: external_exports3.literal("bearerKey"),
+  sessionJwk: sessionJwkSchema4
+}).strict();
+var recipientDidTargetSchema4 = external_exports3.object({
+  kind: external_exports3.literal("recipientDid"),
+  did: external_exports3.string().regex(/^did:[a-z0-9]+:.+$/, "expected a DID")
+}).strict();
+var authorizationTargetSchema4 = external_exports3.discriminatedUnion("kind", [
+  policyTargetSchema4,
+  bearerKeyTargetSchema4,
+  recipientDidTargetSchema4
+]);
+function isCanonicalResourcePath4(value) {
+  if (value.length === 0) return false;
+  if (/[\u0000-\u001f\u007f\\]/.test(value)) return false;
+  if (/%2f|%5c|%2e/i.test(value)) return false;
+  return value.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
+}
+function isCanonicalPathSegment4(value) {
+  return isCanonicalResourcePath4(value) && !value.includes("/");
+}
+var resourceSelectorSchema4 = external_exports3.object({
+  kind: external_exports3.union([external_exports3.literal("exact"), external_exports3.literal("prefix")]),
+  path: external_exports3.string().min(1)
+}).strict().superRefine((selector, ctx) => {
+  const body = selector.kind === "prefix" && selector.path.endsWith("/") ? selector.path.slice(0, -1) : selector.path;
+  if (!isCanonicalResourcePath4(body)) {
+    ctx.addIssue({
+      code: external_exports3.ZodIssueCode.custom,
+      path: ["path"],
+      message: "expected a canonical resource path (non-empty segments, no . or .. segments, no //, no backslash, no %2f/%5c/%2e, no control chars)"
+    });
+  }
+});
+var targetSchema4 = external_exports3.object({
+  origin: external_exports3.string().refine(isCanonicalHttpsOrigin4, {
+    message: "expected a canonical https origin (https://host[:port], nothing else)"
+  }),
+  nodeAudience: external_exports3.string().min(1),
+  spaceId: external_exports3.string().refine(isCanonicalPathSegment4, {
+    message: "expected a single canonical path segment (spaceId joins the resource URI; separators/traversal would alias grants)"
+  }),
+  resource: resourceSelectorSchema4
+}).strict();
+var displaySchema4 = external_exports3.object({
+  senderName: external_exports3.string().optional(),
+  filename: external_exports3.string().optional(),
+  recipientHint: external_exports3.string().optional(),
+  /**
+   * Presentation preference only (viewer spec §1): may narrow, never widen;
+   * capabilities always win.
+   */
+  mode: external_exports3.union([external_exports3.literal("document"), external_exports3.literal("source"), external_exports3.literal("folder")]).optional()
+}).strict();
+var contentPointerSchema4 = external_exports3.object({
+  cid: external_exports3.string().refine(isCanonicalRawCid4, {
+    message: "expected a canonical CIDv1 raw sha2-256 base32 CID"
+  }),
+  key: external_exports3.string().refine((value) => decodeBase64UrlOrNull4(value)?.length === 32, {
+    message: "expected base64url decoding to exactly 32 bytes"
+  })
+}).strict();
+var signatureSchema4 = external_exports3.object({
+  /** did:key of the sender's ed25519 signing key. */
+  signerDid: external_exports3.string().regex(/^did:key:z[1-9A-HJ-NP-Za-km-z]+$/, "expected a did:key"),
+  algorithm: external_exports3.literal("Ed25519"),
+  /** base64url-encoded ed25519 signature over the JCS bytes of all other fields. */
+  value: external_exports3.string().refine((value) => decodeBase64UrlOrNull4(value)?.length === 64, {
+    message: "expected base64url decoding to exactly 64 bytes"
+  })
+}).strict();
+var unsignedShareEnvelopeSchema4 = external_exports3.object({
+  version: external_exports3.literal(1),
+  shareId: external_exports3.string().min(1),
+  /** Full signed delegation chain, opaque serialized form. */
+  delegation: external_exports3.string().min(1),
+  authorizationTarget: authorizationTargetSchema4,
+  target: targetSchema4,
+  display: displaySchema4,
+  /** ISO 8601 UTC datetime. Advisory here; enforcement is the delegation's. */
+  expiry: external_exports3.string().datetime(),
+  /** Bearer-slice sealed-content pointer (see contentPointerSchema). */
+  content: contentPointerSchema4.optional()
+}).strict();
+var shareEnvelopeSchema4 = unsignedShareEnvelopeSchema4.extend({ signature: signatureSchema4 }).strict();
+var recipientMatcherSchema4 = external_exports3.discriminatedUnion("kind", [
+  external_exports3.object({ kind: external_exports3.literal("exactEmail"), value: external_exports3.string().min(3).regex(/^[^@\s]+@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/) }).strict(),
+  external_exports3.object({ kind: external_exports3.literal("emailDomain"), value: external_exports3.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/) }).strict(),
+  external_exports3.object({ kind: external_exports3.literal("recipientDid"), value: external_exports3.string().regex(/^did:[a-z0-9]+:.+$/) }).strict(),
+  external_exports3.object({ kind: external_exports3.literal("policyDigest"), value: external_exports3.string().regex(/^[A-Za-z0-9_-]{43}$/) }).strict(),
+  external_exports3.object({ kind: external_exports3.literal("bearer") }).strict()
+]);
+var shareActionSchema4 = external_exports3.union([external_exports3.literal("read"), external_exports3.literal("list"), external_exports3.literal("edit")]);
+var kvContentSourceSchema4 = external_exports3.object({
+  kind: external_exports3.literal("kv"),
+  space: external_exports3.string().min(1),
+  path: external_exports3.string().min(1),
+  action: external_exports3.literal("tinycloud.kv/get")
+}).strict();
+var sqlContentSourceSchema4 = external_exports3.object({
+  kind: external_exports3.literal("sql"),
+  space: external_exports3.string().min(1),
+  database: external_exports3.string().min(1),
+  path: external_exports3.string().min(1),
+  statement: external_exports3.string().min(1),
+  arguments: external_exports3.record(external_exports3.string(), external_exports3.number().int()),
+  argumentsDigest: external_exports3.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  action: external_exports3.literal("tinycloud.sql/read")
+}).strict();
+var contentSourceSchema4 = external_exports3.discriminatedUnion("kind", [kvContentSourceSchema4, sqlContentSourceSchema4]);
+var v2TargetSchema4 = external_exports3.object({
+  origin: external_exports3.string().refine(isCanonicalHttpsOrigin4, { message: "expected a canonical https origin" }),
+  nodeAudience: external_exports3.string().min(1),
+  spaceId: external_exports3.string().refine(isCanonicalPathSegment4, { message: "expected a canonical space id" })
+}).strict();
+var shareDecryptionSchema4 = external_exports3.object({
+  networkId: external_exports3.string().min(1),
+  action: external_exports3.literal("tinycloud.encryption/decrypt")
+}).strict();
+var ownerAuthoritySchema4 = external_exports3.object({
+  registrationCid: external_exports3.string().min(1),
+  shareCid: external_exports3.string().min(1),
+  envelopeCid: external_exports3.string().min(1),
+  enforcementDelegation: external_exports3.record(external_exports3.string(), external_exports3.unknown()),
+  outerEnvelope: external_exports3.record(external_exports3.string(), external_exports3.unknown()),
+  /** Node-signed registration evidence; required by trusted policy adapters. */
+  registrationReceipt: external_exports3.object({
+    registration: external_exports3.record(external_exports3.string(), external_exports3.unknown()),
+    proof: external_exports3.record(external_exports3.string(), external_exports3.unknown())
+  }).strict().optional()
+}).strict();
+var contentMetadataSchema4 = external_exports3.object({
+  mediaType: external_exports3.string().min(1).max(128).optional(),
+  byteLength: external_exports3.number().int().nonnegative().max(100 * 1024 * 1024).optional(),
+  filename: external_exports3.string().min(1).max(255).optional(),
+  encoding: external_exports3.literal("utf-8").optional(),
+  /** Encrypted presentation discriminator. The fixed entry point is index.html. */
+  artifact: external_exports3.literal("html").optional()
+}).strict();
+var deliveryEmailSchema4 = external_exports3.string().email();
+var unsignedShareEnvelopeV2BaseSchema4 = external_exports3.object({
+  version: external_exports3.literal(2),
+  shareId: external_exports3.string().min(1),
+  recipientMatcher: recipientMatcherSchema4,
+  deliveryEmail: deliveryEmailSchema4.optional(),
+  actions: external_exports3.array(shareActionSchema4).min(1).max(3),
+  resource: resourceSelectorSchema4,
+  target: v2TargetSchema4,
+  delegationCid: external_exports3.string().min(1),
+  authorityMaterialHandle: external_exports3.string().min(1),
+  authorityMaterialDigest: external_exports3.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  decryption: shareDecryptionSchema4.optional(),
+  contentSource: contentSourceSchema4,
+  contentSourceDigest: external_exports3.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  authorizationTarget: authorizationTargetSchema4,
+  display: displaySchema4,
+  expiry: external_exports3.string().datetime(),
+  encrypted: external_exports3.boolean(),
+  content: contentPointerSchema4.optional(),
+  metadata: contentMetadataSchema4,
+  ownerAuthority: ownerAuthoritySchema4.optional()
+}).strict();
+function validateV2Invariants4(value, ctx) {
+  const actions = [...value.actions];
+  if (new Set(actions).size !== actions.length) ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["actions"], message: "actions must be unique" });
+  if (actions.some((action, index) => action !== ["read", "list", "edit"].filter((candidate) => actions.includes(candidate))[index])) ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["actions"], message: "actions must be canonically ordered" });
+  if (!value.encrypted && value.recipientMatcher.kind !== "policyDigest") ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["recipientMatcher"], message: "safe plaintext must carry only a matcher digest" });
+  if (!value.encrypted && value.authorizationTarget.kind !== "policy") ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["encrypted"], message: "unencrypted content requires a policy target" });
+  if (!value.encrypted && value.content !== void 0) ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["content"], message: "policy-only plaintext cannot carry content" });
+  if (value.encrypted && (value.metadata.mediaType === void 0 || value.metadata.filename === void 0 || value.metadata.byteLength === void 0)) ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["metadata"], message: "encrypted shares must describe their content" });
+  if (!value.encrypted && Object.keys(value.metadata).length !== 0) ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["metadata"], message: "policy-only plaintext cannot describe content" });
+  if (!value.encrypted && value.metadata.encoding !== void 0) ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["metadata", "encoding"], message: "policy-only plaintext cannot carry content encoding" });
+  if (value.metadata.artifact === "html" && (!value.encrypted || value.resource.kind !== "prefix" || !value.actions.includes("read") || !value.actions.includes("list"))) ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["metadata", "artifact"], message: "html artifacts require an encrypted readable prefix" });
+  if (!value.encrypted && (value.display.senderName !== void 0 || value.display.filename !== void 0 || value.display.recipientHint !== void 0)) ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["display"], message: "policy-only plaintext cannot carry display metadata" });
+  if (!value.encrypted && value.deliveryEmail !== void 0) ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["deliveryEmail"], message: "policy-only plaintext cannot carry delivery metadata" });
+  if (value.recipientMatcher.kind === "exactEmail" && value.deliveryEmail !== void 0 && value.deliveryEmail !== value.recipientMatcher.value) ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["deliveryEmail"], message: "delivery email must match the exact matcher" });
+  if (value.recipientMatcher.kind === "emailDomain" && value.deliveryEmail !== void 0 && value.deliveryEmail.toLowerCase().endsWith(`@${value.recipientMatcher.value}`) === false) ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["deliveryEmail"], message: "delivery email must belong to the matcher domain" });
+  if (value.contentSource.kind === "kv" && value.contentSource.action !== "tinycloud.kv/get") ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["contentSource"], message: "source action mismatch" });
+  if (value.contentSource.kind === "sql" && value.contentSource.action !== "tinycloud.sql/read") ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["contentSource"], message: "source action mismatch" });
+}
+var unsignedShareEnvelopeV2Schema4 = unsignedShareEnvelopeV2BaseSchema4.superRefine(validateV2Invariants4);
+var shareEnvelopeV2Schema4 = unsignedShareEnvelopeV2BaseSchema4.extend({ signature: signatureSchema4 }).strict().superRefine(validateV2Invariants4);
+var unifiedResourceSchema4 = external_exports3.string().refine((value) => {
+  const marker = value.indexOf("/kv/");
+  if (marker < 1) return false;
+  const space = value.slice(0, marker);
+  const legacy = space.startsWith("tinycloud://");
+  if (legacy ? /[:/?#%]/.test(space.slice("tinycloud://".length)) : !space.startsWith("tinycloud:") || /[/?#%]/.test(space)) return false;
+  const path = value.slice(marker + 4);
+  return !path.startsWith("/") && !path.endsWith("/") && !path.includes("//") && path.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
+}, { message: "expected canonical TinyCloud KV resource" });
+var unifiedEncryptionNetworkSchema4 = external_exports3.string().refine((value) => {
+  if (!value.startsWith("urn:tinycloud:encryption:")) return false;
+  const rest = value.slice("urn:tinycloud:encryption:".length);
+  const separator = rest.lastIndexOf(":");
+  const owner = separator < 0 ? "" : rest.slice(0, separator);
+  const network = separator < 0 ? "" : rest.slice(separator + 1);
+  return owner.startsWith("did:") && owner.length > 4 && network.length > 0 && !/[:/%?#\s]/.test(network);
+}, { message: "expected canonical TinyCloud encryption network" });
+var unifiedKvCapabilitySchema4 = external_exports3.object({
+  kind: external_exports3.literal("kv"),
+  resource: unifiedResourceSchema4,
+  selector: external_exports3.union([external_exports3.literal("exact"), external_exports3.literal("prefix")]),
+  actions: external_exports3.array(external_exports3.union([
+    external_exports3.literal("tinycloud.kv/get"),
+    external_exports3.literal("tinycloud.kv/list"),
+    external_exports3.literal("tinycloud.kv/metadata"),
+    external_exports3.literal("tinycloud.kv/put")
+  ])).min(1)
+}).strict();
+var unifiedEncryptionCapabilitySchema4 = external_exports3.object({
+  kind: external_exports3.literal("encryption"),
+  resource: unifiedEncryptionNetworkSchema4,
+  action: external_exports3.literal("tinycloud.encryption/decrypt")
+}).strict();
+var unifiedCapabilitySchema4 = external_exports3.union([unifiedKvCapabilitySchema4, unifiedEncryptionCapabilitySchema4]);
+var unifiedContentSourceSchema4 = external_exports3.object({
+  shareId: external_exports3.string().min(1),
+  kvResource: unifiedResourceSchema4,
+  selector: external_exports3.union([external_exports3.literal("exact"), external_exports3.literal("prefix")]),
+  encryptionNetwork: unifiedEncryptionNetworkSchema4,
+  encryptedSymmetricKeyDigestHex: external_exports3.string().regex(/^[0-9a-f]{64}$/),
+  keyVersion: external_exports3.number().int().positive(),
+  mode: external_exports3.union([external_exports3.literal("mutable"), external_exports3.literal("immutable")]),
+  initialCiphertextDigestHex: external_exports3.string().regex(/^[0-9a-f]{64}$/).optional()
+}).strict();
+var unifiedPolicyV1Schema4 = external_exports3.object({
+  schema: external_exports3.literal("xyz.tinycloud.policy/policy/v1"),
+  policyId: external_exports3.string().regex(/^pol_[a-z2-7]+$/),
+  ownerDid: external_exports3.string().min(1),
+  createdAt: external_exports3.string().datetime({ offset: true }),
+  expiresAt: external_exports3.string().datetime({ offset: true }).optional(),
+  contentSource: unifiedContentSourceSchema4,
+  capabilityCeiling: external_exports3.array(unifiedCapabilitySchema4).min(2),
+  signature: external_exports3.object({ suite: external_exports3.string().min(1), signerDid: external_exports3.string().min(1), value: external_exports3.string().min(1) }).strict()
+}).strict();
+var policyCredentialRequirementV1Schema4 = external_exports3.object({
+  type: external_exports3.literal("TinyCloudPolicyCredentialRequirement"),
+  version: external_exports3.literal(1),
+  requirementDigest: external_exports3.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  descriptorDigest: external_exports3.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  issuerDid: external_exports3.string().min(1),
+  issuerKid: external_exports3.string().min(1),
+  profile: external_exports3.object({ id: external_exports3.string().min(1), version: external_exports3.literal(1) }).strict(),
+  credentialType: external_exports3.object({ id: external_exports3.string().min(1), version: external_exports3.literal(1) }).strict()
+}).strict();
+var unifiedPolicyV2Schema4 = external_exports3.object({
+  schema: external_exports3.literal("xyz.tinycloud.policy/policy/v2"),
+  policyId: external_exports3.string().regex(/^pol_[a-z2-7]+$/),
+  ownerDid: external_exports3.string().min(1),
+  createdAt: external_exports3.string().datetime({ offset: true }),
+  expiresAt: external_exports3.string().datetime({ offset: true }).optional(),
+  contentSource: unifiedContentSourceSchema4,
+  capabilityCeiling: external_exports3.array(unifiedCapabilitySchema4).min(2),
+  credentialRequirement: policyCredentialRequirementV1Schema4,
+  signature: external_exports3.object({ suite: external_exports3.literal("Ed25519"), signerDid: external_exports3.string().min(1), value: external_exports3.string().min(1) }).strict()
+}).strict();
+var unifiedPolicySchema4 = external_exports3.discriminatedUnion("schema", [
+  unifiedPolicyV1Schema4,
+  unifiedPolicyV2Schema4
+]);
+var unifiedRootSchema4 = external_exports3.object({
+  cid: external_exports3.string().min(1),
+  authorization: external_exports3.string().regex(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/),
+  role: external_exports3.union([external_exports3.literal("policy-authority"), external_exports3.literal("policy-enforcement")])
+}).strict();
+var attestedEnforcerBindingV2Schema4 = external_exports3.object({
+  schema: external_exports3.literal("xyz.tinycloud.policy/attested-enforcer/v2"),
+  enforcerDid: external_exports3.string().regex(/^did:key:z[1-9A-HJ-NP-Za-km-z]+$/),
+  nodeAudience: external_exports3.string().min(1),
+  attestationBindingDigestHex: external_exports3.string().regex(/^[0-9a-f]{64}$/),
+  issuedAt: external_exports3.string().datetime({ offset: true }),
+  expiresAt: external_exports3.string().datetime({ offset: true }),
+  signature: external_exports3.object({ suite: external_exports3.literal("Ed25519"), signerDid: external_exports3.string().min(1), value: base64UrlString4() }).strict()
+}).strict();
+var v3TargetSchema4 = external_exports3.object({
+  origin: external_exports3.string().refine(isCanonicalHttpsOrigin4, { message: "expected a canonical https origin" }),
+  nodeAudience: external_exports3.string().min(1),
+  spaceId: external_exports3.string().refine(isCanonicalPathSegment4, { message: "expected a canonical space id" })
+}).strict();
+var ARTIFACT_ID_PATTERN4 = /^[a-z0-9][a-z0-9_-]{2,62}$/;
+var artifactPinSchema4 = external_exports3.object({
+  v: external_exports3.literal(1),
+  artifactId: external_exports3.string().regex(ARTIFACT_ID_PATTERN4),
+  version: external_exports3.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+  /** SHA-256 (lowercase hex) of the exact `manifest.json` bytes. The manifest itself stays an owner-side record. */
+  manifestSha256: external_exports3.string().regex(/^[0-9a-f]{64}$/),
+  /** An addressed share reads one exact file, so exactly one entry: the stored bytes (ciphertext) it will fetch. */
+  files: external_exports3.array(external_exports3.object({
+    path: external_exports3.string().min(1).max(255),
+    sha256: external_exports3.string().regex(/^[0-9a-f]{64}$/),
+    bytes: external_exports3.number().int().nonnegative()
+  }).strict()).length(1)
+}).strict();
+var unsignedShareEnvelopeV3BaseSchema4 = external_exports3.object({
+  version: external_exports3.literal(3),
+  shareId: external_exports3.string().min(1),
+  recipientMatcher: recipientMatcherSchema4,
+  deliveryEmail: deliveryEmailSchema4.optional(),
+  actions: external_exports3.array(shareActionSchema4).min(1).max(3),
+  resource: resourceSelectorSchema4,
+  target: v3TargetSchema4,
+  policy: unifiedPolicySchema4,
+  policyCid: external_exports3.string().min(1),
+  policyRoot: unifiedRootSchema4,
+  enforcementRoot: unifiedRootSchema4,
+  attestedEnforcerBinding: attestedEnforcerBindingV2Schema4,
+  contentSource: unifiedContentSourceSchema4,
+  contentSourceDigestHex: external_exports3.string().regex(/^[0-9a-f]{64}$/),
+  encryptionNetwork: unifiedEncryptionNetworkSchema4,
+  expiry: external_exports3.string().datetime({ offset: true }),
+  display: displaySchema4,
+  encrypted: external_exports3.literal(true),
+  metadata: contentMetadataSchema4,
+  /**
+   * TC-1428: an owner-signed statement that this share reads one write-once artifact version. Additive: absent on
+   * every other share, and covered by the envelope signature because the signature spans the whole unsigned object.
+   * The shape is checked here; its binding to the content source is `verifyArtifactShare` in share-sdk.
+   */
+  artifactPin: artifactPinSchema4.optional()
+}).strict();
+function validateV3Invariants4(value, ctx) {
+  const actions = [...value.actions];
+  if (new Set(actions).size !== actions.length || actions.some((action, index) => action !== ["read", "list", "edit"].filter((candidate) => actions.includes(candidate))[index])) {
+    ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["actions"], message: "actions must be unique and canonically ordered" });
+  }
+  if (value.policyRoot.role !== "policy-authority" || value.enforcementRoot.role !== "policy-enforcement") {
+    ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["policyRoot", "role"], message: "root roles are fixed" });
+  }
+  if (value.policyCid.length === 0 || value.policyCid === value.policyRoot.cid || value.policyCid === value.enforcementRoot.cid) {
+    ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["policyCid"], message: "policy CID must be distinct from both roots" });
+  }
+  if (value.contentSource.encryptionNetwork !== value.encryptionNetwork) {
+    ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["encryptionNetwork"], message: "encryption network is not bound to the source" });
+  }
+  if (value.attestedEnforcerBinding.nodeAudience !== value.target.nodeAudience || value.attestedEnforcerBinding.signature.signerDid !== value.attestedEnforcerBinding.nodeAudience || Date.parse(value.attestedEnforcerBinding.expiresAt) < Date.parse(value.expiry)) {
+    ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["attestedEnforcerBinding"], message: "enforcer binding does not cover the target and share lifetime" });
+  }
+  if (value.policy.contentSource.shareId !== value.contentSource.shareId || value.policy.contentSource.kvResource !== value.contentSource.kvResource || value.policy.contentSource.selector !== value.contentSource.selector || value.policy.contentSource.encryptionNetwork !== value.encryptionNetwork || value.policy.contentSource.encryptedSymmetricKeyDigestHex !== value.contentSource.encryptedSymmetricKeyDigestHex || value.policy.contentSource.keyVersion !== value.contentSource.keyVersion || value.policy.contentSource.mode !== value.contentSource.mode || value.policy.contentSource.initialCiphertextDigestHex !== value.contentSource.initialCiphertextDigestHex) {
+    ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["contentSource"], message: "content source is not bound to policy" });
+  }
+  if (value.policy.signature.suite !== "Ed25519" || value.policy.signature.signerDid !== value.policy.ownerDid) {
+    ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["policy", "signature"], message: "policy must be signed by its owner" });
+  }
+  const kvCapabilities = value.policy.capabilityCeiling.filter((capability) => capability.kind === "kv");
+  const decryptCapabilities = value.policy.capabilityCeiling.filter((capability) => capability.kind === "encryption" && capability.resource === value.encryptionNetwork && capability.action === "tinycloud.encryption/decrypt");
+  if (value.policy.capabilityCeiling.length !== 2 || kvCapabilities.length !== 1 || decryptCapabilities.length !== 1 || kvCapabilities[0]?.resource !== value.contentSource.kvResource || kvCapabilities[0]?.selector !== value.contentSource.selector) {
+    ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["policy", "capabilityCeiling"], message: "policy ceiling must contain exact decrypt network" });
+  }
+}
+var unsignedShareEnvelopeV3Schema4 = unsignedShareEnvelopeV3BaseSchema4.superRefine(validateV3Invariants4);
+var shareEnvelopeV3Schema4 = unsignedShareEnvelopeV3BaseSchema4.extend({ signature: signatureSchema4 }).strict().superRefine(validateV3Invariants4);
+var KEY_LENGTH3 = 32;
+var MAX_INLINE_BYTES4 = 256 * 1024;
+function assertCanonicalCid3(cidString) {
+  const cid = CID4.parse(cidString);
+  if (cid.version !== 1 || cid.code !== code4 || cid.multihash.code !== 18 || // sha2-256 (0x12) only, at the link layer too
+  cid.toString() !== cidString) {
+    throw new TypeError(`not a canonical CIDv1 raw sha2-256 base32 CID: ${cidString}`);
+  }
+}
+async function parseSealedInlineShareUrl3(url, options = {}) {
+  const parsed = new URL(url);
+  if (parsed.protocol !== "https:" || parsed.username !== "" || parsed.password !== "") throw new TypeError("sealed inline share URL must be canonical HTTPS without userinfo");
+  if (!isCanonicalHttpsOrigin4(parsed.origin) || options.expectedOrigin !== void 0 && parsed.origin !== options.expectedOrigin) throw new TypeError("sealed inline share URL origin is not trusted");
+  if (parsed.pathname !== "/s/inline" || parsed.search !== "") throw new TypeError("not a Node sealed-inline share URL");
+  if (url !== `${parsed.origin}/s/inline${parsed.hash}`) throw new TypeError("sealed inline share URL is not lexically canonical");
+  const prefix = "#v=2&p=";
+  if (!parsed.hash.startsWith(prefix)) throw new TypeError("sealed inline URL is missing its canonical fragment");
+  const encoded = parsed.hash.slice(prefix.length);
+  if (encoded.length === 0 || parsed.hash !== `${prefix}${encoded}`) throw new TypeError("sealed inline URL fragment is not canonical");
+  let payloadBytes;
+  try {
+    payloadBytes = fromBase64Url4(encoded);
+  } catch {
+    throw new TypeError("sealed inline payload is not canonical base64url");
+  }
+  if (payloadBytes.byteLength === 0 || payloadBytes.byteLength > MAX_INLINE_BYTES4 * 2) throw new TypeError("sealed inline payload is too large");
+  const payloadText = new TextDecoder("utf-8", { fatal: true }).decode(payloadBytes);
+  let value;
+  try {
+    value = JSON.parse(payloadText);
+  } catch {
+    throw new TypeError("sealed inline payload is not valid JSON");
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value) || canonicalize4(value) !== payloadText) throw new TypeError("sealed inline payload is not canonical JSON");
+  const record2 = value;
+  if (Object.keys(record2).length !== 4 || record2.v !== 2 || typeof record2.c !== "string" || typeof record2.cid !== "string" || typeof record2.k !== "string") throw new TypeError("sealed inline payload has invalid fields");
+  let ciphertext;
+  let key32;
+  try {
+    ciphertext = fromBase64Url4(record2.c);
+    key32 = fromBase64Url4(record2.k);
+  } catch {
+    throw new TypeError("sealed inline payload has invalid base64url material");
+  }
+  if (ciphertext.byteLength === 0 || ciphertext.byteLength > MAX_INLINE_BYTES4) throw new TypeError("sealed inline ciphertext is outside the allowed size");
+  if (key32.byteLength !== KEY_LENGTH3) throw new TypeError("sealed inline key must be 32 bytes");
+  assertCanonicalCid3(record2.cid);
+  if (await computeCid3(ciphertext) !== record2.cid) throw new TypeError("sealed inline ciphertext does not match its CID");
+  return { kind: "inline", ciphertextCid: record2.cid, ciphertext, key32 };
+}
+var SHORT_LINK_ID_PATTERN = /^[a-z2-7]{26}$/;
+function assertShortLinkId(id) {
+  if (!SHORT_LINK_ID_PATTERN.test(id)) throw new TypeError("short link id must be 26 lowercase base32 characters");
+}
+function parseShortShareUrl(url, options = {}) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new TypeError("short share URL is not a URL");
+  }
+  if (parsed.protocol !== "https:" || parsed.username !== "" || parsed.password !== "") throw new TypeError("short share URL must be canonical HTTPS without userinfo");
+  if (!isCanonicalHttpsOrigin4(parsed.origin) || options.expectedOrigin !== void 0 && parsed.origin !== options.expectedOrigin) throw new TypeError("short share URL origin is not trusted");
+  if (parsed.search !== "") throw new TypeError("short share URL must not have a query string");
+  const match = /^\/s\/([A-Za-z2-7]{26})$/.exec(parsed.pathname);
+  if (match === null) throw new TypeError("not a short share URL path");
+  const id = match[1].toLowerCase();
+  const fragment = /^#v=3&k=([A-Za-z0-9_-]{43})&c=([a-z2-7]+)$/.exec(parsed.hash);
+  if (fragment === null) throw new TypeError("short share URL fragment is not canonical");
+  const k = fragment[1];
+  const ciphertextCid = fragment[2];
+  if (url !== `${parsed.origin}${parsed.pathname}${parsed.hash}`) throw new TypeError("short share URL is not lexically canonical");
+  let key32;
+  try {
+    key32 = fromBase64Url4(k);
+  } catch {
+    throw new TypeError("short share URL key is not canonical base64url");
+  }
+  if (key32.byteLength !== KEY_LENGTH3) throw new TypeError("short share URL key must be 32 bytes");
+  try {
+    assertCanonicalCid3(ciphertextCid);
+  } catch {
+    throw new TypeError("short share URL CID is not canonical");
+  }
+  return { kind: "short", origin: parsed.origin, id, k, key32, ciphertextCid };
+}
+async function splitInlineToShort(inlineUrl, id) {
+  assertShortLinkId(id);
+  const inline = await parseSealedInlineShareUrl3(inlineUrl);
+  const origin = new URL(inlineUrl).origin;
+  return `${origin}/s/${id}#v=3&k=${toBase64Url3(inline.key32)}&c=${inline.ciphertextCid}`;
+}
+async function rebuildInlineFromShort(shortUrl, ciphertextB64Url) {
+  const short = parseShortShareUrl(shortUrl);
+  let ciphertext;
+  try {
+    ciphertext = fromBase64Url4(ciphertextB64Url);
+  } catch {
+    throw new TypeError("short link ciphertext is not canonical base64url");
+  }
+  if (ciphertext.byteLength === 0 || ciphertext.byteLength > MAX_INLINE_BYTES4) throw new TypeError("short link ciphertext is outside the allowed size");
+  if (await computeCid3(ciphertext) !== short.ciphertextCid) throw new TypeError("short link ciphertext does not match the link's CID");
+  return { v: 2, c: ciphertextB64Url, cid: short.ciphertextCid, k: short.k };
+}
+
+// src/share/short-links.ts
+var MAX_SHORT_LINK_BYTES = 128 * 1024;
+var REQUEST_TIMEOUT_MS = 1e4;
+var DELETE_TOKEN = /^[A-Za-z0-9_-]{43}$/;
+var ShortLinkError = class extends Error {
+  constructor(code5, message, options) {
+    super(message, options);
+    this.code = code5;
+    this.name = "ShortLinkError";
+  }
+};
+function shortLinkTokenKey(shareId) {
+  return `xyz.tinycloud.share/shares/${shareId}/.short-link.json`;
+}
+async function readCapped(response, max) {
+  if (response.body === null) return new Uint8Array(0);
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  for (; ; ) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > max) {
+      await reader.cancel().catch(() => void 0);
+      throw new ShortLinkError("too-large", "the short-link service returned too many bytes");
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+function parseShortLinkRecord(bytes) {
+  let value;
+  try {
+    value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } catch {
+    return void 0;
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return void 0;
+  const record2 = value;
+  if (typeof record2.id !== "string" || !SHORT_LINK_ID_PATTERN.test(record2.id)) return void 0;
+  if (typeof record2.deleteToken !== "string" || !DELETE_TOKEN.test(record2.deleteToken)) return void 0;
+  return { id: record2.id, deleteToken: record2.deleteToken };
+}
+function serializeShortLinkRecord(record2) {
+  return new TextEncoder().encode(JSON.stringify({ id: record2.id, deleteToken: record2.deleteToken }));
+}
+function request(init, timeoutMs) {
+  return { ...init, credentials: "omit", redirect: "error", referrerPolicy: "no-referrer", signal: AbortSignal.timeout(timeoutMs) };
+}
+async function send(fetchFn, url, init, timeoutMs) {
+  try {
+    return await fetchFn(url, request(init, timeoutMs));
+  } catch (error) {
+    throw new ShortLinkError("unavailable", "the short-link service could not be reached", { cause: error });
+  }
+}
+function statusError(response) {
+  if (response.status === 429) return new ShortLinkError("rate-limited", "the short-link service is rate limiting this client");
+  if (response.status === 503) return new ShortLinkError("capacity", "the short-link service is at capacity");
+  if (response.status === 404) return new ShortLinkError("not-found", "the short link has expired, was revoked, or never existed");
+  if (response.status >= 400 && response.status < 500) return new ShortLinkError("rejected", `the short-link service rejected the request (HTTP ${response.status})`);
+  return new ShortLinkError("unavailable", `the short-link service failed (HTTP ${response.status})`);
+}
+function createShortLinkClient(origin, fetchFn = globalThis.fetch, timeoutMs = REQUEST_TIMEOUT_MS) {
+  const base5 = `${origin}/api/share-links`;
+  return {
+    async create(ciphertext, expiresAt) {
+      if (ciphertext.byteLength === 0 || ciphertext.byteLength > MAX_SHORT_LINK_BYTES) throw new ShortLinkError("too-large", "the sealed share is too large for a short link");
+      const expectedCid = await computeCid2(ciphertext);
+      const response = await send(fetchFn, base5, {
+        method: "POST",
+        headers: { "content-type": "application/json", accept: "application/json" },
+        body: JSON.stringify({ ciphertext: toBase64Url2(ciphertext), expiresAt: expiresAt.toISOString() })
+      }, timeoutMs);
+      if (response.status !== 201) throw statusError(response);
+      let value;
+      try {
+        value = await response.json();
+      } catch {
+        throw new ShortLinkError("invalid-response", "the short-link service returned an unreadable response");
+      }
+      const body = typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
+      if (typeof body.id !== "string" || !SHORT_LINK_ID_PATTERN.test(body.id)) throw new ShortLinkError("invalid-response", "the short-link service returned an invalid id");
+      if (typeof body.deleteToken !== "string" || !DELETE_TOKEN.test(body.deleteToken) || fromBase64Url3(body.deleteToken).byteLength !== 32) {
+        throw new ShortLinkError("invalid-response", "the short-link service returned an invalid delete token");
+      }
+      if (body.cid !== expectedCid) throw new ShortLinkError("invalid-response", "the short-link service stored different bytes than were sent");
+      return { id: body.id, deleteToken: body.deleteToken };
+    },
+    async fetchCiphertext(id) {
+      if (!SHORT_LINK_ID_PATTERN.test(id)) throw new ShortLinkError("not-found", "the short link has expired, was revoked, or never existed");
+      const response = await send(fetchFn, `${base5}/${id}`, { method: "GET", headers: { accept: "application/octet-stream" } }, timeoutMs);
+      if (response.status !== 200) throw statusError(response);
+      if ((response.headers.get("content-type") ?? "").split(";", 1)[0].trim().toLowerCase() !== "application/octet-stream") {
+        await response.body?.cancel().catch(() => void 0);
+        throw new ShortLinkError("invalid-response", "the short-link service did not return sealed bytes");
+      }
+      const declared = Number(response.headers.get("content-length") ?? "0");
+      if (declared > MAX_SHORT_LINK_BYTES) {
+        await response.body?.cancel().catch(() => void 0);
+        throw new ShortLinkError("too-large", "the short-link service returned too many bytes");
+      }
+      const bytes = await readCapped(response, MAX_SHORT_LINK_BYTES);
+      if (bytes.byteLength === 0) throw new ShortLinkError("invalid-response", "the short-link service returned no bytes");
+      return bytes;
+    },
+    async delete(record2) {
+      const response = await send(fetchFn, `${base5}/${record2.id}`, { method: "DELETE", headers: { authorization: `Bearer ${record2.deleteToken}` } }, timeoutMs);
+      if (response.status === 204) return "deleted";
+      if (response.status === 404) return "absent";
+      throw statusError(response);
+    }
+  };
+}
+async function shortenInlineLink(input) {
+  const inline = await parseSealedInlineShareUrl2(input.inlineUrl);
+  const record2 = await input.client.create(inline.ciphertext, input.expiresAt);
+  try {
+    await input.tokens.write(input.shareId, record2);
+  } catch (error) {
+    await input.client.delete(record2).catch(() => void 0);
+    throw new ShortLinkError("token-store-failed", "the short link's delete token could not be saved", { cause: error });
+  }
+  return splitInlineToShort(input.inlineUrl, record2.id);
+}
+async function resolveShortLink(link4, options) {
+  let short;
+  try {
+    short = parseShortShareUrl(link4);
+  } catch {
+    return link4;
+  }
+  if (short.origin !== options.expectedOrigin) throw new ShortLinkError("rejected", "the short link is not from the trusted Share origin");
+  const ciphertext = await createShortLinkClient(options.expectedOrigin, options.fetchFn).fetchCiphertext(short.id);
+  let payload;
+  try {
+    payload = await rebuildInlineFromShort(link4, toBase64Url2(ciphertext));
+  } catch (error) {
+    throw new ShortLinkError("invalid-response", "the short-link service returned bytes that do not match the link", { cause: error });
+  }
+  return encodeSealedInlineShareUrl2({ origin: short.origin, ciphertext: fromBase64Url3(payload.c), key32: fromBase64Url3(payload.k) });
+}
+function kvErrorCode(error) {
+  return typeof error === "object" && error !== null && "code" in error && typeof error.code === "string" ? error.code : void 0;
+}
+function kvShortLinkTokenStore(kv) {
+  return {
+    async read(shareId) {
+      const read5 = await (await kv()).get(shortLinkTokenKey(shareId), { binary: true });
+      if (read5.ok) return parseShortLinkRecord(new Uint8Array(read5.data.data));
+      if (kvErrorCode(read5.error) === "KV_NOT_FOUND") return void 0;
+      throw new Error(`could not read the short-link token (${kvErrorCode(read5.error) ?? "unknown error"})`);
+    },
+    async write(shareId, record2) {
+      const written = await (await kv()).put(shortLinkTokenKey(shareId), serializeShortLinkRecord(record2), { contentType: "application/json" });
+      if (!written.ok) throw new Error(`could not write the short-link token (${kvErrorCode(written.error) ?? "unknown error"})`);
+    },
+    async remove(shareId) {
+      const removed = await (await kv()).delete(shortLinkTokenKey(shareId));
+      if (!removed.ok && kvErrorCode(removed.error) !== "KV_NOT_FOUND") throw new Error(`could not remove the short-link token (${kvErrorCode(removed.error) ?? "unknown error"})`);
+    }
+  };
+}
+function isInlineLink(link4) {
+  if (link4 === void 0) return false;
+  try {
+    return new URL(link4).pathname === "/s/inline";
+  } catch {
+    return false;
+  }
+}
+function createShareShortLinks(input) {
+  const tokens = (spaceId) => kvShortLinkTokenStore(() => input.kvForSpace(spaceId));
+  const client = (inlineUrl) => createShortLinkClient(new URL(inlineUrl).origin, input.fetchFn, input.timeoutMs);
+  return {
+    async shorten(published) {
+      if (published.link.kind !== "policy" || !isInlineLink(published.url)) throw new ShortLinkError("rejected", "only addressed shares get a short link");
+      return shortenInlineLink({
+        inlineUrl: published.url,
+        shareId: published.metadata.shareId,
+        expiresAt: new Date(published.metadata.expiresAt),
+        client: client(published.url),
+        tokens: tokens(published.metadata.target.spaceId)
+      });
+    },
+    async linkFor(record2) {
+      if (!isInlineLink(record2.link)) return void 0;
+      const inlineUrl = record2.link;
+      const stored = await tokens(record2.target.spaceId).read(record2.shareId).catch(() => void 0);
+      return stored === void 0 ? void 0 : splitInlineToShort(inlineUrl, stored.id).catch(() => void 0);
+    },
+    async discard(record2) {
+      if (!isInlineLink(record2.link)) return "none";
+      return discardShortLink(record2.shareId, client(record2.link), tokens(record2.target.spaceId));
+    },
+    resolve: (link4, expectedOrigin) => resolveShortLink(link4, { expectedOrigin, ...input.fetchFn === void 0 ? {} : { fetchFn: input.fetchFn } })
+  };
+}
+async function discardShortLink(shareId, client, tokens) {
+  let record2;
+  try {
+    record2 = await tokens.read(shareId);
+  } catch {
+    return "failed";
+  }
+  if (record2 === void 0) return "none";
+  try {
+    await client.delete(record2);
+  } catch {
+    return "failed";
+  }
+  await tokens.remove(shareId).catch(() => void 0);
+  return "deleted";
 }
 
 // src/share/errors.ts
@@ -26637,8 +28409,8 @@ var HISTORY_WRITE_ERROR_CODES = { EACCES: true, EPERM: true, EROFS: true, ENOSPC
 function shareHistoryReason(error) {
   if (error instanceof ShareHistoryUnreadableError) return "HISTORY_UNREADABLE";
   if (error instanceof ShareHistoryReadError) return "HISTORY_READ_FAILED";
-  const code4 = typeof error === "object" && error !== null && "code" in error ? error.code : void 0;
-  return typeof code4 === "string" && HISTORY_WRITE_ERROR_CODES[code4] === true ? "HISTORY_WRITE_FAILED" : "HISTORY_UNAVAILABLE";
+  const code5 = typeof error === "object" && error !== null && "code" in error ? error.code : void 0;
+  return typeof code5 === "string" && HISTORY_WRITE_ERROR_CODES[code5] === true ? "HISTORY_WRITE_FAILED" : "HISTORY_UNAVAILABLE";
 }
 
 // src/share/space-not-ready.ts
@@ -26690,6 +28462,9 @@ function throwKvUploadFailure(error) {
   if (rejection) throw new SharePublishAuthorityError({ kind: "storage-full", ...rejection });
   throw new SharePublishAuthorityError({ kind: "upload-failed" });
 }
+function sessionHoldsEncryptionDecrypt(node, networkId) {
+  return node.hasRuntimePermissions([{ service: "tinycloud.encryption", path: networkId, actions: ["tinycloud.encryption/decrypt"] }]);
+}
 var DEFAULT_SHARE_ORIGIN = "https://share.tinycloud.xyz";
 var MIN_DOMAIN_DELIVERY_VERSION = "1.17.3";
 function supportsDomainDelivery(version2) {
@@ -26723,8 +28498,8 @@ function safeStorageFilename(filename) {
 }
 function scopeDeniedFromArtifactError(error, capability, authority) {
   const cause = error instanceof ArtifactError ? error.cause : void 0;
-  const code4 = typeof cause === "object" && cause !== null && "code" in cause ? cause.code : void 0;
-  if (code4 !== "AUTH_UNAUTHORIZED" && code4 !== "PERMISSION_DENIED") return void 0;
+  const code5 = typeof cause === "object" && cause !== null && "code" in cause ? cause.code : void 0;
+  if (code5 !== "AUTH_UNAUTHORIZED" && code5 !== "PERMISSION_DENIED") return void 0;
   const meta = typeof cause === "object" && cause !== null && "meta" in cause ? cause.meta : void 0;
   const requiredAction = requiredKvAction(meta);
   return new SharePublishAuthorityError({
@@ -26752,7 +28527,7 @@ function createEncryptedSessionHistory() {
   };
   let keyPromise;
   const key = async () => keyPromise ??= crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
-  const encode6 = async (record2) => {
+  const encode7 = async (record2) => {
     const secret = new TextEncoder().encode(JSON.stringify(record2));
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const encrypted = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await key(), secret));
@@ -26761,29 +28536,29 @@ function createEncryptedSessionHistory() {
     value.set(encrypted, iv.length);
     return value;
   };
-  const decode10 = async (value) => JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: value.slice(0, 12) }, await key(), value.slice(12))));
+  const decode11 = async (value) => JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: value.slice(0, 12) }, await key(), value.slice(12))));
   return {
     async put(record2) {
       return serial(async () => {
-        records.set(record2.shareId, await encode6(record2));
+        records.set(record2.shareId, await encode7(record2));
       });
     },
     async update(shareId, change) {
       return serial(async () => {
         const value = records.get(shareId);
         if (value === void 0) return void 0;
-        const updated = await change(await decode10(value));
-        records.set(shareId, await encode6(updated));
+        const updated = await change(await decode11(value));
+        records.set(shareId, await encode7(updated));
         return updated;
       });
     },
     async list() {
-      return serial(() => Promise.all([...records.values()].map(decode10)));
+      return serial(() => Promise.all([...records.values()].map(decode11)));
     },
     async get(shareId) {
       return serial(async () => {
         const value = records.get(shareId);
-        return value === void 0 ? void 0 : decode10(value);
+        return value === void 0 ? void 0 : decode11(value);
       });
     },
     async delete(shareId) {
@@ -26880,7 +28655,7 @@ function createEncryptedProfileHistory(profileName, sessionSigner) {
     if (salt.length < 16) throw new ShareHistoryUnreadableError();
     return salt;
   };
-  const read4 = async (profile, ready) => {
+  const read5 = async (profile, ready) => {
     const file = await readIfPresent(await path(profile));
     if (file === void 0) {
       const legacy = await readIfPresent(await legacyPath(profile));
@@ -26969,7 +28744,7 @@ function createEncryptedProfileHistory(profileName, sessionSigner) {
         false,
         ["encrypt", "decrypt"]
       );
-      await read4(profile, { salt, key, legacyKey: keys.legacyKey });
+      await read5(profile, { salt, key, legacyKey: keys.legacyKey });
       return true;
     } catch (error) {
       if (error instanceof ShareHistoryUnreadableError) return false;
@@ -27008,7 +28783,7 @@ function createEncryptedProfileHistory(profileName, sessionSigner) {
   return {
     async put(record2) {
       return locked(async (profile, ready) => {
-        const values = await read4(profile, ready);
+        const values = await read5(profile, ready);
         const index = values.findIndex((value) => value.shareId === record2.shareId);
         if (index >= 0) values[index] = record2;
         else values.push(record2);
@@ -27017,7 +28792,7 @@ function createEncryptedProfileHistory(profileName, sessionSigner) {
     },
     async update(shareId, change) {
       return locked(async (profile, ready) => {
-        const values = await read4(profile, ready);
+        const values = await read5(profile, ready);
         const index = values.findIndex((record2) => record2.shareId === shareId);
         if (index < 0) return void 0;
         const updated = await change(values[index]);
@@ -27027,14 +28802,14 @@ function createEncryptedProfileHistory(profileName, sessionSigner) {
       }, true);
     },
     async list() {
-      return locked((profile, ready) => read4(profile, ready));
+      return locked((profile, ready) => read5(profile, ready));
     },
     async get(shareId) {
-      return locked(async (profile, ready) => (await read4(profile, ready)).find((record2) => record2.shareId === shareId));
+      return locked(async (profile, ready) => (await read5(profile, ready)).find((record2) => record2.shareId === shareId));
     },
     async delete(shareId) {
       return locked(async (profile, ready) => {
-        await write(profile, (await read4(profile, ready)).filter((record2) => record2.shareId !== shareId), ready);
+        await write(profile, (await read5(profile, ready)).filter((record2) => record2.shareId !== shareId), ready);
       }, true);
     },
     quarantineUnreadable
@@ -27057,13 +28832,19 @@ function createShareAuthorityAdapters(input = {}) {
   };
   let configPromise;
   const publicConfig = async () => configPromise ??= (async () => {
-    const response = await fetchFn(`${origin}/.well-known/tinycloud-share/config.json`, {
-      headers: { accept: "application/json" },
-      credentials: "omit",
-      redirect: "error",
-      referrerPolicy: "no-referrer"
-    });
-    if (!response.ok) throw new Error("share public config is unavailable");
+    let response;
+    try {
+      response = await fetchFn(`${origin}/.well-known/tinycloud-share/config.json`, {
+        headers: { accept: "application/json" },
+        credentials: "omit",
+        redirect: "error",
+        referrerPolicy: "no-referrer",
+        signal: AbortSignal.timeout(1e4)
+      });
+    } catch (error) {
+      throw new SharePublishAuthorityError({ kind: "share-service-unavailable", origin }, { cause: error });
+    }
+    if (!response.ok) throw new SharePublishAuthorityError({ kind: "share-service-unavailable", origin });
     const value = await response.json();
     if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("share public config is invalid");
     const object3 = value;
@@ -27085,8 +28866,8 @@ function createShareAuthorityAdapters(input = {}) {
       return await ensureAuthenticated2(context);
     } catch (error) {
       const profileConfig = await ProfileManager.getProfile(profile).catch(() => void 0);
-      const code4 = typeof error === "object" && error !== null && "code" in error ? error.code : void 0;
-      if (error instanceof InvalidRestoredSessionError || code4 === "AUTH_EXPIRED" || isSessionExpiredError(error)) {
+      const code5 = typeof error === "object" && error !== null && "code" in error ? error.code : void 0;
+      if (error instanceof InvalidRestoredSessionError || code5 === "AUTH_EXPIRED" || isSessionExpiredError(error)) {
         throw new SharePublishAuthorityError({
           kind: "owner-space-unresolved",
           localKey: profileConfig?.authMethod === "local",
@@ -27130,7 +28911,7 @@ function createShareAuthorityAdapters(input = {}) {
   };
   const targetAdapter = { async publish(targetInput) {
     if (input.publishTarget !== void 0) return input.publishTarget(targetInput);
-    const [config, node] = await Promise.all([publicConfig(), authenticatedNode()]);
+    const node = await authenticatedNode();
     const session = node.restorableSession;
     const ownerSpaceId = session?.spaceId;
     const localKey = !node.isSessionOnly;
@@ -27143,7 +28924,6 @@ function createShareAuthorityAdapters(input = {}) {
     if (ownerSpaceId === void 0 || node.isSessionOnly && (!session?.siwe || !session.signature || sessionExpiresAt === void 0)) {
       throw new SharePublishAuthorityError({ kind: "owner-space-unresolved", localKey, profileName: activeProfileName2 });
     }
-    if (targetInput.origin !== config.shareOrigin) throw new SharePublishAuthorityError({ kind: "origin-mismatch" });
     if (node.isSessionOnly && sessionExpiresAt !== void 0) {
       const roundedSessionExpiry = new Date(Math.floor(sessionExpiresAt.getTime() / 1e3) * 1e3);
       if (roundedSessionExpiry.getTime() <= Date.now() + 6e4) {
@@ -27177,6 +28957,12 @@ function createShareAuthorityAdapters(input = {}) {
         profileName: activeProfileName2
       });
     }
+    const addressedEncryptionNetwork = targetInput.target.kind === "bearer" ? void 0 : node.getEncryptionNetworkIdForSpace(ownerSpaceId);
+    if (addressedEncryptionNetwork !== void 0 && node.isSessionOnly && !sessionHoldsEncryptionDecrypt(node, addressedEncryptionNetwork)) {
+      throw new SharePublishAuthorityError({ kind: "decrypt-not-held" });
+    }
+    const config = await publicConfig();
+    if (targetInput.origin !== config.shareOrigin) throw new SharePublishAuthorityError({ kind: "origin-mismatch" });
     const activeNode = await node.activeNodeIdentity();
     if (targetInput.notify === true && targetInput.target.kind === "emailDomain") {
       await assertDomainDeliveryForOrigin(activeNode.origin, "publish");
@@ -27213,8 +28999,8 @@ function createShareAuthorityAdapters(input = {}) {
         });
         failIfSpaceNotReady(written);
         if (!written.ok) {
-          const code4 = typeof written.error === "object" && written.error !== null && "code" in written.error ? written.error.code : void 0;
-          if (code4 === "AUTH_UNAUTHORIZED" || code4 === "PERMISSION_DENIED") {
+          const code5 = typeof written.error === "object" && written.error !== null && "code" in written.error ? written.error.code : void 0;
+          if (code5 === "AUTH_UNAUTHORIZED" || code5 === "PERMISSION_DENIED") {
             const requiredAction = requiredKvAction(written.error.meta);
             throw new SharePublishAuthorityError({
               kind: "scope-denied",
@@ -27235,8 +29021,8 @@ function createShareAuthorityAdapters(input = {}) {
           viewerOrigin: config.shareOrigin
         });
       } catch (error) {
-        const code4 = typeof error === "object" && error !== null && "code" in error ? error.code : void 0;
-        if (code4 === "AUTH_UNAUTHORIZED" || code4 === "PERMISSION_DENIED") {
+        const code5 = typeof error === "object" && error !== null && "code" in error ? error.code : void 0;
+        if (code5 === "AUTH_UNAUTHORIZED" || code5 === "PERMISSION_DENIED") {
           throw new SharePublishAuthorityError({
             kind: "scope-denied",
             capability: "sharing delegation",
@@ -27297,7 +29083,7 @@ function createShareAuthorityAdapters(input = {}) {
       const rejected = error instanceof LocationRecordValidationError || error instanceof LocationRegistryHttpError && error.status >= 400 && error.status < 500 && error.status !== 408 && error.status !== 429;
       throw new SharePublishAuthorityError({ kind: rejected ? "registry-rejected" : "registry-unavailable" });
     }
-    const encryptionNetwork = node.getEncryptionNetworkIdForSpace(ownerSpaceId);
+    const encryptionNetwork = addressedEncryptionNetwork;
     const encrypted = await node.encryption.encryptToNetwork(encryptionNetwork, file.bytes, { metadata: { contentType: mediaType } });
     if (!encrypted.ok) throw new Error("addressed source encryption was rejected");
     const storedBytes = new TextEncoder().encode(canonicalize3(encrypted.data));
@@ -27313,8 +29099,8 @@ function createShareAuthorityAdapters(input = {}) {
       const stored = await node.kvForSpace(ownerSpaceId).put(resourcePath, storedBytes, { contentType: "application/vnd.tinycloud.encrypted-envelope+json" });
       failIfSpaceNotReady(stored);
       if (!stored.ok) {
-        const code4 = typeof stored.error === "object" && stored.error !== null && "code" in stored.error ? stored.error.code : void 0;
-        if (code4 === "AUTH_UNAUTHORIZED" || code4 === "PERMISSION_DENIED") {
+        const code5 = typeof stored.error === "object" && stored.error !== null && "code" in stored.error ? stored.error.code : void 0;
+        if (code5 === "AUTH_UNAUTHORIZED" || code5 === "PERMISSION_DENIED") {
           const requiredAction = requiredKvAction(stored.error.meta);
           throw new SharePublishAuthorityError({
             kind: "scope-denied",
@@ -27366,9 +29152,9 @@ function createShareAuthorityAdapters(input = {}) {
       // transport hop, so the CLI supplies only owner signing material.
       authority: {
         ownerDid: node.credentialHolderDid,
-        createOwnerRoot: (request) => node.createUnifiedOwnerRoot(request),
+        createOwnerRoot: (request2) => node.createUnifiedOwnerRoot(request2),
         sign: (bytes) => node.signSessionBytes(bytes),
-        registerPolicy: (request) => node.registerPolicy(request)
+        registerPolicy: (request2) => node.registerPolicy(request2)
       }
     });
     if (expiryClamped) Object.defineProperty(published.metadata, "expiryClamped", { value: true, enumerable: true });
@@ -27377,9 +29163,9 @@ function createShareAuthorityAdapters(input = {}) {
     }
     return published;
   } };
-  const delivery = { deliver: input.deliver ?? (async (request) => {
-    const record2 = request.record;
-    if (record2 === void 0 || record2.link === void 0 || record2.deliveryMaterial === void 0 || request.idempotencyKey === void 0) throw new Error("share delivery history is incomplete");
+  const delivery = { deliver: input.deliver ?? (async (request2) => {
+    const record2 = request2.record;
+    if (record2 === void 0 || record2.link === void 0 || record2.deliveryMaterial === void 0 || request2.idempotencyKey === void 0) throw new Error("share delivery history is incomplete");
     const expiry = shareDeliveryWindowExpiresAt(record2);
     if (expiry <= Date.now()) throw new ShareNotifyError("share delivery authorization window has expired", "delivery-window-expired");
     const authorizationExpiresAt = new Date(expiry).toISOString();
@@ -27390,19 +29176,19 @@ function createShareAuthorityAdapters(input = {}) {
       envelopeKey: record2.deliveryMaterial.envelopeKey,
       shareCid: record2.deliveryMaterial.shareCid,
       resourcePath: record2.resource.path,
-      recipientEmail: request.recipient,
+      recipientEmail: request2.recipient,
       shareUrl: record2.link,
       documentName: record2.filename ?? "share.md",
       expiresAt: authorizationExpiresAt,
       deliveryAudience: config.credentialsOrigin,
-      idempotencyKey: request.idempotencyKey
+      idempotencyKey: request2.idempotencyKey
     });
     await deliverCredentialInvitation({
       credentialsOrigin: config.credentialsOrigin,
       receipt,
       shareUrl: record2.link,
       fetchFn,
-      signal: request.signal
+      signal: request2.signal
     });
     return "delivered";
   }) };
@@ -27482,16 +29268,16 @@ function createShareAuthorityAdapters(input = {}) {
         { status: response.status }
       );
     }),
-    revokePolicyRoot: input.revokePolicyRoot ?? (async (request) => {
+    revokePolicyRoot: input.revokePolicyRoot ?? (async (request2) => {
       const node = await authenticatedNode();
       const activeNode = await node.activeNodeIdentity();
-      if (request.nodeOrigin !== activeNode.origin || request.nodeAudience !== activeNode.nodeDid || request.ownerDid !== node.credentialHolderDid) {
+      if (request2.nodeOrigin !== activeNode.origin || request2.nodeAudience !== activeNode.nodeDid || request2.ownerDid !== node.credentialHolderDid) {
         throw new Error("share Policy/v3 revocation is not bound to the active owner node");
       }
       await revokePolicyRootV3({
         nodeOrigin: activeNode.origin,
-        rootCid: request.rootCid,
-        targetRole: request.targetRole,
+        rootCid: request2.rootCid,
+        targetRole: request2.targetRole,
         ownerDid: node.credentialHolderDid,
         issuerDid: node.credentialHolderDid,
         nodeAudience: activeNode.nodeDid,
@@ -27535,6 +29321,10 @@ function createShareAuthorityAdapters(input = {}) {
       list: (prefix) => mapped(() => store.list(prefix))
     };
   };
+  const shortLinks = createShareShortLinks({
+    kvForSpace: async (spaceId) => (await authenticatedNode()).kvForSpace(spaceId),
+    fetchFn
+  });
   return {
     targetAdapter,
     records: input.profileName === void 0 ? createEncryptedSessionHistory() : createEncryptedProfileHistory(profileName, signShareHistoryBytes),
@@ -27542,7 +29332,8 @@ function createShareAuthorityAdapters(input = {}) {
     revocation,
     assertDomainDelivery,
     nativeReader,
-    artifactStore
+    artifactStore,
+    shortLinks
   };
 }
 async function selectedProfileName() {
@@ -27898,7 +29689,7 @@ var SCRIPT_END = /<\/script/gi;
 var STYLE_END = /<\/style/gi;
 function scanMarkup(html, options) {
   const checkReferences = options.references;
-  const length4 = html.length;
+  const length5 = html.length;
   let index = 0;
   let comments = 0;
   const malformed = (detail) => {
@@ -27909,7 +29700,7 @@ function scanMarkup(html, options) {
     comments += 1;
     if (comments > MAX_ARTIFACT_COMMENTS) fail("limit", "artifact page has too many comments");
   };
-  while (index < length4) {
+  while (index < length5) {
     const open10 = html.indexOf("<", index);
     if (open10 === -1) return;
     index = open10 + 1;
@@ -27953,8 +29744,8 @@ function scanMarkup(html, options) {
     const attributes = /* @__PURE__ */ new Map();
     let attributeCount = 0;
     for (; ; ) {
-      while (index < length4 && SKIPPED.test(html[index])) index += 1;
-      if (index >= length4) {
+      while (index < length5 && SKIPPED.test(html[index])) index += 1;
+      if (index >= length5) {
         if (malformed("artifact output has an unterminated tag")) return;
         return;
       }
@@ -27965,11 +29756,11 @@ function scanMarkup(html, options) {
       ATTRIBUTE_NAME.lastIndex = index;
       const rawName = ATTRIBUTE_NAME.exec(html)[0];
       index = ATTRIBUTE_NAME.lastIndex;
-      while (index < length4 && SPACE.test(html[index])) index += 1;
+      while (index < length5 && SPACE.test(html[index])) index += 1;
       let rawValue = "";
       if (html[index] === "=") {
         index += 1;
-        while (index < length4 && SPACE.test(html[index])) index += 1;
+        while (index < length5 && SPACE.test(html[index])) index += 1;
         const quote = html[index];
         if (quote === '"' || quote === "'") {
           const close = html.indexOf(quote, index + 1);
@@ -27994,7 +29785,7 @@ function scanMarkup(html, options) {
         checkAttribute(name, decoded);
         if (isHrefAnimation(tag, name, decoded)) unsupportedOutput("artifact svg animates a resource reference");
         if (!attributes.has(name)) attributes.set(name, decoded);
-      } else if (index < length4 && html[index] !== ">" && !SKIPPED.test(html[index])) {
+      } else if (index < length5 && html[index] !== ">" && !SKIPPED.test(html[index])) {
         index += 1;
       }
     }
@@ -28017,7 +29808,7 @@ function scanMarkup(html, options) {
     } else if (tag === "style" && checkReferences) {
       STYLE_END.lastIndex = index;
       const close = STYLE_END.exec(html);
-      assertOnlyInlineCssReferences(html.slice(index, close === null ? length4 : close.index));
+      assertOnlyInlineCssReferences(html.slice(index, close === null ? length5 : close.index));
     }
   }
 }
@@ -28121,26 +29912,26 @@ function requiredFile(context, basePath, reference) {
   return { file, resolved };
 }
 var CSS_REFERENCE_NAMES = /* @__PURE__ */ new Set(["url", "image-set", "-webkit-image-set", "src", "import"]);
-function isCssIdentifierCode(code4) {
-  return code4 >= 128 || code4 >= 48 && code4 <= 57 || code4 >= 65 && code4 <= 90 || code4 >= 97 && code4 <= 122 || code4 === 95 || code4 === 45;
+function isCssIdentifierCode(code5) {
+  return code5 >= 128 || code5 >= 48 && code5 <= 57 || code5 >= 65 && code5 <= 90 || code5 >= 97 && code5 <= 122 || code5 === 95 || code5 === 45;
 }
 function normalizeCssEscapes(source) {
   let output = "";
   let index = 0;
-  const length4 = source.length;
-  while (index < length4) {
+  const length5 = source.length;
+  while (index < length5) {
     const char = source[index];
     if (char === "/" && source[index + 1] === "*") {
       const end = source.indexOf("*/", index + 2);
-      const stop = end === -1 ? length4 : end + 2;
+      const stop = end === -1 ? length5 : end + 2;
       output += source.slice(index, stop);
       index = stop;
       continue;
     }
     if (char === '"' || char === "'") {
       let cursor = index + 1;
-      while (cursor < length4 && source[cursor] !== char && source[cursor] !== "\n") cursor += source[cursor] === "\\" ? 2 : 1;
-      const stop = Math.min(source[cursor] === char ? cursor + 1 : cursor, length4);
+      while (cursor < length5 && source[cursor] !== char && source[cursor] !== "\n") cursor += source[cursor] === "\\" ? 2 : 1;
+      const stop = Math.min(source[cursor] === char ? cursor + 1 : cursor, length5);
       output += source.slice(index, stop);
       index = stop;
       continue;
@@ -28149,7 +29940,7 @@ function normalizeCssEscapes(source) {
       let cursor = index;
       let decoded = "";
       let escaped = false;
-      while (cursor < length4) {
+      while (cursor < length5) {
         if (source[cursor] === "\\") {
           const next = source[cursor + 1];
           if (next === void 0) {
@@ -28193,15 +29984,15 @@ function assertOnlyInlineCssReferences(css) {
   if (/@import/i.test(text)) fail("unsupported", "artifact css still imports a stylesheet");
   if (/(?:^|[^\w-])(?:-webkit-)?image-set\s*\(/i.test(text) || /(?:^|[^\w-])src\s*\(/i.test(text)) fail("unsupported", "artifact css uses an unsupported resource function");
   const opened = text.match(/url\(/gi)?.length ?? 0;
-  let read4 = 0;
+  let read5 = 0;
   for (const match of text.matchAll(/url\([ \t\n\r\f]*(?:"([^"]*)"|'([^']*)'|([^)"' \t\n\r\f]*))[ \t\n\r\f]*\)/gi)) {
-    read4 += 1;
+    read5 += 1;
     const value = match[1] ?? match[2] ?? match[3] ?? "";
     if (!isInlineReference(value) || value.includes("\\")) {
       throw new ArtifactBundleError("unsupported", "artifact css references a resource", void 0, value);
     }
   }
-  if (read4 !== opened) fail("unsupported", "artifact css has a url() that cannot be read");
+  if (read5 !== opened) fail("unsupported", "artifact css has a url() that cannot be read");
 }
 async function transformCss(sourceText, basePath, context) {
   if (context.cssStack.length > MAX_ARTIFACT_CSS_IMPORT_DEPTH) fail("limit", "artifact stylesheet import depth exceeded");
@@ -28487,8 +30278,8 @@ function isWithinFolder(root, candidate) {
 }
 var CHANGED = "changed while it was read";
 function isRaceError(error) {
-  const code4 = error?.code;
-  return code4 === "ENOENT" || code4 === "ENOTDIR" || code4 === "ELOOP";
+  const code5 = error?.code;
+  return code5 === "ENOENT" || code5 === "ENOTDIR" || code5 === "ELOOP";
 }
 var PROC_FD = "/proc/self/fd";
 async function linuxDescriptorPath(fd) {
@@ -28645,11 +30436,11 @@ async function readHtmlFolder(directory, limit) {
           continue;
         }
         if (files.length >= MAX_ARTIFACT_FILES) throw limitError(`folder has more than ${MAX_ARTIFACT_FILES} files`);
-        const read4 = await readRegularFile(root, child, path, limit - total, limit);
-        if (read4 instanceof Uint8Array) {
-          total += read4.byteLength;
-          files.push({ path: path.normalize("NFC"), bytes: read4 });
-        } else problems.push(read4);
+        const read5 = await readRegularFile(root, child, path, limit - total, limit);
+        if (read5 instanceof Uint8Array) {
+          total += read5.byteLength;
+          files.push({ path: path.normalize("NFC"), bytes: read5 });
+        } else problems.push(read5);
       }
     }
   };
@@ -28762,9 +30553,9 @@ function shareHistoryRecoverError(error) {
   if (error instanceof ShareHistoryReadError) {
     return new CLIError("SHARE_HISTORY_RECOVER_FAILED", "could not read the unreadable sender history to move it aside", 1, { hint: "The original history file was not deleted. Check read permission on the history file, then retry." });
   }
-  const code4 = error instanceof Error ? error.code : void 0;
-  if (code4 !== void 0 && SHARE_HISTORY_RECOVER_FS_ERRNO[code4] === true) {
-    return new CLIError("SHARE_HISTORY_RECOVER_FAILED", `could not move the unreadable sender history aside (${code4})`, 1, { hint: "The original history file was not deleted. Check write permission on the profile directory, then retry." });
+  const code5 = error instanceof Error ? error.code : void 0;
+  if (code5 !== void 0 && SHARE_HISTORY_RECOVER_FS_ERRNO[code5] === true) {
+    return new CLIError("SHARE_HISTORY_RECOVER_FAILED", `could not move the unreadable sender history aside (${code5})`, 1, { hint: "The original history file was not deleted. Check write permission on the profile directory, then retry." });
   }
   return shareCliError(error);
 }
@@ -28833,6 +30624,10 @@ function shareCliError(error, operation = "publish") {
     if (failure.kind === "registry-unavailable") {
       return new CLIError("UNAVAILABLE", "the TinyCloud location registry could not be reached, so nothing was shared; try again shortly", 4);
     }
+    if (failure.kind === "share-service-unavailable") {
+      const outcome = operation === "publish" ? "nothing was shared" : "no invitation was sent";
+      return new CLIError("SHARE_SERVICE_UNAVAILABLE", `the Share service at ${failure.origin} could not be reached, so ${outcome}; try again shortly`, 4);
+    }
     if (failure.kind === "node-info-unavailable") {
       const outcome = operation === "publish" ? "nothing was shared and no invitation was sent" : "no invitation was sent";
       return new CLIError("UNAVAILABLE", `could not verify TinyCloud node 1.17.3 domain delivery support; ${outcome}. Check the node and retry`, 4);
@@ -28857,20 +30652,35 @@ function shareCliError(error, operation = "publish") {
     if (failure.kind === "upload-failed") {
       return new CLIError("UPLOAD_FAILED", "share source upload failed; nothing was shared", 4);
     }
+    if (failure.kind === "decrypt-not-held") {
+      return new CLIError(
+        "PERMISSION_DENIED",
+        "this sign-in can't create email-addressed shares: it has no permission to decrypt with the account's key. Nothing was shared.",
+        5,
+        { hint: "Share it from https://share.tinycloud.xyz while signed in as the account owner, or ask the owner to share it. A link anyone can open works from this sign-in: --to anyone." }
+      );
+    }
+  }
+  if (error instanceof ShortLinkError) {
+    if (error.code === "not-found") return new CLIError("NOT_FOUND", "this short link has expired, was revoked, or never existed", 4);
+    if (error.code === "rejected") return new CLIError("ORIGIN_MISMATCH", "this short link is not from the trusted Share origin", 5);
+    if (error.code === "too-large") return new CLIError("MAX_BYTES_EXCEEDED", "the Share short-link service returned too many bytes", 7);
+    if (error.code === "invalid-response") return new CLIError("CID_MISMATCH", "the Share short-link service returned content that does not match the link", 5);
+    return new CLIError("UNAVAILABLE", "the Share short-link service is unavailable; try again shortly", 4);
   }
   if (error instanceof ShareNotifyError) {
     return new CLIError("INVALID_ARGUMENT", error.message, 2);
   }
   if (error instanceof SharePublishError) {
     const exit = error.code === "authority-required" ? 3 : error.code === "max-bytes-exceeded" ? 7 : 2;
-    const code4 = error.code === "authority-required" ? "AUTH_REQUIRED" : error.code === "max-bytes-exceeded" ? "MAX_BYTES_EXCEEDED" : "INVALID_ARGUMENT";
-    return new CLIError(code4, error.message, exit);
+    const code5 = error.code === "authority-required" ? "AUTH_REQUIRED" : error.code === "max-bytes-exceeded" ? "MAX_BYTES_EXCEEDED" : "INVALID_ARGUMENT";
+    return new CLIError(code5, error.message, exit);
   }
   if (error instanceof ShareReceiveError) {
     const verification = /* @__PURE__ */ new Set(["cid-mismatch", "decrypt-failed", "envelope-invalid", "origin-mismatch", "signature-invalid", "capability-invalid", "content-integrity-failed"]);
     const exit = error.code === "max-bytes-exceeded" ? 7 : verification.has(error.code) ? 5 : error.code === "expired" || error.code === "fetch-failed" ? 4 : error.code === "invalid-link" || error.code === "unsupported-target" ? 2 : 2;
-    const code4 = error.code === "fetch-failed" ? "NOT_FOUND" : error.code.replaceAll("-", "_").toUpperCase();
-    return new CLIError(code4, error.message, exit);
+    const code5 = error.code === "fetch-failed" ? "NOT_FOUND" : error.code.replaceAll("-", "_").toUpperCase();
+    return new CLIError(code5, error.message, exit);
   }
   const storageFull = storageFullError(error);
   if (storageFull) return storageFull;
@@ -28898,13 +30708,45 @@ function inputUrl(value, stdin) {
   if (value === void 0 || value.length === 0) throw new CLIError("INVALID_ARGUMENT", "a share URL or - is required", 2);
   return Promise.resolve(value);
 }
+function resolveLink(link4, expectedOrigin) {
+  return shareServices.shortLinks?.resolve(link4, expectedOrigin) ?? resolveShortLink(link4, { expectedOrigin });
+}
+function assertTrustedShareOrigin(link4, expectedOrigin) {
+  if (URL.canParse(link4) && new URL(link4).origin !== expectedOrigin) {
+    throw new ShareReceiveError("origin-mismatch", "share link origin is not the trusted Share origin");
+  }
+}
+var SHORT_LINK_WARNING = {
+  "rate-limited": "the short-link service is rate limiting this client",
+  capacity: "the short-link service is at capacity",
+  rejected: "the short-link service refused this share",
+  unavailable: "the short-link service could not be reached",
+  "invalid-response": "the short-link service answered incorrectly",
+  "not-found": "the short-link service lost the link",
+  "too-large": "this share is too large for a short link",
+  "token-store-failed": "the short link's delete token could not be saved"
+};
+async function linkToShow(result, longLink) {
+  if (longLink || result.link.kind !== "policy" || shareServices.shortLinks === void 0) return { url: result.url };
+  try {
+    return { url: await shareServices.shortLinks.shorten(result) };
+  } catch (error) {
+    const code5 = error instanceof ShortLinkError ? error.code : "unavailable";
+    process.stderr.write(`Warning: no short link (${SHORT_LINK_WARNING[code5]}); printing the long link instead. It works, but it is long and some mail clients may break it.
+`);
+    return { url: result.url, shortLinkError: code5 };
+  }
+}
 async function inspectShareInputOnce(value, stdin, expectedOrigin, dependencies = {}) {
   const link4 = stdin || value === "-" ? await (dependencies.read ?? readBoundedUrlStdin)() : await inputUrl(value, false);
   try {
     parseNativeShareUrl(link4);
   } catch {
-    return (dependencies.inspect ?? inspectShare)(link4, { expectedOrigin });
+    const resolved = await resolveLink(link4, expectedOrigin);
+    assertTrustedShareOrigin(resolved, expectedOrigin);
+    return (dependencies.inspect ?? inspectShare)(resolved, { expectedOrigin });
   }
+  assertTrustedShareOrigin(link4, expectedOrigin);
   throw new CLIError("UNSUPPORTED_LINK", "native bearer links are opaque; receive the link to verify access", 2);
 }
 function jsonOutput(options, command) {
@@ -28977,7 +30819,7 @@ function assertAggregateInputLimit(inputs, maxBytes) {
 }
 function registerShareCommand(program2) {
   const share = program2.command("share").description("Publish and consume TinyCloud Share links");
-  share.command("publish <files...>").description("Publish one or more bounded files as a Share, or a folder with an index.html as one self-contained page (anyone links only)").option("--name <filename>", "Filename for stdin input, or the published .html name of a folder").option("--to <target>", "Share target", "anyone").option("--notify", "Email an exact-email recipient, or a domain mailbox on node 1.17.3+").option("--notify-to <address>", "Mailbox to invite for --to domain:<name> --notify (node 1.17.3+)").option("--expires <duration>", "Share lifetime").option("--max-bytes <bytes>", "Bound input bytes").option("--media-type <type>", "Media type for a single input").option("--action <actions...>", "Addressed permission: read, list, or edit").option("--prefix", "Publish multiple inputs beneath one addressed prefix").option("--binary", "Allow non-UTF-8 bearer content").option("--artifact <id>", 'Publish as the next write-once version of an artifact ("new" starts one); the share is pinned to that version').addOption(new Option("--ongoing").hideHelp()).option("--note <text>", "Note stored with the artifact version").option("--json", "Print versioned redacted JSON").option("--viewer-origin <origin>", "Canonical HTTPS viewer origin", SHARE_ORIGIN).action(async (files, options, command) => {
+  share.command("publish <files...>").description("Publish one or more bounded files as a Share, or a folder with an index.html as one self-contained page (anyone links only)").option("--name <filename>", "Filename for stdin input, or the published .html name of a folder").option("--to <target>", "Share target", "anyone").option("--notify", "Email an exact-email recipient, or a domain mailbox on node 1.17.3+").option("--notify-to <address>", "Mailbox to invite for --to domain:<name> --notify (node 1.17.3+)").option("--expires <duration>", "Share lifetime").option("--max-bytes <bytes>", "Bound input bytes").option("--media-type <type>", "Media type for a single input").option("--action <actions...>", "Addressed permission: read, list, or edit").option("--prefix", "Publish multiple inputs beneath one addressed prefix").option("--binary", "Allow non-UTF-8 bearer content").option("--artifact <id>", 'Publish as the next write-once version of an artifact ("new" starts one); the share is pinned to that version').addOption(new Option("--ongoing").hideHelp()).option("--note <text>", "Note stored with the artifact version").option("--json", "Print versioned redacted JSON").option("--long-link", "Print the long self-contained link instead of a short link (addressed shares)").option("--viewer-origin <origin>", "Canonical HTTPS viewer origin", SHARE_ORIGIN).action(async (files, options, command) => {
     try {
       const json = jsonOutput(options, command);
       if (options.ongoing === true) throw new CLIError("UNSUPPORTED_TARGET", ONGOING_UNAVAILABLE, 2);
@@ -29038,7 +30880,7 @@ function registerShareCommand(program2) {
         notify: options.notify === true,
         // The artifact request rides on the adapter call rather than through `publishTargetShare`, whose code is part of
         // the browser bundles (the web-sdk size ceiling counts every byte it carries).
-        targetAdapter: artifact === void 0 || shareServices.targetAdapter === void 0 ? shareServices.targetAdapter : { publish: (request) => shareServices.targetAdapter.publish({ ...request, artifact }) }
+        targetAdapter: artifact === void 0 || shareServices.targetAdapter === void 0 ? shareServices.targetAdapter : { publish: (request2) => shareServices.targetAdapter.publish({ ...request2, artifact }) }
       });
       if ("state" in result) {
         if (json) {
@@ -29058,11 +30900,12 @@ function registerShareCommand(program2) {
       }
       if (result.metadata.expiryClamped === true) process.stderr.write(`Share expiry clamped to session expiry (${result.metadata.expiresAt}).
 `);
-      if (json) writeJson2({ ...redactPublishedShare(result), history: history2, expiryClamped: result.metadata.expiryClamped === true, ...artifact === void 0 || result.metadata.artifact === void 0 ? {} : { artifactId: result.metadata.artifact.id, version: result.metadata.artifact.version, mode: result.metadata.artifact.mode }, ...notification === void 0 ? {} : { notification } });
+      const shown = await linkToShow(result, options.longLink === true);
+      if (json) writeJson2({ ...redactPublishedShare(result), history: history2, expiryClamped: result.metadata.expiryClamped === true, ...artifact === void 0 || result.metadata.artifact === void 0 ? {} : { artifactId: result.metadata.artifact.id, version: result.metadata.artifact.version, mode: result.metadata.artifact.mode }, ...notification === void 0 ? {} : { notification }, ...shown.shortLinkError === void 0 ? {} : { shortLinkError: shown.shortLinkError } });
       else {
         if (result.metadata.artifact !== void 0) process.stderr.write(`Artifact ${result.metadata.artifact.id} v${result.metadata.artifact.version} (${result.metadata.artifact.mode})
 `);
-        publishHuman(result);
+        publishHuman(shown.url);
       }
     } catch (error) {
       return handleError(shareCliError(error));
@@ -29126,6 +30969,7 @@ function registerShareCommand(program2) {
       } catch {
       }
       if (nativeLink) {
+        assertTrustedShareOrigin(link4, options.viewerOrigin);
         if (shareServices.nativeReader === void 0) throw new CLIError("AUTH_REQUIRED", "native TinyCloud receive is not configured", 3);
         const native = await shareServices.nativeReader(link4);
         if (maxBytes !== void 0 && native.bytes.byteLength > maxBytes) throw new CLIError("MAX_BYTES_EXCEEDED", "shared content exceeds max-bytes", 7);
@@ -29138,7 +30982,9 @@ function registerShareCommand(program2) {
         else receiveHuman(output2);
         return;
       }
-      const result = await receiveShare(link4, {
+      const resolved = await resolveLink(link4, options.viewerOrigin);
+      assertTrustedShareOrigin(resolved, options.viewerOrigin);
+      const result = await receiveShare(resolved, {
         expectedOrigin: options.viewerOrigin,
         ...maxBytes === void 0 ? {} : { maxContentBlobBytes: maxBytes }
       });
@@ -29167,7 +31013,7 @@ function registerShareCommand(program2) {
       if (shareServices.records === void 0) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);
       const result = await listShares(shareServices.records);
       if (json) writeJson2({ protocol: "tinycloud-share", version: 1, shares: result });
-      else process.stdout.write(result.map((item) => `${item.shareId}	${item.target}	${item.expiresAt}`).join("\n") + (result.length ? "\n" : ""));
+      else process.stdout.write(result.map((item) => `${item.shareId}	${item.target}	${item.expiresAt}	${item.revoked ? "revoked" : Date.parse(item.expiresAt) < Date.now() ? "expired" : "active"}`).join("\n") + (result.length ? "\n" : ""));
     } catch (error) {
       return handleError(shareCliError(error));
     }
@@ -29177,7 +31023,9 @@ function registerShareCommand(program2) {
       const json = jsonOutput(options, command);
       if (options.revealLink && json) throw new CLIError("INVALID_ARGUMENT", "--reveal-link cannot be combined with --json", 2);
       if (shareServices.records === void 0) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);
-      const result = await showShare({ storage: shareServices.records, shareId: id, revealLink: options.revealLink === true, link: options.revealLink ? await shareServices.linkFor?.(id) : void 0 });
+      const record2 = options.revealLink === true ? await shareServices.records.get(id) : void 0;
+      const link4 = record2 === void 0 ? void 0 : await shareServices.shortLinks?.linkFor(record2);
+      const result = await showShare({ storage: shareServices.records, shareId: id, revealLink: options.revealLink === true, ...link4 === void 0 ? {} : { link: link4 } });
       if (json) writeJson2({ protocol: "tinycloud-share", version: 1, share: result });
       else writeJson2(result);
     } catch (error) {
@@ -29221,7 +31069,9 @@ function registerShareCommand(program2) {
       if (result.state === "unsupported") {
         throw new CLIError("UNSUPPORTED_TARGET", result.reason, 2);
       }
-      if (json) writeJson2({ protocol: "tinycloud-share", version: 1, result });
+      const shortLink = await shareServices.shortLinks?.discard(record2) ?? "none";
+      if (shortLink === "failed") process.stderr.write("Warning: the share is revoked, but its short link could not be removed; it stops resolving when the share expires.\n");
+      if (json) writeJson2({ protocol: "tinycloud-share", version: 1, result, ...shortLink === "none" ? {} : { shortLink } });
       else process.stdout.write(`${result.state}
 `);
     } catch (error) {
@@ -29309,7 +31159,8 @@ configureShareCommandServices({
   assertDomainDelivery: shareAuthority.assertDomainDelivery,
   revocation: shareAuthority.revocation,
   nativeReader: shareAuthority.nativeReader,
-  artifactStore: shareAuthority.artifactStore
+  artifactStore: shareAuthority.artifactStore,
+  shortLinks: shareAuthority.shortLinks
 });
 var argv = process.argv.slice(2);
 var globalLongOptionsWithValues = { "--profile": true, "--host": true };
@@ -29355,8 +31206,8 @@ ${theme.muted("Repo:")} ${theme.accent("https://github.com/tinycloudlabs/web-sdk
 });
 var commandToken = firstCommandToken(argv);
 if (argv[0] === "courier") {
-  const code4 = await (await loadCourierEntry()).runCourier(argv.slice(1));
-  if (code4 !== 0) process.exit(code4);
+  const code5 = await (await loadCourierEntry()).runCourier(argv.slice(1));
+  if (code5 !== 0) process.exit(code5);
 } else if (commandToken === "courier") {
   process.stderr.write(`${TC_OPTIONS_BEFORE_COURIER}
 `);

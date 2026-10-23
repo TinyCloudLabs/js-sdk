@@ -1,0 +1,653 @@
+[
+  {
+    "id": "G1 drop issuer DID check",
+    "file": "src/credentials/email-proof.ts",
+    "find": "descriptor.issuer.did !== EMAIL_PROOF_PINS.issuerDid || ",
+    "replace": "",
+    "all": false
+  },
+  {
+    "id": "G1 drop origin check",
+    "file": "src/credentials/email-proof.ts",
+    "find": "descriptor.issuer.origin !== EMAIL_PROOF_PINS.witnessOrigin || ",
+    "replace": "",
+    "all": false
+  },
+  {
+    "id": "G1 drop required-step check",
+    "file": "src/credentials/email-proof.ts",
+    "find": " || !descriptor.steps.some((candidate) => candidate.type === pin.requiredStep)",
+    "replace": "",
+    "all": false
+  },
+  {
+    "id": "G1 drop descriptor digest check",
+    "file": "src/credentials/email-proof.ts",
+    "find": "if (await canonicalDigest(descriptor) !== pin.descriptorDigest) throw new EmailProofError(step, \"PROFILE_UNAVAILABLE\");",
+    "replace": "",
+    "all": false
+  },
+  {
+    "id": "G1 profile pin digest from catalog instead of pin",
+    "file": "src/credentials/email-proof.ts",
+    "find": "descriptorDigest: EMAIL_PROOF_PINS.descriptorDigest, requiredStep",
+    "replace": "descriptorDigest: \"x\", requiredStep",
+    "all": false
+  },
+  {
+    "id": "G1 discovery URL to caller-controlled origin",
+    "file": "src/credentials/email-proof.ts",
+    "find": "const DISCOVERY_URL = `${EMAIL_PROOF_PINS.witnessOrigin}/.well-known/opencredentials`;",
+    "replace": "const DISCOVERY_URL = `https://evil.example/.well-known/opencredentials`;",
+    "all": false
+  },
+  {
+    "id": "G1 pinned metadata origin/issuer unused: keys from metadata",
+    "file": "src/credentials/email-proof.ts",
+    "find": "keys, cache: { maxAgeSeconds: 3600",
+    "replace": "keys: [], cache: { maxAgeSeconds: 3600",
+    "all": false
+  },
+  {
+    "id": "G2 complete honours input.issuerKeys",
+    "file": "src/credentials/email-proof.ts",
+    "find": "return completeWithIssuerKeys(input, EMAIL_PROOF_ISSUER_KEYS);",
+    "replace": "return completeWithIssuerKeys(input, (input as any).issuerKeys ?? EMAIL_PROOF_ISSUER_KEYS);",
+    "all": false
+  },
+  {
+    "id": "G2 acquire honours input.issuerKeys",
+    "file": "src/credentials/email-proof.ts",
+    "find": "return acquireWithIssuerKeys(input, EMAIL_PROOF_ISSUER_KEYS);",
+    "replace": "return acquireWithIssuerKeys(input, (input as any).issuerKeys ?? EMAIL_PROOF_ISSUER_KEYS);",
+    "all": false
+  },
+  {
+    "id": "G2 drop pinned keys from credential verification",
+    "file": "src/credentials/email-proof.ts",
+    "find": "issuerMetadata: pinnedIssuerMetadata(issuerKeys),",
+    "replace": "issuerMetadata: pinnedIssuerMetadata([]),",
+    "all": false
+  },
+  {
+    "id": "G3 verifier enumerable",
+    "file": "src/credentials/email-proof.ts",
+    "find": "hide(pending, \"verifier\", fields.verifier);",
+    "replace": "(pending as any).verifier = fields.verifier;",
+    "all": false
+  },
+  {
+    "id": "G3 drop toJSON",
+    "file": "src/credentials/email-proof.ts",
+    "find": "hide(pending, \"toJSON\", () => ({ ...shown }));",
+    "replace": "",
+    "all": false
+  },
+  {
+    "id": "G3 toJSON includes verifier",
+    "file": "src/credentials/email-proof.ts",
+    "find": "hide(pending, \"toJSON\", () => ({ ...shown }));",
+    "replace": "hide(pending, \"toJSON\", () => ({ ...shown, verifier: fields.verifier }));",
+    "all": false
+  },
+  {
+    "id": "G3 drop inspect.custom",
+    "file": "src/credentials/email-proof.ts",
+    "find": "hide(pending, INSPECT, () => ({ ...shown, verifier: \"[redacted]\" }));",
+    "replace": "",
+    "all": false
+  },
+  {
+    "id": "G3 inspect.custom shows verifier",
+    "file": "src/credentials/email-proof.ts",
+    "find": "verifier: \"[redacted]\"",
+    "replace": "verifier: fields.verifier",
+    "all": false
+  },
+  {
+    "id": "G3 file store returns unredacted object",
+    "file": "src/credential-pending-store.ts",
+    "find": "const pending = restoreFromFile(value);",
+    "replace": "const pending = value as unknown as EmailProofPending;",
+    "all": false
+  },
+  {
+    "id": "G4 ISSUER_UNREADY recoverable forced false",
+    "file": "src/credentials/email-proof.ts",
+    "find": "new EmailProofError(step, \"ISSUER_UNAVAILABLE\", undefined, error.recoverable)",
+    "replace": "new EmailProofError(step, \"ISSUER_UNAVAILABLE\", undefined, false)",
+    "all": false
+  },
+  {
+    "id": "G4 ISSUER_UNREADY recoverable forced true",
+    "file": "src/credentials/email-proof.ts",
+    "find": "new EmailProofError(step, \"ISSUER_UNAVAILABLE\", undefined, error.recoverable)",
+    "replace": "new EmailProofError(step, \"ISSUER_UNAVAILABLE\", undefined, true)",
+    "all": false
+  },
+  {
+    "id": "G4 PROOF_REJECTED recoverable forced false",
+    "file": "src/credentials/email-proof.ts",
+    "find": "return new EmailProofError(\"code\", \"CODE_REJECTED\", undefined, true);",
+    "replace": "return new EmailProofError(\"code\", \"CODE_REJECTED\", undefined, false);",
+    "all": false
+  },
+  {
+    "id": "G4 transport ignores server flag (all)",
+    "file": "src/credentials/transport.ts",
+    "find": "recoverable: honorServerRecoverable ? body.recoverable : undefined",
+    "replace": "recoverable: undefined",
+    "all": true
+  },
+  {
+    "id": "G4 transport honours server flag even when option off",
+    "file": "src/credentials/transport.ts",
+    "find": "honorServerRecoverable ? body.recoverable : undefined",
+    "replace": "body.recoverable",
+    "all": true
+  },
+  {
+    "id": "G4 bare 503 non-recoverable (transport)",
+    "file": "src/credentials/transport.ts",
+    "find": "\"Credential issuer is not ready\", { retryAfterMs",
+    "replace": "\"Credential issuer is not ready\", { recoverable: false, retryAfterMs",
+    "all": false
+  },
+  {
+    "id": "G4 driver honorServerRecoverable false",
+    "file": "src/credentials/email-proof.ts",
+    "find": "{ honorServerRecoverable: true }",
+    "replace": "{ honorServerRecoverable: false }",
+    "all": true
+  },
+  {
+    "id": "G4 NETWORK default recoverable false",
+    "file": "src/credentials/email-proof.ts",
+    "find": "  NETWORK: true,",
+    "replace": "  NETWORK: false,",
+    "all": false
+  },
+  {
+    "id": "G4 OFFLINE -> NETWORK non-recoverable",
+    "file": "src/credentials/email-proof.ts",
+    "find": "return new EmailProofError(step, \"NETWORK\");\n    case \"UNSUPPORTED_PROFILE\"",
+    "replace": "return new EmailProofError(step, \"NETWORK\", undefined, false);\n    case \"UNSUPPORTED_PROFILE\"",
+    "all": false
+  },
+  {
+    "id": "G4 TimeoutError non-recoverable",
+    "file": "src/credentials/email-proof.ts",
+    "find": "return new EmailProofError(step, \"NETWORK\");\n  const error",
+    "replace": "return new EmailProofError(step, \"NETWORK\", undefined, false);\n  const error",
+    "all": false
+  },
+  {
+    "id": "G4 attempts-exhausted mapping removed",
+    "file": "src/credentials/email-proof.ts",
+    "find": "if (details.state === \"proof_attempts_exhausted\") return new EmailProofError(\"code\", \"CODE_ATTEMPTS_EXHAUSTED\");",
+    "replace": "",
+    "all": false
+  },
+  {
+    "id": "G4 RATE_LIMITED forced recoverable",
+    "file": "src/credentials/email-proof.ts",
+    "find": "new EmailProofError(step, \"RATE_LIMITED\", details.retryAfterMs, error.recoverable)",
+    "replace": "new EmailProofError(step, \"RATE_LIMITED\", details.retryAfterMs, true)",
+    "all": false
+  },
+  {
+    "id": "G4 SIGNATURE_REJECTED -> forced non-recoverable",
+    "file": "src/credentials/email-proof.ts",
+    "find": "return new EmailProofError(\"credential\", \"SIGNATURE_REJECTED\", undefined, error.recoverable);",
+    "replace": "return new EmailProofError(\"credential\", \"SIGNATURE_REJECTED\", undefined, false);",
+    "all": false
+  },
+  {
+    "id": "G4 delete-on-failure never",
+    "file": "src/credentials/email-proof.ts",
+    "find": "if (!(error instanceof EmailProofError && error.recoverable)) await store?.delete",
+    "replace": "if (false) await store?.delete",
+    "all": false
+  },
+  {
+    "id": "G4 delete-on-failure always",
+    "file": "src/credentials/email-proof.ts",
+    "find": "if (!(error instanceof EmailProofError && error.recoverable)) await store?.delete",
+    "replace": "if (true) await store?.delete",
+    "all": false
+  },
+  {
+    "id": "G4 no delete after success",
+    "file": "src/credentials/email-proof.ts",
+    "find": "try { await store.delete(pending.requestId); } catch {",
+    "replace": "try { } catch {",
+    "all": false
+  },
+  {
+    "id": "G4 delete failure after success propagates",
+    "file": "src/credentials/email-proof.ts",
+    "find": "} catch { warnings.push(\"The pending request could not be deleted after success; it expires at its deadline.\"); }",
+    "replace": "} catch (e) { throw e; }",
+    "all": false
+  },
+  {
+    "id": "G5 read O_NOFOLLOW removed",
+    "file": "src/credential-pending-store.ts",
+    "find": "fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW",
+    "replace": "fs.constants.O_RDONLY",
+    "all": false
+  },
+  {
+    "id": "G5 write O_NOFOLLOW removed",
+    "file": "src/credential-pending-store.ts",
+    "find": " | fs.constants.O_NOFOLLOW, 0o600",
+    "replace": ", 0o600",
+    "all": false
+  },
+  {
+    "id": "G5 write O_EXCL removed",
+    "file": "src/credential-pending-store.ts",
+    "find": "fs.constants.O_CREAT | fs.constants.O_EXCL | ",
+    "replace": "fs.constants.O_CREAT | ",
+    "all": false
+  },
+  {
+    "id": "G5 read isFile (lstat) refusal removed",
+    "file": "src/credential-pending-store.ts",
+    "find": "if (!before.isFile()) {",
+    "replace": "if (false) {",
+    "all": false
+  },
+  {
+    "id": "G5 write existing-not-file refusal removed",
+    "file": "src/credential-pending-store.ts",
+    "find": "if (existing && !existing.isFile()) {",
+    "replace": "if (false) {",
+    "all": false
+  },
+  {
+    "id": "G5 group/world mode check removed",
+    "file": "src/credential-pending-store.ts",
+    "find": "if ((mode & 0o077) !== 0) {",
+    "replace": "if (false) {",
+    "all": false
+  },
+  {
+    "id": "G5 owner check removed",
+    "file": "src/credential-pending-store.ts",
+    "find": "st.uid !== process.getuid()",
+    "replace": "false",
+    "all": false
+  },
+  {
+    "id": "G5 nlink check removed",
+    "file": "src/credential-pending-store.ts",
+    "find": "if (opened.nlink !== 1) {",
+    "replace": "if (false) {",
+    "all": false
+  },
+  {
+    "id": "G5 dev/ino identity check removed",
+    "file": "src/credential-pending-store.ts",
+    "find": "opened.dev !== before.dev || opened.ino !== before.ino",
+    "replace": "false",
+    "all": false
+  },
+  {
+    "id": "G5 dir isDirectory refusal removed (both)",
+    "file": "src/credential-pending-store.ts",
+    "find": "if (!st.isDirectory()) {",
+    "replace": "if (false) {",
+    "all": true
+  },
+  {
+    "id": "G5 symlinked home refusal removed",
+    "file": "src/credential-pending-store.ts",
+    "find": "if (st?.isSymbolicLink()) {",
+    "replace": "if (false) {",
+    "all": false
+  },
+  {
+    "id": "G5 absolute home check removed",
+    "file": "src/credential-pending-store.ts",
+    "find": "typeof home !== 'string' || home.length === 0 || !path.isAbsolute(home)",
+    "replace": "typeof home !== 'string'",
+    "all": false
+  },
+  {
+    "id": "G5 empty home allowed",
+    "file": "src/credential-pending-store.ts",
+    "find": "typeof home !== 'string' || home.length === 0 || !path.isAbsolute(home)",
+    "replace": "typeof home !== 'string' || !path.isAbsolute(path.resolve(home))",
+    "all": false
+  },
+  {
+    "id": "G5 fchmod removed",
+    "file": "src/credential-pending-store.ts",
+    "find": "fs.fchmodSync(fd, 0o600);",
+    "replace": "",
+    "all": false
+  },
+  {
+    "id": "G5 dir chmod 0700 removed (all)",
+    "file": "src/credential-pending-store.ts",
+    "find": "fs.chmodSync(dir, 0o700);",
+    "replace": "",
+    "all": true
+  },
+  {
+    "id": "G5 mkdir mode 0700 removed",
+    "file": "src/credential-pending-store.ts",
+    "find": "fs.mkdirSync(dir, { mode: 0o700 });",
+    "replace": "fs.mkdirSync(dir);",
+    "all": false
+  },
+  {
+    "id": "G5 file mode 0600 -> 0644 at create",
+    "file": "src/credential-pending-store.ts",
+    "find": "fs.constants.O_NOFOLLOW, 0o600);",
+    "replace": "fs.constants.O_NOFOLLOW, 0o644);",
+    "all": false
+  },
+  {
+    "id": "G5 filename/requestId binding check removed",
+    "file": "src/credential-pending-store.ts",
+    "find": "pendingFile(home, value.requestId) !== file || ",
+    "replace": "",
+    "all": false
+  },
+  {
+    "id": "G5 put window check removed",
+    "file": "src/credential-pending-store.ts",
+    "find": "if (exceedsWindow(pending)) {",
+    "replace": "if (false) {",
+    "all": false
+  },
+  {
+    "id": "G5 read window check removed",
+    "file": "src/credential-pending-store.ts",
+    "find": " || exceedsWindow(value))",
+    "replace": ")",
+    "all": false
+  },
+  {
+    "id": "G5 expired record not deleted",
+    "file": "src/credential-pending-store.ts",
+    "find": "if (expired) removeFile(file);",
+    "replace": "",
+    "all": false
+  },
+  {
+    "id": "G5 stale tmp sweep removed",
+    "file": "src/credential-pending-store.ts",
+    "find": "if (st && now.getTime() - st.mtimeMs > EMAIL_PROOF_PENDING_MAX_MS) removeFile(file);",
+    "replace": "",
+    "all": false
+  },
+  {
+    "id": "G5 findLive picks oldest",
+    "file": "src/credential-pending-store.ts",
+    "find": "Date.parse(entry.pending.createdAt) > Date.parse(newest.createdAt)",
+    "replace": "Date.parse(entry.pending.createdAt) < Date.parse(newest.createdAt)",
+    "all": false
+  },
+  {
+    "id": "G5 findLive ignores address",
+    "file": "src/credential-pending-store.ts",
+    "find": "entry.pending.address !== address",
+    "replace": "false",
+    "all": false
+  },
+  {
+    "id": "G5 findLive returns expired",
+    "file": "src/credential-pending-store.ts",
+    "find": "if (entry.expired || entry.pending.address",
+    "replace": "if (entry.pending.address",
+    "all": false
+  },
+  {
+    "id": "G5 get returns expired",
+    "file": "src/credential-pending-store.ts",
+    "find": "entry === undefined || entry.expired ? undefined : entry.pending",
+    "replace": "entry === undefined ? undefined : entry.pending",
+    "all": false
+  },
+  {
+    "id": "G5 memory store: findLive returns expired (no prune)",
+    "file": "src/credentials/email-proof.ts",
+    "find": "    async findLive(address, now) {\n      prune(now);",
+    "replace": "    async findLive(address, now) {",
+    "all": false
+  },
+  {
+    "id": "G5 delete skips dir check",
+    "file": "src/credential-pending-store.ts",
+    "find": "if (!checkSecureDir(home)) return;\n        removeFile",
+    "replace": "removeFile",
+    "all": false
+  },
+  {
+    "id": "G6 no fragment strip",
+    "file": "src/credentials/email-proof.ts",
+    "find": "const bare = fragment === -1 ? did : did.slice(0, fragment);",
+    "replace": "const bare = did;",
+    "all": false
+  },
+  {
+    "id": "G6 any fragment accepted",
+    "file": "src/credentials/email-proof.ts",
+    "find": "if (fragment !== -1 && did.slice(fragment + 1) !== bare.slice(HOLDER_DID_PREFIX.length)) throw new EmailProofError(\"request\", \"HOLDER_INVALID\");",
+    "replace": "",
+    "all": false
+  },
+  {
+    "id": "G6 pattern allows #",
+    "file": "src/credentials/email-proof.ts",
+    "find": "/^did:key:z6Mk[^#]+$/",
+    "replace": "/^did:key:z6Mk.+$/",
+    "all": false
+  },
+  {
+    "id": "G6 signer.did keeps fragment",
+    "file": "src/credentials/email-proof.ts",
+    "find": "return { did: bare, alg: \"EdDSA\", kid: holderKid(bare), sign };",
+    "replace": "return { did, alg: \"EdDSA\", kid: holderKid(bare), sign };",
+    "all": false
+  },
+  {
+    "id": "G6 kid from fragment did",
+    "file": "src/credentials/email-proof.ts",
+    "find": "kid: holderKid(bare), sign",
+    "replace": "kid: holderKid(did), sign",
+    "all": false
+  },
+  {
+    "id": "G6 assertHolder pattern check removed",
+    "file": "src/credentials/email-proof.ts",
+    "find": "!HOLDER_DID_PATTERN.test(holder.did) || ",
+    "replace": "",
+    "all": false
+  },
+  {
+    "id": "G6 assertHolder alg check removed",
+    "file": "src/credentials/email-proof.ts",
+    "find": "holder.alg !== \"EdDSA\" || ",
+    "replace": "",
+    "all": false
+  },
+  {
+    "id": "G6 assertHolder kid check removed",
+    "file": "src/credentials/email-proof.ts",
+    "find": " || holder.kid !== holderKid(holder.did)",
+    "replace": "",
+    "all": false
+  },
+  {
+    "id": "G6 holder vs pending.holderDid check removed",
+    "file": "src/credentials/email-proof.ts",
+    "find": "if (input.holder.did !== pending.holderDid) throw",
+    "replace": "if (false) throw",
+    "all": false
+  },
+  {
+    "id": "O pendingDeadline cap removed",
+    "file": "src/credentials/email-proof.ts",
+    "find": "Math.min(Date.parse(pending.expiresAt), Date.parse(pending.createdAt) + EMAIL_PROOF_PENDING_MAX_MS)",
+    "replace": "Date.parse(pending.expiresAt)",
+    "all": false
+  },
+  {
+    "id": "O completion deadline check removed",
+    "file": "src/credentials/email-proof.ts",
+    "find": "if (pendingDeadlineMs(pending) <= now().getTime()) throw new EmailProofError(\"session\", \"SESSION_EXPIRED\");",
+    "replace": "",
+    "all": false
+  },
+  {
+    "id": "O openerOrigin check removed",
+    "file": "src/credentials/email-proof.ts",
+    "find": "&& pending.openerOrigin === OPENER_ORIGIN",
+    "replace": "",
+    "all": false
+  },
+  {
+    "id": "O request expiry cap removed",
+    "file": "src/credentials/email-proof.ts",
+    "find": "Math.min(serverExpiry, createdAtMs + EMAIL_PROOF_PENDING_MAX_MS)",
+    "replace": "serverExpiry",
+    "all": false
+  },
+  {
+    "id": "O 15 minutes -> 150",
+    "file": "src/credentials/email-proof.ts",
+    "find": "export const EMAIL_PROOF_PENDING_MAX_MS = 15 * 60_000;",
+    "replace": "export const EMAIL_PROOF_PENDING_MAX_MS = 150 * 60_000;",
+    "all": false
+  },
+  {
+    "id": "O rate-limit ceil->floor",
+    "file": "src/credentials/email-proof.ts",
+    "find": "Math.ceil(retryAfterMs / 60_000)",
+    "replace": "Math.floor(retryAfterMs / 60_000)",
+    "all": false
+  },
+  {
+    "id": "O profile hasOwnProperty guard removed",
+    "file": "src/credentials/email-proof.ts",
+    "find": "Object.prototype.hasOwnProperty.call(PROFILE_PINS, profile) ? PROFILE_PINS[profile as EmailProofProfileId] : undefined",
+    "replace": "PROFILE_PINS[profile as EmailProofProfileId]",
+    "all": false
+  },
+  {
+    "id": "O profile enabled check removed",
+    "file": "src/credentials/email-proof.ts",
+    "find": "if (!entry || !entry.enabled)",
+    "replace": "if (!entry)",
+    "all": false
+  },
+  {
+    "id": "O requirement digest check removed",
+    "file": "src/credentials/email-proof.ts",
+    "find": "if (await credentialRequirementDigest(requirement) !== pending.requirementDigest) throw new EmailProofError(\"session\", \"SESSION_INVALID\");",
+    "replace": "",
+    "all": false
+  },
+  {
+    "id": "O descriptor digest vs pending check removed",
+    "file": "src/credentials/email-proof.ts",
+    "find": "if (descriptorDigest !== pending.descriptorDigest) throw new EmailProofError(\"session\", \"SESSION_INVALID\");",
+    "replace": "",
+    "all": false
+  },
+  {
+    "id": "O challengeRequired guard removed",
+    "file": "src/credentials/email-proof.ts",
+    "find": "if (state.nextStep?.constraints.challengeRequired === true) throw new EmailProofError(\"session\", \"SESSION_INVALID\");",
+    "replace": "",
+    "all": false
+  },
+  {
+    "id": "O code format check removed",
+    "file": "src/credentials/email-proof.ts",
+    "find": "if (!/^\\d{8}$/.test(input.code)) throw new EmailProofError(\"code\", \"CODE_INVALID\");",
+    "replace": "",
+    "all": false
+  },
+  {
+    "id": "O resume removed (acquire always requests)",
+    "file": "src/credentials/email-proof.ts",
+    "find": "let pending = store ? await store.findLive(address, now()) : undefined;",
+    "replace": "let pending: EmailProofPending | undefined = undefined;",
+    "all": false
+  },
+  {
+    "id": "O discovery caller-abort -> CANCELED removed",
+    "file": "src/credentials/email-proof.ts",
+    "find": "if (signal.aborted && (signal.reason as { name?: string } | undefined)?.name !== \"TimeoutError\") return new EmailProofError(step, \"CANCELED\");\n  return mapError",
+    "replace": "return mapError",
+    "all": false
+  },
+  {
+    "id": "O OFFLINE caller-abort -> CANCELED removed",
+    "file": "src/credentials/email-proof.ts",
+    "find": "      if (signal?.aborted && (signal.reason as { name?: string } | undefined)?.name !== \"TimeoutError\") return new EmailProofError(step, \"CANCELED\");\n",
+    "replace": "",
+    "all": false
+  },
+  {
+    "id": "O wire kid from signer replaced",
+    "file": "src/credentials/email-proof.ts",
+    "find": "holderKey: { alg: \"EdDSA\", kid: holder.kid }",
+    "replace": "holderKey: { alg: \"EdDSA\", kid: \"x\" }",
+    "all": false
+  },
+  {
+    "id": "O wire alg from signer replaced",
+    "file": "src/credentials/email-proof.ts",
+    "find": "holderKey: { alg: \"EdDSA\", kid: holder.kid }",
+    "replace": "holderKey: { alg: \"EIP191\" as never, kid: holder.kid }",
+    "all": false
+  },
+  {
+    "id": "O interpreter drops holderKey",
+    "file": "src/credentials/interpreter.ts",
+    "find": ", input.signing.holderKey)",
+    "replace": ")",
+    "all": false
+  },
+  {
+    "id": "O transport kid override removed",
+    "file": "src/credentials/transport.ts",
+    "find": "const kid = key?.kid ?? `",
+    "replace": "const kid = `",
+    "all": false
+  },
+  {
+    "id": "O transport alg override removed",
+    "file": "src/credentials/transport.ts",
+    "find": "alg: key?.alg ?? \"EdDSA\"",
+    "replace": "alg: \"EdDSA\"",
+    "all": false
+  },
+  {
+    "id": "O address normalisation removed",
+    "file": "src/credentials/email-proof.ts",
+    "find": "const value = address.trim();",
+    "replace": "const value = address;",
+    "all": false
+  },
+  {
+    "id": "O verifier randomness fixed",
+    "file": "src/credentials/email-proof.ts",
+    "find": "crypto.getRandomValues(new Uint8Array(32))",
+    "replace": "new Uint8Array(32)",
+    "all": false
+  },
+  {
+    "id": "O verifier challenge not sent (wrong hash)",
+    "file": "src/credentials/email-proof.ts",
+    "find": "completionVerifierChallenge: await sha256Base64Url(verifier),",
+    "replace": "completionVerifierChallenge: await sha256Base64Url(verifier + 'x'),",
+    "all": false
+  }
+]

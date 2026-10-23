@@ -515,7 +515,7 @@ describe("generic KV exploration operations", () => {
         status: "error",
         error: {
           code: "STORAGE_QUOTA_EXCEEDED",
-          message: `${sentence} Reading still works. Do not retry: the owner must free up space or upgrade at https://account.tinycloud.xyz/billing.`,
+          message: `${sentence} Reading still works. Do not retry: the owner must free up space or upgrade at https://account.tinycloud.xyz/storage.`,
           retryable: false,
           details: { account },
         },

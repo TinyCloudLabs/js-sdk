@@ -1,0 +1,52 @@
+{
+  "package_version": "0.1.0",
+  "endpoint": "https://mcp.tinycloud.xyz/chatgpt/mcp",
+  "status": "local engineering candidate validated; actual ChatGPT acceptance not run",
+  "case_results": [],
+  "required_case_ids": ["P01", "P02", "P03", "P04", "P05", "N01", "N02", "N03"],
+  "required_tools": ["tinycloud_connect", "tinycloud_apps_context", "tinycloud_apps_read", "tinycloud_apps_write", "tinycloud_apps_query"],
+  "engineering_evidence": {
+    "date": "2026-10-21",
+    "branch": "release/chatgpt-public-20261021",
+    "default_branch_integration": "Not authorized; explicit owner approval required for every repository. No auto-merge or deployment bypass.",
+    "mcp": "Build, TypeScript, generated artifacts and isolated MCP suite passed: 75 passed, one native-node case skipped because TC_MCP_TEST_NODE was unset. A separate built Node HTTP CLI smoke verified the exact five tools, excluded invocations, mutation annotations, separate audiences, approval callback, no public session DID, metadata/challenge and browser recovery. Synthetic local OAuth only.",
+    "personal_records": "31 existing operation tests passed. HTTP integration covered public and broad record write/read, prefix rejection and expired-approval recovery using the hermetic node. No production-record or ChatGPT acceptance claim.",
+    "openkey": "API TypeScript and real-provider DCR, consent, PKCE exchange and refresh passed for both resources. Exact callback rejection reproduced before the web allowlist fix; all eight callback-policy tests and actual policy smoke passed afterward. Sign-in methods and owner consent are unchanged.",
+    "documentation": "Candidate CLI/hosting pages rendered in the local Mintlify preview; actual HTTP recovery page inspected in Chromium.",
+    "package": "Canonical schema validation, deterministic archive/read-back and SHA-256 generation passed. Artifact tinycloud-0.1.0.zip: 16f8fd79a2b65df1dad875f8630a4806c373f438107da6ea0ec9b281bc9e175d.",
+    "deployment_access_preflight": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39613082008 succeeded without building or deploying. It does not establish deployment permission, the state secret, a deployed candidate or application acceptance."
+  },
+  "policy_findings": [
+    "The live privacy page reviewed on 2026-10-21 is dated November 13, 2024 and describes older Muse-related processing; approval for hosted MCP records, timezone, derived SQL, delegates, logs, recipients, retention and deletion has not been established.",
+    "The current Secrets footer Privacy and Terms links both resolve to its homepage; they are not usable policy documents. No approved terms-of-service URL is supplied.",
+    "An authorized operator must confirm retention and backup/history behavior, deletion versus access revocation, processor/hosting recipients, support ownership and launch countries. Do not invent these facts or promise physical erasure."
+  ],
+  "oauth": {
+    "registration": "dcr via OpenKey discovery",
+    "scopes": ["tinycloud:mcp"],
+    "resource": "https://mcp.tinycloud.xyz/chatgpt/mcp",
+    "verification": "not run in actual ChatGPT or the submission portal",
+    "configuration_note": "Canonical Agent Plugins 1.0.0 mcp.schema.json forbids per-server extensions, although OpenAI documents an extensions.com.openai.auth overlay. The package uses the schema-valid type/url configuration from OpenAI's complete submission example. OAuth registration and scopes must be discovered and verified in the portal; no claim of imported OAuth configuration is made."
+  },
+  "asset_source": "documentation/static/img/logo512.png in TinyCloudLabs/js-sdk",
+  "submission_gates": [
+    "Obtain explicit owner approval for all default-branch merges and deployment; PR preparation is not merge authorization.",
+    "Identify and deploy the isolated public candidate; record source revision and deployed digest.",
+    "Prove actual ChatGPT web/mobile OAuth, PKCE, refresh, expiry, revocation and exact five-tool discovery with resource-bound authority.",
+    "Provide authorized independent reviewer login without owner intervention, MFA approvals, email/SMS codes, magic links or private networking; credentials only in private portal fields.",
+    "Seed isolated synthetic fixtures and record all eight cases with observed outcomes, authoritative state proof, client versions and candidate/package identity.",
+    "Obtain approved privacy disclosures covering hosted plaintext processing, recipients, retention, deletion and derived copies; existing privacy URL is not proof of adequacy.",
+    "Supply a verified HTTPS terms-of-service URL and approve listing, branding, support route and country availability.",
+    "Provide a real accessible walkthrough recording URL; none is supplied by this package.",
+    "Validate the exact archive, complete actual portal import, verify OAuth discovery/settings, domain challenge, tool scan and required findings.",
+    "Authorized publisher completes identity, permissions and policy attestations; obtain actual review approval before explicit publication.",
+    "After publication, prove fresh directory installation and authoritative write/read-back on supported clients."
+  ],
+  "evidence_rules": "This file is excluded from the ZIP. Case definitions are not execution evidence. Packaging cannot establish import, deployment, submission readiness, review approval, publication or completion. Record actual results in the team's release artifact system, bound to ZIP SHA-256 and deployed candidate; never place credentials, tokens, approval URLs, real personal records or private transcripts in the package or public evidence.",
+  "sources": [
+    "https://developers.openai.com/plugins/build/plugins",
+    "https://developers.openai.com/plugins/deploy/submission",
+    "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+    "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json"
+  ]
+}

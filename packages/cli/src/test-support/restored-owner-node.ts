@@ -14,11 +14,14 @@ export async function restoredOwnerNode(params: {
   host: string;
   /** Signed abilities on `spaceId`; defaults to capabilities read only. */
   abilities?: Record<string, Record<string, string[]>>;
+  /** Signed raw encryption-network abilities (network URN → actions), outside any space. */
+  rawAbilities?: Record<string, string[]>;
 }): Promise<TinyCloudNode> {
   const address = await params.signer.getAddress();
   const now = Date.now();
   const prepared = params.wasm.prepareSession({
     abilities: params.abilities ?? { capabilities: { "": ["tinycloud.capabilities/read"] } },
+    ...(params.rawAbilities === undefined ? {} : { rawAbilities: params.rawAbilities }),
     address, chainId: 1, domain: "cli.example.test", spaceId: params.spaceId, jwk: params.sessionKey,
     issuedAt: new Date(now - 60_000).toISOString(),
     expirationTime: new Date(now + 3_600_000).toISOString(),

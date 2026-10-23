@@ -126,7 +126,7 @@ describe("a full TinyCloud account", () => {
         error: {
           code: "STORAGE_QUOTA_EXCEEDED",
           message: "TinyCloud storage is full; nothing was written.",
-          hint: "371.7 MiB used of 100 MiB (free plan). Reading still works.\nFree up space or upgrade: https://account.tinycloud.xyz/billing",
+          hint: "371.7 MiB used of 100 MiB (free plan). Reading still works.\nFree up space or upgrade: https://account.tinycloud.xyz/storage",
         },
       });
     }
@@ -142,7 +142,7 @@ describe("a full TinyCloud account", () => {
       error: {
         code: "STORAGE_QUOTA_EXCEEDED",
         message: 'Insert into "notes" failed after 2 row(s): TinyCloud storage is full.',
-        hint: "371.7 MiB used of 100 MiB (free plan). Reading still works.\nFree up space or upgrade: https://account.tinycloud.xyz/billing",
+        hint: "371.7 MiB used of 100 MiB (free plan). Reading still works.\nFree up space or upgrade: https://account.tinycloud.xyz/storage",
       },
     });
   });

@@ -102,6 +102,11 @@ The `Major release guard` check fails a PR that adds a `major` changeset or rais
 without that sign-off. The Release workflow applies the same rule before publishing betas and before
 graduating them to stable (TC-615).
 
+Every changeset a PR adds or modifies needs a line that starts `Details: TC-<number>` (several
+tickets: `Details: TC-1, TC-2`); the `Changeset details` check fails the PR otherwise. It becomes
+the ticket line in the package CHANGELOG. `.changeset/README.md`, `config.json` and `pre.json` are
+exempt, as are the `dependabot-*.md` changesets that `dependabot-changeset.yml` generates.
+
 Release runs queue and never cancel each other. Each run pushes its version commit to `master` and
 then publishes from that commit; if `master` moved first, the run fails without publishing and the
 next run releases the changesets. Before publishing, it fails if npm's copy of any current version
@@ -161,6 +166,14 @@ version metadata and make the immutable release checkout fail the clean-tree pub
   entry to `agent.changelog.md` so future agents can see what changed and why.
 - PR descriptions should list cross-repo dependencies, node/API implications, tests run, and any
   required changesets.
+- The public ChatGPT candidate is `/chatgpt/mcp`, not the broad `/mcp` service.
+  Tool bindings are public opt-in; keep recovery-tool mapping restricted to the
+  selected surface. Public approvals/state are separate and require matching
+  OpenKey audience and exact web callback registrations. Context/query mutate
+  timezone/derived data and are not read-only. Query responses remain bounded;
+  canonical write outcomes must not be truncated. Package/review state lives
+  under `packages/mcp/plugin`. Default-branch merges and deployment require
+  explicit owner approval; never enable auto-merge or bypass that gate.
 - Hosted personal apps live in `packages/operations/src/operations/apps.ts` and
   `src/tc-apps/`. The published skill is pinned under `src/tc-apps/vendor/`;
   update it with `bun scripts/sync-tc-apps-rules.ts`, then

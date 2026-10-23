@@ -31,6 +31,8 @@ const uploadedSpaces: string[] = [];
 const uploadedPaths: string[] = [];
 const encryptionSpaces: string[] = [];
 let sessionOnly = true;
+let holdsDecrypt = true;
+const decryptChecks: unknown[] = [];
 let invokerDid = credentialHolderDid;
 let nodeInfoStatus = 200;
 const nodeInfoRequests: RequestInit[] = [];
@@ -141,6 +143,10 @@ const node = {
   getEncryptionNetworkIdForSpace: (spaceId: string) => {
     encryptionSpaces.push(spaceId);
     return `urn:tinycloud:encryption:${credentialHolderDid}:default`;
+  },
+  hasRuntimePermissions: (entries: unknown) => {
+    decryptChecks.push(entries);
+    return holdsDecrypt;
   },
   encryption: {
     encryptToNetwork: async (networkId: string) => {
@@ -288,6 +294,8 @@ afterEach(() => {
   nativeSpaceId = "tinycloud:test-space";
   uploadedPaths.length = 0;
   sessionOnly = true;
+  holdsDecrypt = true;
+  decryptChecks.length = 0;
   invokerDid = credentialHolderDid;
   nodeInfoStatus = 200;
   nodeInfoRequests.length = 0;
@@ -714,6 +722,24 @@ describe("TinyCloud share authority adapter", () => {
     }
   });
 
+  it("names the Share service, not the node, when the public config cannot be fetched", async () => {
+    const cases: Array<[string, typeof globalThis.fetch]> = [
+      ["refused", (async () => { throw new TypeError("fetch failed"); }) as unknown as typeof globalThis.fetch],
+      ["HTTP 503", (async () => new Response("down", { status: 503 })) as unknown as typeof globalThis.fetch],
+    ];
+    for (const [label, fetchFn] of cases) {
+      const { targetAdapter } = createShareAuthorityAdapters({ origin: "https://share.example", profileName: async () => "test", fetchFn });
+      const outcome = await targetAdapter.publish({
+        source: new TextEncoder().encode("x"), filename: "readme.txt",
+        target: { kind: "email", address: "alice@example.com" },
+        expiresAt: new Date("2100-01-01T00:00:00.000Z"), expiryWasExplicit: false,
+        origin: "https://share.example", mediaType: "text/plain",
+      }).then(() => undefined, (error: unknown) => error);
+      expect({ label, failure: outcome instanceof SharePublishAuthorityError ? outcome.failure : outcome })
+        .toEqual({ label, failure: { kind: "share-service-unavailable", origin: "https://share.example" } });
+    }
+  });
+
   const addressedAdapter = () => createShareAuthorityAdapters({
     origin: "https://share.example",
     profileName: async () => "test",
@@ -963,6 +989,55 @@ describe("TinyCloud share authority adapter", () => {
     expect("state" in bearer).toBe(false);
     expect(preflightRequests).toEqual([]);
     expect(uploadedPaths).toHaveLength(2);
+  });
+
+  it("refuses an addressed share before any request when a session-only sign-in lacks decrypt on the encryption network (TC-1753)", async () => {
+    holdsDecrypt = false;
+    // Every request the adapter itself makes goes through this fetch; the Share config answers 503,
+    // so a refusal that came after the config fetch would surface as share-service-unavailable.
+    const requests: string[] = [];
+    const adapter = createShareAuthorityAdapters({
+      origin: "https://share.example",
+      profileName: async () => "test",
+      fetchFn: (async (input: string | URL | Request) => {
+        requests.push(String(input instanceof Request ? input.url : input));
+        return new Response(null, { status: 503 });
+      }) as unknown as typeof globalThis.fetch,
+    }).targetAdapter;
+    const error = await adapter.publish(addressedInput({ kind: "email", address: "owner@example.com" })).then(() => undefined, (caught: unknown) => caught);
+    expect(error).toBeInstanceOf(SharePublishAuthorityError);
+    expect((error as InstanceType<typeof SharePublishAuthorityError>).failure).toEqual({ kind: "decrypt-not-held" });
+    expect(decryptChecks).toEqual([[{
+      service: "tinycloud.encryption",
+      path: `urn:tinycloud:encryption:${credentialHolderDid}:default`,
+      actions: ["tinycloud.encryption/decrypt"],
+    }]]);
+    // No Share config fetch, registry write, upload, encryption, signing, policy registration or node probe.
+    expect(requests).toEqual([]);
+    expect(publishEvents).toEqual([]);
+    expect(uploadedPaths).toEqual([]);
+    expect(encryptions).toBe(0);
+    expect(ownerRootInputs).toEqual([]);
+    expect(sessionSignatures).toEqual([]);
+    expect(registeredPolicies).toEqual([]);
+    expect(nodeInfoRequests).toEqual([]);
+  });
+
+  it("still publishes addressed shares for a session that holds decrypt, and for a signer-backed owner without a session grant", async () => {
+    const held = await addressedAdapter().publish(addressedInput({ kind: "email", address: "owner@example.com" }));
+    expect("state" in held).toBe(false);
+    holdsDecrypt = false;
+    sessionOnly = false;
+    const local = await addressedAdapter().publish(addressedInput({ kind: "email", address: "owner@example.com" }));
+    expect("state" in local).toBe(false);
+    expect(uploadedPaths).toHaveLength(2);
+  });
+
+  it("does not ask for decrypt on a bearer share", async () => {
+    holdsDecrypt = false;
+    const bearer = await addressedAdapter().publish(addressedInput({ kind: "bearer" }));
+    expect("state" in bearer).toBe(false);
+    expect(decryptChecks).toEqual([]);
   });
 
   it("keeps a lost-response retry identical after the clock advances and the adapter is recreated", async () => {
