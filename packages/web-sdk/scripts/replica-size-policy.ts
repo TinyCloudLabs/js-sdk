@@ -1465,7 +1465,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
 export function validateLedger(value: Ledger, historicalBase = false): void {
   if (!value || !value.allowance || !Array.isArray(value.entries) ||
-      Object.keys(value).some((key) => !["allowance", "entries", "note", "pr", "ticket"].includes(key) && !Object.hasOwn(approvedLedgerRows, key))) {
+      Object.keys(value).some((key) => !["allowance", "entries"].includes(key) && !Object.hasOwn(approvedLedgerRows, key))) {
     throw new Error("Invalid packages/web-sdk/scripts/replica-size-ledger.json shape");
   }
   if (Object.keys(value.allowance).some((key) => !formats.includes(key as typeof formats[number]))) {

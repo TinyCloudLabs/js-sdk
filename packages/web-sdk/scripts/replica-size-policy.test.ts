@@ -32,7 +32,7 @@ const rootRowsInFileOrder = (ledger: Ledger) => {
   return Object.keys(ledger).filter((key) => rootRows.has(key));
 };
 const newestRootRow = () => rootRowsInFileOrder(current).at(-1)!;
-const ceilingOfRootRow = (row: string) => rootCeilings(current).find((entry) => entry.row === row)!.ceiling;
+const ceilingOfRootRow = (row: string) => (current as unknown as Record<string, { root: { ceiling: { "index.mjs": number; "index.cjs": number } } }>)[row]!.root.ceiling;
 const newestKvWorkerCeiling = () => {
   const rows = current as unknown as Record<string, { worker?: { ceiling: number } } | undefined>;
   const newest = Object.keys(rows).filter((key) => key !== "tc1827ReplicaWorkerRatchet" && rows[key]?.worker !== undefined).at(-1)!;
@@ -124,6 +124,12 @@ describe("TC-858 canonical size ratchet transition", () => {
       const invalidAllowance = copy(base);
       invalidAllowance.allowance["index.mjs"]++;
       expect(() => validateLedger(invalidAllowance, base === historical)).toThrow();
+    }
+  });
+
+  it("rejects any top-level key that is not allowance, entries, or an approved ledger row", () => {
+    for (const key of ["bogusRow", "note", "pr", "ticket", "constructor", "__proto__x"]) {
+      expect(() => validateLedger({ ...copy(current), [key]: {} } as Ledger)).toThrow("Invalid packages/web-sdk/scripts/replica-size-ledger.json shape");
     }
   });
 });
