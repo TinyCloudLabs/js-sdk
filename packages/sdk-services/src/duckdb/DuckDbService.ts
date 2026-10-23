@@ -27,6 +27,11 @@ import {
   parseServiceErrorBody,
   responseErrorMeta,
 } from "../responseErrors";
+import {
+  requestTooLargeError,
+  statementClassOf,
+  type StatementClass,
+} from "../statementSize";
 import type { IDuckDbService, IDuckDbDatabaseHandle } from "./IDuckDbService";
 import { DuckDbDatabaseHandle } from "./DuckDbDatabaseHandle";
 import {
@@ -217,7 +222,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "execute", duckDbSizeClass(sql));
+          return await this.handleErrorResponse(response, "execute", statementClassOf(sql));
         }
 
         const data = (await response.json()) as ExecuteResponse;
@@ -448,7 +453,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
   private async handleErrorResponse(
     response: FetchResponse,
     operation: string,
-    statementClass: SizeClass,
+    statementClass: StatementClass,
   ): Promise<Result<never>> {
     const errorText = await response.text();
     const meta = responseErrorMeta(response.status, response.statusText, errorText);
@@ -467,13 +472,9 @@ export class DuckDbService extends BaseService implements IDuckDbService {
 
     const errorBody = parseServiceErrorBody(errorText);
 
-    const sizeKind = response.status === 413 ? duckDbSizeKind(errorText, statementClass) : undefined;
-    const errorCode = sizeKind === "request"
-      ? ErrorCodes.DUCKDB_REQUEST_TOO_LARGE
-      : this.mapHttpStatusToErrorCode(response.status, errorBody.error);
-    const message = sizeKind === "request"
-      ? requestTooLargeMessage("DuckDB", operation, duckDbNodeRequestLimit(errorText))
-      : formatServiceResponseError("DuckDB", operation, response.status, errorText, errorBody);
+    const sized = response.status === 413 ? requestTooLargeError("duckdb", operation, errorText, statementClass) : undefined;
+    const errorCode = sized?.code ?? this.mapHttpStatusToErrorCode(response.status, errorBody.error);
+    const message = sized?.message ?? formatServiceResponseError("DuckDB", operation, response.status, errorText, errorBody);
 
     if (response.status === 401) {
       const { resource, action } = parseAuthError(errorText);
@@ -510,51 +511,4 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         return ErrorCodes.NETWORK_ERROR;
     }
   }
-}
-
-type SizeClass = "read" | "write" | "ambiguous";
-
-// The node names the cause with a stable code, alone or before the first colon of a 413
-// body. Without a code (older nodes), the statement decides: reads answer with
-// the response size, writes with the request size. Ambiguous statements (WITH,
-// EXPLAIN, ...) use the node's envelope text, else the response size.
-const DUCKDB_SIZE_CODES = {
-  request: "duckdb_request_too_large",
-  response: "duckdb_response_too_large",
-} as const;
-
-function duckDbSizeClass(sql: string): SizeClass {
-  // Skip leading whitespace and comments, as the SQL path does.
-  const body = sql.replace(/^(?:\s+|--[^\n]*|\/\*[\s\S]*?\*\/)*/, "");
-  const token = /^[A-Za-z_]+/.exec(body)?.[0].toLowerCase();
-  if (token === "select" || token === "values") return "read";
-  if (token === "with" || token === "explain" || token === "show" || token === "describe") return "ambiguous";
-  return "write";
-}
-
-function duckDbSizeCode(errorText: string): string {
-  const colon = errorText.indexOf(":");
-  return (colon === -1 ? errorText : errorText.slice(0, colon)).trim();
-}
-
-// The node's limit, shown in the request-side message only when the node coded the cause.
-const DUCKDB_NODE_LIMIT_CLAUSE = /\(limit (\d+) bytes\)/;
-
-function duckDbNodeRequestLimit(errorText: string): string | undefined {
-  if (duckDbSizeCode(errorText) !== DUCKDB_SIZE_CODES.request) return undefined;
-  return DUCKDB_NODE_LIMIT_CLAUSE.exec(errorText)?.[1];
-}
-
-function duckDbSizeKind(errorText: string, statementClass: SizeClass): "request" | "response" {
-  const code = duckDbSizeCode(errorText);
-  if (code === DUCKDB_SIZE_CODES.request) return "request";
-  if (code === DUCKDB_SIZE_CODES.response) return "response";
-  if (statementClass === "read") return "response";
-  if (statementClass === "write") return "request";
-  return errorText.includes("envelope limit") ? "request" : "response";
-}
-
-function requestTooLargeMessage(label: string, operation: string, nodeLimit?: string): string {
-  const limit = nodeLimit === undefined ? "" : ` (the node's limit is ${nodeLimit} bytes)`;
-  return `${label} ${operation} failed: request is too large${limit}. Split the batch into smaller requests.`;
 }

@@ -29,6 +29,12 @@ import {
   parseServiceErrorBody,
   responseErrorMeta,
 } from "../responseErrors";
+import {
+  firstSqlToken,
+  requestTooLargeError,
+  statementClassOf,
+  type StatementClass,
+} from "../statementSize";
 import type { ISQLService } from "./ISQLService";
 import type { IDatabaseHandle } from "./ISQLService";
 import { DatabaseHandle } from "./DatabaseHandle";
@@ -228,7 +234,7 @@ export class SQLService extends BaseService implements ISQLService {
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "execute", dbName, requestedActions, sqlSizeClass(sql));
+          return await this.handleErrorResponse(response, "execute", dbName, requestedActions, statementClassOf(sql));
         }
 
         const data = (await response.json()) as ExecuteResponse;
@@ -556,7 +562,7 @@ export class SQLService extends BaseService implements ISQLService {
     operation: string,
     dbName: string,
     requestedActions: readonly string[],
-    statementClass: SizeClass,
+    statementClass: StatementClass,
   ): Promise<Result<never>> {
     const errorText = await response.text();
     const meta = responseErrorMeta(response.status, response.statusText, errorText);
@@ -575,13 +581,9 @@ export class SQLService extends BaseService implements ISQLService {
 
     const errorBody = parseServiceErrorBody(errorText);
 
-    const sizeKind = response.status === 413 ? sqlSizeKind(errorText, statementClass) : undefined;
-    const errorCode = sizeKind === "request"
-      ? ErrorCodes.SQL_REQUEST_TOO_LARGE
-      : this.mapHttpStatusToErrorCode(response.status, errorBody.error);
-    const message = sizeKind === "request"
-      ? requestTooLargeMessage("SQL", operation, sqlNodeRequestLimit(errorText))
-      : formatServiceResponseError("SQL", operation, response.status, errorText, errorBody);
+    const sized = response.status === 413 ? requestTooLargeError("sql", operation, errorText, statementClass) : undefined;
+    const errorCode = sized?.code ?? this.mapHttpStatusToErrorCode(response.status, errorBody.error);
+    const message = sized?.message ?? formatServiceResponseError("SQL", operation, response.status, errorText, errorBody);
 
     if (response.status === 401) {
       const { action } = parseAuthError(errorText);
@@ -620,84 +622,6 @@ export class SQLService extends BaseService implements ISQLService {
         return ErrorCodes.NETWORK_ERROR;
     }
   }
-}
-
-function firstSqlToken(sql: string): string | undefined {
-  let index = 0;
-
-  while (index < sql.length) {
-    while (index < sql.length && /\s/.test(sql[index])) {
-      index++;
-    }
-
-    if (sql.startsWith("--", index)) {
-      const newline = sql.indexOf("\n", index + 2);
-      if (newline === -1) {
-        return undefined;
-      }
-      index = newline + 1;
-      continue;
-    }
-
-    if (sql.startsWith("/*", index)) {
-      const end = sql.indexOf("*/", index + 2);
-      if (end === -1) {
-        return undefined;
-      }
-      index = end + 2;
-      continue;
-    }
-
-    break;
-  }
-
-  const match = /^[A-Za-z_]+/.exec(sql.slice(index));
-  return match?.[0].toLowerCase();
-}
-
-type SizeClass = "read" | "write" | "ambiguous";
-
-// The node names the cause with a stable code, alone or before the first colon of a 413
-// body. Without a code (older nodes), the statement decides: reads answer with
-// the response size, writes with the request size. Ambiguous statements (WITH,
-// EXPLAIN, ...) use the node's envelope text, else the response size.
-const SQL_SIZE_CODES = {
-  request: "sql_request_too_large",
-  response: "sql_response_too_large",
-} as const;
-
-function sqlSizeClass(sql: string): SizeClass {
-  const token = firstSqlToken(sql);
-  if (token === "select" || token === "values") return "read";
-  if (token === "with" || token === "explain" || token === "show" || token === "describe") return "ambiguous";
-  return "write";
-}
-
-function sqlSizeCode(errorText: string): string {
-  const colon = errorText.indexOf(":");
-  return (colon === -1 ? errorText : errorText.slice(0, colon)).trim();
-}
-
-// The node's limit, shown in the request-side message only when the node coded the cause.
-const SQL_NODE_LIMIT_CLAUSE = /\(limit (\d+) bytes\)/;
-
-function sqlNodeRequestLimit(errorText: string): string | undefined {
-  if (sqlSizeCode(errorText) !== SQL_SIZE_CODES.request) return undefined;
-  return SQL_NODE_LIMIT_CLAUSE.exec(errorText)?.[1];
-}
-
-function sqlSizeKind(errorText: string, statementClass: SizeClass): "request" | "response" {
-  const code = sqlSizeCode(errorText);
-  if (code === SQL_SIZE_CODES.request) return "request";
-  if (code === SQL_SIZE_CODES.response) return "response";
-  if (statementClass === "read") return "response";
-  if (statementClass === "write") return "request";
-  return errorText.includes("envelope limit") ? "request" : "response";
-}
-
-function requestTooLargeMessage(label: string, operation: string, nodeLimit?: string): string {
-  const limit = nodeLimit === undefined ? "" : ` (the node's limit is ${nodeLimit} bytes)`;
-  return `${label} ${operation} failed: request is too large${limit}. Split the batch into smaller requests.`;
 }
 
 function validateMigrationOptions(options: SqlMigrationApplyOptions): string | null {

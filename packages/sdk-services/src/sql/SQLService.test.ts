@@ -840,7 +840,7 @@ describe("SQLService 413 request vs response classification", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error.code).toBe(ErrorCodes.SQL_REQUEST_TOO_LARGE);
+      expect(result.error.code).toBe("SQL_REQUEST_TOO_LARGE");
       expect(result.error.message).toBe(
         "SQL batch failed: request is too large (the node's limit is 1024 bytes). Split the batch into smaller requests.",
       );
@@ -883,7 +883,7 @@ describe("SQLService 413 request vs response classification", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error.code).toBe(ErrorCodes.SQL_REQUEST_TOO_LARGE);
+      expect(result.error.code).toBe("SQL_REQUEST_TOO_LARGE");
     }
   });
 
@@ -907,7 +907,7 @@ describe("SQLService 413 request vs response classification", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error.code).toBe(ErrorCodes.SQL_REQUEST_TOO_LARGE);
+      expect(result.error.code).toBe("SQL_REQUEST_TOO_LARGE");
     }
   });
 
@@ -931,7 +931,7 @@ describe("SQLService 413 request vs response classification", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error.code).toBe(ErrorCodes.SQL_REQUEST_TOO_LARGE);
+      expect(result.error.code).toBe("SQL_REQUEST_TOO_LARGE");
     }
   });
 
@@ -942,7 +942,7 @@ describe("SQLService 413 request vs response classification", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error.code).toBe(ErrorCodes.SQL_REQUEST_TOO_LARGE);
+      expect(result.error.code).toBe("SQL_REQUEST_TOO_LARGE");
     }
   });
 
@@ -965,11 +965,11 @@ describe("SQLService 413 request vs response classification", () => {
 
     expect(withResult.ok).toBe(false);
     if (!withResult.ok) {
-      expect(withResult.error.code).toBe(ErrorCodes.SQL_REQUEST_TOO_LARGE);
+      expect(withResult.error.code).toBe("SQL_REQUEST_TOO_LARGE");
     }
     expect(explainResult.ok).toBe(false);
     if (!explainResult.ok) {
-      expect(explainResult.error.code).toBe(ErrorCodes.SQL_REQUEST_TOO_LARGE);
+      expect(explainResult.error.code).toBe("SQL_REQUEST_TOO_LARGE");
     }
   });
 
@@ -993,7 +993,7 @@ describe("SQLService 413 request vs response classification", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error.code).toBe(ErrorCodes.SQL_REQUEST_TOO_LARGE);
+      expect(result.error.code).toBe("SQL_REQUEST_TOO_LARGE");
       expect(result.error.message).not.toMatch(/1024/);
     }
   });

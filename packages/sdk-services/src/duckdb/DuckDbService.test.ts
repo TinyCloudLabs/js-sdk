@@ -149,7 +149,7 @@ describe("DuckDbService 413 request vs response classification", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error.code).toBe(ErrorCodes.DUCKDB_REQUEST_TOO_LARGE);
+      expect(result.error.code).toBe("DUCKDB_REQUEST_TOO_LARGE");
       expect(result.error.message).toBe(
         "DuckDB batch failed: request is too large (the node's limit is 1024 bytes). Split the batch into smaller requests.",
       );
@@ -192,7 +192,7 @@ describe("DuckDbService 413 request vs response classification", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error.code).toBe(ErrorCodes.DUCKDB_REQUEST_TOO_LARGE);
+      expect(result.error.code).toBe("DUCKDB_REQUEST_TOO_LARGE");
     }
   });
 
@@ -216,7 +216,7 @@ describe("DuckDbService 413 request vs response classification", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error.code).toBe(ErrorCodes.DUCKDB_REQUEST_TOO_LARGE);
+      expect(result.error.code).toBe("DUCKDB_REQUEST_TOO_LARGE");
     }
   });
 
@@ -238,7 +238,7 @@ describe("DuckDbService 413 request vs response classification", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error.code).toBe(ErrorCodes.DUCKDB_REQUEST_TOO_LARGE);
+      expect(result.error.code).toBe("DUCKDB_REQUEST_TOO_LARGE");
     }
   });
 
@@ -249,7 +249,7 @@ describe("DuckDbService 413 request vs response classification", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error.code).toBe(ErrorCodes.DUCKDB_REQUEST_TOO_LARGE);
+      expect(result.error.code).toBe("DUCKDB_REQUEST_TOO_LARGE");
     }
   });
 
@@ -272,11 +272,11 @@ describe("DuckDbService 413 request vs response classification", () => {
 
     expect(withResult.ok).toBe(false);
     if (!withResult.ok) {
-      expect(withResult.error.code).toBe(ErrorCodes.DUCKDB_REQUEST_TOO_LARGE);
+      expect(withResult.error.code).toBe("DUCKDB_REQUEST_TOO_LARGE");
     }
     expect(explainResult.ok).toBe(false);
     if (!explainResult.ok) {
-      expect(explainResult.error.code).toBe(ErrorCodes.DUCKDB_REQUEST_TOO_LARGE);
+      expect(explainResult.error.code).toBe("DUCKDB_REQUEST_TOO_LARGE");
     }
   });
 
@@ -300,7 +300,7 @@ describe("DuckDbService 413 request vs response classification", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error.code).toBe(ErrorCodes.DUCKDB_REQUEST_TOO_LARGE);
+      expect(result.error.code).toBe("DUCKDB_REQUEST_TOO_LARGE");
       expect(result.error.message).not.toMatch(/1024/);
     }
   });
