@@ -214,3 +214,30 @@ test("storage succeeds only after active-owner readback", async () => {
   const req = requirement(synthetic); const claims = req.claims; const verified = { type: "OpenCredentialsIssuedCredential", version: 1, protocol: synthetic.protocol, profile: req.profile, credentialType: req.credentialType, schema: synthetic.format.vct, format: "vc+sd-jwt", issuerDid: synthetic.issuer.did, issuerKid: synthetic.issuer.kid, subjectDid: HOLDER, holderDid: HOLDER, claims, claimsDigest: await canonicalDigest(claims), descriptorDigest: await canonicalDigest(synthetic), credentialId: "credential", issuedAt: "2030-01-01T00:00:00Z", notBefore: "2030-01-01T00:00:00Z", expiresAt: "2030-01-01T01:00:00Z", status: { method: "none", freshnessSeconds: 300 }, credential: "signed", verifiedAt: "2030-01-01T00:00:00Z", credentialDigest: await canonicalDigest("signed"), statusCheckedAt: "2030-01-01T00:00:00Z" } as VerifiedCredential; const memory = kvMemory(); const digest = await canonicalDigest(req);
   const saved = await storeCredential({ kv: memory.service, verified, requirement: req, requirementDigest: digest, activeHolderDid: HOLDER, activeOwnerDid: OWNER, now: new Date("2030-01-01T00:00:01Z") }); expect(saved.record.ownerDid).toBe(OWNER); expect(saved.record.holderDid).toBe(HOLDER); expect((await findStoredCredential({ kv: memory.service, requirement: req, holderDid: HOLDER, ownerDid: OWNER, now: new Date("2030-01-01T00:00:02Z") }))?.recordId).toBe(saved.record.recordId); expect(await findStoredCredential({ kv: memory.service, requirement: req, holderDid: HOLDER, ownerDid: "did:pkh:eip155:1:other", now: new Date("2030-01-01T00:00:02Z") })).toBeUndefined(); await expect(storeCredential({ kv: kvMemory(true).service, verified, requirement: req, requirementDigest: digest, activeHolderDid: HOLDER, activeOwnerDid: OWNER })).rejects.toMatchObject({ code: "VERIFIED_NOT_SAVED", recoverable: true }); await expect(storeCredential({ kv: memory.service, verified: { ...verified, holderDid: "did:key:other" }, requirement: req, requirementDigest: digest, activeHolderDid: HOLDER, activeOwnerDid: OWNER })).rejects.toBeInstanceOf(CredentialError);
 });
+
+async function discoveryFailure(response: Response): Promise<unknown> {
+  const client = { credentialHolderDid: HOLDER, credentialHolderKid: `${HOLDER}#${HOLDER.slice("did:key:".length)}`, receiverCredentialCustody: {}, session: () => undefined } as unknown as ConstructorParameters<typeof CredentialsService>[0];
+  const service = new CredentialsService(client);
+  try {
+    await service.acquire(requirement(email), { discoveryUrl: `${ORIGIN}/.well-known/opencredentials`, fetch: async () => response, interaction: "headless", transport: {} as unknown as CredentialAcquisitionTransport });
+  } catch (error) { return error; }
+  throw new Error("discovery unexpectedly succeeded");
+}
+
+test("discovery HTML 200 raises a typed CREDENTIAL_DISCOVERY_FAILED error without a raw SyntaxError", async () => {
+  const error = await discoveryFailure(new Response("<!doctype html><html></html>", { status: 200, headers: { "content-type": "text/html; charset=utf-8" } })) as Error & Record<string, unknown>;
+  expect(error.code).toBe("CREDENTIAL_DISCOVERY_FAILED");
+  expect(error.name).not.toBe("SyntaxError");
+  expect(error.host).toBe("witness.credentials.org");
+  expect(error.status).toBe(200);
+  expect(error.contentType).toBe("text/html; charset=utf-8");
+  expect(error.message).not.toContain("/.well-known");
+});
+
+test("discovery 404 raises a typed CREDENTIAL_DISCOVERY_FAILED error with the HTTP status", async () => {
+  const error = await discoveryFailure(new Response("missing", { status: 404, headers: { "content-type": "text/plain" } })) as Error & Record<string, unknown>;
+  expect(error.code).toBe("CREDENTIAL_DISCOVERY_FAILED");
+  expect(error.host).toBe("witness.credentials.org");
+  expect(error.status).toBe(404);
+  expect(error.contentType).toBe("text/plain");
+});
