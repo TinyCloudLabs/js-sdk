@@ -81,6 +81,8 @@ export const storageSection: PanelSection = {
   mount(el, ctx: HostContext) {
     const client = ctx.client();
     if (!client || !client.signedIn()) return () => undefined;
+    // Hoisted functions below do not inherit the guard's narrowing, so bind the non-undefined client once.
+    const live: PanelClient = client;
 
     let disposed = false;
     let busy = false;
@@ -162,7 +164,7 @@ export const storageSection: PanelSection = {
       read = { signedIn: true, result: read.signedIn ? read.result : undefined };
       view = reduceStorage(read);
       render();
-      const result = await readStatus(client, fresh);
+      const result = await readStatus(live, fresh);
       busy = false;
       if (disposed || token !== seq) return;
       read = { signedIn: true, result };
@@ -176,8 +178,8 @@ export const storageSection: PanelSection = {
       render();
       let outcome: { approved: boolean; code?: string };
       try {
-        outcome = client.requestAuthority
-          ? await client.requestAuthority("space/info")
+        outcome = live.requestAuthority
+          ? await live.requestAuthority("space/info")
           : { approved: false, code: "unsupported" };
       } catch {
         outcome = { approved: false, code: "unknown" };
