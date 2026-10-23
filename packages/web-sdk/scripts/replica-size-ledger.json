@@ -1097,5 +1097,55 @@
       "ceiling": 822753
     },
     "reason": "one-hour decrypt default and secret-read coverage: +303 B (mjs) / +217 B (cjs) gzip to each web-sdk root bundle (TC-1781)"
+  },
+  "tc1801NonTransferableShareRatchet": {
+    "label": "non-transferable share option (#687): root ceiling raised to the measured CI bytes",
+    "ruling": "Approved by Naomi (2026-10-23, policy review relayed by Amos)",
+    "base": "51ee7f0e9aa7a382d5150a7f1c20e9b64b36409b",
+    "sourceCommits": [
+      "8109b636fbc6b21a56d11a17ea8d97d860a8435b"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39896378690",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39896378690/job/120227697556",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/39896378690/job/120227697563"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 26,
+        "index.cjs": 35
+      },
+      "ceiling": {
+        "index.mjs": 1462375,
+        "index.cjs": 1404597
+      }
+    },
+    "firstImport": {
+      "delta": {
+        "replica.mjs": 0,
+        "replica.cjs": 0
+      },
+      "ceiling": {
+        "replica.mjs": 51925,
+        "replica.cjs": 67141
+      }
+    },
+    "activation": {
+      "delta": {
+        "activation.mjs": 0,
+        "activation.cjs": 0
+      },
+      "ceiling": {
+        "activation.mjs": 23117,
+        "activation.cjs": 24700
+      }
+    },
+    "worker": {
+      "delta": 0,
+      "ceiling": 822753
+    },
+    "reason": "non-transferable share option: +26 B (mjs) / +35 B (cjs) gzip to each web-sdk root bundle (TC-1801)"
   }
 }
