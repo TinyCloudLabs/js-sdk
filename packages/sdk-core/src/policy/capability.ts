@@ -1,6 +1,7 @@
 import { CAPABILITY_REGISTRY } from "@tinycloud/bootstrap";
 import { bytesToHex, sha256 } from "viem";
 import { jcsCanonicalize, normalizeJson, type JsonValue } from "./jcs";
+import { sqlCaveatExtension } from "./sqlCaveatGate";
 
 const POLICY_CAPABILITY_DOMAIN = "xyz.tinycloud.policy/PolicyCapability/v0";
 const textEncoder = new TextEncoder();
@@ -358,7 +359,14 @@ function validateCaveats(input: JsonValue, service: PolicyCapability["service"])
     );
   }
   if (service === "tinycloud.sql") {
-    return validateSqlCaveats(input as JsonObject);
+    // Without the grammar (`@tinycloud/sdk-core/sql-caveats`) only the profile is accepted.
+    const extension = hasOwn(input, "mode") ? undefined : sqlCaveatExtension();
+    if (extension === undefined) return validateSqlCaveats(input);
+    const refusal = extension.checkEntry(input);
+    if (refusal !== undefined) {
+      throw new PolicyCapabilityError("policy-capability-malformed-caveats", `$.caveats ${refusal}`);
+    }
+    return input;
   }
   throw new PolicyCapabilityError(
     "policy-capability-malformed-caveats",
@@ -366,7 +374,8 @@ function validateCaveats(input: JsonValue, service: PolicyCapability["service"])
   );
 }
 
-function validateSqlCaveats(input: JsonObject): JsonObject {
+/** A constrained-statements profile entry (`mode` key): the form this SDK emits and accepts. */
+export function validateSqlCaveats(input: JsonObject): JsonObject {
   assertCaveatKeys(input, ["mode", "readOnly", "statements"], "$.caveats");
   const mode = caveatString(input, "mode", "$.caveats");
   if (mode !== "constrained-statements") {
@@ -476,6 +485,10 @@ function caveatsContain(authority: JsonObject | undefined, request: JsonObject |
   }
   if (request === undefined) {
     return Object.keys(authority).length === 0;
+  }
+  if (!hasOwn(authority, "mode") && !hasOwn(request, "mode")) {
+    // Both were validated as the delegated form, which only the installed grammar accepts.
+    return sqlCaveatExtension()?.entryContains(authority, request) ?? false;
   }
   if (authority.mode !== "constrained-statements" || request.mode !== "constrained-statements") {
     return false;

@@ -8,6 +8,7 @@ import { ErrorCodes } from "../types";
 import { validatedCapabilityOf } from "../errors";
 import { SQLService } from "./SQLService";
 import { SQLAction } from "./types";
+import { SqlErrorCodes } from "./errorCodes";
 
 function response(
   ok: boolean,
@@ -987,6 +988,86 @@ describe("SQLService 413 request vs response classification", () => {
     if (!result.ok) {
       expect(result.error.code).toBe(ErrorCodes.SQL_RESPONSE_TOO_LARGE);
       expect(result.error.message).not.toMatch(/node's limit/);
+    }
+  });
+});
+
+describe("SQLService 403 refusal mapping (TC-1839)", () => {
+  async function refusedWith(body: unknown, statusText = "Forbidden") {
+    const service = new SQLService();
+    service.initialize(createContext(async () => response(false, 403, body, statusText), []));
+    const result = await service.query("SELECT secret_col FROM secret_table");
+    if (result.ok) throw new Error("expected a refusal");
+    return result.error;
+  }
+
+  for (const arm of ["table", "column", "write", "chain"] as const) {
+    test(`sql_caveat_violation: ${arm} maps to SQL_CAVEAT_VIOLATION with meta.arm`, async () => {
+      const error = await refusedWith(`sql_caveat_violation: ${arm}`);
+      expect(error.code).toBe(SqlErrorCodes.SQL_CAVEAT_VIOLATION);
+      expect(error.meta?.arm).toBe(arm);
+      expect(error.meta?.status).toBe(403);
+    });
+  }
+
+  test("the code is also read from a JSON error field", async () => {
+    const error = await refusedWith({ error: "sql_caveat_violation: table" });
+    expect(error.code).toBe(SqlErrorCodes.SQL_CAVEAT_VIOLATION);
+    expect(error.meta?.arm).toBe("table");
+  });
+
+  test("an unknown arm still maps, with no arm", async () => {
+    const error = await refusedWith("sql_caveat_violation: secret_table");
+    expect(error.code).toBe(SqlErrorCodes.SQL_CAVEAT_VIOLATION);
+    expect(error.meta && "arm" in error.meta).toBe(false);
+  });
+
+  test("an arm that is not exactly one of the four is dropped", async () => {
+    for (const detail of ["Table", "table extra", "tables", ""]) {
+      const error = await refusedWith(`sql_caveat_violation: ${detail}`);
+      expect(error.code).toBe(SqlErrorCodes.SQL_CAVEAT_VIOLATION);
+      expect(error.meta && "arm" in error.meta).toBe(false);
+    }
+  });
+
+  test("the message and meta never carry node text", async () => {
+    const error = await refusedWith("sql_caveat_violation: SELECT secret_col FROM secret_table");
+    expect(error.code).toBe(SqlErrorCodes.SQL_CAVEAT_VIOLATION);
+    const text = JSON.stringify({ message: error.message, meta: error.meta });
+    expect(text).not.toContain("secret_col");
+    expect(text).not.toContain("secret_table");
+    expect(error.meta?.responseSnippet).toBeUndefined();
+  });
+
+  test("a caveat code without a colon still maps, with no arm", async () => {
+    const error = await refusedWith("sql_caveat_violation");
+    expect(error.code).toBe(SqlErrorCodes.SQL_CAVEAT_VIOLATION);
+    expect(error.meta && "arm" in error.meta).toBe(false);
+  });
+
+  test("a caveat code on another status is not mapped", async () => {
+    const service = new SQLService();
+    service.initialize(createContext(async () => response(false, 400, "sql_caveat_violation: table"), []));
+    const result = await service.query("SELECT 1");
+    if (result.ok) throw new Error("expected a refusal");
+    expect(result.error.code).toBe(ErrorCodes.SQL_ERROR);
+  });
+
+  test("sql_readonly_violation keeps mapping with and without a colon suffix", async () => {
+    for (const body of [
+      "sql_readonly_violation",
+      "sql_readonly_violation: write",
+      { error: "sql_readonly_violation" },
+    ]) {
+      const error = await refusedWith(body);
+      expect(error.code).toBe(ErrorCodes.SQL_READONLY_VIOLATION);
+    }
+  });
+
+  test("other 403 bodies stay SQL_PERMISSION_DENIED", async () => {
+    for (const body of ["Forbidden", "", { error: "forbidden" }, "Unauthorized Action: host"]) {
+      const error = await refusedWith(body);
+      expect(error.code).toBe(ErrorCodes.SQL_PERMISSION_DENIED);
     }
   });
 });

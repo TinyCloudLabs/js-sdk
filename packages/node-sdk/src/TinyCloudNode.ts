@@ -122,6 +122,9 @@ import {
   ErrorCodes,
   ENCRYPTION_PERMISSION_SERVICE,
   CaveatedDelegationUnsupportedError,
+  SQL_DELEGATED_CAVEATS_FEATURE,
+  SqlDelegatedCaveatsUnsupportedError,
+  sqlCaveatListNeedsDelegatedFeature,
   PermissionNotInManifestError,
   SessionExpiredError,
   canonicalizeRecapCaveats,
@@ -1610,6 +1613,15 @@ export class TinyCloudNode {
 
   private get nodeFeatures(): string[] {
     return this.auth?.nodeFeatures ?? this._restoredNodeFeatures ?? [];
+  }
+
+  /**
+   * Whether the node this instance is signed in to announced
+   * `sql-delegated-caveats-v1` in `GET /info`. False when the node did not
+   * announce it and when its features are not known (fail closed).
+   */
+  get supportsSqlDelegatedCaveats(): boolean {
+    return this.replicationNodeFeatures?.includes(SQL_DELEGATED_CAVEATS_FEATURE) === true;
   }
 
   private get replicationNodeFeatures(): readonly string[] | undefined {
@@ -6552,6 +6564,7 @@ export class TinyCloudNode {
       );
     }
 
+    this.gateSql(this.portableCaveats(delegation), delegation.host);
     const targetHost = delegation.host ?? this.config.host!;
     let activateResult: SpaceHostResult;
     try {
@@ -7165,6 +7178,10 @@ export class TinyCloudNode {
     //    we don't mutate caller-owned data.
     const expandedEntries = this.expandPermissionEntries(permissions);
 
+    // A delegated SQL caveat is refused up front when the node cannot enforce
+    // it, instead of surfacing as a coverage failure further down.
+    this.gateSql(expandedEntries);
+
     // 4. Compute expiration. `options.expiry` overrides the default
     //    (DEFAULT_DELEGATION_EXPIRY_MS); ms-format ("7d") or a raw
     //    millisecond count are both accepted. Cap at the session's own
@@ -7762,12 +7779,30 @@ export class TinyCloudNode {
    * constrained branch rather than signing a broader action-only child UCAN.
    */
   private assertDelegationCaveatsPreservable(entries: PermissionEntry[]): void {
+    this.gateSql(entries);
     const caveated = entries.filter((entry) =>
       !recapCaveatsEqual(entry.caveats, undefined)
     );
     if (caveated.length > 0) {
       throw new CaveatedDelegationUnsupportedError(caveated);
     }
+  }
+
+  /**
+   * Refuses, before any request, a delegation or grant that carries a
+   * delegated SQL caveat (`tables`, `columns`, `readOnly`) unless the node
+   * announced `sql-delegated-caveats-v1`. `host` is the node the request
+   * would go to; a node other than the one signed in to is unknown, so it is
+   * refused too. Profile caveats and empty caveats are not affected.
+   */
+  private gateSql(
+    entries: readonly { readonly service: string; readonly caveats?: readonly Record<string, unknown>[] }[],
+    host?: string,
+  ): void {
+    if (!entries.some((e) => (e.service === "tinycloud.sql" || e.service === "sql") && sqlCaveatListNeedsDelegatedFeature(e.caveats))) return;
+    const nodeHost = this.hosts[0] ?? this.config.host;
+    const otherNode = host !== undefined && host.replace(/\/+$/, "") !== nodeHost?.replace(/\/+$/, "");
+    if (otherNode || !this.supportsSqlDelegatedCaveats) throw new SqlDelegatedCaveatsUnsupportedError(host ?? nodeHost);
   }
 
   /**
@@ -7820,38 +7855,35 @@ export class TinyCloudNode {
     return caveated;
   }
 
+  /** The caveated branches of a received delegation, as permission entries. */
+  private portableCaveats(delegation: PortableDelegation): PermissionEntry[] {
+    const entry = (
+      service: string,
+      space: string,
+      path: string,
+      actions: readonly string[],
+      caveats: readonly Record<string, unknown>[] | undefined,
+    ): PermissionEntry[] => recapCaveatsEqual(caveats, undefined) ? [] : [{
+      service: service.startsWith("tinycloud.") ? service : `tinycloud.${service}`,
+      space,
+      path,
+      actions: [...actions],
+      caveats: cloneRecapCaveats(caveats),
+    }];
+    // A flat caveat covers every action, so it counts as SQL when any action is.
+    const flatAction = delegation.actions.find((action) => action.startsWith("tinycloud.sql/")) ?? delegation.actions[0];
+    return [
+      ...entry(flatAction?.split("/", 1)[0] ?? "tinycloud.unknown", delegation.spaceId, delegation.path, delegation.actions, delegation.caveats),
+      ...(delegation.resources ?? []).flatMap((r) => entry(r.service, r.space, r.path, r.actions, r.caveats)),
+    ];
+  }
+
   /** Reject caveated parent branches before action-only child signing. */
   private assertPortableDelegationCaveatsPreservable(
     delegation: PortableDelegation,
   ): void {
-    const entries: PermissionEntry[] = [];
-    const add = (
-      service: string,
-      space: string,
-      path: string,
-      actions: string[],
-      caveats: readonly Record<string, unknown>[] | undefined,
-    ): void => {
-      if (recapCaveatsEqual(caveats, undefined)) return;
-      entries.push({
-        service: service.startsWith("tinycloud.") ? service : `tinycloud.${service}`,
-        space,
-        path,
-        actions: [...actions],
-        caveats: cloneRecapCaveats(caveats),
-      });
-    };
-
-    add(
-      delegation.actions[0]?.split("/", 1)[0] ?? "tinycloud.unknown",
-      delegation.spaceId,
-      delegation.path,
-      delegation.actions,
-      delegation.caveats,
-    );
-    for (const resource of delegation.resources ?? []) {
-      add(resource.service, resource.space, resource.path, resource.actions, resource.caveats);
-    }
+    const entries = this.portableCaveats(delegation);
+    this.gateSql(entries, delegation.host);
     if (entries.length > 0) {
       throw new CaveatedDelegationUnsupportedError(entries);
     }
@@ -8813,6 +8845,11 @@ export class TinyCloudNode {
     if (!mySession) {
       throw new Error("Not signed in. Call signIn() first.");
     }
+
+    // The activated child session drops caveats, but it is a child of this
+    // delegation; refuse a delegated SQL caveat the node cannot enforce before
+    // the wallet is asked to sign or anything is sent.
+    this.gateSql(this.portableCaveats(delegation), delegation.host);
 
     // Use our existing session key - the delegation targets our DID from signIn
     // We must use the same key that the delegation was created for

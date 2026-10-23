@@ -207,6 +207,8 @@ export {
   DEFAULT_MANIFEST_VERSION,
   VAULT_PERMISSION_SERVICE,
   CaveatedDelegationUnsupportedError,
+  SQL_DELEGATED_CAVEATS_FEATURE,
+  SqlDelegatedCaveatsUnsupportedError,
   PermissionNotInManifestError,
   SessionExpiredError,
   ManifestValidationError,

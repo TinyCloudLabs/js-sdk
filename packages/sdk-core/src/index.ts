@@ -1167,3 +1167,10 @@ export {
   type UnsignedPolicyObject,
   type UnsignedPolicyStatus,
 } from "./policy";
+
+// Delegated SQL caveats: the root carries only the feature gate. The grammar, folding and containment are `@tinycloud/sdk-core/sql-caveats`.
+export {
+  SQL_DELEGATED_CAVEATS_FEATURE,
+  SqlDelegatedCaveatsUnsupportedError,
+  sqlCaveatListNeedsDelegatedFeature,
+} from "./policy/sqlCaveatGate";

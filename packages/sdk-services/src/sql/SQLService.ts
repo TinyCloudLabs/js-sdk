@@ -574,11 +574,25 @@ export class SQLService extends BaseService implements ISQLService {
     if (retryError) return err(retryError);
 
     const errorBody = parseServiceErrorBody(errorText);
+    // A node refusal is `code` or `code: detail`, in the JSON `error` field or as the plain body.
+    const [, refusalCode, refusalDetail = ""] =
+      /^([a-z][a-z0-9_]*)(?::\s*([\s\S]*))?$/.exec(String(errorBody.error ?? errorBody.message ?? errorText).trim()) ?? [];
+
+    // The caveat refusal names an arm and nothing else, so no SQL can travel with it.
+    if (response.status === 403 && refusalCode === "sql_caveat_violation") {
+      const arm = /^(table|column|write|chain)$/.exec(refusalDetail.trim())?.[0];
+      return err(serviceError(
+        "SQL_CAVEAT_VIOLATION",
+        `SQL ${operation} refused by the delegation's SQL caveats`,
+        "sql",
+        { meta: { status: meta.status, ...(arm && { arm }) } },
+      ));
+    }
 
     const sizeCode = requestTooLargeError("sql", operation, response.status, errorText);
     const errorCode = sizeCode ?? this.mapHttpStatusToErrorCode(
       response.status,
-      errorBody.error
+      refusalCode
     );
     const message = formatServiceResponseError(
       "SQL",

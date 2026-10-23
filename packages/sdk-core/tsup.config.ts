@@ -9,6 +9,7 @@ export default defineConfig({
     "src/delegations/index.ts",
     "src/held-credentials/index.ts",
     "src/kv-list-matching/index.ts",
+    "src/sql-caveats/index.ts",
   ],
   format: ["esm", "cjs"],
   dts: true,

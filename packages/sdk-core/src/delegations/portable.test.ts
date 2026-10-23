@@ -59,6 +59,63 @@ describe("portable delegation admission", () => {
       delegation.delegationHeader.Authorization,
     );
   });
+
+  describe("delegated SQL caveats", () => {
+    const sqlDelegation = (caveats: Record<string, unknown>[] | undefined, flat = false) => ({
+      ...delegation,
+      actions: ["tinycloud.sql/read"],
+      ...(flat ? { caveats } : {}),
+      resources: [{
+        service: "sql",
+        space: delegation.spaceId,
+        path: "data.sqlite",
+        actions: ["tinycloud.sql/read"],
+        ...(flat || caveats === undefined ? {} : { caveats }),
+      }],
+    });
+
+    function spyFetch(): { requests: string[]; fetchFn: (input: string | URL) => Promise<Response> } {
+      const requests: string[] = [];
+      return {
+        requests,
+        fetchFn: async (input) => {
+          requests.push(input.toString());
+          return new Response(JSON.stringify({ activated: [] }), { status: 200 });
+        },
+      };
+    }
+
+    test.each([
+      ["delegated form in resources", sqlDelegation([{ tables: ["Notes"] }])],
+      ["two empty-only entries", sqlDelegation([{}, {}])],
+      ["delegated form in the flat caveats", sqlDelegation([{ readOnly: true }], true)],
+    ] as const)("refuses %s with no request", async (_label, value) => {
+      const { requests, fetchFn } = spyFetch();
+      await expect(importPortableDelegation(fetchFn, delegation.host, value)).rejects.toMatchObject({
+        code: "SQL_DELEGATED_CAVEATS_UNSUPPORTED",
+      });
+      expect(requests).toEqual([]);
+    });
+
+    test.each([
+      ["no caveats", sqlDelegation(undefined)],
+      ["[{}]", sqlDelegation([{}])],
+      ["a constrained-statements profile", sqlDelegation([{ mode: "constrained-statements", readOnly: true, statements: [] }])],
+    ] as const)("does not gate %s", async (_label, value) => {
+      const { requests, fetchFn } = spyFetch();
+      await importPortableDelegation(fetchFn, delegation.host, value);
+      expect(requests).toHaveLength(1);
+    });
+
+    test("a delegated-looking caveat on another service is not gated", async () => {
+      const { requests, fetchFn } = spyFetch();
+      await importPortableDelegation(fetchFn, delegation.host, {
+        ...delegation,
+        resources: [{ ...delegation.resources[0]!, caveats: [{ tables: ["Notes"] }] }],
+      });
+      expect(requests).toHaveLength(1);
+    });
+  });
   test.each([
     [401, "", "unauthenticated"],
     [401, "Forbidden", "unauthenticated"],
