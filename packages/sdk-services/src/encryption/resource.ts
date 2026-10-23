@@ -18,8 +18,8 @@
  *   never normalized: wrong case, bad characters, empty segments, a
  *   non-canonical owner (EIP-55 for `did:pkh:eip155`).
  * - Bare networks follow `parseNetworkId` unchanged. When PARSING a key or
- *   prefix the network name follows the node rule (`[^:/#?%\s]+`); builders take a
- *   network id that `parseNetworkId` produced, so emitted names stay strict.
+ *   prefix the network part must match `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`; builders
+ *   take a network id that `parseNetworkId` produced, so emitted names stay strict.
  */
 
 import { pkhDid } from "@tinycloud/bootstrap";
@@ -34,8 +34,14 @@ import { DECRYPT_ACTION } from "./types";
 const SEGMENT_SOURCE = "[a-z0-9][a-z0-9._-]{0,63}";
 const PATH_SOURCE = `${SEGMENT_SOURCE}(?:/${SEGMENT_SOURCE}){0,7}`;
 const KEY_PATH_RE = new RegExp(`^${PATH_SOURCE}$`);
+/**
+ * Network part of a KEY or PREFIX resource: printable ASCII, first character
+ * alphanumeric, at most 64 characters. Bare networks are not checked against
+ * this; they go through `parseNetworkId` unchanged.
+ */
+const KEY_NETWORK_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 /** `<ownerDid>:<network>` head, then the raw path (prefix keeps its trailing `/`). */
-const RESOURCE_RE = /^(did:[a-z0-9]+:[A-Za-z0-9._:-]+):([^:/#?%\s]+)(?:\/(.*))?$/s;
+const RESOURCE_RE = /^(did:[a-z0-9]+:[A-Za-z0-9._:-]+):([^:/]+)(?:\/(.*))?$/s;
 const MAX_PATH_BYTES = 255;
 const PKH_EIP155_PREFIX = "did:pkh:eip155:";
 const MAX_U64 = 18446744073709551615n;
@@ -198,6 +204,12 @@ export function parseEncryptionResource(uri: string): ParsedEncryptionResource {
       throw error;
     }
     return { kind: "network", ownerDid: canonicalOwnerDid, network, networkId: bareId };
+  }
+  if (!KEY_NETWORK_RE.test(network)) {
+    throw new EncryptionResourceError(
+      "bad_network",
+      `network ${JSON.stringify(network)} must match ${KEY_NETWORK_RE.source}`,
+    );
   }
   assertCanonicalOwner(ownerDid);
   const networkId = `${ENCRYPTION_NETWORK_URN_PREFIX}${ownerDid}:${network}`;

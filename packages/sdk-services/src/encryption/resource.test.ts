@@ -60,6 +60,7 @@ const validVectors: Array<[string, string, ParsedEncryptionResource]> = [
   ],
   ["#32 node-rule network name in a key", `urn:tinycloud:encryption:${OWNER}:Default/apps/x`, key("apps/x", "Default")],
   ["#33 prefix with a 255-byte path", res(`${seg255}/`), prefixOf(seg255)],
+  ["#44 network of exactly 64 characters", `urn:tinycloud:encryption:${OWNER}:${seg(64)}/apps/x`, key("apps/x", seg(64))],
   // #35 is a valid GRANT; the parser reports kind "prefix" so a caller can refuse it as an invocation target.
   ["#35 prefix parses as a prefix, never a key", res("apps/x/"), prefixOf("apps/x")],
 ];
@@ -89,6 +90,15 @@ const rejectVectors: Array<[string, string]> = [
   ["#29 uppercase URN scheme", `URN:tinycloud:encryption:${OWNER}:default/apps/x`],
   ["#30 mixed-case URN namespace", `urn:TinyCloud:encryption:${OWNER}:default/apps/x`],
   ["#34 prefix path over 255 bytes", res(`${seg256}/`)],
+  ["#36 bidi override in network of a key", `urn:tinycloud:encryption:${OWNER}:de\u202eault/apps/x`],
+  ["#37 zero-width space in network", `urn:tinycloud:encryption:${OWNER}:de\u200bfault/apps/x`],
+  ["#38 BOM in network", `urn:tinycloud:encryption:${OWNER}:\ufeffdefault/apps/x`],
+  ["#39 control character in network", `urn:tinycloud:encryption:${OWNER}:de\x07fault/apps/x`],
+  ["#40 non-ASCII letter in network", `urn:tinycloud:encryption:${OWNER}:d\xe9fault/apps/x`],
+  ["#41 network starting with '-'", `urn:tinycloud:encryption:${OWNER}:-default/apps/x`],
+  ["#42 network starting with '.'", `urn:tinycloud:encryption:${OWNER}:.a/apps/x`],
+  ["#43 network of 65 characters", `urn:tinycloud:encryption:${OWNER}:${seg(65)}/apps/x`],
+  ["#45 bidi network inside a prefix", `urn:tinycloud:encryption:${OWNER}:de\u202eault/apps/x/`],
   // Beyond the shared vectors.
   ["prefix with a '..' segment", res("apps/../")],
   ["prefix with an empty segment", res("apps//x/")],
@@ -164,6 +174,12 @@ describe("builder output always parses", () => {
   ])("throws for owner with %s", (_name, owner) => {
     expect(() => formatKeyResource(netOf(owner), "a")).toThrow(EncryptionResourceError);
     expect(() => formatPrefixResource(netOf(owner), "a")).toThrow(EncryptionResourceError);
+  });
+
+  test("throws for a bare network the key grammar would reject (65 characters)", () => {
+    const longNet = `urn:tinycloud:encryption:${OWNER}:${seg(65)}`;
+    expect(() => formatKeyResource(longNet, "a")).toThrow(EncryptionResourceError);
+    expect(() => formatPrefixResource(longNet, "a")).toThrow(EncryptionResourceError);
   });
 
   test.each([
