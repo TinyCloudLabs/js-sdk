@@ -485,6 +485,7 @@ export class TinyCloudWeb {
       ui: config.ui,
       source: {
         signedIn: () => this.session() !== undefined,
+        waitForAccountRegistrySync: () => this._node?.waitForAccountRegistrySync() ?? Promise.resolve(),
         storage: { status: () => this.storage.status() },
         storageEpisode: this.uiStorageEpisode,
       },

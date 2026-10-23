@@ -9,6 +9,8 @@ import type { PanelClient, SyncFacade } from "./slots";
  */
 export interface ClientSource {
   signedIn(): boolean;
+  /** Resolves when the account registry sync has settled. Absent means already settled. */
+  waitForAccountRegistrySync?(): Promise<void>;
   readonly sync?: SyncFacade | undefined;
   readonly storage: Pick<IStorageService, "status">;
   readonly storageEpisode?: PanelClient["storageEpisode"];

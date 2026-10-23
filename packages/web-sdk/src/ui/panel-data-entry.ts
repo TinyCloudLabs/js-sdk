@@ -4,3 +4,4 @@
  * budget, contracts-ade §1.4). The root reaches it only through dynamic import().
  */
 export { createRealPanelData } from "./data/real";
+export { browserIdle, createPanelPrefetch } from "./data/prefetch";
