@@ -998,6 +998,18 @@ describe("SQLService 413 request vs response classification", () => {
     }
   });
 
+  test("coded row-limit 413 maps to SQL_RESPONSE_TOO_LARGE and names no node byte limit", async () => {
+    const service = serviceAnswering("sql_response_too_large: Response too large: row limit exceeded (limit 500 rows)");
+
+    const result = await service.execute("SELECT id FROM notes");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCodes.SQL_RESPONSE_TOO_LARGE);
+      expect(result.error.message).not.toMatch(/node's limit/);
+    }
+  });
+
   test("coded request 413 without a limit clause adds no digits to the message", async () => {
     const service = serviceAnswering("sql_request_too_large: JSON body exceeds complete envelope limit");
 
