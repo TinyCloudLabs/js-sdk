@@ -1490,7 +1490,11 @@ describe("signIn refuses caveated manifests (TC-1855)", () => {
     };
   }
 
-  const constrained: Caveats[] = [[{ kind: "prefix", prefix: "notes/" }], [{}, { kind: "prefix", prefix: "notes/" }]];
+  const constrained: Caveats[] = [
+    [{ kind: "prefix", prefix: "notes/" }],
+    [{}, { kind: "prefix", prefix: "notes/" }],
+    [{}, {}],
+  ];
 
   for (const caveats of constrained) {
     test(`manifest ${JSON.stringify(caveats)}: no restore, wallet request, fetch or node sign-in`, async () => {
@@ -1530,7 +1534,7 @@ describe("signIn refuses caveated manifests (TC-1855)", () => {
     }
   });
 
-  for (const caveats of [undefined, [], [{}], [{}, {}]] as Caveats[]) {
+  for (const caveats of [undefined, [], [{}]] as Caveats[]) {
     test(`manifest ${JSON.stringify(caveats) ?? "without caveats"}: unchanged, still restores`, async () => {
       const harness = await webWith({ manifest: manifestWith(caveats) });
       try {

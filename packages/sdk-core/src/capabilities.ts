@@ -77,19 +77,6 @@ export class CaveatedDelegationUnsupportedError extends Error {
   }
 }
 
-/**
- * True unless `caveats` is absent or holds only plain empty objects; any other
- * shape fails closed.
- */
-export function hasNonEmptyCaveat(caveats: unknown): boolean {
-  return caveats !== undefined && (!Array.isArray(caveats) || caveats.some((caveat) =>
-    caveat === null
-    || typeof caveat !== "object"
-    || (Object.getPrototypeOf(caveat) ?? Object.prototype) !== Object.prototype
-    || Object.keys(caveat).length > 0
-  ));
-}
-
 // ---------------------------------------------------------------------------
 // Space normalization
 // ---------------------------------------------------------------------------

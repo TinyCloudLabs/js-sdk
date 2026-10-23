@@ -21,6 +21,7 @@ import {
 } from "@tinycloud/sdk-core";
 
 import { NodeUserAuthorization } from "./authorization/NodeUserAuthorization";
+import { refuseCaveatedEntries } from "./authorization/caveatRefusal";
 import { MemorySessionStorage } from "./storage/MemorySessionStorage";
 import { TinyCloudNode } from "./TinyCloudNode";
 
@@ -91,14 +92,63 @@ type Caveats = PermissionEntry["caveats"];
 const CAVEATED: Array<[string, Caveats]> = [
   ["a constrained branch", [{ kind: "prefix", prefix: "notes/" }]],
   ["an empty branch next to a constrained one", [{}, { kind: "prefix", prefix: "notes/" }]],
+  ["two empty branches", [{}, {}]],
 ];
 
 const UNCONSTRAINED: Array<[string, Caveats]> = [
   ["absent", undefined],
   ["[]", []],
   ["[{}]", [{}]],
-  ["[{}, {}]", [{}, {}]],
 ];
+
+describe("refuseCaveatedEntries", () => {
+  class Branch {}
+  const entry = (caveats: unknown, service = "tinycloud.kv"): PermissionEntry => ({
+    service,
+    path: "notes/",
+    actions: [`${service}/get`],
+    caveats: caveats as Caveats,
+  });
+
+  test("accepts absent, [] and [{}]", () => {
+    for (const caveats of [undefined, [], [{}]]) {
+      expect(() => refuseCaveatedEntries([entry(caveats)])).not.toThrow();
+    }
+  });
+
+  test("refuses every other shape, for any service", () => {
+    const refused: unknown[] = [
+      [{}, {}],
+      [{ kind: "prefix" }],
+      [{}, { kind: "prefix" }],
+      null,
+      "prefix",
+      { kind: "prefix" },
+      [null],
+      ["x"],
+      [[]],
+      [new Map()],
+      [new Branch()],
+    ];
+    for (const service of ["tinycloud.kv", "tinycloud.sql"]) {
+      for (const caveats of refused) {
+        expect(() => refuseCaveatedEntries([entry(caveats, service)])).toThrow(CaveatedDelegationUnsupportedError);
+      }
+    }
+  });
+
+  test("names only the caveated entries", () => {
+    const plain = entry(undefined);
+    const caveated = { ...entry([{ kind: "prefix" }]), path: "b/" };
+    try {
+      refuseCaveatedEntries([plain, entry([{}]), caveated]);
+      throw new Error("expected a refusal");
+    } catch (error) {
+      if (!(error instanceof CaveatedDelegationUnsupportedError)) throw error;
+      expect(error.entries.map((refused) => refused.path)).toEqual(["b/"]);
+    }
+  });
+});
 
 function manifest(caveats: Caveats): Manifest {
   return {

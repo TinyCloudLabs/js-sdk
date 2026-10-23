@@ -4,8 +4,8 @@
 "@tinycloud/web-sdk": patch
 ---
 
-Manifest sign-in and session preparation refuse a permission with a non-empty caveat by throwing the existing `CaveatedDelegationUnsupportedError` (`CAVEATED_DELEGATION_UNSUPPORTED`) before any request or signature. Caveats that are absent, `[]`, `[{}]` or `[{}, {}]` are accepted.
+Manifest sign-in and session preparation refuse a permission that carries caveats by throwing the existing `CaveatedDelegationUnsupportedError` (`CAVEATED_DELEGATION_UNSUPPORTED`) before any request or signature. Absent, `[]` and `[{}]` caveats are accepted; any other set, including `[{}, {}]`, is refused, the same rule the delegation paths apply through `recapCaveatsEqual`.
 
-Refusing call sites: `TinyCloudNode.signIn`, `signInWithOpenKey` and `createOwnerDelegation`/`createSubDelegation` permissions; `NodeUserAuthorization.signIn`, `prepareSessionForSigning`, `signInWithOpenKey` and `createBootstrapSession`; `TinyCloudWeb.signIn` (before any persisted session is restored). `@tinycloud/sdk-core` exports the `hasNonEmptyCaveat` predicate.
+Refusing call sites: `TinyCloudNode.signIn`, `signInWithOpenKey`, `createOwnerDelegation` and `createSubDelegation` permissions; `NodeUserAuthorization.signIn`, `prepareSessionForSigning`, `signInWithOpenKey` and `createBootstrapSession`; `TinyCloudWeb.signIn` (before any persisted session is restored).
 
 Details: TC-1855

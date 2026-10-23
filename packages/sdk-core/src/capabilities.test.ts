@@ -23,7 +23,6 @@ import {
   isExplicitOnlyAction,
   normalizeSpace,
   parseRecapCapabilities,
-  hasNonEmptyCaveat,
   type WasmRecapEntry,
 } from "./capabilities";
 import { resolveManifest, type PermissionEntry } from "./manifest";
@@ -729,27 +728,6 @@ describe("explicit-only actions", () => {
     expect(found).toContain("tinycloud.kv/get");
     for (const action of EXPLICIT) {
       expect(found.some((value) => value.endsWith(action) || value === action.split("/")[1])).toBe(false);
-    }
-  });
-});
-
-describe("hasNonEmptyCaveat (TC-1855)", () => {
-  it("treats absent, [], [{}] and [{}, {}] as unconstrained", () => {
-    for (const caveats of [undefined, [], [{}], [{}, {}], [Object.create(null)]]) {
-      expect(hasNonEmptyCaveat(caveats)).toBe(false);
-    }
-  });
-
-  it("treats any branch with a key as constrained, wherever it sits", () => {
-    expect(hasNonEmptyCaveat([{ kind: "prefix" }])).toBe(true);
-    expect(hasNonEmptyCaveat([{}, { kind: "prefix" }])).toBe(true);
-    expect(hasNonEmptyCaveat([{ kind: "prefix" }, {}])).toBe(true);
-  });
-
-  it("fails closed on a value that is not an array of plain objects", () => {
-    class Branch {}
-    for (const caveats of [null, "prefix", { kind: "prefix" }, [null], ["x"], [[]], [new Map()], [new Branch()]]) {
-      expect(hasNonEmptyCaveat(caveats)).toBe(true);
     }
   });
 });
