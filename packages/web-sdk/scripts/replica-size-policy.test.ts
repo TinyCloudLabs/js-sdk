@@ -16,7 +16,6 @@ import { approvedTc1781DecryptExpiryRatchet, validateTc1781DecryptExpiryRatchetT
 import { approvedTc1801NonTransferableShareRatchet, validateTc1801NonTransferableShareRatchetTransition, type Tc1801NonTransferableShareRatchet } from "./replica-size-policy";
 import { approvedTc1807CredentialDiscoveryRatchet, validateTc1807CredentialDiscoveryRatchetTransition, type Tc1807CredentialDiscoveryRatchet } from "./replica-size-policy";
 import { approvedTc1827WorkerRatchet, validateTc1827WorkerRatchetTransition, type Tc1827WorkerRatchet } from "./replica-size-policy";
-import { approvedTc1823ErrorCodeRatchet, validateTc1823ErrorCodeRatchetTransition, type Tc1823ErrorCodeRatchet } from "./replica-size-policy";
 import { activeRootCeiling, rootCeilingFor, rootCeilings } from "./replica-size-policy";
 import { approvedTc1443Ratchet, approvedTc1443bRatchet, approvedTc1448Ratchet, approvedTc1466Ratchet, validateTc1443RatchetTransition, validateTc1443bRatchetTransition, validateTc1448RatchetTransition, validateTc1466RatchetTransition, type Tc1443Ratchet, type Tc1443bRatchet, type Tc1448Ratchet, type Tc1466Ratchet } from "./replica-size-policy";
 import { ancestryPins, assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedHardeningRatchet, approvedLogoutRatchet, approvedTc1413Ratchet, approvedTc1424Ratchet, approvedTc1432Ratchet, approvedTc1436Ratchet, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, landingCommit, pinLandedOn, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateLogoutRatchetTransition, validateMasterMergeResolutionTransition, validateTc1413RatchetTransition, validateTc1424RatchetTransition, validateTc1432RatchetTransition, validateTc1436RatchetTransition, type HardeningRatchet, type Ledger, type LogoutRatchet, type MasterMergeResolution, type Tc1413Ratchet, type Tc1424Ratchet, type Tc1432Ratchet, type Tc1436Ratchet } from "./replica-size-policy";
@@ -50,7 +49,6 @@ const historical: Ledger = {
   tc1801NonTransferableShareRatchet: undefined,
   tc1807CredentialDiscoveryRatchet: undefined,
   tc1827WorkerRatchet: undefined,
-  tc1823ErrorCodeRatchet: undefined,
   phase2Ratchet: {
     ...current.phase2Ratchet!,
     toolchain: "Bun 1.4.3; production webpack; gzip -9 -c",
@@ -2203,11 +2201,12 @@ describe("credential discovery default and typed error (#690) raised root ceilin
 describe("replica worker narrow imports (#694) lowered worker ceiling ratchet", () => {
   const row = () => structuredClone(approvedTc1827WorkerRatchet);
 
-  it("lowers only the worker ceiling, to the exact canonical CI bytes", () => {
+  it("lowers only the worker ceiling, to the exact canonical CI bytes, and is the checker's ceiling", () => {
     expect(() => validateLedger(current)).not.toThrow();
     expect(JSON.stringify(current.tc1827WorkerRatchet)).toBe(JSON.stringify(approvedTc1827WorkerRatchet));
     expect(row().worker).toEqual({ delta: -46625, ceiling: 776128 });
     expect(row().worker.ceiling).toBe(approvedTc1807CredentialDiscoveryRatchet.worker.ceiling + row().worker.delta);
+    expect(MAX_WORKER_GZIP_BYTES).toBe(row().worker.ceiling);
     expect(row().root).toEqual({ delta: { "index.mjs": 0, "index.cjs": 0 }, ceiling: approvedTc1807CredentialDiscoveryRatchet.root.ceiling });
     expect(row().firstImport.ceiling).toEqual(approvedTc1807CredentialDiscoveryRatchet.firstImport.ceiling);
     expect(row().firstImport.delta).toEqual({ "replica.mjs": 0, "replica.cjs": -1 });
@@ -2255,69 +2254,13 @@ describe("replica worker narrow imports (#694) lowered worker ceiling ratchet", 
   });
 });
 
-describe("SQL request-size error code (#693) raised worker ceiling ratchet", () => {
-  const row = () => structuredClone(approvedTc1823ErrorCodeRatchet);
-
-  it("raises only the worker ceiling, to the exact canonical CI bytes, and is the checker's ceiling", () => {
-    expect(() => validateLedger(current)).not.toThrow();
-    expect(JSON.stringify(current.tc1823ErrorCodeRatchet)).toBe(JSON.stringify(approvedTc1823ErrorCodeRatchet));
-    expect(row().worker).toEqual({ delta: 57, ceiling: 776185 });
-    expect(row().worker.ceiling).toBe(approvedTc1827WorkerRatchet.worker.ceiling + row().worker.delta);
-    expect(MAX_WORKER_GZIP_BYTES).toBe(row().worker.ceiling);
-    expect(row().root).toEqual({ delta: { "index.mjs": 0, "index.cjs": 0 }, ceiling: approvedTc1827WorkerRatchet.root.ceiling });
-    expect(row().firstImport.ceiling).toEqual(approvedTc1827WorkerRatchet.firstImport.ceiling);
-    expect(row().firstImport.delta).toEqual({ "replica.mjs": 0, "replica.cjs": 0 });
-    expect(row().activation.ceiling).toEqual(approvedTc1827WorkerRatchet.activation.ceiling);
-    expect(row().activation.delta).toEqual({ "activation.mjs": 0, "activation.cjs": 0 });
-    expect(row().ruling).toBe("Approved by Naomi (2026-10-23, policy review relayed by Amos)");
-    expect(row().base).toBe("e0a9891ef6fae47fcd2414127619032dc9343ae8");
-    expect(row().canonicalCI.run).toBe("https://github.com/TinyCloudLabs/js-sdk/actions/runs/39951550053");
-    expect(row().canonicalCI.jobs).toHaveLength(2);
-    expect(ancestryPins(current, false)).toContainEqual({
-      row: "tc1823ErrorCodeRatchet", pin: row().sourceCommits.at(-1)!,
-    });
-  });
-
-  it("refuses one extra byte in any bucket, other CI provenance, or a missing replica worker narrow-imports row", () => {
-    const mutations: Array<(changed: Tc1823ErrorCodeRatchet) => void> = [
-      (changed) => { changed.worker.ceiling++; },
-      (changed) => { changed.worker.ceiling--; },
-      (changed) => { changed.worker.delta++; },
-      (changed) => { changed.root.ceiling["index.mjs"]++; },
-      (changed) => { changed.firstImport.ceiling["replica.cjs"]++; },
-      (changed) => { changed.activation.ceiling["activation.cjs"]++; },
-      (changed) => { changed.canonicalCI.run = "https://github.com/TinyCloudLabs/js-sdk/actions/runs/1"; },
-      (changed) => { changed.sourceCommits = ["0".repeat(40)]; },
-    ];
-    for (const mutate of mutations) {
-      const ledger = copy(current);
-      const changed = row();
-      mutate(changed);
-      ledger.tc1823ErrorCodeRatchet = changed;
-      expect(() => validateLedger(ledger)).toThrow();
-    }
-    const withoutPrerequisite = copy(current);
-    delete withoutPrerequisite.tc1827WorkerRatchet;
-    expect(() => validateLedger(withoutPrerequisite)).toThrow();
-  });
-
-  it("may be introduced once and never changed or removed in a later base", () => {
-    expect(() => validateTc1823ErrorCodeRatchetTransition(undefined, row())).not.toThrow();
-    expect(() => validateTc1823ErrorCodeRatchetTransition(row(), row())).not.toThrow();
-    const changed = row();
-    changed.worker.ceiling++;
-    expect(() => validateTc1823ErrorCodeRatchetTransition(undefined, changed)).toThrow();
-    expect(() => validateTc1823ErrorCodeRatchetTransition(row(), undefined)).toThrow();
-  });
-});
-
 describe("the newest root ceiling is the only active one", () => {
   const rowOrder = (ledger: Ledger) => rootCeilings(ledger).map(({ row }) => row);
 
-  it("is the SQL request-size error code row on master, below the older index.mjs row it would otherwise be shadowed by", () => {
+  it("is the replica worker narrow-imports row on master, below the older index.mjs row it would otherwise be shadowed by", () => {
     expect(() => validateLedger(current)).not.toThrow();
     const active = activeRootCeiling(current)!;
-    expect(active).toEqual({ row: "tc1823ErrorCodeRatchet", ceiling: approvedTc1823ErrorCodeRatchet.root.ceiling });
+    expect(active).toEqual({ row: "tc1827WorkerRatchet", ceiling: approvedTc1827WorkerRatchet.root.ceiling });
     const older = rootCeilings(current).slice(0, -1);
     expect(older.length).toBeGreaterThan(0);
     expect(older.some((entry) => entry.ceiling["index.mjs"] > active.ceiling["index.mjs"])).toBe(true);
@@ -2330,9 +2273,9 @@ describe("the newest root ceiling is the only active one", () => {
       ceiling["index.cjs"] += 1_000_000;
     }
     const active = activeRootCeiling(ledger)!;
-    expect(active.row).toBe("tc1823ErrorCodeRatchet");
+    expect(active.row).toBe("tc1827WorkerRatchet");
     for (const format of ["index.mjs", "index.cjs"] as const) {
-      const newest = approvedTc1823ErrorCodeRatchet.root.ceiling[format];
+      const newest = approvedTc1827WorkerRatchet.root.ceiling[format];
       expect(active.ceiling[format]).toBe(newest);
       expect(newest > active.ceiling[format]).toBe(false);
       expect(newest + 1 > active.ceiling[format]).toBe(true);
@@ -2341,8 +2284,8 @@ describe("the newest root ceiling is the only active one", () => {
 
   it("falls back to the newest row still present, and a lone older row is its own history", () => {
     const withoutNewest = copy(current);
-    delete withoutNewest.tc1823ErrorCodeRatchet;
-    expect(activeRootCeiling(withoutNewest)).toEqual({ row: "tc1827WorkerRatchet", ceiling: approvedTc1827WorkerRatchet.root.ceiling });
+    delete withoutNewest.tc1827WorkerRatchet;
+    expect(activeRootCeiling(withoutNewest)).toEqual({ row: "tc1807CredentialDiscoveryRatchet", ceiling: approvedTc1807CredentialDiscoveryRatchet.root.ceiling });
     expect(() => validateLedger(withoutNewest)).not.toThrow();
     expect(activeRootCeiling(historical)).toEqual({ row: "fixRequiredRatchet", ceiling: approvedFixRequiredRatchet.rootCeiling });
     expect(activeRootCeiling({ allowance: current.allowance, entries: [] })).toBeUndefined();
@@ -2360,14 +2303,14 @@ describe("the newest root ceiling is the only active one", () => {
 
   it("fails closed when the active row has no ceiling for a format", () => {
     const missing = copy(current);
-    delete (missing.tc1823ErrorCodeRatchet!.root.ceiling as Record<string, unknown>)["index.cjs"];
-    expect(rootCeilingFor(missing, "index.cjs")).toEqual({ error: expect.stringContaining("index.cjs: active root row tc1823ErrorCodeRatchet has no ceiling") });
-    expect(rootCeilingFor(missing, "index.mjs")).toEqual({ row: "tc1823ErrorCodeRatchet", ceiling: approvedTc1823ErrorCodeRatchet.root.ceiling["index.mjs"] });
+    delete (missing.tc1827WorkerRatchet!.root.ceiling as Record<string, unknown>)["index.cjs"];
+    expect(rootCeilingFor(missing, "index.cjs")).toEqual({ error: expect.stringContaining("index.cjs: active root row tc1827WorkerRatchet has no ceiling") });
+    expect(rootCeilingFor(missing, "index.mjs")).toEqual({ row: "tc1827WorkerRatchet", ceiling: approvedTc1827WorkerRatchet.root.ceiling["index.mjs"] });
   });
 
   it("returns the newest row's number for each format on the real ledger", () => {
     for (const format of ["index.mjs", "index.cjs"] as const) {
-      expect(rootCeilingFor(current, format)).toEqual({ row: "tc1823ErrorCodeRatchet", ceiling: approvedTc1823ErrorCodeRatchet.root.ceiling[format] });
+      expect(rootCeilingFor(current, format)).toEqual({ row: "tc1827WorkerRatchet", ceiling: approvedTc1827WorkerRatchet.root.ceiling[format] });
     }
   });
 
@@ -2377,7 +2320,7 @@ describe("the newest root ceiling is the only active one", () => {
     const filed = Object.keys(current).filter((key) => order.includes(key));
     expect(pinned).toEqual(order);
     expect(filed).toEqual(order);
-    expect(order.at(-1)).toBe("tc1823ErrorCodeRatchet");
+    expect(order.at(-1)).toBe("tc1827WorkerRatchet");
   });
 });
 
