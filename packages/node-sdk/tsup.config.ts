@@ -4,6 +4,7 @@ export default defineConfig({
   entry: {
     index: 'src/index.ts',
     core: 'src/core.ts',
+    'encryption-keys': 'src/encryption-keys.ts',
     'replication/runtime': 'src/replication/runtime.ts',
     'replication/authority': 'src/replication/authority.ts',
     'replication/gated-network': 'src/replication/gated-network.ts',
@@ -18,6 +19,7 @@ export default defineConfig({
     '@tinycloud/sdk-core',
     '@tinycloud/sdk-services',
     '@tinycloud/sdk-services/kv/replication',
+    '@tinycloud/sdk-services/encryption/named-keys',
     '@tinycloud/node-sdk-wasm',
     '@tinycloud/replica',
     '@tinycloud/replica/sqlite',
