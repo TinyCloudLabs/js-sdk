@@ -29,6 +29,7 @@
     "@tinycloud/sdk-services-test": "20.0.0"
   },
   "changesets": [
-    "tc1801-share-non-transferable"
+    "tc1801-share-non-transferable",
+    "tc1807-discovery-url"
   ]
 }
