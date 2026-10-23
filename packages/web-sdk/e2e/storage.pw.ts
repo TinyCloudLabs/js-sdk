@@ -253,7 +253,7 @@ for (const scheme of SCHEMES) {
       const manage = section(page).getByRole("link", { name: STRINGS["storage.manage"], exact: true });
       await expect(manage).toBeVisible();
 
-      // The panel animates in (tc-in/tc-up) and resizes through a ResizeObserver. Sample only after its
+      // The panel animates in (tc-in) and resizes through a ResizeObserver. Sample only after its
       // animations finish, so the hit-test measures the resting layout rather than a transient frame.
       let geometry: ToastGeometry | undefined;
       await expect
