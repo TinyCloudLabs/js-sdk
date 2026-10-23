@@ -1,12 +1,18 @@
-import { afterEach, expect, spyOn, test } from "bun:test";
+import { afterAll, afterEach, expect, spyOn, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PermissionEntry } from "@tinycloud/node-sdk";
-import { profileConfigPath, withTinyCloudStateRoot, writeJsonAtomic } from "@tinycloud/operations/state";
-import { startAuthFlow } from "../auth/browser-auth.js";
-import { acquireOpenKeyApproval, ensureDelegationAuthority } from "./auth.js";
+import { profileConfigPath, profilePath, withTinyCloudStateRoot, writeJsonAtomic } from "@tinycloud/operations/state";
 import type { ProfileConfig } from "../config/types.js";
+
+// The profile store reads TC_HOME when it loads, so the command modules are imported after it is set
+// (a static import would bind the real profile directory).
+const originalTcHome = process.env.TC_HOME;
+const stateHome = await mkdtemp(join(tmpdir(), "tc1856-state-"));
+process.env.TC_HOME = stateHome;
+const { startAuthFlow } = await import("../auth/browser-auth.js");
+const { acquireOpenKeyApproval, ensureDelegationAuthority, refreshOpenKeySession } = await import("./auth.js");
 
 const PROFILE = "owner";
 const OWNER_DID = "did:pkh:eip155:1:0xd559CCd9be5C5dbF8068dee29A91DF2c2d4D7B49";
@@ -17,6 +23,11 @@ const servers: Array<{ stop(closeActiveConnections?: boolean): void }> = [];
 afterEach(async () => {
   for (const server of servers.splice(0)) server.stop(true);
   await Promise.all(homes.splice(0).map((home) => rm(home, { recursive: true, force: true })));
+});
+afterAll(async () => {
+  if (originalTcHome === undefined) delete process.env.TC_HOME;
+  else process.env.TC_HOME = originalTcHome;
+  await rm(stateHome, { recursive: true, force: true });
 });
 
 function manifestSource(manifest: Record<string, unknown>): string {
@@ -134,6 +145,31 @@ test("auth grant on an OpenKey owner profile refuses a limited request before pr
   const result = await runCli(["auth", "grant", "$HOME/request.json"], { "request.json": artifact });
   expectRefused(result);
   expect(result.output).not.toContain("notes");
+});
+
+test("a session refresh rebuilt from stored caveated authority is refused before any request", async () => {
+  // With replication prefixes saved and no explicit permissions, the refresh request is rebuilt from
+  // the stored session's permissions; caveated get authority on the prefix is refused.
+  await withTinyCloudStateRoot(stateHome, async () => {
+    await writeJsonAtomic(profileConfigPath(PROFILE), {
+      name: PROFILE, host: "http://127.0.0.1:1", chainId: 1, spaceName: "default", did: "did:key:prior",
+      ownerDid: OWNER_DID, posture: "owner-openkey", authMethod: "openkey",
+      createdAt: "2026-10-01T00:00:00.000Z", replication: { prefixes: ["notes/"] },
+    });
+    await writeJsonAtomic(join(profilePath(PROFILE), "session.json"), {
+      permissions: [{ service: "tinycloud.kv", space: SPACE, path: "notes/", actions: ["tinycloud.kv/get"], caveats: [{ tenant: "alpha" }] }],
+    });
+  });
+  const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(() => {
+    throw new Error("Refusal missing: fetch was called");
+  });
+  try {
+    await expect(refreshOpenKeySession(PROFILE, "http://127.0.0.1:1", { noPopup: true }))
+      .rejects.toMatchObject({ code: "REPLICATION_PREFIX_CAVEATED", exitCode: 2 });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  } finally {
+    fetchSpy.mockRestore();
+  }
 });
 
 const limited: PermissionEntry = {
