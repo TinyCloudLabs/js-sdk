@@ -2,9 +2,9 @@
  * Size errors for a 413 from the SQL and DuckDB nodes.
  *
  * This module exports one function. The node's code prefix decides the side.
- * Without a code, the requested operation decides: read operations are
- * response-side, everything else is request-side. An uncoded 413 on `execute`
- * is therefore request-side even for a SELECT.
+ * Without a code, the requested operation decides: the write-class operations
+ * (`batch`, `executeStatement`, `import`) are request-side, every other
+ * operation is response-side.
  */
 
 /**
@@ -28,7 +28,7 @@ export function requestTooLargeError(
   } else if (["sql_response_too_large", "duckdb_response_too_large"].includes(nodeCode)) {
     request = false;
   } else {
-    request = !["query", "queryArrow", "describe", "export"].includes(operation);
+    request = ["batch", "executeStatement", "import"].includes(operation);
   }
 
   const name = engine === "sql" ? "SQL" : "DuckDB";
