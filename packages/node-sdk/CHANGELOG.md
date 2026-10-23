@@ -1,5 +1,27 @@
 # @tinycloudlabs/node-sdk
 
+## 3.5.0-beta.0
+
+### Minor Changes
+
+- d60f81d: Add an opt-in, in-memory developer request log. With `requestLog: true` in `TinyCloudNode` config, the log records requests the SDK makes on your behalf: operation, path (first segment only), space (the name after the last colon), host, size, duration, attempts, result and source. Read them from `node.requests`, a read-only view with `snapshot()`, `subscribe()` and `onClear()`. The log keeps the most recent 500 entries and is cleared on sign-out, on sign-in as another account, and when a session is restored for a different owner. Entries carry sizes only; body and header content is absent from them. When the option is omitted, no log is created and no events are built.
+
+### Patch Changes
+
+- Updated dependencies [d60f81d]
+  - @tinycloud/sdk-services@3.5.0-beta.0
+  - @tinycloud/replica@0.3.2-beta.0
+  - @tinycloud/sdk-core@3.5.0-beta.0
+
+## 3.4.0
+
+### Patch Changes
+
+- Updated dependencies [6139879]
+  - @tinycloud/replica@0.3.1
+  - @tinycloud/sdk-core@3.4.0
+  - @tinycloud/sdk-services@3.3.2
+
 ## 3.3.2-beta.1
 
 ### Patch Changes

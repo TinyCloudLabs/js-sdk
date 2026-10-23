@@ -109,7 +109,7 @@ const { TinyCloudNode, NodeWasmBindings, PrivateKeySigner } = require("@tinyclou
 
 test("optional replica import is inert until one explicit root registration", () => {
   const plugin = require("../src/replica").browserReplicaPlugin;
-  const { registerBrowserReplica } = require("../src/modules/tcw");
+  const { registerBrowserReplica } = require("../src/modules/replica-wiring");
   const config = {
     replication: { enabled: true, prefixes: ["notes/"], storage: { kind: "indexeddb" } as never },
   };
