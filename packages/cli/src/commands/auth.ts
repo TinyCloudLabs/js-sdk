@@ -9,7 +9,7 @@ import { createInterface } from "node:readline";
 import type { IncomingMessage } from "node:http";
 import { TinyCloudNode, grantAuthRequest, principalDidEquals, REPLICA_LOGOUT_PENDING_FILE, signedCompactUcanExpiry, type AuthDelegationArtifact, type PermissionEntry, type PortableDelegation, type RuntimeDelegationActivator, type TinyCloudSession } from "@tinycloud/node-sdk";
 import type { ProfileReplicaApprovalEntry, ProfileReplicaDeferredToken, ProfileReplicaLogoutPending, ProfileReplicaPreflight, ProfileReplicaPurge } from "@tinycloud/sdk-services/kv/replication";
-import { composeManifestRequest } from "@tinycloud/sdk-core";
+import { composeManifestRequest, SqlDelegatedCaveatsUnsupportedError, sqlCaveatListNeedsDelegatedFeature } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
 import { namedProfilePath, profilePath } from "@tinycloud/operations/state";
 import { principalHashOf, readGateSnapshot, REPLICA_DENY_FLOOR_FILE } from "@tinycloud/replica/profile-gate";
@@ -980,6 +980,8 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           outputJson({ changed: false, missing: [], added: [] });
           return;
         }
+
+        assertSqlDelegatedCaveatsSupportedBeforeApproval(node, requested, ctx.host);
 
         if (profile.authMethod === "openkey" || options.device) {
           const key = await ProfileManager.getKey(ctx.profile);
@@ -1976,6 +1978,24 @@ async function nodeFromOpenKeyApproval(host: string, session: VerifiedScopedSess
   return node;
 }
 
+/**
+ * A delegated SQL caveat needs a node that can enforce it. Checked before the
+ * owner is asked to approve anything, so no approval is wasted on a grant the
+ * SDK would refuse to send.
+ */
+export function assertSqlDelegatedCaveatsSupportedBeforeApproval(
+  node: Pick<TinyCloudNode, "supportsSqlDelegatedCaveats">,
+  requested: readonly PermissionEntry[],
+  host: string,
+): void {
+  if (
+    requested.some((entry) => entry.service === "tinycloud.sql" && sqlCaveatListNeedsDelegatedFeature(entry.caveats)) &&
+    !node.supportsSqlDelegatedCaveats
+  ) {
+    throw new SqlDelegatedCaveatsUnsupportedError(host);
+  }
+}
+
 export async function ensureDelegationAuthority(params: {
   ctx: { profile: string; host: string };
   profile: ProfileConfig;
@@ -2002,6 +2022,8 @@ export async function ensureDelegationAuthority(params: {
   exactApproval?: boolean;
 }): Promise<PortableDelegation | undefined> {
   if (!params.force && params.node.hasRuntimePermissions(params.requested)) return undefined;
+
+  assertSqlDelegatedCaveatsSupportedBeforeApproval(params.node, params.requested, params.ctx.host);
 
   if (
     !params.consentAlreadyGiven &&
