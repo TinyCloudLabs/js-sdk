@@ -1,5 +1,33 @@
 # @tinycloudlabs/node-sdk
 
+## 3.6.0-beta.5
+
+### Minor Changes
+
+- c0acb86: Adds email-proof credential acquisition as `@tinycloud/node-sdk/credentials-core` (narrow entry, no web-sdk dependency) and `@tinycloud/node-sdk/credential-pending-store` (owner-only, one file per pending request). The `@tinycloud/node-sdk/credentials` entry adds `requestEmailProofCode`, `completeEmailProof`, `acquireEmailProof`, `createEd25519HolderSigner`, `emailProofRequirement`, and `EmailProofError`. The root entry gains no email-proof exports.
+
+  Details: TC-712
+
+## 3.6.0-beta.4
+
+### Minor Changes
+
+- e32bc41: feat(credentials): add email-proof credential acquisition
+  - `@tinycloud/node-sdk/credentials` exports `requestEmailProofCode`, `completeEmailProof`, and `acquireEmailProof` for a two-step flow: request a one-time code for an address, then exchange it for a verifiable credential.
+  - Errors are `EmailProofError` with a `step`, a stable `code`, `retryAfterMs`, and `recoverable`.
+  - `@tinycloud/node-sdk/credential-pending-store` provides a file-backed pending store: owner-only files, 15-minute maximum lifetime, deleted after success or any unrecoverable failure.
+  - `@tinycloud/web-sdk` re-exports the same types. Existing root behaviour is unchanged; the root bundle contains no email-proof code.
+  - `@tinycloud/sdk-core`: `CredentialError` accepts an explicit `recoverable` flag that overrides the per-code default. `@tinycloud/node-sdk` needs this to keep the witness's recoverable flag on server errors.
+
+  Release order: `@tinycloud/sdk-core`, then `@tinycloud/node-sdk`, then `@tinycloud/web-sdk`. Node-sdk pins sdk-core exactly, so sdk-core must publish first for that pin to carry the recoverable override.
+
+  Details: TC-712
+
+### Patch Changes
+
+- Updated dependencies [e32bc41]
+  - @tinycloud/sdk-core@3.6.0-beta.4
+
 ## 3.6.0-beta.3
 
 ### Patch Changes

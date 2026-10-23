@@ -1,5 +1,25 @@
 # @tinycloud/courier
 
+## 0.3.0-beta.4
+
+### Minor Changes
+
+- c0acb86: Adds `courier credential acquire --email <addr>` and `courier credential show --email <addr>`. `acquire` requests an email verification code. Run it again with `--code-stdin` and enter the code on stdin to store the verified credential under `COURIER_HOME/credentials/` (owner-only). `show` prints `email`, `credentialId`, `issuedAt`, `expiresAt`, and `status`, never the credential itself.
+
+  Details: TC-712
+
+### Patch Changes
+
+- Updated dependencies [c0acb86]
+  - @tinycloud/node-sdk@3.6.0-beta.5
+
+## 0.2.4-beta.3
+
+### Patch Changes
+
+- Updated dependencies [e32bc41]
+  - @tinycloud/node-sdk@3.6.0-beta.4
+
 ## 0.2.4-beta.2
 
 ### Patch Changes

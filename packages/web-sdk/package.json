@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/web-sdk",
-  "version": "3.6.0-beta.3",
+  "version": "3.6.0-beta.5",
   "description": "A set of tools and utilities to help you build your app with TinyCloud.",
   "main": "dist/index.cjs",
   "module": "dist/index.mjs",
@@ -23,6 +23,11 @@
       "types": "./dist/replica-gated.d.ts",
       "import": "./dist/replica-gated.mjs",
       "require": "./dist/replica-gated.cjs"
+    },
+    "./credentials": {
+      "types": "./dist/credentials-subpath.d.ts",
+      "import": "./dist/credentials.mjs",
+      "require": "./dist/credentials.cjs"
     },
     "./package.json": "./package.json"
   },
@@ -54,9 +59,9 @@
     "@multiformats/multiaddr": "^13.0.1",
     "@multiformats/multiaddr-to-uri": "^12.0.0",
     "@noble/curves": "^1.9.7",
-    "@tinycloud/node-sdk": "3.6.0-beta.3",
+    "@tinycloud/node-sdk": "3.6.0-beta.5",
     "@tinycloud/replica": "0.3.3-beta.1",
-    "@tinycloud/sdk-core": "3.6.0-beta.3",
+    "@tinycloud/sdk-core": "3.6.0-beta.4",
     "@tinycloud/share-envelope": "1.2.1",
     "@tinycloud/share-sdk": "1.3.0",
     "@tinycloud/web-sdk-wasm": "1.7.7",
