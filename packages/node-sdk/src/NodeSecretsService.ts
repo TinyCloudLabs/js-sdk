@@ -247,7 +247,9 @@ export class NodeSecretsService implements ISecretsService {
     }
 
     try {
-      await this.config.grantPermissions(permissionEntries);
+      // Only entries the runtime confirms as covered are dropped from the request.
+      const uncovered = permissionEntries.filter((entry) => !this.config.hasPermissions?.([entry]));
+      await this.config.grantPermissions(uncovered);
       return this.restoreUnlockAfterEscalation();
     } catch (error) {
       return secretsError(

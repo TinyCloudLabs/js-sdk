@@ -3266,3 +3266,190 @@ describe("TinyCloudNode grantRuntimePermissions issued expiry", () => {
     });
   });
 });
+
+describe("TinyCloudNode per-entry permission coverage (TC-1781)", () => {
+  const ADDRESS = "0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
+  const SECRETS_SPACE = `tinycloud:pkh:eip155:1:${ADDRESS}:secrets`;
+  const KV_PATH = "vault/secrets/API_KEY";
+  const DECRYPT_ACTIONS = ["decrypt"];
+  const ONE_HOUR_MS = 60 * 60 * 1000;
+  const CLOCK_SLACK_MS = 5_000;
+  const KV_GET_ENTRY: PermissionEntry = {
+    service: "tinycloud.kv",
+    space: SECRETS_SPACE,
+    path: KV_PATH,
+    actions: ["get"],
+    skipPrefix: true,
+  };
+  const KV_GET_RECAP = [{
+    service: "kv",
+    space: SECRETS_SPACE,
+    path: KV_PATH,
+    actions: ["tinycloud.kv/get"],
+  }];
+
+  function decryptEntryFor(node: TinyCloudNode): PermissionEntry {
+    return {
+      service: "tinycloud.encryption",
+      path: node.getEncryptionNetworkIdForSpace(SECRETS_SPACE),
+      actions: DECRYPT_ACTIONS,
+      skipPrefix: true,
+    };
+  }
+
+  function nodeWithSessionRecap(recap: unknown[]): TinyCloudNode {
+    const node = makeNode(mock(() => ({})));
+    Reflect.set(node, "_address", ADDRESS);
+    (node as any).wasmBindings.parseRecapFromSiwe = mock(() => recap);
+    return node;
+  }
+
+  function stubBaseSecrets(node: TinyCloudNode) {
+    const base = { get: mock(async () => ({ ok: true, data: "value" })) };
+    (node as any).getBaseSecrets = () => base;
+    (node as any)._spaceService = {};
+    return base;
+  }
+
+  function spyOnGrant(node: TinyCloudNode) {
+    const spy = mock(node.grantRuntimePermissions.bind(node));
+    (node as any).grantRuntimePermissions = spy;
+    return spy;
+  }
+
+  async function withFetchActivated<T>(fn: () => Promise<T>): Promise<T> {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async () =>
+      new Response(JSON.stringify({ activated: ["runtime-cid"] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    ) as any;
+    try {
+      return await fn();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }
+
+  function walletCallCounts(node: TinyCloudNode) {
+    const wasm = (node as any).wasmBindings;
+    return {
+      signatures: ((node as any).signer.signMessage as ReturnType<typeof mock>).mock.calls.length,
+      prepareSession: wasm.prepareSession.mock.calls.length,
+      createDelegation: wasm.createDelegation.mock.calls.length,
+    };
+  }
+
+  function expectExpiriesWithin(node: TinyCloudNode, maxMs: number): void {
+    const now = Date.now();
+    const wasm = (node as any).wasmBindings;
+    const prepared = wasm.prepareSession.mock.calls.map(
+      ([call]: [{ expirationTime: string }]) => new Date(call.expirationTime).getTime(),
+    );
+    const issued = node.getRuntimePermissionDelegations().map((d) => d.expiry.getTime());
+    const expiries = [...prepared, ...issued];
+    expect(expiries.length).toBeGreaterThan(0);
+    for (const expiry of expiries) {
+      expect(expiry - now).toBeLessThanOrEqual(maxMs + CLOCK_SLACK_MS);
+    }
+  }
+
+  test("secrets.get succeeds on a session kv get plus a decrypt-only runtime grant, with zero new calls", async () => {
+    const node = nodeWithSessionRecap(KV_GET_RECAP);
+    const decryptEntry = decryptEntryFor(node);
+    await withFetchActivated(() => node.grantRuntimePermissions([decryptEntry]));
+    expect(node.getRuntimePermissionDelegations([decryptEntry])).toHaveLength(1);
+
+    const base = stubBaseSecrets(node);
+    const before = walletCallCounts(node);
+
+    const result = await node.secrets.get("API_KEY");
+
+    expect(result).toEqual({ ok: true, data: "value" });
+    expect(base.get).toHaveBeenCalled();
+    expect(walletCallCounts(node)).toEqual(before);
+  });
+
+  test("hasRuntimePermissions requires every entry, each covered on its own", () => {
+    const node = nodeWithSessionRecap(KV_GET_RECAP);
+    const decryptEntry = decryptEntryFor(node);
+
+    // Session covers the kv get; nothing covers decrypt.
+    expect(node.hasRuntimePermissions([KV_GET_ENTRY])).toBe(true);
+    expect(node.hasRuntimePermissions([decryptEntry])).toBe(false);
+    expect(node.hasRuntimePermissions([KV_GET_ENTRY, decryptEntry])).toBe(false);
+  });
+
+  test("an entry covered only by an expired runtime grant does not count as covered", async () => {
+    const node = nodeWithSessionRecap(KV_GET_RECAP);
+    const decryptEntry = decryptEntryFor(node);
+    await withFetchActivated(() => node.grantRuntimePermissions([decryptEntry]));
+    expect(node.hasRuntimePermissions([KV_GET_ENTRY, decryptEntry])).toBe(true);
+
+    const grants = (node as any).runtimePermissionGrants as Array<{ expiresAt: Date }>;
+    for (const grant of grants) grant.expiresAt = new Date(Date.now() - 1);
+
+    expect(node.hasRuntimePermissions([decryptEntry])).toBe(false);
+    expect(node.hasRuntimePermissions([KV_GET_ENTRY, decryptEntry])).toBe(false);
+  });
+
+  test("a one-hour decrypt-only grant costs one signature in total, and repeat reads cost none", async () => {
+    const node = nodeWithSessionRecap(KV_GET_RECAP);
+    const decryptEntry = decryptEntryFor(node);
+    await withFetchActivated(() => node.grantRuntimePermissions([decryptEntry], { expiry: 3_540_000 }));
+    stubBaseSecrets(node);
+
+    await withFetchActivated(() => node.secrets.get("API_KEY"));
+    const afterFirst = walletCallCounts(node);
+    await withFetchActivated(() => node.secrets.get("API_KEY"));
+    const afterSecond = walletCallCounts(node);
+
+    expect(afterFirst.signatures).toBe(1);
+    expect(afterSecond).toEqual(afterFirst);
+    expectExpiriesWithin(node, 3_540_000);
+  });
+
+  test("no prior step-up, session holds kv get: secrets.get escalates once, requesting only decrypt, at most one hour", async () => {
+    const node = nodeWithSessionRecap(KV_GET_RECAP);
+    stubBaseSecrets(node);
+    const grant = spyOnGrant(node);
+
+    const result = await withFetchActivated(() => node.secrets.get("API_KEY"));
+
+    expect(result).toEqual({ ok: true, data: "value" });
+    expect(grant).toHaveBeenCalledTimes(1);
+    const requested = grant.mock.calls[0][0] as PermissionEntry[];
+    expect(requested.map((e) => e.actions)).toEqual([DECRYPT_ACTIONS]);
+    expect(node.getRuntimePermissionDelegations()).toHaveLength(1);
+    expectExpiriesWithin(node, ONE_HOUR_MS);
+  });
+
+  test("kv get outside the session manifest, decrypt already held: escalation requests only the kv get", async () => {
+    const node = nodeWithSessionRecap([]);
+    const decryptEntry = decryptEntryFor(node);
+    await withFetchActivated(() => node.grantRuntimePermissions([decryptEntry]));
+    stubBaseSecrets(node);
+    const grant = spyOnGrant(node);
+
+    const result = await withFetchActivated(() => node.secrets.get("API_KEY"));
+
+    expect(result).toEqual({ ok: true, data: "value" });
+    expect(grant).toHaveBeenCalledTimes(1);
+    const requested = grant.mock.calls[0][0] as PermissionEntry[];
+    expect(requested.map((e) => e.service)).toEqual(["tinycloud.kv"]);
+  });
+
+  test("nothing held: secrets.get grants the kv get and decrypt pair together, bounded to one hour", async () => {
+    const node = nodeWithSessionRecap([]);
+    stubBaseSecrets(node);
+    const grant = spyOnGrant(node);
+
+    await withFetchActivated(() => node.secrets.get("API_KEY"));
+
+    expect(grant).toHaveBeenCalledTimes(1);
+    const requested = grant.mock.calls[0][0] as PermissionEntry[];
+    expect(requested.map((e) => e.service)).toEqual(["tinycloud.kv", "tinycloud.encryption"]);
+    expectExpiriesWithin(node, ONE_HOUR_MS);
+  });
+});
