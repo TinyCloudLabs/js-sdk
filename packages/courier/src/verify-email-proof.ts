@@ -143,10 +143,11 @@ export async function verifyEmailProofWithPin(
   pin: CredentialPin,
 ): Promise<VerifyEmailProofResult> {
   const { credential, possession, expectEmail, inviteId, oneTimeKeyHash, seenCredentials } = input;
-  const holder = bareDid(input.holderDid);
   if (!credential) return { ok: false, reason: 'no-credential' };
   const nowMs = input.now ?? Date.now();
   try {
+    if (typeof input.holderDid !== 'string') reject('holder-mismatch');
+    const holder = bareDid(input.holderDid);
     const [jwt = '', ...rest] = credential.split('~');
     const disclosures = rest.filter(Boolean);
     const jwtParts = jwt.split('.');

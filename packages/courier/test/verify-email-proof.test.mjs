@@ -233,3 +233,7 @@ test('a holder DID with a key fragment still matches its bare did:key', async ()
   const result = await verifyEmailProofWithPin(verifyArgs({ holderDid: `${holderDid}#${holderDid.slice('did:key:'.length)}` }), TEST_PIN);
   assert.equal(result.ok, true);
 });
+
+test('a missing holder DID is a reason code, not a thrown error', async () => {
+  assert.deepEqual(await verifyEmailProofWithPin(verifyArgs({ holderDid: undefined }), TEST_PIN), { ok: false, reason: 'holder-mismatch' });
+});
