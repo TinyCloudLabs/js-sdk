@@ -109,6 +109,25 @@ test("README.md, config.json and pre.json are exempt", (t) => {
   assert.equal(repo.check(repo.base, head).status, 0);
 });
 
+test("a generated dependabot changeset without a ticket line is exempt", (t) => {
+  const repo = prRepository(t);
+  const head = repo.commit("deps", {
+    ".changeset/dependabot-npm-and-yarn-vite-5-4-9.md": changeset("Bump vite from 5.4.8 to 5.4.9"),
+  });
+  const result = repo.check(repo.base, head);
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test("only the generated dependabot file name is exempt", (t) => {
+  for (const name of ["dependabot.md", "dependabot-.md", "my-dependabot-bump.md", "dependabot-a_b.md", `dependabot-${"a".repeat(51)}.md`]) {
+    const repo = prRepository(t);
+    const head = repo.commit("feat", { [`.changeset/${name}`]: changeset("Add a thing.") });
+    const result = repo.check(repo.base, head);
+    assert.equal(result.status, 1, name);
+    assert.match(result.stderr, /needs a `Details: TC-N` line/, name);
+  }
+});
+
 test("every offending file is reported", (t) => {
   const repo = prRepository(t);
   const head = repo.commit("feat", {

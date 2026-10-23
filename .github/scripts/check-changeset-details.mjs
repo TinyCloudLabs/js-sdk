@@ -6,12 +6,16 @@
 //   check-changeset-details.mjs <base> <head>
 //
 // Only the files the PR adds or modifies since the merge base are read.
-// `.changeset/README.md`, `config.json` and `pre.json` are not changesets.
+// `.changeset/README.md`, `config.json` and `pre.json` are not changesets. Neither
+// are the changesets `.github/workflows/dependabot-changeset.yml` generates from a
+// dependency PR title (`dependabot-` + the branch name with every character outside
+// `[a-zA-Z0-9]` turned into `-`, cut to 50 characters): they carry no ticket.
 
 import { execFileSync } from "node:child_process";
 
 const DETAILS = /^Details: TC-[0-9]+/m;
 const EXEMPT = new Set(["README.md", "config.json", "pre.json"]);
+const DEPENDABOT = /^dependabot-[a-zA-Z0-9-]{1,50}\.md$/;
 
 function git(...args) {
   return execFileSync("git", args, {
@@ -22,7 +26,7 @@ function git(...args) {
 
 function isChangeset(path) {
   const match = /^\.changeset\/([^/]+\.md)$/.exec(path);
-  return match !== null && !EXEMPT.has(match[1]);
+  return match !== null && !EXEMPT.has(match[1]) && !DEPENDABOT.test(match[1]);
 }
 
 function missingDetails(base, head) {
