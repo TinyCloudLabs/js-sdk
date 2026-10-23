@@ -1040,6 +1040,113 @@ describe("TinyCloud share authority adapter", () => {
     expect(decryptChecks).toEqual([]);
   });
 
+  const stepUpAdapter = (approveShareDecrypt: (input: { profileName: string }) => Promise<void>, fetchFn?: typeof globalThis.fetch) => createShareAuthorityAdapters({
+    origin: "https://share.example",
+    profileName: async () => "test",
+    fetchFn: fetchFn ?? (async () => Response.json({
+      version: "tinycloud.share/config-v2",
+      shareOrigin: "https://share.example",
+      registryOrigin: "https://registry.example",
+      credentialsOrigin: "https://credentials.example",
+    })) as unknown as typeof globalThis.fetch,
+    approveShareDecrypt,
+  }).targetAdapter;
+
+  it("asks for a decrypt approval when the session lacks decrypt, then publishes", async () => {
+    holdsDecrypt = false;
+    const approvals: string[] = [];
+    const published = await stepUpAdapter(async ({ profileName }) => {
+      approvals.push(profileName);
+      holdsDecrypt = true;
+    }).publish(addressedInput({ kind: "email", address: "owner@example.com" }));
+    expect("state" in published).toBe(false);
+    expect(approvals).toEqual(["test"]);
+    expect(uploadedPaths).toHaveLength(1);
+  });
+
+  it("asks only once: a second publish after the approval makes no further approval request", async () => {
+    holdsDecrypt = false;
+    const approvals: string[] = [];
+    const adapter = stepUpAdapter(async () => {
+      approvals.push("approved");
+      holdsDecrypt = true;
+    });
+    await adapter.publish(addressedInput({ kind: "email", address: "owner@example.com" }));
+    await adapter.publish(addressedInput({ kind: "email", address: "owner@example.com" }));
+    expect(approvals).toEqual(["approved"]);
+    expect(uploadedPaths).toHaveLength(2);
+  });
+
+  it("uploads nothing and sends no Share request when the decrypt approval is refused", async () => {
+    holdsDecrypt = false;
+    const requests: string[] = [];
+    const adapter = stepUpAdapter(async () => {
+      throw new CLIError("DEVICE_AUTH_DENIED", "The owner denied the OpenKey device authorization. No session was saved.", 5);
+    }, (async (input: string | URL | Request) => {
+      requests.push(String(input instanceof Request ? input.url : input));
+      return new Response(null, { status: 503 });
+    }) as unknown as typeof globalThis.fetch);
+    const error = await adapter.publish(addressedInput({ kind: "email", address: "owner@example.com" })).then(() => undefined, (caught: unknown) => caught);
+    expect(error).toBeInstanceOf(SharePublishAuthorityError);
+    expect((error as InstanceType<typeof SharePublishAuthorityError>).failure).toEqual({ kind: "decrypt-approval-not-completed" });
+    expect(requests).toEqual([]);
+    expect(publishEvents).toEqual([]);
+    expect(uploadedPaths).toEqual([]);
+    expect(encryptions).toBe(0);
+  });
+
+  it("uploads nothing and sends no Share request when the decrypt approval times out", async () => {
+    holdsDecrypt = false;
+    const requests: string[] = [];
+    const adapter = stepUpAdapter(async () => {
+      throw new CLIError("DEVICE_AUTH_EXPIRED", "OpenKey device authorization expired_token: the approval window closed.", 3);
+    }, (async (input: string | URL | Request) => {
+      requests.push(String(input instanceof Request ? input.url : input));
+      return new Response(null, { status: 503 });
+    }) as unknown as typeof globalThis.fetch);
+    const error = await adapter.publish(addressedInput({ kind: "email", address: "owner@example.com" })).then(() => undefined, (caught: unknown) => caught);
+    expect((error as InstanceType<typeof SharePublishAuthorityError>).failure).toEqual({ kind: "decrypt-approval-not-completed" });
+    expect(requests).toEqual([]);
+    expect(publishEvents).toEqual([]);
+    expect(uploadedPaths).toEqual([]);
+    expect(encryptions).toBe(0);
+  });
+
+  it.each([
+    ["a verification refusal", () => new CLIError("OPENKEY_GRANT_BROADENED", "The signed grant contains authority beyond the requested grant.", 5), "OPENKEY_GRANT_BROADENED"],
+    ["an unpinned owner", () => new CLIError("DECRYPT_APPROVAL_OWNER_UNPINNED", "This profile records no owner.", 5), "DECRYPT_APPROVAL_OWNER_UNPINNED"],
+    ["an OpenKey refusal of the request", () => new CLIError("DEVICE_AUTH_FAILED", "OpenKey refused the device request.", 4), "DEVICE_AUTH_FAILED"],
+  ])("keeps its own error code for %s, and publishes nothing", async (_name, failure, code) => {
+    holdsDecrypt = false;
+    const error = await stepUpAdapter(async () => { throw failure(); })
+      .publish(addressedInput({ kind: "email", address: "owner@example.com" }))
+      .then(() => undefined, (caught: unknown) => caught);
+    expect(error).toBeInstanceOf(CLIError);
+    expect(error).toMatchObject({ code });
+    expect(publishEvents).toEqual([]);
+    expect(uploadedPaths).toEqual([]);
+    expect(encryptions).toBe(0);
+  });
+
+  it("refuses with decrypt-not-held when the approval completes but decrypt is still missing", async () => {
+    holdsDecrypt = false;
+    const error = await stepUpAdapter(async () => undefined)
+      .publish(addressedInput({ kind: "email", address: "owner@example.com" }))
+      .then(() => undefined, (caught: unknown) => caught);
+    expect((error as InstanceType<typeof SharePublishAuthorityError>).failure).toEqual({ kind: "decrypt-not-held" });
+    expect(uploadedPaths).toEqual([]);
+  });
+
+  it("never asks for a decrypt approval on a bearer share", async () => {
+    holdsDecrypt = false;
+    const approvals: string[] = [];
+    const bearer = await stepUpAdapter(async () => {
+      approvals.push("approved");
+    }).publish(addressedInput({ kind: "bearer" }));
+    expect("state" in bearer).toBe(false);
+    expect(approvals).toEqual([]);
+  });
+
   it("keeps a lost-response retry identical after the clock advances and the adapter is recreated", async () => {
     deliveryAuthorizationInputs.length = 0;
     deliveryAuthorization = undefined;

@@ -42,7 +42,11 @@ import { ExitCode } from "../config/constants.js";
 import { resolveSpaceUri } from "./space.js";
 import { isRawEncryptionPermission } from "./raw-encryption.js";
 import { canonicalOwnerDid } from "./owner-did.js";
-import { SHARE_PUBLISHING_MANIFEST, SHARE_PUBLISHING_MANIFEST_REF } from "../share/publishing-manifest.js";
+import {
+  isDeviceRestrictedPermission,
+  SHARE_PUBLISHING_MANIFEST,
+  SHARE_PUBLISHING_MANIFEST_REF,
+} from "../share/publishing-manifest.js";
 import {
   resolveProfileOperatorType,
   resolveProfilePosture,
@@ -481,10 +485,7 @@ export async function loadManifestPermissions(
   if (options.device && typeof manifest.app_id === "string" &&
     (manifest.secrets !== undefined ||
       manifest.space === "secrets" ||
-      (typeof manifest.space === "string" && manifest.space.endsWith(":secrets")) ||
-      (Array.isArray(manifest.permissions) && manifest.permissions.some((entry: unknown) =>
-        entry !== null && typeof entry === "object" &&
-        normalizeService(String((entry as Record<string, unknown>).service ?? "")) === "tinycloud.encryption")))) {
+      (typeof manifest.space === "string" && manifest.space.endsWith(":secrets")))) {
     throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", "--device cannot authorize tinycloud.encryption or the secrets space. Use browser or --paste login.", ExitCode.USAGE_ERROR);
   }
 
@@ -527,6 +528,9 @@ export async function loadManifestPermissions(
           ...(Array.isArray(entry.caveats) ? { caveats: entry.caveats as PermissionEntry["caveats"] } : {}),
         };
       });
+    if (options.device && permissions.some(isDeviceRestrictedPermission)) {
+      throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", "--device cannot authorize tinycloud.encryption or the secrets space. Use browser or --paste login.", ExitCode.USAGE_ERROR);
+    }
     permissions.push(...await secretPermissionsFromAppManifest(manifest, profile, options.ownerDid));
     return resolvePermissionSpaces(permissions, profile, options);
   }

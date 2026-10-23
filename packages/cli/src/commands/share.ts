@@ -1,3 +1,4 @@
+import { DECRYPT_APPROVAL_MESSAGES } from "../share/decrypt-approval-messages.js";
 import { Command, Option } from "commander";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import {
@@ -237,6 +238,9 @@ export function shareCliError(error: unknown, operation: "publish" | "notify" = 
         5,
         { hint: "Share it from https://share.tinycloud.xyz while signed in as the account owner, or ask the owner to share it. A link anyone can open works from this sign-in: --to anyone." },
       );
+    }
+    if (failure.kind === "decrypt-approval-not-completed") {
+      return new CLIError("DECRYPT_APPROVAL_NOT_COMPLETED", DECRYPT_APPROVAL_MESSAGES.notCompleted, 5);
     }
   }
   if (error instanceof ShortLinkError) {
