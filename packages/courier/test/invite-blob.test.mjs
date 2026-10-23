@@ -3,13 +3,13 @@ import assert from 'node:assert/strict';
 import { newInviteId, buildInviteBlob, buildHello } from '../dist/invite-blob.js';
 import { parseInviteBlob, parseHello, inviteFolder, CREDENTIAL_MAX_BYTES } from '../dist/invite-schema.js';
 
-const NOW = Date.parse('2026-10-21T00:00:00.000Z');
+const NOW = Math.floor(Date.now() / 1000) * 1000;
 const LATER = new Date(NOW + 24 * 3600e3);
 const SAM_ADDR = '0x1234567890abcdef1234567890abcdef12345678';
 const HUNTER_ADDR = '0xfedcba0987654321fedcba0987654321fedcba09';
 const SAM_OWNER = `did:pkh:eip155:1:${SAM_ADDR}`;
 const HUNTER_OWNER = `did:pkh:eip155:1:${HUNTER_ADDR}`;
-const ISSUED = '2026-10-21T00:00:00.000Z';
+const ISSUED = new Date(NOW).toISOString();
 
 const artifactA = () => ({
   type: 'courier-pair',
