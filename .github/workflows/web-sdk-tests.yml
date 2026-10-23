@@ -127,10 +127,7 @@ jobs:
           OPENCREDENTIALS_FIXTURE_OPTIONAL: "1"
         run: |
           set -o pipefail
-          declare -A skip=(
-            [tests/web-sdk.test.ts]="Jest-only suite (jest.mock automock, eth-testing provider, TinyCloud server on localhost:3001); not runnable under bun test"
-            [tests/siwe-signature-init.test.js]="exercises an in-file MockUserAuthorization rather than web-sdk source, and 3 of its cases fail against that mock"
-          )
+          declare -A skip=()
           log="$RUNNER_TEMP/web-sdk-test.log"
           passed=()
           skipped=()
