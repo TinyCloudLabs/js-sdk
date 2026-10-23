@@ -1,78 +1,51 @@
 /**
- * Statement classification and request-side size errors shared by the SQL and
- * DuckDB services.
+ * Size errors for a 413 from the SQL and DuckDB nodes.
  *
- * The request-too-large error codes are plain string literals, deliberately not
- * entries of the runtime ErrorCodes object in types.ts: that object is bundled
- * into every entry point, and the wire string is the contract.
+ * This module exports one function. Everything else lives inside it, so the
+ * bundle gets no extra top-level names. The request-too-large code is a plain
+ * string literal, not an entry of the runtime ErrorCodes object in types.ts.
  */
 
 export type StatementClass = "read" | "write" | "ambiguous";
 
-interface SizeEngine {
-  label: string;
-  requestNodeCode: string;
-  responseNodeCode: string;
-  errorCode: string;
-}
-
-const SIZE_ENGINES: Record<"sql" | "duckdb", SizeEngine> = {
-  sql: {
-    label: "SQL",
-    requestNodeCode: "sql_request_too_large",
-    responseNodeCode: "sql_response_too_large",
-    errorCode: "SQL_REQUEST_TOO_LARGE",
-  },
-  duckdb: {
-    label: "DuckDB",
-    requestNodeCode: "duckdb_request_too_large",
-    responseNodeCode: "duckdb_response_too_large",
-    errorCode: "DUCKDB_REQUEST_TOO_LARGE",
-  },
-};
-
-/** First keyword of a statement, lowercased, skipping leading whitespace and comments. */
-export function firstSqlToken(sql: string): string | undefined {
-  const match = /^(?:\s|--[^\n]*\n|\/\*[\s\S]*?\*\/)*([A-Za-z_]+)/.exec(sql);
-  return match?.[1].toLowerCase();
-}
-
-export function statementClassOf(sql: string): StatementClass {
-  const token = firstSqlToken(sql);
-  if (token === "select" || token === "values") return "read";
-  if (token === "with" || token === "explain" || token === "show" || token === "describe") return "ambiguous";
-  return "write";
-}
-
-// The node's limit, shown in the request-side message only when the node coded the cause.
-const NODE_LIMIT_CLAUSE = /\(limit (\d+) bytes\)/;
-
 /**
- * The request-too-large error for a 413, or undefined when the 413 is a response-side
- * size. The node's stable code (alone or before the first colon) decides; without
- * one (older nodes) the statement class decides: reads answer with the response size,
- * writes with the request size, ambiguous statements use the envelope text.
+ * The size error for a 413, or undefined for any other status. `request` is
+ * true for a request-side size, false for a response-side size. The node's code
+ * decides first: a code prefix (or a bare code) names the side, and the
+ * statement decides only when the node sent no code. `detail` is the service's
+ * formatted error, appended after the short sentence unchanged. `code` is set
+ * only for the request side; a response-side error keeps the HTTP mapping.
  */
 export function requestTooLargeError(
-  engine: keyof typeof SIZE_ENGINES,
-  operation: string,
+  engine: "sql" | "duckdb",
+  status: number,
   errorText: string,
-  statementClass: StatementClass,
-): { code: string; message: string } | undefined {
-  const spec = SIZE_ENGINES[engine];
-  const colon = errorText.indexOf(":");
-  const nodeCode = (colon === -1 ? errorText : errorText.slice(0, colon)).trim();
+  statement: StatementClass | { sql: string },
+  detail: string,
+): { code: string | undefined; message: string } | undefined {
+  if (status !== 413) return undefined;
 
-  if (nodeCode !== spec.requestNodeCode) {
-    const request = nodeCode !== spec.responseNodeCode
-      && (statementClass === "write" || (statementClass === "ambiguous" && errorText.includes("envelope limit")));
-    if (!request) return undefined;
+  function classify(sql: string): StatementClass {
+    const token = /^(?:\s|--[^\n]*\n|\/\*[\s\S]*?\*\/)*([A-Za-z_]+)/.exec(sql)?.[1]?.toLowerCase();
+    if (token === "select" || token === "values") return "read";
+    if (token === "with" || token === "explain" || token === "show" || token === "describe") return "ambiguous";
+    return "write";
   }
 
-  const limit = nodeCode === spec.requestNodeCode ? NODE_LIMIT_CLAUSE.exec(errorText)?.[1] : undefined;
-  const suffix = limit === undefined ? "" : ` (the node's limit is ${limit} bytes)`;
+  const name = engine === "sql" ? "SQL" : "DuckDB";
+  const colon = errorText.indexOf(":");
+  const nodeCode = (colon === -1 ? errorText : errorText.slice(0, colon)).trim();
+  let request: boolean;
+  if (nodeCode === `${engine}_request_too_large`) {
+    request = true;
+  } else if (nodeCode === `${engine}_response_too_large`) {
+    request = false;
+  } else {
+    const statementClass = typeof statement === "string" ? statement : classify(statement.sql);
+    request = statementClass === "write" || (statementClass === "ambiguous" && errorText.includes("envelope limit"));
+  }
   return {
-    code: spec.errorCode,
-    message: `${spec.label} ${operation} failed: request is too large${suffix}. Split the batch into smaller requests.`,
+    code: request ? `${name.toUpperCase()}_REQUEST_TOO_LARGE` : undefined,
+    message: `${name} ${request ? "request" : "response"} too large. ${detail}`,
   };
 }

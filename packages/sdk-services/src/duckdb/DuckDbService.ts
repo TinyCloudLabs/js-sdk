@@ -29,7 +29,6 @@ import {
 } from "../responseErrors";
 import {
   requestTooLargeError,
-  statementClassOf,
   type StatementClass,
 } from "../statementSize";
 import type { IDuckDbService, IDuckDbDatabaseHandle } from "./IDuckDbService";
@@ -222,7 +221,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "execute", statementClassOf(sql));
+          return await this.handleErrorResponse(response, "execute", { sql });
         }
 
         const data = (await response.json()) as ExecuteResponse;
@@ -453,7 +452,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
   private async handleErrorResponse(
     response: FetchResponse,
     operation: string,
-    statementClass: StatementClass,
+    statementClass: StatementClass | { sql: string },
   ): Promise<Result<never>> {
     const errorText = await response.text();
     const meta = responseErrorMeta(response.status, response.statusText, errorText);
@@ -472,9 +471,10 @@ export class DuckDbService extends BaseService implements IDuckDbService {
 
     const errorBody = parseServiceErrorBody(errorText);
 
-    const sized = response.status === 413 ? requestTooLargeError("duckdb", operation, errorText, statementClass) : undefined;
+    const formatted = formatServiceResponseError("DuckDB", operation, response.status, errorText, errorBody);
+    const sized = requestTooLargeError("duckdb", response.status, errorText, statementClass, formatted);
     const errorCode = sized?.code ?? this.mapHttpStatusToErrorCode(response.status, errorBody.error);
-    const message = sized?.message ?? formatServiceResponseError("DuckDB", operation, response.status, errorText, errorBody);
+    const message = sized?.message ?? formatted;
 
     if (response.status === 401) {
       const { resource, action } = parseAuthError(errorText);

@@ -30,9 +30,7 @@ import {
   responseErrorMeta,
 } from "../responseErrors";
 import {
-  firstSqlToken,
   requestTooLargeError,
-  statementClassOf,
   type StatementClass,
 } from "../statementSize";
 import type { ISQLService } from "./ISQLService";
@@ -234,7 +232,7 @@ export class SQLService extends BaseService implements ISQLService {
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "execute", dbName, requestedActions, statementClassOf(sql));
+          return await this.handleErrorResponse(response, "execute", dbName, requestedActions, { sql });
         }
 
         const data = (await response.json()) as ExecuteResponse;
@@ -562,7 +560,7 @@ export class SQLService extends BaseService implements ISQLService {
     operation: string,
     dbName: string,
     requestedActions: readonly string[],
-    statementClass: StatementClass,
+    statementClass: StatementClass | { sql: string },
   ): Promise<Result<never>> {
     const errorText = await response.text();
     const meta = responseErrorMeta(response.status, response.statusText, errorText);
@@ -581,9 +579,10 @@ export class SQLService extends BaseService implements ISQLService {
 
     const errorBody = parseServiceErrorBody(errorText);
 
-    const sized = response.status === 413 ? requestTooLargeError("sql", operation, errorText, statementClass) : undefined;
+    const formatted = formatServiceResponseError("SQL", operation, response.status, errorText, errorBody);
+    const sized = requestTooLargeError("sql", response.status, errorText, statementClass, formatted);
     const errorCode = sized?.code ?? this.mapHttpStatusToErrorCode(response.status, errorBody.error);
-    const message = sized?.message ?? formatServiceResponseError("SQL", operation, response.status, errorText, errorBody);
+    const message = sized?.message ?? formatted;
 
     if (response.status === 401) {
       const { action } = parseAuthError(errorText);
@@ -685,4 +684,37 @@ function rowValue(row: unknown, index: number): unknown {
     return values[index];
   }
   return undefined;
+}
+
+function firstSqlToken(sql: string): string | undefined {
+  let index = 0;
+
+  while (index < sql.length) {
+    while (index < sql.length && /\s/.test(sql[index])) {
+      index++;
+    }
+
+    if (sql.startsWith("--", index)) {
+      const newline = sql.indexOf("\n", index + 2);
+      if (newline === -1) {
+        return undefined;
+      }
+      index = newline + 1;
+      continue;
+    }
+
+    if (sql.startsWith("/*", index)) {
+      const end = sql.indexOf("*/", index + 2);
+      if (end === -1) {
+        return undefined;
+      }
+      index = end + 2;
+      continue;
+    }
+
+    break;
+  }
+
+  const match = /^[A-Za-z_]+/.exec(sql.slice(index));
+  return match?.[0].toLowerCase();
 }
