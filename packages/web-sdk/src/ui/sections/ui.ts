@@ -56,6 +56,13 @@ export function confirmBox(options: ConfirmOptions): ConfirmBox {
   const el = document.createElement("div");
   el.className = "confirm";
   el.setAttribute("role", "alertdialog");
+  // Escape takes the safe action, as the mockup's design rules require. Stopping
+  // propagation keeps the panel's own Escape handler from closing the drawer.
+  el.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    event.stopPropagation();
+    options.onCancel();
+  });
 
   const question = document.createElement("p");
   question.className = "busy";

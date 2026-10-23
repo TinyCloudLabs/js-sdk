@@ -6,7 +6,7 @@ import { confirmBox, detailsDrawer, glanceRow } from "../../src/ui/sections/ui";
 type Loose = Record<PropertyKey, unknown>;
 
 const g = globalThis as unknown as Loose;
-const GLOBAL_NAMES = ["window", "document", "HTMLElement", "Element", "Node", "Event", "MouseEvent"];
+const GLOBAL_NAMES = ["window", "document", "HTMLElement", "Element", "Node", "Event", "MouseEvent", "KeyboardEvent"];
 const saved = new Map<string, unknown>();
 
 beforeAll(() => {
@@ -19,6 +19,7 @@ beforeAll(() => {
   g.Node = page.Node;
   g.Event = page.Event;
   g.MouseEvent = page.MouseEvent;
+  g.KeyboardEvent = page.KeyboardEvent;
 });
 
 afterAll(() => {
@@ -58,6 +59,25 @@ describe("confirmBox", () => {
     box.cancel.click();
     box.confirm.click();
     expect(calls).toEqual(["cancel", "confirm"]);
+  });
+
+  test("Escape takes the safe action and does not reach the panel's own handler", () => {
+    const calls: string[] = [];
+    const box = confirmBox({
+      question: "Sign out?",
+      cancelLabel: "Stay signed in",
+      confirmLabel: "Sign out",
+      onCancel: () => calls.push("cancel"),
+      onConfirm: () => calls.push("confirm"),
+    });
+    const panelKeys: string[] = [];
+    const panel = g.document.createElement("div");
+    panel.addEventListener("keydown", () => panelKeys.push("reached panel"));
+    panel.append(box.el);
+
+    box.el.dispatchEvent(new g.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(calls).toEqual(["cancel"]);
+    expect(panelKeys).toEqual([]);
   });
 });
 
