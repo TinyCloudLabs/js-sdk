@@ -1,5 +1,30 @@
 # @tinycloudlabs/web-sdk
 
+## 3.4.0
+
+### Minor Changes
+
+- f9b7e85: `TinyCloudWeb.requestPermissions(additional, { expiryMs })` now passes `expiryMs` to the step-up delegation it issues through `grantRuntimePermissions`, so the delegation expires at `now + expiryMs`. The expiry is capped at the session's expiry. The expiry applies when new permissions are requested. Calls without `expiryMs` are unchanged. A non-finite or non-positive `expiryMs` throws before the approval modal opens.
+
+  Decrypt grants (including wildcards) with `expiryMs` over one hour throw `DECRYPT_EXPIRY_TOO_LONG` before the approval modal opens.
+
+  `TinyCloudWeb.hasPermissions(entries)` returns whether the session or an unexpired runtime grant covers all entries. It never prompts.
+
+  Details: TC-1777
+
+### Patch Changes
+
+- 666f60b: Import the share recipient surface from `@tinycloud/share-sdk/web-recipient` instead of the share-sdk package root, so the built bundle no longer carries the rest of share-sdk. No runtime API change.
+
+  Details: TC-1757
+
+- Updated dependencies [6139879]
+- Updated dependencies [666f60b]
+  - @tinycloud/replica@0.3.1
+  - @tinycloud/share-sdk@1.3.0
+  - @tinycloud/node-sdk@3.4.0
+  - @tinycloud/sdk-core@3.4.0
+
 ## 3.4.0-beta.2
 
 ### Minor Changes

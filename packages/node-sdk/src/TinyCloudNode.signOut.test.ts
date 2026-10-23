@@ -534,6 +534,48 @@ describe("TinyCloudNode.signOut during an in-flight sign-in or restore", () => {
     expect(requests.length).toBeGreaterThan(before);
   });
 
+  test("signing in as another account clears recorded requests and notifies onClear listeners", async () => {
+    requests = [];
+    globalThis.fetch = mock(async (input: string | URL | Request) => {
+      const url = String(input instanceof Request ? input.url : input);
+      requests.push(url);
+      const body = url.endsWith("/info")
+        ? { protocol: 1, version: "test", features: [], nodeId: "did:key:z6MkNode" }
+        : { activated: [], skipped: [] };
+      return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as unknown as typeof fetch;
+    let signer = new PrivateKeySigner(OWNER_KEY);
+    const node = new TinyCloudNode({
+      host: HOST,
+      signer: {
+        getAddress: () => signer.getAddress(),
+        getChainId: () => signer.getChainId(),
+        signMessage: (message: string | Uint8Array) => signer.signMessage(message),
+      },
+      wasmBindings: new NodeWasmBindings(),
+      autoBootstrapAccount: false,
+      includeAccountRegistryPermissions: false,
+      enablePublicSpace: false,
+      autoCreateSpace: false,
+      requestLog: true,
+    });
+    await node.signIn();
+    const recorder = Reflect.get(node, "_requestLog") as { record(event: object): void };
+    recorder.record({
+      v: 1, at: 0, service: "kv", op: "kv/get", path: "notes/a", space: "default",
+      host: null, bytes: 3, durationMs: 1, attempts: 1, ok: true, code: "ok", source: "network",
+    });
+    expect(node.requests!.snapshot().length).toBeGreaterThan(0);
+
+    const onClear = mock(() => {});
+    node.requests!.onClear(onClear);
+    signer = new PrivateKeySigner(SECOND_ACCOUNT_KEY);
+    await node.signIn();
+
+    expect(node.requests!.snapshot()).toEqual([]);
+    expect(onClear).toHaveBeenCalledTimes(1);
+  });
+
   const SECOND_ACCOUNT_KEY = "8da4ef21b864d2cc526dbdb2a120bd2874c36c9d0a1fb7f8c63d7f7a8b41de8f";
 
   test.each([
