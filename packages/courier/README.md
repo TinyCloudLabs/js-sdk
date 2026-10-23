@@ -133,6 +133,11 @@ tc courier join --resume
 - `join` sends a hello and waits for the owner's reply. If none arrives in
   about 10 minutes it prints the resume command and exits. `join --resume`
   continues a pending join without sending a second hello.
+- If a hello is already stored for the invite and it is not the one this
+  machine wrote, or cannot be read back, `join` stops with `hello-exists`. Ask
+  the inviter for a new invite.
+- A hello's credential and possession proof must belong to the courier named in
+  its pairing artifact; otherwise `watch` holds it (`holder-mismatch`).
 - `join --stdin` and `join --file` read the invite string without putting it
   on the command line. The positional form works, but the string is visible
   in `ps` to other users on the machine.
