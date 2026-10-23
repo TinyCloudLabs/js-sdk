@@ -871,36 +871,10 @@ describe("SQLService 413 request vs response classification", () => {
     }
   });
 
-  test("uncoded 413 on a read statement maps to SQL_RESPONSE_TOO_LARGE", async () => {
+  test("uncoded 413 on a query maps to SQL_RESPONSE_TOO_LARGE", async () => {
     const service = serviceAnswering("Response too large: 2048 bytes");
 
     const result = await service.query("SELECT * FROM big");
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error.code).toBe(ErrorCodes.SQL_RESPONSE_TOO_LARGE);
-    }
-  });
-
-  test("uncoded 413 on a WITH statement uses the envelope text to pick request", async () => {
-    const service = serviceAnswering("JSON body exceeds complete envelope limit");
-
-    const result = await service.execute(
-      "WITH src AS (SELECT 1 AS id) INSERT INTO notes (id) SELECT id FROM src",
-    );
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error.code).toBe("SQL_REQUEST_TOO_LARGE");
-    }
-  });
-
-  test("uncoded 413 on a WITH statement without envelope text stays a response error", async () => {
-    const service = serviceAnswering("Response too large: 2048 bytes");
-
-    const result = await service.execute(
-      "WITH src AS (SELECT 1 AS id) SELECT id FROM src",
-    );
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -941,7 +915,7 @@ describe("SQLService 413 request vs response classification", () => {
     }
   });
 
-  test("coded request prefix beats response text on ambiguous WITH and EXPLAIN executes", async () => {
+  test("coded request prefix beats response text on WITH and EXPLAIN executes", async () => {
     const service = serviceAnswering("sql_request_too_large: Response too large: 2048 bytes");
 
     const withResult = await service.execute("WITH src AS (SELECT 1 AS id) SELECT id FROM src");
@@ -957,7 +931,7 @@ describe("SQLService 413 request vs response classification", () => {
     }
   });
 
-  test("coded response prefix beats envelope text on an ambiguous WITH execute", async () => {
+  test("coded response prefix beats request-side text on a WITH execute", async () => {
     const service = serviceAnswering("sql_response_too_large: JSON body exceeds complete envelope limit");
 
     const result = await service.execute(

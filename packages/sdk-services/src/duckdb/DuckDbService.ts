@@ -27,10 +27,7 @@ import {
   parseServiceErrorBody,
   responseErrorMeta,
 } from "../responseErrors";
-import {
-  requestTooLargeError,
-  type StatementClass,
-} from "../statementSize";
+import { requestTooLargeError } from "../statementSize";
 import type { IDuckDbService, IDuckDbDatabaseHandle } from "./IDuckDbService";
 import { DuckDbDatabaseHandle } from "./DuckDbDatabaseHandle";
 import {
@@ -143,7 +140,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "query", "read");
+          return await this.handleErrorResponse(response, "query");
         }
 
         const data = (await response.json()) as QueryResponse<T>;
@@ -178,7 +175,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "queryArrow", "read");
+          return await this.handleErrorResponse(response, "queryArrow");
         }
 
         const buffer = await response.arrayBuffer();
@@ -221,7 +218,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "execute", { sql });
+          return await this.handleErrorResponse(response, "execute");
         }
 
         const data = (await response.json()) as ExecuteResponse;
@@ -262,7 +259,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "batch", "write");
+          return await this.handleErrorResponse(response, "batch");
         }
 
         const data = (await response.json()) as BatchResponse;
@@ -304,7 +301,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "executeStatement", "write");
+          return await this.handleErrorResponse(response, "executeStatement");
         }
 
         const data = (await response.json()) as
@@ -343,7 +340,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "describe", "read");
+          return await this.handleErrorResponse(response, "describe");
         }
 
         const data = (await response.json()) as SchemaInfo;
@@ -375,7 +372,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "export", "read");
+          return await this.handleErrorResponse(response, "export");
         }
 
         const blob = await response.blob();
@@ -417,7 +414,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "import", "write");
+          return await this.handleErrorResponse(response, "import");
         }
 
         return ok(undefined);
@@ -452,7 +449,6 @@ export class DuckDbService extends BaseService implements IDuckDbService {
   private async handleErrorResponse(
     response: FetchResponse,
     operation: string,
-    statementClass: StatementClass | { sql: string },
   ): Promise<Result<never>> {
     const errorText = await response.text();
     const meta = responseErrorMeta(response.status, response.statusText, errorText);
@@ -472,7 +468,7 @@ export class DuckDbService extends BaseService implements IDuckDbService {
     const errorBody = parseServiceErrorBody(errorText);
 
     const formatted = formatServiceResponseError("DuckDB", operation, response.status, errorText, errorBody);
-    const sized = requestTooLargeError("duckdb", response.status, errorText, statementClass, formatted);
+    const sized = requestTooLargeError("duckdb", operation, response.status, errorText, formatted);
     const errorCode = sized?.code ?? this.mapHttpStatusToErrorCode(response.status, errorBody.error);
     const message = sized?.message ?? formatted;
 

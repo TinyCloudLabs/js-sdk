@@ -29,10 +29,7 @@ import {
   parseServiceErrorBody,
   responseErrorMeta,
 } from "../responseErrors";
-import {
-  requestTooLargeError,
-  type StatementClass,
-} from "../statementSize";
+import { requestTooLargeError } from "../statementSize";
 import type { ISQLService } from "./ISQLService";
 import type { IDatabaseHandle } from "./ISQLService";
 import { DatabaseHandle } from "./DatabaseHandle";
@@ -182,7 +179,7 @@ export class SQLService extends BaseService implements ISQLService {
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "query", dbName, [action], "read");
+          return await this.handleErrorResponse(response, "query", dbName, [action]);
         }
 
         const data = (await response.json()) as QueryResponse<T>;
@@ -232,7 +229,7 @@ export class SQLService extends BaseService implements ISQLService {
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "execute", dbName, requestedActions, { sql });
+          return await this.handleErrorResponse(response, "execute", dbName, requestedActions);
         }
 
         const data = (await response.json()) as ExecuteResponse;
@@ -266,7 +263,7 @@ export class SQLService extends BaseService implements ISQLService {
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "batch", dbName, requestedActions, "write");
+          return await this.handleErrorResponse(response, "batch", dbName, requestedActions);
         }
 
         const data = (await response.json()) as BatchResponse;
@@ -310,7 +307,7 @@ export class SQLService extends BaseService implements ISQLService {
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "executeStatement", dbName, [SQLAction.WRITE], "write");
+          return await this.handleErrorResponse(response, "executeStatement", dbName, [SQLAction.WRITE]);
         }
 
         const data = (await response.json()) as
@@ -349,7 +346,7 @@ export class SQLService extends BaseService implements ISQLService {
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "export", dbName, [SQLAction.READ], "read");
+          return await this.handleErrorResponse(response, "export", dbName, [SQLAction.READ]);
         }
 
         // FetchResponse doesn't expose blob(), so access it from the
@@ -560,7 +557,6 @@ export class SQLService extends BaseService implements ISQLService {
     operation: string,
     dbName: string,
     requestedActions: readonly string[],
-    statementClass: StatementClass | { sql: string },
   ): Promise<Result<never>> {
     const errorText = await response.text();
     const meta = responseErrorMeta(response.status, response.statusText, errorText);
@@ -580,7 +576,7 @@ export class SQLService extends BaseService implements ISQLService {
     const errorBody = parseServiceErrorBody(errorText);
 
     const formatted = formatServiceResponseError("SQL", operation, response.status, errorText, errorBody);
-    const sized = requestTooLargeError("sql", response.status, errorText, statementClass, formatted);
+    const sized = requestTooLargeError("sql", operation, response.status, errorText, formatted);
     const errorCode = sized?.code ?? this.mapHttpStatusToErrorCode(response.status, errorBody.error);
     const message = sized?.message ?? formatted;
 
