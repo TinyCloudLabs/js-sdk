@@ -497,25 +497,6 @@ function cloneRecapCaveats(
 }
 
 /**
- * The caveats to put on an invocation capability for a grant that carries
- * `caveats`; `undefined` means none. A constrained-statements profile (and any
- * other caveat) is echoed exactly, because the node checks the invocation
- * against it. A delegated `tinycloud.sql` form, and an empty-only list of two
- * or more entries, are not echoed: the node derives the limit from the stored
- * chain and refuses an invocation capability that carries them.
- */
-function invocationCaveats(
-  service: string,
-  caveats: readonly Record<string, unknown>[] | undefined,
-): Record<string, unknown>[] | undefined {
-  if (!caveats?.length) return undefined;
-  if ((service === "sql" || service === "tinycloud.sql") && sqlCaveatListNeedsDelegatedFeature(caveats)) {
-    return undefined;
-  }
-  return cloneRecapCaveats(caveats);
-}
-
-/**
  * The WASM verifier serializes ReCap caveats with serde-wasm-bindgen, which
  * returns JSON objects as `Map`s and JSON `null` as `undefined`. Convert
  * exactly those back to JSON: string-keyed `Map`s to plain objects and
@@ -1677,8 +1658,7 @@ export class TinyCloudNode {
     // The legacy single-capability binding has no caveat parameter.  Calling
     // it for a restored caveated grant would silently broaden the authority,
     // so mint the equivalent one-entry aggregate invocation instead.
-    const echoed = invocationCaveats(service, grantedOperation?.caveats);
-    if (echoed !== undefined) {
+    if ((grantedOperation?.caveats?.length ?? 0) > 0) {
       if (!this.wasmBindings.invokeAny) {
         throw new Error("WASM binding does not support caveat-preserving invocation");
       }
@@ -1687,7 +1667,7 @@ export class TinyCloudNode {
         service,
         path,
         action,
-        caveats: echoed,
+        caveats: cloneRecapCaveats(grantedOperation!.caveats),
       }], facts);
     }
 
@@ -1734,12 +1714,7 @@ export class TinyCloudNode {
         !recapCaveatsEqual(entry.caveats, granted.caveats)) {
         throw new Error("Invocation caveats do not match signed ReCap authority.");
       }
-      const echoed = invocationCaveats(entry.service, granted.caveats);
-      if (echoed === undefined) {
-        const { caveats: _limitedByChain, ...withoutCaveats } = entry;
-        return withoutCaveats;
-      }
-      return { ...entry, caveats: echoed };
+      return { ...entry, caveats: cloneRecapCaveats(granted.caveats) };
     });
     return this.wasmBindings.invokeAny(invocationSession, caveatPreservingEntries, facts);
   };
@@ -6589,7 +6564,7 @@ export class TinyCloudNode {
       );
     }
 
-    this.assertSqlDelegatedCaveatsSupported(this.caveatedPortableEntries(delegation), delegation.host);
+    this.gateSql(this.portableCaveats(delegation), delegation.host);
     const targetHost = delegation.host ?? this.config.host!;
     let activateResult: SpaceHostResult;
     try {
@@ -7205,7 +7180,7 @@ export class TinyCloudNode {
 
     // A delegated SQL caveat is refused up front when the node cannot enforce
     // it, instead of surfacing as a coverage failure further down.
-    this.assertSqlDelegatedCaveatsSupported(expandedEntries);
+    this.gateSql(expandedEntries);
 
     // 4. Compute expiration. `options.expiry` overrides the default
     //    (DEFAULT_DELEGATION_EXPIRY_MS); ms-format ("7d") or a raw
@@ -7804,7 +7779,7 @@ export class TinyCloudNode {
    * constrained branch rather than signing a broader action-only child UCAN.
    */
   private assertDelegationCaveatsPreservable(entries: PermissionEntry[]): void {
-    this.assertSqlDelegatedCaveatsSupported(entries);
+    this.gateSql(entries);
     const caveated = entries.filter((entry) =>
       !recapCaveatsEqual(entry.caveats, undefined)
     );
@@ -7820,20 +7795,14 @@ export class TinyCloudNode {
    * would go to; a node other than the one signed in to is unknown, so it is
    * refused too. Profile caveats and empty caveats are not affected.
    */
-  private assertSqlDelegatedCaveatsSupported(
+  private gateSql(
     entries: readonly { readonly service: string; readonly caveats?: readonly Record<string, unknown>[] }[],
     host?: string,
   ): void {
-    const carries = entries.some((entry) =>
-      (entry.service === "tinycloud.sql" || entry.service === "sql") &&
-      sqlCaveatListNeedsDelegatedFeature(entry.caveats)
-    );
-    if (!carries) return;
+    if (!entries.some((e) => (e.service === "tinycloud.sql" || e.service === "sql") && sqlCaveatListNeedsDelegatedFeature(e.caveats))) return;
     const nodeHost = this.hosts[0] ?? this.config.host;
-    const sameNode = host === undefined || (nodeHost !== undefined && host.replace(/\/+$/, "") === nodeHost.replace(/\/+$/, ""));
-    if (!sameNode || !this.supportsSqlDelegatedCaveats) {
-      throw new SqlDelegatedCaveatsUnsupportedError(host ?? nodeHost);
-    }
+    const otherNode = host !== undefined && host.replace(/\/+$/, "") !== nodeHost?.replace(/\/+$/, "");
+    if (otherNode || !this.supportsSqlDelegatedCaveats) throw new SqlDelegatedCaveatsUnsupportedError(host ?? nodeHost);
   }
 
   /**
@@ -7887,49 +7856,34 @@ export class TinyCloudNode {
   }
 
   /** The caveated branches of a received delegation, as permission entries. */
-  private caveatedPortableEntries(delegation: PortableDelegation): PermissionEntry[] {
-    const entries: PermissionEntry[] = [];
-    const add = (
+  private portableCaveats(delegation: PortableDelegation): PermissionEntry[] {
+    const entry = (
       service: string,
       space: string,
       path: string,
-      actions: string[],
+      actions: readonly string[],
       caveats: readonly Record<string, unknown>[] | undefined,
-    ): void => {
-      if (recapCaveatsEqual(caveats, undefined)) return;
-      entries.push({
-        service: service.startsWith("tinycloud.") ? service : `tinycloud.${service}`,
-        space,
-        path,
-        actions: [...actions],
-        caveats: cloneRecapCaveats(caveats),
-      });
-    };
-
-    // A flat caveat covers every action, so each action's own service counts.
-    const flatActionsByService = new Map<string, string[]>();
-    for (const action of delegation.actions) {
-      const service = action.split("/", 1)[0] || "tinycloud.unknown";
-      flatActionsByService.set(service, [...(flatActionsByService.get(service) ?? []), action]);
-    }
-    for (const [service, actions] of flatActionsByService) {
-      add(service, delegation.spaceId, delegation.path, actions, delegation.caveats);
-    }
-    if (flatActionsByService.size === 0) {
-      add("tinycloud.unknown", delegation.spaceId, delegation.path, [], delegation.caveats);
-    }
-    for (const resource of delegation.resources ?? []) {
-      add(resource.service, resource.space, resource.path, resource.actions, resource.caveats);
-    }
-    return entries;
+    ): PermissionEntry[] => recapCaveatsEqual(caveats, undefined) ? [] : [{
+      service: service.startsWith("tinycloud.") ? service : `tinycloud.${service}`,
+      space,
+      path,
+      actions: [...actions],
+      caveats: cloneRecapCaveats(caveats),
+    }];
+    // A flat caveat covers every action, so it counts as SQL when any action is.
+    const flatAction = delegation.actions.find((action) => action.startsWith("tinycloud.sql/")) ?? delegation.actions[0];
+    return [
+      ...entry(flatAction?.split("/", 1)[0] ?? "tinycloud.unknown", delegation.spaceId, delegation.path, delegation.actions, delegation.caveats),
+      ...(delegation.resources ?? []).flatMap((r) => entry(r.service, r.space, r.path, r.actions, r.caveats)),
+    ];
   }
 
   /** Reject caveated parent branches before action-only child signing. */
   private assertPortableDelegationCaveatsPreservable(
     delegation: PortableDelegation,
   ): void {
-    const entries = this.caveatedPortableEntries(delegation);
-    this.assertSqlDelegatedCaveatsSupported(entries, delegation.host);
+    const entries = this.portableCaveats(delegation);
+    this.gateSql(entries, delegation.host);
     if (entries.length > 0) {
       throw new CaveatedDelegationUnsupportedError(entries);
     }
@@ -8895,7 +8849,7 @@ export class TinyCloudNode {
     // The activated child session drops caveats, but it is a child of this
     // delegation; refuse a delegated SQL caveat the node cannot enforce before
     // the wallet is asked to sign or anything is sent.
-    this.assertSqlDelegatedCaveatsSupported(this.caveatedPortableEntries(delegation), delegation.host);
+    this.gateSql(this.portableCaveats(delegation), delegation.host);
 
     // Use our existing session key - the delegation targets our DID from signIn
     // We must use the same key that the delegation was created for

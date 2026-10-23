@@ -17,9 +17,6 @@ export const SQL_CAVEAT_MAX_NAMES = 256;
 /** Longest element of a `tables` or `columns` list, in UTF-8 bytes. */
 export const SQL_CAVEAT_MAX_NAME_BYTES = 128;
 
-/** Name of the node `/info` feature that enables the delegated form. */
-export const SQL_DELEGATED_CAVEATS_FEATURE = "sql-delegated-caveats-v1";
-
 const DELEGATED_KEYS: readonly string[] = ["tables", "columns", "readOnly"];
 const textEncoder = new TextEncoder();
 // Rust `char::is_control` is Unicode category Cc; `char::is_whitespace` is the
@@ -37,21 +34,6 @@ export class SqlCaveatError extends Error {
   ) {
     super(index === undefined ? `caveats ${reason}` : `caveat ${index} ${reason}`);
     this.name = "SqlCaveatError";
-  }
-}
-
-/**
- * Thrown, with no request made, when a delegation or grant carries a
- * delegated SQL caveat (`tables`, `columns`, `readOnly`) and the target node
- * has not announced the `sql-delegated-caveats-v1` feature (or the SDK does
- * not know what the node supports).
- */
-export class SqlDelegatedCaveatsUnsupportedError extends Error {
-  readonly code = "SQL_DELEGATED_CAVEATS_UNSUPPORTED" as const;
-
-  constructor(readonly host?: string) {
-    super("This node cannot limit SQL grants to tables or columns, so nothing was sent.");
-    this.name = "SqlDelegatedCaveatsUnsupportedError";
   }
 }
 
@@ -176,37 +158,4 @@ export function sqlCaveatContains(parent: SqlCaveatList, child: SqlCaveatList): 
     parent.caveat,
     child.kind === "unrestricted" ? { readOnly: false } : child.caveat,
   );
-}
-
-/**
- * Whether sending this caveat list needs the node's `sql-delegated-caveats-v1`
- * feature. A node without it refuses everything but a lone constrained-
- * statements profile, an absent list, and `[{}]` (which the wire collapses to
- * no caveats), so this is true for:
- * - some entry is a non-empty object with neither `mode` nor
- *   `constrained-statements` (the delegated form, valid or not);
- * - two or more entries, all empty (`[{}, {}]`: stored as `{"0":{},"1":{}}`);
- * - some entry is not a plain object (a `Map`, a class instance, an array, a
- *   primitive): its keys cannot be read, so it fails closed.
- *
- * `[]`, `[{}]` and profile lists are false. Meant for gates, so it does not
- * require the list to be valid.
- */
-export function sqlCaveatListNeedsDelegatedFeature(list: unknown): boolean {
-  if (!Array.isArray(list)) return false;
-  const entries: unknown[] = list;
-  const plain: object[] = [];
-  for (const entry of entries) {
-    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return true;
-    const prototype = Object.getPrototypeOf(entry);
-    if (prototype !== Object.prototype && prototype !== null) return true;
-    plain.push(entry);
-  }
-  const delegatedEntry = plain.some((entry) =>
-    Object.keys(entry).length > 0 &&
-    !hasOwn(entry, "mode") &&
-    !hasOwn(entry, "constrained-statements")
-  );
-  if (delegatedEntry) return true;
-  return plain.length >= 2 && plain.every((entry) => Object.keys(entry).length === 0);
 }

@@ -7,7 +7,8 @@ import type {
 import { ErrorCodes } from "../types";
 import { validatedCapabilityOf } from "../errors";
 import { SQLService } from "./SQLService";
-import { SQLAction, SqlErrorCodes } from "./types";
+import { SQLAction } from "./types";
+import { SqlErrorCodes } from "./errorCodes";
 
 function response(
   ok: boolean,

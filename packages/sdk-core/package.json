@@ -4,7 +4,10 @@
   "description": "Core TinyCloud SDK - shared interfaces and TinyCloud class",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
-  "sideEffects": false,
+  "sideEffects": [
+    "./dist/sql-caveats/index.js",
+    "./dist/sql-caveats/index.cjs"
+  ],
   "engines": {
     "node": ">=20"
   },
@@ -47,6 +50,11 @@
       "types": "./dist/kv-list-matching/index.d.ts",
       "import": "./dist/kv-list-matching/index.js",
       "require": "./dist/kv-list-matching/index.cjs"
+    },
+    "./sql-caveats": {
+      "types": "./dist/sql-caveats/index.d.ts",
+      "import": "./dist/sql-caveats/index.js",
+      "require": "./dist/sql-caveats/index.cjs"
     }
   },
   "files": [

@@ -1032,21 +1032,9 @@ export class TranscriptRequester {
     const capabilities = parsed.capabilities.map((capability, index) =>
       parsePolicyCapability(capability, `$.delegation.capabilities[${index}]`),
     );
-    // This requester only sends constrained-statements profiles. The delegated
-    // SQL form needs a node feature it never learns here, so it is refused
-    // before anything is sent.
-    if (
-      capabilities.some(
-        (capability) =>
-          capability.service === "tinycloud.sql" &&
-          capability.caveats !== undefined &&
-          capability.caveats.mode === undefined,
-      )
-    ) {
-      throw new TranscriptRequesterError(
-        "requester-delegation-invalid",
-        "portable delegation carries a SQL caveat form this requester does not send",
-      );
+    // Only constrained-statements profiles are sent here; the delegated SQL form needs a node feature this requester never learns.
+    if (capabilities.some((c) => c.service === "tinycloud.sql" && c.caveats && !("mode" in c.caveats))) {
+      throw new TranscriptRequesterError("requester-delegation-invalid", "unsupported SQL caveat form");
     }
     for (const granted of capabilities) {
       if (

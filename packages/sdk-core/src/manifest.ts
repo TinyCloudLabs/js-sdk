@@ -18,8 +18,7 @@
 import ms from "ms";
 import { ACCOUNT_MANIFEST_PERMISSIONS } from "@tinycloud/bootstrap";
 import { resolveSecretPath, SECRET_NAME_RE } from "@tinycloud/sdk-services";
-import { SqlCaveatError } from "./policy/delegatedCaveats";
-import { parseSqlCaveatList } from "./policy/sqlCaveatList";
+import { sqlCaveatExtension, sqlCaveatListNeedsDelegatedFeature } from "./policy/sqlCaveatGate";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -808,24 +807,13 @@ function validatePermissionEntry(p: unknown, path: string): void {
   ) {
     throw new ManifestValidationError(`${path}.caveats must be an array of objects`);
   }
-  if (Array.isArray(entry.caveats)) {
-    if (entry.service === "tinycloud.sql") {
-      try {
-        parseSqlCaveatList(entry.caveats);
-      } catch (error) {
-        if (error instanceof SqlCaveatError) {
-          throw new ManifestValidationError(`${path}.caveats: ${error.message}`);
-        }
-        throw error;
-      }
-    } else if (
-      entry.service === "tinycloud.duckdb" &&
-      // The node reads only a lone entry (`[]` and `[{}]` are no caveats); two or
-      // more entries are refused whatever they hold.
-      (entry.caveats.length > 1 || entry.caveats.some((caveat) => Object.keys(caveat).length > 0))
-    ) {
-      throw new ManifestValidationError(`${path}.caveats are not defined for tinycloud.duckdb`);
-    }
+  if (Array.isArray(entry.caveats) && (entry.service === "tinycloud.sql" || entry.service === "tinycloud.duckdb")) {
+    // The full grammar is `@tinycloud/sdk-core/sql-caveats`; without it a delegated SQL form is refused, never accepted unparsed.
+    const extension = sqlCaveatExtension();
+    const refusal = extension
+      ? extension.checkManifest(entry.service, entry.caveats)
+      : entry.service === "tinycloud.sql" && sqlCaveatListNeedsDelegatedFeature(entry.caveats) ? "is not supported here" : undefined;
+    if (refusal !== undefined) throw new ManifestValidationError(`${path}.caveats: ${refusal}`);
   }
   if (entry.expiry !== undefined) {
     parseExpiry(entry.expiry);

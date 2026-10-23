@@ -38,6 +38,7 @@ import type {
   ISessionManager,
   PersistedSessionProof,
 } from "@tinycloud/sdk-core";
+import { sqlCaveatListNeedsDelegatedFeature } from "@tinycloud/sdk-core";
 
 /**
  * Node.js WASM bindings using @tinycloud/node-sdk-wasm.
@@ -57,7 +58,22 @@ export class NodeWasmBindings implements IWasmBindings {
   }
 
   invoke = invoke;
-  invokeAny = invokeAny;
+  /**
+   * A delegated SQL caveat (and an empty-only list of two or more entries) is
+   * not echoed on an invocation capability: the node derives the limit from
+   * the stored chain and refuses an invocation that carries it. A
+   * constrained-statements profile, and every other service, is signed as given.
+   */
+  invokeAny: NonNullable<IWasmBindings["invokeAny"]> = (session, entries, facts) =>
+    invokeAny(
+      session,
+      entries.map(({ caveats, ...entry }) =>
+        caveats === undefined || ((entry.service === "sql" || entry.service === "tinycloud.sql") && sqlCaveatListNeedsDelegatedFeature(caveats))
+          ? entry
+          : { ...entry, caveats },
+      ),
+      facts,
+    );
   computeCid = computeCid;
   prepareSession = prepareSession;
   completeSessionSetup = completeSessionSetup;

@@ -177,17 +177,3 @@ export const SQLAction = {
 } as const;
 
 export type SQLActionType = (typeof SQLAction)[keyof typeof SQLAction];
-
-/**
- * Error codes only the SQL service raises. Kept out of the shared `ErrorCodes`
- * object so that bundles which never load the SQL service (the replica workers)
- * do not carry them.
- */
-export const SqlErrorCodes = {
-  /**
-   * HTTP 403: the delegation's SQL caveats (tables, columns, read-only) do not
-   * allow the request. `meta.arm` is `table`, `column`, `write` or `chain`
-   * when the node named one; the message never carries SQL.
-   */
-  SQL_CAVEAT_VIOLATION: "SQL_CAVEAT_VIOLATION",
-} as const;

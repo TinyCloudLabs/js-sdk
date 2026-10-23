@@ -20,7 +20,7 @@ import {
   SERVICE_SHORT_TO_LONG,
   expandActionShortNames,
 } from "./manifest";
-import { sqlCaveatListsEquivalent } from "./policy/sqlCaveatList";
+import { sqlCaveatExtension } from "./policy/sqlCaveatGate";
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -204,11 +204,12 @@ function canonicalizeEntryScopeMatches(
   // objects. A caveated authority therefore only covers the same caveat set;
   // treating it as uncaveated would authorize a broader child delegation.
   // The one exception to byte-equality is the delegated SQL form, whose table
-  // and column names compare ASCII-case-insensitively (`NOTES` is `Notes`).
+  // and column names compare ASCII-case-insensitively (`NOTES` is `Notes`);
+  // that needs `@tinycloud/sdk-core/sql-caveats`, and without it equality stays exact.
   if (
     !recapCaveatsEqual(requested.caveats, granted.caveats) &&
     !(requested.service === "tinycloud.sql" &&
-      sqlCaveatListsEquivalent(requested.caveats ?? [], granted.caveats ?? []))
+      sqlCaveatExtension()?.listsEquivalent(requested.caveats ?? [], granted.caveats ?? []))
   ) {
     return false;
   }

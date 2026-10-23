@@ -8,9 +8,9 @@ export { SQLService } from "./SQLService";
 export { DatabaseHandle } from "./DatabaseHandle";
 export { SQLMigrations } from "./SQLMigrations";
 export type { ISQLService, IDatabaseHandle, ISQLMigrations } from "./ISQLService";
+export { SqlErrorCodes } from "./errorCodes";
 export {
   SQLAction,
-  SqlErrorCodes,
   type SQLActionType,
   type SQLServiceConfig,
   type QueryOptions,

@@ -5,12 +5,15 @@
  * Unicode edges of the control / whitespace rules.
  */
 
-import { describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+
+// Importing the entry point installs the grammar into manifest, policy-capability and coverage checks.
+import "../sql-caveats";
 
 import { SqlCaveatError, foldSqlName, sqlCaveatContains } from "./delegatedCaveats";
 import { normalizePolicyCapability, policyCapabilityContains } from "./capability";
 import { parseSqlCaveatList, sqlCaveatListsEquivalent } from "./sqlCaveatList";
-import { sqlCaveatListNeedsDelegatedFeature } from "./delegatedCaveats";
+import { sqlCaveatListNeedsDelegatedFeature } from "./sqlCaveatGate";
 import { isCapabilitySubset } from "../capabilities";
 import { ManifestValidationError, validateManifest } from "../manifest";
 
@@ -411,5 +414,60 @@ describe("TC-1839 well-formed names and fail-closed gate input", () => {
   it("plain objects with a null prototype are still plain", () => {
     expect(sqlCaveatListNeedsDelegatedFeature([Object.create(null)])).toBe(false);
     expect(sqlCaveatListNeedsDelegatedFeature([Object.assign(Object.create(null), { tables: ["a"] })])).toBe(true);
+  });
+});
+
+describe("TC-1839 without the grammar installed (the web bundle)", () => {
+  const SLOT = Symbol.for("@tinycloud/sdk-core/sql-caveat-extension");
+  const realm = globalThis as unknown as Record<symbol, unknown>;
+  let installed: unknown;
+  beforeAll(() => { installed = realm[SLOT]; delete realm[SLOT]; });
+  afterAll(() => { realm[SLOT] = installed; });
+
+  const manifest = (caveats: unknown) => ({
+    app_id: "com.example.app",
+    name: "Example",
+    permissions: [{ service: "tinycloud.sql", path: "data.sqlite", actions: ["read"], caveats }],
+  });
+  const policyCapability = (caveats: Record<string, unknown>) => ({
+    service: "tinycloud.sql",
+    space: "applications",
+    path: "data.sqlite",
+    actions: ["tinycloud.sql/read"],
+    caveats,
+  });
+
+  it("the grammar really is absent", () => {
+    expect(realm[SLOT]).toBeUndefined();
+  });
+
+  it("a manifest refuses a delegated SQL caveat or two empty entries, never accepting them unparsed", () => {
+    for (const list of [[{ tables: ["Notes"] }], [{ readOnly: true }], [{}, {}], [{ tabels: ["a"] }]]) {
+      expect(() => validateManifest(manifest(list))).toThrow(ManifestValidationError);
+    }
+  });
+
+  it("a manifest still accepts no caveats, [], [{}] and a profile", () => {
+    for (const list of [undefined, [], [{}], [profile]]) {
+      expect(() => validateManifest(manifest(list))).not.toThrow();
+    }
+  });
+
+  it("the policy capability accepts the profile and refuses the delegated form", () => {
+    expect(() => normalizePolicyCapability(policyCapability(profile))).not.toThrow();
+    expect(() => normalizePolicyCapability(policyCapability({ tables: ["Notes"] }))).toThrow();
+    expect(policyCapabilityContains(policyCapability(profile), policyCapability({ tables: ["Notes"] }))).toBe(false);
+  });
+
+  it("coverage of a delegated SQL caveat stays exact", () => {
+    const entry = (tables: string[]) => ({
+      service: "tinycloud.sql",
+      space: "applications",
+      path: "data.sqlite",
+      actions: ["tinycloud.sql/read"],
+      caveats: [{ tables }],
+    });
+    expect(isCapabilitySubset([entry(["Notes"])], [entry(["Notes"])]).subset).toBe(true);
+    expect(isCapabilitySubset([entry(["NOTES"])], [entry(["Notes"])]).subset).toBe(false);
   });
 });
