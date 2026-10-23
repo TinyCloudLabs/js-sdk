@@ -1168,18 +1168,9 @@ export {
   type UnsignedPolicyStatus,
 } from "./policy";
 
-// Delegated SQL caveats (`tables` / `columns` / `readOnly`) behind the node's `sql-delegated-caveats-v1` feature.
+// Delegated SQL caveats: the root carries only the feature gate. The grammar, folding and containment are `@tinycloud/sdk-core/sql-caveats`.
 export {
-  SQL_CAVEAT_MAX_NAME_BYTES,
-  SQL_CAVEAT_MAX_NAMES,
   SQL_DELEGATED_CAVEATS_FEATURE,
-  SqlCaveatError,
   SqlDelegatedCaveatsUnsupportedError,
-  foldSqlName,
-  parseDelegatedSqlEntry,
-  sqlCaveatContains,
   sqlCaveatListNeedsDelegatedFeature,
-  type DelegatedSqlCaveat,
-  type SqlCaveatList,
-} from "./policy/delegatedCaveats";
-export { parseSqlCaveatList, sqlCaveatListsEquivalent } from "./policy/sqlCaveatList";
+} from "./policy/sqlCaveatGate";

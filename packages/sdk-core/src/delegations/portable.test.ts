@@ -89,17 +89,12 @@ describe("portable delegation admission", () => {
       ["delegated form in resources", sqlDelegation([{ tables: ["Notes"] }])],
       ["two empty-only entries", sqlDelegation([{}, {}])],
       ["delegated form in the flat caveats", sqlDelegation([{ readOnly: true }], true)],
-    ] as const)("refuses %s with no request unless the node is known to support it", async (_label, value) => {
+    ] as const)("refuses %s with no request", async (_label, value) => {
       const { requests, fetchFn } = spyFetch();
       await expect(importPortableDelegation(fetchFn, delegation.host, value)).rejects.toMatchObject({
         code: "SQL_DELEGATED_CAVEATS_UNSUPPORTED",
       });
-      await expect(
-        importPortableDelegation(fetchFn, delegation.host, value, { supportsSqlDelegatedCaveats: false }),
-      ).rejects.toMatchObject({ code: "SQL_DELEGATED_CAVEATS_UNSUPPORTED" });
       expect(requests).toEqual([]);
-      await importPortableDelegation(fetchFn, delegation.host, value, { supportsSqlDelegatedCaveats: true });
-      expect(requests).toHaveLength(1);
     });
 
     test.each([

@@ -1,4 +1,4 @@
-import { validateSqlProfileCaveat, type JsonObject } from "./capability";
+import { validateSqlCaveats, type JsonObject } from "./capability";
 import {
   parseDelegatedSqlEntry,
   SqlCaveatError,
@@ -15,7 +15,7 @@ const hasOwn = (object: object, key: string): boolean => Object.prototype.hasOwn
 /** Whether `entry` (which has a `mode` key) is a constrained-statements profile this SDK accepts. */
 function isProfile(entry: CaveatEntry): boolean {
   try {
-    validateSqlProfileCaveat(normalizeJson(entry) as JsonObject);
+    validateSqlCaveats(normalizeJson(entry) as JsonObject);
     return true;
   } catch {
     return false;

@@ -37,6 +37,9 @@
 // This must be imported before TinyCloudNode is used, so it runs on module load.
 import "./nodeDefaults";
 import "./replication/node-loader";
+// Turn on the delegated SQL caveat grammar (manifest, policy-capability and coverage checks). The web
+// bundle imports `./core`, not this entry point, and so refuses delegated SQL caveats instead.
+import "@tinycloud/sdk-core/sql-caveats";
 
 // Re-export core values
 export { TinyCloud } from "@tinycloud/sdk-core";
