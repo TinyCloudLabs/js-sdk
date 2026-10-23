@@ -952,3 +952,75 @@ describe("share history recover failures", () => {
     expect(shareHistoryRecoverError(Object.assign(new Error("missing"), { code: "ENOENT" }))).toMatchObject({ code: "INVALID_ARGUMENT", exitCode: 2 });
   });
 });
+
+describe("tc share with the default services", () => {
+  // No `links` and no `shortLinkInvitations`: the configuration index.ts installs. The wrapper the other tests use is not involved.
+  test("invitations fail closed with exit 4 and the final text, and a publish without --notify works", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "tc-share-default-"));
+    const file = join(directory, "note.md");
+    await writeFile(file, "# note\n");
+    const stored = new Map<string, SenderShareRecord>();
+    let publishes = 0;
+    let deliveries = 0;
+    const published: PublishedShare = {
+      protocol: "tinycloud-share", version: 1, url: SHORT_LINK, link: { kind: "policy", cid: "bafy-default" },
+      metadata: {
+        protocol: "tinycloud-share", version: 1, shareId: "share-default", origin: "https://share.example",
+        target: { kind: "email", origin: "https://node.example", nodeAudience: "did:key:z6Mknode", spaceId: "tinycloud:space" },
+        resource: { kind: "exact", path: "shares/share-default/note.md" }, actions: ["read"],
+        expiresAt: "2030-01-01T00:00:00.000Z", display: { filename: "note.md" },
+        recipientMatcher: { kind: "exactEmail", value: "alice@example.com" },
+      },
+    };
+    stored.set("share-default", { ...reviewRecordForDefaults(), link: SHORT_LINK });
+    configureServices({
+      targetAdapter: { async publish() { publishes += 1; return published; } },
+      records: {
+        async put(record) { stored.set(record.shareId, record); },
+        async get(shareId) { return stored.get(shareId); },
+        async list() { return [...stored.values()]; },
+        async delete(shareId) { stored.delete(shareId); },
+      },
+      delivery: { async deliver() { deliveries += 1; return "delivered"; } },
+    });
+    const originalExit = process.exit;
+    let exited: number | undefined;
+    process.exit = ((code?: number) => { exited = code; }) as typeof process.exit;
+    try {
+      const notifyPublish = await runShareCaptured(["share", "publish", file, "--to", "email:alice@example.com", "--notify"]);
+      expect(exited).toBe(4);
+      expect(notifyPublish.stderr).toContain("Invitation emails are not available yet. Nothing was shared and no invitation was sent.");
+      expect(publishes).toBe(0);
+
+      exited = undefined;
+      const notify = await runShareCaptured(["share", "notify", "share-default", "--to", "alice@example.com"]);
+      expect(exited).toBe(4);
+      expect(notify.stderr).toContain("Invitation emails are not available yet. No invitation was sent.");
+      expect(deliveries).toBe(0);
+
+      stored.delete("share-default");
+      exited = undefined;
+      const plain = await runShareCaptured(["share", "publish", file, "--to", "email:alice@example.com"]);
+      expect(exited).toBeUndefined();
+      expect(plain.exitCode).toBe(0);
+      expect(plain.stdout).toBe(`${SHORT_LINK}\n`);
+      expect(publishes).toBe(1);
+      expect(stored.get("share-default")?.link).toBe(SHORT_LINK);
+    } finally {
+      process.exit = originalExit;
+      configureServices({});
+    }
+  });
+});
+
+function reviewRecordForDefaults(): SenderShareRecord {
+  return {
+    shareId: "share-default",
+    target: { origin: "https://node.example", nodeAudience: "did:key:z6Mknode", spaceId: "tinycloud:space" },
+    resource: { kind: "exact", path: "shares/share-default/note.md" },
+    actions: ["tinycloud.kv/get"],
+    recipientMatcher: { kind: "exactEmail", value: "alice@example.com" },
+    registeredAt: new Date().toISOString(),
+    expiresAt: "2030-01-01T00:00:00.000Z",
+  };
+}

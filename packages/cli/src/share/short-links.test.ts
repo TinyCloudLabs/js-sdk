@@ -3,7 +3,7 @@ import { Command } from "commander";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { generateKey, seal, toBase64Url } from "@tinycloud/share-envelope";
+import { fromBase64Url, generateKey, seal, toBase64Url } from "@tinycloud/share-envelope";
 import {
   buildFullLink,
   parseLink,
@@ -20,6 +20,7 @@ import { SharePublishAuthorityError } from "./errors.js";
 import vectors from "../../../share-envelope/test/links-api-vectors.json";
 import { configureShareCommandServices, registerShareCommand, type ShareCommandServices } from "../commands/share.js";
 import { LINK_EXPIRY_WARNING, LINK_EXPIRY_WARNING_URL, createShareLinks, linkFormForLifetime, shortLinkId } from "./short-links.js";
+import { buildShortLink } from "@tinycloud/share-envelope/links";
 
 const ORIGIN = "https://share.example";
 const API = "https://api.tinycloud.xyz";
@@ -196,6 +197,24 @@ describe("share links", () => {
     expect(shortLinkId(`${ORIGIN}/s/inline#v=2&p=abc`)).toBeUndefined();
     const shown = await createShareLinks({ signer: async () => signer, fetchFn: fakeApi().fetchFn }).show(published, { fullLink: false });
     expect(shortLinkId(shown.url)).toMatch(/^[a-z2-7]{26}$/);
+  });
+
+  test("the create request is exactly the signed record, and the short link stays short", async () => {
+    const api = fakeApi();
+    const published = await publishedShare();
+    const now = new Date();
+    const shown = await createShareLinks({ signer: async () => signer, fetchFn: api.fetchFn }).show(published, { fullLink: false, now });
+    expect(shown.url.length).toBeLessThan(200);
+    const body: unknown = JSON.parse(api.requests[0]!.body!);
+    expect(body).toEqual({
+      header: {
+        version: 1, type: "share", issuer: signer.did, audience: API, issuedAt: now.toISOString(), expiresAt: published.metadata.expiresAt,
+        size: fromBase64Url(published.deliveryMaterial!.sealedEnvelope).length, bodyCid: published.link.cid,
+        nonce: expect.stringMatching(/^[A-Za-z0-9_-]{22}$/),
+      },
+      signature: { algorithm: "Ed25519", value: expect.stringMatching(/^[A-Za-z0-9_-]{86}$/) },
+      body: published.deliveryMaterial!.sealedEnvelope,
+    });
   });
 });
 
@@ -428,6 +447,71 @@ describe("tc share with links", () => {
     expect(removed.stdout).toBe("");
     // No link was created, short or full.
     expect(api.requests).toEqual([]);
+  });
+
+  const SHORT_CID = "bafkreibm6jg3ux5qucnwb24kinphs4b5fbc7n5t3lti2skm4du5qjn4fli";
+  const linkAt = (origin: string) => buildShortLink({ origin, type: "share", id: "a".repeat(26), key: new Uint8Array(32).fill(7), bodyCid: SHORT_CID });
+
+  test("a link at an untrusted origin makes no request, for receive and for inspect", async () => {
+    let calls = 0;
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () => { calls += 1; return new Response(JSON.stringify({ error: "not_found" }), { status: 404 }); }) as unknown as typeof fetch;
+    try {
+      for (const command of ["receive", "inspect"]) {
+        const refused = await run([command, linkAt("https://share.example.evil.example"), "--viewer-origin", ORIGIN], {});
+        expect({ command, exit: refused.exitCode }).toEqual({ command, exit: 5 });
+      }
+      expect(calls).toBe(0);
+      // The same link at the trusted origin does reach the API, so the count above is meaningful.
+      const trusted = await run(["receive", linkAt(ORIGIN), "--viewer-origin", ORIGIN], {});
+      expect(trusted.exitCode).toBe(4);
+      expect(calls).toBe(1);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  test("an HTTP 5xx answer to a delete is UNAVAILABLE (exit 4) and the short link stays", async () => {
+    const healthy = fakeApi();
+    const published = await publish([], { fetchFn: healthy.fetchFn });
+    const { storage } = memoryRecordsWith(published.records.get("share-cmd")!);
+    const failing = fakeApi({ deleteStatus: 503 });
+    const result = await run(["unlink", "share-cmd"], { records: storage, links: createShareLinks({ signer: async () => signer, fetchFn: failing.fetchFn }) });
+    expect(result.exitCode).toBe(4);
+    expect(result.stderr).toContain("the links service refused the request");
+    expect(failing.requests.filter((request) => request.url.endsWith("/delete"))).toHaveLength(1);
+    expect(healthy.stored.size).toBe(1);
+  });
+
+  test("an endless streamed record is cut off at the limit without being read", async () => {
+    let pulled = 0;
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
+      pull(controller) { pulled += 1; controller.enqueue(new Uint8Array(64 * 1024)); },
+    }), {
+      status: 200,
+      headers: { "content-type": "application/octet-stream", "x-link-record": toBase64Url(new TextEncoder().encode(JSON.stringify({ header: {} }))) },
+    })) as unknown as typeof fetch;
+    try {
+      const result = await run(["receive", linkAt(ORIGIN), "--viewer-origin", ORIGIN], {});
+      expect(result.exitCode).toBe(7);
+      expect(pulled).toBeLessThan(10);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  test("a body that stalls after the 201 headers hits the timeout and falls back", async () => {
+    const stalledBody = ((_input: string | URL | Request, init?: RequestInit) => Promise.resolve(new Response(new ReadableStream<Uint8Array>({
+      start(controller) { init?.signal?.addEventListener("abort", () => controller.error(init.signal!.reason), { once: true }); },
+    }), { status: 201 }))) as unknown as typeof fetch;
+    const started = Date.now();
+    const result = await publish([], { fetchFn: stalledBody, timeoutMs: 50 });
+    expect(result.exitCode ?? 0).toBe(0);
+    expect(result.stdout).toBe(`${result.published.url}\n`);
+    expect(result.stderr).toContain("printing the full link instead");
+    expect(result.stderr).toContain("the links service could not be reached");
+    expect(Date.now() - started).toBeLessThan(2_000);
   });
 
   function memoryRecordsWith(record: SenderShareRecord) {

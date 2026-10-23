@@ -8,7 +8,8 @@ import { base58btc } from "multiformats/bases/base58";
 import { profilePath, withProfileLock, withTinyCloudStateRoot } from "@tinycloud/operations/state";
 import { fromBase64Url, unifiedPolicyV2Schema } from "@tinycloud/share-envelope";
 import { buildShortLink } from "@tinycloud/share-envelope/links";
-import { ADDRESSED_SHARE_TOO_LARGE_MESSAGE, historyRecordForPublishedShare, notifyShare, type PublishedShare, type SenderShareRecord, type SharePolicyRootRevocation, type TargetPublishInput } from "@tinycloud/share-sdk";
+import { ADDRESSED_SHARE_TOO_LARGE_MESSAGE, historyRecordForPublishedShare, notifyShare, revokeShare, type PublishedShare, type SenderShareRecord, type SharePolicyRootRevocation, type TargetPublishInput } from "@tinycloud/share-sdk";
+import { shortLinkId } from "./short-links.js";
 import { createEmailCredentialRequirement, createEmailDomainCredentialRequirement, credentialRequirementDigest, LocationRecordValidationError, LocationRegistryHttpError } from "@tinycloud/sdk-core";
 import { CLIError } from "../output/errors.js";
 import { ShareHistoryReadError, ShareHistoryRetryError, ShareHistoryUnreadableError, SharePublishAuthorityError, shareHistoryReason } from "./errors.js";
@@ -857,6 +858,49 @@ describe("TinyCloud share authority adapter", () => {
         "artifact art_over version 1 stays in your space, because artifact versions are write-once",
       ]);
       expect(ownerKv.has("artifacts/art_over/versions/1/note.md")).toBe(true);
+    });
+  });
+
+  describe("the delete-token record", () => {
+    it("is neither written nor read by an addressed publish, a revoke and an unlink", async () => {
+      const touched: string[] = [];
+      const original = node.kvForSpace;
+      const recording = (spaceId: string) => {
+        const kv = original(spaceId);
+        return {
+          put: async (path: string, bytes?: Uint8Array, options?: { readonly ifNoneMatch?: "*" }) => { touched.push(`put ${path}`); return kv.put(path, bytes, options); },
+          get: async (path: string) => { touched.push(`get ${path}`); return kv.get(path); },
+          list: async (options: { readonly prefix: string }) => { touched.push(`list ${options.prefix}`); return kv.list(options); },
+          delete: async (path: string) => { touched.push(`delete ${path}`); return kv.delete(path); },
+        };
+      };
+      const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/.well-known/tinycloud-share/config.json")) {
+          return Response.json({ version: "tinycloud.share/config-v2", shareOrigin: "https://share.example", registryOrigin: "https://registry.example", credentialsOrigin: "https://credentials.example" });
+        }
+        if (url === "https://api.tinycloud.xyz/v1/links") {
+          return Response.json({ id: "a".repeat(26), expiresAt: (JSON.parse(String(init?.body)) as { header: { expiresAt: string } }).header.expiresAt }, { status: 201 });
+        }
+        if (url === `https://api.tinycloud.xyz/v1/links/${"a".repeat(26)}/delete`) return new Response(null, { status: 204 });
+        throw new Error(`unexpected request ${url}`);
+      }) as unknown as typeof globalThis.fetch;
+      Object.defineProperty(node, "kvForSpace", { value: recording, configurable: true, writable: true });
+      try {
+        const adapters = createShareAuthorityAdapters({ origin: "https://share.example", profileName: async () => "test", fetchFn, revokePolicyRoot: async () => {} });
+        const published = await adapters.targetAdapter.publish({ ...addressedInput({ kind: "email", address: "alice@example.com" }), expiresAt: new Date(Date.now() + 7 * 86_400_000) });
+        if ("state" in published) throw new Error("expected addressed publication");
+        const shown = await adapters.links.show(published, { fullLink: false });
+        expect(shown.short).toBe(true);
+        const record: SenderShareRecord = { ...historyRecordForPublishedShare(published), link: shown.url };
+        expect((await revokeShare({ record, adapter: adapters.revocation })).state).toBe("revoked");
+        expect(await adapters.links.unlink(shortLinkId(shown.url)!)).toBe("deleted");
+        // The only space access is the content upload: no token key is written, read, listed or deleted.
+        expect(touched).toEqual([`put ${uploadedPaths[0]}`]);
+        expect(touched.filter((entry) => entry.includes("short-link"))).toEqual([]);
+      } finally {
+        Object.defineProperty(node, "kvForSpace", { value: original, configurable: true, writable: true });
+      }
     });
   });
 
