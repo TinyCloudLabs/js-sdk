@@ -113,6 +113,14 @@ jobs:
         if: steps.gate.outputs.run == 'true'
         run: bunx turbo build --filter=@tinycloud/web-sdk...
 
+      # A broken `exports` target (missing types file, subpath bundle never
+      # emitted) only fails for consumers. Check the built package itself.
+      - name: Check that every web-sdk export target exists
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          node --test .github/scripts/check-package-exports-exist.test.mjs
+          node .github/scripts/check-package-exports-exist.mjs packages/web-sdk
+
       # coordinationos-vendor.test.ts imports the generated vendor bundle and manifest.
       - name: Build the CoordinationOS vendor bundle
         if: steps.gate.outputs.run == 'true'
