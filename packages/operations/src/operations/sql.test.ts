@@ -227,9 +227,9 @@ describe("SQLite read operations", () => {
     });
   });
 
-  test("maps request-side SQL 413 to split-batch guidance for queries and writes", async () => {
+  test("maps request-side SQL 413 to the short request-size message for queries and writes", async () => {
     const tooLarge = { ok: false, error: { code: "SQL_REQUEST_TOO_LARGE" } };
-    const message = "The SQL request is too large. Split the batch into smaller requests.";
+    const message = "SQL request too large.";
     const query = definition("tinycloud.sql.query");
     const queryInput = query.input.parse({
       space: "applications",

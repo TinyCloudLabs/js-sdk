@@ -602,10 +602,10 @@ describe("personal apps fast copy", () => {
 });
 
 describe("fast-copy request-size mapping", () => {
-  test("maps request-side 413 to split guidance and keeps response-side 413 as result-limit", () => {
+  test("maps request-side 413 to a short request-size message and keeps response-side 413 as result-limit", () => {
     expect(copyFailure({ code: "SQL_REQUEST_TOO_LARGE" }).operationError).toMatchObject({
       code: "INPUT_INVALID",
-      message: "Split the fast-copy batch into smaller requests.",
+      message: "Fast-copy request too large.",
     });
     expect(copyFailure({ code: "SQL_RESPONSE_TOO_LARGE" }).operationError).toMatchObject({
       code: "SQL_RESULT_LIMIT_EXCEEDED",

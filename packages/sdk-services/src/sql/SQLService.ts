@@ -29,12 +29,7 @@ import {
   parseServiceErrorBody,
   responseErrorMeta,
 } from "../responseErrors";
-import {
-  firstSqlToken,
-  requestTooLargeError,
-  statementClassOf,
-  type StatementClass,
-} from "../statementSize";
+import { requestTooLargeError } from "../statementSize";
 import type { ISQLService } from "./ISQLService";
 import type { IDatabaseHandle } from "./ISQLService";
 import { DatabaseHandle } from "./DatabaseHandle";
@@ -184,7 +179,7 @@ export class SQLService extends BaseService implements ISQLService {
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "query", dbName, [action], "read");
+          return await this.handleErrorResponse(response, "query", dbName, [action]);
         }
 
         const data = (await response.json()) as QueryResponse<T>;
@@ -234,7 +229,7 @@ export class SQLService extends BaseService implements ISQLService {
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "execute", dbName, requestedActions, statementClassOf(sql));
+          return await this.handleErrorResponse(response, "execute", dbName, requestedActions);
         }
 
         const data = (await response.json()) as ExecuteResponse;
@@ -268,7 +263,7 @@ export class SQLService extends BaseService implements ISQLService {
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "batch", dbName, requestedActions, "write");
+          return await this.handleErrorResponse(response, "batch", dbName, requestedActions);
         }
 
         const data = (await response.json()) as BatchResponse;
@@ -312,7 +307,7 @@ export class SQLService extends BaseService implements ISQLService {
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "executeStatement", dbName, [SQLAction.WRITE], "write");
+          return await this.handleErrorResponse(response, "executeStatement", dbName, [SQLAction.WRITE]);
         }
 
         const data = (await response.json()) as
@@ -351,7 +346,7 @@ export class SQLService extends BaseService implements ISQLService {
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "export", dbName, [SQLAction.READ], "read");
+          return await this.handleErrorResponse(response, "export", dbName, [SQLAction.READ]);
         }
 
         // FetchResponse doesn't expose blob(), so access it from the
@@ -562,7 +557,6 @@ export class SQLService extends BaseService implements ISQLService {
     operation: string,
     dbName: string,
     requestedActions: readonly string[],
-    statementClass: StatementClass,
   ): Promise<Result<never>> {
     const errorText = await response.text();
     const meta = responseErrorMeta(response.status, response.statusText, errorText);
@@ -581,9 +575,18 @@ export class SQLService extends BaseService implements ISQLService {
 
     const errorBody = parseServiceErrorBody(errorText);
 
-    const sized = response.status === 413 ? requestTooLargeError("sql", operation, errorText, statementClass) : undefined;
-    const errorCode = sized?.code ?? this.mapHttpStatusToErrorCode(response.status, errorBody.error);
-    const message = sized?.message ?? formatServiceResponseError("SQL", operation, response.status, errorText, errorBody);
+    const sizeCode = requestTooLargeError("sql", operation, response.status, errorText);
+    const errorCode = sizeCode ?? this.mapHttpStatusToErrorCode(
+      response.status,
+      errorBody.error
+    );
+    const message = formatServiceResponseError(
+      "SQL",
+      operation,
+      response.status,
+      errorText,
+      errorBody,
+    );
 
     if (response.status === 401) {
       const { action } = parseAuthError(errorText);
@@ -685,4 +688,37 @@ function rowValue(row: unknown, index: number): unknown {
     return values[index];
   }
   return undefined;
+}
+
+function firstSqlToken(sql: string): string | undefined {
+  let index = 0;
+
+  while (index < sql.length) {
+    while (index < sql.length && /\s/.test(sql[index])) {
+      index++;
+    }
+
+    if (sql.startsWith("--", index)) {
+      const newline = sql.indexOf("\n", index + 2);
+      if (newline === -1) {
+        return undefined;
+      }
+      index = newline + 1;
+      continue;
+    }
+
+    if (sql.startsWith("/*", index)) {
+      const end = sql.indexOf("*/", index + 2);
+      if (end === -1) {
+        return undefined;
+      }
+      index = end + 2;
+      continue;
+    }
+
+    break;
+  }
+
+  const match = /^[A-Za-z_]+/.exec(sql.slice(index));
+  return match?.[0].toLowerCase();
 }
