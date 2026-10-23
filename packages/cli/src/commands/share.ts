@@ -48,6 +48,24 @@ import { FOLDER_NOT_AVAILABLE, bundleHtmlFolder, htmlFolderNotice, isDirectoryIn
 
 import { ShareHistoryReadError, ShareHistoryRetryError, ShareHistoryUnreadableError, SharePublishAuthorityError, shareHistoryReason, type ShareHistoryStatus } from "../share/errors.js";
 import { resolveShortLink, ShortLinkError, type ShareShortLinks, type ShortLinkErrorCode } from "../share/short-links.js";
+import { randomBytes } from "node:crypto";
+import { join } from "node:path";
+import { createInterface } from "node:readline/promises";
+import type { ShareEnvelopeV3 } from "@tinycloud/share-envelope";
+import { CONFIG_DIR, ExitCode } from "../config/constants.js";
+import {
+  codeGateSource,
+  completeHeadlessReceive,
+  exactEmailRecipient,
+  filePendingStore,
+  HeadlessReceiveError,
+  promptHeadlessReceive,
+  requestHeadlessCode,
+  type EmailProofGate,
+  type PendingStore,
+  type ReceivedContent,
+  type ShareAccessPort,
+} from "../share/headless-receive.js";
 const SHARE_ORIGIN = "https://share.tinycloud.xyz";
 const NOTIFY_WINDOW_MESSAGE = "Share notification authorization expired (at share expiry or 5 minutes after publication); publish a new share and invite the recipient then.\n";
 
@@ -62,6 +80,8 @@ export interface ShareCommandServices {
   readonly getRecord?: (shareId: string) => Promise<SenderShareRecord | undefined>;
   /** Short links for addressed shares (TC-1737). */
   readonly shortLinks?: ShareShortLinks;
+  /** Email-code receive (TC-1757): the code-gate and access port are injected by the host. */
+  readonly headlessReceive?: HeadlessReceiveServices;
   /** The authenticated owner's artifact storage, for `tc share versions`. */
   readonly artifactStore?: () => Promise<ArtifactStore>;
 }
@@ -95,6 +115,92 @@ let shareServices: ShareCommandServices = {};
 
 export function configureShareCommandServices(services: ShareCommandServices): void {
   shareServices = services;
+}
+
+/** Email-code receive (TC-1757). The host supplies the code-gate and access port; the pending store defaults to a 0600 file store. */
+export interface HeadlessReceiveServices {
+  readonly gate: EmailProofGate;
+  readonly access: ShareAccessPort;
+  readonly store?: PendingStore;
+}
+
+interface HeadlessReceiveOptions {
+  readonly requestCode?: boolean;
+  readonly code?: string;
+  readonly resume?: string;
+  readonly output?: string;
+  readonly stdout?: boolean;
+  readonly stdin?: boolean;
+  readonly force?: boolean;
+  readonly viewerOrigin: string;
+}
+
+async function promptForCode(): Promise<string> {
+  const prompt = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return (await prompt.question("Code from the owner's email (8 digits): ")).trim();
+  } finally {
+    prompt.close();
+  }
+}
+
+/** `--request-code` asks the recipient mailbox for a code; `--resume <id> --code <code>` completes it. A terminal prompts for the code. */
+async function headlessReceive(options: HeadlessReceiveOptions, url: string | undefined, json: boolean, maxBytes: number | undefined): Promise<void> {
+  if (options.stdout === true && options.output !== undefined) throw new CLIError("INVALID_ARGUMENT", "--output and --stdout are mutually exclusive", ExitCode.USAGE_ERROR);
+  if (options.stdout !== true && options.output === undefined) throw new CLIError("INVALID_ARGUMENT", "email code receive needs --output <directory> or --stdout", ExitCode.USAGE_ERROR);
+  const services = shareServices.headlessReceive;
+  if (services === undefined) throw new CLIError("AUTH_REQUIRED", "email code receive is not configured", ExitCode.AUTH_REQUIRED);
+  const store = services.store ?? filePendingStore(join(CONFIG_DIR, "share-receive"));
+  const interactive = process.stdin.isTTY === true && process.stdout.isTTY === true && !json;
+  const outputDir = options.output;
+  const deliver = async (content: ReceivedContent): Promise<void> => {
+    if (maxBytes !== undefined && content.bytes.byteLength > maxBytes) throw new CLIError("MAX_BYTES_EXCEEDED", "shared content exceeds max-bytes", 7);
+    if (options.stdout === true) { process.stdout.write(Buffer.from(content.bytes)); return; }
+    if (outputDir === undefined) throw new CLIError("INVALID_ARGUMENT", "email code receive needs --output <directory> or --stdout", ExitCode.USAGE_ERROR);
+    const output = await writeShareOutput(outputDir, content.filename ?? "share.md", content.bytes, options.force === true);
+    if (json) writeJson({ protocol: "tinycloud-share", version: 1, path: output, transport: "email-code" });
+    else receiveHuman(output);
+  };
+  try {
+    if (options.resume !== undefined) {
+      if (url !== undefined || options.stdin === true) throw new CLIError("INVALID_ARGUMENT", "--resume takes no share URL", ExitCode.USAGE_ERROR);
+      if (options.requestCode === true) throw new CLIError("INVALID_ARGUMENT", "--resume and --request-code are mutually exclusive", ExitCode.USAGE_ERROR);
+      const code = options.code ?? (interactive ? await promptForCode() : undefined);
+      if (code === undefined) throw new CLIError("INVALID_ARGUMENT", "--code is required when not running in a terminal", ExitCode.USAGE_ERROR);
+      await deliver(await completeHeadlessReceive({ id: options.resume, code, gate: services.gate, store, access: services.access, now: Date.now() }));
+      return;
+    }
+    if (options.code !== undefined) throw new CLIError("INVALID_ARGUMENT", "--code needs --resume <id>", ExitCode.USAGE_ERROR);
+    if (options.requestCode !== true) throw new CLIError("INVALID_ARGUMENT", "email code receive needs --request-code or --resume <id>", ExitCode.USAGE_ERROR);
+    const link = await inputUrl(url, options.stdin === true);
+    let native = false;
+    try { parseNativeShareUrl(link); native = true; } catch { /* addressed link */ }
+    if (native) throw new CLIError("INVALID_ARGUMENT", "email code receive takes an addressed share link, not a native TinyCloud link", ExitCode.USAGE_ERROR);
+    const captured: { envelope?: ShareEnvelopeV3 } = {};
+    const resolved = await resolveLink(link, options.viewerOrigin);
+    assertTrustedShareOrigin(resolved, options.viewerOrigin);
+    const result = await receiveShare(resolved, {
+      expectedOrigin: options.viewerOrigin,
+      onResolvedAddressedEnvelope: (envelope) => { captured.envelope = envelope; },
+    });
+    const envelope = captured.envelope;
+    if (!("state" in result) || result.method !== "email-claim" || envelope === undefined) {
+      throw new CLIError("INVALID_ARGUMENT", "this share does not take an email code; receive it with the normal command", ExitCode.USAGE_ERROR);
+    }
+    const recipient = exactEmailRecipient(envelope);
+    if (interactive) {
+      await deliver(await promptHeadlessReceive({ envelope, recipient, source: codeGateSource(services.gate), access: services.access, promptForCode }));
+      return;
+    }
+    const pending = await requestHeadlessCode({ envelope, recipient, gate: services.gate, store, now: Date.now(), randomId: () => randomBytes(16).toString("hex") });
+    const expiresAt = new Date(pending.expiresAt).toISOString();
+    if (json) writeJson({ protocol: "tinycloud-share", version: 1, pending: { resumeId: pending.id, expiresAt } });
+    else process.stdout.write(`Code requested; it expires at ${expiresAt}. Ask the owner for the 8-digit code, then run: tinycloud share receive --resume ${pending.id} --code <code> --output <directory>\n`);
+    process.exitCode = ExitCode.PENDING;
+  } catch (error) {
+    if (error instanceof HeadlessReceiveError) throw new CLIError(error.code, error.message, error.exitCode);
+    throw error;
+  }
 }
 
 export function parseShareTarget(value: string): ShareTarget {
@@ -314,7 +420,6 @@ function assertTrustedShareOrigin(link: string, expectedOrigin: string): void {
     throw new ShareReceiveError("origin-mismatch", "share link origin is not the trusted Share origin");
   }
 }
-
 const SHORT_LINK_WARNING: Record<ShortLinkErrorCode, string> = {
   "rate-limited": "the short-link service is rate limiting this client",
   capacity: "the short-link service is at capacity",
@@ -630,11 +735,18 @@ export function registerShareCommand(program: Command): void {
     .option("--max-bytes <bytes>", "Bound received content bytes")
     .option("--json", "Print versioned redacted JSON")
     .option("--viewer-origin <origin>", "Require this canonical Share origin", SHARE_ORIGIN)
+    .option("--request-code", "Email an authorization code to the owner's mailbox and wait for it (email shares)")
+    .option("--code <code>", "The 8-digit code from the owner's email (with --resume)")
+    .option("--resume <id>", "Resume a pending email-code receive with --code, or a prompt in a terminal")
     .action(async (url: string | undefined, options, command: Command) => {
       try {
         const json = jsonOutput(options, command);
         if (options.stdout && json) throw new CLIError("INVALID_ARGUMENT", "--stdout and --json are mutually exclusive", 2);
         const maxBytes = byteLimit(options.maxBytes);
+        if (options.requestCode === true || options.resume !== undefined || options.code !== undefined) {
+          await headlessReceive(options, url, json, maxBytes);
+          return;
+        }
         const link = await inputUrl(url, options.stdin === true);
         let nativeLink = false;
         try { parseNativeShareUrl(link); nativeLink = true; } catch { /* addressed Policy/v3 link */ }
