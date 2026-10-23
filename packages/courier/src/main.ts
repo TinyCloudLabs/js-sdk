@@ -12,6 +12,7 @@ import { cmdPause, cmdResume } from './pause.js';
 import { cmdGuard } from './guard/command.js';
 import { cmdBroker, cmdRunApproved } from './broker.js';
 import { cmdCredential } from './credential.js';
+import { cmdInvite, cmdJoin } from './invite-commands.js';
 
 function usage(): string {
   const name = programName();
@@ -30,6 +31,17 @@ Setup & pairing (humans run these):
                                    Accept artifact A, B or C; prints B or C to pass on
   pair renew [peer] [--force]      Renew peer delegations; humans or watcher only
   revoke <peer>                    Stop renewing + drop the peer (access lapses at delegation expiry)
+  invite <handle> --email <address> [--tier strict|trusted] [--ttl 24h] [--call-me h] [--also-ask] [--invites-public-dir d]
+                                   Create a one-time invite string for an invitee (bearer link). With a public dir
+                                   (flag or COURIER_INVITES_PUBLIC_DIR) also writes a non-secret copy of the record there
+                                   --tier trusted  request trusted status; the peer starts as strict until you confirm
+  invite list                      Invites on this machine: status and expiry, no secrets
+  invite revoke <invite-id>        Delete the sealed invite and any pending hello or welcome
+  join --stdin | --file f          Accept an invite read from stdin or a file, then send hello; waits for the reply
+                                   Prefer --stdin or --file: an invite passed as an argument is visible in ps.
+  join <invite-string> [--credential-file f | --credential-stdin]
+                                   Same as above with the invite on the command line
+  join --resume [invite-id]        Resume a pending join; id may be omitted when only one is pending
 
 Threads (agents run these):
   send <peer> (--new <subject> | --thread <id>) [--text t | --file f | stdin]
@@ -148,6 +160,8 @@ export async function run(argv: string[]): Promise<void> {
     case 'manifest': return cmdManifest();
     case 'pair': return cmdPair(sub);
     case 'revoke': return cmdRevoke(sub);
+    case 'invite': return cmdInvite(sub);
+    case 'join': return cmdJoin(sub);
     case 'send': return cmdSend(sub);
     case 'inbox': return cmdInbox(sub);
     case 'read': return cmdRead(sub);

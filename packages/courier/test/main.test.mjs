@@ -55,3 +55,11 @@ test('main() names the program it was invoked as', async () => {
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
+
+test('courier invite --help: --tier trusted is a request; the peer starts strict until confirmed', () => {
+  withHome((home) => {
+    const r = runCli(['invite', '--help'], home);
+    assert.equal(r.status, 0);
+    assert.match(r.stdout, /--tier trusted  request trusted status; the peer starts as strict until you confirm/);
+  });
+});
