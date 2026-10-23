@@ -10,43 +10,58 @@ interface Call {
 }
 
 const calls: Call[] = [];
-const record = (name: string) => calls.push({ name, at: performance.now() });
 
-const ok = <T>(data: T) => ({ ok: true as const, data });
+// Test-only clock offset. The adapter's TTLs and freshness text read Date.now(); `age` moves
+// it forward so a snapshot goes stale without waiting out the 60 s / 10 s TTLs.
+let clockOffset = 0;
+const realNow = Date.now.bind(Date);
+Date.now = () => realNow() + clockOffset;
+
+// Fault controls set through `__tc.control`. `rtt` delays every read; `deny` answers
+// PERMISSION_DENIED and `fail` answers NETWORK for the named reads.
+const faults = { rtt: 0, deny: new Set<string>(), fail: new Set<string>() };
+
+async function respond<T>(name: string, service: string, data: T) {
+  calls.push({ name, at: performance.now() });
+  if (faults.rtt > 0) await new Promise((resolve) => setTimeout(resolve, faults.rtt));
+  if (faults.deny.has(name)) {
+    return { ok: false as const, error: { code: "PERMISSION_DENIED", message: "denied", service } };
+  }
+  if (faults.fail.has(name)) {
+    return { ok: false as const, error: { code: "NETWORK", message: "down", service } };
+  }
+  return { ok: true as const, data };
+}
 
 const host = {
   account: {
     index: {
       spaces: {
         async list() {
-          record("spaces.list");
-          return ok([]);
+          return respond("spaces.list", "space", []);
         },
       },
       applications: {
         async list() {
-          record("applications.list");
-          return ok([]);
+          return respond("applications.list", "application", []);
         },
       },
     },
   },
   delegations: {
     async query() {
-      record("delegations.query");
-      return ok({ items: [] });
+      return respond("delegations.query", "delegation", { items: [] });
     },
     async status() {
-      return ok({});
+      return { ok: true as const, data: {} };
     },
     async revoke() {
-      return ok({});
+      return { ok: true as const, data: {} };
     },
   },
   storage: {
     async status() {
-      record("storage.status");
-      return ok({
+      return respond("storage.status", "storage", {
         usedBytes: 1073741824,
         limitBytes: 5368709120,
         state: "ok" as const,
@@ -112,11 +127,25 @@ w.__tc = {
     handle?.reset();
     return true;
   },
+  control(next: { rtt?: number; deny?: string[]; fail?: string[] }) {
+    faults.rtt = next.rtt ?? 0;
+    faults.deny = new Set(next.deny ?? []);
+    faults.fail = new Set(next.fail ?? []);
+    return true;
+  },
+  age(ms: number) {
+    clockOffset += ms;
+    return clockOffset;
+  },
   open() {
     handle?.api.open();
     return performance.now();
   },
+  close() {
+    handle?.api.close();
+    return true;
+  },
   calls() {
-    return calls.slice();
+    return calls.map((c) => ({ ...c }));
   },
 };

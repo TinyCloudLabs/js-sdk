@@ -32,6 +32,9 @@ interface HarnessWindow {
     arm(): Promise<boolean>;
     reset(): boolean;
     open(): number;
+    control(next: { rtt?: number; deny?: string[]; fail?: string[] }): boolean;
+    age(ms: number): number;
+    close(): boolean;
     calls(): Call[];
   };
 }
@@ -42,6 +45,13 @@ const arm = (page: Page) => page.evaluate(() => (window as unknown as HarnessWin
 const reset = (page: Page) => page.evaluate(() => (window as unknown as HarnessWindow).__tc.reset());
 const open = (page: Page) => page.evaluate(() => (window as unknown as HarnessWindow).__tc.open());
 const calls = (page: Page) => page.evaluate(() => (window as unknown as HarnessWindow).__tc.calls());
+const setFaults = (page: Page, next: { rtt?: number; deny?: string[]; fail?: string[] }) =>
+  page.evaluate((n) => (window as unknown as HarnessWindow).__tc.control(n), next);
+const age = (page: Page, ms: number) => page.evaluate((m) => (window as unknown as HarnessWindow).__tc.age(m), ms);
+const close = (page: Page) => page.evaluate(() => (window as unknown as HarnessWindow).__tc.close());
+const callCount = async (page: Page, name: string) => (await calls(page)).filter((c) => c.name === name).length;
+const delegationsNav = (page: Page) => panel(page).getByRole("button", { name: "Delegations", exact: true });
+const storageNav = (page: Page) => panel(page).getByRole("button", { name: "Storage", exact: true });
 
 // `blockIdle` makes requestIdleCallback never fire, so only an intent can start the pull.
 async function boot(page: Page, blockIdle = false) {
@@ -118,4 +128,125 @@ test("sign-out before the pull cancels it; a later hover starts nothing", async 
   await launcher(page).hover();
   await page.waitForTimeout(500);
   expect(await calls(page)).toEqual([]);
+});
+
+// Prefetch has run; the delegations snapshot is then 3 min old, so the next open revalidates it.
+async function armAndAge(page: Page) {
+  await boot(page);
+  await arm(page);
+  await expect.poll(async () => (await calls(page)).map((c) => c.name), { timeout: 8000 }).toEqual(
+    expect.arrayContaining(READS),
+  );
+  await age(page, 180_000);
+}
+
+test("stale delegations: Updating while the revalidate is in flight, then Updated with one re-query", async ({ page }) => {
+  await armAndAge(page);
+  await setFaults(page, { rtt: 1500 });
+  const before = await callCount(page, "delegations.query");
+  await open(page);
+  await delegationsNav(page).click();
+  await expect(panel(page).getByText("Updating...", { exact: true })).toBeVisible();
+  await expect(panel(page).getByText("Updated just now", { exact: true })).toBeVisible({ timeout: 5000 });
+  expect(await callCount(page, "delegations.query")).toBe(before + 1);
+});
+
+test("failed refresh keeps the snapshot and says so", async ({ page }) => {
+  await armAndAge(page);
+  await setFaults(page, { fail: ["delegations.query"] });
+  const before = await callCount(page, "delegations.query");
+  await open(page);
+  await delegationsNav(page).click();
+  await expect(panel(page).getByText("Couldn't refresh, showing 3 min ago", { exact: true })).toBeVisible({
+    timeout: 5000,
+  });
+  expect(await callCount(page, "delegations.query")).toBe(before + 1);
+});
+
+test("denied delegations shows needs-permission for that section only", async ({ page }) => {
+  await armAndAge(page);
+  await setFaults(page, { deny: ["delegations.query"] });
+  await open(page);
+  await delegationsNav(page).click();
+  await expect(panel(page).getByText("This session can't show this yet.", { exact: true })).toBeVisible({
+    timeout: 5000,
+  });
+  await storageNav(page).click();
+  await expect(panel(page).getByText("Storage usage needs your permission.", { exact: true })).toBeHidden();
+  await expect(panel(page).getByText(" used", { exact: false }).first()).toBeVisible({ timeout: 5000 });
+});
+
+for (const rtt of [100, 300]) {
+  test(`cold open at ${rtt} ms RTT: data appears after one round trip`, async ({ page }, testInfo) => {
+    await boot(page, true);
+    await setFaults(page, { rtt });
+    await open(page);
+    await delegationsNav(page).click();
+    await expect(panel(page).getByText("Updated just now", { exact: true })).toBeVisible({ timeout: 8000 });
+    const requestedAt = (await calls(page)).find((c) => c.name === "delegations.query")?.at ?? NaN;
+    const shownAt = await page.evaluate(() => performance.now());
+    testInfo.annotations.push({
+      type: `cold open ${rtt} ms RTT: request to updated (ms)`,
+      description: (shownAt - requestedAt).toFixed(1),
+    });
+    expect(shownAt - requestedAt).toBeGreaterThanOrEqual(rtt);
+  });
+}
+
+test("warm open from memory shows data before a 300 ms round trip could finish", async ({ page }, testInfo) => {
+  await boot(page);
+  await arm(page);
+  await expect.poll(async () => (await calls(page)).map((c) => c.name), { timeout: 8000 }).toEqual(
+    expect.arrayContaining(READS),
+  );
+  await setFaults(page, { rtt: 300 });
+  const before = await callCount(page, "delegations.query");
+  await open(page);
+  await expect(panel(page)).toBeVisible();
+  await delegationsNav(page).click();
+  const clickedAt = await page.evaluate(() => performance.now());
+  await expect(panel(page).getByText("Updated just now", { exact: true })).toBeVisible();
+  const shownAt = await page.evaluate(() => performance.now());
+  testInfo.annotations.push({ type: "warm open from memory: click to updated (ms)", description: (shownAt - clickedAt).toFixed(1) });
+  expect(shownAt - clickedAt).toBeLessThan(300);
+  expect(await callCount(page, "delegations.query")).toBe(before);
+});
+
+test("freshness chip states at light and dark, desktop and phone widths", async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  await armAndAge(page);
+  const sizes = {
+    desktop: { width: 1280, height: 800 },
+    phone: { width: 390, height: 844 },
+  } as const;
+  for (const scheme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme: scheme });
+    for (const size of Object.keys(sizes) as (keyof typeof sizes)[]) {
+      await page.setViewportSize(sizes[size]);
+
+      await setFaults(page, { rtt: 3000 });
+      await age(page, 180_000);
+      await close(page);
+      await open(page);
+      await delegationsNav(page).click();
+      await expect(panel(page).getByText("Updating...", { exact: true })).toBeVisible();
+      const updatingShot = testInfo.outputPath(`updating-${scheme}-${size}.png`);
+      await page.screenshot({ path: updatingShot });
+      await expect(panel(page).getByText("Updated just now", { exact: true })).toBeVisible({ timeout: 8000 });
+
+      await setFaults(page, { fail: ["delegations.query"] });
+      await age(page, 180_000);
+      await close(page);
+      await open(page);
+      await delegationsNav(page).click();
+      await expect(panel(page).getByText("Couldn't refresh, showing 3 min ago", { exact: true })).toBeVisible({
+        timeout: 5000,
+      });
+      const failedShot = testInfo.outputPath(`failed-${scheme}-${size}.png`);
+      await page.screenshot({ path: failedShot });
+      await testInfo.attach(`updating-${scheme}-${size}`, { path: updatingShot, contentType: "image/png" });
+      await testInfo.attach(`failed-${scheme}-${size}`, { path: failedShot, contentType: "image/png" });
+      await setFaults(page, {});
+    }
+  }
 });
