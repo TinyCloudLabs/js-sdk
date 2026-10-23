@@ -1427,10 +1427,45 @@ export function validateGatedOnlyRatchet(row?: GatedOnlyRatchet, base?: GatedOnl
 }
 const historicalToolchain = "Bun 1.4.3; production webpack; gzip -9 -c";
 
+/** Every ledger row, except allowance and entries, with its approved constant. A row commit wires its constant here once. */
+export const approvedLedgerRows: Record<string, unknown> = {
+  phase2Ratchet: approvedPhase2,
+  fixRequiredRatchet: approvedFixRequiredRatchet,
+  canonicalToolchainCorrection: approvedCiToolchainCorrection,
+  masterMergeResolution: approvedMasterMergeResolution,
+  hardeningRatchet: approvedHardeningRatchet,
+  logoutRatchet: approvedLogoutRatchet,
+  tc1413Ratchet: approvedTc1413Ratchet,
+  tc1436Ratchet: approvedTc1436Ratchet,
+  tc1432Ratchet: approvedTc1432Ratchet,
+  tc1424Ratchet: approvedTc1424Ratchet,
+  tc1448Ratchet: approvedTc1448Ratchet,
+  tc1443Ratchet: approvedTc1443Ratchet,
+  tc1466Ratchet: approvedTc1466Ratchet,
+  tc1443bRatchet: approvedTc1443bRatchet,
+  tc1428Ratchet: approvedTc1428Ratchet,
+  tc1476Ratchet: approvedTc1476Ratchet,
+  tc1475Ratchet: approvedTc1475Ratchet,
+  tc606WorkerRatchet: approvedTc606WorkerRatchet,
+  masterDriftRatchet: approvedMasterDriftRatchet,
+  tc1789Ratchet: approvedTc1789Ratchet,
+  tc1757Ratchet: approvedTc1757Ratchet,
+  tc1777Ratchet: approvedTc1777Ratchet,
+  tc1777ExpiryRatchet: approvedTc1777ExpiryRatchet,
+  tc848PanelRatchet: approvedTc848PanelRatchet,
+  tc1781DecryptExpiryRatchet: approvedTc1781DecryptExpiryRatchet,
+  tc1801NonTransferableShareRatchet: approvedTc1801NonTransferableShareRatchet,
+  tc1807CredentialDiscoveryRatchet: approvedTc1807CredentialDiscoveryRatchet,
+  tc1827WorkerRatchet: approvedTc1827WorkerRatchet,
+  tc1827ReplicaWorkerRatchet: approvedTc1827ReplicaWorkerRatchet,
+  tc1823SizeCodeRatchet: approvedTc1823SizeCodeRatchet,
+  tc712CredentialCoreRatchet: approvedTc712CredentialCoreRatchet,
+};
+
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
 export function validateLedger(value: Ledger, historicalBase = false): void {
   if (!value || !value.allowance || !Array.isArray(value.entries) ||
-      Object.keys(value).some((key) => key !== "allowance" && key !== "entries" && key !== "phase2Ratchet" && key !== "fixRequiredRatchet" && key !== "canonicalToolchainCorrection" && key !== "masterMergeResolution" && key !== "hardeningRatchet" && key !== "logoutRatchet" && key !== "tc1413Ratchet" && key !== "tc1436Ratchet" && key !== "tc1432Ratchet" && key !== "tc1424Ratchet" && key !== "tc1448Ratchet" && key !== "tc1443Ratchet" && key !== "tc1466Ratchet" && key !== "tc1443bRatchet" && key !== "tc1428Ratchet" && key !== "tc1476Ratchet" && key !== "tc1475Ratchet" && key !== "tc606WorkerRatchet" && key !== "masterDriftRatchet" && key !== "tc1789Ratchet" && key !== "tc1757Ratchet" && key !== "tc1777Ratchet" && key !== "tc1777ExpiryRatchet" && key !== "tc848PanelRatchet" && key !== "tc1781DecryptExpiryRatchet" && key !== "tc1801NonTransferableShareRatchet" && key !== "tc1807CredentialDiscoveryRatchet" && key !== "tc1827WorkerRatchet" && key !== "tc1827ReplicaWorkerRatchet" && key !== "tc1823SizeCodeRatchet" && key !== "tc712CredentialCoreRatchet")) {
+      Object.keys(value).some((key) => !["allowance", "entries", "note", "pr", "ticket"].includes(key) && !Object.hasOwn(approvedLedgerRows, key))) {
     throw new Error("Invalid packages/web-sdk/scripts/replica-size-ledger.json shape");
   }
   if (Object.keys(value.allowance).some((key) => !formats.includes(key as typeof formats[number]))) {
