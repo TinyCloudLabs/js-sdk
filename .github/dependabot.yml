@@ -46,6 +46,22 @@ updates:
         update-types:
           - "version-update:semver-minor"
           - "version-update:semver-patch"
+      - dependency-name: "deranged"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
+      - dependency-name: "num-conv"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
+      - dependency-name: "time-core"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
+      - dependency-name: "time-macros"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
       - dependency-name: "serde"
         update-types:
           - "version-update:semver-minor"
