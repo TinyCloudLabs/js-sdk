@@ -40,12 +40,14 @@
     {
       "name": "tinycloud_apps_context",
       "surfaces": [
-        "hosted"
+        "hosted",
+        "public"
       ],
       "operationId": "tinycloud.apps.context",
       "operationVersion": 1,
       "effects": [
-        "read"
+        "read",
+        "local_write"
       ],
       "postures": [
         "owner-openkey",
@@ -57,12 +59,15 @@
     {
       "name": "tinycloud_apps_query",
       "surfaces": [
-        "hosted"
+        "hosted",
+        "public"
       ],
       "operationId": "tinycloud.apps.query",
       "operationVersion": 1,
       "effects": [
-        "read"
+        "read",
+        "write",
+        "destructive"
       ],
       "postures": [
         "owner-openkey",
@@ -74,7 +79,8 @@
     {
       "name": "tinycloud_apps_read",
       "surfaces": [
-        "hosted"
+        "hosted",
+        "public"
       ],
       "operationId": "tinycloud.apps.read",
       "operationVersion": 1,
@@ -91,7 +97,8 @@
     {
       "name": "tinycloud_apps_write",
       "surfaces": [
-        "hosted"
+        "hosted",
+        "public"
       ],
       "operationId": "tinycloud.apps.write",
       "operationVersion": 1,

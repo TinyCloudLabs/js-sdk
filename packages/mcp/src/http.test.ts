@@ -55,6 +55,37 @@ test("challenges unauthenticated MCP requests with resource metadata", async () 
   );
 });
 
+test("public plugin discovery and challenges bind the distinct resource audience", async () => {
+  const app = await testApp();
+  const metadata = await app.fetch(request("/.well-known/oauth-protected-resource/chatgpt/mcp"));
+  expect(metadata.status).toBe(200);
+  expect(await metadata.json()).toMatchObject({
+    resource: "https://mcp.test/chatgpt/mcp",
+    authorization_servers: ["https://openkey.test/api/auth"],
+    scopes_supported: ["tinycloud:mcp"],
+  });
+  const unauthenticated = await app.fetch(request("/chatgpt/mcp", { method: "POST" }));
+  expect(unauthenticated.status).toBe(401);
+  expect(unauthenticated.headers.get("www-authenticate")).toContain(
+    'resource_metadata="https://mcp.test/.well-known/oauth-protected-resource/chatgpt/mcp"',
+  );
+});
+
+test("invalid browser approvals return an inert page without reflecting state", async () => {
+  const app = await testApp();
+  const response = await app.fetch(request(`/chatgpt/connect?state=${encodeURIComponent(`<script>${CANARY}</script>`)}`, {
+    headers: { accept: "text/html" },
+  }));
+  expect(response.status).toBe(400);
+  expect(response.headers.get("content-type")).toBe("text/html; charset=utf-8");
+  expect(response.headers.get("content-security-policy")).toContain("default-src 'none'");
+  expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+  expect(await response.text()).not.toContain(CANARY);
+  const machine = await app.fetch(request("/chatgpt/connect", { headers: { accept: "application/json" } }));
+  expect(machine.status).toBe(400);
+  expect(machine.headers.get("content-type")).toContain("application/json");
+});
+
 test("rejects untrusted browser origins", async () => {
   const app = await testApp();
   const response = await app.fetch(request("/mcp", {

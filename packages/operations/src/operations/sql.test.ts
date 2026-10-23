@@ -227,6 +227,34 @@ describe("SQLite read operations", () => {
     });
   });
 
+  test("maps request-side SQL 413 to the short request-size message for queries and writes", async () => {
+    const tooLarge = { ok: false, error: { code: "SQL_REQUEST_TOO_LARGE" } };
+    const message = "SQL request too large.";
+    const query = definition("tinycloud.sql.query");
+    const queryInput = query.input.parse({
+      space: "applications",
+      database: "notes",
+      sql: "SELECT value FROM notes",
+    });
+    expect(await query.execute(context(sqlNode(async () => tooLarge)), queryInput)).toMatchObject({
+      status: "error",
+      error: { code: "INPUT_INVALID", message },
+    });
+
+    const execute = definition("tinycloud.sql.execute");
+    const executeInput = execute.input.parse({
+      space: "applications",
+      database: "notes",
+      sql: "INSERT INTO notes (body) VALUES (?)",
+      params: ["hello"],
+      acknowledgeDatabaseWideAuthority: true,
+    });
+    expect(await execute.execute(context(sqlWriteNode(async () => tooLarge)), executeInput)).toMatchObject({
+      status: "error",
+      error: { code: "INPUT_INVALID", message },
+    });
+  });
+
   test("classifies real SQL service HTTP refusals separately from retryable node errors", async () => {
     for (const [id, raw] of [
       ["tinycloud.sql.query", { space: "applications", database: "notes", sql: "SELECT value FROM notes" }],
