@@ -84,13 +84,35 @@ test('sendHello writes the hello create-only and persists hello-sent', async () 
   assert.equal(readJoinFile().stage, 'hello-sent');
 });
 
-test('sendHello treats a hello already on the store as sent and keeps it', async () => {
+test('sendHello accepts a conflict only when the stored object is exactly this hello, and keeps it', async () => {
   const kv = memoryKv();
-  await kv.put(HELLO_KEY, { earlier: true });
+  await kv.put(HELLO_KEY, hello());
   const s = state();
+  writeJoinFile(s);
   await sendHello(blob(), s, makeIO(kv).io);
   assert.equal(s.stage, 'hello-sent');
-  assert.deepEqual(kv.rows.get(HELLO_KEY).value, { earlier: true });
+  assert.equal(readJoinFile().stage, 'hello-sent');
+  assert.deepEqual(kv.rows.get(HELLO_KEY).value, hello());
+});
+
+test('sendHello refuses a conflict with a different stored hello: hello-exists, stays hello-ready, object untouched', async () => {
+  const kv = memoryKv();
+  await kv.put(HELLO_KEY, { ...hello(), claimedLabel: 'Someone else' });
+  const s = state();
+  writeJoinFile(s);
+  await assert.rejects(sendHello(blob(), s, makeIO(kv).io), (e) => e.code === 'hello-exists' && /Ask the inviter for a new invite/.test(e.message));
+  assert.equal(s.stage, 'hello-ready');
+  assert.equal(readJoinFile().stage, 'hello-ready');
+  assert.equal(kv.rows.get(HELLO_KEY).value.claimedLabel, 'Someone else');
+});
+
+test('sendHello refuses a conflict it cannot read back (the one-time key cannot read in/): hello-exists, stays hello-ready', async () => {
+  const kv = memoryKv();
+  await kv.put(HELLO_KEY, hello());
+  const unreadable = { ...kv, put: kv.put, get: async () => ({ ok: false, error: { code: 'KV_UNAUTHORIZED', message: 'unauthorized', service: 'kv', meta: { status: 401 } } }) };
+  const s = state();
+  await assert.rejects(sendHello(blob(), s, makeIO(unreadable).io), (e) => e.code === 'hello-exists');
+  assert.equal(s.stage, 'hello-ready');
 });
 
 test('sendHello does not write again once hello-sent', async () => {

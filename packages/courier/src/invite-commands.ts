@@ -433,13 +433,26 @@ function possessionFor(blob: InviteBlob, holderDid: string, credential: string, 
   return sig;
 }
 
-/** Writes hello once. Create-only: a conflict means an earlier attempt already landed. */
+/**
+ * Writes hello once. Create-only. A conflict is accepted only when the object already there is byte-for-byte this hello (an earlier attempt landed).
+ * Anything else, or an object this key cannot read, means another writer got there first: refused, and the join stays at hello-ready.
+ */
 export async function sendHello(blob: InviteBlob, state: JoinState, io: JoinIO = productionIO): Promise<void> {
   if (state.stage === 'hello-sent') return;
+  const hello: unknown = JSON.parse(state.helloText);
   try {
-    await putCreate(io.kv(blob, 'put'), blob.helloKey, JSON.parse(state.helloText));
+    await putCreate(io.kv(blob, 'put'), blob.helloKey, hello);
   } catch (e) {
     if (!(e instanceof CourierError && e.code === 'conflict')) throw e;
+    let existing: unknown;
+    try {
+      existing = (await getJson(io.kv(blob, 'read'), blob.helloKey))?.value;
+    } catch {
+      existing = undefined;
+    }
+    if (existing === undefined || JSON.stringify(existing) !== JSON.stringify(hello)) {
+      fail('hello-exists', 'A hello is already stored for this invite and it is not the one this machine wrote, or it cannot be checked. Ask the inviter for a new invite.');
+    }
   }
   state.stage = 'hello-sent';
   writeJoin(state);
