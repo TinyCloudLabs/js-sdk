@@ -260,7 +260,7 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
 
     const { requestNotice, grantNotice } = await grantAgent("writer", ["--preset", "apps-agent", "--write", "--app", HEALTH]);
     expect(requestNotice).toContain(appsAgentScopeNotice("write", [HEALTH]));
-    expect(requestNotice).toContain("(structure)");
+    expect(requestNotice).toContain("This grant does not include permission to create, change or drop tables (tinycloud.sql/schema).");
     expect(grantNotice).toContain(appsAgentScopeNotice("write", [HEALTH]));
 
     const note = `${HEALTH}/knowledge/log.md`;
@@ -268,6 +268,7 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
     expect((await cli("owner", ["kv", "get", "--space", "applications", note, "--raw"])).stdout).toContain("agent note");
     expect((await cli("writer", ["sql", "execute", "INSERT INTO meal(name) VALUES ('rice')", "--db", HEALTH_DB, "--space", ownerSpace])).exitCode).toBe(0);
     expect(await ownerRows()).toEqual([["salmon"], ["rice"]]);
+    expect((await cli("writer", ["sql", "execute", "CREATE TABLE extra (x TEXT)", "--db", HEALTH_DB, "--space", ownerSpace])).exitCode).toBe(5);
     const prefs = `${HEALTH}/prefs/targets.json`;
     expect((await cli("writer", ["kv", "put", "--space", ownerSpace, prefs, '{"kcal":2000}'])).exitCode).toBe(0);
     expect((await cli("owner", ["kv", "get", "--space", "applications", prefs, "--raw"])).stdout).toContain("2000");
@@ -301,6 +302,76 @@ describe.skipIf(!NODE_BIN)("tinycloud knowledge against a real node", () => {
     expect((await cli("writer", ["kv", "put", "--space", ownerSpace, `${RECIPES}/knowledge/log.md`, "x"])).exitCode).toBe(5);
     expect((await cli("writer", ["kv", "put", "--space", ownerSpace, `${HEALTH}x/knowledge/log.md`, "x"])).exitCode).toBe(5);
     expect((await cli("writer", ["kv", "list", "--space", ownerSpace.replace(/:applications$/, ":default")])).exitCode).toBe(5);
+  }, 180_000);
+
+  test("a write grant for a catalog app creates and drops tables only in its own database, at the exact path", async () => {
+    const CAT = "xyz.tinycloud.sample.healthlog";
+    const CAT_DB = `${CAT}/healthlog`;
+    await newAgent("catwriter");
+    const { requestNotice, grantNotice } = await grantAgent("catwriter", ["--preset", "apps-agent", "--write", "--app", CAT]);
+    expect(requestNotice).toContain(appsAgentScopeNotice("write", [CAT]));
+    expect(grantNotice).toContain("It can also create, change and drop the tables in");
+
+    expect((await cli("owner", ["sql", "execute", "CREATE TABLE IF NOT EXISTS log (id INTEGER PRIMARY KEY)", "--db", CAT_DB, "--space", "applications"])).exitCode).toBe(0);
+    // Positive: the schema grant covers CREATE and DROP on the exact catalog database.
+    expect((await cli("catwriter", ["sql", "execute", "CREATE TABLE IF NOT EXISTS extra (x TEXT)", "--db", CAT_DB, "--space", ownerSpace])).exitCode).toBe(0);
+    expect((await cli("catwriter", ["sql", "execute", "DROP TABLE extra", "--db", CAT_DB, "--space", ownerSpace])).exitCode).toBe(0);
+    // Refused: another database of the same app, and the same database with a trailing slash. Exit code is 3 or 5 depending on how the node's 401/403 maps, so only non-zero is asserted.
+    expect((await cli("catwriter", ["sql", "execute", "CREATE TABLE IF NOT EXISTS extra (x TEXT)", "--db", `${CAT}/other`, "--space", ownerSpace])).exitCode).not.toBe(0);
+    expect((await cli("catwriter", ["sql", "execute", "CREATE TABLE IF NOT EXISTS extra (x TEXT)", "--db", `${CAT_DB}/`, "--space", ownerSpace])).exitCode).not.toBe(0);
+    expect((await cli("owner", ["sql", "query", "SELECT name FROM sqlite_master WHERE name = 'extra'", "--db", CAT_DB, "--space", "applications"])).json().rows).toEqual([]);
+  }, 180_000);
+
+  test("apps install as a delegate-session agent: installs, re-runs as already, reports owner-edited notes, repairs an altered view, and refuses a CREATE outside its database", async () => {
+    const CAT = "xyz.tinycloud.sample.healthlog";
+    const CAT_DB = `${CAT}/healthlog`;
+    const CAT_INDEX = `${CAT}/knowledge/index.md`;
+    await newAgent("installer");
+    await grantAgent("installer", ["--preset", "apps-agent", "--write", "--app", CAT]);
+
+    const first = await cli("installer", ["apps", "install", CAT]);
+    expect(first.exitCode).toBe(0);
+    expect(first.json()).toMatchObject({
+      appId: CAT,
+      status: "installed",
+      database: CAT_DB,
+      conflicts: [],
+      tablesCreated: ["meal", "weight"],
+      viewsRecreated: ["day_card", "week_rollup"],
+    });
+    expect(first.json().filesWritten).toHaveLength(10);
+
+    const second = await cli("installer", ["apps", "install", CAT]);
+    expect(second.exitCode).toBe(0);
+    expect(second.json()).toMatchObject({
+      status: "already",
+      filesWritten: [],
+      conflicts: [],
+      tablesCreated: [],
+      viewsRecreated: ["day_card", "week_rollup"],
+    });
+
+    // The owner edits the index. The agent's next run reports it and leaves the owner's bytes alone.
+    const ownerIndex = join(root, "owner-index.md");
+    await writeFile(ownerIndex, "owner notes: keep this\n");
+    expect((await cli("owner", ["kv", "put", "--space", "applications", CAT_INDEX, "--file", ownerIndex])).exitCode).toBe(0);
+    const edited = await cli("installer", ["apps", "install", CAT]);
+    expect(edited.exitCode).toBe(0);
+    expect(edited.json()).toMatchObject({ status: "already", conflicts: ["knowledge/index.md"] });
+    expect((await cli("owner", ["kv", "get", "--space", "applications", CAT_INDEX, "--raw"])).stdout).toBe("owner notes: keep this\n");
+
+    // The agent alters a pinned view. The next run puts the pinned definition back.
+    expect((await cli("installer", ["sql", "execute", "DROP VIEW day_card", "--db", CAT_DB, "--space", ownerSpace])).exitCode).toBe(0);
+    expect((await cli("installer", ["sql", "execute", "CREATE VIEW day_card AS SELECT 0 AS altered", "--db", CAT_DB, "--space", ownerSpace])).exitCode).toBe(0);
+    const repaired = await cli("installer", ["apps", "install", CAT]);
+    expect(repaired.exitCode).toBe(0);
+    expect(repaired.json().viewsRecreated).toEqual(["day_card", "week_rollup"]);
+    const dayCard = await cli("owner", ["sql", "query", "SELECT sql FROM sqlite_master WHERE type = 'view' AND name = 'day_card'", "--db", CAT_DB, "--space", "applications"]);
+    expect(dayCard.json().rows).toHaveLength(1);
+    expect(JSON.stringify(dayCard.json().rows)).not.toContain("altered");
+
+    // The grant covers CREATE in its own database only. A CREATE in another database is refused for the agent.
+    expect((await cli("installer", ["sql", "execute", "CREATE TABLE IF NOT EXISTS extra (x TEXT)", "--db", `${CAT}/other`, "--space", ownerSpace])).exitCode).not.toBe(0);
   }, 180_000);
 
   test("the owner-side text follows what will be signed, not the requester's wording", async () => {

@@ -97,6 +97,7 @@ configureShareCommandServices({
   revocation: shareAuthority.revocation,
   nativeReader: shareAuthority.nativeReader,
   artifactStore: shareAuthority.artifactStore,
+  shortLinks: shareAuthority.shortLinks,
 });
 
 const argv = process.argv.slice(2);

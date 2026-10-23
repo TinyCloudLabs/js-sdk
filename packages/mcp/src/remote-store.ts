@@ -48,6 +48,8 @@ export interface RemoteStoreConfig {
   readonly stateDir: string;
   readonly stateSecret: string;
   readonly publicUrl: URL;
+  /** Separate public-plugin approvals from the existing root callback. */
+  readonly approvalPath?: string;
   readonly nodeHost: string;
   readonly openkeyHost: string;
   readonly approvalTtlSeconds: number;
@@ -378,7 +380,7 @@ export class RemoteTenantStore {
   async approvalRedirect(state: string): Promise<string> {
     const pending = await this.#readPending(state, false);
     const tenant = await this.#readTenant(pending.tenantId);
-    const callback = new URL("/connect/callback", this.#config.publicUrl);
+    const callback = new URL(`${this.#config.approvalPath ?? "/connect"}/callback`, this.#config.publicUrl);
     callback.searchParams.set("state", state);
     const params = new URLSearchParams({
       did: tenant.sessionDid,
@@ -896,7 +898,7 @@ export class RemoteTenantStore {
   }
 
   #connectUrl(pending: PendingApproval): string {
-    const url = new URL("/connect", this.#config.publicUrl);
+    const url = new URL(this.#config.approvalPath ?? "/connect", this.#config.publicUrl);
     url.searchParams.set("state", `${pending.tenantId}.${pending.nonce}.${this.#signState(pending.tenantId, pending.nonce)}`);
     return url.toString();
   }

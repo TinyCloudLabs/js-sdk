@@ -172,6 +172,16 @@
       "status": "migrated",
       "operationId": "tinycloud.knowledge.read",
       "operationVersion": 1
+    },
+    {
+      "command": "apps",
+      "status": "excluded",
+      "reason": "Command group; its subcommands are local installer compositions."
+    },
+    {
+      "command": "apps install <app_id>",
+      "status": "excluded",
+      "reason": "Local installer: verifies pinned Share bytes, runs pinned DDL, writes knowledge files via SDK KV/SQL; not a shared operation."
     }
   ]
 }

@@ -1,0 +1,31 @@
+# A changeset carries its ticket into the package CHANGELOG. This fails a pull
+# request that adds or modifies a `.changeset/*.md` file without a line that
+# starts `Details: TC-<number>` (several tickets: `Details: TC-1, TC-2`).
+# `.changeset/README.md`, `config.json` and `pre.json` are exempt.
+name: Changeset details
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  details:
+    name: Changeset ticket line
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Test the changeset details check
+        run: node --test .github/scripts/check-changeset-details.test.mjs
+
+      - name: Require a ticket line in new changesets
+        run: node .github/scripts/check-changeset-details.mjs "$BASE_SHA" "$HEAD_SHA"
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}

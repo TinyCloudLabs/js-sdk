@@ -10,6 +10,8 @@ export type SharePublishFailure =
   | { readonly kind: "invalid-request"; readonly reason: string }
   /** Network failure, 5xx, 408 or 429: a retry can succeed. */
   | { readonly kind: "registry-unavailable" }
+  /** The Share service's public config could not be fetched (network failure, timeout, or a non-OK answer). */
+  | { readonly kind: "share-service-unavailable"; readonly origin: string }
   /** The node's version cannot be verified for domain invite delivery. */
   | { readonly kind: "node-info-unavailable" }
   /** The registry refused the record (other 4xx, or an invalid record): a retry cannot succeed. */
@@ -18,7 +20,9 @@ export type SharePublishFailure =
   | ({ readonly kind: "storage-full" } & StorageRejection)
   | { readonly kind: "upload-failed" }
   /** The Node answered a share upload 404 "Space not found": the owner space has no row there. Retryable. */
-  | { readonly kind: "space-not-ready" };
+  | { readonly kind: "space-not-ready" }
+  /** An addressed share's ceiling includes decrypt on the owner's encryption network; this session does not hold it. Refused before any upload or network call. */
+  | { readonly kind: "decrypt-not-held" };
 
 export class SharePublishAuthorityError extends Error {
   constructor(readonly failure: SharePublishFailure, options?: { readonly cause?: unknown }) {

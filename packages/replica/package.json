@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/replica",
-  "version": "0.3.0-beta.10",
+  "version": "0.3.3-beta.1",
   "description": "Durable, read-only local replicas of a TinyCloud KV prefix over the tinycloud.kv/sync change feed.",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
@@ -62,10 +62,10 @@
   "dependencies": {
     "@noble/curves": "^1.9.2",
     "@noble/hashes": "^1.8.0",
-    "@tinycloud/sdk-services": "3.3.0-beta.25"
+    "@tinycloud/sdk-services": "3.6.0-beta.3"
   },
   "devDependencies": {
-    "@tinycloud/web-sdk-wasm": "1.7.7-beta.1",
+    "@tinycloud/web-sdk-wasm": "1.7.7",
     "@types/node": "^20",
     "fake-indexeddb": "^6.2.5",
     "tsup": "^8.0.0",

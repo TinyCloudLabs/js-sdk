@@ -13,8 +13,6 @@
 import {
   activateCompactRuntimeDelegation as activateCompactRuntimeDelegationOnNode,
   TinyCloudNode,
-  registerReplicationLoaders as registerNodeReplicationLoaders,
-  type ReplicationModuleLoaders,
   TinyCloudNodeConfig,
   type BootstrapWarning,
   type DelegateToOptions,
@@ -28,6 +26,10 @@ import {
   type RegisterPolicyV3Input,
   type RegisterPolicyV3Receipt,
 } from "@tinycloud/node-sdk/core";
+import {
+  resolveReplicationConfig,
+  validateReplicationConfig,
+} from "./replica-wiring";
 import {
   IKVService,
   ISQLService,
@@ -81,6 +83,7 @@ import { showPermissionRequestModal } from "../notifications/ModalManager";
 import {
   requestPermissionsCore,
   validateAdditionalPermissions,
+  type RequestPermissionsOptions,
 } from "./requestPermissionsCore";
 import {
   isPermissionPromptSuppressed,
@@ -278,29 +281,6 @@ export interface SessionRestoreResult {
   error?: Error;
 }
 
-/** Supplied by the optional web replica entry; importing that entry does not register it. */
-export interface BrowserReplicaPlugin {
-  readonly loaders: ReplicationModuleLoaders;
-  readonly validateConfig: (replication: NonNullable<TinyCloudNodeConfig["replication"]>) => void;
-  readonly recover: (
-    replication: NonNullable<TinyCloudNodeConfig["replication"]>,
-    signer?: BrowserWalletSigner,
-  ) => Promise<NonNullable<TinyCloudNodeConfig["replication"]>>;
-}
-
-let registeredBrowserReplica: BrowserReplicaPlugin | undefined;
-
-/**
- * Register in the root bundle so a separately built plugin shares its Node loader registry. The
- * registry keeps a frozen copy, so mutating the supplied plugin later changes nothing.
- */
-export function registerBrowserReplica(plugin: BrowserReplicaPlugin): void {
-  if (registeredBrowserReplica) throw new Error("Browser replica is already registered.");
-  const loaders = Object.freeze({ ...plugin.loaders });
-  registerNodeReplicationLoaders(loaders);
-  registeredBrowserReplica = Object.freeze({ ...plugin, loaders });
-}
-
 
 // Share Link Utilities (static, no auth required)
 
@@ -431,16 +411,12 @@ export class TinyCloudWeb {
     hasRuntimePermissions?: (additional: PermissionEntry[]) => boolean;
     grantPermissions?: (
       additional: PermissionEntry[],
+      options?: RequestPermissionsOptions,
     ) => Promise<readonly PortableDelegation[] | void>;
   };
 
   constructor(config: Config = {}) {
-    if (config.replication?.enabled) {
-      if (!registeredBrowserReplica) {
-        throw new Error("Call registerBrowserReplica from @tinycloud/web-sdk with the @tinycloud/web-sdk/replica plugin before constructing TinyCloudWeb with replication enabled.");
-      }
-      registeredBrowserReplica.validateConfig(config.replication);
-    }
+    validateReplicationConfig(config);
     this.config = config;
     this._manifest = config.manifest;
     this._capabilityRequest = config.capabilityRequest;
@@ -519,11 +495,8 @@ export class TinyCloudWeb {
       telemetry: this.config.telemetry,
       retryPolicy: this.config.retryPolicy,
     };
-    if (this.config.replication) {
-      nodeConfig.replication = this.config.replication.enabled
-        ? await registeredBrowserReplica!.recover(this.config.replication, this.walletSigner)
-        : this.config.replication;
-    }
+    const resolved = await resolveReplicationConfig(this.config, this.walletSigner);
+    if (resolved) nodeConfig.replication = resolved;
 
     // Wire up signer if available
     if (this.walletSigner) {
@@ -984,6 +957,11 @@ export class TinyCloudWeb {
   address = (): string | undefined => this._node?.address;
   chainId = (): number | undefined => this._node?.session?.chainId;
 
+  /** Returns whether the session or an unexpired runtime grant covers all entries. Never prompts. */
+  hasPermissions(entries: PermissionEntry[]): boolean {
+    return this._node?.hasRuntimePermissions(entries) ?? false;
+  }
+
   get did(): string { return this.node.did; }
   get sessionDid(): string { return this.node.sessionDid; }
   get credentialHolderDid(): string { return this.node.credentialHolderDid; }
@@ -1205,13 +1183,23 @@ export class TinyCloudWeb {
    * On approve, this does not mutate the manifest or force a new sign-in.
    * The underlying node creates a secondary delegation to the current
    * session key and records it in the invocation permission map.
+   *
+   * `options.expiryMs` sets the requested lifetime of the issued step-up
+   * delegation, in milliseconds. Omitted, the node's default applies. The
+   * node clamps the lifetime to the session expiry, so the issued
+   * delegation never outlives the session. The expiry applies when new
+   * permissions are requested. Permissions already covered by the session
+   * or an existing runtime grant return without a new delegation, so
+   * `expiryMs` does not apply to them.
+   *
+   * Decrypt grants (including wildcards) with `expiryMs` over one hour
+   * reject with `DECRYPT_EXPIRY_TOO_LONG` before the modal opens. Covered
+   * permissions skip this check.
    */
   async requestPermissions(
     additional: PermissionEntry[],
+    options?: RequestPermissionsOptions,
   ): Promise<RequestPermissionsResult> {
-    // Shared validation (also called by the core). Keeping the guard
-    // here short-circuits before any manifest lookup so the error text
-    // is unambiguous.
     validateAdditionalPermissions(additional);
 
     const manifest = Array.isArray(this._manifest)
@@ -1244,8 +1232,14 @@ export class TinyCloudWeb {
       suppressPromptFor30Days: () =>
         suppressPermissionPromptFor30Days(manifest),
       grantPermissions: this._testHooks?.grantPermissions ??
-        ((approved) => node.grantRuntimePermissions(approved)),
-    });
+        ((approved, grantOptions) =>
+          node.grantRuntimePermissions(
+            approved,
+            grantOptions?.expiryMs !== undefined
+              ? { expiry: grantOptions.expiryMs }
+              : undefined,
+          )),
+    }, options);
     return result.approved
       ? {
           approved: true,

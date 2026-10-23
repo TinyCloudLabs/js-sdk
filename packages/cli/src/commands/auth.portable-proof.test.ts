@@ -83,6 +83,7 @@ async function signedProof(options: {
   raw?: boolean;
   rawNetwork?: string;
   capabilitiesRead?: boolean;
+  lifetimeSeconds?: number;
 } = {}): Promise<SignedCallback> {
   const now = Date.now();
   const prepared = wasm.prepareSession({
@@ -100,7 +101,7 @@ async function signedProof(options: {
     } }),
     address, chainId: 1, domain: "cli.example.test", spaceId, jwk,
     issuedAt: new Date(now - 60_000).toISOString(),
-    expirationTime: new Date(now + 3600_000).toISOString(),
+    expirationTime: new Date(now + (options.lifetimeSeconds ?? 3600) * 1000).toISOString(),
   });
   const signature = await signer.signMessage(prepared.siwe);
   const result = wasm.completeSessionSetup({ ...prepared, signature });
@@ -149,7 +150,7 @@ afterAll(async () => {
   await rm(home, { recursive: true, force: true });
 });
 
-async function escalate(proof: SignedCallback, expectedOwner = ownerDid, expiryOption?: string): Promise<void> {
+async function escalate(proof: SignedCallback, expectedOwner = ownerDid, expiryOption?: string, exactApproval = false): Promise<void> {
   callback = proof;
   const profile = await ProfileManager.getProfile(profileName);
   if (expectedOwner !== ownerDid) {
@@ -159,7 +160,7 @@ async function escalate(proof: SignedCallback, expectedOwner = ownerDid, expiryO
     ctx: { profile: profileName, host },
     profile: await ProfileManager.getProfile(profileName),
     node: node as never,
-    requested, expiryOption, reason: "Read named secret", yes: true,
+    requested, expiryOption, reason: "Read named secret", yes: true, exactApproval,
     openKeyAcquisition: async () => callback,
   });
 }
@@ -207,6 +208,35 @@ describe("signed portable OpenKey grants", () => {
     await expect(escalate({ ...proof, siwe: undefined })).rejects.toMatchObject({ code: "OPENKEY_PROOF_INVALID" });
     await expect(escalate(proof, ownerDid, "1m")).rejects.toMatchObject({ code: "OPENKEY_EXPIRY_EXCEEDED" });
     expect(await loadAdditionalDelegations(profileName)).toEqual([]);
+  });
+
+  test("refuses a forged callback with no session proof and stores no grant", async () => {
+    const proof = await signedProof();
+    const forgedBodies = [
+      { ...proof, siwe: undefined, signature: undefined, address: undefined },
+      { ...proof, signature: await signer.signMessage("not the session siwe") },
+    ];
+    for (const forged of forgedBodies) {
+      await expect(escalate(forged)).rejects.toMatchObject({ code: "OPENKEY_PROOF_INVALID" });
+    }
+    expect(activated).toEqual([]);
+    expect(await loadAdditionalDelegations(profileName)).toEqual([]);
+    expect(await readGrantHistory(profileName)).toEqual([]);
+  });
+
+  test("an agent approval that unchecks an ability is refused and stores no grant", async () => {
+    await expect(escalate(await signedProof({ raw: false, capabilitiesRead: true }), ownerDid, undefined, true)).rejects.toMatchObject({
+      code: "OPENKEY_APPROVAL_NARROWER",
+      message: expect.stringContaining("Approve all of it"),
+    });
+    expect(activated).toEqual([]);
+    expect(await loadAdditionalDelegations(profileName)).toEqual([]);
+    expect(await readGrantHistory(profileName)).toEqual([]);
+  });
+
+  test("an agent approval that covers the whole request is stored", async () => {
+    await escalate(await signedProof({ capabilitiesRead: true }), ownerDid, undefined, true);
+    expect(activated).toHaveLength(1);
   });
 
   test("activation refusal leaves stored delegations unchanged", async () => {
@@ -414,19 +444,21 @@ describe("signed portable OpenKey grants", () => {
   });
 
   test("command-scoped OpenKey acquisition requests capabilities/read and returns its installed grant", async () => {
-    const proof = await signedProof({ capabilitiesRead: true });
+    const proof = await signedProof({ capabilitiesRead: true, lifetimeSeconds: 300 });
     let received: PermissionEntry[] = [];
+    let receivedExpiry: string | number | undefined;
     const authority = await ensureDelegationAuthority({
       ctx: { profile: profileName, host },
       profile: await ProfileManager.getProfile(profileName),
       node,
       requested,
-      expiryOption: undefined,
+      expiryOption: "5m",
       reason: "Revoke delegation",
       yes: true,
       persist: false,
       openKeyAcquisition: async (_did, options) => {
         received = options?.permissions ?? [];
+        receivedExpiry = options?.expiry;
         return proof;
       },
     });
@@ -436,6 +468,7 @@ describe("signed portable OpenKey grants", () => {
       path: "",
       actions: ["tinycloud.capabilities/read"],
     });
+    expect(receivedExpiry).toBe("300s");
     expect(authority?.cid).toBe(proof.delegationCid);
     expect(activated).toHaveLength(1);
     expect(await loadAdditionalDelegations(profileName)).toEqual([]);
@@ -460,6 +493,26 @@ describe("signed portable OpenKey grants", () => {
     })).rejects.toMatchObject({ code: "CONFIRMATION_REQUIRED" });
     expect(called).toBe(false);
   });
+
+  test("one-use OpenKey authority without an expiry is refused before any approval", async () => {
+    let called = false;
+    await expect(ensureDelegationAuthority({
+      ctx: { profile: profileName, host },
+      profile: await ProfileManager.getProfile(profileName),
+      node,
+      requested,
+      expiryOption: undefined,
+      reason: "Revoke delegation",
+      yes: true,
+      persist: false,
+      openKeyAcquisition: async () => {
+        called = true;
+        return await signedProof();
+      },
+    })).rejects.toMatchObject({ code: "AUTHORITY_EXPIRY_REQUIRED" });
+    expect(called).toBe(false);
+    expect(activated).toEqual([]);
+  });
   test("reports unsupported raw CID ReCap encoding without persisting a grant", async () => {
     const cid = wasm.computeCid(new TextEncoder().encode("revoke target"), 0x55n);
     const permission: PermissionEntry = {
@@ -474,7 +527,7 @@ describe("signed portable OpenKey grants", () => {
       profile: await ProfileManager.getProfile(profileName),
       node,
       requested: [permission],
-      expiryOption: undefined,
+      expiryOption: "5m",
       reason: `Revoke delegation ${cid}`,
       yes: true,
       persist: false,

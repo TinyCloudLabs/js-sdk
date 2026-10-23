@@ -296,7 +296,7 @@ describe("handleError authorization output", () => {
 });
 
 describe("storage full", () => {
-  const manage = "Free up space or upgrade: https://account.tinycloud.xyz/billing";
+  const manage = "Free up space or upgrade: https://account.tinycloud.xyz/storage";
   // Node 402 as the SDK reports it: per-space numbers (limit 0) plus the account's.
   const fullSpace = {
     code: "STORAGE_QUOTA_EXCEEDED",

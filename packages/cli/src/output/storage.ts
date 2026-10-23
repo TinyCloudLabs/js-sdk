@@ -8,7 +8,7 @@
  * without depending on the error module that command tests replace.
  */
 
-export const MANAGE_STORAGE_URL = "https://account.tinycloud.xyz/billing";
+export const MANAGE_STORAGE_URL = "https://account.tinycloud.xyz/storage";
 
 export type StorageRejectionCode = "STORAGE_QUOTA_EXCEEDED" | "STORAGE_LIMIT_REACHED";
 
