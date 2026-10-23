@@ -48,12 +48,16 @@ const storage = {
   },
 };
 
+let signOutCount = 0;
 const source = {
   signedIn: () => true,
   get sync() {
     return facade;
   },
   storage,
+  async signOut() {
+    signOutCount += 1;
+  },
 };
 
 let handle: UiClientHandle | undefined;
@@ -91,5 +95,9 @@ w.__tc = {
   setSync(next: SyncState) {
     emit(next);
     return true;
+  },
+  // How many times the panel's Sign out reached the client. Checked by the sign-out spec.
+  signOutCalls() {
+    return signOutCount;
   },
 };

@@ -81,6 +81,7 @@ const STUB_ACCOUNT: AccountInfo = {
   grantedDelegations: 3,
   receivedDelegations: 1,
   appName: "Stub app",
+  sessionExpiresAt: new Date(Date.now() + 3 * 3_600_000 + 14 * 60_000),
 };
 
 const STUB_DELEGATION: DelegationRow = {
