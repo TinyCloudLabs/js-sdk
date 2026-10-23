@@ -7,7 +7,6 @@ import {
   type ArtifactPin, type PolicyCredentialRequirementV1, type ShareAction, type UnifiedContentSource,
   type UnifiedPolicy, type UnifiedPolicyCapability, type UnifiedRoot,
 } from "@tinycloud/share-envelope";
-import { DEFAULT_LINKS_API_ORIGIN, buildFullLink, prepareLinkRecord } from "@tinycloud/share-envelope/links";
 import {
   SHARE_CONTENT_LIMIT, SHARE_PUBLISH_RESULT_VERSION, redactPublishedShare,
   type PublishedShare, type PublishedShareDeliveryMaterial,
@@ -399,15 +398,16 @@ export async function publishAddressedShare(input: AddressedSharePublishOptions)
   // The link this publisher returns is the full `v=4` link: the signed record rides in the fragment, so it works
   // with no service. The header is signed by the key that signs the envelope (the envelope's signer is the issuer
   // every reader binds the record to). A caller that wants a short link posts `deliveryMaterial` with `createLink`.
-  const { record } = await prepareLinkRecord({
+  const links = await import("@tinycloud/share-envelope/links");
+  const { record } = await links.prepareLinkRecord({
     type: "share",
     sealed: { blob: sealed.blob, key: envelopeKeyBytes },
     issuerKey: { did: options.authority.ownerDid, sign: (digest) => options.authority.sign(digest) },
-    apiOrigin: options.apiOrigin ?? DEFAULT_LINKS_API_ORIGIN,
+    apiOrigin: options.apiOrigin ?? links.DEFAULT_LINKS_API_ORIGIN,
     expiresAt: new Date(expiry),
     enforceServiceLife: false,
   });
-  const url = buildFullLink({ origin: options.shareOrigin, key: envelopeKeyBytes, record });
+  const url = links.buildFullLink({ origin: options.shareOrigin, key: envelopeKeyBytes, record });
   const deliveryMaterial = {
     envelope,
     shareCid: sealed.cid,
