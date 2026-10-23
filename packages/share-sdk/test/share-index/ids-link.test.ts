@@ -70,6 +70,18 @@ describe("link validator (§5 check 6)", () => {
       "https://share.test/s/notacid#k=abc", "https://share.test/viewer#tc1=a\n", 42,
     ]) expect(validateShareLink(link, origins).ok).toBe(false);
   });
+
+  test("refuses fragment version 1 on every link path, as it refuses versions 2 and 3", () => {
+    for (const link of [
+      "https://share.test/s/inline#v=1&p=a",
+      SHORT.replace("#v=4", "#v=1"),
+      FULL.replace("#v=4", "#v=1"),
+      SHORT.replace("#v=4", "#v=2"),
+      FULL.replace("#v=4", "#v=3"),
+    ]) expect(validateShareLink(link, origins).ok).toBe(false);
+    expect(validateShareLink(SHORT, origins).ok).toBe(true);
+    expect(validateShareLink(FULL, origins).ok).toBe(true);
+  });
 });
 
 describe("display names (§2)", () => {

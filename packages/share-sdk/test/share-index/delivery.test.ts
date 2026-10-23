@@ -6,6 +6,7 @@ import { createTinyCloudShareIndexBackend, type TinyCloudShareIndexClient } from
 import { sealAgentRecord } from "../../src/share-index/agent-record.js";
 import { compactShareRecord, expandShareRecord, openDeliveryEnvelope, type StoredShareRecord } from "../../src/share-index/delivery.js";
 import { MAX_AGENT_RECORD_BYTES } from "../../src/share-index/agent-record.js";
+import { openAgentRecordAsOwner, parseStoredAgentRecord } from "../../src/share-index/agent-record.js";
 import { agentIdFromDid, agentRecordKey, SHARE_RECORDS_VAULT_PREFIX } from "../../src/share-index/ids.js";
 import { AgentShareRecordStore } from "../../src/share-index/record-store.js";
 import { MemoryShareIndexOutbox, SenderShareIndex } from "../../src/share-index/sender-share-index.js";
@@ -108,6 +109,14 @@ describe("stored form: each blob once", () => {
     const loose = await seal(encoder.encode(JSON.stringify(v3.envelope, null, 1)), key);
     await expect(openDeliveryEnvelope({ shareCid: loose.cid, sealedEnvelope: toBase64Url(loose.blob), envelopeKey: toBase64Url(key) })).rejects.toThrow("canonical");
   });
+
+  test("the stored form is strictly smaller than the full record by exactly the envelope property", async () => {
+    const full = await fullRecord();
+    const stored = await compactShareRecord(full);
+    const envelopeBytes = JSON.stringify(v3.envelope).length;
+    expect(JSON.stringify(stored).length).toBeLessThan(JSON.stringify(full).length - envelopeBytes);
+    expect(JSON.stringify(full).length - JSON.stringify(stored).length).toBe(envelopeBytes + `"envelope":`.length + 1);
+  });
 });
 
 describe("the chain verifies the stored form", () => {
@@ -192,6 +201,42 @@ describe("agent store and reconciler use the stored form", () => {
     await new AgentShareRecordStore({ backend, agentDid: agent.did, agentKey }).put(withFullLink);
     const { link: _link, ...withoutLink } = withFullLink;
     expect(await new AgentShareRecordStore({ backend, agentDid: agent.did, agentKey }).get(v3.shareId)).toEqual(withoutLink);
+  });
+
+  test("what the agent store writes is the stored form: no envelope, the short link, the sealed material, under the record cap", async () => {
+    const backend = new MemoryBackend();
+    const store = new AgentShareRecordStore({ backend, agentDid: v3Fixture.agentDid });
+    const full = await fullRecord();
+    await store.put(full);
+    const key = agentRecordKey(store.agentId, v3.shareId);
+    const raw = await backend.readRaw(key);
+    if (raw.status !== "ok") throw new Error(`stored record is ${raw.status}`);
+    expect(raw.bytes.byteLength).toBeLessThanOrEqual(MAX_AGENT_RECORD_BYTES);
+    const record = parseStoredAgentRecord(raw.bytes, { agentDid: v3Fixture.agentDid, ownerNetworkId: NETWORK_ID });
+    const plaintext = await openAgentRecordAsOwner(record, { spaceId: SPACE_ID, vaultKey: `${SHARE_RECORDS_VAULT_PREFIX}${key}` }, backend.network);
+    const written = JSON.parse(new TextDecoder().decode(plaintext)) as StoredShareRecord;
+    expect(written.link).toBe(full.link);
+    expect(Object.keys(written.deliveryMaterial ?? {}).sort()).toEqual(["envelopeKey", "sealedEnvelope", "shareCid"]);
+    expect(new TextDecoder().decode(plaintext)).not.toContain(JSON.stringify(v3.envelope));
+    expect(written).toEqual(await compactShareRecord(full));
+  });
+
+  test("a stored record that embeds a full link is over the record cap and is refused on read", async () => {
+    const withFull = await fullRecord("full");
+    const stored = await compactShareRecord(withFull);
+    const duplicate: StoredShareRecord = { ...stored, link: withFull.link! };
+    const backend = new MemoryBackend();
+    const key = await writeRaw(backend, duplicate);
+    const raw = await backend.readRaw(key);
+    if (raw.status !== "ok") throw new Error(`stored record is ${raw.status}`);
+    expect(raw.bytes.byteLength).toBeGreaterThan(MAX_AGENT_RECORD_BYTES);
+    let failure: unknown;
+    try {
+      parseStoredAgentRecord(raw.bytes, { agentDid: v3Fixture.agentDid, ownerNetworkId: NETWORK_ID });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toMatchObject({ name: "AgentRecordError", reason: "size" });
   });
 });
 

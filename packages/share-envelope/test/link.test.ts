@@ -4,6 +4,7 @@ import { generateKey } from "../src/aead.js";
 import { computeCid } from "../src/cid.js";
 import { encodeShareUrl, parseShareUrl } from "../src/link.js";
 import { utf8Bytes } from "../src/bytes.js";
+import { LinkError, buildShortLink, parseLink } from "../src/links/index.js";
 
 const ORIGIN = "https://share.tinycloud.xyz";
 
@@ -136,5 +137,33 @@ describe("share link codec", () => {
   it("fails closed on plaintext query URLs", () => {
     const plaintextQuery = `${ORIGIN}/viewer?tc2=eyJyZWNpcGllbnQiOiJhbGljZUBleGFtcGxlLmNvbSJ9`;
     expect(() => parseShareUrl(plaintextQuery)).toThrow(TypeError);
+  });
+});
+
+describe("v=4 link spellings", () => {
+  it("refuses non-canonical lexical aliases of a short link", async () => {
+    const id = "lqdw5iopqq2tkkvjj6gbbi5vbv";
+    const key = Uint8Array.from({ length: 32 }, (_, index) => index);
+    const link = buildShortLink({ origin: ORIGIN, type: "share", id, key, bodyCid: await computeCid(utf8Bytes("sealed bytes")) });
+    expect(parseLink(link, { trustedOrigins: [ORIGIN] })).toMatchObject({ form: "short", id });
+    const suffix = link.slice(ORIGIN.length);
+    const hash = new URL(link).hash;
+    for (const alias of [
+      `https://SHARE.tinycloud.xyz${suffix}`,
+      `https://share.tinycloud.xyz:443${suffix}`,
+      `https://share.tinycloud.xyz:0443${suffix}`,
+      `https://%73hare.tinycloud.xyz${suffix}`,
+      `HTTPS://share.tinycloud.xyz${suffix}`,
+      `${ORIGIN}/s/${id}?${hash}`,
+    ]) {
+      let failure: unknown;
+      try {
+        parseLink(alias, { trustedOrigins: [ORIGIN] });
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toBeInstanceOf(LinkError);
+      expect(failure).toMatchObject({ code: "not_canonical" });
+    }
   });
 });
