@@ -8,7 +8,11 @@ export {
   completeEmailProof,
   createEd25519HolderSigner,
   createMemoryEmailProofPendingStore,
+  DEFAULT_EMAIL_PROOF_PROFILE,
+  EMAIL_PROOF_CREDENTIAL_TYPE,
+  EMAIL_PROOF_PENDING_MAX_MS,
   EmailProofError,
+  emailProofRequirement,
   requestEmailProofCode,
 } from "./email-proof";
 export type {

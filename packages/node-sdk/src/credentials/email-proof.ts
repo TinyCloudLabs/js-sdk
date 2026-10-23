@@ -533,6 +533,11 @@ function emailRequirement(address: string, profile: EmailProofProfileId): Creden
   return createEmailCredentialRequirement({ email: address, profile: { id: profile, version: 1 }, credentialType: EMAIL_PROOF_CREDENTIAL_TYPE });
 }
 
+/** Requirement for an email credential issued to `address` under the default profile. Storage and `show` key on its digest. */
+export function emailProofRequirement(address: string): CredentialRequirement {
+  return emailRequirement(normalizeAddress(address), DEFAULT_EMAIL_PROOF_PROFILE);
+}
+
 /** Discovers the catalog and returns the descriptor only if it matches the pinned issuer, origin, step, and digest. */
 async function witnessDescriptor(
   profile: EmailProofProfileId,
