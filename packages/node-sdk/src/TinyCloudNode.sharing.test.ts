@@ -761,8 +761,6 @@ describe("TinyCloudNode sharing", () => {
     const common = {
       resourcePath: "shares/test/readme.md",
       recipientEmail: "recipient@example.test",
-      sealedEnvelope: "AQ".repeat(20),
-      envelopeKey: "A".repeat(43),
       shareUrl: `https://share.tinycloud.xyz/s/lqdw5iopqq2tkkvjj6gbbi5vbv#v=4&k=${"A".repeat(43)}&c=bafkreiewixmt5nwgi3ych6durcsheaql3ybswbplpjmpbdhfkvdkidzt5u`,
       documentName: "readme.md",
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
@@ -773,12 +771,10 @@ describe("TinyCloudNode sharing", () => {
     await expect(node.authorizeShareDeliveryV3({
       ...common,
       envelope: { version: 3 },
-      shareCid: "cid",
     })).rejects.toThrow();
     await expect(node.authorizeShareDeliveryV3({
       ...common,
       envelope: { version: 3 },
-      shareCid: "cid",
     })).rejects.toThrow();
     expect(calls.map((call) => call.url)).toEqual([
       "https://node.example/policy/v3/deliveries/authorize",
@@ -788,9 +784,6 @@ describe("TinyCloudNode sharing", () => {
     expect(calls).toHaveLength(2);
     const { requestBodyDigest, ...unsigned } = calls[0]!.body;
     expect(unsigned).toMatchObject({
-      sealedEnvelope: common.sealedEnvelope,
-      envelopeKey: common.envelopeKey,
-      shareCid: "cid",
       shareUrl: common.shareUrl,
     });
     const digest = new Uint8Array(await crypto.subtle.digest(
@@ -822,9 +815,6 @@ describe("TinyCloudNode sharing", () => {
     Reflect.set(node, "findGrantForOperations", () => ({ provenance: "delegated", session: grantSession, operations: [] }));
     await expect(node.authorizeShareDeliveryV3({
       envelope: { version: 3 },
-      sealedEnvelope: "AQ".repeat(20),
-      envelopeKey: "A".repeat(43),
-      shareCid: "cid",
       resourcePath: "shares/test/readme.md",
       recipientEmail: "recipient@example.test",
       shareUrl: `https://share.tinycloud.xyz/s/lqdw5iopqq2tkkvjj6gbbi5vbv#v=4&k=${"A".repeat(43)}&c=bafkreiewixmt5nwgi3ych6durcsheaql3ybswbplpjmpbdhfkvdkidzt5u`,
@@ -849,12 +839,9 @@ describe("TinyCloudNode sharing", () => {
     try {
       await node.authorizeShareDeliveryV3({
         envelope: { version: 3 },
-        sealedEnvelope: "AQ".repeat(20),
-        envelopeKey: "A".repeat(43),
-        shareCid: "cid",
         resourcePath: "shares/test/readme.md",
         recipientEmail: "recipient@example.test",
-        shareUrl: "https://share.example/s/test#key",
+        shareUrl: `https://share.example/s/lqdw5iopqq2tkkvjj6gbbi5vbv#v=4&k=${"A".repeat(43)}&c=bafkreiewixmt5nwgi3ych6durcsheaql3ybswbplpjmpbdhfkvdkidzt5u`,
         documentName: "readme.md",
         expiresAt: new Date(Date.now() + 60_000).toISOString(),
         deliveryAudience: "https://witness.example",
@@ -865,5 +852,123 @@ describe("TinyCloudNode sharing", () => {
       expect((error as Error).message).toContain("HTTP 403 - Forbidden");
       expect(authorizationVerdictOf(error)).toBe("forbidden");
     }
+  });
+
+  describe("delivery authorization request: the short link", () => {
+    const KEY = Buffer.alloc(32, 0x5a).toString("base64url");
+    const CID = "bafkreiewixmt5nwgi3ych6durcsheaql3ybswbplpjmpbdhfkvdkidzt5u";
+    const SHORT = `https://share.tinycloud.xyz/s/lqdw5iopqq2tkkvjj6gbbi5vbv#v=4&k=${KEY}&c=${CID}`;
+    const FULL = `https://share.tinycloud.xyz/s/full#v=4&k=${KEY}&r=eyJib2R5IjoiQSJ9`;
+
+    function deliveryNode(respond: () => Response) {
+      const sent: Array<{ readonly url: string; readonly body: Record<string, unknown> }> = [];
+      let invocations = 0;
+      globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+        sent.push({ url: String(input), body: JSON.parse(String(init?.body)) as Record<string, unknown> });
+        return respond();
+      }) as unknown as typeof fetch;
+      const wasmBindings = {
+        ...makeWasmBindings(),
+        invoke: () => { invocations += 1; return { Authorization: "delivery-invocation" }; },
+      } as unknown as IWasmBindings;
+      const node = new TinyCloudNode({ host: "https://node.example", wasmBindings });
+      Reflect.set(node, "_restoredTcSession", { spaceId: SPACE });
+      Reflect.set(node, "_serviceContext", { session: { spaceId: SPACE } });
+      return { node, sent, invocations: () => invocations };
+    }
+
+    const input = (shareUrl: string) => ({
+      envelope: { version: 3 },
+      resourcePath: "shares/test/readme.md",
+      recipientEmail: "recipient@example.test",
+      shareUrl,
+      documentName: "readme.md",
+      expiresAt: "2030-01-01T00:01:00.123Z",
+      deliveryAudience: "https://witness.credentials.org",
+      idempotencyKey: "stable-key",
+    });
+
+    test("sends exactly the strict body: the link, the recipient, the name, the jti, the expiry and the digest", async () => {
+      const { node, sent } = deliveryNode(() => new Response("{}", { status: 200 }));
+      await expect(node.authorizeShareDeliveryV3(input(SHORT))).rejects.toThrow();
+      expect(sent).toHaveLength(1);
+      const { requestBodyDigest, ...unsigned } = sent[0]!.body;
+      const jti = Buffer.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode("stable-key"))).subarray(0, 16).toString("base64url");
+      expect(unsigned).toEqual({
+        recipientEmail: "recipient@example.test",
+        shareUrl: SHORT,
+        documentName: "readme.md",
+        jti,
+        expiresAt: "2030-01-01T00:01:00Z",
+      });
+      expect(Object.keys(sent[0]!.body).sort()).toEqual(["documentName", "expiresAt", "jti", "recipientEmail", "requestBodyDigest", "shareUrl"]);
+      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalizeEncryptionJson(unsigned)));
+      expect(requestBodyDigest).toBe(Buffer.from(digest).toString("base64url"));
+    });
+
+    test("refuses a link that is not a short share link before any request or invocation", async () => {
+      const { node, sent, invocations } = deliveryNode(() => new Response("{}", { status: 200 }));
+      const links = [
+        FULL,
+        SHORT.replace("#v=4", "#v=3"),
+        `https://share.tinycloud.xyz/s/${CID}#k=${KEY}`,
+        `${SHORT}&x=1`,
+        SHORT.replace("/s/", "/c/"),
+        SHORT.replace("https://", "http://"),
+      ];
+      for (const link of links) {
+        await expect(node.authorizeShareDeliveryV3(input(link))).rejects.toThrow("share delivery requires a short share link");
+      }
+      expect(sent).toHaveLength(0);
+      expect(invocations()).toBe(0);
+    });
+
+    test("the key of the link reaches no log, no thrown error and no stored value", async () => {
+      const logged: string[] = [];
+      const consoleMethods = ["log", "info", "warn", "error", "debug", "trace"] as const;
+      const originals = consoleMethods.map((method) => console[method]);
+      for (const method of consoleMethods) console[method] = (...args: unknown[]) => { logged.push(args.map(String).join(" ")); };
+      const stdout = process.stdout.write.bind(process.stdout);
+      const stderr = process.stderr.write.bind(process.stderr);
+      process.stdout.write = ((chunk: string | Uint8Array) => { logged.push(String(chunk)); return true; }) as typeof process.stdout.write;
+      process.stderr.write = ((chunk: string | Uint8Array) => { logged.push(String(chunk)); return true; }) as typeof process.stderr.write;
+      const replies: Array<() => Response> = [
+        () => new Response("Forbidden", { status: 403 }),
+        () => new Response(`bad link ${SHORT}`, { status: 400 }),
+        () => new Response(`bad key ${KEY}`, { status: 422 }),
+        () => new Response(`{"shareUrl":"${SHORT}"}`, { status: 200 }),
+        () => new Response("not json", { status: 200 }),
+      ];
+      const failures: unknown[] = [];
+      try {
+        for (const reply of replies) {
+          const { node } = deliveryNode(reply);
+          try {
+            await node.authorizeShareDeliveryV3(input(SHORT));
+            throw new Error("expected a failure");
+          } catch (error) {
+            failures.push(error);
+          }
+        }
+        const { node } = deliveryNode(() => new Response("{}", { status: 200 }));
+        try {
+          await node.authorizeShareDeliveryV3(input(FULL));
+        } catch (error) {
+          failures.push(error);
+        }
+      } finally {
+        consoleMethods.forEach((method, index) => { console[method] = originals[index]!; });
+        process.stdout.write = stdout;
+        process.stderr.write = stderr;
+      }
+      expect(failures).toHaveLength(6);
+      const thrown = failures.map((error) => JSON.stringify(error, Object.getOwnPropertyNames(error)) + String(error));
+      for (const text of [...thrown, ...logged]) {
+        expect(text).not.toContain(KEY);
+        expect(text).not.toContain("#v=4&k=");
+      }
+      expect(failures[1]).toMatchObject({ message: "V3 share delivery authorization failed: HTTP 400 - bad link [share link]", status: 400 });
+      expect(failures[2]).toMatchObject({ message: "V3 share delivery authorization failed: HTTP 422 - bad key [key]", status: 422 });
+    });
   });
 });

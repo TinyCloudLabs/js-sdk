@@ -173,7 +173,9 @@ import {
   type RegisterPolicyV3Receipt,
   type ShareDeliveryAuthorizationV3Receipt,
   CREDENTIAL_INVITATION_REQUEST_DOMAIN,
+  shortDeliveryLinkBodyCid,
   validateShareDeliveryAuthorizationV3Bytes,
+  withoutShareLink,
   verifyEip191MessageSignature,
   signCompactUcanRootAuthorization,
   markDelegationTerminal,
@@ -5830,14 +5832,14 @@ export class TinyCloudNode {
     });
   }
 
-  /** Authorize one short-lived v3 delivery against the signed v3 envelope and registered roots. */
+  /**
+   * Authorize one short-lived v3 delivery. `shareUrl` is the short `/s/<id>#v=4&k=…&c=…` link: the node fetches the
+   * sealed body by id and opens it with the link's key, so the body of the request carries the link and nothing else
+   * of the share. `envelope` is the signed v3 envelope the sender holds; it checks the node's admission here and is
+   * not sent.
+   */
   async authorizeShareDeliveryV3(input: {
     readonly envelope: Record<string, CanonicalJson | undefined>;
-    /** Canonical sealed recipient envelope: version || nonce || ciphertext+tag. */
-    readonly sealedEnvelope: string;
-    /** Base64url 32-byte envelope key; it must also be the URL fragment key. */
-    readonly envelopeKey: string;
-    readonly shareCid: string;
     readonly resourcePath: string;
     readonly recipientEmail: string;
     readonly shareUrl: string;
@@ -5847,6 +5849,7 @@ export class TinyCloudNode {
     /** Stable caller retry identity. It is hashed into the protocol's 16-byte JTI. */
     readonly idempotencyKey: string;
   }): Promise<ShareDeliveryAuthorizationV3Receipt> {
+    const envelopeRef = await shortDeliveryLinkBodyCid(input.shareUrl);
     const session = this.currentTinyCloudSession();
     const serviceSession = this._serviceContext?.session;
     if (!session || !serviceSession) throw new Error("Share delivery requires an authenticated session");
@@ -5859,10 +5862,6 @@ export class TinyCloudNode {
     // application identifiers and has no protocol meaning beyond this binding.
     const jtiDigest = new Uint8Array(await crypto.subtle.digest("SHA-256", idempotencyBytes));
     const body = {
-      envelope: input.envelope,
-      sealedEnvelope: input.sealedEnvelope,
-      envelopeKey: input.envelopeKey,
-      shareCid: input.shareCid,
       recipientEmail: input.recipientEmail,
       shareUrl: input.shareUrl,
       documentName: input.documentName,
@@ -5884,9 +5883,15 @@ export class TinyCloudNode {
       headers: { accept: "application/json", "content-type": "application/json", authorization },
       body: canonicalizeEncryptionJson(request),
     });
-    if (!response.ok) throw await httpResponseError(response, "V3 share delivery authorization failed");
+    if (!response.ok) {
+      // The node's reply is part of the message; it must not carry the link or its key into a log.
+      const failure = await httpResponseError(response, "V3 share delivery authorization failed");
+      throw Object.assign(new Error(withoutShareLink(failure.message, input.shareUrl)), { status: failure.status });
+    }
     const verified = validateShareDeliveryAuthorizationV3Bytes(new Uint8Array(await response.arrayBuffer()), {
       request,
+      envelope: input.envelope,
+      envelopeRef,
       senderKeyDid: this.credentialHolderDid,
       deliveryAudience: input.deliveryAudience,
     });
