@@ -33,7 +33,7 @@ import type {
   ShareReceiverRecipient,
 } from "./types";
 
-const DEFAULT_CREDENTIAL_DISCOVERY = "https://credentials.org/.well-known/opencredentials";
+const DEFAULT_CREDENTIAL_DISCOVERY = "https://witness.credentials.org/.well-known/opencredentials";
 
 export interface ShareReceiverServiceOptions {
   readonly origin?: string;

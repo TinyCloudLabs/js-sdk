@@ -387,6 +387,12 @@ TinyCloud is built on these fundamental principles:
 - **Interoperability** - Embracing artifact-based formats like Markdown, JSON Canvas, CSV, and SQLite so that data remains portable and future-proof.
 - **Open Innovation** - We view AI's rapid growth as an opportunity to endow individuals with new capabilities—before these capabilities are seized exclusively by large institutions.
 
+## Credential discovery
+
+Share receivers that require a credential discover the catalog at `https://witness.credentials.org/.well-known/opencredentials` by default. Set `credentialDiscoveryUrl` in the receiver config to use a different endpoint. The URL must be `https` and must be `/.well-known/opencredentials` or `/v1/credential-types`, with no query or fragment.
+
+If discovery responds with a 2xx status whose body is not JSON, the call rejects with an error whose `code` is `CREDENTIAL_DISCOVERY_FAILED`, carrying `host`, `status`, and `contentType`. A 503 response rejects with `ISSUER_UNREADY`. Any other non-2xx response, and a network failure, rejects with `OFFLINE`.
+
 ## Documentation
 
 For complete documentation, please visit:
