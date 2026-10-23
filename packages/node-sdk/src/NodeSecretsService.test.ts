@@ -499,12 +499,10 @@ describe("NodeSecretsService", () => {
   it("session-only node: a fully covered get proceeds without a grant or the signer gate", async () => {
     const base = makeBaseSecrets();
     const grantPermissions = mock(async () => {});
-    const grantGetPermissions = mock(async () => {});
     const secrets = new NodeSecretsService({
       getService: () => base,
       getManifest: readOnlyManifest,
       grantPermissions,
-      grantGetPermissions,
       hasPermissions: () => false,
       canEscalate: () => false,
       getEncryptionNetworkId: () =>
@@ -517,18 +515,15 @@ describe("NodeSecretsService", () => {
     expect(result).toEqual({ ok: true, data: "stored" });
     expect(base.get).toHaveBeenCalledTimes(1);
     expect(grantPermissions).not.toHaveBeenCalled();
-    expect(grantGetPermissions).not.toHaveBeenCalled();
   });
 
   it("session-only node: an uncovered get is denied before any grant is attempted", async () => {
     const base = makeBaseSecrets();
     const grantPermissions = mock(async () => {});
-    const grantGetPermissions = mock(async () => {});
     const secrets = new NodeSecretsService({
       getService: () => base,
       getManifest: readOnlyManifest,
       grantPermissions,
-      grantGetPermissions,
       hasPermissions: () => false,
       canEscalate: () => false,
       getEncryptionNetworkId: () =>
@@ -549,31 +544,5 @@ describe("NodeSecretsService", () => {
     });
     expect(base.get).not.toHaveBeenCalled();
     expect(grantPermissions).not.toHaveBeenCalled();
-    expect(grantGetPermissions).not.toHaveBeenCalled();
-  });
-
-  it("routes get escalations to grantGetPermissions and leaves put on grantPermissions", async () => {
-    const base = makeBaseSecrets();
-    const grantPermissions = mock(async () => {});
-    const grantGetPermissions = mock(async () => {});
-    const secrets = new NodeSecretsService({
-      getService: () => base,
-      getManifest: readOnlyManifest,
-      grantPermissions,
-      grantGetPermissions,
-      hasPermissions: () => false,
-      canEscalate: () => true,
-      getEncryptionNetworkId: () =>
-        "urn:tinycloud:encryption:did:key:z6MkPrincipal:default",
-      uncoveredEntries: (entries) => entries,
-    });
-
-    await secrets.get("ANTHROPIC_API_KEY");
-    expect(grantGetPermissions).toHaveBeenCalledTimes(1);
-    expect(grantPermissions).not.toHaveBeenCalled();
-
-    await secrets.put("ANTHROPIC_API_KEY", "secret");
-    expect(grantPermissions).toHaveBeenCalledTimes(1);
-    expect(grantGetPermissions).toHaveBeenCalledTimes(1);
   });
 });
