@@ -1167,3 +1167,19 @@ export {
   type UnsignedPolicyObject,
   type UnsignedPolicyStatus,
 } from "./policy";
+
+// Delegated SQL caveats (`tables` / `columns` / `readOnly`) behind the node's `sql-delegated-caveats-v1` feature.
+export {
+  SQL_CAVEAT_MAX_NAME_BYTES,
+  SQL_CAVEAT_MAX_NAMES,
+  SQL_DELEGATED_CAVEATS_FEATURE,
+  SqlCaveatError,
+  SqlDelegatedCaveatsUnsupportedError,
+  foldSqlName,
+  parseDelegatedSqlEntry,
+  sqlCaveatContains,
+  sqlCaveatListNeedsDelegatedFeature,
+  type DelegatedSqlCaveat,
+  type SqlCaveatList,
+} from "./policy/delegatedCaveats";
+export { parseSqlCaveatList, sqlCaveatListsEquivalent } from "./policy/sqlCaveatList";

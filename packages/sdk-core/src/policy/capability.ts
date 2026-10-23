@@ -1,6 +1,11 @@
 import { CAPABILITY_REGISTRY } from "@tinycloud/bootstrap";
 import { bytesToHex, sha256 } from "viem";
 import { jcsCanonicalize, normalizeJson, type JsonValue } from "./jcs";
+import {
+  delegatedSqlCaveatContains,
+  parseDelegatedSqlEntry,
+  SqlCaveatError,
+} from "./delegatedCaveats";
 
 const POLICY_CAPABILITY_DOMAIN = "xyz.tinycloud.policy/PolicyCapability/v0";
 const textEncoder = new TextEncoder();
@@ -367,6 +372,33 @@ function validateCaveats(input: JsonValue, service: PolicyCapability["service"])
 }
 
 function validateSqlCaveats(input: JsonObject): JsonObject {
+  if (hasOwn(input, "mode")) {
+    return validateSqlProfileCaveat(input);
+  }
+  // `caveats` absent already says "unrestricted"; an empty object would be a
+  // second spelling of it.
+  if (Object.keys(input).length === 0) {
+    throw new PolicyCapabilityError(
+      "policy-capability-malformed-caveats",
+      "$.caveats must not be empty",
+    );
+  }
+  try {
+    parseDelegatedSqlEntry(input);
+  } catch (error) {
+    if (error instanceof SqlCaveatError) {
+      throw new PolicyCapabilityError(
+        "policy-capability-malformed-caveats",
+        `$.caveats ${error.reason}`,
+      );
+    }
+    throw error;
+  }
+  return input;
+}
+
+/** A constrained-statements profile entry (`mode` key): the form this SDK emits and accepts. */
+export function validateSqlProfileCaveat(input: JsonObject): JsonObject {
   assertCaveatKeys(input, ["mode", "readOnly", "statements"], "$.caveats");
   const mode = caveatString(input, "mode", "$.caveats");
   if (mode !== "constrained-statements") {
@@ -476,6 +508,10 @@ function caveatsContain(authority: JsonObject | undefined, request: JsonObject |
   }
   if (request === undefined) {
     return Object.keys(authority).length === 0;
+  }
+  if (!hasOwn(authority, "mode") && !hasOwn(request, "mode")) {
+    // Both were validated as the delegated form; the node folds names ASCII-only.
+    return delegatedSqlCaveatContains(parseDelegatedSqlEntry(authority), parseDelegatedSqlEntry(request));
   }
   if (authority.mode !== "constrained-statements" || request.mode !== "constrained-statements") {
     return false;

@@ -122,6 +122,9 @@ import {
   ErrorCodes,
   ENCRYPTION_PERMISSION_SERVICE,
   CaveatedDelegationUnsupportedError,
+  SQL_DELEGATED_CAVEATS_FEATURE,
+  SqlDelegatedCaveatsUnsupportedError,
+  sqlCaveatListNeedsDelegatedFeature,
   PermissionNotInManifestError,
   SessionExpiredError,
   canonicalizeRecapCaveats,
@@ -1610,6 +1613,15 @@ export class TinyCloudNode {
 
   private get nodeFeatures(): string[] {
     return this.auth?.nodeFeatures ?? this._restoredNodeFeatures ?? [];
+  }
+
+  /**
+   * Whether the node this instance is signed in to announced
+   * `sql-delegated-caveats-v1` in `GET /info`. False when the node did not
+   * announce it and when its features are not known (fail closed).
+   */
+  get supportsSqlDelegatedCaveats(): boolean {
+    return this.replicationNodeFeatures?.includes(SQL_DELEGATED_CAVEATS_FEATURE) === true;
   }
 
   private get replicationNodeFeatures(): readonly string[] | undefined {
@@ -6552,6 +6564,7 @@ export class TinyCloudNode {
       );
     }
 
+    this.assertSqlDelegatedCaveatsSupported(this.caveatedPortableEntries(delegation), delegation.host);
     const targetHost = delegation.host ?? this.config.host!;
     let activateResult: SpaceHostResult;
     try {
@@ -7762,11 +7775,35 @@ export class TinyCloudNode {
    * constrained branch rather than signing a broader action-only child UCAN.
    */
   private assertDelegationCaveatsPreservable(entries: PermissionEntry[]): void {
+    this.assertSqlDelegatedCaveatsSupported(entries);
     const caveated = entries.filter((entry) =>
       !recapCaveatsEqual(entry.caveats, undefined)
     );
     if (caveated.length > 0) {
       throw new CaveatedDelegationUnsupportedError(caveated);
+    }
+  }
+
+  /**
+   * Refuses, before any request, a delegation or grant that carries a
+   * delegated SQL caveat (`tables`, `columns`, `readOnly`) unless the node
+   * announced `sql-delegated-caveats-v1`. `host` is the node the request
+   * would go to; a node other than the one signed in to is unknown, so it is
+   * refused too. Profile caveats and empty caveats are not affected.
+   */
+  private assertSqlDelegatedCaveatsSupported(
+    entries: readonly { readonly service: string; readonly caveats?: readonly Record<string, unknown>[] }[],
+    host?: string,
+  ): void {
+    const carries = entries.some((entry) =>
+      (entry.service === "tinycloud.sql" || entry.service === "sql") &&
+      sqlCaveatListNeedsDelegatedFeature(entry.caveats)
+    );
+    if (!carries) return;
+    const nodeHost = this.hosts[0] ?? this.config.host;
+    const sameNode = host === undefined || (nodeHost !== undefined && host.replace(/\/+$/, "") === nodeHost.replace(/\/+$/, ""));
+    if (!sameNode || !this.supportsSqlDelegatedCaveats) {
+      throw new SqlDelegatedCaveatsUnsupportedError(host ?? nodeHost);
     }
   }
 
@@ -7820,10 +7857,8 @@ export class TinyCloudNode {
     return caveated;
   }
 
-  /** Reject caveated parent branches before action-only child signing. */
-  private assertPortableDelegationCaveatsPreservable(
-    delegation: PortableDelegation,
-  ): void {
+  /** The caveated branches of a received delegation, as permission entries. */
+  private caveatedPortableEntries(delegation: PortableDelegation): PermissionEntry[] {
     const entries: PermissionEntry[] = [];
     const add = (
       service: string,
@@ -7852,6 +7887,15 @@ export class TinyCloudNode {
     for (const resource of delegation.resources ?? []) {
       add(resource.service, resource.space, resource.path, resource.actions, resource.caveats);
     }
+    return entries;
+  }
+
+  /** Reject caveated parent branches before action-only child signing. */
+  private assertPortableDelegationCaveatsPreservable(
+    delegation: PortableDelegation,
+  ): void {
+    const entries = this.caveatedPortableEntries(delegation);
+    this.assertSqlDelegatedCaveatsSupported(entries, delegation.host);
     if (entries.length > 0) {
       throw new CaveatedDelegationUnsupportedError(entries);
     }

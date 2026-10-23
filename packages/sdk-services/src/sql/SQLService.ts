@@ -27,6 +27,7 @@ import {
 import {
   formatServiceResponseError,
   parseServiceErrorBody,
+  parseServiceRefusal,
   responseErrorMeta,
 } from "../responseErrors";
 import { requestTooLargeError } from "../statementSize";
@@ -60,6 +61,8 @@ const MIGRATIONS_SCHEMA = `CREATE TABLE IF NOT EXISTS ${MIGRATIONS_TABLE} (
 )`;
 const MIGRATIONS_META_NAMESPACE = "tinycloud.sql.migrations";
 const MIGRATIONS_META_ID = "000_metadata";
+/** The only arm names the SDK reports for a caveat refusal; anything else is dropped. */
+const SQL_CAVEAT_ARMS = ["table", "column", "write", "chain"] as const;
 
 export class SQLService extends BaseService implements ISQLService {
   static readonly serviceName = "sql";
@@ -574,11 +577,26 @@ export class SQLService extends BaseService implements ISQLService {
     if (retryError) return err(retryError);
 
     const errorBody = parseServiceErrorBody(errorText);
+    const refusal = parseServiceRefusal(errorText, errorBody);
+
+    // The caveat refusal names an arm and nothing else. Nothing from the node
+    // body goes into the message or meta, so no SQL can travel with it.
+    if (response.status === 403 && refusal.code === "sql_caveat_violation" && refusal.detail !== undefined) {
+      const arm = SQL_CAVEAT_ARMS.find((candidate) => candidate === refusal.detail);
+      return err(
+        serviceError(
+          ErrorCodes.SQL_CAVEAT_VIOLATION,
+          `SQL ${operation} refused: the delegation's SQL caveats do not allow this request`,
+          "sql",
+          { meta: { status: meta.status, statusText: meta.statusText, ...(arm === undefined ? {} : { arm }) } },
+        ),
+      );
+    }
 
     const sizeCode = requestTooLargeError("sql", operation, response.status, errorText);
     const errorCode = sizeCode ?? this.mapHttpStatusToErrorCode(
       response.status,
-      errorBody.error
+      refusal.code
     );
     const message = formatServiceResponseError(
       "SQL",

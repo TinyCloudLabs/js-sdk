@@ -18,6 +18,8 @@
 import ms from "ms";
 import { ACCOUNT_MANIFEST_PERMISSIONS } from "@tinycloud/bootstrap";
 import { resolveSecretPath, SECRET_NAME_RE } from "@tinycloud/sdk-services";
+import { SqlCaveatError } from "./policy/delegatedCaveats";
+import { parseSqlCaveatList } from "./policy/sqlCaveatList";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -805,6 +807,23 @@ function validatePermissionEntry(p: unknown, path: string): void {
     ))
   ) {
     throw new ManifestValidationError(`${path}.caveats must be an array of objects`);
+  }
+  if (Array.isArray(entry.caveats)) {
+    if (entry.service === "tinycloud.sql") {
+      try {
+        parseSqlCaveatList(entry.caveats);
+      } catch (error) {
+        if (error instanceof SqlCaveatError) {
+          throw new ManifestValidationError(`${path}.caveats: ${error.message}`);
+        }
+        throw error;
+      }
+    } else if (
+      entry.service === "tinycloud.duckdb" &&
+      entry.caveats.some((caveat) => Object.keys(caveat).length > 0)
+    ) {
+      throw new ManifestValidationError(`${path}.caveats are not defined for tinycloud.duckdb`);
+    }
   }
   if (entry.expiry !== undefined) {
     parseExpiry(entry.expiry);
