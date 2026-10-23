@@ -15,6 +15,7 @@ import { publicJwkForDelegation, validateDelegationCallbackPayload } from "./bro
 import {
   declinedPermissions,
   expiryLimit,
+  signedFormOfDecryptOnlyRequest,
   permissionTuples,
   permissionsFromTuples,
   expectedOwnerFor,
@@ -26,6 +27,7 @@ import {
 } from "./scoped-login.js";
 import { assertNotLocalOwner, assertSessionReplaceable, commitLogin, readProfileSnapshot } from "./login-commit.js";
 import { announceFirstOwner, openKeyPrimaryFlag, warnIfNotPrimaryKey, withOwnerKeyPrimary } from "./owner-key.js";
+import { isDeviceRestrictedPermission } from "../share/publishing-manifest.js";
 
 /** OpenKey caps device-approved delegations at 30 days. */
 const DEVICE_DELEGATION_MAX_SECONDS = 30 * 24 * 60 * 60;
@@ -93,6 +95,8 @@ export interface DeviceAuthorizationInput {
   reason?: string;
   /** Primary DID the approving identity must match, when known. */
   expectedOwner?: string;
+  /** Decrypt-only approval (share publishing): verified without a space ReCap. */
+  decryptOnly?: boolean;
   openkeyHost?: string;
   fetchFn?: typeof globalThis.fetch;
   emitInstructions?: (prompt: DeviceApprovalPrompt) => void;
@@ -353,6 +357,7 @@ async function verifyApproval(input: {
   requested: PermissionEntry[];
   expiry: RequestedExpiry;
   expectedOwner?: string;
+  decryptOnly?: boolean;
 }): Promise<DeviceAuthorizationResult> {
   const { binding, delegation } = input;
   if (
@@ -382,6 +387,7 @@ async function verifyApproval(input: {
   const { session } = verifyScopedLogin(delegation, input.key, input.sessionDid, input.requested, {
     expectedOwner: input.expectedOwner,
     expiry: input.expiry,
+    decryptOnly: input.decryptOnly,
   });
   const { ownerDid } = session;
   if (Math.abs(Date.parse(session.expiresAt) - expiresAt) > 1000) {
@@ -391,10 +397,13 @@ async function verifyApproval(input: {
   // The signed ReCap is the authority. OpenKey's unsigned statements of the
   // approved set (binding and relayed delegation) must match it exactly, so
   // neither can over- or under-report what was granted.
+  // A decrypt-only approval is reported unsigned as the short request entry;
+  // map that one entry onto its signed form before comparing.
+  const statement = (list: PermissionEntry[]) => input.decryptOnly ? signedFormOfDecryptOnlyRequest(list, ownerDid) : list;
   const signed = permissionTuples(session.permissions, ownerDid);
   if (
-    !sameTuples(signed, permissionTuples(permissionList(binding.permissions, "approved"), ownerDid)) ||
-    !sameTuples(signed, permissionTuples(permissionList(delegation.permissions, "delegated"), ownerDid))
+    !sameTuples(signed, permissionTuples(statement(permissionList(binding.permissions, "approved")), ownerDid)) ||
+    !sameTuples(signed, permissionTuples(statement(permissionList(delegation.permissions, "delegated")), ownerDid))
   ) {
     throw new CLIError("DEVICE_AUTH_BINDING_MISMATCH", "OpenKey's approved permissions differ from the signed grant. No session was saved.", ExitCode.PERMISSION_DENIED);
   }
@@ -404,7 +413,7 @@ async function verifyApproval(input: {
     spaceId: delegation.spaceId as string,
     expiresAt: session.expiresAt,
     approved: permissionsFromTuples(signed),
-    declined: declinedPermissions(input.requested, session.permissions, ownerDid),
+    declined: declinedPermissions(statement(input.requested), session.permissions, ownerDid),
     ...(openKeyPrimaryFlag(delegation) === undefined ? {} : { primary: openKeyPrimaryFlag(delegation) }),
   };
 }
@@ -421,20 +430,28 @@ function writeApprovalPrompt(prompt: DeviceApprovalPrompt): void {
 /**
  * Request exactly `permissions` through OpenKey device authorization, wait
  * for the owner's approval for the whole approval window, and return the
- * verified session. Nothing is persisted here.
+ * verified session. Nothing is persisted here. Device login cannot carry the
+ * encryption or secrets spaces.
  */
 export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): Promise<DeviceAuthorizationResult> {
-  validateLoginPermissions(input.permissions);
-  if (input.permissions.some((permission) =>
-    permission.service === "tinycloud.encryption" ||
-    permission.space === "secrets" ||
-    (permission.space?.startsWith("tinycloud:") && permission.space.endsWith(":secrets")))) {
+  if (input.permissions.some(isDeviceRestrictedPermission)) {
     throw new CLIError(
       "DEVICE_AUTH_UNSUPPORTED_SCOPE",
       "--device cannot authorize tinycloud.encryption or the secrets space. Use another OpenKey approval method for this manifest.",
       ExitCode.USAGE_ERROR,
     );
   }
+  return runDeviceAuthorization(input);
+}
+
+/**
+ * Run OpenKey device authorization for `input.permissions` without the
+ * restricted-scope check that {@link acquireDeviceDelegation} applies. Base
+ * login goes through `acquireDeviceDelegation`; the share decrypt approval
+ * calls this directly with its single decrypt entry.
+ */
+export async function runDeviceAuthorization(input: DeviceAuthorizationInput): Promise<DeviceAuthorizationResult> {
+  validateLoginPermissions(input.permissions);
   const expiry = input.expiry ?? { durationMs: DEVICE_DELEGATION_MAX_SECONDS * 1000 };
   const ttlSeconds = Math.floor(expiry.durationMs / 1000);
   if (!Number.isSafeInteger(ttlSeconds) || ttlSeconds < 60 || ttlSeconds > DEVICE_DELEGATION_MAX_SECONDS) {
@@ -559,6 +576,7 @@ export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): 
       requested: input.permissions,
       expiry,
       expectedOwner: input.expectedOwner,
+      decryptOnly: input.decryptOnly,
     });
   }
   throw new CLIError("DEVICE_AUTH_EXPIRED", "OpenKey device authorization expired before approval. Run the command again.", ExitCode.AUTH_REQUIRED);

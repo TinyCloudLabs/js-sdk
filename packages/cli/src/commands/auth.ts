@@ -1871,7 +1871,7 @@ interface StagedOpenKeyGrant {
 }
 
 /** Validate and activate the complete batch before committing any stored authority. */
-async function activateAndStoreOpenKeyGrants(
+export async function activateAndStoreOpenKeyGrants(
   profileName: string,
   host: string,
   node: TinyCloudNode,
@@ -2281,6 +2281,8 @@ export interface PortableGrantProof {
   expiry?: RequestedExpiry;
   /** Agent request: the approval must cover every requested action, or no grant is stored. */
   exactApproval?: boolean;
+  /** Share-publishing decrypt approval: verified as a decrypt-only request. */
+  decryptOnly?: boolean;
 }
 
 /** A verified OpenKey approval: the portable grant, and the signed session it was verified from. */
@@ -2310,6 +2312,7 @@ export function verifyOpenKeyApproval(
     expectedOwner: proof.expectedOwner,
     expiry: proof.expiry,
     purpose: "grant",
+    decryptOnly: proof.decryptOnly,
     exactApproval: proof.exactApproval,
   });
   if (legacyNested.length > 0) {

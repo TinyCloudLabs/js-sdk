@@ -489,6 +489,11 @@ export function createShareAuthorityAdapters(input: {
   readonly revokePolicyRoot?: ShareRevocationAdapter["revokePolicyRoot"];
   /** Bearer-link sharing service: `undefined` host decodes the link, a host reads from that owner Node. */
   readonly nativeSharing?: (host: string | undefined) => TinyCloudNode["sharing"];
+  /**
+   * Decrypt approval for an addressed share when this session does not hold decrypt, lasting as long as the
+   * session. A declined or expired approval is reported as not completed; every other failure keeps its own error.
+   */
+  readonly approveShareDecrypt?: (input: { readonly profileName: string; readonly node: TinyCloudNode }) => Promise<void>;
 } = {}): {
   readonly targetAdapter: TargetPublishAdapter;
   readonly records: SenderShareRecordStorage;
@@ -649,7 +654,15 @@ export function createShareAuthorityAdapters(input: {
     // or node request, registry write or upload. A signer-backed (local-key) owner has full authority.
     const addressedEncryptionNetwork = targetInput.target.kind === "bearer" ? undefined : node.getEncryptionNetworkIdForSpace(ownerSpaceId);
     if (addressedEncryptionNetwork !== undefined && node.isSessionOnly && !sessionHoldsEncryptionDecrypt(node, addressedEncryptionNetwork)) {
-      throw new SharePublishAuthorityError({ kind: "decrypt-not-held" });
+      if (input.approveShareDecrypt === undefined || activeProfileName === undefined) throw new SharePublishAuthorityError({ kind: "decrypt-not-held" });
+      try {
+        await input.approveShareDecrypt({ profileName: activeProfileName, node });
+      } catch (cause) {
+        // Only the owner's decline or an expired approval window reads as "not completed".
+        if (!(cause instanceof CLIError) || (cause.code !== "DEVICE_AUTH_DENIED" && cause.code !== "DEVICE_AUTH_EXPIRED")) throw cause;
+        throw new SharePublishAuthorityError({ kind: "decrypt-approval-not-completed" }, { cause });
+      }
+      if (!sessionHoldsEncryptionDecrypt(node, addressedEncryptionNetwork)) throw new SharePublishAuthorityError({ kind: "decrypt-not-held" });
     }
     const config = await publicConfig();
     if (targetInput.origin !== config.shareOrigin) throw new SharePublishAuthorityError({ kind: "origin-mismatch" });

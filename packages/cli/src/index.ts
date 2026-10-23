@@ -14,6 +14,7 @@ import { setJsonOutputRequested, shouldOutputJson, outputWarnings } from "./outp
 import { ProfileManager } from "./config/profiles.js";
 import { configureShareCommandServices, registerShareCommand } from "./commands/share.js";
 import { createShareAuthorityAdapters } from "./share/adapters.js";
+import { approveShareDecrypt } from "./share/decrypt-approval.js";
 import { loadCourierEntry } from "./lib/courier-loader.js";
 import { applyNoRetryFlag } from "./lib/retry-policy.js";
 
@@ -21,6 +22,7 @@ const program = new Command();
 const shareAuthority = createShareAuthorityAdapters({
   profileName: async () => selectedShareProfile() ?? (await ProfileManager.getConfig()).defaultProfile,
   fetchFn: globalThis.fetch,
+  approveShareDecrypt,
 });
 
 function selectedShareProfile(): string | undefined {

@@ -77,3 +77,10 @@ export function sharePublishingPermissions(): PermissionEntry[] {
     actions: [...permission.actions],
   }));
 }
+
+/** Device login refuses encryption entries and the secrets space. */
+export function isDeviceRestrictedPermission(permission: PermissionEntry): boolean {
+  return permission.service === "tinycloud.encryption" ||
+    permission.space === "secrets" ||
+    (permission.space?.startsWith("tinycloud:") === true && permission.space.endsWith(":secrets"));
+}
