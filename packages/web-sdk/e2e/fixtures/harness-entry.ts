@@ -6,14 +6,27 @@ import { toastStore } from "../../src/ui/parts/toasts";
 import type { ToastKind } from "../../src/ui/toast-store";
 import { createStubPanelData, type StubSeed } from "../../src/ui/stub/index";
 import { createRequestLog, sampleRows, type LogRow } from "./request-log";
+import type { NodeRow, ViewResult } from "../../src/ui/data";
 
 // What a spec pins with page.addInitScript before the page loads: window.__TC_STUB_SEED__ (a JSON string).
 // The stub's per-view results, plus `requests`, the request log rows the harness itself serves.
+// JSON carries no Date, so a nodes row's ISO `lastSeenAt` string is revived here.
+type SeedNodeRow = Omit<NodeRow, "lastSeenAt"> & { lastSeenAt?: string };
+type SeedJson = Omit<StubSeed, "nodes"> & { nodes?: ViewResult<readonly SeedNodeRow[]>; requests?: LogRow[] };
 type HarnessSeed = StubSeed & { requests?: LogRow[] };
+
+function reviveRow(row: SeedNodeRow): NodeRow {
+  const { lastSeenAt, ...rest } = row;
+  return lastSeenAt === undefined ? rest : { ...rest, lastSeenAt: new Date(lastSeenAt) };
+}
 
 function harnessSeed(): HarnessSeed {
   const raw: unknown = Reflect.get(window, "__TC_STUB_SEED__");
-  return typeof raw === "string" ? JSON.parse(raw) : {};
+  if (typeof raw !== "string") return {};
+  const { nodes, ...rest }: SeedJson = JSON.parse(raw);
+  if (nodes === undefined) return rest;
+  if (nodes.state !== "ready") return { ...rest, nodes };
+  return { ...rest, nodes: { state: "ready", data: nodes.data.map(reviveRow) } };
 }
 
 type SyncState = { requested: boolean; effective: string; reason?: string };

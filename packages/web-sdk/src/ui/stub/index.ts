@@ -24,9 +24,13 @@ import type {
 } from "../data";
 import { viewReady } from "../view-result";
 
-/** Per-view results a preview or test can pin. One optional field per section; absent fields keep the defaults below. */
+/**
+ * Per-view stub overrides, so a preview or e2e spec can reach states the defaults never produce.
+ * One optional field per section; a missing field keeps that section's default.
+ */
 export interface StubSeed {
   storage?: ViewResult<StorageView>;
+  nodes?: ViewResult<readonly NodeRow[]>;
 }
 
 export function createStubPanelData(seed: StubSeed = {}): PanelDataFactory {
@@ -62,7 +66,7 @@ export function createStubPanelData(seed: StubSeed = {}): PanelDataFactory {
       },
       delegations: () => Promise.resolve(viewReady<DelegationPage>({ rows: [STUB_DELEGATION] })),
       revoke: (cid: string) => Promise.resolve<RevokeOutcome>({ ok: true, cid }),
-      nodes: () => Promise.resolve(viewReady<readonly NodeRow[]>([STUB_NODE])),
+      nodes: () => Promise.resolve(seed.nodes ?? viewReady<readonly NodeRow[]>([STUB_NODE])),
       storage: () =>
         Promise.resolve(
           seed.storage ??
