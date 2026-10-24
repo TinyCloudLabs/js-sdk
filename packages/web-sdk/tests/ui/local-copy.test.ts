@@ -1105,7 +1105,8 @@ describe("an account change while a call is in flight", () => {
     expect(listenerCount()).toBe(0);
   });
 
-  test("a purge retry that ends after the account changed shows no 'removed' toast and keeps the warning", async () => {
+  /** Signs out through the guard with a failing purge, mounts the section, starts a retry, resets, then answers it. */
+  async function retryAcrossReset(answer: PurgeLocalCopyResult) {
     const purgeBox = (el: HTMLElement) => el.querySelector<HTMLElement>(".lc-purge") as HTMLElement;
     const state0 = { signedIn: true };
     const resetListeners = new Set<() => void>();
@@ -1136,11 +1137,23 @@ describe("an account change while a call is in flight", () => {
     retry.click();
     await flush();
     expect(purges.count()).toBe(2);
-    resetListeners.forEach((cb) => cb()); // the account changes while the retry runs
-    purges.resolve(1, { ok: true });
+    resetListeners.forEach((cb) => cb()); // the account changes while the retry runs; nobody is signed in
+    purges.resolve(1, answer);
     await flush();
+    return { el, toasts, box: purgeBox(el) };
+  }
+
+  test("a purge retry that succeeds after a reset clears the warning, but raises no toast for the new account", async () => {
+    const { toasts, box } = await retryAcrossReset({ ok: true });
     expect(toasts).toEqual([]);
-    expect(purgeBox(el).hidden).toBe(false);
+    expect(box.hidden).toBe(true);
+  });
+
+  test("a purge retry that fails after a reset keeps the warning, with no toast for the new account", async () => {
+    const { toasts, box } = await retryAcrossReset({ ok: false, retryNow: true });
+    expect(toasts).toEqual([]);
+    expect(box.hidden).toBe(false);
+    expect(box.textContent).toContain("It may still be readable here.");
   });
 });
 
