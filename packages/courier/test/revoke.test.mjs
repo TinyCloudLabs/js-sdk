@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { revokePeer } from '../dist/commands.js';
-import { k } from '../dist/keys.js';
+import { AGENT_GRANT, REVOKE_GRANT_ENTRY, k } from '../dist/keys.js';
 import { loadProfile, saveProfile } from '../dist/profile.js';
 import { memoryKv } from './memory-kv.mjs';
 
@@ -14,7 +14,7 @@ const PAST = '2026-10-20T12:00:00.000Z';
 
 const grant = (cid, expiresAt = FUTURE, extra = {}) => ({ cid, issuedAt: '2026-10-23T12:00:00.000Z', expiresAt, ...extra });
 
-function withHome(outbound, fn) {
+async function withHome(outbound, fn) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'courier-revoke-'));
   const prior = process.env.COURIER_HOME;
   process.env.COURIER_HOME = home;
@@ -32,15 +32,15 @@ function withHome(outbound, fn) {
       },
     };
     saveProfile(profile);
-    return fn(loadProfile());
+    return await fn(loadProfile());
   } finally {
     if (prior === undefined) delete process.env.COURIER_HOME; else process.env.COURIER_HOME = prior;
     fs.rmSync(home, { recursive: true, force: true });
   }
 }
 
-/** A node whose revokeDelegation answers per cid: 'ok', 'refuse', or 'throw'. */
-function fakeNode(behaviour = {}) {
+/** A node whose revokeDelegation answers per cid: 'ok', 'refuse', or 'throw'. `caps` is the signed grant. */
+function fakeNode(behaviour = {}, caps = AGENT_GRANT) {
   const kv = memoryKv();
   kv.rows.set(k.peerRecord('bob'), { value: { handle: 'bob' }, etag: 'e0' });
   const calls = [];
@@ -48,6 +48,7 @@ function fakeNode(behaviour = {}) {
     calls,
     kv,
     behaviour,
+    getVerifiedSessionCapabilities: () => caps,
     async revokeDelegation(cid) {
       calls.push(cid);
       const mode = this.behaviour[cid] ?? 'ok';
@@ -157,4 +158,44 @@ test('an unknown peer is unknown-peer and touches nothing', async () => {
     await assert.rejects(revokePeer(profile, node, 'nobody', NOW), { code: 'unknown-peer' });
     assert.deepEqual(node.calls, []);
   });
+});
+
+const OLD_GRANT = AGENT_GRANT.filter((entry) => entry !== REVOKE_GRANT_ENTRY);
+
+test('a grant without the revoke entry fails revoke-not-enabled before any node call and keeps everything', async () => {
+  await withHome([grant('g1'), grant('g2')], async (profile) => {
+    const node = fakeNode({}, OLD_GRANT);
+    await assert.rejects(revokePeer(profile, node, 'bob', NOW), (error) => {
+      assert.equal(error.code, 'revoke-not-enabled');
+      assert.equal(error.message, 'This install cannot revoke yet: re-run `courier init` to enable revoke.');
+      return true;
+    });
+    assert.equal(node.calls.length, 0, 'zero revokeDelegation calls');
+    const kept = loadProfile().peers.bob;
+    assert.deepEqual(kept.outbound.map((g) => g.revokedAt), [undefined, undefined]);
+    assert.equal(node.kv.rows.has(k.peerRecord('bob')), true, 'peer record kept');
+  });
+});
+
+test('a grant without the revoke entry refuses even a peer with no live grants', async () => {
+  await withHome([], async (profile) => {
+    const node = fakeNode({}, OLD_GRANT);
+    await assert.rejects(revokePeer(profile, node, 'bob', NOW), { code: 'revoke-not-enabled' });
+    assert.ok(loadProfile().peers.bob);
+  });
+});
+
+test('a revoke entry with the wrong shape does not enable revoke', async () => {
+  const wrong = [
+    { ...REVOKE_GRANT_ENTRY, space: 'other' },
+    { ...REVOKE_GRANT_ENTRY, path: 'x/' },
+    { ...REVOKE_GRANT_ENTRY, actions: ['tinycloud.delegation/status'] },
+  ];
+  for (const entry of wrong) {
+    await withHome([grant('g1')], async (profile) => {
+      const node = fakeNode({}, [...OLD_GRANT, entry]);
+      await assert.rejects(revokePeer(profile, node, 'bob', NOW), { code: 'revoke-not-enabled' });
+      assert.equal(node.calls.length, 0);
+    });
+  }
 });

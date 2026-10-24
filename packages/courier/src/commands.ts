@@ -30,7 +30,7 @@ import { requestHash } from './canonical.js';
 import { targetHelp } from './guard/target.js';
 import type { ParsedArgs } from './args.js';
 import { requireFlag, oneOf } from './args.js';
-import { assertPeerDelegation, bareDid, durationMs, AGENT_GRANT_MAX_MS } from './authority.js';
+import { assertPeerDelegation, bareDid, durationMs, grantCanRevoke, AGENT_GRANT_MAX_MS } from './authority.js';
 
 interface Ctx {
   profile: Profile;
@@ -375,15 +375,19 @@ async function writePeerRecord(node: TinyCloudNode, peer: StoredPeer) {
 
 // ---------- revoke ----------
 
-/** The slice of the node `revoke` needs; a fake with these two members drives the unit tests. */
-export type RevokingNode = Pick<TinyCloudNode, 'revokeDelegation' | 'kv'>;
+/** The slice of the node `revoke` needs; a fake with these three members drives the unit tests. */
+export type RevokingNode = Pick<TinyCloudNode, 'revokeDelegation' | 'kv' | 'getVerifiedSessionCapabilities'>;
 
 /**
  * Revokes every live outbound grant of `handle` on the node, then drops the peer. Any refused grant fails the
  * command with `revoke-failed` and keeps the peer; confirmed grants are marked so a re-run only retries the rest.
+ * A grant that predates the revoke entry fails with `revoke-not-enabled` before any node call.
  */
 export async function revokePeer(profile: Profile, node: RevokingNode, handle: string, now = Date.now()): Promise<string> {
   const peer = getPeer(profile, handle);
+  if (!grantCanRevoke(node.getVerifiedSessionCapabilities())) {
+    fail('revoke-not-enabled', `This install cannot revoke yet: re-run \`${cmd('init')}\` to enable revoke.`);
+  }
   let revoked = 0;
   let earlier = 0;
   let expired = 0;
