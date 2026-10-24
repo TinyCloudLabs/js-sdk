@@ -499,7 +499,10 @@ describe.skipIf(!NODE_BIN)("tc replica Secrets against a real local SQLite node"
     ].entries()) {
       const denied = await tc(["replica", "sync", "--replica", `denied-${index}`, ...selector], "device", true);
       expect(denied.code).toBe(2);
-      expect(denied.stderr.includes("SECRETS_OPT_IN_REQUIRED")).toBe(true);
+      expect(denied.stderr.includes(index === 2 ? "INVALID_REPLICATION_PREFIX" : "SECRETS_OPT_IN_REQUIRED")).toBe(true);
+      // A refused sync creates no replica directory, so no replica.db or blobs exist either.
+      await expect(stat(join(home, ".tinycloud", "profiles", "device", "replicas", `denied-${index}`)))
+        .rejects.toMatchObject({ code: "ENOENT" });
     }
   });
 
