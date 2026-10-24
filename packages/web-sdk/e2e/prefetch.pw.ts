@@ -56,13 +56,20 @@ const callCount = async (page: Page, name: string) => (await calls(page)).filter
 const delegationsNav = (page: Page) => panel(page).getByRole("button", { name: "Delegations", exact: true });
 const storageNav = (page: Page) => panel(page).getByRole("button", { name: "Storage", exact: true });
 // At phone width the section nav is the Sections menu. The panel keeps the last section, so when Delegations is already open there is nothing to pick.
+// A reopened panel can paint in the previous width's layout for a moment before it settles into the new one, so a nav seen
+// by one check can be gone by the next click; the whole step runs again until it lands.
 async function goDelegations(page: Page) {
   const menuButton = panel(page).getByRole("button", { name: "Sections", exact: true });
   await expect(delegationsNav(page).or(menuButton)).toBeVisible();
-  if (await delegationsNav(page).isVisible()) return delegationsNav(page).click();
-  if (await panel(page).locator('section[data-section="delegations"]').isVisible()) return;
-  await menuButton.click();
-  await delegationsNav(page).click();
+  await expect(async () => {
+    if (await panel(page).locator('section[data-section="delegations"]').isVisible()) return;
+    if (await delegationsNav(page).isVisible()) {
+      await delegationsNav(page).click({ timeout: 1000 });
+      return;
+    }
+    await menuButton.click({ timeout: 1000 });
+    await delegationsNav(page).click({ timeout: 1000 });
+  }).toPass({ timeout: 8000 });
 }
 
 // `blockIdle` makes requestIdleCallback never fire, so only an intent can start the pull.
