@@ -1,5 +1,24 @@
 # @tinycloud/cli
 
+## 1.3.6
+
+### Patch Changes
+
+- 3d814e8: `tc init` and other spinner steps print one plain progress line per step, with no animation, when the terminal reports 0 columns. Terminals with a normal size keep the animated spinner.
+
+  Details: TC-1893
+
+- 09b7dc0: Document that `tinycloud.delegation/revoke` on a space is space-wide, and that the CLI's own fallback asks for 5 minutes and stores nothing. Added to the tc-cli skill docs and the node-sdk README.
+
+  Details: TC-1923
+
+- Updated dependencies [271155a]
+- Updated dependencies [09b7dc0]
+  - @tinycloud/node-sdk@3.6.1
+  - @tinycloud/operations@0.7.5
+  - @tinycloud/sdk-core@3.6.1
+  - @tinycloud/sdk-services@3.6.1
+
 ## 1.3.6-beta.2
 
 ### Patch Changes
