@@ -115,6 +115,19 @@ async function open(page: Page, layout: "drawer" | "page") {
   await expect(panel(page).locator('section[data-section="nodes"]')).toBeVisible();
 }
 
+const boxOf = async (locator: Locator) => {
+  const box = await locator.boundingBox();
+  if (box === null) throw new Error("element has no box");
+  return box;
+};
+// The host is a block that fills its column, so measure the text itself for the line it sits on.
+const textBoxOf = (locator: Locator) =>
+  locator.evaluate((el) => {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const rect = range.getBoundingClientRect();
+    return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+  });
 const panel = (page: Page) => page.locator("#tinycloud-ui-panel");
 const section = (page: Page) => panel(page).locator('section[data-section="nodes"]');
 const cards = (page: Page) => section(page).locator("li.nd-card");
@@ -204,6 +217,29 @@ for (const scheme of ["light", "dark"] as const) {
       // The local node is described as this computer, and the DID row is absent for non-active nodes.
       await expect(cards(page).nth(2)).toContainText("On this computer");
       await expect(cards(page).nth(2)).not.toContainText("Node ID");
+    });
+
+    test("populated: the status sits right of the host, centred on the host line", async ({ page }) => {
+      await mountHarness(page, scheme, { width: 1280, height: 800 }, populatedSeed);
+      await open(page, "drawer");
+      await settleSlide(section(page));
+
+      const host = await textBoxOf(cards(page).nth(0).locator(".nd-host"));
+      const status = await boxOf(cards(page).nth(0).locator(".st"));
+      expect(status.x).toBeGreaterThan(host.x + host.width);
+      const statusMiddle = status.y + status.height / 2;
+      expect(statusMiddle).toBeGreaterThanOrEqual(host.y);
+      expect(statusMiddle).toBeLessThanOrEqual(host.y + host.height);
+    });
+
+    test("populated: the lede takes the body ink token, not the grey note colour", async ({ page }) => {
+      await mountHarness(page, scheme, { width: 1280, height: 800 }, populatedSeed);
+      await open(page, "drawer");
+
+      const colourOf = (locator: Locator) => locator.evaluate((el) => getComputedStyle(el).color);
+      const lede = await colourOf(section(page).locator(".nd-lede"));
+      // The mockup lede has no colour of its own, so it takes the ink token: #09090b light, #fafafa dark.
+      expect(lede).toBe(scheme === "light" ? "rgb(9, 9, 11)" : "rgb(250, 250, 250)");
     });
 
     test("populated: the DID copy button writes the ID to the clipboard", async ({ page }) => {
