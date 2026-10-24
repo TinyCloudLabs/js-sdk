@@ -13,6 +13,7 @@ import { cmdGuard } from './guard/command.js';
 import { cmdBroker, cmdRunApproved } from './broker.js';
 import { cmdCredential } from './credential.js';
 import { cmdInvite, cmdJoin } from './invite-commands.js';
+import { courierVersion } from './version.js';
 
 function usage(): string {
   const name = programName();
@@ -151,6 +152,10 @@ peers.json that invite, invite approve and watch check; --peers-file wins).
 export async function run(argv: string[]): Promise<void> {
   const args = parseArgs(argv);
   const command = args.positional[0];
+  if (!command && args.has('version')) {
+    process.stdout.write(`${courierVersion()}\n`);
+    return;
+  }
   if (command === 'request' && args.has('help')) {
     process.stdout.write(requestHelp());
     return;

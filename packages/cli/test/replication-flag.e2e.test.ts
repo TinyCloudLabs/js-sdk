@@ -587,7 +587,11 @@ describe.skipIf(!NODE_BIN)(`replication flag against a real node (${DATABASE_URL
     }));
     const caveatedLogin = await tc(["auth", "login", "--method", "openkey", "--manifest", caveatedManifest, "--replication-prefix", "notes/"], { profile: "caveated-scope" });
     expect(caveatedLogin.code).toBe(2);
-    expect(caveatedLogin.stderr).toContain("REPLICATION_PREFIX_CAVEATED");
+    expect(caveatedLogin.stderr).toContain("CAVEATS_UNSUPPORTED");
+    // The refusal comes before any OpenKey approval: nothing was requested and no approval URL was printed.
+    expect(caveatedLogin.stderr).toContain("Nothing was requested");
+    expect(caveatedLogin.stderr).not.toContain("/delegate");
+    expect(caveatedLogin.stderr).not.toContain("Open this URL");
     expect((JSON.parse(await readFile(join(home, ".tinycloud", "profiles", "caveated-scope", "profile.json"), "utf8")) as { replication?: unknown }).replication).toBeUndefined();
 
     const alias = host.replace("127.0.0.1", "localhost");

@@ -1,5 +1,37 @@
 # @tinycloudlabs/web-sdk
 
+## 3.6.0-beta.8
+
+### Patch Changes
+
+- 1f831e3: Manifest sign-in and session preparation refuse a permission that carries caveats by throwing the existing `CaveatedDelegationUnsupportedError` (`CAVEATED_DELEGATION_UNSUPPORTED`) before any request or signature. Absent, `[]` and `[{}]` caveats are accepted; any other set, including `[{}, {}]`, is refused, the same rule the delegation paths apply through `recapCaveatsEqual`.
+
+  Refusing call sites: `TinyCloudNode.signIn`, `signInWithOpenKey`, `createOwnerDelegation` and `createSubDelegation` permissions; `NodeUserAuthorization.signIn`, `prepareSessionForSigning`, `signInWithOpenKey` and `createBootstrapSession`; `TinyCloudWeb.signIn` (before any persisted session is restored).
+
+  Details: TC-1855
+
+- Updated dependencies [1f831e3]
+  - @tinycloud/sdk-core@3.6.0-beta.8
+  - @tinycloud/node-sdk@3.6.0-beta.8
+
+## 3.6.0-beta.7
+
+### Minor Changes
+
+- 7bd4ae6: `courier credential show` no longer deletes a stored credential that fails offline re-verification. The record is refused with `credential-record-invalid` and kept under `COURIER_HOME/credentials/` for inspection. Lifecycle drops are unchanged: a credential within 60 seconds of its own expiry, or older than the 3600-second maximum age, is still deleted.
+
+  `@tinycloud/node-sdk/credentials` also exports the `StoredEmailProofInput` type.
+
+  `@tinycloud/web-sdk/credentials` adds `verifyStoredEmailProof` and the `StoredEmailProofInput` and `StoredEmailProofRecord` types, so headless clients can re-verify a stored email-proof credential offline without importing `@tinycloud/node-sdk` directly.
+
+  Details: TC-712
+
+### Patch Changes
+
+- Updated dependencies [7bd4ae6]
+- Updated dependencies [7bd4ae6]
+  - @tinycloud/node-sdk@3.6.0-beta.7
+
 ## 3.6.0-beta.6
 
 ### Patch Changes
