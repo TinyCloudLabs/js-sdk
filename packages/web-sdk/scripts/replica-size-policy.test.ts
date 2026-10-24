@@ -2603,7 +2603,7 @@ describe("browser SIWE domain and URI (#604, TC-1488) raised root ceiling ratche
     expect(ancestryPins(current, false)).toContainEqual({
       row: "tc1488SiweDomainUriRatchet", pin: row().sourceCommits.at(-1)!,
     });
-    expect(activeRootCeiling(current)).toEqual({ row: "tc1488SiweDomainUriRatchet", ceiling: row().root.ceiling });
+    expect(rootCeilings(current).find((e) => e.row === "tc1488SiweDomainUriRatchet")).toEqual({ row: "tc1488SiweDomainUriRatchet", ceiling: row().root.ceiling });
   });
 
   it("refuses one byte of drift in any bucket, other CI provenance, or a missing manifest limit guard row", () => {
