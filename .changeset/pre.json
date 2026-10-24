@@ -29,6 +29,7 @@
     "@tinycloud/sdk-services-test": "21.0.0"
   },
   "changesets": [
-    "siwe-domain-uri-follow-origin"
+    "siwe-domain-uri-follow-origin",
+    "tc-1923-revoke-scope-docs"
   ]
 }
