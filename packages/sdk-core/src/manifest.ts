@@ -1060,6 +1060,8 @@ function secretEntriesForManifest(
 /**
  * Expand a single permission entry into a {@link ResourceCapability}:
  * apply the prefix to the path and expand short actions into full URNs.
+ * Caveats are not carried into a `ResourceCapability`; sign-in callers check
+ * the original manifests.
  */
 function resolveEntry(
   entry: PermissionEntry,
