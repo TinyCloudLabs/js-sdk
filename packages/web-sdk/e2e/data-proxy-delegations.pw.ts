@@ -30,7 +30,7 @@ interface HarnessWindow {
   __tc: {
     mount(options?: { signedIn?: boolean }): boolean;
     arm(): Promise<boolean>;
-    switchAccount(to: "A" | "B"): Promise<boolean>;
+    switchAccount(to: "A" | "B" | "S"): Promise<boolean>;
     signOut(): boolean;
     hold(closed: boolean): boolean;
     deny(on: boolean): boolean;
@@ -49,9 +49,9 @@ const slips = (page: Page) => page.locator(".tstack .toast");
 const calls = (page: Page, name: string) => tc(page, (api) => api.calls()).then((all) => all.filter((c) => c.name === name));
 
 // The cards are named by the adapter's short form of the delegate DID. Mirrors the harness's DELEGATE().
-const delegate = (account: "A" | "B", n: number) =>
+const delegate = (account: "A" | "B" | "S", n: number) =>
   shortDid(`did:key:z6Mk${account}DelegateExampleBase0${n}`);
-const card = (page: Page, account: "A" | "B", n: number) => cards(page).filter({ hasText: delegate(account, n) });
+const card = (page: Page, account: "A" | "B" | "S", n: number) => cards(page).filter({ hasText: delegate(account, n) });
 
 /** Records whether the needle is ever in the panel's DOM from now on, not only at the end: a flash of the old account's rows counts. */
 const watchFor = (page: Page, needle: string) =>
@@ -204,4 +204,29 @@ test("signing out while Delegations is open closes the panel; reopening signed o
   await expect(panel(page).getByText(/Loading|Looking for|Checking/)).toHaveCount(0);
   await page.waitForTimeout(500);
   expect((await calls(page, "delegations.query")).length).toBe(before);
+});
+
+test("the app's own session grant, listed under the bare DID while sessionDid carries a fragment, is the app's own", async ({ page }) => {
+  await boot(page);
+  await tc(page, (api) => api.arm());
+  await tc(page, (api) => api.switchAccount("S"));
+  await openDelegations(page);
+  await expect(cards(page)).toHaveCount(2);
+  // Grouped under the app, not under others.
+  await expect(body(page).locator(".dl-h")).toHaveText(["Granted to e2e-data-proxy1", "Granted to others1"]);
+  const own = cards(page).filter({ hasText: "This app" });
+  await expect(own).toHaveCount(1);
+
+  // The confirm names the app and says it stops working here.
+  await own.getByRole("button", { name: /^Revoke access for / }).click();
+  const box = body(page).locator('[role="alertdialog"]');
+  await expect(box).toBeVisible();
+  await expect(box).toContainText("Revoke access for e2e-data-proxy on this device?");
+  await expect(box).toContainText("e2e-data-proxy will stop working here until you sign in again.");
+  await box.getByRole("button", { name: "Keep access" }).click();
+  expect(await tc(page, (api) => api.revokes())).toEqual([]);
+
+  // A helper's grant is still under others, with the ordinary confirm.
+  await card(page, "S", 1).getByRole("button", { name: `Revoke access for ${delegate("S", 1)}` }).click();
+  await expect(body(page).locator('[role="alertdialog"]')).not.toContainText("will stop working here");
 });

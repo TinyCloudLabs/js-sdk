@@ -5,6 +5,21 @@ import type { DelegationGroup, DelegationRow } from "../data";
 export const EXPIRING_SOON_MS = 24 * 60 * 60 * 1000;
 
 /**
+ * The DID without its fragment. `tc.sessionDid` is a DID URL naming the session key
+ * (`did:key:z6Mk…#z6Mk…`); the node lists the same DID bare. Only a single trailing
+ * `#fragment` is dropped; a string with more than one `#` is left as it is.
+ */
+export function bareDid(did: string): string {
+  const hash = did.indexOf("#");
+  return hash !== -1 && did.indexOf("#", hash + 1) === -1 ? did.slice(0, hash) : did;
+}
+
+/** Same DID, ignoring a fragment on either side. A different key is never the same DID. */
+export function sameDid(a: string, b: string): boolean {
+  return bareDid(a) === bareDid(b);
+}
+
+/**
  * `this-app`: granted, delegate is the current session DID.
  * `to-others`: granted, delegate is another DID.
  * `received`: direction is received (checked first, so a received record whose
@@ -15,7 +30,7 @@ export function delegationGroup(
   sessionDid: string,
 ): DelegationGroup {
   if (record.direction === "received") return "received";
-  return record.delegateDid === sessionDid ? "this-app" : "to-others";
+  return sameDid(record.delegateDid, sessionDid) ? "this-app" : "to-others";
 }
 
 /** True only for a future `expiresAt` within 24 h of `now`. Expired records are not "expiring". */

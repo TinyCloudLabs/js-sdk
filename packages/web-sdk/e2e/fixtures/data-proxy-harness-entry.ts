@@ -5,7 +5,8 @@
 import type { AccountDelegationRecord } from "@tinycloud/sdk-core";
 import { registerUiClient, type UiClientHandle } from "../../src/ui/index";
 
-type Account = "A" | "B";
+// "S" is an account whose app session holds one grant listed under the bare DID while `sessionDid` is a DID URL with a fragment.
+type Account = "A" | "B" | "S";
 
 interface Call {
   readonly name: string;
@@ -42,6 +43,9 @@ interface Pages {
   readonly second?: AccountDelegationRecord[];
 }
 
+const SESSION_KEY = "z6MkSessionFake";
+const SESSION_BARE = `did:key:${SESSION_KEY}`;
+
 const DATA: Record<Account, Pages> = {
   A: {
     first: [1, 2, 3].map((n) => record(`bafyAccountA${n}`, DELEGATE("A", n))),
@@ -50,6 +54,9 @@ const DATA: Record<Account, Pages> = {
   },
   B: {
     first: [1, 2].map((n) => record(`bafyAccountB${n}`, DELEGATE("B", n))),
+  },
+  S: {
+    first: [record("bafyOwnSession", SESSION_BARE), record("bafyHelper", DELEGATE("S", 1))],
   },
 };
 
@@ -116,7 +123,9 @@ const host = {
   get did() {
     return `did:key:z6MkAccount${account}Example`;
   },
-  sessionDid: "did:key:z6MkSessionFake",
+  get sessionDid() {
+    return account === "S" ? `${SESSION_BARE}#${SESSION_KEY}` : SESSION_BARE;
+  },
   async activeNodeIdentity() {
     return { origin: "https://node.example.test", nodeDid: "did:key:z6MkNodeFake" };
   },
