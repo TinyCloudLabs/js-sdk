@@ -4,11 +4,14 @@ import type { TinyCloudNode } from '@tinycloud/node-sdk';
 import { acceptB, fail } from './commands.js';
 import { CourierError } from './errors.js';
 import { deleteSealed as deleteSealedReal, inviteOrigin } from './invite-link.js';
-import { readPublicStatus, updatePublicInvite, type PublicInvite } from './invite-public.js';
+import { publicHeldReason, readPublicStatus, updatePublicInvite, type HeldReason } from './invite-public.js';
 import { inviteFolder, ownerMatches, parseHello, type Hello, type Tier, type Welcome } from './invite-schema.js';
 import type { Notice, Notifier } from './notify.js';
 import type { WatchLog } from './wake.js';
-import { profileDir, saveProfile, secureSubdir, writeSecure, type Profile } from './profile.js';
+import { saveProfile, secureSubdir, writeSecure, type Profile } from './profile.js';
+import { peersEntryProblem, peersFilesFor, peersMessage, type PeersFile } from './peers-guard.js';
+
+export { peersEntryProblem, peersFilesFor, peersMessage, PEERS_ENTRY_MESSAGE, PEERS_UNREADABLE_MESSAGE, type PeersFile } from './peers-guard.js';
 import { delIfPresent, getJson, listAll, putCreate } from './store.js';
 import { verifyEmailProof as verifyReal, type VerifyEmailProofInput, type VerifyEmailProofResult } from './verify-email-proof.js';
 
@@ -42,7 +45,7 @@ export interface InviteRecord {
   status: InviteStatus;
   /** Public record directory, resolved from --invites-public-dir or the env at create. Unset means no public copy. */
   publicDir?: string;
-  held?: { reason: string; at: string };
+  held?: { reason: string; at: string; owner?: string; courierDid?: string };
   /** Artifact C, persisted before the Welcome write so a retried approve reuses it instead of pairing again. */
   artifactC?: Welcome['artifactC'];
   completedPeer?: { handle: string; courierDid: string; ownerDid: string };
@@ -103,10 +106,19 @@ export function reasonOf(e: unknown): string {
   return typeof code === 'string' && /^[A-Za-z0-9_-]{1,40}$/.test(code) ? code : 'handler-error';
 }
 
-/** Public copy update that throws on failure. Only status and completedPeer are patched; create-time fields stay as written at create. */
+/** The held facts the public copy shows: why the invite is held and the owner DID of the hello that actually arrived. Only while held. */
+function heldFacts(record: InviteRecord): { heldReason: HeldReason; helloOwner: string } | undefined {
+  if (record.status !== 'held') return undefined;
+  const owner = record.held?.owner ?? readHeld(record.inviteId)?.artifactB.from.owner;
+  if (owner === undefined) return undefined;
+  return { heldReason: publicHeldReason(record.held?.reason ?? 'internal-error'), helloOwner: owner };
+}
+
+/** Public copy update that throws on failure. Only status, completedPeer and the held facts are patched; create-time fields stay as written at create. */
 export function writePublicStatus(record: InviteRecord): void {
   if (record.publicDir === undefined) return;
-  const patch: Partial<Pick<PublicInvite, 'status' | 'completedPeer'>> = { status: record.status };
+  const facts = heldFacts(record);
+  const patch: Parameters<typeof updatePublicInvite>[2] = { status: record.status, heldReason: facts?.heldReason, helloOwner: facts?.helloOwner };
   if (record.completedPeer !== undefined) patch.completedPeer = record.completedPeer;
   updatePublicInvite(record.publicDir, record.inviteId, patch);
 }
@@ -119,77 +131,6 @@ export function publishStatus(record: InviteRecord, log: Log): void {
     log({ event: 'public-write-failed', inviteId: record.inviteId, reason: reasonOf(e) });
   }
 }
-
-/** A peers.json location. `required` files (set explicitly) that are missing refuse; the default locations may be absent. */
-export interface PeersFile {
-  path: string;
-  required: boolean;
-}
-
-/**
- * The peers.json location the owner named: `--peers-file` wins over `COURIER_PEERS_FILE`. Either must be a non-empty absolute path to a file that
- * exists; anything else is an error, never ignored (a service forwards a relative path unchanged and it would resolve against its own directory).
- * Courier has no stored setting for this: the profile's stored settings are written only by `init`.
- */
-function explicitPeersFile(flag: string | undefined): PeersFile | undefined {
-  const source = flag !== undefined ? '--peers-file' : 'COURIER_PEERS_FILE';
-  const value = flag ?? process.env.COURIER_PEERS_FILE;
-  if (value === undefined) return undefined;
-  if (value === '' || (flag !== undefined && value === 'true')) fail('usage', `${source} needs a path.`);
-  // A control character (a newline above all) would split a line of the systemd unit this path is written into.
-  if (/[\u0000-\u001f\u007f]/.test(value)) fail('usage', `${source} must not contain control characters.`);
-  if (!path.isAbsolute(value)) fail('usage', `${source} must be an absolute path (got "${value}").`);
-  if (!fs.existsSync(value)) fail('peers-unreadable', `${source} names a file that does not exist: ${value}`);
-  return { path: value, required: true };
-}
-
-/**
- * Where the box owner's peers.json may live: the explicit file (flag, else `COURIER_PEERS_FILE`) plus the intake and outbox defaults under COURIER_HOME.
- * peers.json is keyed by handle and carries the trust tier, so Courier never pairs over a handle that has an entry there.
- */
-export function peersFilesFor(flag?: string): PeersFile[] {
-  const home = profileDir();
-  const explicit = explicitPeersFile(flag);
-  return [
-    ...(explicit ? [explicit] : []),
-    { path: path.join(home, 'peers.json'), required: false },
-    { path: path.join(home, 'intake', 'peers.json'), required: false },
-  ];
-}
-
-/**
- * `peers-entry-exists` when any peers file has an entry for `handle`; `peers-unreadable` when a file exists but cannot be read as a JSON object,
- * or a required file is missing (fail closed: an unreadable file may hide an entry). A missing optional file is no entry. Reads only; never writes the file.
- * A plain string is an optional location.
- */
-export function peersEntryProblem(handle: string, files: readonly (string | PeersFile)[]): 'peers-entry-exists' | 'peers-unreadable' | undefined {
-  for (const entry of files) {
-    const { path: file, required } = typeof entry === 'string' ? { path: entry, required: false } : entry;
-    let text: string;
-    try {
-      text = fs.readFileSync(file, 'utf8');
-    } catch (e) {
-      const code = (e as NodeJS.ErrnoException).code;
-      if (!required && (code === 'ENOENT' || code === 'ENOTDIR')) continue;
-      return 'peers-unreadable';
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      return 'peers-unreadable';
-    }
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return 'peers-unreadable';
-    if (Object.hasOwn(parsed, handle)) return 'peers-entry-exists';
-  }
-  return undefined;
-}
-
-export const PEERS_ENTRY_MESSAGE = 'The peers file already lists this handle, so its trust setting would carry over to the new peer. Remove the entry (or use another handle) and try again.';
-export const PEERS_UNREADABLE_MESSAGE = 'A peers file is missing or cannot be read as a JSON object, so Courier cannot tell whether this handle is listed. Fix the file, or the --peers-file / COURIER_PEERS_FILE path, and try again.';
-
-/** The message for a peers-guard code. */
-export const peersMessage = (code: 'peers-entry-exists' | 'peers-unreadable'): string => (code === 'peers-entry-exists' ? PEERS_ENTRY_MESSAGE : PEERS_UNREADABLE_MESSAGE);
 
 export interface InviteEnv {
   node: TinyCloudNode;
@@ -311,7 +252,7 @@ export class InviteWatcher {
         this.env.log({ event: 'public-reconcile-failed', inviteId: record.inviteId, reason: 'public-record-missing' });
         return;
       }
-      if (pub.status === record.status && peerKey(pub.completedPeer) === peerKey(record.completedPeer)) return;
+      if (pub.status === record.status && peerKey(pub.completedPeer) === peerKey(record.completedPeer) && pub.heldReason === heldFacts(record)?.heldReason && pub.helloOwner === heldFacts(record)?.helloOwner) return;
       writePublicStatus(record);
       this.env.log({ event: 'public-reconciled', inviteId: record.inviteId });
     } catch (e) {
@@ -471,7 +412,7 @@ export class InviteWatcher {
       writeSecure(heldPath(record.inviteId), hello);
       await delIfPresent(this.env.node.kv, `${inviteFolder(record.inviteId)}in/hello.json`);
       record.status = 'held';
-      record.held = { reason, at: this.now().toISOString() };
+      record.held = { reason, at: this.now().toISOString(), owner: hello.artifactB.from.owner, courierDid: hello.artifactB.from.courier };
       writeRecord(record);
     } catch (e) {
       this.env.log({ event: 'invite-error', inviteId: record.inviteId, reason: reasonOf(e) });
@@ -487,6 +428,24 @@ export class InviteWatcher {
     const record = await this.heldRecord(id);
     const hello = readHeld(id);
     if (!hello) fail('invite-not-held', 'Held hello is missing; nothing to approve.');
+    return this.pairHeld(record, hello, tier);
+  }
+
+  /**
+   * The approval the owner's command uses: `owner` is the owner the human says they mean to pair, and it must be the owner of the hello that is
+   * actually held (`owner-mismatch` otherwise; nothing is paired or changed). The hello that is paired is the one that was checked.
+   */
+  async approveHeld(id: string, owner: string, tier?: AcceptedTier): Promise<AcceptedTier> {
+    const record = await this.heldRecord(id);
+    const hello = readHeld(id);
+    if (!hello) fail('invite-not-held', 'Held hello is missing; nothing to approve.');
+    if (!ownerConfirms(owner, hello.artifactB.from.owner)) {
+      fail('owner-mismatch', 'The owner you gave is not the owner of the hello that is held; nothing was paired. Run the command again with the owner shown for this invite.');
+    }
+    return this.pairHeld(record, hello, tier);
+  }
+
+  private async pairHeld(record: InviteRecord, hello: Hello, tier: AcceptedTier | undefined): Promise<AcceptedTier> {
     const peersProblem = peersEntryProblem(record.handle, this.env.peersFiles ?? peersFilesFor());
     if (peersProblem !== undefined) fail(peersProblem, `${peersMessage(peersProblem)} The invite stays held.`);
     if (tier !== undefined) record.tier = tier;
@@ -598,4 +557,50 @@ export class InviteWatcher {
 
 function inviteFacts(record: InviteRecord, hello: Hello, reason: string): NonNullable<Notice['invite']> {
   return { id: record.inviteId, handle: record.handle, label: hello.claimedLabel, owner: hello.artifactB.from.owner, courierDid: hello.artifactB.from.courier, reason, tier: record.tier };
+}
+
+const BARE_ADDRESS = /^0x[a-fA-F0-9]{40}$/;
+const OWNER_DID_ADDRESS = /^did:pkh:eip155:\d+:(0x[a-fA-F0-9]{40})$/;
+
+/** True when `given` (an owner DID, or a bare 0x address) names the owner `helloOwner` of the hello that is held. Nothing else matches. */
+export function ownerConfirms(given: string, helloOwner: string): boolean {
+  if (BARE_ADDRESS.test(given)) return OWNER_DID_ADDRESS.exec(helloOwner)?.[1]?.toLowerCase() === given.toLowerCase();
+  return ownerMatches(given, helloOwner);
+}
+
+/** What the owner must see before a held invite is paired: who actually knocked, why it was held, and who was expected. */
+export interface HeldFacts {
+  inviteId: string;
+  handle: string;
+  reason: string;
+  expectOwner: string | null;
+  owner: string;
+  courierDid: string;
+  claimedLabel: string;
+}
+
+/** Reads the held invite and its hello from local files (no network). `invite-not-held` when the invite is not held or its hello is gone. */
+export function describeHeld(id: string): HeldFacts {
+  const record = readRecord(id);
+  if (!record || record.status !== 'held') fail('invite-not-held', 'Invite is not held; only held invites take a decision.');
+  const hello = readHeld(id);
+  if (!hello) fail('invite-not-held', 'Held hello is missing; nothing to approve.');
+  return {
+    inviteId: id,
+    handle: record.handle,
+    reason: record.held?.reason ?? 'unknown',
+    expectOwner: record.expectOwner ?? null,
+    owner: hello.artifactB.from.owner,
+    courierDid: hello.artifactB.from.courier,
+    claimedLabel: hello.claimedLabel,
+  };
+}
+
+export function heldFactsText(facts: HeldFacts): string {
+  return [
+    `Invite ${facts.inviteId} for handle "${facts.handle}" is held (${facts.reason}).`,
+    `  The hello that arrived is from owner ${facts.owner}, courier ${facts.courierDid}.`,
+    `  Name it claims (not verified): ${facts.claimedLabel}`,
+    `  Owner this invite expected: ${facts.expectOwner ?? 'any (no --expect-owner was set)'}`,
+  ].join('\n');
 }

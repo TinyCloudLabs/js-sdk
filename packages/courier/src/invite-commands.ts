@@ -21,7 +21,8 @@ import { cmd } from './program.js';
 import { credentialDigest, oneTimeKeyHash, signPossession, verifyPossession } from './possession.js';
 import { loadKey, saveProfile, secureSubdir, writeSecure, type Profile } from './profile.js';
 import { delIfPresent, getJson, putCreate } from './store.js';
-import { InviteWatcher, peersMessage, eventLog, listRecords, peersEntryProblem, peersFilesFor, readJson, readRecord, reasonOf, recordPath, requestedTier, writeRecord, type AcceptedTier, type InviteRecord, type PeersFile } from './invite-watch.js';
+import { assertNoPeersEntry } from './peers-guard.js';
+import { InviteWatcher, describeHeld, heldFactsText, ownerConfirms, peersMessage, eventLog, listRecords, peersEntryProblem, peersFilesFor, readJson, readRecord, reasonOf, recordPath, requestedTier, writeRecord, type AcceptedTier, type InviteRecord, type PeersFile } from './invite-watch.js';
 import { isRecord } from './a2a.js';
 import { jsonLineLog } from './wake.js';
 
@@ -45,6 +46,13 @@ interface JoinState {
   /** Stable code of the first Welcome that arrived in `hello-unconfirmed` and did not verify for this courier. Never message text. */
   welcomeFailure?: string;
 }
+
+/** Printed by `invite` above the string, and repeated in the README. Tests pin these lines. */
+export const INVITE_GUIDANCE: readonly string[] = [
+  'Send this string to the invitee. It is a bearer link: keep it private until revoked or expired.',
+  'Send it by a different channel than the invited email address. If it goes by email, add --also-ask or --expect-owner so a mailbox alone cannot pair.',
+  'Anyone who holds the link can read the invitee address and your owner address, space and handles until it expires.',
+];
 
 const inviteUsage = () => `Usage: ${cmd('invite <handle> --email <address> [--tier strict|trusted] [--expect-owner <did>] [--ttl 24h] [--call-me <handle>] [--also-ask] [--invites-public-dir d] [--peers-file f]')}`;
 
@@ -238,7 +246,7 @@ async function inviteCreate(args: ParsedArgs): Promise<void> {
       }
     }
     console.log(`Invite for ${expectEmail} as "${handle}" (requested tier ${tier}; the peer starts strict until you confirm), expires ${expiresAt.toISOString()}.`);
-    console.log('Send this string to the invitee. It is a bearer link: keep it private until revoked or expired.');
+    for (const line of INVITE_GUIDANCE) console.log(line);
     console.log(formatInviteString({ id: uploaded.id, key: seal.key, cid: uploaded.cid }));
   } catch (e) {
     if (recordWritten) fs.rmSync(recordPath(inviteId), { force: true });
@@ -284,14 +292,26 @@ export function inviteWatcher(profile: Profile, node: TinyCloudNode, peersFiles?
   return new InviteWatcher({ node, profile: () => profile, log: eventLog(jsonLineLog((line) => process.stderr.write(line))), ...(peersFiles ? { peersFiles } : {}) });
 }
 
-/** `trusted` is recorded as a request for you to decide on. It does not grant trust; the peer starts strict. */
+/**
+ * `trusted` is recorded as a request for you to decide on. It does not grant trust; the peer starts strict.
+ * Before anything is paired the hello that is actually held is shown (its owner and courier DID, why it is held), and `--owner` must name that owner.
+ */
 async function inviteApprove(args: ParsedArgs): Promise<void> {
-  const inviteId = requireInviteId(args.positional[1], `Usage: ${cmd('invite approve <invite-id> [--tier strict|trusted] [--peers-file f]')}`);
+  const inviteId = requireInviteId(args.positional[1], `Usage: ${cmd('invite approve <invite-id> [--tier strict|trusted] [--peers-file f] --owner <did>')}`);
   const flag = args.get('tier');
   const tier = flag === undefined ? undefined : requestedTier(flag);
+  const facts = describeHeld(inviteId);
+  console.log(heldFactsText(facts));
+  const owner = args.get('owner');
+  if (owner === undefined || owner === 'true' || owner === '') {
+    fail('usage', `Nothing was paired. Check that the owner above is the one you mean to pair, then run: ${cmd(`invite approve ${inviteId} --owner <that owner>`)}`);
+  }
+  if (!ownerConfirms(owner, facts.owner)) {
+    fail('owner-mismatch', 'The owner you gave is not the owner of the hello that is held; nothing was paired. Run the command again with the owner shown above.');
+  }
   const peersFiles = peersFilesFor(args.get('peers-file'));
   const { profile, node } = await ctx();
-  const approved = await inviteWatcher(profile, node, peersFiles).approve(inviteId, tier);
+  const approved = await inviteWatcher(profile, node, peersFiles).approveHeld(inviteId, owner, tier);
   console.log(approveSummary(inviteId, approved));
 }
 
@@ -346,6 +366,7 @@ function checkBlob(profile: Profile, blob: InviteBlob): void {
 }
 
 async function joinStart(args: ParsedArgs, input: string): Promise<void> {
+  const peersFiles = peersFilesFor(args.get('peers-file'));
   const { profile, node } = await ctx();
   const parts = parseInviteString(input);
   const credentials = credentialSourceFromArgs(args);
@@ -356,7 +377,7 @@ async function joinStart(args: ParsedArgs, input: string): Promise<void> {
   if (readJoin(blob.inviteId)) {
     fail('join-exists', `A join for this invite is already pending; run \`${cmd(`join --resume ${blob.inviteId}`)}\`.`);
   }
-  claimCallMe(profile, blob);
+  claimCallMe(profile, blob, peersFiles);
 
   const credential = credentials
     ? await credentials.getEmailProof(blob.expectEmail, { courierDid: profile.courierDid, inviteId: blob.inviteId })
@@ -464,7 +485,9 @@ function possessionFor(blob: InviteBlob, holderDid: string, credential: string, 
  * earlier failed join left behind: the new invite replaces it and drops that join's state. A paired peer, or any other peer under the handle, still blocks.
  * The earlier join's outgoing read grant is no longer tracked and ends at its own expiry (at most 7 days).
  */
-export function claimCallMe(profile: Profile, blob: InviteBlob): void {
+export function claimCallMe(profile: Profile, blob: InviteBlob, peersFiles: readonly PeersFile[] = peersFilesFor()): void {
+  // The inviter picked this handle. A peers file that lists it would hand its trust setting to the new peer, so nothing is created.
+  assertNoPeersEntry(blob.artifactA.callMe, peersFiles);
   const leftover = profile.peers[blob.artifactA.callMe];
   if (!leftover) return;
   const sameInviter = leftover.status === 'awaiting-C' && leftover.courierDid === blob.artifactA.from.courier && leftover.ownerDid === blob.artifactA.from.owner;

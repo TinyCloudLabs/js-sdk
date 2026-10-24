@@ -10,6 +10,21 @@ import { CourierError } from './errors.js';
 export const PUBLIC_INVITE_STATUSES = ['open', 'consumed', 'held', 'completed', 'failed', 'denied', 'revoked', 'expired'] as const;
 export type PublicInviteStatus = (typeof PUBLIC_INVITE_STATUSES)[number];
 
+/**
+ * Why an invite is held, as the gate may show it. A small closed set: the verifier's reason codes plus the watcher's own. Never free text.
+ * `publicHeldReason` maps anything else to `internal-error`.
+ */
+export const HELD_REASONS = [
+  'no-credential', 'no-possession', 'bad-format', 'issuer-not-pinned', 'descriptor-mismatch', 'from-the-future', 'expired', 'too-old',
+  'address-mismatch', 'bad-signature', 'holder-mismatch', 'bad-possession', 'replayed',
+  'owner-mismatch', 'peers-entry-exists', 'peers-unreadable', 'also-ask', 'internal-error',
+] as const;
+export type HeldReason = (typeof HELD_REASONS)[number];
+
+export function publicHeldReason(reason: string): HeldReason {
+  return (HELD_REASONS as readonly string[]).includes(reason) ? (reason as HeldReason) : 'internal-error';
+}
+
 export interface PublicInvite {
   v: 1;
   inviteId: string;
@@ -22,12 +37,18 @@ export interface PublicInvite {
   expiresAt: string;
   status: PublicInviteStatus;
   completedPeer: null | { handle: string; courierDid: string; ownerDid: string };
+  /** Present only while the invite is held, and only together with `helloOwner`: why it is held. */
+  heldReason?: HeldReason;
+  /** Present only while the invite is held: the owner DID (bare) of the hello that actually arrived. May differ from `expectOwner`. */
+  helloOwner?: string;
 }
 
 const FIELDS = ['v', 'inviteId', 'handle', 'expectEmail', 'expectOwner', 'tier', 'createdAt', 'expiresAt', 'status', 'completedPeer'] as const;
-const PATCHABLE = ['status', 'completedPeer'] as const;
+const HELD_FIELDS = ['heldReason', 'helloOwner'] as const;
+const PATCHABLE = ['status', 'completedPeer', ...HELD_FIELDS] as const;
 const PEER_FIELDS = ['handle', 'courierDid', 'ownerDid'] as const;
 const INVITE_ID = /^[a-z2-7]{26}$/;
+const OWNER_DID = /^did:pkh:eip155:\d+:0x[a-fA-F0-9]{40}$/;
 const FILE_MODE = 0o640;
 const DIR_MODE = 0o750;
 
@@ -43,7 +64,7 @@ function refused(message: string): never {
 function checkRecord(record: unknown): PublicInvite {
   if (typeof record !== 'object' || record === null || Array.isArray(record)) invalid('record must be an object');
   const given = Object.keys(record);
-  const extra = given.filter((k) => !(FIELDS as readonly string[]).includes(k));
+  const extra = given.filter((k) => !(FIELDS as readonly string[]).includes(k) && !(HELD_FIELDS as readonly string[]).includes(k));
   if (extra.length > 0) invalid(`unexpected fields ${extra.join(', ')}`);
   const missing = FIELDS.filter((k) => !given.includes(k));
   if (missing.length > 0) invalid(`missing fields ${missing.join(', ')}`);
@@ -64,9 +85,17 @@ function checkRecord(record: unknown): PublicInvite {
       invalid(`completedPeer must have exactly ${PEER_FIELDS.join(', ')} as strings`);
     }
   }
+  const heldGiven = HELD_FIELDS.filter((k) => given.includes(k));
+  if (heldGiven.length > 0) {
+    if (heldGiven.length !== HELD_FIELDS.length) invalid('heldReason and helloOwner must be given together');
+    if (r.status !== 'held') invalid('heldReason and helloOwner belong to a held invite only');
+    if (!(HELD_REASONS as readonly unknown[]).includes(r.heldReason)) invalid(`heldReason must be one of ${HELD_REASONS.join(', ')}`);
+    if (typeof r.helloOwner !== 'string' || !OWNER_DID.test(r.helloOwner)) invalid('helloOwner must be a did:pkh:eip155 DID');
+  }
 
   const out: Record<string, unknown> = {};
   for (const k of FIELDS) out[k] = r[k];
+  if (heldGiven.length > 0) for (const k of HELD_FIELDS) out[k] = r[k];
   return out as unknown as PublicInvite;
 }
 
@@ -148,22 +177,25 @@ export function writePublicInvite(dir: string, record: PublicInvite): void {
 }
 
 /** Changes only `status` and/or `completedPeer` on an existing public record, atomically. */
-export function updatePublicInvite(dir: string, inviteId: string, patch: Partial<Pick<PublicInvite, 'status' | 'completedPeer'>>): void {
+export function updatePublicInvite(dir: string, inviteId: string, patch: { [K in (typeof PATCHABLE)[number]]?: PublicInvite[K] | undefined }): void {
   const extra = Object.keys(patch).filter((k) => !(PATCHABLE as readonly string[]).includes(k));
-  if (extra.length > 0) invalid(`patch may set only status and completedPeer (got ${extra.join(', ')})`);
+  if (extra.length > 0) invalid(`patch may set only status and completedPeer or the held facts (got ${extra.join(', ')})`);
   const file = publicFile(dir, inviteId);
   plainDir(dir);
   plainFileOrAbsent(file);
   if (!fs.existsSync(file)) refused(`no public record for invite ${inviteId} in ${dir}`);
   const current = JSON.parse(fs.readFileSync(file, 'utf8')) as unknown;
-  writePublicInvite(dir, { ...(current as PublicInvite), ...patch });
+  // A held field patched to undefined is removed.
+  const merged: Record<string, unknown> = { ...(current as PublicInvite), ...patch };
+  for (const k of Object.keys(merged)) if (merged[k] === undefined) delete merged[k];
+  writePublicInvite(dir, merged as unknown as PublicInvite);
 }
 
-/** Reads `status` and `completedPeer` from an existing public record. Undefined when the file is absent. */
-export function readPublicStatus(dir: string, inviteId: string): Pick<PublicInvite, 'status' | 'completedPeer'> | undefined {
+/** Reads `status`, `completedPeer` and the held facts from an existing public record. Undefined when the file is absent. */
+export function readPublicStatus(dir: string, inviteId: string): Pick<PublicInvite, 'status' | 'completedPeer' | 'heldReason' | 'helloOwner'> | undefined {
   const file = publicFile(dir, inviteId);
   plainFileOrAbsent(file);
   if (!fs.existsSync(file)) return undefined;
   const clean = checkRecord(JSON.parse(fs.readFileSync(file, 'utf8')) as unknown as PublicInvite);
-  return { status: clean.status, completedPeer: clean.completedPeer };
+  return { status: clean.status, completedPeer: clean.completedPeer, heldReason: clean.heldReason, helloOwner: clean.helloOwner };
 }

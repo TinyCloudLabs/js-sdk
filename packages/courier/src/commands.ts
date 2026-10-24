@@ -26,6 +26,7 @@ import {
 import { commitReceipts, collectInbound, renderInboxText, writeOut } from './inbox.js';
 import { getJson, listAll, putCreate, putMatch, del } from './store.js';
 import { DEFAULT_ORDERS } from './orders.js';
+import { assertNoPeersEntry, peersFilesFor } from './peers-guard.js';
 import { HANDLE, requestFields, requestIds, requestShapeProblem, requestText } from './request.js';
 import { requestHash } from './canonical.js';
 import { targetHelp } from './guard/target.js';
@@ -185,8 +186,10 @@ export async function cmdPair(args: ParsedArgs) {
 }
 
 async function pairStart(args: ParsedArgs) {
-  const { profile } = await ctx();
   const peerHandle = args.positional[1] ?? fail('usage', `Usage: ${cmd('pair start <peer> [--call-me <handle>]')}`);
+  // Before anything is read or created: a peers file that lists this handle would hand its trust setting to the new peer.
+  if (HANDLE.test(peerHandle)) assertNoPeersEntry(peerHandle, peersFilesFor(args.get('peers-file')));
+  const { profile } = await ctx();
   const callMe = args.get('call-me') ?? profile.selfHandle ?? peerHandle;
   if (!HANDLE.test(peerHandle) || !HANDLE.test(callMe)) fail('usage', `Handles are letters, digits, "-" or "_", not starting with "_" (got "${peerHandle}" / "${callMe}").`);
   if (profile.peers[peerHandle]?.status === 'paired') fail('usage', `Already paired with ${peerHandle}.`);
@@ -234,12 +237,16 @@ async function validatePeerDelegation(node: TinyCloudNode, profile: Profile, pee
 }
 
 async function pairAccept(args: ParsedArgs) {
-  const { profile, node } = await ctx();
   const art = parseArtifact(readArtifactArg(args));
   validateArtifactIdentity(art);
+  // A step that creates a peer or a grant for a handle first checks that no peers file already lists it (step C only completes a pairing that exists).
+  // The check comes before the profile and the node are touched, so a refusal writes nothing.
+  const handle = art.step === 'B' ? args.get('as') ?? art.callMe : art.callMe;
+  if (art.step !== 'C') assertNoPeersEntry(handle, peersFilesFor(args.get('peers-file')));
+  const { profile, node } = await ctx();
   if (art.from.owner === profile.ownerDid || art.from.courier === profile.courierDid) fail('bad-artifact', 'Refusing to pair with this agent identity.');
   if (art.step === 'A') return printJson(await acceptA(profile, node, art));
-  if (art.step === 'B') return printJson(await acceptB(profile, node, art, args.get('as') ?? art.callMe));
+  if (art.step === 'B') return printJson(await acceptB(profile, node, art, handle));
   printJson(await acceptC(profile, node, art));
 }
 

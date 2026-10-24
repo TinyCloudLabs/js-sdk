@@ -26,8 +26,9 @@ Setup & pairing (humans run these):
                                    Create/renew the agent key's restricted grant in OpenKey.
                                    --paste and --grant-file also take an OpenKey XXXX-XXXX code.
   manifest                         Print the agent grant permissions
-  pair start <peer> [--call-me h]  Emit pairing artifact A (paste to the peer)
-  pair accept <json|--file f|--stdin>
+  pair start <peer> [--call-me h] [--peers-file f]
+                                   Emit pairing artifact A (paste to the peer)
+  pair accept <json|--file f|--stdin> [--peers-file f]
                                    Accept artifact A, B or C; prints B or C to pass on
   pair renew [peer] [--force]      Renew peer delegations; humans or watcher only
   revoke <peer>                    Stop renewing + drop the peer (access lapses at delegation expiry)
@@ -36,14 +37,16 @@ Setup & pairing (humans run these):
                                    (flag or COURIER_INVITES_PUBLIC_DIR) also writes a non-secret copy of the record there
                                    --tier trusted  request trusted status; the peer starts as strict until you confirm
   invite list                      Invites on this machine: status and expiry, no secrets
-  invite approve <invite-id> [--tier strict|trusted] [--peers-file f]
-                                   Pair a held invite. The peer starts as strict until you confirm trusted status;
+  invite approve <invite-id> [--tier strict|trusted] [--peers-file f] --owner <did>
+                                   Pair a held invite. It first shows the owner and courier of the hello that is held and why;
+                                   --owner must name that owner (a did:pkh DID or its 0x address), otherwise nothing is paired.
+                                   The peer starts as strict until you confirm trusted status;
                                    --tier trusted only records that request for you to decide on
   invite deny <invite-id>          Refuse a held invite: the invitee is told it was rejected and gets no access
   invite revoke <invite-id>        Delete the sealed invite and any pending hello or welcome
   join --stdin | --file f          Accept an invite read from stdin or a file, then send hello; waits for the reply
                                    Prefer --stdin or --file: an invite passed as an argument is visible in ps.
-  join <invite-string> [--credential-file f | --credential-stdin]
+  join <invite-string> [--credential-file f | --credential-stdin] [--peers-file f]
                                    Same as above with the invite on the command line
   join --resume [invite-id]        Resume a pending join; id may be omitted when only one is pending
 

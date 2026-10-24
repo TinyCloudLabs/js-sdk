@@ -119,6 +119,19 @@ tc courier join --resume
 
 - `invite <handle>` prints the string once. `--call-me` sets the name the
   invitee uses for the owner; it defaults to the owner's handle.
+- Send the link by a different channel than the invited email address. If it
+  goes by email, add `--also-ask` (you approve each hello) or `--expect-owner`
+  (the invitee's account must match), so one mailbox alone cannot pair.
+  Anyone who holds the link can read the invitee address and your owner
+  address, space and handles until it expires.
+- `invite approve <invite-id> --owner <did>` first prints the owner and courier
+  of the hello that is held and why it is held; `--owner` (a `did:pkh` DID or
+  its `0x` address) must name that owner, otherwise it stops with
+  `owner-mismatch` and pairs nothing. The public record of a held invite carries
+  `heldReason` and `helloOwner` for the gate.
+- `pair start`, `pair accept` and `join` also refuse a handle that a peers file
+  lists (`peers-entry-exists`, or `peers-unreadable`), before creating a peer or
+  a grant; the same `--peers-file` / `COURIER_PEERS_FILE` / defaults apply.
 - `--tier` is the requested tier. `--tier trusted` asks for trusted status; the
   paired peer starts strict until you confirm trusted by hand. Self-service
   invites never create a trusted peer.
