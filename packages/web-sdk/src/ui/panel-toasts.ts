@@ -3,7 +3,8 @@
  * every toast in the shared store (icon, 44px dismiss, 7 s) and the receipt
  * slips that sections raise, in the host layer above the panel. The eager
  * toasts part keeps its own stack and shows the toasts that appear before this
- * chunk loads; this region hides that stack so a toast is never drawn twice.
+ * chunk loads; mounting this region removes that stack, so a toast is never
+ * drawn twice and the page holds one set of toast elements.
  */
 import { icon, type IconName } from "./sections/ui";
 import { panelText, type PanelStringKey } from "./strings-panel";
@@ -36,7 +37,6 @@ const RECEIPT_MS = 7000;
 const MAX_RECEIPTS = 3;
 
 export const TOAST_REGION_CSS = `
-.toasts{display:none}
 .tstack{position:fixed;bottom:calc(var(--b) + 56px);display:flex;flex-direction:column;gap:10px;width:min(400px,calc(100vw - 24px));pointer-events:none}
 .layer[data-position="bottom-right"] .tstack{right:var(--tinycloud-ui-offset-inline,12px)}
 .layer[data-position="bottom-left"] .tstack{left:var(--tinycloud-ui-offset-inline,12px)}
@@ -50,7 +50,7 @@ export const TOAST_REGION_CSS = `
 .tstack .toast{display:flex;align-items:flex-start;gap:12px;box-sizing:border-box;padding:14px 8px 14px 16px;border:0;border-radius:16px;background:#fff;color:#111827;box-shadow:0 12px 32px -8px rgba(0,0,0,.3),0 0 0 1px #a1a1aa;pointer-events:auto;animation:tc-toast-in .45s cubic-bezier(.22,1,.36,1)}
 .tstack .toast__icon{display:inline-flex;flex:none;margin-top:12px}
 .tstack .toast__icon .ui-ic{width:20px;height:20px}
-.tstack .toast__message{flex:1;min-width:0;padding-top:12px;overflow-wrap:anywhere}
+.tstack .toast__body{flex:1;min-width:0;padding-top:12px;overflow-wrap:anywhere}
 .tstack .toast__title{display:block;font-weight:700}
 .tstack .toast a,.tstack .toast__copy{display:inline-flex;align-items:center;min-height:44px;margin-top:2px;padding:0;border:0;background:transparent;color:inherit;font:inherit;font-weight:700;text-decoration:underline;text-underline-offset:3px;white-space:nowrap;cursor:pointer}
 .tstack .toast__close{display:inline-flex;align-items:center;justify-content:center;flex:none;box-sizing:border-box;width:44px;height:44px;padding:0;border:0;border-radius:50%;background:transparent;color:inherit;cursor:pointer}
@@ -58,7 +58,7 @@ export const TOAST_REGION_CSS = `
 .tstack .slip{margin-top:8px;padding:8px 0;border-top:2px dashed #71717a;border-bottom:2px dashed #71717a;font:12px/1.7 ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;overflow-wrap:anywhere}
 .tstack .slip>div{display:block}
 .toast a:focus-visible,.toast__close:focus-visible,.toast__copy:focus-visible{outline:2px solid #111827;outline-offset:2px;box-shadow:0 0 0 6px #fafafa}
-@keyframes tc-toast-in{from{opacity:0;transform:translateY(14px) scale(.98)}}
+@keyframes tc-toast-in{from{opacity:0;transform:translateY(14px)}}
 @media (prefers-reduced-motion:reduce){
 .tstack .toast{animation:none}
 }
@@ -78,17 +78,20 @@ function closeButton(onDismiss: () => void): HTMLButtonElement {
   return close;
 }
 
-function toastShell(kind: ToastKind): { el: HTMLElement; message: HTMLElement } {
+function toastShell(kind: ToastKind): { el: HTMLElement; body: HTMLElement; message: HTMLElement } {
   const el = document.createElement("div");
   el.className = `toast toast--${kind}`;
   el.setAttribute("role", kind === "error" ? "alert" : "status");
   const mark = document.createElement("span");
   mark.className = "toast__icon";
   mark.append(icon(KIND_ICON[kind]));
+  const body = document.createElement("div");
+  body.className = "toast__body";
   const message = document.createElement("div");
   message.className = "toast__message";
-  el.append(mark, message);
-  return { el, message };
+  body.append(message);
+  el.append(mark, body);
+  return { el, body, message };
 }
 
 /**
@@ -105,13 +108,14 @@ export function mountToastRegion(
   const receipts = document.createElement("div");
   const storeItems = document.createElement("div");
   stack.append(receipts, storeItems);
+  layer.querySelector(":scope > .toasts")?.remove();
   layer.append(stack);
 
   const shown = new Map<string, HTMLElement>();
   const hovered = new Set<string>();
 
   function buildStoreToast(view: ToastView): HTMLElement {
-    const { el, message } = toastShell(view.kind);
+    const { el, body, message } = toastShell(view.kind);
     message.textContent = panelText(view.textCode);
     if (view.href !== undefined && view.hrefLabelCode !== undefined) {
       const link = document.createElement("a");
@@ -119,7 +123,7 @@ export function mountToastRegion(
       link.target = "_blank";
       link.rel = "noopener noreferrer";
       link.textContent = panelText(view.hrefLabelCode);
-      message.append(document.createElement("br"), link);
+      body.append(link);
     }
     el.append(closeButton(() => store.dismiss(view.id)));
     // Hover holds every timer; the hold is released on leave or removal.
@@ -195,7 +199,7 @@ export function mountToastRegion(
     receipt(request) {
       const key = request.rows.map((row) => `${row.labelCode}=${row.value}`).join("\n");
       if (slips.some((slip) => slip.key === key)) return false;
-      const { el, message } = toastShell("success");
+      const { el, body, message } = toastShell("success");
       const title = document.createElement("b");
       title.className = "toast__title";
       title.textContent = panelText(request.titleCode);
@@ -213,7 +217,7 @@ export function mountToastRegion(
       copy.className = "toast__copy";
       copy.textContent = panelText("toast.copy_receipt");
       copy.addEventListener("click", () => void copyReceipt(request.rows));
-      message.append(slip, copy);
+      body.append(slip, copy);
 
       const entry: Slip = { key, el, timer: undefined, remaining: RECEIPT_MS, startedAt: 0 };
       el.append(closeButton(() => drop(entry)));

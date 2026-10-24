@@ -93,6 +93,21 @@ w.__tc = {
   dismiss(id: string) {
     toastStore.dismiss(id);
   },
+  // A receipt slip in the host layer, the way a section raises one. No section does yet, so the spec drives the region directly.
+  async showReceipt() {
+    const layer = document.querySelector("[data-tinycloud-ui]")?.shadowRoot?.querySelector<HTMLElement>(".layer");
+    if (!layer) return false;
+    const { mountToastRegion } = await import("../../src/ui/panel-toasts");
+    const { createToastStore } = await import("../../src/ui/toast-store");
+    return mountToastRegion(layer, createToastStore(), (request) => toastStore.push(request)).receipt({
+      titleCode: "panel.title",
+      bodyCode: "panel.title",
+      rows: [
+        { labelCode: "panel.close", value: "rcpt_EXAMPLE_a1b2" },
+        { labelCode: "panel.back", value: "bafkreiEXAMPLE" },
+      ],
+    });
+  },
   // Sets the sync state the panel renders from, so a spec can reach states the stub facade never produces.
   setSync(next: SyncState) {
     emit(next);

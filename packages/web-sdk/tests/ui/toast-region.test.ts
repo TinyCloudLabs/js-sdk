@@ -63,6 +63,32 @@ const RECEIPT = {
 } as const;
 
 describe("toast region", () => {
+  test("mounting takes over from the launcher stack, so each toast is in the page once", () => {
+    const layer = document.createElement("div");
+    document.body.append(layer);
+    const eager = document.createElement("div");
+    eager.className = "toasts";
+    layer.append(eager);
+    const store = createToastStore();
+    const region = mountToastRegion(layer, store, () => null);
+    store.push({ kind: "info", textCode: "panel.title" });
+    expect(layer.querySelector(".toasts")).toBeNull();
+    expect(layer.querySelectorAll(".toast").length).toBe(1);
+    region.dispose();
+    layer.remove();
+  });
+
+  test("a toast already showing when the region mounts is drawn in the region", () => {
+    const layer = document.createElement("div");
+    document.body.append(layer);
+    const store = createToastStore();
+    store.push({ kind: "warning", textCode: "panel.title" });
+    const region = mountToastRegion(layer, store, () => null);
+    expect(layer.querySelectorAll(".tstack .toast--warning").length).toBe(1);
+    region.dispose();
+    layer.remove();
+  });
+
   test("renders a store toast with an icon, its text and a labelled 44px-class dismiss button", () => {
     const m = mount();
     m.store.push({ kind: "success", textCode: "panel.title" });
