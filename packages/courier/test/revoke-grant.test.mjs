@@ -1,13 +1,16 @@
-import { test } from 'node:test';
+import { assertIsolated, testHome } from './tc1916-home.mjs';
+import { before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { assertAgentGrant, assertExactAuthority, grantCanRevoke } from '../dist/authority.js';
 import { courierGrantRequest } from '../dist/grant.js';
+import { profileDir } from '../dist/profile.js';
 import { AGENT_GRANT, REVOKE_GRANT_ENTRY } from '../dist/keys.js';
+
+before(() => assertIsolated());
 
 const run = promisify(execFile);
 const CLI = new URL('../dist/cli.js', import.meta.url).pathname;
@@ -57,14 +60,39 @@ test('the grant request a new install sends to OpenKey includes the revoke entry
 });
 
 test('`courier init --request` prints a grant that includes the revoke entry', async () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'courier-init-revoke-'));
-  fs.chmodSync(home, 0o700);
+  assertIsolated();
+  const home = fs.mkdtempSync(path.join(testHome, 'init-'));
   try {
     const { stdout } = await run(process.execPath, [CLI, 'init', '--request', '--handle', 'alice'], {
       env: { ...process.env, COURIER_HOME: path.join(home, 'h') },
+      timeout: 60_000,
     });
     assert.equal(hasRevoke(JSON.parse(stdout).permissions), true);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('the test fence refuses a Courier home outside the test home and is inert without COURIER_TEST', () => {
+  const saved = { home: process.env.COURIER_HOME, flag: process.env.COURIER_TEST };
+  try {
+    for (const outside of ['/var/tmp/tc1916.elsewhere/courier', path.join(process.env.HOME, '..', 'x'), '/root/.courier', `${testHome}-sibling`]) {
+      process.env.COURIER_HOME = outside;
+      assert.throws(() => profileDir(), { code: 'test-home-escape' }, outside);
+    }
+    delete process.env.COURIER_HOME;
+    process.env.HOME = '/var/tmp/tc1916.elsewhere';
+    assert.throws(() => profileDir(), { code: 'test-home-escape' }, 'default $HOME/.courier outside the test home');
+    process.env.HOME = testHome;
+    process.env.COURIER_HOME = path.join(testHome, 'inside');
+    assert.equal(profileDir(), path.join(testHome, 'inside'));
+    delete process.env.COURIER_TEST;
+    process.env.COURIER_HOME = '/var/tmp/tc1916.elsewhere/courier';
+    assert.equal(profileDir(), '/var/tmp/tc1916.elsewhere/courier', 'no fence unless COURIER_TEST=1');
+  } finally {
+    process.env.HOME = testHome;
+    process.env.COURIER_HOME = saved.home;
+    process.env.COURIER_TEST = saved.flag;
+    assertIsolated();
   }
 });

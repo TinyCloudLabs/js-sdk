@@ -1,5 +1,6 @@
 // Real-node proof that `courier revoke` revokes the outbound grant on the node: the peer's next read is refused.
 // Runs only when TC_REPLICATION_E2E_NODE_BIN points at a tinycloud node executable (CI: node-replication-e2e.yml).
+import { assertIsolated, testHome } from './tc1916-home.mjs';
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
@@ -24,7 +25,8 @@ describe('courier revoke against a real node', { skip: !nodeBinary }, () => {
   let child;
 
   before(async () => {
-    dir = fs.mkdtempSync('/var/tmp/tc1916-revoke-e2e-');
+    assertIsolated();
+    dir = fs.mkdtempSync(path.join(testHome, 'e2e-'));
     fs.chmodSync(dir, 0o700);
     const server = createServer();
     const port = await new Promise((resolve, reject) => {
@@ -52,16 +54,17 @@ describe('courier revoke against a real node', { skip: !nodeBinary }, () => {
     });
     await new Promise((resolve, reject) => {
       let output = '';
+      const timer = setTimeout(() => reject(new Error(`node not ready after 60s: ${output.slice(-1500)}`)), 60_000);
       const onData = (chunk) => {
         output += chunk.toString();
-        if (output.includes('Rocket has launched')) resolve();
+        if (output.includes('Rocket has launched')) { clearTimeout(timer); resolve(); }
       };
       child.stdout.on('data', onData);
       child.stderr.on('data', onData);
-      child.once('error', reject);
-      child.once('exit', (code) => reject(new Error(`node exited before readiness (${code}): ${output.slice(-1500)}`)));
+      child.once('error', (error) => { clearTimeout(timer); reject(error); });
+      child.once('exit', (code) => { clearTimeout(timer); reject(new Error(`node exited before readiness (${code}): ${output.slice(-1500)}`)); });
     });
-  });
+  }, { timeout: 90_000 });
 
   after(async () => {
     if (child && child.exitCode === null && child.signalCode === null) {

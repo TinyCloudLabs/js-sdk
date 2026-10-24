@@ -1,12 +1,14 @@
-import { test } from 'node:test';
+import { assertIsolated, testHome } from './tc1916-home.mjs';
+import { before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { revokePeer } from '../dist/commands.js';
 import { AGENT_GRANT, REVOKE_GRANT_ENTRY, k } from '../dist/keys.js';
 import { loadProfile, saveProfile } from '../dist/profile.js';
 import { memoryKv } from './memory-kv.mjs';
+
+before(() => assertIsolated());
 
 const NOW = Date.parse('2026-10-24T12:00:00Z');
 const FUTURE = '2026-10-31T12:00:00.000Z';
@@ -15,10 +17,11 @@ const PAST = '2026-10-20T12:00:00.000Z';
 const grant = (cid, expiresAt = FUTURE, extra = {}) => ({ cid, issuedAt: '2026-10-23T12:00:00.000Z', expiresAt, ...extra });
 
 async function withHome(outbound, fn) {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'courier-revoke-'));
   const prior = process.env.COURIER_HOME;
+  const home = fs.mkdtempSync(path.join(testHome, 'revoke-'));
   process.env.COURIER_HOME = home;
   try {
+    assertIsolated();
     const profile = {
       version: 3,
       host: 'https://tee.node.tinycloud.xyz',
