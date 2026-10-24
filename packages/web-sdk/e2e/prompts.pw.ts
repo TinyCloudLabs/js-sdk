@@ -57,12 +57,20 @@ async function mountHarness(
   );
 }
 
+// The modal sets data-state="visible" in a requestAnimationFrame, and its backdrop ignores the
+// pointer until then, so the focus guard refuses a covered control. Wait for it before any key press.
+async function modalShown(page: Page, selector: string) {
+  await expect(page.locator(`${selector} .modal-backdrop[data-state="visible"]`)).toBeAttached();
+}
+
 async function openSpaceCreation(page: Page) {
   await page.evaluate(() => (window as unknown as PromptWindow).__tc.openSpaceCreation());
+  await modalShown(page, SPACE);
 }
 
 async function openPermission(page: Page, extraEntries = 0) {
   await page.evaluate((n) => (window as unknown as PromptWindow).__tc.openPermission(n), extraEntries);
+  await modalShown(page, PERMISSION);
 }
 
 async function openThrowingSpaceCreation(page: Page) {
