@@ -218,6 +218,9 @@ interface RigOptions {
   refreshWith?: () => Promise<void>;
   /** An own-storage-full episode is already on at mount. */
   episode?: boolean;
+  /** No data source, as for a signed-out client. */
+  noSource?: boolean;
+  signedIn?: boolean;
 }
 
 function mount(initial: ViewResult<StorageView> | undefined, opts: RigOptions = {}): Rig {
@@ -232,7 +235,7 @@ function mount(initial: ViewResult<StorageView> | undefined, opts: RigOptions = 
   let renders = 0;
   const client = {
     id: 1,
-    signedIn: () => true,
+    signedIn: () => opts.signedIn !== false,
     onReset: (fn: () => void) => {
       resetListeners.add(fn);
       return () => resetListeners.delete(fn);
@@ -260,7 +263,7 @@ function mount(initial: ViewResult<StorageView> | undefined, opts: RigOptions = 
     },
     text: (code: string, params?: Record<string, string | number>) => panelText(code, params),
     data: {
-      source: {},
+      source: opts.noSource ? undefined : {},
       latest: () => latest,
       age: () => ("age" in opts ? opts.age : 5_000),
       refresh: async (key: string) => {
@@ -521,6 +524,23 @@ describe("storage page", () => {
     expect(css().split(".storage-banner strong{").length).toBe(2);
     rig.set(ready(status(1000, 1000, "full")));
     expect(css().split(".storage-banner strong{").length).toBe(2);
+  });
+});
+
+describe("storage section: signed out", () => {
+  test("it is not offered, and a mount without a data source shows the unavailable line, never a loading line or a retry", () => {
+    const rig = mount(undefined, { noSource: true, signedIn: false });
+    const visible = (selector: string) =>
+      [...rig.el.querySelectorAll(selector)].filter((node) => node.closest("[hidden]") === null);
+    expect(storageSection.isAvailable({ client: () => ({ signedIn: () => false }) } as unknown as SectionContext)).toBe(false);
+    expect(rig.el.querySelector('[role="status"]')?.textContent).toBe("Storage usage isn't available here.");
+    expect(rig.el.querySelector('[role="status"]')?.textContent).not.toContain("Loading");
+    expect(visible("button")).toEqual([]);
+    expect(rig.el.querySelector('[role="meter"]')).toBeNull();
+  });
+
+  test("a signed-in client is offered the section", () => {
+    expect(storageSection.isAvailable({ client: () => ({ signedIn: () => true }) } as unknown as SectionContext)).toBe(true);
   });
 });
 
