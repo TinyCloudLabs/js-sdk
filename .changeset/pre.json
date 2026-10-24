@@ -30,6 +30,9 @@
   },
   "changesets": [
     "chatgpt-public-personal-records",
+    "mcp-connect-positive-check",
+    "tc1781-decrypt-standard-expiry",
+    "tc1781-web-decrypt-expiry",
     "tc1801-share-non-transferable",
     "tc1807-discovery-url",
     "tc1823-sql-request-too-large",
