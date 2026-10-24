@@ -49,3 +49,30 @@ describe("redacting a link from text", () => {
     expect(redactLink(`seen ${keyless} ${KEY}`, keyless)).toBe(`seen [share link] ${KEY}`);
   });
 });
+
+describe("the short share link on a trusted origin", () => {
+  const trusted = { trustedOrigins: [ORIGIN] } as const;
+
+  it("accepts the exact production share origin", () => {
+    expect(shortShareLinkCid(SHORT, trusted)).toBe(CID);
+  });
+
+  it("refuses another origin, a sub-domain, a port and a different scheme", () => {
+    for (const origin of ["https://share.example", "https://evil.share.tinycloud.xyz", "https://share.tinycloud.xyz:8443", "http://share.tinycloud.xyz"]) {
+      expect(shortShareLinkCid(SHORT.replace(ORIGIN, origin), trusted)).toBeUndefined();
+    }
+  });
+
+  it("takes the origin from the list it is given, so a staging origin is accepted only when it is listed", () => {
+    const staging = SHORT.replace(ORIGIN, "https://share.staging.example");
+    expect(shortShareLinkCid(staging, trusted)).toBeUndefined();
+    expect(shortShareLinkCid(staging, { trustedOrigins: ["https://share.staging.example"] })).toBe(CID);
+  });
+
+  it("refuses an id with an upper-case letter, with or without a trusted origin, and does not lower-case it", () => {
+    const upper = SHORT.replace(ID, ID.toUpperCase());
+    expect(shortShareLinkCid(upper, trusted)).toBeUndefined();
+    expect(shortShareLinkCid(upper)).toBeUndefined();
+    expect(shortShareLinkCid(SHORT.replace(ID, `${ID.slice(0, 5).toUpperCase()}${ID.slice(5)}`), trusted)).toBeUndefined();
+  });
+});

@@ -146,6 +146,19 @@ describe("Share lifecycle and authorization parity", () => {
     }
   });
 
+  it("retries a rate-limited delivery authorization within the budget and ends retryable, not final", async () => {
+    let calls = 0;
+    const result = await notifyShare({
+      shareId: "share-1", recipient: "person@example.com", maxAttempts: 3,
+      adapter: { async deliver() {
+        calls += 1;
+        throw Object.assign(new Error("V3 share delivery authorization failed: HTTP 429"), { status: 429, code: "delivery-rate-limited" });
+      } },
+    });
+    expect(calls).toBe(3);
+    expect(result).toMatchObject({ state: "partial-failure", attempts: 3, retryable: true });
+  });
+
   it("reports a confirmed prior delivery only after a successful repeat", async () => {
     const email = { ...record, recipientMatcher: { kind: "exactEmail" as const, value: "foo@x.com" }, deliveredRecipients: ["foo@x.com"] };
     let attempts = 0;

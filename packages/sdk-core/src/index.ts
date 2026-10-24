@@ -204,6 +204,7 @@ export {
   ShareDeliveryRefusedError,
   shortDeliveryLinkBodyCid,
   validateShareDeliveryAuthorizationV3Bytes,
+  verifyShareDeliveryAuthorizationV3Bytes,
   withoutShareLink,
   MemorySenderShareRecordStorage,
   MemorySenderShareKeyStorage,

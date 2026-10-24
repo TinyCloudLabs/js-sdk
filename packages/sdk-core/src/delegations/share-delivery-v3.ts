@@ -73,8 +73,16 @@ function exactObject(value: unknown, keys: readonly string[], label: string): Re
   return record;
 }
 
+const BASE64URL_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+/** The unused trailing bits of an unpadded base64url string are zero, so one byte string has one spelling. */
+function isCanonicalBase64Url(value: string): boolean {
+  const unusedBits = value.length % 4 === 0 ? 0 : value.length % 4 === 2 ? 0x0f : value.length % 4 === 3 ? 0x03 : undefined;
+  return unusedBits !== undefined && (BASE64URL_ALPHABET.indexOf(value.slice(-1)) & unusedBits) === 0;
+}
+
 function decodeBase64Url(value: unknown): Uint8Array {
-  if (typeof value !== "string" || !/^[A-Za-z0-9_-]+$/.test(value)) throw new Error("share delivery value is not canonical base64url");
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]+$/.test(value) || !isCanonicalBase64Url(value)) throw new Error("share delivery value is not canonical base64url");
   if (typeof atob === "function") {
     const padded = value.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - value.length % 4) % 4);
     return Uint8Array.from(atob(padded), (character) => character.charCodeAt(0));
@@ -151,17 +159,41 @@ export function validateShareDeliveryAuthorizationV3Bytes(
   if (!Number.isFinite(issuedAt) || !Number.isFinite(expiresAt) || expiresAt <= issuedAt || expiresAt - issuedAt > 15 * 60_000) throw new Error("v3 share delivery authorization time is invalid");
   const admissionSignature = decodeBase64Url(signature.value);
   const { signature: _signature, ...unsignedAdmission } = admission;
-  const digest = sha256(new TextEncoder().encode(`${DELIVERY_ADMISSION_DOMAIN}${canonicalize(unsignedAdmission)}`));
+  const digest = admissionDigest(unsignedAdmission);
   if (admissionSignature.length !== 64 || !ed25519.verify(admissionSignature, digest, didKeyBytes(String(signature.signerDid)))) throw new Error("v3 share delivery admission signature is invalid");
   return { request: request as unknown as CredentialInvitationRequest, admission: admission as unknown as DeliveryAdmission };
 }
 
+function admissionDigest(unsignedAdmission: Record<string, unknown>): Uint8Array {
+  return sha256(new TextEncoder().encode(`${DELIVERY_ADMISSION_DOMAIN}${canonicalize(unsignedAdmission)}`));
+}
+
 /**
- * The body CID of a short share link. Any other link (the full form, another type or version, a query, a
- * non-canonical spelling) is refused, so the node is only ever sent a link it can fetch by id.
+ * {@link validateShareDeliveryAuthorizationV3Bytes}, then the signature again under the strict Ed25519 rule of the
+ * links contract (`S < L`, canonical and prime-order `A` and `R`), checked by `@tinycloud/share-envelope/links`.
  */
-export async function shortDeliveryLinkBodyCid(shareUrl: string): Promise<string> {
-  const cid = (await import("@tinycloud/share-envelope/links")).shortShareLinkCid(shareUrl);
+export async function verifyShareDeliveryAuthorizationV3Bytes(
+  bytes: Uint8Array,
+  expected: Parameters<typeof validateShareDeliveryAuthorizationV3Bytes>[1],
+): Promise<Omit<ShareDeliveryAuthorizationV3Receipt, "proof">> {
+  const verified = validateShareDeliveryAuthorizationV3Bytes(bytes, expected);
+  const { signature, ...unsignedAdmission } = verified.admission;
+  const { verifyEd25519Strict } = await import("@tinycloud/share-envelope/links");
+  if (!verifyEd25519Strict(didKeyBytes(signature.signerDid), admissionDigest(unsignedAdmission), decodeBase64Url(signature.value))) {
+    throw new Error("v3 share delivery admission signature is invalid");
+  }
+  return verified;
+}
+
+const DEFAULT_SHARE_ORIGINS: readonly string[] = ["https://share.tinycloud.xyz"];
+
+/**
+ * The body CID of a short share link on one of `trustedOrigins` (default: the production share origin). Any other
+ * link (another origin, the full form, another type or version, a query, a non-canonical spelling, an id that is
+ * not lowercase) is refused, so the node is only ever sent a link it can fetch by id.
+ */
+export async function shortDeliveryLinkBodyCid(shareUrl: string, trustedOrigins: readonly string[] = DEFAULT_SHARE_ORIGINS): Promise<string> {
+  const cid = (await import("@tinycloud/share-envelope/links")).shortShareLinkCid(shareUrl, { trustedOrigins });
   if (cid === undefined) throw new Error("share delivery requires a short share link");
   return cid;
 }

@@ -1013,6 +1013,7 @@ export function createShareAuthorityAdapters(input: {
       expiresAt: authorizationExpiresAt,
       deliveryAudience: config.credentialsOrigin,
       idempotencyKey: request.idempotencyKey,
+      trustedOrigins: [config.shareOrigin],
     });
     await deliverCredentialInvitation({
       credentialsOrigin: config.credentialsOrigin,

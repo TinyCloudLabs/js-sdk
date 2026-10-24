@@ -175,7 +175,7 @@ import {
   CREDENTIAL_INVITATION_REQUEST_DOMAIN,
   ShareDeliveryRefusedError,
   shortDeliveryLinkBodyCid,
-  validateShareDeliveryAuthorizationV3Bytes,
+  verifyShareDeliveryAuthorizationV3Bytes,
   withoutShareLink,
   verifyEip191MessageSignature,
   signCompactUcanRootAuthorization,
@@ -5849,8 +5849,10 @@ export class TinyCloudNode {
     readonly deliveryAudience: string;
     /** Stable caller retry identity. It is hashed into the protocol's 16-byte JTI. */
     readonly idempotencyKey: string;
+    /** The origins `shareUrl` may be on: the node's `return_origin`. Default: `https://share.tinycloud.xyz`. */
+    readonly trustedOrigins?: readonly string[];
   }): Promise<ShareDeliveryAuthorizationV3Receipt> {
-    const envelopeRef = await shortDeliveryLinkBodyCid(input.shareUrl);
+    const envelopeRef = await shortDeliveryLinkBodyCid(input.shareUrl, input.trustedOrigins);
     const session = this.currentTinyCloudSession();
     const serviceSession = this._serviceContext?.session;
     if (!session || !serviceSession) throw new Error("Share delivery requires an authenticated session");
@@ -5894,7 +5896,7 @@ export class TinyCloudNode {
       const body = (await withoutShareLink(reply, input.shareUrl)).trim().slice(0, 512);
       throw Object.assign(new Error(`V3 share delivery authorization failed: HTTP ${response.status}${body ? ` - ${body}` : ""}`), { status: response.status });
     }
-    const verified = validateShareDeliveryAuthorizationV3Bytes(new Uint8Array(await response.arrayBuffer()), {
+    const verified = await verifyShareDeliveryAuthorizationV3Bytes(new Uint8Array(await response.arrayBuffer()), {
       request,
       envelope: input.envelope,
       envelopeRef,

@@ -37,7 +37,7 @@ interface Request {
 }
 
 /** An in-memory links API: it verifies every signature the way the service does and stores records by id. */
-function fakeApi(options: { readonly createStatus?: number; readonly deleteStatus?: number } = {}) {
+function stubApi(options: { readonly createStatus?: number; readonly deleteStatus?: number } = {}) {
   const stored = new Map<string, { issuer: string; expiresAt: string }>();
   const requests: Request[] = [];
   let next = 0;
@@ -113,7 +113,7 @@ describe("link choice", () => {
 
 describe("share links", () => {
   test("a short link is created through the API, signed by the publishing key, and the key stays in the fragment", async () => {
-    const api = fakeApi();
+    const api = stubApi();
     const links = createShareLinks({ signer: async () => signer, fetchFn: api.fetchFn });
     const published = await publishedShare();
 
@@ -143,7 +143,7 @@ describe("share links", () => {
   });
 
   test("a share under two minutes gets the full link, with no warning and no request", async () => {
-    const api = fakeApi();
+    const api = stubApi();
     const published = await publishedShare("share-short-life", 90);
     const shown = await createShareLinks({ signer: async () => signer, fetchFn: api.fetchFn }).show(published, { fullLink: false });
     expect(shown).toEqual({ url: published.url, short: false });
@@ -151,7 +151,7 @@ describe("share links", () => {
   });
 
   test("a share over 30 days gets the full link and the contract's warning, with no request", async () => {
-    const api = fakeApi();
+    const api = stubApi();
     const published = await publishedShare("share-long-life", 30 * 86_400 + 60);
     const shown = await createShareLinks({ signer: async () => signer, fetchFn: api.fetchFn }).show(published, { fullLink: false });
     expect(shown.url).toBe(published.url);
@@ -162,7 +162,7 @@ describe("share links", () => {
   });
 
   test("a bearer share keeps its own link and makes no request", async () => {
-    const api = fakeApi();
+    const api = stubApi();
     const published = { ...(await publishedShare("share-bearer")), link: { kind: "native" as const, cid: "bafy-native" } };
     const shown = await createShareLinks({ signer: async () => signer, fetchFn: api.fetchFn }).show(published, { fullLink: false });
     expect(shown).toEqual({ url: published.url, short: false });
@@ -170,7 +170,7 @@ describe("share links", () => {
   });
 
   test("unlink deletes with a request signed by the same key; a second delete finds nothing", async () => {
-    const api = fakeApi();
+    const api = stubApi();
     const links = createShareLinks({ signer: async () => signer, fetchFn: api.fetchFn });
     const shown = await links.show(await publishedShare(), { fullLink: false });
     const id = shortLinkId(shown.url)!;
@@ -196,12 +196,12 @@ describe("share links", () => {
     expect(shortLinkId(published.url)).toBeUndefined();
     expect(shortLinkId(undefined)).toBeUndefined();
     expect(shortLinkId(`${ORIGIN}/s/inline#v=2&p=abc`)).toBeUndefined();
-    const shown = await createShareLinks({ signer: async () => signer, fetchFn: fakeApi().fetchFn }).show(published, { fullLink: false });
+    const shown = await createShareLinks({ signer: async () => signer, fetchFn: stubApi().fetchFn }).show(published, { fullLink: false });
     expect(shortLinkId(shown.url)).toMatch(/^[a-z2-7]{26}$/);
   });
 
   test("the create request is exactly the signed record, and the short link stays short", async () => {
-    const api = fakeApi();
+    const api = stubApi();
     const published = await publishedShare();
     const now = new Date();
     const shown = await createShareLinks({ signer: async () => signer, fetchFn: api.fetchFn }).show(published, { fullLink: false, now });
@@ -279,7 +279,7 @@ describe("tc share with links", () => {
   }
 
   test("prints the short link and keeps that same link in history", async () => {
-    const api = fakeApi();
+    const api = stubApi();
     const result = await publish([], { fetchFn: api.fetchFn });
     const printed = result.stdout.trim();
     expect(shortLinkId(printed)).toBeDefined();
@@ -289,7 +289,7 @@ describe("tc share with links", () => {
   });
 
   test("--full-link prints the full link and creates nothing", async () => {
-    const api = fakeApi();
+    const api = stubApi();
     const result = await publish(["--full-link"], { fetchFn: api.fetchFn });
     expect(result.stdout).toBe(`${result.published.url}\n`);
     expect(result.records.get("share-cmd")?.link).toBe(result.published.url);
@@ -297,7 +297,7 @@ describe("tc share with links", () => {
   });
 
   test("a share over 30 days prints the full link, the warning on stderr, and linkNotice in JSON", async () => {
-    const api = fakeApi();
+    const api = stubApi();
     const human = await publish([], { fetchFn: api.fetchFn, lifetimeSeconds: 31 * 86_400 });
     expect(human.stdout).toBe(`${human.published.url}\n`);
     expect(human.stderr).toBe(`${LINK_EXPIRY_WARNING}\n`);
@@ -314,7 +314,7 @@ describe("tc share with links", () => {
     const serverError = (async () => new Response("<html>oops</html>", { status: 500 })) as unknown as typeof fetch;
     const garbage201 = (async () => new Response("not json", { status: 201 })) as unknown as typeof fetch;
     const cases: Array<[string, typeof fetch, string]> = [
-      ["rate limited", fakeApi({ createStatus: 429 }).fetchFn, "rate limiting"],
+      ["rate limited", stubApi({ createStatus: 429 }).fetchFn, "rate limiting"],
       ["refused", refused, "could not be reached"],
       ["blackhole", blackhole, "could not be reached"],
       ["HTTP 500", serverError, "refused this share"],
@@ -337,7 +337,7 @@ describe("tc share with links", () => {
   });
 
   test("share show --reveal-link prints the link the share printed", async () => {
-    const api = fakeApi();
+    const api = stubApi();
     const result = await publish([], { fetchFn: api.fetchFn });
     const { storage } = memoryRecords();
     await storage.put(result.records.get("share-cmd")!);
@@ -346,7 +346,7 @@ describe("tc share with links", () => {
   });
 
   test("share unlink deletes the short link; revoke makes no links request and reports no short-link field", async () => {
-    const api = fakeApi();
+    const api = stubApi();
     const published = await publish([], { fetchFn: api.fetchFn });
     const record = published.records.get("share-cmd")!;
     const { storage } = memoryRecordsWith({ ...record, ownerDid: signer.did, enforcementDelegationCid: "bafy-enforcement-root" });
@@ -373,7 +373,7 @@ describe("tc share with links", () => {
   });
 
   test("share unlink on a full-link share refuses before any request", async () => {
-    const api = fakeApi();
+    const api = stubApi();
     const published = await publish(["--full-link"], { fetchFn: api.fetchFn });
     const { storage } = memoryRecordsWith(published.records.get("share-cmd")!);
     const result = await run(["unlink", "share-cmd"], { records: storage, links: createShareLinks({ signer: async () => signer, fetchFn: api.fetchFn }) });
@@ -382,7 +382,7 @@ describe("tc share with links", () => {
   });
 
   test("share unlink reports a links service that cannot be reached", async () => {
-    const api = fakeApi();
+    const api = stubApi();
     const published = await publish([], { fetchFn: api.fetchFn });
     const { storage } = memoryRecordsWith(published.records.get("share-cmd")!);
     const offline = createShareLinks({ signer: async () => signer, fetchFn: (async () => { throw new TypeError("fetch failed"); }) as unknown as typeof fetch, timeoutMs: 50 });
@@ -392,7 +392,7 @@ describe("tc share with links", () => {
   });
 
   test("invitations fail closed until the services accept short links: publish --notify publishes nothing, notify sends nothing", async () => {
-    const api = fakeApi();
+    const api = stubApi();
     const published = await publish(["--notify"], { fetchFn: api.fetchFn });
     expect(published.exitCode).toBe(4);
     expect(published.stderr).toContain("Invitation emails are not available yet. Nothing was shared and no invitation was sent.");
@@ -410,7 +410,7 @@ describe("tc share with links", () => {
   });
 
   test("once enabled, notify carries only a short link", async () => {
-    const api = fakeApi();
+    const api = stubApi();
     const full = await publish(["--full-link"], { fetchFn: api.fetchFn });
     const fullRecord: SenderShareRecord = { ...full.records.get("share-cmd")!, actions: ["tinycloud.kv/get"] };
     let delivered: string | undefined;
@@ -427,7 +427,7 @@ describe("tc share with links", () => {
   });
 
   test("the node's refusal of a delivery authorization (its 422 and its 400) is final: one attempt, not retryable, the same exit code and output, naming neither link nor key", async () => {
-    const api = fakeApi();
+    const api = stubApi();
     const short = await publish([], { fetchFn: api.fetchFn });
     const record: SenderShareRecord = { ...short.records.get("share-cmd")!, actions: ["tinycloud.kv/get"] };
     const outputs: { readonly stdout: string; readonly stderr: string; readonly exitCode: number | undefined }[] = [];
@@ -453,7 +453,7 @@ describe("tc share with links", () => {
     const directory = await mkdtemp(join(tmpdir(), "tc-share-limit-"));
     const file = join(directory, "note.md");
     await writeFile(file, "# note\n");
-    const api = fakeApi();
+    const api = stubApi();
     const refused = await run(["publish", file, "--to", "alice@example.com"], {
       targetAdapter: { publish: async () => { throw new SharePublishError("max-bytes-exceeded", ADDRESSED_SHARE_TOO_LARGE_MESSAGE); } },
       links: createShareLinks({ signer: async () => signer, fetchFn: api.fetchFn }),
@@ -496,10 +496,10 @@ describe("tc share with links", () => {
   });
 
   test("an HTTP 5xx answer to a delete is UNAVAILABLE (exit 4) and the short link stays", async () => {
-    const healthy = fakeApi();
+    const healthy = stubApi();
     const published = await publish([], { fetchFn: healthy.fetchFn });
     const { storage } = memoryRecordsWith(published.records.get("share-cmd")!);
-    const failing = fakeApi({ deleteStatus: 503 });
+    const failing = stubApi({ deleteStatus: 503 });
     const result = await run(["unlink", "share-cmd"], { records: storage, links: createShareLinks({ signer: async () => signer, fetchFn: failing.fetchFn }) });
     expect(result.exitCode).toBe(4);
     expect(result.stderr).toContain("the links service refused the request");

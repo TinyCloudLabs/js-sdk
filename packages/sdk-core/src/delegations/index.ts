@@ -174,6 +174,7 @@ export {
   ShareDeliveryRefusedError,
   shortDeliveryLinkBodyCid,
   validateShareDeliveryAuthorizationV3Bytes,
+  verifyShareDeliveryAuthorizationV3Bytes,
   withoutShareLink,
 } from "./share-delivery-v3";
 export type {

@@ -843,6 +843,7 @@ describe("TinyCloudNode sharing", () => {
         resourcePath: "shares/test/readme.md",
         recipientEmail: "recipient@example.test",
         shareUrl: `https://share.example/s/lqdw5iopqq2tkkvjj6gbbi5vbv#v=4&k=${"A".repeat(43)}&c=bafkreiewixmt5nwgi3ych6durcsheaql3ybswbplpjmpbdhfkvdkidzt5u`,
+        trustedOrigins: ["https://share.example"],
         documentName: "readme.md",
         expiresAt: new Date(Date.now() + 60_000).toISOString(),
         deliveryAudience: "https://witness.example",
@@ -1070,6 +1071,107 @@ describe("TinyCloudNode sharing", () => {
         expect(text).not.toContain("#v=4&k=");
         expect(text).toMatch(/\[(share link|key)\]/);
         expect(String(failure).length).toBeLessThanOrEqual("Error: V3 share delivery authorization failed: HTTP 403 - ".length + 512);
+      }
+    });
+
+    test("the link must be on the trusted share origin and have a lowercase id, before any request", async () => {
+      const { node, sent } = deliveryNode(() => new Response("{}", { status: 200 }));
+      const elsewhere = SHORT.replace("https://share.tinycloud.xyz", "https://share.example");
+      await expect(node.authorizeShareDeliveryV3(input(elsewhere))).rejects.toThrow("share delivery requires a short share link");
+      await expect(node.authorizeShareDeliveryV3(input(SHORT.replace("lqdw5iopqq2tkkvjj6gbbi5vbv", "LQDW5IOPQQ2TKKVJJ6GBBI5VBV")))).rejects.toThrow("share delivery requires a short share link");
+      expect(sent).toHaveLength(0);
+      await expect(node.authorizeShareDeliveryV3({ ...input(elsewhere), trustedOrigins: ["https://share.example"] })).rejects.toThrow();
+      expect(sent).toHaveLength(1);
+      await expect(node.authorizeShareDeliveryV3({ ...input(SHORT), trustedOrigins: ["https://share.example"] })).rejects.toThrow("share delivery requires a short share link");
+      expect(sent).toHaveLength(1);
+      await expect(node.authorizeShareDeliveryV3(input(SHORT))).rejects.toThrow();
+      expect(sent).toHaveLength(2);
+    });
+
+    test("the request body digest is over the RFC 8785 bytes, for a document name with an emoji, <, &, U+2028 and escapes", async () => {
+      // RFC 8785 written out here, apart from the SDK: members sorted by UTF-16 code units, a string is its characters
+      // with only `"`, `\` and the C0 controls escaped; everything else (emoji, <, &, U+2028) stays as it is.
+      const escaped = (text: string): string => {
+        let out = "\"";
+        for (const char of text) {
+          const code = char.codePointAt(0) ?? 0;
+          const shortEscape: Readonly<Record<number, string>> = { 8: "\\b", 9: "\\t", 10: "\\n", 12: "\\f", 13: "\\r", 34: "\\\"", 92: "\\\\" };
+          out += shortEscape[code] ?? (code < 0x20 ? `\\u${code.toString(16).padStart(4, "0")}` : char);
+        }
+        return `${out}"`;
+      };
+      const jcs = (fields: Readonly<Record<string, string>>): string =>
+        `{${Object.keys(fields).sort().map((name) => `${escaped(name)}:${escaped(fields[name] ?? "")}`).join(",")}}`;
+      const names = ["Plan \u{1F4C4} <draft> & more", "line\u2028break\u2029end", "tab\tquote\"back\\slash\u0001ctl", "caf\u00e9 \u6f22\u5b57 \u{1F9D1}\u200d\u{1F4BB}", "</script><b>&amp;"];
+      for (const documentName of names) {
+        const { node } = deliveryNode(() => new Response("{}", { status: 200 }));
+        const wire: string[] = [];
+        globalThis.fetch = mock(async (_input: string | URL | Request, init?: RequestInit) => {
+          wire.push(String(init?.body));
+          return new Response("{}", { status: 200 });
+        }) as unknown as typeof fetch;
+        await expect(node.authorizeShareDeliveryV3({ ...input(SHORT), documentName })).rejects.toThrow();
+        const jti = Buffer.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode("stable-key"))).subarray(0, 16).toString("base64url");
+        const fields = { documentName, expiresAt: "2030-01-01T00:01:00.123Z", jti, recipientEmail: "recipient@example.test", shareUrl: SHORT };
+        const digest = Buffer.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(jcs(fields)))).toString("base64url");
+        expect(wire).toEqual([jcs({ ...fields, requestBodyDigest: digest })]);
+        expect(Buffer.from(wire[0] ?? "").equals(Buffer.from(jcs({ ...fields, requestBodyDigest: digest })))).toBe(true);
+      }
+    });
+
+    test("a 500 or 503 reply that holds the key or the link leaves neither in the thrown error nor in any log", async () => {
+      const logged: string[] = [];
+      const consoleMethods = ["log", "info", "warn", "error", "debug", "trace"] as const;
+      const originals = consoleMethods.map((method) => console[method]);
+      const stdout = process.stdout.write.bind(process.stdout);
+      const stderr = process.stderr.write.bind(process.stderr);
+      const failures: unknown[] = [];
+      try {
+        for (const method of consoleMethods) console[method] = (...args: unknown[]) => { logged.push(args.map(String).join(" ")); };
+        process.stdout.write = ((chunk: string | Uint8Array) => { logged.push(String(chunk)); return true; }) as typeof process.stdout.write;
+        process.stderr.write = ((chunk: string | Uint8Array) => { logged.push(String(chunk)); return true; }) as typeof process.stderr.write;
+        for (const status of [500, 503] as const) {
+          for (const body of [`upstream said ${KEY}`, `upstream said ${SHORT}`, JSON.stringify({ shareUrl: SHORT, key: KEY, detail: "x".repeat(600) })]) {
+            const { node } = deliveryNode(() => new Response(body, { status }));
+            try {
+              await node.authorizeShareDeliveryV3(input(SHORT));
+              throw new Error("expected a failure");
+            } catch (error) {
+              failures.push(error);
+            }
+          }
+        }
+      } finally {
+        consoleMethods.forEach((method, index) => { console[method] = originals[index]!; });
+        process.stdout.write = stdout;
+        process.stderr.write = stderr;
+      }
+      expect(failures).toHaveLength(6);
+      for (const failure of failures) {
+        expect(failure).toMatchObject({ status: expect.any(Number) });
+        const text = JSON.stringify(failure, Object.getOwnPropertyNames(failure)) + String(failure);
+        expect(text).not.toContain(KEY);
+        expect(text).not.toContain("#v=4&k=");
+        expect(text).not.toContain(KEY.slice(0, 12));
+      }
+      for (const text of logged) {
+        expect(text).not.toContain(KEY);
+        expect(text).not.toContain("#v=4&k=");
+      }
+      failures.forEach((failure, index) => expect(failure).toMatchObject({ status: index < 3 ? 500 : 503 }));
+    });
+
+    test("HTTP 429 is not the final refusal, with or without Retry-After", async () => {
+      const replies = [
+        new Response(JSON.stringify({ error: "delivery-rate-limited" }), { status: 429, headers: { "retry-after": "7" } }),
+        new Response(JSON.stringify({ error: "delivery-rate-limited" }), { status: 429 }),
+      ];
+      for (const reply of replies) {
+        const { node } = deliveryNode(() => reply);
+        const failure: unknown = await node.authorizeShareDeliveryV3(input(SHORT)).catch((error: unknown) => error);
+        expect(failure).not.toBeInstanceOf(ShareDeliveryRefusedError);
+        expect(failure).toMatchObject({ status: 429, message: expect.stringContaining("HTTP 429") });
+        expect(failure).not.toMatchObject({ code: "delivery-authorization-invalid" });
       }
     });
   });

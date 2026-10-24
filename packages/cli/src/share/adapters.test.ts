@@ -29,7 +29,7 @@ const registeredPolicies: unknown[] = [];
 /** The owner's KV as the artifact layout sees it: write-once creates, reads and prefix lists. */
 const ownerKv = new Map<string, Uint8Array>();
 let encryptions = 0;
-/** When set, the fake node's owner roots carry this authorization: a root far larger than any real one. */
+/** When set, the stub node's owner roots carry this authorization: a root far larger than any real one. */
 let oversizedRootAuthorization: string | undefined;
 
 let nodeSpaceId: string | undefined = "tinycloud:test-space";

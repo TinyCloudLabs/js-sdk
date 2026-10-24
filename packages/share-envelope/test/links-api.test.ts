@@ -62,7 +62,7 @@ async function sharePlaintext(signer: LinkSigner, extra: Record<string, unknown>
   return utf8Bytes(canonicalize({ version: 3, signature: { algorithm: "Ed25519", signerDid: signer.did, value: "TEST ONLY" }, ...extra }));
 }
 
-/** A fake service that stores what it is sent and serves it back as the contract's read does. */
+/** A stub service that stores what it is sent and serves it back as the contract's read does. */
 function storingService(): { fetch: typeof globalThis.fetch; seen: Seen[]; stored: () => LinkRecord | undefined } {
   let record: LinkRecord | undefined;
   const { fetch: fetchFn, seen } = recorder((request) => {

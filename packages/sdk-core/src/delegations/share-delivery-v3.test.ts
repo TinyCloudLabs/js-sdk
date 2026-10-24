@@ -4,7 +4,7 @@ import { sha256 } from "@noble/hashes/sha256";
 import { base58btc } from "multiformats/bases/base58";
 import { canonicalizeSignedObjectUnsigned as canonicalize } from "../policy/signed-object.js";
 import { readFileSync } from "node:fs";
-import { DELIVERY_ADMISSION_DOMAIN, shortDeliveryLinkBodyCid, validateShareDeliveryAuthorizationV3Bytes } from "./share-delivery-v3.js";
+import { DELIVERY_ADMISSION_DOMAIN, shortDeliveryLinkBodyCid, validateShareDeliveryAuthorizationV3Bytes, verifyShareDeliveryAuthorizationV3Bytes } from "./share-delivery-v3.js";
 
 const seed = new Uint8Array(32).fill(7);
 const nodeDid = `did:key:${base58btc.encode(Uint8Array.from([0xed, 0x01, ...ed25519.getPublicKey(seed)]))}`;
@@ -193,4 +193,87 @@ describe("the short link of a delivery", () => {
       expect(failure).toMatchObject({ message: "share delivery requires a short share link" });
     });
   }
+});
+
+describe("v3 share delivery authorization: the strict Ed25519 rule", () => {
+  const { ed25519Strict } = JSON.parse(readFileSync(new URL("../../../share-envelope/test/links-api-vectors.json", import.meta.url), "utf8")) as {
+    ed25519Strict: readonly { name: string; publicKeyHex: string; signatureHex: string; expect: { valid: boolean } }[];
+  };
+  const didOf = (publicKey: Uint8Array) => `did:key:${base58btc.encode(Uint8Array.from([0xed, 0x01, ...publicKey]))}`;
+  const expectedFor = (nodeAudience: string) => ({
+    request,
+    envelope: { ...envelope, target: { ...envelope.target, nodeAudience }, attestedEnforcerBinding: { ...envelope.attestedEnforcerBinding, nodeAudience } },
+    envelopeRef: shareCid,
+    senderKeyDid,
+    deliveryAudience: "https://api.share.tinycloud.xyz",
+  });
+  /** The node's response with the admission signed by `signerDid` and carrying exactly `value` as its signature. */
+  const responseWith = (signerDid: string, value: string) => {
+    const parsed = JSON.parse(new TextDecoder().decode(response()));
+    parsed.admission.signature = { suite: "eddsa-ed25519-sha256-jcs-v1", signerDid, value };
+    return new TextEncoder().encode(JSON.stringify(parsed));
+  };
+  const fromHex = (hex: string) => Uint8Array.from(hex.match(/../g) ?? [], (pair) => Number.parseInt(pair, 16));
+  const vectorsNamed = (prefix: string) => ed25519Strict.filter((vector) => vector.name.startsWith(prefix));
+
+  it("verifies an admission signed by the node's key", async () => {
+    const verified = await verifyShareDeliveryAuthorizationV3Bytes(response(), expectedFor(nodeDid));
+    expect(verified.admission.signature.signerDid).toBe(nodeDid);
+  });
+
+  it("refuses a small-order node key with the identity signature, for all eight keys of the contract vectors", async () => {
+    const vectors = vectorsNamed("small-order public key");
+    expect(vectors).toHaveLength(8);
+    let permissive = 0;
+    for (const vector of vectors) {
+      const signerDid = didOf(fromHex(vector.publicKeyHex));
+      const bytes = responseWith(signerDid, Buffer.from(fromHex(vector.signatureHex)).toString("base64url"));
+      try {
+        validateShareDeliveryAuthorizationV3Bytes(bytes, expectedFor(signerDid));
+        permissive += 1;
+      } catch {
+        // The default rule of the library may refuse some of them as well.
+      }
+      await expect(verifyShareDeliveryAuthorizationV3Bytes(bytes, expectedFor(signerDid))).rejects.toThrow("signature is invalid");
+    }
+    expect(permissive).toBeGreaterThan(0);
+  });
+
+  it("refuses a non-canonical encoding of the identity as the node key and as R", async () => {
+    for (const vector of [...vectorsNamed("non-canonical encoding of the identity as the public key"), ...vectorsNamed("non-canonical encoding of the identity as R")]) {
+      const signerDid = didOf(fromHex(vector.publicKeyHex));
+      const bytes = responseWith(signerDid, Buffer.from(fromHex(vector.signatureHex)).toString("base64url"));
+      await expect(verifyShareDeliveryAuthorizationV3Bytes(bytes, expectedFor(signerDid))).rejects.toThrow();
+    }
+  });
+
+  it("refuses a signature whose base64url spelling is not canonical, though it decodes to the same bytes", async () => {
+    const value: string = JSON.parse(new TextDecoder().decode(response())).admission.signature.value;
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    const spelled = `${value.slice(0, -1)}${alphabet[alphabet.indexOf(value.slice(-1)) | 1]}`;
+    expect(spelled).not.toBe(value);
+    expect(Buffer.from(spelled, "base64url").equals(Buffer.from(value, "base64url"))).toBe(true);
+    const bytes = responseWith(nodeDid, spelled);
+    expect(() => validateShareDeliveryAuthorizationV3Bytes(bytes, expectedFor(nodeDid))).toThrow("canonical base64url");
+    await expect(verifyShareDeliveryAuthorizationV3Bytes(bytes, expectedFor(nodeDid))).rejects.toThrow("canonical base64url");
+  });
+});
+
+describe("the short link of a delivery: the share origin", () => {
+  const id = "lqdw5iopqq2tkkvjj6gbbi5vbv";
+  const link = (origin: string, linkId = id) => `${origin}/s/${linkId}#v=4&k=${"A".repeat(43)}&c=${shareCid}`;
+
+  it("accepts the production share origin by default and refuses another one", async () => {
+    expect(await shortDeliveryLinkBodyCid(link("https://share.tinycloud.xyz"))).toBe(shareCid);
+    await expect(shortDeliveryLinkBodyCid(link("https://share.example"))).rejects.toThrow("share delivery requires a short share link");
+  });
+
+  it("accepts the origins it is given, and only those", async () => {
+    expect(await shortDeliveryLinkBodyCid(link("https://share.example"), ["https://share.example"])).toBe(shareCid);
+    await expect(shortDeliveryLinkBodyCid(link("https://share.tinycloud.xyz"), ["https://share.example"])).rejects.toThrow("short share link");
+  });
+
+  it("refuses an upper-case id", async () => {
+    await expect(shortDeliveryLinkBodyCid(link("https://share.tinycloud.xyz", id.toUpperCase()))).rejects.toThrow("short share link");
+  });
 });
