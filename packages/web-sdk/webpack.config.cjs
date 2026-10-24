@@ -285,18 +285,18 @@ const panelDataCjsConfig = {
   output: { ...cjsConfig.output, filename: "panel-data.cjs" },
 };
 
-// The permission and space-creation dialogs. Like the panel, they keep @tinycloud/* external.
+// The permission and space-creation dialogs. Unlike the panel they import runtime constants from
+// @tinycloud/sdk-core, so nothing is external: a bare import in this chunk would not resolve for a page that loads
+// the SDK without a bundler.
 const modalsEsmConfig = {
   ...esmConfig,
   entry: "./src/notifications/modals-entry.ts",
-  externals: panelExternals("module", "mjs"),
   output: { ...esmConfig.output, filename: "modals.mjs" },
 };
 
 const modalsCjsConfig = {
   ...cjsConfig,
   entry: "./src/notifications/modals-entry.ts",
-  externals: panelExternals("commonjs", "cjs"),
   output: { ...cjsConfig.output, filename: "modals.cjs" },
 };
 
