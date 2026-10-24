@@ -33,7 +33,7 @@ export const DELEGATIONS_STRINGS = {
 
   "delegations.kind.app": "This app",
   "delegations.kind.others": "Granted by you",
-  "delegations.kind.received": "Granted to you",
+  "delegations.kind.received": "Shared with you by {who}",
 
   "delegations.st.active": "Active",
   "delegations.st.soon": "Expiring soon",
@@ -78,6 +78,7 @@ export const DELEGATIONS_STRINGS = {
   "delegations.ended.expired": "Expired grants can't be used. Nothing to revoke.",
   "delegations.ended.revoked": "Already revoked. Nothing to revoke.",
   "delegations.ended.pending": "Not active yet. Nothing to revoke.",
+  "delegations.ended.received": "Shared with you. Only the one who shared it can end it.",
 
   "delegations.confirm.title": "Revoke access for {name}?",
   "delegations.confirm.what": "{name} will stop being able to {what}{where}.",

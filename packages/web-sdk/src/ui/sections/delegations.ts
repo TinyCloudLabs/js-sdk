@@ -272,12 +272,18 @@ export function shownStatus(row: DelegationRow, now: number): Shown {
 
 const revocable = (shown: Shown): boolean => shown === "active" || shown === "soon";
 
+/** A grant someone else gave the user. The mapper sets both fields; either one marks it. */
+const isReceived = (row: DelegationRow): boolean => row.group === "received" || row.direction === "received";
+
+/** Only grants the user gave can be revoked here. A received grant is read-only: the user would be the one losing access, and there is nothing for them to consent to. */
+const canRevoke = (row: DelegationRow, now: number): boolean => revocable(shownStatus(row, now)) && !isReceived(row);
+
 const GROUPS: readonly DelegationGroup[] = ["this-app", "to-others", "received"];
 
 /** Rows by group, in the order the page lists them. */
 export function groupRows(rows: readonly DelegationRow[]): Record<DelegationGroup, DelegationRow[]> {
   const grouped: Record<DelegationGroup, DelegationRow[]> = { "this-app": [], "to-others": [], received: [] };
-  for (const row of rows) grouped[GROUPS.includes(row.group) ? row.group : "to-others"].push(row);
+  for (const row of rows) grouped[isReceived(row) ? "received" : GROUPS.includes(row.group) ? row.group : "to-others"].push(row);
   return grouped;
 }
 
@@ -293,13 +299,13 @@ function shortCid(cid: string): string {
 
 /** The other party: who got access from you, or who gave it to you. */
 function counterpart(row: DelegationRow): string {
-  return row.group === "received" ? row.delegatorDid : row.delegateDid;
+  return isReceived(row) ? row.delegatorDid : row.delegateDid;
 }
 
 function displayName(row: DelegationRow): string {
   const label = clean(row.label?.text ?? "", 120);
   // The mapper names every row after its delegate; for a received grant the other party is the delegator.
-  if (row.group === "received" && (label === "" || label === shortDid(row.delegateDid))) return shortDid(row.delegatorDid);
+  if (isReceived(row) && (label === "" || label === shortDid(row.delegateDid))) return shortDid(row.delegatorDid);
   return label === "" ? shortDid(counterpart(row)) : label;
 }
 
@@ -347,9 +353,8 @@ function metaLine(row: DelegationRow, shown: Shown, parsed: readonly ParsedResou
 }
 
 function kindLine(row: DelegationRow, name: string): string {
-  const kind = panelText(
-    row.group === "this-app" ? "delegations.kind.app" : row.group === "received" ? "delegations.kind.received" : "delegations.kind.others",
-  );
+  if (isReceived(row)) return panelText("delegations.kind.received", { who: name });
+  const kind = panelText(row.group === "this-app" ? "delegations.kind.app" : "delegations.kind.others");
   const who = shortDid(counterpart(row));
   return who === name ? kind : `${kind}${panelText("delegations.meta.sep")}${who}`;
 }
@@ -580,14 +585,20 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
     card.chips.hidden = chips.length === 0;
 
     card.see.setAttribute("aria-label", text("delegations.see.for", { name }));
-    const canRevoke = revocable(shown);
-    card.revoke.hidden = !canRevoke;
+    const mayRevoke = canRevoke(row, now);
+    card.revoke.hidden = !mayRevoke;
     card.revoke.disabled = inflight !== undefined;
     card.revoke.setAttribute("aria-label", text("delegations.revoke.for", { name }));
-    card.ended.hidden = canRevoke;
-    if (!canRevoke) {
+    card.ended.hidden = mayRevoke;
+    if (!mayRevoke) {
       card.ended.textContent = text(
-        shown === "expired" ? "delegations.ended.expired" : shown === "revoked" ? "delegations.ended.revoked" : "delegations.ended.pending",
+        revocable(shown)
+          ? "delegations.ended.received"
+          : shown === "expired"
+            ? "delegations.ended.expired"
+            : shown === "revoked"
+              ? "delegations.ended.revoked"
+              : "delegations.ended.pending",
       );
     }
 
@@ -598,7 +609,7 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
     if (refused) {
       card.errText.textContent = text(`delegations.err.${card.phase === "failed" ? "failed" : card.phase === "denied" ? "denied" : "stale"}`);
     }
-    card.retry.hidden = card.phase !== "failed" || !canRevoke;
+    card.retry.hidden = card.phase !== "failed" || !mayRevoke;
     card.retry.disabled = inflight !== undefined;
     if (card.detail !== undefined) card.detail.replaceChildren(...detailRows(row, shown, now));
   }
@@ -619,7 +630,7 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
   // --- revoke -------------------------------------------------------------
   function askRevoke(card: Card): void {
     if (inflight !== undefined || card.phase === "busy") return;
-    if (!revocable(shownStatus(card.row, Date.now()))) return;
+    if (!canRevoke(card.row, Date.now())) return;
     closeOtherConfirms();
     closeConfirm(card);
     card.phase = "idle";
@@ -673,7 +684,7 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
     if (confirmed !== undefined) confirmed.confirm.disabled = true;
     const source = ctx.data.source;
     // Re-check at the moment of consent: the row may have changed since the box opened.
-    if (source === undefined || !revocable(shownStatus(card.row, Date.now()))) {
+    if (source === undefined || !canRevoke(card.row, Date.now())) {
       closeConfirm(card);
       card.phase = "stale";
       paint(card);
@@ -990,7 +1001,7 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
         }
         card.row = row;
         seen.add(row.cid);
-        if (card.confirm !== undefined && !revocable(shownStatus(row, Date.now()))) {
+        if (card.confirm !== undefined && !canRevoke(row, Date.now())) {
           closeConfirm(card);
           card.phase = "stale";
         }

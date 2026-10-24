@@ -395,7 +395,12 @@ for (const scheme of ["light", "dark"] as const) {
     test("a received grant gets its own group, a cursor says only the first page is listed", async ({ page }) => {
       await open(page, { scheme, seed: { rows: [...mockupRows(), receivedRow()], nextCursor: "next" } });
       await expect(body(page).locator(".dl-h")).toHaveText(["Granted to e2e-settings-smoke3", "Granted to others4", "Received1"]);
-      await expect(card(page, "did:key:z6MkEX…LEg7Qa").locator(".dl-kind")).toContainText("Granted to you");
+      const received = card(page, "did:key:z6MkEX…LEg7Qa");
+      await expect(received.locator(".dl-kind")).toHaveText("Shared with you by did:key:z6MkEX…LEg7Qa");
+      await expect(received.locator(".st")).toHaveText("Active");
+      await expect(received.getByRole("button", { name: /^Revoke/ })).toBeHidden();
+      await expect(received.getByRole("button", { name: /^See details/ })).toBeVisible();
+      await expect(received).toContainText("Only the one who shared it can end it");
       await expect(body(page)).toContainText("Showing the first 8+");
       await page.getByRole("button", { name: "Open full page", exact: true }).click();
       await expect(panel(page).locator(".nav-i", { hasText: "Delegations" }).locator(".nav-m")).toHaveText("8+");

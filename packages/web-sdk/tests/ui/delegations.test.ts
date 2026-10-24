@@ -563,6 +563,43 @@ describe("revoke", () => {
     expect(h.el.textContent).toContain("Nothing to revoke");
   });
 
+  test("only active rows the user granted offer Revoke: a received grant is read-only, however active", async () => {
+    const h = await mountSection({
+      rows: [
+        row("mine"),
+        row("theirs", {
+          group: "received",
+          direction: "received",
+          label: { text: "did:key:z6MkMe…MeMeMe", source: "derived" },
+          delegatorDid: "did:key:z6MkGrantorGrantorGrantorGrantor",
+          delegateDid: "did:key:z6MkMeMeMeMeMeMeMeMeMeMeMe",
+        }),
+        // A received direction is enough, whatever group the mapper gave it.
+        row("odd", { direction: "received" }),
+      ],
+    });
+    const [mine, theirs, odd] = cards(h.el);
+    const revokeOf = (card: HTMLElement | undefined) => card?.querySelector<HTMLButtonElement>('[aria-label^="Revoke access for"]');
+    expect(revokeOf(mine)?.hidden).toBe(false);
+    expect(revokeOf(theirs)?.hidden).toBe(true);
+    expect(revokeOf(odd)?.hidden).toBe(true);
+    expect(theirs?.querySelector(".dl-kind")?.textContent).toBe("Shared with you by did:key:z6MkGr…rantor");
+    expect(theirs?.querySelector(".st")?.textContent).toBe("Active");
+    expect(theirs?.textContent).toContain("Only the one who shared it can end it");
+
+    // Even a programmatic click on the hidden button opens nothing and calls nothing.
+    revokeOf(theirs)?.click();
+    revokeOf(odd)?.click();
+    await flush();
+    expect(h.el.querySelector('[role="alertdialog"]')).toBeNull();
+    expect(h.revoked).toEqual([]);
+
+    // The details drawer still works for it.
+    theirs?.querySelector<HTMLButtonElement>('[aria-label^="See details"]')?.click();
+    await flush();
+    expect(h.el.querySelector(".drawer")?.textContent).toContain("Granted by");
+  });
+
   test("when the slip is declined a plain toast confirms, unless toasts are off; the receipt is always offered", async () => {
     const declined = await mountSection({ rows: [row("a")], slip: false });
     buttonIn(await openConfirm(declined), "Revoke access")?.click();

@@ -60,7 +60,8 @@ export function receivedRow(now: number = Date.now()): StubDelegationRowSeed {
     direction: "received",
     status: "active",
     group: "received",
-    label: { text: "did:key:z6MkEXAMPLEg7Qa", source: "stub" },
+    // The real mapper names every row after its delegate, which for a received grant is the user.
+    label: { text: "did:pkh:eip155…0c41d0", source: "derived" },
     delegatorDid: "did:key:z6MkEXAMPLEg7Qa",
     delegateDid: OWNER,
     resources: [{ resource: `${SPACE("Shared")}/kv/lab-notes/`, actions: [KV_ACTIONS.get, KV_ACTIONS.list] }],
