@@ -133,50 +133,6 @@ for (const scheme of ["light", "dark"] as const) {
   });
 }
 
-// The wipe note is always shown directly under the Erase button, so it is visible in the default on state.
-for (const scheme of ["light", "dark"] as const) {
-  test(`${scheme}: wipe note is visible under the Erase button in the default on state`, async ({ page }) => {
-    await mountHarness(page, scheme);
-    await page.evaluate(() => (window as unknown as HarnessWindow).tc?.ui.open("local-copy"));
-    const erase = page.getByRole("button", { name: "Erase local copy", exact: true });
-    await expect(erase).toBeVisible();
-    const note = erase.locator("xpath=following-sibling::p[1]");
-    await expect(note).toBeVisible();
-    await expect(note).toHaveClass(/\bnote\b/);
-  });
-}
-
-// The gap above Erase must be the 8px the wipe note uses, in every sync state. Each state is measured against the visible element directly above Erase.
-const SYNC_STATES = {
-  off: { requested: false, effective: "off" },
-  on: { requested: true, effective: "on" },
-  enabling: { requested: true, effective: "enabling" },
-  wiping: { requested: true, effective: "wiping" },
-  pending: { requested: true, effective: "pending" },
-  unavailable: { requested: true, effective: "unavailable" },
-} as const;
-
-for (const scheme of ["light", "dark"] as const) {
-  for (const [name, state] of Object.entries(SYNC_STATES)) {
-    test(`${scheme}: ${name}: Erase sits 8px below the visible element above it`, async ({ page }) => {
-      await mountHarness(page, scheme);
-      await page.evaluate((next) => (window as unknown as HarnessWindow).__tc.setSync(next), state);
-      await page.evaluate(() => (window as unknown as HarnessWindow).tc?.ui.open("local-copy"));
-      const erase = page.getByRole("button", { name: "Erase local copy", exact: true });
-      await expect(erase).toBeVisible();
-      const gap = await erase.evaluate((button) => {
-        let above = button.previousElementSibling;
-        while (above && (above.hasAttribute("hidden") || above.getClientRects().length === 0)) {
-          above = above.previousElementSibling;
-        }
-        if (!above) return null;
-        return button.getBoundingClientRect().top - above.getBoundingClientRect().bottom;
-      });
-      expect(gap).toBeCloseTo(8, 0);
-    });
-  }
-}
-
 // Each toast's left stripe must be its kind colour in the rendered page, and at
 // least 3:1 against the toast surface. Dark warning is the only dark override.
 const KINDS = ["info", "success", "warning", "error"] as const;

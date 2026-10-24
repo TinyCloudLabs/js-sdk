@@ -37,6 +37,8 @@ export interface StubSeed {
    * or -> not-found when this is `not-found`.
    */
   localNode?: LocalNodeState;
+  /** Local copy status. Replaces the default (a settled copy that follows the sync facade). */
+  readonly localCopy?: LocalCopyStatus;
 }
 
 const STUB_LOCAL_SETTLE_MS = 600;
@@ -106,15 +108,17 @@ export function createStubPanelData(seed: StubSeed = {}): PanelDataFactory {
       localCopy: () => {
         const state = client.sync?.state;
         return Promise.resolve(
-          viewReady<LocalCopyStatus>({
-            source: "stub",
-            fieldSources: { requested: "real", effective: "real", reason: "real" },
-            requested: state?.requested ?? false,
-            effective: state?.effective ?? "unavailable",
-            reason: state?.reason,
-            folders: [STUB_FOLDER],
-            pending: 0,
-          }),
+          viewReady<LocalCopyStatus>(
+            seed.localCopy ?? {
+              source: "stub",
+              fieldSources: { requested: "real", effective: "real", reason: "real" },
+              requested: state?.requested ?? false,
+              effective: state?.effective ?? "unavailable",
+              reason: state?.reason,
+              folders: [STUB_FOLDER],
+              pending: 0,
+            },
+          ),
         );
       },
       ...delegationsStub(seed.delegations),

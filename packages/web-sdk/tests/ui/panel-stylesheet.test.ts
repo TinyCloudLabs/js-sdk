@@ -161,6 +161,9 @@ describe("panel stylesheet targets", () => {
     for (const nav of shadow().querySelectorAll<HTMLButtonElement>(".nav-i")) {
       nav.click();
       for (const el of shadow().querySelectorAll("[class]")) for (const cls of el.classList) applied.add(cls);
+      // The Local copy section offers a wipe: open its confirm so the confirm box classes render too.
+      shadow().querySelector<HTMLButtonElement>("section.lc-wipe > button.action")?.click();
+      for (const el of shadow().querySelectorAll("[class]")) for (const cls of el.classList) applied.add(cls);
     }
     for (const cls of appliedClassesAcrossKinds()) applied.add(cls);
     const missing = [...targetedClasses(stylesheetText(shadow()))].filter((cls) => !applied.has(cls)).sort();

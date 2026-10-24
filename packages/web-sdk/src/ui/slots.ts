@@ -212,6 +212,12 @@ export interface HostPart {
 /** Authority kinds a client can be asked for. The bridge is internal; views without it show a neutral line. */
 export type AuthorityKind = "kv/sync" | "space/info" | "delegation/list" | "space/list";
 
+/**
+ * Outcome of `purgeLocalCopy`. `retryNow` is true when the replica keys may still be in the database
+ * (deny outcome marker or unguarded), so the copy may still be readable and one immediate retry is worthwhile.
+ */
+export type PurgeLocalCopyResult = { readonly ok: true } | { readonly ok: false; readonly retryNow: boolean };
+
 /** Narrow adapter built by ui/client.ts from TinyCloudWeb. */
 export interface PanelClient {
   readonly id: number;
@@ -239,4 +245,9 @@ export interface PanelClient {
   readonly data?: PanelDataSource | undefined;
   /** Signs out of the TinyCloud session. Undefined when the host cannot sign out; Overview then omits the control. */
   readonly signOut?: (() => Promise<void>) | undefined;
+  /**
+   * Removes the local copy from this browser after sign-out. Supplied by the host app or the SDK; the panel
+   * only calls it, after `signOut` has settled. Undefined: nothing to purge.
+   */
+  readonly purgeLocalCopy?: (() => Promise<PurgeLocalCopyResult>) | undefined;
 }
