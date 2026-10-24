@@ -102,6 +102,37 @@ describe("storageDisplay: state mapping", () => {
     expect(storageDisplay(status(1, 10, "ok", { state: "weird" }))).toBeUndefined();
   });
 
+  test("no limit is never full, even when the body says full", () => {
+    const d = storageDisplay(status(7, null, "full"));
+    expect(d?.level).toBe("normal");
+    expect(d?.percent).toBeUndefined();
+  });
+
+  test("account totals decide unlimited even when the space has a limit", () => {
+    const d = storageDisplay(status(1, 10, "ok", { account: { usedBytes: 9, limitBytes: null } }));
+    expect(d?.usedBytes).toBe(9);
+    expect(d?.limitBytes).toBeNull();
+    expect(d?.percent).toBeUndefined();
+    expect(d?.level).toBe("normal");
+  });
+
+  test("malformed bodies are not a status: never a 0 and never a full bar", () => {
+    const malformed: unknown[] = [
+      null,
+      "42",
+      {},
+      { usedBytes: -1, limitBytes: 10, state: "ok" },
+      { usedBytes: 1.5, limitBytes: 10, state: "ok" },
+      { usedBytes: "3", limitBytes: 10, state: "ok" },
+      { usedBytes: 3, limitBytes: -10, state: "ok" },
+      { usedBytes: 3, limitBytes: 10 },
+      { usedBytes: 3, limitBytes: 10, state: "bogus" },
+      { usedBytes: 3, limitBytes: 10, state: "ok", account: { usedBytes: -1, limitBytes: 100 } },
+      { usedBytes: 3, limitBytes: 10, state: "ok", account: null },
+    ];
+    for (const value of malformed) expect(storageDisplay(value)).toBeUndefined();
+  });
+
   test("a manage URL that is not https falls back to the account page", () => {
     expect(storageDisplay(status(1, 10, "ok", { manageUrl: "javascript:alert(1)" }))?.manageHref).toBe(
       "https://account.tinycloud.xyz/storage",
@@ -399,6 +430,17 @@ describe("storage page", () => {
     expect(el.querySelector(".storage-ask .note")?.textContent).toBe("You declined. Storage usage stays hidden.");
     expect(button?.textContent).toBe("Try again");
     expect(refreshes).toEqual([]);
+  });
+
+  test("a refusal with code unsupported says this session is blocked, not that the user declined", async () => {
+    const { el } = mount(
+      { state: "needs-permission", ability: "space/info" },
+      { authority: () => ({ approved: false, code: "unsupported" }) },
+    );
+    trustedClick(el.querySelector<HTMLButtonElement>(".storage-ask button") as HTMLButtonElement);
+    await flush();
+    expect(el.querySelector(".storage-ask .note")?.textContent).toBe("This session has no way to ask for it here.");
+    expect(el.querySelector(".storage-ask .note")?.textContent).not.toContain("declined");
   });
 
   test("needs permission without a request hook: a neutral note and no button", () => {

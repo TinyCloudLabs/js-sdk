@@ -431,7 +431,8 @@ export function storageDisplay(view: unknown): StorageDisplay | undefined {
   const limit = usage.limitBytes;
   const plan = view.account?.plan ?? view.plan;
   return {
-    level: LEVELS[view.state],
+    // No limit is never full, whatever the body says.
+    level: limit === null ? "normal" : LEVELS[view.state],
     usedBytes: usage.usedBytes,
     limitBytes: limit,
     percent: limit !== null && limit > 0 ? Math.min(100, Math.round((usage.usedBytes / limit) * 1000) / 10) : undefined,

@@ -25,7 +25,7 @@ interface HarnessWindow {
   tc?: { ui: { open(section?: string): void; openPage(section?: string): void } };
 }
 
-type Kind = "normal" | "near" | "full" | "permission" | "error";
+type Kind = "normal" | "near" | "full" | "unlimited" | "permission" | "error";
 type Scheme = "light" | "dark";
 
 // The mockup's three spaces for each state (MiB). The sums are its used amounts.
@@ -38,6 +38,15 @@ const SPACES: Record<"normal" | "near" | "full", Array<[string, number]>> = {
 function seed(kind: Kind): string {
   if (kind === "permission") return JSON.stringify({ storage: { state: "needs-permission", ability: "space/info" } });
   if (kind === "error") return JSON.stringify({ storage: { state: "error", code: "boom" } });
+  if (kind === "unlimited") {
+    // No limit, and a body that says "full": the page must not.
+    return JSON.stringify({
+      storage: {
+        state: "ready",
+        data: { source: "stub", usedBytes: 5 * 1024 * MIB, limitBytes: null, state: "full", manageUrl: MANAGE },
+      },
+    });
+  }
   const spaces = SPACES[kind];
   const used = Math.round(spaces.reduce((sum, [, mib]) => sum + mib, 0) * MIB);
   const limit = 1024 * MIB;
@@ -179,6 +188,32 @@ for (const scheme of SCHEMES) {
       await expect(banner.getByRole("link", { name: /Manage storage/ })).toHaveAttribute("href", MANAGE);
       await expect(s.locator(".storage-kv")).toContainText("None");
       await expect(s.locator('[role="meter"]').first()).toHaveAttribute("aria-valuenow", String(1024 * MIB));
+    });
+
+    test("unlimited never shows the full state: no meter, no Full word, no banner, header and launcher quiet", async ({ page }) => {
+      await mountHarness(page, scheme, "unlimited");
+      await open(page, "drawer");
+      const s = storage(page);
+      await expect(s.locator(".storage-fig")).toContainText("No limit");
+      await expect(s.locator(".storage-st")).toHaveText("Normal");
+      await expect(s.locator('[role="meter"]')).toHaveCount(0);
+      await expect(s.locator(".storage-banner")).toHaveCount(0);
+      await expect(s).not.toContainText("Full");
+      await expect(panel(page).locator(".status")).toBeHidden();
+      await expect(page.getByRole("button", { name: "TinyCloud settings", exact: true }).locator(".dot")).toBeHidden();
+    });
+
+    test("contrast: the permission card text clears 4.5:1", async ({ page }) => {
+      await mountHarness(page, scheme, "permission");
+      await open(page, "drawer");
+      const s = storage(page);
+      const bg = await panelBackground(page);
+      const rows = [
+        await textRow("card title", s.locator(".storage-ask h4"), bg),
+        await textRow("card body", s.locator(".storage-ask p").first(), bg),
+        await textRow("card note", s.locator(".storage-ask .note"), bg),
+      ];
+      for (const r of rows) expect(r.ratio, `${r.label} ${r.ratio}`).toBeGreaterThanOrEqual(4.5);
     });
 
     test("permission needed: neutral card and no numbers; no button without a request hook", async ({ page }) => {
