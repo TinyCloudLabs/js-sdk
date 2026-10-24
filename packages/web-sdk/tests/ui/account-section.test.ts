@@ -82,7 +82,7 @@ function mountWith(opts: Opts) {
       subscribe: () => () => undefined,
       account: opts.readAccount ?? (async () => ({ state: "ready", data: { ...ACCOUNT, ...opts.account } })),
     },
-    requests: opts.requests ? {} : undefined,
+    requests: opts.requests ? { snapshot: () => [] } : undefined,
     sync: {},
     signOut: opts.signOut
       ? async () => {

@@ -5,9 +5,13 @@ import { registerUiClient, type UiClientHandle } from "../../src/ui/index";
 import { toastStore } from "../../src/ui/parts/toasts";
 import type { ToastKind } from "../../src/ui/toast-store";
 import { createStubPanelData, type StubSeed } from "../../src/ui/stub/index";
+import { createRequestLog, sampleRows, type LogRow } from "./request-log";
 
-// Per-view stub results a spec pins with page.addInitScript before the page loads: window.__TC_STUB_SEED__ (a JSON string).
-function stubSeed(): StubSeed {
+// What a spec pins with page.addInitScript before the page loads: window.__TC_STUB_SEED__ (a JSON string).
+// The stub's per-view results, plus `requests`, the request log rows the harness itself serves.
+type HarnessSeed = StubSeed & { requests?: LogRow[] };
+
+function harnessSeed(): HarnessSeed {
   const raw: unknown = Reflect.get(window, "__TC_STUB_SEED__");
   return typeof raw === "string" ? JSON.parse(raw) : {};
 }
@@ -54,6 +58,8 @@ const storage = {
   },
 };
 
+// Request log rows: the mockup's sample rows, or `requests` from the seed.
+const requestLog = createRequestLog(harnessSeed().requests ?? sampleRows());
 let signOutCount = 0;
 let signedIn = true;
 const source = {
@@ -61,6 +67,7 @@ const source = {
   get sync() {
     return facade;
   },
+  requests: requestLog.reader,
   storage,
   async signOut() {
     signOutCount += 1;
@@ -80,7 +87,7 @@ w.__tc = {
       ui: { developerMode: true, ...ui },
       source: source as never,
       manifestAppId: () => "e2e-settings-smoke",
-      data: createStubPanelData(stubSeed()),
+      data: createStubPanelData(harnessSeed()),
     });
     w.tc = { ui: handle.api };
     return true;
@@ -122,5 +129,17 @@ w.__tc = {
   // How many times the panel's Sign out reached the client. Checked by the sign-out spec.
   signOutCalls() {
     return signOutCount;
+  },
+  // The request log the Activity section reads: add a request, clear the log, or count its listeners.
+  logPush(row: LogRow) {
+    requestLog.push(row);
+    return true;
+  },
+  logClear() {
+    requestLog.clear();
+    return true;
+  },
+  logListeners() {
+    return requestLog.listeners();
   },
 };

@@ -85,6 +85,9 @@ function ctxFor(client: PanelClient, developerMode = false): HostContext {
     toast: () => "",
     openPanel: () => undefined,
     closePanel: () => undefined,
+    appLabel: () => undefined,
+    requestRender: () => undefined,
+    data: { latest: () => undefined, subscribe: () => () => undefined },
     text,
   } as unknown as HostContext;
 }
@@ -367,16 +370,16 @@ describe("activity section", () => {
 
   test("lists requests newest first", async () => {
     const requests = {
-      rows: () => [request("get", "a"), request("put", "b")],
+      snapshot: () => [request("get", "a"), request("put", "b")],
       subscribe: () => () => undefined,
+      onClear: () => () => undefined,
     };
-    const el = mount(
-      activitySection,
-      clientWith(fakeData({ requests: () => requests })),
-      true,
-    );
+    const el = mount(activitySection, { ...clientWith(fakeData({})), requests } as PanelClient, true);
     await flush();
-    expect(labels(el)).toEqual(["put b", "get a"]);
+    const rows = [...el.querySelectorAll(".act-ar:not(.act-hd)")].map(
+      (node) => `${node.querySelector(".act-c-op")?.textContent} ${node.querySelector(".act-c-path")?.textContent}`,
+    );
+    expect(rows).toEqual(["put b", "get a"]);
   });
 });
 

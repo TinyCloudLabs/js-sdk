@@ -1,7 +1,7 @@
 import type { IStorageService } from "@tinycloud/sdk-core";
 
 import type { PanelDataFactory, PanelDataSource } from "./data";
-import type { PanelClient, SyncFacade } from "./slots";
+import type { PanelClient, RequestLogReader, SyncFacade } from "./slots";
 
 /**
  * What the UI reads from a TinyCloudWeb instance. The panel never sees
@@ -12,6 +12,7 @@ export interface ClientSource {
   readonly sync?: SyncFacade | undefined;
   readonly storage: Pick<IStorageService, "status">;
   readonly storageEpisode?: PanelClient["storageEpisode"];
+  readonly requests?: RequestLogReader | undefined;
   /** Signs out of the TinyCloud session. Undefined when the host cannot sign out. */
   signOut?: (() => Promise<void>) | undefined;
 }
@@ -54,7 +55,7 @@ export function createPanelClient(
       return panelData;
     },
     requestAuthority: undefined,
-    requests: undefined,
+    requests: source.requests,
     signOut: source.signOut,
   };
 
