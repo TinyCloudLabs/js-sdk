@@ -2644,13 +2644,14 @@ describe("browser SIWE domain and URI (#604, TC-1488) raised root ceiling ratche
 describe("short links v=4 (#708, TC-1737) worker ceiling ratchet", () => {
   const row = () => structuredClone(approvedTc1737ShortLinkLazyChunkRatchet);
 
-  it("sets the root, kv-storage worker and replica worker ceilings to the exact canonical CI bytes, carries every other ceiling, and is read by the checker", () => {
+  it("carries the index.mjs ceiling, sets index.cjs and both worker ceilings to the exact canonical CI bytes, carries every other ceiling, and is read by the checker", () => {
     expect(() => validateLedger(current)).not.toThrow();
     expect(JSON.stringify(current.tc1737ShortLinkLazyChunkRatchet)).toBe(JSON.stringify(approvedTc1737ShortLinkLazyChunkRatchet));
     expect(row().worker).toEqual({ delta: 46, ceiling: 776174 });
     expect(row().replicaWorker).toEqual({ delta: 20, ceiling: 770113 });
-    expect(row().root.delta).toEqual({ "index.mjs": -559, "index.cjs": 166 });
-    expect(row().root.ceiling).toEqual({ "index.mjs": 1461950, "index.cjs": 1404942 });
+    expect(row().root.delta).toEqual({ "index.mjs": 0, "index.cjs": 166 });
+    expect(row().root.ceiling).toEqual({ "index.mjs": 1462509, "index.cjs": 1404942 });
+    expect(row().reason).toContain("index.mjs measured 1461950 in CI run 40136320965; ceiling not lowered: within the TC-1985 gzip-alignment swing");
     for (const format of ["index.mjs", "index.cjs"] as const) {
       expect(row().root.ceiling[format]).toBe(approvedTc1488SiweDomainUriRatchet.root.ceiling[format] + row().root.delta[format]);
     }

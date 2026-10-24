@@ -1549,12 +1549,12 @@ export const approvedTc1488SiweDomainUriRatchet: Tc1488SiweDomainUriRatchet = {
  * Short links v=4 (js-sdk #708, TC-1737), accepted by Naomi: short-link code in sdk-core/share-envelope reached the
  * worker bundles. The kv-storage worker ceiling (`MAX_WORKER_GZIP_BYTES`) rises from 776,128 to 776,174 (+46) and the
  * replica worker ceiling (`MAX_REPLICA_WORKER_GZIP_BYTES`, the row's `replicaWorker`) from 770,093 to 770,113 (+20).
- * The root index.mjs / index.cjs ceilings go from 1,462,509 / 1,404,776 to 1,461,950 / 1,404,942 (-559 / +166). All are
- * the bytes canonical CI printed on the #708 head 8d15cd61 (Replica run 40136320965). First-import and activation
- * ceilings are unchanged.
+ * The root index.cjs ceiling goes from 1,404,776 to 1,404,942 (+166); the index.mjs ceiling stays 1,462,509 (CI measured
+ * 1,461,950, within the TC-1985 gzip-alignment swing). The worker and root ceilings are the bytes canonical CI printed on
+ * the #708 head 8d15cd61 (Replica run 40136320965). First-import and activation ceilings are unchanged.
  */
 export const approvedTc1737ShortLinkLazyChunkRatchet: Tc1737ShortLinkLazyChunkRatchet = {
-  label: "short links v=4 (TC-1737, #708): root -559 B mjs / +166 B cjs gzip; worker +46 B kv-storage / +20 B replica, all at the exact CI bytes",
+  label: "short links v=4 (TC-1737, #708): root index.cjs +166 B gzip, index.mjs ceiling carried; worker +46 B kv-storage / +20 B replica, at the exact CI bytes",
   ruling: "Approved by Naomi (root, kv-storage worker and replica worker at the exact CI bytes, no headroom; test-ruling: TC-1976)",
   base: "e6aad66159e81b47c937da584a4c7f019be54100",
   sourceCommits: [
@@ -1568,8 +1568,8 @@ export const approvedTc1737ShortLinkLazyChunkRatchet: Tc1737ShortLinkLazyChunkRa
     ],
   },
   root: {
-    delta: { "index.mjs": -559, "index.cjs": 166 },
-    ceiling: { "index.mjs": 1461950, "index.cjs": 1404942 },
+    delta: { "index.mjs": 0, "index.cjs": 166 },
+    ceiling: { "index.mjs": 1462509, "index.cjs": 1404942 },
   },
   firstImport: {
     delta: { "replica.mjs": 0, "replica.cjs": 0 },
@@ -1581,7 +1581,7 @@ export const approvedTc1737ShortLinkLazyChunkRatchet: Tc1737ShortLinkLazyChunkRa
   },
   worker: { delta: 46, ceiling: 776174 },
   replicaWorker: { delta: 20, ceiling: 770113 },
-  reason: "short-link code in sdk-core/share-envelope reached the worker bundles; accepted for the short-links release; follow-up ticket to keep it out.",
+  reason: "short-link code in sdk-core/share-envelope reached the worker bundles; accepted for the short-links release; follow-up ticket to keep it out. index.mjs measured 1461950 in CI run 40136320965; ceiling not lowered: within the TC-1985 gzip-alignment swing",
 };
 
 export type GatedOnlyRatchet = {

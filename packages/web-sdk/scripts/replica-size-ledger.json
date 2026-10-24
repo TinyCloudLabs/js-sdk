@@ -1533,7 +1533,7 @@
     "reason": "the browser SIWE domain and URI follow the page origin (TC-1488, #604): +35 B mjs / +35 B cjs gzip"
   },
   "tc1737ShortLinkLazyChunkRatchet": {
-    "label": "short links v=4 (TC-1737, #708): root -559 B mjs / +166 B cjs gzip; worker +46 B kv-storage / +20 B replica, all at the exact CI bytes",
+    "label": "short links v=4 (TC-1737, #708): root index.cjs +166 B gzip, index.mjs ceiling carried; worker +46 B kv-storage / +20 B replica, at the exact CI bytes",
     "ruling": "Approved by Naomi (root, kv-storage worker and replica worker at the exact CI bytes, no headroom; test-ruling: TC-1976)",
     "base": "e6aad66159e81b47c937da584a4c7f019be54100",
     "sourceCommits": [
@@ -1548,11 +1548,11 @@
     },
     "root": {
       "delta": {
-        "index.mjs": -559,
+        "index.mjs": 0,
         "index.cjs": 166
       },
       "ceiling": {
-        "index.mjs": 1461950,
+        "index.mjs": 1462509,
         "index.cjs": 1404942
       }
     },
@@ -1584,6 +1584,6 @@
       "delta": 20,
       "ceiling": 770113
     },
-    "reason": "short-link code in sdk-core/share-envelope reached the worker bundles; accepted for the short-links release; follow-up ticket to keep it out."
+    "reason": "short-link code in sdk-core/share-envelope reached the worker bundles; accepted for the short-links release; follow-up ticket to keep it out. index.mjs measured 1461950 in CI run 40136320965; ceiling not lowered: within the TC-1985 gzip-alignment swing"
   }
 }
