@@ -151,7 +151,7 @@ test("createKey signs one key.create capability on the exact key URN and hashes 
   const post = seen.find((r) => r.method === "POST")!;
   expect(post.url).toBe(`${HOST}/encryption/networks/${NETWORK_ID}/keys`);
   expect(post.url).not.toContain("%");
-  expect(post.body).toBe('{"keyPath":"apps/tinychat/session","shreddable":false}');
+  expect(post.body).toBe('{"deletable":true,"keyPath":"apps/tinychat/session"}');
   expect(call.facts).toEqual({
     type: "tinycloud.encryption.key-admin/v1",
     targetNode: NODE_DID,
@@ -159,7 +159,7 @@ test("createKey signs one key.create capability on the exact key URN and hashes 
     keyPath: PATH,
     action: "tinycloud.encryption/key.create",
     // Same rule createEncryptionNetwork uses: sha256 over the canonical body it sends.
-    bodyHash: sha256Hex(canonicalizeEncryptionJson({ keyPath: PATH, shreddable: false })),
+    bodyHash: sha256Hex(canonicalizeEncryptionJson({ keyPath: PATH, deletable: true })),
   });
   expect(call.facts.bodyHash).toBe(sha256Hex(post.body!));
 });

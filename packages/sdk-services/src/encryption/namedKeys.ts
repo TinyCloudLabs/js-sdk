@@ -15,8 +15,9 @@
  *   decrypted only through `POST /invoke` with a single decrypt capability on
  *   that key. v1 envelopes (no `keyPath`) go to the root-key path unchanged.
  *   A key and the root, or two keys, are never mixed in one invocation.
- * - `key.delete` is not offered. `shreddable` is always sent as `false`; the
- *   node refuses `true` until pricing is wired, so it is not part of the API.
+ * - `key.delete` is not offered. The create body carries `deletable`, which is
+ *   `true` exactly when the path starts with `apps/`; the node refuses it with
+ *   `deletable_unavailable` while app-key deletion is not enabled there.
  */
 
 import {
@@ -65,8 +66,9 @@ export type NamedKeyErrorCode =
   | "NETWORK_NOT_FOUND"
   | "NETWORK_NOT_ACTIVE"
   | "KEY_LIMIT_EXCEEDED"
-  | "SHREDDABLE_UNAVAILABLE"
-  | "SHREDDABLE_REQUIRES_PAID_TIER"
+  | "DELETABLE_UNAVAILABLE"
+  /** The key is not deletable (a deterministic key answers 409 `key_not_deletable`). */
+  | "KEY_NOT_DELETABLE"
   | "KEY_PATH_INVALID"
   | "KEY_UNWRAP_FAILED"
   /** Key is in a state other than active/blocked; `rawState` holds the node's string. */
@@ -145,29 +147,35 @@ export class NamedKeyError extends Error {
   }
 }
 
-const NODE_CODE_MAP: Readonly<Record<string, NamedKeyErrorCode>> = {
-  key_blocked: "KEY_BLOCKED",
-  key_not_found: "KEY_NOT_FOUND",
-  key_exists: "KEY_EXISTS",
-  network_not_found: "NETWORK_NOT_FOUND",
-  network_not_active: "NETWORK_NOT_ACTIVE",
-  key_limit_exceeded: "KEY_LIMIT_EXCEEDED",
-  shreddable_unavailable: "SHREDDABLE_UNAVAILABLE",
-  shreddable_requires_paid_tier: "SHREDDABLE_REQUIRES_PAID_TIER",
-  key_path_invalid: "KEY_PATH_INVALID",
-  key_unwrap_failed: "KEY_UNWRAP_FAILED",
-  receiver_key_invalid: "RECEIVER_KEY_INVALID",
-};
+/**
+ * Null-prototype tables: a node body such as `constructor: x` or `__proto__: x`
+ * must never match an inherited property.
+ */
+const NODE_CODE_MAP: Readonly<Record<string, NamedKeyErrorCode>> = Object.assign(
+  Object.create(null) as Record<string, NamedKeyErrorCode>,
+  {
+    key_blocked: "KEY_BLOCKED",
+    key_not_found: "KEY_NOT_FOUND",
+    key_exists: "KEY_EXISTS",
+    network_not_found: "NETWORK_NOT_FOUND",
+    network_not_active: "NETWORK_NOT_ACTIVE",
+    key_limit_exceeded: "KEY_LIMIT_EXCEEDED",
+    deletable_unavailable: "DELETABLE_UNAVAILABLE",
+    key_not_deletable: "KEY_NOT_DELETABLE",
+    key_path_invalid: "KEY_PATH_INVALID",
+    key_unwrap_failed: "KEY_UNWRAP_FAILED",
+    receiver_key_invalid: "RECEIVER_KEY_INVALID",
+  } satisfies Record<string, NamedKeyErrorCode>,
+);
 
 /**
- * The deleted/retired state code name is pending on the node side
- * (`key_deleted` may become `key_retired`). Both map to the generic
- * "unavailable" error carrying the raw code, so neither name is load-bearing.
+ * A deleted key answers `key_deleted`. It maps to the generic "unavailable"
+ * error carrying the raw code.
  */
-const UNAVAILABLE_NODE_CODES: Record<string, true> = {
-  key_deleted: true,
-  key_retired: true,
-};
+const UNAVAILABLE_NODE_CODES: Readonly<Record<string, true>> = Object.assign(
+  Object.create(null) as Record<string, true>,
+  { key_deleted: true as const },
+);
 
 const NODE_ERROR_RE = /^([a-z][a-z0-9_]*):\s?([\s\S]*)$/;
 
@@ -546,7 +554,7 @@ export class NamedKeyClient {
     const networkId = this.networkFor(options);
     const keyResource = this.keyUrn(networkId, path);
     const body: Json =
-      route === "keys" ? { keyPath: path, shreddable: false } : { keyPath: path };
+      route === "keys" ? { keyPath: path, deletable: path.startsWith("apps/") } : { keyPath: path };
     const targetNode = await this.requireNode();
     const signed = await this.config.signInvocation({
       targetNode,
@@ -577,7 +585,7 @@ export class NamedKeyClient {
     return parseFullDescriptor(unwrapDescriptor(await response.json()), networkId, path);
   }
 
-  /** `key.create`: deterministic key (`shreddable: false`). */
+  /** `key.create`: `deletable` is `true` exactly under `apps/`, else a deterministic key. */
   createKey(path: string, options?: KeyCallOptions): Promise<KeyDescriptor> {
     return this.admin("keys", KEY_CREATE_ABILITY, path, options);
   }

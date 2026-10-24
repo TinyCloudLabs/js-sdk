@@ -208,7 +208,7 @@ describe("key targets", () => {
 
 describe("admin routes", () => {
   const cases = [
-    { name: "create", call: (c: NamedKeyClient) => c.createKey(PATH), route: "keys", can: KEY_CREATE_ABILITY, body: '{"keyPath":"secrets/software-factory","shreddable":false}' },
+    { name: "create", call: (c: NamedKeyClient) => c.createKey(PATH), route: "keys", can: KEY_CREATE_ABILITY, body: '{"deletable":false,"keyPath":"secrets/software-factory"}' },
     { name: "block", call: (c: NamedKeyClient) => c.blockKey(PATH), route: "key-actions/block", can: KEY_BLOCK_ABILITY, body: '{"keyPath":"secrets/software-factory"}' },
     { name: "unblock", call: (c: NamedKeyClient) => c.unblockKey(PATH), route: "key-actions/unblock", can: KEY_UNBLOCK_ABILITY, body: '{"keyPath":"secrets/software-factory"}' },
   ] as const;
@@ -238,7 +238,7 @@ describe("admin routes", () => {
     });
   }
 
-  it("never sends shreddable: true or a delete route", async () => {
+  it("never sends deletable: true outside apps/ or a delete route", async () => {
     const h = harness(() => json(descriptor()));
     await h.client.createKey(PATH);
     const all = keyRequests(h.requests).map((r) => `${r.url} ${r.body ?? ""}`).join("\n");
@@ -433,8 +433,8 @@ describe("error mapping", () => {
     [404, "network_not_found: x", "NETWORK_NOT_FOUND"],
     [409, "network_not_active: x", "NETWORK_NOT_ACTIVE"],
     [403, "key_limit_exceeded: x", "KEY_LIMIT_EXCEEDED"],
-    [403, "shreddable_unavailable: x", "SHREDDABLE_UNAVAILABLE"],
-    [403, "shreddable_requires_paid_tier: x", "SHREDDABLE_REQUIRES_PAID_TIER"],
+    [403, "deletable_unavailable: x", "DELETABLE_UNAVAILABLE"],
+    [409, "key_not_deletable: x", "KEY_NOT_DELETABLE"],
     [400, "key_path_invalid: x", "KEY_PATH_INVALID"],
     [403, "key_unwrap_failed: x", "KEY_UNWRAP_FAILED"],
     [400, "receiver_key_invalid: receiverPublicKey must be a 32-byte X25519 public key", "RECEIVER_KEY_INVALID"],
@@ -449,8 +449,8 @@ describe("error mapping", () => {
     });
   }
 
-  it("deleted and retired codes both map to KEY_UNAVAILABLE carrying the raw code", () => {
-    for (const raw of ["key_deleted", "key_retired"]) {
+  it("a deleted code maps to KEY_UNAVAILABLE carrying the raw code", () => {
+    for (const raw of ["key_deleted"]) {
       const error = mapNodeKeyError(403, `${raw}: gone`, "ctx");
       expect(error.code).toBe("KEY_UNAVAILABLE");
       expect(error.rawState).toBe(raw);
@@ -834,5 +834,88 @@ describe("error messages never carry raw untrusted text", () => {
     expect(error.code).toBe("KEY_NOT_FOUND");
     expect(error.message).toContain(`${longPath.slice(0, 120)}...`);
     expect(error.message).not.toContain(longPath.slice(0, 121));
+  });
+});
+
+describe("create body `deletable` (node 1.22.0 contract)", () => {
+  const APP_PATH = "apps/tinychat/session";
+
+  it("sends deletable: true exactly under apps/ and never a shreddable field", async () => {
+    for (const [path, expected] of [
+      [APP_PATH, '{"deletable":true,"keyPath":"apps/tinychat/session"}'],
+      [PATH, '{"deletable":false,"keyPath":"secrets/software-factory"}'],
+      ["apps-x/y", '{"deletable":false,"keyPath":"apps-x/y"}'],
+    ] as const) {
+      const h = harness(() => json(descriptor({ keyPath: path })));
+      await h.client.createKey(path);
+      const [req] = keyRequests(h.requests);
+      expect(req!.body).toBe(expected);
+      expect(req!.body).not.toContain("shreddable");
+      expect(h.signed[0]!.facts.bodyHash).toBe(canonicalHashHex(sha256, JSON.parse(expected)));
+    }
+  });
+
+  it("maps deletable_unavailable and key_not_deletable by code, at any status", () => {
+    for (const status of [400, 403, 409]) {
+      expect(mapNodeKeyError(status, "deletable_unavailable: not enabled", "ctx")).toMatchObject({
+        code: "DELETABLE_UNAVAILABLE",
+        status,
+        nodeCode: "deletable_unavailable",
+      });
+    }
+    expect(mapNodeKeyError(409, "key_not_deletable: deterministic key", "ctx")).toMatchObject({
+      code: "KEY_NOT_DELETABLE",
+      status: 409,
+      nodeCode: "key_not_deletable",
+    });
+  });
+
+  it("a node that refuses deletable: true surfaces DELETABLE_UNAVAILABLE from createKey and ensureKey", async () => {
+    const refuse = (req: Recorded) =>
+      req.method === "POST" ? text("deletable_unavailable: app key deletion is not enabled", 403) : undefined;
+    const direct = harness(refuse);
+    await expect(direct.client.createKey(APP_PATH)).rejects.toMatchObject({ code: "DELETABLE_UNAVAILABLE" });
+
+    const steps = [() => text("key_not_found: x", 404), () => text("deletable_unavailable: x", 403)];
+    let i = 0;
+    const ensured = harness(() => steps[i++]!());
+    await expect(ensured.client.ensureKey(APP_PATH)).rejects.toMatchObject({ code: "DELETABLE_UNAVAILABLE" });
+  });
+
+  it("shreddable_* and key_retired are not mapped: they surface as NODE_ERROR", () => {
+    for (const body of [
+      "shreddable_unavailable: x",
+      "shreddable_requires_paid_tier: x",
+      "key_retired: x",
+    ]) {
+      expect(mapNodeKeyError(403, body, "ctx").code).toBe("NODE_ERROR");
+    }
+    expect(mapNodeKeyError(403, "key_deleted: gone", "ctx")).toMatchObject({
+      code: "KEY_UNAVAILABLE",
+      rawState: "key_deleted",
+    });
+  });
+
+  it("a public GET of a missing key under apps/ is KEY_NOT_FOUND, and encrypt creates nothing first", async () => {
+    const h = harness((req) =>
+      req.method === "GET" && req.url.startsWith(KEYS_URL) ? text("key_not_found: no such key", 404) : undefined,
+    );
+    await expect(h.client.getPublicKey(APP_PATH)).rejects.toMatchObject({ code: "KEY_NOT_FOUND", status: 404 });
+    await expect(h.client.encrypt(APP_PATH, utf8Encode("x"))).rejects.toMatchObject({ code: "KEY_NOT_FOUND" });
+    expect(keyRequests(h.requests).every((r) => r.method === "GET")).toBe(true);
+    expect(h.signed).toHaveLength(0);
+  });
+});
+
+describe("node error codes are matched as own keys only", () => {
+  it("`constructor`, `__proto__` and `toString` bodies are NODE_ERROR with no mapped code", () => {
+    for (const body of ["constructor: x", "__proto__: x", "toString: x", "hasOwnProperty: x", "valueOf: x"]) {
+      for (const status of [400, 403, 404]) {
+        const error = mapNodeKeyError(status, body, "ctx");
+        expect(error.code).toBe("NODE_ERROR");
+        expect(typeof error.code).toBe("string");
+        expect(error.status).toBe(status);
+      }
+    }
   });
 });
