@@ -6,6 +6,7 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { createLazyPrompts } from "../../src/notifications/lazy-prompts";
 import { MODALS_KEY, type LoadedModals } from "../../src/notifications/modals-registry";
+import { createPromptScope, dismissPrompts, prompts } from "../../src/ui/parts/prompts";
 
 const registry = globalThis as Record<symbol, unknown>;
 
@@ -154,5 +155,118 @@ describe("lazy dialog front", () => {
     registry[MODALS_KEY] = fakeModals();
     createLazyPrompts(async () => undefined).closeActiveModal();
     expect(calls).toEqual(["close"]);
+  });
+});
+
+/** A loader that waits for `release()` before the dialogs register, like a chunk still in flight. */
+function heldLoader(): { load: () => Promise<unknown>; release: () => void } {
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((done) => {
+    release = done;
+  });
+  return {
+    load: async () => {
+      await gate;
+      registry[MODALS_KEY] = fakeModals();
+    },
+    release,
+  };
+}
+
+const settle = () => new Promise((done) => setTimeout(done, 10));
+
+describe("a prompt waiting for the dialog chunk and the account", () => {
+  test("a reset declines a waiting permission prompt at once; no dialog is shown when the chunk arrives", async () => {
+    const chunk = heldLoader();
+    const front = createLazyPrompts(chunk.load);
+    const scope = createPromptScope(true);
+    let dismissed = 0;
+    const pending = front.showPermissionRequestModal({ appName: "A", additional: [], onDismiss: () => (dismissed += 1) } as never, scope);
+
+    dismissPrompts(scope);
+    // Settled by the reset itself, before the chunk is released.
+    expect(await pending).toEqual({ approved: false });
+    expect(dismissed).toBe(1);
+
+    chunk.release();
+    await settle();
+    expect(calls).toEqual([]);
+  });
+
+  test("a reset declines a waiting space-creation prompt the same way", async () => {
+    const chunk = heldLoader();
+    const front = createLazyPrompts(chunk.load);
+    const scope = createPromptScope(true);
+    let dismissed = 0;
+    const pending = front.showSpaceCreationModal(spaceOptions(() => (dismissed += 1)), scope);
+
+    dismissPrompts(scope);
+    expect(await pending).toEqual({ success: false, dismissed: true });
+    expect(dismissed).toBe(1);
+
+    chunk.release();
+    await settle();
+    expect(calls).toEqual([]);
+  });
+
+  test("an account change resets only that account's prompts: the other client's waiting prompt still shows", async () => {
+    const chunk = heldLoader();
+    const front = createLazyPrompts(chunk.load);
+    const accountA = createPromptScope(true);
+    const accountB = createPromptScope(true);
+    const first = front.showPermissionRequestModal({ appName: "A", additional: [] } as never, accountA);
+    const second = front.showPermissionRequestModal({ appName: "B", additional: [] } as never, accountB);
+
+    dismissPrompts(accountA);
+    expect(await first).toEqual({ approved: false });
+
+    chunk.release();
+    expect(await second).toEqual({ approved: true });
+    // Only account B's request reached a dialog.
+    expect(calls).toEqual(["permission:B"]);
+  });
+
+  test("the host's teardown declines every waiting prompt, including one raised without a client scope", async () => {
+    const chunk = heldLoader();
+    const front = createLazyPrompts(chunk.load);
+    const stop = prompts.start({} as never, {} as never);
+    const scoped = front.showPermissionRequestModal({ appName: "A", additional: [] } as never, createPromptScope(true));
+    const unscoped = front.showSpaceCreationModal(spaceOptions());
+
+    stop();
+    expect(await scoped).toEqual({ approved: false });
+    expect(await unscoped).toEqual({ success: false, dismissed: true });
+
+    chunk.release();
+    await settle();
+    expect(calls).toEqual([]);
+  });
+
+  test("a prompt that was dismissed is gone from the registry: a later reset does not call onDismiss again", async () => {
+    const chunk = heldLoader();
+    const front = createLazyPrompts(chunk.load);
+    const scope = createPromptScope(true);
+    let dismissed = 0;
+    const pending = front.showPermissionRequestModal({ appName: "A", additional: [], onDismiss: () => (dismissed += 1) } as never, scope);
+    chunk.release();
+    await pending;
+    dismissPrompts(scope);
+    expect(dismissed).toBe(0);
+  });
+});
+
+describe("closeActiveModal only withdraws space-creation prompts that are waiting", () => {
+  test("the space-creation timeout does not decline an unrelated permission prompt waiting for the chunk", async () => {
+    const chunk = heldLoader();
+    const front = createLazyPrompts(chunk.load);
+    const permission = front.showPermissionRequestModal({ appName: "keep", additional: [] } as never);
+    const space = front.showSpaceCreationModal(spaceOptions());
+
+    front.closeActiveModal();
+    expect(await space).toEqual({ success: false, dismissed: true });
+
+    chunk.release();
+    expect(await permission).toEqual({ approved: true });
+    expect(calls).toEqual(["permission:keep"]);
   });
 });

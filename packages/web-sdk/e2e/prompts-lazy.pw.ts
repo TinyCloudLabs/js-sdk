@@ -13,7 +13,7 @@ const DIALOG_CHUNK = /^modals-entry-.+\.js$/;
 const PERMISSION = "tinycloud-permission-request-modal";
 
 interface HarnessWindow {
-  __tc: { mount(): boolean; openPermission(): boolean; openSpaceCreation(): boolean };
+  __tc: { mount(): boolean; openPermission(): boolean; openSpaceCreation(): boolean; reset(): boolean };
   __permResult?: boolean;
   __permError?: string;
   __spaceResult?: boolean;
@@ -35,6 +35,19 @@ test.beforeEach(({ page }) => {
 test.afterEach(({ page }) => {
   expect(pageErrors.get(page) ?? []).toEqual([]);
 });
+
+/** Holds the dialog chunk's response until `release()`, as a slow network would. */
+async function holdDialogChunk(page: Page): Promise<() => void> {
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((done) => {
+    release = done;
+  });
+  await page.route(`${ORIGIN}/modals-entry-*.js`, async (route) => {
+    await gate;
+    await route.fallback();
+  });
+  return release;
+}
 
 async function boot(page: Page, options: { failDialogChunk?: boolean } = {}) {
   expect([...FILES.keys()].some((name) => DIALOG_CHUNK.test(name))).toBe(true);
@@ -95,4 +108,51 @@ test("a space-creation prompt whose dialog chunk fails to load resolves as not c
     .toBe(false);
   await expect(page.locator("tinycloud-space-modal")).toHaveCount(0);
   expect((consoleErrors.get(page) ?? []).some((line) => line.includes("its dialog failed to load, so it was declined"))).toBe(true);
+});
+
+test("a prompt raised before the dialog chunk loaded is declined by a reset and never shows or approves once the chunk arrives", async ({ page }) => {
+  await boot(page);
+  const release = await holdDialogChunk(page);
+  await page.evaluate(() => (window as unknown as HarnessWindow).__tc.openPermission());
+  await page.evaluate(() => (window as unknown as HarnessWindow).__tc.reset());
+  // Declined by the reset itself, while the chunk is still held.
+  await expect.poll(() => permResult(page)).toBe(false);
+
+  release();
+  await page.waitForTimeout(500);
+  await expect(page.locator(PERMISSION)).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Approve" })).toHaveCount(0);
+  expect(await permResult(page)).toBe(false);
+  expect(consoleErrors.get(page) ?? []).toEqual([]);
+});
+
+test("after an account change the old account's waiting prompt stays declined and only the new account's prompt shows", async ({ page }) => {
+  await boot(page);
+  const release = await holdDialogChunk(page);
+  await page.evaluate(() => (window as unknown as HarnessWindow).__tc.openPermission());
+  await page.evaluate(() => (window as unknown as HarnessWindow).__tc.reset());
+  await expect.poll(() => permResult(page)).toBe(false);
+
+  // The new account raises its own request while the chunk is still held.
+  await page.evaluate(() => (window as unknown as HarnessWindow).__tc.openPermission());
+  release();
+  await shown(page);
+  await expect(page.locator(PERMISSION)).toHaveCount(1);
+  await page.getByRole("button", { name: "Approve" }).click();
+  await expect.poll(() => permResult(page)).toBe(true);
+  expect(consoleErrors.get(page) ?? []).toEqual([]);
+});
+
+test("a space-creation prompt waiting for the chunk is declined by a reset the same way", async ({ page }) => {
+  await boot(page);
+  const release = await holdDialogChunk(page);
+  await page.evaluate(() => (window as unknown as HarnessWindow).__tc.openSpaceCreation());
+  await page.evaluate(() => (window as unknown as HarnessWindow).__tc.reset());
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as HarnessWindow).__spaceResult))
+    .toBe(false);
+
+  release();
+  await page.waitForTimeout(500);
+  await expect(page.locator("tinycloud-space-modal")).toHaveCount(0);
 });

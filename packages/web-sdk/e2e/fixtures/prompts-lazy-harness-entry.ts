@@ -28,6 +28,11 @@ w.__tc = {
     );
     return true;
   },
+  // What tcw does on sign-out and on an account change: the UI client is reset.
+  reset() {
+    handle?.reset();
+    return true;
+  },
   openSpaceCreation() {
     if (handle === undefined) throw new Error("mount() must run first");
     delete w.__spaceResult;

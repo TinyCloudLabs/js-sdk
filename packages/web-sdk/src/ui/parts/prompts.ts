@@ -82,6 +82,19 @@ export function mountPrompt(
 }
 
 /**
+ * Registers a prompt that has no dialog on screen yet (its dialog chunk is still loading). `dismissPrompts` and
+ * the part's teardown decline it like a mounted one, so a reset, sign-out or account change reaches it. Returns
+ * the release that takes it out of the registry.
+ */
+export function holdPrompt(scope: PromptScope, dismiss: () => void): () => void {
+  const entry: OpenPrompt = { scope, dismiss };
+  state.open.add(entry);
+  return () => {
+    state.open.delete(entry);
+  };
+}
+
+/**
  * Runs every entry's dismiss, removing each from the registry first. A throwing
  * caller callback must not stop cleanup, so the first error is rethrown on a
  * microtask after all entries have been settled.
