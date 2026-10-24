@@ -200,6 +200,41 @@ describe("toast region", () => {
     }
   });
 
+  test("a row's copyValue is what Copy receipt writes; the slip still shows the short value", async () => {
+    const written: string[] = [];
+    const realNavigator = globalThis.navigator;
+    Object.defineProperty(globalThis, "navigator", {
+      configurable: true,
+      value: { clipboard: { writeText: async (text: string) => { written.push(text); } } },
+    });
+    try {
+      const m = mount();
+      m.region.receipt({
+        titleCode: "panel.title",
+        rows: [
+          { labelCode: "panel.close", value: "bafy…9z", copyValue: "bafy-the-full-cid-9z" },
+          { labelCode: "panel.back", value: "rc-7" },
+        ],
+      });
+      expect([...m.layer.querySelectorAll(".slip > div")].map((row) => row.textContent)).toEqual(["Close bafy…9z", "Back to rc-7"]);
+      (m.layer.querySelector(".toast__copy") as HTMLButtonElement).click();
+      for (let turn = 0; turn < 10; turn++) await Promise.resolve();
+      expect(written).toEqual(["Close bafy-the-full-cid-9z\nBack to rc-7"]);
+      m.stop();
+    } finally {
+      Object.defineProperty(globalThis, "navigator", { configurable: true, value: realNavigator });
+    }
+  });
+
+  test("receipts with the same shown value but different copy values are both shown", () => {
+    const m = mount();
+    const receipt = (copyValue: string) => ({ titleCode: "panel.title", rows: [{ labelCode: "panel.close", value: "bafy…", copyValue }] });
+    expect(m.region.receipt(receipt("bafy-one"))).toBe(true);
+    expect(m.region.receipt(receipt("bafy-one"))).toBe(false);
+    expect(m.region.receipt(receipt("bafy-two"))).toBe(true);
+    m.stop();
+  });
+
   test("a refused clipboard write is reported, not swallowed", async () => {
     const realNavigator = globalThis.navigator;
     Object.defineProperty(globalThis, "navigator", {

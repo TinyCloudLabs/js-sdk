@@ -33,7 +33,7 @@
  *     Keys: localNode, localCopy, delegations, nodes, storage. The shell reads them all when the panel
  *     opens, on every source change, and each minute while open. A section reads its own body
  *     through ctx.data.source; status(ctx) must use latest() because it cannot wait.
- *   ctx.receipt({ titleCode, bodyCode?, rows }) Receipt slip toast with Copy receipt. False if toasts are off or it is a duplicate.
+ *   ctx.receipt({ titleCode, bodyCode?, rows: [{ labelCode, value, copyValue? }] }) Receipt slip toast with Copy receipt. `value` is shown; `copyValue` (default: value) is what is copied, e.g. full ID copied, short ID shown. False if toasts are off or it is a duplicate.
  *   ctx.toast({ kind, textCode, href?, hrefLabelCode? }) Plain toast; textCode may be a code the section registered.
  *   ctx.confirm({ question, cancelLabel, confirmLabel, anchor?, onCancel?, onConfirm }) -> { cancel, confirm, close() }
  *                              Inline alertdialog. The safe action takes focus; Escape takes it.

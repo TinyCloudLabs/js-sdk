@@ -16,6 +16,8 @@ type Code = string;
 export interface ReceiptRow {
   readonly labelCode: Code;
   readonly value: string;
+  /** What Copy receipt writes for this row (for example the full ID when `value` is a short form). Default: `value`. */
+  readonly copyValue?: string;
 }
 
 /** A confirmation with a dashed slip of identifiers and a Copy receipt action. */
@@ -185,7 +187,7 @@ export function mountToastRegion(
   }
 
   async function copyReceipt(rows: readonly ReceiptRow[]): Promise<void> {
-    const plain = rows.map((row) => `${panelText(row.labelCode)} ${row.value}`).join("\n");
+    const plain = rows.map((row) => `${panelText(row.labelCode)} ${row.copyValue ?? row.value}`).join("\n");
     try {
       await navigator.clipboard.writeText(plain);
       toast({ kind: "success", textCode: "toast.copied" });
@@ -196,7 +198,7 @@ export function mountToastRegion(
 
   return {
     receipt(request) {
-      const key = request.rows.map((row) => `${row.labelCode}=${row.value}`).join("\n");
+      const key = request.rows.map((row) => `${row.labelCode}=${row.value}|${row.copyValue ?? ""}`).join("\n");
       if (slips.some((slip) => slip.key === key)) return false;
       const { el, body, message } = toastShell("success");
       const title = document.createElement("b");
