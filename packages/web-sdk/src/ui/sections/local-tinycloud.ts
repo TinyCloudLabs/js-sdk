@@ -10,7 +10,7 @@ import { applyResult, createStateLine, settle, startLoading, textLine } from "./
 const MONO = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 
 const STYLE = `
-.ll-intro{margin:0 0 12px;font-size:13px;line-height:1.5;color:#52525b}
+.ll-intro{margin:-20px 0 20px;font-size:15px;line-height:1.5;max-width:56ch;color:#52525b}
 .ll-sub{margin:2px 0 0;font-size:12.5px;color:#52525b}
 .ll-ctl{display:flex;align-items:center;gap:10px;flex:none}
 .ll-word{min-width:2.5em;text-align:right;font-size:13px;font-weight:600}
@@ -22,17 +22,22 @@ const STYLE = `
 .ll-spin{flex:none;width:18px;height:18px;margin-top:2px;border:2px solid #d4d4d8;border-top-color:#18181b;border-radius:50%;animation:ll-spin .9s linear infinite}
 @keyframes ll-spin{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion: reduce){.ll-spin{animation:none}}
-.ll-kv{display:grid;grid-template-columns:auto minmax(0,1fr);gap:8px 14px;align-items:center;margin:0}
-.ll-kv dt{font-size:12.5px;color:#52525b}
-.ll-kv dd{display:flex;align-items:center;gap:8px;min-width:0;margin:0;font-size:13px}
-.ll-mono{font-family:${MONO};font-size:12.5px;overflow-wrap:anywhere}
-.ll-did{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:${MONO};font-size:12.5px}
+.ll-kv{display:flex;flex-direction:column;margin:0;padding:0}
+.ll-kv>div{display:flex;align-items:center;gap:10px;box-sizing:border-box;min-height:44px;padding:9px 0;border-bottom:1px solid #e4e4e7}
+.ll-kv>div:last-child{border-bottom:0}
+.ll-kv dt{display:flex;flex:1 1 auto;align-items:baseline;gap:10px;min-width:0;font-size:14px;color:#52525b;white-space:nowrap}
+.ll-kv dt::after{content:"";flex:1 1 12px;min-width:12px;border-bottom:2px dotted #a1a1aa;transform:translateY(-3px)}
+.ll-kv dd{display:flex;flex:0 1 auto;align-items:center;justify-content:flex-end;gap:2px;max-width:100%;min-width:0;margin:0;font-size:14px;font-weight:600;text-align:right;overflow-wrap:anywhere}
+.ll-mono,.ll-did{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:${MONO};font-size:12.5px}
 .ll-cell{display:flex;align-items:center;gap:8px;min-width:0}
+.ll-cell>.action{flex:none;padding-left:10px;padding-right:10px}
 .ll-steps{margin:0;padding-left:20px;font-size:13px;line-height:1.6;color:#52525b}
 @media (prefers-color-scheme: dark){
 .ll-intro,.ll-sub,.ll-body,.ll-kv dt,.ll-steps{color:#a1a1aa}
 .ll-card{border-color:#3f3f46}
 .ll-spin{border-color:#3f3f46;border-top-color:#fafafa}
+.ll-kv>div{border-bottom-color:#69696b}
+.ll-kv dt::after{border-bottom-color:#71717a}
 }
 `;
 
@@ -90,6 +95,10 @@ export const localTinycloudSection: PanelSection = {
     content.hidden = true;
 
     const intro = textLine("ll-intro", ctx.text("local-tinycloud.intro"));
+    const heading = document.createElement("h3");
+    heading.className = "sec-title";
+    heading.tabIndex = -1;
+    heading.textContent = ctx.text("nav.local-tinycloud");
 
     const row = document.createElement("div");
     row.className = "row";
@@ -124,7 +133,7 @@ export const localTinycloudSection: PanelSection = {
       if (attempted !== undefined) void setOn(attempted);
     });
 
-    content.append(intro, row, card, errorLine, retryWrite);
+    content.append(row, card, errorLine, retryWrite);
 
     function copyButton(value: string, labelCode: string): HTMLButtonElement {
       const button = actionButton(ctx.text("local-tinycloud.copy"));
@@ -185,13 +194,14 @@ export const localTinycloudSection: PanelSection = {
           recheck.addEventListener("click", () => void load());
           const kv = document.createElement("dl");
           kv.className = "ll-kv";
-          const rows: HTMLElement[] = [];
           const addRow = (labelCode: string, value: HTMLElement): void => {
+            const row = document.createElement("div");
             const dt = document.createElement("dt");
             dt.textContent = ctx.text(labelCode);
             const dd = document.createElement("dd");
             dd.append(value);
-            rows.push(dt, dd);
+            row.append(dt, dd);
+            kv.append(row);
           };
           const did = current.identity?.nodeDid;
           if (did !== undefined) {
@@ -214,12 +224,12 @@ export const localTinycloudSection: PanelSection = {
             const host = document.createElement("span");
             host.className = "ll-mono";
             host.textContent = current.url;
+            host.title = current.url;
             const hostCell = document.createElement("span");
             hostCell.className = "ll-cell";
             hostCell.append(host, copyButton(current.url, "local-tinycloud.copy.host_label"));
             addRow("local-tinycloud.found.host", hostCell);
           }
-          kv.append(...rows);
           return [head(pill("found"), recheck), kv];
         }
         case "not-found": {
@@ -313,7 +323,7 @@ export const localTinycloudSection: PanelSection = {
 
     const style = document.createElement("style");
     style.textContent = STYLE + UI_STYLE;
-    el.append(style, line.status, line.retry, content);
+    el.append(style, heading, intro, line.status, line.retry, content);
     startLoading(line, ctx);
     void load();
 
