@@ -1381,5 +1381,55 @@
       "ceiling": 776128
     },
     "reason": "credential consumer core: +76 B (mjs) / +71 B (cjs) gzip to each web-sdk root bundle (TC-712)"
+  },
+  "tc1781DecryptStandardExpiryRatchet": {
+    "label": "decrypt grants use the standard grant expiry again (node and web): root -313/-229; ceilings set to the exact CI bytes at 218d4a83 (run 40030915569)",
+    "ruling": "Approved by Naomi (2026-10-23, policy review relayed by Amos)",
+    "base": "f543b70ccd18bfde7324b3323af07d36450f5300",
+    "sourceCommits": [
+      "218d4a83fc7771818d1f7d1f674b81e7163d6d07"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40030915569",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40030915569/job/120678658559",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40030915569/job/120678658540"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": -313,
+        "index.cjs": -229
+      },
+      "ceiling": {
+        "index.mjs": 1462319,
+        "index.cjs": 1404635
+      }
+    },
+    "firstImport": {
+      "delta": {
+        "replica.mjs": 0,
+        "replica.cjs": 0
+      },
+      "ceiling": {
+        "replica.mjs": 51925,
+        "replica.cjs": 67141
+      }
+    },
+    "activation": {
+      "delta": {
+        "activation.mjs": 0,
+        "activation.cjs": 0
+      },
+      "ceiling": {
+        "activation.mjs": 23117,
+        "activation.cjs": 24700
+      }
+    },
+    "worker": {
+      "delta": 0,
+      "ceiling": 776128
+    },
+    "reason": "decrypt grants use the standard grant expiry again (node and web): root -313/-229; ceilings set to the exact CI bytes at 218d4a83 (run 40030915569)"
   }
 }

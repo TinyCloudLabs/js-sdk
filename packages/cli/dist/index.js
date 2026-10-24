@@ -1600,6 +1600,16 @@ var init_owner_did = __esm({
   }
 });
 
+// src/lib/caveat-refusal.ts
+import { recapCaveatsEqual } from "@tinycloud/sdk-core";
+var init_caveat_refusal = __esm({
+  "src/lib/caveat-refusal.ts"() {
+    "use strict";
+    init_constants();
+    init_errors();
+  }
+});
+
 // src/share/publishing-manifest.ts
 var init_publishing_manifest = __esm({
   "src/share/publishing-manifest.ts"() {
@@ -1648,6 +1658,7 @@ var init_permissions = __esm({
     init_space();
     init_raw_encryption();
     init_owner_did();
+    init_caveat_refusal();
     init_publishing_manifest();
     init_types();
   }

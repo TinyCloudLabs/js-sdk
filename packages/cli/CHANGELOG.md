@@ -1,5 +1,21 @@
 # @tinycloud/cli
 
+## 1.3.5-beta.7
+
+### Patch Changes
+
+- 217d82c: A manifest, grant or login permission that carries a limit (any `caveats` other than absent, `[]` or `[{}]`) is refused with `CAVEATS_UNSUPPORTED` (exit 2) before any OpenKey URL, device authorization or request is made. The check uses the same `recapCaveatsEqual` comparison as the SDK.
+
+  Details: TC-1856
+
+## 1.3.5-beta.6
+
+### Patch Changes
+
+- Updated dependencies [e600a1a]
+  - @tinycloud/node-sdk@3.6.0-beta.6
+  - @tinycloud/operations@0.7.4-beta.6
+
 ## 1.3.5-beta.5
 
 ### Patch Changes

@@ -1,5 +1,16 @@
 # @tinycloudlabs/web-sdk
 
+## 3.6.0-beta.6
+
+### Patch Changes
+
+- e600a1a: `TinyCloudWeb.requestPermissions` passes `expiryMs` through for decrypt grants, including wildcards, like any other entry.
+
+  Details: TC-1781
+
+- Updated dependencies [e600a1a]
+  - @tinycloud/node-sdk@3.6.0-beta.6
+
 ## 3.6.0-beta.5
 
 ### Patch Changes

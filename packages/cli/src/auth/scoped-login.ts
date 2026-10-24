@@ -8,6 +8,7 @@ import { normalizePkhIdentifier } from "../lib/space.js";
 import { ENCRYPTION_MANIFEST_SPACE } from "../../../sdk-core/src/manifest.js";
 import { isRawEncryptionPermission, isVerifiedRawEncryptionPermission } from "../lib/raw-encryption.js";
 import { canonicalNetworkUrn, rawEncryptionOwnerMatches } from "../lib/owner-did.js";
+import { assertNoCaveatLimits } from "../lib/caveat-refusal.js";
 
 /** OpenKey signs a scoped delegation only when it carries this read on the session space. */
 const CAPABILITIES_READ = "tinycloud.capabilities/read";
@@ -333,6 +334,7 @@ export function validateLoginPermissions(permissions: PermissionEntry[]): void {
  * before it signs any delegation.
  */
 export function scopedLoginPermissions(permissions: PermissionEntry[]): PermissionEntry[] {
+  assertNoCaveatLimits(permissions);
   // Validation guarantees one non-raw entry with a non-empty space.
   return withCapabilitiesRead(permissions, permissions.find((p) => !isRawEncryptionPermission(p))!.space ?? "");
 }
@@ -347,6 +349,7 @@ export function scopedLoginPermissions(permissions: PermissionEntry[]): Permissi
  * request whose non-raw entries do not name exactly one space.
  */
 export function grantRequestPermissions(group: PermissionEntry[], anchorSpace: string): PermissionEntry[] {
+  assertNoCaveatLimits(group);
   const request = group.map((p) => isRawEncryptionPermission(p)
     ? { ...p, space: ENCRYPTION_MANIFEST_SPACE, path: canonicalNetworkUrn(p.path) }
     : p);
