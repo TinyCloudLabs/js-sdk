@@ -147,7 +147,11 @@ tc courier join --resume
   over after two minutes without a refresh). A holder whose lock was taken
   over, or whose invite was changed under it, stops with `invite-lock-lost`
   before it writes anything more. Node calls made while deciding an invite give
-  up after 60 seconds (`node-timeout`) and leave the invite held again.
+  up after 60 seconds (`node-timeout`) and leave the invite held again; the
+  pairing step that gave up writes nothing afterwards. If it may already have
+  asked the node for a read grant, `invite list` shows it under `possibleGrants`
+  (cid or `unknown`, the courier, and the latest date it can be valid), and
+  `invite approve` shows it before pairing. It is not revoked automatically yet.
 - `pair start`, `pair accept` and `join` also refuse a handle that a peers file
   lists (`peers-entry-exists`, or `peers-unreadable`), before creating a peer or
   a grant; the same `--peers-file` / `COURIER_PEERS_FILE` / defaults apply.

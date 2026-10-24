@@ -17,7 +17,7 @@ export type PublicInviteStatus = (typeof PUBLIC_INVITE_STATUSES)[number];
 export const HELD_REASONS = [
   'no-credential', 'no-possession', 'bad-format', 'issuer-not-pinned', 'descriptor-mismatch', 'from-the-future', 'expired', 'too-old',
   'address-mismatch', 'bad-signature', 'holder-mismatch', 'bad-possession', 'replayed',
-  'owner-mismatch', 'peers-entry-exists', 'peers-unreadable', 'also-ask', 'internal-error',
+  'owner-mismatch', 'peers-entry-exists', 'peers-unreadable', 'also-ask', 'internal-error', 'node-timeout',
 ] as const;
 export type HeldReason = (typeof HELD_REASONS)[number];
 

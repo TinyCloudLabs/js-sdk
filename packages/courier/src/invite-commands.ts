@@ -22,6 +22,7 @@ import { credentialDigest, oneTimeKeyHash, signPossession, verifyPossession } fr
 import { loadKey, saveProfile, secureSubdir, writeSecure, type Profile } from './profile.js';
 import { delIfPresent, getJson, putCreate } from './store.js';
 import { assertNoPeersEntry } from './peers-guard.js';
+import { grantNote, possibleGrants, type PossibleGrant } from './grant-record.js';
 import { InviteWatcher, describeHeld, heldFactsText, ownerConfirms, peersMessage, eventLog, listRecords, peersEntryProblem, peersFilesFor, readJson, readRecord, reasonOf, recordPath, requestedTier, writeRecord, type AcceptedTier, type InviteRecord, type PeersFile } from './invite-watch.js';
 import { isRecord } from './a2a.js';
 import { jsonLineLog } from './wake.js';
@@ -273,6 +274,8 @@ function inviteList(): void {
     alsoAsk: r.alsoAsk,
     expiresAt: r.expiresAt,
     status: (r.status === 'open' || r.status === 'held') && Date.parse(r.expiresAt) <= now ? 'expired' : r.status,
+    // Read grants an abandoned attempt may have left (not revoked automatically): cid or `unknown`, the courier it was for, and when it ends at the latest.
+    possibleGrants: possibleGrants(r.inviteId, now).map((g) => ({ cid: g.cid, peerCourierDid: g.peerCourierDid, notAfter: g.notAfter })),
   })));
 }
 
@@ -317,19 +320,22 @@ async function inviteApprove(args: ParsedArgs): Promise<void> {
   const peersFiles = peersFilesFor(args.get('peers-file'));
   const { profile, node } = await ctx();
   const approved = await inviteWatcher(profile, node, peersFiles).approveHeld(inviteId, owner, tier);
-  console.log(approveSummary(inviteId, approved));
+  console.log(approveSummary(inviteId, approved, possibleGrants(inviteId, Date.now())));
 }
 
 /** What `invite approve` prints: the tier the record carries (the request, `trusted-requested` shown as `trusted`), not the flag. */
-export function approveSummary(inviteId: string, tier: AcceptedTier): string {
-  return `Invite ${inviteId} paired. Requested tier: ${tier === 'trusted-requested' ? 'trusted' : tier}. The peer starts as strict until you confirm trusted status.`;
+export function approveSummary(inviteId: string, tier: AcceptedTier, grants: readonly PossibleGrant[] = []): string {
+  return [`Invite ${inviteId} paired. Requested tier: ${tier === 'trusted-requested' ? 'trusted' : tier}. The peer starts as strict until you confirm trusted status.`, ...grants.map(earlierGrantNote)].join('\n');
 }
+
+/** Said after approve or deny when an earlier, abandoned attempt may have left a read grant (not revoked automatically yet). */
+const earlierGrantNote = (g: PossibleGrant): string => `Note: an earlier attempt may have left ${grantNote(g)}.`;
 
 async function inviteDeny(id: string | undefined): Promise<void> {
   const inviteId = requireInviteId(id, `Usage: ${cmd('invite deny <invite-id>')}`);
   const { profile, node } = await ctx();
   await inviteWatcher(profile, node).deny(inviteId);
-  console.log(`Invite ${inviteId} denied. The invitee receives a rejected Welcome and no artifact.`);
+  console.log([`Invite ${inviteId} denied. The invitee receives a rejected Welcome and no artifact.`, ...possibleGrants(inviteId, Date.now()).map(earlierGrantNote)].join('\n'));
 }
 
 export async function cmdJoin(args: ParsedArgs): Promise<void> {

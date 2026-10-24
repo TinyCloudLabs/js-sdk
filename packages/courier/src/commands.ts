@@ -265,14 +265,32 @@ export async function acceptA(profile: Profile, node: TinyCloudNode, art: PairAr
   return artifactWithDelegation('B', profile, outbound.delegation, handle, art.peer);
 }
 
-/** Step B received for a pending-A peer `handle`: validate, grant read back, mark paired, return artifact C. */
+/** Seams of acceptB. `signal` is aborted by the caller's deadline: once it is, acceptB writes nothing more. */
+export interface AcceptBDeps {
+  validatePeerDelegation?: typeof validatePeerDelegation;
+  signal?: AbortSignal;
+  /** Called synchronously just before the outgoing grant is requested from the node. */
+  onRequest?: () => void;
+  /** Called synchronously right after the node returned the outgoing grant, before anything else is done with it. */
+  onOutgoing?: (grant: { cid: string; expiresAt: string }) => void;
+}
+
+/**
+ * Step B received for a pending-A peer `handle`: validate, grant read back, mark paired, return artifact C.
+ * When `deps.signal` is aborted (the caller gave up), the next check throws `node-timeout` and nothing is changed after it: not the peer in the profile, not
+ * the peer record on the node, not profile.json. A grant the node already issued stays issued; `onOutgoing` has told the caller about it.
+ */
 export async function acceptB(
   profile: Profile,
   node: TinyCloudNode,
   art: PairArtifact,
   handle: string,
-  deps: { validatePeerDelegation: typeof validatePeerDelegation } = { validatePeerDelegation },
+  deps: AcceptBDeps = {},
 ): Promise<PairArtifact> {
+  const validate = deps.validatePeerDelegation ?? validatePeerDelegation;
+  const stopIfAborted = (): void => {
+    if (deps.signal?.aborted) throw new CourierError('node-timeout', 'The pairing step was abandoned at its deadline; nothing more was written.');
+  };
   const peer = findPendingPeer(profile, handle);
   if (art.from.owner === profile.ownerDid) fail('bad-artifact', 'Refusing to pair with our own owner identity.');
   // Snapshot: a failure restores the in-memory peer so a retry finds it pending-A again.
@@ -286,17 +304,23 @@ export async function acceptB(
       spaceId: art.spaceId,
       theirHandleForMe: art.peer,
     };
-    const incoming = await deps.validatePeerDelegation(node, profile, candidate, art.delegation!);
+    const incoming = await validate(node, profile, candidate, art.delegation!);
+    stopIfAborted();
     Object.assign(peer, candidate);
     peer.inbound = { delegation: serializeDelegation(incoming.delegation), cid: incoming.cid, expiresAt: incoming.expiresAt };
     // Orphan window: the outgoing delegation below is recorded on the peer only in memory until saveProfile. If writePeerRecord or
     // saveProfile fails after this call, the catch restores the peer, the delegation is never listed, and a retry mints another.
     // An orphaned outgoing delegation expires in 7 days (PEER_DELEGATION_EXPIRY).
+    deps.onRequest?.();
     const outgoing = await node.delegateTo(peer.courierDid, peerReadPermissions(peer.handle, profile.spaceId!), { expiry: PEER_DELEGATION_EXPIRY });
     recordOutbound(peer, outgoing.delegation);
+    deps.onOutgoing?.({ cid: peer.outbound[peer.outbound.length - 1]!.cid, expiresAt: peer.outbound[peer.outbound.length - 1]!.expiresAt });
+    stopIfAborted();
     peer.status = 'paired';
     await writePeerRecord(node, peer);
-    // Commit point: profile.json is saved last. A failure before this leaves the peer pending-A, so a retry re-runs.
+    // Commit point: profile.json is saved last. A failure before this leaves the peer pending-A, so a retry re-runs. Nothing is awaited between the
+    // last abort check and the save, so a call that was abandoned never saves its stale copy of the profile.
+    stopIfAborted();
     saveProfile(profile);
     return artifactWithDelegation('C', profile, outgoing.delegation, peer.handle, art.peer);
   } catch (e) {

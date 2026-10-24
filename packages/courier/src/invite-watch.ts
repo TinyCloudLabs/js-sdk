@@ -11,6 +11,7 @@ import type { Notice, Notifier } from './notify.js';
 import type { WatchLog } from './wake.js';
 import { saveProfile, secureSubdir, writeSecure, type Profile } from './profile.js';
 import { peersEntryProblem, peersFilesFor, peersMessage, type PeersFile } from './peers-guard.js';
+import { GRANT_LIFETIME_MS, listGrants, possibleGrants, removeExpiredGrants, updateGrantLate, writeGrant, type PossibleGrant } from './grant-record.js';
 
 export { peersEntryProblem, peersFilesFor, peersMessage, PEERS_ENTRY_MESSAGE, PEERS_UNREADABLE_MESSAGE, type PeersFile } from './peers-guard.js';
 import { delIfPresent, getJson, listAll, putCreate } from './store.js';
@@ -262,7 +263,7 @@ type Check = { ok: true; replayKey: string } | { ok: false; reason: string };
 export class InviteWatcher {
   private readonly now: () => Date;
   private readonly verify: (input: VerifyEmailProofInput) => Promise<VerifyEmailProofResult>;
-  private readonly accept: typeof acceptB;
+  private readonly realAccept: typeof acceptB;
   private readonly deleteSealed: typeof deleteSealedReal;
   /** The node's KV with every call bounded by NODE_CALL_TIMEOUT_MS. */
   private readonly kv: TinyCloudNode['kv'];
@@ -270,41 +271,47 @@ export class InviteWatcher {
   constructor(private readonly env: InviteEnv) {
     this.now = env.now ?? (() => new Date());
     this.verify = env.verify ?? verifyReal;
-    const realAccept = env.accept ?? acceptB;
+    this.realAccept = env.accept ?? acceptB;
     const realDelete = env.deleteSealed ?? deleteSealedReal;
-    this.accept = (...args: Parameters<typeof acceptB>) => this.bounded('acceptB', () => realAccept(...args));
-    this.deleteSealed = (...args: Parameters<typeof deleteSealedReal>) => this.bounded('deleteSealed', () => realDelete(...args));
+    this.deleteSealed = (...args: Parameters<typeof deleteSealedReal>) => this.bounded('deleteSealed', async () => realDelete(...args));
     this.kv = new Proxy(env.node.kv, {
       get: (target, prop) => {
         const member = Reflect.get(target, prop, target) as unknown;
         if (typeof member !== 'function') return member;
-        return (...args: unknown[]) => this.bounded(`kv.${String(prop)}`, async () => (member as (...a: unknown[]) => unknown).apply(target, args));
+        return (...args: unknown[]) => this.bounded(`kv.${String(prop)}`, async (_signal) => (member as (...a: unknown[]) => unknown).apply(target, args));
       },
     });
   }
 
   /**
-   * Runs one node call with a deadline. At the deadline the caller gets `node-timeout` and moves on (the invite stays recoverable); the call itself
-   * cannot be cancelled, so whatever it returns later is dropped and only logged.
+   * Runs one node call with a deadline. At the deadline the caller gets `node-timeout` and moves on (the invite stays recoverable), and the signal given to
+   * `run` is aborted: a call that honours it (acceptB does) writes nothing more. The call itself cannot be cancelled, so whatever it returns later is
+   * dropped and only logged; `onLate` (when given) hears how it ended.
    */
-  private bounded<T>(label: string, run: () => Promise<T>): Promise<T> {
+  private bounded<T>(label: string, run: (signal: AbortSignal) => Promise<T>, onLate?: (outcome: 'ok' | 'failed') => void): Promise<T> {
     const ms = this.env.timing?.nodeTimeoutMs ?? NODE_CALL_TIMEOUT_MS;
     return new Promise<T>((resolve, reject) => {
       let timedOut = false;
+      const controller = new AbortController();
       const timer = setTimeout(() => {
         timedOut = true;
+        controller.abort();
         reject(new CourierError('node-timeout', `${label} did not answer within ${Math.round(ms / 1000)} s`));
       }, ms);
-      run().then(
+      run(controller.signal).then(
         (value) => {
           clearTimeout(timer);
-          if (timedOut) this.env.log({ event: 'node-call-late', step: label, outcome: 'ok' });
-          else resolve(value);
+          if (timedOut) {
+            this.env.log({ event: 'node-call-late', step: label, outcome: 'ok' });
+            onLate?.('ok');
+          } else resolve(value);
         },
         (error: unknown) => {
           clearTimeout(timer);
-          if (timedOut) this.env.log({ event: 'node-call-late', step: label, outcome: 'failed', reason: reasonOf(error) });
-          else reject(error);
+          if (timedOut) {
+            this.env.log({ event: 'node-call-late', step: label, outcome: 'failed', reason: reasonOf(error) });
+            onLate?.('failed');
+          } else reject(error);
         },
       );
     });
@@ -336,6 +343,8 @@ export class InviteWatcher {
           this.env.log({ event: 'invite-sweep-error', inviteId: record.inviteId, reason: reasonOf(e) });
         }
       }
+      // A possible-grant record is kept until the grant can no longer be valid, and only then deleted here.
+      removeExpiredGrants(this.now().getTime());
     } catch (e) {
       this.env.log({ event: 'invite-sweep-error', reason: reasonOf(e) });
     }
@@ -343,8 +352,9 @@ export class InviteWatcher {
 
   private async sweepOne(listed: InviteRecord): Promise<void> {
     await this.recoverConsumed(listed);
-    // Recovery works on the record it re-reads under the lock, so carry on from what is on disk now, not from the listing.
-    const record = listed.status === 'consumed' ? (readRecord(listed.inviteId) ?? listed) : listed;
+    // The listing can be old (the sweep awaits the node for every record): carry on from what is on disk now, and not at all if it is gone.
+    const record = readRecord(listed.inviteId);
+    if (!record) return;
     await this.reconcilePublic(record);
     if (Date.parse(record.expiresAt) > this.now().getTime()) {
       // A missed hook must not strand a hello: the poll runs the same handler. It consumes the hello first, so a hello seen twice pairs once.
@@ -557,13 +567,52 @@ export class InviteWatcher {
   private async complete(record: InviteRecord, hello: Hello, guard?: LockGuard): Promise<string | undefined> {
     // Before each step that writes (or mints a delegation) the record on disk must still be the consume this holder made, and the lock still ours.
     const claim = consumedClaim(record);
+    // Bookkeeping for an outgoing grant that may exist if this attempt is abandoned (see grant-record.ts).
+    const attempt = record.consumedBy ?? newMarker();
+    const startedAt = this.now().toISOString();
+    let requested = false;
+    let outgoing: { cid: string; expiresAt: string } | undefined;
+    let persisted = record.artifactC !== undefined;
+    let grantRecorded = false;
+    const recordPossibleGrant = (): void => {
+      const timedOutAt = this.now().toISOString();
+      writeGrant({
+        v: 1, inviteId: record.inviteId, handle: record.handle, attempt,
+        peerCourierDid: hello.artifactB.from.courier, peerOwnerDid: hello.artifactB.from.owner, space: this.env.profile().spaceId ?? '',
+        startedAt, timedOutAt,
+        notAfter: outgoing?.expiresAt ?? new Date(Date.parse(timedOutAt) + GRANT_LIFETIME_MS).toISOString(),
+        cid: outgoing?.cid ?? 'unknown',
+      });
+      grantRecorded = true;
+      this.env.log({ event: 'invite-possible-grant', inviteId: record.inviteId, cid: outgoing?.cid ?? 'unknown' });
+    };
     try {
       if (record.artifactC === undefined) {
         this.cas(record.inviteId, claim, guard);
-        const artifactC = await this.accept(this.env.profile(), this.env.node, hello.artifactB, record.handle);
+        // A Welcome that is already out (a rejected one a deny left behind) must be found BEFORE a grant is minted for it.
+        if (await getJson(this.kv, `${inviteFolder(record.inviteId)}out/welcome.json`)) {
+          throw new CourierError('welcome-exists', 'a Welcome is already written for this invite');
+        }
+        this.cas(record.inviteId, claim, guard);
+        const artifactC = await this.bounded(
+          'acceptB',
+          (signal) => this.realAccept(this.env.profile(), this.env.node, hello.artifactB, record.handle, {
+            signal,
+            onRequest: () => { requested = true; },
+            onOutgoing: (grant) => {
+              outgoing = grant;
+              // The abandoned attempt got its answer after all: this file is the only thing it may update.
+              if (grantRecorded) updateGrantLate(record.inviteId, attempt, { cid: grant.cid, notAfter: grant.expiresAt });
+            },
+          }),
+          (outcome) => {
+            if (grantRecorded) updateGrantLate(record.inviteId, attempt, { late: outcome, lateAt: this.now().toISOString() });
+          },
+        );
         this.cas(record.inviteId, claim, guard);
         record.artifactC = artifactC;
         writeRecord(record);
+        persisted = true;
       }
       this.env.fault?.('before-welcome');
       this.cas(record.inviteId, claim, guard);
@@ -574,18 +623,22 @@ export class InviteWatcher {
       delete record.held;
       writeRecord(record);
     } catch (e) {
+      const timedOut = e instanceof CourierError && e.code === 'node-timeout';
+      // A grant that may exist but that no artifact C carries is written down before anything else, also when the lock was lost.
+      if (!persisted && (outgoing !== undefined || (timedOut && requested))) recordPossibleGrant();
       // A holder that lost its lock or whose record was changed under it writes nothing more; the invite is left for recovery.
       if (e instanceof CourierError && e.code === 'invite-lock-lost') throw e;
       this.env.log({ event: 'invite-error', inviteId: record.inviteId, reason: reasonOf(e) });
       delete record.completedPeer;
       record.status = 'consumed';
-      await this.hold(record, hello, 'internal-error', guard);
-      return e instanceof CourierError && e.code === 'node-timeout' ? 'node-timeout' : 'internal-error';
+      await this.hold(record, hello, timedOut ? 'node-timeout' : 'internal-error', guard);
+      if (timedOut) return 'node-timeout';
+      return e instanceof CourierError && e.code === 'welcome-exists' ? 'welcome-exists' : 'internal-error';
     }
     // The public copy is best-effort. A failed write is logged by reason and reconciled by the next sweep; it never changes the outcome.
     publishStatus(record, this.env.log);
     await this.finish(record);
-    await this.emit({ kind: 'invite-completed', peer: record.handle, threadId: record.inviteId, detail: '', invite: inviteFacts(record, hello, '') });
+    await this.emit({ kind: 'invite-completed', peer: record.handle, threadId: record.inviteId, detail: '', invite: inviteFacts(record, hello, '', this.now().getTime()) });
     return undefined;
   }
 
@@ -610,7 +663,7 @@ export class InviteWatcher {
     }
     publishStatus(record, this.env.log);
     this.env.log({ event: 'invite-held', inviteId: record.inviteId, reason });
-    await this.emit({ kind: 'invite-held', peer: record.handle, threadId: record.inviteId, detail: '', invite: inviteFacts(record, hello, reason) });
+    await this.emit({ kind: 'invite-held', peer: record.handle, threadId: record.inviteId, detail: '', invite: inviteFacts(record, hello, reason, this.now().getTime()) });
   }
 
   /**
@@ -619,7 +672,7 @@ export class InviteWatcher {
    */
   async approveHeld(id: string, owner: string, tier?: AcceptedTier): Promise<AcceptedTier> {
     return withInviteLock(id, this.env.timing, async (guard) => {
-      const record = await this.heldRecord(id);
+      const record = await this.heldRecord(id, guard);
       const hello = readHeld(id);
       if (!hello) fail('invite-not-held', 'Held hello is missing; nothing to approve.');
       if (!ownerConfirms(owner, hello.artifactB.from.owner)) {
@@ -640,6 +693,12 @@ export class InviteWatcher {
     writeRecord(record);
     publishStatus(record, this.env.log);
     const reason = await this.complete(record, hello, guard);
+    if (reason === 'node-timeout') {
+      const grant = possibleGrants(record.inviteId, this.now().getTime()).at(-1);
+      fail(reason, grant
+        ? `Pairing timed out (node-timeout); the invite is held again. A read grant to courier ${grant.peerCourierDid} may exist until ${grant.notAfter}; see courier invite list.`
+        : 'Pairing timed out (node-timeout); the invite is held again.');
+    }
     if (reason !== undefined) fail(reason, 'Pairing failed; the invite is held again. Retry approve or deny.');
     return record.tier;
   }
@@ -650,7 +709,7 @@ export class InviteWatcher {
   }
 
   private async denyLocked(id: string, guard: LockGuard): Promise<void> {
-    const record = await this.heldRecord(id);
+    const record = await this.heldRecord(id, guard);
     this.cas(id, claimOf(record), guard);
     record.status = 'consumed';
     record.consumedAt = this.now().toISOString();
@@ -689,11 +748,11 @@ export class InviteWatcher {
     await this.close(record, 'revoked');
   }
 
-  private async heldRecord(id: string): Promise<InviteRecord> {
+  private async heldRecord(id: string, guard?: LockGuard): Promise<InviteRecord> {
     const record = readRecord(id);
     if (!record || record.status !== 'held') fail('invite-not-held', 'Invite is not held; only held invites take a decision.');
     if (Date.parse(record.expiresAt) <= this.now().getTime()) {
-      await this.close(record, 'expired');
+      await this.close(record, 'expired', guard);
       fail('invite-expired', 'Invite has expired.');
     }
     return record;
@@ -701,10 +760,12 @@ export class InviteWatcher {
 
   /** Remote cleanup first, then the local status. A crash leaves the record open or held for the next sweep. */
   private async close(record: InviteRecord, status: 'expired' | 'revoked', guard?: LockGuard): Promise<void> {
+    // Whoever closes works from a record it read earlier: it may only close the invite if it is still in that state (not completed or re-consumed since).
+    this.cas(record.inviteId, claimOf(record), guard);
     await this.deleteSealedBlob(record);
     const kv = this.kv;
     for (const key of await listAll(kv, inviteFolder(record.inviteId))) await delIfPresent(kv, key);
-    if (guard !== undefined) this.cas(record.inviteId, claimOf(record), guard);
+    this.cas(record.inviteId, claimOf(record), guard);
     this.dropPendingPeer(record.handle);
     removeHeld(record.inviteId);
     record.status = status;
@@ -753,8 +814,9 @@ export class InviteWatcher {
   }
 }
 
-function inviteFacts(record: InviteRecord, hello: Hello, reason: string): NonNullable<Notice['invite']> {
-  return { id: record.inviteId, handle: record.handle, label: hello.claimedLabel, owner: hello.artifactB.from.owner, courierDid: hello.artifactB.from.courier, reason, tier: record.tier };
+function inviteFacts(record: InviteRecord, hello: Hello, reason: string, nowMs: number): NonNullable<Notice['invite']> {
+  const until = possibleGrants(record.inviteId, nowMs).map((g) => g.notAfter).sort().at(-1);
+  return { id: record.inviteId, handle: record.handle, label: hello.claimedLabel, owner: hello.artifactB.from.owner, courierDid: hello.artifactB.from.courier, reason, tier: record.tier, ...(until ? { possibleGrantUntil: until } : {}) };
 }
 
 const BARE_ADDRESS = /^0x[a-fA-F0-9]{40}$/;
@@ -775,6 +837,8 @@ export interface HeldFacts {
   owner: string;
   courierDid: string;
   claimedLabel: string;
+  /** Read grants an earlier, abandoned attempt may have left (still within their validity). */
+  possibleGrants: PossibleGrant[];
 }
 
 /** Reads the held invite and its hello from local files (no network). `invite-not-held` when the invite is not held or its hello is gone. */
@@ -791,6 +855,7 @@ export function describeHeld(id: string): HeldFacts {
     owner: hello.artifactB.from.owner,
     courierDid: hello.artifactB.from.courier,
     claimedLabel: hello.claimedLabel,
+    possibleGrants: possibleGrants(id, Date.now()),
   };
 }
 
@@ -800,5 +865,6 @@ export function heldFactsText(facts: HeldFacts): string {
     `  The hello that arrived is from owner ${facts.owner}, courier ${facts.courierDid}.`,
     `  Name it claims (not verified): ${facts.claimedLabel}`,
     `  Owner this invite expected: ${facts.expectOwner ?? 'any (no --expect-owner was set)'}`,
+    ...facts.possibleGrants.map((g) => `  An earlier pairing attempt timed out at ${g.timedOutAt} after asking the node for a read grant to courier ${g.peerCourierDid}. That grant may exist until ${g.notAfter} (cid ${g.cid}). It was not sent to the invitee and is not revoked automatically yet.`),
   ].join('\n');
 }
