@@ -289,8 +289,11 @@ export class EncryptionService
           return encErr(
             encryptionError(
               error.status === 404
-                // Matches the node's current "not found" status for a missing network.
-                ? { code: "NETWORK_NOT_FOUND", networkId: envelope.networkId }
+                ? {
+                  code: "NETWORK_NOT_FOUND",
+                  networkId: envelope.networkId,
+                  ...(error.notFoundMessage === undefined ? {} : { message: error.notFoundMessage }),
+                }
                 : error.status === 401 || error.status === 403
                 ? {
                   code: "DECRYPT_DENIED",

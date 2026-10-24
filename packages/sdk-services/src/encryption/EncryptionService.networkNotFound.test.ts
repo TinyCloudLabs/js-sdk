@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { discoverNetwork } from "./discovery";
+import { encryptionError } from "./types";
+
 
 import { base64Encode, canonicalize, utf8Encode } from "./canonical";
 import {
@@ -87,14 +90,13 @@ function crypto(localDecryptFails = false): EncryptionCrypto {
 }
 
 /**
- * A decrypt that the node answers with 404 (the account's encryption network
- * does not exist) tells the caller to sign in again with a current SDK. The
- * matcher is the node's current 404 status (TC-1910).
+ * A decrypt that the node answers with 404 maps to NETWORK_NOT_FOUND. The
+ * sign-in-again advice appears only when the transport supplies it (the
+ * signed-in owner's own default network), never from the default text (TC-1910).
  */
-test("decrypt 404 maps to NETWORK_NOT_FOUND with a sign-in-again hint", async () => {
-  const serviceCrypto = crypto();
+async function decrypt404(transportError: DecryptTransportResponseError) {
   const service = new EncryptionService({
-    crypto: serviceCrypto,
+    crypto: crypto(),
     signer: {
       signDecryptInvocation: async (input) => ({
         authorization: "authorization-canary",
@@ -104,7 +106,7 @@ test("decrypt 404 maps to NETWORK_NOT_FOUND with a sign-in-again hint", async ()
     },
     transport: {
       postDecrypt: async () => {
-        throw new DecryptTransportResponseError(404);
+        throw transportError;
       },
     },
     node: { fetchByNetworkId: async () => descriptor() },
@@ -112,7 +114,39 @@ test("decrypt 404 maps to NETWORK_NOT_FOUND with a sign-in-again hint", async ()
   const encrypted = await service.encryptToNetwork(NETWORK_ID, utf8Encode("value"));
   if (!encrypted.ok) throw new Error("fixture encryption failed");
   const result = await service.decryptEnvelope(encrypted.data as InlineEncryptedEnvelope, { proofs: [] });
-  expect(result).toMatchObject({ ok: false, error: { code: "NETWORK_NOT_FOUND", networkId: NETWORK_ID } });
   if (result.ok) throw new Error("expected failure");
-  expect(result.error.message).toContain("Sign in again with a current SDK");
+  return result.error;
+}
+
+test("decrypt 404 with transport advice keeps the sign-in-again hint", async () => {
+  const error = await decrypt404(
+    new DecryptTransportResponseError(404, undefined, `Network not found: ${NETWORK_ID}. Sign in again with a current SDK.`),
+  );
+  expect(error).toMatchObject({ code: "NETWORK_NOT_FOUND", networkId: NETWORK_ID });
+  expect(error.message).toContain("Sign in again with a current SDK");
+});
+
+test("decrypt 404 without transport advice has the plain not-found text", async () => {
+  const error = await decrypt404(new DecryptTransportResponseError(404));
+  expect(error).toMatchObject({ code: "NETWORK_NOT_FOUND", networkId: NETWORK_ID });
+  expect(error.message).toBe(`Network not found: ${NETWORK_ID}`);
+});
+
+describe("NETWORK_NOT_FOUND text carries no sign-in advice by default", () => {
+  test("the generic message has no advice", () => {
+    expect(encryptionError({ code: "NETWORK_NOT_FOUND", networkId: NETWORK_ID }).message).toBe(
+      `Network not found: ${NETWORK_ID}`,
+    );
+  });
+
+  test.each([
+    ["a named network", "urn:tinycloud:encryption:did:key:z6MkPrincipal:team"],
+    ["another owner's network", "urn:tinycloud:encryption:did:key:z6MkSomeoneElse:default"],
+  ])("encrypt-time discovery of %s has no advice", async (_label, identifier) => {
+    const found = await discoverNetwork({ identifier, node: { fetchByNetworkId: async () => null } });
+    expect(found.ok).toBe(false);
+    if (found.ok) return;
+    expect(found.error.code).toBe("NETWORK_NOT_FOUND");
+    expect(found.error.message).not.toContain("Sign in again");
+  });
 });

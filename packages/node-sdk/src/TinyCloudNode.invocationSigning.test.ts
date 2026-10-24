@@ -208,4 +208,80 @@ describe("invocation signing consistency (TC-1910)", () => {
     expect(verifiesUnderIssuer(headers.Authorization)).toBe(true);
     expect(verifiesUnderIssuer(forged)).toBe(false);
   });
+
+  test("bindInvocationAudience with a grant held: a base-issued token is re-signed with the base key", async () => {
+    const { node, base, mint, networkId, spaceId } = await setup();
+    const grantSession = await mint({ abilities: {}, rawAbilities: { [networkId]: [CREATE] } });
+    (node as any).runtimePermissionGrants.push({
+      session: grantSession,
+      delegation: { cid: grantSession.delegationCid },
+      operations: [{ resource: networkId, service: "encryption", path: networkId, action: CREATE }],
+      expiresAt: new Date(Date.now() + 30 * 60_000),
+      provenance: "runtime",
+    });
+    const headers = (node as any).invokeAnyWithRuntimePermissions(
+      base,
+      [{ spaceId, service: "kv", path: "", action: "tinycloud.kv/get" }],
+      [{}],
+    );
+    const bound = await node.bindInvocationAudience(headers.Authorization, NODE_DID);
+    expectConsistent(bound, base);
+    expect(decode(bound).payload.aud).toBe(NODE_DID);
+  });
+
+  test("bindInvocationAudience rejects a token whose issuer is not a held session", async () => {
+    const { node, mint, networkId } = await setup();
+    const stranger = await mint({ abilities: {}, rawAbilities: { [networkId]: [CREATE] } });
+    const headers = (node as any).wasmBindings.invokeAny(
+      stranger,
+      [{ resource: networkId, service: "encryption", path: networkId, action: CREATE }],
+      [{}],
+    );
+    await expect(node.bindInvocationAudience(headers.Authorization, NODE_DID)).rejects.toThrow(
+      "invocation issuer does not match a held session",
+    );
+  });
+
+  describe("decrypt 404 advice", () => {
+    async function postDecryptTo(networkIdOf: (own: string) => string, body: string) {
+      const { node, base, networkId } = await setup();
+      const graph = {
+        assertActive() {},
+        fetch: async () => new Response(body, { status: 404 }),
+      };
+      const service = (node as any).createEncryptionService({
+        graph,
+        host: "http://127.0.0.1:1",
+        session: base,
+        did: node.did,
+        address: base.address,
+        chainId: 1,
+      });
+      return service._config.transport
+        .postDecrypt({ targetNode: NODE_DID, networkId: networkIdOf(networkId), authorization: "a", canonicalBody: "{}" })
+        .then(() => undefined, (error: any) => error);
+    }
+
+    test("the signed-in owner's default network carries the sign-in-again advice", async () => {
+      const error = await postDecryptTo((own) => own, "network not found");
+      expect(error.status).toBe(404);
+      expect(error.notFoundMessage).toEndWith(
+        "Sign in again with a current SDK to create the account's encryption network.",
+      );
+    });
+
+    test("a named network and another owner's network carry no advice", async () => {
+      const named = await postDecryptTo((own) => own.replace(":default", ":other"), "network not found");
+      expect(named.status).toBe(404);
+      expect(named.notFoundMessage).toBeUndefined();
+      const foreign = await postDecryptTo(
+        (own) => own.replace(/eip155:1:0x[0-9a-fA-F]{40}/, "eip155:1:0x00000000000000000000000000000000000000aa"),
+        "network not found",
+      );
+      expect(foreign.status).toBe(404);
+      expect(foreign.notFoundMessage).toBeUndefined();
+      const odd = await postDecryptTo((own) => own, "something else");
+      expect(odd.notFoundMessage).toBeUndefined();
+    });
+  });
 });
