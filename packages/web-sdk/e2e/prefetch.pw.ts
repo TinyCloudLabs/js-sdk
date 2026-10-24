@@ -183,6 +183,7 @@ test("denied delegations shows needs-permission for that section only", async ({
 for (const rtt of [100, 300]) {
   test(`cold open at ${rtt} ms RTT: data appears after one round trip`, async ({ page }, testInfo) => {
     await boot(page, true);
+    await arm(page);
     await setFaults(page, { rtt });
     await open(page);
     await delegationsNav(page).click();
@@ -196,6 +197,20 @@ for (const rtt of [100, 300]) {
     expect(shownAt - requestedAt).toBeGreaterThanOrEqual(rtt);
   });
 }
+
+test("opening the panel without an arm makes no reads and logs no error", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") errors.push(message.text());
+  });
+  page.on("pageerror", (error) => errors.push(error.message));
+  await boot(page, true);
+  await open(page);
+  await delegationsNav(page).click();
+  await expect(panel(page)).toBeVisible();
+  expect(await calls(page)).toEqual([]);
+  expect(errors).toEqual([]);
+});
 
 test("warm open from memory shows data before a 300 ms round trip could finish", async ({ page }, testInfo) => {
   await boot(page);
