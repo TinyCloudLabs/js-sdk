@@ -30,6 +30,7 @@ export const AGENT_GRANT: PermissionEntry[] = [
     path: `kv/${PREFIX}/`,
     actions: ['tinycloud.hooks/subscribe'],
   },
+  { service: 'tinycloud.delegation', space: COURIER_SPACE, path: '', actions: ['tinycloud.delegation/revoke'] },
 ];
 
 
