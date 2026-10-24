@@ -1,37 +1,1066 @@
 import type {
   DelegationGroup,
+  DelegationPage,
+  DelegationResource,
   DelegationRow,
-  DelegationStatus,
+  DescribedAbilities,
+  PermissionAbility,
   RevokeOutcome,
 } from "../data";
-import type { HostContext, PanelSection } from "../slots";
-import { registerPanelStrings } from "../strings-panel";
+import type { ConfirmHandle, DrawerHandle, PanelSection, SectionContext, StatusTone } from "../slots";
+import { registerPanelStrings, panelText } from "../strings-panel";
 import { DELEGATIONS_STRINGS } from "./delegations.strings";
 import { viewStatus } from "./status";
+import { actionButton, icon, statusNode, UI_STYLE } from "./ui";
 
 registerPanelStrings(DELEGATIONS_STRINGS);
-import { mountPlaceholder } from "./placeholder";
-import { applyResult, createStateLine, settle, startLoading, textLine } from "./view-body";
+
+const DISPLAY = '"Literata Variable","Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif';
+const MONO = 'ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace';
+
+const STYLE = `
+.dl{container-type:inline-size}
+.dl-lede{margin:-22px 0 28px;max-width:56ch;font-size:15px;line-height:1.5}
+.dl-live{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.dl-body{display:flex;flex-direction:column;gap:28px}
+.dl-h{display:flex;align-items:center;gap:10px;margin:0 0 12px;font:600 13px/1.3 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;letter-spacing:.02em}
+.dl-h::after{content:"";flex:1;height:1px;background:#e4e4e7}
+.dl-cnt{font-weight:500;color:#71717a}
+.dl-sub{margin:-4px 0 12px;font-size:12.5px;line-height:1.4;color:#71717a}
+.dl-none{margin:0;font-size:14px;line-height:1.45;color:#71717a}
+.dl-list{display:flex;flex-direction:column;margin:0;padding:0;list-style:none}
+@container (min-width:720px){.dl-list{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);column-gap:16px;align-items:start}}
+.dl-wrap{display:grid;grid-template-rows:1fr;transition:grid-template-rows .4s cubic-bezier(.22,1,.36,1),opacity .3s}
+.dl-in{min-height:0;padding:3px 3px 12px;margin:-3px -3px 0}
+.dl-wrap.dl-leaving{grid-template-rows:0fr;opacity:0}
+.dl-wrap.dl-leaving>.dl-in{overflow:hidden;padding-bottom:0}
+.dl-card{display:flex;flex-direction:column;gap:10px;padding:16px 16px 16px 18px;border-radius:20px;background:#fff;box-shadow:inset 0 0 0 1px #e4e4e7}
+.dl-card:focus{outline:none}
+.dl-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.dl-top .st{flex:none}
+.dl-name{margin:0;font-size:15px;font-weight:600;line-height:1.3;overflow-wrap:anywhere}
+.dl-kind{display:block;margin-top:2px;font-size:12.5px;font-weight:500;color:#71717a;overflow-wrap:anywhere}
+.dl-what{margin:0;font-size:14px;line-height:1.45;overflow-wrap:anywhere}
+.dl-meta{margin:0;font-size:13px;color:#71717a}
+.dl-chips{display:flex;flex-wrap:wrap;gap:6px;margin:0;padding:0;list-style:none}
+.dl-chip{display:inline-flex;align-items:center;height:28px;padding:0 11px;border-radius:999px;background:#f4f4f5;color:#09090b;font-size:12.5px;font-weight:600;white-space:nowrap}
+.dl-chip-line{background:transparent;box-shadow:inset 0 0 0 1px #71717a}
+.dl-acts{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:2px}
+.dl-fine{margin:0;font-size:12.5px;line-height:1.4;color:#71717a}
+.dl-msg{margin:0;font-size:13px;line-height:1.4;color:#09090b}
+.dl-err{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.dl-foot{margin:16px 0 0}
+.dl-notice{display:flex;flex-direction:column;align-items:flex-start;gap:12px;padding:28px 22px;border-radius:20px;box-shadow:inset 0 0 0 1px #e4e4e7}
+.dl-notice-ask{padding:16px 16px 16px 18px}
+.dl-ic{display:grid;place-items:center;width:52px;height:52px;border-radius:50%;box-shadow:inset 0 0 0 1px #71717a}
+.dl-notice-ask .dl-ic{width:44px;height:44px}
+.dl-ic .ui-ic{width:24px;height:24px}
+.dl-notice h4{margin:0;font:400 1.375rem/1.2 ${DISPLAY}}
+.dl-notice p{margin:0;max-width:52ch;font-size:14px;line-height:1.45}
+.dl-skel{display:flex;flex-direction:column;gap:12px}
+.dl-skel-card{height:132px;border-radius:20px;background:#f4f4f5;animation:dl-pulse 1.4s ease-in-out infinite}
+.dl-skel-line{height:14px;width:40%;border-radius:7px;background:#f4f4f5;animation:dl-pulse 1.4s ease-in-out infinite}
+@keyframes dl-pulse{50%{opacity:.55}}
+.dl-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.dl-kv{display:flex;flex-direction:column;margin:0 0 12px;padding:0}
+.dl-kv>div{display:flex;align-items:center;justify-content:space-between;gap:10px;box-sizing:border-box;min-height:44px;padding:0;border-bottom:1px solid #e4e4e7}
+.dl-kv>div:last-child{border-bottom:0}
+.dl-kv dt{flex:none;font-size:14px}
+.dl-kv dd{display:flex;flex:1 1 auto;align-items:center;justify-content:flex-end;gap:2px;min-width:0;margin:0;font-size:14px;font-weight:600;text-align:right;overflow-wrap:anywhere}
+.dl-kv dd.dl-plain{font-weight:400}
+.dl-kv dd.dl-mono{font:500 12.5px ${MONO}}
+.dl-sub-h{margin:12px 0 8px;font-size:13px;font-weight:600}
+.dl-res{display:flex;flex-direction:column;gap:8px;margin:0 0 12px;padding:0;list-style:none}
+.dl-res li{display:flex;flex-direction:column;gap:6px;padding:10px 14px;border-radius:12px;background:#f4f4f5}
+.dl-res code{font:600 12px ${MONO};overflow-wrap:anywhere}
+.dl-res .dl-chips{gap:4px}
+.dl-res .dl-chip{height:24px;padding:0 9px;background:#fff;font-size:12px;line-height:1}
+.section[data-section="delegations"] .confirm{margin-top:10px;padding:14px 16px;border-radius:16px;box-shadow:inset 0 0 0 1px #71717a}
+.section[data-section="delegations"] .confirm p{margin:0;font-size:14px;line-height:1.45;color:inherit}
+.dl-q-title{display:block;margin-bottom:6px;font:400 1.25rem/1.25 ${DISPLAY}}
+.dl-q-dim{display:block;margin-top:8px;color:#52525b}
+.drawer .dl-what{margin:0 0 8px}
+@media (prefers-reduced-motion:reduce){
+.dl-wrap{transition:none}
+.dl-skel-card,.dl-skel-line{animation:none}
+}
+@media (prefers-color-scheme: dark){
+.dl-h::after{background:#69696b}
+.dl-cnt,.dl-sub,.dl-none,.dl-kind,.dl-meta,.dl-fine{color:#a1a1aa}
+.dl-card{background:#151517;box-shadow:inset 0 0 0 1px #69696b}
+.dl-msg{color:#fafafa}
+.dl-chip{background:#27272a;color:#fafafa}
+.dl-chip-line{background:transparent;box-shadow:inset 0 0 0 1px #a1a1aa}
+.dl-notice{box-shadow:inset 0 0 0 1px #69696b}
+.dl-ic{box-shadow:inset 0 0 0 1px #a1a1aa}
+.dl-skel-card,.dl-skel-line{background:#27272a}
+.dl-kv>div{border-bottom-color:#69696b}
+.dl-res li{background:#27272a}
+.dl-res .dl-chip{height:24px;padding:0 9px;background:#151517}
+.section[data-section="delegations"] .confirm{box-shadow:inset 0 0 0 1px #a1a1aa}
+.dl-q-dim{color:#d4d4d8}
+}
+`;
+
+// ---------------------------------------------------------------------------
+// Plain-words abilities
+// ---------------------------------------------------------------------------
+
+type Verb = "read" | "write" | "list" | "delete";
+const VERBS: readonly Verb[] = ["read", "write", "list", "delete"];
+
+/** Known action names, with and without the service prefix. Looked up by own key only, so `constructor` and friends are plain unknown actions. */
+const KNOWN_ACTIONS: Readonly<Record<string, Verb>> = {
+  "tinycloud.kv/get": "read",
+  "tinycloud.kv/put": "write",
+  "tinycloud.kv/list": "list",
+  "tinycloud.kv/del": "delete",
+  get: "read",
+  put: "write",
+  list: "list",
+  del: "delete",
+};
+
+const MAX_RAW = 64;
+
+/** Text that came from the network, made safe to show: no control or bidi characters, bounded. */
+function clean(value: string, max = MAX_RAW): string {
+  // eslint-disable-next-line no-control-regex
+  return value.replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, " ").trim().slice(0, max);
+}
+
+interface ParsedResource {
+  readonly space?: string;
+  /** Empty when the grant covers everything in the space. */
+  readonly path: string;
+  readonly verbs: readonly Verb[];
+  /** Actions the table does not know, shown as they are. */
+  readonly raws: readonly string[];
+}
+
+const SERVICE_PATH = /^(.*?)\/(?:kv|sql|duckdb|hooks|vault)(?:\/(.*))?$/;
+const BARE_PATH = /^tinycloud\.[a-z]+\/(.*)$/i;
+
+function splitResource(resource: string): { space?: string; path: string } {
+  const bare = BARE_PATH.exec(resource);
+  if (bare) return { path: (bare[1] ?? "") === "/" ? "" : (bare[1] ?? "") };
+  const full = SERVICE_PATH.exec(resource);
+  if (full) {
+    const tail = (full[1] ?? "").split(/[:/]/).pop() ?? "";
+    const space = tail === "" || /^0x[0-9a-f]{16,}$/i.test(tail) ? undefined : tail;
+    const path = full[2] ?? "";
+    return { ...(space === undefined ? {} : { space }), path: path === "/" ? "" : path };
+  }
+  return { path: resource === "/" ? "" : resource };
+}
+
+/** Reads a resource list that may be malformed. Never throws. */
+function parseResources(resources: readonly DelegationResource[]): ParsedResource[] {
+  const parsed: ParsedResource[] = [];
+  if (!Array.isArray(resources)) return parsed;
+  for (const entry of resources) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const raw = "resource" in entry ? entry.resource : undefined;
+    const actions = "actions" in entry ? entry.actions : undefined;
+    if (typeof raw !== "string" || !Array.isArray(actions)) continue;
+    const verbs = new Set<Verb>();
+    const raws: string[] = [];
+    for (const action of actions) {
+      if (typeof action !== "string") continue;
+      const key = action.trim().toLowerCase();
+      const verb = Object.prototype.hasOwnProperty.call(KNOWN_ACTIONS, key) ? KNOWN_ACTIONS[key] : undefined;
+      if (verb !== undefined) verbs.add(verb);
+      else {
+        const shown = clean(action);
+        if (shown !== "" && !raws.includes(shown)) raws.push(shown);
+      }
+    }
+    const where = splitResource(clean(raw, 200));
+    parsed.push({
+      ...(where.space === undefined ? {} : { space: where.space }),
+      path: where.path,
+      verbs: VERBS.filter((verb) => verbs.has(verb)),
+      raws,
+    });
+  }
+  return parsed;
+}
+
+function joinList(items: readonly string[]): string {
+  if (items.length < 2) return items.join("");
+  return `${items.slice(0, -1).join(", ")}${panelText("delegations.ability.and")}${items[items.length - 1] ?? ""}`;
+}
+
+function uniq(items: readonly string[]): string[] {
+  return items.filter((item, at) => items.indexOf(item) === at);
+}
+
+/** "read and list notes/", the part after "Can". Empty when the grant lists no action. */
+function abilityClause(parsed: readonly ParsedResource[]): string {
+  const groups = new Map<string, { words: string[]; paths: string[] }>();
+  for (const resource of parsed) {
+    const words = [...resource.verbs.map((verb) => panelText(`delegations.verb.${verb}`)), ...resource.raws];
+    if (words.length === 0) continue;
+    const key = words.join("\u0000");
+    const group = groups.get(key) ?? { words, paths: [] };
+    group.paths.push(resource.path === "" ? panelText("delegations.ability.all") : resource.path);
+    groups.set(key, group);
+  }
+  return [...groups.values()]
+    .map((group) => `${joinList(group.words)} ${joinList(uniq(group.paths))}`)
+    .join(panelText("delegations.ability.sep"));
+}
+
+/**
+ * Plain-words rendering of a resource list. `tinycloud.kv/get` reads as "read",
+ * `put` as "write", `list` as "list", `del` as "delete". Any other action is
+ * shown as it is (cleaned and shortened) in the line and in `chips`. A malformed
+ * list reads as no actions; this never throws.
+ */
+export function describeAbilities(resources: readonly DelegationResource[]): DescribedAbilities {
+  try {
+    const parsed = parseResources(resources);
+    const clause = abilityClause(parsed);
+    const chips = [
+      ...VERBS.filter((verb) => parsed.some((resource) => resource.verbs.includes(verb))).map((verb) =>
+        panelText(`delegations.chip.${verb}`),
+      ),
+      ...uniq(parsed.flatMap((resource) => resource.raws)),
+    ];
+    return {
+      plain: clause === "" ? panelText("delegations.ability.none") : panelText("delegations.ability.can", { what: clause }),
+      chips,
+    };
+  } catch {
+    return { plain: panelText("delegations.ability.none"), chips: [] };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Row mapping
+// ---------------------------------------------------------------------------
+
+type Shown = "active" | "soon" | "expired" | "revoked" | "pending";
+
+const SHOWN_TONE: Record<Shown, StatusTone> = {
+  active: "ok",
+  soon: "warn",
+  expired: "info",
+  revoked: "info",
+  pending: "off",
+};
+
+/** What the card says. An active grant whose end has passed reads as expired, so it offers no revoke. */
+export function shownStatus(row: DelegationRow, now: number): Shown {
+  switch (row.status) {
+    case "active": {
+      const end = row.expiresAt?.getTime();
+      if (end !== undefined && !Number.isNaN(end) && end <= now) return "expired";
+      return row.expiringSoon ? "soon" : "active";
+    }
+    case "expired":
+      return "expired";
+    case "revoked":
+    case "ancestor_revoked":
+      return "revoked";
+    default:
+      return "pending";
+  }
+}
+
+const revocable = (shown: Shown): boolean => shown === "active" || shown === "soon";
 
 const GROUPS: readonly DelegationGroup[] = ["this-app", "to-others", "received"];
 
-const GROUP_WORD: Record<DelegationGroup, string> = {
-  "this-app": "delegations.group.this-app",
-  "to-others": "delegations.group.to-others",
-  received: "delegations.group.received",
-};
+/** Rows by group, in the order the page lists them. */
+export function groupRows(rows: readonly DelegationRow[]): Record<DelegationGroup, DelegationRow[]> {
+  const grouped: Record<DelegationGroup, DelegationRow[]> = { "this-app": [], "to-others": [], received: [] };
+  for (const row of rows) grouped[GROUPS.includes(row.group) ? row.group : "to-others"].push(row);
+  return grouped;
+}
 
-const STATUS_WORD: Record<DelegationStatus, string> = {
-  active: "delegations.status.active",
-  pending: "delegations.status.pending",
-  expired: "delegations.status.expired",
-  revoked: "delegations.status.revoked",
-  ancestor_revoked: "delegations.status.ancestor_revoked",
+function shortDid(did: string): string {
+  const shown = clean(did, 200);
+  return shown.length <= 22 ? shown : `${shown.slice(0, 14)}…${shown.slice(-6)}`;
+}
+
+function shortCid(cid: string): string {
+  const shown = clean(cid, 200);
+  return shown.length <= 16 ? shown : `${shown.slice(0, 10)}…${shown.slice(-4)}`;
+}
+
+/** The other party: who got access from you, or who gave it to you. */
+function counterpart(row: DelegationRow): string {
+  return row.group === "received" ? row.delegatorDid : row.delegateDid;
+}
+
+function displayName(row: DelegationRow): string {
+  const label = clean(row.label?.text ?? "", 120);
+  // The mapper names every row after its delegate; for a received grant the other party is the delegator.
+  if (row.group === "received" && (label === "" || label === shortDid(row.delegateDid))) return shortDid(row.delegatorDid);
+  return label === "" ? shortDid(counterpart(row)) : label;
+}
+
+function spacesOf(parsed: readonly ParsedResource[]): string[] {
+  return uniq(parsed.flatMap((resource) => (resource.space === undefined ? [] : [resource.space])));
+}
+
+function relative(ms: number): string {
+  const minutes = Math.round(Math.abs(ms) / 60_000);
+  const days = Math.floor(minutes / 1440);
+  const hours = Math.floor((minutes % 1440) / 60);
+  const mins = minutes % 60;
+  const NBSP = "\u00a0";
+  if (days > 0) return hours > 0 ? `${days}d${NBSP}${hours}h` : `${days}d`;
+  if (hours > 0) return mins > 0 ? `${hours}h${NBSP}${mins}m` : `${hours}h`;
+  return `${mins}m`;
+}
+
+function agoText(from: Date, now: number): string {
+  const minutes = Math.max(0, Math.round((now - from.getTime()) / 60_000));
+  if (minutes < 1) return panelText("delegations.time.now");
+  if (minutes < 60) return panelText("delegations.time.min", { n: minutes });
+  if (minutes < 1440) return panelText("delegations.time.hour", { n: Math.floor(minutes / 60) });
+  return panelText("delegations.time.day", { n: Math.floor(minutes / 1440) });
+}
+
+function validDate(date: Date | null | undefined): date is Date {
+  return date instanceof Date && !Number.isNaN(date.getTime());
+}
+
+function metaLine(row: DelegationRow, shown: Shown, parsed: readonly ParsedResource[], now: number): string {
+  const parts: string[] = [];
+  const spaces = spacesOf(parsed);
+  if (spaces.length === 1) parts.push(panelText("delegations.meta.space", { space: spaces[0] ?? "" }));
+  else if (spaces.length > 1) parts.push(panelText("delegations.meta.spaces", { count: spaces.length }));
+  if (validDate(row.issuedAt)) parts.push(panelText("delegations.meta.created", { when: agoText(row.issuedAt, now) }));
+  if (validDate(row.expiresAt)) {
+    const gone = row.expiresAt.getTime() <= now;
+    const when = panelText(gone ? "delegations.time.ago" : "delegations.time.in", { t: relative(row.expiresAt.getTime() - now) });
+    parts.push(panelText(gone || shown === "expired" ? "delegations.meta.expired" : "delegations.meta.expires", { when }));
+  } else if (shown === "active" || shown === "soon") {
+    parts.push(panelText("delegations.meta.never"));
+  }
+  return parts.join(panelText("delegations.meta.sep"));
+}
+
+function kindLine(row: DelegationRow, name: string): string {
+  const kind = panelText(
+    row.group === "this-app" ? "delegations.kind.app" : row.group === "received" ? "delegations.kind.received" : "delegations.kind.others",
+  );
+  const who = shortDid(counterpart(row));
+  return who === name ? kind : `${kind}${panelText("delegations.meta.sep")}${who}`;
+}
+
+/** Codes the adapter uses when the grant was not active at the moment of revoking. */
+const STALE_CODES: Readonly<Record<string, true>> = {
+  "not-revocable": true,
+  not_found: true,
+  "not-found": true,
+  "not-active": true,
 };
+const DENIED_CODES: Readonly<Record<string, true>> = { PERMISSION_DENIED: true, "permission-denied": true, denied: true };
+
+type Phase = "idle" | "busy" | "failed" | "denied" | "stale";
+
+/** Which of the three messages a refused revoke maps to. */
+export function refusalPhase(code: string): Exclude<Phase, "idle" | "busy"> {
+  if (Object.prototype.hasOwnProperty.call(STALE_CODES, code)) return "stale";
+  if (Object.prototype.hasOwnProperty.call(DENIED_CODES, code)) return "denied";
+  return "failed";
+}
+
+
+// ---------------------------------------------------------------------------
+// DOM helpers
+// ---------------------------------------------------------------------------
+
+function node<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string): HTMLElementTagNameMap[K] {
+  const made = document.createElement(tag);
+  if (className !== undefined) made.className = className;
+  if (text !== undefined) made.textContent = text;
+  return made;
+}
+
+function reducedMotion(): boolean {
+  return typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+interface Card {
+  readonly cid: string;
+  row: DelegationRow;
+  phase: Phase;
+  confirm: ConfirmHandle | undefined;
+  drawer: DrawerHandle | undefined;
+  detail: HTMLElement | undefined;
+  readonly li: HTMLLIElement;
+  readonly article: HTMLElement;
+  readonly name: HTMLElement;
+  readonly kind: HTMLElement;
+  readonly statusSlot: HTMLElement;
+  readonly what: HTMLElement;
+  readonly meta: HTMLElement;
+  readonly chips: HTMLUListElement;
+  readonly see: HTMLButtonElement;
+  readonly revoke: HTMLButtonElement;
+  readonly ended: HTMLElement;
+  readonly busy: HTMLElement;
+  readonly err: HTMLElement;
+  readonly errText: HTMLElement;
+  readonly retry: HTMLButtonElement;
+}
+
+let cardSeq = 0;
+
+/** CIDs revoked from this panel, per data cache. The node's list keeps a revoked grant as a row; the panel shows it gone, in the body and in the rail count. */
+const REVOKED_HERE = new WeakMap<object, Set<string>>();
+function revokedFrom(data: object): Set<string> {
+  const known = REVOKED_HERE.get(data);
+  if (known !== undefined) return known;
+  const made = new Set<string>();
+  REVOKED_HERE.set(data, made);
+  return made;
+}
+
+/**
+ * Delegations the account granted or received, as cards by group. Reads the
+ * shell's cache (`ctx.data`), so the rail count and the body never disagree.
+ * Revoke asks first (the safe action takes focus), then calls the data source,
+ * which checks the node's current status before and after.
+ */
+function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
+  const text = (code: string, params?: Readonly<Record<string, string | number>>): string => ctx.text(code, params);
+  const appName = (): string => ctx.appLabel() ?? text("delegations.app.fallback");
+
+  const style = node("style");
+  style.textContent = UI_STYLE + STYLE;
+  const root = node("div", "dl");
+  const title = node("h3", "sec-title", text("nav.delegations"));
+  title.tabIndex = -1;
+  const lede = node("p", "dl-lede", text("delegations.lede"));
+  const live = node("div", "dl-live");
+  live.setAttribute("role", "status");
+  live.setAttribute("aria-live", "polite");
+
+  const skeleton = node("div", "dl-skel");
+  skeleton.setAttribute("role", "status");
+  skeleton.setAttribute("aria-busy", "true");
+  skeleton.append(
+    node("span", "dl-sr", text("delegations.loading")),
+    node("div", "dl-skel-line"),
+    node("div", "dl-skel-card"),
+  );
+  const notice = node("div");
+  const body = node("div", "dl-body");
+  const foot = node("p", "dl-fine dl-foot");
+  root.append(title, lede, live, skeleton, notice, body);
+  el.append(style, root);
+
+  let disposed = false;
+  let reloading = false;
+  let inflight: string | undefined;
+  let declined = false;
+  const cards = new Map<string, Card>();
+  const removed = revokedFrom(ctx.data);
+  const timers = new Set<number>();
+
+  // --- groups -------------------------------------------------------------
+  interface GroupView {
+    readonly section: HTMLElement;
+    readonly count: HTMLElement;
+    readonly list: HTMLUListElement;
+    readonly none: HTMLElement;
+  }
+  const groupViews = new Map<DelegationGroup, GroupView>();
+
+  function groupView(group: DelegationGroup): GroupView {
+    const known = groupViews.get(group);
+    if (known !== undefined) return known;
+    const code = group === "this-app" ? "app" : group === "to-others" ? "others" : "received";
+    const section = node("section");
+    const heading = node("h3", "dl-h");
+    const label = node("span", undefined, text(`delegations.g.${code}`, { app: appName() }));
+    const count = node("span", "dl-cnt");
+    heading.append(label, count);
+    const sub = node("p", "dl-sub", text(`delegations.g.${code}.sub`, { app: appName() }));
+    const list = node("ul", "dl-list");
+    const none = node("p", "dl-none", text("delegations.g.none"));
+    section.append(heading, sub, list, none);
+    const made = { section, count, list, none };
+    groupViews.set(group, made);
+    return made;
+  }
+
+  // --- cards --------------------------------------------------------------
+  function buildCard(row: DelegationRow): Card {
+    const id = `dl-${++cardSeq}`;
+    const li = node("li", "dl-wrap");
+    const inner = node("div", "dl-in");
+    const article = node("article", "dl-card");
+    article.tabIndex = -1;
+    const top = node("div", "dl-top");
+    const name = node("div", "dl-name");
+    name.id = `${id}-n`;
+    const kind = node("small", "dl-kind");
+    const nameText = node("span");
+    name.append(nameText, kind);
+    const statusSlot = node("span");
+    top.append(name, statusSlot);
+    const what = node("p", "dl-what");
+    const meta = node("p", "dl-meta");
+    const chips = node("ul", "dl-chips");
+    const acts = node("div", "dl-acts");
+    const see = actionButton(text("delegations.see"));
+    const revoke = actionButton(text("delegations.revoke.btn"));
+    const ended = node("span", "dl-fine");
+    acts.append(see, revoke, ended);
+    const busy = node("p", "dl-msg", text("delegations.busy"));
+    busy.setAttribute("role", "status");
+    const err = node("div", "dl-err");
+    err.setAttribute("role", "alert");
+    const errText = node("p", "dl-msg");
+    const retry = actionButton(text("view.retry"));
+    err.append(errText, retry);
+    article.setAttribute("aria-labelledby", name.id);
+    article.append(top, what, meta, chips, acts, busy, err);
+    inner.append(article);
+    li.append(inner);
+
+    const card: Card = {
+      cid: row.cid,
+      row,
+      phase: "idle",
+      confirm: undefined,
+      drawer: undefined,
+      detail: undefined,
+      li,
+      article,
+      name: nameText,
+      kind,
+      statusSlot,
+      what,
+      meta,
+      chips,
+      see,
+      revoke,
+      ended,
+      busy,
+      err,
+      errText,
+      retry,
+    };
+    see.addEventListener("click", () => openDetails(card));
+    revoke.addEventListener("click", () => askRevoke(card));
+    retry.addEventListener("click", () => askRevoke(card));
+    return card;
+  }
+
+  function paint(card: Card): void {
+    const now = Date.now();
+    const { row } = card;
+    const shown = shownStatus(row, now);
+    const parsed = parseResources(row.resources);
+    const name = displayName(row);
+    card.name.textContent = name;
+    card.kind.textContent = kindLine(row, name);
+    card.statusSlot.replaceChildren(statusNode({ text: text(`delegations.st.${shown}`), tone: SHOWN_TONE[shown] }));
+    card.what.textContent = describeAbilities(row.resources).plain;
+    card.meta.textContent = metaLine(row, shown, parsed, now);
+
+    const described = describeAbilities(row.resources);
+    const chips = described.chips.map((chip) => node("li", "dl-chip", chip));
+    if (row.terminal === true) {
+      const terminal = node("li", "dl-chip dl-chip-line", text("delegations.chip.terminal"));
+      terminal.title = text("delegations.chip.terminal.tip");
+      chips.push(terminal);
+    }
+    card.chips.replaceChildren(...chips);
+    card.chips.hidden = chips.length === 0;
+
+    card.see.setAttribute("aria-label", text("delegations.see.for", { name }));
+    const canRevoke = revocable(shown);
+    card.revoke.hidden = !canRevoke;
+    card.revoke.disabled = inflight !== undefined;
+    card.revoke.setAttribute("aria-label", text("delegations.revoke.for", { name }));
+    card.ended.hidden = canRevoke;
+    if (!canRevoke) {
+      card.ended.textContent = text(
+        shown === "expired" ? "delegations.ended.expired" : shown === "revoked" ? "delegations.ended.revoked" : "delegations.ended.pending",
+      );
+    }
+
+    const busy = card.phase === "busy";
+    card.busy.hidden = !busy;
+    const refused = card.phase === "failed" || card.phase === "denied" || card.phase === "stale";
+    card.err.hidden = !refused;
+    if (refused) {
+      card.errText.textContent = text(`delegations.err.${card.phase === "failed" ? "failed" : card.phase === "denied" ? "denied" : "stale"}`);
+    }
+    card.retry.hidden = card.phase !== "failed" || !canRevoke;
+    card.retry.disabled = inflight !== undefined;
+    if (card.detail !== undefined) card.detail.replaceChildren(...detailRows(row, shown, now));
+  }
+
+  function paintAll(): void {
+    for (const card of cards.values()) paint(card);
+  }
+
+  function closeConfirm(card: Card): void {
+    card.confirm?.close();
+    card.confirm = undefined;
+  }
+
+  function closeOtherConfirms(keep?: Card): void {
+    for (const card of cards.values()) if (card !== keep) closeConfirm(card);
+  }
+
+  // --- revoke -------------------------------------------------------------
+  function askRevoke(card: Card): void {
+    if (inflight !== undefined || card.phase === "busy") return;
+    if (!revocable(shownStatus(card.row, Date.now()))) return;
+    closeOtherConfirms();
+    closeConfirm(card);
+    card.phase = "idle";
+    paint(card);
+
+    const name = displayName(card.row);
+    const parsed = parseResources(card.row.resources);
+    const spaces = spacesOf(parsed);
+    const where = spaces.length === 1 ? text("delegations.confirm.where", { space: spaces[0] ?? "" }) : "";
+    const clause = abilityClause(parsed);
+    const heading = text("delegations.confirm.title", { name });
+    const detail =
+      clause === ""
+        ? text("delegations.confirm.generic", { name, where })
+        : text("delegations.confirm.what", { name, what: clause, where });
+    const wallet = text("delegations.confirm.openkey");
+
+    const handle = ctx.confirm({
+      question: `${heading} ${detail} ${wallet}`,
+      cancelLabel: text("delegations.confirm.keep"),
+      confirmLabel: text("delegations.confirm.go"),
+      anchor: card.article,
+      onCancel: () => {
+        card.confirm = undefined;
+        if (!disposed && card.revoke.isConnected && !card.revoke.hidden) card.revoke.focus();
+      },
+      onConfirm: () => void doRevoke(card),
+    });
+    card.confirm = handle;
+
+    // Same words, laid out as a heading, the consequence and the wallet note; the dialog is named by its question.
+    const box = handle.cancel.closest<HTMLElement>('[role="alertdialog"]');
+    const question = box?.querySelector("p");
+    if (box !== null && box !== undefined && question !== null && question !== undefined) {
+      const id = `dl-${++cardSeq}`;
+      const head = node("span", "dl-q-title", heading);
+      head.id = `${id}-t`;
+      const body = node("span", undefined, detail);
+      body.id = `${id}-b`;
+      const dim = node("span", "dl-q-dim", wallet);
+      dim.id = `${id}-w`;
+      question.replaceChildren(head, body, dim);
+      box.setAttribute("aria-labelledby", head.id);
+      box.setAttribute("aria-describedby", `${body.id} ${dim.id}`);
+    }
+  }
+
+  async function doRevoke(card: Card): Promise<void> {
+    if (inflight !== undefined || card.phase === "busy") return;
+    const confirmed = card.confirm;
+    if (confirmed !== undefined) confirmed.confirm.disabled = true;
+    const source = ctx.data.source;
+    // Re-check at the moment of consent: the row may have changed since the box opened.
+    if (source === undefined || !revocable(shownStatus(card.row, Date.now()))) {
+      closeConfirm(card);
+      card.phase = "stale";
+      paint(card);
+      void settleList();
+      return;
+    }
+    closeConfirm(card);
+    inflight = card.cid;
+    card.phase = "busy";
+    paintAll();
+    card.article.focus();
+
+    let outcome: RevokeOutcome | undefined;
+    try {
+      outcome = await source.revoke(card.cid);
+    } catch {
+      outcome = { ok: false, code: "unknown" };
+    }
+    inflight = undefined;
+
+    if (outcome !== undefined && outcome.ok === true) {
+      removed.add(card.cid);
+      ctx.requestRender();
+      receipt(card);
+      void settleList();
+      if (disposed) return;
+      live.textContent = text("delegations.live.revoked", { name: displayName(card.row) });
+      leave(card);
+      return;
+    }
+    const code = outcome !== undefined && outcome.ok === false ? outcome.code : "unknown";
+    card.phase = refusalPhase(code);
+    if (card.phase === "stale") void settleList();
+    if (disposed) return;
+    paintAll();
+    if (card.retry.hidden) card.article.focus();
+    else card.retry.focus();
+  }
+
+  /** The slip: the revocation's CID and the time. The receipt id does not exist, so the CID is the only identifier. */
+  function receipt(card: Card): void {
+    const time = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    // The slip's body takes no parameters, so the sentence for this revoke is registered under its own code just before it is shown.
+    const name = displayName(card.row);
+    const clause = abilityClause(parseResources(card.row.resources));
+    registerPanelStrings({
+      "delegations.receipt.sentence":
+        clause === "" ? text("delegations.receipt.generic", { name }) : text("delegations.receipt.what", { name, what: clause }),
+    });
+    const shown = ctx.receipt({
+      titleCode: "delegations.receipt.title",
+      bodyCode: "delegations.receipt.sentence",
+      rows: [
+        { labelCode: "delegations.receipt.cid", value: shortCid(card.cid) },
+        { labelCode: "delegations.receipt.time", value: time },
+      ],
+    });
+    if (!shown && ctx.toastsEnabled()) ctx.toast({ kind: "success", textCode: "delegations.receipt.title" });
+  }
+
+  /** Re-reads the list so counts, statuses and the rail follow the node. */
+  async function settleList(): Promise<void> {
+    try {
+      await ctx.data.refresh("delegations");
+    } catch {
+      // The cache records a failed read as an error result; nothing to add here.
+    }
+  }
+
+  function leave(card: Card): void {
+    cards.delete(card.cid);
+    closeConfirm(card);
+    card.drawer?.close();
+    card.drawer = undefined;
+    const active = (el.getRootNode() as Document | ShadowRoot).activeElement;
+    if (active !== null && card.li.contains(active)) title.focus();
+    const finish = (): void => card.li.remove();
+    if (reducedMotion()) finish();
+    else {
+      card.li.classList.add("dl-leaving");
+      const timer = window.setTimeout(() => {
+        timers.delete(timer);
+        finish();
+      }, 420);
+      timers.add(timer);
+    }
+    update();
+  }
+
+  // --- details ------------------------------------------------------------
+  function copyButton(value: string, labelCode: string): HTMLButtonElement {
+    const button = node("button", "icon-btn");
+    button.type = "button";
+    button.setAttribute("aria-label", text(labelCode));
+    button.append(icon("copy"));
+    button.addEventListener("click", () => {
+      void (async () => {
+        try {
+          await navigator.clipboard.writeText(value);
+          ctx.toast({ kind: "success", textCode: "toast.copied" });
+        } catch {
+          ctx.toast({ kind: "error", textCode: "toast.copy_failed" });
+        }
+      })();
+    });
+    return button;
+  }
+
+  function kvRow(labelCode: string, value: string): HTMLElement {
+    const line = node("div");
+    line.append(node("dt", undefined, text(labelCode)), node("dd", "dl-plain", value));
+    return line;
+  }
+
+  function idRow(labelCode: string, id: string, shortForm: string, copyCode: string): HTMLElement {
+    const line = node("div");
+    const dd = node("dd", "dl-mono");
+    dd.append(node("span", undefined, shortForm), copyButton(id, copyCode));
+    line.append(node("dt", undefined, text(labelCode)), dd);
+    return line;
+  }
+
+  function dateText(date: Date | null | undefined): string {
+    return validDate(date) ? date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : text("delegations.d.none");
+  }
+
+  function detailRows(row: DelegationRow, shown: Shown, now: number): Node[] {
+    const all = parseResources(row.resources);
+    const summary = node(
+      "p",
+      "dl-what",
+      `${describeAbilities(row.resources).plain}${row.terminal === true ? `. ${text("delegations.d.noforward")}` : "."}`,
+    );
+    const list = node("dl", "dl-kv");
+    const status = node("dd");
+    status.append(statusNode({ text: text(`delegations.st.${shown}`), tone: SHOWN_TONE[shown] }));
+    const statusLine = node("div");
+    statusLine.append(node("dt", undefined, text("delegations.d.status")), status);
+    list.append(
+      statusLine,
+      idRow("delegations.d.by", row.delegatorDid, shortDid(row.delegatorDid), "delegations.d.copy.by"),
+      idRow("delegations.d.to", row.delegateDid, shortDid(row.delegateDid), "delegations.d.copy.to"),
+      idRow("delegations.d.id", row.cid, shortCid(row.cid), "delegations.d.copy.id"),
+      kvRow("delegations.d.issued", dateText(row.issuedAt)),
+      kvRow("delegations.d.notbefore", dateText(row.notBefore)),
+      kvRow(
+        validDate(row.expiresAt) && row.expiresAt.getTime() <= now ? "delegations.d.expired" : "delegations.d.expires",
+        dateText(row.expiresAt),
+      ),
+      kvRow(
+        "delegations.d.parents",
+        row.parents.length === 0 ? text("delegations.d.parents.none") : text("delegations.d.parents.n", { count: row.parents.length }),
+      ),
+    );
+    const spaces = spacesOf(all);
+    if (spaces.length === 1) list.insertBefore(kvRow("delegations.d.space", spaces[0] ?? ""), list.children[1] ?? null);
+    if (row.terminal !== undefined) {
+      list.append(kvRow("delegations.d.terminal", text(row.terminal ? "delegations.d.terminal.yes" : "delegations.d.terminal.no")));
+    }
+    if (row.revokedAt !== undefined && row.revokedAt !== null) list.append(kvRow("delegations.d.revokedat", dateText(row.revokedAt)));
+    if (row.revokedBy !== undefined) list.append(kvRow("delegations.d.revokedby", shortDid(row.revokedBy)));
+    if (row.revokedAncestorCid !== undefined) list.append(kvRow("delegations.d.revokedvia", shortCid(row.revokedAncestorCid)));
+
+    const heading = node("h4", "dl-sub-h", text("delegations.d.resources"));
+    const resources = node("ul", "dl-res");
+    for (const parsed of parseResources(row.resources)) {
+      const item = node("li");
+      item.append(node("code", undefined, parsed.path === "" ? text("delegations.ability.all") : parsed.path));
+      const words = node("ul", "dl-chips");
+      for (const verb of parsed.verbs) words.append(node("li", "dl-chip", text(`delegations.chip.${verb}`)));
+      for (const raw of parsed.raws) words.append(node("li", "dl-chip", raw));
+      if (words.childElementCount > 0) item.append(words);
+      resources.append(item);
+    }
+    return [summary, list, heading, resources];
+  }
+
+  function openDetails(card: Card): void {
+    for (const other of cards.values()) {
+      if (other === card) continue;
+      other.drawer?.close();
+      other.drawer = undefined;
+      other.detail = undefined;
+    }
+    card.drawer?.close();
+    const detail = node("div");
+    card.detail = detail;
+    detail.replaceChildren(...detailRows(card.row, shownStatus(card.row, Date.now()), Date.now()));
+    const drawer = ctx.openDrawer({
+      title: displayName(card.row),
+      body: [detail],
+      closeLabel: text("delegations.d.close"),
+      anchor: card.article,
+      onClose: () => {
+        card.drawer = undefined;
+        card.detail = undefined;
+        if (!disposed) card.see.focus();
+      },
+    });
+    drawer.el.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      event.stopPropagation();
+      drawer.close();
+      card.drawer = undefined;
+      card.detail = undefined;
+      card.see.focus();
+    });
+    card.drawer = drawer;
+  }
+
+  // --- states -------------------------------------------------------------
+  function destroy(card: Card): void {
+    cards.delete(card.cid);
+    closeConfirm(card);
+    card.drawer?.close();
+    card.li.remove();
+  }
+
+  function iconNotice(className: string, heading: string, ...rest: Node[]): HTMLElement {
+    const box = node("div", className);
+    const mark = node("span", "dl-ic");
+    mark.setAttribute("aria-hidden", "true");
+    mark.append(icon("key"));
+    box.append(mark, node("h4", undefined, heading), ...rest);
+    return box;
+  }
+
+  function showNotice(content: Node | undefined): void {
+    notice.replaceChildren(...(content === undefined ? [] : [content]));
+    notice.hidden = content === undefined;
+  }
+
+  function askNotice(ability: PermissionAbility): HTMLElement {
+    const client = ctx.client();
+    const request = client?.requestAuthority;
+    const canAsk = ability === "delegation/list" && typeof request === "function";
+    const message = node(
+      "p",
+      undefined,
+      text("delegations.ask.body") + (canAsk ? text("delegations.ask.openkey") : ""),
+    );
+    const parts: Node[] = [message];
+    if (declined) parts.push(node("p", "dl-fine", text("delegations.ask.declined")));
+    if (canAsk && request !== undefined) {
+      const allow = actionButton(text("delegations.ask.button"));
+      allow.addEventListener("click", () => {
+        allow.disabled = true;
+        void (async () => {
+          let approved = false;
+          try {
+            approved = (await request(ability)).approved === true;
+          } catch {
+            approved = false;
+          }
+          declined = !approved;
+          if (approved) await settleList();
+          if (disposed) return;
+          if (approved) title.focus();
+          update();
+        })();
+      });
+      parts.push(allow);
+    }
+    return iconNotice("dl-notice dl-notice-ask", text("delegations.ask.title", { app: appName() }), ...parts);
+  }
+
+  function emptyNotice(): HTMLElement {
+    return iconNotice("dl-notice", text("delegations.empty.title"), node("p", undefined, text("delegations.empty.body")));
+  }
+
+  function errorNotice(): HTMLElement {
+    const box = node("div", "dl-notice");
+    const line = node("p", undefined, text("delegations.error"));
+    line.setAttribute("role", "status");
+    const retry = actionButton(text("view.retry"));
+    retry.addEventListener("click", () => {
+      reloading = true;
+      update();
+      void settleList().then(() => {
+        reloading = false;
+        update();
+      });
+    });
+    box.append(line, retry);
+    return box;
+  }
+
+  function showList(page: DelegationPage): void {
+    const rows = page.rows.filter((row) => !removed.has(row.cid));
+    if (rows.length === 0) {
+      for (const card of [...cards.values()]) if (card.phase !== "busy") destroy(card);
+      showNotice(emptyNotice());
+      body.hidden = true;
+      return;
+    }
+    showNotice(undefined);
+    body.hidden = false;
+
+    const grouped = groupRows(rows);
+    const seen = new Set<string>();
+    const views: HTMLElement[] = [];
+    for (const group of GROUPS) {
+      const members = grouped[group];
+      if (group === "received" && members.length === 0) continue;
+      const view = groupView(group);
+      view.count.textContent = String(members.length);
+      view.none.hidden = members.length > 0;
+      const wanted: HTMLElement[] = [];
+      for (const row of members) {
+        let card = cards.get(row.cid);
+        if (card === undefined) {
+          card = buildCard(row);
+          cards.set(row.cid, card);
+        }
+        card.row = row;
+        seen.add(row.cid);
+        if (card.confirm !== undefined && !revocable(shownStatus(row, Date.now()))) {
+          closeConfirm(card);
+          card.phase = "stale";
+        }
+        paint(card);
+        wanted.push(card.li);
+      }
+      wanted.forEach((li, at) => {
+        if (view.list.children[at] !== li) view.list.insertBefore(li, view.list.children[at] ?? null);
+      });
+      views.push(view.section);
+    }
+    for (const card of [...cards.values()]) if (!seen.has(card.cid) && card.phase !== "busy") destroy(card);
+
+    foot.hidden = page.nextCursor === undefined;
+    foot.textContent = text("delegations.firstpage", { count: `${rows.length}+` });
+    // Placed in order without removing what is already in place, so focus inside a card survives a refresh.
+    const wanted = [...views, foot];
+    wanted.forEach((child, at) => {
+      if (body.children[at] !== child) body.insertBefore(child, body.children[at] ?? null);
+    });
+    while (body.children.length > wanted.length) body.lastElementChild?.remove();
+  }
+
+  function update(): void {
+    if (disposed) return;
+    const source = ctx.data.source;
+    const result = ctx.data.latest("delegations");
+    skeleton.hidden = true;
+    body.hidden = true;
+    if (source === undefined) {
+      showNotice(node("p", "note", text("delegations.unavailable")));
+      return;
+    }
+    if (reloading || result === undefined || result.state === "loading") {
+      showNotice(undefined);
+      skeleton.hidden = false;
+      return;
+    }
+    switch (result.state) {
+      case "needs-permission":
+        showNotice(askNotice(result.ability));
+        return;
+      case "error":
+        showNotice(errorNotice());
+        return;
+      case "ready":
+        showList(result.data);
+    }
+  }
+
+  const unsubscribe = ctx.data.subscribe(update);
+  update();
+  // The shell reads on open; only a stale cache needs another read.
+  const age = ctx.data.age("delegations");
+  if (age !== undefined && age > 10_000) void settleList();
+
+  return () => {
+    disposed = true;
+    unsubscribe();
+    for (const timer of timers) window.clearTimeout(timer);
+    timers.clear();
+    for (const card of cards.values()) {
+      closeConfirm(card);
+      card.drawer?.close();
+    }
+    el.replaceChildren();
+  };
+}
 
 /**
  * Delegations the account granted or received. Mounted only while the panel is
- * open and the session is signed in. Revoke asks first and moves focus to Keep.
+ * open and the session is signed in.
  */
 export const delegationsSection: PanelSection = {
   id: "delegations",
@@ -39,171 +1068,15 @@ export const delegationsSection: PanelSection = {
   icon: "key",
   summaryCode: "delegations.summary",
   isAvailable: (ctx) => ctx.client()?.signedIn() === true,
-  // The rail shows how many the first page lists; a "+" means more pages exist.
+  // The rail shows how many rows the first page lists, less the ones revoked from this panel; a "+" means more pages exist.
   status: (ctx) =>
-    viewStatus(ctx, ctx.data.latest("delegations"), (page) => ({
-      text: ctx.text("delegations.glance.visible"),
-      tone: "ok",
-      count: `${page.rows.length}${page.nextCursor === undefined ? "" : "+"}`,
-    })),
-  mount(el, ctx: HostContext) {
-    const data = ctx.client()?.data;
-    if (!data) return mountPlaceholder(el);
-
-    let disposed = false;
-    let busy = false;
-    let seq = 0;
-    let loaded = false;
-    let rows: readonly DelegationRow[] = [];
-    let nextCursor: string | undefined;
-    let confirming: string | undefined;
-
-    const line = createStateLine(ctx, () => void load());
-
-    const content = document.createElement("div");
-    content.hidden = true;
-    const empty = textLine("busy", ctx.text("delegations.empty"));
-    const groups = document.createElement("div");
-    const more = document.createElement("button");
-    more.type = "button";
-    more.className = "action";
-    more.textContent = ctx.text("delegations.more");
-    more.hidden = true;
-    more.addEventListener("click", () => void load(nextCursor));
-    const errorLine = textLine("error", "");
-    errorLine.setAttribute("role", "alert");
-    errorLine.hidden = true;
-    content.append(empty, groups, more, errorLine);
-
-    function render(): void {
-      if (disposed) return;
-      content.hidden = !loaded;
-      if (!loaded) return;
-      empty.hidden = rows.length > 0;
-      groups.replaceChildren(...GROUPS.flatMap((group) => groupBlock(group)));
-      more.hidden = nextCursor === undefined;
-      more.disabled = busy;
-    }
-
-    function groupBlock(group: DelegationGroup): HTMLElement[] {
-      const members = rows.filter((row) => row.group === group);
-      if (members.length === 0) return [];
-      const block = document.createElement("div");
-      block.append(
-        textLine("label", ctx.text(GROUP_WORD[group])),
-        ...members.map((row) => rowBlock(row)),
-      );
-      return [block];
-    }
-
-    function rowBlock(row: DelegationRow): HTMLElement {
-      const wrap = document.createElement("div");
-      const item = document.createElement("div");
-      item.className = "row";
-      const info = document.createElement("div");
-      info.append(
-        textLine("label", row.label.text),
-        textLine("busy", ctx.text(STATUS_WORD[row.status])),
-      );
-      if (row.expiringSoon) info.append(textLine("note", ctx.text("delegations.expiring")));
-      item.append(info);
-      wrap.append(item);
-      if (row.status !== "active") return wrap;
-      if (confirming === row.cid) {
-        wrap.append(confirmBlock(row.cid));
-        return wrap;
-      }
-      const revoke = document.createElement("button");
-      revoke.type = "button";
-      revoke.className = "action";
-      revoke.textContent = ctx.text("delegations.revoke");
-      revoke.disabled = busy;
-      revoke.addEventListener("click", () => {
-        confirming = row.cid;
-        render();
-        groups.querySelector<HTMLButtonElement>(".confirm .action")?.focus();
-      });
-      item.append(revoke);
-      return wrap;
-    }
-
-    function confirmBlock(cid: string): HTMLElement {
-      const box = document.createElement("div");
-      box.className = "confirm";
-      const actions = document.createElement("div");
-      actions.className = "actions";
-      // Keep comes first in the order and takes focus, so Enter cannot revoke by accident.
-      const keep = document.createElement("button");
-      keep.type = "button";
-      keep.className = "action";
-      keep.textContent = ctx.text("delegations.revoke.cancel");
-      keep.addEventListener("click", () => {
-        confirming = undefined;
-        render();
-      });
-      const confirm = document.createElement("button");
-      confirm.type = "button";
-      confirm.className = "action";
-      confirm.textContent = ctx.text("delegations.revoke.confirm");
-      confirm.disabled = busy;
-      confirm.addEventListener("click", () => void revoke(cid));
-      actions.append(keep, confirm);
-      box.append(textLine("busy", ctx.text("delegations.revoke.question")), actions);
-      return box;
-    }
-
-    async function load(cursor?: string): Promise<void> {
-      const token = ++seq;
-      const result = await settle(() => data.delegations(cursor));
-      if (disposed || token !== seq) return;
-      const page = applyResult(line, ctx, result);
-      if (page === undefined) {
-        loaded = false;
-        rows = [];
-        nextCursor = undefined;
-      } else {
-        loaded = true;
-        rows = cursor === undefined ? page.rows : [...rows, ...page.rows];
-        nextCursor = page.nextCursor;
-      }
-      render();
-    }
-
-    async function revoke(cid: string): Promise<void> {
-      if (busy) return;
-      busy = true;
-      errorLine.hidden = true;
-      render();
-      let outcome: RevokeOutcome;
-      try {
-        outcome = await data.revoke(cid);
-      } catch {
-        outcome = { ok: false, code: "unknown" };
-      }
-      busy = false;
-      if (disposed) return;
-      confirming = undefined;
-      if (!outcome.ok) {
-        errorLine.hidden = false;
-        errorLine.textContent = ctx.text("view.action.error");
-        render();
-        return;
-      }
-      await load();
-    }
-
-    const unsubscribe = data.subscribe((view) => {
-      if (view === "delegations") void load();
-    });
-
-    el.append(line.status, line.retry, content);
-    startLoading(line, ctx);
-    void load();
-
-    return () => {
-      disposed = true;
-      unsubscribe();
-      el.replaceChildren();
-    };
-  },
+    viewStatus(ctx, ctx.data.latest("delegations"), (page) => {
+      const gone = revokedFrom(ctx.data);
+      return {
+        text: ctx.text("delegations.glance.visible"),
+        tone: "ok",
+        count: `${page.rows.filter((row) => !gone.has(row.cid)).length}${page.nextCursor === undefined ? "" : "+"}`,
+      };
+    }),
+  mount: mountDelegations,
 };

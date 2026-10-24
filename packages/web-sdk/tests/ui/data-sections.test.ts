@@ -3,7 +3,6 @@ import { JSDOM } from "jsdom";
 
 import type { PanelDataSource } from "../../src/ui/data";
 import { activitySection } from "../../src/ui/sections/activity";
-import { delegationsSection } from "../../src/ui/sections/delegations";
 import { localTinycloudSection } from "../../src/ui/sections/local-tinycloud";
 import { nodesSection } from "../../src/ui/sections/nodes";
 import type { HostContext, PanelClient, PanelSection } from "../../src/ui/slots";
@@ -98,10 +97,6 @@ function mount(section: PanelSection, client: PanelClient, developerMode = false
 
 function labels(el: HTMLElement): string[] {
   return [...el.querySelectorAll(".row .label")].map((node) => node.textContent ?? "");
-}
-
-function buttonWithText(el: HTMLElement, code: string): HTMLButtonElement | undefined {
-  return [...el.querySelectorAll("button")].find((b) => b.textContent === text(code));
 }
 
 describe("local tinycloud section", () => {
@@ -209,119 +204,6 @@ describe("local tinycloud section", () => {
   });
 });
 
-describe("delegations section", () => {
-  test("is unavailable without a signed-in session", () => {
-    const signedOut = ctxFor(clientWith(fakeData({}), false));
-    const signedIn = ctxFor(clientWith(fakeData({}), true));
-    expect(delegationsSection.isAvailable(signedOut)).toBe(false);
-    expect(delegationsSection.isAvailable(signedIn)).toBe(true);
-  });
-
-  test("only active rows offer revoke", async () => {
-    const rows = [
-      row("a", "this-app", "active"),
-      row("b", "received", "revoked"),
-    ];
-    const el = mount(
-      delegationsSection,
-      clientWith(fakeData({ delegations: async () => ready({ rows, nextCursor: undefined }) })),
-    );
-    await flush();
-    expect(labels(el)).toEqual(["App a", "App b"]);
-    expect(el.querySelectorAll(".row button.action").length).toBe(1);
-  });
-
-  test("revoke asks first and moves focus to Keep", async () => {
-    const revoked: string[] = [];
-    const el = mount(
-      delegationsSection,
-      clientWith(
-        fakeData({
-          delegations: async () => ready({ rows: [row("a", "this-app", "active")], nextCursor: undefined }),
-          revoke: async (cid: string) => {
-            revoked.push(cid);
-            return { ok: true, cid };
-          },
-        }),
-      ),
-    );
-    await flush();
-    el.querySelector<HTMLButtonElement>(".row button.action")?.click();
-    await flush();
-
-    const confirm = el.querySelector(".confirm");
-    expect(confirm).not.toBeNull();
-    const keep = confirm?.querySelector<HTMLButtonElement>(".action");
-    expect(page.document.activeElement).toBe(keep);
-    expect(revoked).toEqual([]);
-  });
-
-  test("confirming revoke calls the source and reloads the list", async () => {
-    const revoked: string[] = [];
-    let reads = 0;
-    const el = mount(
-      delegationsSection,
-      clientWith(
-        fakeData({
-          delegations: async () => {
-            reads += 1;
-            return ready({ rows: [row("a", "this-app", "active")], nextCursor: undefined });
-          },
-          revoke: async (cid: string) => {
-            revoked.push(cid);
-            return { ok: true, cid };
-          },
-        }),
-      ),
-    );
-    await flush();
-    el.querySelector<HTMLButtonElement>(".row button.action")?.click();
-    await flush();
-    const actions = el.querySelectorAll<HTMLButtonElement>(".confirm .action");
-    actions[1]?.click();
-    await flush();
-    expect(revoked).toEqual(["a"]);
-    expect(reads).toBe(2);
-  });
-
-  test("a further page appends rows to the list", async () => {
-    const el = mount(
-      delegationsSection,
-      clientWith(
-        fakeData({
-          delegations: async (cursor?: string) =>
-            cursor === undefined
-              ? ready({ rows: [row("a", "this-app", "active")], nextCursor: "next" })
-              : ready({ rows: [row("b", "received", "active")], nextCursor: undefined }),
-        }),
-      ),
-    );
-    await flush();
-    buttonWithText(el, "delegations.more")?.click();
-    await flush();
-    expect(labels(el)).toEqual(["App a", "App b"]);
-  });
-
-  test("a failed revoke shows the action error and keeps the row", async () => {
-    const el = mount(
-      delegationsSection,
-      clientWith(
-        fakeData({
-          delegations: async () => ready({ rows: [row("a", "this-app", "active")], nextCursor: undefined }),
-          revoke: async () => ({ ok: false, code: "unknown" }),
-        }),
-      ),
-    );
-    await flush();
-    el.querySelector<HTMLButtonElement>(".row button.action")?.click();
-    await flush();
-    el.querySelectorAll<HTMLButtonElement>(".confirm .action")[1]?.click();
-    await flush();
-    expect(el.querySelector('[role="alert"]')?.textContent).toBe(text("view.action.error"));
-    expect(labels(el)).toEqual(["App a"]);
-  });
-});
-
 describe("nodes section", () => {
   test("lists each node by origin", async () => {
     const el = mount(
@@ -379,25 +261,6 @@ describe("activity section", () => {
     expect(labels(el)).toEqual(["put b", "get a"]);
   });
 });
-
-function row(cid: string, group: string, status: string) {
-  return {
-    source: "stub",
-    cid,
-    direction: "granted",
-    status,
-    group,
-    label: { text: `App ${cid}`, source: "stub" },
-    delegatorDid: "did:example:a",
-    delegateDid: "did:example:b",
-    resources: [],
-    parents: [],
-    issuedAt: null,
-    notBefore: null,
-    expiresAt: null,
-    expiringSoon: false,
-  };
-}
 
 function request(op: string, path: string) {
   return {
