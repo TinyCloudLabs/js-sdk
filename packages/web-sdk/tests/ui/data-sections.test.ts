@@ -86,6 +86,7 @@ function ctxFor(client: PanelClient, developerMode = false): HostContext {
     openPanel: () => undefined,
     closePanel: () => undefined,
     text,
+    appLabel: () => undefined,
   } as unknown as HostContext;
 }
 
