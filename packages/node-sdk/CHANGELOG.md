@@ -1,5 +1,19 @@
 # @tinycloudlabs/node-sdk
 
+## 3.6.1
+
+### Patch Changes
+
+- 271155a: In the browser, the SIWE sign-in `domain` now uses `window.location.host` (it keeps the port) and, when the domain comes from the page, the SIWE `uri` defaults to `window.location.origin` (it keeps the scheme), so local http dev origins satisfy OpenKey's origin check (TC-1486). Production https origins on default ports are unchanged. `TinyCloudNodeConfig` gains an optional `uri`; a caller `siweConfig.uri` still takes precedence. (TC-1488)
+
+  Details: TC-1488
+
+- 09b7dc0: Document that `tinycloud.delegation/revoke` on a space is space-wide, and that the CLI's own fallback asks for 5 minutes and stores nothing. Added to the tc-cli skill docs and the node-sdk README.
+
+  Details: TC-1923
+  - @tinycloud/sdk-core@3.6.1
+  - @tinycloud/sdk-services@3.6.1
+
 ## 3.6.1-beta.1
 
 ### Patch Changes
