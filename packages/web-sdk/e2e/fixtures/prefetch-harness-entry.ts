@@ -1,8 +1,7 @@
 // Browser harness for the panel prefetch smoke tests. Bundled by `build:e2e-prefetch`
 // into e2e/.build/prefetch. Unlike harness-entry.ts, the panel data here is the real
-// lazy adapter (lazyRealPanelData) over a fake node host that records every read.
+// lazy proxy (production wiring) over a fake node host that records every read.
 import { registerUiClient, type UiClientHandle } from "../../src/ui/index";
-import { lazyRealPanelData } from "../../src/ui/panel-data-loader";
 
 interface Call {
   readonly name: string;
@@ -117,14 +116,13 @@ w.__tc = {
       ui: { developerMode: false },
       source: source as never,
       manifestAppId: () => "e2e-prefetch",
-      data: lazyRealPanelData(host as never, () => "e2e-prefetch"),
     });
     w.tc = { ui: handle.api };
     return performance.now();
   },
   // Stands in for tcw's sign-in or restore: arms the pull, then waits for the lazy entry to load.
   async arm() {
-    handle?.armPrefetch();
+    handle?.armPrefetch(host as never);
     await import("../../src/ui/panel-data-entry");
     await new Promise((resolve) => setTimeout(resolve, 0));
     return true;

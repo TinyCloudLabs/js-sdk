@@ -1,11 +1,16 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
-import type { PanelDataSource } from "../../src/ui/data";
+import type { PanelDataHost, PanelDataSource } from "../../src/ui/data";
 import { browserIdle } from "../../src/ui/data/prefetch";
-import { armPanelPrefetch, intentPanelPrefetch } from "../../src/ui/panel-data-entry";
+import {
+  armPanelPrefetch,
+  intentPanelPrefetch,
+  livePanelData,
+  onLivePanelDataChange,
+} from "../../src/ui/panel-data-entry";
 import type { PanelClient } from "../../src/ui/slots";
 
-function fakeClient(signedIn: boolean) {
+function fakeClient(signedIn: boolean, withData = true) {
   const reads = { account: 0, delegations: 0, storage: 0 };
   const resets: Array<() => void> = [];
   const data = {
@@ -14,7 +19,7 @@ function fakeClient(signedIn: boolean) {
     storage: async () => (reads.storage += 1, { ok: true }),
   } as unknown as PanelDataSource;
   const client = {
-    data,
+    data: withData ? data : undefined,
     signedIn: () => signedIn,
     onReset: (cb: () => void) => {
       resets.push(cb);
@@ -30,7 +35,9 @@ function fakeClient(signedIn: boolean) {
   };
 }
 
-const settled = async (): Promise<void> => {};
+const host = {} as PanelDataHost;
+const gate = { waitForAccountRegistrySync: async () => {} };
+const appName = () => "test-app";
 const flush = async (): Promise<void> => {
   for (let i = 0; i < 5; i++) await Promise.resolve();
 };
@@ -38,7 +45,7 @@ const flush = async (): Promise<void> => {
 describe("panel prefetch arming", () => {
   test("does nothing when armed while signed out", async () => {
     const { client, reads } = fakeClient(false);
-    armPanelPrefetch(client, settled);
+    armPanelPrefetch(client, host, gate, appName);
     intentPanelPrefetch(client);
     await flush();
     expect(reads).toEqual({ account: 0, delegations: 0, storage: 0 });
@@ -46,7 +53,7 @@ describe("panel prefetch arming", () => {
 
   test("an intent after arming on sign-in reads all three sections once", async () => {
     const { client, reads } = fakeClient(true);
-    armPanelPrefetch(client, settled);
+    armPanelPrefetch(client, host, gate, appName);
     intentPanelPrefetch(client);
     intentPanelPrefetch(client);
     await flush();
@@ -55,7 +62,7 @@ describe("panel prefetch arming", () => {
 
   test("a reset disarms the pull, so a later intent reads nothing", async () => {
     const { client, reads, reset } = fakeClient(true);
-    armPanelPrefetch(client, settled);
+    armPanelPrefetch(client, host, gate, appName);
     reset();
     intentPanelPrefetch(client);
     await flush();
@@ -64,9 +71,9 @@ describe("panel prefetch arming", () => {
 
   test("arming again after a reset starts a new pull on the next intent", async () => {
     const { client, reads, reset } = fakeClient(true);
-    armPanelPrefetch(client, settled);
+    armPanelPrefetch(client, host, gate, appName);
     reset();
-    armPanelPrefetch(client, settled);
+    armPanelPrefetch(client, host, gate, appName);
     intentPanelPrefetch(client);
     await flush();
     expect(reads).toEqual({ account: 1, delegations: 1, storage: 1 });
@@ -74,6 +81,49 @@ describe("panel prefetch arming", () => {
 
   test("an intent without a client is a no-op", () => {
     expect(() => intentPanelPrefetch(undefined)).not.toThrow();
+  });
+});
+
+describe("live panel data singleton", () => {
+  test("arming twice keeps one live source per client", () => {
+    const { client } = fakeClient(true, false);
+    armPanelPrefetch(client, host, gate, appName);
+    const first = livePanelData(client);
+    armPanelPrefetch(client, host, gate, appName);
+    expect(first).toBeDefined();
+    expect(livePanelData(client)).toBe(first);
+  });
+
+  test("a live source given by the client is the one served, with no second copy", () => {
+    const { client } = fakeClient(true);
+    armPanelPrefetch(client, host, gate, appName);
+    expect(livePanelData(client)).toBe(client.data);
+  });
+
+  test("a reset drops the live source and the next arm builds a new one", () => {
+    const { client, reset } = fakeClient(true, false);
+    armPanelPrefetch(client, host, gate, appName);
+    const first = livePanelData(client);
+    reset();
+    expect(livePanelData(client)).toBeUndefined();
+    armPanelPrefetch(client, host, gate, appName);
+    expect(livePanelData(client)).toBeDefined();
+    expect(livePanelData(client)).not.toBe(first);
+  });
+
+  test("change listeners fire on arm and on reset, and stop after unsubscribe", () => {
+    const { client, reset } = fakeClient(true, false);
+    let changes = 0;
+    const off = onLivePanelDataChange(client, () => {
+      changes += 1;
+    });
+    armPanelPrefetch(client, host, gate, appName);
+    expect(changes).toBe(1);
+    reset();
+    expect(changes).toBe(2);
+    off();
+    armPanelPrefetch(client, host, gate, appName);
+    expect(changes).toBe(2);
   });
 });
 

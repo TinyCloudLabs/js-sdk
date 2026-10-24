@@ -1,7 +1,6 @@
 import { createUiApi, type TinyCloudUI, type UiTarget } from "./api";
 import { createPanelClient, type ClientSource } from "./client";
-import type { PanelDataFactory } from "./data";
-import { armPanelPrefetch } from "./panel-data-loader";
+import type { PanelDataFactory, PanelDataHost } from "./data";
 import { resolveUiConfig, type UiConfig } from "./config";
 import { canRenderUi } from "./frame-guard";
 import { HOST_API_VERSION, REGISTRY_KEY, createHostRuntime, type HostRuntime } from "./host";
@@ -23,7 +22,7 @@ export interface UiClientHandle {
   /** Prompts this client opens. `uiEnabled` is false for `ui: false` and detached clients. */
   readonly promptScope: PromptScope;
   /** Arms the background panel-data pull for this client. Call once sign-in or restore has produced a session. */
-  armPrefetch(): void;
+  armPrefetch(host: PanelDataHost): void;
 }
 
 export interface UiClientOptions {
@@ -115,8 +114,20 @@ export function registerUiClient(options: UiClientOptions): UiClientHandle {
       return runtime.toast(request, id);
     },
     promptScope,
-    armPrefetch() {
-      if (target) armPanelPrefetch(panel.client, () => options.source.waitForAccountRegistrySync?.() ?? Promise.resolve());
+    armPrefetch(host) {
+      if (!target || !options.source.signedIn()) return;
+      const appName = () => options.manifestAppId() ?? "";
+      // Wait for idle so sign-in never blocks on the pull; the lazy entry then starts it.
+      const whenIdle = (run: () => void) =>
+        "requestIdleCallback" in globalThis
+          ? globalThis.requestIdleCallback(run, { timeout: 3000 })
+          : setTimeout(run, 2000);
+      whenIdle(() => {
+        void import("./panel-data-entry").then(
+          (m) => m.armPanelPrefetch(panel.client, host, options.source, appName),
+          () => undefined,
+        );
+      });
     },
   };
 }

@@ -101,7 +101,6 @@ import { BrowserWalletSigner } from "../adapters/BrowserWalletSigner";
 import { BrowserNotificationHandler } from "../adapters/BrowserNotificationHandler";
 import { registerUiClient, type TinyCloudUI, type UiClientHandle, type UiConfig } from "../ui";
 import type { ToastSink } from "../ui/toast-store";
-import { lazyRealPanelData } from "../ui/panel-data-loader";
 import { BrowserWasmBindings } from "../adapters/BrowserWasmBindings";
 import { BrowserENSResolver } from "../adapters/BrowserENSResolver";
 import {
@@ -476,11 +475,6 @@ export class TinyCloudWeb {
     this._manifest = config.manifest;
     this._capabilityRequest = config.capabilityRequest;
 
-    const manifestAppId = (): string | undefined => {
-      const manifest = this._manifest;
-      const fromManifest = (Array.isArray(manifest) ? manifest[0] : manifest)?.app_id;
-      return fromManifest ?? this._capabilityRequest?.manifests[0]?.app_id;
-    };
     this.uiClient = registerUiClient({
       ui: config.ui,
       source: {
@@ -489,8 +483,11 @@ export class TinyCloudWeb {
         storage: { status: () => this.storage.status() },
         storageEpisode: this.uiStorageEpisode,
       },
-      manifestAppId,
-      data: lazyRealPanelData(this, () => manifestAppId() ?? ""),
+      manifestAppId: () => {
+        const manifest = this._manifest;
+        const fromManifest = (Array.isArray(manifest) ? manifest[0] : manifest)?.app_id;
+        return fromManifest ?? this._capabilityRequest?.manifests[0]?.app_id;
+      },
     });
 
     // Initialize browser notification handler
@@ -897,7 +894,7 @@ export class TinyCloudWeb {
       await node.restoreSession(restoreDataFromPersisted(loaded.data));
       assertNotSignedOut();
       this.resetSessionScopedCaches();
-      this.uiClient.armPrefetch();
+      this.uiClient.armPrefetch(this);
       this._sessionRestoreStatus = "restored";
       return {
         status: "restored",
@@ -989,7 +986,7 @@ export class TinyCloudWeb {
     await node.signIn(options);
     assertNotSignedOut();
     this.resetSessionScopedCaches();
-    this.uiClient.armPrefetch();
+    this.uiClient.armPrefetch(this);
     const session = node.session;
     if (!session) throw new Error("Sign-in completed but no session available");
     // Explicit logout never permits an older tab's persisted proof to satisfy the next sign-in.

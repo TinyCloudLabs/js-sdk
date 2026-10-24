@@ -233,9 +233,14 @@ const lazyLoaderExternals = (type, ext) => ({ context, request }, callback) => {
 };
 
 // The panel keeps every @tinycloud/* package external, like the replica entries.
-const panelExternals = (moduleType) => ({ request }, callback) => {
+const panelExternals = (moduleType, ext) => ({ context, request }, callback) => {
   if (request && /^@tinycloud\//.test(request)) {
     callback(null, `${moduleType} ${request}`);
+    return;
+  }
+  // The panel shares the eager root's panel-data singleton, so both loaders see one live source.
+  if (request === "./panel-data-entry" && context === path.resolve(__dirname, "src/ui")) {
+    callback(null, `${moduleType} ./panel-data.${ext}`);
     return;
   }
   callback();
@@ -251,28 +256,28 @@ const rootCjsConfig = {
 const panelEsmConfig = {
   ...esmConfig,
   entry: "./src/ui/panel-entry.ts",
-  externals: panelExternals("module"),
+  externals: panelExternals("module", "mjs"),
   output: { ...esmConfig.output, filename: "panel.mjs" },
 };
 
 const panelCjsConfig = {
   ...cjsConfig,
   entry: "./src/ui/panel-entry.ts",
-  externals: panelExternals("commonjs"),
+  externals: panelExternals("commonjs", "cjs"),
   output: { ...cjsConfig.output, filename: "panel.cjs" },
 };
 
 const panelDataEsmConfig = {
   ...esmConfig,
   entry: "./src/ui/panel-data-entry.ts",
-  externals: panelExternals("module"),
+  externals: panelExternals("module", "mjs"),
   output: { ...esmConfig.output, filename: "panel-data.mjs" },
 };
 
 const panelDataCjsConfig = {
   ...cjsConfig,
   entry: "./src/ui/panel-data-entry.ts",
-  externals: panelExternals("commonjs"),
+  externals: panelExternals("commonjs", "cjs"),
   output: { ...cjsConfig.output, filename: "panel-data.cjs" },
 };
 
