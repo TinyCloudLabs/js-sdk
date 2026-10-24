@@ -3,7 +3,7 @@ import { createPanelClient, type ClientSource } from "./client";
 import type { PanelDataFactory, PanelDataHost } from "./data";
 import { resolveUiConfig, type UiConfig } from "./config";
 import { canRenderUi } from "./frame-guard";
-import { HOST_API_VERSION, REGISTRY_KEY, createHostRuntime, type HostRuntime } from "./host";
+import { HOST_API_VERSION, REGISTRY_KEY, armPanelData, createHostRuntime, type HostRuntime } from "./host";
 import type { ToastRequest } from "./toast-store";
 import { createPromptScope, dismissPrompts, type PromptScope } from "./parts/prompts";
 
@@ -115,19 +115,7 @@ export function registerUiClient(options: UiClientOptions): UiClientHandle {
     },
     promptScope,
     armPrefetch(host) {
-      if (!target || !options.source.signedIn()) return;
-      const appName = () => options.manifestAppId() ?? "";
-      // Wait for idle so sign-in never blocks on the pull; the lazy entry then starts it.
-      const whenIdle = (run: () => void) =>
-        "requestIdleCallback" in globalThis
-          ? globalThis.requestIdleCallback(run, { timeout: 3000 })
-          : setTimeout(run, 2000);
-      whenIdle(() => {
-        void import("./panel-data-entry").then(
-          (m) => m.armPanelPrefetch(panel.client, host, options.source, appName),
-          () => undefined,
-        );
-      });
+      armPanelData(panel.client, { host, gate: options.source, appName: options.manifestAppId });
     },
   };
 }

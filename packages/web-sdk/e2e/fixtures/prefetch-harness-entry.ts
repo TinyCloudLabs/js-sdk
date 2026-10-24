@@ -120,11 +120,11 @@ w.__tc = {
     w.tc = { ui: handle.api };
     return performance.now();
   },
-  // Stands in for tcw's sign-in or restore: arms the pull, then waits for the lazy entry to load.
+  // Stands in for tcw's sign-in or restore. `armPrefetch` and this import resolve the same
+  // chunk, and the eager `.then` was registered first, so the live source exists when this resolves.
   async arm() {
     handle?.armPrefetch(host as never);
     await import("../../src/ui/panel-data-entry");
-    await new Promise((resolve) => setTimeout(resolve, 0));
     return true;
   },
   // Sign-out path: clears this client's view state and cancels a pending pull.

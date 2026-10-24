@@ -2,12 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 
 import type { PanelDataHost, PanelDataSource } from "../../src/ui/data";
 import { browserIdle } from "../../src/ui/data/prefetch";
-import {
-  armPanelPrefetch,
-  intentPanelPrefetch,
-  livePanelData,
-  onLivePanelDataChange,
-} from "../../src/ui/panel-data-entry";
+import { arm, livePanelData, onLivePanelDataChange } from "../../src/ui/panel-data-entry";
 import type { PanelClient } from "../../src/ui/slots";
 
 function fakeClient(signedIn: boolean, withData = true) {
@@ -38,6 +33,8 @@ function fakeClient(signedIn: boolean, withData = true) {
 const host = {} as PanelDataHost;
 const gate = { waitForAccountRegistrySync: async () => {} };
 const appName = () => "test-app";
+const signIn = { host, gate, appName };
+const intent = { now: true } as const;
 const flush = async (): Promise<void> => {
   for (let i = 0; i < 5; i++) await Promise.resolve();
 };
@@ -45,68 +42,69 @@ const flush = async (): Promise<void> => {
 describe("panel prefetch arming", () => {
   test("does nothing when armed while signed out", async () => {
     const { client, reads } = fakeClient(false);
-    armPanelPrefetch(client, host, gate, appName);
-    intentPanelPrefetch(client);
+    arm(client, signIn);
+    arm(client, intent);
     await flush();
     expect(reads).toEqual({ account: 0, delegations: 0, storage: 0 });
   });
 
   test("an intent after arming on sign-in reads all three sections once", async () => {
     const { client, reads } = fakeClient(true);
-    armPanelPrefetch(client, host, gate, appName);
-    intentPanelPrefetch(client);
-    intentPanelPrefetch(client);
+    arm(client, signIn);
+    arm(client, intent);
+    arm(client, intent);
     await flush();
     expect(reads).toEqual({ account: 1, delegations: 1, storage: 1 });
   });
 
   test("a reset disarms the pull, so a later intent reads nothing", async () => {
     const { client, reads, reset } = fakeClient(true);
-    armPanelPrefetch(client, host, gate, appName);
+    arm(client, signIn);
     reset();
-    intentPanelPrefetch(client);
+    arm(client, intent);
     await flush();
     expect(reads).toEqual({ account: 0, delegations: 0, storage: 0 });
   });
 
   test("arming again after a reset starts a new pull on the next intent", async () => {
     const { client, reads, reset } = fakeClient(true);
-    armPanelPrefetch(client, host, gate, appName);
+    arm(client, signIn);
     reset();
-    armPanelPrefetch(client, host, gate, appName);
-    intentPanelPrefetch(client);
+    arm(client, signIn);
+    arm(client, intent);
     await flush();
     expect(reads).toEqual({ account: 1, delegations: 1, storage: 1 });
   });
 
-  test("an intent without a client is a no-op", () => {
-    expect(() => intentPanelPrefetch(undefined)).not.toThrow();
+  test("an intent before any arm is a no-op", () => {
+    const { client } = fakeClient(true);
+    expect(() => arm(client, intent)).not.toThrow();
   });
 });
 
 describe("live panel data singleton", () => {
   test("arming twice keeps one live source per client", () => {
     const { client } = fakeClient(true, false);
-    armPanelPrefetch(client, host, gate, appName);
+    arm(client, signIn);
     const first = livePanelData(client);
-    armPanelPrefetch(client, host, gate, appName);
+    arm(client, signIn);
     expect(first).toBeDefined();
     expect(livePanelData(client)).toBe(first);
   });
 
   test("a live source given by the client is the one served, with no second copy", () => {
     const { client } = fakeClient(true);
-    armPanelPrefetch(client, host, gate, appName);
+    arm(client, signIn);
     expect(livePanelData(client)).toBe(client.data);
   });
 
   test("a reset drops the live source and the next arm builds a new one", () => {
     const { client, reset } = fakeClient(true, false);
-    armPanelPrefetch(client, host, gate, appName);
+    arm(client, signIn);
     const first = livePanelData(client);
     reset();
     expect(livePanelData(client)).toBeUndefined();
-    armPanelPrefetch(client, host, gate, appName);
+    arm(client, signIn);
     expect(livePanelData(client)).toBeDefined();
     expect(livePanelData(client)).not.toBe(first);
   });
@@ -117,12 +115,12 @@ describe("live panel data singleton", () => {
     const off = onLivePanelDataChange(client, () => {
       changes += 1;
     });
-    armPanelPrefetch(client, host, gate, appName);
+    arm(client, signIn);
     expect(changes).toBe(1);
     reset();
     expect(changes).toBe(2);
     off();
-    armPanelPrefetch(client, host, gate, appName);
+    arm(client, signIn);
     expect(changes).toBe(2);
   });
 });

@@ -53,7 +53,11 @@ function resultFromView(view: ViewResult<StorageView>): StorageResult {
 
 /** The SDK `Result` is `{data}` / `{error.code}`; the reducer reads `{value}` / `{code}`. */
 async function readStatus(client: PanelClient, fresh: boolean): Promise<StorageResult> {
-  if (client.data) return resultFromView(await client.data.storage({ fresh }));
+  if (client.data) {
+    const view = await client.data.storage({ fresh });
+    // Loading means no live source is armed yet; read the status API directly, as the base section did.
+    if (view.state !== "loading") return resultFromView(view);
+  }
   try {
     const result = await client.storage.status();
     if ("error" in result) return { ok: false, code: result.error.code };

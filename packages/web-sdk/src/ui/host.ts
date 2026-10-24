@@ -2,13 +2,14 @@ import { createButton, type ButtonView } from "./button";
 import type { PanelClientHandle } from "./client";
 import type { ResolvedUiConfig } from "./config";
 import type { PanelHandle, ShellLayout } from "./panel";
+import type { ArmOptions } from "./panel-data-entry";
 import type * as PanelEntry from "./panel-entry";
 import { createPendingPanel, type PendingPanel } from "./pending";
 import { HOST_PARTS } from "./parts";
 import { toastStore } from "./parts/toasts";
 import type { ToastRequest } from "./toast-store";
 import { createButtonHideStore, defaultLocalStorage, FALLBACK_APP_ID, resolveUiAppId, type HideScope } from "./persistence";
-import type { HostContext, SectionId, StatusCode } from "./slots";
+import type { HostContext, PanelClient, SectionId, StatusCode } from "./slots";
 import { createStatusBoard } from "./status";
 import { text } from "./strings";
 import { HOST_CSS } from "./styles";
@@ -16,6 +17,11 @@ import { HOST_CSS } from "./styles";
 /** Global registry key. Shared across bundled copies of the SDK on one page. */
 export const REGISTRY_KEY = Symbol.for("tinycloud.web-sdk.ui-host");
 export const HOST_API_VERSION = 1;
+
+/** The only eager import of the lazy panel-data entry. Every gate lives in that module. */
+export function armPanelData(client: PanelClient, opts: ArmOptions): void {
+  void import("./panel-data-entry").then((m) => m.arm(client, opts), () => undefined);
+}
 
 /** Below OpenKey (999999); the host stacking context contains every panel element. */
 const HOST_STYLE = "position:fixed;inset:0;pointer-events:none;z-index:999990;isolation:isolate;";
@@ -264,7 +270,7 @@ export function createHostRuntime(): HostRuntime {
    */
   function requestPanel(): void {
     const client = activeEntry()?.registration.handle.client;
-    if (client) void import("./panel-data-entry").then((m) => m.intentPanelPrefetch(client), () => undefined);
+    if (client) armPanelData(client, { now: true });
     const owner = mounted;
     if (!owner || owner.panel || loadingFor === owner) return;
     if (panelModule) {
