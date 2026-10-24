@@ -12,6 +12,7 @@ import {
   shownStatus,
 } from "../../src/ui/sections/delegations";
 import type { PanelClient, SectionContext, SectionStatus } from "../../src/ui/slots";
+import { createStubPanelData } from "../../src/ui/stub/index";
 import { panelText } from "../../src/ui/strings-panel";
 
 type Loose = Record<PropertyKey, unknown>;
@@ -257,6 +258,60 @@ describe("describeAbilities", () => {
     // Prototype names are plain unknown actions, not known verbs.
     expect(described.chips).toContain("constructor");
     expect(describeAbilities([]).plain).toBe("No actions listed");
+  });
+});
+
+describe("the stub's revoke behaves like the adapter's active check", () => {
+  const seeded = (cid: string, status: DelegationRow["status"]) => ({
+    cid,
+    direction: "granted" as const,
+    status,
+    group: "to-others" as const,
+    label: { text: cid, source: "stub" as const },
+    delegatorDid: "did:example:owner",
+    delegateDid: `did:example:${cid}`,
+    resources: [],
+    parents: [],
+    issuedAt: null,
+    notBefore: null,
+    expiresAt: null,
+    expiringSoon: false,
+  });
+  const stub = () =>
+    createStubPanelData({
+      delegations: { rows: [seeded("live", "active"), seeded("done", "revoked"), seeded("old", "expired"), seeded("wait", "pending")] },
+    })({ sync: undefined } as unknown as PanelClient);
+
+  test("a revoke of a row that is not active is refused as not-revocable and changes nothing", async () => {
+    const source = stub();
+    for (const cid of ["done", "old", "wait"]) expect(await source.revoke(cid)).toEqual({ ok: false, code: "not-revocable" });
+    const listed = await source.delegations();
+    if (listed.state !== "ready") throw new Error("not ready");
+    expect(listed.data.rows.map((r) => [r.cid, r.status])).toEqual([
+      ["live", "active"],
+      ["done", "revoked"],
+      ["old", "expired"],
+      ["wait", "pending"],
+    ]);
+  });
+
+  test("an active row is revoked once: the list then shows it revoked and a second revoke is refused", async () => {
+    const source = stub();
+    expect(await source.revoke("live")).toEqual({ ok: true, cid: "live" });
+    const listed = await source.delegations();
+    if (listed.state !== "ready") throw new Error("not ready");
+    expect(listed.data.rows.find((r) => r.cid === "live")?.status).toBe("revoked");
+    expect(await source.revoke("live")).toEqual({ ok: false, code: "not-revocable" });
+  });
+
+  test("a seeded failure code is returned and the row stays active", async () => {
+    const source = createStubPanelData({ delegations: { rows: [seeded("live", "active")], revokeFails: { live: "NETWORK_ERROR" } } })({
+      sync: undefined,
+    } as unknown as PanelClient);
+    expect(await source.revoke("live")).toEqual({ ok: false, code: "NETWORK_ERROR" });
+    const listed = await source.delegations();
+    if (listed.state !== "ready") throw new Error("not ready");
+    expect(listed.data.rows[0]?.status).toBe("active");
   });
 });
 
