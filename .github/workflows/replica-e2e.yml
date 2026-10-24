@@ -243,18 +243,13 @@ jobs:
 
       # The suite skips itself when the node binary variable is unset, so the
       # step fails if any test was skipped.
-      # secrets_sync_requires_opt_in fails in CI, so the step is held back by
-      # EXCLUDED_TICKET. Delete that env line to run the suite again.
+      # The step runs packages/cli/test/replica-secrets.e2e.test.ts and fails
+      # unless at least one test passed and none were skipped.
       - name: tc replica Secrets against the node
         if: matrix.database == 'sqlite'
         env:
           TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
-          EXCLUDED_TICKET: TC-1899
         run: |
-          if [ -n "${EXCLUDED_TICKET:-}" ]; then
-            echo "excluded: packages/cli/test/replica-secrets.e2e.test.ts: secrets_sync_requires_opt_in fails in CI; $EXCLUDED_TICKET"
-            exit 0
-          fi
           set -o pipefail
           bun test packages/cli/test/replica-secrets.e2e.test.ts 2>&1 | tee "$RUNNER_TEMP/replica-secrets.log"
           if grep -Eq '^ *[1-9][0-9]* skip' "$RUNNER_TEMP/replica-secrets.log" || ! grep -Eq '^ *[1-9][0-9]* pass' "$RUNNER_TEMP/replica-secrets.log"; then
