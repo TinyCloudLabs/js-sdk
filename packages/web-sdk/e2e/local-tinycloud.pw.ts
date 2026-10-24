@@ -124,6 +124,27 @@ for (const scheme of ["light", "dark"] as const) {
       await expect(panel(page).locator(".ll-label")).toHaveCSS("font-size", "16px");
     });
 
+    // The sub-line sits 2 px under the label (mock `.swrow .sub`), and the label+sub block is centred on the switch.
+    for (const [state, node] of [
+      ["off", undefined],
+      ["found", NODES.found],
+      ["not-found", NODES["not-found"]],
+    ] as const) {
+      test(`switch row: sub-line sits under the label and the block is centred on the switch (${state})`, async ({ page }) => {
+        await mount(page, { scheme, node, viewport: PHONE_360 });
+        await openLocal(page);
+        const label = await panel(page).locator(".ll-label").boundingBox();
+        const sub = await panel(page).locator(".ll-sub").boundingBox();
+        const sw = await toggle(page).boundingBox();
+        if (!label || !sub || !sw) throw new Error("switch row is not laid out");
+        const gap = sub.y - (label.y + label.height);
+        expect(gap, "label bottom to sub-line top").toBeGreaterThanOrEqual(0);
+        expect(gap, "label bottom to sub-line top").toBeLessThanOrEqual(4);
+        const blockCentre = (label.y + sub.y + sub.height) / 2;
+        expect(Math.abs(blockCentre - (sw.y + sw.height / 2)), "block centre vs switch centre").toBeLessThanOrEqual(4);
+      });
+    }
+
     test("off card: white on the full-page layout in light, the dark card surface in dark", async ({ page }) => {
       await mount(page, { scheme, viewport: PHONE_360 });
       await openLocal(page);
