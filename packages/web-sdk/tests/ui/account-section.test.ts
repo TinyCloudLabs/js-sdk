@@ -59,6 +59,9 @@ interface Opts {
   requests?: boolean;
   layout?: "drawer" | "page";
   latest?: (key: string) => unknown;
+  generation?: () => number;
+  /** Replaces `account()`; lets a spec hold a read open. */
+  readAccount?: () => Promise<unknown>;
 }
 
 function mountWith(opts: Opts) {
@@ -66,14 +69,18 @@ function mountWith(opts: Opts) {
   const opened: SectionId[] = [];
   const toasts: Array<{ kind: string; textCode: string }> = [];
   const dataListeners: Array<() => void> = [];
+  const resetListeners: Array<() => void> = [];
   const client = {
     id: 1,
     signedIn: opts.signedIn ?? (() => true),
-    onReset: () => () => undefined,
+    onReset: (cb: () => void) => {
+      resetListeners.push(cb);
+      return () => undefined;
+    },
     storage: { status: async () => ({}) },
     data: {
       subscribe: () => () => undefined,
-      account: async () => ({ state: "ready", data: { ...ACCOUNT, ...opts.account } }),
+      account: opts.readAccount ?? (async () => ({ state: "ready", data: { ...ACCOUNT, ...opts.account } })),
     },
     requests: opts.requests ? {} : undefined,
     sync: {},
@@ -104,6 +111,7 @@ function mountWith(opts: Opts) {
       source: client.data,
       latest: opts.latest ?? (() => undefined),
       age: () => undefined,
+      generation: opts.generation ?? (() => 0),
       refresh: async () => undefined,
       subscribe: (cb: () => void) => {
         dataListeners.push(cb);
@@ -119,7 +127,7 @@ function mountWith(opts: Opts) {
   page.document.body.append(el);
   const dispose = accountSection.mount(el as unknown as HTMLElement, ctx);
   cleanups.push(dispose);
-  return { el, signOutCalls, opened, toasts, dataListeners };
+  return { el, signOutCalls, opened, toasts, dataListeners, resetListeners };
 }
 
 const button = (root: ParentNode, label: string): HTMLButtonElement => {
@@ -255,6 +263,64 @@ describe("Overview section", () => {
     expect(nodes.querySelector(".st")?.textContent).toBe("1 slow");
     expect(nodes.querySelector(".st")?.className).toBe("st st-warn");
     expect(rows[0].querySelector(".st")).toBeNull();
+  });
+
+  test("an account change drops the old account's facts and ignores its late read", async () => {
+    let calls = 0;
+    let releaseSecond: (value: unknown) => void = () => undefined;
+    const readAccount = () => {
+      calls += 1;
+      if (calls === 1) return Promise.resolve({ state: "ready", data: { ...ACCOUNT, did: "did:key:old", displayName: "Old Name" } });
+      return new Promise((resolve) => (releaseSecond = resolve));
+    };
+    const { el, resetListeners } = mountWith({ readAccount });
+    await flush();
+    const name = () => (el.querySelector(".account-ident .name") as HTMLElement).textContent;
+    expect(name()).toBe("Old Name");
+
+    for (const listener of resetListeners) listener();
+    await flush();
+    // The new account's read is still out: the old name must not be on screen meanwhile.
+    expect((el.querySelector(".account-ident") as HTMLElement).hidden).toBe(true);
+
+    releaseSecond({ state: "ready", data: { ...ACCOUNT, did: "did:key:new", displayName: "New Name" } });
+    await flush();
+    expect(name()).toBe("New Name");
+  });
+
+  test("copying the DID across an account change shows no toast", async () => {
+    let generation = 0;
+    const realNavigator = globalThis.navigator;
+    let releaseCopy: () => void = () => undefined;
+    Object.defineProperty(globalThis, "navigator", {
+      configurable: true,
+      value: { clipboard: { writeText: () => new Promise<void>((resolve) => (releaseCopy = resolve)) } },
+    });
+    try {
+      const { el, toasts } = mountWith({ generation: () => generation });
+      await flush();
+      (el.querySelector(".account-copy") as HTMLButtonElement).click();
+      generation += 1;
+      releaseCopy();
+      await flush();
+      expect(toasts).toEqual([]);
+    } finally {
+      Object.defineProperty(globalThis, "navigator", { configurable: true, value: realNavigator });
+    }
+  });
+
+  test("copying the DID in the same account confirms it", async () => {
+    const realNavigator = globalThis.navigator;
+    Object.defineProperty(globalThis, "navigator", { configurable: true, value: { clipboard: { writeText: async () => undefined } } });
+    try {
+      const { el, toasts } = mountWith({});
+      await flush();
+      (el.querySelector(".account-copy") as HTMLButtonElement).click();
+      await flush();
+      expect(toasts).toEqual([{ kind: "success", textCode: "account.copied" }]);
+    } finally {
+      Object.defineProperty(globalThis, "navigator", { configurable: true, value: realNavigator });
+    }
   });
 
   test("a cache change repaints the row statuses in place", async () => {

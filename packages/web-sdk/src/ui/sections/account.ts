@@ -319,12 +319,15 @@ function mountAccount(el: HTMLElement, ctx: SectionContext): () => void {
 
   async function copyDid(): Promise<void> {
     if (view.state !== "ready") return;
+    const generation = ctx.data.generation();
     let ok = true;
     try {
       await navigator.clipboard.writeText(view.data.did);
     } catch {
       ok = false;
     }
+    // The DID was the old account's; say nothing about it to the new one.
+    if (disposed || generation !== ctx.data.generation()) return;
     ctx.toast(
       ok ? { kind: "success", textCode: "account.copied" } : { kind: "error", textCode: "account.copy_failed" },
     );
@@ -353,7 +356,11 @@ function mountAccount(el: HTMLElement, ctx: SectionContext): () => void {
     render();
   }
 
-  const offReset = client?.onReset(() => void load());
+  const offReset = client?.onReset(() => {
+    // A refetch keeps the old facts on screen, which is wrong across an account change: start from loading.
+    view = { state: "loading" };
+    void load();
+  });
   // The shell refreshes the cache on open, on data change and each minute; each refresh repaints the rows.
   const offData = ctx.data.subscribe(paintGlance);
   // The session countdown is minute-grained, so one tick a minute is enough.
