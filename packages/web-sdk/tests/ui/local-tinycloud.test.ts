@@ -5,6 +5,7 @@ import type { ActionResult, LocalNodeState, PanelDataSource } from "../../src/ui
 import { localTinycloudSection } from "../../src/ui/sections/local-tinycloud";
 import type { HostContext, PanelClient } from "../../src/ui/slots";
 import { panelText } from "../../src/ui/strings-panel";
+import { viewError } from "../../src/ui/view-result";
 
 type Loose = Record<PropertyKey, unknown>;
 type Toast = Record<string, unknown>;
@@ -15,6 +16,16 @@ const GLOBAL_NAMES = ["window", "document", "HTMLElement", "Element", "Event", "
 const HOST = "http://127.0.0.1:8787";
 const DID_LONG = "did:key:z6MkEXAMPLEabcdefghijklmnopqrstuvwxyz0123456789";
 const DID_SHORT = "did:key:zLocal";
+const UNKNOWN = panelText("local-tinycloud.unknown");
+
+/** Text of each value cell in the found card, without its Copy buttons. */
+function valueTexts(el: HTMLElement): string[] {
+  return Array.from(el.querySelectorAll(".ll-kv dd")).map((dd) => {
+    const value = dd.cloneNode(true) as HTMLElement;
+    value.querySelectorAll("button").forEach((button) => button.remove());
+    return value.textContent?.trim() ?? "";
+  });
+}
 
 let page: Window;
 const saved = new Map<string, unknown>();
@@ -316,5 +327,54 @@ describe("Local TinyCloud section", () => {
     fake.notify();
     await flush();
     expect(query(el, "button.switch").getAttribute("aria-checked")).toBe("true");
+  });
+
+  test("found: a node id, version, or host the node did not report is shown as Unknown, never blank or zero", async () => {
+    const fake = fakeLocal({ source: "stub", connection: "found" });
+    const el = mountWith(fake.data);
+    await flush();
+    expect(valueTexts(el)).toEqual([UNKNOWN, UNKNOWN, UNKNOWN]);
+    expect(el.querySelector(".ll-did")).toBeNull();
+    expect(el.querySelector(".ll-mono")).toBeNull();
+    expect(el.querySelectorAll(".ll-kv button")).toHaveLength(0);
+  });
+
+  test("found: blank version, host, and node id count as missing, not as values", async () => {
+    const fake = fakeLocal({
+      source: "stub",
+      connection: "found",
+      url: "",
+      identity: { origin: HOST, nodeDid: "" },
+      version: "",
+    });
+    const el = mountWith(fake.data);
+    await flush();
+    expect(valueTexts(el)).toEqual([UNKNOWN, UNKNOWN, UNKNOWN]);
+    expect(el.querySelectorAll(".ll-kv button")).toHaveLength(0);
+  });
+
+  test("found: a missing host shows Unknown while the reported version still shows", async () => {
+    const fake = fakeLocal({
+      source: "stub",
+      connection: "found",
+      identity: { origin: HOST, nodeDid: DID_SHORT },
+      version: "v0.14.2",
+    });
+    const el = mountWith(fake.data);
+    await flush();
+    expect(valueTexts(el)).toEqual([DID_SHORT, "v0.14.2", UNKNOWN]);
+  });
+
+  test("a failed read shows the retry affordance, never the Not found state", async () => {
+    const data = {
+      subscribe: () => () => undefined,
+      localNode: async () => viewError("unknown"),
+    } as unknown as PanelDataSource;
+    const el = mountWith(data);
+    await flush();
+    expect(visibleButton(el, panelText("view.retry")).hidden).toBe(false);
+    expect(el.textContent).not.toContain(panelText("local-tinycloud.glance.not_found"));
+    expect(el.textContent).not.toContain(panelText("local-tinycloud.not_found.title"));
+    expect(query(el, ".ll-card").textContent).toBe("");
   });
 });

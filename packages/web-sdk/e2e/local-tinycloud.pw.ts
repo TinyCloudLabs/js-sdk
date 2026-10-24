@@ -136,6 +136,15 @@ for (const scheme of ["light", "dark"] as const) {
       await expect(panel(page).getByRole("button", { name: "Check again", exact: true })).toBeVisible();
     });
 
+    test("found with details missing: each value reads Unknown, with no copy action and no zero", async ({ page }) => {
+      await mount(page, { scheme, node: { source: "stub", connection: "found" } });
+      await openLocal(page);
+      await expect(toggle(page)).toHaveAttribute("aria-checked", "true");
+      await expect(panel(page).locator(".ll-kv dd")).toHaveText(["Unknown", "Unknown", "Unknown"]);
+      await expect(panel(page).locator(".ll-unknown")).toHaveCount(3);
+      await expect(panel(page).locator(".ll-kv button")).toHaveCount(0);
+    });
+
     test("not found: lists the four steps with the start command, and offers a retry", async ({ page }) => {
       await mount(page, { scheme, node: NODES["not-found"] });
       await openLocal(page);

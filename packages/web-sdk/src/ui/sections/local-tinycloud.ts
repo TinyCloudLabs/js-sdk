@@ -32,8 +32,9 @@ const STYLE = `
 .ll-cell{display:flex;align-items:center;gap:8px;min-width:0}
 .ll-cell>.action{flex:none;padding-left:10px;padding-right:10px}
 .ll-steps{margin:0;padding-left:20px;font-size:13px;line-height:1.6;color:#52525b}
+.ll-unknown{color:#52525b}
 @media (prefers-color-scheme: dark){
-.ll-intro,.ll-sub,.ll-body,.ll-kv dt,.ll-steps{color:#a1a1aa}
+.ll-intro,.ll-sub,.ll-body,.ll-kv dt,.ll-steps,.ll-unknown{color:#a1a1aa}
 .ll-card{border-color:#3f3f46}
 .ll-spin{border-color:#3f3f46;border-top-color:#fafafa}
 .ll-kv>div{border-bottom-color:#69696b}
@@ -142,6 +143,14 @@ export const localTinycloudSection: PanelSection = {
       return button;
     }
 
+    /** Neutral placeholder for a value the node did not report. Never shown as zero or blank. */
+    function unknownValue(): HTMLSpanElement {
+      const span = document.createElement("span");
+      span.className = "ll-unknown";
+      span.textContent = ctx.text("local-tinycloud.unknown");
+      return span;
+    }
+
     async function copy(value: string): Promise<void> {
       try {
         await navigator.clipboard.writeText(value);
@@ -204,32 +213,35 @@ export const localTinycloudSection: PanelSection = {
             kv.append(row);
           };
           const did = current.identity?.nodeDid;
-          if (did !== undefined) {
+          const idCell = document.createElement("span");
+          idCell.className = "ll-cell";
+          if (did) {
             const idText = document.createElement("span");
             idText.className = "ll-did";
             idText.textContent =
               did.length > 24 ? `${did.slice(0, 16)}…${did.slice(-6)}` : did;
             idText.title = did;
-            const idCell = document.createElement("span");
-            idCell.className = "ll-cell";
             idCell.append(idText, copyButton(did, "local-tinycloud.copy.node_id_label"));
-            addRow("local-tinycloud.found.node_id", idCell);
+          } else {
+            idCell.append(unknownValue());
           }
-          if (current.version !== undefined) {
-            const version = document.createElement("span");
-            version.textContent = current.version;
-            addRow("local-tinycloud.found.version", version);
-          }
-          if (current.url !== undefined) {
+          addRow("local-tinycloud.found.node_id", idCell);
+          const version = document.createElement("span");
+          if (current.version) version.textContent = current.version;
+          else version.append(unknownValue());
+          addRow("local-tinycloud.found.version", version);
+          const hostCell = document.createElement("span");
+          hostCell.className = "ll-cell";
+          if (current.url) {
             const host = document.createElement("span");
             host.className = "ll-mono";
             host.textContent = current.url;
             host.title = current.url;
-            const hostCell = document.createElement("span");
-            hostCell.className = "ll-cell";
             hostCell.append(host, copyButton(current.url, "local-tinycloud.copy.host_label"));
-            addRow("local-tinycloud.found.host", hostCell);
+          } else {
+            hostCell.append(unknownValue());
           }
+          addRow("local-tinycloud.found.host", hostCell);
           return [head(pill("found"), recheck), kv];
         }
         case "not-found": {

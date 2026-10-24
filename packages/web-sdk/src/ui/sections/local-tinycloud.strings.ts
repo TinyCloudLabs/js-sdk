@@ -30,6 +30,7 @@ export const LOCAL_TINYCLOUD_STRINGS = {
   "local-tinycloud.found.node_id": "Node ID",
   "local-tinycloud.found.version": "Version",
   "local-tinycloud.found.host": "Host",
+  "local-tinycloud.unknown": "Unknown",
   "local-tinycloud.copy": "Copy",
   "local-tinycloud.copy.node_id_label": "Copy node ID",
   "local-tinycloud.copy.host_label": "Copy host",
