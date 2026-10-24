@@ -1,4 +1,4 @@
-import type { ActionResult, LocalNodeConnection, LocalNodeState } from "../data";
+import type { ActionResult, LocalNodeConnection, LocalNodeState, PanelDataSource } from "../data";
 import type { HostContext, PanelSection, SectionStatus } from "../slots";
 import { registerPanelStrings } from "../strings-panel";
 import { LOCAL_TINYCLOUD_STRINGS } from "./local-tinycloud.strings";
@@ -80,8 +80,12 @@ export const localTinycloudSection: PanelSection = {
       return { text: ctx.text(glance.code), tone: glance.tone };
     }),
   mount(el, ctx: HostContext) {
-    const data = ctx.client()?.data;
-    if (!data) return mountPlaceholder(el);
+    const first = ctx.client()?.data;
+    if (!first) return mountPlaceholder(el);
+    // The source this mount reads. A client change swaps it; a result still in flight for the old one is dropped.
+    let source: PanelDataSource | undefined = first;
+    let epoch = 0;
+    let offSource: (() => void) | undefined;
 
     let disposed = false;
     let busy = false;
@@ -152,11 +156,12 @@ export const localTinycloudSection: PanelSection = {
     }
 
     async function copy(value: string): Promise<void> {
+      const at = epoch;
       try {
         await navigator.clipboard.writeText(value);
-        ctx.toast({ kind: "success", textCode: "local-tinycloud.copied" });
+        if (!disposed && at === epoch) ctx.toast({ kind: "success", textCode: "local-tinycloud.copied" });
       } catch {
-        ctx.toast({ kind: "error", textCode: "local-tinycloud.copy_failed" });
+        if (!disposed && at === epoch) ctx.toast({ kind: "error", textCode: "local-tinycloud.copy_failed" });
       }
     }
 
@@ -298,13 +303,19 @@ export const localTinycloudSection: PanelSection = {
 
     async function load(): Promise<void> {
       const token = ++seq;
-      const result = await settle(() => data.localNode());
-      if (disposed || token !== seq) return;
+      const src = source;
+      const at = epoch;
+      if (src === undefined) return;
+      const result = await settle(() => src.localNode());
+      if (disposed || token !== seq || at !== epoch) return;
       node = applyResult(line, ctx, result);
       render();
     }
 
     async function setOn(on: boolean): Promise<void> {
+      const src = source;
+      if (src === undefined) return;
+      const at = epoch;
       busy = true;
       attempted = on;
       errorLine.hidden = true;
@@ -312,12 +323,12 @@ export const localTinycloudSection: PanelSection = {
       render();
       let result: ActionResult;
       try {
-        result = await data.setLocalNodeEnabled(on);
+        result = await src.setLocalNodeEnabled(on);
       } catch {
         result = { ok: false, code: "unknown" };
       }
+      if (disposed || at !== epoch) return;
       busy = false;
-      if (disposed) return;
       errorLine.hidden = result.ok;
       retryWrite.hidden = result.ok;
       if (result.ok) attempted = undefined;
@@ -329,9 +340,32 @@ export const localTinycloudSection: PanelSection = {
       void setOn(node.connection === "off");
     });
 
-    const unsubscribe = data.subscribe((view) => {
-      if (view === "local") void load();
+    function follow(): void {
+      offSource?.();
+      offSource = source?.subscribe((view) => {
+        if (view === "local") void load();
+      });
+    }
+    // Client change (account switch): drop the old source's in-flight results and read the new source.
+    const offClient = ctx.onClientChange(() => {
+      epoch += 1;
+      busy = false;
+      attempted = undefined;
+      errorLine.hidden = true;
+      retryWrite.hidden = true;
+      node = undefined;
+      source = ctx.client()?.data;
+      follow();
+      render();
+      if (source === undefined) {
+        line.status.hidden = true;
+        line.retry.hidden = true;
+        return;
+      }
+      startLoading(line, ctx);
+      void load();
     });
+    follow();
 
     const style = document.createElement("style");
     style.textContent = STYLE + UI_STYLE;
@@ -341,7 +375,8 @@ export const localTinycloudSection: PanelSection = {
 
     return () => {
       disposed = true;
-      unsubscribe();
+      offClient();
+      offSource?.();
       el.replaceChildren();
     };
   },

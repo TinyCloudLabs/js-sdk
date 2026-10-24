@@ -378,3 +378,118 @@ describe("Local TinyCloud section", () => {
     expect(query(el, ".ll-card").textContent).toBe("");
   });
 });
+
+/** A promise the test resolves by hand, to hold a read or write in flight. */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((next) => {
+    resolve = next;
+  });
+  return { promise, resolve };
+}
+
+/** Mounts with a client the test can swap, the way an account switch does. */
+function mountSwitchable(first: PanelDataSource, toasts: Toast[] = []) {
+  const el = page.document.createElement("div");
+  page.document.body.append(el);
+  let current = first;
+  let onChange: (() => void) | undefined;
+  const base = ctxFor({ id: 1, signedIn: () => true, onReset: () => () => undefined, data: first } as unknown as PanelClient, toasts);
+  const ctx = {
+    ...base,
+    client: () => ({ id: 1, data: current }) as unknown as PanelClient,
+    onClientChange: (cb: () => void) => {
+      onChange = cb;
+      return () => undefined;
+    },
+  };
+  cleanups.push(localTinycloudSection.mount(el, ctx as never));
+  return {
+    el,
+    switchTo(next: PanelDataSource) {
+      current = next;
+      onChange?.();
+    },
+  };
+}
+
+const DID_OLD = "did:key:zOldAccount";
+
+describe("Local TinyCloud section: account switch while a request is in flight", () => {
+  test("a read for the old account that lands after the switch is dropped", async () => {
+    const oldRead = deferred<unknown>();
+    const old = {
+      subscribe: () => () => undefined,
+      localNode: () => oldRead.promise,
+      setLocalNodeEnabled: async () => ({ ok: true }),
+    } as unknown as PanelDataSource;
+    const next = fakeLocal({
+      source: "stub",
+      connection: "found",
+      url: HOST,
+      identity: { origin: HOST, nodeDid: DID_SHORT },
+      version: "v0.14.2",
+    });
+    const view = mountSwitchable(old);
+    view.switchTo(next.data);
+    await flush();
+    expect(valueTexts(view.el)).toContain(DID_SHORT);
+    oldRead.resolve({
+      state: "ready",
+      data: { source: "stub", connection: "found", url: HOST, identity: { origin: HOST, nodeDid: DID_OLD }, version: "v0.13.0" },
+    });
+    await flush();
+    expect(valueTexts(view.el)).toContain(DID_SHORT);
+    expect(valueTexts(view.el)).not.toContain(DID_OLD);
+  });
+
+  test("a write for the old account that fails after the switch shows no error", async () => {
+    const oldWrite = deferred<ActionResult>();
+    const old = fakeLocal({ source: "stub", connection: "off" }, () => oldWrite.promise);
+    const next = fakeLocal({
+      source: "stub",
+      connection: "found",
+      url: HOST,
+      identity: { origin: HOST, nodeDid: DID_SHORT },
+      version: "v0.14.2",
+    });
+    const view = mountSwitchable(old.data);
+    await flush();
+    query<HTMLButtonElement>(view.el, "button.switch").click();
+    await flush();
+    view.switchTo(next.data);
+    await flush();
+    oldWrite.resolve({ ok: false, code: "unknown" });
+    await flush();
+    expect(query(view.el, '[role="alert"]').hidden).toBe(true);
+    expect(valueTexts(view.el)).toContain(DID_SHORT);
+  });
+
+  test("a copy that finishes after the switch shows no toast", async () => {
+    const write = deferred<void>();
+    clipboard(() => write.promise);
+    const old = fakeLocal({
+      source: "stub",
+      connection: "found",
+      url: HOST,
+      identity: { origin: HOST, nodeDid: DID_OLD },
+      version: "v0.13.0",
+    });
+    const next = fakeLocal({
+      source: "stub",
+      connection: "found",
+      url: HOST,
+      identity: { origin: HOST, nodeDid: DID_SHORT },
+      version: "v0.14.2",
+    });
+    const toasts: Toast[] = [];
+    const view = mountSwitchable(old.data, toasts);
+    await flush();
+    query<HTMLButtonElement>(view.el, ".ll-kv dd button").click();
+    view.switchTo(next.data);
+    await flush();
+    write.resolve();
+    await flush();
+    expect(toasts).toEqual([]);
+  });
+});
