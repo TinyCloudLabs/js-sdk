@@ -105,6 +105,7 @@ jobs:
           bun test packages/cli/src/commands/raw-decrypt-grant.test.ts
           bun test packages/cli/src/commands/secrets-put-classification.test.ts
           bun test packages/cli/src/output/errors.test.ts
+          bun test packages/cli/src/output/spinner.test.ts
           bun test packages/cli/src/commands/account.test.ts
           bun test packages/cli/src/commands/account-invocations.test.ts
           bun test packages/cli/src/commands/storage-full.test.ts
