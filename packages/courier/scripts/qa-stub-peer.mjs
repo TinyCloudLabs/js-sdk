@@ -37,13 +37,89 @@ export function assertRunning(owner) {
   } catch { throw new Error('stub has a stale process identity'); }
 }
 
-export function claimLifecycle(stateDir) {
+export function holderIsDead(holder) {
+  if (!Number.isSafeInteger(holder?.pid) || holder.pid <= 0 || typeof holder.startTime !== 'string' || !/^\d+$/.test(holder.startTime) ||
+      typeof holder.nonce !== 'string' ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(holder.nonce ?? '')) {
+    throw new Error('state lifecycle lock recovery refused: garbled holder identity');
+  }
+  try {
+    const actual = processStartTime(holder.pid);
+    if (!/^\d+$/.test(actual ?? '')) throw new Error('unreadable process start time');
+    return actual !== holder.startTime;
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      try { process.kill(holder.pid, 0); }
+      catch (probe) { if (probe.code === 'ESRCH') return true; }
+    }
+    throw new Error('state lifecycle lock recovery refused: cannot prove holder dead');
+  }
+}
+
+function recoveryRecord(file) {
+  try { return json(file); }
+  catch { throw new Error('state lifecycle lock recovery refused: unreadable or garbled record'); }
+}
+
+function assertDeadMarker(stateDir, holder) {
+  const dead = holderIsDead(holder);
+  const owner = recoveryRecord(path.join(stateDir, 'qa-stub.json'));
+  assertMarker(owner, stateDir);
+  if (owner.pid !== holder.pid || owner.startTime !== holder.startTime || owner.nonce !== holder.nonce) {
+    throw new Error('state lifecycle lock recovery refused: marker does not match holder');
+  }
+  if (!dead) throw new Error('state lifecycle lock recovery refused: holder is live');
+}
+
+function recoverDeadState(stateDir) {
+  assertState(stateDir, process.env.COURIER_HOME);
+  // Serialize recovery snapshots/renames: two purges must never move each other's new live claim.
+  const gate = path.join(stateDir, 'purge-recovery.lock');
+  const nonce = randomUUID();
+  let gateFd;
+  try { gateFd = fs.openSync(gate, 'wx', 0o600); }
+  catch { throw new Error('state lifecycle lock recovery refused: another purge is active'); }
+  fs.writeFileSync(gateFd, JSON.stringify({ nonce }));
+  fs.closeSync(gateFd);
+  const file = path.join(stateDir, 'lifecycle.lock');
+  const archived = path.join(stateDir, `.stale-${nonce}`);
+  let claim;
+  try {
+    const holder = recoveryRecord(file);
+    assertDeadMarker(stateDir, holder);
+    fs.renameSync(file, archived);
+    const moved = recoveryRecord(archived);
+    if (moved.pid !== holder.pid || moved.startTime !== holder.startTime || moved.nonce !== holder.nonce) {
+      throw new Error('state lifecycle lock recovery refused: holder changed during takeover');
+    }
+    claim = claimLifecycle(stateDir);
+    claim.assertHeld();
+    assertState(stateDir, process.env.COURIER_HOME);
+    assertDeadMarker(stateDir, holder); // re-verify marker and death under our fresh wx claim
+    return Object.assign(claim, { recovered: true, deadHolder: holder });
+  } catch (error) {
+    claim?.release();
+    // Restore without overwriting a competing claim if takeover failed after rename.
+    if (fs.existsSync(archived)) {
+      try { fs.linkSync(archived, file); }
+      catch (restore) { if (restore.code !== 'EEXIST') throw restore; }
+    }
+    throw error;
+  } finally {
+    if (recoveryRecord(gate).nonce === nonce) fs.unlinkSync(gate);
+  }
+}
+
+export function claimLifecycle(stateDir, allowRecovery = false) {
   const file = path.join(stateDir, 'lifecycle.lock');
   const identity = { pid: process.pid, startTime: processStartTime(process.pid), nonce: randomUUID() };
   let fd;
   try { fd = fs.openSync(file, 'wx', 0o600); }
   catch (error) {
-    if (error.code === 'EEXIST') throw new Error('state lifecycle lock is held; concurrent start/purge refused');
+    if (error.code === 'EEXIST') {
+      if (allowRecovery) return recoverDeadState(stateDir);
+      throw new Error(`state lifecycle lock is held; concurrent start/purge refused; after a crash run purge --state ${stateDir}`);
+    }
     throw error;
   }
   fs.writeFileSync(fd, JSON.stringify(identity));
@@ -171,17 +247,18 @@ async function main() {
   assertState(stateDir, process.env.COURIER_HOME);
   scrubEnvironment(stateDir); // before any SDK import or runtime write
   assertState(stateDir, process.env.COURIER_HOME);
-  const claim = command === 'start' || command === 'purge' ? claimLifecycle(stateDir) : undefined;
+  const claim = command === 'start' || command === 'purge' ? claimLifecycle(stateDir, command === 'purge') : undefined;
   try {
   const marker = path.join(stateDir, 'qa-stub.json');
   if (command !== 'start') {
     const owner = json(marker);
     assertMarker(owner, stateDir);
     if (command === 'purge') {
-      assertMarker(owner, stateDir, true);
+      if (claim.recovered) assertDeadMarker(stateDir, claim.deadHolder);
+      else assertMarker(owner, stateDir, true);
       claim.assertHeld();
       fs.rmSync(stateDir, { recursive: true });
-      console.log(JSON.stringify({ purged: true })); return;
+      console.log(JSON.stringify({ purged: true, path: stateDir, recovered: claim.recovered === true })); return;
     }
     assertRunning(owner);
     if (command === 'status') {

@@ -177,11 +177,32 @@ or a competing purge fail with a clear lifecycle-lock error. The lock contains
 the PID, Linux `/proc/<pid>/stat` start time and a unique start nonce. Control
 commands check PID **and** start time, so a reused PID is refused. Lock release
 requires the matching nonce; atomic-write temporary names include PID and nonce.
-This lifecycle check requires Linux `/proc`. An abrupt kill can leave a stale
-lock: it is refused rather than automatically removed or retried.
+This lifecycle check requires Linux `/proc`. After an abrupt kill, start still
+refuses the stale lock and prints the explicit purge command below.
 
 Pending and seen deliveries are keyed by `(peer, thread, message)` tuples, so a
 second peer cannot consume another peer's delivery identity by reusing its IDs.
+
+### After a crash
+
+Discard the crashed throwaway run with this exact-path command (replace the
+example with its recorded state path):
+
+```sh
+env -u COURIER_HOME node scripts/qa-stub-peer.mjs purge \
+  --state /var/tmp/tc2001stub.ABCDEF
+```
+
+Only purge can recover a stale lock. It requires the canonical, owner-only,
+marked directory with no symlinks, a valid lock identity, and the same identity
+in the marker. The holder must be provably absent or its PID must now have a
+different `/proc` start time. Live holders, unreadable/garbled records and
+ambiguous process inspection are refused. Purges serialize recovery, rename the
+stale lock to a unique `.stale-<nonce>` file, acquire a fresh exclusive claim,
+and re-check the marker before deleting only that directory. Success prints one
+JSON line: `{"purged":true,"path":"/var/tmp/tc2001stub.ABCDEF","recovered":true}`.
+Start a fresh stub and pair again; the crashed identity/pairing is discarded.
+
 
 Exit 0 means success; exit 1 means invalid arguments/state, refused operation,
 timeout or node failure. A CLI call has a 45-second deadline; a control command
@@ -224,6 +245,8 @@ connection failed. Inspect the throwaway run and start fresh if needed.
 | Purge claim | Omit purge from lifecycle locking | Purge cannot enter a claimed startup window | Green |
 | Process identity | Ignore process start time | A reused PID must be refused | Green |
 | Explicit state | Accept an unmarked explicit directory | Empty/registry-only directories must be refused | Green |
+| Dead holder | Treat a live PID/start-time as dead | A live holder cannot be purged | Green |
+| Recovery scope | Remove exact state-path pattern check | A marked dead fixture outside the exact pattern remains untouched | Green |
 
 Run the offline tests or the optional local-node proof from the repository root:
 

@@ -4,7 +4,7 @@ import path from 'node:path';
 import { execFileSync, execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createServer } from 'node:net';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { pathToFileURL, fileURLToPath } from 'node:url';
@@ -309,7 +309,7 @@ test('purge serializes with start, including the stopped-marker startup window',
       assert.equal((await stateCommand(source, dir, ['stop', '--keep-state'])).code, 0);
     } else { assert.equal(started.code, 1); assert.equal(fs.existsSync(dir), false); }
   } finally { await finishAttempt(start); }
-  const mutation = await scratchModule('purge-lock', "command === 'start' || command === 'purge' ? claimLifecycle(stateDir)", "command === 'start' ? claimLifecycle(stateDir)", code => code.replace('      claim.assertHeld();', ''));
+  const mutation = await scratchModule('purge-lock', "command === 'start' || command === 'purge' ? claimLifecycle(stateDir, command === 'purge')", "command === 'start' ? claimLifecycle(stateDir)", code => code.replace('      claim.assertHeld();', '').replace('if (claim.recovered)', 'if (claim?.recovered)'));
   await assert.rejects(() => purgeLockScenario(mutation.file), assert.AssertionError);
   await purgeLockScenario();
   console.log('MUTATION purge-lock: unsafe purge failed regression; restored green');
@@ -331,6 +331,99 @@ test('explicit state refuses unmarked empty and registry-only directories', asyn
   assert.throws(() => scenario(mutation.module), assert.AssertionError);
   scenario(peerModule);
   console.log('MUTATION explicit-state: unmarked acceptance failed regression; restored green');
+});
+
+function recoveryFixture(dir = allocate(), startTime = peerModule.processStartTime(process.pid) + '1') {
+  const holder = { pid: process.pid, startTime, nonce: randomUUID() };
+  fs.writeFileSync(path.join(dir, 'lifecycle.lock'), JSON.stringify(holder), { mode: 0o600 });
+  fs.writeFileSync(path.join(dir, 'qa-stub.json'), JSON.stringify({ type: 'qa-courier-stub-v1', state: dir, ...holder }), { mode: 0o600 });
+  return dir;
+}
+
+test('SIGKILL recovery purges exactly the crashed stub and start gives the purge command', { timeout: 15000 }, async () => {
+  const dir = keptFixture();
+  const other = allocate();
+  const attempt = startAttempt(source, dir);
+  try {
+    assert.equal((await attempt.outcome).ready, true);
+    const exited = new Promise(resolve => attempt.child.once('exit', resolve));
+    attempt.child.kill('SIGKILL'); await exited;
+    assert.equal(fs.existsSync(path.join(dir, 'lifecycle.lock')), true);
+    const start = await stateCommand(source, dir, ['start', '--host', 'http://127.0.0.1:8000']);
+    assert.equal(start.code, 1); assert.match(start.stderr, /purge --state/); assert.ok(start.stderr.includes(dir));
+    const result = await stateCommand(source, dir, ['purge']);
+    assert.equal(result.code, 0);
+    assert.deepEqual(JSON.parse(result.stdout), { purged: true, path: dir, recovered: true });
+    assert.equal(fs.existsSync(dir), false); assert.equal(fs.existsSync(other), true);
+    console.log('CRASH real stub: SIGKILL -> start refused with purge command -> recovered:true; exact state removed');
+  } finally { await finishAttempt(attempt); }
+});
+
+async function liveHolderScenario(file = source) {
+  const dir = recoveryFixture(undefined, peerModule.processStartTime(process.pid));
+  const result = await stateCommand(file, dir, ['purge']);
+  assert.equal(result.code, 1, 'same pid/start time is live and cannot be reclaimed');
+  assert.match(result.stderr, /holder is live/); assert.equal(fs.existsSync(dir), true);
+}
+
+test('live holder and mismatched marker cannot be recovered', async () => {
+  await liveHolderScenario();
+  const dir = recoveryFixture();
+  const marker = path.join(dir, 'qa-stub.json');
+  const owner = JSON.parse(fs.readFileSync(marker, 'utf8'));
+  fs.writeFileSync(marker, JSON.stringify({ ...owner, nonce: randomUUID() }));
+  const result = await stateCommand(source, dir, ['purge']);
+  assert.equal(result.code, 1); assert.match(result.stderr, /marker does not match/);
+  assert.equal(fs.existsSync(dir), true);
+});
+
+test('garbled or unreadable recovery records are refused without takeover', async () => {
+  for (const file of ['lifecycle.lock', 'qa-stub.json']) {
+    const dir = recoveryFixture();
+    fs.writeFileSync(path.join(dir, file), 'not JSON');
+    const result = await stateCommand(source, dir, ['purge']);
+    assert.equal(result.code, 1); assert.match(result.stderr, /unreadable or garbled/);
+    assert.equal(fs.readFileSync(path.join(dir, file), 'utf8'), 'not JSON');
+    assert.equal(fs.existsSync(dir), true);
+  }
+  const unreadable = recoveryFixture();
+  fs.unlinkSync(path.join(unreadable, 'lifecycle.lock'));
+  fs.mkdirSync(path.join(unreadable, 'lifecycle.lock'), { mode: 0o700 });
+  assert.equal((await stateCommand(source, unreadable, ['purge'])).code, 1);
+  const numeric = recoveryFixture();
+  const holder = JSON.parse(fs.readFileSync(path.join(numeric, 'lifecycle.lock'), 'utf8'));
+  fs.writeFileSync(path.join(numeric, 'lifecycle.lock'), JSON.stringify({ ...holder, startTime: Number(holder.startTime) }));
+  assert.equal((await stateCommand(source, numeric, ['purge'])).code, 1);
+});
+
+test('reused pid is recoverable and two simultaneous purges have exactly one winner', async () => {
+  const dir = recoveryFixture();
+  const results = await Promise.all([stateCommand(source, dir, ['purge']), stateCommand(source, dir, ['purge'])]);
+  assert.equal(results.filter(r => r.code === 0).length, 1);
+  assert.equal(results.filter(r => r.code === 1).length, 1);
+  assert.deepEqual(JSON.parse(results.find(r => r.code === 0).stdout), { purged: true, path: dir, recovered: true });
+  assert.equal(fs.existsSync(dir), false);
+  console.log('CRASH reused pid + concurrent purge/purge: exactly one recovered winner');
+});
+
+async function exactScopeScenario(file = source) {
+  const dir = path.join(root, `foreign-${randomUUID()}`);
+  fs.mkdirSync(dir, { mode: 0o700 });
+  recoveryFixture(dir);
+  const result = await stateCommand(file, dir, ['purge']);
+  assert.equal(result.code, 1, 'a marked dead fixture outside the exact state pattern must not be removed');
+  assert.equal(fs.existsSync(dir), true);
+}
+
+test('crash recovery mutations catch live-holder acceptance and scope escape', async () => {
+  await exactScopeScenario();
+  const death = await scratchModule('dead-holder', 'return actual !== holder.startTime;', 'return true;');
+  await assert.rejects(() => liveHolderScenario(death.file), assert.AssertionError);
+  await liveHolderScenario();
+  const scope = await scratchModule('exact-scope', '!ROOT.test(state) || ', '');
+  await assert.rejects(() => exactScopeScenario(scope.file), assert.AssertionError);
+  await exactScopeScenario();
+  console.log('MUTATION dead-holder + exact-scope: each failed as expected; restored green');
 });
 
 const binary = process.env.TC_REPLICATION_E2E_NODE_BIN;
