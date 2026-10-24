@@ -8,6 +8,7 @@ export const DELEGATIONS_STRINGS = {
   "delegations.glance.visible": "Visible",
   "delegations.lede": "Who can use your TinyCloud, and what they can do.",
   "delegations.unavailable": "Delegations aren't available here.",
+  "delegations.denied": "This session doesn't have access to this list.",
   "delegations.app.fallback": "this app",
   "delegations.app.subject": "This app",
 

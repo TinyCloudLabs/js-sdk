@@ -3,9 +3,9 @@
  * the eager STRINGS table in ../strings.ts.
  */
 const FRESHNESS_COPY = {
-  "freshness.updating": "Updating...",
+  "freshness.updating": "Updating…",
   "freshness.updated": "Updated {age}",
-  "freshness.failed": "Couldn't refresh, showing {age}",
+  "freshness.failed": "Couldn't refresh. Showing data from {age}.",
   "freshness.age.now": "just now",
   "freshness.age.minutes": "{n} min ago",
   "freshness.age.hours": "{n} h ago",

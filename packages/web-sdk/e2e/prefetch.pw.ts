@@ -149,7 +149,7 @@ test("stale delegations: Updating while the revalidate is in flight, then Update
   const before = await callCount(page, "delegations.query");
   await open(page);
   await delegationsNav(page).click();
-  await expect(panel(page).getByText("Updating...", { exact: true })).toBeVisible();
+  await expect(panel(page).getByText("Updating…", { exact: true })).toBeVisible();
   await hold(page, false);
   await expect(panel(page).getByText("Updated just now", { exact: true })).toBeVisible({ timeout: 5000 });
   expect(await callCount(page, "delegations.query")).toBe(before + 1);
@@ -161,7 +161,7 @@ test("failed refresh keeps the snapshot and says so", async ({ page }) => {
   const before = await callCount(page, "delegations.query");
   await open(page);
   await delegationsNav(page).click();
-  await expect(panel(page).getByText("Couldn't refresh, showing 3 min ago", { exact: true })).toBeVisible({
+  await expect(panel(page).getByText("Couldn't refresh. Showing data from 3 min ago.", { exact: true })).toBeVisible({
     timeout: 5000,
   });
   expect(await callCount(page, "delegations.query")).toBe(before + 1);
@@ -172,7 +172,7 @@ test("denied delegations shows needs-permission for that section only", async ({
   await setFaults(page, { deny: ["delegations.query"] });
   await open(page);
   await delegationsNav(page).click();
-  await expect(panel(page).getByText("This session can't show this yet.", { exact: true })).toBeVisible({
+  await expect(panel(page).getByText("This session doesn't have access to this list.", { exact: true })).toBeVisible({
     timeout: 5000,
   });
   await storageNav(page).click();
@@ -248,7 +248,7 @@ test("freshness chip states at light and dark, desktop and phone widths", async 
       await close(page);
       await open(page);
       await delegationsNav(page).click();
-      await expect(panel(page).getByText("Updating...", { exact: true })).toBeVisible();
+      await expect(panel(page).getByText("Updating…", { exact: true })).toBeVisible();
       const updatingShot = testInfo.outputPath(`updating-${scheme}-${size}.png`);
       await page.screenshot({ path: updatingShot });
       await hold(page, false);
@@ -259,7 +259,7 @@ test("freshness chip states at light and dark, desktop and phone widths", async 
       await close(page);
       await open(page);
       await delegationsNav(page).click();
-      await expect(panel(page).getByText("Couldn't refresh, showing 3 min ago", { exact: true })).toBeVisible({
+      await expect(panel(page).getByText("Couldn't refresh. Showing data from 3 min ago.", { exact: true })).toBeVisible({
         timeout: 5000,
       });
       const failedShot = testInfo.outputPath(`failed-${scheme}-${size}.png`);
