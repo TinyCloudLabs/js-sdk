@@ -13,6 +13,7 @@ import {
 import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedPhase2, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, preexistingS3EntryCommit, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateLogoutRatchetTransition, validateMasterMergeResolutionTransition, validateTc1413RatchetTransition, validateTc1424RatchetTransition, validateTc1448RatchetTransition, validateTc1432RatchetTransition, validateTc1436RatchetTransition, validateTc1443RatchetTransition, validateTc1443bRatchetTransition, validateTc1428RatchetTransition, validateTc1475RatchetTransition, validateTc606WorkerRatchetTransition, validateMasterDriftRatchetTransition, validateTc1789RatchetTransition, validateTc1476RatchetTransition, validateTc1466RatchetTransition, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
 import { rootCeilingFor, validateTc1757RatchetTransition, validateTc1777ExpiryRatchetTransition, validateTc1777RatchetTransition, validateTc1781DecryptExpiryRatchetTransition, validateTc1801NonTransferableShareRatchetTransition, validateTc1807CredentialDiscoveryRatchetTransition, validateTc1823SizeCodeRatchetTransition, validateTc712CredentialCoreRatchetTransition, validateTc1827ReplicaWorkerRatchetTransition, validateTc1827WorkerRatchetTransition, validateTc848PanelRatchetTransition } from "./replica-size-policy";
 import { validateTc1781DecryptStandardExpiryRatchetTransition } from "./replica-size-policy";
+import { validateTc1855ManifestLimitGuardRatchetTransition } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 import { replicaOwnedPath } from "./replica-owned-path";
 import { webSdkTestExitFailure } from "./web-sdk-test-exit";
@@ -371,6 +372,13 @@ if (prBaseSha) {
   if (tc1781DecryptStandardExpiry !== undefined && baseLedger.tc1781DecryptStandardExpiryRatchet === undefined &&
       (baseLedger.tc712CredentialCoreRatchet === undefined || !hasAncestor(repoRoot, tc1781DecryptStandardExpiry.sourceCommits.at(-1)!))) {
     console.error("The decrypt standard expiry ratchet requires the merged credential consumer core ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc1855ManifestLimitGuardRatchetTransition(baseLedger.tc1855ManifestLimitGuardRatchet, ledger.tc1855ManifestLimitGuardRatchet);
+  const tc1855ManifestLimitGuard = ledger.tc1855ManifestLimitGuardRatchet;
+  if (tc1855ManifestLimitGuard !== undefined && baseLedger.tc1855ManifestLimitGuardRatchet === undefined &&
+      (baseLedger.tc1781DecryptStandardExpiryRatchet === undefined || !hasAncestor(repoRoot, tc1855ManifestLimitGuard.sourceCommits.at(-1)!))) {
+    console.error("The manifest limit guard ratchet requires the merged decrypt standard expiry ratchet and its measured source commit.");
     failed = true;
   }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
