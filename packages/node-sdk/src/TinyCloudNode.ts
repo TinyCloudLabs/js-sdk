@@ -5333,7 +5333,7 @@ export class TinyCloudNode {
           // re-sign-in only for the signed-in owner's own default network.
           const missingOwnNetwork = response.status === 404 &&
             networkId === this.getDefaultEncryptionNetworkId() &&
-            (await response.text().catch(() => "")).trim().toLowerCase() === "network not found";
+            (await response.text().catch(() => "")).trim() === "network not found";
           throw new DecryptTransportResponseError(
             response.status,
             permissionHint,
