@@ -57,7 +57,7 @@ jobs:
           relevant=""
           while IFS= read -r f; do
             case "$f" in
-              packages/web-sdk/*|packages/bootstrap/*|packages/node-sdk/*|packages/replica/*|packages/sdk-core/*|packages/sdk-rs/*|packages/sdk-services/*|packages/share-envelope/*|packages/share-sdk/*|Cargo.toml|Cargo.lock|bun.lock|package.json|turbo.json|tsconfig.base.json|scripts/setup.sh|.github/workflows/web-sdk-tests.yml)
+              packages/web-sdk/*|packages/bootstrap/*|packages/node-sdk/*|packages/replica/*|packages/sdk-core/*|packages/sdk-rs/*|packages/sdk-services/*|packages/share-envelope/*|packages/share-sdk/*|Cargo.toml|Cargo.lock|bun.lock|package.json|turbo.json|tsconfig.base.json|scripts/setup.sh|.github/workflows/web-sdk-tests.yml|.github/scripts/check-package-exports-exist*)
                 relevant="$f"; break ;;
             esac
           done <<< "$files"
@@ -113,6 +113,14 @@ jobs:
         if: steps.gate.outputs.run == 'true'
         run: bunx turbo build --filter=@tinycloud/web-sdk...
 
+      # A broken `exports` target (missing types file, subpath bundle never
+      # emitted) only fails for consumers. Check the built package itself.
+      - name: Check that every web-sdk export target exists
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          node --test .github/scripts/check-package-exports-exist.test.mjs
+          node .github/scripts/check-package-exports-exist.mjs packages/web-sdk
+
       # coordinationos-vendor.test.ts imports the generated vendor bundle and manifest.
       - name: Build the CoordinationOS vendor bundle
         if: steps.gate.outputs.run == 'true'
@@ -127,10 +135,7 @@ jobs:
           OPENCREDENTIALS_FIXTURE_OPTIONAL: "1"
         run: |
           set -o pipefail
-          declare -A skip=(
-            [tests/web-sdk.test.ts]="Jest-only suite (jest.mock automock, eth-testing provider, TinyCloud server on localhost:3001); not runnable under bun test"
-            [tests/siwe-signature-init.test.js]="exercises an in-file MockUserAuthorization rather than web-sdk source, and 3 of its cases fail against that mock"
-          )
+          declare -A skip=()
           log="$RUNNER_TEMP/web-sdk-test.log"
           passed=()
           skipped=()

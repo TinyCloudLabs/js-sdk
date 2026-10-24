@@ -3,6 +3,14 @@
 Track changes to agent-facing development guidance for the TinyCloud JavaScript SDK. Add a concise
 entry when `agent.dev.md` or related agent workflow expectations change.
 
+## 2026-10-21
+
+- Added the separate five-tool public ChatGPT candidate with distinct OAuth,
+  tenant state and approval paths; private integrations retain their broad
+  surface. Corrected context/query effects, preserved the derived-query output
+  cap, and added reproducible plugin packaging with explicit unfulfilled release
+  gates. Default-branch integration and deployment remain owner-approved.
+
 ## 2026-10-14
 
 - Hosted personal apps now use canonical operations with CLI-compatible JSON

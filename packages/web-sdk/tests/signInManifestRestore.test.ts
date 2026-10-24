@@ -6,7 +6,7 @@ import { indexedDbReplicaStorage } from "../../replica/src/kv-storage/client";
 import { TinyCloudNode as ReplicationNode, getNodeReplicationLoaders, registerReplicationLoaders } from "@tinycloud/node-sdk/core";
 import { assertValidReplicationConfig } from "@tinycloud/node-sdk/replication/authority";
 import { PROOF_PRIVATE_KEY, signedRestorableSession } from "../../node-sdk/src/test-support/signed-restorable-session";
-import { pkhDid, signLocationRecord } from "@tinycloud/sdk-core";
+import { CaveatedDelegationUnsupportedError, composeManifestRequest, pkhDid, signLocationRecord } from "@tinycloud/sdk-core";
 import { createMemoryPendingStore } from "../../sdk-services/src/kv/replication/memoryPendingStore";
 
 const { TextEncoder: TE, TextDecoder: TD } = require("util");
@@ -108,7 +108,7 @@ const { TinyCloudNode, NodeWasmBindings, PrivateKeySigner } = require("@tinyclou
 
 test("optional replica import is inert until one explicit root registration", () => {
   const plugin = require("../src/replica").browserReplicaPlugin;
-  const { registerBrowserReplica } = require("../src/modules/tcw");
+  const { registerBrowserReplica } = require("../src/modules/replica-wiring");
   const config = {
     replication: { enabled: true, prefixes: ["notes/"], storage: { kind: "indexeddb" } as never },
   };
@@ -1591,4 +1591,127 @@ describe("panel reset when the principal changes over a live session", () => {
     await expect(tcw.signIn()).rejects.toBe(failure);
     expect(reset).not.toHaveBeenCalled();
   });
+});
+
+describe("signIn refuses caveated manifests (TC-1855)", () => {
+  // `tcw` comes from `require`, so it is untyped here; the error class must be the
+  // same ESM instance the source throws, hence the static import at the top.
+  type Caveats = Array<Record<string, unknown>> | undefined;
+  const restoredSession = {
+    address: "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1",
+    walletAddress: "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1",
+    chainId: 1,
+    sessionKey: {},
+    siwe: "persisted-siwe",
+    signature: "persisted-signature",
+  };
+  const manifestWith = (caveats: Caveats) => ({
+    app_id: "xyz.tinycloud.refuse-caveats",
+    name: "Refuse caveats",
+    defaults: false,
+    permissions: [
+      {
+        service: "tinycloud.kv",
+        path: "notes/",
+        actions: ["get"],
+        ...(caveats === undefined ? {} : { caveats }),
+      },
+    ],
+  });
+
+  async function webWith(config: Record<string, unknown>) {
+    const walletRequest = mock(async () => {
+      throw new Error("wallet is closed in this test");
+    });
+    const originalFetch = globalThis.fetch;
+    const fetchMock = mock(async () => {
+      throw new Error("network is closed in this test");
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const tcw = new TinyCloudWeb({
+      provider: { request: walletRequest },
+      includeAccountRegistryPermissions: false,
+      autoBootstrapAccount: false,
+      ...config,
+    });
+    await tcw._initPromise;
+    walletRequest.mockClear();
+    fetchMock.mockClear();
+    const node = {
+      hasRuntimePermissions: mock(() => true),
+      signIn: mock(async () => undefined),
+    };
+    const restoreSession = mock(async () => ({ status: "restored", session: restoredSession }));
+    tcw._node = node;
+    tcw.restoreSession = restoreSession;
+    return {
+      tcw,
+      node,
+      restoreSession,
+      walletRequest,
+      fetchMock,
+      restore: () => {
+        globalThis.fetch = originalFetch;
+      },
+    };
+  }
+
+  const constrained: Caveats[] = [
+    [{ kind: "prefix", prefix: "notes/" }],
+    [{}, { kind: "prefix", prefix: "notes/" }],
+    [{}, {}],
+  ];
+
+  for (const caveats of constrained) {
+    test(`manifest ${JSON.stringify(caveats)}: no restore, wallet request, fetch or node sign-in`, async () => {
+      const harness = await webWith({ manifest: manifestWith(caveats) });
+      try {
+        const error = await harness.tcw.signIn().then(() => undefined, (rejected: unknown) => rejected);
+
+        expect(error).toBeInstanceOf(CaveatedDelegationUnsupportedError);
+        expect(error).toMatchObject({ code: "CAVEATED_DELEGATION_UNSUPPORTED" });
+        expect(harness.restoreSession).not.toHaveBeenCalled();
+        expect(harness.node.hasRuntimePermissions).not.toHaveBeenCalled();
+        expect(harness.node.signIn).not.toHaveBeenCalled();
+        expect(harness.walletRequest).not.toHaveBeenCalled();
+        expect(harness.fetchMock).not.toHaveBeenCalled();
+      } finally {
+        harness.restore();
+      }
+    });
+  }
+
+  test("a pre-composed capabilityRequest is refused the same way", async () => {
+    const harness = await webWith({
+      capabilityRequest: composeManifestRequest([manifestWith([{ kind: "prefix", prefix: "notes/" }])], {
+        includeAccountRegistryPermissions: false,
+      }),
+    });
+    try {
+      const error = await harness.tcw.signIn().then(() => undefined, (rejected: unknown) => rejected);
+
+      expect(error).toBeInstanceOf(CaveatedDelegationUnsupportedError);
+      expect(harness.restoreSession).not.toHaveBeenCalled();
+      expect(harness.node.signIn).not.toHaveBeenCalled();
+      expect(harness.walletRequest).not.toHaveBeenCalled();
+      expect(harness.fetchMock).not.toHaveBeenCalled();
+    } finally {
+      harness.restore();
+    }
+  });
+
+  for (const caveats of [undefined, [], [{}]] as Caveats[]) {
+    test(`manifest ${JSON.stringify(caveats) ?? "without caveats"}: unchanged, still restores`, async () => {
+      const harness = await webWith({ manifest: manifestWith(caveats) });
+      try {
+        const session = await harness.tcw.signIn();
+
+        expect(session).toBe(restoredSession);
+        expect(harness.restoreSession).toHaveBeenCalledTimes(1);
+        expect(harness.node.hasRuntimePermissions).toHaveBeenCalledTimes(1);
+      } finally {
+        harness.restore();
+      }
+    });
+  }
 });

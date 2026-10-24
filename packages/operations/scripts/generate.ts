@@ -61,8 +61,8 @@ function toCatalogOperation(
     title: definition.title,
     description: definition.description,
     // MCP requires an object root for tool inputs. The union branches are
-    // already strict objects; recording that fact keeps the generated catalog
-    // byte-identical to the schema MCP advertises through fromJsonSchema.
+    // already strict objects. MCP projects this catalog's Draft-07 vocabulary
+    // to equivalent JSON Schema 2020-12 schemas at the transport boundary.
     input: {
       ...(input as Record<string, unknown>),
       ...(typeof (input as Record<string, unknown>).type === "string"

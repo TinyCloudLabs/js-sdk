@@ -80,6 +80,7 @@ import {
   storedSessionState,
   type StoredSessionState,
 } from "../auth/scoped-login.js";
+import { assertNoCaveatLimits } from "../lib/caveat-refusal.js";
 import { isRawEncryptionPermission, isVerifiedRawEncryptionPermission } from "../lib/raw-encryption.js";
 import { canonicalOwnerDid } from "../lib/owner-did.js";
 import { assertNotLocalOwner, assertSessionReplaceable, commitLogin, readProfileSnapshot } from "../auth/login-commit.js";
@@ -971,6 +972,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           return;
         }
 
+        if (profile.authMethod === "openkey" || options.device) assertNoCaveatLimits(requested);
         const node = await ensureAuthenticated(ctx);
 
         // Fast path: master's grantRuntimePermissions / hasRuntimePermissions
@@ -1320,6 +1322,8 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         const requested = finalizeSigningEntries(
           await resolvePermissionSpaces(entriesForSigning(parsed.requested as PermissionEntry[]), ctx.profile),
         );
+        // Before the scope is printed, the session is checked or any prompt is shown.
+        if (profile.authMethod === "openkey") assertNoCaveatLimits(requested);
         const [applications] = await resolvePermissionSpaces(
           [{ service: "tinycloud.kv", space: APPS_AGENT_SPACE, path: "", actions: ["tinycloud.kv/get"] }],
           ctx.profile,
@@ -1333,9 +1337,11 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         process.stderr.write(`\n${scope.text}\n\n`);
         // The request file comes from the agent: anything the apps-agent preset could never grant
         // is signed only after an explicit --yes or an interactive confirmation of the list above.
+        // The question is written to stderr and answered on stdin, so those two must be a terminal;
+        // stdout may be a file (scripts capture the grant artifact there) without losing the prompt.
         let confirmedExtras = false;
         if (scope.extras.length > 0 && options.yes !== true) {
-          if (!isInteractive()) {
+          if (!process.stdin.isTTY || !process.stderr.isTTY) {
             throw new CLIError(
               "CONFIRMATION_REQUIRED",
               `This request asks for more than the apps-agent preset (${scope.extras.length} entr${scope.extras.length === 1 ? "y" : "ies"} marked ! in the list above). Nothing was signed. Read the list, then re-run with --yes to sign it.`,
@@ -1914,6 +1920,7 @@ export async function acquireOpenKeyApproval(params: {
   /** Test seam for the browser acquisition boundary; production uses startAuthFlow. */
   openKeyAcquisition?: OpenKeyAcquisition;
 }): Promise<OpenKeyApproval> {
+  assertNoCaveatLimits(params.requested);
   if (params.requested.some(isRawCidRevocationPermission)) {
     throw new CLIError(
       "RAW_RECAP_RESOURCE_UNSUPPORTED",
@@ -2000,6 +2007,7 @@ export async function ensureDelegationAuthority(params: {
   exactApproval?: boolean;
 }): Promise<PortableDelegation | undefined> {
   if (!params.force && params.node.hasRuntimePermissions(params.requested)) return undefined;
+  if (params.profile.authMethod === "openkey") assertNoCaveatLimits(params.requested);
 
   if (
     !params.consentAlreadyGiven &&
@@ -2010,6 +2018,13 @@ export async function ensureDelegationAuthority(params: {
 
   if (params.profile.authMethod === "openkey") {
     if (params.persist === false) {
+      if (params.expiryOption === undefined) {
+        throw new CLIError(
+          "AUTHORITY_EXPIRY_REQUIRED",
+          "One-use command authority needs an explicit lifetime; none was given, so no approval was requested.",
+          ExitCode.ERROR,
+        );
+      }
       const { delegation } = await acquireOpenKeyApproval(params);
       await params.node.useRuntimeDelegation(delegation);
       return delegation;
@@ -2699,6 +2714,7 @@ async function refreshPreparedOpenKeySession(params: {
   expiry: RequestedExpiry | undefined;
 }): Promise<{ profile: ProfileConfig; delegationData: Record<string, unknown>; declined: PermissionEntry[]; legacyNested: PermissionEntry[] }> {
   const { profileName, host, profile, snapshot, options, replication, permissions, expectedOwner, expiry } = params;
+  assertNoCaveatLimits(permissions);
   const storedOwner = snapshot.session && snapshot.key && profile.sessionDid
     ? verifySignedSession(snapshot.session, snapshot.key, profile.sessionDid).ownerDid
     : undefined;

@@ -27,6 +27,7 @@ import {
   parseServiceErrorBody,
   responseErrorMeta,
 } from "../responseErrors";
+import { requestTooLargeError } from "../statementSize";
 import type { IDuckDbService, IDuckDbDatabaseHandle } from "./IDuckDbService";
 import { DuckDbDatabaseHandle } from "./DuckDbDatabaseHandle";
 import {
@@ -466,7 +467,8 @@ export class DuckDbService extends BaseService implements IDuckDbService {
 
     const errorBody = parseServiceErrorBody(errorText);
 
-    const errorCode = this.mapHttpStatusToErrorCode(
+    const sizeCode = requestTooLargeError("duckdb", operation, response.status, errorText);
+    const errorCode = sizeCode ?? this.mapHttpStatusToErrorCode(
       response.status,
       errorBody.error
     );

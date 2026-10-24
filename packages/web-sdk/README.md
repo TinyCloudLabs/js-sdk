@@ -239,12 +239,13 @@ squash merge, nothing needs editing. Content keys (blob hashes) were rejected:
 pinned files such as `authority.ts` legitimately change later, whereas the
 landing commit stays an ancestor for good.
 
-The opt-in first-import ceiling is 51,925 B ESM / 67,138 B CJS gzip
+The opt-in first-import ceiling is 51,925 B ESM / 67,141 B CJS gzip
 (including the replica parser and noble dependencies); awaiting the IndexedDB
-factory has a separate 23,075 B / 24,655 B ceiling. The content-hashed worker
-and WASM asset has an 820,108 B ceiling owned by `@tinycloud/replica`.
-A compliant first local open therefore costs at most 895,108 B ESM /
-911,901 B CJS incremental gzip beyond the already-loaded web root; those
+factory has a separate 23,117 B / 24,700 B ceiling. The content-hashed kv-storage
+worker and WASM asset has a 776,128 B ceiling owned by `@tinycloud/replica`
+(its `replica.worker.js`, which web-sdk does not load, has its own 770,093 B).
+A compliant first local open therefore costs at most 851,170 B ESM /
+867,969 B CJS incremental gzip beyond the already-loaded web root; those
 assets can then be cached. These byte ceilings do not replace real-worker
 Chromium acceptance of local reads, denial, expiry, and sign-out.
 
@@ -426,6 +427,12 @@ TinyCloud is built on these fundamental principles:
 - **Privacy** - Data is stored, streamed, and computed upon in ways that minimize leakage with encryption strategies that ensure users do not need to trust an external party.
 - **Interoperability** - Embracing artifact-based formats like Markdown, JSON Canvas, CSV, and SQLite so that data remains portable and future-proof.
 - **Open Innovation** - We view AI's rapid growth as an opportunity to endow individuals with new capabilities—before these capabilities are seized exclusively by large institutions.
+
+## Credential discovery
+
+Share receivers that require a credential discover the catalog at `https://witness.credentials.org/.well-known/opencredentials` by default. Set `credentialDiscoveryUrl` in the receiver config to use a different endpoint. The URL must be `https` and must be `/.well-known/opencredentials` or `/v1/credential-types`, with no query or fragment.
+
+If discovery responds with a 2xx status whose body is not JSON, the call rejects with an error whose `code` is `CREDENTIAL_DISCOVERY_FAILED`, carrying `host`, `status`, and `contentType`. A 503 response rejects with `ISSUER_UNREADY`. Any other non-2xx response, and a network failure, rejects with `OFFLINE`.
 
 ## Documentation
 
