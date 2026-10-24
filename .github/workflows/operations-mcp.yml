@@ -157,8 +157,6 @@ jobs:
             [packages/cli/src/commands/secrets-private-key-production.test.ts]="run in isolation by its own step"
             # Known failures, tracked:
             [packages/cli/src/config/shared-state-writers.test.ts]="fails on master: test-support harness writes shared state directly; TC-1898"
-            [packages/cli/src/commands/space-list.test.ts]="fails on master: walletless session test gets a space id; TC-1900"
-            [tests/cli/secrets/secrets.test.ts]="fails on master: node-sdk export makePkhSpaceId not found; TC-1901"
             [tests/cli/duckdb/duckdb.test.ts]="needs a DuckDB-enabled node; the node binary the live-node lanes use is built without DuckDB; TC-1965"
           )
           failed=()
