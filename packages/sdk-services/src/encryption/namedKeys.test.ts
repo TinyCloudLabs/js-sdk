@@ -581,7 +581,7 @@ describe("envelopes", () => {
 
   it("mixed batch: v1 goes to the root path, each v2 key gets its own single-capability invocation", async () => {
     const seen: Recorded[] = [];
-    const other = "apps/other";
+    const other = "apps/other/key";
     const h = harness(invokeNode({ [PATH]: KEY_PUB, [other]: KEY_PUB }, seen));
     const a = await h.client.encrypt(PATH, utf8Encode("a"));
     const b = await h.client.encrypt(other, utf8Encode("b"));
