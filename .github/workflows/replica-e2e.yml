@@ -133,11 +133,16 @@ jobs:
           bun packages/web-sdk/scripts/check-replica-built-entry.ts mjs
           bun packages/web-sdk/scripts/check-replica-built-entry.ts cjs
 
+      - name: Build CoordinationOS vendor bundle for the web-sdk test baseline
+        run: bun run --cwd packages/web-sdk build:coordinationos-vendor
+
       - name: Check Phase 1 web-sdk dist and test baseline
         env:
           REPLICA_BUDGET_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           REPLICA_BUDGET_PR_NUMBER: ${{ github.event.pull_request.number }}
           REPLICA_BUDGET_TICKET: ${{ github.event.pull_request.title }}
+          # No paired OpenCredentials checkout in CI; credentials.integration.test.ts skips with a warning.
+          OPENCREDENTIALS_FIXTURE_OPTIONAL: "1"
         run: bun packages/web-sdk/scripts/check-phase1-replica-dist.ts
 
       - name: Size-policy unit tests

@@ -16,9 +16,12 @@ import { CourierError } from './errors.js';
 import { requireFlag, type ParsedArgs } from './args.js';
 import { cmd } from './program.js';
 import { loadKey, profileDir, type AgentKey } from './profile.js';
-import { StoredCredentialSource } from './credential-source.js';
+import { StoredCredentialSource, type StoredVerifier } from './credential-source.js';
 
 type Step = 'request' | 'code' | 'credential' | 'session';
+
+/** Code window: 5 minutes (lifecycle ruling). The witness returns no code expiry, so it is computed from the pending record's creation time. */
+const CODE_WINDOW_MS = 5 * 60_000;
 
 export interface CredentialDeps {
   home?: string;
@@ -27,9 +30,12 @@ export interface CredentialDeps {
   loadKey?: (home: string) => AgentKey;
   requestCode?: typeof requestEmailProofCode;
   completeProof?: typeof completeEmailProof;
+  /** Test seam for the offline re-verify on store and find. Defaults to verifyStoredEmailProof. */
+  verifyStored?: StoredVerifier;
   /** Reads the first line of stdin for `--code-stdin`. */
   readStdinLine?: () => Promise<string>;
   out?: (text: string) => void;
+  err?: (text: string) => void;
 }
 
 interface Resolved {
@@ -39,8 +45,10 @@ interface Resolved {
   loadKey: (home: string) => AgentKey;
   requestCode: typeof requestEmailProofCode;
   completeProof: typeof completeEmailProof;
+  verifyStored: StoredVerifier | undefined;
   readStdinLine: () => Promise<string>;
   out: (text: string) => void;
+  err: (text: string) => void;
 }
 
 const acquireUsage = () => `Usage: ${cmd('credential acquire --email <addr> [--code-stdin]')}`;
@@ -124,7 +132,9 @@ async function acquire(args: ParsedArgs, deps: Resolved): Promise<void> {
       await store.put(pending);
       if (older && older.requestId !== pending.requestId) await store.delete(older.requestId);
     });
-    deps.out(`Verification code sent to ${address}. Run \`${cmd(`credential acquire --email ${address} --code-stdin`)}\` and enter the code within 15 minutes.\n`);
+    const codeExpiresAt = new Date(Math.min(Date.parse(pending.expiresAt), Date.parse(pending.createdAt) + CODE_WINDOW_MS)).toISOString();
+    deps.out(JSON.stringify({ ok: true, status: 'code-sent', address, codeExpiresAt }, null, 2) + '\n');
+    deps.err(`Verification code sent to ${address}. Run \`${cmd(`credential acquire --email ${address} --code-stdin`)}\` and enter the code within 5 minutes (before ${codeExpiresAt}).\n`);
     return;
   }
 
@@ -157,15 +167,20 @@ async function acquire(args: ParsedArgs, deps: Resolved): Promise<void> {
 
   const requirement = emailProofRequirement(address);
   const requirementDigest = await credentialRequirementDigest(requirement);
-  await new StoredCredentialSource(deps.home).store({
-    verified: result.verified,
-    requirement,
-    requirementDigest,
-    holderDid: holder.did,
-    now: deps.now(),
-  });
-  await withStoreErrors(() => store.delete(pending.requestId));
-  deps.out(`Email credential stored for ${address}. It is valid for up to 1 hour from issuance.\n`);
+  try {
+    await new StoredCredentialSource(deps.home, deps.verifyStored).store({
+      result,
+      requirement,
+      requirementDigest,
+      holderDid: holder.did,
+      now: deps.now(),
+    });
+  } finally {
+    // The code was consumed by the witness; the pending request is spent whether or not the record was stored.
+    await withStoreErrors(() => store.delete(pending.requestId));
+  }
+  deps.out(JSON.stringify({ ok: true, status: 'acquired', address, issuedAt: result.issuedAt, expiresAt: result.expiresAt }, null, 2) + '\n');
+  deps.err(`Email credential stored for ${address}. Valid until ${result.expiresAt}.\n`);
 }
 
 async function show(args: ParsedArgs, deps: Resolved): Promise<void> {
@@ -173,7 +188,7 @@ async function show(args: ParsedArgs, deps: Resolved): Promise<void> {
   const holder = holderFor(deps.loadKey(deps.home));
   const requirement = emailProofRequirement(address);
   const requirementDigest = await credentialRequirementDigest(requirement);
-  const record = await new StoredCredentialSource(deps.home).find({
+  const record = await new StoredCredentialSource(deps.home, deps.verifyStored).find({
     requirement,
     requirementDigest,
     holderDid: holder.did,
@@ -183,16 +198,7 @@ async function show(args: ParsedArgs, deps: Resolved): Promise<void> {
     throw new CourierError('credential.show.NOT_FOUND', `No valid stored email credential for ${address}. Run \`${cmd(`credential acquire --email ${address}`)}\`.`);
   }
   // The bearer `credential` (SD-JWT) is never printed.
-  deps.out(
-    [
-      `email: ${record.claims.email}`,
-      `credentialId: ${record.credentialId}`,
-      `issuedAt: ${record.issuedAt}`,
-      `expiresAt: ${record.expiresAt}`,
-      `status: ${record.status.method}`,
-      '',
-    ].join('\n'),
-  );
+  deps.out(JSON.stringify({ ok: true, address, credentialId: record.credentialId, issuedAt: record.issuedAt, expiresAt: record.expiresAt, status: record.status.method }, null, 2) + '\n');
 }
 
 export async function cmdCredential(args: ParsedArgs, deps: CredentialDeps = {}): Promise<void> {
@@ -203,8 +209,10 @@ export async function cmdCredential(args: ParsedArgs, deps: CredentialDeps = {})
     loadKey: deps.loadKey ?? ((home: string) => loadKey(home)),
     requestCode: deps.requestCode ?? requestEmailProofCode,
     completeProof: deps.completeProof ?? completeEmailProof,
+    verifyStored: deps.verifyStored,
     readStdinLine: deps.readStdinLine ?? readStdinFirstLine,
     out: deps.out ?? ((text: string) => { process.stdout.write(text); }),
+    err: deps.err ?? ((text: string) => { process.stderr.write(text); }),
   };
   switch (args.positional[0]) {
     case 'acquire': return acquire(args, resolved);

@@ -12,6 +12,7 @@ import { cmdPause, cmdResume } from './pause.js';
 import { cmdGuard } from './guard/command.js';
 import { cmdBroker, cmdRunApproved } from './broker.js';
 import { cmdCredential } from './credential.js';
+import { courierVersion } from './version.js';
 
 function usage(): string {
   const name = programName();
@@ -131,6 +132,10 @@ api.openkey.so for openkey.so, otherwise the OpenKey host).
 export async function run(argv: string[]): Promise<void> {
   const args = parseArgs(argv);
   const command = args.positional[0];
+  if (!command && args.has('version')) {
+    process.stdout.write(`${courierVersion()}\n`);
+    return;
+  }
   if (command === 'request' && args.has('help')) {
     process.stdout.write(requestHelp());
     return;
