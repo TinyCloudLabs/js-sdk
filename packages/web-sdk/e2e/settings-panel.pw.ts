@@ -46,6 +46,8 @@ for (const scheme of ["light", "dark"] as const) {
 
     await launcher.click();
     await expect(panel).toBeVisible();
+    // The stand-in shares the panel id and is visible first; wait for the lazy shell to replace it before measuring.
+    await expect(panel.locator(".nav-i").first()).toBeAttached();
 
     // The panel must receive pointer events and paint its own surface. A
     // missing `.panel` class left it with pointer-events:none and no background.
@@ -76,6 +78,8 @@ test("the settings panel is fetched on first open, not with the page", async ({ 
 
   await page.getByRole("button", { name: "TinyCloud settings", exact: true }).click();
   await expect(page.locator("#tinycloud-ui-panel")).toBeVisible();
+  // The stand-in is visible before the chunk request is recorded; wait for the lazy shell.
+  await expect(page.locator("#tinycloud-ui-panel .nav-i").first()).toBeAttached();
   expect(requested.filter(isPanelChunk)).toHaveLength(1);
 });
 
