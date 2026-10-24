@@ -139,10 +139,12 @@ export type StoredVerifier = typeof verifyStoredEmailProof;
 /**
  * Stored email credentials for the Courier agent.
  *
- * - `find` drops (deletes) a record that no longer matches the requirement or has less than
- *   60 s of its own `exp` left. It returns a record only after offline re-verification passes.
- * - A record that fails re-verification is refused: it is neither returned nor deleted, and the
- *   caller gets `credential-record-invalid`.
+ * - `find` authenticates the stored record first, with the offline verifier, and refuses anything that
+ *   fails: the record is neither returned nor deleted, and the caller gets `credential-record-invalid`.
+ * - Only then does the lifecycle apply, and only to the authenticated `issuedAt` and `expiresAt` (the
+ *   verifier proves both equal the signed `iat` and `exp`): a credential with less than 60 s of its own
+ *   `exp` left, or issued more than the maximum age ago, is deleted and reported as absent.
+ *   Nothing is deleted on the strength of a stored field the verifier has not accepted.
  */
 export class StoredCredentialSource {
   constructor(
@@ -155,18 +157,24 @@ export class StoredCredentialSource {
     const record = readOwnerOnly<StoredEmailProofRecord>(this.home, file);
     if (!record) return undefined;
     const now = input.now ?? new Date();
-    // Lifecycle only: past the expiry margin, or issued outside the freshness window, the record is deleted.
-    // Anything else (a tampered field, a bad signature) is refused by the verifier below and kept for inspection.
+    // The verifier enforces the validity window against the instant it is given. Authenticating at the
+    // record's own issuance instant proves the signature and every stored field regardless of the clock,
+    // so an honestly expired record is classified below from authenticated fields instead of being refused.
+    // A stored issuedAt or expiresAt that differs from the signed iat or exp is refused by the verifier.
+    const authenticatedAt = Math.max(Date.parse(record.issuedAt), Date.parse(record.notBefore));
+    try {
+      // The lifecycle below does arithmetic on these fields, so a verifier that accepted the record must not let a
+      // field that is not a date through: NaN comparisons are all false and would keep an expired record.
+      if (!Number.isFinite(authenticatedAt) || !Number.isFinite(Date.parse(record.expiresAt))) throw new Error('stored record has no usable dates');
+      await this.verify({ record, requirement: input.requirement, holderDid: input.holderDid, now: new Date(authenticatedAt) });
+    } catch {
+      throw new CourierError('credential-record-invalid', 'Stored credential failed offline verification and was not returned. Run `credential acquire` again.');
+    }
     const expired = Date.parse(record.expiresAt) - EXPIRY_MARGIN_MS <= now.getTime();
     const stale = now.getTime() - Date.parse(record.issuedAt) > EMAIL_CREDENTIAL_MAX_AGE_SECONDS * 1000;
     if (expired || stale) {
       removeFile(file);
       return undefined;
-    }
-    try {
-      await this.verify({ record, requirement: input.requirement, holderDid: input.holderDid, now });
-    } catch {
-      throw new CourierError('credential-record-invalid', 'Stored credential failed offline verification and was not returned. Run `credential acquire` again.');
     }
     return record;
   }
