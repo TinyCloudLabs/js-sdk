@@ -356,5 +356,6 @@ for (const scheme of ["light", "dark"] as const) {
     await expect(panel.getByText("TinyCloud is signed out in this app. Sign in to see your account.")).toBeVisible();
     await expect(panel).toBeVisible();
     expect(await page.evaluate(() => (window as unknown as HarnessWindow).__tc.signOutCalls())).toBe(1);
+    expect(pageErrors.get(page)).toEqual([]);
   });
 }

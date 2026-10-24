@@ -39,12 +39,15 @@ async function mountHarness(page: Page, scheme: "light" | "dark", ui?: Record<st
 const launcher = (page: Page) => page.getByRole("button", { name: "TinyCloud settings", exact: true });
 const panel = (page: Page) => page.locator("#tinycloud-ui-panel");
 
+// open() returns before the lazy panel mounts; wait for its nav so later counts see the real shell.
 async function openDrawer(page: Page, section?: string) {
   await page.evaluate((s) => (window as unknown as HarnessWindow).tc?.ui.open(s), section);
+  await expect(panel(page).locator(".nav-i").first()).toBeAttached();
 }
 
 async function openPageLayout(page: Page, section?: string) {
   await page.evaluate((s) => (window as unknown as HarnessWindow).tc?.ui.openPage(s), section);
+  await expect(panel(page).locator(".nav-i").first()).toBeAttached();
 }
 
 for (const scheme of ["light", "dark"] as const) {
@@ -127,10 +130,10 @@ for (const scheme of ["light", "dark"] as const) {
       const dialog = panel(page);
       await expect(dialog).toHaveAttribute("data-layout", "page");
 
-      await dialog.getByRole("button", { name: "Sidebar", exact: true }).click();
+      await dialog.getByRole("button", { name: "Show as sidebar", exact: true }).click();
       await expect(dialog).toHaveAttribute("data-layout", "drawer");
 
-      await dialog.getByRole("button", { name: "Full page", exact: true }).click();
+      await dialog.getByRole("button", { name: "Open full page", exact: true }).click();
       await expect(dialog).toHaveAttribute("data-layout", "page");
     });
 
@@ -140,7 +143,7 @@ for (const scheme of ["light", "dark"] as const) {
 
       const dialog = panel(page);
       await expect(dialog).toHaveAttribute("data-layout", "drawer");
-      await expect(dialog.getByRole("button", { name: "Full page", exact: true })).toHaveCount(0);
+      await expect(dialog.getByRole("button", { name: "Open full page", exact: true })).toHaveCount(0);
     });
 
     test("ui.mode page opens the full-page layout without a sidebar control", async ({ page }) => {
@@ -271,8 +274,8 @@ test.describe("host layer, targets, and motion", () => {
       await openDrawer(page);
       const dialog = panel(page);
       await expect(dialog).toHaveAttribute("data-layout", "page");
-      await expect(dialog.getByRole("button", { name: "Full page", exact: true })).toHaveCount(0);
-      await expect(dialog.getByRole("button", { name: "Sidebar", exact: true })).toHaveCount(0);
+      await expect(dialog.getByRole("button", { name: "Open full page", exact: true })).toHaveCount(0);
+      await expect(dialog.getByRole("button", { name: "Show as sidebar", exact: true })).toHaveCount(0);
     });
 
     test("keyboard: Enter opens the menu, Enter on a section closes it and moves focus into the section", async ({ page }) => {
