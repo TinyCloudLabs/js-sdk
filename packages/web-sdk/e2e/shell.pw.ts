@@ -45,6 +45,12 @@ async function openDrawer(page: Page, section?: string) {
   await expect(panel(page).locator(".nav-i").first()).toBeAttached();
 }
 
+// A box measured while the slide-in runs carries float error from the transform (43.99997 for a 44px
+// target). Measure once the panel's animations have finished.
+async function slideSettled(page: Page) {
+  await panel(page).evaluate((el) => Promise.all(el.getAnimations().map((animation) => animation.finished)).then(() => undefined));
+}
+
 async function openPageLayout(page: Page, section?: string) {
   await page.evaluate((s) => (window as unknown as HarnessWindow).tc?.ui.openPage(s), section);
   await expect(panel(page).locator(".nav-i").first()).toBeAttached();
@@ -207,6 +213,7 @@ test.describe("host layer, targets, and motion", () => {
     await page.setViewportSize({ width: 390, height: 844 });
     await openDrawer(page);
     await expect(panel(page)).toHaveAttribute("data-layout", "page");
+    await slideSettled(page);
     const targets = panel(page).locator(".nav-i:visible, .head-actions button:visible");
     const count = await targets.count();
     expect(count).toBeGreaterThan(0);
@@ -248,6 +255,7 @@ test.describe("host layer, targets, and motion", () => {
         await page.setViewportSize({ width, height: 844 });
         await expect(panel(page).locator(".nav-i").first()).toBeHidden();
         await expect(menuButton(page)).toHaveAttribute("aria-expanded", "false");
+        await slideSettled(page);
         const trigger = await menuButton(page).boundingBox();
         expect(trigger!.width, `${width}px trigger width`).toBeGreaterThanOrEqual(44);
         expect(trigger!.height, `${width}px trigger height`).toBeGreaterThanOrEqual(44);
