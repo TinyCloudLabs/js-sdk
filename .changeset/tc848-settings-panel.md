@@ -8,7 +8,7 @@ Sections: Overview, Local TinyCloud, Local copy, Delegations, Nodes, Storage and
 
 What the sections show with `TinyCloudWeb` today:
 - Local copy appears only when the host supplies a sync facade, and sign-out removes the local copy only when the host supplies a purge. `TinyCloudWeb` supplies neither, so Local copy is not shown.
-- Storage details need the `tinycloud.space/info` permission on the app's primary space, which the panel can't request itself. Add it to your app's manifest to show them: a permission with `service: "tinycloud.space"`, an `actions` entry of `info`, an empty `path` and `skipPrefix: true`, on the same `space` as your app's first permission (`applications` when `space` is omitted). Without it, Storage says the app can't see your storage.
+- Storage details need the `tinycloud.space/info` permission on the app's primary space, which the panel can't request itself. Add it to your app's manifest to show them: a permission with `service: "tinycloud.space"`, `actions: ["info"]`, an empty `path` and `skipPrefix: true`, on the same `space` as your app's first permission (`applications` when `space` is omitted). Without it, Storage says the app can't see your storage.
 - Local TinyCloud says it can't be checked from this app, and Activity has nothing to show until the host supplies a request log.
 - Delegations and Storage appear when signed in.
 
