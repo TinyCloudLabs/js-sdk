@@ -94,6 +94,7 @@ const legacySection: PanelSection = {
     let disposed = false;
     let busy = false;
     let seq = 0;
+    let generation = 0;
     let read: StorageRead = { signedIn: true };
     // `view` is `reduceStorage(read)` except after an authority outcome, which overrides it.
     let view: StorageViewState = reduceStorage(read);
@@ -172,8 +173,8 @@ const legacySection: PanelSection = {
       view = reduceStorage(read);
       render();
       const result = await readStatus(client);
-      busy = false;
       if (disposed || token !== seq) return;
+      busy = false;
       read = { signedIn: true, result };
       view = reduceStorage(read);
       render();
@@ -182,6 +183,7 @@ const legacySection: PanelSection = {
     async function askAuthority(): Promise<void> {
       if (busy) return;
       busy = true;
+      const mine = generation;
       render();
       let outcome: { approved: boolean; code?: string };
       try {
@@ -191,14 +193,25 @@ const legacySection: PanelSection = {
       } catch {
         outcome = { approved: false, code: "unknown" };
       }
+      if (disposed || mine !== generation) return;
       busy = false;
-      if (disposed) return;
       if (outcome.approved) {
         void load();
         return;
       }
       view = afterAuthority(outcome);
       render();
+    }
+
+    /** An account or session change: results still in flight belong to the old account and are dropped. */
+    function restart(): void {
+      generation += 1;
+      seq += 1;
+      busy = false;
+      read = { signedIn: true };
+      view = reduceStorage(read);
+      render();
+      if (ctx.client() === client && client.signedIn()) void load();
     }
 
     action.addEventListener("click", (event) => {
@@ -213,6 +226,8 @@ const legacySection: PanelSection = {
     const unsubscribe = client.storageEpisode?.subscribe(() => {
       void load();
     });
+    const offReset = client.onReset(restart);
+    const offClient = ctx.onClientChange(restart);
 
     el.append(style, word, usage, bar, note, action, manage);
     void load();
@@ -220,6 +235,8 @@ const legacySection: PanelSection = {
     return () => {
       disposed = true;
       unsubscribe?.();
+      offReset();
+      offClient();
       el.replaceChildren();
     };
   },
@@ -601,6 +618,7 @@ function mountPage(el: HTMLElement, ctx: SectionContext): () => void {
 
   let disposed = false;
   let reading = false;
+  let generation = 0;
   let asking = false;
   let outcome: "declined" | "blocked" | undefined;
 
@@ -623,6 +641,7 @@ function mountPage(el: HTMLElement, ctx: SectionContext): () => void {
 
   async function reload(): Promise<void> {
     if (reading) return;
+    const mine = generation;
     reading = true;
     render();
     try {
@@ -630,7 +649,17 @@ function mountPage(el: HTMLElement, ctx: SectionContext): () => void {
     } catch {
       // The cache keeps the failed read as an error result, which render shows.
     }
+    if (mine !== generation) return;
     reading = false;
+    render();
+  }
+
+  /** An account or session change: whatever was awaiting belongs to the old account and is dropped. */
+  function drop(): void {
+    generation += 1;
+    reading = false;
+    asking = false;
+    outcome = undefined;
     render();
   }
 
@@ -695,6 +724,7 @@ function mountPage(el: HTMLElement, ctx: SectionContext): () => void {
     if (!event.isTrusted || asking || request === undefined) return;
     asking = true;
     outcome = undefined;
+    const mine = generation;
     render();
     void (async () => {
       let result: { approved: boolean; code?: string };
@@ -703,8 +733,8 @@ function mountPage(el: HTMLElement, ctx: SectionContext): () => void {
       } catch {
         result = { approved: false, code: "failed" };
       }
+      if (disposed || mine !== generation) return;
       asking = false;
-      if (disposed) return;
       if (result.approved) {
         await reload();
         return;
@@ -715,12 +745,16 @@ function mountPage(el: HTMLElement, ctx: SectionContext): () => void {
   });
 
   const unsubscribe = ctx.data.subscribe(() => render());
+  const offReset = ctx.client()?.onReset(drop);
+  const offClient = ctx.onClientChange(drop);
   el.append(style, heading, lede, line.status, line.retry, askCard, content, updated);
   render();
 
   return () => {
     disposed = true;
     unsubscribe();
+    offReset?.();
+    offClient();
     el.replaceChildren();
   };
 }

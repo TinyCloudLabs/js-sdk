@@ -167,30 +167,46 @@ const flush = async () => {
 interface Rig {
   el: HTMLElement;
   set(result: ViewResult<StorageView> | undefined): void;
+  /** An account change: the new account's cached view, then the reset listeners, as the shell does. */
+  switchAccount(result: ViewResult<StorageView> | undefined): void;
   refreshes: string[];
   authority: string[];
 }
 
-function mount(
-  initial: ViewResult<StorageView> | undefined,
-  opts: { authority?: () => { approved: boolean; code?: string }; age?: number | undefined; refresh?: () => void } = {},
-): Rig {
+interface RigOptions {
+  authority?: () => { approved: boolean; code?: string };
+  /** A request that settles when the test says so. Wins over `authority`. */
+  authorityWith?: () => Promise<{ approved: boolean; code?: string }>;
+  age?: number | undefined;
+  refresh?: () => void;
+  /** A read that settles when the test says so. */
+  refreshWith?: () => Promise<void>;
+}
+
+function mount(initial: ViewResult<StorageView> | undefined, opts: RigOptions = {}): Rig {
   let latest = initial;
   const listeners = new Set<() => void>();
+  const resetListeners = new Set<() => void>();
   const refreshes: string[] = [];
   const authority: string[] = [];
+  const request = opts.authorityWith ?? (opts.authority ? async () => opts.authority!() : undefined);
   const client = {
     id: 1,
     signedIn: () => true,
-    requestAuthority: opts.authority
+    onReset: (fn: () => void) => {
+      resetListeners.add(fn);
+      return () => resetListeners.delete(fn);
+    },
+    requestAuthority: request
       ? async (kind: string) => {
           authority.push(kind);
-          return opts.authority!();
+          return request();
         }
       : undefined,
   } as unknown as PanelClient;
   const ctx = {
     client: () => client,
+    onClientChange: () => () => undefined,
     appLabel: () => "Example app",
     text: (code: string, params?: Record<string, string | number>) => panelText(code, params),
     data: {
@@ -200,6 +216,7 @@ function mount(
       refresh: async (key: string) => {
         refreshes.push(key);
         opts.refresh?.();
+        await opts.refreshWith?.();
       },
       subscribe: (fn: () => void) => {
         listeners.add(fn);
@@ -210,15 +227,29 @@ function mount(
   const el = page.document.createElement("div");
   page.document.body.append(el);
   cleanups.push(storageSection.mount(el, ctx));
+  const set = (result: ViewResult<StorageView> | undefined): void => {
+    latest = result;
+    for (const fn of [...listeners]) fn();
+  };
   return {
     el,
     refreshes,
     authority,
-    set(result) {
-      latest = result;
-      for (const fn of [...listeners]) fn();
+    set,
+    switchAccount(result) {
+      set(result);
+      for (const fn of [...resetListeners]) fn();
     },
   };
+}
+
+/** A promise the test settles by hand. */
+function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
 }
 
 const ready = (data: object): ViewResult<StorageView> => ({ state: "ready", data: data as StorageView });
@@ -424,5 +455,62 @@ describe("storage status(ctx) alongside the page", () => {
       tone: "warn",
     });
     expect(storageSection.status(ctx(ready(status(1000, 1000, "full"))))).toEqual({ text: "Full", tone: "warn" });
+  });
+});
+
+describe("storage page: results from a previous account", () => {
+  const PERMISSION: ViewResult<StorageView> = { state: "needs-permission", ability: "space/info" };
+
+  test("a refusal that arrives after an account change is not shown to the new account", async () => {
+    const answer = deferred<{ approved: boolean; code?: string }>();
+    const rig = mount(PERMISSION, { authorityWith: () => answer.promise });
+    const button = rig.el.querySelector<HTMLButtonElement>(".storage-ask button") as HTMLButtonElement;
+    trustedClick(button);
+    await flush();
+
+    rig.switchAccount(PERMISSION);
+    answer.resolve({ approved: false, code: "declined" });
+    await flush();
+
+    expect(rig.el.querySelector(".storage-ask .note")?.hasAttribute("hidden")).toBe(true);
+    expect(button.textContent).toBe("Allow storage details");
+    expect(button.disabled).toBe(false);
+  });
+
+  test("an approval that arrives after an account change does not re-read for the new account", async () => {
+    const answer = deferred<{ approved: boolean; code?: string }>();
+    const rig = mount(PERMISSION, { authorityWith: () => answer.promise });
+    trustedClick(rig.el.querySelector<HTMLButtonElement>(".storage-ask button") as HTMLButtonElement);
+    await flush();
+
+    rig.switchAccount(PERMISSION);
+    answer.resolve({ approved: true });
+    await flush();
+
+    expect(rig.refreshes).toEqual([]);
+  });
+
+  test("a retry still in flight for the old account does not block the new account's retry", async () => {
+    const first = deferred<void>();
+    let calls = 0;
+    const rig = mount(
+      { state: "error", code: "boom" },
+      { refreshWith: () => (++calls === 1 ? first.promise : new Promise<void>(() => undefined)) },
+    );
+    const retry = () =>
+      [...rig.el.querySelectorAll<HTMLButtonElement>("button")].find((b) => !b.hidden && b.textContent === "Try again");
+    trustedClick(retry() as HTMLButtonElement);
+    await flush();
+    expect(rig.refreshes).toEqual(["storage"]);
+
+    rig.switchAccount({ state: "error", code: "other" });
+    trustedClick(retry() as HTMLButtonElement);
+    await flush();
+    expect(rig.refreshes).toEqual(["storage", "storage"]);
+
+    // The old read settling late changes nothing for the new account's read in flight.
+    first.resolve();
+    await flush();
+    expect(rig.el.querySelector('[role="status"]')?.textContent).toBe("Loading…");
   });
 });
