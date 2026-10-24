@@ -23,7 +23,8 @@ export const UI_STYLE = `
 .st-ok{color:#18181b}
 .st-ok .dot{background:currentColor}
 .st-warn{color:#92400e}
-.st-warn .dot{background:#b45309;box-shadow:0 0 0 1.5px #fff,0 0 0 2.5px #b45309}
+/* Warning colour from the mockup (panel-mock index.html: --tc-color-warning #b35309 light line 34, #fbbd23 dark line 57; .st-warn .dot line 259). */
+.st-warn .dot{background:#b35309;box-shadow:0 0 0 1.5px #fff,0 0 0 2.5px #b35309}
 .st-off,.st-info{color:#71717a}
 .st-off .dot,.st-info .dot{box-shadow:inset 0 0 0 2px currentColor}
 .st-info .dot::after{content:"";position:absolute;left:-1px;right:-1px;top:3.5px;height:2px;background:currentColor;transform:rotate(-45deg)}
@@ -35,7 +36,7 @@ export const UI_STYLE = `
 .drawer{border-color:#3f3f46;background:#151517}
 .st-ok{color:#fafafa}
 .st-warn{color:#fcd34d}
-.st-warn .dot{background:#f59e0b;box-shadow:0 0 0 1.5px #18181b,0 0 0 2.5px #f59e0b}
+.st-warn .dot{background:#fbbd23;box-shadow:0 0 0 1.5px #151517,0 0 0 2.5px #fbbd23}
 .st-off,.st-info{color:#a1a1aa}
 }
 `;

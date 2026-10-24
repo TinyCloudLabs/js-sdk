@@ -340,6 +340,18 @@ describe("switch", () => {
   });
 });
 
+describe("warning status dot", () => {
+  test("uses the mockup's warning colour: #b35309 in light, #fbbd23 on the dark surface", async () => {
+    const css = await renderedCss();
+    const light = resolvedDeclarations(css, "light", ".st-warn .dot");
+    expect(light.get("background")).toBe("#b35309");
+    expect(light.get("box-shadow")).toBe("0 0 0 1.5px #fff,0 0 0 2.5px #b35309");
+    const dark = resolvedDeclarations(css, "dark", ".st-warn .dot");
+    expect(dark.get("background")).toBe("#fbbd23");
+    expect(dark.get("box-shadow")).toBe("0 0 0 1.5px #151517,0 0 0 2.5px #fbbd23");
+  });
+});
+
 describe("panel colour scheme", () => {
   test("dark scheme paints the panel, toasts and text on the dark surface", async () => {
     const css = await renderedCss();
