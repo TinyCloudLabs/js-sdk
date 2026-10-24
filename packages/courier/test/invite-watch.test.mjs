@@ -220,7 +220,7 @@ test('acceptB throws after consumed: held with internal-error, one notice, appro
   assert.deepEqual(inKeys(ID), []);
   assert.ok(logs.some((e) => e.event === 'invite-error' && e.inviteId === ID));
 
-  await w.approve(ID);
+  await w.approveHeld(ID, HUNTER_OWNER);
   assert.equal(calls, 2);
   assert.equal(readRecord(ID).status, 'completed');
   assert.equal(welcomeOf(ID).artifactC.step, 'C');
@@ -250,7 +250,7 @@ test('fault after acceptB, before the Welcome write: held, approve reuses artifa
   assert.equal(welcomeOf(ID), undefined);
   assert.equal(accepts, 1);
 
-  await w.approve(ID);
+  await w.approveHeld(ID, HUNTER_OWNER);
   assert.equal(accepts, 1);
   assert.equal(welcomePuts.n, 1);
   assert.equal(readRecord(ID).status, 'completed');
@@ -267,7 +267,7 @@ test('Welcome put fails once: held with internal-error, approve writes exactly o
   assertHeldOnce('internal-error');
   assert.equal(welcomeOf(ID), undefined);
 
-  await w.approve(ID);
+  await w.approveHeld(ID, HUNTER_OWNER);
   assert.equal(welcomePuts.n, 1);
   assert.equal(welcomeOf(ID).artifactC.step, 'C');
   assert.equal(readRecord(ID).status, 'completed');
@@ -447,7 +447,7 @@ test('approve pairs a held invite at the requested tier and notifies', async () 
   await putHello(ID);
   const w = watcher({ verify: async () => ({ ok: false, reason: 'bad-signature' }) });
   await w.onHello(ID);
-  await w.approve(ID);
+  await w.approveHeld(ID, HUNTER_OWNER);
   assert.equal(readRecord(ID).status, 'completed');
   assert.equal(welcomeOf(ID).tier, 'strict');
   assert.equal(readHeld(ID), undefined);
@@ -462,7 +462,7 @@ test('approve --tier trusted pairs, writes trusted-requested, grants nothing, wr
   const filesBefore = treeOf(home);
   const peersBefore = JSON.stringify(profile.peers);
 
-  await w.approve(ID, requestedTier('trusted'));
+  await w.approveHeld(ID, HUNTER_OWNER, requestedTier('trusted'));
 
   assert.equal(readRecord(ID).status, 'completed');
   assert.equal(welcomeOf(ID).tier, 'trusted-requested');
@@ -475,7 +475,7 @@ test('approve --tier trusted pairs, writes trusted-requested, grants nothing, wr
 
 test('approve refuses an invite that is not held', async () => {
   invite(ID);
-  await assert.rejects(watcher().approve(ID), { code: 'invite-not-held' });
+  await assert.rejects(watcher().approveHeld(ID, HUNTER_OWNER), { code: 'invite-not-held' });
 });
 
 test('approve after the held invite expired is refused and the invite expires', async () => {
@@ -483,7 +483,7 @@ test('approve after the held invite expired is refused and the invite expires', 
   await putHello(ID);
   await watcher({ verify: async () => ({ ok: false, reason: 'bad-signature' }) }).onHello(ID);
   const later = new Date(NOW + TTL_MS + 1000);
-  await assert.rejects(watcher({ now: () => later }).approve(ID), { code: 'invite-expired' });
+  await assert.rejects(watcher({ now: () => later }).approveHeld(ID, HUNTER_OWNER), { code: 'invite-expired' });
   assert.equal(readRecord(ID).status, 'expired');
 });
 
@@ -722,7 +722,7 @@ test('nothing is written outside COURIER_HOME across complete, approve, deny, an
   await putHello(ID2, { credential: undefined, possession: undefined });
   const held = watcher();
   await held.onHello(ID2);
-  await held.approve(ID2, requestedTier('trusted'));
+  await held.approveHeld(ID2, HUNTER_OWNER, requestedTier('trusted'));
 
   invite(ID3);
   await putHello(ID3, { credential: undefined, possession: undefined });

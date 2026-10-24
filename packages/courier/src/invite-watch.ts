@@ -56,6 +56,41 @@ export interface InviteRecord {
 
 const RECORD_FILE = /^[a-z2-7]{26}\.json$/;
 const RECOVER_AFTER_MS = 10 * 60 * 1000;
+/** A lock older than this belongs to a process that died; it is removed so a crash cannot wedge an invite. */
+const LOCK_STALE_MS = 2 * 60 * 1000;
+const lockPath = (id: string) => path.join(secureSubdir('invites'), `${id}.lock`);
+
+/**
+ * Runs `fn` while holding the invite's exclusive lock (`<id>.lock`, created `wx`, 0600, in the 0700 invites dir). Approve, deny and recovery take it so two
+ * of them cannot both read `held` and both pair. A lock that is already held makes the caller fail with `invite-busy` at once (it never waits); a lock
+ * older than LOCK_STALE_MS is taken over. Released in `finally`. `revoke` never takes it.
+ */
+async function withInviteLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
+  const file = lockPath(id);
+  let fd: number | undefined;
+  for (let attempt = 0; attempt < 2 && fd === undefined; attempt++) {
+    try {
+      fd = fs.openSync(file, 'wx', 0o600);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+      let ageMs = 0;
+      try {
+        ageMs = Date.now() - fs.statSync(file).mtimeMs;
+      } catch {
+        continue;
+      }
+      if (ageMs < LOCK_STALE_MS) break;
+      fs.rmSync(file, { force: true });
+    }
+  }
+  if (fd === undefined) fail('invite-busy', 'Another approve, deny or recovery is working on this invite. Try again in a minute.');
+  fs.closeSync(fd);
+  try {
+    return await fn();
+  } finally {
+    fs.rmSync(file, { force: true });
+  }
+}
 const peerKey = (p: { handle: string; courierDid: string; ownerDid: string } | null | undefined): string => (p ? `${p.handle}|${p.courierDid}|${p.ownerDid}` : '');
 const invitesDir = () => secureSubdir('invites');
 export const recordPath = (id: string) => path.join(invitesDir(), `${id}.json`);
@@ -185,8 +220,10 @@ export class InviteWatcher {
     }
   }
 
-  private async sweepOne(record: InviteRecord): Promise<void> {
-    await this.recoverConsumed(record);
+  private async sweepOne(listed: InviteRecord): Promise<void> {
+    await this.recoverConsumed(listed);
+    // Recovery works on the record it re-reads under the lock, so carry on from what is on disk now, not from the listing.
+    const record = listed.status === 'consumed' ? (readRecord(listed.inviteId) ?? listed) : listed;
     await this.reconcilePublic(record);
     if (Date.parse(record.expiresAt) > this.now().getTime()) {
       // A missed hook must not strand a hello: the poll runs the same handler. It consumes the hello first, so a hello seen twice pairs once.
@@ -206,16 +243,32 @@ export class InviteWatcher {
 
   /**
    * Recovers an invite left in consumed by a crash or a failed hold. Waits RECOVER_AFTER_MS past consumedAt so a live handleHello or approve is not disturbed.
-   * An expired invite closes. A valid remote hello, else the held copy, is held with internal-error. With neither, the invite fails with hello-lost.
+   * An expired invite closes. The held copy, else a valid remote hello, is held with internal-error. With neither, the invite fails with hello-lost.
    */
-  private async recoverConsumed(record: InviteRecord): Promise<void> {
+  private async recoverConsumed(snapshot: InviteRecord): Promise<void> {
+    if (snapshot.status !== 'consumed') return;
+    try {
+      await withInviteLock(snapshot.inviteId, async () => {
+        // Re-read under the lock: an approve or deny that held it may have moved the invite on.
+        const record = readRecord(snapshot.inviteId);
+        if (record) await this.recoverLocked(record);
+      });
+    } catch (e) {
+      if (e instanceof CourierError && e.code === 'invite-busy') return;
+      throw e;
+    }
+  }
+
+  private async recoverLocked(record: InviteRecord): Promise<void> {
     if (record.status !== 'consumed') return;
     if (record.consumedAt !== undefined && this.now().getTime() - Date.parse(record.consumedAt) < RECOVER_AFTER_MS) return;
     if (Date.parse(record.expiresAt) <= this.now().getTime()) {
       await this.close(record, 'expired');
       return;
     }
-    const hello = (await this.remoteHello(record.inviteId)) ?? readHeld(record.inviteId);
+    // The held copy wins: a recovery must never let a later writer replace the identity the owner already saw. The remote hello is used only when
+    // there is no held copy (a crash between the hello arriving and the hold).
+    const hello = readHeld(record.inviteId) ?? (await this.remoteHello(record.inviteId));
     if (hello) {
       await this.hold(record, hello, 'internal-error');
       return;
@@ -423,26 +476,20 @@ export class InviteWatcher {
     await this.emit({ kind: 'invite-held', peer: record.handle, threadId: record.inviteId, detail: '', invite: inviteFacts(record, hello, reason) });
   }
 
-  /** Owner approves a held invite, optionally overriding the requested tier. A failure ends held again, so approve can be retried. */
-  async approve(id: string, tier?: AcceptedTier): Promise<AcceptedTier> {
-    const record = await this.heldRecord(id);
-    const hello = readHeld(id);
-    if (!hello) fail('invite-not-held', 'Held hello is missing; nothing to approve.');
-    return this.pairHeld(record, hello, tier);
-  }
-
   /**
    * The approval the owner's command uses: `owner` is the owner the human says they mean to pair, and it must be the owner of the hello that is
    * actually held (`owner-mismatch` otherwise; nothing is paired or changed). The hello that is paired is the one that was checked.
    */
   async approveHeld(id: string, owner: string, tier?: AcceptedTier): Promise<AcceptedTier> {
-    const record = await this.heldRecord(id);
-    const hello = readHeld(id);
-    if (!hello) fail('invite-not-held', 'Held hello is missing; nothing to approve.');
-    if (!ownerConfirms(owner, hello.artifactB.from.owner)) {
-      fail('owner-mismatch', 'The owner you gave is not the owner of the hello that is held; nothing was paired. Run the command again with the owner shown for this invite.');
-    }
-    return this.pairHeld(record, hello, tier);
+    return withInviteLock(id, async () => {
+      const record = await this.heldRecord(id);
+      const hello = readHeld(id);
+      if (!hello) fail('invite-not-held', 'Held hello is missing; nothing to approve.');
+      if (!ownerConfirms(owner, hello.artifactB.from.owner)) {
+        fail('owner-mismatch', 'The owner you gave is not the owner of the hello that is held; nothing was paired. Run the command again with the owner shown for this invite.');
+      }
+      return this.pairHeld(record, hello, tier);
+    });
   }
 
   private async pairHeld(record: InviteRecord, hello: Hello, tier: AcceptedTier | undefined): Promise<AcceptedTier> {
@@ -460,6 +507,10 @@ export class InviteWatcher {
 
   /** Owner denies a held invite. The invitee gets a rejected Welcome with no artifact. */
   async deny(id: string): Promise<void> {
+    return withInviteLock(id, () => this.denyLocked(id));
+  }
+
+  private async denyLocked(id: string): Promise<void> {
     const record = await this.heldRecord(id);
     record.status = 'consumed';
     record.consumedAt = this.now().toISOString();

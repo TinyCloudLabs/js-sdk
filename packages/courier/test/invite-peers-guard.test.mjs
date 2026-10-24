@@ -139,13 +139,13 @@ for (const [name, who] of [
     await helloFrom(id, who);
     const w = watcher();
     await w.onHello(id);
-    await assert.rejects(w.approve(id), (e) => e.code === 'peers-entry-exists');
+    await assert.rejects(w.approveHeld(id, who.owner), (e) => e.code === 'peers-entry-exists');
     assert.equal(readRecord(id).status, 'held');
     assert.deepEqual(accepted, []);
     assert.equal(welcomeOf(id), undefined);
 
     writePeers({});
-    assert.equal(await w.approve(id), 'strict');
+    assert.equal(await w.approveHeld(id, who.owner), 'strict');
     assert.equal(readRecord(id).status, 'completed');
     assert.deepEqual(accepted, [who.courier]);
     assert.equal(welcomeOf(id).tier, 'strict');

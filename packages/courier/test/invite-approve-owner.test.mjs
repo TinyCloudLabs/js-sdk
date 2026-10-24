@@ -11,6 +11,7 @@ import { writePublicInvite, publicHeldReason, HELD_REASONS } from '../dist/invit
 import { inviteFolder } from '../dist/invite-schema.js';
 import { newInviteId } from '../dist/invite-blob.js';
 import { writeSecure } from '../dist/profile.js';
+import { noticeText } from '../dist/notify.js';
 import { memoryKv } from './memory-kv.mjs';
 
 const CLI = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
@@ -258,4 +259,22 @@ test('courier invite approve on an invite that is not held says so', () => {
   const id = invite();
   const result = runCli(['invite', 'approve', id, '--owner', MALLORY_OWNER]);
   assert.match(result.stderr, /^courier: \[invite-not-held\]/);
+});
+
+test('the invite-held notice tells the owner the command that works: approve WITH --owner <the held owner>, and deny', async () => {
+  const id = invite({ expectOwner: HUNTER_OWNER });
+  await helloFrom(id, { owner: MALLORY_OWNER, courier: MALLORY_COURIER });
+  const notices = [];
+  const w = new InviteWatcher({
+    node: { kv },
+    profile: () => ({ version: 3, host: 'https://openkey.example.test', openkeyHost: 'https://openkey.example.test', label: 'sam', courierDid: SAM_COURIER, ownerDid: SAM_OWNER, spaceId: `tinycloud:pkh:eip155:1:${SAM_ADDR}:agents`, status: 'ready', peers: {} }),
+    log: () => undefined, notify: async (n) => { notices.push(n); }, now: () => new Date(NOW),
+    verify: async () => ({ ok: true, address: EMAIL, credentialId: 'c', issuedAt: ISSUED }),
+    accept: async () => C_ARTIFACT, deleteSealed: async () => undefined, peersFiles: [],
+  });
+  await w.onHello(id);
+  const body = noticeText(notices[0], '').body;
+  assert.ok(body.includes(`courier invite approve ${id} --owner ${MALLORY_OWNER}`), body);
+  assert.ok(body.includes(`courier invite deny ${id}`));
+  assert.doesNotMatch(body, new RegExp(`approve ${id} or`));
 });

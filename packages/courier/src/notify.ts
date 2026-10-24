@@ -57,7 +57,7 @@ export function noticeText(notice: Notice, _owner: string): { title: string; bod
     const invite = notice.invite;
     if (!invite) throw new Error('invite notice without invite facts');
     return notice.kind === 'invite-held'
-      ? { title: 'Courier: invite needs you', body: `Invite ${invite.id} for ${invite.handle} is held (${invite.reason}). Claimed label "${invite.label}", owner ${invite.owner}, courier ${invite.courierDid}, requested tier ${invite.tier}. Run courier invite approve ${invite.id} or courier invite deny ${invite.id}. No agent was woken.` }
+      ? { title: 'Courier: invite needs you', body: `Invite ${invite.id} for ${invite.handle} is held (${invite.reason}). Claimed label "${invite.label}", owner ${invite.owner}, courier ${invite.courierDid}, requested tier ${invite.tier}. Run courier invite approve ${invite.id} --owner ${invite.owner} (only if that owner is the one you mean to pair) or courier invite deny ${invite.id}. No agent was woken.` }
       : { title: 'Courier: invite paired', body: `Invite ${invite.id} paired with ${invite.handle}: owner ${invite.owner}, courier ${invite.courierDid}, requested tier ${invite.tier}. The peer starts as strict until you confirm trusted status. Claimed label "${invite.label}". No agent was woken.` };
   }
   if (notice.kind === 'invite-failed') return { title: 'Courier: invite failed', body: `An invite for ${peer} could not be recovered (${notice.detail}). No pairing happened, and the invite closes at its expiry. No approve or deny applies. No agent was woken.` };

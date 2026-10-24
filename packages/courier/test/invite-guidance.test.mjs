@@ -1,12 +1,23 @@
-// The channel guidance printed by `invite` and written in the README must keep saying the same things.
+// The channel guidance `invite` prints with the link. Output is checked through the function `invite` prints with, not through source or README text.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { INVITE_GUIDANCE } from '../dist/invite-commands.js';
+import { INVITE_GUIDANCE, printInviteCreated } from '../dist/invite-commands.js';
 
-const README = fs.readFileSync(fileURLToPath(new URL('../README.md', import.meta.url)), 'utf8').replace(/\s+/g, ' ');
-const SOURCE = fs.readFileSync(fileURLToPath(new URL('../src/invite-commands.ts', import.meta.url)), 'utf8');
+const INVITE = 'tcinvite1:aaaaaaaaaaaaaaaaaaaaaaaaaa:' + 'B'.repeat(43) + ':bafkrei' + 'a'.repeat(52);
+const input = () => ({ expectEmail: 'hunter@example.test', handle: 'hunter', tier: 'strict', expiresAt: new Date('2099-01-01T00:00:00.000Z'), invite: INVITE });
+
+/** Captures what the default sink (console.log, i.e. stdout) receives. */
+function stdoutOf(fn) {
+  const out = [];
+  const log = console.log;
+  console.log = (...parts) => out.push(parts.join(' '));
+  try {
+    fn();
+  } finally {
+    console.log = log;
+  }
+  return out;
+}
 
 test('invite screen text: bearer link, a different channel than the invited address, --also-ask / --expect-owner for email, what a link holder can read', () => {
   const text = INVITE_GUIDANCE.join('\n');
@@ -16,13 +27,11 @@ test('invite screen text: bearer link, a different channel than the invited addr
   assert.match(text, /Anyone who holds the link can read the invitee address and your owner address, space and handles until it expires/);
 });
 
-test('invite create prints every guidance line', () => {
-  assert.match(SOURCE, /for \(const line of INVITE_GUIDANCE\) console\.log\(line\);/);
-});
-
-test('README says the same: different channel, --also-ask / --expect-owner by email, what a link holder can read', () => {
-  assert.ok(README.includes('Send the link by a different channel than the invited email address'));
-  assert.ok(README.includes('add `--also-ask`'));
-  assert.ok(README.includes('`--expect-owner`'));
-  assert.ok(README.includes('Anyone who holds the link can read the invitee address and your owner address, space and handles until it expires'));
+test('invite prints every guidance line on stdout, after the summary and above the invite string, which comes last', () => {
+  const lines = stdoutOf(() => printInviteCreated(input()));
+  assert.equal(lines.length, INVITE_GUIDANCE.length + 2);
+  assert.match(lines[0], /^Invite for hunter@example\.test as "hunter"/);
+  assert.deepEqual(lines.slice(1, 1 + INVITE_GUIDANCE.length), [...INVITE_GUIDANCE]);
+  assert.equal(lines.at(-1), INVITE);
+  assert.equal(lines.filter((line) => line === INVITE).length, 1, 'the string is printed once');
 });

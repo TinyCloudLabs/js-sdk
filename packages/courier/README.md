@@ -140,6 +140,10 @@ tc courier join --resume
   its `0x` address) must name that owner, otherwise it stops with
   `owner-mismatch` and pairs nothing. The public record of a held invite carries
   `heldReason` and `helloOwner` for the gate.
+- A held invite keeps the hello that was held: recovery after a crash re-holds
+  that hello and never swaps in a later one. `invite approve` and `invite deny`
+  take a per-invite lock, so a second one at the same time fails with
+  `invite-busy`.
 - `pair start`, `pair accept` and `join` also refuse a handle that a peers file
   lists (`peers-entry-exists`, or `peers-unreadable`), before creating a peer or
   a grant; the same `--peers-file` / `COURIER_PEERS_FILE` / defaults apply.

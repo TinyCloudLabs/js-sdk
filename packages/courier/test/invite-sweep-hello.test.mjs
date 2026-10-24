@@ -147,14 +147,14 @@ test('approve returns the tier the record carries, and the summary shows the req
   const w = watcher();
   await w.sweep();
   assert.equal(readRecord(id).held.reason, 'also-ask');
-  assert.equal(await w.approve(id), 'trusted-requested');
+  assert.equal(await w.approveHeld(id, HUNTER_OWNER), 'trusted-requested');
   assert.match(approveSummary(id, 'trusted-requested'), /Requested tier: trusted\. The peer starts as strict/);
   assert.match(approveSummary(id, 'strict'), /Requested tier: strict\. The peer starts as strict/);
 
   const second = invite({ tier: 'trusted', alsoAsk: true });
   await writeHello(second);
   await w.sweep();
-  assert.equal(await w.approve(second, 'strict'), 'strict');
+  assert.equal(await w.approveHeld(second, HUNTER_OWNER, 'strict'), 'strict');
 });
 
 test('a second handler that finds the invite consumed leaves the hello in place while the first is still deciding', async () => {

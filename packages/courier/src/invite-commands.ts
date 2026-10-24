@@ -54,6 +54,13 @@ export const INVITE_GUIDANCE: readonly string[] = [
   'Anyone who holds the link can read the invitee address and your owner address, space and handles until it expires.',
 ];
 
+/** What `invite` prints on success, on stdout: the summary, the guidance, then the invite string last. */
+export function printInviteCreated(input: { expectEmail: string; handle: string; tier: RequestedTier; expiresAt: Date; invite: string }, out: (line: string) => void = console.log): void {
+  out(`Invite for ${input.expectEmail} as "${input.handle}" (requested tier ${input.tier}; the peer starts strict until you confirm), expires ${input.expiresAt.toISOString()}.`);
+  for (const line of INVITE_GUIDANCE) out(line);
+  out(input.invite);
+}
+
 const inviteUsage = () => `Usage: ${cmd('invite <handle> --email <address> [--tier strict|trusted] [--expect-owner <did>] [--ttl 24h] [--call-me <handle>] [--also-ask] [--invites-public-dir d] [--peers-file f]')}`;
 
 /** Owner and tier flags. No flags: no owner check, strict. `--tier trusted` is a request the owner confirms by hand. */
@@ -245,9 +252,7 @@ async function inviteCreate(args: ParsedArgs): Promise<void> {
         console.error(`Public invite record not written (${reasonOf(e)}). The invite itself is unaffected.`);
       }
     }
-    console.log(`Invite for ${expectEmail} as "${handle}" (requested tier ${tier}; the peer starts strict until you confirm), expires ${expiresAt.toISOString()}.`);
-    for (const line of INVITE_GUIDANCE) console.log(line);
-    console.log(formatInviteString({ id: uploaded.id, key: seal.key, cid: uploaded.cid }));
+    printInviteCreated({ expectEmail, handle, tier, expiresAt, invite: formatInviteString({ id: uploaded.id, key: seal.key, cid: uploaded.cid }) });
   } catch (e) {
     if (recordWritten) fs.rmSync(recordPath(inviteId), { force: true });
     delete profile.peers[handle];
@@ -365,9 +370,10 @@ function checkBlob(profile: Profile, blob: InviteBlob): void {
   }
 }
 
-async function joinStart(args: ParsedArgs, input: string): Promise<void> {
+/** `deps.ctx` is a test seam: the profile and node a join runs with. */
+export async function joinStart(args: ParsedArgs, input: string, deps: { ctx: typeof ctx } = { ctx }): Promise<void> {
   const peersFiles = peersFilesFor(args.get('peers-file'));
-  const { profile, node } = await ctx();
+  const { profile, node } = await deps.ctx();
   const parts = parseInviteString(input);
   const credentials = credentialSourceFromArgs(args);
   const sealed = await fetchSealed(inviteOrigin(), parts.id, parts.cid);
