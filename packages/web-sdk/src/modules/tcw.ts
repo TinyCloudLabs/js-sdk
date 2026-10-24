@@ -891,11 +891,11 @@ export class TinyCloudWeb {
       }
       const node = await this.ensureNode();
       assertNotSignedOut();
-      const was = node.session && `${node.session.address}:${node.session.chainId}`;
+      const was = node.spaceId;
       await node.restoreSession(restoreDataFromPersisted(loaded.data));
       assertNotSignedOut();
       this.resetSessionScopedCaches();
-      if (was && was !== `${node.session?.address}:${node.session?.chainId}`) this.uiClient.reset();
+      if (was && was !== node.spaceId) this.uiClient.reset();
       this._sessionRestoreStatus = "restored";
       return {
         status: "restored",
@@ -984,13 +984,13 @@ export class TinyCloudWeb {
     // A sign-out during the restore must not fall through to a fresh sign-in.
     assertNotSignedOut();
     this._sessionRestoreStatus = "logging-in";
-    const was = node.session && `${node.session.address}:${node.session.chainId}`;
+    const was = node.spaceId;
     await node.signIn(options);
     assertNotSignedOut();
     this.resetSessionScopedCaches();
     const session = node.session;
     if (!session) throw new Error("Sign-in completed but no session available");
-    if (was && was !== `${session.address}:${session.chainId}`) this.uiClient.reset();
+    if (was && was !== node.spaceId) this.uiClient.reset();
     // Explicit logout never permits an older tab's persisted proof to satisfy the next sign-in.
     if (!this.signOutCleanupFailed && this.signOutInFlight === 0) this.persistedRestoreBlocked = false;
     return {

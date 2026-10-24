@@ -1459,6 +1459,10 @@ describe("panel reset when the principal changes over a live session", () => {
     await (tcw as any)._initPromise;
     const node: any = {
       session: live,
+      // The real node reads this from the session; the primary space id encodes address and chain.
+      get spaceId() {
+        return this.session && `tinycloud:pkh:eip155:${this.session.chainId}:${this.session.address}:default`;
+      },
       accountSpaceId: `tinycloud:pkh:eip155:${next.chainId}:${next.address}:account`,
       hasRuntimePermissions: mock(() => true),
       signIn: mock(async () => {
