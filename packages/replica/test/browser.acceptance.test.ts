@@ -484,6 +484,7 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       await page.evaluate(() => window.__tcw.signIn());
       await page.evaluate(() => window.__tcw.replicationSync());
       await page.evaluate(() => window.__tcw.injectEraseFailure());
+      await page.evaluate(() => window.__tcw.injectDenyFailure({ stage: "delete_database", once: false }));
       await page.evaluate(() => window.__tcw.signOut());
       // The erase failed, so the partition is condemned but not yet erased: a purge intent remains.
       expect(await page.evaluate(() => window.__tcw.pendingPurgeCount())).toBeGreaterThan(0);
@@ -580,7 +581,7 @@ describe.skipIf(NODE_BIN === undefined)("TC-858 browser replication acceptance (
       const sibling = await bootPage(context);
       await sibling.evaluate(() => window.__tcw.signIn());
       await page.evaluate(() => window.__tcw.injectDenyFailure({ stage: "deny_tx", once: true }));
-      await page.evaluate(() => window.__tcw.injectDenyFailure({ stage: "delete_database", once: true }));
+      await page.evaluate(() => window.__tcw.injectDenyFailure({ stage: "delete_database", once: false }));
       await page.evaluate(() => window.__tcw.signOut());
       expect(await replicationEventsOf(page, "replication.lifecycle")).toContainEqual(expect.objectContaining({ action: "marker_set" }));
       await sibling.evaluate(() => window.__tcw.kvGet("notes/a"));

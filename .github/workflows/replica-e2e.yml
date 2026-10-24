@@ -367,10 +367,12 @@ jobs:
           grep -qE '^ *[1-9][0-9]* pass$' "$RUNNER_TEMP/acceptance.log"
 
       - name: Build the purge fixture page
+        if: ${{ !cancelled() }}
         run: bunx vite build
         working-directory: packages/replica/test/browser/purge
 
       - name: Browser local-copy purge (TC-1888, Chromium)
+        if: ${{ !cancelled() }}
         env:
           TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
           TC1888_ACCEPTANCE_STRICT: "1"

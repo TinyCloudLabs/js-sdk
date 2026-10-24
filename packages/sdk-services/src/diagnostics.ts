@@ -32,7 +32,7 @@ const SAFE_REPLICATION_FIELDS: Record<string, readonly string[]> = {
   class: ["offline", "authority", "storage", "node", "lifecycle"],
   state: ["opened", "grant_installed", "grant_missing", "runtime_unsupported", "unavailable", "revoked", "recreated", "purged", "purge_failed", "pending_store_error", "pinned", "pending_cleared", "closed", "idle", "ready", "gated"],
   action: ["minted", "renewed", "renewal_refused", "renewal_deferred", "capped", "expired", "consent_deadline_reached", "denied", "deny_stale", "deny_failed", "database_deleted", "marker_set", "marker_cleared", "unguarded", "drained", "erased", "erase_failed", "activation_blocked", "activated", "recovered"],
-  gate: ["not_established", "stamp_stale", "principal_mismatch", "purge_pending", "logout_pending", "gate_unavailable", "wallet_provider_required"],
+  gate: ["not_established", "stamp_stale", "principal_mismatch", "purge_pending", "logout_pending", "gate_unavailable"],
   kind: ["value", "missing_local", "extra_local", "keys", "order"],
   coverage: ["empty", "bootstrapping", "complete"],
   authority: ["valid", "expired", "revoked", "not-yet-valid"],
