@@ -236,7 +236,7 @@ describe("encryptionResourceContains", () => {
     ["prefix does not cover sibling prefix with same leading text", res("apps/foo/"), res("apps/foobar/"), false],
     ["prefix covers itself", res("a/"), res("a/"), true],
     ["prefix covers narrower prefix", res("a/"), res("a/b/"), true],
-    ["narrow prefix does not cover wider prefix", res("a/b/"), res("a/"), false],
+    ["a prefix does not cover the enclosing prefix", res("a/b/"), res("a/"), false],
     ["prefix a/ vs prefix a (key form) differ", res("a/"), res("a"), false],
     ["key does not cover prefix of itself", res("a/b"), res("a/b/"), false],
     ["key does not cover a prefix below it", res("a"), res("a/b/"), false],
