@@ -14,6 +14,7 @@ import { registerPanelStrings, panelText } from "../strings-panel";
 import { DELEGATIONS_STRINGS } from "./delegations.strings";
 import { viewStatus } from "./status";
 import { actionButton, icon, statusNode, UI_STYLE } from "./ui";
+import { applyResult, createStateLine } from "./view-body";
 
 registerPanelStrings(DELEGATIONS_STRINGS);
 
@@ -23,6 +24,8 @@ const MONO = 'ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monos
 const STYLE = `
 .dl{container-type:inline-size}
 .dl-lede{margin:-22px 0 28px;max-width:56ch;font-size:15px;line-height:1.5}
+.dl-lede:has(+.dl-fresh:not([hidden])){margin-bottom:10px}
+.dl .dl-fresh{margin:0 0 24px;font-size:12.5px}
 .dl-live{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .dl-body{display:flex;flex-direction:column;gap:28px}
 .dl-h{display:flex;align-items:center;gap:10px;margin:0 0 12px;font:600 13px/1.3 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;letter-spacing:.02em}
@@ -518,7 +521,10 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
   footErr.hidden = true;
   foot.append(footNote, showMore, footErr);
   showMore.addEventListener("click", () => void loadMore());
-  root.append(title, lede, live, skeleton, notice, body);
+  // The retry the helper builds is not used: this section has its own for a failed read.
+  const fresh = createStateLine(ctx, () => undefined);
+  fresh.status.classList.add("dl-fresh");
+  root.append(title, lede, fresh.status, live, skeleton, notice, body);
   el.append(style, root);
 
   let disposed = false;
@@ -1281,6 +1287,16 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
       extra = [];
       extraCursor = undefined;
       paging = "idle";
+    }
+    // The freshness of what is listed, and the denied line, through the shared state-line helper. It is derived from the
+    // result the cache holds now, so it can only describe the current account's list: after an account change the cache is
+    // empty and the line is gone until that account's own read arrives.
+    if (source !== undefined && (result?.state === "ready" || result?.state === "needs-permission")) {
+      applyResult(fresh, ctx, result);
+      if (result.state === "needs-permission") fresh.status.textContent = text("delegations.denied");
+    } else {
+      fresh.status.hidden = true;
+      fresh.status.textContent = "";
     }
     skeleton.hidden = true;
     body.hidden = true;

@@ -1565,6 +1565,107 @@ describe("a status this panel does not know", () => {
   });
 });
 
+describe("freshness and denied lines", () => {
+  const MIN = 60_000;
+  const lineOf = (h: Harness) => h.el.querySelector<HTMLElement>(".dl-fresh");
+  /** A ready first page with the freshness the live adapter attaches. */
+  const withFreshness = (rows: DelegationRow[], freshness: { updatedAt: number; refreshing: boolean; lastError?: string }): PageResult => ({
+    state: "ready",
+    data: { rows },
+    freshness,
+  });
+  const shown = (h: Harness) => (lineOf(h)?.hidden === false ? lineOf(h)?.textContent : undefined);
+
+  test("a revalidate in flight says 'Updating…' (one ellipsis character) and keeps the list", async () => {
+    const h = await mountSection({ result: withFreshness([row("a")], { updatedAt: Date.now() - 3 * MIN, refreshing: true }) });
+    expect(shown(h)).toBe("Updating…");
+    expect(shown(h)).not.toContain("...");
+    expect(lineOf(h)?.getAttribute("role")).toBe("status");
+    expect(names(h.el)).toEqual(["Helper a"]);
+  });
+
+  test("a fresh read says 'Updated just now'", async () => {
+    const h = await mountSection({ result: withFreshness([row("a")], { updatedAt: Date.now(), refreshing: false }) });
+    expect(shown(h)).toBe("Updated just now");
+  });
+
+  test("a failed refresh keeps the snapshot and says how old it is, never that it is current", async () => {
+    const h = await mountSection({
+      result: withFreshness([row("a")], { updatedAt: Date.now() - 3 * MIN, refreshing: false, lastError: "NETWORK" }),
+    });
+    expect(shown(h)).toBe("Couldn't refresh. Showing data from 3 min ago.");
+    expect(shown(h)).not.toContain("Updated");
+    expect(names(h.el)).toEqual(["Helper a"]);
+  });
+
+  test("the line follows the read: Updating… becomes Updated just now, then a failure", async () => {
+    const h = await mountSection({ result: withFreshness([row("a")], { updatedAt: Date.now() - 3 * MIN, refreshing: true }) });
+    expect(shown(h)).toBe("Updating…");
+    h.setPage(withFreshness([row("a")], { updatedAt: Date.now(), refreshing: false }));
+    await h.refresh();
+    expect(shown(h)).toBe("Updated just now");
+    h.setPage(withFreshness([row("a")], { updatedAt: Date.now() - 4 * MIN, refreshing: false, lastError: "NETWORK" }));
+    await h.refresh();
+    expect(shown(h)).toBe("Couldn't refresh. Showing data from 4 min ago.");
+  });
+
+  test("a denied list says the session does not have access to it, and offers no Allow of its own", async () => {
+    const h = await mountSection({ result: { state: "needs-permission", ability: "delegation/list" } });
+    expect(shown(h)).toBe("This session doesn't have access to this list.");
+    expect(panelText("delegations.denied")).toBe("This session doesn't have access to this list.");
+    expect(cards(h.el)).toHaveLength(0);
+    expect(h.el.querySelector(".dl-fresh")?.getAttribute("role")).toBe("status");
+  });
+
+  test("a result without freshness (a stub) and the loading and error states have no line", async () => {
+    const stub = await mountSection({ rows: [row("a")] });
+    expect(shown(stub)).toBeUndefined();
+    const loading = await mountSection({ result: { state: "loading" } });
+    expect(shown(loading)).toBeUndefined();
+    const failed = await mountSection({ result: { state: "error", code: "x" } });
+    expect(shown(failed)).toBeUndefined();
+    // The failed read keeps its own message and Try again, once.
+    expect(failed.el.textContent).toContain("The list of delegations didn't load.");
+    expect(failed.el.textContent).not.toContain("This didn't load.");
+  });
+
+  test("one account's freshness never shows on another's list: a stale line for A is gone with A, and B's list starts with its own", async () => {
+    const h = await mountSection({
+      result: withFreshness([row("a")], { updatedAt: Date.now() - 5 * MIN, refreshing: false, lastError: "NETWORK" }),
+    });
+    expect(shown(h)).toContain("Couldn't refresh");
+    h.reset();
+    // The cache is empty: no list, no line.
+    expect(shown(h)).toBeUndefined();
+    // B's list has no freshness yet (first read): no line, and certainly not A's failure.
+    h.setPage(ready([row("b1")]));
+    await h.refresh();
+    expect(names(h.el)).toEqual(["Helper b1"]);
+    expect(shown(h)).toBeUndefined();
+    expect(h.el.textContent).not.toContain("Couldn't refresh");
+    // Then B's own.
+    h.setPage(withFreshness([row("b1")], { updatedAt: Date.now(), refreshing: false }));
+    await h.refresh();
+    expect(shown(h)).toBe("Updated just now");
+  });
+
+  test("a stale list still revokes correctly: the revoke reaches the source and the list is re-read after it", async () => {
+    const h = await mountSection({
+      result: withFreshness([row("a"), row("b")], { updatedAt: Date.now() - 3 * MIN, refreshing: false, lastError: "NETWORK" }),
+      revoke: async () => ({ ok: false, code: "NETWORK_ERROR" }),
+    });
+    expect(shown(h)).toContain("Couldn't refresh");
+    const readsBefore = h.reads.count;
+    buttonIn(await openBox(h), "Revoke access")?.click();
+    await flush();
+    expect(h.revoked).toEqual(["a"]);
+    expect(h.reads.count).toBeGreaterThan(readsBefore);
+    // The revoke's own outcome is still told, and the stale line is not turned into a claim that the list is current.
+    expect(h.el.textContent).toContain("couldn't confirm whether this worked");
+    expect(shown(h)).not.toContain("Updated");
+  });
+});
+
 describe("details", () => {
   test("See details opens a drawer with both identities, the delegation ID, the resources and dates, and Close returns focus", async () => {
     const h = await mountSection({
