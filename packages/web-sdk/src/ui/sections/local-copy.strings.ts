@@ -61,7 +61,6 @@ export const LOCAL_COPY_STRINGS = {
   "local-copy.wipe.done": "Local data wiped. Your TinyCloud still has everything.",
   "local-copy.wipe.failed": "The wipe didn't finish. The copy may still be on this device.",
   "local-copy.wipe.retry": "Try again",
-  "local-copy.wipe.none": "Nothing to wipe: no copy is kept on this device.",
   "local-copy.purge.pending": "The local copy on this browser was not removed yet.",
   "local-copy.purge.readable": "The local copy on this browser was not removed yet. It may still be readable here.",
   "local-copy.purge.toast.pending": "The local copy on this browser was not removed yet. Try again from Local copy.",
