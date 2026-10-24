@@ -4,36 +4,62 @@ import { registerPanelStrings } from "../strings-panel";
 import { LOCAL_TINYCLOUD_STRINGS } from "./local-tinycloud.strings";
 import { viewStatus } from "./status";
 import { alwaysAvailable, mountPlaceholder } from "./placeholder";
+import { actionButton, statusNode, UI_STYLE } from "./ui";
 import { applyResult, createStateLine, settle, startLoading, textLine } from "./view-body";
 
-/** Status word per connection state. */
-const WORD: Record<LocalNodeConnection, string> = {
-  off: "local.off",
-  looking: "local.looking",
-  found: "local.found",
-  "not-found": "local.not-found",
-  unavailable: "local.unavailable",
+const MONO = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+
+const STYLE = `
+.ll-intro{margin:0 0 12px;font-size:13px;line-height:1.5;color:#52525b}
+.ll-sub{margin:2px 0 0;font-size:12.5px;color:#52525b}
+.ll-ctl{display:flex;align-items:center;gap:10px;flex:none}
+.ll-word{min-width:2.5em;text-align:right;font-size:13px;font-weight:600}
+.ll-card{display:flex;flex-direction:column;gap:10px;margin-top:14px;padding:16px;border:1px solid #e4e4e7;border-radius:12px}
+.ll-card-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px}
+.ll-strong{margin:0;font-size:14px;font-weight:600}
+.ll-body{margin:0;font-size:13px;line-height:1.5;color:#52525b}
+.ll-looking{display:flex;align-items:flex-start;gap:12px}
+.ll-spin{flex:none;width:18px;height:18px;margin-top:2px;border:2px solid #d4d4d8;border-top-color:#18181b;border-radius:50%;animation:ll-spin .9s linear infinite}
+@keyframes ll-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion: reduce){.ll-spin{animation:none}}
+.ll-kv{display:grid;grid-template-columns:auto minmax(0,1fr);gap:8px 14px;align-items:center;margin:0}
+.ll-kv dt{font-size:12.5px;color:#52525b}
+.ll-kv dd{display:flex;align-items:center;gap:8px;min-width:0;margin:0;font-size:13px}
+.ll-mono{font-family:${MONO};font-size:12.5px;overflow-wrap:anywhere}
+.ll-did{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:${MONO};font-size:12.5px}
+.ll-steps{margin:0;padding-left:20px;font-size:13px;line-height:1.6;color:#52525b}
+@media (prefers-color-scheme: dark){
+.ll-intro,.ll-sub,.ll-body,.ll-kv dt,.ll-steps{color:#a1a1aa}
+.ll-card{border-color:#3f3f46}
+.ll-spin{border-color:#3f3f46;border-top-color:#fafafa}
+}
+`;
+
+/** Glance-row status for each connection. */
+const GLANCE: Record<LocalNodeConnection, { code: string; tone: SectionStatus["tone"] }> = {
+  found: { code: "local-tinycloud.glance.found", tone: "ok" },
+  looking: { code: "local-tinycloud.glance.looking", tone: "info" },
+  "not-found": { code: "local-tinycloud.glance.not_found", tone: "off" },
+  off: { code: "local-tinycloud.glance.off", tone: "off" },
+  unavailable: { code: "section.status.unavailable", tone: "off" },
 };
 
-/** Address, node identity and version, each only when the source reports it. */
-function detailLines(ctx: HostContext, node: LocalNodeState): HTMLParagraphElement[] {
-  const rows: readonly (readonly [string, string | undefined])[] = [
-    ["local.address", node.url],
-    ["local.identity", node.identity?.nodeDid],
-    ["local.version", node.version],
-  ];
-  return rows.flatMap(([code, value]) =>
-    value === undefined ? [] : [textLine("note", `${ctx.text(code)}: ${value}`)],
-  );
-}
+/** Sub-line under the switch label, one per connection. */
+const SUB: Record<LocalNodeConnection, string> = {
+  off: "local-tinycloud.sub.off",
+  looking: "local-tinycloud.sub.looking",
+  found: "local-tinycloud.sub.found",
+  "not-found": "local-tinycloud.sub.not_found",
+  unavailable: "local-tinycloud.sub.unavailable",
+};
 
 registerPanelStrings(LOCAL_TINYCLOUD_STRINGS);
 
 /**
  * Local TinyCloud on this computer. Mounted only while the panel is open.
- * The switch is on for any connection except `off`. It is disabled when the
- * connection cannot be checked. Without a data source the body keeps the
- * neutral placeholder.
+ * The switch is on for any connection except `off` and `unavailable`. It is
+ * disabled only when the app cannot change the setting. While looking, the
+ * switch stays usable so the check can be cancelled.
  */
 export const localTinycloudSection: PanelSection = {
   id: "local-tinycloud",
@@ -43,18 +69,8 @@ export const localTinycloudSection: PanelSection = {
   isAvailable: alwaysAvailable,
   status: (ctx) =>
     viewStatus(ctx, ctx.data.latest("localNode"), (node): SectionStatus => {
-      switch (node.connection) {
-        case "found":
-          return { text: ctx.text("local-tinycloud.glance.found"), tone: "ok" };
-        case "looking":
-          return { text: ctx.text("local-tinycloud.glance.looking"), tone: "info" };
-        case "not-found":
-          return { text: ctx.text("local-tinycloud.glance.not_found"), tone: "off" };
-        case "off":
-          return { text: ctx.text("local-tinycloud.glance.off"), tone: "off" };
-        case "unavailable":
-          return { text: ctx.text("section.status.unavailable"), tone: "info" };
-      }
+      const glance = GLANCE[node.connection];
+      return { text: ctx.text(glance.code), tone: glance.tone };
     }),
   mount(el, ctx: HostContext) {
     const data = ctx.client()?.data;
@@ -64,40 +80,194 @@ export const localTinycloudSection: PanelSection = {
     let busy = false;
     let seq = 0;
     let node: LocalNodeState | undefined;
+    let attempted: boolean | undefined;
 
+    const appName = (): string => ctx.appLabel() ?? ctx.text("local-tinycloud.app_fallback");
     const line = createStateLine(ctx, () => void load());
 
     const content = document.createElement("div");
     content.hidden = true;
 
+    const intro = textLine("ll-intro", ctx.text("local-tinycloud.intro"));
+
     const row = document.createElement("div");
     row.className = "row";
-    const label = textLine("label", ctx.text("local.switch"));
+    const labelBlock = document.createElement("div");
+    const label = textLine("label", ctx.text("local-tinycloud.switch"));
+    const sub = textLine("ll-sub", "");
+    labelBlock.append(label, sub);
+    const control = document.createElement("div");
+    control.className = "ll-ctl";
+    const word = document.createElement("span");
+    word.className = "ll-word";
     const toggle = document.createElement("button");
     toggle.type = "button";
     toggle.className = "switch";
     toggle.setAttribute("role", "switch");
-    toggle.setAttribute("aria-label", ctx.text("local.switch"));
+    toggle.setAttribute("aria-label", ctx.text("local-tinycloud.switch"));
     const knob = document.createElement("span");
     knob.className = "knob";
     toggle.append(knob);
-    row.append(label, toggle);
+    control.append(word, toggle);
+    row.append(labelBlock, control);
 
-    const word = textLine("busy", "");
-    const details = document.createElement("div");
-    const errorLine = textLine("error", "");
+    const card = document.createElement("div");
+    card.className = "ll-card";
+
+    const errorLine = textLine("error", ctx.text("local-tinycloud.error"));
     errorLine.setAttribute("role", "alert");
     errorLine.hidden = true;
-    content.append(row, word, details, errorLine);
+    const retryWrite = actionButton(ctx.text("view.retry"));
+    retryWrite.hidden = true;
+    retryWrite.addEventListener("click", () => {
+      if (attempted !== undefined) void setOn(attempted);
+    });
+
+    content.append(intro, row, card, errorLine, retryWrite);
+
+    function copyButton(value: string, labelCode: string): HTMLButtonElement {
+      const button = actionButton(ctx.text("local-tinycloud.copy"));
+      button.setAttribute("aria-label", ctx.text(labelCode));
+      button.addEventListener("click", () => void copy(value));
+      return button;
+    }
+
+    async function copy(value: string): Promise<void> {
+      try {
+        await navigator.clipboard.writeText(value);
+        ctx.toast({ kind: "success", textCode: "local-tinycloud.copied" });
+      } catch {
+        ctx.toast({ kind: "error", textCode: "local-tinycloud.copy_failed" });
+      }
+    }
+
+    function pill(connection: LocalNodeConnection): HTMLSpanElement {
+      const glance = GLANCE[connection];
+      return statusNode({ text: ctx.text(glance.code), tone: glance.tone });
+    }
+
+    function head(status: HTMLElement, action?: HTMLButtonElement): HTMLDivElement {
+      const div = document.createElement("div");
+      div.className = "ll-card-head";
+      div.append(status, ...(action ? [action] : []));
+      return div;
+    }
+
+    /** The card for the current connection. Built fresh on every render. */
+    function cardFor(current: LocalNodeState): HTMLElement[] {
+      switch (current.connection) {
+        case "off":
+          return [
+            head(pill("off")),
+            textLine("ll-body", ctx.text("local-tinycloud.off.body", { app: appName() })),
+          ];
+        case "looking": {
+          const spin = document.createElement("span");
+          spin.className = "ll-spin";
+          spin.setAttribute("aria-hidden", "true");
+          const text = document.createElement("div");
+          text.append(
+            textLine("ll-strong", ctx.text("local-tinycloud.looking.title")),
+            textLine("ll-body", ctx.text("local-tinycloud.looking.permission", { app: appName() })),
+          );
+          const wrap = document.createElement("div");
+          wrap.className = "ll-looking";
+          wrap.append(spin, text);
+          const cancel = actionButton(ctx.text("local-tinycloud.looking.cancel"));
+          cancel.addEventListener("click", () => {
+            if (!busy) void setOn(false);
+          });
+          return [wrap, cancel];
+        }
+        case "found": {
+          const recheck = actionButton(ctx.text("local-tinycloud.found.recheck"));
+          recheck.addEventListener("click", () => void load());
+          const kv = document.createElement("dl");
+          kv.className = "ll-kv";
+          const rows: HTMLElement[] = [];
+          const addRow = (labelCode: string, value: HTMLElement): void => {
+            const dt = document.createElement("dt");
+            dt.textContent = ctx.text(labelCode);
+            const dd = document.createElement("dd");
+            dd.append(value);
+            rows.push(dt, dd);
+          };
+          const did = current.identity?.nodeDid;
+          if (did !== undefined) {
+            const idText = document.createElement("span");
+            idText.className = "ll-did";
+            idText.textContent =
+              did.length > 24 ? `${did.slice(0, 16)}…${did.slice(-6)}` : did;
+            idText.title = did;
+            const idCell = document.createElement("span");
+            idCell.append(idText, copyButton(did, "local-tinycloud.copy.node_id_label"));
+            addRow("local-tinycloud.found.node_id", idCell);
+          }
+          if (current.version !== undefined) {
+            const version = document.createElement("span");
+            version.textContent = current.version;
+            addRow("local-tinycloud.found.version", version);
+          }
+          if (current.url !== undefined) {
+            const host = document.createElement("span");
+            host.className = "ll-mono";
+            host.textContent = current.url;
+            const hostCell = document.createElement("span");
+            hostCell.append(host, copyButton(current.url, "local-tinycloud.copy.host_label"));
+            addRow("local-tinycloud.found.host", hostCell);
+          }
+          kv.append(...rows);
+          return [head(pill("found"), recheck), kv];
+        }
+        case "not-found": {
+          const again = actionButton(ctx.text("local-tinycloud.not_found.retry"));
+          again.addEventListener("click", () => void load());
+          const command = ctx.text("local-tinycloud.not_found.step_command");
+          const code = document.createElement("code");
+          code.className = "ll-mono";
+          code.textContent = command;
+          const commandCell = document.createElement("span");
+          commandCell.append(code, copyButton(command, "local-tinycloud.copy.command_label"));
+          const steps = document.createElement("ol");
+          steps.className = "ll-steps";
+          const openItem = document.createElement("li");
+          openItem.textContent = ctx.text("local-tinycloud.not_found.step_open");
+          const commandItem = document.createElement("li");
+          commandItem.append(commandCell);
+          const listenItem = document.createElement("li");
+          listenItem.textContent = ctx.text("local-tinycloud.not_found.step_listen");
+          const retryItem = document.createElement("li");
+          retryItem.textContent = ctx.text("local-tinycloud.not_found.step_retry");
+          steps.append(openItem, commandItem, listenItem, retryItem);
+          return [
+            head(pill("not-found"), again),
+            textLine("ll-strong", ctx.text("local-tinycloud.not_found.title")),
+            textLine("ll-body", ctx.text("local-tinycloud.not_found.unchanged", { app: appName() })),
+            textLine("ll-strong", ctx.text("local-tinycloud.not_found.steps_title")),
+            steps,
+          ];
+        }
+        case "unavailable":
+          return [
+            head(pill("unavailable")),
+            textLine("ll-strong", ctx.text("local-tinycloud.unavailable.line")),
+            textLine("ll-body", ctx.text("local-tinycloud.unavailable.explain")),
+          ];
+      }
+    }
 
     function render(): void {
       if (disposed) return;
       content.hidden = node === undefined;
       if (node === undefined) return;
-      toggle.setAttribute("aria-checked", String(node.connection !== "off"));
-      toggle.disabled = busy || node.connection === "unavailable";
-      word.textContent = ctx.text(WORD[node.connection]);
-      details.replaceChildren(...detailLines(ctx, node));
+      const connection = node.connection;
+      const on = connection !== "off" && connection !== "unavailable";
+      toggle.setAttribute("aria-checked", String(on));
+      toggle.disabled = connection === "unavailable";
+      toggle.setAttribute("aria-disabled", String(busy));
+      word.textContent = ctx.text(on ? "local-tinycloud.switch.on" : "local-tinycloud.switch.off");
+      sub.textContent = ctx.text(SUB[connection]);
+      card.replaceChildren(...cardFor(node));
     }
 
     async function load(): Promise<void> {
@@ -110,6 +280,9 @@ export const localTinycloudSection: PanelSection = {
 
     async function setOn(on: boolean): Promise<void> {
       busy = true;
+      attempted = on;
+      errorLine.hidden = true;
+      retryWrite.hidden = true;
       render();
       let result: ActionResult;
       try {
@@ -120,12 +293,13 @@ export const localTinycloudSection: PanelSection = {
       busy = false;
       if (disposed) return;
       errorLine.hidden = result.ok;
-      errorLine.textContent = result.ok ? "" : ctx.text("view.action.error");
+      retryWrite.hidden = result.ok;
+      if (result.ok) attempted = undefined;
       await load();
     }
 
     toggle.addEventListener("click", () => {
-      if (busy || node === undefined) return;
+      if (busy || node === undefined || node.connection === "unavailable") return;
       void setOn(node.connection === "off");
     });
 
@@ -133,7 +307,9 @@ export const localTinycloudSection: PanelSection = {
       if (view === "local") void load();
     });
 
-    el.append(line.status, line.retry, content);
+    const style = document.createElement("style");
+    style.textContent = STYLE + UI_STYLE;
+    el.append(style, line.status, line.retry, content);
     startLoading(line, ctx);
     void load();
 
