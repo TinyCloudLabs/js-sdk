@@ -467,7 +467,10 @@ function mountLocalCopy(el: HTMLElement, ctx: SectionContext): () => void {
   async function load(): Promise<void> {
     const source = ctx.data.source;
     if (!source) {
+      // Signed out, or no data source: the facade drives the switch and nothing is on its way, so no "Loading…".
       copy = undefined;
+      viewLine.status.hidden = true;
+      viewLine.retry.hidden = true;
       render();
       return;
     }

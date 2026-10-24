@@ -98,8 +98,11 @@ const facade = {
   async wipeLocalData() {},
 };
 
+// Sign-in state the harness client reports; `setSignedIn` and `signOut` change it.
+let signedIn = true;
+
 const source = {
-  signedIn: () => true,
+  signedIn: () => signedIn,
   get sync() {
     return facade;
   },
@@ -110,10 +113,11 @@ let handle: UiClientHandle | undefined;
 
 const w = window as unknown as Record<string, unknown>;
 w.__tc = {
-  mount() {
+  mount(options: { developerMode?: boolean; signedIn?: boolean } = {}) {
     handle?.unregister();
+    signedIn = options.signedIn ?? true;
     handle = registerUiClient({
-      ui: { developerMode: false },
+      ui: { developerMode: options.developerMode ?? false },
       source: source as never,
       manifestAppId: () => "e2e-prefetch",
     });
@@ -125,6 +129,12 @@ w.__tc = {
   async arm() {
     handle?.armPrefetch(host as never);
     await import("../../src/ui/panel-data-entry");
+    return true;
+  },
+  // The user signs out: the client reports signed out, and its view state is cleared, as tcw's signOut does.
+  signOut() {
+    signedIn = false;
+    handle?.reset();
     return true;
   },
   // Sign-out path: clears this client's view state and cancels a pending pull.
