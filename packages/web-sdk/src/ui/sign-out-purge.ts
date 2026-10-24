@@ -49,6 +49,12 @@ export function purgeWatch(client: PanelClient | undefined): PurgeWatch | undefi
 }
 
 /**
+ * The answer given for a purge that did not settle within `PURGE_TIMEOUT_MS`. It is compared by identity: a timeout
+ * is a failed attempt that says nothing about the keys, unlike a failure the host reported itself.
+ */
+const TIMED_OUT: PurgeLocalCopyResult = Object.freeze({ ok: false, retryNow: false });
+
+/**
  * Runs the host's purge, raced against `PURGE_TIMEOUT_MS`. A throw, a malformed answer or a timeout is a failed
  * attempt that keeps no claim about the keys. A purge that settles after the timeout is ignored: the attempt has
  * already reported failure, and the warning stays until a retry succeeds. A late rejection is swallowed here.
@@ -62,7 +68,7 @@ function attempt(purge: () => Promise<PurgeLocalCopyResult>): Promise<PurgeLocal
       clearTimeout(timer);
       resolve(result);
     };
-    const timer = setTimeout(() => finish({ ok: false, retryNow: false }), PURGE_TIMEOUT_MS);
+    const timer = setTimeout(() => finish(TIMED_OUT), PURGE_TIMEOUT_MS);
     Promise.resolve()
       .then(purge)
       .then(
@@ -97,17 +103,21 @@ function createEntry(client: PanelClient, purge: () => Promise<PurgeLocalCopyRes
       };
     },
     settle(result, readable) {
+      // The keys may still be readable if the host said so (this answer, or the run's first one). A timeout keeps no
+      // claim about the keys, so it leaves an earlier "readable" in place; a failure the host reported replaces it.
+      const keepsReadable = failure === "readable" && result === TIMED_OUT;
+      const next: PurgeFailure = readable || (result.ok === false && result.retryNow) || keepsReadable ? "readable" : "pending";
       if (client.signedIn()) {
         // Someone signed in while the purge ran: record the failure, say nothing to them, never clear on their watch.
-        if (result.ok === false) set(failure === "readable" ? "readable" : "pending");
+        if (result.ok === false) set(next);
         return;
       }
       if (result.ok === true) {
         set(undefined);
         return;
       }
-      set(readable ? "readable" : "pending");
-      toast({ kind: "warning", textCode: readable ? "local-copy.purge.toast.readable" : "local-copy.purge.toast.pending" });
+      set(next);
+      toast({ kind: "warning", textCode: next === "readable" ? "local-copy.purge.toast.readable" : "local-copy.purge.toast.pending" });
     },
     markPending() {
       set(failure === "readable" ? "readable" : "pending");
