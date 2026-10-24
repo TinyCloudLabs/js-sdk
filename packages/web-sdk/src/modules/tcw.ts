@@ -30,6 +30,7 @@ import {
 import {
   resolveReplicationConfig,
   validateReplicationConfig,
+  type LocalCopyPurgeFailedEvent,
 } from "./replica-wiring";
 import {
   IKVService,
@@ -78,7 +79,6 @@ import {
   createLocalStorageLocalNodeIdentityStore,
   createLocalStorageRegistrySequenceStore,
   type StorageFullEvent,
-  type ReplicaPurgeFailedEvent,
   type IStorageService,
 } from "@tinycloud/sdk-core";
 import { showPermissionRequestModal } from "../notifications/ModalManager";
@@ -370,7 +370,7 @@ export class TinyCloudWeb {
   private _credentialsService?: CredentialsService;
   private _shareReceiverService?: ShareReceiverService;
   private readonly storageFullHandlers = new Set<(event: StorageFullEvent) => void>();
-  private readonly purgeFailedHandlers = new Set<(event: ReplicaPurgeFailedEvent) => void>();
+  private readonly purgeFailedHandlers = new Set<(event: LocalCopyPurgeFailedEvent) => void>();
 
   /** Promise that resolves when WASM + node are ready */
   private _initPromise: Promise<void>;
@@ -597,13 +597,13 @@ export class TinyCloudWeb {
    * reason and `retryNow`. The SDK retries again on the next load; `replication.purgeLocalCopy()`
    * retries now. Safe to call before initialization finishes. Returns the unsubscribe function.
    */
-  on(event: "replica.purge.failed", handler: (event: ReplicaPurgeFailedEvent) => void): () => void;
+  on(event: "replica.purge.failed", handler: (event: LocalCopyPurgeFailedEvent) => void): () => void;
   on(
     event: "storage.full" | "replica.purge.failed",
-    handler: ((event: StorageFullEvent) => void) | ((event: ReplicaPurgeFailedEvent) => void),
+    handler: ((event: StorageFullEvent) => void) | ((event: LocalCopyPurgeFailedEvent) => void),
   ): () => void {
     if (event === "replica.purge.failed") {
-      const listener = handler as (event: ReplicaPurgeFailedEvent) => void;
+      const listener = handler as (event: LocalCopyPurgeFailedEvent) => void;
       this.purgeFailedHandlers.add(listener);
       return () => {
         this.purgeFailedHandlers.delete(listener);
