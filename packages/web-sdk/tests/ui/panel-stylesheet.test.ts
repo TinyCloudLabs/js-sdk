@@ -161,6 +161,9 @@ describe("panel stylesheet targets", () => {
     for (const nav of shadow().querySelectorAll<HTMLButtonElement>(".nav-i")) {
       nav.click();
       for (const el of shadow().querySelectorAll("[class]")) for (const cls of el.classList) applied.add(cls);
+      // The Local copy section offers a wipe: open its confirm so the confirm box classes render too.
+      shadow().querySelector<HTMLButtonElement>("section.lc-wipe > button.action")?.click();
+      for (const el of shadow().querySelectorAll("[class]")) for (const cls of el.classList) applied.add(cls);
     }
     for (const cls of appliedClassesAcrossKinds()) applied.add(cls);
     const missing = [...targetedClasses(stylesheetText(shadow()))].filter((cls) => !applied.has(cls)).sort();
@@ -306,6 +309,48 @@ async function renderedCss(): Promise<string> {
   toastStore.push({ kind: "warning", textCode: "panel.title", href: "https://example.com/docs", hrefLabelCode: "panel.close" });
   return stylesheetText(shadow());
 }
+
+describe("switch", () => {
+  test("is the mockup's 56x30 track with a 22px thumb, in both schemes", async () => {
+    const css = await renderedCss();
+    for (const scheme of ["light", "dark"] as const) {
+      const knob = resolvedDeclarations(css, scheme, ".knob");
+      expect([knob.get("width"), knob.get("height")]).toEqual(["56px", "30px"]);
+      const thumb = resolvedDeclarations(css, scheme, ".knob::after");
+      expect([thumb.get("width"), thumb.get("height")]).toEqual(["22px", "22px"]);
+    }
+    expect(resolvedDeclarations(css, "light", ".switch").get("width")).toBe("56px");
+  });
+
+  test("the thumb is black when off and the track fill is muted (light), with the inverse in dark", async () => {
+    const css = await renderedCss();
+    expect(resolvedDeclarations(css, "light", ".knob::after").get("background")).toBe("#09090b");
+    expect(resolvedDeclarations(css, "light", ".knob::before").get("background")).toBe("#f4f4f5");
+    expect(resolvedDeclarations(css, "dark", ".knob::after").get("background")).toBe("#fafafa");
+    expect(resolvedDeclarations(css, "dark", ".knob::before").get("background")).toBe("#27272a");
+  });
+
+  test("on is a black track with a white thumb (light) and a white track with a black thumb (dark)", async () => {
+    const css = await renderedCss();
+    const on = ".switch[aria-checked=\"true\"] .knob";
+    expect(resolvedDeclarations(css, "light", on).get("background")).toBe("#09090b");
+    expect(resolvedDeclarations(css, "light", `${on}::after`).get("background")).toBe("#fff");
+    expect(resolvedDeclarations(css, "dark", on).get("background")).toBe("#fafafa");
+    expect(resolvedDeclarations(css, "dark", `${on}::after`).get("background")).toBe("#09090b");
+  });
+});
+
+describe("warning status dot", () => {
+  test("uses the mockup's warning colour: #b35309 in light, #fbbd23 on the dark surface", async () => {
+    const css = await renderedCss();
+    const light = resolvedDeclarations(css, "light", ".st-warn .dot");
+    expect(light.get("background")).toBe("#b35309");
+    expect(light.get("box-shadow")).toBe("0 0 0 1.5px #fff,0 0 0 2.5px #b35309");
+    const dark = resolvedDeclarations(css, "dark", ".st-warn .dot");
+    expect(dark.get("background")).toBe("#fbbd23");
+    expect(dark.get("box-shadow")).toBe("0 0 0 1.5px #151517,0 0 0 2.5px #fbbd23");
+  });
+});
 
 describe("panel colour scheme", () => {
   test("dark scheme paints the panel, toasts and text on the dark surface", async () => {

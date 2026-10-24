@@ -479,6 +479,7 @@ export class TinyCloudWeb {
       ui: config.ui,
       source: {
         signedIn: () => this.session() !== undefined,
+        waitForAccountRegistrySync: () => this._node?.waitForAccountRegistrySync() ?? Promise.resolve(),
         storage: { status: () => this.storage.status() },
         storageEpisode: this.uiStorageEpisode,
         signOut: this.signOut,
@@ -891,9 +892,16 @@ export class TinyCloudWeb {
       }
       const node = await this.ensureNode();
       assertNotSignedOut();
-      await node.restoreSession(restoreDataFromPersisted(loaded.data));
+      const was = node.spaceId;
+      try {
+        await node.restoreSession(restoreDataFromPersisted(loaded.data));
+      } finally {
+        // Also when a later step throws after the node committed the new account. A sign-out resets itself.
+        if (was && was !== node.spaceId && this.signOutCount === signOuts && !this.signOutInFlight) this.uiClient.reset();
+      }
       assertNotSignedOut();
       this.resetSessionScopedCaches();
+      this.uiClient.armPrefetch(this);
       this._sessionRestoreStatus = "restored";
       return {
         status: "restored",
@@ -982,9 +990,15 @@ export class TinyCloudWeb {
     // A sign-out during the restore must not fall through to a fresh sign-in.
     assertNotSignedOut();
     this._sessionRestoreStatus = "logging-in";
-    await node.signIn(options);
+    const was = node.spaceId;
+    try {
+      await node.signIn(options);
+    } finally {
+      if (was && was !== node.spaceId && this.signOutCount === signOuts && !this.signOutInFlight) this.uiClient.reset();
+    }
     assertNotSignedOut();
     this.resetSessionScopedCaches();
+    this.uiClient.armPrefetch(this);
     const session = node.session;
     if (!session) throw new Error("Sign-in completed but no session available");
     // Explicit logout never permits an older tab's persisted proof to satisfy the next sign-in.

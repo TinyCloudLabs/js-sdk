@@ -34,7 +34,10 @@ export function createSectionData(
 ): SectionDataCache {
   const entries = new Map<CachedKey, Entry>();
   const listeners = new Set<() => void>();
+  // Public: changes only when the account does (reset). Sections capture it across awaits.
   let generation = 0;
+  // Read guard: also changes on stop, so a read started before the panel closed is dropped too.
+  let readEpoch = 0;
   let following = false;
   let unbind: (() => void) | undefined;
   let timer: ReturnType<typeof setInterval> | undefined;
@@ -46,14 +49,14 @@ export function createSectionData(
   async function read(key: CachedKey): Promise<void> {
     const source = getSource();
     if (source === undefined) return;
-    const mine = generation;
+    const mine = readEpoch;
     let result: ViewResult<unknown>;
     try {
       result = await source[key]();
     } catch {
       result = { state: "error", code: "unknown" };
     }
-    if (mine !== generation) return;
+    if (mine !== readEpoch) return;
     entries.set(key, { result, at: now() });
     emit();
   }
@@ -79,6 +82,7 @@ export function createSectionData(
       return entry === undefined ? undefined : now() - entry.at;
     },
     refresh,
+    generation: () => generation,
     subscribe(listener) {
       listeners.add(listener);
       return () => {
@@ -94,7 +98,7 @@ export function createSectionData(
     },
     stop() {
       following = false;
-      generation++;
+      readEpoch++;
       unbind?.();
       unbind = undefined;
       if (timer !== undefined) clearInterval(timer);
@@ -102,6 +106,7 @@ export function createSectionData(
     },
     reset() {
       generation++;
+      readEpoch++;
       entries.clear();
       emit();
       if (!following) return;

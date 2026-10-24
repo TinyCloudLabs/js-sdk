@@ -5,16 +5,21 @@
  * sections and PANEL_CSS into it. The host reaches this module only through
  * dynamic import(), which is the one exception to ts-no-dynamic-import.
  */
+import type { ActionResult, PanelDataSource, PanelView, RevokeOutcome } from "./data";
+import { PANEL_VIEWS } from "./data";
 import type { LayoutOptions, NavItem, PanelHandle, PanelOptions, ShellLayout } from "./panel";
+import { livePanelData, onLivePanelDataChange } from "./panel-data-entry";
 import { createPanel } from "./panel";
 import { mountToastRegion, TOAST_REGION_CSS, type ReceiptRequest } from "./panel-toasts";
 import { PANEL_CSS } from "./panel-styles";
 import { PANEL_SECTIONS } from "./sections";
 import { createSectionData } from "./section-data";
 import { createSectionDialogs } from "./section-dialogs";
+import { createSignOutGuard } from "./sign-out-purge";
 import { panelText } from "./strings-panel";
-import type { HostContext, PanelSection, SectionContext, SectionId } from "./slots";
+import type { HostContext, PanelClient, PanelSection, SectionContext, SectionId } from "./slots";
 import type { ToastStore } from "./toast-store";
+import { viewLoading } from "./view-result";
 
 /** What the host passes on each render. The shell keeps the section between renders. */
 export interface ShellView extends LayoutOptions {
@@ -28,6 +33,70 @@ export interface ShellPanel extends PanelHandle {
   render(view: ShellView): void;
   /** Disposes the mounted section. The host calls it on unmount. */
   dispose(): void;
+}
+
+const NOT_READY: ActionResult & RevokeOutcome = { ok: false, code: "stale" };
+
+/**
+ * The client's data as sections see it. Before the live source is armed, reads
+ * return loading and actions fail as stale. Once armed (or dropped on reset),
+ * every subscriber gets each view so sections re-read.
+ */
+function proxyFor(client: PanelClient): PanelDataSource {
+  const listeners = new Set<(view: PanelView) => void>();
+  const forward = (view: PanelView): void => {
+    for (const cb of [...listeners]) cb(view);
+  };
+  let real: PanelDataSource | undefined;
+  let offReal: (() => void) | undefined;
+  const follow = (): void => {
+    const next = livePanelData(client);
+    if (next === real) return;
+    offReal?.();
+    real = next;
+    offReal = next?.subscribe(forward);
+    for (const view of PANEL_VIEWS) forward(view);
+  };
+  onLivePanelDataChange(client, follow);
+  follow();
+  return {
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    account: () => real?.account() ?? viewLoading(),
+    localNode: () => real?.localNode() ?? viewLoading(),
+    localCopy: () => real?.localCopy() ?? viewLoading(),
+    nodes: () => real?.nodes() ?? viewLoading(),
+    storage: (options) => real?.storage(options) ?? viewLoading(),
+    delegations: (cursor) => real?.delegations(cursor) ?? viewLoading(),
+    revoke: (cid) => real?.revoke(cid) ?? NOT_READY,
+    setLocalNodeEnabled: (enabled) => real?.setLocalNodeEnabled(enabled) ?? NOT_READY,
+    get requests() {
+      const source = real;
+      return source?.requests ? () => source.requests?.() ?? viewLoading() : undefined;
+    },
+  } as PanelDataSource;
+}
+
+const wrappedClients = new WeakMap<PanelClient, PanelClient>();
+
+/**
+ * The client a section sees: same methods and state, with `data` routed through the proxy while
+ * signed in. Signed out there is no live source to wait for, so a client without its own data
+ * has none, and sections show their no-data state instead of a loading line that never ends.
+ */
+function sectionClient(client: PanelClient): PanelClient {
+  let wrapped = wrappedClients.get(client);
+  if (wrapped === undefined) {
+    wrapped = Object.create(client, {
+      data: { get: () => client.data ?? (client.signedIn() ? proxyFor(client) : undefined), enumerable: true },
+    }) as PanelClient;
+    wrappedClients.set(client, wrapped);
+  }
+  return wrapped;
 }
 
 /**
@@ -54,10 +123,18 @@ export function mountPanel(root: ShadowRoot, options: Omit<PanelOptions, "onNavi
   });
   const layer = root.querySelector<HTMLElement>(".layer");
   const region = layer ? mountToastRegion(layer, toasts, (request) => base.toast(request)) : undefined;
-  const data = createSectionData(() => base.client()?.data);
+  /** The client as sections see it: `data` routes through the proxy until the live source is armed. */
+  const seen = (): PanelClient | undefined => {
+    const client = base.client();
+    return client && sectionClient(client);
+  };
+  const data = createSectionData(() => seen()?.data);
   const dialogs = createSectionDialogs(() => sectionEl);
+  const guardSignOut = createSignOutGuard((request) => base.toast(request));
   const context: SectionContext = {
     ...base,
+    // Sections see the client with sign-out removing the local copy once the session has ended.
+    client: () => guardSignOut(seen()),
     text: panelText,
     data,
     layout: () => view.layout,
@@ -99,14 +176,25 @@ export function mountPanel(root: ShadowRoot, options: Omit<PanelOptions, "onNavi
   }
   const offData = data.subscribe(paintNav);
 
+  /**
+   * An account change (sign-out, account switch, client change) invalidates everything keyed by the
+   * old account: cached reads and in-flight ones (generation), open confirm boxes and drawers
+   * (their callbacks hold the old account's ids), and receipt slips.
+   */
+  function accountChanged(): void {
+    data.reset();
+    dialogs.closeAll();
+    region?.clearReceipts();
+  }
+
   let offReset: (() => void) | undefined;
   function watchClient(): void {
     offReset?.();
-    offReset = base.client()?.onReset(() => data.reset());
+    offReset = base.client()?.onReset(accountChanged);
   }
   const offClient = base.onClientChange(() => {
     watchClient();
-    data.reset();
+    accountChanged();
   });
   watchClient();
 

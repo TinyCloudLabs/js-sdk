@@ -10,11 +10,16 @@ const DIR = resolve("e2e/.build/ui");
 const ORIGIN = "http://tinycloud-ui.test";
 const ENTRY = "harness-entry.js";
 
-const FILES = new Map(
-  readdirSync(DIR)
-    .filter((name) => name.endsWith(".js"))
-    .map((name) => [name, readFileSync(resolve(DIR, name), "utf8")]),
-);
+// Reads every built .js file in a harness output directory.
+export function loadBuild(dir: string): Map<string, string> {
+  return new Map(
+    readdirSync(dir)
+      .filter((name) => name.endsWith(".js"))
+      .map((name) => [name, readFileSync(resolve(dir, name), "utf8")]),
+  );
+}
+
+const FILES = loadBuild(DIR);
 
 const PANEL_CHUNK = /^panel-entry-.+\.js$/;
 
@@ -39,19 +44,20 @@ export function defaultDocument(frameTag = ""): string {
 export async function routeUiHarness(
   page: Page,
   pageHtml: (path: string) => string = () => defaultDocument(),
+  files: ReadonlyMap<string, string> = FILES,
 ): Promise<string[]> {
   const requested: string[] = [];
   await page.route(`${ORIGIN}/**`, (route) => {
     const path = new URL(route.request().url()).pathname;
     const name = path.slice(1);
-    if (FILES.has(name)) {
+    if (files.has(name)) {
       requested.push(name);
       // Module scripts are fetched in CORS mode. A sandboxed frame has an opaque origin, so it needs this header.
       return route.fulfill({
         status: 200,
         contentType: "text/javascript",
         headers: { "access-control-allow-origin": "*" },
-        body: FILES.get(name),
+        body: files.get(name),
       });
     }
     return route.fulfill({ status: 200, contentType: "text/html", body: pageHtml(path) });

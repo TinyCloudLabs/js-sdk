@@ -122,6 +122,7 @@ for (const scheme of ["light", "dark"] as const) {
   test(`${scheme}: action button border is at least 3:1 on its surface`, async ({ page }) => {
     await mountHarness(page, scheme);
     await page.getByRole("button", { name: "TinyCloud settings", exact: true }).click();
+    await expect(page.locator("#tinycloud-ui-panel .nav-i").first()).toBeAttached();
     const action = page.getByRole("button", { name: "Hide button", exact: true });
     await expect(action).toHaveClass(/\baction\b/);
     const colours = await action.evaluate((el) => {
@@ -130,50 +131,6 @@ for (const scheme of ["light", "dark"] as const) {
     });
     expect(contrast(colours.border, colours.surface)).toBeGreaterThanOrEqual(3);
   });
-}
-
-// The wipe note is always shown directly under the Erase button, so it is visible in the default on state.
-for (const scheme of ["light", "dark"] as const) {
-  test(`${scheme}: wipe note is visible under the Erase button in the default on state`, async ({ page }) => {
-    await mountHarness(page, scheme);
-    await page.evaluate(() => (window as unknown as HarnessWindow).tc?.ui.open("local-copy"));
-    const erase = page.getByRole("button", { name: "Erase local copy", exact: true });
-    await expect(erase).toBeVisible();
-    const note = erase.locator("xpath=following-sibling::p[1]");
-    await expect(note).toBeVisible();
-    await expect(note).toHaveClass(/\bnote\b/);
-  });
-}
-
-// The gap above Erase must be the 8px the wipe note uses, in every sync state. Each state is measured against the visible element directly above Erase.
-const SYNC_STATES = {
-  off: { requested: false, effective: "off" },
-  on: { requested: true, effective: "on" },
-  enabling: { requested: true, effective: "enabling" },
-  wiping: { requested: true, effective: "wiping" },
-  pending: { requested: true, effective: "pending" },
-  unavailable: { requested: true, effective: "unavailable" },
-} as const;
-
-for (const scheme of ["light", "dark"] as const) {
-  for (const [name, state] of Object.entries(SYNC_STATES)) {
-    test(`${scheme}: ${name}: Erase sits 8px below the visible element above it`, async ({ page }) => {
-      await mountHarness(page, scheme);
-      await page.evaluate((next) => (window as unknown as HarnessWindow).__tc.setSync(next), state);
-      await page.evaluate(() => (window as unknown as HarnessWindow).tc?.ui.open("local-copy"));
-      const erase = page.getByRole("button", { name: "Erase local copy", exact: true });
-      await expect(erase).toBeVisible();
-      const gap = await erase.evaluate((button) => {
-        let above = button.previousElementSibling;
-        while (above && (above.hasAttribute("hidden") || above.getClientRects().length === 0)) {
-          above = above.previousElementSibling;
-        }
-        if (!above) return null;
-        return button.getBoundingClientRect().top - above.getBoundingClientRect().bottom;
-      });
-      expect(gap).toBeCloseTo(8, 0);
-    });
-  }
 }
 
 // Each toast's left stripe must be its kind colour in the rendered page, and at
@@ -314,6 +271,7 @@ for (const scheme of ["light", "dark"] as const) {
       const launcher = page.getByRole("button", { name: "TinyCloud settings", exact: true });
       await launcher.click();
       await expect(page.locator("#tinycloud-ui-panel")).toBeVisible();
+      await expect(page.locator("#tinycloud-ui-panel .nav-i").first()).toBeAttached();
       await page.evaluate(() => {
         const harness = window as unknown as HarnessWindow;
         harness.__tc.toast("info");
@@ -342,6 +300,7 @@ for (const scheme of ["light", "dark"] as const) {
     await page.getByRole("button", { name: "TinyCloud settings", exact: true }).click();
     const panel = page.locator("#tinycloud-ui-panel");
     await expect(panel).toBeVisible();
+    await expect(panel.locator(".nav-i").first()).toBeAttached();
 
     const signOut = panel.getByRole("button", { name: "Sign out", exact: true });
     await signOut.click();

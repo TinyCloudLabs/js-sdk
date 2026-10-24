@@ -104,6 +104,11 @@ export interface SectionData {
   readonly source: PanelDataSource | undefined;
   /** Last result the shell read for `key`; undefined until the first read settles. Never waits. */
   latest<K extends Exclude<DataKey, "account">>(key: K): ViewResult<DataViews[K]> | undefined;
+  /**
+   * Account generation: a number that changes on every reset (sign-out, account switch, client change).
+   * Capture it before any await whose result is keyed by account and discard the result if it changed.
+   */
+  generation(): number;
   /** Milliseconds since `latest(key)` settled; undefined when it never has. */
   age(key: Exclude<DataKey, "account">): number | undefined;
   /** Re-reads one view, or all of them. Resolves once the cache holds the new results. */
@@ -207,6 +212,12 @@ export interface HostPart {
 /** Authority kinds a client can be asked for. The bridge is internal; views without it show a neutral line. */
 export type AuthorityKind = "kv/sync" | "space/info" | "delegation/list" | "space/list";
 
+/**
+ * Outcome of `purgeLocalCopy`. `retryNow` is true when the replica keys may still be in the database
+ * (deny outcome marker or unguarded), so the copy may still be readable and one immediate retry is worthwhile.
+ */
+export type PurgeLocalCopyResult = { readonly ok: true } | { readonly ok: false; readonly retryNow: boolean };
+
 /** Narrow adapter built by ui/client.ts from TinyCloudWeb. */
 export interface PanelClient {
   readonly id: number;
@@ -234,4 +245,9 @@ export interface PanelClient {
   readonly data?: PanelDataSource | undefined;
   /** Signs out of the TinyCloud session. Undefined when the host cannot sign out; Overview then omits the control. */
   readonly signOut?: (() => Promise<void>) | undefined;
+  /**
+   * Removes the local copy from this browser after sign-out. Supplied by the host app or the SDK; the panel
+   * only calls it, after `signOut` has settled. Undefined: nothing to purge.
+   */
+  readonly purgeLocalCopy?: (() => Promise<PurgeLocalCopyResult>) | undefined;
 }

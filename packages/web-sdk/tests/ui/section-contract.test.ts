@@ -37,7 +37,7 @@ const failed = { state: "error", code: "unknown" } as ViewResult<never>;
 interface CtxOptions {
   views?: Record<string, ViewResult<unknown>>;
   source?: boolean;
-  requests?: () => unknown;
+  requests?: { snapshot(): readonly unknown[] };
   signedIn?: boolean;
 }
 
@@ -48,7 +48,7 @@ function ctxWith(options: CtxOptions = {}): SectionContext {
   return {
     client: () => ({
       signedIn: () => options.signedIn ?? true,
-      data: options.requests === undefined ? undefined : { requests: options.requests },
+      requests: options.requests,
     }),
     text: panelText,
     data: {
@@ -176,11 +176,10 @@ describe("status(ctx): each section", () => {
 
   test("activity: nothing without request logs; 'No errors' with a Clear rail value; failures counted", () => {
     expect(section("activity").status(ctxWith())).toBeUndefined();
-    const clean = section("activity").status(ctxWith({ requests: () => ({ rows: () => [{ ok: true }] }) }));
+    const log = (...ok: boolean[]) => ({ snapshot: () => ok.map((value, id) => ({ id, ok: value })) });
+    const clean = section("activity").status(ctxWith({ requests: log(true) }));
     expect(clean).toEqual({ text: "No errors", tone: "ok", count: "Clear" });
-    const failing = section("activity").status(
-      ctxWith({ requests: () => ({ rows: () => [{ ok: true }, { ok: false }, { ok: false }] }) }),
-    );
+    const failing = section("activity").status(ctxWith({ requests: log(true, false, false) }));
     expect(failing).toEqual({ text: "2 errors", tone: "warn" });
   });
 });

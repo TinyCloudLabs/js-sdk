@@ -71,9 +71,19 @@ export interface PanelRoute {
  */
 export type PermissionAbility = "delegation/list" | "space/info" | "space/list";
 
+/** Read freshness, attached to ready results by the live adapter. */
+export interface Freshness {
+  /** When the shown data was last read successfully (epoch ms). */
+  readonly updatedAt: number;
+  /** A refresh is in flight. */
+  readonly refreshing: boolean;
+  /** Code of the last refresh that failed. Cleared by the next success. */
+  readonly lastError?: string;
+}
+
 export type ViewResult<T> =
   | { readonly state: "loading" }
-  | { readonly state: "ready"; readonly data: T }
+  | { readonly state: "ready"; readonly data: T; readonly freshness?: Freshness }
   | { readonly state: "needs-permission"; readonly ability: PermissionAbility }
   | { readonly state: "error"; readonly code: string };
 
@@ -309,8 +319,8 @@ export declare function describeAbilities(
 // ---------------------------------------------------------------------------
 
 export interface PanelDataHost {
-  readonly account: Pick<AccountService, "status">;
-  readonly delegations: Pick<DelegationManager, "query" | "revoke">;
+  readonly account: Pick<AccountService, "index">;
+  readonly delegations: Pick<DelegationManager, "query" | "revoke" | "status">;
   readonly storage: Pick<IStorageService, "status">;
   readonly hosts: readonly string[];
   /** Current account DID (`tc.did`). */
@@ -344,7 +354,8 @@ export interface PanelDataSource {
 
   nodes(): Promise<ViewResult<readonly NodeRow[]>>;
 
-  storage(): Promise<ViewResult<StorageView>>;
+  /** `fresh` awaits a network read now. Otherwise a cached value is returned, refreshed in the background only when stale. */
+  storage(options?: { readonly fresh?: boolean }): Promise<ViewResult<StorageView>>;
 
   /** Present only when developer mode is on. Absent otherwise. */
   requests?(): RequestsView;

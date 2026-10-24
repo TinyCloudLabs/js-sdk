@@ -84,7 +84,11 @@ function ctxFor(client: PanelClient, developerMode = false): HostContext {
     toast: () => "",
     openPanel: () => undefined,
     closePanel: () => undefined,
+    appLabel: () => undefined,
+    requestRender: () => undefined,
+    data: { latest: () => undefined, subscribe: () => () => undefined },
     text,
+    appLabel: () => undefined,
   } as unknown as HostContext;
 }
 
@@ -205,7 +209,7 @@ describe("local tinycloud section", () => {
 });
 
 describe("nodes section", () => {
-  test("lists each node by origin", async () => {
+  test("lists each node by its host", async () => {
     const el = mount(
       nodesSection,
       clientWith(
@@ -226,7 +230,7 @@ describe("nodes section", () => {
       ),
     );
     await flush();
-    expect(labels(el)).toEqual(["https://node.test"]);
+    expect(labels(el)).toEqual(["node.test"]);
   });
 
   test("a failed read shows the error with retry", async () => {
@@ -249,16 +253,16 @@ describe("activity section", () => {
 
   test("lists requests newest first", async () => {
     const requests = {
-      rows: () => [request("get", "a"), request("put", "b")],
+      snapshot: () => [request("get", "a"), request("put", "b")],
       subscribe: () => () => undefined,
+      onClear: () => () => undefined,
     };
-    const el = mount(
-      activitySection,
-      clientWith(fakeData({ requests: () => requests })),
-      true,
-    );
+    const el = mount(activitySection, { ...clientWith(fakeData({})), requests } as PanelClient, true);
     await flush();
-    expect(labels(el)).toEqual(["put b", "get a"]);
+    const rows = [...el.querySelectorAll(".act-ar:not(.act-hd)")].map(
+      (node) => `${node.querySelector(".act-c-op")?.textContent} ${node.querySelector(".act-c-path")?.textContent}`,
+    );
+    expect(rows).toEqual(["put b", "get a"]);
   });
 });
 

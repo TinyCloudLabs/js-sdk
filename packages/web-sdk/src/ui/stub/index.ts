@@ -24,10 +24,32 @@ import type {
 } from "../data";
 import { viewReady } from "../view-result";
 
-/** Per-view results a preview or test can pin. One optional field per section; absent fields keep the defaults below. */
+/**
+ * Per-view stub overrides, so a preview or e2e spec can reach states the defaults never produce.
+ * One optional field per section; a missing field keeps that section's default.
+ */
 export interface StubSeed {
+  storage?: ViewResult<StorageView>;
+  nodes?: ViewResult<readonly NodeRow[]>;
   delegations?: StubDelegationsSeed;
+  /**
+   * Local TinyCloud state. Default: off. Enabling moves off -> looking -> found,
+   * or -> not-found when this is `not-found`.
+   */
+  localNode?: LocalNodeState;
+  /** Local copy status. Replaces the default (a settled copy that follows the sync facade). */
+  readonly localCopy?: LocalCopyStatus;
 }
+
+const STUB_LOCAL_SETTLE_MS = 600;
+
+const STUB_LOCAL_FOUND: LocalNodeState = {
+  source: "stub",
+  connection: "found",
+  url: "http://127.0.0.1:8787",
+  identity: { origin: "http://127.0.0.1:8787", nodeDid: "did:example:stub-local-node" },
+  version: "v0.14.2",
+};
 
 export function createStubPanelData(seed: StubSeed = {}): PanelDataFactory {
   return (client) => {
@@ -35,35 +57,75 @@ export function createStubPanelData(seed: StubSeed = {}): PanelDataFactory {
       rows: () => [],
       subscribe: () => () => undefined,
     };
+    const localListeners = new Set<(view: PanelView) => void>();
+    let localNode: LocalNodeState = seed.localNode ?? { source: "stub", connection: "off" };
+    let pending: { timer: ReturnType<typeof setTimeout>; resolve: (result: ActionResult) => void } | undefined;
+
+    const setLocalNode = (next: LocalNodeState): void => {
+      localNode = next;
+      for (const listener of localListeners) listener("local");
+    };
 
     return {
       // A sync facade change re-reads only the local-copy view.
       subscribe(listener) {
-        return client.sync?.subscribe(() => listener("copy" satisfies PanelView)) ?? (() => undefined);
+        localListeners.add(listener);
+        const unsubscribeSync =
+          client.sync?.subscribe(() => listener("copy" satisfies PanelView)) ?? (() => undefined);
+        return () => {
+          localListeners.delete(listener);
+          unsubscribeSync();
+        };
       },
       account: () => Promise.resolve(viewReady<AccountInfo>(STUB_ACCOUNT)),
-      localNode: () =>
-        Promise.resolve(viewReady<LocalNodeState>({ source: "stub", connection: "off" })),
-      // Stub: reports success without changing the reported connection state.
-      setLocalNodeEnabled: () => Promise.resolve<ActionResult>({ ok: true }),
+      localNode: () => Promise.resolve(viewReady<LocalNodeState>(localNode)),
+      // Stub: a short timer stands in for the real check. Cancelling while looking
+      // (switch off) clears the timer and settles the pending enable as ok.
+      setLocalNodeEnabled: (on: boolean) => {
+        if (pending) {
+          clearTimeout(pending.timer);
+          pending.resolve({ ok: true });
+          pending = undefined;
+        }
+        if (!on) {
+          setLocalNode({ source: "stub", connection: "off" });
+          return Promise.resolve<ActionResult>({ ok: true });
+        }
+        setLocalNode({ source: "stub", connection: "looking" });
+        return new Promise<ActionResult>((resolve) => {
+          const timer = setTimeout(() => {
+            pending = undefined;
+            setLocalNode(
+              seed.localNode && seed.localNode.connection === "not-found"
+                ? seed.localNode
+                : STUB_LOCAL_FOUND,
+            );
+            resolve({ ok: true });
+          }, STUB_LOCAL_SETTLE_MS);
+          pending = { timer, resolve };
+        });
+      },
       localCopy: () => {
         const state = client.sync?.state;
         return Promise.resolve(
-          viewReady<LocalCopyStatus>({
-            source: "stub",
-            fieldSources: { requested: "real", effective: "real", reason: "real" },
-            requested: state?.requested ?? false,
-            effective: state?.effective ?? "unavailable",
-            reason: state?.reason,
-            folders: [STUB_FOLDER],
-            pending: 0,
-          }),
+          viewReady<LocalCopyStatus>(
+            seed.localCopy ?? {
+              source: "stub",
+              fieldSources: { requested: "real", effective: "real", reason: "real" },
+              requested: state?.requested ?? false,
+              effective: state?.effective ?? "unavailable",
+              reason: state?.reason,
+              folders: [STUB_FOLDER],
+              pending: 0,
+            },
+          ),
         );
       },
       ...delegationsStub(seed.delegations),
-      nodes: () => Promise.resolve(viewReady<readonly NodeRow[]>([STUB_NODE])),
+      nodes: () => Promise.resolve(seed.nodes ?? viewReady<readonly NodeRow[]>([STUB_NODE])),
       storage: () =>
         Promise.resolve(
+          seed.storage ??
           viewReady<StorageView>({
             source: "stub",
             usedBytes: 1_073_741_824,

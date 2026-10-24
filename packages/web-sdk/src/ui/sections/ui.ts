@@ -23,7 +23,8 @@ export const UI_STYLE = `
 .st-ok{color:#18181b}
 .st-ok .dot{background:currentColor}
 .st-warn{color:#92400e}
-.st-warn .dot{background:#b45309;box-shadow:0 0 0 1.5px #fff,0 0 0 2.5px #b45309}
+/* Warning colour from the mockup (panel-mock index.html: --tc-color-warning #b35309 light line 34, #fbbd23 dark line 57; .st-warn .dot line 259). */
+.st-warn .dot{background:#b35309;box-shadow:0 0 0 1.5px #fff,0 0 0 2.5px #b35309}
 .st-off,.st-info{color:#71717a}
 .st-off .dot,.st-info .dot{box-shadow:inset 0 0 0 2px currentColor}
 .st-info .dot::after{content:"";position:absolute;left:-1px;right:-1px;top:3.5px;height:2px;background:currentColor;transform:rotate(-45deg)}
@@ -35,7 +36,7 @@ export const UI_STYLE = `
 .drawer{border-color:#3f3f46;background:#151517}
 .st-ok{color:#fafafa}
 .st-warn{color:#fcd34d}
-.st-warn .dot{background:#f59e0b;box-shadow:0 0 0 1.5px #18181b,0 0 0 2.5px #f59e0b}
+.st-warn .dot{background:#fbbd23;box-shadow:0 0 0 1.5px #151517,0 0 0 2.5px #fbbd23}
 .st-off,.st-info{color:#a1a1aa}
 }
 `;
@@ -65,25 +66,34 @@ export interface ConfirmBox {
   readonly confirm: HTMLButtonElement;
 }
 
+let confirmSeq = 0;
+
 /**
  * Inline confirm for a destructive action. The cancel (safe) action comes first
- * in the DOM and is the one the caller focuses. The box is an alertdialog so a
- * screen reader announces the question.
+ * in the DOM and is the one the caller focuses. The box is an alertdialog whose
+ * question is its description, so a screen reader reads the question when focus
+ * lands on the safe action. Each box gets its own id, so two boxes never collide.
  */
 export function confirmBox(options: ConfirmOptions): ConfirmBox {
   const el = document.createElement("div");
   el.className = "confirm";
   el.setAttribute("role", "alertdialog");
+  const questionId = `tc-confirm-q-${++confirmSeq}`;
+  el.setAttribute("aria-describedby", questionId);
   // Escape takes the safe action, as the mockup's design rules require. Stopping
   // propagation keeps the panel's own Escape handler from closing the drawer.
+  // While the destructive action runs both buttons are disabled: Escape is
+  // swallowed then, so the box stays and focus stays where it is.
   el.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
     event.stopPropagation();
+    if (cancel.disabled || confirm.disabled) return;
     options.onCancel();
   });
 
   const question = document.createElement("p");
   question.className = "busy";
+  question.id = questionId;
   question.textContent = options.question;
 
   const actions = document.createElement("div");

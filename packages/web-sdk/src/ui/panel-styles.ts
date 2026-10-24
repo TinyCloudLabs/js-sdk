@@ -34,12 +34,15 @@ export const PANEL_CSS = `
 .layout-switch svg{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
 .row{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:44px}
 .label{font-weight:500}
-.switch{display:inline-flex;align-items:center;width:52px;min-width:44px;height:44px;padding:0;border:0;background:none;cursor:pointer}
+.switch{display:inline-flex;align-items:center;width:56px;min-width:44px;height:44px;padding:0;border:0;background:none;cursor:pointer}
 .switch:disabled{cursor:default;opacity:.6}
-.knob{position:relative;display:block;width:40px;height:24px;border-radius:12px;background:#71717a}
-.knob::after{content:"";position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;background:#fff;transition:transform .15s ease}
-.switch[aria-checked="true"] .knob{background:#111827}
-.switch[aria-checked="true"] .knob::after{transform:translateX(16px)}
+/* The mockup switch: a 56x30 track with a 1px #71717a edge (the .knob background, so it clears 3:1 on the panel) around a muted fill (::before), and a 22px thumb that is black when off and white on a black track when on. */
+.knob{position:relative;display:block;width:56px;height:30px;border-radius:999px;background:#71717a}
+.knob::before{content:"";position:absolute;inset:1px;border-radius:999px;background:#f4f4f5}
+.knob::after{content:"";position:absolute;top:4px;left:4px;width:22px;height:22px;border-radius:50%;background:#09090b;transition:transform .3s cubic-bezier(.22,1,.36,1)}
+.switch[aria-checked="true"] .knob{background:#09090b}
+.switch[aria-checked="true"] .knob::before{background:#09090b}
+.switch[aria-checked="true"] .knob::after{transform:translateX(26px);background:#fff}
 .busy,.note,.error{margin:6px 0 0;font-size:12px;color:#4b5563}
 .note{text-wrap:pretty}
 .action+.note,.note:not([hidden])+.action,.row~.action{margin-top:8px}
@@ -84,9 +87,11 @@ export const PANEL_CSS = `
 .action{border-color:#71717a;background:#151517;color:#fafafa}
 .action:hover{background:#27272a}
 .error{color:#fafafa}
-.knob{background:#71717a}
-.knob::after{background:#151517}
+.knob::before{background:#27272a}
+.knob::after{background:#fafafa}
 .switch[aria-checked="true"] .knob{background:#fafafa}
+.switch[aria-checked="true"] .knob::before{background:#fafafa}
+.switch[aria-checked="true"] .knob::after{background:#09090b}
 .layer .panel[data-layout="page"] .head{background:#151517;border-bottom-color:#69696b}
 .layer .panel[data-layout="page"] .nav{background:#151517;border-right-color:#69696b}
 .layer .panel[data-layout="page"] .nav-i{background:transparent}
