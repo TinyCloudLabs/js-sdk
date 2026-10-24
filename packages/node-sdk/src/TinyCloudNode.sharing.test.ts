@@ -1021,5 +1021,32 @@ describe("TinyCloudNode sharing", () => {
       }
       expect(JSON.stringify(failures[0], Object.getOwnPropertyNames(failures[0])).replace(/"stack":"[^"]*"/, "")).toBe(JSON.stringify(failures[1], Object.getOwnPropertyNames(failures[1])).replace(/"stack":"[^"]*"/, ""));
     });
+
+    test("failures that come before any node reply carry neither the link nor its key", async () => {
+      const failures: unknown[] = [];
+      const rejects = () => { throw new TypeError("fetch failed"); };
+      const answers = () => new Response("{}", { status: 200 });
+      const attempts = [
+        { respond: rejects, shareUrl: SHORT, expiresAt: "2030-01-01T00:01:00Z" },
+        { respond: answers, shareUrl: SHORT, expiresAt: "not a time" },
+        { respond: answers, shareUrl: FULL, expiresAt: "2030-01-01T00:01:00Z" },
+        { respond: answers, shareUrl: SHORT.replace("#v=4", "#v=3"), expiresAt: "2030-01-01T00:01:00Z" },
+      ];
+      for (const { respond, shareUrl, expiresAt } of attempts) {
+        const { node } = deliveryNode(respond);
+        try {
+          await node.authorizeShareDeliveryV3({ ...input(shareUrl), expiresAt });
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      expect(failures).toHaveLength(4);
+      for (const failure of failures) {
+        const text = JSON.stringify(failure, Object.getOwnPropertyNames(failure)) + String(failure);
+        expect(text).not.toContain(KEY);
+        expect(text).not.toContain("#v=4&k=");
+        expect(text).not.toContain("#v=3&k=");
+      }
+    });
   });
 });

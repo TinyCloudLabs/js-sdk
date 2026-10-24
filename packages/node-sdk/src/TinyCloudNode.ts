@@ -5890,7 +5890,7 @@ export class TinyCloudNode {
     if (!response.ok) {
       // The node's reply is part of the message; it must not carry the link or its key into a log.
       const failure = await httpResponseError(response, "V3 share delivery authorization failed");
-      throw Object.assign(new Error(withoutShareLink(failure.message, input.shareUrl)), { status: failure.status });
+      throw Object.assign(new Error(await withoutShareLink(failure.message, input.shareUrl)), { status: failure.status });
     }
     const verified = validateShareDeliveryAuthorizationV3Bytes(new Uint8Array(await response.arrayBuffer()), {
       request,
