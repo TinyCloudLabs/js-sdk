@@ -15,6 +15,7 @@ import { rootCeilingFor, validateTc1757RatchetTransition, validateTc1777ExpiryRa
 import { validateTc1781DecryptStandardExpiryRatchetTransition } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 import { replicaOwnedPath } from "./replica-owned-path";
+import { webSdkTestExitFailure } from "./web-sdk-test-exit";
 type Baseline = {
   webSdkTestBaseline: { ref: string; unhandledErrors: number; failingNames: string[]; unhandledSignatures: string[] };
 };
@@ -788,6 +789,11 @@ try {
   if (test.error) throw test.error;
   process.stdout.write(test.stdout);
   process.stderr.write(test.stderr);
+  const exitFailure = webSdkTestExitFailure(test.status, test.signal);
+  if (exitFailure) {
+    console.error(`${exitFailure}; the step fails on any non-zero exit even when the junit report is clean`);
+    failed = true;
+  }
   const xml = await readFile(report, "utf8");
   const cases = [...xml.matchAll(/<testcase\b([^>]*?)(?:\/>|>([\s\S]*?)<\/testcase>)/g)];
   const decode = (value: string) => value.replaceAll("&quot;", '"').replaceAll("&apos;", "'").replaceAll("&lt;", "<").replaceAll("&gt;", ">").replaceAll("&amp;", "&");
