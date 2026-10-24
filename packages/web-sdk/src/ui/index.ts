@@ -1,9 +1,9 @@
 import { createUiApi, type TinyCloudUI, type UiTarget } from "./api";
 import { createPanelClient, type ClientSource } from "./client";
-import type { PanelDataFactory } from "./data";
+import type { PanelDataFactory, PanelDataHost } from "./data";
 import { resolveUiConfig, type UiConfig } from "./config";
 import { canRenderUi } from "./frame-guard";
-import { HOST_API_VERSION, REGISTRY_KEY, createHostRuntime, type HostRuntime } from "./host";
+import { HOST_API_VERSION, REGISTRY_KEY, armPanelData, createHostRuntime, type HostRuntime } from "./host";
 import type { ToastRequest } from "./toast-store";
 import { createPromptScope, dismissPrompts, type PromptScope } from "./parts/prompts";
 
@@ -21,6 +21,8 @@ export interface UiClientHandle {
   toast(request: ToastRequest): boolean;
   /** Prompts this client opens. `uiEnabled` is false for `ui: false` and detached clients. */
   readonly promptScope: PromptScope;
+  /** Arms the background panel-data pull for this client. Call once sign-in or restore has produced a session. */
+  armPrefetch(host: PanelDataHost): void;
 }
 
 export interface UiClientOptions {
@@ -28,7 +30,7 @@ export interface UiClientOptions {
   readonly source: ClientSource;
   /** manifest.app_id, read lazily so setManifest() re-keys the hide flag. */
   readonly manifestAppId: () => string | undefined;
-  /** Panel data factory. Only the harness and preview pass one; production panels show placeholders. */
+  /** Panel data factory. Production passes the live adapter; the harness passes its stub. */
   readonly data?: PanelDataFactory;
 }
 
@@ -63,6 +65,7 @@ function detachedHandle(): UiClientHandle {
     unregister() {},
     toast: () => false,
     promptScope: createPromptScope(false),
+    armPrefetch() {},
   };
 }
 
@@ -111,5 +114,8 @@ export function registerUiClient(options: UiClientOptions): UiClientHandle {
       return runtime.toast(request, id);
     },
     promptScope,
+    armPrefetch(host) {
+      armPanelData(panel.client, { host, gate: options.source, appName: options.manifestAppId });
+    },
   };
 }

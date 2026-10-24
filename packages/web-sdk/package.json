@@ -51,7 +51,8 @@
     "build:e2e-ui": "bun build ./e2e/fixtures/harness-entry.ts --target=browser --format=esm --splitting --outdir=./e2e/.build/ui",
     "build:e2e-storage": "bun build ./e2e/fixtures/storage-harness-entry.ts --target=browser --format=iife --outfile=./e2e/.build/storage.bundle.js",
     "build:e2e-prompts": "bun build ./e2e/fixtures/prompts-harness-entry.ts --target=browser --format=iife --outfile=./e2e/.build/prompts.bundle.js",
-    "test:e2e": "bun run build:e2e-ui && bun run build:e2e-storage && bun run build:e2e-prompts && playwright test -c playwright.e2e.config.ts",
+    "build:e2e-prefetch": "bun build ./e2e/fixtures/prefetch-harness-entry.ts --target=browser --format=esm --splitting --outdir=./e2e/.build/prefetch",
+    "test:e2e": "bun run build:e2e-ui && bun run build:e2e-storage && bun run build:e2e-prompts && bun run build:e2e-prefetch && playwright test -c playwright.e2e.config.ts",
     "test": "jest"
   },
   "dependencies": {

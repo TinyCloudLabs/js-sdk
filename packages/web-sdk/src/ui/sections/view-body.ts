@@ -1,4 +1,5 @@
-import type { ViewResult } from "../data";
+import { freshnessCopy, type FreshnessCode } from "./freshness-copy";
+import type { Freshness, ViewResult } from "../data";
 import type { HostContext } from "../slots";
 import { viewError, viewLoading } from "../view-result";
 
@@ -38,6 +39,24 @@ export function createStateLine(ctx: HostContext, onRetry: () => void): StateLin
   return { status, retry };
 }
 
+/** Chip text for a ready result: updating, updated, or failed-with-age. */
+function freshnessText(freshness: Freshness): string {
+  if (freshness.refreshing) return freshnessCopy("freshness.updating");
+  const age = formatAge(Date.now() - freshness.updatedAt);
+  const code: FreshnessCode = freshness.lastError ? "freshness.failed" : "freshness.updated";
+  return freshnessCopy(code).replace("{age}", age);
+}
+
+/** Relative age in the panel's own words. Minutes, hours, and days only. */
+function formatAge(ms: number): string {
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 1) return freshnessCopy("freshness.age.now");
+  if (minutes < 60) return freshnessCopy("freshness.age.minutes").replace("{n}", String(minutes));
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return freshnessCopy("freshness.age.hours").replace("{n}", String(hours));
+  return freshnessCopy("freshness.age.days").replace("{n}", String(Math.floor(hours / 24)));
+}
+
 /**
  * Shows the loading, permission, or error word for a non-ready result, and the
  * retry button for errors only. Returns the data when the result is ready.
@@ -48,8 +67,10 @@ export function applyResult<T>(
   result: ViewResult<T>,
 ): T | undefined {
   if (result.state === "ready") {
-    line.status.hidden = true;
     line.retry.hidden = true;
+    const chip = result.freshness ? freshnessText(result.freshness) : undefined;
+    line.status.hidden = chip === undefined;
+    line.status.textContent = chip ?? "";
     return result.data;
   }
   line.status.hidden = false;
