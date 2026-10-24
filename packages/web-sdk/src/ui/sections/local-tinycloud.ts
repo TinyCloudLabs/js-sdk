@@ -27,6 +27,7 @@ const STYLE = `
 .ll-kv dd{display:flex;align-items:center;gap:8px;min-width:0;margin:0;font-size:13px}
 .ll-mono{font-family:${MONO};font-size:12.5px;overflow-wrap:anywhere}
 .ll-did{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:${MONO};font-size:12.5px}
+.ll-cell{display:flex;align-items:center;gap:8px;min-width:0}
 .ll-steps{margin:0;padding-left:20px;font-size:13px;line-height:1.6;color:#52525b}
 @media (prefers-color-scheme: dark){
 .ll-intro,.ll-sub,.ll-body,.ll-kv dt,.ll-steps{color:#a1a1aa}
@@ -200,6 +201,7 @@ export const localTinycloudSection: PanelSection = {
               did.length > 24 ? `${did.slice(0, 16)}…${did.slice(-6)}` : did;
             idText.title = did;
             const idCell = document.createElement("span");
+            idCell.className = "ll-cell";
             idCell.append(idText, copyButton(did, "local-tinycloud.copy.node_id_label"));
             addRow("local-tinycloud.found.node_id", idCell);
           }
@@ -213,6 +215,7 @@ export const localTinycloudSection: PanelSection = {
             host.className = "ll-mono";
             host.textContent = current.url;
             const hostCell = document.createElement("span");
+            hostCell.className = "ll-cell";
             hostCell.append(host, copyButton(current.url, "local-tinycloud.copy.host_label"));
             addRow("local-tinycloud.found.host", hostCell);
           }
@@ -227,6 +230,7 @@ export const localTinycloudSection: PanelSection = {
           code.className = "ll-mono";
           code.textContent = command;
           const commandCell = document.createElement("span");
+          commandCell.className = "ll-cell";
           commandCell.append(code, copyButton(command, "local-tinycloud.copy.command_label"));
           const steps = document.createElement("ol");
           steps.className = "ll-steps";

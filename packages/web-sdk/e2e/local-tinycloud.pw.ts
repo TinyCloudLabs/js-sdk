@@ -184,6 +184,25 @@ for (const scheme of ["light", "dark"] as const) {
   });
 }
 
+for (const [name, viewport] of [["desktop", DESKTOP], ["360 px", PHONE_360]] as const) {
+  test(`found: each Copy button sits clear of its value at ${name}`, async ({ page }) => {
+    await mount(page, { viewport, node: NODES.found });
+    await openLocal(page);
+    const cells = panel(page).locator(".ll-kv dd > .ll-cell");
+    await expect(cells).toHaveCount(2);
+    // Both boxes are read in one evaluate so the drawer's slide-in transform applies to both alike.
+    for (const cell of await cells.all()) {
+      const gap = await cell.evaluate((el) => {
+        const value = el.querySelector(".ll-did, .ll-mono")?.getBoundingClientRect();
+        const copy = el.querySelector("button")?.getBoundingClientRect();
+        return value && copy ? copy.left - value.right : null;
+      });
+      expect(gap).not.toBeNull();
+      expect(gap ?? 0).toBeGreaterThanOrEqual(4);
+    }
+  });
+}
+
 test("keyboard: Space turns the node on and settles on found; Enter turns it off", async ({ page }) => {
   await mount(page);
   await openLocal(page);
