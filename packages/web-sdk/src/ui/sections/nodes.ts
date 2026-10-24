@@ -11,11 +11,11 @@ registerPanelStrings(NODES_STRINGS);
 
 const STYLE = `
 .nd-wrap{container-type:inline-size;min-width:0}
-.nd-wrap>.nd-lede{margin:0 0 20px;font-size:15px;line-height:1.5;max-width:56ch}
+.nd-wrap>.nd-lede{margin:0 0 20px;font-size:15px;line-height:1.5;max-width:56ch;color:#09090b}
 .nd-cards{display:grid;gap:14px;grid-template-columns:minmax(0,1fr);margin:0;padding:0;list-style:none}
 @container (min-width:720px){.nd-cards{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}}
 .nd-card{min-width:0;padding:14px 16px;border:1px solid #e4e4e7;border-radius:12px;--nd-leader:#a1a1aa}
-.nd-card .row{align-items:flex-start}
+.nd-card .row{align-items:baseline}
 .nd-card .row>div{min-width:0;flex:1}
 .nd-host{font:600 15px/1.3 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;overflow-wrap:anywhere}
 .nd-kv{display:flex;flex-direction:column;margin:8px 0 0;padding:0}
@@ -33,6 +33,7 @@ const STYLE = `
 .nd-card .icon-btn{margin:-10px -10px -10px 0}
 .nd-did-row .icon-btn{margin:-10px 0}
 @media (prefers-color-scheme: dark){
+.nd-wrap>.nd-lede{color:#fafafa}
 .nd-card{border-color:#3f3f46;--nd-leader:#71717a}
 .nd-kv>div{border-top-color:#27272a}
 .nd-kv dt{color:#a1a1aa}
