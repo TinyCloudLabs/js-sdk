@@ -295,7 +295,8 @@ function defaultEncryptionMessage(input: EncryptionErrorInput): string {
     case "NETWORK_NOT_FOUND":
       return (
         input.message ??
-        `Network not found: ${input.networkId ?? input.name ?? "<unknown>"}`
+        `Network not found: ${input.networkId ?? input.name ?? "<unknown>"}. ` +
+        "Sign in again with a current SDK to create the account's encryption network."
       );
     case "NETWORK_NOT_ACTIVE":
       return input.message ?? `Network not active (state=${input.state})`;
