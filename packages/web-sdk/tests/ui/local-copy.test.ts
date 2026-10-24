@@ -912,6 +912,238 @@ describe("purge warning after sign-out", () => {
   });
 });
 
+/** A client whose reset the test fires, as sign-out or an account switch does. */
+function resettableClient(facade: SyncFacade) {
+  const listeners = new Set<() => void>();
+  const client = {
+    id: 1,
+    signedIn: () => true,
+    onReset: (cb: () => void) => {
+      listeners.add(cb);
+      return () => listeners.delete(cb);
+    },
+    sync: facade,
+    storage: {},
+  } as unknown as PanelClient;
+  return { client, reset: () => [...listeners].forEach((cb) => cb()), listenerCount: () => listeners.size };
+}
+
+function deferred<T>() {
+  const calls: Array<{ resolve: (value: T) => void; reject: (reason: unknown) => void }> = [];
+  return {
+    next: () => new Promise<T>((resolve, reject) => calls.push({ resolve, reject })),
+    resolve: (call: number, value: T) => calls[call]?.resolve(value),
+    reject: (call: number, reason: unknown) => calls[call]?.reject(reason),
+    count: () => calls.length,
+  };
+}
+
+describe("an account change while a call is in flight", () => {
+  test("a read that lands after the reset does not show the previous account's figures", async () => {
+    const facade = makeFacade(state("on"));
+    const { client, reset } = resettableClient(facade);
+    const reads = deferred<ViewResult<LocalCopyStatus>>();
+    const { el } = setup({ client, copy: reads.next });
+    await flush();
+    expect(reads.count()).toBe(1);
+    reset();
+    await flush();
+    expect(reads.count()).toBe(2); // the section re-reads for the new account
+    reads.resolve(0, ready({ bytesOnDevice: 1024 * 1024 })); // the previous account's answer arrives first
+    await flush();
+    expect(bodyText(el)).not.toContain("1 MiB");
+    expect(el.querySelector(".lc-cozy")?.closest("[hidden]")).not.toBeNull();
+    reads.resolve(1, ready({ bytesOnDevice: 2 * 1024 * 1024 }));
+    await flush();
+    expect(bodyText(el)).toContain("2 MiB");
+    expect(bodyText(el)).not.toContain("1 MiB");
+  });
+
+  test("the reset clears what the previous account's session left on screen and re-reads", async () => {
+    const facade = makeFacade(state("on"));
+    facade.nextWipe = () => Promise.reject(new Error("x"));
+    const { client, reset } = resettableClient(facade);
+    const { el, reads } = setup({ client, copy: ready() });
+    await flush();
+    wipeBtn(el).click();
+    confirmBtn(el).click();
+    await flush();
+    expect(el.querySelector<HTMLElement>(".lc-wipe .lc-fail")?.hidden).toBe(false);
+    wipeBtn(el).click(); // a confirm is open too
+    expect(box(el)).not.toBeNull();
+    const before = reads();
+    reset();
+    await flush();
+    expect(el.querySelector<HTMLElement>(".lc-wipe .lc-fail")?.hidden).toBe(true);
+    expect(box(el)).toBeNull();
+    expect(reads()).toBeGreaterThan(before);
+  });
+
+  test("a failed enable that lands after the reset shows no line and leaves the switch usable", async () => {
+    const facade = makeFacade(state("off"));
+    const enables = deferred<void>();
+    facade.nextSetEnabled = enables.next;
+    const { client, reset } = resettableClient(facade);
+    const { el } = setup({ client });
+    await flush();
+    toggleOf(el).click();
+    expect(toggleOf(el).disabled).toBe(true);
+    reset();
+    await flush();
+    expect(toggleOf(el).disabled).toBe(false);
+    enables.reject(0, Object.assign(new Error("x"), { code: "declined" }));
+    await flush();
+    expect(el.querySelector<HTMLElement>(".error")?.hidden).toBe(true);
+    expect(el.querySelector(".error")?.textContent).toBe("");
+    expect(toggleOf(el).disabled).toBe(false);
+  });
+
+  test("a late enable result of the previous account does not release the new account's busy state", async () => {
+    const facade = makeFacade(state("off"));
+    const enables = deferred<void>();
+    facade.nextSetEnabled = enables.next;
+    const { client, reset } = resettableClient(facade);
+    const { el } = setup({ client });
+    await flush();
+    toggleOf(el).click(); // old account
+    reset();
+    await flush();
+    toggleOf(el).click(); // new account
+    expect(enables.count()).toBe(2);
+    expect(toggleOf(el).disabled).toBe(true);
+    enables.reject(0, new Error("old")); // the old call ends late
+    await flush();
+    expect(toggleOf(el).disabled).toBe(true);
+    expect(el.querySelector<HTMLElement>(".error")?.hidden).toBe(true);
+    enables.resolve(1, undefined);
+    await flush();
+    expect(toggleOf(el).disabled).toBe(false);
+  });
+
+  test("a wipe failure that lands after the reset raises no failure line for the new account and moves no focus", async () => {
+    const facade = makeFacade(state("on"));
+    const wipes = deferred<void>();
+    facade.nextWipe = wipes.next;
+    const { client, reset } = resettableClient(facade);
+    const { el } = setup({ client, copy: ready() });
+    await flush();
+    wipeBtn(el).click();
+    confirmBtn(el).click();
+    reset();
+    await flush();
+    toggleOf(el).focus();
+    wipes.reject(0, new Error("old"));
+    await flush();
+    expect(el.querySelector<HTMLElement>(".lc-wipe .lc-fail")?.hidden).toBe(true);
+    expect(document.activeElement).toBe(toggleOf(el));
+  });
+
+  test("a wipe success that lands after the reset shows no success toast and does not reload", async () => {
+    const facade = makeFacade(state("on"));
+    const wipes = deferred<void>();
+    facade.nextWipe = wipes.next;
+    const { client, reset } = resettableClient(facade);
+    const { el, toasts, reads } = setup({ client, copy: ready() });
+    await flush();
+    wipeBtn(el).click();
+    confirmBtn(el).click();
+    reset();
+    await flush();
+    const before = reads();
+    wipes.resolve(0, undefined);
+    await flush();
+    expect(toasts).toEqual([]);
+    expect(reads()).toBe(before);
+  });
+
+  test("turning off: a wipe of the previous account that ends after the reset does not turn off the new account's copy", async () => {
+    const facade = makeFacade(state("on"));
+    const wipes = deferred<void>();
+    facade.nextWipe = wipes.next;
+    const { client, reset } = resettableClient(facade);
+    const { el, toasts } = setup({ client, copy: ready() });
+    await flush();
+    toggleOf(el).click(); // asks to turn off
+    confirmBtn(el).click();
+    expect(facade.wipeCalls).toBe(1);
+    reset(); // the account changes while the wipe runs
+    await flush();
+    wipes.resolve(0, undefined);
+    await flush();
+    expect(facade.setEnabledCalls).toEqual([]);
+    expect(toasts).toEqual([]);
+  });
+
+  test("after the reset a new wipe can be confirmed; the previous account's wipe no longer holds the latch", async () => {
+    const facade = makeFacade(state("on"));
+    const wipes = deferred<void>();
+    facade.nextWipe = wipes.next;
+    const { client, reset } = resettableClient(facade);
+    const { el } = setup({ client, copy: ready() });
+    await flush();
+    wipeBtn(el).click();
+    confirmBtn(el).click();
+    reset();
+    await flush();
+    expect(wipeBtn(el).disabled).toBe(false);
+    wipeBtn(el).click();
+    confirmBtn(el).click();
+    expect(facade.wipeCalls).toBe(2);
+    wipes.resolve(0, undefined); // the old one ends late and must not touch the new one's box
+    await flush();
+    expect(box(el)).not.toBeNull();
+    expect(confirmBtn(el).textContent).toBe("Wiping…");
+  });
+
+  test("dispose stops listening for resets", async () => {
+    const facade = makeFacade(state("on"));
+    const { client, listenerCount } = resettableClient(facade);
+    const { dispose } = setup({ client, copy: ready() });
+    await flush();
+    expect(listenerCount()).toBe(1);
+    dispose();
+    expect(listenerCount()).toBe(0);
+  });
+
+  test("a purge retry that ends after the account changed shows no 'removed' toast and keeps the warning", async () => {
+    const purgeBox = (el: HTMLElement) => el.querySelector<HTMLElement>(".lc-purge") as HTMLElement;
+    const state0 = { signedIn: true };
+    const resetListeners = new Set<() => void>();
+    const purges = deferred<PurgeLocalCopyResult>();
+    const raw = {
+      id: 1,
+      signedIn: () => state0.signedIn,
+      onReset: (cb: () => void) => {
+        resetListeners.add(cb);
+        return () => resetListeners.delete(cb);
+      },
+      storage: {},
+      sync: makeFacade({ requested: false, effective: "off" }),
+      signOut: async () => {
+        state0.signedIn = false;
+        resetListeners.forEach((cb) => cb());
+      },
+      purgeLocalCopy: purges.next,
+    } as unknown as PanelClient;
+    const client = createSignOutGuard(() => undefined)(raw) as PanelClient;
+    const signedOut = client.signOut?.();
+    await flush();
+    purges.resolve(0, { ok: false, retryNow: false });
+    await signedOut;
+    const { el, toasts } = setup({ client, facade: client.sync });
+    await flush();
+    const retry = purgeBox(el).querySelector("button") as HTMLButtonElement;
+    retry.click();
+    await flush();
+    expect(purges.count()).toBe(2);
+    resetListeners.forEach((cb) => cb()); // the account changes while the retry runs
+    purges.resolve(1, { ok: true });
+    await flush();
+    expect(toasts).toEqual([]);
+    expect(purgeBox(el).hidden).toBe(false);
+  });
+});
+
 describe("status(ctx)", () => {
   const status = (effective: string) => {
     const { ctx } = setup({ facade: makeFacade(state("off")) });

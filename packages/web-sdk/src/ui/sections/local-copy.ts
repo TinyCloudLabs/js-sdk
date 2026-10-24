@@ -204,6 +204,12 @@ function mountLocalCopy(el: HTMLElement, ctx: SectionContext): () => void {
   /** The switch held focus when it was locked; Chromium drops focus from a disabled button. */
   let refocusSwitch = false;
   const watch = purgeWatch(ctx.client());
+  /**
+   * Bumped when the account or session changes (the client's reset). Every awaited result captures it first and is
+   * dropped if it moved, so a late answer of the previous session never writes to the new one. The shell exposes
+   * no generation to sections yet; this is the section's own, driven by the same reset the shell reacts to.
+   */
+  let generation = 0;
 
   const style = document.createElement("style");
   style.textContent = STYLE + UI_STYLE;
@@ -454,24 +460,29 @@ function mountLocalCopy(el: HTMLElement, ctx: SectionContext): () => void {
       return;
     }
     const token = ++seq;
+    const mine = generation;
     const result = await settle(() => source.localCopy());
-    if (disposed || token !== seq) return;
+    if (disposed || token !== seq || mine !== generation) return;
     const data = applyResult(viewLine, ctx, result);
     if (data !== undefined) copy = data;
     render();
   }
 
   async function enable(on: boolean): Promise<void> {
+    const mine = generation;
     busy = true;
     toggleFailed = undefined;
     render();
     try {
       await sync.setEnabled(on);
     } catch (err) {
-      if (!disposed) toggleFailed = codeOf(err);
+      if (!disposed && mine === generation) toggleFailed = codeOf(err);
     } finally {
-      busy = false;
-      render();
+      // After a reset the busy flag belongs to the new session's call, not to this one.
+      if (mine === generation) {
+        busy = false;
+        render();
+      }
     }
   }
 
@@ -479,6 +490,7 @@ function mountLocalCopy(el: HTMLElement, ctx: SectionContext): () => void {
     // Fail closed: only the open box this call belongs to can start a wipe, once, in a state that allows it.
     if (wiping || confirming !== handle || !canWipe()) return;
     wiping = true;
+    const mine = generation;
     wipeFailed = false;
     toggleFailed = undefined;
     handle.confirm.disabled = true;
@@ -492,12 +504,15 @@ function mountLocalCopy(el: HTMLElement, ctx: SectionContext): () => void {
     } catch {
       wiped = false;
     }
+    // The account changed while the wipe ran: its outcome belongs to the previous session and shows nothing.
+    if (mine !== generation) return;
     if (wiped && turnOff && sync.state.requested) {
       try {
         await sync.setEnabled(false);
       } catch (err) {
-        if (!disposed) toggleFailed = codeOf(err);
+        if (!disposed && mine === generation) toggleFailed = codeOf(err);
       }
+      if (mine !== generation) return;
     }
     wiping = false;
     if (wiped) ctx.toast({ kind: "success", textCode: "local-copy.wipe.done" });
@@ -566,9 +581,12 @@ function mountLocalCopy(el: HTMLElement, ctx: SectionContext): () => void {
   });
   purgeRetry.addEventListener("click", () => {
     if (watch === undefined || purgeRetry.disabled || purgeBusy) return;
+    const mine = generation;
     purgeBusy = true;
     render();
     void watch.retry().then((gone) => {
+      // An answer for an earlier session changes nothing here: the reset already released this retry.
+      if (mine !== generation) return;
       purgeBusy = false;
       if (gone) ctx.toast({ kind: "success", textCode: "local-copy.purge.done" });
       if (disposed) return;
@@ -582,8 +600,29 @@ function mountLocalCopy(el: HTMLElement, ctx: SectionContext): () => void {
     render();
     void load();
   });
-  const offSource = ctx.data.source?.subscribe((view: PanelView) => {
-    if (view === "copy") void load();
+  let offSource: (() => void) | undefined;
+  const watchSource = (): void => {
+    offSource?.();
+    offSource = ctx.data.source?.subscribe((view: PanelView) => {
+      if (view === "copy") void load();
+    });
+  };
+  watchSource();
+  // A reset (sign-out, account switch): whatever the previous session left on screen or in flight is dropped,
+  // and the section reads again for the new one. In-flight calls find the generation moved and discard themselves.
+  const offReset = ctx.client()?.onReset(() => {
+    generation += 1;
+    busy = false;
+    wiping = false;
+    purgeBusy = false;
+    toggleFailed = undefined;
+    wipeFailed = false;
+    copy = undefined;
+    closeConfirm();
+    startLoading(viewLine, ctx);
+    render();
+    watchSource();
+    void load();
   });
   const offStatus = ctx.onStatusChange(render);
   const offPurge = watch?.subscribe(render);
@@ -605,6 +644,7 @@ function mountLocalCopy(el: HTMLElement, ctx: SectionContext): () => void {
     clearInterval(timer);
     offFacade();
     offSource?.();
+    offReset?.();
     offStatus();
     offPurge?.();
     el.replaceChildren();
