@@ -749,24 +749,28 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
     else card.retry.focus();
   }
 
-  /** The slip: the revocation's CID and the time. The receipt id does not exist, so the CID is the only identifier. */
+  /** The slip: the delegation's CID and the time. The receipt id does not exist, so the CID is the only identifier. */
   function receipt(card: Card): void {
     const time = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    // The slip's body takes no parameters, so the sentence for this revoke is registered under its own code just before it is shown.
     const name = partyName(card.row);
     const suffix = card.row.group === "this-app" ? ".app" : "";
     const clause = abilityClause(parseResources(card.row.resources));
-    registerPanelStrings({
-      "delegations.receipt.sentence":
-        clause === ""
-          ? text(`delegations.receipt.generic${suffix}`, { name })
-          : text(`delegations.receipt.what${suffix}`, { name, what: clause }),
-    });
+    const sentence =
+      clause === ""
+        ? text(`delegations.receipt.generic${suffix}`, { name })
+        : text(`delegations.receipt.what${suffix}`, { name, what: clause });
+    // The slip's body is a string code with no parameters, so a sentence reaches it as a registered template and is
+    // interpolated once more. Text that came from the network must not go through that: a brace in it (`App {constructor}`)
+    // would be read as a placeholder. Such a sentence is kept out of the body; the name goes in a row, which is shown as data.
+    const literal = sentence.includes("{");
+    if (!literal) registerPanelStrings({ "delegations.receipt.sentence": sentence });
     const shown = ctx.receipt({
       titleCode: "delegations.receipt.title",
-      bodyCode: "delegations.receipt.sentence",
+      bodyCode: literal ? "delegations.receipt.body" : "delegations.receipt.sentence",
       rows: [
-        { labelCode: "delegations.receipt.cid", value: shortCid(card.cid) },
+        ...(literal ? [{ labelCode: "delegations.receipt.for", value: name }] : []),
+        // The whole CID: the slip copies what it shows, and a shortened identifier would not find the delegation again.
+        { labelCode: "delegations.receipt.cid", value: clean(card.cid, 200) },
         { labelCode: "delegations.receipt.time", value: time },
       ],
     });

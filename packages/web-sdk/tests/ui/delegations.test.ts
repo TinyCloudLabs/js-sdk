@@ -531,6 +531,22 @@ describe("revoke", () => {
     expect(words).not.toContain("sign in again");
   });
 
+  test("a name with braces reaches the confirm and the receipt as written, never as a placeholder", async () => {
+    for (const label of ["App {constructor}", "{toString} {name} {__proto__}"]) {
+      const h = await mountSection({ rows: [row("a", { label: { text: label, source: "stub" } })] });
+      const words = (await openConfirm(h)).textContent ?? "";
+      expect(words, label).toContain(`Revoke access for ${label}?`);
+      expect(words, label).not.toContain("function");
+      buttonIn(h.el.querySelector<HTMLElement>('[role="alertdialog"]') ?? h.el, "Revoke access")?.click();
+      await flush();
+      const slip = h.receipts[0];
+      // The sentence is not handed to the string table, so nothing interpolates it a second time.
+      expect(panelText(slip?.bodyCode ?? ""), label).toBe("That access has ended.");
+      expect(slip?.rows[0], label).toEqual({ labelCode: "delegations.receipt.for", value: label });
+      expect(slip?.rows.map((r) => r.value).join(" "), label).not.toContain("function");
+    }
+  });
+
   test("the receipt and the live line follow the same naming", async () => {
     const app = await mountSection({ rows: [row("a", { group: "this-app" })] });
     buttonIn(await openConfirm(app), "Revoke access")?.click();
@@ -594,7 +610,8 @@ describe("revoke", () => {
     expect(h.reads.count).toBeGreaterThan(readsBefore);
     expect(h.receipts).toHaveLength(1);
     const slip = h.receipts[0];
-    expect(slip?.rows[0]).toEqual({ labelCode: "delegations.receipt.cid", value: "bafyEXAMPL…k2dq" });
+    expect(slip?.rows[0]).toEqual({ labelCode: "delegations.receipt.cid", value: "bafyEXAMPLEcidcidcidk2dq" });
+    expect(panelText("delegations.receipt.cid")).toBe("Delegation");
     expect(slip?.rows[1]?.labelCode).toBe("delegations.receipt.time");
     expect(slip?.rows[1]?.value).toMatch(/\d/);
     // The group count and the rail count follow: the node's list still holds the revoked row, the panel counts it gone.

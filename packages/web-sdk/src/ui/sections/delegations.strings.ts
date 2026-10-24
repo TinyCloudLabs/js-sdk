@@ -101,8 +101,10 @@ export const DELEGATIONS_STRINGS = {
   "delegations.live.revoked": "Access revoked for {name}.",
 
   "delegations.receipt.title": "Access revoked",
-  "delegations.receipt.cid": "revocation",
-  "delegations.receipt.time": "time",
+  "delegations.receipt.body": "That access has ended.",
+  "delegations.receipt.for": "For",
+  "delegations.receipt.cid": "Delegation",
+  "delegations.receipt.time": "Time",
 
   "delegations.d.close": "Close",
   "delegations.d.status": "Status",

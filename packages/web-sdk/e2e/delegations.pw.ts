@@ -277,8 +277,8 @@ for (const scheme of ["light", "dark"] as const) {
       // The receipt carries the CID and the time, and no receipt id.
       await expect(slips(page)).toHaveCount(1);
       await expect(slips(page)).toContainText("Access revoked");
-      await expect(slips(page).locator(".slip")).toContainText(/revocation bafyEXAMPL…p9ax/);
-      await expect(slips(page).locator(".slip")).toContainText(/time \d/);
+      await expect(slips(page).locator(".slip")).toContainText(/Delegation bafyEXAMPLEd4p9ax/);
+      await expect(slips(page).locator(".slip")).toContainText(/Time \d/);
       await expect(slips(page).locator(".slip")).not.toContainText("rcpt");
 
       // Focus lands on the section heading, not on a removed element.
@@ -481,6 +481,17 @@ test("a revoke that fails after the panel was reopened shows a toast and can be 
   await retry.click();
   await expect(body(page).locator('[role="alertdialog"]')).toBeVisible();
   expect(await revokeCalls(page)).toEqual(["bafyEXAMPLEd4p9ax"]);
+});
+
+test("a name with braces shows in the confirm and the receipt as written", async ({ page }) => {
+  const rows = mockupRows().map((r) => (r.cid === "bafyEXAMPLEd4p9ax" ? { ...r, label: { text: "App {constructor}", source: "stub" as const } } : r));
+  await open(page, { seed: { rows } });
+  const box = await openConfirm(page, "App {constructor}");
+  await expect(box).toContainText("Revoke access for App {constructor}?");
+  await box.getByRole("button", { name: "Revoke access" }).click();
+  await expect(slips(page)).toContainText("Access revoked");
+  await expect(slips(page).locator(".slip")).toContainText("For App {constructor}");
+  await expect(slips(page)).not.toContainText("function");
 });
 
 test("reduced motion removes the row at once", async ({ page }) => {
