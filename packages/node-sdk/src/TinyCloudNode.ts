@@ -1283,11 +1283,6 @@ function accountIndexWarningDiagnostic(error: unknown): { status?: number; code?
   return diagnostic;
 }
 
-/** Local-copy erase after a deny: 3 attempts in total, retries 150 ms then 450 ms apart, 3 s per attempt. */
-const REPLICA_ERASE_ATTEMPTS = 3;
-const REPLICA_ERASE_RETRY_DELAYS_MS = [150, 450] as const;
-const REPLICA_ERASE_ATTEMPT_MS = 3_000;
-
 function replicaRestoreRefusal(error: unknown): ReplicaGateReason {
   if (error !== null && typeof error === "object" && "code" in error && error.code === "REPLICA_GATED" && "gate" in error) {
     switch (error.gate) {
@@ -1333,8 +1328,6 @@ export class TinyCloudNode {
   private replicaRestoreGate?: ReplicaGateReason;
   private replicaSessionPrincipal?: string;
   private replicaSessionStamp?: ReplicaSessionStamp;
-  /** Set while a local-copy erase has not finished; `purgeLocalCopy()` retries it. */
-  private replicaPurgeOutstanding?: { retryNow: boolean };
   private readonly replicaPurgeFailedHandlers = new Set<(event: ReplicaPurgeFailedEvent) => void>();
   /** Mints the replica session stamp on each fresh sign-in (TC-858 §4.1). Undefined when replication is off. */
   private readonly establishReplicaStamp = async (session: TinyCloudSession) => {
@@ -2320,12 +2313,9 @@ export class TinyCloudNode {
   }
 
   /**
-   * Erases the browser local copy after a deny: up to {@link REPLICA_ERASE_ATTEMPTS} attempts, the
-   * retries {@link REPLICA_ERASE_RETRY_DELAYS_MS} apart, each bounded by {@link REPLICA_ERASE_ATTEMPT_MS}.
-   * Only `failed` outcomes retry. After the last failure `replica.purge.failed` fires and the logout
-   * marker (set by the lifecycle) makes the next load finish the erase. Never rejects.
-   * Returns `undefined` when replication is off or the storage has no browser database.
-   * `denyStatus` marker/unguarded means the deny kept the keys; a refusal then stays outstanding.
+   * Erases the browser local copy after a deny (retry, event and next-load marker live in the lazy
+   * replication authority). Never rejects; `undefined` when replication is off or the storage keeps
+   * no browser database.
    */
   private async eraseReplicaLocalCopy(
     trigger: ReplicaPurgeTrigger,
@@ -2333,36 +2323,16 @@ export class TinyCloudNode {
   ): Promise<ReplicaLocalEraseOutcome | undefined> {
     const replication = this.config.replication;
     if (!replication?.enabled) return undefined;
-    const lifecycle = replication.storage.lifecycle;
-    if (lifecycle?.kind !== "indexeddb" || lifecycle.eraseLocalCopy === undefined) return undefined;
-    let outcome: ReplicaLocalEraseOutcome = { status: "failed", code: "STORAGE_ERROR", marker: false };
-    for (let attempt = 0; attempt < REPLICA_ERASE_ATTEMPTS; attempt++) {
-      if (attempt > 0) await new Promise<void>((resolve) => setTimeout(resolve, REPLICA_ERASE_RETRY_DELAYS_MS[attempt - 1]));
-      try {
-        outcome = await lifecycle.eraseLocalCopy({ signal: AbortSignal.timeout(REPLICA_ERASE_ATTEMPT_MS) });
-      } catch {
-        outcome = { status: "failed", code: "STORAGE_ERROR", marker: false };
-      }
-      if (outcome.status !== "failed") break;
+    try {
+      const { eraseReplicaLocalCopy } = await getNodeReplicationLoaders().authority();
+      const erased = await eraseReplicaLocalCopy(
+        replication.storage.lifecycle, trigger, denyStatus, this.replicaPurgeFailedHandlers,
+      );
+      if (erased?.logoutPending) this.replicaRestoreGate = "logout_pending";
+      return erased?.outcome;
+    } catch {
+      return undefined;
     }
-    const keysKept = denyStatus === "marker" || denyStatus === "unguarded";
-    if (outcome.status === "erased" || (outcome.status === "refused" && !keysKept)) {
-      this.replicaPurgeOutstanding = undefined;
-      return outcome;
-    }
-    const retryNow = outcome.status === "failed";
-    this.replicaPurgeOutstanding = { retryNow };
-    const reason: ReplicaGateReason = outcome.status === "failed" && outcome.marker ? "logout_pending" : "gate_unavailable";
-    if (reason === "logout_pending") this.replicaRestoreGate = "logout_pending";
-    const event: ReplicaPurgeFailedEvent = { type: "replica.purge.failed", trigger, reason, code: outcome.code, retryNow };
-    for (const handler of this.replicaPurgeFailedHandlers) {
-      try {
-        handler(event);
-      } catch (error) {
-        console.error('Error in "replica.purge.failed" handler:', error);
-      }
-    }
-    return outcome;
   }
 
   /**

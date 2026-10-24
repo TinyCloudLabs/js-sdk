@@ -36,7 +36,13 @@ import {
   type ReplicationAuthority,
   type ReplicationEvent,
 } from "@tinycloud/sdk-services";
-import type { ReplicaDenyInput, ReplicaSessionStamp } from "@tinycloud/sdk-services/kv/replication";
+import type {
+  ReplicaDenyInput,
+  ReplicaLocalEraseOutcome,
+  ReplicaPurgeFailedEvent,
+  ReplicaPurgeTrigger,
+  ReplicaSessionStamp,
+} from "@tinycloud/sdk-services/kv/replication";
 import type { DelegateToOptions, DelegateToResult, TinyCloudNode } from "../TinyCloudNode";
 import type { ReplicaRuntime } from "./replica-contract";
 // @ts-ignore -- node-sdk builds before replica declarations; keep the literal import for bundlers.
@@ -64,6 +70,53 @@ export function reportReplicaDenial(
   try { onEvent?.(event); } catch { /* Observability cannot undo committed denial. */ }
   const { type, ...data } = event;
   try { context?.emit(type, data); } catch { /* Observability cannot undo committed denial. */ }
+}
+
+/** Local-copy erase after a deny: 3 attempts in total, retries 150 ms then 450 ms apart, 3 s per attempt. */
+const ERASE_RETRY_DELAYS_MS = [150, 450] as const;
+const ERASE_ATTEMPT_MS = 3_000;
+
+/**
+ * Erases the browser local copy after a deny, retrying a `failed` outcome with the delays above. After
+ * the last failure (or a refusal while the deny kept the keys) it notifies `handlers` with
+ * `replica.purge.failed`; the logout marker the lifecycle set makes the next load finish the erase.
+ * Never rejects. `undefined`: this storage has no browser local copy to erase.
+ */
+export async function eraseReplicaLocalCopy(
+  lifecycle: KVReplicaStorage["lifecycle"],
+  trigger: ReplicaPurgeTrigger,
+  denyStatus: string | undefined,
+  handlers: ReadonlySet<(event: ReplicaPurgeFailedEvent) => void>,
+): Promise<{ outcome: ReplicaLocalEraseOutcome; logoutPending?: true } | undefined> {
+  if (lifecycle?.kind !== "indexeddb" || lifecycle.eraseLocalCopy === undefined) return undefined;
+  let outcome: ReplicaLocalEraseOutcome = { status: "failed", code: "STORAGE_ERROR", marker: false };
+  for (let attempt = 0; attempt <= ERASE_RETRY_DELAYS_MS.length; attempt++) {
+    if (attempt > 0) await new Promise<void>((resolve) => setTimeout(resolve, ERASE_RETRY_DELAYS_MS[attempt - 1]));
+    try {
+      outcome = await lifecycle.eraseLocalCopy({ signal: AbortSignal.timeout(ERASE_ATTEMPT_MS) });
+    } catch {
+      outcome = { status: "failed", code: "STORAGE_ERROR", marker: false };
+    }
+    if (outcome.status !== "failed") break;
+  }
+  const keysKept = denyStatus === "marker" || denyStatus === "unguarded";
+  if (outcome.status === "erased" || (outcome.status === "refused" && !keysKept)) return { outcome };
+  const logoutPending = outcome.status === "failed" && outcome.marker;
+  const event: ReplicaPurgeFailedEvent = {
+    type: "replica.purge.failed",
+    trigger,
+    reason: logoutPending ? "logout_pending" : "gate_unavailable",
+    code: outcome.code,
+    retryNow: outcome.status === "failed",
+  };
+  for (const handler of handlers) {
+    try {
+      handler(event);
+    } catch (error) {
+      console.error('Error in "replica.purge.failed" handler:', error);
+    }
+  }
+  return logoutPending ? { outcome, logoutPending } : { outcome };
 }
 
 const KV_GET = KV.GET;
