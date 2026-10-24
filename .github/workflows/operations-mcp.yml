@@ -107,6 +107,7 @@ jobs:
           bun test packages/cli/src/output/errors.test.ts
           bun test packages/cli/src/commands/account.test.ts
           bun test packages/cli/src/commands/account-invocations.test.ts
+          bun test packages/cli/src/commands/storage-full.test.ts
           bun test packages/cli/src/lib/account-access.test.ts
           bun test packages/cli/src/lib/approval-notices.test.ts
           bun test packages/node-sdk/src/TinyCloudNode.accountRegistrySync.test.ts
