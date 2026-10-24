@@ -423,6 +423,12 @@ interface Card {
 
 let cardSeq = 0;
 
+/**
+ * CIDs with a revoke in flight, across mounts. Closing the panel unmounts the section, but the request goes on;
+ * a new mount must not ask the node to revoke the same grant again. Cleared when the request settles.
+ */
+const IN_FLIGHT = new Set<string>();
+
 /** CIDs revoked from this panel, per data cache. The node's list keeps a revoked grant as a row; the panel shows it gone, in the body and in the rail count. */
 const REVOKED_HERE = new WeakMap<object, Set<string>>();
 function revokedFrom(data: object): Set<string> {
@@ -471,7 +477,6 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
 
   let disposed = false;
   let reloading = false;
-  let inflight: string | undefined;
   let declined = false;
   const cards = new Map<string, Card>();
   const removed = revokedFrom(ctx.data);
@@ -593,7 +598,7 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
     card.see.setAttribute("aria-label", text("delegations.see.for", { name }));
     const mayRevoke = canRevoke(row, now);
     card.revoke.hidden = !mayRevoke;
-    card.revoke.disabled = inflight !== undefined;
+    card.revoke.disabled = IN_FLIGHT.size > 0;
     card.revoke.setAttribute("aria-label", text("delegations.revoke.for", { name }));
     card.ended.hidden = mayRevoke;
     if (!mayRevoke) {
@@ -608,7 +613,8 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
       );
     }
 
-    const busy = card.phase === "busy";
+    // A revoke started by an earlier mount of this section still counts: the panel may have been closed and opened again.
+    const busy = card.phase === "busy" || IN_FLIGHT.has(card.cid);
     card.busy.hidden = !busy;
     const refused = card.phase === "failed" || card.phase === "denied" || card.phase === "stale" || card.phase === "unconfirmed";
     card.err.hidden = !refused;
@@ -618,7 +624,7 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
       card.errText.textContent = text(`delegations.err.${ended ? "ended" : card.phase}`);
     }
     card.retry.hidden = (card.phase !== "failed" && card.phase !== "unconfirmed") || !mayRevoke;
-    card.retry.disabled = inflight !== undefined;
+    card.retry.disabled = IN_FLIGHT.size > 0;
     if (card.detail !== undefined) card.detail.replaceChildren(...detailRows(row, shown, now));
   }
 
@@ -637,7 +643,7 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
 
   // --- revoke -------------------------------------------------------------
   function askRevoke(card: Card): void {
-    if (inflight !== undefined || card.phase === "busy") return;
+    if (IN_FLIGHT.size > 0 || card.phase === "busy") return;
     if (!canRevoke(card.row, Date.now())) return;
     closeOtherConfirms();
     closeConfirm(card);
@@ -690,7 +696,7 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
   }
 
   async function doRevoke(card: Card): Promise<void> {
-    if (inflight !== undefined || card.phase === "busy") return;
+    if (IN_FLIGHT.size > 0 || card.phase === "busy") return;
     const confirmed = card.confirm;
     if (confirmed !== undefined) confirmed.confirm.disabled = true;
     const source = ctx.data.source;
@@ -705,7 +711,7 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
       return;
     }
     closeConfirm(card);
-    inflight = card.cid;
+    IN_FLIGHT.add(card.cid);
     card.phase = "busy";
     paintAll();
     card.article.focus();
@@ -715,8 +721,9 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
       outcome = await source.revoke(card.cid);
     } catch {
       outcome = { ok: false, code: "thrown" };
+    } finally {
+      IN_FLIGHT.delete(card.cid);
     }
-    inflight = undefined;
 
     if (outcome !== undefined && outcome.ok === true) {
       removed.add(card.cid);

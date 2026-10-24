@@ -4,6 +4,7 @@
 import { registerUiClient, type UiClientHandle } from "../../src/ui/index";
 import { toastStore } from "../../src/ui/parts/toasts";
 import type { ToastKind } from "../../src/ui/toast-store";
+import type { PanelDataFactory } from "../../src/ui/data";
 import { createStubPanelData, type StubSeed } from "../../src/ui/stub/index";
 
 // Per-view stub results a spec pins with page.addInitScript before the page loads: window.__TC_STUB_SEED__ (a JSON string).
@@ -68,6 +69,22 @@ const source = {
   },
 };
 
+const revokeLog: string[] = [];
+
+// Wraps the stub data factory so every revoke the panel asks for is recorded.
+function loggedRevokes(factory: PanelDataFactory): PanelDataFactory {
+  return (client) => {
+    const source = factory(client);
+    return {
+      ...source,
+      revoke: (cid: string) => {
+        revokeLog.push(cid);
+        return source.revoke(cid);
+      },
+    };
+  };
+}
+
 let handle: UiClientHandle | undefined;
 
 const w = window as unknown as Record<string, unknown>;
@@ -80,7 +97,7 @@ w.__tc = {
       ui: { developerMode: true, ...ui },
       source: source as never,
       manifestAppId: () => "e2e-settings-smoke",
-      data: createStubPanelData(stubSeed()),
+      data: loggedRevokes(createStubPanelData(stubSeed())),
     });
     w.tc = { ui: handle.api };
     return true;
@@ -122,5 +139,9 @@ w.__tc = {
   // How many times the panel's Sign out reached the client. Checked by the sign-out spec.
   signOutCalls() {
     return signOutCount;
+  },
+  // The CIDs the panel asked the data source to revoke, in order. Checked by the delegations spec.
+  revokeCalls() {
+    return revokeLog.slice();
   },
 };

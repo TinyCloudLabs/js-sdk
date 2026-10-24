@@ -432,6 +432,57 @@ for (const scheme of ["light", "dark"] as const) {
   });
 }
 
+const revokeCalls = (page: Page) => page.evaluate(() => (window as unknown as HarnessWindow & { __tc: { revokeCalls(): string[] } }).__tc.revokeCalls());
+const reopen = async (page: Page) => {
+  await page.evaluate(() => (window as unknown as { tc: { ui: { close(): void } } }).tc.ui.close());
+  await expect(panel(page)).toBeHidden();
+  await page.evaluate(() => (window as unknown as HarnessWindow).tc?.ui.open("delegations"));
+  await expect(body(page)).toBeVisible();
+};
+
+test("closing and reopening the panel mid-revoke cannot revoke the same grant twice", async ({ page }) => {
+  await open(page, { seed: { rows: mockupRows(), revokeDelayMs: 1500 } });
+  const box = await openConfirm(page, "Research helper");
+  await box.getByRole("button", { name: "Revoke access" }).click();
+  await expect.poll(() => revokeCalls(page)).toEqual(["bafyEXAMPLEd4p9ax"]);
+
+  await reopen(page);
+  const target = card(page, "Research helper");
+  await expect(target).toContainText("Revoking…");
+  for (const button of await body(page).getByRole("button", { name: /^Revoke access for/ }).all()) await expect(button).toBeDisabled();
+
+  // Not only disabled: forcing the button on and clicking it still opens nothing and calls nothing.
+  await target.getByRole("button", { name: /^Revoke access for/ }).evaluate((button: HTMLButtonElement) => {
+    button.disabled = false;
+    button.click();
+  });
+  await expect(body(page).locator('[role="alertdialog"]')).toHaveCount(0);
+  expect(await revokeCalls(page)).toEqual(["bafyEXAMPLEd4p9ax"]);
+
+  // The first request settles: one receipt, the row is gone, and the latch is clear for another grant.
+  await expect(card(page, "Research helper")).toHaveCount(0);
+  await expect(slips(page)).toHaveCount(1);
+  const again = await openConfirm(page, "Exo");
+  await again.getByRole("button", { name: "Revoke access" }).click();
+  await expect.poll(() => revokeCalls(page)).toEqual(["bafyEXAMPLEd4p9ax", "bafyEXAMPLEd5c7hs"]);
+});
+
+test("a revoke that fails after the panel was reopened shows a toast and can be tried again", async ({ page }) => {
+  await open(page, { seed: { rows: mockupRows(), revokeFails: { bafyEXAMPLEd4p9ax: "REVOCATION_FAILED" }, revokeDelayMs: 1000 } });
+  const box = await openConfirm(page, "Research helper");
+  await box.getByRole("button", { name: "Revoke access" }).click();
+  await expect.poll(() => revokeCalls(page)).toEqual(["bafyEXAMPLEd4p9ax"]);
+  await reopen(page);
+
+  await expect(page.locator(".tstack .toast")).toContainText("Couldn't revoke this access.");
+  await expect(cards(page)).toHaveCount(7);
+  const retry = card(page, "Research helper").getByRole("button", { name: /^Revoke access for/ });
+  await expect(retry).toBeEnabled();
+  await retry.click();
+  await expect(body(page).locator('[role="alertdialog"]')).toBeVisible();
+  expect(await revokeCalls(page)).toEqual(["bafyEXAMPLEd4p9ax"]);
+});
+
 test("reduced motion removes the row at once", async ({ page }) => {
   await open(page, { reducedMotion: true, seed: { rows: mockupRows() } });
   const box = await openConfirm(page, "Exo");

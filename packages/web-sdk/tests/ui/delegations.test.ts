@@ -751,6 +751,88 @@ describe("revoke", () => {
   });
 });
 
+describe("one revoke per CID across close and reopen", () => {
+  const revokeButton = (scope: ParentNode, cid: string) => scope.querySelector<HTMLButtonElement>(`[aria-label="Revoke access for Helper ${cid}"]`);
+  const busyShown = (scope: ParentNode) => [...scope.querySelectorAll<HTMLElement>('p[role="status"]')].some((p) => !p.hidden && p.textContent === "Revoking…");
+
+  async function confirmRevoke(scope: HTMLElement, cid: string): Promise<void> {
+    revokeButton(scope, cid)?.click();
+    await flush();
+    buttonIn(scope.querySelector<HTMLElement>('[role="alertdialog"]') ?? scope, "Revoke access")?.click();
+    await flush();
+  }
+
+  /** A source whose revoke of "a" waits for the test; any other CID answers at once. */
+  function held() {
+    let settle: (outcome: RevokeOutcome) => void = () => undefined;
+    const pending = new Promise<RevokeOutcome>((resolve) => {
+      settle = resolve;
+    });
+    return { settle, revoke: (cid: string): Promise<RevokeOutcome> => (cid === "a" ? pending : Promise.resolve({ ok: true, cid })) };
+  }
+
+  test("a second mount cannot revoke the CID that is still in flight; the source is called exactly once", async () => {
+    const gate = held();
+    const h = await mountSection({ rows: [row("a"), row("b")], revoke: gate.revoke });
+    await confirmRevoke(h.el, "a");
+    expect(h.revoked).toEqual(["a"]);
+
+    // Close the panel and open it again while the node has not answered.
+    h.unmount();
+    const again = await h.remount();
+    expect(busyShown(again)).toBe(true);
+    expect(revokeButton(again, "a")?.disabled).toBe(true);
+    expect(revokeButton(again, "b")?.disabled).toBe(true);
+
+    // Not just a disabled attribute: forcing the button and the confirm still reaches nothing.
+    for (const cid of ["a", "b"]) {
+      const button = revokeButton(again, cid);
+      if (button === null || button === undefined) throw new Error(`no revoke button for ${cid}`);
+      button.disabled = false;
+      button.click();
+    }
+    await flush();
+    expect(again.querySelector('[role="alertdialog"]')).toBeNull();
+    expect(h.revoked).toEqual(["a"]);
+
+    gate.settle({ ok: true, cid: "a" });
+    await flush();
+    expect(h.revoked).toEqual(["a"]);
+    expect(h.receipts).toHaveLength(1);
+  });
+
+  test("once the first request settles the latch clears: another CID can be revoked from the new mount", async () => {
+    const gate = held();
+    const h = await mountSection({ rows: [row("a"), row("b")], revoke: gate.revoke });
+    await confirmRevoke(h.el, "a");
+    h.unmount();
+    const again = await h.remount();
+    h.setPage({ state: "ready", data: { rows: [row("a", { status: "revoked" }), row("b")] } });
+    gate.settle({ ok: true, cid: "a" });
+    await flush();
+    expect(revokeButton(again, "b")?.disabled).toBe(false);
+    await confirmRevoke(again, "b");
+    expect(h.revoked).toEqual(["a", "b"]);
+  });
+
+  test("after a failure the same CID can be tried again from the new mount", async () => {
+    const gate = held();
+    const h = await mountSection({ rows: [row("a"), row("b")], revoke: gate.revoke });
+    await confirmRevoke(h.el, "a");
+    h.unmount();
+    const again = await h.remount();
+    gate.settle({ ok: false, code: "REVOCATION_FAILED" });
+    await flush();
+    expect(h.toasts).toEqual(["delegations.err.failed"]);
+    const button = revokeButton(again, "a");
+    expect(button?.disabled).toBe(false);
+    expect(busyShown(again)).toBe(false);
+    button?.click();
+    await flush();
+    expect(again.querySelector('[role="alertdialog"]')).not.toBeNull();
+  });
+});
+
 describe("details", () => {
   test("See details opens a drawer with both identities, the delegation ID, the resources and dates, and Close returns focus", async () => {
     const h = await mountSection({
