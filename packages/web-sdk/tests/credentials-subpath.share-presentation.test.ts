@@ -16,6 +16,7 @@ test("credentials subpath: a share-route (route-A) challenge is rejected with CH
     } as never,
     policy: {},
     expectedNodeAudience: "did:key:zNode",
+    requestedCapabilities: [],
   }).catch((error: unknown) => error);
 
   expect(rejected).toBeInstanceOf(SharePresentationError);

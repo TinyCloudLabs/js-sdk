@@ -1,17 +1,20 @@
 import {
   buildPolicyCredentialPresentationV4,
   credentialRequirementDigest,
+  normalizeUnifiedPolicyCapability,
+  unifiedPolicyCapabilityContains,
   validateUnifiedPolicyV2,
   type CredentialRequirement,
   type IssuedCredentialEnvelope,
   type PolicyCredentialPresentationV4,
+  type UnifiedPolicyCapability,
   type UnifiedPolicyV2,
+  type VerifiedCredential,
 } from "@tinycloud/sdk-core";
 import type { EmailProofResult, HolderSigner } from "./email-proof";
 
 export type SharePresentationErrorCode =
   | "CHALLENGE_EXPIRED"
-  | "CHALLENGE_WINDOW_TOO_LONG"
   | "CHALLENGE_IDENTIFIER_INVALID"
   | "CHALLENGE_ROUTE_UNSUPPORTED"
   | "CHALLENGE_AUDIENCE_MISMATCH"
@@ -24,6 +27,8 @@ export type SharePresentationErrorCode =
   | "POLICY_INVALID"
   | "POLICY_CID_MISMATCH"
   | "REQUIREMENT_MISMATCH"
+  | "REQUESTED_CAPABILITIES_INVALID"
+  | "CAPABILITY_OUTSIDE_CEILING"
   | "PRESENTATION_REJECTED";
 
 /** Typed rejection. Messages are fixed strings: they never include DIDs, digests, or credential text. */
@@ -37,14 +42,14 @@ export class SharePresentationError extends Error {
   }
 }
 
-/** Same 60 s ceiling sdk-core clamps the presentation expiry to (credential-admission.ts:461-462). */
-const CHALLENGE_MAX_WINDOW_MS = 60_000;
-
 /**
  * Floor for challengeId and nonce. A floor, not a security claim: the node's generator
  * and its minimum length are NOT CONFIRMED from this checkout.
  */
 const CHALLENGE_IDENTIFIER_MIN_LENGTH = 16;
+
+/** Ceiling on challengeId and nonce length. Bounds what the holder is asked to sign; node length not confirmed. */
+const CHALLENGE_IDENTIFIER_MAX_LENGTH = 256;
 
 /**
  * Local fail-closed margin on the credential's own expiry (CREDENTIAL_EXPIRED). Courier's
@@ -53,6 +58,18 @@ const CHALLENGE_IDENTIFIER_MIN_LENGTH = 16;
  * stricter local choice, not a Courier constant.
  */
 const CREDENTIAL_EXPIRY_MARGIN_MS = 60_000;
+
+/**
+ * Node status freshness for the reviewed OpenCredentials email profiles: 300 s (policy_v3.rs:87),
+ * applied by pinned_profile_status_freshness_seconds (policy_v3.rs:5929-5949) on top of any
+ * requirement maxAgeSeconds. The stricter limit applies.
+ */
+const EMAIL_STATUS_FRESHNESS_SECONDS = 300;
+const EMAIL_PINNED_PROFILE_IDS: readonly string[] = ["tinycloud.email-proof/v1", "tinycloud.email-domain-proof/v1"];
+const EMAIL_CREDENTIAL_TYPE_ID = "opencredentials.email/v1";
+
+/** Audience pin shape: printable ASCII, no whitespace or control characters. */
+const NODE_AUDIENCE_SHAPE = /^[\x21-\x7e]+$/;
 
 /**
  * Policy-v3 challenge as returned by the node (policy_v3.rs:1665-1673): challengeId, nonce,
@@ -84,6 +101,11 @@ export interface BuildSharePresentationInput {
    * Always written into the V4 body as nodeAudience.
    */
   readonly expectedNodeAudience: string;
+  /**
+   * Capabilities requested at challenge time, sent to the node as-is. Required: non-empty, each entry
+   * inside policy.capabilityCeiling. The same set is signed into the V4 body.
+   */
+  readonly requestedCapabilities: readonly UnifiedPolicyCapability[];
 }
 
 export interface SharePresentationMaterial {
@@ -94,8 +116,9 @@ export interface SharePresentationMaterial {
   readonly requirement: CredentialRequirement;
   readonly presentation: PolicyCredentialPresentationV4;
   /**
-   * Raw holder signature over exactly the bytes given (no hashing or prefixing). Bound to
-   * the holder key from `holderSigner`; the signer object itself is not exposed.
+   * Raw holder signature over exactly the bytes given (no hashing or prefixing). Same key authority as
+   * the holderSigner the caller passed in: it adds no signing power. Holder-key-bearing; do not persist,
+   * log, or forward it to less-trusted code.
    */
   readonly sign: (bytes: Uint8Array) => Promise<Uint8Array>;
 }
@@ -114,6 +137,19 @@ function isRouteAShaped(challenge: unknown): boolean {
 }
 
 /**
+ * Effective credential age limit in seconds, or undefined when neither limit applies. The node enforces
+ * two independent limits from issuedAt (policy_v3.rs:6340-6370): the requirement's maxAgeSeconds and the
+ * 300 s pin for the reviewed email profiles. The effective limit is the stricter of the two.
+ */
+function credentialAgeLimitSeconds(credential: VerifiedCredential, requirement: CredentialRequirement): number | undefined {
+  const pinned = EMAIL_PINNED_PROFILE_IDS.includes(credential.profile.id) &&
+    credential.credentialType.id === EMAIL_CREDENTIAL_TYPE_ID;
+  const maxAge = requirement.maxAgeSeconds;
+  if (!pinned) return maxAge;
+  return maxAge === undefined ? EMAIL_STATUS_FRESHNESS_SECONDS : Math.min(EMAIL_STATUS_FRESHNESS_SECONDS, maxAge);
+}
+
+/**
  * Build the signed V4 policy presentation for a Share mint.
  *
  * Checks run in fail-closed order; each failure throws a SharePresentationError
@@ -125,9 +161,16 @@ function isRouteAShaped(challenge: unknown): boolean {
  * rejection maps to PRESENTATION_REJECTED. Signing is delegated to the holder signer
  * over the 32-byte V4 digest; no hashing happens here.
  *
- * Holder algorithm must be EdDSA. The credential must expire more than 60 seconds from now and,
- * when the requirement sets maxAgeSeconds, must have been issued no more than that long ago.
- * A requirement without maxAgeSeconds has no age limit; this builder does not invent one.
+ * Holder algorithm must be EdDSA. The credential must expire more than 60 seconds from now. This local
+ * margin is the builder's choice, not a node rule: Courier applies none.
+ * Credential age is measured from issuedAt against the stricter of the requirement's maxAgeSeconds and,
+ * for the reviewed OpenCredentials email profiles (tinycloud.email-proof/v1 and tinycloud.email-domain-proof/v1
+ * with credentialType opencredentials.email/v1), the node's 300-second status pin (policy_v3.rs:87,
+ * :5929-5949). Any other profile with no maxAgeSeconds has no age limit, and none is added here.
+ * requestedCapabilities is required: non-empty, every entry inside policy.capabilityCeiling, and the same
+ * set is signed exactly as given. Pass the set sent at challenge time: the node compares it as a set
+ * (policy_v3.rs:5847-5853). The challenge is taken as the node issues it (300-second lifetime,
+ * policy_v3.rs:2075); no lifetime bound beyond expiry is applied.
  */
 export async function buildSharePresentation(
   input: BuildSharePresentationInput,
@@ -140,6 +183,7 @@ export async function buildSharePresentation(
   if (
     typeof input.expectedNodeAudience !== "string" ||
     input.expectedNodeAudience.length === 0 ||
+    !NODE_AUDIENCE_SHAPE.test(input.expectedNodeAudience) ||
     (challenge.nodeAudience !== undefined && challenge.nodeAudience !== input.expectedNodeAudience)
   ) {
     throw new SharePresentationError("CHALLENGE_AUDIENCE_MISMATCH", "policy challenge audience is not the expected node");
@@ -150,15 +194,12 @@ export async function buildSharePresentation(
   if (!Number.isFinite(expiresMs) || expiresMs <= nowMs) {
     throw new SharePresentationError("CHALLENGE_EXPIRED", "policy challenge is expired");
   }
-  if (expiresMs - nowMs > CHALLENGE_MAX_WINDOW_MS) {
-    throw new SharePresentationError("CHALLENGE_WINDOW_TOO_LONG", "policy challenge expiry is further out than 60 seconds");
-  }
 
   const identifiersOk = [challenge.challengeId, challenge.nonce].every(
-    (value) => typeof value === "string" && value.length >= CHALLENGE_IDENTIFIER_MIN_LENGTH,
+    (value) => typeof value === "string" && value.length >= CHALLENGE_IDENTIFIER_MIN_LENGTH && value.length <= CHALLENGE_IDENTIFIER_MAX_LENGTH,
   );
   if (!identifiersOk) {
-    throw new SharePresentationError("CHALLENGE_IDENTIFIER_INVALID", "policy challenge identifiers are missing or too short");
+    throw new SharePresentationError("CHALLENGE_IDENTIFIER_INVALID", "policy challenge identifiers are missing or outside the length bounds");
   }
 
   const holderDid = result.verified.holderDid;
@@ -181,12 +222,13 @@ export async function buildSharePresentation(
   if (!Number.isFinite(credentialExpiresMs) || credentialExpiresMs - nowMs <= CREDENTIAL_EXPIRY_MARGIN_MS) {
     throw new SharePresentationError("CREDENTIAL_EXPIRED", "credential is expired or within the expiry margin");
   }
-  // maxAgeSeconds is measured from issuedAt (packages/sdk-core/src/credentials/requirement.ts:79).
-  // A requirement without maxAgeSeconds has no age limit; none is added here.
-  if (requirement.maxAgeSeconds !== undefined) {
+  // Credential age: the node enforces the stricter of maxAgeSeconds and the 300 s email pin, measured
+  // from issuedAt (policy_v3.rs:6340-6370). Refused only when strictly older than the limit.
+  const ageLimitSeconds = credentialAgeLimitSeconds(result.verified, requirement);
+  if (ageLimitSeconds !== undefined) {
     const issuedMs = Date.parse(result.verified.issuedAt);
-    if (!Number.isFinite(issuedMs) || nowMs - issuedMs > requirement.maxAgeSeconds * 1000) {
-      throw new SharePresentationError("CREDENTIAL_TOO_OLD", "credential is older than the requirement maxAgeSeconds");
+    if (!Number.isFinite(issuedMs) || nowMs - issuedMs > ageLimitSeconds * 1000) {
+      throw new SharePresentationError("CREDENTIAL_TOO_OLD", "credential is older than its freshness limit");
     }
   }
 
@@ -212,6 +254,23 @@ export async function buildSharePresentation(
     throw new SharePresentationError("REQUIREMENT_MISMATCH", "credential requirement does not match the policy");
   }
 
+  // Requested capabilities are signed exactly as the caller sent them, so they must be a non-empty set
+  // inside the policy ceiling (node: policy_v3.rs:2061-2067 at challenge; :5847-5853 V4 set equality).
+  // Checked before any signing.
+  if (!Array.isArray(input.requestedCapabilities) || input.requestedCapabilities.length === 0) {
+    throw new SharePresentationError("REQUESTED_CAPABILITIES_INVALID", "requested capabilities must be a non-empty set");
+  }
+  let requestedCapabilities: UnifiedPolicyCapability[];
+  try {
+    requestedCapabilities = input.requestedCapabilities.map((entry) => normalizeUnifiedPolicyCapability(entry));
+  } catch {
+    throw new SharePresentationError("REQUESTED_CAPABILITIES_INVALID", "requested capability is malformed");
+  }
+  if (requestedCapabilities.some((requested) =>
+    !policy.capabilityCeiling.some((authority) => unifiedPolicyCapabilityContains(authority, requested)))) {
+    throw new SharePresentationError("CAPABILITY_OUTSIDE_CEILING", "requested capability is outside the policy capability ceiling");
+  }
+
   let presentation: PolicyCredentialPresentationV4;
   try {
     presentation = await buildPolicyCredentialPresentationV4({
@@ -227,7 +286,7 @@ export async function buildSharePresentation(
       },
       requirement,
       credential: result.verified,
-      requestedCapabilities: policy.capabilityCeiling,
+      requestedCapabilities,
       sign: holderSigner.sign,
     });
   } catch {

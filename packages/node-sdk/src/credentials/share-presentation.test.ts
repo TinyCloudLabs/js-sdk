@@ -66,6 +66,31 @@ function cidOf(value: unknown): string {
   return policyCidFromCanonicalBytes(new TextEncoder().encode(jcsCanonicalize(value)));
 }
 
+/** Policy with a replacement capability ceiling, re-bound to its own policyCid (as a relay would). */
+function policyWithCeiling(f: Fixture, capabilityCeiling: UnifiedPolicyV2["capabilityCeiling"]): { policy: UnifiedPolicyV2; policyCid: string } {
+  const { policyId: _p, signature: _s, ...unsigned } = f.policy;
+  const policy = policyFor({ ...unsigned, capabilityCeiling });
+  return { policy, policyCid: cidOf(policy) };
+}
+
+/** Requirement on a non-pinned profile: only maxAgeSeconds (if given) applies. */
+function otherRequirement(maxAgeSeconds?: number): CredentialRequirement {
+  return {
+    type: "TinyCloudCredentialRequirement",
+    version: 1,
+    profile: { id: "tinycloud.other-proof/v1", version: 1 },
+    credentialType: { id: "opencredentials.other/v1", version: 1 },
+    claims: requirementVector.sdkRequirement.claims,
+    ...(maxAgeSeconds === undefined ? {} : { maxAgeSeconds }),
+  };
+}
+
+/** Pinned email requirement with no maxAgeSeconds: the 300 s node pin is the only age limit. */
+function pinnedWithoutMaxAge(): CredentialRequirement {
+  const { maxAgeSeconds: _unused, ...requirement } = requirementVector.sdkRequirement;
+  return requirement as CredentialRequirement;
+}
+
 interface Fixture {
   readonly input: BuildSharePresentationInput;
   readonly policy: UnifiedPolicyV2;
@@ -84,7 +109,12 @@ interface FixtureOptions {
 async function fixture(opts: FixtureOptions = {}): Promise<Fixture> {
   const requirement = opts.requirement ?? requirementVector.sdkRequirement;
   const policyProjection = opts.requirement
-    ? { ...requirementVector.policyProjection, requirementDigest: await credentialRequirementDigest(opts.requirement) }
+    ? {
+        ...requirementVector.policyProjection,
+        profile: requirement.profile,
+        credentialType: requirement.credentialType,
+        requirementDigest: await credentialRequirementDigest(opts.requirement),
+      }
     : requirementVector.policyProjection;
   const issuedAt = new Date(Date.now() - (opts.issuedMsAgo ?? 60_000)).toISOString();
   const checkedAt = new Date().toISOString();
@@ -112,8 +142,8 @@ async function fixture(opts: FixtureOptions = {}): Promise<Fixture> {
     version: 1,
     protocol: "tinycloud.credentials/acquisition/v1",
     format: "vc+sd-jwt",
-    profile: requirementVector.policyProjection.profile,
-    credentialType: requirementVector.policyProjection.credentialType,
+    profile: policyProjection.profile,
+    credentialType: policyProjection.credentialType,
     schema: "test",
     issuerDid: requirementVector.policyProjection.issuerDid,
     issuerKid: requirementVector.policyProjection.issuerKid,
@@ -161,6 +191,7 @@ async function fixture(opts: FixtureOptions = {}): Promise<Fixture> {
       challenge,
       policy,
       expectedNodeAudience: "did:key:zNode",
+      requestedCapabilities: [capability],
     },
   };
 }
@@ -266,6 +297,22 @@ describe("buildSharePresentation golden and differential", () => {
     expect(JSON.stringify(material)).not.toContain(golden.holderSeedBase64Url);
     expect(Bun.inspect(material)).not.toContain(golden.holderSeedBase64Url);
     expect(Object.keys(material)).not.toContain("holderSigner");
+  });
+
+  test("each build draws a fresh 16-byte base64url jti and stamps issuedAt at build time", async () => {
+    const f = await fixture();
+    const before = Date.now();
+    const first = (await buildSharePresentation(f.input)).presentation;
+    const second = (await buildSharePresentation(f.input)).presentation;
+    const after = Date.now();
+    expect(first.jti).not.toBe(second.jti);
+    expect(first.jti).toMatch(/^[A-Za-z0-9_-]{22}$/);
+    expect(second.jti).toMatch(/^[A-Za-z0-9_-]{22}$/);
+    for (const p of [first, second]) {
+      const issued = Date.parse(p.issuedAt);
+      expect(issued).toBeGreaterThanOrEqual(before - 1000);
+      expect(issued).toBeLessThanOrEqual(after + 1000);
+    }
   });
 });
 
@@ -425,16 +472,13 @@ describe("buildSharePresentation fail-closed rejections (one per code)", () => {
     expect(typeof withoutAudience).toBe("function");
   });
 
-  test("CHALLENGE_WINDOW_TOO_LONG when the challenge expires 61 s out; nothing is signed", async () => {
+  test("a node-issued challenge with 299 s remaining is accepted: no window bound beyond expiry", async () => {
     const f = await fixture();
-    const { holderSigner, calls } = countingSigner(f);
-    const error = await rejectionOf(buildSharePresentation({
+    const material = await buildSharePresentation({
       ...f.input,
-      holderSigner,
-      challenge: { ...f.challenge, expiresAt: new Date(Date.now() + 61_000).toISOString() },
-    }));
-    expect(error.code).toBe("CHALLENGE_WINDOW_TOO_LONG");
-    expect(calls.n).toBe(0);
+      challenge: { ...f.challenge, expiresAt: new Date(Date.now() + 299_000).toISOString() },
+    });
+    expect(material.presentation.challengeId).toBe(f.challenge.challengeId);
   });
 
   test("a challenge expiring 59 s out is accepted and its challengeId is bound", async () => {
@@ -446,12 +490,13 @@ describe("buildSharePresentation fail-closed rejections (one per code)", () => {
     expect(material.presentation.challengeId).toBe(f.challenge.challengeId);
   });
 
-  test("CHALLENGE_IDENTIFIER_INVALID when challengeId or nonce is empty or under 16 characters; nothing is signed", async () => {
+  test("CHALLENGE_IDENTIFIER_INVALID when challengeId or nonce is empty, under 16 characters, or over 256; nothing is signed", async () => {
     const f = await fixture();
     const variants: SharePresentationChallenge[] = [
       { ...f.challenge, challengeId: "short-id" },
       { ...f.challenge, nonce: "short" },
       { ...f.challenge, nonce: "" },
+      { ...f.challenge, challengeId: "c".repeat(257) },
     ];
     for (const challenge of variants) {
       const { holderSigner, calls } = countingSigner(f);
@@ -469,6 +514,38 @@ describe("buildSharePresentation fail-closed rejections (one per code)", () => {
     });
     expect(material.presentation.challengeId).toBe("0123456789abcdef");
     expect(material.presentation.nonce).toBe("fedcba9876543210");
+  });
+
+  test("challengeId and nonce of exactly 256 characters are accepted; a 257-character nonce is refused", async () => {
+    const f = await fixture();
+    const material = await buildSharePresentation({
+      ...f.input,
+      challenge: { ...f.challenge, challengeId: "c".repeat(256), nonce: "n".repeat(256) },
+    });
+    expect(material.presentation.challengeId).toBe("c".repeat(256));
+    const { holderSigner, calls } = countingSigner(f);
+    const error = await rejectionOf(buildSharePresentation({
+      ...f.input,
+      holderSigner,
+      challenge: { ...f.challenge, nonce: "n".repeat(257) },
+    }));
+    expect(error.code).toBe("CHALLENGE_IDENTIFIER_INVALID");
+    expect(calls.n).toBe(0);
+  });
+
+  test("CHALLENGE_AUDIENCE_MISMATCH when the node audience is not printable ASCII; nothing is signed", async () => {
+    const f = await fixture();
+    for (const audience of ["did:key:z Node", "did:key:zNode\n"]) {
+      const { holderSigner, calls } = countingSigner(f);
+      const error = await rejectionOf(buildSharePresentation({
+        ...f.input,
+        holderSigner,
+        expectedNodeAudience: audience,
+        challenge: { ...f.challenge, nodeAudience: audience },
+      }));
+      expect(error.code).toBe("CHALLENGE_AUDIENCE_MISMATCH");
+      expect(calls.n).toBe(0);
+    }
   });
 });
 
@@ -520,7 +597,21 @@ describe("buildSharePresentation holder algorithm and credential freshness (sign
     expect(material.credentialDigest).toBe(f.result.verified.credentialDigest);
   });
 
-  test("CREDENTIAL_TOO_OLD when issuedAt is older than the requirement maxAgeSeconds (3600 s); nothing is signed", async () => {
+  test("CREDENTIAL_TOO_OLD when issuedAt is 301 s old on a pinned email profile (300 s pin, stricter than maxAgeSeconds 3600); nothing is signed", async () => {
+    const f = await fixture({ issuedMsAgo: 301_000 });
+    const { holderSigner, calls } = countingSigner(f);
+    const error = await rejectionOf(buildSharePresentation({ ...f.input, holderSigner }));
+    expect(error.code).toBe("CREDENTIAL_TOO_OLD");
+    expect(calls.n).toBe(0);
+  });
+
+  test("a pinned-profile credential issued 299 s ago, inside the 300 s pin, is accepted", async () => {
+    const f = await fixture({ issuedMsAgo: 299_000 });
+    const material = await buildSharePresentation(f.input);
+    expect(material.credentialDigest).toBe(f.result.verified.credentialDigest);
+  });
+
+  test("CREDENTIAL_TOO_OLD when issuedAt is 3610 s old, past both the 300 s pin and maxAgeSeconds 3600; nothing is signed", async () => {
     const f = await fixture({ issuedMsAgo: 3_610_000 });
     const { holderSigner, calls } = countingSigner(f);
     const error = await rejectionOf(buildSharePresentation({ ...f.input, holderSigner }));
@@ -528,27 +619,115 @@ describe("buildSharePresentation holder algorithm and credential freshness (sign
     expect(calls.n).toBe(0);
   });
 
-  test("a credential issued 3590 s ago, inside maxAgeSeconds, is accepted", async () => {
-    const f = await fixture({ issuedMsAgo: 3_590_000 });
+  test("a non-pinned profile applies only maxAgeSeconds: a 3590 s credential is accepted", async () => {
+    const f = await fixture({ requirement: otherRequirement(3600), issuedMsAgo: 3_590_000 });
     const material = await buildSharePresentation(f.input);
     expect(material.credentialDigest).toBe(f.result.verified.credentialDigest);
   });
 
-  test("a requirement without maxAgeSeconds sets no age limit: a 30-day-old credential is accepted", async () => {
-    const { maxAgeSeconds, ...requirement } = requirementVector.sdkRequirement;
-    expect(maxAgeSeconds).toBe(3600);
-    const f = await fixture({ requirement: requirement as CredentialRequirement, issuedMsAgo: 30 * 86_400_000 });
+  test("a non-pinned profile applies only maxAgeSeconds: a 3610 s credential is CREDENTIAL_TOO_OLD; nothing is signed", async () => {
+    const f = await fixture({ requirement: otherRequirement(3600), issuedMsAgo: 3_610_000 });
+    const { holderSigner, calls } = countingSigner(f);
+    const error = await rejectionOf(buildSharePresentation({ ...f.input, holderSigner }));
+    expect(error.code).toBe("CREDENTIAL_TOO_OLD");
+    expect(calls.n).toBe(0);
+  });
+
+  test("a non-pinned profile with no maxAgeSeconds has no age limit: a 30-day-old credential is accepted", async () => {
+    const f = await fixture({ requirement: otherRequirement(), issuedMsAgo: 30 * 86_400_000 });
     const material = await buildSharePresentation(f.input);
     expect(material.presentation.requirementDigest).toBe(f.policy.credentialRequirement.requirementDigest);
   });
 
-  test("with no maxAgeSeconds, issuedAt is not checked at all: an unparseable issuedAt is accepted (no invented age limit)", async () => {
-    const { maxAgeSeconds, ...requirement } = requirementVector.sdkRequirement;
-    expect(maxAgeSeconds).toBe(3600);
-    const f = await fixture({ requirement: requirement as CredentialRequirement });
+  test("a pinned email profile with no maxAgeSeconds is still limited to 300 s: a 30-day-old credential is CREDENTIAL_TOO_OLD", async () => {
+    const f = await fixture({ requirement: pinnedWithoutMaxAge(), issuedMsAgo: 30 * 86_400_000 });
+    const { holderSigner, calls } = countingSigner(f);
+    const error = await rejectionOf(buildSharePresentation({ ...f.input, holderSigner }));
+    expect(error.code).toBe("CREDENTIAL_TOO_OLD");
+    expect(calls.n).toBe(0);
+  });
+
+  test("a pinned email profile with no maxAgeSeconds refuses an unparseable issuedAt, because a limit applies", async () => {
+    const f = await fixture({ requirement: pinnedWithoutMaxAge() });
+    const { holderSigner, calls } = countingSigner(f);
+    const result = { ...f.result, verified: { ...f.result.verified, issuedAt: "not-a-date" } };
+    const error = await rejectionOf(buildSharePresentation({ ...f.input, holderSigner, result }));
+    expect(error.code).toBe("CREDENTIAL_TOO_OLD");
+    expect(calls.n).toBe(0);
+  });
+
+  test("a non-pinned profile with no maxAgeSeconds does not check issuedAt: an unparseable issuedAt is accepted", async () => {
+    const f = await fixture({ requirement: otherRequirement() });
     const result = { ...f.result, verified: { ...f.result.verified, issuedAt: "not-a-date" } };
     const material = await buildSharePresentation({ ...f.input, result });
     expect(material.presentation.requirementDigest).toBe(f.policy.credentialRequirement.requirementDigest);
+  });
+
+  test("a pinned profile id with a non-email credentialType gets no 300 s pin: a 30-day-old credential is accepted", async () => {
+    const requirement = { ...pinnedWithoutMaxAge(), credentialType: { id: "opencredentials.other/v1", version: 1 } } as CredentialRequirement;
+    const f = await fixture({ requirement, issuedMsAgo: 30 * 86_400_000 });
+    const material = await buildSharePresentation(f.input);
+    expect(material.presentation.requirementDigest).toBe(f.policy.credentialRequirement.requirementDigest);
+  });
+
+  test("a non-pinned profile id with the email credentialType gets no 300 s pin: a 30-day-old credential is accepted", async () => {
+    const requirement = { ...pinnedWithoutMaxAge(), profile: { id: "tinycloud.other-proof/v1", version: 1 } } as CredentialRequirement;
+    const f = await fixture({ requirement, issuedMsAgo: 30 * 86_400_000 });
+    const material = await buildSharePresentation(f.input);
+    expect(material.presentation.requirementDigest).toBe(f.policy.credentialRequirement.requirementDigest);
+  });
+});
+
+describe("buildSharePresentation requested capabilities (the node compares the signed set)", () => {
+  const other = { ...capability, resource: "tinycloud://space/kv/docs/b" };
+
+  test("a subset of the ceiling is signed exactly as given", async () => {
+    const f = await fixture();
+    const { policy, policyCid } = policyWithCeiling(f, [capability, other]);
+    const material = await buildSharePresentation({
+      ...f.input,
+      policy,
+      challenge: { ...f.challenge, policyCid },
+      requestedCapabilities: [capability],
+    });
+    expect(material.presentation.requestedCapabilities).toEqual([capability]);
+  });
+
+  test("set order is not significant: a reordered subset is accepted and signed in caller order", async () => {
+    const f = await fixture();
+    const { policy, policyCid } = policyWithCeiling(f, [capability, other]);
+    const material = await buildSharePresentation({
+      ...f.input,
+      policy,
+      challenge: { ...f.challenge, policyCid },
+      requestedCapabilities: [other, capability],
+    });
+    expect(material.presentation.requestedCapabilities).toEqual([other, capability]);
+  });
+
+  test("REQUESTED_CAPABILITIES_INVALID when the requested set is empty; nothing is signed", async () => {
+    const f = await fixture();
+    const { holderSigner, calls } = countingSigner(f);
+    const error = await rejectionOf(buildSharePresentation({ ...f.input, holderSigner, requestedCapabilities: [] }));
+    expect(error.code).toBe("REQUESTED_CAPABILITIES_INVALID");
+    expect(calls.n).toBe(0);
+  });
+
+  test("REQUESTED_CAPABILITIES_INVALID when an entry is malformed; nothing is signed", async () => {
+    const f = await fixture();
+    const { holderSigner, calls } = countingSigner(f);
+    const malformed = { kind: "kv" } as unknown as UnifiedPolicyV2["capabilityCeiling"][number];
+    const error = await rejectionOf(buildSharePresentation({ ...f.input, holderSigner, requestedCapabilities: [malformed] }));
+    expect(error.code).toBe("REQUESTED_CAPABILITIES_INVALID");
+    expect(calls.n).toBe(0);
+  });
+
+  test("CAPABILITY_OUTSIDE_CEILING when a requested capability is not in the ceiling; nothing is signed", async () => {
+    const f = await fixture();
+    const { holderSigner, calls } = countingSigner(f);
+    const error = await rejectionOf(buildSharePresentation({ ...f.input, holderSigner, requestedCapabilities: [other] }));
+    expect(error.code).toBe("CAPABILITY_OUTSIDE_CEILING");
+    expect(calls.n).toBe(0);
   });
 });
 
