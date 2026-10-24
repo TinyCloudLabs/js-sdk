@@ -4,7 +4,7 @@
 import { registerUiClient, type UiClientHandle } from "../../src/ui/index";
 import { toastStore } from "../../src/ui/parts/toasts";
 import type { ToastKind } from "../../src/ui/toast-store";
-import { createStubPanelData } from "../../src/ui/stub/index";
+import { createStubPanelData, type StubSeed } from "../../src/ui/stub/index";
 
 type SyncState = { requested: boolean; effective: string; reason?: string };
 
@@ -74,7 +74,7 @@ w.__tc = {
       ui: { developerMode: true, ...ui },
       source: source as never,
       manifestAppId: () => "e2e-settings-smoke",
-      data: createStubPanelData(),
+      data: createStubPanelData((w.__TC_STUB_SEED__ as StubSeed | undefined) ?? {}),
     });
     w.tc = { ui: handle.api };
     return true;

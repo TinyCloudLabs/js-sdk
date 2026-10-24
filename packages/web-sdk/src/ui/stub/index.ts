@@ -23,23 +23,78 @@ import type {
 } from "../data";
 import { viewReady } from "../view-result";
 
-export function createStubPanelData(): PanelDataFactory {
+export interface StubSeed {
+  /**
+   * Local TinyCloud state. Default: off. Enabling moves off -> looking -> found,
+   * or -> not-found when this is `not-found`.
+   */
+  localNode?: LocalNodeState;
+}
+
+const STUB_LOCAL_SETTLE_MS = 600;
+
+const STUB_LOCAL_FOUND: LocalNodeState = {
+  source: "stub",
+  connection: "found",
+  url: "http://127.0.0.1:8787",
+  identity: { origin: "http://127.0.0.1:8787", nodeDid: "did:example:stub-local-node" },
+  version: "v0.14.2",
+};
+
+export function createStubPanelData(seed: StubSeed = {}): PanelDataFactory {
   return (client) => {
     const requests: RequestsView = {
       rows: () => [],
       subscribe: () => () => undefined,
     };
+    const localListeners = new Set<(view: PanelView) => void>();
+    let localNode: LocalNodeState = seed.localNode ?? { source: "stub", connection: "off" };
+    let pending: { timer: ReturnType<typeof setTimeout>; resolve: (result: ActionResult) => void } | undefined;
+
+    const setLocalNode = (next: LocalNodeState): void => {
+      localNode = next;
+      for (const listener of localListeners) listener("local");
+    };
 
     return {
       // A sync facade change re-reads only the local-copy view.
       subscribe(listener) {
-        return client.sync?.subscribe(() => listener("copy" satisfies PanelView)) ?? (() => undefined);
+        localListeners.add(listener);
+        const unsubscribeSync =
+          client.sync?.subscribe(() => listener("copy" satisfies PanelView)) ?? (() => undefined);
+        return () => {
+          localListeners.delete(listener);
+          unsubscribeSync();
+        };
       },
       account: () => Promise.resolve(viewReady<AccountInfo>(STUB_ACCOUNT)),
-      localNode: () =>
-        Promise.resolve(viewReady<LocalNodeState>({ source: "stub", connection: "off" })),
-      // Stub: reports success without changing the reported connection state.
-      setLocalNodeEnabled: () => Promise.resolve<ActionResult>({ ok: true }),
+      localNode: () => Promise.resolve(viewReady<LocalNodeState>(localNode)),
+      // Stub: a short timer stands in for the real check. Cancelling while looking
+      // (switch off) clears the timer and settles the pending enable as ok.
+      setLocalNodeEnabled: (on: boolean) => {
+        if (pending) {
+          clearTimeout(pending.timer);
+          pending.resolve({ ok: true });
+          pending = undefined;
+        }
+        if (!on) {
+          setLocalNode({ source: "stub", connection: "off" });
+          return Promise.resolve<ActionResult>({ ok: true });
+        }
+        setLocalNode({ source: "stub", connection: "looking" });
+        return new Promise<ActionResult>((resolve) => {
+          const timer = setTimeout(() => {
+            pending = undefined;
+            setLocalNode(
+              seed.localNode && seed.localNode.connection === "not-found"
+                ? seed.localNode
+                : STUB_LOCAL_FOUND,
+            );
+            resolve({ ok: true });
+          }, STUB_LOCAL_SETTLE_MS);
+          pending = { timer, resolve };
+        });
+      },
       localCopy: () => {
         const state = client.sync?.state;
         return Promise.resolve(
