@@ -9,6 +9,7 @@ export const DELEGATIONS_STRINGS = {
   "delegations.lede": "Who can use your TinyCloud, and what they can do.",
   "delegations.unavailable": "Delegations aren't available here.",
   "delegations.app.fallback": "this app",
+  "delegations.app.subject": "This app",
 
   "delegations.g.app": "Granted to {app}",
   "delegations.g.app.sub": "{app} and the helpers it started.",
@@ -81,6 +82,8 @@ export const DELEGATIONS_STRINGS = {
   "delegations.ended.received": "Shared with you. Only the one who shared it can end it.",
 
   "delegations.confirm.title": "Revoke access for {name}?",
+  "delegations.confirm.title.app": "Revoke access for {name} on this device?",
+  "delegations.confirm.after.app": "{name} will stop working here until you sign in again.",
   "delegations.confirm.what": "{name} will stop being able to {what}{where}.",
   "delegations.confirm.generic": "{name} will stop being able to use this access{where}.",
   "delegations.confirm.where": " in your {space} space",
@@ -123,6 +126,8 @@ export const DELEGATIONS_STRINGS = {
   "delegations.d.noforward": "It can't pass this access on to anyone else.",
   "delegations.receipt.what": "{name} can no longer {what}.",
   "delegations.receipt.generic": "{name} can no longer use this access.",
+  "delegations.receipt.what.app": "{name} can no longer {what} on this device.",
+  "delegations.receipt.generic.app": "{name} can no longer use this access on this device.",
   "delegations.d.copy.by": "Copy the identity that granted this",
   "delegations.d.copy.to": "Copy the identity that received this",
   "delegations.d.copy.id": "Copy the delegation ID",

@@ -210,6 +210,18 @@ for (const scheme of ["light", "dark"] as const) {
       expect(dim.ratio).toBeGreaterThanOrEqual(4.5);
     });
 
+    test("the app's own grant names the app on this device and what happens next", async ({ page }) => {
+      await open(page, { scheme });
+      const box = await openConfirm(page, "Fieldnotes · local copy");
+      await expect(box).toContainText("Revoke access for e2e-settings-smoke on this device?");
+      await expect(box).toContainText("e2e-settings-smoke will stop being able to read, write and list notes/ and recordings/ in your Personal space.");
+      await expect(box).toContainText("e2e-settings-smoke will stop working here until you sign in again.");
+      await expect(box).not.toContainText("did:key");
+      await expect(box.getByRole("button", { name: "Keep access" })).toBeFocused();
+      const note = await textRow("consequence", box.locator("p span").nth(1), SURFACE[scheme]);
+      expect(note.ratio).toBeGreaterThanOrEqual(4.5);
+    });
+
     test("Keep access closes the box, changes nothing and puts focus back on Revoke", async ({ page }) => {
       await open(page, { scheme });
       const box = await openConfirm(page, "Research helper");

@@ -438,6 +438,8 @@ function revokedFrom(data: object): Set<string> {
 function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
   const text = (code: string, params?: Readonly<Record<string, string | number>>): string => ctx.text(code, params);
   const appName = (): string => ctx.appLabel() ?? text("delegations.app.fallback");
+  const appSubject = (): string => ctx.appLabel() ?? text("delegations.app.subject");
+  const partyName = (row: DelegationRow): string => (row.group === "this-app" ? appSubject() : displayName(row));
 
   const style = node("style");
   style.textContent = UI_STYLE + STYLE;
@@ -636,16 +638,19 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
     card.phase = "idle";
     paint(card);
 
-    const name = displayName(card.row);
+    const thisApp = card.row.group === "this-app";
+    // For the app's own grant the party losing access is the app, on this device; the DID would name nobody the user knows.
+    const name = partyName(card.row);
     const parsed = parseResources(card.row.resources);
     const spaces = spacesOf(parsed);
     const where = spaces.length === 1 ? text("delegations.confirm.where", { space: spaces[0] ?? "" }) : "";
     const clause = abilityClause(parsed);
-    const heading = text("delegations.confirm.title", { name });
-    const detail =
+    const heading = text(thisApp ? "delegations.confirm.title.app" : "delegations.confirm.title", { name });
+    const consequence =
       clause === ""
         ? text("delegations.confirm.generic", { name, where })
         : text("delegations.confirm.what", { name, what: clause, where });
+    const detail = thisApp ? `${consequence} ${text("delegations.confirm.after.app", { name })}` : consequence;
     const wallet = text("delegations.confirm.openkey");
 
     const handle = ctx.confirm({
@@ -711,7 +716,7 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
       receipt(card);
       void settleList();
       if (disposed) return;
-      live.textContent = text("delegations.live.revoked", { name: displayName(card.row) });
+      live.textContent = text("delegations.live.revoked", { name: partyName(card.row) });
       leave(card);
       return;
     }
@@ -728,11 +733,14 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
   function receipt(card: Card): void {
     const time = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     // The slip's body takes no parameters, so the sentence for this revoke is registered under its own code just before it is shown.
-    const name = displayName(card.row);
+    const name = partyName(card.row);
+    const suffix = card.row.group === "this-app" ? ".app" : "";
     const clause = abilityClause(parseResources(card.row.resources));
     registerPanelStrings({
       "delegations.receipt.sentence":
-        clause === "" ? text("delegations.receipt.generic", { name }) : text("delegations.receipt.what", { name, what: clause }),
+        clause === ""
+          ? text(`delegations.receipt.generic${suffix}`, { name })
+          : text(`delegations.receipt.what${suffix}`, { name, what: clause }),
     });
     const shown = ctx.receipt({
       titleCode: "delegations.receipt.title",

@@ -72,7 +72,7 @@ function row(cid: string, over: Partial<DelegationRow> = {}): DelegationRow {
 interface Harness {
   readonly el: HTMLElement;
   readonly revoked: string[];
-  readonly receipts: Array<{ titleCode: string; rows: ReadonlyArray<{ labelCode: string; value: string }> }>;
+  readonly receipts: Array<{ titleCode: string; bodyCode?: string; rows: ReadonlyArray<{ labelCode: string; value: string }> }>;
   readonly toasts: string[];
   readonly reads: { count: number };
   refresh(): Promise<void>;
@@ -88,6 +88,8 @@ interface Options {
   source?: boolean;
   toasts?: boolean;
   slip?: boolean;
+  /** `null`: the host gives no app name. */
+  appLabel?: string | null;
 }
 
 async function mountSection(options: Options = {}): Promise<Harness> {
@@ -132,7 +134,7 @@ async function mountSection(options: Options = {}): Promise<Harness> {
   const ctx = {
     client: () => client,
     text: panelText,
-    appLabel: () => "Fieldnotes",
+    appLabel: () => (options.appLabel === null ? undefined : (options.appLabel ?? "Fieldnotes")),
     requestRender: () => undefined,
     toastsEnabled: () => options.toasts !== false,
     toast: (request: { textCode: string }) => {
@@ -427,6 +429,45 @@ describe("revoke", () => {
     expect(active()).toBe(keep ?? null);
     expect(h.revoked).toEqual([]);
     expect(box.getAttribute("aria-labelledby")).not.toBeNull();
+  });
+
+  test("the app's own grant names the app on this device, says what happens next, and never the DID", async () => {
+    const h = await mountSection({ rows: [row("a", { group: "this-app", label: { text: "did:key:z6MkAp…AppKey", source: "derived" } })] });
+    const words = (await openConfirm(h)).textContent ?? "";
+    expect(words).toContain("Revoke access for Fieldnotes on this device?");
+    expect(words).toContain("Fieldnotes will stop being able to read and list notes/");
+    expect(words).toContain("Fieldnotes will stop working here until you sign in again.");
+    expect(words).toContain("You'll confirm with your wallet in OpenKey.");
+    expect(words).not.toContain("did:key");
+    expect(words).not.toContain("z6Mk");
+  });
+
+  test("without an app name the app's grant says 'This app'", async () => {
+    const h = await mountSection({ rows: [row("a", { group: "this-app" })], appLabel: null });
+    const words = (await openConfirm(h)).textContent ?? "";
+    expect(words).toContain("Revoke access for This app on this device?");
+    expect(words).toContain("This app will stop working here until you sign in again.");
+  });
+
+  test("other groups keep the grantee's name and add no this-device line", async () => {
+    const h = await mountSection({ rows: [row("a", { label: { text: "Research helper", source: "stub" } })] });
+    const words = (await openConfirm(h)).textContent ?? "";
+    expect(words).toContain("Revoke access for Research helper?");
+    expect(words).not.toContain("on this device");
+    expect(words).not.toContain("sign in again");
+  });
+
+  test("the receipt and the live line follow the same naming", async () => {
+    const app = await mountSection({ rows: [row("a", { group: "this-app" })] });
+    buttonIn(await openConfirm(app), "Revoke access")?.click();
+    await flush();
+    expect(panelText(app.receipts[0]?.bodyCode ?? "")).toBe("Fieldnotes can no longer read and list notes/ on this device.");
+    expect(app.el.querySelector(".dl-live")?.textContent).toBe("Access revoked for Fieldnotes.");
+
+    const other = await mountSection({ rows: [row("a", { label: { text: "Research helper", source: "stub" } })] });
+    buttonIn(await openConfirm(other), "Revoke access")?.click();
+    await flush();
+    expect(panelText(other.receipts[0]?.bodyCode ?? "")).toBe("Research helper can no longer read and list notes/.");
   });
 
   test("Escape takes the safe action, calls nothing and returns focus to Revoke", async () => {
