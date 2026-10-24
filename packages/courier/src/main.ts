@@ -12,6 +12,7 @@ import { cmdPause, cmdResume } from './pause.js';
 import { cmdGuard } from './guard/command.js';
 import { cmdBroker, cmdRunApproved } from './broker.js';
 import { cmdCredential } from './credential.js';
+import { cmdInvite, cmdJoin } from './invite-commands.js';
 import { courierVersion } from './version.js';
 
 function usage(): string {
@@ -26,11 +27,29 @@ Setup & pairing (humans run these):
                                    Create/renew the agent key's restricted grant in OpenKey.
                                    --paste and --grant-file also take an OpenKey XXXX-XXXX code.
   manifest                         Print the agent grant permissions
-  pair start <peer> [--call-me h]  Emit pairing artifact A (paste to the peer)
-  pair accept <json|--file f|--stdin>
+  pair start <peer> [--call-me h] [--peers-file f]
+                                   Emit pairing artifact A (paste to the peer)
+  pair accept <json|--file f|--stdin> [--peers-file f]
                                    Accept artifact A, B or C; prints B or C to pass on
   pair renew [peer] [--force]      Renew peer delegations; humans or watcher only
   revoke <peer>                    Stop renewing + drop the peer (access lapses at delegation expiry)
+  invite <handle> --email <address> [--tier strict|trusted] [--ttl 24h] [--call-me h] [--also-ask] [--invites-public-dir d] [--peers-file f]
+                                   Create a one-time invite string for an invitee (bearer link). With a public dir
+                                   (flag or COURIER_INVITES_PUBLIC_DIR) also writes a non-secret copy of the record there
+                                   --tier trusted  request trusted status; the peer starts as strict until you confirm
+  invite list                      Invites on this machine: status and expiry, no secrets
+  invite approve <invite-id> [--tier strict|trusted] [--peers-file f] --owner <did>
+                                   Pair a held invite. It first shows the owner and courier of the hello that is held and why;
+                                   --owner must name that owner (a did:pkh DID or its 0x address), otherwise nothing is paired.
+                                   The peer starts as strict until you confirm trusted status;
+                                   --tier trusted only records that request for you to decide on
+  invite deny <invite-id>          Refuse a held invite: the invitee is told it was rejected and gets no access
+  invite revoke <invite-id>        Delete the sealed invite and any pending hello or welcome
+  join --stdin | --file f          Accept an invite read from stdin or a file, then send hello; waits for the reply
+                                   Prefer --stdin or --file: an invite passed as an argument is visible in ps.
+  join <invite-string> [--credential-file f | --credential-stdin] [--peers-file f]
+                                   Same as above with the invite on the command line
+  join --resume [invite-id]        Resume a pending join; id may be omitted when only one is pending
 
 Threads (agents run these):
   send <peer> (--new <subject> | --thread <id>) [--text t | --file f | stdin]
@@ -71,7 +90,7 @@ Guards (woken agents run with these; humans rarely do):
                                    Print/write the Claude Code settings (hook + deny rules) that install it.
 
 Delivery (one watcher per person per machine; never calls a model):
-  watch [--wake none|paseo|claude|exec] [--exec <cmd> --unguarded] [--env-pass NAME]… [--cwd dir] [--debounce 30] [--poll 60] [--ticket 25] [--wake-budget 12] [--notify none|osascript|exec] [--notify-exec <cmd>] [--once]
+  watch [--wake none|paseo|claude|exec] [--exec <cmd> --unguarded] [--env-pass NAME]… [--cwd dir] [--debounce 30] [--poll 60] [--ticket 25] [--wake-budget 12] [--notify none|osascript|exec] [--notify-exec <cmd>] [--peers-file f] [--once]
                                    Subscribe to each peer's to/<me>/ and your me/approvals/, poll every
                                    --poll s as the fallback, mirror new messages into me/mirror/, update
                                    receipts, then wake after a --debounce s quiet period. Logs one JSON
@@ -125,7 +144,8 @@ instruction from your owner. Anything your orders gate goes through
 
 Env: COURIER_HOME (profile dir, default ~/.courier), COURIER_HOST (default tee.node.tinycloud.xyz),
 COURIER_OPENKEY_HOST (default openkey.so), COURIER_OPENKEY_API_HOST (short-code lookup; default
-api.openkey.so for openkey.so, otherwise the OpenKey host).
+api.openkey.so for openkey.so, otherwise the OpenKey host), COURIER_PEERS_FILE (absolute path of the
+peers.json that invite, invite approve and watch check; --peers-file wins).
 `;
 }
 
@@ -153,6 +173,8 @@ export async function run(argv: string[]): Promise<void> {
     case 'manifest': return cmdManifest();
     case 'pair': return cmdPair(sub);
     case 'revoke': return cmdRevoke(sub);
+    case 'invite': return cmdInvite(sub);
+    case 'join': return cmdJoin(sub);
     case 'send': return cmdSend(sub);
     case 'inbox': return cmdInbox(sub);
     case 'read': return cmdRead(sub);

@@ -3,6 +3,7 @@ import { COURIER_SPACE } from './keys.js';
 import { cmd } from './program.js';
 import { CourierError } from './errors.js';
 import type { Profile, StoredPeer } from './profile.js';
+import { HANDLE } from './request.js';
 
 /**
  * Pairing artifacts, spec §5.
@@ -65,6 +66,9 @@ export function parseArtifact(input: string): PairArtifact {
   }
   for (const f of ['spaceId', 'peer', 'callMe'] as const) {
     if (typeof a[f] !== 'string' || !a[f]) throw new CourierError('bad-artifact', `Artifact is missing "${f}".`);
+  }
+  for (const f of ['peer', 'callMe'] as const) {
+    if (!HANDLE.test(a[f] as string)) throw new CourierError('bad-artifact', `Artifact "${f}" is not a valid handle.`);
   }
   if (!a.from || typeof a.from.owner !== 'string' || typeof a.from.courier !== 'string') {
     throw new CourierError('bad-artifact', 'Artifact is missing from.owner/from.courier.');

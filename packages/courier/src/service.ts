@@ -86,16 +86,40 @@ export function launchdPlan(spec: ServiceSpec, home: string, uid: number): Servi
   };
 }
 
+const CONTROL = /[\u0000-\u001f\u007f]/;
+const ENV_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
 /**
- * systemd.exec: ExecStart= splits on whitespace and expands `%` specifiers and `$VAR`; Environment= values expand
- * `%` only (`$` is literal there); WorkingDirectory= is a plain path (quotes are rejected) with `%` expansion.
+ * Every value in the unit goes through one of two functions: `quoted` for values in a quoted word (ExecStart= arguments, Environment= assignments) and
+ * `unitPath` for directives that take a path (WorkingDirectory=, StandardOutput=append:, StandardError=append:). Nothing else is interpolated.
+ *
+ * systemd.exec: ExecStart= splits on whitespace and expands `%` specifiers and `$VAR`; Environment= values expand `%` only (`$` is literal there).
+ * `quoted` writes newline, carriage return and tab as their `\n`, `\r`, `\t` escapes so a value can never start a new directive, and refuses any
+ * other control character.
  */
 const quoted = (s: string, expandsDollar: boolean) => {
-  const escaped = s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/%/g, '%%');
+  const escaped = s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/%/g, '%%').replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t');
+  if (CONTROL.test(escaped)) throw new CourierError('usage', 'A systemd unit value must not contain control characters.');
   return `"${expandsDollar ? escaped.replace(/\$/g, '$$$$') : escaped}"`;
 };
+
+/**
+ * A path directive takes the path as written (quotes and escapes are not interpreted there), so the value must be absolute and free of control
+ * characters, and only `%` is doubled (specifiers are expanded in these directives; `$` is not). A trailing backslash would continue the line
+ * and swallow the next directive, and trailing whitespace is dropped by the parser, so both are refused.
+ */
+const unitPath = (directive: string, p: string) => {
+  if (CONTROL.test(p)) throw new CourierError('usage', `${directive} must not contain control characters.`);
+  if (!path.isAbsolute(p)) throw new CourierError('usage', `${directive} must be an absolute path.`);
+  if (/[\\\s]$/.test(p)) throw new CourierError('usage', `${directive} must not end with a backslash or whitespace.`);
+  return p.replace(/%/g, '%%');
+};
+
 const execArg = (s: string) => quoted(s, true);
-const envAssignment = (s: string) => quoted(s, false);
+const envAssignment = (key: string, value: string) => {
+  if (!ENV_KEY.test(key)) throw new CourierError('usage', 'A systemd unit environment name must be letters, digits and "_".');
+  return quoted(`${key}=${value}`, false);
+};
 
 export function systemdUnitFile(spec: ServiceSpec): string {
   const env = Object.entries(spec.env).sort(([a], [b]) => (a < b ? -1 : 1));
@@ -107,8 +131,8 @@ export function systemdUnitFile(spec: ServiceSpec): string {
     '',
     '[Service]',
     'Type=simple',
-    `WorkingDirectory=${spec.cwd.replace(/%/g, '%%')}`,
-    ...env.map(([key, value]) => `Environment=${envAssignment(`${key}=${value}`)}`),
+    `WorkingDirectory=${unitPath('WorkingDirectory', spec.cwd)}`,
+    ...env.map(([key, value]) => `Environment=${envAssignment(key, value)}`),
     `ExecStart=${spec.argv.map(execArg).join(' ')}`,
     // Every process the watcher started (agents run in their own process groups) belongs to this cgroup, so a stop,
     // a crash or a restart takes them all down.
@@ -117,8 +141,8 @@ export function systemdUnitFile(spec: ServiceSpec): string {
     'TimeoutStopSec=15',
     'Restart=always',
     'RestartSec=30',
-    `StandardOutput=append:${spec.logFile}`,
-    `StandardError=append:${spec.logFile}`,
+    `StandardOutput=append:${unitPath('StandardOutput', spec.logFile)}`,
+    `StandardError=append:${unitPath('StandardError', spec.logFile)}`,
     '',
     '[Install]',
     'WantedBy=default.target',

@@ -11,6 +11,8 @@ import type { WakeApproval, WakeMessage, Waker, WatchLog } from './wake.js';
 import { appendNotice, type Notice, type Notifier } from './notify.js';
 import { nextNoticeId, writePauseMarker } from './pause.js';
 import { HANDLE, ULID } from './request.js';
+import { inviteFolder } from './invite-schema.js';
+import type { InviteWatcher } from './invite-watch.js';
 
 /** Spec §8. inform and receipts never wake; a message with no valid intent is delivered but never wakes. */
 const WAKE_INTENTS = new Set(['request', 'ask', 'answer', 'update']);
@@ -180,6 +182,8 @@ export interface WatchDeps {
   spaceId: string;
   /** The owner's own space. */
   selfHooks: HooksLike;
+  /** Inviter-side invite watcher. Sweeps open invites on each poll and handles hello events. */
+  invites?: InviteWatcher;
   /** A peer's space, through the peer delegation (each peer streams independently: one refused scope must not stall the rest). */
   peerHooks(peer: StoredPeer): Promise<HooksLike>;
   /** Fresh peer list each call (pairing and renewals change the profile under a running watcher). */
@@ -1264,6 +1268,7 @@ export class Watcher {
         });
       }
     }
+    await this.deps.invites?.sweep();
     await this.syncPaused();
     await this.pruneState();
     await Promise.all(this.deps.loadPeers().map((peer) => this.sync(peer, via)));
@@ -1306,6 +1311,13 @@ export class Watcher {
           hooks: async () => this.deps.selfHooks,
           onEvent: () => void this.syncApprovals('hook'),
         });
+        for (const id of this.deps.invites?.openIds() ?? []) {
+          desired.set(`invite:${id}`, {
+            sub: { space: this.deps.spaceId, service: 'kv', pathPrefix: `${inviteFolder(id)}in/` },
+            hooks: async () => this.deps.selfHooks,
+            onEvent: () => void this.deps.invites?.onHello(id),
+          });
+        }
         for (const [id, controller] of supervisors) {
           if (!desired.has(id)) {
             controller.abort();
