@@ -70,6 +70,38 @@ jobs:
           bun run --cwd packages/courier build
           bun run --cwd packages/cli build
           bun run --cwd packages/mcp build
+      # One bun process per file, found by glob so new files are picked up.
+      # Fails on any failing file, on a file that reports `0 pass` with skips,
+      # and on a file that runs past its per-file timeout.
+      - name: Run share-envelope and share-sdk unit tests
+        timeout-minutes: 10
+        env:
+          BUN_JSC_useConcurrentJIT: "0"
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/share-unit-tests.log"
+          mapfile -t files < <(find packages/share-envelope/test packages/share-sdk/test -name '*.test.ts' | sort)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error title=share tests::no test files found"
+            exit 1
+          fi
+          failed=()
+          for file in "${files[@]}"; do
+            echo "::group::$file"
+            if ! timeout 120 bun test "./$file" 2>&1 | tee "$log"; then
+              failed+=("$file")
+              echo "::error title=share test failed::$file"
+            elif grep -Eq '\b0 pass\b' "$log" && grep -Eq '\b[1-9][0-9]* skip\b' "$log"; then
+              failed+=("$file (0 pass, all skipped)")
+              echo "::error title=share test skipped entirely::$file"
+            fi
+            echo "::endgroup::"
+          done
+          echo "ran ${#files[@]} files, ${#failed[@]} failed"
+          if [ "${#failed[@]}" -gt 0 ]; then
+            printf 'FAILED: %s\n' "${failed[@]}"
+            exit 1
+          fi
       - name: Run focused conformance and concurrency tests
         run: |
           bun test tests/operations-mcp-conformance/conformance.test.ts
@@ -80,11 +112,11 @@ jobs:
           bun test packages/cli/src/commands/share-artifact.test.ts
           bun test packages/cli/src/commands/share.integration.test.ts
           bun test packages/cli/src/share/adapters.test.ts
+          bun test packages/cli/src/share/short-links.test.ts
           bun test packages/cli/src/share/bearer-revoke.test.ts
           bun test packages/cli/src/share/native-receive.test.ts
           bun test packages/cli/src/commands/share-folder.test.ts
           bun test packages/cli/src/share/html-folder.test.ts
-          bun test packages/share-sdk/test/html-bundle
       - name: Run production private-key secrets regression in isolation
         run: bun test packages/cli/src/commands/secrets-private-key-production.test.ts
       - name: Run MCP CLI regression in isolation

@@ -65,6 +65,7 @@ import {
 import type { ReplicationOptions } from "@tinycloud/sdk-core";
 import type { PermissionEntry } from "@tinycloud/sdk-core";
 import { augmentSignInEntriesWithReplication } from "../replication/authority-sign-in";
+import { refuseCaveated } from "./caveatRefusal";
 import {
   SignStrategy,
   SignRequest,
@@ -1442,6 +1443,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   async createBootstrapSession(
     options: CreateBootstrapSessionOptions,
   ): Promise<TinyCloudSession> {
+    refuseCaveated(options.capabilityRequest.manifests);
     if (!this._address || !this._chainId) {
       throw new Error("Must be signed in before creating bootstrap sessions");
     }
@@ -1566,6 +1568,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * @param options - Optional per-call SIWE overrides for this sign-in only
    */
   async signIn(options?: SignInOptions): Promise<ClientSession> {
+    refuseCaveated(this.getCapabilityRequest()?.manifests);
     const generation = this.sessionGeneration;
     // Get signer address and chain ID
     const address = canonicalizeAddress(await this.signer.getAddress());
@@ -1786,6 +1789,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     address: string;
     chainId: number;
   }> {
+    refuseCaveated(this.getCapabilityRequest()?.manifests);
     const address = canonicalizeAddress(await this.signer.getAddress());
     const chainId = await this.signer.getChainId();
 
@@ -1995,6 +1999,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       ) => Promise<OpenKeyAuthorizationResultV1 | null>;
     },
   ): Promise<ClientSession> {
+    refuseCaveated(this.getCapabilityRequest()?.manifests);
     // A per-call host override is the host this session will actually use,
     // not merely a display hint for OpenKey. Install it before preparation so
     // the same value is bound into the authorization context and later used

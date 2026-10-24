@@ -25,6 +25,7 @@ import {
   type UnifiedOwnerRootReceipt,
   type RegisterPolicyV3Input,
   type RegisterPolicyV3Receipt,
+  refuseCaveated,
 } from "@tinycloud/node-sdk/core";
 import {
   resolveReplicationConfig,
@@ -857,6 +858,8 @@ export class TinyCloudWeb {
   }
 
   signIn = async (options?: SignInOptions): Promise<ClientSession> => {
+    // Refuse a caveated manifest before any restore, signer or network call.
+    refuseCaveated(this._capabilityRequest?.manifests ?? this._manifest);
     const signOuts = this.signOutCount;
     const assertNotSignedOut = (): void => {
       if (this.signOutCount !== signOuts || this.signOutInFlight > 0) {
