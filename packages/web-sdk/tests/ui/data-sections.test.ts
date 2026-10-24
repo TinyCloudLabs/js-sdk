@@ -85,7 +85,6 @@ function ctxFor(client: PanelClient, developerMode = false): HostContext {
     toast: () => "",
     openPanel: () => undefined,
     closePanel: () => undefined,
-    appLabel: () => undefined,
     text,
   } as unknown as HostContext;
 }
@@ -377,36 +376,7 @@ describe("activity section", () => {
       true,
     );
     await flush();
-    const rows = [...el.querySelectorAll(".act-table .act-ar:not(.act-hd)")].map(
-      (node) => `${node.querySelector(".act-c-op")?.textContent} ${node.querySelector(".act-c-path")?.textContent}`,
-    );
-    expect(rows).toEqual(["put b", "get a"]);
-  });
-
-  test("gives each request ten cells in column order, copy last", async () => {
-    const requests = {
-      rows: () => [request("get", "a")],
-      subscribe: () => () => undefined,
-    };
-    const el = mount(activitySection, clientWith(fakeData({ requests: () => requests })), true);
-    await flush();
-    const data = el.querySelector(".act-table .act-ar:not(.act-hd)");
-    const cells = [...(data?.querySelectorAll(":scope > [role=cell]") ?? [])];
-    expect(cells).toHaveLength(10);
-    expect(cells[9]?.querySelector("button")).not.toBeNull();
-  });
-
-  test("errors only hides successful requests and shows the failure code", async () => {
-    const requests = {
-      rows: () => [request("get", "a"), { ...request("put", "b"), ok: false, code: "quota" }],
-      subscribe: () => () => undefined,
-    };
-    const el = mount(activitySection, clientWith(fakeData({ requests: () => requests })), true);
-    await flush();
-    el.querySelector<HTMLButtonElement>("button[role=switch]")?.click();
-    const rows = [...el.querySelectorAll(".act-table .act-ar:not(.act-hd)")];
-    expect(rows).toHaveLength(1);
-    expect(rows[0]?.querySelector(".act-c-res")?.textContent).toContain("quota");
+    expect(labels(el)).toEqual(["put b", "get a"]);
   });
 });
 

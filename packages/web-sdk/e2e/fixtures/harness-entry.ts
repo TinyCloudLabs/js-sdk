@@ -5,6 +5,7 @@ import { registerUiClient, type UiClientHandle } from "../../src/ui/index";
 import { toastStore } from "../../src/ui/parts/toasts";
 import type { ToastKind } from "../../src/ui/toast-store";
 import { createStubPanelData } from "../../src/ui/stub/index";
+import { createRequestLog, sampleRows, type LogRow } from "./request-log";
 
 type SyncState = { requested: boolean; effective: string; reason?: string };
 
@@ -48,6 +49,14 @@ const storage = {
   },
 };
 
+// Request log rows: the mockup's sample rows, or `requests` from window.__TC_STUB_SEED__ (a JSON string) set with addInitScript.
+function seededRows(): LogRow[] {
+  const raw: unknown = Reflect.get(window, "__TC_STUB_SEED__");
+  const seed: { requests?: LogRow[] } = typeof raw === "string" ? JSON.parse(raw) : {};
+  return seed.requests ?? sampleRows();
+}
+
+const requestLog = createRequestLog(seededRows());
 let signOutCount = 0;
 let signedIn = true;
 const source = {
@@ -55,6 +64,7 @@ const source = {
   get sync() {
     return facade;
   },
+  requests: requestLog.reader,
   storage,
   async signOut() {
     signOutCount += 1;
@@ -116,5 +126,17 @@ w.__tc = {
   // How many times the panel's Sign out reached the client. Checked by the sign-out spec.
   signOutCalls() {
     return signOutCount;
+  },
+  // The request log the Activity section reads: add a request, clear the log, or count its listeners.
+  logPush(row: LogRow) {
+    requestLog.push(row);
+    return true;
+  },
+  logClear() {
+    requestLog.clear();
+    return true;
+  },
+  logListeners() {
+    return requestLog.listeners();
   },
 };
