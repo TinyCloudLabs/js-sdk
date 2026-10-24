@@ -1437,7 +1437,12 @@ describe("panel reset when the principal changes over a live session", () => {
   });
 
   /** A TinyCloudWeb with a fake node. `live` is the session already on the node; `next` is what signIn/restore leaves behind. */
-  async function webWith(live: ReturnType<typeof principal> | undefined, next: ReturnType<typeof principal>) {
+  async function webWith(
+    live: ReturnType<typeof principal> | undefined,
+    next: ReturnType<typeof principal>,
+    // `failAfterCommit`: the node commits `next`, then a later step throws, as establishSignIn can. `stale`: restored permissions are not enough.
+    opts: { failAfterCommit?: Error; stale?: boolean } = {},
+  ) {
     const persisted = {
       address: next.address,
       chainId: next.chainId,
@@ -1464,19 +1469,24 @@ describe("panel reset when the principal changes over a live session", () => {
         return this.session && `tinycloud:pkh:eip155:${this.session.chainId}:${this.session.address}:default`;
       },
       accountSpaceId: `tinycloud:pkh:eip155:${next.chainId}:${next.address}:account`,
-      hasRuntimePermissions: mock(() => true),
+      hasRuntimePermissions: mock(() => !opts.stale),
       signIn: mock(async () => {
         node.session = next;
+        if (opts.failAfterCommit) throw opts.failAfterCommit;
       }),
       restoreSession: mock(async () => {
         node.session = next;
+        if (opts.failAfterCommit) throw opts.failAfterCommit;
+      }),
+      signOut: mock(async () => {
+        node.session = undefined;
       }),
     };
     (tcw as any)._node = node;
     (tcw as any)._initPromise = Promise.resolve();
     const reset = mock(() => undefined);
     (tcw as any).uiClient.reset = reset;
-    return { tcw, reset };
+    return { tcw, reset, node };
   }
 
   /** signIn() with nothing to restore, so it takes the fresh node.signIn path. */
@@ -1520,5 +1530,65 @@ describe("panel reset when the principal changes over a live session", () => {
     expect((tcw as any)._node.restoreSession).toHaveBeenCalledTimes(1);
     expect((tcw as any)._node.signIn).not.toHaveBeenCalled();
     expect(reset).toHaveBeenCalledTimes(1);
+  });
+
+  test("a sign-in that fails after the node committed a different account still resets the panel once, and the error propagates", async () => {
+    const failure = new Error("hosting failed");
+    const { tcw, reset } = await webWith(principal(ACCOUNT_A), principal(ACCOUNT_B), { failAfterCommit: failure });
+    (tcw as any).restoreSession = mock(async () => ({ status: "missing" }));
+    await expect(tcw.signIn()).rejects.toBe(failure);
+    expect(tcw.session()?.address).toBe(ACCOUNT_B);
+    expect(reset).toHaveBeenCalledTimes(1);
+  });
+
+  test("a restore that fails after the node committed a different account still resets the panel once, and the failure is reported", async () => {
+    const failure = new Error("hosting failed");
+    const { tcw, reset } = await webWith(principal(ACCOUNT_A), principal(ACCOUNT_B), { failAfterCommit: failure });
+    const result = await tcw.restoreSession(ACCOUNT_B);
+    expect(result.status).toBe("restore-failed");
+    expect(result.error).toBe(failure);
+    expect(reset).toHaveBeenCalledTimes(1);
+  });
+
+  test("a restore with stale permissions that falls through to a fresh sign-in resets once for a principal swap and not for the same principal", async () => {
+    const swap = await webWith(principal(ACCOUNT_A), principal(ACCOUNT_B), { stale: true });
+    (swap.tcw as any).walletSigner = { getConnectedAddress: async () => ACCOUNT_B };
+    await swap.tcw.signIn();
+    expect(swap.node.restoreSession).toHaveBeenCalledTimes(1);
+    expect(swap.node.signIn).toHaveBeenCalledTimes(1);
+    expect(swap.reset).toHaveBeenCalledTimes(1);
+
+    const same = await webWith(principal(ACCOUNT_A), principal(ACCOUNT_A), { stale: true });
+    (same.tcw as any).walletSigner = { getConnectedAddress: async () => ACCOUNT_A };
+    await same.tcw.signIn();
+    expect(same.node.signIn).toHaveBeenCalledTimes(1);
+    expect(same.reset).not.toHaveBeenCalled();
+  });
+
+  test("a sign-out during the node call leaves exactly one reset, signOut's own, for sign-in and for restore", async () => {
+    const swapDuringSignOut = async (via: "signIn" | "restore") => {
+      const { tcw, reset, node } = await webWith(principal(ACCOUNT_A), principal(ACCOUNT_B));
+      const commit = via === "signIn" ? node.signIn : node.restoreSession;
+      const original = commit.getMockImplementation() as () => Promise<void>;
+      const slow = mock(async () => {
+        await original();
+        await tcw.signOut();
+      });
+      node[via === "signIn" ? "signIn" : "restoreSession"] = slow;
+      if (via === "signIn") (tcw as any).restoreSession = mock(async () => ({ status: "missing" }));
+      const outcome = via === "signIn" ? tcw.signIn() : tcw.restoreSession(ACCOUNT_B);
+      await outcome.catch(() => undefined);
+      return reset;
+    };
+    expect(await swapDuringSignOut("signIn")).toHaveBeenCalledTimes(1);
+    expect(await swapDuringSignOut("restore")).toHaveBeenCalledTimes(1);
+  });
+
+  test("a sign-in for the same account that fails after the node committed does not reset the panel", async () => {
+    const failure = new Error("hosting failed");
+    const { tcw, reset } = await webWith(principal(ACCOUNT_A), principal(ACCOUNT_A), { failAfterCommit: failure });
+    (tcw as any).restoreSession = mock(async () => ({ status: "missing" }));
+    await expect(tcw.signIn()).rejects.toBe(failure);
+    expect(reset).not.toHaveBeenCalled();
   });
 });
