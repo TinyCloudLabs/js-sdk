@@ -37,7 +37,7 @@ export {
   type LinkType,
   type LinkTypeSpec,
 } from "./constants.js";
-export { assertDidKeySignature, redactLink, shortShareLinkCid } from "./delivery.js";
+export { DEFAULT_SHARE_ORIGINS, assertDidKeySignature, redactLink, shortShareLinkCid } from "./delivery.js";
 export { ed25519KeyProblem, verifyEd25519Strict, type Ed25519KeyProblem } from "./ed25519-strict.js";
 export { LinkError, isLinkError, type LinkErrorCode } from "./errors.js";
 export {

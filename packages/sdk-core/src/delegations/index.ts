@@ -173,7 +173,6 @@ export {
   DELIVERY_ADMISSION_DOMAIN,
   ShareDeliveryRefusedError,
   shortDeliveryLinkBodyCid,
-  validateShareDeliveryAuthorizationV3Bytes,
   verifyShareDeliveryAuthorizationV3Bytes,
   withoutShareLink,
 } from "./share-delivery-v3";

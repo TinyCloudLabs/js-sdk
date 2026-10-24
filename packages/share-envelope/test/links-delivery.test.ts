@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { redactLink, shortShareLinkCid } from "../src/links/index.js";
+import { DEFAULT_SHARE_ORIGINS, redactLink, shortShareLinkCid } from "../src/links/index.js";
 
 const ORIGIN = "https://share.tinycloud.xyz";
 const ID = "lqdw5iopqq2tkkvjj6gbbi5vbv";
@@ -74,5 +74,13 @@ describe("the short share link on a trusted origin", () => {
     expect(shortShareLinkCid(upper, trusted)).toBeUndefined();
     expect(shortShareLinkCid(upper, { trustedOrigins: [new URL(upper).origin] })).toBeUndefined();
     expect(shortShareLinkCid(SHORT.replace(ID, `${ID.slice(0, 5).toUpperCase()}${ID.slice(5)}`), trusted)).toBeUndefined();
+  });
+});
+
+describe("the default share origins", () => {
+  it("are exactly the production share origin, and a link on it is accepted with them", () => {
+    expect(DEFAULT_SHARE_ORIGINS).toEqual([ORIGIN]);
+    expect(shortShareLinkCid(SHORT, { trustedOrigins: DEFAULT_SHARE_ORIGINS })).toBe(CID);
+    expect(shortShareLinkCid(SHORT.replace(ORIGIN, "https://share.example"), { trustedOrigins: DEFAULT_SHARE_ORIGINS })).toBeUndefined();
   });
 });

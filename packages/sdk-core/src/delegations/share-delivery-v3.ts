@@ -174,15 +174,14 @@ export async function verifyShareDeliveryAuthorizationV3Bytes(
   return verified;
 }
 
-const DEFAULT_SHARE_ORIGINS: readonly string[] = ["https://share.tinycloud.xyz"];
-
 /**
  * The body CID of a short share link on one of `trustedOrigins` (default: the production share origin). Any other
  * link (another origin, the full form, another type or version, a query, a non-canonical spelling, an id that is
  * not lowercase) is refused, so the node is only ever sent a link it can fetch by id.
  */
-export async function shortDeliveryLinkBodyCid(shareUrl: string, trustedOrigins: readonly string[] = DEFAULT_SHARE_ORIGINS): Promise<string> {
-  const cid = (await import("@tinycloud/share-envelope/links")).shortShareLinkCid(shareUrl, { trustedOrigins });
+export async function shortDeliveryLinkBodyCid(shareUrl: string, trustedOrigins?: readonly string[]): Promise<string> {
+  const links = await import("@tinycloud/share-envelope/links");
+  const cid = links.shortShareLinkCid(shareUrl, { trustedOrigins: trustedOrigins ?? links.DEFAULT_SHARE_ORIGINS });
   if (cid === undefined) throw new Error("share delivery requires a short share link");
   return cid;
 }

@@ -4,6 +4,9 @@ import { decodeStrictBase64Url, linkIssuerPublicKey } from "./header.js";
 
 const KEY_PARAMETER = /[#&]k=([A-Za-z0-9_-]{43})(?:&|$)/;
 
+/** The share origins a delivery link is on by default: the production share origin. */
+export const DEFAULT_SHARE_ORIGINS: readonly string[] = ["https://share.tinycloud.xyz"];
+
 /**
  * The body CID (`c`) of a short share link, or `undefined` for any other string: the full form, another link type,
  * another fragment version, a query, a non-canonical spelling, an id that is not lowercase, or a link on an origin
