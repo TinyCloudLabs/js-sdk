@@ -61,6 +61,36 @@ describe("confirmBox", () => {
     expect(calls).toEqual(["cancel", "confirm"]);
   });
 
+  test("confirmBox exposes its question as the accessible description", () => {
+    const box = confirmBox({
+      question: "Wiping now loses 3 unsynced changes.",
+      cancelLabel: "Keep",
+      confirmLabel: "Wipe",
+      onCancel: () => undefined,
+      onConfirm: () => undefined,
+    });
+    g.document.body.append(box.el);
+    const describedBy = box.el.getAttribute("aria-describedby");
+    expect(describedBy).toBeTruthy();
+    const target = g.document.getElementById(describedBy as string);
+    expect(target).not.toBeNull();
+    expect(box.el.contains(target as Element)).toBe(true);
+    expect(target?.textContent).toBe("Wiping now loses 3 unsynced changes.");
+    box.el.remove();
+  });
+
+  test("two confirm boxes get different description ids", () => {
+    const make = () =>
+      confirmBox({ question: "Sure?", cancelLabel: "No", confirmLabel: "Yes", onCancel: () => undefined, onConfirm: () => undefined });
+    const a = make();
+    const b = make();
+    g.document.body.append(a.el, b.el);
+    expect(a.el.getAttribute("aria-describedby")).not.toBe(b.el.getAttribute("aria-describedby"));
+    expect(g.document.getElementById(b.el.getAttribute("aria-describedby") as string)?.parentElement).toBe(b.el);
+    a.el.remove();
+    b.el.remove();
+  });
+
   test("Escape takes the safe action and does not reach the panel's own handler", () => {
     const calls: string[] = [];
     const box = confirmBox({

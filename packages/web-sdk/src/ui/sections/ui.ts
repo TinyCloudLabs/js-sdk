@@ -65,15 +65,20 @@ export interface ConfirmBox {
   readonly confirm: HTMLButtonElement;
 }
 
+let confirmSeq = 0;
+
 /**
  * Inline confirm for a destructive action. The cancel (safe) action comes first
- * in the DOM and is the one the caller focuses. The box is an alertdialog so a
- * screen reader announces the question.
+ * in the DOM and is the one the caller focuses. The box is an alertdialog whose
+ * question is its description, so a screen reader reads the question when focus
+ * lands on the safe action. Each box gets its own id, so two boxes never collide.
  */
 export function confirmBox(options: ConfirmOptions): ConfirmBox {
   const el = document.createElement("div");
   el.className = "confirm";
   el.setAttribute("role", "alertdialog");
+  const questionId = `tc-confirm-q-${++confirmSeq}`;
+  el.setAttribute("aria-describedby", questionId);
   // Escape takes the safe action, as the mockup's design rules require. Stopping
   // propagation keeps the panel's own Escape handler from closing the drawer.
   el.addEventListener("keydown", (event) => {
@@ -84,6 +89,7 @@ export function confirmBox(options: ConfirmOptions): ConfirmBox {
 
   const question = document.createElement("p");
   question.className = "busy";
+  question.id = questionId;
   question.textContent = options.question;
 
   const actions = document.createElement("div");
