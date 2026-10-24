@@ -9,6 +9,7 @@ import {
   decodeStrictBase64Url,
   linkSignatureV1Schema,
   parseLinkTimestamp,
+  isPlainObject,
   validateLinkHeader,
   verifyHeader,
   type LinkHeaderV1,
@@ -34,8 +35,9 @@ export interface OpenedLink {
 const jsonObject = z.record(z.unknown());
 
 export function toEpochMs(now: Date | number | undefined): number {
-  if (now === undefined) return Date.now();
-  return now instanceof Date ? now.getTime() : now;
+  const ms = now === undefined ? Date.now() : now instanceof Date ? now.getTime() : now;
+  if (Number.isNaN(new Date(ms).getTime())) throw new LinkError("timestamp_format");
+  return ms;
 }
 
 export interface CheckedLinkRecord {
@@ -54,9 +56,8 @@ export interface CheckedLinkRecord {
  * rules.
  */
 export async function checkLinkRecord(record: unknown, nowMs: number): Promise<CheckedLinkRecord> {
-  const parsedRecord = jsonObject.safeParse(record);
-  if (!parsedRecord.success) throw new LinkError("record_shape");
-  const fields = parsedRecord.data;
+  if (!isPlainObject(record)) throw new LinkError("record_shape");
+  const fields = record;
   const names = Object.keys(fields).sort().join(",");
   if (names !== "body,header,signature" && names !== "body,header") throw new LinkError("record_fields");
   const signed = "signature" in fields;

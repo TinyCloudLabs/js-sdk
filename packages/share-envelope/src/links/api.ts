@@ -10,6 +10,7 @@ import {
   checkLinkBody,
   checkLinkHeaderLife,
   decodeStrictBase64Url,
+  isPlainObject,
   randomLinkNonce,
   signDelete,
   signHeader,
@@ -259,9 +260,13 @@ export interface ResolvedLink extends OpenedLink {
   readonly id: string | undefined;
 }
 
-const recordHeaderSchema = z.object({ header: z.record(z.unknown()), signature: z.record(z.unknown()).optional() }).strict();
+/** The stored header record of a short link: the raw objects, so a key outside the field set is still there for the checks. */
+interface RecordHeader {
+  readonly header: unknown;
+  readonly signature?: unknown;
+}
 
-function parseRecordHeader(text: string | null): z.infer<typeof recordHeaderSchema> {
+function parseRecordHeader(text: string | null): RecordHeader {
   if (text === null || text.length === 0 || text.length > LINK_MAX_RECORD_HEADER_BYTES) throw new LinkError("invalid_response");
   const bytes = decodeStrictBase64Url(text);
   let value: unknown;
@@ -271,9 +276,9 @@ function parseRecordHeader(text: string | null): z.infer<typeof recordHeaderSche
   } catch {
     throw new LinkError("invalid_response");
   }
-  const parsed = recordHeaderSchema.safeParse(value);
-  if (!parsed.success) throw new LinkError("invalid_response");
-  return parsed.data;
+  if (!isPlainObject(value) || Object.keys(value).some((name) => name !== "header" && name !== "signature")) throw new LinkError("invalid_response");
+  if (!isPlainObject(value.header) || ("signature" in value && !isPlainObject(value.signature))) throw new LinkError("invalid_response");
+  return { header: value.header, ..."signature" in value ? { signature: value.signature } : {} };
 }
 
 async function fetchShortRecord(

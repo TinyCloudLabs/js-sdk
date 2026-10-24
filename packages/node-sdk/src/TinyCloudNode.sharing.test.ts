@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, mock, test } from "bun:test";
 
 import {
@@ -1172,6 +1173,39 @@ describe("TinyCloudNode sharing", () => {
         expect(failure).not.toBeInstanceOf(ShareDeliveryRefusedError);
         expect(failure).toMatchObject({ status: 429, message: expect.stringContaining("HTTP 429") });
         expect(failure).not.toMatchObject({ code: "delivery-authorization-invalid" });
+      }
+    });
+
+    test("a short link on an origin that is not configured is refused with no fetch and no invocation", async () => {
+      const elsewhere = SHORT.replace("https://share.tinycloud.xyz", "https://share.example");
+      const defaults = deliveryNode(() => new Response("{}", { status: 200 }));
+      await expect(defaults.node.authorizeShareDeliveryV3(input(elsewhere))).rejects.toThrow("share delivery requires a short share link");
+      expect(defaults.sent).toHaveLength(0);
+      expect(defaults.invocations()).toBe(0);
+
+      const configured = deliveryNode(() => new Response("{}", { status: 200 }));
+      await expect(configured.node.authorizeShareDeliveryV3({ ...input(SHORT), trustedOrigins: ["https://share.example"] })).rejects.toThrow("share delivery requires a short share link");
+      expect(configured.sent).toHaveLength(0);
+      expect(configured.invocations()).toBe(0);
+
+      const listed = deliveryNode(() => new Response("{}", { status: 200 }));
+      await expect(listed.node.authorizeShareDeliveryV3({ ...input(elsewhere), trustedOrigins: ["https://share.example"] })).rejects.toThrow();
+      expect(listed.sent).toHaveLength(1);
+      expect(listed.invocations()).toBe(1);
+    });
+
+    test("the contract's request body digest rows: the JCS bytes in hex and the digest equal what the SDK computes", () => {
+      const { deliveryRequestDigest } = JSON.parse(readFileSync(new URL("../../share-envelope/test/links-api-vectors.json", import.meta.url), "utf8")) as {
+        deliveryRequestDigest: { vectors: readonly { body: Record<string, string>; jcsBytes: number; jcsHex: string; requestBodyDigest: string }[] };
+      };
+      expect(deliveryRequestDigest.vectors.length).toBeGreaterThanOrEqual(2);
+      for (const vector of deliveryRequestDigest.vectors) {
+        const { requestBodyDigest, ...unsigned } = vector.body;
+        const bytes = new TextEncoder().encode(canonicalizeEncryptionJson(unsigned));
+        expect(bytes.length).toBe(vector.jcsBytes);
+        expect(Buffer.from(bytes).toString("hex")).toBe(vector.jcsHex);
+        expect(Buffer.from(sha256(bytes)).toString("base64url")).toBe(vector.requestBodyDigest);
+        expect(requestBodyDigest).toBe(vector.requestBodyDigest);
       }
     });
   });

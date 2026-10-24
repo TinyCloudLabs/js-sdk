@@ -114,7 +114,7 @@ export type LinkDeleteRequestV1 = z.infer<typeof linkDeleteRequestV1Schema>;
 
 export type LinkIssuerMode = "signed" | "service";
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
+export function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 

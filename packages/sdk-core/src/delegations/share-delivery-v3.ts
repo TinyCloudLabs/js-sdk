@@ -73,16 +73,8 @@ function exactObject(value: unknown, keys: readonly string[], label: string): Re
   return record;
 }
 
-const BASE64URL_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-
-/** The unused trailing bits of an unpadded base64url string are zero, so one byte string has one spelling. */
-function isCanonicalBase64Url(value: string): boolean {
-  const unusedBits = value.length % 4 === 0 ? 0 : value.length % 4 === 2 ? 0x0f : value.length % 4 === 3 ? 0x03 : undefined;
-  return unusedBits !== undefined && (BASE64URL_ALPHABET.indexOf(value.slice(-1)) & unusedBits) === 0;
-}
-
 function decodeBase64Url(value: unknown): Uint8Array {
-  if (typeof value !== "string" || !/^[A-Za-z0-9_-]+$/.test(value) || !isCanonicalBase64Url(value)) throw new Error("share delivery value is not canonical base64url");
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]+$/.test(value)) throw new Error("share delivery value is not canonical base64url");
   if (typeof atob === "function") {
     const padded = value.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - value.length % 4) % 4);
     return Uint8Array.from(atob(padded), (character) => character.charCodeAt(0));
@@ -178,10 +170,7 @@ export async function verifyShareDeliveryAuthorizationV3Bytes(
 ): Promise<Omit<ShareDeliveryAuthorizationV3Receipt, "proof">> {
   const verified = validateShareDeliveryAuthorizationV3Bytes(bytes, expected);
   const { signature, ...unsignedAdmission } = verified.admission;
-  const { verifyEd25519Strict } = await import("@tinycloud/share-envelope/links");
-  if (!verifyEd25519Strict(didKeyBytes(signature.signerDid), admissionDigest(unsignedAdmission), decodeBase64Url(signature.value))) {
-    throw new Error("v3 share delivery admission signature is invalid");
-  }
+  (await import("@tinycloud/share-envelope/links")).assertDidKeySignature(signature.signerDid, admissionDigest(unsignedAdmission), signature.value);
   return verified;
 }
 

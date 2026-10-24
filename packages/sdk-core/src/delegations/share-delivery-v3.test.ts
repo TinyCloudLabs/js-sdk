@@ -4,6 +4,7 @@ import { sha256 } from "@noble/hashes/sha256";
 import { base58btc } from "multiformats/bases/base58";
 import { canonicalizeSignedObjectUnsigned as canonicalize } from "../policy/signed-object.js";
 import { readFileSync } from "node:fs";
+import { assertDidKeySignature } from "@tinycloud/share-envelope/links";
 import { DELIVERY_ADMISSION_DOMAIN, shortDeliveryLinkBodyCid, validateShareDeliveryAuthorizationV3Bytes, verifyShareDeliveryAuthorizationV3Bytes } from "./share-delivery-v3.js";
 
 const seed = new Uint8Array(32).fill(7);
@@ -150,7 +151,7 @@ describe("v3 share delivery authorization: admission v1", () => {
     const { deliveryAdmission } = JSON.parse(readFileSync(new URL("../../../share-envelope/test/links-api-vectors.json", import.meta.url), "utf8")) as {
       deliveryAdmission: { vectors: readonly { admission: Record<string, unknown>; digestHex: string; signature: { signerDid: string; value: string }; expect: { valid: boolean } }[] };
     };
-    expect(deliveryAdmission.vectors).toHaveLength(2);
+    expect(deliveryAdmission.vectors).toHaveLength(3);
     for (const vector of deliveryAdmission.vectors) {
       const digest = sha256(new TextEncoder().encode(`${DELIVERY_ADMISSION_DOMAIN}${canonicalize(vector.admission)}`));
       const verifies = ed25519.verify(Buffer.from(vector.signature.value, "base64url"), digest, base58btc.decode(vector.signature.signerDid.slice("did:key:".length)).slice(2));
@@ -254,7 +255,6 @@ describe("v3 share delivery authorization: the strict Ed25519 rule", () => {
     expect(spelled).not.toBe(value);
     expect(Buffer.from(spelled, "base64url").equals(Buffer.from(value, "base64url"))).toBe(true);
     const bytes = responseWith(nodeDid, spelled);
-    expect(() => validateShareDeliveryAuthorizationV3Bytes(bytes, expectedFor(nodeDid))).toThrow("canonical base64url");
     await expect(verifyShareDeliveryAuthorizationV3Bytes(bytes, expectedFor(nodeDid))).rejects.toThrow("canonical base64url");
   });
 });
@@ -275,5 +275,26 @@ describe("the short link of a delivery: the share origin", () => {
 
   it("refuses an upper-case id", async () => {
     await expect(shortDeliveryLinkBodyCid(link("https://share.tinycloud.xyz", id.toUpperCase()))).rejects.toThrow("short share link");
+  });
+});
+
+describe("the delivery admission vector with a non-ASCII label", () => {
+  const { deliveryAdmission } = JSON.parse(readFileSync(new URL("../../../share-envelope/test/links-api-vectors.json", import.meta.url), "utf8")) as {
+    deliveryAdmission: { vectors: readonly { admission: Record<string, unknown>; digestHex: string; signature: { signerDid: string; value: string }; expect: { valid: boolean } }[] };
+  };
+  const vector = deliveryAdmission.vectors.find((entry) => String(entry.admission.label).includes("\u{1F4C4}"));
+  if (vector === undefined) throw new Error("the vector file has no admission with a non-ASCII label");
+  const digestOf = (admission: Record<string, unknown>) => sha256(new TextEncoder().encode(`${DELIVERY_ADMISSION_DOMAIN}${canonicalize(admission)}`));
+
+  it("has the digest the SDK computes, and the strict verifier accepts its signature", () => {
+    expect(vector.expect.valid).toBe(true);
+    expect(String(vector.admission.label)).toContain("\u2028");
+    expect(Buffer.from(digestOf(vector.admission)).toString("hex")).toBe(vector.digestHex);
+    expect(() => assertDidKeySignature(vector.signature.signerDid, digestOf(vector.admission), vector.signature.value)).not.toThrow();
+  });
+
+  it("is refused when one character of the label differs", () => {
+    const altered = { ...vector.admission, label: String(vector.admission.label).replace("<v2>", "<v3>") };
+    expect(() => assertDidKeySignature(vector.signature.signerDid, digestOf(altered), vector.signature.value)).toThrow("signature is invalid");
   });
 });

@@ -41,7 +41,7 @@ import { buildShortLink } from "../src/links/index.js";
 
 const VECTOR_PATH = new URL("./links-api-vectors.json", import.meta.url);
 // The SHA-256 printed by `node short-links-api-vectors.gen.mjs --check` in tinycloud-dev docs/specs.
-const VECTOR_SHA256 = "72db4cd91ba0ae9c530d541ad0f7b1a05c76b8de942b0fe247f1356ff5899d25";
+const VECTOR_SHA256 = "59641c44536e5f53d7230205ff7d277bd5441cc8ddac10b7bee63f1d2358f3e6";
 
 type Outcome = { readonly status: number; readonly error?: string; readonly reason?: string; readonly type?: string };
 
