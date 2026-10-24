@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 
 import {
+  ShareDeliveryRefusedError,
   CapabilityKeyRegistry,
   CaveatedDelegationUnsupportedError,
   canonicalizeEncryptionJson,
@@ -899,11 +900,33 @@ describe("TinyCloudNode sharing", () => {
         shareUrl: SHORT,
         documentName: "readme.md",
         jti,
-        expiresAt: "2030-01-01T00:01:00Z",
+        expiresAt: "2030-01-01T00:01:00.123Z",
       });
       expect(Object.keys(sent[0]!.body).sort()).toEqual(["documentName", "expiresAt", "jti", "recipientEmail", "requestBodyDigest", "shareUrl"]);
       const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalizeEncryptionJson(unsigned)));
       expect(requestBodyDigest).toBe(Buffer.from(digest).toString("base64url"));
+    });
+
+    test("expiresAt is exactly the toISOString form, with the digest over that string", async () => {
+      const cases = [
+        { given: new Date("2030-01-01T00:01:00.000Z").toISOString(), sent: "2030-01-01T00:01:00.000Z" },
+        { given: new Date("2030-01-01T00:01:00.120Z").toISOString(), sent: "2030-01-01T00:01:00.120Z" },
+        { given: "2030-01-01T00:01:00Z", sent: "2030-01-01T00:01:00.000Z" },
+        { given: "2030-01-01T02:01:00.5+01:00", sent: "2030-01-01T01:01:00.500Z" },
+        { given: "2030-01-01T00:01:00.123456Z", sent: "2030-01-01T00:01:00.123Z" },
+      ];
+      for (const { given, sent: expected } of cases) {
+        const { node, sent } = deliveryNode(() => new Response("{}", { status: 200 }));
+        await expect(node.authorizeShareDeliveryV3({ ...input(SHORT), expiresAt: given })).rejects.toThrow();
+        const { requestBodyDigest, ...unsigned } = sent[0]!.body;
+        expect(unsigned.expiresAt).toBe(expected);
+        expect(unsigned.expiresAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+        const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalizeEncryptionJson({ ...unsigned, expiresAt: expected })));
+        expect(requestBodyDigest).toBe(Buffer.from(digest).toString("base64url"));
+      }
+      const { node, sent } = deliveryNode(() => new Response("{}", { status: 200 }));
+      await expect(node.authorizeShareDeliveryV3({ ...input(SHORT), expiresAt: "not a time" })).rejects.toThrow();
+      expect(sent).toHaveLength(0);
     });
 
     test("refuses a link that is not a short share link before any request or invocation", async () => {
@@ -934,8 +957,8 @@ describe("TinyCloudNode sharing", () => {
       process.stderr.write = ((chunk: string | Uint8Array) => { logged.push(String(chunk)); return true; }) as typeof process.stderr.write;
       const replies: Array<() => Response> = [
         () => new Response("Forbidden", { status: 403 }),
-        () => new Response(`bad link ${SHORT}`, { status: 400 }),
-        () => new Response(`bad key ${KEY}`, { status: 422 }),
+        () => new Response(`bad link ${SHORT}`, { status: 409 }),
+        () => new Response(`bad key ${KEY}`, { status: 403 }),
         () => new Response(`{"shareUrl":"${SHORT}"}`, { status: 200 }),
         () => new Response("not json", { status: 200 }),
       ];
@@ -967,8 +990,36 @@ describe("TinyCloudNode sharing", () => {
         expect(text).not.toContain(KEY);
         expect(text).not.toContain("#v=4&k=");
       }
-      expect(failures[1]).toMatchObject({ message: "V3 share delivery authorization failed: HTTP 400 - bad link [share link]", status: 400 });
-      expect(failures[2]).toMatchObject({ message: "V3 share delivery authorization failed: HTTP 422 - bad key [key]", status: 422 });
+      expect(failures[1]).toMatchObject({ message: "V3 share delivery authorization failed: HTTP 409 - bad link [share link]", status: 409 });
+      expect(failures[2]).toMatchObject({ message: "V3 share delivery authorization failed: HTTP 403 - bad key [key]", status: 403 });
+    });
+
+    test("HTTP 422 and HTTP 400 are one refusal: the same error, and the key of the link in neither", async () => {
+      const replies = [
+        new Response(`{"error":"unknown field","shareUrl":"${SHORT}"}`, { status: 422 }),
+        new Response(`{"error":"delivery-authorization-invalid","key":"${KEY}"}`, { status: 400 }),
+        new Response("", { status: 422 }),
+        new Response("", { status: 400 }),
+      ];
+      const failures: unknown[] = [];
+      for (const reply of replies) {
+        const { node } = deliveryNode(() => reply);
+        try {
+          await node.authorizeShareDeliveryV3(input(SHORT));
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      expect(failures).toHaveLength(4);
+      for (const failure of failures) {
+        expect(failure).toBeInstanceOf(ShareDeliveryRefusedError);
+        expect(failure).toMatchObject({ name: "ShareDeliveryRefusedError", code: "delivery-authorization-invalid", status: 400, message: "share delivery authorization refused" });
+        const text = JSON.stringify(failure, Object.getOwnPropertyNames(failure)) + String(failure);
+        expect(text).not.toContain(KEY);
+        expect(text).not.toContain("#v=4&k=");
+        expect(text).not.toContain("unknown field");
+      }
+      expect(JSON.stringify(failures[0], Object.getOwnPropertyNames(failures[0])).replace(/"stack":"[^"]*"/, "")).toBe(JSON.stringify(failures[1], Object.getOwnPropertyNames(failures[1])).replace(/"stack":"[^"]*"/, ""));
     });
   });
 });

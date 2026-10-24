@@ -171,6 +171,7 @@ export type {
 export {
   CREDENTIAL_INVITATION_REQUEST_DOMAIN,
   DELIVERY_ADMISSION_DOMAIN,
+  ShareDeliveryRefusedError,
   shortDeliveryLinkBodyCid,
   validateShareDeliveryAuthorizationV3Bytes,
   withoutShareLink,

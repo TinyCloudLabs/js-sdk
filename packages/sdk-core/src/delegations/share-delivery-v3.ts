@@ -179,3 +179,18 @@ export function withoutShareLink(text: string, shareUrl: string): string {
   const withoutLink = text.split(shareUrl).join("[share link]");
   return key === undefined ? withoutLink : withoutLink.split(key).join("[key]");
 }
+
+/**
+ * The node refused a delivery authorization: its body did not parse (HTTP 422) or it failed the node's checks (HTTP
+ * 400 `delivery-authorization-invalid`). Both are the same refusal, so the error carries no status, body or link of
+ * the reply.
+ */
+export class ShareDeliveryRefusedError extends Error {
+  readonly code = "delivery-authorization-invalid";
+  readonly status = 400;
+
+  constructor() {
+    super("share delivery authorization refused");
+    this.name = "ShareDeliveryRefusedError";
+  }
+}

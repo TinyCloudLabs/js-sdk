@@ -173,6 +173,7 @@ import {
   type RegisterPolicyV3Receipt,
   type ShareDeliveryAuthorizationV3Receipt,
   CREDENTIAL_INVITATION_REQUEST_DOMAIN,
+  ShareDeliveryRefusedError,
   shortDeliveryLinkBodyCid,
   validateShareDeliveryAuthorizationV3Bytes,
   withoutShareLink,
@@ -5866,7 +5867,8 @@ export class TinyCloudNode {
       shareUrl: input.shareUrl,
       documentName: input.documentName,
       jti: base64UrlEncode(jtiDigest.slice(0, 16)),
-      expiresAt: new Date(input.expiresAt).toISOString().replace(/\.\d{3}Z$/, "Z"),
+      // Re-normalised through Date, so the sent value is always `YYYY-MM-DDTHH:mm:ss.SSSZ` (UTC, three digits).
+      expiresAt: new Date(input.expiresAt).toISOString(),
     };
     const requestBodyDigest = base64UrlEncode(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalizeEncryptionJson(body)))));
     const request = { ...body, requestBodyDigest };
@@ -5883,6 +5885,8 @@ export class TinyCloudNode {
       headers: { accept: "application/json", "content-type": "application/json", authorization },
       body: canonicalizeEncryptionJson(request),
     });
+    // 422 (the body did not parse) and 400 (it failed the node's checks) are one refusal with one error.
+    if (response.status === 400 || response.status === 422) throw new ShareDeliveryRefusedError();
     if (!response.ok) {
       // The node's reply is part of the message; it must not carry the link or its key into a log.
       const failure = await httpResponseError(response, "V3 share delivery authorization failed");
