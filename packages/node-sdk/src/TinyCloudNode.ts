@@ -212,7 +212,6 @@ import {
   legacyParamsToPermissionEntries,
   resolveExpiryMs,
   extractSiweExpiration,
-  includesDecrypt,
 } from "./delegateToHelpers";
 import { NodeSecretsService } from "./NodeSecretsService";
 
@@ -1022,13 +1021,6 @@ export interface DelegateToResult {
   delegation: PortableDelegation;
   prompted: boolean;
 }
-
-const DECRYPT_GRANT_MAX_EXPIRY_MS = 60 * 60 * 1000;
-/**
- * Expiry for runtime grants escalated by `secrets.get`. Kept under the one-hour
- * decrypt cap so a secret read never leaves a grant that outlives an hour.
- */
-const SECRET_GET_GRANT_EXPIRY_MS = 59 * 60 * 1000;
 
 /**
  * Options for runtime permission escalation.
@@ -6215,8 +6207,6 @@ export class TinyCloudNode {
         getManifest: () => this.manifest,
         hasPermissions: (permissions) => this.hasRuntimePermissions(permissions),
         grantPermissions: (additional) => this.grantRuntimePermissions(additional),
-        grantGetPermissions: (additional) =>
-          this.grantRuntimePermissions(additional, { expiry: SECRET_GET_GRANT_EXPIRY_MS }),
         uncoveredEntries: (permissions) =>
           permissions.filter((entry) => !this.hasRuntimePermissions([entry])),
         canEscalate: () => this.signer !== undefined && this.tc !== undefined,
@@ -6630,15 +6620,6 @@ export class TinyCloudNode {
     }
 
     const expanded = this.expandPermissionEntries(permissions);
-    const requestsDecrypt = includesDecrypt(expanded);
-    const requestedExpiryMs = requestsDecrypt && options?.expiry === undefined
-      ? DECRYPT_GRANT_MAX_EXPIRY_MS
-      : resolveExpiryMs(options?.expiry);
-    if (requestsDecrypt && requestedExpiryMs > DECRYPT_GRANT_MAX_EXPIRY_MS) {
-      throw Object.assign(new Error("decrypt grants last at most one hour"), {
-        code: "DECRYPT_EXPIRY_TOO_LONG",
-      });
-    }
     if (this.sessionCoversPermissionEntries(session, expanded)) {
       return [];
     }
@@ -6673,6 +6654,7 @@ export class TinyCloudNode {
     }
 
     const now = new Date();
+    const requestedExpiryMs = resolveExpiryMs(options?.expiry);
     let expiresAt = new Date(now.getTime() + requestedExpiryMs);
     if (sessionExpiry !== undefined && sessionExpiry < expiresAt) {
       expiresAt = sessionExpiry;

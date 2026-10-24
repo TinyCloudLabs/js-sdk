@@ -117,11 +117,6 @@ export interface NodeSecretsServiceConfig {
   getManifest: () => Manifest | Manifest[] | undefined;
   hasPermissions?: (permissions: PermissionEntry[]) => boolean;
   grantPermissions: (additional: PermissionEntry[]) => Promise<unknown>;
-  /**
-   * Escalation used for `get` only. Defaults to `grantPermissions`. Lets the
-   * node cap get grants below the default expiry without changing put/del.
-   */
-  grantGetPermissions?: (additional: PermissionEntry[]) => Promise<unknown>;
   canEscalate: () => boolean;
   /**
    * Returns the entries that neither the session nor a live runtime grant
@@ -271,11 +266,7 @@ export class NodeSecretsService implements ISecretsService {
     }
 
     try {
-      const grant =
-        action === "get" && this.config.grantGetPermissions !== undefined
-          ? this.config.grantGetPermissions
-          : this.config.grantPermissions;
-      await grant(escalation);
+      await this.config.grantPermissions(escalation);
       return this.restoreUnlockAfterEscalation();
     } catch (error) {
       return this.escalationError(action, target, error);

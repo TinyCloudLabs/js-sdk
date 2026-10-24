@@ -1,5 +1,30 @@
 # @tinycloud/mcp
 
+## 0.8.0-beta.8
+
+### Patch Changes
+
+- Updated dependencies [7bd4ae6]
+- Updated dependencies [7bd4ae6]
+  - @tinycloud/node-sdk@3.6.0-beta.7
+  - @tinycloud/operations@0.7.4-beta.7
+
+## 0.8.0-beta.7
+
+### Patch Changes
+
+- 00e1d5a: `tinycloud_connect` reports `connected: true` only after the node confirms the account session. When the node cannot confirm it (timeout, unreachable, or an unexpected response), the tool reports `connected: false` with no approval URL instead of a connected state.
+
+  Details: TC-1627
+
+## 0.8.0-beta.6
+
+### Patch Changes
+
+- Updated dependencies [e600a1a]
+  - @tinycloud/node-sdk@3.6.0-beta.6
+  - @tinycloud/operations@0.7.4-beta.6
+
 ## 0.8.0-beta.5
 
 ### Patch Changes
