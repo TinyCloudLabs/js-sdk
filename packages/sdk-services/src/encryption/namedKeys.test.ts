@@ -1,7 +1,7 @@
 /**
  * Named-key client tests. Hermetic: `fetch` is a recording router standing in
  * for a node, so every assertion is on the exact request that would be sent.
- * NOT run against a real node (none advertises `encryption-named-keys-v1` yet).
+ * The same client was also run against real nodes with the feature on (see the PR body).
  */
 import { describe, expect, it } from "bun:test";
 
@@ -896,14 +896,43 @@ describe("create body `deletable` (node 1.22.0 contract)", () => {
     });
   });
 
-  it("a public GET of a missing key under apps/ is KEY_NOT_FOUND, and encrypt creates nothing first", async () => {
-    const h = harness((req) =>
-      req.method === "GET" && req.url.startsWith(KEYS_URL) ? text("key_not_found: no such key", 404) : undefined,
-    );
+  it("a public GET under apps/ is KEY_NOT_FOUND (the node answers 404 even for an existing key)", async () => {
+    const h = harness(() => text("key_not_found: no key exists at this path", 404));
     await expect(h.client.getPublicKey(APP_PATH)).rejects.toMatchObject({ code: "KEY_NOT_FOUND", status: 404 });
+  });
+
+  it("encrypt under apps/ reads the public key through an authenticated decrypt describe, never the public GET", async () => {
+    const h = harness((req) =>
+      req.headers.Authorization === undefined
+        ? text("key_not_found: no key exists at this path", 404)
+        : json(descriptor({ keyPath: APP_PATH, kind: "deletable" })),
+    );
+    const env = await h.client.encrypt(APP_PATH, utf8Encode("x"));
+    expect(env.keyPath).toBe(APP_PATH);
+    const sym = xor(KEY_PUB, base64Decode(env.encryptedSymmetricKey));
+    expect(xor(sym, base64Decode(env.ciphertext))).toEqual(utf8Encode("x"));
+    expect(keyRequests(h.requests).map((r) => r.method)).toEqual(["GET"]);
+    expect(keyRequests(h.requests)[0]!.headers.Authorization).toBeDefined();
+    expect(h.signed).toHaveLength(1);
+    expect(h.signed[0]!.resource).toBe(formatKeyResource(NETWORK_ID, APP_PATH));
+    expect(h.signed[0]!.action).toBe(DECRYPT_ACTION);
+  });
+
+  it("encrypt to a missing key under apps/ is KEY_NOT_FOUND and creates nothing", async () => {
+    const h = harness(() => text("key_not_found: no key exists at this path", 404));
     await expect(h.client.encrypt(APP_PATH, utf8Encode("x"))).rejects.toMatchObject({ code: "KEY_NOT_FOUND" });
     expect(keyRequests(h.requests).every((r) => r.method === "GET")).toBe(true);
-    expect(h.signed).toHaveLength(0);
+  });
+
+  it("ensureKey expects kind deletable under apps/ and deterministic elsewhere", async () => {
+    const ok = harness(() => json(descriptor({ keyPath: APP_PATH, kind: "deletable" })));
+    await expect(ok.client.ensureKey(APP_PATH)).resolves.toMatchObject({ kind: "deletable", keyPath: APP_PATH });
+
+    const wrongApp = harness(() => json(descriptor({ keyPath: APP_PATH, kind: "deterministic" })));
+    await expect(wrongApp.client.ensureKey(APP_PATH)).rejects.toMatchObject({ code: "KEY_KIND_MISMATCH", kind: "deterministic" });
+
+    const wrongSecret = harness(() => json(descriptor({ kind: "deletable" })));
+    await expect(wrongSecret.client.ensureKey(PATH)).rejects.toMatchObject({ code: "KEY_KIND_MISMATCH", kind: "deletable" });
   });
 });
 

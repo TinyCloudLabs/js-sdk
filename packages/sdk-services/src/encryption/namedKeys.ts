@@ -222,7 +222,7 @@ export interface PublicKeyDescriptor {
 export interface KeyDescriptor extends PublicKeyDescriptor {
   /** Raw node state string (`active`, `blocked`, ...). */
   state: string;
-  /** `deterministic` today; kept as a string so unknown kinds surface. */
+  /** `deterministic` outside `apps/`, `deletable` under it; kept as a string so unknown kinds surface. */
   kind: string;
   createdAt?: string;
   updatedAt?: string;
@@ -394,8 +394,8 @@ function parseFullDescriptor(
   };
 }
 
-/** Success only for `state: "active"` AND `kind: "deterministic"`. */
-function assertEnsuredDescriptor(descriptor: KeyDescriptor): KeyDescriptor {
+/** Success only for `state: "active"` AND the expected `kind`. */
+function assertEnsuredDescriptor(descriptor: KeyDescriptor, expectedKind: string): KeyDescriptor {
   if (descriptor.state === "blocked") {
     throw new NamedKeyError("KEY_BLOCKED", `key ${safeEcho(descriptor.keyPath)} is blocked`, {
       rawState: descriptor.state,
@@ -408,14 +408,19 @@ function assertEnsuredDescriptor(descriptor: KeyDescriptor): KeyDescriptor {
       { rawState: descriptor.state },
     );
   }
-  if (descriptor.kind !== "deterministic") {
+  if (descriptor.kind !== expectedKind) {
     throw new NamedKeyError(
       "KEY_KIND_MISMATCH",
-      `key ${safeEcho(descriptor.keyPath)} exists with kind ${safeEcho(descriptor.kind)}, not deterministic`,
+      `key ${safeEcho(descriptor.keyPath)} exists with kind ${safeEcho(descriptor.kind)}, not ${expectedKind}`,
       { kind: descriptor.kind },
     );
   }
   return descriptor;
+}
+
+/** Keys under `apps/` are the deletable keys; everything else is deterministic. */
+function isAppKeyPath(path: string): boolean {
+  return path.startsWith("apps/");
 }
 
 const REQUIRED_ENVELOPE_STRINGS = [
@@ -497,7 +502,7 @@ export class NamedKeyClient {
     return `${this.config.host}/encryption/networks/${networkId}/keys/${path}`;
   }
 
-  /** Public GET: the key's public key. Never 404s for a missing key. */
+  /** Public GET: the key's public key. Derive-only (no 404) outside `apps/`; under `apps/` the node answers 404. */
   async getPublicKey(path: string, options?: KeyCallOptions): Promise<PublicKeyDescriptor> {
     const networkId = this.networkFor(options);
     this.keyUrn(networkId, path);
@@ -517,6 +522,26 @@ export class NamedKeyClient {
     path: string,
     options?: KeyCallOptions & { ability?: string },
   ): Promise<KeyDescriptor | null> {
+    const networkId = this.networkFor(options);
+    const body = await this.describeBody(path, options);
+    return body === null ? null : parseFullDescriptor(body, networkId, path);
+  }
+
+  /** Public fields of an authenticated describe (decrypt ability); `key_not_found` throws. */
+  private async describePublic(path: string, options?: KeyCallOptions): Promise<PublicKeyDescriptor> {
+    const networkId = this.networkFor(options);
+    const body = await this.describeBody(path, options);
+    if (body === null) {
+      throw new NamedKeyError("KEY_NOT_FOUND", `key ${safeEcho(path)} does not exist`, { status: 404 });
+    }
+    return parsePublicDescriptor(body, networkId, path);
+  }
+
+  /** The authenticated GET response body, or `null` on `key_not_found`. */
+  private async describeBody(
+    path: string,
+    options?: KeyCallOptions & { ability?: string },
+  ): Promise<unknown> {
     const networkId = this.networkFor(options);
     const keyResource = this.keyUrn(networkId, path);
     const ability = options?.ability ?? DECRYPT_ACTION;
@@ -542,7 +567,7 @@ export class NamedKeyClient {
     if (!response.ok) {
       throw mapNodeKeyError(response.status, await safeText(response), "failed to describe key");
     }
-    return parseFullDescriptor(await response.json(), networkId, path);
+    return response.json();
   }
 
   private async admin(
@@ -554,7 +579,7 @@ export class NamedKeyClient {
     const networkId = this.networkFor(options);
     const keyResource = this.keyUrn(networkId, path);
     const body: Json =
-      route === "keys" ? { keyPath: path, deletable: path.startsWith("apps/") } : { keyPath: path };
+      route === "keys" ? { keyPath: path, deletable: isAppKeyPath(path) } : { keyPath: path };
     const targetNode = await this.requireNode();
     const signed = await this.config.signInvocation({
       targetNode,
@@ -599,9 +624,10 @@ export class NamedKeyClient {
   }
 
   /**
-   * Make sure a deterministic key exists and is usable: authenticated GET; on
+   * Make sure a key exists and is usable: authenticated GET; on
    * `key_not_found` create it; on 409 `key_exists` read it again. Succeeds only
-   * for `state: "active"` and `kind: "deterministic"`.
+   * for `state: "active"` and the kind the path implies: `deletable` under
+   * `apps/`, `deterministic` elsewhere.
    */
   async ensureKey(path: string, options?: KeyCallOptions): Promise<KeyDescriptor> {
     const describe = () =>
@@ -621,7 +647,7 @@ export class NamedKeyClient {
         }
       }
     }
-    return assertEnsuredDescriptor(descriptor);
+    return assertEnsuredDescriptor(descriptor, isAppKeyPath(path) ? "deletable" : "deterministic");
   }
 
   /** Encrypt to a named key: envelope v2, symmetric key wrapped to the key's public key. */
@@ -630,7 +656,11 @@ export class NamedKeyClient {
     plaintext: Uint8Array,
     options?: KeyEncryptOptions,
   ): Promise<NamedKeyEnvelope> {
-    const descriptor = await this.getPublicKey(path, options);
+    // The node answers a public GET under `apps/` with 404 `key_not_found`, so
+    // an app key's public key is read through the authenticated describe.
+    const descriptor = isAppKeyPath(path)
+      ? await this.describePublic(path, options)
+      : await this.getPublicKey(path, options);
     const { crypto } = this.config;
     const symmetricKey = crypto.randomBytes(32);
     const ciphertext = crypto.authEncrypt(symmetricKey, plaintext, options?.aad);
