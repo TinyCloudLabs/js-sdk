@@ -20,10 +20,16 @@ import type {
   RequestsView,
   RevokeOutcome,
   StorageView,
+  ViewResult,
 } from "../data";
 import { viewReady } from "../view-result";
 
-export function createStubPanelData(): PanelDataFactory {
+/** Per-view results a preview or test can pin. One optional field per section; absent fields keep the defaults below. */
+export interface StubSeed {
+  delegations?: StubDelegationsSeed;
+}
+
+export function createStubPanelData(seed: StubSeed = {}): PanelDataFactory {
   return (client) => {
     const requests: RequestsView = {
       rows: () => [],
@@ -54,8 +60,7 @@ export function createStubPanelData(): PanelDataFactory {
           }),
         );
       },
-      delegations: () => Promise.resolve(viewReady<DelegationPage>({ rows: [STUB_DELEGATION] })),
-      revoke: (cid: string) => Promise.resolve<RevokeOutcome>({ ok: true, cid }),
+      ...delegationsStub(seed.delegations),
       nodes: () => Promise.resolve(viewReady<readonly NodeRow[]>([STUB_NODE])),
       storage: () =>
         Promise.resolve(
@@ -69,6 +74,71 @@ export function createStubPanelData(): PanelDataFactory {
         ),
       requests: () => requests,
     } satisfies PanelDataSource;
+  };
+}
+
+/** A delegation row as a JSON seed: dates are ISO strings, and `source` is always "stub". */
+export type StubDelegationRowSeed = Omit<DelegationRow, "source" | "issuedAt" | "notBefore" | "expiresAt" | "revokedAt"> & {
+  readonly issuedAt?: string | null;
+  readonly notBefore?: string | null;
+  readonly expiresAt?: string | null;
+  readonly revokedAt?: string | null;
+};
+
+/** Delegations a preview or test can pin. Absent fields keep the one-row default. */
+export interface StubDelegationsSeed {
+  /** The read state of the first page. Default: ready. */
+  readonly state?: "ready" | "loading" | "needs-permission" | "error";
+  readonly rows?: readonly StubDelegationRowSeed[];
+  readonly nextCursor?: string;
+  /** Failure code `revoke(cid)` returns for a CID, with the row left as it is. */
+  readonly revokeFails?: Readonly<Record<string, string>>;
+  /** Milliseconds `revoke` waits before it answers. */
+  readonly revokeDelayMs?: number;
+}
+
+function seededDate(value: string | null | undefined): Date | null {
+  return typeof value === "string" ? new Date(value) : null;
+}
+
+/**
+ * Delegations that behave like the real adapter: a revoke of an active row marks it revoked, and a row that is not
+ * active is refused with `not-revocable`. A CID the list does not hold is accepted, as before.
+ */
+function delegationsStub(seed: StubDelegationsSeed = {}): Pick<PanelDataSource, "delegations" | "revoke"> {
+  const rows: DelegationRow[] =
+    seed.rows === undefined
+      ? [STUB_DELEGATION]
+      : seed.rows.map(({ revokedAt, ...row }) => ({
+          ...row,
+          source: "stub",
+          issuedAt: seededDate(row.issuedAt),
+          notBefore: seededDate(row.notBefore),
+          expiresAt: seededDate(row.expiresAt),
+          ...(revokedAt === undefined ? {} : { revokedAt: seededDate(revokedAt) }),
+        }));
+  return {
+    delegations: () => {
+      const state = seed.state ?? "ready";
+      if (state === "loading") return Promise.resolve<ViewResult<DelegationPage>>({ state });
+      if (state === "needs-permission") return Promise.resolve<ViewResult<DelegationPage>>({ state, ability: "delegation/list" });
+      if (state === "error") return Promise.resolve<ViewResult<DelegationPage>>({ state, code: "unknown" });
+      return Promise.resolve(
+        viewReady<DelegationPage>({ rows: [...rows], ...(seed.nextCursor === undefined ? {} : { nextCursor: seed.nextCursor }) }),
+      );
+    },
+    revoke: async (cid: string): Promise<RevokeOutcome> => {
+      // The lib target has no Promise.withResolvers, so this uses the executor form.
+      if (seed.revokeDelayMs !== undefined) await new Promise((resolve) => setTimeout(resolve, seed.revokeDelayMs));
+      const code = seed.revokeFails?.[cid];
+      if (code !== undefined) return { ok: false, code };
+      const at = rows.findIndex((row) => row.cid === cid);
+      const found = rows[at];
+      if (found === undefined) return { ok: true, cid };
+      if (found.status !== "active") return { ok: false, code: "not-revocable" };
+      rows[at] = { ...found, status: "revoked", revokedAt: new Date() };
+      return { ok: true, cid };
+    },
   };
 }
 
