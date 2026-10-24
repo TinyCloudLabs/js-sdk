@@ -5,7 +5,7 @@ import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { sendHello, driveJoin, claimCallMe, resumeBlob, inviteWatcher } from '../dist/invite-commands.js';
+import { sendHello, driveJoin, claimCallMe, resumeBlob, inviteWatcher, readJoin } from '../dist/invite-commands.js';
 import { buildInviteBlob } from '../dist/invite-blob.js';
 import { acceptC as realAcceptC } from '../dist/commands.js';
 import { assertPeerDelegation } from '../dist/authority.js';
@@ -102,7 +102,7 @@ const unreadableIn = (kv) => ({ ...kv, get: async (key, ...rest) => (key === HEL
   : kv.get(key, ...rest)) });
 
 const refusedAtExpiry = (e) => e.code === 'hello-exists'
-  && /could not be confirmed and no welcome arrived before the invite expired/.test(e.message)
+  && /could not be confirmed and no welcome was seen before the invite expired/.test(e.message)
   && /Ask the inviter for a new invite/.test(e.message)
   && /already exists/.test(e.message)
   && /revoke hunter/.test(e.message);
@@ -110,9 +110,17 @@ const refusedAtExpiry = (e) => e.code === 'hello-exists'
 // A Welcome did arrive but does not verify for this courier: the refusal says so, with a stable code only.
 const refusedAfterFailedWelcome = (code) => (e) => e.code === 'hello-exists'
   && e.message.includes(`the welcome that arrived does not verify for this courier (${code})`)
-  && !/no welcome arrived/.test(e.message)
+  && !/no welcome was seen/.test(e.message)
   && /Ask the inviter for a new invite/.test(e.message)
   && /already exists/.test(e.message)
+  && /revoke hunter/.test(e.message);
+
+// A Welcome did arrive but it could not be checked, or it is a decline: the refusal does not claim it failed verification.
+const refusedAfterUnconfirmedWelcome = (code) => (e) => e.code === 'hello-exists'
+  && e.message.includes(`the welcome that arrived could not be confirmed (${code})`)
+  && !/does not verify/.test(e.message)
+  && !/no welcome was seen/.test(e.message)
+  && /Ask the inviter for a new invite/.test(e.message)
   && /revoke hunter/.test(e.message);
 
 test('(i) another writer stored a different hello first: nothing is accepted, the join is refused at expiry, the object is untouched', async () => {
@@ -191,8 +199,37 @@ test('a rejected welcome in hello-unconfirmed says nothing about our hello: the 
   const kv = memoryKv();
   await kv.put(WELCOME_KEY, { v: 1, inviteId: INVITE_ID, tier: 'rejected', sentAt: ISSUED });
   const accepted = [];
-  await assert.rejects(capture(() => driveJoin(profile(), {}, blob(soon(120)), state('hello-unconfirmed'), io(kv, acceptCWithRealChecks(accepted)))), refusedAfterFailedWelcome('rejected'));
+  await assert.rejects(capture(() => driveJoin(profile(), {}, blob(soon(120)), state('hello-unconfirmed'), io(kv, acceptCWithRealChecks(accepted)))), refusedAfterUnconfirmedWelcome('rejected'));
   assert.equal(accepted.length, 0);
+});
+
+test('L2: a transient acceptC error is "could not be confirmed (<code>)", never "does not verify"', async () => {
+  const kv = memoryKv();
+  await kv.put(WELCOME_KEY, welcome());
+  const flaky = async () => { throw Object.assign(new Error('socket hang up with a secret token in it'), { code: 'ECONNRESET' }); };
+  const s = state('hello-unconfirmed');
+  writeJoinFile(s);
+  const out = await capture(() => driveJoin(profile(), {}, blob(soon(60_000)), s, io(kv, flaky, { waitMs: 40 })));
+  assert.match(out, /A welcome arrived but could not be confirmed \(ECONNRESET\); still waiting\./);
+  assert.doesNotMatch(out, /does not verify|secret token/);
+  await assert.rejects(capture(() => driveJoin(profile(), {}, blob(soon(120)), state('hello-unconfirmed'), io(kv, flaky))), refusedAfterUnconfirmedWelcome('ECONNRESET'));
+  assert.equal(readJoinFile().welcomeFailure, 'ECONNRESET');
+});
+
+// L4: join --resume <id> must not act on a state file that belongs to another invite.
+test('L4: a join state file whose in-file id differs from its name is refused and left unchanged', () => {
+  const crafted = { ...state('hello-unconfirmed'), inviteId: OLD_INVITE_ID };
+  fs.writeFileSync(joinFile(INVITE_ID), JSON.stringify(crafted), { mode: 0o600 });
+  const before = fs.readFileSync(joinFile(INVITE_ID), 'utf8');
+  assert.throws(() => readJoin(INVITE_ID), (e) => e.code === 'bad-join-state');
+  assert.equal(fs.readFileSync(joinFile(INVITE_ID), 'utf8'), before);
+  assert.equal(fs.existsSync(joinFile(OLD_INVITE_ID)), false);
+});
+
+test('L4: a join state file whose id matches its name is read', () => {
+  writeJoinFile(state('hello-sent'));
+  assert.equal(readJoin(INVITE_ID).stage, 'hello-sent');
+  assert.equal(readJoin(OLD_INVITE_ID), undefined);
 });
 
 test('(v) a stored hello identical to ours and readable is still sent, not unconfirmed', async () => {

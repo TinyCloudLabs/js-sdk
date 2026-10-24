@@ -114,7 +114,12 @@ const joinPath = (id: string) => {
   if (!INVITE_ID.test(id)) fail('internal', 'Join state has an invalid invite id.');
   return path.join(secureSubdir('joins'), `${id}.json`);
 };
-const readJoin = (id: string) => readJson<JoinState>(joinPath(id));
+/** Reads the state of a join. A file whose in-file id is not the id it was asked for is refused, and nothing is changed. */
+export function readJoin(id: string): JoinState | undefined {
+  const state = readJson<JoinState>(joinPath(id));
+  if (state !== undefined && state.inviteId !== id) fail('bad-join-state', `The join state file for ${id} belongs to a different invite; it was not used.`);
+  return state;
+}
 const writeJoin = (state: JoinState) => writeSecure(joinPath(state.inviteId), state);
 const removeJoin = (id: string) => fs.rmSync(joinPath(id), { force: true });
 
@@ -493,12 +498,16 @@ export function resumeBlob(state: JoinState, now: number = Date.now()): InviteBl
   return blob;
 }
 
-/** `failure` is the stable code of a Welcome that arrived and did not verify, when one did. */
+/** Codes of a Welcome that arrived and was checked and refused. Any other code (a network error, `rejected`) means it could not be confirmed. */
+const VERIFICATION_FAILURES: Record<string, true> = { 'bad-delegation': true, 'bad-artifact': true, 'bad-welcome': true };
+const welcomeProblem = (failure: string): string => (Object.hasOwn(VERIFICATION_FAILURES, failure) ? `does not verify for this courier (${failure})` : `could not be confirmed (${failure})`);
+
+/** `failure` is the stable code of the first Welcome that arrived and was not accepted, when one did. */
 const helloUnconfirmedMessage = (blob: InviteBlob, failure: string | undefined): string => {
   const advice = `Ask the inviter for a new invite; if that is refused with "already exists", ask them to run \`${cmd(`revoke ${blob.artifactA.peer}`)}\` first.`;
   return failure === undefined
-    ? `Your hello could not be confirmed and no welcome arrived before the invite expired. ${advice}`
-    : `Your hello could not be confirmed, and the welcome that arrived does not verify for this courier (${failure}). ${advice}`;
+    ? `Your hello could not be confirmed and no welcome was seen before the invite expired. ${advice}`
+    : `Your hello could not be confirmed, and the welcome that arrived ${welcomeProblem(failure)}. ${advice}`;
 };
 
 /**
@@ -560,7 +569,7 @@ export async function driveJoin(profile: Profile, node: TinyCloudNode, blob: Inv
       if (failure !== undefined && state.welcomeFailure === undefined) {
         state.welcomeFailure = failure;
         writeJoin(state);
-        console.log(`A welcome arrived but does not verify for this courier (${failure}); still waiting for one that does.`);
+        console.log(`A welcome arrived but ${welcomeProblem(failure)}; still waiting.`);
       }
     } else if (got) {
       const welcome = parseWelcome(JSON.stringify(got.value));
