@@ -5888,9 +5888,11 @@ export class TinyCloudNode {
     // 422 (the body did not parse) and 400 (it failed the node's checks) are one refusal with one error.
     if (response.status === 400 || response.status === 422) throw new ShareDeliveryRefusedError();
     if (!response.ok) {
-      // The node's reply is part of the message; it must not carry the link or its key into a log.
-      const failure = await httpResponseError(response, "V3 share delivery authorization failed");
-      throw Object.assign(new Error(await withoutShareLink(failure.message, input.shareUrl)), { status: failure.status });
+      // The node's reply is part of the message. The whole reply is redacted before it is cut to 512 characters, so a
+      // link or key that crosses the cut is replaced too.
+      const reply = await response.text().catch(() => response.statusText);
+      const body = (await withoutShareLink(reply, input.shareUrl)).trim().slice(0, 512);
+      throw Object.assign(new Error(`V3 share delivery authorization failed: HTTP ${response.status}${body ? ` - ${body}` : ""}`), { status: response.status });
     }
     const verified = validateShareDeliveryAuthorizationV3Bytes(new Uint8Array(await response.arrayBuffer()), {
       request,
