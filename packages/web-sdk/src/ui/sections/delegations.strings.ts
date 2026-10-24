@@ -20,7 +20,11 @@ export const DELEGATIONS_STRINGS = {
   "delegations.g.none": "Nothing here.",
   "delegations.g.none.more": "None in what's loaded so far.",
   "delegations.party.unknown": "Unknown",
-  "delegations.firstpage": "Showing the first {count}. There are more than this page lists.",
+  "delegations.firstpage": "Showing {count}. There are more.",
+  "delegations.more.btn": "Show more",
+  "delegations.more.busy": "Loading…",
+  "delegations.more.err": "Couldn't load more.",
+  "delegations.more.loaded": "{count} more loaded.",
 
   "delegations.empty.title": "No one has access yet",
   "delegations.empty.body":

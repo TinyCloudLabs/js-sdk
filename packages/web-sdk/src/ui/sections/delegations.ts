@@ -6,6 +6,7 @@ import type {
   DescribedAbilities,
   PermissionAbility,
   RevokeOutcome,
+  ViewResult,
 } from "../data";
 import type { ConfirmHandle, DrawerHandle, PanelSection, SectionContext, StatusTone } from "../slots";
 import { registerPanelStrings, panelText } from "../strings-panel";
@@ -49,7 +50,8 @@ const STYLE = `
 .dl-fine{margin:0;font-size:12.5px;line-height:1.4;color:#71717a}
 .dl-msg{margin:0;font-size:13px;line-height:1.4;color:#09090b}
 .dl-err{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
-.dl-foot{margin:16px 0 0}
+.dl-foot{display:flex;flex-direction:column;align-items:flex-start;gap:10px;margin:16px 0 0}
+.dl-foot[hidden]{display:none}
 .dl-notice{display:flex;flex-direction:column;align-items:flex-start;gap:12px;padding:28px 22px;border-radius:20px;box-shadow:inset 0 0 0 1px #e4e4e7}
 .dl-notice-ask{padding:16px 16px 16px 18px}
 .dl-ic{display:grid;place-items:center;width:52px;height:52px;border-radius:50%;box-shadow:inset 0 0 0 1px #71717a}
@@ -502,13 +504,25 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
   );
   const notice = node("div");
   const body = node("div", "dl-body");
-  const foot = node("p", "dl-fine dl-foot");
+  const foot = node("div", "dl-foot");
+  const footNote = node("p", "dl-fine");
+  const showMore = actionButton(text("delegations.more.btn"));
+  const footErr = node("p", "dl-msg");
+  footErr.setAttribute("role", "alert");
+  footErr.hidden = true;
+  foot.append(footNote, showMore, footErr);
+  showMore.addEventListener("click", () => void loadMore());
   root.append(title, lede, live, skeleton, notice, body);
   el.append(style, root);
 
   let disposed = false;
   let reloading = false;
   let declined = false;
+  // The first page is the cache's. Pages after it are read here, kept apart, and dropped when the list goes.
+  let firstPage: DelegationPage | undefined;
+  let extra: DelegationRow[] = [];
+  let extraCursor: { next: string | undefined } | undefined;
+  let paging: "idle" | "loading" | "error" = "idle";
   const cards = new Map<string, Card>();
   const removed = revokedFrom(ctx.data);
   const timers = new Set<number>();
@@ -1045,9 +1059,56 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
     return box;
   }
 
+  /** Where the next page starts: after the last page read here, else after the cache's first page. */
+  function nextCursorOf(page: DelegationPage): string | undefined {
+    return extraCursor === undefined ? page.nextCursor : extraCursor.next;
+  }
+
+  async function loadMore(): Promise<void> {
+    const page = firstPage;
+    const source = ctx.data.source;
+    if (paging === "loading" || page === undefined || source === undefined) return;
+    const cursor = nextCursorOf(page);
+    if (cursor === undefined) return;
+    paging = "loading";
+    update();
+    let result: ViewResult<DelegationPage>;
+    try {
+      result = await source.delegations(cursor);
+    } catch {
+      result = { state: "error", code: "thrown" };
+    }
+    if (disposed) return;
+    if (result.state !== "ready") {
+      paging = "error";
+      update();
+      showMore.focus({ preventScroll: true });
+      return;
+    }
+    const known = new Set([...page.rows, ...extra].map((row) => row.cid));
+    const fresh = result.data.rows.filter((row) => {
+      if (known.has(row.cid)) return false;
+      known.add(row.cid);
+      return true;
+    });
+    extra = [...extra, ...fresh];
+    extraCursor = { next: result.data.nextCursor };
+    paging = "idle";
+    live.textContent = text("delegations.more.loaded", { count: fresh.length });
+    update();
+    // The button stays where the user left focus while there is more; at the end it goes away, and focus goes to the first new card.
+    if (result.data.nextCursor !== undefined) showMore.focus({ preventScroll: true });
+    else (cards.get(fresh[0]?.cid ?? "")?.article ?? title).focus({ preventScroll: true });
+  }
+
   function showList(page: DelegationPage): void {
-    const rows = page.rows.filter((row) => !removed.has(row.cid));
-    if (rows.length === 0) {
+    firstPage = page;
+    const known = new Set(page.rows.map((row) => row.cid));
+    const listed = [...page.rows, ...extra.filter((row) => !known.has(row.cid))];
+    const rows = listed.filter((row) => !removed.has(row.cid));
+    // With more pages the list is not the whole list: nothing listed yet is not "no one", and counts are lower bounds.
+    const more = nextCursorOf(page) !== undefined;
+    if (rows.length === 0 && !more) {
       for (const card of [...cards.values()]) if (card.phase !== "busy") destroy(card);
       showNotice(emptyNotice());
       body.hidden = true;
@@ -1064,7 +1125,6 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
       if (group === "received" && members.length === 0) continue;
       const view = groupView(group);
       // With more pages the group's true size is not known: "3+" is a lower bound and an empty group has no number.
-      const more = page.nextCursor !== undefined;
       view.count.textContent = more ? (members.length === 0 ? "" : `${members.length}+`) : String(members.length);
       view.none.hidden = members.length > 0;
       view.none.textContent = text(more ? "delegations.g.none.more" : "delegations.g.none");
@@ -1096,8 +1156,12 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
     }
     for (const card of [...cards.values()]) if (!seen.has(card.cid) && card.phase !== "busy") destroy(card);
 
-    foot.hidden = page.nextCursor === undefined;
-    foot.textContent = text("delegations.firstpage", { count: `${rows.length}+` });
+    foot.hidden = !more;
+    footNote.textContent = text("delegations.firstpage", { count: `${rows.length}+` });
+    showMore.textContent = text(paging === "loading" ? "delegations.more.busy" : paging === "error" ? "view.retry" : "delegations.more.btn");
+    showMore.setAttribute("aria-disabled", String(paging === "loading"));
+    footErr.hidden = paging !== "error";
+    footErr.textContent = text("delegations.more.err");
     // Placed in order without removing what is already in place, so focus inside a card survives a refresh.
     const wanted = [...views, foot];
     wanted.forEach((child, at) => {
@@ -1110,6 +1174,12 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
     if (disposed) return;
     const source = ctx.data.source;
     const result = ctx.data.latest("delegations");
+    // Pages read after the first belong to one list of one account; when that list is gone or replaced, so are they.
+    if (result === undefined || result.state !== "ready") {
+      extra = [];
+      extraCursor = undefined;
+      paging = "idle";
+    }
     skeleton.hidden = true;
     body.hidden = true;
     if (source === undefined) {

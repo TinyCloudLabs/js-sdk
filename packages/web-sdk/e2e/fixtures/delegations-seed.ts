@@ -53,6 +53,25 @@ export function mockupRows(now: number = Date.now()): StubDelegationRowSeed[] {
   }));
 }
 
+/** A grant for a later page: another helper with its own CID, read and list on notes/. */
+export function laterRow(n: number, now: number = Date.now()): StubDelegationRowSeed {
+  return {
+    cid: `bafyEXAMPLElate${n}`,
+    direction: "granted",
+    status: "active",
+    group: "to-others",
+    label: { text: `Late helper ${n}`, source: "stub" },
+    delegatorDid: OWNER,
+    delegateDid: `did:key:z6MkEXAMPLElate${n}`,
+    resources: [{ resource: `${SPACE("Personal")}/kv/notes/`, actions: [KV_ACTIONS.get, KV_ACTIONS.list] }],
+    parents: [],
+    issuedAt: new Date(now - 86_400_000).toISOString(),
+    notBefore: null,
+    expiresAt: new Date(now + 10 * 86_400_000).toISOString(),
+    expiringSoon: false,
+  };
+}
+
 /** A delegation that was granted to this account by someone else. */
 export function receivedRow(now: number = Date.now()): StubDelegationRowSeed {
   return {

@@ -1,6 +1,6 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { row as contrastRow, textRow, type ContrastRow } from "./fixtures/contrast";
-import { mockupRows, receivedRow, seedScript } from "./fixtures/delegations-seed";
+import { laterRow, mockupRows, receivedRow, seedScript } from "./fixtures/delegations-seed";
 import { routeUiHarness } from "./fixtures/ui-route";
 import type { StubDelegationsSeed } from "../src/ui/stub/index";
 
@@ -416,6 +416,63 @@ for (const scheme of ["light", "dark"] as const) {
       await expect(cards(page)).toHaveCount(0);
     });
 
+    test("Show more reads the next pages, appends their rows, and a later row can be revoked", async ({ page }) => {
+      const seed = {
+        rows: mockupRows(),
+        nextCursor: "p2",
+        pages: { p2: { rows: [laterRow(1), laterRow(2)], nextCursor: "p3" }, p3: { rows: [laterRow(2), laterRow(3)] } },
+        revokeDelayMs: 100,
+      };
+      await open(page, { scheme, layout: "page", seed });
+      await expect(cards(page)).toHaveCount(7);
+      await expect(body(page).locator(".dl-h")).toHaveText(["Granted to e2e-settings-smoke3+", "Granted to others4+"]);
+      await expect(body(page)).toContainText("Showing 7+. There are more.");
+
+      const more = body(page).getByRole("button", { name: "Show more" });
+      // Keyboard operable and a proper target.
+      await more.focus();
+      const box = await more.boundingBox();
+      expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
+      await page.keyboard.press("Enter");
+      await expect(cards(page)).toHaveCount(9);
+      await expect(body(page).locator(".dl-h")).toHaveText(["Granted to e2e-settings-smoke3+", "Granted to others6+"]);
+      await expect(more).toBeFocused();
+      await page.keyboard.press("Enter");
+      // The repeated Late helper 2 is not listed twice.
+      await expect(cards(page)).toHaveCount(10);
+      await expect(body(page).locator(".dl-h")).toHaveText(["Granted to e2e-settings-smoke3", "Granted to others7"]);
+      await expect(body(page).getByRole("button", { name: "Show more" })).toHaveCount(0);
+      await expect(card(page, "Late helper 3")).toBeVisible();
+      await expect(body(page).locator(".dl-foot")).toBeHidden();
+
+      // Rows from later pages are the user's to revoke, with the same confirm and receipt.
+      const confirm = await openConfirm(page, "Late helper 3");
+      await expect(confirm.getByRole("button", { name: "Keep access" })).toBeFocused();
+      await confirm.getByRole("button", { name: "Revoke access" }).click();
+      await expect(card(page, "Late helper 3")).toHaveCount(0);
+      await expect(slips(page).locator(".slip")).toContainText("Delegation bafyEXAMPLElate3");
+      expect(await revokeCalls(page)).toEqual(["bafyEXAMPLElate3"]);
+    });
+
+    test("a page that fails to load says so and Try again reads it; nothing else changes", async ({ page }) => {
+      // p2 is not seeded, so the stub answers it with an error.
+      await open(page, { scheme, seed: { rows: mockupRows(), nextCursor: "p2" } });
+      await body(page).getByRole("button", { name: "Show more" }).click();
+      await expect(body(page).getByRole("alert").filter({ hasText: "Couldn't load more." })).toBeVisible();
+      await expect(body(page).getByRole("button", { name: "Try again" }).last()).toBeFocused();
+      await expect(cards(page)).toHaveCount(7);
+      const note = await textRow("footer note", body(page).locator(".dl-foot .dl-fine"), SURFACE[scheme]);
+      expect(note.ratio).toBeGreaterThanOrEqual(4.5);
+    });
+
+    test("nothing on the first page but a cursor offers Show more instead of 'No one has access yet'", async ({ page }) => {
+      await open(page, { scheme, seed: { rows: [], nextCursor: "p2", pages: { p2: { rows: [laterRow(1)] } } } });
+      await expect(body(page)).not.toContainText("No one has access yet");
+      await expect(body(page)).toContainText("None in what's loaded so far.");
+      await body(page).getByRole("button", { name: "Show more" }).click();
+      await expect(card(page, "Late helper 1")).toBeVisible();
+    });
+
     test("a received grant gets its own group, a cursor says only the first page is listed", async ({ page }) => {
       await open(page, { scheme, seed: { rows: [...mockupRows(), receivedRow()], nextCursor: "next" } });
       await expect(body(page).locator(".dl-h")).toHaveText(["Granted to e2e-settings-smoke3+", "Granted to others4+", "Received1+"]);
@@ -425,7 +482,7 @@ for (const scheme of ["light", "dark"] as const) {
       await expect(received.getByRole("button", { name: /^Revoke/ })).toBeHidden();
       await expect(received.getByRole("button", { name: /^See details/ })).toBeVisible();
       await expect(received).toContainText("Only the one who shared it can end it");
-      await expect(body(page)).toContainText("Showing the first 8+");
+      await expect(body(page)).toContainText("Showing 8+. There are more.");
       await page.getByRole("button", { name: "Open full page", exact: true }).click();
       await expect(panel(page).locator(".nav-i", { hasText: "Delegations" }).locator(".nav-m")).toHaveText("8+");
     });

@@ -81,6 +81,8 @@ interface Harness {
   remount(): Promise<HTMLElement>;
   status(): SectionStatus | undefined;
   setPage(result: ViewResult<{ rows: readonly DelegationRow[]; nextCursor?: string }>): void;
+  /** Cursors the section asked the source for, in order. */
+  readonly cursors: string[];
 }
 
 interface Options {
@@ -93,6 +95,8 @@ interface Options {
   slip?: boolean;
   /** `null`: the host gives no app name. */
   appLabel?: string | null;
+  /** Answers a read of a page after the first. */
+  pages?: (cursor: string) => Promise<ViewResult<{ rows: readonly DelegationRow[]; nextCursor?: string }>>;
 }
 
 async function mountSection(options: Options = {}): Promise<Harness> {
@@ -101,10 +105,15 @@ async function mountSection(options: Options = {}): Promise<Harness> {
     data: { rows: options.rows ?? [] },
   };
   const revoked: string[] = [];
+  const cursors: string[] = [];
   const reads = { count: 0 };
   const source = {
     subscribe: () => () => undefined,
-    delegations: async () => {
+    delegations: async (cursor?: string) => {
+      if (cursor !== undefined) {
+        cursors.push(cursor);
+        return options.pages !== undefined ? options.pages(cursor) : ({ state: "error", code: "no-page" } as const);
+      }
       reads.count += 1;
       return current;
     },
@@ -164,6 +173,7 @@ async function mountSection(options: Options = {}): Promise<Harness> {
     receipts,
     toasts,
     reads,
+    cursors,
     refresh: () => data.refresh("delegations"),
     status: () => delegationsSection.status(ctx),
     unmount: () => {
@@ -302,6 +312,26 @@ describe("the stub's revoke behaves like the adapter's active check", () => {
     if (listed.state !== "ready") throw new Error("not ready");
     expect(listed.data.rows.find((r) => r.cid === "live")?.status).toBe("revoked");
     expect(await source.revoke("live")).toEqual({ ok: false, code: "not-revocable" });
+  });
+
+  test("seeded pages are read by their cursor; an unknown cursor is an error; a row on a later page is revoked like any other", async () => {
+    const source = createStubPanelData({
+      delegations: {
+        rows: [seeded("first", "active")],
+        nextCursor: "p2",
+        pages: { p2: { rows: [seeded("second", "active")], nextCursor: "p3" }, p3: { rows: [seeded("third", "active")] } },
+      },
+    })({ sync: undefined } as unknown as PanelClient);
+    const first = await source.delegations();
+    expect(first.state === "ready" && [first.data.rows.map((r) => r.cid), first.data.nextCursor]).toEqual([["first"], "p2"]);
+    const second = await source.delegations("p2");
+    expect(second.state === "ready" && [second.data.rows.map((r) => r.cid), second.data.nextCursor]).toEqual([["second"], "p3"]);
+    const third = await source.delegations("p3");
+    expect(third.state === "ready" && [third.data.rows.map((r) => r.cid), third.data.nextCursor]).toEqual([["third"], undefined]);
+    expect((await source.delegations("nope")).state).toBe("error");
+    expect(await source.revoke("third")).toEqual({ ok: true, cid: "third" });
+    const again = await source.delegations("p3");
+    expect(again.state === "ready" && again.data.rows[0]?.status).toBe("revoked");
   });
 
   test("a seeded failure code is returned and the row stays active", async () => {
@@ -556,7 +586,134 @@ describe("the body states", () => {
 
   test("a cursor on the page says the list is the first page", async () => {
     const h = await mountSection({ result: { state: "ready", data: { rows: [row("a"), row("b")], nextCursor: "c" } } });
-    expect(h.el.textContent).toContain("Showing the first 2+");
+    expect(h.el.textContent).toContain("Showing 2+. There are more.");
+  });
+
+  test("a cursor offers Show more; there is no cursor, no button", async () => {
+    const more = await mountSection({ result: { state: "ready", data: { rows: [row("a")], nextCursor: "c1" } } });
+    expect(more.el.querySelector<HTMLElement>(".dl-foot")?.hidden).toBe(false);
+    expect(buttonIn(more.el, "Show more")).toBeDefined();
+    const whole = await mountSection({ rows: [row("a")] });
+    expect(whole.el.querySelector<HTMLElement>(".dl-foot")?.hidden).toBe(true);
+  });
+
+  test("Show more reads the next page with the cursor, appends its rows without duplicates, and ends with exact counts and focus on the first new row", async () => {
+    const pages: Record<string, { rows: DelegationRow[]; nextCursor?: string }> = {
+      c1: { rows: [row("b"), row("c")], nextCursor: "c2" },
+      c2: { rows: [row("c"), row("d", { group: "this-app" })] },
+    };
+    const h = await mountSection({
+      result: { state: "ready", data: { rows: [row("a"), row("b")], nextCursor: "c1" } },
+      pages: async (cursor) => ({ state: "ready", data: pages[cursor] ?? { rows: [] } }),
+    });
+    expect(cards(h.el)).toHaveLength(2);
+
+    buttonIn(h.el, "Show more")?.click();
+    await flush();
+    expect(h.cursors).toEqual(["c1"]);
+    // "b" was on the first page already; only "c" is new. There is still more, so counts stay lower bounds and focus stays on the button.
+    expect(cards(h.el)).toHaveLength(3);
+    expect([...h.el.querySelectorAll(".dl-h")].map((n) => n.textContent)).toEqual(["Granted to Fieldnotes", "Granted to others3+"]);
+    expect(h.el.querySelector(".dl-foot p")?.textContent).toBe("Showing 3+. There are more.");
+    expect(active()?.textContent).toBe("Show more");
+    expect(h.el.querySelector(".dl-live")?.textContent).toBe("1 more loaded.");
+
+    buttonIn(h.el, "Show more")?.click();
+    await flush();
+    expect(h.cursors).toEqual(["c1", "c2"]);
+    expect(cards(h.el)).toHaveLength(4);
+    expect([...h.el.querySelectorAll(".dl-h")].map((n) => n.textContent)).toEqual(["Granted to Fieldnotes1", "Granted to others3"]);
+    expect(h.el.querySelector<HTMLElement>(".dl-foot")?.hidden).toBe(true);
+    // The button is gone; focus goes to the first row that arrived.
+    expect(active()).toBe(cards(h.el).find((card) => card.textContent?.includes("Helper d")) ?? null);
+  });
+
+  test("while a page loads the button says so and a second click asks for nothing more", async () => {
+    let answer: (result: ViewResult<{ rows: readonly DelegationRow[]; nextCursor?: string }>) => void = () => undefined;
+    const h = await mountSection({
+      result: { state: "ready", data: { rows: [row("a")], nextCursor: "c1" } },
+      pages: () => new Promise((resolve) => (answer = resolve)),
+    });
+    const button = buttonIn(h.el, "Show more");
+    button?.click();
+    await flush();
+    expect(button?.textContent).toBe("Loading…");
+    expect(button?.getAttribute("aria-disabled")).toBe("true");
+    button?.click();
+    await flush();
+    expect(h.cursors).toEqual(["c1"]);
+    answer({ state: "ready", data: { rows: [row("b")] } });
+    await flush();
+    expect(cards(h.el)).toHaveLength(2);
+  });
+
+  test("a page that fails to load says so, keeps the rows and offers Try again, also when the source throws", async () => {
+    let calls = 0;
+    const h = await mountSection({
+      result: { state: "ready", data: { rows: [row("a")], nextCursor: "c1" } },
+      pages: async () => {
+        calls += 1;
+        if (calls === 1) return { state: "error", code: "x" };
+        if (calls === 2) throw new Error("boom");
+        return { state: "ready", data: { rows: [row("b")] } };
+      },
+    });
+    const footer = () => h.el.querySelector<HTMLButtonElement>(".dl-foot button");
+    for (let attempt = 0; attempt < 2; attempt++) {
+      footer()?.click();
+      await flush();
+      expect(h.el.querySelector('.dl-foot [role="alert"]:not([hidden])')?.textContent).toBe("Couldn't load more.");
+      expect(footer()?.textContent).toBe("Try again");
+      expect(cards(h.el)).toHaveLength(1);
+      expect(active()).toBe(footer() ?? null);
+    }
+    footer()?.click();
+    await flush();
+    expect(cards(h.el)).toHaveLength(2);
+    expect(h.el.querySelector<HTMLElement>(".dl-foot")?.hidden).toBe(true);
+  });
+
+  test("a row that arrived on a later page can be revoked: it is the user's to consent to", async () => {
+    const h = await mountSection({
+      result: { state: "ready", data: { rows: [row("a")], nextCursor: "c1" } },
+      pages: async () => ({ state: "ready", data: { rows: [row("late")] } }),
+    });
+    buttonIn(h.el, "Show more")?.click();
+    await flush();
+    h.el.querySelector<HTMLButtonElement>('[aria-label="Revoke access for Helper late"]')?.click();
+    await flush();
+    buttonIn(h.el.querySelector<HTMLElement>('[role="alertdialog"]') ?? h.el, "Revoke access")?.click();
+    await flush();
+    expect(h.revoked).toEqual(["late"]);
+    expect(cards(h.el)).toHaveLength(1);
+  });
+
+  test("nothing on the first page but a cursor is not 'No one has access yet': more may follow", async () => {
+    const h = await mountSection({
+      result: { state: "ready", data: { rows: [], nextCursor: "c1" } },
+      pages: async () => ({ state: "ready", data: { rows: [row("a")] } }),
+    });
+    expect(h.el.textContent).not.toContain("No one has access yet");
+    expect(buttonIn(h.el, "Show more")).toBeDefined();
+    buttonIn(h.el, "Show more")?.click();
+    await flush();
+    expect(cards(h.el)).toHaveLength(1);
+  });
+
+  test("rows read on later pages are dropped when the list goes away, so another account's list never mixes in", async () => {
+    const h = await mountSection({
+      result: { state: "ready", data: { rows: [row("a")], nextCursor: "c1" } },
+      pages: async () => ({ state: "ready", data: { rows: [row("late")] } }),
+    });
+    buttonIn(h.el, "Show more")?.click();
+    await flush();
+    expect(cards(h.el)).toHaveLength(2);
+    h.setPage({ state: "error", code: "x" });
+    await h.refresh();
+    h.setPage({ state: "ready", data: { rows: [row("z")], nextCursor: "c9" } });
+    await h.refresh();
+    await flush();
+    expect(names(h.el)).toEqual(["Helper z"]);
   });
 
   test("the card: label, plain-words line, chips, a Terminal chip only when the data says so, status word", async () => {
