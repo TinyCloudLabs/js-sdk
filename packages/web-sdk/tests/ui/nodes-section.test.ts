@@ -340,4 +340,19 @@ describe("nodes section unknown values", () => {
     expect(rowsOf(cards(el)[0]).get(LATENCY)).toBe("84 ms");
     expect(cards(el)[0].textContent).not.toContain("0 s ago");
   });
+
+  test.each([null, "", "   "])("a version of %p is omitted, never shown as vnull or an empty value", async (version) => {
+    const el = mount(clientWith(fakeData(async () => ready([{ ...HOSTED, version } as unknown as NodeRow]))));
+    await flush();
+    expect(rowsOf(cards(el)[0]).has(panelText("nodes.version"))).toBe(false);
+    expect(cards(el)[0].textContent).not.toContain("vnull");
+  });
+
+  test("blank or missing space names are dropped, and an empty list omits the row", async () => {
+    const el = mount(clientWith(fakeData(async () => ready([{ ...HOSTED, spaces: ["", "  ", null, "Work"] } as unknown as NodeRow, { ...HOSTED, origin: "https://other.test", spaces: [""] } as unknown as NodeRow]))));
+    await flush();
+    const [first, second] = cards(el);
+    expect([...first.querySelectorAll(".nd-chip")].map((chip) => chip.textContent)).toEqual(["Work"]);
+    expect(rowsOf(second).has(panelText("nodes.spaces"))).toBe(false);
+  });
 });

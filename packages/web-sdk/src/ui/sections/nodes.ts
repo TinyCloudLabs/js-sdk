@@ -184,7 +184,9 @@ export const nodesSection: PanelSection = {
         wrapDid.append(did, copy);
         addRow(ctx.text("nodes.nodeid"), wrapDid, true);
       }
-      if (node.version !== undefined) addRow(ctx.text("nodes.version"), plain(`v${node.version}`));
+      if (typeof node.version === "string" && node.version.trim() !== "") {
+        addRow(ctx.text("nodes.version"), plain(`v${node.version}`));
+      }
       const latency = typeof node.latencyMs === "number" && Number.isFinite(node.latencyMs) ? node.latencyMs : undefined;
       if (latency !== undefined) {
         const ms = String(latency);
@@ -193,12 +195,15 @@ export const nodesSection: PanelSection = {
           seen !== undefined ? ctx.text("nodes.latency.value", { ms, seen }) : ctx.text("nodes.latency.only", { ms });
         addRow(ctx.text("nodes.latency"), plain(value));
       }
-      // NodeRow.spaces is typed as a string list; anything else is treated as absent.
-      if (Array.isArray(node.spaces) && node.spaces.length > 0) {
+      // NodeRow.spaces is typed as a string list; anything else, and blank names, are treated as absent.
+      const spaces = Array.isArray(node.spaces)
+        ? node.spaces.filter((name): name is string => typeof name === "string" && name.trim() !== "")
+        : [];
+      if (spaces.length > 0) {
         const chips = document.createElement("ul");
         chips.className = "nd-chips";
         chips.append(
-          ...node.spaces.map((name: string) => {
+          ...spaces.map((name) => {
             const chip = document.createElement("li");
             chip.className = "nd-chip";
             chip.textContent = name;
