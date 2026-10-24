@@ -7,10 +7,12 @@
  */
 import type { LayoutOptions, PanelHandle, PanelOptions, ShellLayout } from "./panel";
 import { createPanel } from "./panel";
+import { mountToastRegion, TOAST_REGION_CSS, type ReceiptRequest } from "./panel-toasts";
 import { PANEL_CSS } from "./panel-styles";
 import { PANEL_SECTIONS } from "./sections";
 import { panelText } from "./strings-panel";
 import type { HostContext, SectionContext, SectionId } from "./slots";
+import type { ToastStore } from "./toast-store";
 
 /** What the host passes on each render. The shell keeps the section between renders. */
 export interface ShellView extends LayoutOptions {
@@ -26,10 +28,13 @@ export interface ShellPanel extends PanelHandle {
   dispose(): void;
 }
 
-/** Builds the panel and its stylesheet in the host's open shadow root. Owns section state and mounting. */
-export function mountPanel(root: ShadowRoot, options: Omit<PanelOptions, "onNavigate">, base: HostContext): ShellPanel {
+/**
+ * Builds the panel and its stylesheet in the host's open shadow root. Owns section state and mounting.
+ * `toasts` is the host's store: the host passes it so this chunk never imports the eager toasts module.
+ */
+export function mountPanel(root: ShadowRoot, options: Omit<PanelOptions, "onNavigate">, base: HostContext, toasts: ToastStore): ShellPanel {
   const style = document.createElement("style");
-  style.textContent = PANEL_CSS;
+  style.textContent = PANEL_CSS + TOAST_REGION_CSS;
   root.append(style);
 
   let view: ShellView = { open: false, layout: "drawer", phone: false, showLayoutToggle: false };
@@ -43,9 +48,12 @@ export function mountPanel(root: ShadowRoot, options: Omit<PanelOptions, "onNavi
       draw();
     },
   });
+  const layer = root.querySelector<HTMLElement>(".layer");
+  const region = layer ? mountToastRegion(layer, toasts, (request) => base.toast(request)) : undefined;
   const context: SectionContext = {
     ...base,
     text: panelText,
+    receipt: (request: ReceiptRequest) => base.toastsEnabled() && region !== undefined && region.receipt(request),
     closePanel: options.onClose,
     openSection(id) {
       active = id;
@@ -85,6 +93,9 @@ export function mountPanel(root: ShadowRoot, options: Omit<PanelOptions, "onNavi
       if (next.section !== undefined) active = next.section;
       draw();
     },
-    dispose: closeSections,
+    dispose() {
+      closeSections();
+      region?.dispose();
+    },
   });
 }

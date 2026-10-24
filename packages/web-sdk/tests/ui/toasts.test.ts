@@ -147,15 +147,6 @@ describe("toast store", () => {
     const view = collect(store);
     expect(view.latest().map((toast) => toast.textCode)).toEqual(["a"]);
   });
-
-  test("two toasts that differ only in receipt rows are both shown", () => {
-    const store = createToastStore({ durationMs: 10_000 });
-    const view = collect(store);
-    store.push({ kind: "success", textCode: "a", slip: [{ labelCode: "label", value: "rc-1" }] });
-    store.push({ kind: "success", textCode: "a", slip: [{ labelCode: "label", value: "rc-2" }] });
-    expect(view.latest().length).toBe(2);
-    expect(view.latest()[0]?.slip).toEqual([{ labelCode: "label", value: "rc-1" }]);
-  });
 });
 
 describe("toasts part", () => {
@@ -233,63 +224,6 @@ describe("toasts part", () => {
     expect(layer.querySelectorAll(".toast").length).toBe(0);
     jest.advanceTimersByTime(40);
     expect(view.latest().length).toBe(0);
-  });
-
-  test("renders receipt rows as label text and value text, never as markup", () => {
-    const store = createToastStore({ durationMs: 10_000 });
-    const { layer, stop } = mountPart(store);
-    store.push({ kind: "success", textCode: "a", slip: [{ labelCode: "rc", value: "<b>rc-1</b>" }] });
-    const row = layer.querySelector(".slip > div");
-    expect(row?.children.length).toBe(2);
-    expect(row?.children[0]?.textContent).toBe("T:rc");
-    expect(row?.children[1]?.textContent).toBe("<b>rc-1</b>");
-    expect(row?.querySelector("b")).toBeNull();
-    stop();
-    layer.remove();
-  });
-
-  test("a toast without a slip renders no receipt block", () => {
-    const store = createToastStore({ durationMs: 10_000 });
-    const { layer, stop } = mountPart(store);
-    store.push({ kind: "info", textCode: "a" });
-    expect(layer.querySelectorAll(".slip").length).toBe(0);
-    stop();
-    layer.remove();
-  });
-
-  test("the dismiss button is labelled with the toast.dismiss string", () => {
-    const store = createToastStore({ durationMs: 10_000 });
-    const { layer, stop } = mountPart(store);
-    store.push({ kind: "info", textCode: "a" });
-    expect(layer.querySelector(".toast__close")?.getAttribute("aria-label")).toBe("T:toast.dismiss");
-    stop();
-    layer.remove();
-  });
-
-  test("copy receipt writes each row as label and value, then confirms", async () => {
-    const written: string[] = [];
-    const pushed: string[] = [];
-    const realNavigator = globalThis.navigator;
-    Object.defineProperty(globalThis, "navigator", {
-      configurable: true,
-      value: { clipboard: { writeText: async (text: string) => { written.push(text); } } },
-    });
-    try {
-      const store = createToastStore({ durationMs: 10_000 });
-      store.subscribe((list) => {
-        pushed.splice(0, pushed.length, ...list.map((toast) => toast.textCode));
-      });
-      const { layer, stop } = mountPart(store);
-      store.push({ kind: "success", textCode: "a", slip: [{ labelCode: "rc", value: "rc-1" }, { labelCode: "cid", value: "cid-9" }] });
-      (layer.querySelector(".toast__copy") as HTMLButtonElement).click();
-      for (let turn = 0; turn < 10; turn++) await Promise.resolve();
-      expect(written).toEqual(["T:rc rc-1\nT:cid cid-9"]);
-      expect(pushed).toEqual(["a", "account.copied"]);
-      stop();
-      layer.remove();
-    } finally {
-      Object.defineProperty(globalThis, "navigator", { configurable: true, value: realNavigator });
-    }
   });
 });
 

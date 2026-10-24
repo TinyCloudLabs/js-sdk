@@ -287,7 +287,7 @@ export function createHostRuntime(): HostRuntime {
       onClose: () => closeShell(true),
       onEscape: () => closeShell(true),
       onLayout: (target) => openAt(target),
-    }, context);
+    }, context, toastStore);
     owner.pending.el.replaceWith(panel.el);
     owner.panel = panel;
     panel.setStatus(board.top());

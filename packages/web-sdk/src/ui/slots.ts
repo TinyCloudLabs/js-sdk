@@ -4,6 +4,7 @@
  */
 
 import type { IStorageService } from "@tinycloud/sdk-core";
+import type { ReceiptRequest } from "./panel-toasts";
 import type { StringKey } from "./strings";
 import type { PanelDataSource } from "./data";
 import type { ToastRequest } from "./toast-store";
@@ -76,6 +77,8 @@ export interface SectionContext extends HostContext {
   closePanel(): void;
   /** Opens a section in the panel. Used by At-a-glance rows. */
   openSection(id: SectionId): void;
+  /** Shows a receipt slip (title, identifiers, Copy receipt). False when toasts are off or the same receipt is already up. */
+  receipt(request: ReceiptRequest): boolean;
 }
 
 /** A body section in the panel. Mounted only while the panel is open and `isAvailable`. */

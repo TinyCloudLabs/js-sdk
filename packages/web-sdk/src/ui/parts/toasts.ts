@@ -1,5 +1,5 @@
 import type { HostPart } from "../slots";
-import { createToastStore, type ToastKind, type ToastSlipRow, type ToastStore, type ToastView } from "../toast-store";
+import { createToastStore, type ToastStore, type ToastView } from "../toast-store";
 
 /** Shared store: host.ts pushes here; the registered part renders it. */
 export const toastStore: ToastStore = createToastStore();
@@ -15,30 +15,18 @@ const TOAST_CSS = `
 .toast--warning{border-left-color:#d97706}
 .toast--error{border-left-color:#dc2626}
 .toast__message{flex:1;min-width:0;overflow-wrap:anywhere}
-.slip{margin-top:8px;padding:8px 0;border-top:2px dashed #71717a;border-bottom:2px dashed #71717a;font:12px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere}
-.slip>div{display:flex;justify-content:space-between;gap:12px}
 .toast a{color:inherit;text-decoration:underline;white-space:nowrap}
-.toast__close{border:0;background:transparent;color:inherit;cursor:pointer;padding:0;font:inherit;line-height:1;min-width:44px;min-height:44px;margin:-12px -10px -12px 0;display:inline-flex;align-items:center;justify-content:center}
-.toast__icon{flex:none;padding-top:1px}
-.toast__copy{display:inline-flex;align-items:center;min-height:44px;margin-top:2px;border:0;background:transparent;color:inherit;cursor:pointer;padding:0;font:inherit;text-decoration:underline}
-.toast a:focus-visible,.toast__close:focus-visible,.toast__copy:focus-visible{outline:2px solid #111827;outline-offset:2px;box-shadow:0 0 0 6px #fafafa}
+.toast__close{border:0;background:transparent;color:inherit;cursor:pointer;padding:0 2px;font:inherit;line-height:1}
+.toast a:focus-visible,.toast__close:focus-visible{outline:2px solid #111827;outline-offset:2px;box-shadow:0 0 0 6px #fafafa}
 /* Dark candidate, app family (docs/brand/guide.md §4.1): surface #151517, ink #fafafa,
    hairline #69696b, warning #fbbd23. The guide has no dark value for info, success or
    error; the light stripes are kept, and each measures at least 3:1 on #151517. */
 @media (prefers-color-scheme: dark){
 .toast{border-top-color:#69696b;border-right-color:#69696b;border-bottom-color:#69696b;background:#151517;color:#fafafa}
-.toast a:focus-visible,.toast__close:focus-visible,.toast__copy:focus-visible{outline-color:#fafafa;box-shadow:0 0 0 6px #111827}
+.toast a:focus-visible,.toast__close:focus-visible{outline-color:#fafafa;box-shadow:0 0 0 6px #111827}
 .toast--warning{border-left-color:#fbbd23}
 }
 `;
-
-/** Inline icon paths, one per toast kind, so the eager bundle carries no icon module. */
-const TOAST_ICON: Record<ToastKind, string> = {
-  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
-  success: '<path d="M5 12l5 5 9-10"/>',
-  warning: '<path d="M12 3l10 18H2zM12 10v5M12 18h.01"/>',
-  error: '<path d="M12 3l10 18H2zM12 10v5M12 18h.01"/>',
-};
 
 /** Renders `store` into the host layer. Exposed for tests with a short-duration store. */
 export function createToastsPart(store: ToastStore): HostPart {
@@ -54,52 +42,14 @@ export function createToastsPart(store: ToastStore): HostPart {
       const items = new Map<string, HTMLElement>();
       const hovered = new Set<string>();
 
-      function copyReceipt(rows: readonly ToastSlipRow[]): void {
-        const plain = rows.map((row) => `${ctx.text(row.labelCode)} ${row.value}`).join("\n");
-        void (async () => {
-          try {
-            await navigator.clipboard.writeText(plain);
-            store.push({ kind: "success", textCode: "account.copied" });
-          } catch {
-            store.push({ kind: "error", textCode: "account.copy_failed" });
-          }
-        })();
-      }
-
       function buildToast(view: ToastView): HTMLElement {
         const el = document.createElement("div");
         el.className = `toast toast--${view.kind}`;
         el.setAttribute("role", view.kind === "error" ? "alert" : "status");
 
-        const icon = document.createElement("span");
-        icon.className = "toast__icon";
-        icon.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${TOAST_ICON[view.kind]}</svg>`;
-        el.append(icon);
-
         const message = document.createElement("div");
         message.className = "toast__message";
         message.textContent = ctx.text(view.textCode);
-        if (view.slip !== undefined) {
-          const slip = document.createElement("div");
-          slip.className = "slip";
-          for (const row of view.slip) {
-            const line = document.createElement("div");
-            const label = document.createElement("span");
-            label.textContent = ctx.text(row.labelCode);
-            const value = document.createElement("span");
-            value.textContent = row.value;
-            line.append(label, value);
-            slip.append(line);
-          }
-          message.append(slip);
-          const rows = view.slip;
-          const copy = document.createElement("button");
-          copy.type = "button";
-          copy.className = "toast__copy";
-          copy.textContent = ctx.text("toast.copy_receipt");
-          copy.addEventListener("click", () => copyReceipt(rows));
-          message.append(copy);
-        }
         el.append(message);
 
         if (view.href !== undefined && view.hrefLabelCode !== undefined) {
@@ -114,7 +64,7 @@ export function createToastsPart(store: ToastStore): HostPart {
         const close = document.createElement("button");
         close.type = "button";
         close.className = "toast__close";
-        close.setAttribute("aria-label", ctx.text("toast.dismiss"));
+        close.setAttribute("aria-label", ctx.text("panel.close"));
         close.textContent = "×";
         close.addEventListener("click", () => store.dismiss(view.id));
         el.append(close);

@@ -4,10 +4,11 @@ import { JSDOM } from "jsdom";
 import { registerUiClient, type UiClientHandle } from "../../src/ui";
 import type { ClientSource } from "../../src/ui/client";
 import { REGISTRY_KEY } from "../../src/ui/host";
+import { mountToastRegion } from "../../src/ui/panel-toasts";
 import { toastStore } from "../../src/ui/parts/toasts";
 import type { SyncFacade, SyncState } from "../../src/ui/slots";
 import { createStubPanelData } from "../../src/ui/stub";
-import type { ToastKind, ToastView } from "../../src/ui/toast-store";
+import { createToastStore, type ToastKind, type ToastView } from "../../src/ui/toast-store";
 import { panelMounted } from "./panel-ready";
 
 // Checks the shipped DOM against the stylesheet text the same shadow root carries.
@@ -114,11 +115,17 @@ function appliedClassesAcrossKinds(): Set<string> {
       textCode: "panel.title",
       href: "https://example.com/docs",
       hrefLabelCode: "panel.close",
-      slip: [{ labelCode: "panel.title", value: "rc-1" }],
     });
     for (const el of shadow().querySelectorAll("[class]")) for (const cls of el.classList) applied.add(cls);
     toastStore.dismiss(id);
   }
+  // No section raises a receipt yet, so mount a standalone region to render one.
+  const layer = shadow().querySelector<HTMLElement>(".layer");
+  if (!layer) throw new Error("no host layer");
+  const region = mountToastRegion(layer, createToastStore(), () => null);
+  region.receipt({ titleCode: "panel.title", bodyCode: "panel.title", rows: [{ labelCode: "panel.title", value: "rc-1" }] });
+  for (const el of shadow().querySelectorAll("[class]")) for (const cls of el.classList) applied.add(cls);
+  region.dispose();
   return applied;
 }
 

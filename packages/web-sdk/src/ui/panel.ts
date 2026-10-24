@@ -1,6 +1,7 @@
 import { PANEL_ID } from "./ids";
 import type { SectionId, StatusCode } from "./slots";
-import { text, type StringKey } from "./strings";
+import type { StringKey } from "./strings";
+import { panelText as text, type PanelStringKey } from "./strings-panel";
 
 /** `drawer` is the sidebar overlay; `page` fills the host layer. */
 export type ShellLayout = "drawer" | "page";
@@ -50,7 +51,7 @@ const SWITCH_GLYPH: Record<ShellLayout, string> = {
   page: "M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7",
   drawer: "M6 4h12a3 3 0 0 1 3 3v10a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3zM15 4v16",
 };
-const SWITCH_LABEL: Record<ShellLayout, StringKey> = {
+const SWITCH_LABEL: Record<ShellLayout, PanelStringKey> = {
   page: "panel.full_page",
   drawer: "panel.sidebar",
 };

@@ -5,12 +5,8 @@
 export const STRINGS = {
   "panel.title": "TinyCloud",
   "panel.close": "Close",
-  "toast.dismiss": "Dismiss",
-  "toast.copy_receipt": "Copy receipt",
   "panel.hide": "Hide button",
   "panel.sections": "Sections",
-  "panel.full_page": "Open full page",
-  "panel.sidebar": "Show as sidebar",
   "panel.in": "in",
   "panel.back": "Back to",
   "section.placeholder": "Not available yet.",
@@ -63,8 +59,6 @@ export const STRINGS = {
   "nav.nodes": "Nodes",
   "nav.storage": "Storage",
   "nav.activity": "Activity",
-  "account.copied": "DID copied",
-  "account.copy_failed": "Could not copy the DID",
   "button.aria": "TinyCloud settings",
 
   "status.storage_full": "Storage is full",

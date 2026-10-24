@@ -5,7 +5,15 @@ import { text as eagerText } from "./strings";
  * imports this, so the launcher bundle never carries these keys.
  * Toast and launcher keys stay in strings.ts.
  */
-const PANEL_STRINGS: Readonly<Record<string, string>> = {
+const PANEL_STRINGS = {
+  "panel.full_page": "Open full page",
+  "panel.sidebar": "Show as sidebar",
+  "toast.dismiss": "Dismiss",
+  "toast.copy_receipt": "Copy receipt",
+  "toast.copied": "Copied",
+  "toast.copy_failed": "Couldn't copy. Select the text and copy it by hand.",
+  "account.copied": "DID copied",
+  "account.copy_failed": "Could not copy the DID",
   "account.signed_out": "TinyCloud is signed out in this app. Sign in to see your account.",
   "account.signed_in_as": "Signed in as",
   "account.copy_did": "Copy your DID",
@@ -48,10 +56,14 @@ const PANEL_STRINGS: Readonly<Record<string, string>> = {
   "glance.word.no_errors": "No errors",
   "glance.word.checking": "Checking",
   "glance.word.unavailable": "Unavailable",
-};
+} as const satisfies Readonly<Record<string, string>>;
+
+export type PanelStringKey = keyof typeof PANEL_STRINGS;
 
 /** Panel-only lookup. Falls back to the launcher table, then to the neutral line. */
 export function panelText(code: string, params: Readonly<Record<string, string | number>> = {}): string {
-  const raw = Object.prototype.hasOwnProperty.call(PANEL_STRINGS, code) ? PANEL_STRINGS[code] : eagerText(code);
+  const raw: string = Object.prototype.hasOwnProperty.call(PANEL_STRINGS, code)
+    ? PANEL_STRINGS[code as PanelStringKey]
+    : eagerText(code);
   return raw.replace(/\{(\w+)\}/g, (match, name: string) => (name in params ? String(params[name]) : match));
 }

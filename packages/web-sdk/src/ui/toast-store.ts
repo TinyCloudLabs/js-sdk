@@ -3,22 +3,16 @@
  * subscribes and renders. Text is a strings.ts code, never raw text.
  */
 import type { StringKey } from "./strings";
+import type { PanelStringKey } from "./strings-panel";
 
 export type ToastKind = "info" | "success" | "warning" | "error";
 
-/** One receipt row. The label is a strings.ts code; the value is data (an ID), never prose. */
-export interface ToastSlipRow {
-  readonly labelCode: StringKey;
-  readonly value: string;
-}
-
 export interface ToastRequest {
   readonly kind: ToastKind;
-  readonly textCode: StringKey;
+  /** A launcher code, or a panel code when a section raises the toast (rendered by the panel chunk). */
+  readonly textCode: StringKey | PanelStringKey;
   readonly href?: string;
   readonly hrefLabelCode?: StringKey;
-  /** Dashed receipt slip under the message. */
-  readonly slip?: readonly ToastSlipRow[];
 }
 
 /** Delivers a toast to the page's host. Returns false when nothing was shown. */
@@ -27,11 +21,10 @@ export type ToastSink = (request: ToastRequest) => boolean;
 export interface ToastView {
   readonly id: string;
   readonly kind: ToastKind;
-  readonly textCode: StringKey;
+  readonly textCode: StringKey | PanelStringKey;
   /** Present only when it is an absolute https URL. */
   readonly href?: string;
   readonly hrefLabelCode?: StringKey;
-  readonly slip?: readonly ToastSlipRow[];
 }
 
 export interface ToastStoreOptions {
@@ -120,8 +113,7 @@ export function createToastStore(options: ToastStoreOptions = {}): ToastStore {
     push(request, owner) {
       const href = safeHref(request.href);
       const linkLabel = href !== undefined ? request.hrefLabelCode : undefined;
-      const slip = request.slip ?? [];
-      const key = `${request.kind}|${request.textCode}|${href ?? ""}|${slip.map((r) => `${r.labelCode}=${r.value}`).join("\n")}`;
+      const key = `${request.kind}|${request.textCode}|${href ?? ""}`;
       for (const entry of entries.values()) {
         if (entry.key === key) return entry.view.id;
       }
@@ -134,7 +126,6 @@ export function createToastStore(options: ToastStoreOptions = {}): ToastStore {
         ...(href !== undefined && linkLabel !== undefined
           ? { href, hrefLabelCode: linkLabel }
           : {}),
-        ...(slip.length > 0 ? { slip } : {}),
       };
       const entry: Entry = { key, owner, view, timer: undefined, remainingMs: durationMs, startedAt: 0 };
       entries.set(id, entry);
