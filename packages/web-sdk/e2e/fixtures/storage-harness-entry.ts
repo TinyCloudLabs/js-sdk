@@ -2,7 +2,9 @@
 // into e2e/.build/storage.bundle.js. It mounts the real UI module; the spec
 // picks the storage status with `configure` and drives the own-storage episode
 // with `setEpisode`, both through window.__tc.
+import type { PanelDataFactory, StorageView, ViewResult } from "../../src/ui/data";
 import { registerUiClient, type UiClientHandle } from "../../src/ui/index";
+import { createStubPanelData } from "../../src/ui/stub/index";
 
 type StorageConfig =
   | { kind: "known"; manageUrl: string }
@@ -63,6 +65,24 @@ function setEpisode(on: boolean) {
   for (const cb of [...episodeListeners]) cb();
 }
 
+/**
+ * The panel reads Storage through its data source only. This one is the stub with `storage()` answered from
+ * the fake `tc.storage.status()` above, the way the live adapter maps it: a granted read is ready, a denied
+ * read needs permission, any other failure is an error.
+ */
+const data: PanelDataFactory = (client) => ({
+  ...createStubPanelData()(client),
+  async storage(): Promise<ViewResult<StorageView>> {
+    const res = await storage.status();
+    if ("error" in res) {
+      return res.error.code === "PERMISSION_DENIED"
+        ? { state: "needs-permission", ability: "space/info" }
+        : { state: "error", code: res.error.code };
+    }
+    return { state: "ready", data: { source: "stub", ...res.data } };
+  },
+});
+
 const source = {
   signedIn: () => true,
   storage,
@@ -82,6 +102,7 @@ w.__tc = {
       ui: undefined as never,
       source: source as never,
       manifestAppId: () => "e2e-storage",
+      data,
     });
     w.tc = { ui: handle.api };
     return true;

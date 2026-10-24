@@ -80,12 +80,17 @@ const legacySection: PanelSection = {
   labelCode: "nav.storage",
   icon: "drive",
   summaryCode: "storage.summary",
-  status: (ctx) =>
-    viewStatus(ctx, ctx.data.latest("storage"), (view): SectionStatus => {
-      if (view.state === "full") return { text: ctx.text("storage.glance.full"), tone: "warn" };
-      if (view.state === "nearly_full") return { text: ctx.text("storage.glance.nearly_full"), tone: "warn" };
+  status(ctx) {
+    // The same word the launcher, the header and the page body say while an own-storage-full episode lasts.
+    if (ctx.client()?.storageEpisode?.current() !== undefined) return { text: ctx.text("storage.glance.full"), tone: "warn" };
+    return viewStatus(ctx, ctx.data.latest("storage"), (view): SectionStatus => {
+      // No limit is never full, whatever the body says.
+      const open = storageDisplay(view)?.limitBytes === null;
+      if (!open && view.state === "full") return { text: ctx.text("storage.glance.full"), tone: "warn" };
+      if (!open && view.state === "nearly_full") return { text: ctx.text("storage.glance.nearly_full"), tone: "warn" };
       return { text: ctx.text("storage.glance.normal"), tone: "ok" };
-    }),
+    });
+  },
   isAvailable: (ctx) => ctx.client()?.signedIn() === true,
   mount(el, ctx: HostContext) {
     const client = ctx.client();
@@ -590,12 +595,12 @@ function spacesColumn(ctx: SectionContext, d: StorageDisplay): HTMLElement {
   return column;
 }
 
-function banner(ctx: SectionContext, d: StorageDisplay): HTMLElement {
+function banner(ctx: SectionContext, manageHref: string): HTMLElement {
   const box = element("div", "storage-banner");
   box.setAttribute("role", "status");
   const body = document.createElement("div");
   const title = element("strong", "", ctx.text("storage.page.full_title"));
-  body.append(title, ctx.text("storage.page.full_body"), manageLink(ctx, d.manageHref));
+  body.append(title, ctx.text("storage.page.full_body"), manageLink(ctx, manageHref));
   box.append(icon("warn"), body);
   return box;
 }
@@ -622,6 +627,8 @@ function mountPage(el: HTMLElement, ctx: SectionContext): () => void {
   let generation = 0;
   let asking = false;
   let outcome: "declined" | "blocked" | undefined;
+  const episodeOn = (): boolean => ctx.client()?.storageEpisode?.current() !== undefined;
+  let wasEpisode = episodeOn();
 
   const line = createStateLine(ctx, () => void reload());
   const content = document.createElement("div");
@@ -667,7 +674,10 @@ function mountPage(el: HTMLElement, ctx: SectionContext): () => void {
   function render(): void {
     if (disposed) return;
     const result = reading ? viewLoading<StorageView>() : (ctx.data.latest("storage") ?? viewLoading<StorageView>());
-    const permission = result.state === "needs-permission";
+    // An own-storage-full episode is what the launcher, header and toast already say, so the body says it too.
+    // Its numbers are the last read's and may still say "ok", so they are not shown while it lasts.
+    const episode = episodeOn();
+    const permission = result.state === "needs-permission" && !episode;
     lede.textContent = ctx.text(permission ? "storage.page.lede_short" : "storage.page.lede");
 
     let display: StorageDisplay | undefined;
@@ -681,6 +691,12 @@ function mountPage(el: HTMLElement, ctx: SectionContext): () => void {
         line.status.hidden = false;
         line.status.textContent = ctx.text("storage.unavailable");
       }
+    }
+
+    if (episode) {
+      line.status.hidden = true;
+      line.retry.hidden = true;
+      display = undefined;
     }
 
     if (permission) addCss(ASK_CSS);
@@ -703,7 +719,13 @@ function mountPage(el: HTMLElement, ctx: SectionContext): () => void {
       askNote.textContent = note === "" ? "" : ctx.text(note);
     }
 
-    if (display === undefined) {
+    if (episode) {
+      addCss(BANNER_CSS);
+      const head = element("div", "storage-hd");
+      head.append(statusWord(ctx.text(LEVEL_WORD.full.key), LEVEL_WORD.full.tone));
+      const href = result.state === "ready" ? manageHrefFor(result.data) : STORAGE_MANAGE_URL;
+      content.replaceChildren(banner(ctx, href), head);
+    } else if (display === undefined) {
       content.replaceChildren();
     } else {
       if (display.level === "full") addCss(BANNER_CSS);
@@ -712,11 +734,11 @@ function mountPage(el: HTMLElement, ctx: SectionContext): () => void {
       const columns = element("div", "storage-cols");
       columns.append(usedColumn(ctx, display));
       if (display.spaces.length > 0) columns.append(spacesColumn(ctx, display));
-      content.replaceChildren(...(display.level === "full" ? [banner(ctx, display)] : []), columns);
+      content.replaceChildren(...(display.level === "full" ? [banner(ctx, display.manageHref)] : []), columns);
     }
 
     const age = ctx.data.age("storage");
-    updated.hidden = display === undefined || age === undefined;
+    updated.hidden = display === undefined || age === undefined || episode;
     updated.textContent = age === undefined ? "" : ageText(ctx, age);
   }
 
@@ -746,6 +768,14 @@ function mountPage(el: HTMLElement, ctx: SectionContext): () => void {
   });
 
   const unsubscribe = ctx.data.subscribe(() => render());
+  const offEpisode = ctx.client()?.storageEpisode?.subscribe(() => {
+    const was = wasEpisode;
+    wasEpisode = episodeOn();
+    render();
+    ctx.requestRender();
+    // When the episode ends the numbers are stale: read them again.
+    if (was && !wasEpisode) void reload();
+  });
   const offReset = ctx.client()?.onReset(drop);
   const offClient = ctx.onClientChange(drop);
   el.append(style, heading, lede, line.status, line.retry, askCard, content, updated);
@@ -754,6 +784,7 @@ function mountPage(el: HTMLElement, ctx: SectionContext): () => void {
   return () => {
     disposed = true;
     unsubscribe();
+    offEpisode?.();
     offReset?.();
     offClient();
     el.replaceChildren();

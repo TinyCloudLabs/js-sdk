@@ -202,6 +202,10 @@ interface Rig {
   switchAccount(result: ViewResult<StorageView> | undefined): void;
   refreshes: string[];
   authority: string[];
+  /** An own-storage-full episode starts or ends, as the client's episode view reports it. */
+  setEpisode(on: boolean): void;
+  /** How many times the page asked the shell to repaint statuses. */
+  renders(): number;
 }
 
 interface RigOptions {
@@ -212,6 +216,8 @@ interface RigOptions {
   refresh?: () => void;
   /** A read that settles when the test says so. */
   refreshWith?: () => Promise<void>;
+  /** An own-storage-full episode is already on at mount. */
+  episode?: boolean;
 }
 
 function mount(initial: ViewResult<StorageView> | undefined, opts: RigOptions = {}): Rig {
@@ -221,12 +227,22 @@ function mount(initial: ViewResult<StorageView> | undefined, opts: RigOptions = 
   const refreshes: string[] = [];
   const authority: string[] = [];
   const request = opts.authorityWith ?? (opts.authority ? async () => opts.authority!() : undefined);
+  let episodeOn = opts.episode === true;
+  const episodeListeners = new Set<() => void>();
+  let renders = 0;
   const client = {
     id: 1,
     signedIn: () => true,
     onReset: (fn: () => void) => {
       resetListeners.add(fn);
       return () => resetListeners.delete(fn);
+    },
+    storageEpisode: {
+      current: () => (episodeOn ? {} : undefined),
+      subscribe: (fn: () => void) => {
+        episodeListeners.add(fn);
+        return () => episodeListeners.delete(fn);
+      },
     },
     requestAuthority: request
       ? async (kind: string) => {
@@ -239,6 +255,9 @@ function mount(initial: ViewResult<StorageView> | undefined, opts: RigOptions = 
     client: () => client,
     onClientChange: () => () => undefined,
     appLabel: () => "Example app",
+    requestRender: () => {
+      renders += 1;
+    },
     text: (code: string, params?: Record<string, string | number>) => panelText(code, params),
     data: {
       source: {},
@@ -267,6 +286,11 @@ function mount(initial: ViewResult<StorageView> | undefined, opts: RigOptions = 
     refreshes,
     authority,
     set,
+    setEpisode(on) {
+      episodeOn = on;
+      for (const fn of [...episodeListeners]) fn();
+    },
+    renders: () => renders,
     switchAccount(result) {
       set(result);
       for (const fn of [...resetListeners]) fn();
@@ -483,12 +507,80 @@ describe("storage page", () => {
   });
 });
 
+describe("storage page: an own-storage-full episode", () => {
+  const body = (el: HTMLElement) => ({
+    word: el.querySelector(".storage-st")?.textContent,
+    banner: el.querySelector(".storage-banner")?.textContent ?? "",
+    meter: el.querySelector('[role="meter"]'),
+    figure: el.querySelector(".storage-fig"),
+  });
+
+  test("the body says Full and drops the numbers even when the status says ok", () => {
+    const { el } = mount(ready(NORMAL), { episode: true });
+    const b = body(el);
+    expect(b.word).toBe("Full");
+    expect(b.banner).toContain("Storage full: read-only.");
+    expect(b.meter).toBeNull();
+    expect(b.figure).toBeNull();
+    expect(el.querySelector(".storage-updated")?.hasAttribute("hidden")).toBe(true);
+  });
+
+  test("an episode that starts while the page is open turns it to Full and asks the shell to repaint", () => {
+    const rig = mount(ready(NORMAL));
+    expect(body(rig.el).word).toBe("Normal");
+    const before = rig.renders();
+    rig.setEpisode(true);
+    expect(body(rig.el).word).toBe("Full");
+    expect(rig.renders()).toBe(before + 1);
+  });
+
+  test("when the episode ends the numbers come back after a re-read", async () => {
+    const rig = mount(ready(NORMAL), { episode: true });
+    rig.setEpisode(false);
+    await flush();
+    expect(rig.refreshes).toEqual(["storage"]);
+    expect(body(rig.el).word).toBe("Normal");
+    expect(body(rig.el).figure?.textContent).toContain("312.4");
+  });
+
+  test("a loading or failed read still says Full during an episode, with no loading line and no retry", () => {
+    for (const result of [{ state: "loading" } as const, { state: "error", code: "boom" } as const]) {
+      const { el } = mount(result, { episode: true });
+      expect(body(el).word).toBe("Full");
+      expect(el.querySelector('[role="status"]:not(.storage-banner)')?.hasAttribute("hidden")).toBe(true);
+      expect([...el.querySelectorAll("button")].filter((b) => b.closest("[hidden]") === null).length).toBe(0);
+    }
+  });
+
+  test("the manage link in the banner uses an https manageUrl from the last read, else the account page", () => {
+    const withUrl = mount(ready(status(1, 10, "ok", { manageUrl: "https://a.example/m" })), { episode: true });
+    expect(withUrl.el.querySelector<HTMLAnchorElement>(".storage-banner a")?.href).toBe("https://a.example/m");
+    const without = mount({ state: "loading" }, { episode: true });
+    expect(without.el.querySelector<HTMLAnchorElement>(".storage-banner a")?.href).toBe(
+      "https://account.tinycloud.xyz/storage",
+    );
+  });
+});
+
 describe("storage status(ctx) alongside the page", () => {
   const ctx = (result: ViewResult<StorageView> | undefined) =>
     ({
+      client: () => undefined,
       text: (code: string) => panelText(code),
       data: { source: {}, latest: () => result },
     }) as unknown as SectionContext;
+
+  test("an own-storage-full episode makes the rail say Full whatever the cache says; no limit is never full", () => {
+    const withEpisode = (on: boolean) =>
+      ({
+        client: () => ({ storageEpisode: { current: () => (on ? {} : undefined) } }),
+        text: (code: string) => panelText(code),
+        data: { source: {}, latest: () => ready(status(10, 1000, "ok")) },
+      }) as unknown as SectionContext;
+    expect(storageSection.status(withEpisode(true))).toEqual({ text: "Full", tone: "warn" });
+    expect(storageSection.status(withEpisode(false))).toEqual({ text: "Normal", tone: "ok" });
+    expect(storageSection.status(ctx(ready(status(7, null, "full"))))).toEqual({ text: "Normal", tone: "ok" });
+  });
 
   test("Normal, Nearly full and Full from the cached view, with tones ok, warn, warn", () => {
     expect(storageSection.status(ctx(ready(status(0, 1000, "ok"))))).toEqual({ text: "Normal", tone: "ok" });

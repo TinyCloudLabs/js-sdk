@@ -135,6 +135,31 @@ for (const scheme of SCHEMES) {
     await expect(toast.locator("a")).toHaveAttribute("href", STORAGE_MANAGE_URL);
   });
 
+  test(`${scheme}: an own-storage-full episode lights the launcher and the body says Full too`, async ({ page }) => {
+    await mountHarness(page, scheme, KNOWN);
+    await openPanel(page);
+    await expect(section(page).locator(".storage-fig")).toBeVisible();
+    await expect(section(page).locator(".storage-st")).toHaveText("Normal");
+
+    await closePanel(page);
+    await setEpisode(page, true);
+    await expect(launcher(page).locator('.dot[data-status="storage_full"]')).toBeVisible();
+
+    await openPanel(page);
+    await expect(panel(page).locator(".head .status")).toHaveText(STRINGS["status.storage_full"]);
+    // The body agrees with the launcher and the header: Full, in plain words, and no numbers from the last read.
+    await expect(section(page).locator(".storage-st")).toHaveText("Full");
+    await expect(section(page).locator(".storage-banner")).toContainText("Storage full: read-only.");
+    await expect(section(page).locator('[role="meter"]')).toHaveCount(0);
+    await expect(section(page).locator(".storage-fig")).toHaveCount(0);
+
+    // It also turns Full while the panel is open, and back when the episode ends.
+    await setEpisode(page, false);
+    await expect(section(page).locator(".storage-st")).toHaveText("Normal");
+    await setEpisode(page, true);
+    await expect(section(page).locator(".storage-st")).toHaveText("Full");
+  });
+
   test(`${scheme}: a full episode stays on the launcher and the header after close and reopen`, async ({ page }) => {
     await mountHarness(page, scheme, KNOWN);
     await openPanel(page);
