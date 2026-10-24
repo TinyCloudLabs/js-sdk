@@ -104,6 +104,11 @@ export interface SectionData {
   readonly source: PanelDataSource | undefined;
   /** Last result the shell read for `key`; undefined until the first read settles. Never waits. */
   latest<K extends Exclude<DataKey, "account">>(key: K): ViewResult<DataViews[K]> | undefined;
+  /**
+   * Account generation: a number that changes on every reset (sign-out, account switch, client change).
+   * Capture it before any await whose result is keyed by account and discard the result if it changed.
+   */
+  generation(): number;
   /** Milliseconds since `latest(key)` settled; undefined when it never has. */
   age(key: Exclude<DataKey, "account">): number | undefined;
   /** Re-reads one view, or all of them. Resolves once the cache holds the new results. */

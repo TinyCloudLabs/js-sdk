@@ -27,6 +27,11 @@
  *   ctx.data                   Read cache over the client's PanelDataSource (see below)
  *     .source                    the PanelDataSource itself, for reads and writes (undefined: none)
  *     .latest(key)               last ViewResult the shell read, sync; undefined before the first read
+ *     .generation()              sync number that changes on every account change (sign-out, account switch, client
+ *                                change). CAPTURE ctx.data.generation() BEFORE ANY AWAIT WHOSE RESULT IS KEYED BY ACCOUNT
+ *                                (a read, a "Show more" page, a copy, a revoke) AND DISCARD THE RESULT IF IT CHANGED. The cache
+ *                                itself already drops its own reads across a change; reads through ctx.data.source are yours.
+ *                                On a change the shell also closes ctx.confirm boxes and ctx.openDrawer drawers and clears receipt slips.
  *     .age(key)                  ms since that result settled (freshness)
  *     .refresh(key?)             re-read one view or all
  *     .subscribe(fn)             fires after any cached result changes

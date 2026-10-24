@@ -124,6 +124,51 @@ describe("section data cache", () => {
     expect(data.latest("storage")).toBeUndefined();
   });
 
+  test("a read in flight across a reset writes nothing and notifies no one", async () => {
+    const fake = fakeSource();
+    let release: (value: ViewResult<unknown>) => void = () => undefined;
+    fake.results.delegations = () => new Promise((resolve) => (release = resolve));
+    const data = createSectionData(() => fake.source);
+    let heard = 0;
+    data.subscribe(() => {
+      heard += 1;
+    });
+    const pending = data.refresh("delegations");
+    data.reset();
+    heard = 0; // reset itself tells subscribers once
+    release(ok("the old account's page"));
+    await pending;
+    expect(data.latest("delegations")).toBeUndefined();
+    expect(heard).toBe(0);
+  });
+
+  test("generation changes on reset only; stop and start keep it", async () => {
+    const fake = fakeSource();
+    const data = createSectionData(() => fake.source);
+    const first = data.generation();
+    data.start();
+    await flush();
+    data.stop();
+    data.start();
+    await flush();
+    expect(data.generation()).toBe(first);
+    data.reset();
+    expect(data.generation()).toBe(first + 1);
+    data.stop();
+  });
+
+  test("a read in flight across stop is dropped too, without changing the generation", async () => {
+    const fake = fakeSource();
+    let release: (value: ViewResult<unknown>) => void = () => undefined;
+    fake.results.nodes = () => new Promise((resolve) => (release = resolve));
+    const data = createSectionData(() => fake.source);
+    const pending = data.refresh("nodes");
+    data.stop();
+    release(ok("late"));
+    await pending;
+    expect(data.latest("nodes")).toBeUndefined();
+  });
+
   test("reset clears results and tells subscribers", async () => {
     const fake = fakeSource();
     const data = createSectionData(() => fake.source);
