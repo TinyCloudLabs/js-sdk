@@ -1,4 +1,4 @@
-import type { NodeRow, NodeStatus } from "../data";
+import type { NodeRow, NodeStatus, PanelDataSource } from "../data";
 import type { HostContext, PanelSection, SectionStatus } from "../slots";
 import { registerPanelStrings } from "../strings-panel";
 import { NODES_STRINGS } from "./nodes.strings";
@@ -98,8 +98,9 @@ export const nodesSection: PanelSection = {
       return { text: ctx.text("nodes.glance.healthy"), tone: "ok", count };
     }),
   mount(el, ctx: HostContext) {
-    const data = ctx.client()?.data;
-    if (!data) return mountPlaceholder(el);
+    const initial = ctx.client()?.data;
+    if (!initial) return mountPlaceholder(el);
+    let source: PanelDataSource = initial;
 
     let disposed = false;
     let seq = 0;
@@ -224,7 +225,7 @@ export const nodesSection: PanelSection = {
 
     async function load(): Promise<void> {
       const token = ++seq;
-      const result = await settle(() => data.nodes());
+      const result = await settle(() => source.nodes());
       if (disposed || token !== seq) return;
       const nodes = applyResult(line, ctx, result);
       content.hidden = nodes === undefined;
@@ -234,9 +235,34 @@ export const nodesSection: PanelSection = {
       }
     }
 
-    const unsubscribe = data.subscribe((view) => {
-      if (view === "nodes") void load();
-    });
+    function attach(next: PanelDataSource): () => void {
+      return next.subscribe((view) => {
+        if (view === "nodes") void load();
+      });
+    }
+
+    // Bumping seq drops any read still in flight for the previous account.
+    function onAccountChange(): void {
+      seq++;
+      unsubscribe();
+      unsubscribe = () => undefined;
+      offReset?.();
+      offReset = undefined;
+      content.hidden = true;
+      empty.hidden = true;
+      list.replaceChildren();
+      startLoading(line, ctx);
+      const next = ctx.client()?.data;
+      if (next === undefined) return;
+      source = next;
+      unsubscribe = attach(next);
+      offReset = ctx.client()?.onReset(onAccountChange);
+      void load();
+    }
+
+    let unsubscribe = attach(initial);
+    let offReset = ctx.client()?.onReset(onAccountChange);
+    const offClient = ctx.onClientChange(onAccountChange);
 
     el.append(style, heading, line.status, line.retry, content);
     startLoading(line, ctx);
@@ -244,6 +270,8 @@ export const nodesSection: PanelSection = {
 
     return () => {
       disposed = true;
+      offClient();
+      offReset?.();
       unsubscribe();
       el.replaceChildren();
     };

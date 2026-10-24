@@ -356,3 +356,55 @@ describe("nodes section unknown values", () => {
     expect(rowsOf(second).has(panelText("nodes.spaces"))).toBe(false);
   });
 });
+
+describe("nodes section account changes", () => {
+  // Mounts with a controllable current client and captures the change listeners the host would fire.
+  function mountSwitchable(initial: PanelClient) {
+    let current: PanelClient | undefined = initial;
+    const changeListeners: Array<() => void> = [];
+    const ctx = {
+      ...ctxFor(initial),
+      client: () => current,
+      onClientChange: (cb: () => void) => {
+        changeListeners.push(cb);
+        return () => undefined;
+      },
+    } as unknown as HostContext;
+    const el = page.document.createElement("div");
+    page.document.body.append(el);
+    cleanups.push(nodesSection.mount(el, ctx));
+    return {
+      el,
+      switchTo(next: PanelClient | undefined) {
+        current = next;
+        for (const notify of changeListeners) notify();
+      },
+    };
+  }
+
+  test("a read started before an account switch never renders the previous account's nodes", async () => {
+    const previous = Promise.withResolvers<ViewResult<NodeRow[]>>();
+    const { el, switchTo } = mountSwitchable(clientWith(fakeData(() => previous.promise)));
+    await flush();
+
+    switchTo(clientWith(fakeData(async () => ready([SLOW]))));
+    await flush();
+    previous.resolve(ready([HOSTED]));
+    await flush();
+
+    expect(cards(el).map((card) => card.getAttribute("aria-label"))).toEqual(["lab.example.org"]);
+  });
+
+  test("a read started before sign-out never renders the previous account's nodes", async () => {
+    const previous = Promise.withResolvers<ViewResult<NodeRow[]>>();
+    const { el, switchTo } = mountSwitchable(clientWith(fakeData(() => previous.promise)));
+    await flush();
+
+    switchTo(undefined);
+    await flush();
+    previous.resolve(ready([HOSTED]));
+    await flush();
+
+    expect(cards(el).map((card) => card.getAttribute("aria-label"))).toEqual([]);
+  });
+});
