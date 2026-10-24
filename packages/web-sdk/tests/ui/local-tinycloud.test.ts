@@ -180,8 +180,7 @@ describe("Local TinyCloud section", () => {
     const shown = query(el, ".ll-did");
     expect(shown.textContent).not.toBe(DID_LONG);
     expect(shown.textContent).toContain("…");
-    expect(shown.textContent?.startsWith(DID_LONG.slice(0, 16))).toBe(true);
-    expect(shown.textContent?.endsWith(DID_LONG.slice(-6))).toBe(true);
+    expect(shown.textContent).toBe(`${DID_LONG.slice(0, 12)}…${DID_LONG.slice(-6)}`);
     expect(shown.title).toBe(DID_LONG);
     expect(query(el, ".ll-mono").textContent).toBe(HOST);
     expect(el.textContent).toContain("v0.14.2");
@@ -213,8 +212,9 @@ describe("Local TinyCloud section", () => {
     const fake = fakeLocal({ source: "stub", connection: "not-found" });
     const el = mountWith(fake.data);
     await flush();
-    expect(el.querySelectorAll(".ll-steps li")).toHaveLength(4);
+    expect(el.querySelectorAll(".ll-steps li")).toHaveLength(3);
     expect(query(el, ".ll-steps code").textContent).toBe("tinycloud start");
+    expect(query(el, ".ll-codeline button").getAttribute("aria-label")).toBe(panelText("local-tinycloud.copy.command_label"));
     fake.local.node = { ...FOUND };
     visibleButton(el, panelText("local-tinycloud.not_found.retry")).click();
     await flush();

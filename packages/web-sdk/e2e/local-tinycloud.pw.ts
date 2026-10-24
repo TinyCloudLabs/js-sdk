@@ -131,6 +131,7 @@ for (const scheme of ["light", "dark"] as const) {
       await openLocal(page);
       await expect(toggle(page)).toHaveAttribute("aria-checked", "true");
       await expect(panel(page).locator(".ll-did")).toHaveAttribute("title", DID);
+      await expect(panel(page).locator(".ll-did")).toHaveText(`${DID.slice(0, 12)}…${DID.slice(-6)}`);
       await expect(panel(page).locator(".ll-mono").first()).toHaveText(HOST);
       await expect(panel(page).locator(".ll-kv button")).toHaveCount(2);
       await expect(panel(page).getByRole("button", { name: "Check again", exact: true })).toBeVisible();
@@ -145,10 +146,10 @@ for (const scheme of ["light", "dark"] as const) {
       await expect(panel(page).locator(".ll-kv button")).toHaveCount(0);
     });
 
-    test("not found: lists the four steps with the start command, and offers a retry", async ({ page }) => {
+    test("not found: lists the three steps with the start command, and offers a retry", async ({ page }) => {
       await mount(page, { scheme, node: NODES["not-found"] });
       await openLocal(page);
-      await expect(panel(page).locator(".ll-steps li")).toHaveCount(4);
+      await expect(panel(page).locator(".ll-steps li")).toHaveCount(3);
       await expect(panel(page).locator(".ll-steps code")).toHaveText("tinycloud start");
       await expect(panel(page).getByRole("button", { name: "Try again", exact: true })).toBeVisible();
     });

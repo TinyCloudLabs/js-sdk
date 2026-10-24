@@ -4,7 +4,7 @@ import { registerPanelStrings } from "../strings-panel";
 import { LOCAL_TINYCLOUD_STRINGS } from "./local-tinycloud.strings";
 import { viewStatus } from "./status";
 import { alwaysAvailable, mountPlaceholder } from "./placeholder";
-import { actionButton, statusNode, UI_STYLE } from "./ui";
+import { actionButton, icon, statusNode, UI_STYLE } from "./ui";
 import { applyResult, createStateLine, settle, startLoading, textLine } from "./view-body";
 
 const MONO = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
@@ -13,15 +13,21 @@ const STYLE = `
 .ll-intro{margin:-20px 0 20px;font-size:15px;line-height:1.5;max-width:56ch;color:#52525b}
 .ll-sub{margin:2px 0 0;font-size:12.5px;color:#52525b}
 .ll-ctl{display:flex;align-items:center;gap:10px;flex:none}
-.ll-word{min-width:2.5em;text-align:right;font-size:13px;font-weight:600}
-.ll-card{display:flex;flex-direction:column;gap:10px;margin-top:14px;padding:16px;border:1px solid #e4e4e7;border-radius:12px}
+.ll-ctl .switch{width:56px}
+.ll-ctl .knob{width:56px;height:30px;border-radius:999px;background:#f4f4f5;box-shadow:inset 0 0 0 1px #71717a}
+.ll-ctl .knob::after{top:4px;left:4px;width:22px;height:22px;background:#09090b}
+.ll-ctl .switch[aria-checked="true"] .knob{background:#09090b;box-shadow:none}
+.ll-ctl .switch[aria-checked="true"] .knob::after{transform:translateX(26px);background:#fff}
+.ll-word{min-width:22px;text-align:right;font-size:13px;font-weight:700}
+.ll-card{display:flex;flex-direction:column;gap:14px;margin-top:14px;padding:16px 18px;border-radius:16px;background:#fafafa;box-shadow:inset 0 0 0 1px #e4e4e7}
 .ll-card-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px}
 .ll-strong{margin:0;font-size:14px;font-weight:600}
-.ll-body{margin:0;font-size:13px;line-height:1.5;color:#52525b}
-.ll-looking{display:flex;align-items:flex-start;gap:12px}
-.ll-spin{flex:none;width:18px;height:18px;margin-top:2px;border:2px solid #d4d4d8;border-top-color:#18181b;border-radius:50%;animation:ll-spin .9s linear infinite}
+.ll-body{margin:0;font-size:14px;line-height:1.45;color:#52525b}
+.ll-looking{display:flex;align-items:center;gap:14px}
+.ll-spin{flex:none;width:26px;height:26px;border:3px solid #f4f4f5;border-top-color:#09090b;border-radius:50%;animation:ll-spin .9s linear infinite}
 @keyframes ll-spin{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion: reduce){.ll-spin{animation:none}}
+.ll-cancel{align-self:flex-start;width:auto}
 .ll-kv{display:flex;flex-direction:column;margin:0;padding:0}
 .ll-kv>div{display:flex;align-items:center;gap:10px;box-sizing:border-box;min-height:44px;padding:9px 0;border-bottom:1px solid #e4e4e7}
 .ll-kv>div:last-child{border-bottom:0}
@@ -29,16 +35,26 @@ const STYLE = `
 .ll-kv dt::after{content:"";flex:1 1 12px;min-width:12px;border-bottom:2px dotted #a1a1aa;transform:translateY(-3px)}
 .ll-kv dd{display:flex;flex:0 1 auto;align-items:center;justify-content:flex-end;gap:2px;max-width:100%;min-width:0;margin:0;font-size:14px;font-weight:600;text-align:right;overflow-wrap:anywhere}
 .ll-mono,.ll-did{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:${MONO};font-size:12.5px}
+.ll-host{white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
 .ll-cell{display:flex;align-items:center;gap:8px;min-width:0}
-.ll-cell>.action{flex:none;padding-left:10px;padding-right:10px}
-.ll-steps{margin:0;padding-left:20px;font-size:13px;line-height:1.6;color:#52525b}
+.ll-codeline{display:flex;align-items:center;justify-content:space-between;gap:4px;box-sizing:border-box;margin-top:8px;padding:2px 4px 2px 14px;border-radius:12px;background:#f4f4f5;min-height:44px;font-family:${MONO};font-size:13px}
+.ll-codeline code{min-width:0;overflow-wrap:anywhere}
+.ll-steps{display:flex;flex-direction:column;gap:12px;margin:0;padding:0;list-style:none;counter-reset:ll-step;font-size:14px;line-height:1.45;color:#09090b}
+.ll-steps li{position:relative;padding-left:34px;counter-increment:ll-step}
+.ll-steps li::before{content:counter(ll-step);position:absolute;left:0;top:-1px;width:24px;height:24px;border-radius:50%;box-shadow:inset 0 0 0 1px #71717a;font:600 12px/24px ${MONO};text-align:center}
 .ll-unknown{color:#52525b}
 @media (prefers-color-scheme: dark){
-.ll-intro,.ll-sub,.ll-body,.ll-kv dt,.ll-steps,.ll-unknown{color:#a1a1aa}
-.ll-card{border-color:#3f3f46}
-.ll-spin{border-color:#3f3f46;border-top-color:#fafafa}
+.ll-intro,.ll-sub,.ll-body,.ll-kv dt,.ll-unknown{color:#a1a1aa}
+.ll-card{background:#151517;box-shadow:inset 0 0 0 1px #69696b}
+.ll-ctl .knob{background:#27272a}
+.ll-ctl .knob::after{background:#fafafa}
+.ll-ctl .switch[aria-checked="true"] .knob{background:#fafafa}
+.ll-ctl .switch[aria-checked="true"] .knob::after{background:#09090b}
+.ll-spin{border-color:#27272a;border-top-color:#fafafa}
 .ll-kv>div{border-bottom-color:#69696b}
 .ll-kv dt::after{border-bottom-color:#71717a}
+.ll-codeline{background:#27272a}
+.ll-steps{color:#fafafa}
 }
 `;
 
@@ -141,8 +157,10 @@ export const localTinycloudSection: PanelSection = {
     content.append(row, card, errorLine, retryWrite);
 
     function copyButton(value: string, labelCode: string): HTMLButtonElement {
-      const button = actionButton(ctx.text("local-tinycloud.copy"));
+      const button = document.createElement("button");
+      button.className = "icon-btn";
       button.setAttribute("aria-label", ctx.text(labelCode));
+      button.append(icon("copy"));
       button.addEventListener("click", () => void copy(value));
       return button;
     }
@@ -198,6 +216,7 @@ export const localTinycloudSection: PanelSection = {
           wrap.className = "ll-looking";
           wrap.append(spin, text);
           const cancel = actionButton(ctx.text("local-tinycloud.looking.cancel"));
+          cancel.classList.add("ll-cancel");
           cancel.addEventListener("click", () => {
             if (!busy) void setOn(false);
           });
@@ -224,7 +243,7 @@ export const localTinycloudSection: PanelSection = {
             const idText = document.createElement("span");
             idText.className = "ll-did";
             idText.textContent =
-              did.length > 24 ? `${did.slice(0, 16)}…${did.slice(-6)}` : did;
+              did.length > 18 ? `${did.slice(0, 12)}…${did.slice(-6)}` : did;
             idText.title = did;
             idCell.append(idText, copyButton(did, "local-tinycloud.copy.node_id_label"));
           } else {
@@ -239,7 +258,7 @@ export const localTinycloudSection: PanelSection = {
           hostCell.className = "ll-cell";
           if (current.url) {
             const host = document.createElement("span");
-            host.className = "ll-mono";
+            host.className = "ll-mono ll-host";
             host.textContent = current.url;
             host.title = current.url;
             hostCell.append(host, copyButton(current.url, "local-tinycloud.copy.host_label"));
@@ -254,22 +273,19 @@ export const localTinycloudSection: PanelSection = {
           again.addEventListener("click", () => void load());
           const command = ctx.text("local-tinycloud.not_found.step_command");
           const code = document.createElement("code");
-          code.className = "ll-mono";
           code.textContent = command;
-          const commandCell = document.createElement("span");
-          commandCell.className = "ll-cell";
-          commandCell.append(code, copyButton(command, "local-tinycloud.copy.command_label"));
+          const codeline = document.createElement("div");
+          codeline.className = "ll-codeline";
+          codeline.append(code, copyButton(command, "local-tinycloud.copy.command_label"));
           const steps = document.createElement("ol");
           steps.className = "ll-steps";
           const openItem = document.createElement("li");
-          openItem.textContent = ctx.text("local-tinycloud.not_found.step_open");
-          const commandItem = document.createElement("li");
-          commandItem.append(commandCell);
+          openItem.append(ctx.text("local-tinycloud.not_found.step_open"), codeline);
           const listenItem = document.createElement("li");
           listenItem.textContent = ctx.text("local-tinycloud.not_found.step_listen");
           const retryItem = document.createElement("li");
           retryItem.textContent = ctx.text("local-tinycloud.not_found.step_retry");
-          steps.append(openItem, commandItem, listenItem, retryItem);
+          steps.append(openItem, listenItem, retryItem);
           return [
             head(pill("not-found"), again),
             textLine("ll-strong", ctx.text("local-tinycloud.not_found.title")),
