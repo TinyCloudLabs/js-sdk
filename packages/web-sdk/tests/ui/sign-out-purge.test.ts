@@ -9,6 +9,8 @@ interface Rig {
   readonly guard: (client: PanelClient | undefined) => PanelClient | undefined;
   readonly toasts: ToastRequest[];
   readonly log: string[];
+  /** Fires the client's onReset listeners, as sign-out and an account switch do. */
+  reset(): void;
   signedIn: boolean;
 }
 
@@ -27,23 +29,33 @@ function rig(opts: {
   const answers = opts.purges ?? [{ ok: true }];
   let calls = 0;
   const state = { signedIn: true };
+  const resetListeners = new Set<() => void>();
+  const reset = (): void => {
+    for (const cb of [...resetListeners]) cb();
+  };
   const client = {
     id: 1,
     signedIn: () => state.signedIn,
-    onReset: () => () => undefined,
+    onReset: (cb: () => void) => {
+      resetListeners.add(cb);
+      return () => resetListeners.delete(cb);
+    },
     storage: {},
     get sync() {
       return undefined;
     },
+    // Like tcw.signOut, the reset fires inside sign-out, before it settles.
     signOut: async () => {
       log.push("signOut:start");
       try {
         await (opts.signOut ?? (() => Promise.resolve()))();
       } catch (error) {
         if (opts.sessionStaysOnReject !== true) state.signedIn = false;
+        reset();
         throw error;
       }
       state.signedIn = false;
+      reset();
       log.push("signOut:end");
     },
     ...(opts.withPurge === false
@@ -65,6 +77,7 @@ function rig(opts: {
     guard: createSignOutGuard((request) => toasts.push(request)),
     toasts,
     log,
+    reset,
     get signedIn() {
       return state.signedIn;
     },
@@ -393,5 +406,148 @@ describe("a hung purge", () => {
     expect(watch?.failure()).toBe("pending");
     expect(await watch?.retry()).toBe(true);
     expect(watch?.failure()).toBeUndefined();
+  });
+});
+
+/** A purge the test settles by hand, so a result can arrive after the session has changed. */
+function deferredPurge() {
+  const calls: Array<(result: PurgeLocalCopyResult) => void> = [];
+  return {
+    impl: (): Promise<PurgeLocalCopyResult> => new Promise((resolve) => calls.push(resolve)),
+    settle: (call: number, result: PurgeLocalCopyResult) => calls[call]?.(result),
+    count: () => calls.length,
+  };
+}
+
+async function settleAll(): Promise<void> {
+  for (let i = 0; i < 12; i++) await Promise.resolve();
+}
+
+describe("a session change while a purge is running", () => {
+  test("a failure that arrives after a new session signed in raises no warning and records nothing", async () => {
+    const purge = deferredPurge();
+    const r = rig({ purgeImpl: purge.impl });
+    const w = wrapped(r);
+    const done = w.signOut?.();
+    await settleAll();
+    expect(purge.count()).toBe(1);
+    r.signedIn = true; // a new session signs in while the old purge is still running
+    purge.settle(0, { ok: false, retryNow: false });
+    await done;
+    expect(r.toasts).toEqual([]);
+    r.signedIn = false;
+    expect(purgeWatch(w)?.failure()).toBeUndefined();
+  });
+
+  test("the account changing during the purge (a reset) discards its result even when no session is signed in", async () => {
+    const purge = deferredPurge();
+    const r = rig({ purgeImpl: purge.impl });
+    const w = wrapped(r);
+    const done = w.signOut?.();
+    await settleAll();
+    r.signedIn = true;
+    r.signedIn = false;
+    r.reset(); // signed in and out again as another account
+    purge.settle(0, { ok: false, retryNow: false });
+    await done;
+    expect(r.toasts).toEqual([]);
+    expect(purgeWatch(w)?.failure()).toBeUndefined();
+  });
+
+  test("a stale retryNow answer does not purge a second time on behalf of the previous session", async () => {
+    const purge = deferredPurge();
+    const r = rig({ purgeImpl: purge.impl });
+    const w = wrapped(r);
+    const done = w.signOut?.();
+    await settleAll();
+    r.signedIn = true;
+    purge.settle(0, { ok: false, retryNow: true });
+    await done;
+    expect(purge.count()).toBe(1);
+    expect(r.log.filter((entry) => entry === "purge")).toHaveLength(1);
+  });
+
+  test("a stale ok does not clear a warning that belongs to a newer sign-out", async () => {
+    const purge = deferredPurge();
+    const r = rig({ purgeImpl: purge.impl });
+    const w = wrapped(r);
+    const first = w.signOut?.();
+    await settleAll();
+    r.signedIn = true; // new session; its sign-out starts a second run while the first purge is still running
+    const second = w.signOut?.();
+    await settleAll();
+    expect(purge.count()).toBe(2);
+    purge.settle(1, { ok: false, retryNow: false });
+    await second;
+    expect(purgeWatch(w)?.failure()).toBe("pending");
+    purge.settle(0, { ok: true });
+    await first;
+    expect(purgeWatch(w)?.failure()).toBe("pending");
+    expect(r.toasts).toEqual([{ kind: "warning", textCode: "local-copy.purge.toast.pending" }]);
+  });
+
+  test("a new session's sign-out reaches the host while the previous purge is still running", async () => {
+    const purge = deferredPurge();
+    const r = rig({ purgeImpl: purge.impl });
+    const w = wrapped(r);
+    const first = w.signOut?.();
+    await settleAll();
+    r.signedIn = true;
+    const second = w.signOut?.();
+    await settleAll();
+    expect(r.log.filter((entry) => entry === "signOut:start")).toHaveLength(2);
+    expect(r.signedIn).toBe(false);
+    purge.settle(0, { ok: true });
+    purge.settle(1, { ok: true });
+    await Promise.all([first, second]);
+    // The first run finishing late must not leave the next sign-out blocked behind it.
+    r.signedIn = true;
+    const third = w.signOut?.();
+    await settleAll();
+    purge.settle(2, { ok: true });
+    await third;
+    expect(r.log.filter((entry) => entry === "signOut:start")).toHaveLength(3);
+  });
+
+  test("a second sign-out of the same session while its purge runs shares that run", async () => {
+    const purge = deferredPurge();
+    const r = rig({ purgeImpl: purge.impl });
+    const w = wrapped(r);
+    const first = w.signOut?.();
+    await settleAll();
+    const second = w.signOut?.();
+    await settleAll();
+    expect(r.log.filter((entry) => entry === "signOut:start")).toHaveLength(1);
+    purge.settle(0, { ok: true });
+    await Promise.all([first, second]);
+    expect(purge.count()).toBe(1);
+  });
+
+  test("a retry that finishes after a new session signed in changes nothing and reports not removed", async () => {
+    const purge = deferredPurge();
+    const r = rig({ purgeImpl: purge.impl });
+    const w = wrapped(r);
+    const done = w.signOut?.();
+    await settleAll();
+    purge.settle(0, { ok: false, retryNow: false });
+    await done;
+    const watch = purgeWatch(w);
+    expect(watch?.failure()).toBe("pending");
+    const retry = watch?.retry();
+    await settleAll();
+    r.signedIn = true; // a new session signs in while the retry runs
+    purge.settle(1, { ok: true });
+    expect(await retry).toBe(false);
+    r.signedIn = false;
+    expect(watch?.failure()).toBe("pending");
+  });
+
+  test("while a session is signed in a retry never runs, and never claims the copy is gone", async () => {
+    const r = rig({ purges: [{ ok: true }] });
+    const w = wrapped(r);
+    const watch = purgeWatch(w);
+    expect(r.signedIn).toBe(true);
+    expect(await watch?.retry()).toBe(false);
+    expect(r.log).toEqual([]);
   });
 });

@@ -64,9 +64,17 @@ function attempt(purge: () => Promise<PurgeLocalCopyResult>): Promise<PurgeLocal
   });
 }
 
-function createEntry(client: PanelClient, purge: () => Promise<PurgeLocalCopyResult>, toast: (request: ToastRequest) => unknown): Entry {
+/** True while the session a purge was started for is still the current one: no reset since, and nobody signed in. */
+type SessionStamp = () => boolean;
+
+function createEntry(
+  client: PanelClient,
+  purge: () => Promise<PurgeLocalCopyResult>,
+  toast: (request: ToastRequest) => unknown,
+  stamp: () => SessionStamp,
+): Entry {
   let failure: PurgeFailure | undefined;
-  let retrying: Promise<boolean> | undefined;
+  let retrying: { readonly promise: Promise<boolean>; readonly same: SessionStamp } | undefined;
   const listeners = new Set<() => void>();
   const set = (next: PurgeFailure | undefined): void => {
     if (failure === next) return;
@@ -93,18 +101,25 @@ function createEntry(client: PanelClient, purge: () => Promise<PurgeLocalCopyRes
       set("pending");
     },
     retry() {
-      // A new session may own a live copy by now: never erase on behalf of the previous one.
-      if (client.signedIn() || failure === undefined) return Promise.resolve(failure === undefined);
-      retrying ??= attempt(purge)
+      // A new session may own a live copy by now: never erase on behalf of the previous one, and never say it is gone.
+      if (client.signedIn()) return Promise.resolve(false);
+      if (failure === undefined) return Promise.resolve(true);
+      // Share a retry already running for this same session; one left over from an earlier session is not this one.
+      if (retrying !== undefined && retrying.same()) return retrying.promise;
+      const same = stamp();
+      const promise: Promise<boolean> = attempt(purge)
         .then((result) => {
+          // The answer belongs to the session it was started for: after a change it is dropped, not applied.
+          if (!same()) return false;
           if (result.ok === true) set(undefined);
           else if (result.retryNow) set("readable");
           return result.ok;
         })
         .finally(() => {
-          retrying = undefined;
+          if (retrying?.promise === promise) retrying = undefined;
         });
-      return retrying;
+      retrying = { promise, same };
+      return promise;
     },
   };
 }
@@ -132,10 +147,20 @@ export function createSignOutGuard(toast: (request: ToastRequest) => unknown): (
     const known = guarded.get(client);
     if (known !== undefined) return known;
 
+    // Each purge is stamped with the session it belongs to. tcw.signOut calls reset() before it settles, so a
+    // reset after sign-out settled is a later change of account or session.
+    let epoch = 0;
+    client.onReset(() => {
+      epoch += 1;
+    });
+    const stamp = (): SessionStamp => {
+      const mine = epoch;
+      return () => epoch === mine && !client.signedIn();
+    };
     const purge = client.purgeLocalCopy;
-    const entry = purge === undefined ? undefined : createEntry(client, purge, toast);
-    let inFlight: Promise<void> | undefined;
-    const run = async (): Promise<void> => {
+    const entry = purge === undefined ? undefined : createEntry(client, purge, toast, stamp);
+    let inFlight: { readonly promise: Promise<void>; purging: boolean } | undefined;
+    const run = async (onSettled: () => void): Promise<void> => {
       let failed = false;
       let cause: unknown;
       try {
@@ -144,14 +169,19 @@ export function createSignOutGuard(toast: (request: ToastRequest) => unknown): (
         failed = true;
         cause = error;
       }
+      onSettled();
+      const same = stamp();
       if (purge !== undefined && entry !== undefined) {
         if (client.signedIn()) {
           entry.markPending();
         } else {
           let result = await attempt(purge);
-          const readable = result.ok === false && result.retryNow;
-          if (result.ok === false && result.retryNow) result = await attempt(purge);
-          entry.settle(result, readable);
+          // A result for a session that has since changed is dropped: no warning, no clearing, no second purge.
+          if (same()) {
+            const readable = result.ok === false && result.retryNow;
+            if (readable) result = await attempt(purge);
+            if (same()) entry.settle(result, readable);
+          }
         }
       }
       if (failed) throw cause;
@@ -160,10 +190,21 @@ export function createSignOutGuard(toast: (request: ToastRequest) => unknown): (
     const wrapped: PanelClient = Object.create(client, {
       signOut: {
         value: (): Promise<void> => {
-          inFlight ??= run().finally(() => {
-            inFlight = undefined;
+          const current = inFlight;
+          // Share a run still signing out, or purging for a session that is still gone. A new session's
+          // sign-out starts its own run: it must reach the host and must not wait behind an old purge.
+          if (current !== undefined && (!current.purging || !client.signedIn())) return current.promise;
+          const mine: { promise: Promise<void>; purging: boolean } = {
+            purging: false,
+            promise: Promise.resolve(),
+          };
+          mine.promise = run(() => {
+            mine.purging = true;
+          }).finally(() => {
+            if (inFlight === mine) inFlight = undefined;
           });
-          return inFlight;
+          inFlight = mine;
+          return mine.promise;
         },
       },
     });
