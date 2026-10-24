@@ -1,6 +1,7 @@
 import { PANEL_ID } from "./ids";
 import type { SectionId, StatusCode } from "./slots";
 import type { StringKey } from "./strings";
+import { icon, type IconName } from "./sections/ui";
 import { panelText as text, type PanelStringKey } from "./strings-panel";
 
 /** `drawer` is the sidebar overlay; `page` fills the host layer. */
@@ -50,6 +51,16 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 const SWITCH_GLYPH: Record<ShellLayout, string> = {
   page: "M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7",
   drawer: "M6 4h12a3 3 0 0 1 3 3v10a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3zM15 4v16",
+};
+/** Rail icon per section. Shown on the full-page rail only. */
+const NAV_ICON: Record<SectionId, IconName> = {
+  account: "person",
+  "local-tinycloud": "monitor",
+  "local-copy": "sync",
+  delegations: "key",
+  nodes: "nodes",
+  storage: "drive",
+  activity: "term",
 };
 const SWITCH_LABEL: Record<ShellLayout, PanelStringKey> = {
   page: "panel.full_page",
@@ -206,10 +217,12 @@ export function createPanel(options: PanelOptions): PanelHandle {
     const index = document.createElement("span");
     index.className = "nav-n";
     index.setAttribute("aria-hidden", "true");
+    const glyph = icon(NAV_ICON[item.id]);
+    glyph.classList.add("nav-ic");
     const label = document.createElement("span");
     label.className = "nav-l";
     label.textContent = text(item.labelCode);
-    btn.append(index, label);
+    btn.append(glyph, index, label);
     btn.addEventListener("click", () => options.onNavigate(item.id));
 
     const pick = document.createElement("button");

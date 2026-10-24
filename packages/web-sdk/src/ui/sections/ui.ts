@@ -11,17 +11,19 @@ export const UI_STYLE = `
 .glance-row:last-child{border-bottom:0}
 .glance-row .gl{flex:1;min-width:0}
 .glance-row .gl b{display:block;font-size:14.5px;font-weight:600}
-.glance-row .gl span{display:block;font-size:13px;color:#4b5563}
-.glance-row .gr{display:flex;align-items:center;gap:10px;color:#4b5563}
-.glance-row .gi{display:inline-flex;flex:none;color:#4b5563}
+.glance-row .gl span{display:block;font-size:13px;color:#71717a}
+.glance-row .gr{display:flex;align-items:center;gap:10px;color:#71717a}
+.glance-row .gr .ui-ic{width:16px;height:16px}
+.glance-row .gi{display:inline-flex;flex:none;color:#71717a}
+.glance-row .gi .ui-ic{width:20px;height:20px}
 .ui-ic{width:18px;height:18px;flex:none;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .st{display:inline-flex;align-items:center;gap:8px;font-size:13.5px;font-weight:600;white-space:nowrap}
-.st .dot{width:9px;height:9px;border-radius:50%;flex:none;position:relative}
+.st .dot{top:auto;right:auto;width:9px;height:9px;border:0;border-radius:50%;background:transparent;flex:none;position:relative}
 .st-on{color:#18181b}
 .st-on .dot{background:currentColor}
 .st-warn{color:#92400e}
 .st-warn .dot{background:#b45309;box-shadow:0 0 0 1.5px #fff,0 0 0 2.5px #b45309}
-.st-off,.st-x{color:#4b5563}
+.st-off,.st-x{color:#71717a}
 .st-off .dot,.st-x .dot{box-shadow:inset 0 0 0 2px currentColor}
 .st-x .dot::after{content:"";position:absolute;left:-1px;right:-1px;top:3.5px;height:2px;background:currentColor;transform:rotate(-45deg)}
 .drawer{margin-top:12px;padding:14px 16px;border:1px solid #d4d4d8;border-radius:12px;background:#fafafa}
@@ -121,6 +123,8 @@ const ICON_PATHS = {
   warn: '<path d="M12 3l10 18H2zM12 10v5M12 18h.01"/>',
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
   close: '<path d="M6 6l12 12M18 6L6 18"/>',
+  person: '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/>',
+  eyeoff: '<path d="M3 12s3.5-6 9-6 9 6 9 6-3.5 6-9 6-9-6-9-6zM4 4l16 16"/>',
 } as const;
 
 export type IconName = keyof typeof ICON_PATHS;

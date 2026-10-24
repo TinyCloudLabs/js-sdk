@@ -14,33 +14,47 @@ import {
   type IconName,
 } from "./ui";
 
+const DISPLAY = '"Literata Variable","Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif';
+const MONO = 'ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace';
+
 const STYLE = `
-.account-cols{display:grid;gap:18px;grid-template-columns:repeat(auto-fit,minmax(16rem,1fr));align-items:start}
-.account-ident{display:flex;gap:16px;align-items:flex-start;min-width:0}
-.account-avatar{flex:none;width:64px;height:64px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:1.5rem;font-weight:600;background:#18181b;color:#fff}
-.account-ident .eyebrow{margin:0;font-size:13px;font-weight:700;color:#18181b}
-.account-ident .name{margin:2px 0 0;font-family:var(--tc-font-display,Georgia,serif);font-size:1.375rem;font-weight:600;overflow-wrap:anywhere}
-.account-idline{display:flex;gap:8px;align-items:center;margin-top:6px;min-width:0}
-.account-did{flex:1;min-width:0;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;color:#4b5563;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.account-copy{flex:none;display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;padding:0;border:1px solid #d4d4d8;border-radius:10px;background:transparent;color:inherit;cursor:pointer}
-.account-kv{margin:18px 0 0;padding:0}
-.account-kv>div{display:flex;align-items:baseline;gap:8px;padding:8px 0;border-bottom:1px solid #e4e4e7}
-.account-kv dt{display:flex;flex:1;min-width:0;align-items:baseline;color:#4b5563}
-.account-kv dt::after{content:"";flex:1;min-width:16px;margin:0 6px;border-bottom:1px dotted #a1a1aa;transform:translateY(-4px)}
-.account-kv dd{margin:0;flex:none;max-width:100%;text-align:right;overflow-wrap:anywhere}
-.account-kv .account-host{margin-left:8px;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;color:#4b5563}
-.account-signout{margin-top:14px;display:inline-flex;align-items:center;gap:8px}
+.account-hint{margin:-14px 0 28px;font-size:12.5px;line-height:1.4}
+.account-cols{display:grid;gap:28px 36px;grid-template-columns:repeat(auto-fit,minmax(16rem,1fr));align-items:start}
+.account-ident{display:flex;gap:16px;align-items:center;min-width:0}
+.account-avatar{flex:none;width:64px;height:64px;border-radius:50%;display:grid;place-items:center;font:500 30px/1 ${DISPLAY};background:#09090b;color:#fff}
+.account-who{min-width:0}
+.account-ident .eyebrow{margin:0;font-size:13px;font-weight:600;line-height:1.3;color:#71717a}
+.account-ident .name{margin:0;font:500 1.375rem/1.2 ${DISPLAY};overflow-wrap:anywhere}
+.account-idline{display:flex;flex-wrap:wrap;align-items:center;margin-top:2px;min-width:0}
+.account-did{min-width:0;font:.8125rem/1.5 ${MONO};color:#71717a;overflow-wrap:anywhere}
+.account-copy{flex:none}
+.account-copy .ui-ic{width:16px;height:16px;stroke-width:2}
+.account-kv{display:flex;flex-direction:column;margin:18px 0 0;padding:0}
+.account-kv>div{display:flex;align-items:center;gap:10px;box-sizing:border-box;min-height:44px;padding:9px 0;border-bottom:1px solid #e4e4e7}
+.account-kv>div:last-child{border-bottom:0}
+.account-kv dt{display:flex;flex:1 1 auto;align-items:baseline;gap:10px;min-width:0;font-size:14px;white-space:nowrap}
+.account-kv dt::after{content:"";flex:1 1 12px;min-width:12px;border-bottom:2px dotted #a1a1aa;transform:translateY(-3px)}
+.account-kv dd{display:flex;flex:0 1 auto;align-items:center;justify-content:flex-end;gap:2px;max-width:78%;margin:0;font-size:14px;font-weight:600;text-align:right;overflow-wrap:anywhere}
+.account-kv .account-host{margin-left:8px;font:400 .8125rem ${MONO};color:#71717a}
+.account-signout{margin-top:14px}
 .account-glance{display:flex;flex-direction:column;gap:0}
-.account-rule{display:flex;align-items:center;gap:12px}
+.account-rule{display:flex;align-items:center;gap:10px;margin:0 0 12px;font-size:13px;font-weight:600;line-height:1.3;letter-spacing:.02em}
 .account-rule::after{content:"";flex:1;height:1px;background:#e4e4e7}
+.account-button{display:flex;flex-direction:column;align-items:flex-start;gap:12px;margin-top:28px}
+.account-button>*{margin:0}
+.account-button .account-rule{align-self:stretch;margin:0}
+.account-small{max-width:60ch;font-size:14px;line-height:1.45}
+.account-devnote{display:flex;gap:12px;align-items:flex-start;box-sizing:border-box;width:100%;padding:14px 16px;border-radius:12px;box-shadow:inset 0 0 0 1px #e4e4e7;font-size:13.5px;line-height:1.5}
+.account-devnote .ui-ic{margin-top:2px;flex:none}
+.account-devnote code{padding:1px 6px;border-radius:6px;background:#f4f4f5;font:600 .8125rem ${MONO}}
 @media (prefers-color-scheme: dark){
-.account-avatar{background:#fafafa;color:#18181b}
-.account-ident .eyebrow{color:#fafafa}
-.account-did,.account-kv dt,.account-kv .account-host{color:#a1a1aa}
-.account-kv>div{border-bottom-color:#3f3f46}
-.account-kv dt::after{border-bottom-color:#52525b}
-.account-copy{border-color:#3f3f46}
-.account-rule::after{background:#3f3f46}
+.account-avatar{background:#fafafa;color:#09090b}
+.account-ident .eyebrow,.account-did,.account-kv .account-host{color:#a1a1aa}
+.account-kv>div{border-bottom-color:#69696b}
+.account-kv dt::after{border-bottom-color:#71717a}
+.account-rule::after{background:#69696b}
+.account-devnote{box-shadow:inset 0 0 0 1px #69696b}
+.account-devnote code{background:#27272a}
 }
 `;
 
@@ -62,6 +76,11 @@ const GLANCE: readonly GlanceEntry[] = [
   { id: "storage", icon: "drive", labelCode: "nav.storage", subCode: "glance.storage" },
   { id: "activity", icon: "term", labelCode: "nav.activity", subCode: "glance.activity", devOnly: true },
 ];
+
+/** Keeps the start and the last four characters of a long identifier, as in the mockup (did:pkh:0xEXAMPLE…c41d). */
+function middleTruncate(id: string): string {
+  return id.length > 26 ? `${id.slice(0, 20)}…${id.slice(-4)}` : id;
+}
 
 /** Whole hours and minutes until `expires`, rounded up to the minute, never negative. */
 function remaining(expires: Date, now: number): { hours: number; minutes: number } {
@@ -98,7 +117,7 @@ function mountAccount(el: HTMLElement, ctx: SectionContext): () => void {
   signedOut.textContent = ctx.text("account.signed_out");
 
   const hint = document.createElement("p");
-  hint.className = "note";
+  hint.className = "account-hint";
   hint.textContent = ctx.text("account.hint");
 
   // Signed-in layout: identity and facts on the left, At a glance on the right.
@@ -112,7 +131,7 @@ function mountAccount(el: HTMLElement, ctx: SectionContext): () => void {
   avatar.className = "account-avatar";
   avatar.setAttribute("aria-hidden", "true");
   const who = document.createElement("div");
-  who.style.minWidth = "0";
+  who.className = "account-who";
   const eyebrow = document.createElement("p");
   eyebrow.className = "eyebrow";
   eyebrow.textContent = ctx.text("account.signed_in_as");
@@ -165,7 +184,7 @@ function mountAccount(el: HTMLElement, ctx: SectionContext): () => void {
 
   const right = document.createElement("div");
   const glanceTitle = document.createElement("h4");
-  glanceTitle.className = "label account-rule";
+  glanceTitle.className = "account-rule";
   glanceTitle.textContent = ctx.text("account.glance.title");
   const glance = document.createElement("div");
   glance.className = "glance account-glance";
@@ -188,16 +207,26 @@ function mountAccount(el: HTMLElement, ctx: SectionContext): () => void {
 
   if (ctx.canHideButton()) {
     const block = document.createElement("div");
-    block.className = "section";
+    block.className = "account-button";
     const title = document.createElement("h4");
-    title.className = "label";
+    title.className = "account-rule";
     title.textContent = ctx.text("account.button.title");
     const body = document.createElement("p");
-    body.className = "note";
-    body.textContent = ctx.text("account.button.body");
+    body.className = "account-small";
+    body.textContent = ctx.text("account.button.body").replace("{app}", ctx.appLabel() ?? ctx.text("account.button.app"));
     const hide = actionButton(ctx.text("panel.hide"));
+    hide.prepend(icon("eyeoff"));
     hide.addEventListener("click", () => ctx.hideButton());
-    block.append(title, body, hide);
+    const dev = document.createElement("div");
+    dev.className = "account-devnote";
+    const lead = document.createElement("b");
+    lead.textContent = ctx.text("account.button.dev.lead");
+    const call = document.createElement("code");
+    call.textContent = "tc.ui.open()";
+    const words = document.createElement("div");
+    words.append(lead, ` ${ctx.text("account.button.dev.body")} `, call, `. ${ctx.text("account.button.dev.tail")}`);
+    dev.append(icon("info"), words);
+    block.append(title, body, hide, dev);
     el.append(block);
   }
 
@@ -219,7 +248,8 @@ function mountAccount(el: HTMLElement, ctx: SectionContext): () => void {
       const label = ready.displayName ?? ready.did;
       name.textContent = label;
       avatar.textContent = label.charAt(0).toUpperCase();
-      did.textContent = ready.did;
+      did.textContent = middleTruncate(ready.did);
+      did.title = ready.did;
       sessionRow.hidden = ready.sessionExpiresAt === undefined;
       if (ready.sessionExpiresAt !== undefined) {
         const { hours, minutes } = remaining(ready.sessionExpiresAt, Date.now());
