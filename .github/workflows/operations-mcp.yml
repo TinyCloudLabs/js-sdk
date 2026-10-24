@@ -154,7 +154,6 @@ jobs:
             [packages/cli/src/commands/secrets-private-key-production.test.ts]="run in isolation by its own step"
             # Known failures, tracked:
             [packages/cli/src/config/shared-state-writers.test.ts]="fails on master: test-support harness writes shared state directly; TC-1898"
-            [packages/cli/src/commands/space-list.test.ts]="fails on master: walletless session test gets a space id; TC-1900"
             # tests/cli suites that need a tinycloud-node on localhost:8000; no lane starts one:
             [tests/cli/duckdb/duckdb.test.ts]="needs a node on localhost:8000; no lane starts one; TC-1902"
             [tests/cli/kv/kv.test.ts]="needs a node on localhost:8000; no lane starts one; TC-1902"
