@@ -88,6 +88,7 @@ function ctxFor(client: PanelClient, developerMode = false): HostContext {
     requestRender: () => undefined,
     data: { latest: () => undefined, subscribe: () => () => undefined },
     text,
+    appLabel: () => undefined,
   } as unknown as HostContext;
 }
 

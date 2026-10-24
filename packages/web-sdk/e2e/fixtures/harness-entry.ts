@@ -8,7 +8,7 @@ import { createStubPanelData, type StubSeed } from "../../src/ui/stub/index";
 import { createRequestLog, sampleRows, type LogRow } from "./request-log";
 import type { NodeRow, PanelDataFactory, ViewResult } from "../../src/ui/data";
 
-// What a spec pins with page.addInitScript before the page loads: window.__TC_STUB_SEED__ (a JSON string).
+// What a spec pins with page.addInitScript before the page loads: window.__TC_STUB_SEED__ (a JSON string or an object).
 // The stub's per-view results, plus `requests`, the request log rows the harness itself serves.
 // JSON carries no Date, so a nodes row's ISO `lastSeenAt` string is revived here.
 type SeedNodeRow = Omit<NodeRow, "lastSeenAt"> & { lastSeenAt?: string };
@@ -22,8 +22,10 @@ function reviveRow(row: SeedNodeRow): NodeRow {
 
 function harnessSeed(): HarnessSeed {
   const raw: unknown = Reflect.get(window, "__TC_STUB_SEED__");
-  if (typeof raw !== "string") return {};
-  const { nodes, ...rest }: SeedJson = JSON.parse(raw);
+  // Specs set it as a JSON string, or, for plain data without dates, as an object.
+  const parsed: unknown = typeof raw === "string" ? JSON.parse(raw) : raw;
+  if (typeof parsed !== "object" || parsed === null) return {};
+  const { nodes, ...rest }: SeedJson = parsed;
   if (nodes === undefined) return rest;
   if (nodes.state !== "ready") return { ...rest, nodes };
   return { ...rest, nodes: { state: "ready", data: nodes.data.map(reviveRow) } };
