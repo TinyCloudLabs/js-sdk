@@ -303,6 +303,23 @@ describe("states", () => {
     expect(wipeBtn(el).disabled).toBe(false);
   });
 
+  test("off with an unknown size: the Wipe button is enabled, opens the confirm, and wipes only once confirmed", async () => {
+    const facade = makeFacade(state("off"));
+    const { el } = setup({ facade, copy: ready({ requested: false, effective: "off", bytesOnDevice: undefined, folders: [] }) });
+    await flush();
+    expect(wipeSection(el).hidden).toBe(false);
+    expect(wipeBtn(el).disabled).toBe(false);
+    expect(el.querySelector<HTMLElement>(".lc-wipe-none")?.hidden).toBe(true);
+    wipeBtn(el).click();
+    expect(box(el)).not.toBeNull();
+    expect(box(el)?.getAttribute("role")).toBe("alertdialog");
+    expect(document.activeElement).toBe(keepBtn(el));
+    expect(facade.wipeCalls).toBe(0);
+    confirmBtn(el).click();
+    await flush();
+    expect(facade.wipeCalls).toBe(1);
+  });
+
   test("the Wipe button is described by the always-visible explanation next to it", async () => {
     const { el } = setup({ facade: makeFacade(state("on")), copy: ready() });
     await flush();
