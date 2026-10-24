@@ -14,5 +14,5 @@
   "access": "public",
   "baseBranch": "master",
   "updateInternalDependencies": "patch",
-  "ignore": ["tinycloud-web-sdk-example-app"]
+  "ignore": ["tinycloud-web-sdk-example-app", "@tinycloud/sdk-services-test"]
 }
