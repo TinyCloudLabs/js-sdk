@@ -13,6 +13,7 @@ import { text } from "../strings";
 import {
   afterAuthority,
   isStorageStatus,
+  isUnavailableCode,
   manageHrefFor,
   reduceStorage,
   storageModel,
@@ -683,6 +684,11 @@ function mountPage(el: HTMLElement, ctx: SectionContext): () => void {
     let display: StorageDisplay | undefined;
     if (permission) {
       line.status.hidden = true;
+      line.retry.hidden = true;
+    } else if (!reading && result.state === "error" && isUnavailableCode(result.code)) {
+      // This node cannot report usage at all: say so, and offer no retry that cannot help.
+      line.status.hidden = false;
+      line.status.textContent = ctx.text("storage.page.unavailable_node");
       line.retry.hidden = true;
     } else {
       const data = applyResult(line, ctx, result);

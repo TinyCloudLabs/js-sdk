@@ -24,6 +24,7 @@ export const STORAGE_PANEL_STRINGS = {
   "storage.page.full_title": "Storage full: read-only.",
   "storage.page.full_body":
     "Your TinyCloud storage, shared by all your TinyCloud apps, is full. You can still view and copy your data. New changes can't be saved while your storage is full.",
+  "storage.page.unavailable_node": "Storage usage isn't available on this node.",
   "storage.page.permission_title": "{app} can't see your storage yet",
   "storage.page.permission_app": "This app",
   "storage.page.permission_body":

@@ -279,4 +279,28 @@ describe("createRealPanelData storage", () => {
     const view = await data.storage();
     expect(view.state).toBe("needs-permission");
   });
+
+  test("an auth failure (rejected or expired session) maps to needs-permission, never the generic error", async () => {
+    const f = makeFakes();
+    f.setStorage({
+      ok: false,
+      error: { code: "AUTH_UNAUTHORIZED", message: "expired", service: "storage" },
+    });
+    const view = await createRealPanelData(f.host, f.client, "app").storage();
+    expect(view).toEqual({ state: "needs-permission", ability: "space/info" });
+  });
+
+  test("an unsupported node stays an error with its code, which the page renders as unavailable", async () => {
+    const f = makeFakes();
+    f.setStorage({ ok: false, error: { code: "unsupported", message: "no", service: "storage" } });
+    const view = await createRealPanelData(f.host, f.client, "app").storage();
+    expect(view).toEqual({ state: "error", code: "unsupported" });
+  });
+
+  test("any other failure keeps its code as a retryable error", async () => {
+    const f = makeFakes();
+    f.setStorage({ ok: false, error: { code: "NETWORK_ERROR", message: "down", service: "storage" } });
+    const view = await createRealPanelData(f.host, f.client, "app").storage();
+    expect(view).toEqual({ state: "error", code: "NETWORK_ERROR" });
+  });
 });

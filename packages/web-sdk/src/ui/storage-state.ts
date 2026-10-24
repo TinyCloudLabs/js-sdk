@@ -48,6 +48,11 @@ const UNAVAILABLE_CODES: Readonly<Record<string, true>> = {
   STORAGE_STATUS_UNAVAILABLE: true,
 };
 
+/** Failure codes that mean this node cannot report usage at all, so retrying will not help. */
+export function isUnavailableCode(code: string): boolean {
+  return UNAVAILABLE_CODES[code] === true;
+}
+
 function isByteCount(n: unknown): n is number {
   return typeof n === "number" && Number.isSafeInteger(n) && n >= 0;
 }

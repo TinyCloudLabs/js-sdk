@@ -192,7 +192,9 @@ export function createRealPanelData(
     // space/info grant cannot be confirmed, so this read never reaches the node unauthorised.
     const res = await host.storage.status();
     if (res.ok === false) {
-      return res.error.code === "PERMISSION_DENIED"
+      // An expired or rejected session is a permission problem the user can fix (Allow storage details),
+      // never the generic "didn't load".
+      return res.error.code === "PERMISSION_DENIED" || res.error.code === "AUTH_UNAUTHORIZED"
         ? viewNeedsPermission("space/info")
         : viewError(res.error.code);
     }

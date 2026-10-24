@@ -25,7 +25,7 @@ interface HarnessWindow {
   tc?: { ui: { open(section?: string): void; openPage(section?: string): void } };
 }
 
-type Kind = "normal" | "near" | "full" | "unlimited" | "permission" | "error";
+type Kind = "normal" | "near" | "full" | "unlimited" | "permission" | "error" | "unsupported";
 type Scheme = "light" | "dark";
 
 // The mockup's three spaces for each state (MiB). The sums are its used amounts.
@@ -38,6 +38,7 @@ const SPACES: Record<"normal" | "near" | "full", Array<[string, number]>> = {
 function seed(kind: Kind): string {
   if (kind === "permission") return JSON.stringify({ storage: { state: "needs-permission", ability: "space/info" } });
   if (kind === "error") return JSON.stringify({ storage: { state: "error", code: "boom" } });
+  if (kind === "unsupported") return JSON.stringify({ storage: { state: "error", code: "unsupported" } });
   if (kind === "unlimited") {
     // No limit, and a body that says "full": the page must not.
     return JSON.stringify({
@@ -228,6 +229,16 @@ for (const scheme of SCHEMES) {
       await expect(s.getByRole("button", { name: "Allow storage details" })).toBeHidden();
       await expect(s.locator(".storage-ask .note")).toContainText("no way to ask");
       await expect(panel(page).locator('.nav-i[data-section="storage"]')).toBeVisible();
+    });
+
+    test("a node that cannot report usage says so, with no Try again and no numbers", async ({ page }) => {
+      await mountHarness(page, scheme, "unsupported");
+      await open(page, "drawer");
+      const s = storage(page);
+      await expect(s.getByText("Storage usage isn't available on this node.")).toBeVisible();
+      await expect(s.getByRole("button", { name: "Try again" })).toBeHidden();
+      await expect(s.locator('[role="meter"]')).toHaveCount(0);
+      await expect(s.locator(".storage-fig")).toHaveCount(0);
     });
 
     test("error: neutral words and a Try again button that stays reachable", async ({ page }) => {

@@ -411,6 +411,23 @@ describe("storage page", () => {
     expect(el.textContent).not.toContain("boom");
   });
 
+  test("a node that cannot report usage says so, with no Try again; any other error keeps Try again", () => {
+    const visibleButtons = (el: HTMLElement) =>
+      [...el.querySelectorAll("button")].filter((b) => b.closest("[hidden]") === null);
+    for (const code of ["unsupported", "STORAGE_STATUS_UNAVAILABLE"]) {
+      const { el } = mount({ state: "error", code });
+      expect(el.querySelector('[role="status"]')?.textContent).toBe("Storage usage isn't available on this node.");
+      expect(visibleButtons(el)).toEqual([]);
+      expect(el.querySelector('[role="meter"]')).toBeNull();
+      expect(el.textContent).not.toContain(code);
+    }
+    for (const code of ["NETWORK_ERROR", "boom"]) {
+      const { el } = mount({ state: "error", code });
+      expect(el.querySelector('[role="status"]')?.textContent).toBe("This didn't load.");
+      expect(visibleButtons(el).map((b) => b.textContent)).toEqual(["Try again"]);
+    }
+  });
+
   test("a status that is not usable reads as unavailable, not as zeros", () => {
     const { el } = mount(ready({ source: "real", state: "ok" }));
     expect(el.querySelector('[role="status"]')?.textContent).toBe("Storage usage isn't available here.");
