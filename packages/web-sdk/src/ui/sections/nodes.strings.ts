@@ -14,6 +14,7 @@ export const NODES_STRINGS = {
   "nodes.card.ok": "Connected",
   "nodes.card.slow": "Slow to respond",
   "nodes.role.local": "On this computer",
+  "nodes.role.ownHosted": "Your hosted TinyCloud",
   "nodes.nodeid": "Node ID",
   "nodes.copy": "Copy the node ID of {host}",
   "nodes.spaces": "Spaces here",

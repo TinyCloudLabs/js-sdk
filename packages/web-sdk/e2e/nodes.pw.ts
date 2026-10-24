@@ -189,7 +189,7 @@ for (const scheme of ["light", "dark"] as const) {
       expect(hosts).toEqual(["node.tinycloud.xyz", "lab.example.org", "127.0.0.1:8787"]);
 
       const first = cards(page).nth(0);
-      await expect(first).toContainText("Hosted · In use");
+      await expect(first).toContainText("Your hosted TinyCloud");
       await expect(first).toContainText("Connected");
       await expect(first).toContainText(HOSTED_DID);
       await expect(first).toContainText("84 ms · seen");

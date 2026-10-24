@@ -120,11 +120,11 @@ describe("nodes section body", () => {
     expect(rendered[1].querySelector(".st")?.classList.contains("st-warn")).toBe(true);
   });
 
-  test("the origin is the only .row .label, so the row label stays the full origin", async () => {
+  test("the host is the only .row .label, so the row label is the bare host", async () => {
     const el = mount(clientWith(fakeData(async () => ready([HOSTED]))));
     await flush();
     const labels = [...el.querySelectorAll(".row .label")].map((node) => node.textContent);
-    expect(labels).toEqual(["https://node.test"]);
+    expect(labels).toEqual(["node.test"]);
   });
 
   test("a node without a DID shows no node-ID row and no copy button", async () => {

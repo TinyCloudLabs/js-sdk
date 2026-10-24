@@ -344,7 +344,7 @@ describe("nodes section", () => {
       ),
     );
     await flush();
-    expect(labels(el)).toEqual(["https://node.test"]);
+    expect(labels(el)).toEqual(["node.test"]);
   });
 
   test("a failed read shows the error with retry", async () => {
