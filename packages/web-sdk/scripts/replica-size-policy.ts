@@ -1548,27 +1548,28 @@ export const approvedTc1488SiweDomainUriRatchet: Tc1488SiweDomainUriRatchet = {
 /**
  * Short links v=4 (js-sdk #708, TC-1737), accepted by Naomi: short-link code in sdk-core/share-envelope reached the
  * worker bundles. The kv-storage worker ceiling (`MAX_WORKER_GZIP_BYTES`) rises from 776,128 to 776,174 (+46) and the
- * replica worker ceiling (`MAX_REPLICA_WORKER_GZIP_BYTES`, the row's `replicaWorker`) from 770,093 to 770,113 (+20),
- * the bytes canonical CI printed on the #708 head c5c63cf7 (Replica run 40128909084). The root ceilings are those of
- * the previous newest row until the root step prints its bytes. First-import and activation ceilings are unchanged.
+ * replica worker ceiling (`MAX_REPLICA_WORKER_GZIP_BYTES`, the row's `replicaWorker`) from 770,093 to 770,113 (+20).
+ * The root index.mjs / index.cjs ceilings go from 1,462,509 / 1,404,776 to 1,461,950 / 1,404,942 (-559 / +166). All are
+ * the bytes canonical CI printed on the #708 head 8d15cd61 (Replica run 40136320965). First-import and activation
+ * ceilings are unchanged.
  */
 export const approvedTc1737ShortLinkLazyChunkRatchet: Tc1737ShortLinkLazyChunkRatchet = {
-  label: "short links v=4 (TC-1737, #708): worker ceilings +46 B kv-storage / +20 B replica at the exact CI bytes; root ceilings carried from the previous row until the next CI run",
-  ruling: "Approved by Naomi (worker +46 B kv-storage / +20 B replica at the exact CI bytes, no headroom; test-ruling: TC-1976)",
+  label: "short links v=4 (TC-1737, #708): root -559 B mjs / +166 B cjs gzip; worker +46 B kv-storage / +20 B replica, all at the exact CI bytes",
+  ruling: "Approved by Naomi (root, kv-storage worker and replica worker at the exact CI bytes, no headroom; test-ruling: TC-1976)",
   base: "e6aad66159e81b47c937da584a4c7f019be54100",
   sourceCommits: [
-    "c5c63cf762700b75e420557979d14dce6837fed7",
+    "8d15cd6123fd37924db59065e1317682dbff2772",
   ],
   canonicalCI: {
-    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40128909084",
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40136320965",
     jobs: [
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40128909084/job/120976213551",
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40128909084/job/120976213508",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40136320965/job/120998491772",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40136320965/job/120998491418",
     ],
   },
   root: {
-    delta: { "index.mjs": 0, "index.cjs": 0 },
-    ceiling: { "index.mjs": 1462509, "index.cjs": 1404776 },
+    delta: { "index.mjs": -559, "index.cjs": 166 },
+    ceiling: { "index.mjs": 1461950, "index.cjs": 1404942 },
   },
   firstImport: {
     delta: { "replica.mjs": 0, "replica.cjs": 0 },

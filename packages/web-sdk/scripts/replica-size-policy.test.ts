@@ -2644,11 +2644,16 @@ describe("browser SIWE domain and URI (#604, TC-1488) raised root ceiling ratche
 describe("short links v=4 (#708, TC-1737) worker ceiling ratchet", () => {
   const row = () => structuredClone(approvedTc1737ShortLinkLazyChunkRatchet);
 
-  it("raises the kv-storage and replica worker ceilings by the exact canonical CI delta, carries every other ceiling, and is read by the checker", () => {
+  it("sets the root, kv-storage worker and replica worker ceilings to the exact canonical CI bytes, carries every other ceiling, and is read by the checker", () => {
     expect(() => validateLedger(current)).not.toThrow();
     expect(JSON.stringify(current.tc1737ShortLinkLazyChunkRatchet)).toBe(JSON.stringify(approvedTc1737ShortLinkLazyChunkRatchet));
     expect(row().worker).toEqual({ delta: 46, ceiling: 776174 });
     expect(row().replicaWorker).toEqual({ delta: 20, ceiling: 770113 });
+    expect(row().root.delta).toEqual({ "index.mjs": -559, "index.cjs": 166 });
+    expect(row().root.ceiling).toEqual({ "index.mjs": 1461950, "index.cjs": 1404942 });
+    for (const format of ["index.mjs", "index.cjs"] as const) {
+      expect(row().root.ceiling[format]).toBe(approvedTc1488SiweDomainUriRatchet.root.ceiling[format] + row().root.delta[format]);
+    }
     expect(row().worker.ceiling).toBe(approvedTc1488SiweDomainUriRatchet.worker.ceiling + row().worker.delta);
     expect(row().replicaWorker.ceiling).toBe(approvedTc1827ReplicaWorkerRatchet.worker.ceiling + row().replicaWorker.delta);
     expect(MAX_WORKER_GZIP_BYTES).toBe(row().worker.ceiling);
@@ -2658,8 +2663,8 @@ describe("short links v=4 (#708, TC-1737) worker ceiling ratchet", () => {
     expect(row().activation).toEqual({ ...approvedTc1488SiweDomainUriRatchet.activation, delta: { "activation.mjs": 0, "activation.cjs": 0 } });
     expect(row().ruling).toContain("test-ruling: TC-1976");
     expect(row().base).toBe("e6aad66159e81b47c937da584a4c7f019be54100");
-    expect(row().sourceCommits).toEqual(["c5c63cf762700b75e420557979d14dce6837fed7"]);
-    expect(row().canonicalCI.run).toBe("https://github.com/TinyCloudLabs/js-sdk/actions/runs/40128909084");
+    expect(row().sourceCommits).toEqual(["8d15cd6123fd37924db59065e1317682dbff2772"]);
+    expect(row().canonicalCI.run).toBe("https://github.com/TinyCloudLabs/js-sdk/actions/runs/40136320965");
     expect(row().canonicalCI.jobs).toHaveLength(2);
     expect(ancestryPins(current, false)).toContainEqual({
       row: "tc1737ShortLinkLazyChunkRatchet", pin: row().sourceCommits.at(-1)!,
