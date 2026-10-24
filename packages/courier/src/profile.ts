@@ -61,10 +61,24 @@ export interface Profile {
  * rather than guessing a home directory.
  */
 export function profileDir(): string {
-  if (process.env.COURIER_HOME) return process.env.COURIER_HOME;
-  const home = process.env.HOME;
-  if (!home) throw new CourierError('home-unset', 'HOME is not set. Set HOME or COURIER_HOME to choose where Courier stores its state.');
-  return path.join(home, '.courier');
+  let dir = process.env.COURIER_HOME;
+  if (!dir) {
+    const home = process.env.HOME;
+    if (!home) throw new CourierError('home-unset', 'HOME is not set. Set HOME or COURIER_HOME to choose where Courier stores its state.');
+    dir = path.join(home, '.courier');
+  }
+  assertTestHome(dir);
+  return dir;
+}
+
+/** Test fence: with `COURIER_TEST=1`, a home outside `COURIER_TEST_HOME` is refused. Without that variable this does nothing. */
+function assertTestHome(dir: string): void {
+  if (process.env.COURIER_TEST !== '1') return;
+  const root = process.env.COURIER_TEST_HOME ? path.resolve(process.env.COURIER_TEST_HOME) : undefined;
+  const resolved = path.resolve(dir);
+  if (!root || (resolved !== root && !resolved.startsWith(root + path.sep))) {
+    throw new CourierError('test-home-escape', `COURIER_TEST=1: ${resolved} is outside COURIER_TEST_HOME (${root ?? 'unset'}).`);
+  }
 }
 
 function profilePath(name: string, home = profileDir()): string {
