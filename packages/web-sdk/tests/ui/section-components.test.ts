@@ -91,6 +91,37 @@ describe("confirmBox", () => {
     b.el.remove();
   });
 
+  test("Escape is ignored while the confirm's action is running, works after it settles", () => {
+    const calls: string[] = [];
+    const box = confirmBox({
+      question: "Wipe local data?",
+      cancelLabel: "Keep",
+      confirmLabel: "Wipe",
+      onCancel: () => calls.push("cancel"),
+      onConfirm: () => calls.push("confirm"),
+    });
+    const panelKeys: string[] = [];
+    const panel = g.document.createElement("div");
+    panel.addEventListener("keydown", () => panelKeys.push("reached panel"));
+    panel.append(box.el);
+    g.document.body.append(panel);
+    const escape = () => box.el.dispatchEvent(new g.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+
+    // The caller disables both actions while the destructive work runs.
+    box.cancel.disabled = true;
+    box.confirm.disabled = true;
+    escape();
+    expect(calls).toEqual([]);
+    expect(panel.contains(box.el)).toBe(true);
+    expect(panelKeys).toEqual([]);
+
+    box.cancel.disabled = false;
+    box.confirm.disabled = false;
+    escape();
+    expect(calls).toEqual(["cancel"]);
+    panel.remove();
+  });
+
   test("Escape takes the safe action and does not reach the panel's own handler", () => {
     const calls: string[] = [];
     const box = confirmBox({

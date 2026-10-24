@@ -81,9 +81,12 @@ export function confirmBox(options: ConfirmOptions): ConfirmBox {
   el.setAttribute("aria-describedby", questionId);
   // Escape takes the safe action, as the mockup's design rules require. Stopping
   // propagation keeps the panel's own Escape handler from closing the drawer.
+  // While the destructive action runs both buttons are disabled: Escape is
+  // swallowed then, so the box stays and focus stays where it is.
   el.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
     event.stopPropagation();
+    if (cancel.disabled || confirm.disabled) return;
     options.onCancel();
   });
 
