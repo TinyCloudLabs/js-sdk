@@ -310,6 +310,36 @@ async function renderedCss(): Promise<string> {
   return stylesheetText(shadow());
 }
 
+describe("switch", () => {
+  test("is the mockup's 56x30 track with a 22px thumb, in both schemes", async () => {
+    const css = await renderedCss();
+    for (const scheme of ["light", "dark"] as const) {
+      const knob = resolvedDeclarations(css, scheme, ".knob");
+      expect([knob.get("width"), knob.get("height")]).toEqual(["56px", "30px"]);
+      const thumb = resolvedDeclarations(css, scheme, ".knob::after");
+      expect([thumb.get("width"), thumb.get("height")]).toEqual(["22px", "22px"]);
+    }
+    expect(resolvedDeclarations(css, "light", ".switch").get("width")).toBe("56px");
+  });
+
+  test("the thumb is black when off and the track fill is muted (light), with the inverse in dark", async () => {
+    const css = await renderedCss();
+    expect(resolvedDeclarations(css, "light", ".knob::after").get("background")).toBe("#09090b");
+    expect(resolvedDeclarations(css, "light", ".knob::before").get("background")).toBe("#f4f4f5");
+    expect(resolvedDeclarations(css, "dark", ".knob::after").get("background")).toBe("#fafafa");
+    expect(resolvedDeclarations(css, "dark", ".knob::before").get("background")).toBe("#27272a");
+  });
+
+  test("on is a black track with a white thumb (light) and a white track with a black thumb (dark)", async () => {
+    const css = await renderedCss();
+    const on = ".switch[aria-checked=\"true\"] .knob";
+    expect(resolvedDeclarations(css, "light", on).get("background")).toBe("#09090b");
+    expect(resolvedDeclarations(css, "light", `${on}::after`).get("background")).toBe("#fff");
+    expect(resolvedDeclarations(css, "dark", on).get("background")).toBe("#fafafa");
+    expect(resolvedDeclarations(css, "dark", `${on}::after`).get("background")).toBe("#09090b");
+  });
+});
+
 describe("panel colour scheme", () => {
   test("dark scheme paints the panel, toasts and text on the dark surface", async () => {
     const css = await renderedCss();
