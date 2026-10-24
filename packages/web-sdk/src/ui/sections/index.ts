@@ -45,6 +45,8 @@
  *   ctx.sections()             Sections on offer now, nav order.
  *   ctx.closePanel(), ctx.text(), ctx.appLabel(), ctx.developerMode(), ctx.toastsEnabled()
  *
+ * UNKNOWN IS NEVER ZERO: a missing size/count/time renders as "unknown" (or is omitted where the mockup omits it); never 0, never "nothing".
+ *
  * SHARED COMPONENTS
  *   ./ui:        actionButton, confirmBox, detailsDrawer, glanceRow, statusNode, setGlanceStatus,
  *                icon(name), UI_STYLE (the style for these)
