@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { STORAGE_PANEL_STRINGS } from "../src/ui/sections/storage.strings";
 import { STRINGS } from "../src/ui/strings";
 
 // Built by `bun run build:e2e-storage`; the test scripts run from the package root.
@@ -105,7 +106,7 @@ for (const scheme of SCHEMES) {
     await expect(panel(page).locator(".head .status")).toHaveText(STRINGS["status.storage_full"]);
     // The body agrees with the launcher and the header: Full, in plain words, and no numbers from the last read.
     await expect(section(page).locator(".storage-st")).toHaveText("Full");
-    await expect(section(page).locator(".storage-banner")).toContainText("Storage full: read-only.");
+    await expect(section(page).locator(".storage-banner")).toContainText("Storage full: you can't add more data right now.");
     await expect(section(page).locator('[role="meter"]')).toHaveCount(0);
     await expect(section(page).locator(".storage-fig")).toHaveCount(0);
 
@@ -164,8 +165,11 @@ for (const scheme of SCHEMES) {
       await setEpisode(page, true);
       const toast = page.locator(".toast--info");
       await expect(toast).toBeVisible();
-      // On the page the link's accessible name also carries "(opens in a new tab)", so match the name by its start.
-      const manage = section(page).getByRole("link", { name: STRINGS["storage.manage"] });
+      // On the page the link's accessible name is its text plus the screen-reader hint.
+      const manage = section(page).getByRole("link", {
+        name: `${STRINGS["storage.manage"]} ${STORAGE_PANEL_STRINGS["storage.page.manage_hint"]}`,
+        exact: true,
+      });
       await expect(manage).toBeVisible();
 
       // The panel animates in (tc-in) and resizes through a ResizeObserver. Sample only after its
