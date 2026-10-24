@@ -20,8 +20,15 @@ for (const scheme of ["light", "dark"] as const) {
     await panel.getByRole("button", { name: "Sign out", exact: true }).click();
 
     // The same box backs the Sign-out, Revoke and Wipe confirms.
-    const dialog = page.getByRole("alertdialog", { description: "Sign out of TinyCloud on this device?" });
+    const dialog = page.getByRole("alertdialog");
     await expect(dialog).toBeVisible();
     await expect(dialog.getByRole("button", { name: "Stay signed in", exact: true })).toBeFocused();
+
+    // Read the description from Chromium's own accessibility tree, not from the DOM attributes.
+    const cdp = await page.context().newCDPSession(page);
+    const { nodes } = await cdp.send("Accessibility.getFullAXTree");
+    const box = nodes.find((node) => node.role?.value === "alertdialog" && !node.ignored);
+    expect(box, "alertdialog in the accessibility tree").toBeDefined();
+    expect(box?.description?.value).toBe("Sign out of TinyCloud on this device?");
   });
 }
