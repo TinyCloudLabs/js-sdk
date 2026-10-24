@@ -1422,3 +1422,99 @@ describe("registryPolicy fail-closed through TinyCloudWeb (TC-1443)", () => {
     expect(tcw._node.hosts[0]).toBe("https://my.node.example");
   });
 });
+
+// The panel keeps per-account state (read cache, open dialogs, receipts). A session that replaces a
+// live one with a different principal must reset it; the same principal signing in again must not.
+describe("panel reset when the principal changes over a live session", () => {
+  const ACCOUNT_A = "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1";
+  const ACCOUNT_B = "0x1111111111111111111111111111111111111111";
+  const principal = (address: string, chainId = 1) => ({
+    address,
+    chainId,
+    sessionKey: {} as any,
+    siwe: "siwe",
+    signature: "signature",
+  });
+
+  /** A TinyCloudWeb with a fake node. `live` is the session already on the node; `next` is what signIn/restore leaves behind. */
+  async function webWith(live: ReturnType<typeof principal> | undefined, next: ReturnType<typeof principal>) {
+    const persisted = {
+      address: next.address,
+      chainId: next.chainId,
+      sessionKey: JSON.stringify({ kty: "OKP", crv: "Ed25519", d: "private" }),
+      siwe: "siwe",
+      signature: "signature",
+      tinycloudSession: {
+        delegationHeader: { Authorization: "Bearer persisted" },
+        delegationCid: "bafy-persisted",
+        spaceId: `tinycloud:pkh:eip155:${next.chainId}:${next.address}:default`,
+        verificationMethod: "did:key:zPersisted#zPersisted",
+      },
+      expiresAt: "2099-01-01T00:00:00.000Z",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      version: "1.0",
+    };
+    const storage = { save: mock(async () => undefined), load: mock(async () => persisted), clear: mock(async () => undefined) };
+    const tcw = new TinyCloudWeb({ sessionStorage: storage as any });
+    await (tcw as any)._initPromise;
+    const node: any = {
+      session: live,
+      accountSpaceId: `tinycloud:pkh:eip155:${next.chainId}:${next.address}:account`,
+      hasRuntimePermissions: mock(() => true),
+      signIn: mock(async () => {
+        node.session = next;
+      }),
+      restoreSession: mock(async () => {
+        node.session = next;
+      }),
+    };
+    (tcw as any)._node = node;
+    (tcw as any)._initPromise = Promise.resolve();
+    const reset = mock(() => undefined);
+    (tcw as any).uiClient.reset = reset;
+    return { tcw, reset };
+  }
+
+  /** signIn() with nothing to restore, so it takes the fresh node.signIn path. */
+  async function freshSignIn(live: ReturnType<typeof principal> | undefined, next: ReturnType<typeof principal>) {
+    const { tcw, reset } = await webWith(live, next);
+    (tcw as any).restoreSession = mock(async () => ({ status: "missing" }));
+    await tcw.signIn();
+    return reset;
+  }
+
+  test("a different account signing in over a live session resets the panel exactly once", async () => {
+    const reset = await freshSignIn(principal(ACCOUNT_A), principal(ACCOUNT_B));
+    expect(reset).toHaveBeenCalledTimes(1);
+  });
+
+  test("the same account re-signing in (same address and chain) does not reset the panel", async () => {
+    expect(await freshSignIn(principal(ACCOUNT_A), principal(ACCOUNT_A))).not.toHaveBeenCalled();
+    // The same address on another chain is a different principal.
+    expect(await freshSignIn(principal(ACCOUNT_A, 1), principal(ACCOUNT_A, 10))).toHaveBeenCalledTimes(1);
+    // The first sign-in on a node with no live session has no previous account to clear.
+    expect(await freshSignIn(undefined, principal(ACCOUNT_A))).not.toHaveBeenCalled();
+  });
+
+  test("a session restore that replaces a live session with a different principal resets once; a plain or same-principal restore does not", async () => {
+    const restoreOver = async (live: ReturnType<typeof principal> | undefined, next: ReturnType<typeof principal>) => {
+      const { tcw, reset } = await webWith(live, next);
+      const result = await tcw.restoreSession(next.address);
+      expect(result.status).toBe("restored");
+      return reset;
+    };
+    expect(await restoreOver(principal(ACCOUNT_B), principal(ACCOUNT_A))).toHaveBeenCalledTimes(1);
+    expect(await restoreOver(undefined, principal(ACCOUNT_A))).not.toHaveBeenCalled();
+    expect(await restoreOver(principal(ACCOUNT_A), principal(ACCOUNT_A))).not.toHaveBeenCalled();
+  });
+
+  test("signIn that restores a different principal over a live session resets once, not twice", async () => {
+    const { tcw, reset } = await webWith(principal(ACCOUNT_B), principal(ACCOUNT_A));
+    // The wallet reports account A, so signIn restores A's persisted session instead of asking for a new signature.
+    (tcw as any).walletSigner = { getConnectedAddress: async () => ACCOUNT_A };
+    await tcw.signIn();
+    expect((tcw as any)._node.restoreSession).toHaveBeenCalledTimes(1);
+    expect((tcw as any)._node.signIn).not.toHaveBeenCalled();
+    expect(reset).toHaveBeenCalledTimes(1);
+  });
+});
