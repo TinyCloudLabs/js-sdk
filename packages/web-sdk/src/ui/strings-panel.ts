@@ -1,9 +1,11 @@
 import { text as eagerText } from "./strings";
 
 /**
- * Overview, sign-out prompt, and glance copy. Lazy: only the panel chunk
- * imports this, so the launcher bundle never carries these keys.
- * Toast and launcher keys stay in strings.ts.
+ * Shell copy: the layout switch, toasts, and the three words every status can
+ * show. Lazy: only the panel chunk imports this, so the launcher bundle never
+ * carries these keys. Launcher and legacy section keys stay in strings.ts.
+ * Each section owns its own strings in `sections/<id>.strings.ts` and
+ * registers them here with `registerPanelStrings`.
  */
 const PANEL_STRINGS = {
   "panel.full_page": "Open full page",
@@ -12,62 +14,28 @@ const PANEL_STRINGS = {
   "toast.copy_receipt": "Copy receipt",
   "toast.copied": "Copied",
   "toast.copy_failed": "Couldn't copy. Select the text and copy it by hand.",
-  "account.copied": "DID copied",
-  "account.copy_failed": "Could not copy the DID",
-  "account.signed_out": "TinyCloud is signed out in this app. Sign in to see your account.",
-  "account.signed_in_as": "Signed in as",
-  "account.copy_did": "Copy your DID",
-  "account.hint": "Need more room? Choose Open full page, at the top, for these same sections on a full screen.",
-  "account.button.title": "This button",
-  "account.button.body": "TinyCloud shows a round button at the bottom right of {app}. If you'd rather open TinyCloud from the app's own settings, hide it.",
-  "account.button.app": "this app",
-  "account.button.dev.lead": "For developers.",
-  "account.button.dev.body": "Once the button is hidden, your app needs its own way back in: add a place in your settings that calls",
-  "account.button.dev.tail": "TinyCloud doesn't bring the button back on its own.",
-  "account.loading": "Loading account…",
-  "account.unavailable": "Account details are unavailable.",
-  "account.session.label": "Session",
-  "account.session.expires": "Expires in {hours}h {minutes}m",
-  "account.app.label": "You're in",
-  "account.glance.title": "At a glance",
-  "account.signout.button": "Sign out",
-  "account.signout.question": "Sign out of TinyCloud on this device?",
-  "account.signout.cancel": "Stay signed in",
-  "account.signout.confirm": "Sign out",
-  "account.signout.busy": "Signing out…",
-  "account.signout.failed": "Sign-out failed. Try again.",
-  "glance.local-tinycloud": "Use a TinyCloud node on this computer",
-  "glance.local-copy": "Keep a copy of your data on this device",
-  "glance.delegations": "Who can act on your data",
-  "glance.nodes": "Nodes your data syncs with",
-  "glance.storage": "How much space is used",
-  "glance.activity": "Recent requests this session",
-  "glance.word.found": "Found",
-  "glance.word.looking": "Looking",
-  "glance.word.not_found": "Not found",
-  "glance.word.on": "On",
-  "glance.word.off": "Off",
-  "glance.word.none": "None",
-  "glance.word.visible": "Visible",
-  "glance.word.needs_permission": "Needs permission",
-  "glance.word.normal": "Normal",
-  "glance.word.nearly_full": "Nearly full",
-  "glance.word.full": "Full",
-  "glance.word.healthy": "Healthy",
-  "glance.word.slow": "{count} slow",
-  "glance.word.down": "{count} down",
-  "glance.word.errors": "{count} errors",
-  "glance.word.no_errors": "No errors",
-  "glance.word.checking": "Checking",
-  "glance.word.unavailable": "Unavailable",
+  "section.status.checking": "Checking",
+  "section.status.needs_permission": "Needs permission",
+  "section.status.unavailable": "Unavailable",
 } as const satisfies Readonly<Record<string, string>>;
 
 export type PanelStringKey = keyof typeof PANEL_STRINGS;
 
-/** Panel-only lookup. Falls back to the launcher table, then to the neutral line. */
+const SECTION_STRINGS = new Map<string, string>();
+
+/**
+ * The one merge point for section copy. A section calls it once, at module
+ * load, with its own table. Keys start with the section id and must not reuse
+ * a key from strings.ts or another section (tests/ui/section-contract.test.ts checks).
+ */
+export function registerPanelStrings(table: Readonly<Record<string, string>>): void {
+  for (const [code, line] of Object.entries(table)) SECTION_STRINGS.set(code, line);
+}
+
+/** Panel lookup: shell table, then section tables, then the launcher table, then the neutral line. */
 export function panelText(code: string, params: Readonly<Record<string, string | number>> = {}): string {
   const raw: string = Object.prototype.hasOwnProperty.call(PANEL_STRINGS, code)
     ? PANEL_STRINGS[code as PanelStringKey]
-    : eagerText(code);
+    : (SECTION_STRINGS.get(code) ?? eagerText(code));
   return raw.replace(/\{(\w+)\}/g, (match, name: string) => (name in params ? String(params[name]) : match));
 }

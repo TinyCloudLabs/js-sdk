@@ -4,9 +4,20 @@
  */
 
 import type { IStorageService } from "@tinycloud/sdk-core";
+import type {
+  AccountInfo,
+  DelegationPage,
+  LocalCopyStatus,
+  LocalNodeState,
+  NodeRow,
+  PanelDataSource,
+  StorageView,
+  ViewResult,
+} from "./data";
+import type { ShellLayout } from "./panel";
 import type { ReceiptRequest } from "./panel-toasts";
+import type { IconName } from "./sections/ui";
 import type { StringKey } from "./strings";
-import type { PanelDataSource } from "./data";
 import type { ToastRequest } from "./toast-store";
 
 /** Panel sections, in nav order. Ids match the full-page and sidebar mockup. */
@@ -62,13 +73,90 @@ export interface HostContext {
   /** Returns the toast id, or null when `ui.toasts` is false. */
   toast(t: ToastRequest): string | null;
   /** strings.ts lookup. Unknown codes return the neutral line, never raw text. */
-  text(code: string): string;
+  text(code: string, params?: Readonly<Record<string, string | number>>): string;
   /** App name for the header ("in <app>"). Undefined when the app id is the page fallback. */
   appLabel(): string | undefined;
   /** True when the launcher button exists, so Overview can offer to hide it. */
   canHideButton(): boolean;
   /** Hides the launcher button, persists it, and closes the panel. */
   hideButton(): void;
+}
+
+/** Views the shell reads for statuses. `account` is read by Overview itself. */
+export interface DataViews {
+  readonly localNode: LocalNodeState;
+  readonly localCopy: LocalCopyStatus;
+  readonly delegations: DelegationPage;
+  readonly nodes: readonly NodeRow[];
+  readonly storage: StorageView;
+  readonly account: AccountInfo;
+}
+
+export type DataKey = keyof DataViews;
+
+/**
+ * The shell's read cache over `PanelDataSource`. `status(ctx)` is synchronous,
+ * so it reads `latest` instead of awaiting the source. The shell fills the
+ * cache when the panel opens, on every source change, and each minute while open.
+ */
+export interface SectionData {
+  /** The client's data source. Undefined when the host gave none. */
+  readonly source: PanelDataSource | undefined;
+  /** Last result the shell read for `key`; undefined until the first read settles. Never waits. */
+  latest<K extends Exclude<DataKey, "account">>(key: K): ViewResult<DataViews[K]> | undefined;
+  /** Milliseconds since `latest(key)` settled; undefined when it never has. */
+  age(key: Exclude<DataKey, "account">): number | undefined;
+  /** Re-reads one view, or all of them. Resolves once the cache holds the new results. */
+  refresh(key?: Exclude<DataKey, "account">): Promise<void>;
+  /** Calls `listener` after any cached result changes. Returns the unsubscribe function. */
+  subscribe(listener: () => void): () => void;
+}
+
+/** Visible state of a one-line status. `info` is neutral: checking, needs permission, unavailable. */
+export type StatusTone = "ok" | "warn" | "off" | "info";
+
+/**
+ * What a section says about itself in the At-a-glance rows and on the page rail.
+ * The rail shows `count ?? text`; the glance row shows `text` with its tone dot.
+ */
+export interface SectionStatus {
+  readonly text: string;
+  readonly tone: StatusTone;
+  readonly count?: string;
+}
+
+export interface ConfirmRequest {
+  readonly question: string;
+  /** The safe action. It takes focus, and Enter and Escape take it. */
+  readonly cancelLabel: string;
+  readonly confirmLabel: string;
+  /** The box is inserted after this element. Default: the end of the section. */
+  readonly anchor?: HTMLElement;
+  /** Runs after the safe action or Escape. The box is already closed. */
+  readonly onCancel?: () => void;
+  /** Runs on the destructive action. The box stays until `close()`. */
+  readonly onConfirm: () => void;
+}
+
+export interface ConfirmHandle {
+  readonly cancel: HTMLButtonElement;
+  readonly confirm: HTMLButtonElement;
+  close(): void;
+}
+
+export interface DrawerRequest {
+  readonly title: string;
+  readonly body: readonly Node[];
+  readonly closeLabel: string;
+  /** The drawer is inserted after this element. Default: the end of the section. */
+  readonly anchor?: HTMLElement;
+  /** Runs after the drawer closes. */
+  readonly onClose?: () => void;
+}
+
+export interface DrawerHandle {
+  readonly el: HTMLElement;
+  close(): void;
 }
 
 /** Context the panel shell gives sections. Only the lazy shell builds it. */
@@ -79,15 +167,33 @@ export interface SectionContext extends HostContext {
   openSection(id: SectionId): void;
   /** Shows a receipt slip (title, identifiers, Copy receipt). False when toasts are off or the same receipt is already up. */
   receipt(request: ReceiptRequest): boolean;
+  /** Read cache over the client's data source. */
+  readonly data: SectionData;
+  /** Layout the panel is in now. Read at mount; the shell remounts the section when it changes. */
+  layout(): ShellLayout;
+  /** Sections the panel offers right now, in nav order, Overview included. */
+  sections(): readonly PanelSection[];
+  /** Repaints statuses (page rail, At a glance) after a change the data source did not announce. Does not remount the section. */
+  requestRender(): void;
+  /** Inline confirm for a destructive action; the safe action takes focus. */
+  confirm(request: ConfirmRequest): ConfirmHandle;
+  /** Inline details drawer. */
+  openDrawer(request: DrawerRequest): DrawerHandle;
 }
 
 /** A body section in the panel. Mounted only while the panel is open and `isAvailable`. */
 export interface PanelSection {
   readonly id: SectionId;
-  /** strings.ts key for the nav label. */
+  /** strings.ts key for the title: the nav label and the rail text. */
   readonly labelCode: StringKey;
+  /** Icon on the full-page rail and the At-a-glance row. */
+  readonly icon: IconName;
+  /** Panel string code for the one-line description under the title on Overview. Undefined: no row for this section. */
+  readonly summaryCode?: string;
   isAvailable(ctx: HostContext): boolean;
-  /** Returns dispose. May touch only `el`. */
+  /** Synchronous read of what the section knows from `ctx.data`. Undefined shows nothing. */
+  status(ctx: SectionContext): SectionStatus | undefined;
+  /** Renders the body into `el`. Returns dispose. May touch only `el`. */
   mount(el: HTMLElement, ctx: SectionContext): () => void;
 }
 

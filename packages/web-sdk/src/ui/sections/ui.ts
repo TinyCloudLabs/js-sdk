@@ -3,6 +3,7 @@
  * details drawer. Sections pass resolved text in; nothing here
  * reads client data or strings.ts. Each control is at least 44px tall.
  */
+import type { SectionStatus } from "../slots";
 
 /** Light and dark tokens for these components, mirroring the mockup's hairline and chrome. */
 export const UI_STYLE = `
@@ -19,23 +20,23 @@ export const UI_STYLE = `
 .ui-ic{width:18px;height:18px;flex:none;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .st{display:inline-flex;align-items:center;gap:8px;font-size:13.5px;font-weight:600;white-space:nowrap}
 .st .dot{top:auto;right:auto;width:9px;height:9px;border:0;border-radius:50%;background:transparent;flex:none;position:relative}
-.st-on{color:#18181b}
-.st-on .dot{background:currentColor}
+.st-ok{color:#18181b}
+.st-ok .dot{background:currentColor}
 .st-warn{color:#92400e}
 .st-warn .dot{background:#b45309;box-shadow:0 0 0 1.5px #fff,0 0 0 2.5px #b45309}
-.st-off,.st-x{color:#71717a}
-.st-off .dot,.st-x .dot{box-shadow:inset 0 0 0 2px currentColor}
-.st-x .dot::after{content:"";position:absolute;left:-1px;right:-1px;top:3.5px;height:2px;background:currentColor;transform:rotate(-45deg)}
+.st-off,.st-info{color:#71717a}
+.st-off .dot,.st-info .dot{box-shadow:inset 0 0 0 2px currentColor}
+.st-info .dot::after{content:"";position:absolute;left:-1px;right:-1px;top:3.5px;height:2px;background:currentColor;transform:rotate(-45deg)}
 .drawer{margin-top:12px;padding:14px 16px;border:1px solid #d4d4d8;border-radius:12px;background:#fafafa}
 .drawer>h3{margin:0 0 8px;font-size:15px;font-weight:600;overflow-wrap:anywhere}
 @media (prefers-color-scheme: dark){
 .glance-row{border-bottom-color:#3f3f46}
 .glance-row .gl span,.glance-row .gr{color:#a1a1aa}
 .drawer{border-color:#3f3f46;background:#151517}
-.st-on{color:#fafafa}
+.st-ok{color:#fafafa}
 .st-warn{color:#fcd34d}
 .st-warn .dot{background:#f59e0b;box-shadow:0 0 0 1.5px #18181b,0 0 0 2.5px #f59e0b}
-.st-off,.st-x{color:#a1a1aa}
+.st-off,.st-info{color:#a1a1aa}
 }
 `;
 
@@ -98,14 +99,6 @@ export function confirmBox(options: ConfirmOptions): ConfirmBox {
   return { el, cancel, confirm };
 }
 
-export type GlanceTone = "on" | "warn" | "off" | "x";
-
-/** A status word with its dot tone. `x` is neutral: loading, needs-permission, error. */
-export interface StatusView {
-  readonly word: string;
-  readonly tone: GlanceTone;
-}
-
 /** Icon paths from the settings mockup's sprite, stroked with currentColor. Static constants only. */
 const ICON_PATHS = {
   monitor: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
@@ -140,15 +133,15 @@ export function icon(name: IconName): SVGSVGElement {
   return svg;
 }
 
-/** Status word with the mockup dot: solid for on, ringed for warn, hollow for off, hollow with a slash for neutral. */
-export function statusNode(status: StatusView): HTMLSpanElement {
+/** Status text with the mockup dot: solid for ok, ringed for warn, hollow for off, hollow with a slash for info. */
+export function statusNode(status: SectionStatus): HTMLSpanElement {
   const node = document.createElement("span");
   node.className = `st st-${status.tone}`;
   const dot = document.createElement("span");
   dot.className = "dot";
   dot.setAttribute("aria-hidden", "true");
   const word = document.createElement("span");
-  word.textContent = status.word;
+  word.textContent = status.text;
   node.append(dot, word);
   return node;
 }
@@ -157,7 +150,7 @@ export interface GlanceRowOptions {
   readonly icon: IconName;
   readonly label: string;
   readonly sublabel: string;
-  readonly status?: StatusView;
+  readonly status?: SectionStatus;
   readonly onOpen: () => void;
 }
 
@@ -212,7 +205,7 @@ export function detailsDrawer(options: DrawerOptions): HTMLElement {
 }
 
 /** Replaces a row's status in place, so a refresh keeps focus on the row. Undefined clears it. */
-export function setGlanceStatus(row: HTMLButtonElement, status: StatusView | undefined): void {
+export function setGlanceStatus(row: HTMLButtonElement, status: SectionStatus | undefined): void {
   const end = row.querySelector(".gr");
   if (end === null) return;
   end.querySelector(".st")?.remove();

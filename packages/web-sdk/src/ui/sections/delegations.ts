@@ -5,6 +5,11 @@ import type {
   RevokeOutcome,
 } from "../data";
 import type { HostContext, PanelSection } from "../slots";
+import { registerPanelStrings } from "../strings-panel";
+import { DELEGATIONS_STRINGS } from "./delegations.strings";
+import { viewStatus } from "./status";
+
+registerPanelStrings(DELEGATIONS_STRINGS);
 import { mountPlaceholder } from "./placeholder";
 import { applyResult, createStateLine, settle, startLoading, textLine } from "./view-body";
 
@@ -31,7 +36,16 @@ const STATUS_WORD: Record<DelegationStatus, string> = {
 export const delegationsSection: PanelSection = {
   id: "delegations",
   labelCode: "nav.delegations",
+  icon: "key",
+  summaryCode: "delegations.summary",
   isAvailable: (ctx) => ctx.client()?.signedIn() === true,
+  // The rail shows how many the first page lists; a "+" means more pages exist.
+  status: (ctx) =>
+    viewStatus(ctx, ctx.data.latest("delegations"), (page) => ({
+      text: ctx.text("delegations.glance.visible"),
+      tone: "ok",
+      count: `${page.rows.length}${page.nextCursor === undefined ? "" : "+"}`,
+    })),
   mount(el, ctx: HostContext) {
     const data = ctx.client()?.data;
     if (!data) return mountPlaceholder(el);

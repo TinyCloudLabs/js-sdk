@@ -7,11 +7,10 @@
  * drawn twice and the page holds one set of toast elements.
  */
 import { icon, type IconName } from "./sections/ui";
-import { panelText, type PanelStringKey } from "./strings-panel";
-import type { StringKey } from "./strings";
+import { panelText } from "./strings-panel";
 import type { ToastKind, ToastRequest, ToastStore, ToastView } from "./toast-store";
 
-type Code = StringKey | PanelStringKey;
+type Code = string;
 
 /** One receipt row: a label code and a data value (an ID), never prose. */
 export interface ReceiptRow {

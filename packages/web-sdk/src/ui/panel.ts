@@ -10,6 +10,9 @@ export type ShellLayout = "drawer" | "page";
 export interface NavItem {
   readonly id: SectionId;
   readonly labelCode: StringKey;
+  readonly icon: IconName;
+  /** Short status on the full-page rail: the section status's `count ?? text`. Undefined shows nothing. */
+  readonly meta?: string | undefined;
 }
 
 export interface LayoutOptions {
@@ -42,6 +45,7 @@ export interface PanelOptions {
 interface NavEntry {
   readonly btn: HTMLButtonElement;
   readonly index: HTMLSpanElement;
+  readonly meta: HTMLSpanElement;
   readonly pick: HTMLButtonElement;
 }
 
@@ -51,16 +55,6 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 const SWITCH_GLYPH: Record<ShellLayout, string> = {
   page: "M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7",
   drawer: "M6 4h12a3 3 0 0 1 3 3v10a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3zM15 4v16",
-};
-/** Rail icon per section. Shown on the full-page rail only. */
-const NAV_ICON: Record<SectionId, IconName> = {
-  account: "person",
-  "local-tinycloud": "monitor",
-  "local-copy": "sync",
-  delegations: "key",
-  nodes: "nodes",
-  storage: "drive",
-  activity: "term",
 };
 const SWITCH_LABEL: Record<ShellLayout, PanelStringKey> = {
   page: "panel.full_page",
@@ -217,12 +211,16 @@ export function createPanel(options: PanelOptions): PanelHandle {
     const index = document.createElement("span");
     index.className = "nav-n";
     index.setAttribute("aria-hidden", "true");
-    const glyph = icon(NAV_ICON[item.id]);
+    const glyph = icon(item.icon);
     glyph.classList.add("nav-ic");
     const label = document.createElement("span");
     label.className = "nav-l";
     label.textContent = text(item.labelCode);
-    btn.append(glyph, index, label);
+    // Status text on the page rail. Hidden from the name so the button stays named by its label; the status is the description.
+    const meta = document.createElement("span");
+    meta.className = "nav-m";
+    meta.setAttribute("aria-hidden", "true");
+    btn.append(glyph, index, label, meta);
     btn.addEventListener("click", () => options.onNavigate(item.id));
 
     const pick = document.createElement("button");
@@ -231,7 +229,7 @@ export function createPanel(options: PanelOptions): PanelHandle {
     pick.dataset.section = item.id;
     pick.textContent = text(item.labelCode);
     pick.addEventListener("click", () => choose(item.id));
-    return { btn, index, pick };
+    return { btn, index, meta, pick };
   }
 
   menuBtn.addEventListener("click", () => {
@@ -300,6 +298,9 @@ export function createPanel(options: PanelOptions): PanelHandle {
           navButtons.set(item.id, entry);
         }
         entry.index.textContent = String(position + 1).padStart(2, "0");
+        entry.meta.textContent = item.meta ?? "";
+        if (item.meta === undefined) entry.btn.removeAttribute("aria-description");
+        else entry.btn.setAttribute("aria-description", item.meta);
         // Reorder only when a new item lands out of place, so focus on a
         // mounted button is not disturbed by unrelated updates.
         if (nav.children[position] !== entry.btn) nav.insertBefore(entry.btn, nav.children[position] ?? null);

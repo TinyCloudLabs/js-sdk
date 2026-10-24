@@ -23,7 +23,7 @@ export const PANEL_CSS = `
 .nav{grid-area:nav;display:flex;flex-wrap:wrap;gap:6px;padding:6px 20px 14px}
 .nav-i{display:inline-flex;align-items:center;min-height:44px;padding:0 13px;border:0;border-radius:999px;background:#f4f4f5;color:#09090b;font:inherit;font-size:13.5px;font-weight:500;white-space:nowrap;cursor:pointer}
 .nav-i[aria-current="page"]{background:#fff;font-weight:700;box-shadow:inset 0 0 0 2px #09090b}
-.nav-n,.nav-ic{display:none}
+.nav-n,.nav-ic,.nav-m{display:none}
 .main{grid-area:main;min-height:0;overflow:auto;box-sizing:border-box;padding:24px 20px 56px;border-top:2px solid #09090b}
 .sec-title{margin:0 0 28px;font-family:"Literata Variable","Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;font-size:1.5rem;font-weight:400;line-height:1.2;letter-spacing:-.005em}
 .section+.section{margin-top:12px;padding-top:12px;border-top:1px solid #e4e4e7}
@@ -52,6 +52,8 @@ export const PANEL_CSS = `
 .layer .panel[data-layout="page"] .nav-i[aria-current="page"]{background:#fff}
 .layer .panel[data-layout="page"] .nav-i{gap:8px}
 .layer .panel[data-layout="page"] .nav-ic{display:inline-block;width:16px;height:16px}
+.layer .panel[data-layout="page"] .nav-m{display:inline;max-width:90px;margin-left:auto;overflow:hidden;color:#71717a;font-size:12.5px;font-weight:400;text-overflow:ellipsis;white-space:nowrap}
+.layer .panel[data-layout="page"] .nav-i[aria-current="page"] .nav-m{color:#09090b}
 .layer .panel[data-layout="page"] .nav-n{display:inline-block;width:18px;font:500 11px/1 ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;color:#71717a}
 .layer .panel[data-layout="page"] .main{padding:40px 40px 80px;border-top:0;max-width:960px;width:100%;margin:0 auto}
 .layer .panel[data-layout="page"] .sec-title{font-size:1.75rem;line-height:2.125rem;font-weight:600}
@@ -89,7 +91,8 @@ export const PANEL_CSS = `
 .layer .panel[data-layout="page"] .nav{background:#151517;border-right-color:#69696b}
 .layer .panel[data-layout="page"] .nav-i{background:transparent}
 .layer .panel[data-layout="page"] .nav-i[aria-current="page"]{background:#27272a}
-.layer .panel[data-layout="page"] .nav-n{color:#a1a1aa}
+.layer .panel[data-layout="page"] .nav-n,.layer .panel[data-layout="page"] .nav-m{color:#a1a1aa}
+.layer .panel[data-layout="page"] .nav-i[aria-current="page"] .nav-m{color:#fafafa}
 .menu{background:#151517;box-shadow:inset 0 0 0 1px #69696b,0 12px 32px -8px rgba(0,0,0,.6)}
 .menu-i[aria-current="page"]{background:#27272a}
 }

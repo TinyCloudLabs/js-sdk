@@ -1,5 +1,8 @@
 import type { ActionResult, LocalNodeConnection, LocalNodeState } from "../data";
-import type { HostContext, PanelSection } from "../slots";
+import type { HostContext, PanelSection, SectionStatus } from "../slots";
+import { registerPanelStrings } from "../strings-panel";
+import { LOCAL_TINYCLOUD_STRINGS } from "./local-tinycloud.strings";
+import { viewStatus } from "./status";
 import { alwaysAvailable, mountPlaceholder } from "./placeholder";
 import { applyResult, createStateLine, settle, startLoading, textLine } from "./view-body";
 
@@ -24,6 +27,8 @@ function detailLines(ctx: HostContext, node: LocalNodeState): HTMLParagraphEleme
   );
 }
 
+registerPanelStrings(LOCAL_TINYCLOUD_STRINGS);
+
 /**
  * Local TinyCloud on this computer. Mounted only while the panel is open.
  * The switch is on for any connection except `off`. It is disabled when the
@@ -33,7 +38,24 @@ function detailLines(ctx: HostContext, node: LocalNodeState): HTMLParagraphEleme
 export const localTinycloudSection: PanelSection = {
   id: "local-tinycloud",
   labelCode: "nav.local-tinycloud",
+  icon: "monitor",
+  summaryCode: "local-tinycloud.summary",
   isAvailable: alwaysAvailable,
+  status: (ctx) =>
+    viewStatus(ctx, ctx.data.latest("localNode"), (node): SectionStatus => {
+      switch (node.connection) {
+        case "found":
+          return { text: ctx.text("local-tinycloud.glance.found"), tone: "ok" };
+        case "looking":
+          return { text: ctx.text("local-tinycloud.glance.looking"), tone: "info" };
+        case "not-found":
+          return { text: ctx.text("local-tinycloud.glance.not_found"), tone: "off" };
+        case "off":
+          return { text: ctx.text("local-tinycloud.glance.off"), tone: "off" };
+        case "unavailable":
+          return { text: ctx.text("section.status.unavailable"), tone: "info" };
+      }
+    }),
   mount(el, ctx: HostContext) {
     const data = ctx.client()?.data;
     if (!data) return mountPlaceholder(el);

@@ -1,5 +1,10 @@
 import { STORAGE_MANAGE_URL } from "../manage-url";
-import type { HostContext, PanelClient, PanelSection } from "../slots";
+import type { HostContext, PanelClient, PanelSection, SectionStatus } from "../slots";
+import { registerPanelStrings } from "../strings-panel";
+import { STORAGE_PANEL_STRINGS } from "./storage.strings";
+import { viewStatus } from "./status";
+
+registerPanelStrings(STORAGE_PANEL_STRINGS);
 import { text } from "../strings";
 import {
   afterAuthority,
@@ -67,6 +72,14 @@ function manageHref(read: StorageRead): string {
 export const storageSection: PanelSection = {
   id: "storage",
   labelCode: "nav.storage",
+  icon: "drive",
+  summaryCode: "storage.summary",
+  status: (ctx) =>
+    viewStatus(ctx, ctx.data.latest("storage"), (view): SectionStatus => {
+      if (view.state === "full") return { text: ctx.text("storage.glance.full"), tone: "warn" };
+      if (view.state === "nearly_full") return { text: ctx.text("storage.glance.nearly_full"), tone: "warn" };
+      return { text: ctx.text("storage.glance.normal"), tone: "ok" };
+    }),
   isAvailable: (ctx) => ctx.client()?.signedIn() === true,
   mount(el, ctx: HostContext) {
     const client = ctx.client();

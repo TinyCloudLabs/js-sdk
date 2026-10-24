@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { JSDOM } from "jsdom";
 
+import { PANEL_SECTIONS } from "../../src/ui/sections";
 import { accountSection } from "../../src/ui/sections/account";
 import type { SectionContext, SectionId } from "../../src/ui/slots";
 import { panelText as text } from "../../src/ui/strings-panel";
@@ -56,12 +57,15 @@ interface Opts {
   account?: Record<string, unknown>;
   signOut?: () => Promise<void>;
   requests?: boolean;
+  layout?: "drawer" | "page";
+  latest?: (key: string) => unknown;
 }
 
 function mountWith(opts: Opts) {
   const signOutCalls = { n: 0 };
   const opened: SectionId[] = [];
   const toasts: Array<{ kind: string; textCode: string }> = [];
+  const dataListeners: Array<() => void> = [];
   const client = {
     id: 1,
     signedIn: opts.signedIn ?? (() => true),
@@ -72,6 +76,7 @@ function mountWith(opts: Opts) {
       account: async () => ({ state: "ready", data: { ...ACCOUNT, ...opts.account } }),
     },
     requests: opts.requests ? {} : undefined,
+    sync: {},
     signOut: opts.signOut
       ? async () => {
           signOutCalls.n += 1;
@@ -82,7 +87,7 @@ function mountWith(opts: Opts) {
   const ctx = {
     client: () => client,
     onClientChange: () => () => undefined,
-    developerMode: () => false,
+    developerMode: () => opts.requests === true,
     setStatus: () => undefined,
     topStatus: () => null,
     onStatusChange: () => () => undefined,
@@ -95,6 +100,18 @@ function mountWith(opts: Opts) {
     appLabel: () => undefined,
     canHideButton: () => false,
     hideButton: () => undefined,
+    data: {
+      source: client.data,
+      latest: opts.latest ?? (() => undefined),
+      age: () => undefined,
+      refresh: async () => undefined,
+      subscribe: (cb: () => void) => {
+        dataListeners.push(cb);
+        return () => undefined;
+      },
+    },
+    layout: () => opts.layout ?? "drawer",
+    sections: () => PANEL_SECTIONS.filter((section) => section.isAvailable(ctx)),
     openSection: (id: SectionId) => opened.push(id),
     closePanel: () => undefined,
   } as unknown as SectionContext;
@@ -102,7 +119,7 @@ function mountWith(opts: Opts) {
   page.document.body.append(el);
   const dispose = accountSection.mount(el as unknown as HTMLElement, ctx);
   cleanups.push(dispose);
-  return { el, signOutCalls, opened, toasts };
+  return { el, signOutCalls, opened, toasts, dataListeners };
 }
 
 const button = (root: ParentNode, label: string): HTMLButtonElement => {
@@ -201,6 +218,58 @@ describe("Overview section", () => {
     ) as HTMLButtonElement;
     row.click();
     expect(opened).toEqual(["local-copy"]);
+  });
+
+  test("the intro line is shown in the sidebar and hidden on the full page", async () => {
+    const hint = (root: ParentNode) => root.querySelector(".account-hint") as HTMLElement;
+    const drawer = mountWith({ layout: "drawer" });
+    await flush();
+    expect(hint(drawer.el).hidden).toBe(false);
+    expect(hint(drawer.el).textContent).toBe(text("account.hint"));
+
+    const fullPage = mountWith({ layout: "page" });
+    await flush();
+    expect(hint(fullPage.el).hidden).toBe(true);
+  });
+
+  test("the intro line stays hidden when signed out, even in the sidebar", async () => {
+    const { el } = mountWith({ signedIn: () => false, layout: "drawer" });
+    await flush();
+    expect((el.querySelector(".account-hint") as HTMLElement).hidden).toBe(true);
+  });
+
+  test("glance rows take their label, icon and status from the sections", async () => {
+    const latest = (key: string) =>
+      key === "nodes" ? { state: "ready", data: [{ status: "slow" }, { status: "ok" }] } : undefined;
+    const { el } = mountWith({ latest });
+    await flush();
+    const rows = [...el.querySelectorAll(".glance-row")] as HTMLElement[];
+    expect(rows.map((row) => row.querySelector("b")?.textContent)).toEqual([
+      text("nav.local-tinycloud"),
+      text("nav.local-copy"),
+      text("nav.delegations"),
+      text("nav.nodes"),
+      text("nav.storage"),
+    ]);
+    const nodes = rows.find((row) => row.textContent?.includes(text("nav.nodes"))) as HTMLElement;
+    expect(nodes.querySelector(".st")?.textContent).toBe("1 slow");
+    expect(nodes.querySelector(".st")?.className).toBe("st st-warn");
+    expect(rows[0].querySelector(".st")).toBeNull();
+  });
+
+  test("a cache change repaints the row statuses in place", async () => {
+    let state = "ok";
+    const latest = (key: string) => (key === "storage" ? { state: "ready", data: { state } } : undefined);
+    const { el, dataListeners } = mountWith({ latest });
+    await flush();
+    const row = () =>
+      [...el.querySelectorAll(".glance-row")].find((r) => r.textContent?.includes(text("nav.storage"))) as HTMLElement;
+    const before = row();
+    expect(before.querySelector(".st")?.textContent).toBe("Normal");
+    state = "full";
+    for (const listener of dataListeners) listener();
+    expect(row()).toBe(before);
+    expect(before.querySelector(".st")?.textContent).toBe("Full");
   });
 
   test("Activity row is listed only in developer mode", async () => {

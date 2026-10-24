@@ -1,5 +1,10 @@
 import type { NodeRow, NodeStatus } from "../data";
-import type { HostContext, PanelSection } from "../slots";
+import type { HostContext, PanelSection, SectionStatus } from "../slots";
+import { registerPanelStrings } from "../strings-panel";
+import { NODES_STRINGS } from "./nodes.strings";
+import { viewStatus } from "./status";
+
+registerPanelStrings(NODES_STRINGS);
 import { alwaysAvailable, mountPlaceholder } from "./placeholder";
 import { applyResult, createStateLine, settle, startLoading, textLine } from "./view-body";
 
@@ -21,7 +26,19 @@ const KIND_WORD: Record<NodeRow["kind"], string> = {
 export const nodesSection: PanelSection = {
   id: "nodes",
   labelCode: "nav.nodes",
+  icon: "nodes",
+  summaryCode: "nodes.summary",
   isAvailable: alwaysAvailable,
+  status: (ctx) =>
+    viewStatus(ctx, ctx.data.latest("nodes"), (rows): SectionStatus => {
+      const count = String(rows.length);
+      if (rows.length === 0) return { text: ctx.text("nodes.glance.none"), tone: "off", count };
+      const down = rows.filter((row) => row.status === "down").length;
+      if (down > 0) return { text: ctx.text("nodes.glance.down", { count: down }), tone: "warn", count };
+      const slow = rows.filter((row) => row.status === "slow").length;
+      if (slow > 0) return { text: ctx.text("nodes.glance.slow", { count: slow }), tone: "warn", count };
+      return { text: ctx.text("nodes.glance.healthy"), tone: "ok", count };
+    }),
   mount(el, ctx: HostContext) {
     const data = ctx.client()?.data;
     if (!data) return mountPlaceholder(el);

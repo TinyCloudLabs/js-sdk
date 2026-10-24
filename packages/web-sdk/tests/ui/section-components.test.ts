@@ -88,7 +88,7 @@ describe("glanceRow", () => {
       icon: "monitor",
       label: "Storage",
       sublabel: "Usage and limits",
-      status: { word: "On", tone: "on" },
+      status: { text: "On", tone: "ok" },
       onOpen: () => {
         opened += 1;
       },

@@ -1,7 +1,8 @@
 import type { AccountInfo, ViewResult } from "../data";
-import type { PanelClient, PanelSection, SectionContext, SectionId } from "../slots";
+import type { PanelClient, PanelSection, SectionContext } from "../slots";
+import { registerPanelStrings } from "../strings-panel";
+import { ACCOUNT_STRINGS } from "./account.strings";
 import { alwaysAvailable } from "./placeholder";
-import { readGlanceStatus, UNAVAILABLE } from "./glance-status";
 import {
   actionButton,
   confirmBox,
@@ -11,8 +12,9 @@ import {
   statusNode,
   UI_STYLE,
   type ConfirmBox,
-  type IconName,
 } from "./ui";
+
+registerPanelStrings(ACCOUNT_STRINGS);
 
 const DISPLAY = '"Literata Variable","Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif';
 const MONO = 'ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace';
@@ -58,25 +60,6 @@ const STYLE = `
 }
 `;
 
-interface GlanceEntry {
-  readonly id: SectionId;
-  readonly icon: IconName;
-  readonly labelCode: string;
-  readonly subCode: string;
-  /** Shown only when the client exposes developer-mode request logs. */
-  readonly devOnly?: boolean;
-}
-
-/** At-a-glance rows, in nav order. Overview itself is not listed. */
-const GLANCE: readonly GlanceEntry[] = [
-  { id: "local-tinycloud", icon: "monitor", labelCode: "nav.local-tinycloud", subCode: "glance.local-tinycloud" },
-  { id: "local-copy", icon: "sync", labelCode: "nav.local-copy", subCode: "glance.local-copy" },
-  { id: "delegations", icon: "key", labelCode: "nav.delegations", subCode: "glance.delegations" },
-  { id: "nodes", icon: "nodes", labelCode: "nav.nodes", subCode: "glance.nodes" },
-  { id: "storage", icon: "drive", labelCode: "nav.storage", subCode: "glance.storage" },
-  { id: "activity", icon: "term", labelCode: "nav.activity", subCode: "glance.activity", devOnly: true },
-];
-
 /** Keeps the start and the last four characters of a long identifier, as in the mockup (did:pkh:0xEXAMPLE…c41d). */
 function middleTruncate(id: string): string {
   return id.length > 26 ? `${id.slice(0, 20)}…${id.slice(-4)}` : id;
@@ -92,7 +75,8 @@ function remaining(expires: Date, now: number): { hours: number; minutes: number
  * Overview: identity, session and app facts, sign out behind a confirm box,
  * At-a-glance rows, and the hide-button block.
  * Reads `client.data.account()`; re-reads on reset. Each row opens its section.
- * Glance statuses read the same data source and refresh on data change and each minute.
+ * Row labels, icons and statuses come from the sections themselves
+ * (`section.status(ctx)`), the same source as the page rail; the shell refreshes them.
  */
 function mountAccount(el: HTMLElement, ctx: SectionContext): () => void {
   const client: PanelClient | undefined = ctx.client();
@@ -106,7 +90,6 @@ function mountAccount(el: HTMLElement, ctx: SectionContext): () => void {
 
   let disposed = false;
   let seq = 0;
-  let glanceSeq = 0;
   let view: ViewResult<AccountInfo> = { state: "loading" };
   let signingOut = false;
   let signOutFailed = false;
@@ -188,16 +171,16 @@ function mountAccount(el: HTMLElement, ctx: SectionContext): () => void {
   glanceTitle.textContent = ctx.text("account.glance.title");
   const glance = document.createElement("div");
   glance.className = "glance account-glance";
-  const glanceRows: { id: SectionId; row: HTMLButtonElement }[] = [];
-  for (const entry of GLANCE) {
-    if (entry.devOnly && client?.requests === undefined) continue;
+  const glanceRows: Array<{ section: PanelSection; row: HTMLButtonElement }> = [];
+  for (const section of ctx.sections()) {
+    if (section.id === "account" || section.summaryCode === undefined) continue;
     const row = glanceRow({
-      icon: entry.icon,
-      label: ctx.text(entry.labelCode),
-      sublabel: ctx.text(entry.subCode),
-      onOpen: () => ctx.openSection(entry.id),
+      icon: section.icon,
+      label: ctx.text(section.labelCode),
+      sublabel: ctx.text(section.summaryCode),
+      onOpen: () => ctx.openSection(section.id),
     });
-    glanceRows.push({ id: entry.id, row });
+    glanceRows.push({ section, row });
     glance.append(row);
   }
   right.append(glanceTitle, glance);
@@ -234,7 +217,8 @@ function mountAccount(el: HTMLElement, ctx: SectionContext): () => void {
     if (disposed) return;
     const signed = client?.signedIn() === true;
     signedOut.hidden = signed;
-    hint.hidden = !signed;
+    // The hint points at the sidebar's switch; on the full page (and every phone) there is nothing to point at.
+    hint.hidden = !signed || ctx.layout() !== "drawer";
     cols.hidden = !signed;
     if (!signed) return;
 
@@ -257,7 +241,7 @@ function mountAccount(el: HTMLElement, ctx: SectionContext): () => void {
           .text("account.session.expires")
           .replace("{hours}", String(hours))
           .replace("{minutes}", String(minutes).padStart(2, "0"));
-        sessionValue.replaceChildren(statusNode({ word: expires, tone: "on" }));
+        sessionValue.replaceChildren(statusNode({ text: expires, tone: "ok" }));
       }
       appName.textContent = ready.appName;
       appHost.textContent = ready.appHost ?? "";
@@ -269,15 +253,10 @@ function mountAccount(el: HTMLElement, ctx: SectionContext): () => void {
     signOutNote.hidden = !signOutFailed;
   }
 
-  /** Re-reads every glance status. A rejected read shows the unavailable word, not a stale value. */
-  async function refreshGlance(): Promise<void> {
-    if (client?.signedIn() !== true) return;
-    const token = ++glanceSeq;
-    const statuses = await Promise.all(
-      glanceRows.map(({ id }) => readGlanceStatus(client?.data, id).catch(() => UNAVAILABLE)),
-    );
-    if (disposed || token !== glanceSeq) return;
-    glanceRows.forEach(({ row }, i) => setGlanceStatus(row, statuses[i]));
+  /** Repaints each row's status in place from its section, so a refresh keeps focus on the row. */
+  function paintGlance(): void {
+    if (disposed || client?.signedIn() !== true) return;
+    for (const { section, row } of glanceRows) setGlanceStatus(row, section.status(ctx));
   }
 
   function closeConfirm(): void {
@@ -375,21 +354,18 @@ function mountAccount(el: HTMLElement, ctx: SectionContext): () => void {
   }
 
   const offReset = client?.onReset(() => void load());
-  // Live glance statuses: any data change re-reads them, as does the minute tick below.
-  const offData = client?.data?.subscribe(() => void refreshGlance());
+  // The shell refreshes the cache on open, on data change and each minute; each refresh repaints the rows.
+  const offData = ctx.data.subscribe(paintGlance);
   // The session countdown is minute-grained, so one tick a minute is enough.
-  const timer = setInterval(() => {
-    render();
-    void refreshGlance();
-  }, 60_000);
+  const timer = setInterval(render, 60_000);
   void load();
-  void refreshGlance();
+  paintGlance();
 
   return () => {
     disposed = true;
     clearInterval(timer);
     offReset?.();
-    offData?.();
+    offData();
     el.replaceChildren();
   };
 }
@@ -397,6 +373,10 @@ function mountAccount(el: HTMLElement, ctx: SectionContext): () => void {
 export const accountSection: PanelSection = {
   id: "account",
   labelCode: "nav.account",
+  icon: "person",
   isAvailable: alwaysAvailable,
+  // Overview has no status of its own while signed in; signed out says so on the rail.
+  status: (ctx) =>
+    ctx.client()?.signedIn() === true ? undefined : { text: ctx.text("account.status.signed_out"), tone: "off" },
   mount: mountAccount,
 };

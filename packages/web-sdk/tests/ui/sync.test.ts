@@ -6,7 +6,7 @@ import { JSDOM } from "jsdom";
 // Re-check this path whenever jsdom is upgraded. It is not part of the SDK.
 import { implSymbol } from "jsdom/lib/jsdom/living/generated/utils.js";
 
-import { syncSection } from "../../src/ui/sections/sync";
+import { localCopySection } from "../../src/ui/sections/local-copy";
 import type {
   HostContext,
   PanelClient,
@@ -140,7 +140,7 @@ function makeCtx(facade: SyncFacade | undefined, header: HeaderFake = makeHeader
 function mount(facade: SyncFacade | undefined, header?: HeaderFake) {
   const el = document.createElement("div");
   document.body.appendChild(el);
-  const dispose = syncSection.mount(el, makeCtx(facade, header));
+  const dispose = localCopySection.mount(el, makeCtx(facade, header));
   cleanups.push(dispose);
   return { el, dispose };
 }
@@ -176,8 +176,8 @@ describe("availability", () => {
   test("row is unavailable without tc.sync and available with it", () => {
     const withoutSync = makeCtx(undefined);
     const withSync = makeCtx(makeFacade({ requested: false, effective: "off" }));
-    expect(syncSection.isAvailable(withoutSync)).toBe(false);
-    expect(syncSection.isAvailable(withSync)).toBe(true);
+    expect(localCopySection.isAvailable(withoutSync)).toBe(false);
+    expect(localCopySection.isAvailable(withSync)).toBe(true);
   });
 });
 

@@ -2,17 +2,15 @@
  * Toast queue for the always-on toasts part. Pure state, no DOM: the part
  * subscribes and renders. Text is a strings.ts code, never raw text.
  */
-import type { StringKey } from "./strings";
-import type { PanelStringKey } from "./strings-panel";
 
 export type ToastKind = "info" | "success" | "warning" | "error";
 
 export interface ToastRequest {
   readonly kind: ToastKind;
-  /** A launcher code, or a panel code when a section raises the toast (rendered by the panel chunk). */
-  readonly textCode: StringKey | PanelStringKey;
+  /** A launcher code, or a panel or section code when the panel raises the toast. Unknown codes render the neutral line. */
+  readonly textCode: string;
   readonly href?: string;
-  readonly hrefLabelCode?: StringKey;
+  readonly hrefLabelCode?: string;
 }
 
 /** Delivers a toast to the page's host. Returns false when nothing was shown. */
@@ -21,10 +19,10 @@ export type ToastSink = (request: ToastRequest) => boolean;
 export interface ToastView {
   readonly id: string;
   readonly kind: ToastKind;
-  readonly textCode: StringKey | PanelStringKey;
+  readonly textCode: string;
   /** Present only when it is an absolute https URL. */
   readonly href?: string;
-  readonly hrefLabelCode?: StringKey;
+  readonly hrefLabelCode?: string;
 }
 
 export interface ToastStoreOptions {
