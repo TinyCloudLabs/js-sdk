@@ -23,7 +23,15 @@ import type {
 } from "../data";
 import { viewReady } from "../view-result";
 
-export function createStubPanelData(): PanelDataFactory {
+/**
+ * Per-section overrides for preview and tests: one optional field per section, each replacing that
+ * section's default stub data. Defaults apply when a field is absent.
+ */
+export interface StubSeed {
+  readonly localCopy?: LocalCopyStatus;
+}
+
+export function createStubPanelData(seed: StubSeed = {}): PanelDataFactory {
   return (client) => {
     const requests: RequestsView = {
       rows: () => [],
@@ -43,15 +51,17 @@ export function createStubPanelData(): PanelDataFactory {
       localCopy: () => {
         const state = client.sync?.state;
         return Promise.resolve(
-          viewReady<LocalCopyStatus>({
-            source: "stub",
-            fieldSources: { requested: "real", effective: "real", reason: "real" },
-            requested: state?.requested ?? false,
-            effective: state?.effective ?? "unavailable",
-            reason: state?.reason,
-            folders: [STUB_FOLDER],
-            pending: 0,
-          }),
+          viewReady<LocalCopyStatus>(
+            seed.localCopy ?? {
+              source: "stub",
+              fieldSources: { requested: "real", effective: "real", reason: "real" },
+              requested: state?.requested ?? false,
+              effective: state?.effective ?? "unavailable",
+              reason: state?.reason,
+              folders: [STUB_FOLDER],
+              pending: 0,
+            },
+          ),
         );
       },
       delegations: () => Promise.resolve(viewReady<DelegationPage>({ rows: [STUB_DELEGATION] })),
