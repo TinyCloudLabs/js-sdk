@@ -14,6 +14,9 @@
  * - A prefix is the key form with exactly ONE trailing `/`. The trailing `/` is
  *   significant: `apps/foo/` and `apps/foo` are different resources and
  *   `apps/foo/` does not cover `apps/foobar`.
+ * - Under the reserved first segment `apps`, a key needs at least 3 segments
+ *   (`apps/<id>/<name>`) and a prefix at least 2 (`apps/<id>/`); `apps`,
+ *   `apps/<id>` as a key and `apps/` as a prefix are refused.
  * - The canonical form is the exact input. Non-canonical input is rejected and
  *   never normalized: wrong case, bad characters, empty segments, a
  *   non-canonical owner (EIP-55 for `did:pkh:eip155`).
@@ -164,6 +167,16 @@ function assertPath(path: string, what: "key path" | "prefix"): void {
     throw new EncryptionResourceError(
       "bad_path",
       `${what} ${JSON.stringify(path)} must match ${KEY_PATH_RE.source}`,
+    );
+  }
+  // Depth rule for the reserved `apps` first segment: a key is
+  // `apps/<id>/<name>...` (3 or more segments), a prefix is `apps/<id>/...`
+  // (2 or more). `apps`, `apps/<id>` as a key and `apps/` as a prefix are refused.
+  const segments = path.split("/");
+  if (segments[0] === "apps" && segments.length < (what === "key path" ? 3 : 2)) {
+    throw new EncryptionResourceError(
+      "bad_path",
+      `${what} ${JSON.stringify(path)} under apps/ needs ${what === "key path" ? "apps/<id>/<name>" : "apps/<id>/"}`,
     );
   }
 }
