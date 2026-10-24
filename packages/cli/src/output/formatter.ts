@@ -130,6 +130,18 @@ export async function withSpinner<T>(label: string, fn: () => Promise<T>): Promi
   if (shouldOutputJson()) {
     return fn();
   }
+  // A terminal that reports 0 columns cannot wrap a frame, so animating it
+  // never finishes clearing the previous one. Print one plain line per step.
+  if (process.stdout.columns === 0 || process.stderr.columns === 0) {
+    try {
+      const result = await fn();
+      process.stderr.write(`${label}\n`);
+      return result;
+    } catch (error) {
+      process.stderr.write(`${label} failed\n`);
+      throw error;
+    }
+  }
   const spinner = ora(label).start();
   try {
     const result = await fn();
