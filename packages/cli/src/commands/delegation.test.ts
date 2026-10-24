@@ -1,8 +1,8 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { Command } from "commander";
 import { DelegationManager } from "@tinycloud/sdk-core/delegations";
 import type { ServiceSession } from "@tinycloud/sdk-services";
-import { mkdtempSync, readdirSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 let hasRevokeAuthority = false;
@@ -25,6 +25,7 @@ let artifactReadCalls: number;
 let profileAuthMethod = "local";
 
 // Isolated home: set before anything runs, and checked before any write.
+const originalHome = { HOME: process.env.HOME, TC_HOME: process.env.TC_HOME };
 const testHome = mkdtempSync(join("/var/tmp", "tc1923."));
 process.env.HOME = testHome;
 process.env.TC_HOME = testHome;
@@ -33,6 +34,15 @@ function assertTestHome(): void {
     throw new Error("test HOME/TC_HOME is not the isolated tc1923 dir");
   }
 }
+
+afterAll(() => {
+  assertTestHome();
+  rmSync(testHome, { recursive: true, force: true });
+  for (const [key, value] of Object.entries(originalHome)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+});
 
 mock.module("../config/profiles.js", () => ({
   ProfileManager: {
