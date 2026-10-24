@@ -226,6 +226,14 @@ test('L4: a join state file whose in-file id differs from its name is refused an
   assert.equal(fs.existsSync(joinFile(OLD_INVITE_ID)), false);
 });
 
+test('L4: a join state file that is JSON null or not an object is refused with bad-join-state, not a TypeError, and left unchanged', () => {
+  for (const body of ['null', '[]', '"text"', '42', 'true']) {
+    fs.writeFileSync(joinFile(INVITE_ID), body, { mode: 0o600 });
+    assert.throws(() => readJoin(INVITE_ID), (e) => e.code === 'bad-join-state', body);
+    assert.equal(fs.readFileSync(joinFile(INVITE_ID), 'utf8'), body);
+  }
+});
+
 test('L4: a join state file whose id matches its name is read', () => {
   writeJoinFile(state('hello-sent'));
   assert.equal(readJoin(INVITE_ID).stage, 'hello-sent');

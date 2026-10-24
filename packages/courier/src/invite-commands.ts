@@ -114,11 +114,14 @@ const joinPath = (id: string) => {
   if (!INVITE_ID.test(id)) fail('internal', 'Join state has an invalid invite id.');
   return path.join(secureSubdir('joins'), `${id}.json`);
 };
-/** Reads the state of a join. A file whose in-file id is not the id it was asked for is refused, and nothing is changed. */
+/** Reads the state of a join. A file that is not an object, or whose in-file id is not the id it was asked for, is refused and nothing is changed. */
 export function readJoin(id: string): JoinState | undefined {
-  const state = readJson<JoinState>(joinPath(id));
-  if (state !== undefined && state.inviteId !== id) fail('bad-join-state', `The join state file for ${id} belongs to a different invite; it was not used.`);
-  return state;
+  const state: unknown = readJson<unknown>(joinPath(id));
+  if (state === undefined) return undefined;
+  if (typeof state !== 'object' || state === null || !('inviteId' in state) || state.inviteId !== id) {
+    fail('bad-join-state', `The join state file for ${id} is not that invite's join state; it was not used.`);
+  }
+  return state as JoinState;
 }
 const writeJoin = (state: JoinState) => writeSecure(joinPath(state.inviteId), state);
 const removeJoin = (id: string) => fs.rmSync(joinPath(id), { force: true });

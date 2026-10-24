@@ -168,7 +168,7 @@ tc courier join --resume
   file must exist, otherwise the command stops with an error (`watch
   --install-systemd` checks it too and writes `COURIER_PEERS_FILE` into the
   unit; every value written into the unit is escaped, and its path directives
-  must be absolute and free of control characters). A default location that is
+  must be absolute, free of control characters and not end in a backslash or whitespace). A default location that is
   absent counts as no entry. A peers file
   that exists but cannot be read as a JSON object, or a named file that has
   gone missing, refuses with `peers-unreadable`. Courier has no stored setting

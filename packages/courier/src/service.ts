@@ -105,11 +105,13 @@ const quoted = (s: string, expandsDollar: boolean) => {
 
 /**
  * A path directive takes the path as written (quotes and escapes are not interpreted there), so the value must be absolute and free of control
- * characters, and only `%` is doubled (specifiers are expanded in these directives; `$` is not).
+ * characters, and only `%` is doubled (specifiers are expanded in these directives; `$` is not). A trailing backslash would continue the line
+ * and swallow the next directive, and trailing whitespace is dropped by the parser, so both are refused.
  */
 const unitPath = (directive: string, p: string) => {
   if (CONTROL.test(p)) throw new CourierError('usage', `${directive} must not contain control characters.`);
   if (!path.isAbsolute(p)) throw new CourierError('usage', `${directive} must be an absolute path.`);
+  if (/[\\\s]$/.test(p)) throw new CourierError('usage', `${directive} must not end with a backslash or whitespace.`);
   return p.replace(/%/g, '%%');
 };
 

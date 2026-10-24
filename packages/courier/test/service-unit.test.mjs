@@ -61,6 +61,15 @@ test('StandardError=: the same path rules', () => {
   assert.deepEqual(lines(text).filter((line) => line.startsWith('StandardError=')), ['StandardError=append:/srv/p %%h $X "q" \\b']);
 });
 
+test('path directives refuse a trailing backslash (it would continue the line) and trailing whitespace', () => {
+  for (const tail of ['\\', ' ', '\\\\', '/dir\\']) {
+    assert.throws(() => unit({ cwd: `/srv/work${tail}` }), usage(/WorkingDirectory must not end with a backslash or whitespace/), JSON.stringify(tail));
+    assert.throws(() => unit({ logFile: `/srv/w.log${tail}` }), usage(/StandardOutput must not end with a backslash or whitespace/), JSON.stringify(tail));
+  }
+  // A backslash or space inside the path is still written as is.
+  assert.deepEqual(lines(unit({ cwd: '/srv/a\\b c/d' })).filter((line) => line.startsWith('WorkingDirectory=')), ['WorkingDirectory=/srv/a\\b c/d']);
+});
+
 test('a hostile value in any field never produces a line that is not a known directive', () => {
   const known = /^(\[(Unit|Service|Install)\]|(Description|After|Wants|Type|WorkingDirectory|Environment|ExecStart|KillMode|SendSIGKILL|TimeoutStopSec|Restart|RestartSec|StandardOutput|StandardError|WantedBy)=.*|)$/;
   const text = unit({ argv: [...BASE.argv, HOSTILE], env: { COURIER_PEERS_FILE: HOSTILE, COURIER_HOME: '/srv/h' }, cwd: HOSTILE_PATH, logFile: HOSTILE_PATH });
