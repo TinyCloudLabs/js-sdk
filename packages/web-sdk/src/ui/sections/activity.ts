@@ -164,7 +164,8 @@ function readEntry(value: unknown): Entry | undefined {
  * The log's entries, oldest first, or undefined when the snapshot cannot be read: an unreadable log is
  * not an empty one. Entries that share a key (no id, same fields) are told apart by their order.
  */
-function readLog(reader: RequestLogReader): Entry[] | undefined {
+function readLog(reader: RequestLogReader | undefined): Entry[] | undefined {
+  if (reader === undefined) return undefined;
   let snapshot: readonly unknown[];
   try {
     snapshot = reader.snapshot();
@@ -316,7 +317,7 @@ function headerRow(text: Text): HTMLElement {
   return row;
 }
 
-function mountActivity(el: HTMLElement, ctx: SectionContext, reader: RequestLogReader): () => void {
+function mountActivity(el: HTMLElement, ctx: SectionContext, initial: RequestLogReader): () => void {
   const text = ctx.text;
   const root = document.createElement("div");
   root.className = "act-root";
@@ -425,6 +426,7 @@ function mountActivity(el: HTMLElement, ctx: SectionContext, reader: RequestLogR
   // View state. Errors-only filters the view; Pause holds the rows taken at the click.
   let errorsOnly = false;
   let frozen: readonly Entry[] | undefined;
+  let reader: RequestLogReader | undefined = initial;
   let disposed = false;
   let frame: number | undefined;
   let primed = false;
@@ -587,21 +589,56 @@ function mountActivity(el: HTMLElement, ctx: SectionContext, reader: RequestLogR
   // Copy all copies the rows on screen: the filter, the pause and the cap all apply.
   copyAllButton.addEventListener("click", () => void copyEntries(shown, "activity.copied_many"));
 
-  const offLog = reader.subscribe(() => schedule());
-  // A clear (sign-out, account switch) empties the table at once and drops any rows held by Pause.
-  const offClear = reader.onClear(() => {
+  // Everything below is keyed by the client: its log, the rows held by Pause, the rows drawn, and the
+  // listeners on both. A reset (sign-out, account switch) or a replaced client starts a new epoch; a callback
+  // from an earlier epoch does nothing, even from a log whose unsubscribe did not take effect.
+  let epoch = 0;
+  let offClient: Array<() => void> = [];
+  function bind(): void {
+    for (const off of offClient) off();
+    epoch += 1;
+    const mine = epoch;
+    const client = ctx.client();
+    reader = client?.requests;
     frozen = undefined;
     if (frame !== undefined) cancelAnimationFrame(frame);
     frame = undefined;
-    if (!disposed) {
-      render();
-      ctx.requestRender();
+    elements.clear();
+    known = new Set();
+    primed = false;
+    offClient = [];
+    if (reader !== undefined) {
+      offClient.push(
+        reader.subscribe(() => {
+          if (mine === epoch) schedule();
+        }),
+        // A clear empties the table at once and drops any rows held by Pause.
+        reader.onClear(() => {
+          if (mine !== epoch || disposed) return;
+          frozen = undefined;
+          if (frame !== undefined) cancelAnimationFrame(frame);
+          frame = undefined;
+          render();
+          ctx.requestRender();
+        }),
+      );
     }
-  });
+    const offReset = client?.onReset(rebind);
+    if (offReset !== undefined) offClient.push(offReset);
+    const offSync = client?.sync?.subscribe(() => {
+      if (mine === epoch && !disposed) renderFacts();
+    });
+    if (offSync !== undefined) offClient.push(offSync);
+  }
+  function rebind(): void {
+    if (disposed) return;
+    bind();
+    render();
+    ctx.requestRender();
+  }
+  bind();
+  const offChange = ctx.onClientChange(rebind);
   const offData = ctx.data.subscribe(() => {
-    if (!disposed) renderFacts();
-  });
-  const offSync = ctx.client()?.sync?.subscribe(() => {
     if (!disposed) renderFacts();
   });
 
@@ -609,10 +646,10 @@ function mountActivity(el: HTMLElement, ctx: SectionContext, reader: RequestLogR
 
   return () => {
     disposed = true;
-    offLog();
-    offClear();
+    epoch += 1;
+    for (const off of offClient) off();
+    offChange();
     offData();
-    offSync?.();
     if (frame !== undefined) cancelAnimationFrame(frame);
     elements.clear();
     el.replaceChildren();

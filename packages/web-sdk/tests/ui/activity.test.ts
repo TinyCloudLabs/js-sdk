@@ -126,6 +126,17 @@ function fakeLog(initial: Array<Record<string, unknown>> = []) {
   return {
     reader,
     listeners: () => pushed.size + cleared.size,
+    /** Mimics a reader whose unsubscribe functions do nothing: late events still reach the old callback. */
+    ignoreUnsubscribe() {
+      reader.subscribe = (cb) => {
+        pushed.add(cb);
+        return () => undefined;
+      };
+    },
+    /** Replaces the log's content without telling anyone, as a new session's log would start. */
+    replace(next: Array<Record<string, unknown>>) {
+      rows = [...next];
+    },
     push(row: Record<string, unknown>) {
       rows.push(row);
       for (const cb of [...pushed]) cb(row);
@@ -142,6 +153,10 @@ interface Harness {
   readonly toasts: ToastRequest[];
   readonly renders: () => number;
   readonly dispose: () => void;
+  /** The panel's client is replaced by one with this log, as when the host registers another client. */
+  readonly swapClient: (reader: RequestLogReader | undefined) => void;
+  /** The current client's sign-out / account-switch reset. */
+  readonly resetClient: () => void;
 }
 
 function mountWith(
@@ -150,9 +165,29 @@ function mountWith(
 ): Harness {
   const toasts: ToastRequest[] = [];
   let renders = 0;
-  const client = { id: 1, signedIn: () => true, requests: reader, sync: extras.sync } as unknown as PanelClient;
+  let resetListeners = new Set<() => void>();
+  const changeListeners = new Set<() => void>();
+  const clientFor = (log: RequestLogReader | undefined) => {
+    resetListeners = new Set();
+    const mine = resetListeners;
+    return {
+      id: 1,
+      signedIn: () => true,
+      requests: log,
+      sync: extras.sync,
+      onReset(cb: () => void) {
+        mine.add(cb);
+        return () => void mine.delete(cb);
+      },
+    } as unknown as PanelClient;
+  };
+  let client = clientFor(reader);
   const ctx = {
     client: () => client,
+    onClientChange(cb: () => void) {
+      changeListeners.add(cb);
+      return () => void changeListeners.delete(cb);
+    },
     text: panelText,
     appLabel: () => extras.app,
     toast: (request: ToastRequest) => {
@@ -170,7 +205,19 @@ function mountWith(
   page.document.body.append(el);
   const dispose = activitySection.mount(el, ctx);
   cleanups.push(dispose);
-  return { el, toasts, renders: () => renders, dispose };
+  return {
+    el,
+    toasts,
+    renders: () => renders,
+    dispose,
+    swapClient(next) {
+      client = clientFor(next);
+      for (const cb of [...changeListeners]) cb();
+    },
+    resetClient() {
+      for (const cb of [...resetListeners]) cb();
+    },
+  };
 }
 
 const rowsOf = (el: HTMLElement) => [...el.querySelectorAll<HTMLElement>(".act-ar:not(.act-hd)")];
@@ -567,5 +614,82 @@ describe("section entry", () => {
     expect(statusFor([entry(1, { ok: null })])).toBeUndefined();
     // A failure that is known still counts, whatever else is unknown.
     expect(statusFor([entry(1, { ok: undefined }), entry(2, { ok: false })])).toEqual({ text: "1 errors", tone: "warn" });
+  });
+});
+
+describe("one account's log never feeds another's table", () => {
+  test("a replaced client: the old log stops feeding rows and the new log's rows show", () => {
+    const first = fakeLog([entry(1, { op: "kv/old" })]);
+    const second = fakeLog([entry(1, { op: "kv/new" })]);
+    const { el, swapClient } = mountWith(first.reader);
+    swapClient(second.reader);
+    expect(first.listeners()).toBe(0);
+    expect(second.listeners()).toBe(2);
+    expect(rowsOf(el).map((row) => cellText(row, "act-c-op"))).toEqual(["kv/new"]);
+    first.push(entry(2, { op: "kv/old2" }));
+    second.push(entry(3, { op: "kv/new2" }));
+    runFrames();
+    expect(rowsOf(el).map((row) => cellText(row, "act-c-op"))).toEqual(["kv/new2", "kv/new"]);
+  });
+
+  test("a replaced client with no log says the log can't be read, and shows none of the old rows", () => {
+    const first = fakeLog([entry(1)]);
+    const { el, swapClient } = mountWith(first.reader);
+    swapClient(undefined);
+    expect(rowsOf(el)).toHaveLength(0);
+    expect(el.querySelector('[role="table"]')?.textContent).toContain("The request log can't be read right now.");
+    expect(first.listeners()).toBe(0);
+  });
+
+  test("an old log that ignores unsubscribe cannot paint after the swap", () => {
+    const first = fakeLog([entry(1, { op: "kv/old" })]);
+    first.ignoreUnsubscribe();
+    const second = fakeLog([entry(1, { op: "kv/new" })]);
+    const { el, swapClient, renders } = mountWith(first.reader);
+    swapClient(second.reader);
+    const before = renders();
+    first.push(entry(2, { op: "kv/old2" }));
+    expect(frames.size).toBe(0);
+    runFrames();
+    expect(renders()).toBe(before);
+    expect(rowsOf(el).map((row) => cellText(row, "act-c-op"))).toEqual(["kv/new"]);
+  });
+
+  test("a reset drops rows held by Pause even when the log sends no clear", () => {
+    const log = fakeLog([entry(1, { op: "kv/old" })]);
+    const { el, resetClient } = mountWith(log.reader);
+    button(el, "Pause live").click();
+    log.replace([entry(2, { op: "kv/new" })]);
+    resetClient();
+    expect(button(el, "Pause live")).toBeDefined();
+    expect(rowsOf(el).map((row) => cellText(row, "act-c-op"))).toEqual(["kv/new"]);
+  });
+
+  test("after a reset a row with a reused id shows the new content, not the old row", () => {
+    const log = fakeLog([entry(1, { op: "kv/old", path: "old/" })]);
+    const { el, resetClient } = mountWith(log.reader);
+    log.replace([entry(1, { op: "kv/new", path: "new/" })]);
+    resetClient();
+    const [row] = rowsOf(el);
+    expect(cellText(row as Element, "act-c-op")).toBe("kv/new");
+    expect(cellText(row as Element, "act-c-path")).toBe("new/");
+    expect(row?.classList.contains("act-new")).toBe(false);
+  });
+
+  test("a reset listens to the log again, and dispose removes every listener including the client ones", () => {
+    const log = fakeLog();
+    const { el, resetClient, swapClient, dispose } = mountWith(log.reader);
+    resetClient();
+    expect(log.listeners()).toBe(2);
+    log.push(entry(1));
+    runFrames();
+    expect(rowsOf(el)).toHaveLength(1);
+    const next = fakeLog();
+    swapClient(next.reader);
+    dispose();
+    expect(next.listeners()).toBe(0);
+    resetClient();
+    swapClient(next.reader);
+    expect(next.listeners()).toBe(0);
   });
 });
