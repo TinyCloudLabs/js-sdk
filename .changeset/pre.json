@@ -29,6 +29,7 @@
     "@tinycloud/sdk-services-test": "21.0.0"
   },
   "changesets": [
+    "courier-test-home-fence",
     "init-spinner-zero-columns",
     "siwe-domain-uri-follow-origin",
     "tc-1923-revoke-scope-docs"
