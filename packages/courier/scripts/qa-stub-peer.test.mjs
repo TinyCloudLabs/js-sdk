@@ -50,7 +50,7 @@ async function blockScenario(fn = cycle) {
 async function answerScenario(fn = cycle, decision = 'deny', wrongId = false) {
   const state = initialState(); state.paired = true;
   const askId = '01AAAAAAAAAAAAAAAAAAAAAAAA';
-  state.asks[askId] = { askId, threadId: 'thread1', messageId: 'ask-message' };
+  state.asks[askId] = { askId, peer: 'qa-peer', threadId: 'thread1', messageId: 'ask-message' };
   const item = message('answer-message', `${decision} ${wrongId ? '01BBBBBBBBBBBBBBBBBBBBBBBB' : askId}`);
   const sends = [];
   const courier = async argv => argv[0] === 'inbox' ? { items: [item] }
@@ -95,7 +95,7 @@ test('argument, home, text, cue and answer guards', async () => {
 test('mutation proof: reply-once, block, ask-id and approve guards', async () => {
   const original = fs.readFileSync(source, 'utf8');
   const mutations = [
-    ['reply-once', 'if (state.seen.includes(item.messageId))', 'if (false)', onceScenario],
+    ['reply-once', 'if (state.seen.includes(key))', 'if (false)', onceScenario],
     ['block', 'if (state.blocked || !state.paired)', 'if (!state.paired)', blockScenario],
     ['ask-id', 'answer.askId !== openAsk.askId', 'false', fn => answerScenario(fn, 'approve', true)],
     ['approve-only', "if (answer.answer === 'approve') state.resumedActions++", 'if (true) state.resumedActions++', answerScenario],
@@ -156,6 +156,183 @@ test('kept-state and purge ownership mutation proof', async () => {
   }
 });
 
+// Review regressions keep all original assertions intact.
+const peerModule = await import('./qa-stub-peer.mjs');
+const scratchModule = async (name, from, to, transform = code => code) => {
+  const original = fs.readFileSync(source, 'utf8');
+  assert.ok(original.includes(from), name);
+  const file = path.join(root, `review-mutant-${name}.mjs`);
+  fs.writeFileSync(file, transform(original.replace(from, to)).replace("'./qa-stub-safety.mjs'", JSON.stringify(fileURLToPath(new URL('./qa-stub-safety.mjs', import.meta.url)))), { mode: 0o600 });
+  return { file, module: await import(pathToFileURL(file)) };
+};
+
+async function differentPeerScenario(fn = cycle) {
+  const state = initialState(); state.paired = true;
+  const askId = '01AAAAAAAAAAAAAAAAAAAAAAAA';
+  state.asks[askId] = { askId, peer: 'qa-peer', threadId: 'thread1', messageId: 'ask-message' };
+  let item = { ...message('answer-message', `approve ${askId}`), peer: 'second-paired-peer' };
+  const sends = [];
+  const courier = async argv => argv[0] === 'inbox' ? { items: [item] }
+    : argv[0] === 'read' ? { entries: [{ side: 'peer', id: item.messageId, body: { metadata: { 'https://tinycloud.xyz/ext/courier/v0': { inReplyTo: 'ask-message' } } } }] }
+    : sends.push(argv);
+  await fn(state, courier, 'fixed', 'approve');
+  assert.equal(state.answersReceived, 0, 'matching ids and reply reference from a different paired peer are refused');
+  assert.equal(state.resumedActions, 0);
+  assert.equal(state.unparseable, 1);
+  assert.equal(sends.length, 0);
+  item = { ...item, peer: 'qa-peer' }; // same thread/message id, now from the intended peer
+  await fn(state, courier, 'fixed', 'approve');
+  assert.equal(state.answersReceived, 1, 'the rejected peer cannot consume the intended peer delivery identity');
+  assert.equal(state.resumedActions, 1);
+  assert.equal(sends.length, 1);
+}
+
+async function tupleScenario(fn = cycle) {
+  const state = initialState(); state.paired = true;
+  const items = [message(), { ...message(), peer: 'second-paired-peer' }, { ...message(), threadId: 'thread2' }];
+  const sends = [];
+  const courier = async argv => argv[0] === 'inbox' ? { items } : sends.push(argv);
+  await fn(state, courier, 'fixed', 'approve'); await fn(state, courier, 'fixed', 'approve');
+  assert.equal(sends.length, 3, 'pending and seen distinguish peer/thread/message tuples');
+  assert.equal(state.seen.length, 3);
+}
+
+test('answers bind intended peer and delivery identities use full tuples', async () => {
+  await differentPeerScenario(); await tupleScenario();
+  const peerMutation = await scratchModule('answer-peer', 'item.peer !== openAsk.peer || ', '');
+  await assert.rejects(() => differentPeerScenario(peerMutation.module.cycle), assert.AssertionError);
+  await differentPeerScenario();
+  const tupleMutation = await scratchModule('delivery-tuple', 'JSON.stringify([item.peer, item.threadId, item.messageId])', 'item.messageId');
+  await assert.rejects(() => tupleScenario(tupleMutation.module.cycle), assert.AssertionError);
+  await tupleScenario();
+  console.log('MUTATION answer-peer + delivery-tuple: each failed as expected; restored green');
+});
+
+function keptFixture() {
+  const dir = allocate();
+  fs.mkdirSync(path.join(dir, 'courier'), { mode: 0o700 });
+  fs.writeFileSync(path.join(dir, 'courier', 'profile.json'), JSON.stringify({ host: 'http://127.0.0.1:8000', peers: {} }), { mode: 0o600 });
+  fs.writeFileSync(path.join(dir, 'status.json'), JSON.stringify(initialState()), { mode: 0o600 });
+  fs.writeFileSync(path.join(dir, 'qa-stub.json'), JSON.stringify({ type: 'qa-courier-stub-v1', state: dir, pid: null }), { mode: 0o600 });
+  return dir;
+}
+const commandEnv = { PATH: process.env.PATH };
+const stateCommand = (file, dir, args) => run(process.execPath, [file, ...args, '--state', dir], { env: commandEnv, timeout: 8000 }).then(result => ({ ...result, code: 0 }), error => error);
+const startAttempt = (file, dir) => {
+  const child = spawn(process.execPath, [file, 'start', '--host', 'http://127.0.0.1:8000', '--state', dir], { env: commandEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+  let stdout = '', stderr = '';
+  child.stdout.on('data', data => { stdout += data; });
+  child.stderr.on('data', data => { stderr += data; });
+  const outcome = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { child.kill('SIGTERM'); reject(new Error('bounded concurrent start timed out')); }, 8000);
+    child.stdout.on('data', () => { if (stdout.split('\n').some(line => { try { return JSON.parse(line).ready; } catch { return false; } })) { clearTimeout(timer); resolve({ ready: true, child }); } });
+    child.once('exit', code => { clearTimeout(timer); resolve({ ready: false, code, stderr, child }); });
+    child.once('error', error => { clearTimeout(timer); reject(error); });
+  });
+  return { child, outcome };
+};
+async function finishAttempt(attempt) {
+  const child = attempt.child;
+  if (child.exitCode === null && child.signalCode === null) {
+    const done = new Promise(resolve => child.once('exit', resolve));
+    child.kill('SIGTERM');
+    await Promise.race([done, new Promise(resolve => setTimeout(resolve, 1500))]);
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+  }
+}
+
+async function exclusiveScenario(module = peerModule) {
+  const dir = allocate();
+  const claim = module.claimLifecycle(dir);
+  try { assert.throws(() => module.claimLifecycle(dir), /lifecycle lock/, 'second lifecycle claim must fail atomically'); }
+  finally { claim.release(); }
+}
+
+test('lifecycle lock is exclusive, nonce-owned, and detects reused process identities', async () => {
+  await exclusiveScenario();
+  const dir = allocate();
+  const claim = peerModule.claimLifecycle(dir);
+  const file = path.join(dir, 'lifecycle.lock');
+  const recorded = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(recorded.pid, process.pid); assert.equal(recorded.startTime, peerModule.processStartTime(process.pid));
+  assert.equal(recorded.nonce, claim.nonce);
+  fs.writeFileSync(file, JSON.stringify({ ...recorded, nonce: 'replacement-owner' }));
+  assert.throws(() => claim.assertHeld(), /ownership changed/);
+  claim.release();
+  assert.equal(fs.existsSync(file), true, 'release cannot unlink another nonce');
+  fs.unlinkSync(file);
+  assert.doesNotThrow(() => peerModule.assertRunning({ pid: process.pid, startTime: peerModule.processStartTime(process.pid) }));
+  assert.throws(() => peerModule.assertRunning({ pid: process.pid, startTime: 'different-start-time' }), /stale process identity/);
+  const lockMutation = await scratchModule('exclusive-lock', "fs.openSync(file, 'wx', 0o600)", "fs.openSync(file, 'w', 0o600)");
+  await assert.rejects(() => exclusiveScenario(lockMutation.module), assert.AssertionError);
+  await exclusiveScenario();
+  const pidMutation = await scratchModule('process-start', 'processStartTime(owner.pid) !== owner.startTime', 'false');
+  assert.throws(() => assert.throws(() => pidMutation.module.assertRunning({ pid: process.pid, startTime: 'reused' }), /stale process identity/), assert.AssertionError);
+  console.log('MUTATION exclusive-lock + process-start: each failed as expected; restored green');
+});
+
+test('two simultaneous kept-state starts have exactly one winner', { timeout: 15000 }, async () => {
+  const dir = keptFixture();
+  const attempts = [startAttempt(source, dir), startAttempt(source, dir)];
+  try {
+    const results = await Promise.all(attempts.map(a => a.outcome));
+    assert.equal(results.filter(r => r.ready).length, 1);
+    const rejected = results.find(r => !r.ready);
+    assert.equal(rejected.code, 1); assert.match(rejected.stderr, /lifecycle lock/);
+    const stopped = await stateCommand(source, dir, ['stop', '--keep-state']);
+    assert.equal(stopped.code, 0);
+    assert.equal(fs.existsSync(path.join(dir, 'lifecycle.lock')), false);
+    console.log('LIFECYCLE concurrent start/start: exactly one ready; loser refused lifecycle lock');
+  } finally { await Promise.all(attempts.map(finishAttempt)); }
+});
+
+async function purgeLockScenario(file = source) {
+  const dir = keptFixture();
+  const claim = peerModule.claimLifecycle(dir); // startup paused after its atomic claim, before marker update
+  try {
+    const result = await stateCommand(file, dir, ['purge']);
+    assert.equal(result.code, 1, 'purge must acquire the same lifecycle lock as start');
+    assert.match(result.stderr, /lifecycle lock/);
+    assert.equal(fs.existsSync(dir), true);
+  } finally { claim.release(); }
+}
+
+test('purge serializes with start, including the stopped-marker startup window', { timeout: 20000 }, async () => {
+  await purgeLockScenario();
+  const dir = keptFixture();
+  const start = startAttempt(source, dir);
+  try {
+    const [started, purged] = await Promise.all([start.outcome, stateCommand(source, dir, ['purge'])]);
+    assert.equal(Number(started.ready) + Number(purged.code === 0), 1, 'concurrent purge/start has one winner');
+    if (started.ready) {
+      assert.equal(purged.code, 1); assert.match(purged.stderr, /lifecycle lock/);
+      assert.equal((await stateCommand(source, dir, ['stop', '--keep-state'])).code, 0);
+    } else { assert.equal(started.code, 1); assert.equal(fs.existsSync(dir), false); }
+  } finally { await finishAttempt(start); }
+  const mutation = await scratchModule('purge-lock', "command === 'start' || command === 'purge' ? claimLifecycle(stateDir)", "command === 'start' ? claimLifecycle(stateDir)", code => code.replace('      claim.assertHeld();', ''));
+  await assert.rejects(() => purgeLockScenario(mutation.file), assert.AssertionError);
+  await purgeLockScenario();
+  console.log('MUTATION purge-lock: unsafe purge failed regression; restored green');
+  console.log('LIFECYCLE concurrent purge/start: one winner; stopped-marker claim window protected');
+});
+
+test('explicit state refuses unmarked empty and registry-only directories', async () => {
+  for (const registryOnly of [false, true]) {
+    const dir = allocate();
+    if (registryOnly) fs.writeFileSync(path.join(dir, 'created-paths'), dir + '\n', { mode: 0o600 });
+    const result = await stateCommand(source, dir, ['start', '--host', 'http://127.0.0.1:8000']);
+    assert.equal(result.code, 1); assert.match(result.stderr, /explicit --state requires.*marker/);
+    assert.equal(fs.existsSync(path.join(dir, 'qa-stub.json')), false);
+    assert.equal(fs.existsSync(path.join(dir, 'lifecycle.lock')), false);
+  }
+  const scenario = module => assert.throws(() => module.assertInitializable(false, false), /ownership marker/);
+  scenario(peerModule);
+  const mutation = await scratchModule('explicit-state', '!allocated && !markerPresent', 'false');
+  assert.throws(() => scenario(mutation.module), assert.AssertionError);
+  scenario(peerModule);
+  console.log('MUTATION explicit-state: unmarked acceptance failed regression; restored green');
+});
+
 const binary = process.env.TC_REPLICATION_E2E_NODE_BIN;
 test('real local node: all four matrix flows, controls, restart and safety audit', { skip: !binary, timeout: 420_000 }, async () => {
   const server = createServer();
@@ -205,7 +382,7 @@ test('real local node: all four matrix flows, controls, restart and safety audit
     const req = await peer(['init', '--request', '--host', host, '--handle', 'qa-peer']);
     const grant = path.join(root, 'peer-grant.json'); fs.writeFileSync(grant, JSON.stringify(await grantFromRequest(owner, req)), { mode: 0o600 });
     await peer(['init', '--grant-file', grant]); fs.unlinkSync(grant);
-    const info = await launch(allocate());
+    const info = await launch();
     const af = path.join(root, 'a.json'); fs.writeFileSync(af, JSON.stringify(info.artifact), { mode: 0o600 });
     const artB = await peer(['pair', 'accept', '--file', af]);
     const bf = path.join(root, 'b.json'); fs.writeFileSync(bf, JSON.stringify(artB), { mode: 0o600 });
@@ -218,7 +395,7 @@ test('real local node: all four matrix flows, controls, restart and safety audit
     const started = await control('cue', 'send-thread');
     assert.ok(peerText(await read(started.threadId)).some(t => t.includes('please read')));
     const reply = await peer(['send', 'qa-stub', '--thread', started.threadId, '--text', 'QA peer read and replied', '--intent', 'answer', '--reply-to', started.messageId]);
-    await wait(() => snapshot().seen.includes(reply.messageId));
+    await wait(() => snapshot().seen.some(key => JSON.parse(key)[2] === reply.messageId));
     assert.equal(peerText(await read(started.threadId)).filter(t => t.includes(reply.messageId)).length, 1);
     console.log('E2E follow-a-conversation + reply: read stub thread; fixed acknowledgement once');
 
@@ -252,7 +429,7 @@ test('real local node: all four matrix flows, controls, restart and safety audit
     assert.equal(snapshot().answersReceived, 2); assert.equal(snapshot().resumedActions, 1);
 
     const fresh = await peer(['send', 'qa-stub', '--new', 'Fresh request', '--text', 'Please acknowledge', '--intent', 'request']);
-    await wait(() => snapshot().seen.includes(fresh.messageId));
+    await wait(() => snapshot().seen.some(key => JSON.parse(key)[2] === fresh.messageId));
     assert.equal(peerText(await read(fresh.threadId)).filter(t => t.includes(fresh.messageId)).length, 1);
     await control('cue', 'block');
     const queued = await peer(['send', 'qa-stub', '--thread', fresh.threadId, '--text', 'While blocked', '--intent', 'request']);
@@ -260,7 +437,7 @@ test('real local node: all four matrix flows, controls, restart and safety audit
     await new Promise(r => setTimeout(r, 1200));
     assert.equal(peerText(await read(fresh.threadId)).filter(t => t.includes(queued.messageId)).length, 0);
     assert.equal(fs.readFileSync(path.join(stubState, 'safety.jsonl'), 'utf8'), safetyBefore, 'blocked stub makes no node calls');
-    await control('cue', 'unblock'); await wait(() => snapshot().seen.includes(queued.messageId));
+    await control('cue', 'unblock'); await wait(() => snapshot().seen.some(key => JSON.parse(key)[2] === queued.messageId));
     assert.equal(peerText(await read(fresh.threadId)).filter(t => t.includes(queued.messageId)).length, 1);
     await control('cue', 'pause', fresh.threadId);
     assert.ok((await read(fresh.threadId)).some(e => e.body.metadata?.['https://tinycloud.xyz/ext/courier/v0']?.notice === 'thread-paused'));
@@ -291,7 +468,7 @@ test('real local node: all four matrix flows, controls, restart and safety audit
     const after = JSON.parse(fs.readFileSync(path.join(stubState, 'courier', 'profile.json'), 'utf8'));
     assert.equal(after.courierDid, before.courierDid); assert.deepEqual(after.peers, before.peers);
     const again = await peer(['send', 'qa-stub', '--new', 'Returning request', '--intent', 'request', '--text', 'Returning profile']);
-    await wait(() => snapshot().seen.includes(again.messageId));
+    await wait(() => snapshot().seen.some(key => JSON.parse(key)[2] === again.messageId));
     assert.equal(peerText(await read(again.threadId)).filter(t => t.includes(again.messageId)).length, 1);
     const returningAudit = fs.readFileSync(path.join(stubState, 'safety.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
     for (const call of returningAudit.filter(e => e.type === 'child')) { assert.equal(call.file, process.execPath); assert.equal(call.argv[2], cli); assert.ok(allowedCommands.includes(call.argv[3])); assert.ok(!call.envKeys.some(k => /API_KEY|TOKEN|NOTIFY/.test(k))); }

@@ -12,10 +12,56 @@ const GUARD = fileURLToPath(new URL('./qa-stub-safety.mjs', import.meta.url));
 const ROOT = /^\/var\/tmp\/tc2001stub\.[A-Za-z0-9]{6}$/;
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 const json = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
+const PROCESS_NONCE = randomUUID();
 const write = (file, value) => {
-  fs.writeFileSync(file + '.new', JSON.stringify(value), { mode: 0o600 });
-  fs.renameSync(file + '.new', file);
+  const temporary = `${file}.new.${process.pid}.${PROCESS_NONCE}.${randomUUID()}`;
+  try {
+    fs.writeFileSync(temporary, JSON.stringify(value), { mode: 0o600, flag: 'wx' });
+    fs.renameSync(temporary, file);
+  } finally {
+    if (fs.existsSync(temporary)) fs.unlinkSync(temporary);
+  }
 };
+
+export function processStartTime(pid) {
+  // comm may itself contain spaces or parentheses; fields after the final ')' start at field 3.
+  const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+  return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19];
+}
+
+export function assertRunning(owner) {
+  if (!Number.isInteger(owner.pid) || !owner.startTime) throw new Error('stub is stopped or has a stale process identity');
+  try {
+    process.kill(owner.pid, 0);
+    if (processStartTime(owner.pid) !== owner.startTime) throw new Error('reused pid');
+  } catch { throw new Error('stub has a stale process identity'); }
+}
+
+export function claimLifecycle(stateDir) {
+  const file = path.join(stateDir, 'lifecycle.lock');
+  const identity = { pid: process.pid, startTime: processStartTime(process.pid), nonce: randomUUID() };
+  let fd;
+  try { fd = fs.openSync(file, 'wx', 0o600); }
+  catch (error) {
+    if (error.code === 'EEXIST') throw new Error('state lifecycle lock is held; concurrent start/purge refused');
+    throw error;
+  }
+  fs.writeFileSync(fd, JSON.stringify(identity));
+  fs.closeSync(fd);
+  return { ...identity, assertHeld() {
+    if (json(file).nonce !== identity.nonce) throw new Error('state lifecycle lock ownership changed');
+  }, release() {
+    try {
+      if (json(file).nonce === identity.nonce) fs.unlinkSync(file);
+    } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  } };
+}
+
+export function assertInitializable(allocated, markerPresent) {
+  if (!allocated && !markerPresent) throw new Error('explicit --state requires a stopped stub ownership marker');
+}
+
+export const messageKey = item => JSON.stringify([item.peer, item.threadId, item.messageId]);
 export function safeText(value, max = 500) {
   if (typeof value !== 'string' || !value || value.length > max || /[\x00-\x1f\x7f]|[\u200b-\u200f\u202a-\u202e\u2066-\u2069]/u.test(value) || /Bearer |-----BEGIN|(?:api[_-]?key|token|secret)\s*[:=]/i.test(value)) throw new Error('text refused: length, hidden characters, or credential pattern');
   return value;
@@ -30,7 +76,9 @@ export function assertState(state, courierHome) {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       if (entry.isSymbolicLink()) throw new Error('state contains a symlink');
       const file = path.join(dir, entry.name);
-      if (fs.statSync(file).uid !== process.getuid() || (fs.statSync(file).mode & 0o077)) throw new Error('state has non-private files');
+      let stat;
+      try { stat = fs.statSync(file); } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+      if (stat.uid !== process.getuid() || (stat.mode & 0o077)) throw new Error('state has non-private files');
       if (entry.isDirectory()) inspect(file);
     }
   };
@@ -69,11 +117,12 @@ export async function cycle(state, courier, replyText, decision) {
   const inbox = await courier(['inbox', '--json']);
   if (inbox.errors?.length) throw new Error('Courier inbox reported a peer error; stub stopped');
   for (const item of inbox.items) {
-    if (!state.pending.some(x => x.messageId === item.messageId)) state.pending.push(item);
+    if (!state.pending.some(x => messageKey(x) === messageKey(item))) state.pending.push(item);
   }
   for (const item of [...state.pending]) {
+    const key = messageKey(item);
     if (state.pausedThreads.includes(item.threadId)) continue;
-    if (state.seen.includes(item.messageId)) { state.pending = state.pending.filter(x => x.messageId !== item.messageId); continue; }
+    if (state.seen.includes(key)) { state.pending = state.pending.filter(x => messageKey(x) !== key); continue; }
     if (!state.threads.includes(item.threadId)) state.threads.push(item.threadId);
     const openAsk = Object.values(state.asks).find(a => a.threadId === item.threadId);
     if (openAsk) {
@@ -81,7 +130,7 @@ export async function cycle(state, courier, replyText, decision) {
       const history = await courier(['read', item.threadId, '--peer', item.peer, '--json']);
       const entry = history.entries.find(e => e.side === 'peer' && e.id === item.messageId);
       const correlated = entry?.body?.metadata?.['https://tinycloud.xyz/ext/courier/v0']?.inReplyTo === openAsk.messageId;
-      if (!answer || answer.askId !== openAsk.askId || openAsk.answer || !correlated) state.unparseable++;
+      if (item.peer !== openAsk.peer || !answer || answer.askId !== openAsk.askId || openAsk.answer || !correlated) state.unparseable++;
       else {
         openAsk.answer = answer.answer;
         state.answersReceived++;
@@ -97,8 +146,8 @@ export async function cycle(state, courier, replyText, decision) {
         '--text', `${replyText} ${item.messageId}${structured}`]);
       state.repliesSent++;
     }
-    state.seen.push(item.messageId);
-    state.pending = state.pending.filter(x => x.messageId !== item.messageId);
+    state.seen.push(key);
+    state.pending = state.pending.filter(x => messageKey(x) !== key);
   }
 }
 
@@ -111,7 +160,8 @@ async function main() {
   if (command === 'start' && !['approve', 'deny'].includes(v.decision ?? 'approve')) throw new Error('--decision must be approve or deny');
   const cue = command === 'cue' ? parseCue(args) : undefined;
   let stateDir = v.state;
-  if (!stateDir && command === 'start') {
+  const allocated = v.state === undefined && command === 'start';
+  if (allocated) {
     // Lead ruling: in-process allocation keeps the child allow-list Courier-only.
     stateDir = fs.mkdtempSync('/var/tmp/tc2001stub.');
     fs.chmodSync(stateDir, 0o700);
@@ -121,17 +171,19 @@ async function main() {
   assertState(stateDir, process.env.COURIER_HOME);
   scrubEnvironment(stateDir); // before any SDK import or runtime write
   assertState(stateDir, process.env.COURIER_HOME);
+  const claim = command === 'start' || command === 'purge' ? claimLifecycle(stateDir) : undefined;
+  try {
   const marker = path.join(stateDir, 'qa-stub.json');
   if (command !== 'start') {
     const owner = json(marker);
     assertMarker(owner, stateDir);
     if (command === 'purge') {
       assertMarker(owner, stateDir, true);
+      claim.assertHeld();
       fs.rmSync(stateDir, { recursive: true });
       console.log(JSON.stringify({ purged: true })); return;
     }
-    if (!Number.isInteger(owner.pid)) throw new Error('stub is stopped; start --state first');
-    process.kill(owner.pid, 0);
+    assertRunning(owner);
     if (command === 'status') {
       const { seen, pending, asks, threads, ...summary } = json(path.join(stateDir, 'status.json'));
       console.log(JSON.stringify(summary)); return;
@@ -158,7 +210,7 @@ async function main() {
     const deadline = Date.now() + 65_000;
     while (!fs.existsSync(response)) {
       if (Date.now() > deadline) throw new Error('timeout waiting for stub control; check running process');
-      process.kill(owner.pid, 0);
+      assertRunning(owner);
       await sleep(25);
     }
     const result = json(response);
@@ -166,8 +218,8 @@ async function main() {
     if (result.error) throw new Error(result.error);
     console.log(JSON.stringify(result));
     if (command === 'stop' && v['keep-state']) {
-      while (json(marker).pid !== null && Date.now() < deadline) await sleep(25);
-      if (json(marker).pid !== null) throw new Error('timeout waiting for kept state');
+      while ((json(marker).pid !== null || fs.existsSync(path.join(stateDir, 'lifecycle.lock'))) && Date.now() < deadline) await sleep(25);
+      if (json(marker).pid !== null || fs.existsSync(path.join(stateDir, 'lifecycle.lock'))) throw new Error('timeout waiting for kept state');
     }
     if (command === 'stop' && !v['keep-state']) {
       while (fs.existsSync(stateDir) && Date.now() < deadline) await sleep(25);
@@ -176,11 +228,12 @@ async function main() {
     return;
   }
   let kept = false;
+  assertInitializable(allocated, fs.existsSync(marker));
   if (fs.existsSync(marker)) {
     const prior = json(marker);
     assertMarker(prior, stateDir, true);
     kept = true;
-  } else if (fs.readdirSync(stateDir).some(n => n !== 'created-paths')) throw new Error('start requires an empty state directory');
+  }
   const host = new URL(v.host).origin;
   if (kept && json(path.join(stateDir, 'courier', 'profile.json')).host !== host) throw new Error('kept state requires the same node host');
   fs.mkdirSync(path.join(stateDir, 'home'), { mode: 0o700, recursive: true });
@@ -203,10 +256,10 @@ async function main() {
   let stopping = false;
   let keepState = false;
   const save = () => { state.threadCount = state.threads.length; write(path.join(stateDir, 'status.json'), state); };
-  const cleanup = () => { assertState(stateDir, process.env.COURIER_HOME); if (json(marker).pid !== process.pid) throw new Error('cleanup ownership mismatch'); fs.rmSync(stateDir, { recursive: true }); };
+  const cleanup = () => { claim.assertHeld(); assertState(stateDir, process.env.COURIER_HOME); if (json(marker).nonce !== claim.nonce) throw new Error('cleanup ownership mismatch'); fs.rmSync(stateDir, { recursive: true }); };
   process.once('SIGTERM', () => { stopping = true; });
   process.once('SIGINT', () => { stopping = true; });
-  write(marker, { type: 'qa-courier-stub-v1', pid: process.pid, state: stateDir });
+  write(marker, { type: 'qa-courier-stub-v1', pid: claim.pid, startTime: claim.startTime, nonce: claim.nonce, state: stateDir });
   save();
   try {
     if (!kept) {
@@ -263,7 +316,7 @@ async function main() {
               result = await courier(['send', peer, '--new', 'QA owner decision', '--intent', 'ask',
                 '--text', `QA stub: please do ${envelope.verb} on ${envelope.target} (${envelope.summary}). Ask your owner using courier task and courier request on your own profile. After courier approval verifies their decision, reply "approve ${askId}" or "deny ${askId}". This exercise only posts a fixed follow-up; perform no privileged action.\n\n\`\`\`json\n${JSON.stringify(envelope)}\n\`\`\``,
                 '--ask', `Approve: ${envelope.verb} on ${envelope.target}`]);
-              state.asks[askId] = { ...envelope, threadId: result.threadId, messageId: result.messageId };
+              state.asks[askId] = { ...envelope, peer, threadId: result.threadId, messageId: result.messageId };
               result = { ...result, askId }; state.asksSent++; state.threads.push(result.threadId);
             }
           }
@@ -276,9 +329,10 @@ async function main() {
     }
     await sleep(250); // let the stop client read its acknowledgement before exact-path cleanup
   } finally {
-    if (keepState) { save(); write(marker, { type: 'qa-courier-stub-v1', pid: null, state: stateDir }); }
+    if (keepState) { claim.assertHeld(); save(); write(marker, { type: 'qa-courier-stub-v1', pid: null, startTime: null, nonce: null, state: stateDir }); }
     else cleanup();
   }
+  } finally { claim?.release(); }
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

@@ -139,9 +139,9 @@ node dist/cli.js send qa-stub --thread <threadId> --intent answer \
 Both answer forms are accepted: plain text starting with `approve <askId>` or
 `deny <askId>` (optional trailing words), or the complete JSON body
 `{"type":"qa-stub-answer","askId":"<askId>","answer":"approve"}` (or
-`deny`). The answer must be from the paired peer, in the ask's thread, with the
+`deny`). The answer must be from the specific peer that received that ask, in its thread, with the
 real `--reply-to` pointing at its ask message. Wrong ids, missing correlation,
-repeated decisions and other text are counted as unparseable; no question or
+repeated decisions, answers from another paired peer and other text are counted as unparseable; no question or
 follow-up is posted for them. An accepted approval posts only
 `QA stub: resumed action (fixed follow-up only).`; a denial posts only
 `QA stub: denied.`. There is no merge/deploy/publish action behind the message.
@@ -166,7 +166,22 @@ flows again. Kept files are 0600, directories 0700. They contain a **throwaway
 Courier agent key and its owner grant**, never a real account's key; the fake
 owner private key stays only in memory and is discarded after setup. Purge the
 kept directory after measurement. Running or foreign/unmarked directories and
-symlinks are refused. Nothing cleans up a QA peer profile implicitly.
+symlinks are refused. An explicit `start --state` must name a stopped, marked
+stub, even when the directory is empty or contains only `created-paths`. Only
+a fresh directory allocated by that `start` invocation may initialize without
+a marker. Nothing cleans up a QA peer profile implicitly.
+
+Start and purge acquire the same exclusive `lifecycle.lock` before reading the
+marker. The running process holds its claim through shutdown; concurrent starts
+or a competing purge fail with a clear lifecycle-lock error. The lock contains
+the PID, Linux `/proc/<pid>/stat` start time and a unique start nonce. Control
+commands check PID **and** start time, so a reused PID is refused. Lock release
+requires the matching nonce; atomic-write temporary names include PID and nonce.
+This lifecycle check requires Linux `/proc`. An abrupt kill can leave a stale
+lock: it is refused rather than automatically removed or retried.
+
+Pending and seen deliveries are keyed by `(peer, thread, message)` tuples, so a
+second peer cannot consume another peer's delivery identity by reusing its IDs.
 
 Exit 0 means success; exit 1 means invalid arguments/state, refused operation,
 timeout or node failure. A CLI call has a 45-second deadline; a control command
@@ -203,6 +218,12 @@ connection failed. Inspect the throwaway run and start fresh if needed.
 | Approve only | Count denial as a resumed action | Deny must have zero resumed actions | Green |
 | State marker | Ignore marker type/path | Foreign marker must be refused | Green |
 | Kept state | Ignore running-state guard | Running state must not be reused/purged | Green |
+| Intended peer | Remove answer peer equality | Another paired peer with matching IDs/reference cannot answer | Green |
+| Delivery tuple | Collapse key to message ID | Colliding peer/thread deliveries still receive separate replies | Green |
+| Lifecycle claim | Replace exclusive `wx` with `w` | A second claim must be refused | Green |
+| Purge claim | Omit purge from lifecycle locking | Purge cannot enter a claimed startup window | Green |
+| Process identity | Ignore process start time | A reused PID must be refused | Green |
+| Explicit state | Accept an unmarked explicit directory | Empty/registry-only directories must be refused | Green |
 
 Run the offline tests or the optional local-node proof from the repository root:
 
