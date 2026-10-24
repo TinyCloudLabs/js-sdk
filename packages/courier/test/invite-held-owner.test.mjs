@@ -288,11 +288,11 @@ test('lock: recovery skips an invite whose lock is held (an approve is working o
   assert.equal(readRecord(id).status, 'consumed');
 });
 
-test('lock: revoke takes the lock: with an approve or deny working on the invite it fails invite-busy ("try again in a minute") and changes nothing', async () => {
+test('lock: revoke takes the lock: with an approve or deny working on the invite it fails invite-busy ("try again in a few minutes") and changes nothing', async () => {
   const id = await squatted();
   fs.writeFileSync(lockFile(id), '', { mode: 0o600 });
   const before = fs.readFileSync(recordPath(id), 'utf8');
-  await assert.rejects(watcher().revoke(readRecord(id)), (e) => e.code === 'invite-busy' && /A pairing for this invite is finishing\. Try again in a minute\./.test(e.message));
+  await assert.rejects(watcher().revoke(readRecord(id)), (e) => e.code === 'invite-busy' && /A pairing for this invite is finishing\. Try again in a few minutes\./.test(e.message));
   assert.equal(fs.readFileSync(recordPath(id), 'utf8'), before);
   assert.equal(fs.existsSync(lockFile(id)), true, 'the other holder\'s lock is not removed');
 });

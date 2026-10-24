@@ -385,7 +385,7 @@ test('M-1 a revoke racing an approve: the approve holds the lock, so the revoke 
   const approving = approve(watcher({ accept: slowAccept }), id);
   approving.catch(() => undefined);
   for (let i = 0; i < 200 && releaseApprove === undefined; i++) await flush();
-  await assert.rejects(watcher().revoke(stale), (e) => e.code === 'invite-busy' && /Try again in a minute/.test(e.message));
+  await assert.rejects(watcher().revoke(stale), (e) => e.code === 'invite-busy' && /Try again in a few minutes/.test(e.message));
   releaseApprove();
   await approving;
   assert.equal(readRecord(id).status, 'completed');

@@ -143,10 +143,9 @@ tc courier join --resume
 - A held invite keeps the hello that was held: recovery after a crash re-holds
   that hello and never swaps in a later one. `invite approve` and `invite deny`
   take a per-invite lock (so does `invite revoke`: while a pairing is finishing it
-  fails with `invite-busy`, try again in a minute), so a second one at the same
-  time fails with
-  `invite-busy` (try again in a few minutes: a lock whose holder died is taken
-  over after two minutes without a refresh). A holder whose lock was taken
+  fails with `invite-busy`), so a second one at the same time fails with
+  `invite-busy`. Every `invite-busy` message says to try again in a few minutes:
+  a lock whose holder died is taken over after two minutes without a refresh. A holder whose lock was taken
   over, or whose invite was changed under it, stops with `invite-lock-lost`
   before it writes anything more. Node calls made while deciding an invite give
   up after 60 seconds (`node-timeout`) and leave the invite held again; the

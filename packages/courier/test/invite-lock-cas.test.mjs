@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { inviteRecordsFor, storedRecord } from '../dist/invite-commands.js';
-import { InviteWatcher, NODE_CALL_TIMEOUT_MS, readHeld, readRecord, writeRecord, recordPath } from '../dist/invite-watch.js';
+import { InviteWatcher, INVITE_BUSY_WAIT, NODE_CALL_TIMEOUT_MS, readHeld, readRecord, writeRecord, recordPath } from '../dist/invite-watch.js';
 import { writePublicInvite } from '../dist/invite-public.js';
 import { inviteFolder } from '../dist/invite-schema.js';
 import { newInviteId } from '../dist/invite-blob.js';
@@ -447,4 +447,24 @@ test('recovery from the remote hello (no held copy) that loses its lock before t
   assert.equal(fs.existsSync(path.join(secureSubdir('invites'), `${id}.held.json`)), false);
   assert.equal(readRecord(id).status, 'consumed');
   assert.equal(kv.rows.has(`${inviteFolder(id)}in/hello.json`), true, 'the remote hello was not deleted either');
+});
+
+test('every invite-busy message (approve, deny, revoke) ends with the same "Try again in a few minutes." and never promises "a minute"', async () => {
+  const id = await heldInvite();
+  fs.writeFileSync(lockFile(id), 'someone-elses-token');
+  const messages = [];
+  for (const run of [() => approve(watcher(), id), () => watcher().deny(id), () => watcher().revoke(readRecord(id))]) {
+    await assert.rejects(run(), (e) => { messages.push(e.message); return e.code === 'invite-busy'; });
+  }
+  assert.equal(INVITE_BUSY_WAIT, 'Try again in a few minutes.');
+  assert.equal(messages.length, 3);
+  for (const message of messages) {
+    assert.ok(message.endsWith(` ${INVITE_BUSY_WAIT}`), message);
+    assert.doesNotMatch(message, /a minute/);
+  }
+  assert.match(messages[0], /^Another approve, deny or recovery is working on this invite\. /);
+  assert.match(messages[1], /^Another approve, deny or recovery is working on this invite\. /);
+  assert.match(messages[2], /^A pairing for this invite is finishing\. /);
+  assert.equal(readRecord(id).status, 'held');
+  assert.equal(fs.readFileSync(lockFile(id), 'utf8'), 'someone-elses-token');
 });

@@ -60,6 +60,9 @@ export interface InviteRecord {
 
 const RECORD_FILE = /^[a-z2-7]{26}\.json$/;
 const RECOVER_AFTER_MS = 10 * 60 * 1000;
+/** What every `invite-busy` message ends with: a lock whose holder died blocks for LOCK_STALE_MS, so "a minute" would promise too much. */
+export const INVITE_BUSY_WAIT = 'Try again in a few minutes.';
+
 /** A lock whose mtime has not been refreshed for this long belongs to a holder that died; it is taken over. A live holder refreshes it every LOCK_HEARTBEAT_MS. */
 const LOCK_STALE_MS = 2 * 60 * 1000;
 const LOCK_HEARTBEAT_MS = 30 * 1000;
@@ -116,7 +119,7 @@ async function withInviteLock<T>(id: string, timing: LockTiming | undefined, fn:
       fs.rmSync(file, { force: true });
     }
   }
-  if (fd === undefined) fail('invite-busy', busyMessage ?? 'Another approve, deny or recovery is working on this invite. Try again in a few minutes.');
+  if (fd === undefined) fail('invite-busy', busyMessage ?? `Another approve, deny or recovery is working on this invite. ${INVITE_BUSY_WAIT}`);
   fs.writeSync(fd, token);
   fs.closeSync(fd);
   const readToken = (): string | undefined => {
@@ -761,7 +764,7 @@ export class InviteWatcher {
       fail('invite-not-open', `Invite is ${record.status}; only open or held invites can be revoked.`);
     }
     // Under the invite's lock: an approve or deny working on it makes this fail with invite-busy instead of deleting what they are writing.
-    await withInviteLock(record.inviteId, this.env.timing, (guard) => this.close(record, 'revoked', guard), 'A pairing for this invite is finishing. Try again in a minute.');
+    await withInviteLock(record.inviteId, this.env.timing, (guard) => this.close(record, 'revoked', guard), `A pairing for this invite is finishing. ${INVITE_BUSY_WAIT}`);
   }
 
   private async heldRecord(id: string, guard?: LockGuard): Promise<InviteRecord> {
