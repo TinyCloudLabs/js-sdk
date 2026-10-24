@@ -7,6 +7,7 @@ export const NODES_STRINGS = {
   "nodes.title": "Connected nodes",
   "nodes.lede": "The nodes this session is talking to right now. TinyCloud picks the node for each space; there is nothing to switch here.",
   "nodes.empty": "No node is in use right now.",
+  "nodes.unavailable": "Not available right now.",
   "nodes.glance.none": "None",
   "nodes.glance.healthy": "Healthy",
   "nodes.glance.slow": "{count} slow",

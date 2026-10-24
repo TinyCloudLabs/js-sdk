@@ -359,11 +359,11 @@ describe("nodes section unknown values", () => {
 
 describe("nodes section account changes", () => {
   // Mounts with a controllable current client and captures the change listeners the host would fire.
-  function mountSwitchable(initial: PanelClient) {
+  function mountSwitchable(initial: PanelClient | undefined) {
     let current: PanelClient | undefined = initial;
     const changeListeners: Array<() => void> = [];
     const ctx = {
-      ...ctxFor(initial),
+      ...ctxFor(initial ?? clientWith(undefined)),
       client: () => current,
       onClientChange: (cb: () => void) => {
         changeListeners.push(cb);
@@ -406,5 +406,37 @@ describe("nodes section account changes", () => {
     await flush();
 
     expect(cards(el).map((card) => card.getAttribute("aria-label"))).toEqual([]);
+  });
+
+  const statusLine = (el: HTMLElement) => el.querySelector('[role="status"]') as HTMLElement;
+  const contentOf = (el: HTMLElement) => el.querySelector(".nd-wrap") as HTMLElement;
+
+  test("without a client at mount it shows the unavailable line, then loads when a client appears", async () => {
+    const { el, switchTo } = mountSwitchable(undefined);
+    await flush();
+
+    expect(statusLine(el).hidden).toBe(false);
+    expect(statusLine(el).textContent).toBe(panelText("nodes.unavailable"));
+    expect(contentOf(el).hidden).toBe(true);
+
+    switchTo(clientWith(fakeData(async () => ready([SLOW]))));
+    await flush();
+
+    expect(cards(el).map((card) => card.getAttribute("aria-label"))).toEqual(["lab.example.org"]);
+    expect(statusLine(el).hidden).toBe(true);
+  });
+
+  test("signing out clears the rows and shows the unavailable line, not loading", async () => {
+    const { el, switchTo } = mountSwitchable(clientWith(fakeData(async () => ready([HOSTED]))));
+    await flush();
+    expect(cards(el)).toHaveLength(1);
+
+    switchTo(undefined);
+    await flush();
+
+    expect(cards(el)).toHaveLength(0);
+    expect(contentOf(el).hidden).toBe(true);
+    expect(statusLine(el).hidden).toBe(false);
+    expect(statusLine(el).textContent).toBe(panelText("nodes.unavailable"));
   });
 });

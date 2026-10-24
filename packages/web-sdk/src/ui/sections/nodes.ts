@@ -3,7 +3,7 @@ import type { HostContext, PanelSection, SectionStatus } from "../slots";
 import { registerPanelStrings } from "../strings-panel";
 import { NODES_STRINGS } from "./nodes.strings";
 import { viewStatus } from "./status";
-import { alwaysAvailable, mountPlaceholder } from "./placeholder";
+import { alwaysAvailable } from "./placeholder";
 import { applyResult, createStateLine, settle, startLoading, textLine } from "./view-body";
 import { UI_STYLE, icon, statusNode } from "./ui";
 
@@ -79,7 +79,7 @@ function roleOf(node: NodeRow, ctx: HostContext): string {
 
 /**
  * Nodes this session talks to. Mounted only while the panel is open.
- * Without a data source the body keeps the neutral placeholder.
+ * Without a client or data source it shows the unavailable line.
  */
 export const nodesSection: PanelSection = {
   id: "nodes",
@@ -98,9 +98,8 @@ export const nodesSection: PanelSection = {
       return { text: ctx.text("nodes.glance.healthy"), tone: "ok", count };
     }),
   mount(el, ctx: HostContext) {
-    const initial = ctx.client()?.data;
-    if (!initial) return mountPlaceholder(el);
-    let source: PanelDataSource = initial;
+    // Undefined without a client or data source; the unavailable line shows until one appears.
+    let source: PanelDataSource | undefined = ctx.client()?.data;
 
     let disposed = false;
     let seq = 0;
@@ -225,7 +224,9 @@ export const nodesSection: PanelSection = {
 
     async function load(): Promise<void> {
       const token = ++seq;
-      const result = await settle(() => source.nodes());
+      const current = source;
+      if (current === undefined) return showUnavailable();
+      const result = await settle(() => current.nodes());
       if (disposed || token !== seq) return;
       const nodes = applyResult(line, ctx, result);
       content.hidden = nodes === undefined;
@@ -241,31 +242,47 @@ export const nodesSection: PanelSection = {
       });
     }
 
-    // Bumping seq drops any read still in flight for the previous account.
-    function onAccountChange(): void {
-      seq++;
-      unsubscribe();
-      unsubscribe = () => undefined;
-      offReset?.();
-      offReset = undefined;
+    function clearRows(): void {
       content.hidden = true;
       empty.hidden = true;
       list.replaceChildren();
-      startLoading(line, ctx);
+    }
+
+    // Shown when there is no client or data source. Nothing is loading, so no spinner.
+    function showUnavailable(): void {
+      clearRows();
+      line.status.hidden = false;
+      line.status.textContent = ctx.text("nodes.unavailable");
+      line.retry.hidden = true;
+    }
+
+    // Bumping seq drops any read still in flight for the previous account or client.
+    function onAccountChange(): void {
+      seq++;
+      unsubscribe();
+      offReset?.();
+      clearRows();
       const next = ctx.client()?.data;
-      if (next === undefined) return;
       source = next;
-      unsubscribe = attach(next);
+      // The stylesheet ships with the rows. Without a data source nothing it styles can render, so it stays out.
+      if (next === undefined) style.remove();
+      else el.prepend(style);
+      unsubscribe = next ? attach(next) : () => undefined;
       offReset = ctx.client()?.onReset(onAccountChange);
+      if (next !== undefined) startLoading(line, ctx);
       void load();
     }
 
-    let unsubscribe = attach(initial);
+    let unsubscribe = source ? attach(source) : () => undefined;
     let offReset = ctx.client()?.onReset(onAccountChange);
     const offClient = ctx.onClientChange(onAccountChange);
 
-    el.append(style, heading, line.status, line.retry, content);
-    startLoading(line, ctx);
+    // The stylesheet is attached only with a data source; see onAccountChange.
+    el.append(heading, line.status, line.retry, content);
+    if (source !== undefined) {
+      el.prepend(style);
+      startLoading(line, ctx);
+    }
     void load();
 
     return () => {
