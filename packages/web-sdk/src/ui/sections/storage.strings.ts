@@ -14,7 +14,6 @@ export const STORAGE_PANEL_STRINGS = {
   "storage.page.meter_text_open": "{used} used. {state}.",
   "storage.page.space_meter": "{space} storage used",
   "storage.page.space_meter_text": "{used} of {limit}",
-  "storage.page.on_node": "on {host}",
   "storage.page.plan": "Plan",
   "storage.page.left": "Left",
   "storage.page.none": "None",
