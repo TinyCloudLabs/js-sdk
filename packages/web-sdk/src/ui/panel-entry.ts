@@ -74,10 +74,6 @@ function proxyFor(client: PanelClient): PanelDataSource {
     delegations: (cursor) => real?.delegations(cursor) ?? viewLoading(),
     revoke: (cid) => real?.revoke(cid) ?? NOT_READY,
     setLocalNodeEnabled: (enabled) => real?.setLocalNodeEnabled(enabled) ?? NOT_READY,
-    get requests() {
-      const source = real;
-      return source?.requests ? () => source.requests?.() ?? viewLoading() : undefined;
-    },
   } as PanelDataSource;
 }
 

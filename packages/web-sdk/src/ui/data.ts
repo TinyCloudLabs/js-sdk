@@ -264,44 +264,6 @@ export interface StorageView extends Tagged, StorageStatus {
 }
 
 // ---------------------------------------------------------------------------
-// Activity (developer mode only). Mirrors `RequestEvent` in
-// sdk-services/src/telemetry/requestLog.ts (#656, not merged on this branch).
-// Declared locally so the panel does not depend on node-sdk.
-// ---------------------------------------------------------------------------
-
-export type RequestService = "kv" | "sql" | "duckdb" | "hooks" | "vault" | "space" | "sync" | "other";
-
-export interface RequestRow {
-  readonly v: 1;
-  /** Monotonic per log. */
-  readonly id: number;
-  /** Request start, ms since epoch. */
-  readonly at: number;
-  readonly service: RequestService;
-  /** `service/action`, e.g. `kv/get`; `other` when unknown. */
-  readonly op: string;
-  /** First segment of the key; `[redacted]` when unsafe. */
-  readonly path: string | null;
-  /** Tail label of the space id, never the id. */
-  readonly space: string | null;
-  /** URL host[:port] only. */
-  readonly host: string | null;
-  readonly bytes: number | null;
-  readonly durationMs: number | null;
-  readonly attempts: number;
-  readonly ok: boolean;
-  readonly code: string;
-  readonly source: "network" | "replica";
-}
-
-export interface RequestsView {
-  /** Snapshot of the current log, oldest first. */
-  rows(): readonly RequestRow[];
-  /** Fires on each new row and on clear. Returns unsubscribe. */
-  subscribe(cb: () => void): () => void;
-}
-
-// ---------------------------------------------------------------------------
 // Plain-words ability description (implemented in S2).
 // Declared here so the signature is fixed before the view is written.
 // Known actions map to words (`tinycloud.kv/get` -> "read",
@@ -356,9 +318,6 @@ export interface PanelDataSource {
 
   /** `fresh` awaits a network read now. Otherwise a cached value is returned, refreshed in the background only when stale. */
   storage(options?: { readonly fresh?: boolean }): Promise<ViewResult<StorageView>>;
-
-  /** Present only when developer mode is on. Absent otherwise. */
-  requests?(): RequestsView;
 }
 
 /** Builds the data source for one registered client. */

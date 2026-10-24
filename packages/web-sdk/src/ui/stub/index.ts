@@ -17,7 +17,6 @@ import type {
   PanelDataFactory,
   PanelDataSource,
   PanelView,
-  RequestsView,
   RevokeOutcome,
   StorageView,
   ViewResult,
@@ -53,10 +52,6 @@ const STUB_LOCAL_FOUND: LocalNodeState = {
 
 export function createStubPanelData(seed: StubSeed = {}): PanelDataFactory {
   return (client) => {
-    const requests: RequestsView = {
-      rows: () => [],
-      subscribe: () => () => undefined,
-    };
     const localListeners = new Set<(view: PanelView) => void>();
     let localNode: LocalNodeState = seed.localNode ?? { source: "stub", connection: "off" };
     let pending: { timer: ReturnType<typeof setTimeout>; resolve: (result: ActionResult) => void } | undefined;
@@ -134,7 +129,6 @@ export function createStubPanelData(seed: StubSeed = {}): PanelDataFactory {
             manageUrl: STORAGE_MANAGE_URL,
           }),
         ),
-      requests: () => requests,
     } satisfies PanelDataSource;
   };
 }
