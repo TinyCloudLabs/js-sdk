@@ -471,7 +471,7 @@ export class NamedKeyClient {
     return this.nodeId;
   }
 
-  /** Drop the cached `/info` answer; the next call reads it again. */
+  /** Clear the cached `/info` answer; the next call reads it again. */
   refreshNodeInfo(): void {
     this.nodeId = undefined;
   }

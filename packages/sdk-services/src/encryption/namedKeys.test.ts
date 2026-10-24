@@ -65,7 +65,7 @@ const crypto: EncryptionCrypto = {
     }
     return out;
   },
-  // Fake X25519: the "public key" is the seed, so the fake node can wrap to it.
+  // Stub X25519: the "public key" is the seed, so the stub node can wrap to it.
   x25519FromSeed: (seed) => ({ publicKey: seed, privateKey: seed }),
   x25519Dh: (a, b) => xor(a, b),
   authEncrypt: (key, plaintext) => xor(key, plaintext),
@@ -492,7 +492,7 @@ describe("error mapping", () => {
 });
 
 describe("envelopes", () => {
-  /** Fake node for `/invoke`: unwraps with the key secret and rewraps to the receiver key. */
+  /** Stub node for `/invoke`: unwraps with the key secret and rewraps to the receiver key. */
   const invokeNode = (
     secrets: Record<string, Uint8Array>,
     seen: Recorded[],
@@ -533,7 +533,7 @@ describe("envelopes", () => {
     expect(env.v).toBe(2);
     expect(env.keyPath).toBe(PATH);
     expect(env.networkId).toBe(NETWORK_ID);
-    // Fake wrap is xor(pub, sym); unwrapping with the KEY public bytes recovers a key that decrypts.
+    // The stub wrap is xor(pub, sym); unwrapping with the KEY public bytes recovers a key that decrypts.
     const sym = xor(KEY_PUB, base64Decode(env.encryptedSymmetricKey));
     expect(xor(sym, base64Decode(env.ciphertext))).toEqual(utf8Encode("hello"));
     expect(env.encryptedSymmetricKeyHash).toBe(canonicalHashHex(sha256, env.encryptedSymmetricKey));
