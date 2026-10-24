@@ -526,6 +526,17 @@ for (const scheme of ["light", "dark"] as const) {
       await expect(wipeButton(page)).toBeVisible();
       await expect(confirmBox(page)).toHaveCount(0);
 
+      // Assistive tech reads the explanation with the button: check the browser's accessibility tree, not the attribute.
+      const cdp = await page.context().newCDPSession(page);
+      await cdp.send("Accessibility.enable");
+      const { nodes } = (await cdp.send("Accessibility.getFullAXTree")) as {
+        nodes: Array<{ role?: { value?: string }; name?: { value?: string }; description?: { value?: string } }>;
+      };
+      const buttons = nodes.filter((node) => node.role?.value === "button" && node.name?.value === "Wipe local data");
+      expect(buttons).toHaveLength(1);
+      expect(buttons[0]?.description?.value).toBe(WIPE_EXPLAINS);
+      await cdp.detach();
+
       await wipeButton(page).click();
       await expect(confirmBox(page)).toBeVisible();
       const question = confirmBox(page).locator(".busy");

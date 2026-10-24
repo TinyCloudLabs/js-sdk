@@ -256,6 +256,31 @@ describe("states", () => {
     expect(el.querySelector(".lc-kv")?.closest("[hidden]")).not.toBeNull();
   });
 
+  test("the Wipe button is described by the always-visible explanation next to it", async () => {
+    const { el } = setup({ facade: makeFacade(state("on")), copy: ready() });
+    await flush();
+    const id = wipeBtn(el).getAttribute("aria-describedby");
+    expect(id).toBeTruthy();
+    const target = el.querySelector(`[id="${id}"]`);
+    expect(target).toBe(el.querySelector(".lc-wipe > p"));
+    expect(target?.textContent).toBe(
+      "Erases TinyCloud's copy on this device. Your data stays on your TinyCloud; the app's own files are not touched.",
+    );
+    expect(target?.hasAttribute("hidden")).toBe(false);
+  });
+
+  test("each mount gets its own description id, so two sections never share one", async () => {
+    const first = setup({ facade: makeFacade(state("on")), copy: ready() });
+    const second = setup({ facade: makeFacade(state("on")), copy: ready() });
+    await flush();
+    const a = wipeBtn(first.el).getAttribute("aria-describedby");
+    const b = wipeBtn(second.el).getAttribute("aria-describedby");
+    expect(a).toBeTruthy();
+    expect(b).toBeTruthy();
+    expect(a).not.toBe(b);
+    expect(document.querySelectorAll(`[id="${a}"]`)).toHaveLength(1);
+  });
+
   test("off with bytes left on the device still offers the wipe", async () => {
     const { el } = setup({ facade: makeFacade(state("off")), copy: ready({ requested: false, effective: "off", bytesOnDevice: 1024, folders: [] }) });
     await flush();

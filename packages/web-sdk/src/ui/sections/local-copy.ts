@@ -170,6 +170,9 @@ function copyStatus(ctx: SectionContext, copy: LocalCopyStatus): SectionStatus {
   }
 }
 
+/** Counts mounts, so each one's description id is unique even if two sections are ever in one tree. */
+let mountCount = 0;
+
 /**
  * Local copy on this device: the switch, what is kept, and Wipe local data.
  * The switch and the effective state come from the client's sync facade; the rows come from
@@ -284,10 +287,13 @@ function mountLocalCopy(el: HTMLElement, ctx: SectionContext): () => void {
   wipeHead.textContent = ctx.text("local-copy.wipe.title");
   wipeSec.setAttribute("aria-labelledby", wipeHead.id);
   const wipeBody = textLine("", ctx.text("local-copy.wipe.body"));
+  wipeBody.id = `lc-wipe-text-${++mountCount}`;
   const wipeBtn = document.createElement("button");
   wipeBtn.type = "button";
   wipeBtn.className = "action";
   wipeBtn.textContent = ctx.text("local-copy.wipe.button");
+  // The explanation is always on screen above the button; assistive tech reads it with the button.
+  wipeBtn.setAttribute("aria-describedby", wipeBody.id);
   const wipeFail = document.createElement("div");
   wipeFail.className = "lc-fail";
   const wipeFailText = textLine("", ctx.text("local-copy.wipe.failed"));
