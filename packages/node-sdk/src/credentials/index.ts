@@ -16,6 +16,7 @@ export {
   verifyStoredEmailProof,
   requestEmailProofCode,
 } from "./email-proof";
+export { restoreEmailProofPending } from "./email-proof";
 export type {
   EmailProofAcquireInput,
   EmailProofAcquisition,
@@ -32,3 +33,10 @@ export type {
   HolderAlgorithm,
   HolderSigner,
 } from "./email-proof";
+export { buildSharePresentation, SharePresentationError } from "./share-presentation";
+export type {
+  BuildSharePresentationInput,
+  SharePresentationChallenge,
+  SharePresentationErrorCode,
+  SharePresentationMaterial,
+} from "./share-presentation";

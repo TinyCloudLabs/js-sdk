@@ -1,5 +1,5 @@
-// Subpath entry for headless clients (e.g. the CLI). Re-exports the credential driver and the offline
-// stored-credential verifier from @tinycloud/node-sdk/credentials. Built as its own entry by webpack.config.cjs.
+// Subpath entry for headless clients (e.g. the CLI). Re-exports the credential driver, the offline
+// stored-credential verifier and the share-presentation builder from @tinycloud/node-sdk/credentials. Built as its own entry by webpack.config.cjs.
 export { OpenCredentialsHttpTransport } from "@tinycloud/node-sdk/credentials";
 export { interpretCredentialFlow } from "@tinycloud/node-sdk/credentials";
 export type {
@@ -33,4 +33,11 @@ export type {
   HolderSigner,
   StoredEmailProofInput,
   StoredEmailProofRecord,
+} from "@tinycloud/node-sdk/credentials";
+export { buildSharePresentation, SharePresentationError } from "@tinycloud/node-sdk/credentials";
+export type {
+  BuildSharePresentationInput,
+  SharePresentationChallenge,
+  SharePresentationErrorCode,
+  SharePresentationMaterial,
 } from "@tinycloud/node-sdk/credentials";
