@@ -407,6 +407,48 @@ describe("a hung purge", () => {
     expect(await watch?.retry()).toBe(true);
     expect(watch?.failure()).toBeUndefined();
   });
+
+  test("R1: a timed-out newer run keeps an earlier 'readable' state and still says the copy may be readable", async () => {
+    jest.useFakeTimers();
+    const r = rig({
+      purgeImpl: (call) => (call < 2 ? Promise.resolve({ ok: false, retryNow: true }) : new Promise<PurgeLocalCopyResult>(() => undefined)),
+    });
+    const w = wrapped(r);
+    await w.signOut?.(); // calls 0 and 1: the keys may still be in the database
+    expect(purgeWatch(w)?.failure()).toBe("readable");
+    r.signedIn = true;
+    const second = w.signOut?.(); // the newer run hangs
+    await settleMicrotasks();
+    jest.advanceTimersByTime(PURGE_TIMEOUT_MS);
+    await second;
+    expect(purgeWatch(w)?.failure()).toBe("readable");
+    expect(r.toasts.at(-1)).toEqual({ kind: "warning", textCode: "local-copy.purge.toast.readable" });
+  });
+
+  test("a real plain failure from the host still replaces 'readable': the host is the authority", async () => {
+    jest.useFakeTimers();
+    const r = rig({
+      purgeImpl: (call) => Promise.resolve(call < 2 ? { ok: false, retryNow: true } : { ok: false, retryNow: false }),
+    });
+    const w = wrapped(r);
+    await w.signOut?.();
+    expect(purgeWatch(w)?.failure()).toBe("readable");
+    r.signedIn = true;
+    await w.signOut?.();
+    expect(purgeWatch(w)?.failure()).toBe("pending");
+    expect(r.toasts.at(-1)).toEqual({ kind: "warning", textCode: "local-copy.purge.toast.pending" });
+  });
+
+  test("a timed-out run with nothing recorded before is pending, not readable", async () => {
+    jest.useFakeTimers();
+    const r = rig({ purgeImpl: () => new Promise<PurgeLocalCopyResult>(() => undefined) });
+    const w = wrapped(r);
+    const done = w.signOut?.();
+    await settleMicrotasks();
+    jest.advanceTimersByTime(PURGE_TIMEOUT_MS);
+    await done;
+    expect(purgeWatch(w)?.failure()).toBe("pending");
+  });
 });
 
 /** A purge the test settles by hand, so a result can arrive after the session has changed. */
@@ -424,7 +466,7 @@ async function settleAll(): Promise<void> {
 }
 
 describe("a session change while a purge is running", () => {
-  test("G3: a failure that arrives after a new session signed in is recorded as pending, with no warning and no purge for that session", async () => {
+  test("G3/R2: a failure that arrives after a new session signed in is recorded with the host's own verdict, with no warning and no purge for that session", async () => {
     const purge = deferredPurge();
     const r = rig({ purgeImpl: purge.impl });
     const w = wrapped(r);
@@ -432,11 +474,24 @@ describe("a session change while a purge is running", () => {
     await settleAll();
     expect(purge.count()).toBe(1);
     r.signedIn = true; // a new session signs in while the old purge is still running
-    purge.settle(0, { ok: false, retryNow: true });
+    purge.settle(0, { ok: false, retryNow: true }); // the keys may still be in the database
     await done;
     expect(r.toasts).toEqual([]);
     expect(purge.count()).toBe(1); // the old run never purges again while someone is signed in
     expect(purgeWatch(w)?.failure()).toBeUndefined(); // hidden while signed in
+    r.signedIn = false;
+    expect(purgeWatch(w)?.failure()).toBe("readable");
+  });
+
+  test("G3: a plain failure that arrives after a new session signed in is recorded as pending", async () => {
+    const purge = deferredPurge();
+    const r = rig({ purgeImpl: purge.impl });
+    const w = wrapped(r);
+    const done = w.signOut?.();
+    await settleAll();
+    r.signedIn = true;
+    purge.settle(0, { ok: false, retryNow: false });
+    await done;
     r.signedIn = false;
     expect(purgeWatch(w)?.failure()).toBe("pending");
   });
