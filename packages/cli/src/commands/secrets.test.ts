@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { link, lstat, mkdir, mkdtemp, open, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -646,6 +646,38 @@ afterEach(() => {
   else Reflect.deleteProperty(process.stdin, "isTTY");
   if (stderrTTY) Object.defineProperty(process.stderr, "isTTY", stderrTTY);
   else Reflect.deleteProperty(process.stderr, "isTTY");
+});
+
+// Temp home for this file. This block runs after the static imports, so it sets
+// HOME, TC_HOME, COURIER_HOME and BUN_INSTALL_CACHE_DIR to a /var/tmp/tc1901.* dir
+// before the code under test reads them; those reads happen lazily, at call time
+// (for example `resolveProfilesDir` in secrets.ts), not at import. It does not
+// redirect bun's own transpiler cache, which is resolved before this file loads.
+const TEST_ROOT = await mkdtemp(join("/var/tmp", "tc1901."));
+const TEST_HOME_KEYS = ["HOME", "TC_HOME", "COURIER_HOME", "BUN_INSTALL_CACHE_DIR"] as const;
+const homeBefore: Record<(typeof TEST_HOME_KEYS)[number], string | undefined> = {
+  HOME: process.env.HOME,
+  TC_HOME: process.env.TC_HOME,
+  COURIER_HOME: process.env.COURIER_HOME,
+  BUN_INSTALL_CACHE_DIR: process.env.BUN_INSTALL_CACHE_DIR,
+};
+for (const key of TEST_HOME_KEYS) process.env[key] = TEST_ROOT;
+
+function assertTestHome(): void {
+  if (!/^\/var\/tmp\/tc1901\.[A-Za-z0-9]+$/.test(TEST_ROOT)) throw new Error(`test root ${TEST_ROOT} is not a tc1901 temp dir`);
+  for (const key of TEST_HOME_KEYS) {
+    if (process.env[key] !== TEST_ROOT) throw new Error(`${key} is not the test temp home`);
+  }
+}
+assertTestHome();
+
+afterAll(async () => {
+  for (const key of TEST_HOME_KEYS) {
+    const value = homeBefore[key];
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  await rm(TEST_ROOT, { recursive: true, force: true });
 });
 
 describe("CLI secrets commands", () => {
@@ -1970,4 +2002,259 @@ describe("CLI secrets commands", () => {
       ]);
     },
   );
+
+  describe("network init and --delegation source refusals", () => {
+    const REFUSED_SECRET_PLAINTEXT = "tc-1901-refused-secret-plaintext";
+    const DELEGATED_PATH = "vault/secrets/ANTHROPIC_API_KEY";
+
+    function delegationFixture(options: {
+      cid: string;
+      path?: string;
+      host?: string;
+      permissions?: Array<{ service: string; space?: string; path: string; actions: string[] }>;
+    }) {
+      const path = options.path ?? DELEGATED_PATH;
+      return {
+        delegation: {
+          cid: options.cid,
+          spaceId: "secrets",
+          path,
+          actions: ["tinycloud.kv/get"],
+          delegateDID: "did:key:z6MkDelegate",
+          ownerAddress: "0xOwner",
+          chainId: 1,
+          expiry: "2099-01-01T00:00:00.000Z",
+          delegationHeader: { Authorization: "Bearer delegated" },
+          ...(options.host === undefined ? {} : { host: options.host }),
+        },
+        permissions: options.permissions ?? [
+          { service: "tinycloud.kv", space: "secrets", path, actions: ["tinycloud.kv/get"] },
+          { service: "tinycloud.encryption", path: DEFAULT_NETWORK_ID, actions: ["tinycloud.encryption/decrypt"] },
+        ],
+      };
+    }
+
+    /** A node whose stored secret decrypts to the sentinel, so any read-and-print leaks it. */
+    function nodeStoringSentinel(): FakeNode {
+      return makeFakeNode({
+        delegatedKvResult: {
+          ok: true,
+          data: { data: JSON.stringify({ networkId: DEFAULT_NETWORK_ID, ciphertext: REFUSED_SECRET_PLAINTEXT }) },
+        },
+        decryptResult: {
+          ok: true,
+          data: new TextEncoder().encode(JSON.stringify({ value: REFUSED_SECRET_PLAINTEXT })),
+        },
+      });
+    }
+
+    /** Runs `secrets get --delegation <source>` capturing stdout and stderr writes. */
+    async function getDelegated(source: string, name = "ANTHROPIC_API_KEY"): Promise<{ streams: string }> {
+      let streams = "";
+      const stdoutSpy = spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
+        streams += String(chunk);
+        return true;
+      });
+      const stderrSpy = spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
+        streams += String(chunk);
+        return true;
+      });
+      try {
+        await runSecretsCommand(["secrets", "get", name, "--delegation", source]);
+      } finally {
+        stdoutSpy.mockRestore();
+        stderrSpy.mockRestore();
+      }
+      return { streams };
+    }
+
+    /** Every channel a refused read could leak through: outputs, streams, error message, stack and JSON. */
+    function expectSentinelAbsent(streams: string): void {
+      const errors = recorded.errors.filter((error): error is Error => error instanceof Error);
+      const channels = [
+        JSON.stringify(recorded.outputs),
+        streams,
+        ...errors.map((error) => error.message),
+        ...errors.map((error) => error.stack ?? ""),
+        ...errors.map((error) => JSON.stringify(error, Object.getOwnPropertyNames(error))),
+      ];
+      for (const channel of channels) expect(channel).not.toContain(REFUSED_SECRET_PLAINTEXT);
+    }
+
+    function firstErrorMessage(): string {
+      const error = recorded.errors[0];
+      if (!(error instanceof MockCLIError)) throw new Error("expected a CLIError to be recorded");
+      return error.message;
+    }
+
+    function authenticatedHost(): unknown {
+      const call = recorded.ensureAuthenticated[0];
+      if (typeof call !== "object" || call === null || !("ctx" in call)) throw new Error("expected ensureAuthenticated to be called");
+      const ctx = call.ctx;
+      if (typeof ctx !== "object" || ctx === null || !("host" in ctx)) throw new Error("expected a host on the auth context");
+      return ctx.host;
+    }
+
+    async function withDelegationFile<T>(
+      artifact: unknown,
+      action: (source: string) => Promise<T>,
+    ): Promise<T> {
+      assertTestHome();
+      const dir = await mkdtemp(join(TEST_ROOT, "source-"));
+      const source = join(dir, "delegation.json");
+      await writeFile(source, typeof artifact === "string" ? artifact : JSON.stringify(artifact), "utf8");
+      try {
+        return await action(source);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    }
+
+    test("secrets network init ensures the default network and reports it active", async () => {
+      currentNode = makeFakeNode();
+
+      await runSecretsCommand(["secrets", "network", "init"]);
+
+      expect(recorded.networkInitCalls).toEqual(["default"]);
+      expect(recorded.outputs).toHaveLength(1);
+      expect(recorded.outputs[0]).toMatchObject({ networkId: DEFAULT_NETWORK_ID, state: "active" });
+    });
+
+    test("--delegation authenticates against the delegation's host", async () => {
+      const delegationHost = "https://delegation-host.test";
+      currentNode = makeFakeNode();
+
+      await withDelegationFile(
+        delegationFixture({ cid: "bafy-host-delegation", host: delegationHost }),
+        (source) => getDelegated(source),
+      );
+
+      expect(recorded.ensureAuthenticated).toHaveLength(1);
+      expect(authenticatedHost()).toBe(delegationHost);
+      expect(recorded.outputs).toEqual([{ name: "ANTHROPIC_API_KEY", value: "delegated-value" }]);
+    });
+
+    test("--delegation <profile-name> reads the imported profile's additional-delegations.json", async () => {
+      assertTestHome();
+      const profileDir = join(TEST_ROOT, ".tinycloud", "profiles", "owner-profile");
+      await mkdir(profileDir, { recursive: true });
+      await writeFile(
+        join(profileDir, "additional-delegations.json"),
+        JSON.stringify([delegationFixture({ cid: "bafy-imported-delegation", host: "https://delegation-owner.test" })]),
+        "utf8",
+      );
+      currentNode = makeFakeNode();
+
+      try {
+        await runSecretsCommand(["secrets", "get", "ANTHROPIC_API_KEY", "--delegation", "owner-profile"]);
+      } finally {
+        await rm(join(TEST_ROOT, ".tinycloud"), { recursive: true, force: true });
+      }
+
+      expect(recorded.errors).toEqual([]);
+      expect(authenticatedHost()).toBe("https://delegation-owner.test");
+      expect(recorded.delegatedKvGets).toEqual([{ path: DELEGATED_PATH, options: { raw: true, prefix: "" } }]);
+      expect(recorded.decryptEnvelopeCalls).toEqual([
+        { envelope: { networkId: DEFAULT_NETWORK_ID }, options: { proofs: ["bafy-imported-delegation"] } },
+      ]);
+      expect(recorded.outputs).toEqual([{ name: "ANTHROPIC_API_KEY", value: "delegated-value" }]);
+    });
+
+    test("a missing delegated secret is NOT_FOUND and never decrypts", async () => {
+      currentNode = makeFakeNode({
+        delegatedKvResult: { ok: false, error: { code: "KV_NOT_FOUND", message: "missing" } },
+      });
+
+      const { streams } = await withDelegationFile(
+        delegationFixture({ cid: "bafy-missing-secret" }),
+        (source) => getDelegated(source),
+      );
+
+      expect(recorded.errors).toHaveLength(1);
+      expect(recorded.errors[0]).toMatchObject({ code: "NOT_FOUND", exitCode: 4 });
+      expect(firstErrorMessage()).toBe('Secret "ANTHROPIC_API_KEY" not found');
+      expect(recorded.outputs).toEqual([]);
+      expect(recorded.delegatedKvGets).toEqual([{ path: DELEGATED_PATH, options: { raw: true, prefix: "" } }]);
+      expect(recorded.decryptEnvelopeCalls).toEqual([]);
+      expect(streams).toBe("");
+    });
+
+    test("a delegation for a different secret path is PERMISSION_DENIED and reads nothing", async () => {
+      currentNode = nodeStoringSentinel();
+
+      const { streams } = await withDelegationFile(
+        delegationFixture({ cid: "bafy-wrong-path", path: "vault/secrets/OTHER_SECRET" }),
+        (source) => getDelegated(source),
+      );
+
+      expect(recorded.errors).toHaveLength(1);
+      expect(recorded.errors[0]).toMatchObject({ code: "PERMISSION_DENIED", exitCode: 5 });
+      expect(firstErrorMessage()).toContain(DELEGATED_PATH);
+      expect(recorded.outputs).toEqual([]);
+      expect(recorded.delegatedKvGets).toEqual([]);
+      expect(recorded.decryptEnvelopeCalls).toEqual([]);
+      expectSentinelAbsent(streams);
+    });
+
+    test("a delegation for a different space is PERMISSION_DENIED and reads nothing", async () => {
+      currentNode = nodeStoringSentinel();
+
+      const { streams } = await withDelegationFile(
+        delegationFixture({
+          cid: "bafy-wrong-space",
+          permissions: [
+            { service: "tinycloud.kv", space: "other-space", path: DELEGATED_PATH, actions: ["tinycloud.kv/get"] },
+            { service: "tinycloud.encryption", path: DEFAULT_NETWORK_ID, actions: ["tinycloud.encryption/decrypt"] },
+          ],
+        }),
+        (source) => getDelegated(source),
+      );
+
+      expect(recorded.errors).toHaveLength(1);
+      expect(recorded.errors[0]).toMatchObject({ code: "PERMISSION_DENIED", exitCode: 5 });
+      expect(firstErrorMessage()).toContain("does not target secrets space");
+      expect(recorded.outputs).toEqual([]);
+      expect(recorded.delegatedKvGets).toEqual([]);
+      expect(recorded.decryptEnvelopeCalls).toEqual([]);
+      expectSentinelAbsent(streams);
+    });
+
+    test("a delegation without decrypt on the secret's network is PERMISSION_DENIED and never decrypts", async () => {
+      currentNode = nodeStoringSentinel();
+
+      const { streams } = await withDelegationFile(
+        delegationFixture({
+          cid: "bafy-no-decrypt",
+          permissions: [
+            { service: "tinycloud.kv", space: "secrets", path: DELEGATED_PATH, actions: ["tinycloud.kv/get"] },
+            {
+              service: "tinycloud.encryption",
+              path: "urn:tinycloud:encryption:did:pkh:eip155:1:0xowner:alternate",
+              actions: ["tinycloud.encryption/decrypt"],
+            },
+          ],
+        }),
+        (source) => getDelegated(source),
+      );
+
+      expect(recorded.errors).toHaveLength(1);
+      expect(recorded.errors[0]).toMatchObject({ code: "PERMISSION_DENIED", exitCode: 5 });
+      expect(firstErrorMessage()).toContain("tinycloud.encryption/decrypt");
+      expect(recorded.outputs).toEqual([]);
+      expect(recorded.decryptEnvelopeCalls).toEqual([]);
+      expectSentinelAbsent(streams);
+    });
+
+    test("a malformed --delegation file is INVALID_DELEGATION_SOURCE", async () => {
+      currentNode = makeFakeNode();
+
+      await withDelegationFile("{ not valid json }\n", (source) => getDelegated(source));
+
+      expect(recorded.errors).toHaveLength(1);
+      expect(recorded.errors[0]).toMatchObject({ code: "INVALID_DELEGATION_SOURCE", exitCode: 2 });
+      expect(firstErrorMessage()).toContain("must be valid JSON");
+      expect(recorded.outputs).toEqual([]);
+      expect(recorded.delegatedKvGets).toEqual([]);
+    });
+  });
 });
