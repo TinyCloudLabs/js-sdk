@@ -142,6 +142,7 @@ interface Setup {
 
 function setup(opts: Setup) {
   const toasts: ToastRequest[] = [];
+  let renders = 0;
   const host = document.createElement("div");
   document.body.append(host);
   const dialogs = createSectionDialogs(() => host);
@@ -192,7 +193,9 @@ function setup(opts: Setup) {
     },
     layout: () => "drawer",
     sections: () => [],
-    requestRender: () => undefined,
+    requestRender: () => {
+      renders += 1;
+    },
     confirm: (request: Parameters<SectionContext["confirm"]>[0]) => dialogs.confirm(request),
     openDrawer: (request: Parameters<SectionContext["openDrawer"]>[0]) => dialogs.openDrawer(request),
   } as unknown as SectionContext;
@@ -208,6 +211,7 @@ function setup(opts: Setup) {
     toasts,
     header,
     reads: () => reads,
+    renders: () => renders,
     emitSource: (view: PanelView) => sourceListeners.forEach((cb) => cb(view)),
   };
 }
@@ -246,14 +250,57 @@ describe("availability", () => {
 });
 
 describe("states", () => {
-  test("off: switch off and enabled, off line instead of rows, no wipe without bytes", async () => {
-    const { el } = setup({ facade: makeFacade(state("off")), copy: ready({ requested: false, effective: "off", bytesOnDevice: 0, folders: [], pending: 0 }) });
+  test("off with a known empty copy: the Wipe block still shows, with its button disabled and a note saying why", async () => {
+    const facade = makeFacade(state("off"));
+    const { el } = setup({ facade, copy: ready({ requested: false, effective: "off", bytesOnDevice: 0, folders: [], pending: 0 }) });
     await flush();
     expect(toggleOf(el).getAttribute("aria-checked")).toBe("false");
     expect(toggleOf(el).disabled).toBe(false);
     expect(bodyText(el)).toContain("The local copy is off. Nothing is kept on this device. Fieldnotes reads and writes your TinyCloud directly");
-    expect(wipeSection(el).hidden).toBe(true);
+    expect(wipeSection(el).hidden).toBe(false);
+    expect(wipeSection(el).textContent).toContain("Wipe local data");
+    expect(wipeSection(el).textContent).toContain(
+      "Erases TinyCloud's copy on this device. Your data stays on your TinyCloud; the app's own files are not touched.",
+    );
+    expect(wipeBtn(el).disabled).toBe(true);
+    const note = el.querySelector<HTMLElement>(".lc-wipe-none");
+    expect(note?.hidden).toBe(false);
+    expect(note?.textContent).toBe("Nothing to wipe: no copy is kept on this device.");
+    expect(wipeBtn(el).getAttribute("aria-describedby")?.split(" ")).toContain(note?.id ?? "missing");
+    wipeBtn(el).click();
+    expect(box(el)).toBeNull();
+    expect(facade.wipeCalls).toBe(0);
     expect(el.querySelector(".lc-kv")?.closest("[hidden]")).not.toBeNull();
+  });
+
+  test("the nothing-to-wipe note is shown only for a known empty off copy", async () => {
+    const unknown = setup({ facade: makeFacade(state("off")), copy: ready({ requested: false, effective: "off", bytesOnDevice: undefined, folders: [] }) });
+    const withBytes = setup({ facade: makeFacade(state("off")), copy: ready({ requested: false, effective: "off", bytesOnDevice: 2048, folders: [] }) });
+    const on = setup({ facade: makeFacade(state("on")), copy: ready() });
+    await flush();
+    for (const { el } of [unknown, withBytes, on]) {
+      expect(el.querySelector<HTMLElement>(".lc-wipe-none")?.hidden).toBe(true);
+      expect(wipeBtn(el).disabled).toBe(false);
+      expect(wipeBtn(el).getAttribute("aria-describedby")?.split(" ")).toHaveLength(1);
+    }
+  });
+
+  test("an unavailable copy still shows no Wipe block at all", async () => {
+    const { el } = setup({ facade: makeFacade(state("unavailable", true, "storage-blocked")), copy: ready({ bytesOnDevice: 0 }) });
+    await flush();
+    expect(wipeSection(el).hidden).toBe(true);
+  });
+
+
+  test("the note leaves when the copy turns on again and the wipe is offered", async () => {
+    const facade = makeFacade(state("off"));
+    const { el } = setup({ facade, copy: ready({ requested: false, effective: "off", bytesOnDevice: 0, folders: [] }) });
+    await flush();
+    expect(wipeBtn(el).disabled).toBe(true);
+    facade.set(state("on"));
+    await flush();
+    expect(el.querySelector<HTMLElement>(".lc-wipe-none")?.hidden).toBe(true);
+    expect(wipeBtn(el).disabled).toBe(false);
   });
 
   test("the Wipe button is described by the always-visible explanation next to it", async () => {
@@ -1157,24 +1204,71 @@ describe("an account change while a call is in flight", () => {
   });
 });
 
-describe("status(ctx)", () => {
-  const status = (effective: string) => {
-    const { ctx } = setup({ facade: makeFacade(state("off")) });
-    const result = ready({ effective: effective as SyncEffective });
-    const withLatest = { ...ctx, data: { ...ctx.data, latest: () => result, source: {} } } as unknown as SectionContext;
+describe("status(ctx): the rail and the body read the same source", () => {
+  /** What the rail shows: status(ctx) over a context whose facade and data source may disagree. */
+  const rail = (facadeState: SyncState | undefined, result: ViewResult<LocalCopyStatus> | undefined, withSource = true) => {
+    const { ctx } = setup({ facade: facadeState === undefined ? undefined : makeFacade(facadeState) });
+    const withLatest = {
+      ...ctx,
+      data: { ...ctx.data, latest: () => result, source: withSource ? {} : undefined },
+    } as unknown as SectionContext;
     return localCopySection.status(withLatest);
   };
 
-  test("On is ok, Off is off, Pending warns", () => {
-    expect(status("on")).toEqual({ text: "On", tone: "ok" });
-    expect(status("off")).toEqual({ text: "Off", tone: "off" });
-    expect(status("pending")).toEqual({ text: "Pending", tone: "warn" });
+  test("F7: the facade is off while the data source says on: the rail says Off, as the body does", async () => {
+    const result = ready({ requested: true, effective: "on" });
+    expect(rail(state("off"), result)).toEqual({ text: "Off", tone: "off" });
+    const { el } = setup({ facade: makeFacade(state("off")), copy: result });
+    await flush();
+    expect(toggleOf(el).getAttribute("aria-checked")).toBe("false");
+    expect(bodyText(el)).toContain("The local copy is off.");
   });
 
-  test("enabling, wiping and unavailable stay neutral", () => {
-    expect(status("enabling")?.tone).toBe("info");
-    expect(status("wiping")?.tone).toBe("info");
-    expect(status("unavailable")).toEqual({ text: "Unavailable", tone: "info" });
-    expect(status("rebooting")?.tone).toBe("info");
+  test("the facade is on while the data source says off: the rail says On", () => {
+    expect(rail(state("on"), ready({ requested: false, effective: "off" }))).toEqual({ text: "On", tone: "ok" });
+  });
+
+  test("the facade decides every word: On, Off, Pending, and neutral for the transitional and unknown states", () => {
+    const stale = ready({ effective: "on" });
+    expect(rail(state("on"), stale)).toEqual({ text: "On", tone: "ok" });
+    expect(rail(state("off"), stale)).toEqual({ text: "Off", tone: "off" });
+    expect(rail(state("pending"), stale)).toEqual({ text: "Pending", tone: "warn" });
+    expect(rail(state("enabling"), stale)?.tone).toBe("info");
+    expect(rail(state("wiping"), stale)?.tone).toBe("info");
+    expect(rail(state("unavailable"), stale)).toEqual({ text: "Unavailable", tone: "info" });
+    expect(rail({ requested: true, effective: "rebooting" as unknown as SyncEffective }, stale)?.tone).toBe("info");
+  });
+
+  test("with a facade the rail does not wait for, or depend on, the data source", () => {
+    expect(rail(state("on"), undefined)).toEqual({ text: "On", tone: "ok" });
+    expect(rail(state("off"), { state: "loading" })).toEqual({ text: "Off", tone: "off" });
+    expect(rail(state("on"), { state: "error", code: "x" })).toEqual({ text: "On", tone: "ok" });
+    expect(rail(state("on"), undefined, false)).toEqual({ text: "On", tone: "ok" });
+  });
+
+  test("without a facade the rail falls back to the data source's own state", () => {
+    expect(rail(undefined, ready({ effective: "on" }))).toEqual({ text: "On", tone: "ok" });
+    expect(rail(undefined, ready({ effective: "off" }))).toEqual({ text: "Off", tone: "off" });
+    expect(rail(undefined, { state: "loading" })?.tone).toBe("info");
+    expect(rail(undefined, undefined, false)).toEqual({ text: "Unavailable", tone: "info" });
+  });
+
+  test("a facade that carries no state (a partial host) is not trusted: the rail falls back to the data source", () => {
+    const { ctx } = setup({ facade: undefined }); // the section does not mount without a facade
+    const withData = {
+      ...ctx,
+      client: () => ({ ...ctx.client(), sync: {} }),
+      data: { ...ctx.data, latest: () => ready({ effective: "on" }), source: {} },
+    } as unknown as SectionContext;
+    expect(localCopySection.status(withData)).toEqual({ text: "On", tone: "ok" });
+  });
+
+  test("a facade change asks the shell to repaint the rail while the section is mounted", async () => {
+    const facade = makeFacade(state("off"));
+    const { renders } = setup({ facade, copy: ready() });
+    await flush();
+    const before = renders();
+    facade.set(state("on"));
+    expect(renders()).toBeGreaterThan(before);
   });
 });
