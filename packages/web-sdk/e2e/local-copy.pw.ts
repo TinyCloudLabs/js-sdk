@@ -476,3 +476,37 @@ test.describe("sign-out removes the local copy", () => {
     expect(await call(page, (tc) => tc.replicaDatabases())).toContain(REPLICA_DB);
   });
 });
+
+// The plain text that says what Wipe does is on screen before anything is pressed, and the confirm repeats
+// what happens before its destructive action is pressed.
+const WIPE_EXPLAINS = "Erases TinyCloud's copy on this device. Your data stays on your TinyCloud; the app's own files are not touched.";
+const WIPE_LAYOUTS = [
+  { name: "sidebar", viewport: { width: 1280, height: 800 }, layout: "drawer" as const },
+  { name: "page", viewport: { width: 1280, height: 800 }, layout: "page" as const },
+  { name: "phone 390", viewport: { width: 390, height: 844 }, layout: "drawer" as const },
+];
+
+for (const scheme of ["light", "dark"] as const) {
+  for (const { name, viewport, layout } of WIPE_LAYOUTS) {
+    test(`${scheme} ${name}: the wipe explanation is visible before Wipe is pressed, and the confirm says what happens`, async ({ page }) => {
+      await mount(page, { scheme, viewport, seed: seedOn(), sync: SYNC.on });
+      await openCopy(page, layout);
+      const explanation = panel(page).locator(".lc-wipe > p");
+      await wipeButton(page).scrollIntoViewIfNeeded();
+      await expect(explanation).toBeVisible();
+      await expect(explanation).toHaveText(WIPE_EXPLAINS);
+      await expect(wipeButton(page)).toBeVisible();
+      await expect(confirmBox(page)).toHaveCount(0);
+
+      await wipeButton(page).click();
+      await expect(confirmBox(page)).toBeVisible();
+      const question = confirmBox(page).locator(".busy");
+      await expect(question).toBeVisible();
+      await expect(question).toContainText(WIPE_EXPLAINS);
+      await expect(question).toContainText("3 changes haven't synced yet. Wiping now loses them.");
+      // Nothing is erased until the destructive action is pressed.
+      expect(await call(page, (tc) => tc.wipeCalls())).toBe(0);
+      await expect(confirmButton(page)).toBeVisible();
+    });
+  }
+}
