@@ -1,10 +1,12 @@
 /**
  * Credential store under `<home>/credentials/`.
  *
- * - Directory is created 0700 and re-checked on every read (real dir, owned by
- *   the current uid, no group/world bits). Files are written 0600 via O_EXCL
- *   temp + fsync + rename, and read only with O_NOFOLLOW after an lstat check
- *   (regular file, 0600, owned by current uid, same dev/ino on open).
+ * - Directory: `ensureSecureDir` / `checkSecureDir` from `@tinycloud/node-sdk/credential-pending-store`
+ *   (real directory, owner-only, owned by the current uid; a symlink is refused and never chmodded).
+ * - Files: written 0600 via O_EXCL temp + fsync + rename, and read only with O_NOFOLLOW after an
+ *   lstat check (regular file, 0600, owned by current uid, same dev/ino on open). These file-level
+ *   helpers are Courier-local; the pending store has its own record format.
+ * - Every `find` and `store` re-verifies the envelope offline with `verifyStoredEmailProof`.
  *
  * Pending email-proof requests are not stored here; `@tinycloud/node-sdk/credential-pending-store`
  * owns them.
@@ -12,37 +14,28 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
+import { checkSecureDir, ensureSecureDir } from '@tinycloud/node-sdk/credential-pending-store';
+import {
+  verifyStoredEmailProof,
+  type EmailProofResult,
+  type StoredEmailProofRecord,
+} from '@tinycloud/node-sdk/credentials';
 import {
   createStoredCredentialRecord,
-  credentialMatchesRequirement,
+  EMAIL_CREDENTIAL_MAX_AGE_SECONDS,
   type CredentialRequirement,
-  type StoredCredentialRecord,
-  type VerifiedCredential,
 } from '@tinycloud/sdk-core';
 import { CourierError } from './errors.js';
-import { mkdirOwnerOnly, profileDir } from './profile.js';
-
-/**
- * Credentials held by Courier, keyed by holder DID and requirement digest.
- * Same `find`/`store` contract as the receiver custody used by `tinycloud share receive`.
- */
-export interface CredentialSource {
-  find(input: {
-    readonly requirement: CredentialRequirement;
-    readonly requirementDigest: string;
-    readonly holderDid: string;
-    readonly now?: Date;
-  }): Promise<StoredCredentialRecord | undefined>;
-  store(input: {
-    readonly verified: VerifiedCredential;
-    readonly requirement: CredentialRequirement;
-    readonly requirementDigest: string;
-    readonly holderDid: string;
-    readonly now?: Date;
-  }): Promise<StoredCredentialRecord>;
-}
+import { profileDir } from './profile.js';
 
 const DIR_NAME = 'credentials';
+
+/**
+ * A stored credential is returned only while more than this much of its own `exp` window remains.
+ * A credential that expires within the margin is treated as expired, so a holder never starts a
+ * use that a verifier with a slightly different clock would reject.
+ */
+const EXPIRY_MARGIN_MS = 60_000;
 
 function credentialsDir(home: string): string {
   return path.join(home, DIR_NAME);
@@ -77,26 +70,6 @@ function assertOwnedByCurrentUser(st: fs.Stats, label: string): void {
   if (typeof process.getuid === 'function' && st.uid !== process.getuid()) {
     throw new CourierError('credential-permissions', `${label} is not owned by the current user.`);
   }
-}
-
-/** Creates the store directory 0700 if absent. Refuses a symlink or a directory owned by another user. */
-function ensureSecureDir(home: string): void {
-  const dir = credentialsDir(home);
-  mkdirOwnerOnly(dir);
-  const st = fs.lstatSync(dir);
-  if (!st.isDirectory()) throw new CourierError('credential-permissions', `${dir} must be a real directory, not a symlink or file.`);
-  assertOwnedByCurrentUser(st, dir);
-  fs.chmodSync(dir, 0o700);
-}
-
-/** Returns false when the store directory does not exist. Re-checks symlink, owner, and mode on every call. */
-function checkSecureDir(home: string): boolean {
-  const dir = credentialsDir(home);
-  const st = lstatOrUndefined(dir);
-  if (!st) return false;
-  if (!st.isDirectory()) throw new CourierError('credential-permissions', `${dir} must be a real directory, not a symlink or file.`);
-  assertOwnerOnly(st, dir, '0700');
-  return true;
 }
 
 /**
@@ -160,30 +133,71 @@ function removeFile(file: string): void {
   fs.rmSync(file, { force: true });
 }
 
-/** Stored credentials for the Courier agent. Records are dropped once they fail the requirement's window. */
-export class StoredCredentialSource implements CredentialSource {
-  constructor(private readonly home: string = profileDir()) {}
+/** The offline re-verify used by `StoredCredentialSource`. Injectable so tests can stand in for the issuer keys. */
+export type StoredVerifier = typeof verifyStoredEmailProof;
 
-  async find(input: { readonly requirement: CredentialRequirement; readonly requirementDigest: string; readonly holderDid: string; readonly now?: Date }): Promise<StoredCredentialRecord | undefined> {
+/**
+ * Stored email credentials for the Courier agent.
+ *
+ * - `find` authenticates the stored record first, with the offline verifier, and refuses anything that
+ *   fails: the record is neither returned nor deleted, and the caller gets `credential-record-invalid`.
+ * - Only then does the lifecycle apply, and only to the authenticated `issuedAt` and `expiresAt` (the
+ *   verifier proves both equal the signed `iat` and `exp`): a credential with less than 60 s of its own
+ *   `exp` left, or issued more than the maximum age ago, is deleted and reported as absent.
+ *   Nothing is deleted on the strength of a stored field the verifier has not accepted.
+ */
+export class StoredCredentialSource {
+  constructor(
+    private readonly home: string = profileDir(),
+    private readonly verify: typeof verifyStoredEmailProof = verifyStoredEmailProof,
+  ) {}
+
+  async find(input: { readonly requirement: CredentialRequirement; readonly requirementDigest: string; readonly holderDid: string; readonly now?: Date }): Promise<StoredEmailProofRecord | undefined> {
     const file = credentialFile(this.home, input.holderDid, input.requirementDigest);
-    const record = readOwnerOnly<StoredCredentialRecord>(this.home, file);
+    const record = readOwnerOnly<StoredEmailProofRecord>(this.home, file);
     if (!record) return undefined;
     const now = input.now ?? new Date();
-    if (!credentialMatchesRequirement(input.requirement, record, input.holderDid, now)) {
+    // The verifier enforces the validity window against the instant it is given. Authenticating at the
+    // record's own issuance instant proves the signature and every stored field regardless of the clock,
+    // so an honestly expired record is classified below from authenticated fields instead of being refused.
+    // A stored issuedAt or expiresAt that differs from the signed iat or exp is refused by the verifier.
+    const authenticatedAt = Math.max(Date.parse(record.issuedAt), Date.parse(record.notBefore));
+    try {
+      // The lifecycle below does arithmetic on these fields, so a verifier that accepted the record must not let a
+      // field that is not a date through: NaN comparisons are all false and would keep an expired record.
+      if (!Number.isFinite(authenticatedAt) || !Number.isFinite(Date.parse(record.expiresAt))) throw new Error('stored record has no usable dates');
+      await this.verify({ record, requirement: input.requirement, holderDid: input.holderDid, now: new Date(authenticatedAt) });
+    } catch {
+      throw new CourierError('credential-record-invalid', 'Stored credential failed offline verification and was not returned. Run `credential acquire` again.');
+    }
+    const expired = Date.parse(record.expiresAt) - EXPIRY_MARGIN_MS <= now.getTime();
+    const stale = now.getTime() - Date.parse(record.issuedAt) > EMAIL_CREDENTIAL_MAX_AGE_SECONDS * 1000;
+    if (expired || stale) {
       removeFile(file);
       return undefined;
     }
     return record;
   }
 
-  async store(input: { readonly verified: VerifiedCredential; readonly requirement: CredentialRequirement; readonly requirementDigest: string; readonly holderDid: string; readonly now?: Date }): Promise<StoredCredentialRecord> {
-    const record = await createStoredCredentialRecord({
-      verified: input.verified,
+  async store(input: { readonly result: EmailProofResult; readonly requirement: CredentialRequirement; readonly requirementDigest: string; readonly holderDid: string; readonly now?: Date }): Promise<StoredEmailProofRecord> {
+    const now = input.now ?? new Date();
+    const base = await createStoredCredentialRecord({
+      verified: input.result.verified,
       ownerDid: input.holderDid,
       requirement: input.requirement,
       requirementDigest: input.requirementDigest,
-      storedAt: (input.now ?? new Date()).toISOString(),
+      storedAt: now.toISOString(),
     });
+    const record: StoredEmailProofRecord = {
+      ...base,
+      subjectDid: input.result.envelope.subjectDid,
+      descriptor: input.result.descriptor,
+    };
+    try {
+      await this.verify({ record, requirement: input.requirement, holderDid: input.holderDid, now });
+    } catch {
+      throw new CourierError('credential-record-invalid', 'Issued credential failed offline verification and was not stored. Request a new code.');
+    }
     writeOwnerOnly(this.home, credentialFile(this.home, input.holderDid, input.requirementDigest), record);
     return record;
   }

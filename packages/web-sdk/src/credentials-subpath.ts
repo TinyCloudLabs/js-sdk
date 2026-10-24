@@ -1,5 +1,5 @@
-// Subpath entry for headless clients (e.g. the CLI). Re-exports the single
-// credential driver from @tinycloud/node-sdk/credentials; the export list is unchanged.
+// Subpath entry for headless clients (e.g. the CLI). Re-exports the credential driver and the offline
+// stored-credential verifier from @tinycloud/node-sdk/credentials. Built as its own entry by webpack.config.cjs.
 export { OpenCredentialsHttpTransport } from "@tinycloud/node-sdk/credentials";
 export { interpretCredentialFlow } from "@tinycloud/node-sdk/credentials";
 export type {
@@ -16,6 +16,7 @@ export {
   createMemoryEmailProofPendingStore,
   EmailProofError,
   requestEmailProofCode,
+  verifyStoredEmailProof,
 } from "@tinycloud/node-sdk/credentials";
 export type {
   EmailProofAcquireInput,
@@ -30,4 +31,6 @@ export type {
   EmailProofStep,
   HolderAlgorithm,
   HolderSigner,
+  StoredEmailProofInput,
+  StoredEmailProofRecord,
 } from "@tinycloud/node-sdk/credentials";

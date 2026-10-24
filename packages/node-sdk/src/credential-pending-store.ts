@@ -176,7 +176,7 @@ function mkdirOwnerOnly(target: string): void {
 }
 
 /** Creates the store directory 0700 if absent. A pre-existing directory must already be owner-only; it is never chmodded. */
-function ensureSecureDir(home: string): void {
+export function ensureSecureDir(home: string): void {
   assertHomeSafe(home);
   const dir = credentialsDir(home);
   mkdirOwnerOnly(home);
@@ -190,7 +190,7 @@ function ensureSecureDir(home: string): void {
 }
 
 /** Returns false when the store directory does not exist. Re-checks symlink, owner, and mode on every call. */
-function checkSecureDir(home: string): boolean {
+export function checkSecureDir(home: string): boolean {
   assertHomeSafe(home);
   const dir = credentialsDir(home);
   const st = lstatOrUndefined(dir);

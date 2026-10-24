@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 
 import {
   extractSiweExpiration,
-  grantsCappedDecrypt,
   legacyParamsToPermissionEntries,
   resolveExpiryMs,
 } from "./delegateToHelpers";
@@ -146,57 +145,5 @@ describe("extractSiweExpiration", () => {
     // rather than silently returning undefined — a corrupted session is
     // a bug we want to surface.
     expect(() => extractSiweExpiration("garbage not-siwe")).toThrow();
-  });
-});
-
-describe("grantsCappedDecrypt share-network name rule", () => {
-  const DECRYPT = "tinycloud.encryption/decrypt";
-  const WILDCARD = "tinycloud.encryption/*";
-  const OWNER = "did:pkh:eip155:1:0xD559CCd9EB87c530A9a349262669386dE93cf412";
-  const networkPath = (name: string) => `urn:tinycloud:encryption:${OWNER}:${name}`;
-
-  // Network names that must stay capped (one-hour default, explicit > 1 h refused).
-  const CAPPED_NAMES: Array<[string, string]> = [
-    ["the default network", "default"],
-    ["a bare share network name", "share"],
-    ["share- with 15 id characters", `share-${"a".repeat(15)}`],
-    ["share- with 37 id characters", `share-${"a".repeat(37)}`],
-    ["a prefix before share-", `xshare-${"a".repeat(16)}`],
-    ["an uppercase SHARE- prefix", `SHARE-${"a".repeat(16)}`],
-    ["a double dash after share-", `share--${"a".repeat(16)}`],
-    ["a trailing slash", `share-${"a".repeat(16)}/`],
-  ];
-  // Share network names whose id is 16 to 36 valid characters: exempt.
-  const EXEMPT_NAMES: Array<[string, string]> = [
-    ["share- with 16 id characters", `share-${"a".repeat(16)}`],
-    ["share- with 36 id characters", `share-${"a".repeat(36)}`],
-  ];
-
-  for (const [label, name] of CAPPED_NAMES) {
-    test(`decrypt stays capped on ${label}`, () => {
-      expect(grantsCappedDecrypt(networkPath(name), [DECRYPT])).toBe(true);
-    });
-  }
-
-  for (const [label, name] of EXEMPT_NAMES) {
-    test(`decrypt is exempt on ${label}`, () => {
-      expect(grantsCappedDecrypt(networkPath(name), [DECRYPT])).toBe(false);
-    });
-  }
-
-  test("current behaviour: owner segment ending in :default with a share name is exempt", () => {
-    // The parser splits on the last colon, so the owner DID absorbs `:default`
-    // and the name `share-<id>` is valid. The path is exempt like any share
-    // network. The delegation chain still roots at the embedded owner DID.
-    const spoofed = `urn:tinycloud:encryption:${OWNER}:default:share-${"a".repeat(16)}`;
-    expect(grantsCappedDecrypt(spoofed, [DECRYPT])).toBe(false);
-  });
-
-  test("wildcard decrypt is exempt on a share network", () => {
-    expect(grantsCappedDecrypt(networkPath(`share-${"a".repeat(16)}`), [WILDCARD])).toBe(false);
-  });
-
-  test("wildcard decrypt stays capped on a 15-character share name", () => {
-    expect(grantsCappedDecrypt(networkPath(`share-${"a".repeat(15)}`), [WILDCARD])).toBe(true);
   });
 });

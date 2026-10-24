@@ -19,6 +19,8 @@ import { approvedTc1827WorkerRatchet, validateTc1827WorkerRatchetTransition, typ
 import { approvedTc1827ReplicaWorkerRatchet, validateTc1827ReplicaWorkerRatchetTransition, type Tc1827ReplicaWorkerRatchet } from "./replica-size-policy";
 import { approvedTc1823SizeCodeRatchet, validateTc1823SizeCodeRatchetTransition, type Tc1823SizeCodeRatchet } from "./replica-size-policy";
 import { approvedTc712CredentialCoreRatchet, validateTc712CredentialCoreRatchetTransition, type Tc712CredentialCoreRatchet } from "./replica-size-policy";
+import { approvedTc1781DecryptStandardExpiryRatchet, validateTc1781DecryptStandardExpiryRatchetTransition, type Tc1781DecryptStandardExpiryRatchet } from "./replica-size-policy";
+import { approvedTc1855ManifestLimitGuardRatchet, validateTc1855ManifestLimitGuardRatchetTransition, type Tc1855ManifestLimitGuardRatchet } from "./replica-size-policy";
 import { activeRootCeiling, approvedLedgerRows, rootCeilingFor, rootCeilings } from "./replica-size-policy";
 import { approvedTc1443Ratchet, approvedTc1443bRatchet, approvedTc1448Ratchet, approvedTc1466Ratchet, validateTc1443RatchetTransition, validateTc1443bRatchetTransition, validateTc1448RatchetTransition, validateTc1466RatchetTransition, type Tc1443Ratchet, type Tc1443bRatchet, type Tc1448Ratchet, type Tc1466Ratchet } from "./replica-size-policy";
 import { ancestryPins, assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedHardeningRatchet, approvedLogoutRatchet, approvedTc1413Ratchet, approvedTc1424Ratchet, approvedTc1432Ratchet, approvedTc1436Ratchet, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, landingCommit, pinLandedOn, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateLogoutRatchetTransition, validateMasterMergeResolutionTransition, validateTc1413RatchetTransition, validateTc1424RatchetTransition, validateTc1432RatchetTransition, validateTc1436RatchetTransition, type HardeningRatchet, type Ledger, type LogoutRatchet, type MasterMergeResolution, type Tc1413Ratchet, type Tc1424Ratchet, type Tc1432Ratchet, type Tc1436Ratchet } from "./replica-size-policy";
@@ -2459,6 +2461,122 @@ describe("credential consumer core (#679, TC-712) raised root ceiling ratchet", 
     changed.root.ceiling["index.mjs"]++;
     expect(() => validateTc712CredentialCoreRatchetTransition(undefined, changed)).toThrow();
     expect(() => validateTc712CredentialCoreRatchetTransition(row(), undefined)).toThrow();
+  });
+});
+
+describe("decrypt grants on the standard expiry (#707, TC-1781) lowered root ceiling ratchet", () => {
+  const row = () => structuredClone(approvedTc1781DecryptStandardExpiryRatchet);
+
+  it("lowers only the root ceilings, by the exact canonical CI delta under the credential consumer core row, and nothing else", () => {
+    expect(() => validateLedger(current)).not.toThrow();
+    expect(JSON.stringify(current.tc1781DecryptStandardExpiryRatchet)).toBe(JSON.stringify(approvedTc1781DecryptStandardExpiryRatchet));
+    expect(row().root.delta).toEqual({ "index.mjs": -313, "index.cjs": -229 });
+    expect(row().root.ceiling).toEqual({ "index.mjs": 1462319, "index.cjs": 1404635 });
+    for (const format of ["index.mjs", "index.cjs"] as const) {
+      expect(row().root.ceiling[format]).toBe(approvedTc712CredentialCoreRatchet.root.ceiling[format] + row().root.delta[format]);
+    }
+    expect(row().firstImport).toEqual({ ...approvedTc712CredentialCoreRatchet.firstImport, delta: { "replica.mjs": 0, "replica.cjs": 0 } });
+    expect(row().activation).toEqual({ ...approvedTc712CredentialCoreRatchet.activation, delta: { "activation.mjs": 0, "activation.cjs": 0 } });
+    expect(row().worker).toEqual({ delta: 0, ceiling: approvedTc712CredentialCoreRatchet.worker.ceiling });
+    expect(row().ruling).toBe("Approved by Naomi (2026-10-23, policy review relayed by Amos)");
+    expect(row().sourceCommits).toEqual(["218d4a83fc7771818d1f7d1f674b81e7163d6d07"]);
+    expect(row().canonicalCI.run).toBe("https://github.com/TinyCloudLabs/js-sdk/actions/runs/40030915569");
+    expect(row().canonicalCI.jobs).toHaveLength(2);
+    expect(ancestryPins(current, false)).toContainEqual({
+      row: "tc1781DecryptStandardExpiryRatchet", pin: row().sourceCommits.at(-1)!,
+    });
+  });
+
+  it("refuses one byte of drift in any bucket, other CI provenance, or a missing credential consumer core row", () => {
+    const mutations: Array<(changed: Tc1781DecryptStandardExpiryRatchet) => void> = [
+      (changed) => { changed.root.ceiling["index.mjs"]++; },
+      (changed) => { changed.root.ceiling["index.cjs"]++; },
+      (changed) => { changed.root.ceiling["index.cjs"]--; },
+      (changed) => { changed.root.delta["index.mjs"]++; },
+      (changed) => { changed.firstImport.ceiling["replica.cjs"]++; },
+      (changed) => { changed.activation.ceiling["activation.cjs"]++; },
+      (changed) => { changed.worker.ceiling--; },
+      (changed) => { changed.canonicalCI.run = "https://github.com/TinyCloudLabs/js-sdk/actions/runs/1"; },
+      (changed) => { changed.sourceCommits = ["0".repeat(40)]; },
+    ];
+    for (const mutate of mutations) {
+      const ledger = copy(current);
+      const changed = row();
+      mutate(changed);
+      ledger.tc1781DecryptStandardExpiryRatchet = changed;
+      expect(() => validateLedger(ledger)).toThrow();
+    }
+    const withoutPrerequisite = copy(current);
+    delete withoutPrerequisite.tc712CredentialCoreRatchet;
+    expect(() => validateLedger(withoutPrerequisite)).toThrow("decrypt standard expiry");
+  });
+
+  it("may be introduced once and never changed or removed in a later base", () => {
+    expect(() => validateTc1781DecryptStandardExpiryRatchetTransition(undefined, row())).not.toThrow();
+    expect(() => validateTc1781DecryptStandardExpiryRatchetTransition(row(), row())).not.toThrow();
+    const changed = row();
+    changed.root.ceiling["index.mjs"]++;
+    expect(() => validateTc1781DecryptStandardExpiryRatchetTransition(undefined, changed)).toThrow();
+    expect(() => validateTc1781DecryptStandardExpiryRatchetTransition(row(), undefined)).toThrow();
+  });
+});
+
+describe("manifest limit guards (#702, TC-1855) raised root ceiling ratchet", () => {
+  const row = () => structuredClone(approvedTc1855ManifestLimitGuardRatchet);
+
+  it("raises only the root ceilings, by the exact canonical CI delta over the decrypt standard expiry row, and nothing else", () => {
+    expect(() => validateLedger(current)).not.toThrow();
+    expect(JSON.stringify(current.tc1855ManifestLimitGuardRatchet)).toBe(JSON.stringify(approvedTc1855ManifestLimitGuardRatchet));
+    expect(row().root.delta).toEqual({ "index.mjs": 155, "index.cjs": 106 });
+    expect(row().root.ceiling).toEqual({ "index.mjs": 1462474, "index.cjs": 1404741 });
+    for (const format of ["index.mjs", "index.cjs"] as const) {
+      expect(row().root.ceiling[format]).toBe(approvedTc1781DecryptStandardExpiryRatchet.root.ceiling[format] + row().root.delta[format]);
+    }
+    expect(row().firstImport).toEqual({ ...approvedTc1781DecryptStandardExpiryRatchet.firstImport, delta: { "replica.mjs": 0, "replica.cjs": 0 } });
+    expect(row().activation).toEqual({ ...approvedTc1781DecryptStandardExpiryRatchet.activation, delta: { "activation.mjs": 0, "activation.cjs": 0 } });
+    expect(row().worker).toEqual({ delta: 0, ceiling: approvedTc1781DecryptStandardExpiryRatchet.worker.ceiling });
+    expect(row().ruling).toBe("Approved by Naomi (2026-10-24; accepted ~+168 B CJS to keep every guard; judge by the CJS delta)");
+    expect(row().base).toBe("9a5eed8fee222c091d823e3f1c49127011408693");
+    expect(row().sourceCommits).toEqual(["657abe77d520e8174e1394daf5911847bd2ff57d"]);
+    expect(row().canonicalCI.run).toBe("https://github.com/TinyCloudLabs/js-sdk/actions/runs/40058867098");
+    expect(row().canonicalCI.jobs).toHaveLength(2);
+    expect(ancestryPins(current, false)).toContainEqual({
+      row: "tc1855ManifestLimitGuardRatchet", pin: row().sourceCommits.at(-1)!,
+    });
+    expect(activeRootCeiling(current)).toEqual({ row: "tc1855ManifestLimitGuardRatchet", ceiling: row().root.ceiling });
+  });
+
+  it("refuses one byte of drift in any bucket, other CI provenance, or a missing decrypt standard expiry row", () => {
+    const mutations: Array<(changed: Tc1855ManifestLimitGuardRatchet) => void> = [
+      (changed) => { changed.root.ceiling["index.mjs"]++; },
+      (changed) => { changed.root.ceiling["index.cjs"]++; },
+      (changed) => { changed.root.ceiling["index.cjs"]--; },
+      (changed) => { changed.root.delta["index.mjs"]++; },
+      (changed) => { changed.firstImport.ceiling["replica.cjs"]++; },
+      (changed) => { changed.activation.ceiling["activation.cjs"]++; },
+      (changed) => { changed.worker.ceiling--; },
+      (changed) => { changed.canonicalCI.run = "https://github.com/TinyCloudLabs/js-sdk/actions/runs/1"; },
+      (changed) => { changed.sourceCommits = ["0".repeat(40)]; },
+    ];
+    for (const mutate of mutations) {
+      const ledger = copy(current);
+      const changed = row();
+      mutate(changed);
+      ledger.tc1855ManifestLimitGuardRatchet = changed;
+      expect(() => validateLedger(ledger)).toThrow();
+    }
+    const withoutPrerequisite = copy(current);
+    delete withoutPrerequisite.tc1781DecryptStandardExpiryRatchet;
+    expect(() => validateLedger(withoutPrerequisite)).toThrow("manifest limit guard");
+  });
+
+  it("may be introduced once and never changed or removed in a later base", () => {
+    expect(() => validateTc1855ManifestLimitGuardRatchetTransition(undefined, row())).not.toThrow();
+    expect(() => validateTc1855ManifestLimitGuardRatchetTransition(row(), row())).not.toThrow();
+    const changed = row();
+    changed.root.ceiling["index.mjs"]++;
+    expect(() => validateTc1855ManifestLimitGuardRatchetTransition(undefined, changed)).toThrow();
+    expect(() => validateTc1855ManifestLimitGuardRatchetTransition(row(), undefined)).toThrow();
   });
 });
 
