@@ -326,7 +326,7 @@ describe("delegations section", () => {
 });
 
 describe("nodes section", () => {
-  test("lists each node by origin", async () => {
+  test("lists each node by its host", async () => {
     const el = mount(
       nodesSection,
       clientWith(
