@@ -59,19 +59,26 @@ async function mount(page: Page, options: MountOptions = {}) {
   if (options.node) {
     await page.addInitScript(
       (seed) => {
-        (window as unknown as HarnessWindow).__TC_STUB_SEED__ = seed;
+        const w: HarnessWindow = window;
+        w.__TC_STUB_SEED__ = seed;
       },
       { localNode: options.node },
     );
   }
   await routeUiHarness(page);
   await page.goto(`${ORIGIN}/`);
-  await page.evaluate(() => (window as unknown as HarnessWindow).__tc.mount());
+  await page.evaluate(() => {
+    const w: HarnessWindow = window;
+    w.__tc.mount();
+  });
 }
 
 // Opens the panel directly on the Local TinyCloud section, the same path the other specs use.
 async function openLocal(page: Page) {
-  await page.evaluate(() => (window as unknown as HarnessWindow).tc?.ui.open("local-tinycloud"));
+  await page.evaluate(() => {
+    const w: HarnessWindow = window;
+    w.tc?.ui.open("local-tinycloud");
+  });
   await expect(toggle(page)).toBeVisible();
 }
 
