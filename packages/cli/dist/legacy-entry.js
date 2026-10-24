@@ -2523,6 +2523,37 @@ var init_owner_did = __esm({
   }
 });
 
+// src/lib/caveat-refusal.ts
+import { recapCaveatsEqual } from "@tinycloud/sdk-core";
+function hasCaveatLimit(caveats) {
+  if (caveats === void 0) return false;
+  if (!Array.isArray(caveats)) return true;
+  try {
+    return !recapCaveatsEqual(caveats, void 0);
+  } catch {
+    return true;
+  }
+}
+function assertNoCaveatLimits(permissions) {
+  if (permissions === void 0) return;
+  for (const permission of permissions) {
+    if (permission === null || typeof permission !== "object" || !("caveats" in permission)) continue;
+    if (hasCaveatLimit(permission.caveats)) {
+      throw new CLIError(CAVEATS_UNSUPPORTED_CODE, CAVEATS_UNSUPPORTED_MESSAGE, ExitCode.USAGE_ERROR);
+    }
+  }
+}
+var CAVEATS_UNSUPPORTED_CODE, CAVEATS_UNSUPPORTED_MESSAGE;
+var init_caveat_refusal = __esm({
+  "src/lib/caveat-refusal.ts"() {
+    "use strict";
+    init_constants();
+    init_errors();
+    CAVEATS_UNSUPPORTED_CODE = "CAVEATS_UNSUPPORTED";
+    CAVEATS_UNSUPPORTED_MESSAGE = "A requested permission carries a limit (caveats), and OpenKey approval does not apply limits. Nothing was requested. Remove the limit from the permission and retry.";
+  }
+});
+
 // src/share/publishing-manifest.ts
 function sharePublishingPermissions() {
   return SHARE_PUBLISHING_MANIFEST.permissions.map((permission) => ({
@@ -2815,6 +2846,7 @@ async function loadPermissionRequest(source, profile) {
 async function loadManifestPermissions(source, profile, options = {}) {
   const raw = await loadManifestText(source);
   const manifest = JSON.parse(raw);
+  if (Array.isArray(manifest.permissions)) assertNoCaveatLimits(manifest.permissions);
   if (options.device && typeof manifest.app_id === "string" && (manifest.secrets !== void 0 || manifest.space === "secrets" || typeof manifest.space === "string" && manifest.space.endsWith(":secrets") || Array.isArray(manifest.permissions) && manifest.permissions.some((entry) => entry !== null && typeof entry === "object" && normalizeService(String(entry.service ?? "")) === "tinycloud.encryption"))) {
     throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", "--device cannot authorize tinycloud.encryption or the secrets space. Use browser or --paste login.", ExitCode.USAGE_ERROR);
   }
@@ -3030,6 +3062,7 @@ var init_permissions = __esm({
     init_space();
     init_raw_encryption();
     init_owner_did();
+    init_caveat_refusal();
     init_publishing_manifest();
     init_types();
   }
@@ -30423,6 +30456,7 @@ init_types();
 // src/auth/browser-auth.ts
 init_constants();
 init_errors();
+init_caveat_refusal();
 init_formatter();
 import { createServer } from "http";
 import { randomBytes as randomBytes3 } from "crypto";
@@ -30451,6 +30485,7 @@ function publicJwkForDelegation(jwk) {
   return publicJwk;
 }
 async function startAuthFlow(did, options = {}) {
+  assertNoCaveatLimits(options.permissions);
   if (options.paste) {
     return pasteFlow(did, options);
   }
@@ -30466,6 +30501,7 @@ async function startAuthFlow(did, options = {}) {
   }
 }
 function buildAuthUrl(did, options = {}) {
+  assertNoCaveatLimits(options.permissions);
   const params = new URLSearchParams();
   params.set("did", did);
   if (options.callback) {
@@ -30772,6 +30808,7 @@ function loginCancelled() {
 // src/auth/device-auth.ts
 init_constants();
 init_errors();
+init_caveat_refusal();
 import {
   createDecipheriv,
   createECDH,
@@ -30899,6 +30936,7 @@ init_space();
 init_manifest();
 init_raw_encryption();
 init_owner_did();
+init_caveat_refusal();
 var CAPABILITIES_READ = "tinycloud.capabilities/read";
 var CLOCK_SKEW_MS = 3e4;
 var SIGNED_RECAP = "signed-recap";
@@ -31090,9 +31128,11 @@ function validateLoginPermissions(permissions) {
   }
 }
 function scopedLoginPermissions(permissions) {
+  assertNoCaveatLimits(permissions);
   return withCapabilitiesRead(permissions, permissions.find((p) => !isRawEncryptionPermission(p)).space ?? "");
 }
 function grantRequestPermissions(group, anchorSpace) {
+  assertNoCaveatLimits(group);
   const request2 = group.map((p) => isRawEncryptionPermission(p) ? { ...p, space: ENCRYPTION_MANIFEST_SPACE, path: canonicalNetworkUrn(p.path) } : p);
   const capabilitySpace = request2.find(
     (permission) => !isRawEncryptionPermission(permission) && !isRawCidRevocationPermission(permission)
@@ -31592,6 +31632,7 @@ function writeApprovalPrompt(prompt) {
   );
 }
 async function acquireDeviceDelegation(input) {
+  assertNoCaveatLimits(input.permissions);
   validateLoginPermissions(input.permissions);
   if (input.permissions.some((permission) => permission.service === "tinycloud.encryption" || permission.space === "secrets" || permission.space?.startsWith("tinycloud:") && permission.space.endsWith(":secrets"))) {
     throw new CLIError(
@@ -31901,6 +31942,7 @@ async function ensureSpaceSetup(ctx, delegation, permissions) {
 }
 
 // src/commands/auth.ts
+init_caveat_refusal();
 init_raw_encryption();
 init_owner_did();
 
@@ -32276,6 +32318,7 @@ async function lookupOwnerSpaceOnNode(node, cid, ownerDid) {
 }
 
 // src/lib/revoke-delegation.ts
+var REVOKE_AUTHORITY_EXPIRY = "5m";
 function normalizeDid2(input) {
   const trimmed = input.trim();
   const fragment = trimmed.indexOf("#");
@@ -32400,7 +32443,7 @@ async function revokeDelegationOnNode(params) {
         profile,
         node,
         requested: [revokePermission],
-        expiryOption: void 0,
+        expiryOption: REVOKE_AUTHORITY_EXPIRY,
         reason: `Revoke delegation ${cid}`,
         yes: params.yes,
         consentAlreadyGiven: true,
@@ -32446,7 +32489,7 @@ async function revokeDelegationOnNode(params) {
           path: "",
           actions: ["tinycloud.delegation/revoke"]
         }],
-        expiryOption: void 0,
+        expiryOption: REVOKE_AUTHORITY_EXPIRY,
         reason: fallback.source === "node-delegation-record" ? `Revoke delegation ${cid} using the node's record of the owner's grant` : `Revoke delegation ${cid} using its CID-bound owner-signed grant ${fallback.source === "local-stored-grant" ? "record" : "artifact"}`,
         yes: params.yes,
         consentAlreadyGiven: true,
@@ -33804,6 +33847,7 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
         await emitPermissionRequestArtifact(artifact, options2.emit);
         return;
       }
+      if (profile.authMethod === "openkey" || options2.device) assertNoCaveatLimits(requested);
       const node = await ensureAuthenticated(ctx);
       if (node.hasRuntimePermissions(requested)) {
         outputJson({ changed: false, missing: [], added: [] });
@@ -34093,6 +34137,7 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
       const requested = finalizeSigningEntries(
         await resolvePermissionSpaces(entriesForSigning(parsed.requested), ctx.profile)
       );
+      if (profile.authMethod === "openkey") assertNoCaveatLimits(requested);
       const [applications] = await resolvePermissionSpaces(
         [{ service: "tinycloud.kv", space: APPS_AGENT_SPACE, path: "", actions: ["tinycloud.kv/get"] }],
         ctx.profile
@@ -34538,6 +34583,7 @@ async function activateAndStoreOpenKeyGrants(profileName2, host, node, grants, s
   });
 }
 async function acquireOpenKeyApproval(params) {
+  assertNoCaveatLimits(params.requested);
   if (params.requested.some(isRawCidRevocationPermission)) {
     throw new CLIError(
       "RAW_RECAP_RESOURCE_UNSUPPORTED",
@@ -34594,11 +34640,19 @@ async function nodeFromOpenKeyApproval(host, session) {
 }
 async function ensureDelegationAuthority(params) {
   if (!params.force && params.node.hasRuntimePermissions(params.requested)) return void 0;
+  if (params.profile.authMethod === "openkey") assertNoCaveatLimits(params.requested);
   if (!params.consentAlreadyGiven && (params.persist === false || params.profile.authMethod !== "openkey")) {
     await requirePermissionConsent(params.requested, params.yes);
   }
   if (params.profile.authMethod === "openkey") {
     if (params.persist === false) {
+      if (params.expiryOption === void 0) {
+        throw new CLIError(
+          "AUTHORITY_EXPIRY_REQUIRED",
+          "One-use command authority needs an explicit lifetime; none was given, so no approval was requested.",
+          ExitCode.ERROR
+        );
+      }
       const { delegation } = await acquireOpenKeyApproval(params);
       await params.node.useRuntimeDelegation(delegation);
       return delegation;
@@ -35104,6 +35158,7 @@ function writeReplicationSecretsWarning() {
 }
 async function refreshPreparedOpenKeySession(params) {
   const { profileName: profileName2, host, profile, snapshot, options, replication, permissions, expectedOwner, expiry } = params;
+  assertNoCaveatLimits(permissions);
   const storedOwner = snapshot.session && snapshot.key && profile.sessionDid ? verifySignedSession(snapshot.session, snapshot.key, profile.sessionDid).ownerDid : void 0;
   const owner = options.expectedOwner ? canonicalOwnerDid(options.expectedOwner) : storedOwner;
   if (!owner || !permissions) {

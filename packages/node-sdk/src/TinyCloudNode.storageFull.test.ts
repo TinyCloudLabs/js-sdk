@@ -514,4 +514,38 @@ describe("TC-628: restoring a session", () => {
     await restore(OTHER_SPACE);
     expect(internals.storageFull.isFull).toBe(false);
   });
+
+  test("restoring a different owner clears recorded requests; the same owner keeps them", async () => {
+    const wasm = new NodeWasmBindings();
+    const manager = wasm.createSessionManager();
+    const jwk = JSON.parse(manager.jwk("default")!);
+    const node = new TinyCloudNode({ host: "https://tinycloud.test", wasmBindings: wasm, requestLog: true });
+    const restore = (spaceId: string) => node.restoreSession({
+      delegationHeader: { Authorization: "Bearer session" },
+      delegationCid: "bafy-session",
+      spaceId,
+      jwk,
+      verificationMethod: manager.getDID("default"),
+      tinycloudHosts: ["https://tinycloud.test"],
+    });
+    const recorder = Reflect.get(node, "_requestLog") as { record(event: object): void };
+    const onClear = mock(() => {});
+
+    await restore(SPACE_URI);
+    node.requests!.onClear(onClear);
+    recorder.record({
+      v: 1, at: 0, service: "kv", op: "kv/get", path: "notes/a", space: "default",
+      host: null, bytes: 3, durationMs: 1, attempts: 1, ok: true, code: "ok", source: "network",
+    });
+    const recorded = node.requests!.snapshot().length;
+    expect(recorded).toBeGreaterThan(0);
+
+    await restore(SPACE_URI);
+    expect(node.requests!.snapshot()).toHaveLength(recorded);
+    expect(onClear).not.toHaveBeenCalled();
+
+    await restore(OTHER_SPACE);
+    expect(node.requests!.snapshot()).toEqual([]);
+    expect(onClear).toHaveBeenCalledTimes(1);
+  });
 });

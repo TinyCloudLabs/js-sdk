@@ -1,5 +1,186 @@
 # @tinycloud/cli
 
+## 1.3.5
+
+### Patch Changes
+
+- 217d82c: A manifest, grant or login permission that carries a limit (any `caveats` other than absent, `[]` or `[{}]`) is refused with `CAVEATS_UNSUPPORTED` (exit 2) before any OpenKey URL, device authorization or request is made. The check uses the same `recapCaveatsEqual` comparison as the SDK.
+
+  Details: TC-1856
+
+- Updated dependencies [e18946e]
+- Updated dependencies [e600a1a]
+- Updated dependencies [0c09d7b]
+- Updated dependencies [82cbd43]
+- Updated dependencies [dc61583]
+- Updated dependencies [1f831e3]
+- Updated dependencies [7bd4ae6]
+- Updated dependencies [7bd4ae6]
+- Updated dependencies [e32bc41]
+- Updated dependencies [c0acb86]
+  - @tinycloud/operations@0.7.4
+  - @tinycloud/node-sdk@3.6.0
+  - @tinycloud/sdk-core@3.6.0
+  - @tinycloud/sdk-services@3.6.0
+
+## 1.3.5-beta.9
+
+### Patch Changes
+
+- Updated dependencies [1f831e3]
+  - @tinycloud/sdk-core@3.6.0-beta.8
+  - @tinycloud/node-sdk@3.6.0-beta.8
+  - @tinycloud/operations@0.7.4-beta.8
+
+## 1.3.5-beta.8
+
+### Patch Changes
+
+- Updated dependencies [7bd4ae6]
+- Updated dependencies [7bd4ae6]
+  - @tinycloud/node-sdk@3.6.0-beta.7
+  - @tinycloud/operations@0.7.4-beta.7
+
+## 1.3.5-beta.7
+
+### Patch Changes
+
+- 217d82c: A manifest, grant or login permission that carries a limit (any `caveats` other than absent, `[]` or `[{}]`) is refused with `CAVEATS_UNSUPPORTED` (exit 2) before any OpenKey URL, device authorization or request is made. The check uses the same `recapCaveatsEqual` comparison as the SDK.
+
+  Details: TC-1856
+
+## 1.3.5-beta.6
+
+### Patch Changes
+
+- Updated dependencies [e600a1a]
+  - @tinycloud/node-sdk@3.6.0-beta.6
+  - @tinycloud/operations@0.7.4-beta.6
+
+## 1.3.5-beta.5
+
+### Patch Changes
+
+- Updated dependencies [c0acb86]
+  - @tinycloud/node-sdk@3.6.0-beta.5
+  - @tinycloud/operations@0.7.4-beta.5
+
+## 1.3.5-beta.4
+
+### Patch Changes
+
+- Updated dependencies [e32bc41]
+  - @tinycloud/sdk-core@3.6.0-beta.4
+  - @tinycloud/node-sdk@3.6.0-beta.4
+  - @tinycloud/operations@0.7.4-beta.4
+
+## 1.3.5-beta.3
+
+### Patch Changes
+
+- Updated dependencies [82cbd43]
+  - @tinycloud/sdk-services@3.6.0-beta.3
+  - @tinycloud/operations@0.7.4-beta.3
+  - @tinycloud/node-sdk@3.6.0-beta.3
+  - @tinycloud/sdk-core@3.6.0-beta.3
+
+## 1.3.5-beta.2
+
+### Patch Changes
+
+- Updated dependencies [e18946e]
+  - @tinycloud/operations@0.7.4-beta.2
+
+## 1.3.5-beta.1
+
+### Patch Changes
+
+- Updated dependencies [dc61583]
+  - @tinycloud/sdk-services@3.6.0-beta.2
+  - @tinycloud/node-sdk@3.6.0-beta.2
+  - @tinycloud/operations@0.7.4-beta.1
+  - @tinycloud/sdk-core@3.6.0-beta.2
+
+## 1.3.5-beta.0
+
+### Patch Changes
+
+- Updated dependencies [0c09d7b]
+  - @tinycloud/sdk-core@3.6.0-beta.0
+  - @tinycloud/node-sdk@3.6.0-beta.0
+  - @tinycloud/operations@0.7.4-beta.0
+
+## 1.3.4
+
+### Patch Changes
+
+- Updated dependencies [d60f81d]
+- Updated dependencies [7b92156]
+- Updated dependencies [7b92156]
+  - @tinycloud/sdk-services@3.5.0
+  - @tinycloud/node-sdk@3.5.0
+  - @tinycloud/operations@0.7.3
+  - @tinycloud/sdk-core@3.5.0
+
+## 1.3.4-beta.1
+
+### Patch Changes
+
+- Updated dependencies [7b92156]
+- Updated dependencies [7b92156]
+  - @tinycloud/node-sdk@3.5.0-beta.1
+  - @tinycloud/operations@0.7.3-beta.1
+
+## 1.3.4-beta.0
+
+### Patch Changes
+
+- Updated dependencies [d60f81d]
+  - @tinycloud/sdk-services@3.5.0-beta.0
+  - @tinycloud/node-sdk@3.5.0-beta.0
+  - @tinycloud/operations@0.7.3-beta.0
+  - @tinycloud/sdk-core@3.5.0-beta.0
+
+## 1.3.3
+
+### Patch Changes
+
+- b8ce8a9: `tc delegation revoke` now asks OpenKey for its one-use revoke authority with a 5-minute lifetime, so that authority expires a few minutes after the revoke instead of lasting OpenKey's default 7 days. Local-key owners get the same bounded lifetime. The command also refuses to request one-use OpenKey authority without an explicit lifetime.
+
+  Details: TC-1785
+
+- Updated dependencies [666f60b]
+  - @tinycloud/share-sdk@1.3.0
+  - @tinycloud/node-sdk@3.4.0
+  - @tinycloud/sdk-core@3.4.0
+  - @tinycloud/operations@0.7.2
+  - @tinycloud/sdk-services@3.3.2
+
+## 1.3.3-beta.2
+
+### Patch Changes
+
+- Updated dependencies [666f60b]
+  - @tinycloud/share-sdk@1.3.0-beta.0
+  - @tinycloud/sdk-core@3.3.2-beta.1
+  - @tinycloud/node-sdk@3.3.2-beta.1
+  - @tinycloud/operations@0.7.2-beta.1
+
+## 1.3.3-beta.1
+
+### Patch Changes
+
+- b8ce8a9: `tc delegation revoke` now asks OpenKey for its one-use revoke authority with a 5-minute lifetime, so that authority expires a few minutes after the revoke instead of lasting OpenKey's default 7 days. Local-key owners get the same bounded lifetime. The command also refuses to request one-use OpenKey authority without an explicit lifetime.
+
+  Details: TC-1785
+
+## 1.3.3-beta.0
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.3.2-beta.0
+- @tinycloud/operations@0.7.2-beta.0
+
 ## 1.3.2
 
 ### Patch Changes
