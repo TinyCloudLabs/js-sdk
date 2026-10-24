@@ -550,11 +550,9 @@ for (const scheme of ["light", "dark"] as const) {
   }
 }
 
-// Intended behaviour: Escape during a running wipe must not close the confirm box, so the Wiping… state stays
-// on screen. The shared confirm box (src/ui/sections/ui.ts confirmBox) takes the safe action on Escape even
-// when its actions are disabled, which closes the box while the wipe goes on. Enable this test once the shared
-// confirmBox ignores Escape while its actions are disabled.
-test.fixme("Escape during a running wipe keeps the confirm box and its Wiping… state", async ({ page }) => {
+// Escape during a running wipe must not close the confirm box, so the Wiping… state stays on screen.
+// The shared confirm box ignores Escape while its actions are disabled.
+test("Escape during a running wipe keeps the confirm box and its Wiping… state", async ({ page }) => {
   await mount(page, { seed: seedOn(), sync: SYNC.on, wipe: "hold" });
   await openCopy(page);
   await wipeButton(page).click();
