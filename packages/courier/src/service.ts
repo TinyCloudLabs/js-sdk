@@ -89,9 +89,12 @@ export function launchdPlan(spec: ServiceSpec, home: string, uid: number): Servi
 /**
  * systemd.exec: ExecStart= splits on whitespace and expands `%` specifiers and `$VAR`; Environment= values expand
  * `%` only (`$` is literal there); WorkingDirectory= is a plain path (quotes are rejected) with `%` expansion.
+ * Newline, carriage return and tab are written as their `\n`, `\r`, `\t` escapes so a value can never start a new directive; any other control
+ * character is refused.
  */
 const quoted = (s: string, expandsDollar: boolean) => {
-  const escaped = s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/%/g, '%%');
+  const escaped = s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/%/g, '%%').replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t');
+  if (/[\u0000-\u001f\u007f]/.test(escaped)) throw new CourierError('usage', 'A systemd unit value must not contain control characters.');
   return `"${expandsDollar ? escaped.replace(/\$/g, '$$$$') : escaped}"`;
 };
 const execArg = (s: string) => quoted(s, true);

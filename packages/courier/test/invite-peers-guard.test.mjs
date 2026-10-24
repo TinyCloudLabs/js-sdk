@@ -5,6 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { inviteRecordsFor, storedRecord } from '../dist/invite-commands.js';
+import { systemdUnitFile } from '../dist/service.js';
 import { InviteWatcher, peersEntryProblem, peersFilesFor, readRecord, recordPath } from '../dist/invite-watch.js';
 import { inviteFolder } from '../dist/invite-schema.js';
 import { newInviteId } from '../dist/invite-blob.js';
@@ -239,7 +240,7 @@ test('COURIER_PEERS_FILE is honoured by courier invite without any flag', () => 
   assert.match(unset.stderr, /^courier: \[no-profile\]/);
 });
 
-test('precedence: --peers-file wins over COURIER_PEERS_FILE; an empty COURIER_PEERS_FILE is unset', () => {
+test('precedence: --peers-file wins over COURIER_PEERS_FILE; an empty COURIER_PEERS_FILE is an error', () => {
   const fromEnv = path.join(home, 'env', 'peers.json');
   const fromFlag = path.join(home, 'flag', 'peers.json');
   writePeers({ hunter: { tier: 'trusted' } }, fromEnv);
@@ -251,7 +252,7 @@ test('precedence: --peers-file wins over COURIER_PEERS_FILE; an empty COURIER_PE
   const withFlag = runCli(['invite', 'hunter', '--email', 'hunter@example.test', '--peers-file', fromFlag], { COURIER_PEERS_FILE: fromEnv });
   assert.match(withFlag.stderr, /^courier: \[no-profile\]/);
   process.env.COURIER_PEERS_FILE = '';
-  assert.equal(peersFilesFor().length, 2);
+  assert.throws(() => peersFilesFor(), (e) => e.code === 'usage' && /^COURIER_PEERS_FILE needs a path/.test(e.message));
 });
 
 test('an explicit peers file that is empty, relative or missing is an error, never ignored', () => {
@@ -304,4 +305,43 @@ test('watch --install-systemd refuses a relative or missing --peers-file and car
   const planned = runCli(['watch', '--install-systemd', '--dry-run'], { COURIER_PEERS_FILE: gateFile() });
   assert.equal(planned.status, 0);
   assert.match(planned.stdout, new RegExp(`COURIER_PEERS_FILE=${gateFile().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+});
+
+test('N2: an empty COURIER_PEERS_FILE stops invite and watch --install-systemd, it is not read as unset', () => {
+  fs.writeFileSync(path.join(home, 'profile.json'), JSON.stringify({ version: 3, host: 'https://n.example.test', openkeyHost: 'https://o.example.test', label: 'x', courierDid: 'did:key:z6MkX', status: 'awaiting-grant', peers: {} }), { mode: 0o600 });
+  const invite = runCli(['invite', 'hunter', '--email', 'hunter@example.test'], { COURIER_PEERS_FILE: '' });
+  assert.equal(invite.status, 2);
+  assert.match(invite.stderr, /^COURIER_PEERS_FILE needs a path/);
+  const watch = runCli(['watch', '--install-systemd', '--dry-run'], { COURIER_PEERS_FILE: '' });
+  assert.equal(watch.status, 2);
+  assert.match(watch.stderr, /^COURIER_PEERS_FILE needs a path/);
+});
+
+test('N5: a peers path with a newline or other control character is a usage error, flag or env', () => {
+  fs.writeFileSync(path.join(home, 'profile.json'), JSON.stringify({ version: 3, host: 'https://n.example.test', openkeyHost: 'https://o.example.test', label: 'x', courierDid: 'did:key:z6MkX', status: 'awaiting-grant', peers: {} }), { mode: 0o600 });
+  const hostile = path.join(home, 'gate', 'p\nExecStartPre=/bin/true #.json');
+  writePeers({}, hostile);
+  const base = ['invite', 'hunter', '--email', 'hunter@example.test'];
+  const viaFlag = runCli([...base, '--peers-file', hostile]);
+  assert.equal(viaFlag.status, 2);
+  assert.match(viaFlag.stderr, /^--peers-file must not contain control characters/);
+  const viaEnv = runCli(['watch', '--install-systemd', '--dry-run'], { COURIER_PEERS_FILE: hostile });
+  assert.equal(viaEnv.status, 2);
+  assert.match(viaEnv.stderr, /^COURIER_PEERS_FILE must not contain control characters/);
+  assert.equal(viaEnv.stdout, '');
+  const tab = runCli([...base, '--peers-file', path.join(home, 'gate', 'a\tb.json')]);
+  assert.match(tab.stderr, /^--peers-file must not contain control characters/);
+});
+
+test('N5: the systemd unit escapes newline, percent, dollar and quotes so a value cannot add a directive', () => {
+  const value = '/srv/gate/p\nExecStartPre=/bin/true #%h"q$X\\.json';
+  const unit = systemdUnitFile({ argv: [process.execPath, '/x/cli.js', 'watch', '--peers-file', value], cwd: home, env: { COURIER_PEERS_FILE: value, COURIER_HOME: home }, logFile: path.join(home, 'w.log'), name: '' });
+  const lines = unit.split('\n');
+  assert.equal(lines.some((line) => line.startsWith('ExecStartPre')), false);
+  const env = lines.filter((line) => line.startsWith('Environment=') && line.includes('COURIER_PEERS_FILE'));
+  assert.deepEqual(env, ['Environment="COURIER_PEERS_FILE=/srv/gate/p\\nExecStartPre=/bin/true #%%h\\"q$X\\\\.json"']);
+  const exec = lines.filter((line) => line.startsWith('ExecStart='));
+  assert.equal(exec.length, 1);
+  assert.ok(exec[0].includes('\\n'));
+  assert.throws(() => systemdUnitFile({ argv: ['a\u0001b'], cwd: home, env: {}, logFile: path.join(home, 'w.log'), name: '' }), (e) => e.code === 'usage');
 });

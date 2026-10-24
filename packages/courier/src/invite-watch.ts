@@ -133,9 +133,11 @@ export interface PeersFile {
  */
 function explicitPeersFile(flag: string | undefined): PeersFile | undefined {
   const source = flag !== undefined ? '--peers-file' : 'COURIER_PEERS_FILE';
-  const value = flag ?? (process.env.COURIER_PEERS_FILE === '' ? undefined : process.env.COURIER_PEERS_FILE);
+  const value = flag ?? process.env.COURIER_PEERS_FILE;
   if (value === undefined) return undefined;
-  if (value === 'true' || value === '') fail('usage', `${source} needs a path.`);
+  if (value === '' || (flag !== undefined && value === 'true')) fail('usage', `${source} needs a path.`);
+  // A control character (a newline above all) would split a line of the systemd unit this path is written into.
+  if (/[\u0000-\u001f\u007f]/.test(value)) fail('usage', `${source} must not contain control characters.`);
   if (!path.isAbsolute(value)) fail('usage', `${source} must be an absolute path (got "${value}").`);
   if (!fs.existsSync(value)) fail('peers-unreadable', `${source} names a file that does not exist: ${value}`);
   return { path: value, required: true };

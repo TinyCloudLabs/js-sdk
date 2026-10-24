@@ -137,11 +137,13 @@ tc courier join --resume
   machine wrote, or cannot be read back, `join` does not write over it. It
   keeps polling `out/welcome.json` and pairs only if the Welcome is addressed to
   this courier and comes from the inviter pinned when the invite was accepted.
-  A Welcome that fails those checks is ignored. If none arrives before the
-  invite expires, `join` stops with `hello-exists` and says to ask the inviter
-  for a new invite, and to run `courier revoke <handle>` first if that is
-  refused with "already exists". `join --resume` re-enters the wait and never
-  writes again.
+  A Welcome that fails those checks is ignored; the first one prints a line
+  with a stable failure code. If none arrives before the invite expires, or only
+  such Welcomes did, `join` stops with `hello-exists` and says which of the two
+  it was, to ask the inviter for a new invite, and to run
+  `courier revoke <handle>` first if that is refused with "already exists".
+  `join --resume` re-enters the wait and never writes again; after the invite
+  expired it prints the same `hello-exists` advice.
 - A new invite from the same inviter replaces the unfinished pairing an earlier
   failed `join` left behind (and drops that join's state); a paired peer under
   the handle still blocks. `invite revoke` frees a handle whose pairing never
@@ -160,7 +162,9 @@ tc courier join --resume
   to continue. Courier checks `<COURIER_HOME>/peers.json`,
   `<COURIER_HOME>/intake/peers.json` and the file named by `--peers-file <path>`
   (on `invite`, `invite approve` or `watch`) or, without the flag, by
-  `COURIER_PEERS_FILE`; the flag wins. The named path must be absolute and the
+  `COURIER_PEERS_FILE`; the flag replaces the variable for that command (the two
+  are not combined). The named path must be absolute, free of control
+  characters, and the
   file must exist, otherwise the command stops with an error (`watch
   --install-systemd` checks it too and writes `COURIER_PEERS_FILE` into the
   unit). A default location that is absent counts as no entry. A peers file

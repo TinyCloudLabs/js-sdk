@@ -5,11 +5,12 @@ import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { sendHello, driveJoin, claimCallMe } from '../dist/invite-commands.js';
+import { sendHello, driveJoin, claimCallMe, resumeBlob, inviteWatcher } from '../dist/invite-commands.js';
+import { buildInviteBlob } from '../dist/invite-blob.js';
 import { acceptC as realAcceptC } from '../dist/commands.js';
 import { assertPeerDelegation } from '../dist/authority.js';
 import { peerReadPermissions } from '../dist/keys.js';
-import { InviteWatcher } from '../dist/invite-watch.js';
+import { InviteWatcher, peersFilesFor } from '../dist/invite-watch.js';
 import { secureSubdir, writeSecure } from '../dist/profile.js';
 import { memoryKv } from './memory-kv.mjs';
 
@@ -106,6 +107,14 @@ const refusedAtExpiry = (e) => e.code === 'hello-exists'
   && /already exists/.test(e.message)
   && /revoke hunter/.test(e.message);
 
+// A Welcome did arrive but does not verify for this courier: the refusal says so, with a stable code only.
+const refusedAfterFailedWelcome = (code) => (e) => e.code === 'hello-exists'
+  && e.message.includes(`the welcome that arrived does not verify for this courier (${code})`)
+  && !/no welcome arrived/.test(e.message)
+  && /Ask the inviter for a new invite/.test(e.message)
+  && /already exists/.test(e.message)
+  && /revoke hunter/.test(e.message);
+
 test('(i) another writer stored a different hello first: nothing is accepted, the join is refused at expiry, the object is untouched', async () => {
   const kv = memoryKv();
   await kv.put(HELLO_KEY, { ...hello(), claimedLabel: 'Someone else' });
@@ -158,7 +167,7 @@ test('(iii) a welcome addressed to another audience is rejected and the wait run
   await kv.put(WELCOME_KEY, welcome(artifactC({ delegation: 'other-audience' })));
   const accepted = [];
   const s = state('hello-unconfirmed');
-  await assert.rejects(capture(() => driveJoin(profile(), {}, blob(soon(120)), s, io(kv, acceptCWithRealChecks(accepted)))), refusedAtExpiry);
+  await assert.rejects(capture(() => driveJoin(profile(), {}, blob(soon(120)), s, io(kv, acceptCWithRealChecks(accepted)))), refusedAfterFailedWelcome('bad-delegation'));
   assert.deepEqual(accepted, []);
 });
 
@@ -166,7 +175,7 @@ test('(iv) a welcome whose delegation is not from the pinned inviter is rejected
   const kv = memoryKv();
   await kv.put(WELCOME_KEY, welcome(artifactC({ delegation: 'other-issuer' })));
   const accepted = [];
-  await assert.rejects(capture(() => driveJoin(profile(), {}, blob(soon(120)), state('hello-unconfirmed'), io(kv, acceptCWithRealChecks(accepted)))), refusedAtExpiry);
+  await assert.rejects(capture(() => driveJoin(profile(), {}, blob(soon(120)), state('hello-unconfirmed'), io(kv, acceptCWithRealChecks(accepted)))), refusedAfterFailedWelcome('bad-delegation'));
   assert.deepEqual(accepted, []);
 });
 
@@ -174,7 +183,7 @@ test('(iv) the real acceptC refuses an artifact C from a courier other than the 
   const kv = memoryKv();
   await kv.put(WELCOME_KEY, welcome(artifactC({ from: { owner: INVITER_OWNER, courier: OTHER_COURIER } })));
   const p = profile();
-  await assert.rejects(capture(() => driveJoin(p, {}, blob(soon(120)), state('hello-unconfirmed'), io(kv, realAcceptC))), refusedAtExpiry);
+  await assert.rejects(capture(() => driveJoin(p, {}, blob(soon(120)), state('hello-unconfirmed'), io(kv, realAcceptC))), refusedAfterFailedWelcome('bad-artifact'));
   assert.equal(p.peers.sam.status, 'awaiting-C');
 });
 
@@ -182,7 +191,7 @@ test('a rejected welcome in hello-unconfirmed says nothing about our hello: the 
   const kv = memoryKv();
   await kv.put(WELCOME_KEY, { v: 1, inviteId: INVITE_ID, tier: 'rejected', sentAt: ISSUED });
   const accepted = [];
-  await assert.rejects(capture(() => driveJoin(profile(), {}, blob(soon(120)), state('hello-unconfirmed'), io(kv, acceptCWithRealChecks(accepted)))), refusedAtExpiry);
+  await assert.rejects(capture(() => driveJoin(profile(), {}, blob(soon(120)), state('hello-unconfirmed'), io(kv, acceptCWithRealChecks(accepted)))), refusedAfterFailedWelcome('rejected'));
   assert.equal(accepted.length, 0);
 });
 
@@ -250,4 +259,86 @@ test('invite revoke on its own frees a handle whose pairing never started; a pai
   const paired = { ...profile('paired'), peers: { hunter: { handle: 'hunter', ownerDid: INVITER_OWNER, courierDid: US, spaceId: SPACE, outbound: [], theirHandleForMe: 'sam', status: 'paired', pairedAt: ISSUED } } };
   await inviterWatcher(paired, kv).revoke(openRecord('hunter'));
   assert.equal(paired.peers.hunter.status, 'paired');
+});
+
+// N1: the advice must still be reachable after the invite expired, and say which of the two situations it is.
+const realBlobText = () => buildInviteBlob({
+  inviteId: INVITE_ID, host: 'https://node.example.test', spaceId: SPACE,
+  oneTimeKey: { kty: 'OKP', crv: 'Ed25519', x: 'A'.repeat(43), d: 'B'.repeat(43) },
+  permissions: { put: 'P', read: 'R', hooks: 'H' }, artifactA: artifactA(), expiresAt: new Date(Date.now() + 3600e3),
+  expectEmail: 'hunter@example.test', expectOwner: null, tier: 'strict',
+});
+const afterExpiry = () => Date.now() + 2 * 3600e3;
+
+test('N1: resuming an unconfirmed join after the invite expired gives the hello-exists advice, not "invite is expired"', () => {
+  const s = { ...state('hello-unconfirmed'), blob: realBlobText() };
+  assert.throws(() => resumeBlob(s, afterExpiry()), refusedAtExpiry);
+  const failed = { ...s, welcomeFailure: 'bad-delegation' };
+  assert.throws(() => resumeBlob(failed, afterExpiry()), refusedAfterFailedWelcome('bad-delegation'));
+});
+
+test('N1: before expiry an unconfirmed join resumes, and any other stage still gets the schema\'s expired error', () => {
+  const s = { ...state('hello-unconfirmed'), blob: realBlobText() };
+  assert.equal(resumeBlob(s).inviteId, INVITE_ID);
+  const sent = { ...state('hello-sent'), blob: realBlobText() };
+  assert.throws(() => resumeBlob(sent, afterExpiry()), (e) => e.code === 'bad-invite-file' && /expired/.test(e.message));
+});
+
+test('N1: the first Welcome that fails verification is noted once, by stable code, and persisted for a later resume', async () => {
+  const kv = memoryKv();
+  await kv.put(WELCOME_KEY, welcome(artifactC({ delegation: 'other-audience' })));
+  const s = state('hello-unconfirmed');
+  writeJoinFile(s);
+  await assert.rejects(capture(() => driveJoin(profile(), {}, blob(soon(120)), s, io(kv, acceptCWithRealChecks([])))), refusedAfterFailedWelcome('bad-delegation'));
+  assert.equal(readJoinFile().welcomeFailure, 'bad-delegation');
+  assert.equal(s.welcomeFailure, 'bad-delegation');
+  // The notice is printed once however often the Welcome is polled: count it in a run that ends without refusing.
+  const again = state('hello-unconfirmed');
+  const out = await capture(() => driveJoin(profile(), {}, blob(soon(60_000)), again, io(kv, acceptCWithRealChecks([]), { waitMs: 40 })));
+  assert.equal((out.match(/A welcome arrived but does not verify for this courier \(bad-delegation\)/g) ?? []).length, 1);
+  assert.doesNotMatch(out, /did:key/);
+});
+
+// N4: revoke and deny never consult peers, so a bad peers path must not stop them.
+test('N4: building the watcher for revoke or deny does not resolve the peers path; approve still does', () => {
+  const saved = process.env.COURIER_PEERS_FILE;
+  process.env.COURIER_PEERS_FILE = 'relative/peers.json';
+  try {
+    assert.doesNotThrow(() => inviteWatcher({ ...profile(), peers: {} }, { kv: memoryKv() }));
+    assert.throws(() => peersFilesFor(), (e) => e.code === 'usage' && /absolute path/.test(e.message));
+  } finally {
+    if (saved === undefined) delete process.env.COURIER_PEERS_FILE;
+    else process.env.COURIER_PEERS_FILE = saved;
+  }
+});
+
+// N6: join state files are found and removed by NAME inside the joins directory, never by the id written inside them.
+const staleBody = (inviteId) => ({ v: 1, inviteId, blob: JSON.stringify(blobFor(OLD_INVITE_ID)), helloText: '{}', stage: 'hello-unconfirmed' });
+
+test('N6: an in-file id with ../ never reaches a path outside the joins directory', () => {
+  const victim = path.join(path.dirname(secureSubdir('joins')), 'victim.json');
+  fs.writeFileSync(victim, '{}');
+  fs.writeFileSync(joinFile(OLD_INVITE_ID), JSON.stringify(staleBody('../victim')));
+  claimCallMe(profile('awaiting-C'), blobFor(INVITE_ID));
+  assert.equal(fs.existsSync(victim), true);
+  assert.equal(fs.existsSync(joinFile(OLD_INVITE_ID)), true);
+});
+
+test('N6: a symlinked state file is neither followed nor removed', () => {
+  const target = path.join(path.dirname(secureSubdir('joins')), 'target.json');
+  fs.writeFileSync(target, JSON.stringify(staleBody(OLD_INVITE_ID)));
+  fs.symlinkSync(target, joinFile(OLD_INVITE_ID));
+  claimCallMe(profile('awaiting-C'), blobFor(INVITE_ID));
+  assert.equal(fs.lstatSync(joinFile(OLD_INVITE_ID)).isSymbolicLink(), true);
+  assert.equal(fs.existsSync(target), true);
+});
+
+test('N6: a state file whose name is not an invite id is left alone, and a join id that is not an invite id is refused as a path', async () => {
+  const odd = path.join(secureSubdir('joins'), 'notes.json');
+  fs.writeFileSync(odd, JSON.stringify(staleBody(OLD_INVITE_ID)));
+  claimCallMe(profile('awaiting-C'), blobFor(INVITE_ID));
+  assert.equal(fs.existsSync(odd), true);
+  const escaping = { ...state('hello-ready'), inviteId: '../escape' };
+  await assert.rejects(sendHello(blob(soon(5000)), escaping, io(memoryKv(), async () => ({}))), (e) => e.code === 'internal');
+  assert.equal(fs.existsSync(path.join(path.dirname(secureSubdir('joins')), 'escape.json')), false);
 });
