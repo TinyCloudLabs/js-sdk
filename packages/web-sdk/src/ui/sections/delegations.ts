@@ -213,28 +213,54 @@ function abilityClause(parsed: readonly ParsedResource[]): string {
     .join(panelText("delegations.ability.sep"));
 }
 
+/** Entries of a resource list that cannot be read: not an object, no resource, or actions that are not a list of names. */
+function unreadableIn(resources: unknown): number {
+  if (!Array.isArray(resources)) return 1;
+  let count = 0;
+  for (const entry of resources) {
+    const readable =
+      typeof entry === "object" &&
+      entry !== null &&
+      "resource" in entry &&
+      typeof entry.resource === "string" &&
+      "actions" in entry &&
+      Array.isArray(entry.actions) &&
+      entry.actions.every((action: unknown) => typeof action === "string");
+    if (!readable) count += 1;
+  }
+  return count;
+}
+
+/** `abilityClause`, said plainly when part of the list could not be read: what is known, and that there is more. */
+function clauseOf(resources: readonly DelegationResource[]): string {
+  const clause = abilityClause(parseResources(resources));
+  return clause !== "" && unreadableIn(resources) > 0 ? `${clause}${panelText("delegations.ability.more")}` : clause;
+}
+
 /**
  * Plain-words rendering of a resource list. `tinycloud.kv/get` reads as "read",
  * `put` as "write", `list` as "list", `del` as "delete". Any other action is
- * shown as it is (cleaned and shortened) in the line and in `chips`. A malformed
- * list reads as no actions; this never throws.
+ * shown as it is (cleaned and shortened) in the line and in `chips`. An empty
+ * list says no actions are listed; a list that cannot be read says the abilities
+ * are unknown, never "none". This never throws.
  */
 export function describeAbilities(resources: readonly DelegationResource[]): DescribedAbilities {
   try {
     const parsed = parseResources(resources);
-    const clause = abilityClause(parsed);
+    const clause = clauseOf(resources);
     const chips = [
       ...VERBS.filter((verb) => parsed.some((resource) => resource.verbs.includes(verb))).map((verb) =>
         panelText(`delegations.chip.${verb}`),
       ),
       ...uniq(parsed.flatMap((resource) => resource.raws)),
     ];
+    const none = unreadableIn(resources) > 0 ? "delegations.ability.unknown" : "delegations.ability.none";
     return {
-      plain: clause === "" ? panelText("delegations.ability.none") : panelText("delegations.ability.can", { what: clause }),
+      plain: clause === "" ? panelText(none) : panelText("delegations.ability.can", { what: clause }),
       chips,
     };
   } catch {
-    return { plain: panelText("delegations.ability.none"), chips: [] };
+    return { plain: panelText("delegations.ability.unknown"), chips: [] };
   }
 }
 
@@ -305,8 +331,8 @@ function counterpart(row: DelegationRow): string {
 function displayName(row: DelegationRow): string {
   const label = clean(row.label?.text ?? "", 120);
   // The mapper names every row after its delegate; for a received grant the other party is the delegator.
-  if (isReceived(row) && (label === "" || label === shortDid(row.delegateDid))) return shortDid(row.delegatorDid);
-  return label === "" ? shortDid(counterpart(row)) : label;
+  const who = isReceived(row) && (label === "" || label === shortDid(row.delegateDid)) ? shortDid(row.delegatorDid) : label === "" ? shortDid(counterpart(row)) : label;
+  return who === "" ? panelText("delegations.party.unknown") : who;
 }
 
 function spacesOf(parsed: readonly ParsedResource[]): string[] {
@@ -336,19 +362,24 @@ function validDate(date: Date | null | undefined): date is Date {
   return date instanceof Date && !Number.isNaN(date.getTime());
 }
 
+/** A creation time this far ahead of now is a clock disagreement, not a time; it is treated as unknown rather than shown as "just now". */
+const CLOCK_SKEW_MS = 5 * 60_000;
+
+/** Unknown is never shown as a value: a missing space, creation time or expiry says so. A grant that does not expire is not told apart from one whose end is not recorded, because the record cannot. */
 function metaLine(row: DelegationRow, shown: Shown, parsed: readonly ParsedResource[], now: number): string {
   const parts: string[] = [];
   const spaces = spacesOf(parsed);
   if (spaces.length === 1) parts.push(panelText("delegations.meta.space", { space: spaces[0] ?? "" }));
   else if (spaces.length > 1) parts.push(panelText("delegations.meta.spaces", { count: spaces.length }));
-  if (validDate(row.issuedAt)) parts.push(panelText("delegations.meta.created", { when: agoText(row.issuedAt, now) }));
+  else parts.push(panelText("delegations.meta.space.unknown"));
+  if (validDate(row.issuedAt) && row.issuedAt.getTime() <= now + CLOCK_SKEW_MS) {
+    parts.push(panelText("delegations.meta.created", { when: agoText(row.issuedAt, now) }));
+  } else parts.push(panelText("delegations.meta.created.unknown"));
   if (validDate(row.expiresAt)) {
     const gone = row.expiresAt.getTime() <= now;
     const when = panelText(gone ? "delegations.time.ago" : "delegations.time.in", { t: relative(row.expiresAt.getTime() - now) });
     parts.push(panelText(gone || shown === "expired" ? "delegations.meta.expired" : "delegations.meta.expires", { when }));
-  } else if (shown === "active" || shown === "soon") {
-    parts.push(panelText("delegations.meta.never"));
-  }
+  } else parts.push(panelText("delegations.meta.expires.unknown"));
   return parts.join(panelText("delegations.meta.sep"));
 }
 
@@ -656,7 +687,7 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
     const parsed = parseResources(card.row.resources);
     const spaces = spacesOf(parsed);
     const where = spaces.length === 1 ? text("delegations.confirm.where", { space: spaces[0] ?? "" }) : "";
-    const clause = abilityClause(parsed);
+    const clause = clauseOf(card.row.resources);
     const heading = text(thisApp ? "delegations.confirm.title.app" : "delegations.confirm.title", { name });
     const consequence =
       clause === ""
@@ -754,7 +785,7 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
     const time = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     const name = partyName(card.row);
     const suffix = card.row.group === "this-app" ? ".app" : "";
-    const clause = abilityClause(parseResources(card.row.resources));
+    const clause = clauseOf(card.row.resources);
     const sentence =
       clause === ""
         ? text(`delegations.receipt.generic${suffix}`, { name })
@@ -832,6 +863,8 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
   }
 
   function idRow(labelCode: string, id: string, shortForm: string, copyCode: string): HTMLElement {
+    // An identity that is missing is unknown, not an empty value with a copy button.
+    if (id === "") return kvRow(labelCode, text("delegations.d.none"));
     const line = node("div");
     const dd = node("dd", "dl-mono");
     dd.append(node("span", undefined, shortForm), copyButton(id, copyCode));
@@ -868,15 +901,22 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
       ),
       kvRow(
         "delegations.d.parents",
-        row.parents.length === 0 ? text("delegations.d.parents.none") : text("delegations.d.parents.n", { count: row.parents.length }),
+        !Array.isArray(row.parents)
+          ? text("delegations.d.none")
+          : row.parents.length === 0
+            ? text("delegations.d.parents.none")
+            : text("delegations.d.parents.n", { count: row.parents.length }),
       ),
     );
     const spaces = spacesOf(all);
-    if (spaces.length === 1) list.insertBefore(kvRow("delegations.d.space", spaces[0] ?? ""), list.children[1] ?? null);
+    list.insertBefore(kvRow("delegations.d.space", spaces.length === 0 ? text("delegations.d.none") : spaces.join(", ")), list.children[1] ?? null);
     if (row.terminal !== undefined) {
       list.append(kvRow("delegations.d.terminal", text(row.terminal ? "delegations.d.terminal.yes" : "delegations.d.terminal.no")));
     }
-    if (row.revokedAt !== undefined && row.revokedAt !== null) list.append(kvRow("delegations.d.revokedat", dateText(row.revokedAt)));
+    // A revoked grant with no recorded time says the time is unknown; a live one has no revocation time to show.
+    if (shown === "revoked" || (row.revokedAt !== undefined && row.revokedAt !== null)) {
+      list.append(kvRow("delegations.d.revokedat", dateText(row.revokedAt)));
+    }
     if (row.revokedBy !== undefined) list.append(kvRow("delegations.d.revokedby", shortDid(row.revokedBy)));
     if (row.revokedAncestorCid !== undefined) list.append(kvRow("delegations.d.revokedvia", shortCid(row.revokedAncestorCid)));
 
@@ -891,7 +931,8 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
       if (words.childElementCount > 0) item.append(words);
       resources.append(item);
     }
-    return [summary, list, heading, resources];
+    const unreadable = unreadableIn(row.resources);
+    return [summary, list, heading, resources, ...(unreadable > 0 ? [node("p", "dl-fine", text("delegations.d.resources.unreadable"))] : [])];
   }
 
   function openDetails(card: Card): void {
@@ -1022,8 +1063,11 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
       const members = grouped[group];
       if (group === "received" && members.length === 0) continue;
       const view = groupView(group);
-      view.count.textContent = String(members.length);
+      // With more pages the group's true size is not known: "3+" is a lower bound and an empty group has no number.
+      const more = page.nextCursor !== undefined;
+      view.count.textContent = more ? (members.length === 0 ? "" : `${members.length}+`) : String(members.length);
       view.none.hidden = members.length > 0;
+      view.none.textContent = text(more ? "delegations.g.none.more" : "delegations.g.none");
       const wanted: HTMLElement[] = [];
       for (const row of members) {
         let card = cards.get(row.cid);
@@ -1118,14 +1162,17 @@ export const delegationsSection: PanelSection = {
   icon: "key",
   summaryCode: "delegations.summary",
   isAvailable: (ctx) => ctx.client()?.signedIn() === true,
-  // The rail shows how many rows the first page lists, less the ones revoked from this panel; a "+" means more pages exist.
+  // The rail shows how many rows the first page lists, less the ones revoked from this panel. With more pages the total is
+  // not known: the number is a lower bound ("50+"), and with nothing listed yet there is no number at all.
   status: (ctx) =>
     viewStatus(ctx, ctx.data.latest("delegations"), (page) => {
       const gone = revokedFrom(ctx.data);
+      const listed = page.rows.filter((row) => !gone.has(row.cid)).length;
+      const more = page.nextCursor !== undefined;
       return {
         text: ctx.text("delegations.glance.visible"),
         tone: "ok",
-        count: `${page.rows.filter((row) => !gone.has(row.cid)).length}${page.nextCursor === undefined ? "" : "+"}`,
+        ...(more && listed === 0 ? {} : { count: `${listed}${more ? "+" : ""}` }),
       };
     }),
   mount: mountDelegations,

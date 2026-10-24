@@ -326,6 +326,129 @@ describe("availability", () => {
   });
 });
 
+describe("unknown is never shown as a value", () => {
+  const metaOf = (h: Harness) => h.el.querySelector(".dl-meta")?.textContent ?? "";
+
+  test("a missing expiry says 'Expiry unknown', never 'No expiry'; a missing or impossible creation time says so too", async () => {
+    const h = await mountSection({
+      rows: [
+        row("a", { expiresAt: null }),
+        row("b", { issuedAt: null }),
+        // A creation time a day ahead of now is a clock disagreement, not "just now".
+        row("c", { issuedAt: minutes(60 * 24) }),
+        row("d", { expiresAt: null, status: "revoked" }),
+      ],
+    });
+    const metas = cards(h.el).map((card) => card.querySelector(".dl-meta")?.textContent ?? "");
+    expect(metas[0]).toContain("Expiry unknown");
+    expect(metas[1]).toContain("Creation time unknown");
+    expect(metas[2]).toContain("Creation time unknown");
+    expect(metas[3]).toContain("Expiry unknown");
+    for (const meta of metas) {
+      expect(meta).not.toContain("No expiry");
+      expect(meta).not.toContain("never");
+      expect(meta).not.toContain("just now");
+    }
+    // Known values still read as values.
+    const known = await mountSection({
+      rows: [row("k", { resources: [{ resource: "tinycloud:pkh:eip155:1:0xabc:Personal/kv/notes/", actions: ["get"] }] })],
+    });
+    expect(metaOf(known)).toMatch(/^Personal space/);
+    expect(metaOf(known)).toContain("Created 2 h ago");
+    expect(metaOf(known)).toContain("Expires in 5d");
+    expect(metaOf(known)).not.toContain("unknown");
+  });
+
+  test("a grant with no readable space says 'Space unknown'", async () => {
+    const h = await mountSection({ rows: [row("a", { resources: [{ resource: "notes/", actions: ["get"] }] })] });
+    expect(metaOf(h)).toContain("Space unknown");
+  });
+
+  test("describeAbilities: an unreadable list is 'Abilities unknown', an empty one is 'No actions listed', a partial one says there is more", () => {
+    expect(describeAbilities(undefined as never).plain).toBe("Abilities unknown");
+    expect(describeAbilities(null as never).plain).toBe("Abilities unknown");
+    expect(describeAbilities([{ resource: "tinycloud.kv/a/" } as never]).plain).toBe("Abilities unknown");
+    expect(describeAbilities([{ resource: "tinycloud.kv/a/", actions: "get" } as never]).plain).toBe("Abilities unknown");
+    expect(describeAbilities([]).plain).toBe("No actions listed");
+    expect(describeAbilities([{ resource: "tinycloud.kv/a/", actions: [] }]).plain).toBe("No actions listed");
+    expect(describeAbilities([{ resource: "tinycloud.kv/a/", actions: ["get"] }, { resource: 5 } as never]).plain).toBe(
+      "Can read a/ and more that couldn't be read",
+    );
+    expect(describeAbilities([{ resource: "tinycloud.kv/a/", actions: ["get", 7] } as never]).plain).toBe("Can read a/ and more that couldn't be read");
+  });
+
+  test("the confirm says 'use this access' when the abilities are unknown, and 'and more' when only part is known", async () => {
+    const boxOf = async (resources: unknown) => {
+      const h = await mountSection({ rows: [row("a", { resources: resources as never })] });
+      buttonIn(h.el, "Revoke")?.click();
+      await flush();
+      return h.el.querySelector('[role="alertdialog"]')?.textContent ?? "";
+    };
+    expect(await boxOf(undefined)).toContain("will stop being able to use this access");
+    expect(await boxOf([{ resource: "tinycloud.kv/a/", actions: ["get"] }, 3])).toContain(
+      "will stop being able to read a/ and more that couldn't be read",
+    );
+  });
+
+  test("with more pages, group counts are lower bounds and an empty group has no number; without, they are exact", async () => {
+    const paged = await mountSection({ result: { state: "ready", data: { rows: [row("a", { group: "this-app" })], nextCursor: "c" } } });
+    expect([...paged.el.querySelectorAll(".dl-h")].map((h) => h.textContent)).toEqual(["Granted to Fieldnotes1+", "Granted to others"]);
+    expect(paged.el.textContent).toContain("None in what's loaded so far.");
+    expect(paged.el.textContent).not.toContain("Nothing here.");
+
+    const whole = await mountSection({ rows: [row("a", { group: "this-app" })] });
+    expect([...whole.el.querySelectorAll(".dl-h")].map((h) => h.textContent)).toEqual(["Granted to Fieldnotes1", "Granted to others0"]);
+    expect(whole.el.textContent).toContain("Nothing here.");
+  });
+
+  test("the rail count is a lower bound with more pages, absent when nothing is listed yet, and 0 only when the list is whole and empty", async () => {
+    const paged = await mountSection({ result: { state: "ready", data: { rows: [row("a"), row("b")], nextCursor: "c" } } });
+    expect(paged.status()?.count).toBe("2+");
+    const nothingYet = await mountSection({ result: { state: "ready", data: { rows: [], nextCursor: "c" } } });
+    expect(nothingYet.status()?.count).toBeUndefined();
+    expect(nothingYet.status()?.text).toBe("Visible");
+    const empty = await mountSection({ rows: [] });
+    expect(empty.status()?.count).toBe("0");
+  });
+
+  test("the drawer says 'Unknown' for what the record lacks: dates, identities, parents, space, and a revoked grant's time", async () => {
+    const h = await mountSection({
+      rows: [
+        row("a", {
+          status: "revoked",
+          issuedAt: null,
+          notBefore: null,
+          expiresAt: null,
+          delegatorDid: "",
+          parents: undefined as never,
+          resources: [{ resource: "notes/", actions: ["get"] }, 4 as never],
+        }),
+      ],
+    });
+    h.el.querySelector<HTMLButtonElement>('[aria-label^="See details"]')?.click();
+    await flush();
+    const drawer = h.el.querySelector(".drawer") as HTMLElement;
+    const value = (label: string) => [...drawer.querySelectorAll("dl > div")].find((r) => r.querySelector("dt")?.textContent === label)?.querySelector("dd")?.textContent;
+    for (const label of ["Issued", "Not valid before", "Expired", "Expires", "Granted by", "Passed down from", "Space", "Revoked"]) {
+      const shown = value(label);
+      if (shown !== undefined) expect(shown, label).toBe("Unknown");
+    }
+    expect(value("Granted by")).toBe("Unknown");
+    expect(value("Passed down from")).toBe("Unknown");
+    expect(value("Space")).toBe("Unknown");
+    expect(value("Revoked")).toBe("Unknown");
+    expect(drawer.textContent).not.toContain("Not recorded");
+    expect(drawer.textContent).toContain("Some of what it covers couldn't be read.");
+    // No identity, no copy button for it.
+    expect(drawer.querySelectorAll('[aria-label="Copy the identity that granted this"]')).toHaveLength(0);
+  });
+
+  test("a row with no label and no identity is named 'Unknown', not an empty heading", async () => {
+    const h = await mountSection({ rows: [row("a", { label: { text: "", source: "stub" }, delegateDid: "" })] });
+    expect(names(h.el)[0]).toBe("Unknown");
+  });
+});
+
 describe("status mapping and grouping", () => {
   test("an active row is Active, within a day Expiring soon, past its end Expired", () => {
     expect(shownStatus(row("a"), NOW)).toBe("active");

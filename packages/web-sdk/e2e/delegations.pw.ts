@@ -418,7 +418,7 @@ for (const scheme of ["light", "dark"] as const) {
 
     test("a received grant gets its own group, a cursor says only the first page is listed", async ({ page }) => {
       await open(page, { scheme, seed: { rows: [...mockupRows(), receivedRow()], nextCursor: "next" } });
-      await expect(body(page).locator(".dl-h")).toHaveText(["Granted to e2e-settings-smoke3", "Granted to others4", "Received1"]);
+      await expect(body(page).locator(".dl-h")).toHaveText(["Granted to e2e-settings-smoke3+", "Granted to others4+", "Received1+"]);
       const received = card(page, "did:key:z6MkEX…LEg7Qa");
       await expect(received.locator(".dl-kind")).toHaveText("Shared with you by did:key:z6MkEX…LEg7Qa");
       await expect(received.locator(".st")).toHaveText("Active");
@@ -481,6 +481,15 @@ test("a revoke that fails after the panel was reopened shows a toast and can be 
   await retry.click();
   await expect(body(page).locator('[role="alertdialog"]')).toBeVisible();
   expect(await revokeCalls(page)).toEqual(["bafyEXAMPLEd4p9ax"]);
+});
+
+test("a record with no expiry or creation time says so instead of inventing a value", async ({ page }) => {
+  const rows = mockupRows().map((r) => (r.cid === "bafyEXAMPLEd5c7hs" ? { ...r, expiresAt: null, issuedAt: null } : r));
+  await open(page, { seed: { rows } });
+  const meta = card(page, "Exo").locator(".dl-meta");
+  await expect(meta).toHaveText("Personal space · Creation time unknown · Expiry unknown");
+  await expect(meta).not.toContainText("No expiry");
+  await expect(card(page, "Research helper").locator(".dl-meta")).not.toContainText("unknown");
 });
 
 test("a name with braces shows in the confirm and the receipt as written", async ({ page }) => {
