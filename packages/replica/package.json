@@ -62,7 +62,7 @@
   "dependencies": {
     "@noble/curves": "^1.9.2",
     "@noble/hashes": "^1.8.0",
-    "@tinycloud/sdk-services": "3.6.0"
+    "@tinycloud/sdk-services": "3.6.1"
   },
   "devDependencies": {
     "@tinycloud/web-sdk-wasm": "1.7.7",
