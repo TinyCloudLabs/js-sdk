@@ -185,7 +185,7 @@ for (const scheme of SCHEMES) {
       const banner = s.locator(".storage-banner");
       await expect(banner).toHaveAttribute("role", "status");
       await expect(banner).toContainText("Storage full: you can't add more data right now.");
-      await expect(banner).toContainText("New changes can't be saved while your storage is full.");
+      await expect(banner).toContainText("Your existing data stays as it is.");
       await expect(banner.getByRole("link", { name: /Manage storage/ })).toHaveAttribute("href", MANAGE);
       await expect(s.locator(".storage-kv")).toContainText("None");
       await expect(s.locator('[role="meter"]').first()).toHaveAttribute("aria-valuenow", String(1024 * MIB));

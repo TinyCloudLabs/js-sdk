@@ -373,7 +373,7 @@ describe("storage page", () => {
     const banner = el.querySelector(".storage-banner");
     expect(banner?.getAttribute("role")).toBe("status");
     expect(banner?.textContent).toContain("Storage full: you can't add more data right now.");
-    expect(banner?.textContent).toContain("New changes can't be saved while your storage is full.");
+    expect(banner?.textContent).toContain("Your existing data stays as it is.");
     expect(banner?.querySelector("a")?.getAttribute("href")).toBe("https://account.tinycloud.xyz/storage");
     expect(el.querySelector(".storage-st")?.textContent).toBe("Full");
     const meter = el.querySelector('[role="meter"]');
