@@ -172,3 +172,49 @@ describe("real adapter: reset while a read is in flight", () => {
     expect(view.state).toBe("loading");
   });
 });
+
+describe("real adapter: delegation cursors across account reset", () => {
+  test("a cursor from before reset is refused without querying", async () => {
+    const h = fakeHost();
+    h.defaults.query = page([delegation("c1")], "cur-A");
+    const c = fakeClient();
+    const data = createRealPanelData(h.host, c.client, "app");
+    expect((await data.delegations()).state).toBe("ready");
+
+    c.reset();
+    const view = await data.delegations("cur-A");
+
+    expect(view.state).not.toBe("ready");
+    expect(h.calls.query).toBe(1);
+  });
+
+  test("a cursor page that resolves after reset is dropped, not returned", async () => {
+    const h = fakeHost();
+    h.defaults.query = page([delegation("c1")], "cur-A");
+    const c = fakeClient();
+    const data = createRealPanelData(h.host, c.client, "app");
+    await data.delegations();
+
+    const held = deferred<unknown>();
+    h.queues.query.push(held);
+    const pending = data.delegations("cur-A");
+    c.reset();
+    held.resolve(page([delegation("c-old-2")]));
+
+    const view = await pending;
+    expect(view.state).not.toBe("ready");
+  });
+
+  test("a cursor issued after reset is accepted", async () => {
+    const h = fakeHost();
+    h.defaults.query = page([delegation("c1")], "cur-A");
+    const c = fakeClient();
+    const data = createRealPanelData(h.host, c.client, "app");
+    await data.delegations();
+
+    c.reset();
+    h.defaults.query = page([delegation("c2")], "cur-B");
+    expect((await data.delegations()).state).toBe("ready");
+    expect((await data.delegations("cur-B")).state).toBe("ready");
+  });
+});

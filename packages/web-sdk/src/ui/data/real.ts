@@ -59,10 +59,12 @@ export function createRealPanelData(
   const listeners = new Set<(view: PanelView) => void>();
   const snaps = new Map<SectionKey, Snapshot>();
   let epoch = 0;
+  const cursors = new Set<string>();
 
   client.onReset(() => {
     epoch += 1;
     snaps.clear();
+    cursors.clear();
   });
 
   const snapFor = (key: SectionKey): Snapshot => {
@@ -137,17 +139,20 @@ export function createRealPanelData(
   }
 
   async function fetchDelegations(cursor?: string): Promise<ViewResult<DelegationPage>> {
+    const run = epoch;
     const res = await host.delegations.query({
       direction: "all",
       limit: PAGE_LIMIT,
       ...(cursor ? { cursor } : {}),
     });
+    if (run !== epoch) return viewError("stale");
     if (res.ok === false) {
       return res.error.code === "PERMISSION_DENIED"
         ? viewNeedsPermission("delegation/list")
         : viewError(res.error.code);
     }
     const now = Date.now();
+    if (res.data.nextCursor) cursors.add(res.data.nextCursor);
     return viewReady({
       rows: res.data.items.map((r) => toDelegationRow(r, host.sessionDid, now)),
       ...(res.data.nextCursor ? { nextCursor: res.data.nextCursor } : {}),
@@ -235,9 +240,9 @@ export function createRealPanelData(
     },
 
     delegations(cursor?: string) {
-      return cursor
-        ? fetchDelegations(cursor)
-        : read("delegations", DELEGATIONS_TTL_MS, () => fetchDelegations());
+      if (!cursor) return read("delegations", DELEGATIONS_TTL_MS, () => fetchDelegations());
+      if (!cursors.has(cursor)) return Promise.resolve(viewError("stale"));
+      return fetchDelegations(cursor);
     },
 
     async revoke(cid: string): Promise<RevokeOutcome> {
