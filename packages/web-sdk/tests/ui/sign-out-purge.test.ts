@@ -1,6 +1,6 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, jest, test } from "bun:test";
 
-import { createSignOutGuard, purgeWatch } from "../../src/ui/sign-out-purge";
+import { createSignOutGuard, PURGE_TIMEOUT_MS, purgeWatch } from "../../src/ui/sign-out-purge";
 import type { PanelClient, PurgeLocalCopyResult } from "../../src/ui/slots";
 import type { ToastRequest } from "../../src/ui/toast-store";
 
@@ -15,7 +15,11 @@ interface Rig {
 /** Records call order in `log`. `purges` answers each purge call in turn; the last answer repeats. */
 function rig(opts: {
   purges?: Array<PurgeLocalCopyResult | Error>;
+  /** Replaces `purges`: called with the zero-based call number. */
+  purgeImpl?: (call: number) => Promise<PurgeLocalCopyResult>;
   signOut?: () => Promise<void>;
+  /** A rejected signOut leaves the session live, as when the host fails before ending it. */
+  sessionStaysOnReject?: boolean;
   withPurge?: boolean;
 }): Rig {
   const log: string[] = [];
@@ -33,7 +37,12 @@ function rig(opts: {
     },
     signOut: async () => {
       log.push("signOut:start");
-      await (opts.signOut ?? (() => Promise.resolve()))();
+      try {
+        await (opts.signOut ?? (() => Promise.resolve()))();
+      } catch (error) {
+        if (opts.sessionStaysOnReject !== true) state.signedIn = false;
+        throw error;
+      }
       state.signedIn = false;
       log.push("signOut:end");
     },
@@ -41,9 +50,11 @@ function rig(opts: {
       ? {}
       : {
           purgeLocalCopy: async () => {
-            const answer = answers[Math.min(calls, answers.length - 1)];
+            const call = calls;
             calls += 1;
             log.push("purge");
+            if (opts.purgeImpl !== undefined) return opts.purgeImpl(call);
+            const answer = answers[Math.min(call, answers.length - 1)];
             if (answer instanceof Error) throw answer;
             return answer as PurgeLocalCopyResult;
           },
@@ -121,7 +132,7 @@ describe("failure handling", () => {
     const r = rig({ purges: [{ ok: false, retryNow: false }] });
     await wrapped(r).signOut?.();
     expect(r.log.filter((entry) => entry === "purge")).toHaveLength(1);
-    expect(r.toasts).toEqual([{ kind: "warning", textCode: "local-copy.purge.pending" }]);
+    expect(r.toasts).toEqual([{ kind: "warning", textCode: "local-copy.purge.toast.pending" }]);
     expect(purgeWatch(wrapped(r))?.failure()).toBe("pending");
   });
 
@@ -134,7 +145,7 @@ describe("failure handling", () => {
     });
     await wrapped(r).signOut?.();
     expect(r.log.filter((entry) => entry === "purge")).toHaveLength(2);
-    expect(r.toasts).toEqual([{ kind: "warning", textCode: "local-copy.purge.readable" }]);
+    expect(r.toasts).toEqual([{ kind: "warning", textCode: "local-copy.purge.toast.readable" }]);
     expect(purgeWatch(wrapped(r))?.failure()).toBe("readable");
   });
 
@@ -233,5 +244,115 @@ describe("pass-through", () => {
     expect(wrapped(r).id).toBe(1);
     r.signedIn = false;
     expect(wrapped(r).signedIn()).toBe(false);
+  });
+});
+
+describe("a session that is still live", () => {
+  test("a rejected sign-out that left the session live never purges, and the pending state shows once the session is gone", async () => {
+    const failure = new Error("network");
+    const r = rig({ signOut: () => Promise.reject(failure), sessionStaysOnReject: true });
+    const w = wrapped(r);
+    await expect(w.signOut?.()).rejects.toBe(failure);
+    expect(r.signedIn).toBe(true);
+    expect(r.log).toEqual(["signOut:start"]);
+    expect(r.toasts).toEqual([]);
+    const watch = purgeWatch(w);
+    expect(watch?.failure()).toBeUndefined();
+    expect(await watch?.retry()).toBe(false);
+    expect(r.log).toEqual(["signOut:start"]);
+    // The session ends some other way: the recorded pending state is now visible and its retry may run.
+    r.signedIn = false;
+    expect(watch?.failure()).toBe("pending");
+    expect(await watch?.retry()).toBe(true);
+    expect(r.log).toEqual(["signOut:start", "purge"]);
+    expect(watch?.failure()).toBeUndefined();
+  });
+});
+
+describe("a hung purge", () => {
+  afterEach(() => jest.useRealTimers());
+
+  async function settleMicrotasks(): Promise<void> {
+    for (let i = 0; i < 12; i++) await Promise.resolve();
+  }
+
+  test("sign-out settles at the timeout with the pending warning, and the next sign-out reaches the host again", async () => {
+    jest.useFakeTimers();
+    const r = rig({ purgeImpl: (call) => (call === 0 ? new Promise<PurgeLocalCopyResult>(() => undefined) : Promise.resolve({ ok: true })) });
+    const w = wrapped(r);
+    let settled = false;
+    const first = w.signOut?.().then(() => {
+      settled = true;
+    });
+    await settleMicrotasks();
+    expect(settled).toBe(false);
+    jest.advanceTimersByTime(PURGE_TIMEOUT_MS - 1);
+    await settleMicrotasks();
+    expect(settled).toBe(false);
+    jest.advanceTimersByTime(1);
+    await first;
+    expect(settled).toBe(true);
+    expect(r.toasts).toEqual([{ kind: "warning", textCode: "local-copy.purge.toast.pending" }]);
+    expect(purgeWatch(w)?.failure()).toBe("pending");
+
+    // The timed-out run must not hold later sign-outs: the host's signOut is called again.
+    r.signedIn = true;
+    await w.signOut?.();
+    expect(r.log.filter((entry) => entry === "signOut:start")).toHaveLength(2);
+    expect(purgeWatch(w)?.failure()).toBeUndefined();
+  });
+
+  test("a timed-out purge is not retried at once, even when it never said retryNow", async () => {
+    jest.useFakeTimers();
+    const r = rig({ purgeImpl: () => new Promise<PurgeLocalCopyResult>(() => undefined) });
+    const done = wrapped(r).signOut?.();
+    await settleMicrotasks();
+    jest.advanceTimersByTime(PURGE_TIMEOUT_MS);
+    await done;
+    expect(r.log.filter((entry) => entry === "purge")).toHaveLength(1);
+  });
+
+  test("a purge that settles late is ignored: an ok keeps the warning, a rejection is swallowed", async () => {
+    jest.useFakeTimers();
+    let finishOk: (result: PurgeLocalCopyResult) => void = () => undefined;
+    const r = rig({ purgeImpl: () => new Promise<PurgeLocalCopyResult>((resolve) => (finishOk = resolve)) });
+    const w = wrapped(r);
+    const done = w.signOut?.();
+    await settleMicrotasks();
+    jest.advanceTimersByTime(PURGE_TIMEOUT_MS);
+    await done;
+    finishOk({ ok: true });
+    await settleMicrotasks();
+    expect(purgeWatch(w)?.failure()).toBe("pending");
+    expect(r.toasts).toHaveLength(1);
+
+    let rejectLate: (reason: Error) => void = () => undefined;
+    const r2 = rig({ purgeImpl: () => new Promise<PurgeLocalCopyResult>((_, reject) => (rejectLate = reject)) });
+    const w2 = wrapped(r2);
+    const done2 = w2.signOut?.();
+    await settleMicrotasks();
+    jest.advanceTimersByTime(PURGE_TIMEOUT_MS);
+    await done2;
+    rejectLate(new Error("late"));
+    await settleMicrotasks();
+    expect(purgeWatch(w2)?.failure()).toBe("pending");
+  });
+
+  test("a hung retry settles at the timeout, reports failure, and can be tried again", async () => {
+    jest.useFakeTimers();
+    const r = rig({
+      purgeImpl: (call) => (call === 0 ? Promise.resolve({ ok: false, retryNow: false }) : call === 1 ? new Promise<PurgeLocalCopyResult>(() => undefined) : Promise.resolve({ ok: true })),
+    });
+    const w = wrapped(r);
+    await w.signOut?.();
+    const watch = purgeWatch(w);
+    expect(watch?.failure()).toBe("pending");
+    const first = watch?.retry();
+    await settleMicrotasks();
+    jest.advanceTimersByTime(PURGE_TIMEOUT_MS);
+    expect(await first).toBe(false);
+    expect(watch?.failure()).toBe("pending");
+    expect(await watch?.retry()).toBe(true);
+    expect(watch?.failure()).toBeUndefined();
   });
 });
