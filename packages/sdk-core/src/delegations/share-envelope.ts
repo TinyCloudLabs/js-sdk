@@ -909,8 +909,8 @@ export function parseLegacyPublishedShareEnvelope(bytes: Uint8Array, options: { 
 /**
  * Parse the retired registry-backed compact link shape only.
  *
- * Sealed addressed envelopes use the Share SDK's `/s/inline#v=2&p=…`
- * transport. In particular, this parser deliberately never accepts the old
+ * Sealed addressed envelopes use the `v=4` links of `@tinycloud/share-envelope/links`
+ * (`/s/<id>#v=4&k=…&c=…` and `/s/full#v=4&k=…&r=…`). In particular, this parser deliberately never accepts the old
  * `/viewer?tc2=…` transport: a query can be retained in browser history,
  * proxy logs, and referrer-bearing integrations.
  */

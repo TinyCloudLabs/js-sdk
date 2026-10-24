@@ -1,6 +1,6 @@
 import type { IKVService } from "@tinycloud/node-sdk";
 import { kvArtifactStore } from "./artifact-store.js";
-import { createShareShortLinks, type ShareShortLinks } from "./short-links.js";
+import { createShareLinks, type ShareLinks } from "./short-links.js";
 import { artifactSpaceNotReady, failIfSpaceNotReady } from "./space-not-ready.js";
 import { ShareHistoryReadError, ShareHistoryRetryError, ShareHistoryUnreadableError, SharePublishAuthorityError } from "./errors.js";
 import { storageRejection } from "../output/storage.js";
@@ -53,6 +53,13 @@ import {
   signCompactUcanAuthorization,
 } from "@tinycloud/sdk-core";
 import { extractSiweExpiration, InvalidRestoredSessionError, type TinyCloudNode } from "@tinycloud/node-sdk";
+import {
+  AddressedShareOverLimitError,
+  assertAddressedShareFits,
+  type AddressedShareWrites,
+  type AddressedSharePublishOptions,
+  type SharePolicyRootRevocation,
+} from "@tinycloud/share-sdk";
 
 function requiredKvAction(meta: unknown): "tinycloud.kv/put" | "tinycloud.kv/get" | "tinycloud.kv/list" | undefined {
   if (meta === null || typeof meta !== "object" || !("requiredAction" in meta)) return undefined;
@@ -64,6 +71,44 @@ function throwKvUploadFailure(error: unknown): never {
   const rejection = storageRejection(error);
   if (rejection) throw new SharePublishAuthorityError({ kind: "storage-full", ...rejection });
   throw new SharePublishAuthorityError({ kind: "upload-failed" });
+}
+
+/**
+ * What an over-limit publish leaves behind, and what it removes. The size bound makes this unreachable for a correct
+ * publish; if the sealed envelope is over the limit anyway, the owner roots are revoked (the registered policy then
+ * admits no one) and a plain share's uploaded ciphertext is deleted. The registered policy record, the registry's
+ * location record (one per owner, shared by every share) and a pinned artifact version (write-once) cannot be removed.
+ * Returns a sentence for each thing that stays.
+ */
+async function removeOverLimitShare(input: {
+  readonly written: AddressedShareWrites;
+  readonly revokeRoot: (request: SharePolicyRootRevocation) => Promise<void>;
+  readonly owner: Omit<SharePolicyRootRevocation, "rootCid" | "targetRole">;
+  readonly content: { readonly kind: "object"; readonly path: string; readonly remove: () => Promise<void> } | { readonly kind: "artifact"; readonly id: string; readonly version: number };
+}): Promise<readonly string[]> {
+  const remaining: string[] = [];
+  let rootsRevoked = true;
+  for (const [rootCid, targetRole] of [[input.written.enforcementRootCid, "policy-enforcement"], [input.written.policyRootCid, "policy-authority"]] as const) {
+    try {
+      await input.revokeRoot({ ...input.owner, rootCid, targetRole });
+    } catch {
+      rootsRevoked = false;
+      remaining.push(`the ${targetRole} root ${rootCid} could not be revoked`);
+    }
+  }
+  if (rootsRevoked) remaining.push("a policy record stays on your node with both of its roots revoked, so it admits no one");
+  // The publish wrote the registry's location record before any content; the registry keeps one per owner for every share.
+  remaining.push("your node's location record stays in the TinyCloud registry, shared by all your shares");
+  if (input.content.kind === "artifact") {
+    remaining.push(`artifact ${input.content.id} version ${input.content.version} stays in your space, because artifact versions are write-once`);
+  } else {
+    try {
+      await input.content.remove();
+    } catch {
+      remaining.push(`the uploaded encrypted file ${input.content.path} could not be deleted`);
+    }
+  }
+  return remaining;
 }
 
 /** Whether the node's session (or an installed runtime grant) holds decrypt on the encryption network. */
@@ -498,8 +543,8 @@ export function createShareAuthorityAdapters(input: {
   readonly nativeReader: (link: string) => Promise<{ readonly bytes: Uint8Array; readonly filename: string }>;
   /** The authenticated owner's artifact storage (`tc share versions`). */
   readonly artifactStore: () => Promise<ArtifactStore>;
-  /** Short links for addressed shares (TC-1737). */
-  readonly shortLinks: ShareShortLinks;
+  /** Links for addressed shares (TC-1737). */
+  readonly links: ShareLinks;
 } {
   const origin = input.origin ?? DEFAULT_SHARE_ORIGIN;
   const fetchFn = input.fetchFn ?? globalThis.fetch;
@@ -590,6 +635,23 @@ export function createShareAuthorityAdapters(input: {
     const node = await authenticatedNode();
     await assertDomainDeliveryForOrigin((await node.activeNodeIdentity()).origin, "notify");
   };
+  const revokeRoot: NonNullable<ShareRevocationAdapter["revokePolicyRoot"]> = input.revokePolicyRoot ?? (async (request) => {
+    const node = await authenticatedNode();
+    const activeNode = await node.activeNodeIdentity();
+    if (request.nodeOrigin !== activeNode.origin || request.nodeAudience !== activeNode.nodeDid || request.ownerDid !== node.credentialHolderDid) {
+      throw new Error("share Policy/v3 revocation is not bound to the active owner node");
+    }
+    await revokePolicyRootV3({
+      nodeOrigin: activeNode.origin,
+      rootCid: request.rootCid,
+      targetRole: request.targetRole,
+      ownerDid: node.credentialHolderDid,
+      issuerDid: node.credentialHolderDid,
+      nodeAudience: activeNode.nodeDid,
+      reason: "share revoked",
+      sign: (digest) => node.signSessionBytes(digest),
+    });
+  });
   const targetAdapter: TargetPublishAdapter = { async publish(targetInput) {
     if (input.publishTarget !== undefined) return input.publishTarget(targetInput);
     // The Share config is fetched only after the local checks below, so a refusal makes no request.
@@ -786,6 +848,28 @@ export function createShareAuthorityAdapters(input: {
     } catch (error) {
       throw new SharePublishAuthorityError({ kind: "invalid-request", reason: error instanceof TypeError ? error.message : "addressed share request is invalid" });
     }
+    const deliveryEmail = prepared.target.kind === "email" && isEnvelopeDeliveryEmail(prepared.target.address) ? prepared.target.address : undefined;
+    // A link carries at most MAX_LINK_BODY_BYTES of sealed envelope. Measure the largest this share's envelope can be, from
+    // its own inputs, before the first write (registry record, upload, policy registration): a share over the limit stops here.
+    await assertAddressedShareFits({
+      shareId,
+      ownerDid: node.credentialHolderDid,
+      nodeOrigin: activeNode.origin,
+      nodeAudience: activeNode.nodeDid,
+      enforcerDid: activeNode.nodeDid,
+      spaceId: ownerSpaceId,
+      target: prepared.target,
+      resource: { kind: resourceKind },
+      storage: artifact === undefined ? { path: resourcePath } : { artifactId: artifact.id, storageName },
+      encryptionNetwork: addressedEncryptionNetwork!,
+      actions,
+      policyActions,
+      ...(deliveryEmail === undefined ? {} : { deliveryEmail }),
+      filename: targetInput.filename,
+      mediaType,
+      byteLength,
+      expiresAt,
+    });
     // Receivers find the owner's node through a registry record signed by the
     // policy owner (this session key). Publish it before storing content so a
     // registry failure cannot leave an orphaned object or an unverifiable link.
@@ -841,7 +925,7 @@ export function createShareAuthorityAdapters(input: {
       mode: "immutable" as const,
       initialCiphertextDigestHex: createHash("sha256").update(storedBytes).digest("hex"),
     };
-    const published = await publishAddressedShare({
+    const addressedOptions: AddressedSharePublishOptions = {
       shareId,
       shareOrigin: config.shareOrigin,
       nodeOrigin: activeNode.origin,
@@ -861,7 +945,7 @@ export function createShareAuthorityAdapters(input: {
       // it), so an exact-email share pins its canonical mailbox for `--notify`
       // and `tc share notify`. A mailbox the envelope's `deliveryEmail` rule
       // rejects (deployed viewers validate with it) is published unpinned.
-      ...(prepared.target.kind === "email" && isEnvelopeDeliveryEmail(prepared.target.address) ? { deliveryEmail: prepared.target.address } : {}),
+      ...(deliveryEmail === undefined ? {} : { deliveryEmail }),
       filename: targetInput.filename,
       mediaType,
       byteLength,
@@ -874,7 +958,31 @@ export function createShareAuthorityAdapters(input: {
         sign: (bytes) => node.signSessionBytes(bytes),
         registerPolicy: (request) => node.registerPolicy(request),
       },
-    });
+    };
+    let published: PublishedShare;
+    try {
+      published = await publishAddressedShare(addressedOptions);
+    } catch (error) {
+      if (!(error instanceof AddressedShareOverLimitError)) throw error;
+      // The sealed envelope was over the limit although the bound said it fit: nothing was linked. Remove what was written.
+      const remaining = await removeOverLimitShare({
+        written: error.written,
+        revokeRoot,
+        owner: { ownerDid: node.credentialHolderDid, nodeOrigin: activeNode.origin, nodeAudience: activeNode.nodeDid },
+        content: artifactVersion === undefined
+          ? {
+              kind: "object",
+              path: resourcePath,
+              remove: async () => {
+                const removed = await node.kvForSpace(ownerSpaceId).delete(resourcePath);
+                const code = !removed.ok && typeof removed.error === "object" && removed.error !== null && "code" in removed.error ? removed.error.code : undefined;
+                if (!removed.ok && code !== "KV_NOT_FOUND") throw new Error("uploaded content could not be deleted");
+              },
+            }
+          : { kind: "artifact", id: artifactVersion.artifactId, version: artifactVersion.version },
+      });
+      throw new SharePublishAuthorityError({ kind: "over-limit", remaining }, { cause: error });
+    }
     if (expiryClamped) Object.defineProperty(published.metadata, "expiryClamped", { value: true, enumerable: true });
     if (artifact !== undefined && artifactVersion !== undefined) {
       Object.defineProperty(published.metadata, "artifact", { value: { id: artifact.id, version: artifactVersion.version, mode: "pinned" as const }, enumerable: true });
@@ -898,9 +1006,6 @@ export function createShareAuthorityAdapters(input: {
     const [config, node] = await Promise.all([publicConfig(), authenticatedNode()]);
     const receipt = await node.authorizeShareDeliveryV3({
       envelope: record.deliveryMaterial.envelope as Parameters<typeof node.authorizeShareDeliveryV3>[0]["envelope"],
-      sealedEnvelope: record.deliveryMaterial.sealedEnvelope,
-      envelopeKey: record.deliveryMaterial.envelopeKey,
-      shareCid: record.deliveryMaterial.shareCid,
       resourcePath: record.resource.path,
       recipientEmail: request.recipient,
       shareUrl: record.link,
@@ -908,6 +1013,7 @@ export function createShareAuthorityAdapters(input: {
       expiresAt: authorizationExpiresAt,
       deliveryAudience: config.credentialsOrigin,
       idempotencyKey: request.idempotencyKey,
+      trustedOrigins: [config.shareOrigin],
     });
     await deliverCredentialInvitation({
       credentialsOrigin: config.credentialsOrigin,
@@ -996,23 +1102,7 @@ export function createShareAuthorityAdapters(input: {
         { status: response.status },
       );
     }),
-    revokePolicyRoot: input.revokePolicyRoot ?? (async (request) => {
-      const node = await authenticatedNode();
-      const activeNode = await node.activeNodeIdentity();
-      if (request.nodeOrigin !== activeNode.origin || request.nodeAudience !== activeNode.nodeDid || request.ownerDid !== node.credentialHolderDid) {
-        throw new Error("share Policy/v3 revocation is not bound to the active owner node");
-      }
-      await revokePolicyRootV3({
-        nodeOrigin: activeNode.origin,
-        rootCid: request.rootCid,
-        targetRole: request.targetRole,
-        ownerDid: node.credentialHolderDid,
-        issuerDid: node.credentialHolderDid,
-        nodeAudience: activeNode.nodeDid,
-        reason: "share revoked",
-        sign: (digest) => node.signSessionBytes(digest),
-      });
-    }),
+    revokePolicyRoot: revokeRoot,
   };
   const nativeReader = async (link: string): Promise<{ readonly bytes: Uint8Array; readonly filename: string }> => {
     const { TinyCloudNode } = await import("@tinycloud/node-sdk");
@@ -1048,8 +1138,11 @@ export function createShareAuthorityAdapters(input: {
       list: (prefix) => mapped(() => store.list(prefix)),
     };
   };
-  const shortLinks = createShareShortLinks({
-    kvForSpace: async (spaceId) => (await authenticatedNode()).kvForSpace(spaceId),
+  const links = createShareLinks({
+    signer: async () => {
+      const node = await authenticatedNode();
+      return { did: node.credentialHolderDid, sign: (digest) => node.signSessionBytes(digest) };
+    },
     fetchFn,
   });
   return {
@@ -1060,7 +1153,7 @@ export function createShareAuthorityAdapters(input: {
     assertDomainDelivery,
     nativeReader,
     artifactStore,
-    shortLinks,
+    links,
   };
 }
 

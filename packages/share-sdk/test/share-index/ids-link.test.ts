@@ -52,18 +52,35 @@ describe("key classifier (§1, test 5 keys)", () => {
 
 describe("link validator (§5 check 6)", () => {
   const origins = ["https://share.test"];
-  test("accepts the three share link shapes on a configured origin", () => {
+  const SHARE_ID = "lqdw5iopqq2tkkvjj6gbbi5vbv";
+  const SHORT = `https://share.test/s/${SHARE_ID}#v=4&k=${"A".repeat(43)}&c=bafkreiewixmt5nwgi3ych6durcsheaql3ybswbplpjmpbdhfkvdkidzt5u`;
+  const FULL = `https://share.test/s/full#v=4&k=${"A".repeat(43)}&r=eyJhIjoxfQ`;
+  test("accepts the share link shapes on a configured origin", () => {
     expect(validateShareLink("https://share.test/viewer#tc1=opaque", origins)).toEqual({ ok: true, shape: "native" });
-    expect(validateShareLink("https://share.test/s/inline#v=2&p=YWJj", origins)).toEqual({ ok: true, shape: "inline" });
+    expect(validateShareLink(SHORT, origins)).toEqual({ ok: true, shape: "link" });
+    expect(validateShareLink(FULL, origins)).toEqual({ ok: true, shape: "link" });
     expect(validateShareLink(`https://share.test/s/bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku#k=${"A".repeat(43)}`, origins)).toEqual({ ok: true, shape: "envelope" });
   });
 
   test("refuses other origins, schemes, query strings, userinfo and other shapes", () => {
     for (const link of [
       "https://evil.test/viewer#tc1=opaque", "http://share.test/viewer#tc1=opaque", "javascript:alert(1)", "https://share.test/viewer?x=1#tc1=a",
-      "https://u:p@share.test/viewer#tc1=a", "https://share.test/viewer#tc1=a&x=b", "https://share.test/other#tc1=a", "https://share.test/s/inline#v=1&p=a",
+      "https://u:p@share.test/viewer#tc1=a", "https://share.test/viewer#tc1=a&x=b", "https://share.test/other#tc1=a", "https://share.test/s/inline#v=2&p=YWJj",
+      `${SHORT}`.replace("#v=4", "#v=3"), SHORT.replace("/s/", "/c/"), SHORT.replace("&c=", "&x="), `${SHORT}&y=1`, SHORT.replace(SHARE_ID, SHARE_ID.slice(1)), `${FULL}=`,
       "https://share.test/s/notacid#k=abc", "https://share.test/viewer#tc1=a\n", 42,
     ]) expect(validateShareLink(link, origins).ok).toBe(false);
+  });
+
+  test("refuses fragment version 1 on every link path, as it refuses versions 2 and 3", () => {
+    for (const link of [
+      "https://share.test/s/inline#v=1&p=a",
+      SHORT.replace("#v=4", "#v=1"),
+      FULL.replace("#v=4", "#v=1"),
+      SHORT.replace("#v=4", "#v=2"),
+      FULL.replace("#v=4", "#v=3"),
+    ]) expect(validateShareLink(link, origins).ok).toBe(false);
+    expect(validateShareLink(SHORT, origins).ok).toBe(true);
+    expect(validateShareLink(FULL, origins).ok).toBe(true);
   });
 });
 

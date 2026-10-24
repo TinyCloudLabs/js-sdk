@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { canonicalize, encodeSealedInlineShareUrl, fromBase64Url, parseSealedInlineShareUrl, seal, toBase64Url } from "@tinycloud/share-envelope";
+import { canonicalize, fromBase64Url, seal, toBase64Url } from "@tinycloud/share-envelope";
+import { buildFullLink, buildShortLink, prepareLinkRecord, signerFromSeed } from "@tinycloud/share-envelope/links";
 import type { SenderShareRecord } from "../../src/history.js";
 import { createTinyCloudShareIndexBackend, type TinyCloudShareIndexClient } from "../../src/share-index/backend.js";
 import { sealAgentRecord } from "../../src/share-index/agent-record.js";
-import { compactShareRecord, expandShareRecord, openDeliveryEnvelope, shareLinkForRecord, type StoredShareRecord } from "../../src/share-index/delivery.js";
+import { compactShareRecord, expandShareRecord, openDeliveryEnvelope, type StoredShareRecord } from "../../src/share-index/delivery.js";
+import { MAX_AGENT_RECORD_BYTES } from "../../src/share-index/agent-record.js";
+import { openAgentRecordAsOwner, parseStoredAgentRecord } from "../../src/share-index/agent-record.js";
 import { agentIdFromDid, agentRecordKey, SHARE_RECORDS_VAULT_PREFIX } from "../../src/share-index/ids.js";
 import { AgentShareRecordStore } from "../../src/share-index/record-store.js";
 import { MemoryShareIndexOutbox, SenderShareIndex } from "../../src/share-index/sender-share-index.js";
@@ -14,15 +17,32 @@ import { fakeSiwe, fakeSiweParser, MemoryBackend, NETWORK_ID, newKey, SHARE_ORIG
 
 /**
  * The stored form (cap ruling): a Policy/v3 record stores each blob once.
- * The envelope is what `sealedEnvelope` decrypts to and the `/s/inline` link
- * re-encodes `sealedEnvelope`; both are dropped and rebuilt exactly.
+ * The envelope is what `sealedEnvelope` decrypts to; it is omitted and reopened
+ * exactly. A short `v=4` link is kept; a full link is not.
  */
 const encoder = new TextEncoder();
 const v3 = v3Fixture.v3;
 const now = new Date(v3Fixture.generatedAt);
 
-/** The record `historyRecordForPublishedShare` would write for the fixture share: envelope, sealed material and link. */
-async function fullRecord(): Promise<SenderShareRecord> {
+/** The link the fixture share's sealed material gets: the short link, or the full link a record carries in its fragment. */
+async function linkFor(form: "short" | "full", blob: Uint8Array, cid: string, key: Uint8Array): Promise<string> {
+  if (form === "short") return buildShortLink({ origin: SHARE_ORIGIN, type: "share", id: "lqdw5iopqq2tkkvjj6gbbi5vbv", key, bodyCid: cid });
+  const { record } = await prepareLinkRecord({
+    type: "share",
+    sealed: { blob, key },
+    issuerKey: signerFromSeed(Uint8Array.from({ length: 32 }, (_, index) => index + 1)),
+    apiOrigin: "https://api.tinycloud.xyz",
+    expiresAt: new Date(Date.now() + 3600_000),
+    enforceServiceLife: false,
+  });
+  return buildFullLink({ origin: SHARE_ORIGIN, key, record });
+}
+
+/**
+ * The record `historyRecordForPublishedShare` would write for the fixture share: envelope, sealed material and link
+ * (the short link by default; `"full"` for the link a share past 30 days gets).
+ */
+async function fullRecord(form: "short" | "full" = "short"): Promise<SenderShareRecord> {
   const key = crypto.getRandomValues(new Uint8Array(32));
   const sealed = await seal(encoder.encode(canonicalize(v3.envelope)), key);
   const material = { envelope: v3.envelope, shareCid: sealed.cid, sealedEnvelope: toBase64Url(sealed.blob), envelopeKey: toBase64Url(key) };
@@ -36,30 +56,31 @@ async function fullRecord(): Promise<SenderShareRecord> {
     // expiresAt exactly as publishAddressedShare writes it (whole seconds, no fraction).
     targetKind: "recipientDid", registeredAt: v3.registeredAt, expiresAt: v3.expiresAt, policyCid: v3.policyCid, ownerDelegationCid: v3.policyRootCid, enforcementDelegationCid: v3.enforcementRootCid,
     envelopeCid: sealed.cid, shareCid: sealed.cid, filename: "doc.txt",
-    link: await encodeSealedInlineShareUrl({ origin: SHARE_ORIGIN, ciphertext: sealed.blob, key32: key }),
+    link: await linkFor(form, sealed.blob, sealed.cid, key),
     deliveryMaterial: material as SenderShareRecord["deliveryMaterial"] & object, proofs: { session: siwe.authorization },
   };
 }
 
 describe("stored form: each blob once", () => {
-  test("compaction drops the envelope and the inline link; both are rebuilt exactly", async () => {
+  test("compaction omits the envelope and keeps the short link; expansion restores the full record exactly", async () => {
     const full = await fullRecord();
     const stored = await compactShareRecord(full);
-    expect(stored.link).toBeUndefined();
+    expect(stored.link).toBe(full.link!);
     expect(Object.keys(stored.deliveryMaterial!).sort()).toEqual(["envelopeKey", "sealedEnvelope", "shareCid"]);
-    expect(JSON.stringify(stored).length).toBeLessThan(JSON.stringify(full).length - JSON.stringify(v3.envelope).length);
-    // Open/Copy rebuilds the very same link on the configured origin, and it parses back to the stored material.
-    const link = await shareLinkForRecord(stored, SHARE_ORIGIN);
-    expect(link).toBe(full.link!);
-    const parsed = await parseSealedInlineShareUrl(link!, { expectedOrigin: SHARE_ORIGIN });
-    expect(parsed.ciphertextCid).toBe(stored.deliveryMaterial!.shareCid);
-    expect(toBase64Url(parsed.key32)).toBe(stored.deliveryMaterial!.envelopeKey);
-    expect(await expandShareRecord(stored, SHARE_ORIGIN)).toEqual(full);
+    expect(JSON.stringify(stored).length).toBeLessThan(JSON.stringify(full).length - JSON.stringify(v3.envelope).length + 1);
+    expect(await expandShareRecord(stored)).toEqual(full);
     // A bearer link is not derivable and stays; compaction is a no-op without delivery material.
     const bearer = { ...full, deliveryMaterial: undefined, link: `${SHARE_ORIGIN}/viewer#tc1=opaque-token` };
     delete (bearer as { deliveryMaterial?: unknown }).deliveryMaterial;
     expect(await compactShareRecord(bearer)).toEqual(bearer);
-    expect(await shareLinkForRecord(bearer, SHARE_ORIGIN)).toBe(bearer.link);
+  });
+
+  test("a full link is not stored: it embeds the sealed envelope a second time", async () => {
+    const full = await fullRecord("full");
+    expect(full.link!.length).toBeGreaterThan(MAX_AGENT_RECORD_BYTES / 4);
+    const stored = await compactShareRecord(full);
+    expect(stored.link).toBeUndefined();
+    expect(stored.deliveryMaterial!.sealedEnvelope).toBe(full.deliveryMaterial!.sealedEnvelope);
   });
 
   test("compaction refuses a record whose envelope or link is not its sealed material's", async () => {
@@ -68,7 +89,9 @@ describe("stored form: each blob once", () => {
     await expect(compactShareRecord({ ...full, deliveryMaterial: { ...full.deliveryMaterial!, envelope: otherEnvelope } })).rejects.toThrow("envelope is not the sealed envelope");
     const other = await fullRecord();
     await expect(compactShareRecord({ ...full, link: other.link! })).rejects.toThrow("link");
+    await expect(compactShareRecord({ ...full, link: (await fullRecord("full")).link! })).rejects.toThrow("link");
     await expect(compactShareRecord({ ...full, link: `${SHARE_ORIGIN}/viewer#tc1=opaque-token` })).rejects.toThrow("link");
+    await expect(compactShareRecord({ ...full, link: `${SHARE_ORIGIN}/s/inline#v=2&p=eyJ2IjoyfQ` })).rejects.toThrow("link");
     await expect(compactShareRecord({ ...full, deliveryMaterial: { ...full.deliveryMaterial!, shareCid: other.deliveryMaterial!.shareCid } })).rejects.toThrow("shareCid");
   });
 
@@ -85,6 +108,14 @@ describe("stored form: each blob once", () => {
     const key = crypto.getRandomValues(new Uint8Array(32));
     const loose = await seal(encoder.encode(JSON.stringify(v3.envelope, null, 1)), key);
     await expect(openDeliveryEnvelope({ shareCid: loose.cid, sealedEnvelope: toBase64Url(loose.blob), envelopeKey: toBase64Url(key) })).rejects.toThrow("canonical");
+  });
+
+  test("the stored form is strictly smaller than the full record by exactly the envelope property", async () => {
+    const full = await fullRecord();
+    const stored = await compactShareRecord(full);
+    const envelopeBytes = JSON.stringify(v3.envelope).length;
+    expect(JSON.stringify(stored).length).toBeLessThan(JSON.stringify(full).length - envelopeBytes);
+    expect(JSON.stringify(full).length - JSON.stringify(stored).length).toBe(envelopeBytes + `"envelope":`.length + 1);
   });
 });
 
@@ -127,27 +158,28 @@ describe("agent store and reconciler use the stored form", () => {
     const full = await fullRecord();
     await store.put(full);
     const key = agentRecordKey(store.agentId, v3.shareId);
-    // What the owner decrypts carries no envelope and no link.
+    const stored = await compactShareRecord(full);
     const index = await ownerIndex(backend);
     expect(await index.reconcile()).toMatchObject({ admitted: 1, rejected: {} });
     const loaded = await index.load();
     expect(loaded.status === "ok" && loaded.doc.rows[key]).toMatchObject({ ps: "proven", ak: "recipientDid" });
-    const raw = await backend.readRaw(key);
-    expect(raw.status === "ok" && new TextDecoder().decode(raw.bytes)).not.toContain(full.link!);
+    expect(JSON.stringify(stored)).not.toContain(JSON.stringify(v3.envelope));
   });
 
-  test("a record that stores the envelope or the inline link again is refused (schema; size once it is over the cap)", async () => {
+  test("a record that stores the envelope again, a full link, or another share's link is refused", async () => {
     const full = await fullRecord();
     const stored = await compactShareRecord(full);
     const context = { recordV: 1, shareId: v3.shareId, accountOwnerDid: v3Fixture.ownerDid, agentDid: v3Fixture.agentDid, source: "agent" as const };
     expect(checkAgentRecordSchema(JSON.parse(JSON.stringify(stored)), context)).toBeDefined();
-    const duplicates: [StoredShareRecord, Record<string, number>][] = [
-      [{ ...stored, deliveryMaterial: full.deliveryMaterial! }, { schema: 1 }],
-      // The link is sealedEnvelope base64'd twice: over the 32 KiB cap before the schema is reached.
-      [{ ...stored, link: full.link! }, { size: 1 }],
+    const duplicates: [StoredShareRecord, Record<string, number>, boolean][] = [
+      [{ ...stored, deliveryMaterial: full.deliveryMaterial! }, { schema: 1 }, true],
+      // A full link is sealedEnvelope base64'd twice: over the 32 KiB cap, which the reconciler enforces before the schema.
+      [{ ...stored, link: (await fullRecord("full")).link! }, { size: 1 }, false],
+      // A short link that is not this record's own material's: it passes the schema and is refused as a link.
+      [{ ...stored, link: (await fullRecord()).link! }, { link: 1 }, false],
     ];
-    for (const [duplicate, rejected] of duplicates) {
-      expect(() => checkAgentRecordSchema(JSON.parse(JSON.stringify(duplicate)), context)).toThrow("schema");
+    for (const [duplicate, rejected, schemaRefuses] of duplicates) {
+      if (schemaRefuses) expect(() => checkAgentRecordSchema(JSON.parse(JSON.stringify(duplicate)), context)).toThrow("schema");
       const backend = new MemoryBackend();
       await writeRaw(backend, duplicate);
       expect((await (await ownerIndex(backend)).reconcile()).rejected).toEqual(rejected);
@@ -157,16 +189,83 @@ describe("agent store and reconciler use the stored form", () => {
     expect(await (await ownerIndex(backend)).reconcile()).toMatchObject({ admitted: 1, rejected: {} });
   });
 
-  test("an agent reading its own record back gets the full record, with the link on its configured origin", async () => {
+  test("an agent reading its own record back gets the full record; a full link is not kept in the index", async () => {
     const backend = new MemoryBackend();
     const agent = newKey();
     const { deriveAgentKeyMaterial } = await import("../../src/share-index/agent-key.js");
     const agentKey = await deriveAgentKeyMaterial(agent.privateKey, agent.did);
     const full = await fullRecord();
     await new AgentShareRecordStore({ backend, agentDid: agent.did, agentKey }).put(full);
-    expect(await new AgentShareRecordStore({ backend, agentDid: agent.did, agentKey, shareOrigin: SHARE_ORIGIN }).get(v3.shareId)).toEqual(full);
-    const { link: _link, ...withoutLink } = full;
+    expect(await new AgentShareRecordStore({ backend, agentDid: agent.did, agentKey }).get(v3.shareId)).toEqual(full);
+    const withFullLink = await fullRecord("full");
+    await new AgentShareRecordStore({ backend, agentDid: agent.did, agentKey }).put(withFullLink);
+    const { link: _link, ...withoutLink } = withFullLink;
     expect(await new AgentShareRecordStore({ backend, agentDid: agent.did, agentKey }).get(v3.shareId)).toEqual(withoutLink);
+  });
+
+  test("what the agent store writes is the stored form: no envelope, the short link, the sealed material, under the record cap", async () => {
+    const backend = new MemoryBackend();
+    const store = new AgentShareRecordStore({ backend, agentDid: v3Fixture.agentDid });
+    const full = await fullRecord();
+    await store.put(full);
+    const key = agentRecordKey(store.agentId, v3.shareId);
+    const raw = await backend.readRaw(key);
+    if (raw.status !== "ok") throw new Error(`stored record is ${raw.status}`);
+    expect(raw.bytes.byteLength).toBeLessThanOrEqual(MAX_AGENT_RECORD_BYTES);
+    const record = parseStoredAgentRecord(raw.bytes, { agentDid: v3Fixture.agentDid, ownerNetworkId: NETWORK_ID });
+    const plaintext = await openAgentRecordAsOwner(record, { spaceId: SPACE_ID, vaultKey: `${SHARE_RECORDS_VAULT_PREFIX}${key}` }, backend.network);
+    const written = JSON.parse(new TextDecoder().decode(plaintext)) as StoredShareRecord;
+    expect(written.link).toBe(full.link);
+    expect(Object.keys(written.deliveryMaterial ?? {}).sort()).toEqual(["envelopeKey", "sealedEnvelope", "shareCid"]);
+    expect(new TextDecoder().decode(plaintext)).not.toContain(JSON.stringify(v3.envelope));
+    expect(written).toEqual(await compactShareRecord(full));
+  });
+
+  test("a stored record that embeds a full link is over the record cap and is refused on read", async () => {
+    const withFull = await fullRecord("full");
+    const stored = await compactShareRecord(withFull);
+    const duplicate: StoredShareRecord = { ...stored, link: withFull.link! };
+    const backend = new MemoryBackend();
+    const key = await writeRaw(backend, duplicate);
+    const raw = await backend.readRaw(key);
+    if (raw.status !== "ok") throw new Error(`stored record is ${raw.status}`);
+    expect(raw.bytes.byteLength).toBeGreaterThan(MAX_AGENT_RECORD_BYTES);
+    let failure: unknown;
+    try {
+      parseStoredAgentRecord(raw.bytes, { agentDid: v3Fixture.agentDid, ownerNetworkId: NETWORK_ID });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toMatchObject({ name: "AgentRecordError", reason: "size" });
+  });
+
+  test("the schema refuses a full link stored beside delivery material, with a record far under the size cap", async () => {
+    const key = crypto.getRandomValues(new Uint8Array(32));
+    const small = await seal(encoder.encode("{}"), key);
+    const material = { shareCid: small.cid, sealedEnvelope: toBase64Url(small.blob), envelopeKey: toBase64Url(key) };
+    const { record } = await prepareLinkRecord({
+      type: "share",
+      sealed: { blob: small.blob, key },
+      issuerKey: signerFromSeed(Uint8Array.from({ length: 32 }, (_, index) => index + 1)),
+      apiOrigin: "https://api.tinycloud.xyz",
+      expiresAt: new Date(Date.now() + 3600_000),
+      enforceServiceLife: false,
+    });
+    const fullLink = buildFullLink({ origin: SHARE_ORIGIN, key, record });
+    const shortLink = buildShortLink({ origin: SHARE_ORIGIN, type: "share", id: "lqdw5iopqq2tkkvjj6gbbi5vbv", key, bodyCid: small.cid });
+    const stored = await compactShareRecord(await fullRecord());
+    const context = { recordV: 1, shareId: v3.shareId, accountOwnerDid: v3Fixture.ownerDid, agentDid: v3Fixture.agentDid, source: "agent" as const };
+    const withLink = (link: string): StoredShareRecord => ({ ...stored, deliveryMaterial: material, link });
+
+    const duplicate = withLink(fullLink);
+    expect(fullLink.length).toBeGreaterThan(shortLink.length);
+    expect(JSON.stringify(duplicate).length).toBeLessThan(MAX_AGENT_RECORD_BYTES / 2);
+    expect(() => checkAgentRecordSchema(JSON.parse(JSON.stringify(duplicate)), context)).toThrow("schema");
+    expect(() => checkAgentRecordSchema(JSON.parse(JSON.stringify(withLink(`${SHARE_ORIGIN}/s/inline#v=2&p=YWJj`))), context)).toThrow("schema");
+    expect(checkAgentRecordSchema(JSON.parse(JSON.stringify(withLink(shortLink))), context).link).toBe(shortLink);
+    // The same full link on a record with no delivery material (a bearer record) is not this rule's concern.
+    const { deliveryMaterial: _material, ...bearer } = duplicate;
+    expect(() => checkAgentRecordSchema(JSON.parse(JSON.stringify(bearer)), context)).not.toThrow("schema");
   });
 });
 

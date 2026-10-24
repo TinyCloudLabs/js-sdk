@@ -2,15 +2,17 @@ import { canonicalShareFilename } from "./filename-policy.js";
 import { sha256 } from "@noble/hashes/sha256";
 import { assertArtifactBinding } from "./artifact-pin.js";
 import {
-  canonicalize, computeCid, encodeSealedInlineShareUrl, generateKey, isEnvelopeDeliveryEmail, seal,
+  canonicalize, computeCid, generateKey, isEnvelopeDeliveryEmail, seal,
   shareEnvelopeV3Schema, toBase64Url, unsignedShareEnvelopeV3Schema,
   type ArtifactPin, type PolicyCredentialRequirementV1, type ShareAction, type UnifiedContentSource,
-  type UnifiedPolicy, type UnifiedPolicyCapability, type UnifiedRoot,
+  type ShareEnvelopeV3, type UnifiedPolicy, type UnifiedPolicyCapability, type UnifiedRoot, type UnsignedShareEnvelopeV3,
 } from "@tinycloud/share-envelope";
+
 import {
-  SHARE_CONTENT_LIMIT, SHARE_PUBLISH_RESULT_VERSION, redactPublishedShare,
+  SHARE_CONTENT_LIMIT, SHARE_PUBLISH_RESULT_VERSION, SharePublishError, redactPublishedShare,
   type PublishedShare, type PublishedShareDeliveryMaterial,
 } from "./publish.js";
+import { ARTIFACT_ROOT } from "./artifact-core.js";
 import { normalizeShareTarget, type ShareTarget } from "./targets.js";
 import type { OwnerShareAction, OwnerShareMatcher } from "./owner-policy.js";
 
@@ -81,6 +83,8 @@ export interface AddressedPublishAuthority {
 export interface AddressedSharePublishOptions {
   readonly shareId: string;
   readonly shareOrigin: string;
+  /** The links API origin written into the signed header as its audience. Defaults to `https://api.tinycloud.xyz`. */
+  readonly apiOrigin?: string;
   readonly nodeOrigin: string;
   readonly nodeAudience: string;
   readonly enforcerDid: string;
@@ -169,7 +173,11 @@ function nativeProjection(capabilities: readonly UnifiedPolicyCapability[]): rea
       }));
 }
 
-async function createPolicy(options: AddressedSharePublishOptions, capabilities: readonly UnifiedPolicyCapability[]): Promise<{ readonly policy: UnifiedPolicy; readonly policyCid: string; readonly policyDigestHex: string }> {
+type PolicyOptions = Pick<AddressedSharePublishOptions, "expiresAt" | "contentSource" | "credentialRequirement"> & {
+  readonly authority: Pick<AddressedPublishAuthority, "ownerDid" | "sign">;
+};
+
+async function createPolicy(options: PolicyOptions, capabilities: readonly UnifiedPolicyCapability[]): Promise<{ readonly policy: UnifiedPolicy; readonly policyCid: string; readonly policyDigestHex: string }> {
   const fields = {
     ownerDid: options.authority.ownerDid,
     createdAt: rfc3339Seconds(new Date()),
@@ -190,6 +198,61 @@ async function createPolicy(options: AddressedSharePublishOptions, capabilities:
     signature: { suite: "Ed25519" as const, signerDid: options.authority.ownerDid, value: toBase64Url(signature) },
   } satisfies UnifiedPolicy;
   return { policy, policyCid: await computeCid(textEncoder.encode(canonicalize(policy))), policyDigestHex };
+}
+
+/** What an addressed share derives from its own inputs, before any write: the capability ceiling and the digests the owner roots commit to. */
+function addressedPlan(options: Pick<AddressedSharePublishOptions, "resource" | "contentSource" | "policyActions" | "expiresAt">) {
+  const capabilities = sortCanonical<UnifiedPolicyCapability>([
+    { kind: "kv", resource: options.contentSource.kvResource, selector: options.resource.kind, actions: [...options.policyActions] },
+    { kind: "encryption", resource: options.contentSource.encryptionNetwork, action: "tinycloud.encryption/decrypt" },
+  ]);
+  return {
+    expiry: rfc3339Seconds(options.expiresAt),
+    capabilities,
+    contentSourceDigestHex: digestHex(options.contentSource, CONTENT_SOURCE_V1_DOMAIN),
+    capabilityCeilingHashHex: digestHex(capabilities, POLICY_CAPABILITY_V1_DOMAIN),
+    nativeProjectionHashHex: digestHex(nativeProjection(capabilities), NATIVE_PROJECTION_V1_DOMAIN),
+  };
+}
+
+type EnvelopeInputs = Pick<AddressedSharePublishOptions, "shareId" | "nodeOrigin" | "spaceId" | "actions" | "resource" | "contentSource" | "deliveryEmail" | "filename" | "mediaType" | "byteLength" | "artifact" | "artifactPin">;
+
+/**
+ * The unsigned v3 envelope. The publish and the size bound both build it here,
+ * so the bound measures the serialization the publish seals.
+ */
+function unsignedAddressedEnvelope(input: {
+  readonly options: EnvelopeInputs;
+  readonly matcher: OwnerShareMatcher;
+  readonly policy: UnifiedPolicy;
+  readonly policyCid: string;
+  readonly policyRoot: UnifiedRoot;
+  readonly enforcementRoot: UnifiedRoot;
+  readonly attestedEnforcerBinding: AddressedPolicyRegistrationReceipt["attestedEnforcerBinding"];
+  readonly contentSourceDigestHex: string;
+  readonly expiry: string;
+}): UnsignedShareEnvelopeV3 {
+  const { options } = input;
+  return {
+    version: 3 as const, shareId: options.shareId, recipientMatcher: input.matcher,
+    ...(options.deliveryEmail === undefined ? {} : { deliveryEmail: options.deliveryEmail }),
+    actions: [...options.actions], resource: { ...options.resource },
+    target: { origin: options.nodeOrigin, nodeAudience: input.attestedEnforcerBinding.enforcerDid, spaceId: options.spaceId },
+    policy: input.policy, policyCid: input.policyCid, policyRoot: input.policyRoot, enforcementRoot: input.enforcementRoot,
+    attestedEnforcerBinding: input.attestedEnforcerBinding, contentSource: options.contentSource,
+    contentSourceDigestHex: input.contentSourceDigestHex, encryptionNetwork: options.contentSource.encryptionNetwork, expiry: input.expiry,
+    display: { filename: options.filename }, encrypted: true as const,
+    metadata: {
+      mediaType: options.mediaType, byteLength: options.byteLength, filename: options.filename,
+      ...(options.mediaType.startsWith("text/") ? { encoding: "utf-8" as const } : {}),
+      ...(options.artifact === undefined ? {} : { artifact: options.artifact }),
+    },
+    ...(options.artifactPin === undefined ? {} : { artifactPin: options.artifactPin }),
+  };
+}
+
+function signedAddressedEnvelope(unsigned: UnsignedShareEnvelopeV3, signerDid: string, signature: Uint8Array): ShareEnvelopeV3 {
+  return { ...unsigned, signature: { signerDid, algorithm: "Ed25519", value: toBase64Url(signature) } };
 }
 
 function publicationResult(input: {
@@ -340,16 +403,11 @@ export async function publishAddressedShare(input: AddressedSharePublishOptions)
   // Envelope, result metadata and history all carry the viewer's NFC form.
   const options = { ...input, filename: canonicalShareFilename(input.filename) };
   if (target.kind !== "recipientDid") assertMailboxCommitment(options.credentialRequirement, target);
-  const expiry = rfc3339Seconds(options.expiresAt);
   const matcher = targetMatcher(target);
-  const capabilities = sortCanonical<UnifiedPolicyCapability>([
-    { kind: "kv", resource: options.contentSource.kvResource, selector: options.resource.kind, actions: [...options.policyActions] },
-    { kind: "encryption", resource: options.contentSource.encryptionNetwork, action: "tinycloud.encryption/decrypt" },
-  ]);
+  const { expiry, capabilities, contentSourceDigestHex, capabilityCeilingHashHex, nativeProjectionHashHex } = addressedPlan(options);
+  // The policy registration below is the first write. A share whose sealed envelope cannot fit in a link is refused before it.
+  await assertSealedBodyFits({ ...options, matcher, ownerDid: options.authority.ownerDid });
   const created = await createPolicy(options, capabilities);
-  const contentSourceDigestHex = digestHex(options.contentSource, CONTENT_SOURCE_V1_DOMAIN);
-  const capabilityCeilingHashHex = digestHex(capabilities, POLICY_CAPABILITY_V1_DOMAIN);
-  const nativeProjectionHashHex = digestHex(nativeProjection(capabilities), NATIVE_PROJECTION_V1_DOMAIN);
   const commonRoot = {
     ownerDid: options.authority.ownerDid, policyId: created.policy.policyId, policyDigestHex: created.policyDigestHex,
     policyCid: created.policyCid, contentSourceDigestHex, capabilityCeilingHashHex, nativeProjectionHashHex,
@@ -365,26 +423,14 @@ export async function publishAddressedShare(input: AddressedSharePublishOptions)
     expectedNodeAudience: options.nodeAudience,
   });
   if (registration.policyCid !== created.policyCid || registration.policyRootCid !== policyRoot.cid || registration.enforcementRootCid !== enforcementRoot.cid) throw new Error("Policy/v3 registration receipt is not bound to the published roots");
-  const unsigned = {
-    version: 3 as const, shareId: options.shareId, recipientMatcher: matcher,
-    ...(options.deliveryEmail === undefined ? {} : { deliveryEmail: options.deliveryEmail }),
-    actions: [...options.actions], resource: { ...options.resource },
-    target: { origin: options.nodeOrigin, nodeAudience: registration.attestedEnforcerBinding.enforcerDid, spaceId: options.spaceId },
-    policy: created.policy, policyCid: created.policyCid, policyRoot, enforcementRoot,
-    attestedEnforcerBinding: registration.attestedEnforcerBinding, contentSource: options.contentSource,
-    contentSourceDigestHex, encryptionNetwork: options.contentSource.encryptionNetwork, expiry,
-    display: { filename: options.filename }, encrypted: true as const,
-    metadata: {
-      mediaType: options.mediaType, byteLength: options.byteLength, filename: options.filename,
-      ...(options.mediaType.startsWith("text/") ? { encoding: "utf-8" as const } : {}),
-      ...(options.artifact === undefined ? {} : { artifact: options.artifact }),
-    },
-    ...(options.artifactPin === undefined ? {} : { artifactPin: options.artifactPin }),
-  };
+  const unsigned = unsignedAddressedEnvelope({
+    options, matcher, policy: created.policy, policyCid: created.policyCid, policyRoot, enforcementRoot,
+    attestedEnforcerBinding: registration.attestedEnforcerBinding, contentSourceDigestHex, expiry,
+  });
   unsignedShareEnvelopeV3Schema.parse(unsigned);
   const envelopeSignature = await options.authority.sign(sha256(textEncoder.encode(`${ENVELOPE_V3_DOMAIN}${canonicalize(unsigned)}`)));
   if (envelopeSignature.byteLength !== 64) throw new TypeError("v3 envelope signature must be Ed25519");
-  const envelope = { ...unsigned, signature: { signerDid: options.authority.ownerDid, algorithm: "Ed25519" as const, value: toBase64Url(envelopeSignature) } };
+  const envelope = signedAddressedEnvelope(unsigned, options.authority.ownerDid, envelopeSignature);
   shareEnvelopeV3Schema.parse(envelope);
   const envelopeBytes = textEncoder.encode(canonicalize(envelope));
   // The recipient envelope carries email and policy metadata.  Seal it before
@@ -393,11 +439,24 @@ export async function publishAddressedShare(input: AddressedSharePublishOptions)
   const envelopeKeyBytes = generateKey();
   const sealed = await seal(envelopeBytes, envelopeKeyBytes);
   const envelopeKey = toBase64Url(envelopeKeyBytes);
-  const url = await encodeSealedInlineShareUrl({
-    origin: options.shareOrigin,
-    ciphertext: sealed.blob,
-    key32: envelopeKeyBytes,
+  // The real check, on the sealed body itself, before any link is built or the header is signed. The caller removes what the
+  // registration above wrote (see `AddressedShareOverLimitError`).
+  if (sealed.blob.length > await linkBodyLimit()) {
+    throw new AddressedShareOverLimitError({ policyCid: created.policyCid, policyRootCid: policyRoot.cid, enforcementRootCid: enforcementRoot.cid });
+  }
+  // The link this publisher returns is the full `v=4` link: the signed record rides in the fragment, so it works
+  // with no service. The header is signed by the key that signs the envelope (the envelope's signer is the issuer
+  // every reader binds the record to). A caller that wants a short link posts `deliveryMaterial` with `createLink`.
+  const links = await import("@tinycloud/share-envelope/links");
+  const { record } = await links.prepareLinkRecord({
+    type: "share",
+    sealed: { blob: sealed.blob, key: envelopeKeyBytes },
+    issuerKey: { did: options.authority.ownerDid, sign: (digest) => options.authority.sign(digest) },
+    apiOrigin: options.apiOrigin ?? links.DEFAULT_LINKS_API_ORIGIN,
+    expiresAt: new Date(expiry),
+    enforceServiceLife: false,
   });
+  const url = links.buildFullLink({ origin: options.shareOrigin, key: envelopeKeyBytes, record });
   const deliveryMaterial = {
     envelope,
     shareCid: sealed.cid,
@@ -411,4 +470,198 @@ export async function publishAddressedShare(input: AddressedSharePublishOptions)
     enforcerDid: registration.attestedEnforcerBinding.enforcerDid,
     expiry, deliveryMaterial,
   });
+}
+
+/** The text a share gets when its sealed envelope cannot fit in a link. */
+export const ADDRESSED_SHARE_TOO_LARGE_MESSAGE = "This share is too large to send as a link, so nothing was shared. Use a shorter path or fewer folders.";
+
+/** What a publish has written by the time its sealed envelope is measured. */
+export interface AddressedShareWrites {
+  readonly policyCid: string;
+  readonly policyRootCid: string;
+  readonly enforcementRootCid: string;
+}
+
+/**
+ * Thrown by `publishAddressedShare` when the sealed envelope, measured after
+ * the policy registration, is over `MAX_LINK_BODY_BYTES`. The size bound makes
+ * this unreachable for a correct caller; if it happens, `written` names what
+ * the publish registered so the caller can remove it. No link was built.
+ */
+export class AddressedShareOverLimitError extends SharePublishError {
+  constructor(readonly written: AddressedShareWrites) {
+    super("max-bytes-exceeded", ADDRESSED_SHARE_TOO_LARGE_MESSAGE);
+    this.name = "AddressedShareOverLimitError";
+  }
+}
+
+/** The links module loads on demand, so the limit is read from it when a check runs. */
+async function linkBodyLimit(): Promise<number> {
+  return (await import("@tinycloud/share-envelope/links")).MAX_LINK_BODY_BYTES;
+}
+
+/** Longest string an authority returns as the CID of an owner root. A blake3 CIDv1 is 59 characters; the bound leaves room for any multibase CID. */
+const ROOT_CID_BOUND_CHARS = 128;
+/** Longest RFC 3339 timestamp a node may return: nine fractional digits and a numeric offset. */
+const NODE_TIMESTAMP_BOUND = "2026-01-01T00:00:00.123456789+00:00";
+/** An Ed25519 DID key is 56 characters. */
+const ED25519_DID_KEY_CHARS = 56;
+
+/**
+ * The compact-UCAN owner root as the authority signs it (sdk-core
+ * `signCompactUcanRootAuthorization`), with every value the signing writes at
+ * its widest: 16-digit times, a 36-character nonce (a UUID; the node SDK uses 22), a 64-byte signature.
+ */
+function rootAuthorizationBound(input: {
+  readonly ownerDid: string;
+  readonly role: UnifiedRoot["role"];
+  readonly audienceDid: string;
+  readonly policyId: string;
+  readonly policyDigestHex: string;
+  readonly policyCid: string;
+  readonly contentSourceDigestHex: string;
+  readonly capabilityCeilingHashHex: string;
+  readonly nativeProjectionHashHex: string;
+  readonly nodeAudience: string;
+  readonly capabilities: readonly UnifiedPolicyCapability[];
+}): string {
+  const attenuation: Record<string, unknown> = {};
+  for (const capability of input.capabilities) {
+    attenuation[capability.resource] = capability.kind === "encryption"
+      ? { [capability.action]: [{}] }
+      : Object.fromEntries(capability.actions.map((action) => [action, [{ type: "xyz.tinycloud.resource/selector", kind: capability.selector, value: capability.resource }]]));
+  }
+  const facts = {
+    role: input.role,
+    mode: input.role === "policy-authority" ? "policy-source" : "conditional-mint",
+    ownerDid: input.ownerDid,
+    policyId: input.policyId,
+    policyDigestHex: input.policyDigestHex,
+    policyCid: input.policyCid,
+    contentSourceDigestHex: input.contentSourceDigestHex,
+    capabilityCeilingHashHex: input.capabilityCeilingHashHex,
+    nativeProjectionHashHex: input.nativeProjectionHashHex,
+    nodeAudience: input.nodeAudience,
+    ...(input.role === "policy-enforcement" ? { enforcerDid: input.audienceDid } : {}),
+  };
+  const header = { alg: "EdDSA", jwk: { alg: "EdDSA", crv: "Ed25519", kty: "OKP", x: "A".repeat(43) }, typ: "JWT", ucv: "0.10.0" };
+  const payload = {
+    att: attenuation,
+    aud: input.audienceDid,
+    exp: Number.MAX_SAFE_INTEGER,
+    fct: [facts],
+    iss: `${input.ownerDid}#${input.ownerDid.slice("did:key:".length)}`,
+    nbf: Number.MAX_SAFE_INTEGER,
+    nnc: "A".repeat(36),
+    prf: [] as string[],
+  };
+  return `${toBase64Url(textEncoder.encode(canonicalize(header)))}.${toBase64Url(textEncoder.encode(canonicalize(payload)))}.${"A".repeat(86)}`;
+}
+
+type BoundOptions = EnvelopeInputs
+  & Pick<AddressedSharePublishOptions, "nodeAudience" | "enforcerDid" | "policyActions" | "credentialRequirement" | "expiresAt">
+  & { readonly matcher: OwnerShareMatcher; readonly ownerDid: string };
+
+/**
+ * An upper bound on the sealed envelope of an addressed share, in bytes. It
+ * builds the envelope through the same serializer as the publish, from the
+ * share's own inputs, with every value a write returns at its maximum encoded
+ * length: the root and registration identifiers, the root authorizations
+ * (times, nonce, signature), the enforcer's attestation, and all signatures.
+ * It seals that envelope with a throwaway key.
+ */
+async function sealedBodyUpperBound(options: BoundOptions): Promise<number> {
+  const plan = addressedPlan(options);
+  const signature = new Uint8Array(64);
+  const created = await createPolicy({ ...options, authority: { ownerDid: options.ownerDid, sign: async () => signature } }, plan.capabilities);
+  const common = {
+    ownerDid: options.ownerDid, policyId: created.policy.policyId, policyDigestHex: created.policyDigestHex, policyCid: created.policyCid,
+    contentSourceDigestHex: plan.contentSourceDigestHex, capabilityCeilingHashHex: plan.capabilityCeilingHashHex,
+    nativeProjectionHashHex: plan.nativeProjectionHashHex, nodeAudience: options.nodeAudience, capabilities: plan.capabilities,
+  };
+  const policyRoot: UnifiedRoot = {
+    cid: "b".repeat(ROOT_CID_BOUND_CHARS), role: "policy-authority",
+    authorization: rootAuthorizationBound({ ...common, role: "policy-authority", audienceDid: `did:tinycloud:policy:${created.policyDigestHex}` }),
+  };
+  const enforcementRoot: UnifiedRoot = {
+    cid: "b".repeat(ROOT_CID_BOUND_CHARS), role: "policy-enforcement",
+    authorization: rootAuthorizationBound({ ...common, role: "policy-enforcement", audienceDid: options.enforcerDid }),
+  };
+  const nodeDid = options.enforcerDid.padEnd(ED25519_DID_KEY_CHARS, "z");
+  const unsigned = unsignedAddressedEnvelope({
+    options, matcher: options.matcher, policy: created.policy, policyCid: created.policyCid, policyRoot, enforcementRoot,
+    attestedEnforcerBinding: {
+      schema: "xyz.tinycloud.policy/attested-enforcer/v2", enforcerDid: nodeDid, nodeAudience: nodeDid,
+      attestationBindingDigestHex: "f".repeat(64), issuedAt: NODE_TIMESTAMP_BOUND, expiresAt: NODE_TIMESTAMP_BOUND,
+      signature: { suite: "Ed25519", signerDid: nodeDid, value: "A".repeat(86) },
+    },
+    contentSourceDigestHex: plan.contentSourceDigestHex, expiry: plan.expiry,
+  });
+  const envelope = signedAddressedEnvelope(unsigned, options.ownerDid, signature);
+  return (await seal(textEncoder.encode(canonicalize(envelope)), generateKey())).blob.length;
+}
+
+async function assertSealedBodyFits(options: BoundOptions): Promise<void> {
+  if (await sealedBodyUpperBound(options) > await linkBodyLimit()) throw new SharePublishError("max-bytes-exceeded", ADDRESSED_SHARE_TOO_LARGE_MESSAGE);
+}
+
+/** What a sender knows before any write; see {@link addressedShareBodyUpperBound}. */
+export interface AddressedShareBoundInput extends AddressedShareRequest {
+  readonly shareId: string;
+  readonly ownerDid: string;
+  readonly nodeOrigin: string;
+  readonly nodeAudience: string;
+  readonly enforcerDid: string;
+  readonly spaceId: string;
+  readonly resource: { readonly kind: "exact" | "prefix" };
+  /** Where the content will be stored: a path, or the id and stored file name of an artifact (whose version number the publish assigns). */
+  readonly storage: { readonly path: string } | { readonly artifactId: string; readonly storageName: string };
+  /** The owner's encryption network for the space. */
+  readonly encryptionNetwork: string;
+  readonly mediaType: string;
+  readonly byteLength: number;
+  readonly artifact?: "html";
+  readonly expiresAt: Date;
+}
+
+/**
+ * The largest sealed envelope a share can have, in bytes, computed before any
+ * write (upload, registration, registry or KV write): the same envelope the
+ * publish builds, with every value a write returns at its maximum encoded
+ * length (see `sealedBodyUpperBound`). Compare it with `MAX_LINK_BODY_BYTES`.
+ * For an artifact share the version, the manifest digest and the stored size
+ * are taken at their largest.
+ */
+export async function addressedShareBodyUpperBound(input: AddressedShareBoundInput): Promise<number> {
+  // The requirement and the delivery address are derived exactly as the publish derives them, so the bound carries
+  // every field the sealed envelope can: a caller cannot leave one out, and a mailbox target always has its commitment.
+  const { target, credentialRequirement } = prepareAddressedShare(input);
+  const deliveryEmail = input.deliveryEmail ?? (target.kind === "email" && isEnvelopeDeliveryEmail(target.address) ? target.address : undefined);
+  const artifactStorage = "artifactId" in input.storage ? input.storage : undefined;
+  const path = "path" in input.storage
+    ? input.storage.path
+    : `${ARTIFACT_ROOT}/${input.storage.artifactId}/versions/${Number.MAX_SAFE_INTEGER}/${input.storage.storageName}`;
+  const contentSource: UnifiedContentSource = {
+    shareId: input.shareId, kvResource: `${input.spaceId}/kv/${path}`, selector: input.resource.kind, encryptionNetwork: input.encryptionNetwork,
+    encryptedSymmetricKeyDigestHex: "f".repeat(64), keyVersion: Number.MAX_SAFE_INTEGER, mode: "immutable", initialCiphertextDigestHex: "f".repeat(64),
+  };
+  const artifactPin: ArtifactPin | undefined = artifactStorage === undefined ? undefined : {
+    v: 1, artifactId: artifactStorage.artifactId, version: Number.MAX_SAFE_INTEGER, manifestSha256: "f".repeat(64),
+    files: [{ path: artifactStorage.storageName, sha256: "f".repeat(64), bytes: Number.MAX_SAFE_INTEGER }],
+  };
+  return sealedBodyUpperBound({
+    shareId: input.shareId, nodeOrigin: input.nodeOrigin, nodeAudience: input.nodeAudience, enforcerDid: input.enforcerDid, spaceId: input.spaceId,
+    actions: input.actions, policyActions: input.policyActions, resource: { kind: input.resource.kind, path },
+    contentSource, ...(artifactPin === undefined ? {} : { artifactPin }),
+    ...(credentialRequirement === undefined ? {} : { credentialRequirement }),
+    ...(deliveryEmail === undefined ? {} : { deliveryEmail }),
+    ...(input.artifact === undefined ? {} : { artifact: input.artifact }),
+    filename: canonicalShareFilename(input.filename), mediaType: input.mediaType, byteLength: input.byteLength, expiresAt: input.expiresAt,
+    matcher: targetMatcher(target), ownerDid: input.ownerDid,
+  });
+}
+
+/** Refuses (`SharePublishError`, code `max-bytes-exceeded`, {@link ADDRESSED_SHARE_TOO_LARGE_MESSAGE}) a share whose largest sealed envelope is over `MAX_LINK_BODY_BYTES`. Call it before any write. */
+export async function assertAddressedShareFits(input: AddressedShareBoundInput): Promise<void> {
+  if (await addressedShareBodyUpperBound(input) > await linkBodyLimit()) throw new SharePublishError("max-bytes-exceeded", ADDRESSED_SHARE_TOO_LARGE_MESSAGE);
 }

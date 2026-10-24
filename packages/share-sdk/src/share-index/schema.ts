@@ -306,6 +306,17 @@ export class ShareRecordSchemaError extends Error {
   }
 }
 
+/** Whether a link embeds the sealed record: the full form (`/s/full#v=4&k=…&r=…`) or an inline payload (`p=`). */
+function carriesSealedRecord(link: string): boolean {
+  try {
+    const url = new URL(link);
+    const fragment = new URLSearchParams(url.hash.slice(1));
+    return url.pathname === "/s/full" || fragment.has("r") || fragment.has("p");
+  } catch {
+    return false;
+  }
+}
+
 /** Throws {@link ShareRecordSchemaError} when the decrypted value fails the schema. */
 export function checkAgentRecordSchema(value: unknown, context: AgentRecordSchemaContext): StoredShareRecord {
   const fail = (): never => { throw new ShareRecordSchemaError("schema"); };
@@ -346,11 +357,13 @@ export function checkAgentRecordSchema(value: unknown, context: AgentRecordSchem
   if (record.link !== undefined && typeof record.link !== "string") return fail();
   if (record.filename !== undefined && (typeof record.filename !== "string" || record.filename.length > 512)) return fail();
   // Each blob once (stored form, `delivery.ts`): a Policy/v3 record keeps the sealed envelope and its key, never
-  // the envelope it decrypts to nor the `/s/inline` link that re-encodes it.
+  // the envelope it decrypts to. Its `link` is the short link the sender printed, checked against the sealed
+  // material when the record is accepted. A full link carries the sealed record and the key in its fragment, so a
+  // record that stores one beside its delivery material is refused.
   if (record.deliveryMaterial !== undefined) {
     const material = record.deliveryMaterial;
     if (!isObject(material) || Object.keys(material).length !== STORED_DELIVERY_MATERIAL_KEYS.length || !STORED_DELIVERY_MATERIAL_KEYS.every((key) => typeof material[key] === "string")) return fail();
-    if (record.link !== undefined) return fail();
+    if (typeof record.link === "string" && carriesSealedRecord(record.link)) return fail();
   }
   if (record.deliveredRecipients !== undefined && (!Array.isArray(record.deliveredRecipients) || !record.deliveredRecipients.every((item) => typeof item === "string"))) return fail();
   if (record.proofs !== undefined) {

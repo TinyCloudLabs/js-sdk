@@ -114,6 +114,51 @@ describe("Share lifecycle and authorization parity", () => {
     expect(calls).toBe(3);
   });
 
+  it("treats a refused delivery authorization as final, the same for HTTP 400 and HTTP 422", async () => {
+    const results = [];
+    for (const status of [400, 422] as const) {
+      let calls = 0;
+      results.push(await notifyShare({
+        shareId: "share-1", recipient: "person@example.com", maxAttempts: 3,
+        adapter: { async deliver() {
+          calls += 1;
+          throw Object.assign(new Error("share delivery authorization refused"), { code: "delivery-authorization-invalid", status });
+        } },
+      }));
+      expect(calls).toBe(1);
+    }
+    expect(results[0]).toMatchObject({ state: "partial-failure", attempts: 1, retryable: false });
+    expect(results[1]).toEqual(results[0]);
+  });
+
+  it("keeps retrying a server failure and a 400 that is not the authorization refusal", async () => {
+    for (const status of [500, 400] as const) {
+      let calls = 0;
+      const result = await notifyShare({
+        shareId: "share-1", recipient: "person@example.com", maxAttempts: 3,
+        adapter: { async deliver() {
+          calls += 1;
+          throw Object.assign(new Error("failed"), { status });
+        } },
+      });
+      expect(result).toMatchObject({ state: "partial-failure", attempts: 3, retryable: true });
+      expect(calls).toBe(3);
+    }
+  });
+
+  it("retries a rate-limited delivery authorization within the budget and ends retryable, not final", async () => {
+    let calls = 0;
+    const result = await notifyShare({
+      shareId: "share-1", recipient: "person@example.com", maxAttempts: 3,
+      adapter: { async deliver() {
+        calls += 1;
+        throw Object.assign(new Error("V3 share delivery authorization failed: HTTP 429"), { status: 429, code: "delivery-rate-limited" });
+      } },
+    });
+    expect(calls).toBe(3);
+    expect(result).toMatchObject({ state: "partial-failure", attempts: 3, retryable: true });
+  });
+
   it("reports a confirmed prior delivery only after a successful repeat", async () => {
     const email = { ...record, recipientMatcher: { kind: "exactEmail" as const, value: "foo@x.com" }, deliveredRecipients: ["foo@x.com"] };
     let attempts = 0;
