@@ -20,10 +20,19 @@ import type {
   RequestsView,
   RevokeOutcome,
   StorageView,
+  ViewResult,
 } from "../data";
 import { viewReady } from "../view-result";
 
-export function createStubPanelData(): PanelDataFactory {
+/**
+ * Per-section stub overrides, so e2e specs can reach states the defaults never produce.
+ * One optional field per section; a missing field keeps that section's default.
+ */
+export interface StubSeed {
+  nodes?: ViewResult<readonly NodeRow[]>;
+}
+
+export function createStubPanelData(seed: StubSeed = {}): PanelDataFactory {
   return (client) => {
     const requests: RequestsView = {
       rows: () => [],
@@ -56,7 +65,7 @@ export function createStubPanelData(): PanelDataFactory {
       },
       delegations: () => Promise.resolve(viewReady<DelegationPage>({ rows: [STUB_DELEGATION] })),
       revoke: (cid: string) => Promise.resolve<RevokeOutcome>({ ok: true, cid }),
-      nodes: () => Promise.resolve(viewReady<readonly NodeRow[]>([STUB_NODE])),
+      nodes: () => Promise.resolve(seed.nodes ?? viewReady<readonly NodeRow[]>([STUB_NODE])),
       storage: () =>
         Promise.resolve(
           viewReady<StorageView>({

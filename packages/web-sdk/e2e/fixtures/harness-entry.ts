@@ -4,7 +4,8 @@
 import { registerUiClient, type UiClientHandle } from "../../src/ui/index";
 import { toastStore } from "../../src/ui/parts/toasts";
 import type { ToastKind } from "../../src/ui/toast-store";
-import { createStubPanelData } from "../../src/ui/stub/index";
+import { createStubPanelData, type StubSeed } from "../../src/ui/stub/index";
+import type { NodeRow, ViewResult } from "../../src/ui/data";
 
 type SyncState = { requested: boolean; effective: string; reason?: string };
 
@@ -62,6 +63,28 @@ const source = {
   },
 };
 
+// Test-only seed a spec sets via addInitScript as window.__TC_STUB_SEED__ (JSON).
+// JSON carries no Date, so the seed row's ISO `lastSeenAt` string is revived here.
+type SeedNodeRow = Omit<NodeRow, "lastSeenAt"> & { lastSeenAt?: string };
+type SeedJson = { nodes?: ViewResult<readonly SeedNodeRow[]> };
+
+function reviveRow(row: SeedNodeRow): NodeRow {
+  const { lastSeenAt, ...rest } = row;
+  return lastSeenAt === undefined ? rest : { ...rest, lastSeenAt: new Date(lastSeenAt) };
+}
+
+function stubSeed(): StubSeed {
+  // window has no typed slot for the spec-set seed; the holder is read by name below.
+  const holder: Record<string, unknown> = window as unknown as Record<string, unknown>;
+  const raw = holder.__TC_STUB_SEED__;
+  if (typeof raw !== "string") return {};
+  const parsed: SeedJson = JSON.parse(raw);
+  const nodes = parsed.nodes;
+  if (nodes === undefined) return {};
+  if (nodes.state !== "ready") return { nodes };
+  return { nodes: { state: "ready", data: nodes.data.map(reviveRow) } };
+}
+
 let handle: UiClientHandle | undefined;
 
 const w = window as unknown as Record<string, unknown>;
@@ -74,7 +97,7 @@ w.__tc = {
       ui: { developerMode: true, ...ui },
       source: source as never,
       manifestAppId: () => "e2e-settings-smoke",
-      data: createStubPanelData(),
+      data: createStubPanelData(stubSeed()),
     });
     w.tc = { ui: handle.api };
     return true;
