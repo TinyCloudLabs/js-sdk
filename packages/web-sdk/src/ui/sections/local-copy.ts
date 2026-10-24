@@ -45,6 +45,15 @@ const STYLE = `
 .lc-fail{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:12px}
 .lc-fail p{margin:0;font-size:14px}
 .lc-sec .confirm,.lc-sw+.confirm{margin-top:12px}
+.lc-confirm.confirm .busy{margin:0;font-size:14.5px;line-height:1.5;color:inherit}
+.lc-confirm.confirm .actions{margin:16px 0 0}
+.lc-confirm .action:last-child{background:#09090b;border-color:#09090b;color:#fff}
+.lc-confirm .action:last-child:hover{background:#27272a}
+.lc-confirm .action:disabled{opacity:.6;cursor:default}
+@media (max-width:600px){
+.lc-confirm.confirm .actions{flex-direction:column}
+.lc-confirm .action{width:100%;white-space:normal}
+}
 .panel[data-layout="page"] .lc-card{background:#fff}
 @media (prefers-color-scheme: dark){
 .lc-sub,.lc-cnt{color:#a1a1aa}
@@ -52,6 +61,8 @@ const STYLE = `
 .lc-kv>div{border-bottom-color:#69696b}
 .lc-kv dt::after{border-bottom-color:#71717a}
 .lc-h3::after{background:#69696b}
+.lc-confirm .action:last-child{background:#fafafa;border-color:#fafafa;color:#09090b}
+.lc-confirm .action:last-child:hover{background:#e4e4e7}
 .panel[data-layout="page"] .lc-card{background:#151517}
 }
 `;
@@ -501,6 +512,8 @@ function mountLocalCopy(el: HTMLElement, ctx: SectionContext): () => void {
       onConfirm: () => void runWipe(handle, turnOff),
     });
     confirming = handle;
+    // Scoped hook for the confirm's own look: body text, a filled destructive action, stacked buttons on a phone.
+    handle.confirm.closest(".confirm")?.classList.add("lc-confirm");
   }
 
   toggle.addEventListener("click", () => {

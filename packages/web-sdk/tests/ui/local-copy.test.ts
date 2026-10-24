@@ -260,6 +260,10 @@ describe("states", () => {
     const { el } = setup({ facade: makeFacade(state("off")), copy: ready({ requested: false, effective: "off", bytesOnDevice: 1024, folders: [] }) });
     await flush();
     expect(wipeSection(el).hidden).toBe(false);
+    expect(wipeSection(el).textContent).toContain(
+      "Erases TinyCloud's copy on this device. Your data stays on your TinyCloud; the app's own files are not touched.",
+    );
+    expect(wipeSection(el).textContent).toContain("Wipe local data");
     expect(bodyText(el)).not.toContain("Nothing is kept on this device.");
   });
 

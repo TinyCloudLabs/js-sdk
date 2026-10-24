@@ -147,10 +147,17 @@ for (const scheme of ["light", "dark"] as const) {
     test("wipe is two steps: the button only asks; Keep takes the safe action and nothing is erased", async ({ page }) => {
       await mount(page, { scheme, seed: seedOn(), sync: SYNC.on });
       await openCopy(page);
+      await expect(panel(page).locator(".lc-wipe > p")).toHaveText(
+        "Erases TinyCloud's copy on this device. Your data stays on your TinyCloud; the app's own files are not touched.",
+      );
       await call(page, (tc) => tc.createReplicaDb());
       await wipeButton(page).click();
       await expect(confirmBox(page)).toHaveAttribute("role", "alertdialog");
       await expect(keepButton(page)).toBeFocused();
+      const keepBox = await keepButton(page).boundingBox();
+      const wipeBox = await confirmButton(page).boundingBox();
+      expect(Math.abs((keepBox?.y ?? 0) - (wipeBox?.y ?? 99))).toBeLessThan(2);
+      expect((wipeBox?.x ?? 0) > (keepBox?.x ?? 0)).toBe(true);
       await expect(confirmBox(page)).toContainText("Erases TinyCloud's copy on this device.");
       await expect(confirmBox(page)).toContainText("3 changes haven't synced yet. Wiping now loses them.");
       expect(await call(page, (tc) => tc.wipeCalls())).toBe(0);
@@ -306,6 +313,38 @@ for (const scheme of ["light", "dark"] as const) {
       expect(row("knob", knob, surface).ratio).toBeGreaterThanOrEqual(3);
     });
 
+    test("the wipe confirm question and both actions meet AA contrast", async ({ page }) => {
+      await mount(page, { scheme, seed: seedOn(), sync: SYNC.on });
+      await openCopy(page);
+      await wipeButton(page).click();
+      const pairs = await page.evaluate(() => {
+        const root = document.querySelector("[data-tinycloud-ui]")?.shadowRoot?.querySelector("#tinycloud-ui-panel");
+        const read = (el: Element | null | undefined, own: boolean) => {
+          if (!el) return undefined;
+          let node: Element | null = own ? el : el.parentElement;
+          let background = "rgba(0, 0, 0, 0)";
+          while (node) {
+            background = getComputedStyle(node).backgroundColor;
+            if (background !== "rgba(0, 0, 0, 0)") break;
+            node = node.parentElement;
+          }
+          return { color: getComputedStyle(el).color, background };
+        };
+        const buttons = root?.querySelectorAll(".lc-confirm .action");
+        return {
+          question: read(root?.querySelector(".lc-confirm .busy"), false),
+          keep: read(buttons?.[0], true),
+          wipe: read(buttons?.[1], true),
+        };
+      });
+      for (const [label, pair] of Object.entries(pairs)) {
+        expect(pair, label).toBeDefined();
+        const result = row(label, pair!.color, pair!.background);
+        expect(result.opaque, label).toBe(true);
+        expect(result.ratio, label).toBeGreaterThanOrEqual(4.5);
+      }
+    });
+
     test("the focus ring shows on the switch and the wipe button", async ({ page }) => {
       await mount(page, { scheme, seed: seedOn(), sync: SYNC.on });
       await openCopy(page);
@@ -345,6 +384,12 @@ for (const size of [
     const wipeBox = await wipeButton(page).boundingBox();
     await page.touchscreen.tap((wipeBox?.x ?? 0) + 10, (wipeBox?.y ?? 0) + 10);
     await expect(confirmBox(page)).toBeVisible();
+    // Narrow widths stack the two actions, as the mockup does: same left edge, Keep above Wipe, equal width.
+    const stackKeep = await keepButton(page).boundingBox();
+    const stackWipe = await confirmButton(page).boundingBox();
+    expect(Math.abs((stackKeep?.x ?? 0) - (stackWipe?.x ?? 99))).toBeLessThan(2);
+    expect((stackKeep?.y ?? 99) < (stackWipe?.y ?? 0)).toBe(true);
+    expect(Math.abs((stackKeep?.width ?? 0) - (stackWipe?.width ?? 99))).toBeLessThan(2);
     for (const control of [keepButton(page), confirmButton(page)]) {
       const box = await control.boundingBox();
       expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
