@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { link, lstat, mkdir, mkdtemp, open, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -646,6 +646,34 @@ afterEach(() => {
   else Reflect.deleteProperty(process.stdin, "isTTY");
   if (stderrTTY) Object.defineProperty(process.stderr, "isTTY", stderrTTY);
   else Reflect.deleteProperty(process.stderr, "isTTY");
+});
+
+// Tests never touch a real home: every tool home is a temp dir, set at module load.
+const TEST_ROOT = await mkdtemp(join("/var/tmp", "tc1901."));
+const TEST_HOME_KEYS = ["HOME", "TC_HOME", "COURIER_HOME", "BUN_INSTALL_CACHE_DIR"] as const;
+const homeBefore: Record<(typeof TEST_HOME_KEYS)[number], string | undefined> = {
+  HOME: process.env.HOME,
+  TC_HOME: process.env.TC_HOME,
+  COURIER_HOME: process.env.COURIER_HOME,
+  BUN_INSTALL_CACHE_DIR: process.env.BUN_INSTALL_CACHE_DIR,
+};
+for (const key of TEST_HOME_KEYS) process.env[key] = TEST_ROOT;
+
+function assertTestHome(): void {
+  if (!/^\/var\/tmp\/tc1901\.[A-Za-z0-9]+$/.test(TEST_ROOT)) throw new Error(`test root ${TEST_ROOT} is not a tc1901 temp dir`);
+  for (const key of TEST_HOME_KEYS) {
+    if (process.env[key] !== TEST_ROOT) throw new Error(`${key} is not the test temp home`);
+  }
+}
+assertTestHome();
+
+afterAll(async () => {
+  for (const key of TEST_HOME_KEYS) {
+    const value = homeBefore[key];
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  await rm(TEST_ROOT, { recursive: true, force: true });
 });
 
 describe("CLI secrets commands", () => {
@@ -2067,7 +2095,8 @@ describe("CLI secrets commands", () => {
       artifact: unknown,
       action: (source: string) => Promise<T>,
     ): Promise<T> {
-      const dir = await mkdtemp(join(tmpdir(), "tc-secrets-source-"));
+      assertTestHome();
+      const dir = await mkdtemp(join(TEST_ROOT, "source-"));
       const source = join(dir, "delegation.json");
       await writeFile(source, typeof artifact === "string" ? artifact : JSON.stringify(artifact), "utf8");
       try {
@@ -2102,9 +2131,8 @@ describe("CLI secrets commands", () => {
     });
 
     test("--delegation <profile-name> reads the imported profile's additional-delegations.json", async () => {
-      const tempHome = await mkdtemp(join(tmpdir(), "tc-secrets-home-"));
-      const previousHome = process.env.TC_HOME;
-      const profileDir = join(tempHome, ".tinycloud", "profiles", "owner-profile");
+      assertTestHome();
+      const profileDir = join(TEST_ROOT, ".tinycloud", "profiles", "owner-profile");
       await mkdir(profileDir, { recursive: true });
       await writeFile(
         join(profileDir, "additional-delegations.json"),
@@ -2114,12 +2142,9 @@ describe("CLI secrets commands", () => {
       currentNode = makeFakeNode();
 
       try {
-        process.env.TC_HOME = tempHome;
         await runSecretsCommand(["secrets", "get", "ANTHROPIC_API_KEY", "--delegation", "owner-profile"]);
       } finally {
-        if (previousHome === undefined) delete process.env.TC_HOME;
-        else process.env.TC_HOME = previousHome;
-        await rm(tempHome, { recursive: true, force: true });
+        await rm(join(TEST_ROOT, ".tinycloud"), { recursive: true, force: true });
       }
 
       expect(recorded.errors).toEqual([]);
@@ -2129,6 +2154,25 @@ describe("CLI secrets commands", () => {
         { envelope: { networkId: DEFAULT_NETWORK_ID }, options: { proofs: ["bafy-imported-delegation"] } },
       ]);
       expect(recorded.outputs).toEqual([{ name: "ANTHROPIC_API_KEY", value: "delegated-value" }]);
+    });
+
+    test("a missing delegated secret is NOT_FOUND and never decrypts", async () => {
+      currentNode = makeFakeNode({
+        delegatedKvResult: { ok: false, error: { code: "KV_NOT_FOUND", message: "missing" } },
+      });
+
+      const { streams } = await withDelegationFile(
+        delegationFixture({ cid: "bafy-missing-secret" }),
+        (source) => getDelegated(source),
+      );
+
+      expect(recorded.errors).toHaveLength(1);
+      expect(recorded.errors[0]).toMatchObject({ code: "NOT_FOUND", exitCode: 4 });
+      expect(firstErrorMessage()).toBe('Secret "ANTHROPIC_API_KEY" not found');
+      expect(recorded.outputs).toEqual([]);
+      expect(recorded.delegatedKvGets).toEqual([{ path: DELEGATED_PATH, options: { raw: true, prefix: "" } }]);
+      expect(recorded.decryptEnvelopeCalls).toEqual([]);
+      expect(streams).toBe("");
     });
 
     test("a delegation for a different secret path is PERMISSION_DENIED and reads nothing", async () => {
