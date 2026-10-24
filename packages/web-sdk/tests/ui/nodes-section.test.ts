@@ -314,3 +314,30 @@ describe("nodes section body", () => {
     expect(el.querySelector(".nd-card")).toBeNull();
   });
 });
+
+describe("nodes section unknown values", () => {
+  const LATENCY = panelText("nodes.latency");
+  const rowsOf = (card: HTMLElement) =>
+    new Map([...card.querySelectorAll("dt")].map((dt) => [dt.textContent ?? "", dt.nextElementSibling?.textContent ?? ""]));
+
+  test.each([Number.NaN, null, undefined])("a latency of %p is omitted, never shown as NaN, null or 0 ms", async (latencyMs) => {
+    const el = mount(clientWith(fakeData(async () => ready([{ ...HOSTED, latencyMs } as unknown as NodeRow]))));
+    await flush();
+    const card = cards(el)[0];
+    expect(rowsOf(card).has(LATENCY)).toBe(false);
+    expect(card.textContent).not.toMatch(/NaN|null|undefined/);
+  });
+
+  test.each([new Date("not a date"), null])("a last-seen stamp of %p drops the seen text, keeps the latency", async (lastSeenAt) => {
+    const el = mount(clientWith(fakeData(async () => ready([{ ...HOSTED, lastSeenAt } as unknown as NodeRow]))));
+    await flush();
+    expect(rowsOf(cards(el)[0]).get(LATENCY)).toBe("84 ms");
+  });
+
+  test("a last-seen stamp in the future has no known age, so it is not shown as 0 s ago", async () => {
+    const el = mount(clientWith(fakeData(async () => ready([{ ...HOSTED, lastSeenAt: new Date(Date.now() + 60_000) } as unknown as NodeRow]))));
+    await flush();
+    expect(rowsOf(cards(el)[0]).get(LATENCY)).toBe("84 ms");
+    expect(cards(el)[0].textContent).not.toContain("0 s ago");
+  });
+});

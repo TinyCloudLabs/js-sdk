@@ -61,9 +61,12 @@ function hostOf(origin: string): string {
   }
 }
 
-/** Relative age for the last-seen stamp, in whole seconds or minutes. */
-function seenAge(lastSeenAt: Date, now: number, ctx: HostContext): string {
-  const seconds = Math.max(0, Math.floor((now - lastSeenAt.getTime()) / 1000));
+/** Relative age for the last-seen stamp; undefined when the stamp is missing, invalid, or in the future. */
+function seenAge(lastSeenAt: unknown, now: number, ctx: HostContext): string | undefined {
+  if (!(lastSeenAt instanceof Date)) return undefined;
+  const elapsed = now - lastSeenAt.getTime();
+  if (!Number.isFinite(elapsed) || elapsed < 0) return undefined;
+  const seconds = Math.floor(elapsed / 1000);
   if (seconds < 60) return ctx.text("nodes.seen.seconds", { count: seconds });
   return ctx.text("nodes.seen.minutes", { count: Math.floor(seconds / 60) });
 }
@@ -182,12 +185,12 @@ export const nodesSection: PanelSection = {
         addRow(ctx.text("nodes.nodeid"), wrapDid, true);
       }
       if (node.version !== undefined) addRow(ctx.text("nodes.version"), plain(`v${node.version}`));
-      if (node.latencyMs !== undefined) {
-        const ms = String(node.latencyMs);
+      const latency = typeof node.latencyMs === "number" && Number.isFinite(node.latencyMs) ? node.latencyMs : undefined;
+      if (latency !== undefined) {
+        const ms = String(latency);
+        const seen = seenAge(node.lastSeenAt, Date.now(), ctx);
         const value =
-          node.lastSeenAt !== undefined
-            ? ctx.text("nodes.latency.value", { ms, seen: seenAge(node.lastSeenAt, Date.now(), ctx) })
-            : ctx.text("nodes.latency.only", { ms });
+          seen !== undefined ? ctx.text("nodes.latency.value", { ms, seen }) : ctx.text("nodes.latency.only", { ms });
         addRow(ctx.text("nodes.latency"), plain(value));
       }
       // NodeRow.spaces is typed as a string list; anything else is treated as absent.
