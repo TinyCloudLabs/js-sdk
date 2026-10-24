@@ -97,6 +97,7 @@ export function createRealPanelData(
         snap.lastError = undefined;
       })
       .finally(() => {
+        if (run !== epoch) return;
         snap.inflight = undefined;
         snap.checkedAt = Date.now();
         snap.refreshing = false;
@@ -124,7 +125,9 @@ export function createRealPanelData(
   ): Promise<ViewResult<T>> {
     const snap = snapFor(key);
     if (snap.value === undefined || force) {
+      const run = epoch;
       await refresh(key, fetch);
+      if (run !== epoch) return viewLoading<T>();
       return snap.value === undefined
         ? viewLoading<T>()
         : present(snap, snap.value as ViewResult<T>);
