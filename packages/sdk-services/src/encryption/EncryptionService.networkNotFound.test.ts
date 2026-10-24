@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { describe, expect, test, afterAll } from "bun:test";
 import { discoverNetwork } from "./discovery";
 import { encryptionError } from "./types";
 
@@ -13,6 +14,15 @@ import {
   type InlineEncryptedEnvelope,
   type NetworkDescriptor,
 } from "./types";
+
+// Never touch a real home: point HOME and tool homes at a throwaway dir first.
+const tc1910Home = mkdtempSync("/var/tmp/tc1910.");
+if (!tc1910Home.startsWith("/var/tmp/tc1910.")) throw new Error("test home guard failed");
+for (const name of ["HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_DATA_HOME", "COURIER_HOME", "TC_HOME"]) {
+  process.env[name] = tc1910Home;
+}
+afterAll(() => rmSync(tc1910Home, { recursive: true, force: true }));
+
 
 const NETWORK_ID = "urn:tinycloud:encryption:did:key:z6MkPrincipal:default";
 const TARGET_NODE = "did:key:z6MkNode";

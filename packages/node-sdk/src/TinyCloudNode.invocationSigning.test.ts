@@ -4,13 +4,23 @@
  * that signed it, including audience-bound encryption network invocations
  * built under a runtime grant's session.
  */
-import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { describe, expect, test, afterAll } from "bun:test";
 import { createPrivateKey, createPublicKey, sign, verify } from "node:crypto";
 import { base58btc } from "multiformats/bases/base58";
 
 import { NodeWasmBindings } from "./NodeWasmBindings";
 import { PrivateKeySigner } from "./signers/PrivateKeySigner";
 import { TinyCloudNode } from "./TinyCloudNode";
+
+// Never touch a real home: point HOME and tool homes at a throwaway dir first.
+const tc1910Home = mkdtempSync("/var/tmp/tc1910.");
+if (!tc1910Home.startsWith("/var/tmp/tc1910.")) throw new Error("test home guard failed");
+for (const name of ["HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_DATA_HOME", "COURIER_HOME", "TC_HOME"]) {
+  process.env[name] = tc1910Home;
+}
+afterAll(() => rmSync(tc1910Home, { recursive: true, force: true }));
+
 
 const KEY = "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d9c5c1b5605dce6f";
 const NODE_DID = "did:key:z6MkNodeUnderTest111111111111111111111111111";

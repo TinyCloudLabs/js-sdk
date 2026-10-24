@@ -1,3 +1,4 @@
+import { mkdtempSync, rmSync } from "node:fs";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -8,6 +9,15 @@ import { NodeWasmBindings } from "./NodeWasmBindings";
 import "./nodeDefaults";
 import "./replication/node-loader";
 import { TinyCloudNode } from "./TinyCloudNode";
+
+// Never touch a real home: point HOME and tool homes at a throwaway dir first.
+const tc1910Home = mkdtempSync("/var/tmp/tc1910.");
+if (!tc1910Home.startsWith("/var/tmp/tc1910.")) throw new Error("test home guard failed");
+for (const name of ["HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_DATA_HOME", "COURIER_HOME", "TC_HOME"]) {
+  process.env[name] = tc1910Home;
+}
+afterAll(() => rmSync(tc1910Home, { recursive: true, force: true }));
+
 
 const nodeBinary = process.env.TC_REPLICATION_E2E_NODE_BIN;
 const ownerKey =
