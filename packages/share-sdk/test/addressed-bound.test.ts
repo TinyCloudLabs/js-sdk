@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { ed25519 } from "@noble/curves/ed25519";
-import { fromBase64Url } from "@tinycloud/share-envelope";
+import { canonicalize, fromBase64Url, toBase64Url } from "@tinycloud/share-envelope";
 import { MAX_LINK_BODY_BYTES } from "@tinycloud/share-envelope/links";
 import {
   ADDRESSED_SHARE_TOO_LARGE_MESSAGE,
@@ -10,6 +10,7 @@ import {
   addressedShareBodyUpperBound,
   assertAddressedShareFits,
   publishAddressedShare,
+  type AddressedOwnerRootInput,
   type AddressedPublishAuthority,
   type AddressedShareBoundInput,
   type AddressedSharePublishOptions,
@@ -213,5 +214,63 @@ describe("addressed share size bound: every field the envelope can carry", () =>
     // An email target is pinned to its own address even when the caller names none.
     const email: Target = { kind: "email", address: `${"a".repeat(60)}@example.com` };
     expect(await addressedShareBodyUpperBound(boundFor(email))).toBeGreaterThanOrEqual(await addressedShareBodyUpperBound(boundFor({ kind: "email", address: "a@example.com" })) + 59);
+  });
+});
+
+describe("addressed share size bound: derived delivery address and node timestamps", () => {
+  const PATH = `shares/${SHARE_ID}/note.md`;
+  const LONGEST_TIMESTAMP = "2100-01-01T00:00:00.123456789+00:00";
+
+  function boundWith(target: Target, deliveryEmail?: string): AddressedShareBoundInput {
+    return {
+      shareId: SHARE_ID, ownerDid, nodeOrigin: "https://node.example", nodeAudience: nodeDid, enforcerDid: nodeDid, spaceId: SPACE, target,
+      resource: { kind: "exact" }, storage: { path: PATH }, encryptionNetwork: NETWORK,
+      actions: ["read"], policyActions: ["tinycloud.kv/get", "tinycloud.kv/metadata"],
+      ...(deliveryEmail === undefined ? {} : { deliveryEmail }),
+      filename: "note.md", mediaType: "text/markdown", byteLength: 4096, expiresAt: EXPIRES_AT,
+    };
+  }
+
+  it("pins an email target to its own address in the bound, as naming that address does", async () => {
+    const target: Target = { kind: "email", address: "alice@example.com" };
+    expect(await addressedShareBodyUpperBound(boundWith(target))).toBe(await addressedShareBodyUpperBound(boundWith(target, "alice@example.com")));
+  });
+
+  it("carries a pinned mailbox on a non-email target at its full length", async () => {
+    const did: Target = { kind: "recipientDid", did: didFor(foreignSeed) };
+    const mailbox = "a-pinned-mailbox-with-a-long-local-part@example.com";
+    const grown = (await addressedShareBodyUpperBound(boundWith(did, mailbox))) - (await addressedShareBodyUpperBound(boundWith(did)));
+    // The mailbox and the `"deliveryEmail":"…",` around it.
+    expect(grown).toBeGreaterThanOrEqual(mailbox.length + 16);
+  });
+
+  /** An owner root whose times are at their widest and whose id is as long as the bound allows. */
+  function widestRoot(input: AddressedOwnerRootInput) {
+    const [head, payload, signature] = signedRoot(input).delegationHeader.Authorization.split(".");
+    const widened = { ...(JSON.parse(new TextDecoder().decode(fromBase64Url(payload!))) as Record<string, unknown>), nbf: Number.MAX_SAFE_INTEGER, exp: Number.MAX_SAFE_INTEGER };
+    return { cid: "b".repeat(128), delegationHeader: { Authorization: `${head}.${toBase64Url(enc(canonicalize(widened)))}.${signature}` } };
+  }
+
+  it("covers an envelope whose node timestamps are at their longest, with no other slack to hide a shorter assumption", async () => {
+    const target: Target = { kind: "email", address: "alice@example.com" };
+    const { options } = share(target, PATH);
+    const published = await publishAddressedShare({
+      ...options,
+      // The key version is the one value left below its maximum, and it appears twice in the envelope.
+      contentSource: { ...options.contentSource, keyVersion: Number.MAX_SAFE_INTEGER },
+      authority: {
+        ...options.authority,
+        createOwnerRoot: async (input) => widestRoot(input),
+        registerPolicy: async (input) => ({
+          policyCid: input.policyCid, policyRootCid: input.policyRoot.cid, enforcementRootCid: input.enforcementRoot.cid,
+          attestedEnforcerBinding: { ...signedBinding(EXPIRES_AT), issuedAt: LONGEST_TIMESTAMP, expiresAt: LONGEST_TIMESTAMP },
+        }),
+      },
+    });
+    const real = await realSize(published);
+    const upper = await addressedShareBodyUpperBound(boundWith(target));
+    expect(real).toBeLessThanOrEqual(upper);
+    // Every assumption but the 35-character timestamp is met exactly, so little room is left for a shorter one.
+    expect(upper - real).toBeLessThan(22);
   });
 });
