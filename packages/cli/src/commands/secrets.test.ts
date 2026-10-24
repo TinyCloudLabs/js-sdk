@@ -648,7 +648,11 @@ afterEach(() => {
   else Reflect.deleteProperty(process.stderr, "isTTY");
 });
 
-// Tests never touch a real home: every tool home is a temp dir, set at module load.
+// Temp home for this file. This block runs after the static imports, so it sets
+// HOME, TC_HOME, COURIER_HOME and BUN_INSTALL_CACHE_DIR to a /var/tmp/tc1901.* dir
+// before the code under test reads them; those reads happen lazily, at call time
+// (for example `resolveProfilesDir` in secrets.ts), not at import. It does not
+// redirect bun's own transpiler cache, which is resolved before this file loads.
 const TEST_ROOT = await mkdtemp(join("/var/tmp", "tc1901."));
 const TEST_HOME_KEYS = ["HOME", "TC_HOME", "COURIER_HOME", "BUN_INSTALL_CACHE_DIR"] as const;
 const homeBefore: Record<(typeof TEST_HOME_KEYS)[number], string | undefined> = {
