@@ -4,7 +4,13 @@
 import { registerUiClient, type UiClientHandle } from "../../src/ui/index";
 import { toastStore } from "../../src/ui/parts/toasts";
 import type { ToastKind } from "../../src/ui/toast-store";
-import { createStubPanelData } from "../../src/ui/stub/index";
+import { createStubPanelData, type StubSeed } from "../../src/ui/stub/index";
+
+// Per-view stub results a spec pins with page.addInitScript before the page loads: window.__TC_STUB_SEED__ (a JSON string).
+function stubSeed(): StubSeed {
+  const raw: unknown = Reflect.get(window, "__TC_STUB_SEED__");
+  return typeof raw === "string" ? JSON.parse(raw) : {};
+}
 
 type SyncState = { requested: boolean; effective: string; reason?: string };
 
@@ -74,7 +80,7 @@ w.__tc = {
       ui: { developerMode: true, ...ui },
       source: source as never,
       manifestAppId: () => "e2e-settings-smoke",
-      data: createStubPanelData(),
+      data: createStubPanelData(stubSeed()),
     });
     w.tc = { ui: handle.api };
     return true;

@@ -20,10 +20,16 @@ import type {
   RequestsView,
   RevokeOutcome,
   StorageView,
+  ViewResult,
 } from "../data";
 import { viewReady } from "../view-result";
 
-export function createStubPanelData(): PanelDataFactory {
+/** Per-view results a preview or test can pin. One optional field per section; absent fields keep the defaults below. */
+export interface StubSeed {
+  storage?: ViewResult<StorageView>;
+}
+
+export function createStubPanelData(seed: StubSeed = {}): PanelDataFactory {
   return (client) => {
     const requests: RequestsView = {
       rows: () => [],
@@ -59,6 +65,7 @@ export function createStubPanelData(): PanelDataFactory {
       nodes: () => Promise.resolve(viewReady<readonly NodeRow[]>([STUB_NODE])),
       storage: () =>
         Promise.resolve(
+          seed.storage ??
           viewReady<StorageView>({
             source: "stub",
             usedBytes: 1_073_741_824,
