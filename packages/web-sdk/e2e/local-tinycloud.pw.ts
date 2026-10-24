@@ -117,6 +117,22 @@ for (const scheme of ["light", "dark"] as const) {
       await expect(panel(page).locator(".ll-card")).toContainText("talks to your hosted TinyCloud only");
     });
 
+    test("switch label uses the display face at 16 px", async ({ page }) => {
+      await mount(page, { scheme });
+      await openLocal(page);
+      await expect(panel(page).locator(".ll-label")).toHaveCSS("font-family", /Literata/);
+      await expect(panel(page).locator(".ll-label")).toHaveCSS("font-size", "16px");
+    });
+
+    test("off card: white on the full-page layout in light, the dark card surface in dark", async ({ page }) => {
+      await mount(page, { scheme, viewport: PHONE_360 });
+      await openLocal(page);
+      await expect(panel(page).locator(".ll-card")).toHaveCSS(
+        "background-color",
+        scheme === "light" ? "rgb(255, 255, 255)" : "rgb(21, 21, 23)",
+      );
+    });
+
     test("looking: the switch stays on and Cancel turns the node off", async ({ page }) => {
       await mount(page, { scheme, node: NODES.looking });
       await openLocal(page);
@@ -152,6 +168,20 @@ for (const scheme of ["light", "dark"] as const) {
       await expect(panel(page).locator(".ll-steps li")).toHaveCount(3);
       await expect(panel(page).locator(".ll-steps code")).toHaveText("tinycloud start");
       await expect(panel(page).getByRole("button", { name: "Try again", exact: true })).toBeVisible();
+    });
+
+    test("not found: the title and the unchanged line share one paragraph, and the steps heading is an eyebrow", async ({ page }) => {
+      await mount(page, { scheme, node: NODES["not-found"] });
+      await openLocal(page);
+      await expect(panel(page).locator(".ll-body")).toHaveCount(1);
+      await expect(panel(page).locator(".ll-body strong")).toHaveText("We couldn't find TinyCloud on this computer.");
+      await expect(panel(page).locator(".ll-eyebrow")).toHaveText("To start it");
+    });
+
+    test("not found eyebrow meets AA contrast on its surface", async ({ page }) => {
+      await mount(page, { scheme, node: NODES["not-found"] });
+      await openLocal(page);
+      await expectAA(page, [{ label: "steps heading", selector: ".ll-eyebrow" }]);
     });
 
     test("unavailable: the switch is disabled and the card says why", async ({ page }) => {

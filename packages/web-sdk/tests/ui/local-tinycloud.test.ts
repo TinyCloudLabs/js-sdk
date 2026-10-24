@@ -221,6 +221,17 @@ describe("Local TinyCloud section", () => {
     expect(query(el, "button.switch").getAttribute("aria-checked")).toBe("true");
   });
 
+  test("not found: the title and the unchanged line share one paragraph, and the steps heading is an eyebrow", async () => {
+    const fake = fakeLocal({ source: "stub", connection: "not-found" });
+    const el = mountWith(fake.data);
+    await flush();
+    expect(el.querySelectorAll(".ll-body").length).toBe(1);
+    const title = panelText("local-tinycloud.not_found.title");
+    expect(query(el, ".ll-body").textContent?.startsWith(`${title} `)).toBe(true);
+    expect(query(el, ".ll-body strong").textContent).toBe(title);
+    expect(query(el, ".ll-eyebrow").textContent).toBe(panelText("local-tinycloud.not_found.steps_title"));
+  });
+
   test("unavailable: the switch is disabled, clicks write nothing, and the card explains why", async () => {
     const fake = fakeLocal({ source: "stub", connection: "unavailable" });
     const el = mountWith(fake.data);

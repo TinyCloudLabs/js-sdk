@@ -8,13 +8,17 @@ import { actionButton, icon, statusNode, UI_STYLE } from "./ui";
 import { applyResult, createStateLine, settle, startLoading, textLine } from "./view-body";
 
 const MONO = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+const DISPLAY = '"Literata Variable","Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif';
 
 const STYLE = `
 .ll-intro{margin:-20px 0 20px;font-size:15px;line-height:1.5;max-width:56ch;color:#52525b}
 .ll-sub{margin:2px 0 0;font-size:12.5px;color:#52525b}
 .ll-ctl{display:flex;align-items:center;gap:10px;flex:none}
 .ll-word{min-width:22px;text-align:right;font-size:13px;font-weight:700}
+.ll-label{font-family:${DISPLAY};font-size:16px;font-weight:500;letter-spacing:-.005em}
+.ll-eyebrow{margin:0;font-size:13px;font-weight:600;line-height:1.3;color:#71717a}
 .ll-card{display:flex;flex-direction:column;gap:14px;margin-top:14px;padding:16px 18px;border-radius:16px;background:#fafafa;box-shadow:inset 0 0 0 1px #e4e4e7}
+.layer .panel[data-layout="page"] .ll-card{background:#fff}
 .ll-card-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px}
 .ll-strong{margin:0;font-size:14px;font-weight:600}
 .ll-body{margin:0;font-size:14px;line-height:1.45;color:#52525b}
@@ -41,6 +45,8 @@ const STYLE = `
 @media (prefers-color-scheme: dark){
 .ll-intro,.ll-sub,.ll-body,.ll-kv dt,.ll-unknown{color:#a1a1aa}
 .ll-card{background:#151517;box-shadow:inset 0 0 0 1px #69696b}
+.layer .panel[data-layout="page"] .ll-card{background:#151517}
+.ll-eyebrow{color:#a1a1aa}
 .ll-spin{border-color:#27272a;border-top-color:#fafafa}
 .ll-kv>div{border-bottom-color:#69696b}
 .ll-kv dt::after{border-bottom-color:#71717a}
@@ -115,7 +121,7 @@ export const localTinycloudSection: PanelSection = {
     const row = document.createElement("div");
     row.className = "row";
     const labelBlock = document.createElement("div");
-    const label = textLine("label", ctx.text("local-tinycloud.switch"));
+    const label = textLine("label ll-label", ctx.text("local-tinycloud.switch"));
     const sub = textLine("ll-sub", "");
     labelBlock.append(label, sub);
     const control = document.createElement("div");
@@ -277,11 +283,15 @@ export const localTinycloudSection: PanelSection = {
           const retryItem = document.createElement("li");
           retryItem.textContent = ctx.text("local-tinycloud.not_found.step_retry");
           steps.append(openItem, listenItem, retryItem);
+          const lead = document.createElement("p");
+          lead.className = "ll-body";
+          const title = document.createElement("strong");
+          title.textContent = ctx.text("local-tinycloud.not_found.title");
+          lead.append(title, ` ${ctx.text("local-tinycloud.not_found.unchanged", { app: appName() })}`);
           return [
             head(pill("not-found"), again),
-            textLine("ll-strong", ctx.text("local-tinycloud.not_found.title")),
-            textLine("ll-body", ctx.text("local-tinycloud.not_found.unchanged", { app: appName() })),
-            textLine("ll-strong", ctx.text("local-tinycloud.not_found.steps_title")),
+            lead,
+            textLine("ll-eyebrow", ctx.text("local-tinycloud.not_found.steps_title")),
             steps,
           ];
         }
