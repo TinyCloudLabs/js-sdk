@@ -119,14 +119,40 @@ const call = <T,>(page: Page, run: (tc: HarnessWindow["__tc"]) => T) =>
 
 for (const scheme of ["light", "dark"] as const) {
   test.describe(scheme, () => {
-    test("off: heading, lede, switch off, plain explanation, no wipe", async ({ page }) => {
-      await mount(page, { scheme });
+    test("off with a known empty copy: heading, lede, switch off, plain explanation, no wipe", async ({ page }) => {
+      await mount(page, { scheme, seed: seedOn({ requested: false, effective: "off", bytesOnDevice: 0, pending: 0, folders: [] }) });
       await openCopy(page);
       await expect(panel(page).locator(".lc-lede")).toHaveText(/Keep a copy of your data in this browser/);
       await expect(toggle(page)).toHaveAttribute("aria-checked", "false");
       await expect(panel(page)).toContainText("Reads and writes go straight to your TinyCloud");
       await expect(panel(page)).toContainText("The local copy is off.");
+      await expect(panel(page)).toContainText("Nothing is kept on this device.");
       await expect(wipeButton(page)).toBeHidden();
+    });
+
+    test("off with an unknown size never says nothing is kept, and still offers the wipe", async ({ page }) => {
+      await mount(page, { scheme, seed: seedOn({ requested: false, effective: "off", bytesOnDevice: undefined, folders: [] }) });
+      await openCopy(page);
+      await expect(panel(page)).toContainText("What is kept on this device is unknown.");
+      await expect(panel(page)).not.toContainText("Nothing is kept on this device");
+      await expect(wipeButton(page)).toBeVisible();
+    });
+
+    test("unknown size, waiting count, sync time and folder figures read 'unknown', never zero", async ({ page }) => {
+      await mount(page, {
+        scheme,
+        seed: seedOn({ bytesOnDevice: undefined, pending: undefined, lastSyncedAt: undefined, folders: [{ prefix: "notes/", state: "ok" }] }),
+        sync: SYNC.on,
+      });
+      await openCopy(page);
+      await expect(panel(page).locator(".st")).toHaveText("Last synced: unknown");
+      await expect(panel(page).locator(".lc-cozy > div").nth(0)).toHaveText(/Waiting to sync\s*unknown/);
+      await expect(panel(page).locator(".lc-cozy > div").nth(1)).toHaveText(/Size on this device\s*unknown/);
+      await expect(panel(page).locator("section.lc-sec dl.lc-kv > div").nth(0)).toHaveText(/notes\/\s*details unknown/);
+      await expect(panel(page)).not.toContainText(/\b0 B\b/);
+      await expect(panel(page)).not.toContainText("Nothing is kept on this device");
+      await wipeButton(page).click();
+      await expect(confirmBox(page)).toContainText("It isn't known whether all changes have synced.");
     });
 
     test("switch on shows the status, ledger rows and folders; the switch keeps focus", async ({ page }) => {
@@ -444,12 +470,14 @@ test.describe("sign-out removes the local copy", () => {
   test("a failed purge warns neutrally with Retry; Retry calls purge again and clears it", async ({ page }) => {
     await signedOutWithReplica(page, ["fail", PURGE_REAL]);
     await signOutThroughPanel(page);
-    await expect(toastText(page)).toContainText("Signed out. We couldn't remove the local copy from this browser yet; we'll try again.");
+    await expect(toastText(page)).toContainText("The local copy on this browser was not removed yet. Try again from Local copy.");
+    await expect(toastText(page)).not.toContainText("Signed out");
     expect(await call(page, (tc) => tc.replicaDatabases())).toContain(REPLICA_DB);
     expect(await call(page, (tc) => tc.purgeCalls())).toBe(1);
     await openCopy(page);
     const retry = panel(page).locator(".lc-purge").getByRole("button", { name: "Try again" });
-    await expect(panel(page).locator(".lc-purge")).toContainText("we'll try again");
+    await expect(panel(page).locator(".lc-purge")).toContainText("The local copy on this browser was not removed yet.");
+    await expect(panel(page).locator(".lc-purge")).not.toContainText("we'll try again");
     await retry.click();
     await expect(panel(page).locator(".lc-purge")).toBeHidden();
     expect(await call(page, (tc) => tc.purgeCalls())).toBe(2);
@@ -510,3 +538,19 @@ for (const scheme of ["light", "dark"] as const) {
     });
   }
 }
+
+// Intended behaviour: Escape during a running wipe must not close the confirm box, so the Wiping… state stays
+// on screen. The shared confirm box (src/ui/sections/ui.ts confirmBox) takes the safe action on Escape even
+// when its actions are disabled, which closes the box while the wipe goes on. Enable this test once the shared
+// confirmBox ignores Escape while its actions are disabled.
+test.fixme("Escape during a running wipe keeps the confirm box and its Wiping… state", async ({ page }) => {
+  await mount(page, { seed: seedOn(), sync: SYNC.on, wipe: "hold" });
+  await openCopy(page);
+  await wipeButton(page).click();
+  await confirmButton(page).click();
+  await expect(confirmButton(page)).toHaveText("Wiping…");
+  await confirmBox(page).dispatchEvent("keydown", { key: "Escape", bubbles: true });
+  await expect(confirmBox(page)).toBeVisible();
+  await expect(confirmButton(page)).toHaveText("Wiping…");
+  await call(page, (tc) => tc.releaseWipe());
+});

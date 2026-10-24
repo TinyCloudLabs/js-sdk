@@ -275,39 +275,99 @@ describe("states", () => {
     const rows = [...el.querySelectorAll(".lc-cozy > div")].map((row) => row.textContent);
     expect(rows).toEqual(["Waiting to sync3 changes", "Size on this device48.2 MiB"]);
     const folders = [...el.querySelectorAll("section.lc-sec dl.lc-kv > div")].map((row) => row.textContent);
-    expect(folders).toEqual(["notes/214 items · 6.4 MiB · 2 waiting", "recordings/Syncing"]);
+    expect(folders).toEqual(["notes/214 items · 6.4 MiB · 2 waiting", "recordings/Syncing · details unknown"]);
     expect(el.querySelector(".lc-cnt")?.textContent).toBe("2");
   });
 
-  test("waiting reads 'Nothing' at zero and '1 change' at one; never-synced is neutral", async () => {
+  test("waiting reads 'Nothing' at zero and '1 change' at one; a missing sync time reads 'unknown'", async () => {
     const zero = setup({ facade: makeFacade(state("on")), copy: ready({ pending: 0, lastSyncedAt: undefined }) });
     await flush();
     expect(zero.el.querySelector(".lc-cozy > div")?.textContent).toBe("Waiting to syncNothing");
-    expect(zero.el.querySelector(".st")?.textContent).toBe("Not synced yet");
+    expect(zero.el.querySelector(".st")?.textContent).toBe("Last synced: unknown");
     const one = setup({ facade: makeFacade(state("on")), copy: ready({ pending: 1 }) });
     await flush();
     expect(one.el.querySelector(".lc-cozy > div")?.textContent).toBe("Waiting to sync1 change");
   });
 
-  test("a folder without stats says it is up to date; absent fields are not invented", async () => {
-    const { el } = setup({ facade: makeFacade(state("on")), copy: ready({ folders: [{ prefix: "a/", state: "ok" }] }) });
+  test("a folder with no known figures says 'details unknown'; a partly known folder says which figure is unknown", async () => {
+    const { el } = setup({
+      facade: makeFacade(state("on")),
+      copy: ready({
+        folders: [
+          { prefix: "a/", state: "ok" },
+          { prefix: "b/", state: "ok", items: 5 },
+          { prefix: "c/", state: "ok", items: 5, bytes: 10, waiting: 0 },
+        ],
+      }),
+    });
     await flush();
-    expect(el.querySelector("section.lc-sec dl.lc-kv > div")?.textContent).toBe("a/Up to date");
+    const folders = [...el.querySelectorAll("section.lc-sec dl.lc-kv > div")].map((row) => row.textContent);
+    expect(folders).toEqual(["a/details unknown", "b/5 items · size unknown · waiting unknown", "c/5 items · 10 B"]);
   });
 
-  test("switch follows requested, not effective", async () => {
+  test("an unknown size is shown as 'unknown', never as zero", async () => {
+    const { el } = setup({ facade: makeFacade(state("on")), copy: ready({ bytesOnDevice: undefined }) });
+    await flush();
+    const rows = [...el.querySelectorAll(".lc-cozy > div")].map((row) => row.textContent);
+    expect(rows).toEqual(["Waiting to sync3 changes", "Size on this deviceunknown"]);
+    expect(bodyText(el)).not.toContain("0 B");
+    expect(bodyText(el)).not.toContain("Nothing is kept on this device");
+  });
+
+  test("an unknown count of waiting changes is shown as 'unknown', never as 'Nothing' or zero", async () => {
+    const { el } = setup({ facade: makeFacade(state("on")), copy: ready({ pending: undefined as unknown as number }) });
+    await flush();
+    expect(el.querySelector(".lc-cozy > div")?.textContent).toBe("Waiting to syncunknown");
+    expect(bodyText(el)).not.toContain("0 changes");
+    wipeBtn(el).click();
+    expect(box(el)?.textContent).toContain("It isn't known whether all changes have synced.");
+    expect(box(el)?.textContent).not.toContain("0 changes");
+  });
+
+  test("values that are not valid figures count as unknown: negative, NaN and an invalid date", async () => {
+    const { el } = setup({
+      facade: makeFacade(state("on")),
+      copy: ready({ bytesOnDevice: -1, pending: Number.NaN, lastSyncedAt: new Date(Number.NaN) }),
+    });
+    await flush();
+    expect(el.querySelector(".st")?.textContent).toBe("Last synced: unknown");
+    expect([...el.querySelectorAll(".lc-cozy > div")].map((row) => row.textContent)).toEqual([
+      "Waiting to syncunknown",
+      "Size on this deviceunknown",
+    ]);
+  });
+
+  test("off with an unknown size does not claim nothing is kept, and still offers the wipe", async () => {
+    const { el } = setup({ facade: makeFacade(state("off")), copy: ready({ requested: false, effective: "off", bytesOnDevice: undefined, folders: [] }) });
+    await flush();
+    expect(bodyText(el)).toContain("What is kept on this device is unknown.");
+    expect(bodyText(el)).not.toContain("Nothing is kept on this device");
+    expect(wipeSection(el).hidden).toBe(false);
+  });
+
+  test("off with no data read yet is also unknown: the wipe stays offered", async () => {
+    const { el } = setup({ facade: makeFacade(state("off")) });
+    await flush();
+    expect(wipeSection(el).hidden).toBe(false);
+  });
+
+  test("switch follows requested, not effective, and stays enabled", async () => {
     const { el } = setup({ facade: makeFacade(state("on", false)), copy: ready() });
     await flush();
     expect(toggleOf(el).getAttribute("aria-checked")).toBe("false");
+    expect(toggleOf(el).disabled).toBe(false);
   });
 
+  const BUSY_WORD = { enabling: "Turning on the local copy", wiping: "Wiping local data" } as const;
   for (const effective of ["enabling", "wiping"] as const) {
-    test(`${effective}: switch and wipe are disabled and a plain word says why`, async () => {
+    test(`${effective}: switch stays on but locked, wipe is disabled, and the exact word says why`, async () => {
       const { el } = setup({ facade: makeFacade(state(effective)), copy: ready() });
       await flush();
+      expect(toggleOf(el).getAttribute("aria-checked")).toBe("true");
       expect(toggleOf(el).disabled).toBe(true);
       expect(wipeBtn(el).disabled).toBe(true);
       expect(visible(el.querySelector(".lc-state"))).toBe(true);
+      expect(el.querySelector(".lc-state")?.textContent).toBe(BUSY_WORD[effective]);
     });
   }
 
@@ -332,6 +392,18 @@ describe("states", () => {
     expect(visible(el.querySelector(".lc-state"))).toBe(true);
   });
 
+  test("pending shows its word when the header shows a different status", async () => {
+    const header = makeHeader("storage_full");
+    const { el } = setup({ facade: makeFacade(state("pending", true, "erase-pending")), copy: ready(), header });
+    await flush();
+    expect(visible(el.querySelector(".lc-state"))).toBe(true);
+    expect(el.querySelector(".lc-state")?.textContent).toBe("The last wipe is not confirmed yet");
+    header.set("sync_pending");
+    expect(visible(el.querySelector(".lc-state"))).toBe(false);
+    header.set("storage_full");
+    expect(visible(el.querySelector(".lc-state"))).toBe(true);
+  });
+
   test("unavailable: reason in words, switch locked, no wipe at all", async () => {
     const { el } = setup({ facade: makeFacade(state("unavailable", true, "unsupported-browser")), copy: ready() });
     await flush();
@@ -345,6 +417,8 @@ describe("states", () => {
     const weird = setup({ facade: makeFacade({ requested: true, effective: "rebooting" as unknown as SyncEffective }), copy: ready() });
     await flush();
     expect(bodyText(weird.el)).toContain(neutral);
+    expect(bodyText(weird.el)).not.toContain("rebooting");
+    expect(weird.el.innerHTML).not.toContain("rebooting");
     expect(wipeSection(weird.el).hidden).toBe(true);
     const odd = setup({ facade: makeFacade(state("unavailable", true, "weird-code")), copy: ready() });
     await flush();
@@ -451,10 +525,12 @@ describe("switch", () => {
     toggleOf(el).click();
     await flush();
     expect(el.querySelector(".error")?.textContent).toBe(panelText("sync.error.declined"));
+    expect(toggleOf(el).disabled).toBe(false);
     facade.nextSetEnabled = () => Promise.reject(Object.assign(new Error("x"), { code: "ZZ_RAW" }));
     toggleOf(el).click();
     await flush();
     expect(el.querySelector(".error")?.textContent).toBe(neutral);
+    expect(toggleOf(el).disabled).toBe(false);
   });
 
   test("on to off asks first: no wipe, no setEnabled until the destructive action", async () => {
@@ -484,6 +560,17 @@ describe("switch", () => {
     toggleOf(el).click();
     expect(facade.setEnabledCalls).toEqual([false]);
     expect(box(el)).toBeNull();
+  });
+
+  test("a requested-on copy with an unknown size still asks before turning off", async () => {
+    const facade = makeFacade({ requested: true, effective: "off" });
+    const { el } = setup({ facade, copy: ready({ effective: "off", bytesOnDevice: undefined, folders: [] }) });
+    await flush();
+    toggleOf(el).click();
+    expect(facade.setEnabledCalls).toEqual([]);
+    expect(box(el)).not.toBeNull();
+    expect(box(el)?.textContent).toContain("Turn off local copy and wipe local data?");
+    expect(facade.wipeCalls).toBe(0);
   });
 });
 
@@ -679,6 +766,44 @@ describe("wipe: two steps", () => {
     expect(el.childElementCount).toBe(0);
     expect(toasts).toHaveLength(1);
   });
+
+  test("Escape during a running wipe does not cancel it: the wiping state stays shown and the wipe completes", async () => {
+    const facade = makeFacade(state("on"));
+    let release: () => void = () => undefined;
+    facade.nextWipe = () => new Promise<void>((resolve) => (release = resolve));
+    const { el, toasts } = setup({ facade, copy: ready() });
+    await flush();
+    wipeBtn(el).click();
+    const open = box(el) as HTMLElement;
+    confirmBtn(el).click();
+    open.dispatchEvent(new page.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await flush();
+    expect(facade.wipeCalls).toBe(1);
+    expect(visible(el.querySelector(".lc-state"))).toBe(true);
+    expect(el.querySelector(".lc-state")?.textContent).toBe("Wiping local data");
+    expect(toggleOf(el).disabled).toBe(true);
+    expect(wipeBtn(el).disabled).toBe(true);
+    release();
+    await flush();
+    expect(toasts).toEqual([{ kind: "success", textCode: "local-copy.wipe.done" }]);
+    expect(el.querySelector(".lc-state")?.hasAttribute("hidden")).toBe(true);
+  });
+
+  test("after a failed wipe, focus goes to the heading when a state change hid the wipe section", async () => {
+    const facade = makeFacade(state("on"));
+    let fail: (error: Error) => void = () => undefined;
+    facade.nextWipe = () => new Promise<void>((_, reject) => (fail = reject));
+    const { el } = setup({ facade, copy: ready() });
+    await flush();
+    wipeBtn(el).click();
+    confirmBtn(el).click();
+    facade.set(state("unavailable", true, "storage-blocked"));
+    expect(wipeSection(el).hidden).toBe(true);
+    fail(new Error("x"));
+    await flush();
+    expect(document.activeElement?.tagName).toBe("H3");
+    expect(document.activeElement).not.toBe(el.querySelector(".lc-wipe .lc-fail button"));
+  });
 });
 
 describe("purge warning after sign-out", () => {
@@ -713,7 +838,9 @@ describe("purge warning after sign-out", () => {
     const { el, toasts } = setup({ client, facade: client.sync });
     await flush();
     expect(purgeBox(el).hidden).toBe(false);
-    expect(purgeBox(el).textContent).toContain("Signed out. We couldn't remove the local copy from this browser yet; we'll try again.");
+    expect(purgeBox(el).textContent).toContain("The local copy on this browser was not removed yet.");
+    expect(purgeBox(el).textContent).not.toContain("Signed out");
+    expect(purgeBox(el).textContent).not.toContain("we'll try again");
     expect(calls()).toBe(1);
     const retry = purgeBox(el).querySelector("button") as HTMLButtonElement;
     retry.click();
@@ -730,7 +857,8 @@ describe("purge warning after sign-out", () => {
     const { client } = await signedOutWith([{ ok: false, retryNow: true }]);
     const { el } = setup({ client, facade: client.sync });
     await flush();
-    expect(purgeBox(el).textContent).toContain("may still be readable here");
+    expect(purgeBox(el).textContent).toContain("It may still be readable here.");
+    expect(purgeBox(el).textContent).not.toContain("keep trying");
   });
 
   test("a failed retry keeps the warning and puts focus back on Retry", async () => {

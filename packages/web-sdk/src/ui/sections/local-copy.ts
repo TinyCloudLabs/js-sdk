@@ -113,15 +113,27 @@ function ago(ctx: SectionContext, at: Date, now: number): string {
   return ctx.text("local-copy.ago.days", { count: Math.floor(minutes / 1440) });
 }
 
+/** A count or size that is known: a finite, non-negative number. Anything else is unknown, never zero. */
+function isKnown(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function isDate(value: unknown): value is Date {
+  return value instanceof Date && Number.isFinite(value.getTime());
+}
+
 function folderDetail(ctx: SectionContext, folder: LocalFolder): string {
   const parts: string[] = [];
-  if (folder.items !== undefined) parts.push(ctx.text("local-copy.folder.items", { count: folder.items }));
-  if (folder.bytes !== undefined) parts.push(formatBytes(ctx, folder.bytes));
-  if (folder.waiting !== undefined && folder.waiting > 0) {
-    parts.push(ctx.text("local-copy.folder.waiting", { count: folder.waiting }));
+  if (folder.state === "syncing" || folder.state === "paused") parts.push(ctx.text(`local-copy.folder.${folder.state}`));
+  if (!isKnown(folder.items) && !isKnown(folder.bytes) && !isKnown(folder.waiting)) {
+    parts.push(ctx.text("local-copy.folder.unknown"));
+  } else {
+    parts.push(isKnown(folder.items) ? ctx.text("local-copy.folder.items", { count: folder.items }) : ctx.text("local-copy.folder.items.unknown"));
+    parts.push(isKnown(folder.bytes) ? formatBytes(ctx, folder.bytes) : ctx.text("local-copy.folder.size.unknown"));
+    if (!isKnown(folder.waiting)) parts.push(ctx.text("local-copy.folder.waiting.unknown"));
+    else if (folder.waiting > 0) parts.push(ctx.text("local-copy.folder.waiting", { count: folder.waiting }));
   }
-  if (folder.state !== "ok") parts.unshift(ctx.text(`local-copy.folder.${folder.state}`));
-  return parts.length > 0 ? parts.join(" · ") : ctx.text("local-copy.folder.ok");
+  return parts.join(" · ");
 }
 
 function kvRow(label: string, value: string | Node, plain = false, mono = false): HTMLDivElement {
@@ -311,7 +323,8 @@ function mountLocalCopy(el: HTMLElement, ctx: SectionContext): () => void {
   function wipeOffered(): boolean {
     const effective = effectiveNow();
     if (effective === "unavailable" || effective === "enabling") return false;
-    if (effective === "off") return (copy?.bytesOnDevice ?? 0) > 0;
+    // Unknown is never zero: only a size known to be zero hides the wipe for an off copy.
+    if (effective === "off") return copy?.bytesOnDevice !== 0;
     return true;
   }
 
@@ -384,20 +397,19 @@ function mountLocalCopy(el: HTMLElement, ctx: SectionContext): () => void {
         const status: SectionStatus =
           effective === "enabling"
             ? { text: ctx.text("local-copy.state.enabling"), tone: "info" }
-            : copy.lastSyncedAt === undefined
-              ? { text: ctx.text("local-copy.synced.never"), tone: "info" }
-              : { text: ctx.text("local-copy.synced", { ago: ago(ctx, copy.lastSyncedAt, Date.now()) }), tone: "ok" };
+            : isDate(copy.lastSyncedAt)
+              ? { text: ctx.text("local-copy.synced", { ago: ago(ctx, copy.lastSyncedAt, Date.now()) }), tone: "ok" }
+              : { text: ctx.text("local-copy.synced.unknown"), tone: "info" };
         cardStatus.replaceChildren(statusNode(status));
-        const waiting =
-          copy.pending === 0
+        const waiting = !isKnown(copy.pending)
+          ? ctx.text("local-copy.unknown")
+          : copy.pending === 0
             ? ctx.text("local-copy.row.waiting.none")
             : copy.pending === 1
               ? ctx.text("local-copy.row.waiting.one")
               : ctx.text("local-copy.row.waiting.many", { count: copy.pending });
-        const nodes = [kvRow(ctx.text("local-copy.row.waiting"), waiting)];
-        if (copy.bytesOnDevice !== undefined) {
-          nodes.push(kvRow(ctx.text("local-copy.row.size"), formatBytes(ctx, copy.bytesOnDevice)));
-        }
+        const size = isKnown(copy.bytesOnDevice) ? formatBytes(ctx, copy.bytesOnDevice) : ctx.text("local-copy.unknown");
+        const nodes = [kvRow(ctx.text("local-copy.row.waiting"), waiting), kvRow(ctx.text("local-copy.row.size"), size)];
         rows.replaceChildren(...nodes);
         folderCount.textContent = String(copy.folders.length);
         folderList.replaceChildren(
@@ -406,7 +418,12 @@ function mountLocalCopy(el: HTMLElement, ctx: SectionContext): () => void {
       } else {
         const title = document.createElement("strong");
         title.textContent = ctx.text("local-copy.off.title");
-        const empty = (copy.bytesOnDevice ?? 0) === 0 ? ` ${ctx.text("local-copy.off.empty")}` : "";
+        const empty =
+          copy.bytesOnDevice === 0
+            ? ` ${ctx.text("local-copy.off.empty")}`
+            : isKnown(copy.bytesOnDevice)
+              ? ""
+              : ` ${ctx.text("local-copy.off.unknown")}`;
         offBody.replaceChildren(
           title,
           `${empty} ${ctx.text("local-copy.off.body", { app: ctx.appLabel() ?? ctx.text("local-copy.off.app") })}`,
@@ -486,7 +503,9 @@ function mountLocalCopy(el: HTMLElement, ctx: SectionContext): () => void {
       toggle.focus();
       void load();
     } else {
-      retryBtn.focus();
+      // The wipe section can be hidden by a state change while the wipe ran: then there is no Try again to focus.
+      if (!wipeSec.hidden && !wipeFail.hidden && !retryBtn.disabled) retryBtn.focus();
+      else heading.focus();
     }
   }
 
@@ -494,9 +513,10 @@ function mountLocalCopy(el: HTMLElement, ctx: SectionContext): () => void {
   function askWipe(turnOff: boolean, anchor: HTMLElement, returnFocus: HTMLElement): void {
     if (confirming !== undefined || !canWipe()) return;
     lastTurnOff = turnOff;
-    const pending = copy?.pending ?? 0;
+    const pending = copy?.pending;
     const lines = [ctx.text(turnOff ? "local-copy.wipe.question.off" : "local-copy.wipe.question")];
-    if (pending > 0) {
+    if (!isKnown(pending)) lines.push(ctx.text("local-copy.wipe.unsynced.unknown"));
+    else if (pending > 0) {
       lines.push(ctx.text(pending === 1 ? "local-copy.wipe.unsynced.one" : "local-copy.wipe.unsynced.many", { count: pending }));
     }
     if (!turnOff) lines.push(ctx.text("local-copy.wipe.refill"));
