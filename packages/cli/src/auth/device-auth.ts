@@ -10,6 +10,7 @@ import type { PermissionEntry } from "@tinycloud/node-sdk";
 import { DEFAULT_CHAIN_ID, DEFAULT_OPENKEY_DEVICE_API_HOST, ExitCode } from "../config/constants.js";
 import type { ProfileConfig } from "../config/types.js";
 import { CLIError } from "../output/errors.js";
+import { assertNoCaveatLimits } from "../lib/caveat-refusal.js";
 import { generateKey, keyToDID } from "./local-key.js";
 import { publicJwkForDelegation, validateDelegationCallbackPayload } from "./browser-auth.js";
 import {
@@ -424,6 +425,7 @@ function writeApprovalPrompt(prompt: DeviceApprovalPrompt): void {
  * verified session. Nothing is persisted here.
  */
 export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): Promise<DeviceAuthorizationResult> {
+  assertNoCaveatLimits(input.permissions);
   validateLoginPermissions(input.permissions);
   if (input.permissions.some((permission) =>
     permission.service === "tinycloud.encryption" ||
