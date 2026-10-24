@@ -13,6 +13,7 @@ import type {
   ReplicaDenyInput,
   ReplicaDenyOutcome,
   ReplicaEraseReport,
+  ReplicaLocalEraseOutcome,
   ReplicaLifecycleGate,
   ReplicaPartitionEraser,
   ReplicaPartitionIndexEntry,
@@ -708,6 +709,56 @@ export function createIndexedDbLifecycle(options: {
     return exclusive(GATE_LOCK, () => erasePendingLocked(o));
   }
 
+  /**
+   * Deletes the whole origin database, only when nothing live is at stake: a denied gate (null
+   * principal), a gate behind the persisted deny tombstone (commit crashed after the tombstone),
+   * or a set logout marker WITH a tombstone. A live or other-account gate, or a marker without a
+   * tombstone, is refused and the database is untouched. A failed delete sets the marker (with a
+   * tombstone) so `recover` finishes it on the next load. Never clears the deny tombstone.
+   */
+  async function eraseLocalCopyLocked({ signal }: { signal: AbortSignal }): Promise<ReplicaLocalEraseOutcome> {
+    const marker = logoutMarkerSet();
+    const tombstone = readTombstone();
+    if (marker && tombstone === null) {
+      return { status: "refused", code: "gate_unavailable" };
+    }
+    if (!marker) {
+      const gate = await readGate();
+      const denied = gate === undefined || gate.principalHash === null ||
+        (tombstone !== null && gate.lifecycleEpoch < tombstone.epoch);
+      if (!denied) return { status: "refused", code: "principal_active" };
+      // Rows go first so a blocked delete still leaves no readable data behind.
+      if (gate !== undefined && gate.principalHash === null) {
+        try { await erasePendingLocked({ signal }); } catch { /* the delete below covers it */ }
+      }
+    }
+    if (signal.aborted) return { status: "failed", code: "ABORTED", marker: logoutMarkerSet() };
+    const deleted = await deleteKvDatabase();
+    if (deleted.status !== "deleted") {
+      return { status: "failed", code: deleted.code, marker: marker || (tombstone !== null && setLogoutMarker()) };
+    }
+    if (marker) {
+      try {
+        localStorage.removeItem(REPLICA_LOGOUT_MARKER);
+        if (localStorage.getItem(REPLICA_LOGOUT_MARKER) !== null) throw new Error("The logout marker was not cleared.");
+      } catch {
+        return { status: "failed", code: "STORAGE_ERROR", marker: true };
+      }
+    }
+    return { status: "erased" };
+  }
+
+  async function eraseLocalCopy(o: { signal: AbortSignal }): Promise<ReplicaLocalEraseOutcome> {
+    try {
+      return await exclusive(GATE_LOCK, () => eraseLocalCopyLocked(o), o.signal);
+    } catch (error) {
+      const code = codeOf(error);
+      return error !== null && typeof error === "object" && "code" in error && error.code === "REPLICA_GATED"
+        ? { status: "refused", code }
+        : { status: "failed", code, marker: logoutMarkerSet() };
+    }
+  }
+
   async function recover({ signal }: { signal: AbortSignal }): Promise<ReplicaEraseReport> {
     try {
       return await exclusive(GATE_LOCK, async () => {
@@ -778,6 +829,7 @@ export function createIndexedDbLifecycle(options: {
     deliverable,
     deny,
     erasePending,
+    eraseLocalCopy,
     pendingPurge: readIntents,
   };
 }

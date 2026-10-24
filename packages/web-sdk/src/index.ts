@@ -196,6 +196,8 @@ export type {
   TinyCloudDebugTimer,
   StorageAccountUsage,
   StorageFullEvent,
+  ReplicaPurgeFailedEvent,
+  ReplicaPurgeLocalCopyResult,
   StorageStatus,
   StorageStatusOptions,
   StorageUsage,

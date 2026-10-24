@@ -62,7 +62,8 @@ type ReadThroughKV = {
 };
 
 export class ReplicationRuntime {
-  readonly control: ReplicationControl;
+  /** The node facade adds `purgeLocalCopy`: it needs the node's deny state, not the runtime's. */
+  readonly control: Omit<ReplicationControl, "purgeLocalCopy">;
   private readonly pending = new Map<string, { stamp?: ReplicaSessionStamp; store: PendingWriteStore }>();
   private readonly attached = new Map<ReadThroughKV, string>();
   private current?: KVReplicationController;
