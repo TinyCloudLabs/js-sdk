@@ -1102,10 +1102,6 @@ interface RuntimePermissionGrant {
   provenance?: "primary" | "bootstrap" | "delegated" | "runtime";
 }
 
-/** Advice appended to a decrypt 404 for the signed-in owner's default network. */
-const SIGN_IN_AGAIN_FOR_NETWORK_HINT =
-  "Sign in again with a current SDK to create the account's encryption network.";
-
 type CanonicalizableEncryptionJson = CanonicalJson;
 type NetworkInvocationFact = object;
 
@@ -5328,17 +5324,15 @@ export class TinyCloudNode {
               actions: ["tinycloud.encryption/decrypt"],
             })
             : undefined;
-          // The node answers a missing network with 404 and the body
-          // "network not found" (routes/encryption.rs map_service_err). Advise
-          // re-sign-in only for the signed-in owner's own default network.
-          const missingOwnNetwork = response.status === 404 &&
-            networkId === this.getDefaultEncryptionNetworkId() &&
-            (await response.text().catch(() => "")).trim() === "network not found";
+          // The node answers a missing network with 404 and the body "network
+          // not found"; advise re-sign-in only for the owner's default network.
           throw new DecryptTransportResponseError(
             response.status,
             permissionHint,
-            missingOwnNetwork
-              ? `Network not found: ${networkId}. ${SIGN_IN_AGAIN_FOR_NETWORK_HINT}`
+            response.status === 404 &&
+              networkId === this.getDefaultEncryptionNetworkId() &&
+              (await response.text().catch(() => "")) === "network not found"
+              ? `Network not found: ${networkId}. Sign in again with a current SDK to create the account's encryption network.`
               : undefined,
           );
         }
