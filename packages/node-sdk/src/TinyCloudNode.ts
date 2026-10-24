@@ -36,7 +36,15 @@ import { generateNonce, SiweMessage } from "siwe";
  */
 
 import type { KVReplicaStorage, ReplicationAuthority, ReplicationControl, ReplicationOptions } from "@tinycloud/sdk-core";
-import type { ReplicaDenyInput, ReplicaGateReason, ReplicaSessionStamp } from "@tinycloud/sdk-services/kv/replication";
+import type {
+  ReplicaDenyInput,
+  ReplicaGateReason,
+  ReplicaLocalEraseOutcome,
+  ReplicaPurgeError,
+  ReplicaPurgeFailedEvent,
+  ReplicaPurgeTrigger,
+  ReplicaSessionStamp,
+} from "@tinycloud/sdk-services/kv/replication";
 import type { ReplicationRuntime } from "./replication/runtime";
 import { getNodeReplicationLoaders } from "./replication/module-registry";
 import {
@@ -1273,6 +1281,11 @@ function accountIndexWarningDiagnostic(error: unknown): { status?: number; code?
   return diagnostic;
 }
 
+/** Local-copy erase after a deny: 3 attempts in total, retries 150 ms then 450 ms apart, 3 s per attempt. */
+const REPLICA_ERASE_ATTEMPTS = 3;
+const REPLICA_ERASE_RETRY_DELAYS_MS = [150, 450] as const;
+const REPLICA_ERASE_ATTEMPT_MS = 3_000;
+
 function replicaRestoreRefusal(error: unknown): ReplicaGateReason {
   if (error !== null && typeof error === "object" && "code" in error && error.code === "REPLICA_GATED" && "gate" in error) {
     switch (error.gate) {
@@ -1282,6 +1295,7 @@ function replicaRestoreRefusal(error: unknown): ReplicaGateReason {
       case "purge_pending":
       case "logout_pending":
       case "gate_unavailable":
+      case "wallet_provider_required":
         return error.gate;
     }
   }
@@ -1317,6 +1331,9 @@ export class TinyCloudNode {
   private replicaRestoreGate?: ReplicaGateReason;
   private replicaSessionPrincipal?: string;
   private replicaSessionStamp?: ReplicaSessionStamp;
+  /** Set while a local-copy erase has not finished; `purgeLocalCopy()` retries it. */
+  private replicaPurgeOutstanding?: { retryNow: boolean };
+  private readonly replicaPurgeFailedHandlers = new Set<(event: ReplicaPurgeFailedEvent) => void>();
   /** Mints the replica session stamp on each fresh sign-in (TC-858 §4.1). Undefined when replication is off. */
   private readonly establishReplicaStamp = async (session: TinyCloudSession) => {
     const replication = this.config.replication;
@@ -1493,11 +1510,26 @@ export class TinyCloudNode {
    * `storage.status()` has reported space again for every owner whose write
    * was rejected. Returns the unsubscribe function.
    */
-  on(event: "storage.full", handler: (event: StorageFullEvent) => void): () => void {
+  on(event: "storage.full", handler: (event: StorageFullEvent) => void): () => void;
+  /**
+   * Subscribe to `replica.purge.failed`. It fires when the browser local copy could not be erased
+   * after the bounded retries (sign-out, account switch or `purgeLocalCopy()`). The event carries the
+   * typed gate reason and `retryNow`; the SDK retries again on the next load. Returns the unsubscribe function.
+   */
+  on(event: "replica.purge.failed", handler: (event: ReplicaPurgeFailedEvent) => void): () => void;
+  on(
+    event: "storage.full" | "replica.purge.failed",
+    handler: ((event: StorageFullEvent) => void) | ((event: ReplicaPurgeFailedEvent) => void),
+  ): () => void {
+    if (event === "replica.purge.failed") {
+      const listener = handler as (event: ReplicaPurgeFailedEvent) => void;
+      this.replicaPurgeFailedHandlers.add(listener);
+      return () => { this.replicaPurgeFailedHandlers.delete(listener); };
+    }
     if (event !== "storage.full") {
       throw new Error(`Unknown TinyCloud event: ${String(event)}`);
     }
-    return this.storageFull.on(handler);
+    return this.storageFull.on(handler as (event: StorageFullEvent) => void);
   }
 
   /** Owner key of the account the current session's own storage belongs to. */
@@ -1792,6 +1824,11 @@ export class TinyCloudNode {
             : runtime.then((ready) => ready.control.purge(input));
         },
         clearPending: async () => (await runtime).control.clearPending(),
+        purgeLocalCopy: async () => {
+          const erased = await this.eraseReplicaLocalCopy("purge_local_copy");
+          if (erased?.status === "erased") return { ok: true as const };
+          return { ok: false as const, retryNow: erased?.status === "failed" };
+        },
         close: async () => (await runtime).control.close(),
       };
     }
@@ -2241,6 +2278,7 @@ export class TinyCloudNode {
     const leavingAuth = this.auth;
     const leavingContext = this._serviceContext;
     let denied: { status: string; code?: string } | undefined;
+    let erased: ReplicaLocalEraseOutcome | undefined;
     try {
       this.teardownSession();
     } finally {
@@ -2255,6 +2293,8 @@ export class TinyCloudNode {
         try {
           await this.accountRegistryTail;
           await this.quiesceReplicaRuntime();
+          // The deny commit is durable; remove the local copy before sign-out resolves.
+          if (denied) erased = await this.eraseReplicaLocalCopy("sign_out", denied.status);
         } finally {
           if (leavingAddress) {
             await (leavingAuth
@@ -2264,9 +2304,62 @@ export class TinyCloudNode {
         }
       }
     }
-    if (denied?.status === "unguarded") {
-      throw new Error(`Replica gate was not denied (${denied.code ?? "unknown"}); the replica may still be restorable.`);
+    if (denied?.status === "unguarded" && erased?.status !== "erased") {
+      throw Object.assign(
+        new Error(`Replica gate was not denied (${denied.code ?? "unknown"}); the replica may still be restorable.`),
+        {
+          code: "REPLICA_PURGE_FAILED" as const,
+          reason: "gate_unavailable" as const,
+          retryNow: erased?.status === "failed",
+        } satisfies Omit<ReplicaPurgeError, keyof Error>,
+      );
     }
+  }
+
+  /**
+   * Erases the browser local copy after a deny: up to {@link REPLICA_ERASE_ATTEMPTS} attempts, the
+   * retries {@link REPLICA_ERASE_RETRY_DELAYS_MS} apart, each bounded by {@link REPLICA_ERASE_ATTEMPT_MS}.
+   * Only `failed` outcomes retry. After the last failure `replica.purge.failed` fires and the logout
+   * marker (set by the lifecycle) makes the next load finish the erase. Never rejects.
+   * Returns `undefined` when replication is off or the storage has no browser database.
+   * `denyStatus` marker/unguarded means the deny kept the keys; a refusal then stays outstanding.
+   */
+  private async eraseReplicaLocalCopy(
+    trigger: ReplicaPurgeTrigger,
+    denyStatus?: string,
+  ): Promise<ReplicaLocalEraseOutcome | undefined> {
+    const replication = this.config.replication;
+    if (!replication?.enabled) return undefined;
+    const lifecycle = replication.storage.lifecycle;
+    if (lifecycle?.kind !== "indexeddb" || lifecycle.eraseLocalCopy === undefined) return undefined;
+    let outcome: ReplicaLocalEraseOutcome = { status: "failed", code: "STORAGE_ERROR", marker: false };
+    for (let attempt = 0; attempt < REPLICA_ERASE_ATTEMPTS; attempt++) {
+      if (attempt > 0) await new Promise<void>((resolve) => setTimeout(resolve, REPLICA_ERASE_RETRY_DELAYS_MS[attempt - 1]));
+      try {
+        outcome = await lifecycle.eraseLocalCopy({ signal: AbortSignal.timeout(REPLICA_ERASE_ATTEMPT_MS) });
+      } catch {
+        outcome = { status: "failed", code: "STORAGE_ERROR", marker: false };
+      }
+      if (outcome.status !== "failed") break;
+    }
+    const keysKept = denyStatus === "marker" || denyStatus === "unguarded";
+    if (outcome.status === "erased" || (outcome.status === "refused" && !keysKept)) {
+      this.replicaPurgeOutstanding = undefined;
+      return outcome;
+    }
+    const retryNow = outcome.status === "failed";
+    this.replicaPurgeOutstanding = { retryNow };
+    const reason: ReplicaGateReason = outcome.status === "failed" && outcome.marker ? "logout_pending" : "gate_unavailable";
+    if (reason === "logout_pending") this.replicaRestoreGate = "logout_pending";
+    const event: ReplicaPurgeFailedEvent = { type: "replica.purge.failed", trigger, reason, code: outcome.code, retryNow };
+    for (const handler of this.replicaPurgeFailedHandlers) {
+      try {
+        handler(event);
+      } catch (error) {
+        console.error('Error in "replica.purge.failed" handler:', error);
+      }
+    }
+    return outcome;
   }
 
   /**
@@ -2461,6 +2554,11 @@ export class TinyCloudNode {
       ?? (this.address ? pkhDid(this.address, this._chainId) : undefined);
     if (this.config.replication?.enabled && priorPrincipal && priorPrincipal !== nextPrincipal) {
       const denial = await this.denyReplicaGate({ reason: "account_switch", principal: priorPrincipal, next: nextPrincipal });
+      // The old account's copy goes before the new account signs in; a new gate is minted afresh.
+      if (denial) {
+        await this.quiesceReplicaRuntime();
+        await this.eraseReplicaLocalCopy("account_switch", denial.status);
+      }
       this.replicaRestoreGate = denial?.status === "unguarded" ? "gate_unavailable" : "stamp_stale";
     }
     // Storage is one budget per account: another account starts with no known rejection.

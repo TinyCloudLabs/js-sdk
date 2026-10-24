@@ -1,6 +1,6 @@
 import type { Result, FetchFunction } from "../../types";
 import type { KVGetOptions, KVListOptions, KVResponse } from "../types";
-import type { ReplicaGateReason, ReplicaLifecycleGate, ReplicaSessionStamp } from "./lifecycle";
+import type { ReplicaGateReason, ReplicaLifecycleGate, ReplicaPurgeLocalCopyResult, ReplicaSessionStamp } from "./lifecycle";
 import type { ReplicaQuotaSpec } from "./quota";
 import type { ReplicaConsentAnchor, ReplicaGrantPolicy } from "./grantPolicyTypes";
 
@@ -531,6 +531,15 @@ export interface ReplicationControl {
    * and committed records remain. Exposed callers MUST show CLEAR_PENDING_WARNING first.
    */
   clearPending(): Promise<number>;
+  /**
+   * Browser: erases the whole local copy (the IndexedDB database) once the account has been
+   * denied by sign-out or account switch; `signOut()` and account switch already do this. Retries
+   * a few times when the delete is blocked. `{ ok: false, retryNow: true }`: the copy is still
+   * there and a short bounded retry is meaningful (the deny outcome kept the keys, or the delete
+   * is blocked); the SDK also finishes the erase on the next load. `retryNow: false`: nothing is
+   * erasable now (a session is live, or the storage has no browser database). Never rejects.
+   */
+  purgeLocalCopy(): Promise<ReplicaPurgeLocalCopyResult>;
   close(): Promise<void>;
 }
 
