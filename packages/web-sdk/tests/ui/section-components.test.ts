@@ -85,14 +85,15 @@ describe("glanceRow", () => {
   test("is a button that opens once per click and shows its status only when given", () => {
     let opened = 0;
     const withStatus = glanceRow({
+      icon: "monitor",
       label: "Storage",
       sublabel: "Usage and limits",
-      status: "On",
+      status: { word: "On", tone: "on" },
       onOpen: () => {
         opened += 1;
       },
     });
-    const bare = glanceRow({ label: "Activity", sublabel: "Recent events", onOpen: () => undefined });
+    const bare = glanceRow({ icon: "monitor", label: "Activity", sublabel: "Recent events", onOpen: () => undefined });
 
     expect(withStatus.tagName).toBe("BUTTON");
     expect(withStatus.textContent).toContain("On");

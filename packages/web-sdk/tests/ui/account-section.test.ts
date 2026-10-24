@@ -3,7 +3,7 @@ import { JSDOM } from "jsdom";
 
 import { accountSection } from "../../src/ui/sections/account";
 import type { SectionContext, SectionId } from "../../src/ui/slots";
-import { text } from "../../src/ui/strings";
+import { panelText as text } from "../../src/ui/strings-panel";
 
 type Loose = Record<PropertyKey, unknown>;
 
@@ -68,6 +68,7 @@ function mountWith(opts: Opts) {
     onReset: () => () => undefined,
     storage: { status: async () => ({}) },
     data: {
+      subscribe: () => () => undefined,
       account: async () => ({ state: "ready", data: { ...ACCOUNT, ...opts.account } }),
     },
     requests: opts.requests ? {} : undefined,

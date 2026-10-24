@@ -9,6 +9,7 @@ import type { LayoutOptions, PanelHandle, PanelOptions, ShellLayout } from "./pa
 import { createPanel } from "./panel";
 import { PANEL_CSS } from "./panel-styles";
 import { PANEL_SECTIONS } from "./sections";
+import { panelText } from "./strings-panel";
 import type { HostContext, SectionContext, SectionId } from "./slots";
 
 /** What the host passes on each render. The shell keeps the section between renders. */
@@ -44,6 +45,7 @@ export function mountPanel(root: ShadowRoot, options: Omit<PanelOptions, "onNavi
   });
   const context: SectionContext = {
     ...base,
+    text: panelText,
     closePanel: options.onClose,
     openSection(id) {
       active = id;

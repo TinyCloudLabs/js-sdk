@@ -11,7 +11,7 @@ type BottomPosition = "bottom-right" | "bottom-left" | "bottom-center";
 
 /**
  * Which layouts the settings panel offers. `"both"` (default) opens the sidebar
- * with a "Full page" switch. `"sidebar"` offers the sidebar only. `"page"`
+ * with an "Open full page" switch. `"sidebar"` offers the sidebar only. `"page"`
  * opens the full page directly.
  */
 export type UiMode = "sidebar" | "page" | "both";
