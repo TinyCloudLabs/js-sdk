@@ -185,6 +185,13 @@
       "index.mjs": 0,
       "index.cjs": 0,
       "note": "replica worker size ratchet; no measured-bundle change"
+    },
+    {
+      "pr": "#735",
+      "ticket": "TC-2014",
+      "index.mjs": 0,
+      "index.cjs": 0,
+      "note": "Replica gzip growth measured against this PR's merge base"
     }
   ],
   "phase2Ratchet": {
