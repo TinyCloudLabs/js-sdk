@@ -57,7 +57,8 @@ function attempt(purge: () => Promise<PurgeLocalCopyResult>): Promise<PurgeLocal
     Promise.resolve()
       .then(purge)
       .then(
-        (result) => finish(result.ok === true ? { ok: true } : { ok: false, retryNow: result.retryNow === true }),
+        // Anything but exactly { ok: true } is a failure, and retryNow counts only when it is exactly true.
+        (result) => finish(result?.ok === true ? { ok: true } : { ok: false, retryNow: result?.retryNow === true }),
         () => finish({ ok: false, retryNow: false }),
       );
   });

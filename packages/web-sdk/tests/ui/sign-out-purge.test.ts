@@ -269,6 +269,45 @@ describe("a session that is still live", () => {
   });
 });
 
+describe("a purge that resolves to nothing", () => {
+  afterEach(() => jest.useRealTimers());
+
+  for (const [name, answer] of [["null", null], ["undefined", undefined]] as const) {
+    test(`resolving ${name} is a failed attempt: sign-out settles at once, with the pending warning and no unhandled rejection`, async () => {
+      jest.useFakeTimers();
+      const unhandled: unknown[] = [];
+      const onUnhandled = (reason: unknown): void => void unhandled.push(reason);
+      process.on("unhandledRejection", onUnhandled);
+      try {
+        const r = rig({ purgeImpl: () => Promise.resolve(answer as unknown as PurgeLocalCopyResult) });
+        const w = wrapped(r);
+        // No timer is advanced: the attempt must settle on its own, not by waiting out the timeout.
+        await w.signOut?.();
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(r.log).toEqual(["signOut:start", "signOut:end", "purge"]);
+        expect(r.toasts).toEqual([{ kind: "warning", textCode: "local-copy.purge.toast.pending" }]);
+        expect(purgeWatch(w)?.failure()).toBe("pending");
+        expect(unhandled).toEqual([]);
+      } finally {
+        process.off("unhandledRejection", onUnhandled);
+      }
+    });
+  }
+
+  test("a non-object answer is a failed attempt, and retryNow only counts when it is exactly true", async () => {
+    jest.useFakeTimers();
+    const r = rig({
+      purgeImpl: (call) => Promise.resolve((call === 0 ? "ok" : { ok: false, retryNow: "yes" }) as unknown as PurgeLocalCopyResult),
+    });
+    const w = wrapped(r);
+    await w.signOut?.();
+    expect(r.log.filter((entry) => entry === "purge")).toHaveLength(1);
+    expect(purgeWatch(w)?.failure()).toBe("pending");
+    expect(await purgeWatch(w)?.retry()).toBe(false);
+    expect(purgeWatch(w)?.failure()).toBe("pending");
+  });
+});
+
 describe("a hung purge", () => {
   afterEach(() => jest.useRealTimers());
 
