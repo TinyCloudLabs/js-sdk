@@ -113,6 +113,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
 
+      # A published package must not pin another workspace package to a version
+      # this release replaces (TC-2014). Runs before the version commit is pushed.
+      - name: Check internal dependency pins
+        if: steps.check.outputs.pending != '0'
+        run: node scripts/check-internal-dep-pins.mjs
+
       # Commit the version bump locally; nothing leaves the runner until the
       # npm check below has passed (TC-1457). The push still comes before any
       # publish (TC-1095).
@@ -369,6 +375,13 @@ jobs:
         run: bun run --cwd packages/cli check:node-release
         env:
           GITHUB_TOKEN: ${{ github.token }}
+
+      # A published package must not pin another workspace package to a version
+      # this release replaces (TC-2014). Recovery runs publish an older commit
+      # that may not have the script, and were checked when they were cut.
+      - name: Check internal dependency pins
+        if: steps.unfinished.outputs.sha == ''
+        run: node scripts/check-internal-dep-pins.mjs
 
       # Push before publishing anything (TC-1095). One push carries two
       # commits: the stable release, then pre mode re-entered for the next
