@@ -241,6 +241,19 @@ jobs:
           TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
         run: bun test packages/cli/test/secrets-wait.e2e.test.ts
 
+      # The suite skips itself when the node binary variable is unset, so the
+      # step fails if any test was skipped.
+      - name: tc replica Secrets against the node
+        if: matrix.database == 'sqlite'
+        env:
+          TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
+        run: |
+          bun test packages/cli/test/replica-secrets.e2e.test.ts 2>&1 | tee "$RUNNER_TEMP/replica-secrets.log"
+          if grep -Eq '^ *[1-9][0-9]* skip' "$RUNNER_TEMP/replica-secrets.log" || ! grep -Eq '^ *[1-9][0-9]* pass' "$RUNNER_TEMP/replica-secrets.log"; then
+            echo "::error title=replica Secrets::tests were skipped or none passed"
+            exit 1
+          fi
+
       - name: tc delegation revoke from a profile with no grant record, against the node
         if: matrix.database == 'sqlite'
         env:
