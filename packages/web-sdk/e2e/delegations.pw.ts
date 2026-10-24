@@ -305,7 +305,7 @@ for (const scheme of ["light", "dark"] as const) {
       await box.getByRole("button", { name: "Revoke access" }).click();
 
       const target = card(page, "Research helper");
-      await expect(target.getByRole("alert")).toHaveText(/Couldn't revoke this access. Nothing was changed./);
+      await expect(target.getByRole("alert")).toHaveText(/Couldn.t revoke this access\./);
       await expect(cards(page)).toHaveCount(7);
       await expect(slips(page)).toHaveCount(0);
       await expect(target.locator(".st")).toHaveText("Active");
@@ -314,6 +314,18 @@ for (const scheme of ["light", "dark"] as const) {
       const again = body(page).locator('[role="alertdialog"]');
       await expect(again).toBeVisible();
       await expect(again.getByRole("button", { name: "Keep access" })).toBeFocused();
+      await expect(slips(page)).toHaveCount(0);
+    });
+
+    test("a lost answer says it could not be confirmed, keeps the row and offers Try again", async ({ page }) => {
+      await open(page, { scheme, seed: { rows: mockupRows(), revokeFails: { bafyEXAMPLEd4p9ax: "NETWORK_ERROR" }, revokeDelayMs: 50 } });
+      const box = await openConfirm(page, "Research helper");
+      await box.getByRole("button", { name: "Revoke access" }).click();
+      const target = card(page, "Research helper");
+      await expect(target.getByRole("alert")).toContainText("We couldn't confirm whether this worked.");
+      await expect(target.getByRole("alert")).not.toContainText("Nothing was changed");
+      await expect(target.getByRole("button", { name: "Try again" })).toBeVisible();
+      await expect(cards(page)).toHaveCount(7);
       await expect(slips(page)).toHaveCount(0);
     });
 

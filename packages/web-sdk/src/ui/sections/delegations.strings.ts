@@ -93,9 +93,11 @@ export const DELEGATIONS_STRINGS = {
   "delegations.confirm.go": "Revoke access",
 
   "delegations.busy": "Revoking…",
-  "delegations.err.failed": "Couldn't revoke this access. Nothing was changed.",
+  "delegations.err.failed": "Couldn't revoke this access.",
+  "delegations.err.unconfirmed": "We couldn't confirm whether this worked. The list was re-read; try again if this still shows Active.",
   "delegations.err.denied": "This session can't change this access. Nothing was changed.",
   "delegations.err.stale": "This access had already ended, so nothing was changed.",
+  "delegations.err.ended": "This access has ended.",
   "delegations.live.revoked": "Access revoked for {name}.",
 
   "delegations.receipt.title": "Access revoked",

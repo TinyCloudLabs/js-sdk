@@ -359,21 +359,25 @@ function kindLine(row: DelegationRow, name: string): string {
   return who === name ? kind : `${kind}${panelText("delegations.meta.sep")}${who}`;
 }
 
-/** Codes the adapter uses when the grant was not active at the moment of revoking. */
+/** Codes for a grant that was not active, or no longer there, at the moment of revoking. */
 const STALE_CODES: Readonly<Record<string, true>> = {
   "not-revocable": true,
+  NOT_FOUND: true,
   not_found: true,
   "not-found": true,
   "not-active": true,
 };
 const DENIED_CODES: Readonly<Record<string, true>> = { PERMISSION_DENIED: true, "permission-denied": true, denied: true };
+/** The request may or may not have reached the node: the outcome is not known. "thrown" is the section's own code for an exception. */
+const UNCONFIRMED_CODES: Readonly<Record<string, true>> = { NETWORK_ERROR: true, ABORTED: true, thrown: true };
 
-type Phase = "idle" | "busy" | "failed" | "denied" | "stale";
+type Phase = "idle" | "busy" | "failed" | "denied" | "stale" | "unconfirmed";
 
-/** Which of the three messages a refused revoke maps to. */
+/** Which message a refused revoke maps to. Anything else, REVOCATION_FAILED included, is a plain failure. */
 export function refusalPhase(code: string): Exclude<Phase, "idle" | "busy"> {
   if (Object.prototype.hasOwnProperty.call(STALE_CODES, code)) return "stale";
   if (Object.prototype.hasOwnProperty.call(DENIED_CODES, code)) return "denied";
+  if (Object.prototype.hasOwnProperty.call(UNCONFIRMED_CODES, code)) return "unconfirmed";
   return "failed";
 }
 
@@ -606,12 +610,14 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
 
     const busy = card.phase === "busy";
     card.busy.hidden = !busy;
-    const refused = card.phase === "failed" || card.phase === "denied" || card.phase === "stale";
+    const refused = card.phase === "failed" || card.phase === "denied" || card.phase === "stale" || card.phase === "unconfirmed";
     card.err.hidden = !refused;
     if (refused) {
-      card.errText.textContent = text(`delegations.err.${card.phase === "failed" ? "failed" : card.phase === "denied" ? "denied" : "stale"}`);
+      // After a failed try the row may have ended anyway; say what the fresh read shows, not what the failure implied.
+      const ended = !mayRevoke && (card.phase === "failed" || card.phase === "unconfirmed");
+      card.errText.textContent = text(`delegations.err.${ended ? "ended" : card.phase}`);
     }
-    card.retry.hidden = card.phase !== "failed" || !mayRevoke;
+    card.retry.hidden = (card.phase !== "failed" && card.phase !== "unconfirmed") || !mayRevoke;
     card.retry.disabled = inflight !== undefined;
     if (card.detail !== undefined) card.detail.replaceChildren(...detailRows(row, shown, now));
   }
@@ -694,6 +700,8 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
       card.phase = "stale";
       paint(card);
       void settleList();
+      // The activated button just went away; the heading is a steady place for focus.
+      title.focus({ preventScroll: true });
       return;
     }
     closeConfirm(card);
@@ -706,7 +714,7 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
     try {
       outcome = await source.revoke(card.cid);
     } catch {
-      outcome = { ok: false, code: "unknown" };
+      outcome = { ok: false, code: "thrown" };
     }
     inflight = undefined;
 
@@ -720,10 +728,15 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
       leave(card);
       return;
     }
-    const code = outcome !== undefined && outcome.ok === false ? outcome.code : "unknown";
+    const code = outcome !== undefined && outcome.ok === false ? outcome.code : "thrown";
     card.phase = refusalPhase(code);
-    if (card.phase === "stale") void settleList();
-    if (disposed) return;
+    // Whatever went wrong, re-read the list so the card shows where the grant really stands.
+    void settleList();
+    if (disposed) {
+      // The panel was closed while the node answered; the failure still has to be seen.
+      if (ctx.toastsEnabled()) ctx.toast({ kind: "error", textCode: `delegations.err.${card.phase}` });
+      return;
+    }
     paintAll();
     if (card.retry.hidden) card.article.focus();
     else card.retry.focus();
@@ -1010,8 +1023,13 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
         card.row = row;
         seen.add(row.cid);
         if (card.confirm !== undefined && !canRevoke(row, Date.now())) {
+          const box = card.confirm.cancel.closest("[role=alertdialog]");
+          const active = (el.getRootNode() as Document | ShadowRoot).activeElement;
+          const hadFocus = box !== null && active !== null && box.contains(active);
           closeConfirm(card);
           card.phase = "stale";
+          // The box held focus; without a move it would fall to the page.
+          if (hadFocus) card.article.focus({ preventScroll: true });
         }
         paint(card);
         wanted.push(card.li);

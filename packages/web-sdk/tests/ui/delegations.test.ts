@@ -76,6 +76,8 @@ interface Harness {
   readonly toasts: string[];
   readonly reads: { count: number };
   refresh(): Promise<void>;
+  unmount(): void;
+  remount(): Promise<HTMLElement>;
   status(): SectionStatus | undefined;
   setPage(result: ViewResult<{ rows: readonly DelegationRow[]; nextCursor?: string }>): void;
 }
@@ -127,7 +129,8 @@ async function mountSection(options: Options = {}): Promise<Harness> {
 
   const data = createSectionData(() => (options.source === false ? undefined : source));
   if (options.source !== false) await data.refresh("delegations");
-  const dialogs = createSectionDialogs(() => el);
+  let host = el;
+  const dialogs = createSectionDialogs(() => host);
   const receipts: Harness["receipts"] = [];
   const toasts: string[] = [];
   const client = { signedIn: () => true, requestAuthority: options.requestAuthority, data: source } as unknown as PanelClient;
@@ -150,7 +153,8 @@ async function mountSection(options: Options = {}): Promise<Harness> {
     openDrawer: (request: Parameters<typeof dialogs.openDrawer>[0]) => dialogs.openDrawer(request),
   } as unknown as SectionContext;
 
-  cleanups.push(delegationsSection.mount(el, ctx));
+  const dispose = delegationsSection.mount(el, ctx);
+  cleanups.push(dispose);
   cleanups.push(() => dialogs.closeAll());
   await flush();
   return {
@@ -161,6 +165,21 @@ async function mountSection(options: Options = {}): Promise<Harness> {
     reads,
     refresh: () => data.refresh("delegations"),
     status: () => delegationsSection.status(ctx),
+    unmount: () => {
+      dialogs.closeAll();
+      dispose();
+    },
+    // The panel was closed and opened again: the shell mounts a fresh section element against the same cache.
+    remount: async () => {
+      const again = page.document.createElement("section");
+      again.className = "section";
+      again.dataset.section = "delegations";
+      page.document.body.append(again);
+      host = again;
+      cleanups.push(delegationsSection.mount(again, ctx));
+      await flush();
+      return again;
+    },
     setPage: (result) => {
       current = result;
     },
@@ -530,15 +549,60 @@ describe("revoke", () => {
     expect(h.status()?.count).toBe("1");
   });
 
-  test("a failed revoke keeps the row, says nothing changed, and Try again asks again instead of revoking", async () => {
-    const h = await mountSection({ rows: [row("a")], revoke: async () => ({ ok: false, code: "unknown" }) });
+
+  test("NOT_FOUND reads like not-revocable: the grant is gone or ended, the list re-reads, no Try again", async () => {
+    for (const code of ["NOT_FOUND", "not-revocable"]) {
+      const h = await mountSection({ rows: [row("a")], revoke: async () => ({ ok: false, code }) });
+      const box = await openConfirm(h);
+      h.setPage({ state: "ready", data: { rows: [row("a", { status: "revoked" })] } });
+      const readsBefore = h.reads.count;
+      buttonIn(box, "Revoke access")?.click();
+      await flush();
+      expect(h.reads.count, code).toBeGreaterThan(readsBefore);
+      expect(cards(h.el), code).toHaveLength(1);
+      expect(h.receipts, code).toHaveLength(0);
+      expect(h.el.textContent, code).toContain("had already ended");
+      expect(h.el.querySelector(".dl-card .st")?.textContent, code).toBe("Revoked");
+      expect(buttonIn(h.el, "Try again")?.hidden, code).toBe(true);
+    }
+  });
+
+  test("NETWORK_ERROR and ABORTED say it could not be confirmed, re-read the list and offer Try again", async () => {
+    for (const code of ["NETWORK_ERROR", "ABORTED"]) {
+      const h = await mountSection({ rows: [row("a")], revoke: async () => ({ ok: false, code }) });
+      const readsBefore = h.reads.count;
+      buttonIn(await openConfirm(h), "Revoke access")?.click();
+      await flush();
+      const line = h.el.querySelector('[role="alert"]:not([hidden])')?.textContent ?? "";
+      expect(line, code).toContain("couldn't confirm whether this worked");
+      expect(line, code).not.toContain("Nothing was changed");
+      expect(buttonIn(h.el, "Try again")?.hidden, code).toBe(false);
+      expect(h.reads.count, code).toBeGreaterThan(readsBefore);
+      expect(cards(h.el), code).toHaveLength(1);
+    }
+  });
+
+  test("the re-read after an unconfirmed failure is shown truthfully: a grant that did end reads as ended, with no Try again", async () => {
+    const h = await mountSection({ rows: [row("a")], revoke: async () => ({ ok: false, code: "NETWORK_ERROR" }) });
     const box = await openConfirm(h);
+    // The request got through; only the answer was lost.
+    h.setPage({ state: "ready", data: { rows: [row("a", { status: "revoked" })] } });
     buttonIn(box, "Revoke access")?.click();
+    await flush();
+    expect(h.el.querySelector(".dl-card .st")?.textContent).toBe("Revoked");
+    expect(h.el.querySelector('[role="alert"]:not([hidden]) p')?.textContent).toBe("This access has ended.");
+    expect(buttonIn(h.el, "Try again")?.hidden).toBe(true);
+  });
+
+  test("REVOCATION_FAILED and other codes are a plain failure with Try again, which asks again instead of revoking", async () => {
+    const h = await mountSection({ rows: [row("a")], revoke: async () => ({ ok: false, code: "REVOCATION_FAILED" }) });
+    const readsBefore = h.reads.count;
+    buttonIn(await openConfirm(h), "Revoke access")?.click();
     await flush();
     expect(cards(h.el)).toHaveLength(1);
     expect(h.receipts).toHaveLength(0);
-    const alert = h.el.querySelector('[role="alert"]:not([hidden])');
-    expect(alert?.textContent).toContain("Nothing was changed");
+    expect(h.el.querySelector('[role="alert"]:not([hidden]) p')?.textContent).toBe("Couldn't revoke this access.");
+    expect(h.reads.count).toBeGreaterThan(readsBefore);
     expect(h.revoked).toEqual(["a"]);
 
     buttonIn(h.el, "Try again")?.click();
@@ -548,19 +612,47 @@ describe("revoke", () => {
     expect(active()?.textContent).toBe("Keep access");
   });
 
-  test("a row that is no longer active is refused: it is shown as already ended, the list re-reads, the row stays", async () => {
-    const h = await mountSection({ rows: [row("a")], revoke: async () => ({ ok: false, code: "not-revocable" }) });
+  test("when the grant runs out while the box is open, activating Revoke access moves focus to the heading, not the page", async () => {
+    // No re-read happens; the end time passes between the box opening and the click.
+    const h = await mountSection({ rows: [row("a", { expiresAt: new Date(Date.now() + 60_000) })] });
     const box = await openConfirm(h);
-    h.setPage({ state: "ready", data: { rows: [row("a", { status: "revoked" })] } });
-    const readsBefore = h.reads.count;
-    buttonIn(box, "Revoke access")?.click();
-    await flush();
-    expect(h.reads.count).toBeGreaterThan(readsBefore);
-    expect(cards(h.el)).toHaveLength(1);
-    expect(h.receipts).toHaveLength(0);
+    const realNow = Date.now;
+    Date.now = () => realNow() + 120_000;
+    try {
+      buttonIn(box, "Revoke access")?.click();
+      await flush();
+    } finally {
+      Date.now = realNow;
+    }
+    expect(h.revoked).toEqual([]);
     expect(h.el.textContent).toContain("had already ended");
-    expect(h.el.querySelector(".dl-card .st")?.textContent).toBe("Revoked");
-    expect(buttonIn(h.el, "Try again")?.hidden).toBe(true);
+    expect(active()).toBe(h.el.querySelector(".sec-title"));
+  });
+
+  test("when a re-read ends the row under an open box, focus moves to the card instead of falling to the page", async () => {
+    const h = await mountSection({ rows: [row("a")] });
+    await openConfirm(h);
+    expect(active()?.textContent).toBe("Keep access");
+    h.setPage({ state: "ready", data: { rows: [row("a", { status: "revoked" })] } });
+    await h.refresh();
+    await flush();
+    expect(h.el.querySelector('[role="alertdialog"]')).toBeNull();
+    expect(active()).toBe(cards(h.el)[0] ?? null);
+  });
+
+  test("a revoke that fails after the panel was closed still raises the neutral failure toast", async () => {
+    let fail: (outcome: RevokeOutcome) => void = () => undefined;
+    const held = new Promise<RevokeOutcome>((resolve) => {
+      fail = resolve;
+    });
+    const h = await mountSection({ rows: [row("a")], revoke: () => held });
+    buttonIn(await openConfirm(h), "Revoke access")?.click();
+    await flush();
+    h.unmount();
+    fail({ ok: false, code: "REVOCATION_FAILED" });
+    await flush();
+    expect(h.toasts).toEqual(["delegations.err.failed"]);
+    expect(h.receipts).toHaveLength(0);
   });
 
   test("a session that may not revoke gets a neutral line and no Try again", async () => {
@@ -573,18 +665,21 @@ describe("revoke", () => {
     expect(cards(h.el)).toHaveLength(1);
   });
 
-  test("a source that throws is a failure, not a removal", async () => {
+  test("a source that throws is unconfirmed, not a removal and not 'nothing changed'", async () => {
     const h = await mountSection({
       rows: [row("a")],
       revoke: async () => {
         throw new Error("boom");
       },
     });
-    const box = await openConfirm(h);
-    buttonIn(box, "Revoke access")?.click();
+    const readsBefore = h.reads.count;
+    buttonIn(await openConfirm(h), "Revoke access")?.click();
     await flush();
     expect(cards(h.el)).toHaveLength(1);
-    expect(h.el.textContent).toContain("Nothing was changed");
+    expect(h.el.textContent).toContain("couldn't confirm whether this worked");
+    expect(h.el.textContent).not.toContain("Nothing was changed");
+    expect(buttonIn(h.el, "Try again")?.hidden).toBe(false);
+    expect(h.reads.count).toBeGreaterThan(readsBefore);
   });
 
   test("a row revoked elsewhere while the box is open closes the box and says it ended; nothing is called", async () => {
