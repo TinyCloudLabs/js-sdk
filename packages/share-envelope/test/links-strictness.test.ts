@@ -42,12 +42,12 @@ async function prepared() {
 }
 
 /** A fetch that serves `record` the way the read endpoint does, with `header` and `signature` as the stored record. */
-function serving(record: LinkRecord, stored: { readonly header?: unknown; readonly signature?: unknown } = {}): typeof globalThis.fetch {
+function serving(record: LinkRecord, stored: { readonly header?: unknown; readonly signature?: unknown; readonly text?: string } = {}): typeof globalThis.fetch {
   const shown = { header: stored.header ?? record.header, ...("signature" in stored ? { signature: stored.signature } : { signature: record.signature }) };
   return (async () =>
     new Response(fromBase64Url(record.body), {
       status: 200,
-      headers: { "content-type": "application/octet-stream", "x-link-record": toBase64Url(utf8Bytes(JSON.stringify(shown))) },
+      headers: { "content-type": "application/octet-stream", "x-link-record": toBase64Url(utf8Bytes(stored.text ?? canonicalize(shown))) },
     })) as unknown as typeof globalThis.fetch;
 }
 
@@ -246,5 +246,55 @@ describe("isCanonicalRawCid", () => {
       }
       expect(failure).toMatchObject({ code: "body_cid_format" });
     }
+  });
+});
+
+describe("the X-Link-Record text of a short link", () => {
+  async function resolving(text: (record: LinkRecord) => string): Promise<unknown> {
+    const { record, key, bodyCid } = await prepared();
+    const link = buildShortLink({ origin: SHARE_ORIGIN, type: "share", id: ID, key, bodyCid });
+    return resolveLink(link, resolveOptions(serving(record, { text: text(record) }))).catch((error: unknown) => error);
+  }
+  const stored = (record: LinkRecord) => ({ header: record.header, signature: record.signature });
+
+  it("is accepted when it is exactly the JCS text of its parsed value", async () => {
+    expect(await resolving((record) => canonicalize(stored(record)))).toMatchObject({ id: ID, form: "short" });
+  });
+
+  it("is refused when a header key is repeated, though the last value is the right one", async () => {
+    let parsedAudience: unknown;
+    const outcome = await resolving((record) => {
+      const text = canonicalize(stored(record)).replace(`{"header":{"audience":"${API}"`, `{"header":{"audience":"https://other.example","audience":"${API}"`);
+      expect(text).toContain("https://other.example");
+      const parsed: { header: { audience: unknown } } = JSON.parse(text);
+      parsedAudience = parsed.header.audience;
+      return text;
+    });
+    expect(parsedAudience).toBe(API);
+    expect(outcome).toBeInstanceOf(LinkError);
+    expect(outcome).toMatchObject({ code: "record_not_canonical" });
+  });
+
+  it("is refused with white space, another key order, or an escaped lone surrogate", async () => {
+    const spellings: readonly (readonly [string, (record: LinkRecord) => string])[] = [
+      ["white space", (record) => JSON.stringify(stored(record), null, 1)],
+      ["another key order", (record) => JSON.stringify({ signature: record.signature, header: record.header })],
+      ["a lone surrogate", (record) => canonicalize(stored(record)).replace(`"audience":"${API}"`, `"audience":"${API}\\ud800"`)],
+    ];
+    for (const [label, text] of spellings) {
+      const outcome = await resolving(text);
+      expect({ label, isLinkError: outcome instanceof LinkError }).toEqual({ label, isLinkError: true });
+      expect({ label, code: outcome instanceof LinkError ? outcome.code : undefined }).toEqual({ label, code: "record_not_canonical" });
+    }
+  });
+
+  it("is refused when its object has a key besides header and signature, though the text is JCS", async () => {
+    const outcome = await resolving((record) => {
+      const text = canonicalize({ extra: 1, ...stored(record) });
+      expect(text.startsWith('{"extra":1,"header":')).toBe(true);
+      return text;
+    });
+    expect(outcome).toBeInstanceOf(LinkError);
+    expect(outcome).toMatchObject({ code: "invalid_response" });
   });
 });

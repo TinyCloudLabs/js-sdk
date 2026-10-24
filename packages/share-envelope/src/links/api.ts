@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { generateKey, seal } from "../aead.js";
 import { toBase64Url } from "../bytes.js";
+import { canonicalize } from "../jcs.js";
 import { computeCid } from "../cid.js";
 import { LINK_ID_PATTERN, MAX_LINK_BODY_BYTES, LINK_MAX_RECORD_HEADER_BYTES, LINK_TYPE_SPECS, type LinkType } from "./constants.js";
 import { LinkError } from "./errors.js";
@@ -269,15 +270,25 @@ interface RecordHeader {
 function parseRecordHeader(text: string | null): RecordHeader {
   if (text === null || text.length === 0 || text.length > LINK_MAX_RECORD_HEADER_BYTES) throw new LinkError("invalid_response");
   const bytes = decodeStrictBase64Url(text);
+  let decoded: string;
   let value: unknown;
   try {
     if (bytes === null) throw new Error("encoding");
-    value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+    decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    value = JSON.parse(decoded);
   } catch {
     throw new LinkError("invalid_response");
   }
   if (!isPlainObject(value) || Object.keys(value).some((name) => name !== "header" && name !== "signature")) throw new LinkError("invalid_response");
   if (!isPlainObject(value.header) || ("signature" in value && !isPlainObject(value.signature))) throw new LinkError("invalid_response");
+  // The text that is verified is the JCS text: a repeated key, white space or another key order is refused.
+  let canonical: string;
+  try {
+    canonical = canonicalize(value);
+  } catch {
+    throw new LinkError("record_not_canonical");
+  }
+  if (canonical !== decoded) throw new LinkError("record_not_canonical");
   return { header: value.header, ..."signature" in value ? { signature: value.signature } : {} };
 }
 
