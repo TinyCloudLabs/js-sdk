@@ -122,6 +122,7 @@ for (const scheme of ["light", "dark"] as const) {
   test(`${scheme}: action button border is at least 3:1 on its surface`, async ({ page }) => {
     await mountHarness(page, scheme);
     await page.getByRole("button", { name: "TinyCloud settings", exact: true }).click();
+    await expect(page.locator("#tinycloud-ui-panel .nav-i").first()).toBeAttached();
     const action = page.getByRole("button", { name: "Hide button", exact: true });
     await expect(action).toHaveClass(/\baction\b/);
     const colours = await action.evaluate((el) => {
@@ -314,6 +315,7 @@ for (const scheme of ["light", "dark"] as const) {
       const launcher = page.getByRole("button", { name: "TinyCloud settings", exact: true });
       await launcher.click();
       await expect(page.locator("#tinycloud-ui-panel")).toBeVisible();
+      await expect(page.locator("#tinycloud-ui-panel .nav-i").first()).toBeAttached();
       await page.evaluate(() => {
         const harness = window as unknown as HarnessWindow;
         harness.__tc.toast("info");
@@ -342,6 +344,7 @@ for (const scheme of ["light", "dark"] as const) {
     await page.getByRole("button", { name: "TinyCloud settings", exact: true }).click();
     const panel = page.locator("#tinycloud-ui-panel");
     await expect(panel).toBeVisible();
+    await expect(panel.locator(".nav-i").first()).toBeAttached();
 
     const signOut = panel.getByRole("button", { name: "Sign out", exact: true });
     await signOut.click();

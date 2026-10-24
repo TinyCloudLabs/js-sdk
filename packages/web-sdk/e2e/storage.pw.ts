@@ -70,6 +70,8 @@ const section = (page: Page) => panel(page).locator('section[data-section="stora
 async function openPanel(page: Page) {
   await page.evaluate(() => (window as unknown as HarnessWindow).tc?.ui.open("storage"));
   await expect(panel(page)).toBeVisible();
+  // The stand-in shares the panel id and shows first; wait for the lazy shell before reading the section.
+  await expect(panel(page).locator(".nav-i").first()).toBeAttached();
 }
 
 async function closePanel(page: Page) {
