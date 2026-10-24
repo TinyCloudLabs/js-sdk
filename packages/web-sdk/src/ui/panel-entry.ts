@@ -99,14 +99,25 @@ export function mountPanel(root: ShadowRoot, options: Omit<PanelOptions, "onNavi
   }
   const offData = data.subscribe(paintNav);
 
+  /**
+   * An account change (sign-out, account switch, client change) invalidates everything keyed by the
+   * old account: cached reads and in-flight ones (generation), open confirm boxes and drawers
+   * (their callbacks hold the old account's ids), and receipt slips.
+   */
+  function accountChanged(): void {
+    data.reset();
+    dialogs.closeAll();
+    region?.clearReceipts();
+  }
+
   let offReset: (() => void) | undefined;
   function watchClient(): void {
     offReset?.();
-    offReset = base.client()?.onReset(() => data.reset());
+    offReset = base.client()?.onReset(accountChanged);
   }
   const offClient = base.onClientChange(() => {
     watchClient();
-    data.reset();
+    accountChanged();
   });
   watchClient();
 

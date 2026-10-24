@@ -235,6 +235,19 @@ describe("toast region", () => {
     m.stop();
   });
 
+  test("clearReceipts drops every receipt slip and leaves store toasts alone", () => {
+    const m = mount();
+    m.store.push({ kind: "info", textCode: "panel.title" });
+    m.region.receipt(RECEIPT);
+    m.region.receipt({ ...RECEIPT, rows: [{ labelCode: "panel.close", value: "other" }] });
+    m.region.clearReceipts();
+    expect(m.layer.querySelectorAll(".slip").length).toBe(0);
+    expect(m.layer.querySelectorAll(".toast--info").length).toBe(1);
+    // A cleared receipt can be shown again.
+    expect(m.region.receipt(RECEIPT)).toBe(true);
+    m.stop();
+  });
+
   test("a refused clipboard write is reported, not swallowed", async () => {
     const realNavigator = globalThis.navigator;
     Object.defineProperty(globalThis, "navigator", {

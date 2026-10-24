@@ -30,6 +30,8 @@ export interface ReceiptRequest {
 export interface ToastRegion {
   /** Shows a receipt. Returns false when it duplicates one on screen. */
   receipt(request: ReceiptRequest): boolean;
+  /** Drops every receipt slip. A receipt belongs to the account that made it, so an account change clears them. */
+  clearReceipts(): void;
   dispose(): void;
 }
 
@@ -249,6 +251,9 @@ export function mountToastRegion(
       while (slips.length > MAX_RECEIPTS) drop(slips[0] as Slip);
       arm(entry);
       return true;
+    },
+    clearReceipts() {
+      for (const slip of [...slips]) drop(slip);
     },
     dispose() {
       unsubscribe();
