@@ -239,6 +239,17 @@ describe("describeAbilities", () => {
   });
 });
 
+describe("availability", () => {
+  test("is unavailable without a signed-in session and available with one", () => {
+    const hostFor = (signedIn: boolean) =>
+      ({ client: () => ({ signedIn: () => signedIn }) as unknown as PanelClient }) as unknown as SectionContext;
+    expect(delegationsSection.isAvailable(hostFor(false))).toBe(false);
+    expect(delegationsSection.isAvailable(hostFor(true))).toBe(true);
+    // No client at all reads as signed out.
+    expect(delegationsSection.isAvailable({ client: () => undefined } as unknown as SectionContext)).toBe(false);
+  });
+});
+
 describe("status mapping and grouping", () => {
   test("an active row is Active, within a day Expiring soon, past its end Expired", () => {
     expect(shownStatus(row("a"), NOW)).toBe("active");
