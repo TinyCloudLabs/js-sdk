@@ -159,7 +159,9 @@ tc courier join --resume
   A record is written only if `invite list` can read it back. If a grant may exist
   but cannot be recorded (for example the hello's courier DID is not an ed25519
   did:key), the held text, the notice and `invite list` (`unrecordedGrantUntil`)
-  give only the latest date it can be valid, without a courier. Owner-facing texts
+  give only the latest date it can be valid, without a courier. That date lives on
+  the private invite record, only ever moves later, and only the sweep removes it
+  once it has passed. Owner-facing texts
   print a hello's courier DID only if it is a real ed25519 did:key, and say
   "a courier in an unrecognised format" otherwise.
 - `pair start`, `pair accept` and `join` also refuse a handle that a peers file

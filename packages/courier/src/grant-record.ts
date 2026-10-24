@@ -76,7 +76,7 @@ function readGrantFile(file: string): PossibleGrant | undefined {
 /**
  * Writes the record, but only if `parseGrant` (the reader) will accept it: what is written is always listed. A record the reader would hide (for example a
  * courier DID the loose hello check lets through but that is not an ed25519 did:key) is refused with a throw BEFORE anything is written; the caller logs it
- * and carries the possible grant to the owner without the DID (`held.unrecordedGrantUntil`).
+ * and carries the possible grant to the owner without the DID (`unrecordedGrantUntil` on the invite record).
  */
 export function writeGrant(grant: PossibleGrant): void {
   const file = grantPath(grant.inviteId, grant.attempt);

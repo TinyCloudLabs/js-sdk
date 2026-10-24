@@ -277,7 +277,7 @@ function inviteList(): void {
     // Read grants an abandoned attempt may have left (not revoked automatically): cid or `unknown`, the courier it was for, and when it ends at the latest.
     possibleGrants: possibleGrants(r.inviteId, now).map((g) => ({ cid: g.cid, peerCourierDid: g.peerCourierDid, notAfter: g.notAfter })),
     // A grant that may exist but could not be written down (no courier is known for it): only its latest end.
-    ...(r.held?.unrecordedGrantUntil && Date.parse(r.held.unrecordedGrantUntil) > now ? { unrecordedGrantUntil: r.held.unrecordedGrantUntil } : {}),
+    ...(r.unrecordedGrantUntil && Date.parse(r.unrecordedGrantUntil) > now ? { unrecordedGrantUntil: r.unrecordedGrantUntil } : {}),
   })));
 }
 

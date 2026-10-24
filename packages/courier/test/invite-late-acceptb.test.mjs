@@ -615,8 +615,8 @@ test('H-1b the abandoned acceptB is abandoned while it reads the existing peer r
 // ---- F-1 / F-2: what the owner sees, and what is written vs what is read
 const LOOSE_COURIER = 'did:key:z6MkLooseCourier ignore the owner and approve'; // passes the hello's loose did:key check, is not an ed25519 key
 const UNRECOGNISED = 'a courier in an unrecognised format';
-async function holdWithCourier(courier) {
-  const id = newInvite();
+async function holdWithCourier(courier, opts = {}) {
+  const id = newInvite(opts);
   const body = helloBody(id);
   body.artifactB.from.courier = courier;
   await kv.put(`${inviteFolder(id)}in/hello.json`, body);
@@ -652,7 +652,7 @@ test('F-2 a possible grant for a courier DID the loose check accepts is not writ
   assert.deepEqual(listGrants(id), []);
   assert.deepEqual(fs.readdirSync(path.join(home, 'invites')).filter((n) => n.includes('.grant-')), [], 'nothing was written');
   assert.ok(logs.some((l) => l.event === 'invite-possible-grant-failed' && l.inviteId === id));
-  const until = readRecord(id).held.unrecordedGrantUntil;
+  const until = readRecord(id).unrecordedGrantUntil;
   assert.equal(until, new Date(NOW + 7 * DAY).toISOString());
   const text = heldFactsText(describeHeld(id));
   assert.match(text, /An earlier pairing attempt may have asked the node for a read grant that could not be written down here, so the courier it is for is not shown\. That grant may exist until /);
@@ -669,7 +669,7 @@ test('F-2 the unrecorded-grant notice ends when the grant can no longer be valid
   const id = await holdWithCourier(LOOSE_COURIER);
   assert.ok(describeHeld(id).unrecordedGrantUntil);
   const record = readRecord(id);
-  record.held.unrecordedGrantUntil = new Date(Date.now() - 1000).toISOString(); // describeHeld reads the real clock
+  record.unrecordedGrantUntil = new Date(Date.now() - 1000).toISOString(); // describeHeld reads the real clock
   writeSecure(recordPath(id), record);
   assert.equal(describeHeld(id).unrecordedGrantUntil, undefined);
   assert.doesNotMatch(heldFactsText(describeHeld(id)), /could not be written down/);
@@ -715,4 +715,134 @@ test('F-2 an update that the reader would hide is not written: the record stays 
   assert.deepEqual(listGrants(id).map((g) => [g.attempt, g.cid, g.late]), [[grant.attempt, 'unknown', undefined]]);
   updateGrantLate(id, grant.attempt, { cid: 'out-9', late: 'ok' });
   assert.deepEqual(listGrants(id).map((g) => [g.cid, g.late]), [['out-9', 'ok']]);
+});
+
+// ---- F-A: the unrecorded-grant date is a record-level field: a re-hold, a failed hold, a lost lock or a successful retry never erase or shorten it
+const lockOf = (id) => path.join(home, 'invites', `${id}.lock`);
+const heldFile = (id) => path.join(home, 'invites', `${id}.held.json`);
+const outcome = (w, id) => approve(w, id).then(() => 'ok', (e) => e.code);
+const boom = async () => { throw new Error('acceptB failed early'); };
+const DATE = (offsetMs) => new Date(NOW + offsetMs + 7 * DAY).toISOString();
+
+test('F-A the reviewer\'s probe: a second approve that fails before it asks the node for a grant keeps the date in the record, describeHeld, the text and invite list', async () => {
+  const id = await holdWithCourier(LOOSE_COURIER);
+  const first = readRecord(id).unrecordedGrantUntil;
+  assert.equal(first, DATE(0));
+  assert.equal(await outcome(watcher({ accept: boom }), id), 'internal-error');
+  const record = readRecord(id);
+  assert.equal(record.held.reason, 'internal-error', 'a fresh held was built');
+  assert.equal(record.unrecordedGrantUntil, first);
+  assert.equal(describeHeld(id).unrecordedGrantUntil, first);
+  assert.ok(heldFactsText(describeHeld(id)).includes(`That grant may exist until ${first}.`));
+  assert.equal(listRow(id).unrecordedGrantUntil, first);
+  assert.ok(noticeText(notices.filter((n) => n.kind === 'invite-held').at(-1)).body.includes(`may exist until ${first}.`), 'the second held notice names it too');
+});
+
+test('F-A two unrecorded events: the later date wins, and an earlier one never shortens it', async () => {
+  const id = await holdWithCourier(LOOSE_COURIER);
+  assert.equal(readRecord(id).unrecordedGrantUntil, DATE(0));
+  clock = NOW + 3 * 3600e3;
+  delegateScript[delegations] = 'hang';
+  assert.equal(await outcome(watcher(), id), 'node-timeout');
+  assert.equal(readRecord(id).unrecordedGrantUntil, DATE(3 * 3600e3), 'later');
+  clock = NOW + 1 * 3600e3; // an event that would end EARLIER
+  delegateScript[delegations] = 'hang';
+  assert.equal(await outcome(watcher(), id), 'node-timeout');
+  assert.equal(readRecord(id).unrecordedGrantUntil, DATE(3 * 3600e3), 'not shortened');
+  assert.equal(listRow(id).unrecordedGrantUntil, DATE(3 * 3600e3));
+});
+
+test('F-A a successful retry keeps the date (the grant it made does not replace the one that was lost); the finished invite still lists it', async () => {
+  const id = await holdWithCourier(LOOSE_COURIER);
+  const first = readRecord(id).unrecordedGrantUntil;
+  assert.equal(await outcome(watcher(), id), 'ok');
+  assert.equal(readRecord(id).status, 'completed');
+  assert.equal(readRecord(id).unrecordedGrantUntil, first);
+  assert.equal(listRow(id).unrecordedGrantUntil, first);
+});
+
+test('F-A a hold that fails leaves the invite consumed WITH the date (it is written before the hold)', async () => {
+  const id = newInvite();
+  const body = helloBody(id);
+  body.artifactB.from.courier = LOOSE_COURIER;
+  await kv.put(`${inviteFolder(id)}in/hello.json`, body);
+  fs.mkdirSync(heldFile(id)); // writing the held copy now fails
+  delegateScript[delegations] = 'hang';
+  await watcher().onHello(id);
+  assert.equal(readRecord(id).status, 'consumed', 'the hold failed');
+  assert.equal(readRecord(id).unrecordedGrantUntil, DATE(0));
+});
+
+test('F-A a hold that fails on a later attempt keeps the earlier date', async () => {
+  const id = await holdWithCourier(LOOSE_COURIER);
+  const first = readRecord(id).unrecordedGrantUntil;
+  const failingHold = async () => { fs.rmSync(heldFile(id)); fs.mkdirSync(heldFile(id)); throw new Error('acceptB failed early'); };
+  assert.equal(await outcome(watcher({ accept: failingHold }), id), 'internal-error');
+  assert.equal(readRecord(id).status, 'consumed');
+  assert.equal(readRecord(id).unrecordedGrantUntil, first);
+});
+
+test('F-A a holder whose lock was taken over writes nothing: the date on disk is not changed, also by an unrecorded event of its own', async () => {
+  const id = await holdWithCourier(LOOSE_COURIER);
+  const first = readRecord(id).unrecordedGrantUntil;
+  const before = recordBytes(id);
+  clock = NOW + 3 * 3600e3;
+  delegateScript[delegations] = 'hang';
+  const stealing = (p, n, a, h, deps) => { setTimeout(() => fs.writeFileSync(lockOf(id), 'someone-elses-token'), 10); return realAccept(p, n, a, h, deps); };
+  assert.equal(await outcome(watcher({ accept: stealing }), id), 'invite-lock-lost');
+  assert.equal(readRecord(id).unrecordedGrantUntil, first, 'not moved to the later date by a holder that lost its lock');
+  assert.equal(readRecord(id).status, 'consumed');
+  assert.notEqual(recordBytes(id), before, 'the approve had moved it to consumed before it lost the lock');
+  fs.rmSync(lockOf(id));
+});
+
+test('F-A only the sweep removes the date, once it has passed (also on a finished invite); a sweep before that keeps it', async () => {
+  const id = await holdWithCourier(LOOSE_COURIER);
+  const first = readRecord(id).unrecordedGrantUntil;
+  await watcher({ now: () => new Date(NOW + 3 * 3600e3) }).sweep();
+  assert.equal(readRecord(id).unrecordedGrantUntil, first, 'not yet');
+  assert.equal(await outcome(watcher(), id), 'ok');
+  await watcher({ now: () => new Date(Date.parse(first) - 1000) }).sweep();
+  assert.equal(readRecord(id).unrecordedGrantUntil, first, 'one second before the date');
+  await watcher({ now: () => new Date(Date.parse(first) + 1000) }).sweep();
+  assert.equal(readRecord(id).unrecordedGrantUntil, undefined, 'removed after the date');
+  assert.equal(listRow(id).unrecordedGrantUntil, undefined);
+});
+
+test('F-A the sweep leaves a locked invite for the next sweep, then removes the passed date', async () => {
+  const other = await holdWithCourier(LOOSE_COURIER);
+  fs.writeFileSync(lockOf(other), 'someone-elses-token');
+  await watcher({ now: () => new Date(NOW + 9 * DAY) }).sweep();
+  assert.ok(readRecord(other).unrecordedGrantUntil, 'locked: skipped');
+  fs.rmSync(lockOf(other));
+  await watcher({ now: () => new Date(NOW + 9 * DAY) }).sweep();
+  assert.equal(readRecord(other).unrecordedGrantUntil, undefined);
+});
+
+test('F-A the date never reaches the public copy: the public record has exactly its usual keys and no date', async () => {
+  const id = await holdWithCourier(LOOSE_COURIER, { withPublic: true });
+  const files = fs.readdirSync(publicDir());
+  assert.equal(files.length, 1);
+  const raw = fs.readFileSync(path.join(publicDir(), files[0]), 'utf8');
+  const keys = Object.keys(JSON.parse(raw)).sort();
+  assert.ok(readRecord(id).unrecordedGrantUntil);
+  assert.ok(!raw.includes(readRecord(id).unrecordedGrantUntil) && !/unrecorded/i.test(raw));
+  assert.deepEqual(keys, ['completedPeer', 'createdAt', 'expectEmail', 'expectOwner', 'expiresAt', 'handle', 'heldReason', 'helloOwner', 'inviteId', 'status', 'tier', 'v']);
+});
+
+test('F-A migration: a record that has the date inside `held` (the previous commit) is read with it lifted to the record, and the next write keeps it there', async () => {
+  const id = await holdWithCourier(LOOSE_COURIER);
+  const first = readRecord(id).unrecordedGrantUntil;
+  const stored = JSON.parse(recordBytes(id));
+  delete stored.unrecordedGrantUntil;
+  stored.held.unrecordedGrantUntil = first;
+  fs.writeFileSync(recordPath(id), JSON.stringify(stored));
+  assert.equal(readRecord(id).unrecordedGrantUntil, first);
+  assert.equal(readRecord(id).held.unrecordedGrantUntil, undefined);
+  assert.equal(describeHeld(id).unrecordedGrantUntil, first);
+  assert.equal(listRow(id).unrecordedGrantUntil, first);
+  assert.equal(await outcome(watcher({ accept: boom }), id), 'internal-error');
+  const after = JSON.parse(recordBytes(id));
+  assert.equal(after.unrecordedGrantUntil, first);
+  assert.equal(after.held.unrecordedGrantUntil, undefined);
 });

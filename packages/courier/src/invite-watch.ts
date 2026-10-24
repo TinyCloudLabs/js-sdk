@@ -48,7 +48,13 @@ export interface InviteRecord {
   status: InviteStatus;
   /** Public record directory, resolved from --invites-public-dir or the env at create. Unset means no public copy. */
   publicDir?: string;
-  held?: { reason: string; at: string; owner?: string; courierDid?: string; unrecordedGrantUntil?: string };
+  held?: { reason: string; at: string; owner?: string; courierDid?: string };
+  /**
+   * Private. Latest end of a read grant that may exist but could not be written down (no courier is known for it). A record-level field, so a fresh `held`
+   * cannot erase it: it only ever moves later (max with the previous still-future date), and only the sweep removes it, once the date has passed.
+   * Never part of the public copy.
+   */
+  unrecordedGrantUntil?: string;
   /** Artifact C, persisted before the Welcome write so a retried approve reuses it instead of pairing again. */
   artifactC?: Welcome['artifactC'];
   completedPeer?: { handle: string; courierDid: string; ownerDid: string };
@@ -176,7 +182,20 @@ export function readJson<T>(file: string): T | undefined {
   return JSON.parse(fs.readFileSync(file, 'utf8')) as T;
 }
 
-export const readRecord = (id: string) => readJson<InviteRecord>(recordPath(id));
+/** A record written while this date lived inside `held` (an earlier build of this branch): lifted to the record-level field, in memory; the next write keeps it. */
+function liftUnrecorded(record: InviteRecord): InviteRecord {
+  const legacy = (record.held as { unrecordedGrantUntil?: string } | undefined)?.unrecordedGrantUntil;
+  if (legacy === undefined) return record;
+  delete (record.held as { unrecordedGrantUntil?: string }).unrecordedGrantUntil;
+  record.unrecordedGrantUntil = laterDate(record.unrecordedGrantUntil, legacy);
+  return record;
+}
+const laterDate = (a: string | undefined, b: string | undefined): string | undefined => (a === undefined ? b : b === undefined ? a : Date.parse(a) >= Date.parse(b) ? a : b);
+
+export const readRecord = (id: string): InviteRecord | undefined => {
+  const record = readJson<InviteRecord>(recordPath(id));
+  return record ? liftUnrecorded(record) : undefined;
+};
 export const writeRecord = (record: InviteRecord) => writeSecure(recordPath(record.inviteId), record);
 
 /** Only `<id>.json` records; held hellos and the seen-credential file are excluded by name. */
@@ -184,7 +203,7 @@ export function listRecords(): InviteRecord[] {
   const dir = invitesDir();
   return fs.readdirSync(dir).filter((n) => RECORD_FILE.test(n)).flatMap((n) => {
     const record = readJson<InviteRecord>(path.join(dir, n));
-    return record ? [record] : [];
+    return record ? [liftUnrecorded(record)] : [];
   });
 }
 
@@ -357,8 +376,13 @@ export class InviteWatcher {
   private async sweepOne(listed: InviteRecord): Promise<void> {
     await this.recoverConsumed(listed);
     // The listing can be old (the sweep awaits the node for every record): carry on from what is on disk now, and not at all if it is gone.
-    const record = readRecord(listed.inviteId);
+    let record = readRecord(listed.inviteId);
     if (!record) return;
+    if (record.unrecordedGrantUntil !== undefined && Date.parse(record.unrecordedGrantUntil) <= this.now().getTime()) {
+      await this.dropUnrecorded(record.inviteId);
+      record = readRecord(listed.inviteId);
+      if (!record) return;
+    }
     await this.reconcilePublic(record);
     if (Date.parse(record.expiresAt) > this.now().getTime()) {
       // A missed hook must not strand a hello: the poll runs the same handler. It consumes the hello first, so a hello seen twice pairs once.
@@ -378,6 +402,21 @@ export class InviteWatcher {
       await delIfPresent(this.kv, `${inviteFolder(record.inviteId)}out/welcome.json`);
       record.cleanedAt = this.now().toISOString();
       writeRecord(record);
+    }
+  }
+
+  /** The sweep's only removal of `unrecordedGrantUntil`, once the date has passed (checked again under the lock). A busy invite is left for the next sweep. */
+  private async dropUnrecorded(id: string): Promise<void> {
+    try {
+      await withInviteLock(id, this.env.timing, async (guard) => {
+        const record = readRecord(id);
+        if (!record?.unrecordedGrantUntil || Date.parse(record.unrecordedGrantUntil) > this.now().getTime()) return;
+        this.cas(id, claimOf(record), guard);
+        delete record.unrecordedGrantUntil;
+        writeRecord(record);
+      });
+    } catch (e) {
+      if (!(e instanceof CourierError && (e.code === 'invite-busy' || e.code === 'invite-lock-lost'))) throw e;
     }
   }
 
@@ -583,8 +622,7 @@ export class InviteWatcher {
     let outgoing: { cid: string; expiresAt: string } | undefined;
     let persisted = record.artifactC !== undefined;
     let grantRecorded = false;
-    // Set when a grant that may exist could not be written down: the hold then carries its latest end to the owner (no DID is shown for it).
-    let unrecordedGrantUntil: string | undefined;
+    let unrecordedNow = false;
     let space = '';
     const recordPossibleGrant = (cause: 'timeout' | 'error'): void => {
       // Writing this down must never get in the way of holding the invite: a failure here is logged and the hold goes on.
@@ -600,7 +638,11 @@ export class InviteWatcher {
         grantRecorded = true;
         this.env.log({ event: 'invite-possible-grant', inviteId: record.inviteId, cid: outgoing?.cid ?? 'unknown' });
       } catch (e) {
-        unrecordedGrantUntil = outgoing?.expiresAt ?? new Date(this.now().getTime() + GRANT_LIFETIME_MS).toISOString();
+        // A grant that may exist but could not be written down: its latest end goes on the record itself (never shortened), and is shown to the owner with no DID.
+        const until = outgoing?.expiresAt ?? new Date(this.now().getTime() + GRANT_LIFETIME_MS).toISOString();
+        const previous = record.unrecordedGrantUntil !== undefined && Date.parse(record.unrecordedGrantUntil) > this.now().getTime() ? record.unrecordedGrantUntil : undefined;
+        record.unrecordedGrantUntil = laterDate(previous, until);
+        unrecordedNow = true;
         this.env.log({ event: 'invite-possible-grant-failed', inviteId: record.inviteId, reason: reasonOf(e) });
       }
     };
@@ -653,7 +695,9 @@ export class InviteWatcher {
       this.env.log({ event: 'invite-error', inviteId: record.inviteId, reason: reasonOf(e) });
       delete record.completedPeer;
       record.status = 'consumed';
-      await this.hold(record, hello, timedOut ? 'node-timeout' : 'internal-error', guard, unrecordedGrantUntil);
+      // Written to the record at once, not only with the hold: a hold that fails leaves the invite consumed for the sweep, and the date must survive that.
+      if (unrecordedNow) this.saveUnrecorded(record, claim, guard);
+      await this.hold(record, hello, timedOut ? 'node-timeout' : 'internal-error', guard);
       if (timedOut) return 'node-timeout';
       return e instanceof CourierError && e.code === 'welcome-exists' ? 'welcome-exists' : 'internal-error';
     }
@@ -664,11 +708,21 @@ export class InviteWatcher {
     return undefined;
   }
 
+  /** Persists the record with its unrecorded-grant date while the invite is still `consumed` by this holder. A lost lock writes nothing; any other failure is logged. */
+  private saveUnrecorded(record: InviteRecord, claim: Claim, guard: LockGuard | undefined): void {
+    try {
+      this.cas(record.inviteId, claim, guard);
+      writeRecord(record);
+    } catch (e) {
+      this.env.log({ event: 'invite-possible-grant-failed', inviteId: record.inviteId, reason: reasonOf(e) });
+    }
+  }
+
   /**
    * Stores the hello for a decision, then removes the remote copy. The remote copy goes only after the held copy is written, so a crash
    * in between leaves a hello to recover. A failure here leaves the invite consumed; the next sweep holds it and notifies once.
    */
-  private async hold(record: InviteRecord, hello: Hello, reason: string, guard?: LockGuard, unrecordedGrantUntil?: string): Promise<void> {
+  private async hold(record: InviteRecord, hello: Hello, reason: string, guard?: LockGuard): Promise<void> {
     const claim = consumedClaim(record);
     try {
       this.cas(record.inviteId, claim, guard);
@@ -676,7 +730,7 @@ export class InviteWatcher {
       await delIfPresent(this.kv, `${inviteFolder(record.inviteId)}in/hello.json`);
       this.cas(record.inviteId, claim, guard);
       record.status = 'held';
-      record.held = { reason, at: this.now().toISOString(), owner: hello.artifactB.from.owner, courierDid: hello.artifactB.from.courier, ...(unrecordedGrantUntil ? { unrecordedGrantUntil } : {}) };
+      record.held = { reason, at: this.now().toISOString(), owner: hello.artifactB.from.owner, courierDid: hello.artifactB.from.courier };
       writeRecord(record);
     } catch (e) {
       if (e instanceof CourierError && e.code === 'invite-lock-lost') throw e;
@@ -869,9 +923,9 @@ export interface HeldFacts {
   unrecordedGrantUntil?: string;
 }
 
-/** The end of a read grant that may exist but is not on file (`held.unrecordedGrantUntil`), while it can still be valid. */
+/** The end of a read grant that may exist but is not on file (`unrecordedGrantUntil` on the record), while it can still be valid. */
 function unrecordedUntil(record: InviteRecord, nowMs: number): string | undefined {
-  const until = record.held?.unrecordedGrantUntil;
+  const until = record.unrecordedGrantUntil;
   return until !== undefined && Date.parse(until) > nowMs ? until : undefined;
 }
 
