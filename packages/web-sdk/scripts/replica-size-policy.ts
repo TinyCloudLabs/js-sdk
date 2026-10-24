@@ -278,6 +278,12 @@ export type Tc1855ManifestLimitGuardRatchet = HardeningRatchet;
  * hardening row.
  */
 export type Tc1488SiweDomainUriRatchet = HardeningRatchet;
+/**
+ * One reviewed exact-byte row (js-sdk #708, TC-1737): short-link code reached the kv-storage and replica workers. Same
+ * shape as the #565 hardening row, plus `replicaWorker`: the replica worker's own delta and ceiling, because a row's
+ * `worker` field is the kv-storage worker's.
+ */
+export type Tc1737ShortLinkLazyChunkRatchet = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -315,6 +321,7 @@ export type Ledger = {
   tc1781DecryptStandardExpiryRatchet?: Tc1781DecryptStandardExpiryRatchet;
   tc1855ManifestLimitGuardRatchet?: Tc1855ManifestLimitGuardRatchet;
   tc1488SiweDomainUriRatchet?: Tc1488SiweDomainUriRatchet;
+  tc1737ShortLinkLazyChunkRatchet?: Tc1737ShortLinkLazyChunkRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -882,6 +889,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc1781DecryptStandardExpiryRatchet !== undefined) pins.push({ row: "tc1781DecryptStandardExpiryRatchet", pin: root.tc1781DecryptStandardExpiryRatchet.sourceCommits.at(-1)! });
   if (root.tc1855ManifestLimitGuardRatchet !== undefined) pins.push({ row: "tc1855ManifestLimitGuardRatchet", pin: root.tc1855ManifestLimitGuardRatchet.sourceCommits.at(-1)! });
   if (root.tc1488SiweDomainUriRatchet !== undefined) pins.push({ row: "tc1488SiweDomainUriRatchet", pin: root.tc1488SiweDomainUriRatchet.sourceCommits.at(-1)! });
+  if (root.tc1737ShortLinkLazyChunkRatchet !== undefined) pins.push({ row: "tc1737ShortLinkLazyChunkRatchet", pin: root.tc1737ShortLinkLazyChunkRatchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -925,6 +933,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc1781DecryptStandardExpiryRatchet", root.tc1781DecryptStandardExpiryRatchet?.root.ceiling],
     ["tc1855ManifestLimitGuardRatchet", root.tc1855ManifestLimitGuardRatchet?.root.ceiling],
     ["tc1488SiweDomainUriRatchet", root.tc1488SiweDomainUriRatchet?.root.ceiling],
+    ["tc1737ShortLinkLazyChunkRatchet", root.tc1737ShortLinkLazyChunkRatchet?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -1536,6 +1545,44 @@ export const approvedTc1488SiweDomainUriRatchet: Tc1488SiweDomainUriRatchet = {
   reason: "the browser SIWE domain and URI follow the page origin (TC-1488, #604): +35 B mjs / +35 B cjs gzip",
 };
 
+/**
+ * Short links v=4 (js-sdk #708, TC-1737), accepted by Naomi: short-link code in sdk-core/share-envelope reached the
+ * worker bundles. The kv-storage worker ceiling (`MAX_WORKER_GZIP_BYTES`) rises from 776,128 to 776,174 (+46) and the
+ * replica worker ceiling (`MAX_REPLICA_WORKER_GZIP_BYTES`, the row's `replicaWorker`) from 770,093 to 770,113 (+20),
+ * the bytes canonical CI printed on the #708 head c5c63cf7 (Replica run 40128909084). The root ceilings are those of
+ * the previous newest row until the root step prints its bytes. First-import and activation ceilings are unchanged.
+ */
+export const approvedTc1737ShortLinkLazyChunkRatchet: Tc1737ShortLinkLazyChunkRatchet = {
+  label: "short links v=4 (TC-1737, #708): worker ceilings +46 B kv-storage / +20 B replica at the exact CI bytes; root ceilings carried from the previous row until the next CI run",
+  ruling: "Approved by Naomi (worker +46 B kv-storage / +20 B replica at the exact CI bytes, no headroom; test-ruling: TC-1976)",
+  base: "e6aad66159e81b47c937da584a4c7f019be54100",
+  sourceCommits: [
+    "c5c63cf762700b75e420557979d14dce6837fed7",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40128909084",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40128909084/job/120976213551",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40128909084/job/120976213508",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 0, "index.cjs": 0 },
+    ceiling: { "index.mjs": 1462509, "index.cjs": 1404776 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 51925, "replica.cjs": 67141 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23117, "activation.cjs": 24700 },
+  },
+  worker: { delta: 46, ceiling: 776174 },
+  replicaWorker: { delta: 20, ceiling: 770113 },
+  reason: "short-link code in sdk-core/share-envelope reached the worker bundles; accepted for the short-links release; follow-up ticket to keep it out.",
+};
+
 export type GatedOnlyRatchet = {
   label: string;
   sourceCommit: string;
@@ -1601,6 +1648,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc1781DecryptStandardExpiryRatchet: approvedTc1781DecryptStandardExpiryRatchet,
   tc1855ManifestLimitGuardRatchet: approvedTc1855ManifestLimitGuardRatchet,
   tc1488SiweDomainUriRatchet: approvedTc1488SiweDomainUriRatchet,
+  tc1737ShortLinkLazyChunkRatchet: approvedTc1737ShortLinkLazyChunkRatchet,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -1782,6 +1830,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc1855ManifestLimitGuardRatchet || JSON.stringify(value.tc1488SiweDomainUriRatchet) !== JSON.stringify(approvedTc1488SiweDomainUriRatchet))) {
     throw new Error("Only Naomi's exact canonical SIWE domain and URI ratchet is approved.");
   }
+  if (value.tc1737ShortLinkLazyChunkRatchet !== undefined &&
+      (!value.tc1488SiweDomainUriRatchet || JSON.stringify(value.tc1737ShortLinkLazyChunkRatchet) !== JSON.stringify(approvedTc1737ShortLinkLazyChunkRatchet))) {
+    throw new Error("Only Naomi's exact canonical short-link ratchet is approved.");
+  }
 }
 
 /** The #606 worker ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
@@ -1917,6 +1969,14 @@ export function validateTc1488SiweDomainUriRatchetTransition(base?: Tc1488SiweDo
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1488SiweDomainUriRatchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact TC-1488 SIWE domain and URI ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-1737 short-link ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc1737ShortLinkLazyChunkRatchetTransition(base?: Tc1737ShortLinkLazyChunkRatchet, current?: Tc1737ShortLinkLazyChunkRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1737ShortLinkLazyChunkRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-1737 short-link ratchet may be introduced once and cannot change later.");
   }
 }
 

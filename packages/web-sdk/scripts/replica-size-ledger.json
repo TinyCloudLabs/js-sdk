@@ -1531,5 +1531,59 @@
       "ceiling": 776128
     },
     "reason": "the browser SIWE domain and URI follow the page origin (TC-1488, #604): +35 B mjs / +35 B cjs gzip"
+  },
+  "tc1737ShortLinkLazyChunkRatchet": {
+    "label": "short links v=4 (TC-1737, #708): worker ceilings +46 B kv-storage / +20 B replica at the exact CI bytes; root ceilings carried from the previous row until the next CI run",
+    "ruling": "Approved by Naomi (worker +46 B kv-storage / +20 B replica at the exact CI bytes, no headroom; test-ruling: TC-1976)",
+    "base": "e6aad66159e81b47c937da584a4c7f019be54100",
+    "sourceCommits": [
+      "c5c63cf762700b75e420557979d14dce6837fed7"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40128909084",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40128909084/job/120976213551",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40128909084/job/120976213508"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 0,
+        "index.cjs": 0
+      },
+      "ceiling": {
+        "index.mjs": 1462509,
+        "index.cjs": 1404776
+      }
+    },
+    "firstImport": {
+      "delta": {
+        "replica.mjs": 0,
+        "replica.cjs": 0
+      },
+      "ceiling": {
+        "replica.mjs": 51925,
+        "replica.cjs": 67141
+      }
+    },
+    "activation": {
+      "delta": {
+        "activation.mjs": 0,
+        "activation.cjs": 0
+      },
+      "ceiling": {
+        "activation.mjs": 23117,
+        "activation.cjs": 24700
+      }
+    },
+    "worker": {
+      "delta": 46,
+      "ceiling": 776174
+    },
+    "replicaWorker": {
+      "delta": 20,
+      "ceiling": 770113
+    },
+    "reason": "short-link code in sdk-core/share-envelope reached the worker bundles; accepted for the short-links release; follow-up ticket to keep it out."
   }
 }

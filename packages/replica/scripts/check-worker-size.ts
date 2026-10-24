@@ -21,12 +21,15 @@ import { join, resolve } from "node:path";
 // approved by Naomi, 2026-10-19; the ledger's tc606WorkerRatchet row records it.
 // #694 (TC-1827: replica workers import only the KV service and its ServiceContext) measured 776,128 (-46,625) in GitHub
 // run 39943720009 (head 7a7303a8, merge base 6076581d); approved by Naomi, 2026-10-23; the ledger's tc1827WorkerRatchet row records it.
-// Zero additional headroom; independent of the web-sdk ledger, including WASM.
-export const MAX_WORKER_GZIP_BYTES = 776_128;
+// #708 (TC-1737, short links v=4) measured 776,174 (+46) in the same run; approved by Naomi; the ledger's
+// tc1737ShortLinkLazyChunkRatchet row records it. Zero additional headroom; independent of the web-sdk ledger, including WASM.
+export const MAX_WORKER_GZIP_BYTES = 776_174;
 // TC-1827 follow-up: `replica.worker.js` (the @tinycloud/replica/browser worker) is unhashed and had no ceiling. It
 // measured 770,093 in GitHub run 39949887460 (head f2e2f9fc, merge base dc615834); requested by Naomi, 2026-10-23; the
 // ledger's tc1827ReplicaWorkerRatchet row records it. Zero additional headroom.
-export const MAX_REPLICA_WORKER_GZIP_BYTES = 770_093;
+// #708 (TC-1737, short links v=4) measured 770,113 (+20) in GitHub run 40128909084 (head c5c63cf7); approved by Naomi;
+// the ledger's tc1737ShortLinkLazyChunkRatchet row (`replicaWorker`) records it. Zero additional headroom.
+export const MAX_REPLICA_WORKER_GZIP_BYTES = 770_113;
 const canonicalName = /^kv-storage\.worker\.([0-9a-f]{64})\.js$/;
 const replicaWorkerName = "replica.worker.js";
 
