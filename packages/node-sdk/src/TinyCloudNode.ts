@@ -39,12 +39,12 @@ import type { KVReplicaStorage, ReplicationAuthority, ReplicationControl, Replic
 import type {
   ReplicaDenyInput,
   ReplicaGateReason,
-  ReplicaLocalEraseOutcome,
   ReplicaPurgeError,
   ReplicaPurgeFailedEvent,
   ReplicaPurgeTrigger,
   ReplicaSessionStamp,
 } from "@tinycloud/sdk-services/kv/replication";
+import type { ReplicaLocalEraseReport } from "./replication/authority";
 import type { ReplicationRuntime } from "./replication/runtime";
 import { getNodeReplicationLoaders } from "./replication/module-registry";
 import {
@@ -1819,11 +1819,8 @@ export class TinyCloudNode {
             : runtime.then((ready) => ready.control.purge(input));
         },
         clearPending: async () => (await runtime).control.clearPending(),
-        purgeLocalCopy: async () => {
-          const erased = await this.eraseReplicaLocalCopy("purge_local_copy");
-          if (erased?.status === "erased") return { ok: true as const };
-          return { ok: false as const, retryNow: erased?.status === "failed" };
-        },
+        purgeLocalCopy: async () =>
+          (await this.eraseReplicaLocalCopy("purge_local_copy"))?.purge ?? { ok: false as const, retryNow: false },
         close: async () => (await runtime).control.close(),
       };
     }
@@ -2274,7 +2271,7 @@ export class TinyCloudNode {
     const leavingAuth = this.auth;
     const leavingContext = this._serviceContext;
     let denied: { status: string; code?: string } | undefined;
-    let erased: ReplicaLocalEraseOutcome | undefined;
+    let erased: ReplicaLocalEraseReport | undefined;
     try {
       this.teardownSession();
     } finally {
@@ -2300,13 +2297,13 @@ export class TinyCloudNode {
         }
       }
     }
-    if (denied?.status === "unguarded" && erased?.status !== "erased") {
+    if (denied?.status === "unguarded" && erased?.outcome.status !== "erased") {
       throw Object.assign(
         new Error(`Replica gate was not denied (${denied.code ?? "unknown"}); the replica may still be restorable.`),
         {
           code: "REPLICA_PURGE_FAILED" as const,
           reason: "gate_unavailable" as const,
-          retryNow: erased?.status === "failed",
+          retryNow: erased?.outcome.status === "failed",
         } satisfies Omit<ReplicaPurgeError, keyof Error>,
       );
     }
@@ -2320,7 +2317,7 @@ export class TinyCloudNode {
   private async eraseReplicaLocalCopy(
     trigger: ReplicaPurgeTrigger,
     denyStatus?: string,
-  ): Promise<ReplicaLocalEraseOutcome | undefined> {
+  ): Promise<ReplicaLocalEraseReport | undefined> {
     const replication = this.config.replication;
     if (!replication?.enabled) return undefined;
     try {
@@ -2329,7 +2326,7 @@ export class TinyCloudNode {
         replication.storage.lifecycle, trigger, denyStatus, this.replicaPurgeFailedHandlers,
       );
       if (erased?.logoutPending) this.replicaRestoreGate = "logout_pending";
-      return erased?.outcome;
+      return erased;
     } catch {
       return undefined;
     }

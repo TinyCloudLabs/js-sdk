@@ -324,3 +324,97 @@ describe("account switch erases the old account's local copy before the new sign
     });
   });
 });
+
+/** The deny falls back to a delete that fails and the marker write is dropped: outcome `unguarded`, tombstone advanced. */
+async function signOutUnguardedWithAdvancedTombstone(
+  node: TinyCloudNode,
+  entries: Map<string, string>,
+): Promise<void> {
+  const original = Object.getOwnPropertyDescriptor(globalThis, "localStorage")!;
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: {
+      ...(original.value as object),
+      setItem: (key: string, value: string) => { if (key !== markerKey) entries.set(key, value); },
+    },
+  });
+  const clearTx = injectDenyFailure("deny_tx");
+  const clearDelete = injectDenyFailure("delete_database"); // consumed by the deny fallback
+  try {
+    await node.signOut();
+  } finally {
+    clearTx();
+    clearDelete();
+    Object.defineProperty(globalThis, "localStorage", original);
+  }
+}
+
+describe("unguarded deny whose tombstone advanced", () => {
+  test("a delete that works resolves signOut: the keys-kept database is gone", async () => {
+    await withBrowserOrigin(async (lifecycle, entries) => {
+      const { node, failures } = await restoredNode(lifecycle);
+
+      await expect(signOutUnguardedWithAdvancedTombstone(node, entries)).resolves.toBeUndefined();
+
+      expect(node.address).toBeUndefined();
+      expect(await databaseListed()).toBe(false);
+      expect(await inspectReplicaKeyPresence()).toEqual({ gateHmac: false, accountKey: false });
+      expect(entries.has(tombstoneKey)).toBe(true);
+      expect(entries.has(markerKey)).toBe(false);
+      expect(failures).toEqual([]);
+    });
+  });
+});
+
+describe("a replication chunk that fails to load never reports an erase", () => {
+  const failingAuthority = () => registerReplicationLoaders({
+    ...loaders(),
+    runtime: async () => ({ ReplicationRuntime: StubRuntime }) as never,
+    gate: async () => { throw new Error("Browser restore must not load the file gate."); },
+    authority: async () => { throw new Error("chunk load failed"); },
+  });
+  const workingAuthority = () => registerReplicationLoaders({
+    ...loaders(),
+    runtime: async () => ({ ReplicationRuntime: StubRuntime }) as never,
+    gate: async () => { throw new Error("Browser restore must not load the file gate."); },
+  });
+
+  test("denied: signOut resolves, the copy stays (ciphertext without keys), purgeLocalCopy fails closed, a later load erases it", async () => {
+    await withBrowserOrigin(async (lifecycle, entries) => {
+      const { node, failures } = await restoredNode(lifecycle);
+      failingAuthority();
+
+      await expect(node.signOut()).resolves.toBeUndefined();
+
+      expect(await databaseListed()).toBe(true);
+      expect(await inspectReplicaKeyPresence()).toEqual({ gateHmac: false, accountKey: false });
+      expect(await node.replication!.purgeLocalCopy()).toEqual({ ok: false, retryNow: false });
+      expect(await databaseListed()).toBe(true);
+      expect(failures).toEqual([]);
+
+      workingAuthority();
+      expect(await node.replication!.purgeLocalCopy()).toEqual({ ok: true });
+      expect(await databaseListed()).toBe(false);
+      expect(entries.has(tombstoneKey)).toBe(true);
+    });
+  });
+
+  test("unguarded: signOut still rejects, because the erase is not reported as done", async () => {
+    await withBrowserOrigin(async (lifecycle, entries) => {
+      const { node } = await restoredNode(lifecycle);
+      failingAuthority();
+
+      await expect(signOutUnguardedWithAdvancedTombstone(node, entries)).rejects.toMatchObject({
+        code: "REPLICA_PURGE_FAILED", reason: "gate_unavailable", retryNow: false,
+      });
+
+      expect(await databaseListed()).toBe(true);
+      expect(await inspectReplicaKeyPresence()).toEqual({ gateHmac: true, accountKey: true });
+
+      workingAuthority();
+      expect(await node.replication!.purgeLocalCopy()).toEqual({ ok: true });
+      expect(await databaseListed()).toBe(false);
+      expect(await inspectReplicaKeyPresence()).toEqual({ gateHmac: false, accountKey: false });
+    });
+  });
+});
