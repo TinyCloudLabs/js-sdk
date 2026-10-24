@@ -12,6 +12,7 @@ import { PANEL_CSS } from "./panel-styles";
 import { PANEL_SECTIONS } from "./sections";
 import { createSectionData } from "./section-data";
 import { createSectionDialogs } from "./section-dialogs";
+import { createSignOutGuard } from "./sign-out-purge";
 import { panelText } from "./strings-panel";
 import type { HostContext, PanelSection, SectionContext, SectionId } from "./slots";
 import type { ToastStore } from "./toast-store";
@@ -56,8 +57,11 @@ export function mountPanel(root: ShadowRoot, options: Omit<PanelOptions, "onNavi
   const region = layer ? mountToastRegion(layer, toasts, (request) => base.toast(request)) : undefined;
   const data = createSectionData(() => base.client()?.data);
   const dialogs = createSectionDialogs(() => sectionEl);
+  const guardSignOut = createSignOutGuard((request) => base.toast(request));
   const context: SectionContext = {
     ...base,
+    // Sections see the client with sign-out removing the local copy once the session has ended.
+    client: () => guardSignOut(base.client()),
     text: panelText,
     data,
     layout: () => view.layout,
