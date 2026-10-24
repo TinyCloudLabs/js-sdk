@@ -218,3 +218,51 @@ describe("real adapter: delegation cursors across account reset", () => {
     expect((await data.delegations("cur-B")).state).toBe("ready");
   });
 });
+
+describe("real adapter: account reset while identity or revoke reads are in flight", () => {
+  test("a revoke whose status check resolves after reset is not sent", async () => {
+    const h = fakeHost();
+    const c = fakeClient();
+    const data = createRealPanelData(h.host, c.client, "app");
+
+    const held = deferred<unknown>();
+    h.queues.status.push(held);
+    const pending = data.revoke("c1");
+    c.reset();
+    held.resolve({ ok: true, data: { status: "active" } });
+
+    const outcome = await pending;
+    expect(h.calls.revoke).toEqual([]);
+    expect(outcome.ok).toBe(false);
+  });
+
+  test("nodes() resolving after reset does not mark the previous account's node active", async () => {
+    const h = fakeHost();
+    const c = fakeClient();
+    const data = createRealPanelData(h.host, c.client, "app");
+
+    const held = deferred<unknown>();
+    h.queues.identity.push(held);
+    const pending = data.nodes();
+    c.reset();
+    held.resolve({ origin: NODE, nodeDid: "did:key:node-old" });
+
+    const view = await pending;
+    expect(view.state).toBe("loading");
+  });
+
+  test("localNode() resolving after reset does not return the previous identity", async () => {
+    const h = fakeHost();
+    const c = fakeClient();
+    const data = createRealPanelData(h.host, c.client, "app");
+
+    const held = deferred<unknown>();
+    h.queues.identity.push(held);
+    const pending = data.localNode();
+    c.reset();
+    held.resolve({ origin: NODE, nodeDid: "did:key:node-old" });
+
+    const view = await pending;
+    expect(view.state).toBe("loading");
+  });
+});

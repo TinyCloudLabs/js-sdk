@@ -210,7 +210,9 @@ export function createRealPanelData(
     account: () => read("account", ACCOUNT_TTL_MS, fetchAccount),
 
     async localNode(): Promise<ViewResult<LocalNodeState>> {
+      const run = epoch;
       const identity = await host.activeNodeIdentity().catch(() => undefined);
+      if (run !== epoch) return viewLoading<LocalNodeState>();
       return viewReady({
         source: "real",
         fieldSources: { connection: "stub", version: "stub" },
@@ -247,7 +249,9 @@ export function createRealPanelData(
 
     async revoke(cid: string): Promise<RevokeOutcome> {
       // The node is the arbiter: check the current status before acting.
+      const run = epoch;
       const before = await host.delegations.status(cid);
+      if (run !== epoch) return { ok: false, code: "stale" };
       if (before.ok === false) return { ok: false, code: before.error.code };
       if (before.data.status !== "active") {
         return { ok: false, code: "not-revocable" };
@@ -262,7 +266,9 @@ export function createRealPanelData(
     },
 
     async nodes(): Promise<ViewResult<readonly NodeRow[]>> {
+      const run = epoch;
       const identity = await host.activeNodeIdentity().catch(() => undefined);
+      if (run !== epoch) return viewLoading<readonly NodeRow[]>();
       return viewReady(
         host.hosts.map((origin): NodeRow => {
           const active = identity !== undefined && identity.origin === origin;
