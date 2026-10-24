@@ -1,7 +1,7 @@
 import type { IStorageService } from "@tinycloud/sdk-core";
 
 import type { PanelDataFactory, PanelDataSource } from "./data";
-import type { PanelClient, SyncFacade } from "./slots";
+import type { PanelClient, PurgeLocalCopyResult, SyncFacade } from "./slots";
 
 /**
  * What the UI reads from a TinyCloudWeb instance. The panel never sees
@@ -14,6 +14,8 @@ export interface ClientSource {
   readonly storageEpisode?: PanelClient["storageEpisode"];
   /** Signs out of the TinyCloud session. Undefined when the host cannot sign out. */
   signOut?: (() => Promise<void>) | undefined;
+  /** Removes the local copy from this browser; the panel calls it after sign-out settles. Undefined: nothing to purge. */
+  purgeLocalCopy?: (() => Promise<PurgeLocalCopyResult>) | undefined;
 }
 
 export interface PanelClientHandle {
@@ -56,6 +58,7 @@ export function createPanelClient(
     requestAuthority: undefined,
     requests: undefined,
     signOut: source.signOut,
+    purgeLocalCopy: source.purgeLocalCopy,
   };
 
   return {
