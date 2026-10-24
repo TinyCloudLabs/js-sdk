@@ -21,8 +21,9 @@ interface Spec {
 
 const SPECS: readonly Spec[] = [
   { cid: "bafyEXAMPLEd1k2dq", group: "this-app", label: "Fieldnotes · this browser", did: "did:key:z6MkEXAMPLEaW9d", space: "Personal", paths: ["notes/", "recordings/"], actions: ["get", "put", "list"], createdMin: -1068, expMin: 372, terminal: false },
-  { cid: "bafyEXAMPLEd2r8uv", group: "this-app", label: "Fieldnotes · local copy", did: "did:key:z6MkEXAMPLEd4Lp", space: "Personal", paths: ["notes/", "recordings/"], actions: ["get", "put", "list"], createdMin: -1068, expMin: 108, terminal: true, soon: true },
-  { cid: "bafyEXAMPLEd3m3we", group: "this-app", label: "Fieldnotes · audio transcriber", did: "did:key:z6MkEXAMPLEt5Zc", space: "Personal", paths: ["recordings/"], actions: ["get", "list"], createdMin: -1068, expMin: 372, terminal: true },
+  // A helper the app started holds its own key, not the session's, so the real grouping lists it with the others.
+  { cid: "bafyEXAMPLEd2r8uv", group: "to-others", label: "Fieldnotes · local copy", did: "did:key:z6MkEXAMPLEd4Lp", space: "Personal", paths: ["notes/", "recordings/"], actions: ["get", "put", "list"], createdMin: -1068, expMin: 108, terminal: true, soon: true },
+  { cid: "bafyEXAMPLEd3m3we", group: "to-others", label: "Fieldnotes · audio transcriber", did: "did:key:z6MkEXAMPLEt5Zc", space: "Personal", paths: ["recordings/"], actions: ["get", "list"], createdMin: -1068, expMin: 372, terminal: true },
   { cid: "bafyEXAMPLEd4p9ax", group: "to-others", label: "Research helper", did: "did:key:z6MkEXAMPLEv2Hn", space: "Personal", paths: ["notes/"], actions: ["get", "list"], createdMin: -2880, expMin: 7440, terminal: true },
   { cid: "bafyEXAMPLEd5c7hs", group: "to-others", label: "Exo", did: "did:key:z6MkEXAMPLEe1Xo", space: "Personal", paths: ["recordings/"], actions: ["get", "put", "list"], createdMin: -25920, expMin: 16100, terminal: false },
   { cid: "bafyEXAMPLEd6u1ny", group: "to-others", label: "calendar-sync", did: "did:key:z6MkEXAMPLEj6Mk", space: "Work", paths: ["notes/meetings/"], actions: ["get", "put", "list"], createdMin: -12960, expMin: 1210, terminal: true },

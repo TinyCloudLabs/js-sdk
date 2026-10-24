@@ -81,11 +81,12 @@ for (const scheme of ["light", "dark"] as const) {
       await open(page, { scheme });
       await expect(panel(page)).toHaveAttribute("data-layout", "drawer");
       await expect(body(page).locator(".sec-title")).toHaveText("Delegations");
-      await expect(body(page).locator(".dl-h")).toHaveText(["Granted to e2e-settings-smoke3", "Granted to others4"]);
+      await expect(body(page).locator(".dl-h")).toHaveText(["Granted to e2e-settings-smoke1", "Granted to others6"]);
       await expect(cards(page)).toHaveCount(7);
 
       const local = card(page, "Fieldnotes · local copy");
-      await expect(local.locator(".dl-kind")).toContainText("This app");
+      await expect(local.locator(".dl-kind")).toContainText("Granted by you");
+      await expect(card(page, "Fieldnotes · this browser").locator(".dl-kind")).toContainText("This app");
       await expect(local.locator(".dl-what")).toHaveText("Can read, write and list notes/ and recordings/");
       await expect(local.locator(".dl-meta")).toHaveText(/^Personal space · Created 17 h ago · Expires in 1h\u00a048m$/);
       await expect(local.locator(".dl-chip")).toHaveText(["Read", "Write", "List", "Terminal"]);
@@ -109,8 +110,8 @@ for (const scheme of ["light", "dark"] as const) {
       await open(page, { scheme, layout: "page" });
       await expect(panel(page)).toHaveAttribute("data-layout", "page");
       await expect(cards(page)).toHaveCount(7);
-      const a = await card(page, "Fieldnotes · this browser").boundingBox();
-      const b = await card(page, "Fieldnotes · local copy").boundingBox();
+      const a = await card(page, "Fieldnotes · local copy").boundingBox();
+      const b = await card(page, "Fieldnotes · audio transcriber").boundingBox();
       expect(a && b && b.x > a.x + a.width - 1 && Math.abs(a.y - b.y) < 2).toBe(true);
     });
 
@@ -212,7 +213,7 @@ for (const scheme of ["light", "dark"] as const) {
 
     test("the app's own grant names the app on this device and what happens next", async ({ page }) => {
       await open(page, { scheme });
-      const box = await openConfirm(page, "Fieldnotes · local copy");
+      const box = await openConfirm(page, "Fieldnotes · this browser");
       await expect(box).toContainText("Revoke access for e2e-settings-smoke on this device?");
       await expect(box).toContainText("e2e-settings-smoke will stop being able to read, write and list notes/ and recordings/ in your Personal space.");
       await expect(box).toContainText("e2e-settings-smoke will stop working here until you sign in again.");
@@ -220,6 +221,14 @@ for (const scheme of ["light", "dark"] as const) {
       await expect(box.getByRole("button", { name: "Keep access" })).toBeFocused();
       const note = await textRow("consequence", box.locator("p span").nth(1), SURFACE[scheme]);
       expect(note.ratio).toBeGreaterThanOrEqual(4.5);
+    });
+
+    test("a helper the app started is another party's grant: no 'on this device' wording", async ({ page }) => {
+      await open(page, { scheme });
+      const box = await openConfirm(page, "Fieldnotes · local copy");
+      await expect(box).toContainText("Revoke access for Fieldnotes · local copy?");
+      await expect(box).not.toContainText("on this device");
+      await expect(box).not.toContainText("sign in again");
     });
 
     test("Keep access closes the box, changes nothing and puts focus back on Revoke", async ({ page }) => {
@@ -267,12 +276,12 @@ for (const scheme of ["light", "dark"] as const) {
 
       // Busy: the stub answers after a moment, so the card says so and the other Revoke buttons are off.
       await expect(card(page, "Research helper")).toContainText("Revoking…");
-      await expect(card(page, "Exo").getByRole("button", { name: /^Revoke/ })).toBeDisabled();
+      await expect(card(page, "Exo").getByRole("button", { name: /^Revoke/ })).toBeEnabled();
       await expect(card(page, "Research helper")).toBeFocused();
 
       await expect(card(page, "Research helper")).toHaveCount(0);
       await expect(cards(page)).toHaveCount(6);
-      await expect(body(page).locator(".dl-h")).toHaveText(["Granted to e2e-settings-smoke3", "Granted to others3"]);
+      await expect(body(page).locator(".dl-h")).toHaveText(["Granted to e2e-settings-smoke1", "Granted to others5"]);
 
       // The receipt carries the CID and the time, and no receipt id.
       await expect(slips(page)).toHaveCount(1);
@@ -425,7 +434,7 @@ for (const scheme of ["light", "dark"] as const) {
       };
       await open(page, { scheme, layout: "page", seed });
       await expect(cards(page)).toHaveCount(7);
-      await expect(body(page).locator(".dl-h")).toHaveText(["Granted to e2e-settings-smoke3+", "Granted to others4+"]);
+      await expect(body(page).locator(".dl-h")).toHaveText(["Granted to e2e-settings-smoke1+", "Granted to others6+"]);
       await expect(body(page)).toContainText("Showing 7+. There are more.");
 
       const more = body(page).getByRole("button", { name: "Show more" });
@@ -435,12 +444,12 @@ for (const scheme of ["light", "dark"] as const) {
       expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
       await page.keyboard.press("Enter");
       await expect(cards(page)).toHaveCount(9);
-      await expect(body(page).locator(".dl-h")).toHaveText(["Granted to e2e-settings-smoke3+", "Granted to others6+"]);
+      await expect(body(page).locator(".dl-h")).toHaveText(["Granted to e2e-settings-smoke1+", "Granted to others8+"]);
       await expect(more).toBeFocused();
       await page.keyboard.press("Enter");
       // The repeated Late helper 2 is not listed twice.
       await expect(cards(page)).toHaveCount(10);
-      await expect(body(page).locator(".dl-h")).toHaveText(["Granted to e2e-settings-smoke3", "Granted to others7"]);
+      await expect(body(page).locator(".dl-h")).toHaveText(["Granted to e2e-settings-smoke1", "Granted to others9"]);
       await expect(body(page).getByRole("button", { name: "Show more" })).toHaveCount(0);
       await expect(card(page, "Late helper 3")).toBeVisible();
       await expect(body(page).locator(".dl-foot")).toBeHidden();
@@ -475,7 +484,7 @@ for (const scheme of ["light", "dark"] as const) {
 
     test("a received grant gets its own group, a cursor says only the first page is listed", async ({ page }) => {
       await open(page, { scheme, seed: { rows: [...mockupRows(), receivedRow()], nextCursor: "next" } });
-      await expect(body(page).locator(".dl-h")).toHaveText(["Granted to e2e-settings-smoke3+", "Granted to others4+", "Received1+"]);
+      await expect(body(page).locator(".dl-h")).toHaveText(["Granted to e2e-settings-smoke1+", "Granted to others6+", "Received1+"]);
       const received = card(page, "did:key:z6MkEX…LEg7Qa");
       await expect(received.locator(".dl-kind")).toHaveText("Shared with you by did:key:z6MkEX…LEg7Qa");
       await expect(received.locator(".st")).toHaveText("Active");
@@ -506,7 +515,9 @@ test("closing and reopening the panel mid-revoke cannot revoke the same grant tw
   await reopen(page);
   const target = card(page, "Research helper");
   await expect(target).toContainText("Revoking…");
-  for (const button of await body(page).getByRole("button", { name: /^Revoke access for/ }).all()) await expect(button).toBeDisabled();
+  // The lock is on that grant only: the others stay revocable.
+  await expect(target.getByRole("button", { name: /^Revoke access for/ })).toBeDisabled();
+  await expect(card(page, "Exo").getByRole("button", { name: /^Revoke access for/ })).toBeEnabled();
 
   // Not only disabled: forcing the button on and clicking it still opens nothing and calls nothing.
   await target.getByRole("button", { name: /^Revoke access for/ }).evaluate((button: HTMLButtonElement) => {
@@ -558,6 +569,24 @@ test("a name with braces shows in the confirm and the receipt as written", async
   await expect(slips(page)).toContainText("Access revoked");
   await expect(slips(page).locator(".slip")).toContainText("For App {constructor}");
   await expect(slips(page)).not.toContainText("function");
+});
+
+test("a later-page row whose answer was lost says to reload, and Reload list reads the first page again", async ({ page }) => {
+  const late = laterRow(1);
+  await open(page, {
+    seed: { rows: mockupRows(), nextCursor: "p2", pages: { p2: { rows: [late] } }, revokeFails: { [late.cid]: "NETWORK_ERROR" }, revokeDelayMs: 50 },
+  });
+  await body(page).getByRole("button", { name: "Show more" }).click();
+  const box = await openConfirm(page, "Late helper 1");
+  await box.getByRole("button", { name: "Revoke access" }).click();
+  const target = card(page, "Late helper 1");
+  await expect(target.getByRole("alert")).toContainText("We couldn't confirm whether this worked. Reload the list and check.");
+  await expect(target.getByRole("alert")).not.toContainText("re-read");
+  await target.getByRole("button", { name: "Reload list" }).click();
+  await expect(card(page, "Late helper 1")).toHaveCount(0);
+  await expect(cards(page)).toHaveCount(7);
+  await expect(body(page).locator(".sec-title")).toBeFocused();
+  await expect(body(page).getByRole("button", { name: "Show more" })).toBeVisible();
 });
 
 test("reduced motion removes the row at once", async ({ page }) => {
