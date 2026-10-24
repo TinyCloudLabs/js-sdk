@@ -246,21 +246,26 @@ function registerConnectTool(
     async () => {
       const startedAt = performance.now();
       let code = "INTERNAL_ERROR";
+      let text: string;
       try {
         const status = await store.connectStatus(identity.subject, identity.ownerDids);
-        code = status.connected ? "ok" : "authority_required";
+        if (status.connected) {
+          code = "ok";
+          text = "TinyCloud is connected.";
+        } else if (status.approvalUrl === undefined) {
+          code = "unavailable";
+          text = "TinyCloud is unavailable. Call this tool again shortly.";
+        } else {
+          code = "authority_required";
+          text = `TinyCloud approval is required. Open ${status.approvalUrl}, then call this tool again. This link expires at ${status.expiresAt}.`;
+        }
         const visibleStatus = surface === "hosted" ? status : {
           connected: status.connected,
           ...(status.approvalUrl === undefined ? {} : { approvalUrl: status.approvalUrl }),
           ...(status.expiresAt === undefined ? {} : { expiresAt: status.expiresAt }),
         };
         return {
-          content: [{
-            type: "text" as const,
-            text: status.connected
-              ? "TinyCloud is connected."
-              : `TinyCloud approval is required. Open ${status.approvalUrl}, then call this tool again. This link expires at ${status.expiresAt}.`,
-          }],
+          content: [{ type: "text" as const, text }],
           structuredContent: visibleStatus,
         };
       } finally {
