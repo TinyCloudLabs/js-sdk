@@ -42,6 +42,8 @@ const STYLE = `
 .lc-h3::after{content:"";flex:1;height:1px;background:#e4e4e7}
 .lc-cnt{font-weight:500;color:#71717a}
 .lc-wipe p{max-width:56ch;margin:0 0 12px;font-size:14px;line-height:1.45}
+.lc-wipe .lc-wipe-none{max-width:56ch;margin:8px 0 0;font-size:13px}
+.lc-wipe>.action:disabled{opacity:.6;cursor:default}
 .lc-fail{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:12px}
 .lc-fail p{margin:0;font-size:14px}
 .lc-sec .confirm,.lc-sw+.confirm{margin-top:12px}
@@ -155,7 +157,7 @@ function kvRow(label: string, value: string | Node, plain = false, mono = false)
 }
 
 /** Settled on or off; a pending erase warns; transitional states stay neutral. */
-function copyStatus(ctx: SectionContext, copy: LocalCopyStatus): SectionStatus {
+function copyStatus(ctx: SectionContext, copy: Pick<LocalCopyStatus, "effective">): SectionStatus {
   switch (normalizeSyncEffective(copy.effective)) {
     case "on":
       return { text: ctx.text("local-copy.glance.on"), tone: "ok" };
@@ -168,6 +170,18 @@ function copyStatus(ctx: SectionContext, copy: LocalCopyStatus): SectionStatus {
     default:
       return { text: ctx.text("section.status.checking"), tone: "info" };
   }
+}
+
+/**
+ * The rail's and the Overview row's status. It reads the same source as the section body: the client's sync
+ * facade, which is live and synchronous and also drives the switch. The data source's own `effective` is only a
+ * cached copy that can lag or differ (a seed, a stale read), so with a facade it is not consulted. Without a
+ * facade the data source's state is all there is.
+ */
+function railStatus(ctx: SectionContext): SectionStatus | undefined {
+  const state = ctx.client()?.sync?.state;
+  if (state !== undefined) return copyStatus(ctx, state);
+  return viewStatus(ctx, ctx.data.latest("localCopy"), (copy) => copyStatus(ctx, copy));
 }
 
 /** Counts mounts, so each one's description id is unique even if two sections are ever in one tree. */
@@ -294,6 +308,9 @@ function mountLocalCopy(el: HTMLElement, ctx: SectionContext): () => void {
   wipeSec.setAttribute("aria-labelledby", wipeHead.id);
   const wipeBody = textLine("", ctx.text("local-copy.wipe.body"));
   wipeBody.id = `lc-wipe-text-${++mountCount}`;
+  // The note for a copy that is known to be empty: the block stays, as in the mockup, but there is nothing to wipe.
+  const wipeNone = textLine("note lc-wipe-none", ctx.text("local-copy.wipe.none"));
+  wipeNone.id = `lc-wipe-none-${mountCount}`;
   const wipeBtn = document.createElement("button");
   wipeBtn.type = "button";
   wipeBtn.className = "action";
@@ -309,7 +326,7 @@ function mountLocalCopy(el: HTMLElement, ctx: SectionContext): () => void {
   retryBtn.className = "action";
   retryBtn.textContent = ctx.text("local-copy.wipe.retry");
   wipeFail.append(wipeFailText, retryBtn);
-  wipeSec.append(wipeHead, wipeBody, wipeBtn, wipeFail);
+  wipeSec.append(wipeHead, wipeBody, wipeBtn, wipeNone, wipeFail);
 
   el.append(
     style,
@@ -444,8 +461,12 @@ function mountLocalCopy(el: HTMLElement, ctx: SectionContext): () => void {
     }
 
     const offered = wipeOffered();
-    wipeSec.hidden = !offered;
-    wipeBtn.disabled = busy || wiping || effective === "wiping" || effective === "enabling";
+    // Off with a size known to be zero: show the block with its button disabled and a note, rather than hiding it.
+    const nothingToWipe = effective === "off" && copy?.bytesOnDevice === 0;
+    wipeSec.hidden = !offered && !nothingToWipe;
+    wipeNone.hidden = !nothingToWipe;
+    wipeBtn.setAttribute("aria-describedby", nothingToWipe ? `${wipeBody.id} ${wipeNone.id}` : wipeBody.id);
+    wipeBtn.disabled = busy || wiping || !offered || effective === "wiping" || effective === "enabling";
     wipeFail.hidden = !wipeFailed;
     retryBtn.disabled = wipeBtn.disabled;
     // A confirm cannot outlive the state that allowed it, unless it is the one running.
@@ -598,6 +619,8 @@ function mountLocalCopy(el: HTMLElement, ctx: SectionContext): () => void {
 
   const offFacade = sync.subscribe(() => {
     render();
+    // The rail and the Overview row read the facade too: repaint them with the body.
+    ctx.requestRender();
     void load();
   });
   let offSource: (() => void) | undefined;
@@ -657,6 +680,6 @@ export const localCopySection: PanelSection = {
   icon: "sync",
   summaryCode: "local-copy.summary",
   isAvailable: (ctx) => ctx.client()?.sync !== undefined,
-  status: (ctx) => viewStatus(ctx, ctx.data.latest("localCopy"), (copy) => copyStatus(ctx, copy)),
+  status: railStatus,
   mount: mountLocalCopy,
 };

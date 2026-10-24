@@ -119,7 +119,7 @@ const call = <T,>(page: Page, run: (tc: HarnessWindow["__tc"]) => T) =>
 
 for (const scheme of ["light", "dark"] as const) {
   test.describe(scheme, () => {
-    test("off with a known empty copy: heading, lede, switch off, plain explanation, no wipe", async ({ page }) => {
+    test("off with a known empty copy: heading, lede, switch off, plain explanation, the Wipe block shown but disabled", async ({ page }) => {
       await mount(page, { scheme, seed: seedOn({ requested: false, effective: "off", bytesOnDevice: 0, pending: 0, folders: [] }) });
       await openCopy(page);
       await expect(panel(page).locator(".lc-lede")).toHaveText(/Keep a copy of your data in this browser/);
@@ -127,7 +127,14 @@ for (const scheme of ["light", "dark"] as const) {
       await expect(panel(page)).toContainText("Reads and writes go straight to your TinyCloud");
       await expect(panel(page)).toContainText("The local copy is off.");
       await expect(panel(page)).toContainText("Nothing is kept on this device.");
-      await expect(wipeButton(page)).toBeHidden();
+      // The mockup keeps the Wipe block in the Off state. With nothing to wipe it shows, disabled, with a note.
+      await expect(panel(page).locator(".lc-wipe")).toBeVisible();
+      await expect(panel(page).locator(".lc-wipe > p:not(.lc-wipe-none)")).toHaveText(
+        "Erases TinyCloud's copy on this device. Your data stays on your TinyCloud; the app's own files are not touched.",
+      );
+      await expect(wipeButton(page)).toBeVisible();
+      await expect(wipeButton(page)).toBeDisabled();
+      await expect(panel(page).locator(".lc-wipe-none")).toHaveText("Nothing to wipe: no copy is kept on this device.");
     });
 
     test("off with an unknown size never says nothing is kept, and still offers the wipe", async ({ page }) => {
@@ -173,7 +180,7 @@ for (const scheme of ["light", "dark"] as const) {
     test("wipe is two steps: the button only asks; Keep takes the safe action and nothing is erased", async ({ page }) => {
       await mount(page, { scheme, seed: seedOn(), sync: SYNC.on });
       await openCopy(page);
-      await expect(panel(page).locator(".lc-wipe > p")).toHaveText(
+      await expect(panel(page).locator(".lc-wipe > p:not(.lc-wipe-none)")).toHaveText(
         "Erases TinyCloud's copy on this device. Your data stays on your TinyCloud; the app's own files are not touched.",
       );
       await call(page, (tc) => tc.createReplicaDb());
@@ -293,6 +300,18 @@ for (const scheme of ["light", "dark"] as const) {
       await mount(page, { scheme, seed: seedOn(), sync: SYNC.on });
       await openCopy(page, "page");
       await expect(panel(page).locator(".nav-i", { hasText: "Local copy" }).locator(".nav-m")).toHaveText("On");
+    });
+
+    test("F7: data source says on while the facade is off: the rail and the body both say Off, and both follow a switch change", async ({ page }) => {
+      await mount(page, { scheme, seed: seedOn() }); // the harness facade starts off
+      await openCopy(page, "page");
+      const railWord = panel(page).locator(".nav-i", { hasText: "Local copy" }).locator(".nav-m");
+      await expect(railWord).toHaveText("Off");
+      await expect(toggle(page)).toHaveAttribute("aria-checked", "false");
+      await expect(panel(page)).toContainText("The local copy is off.");
+      await toggle(page).click();
+      await expect(toggle(page)).toHaveAttribute("aria-checked", "true");
+      await expect(railWord).toHaveText("On");
     });
 
     test("text and the switch meet AA contrast on the surface they sit on", async ({ page }) => {
@@ -519,7 +538,7 @@ for (const scheme of ["light", "dark"] as const) {
     test(`${scheme} ${name}: the wipe explanation is visible before Wipe is pressed, and the confirm says what happens`, async ({ page }) => {
       await mount(page, { scheme, viewport, seed: seedOn(), sync: SYNC.on });
       await openCopy(page, layout);
-      const explanation = panel(page).locator(".lc-wipe > p");
+      const explanation = panel(page).locator(".lc-wipe > p:not(.lc-wipe-none)");
       await wipeButton(page).scrollIntoViewIfNeeded();
       await expect(explanation).toBeVisible();
       await expect(explanation).toHaveText(WIPE_EXPLAINS);
