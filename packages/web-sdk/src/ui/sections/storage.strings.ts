@@ -21,7 +21,7 @@ export const STORAGE_PANEL_STRINGS = {
   "storage.page.no_limit": "No limit",
   "storage.page.manage_hint": "(opens in a new tab)",
   "storage.page.nearly_note": "You're close to your limit. Saving large recordings may fail soon.",
-  "storage.page.full_title": "Storage full: read-only.",
+  "storage.page.full_title": "Storage full: you can't add more data right now.",
   "storage.page.full_body":
     "Your TinyCloud storage, shared by all your TinyCloud apps, is full. You can still view and copy your data. New changes can't be saved while your storage is full.",
   "storage.page.unavailable_node": "Storage usage isn't available on this node.",

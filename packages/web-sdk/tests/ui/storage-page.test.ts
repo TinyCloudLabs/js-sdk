@@ -372,7 +372,7 @@ describe("storage page", () => {
     const { el } = mount(ready(status(1500, 1000, "full")));
     const banner = el.querySelector(".storage-banner");
     expect(banner?.getAttribute("role")).toBe("status");
-    expect(banner?.textContent).toContain("Storage full: read-only.");
+    expect(banner?.textContent).toContain("Storage full: you can't add more data right now.");
     expect(banner?.textContent).toContain("New changes can't be saved while your storage is full.");
     expect(banner?.querySelector("a")?.getAttribute("href")).toBe("https://account.tinycloud.xyz/storage");
     expect(el.querySelector(".storage-st")?.textContent).toBe("Full");
@@ -556,7 +556,7 @@ describe("storage page: an own-storage-full episode", () => {
     const { el } = mount(ready(NORMAL), { episode: true });
     const b = body(el);
     expect(b.word).toBe("Full");
-    expect(b.banner).toContain("Storage full: read-only.");
+    expect(b.banner).toContain("Storage full: you can't add more data right now.");
     expect(b.meter).toBeNull();
     expect(b.figure).toBeNull();
     expect(el.querySelector(".storage-updated")?.hasAttribute("hidden")).toBe(true);
