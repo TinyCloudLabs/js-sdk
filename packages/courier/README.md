@@ -149,11 +149,19 @@ tc courier join --resume
   over, or whose invite was changed under it, stops with `invite-lock-lost`
   before it writes anything more. Node calls made while deciding an invite give
   up after 60 seconds (`node-timeout`) and leave the invite held again; the
-  pairing step that gave up starts no new write afterwards (a write already on the
-  wire cannot be recalled). If it may already have
+  pairing step that gave up starts no new write afterwards. A write already on the
+  wire cannot be recalled: after a deny, the peer record `me/peers/<handle>.json`
+  on the node may still say `paired`; Courier never reads it as authority (the
+  local profile is). If it may already have
   asked the node for a read grant, `invite list` shows it under `possibleGrants`
   (cid or `unknown`, the courier, and the latest date it can be valid), and
   `invite approve` shows it before pairing. It is not revoked automatically yet.
+  A record is written only if `invite list` can read it back. If a grant may exist
+  but cannot be recorded (for example the hello's courier DID is not an ed25519
+  did:key), the held text, the notice and `invite list` (`unrecordedGrantUntil`)
+  give only the latest date it can be valid, without a courier. Owner-facing texts
+  print a hello's courier DID only if it is a real ed25519 did:key, and say
+  "a courier in an unrecognised format" otherwise.
 - `pair start`, `pair accept` and `join` also refuse a handle that a peers file
   lists (`peers-entry-exists`, or `peers-unreadable`), before creating a peer or
   a grant; the same `--peers-file` / `COURIER_PEERS_FILE` / defaults apply.

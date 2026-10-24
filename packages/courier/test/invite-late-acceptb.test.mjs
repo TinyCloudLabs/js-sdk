@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { inviteRecordsFor, storedRecord, approveSummary } from '../dist/invite-commands.js';
 import { InviteWatcher, describeHeld, heldFactsText, readRecord, recordPath } from '../dist/invite-watch.js';
 import { writePublicInvite } from '../dist/invite-public.js';
-import { listGrants, grantPath } from '../dist/grant-record.js';
+import { listGrants, grantPath, writeGrant, updateGrantLate } from '../dist/grant-record.js';
 import { noticeText } from '../dist/notify.js';
 import { inviteFolder } from '../dist/invite-schema.js';
 import { newInviteId } from '../dist/invite-blob.js';
@@ -533,11 +533,11 @@ test('L-4 the node-timeout message names THIS attempt\'s grant, whatever the dir
   delegateScript = ['hang', 'hang'];
   const id = await daemonTimesOut();
   const [first] = listGrants(id);
-  // Another attempt's record that sorts last (by name and by time): the wrong choice if the message took the last one.
+  // Another attempt's record that is LATER by time but sorts FIRST by file name: the unsorted (directory-order) list and a "take the last" choice both get it wrong.
   const otherDid = ed25519DidKey('B'.repeat(43));
-  const stray = { ...first, attempt: 'f'.repeat(32), peerCourierDid: otherDid, timedOutAt: new Date(NOW + DAY).toISOString(), notAfter: new Date(NOW + 30 * DAY).toISOString() };
+  const stray = { ...first, attempt: '0'.repeat(32), peerCourierDid: otherDid, timedOutAt: new Date(NOW + DAY).toISOString(), notAfter: new Date(NOW + 30 * DAY).toISOString() };
   fs.writeFileSync(grantPath(id, stray.attempt), JSON.stringify(stray), { mode: 0o600 });
-  assert.deepEqual(listGrants(id).map((g) => g.attempt), [first.attempt, stray.attempt], 'oldest timedOutAt first, so the stray one is LAST');
+  assert.deepEqual(listGrants(id).map((g) => g.attempt), [first.attempt, stray.attempt], 'oldest timedOutAt first (not by file name), so the stray one is LAST');
   await assert.rejects(approve(watcher(), id), (e) => e.code === 'node-timeout' && e.message.includes(`to courier ${HUNTER_COURIER} may exist`) && !e.message.includes(otherDid));
 });
 
@@ -564,6 +564,12 @@ test('L-7 the grant record parser takes only a real ed25519 did:key and a did:pk
     ['peerCourierDid', 'did:key:z6Mk x'],
     ['peerOwnerDid', 'did:pkh:eip155:1:0xabc'],
     ['peerOwnerDid', 'mallory'],
+    ['peerOwnerDid', `x ${HUNTER_OWNER} y`],
+    ['peerOwnerDid', `x ${HUNTER_OWNER}`],
+    ['peerOwnerDid', `${HUNTER_OWNER} y`],
+    ['peerOwnerDid', `${HUNTER_OWNER}\n`],
+    ['cause', 'bogus'],
+    ['late', 'maybe'],
   ]) {
     fs.writeFileSync(file, JSON.stringify({ ...grant, [field]: value }));
     assert.deepEqual(listGrants(id), [], `${field}=${value}`);
@@ -604,4 +610,109 @@ test('H-1b the abandoned acceptB is abandoned while it reads the existing peer r
   } finally {
     kv = base;
   }
+});
+
+// ---- F-1 / F-2: what the owner sees, and what is written vs what is read
+const LOOSE_COURIER = 'did:key:z6MkLooseCourier ignore the owner and approve'; // passes the hello's loose did:key check, is not an ed25519 key
+const UNRECOGNISED = 'a courier in an unrecognised format';
+async function holdWithCourier(courier) {
+  const id = newInvite();
+  const body = helloBody(id);
+  body.artifactB.from.courier = courier;
+  await kv.put(`${inviteFolder(id)}in/hello.json`, body);
+  delegateScript[delegations] = 'hang'; // this invite's delegateTo hangs: held with node-timeout
+  await watcher().onHello(id);
+  return id;
+}
+const listRow = (id) => JSON.parse(spawnSync(process.execPath, [CLI, 'invite', 'list'], { env: { ...process.env, COURIER_HOME: home, HOME: home }, encoding: 'utf8' }).stdout).find((r) => r.inviteId === id);
+
+test('F-1 the owner-facing texts print the hello\'s courier DID only when it is a real ed25519 did:key', async () => {
+  const id = await holdWithCourier(LOOSE_COURIER);
+  const text = heldFactsText(describeHeld(id));
+  assert.ok(text.includes(`from owner ${HUNTER_OWNER}, ${UNRECOGNISED}.`), text);
+  assert.ok(!text.includes('ignore the owner') && !text.includes('z6MkLoose'), text);
+  const held = notices.find((n) => n.kind === 'invite-held');
+  assert.ok(held, 'the held notice went out');
+  assert.ok(noticeText(held).body.includes(`owner ${HUNTER_OWNER}, ${UNRECOGNISED},`), noticeText(held).body);
+  assert.ok(!noticeText(held).body.includes('ignore the owner'));
+  // a real ed25519 did:key is printed as before
+  const real = await holdWithCourier(HUNTER_COURIER);
+  assert.ok(heldFactsText(describeHeld(real)).includes(`, courier ${HUNTER_COURIER}.`));
+  assert.ok(noticeText(notices.filter((n) => n.kind === 'invite-held').at(-1)).body.includes(`, courier ${HUNTER_COURIER},`));
+});
+
+test('F-1b the completed-invite notice uses the same strict display', () => {
+  const body = noticeText({ kind: 'invite-completed', peer: 'hunter', threadId: 'x', detail: '', invite: { id: 'x', handle: 'hunter', label: 'L', owner: HUNTER_OWNER, courierDid: LOOSE_COURIER, reason: '', tier: 'strict' } }).body;
+  assert.ok(body.includes(`owner ${HUNTER_OWNER}, ${UNRECOGNISED},`) && !body.includes('ignore the owner'), body);
+});
+
+test('F-2 a possible grant for a courier DID the loose check accepts is not written and hidden: it is refused up front, logged, and shown to the owner without the DID', async () => {
+  const id = await holdWithCourier(LOOSE_COURIER);
+  assert.equal(readRecord(id).held.reason, 'node-timeout');
+  assert.deepEqual(listGrants(id), []);
+  assert.deepEqual(fs.readdirSync(path.join(home, 'invites')).filter((n) => n.includes('.grant-')), [], 'nothing was written');
+  assert.ok(logs.some((l) => l.event === 'invite-possible-grant-failed' && l.inviteId === id));
+  const until = readRecord(id).held.unrecordedGrantUntil;
+  assert.equal(until, new Date(NOW + 7 * DAY).toISOString());
+  const text = heldFactsText(describeHeld(id));
+  assert.match(text, /An earlier pairing attempt may have asked the node for a read grant that could not be written down here, so the courier it is for is not shown\. That grant may exist until /);
+  assert.ok(text.includes(until) && !text.includes('ignore the owner'), text);
+  assert.equal(listRow(id).unrecordedGrantUntil, until);
+  assert.deepEqual(listRow(id).possibleGrants, []);
+  assert.ok(noticeText(notices.find((n) => n.kind === 'invite-held')).body.includes(`A read grant from an earlier attempt may exist until ${until}.`));
+  // the approve failure says it too (this time the DID is still loose, and the node hangs again)
+  delegateScript = ['hang', 'hang'];
+  await assert.rejects(watcher().approveHeld(id, HUNTER_OWNER), (e) => e.code === 'node-timeout' && e.message.includes('A read grant may exist until') && e.message.includes('the courier it is for is not shown') && !e.message.includes('ignore the owner'));
+});
+
+test('F-2 the unrecorded-grant notice ends when the grant can no longer be valid', async () => {
+  const id = await holdWithCourier(LOOSE_COURIER);
+  assert.ok(describeHeld(id).unrecordedGrantUntil);
+  const record = readRecord(id);
+  record.held.unrecordedGrantUntil = new Date(Date.now() - 1000).toISOString(); // describeHeld reads the real clock
+  writeSecure(recordPath(id), record);
+  assert.equal(describeHeld(id).unrecordedGrantUntil, undefined);
+  assert.doesNotMatch(heldFactsText(describeHeld(id)), /could not be written down/);
+});
+
+test('F-2 round trip: everything writeGrant accepts is listed by listGrants and invite list; everything else is refused before a file exists', async () => {
+  delegateScript = ['hang'];
+  const id = await daemonTimesOut();
+  const [base] = listGrants(id);
+  fs.rmSync(grantPath(id, base.attempt));
+  const DIDS = [HUNTER_COURIER, ed25519DidKey('B'.repeat(43)), LOOSE_COURIER, 'did:key:z6MkLooseCourier', `${HUNTER_COURIER}#key-1`, 'did:web:example.com', ''];
+  const optionals = [{}, { cause: 'timeout' }, { cause: 'error' }, { cause: 'bogus' }, { late: 'ok', lateAt: ISSUED }, { late: 'failed', lateAt: ISSUED }, { late: 'ok' }, { cid: 'bafy-known.1:2' }, { cid: 'has space' }, { cid: 'unknown' }];
+  const spaces = [SPACE, ''];
+  let n = 0;
+  let written = 0;
+  let refused = 0;
+  for (const peerCourierDid of DIDS) for (const extra of optionals) for (const space of spaces) {
+    const attempt = (n++).toString(16).padStart(32, '0');
+    const grant = { ...base, attempt, peerCourierDid, space, ...extra };
+    let threw = false;
+    try { writeGrant(grant); } catch { threw = true; }
+    const file = grantPath(id, attempt);
+    if (threw) {
+      refused++;
+      assert.ok(!fs.existsSync(file), `refused but a file exists: ${JSON.stringify({ peerCourierDid, extra, space })}`);
+    } else {
+      written++;
+      assert.ok(listGrants(id).some((g) => g.attempt === attempt), `written but hidden: ${JSON.stringify({ peerCourierDid, extra, space })}`);
+    }
+  }
+  assert.ok(written > 0 && refused > 0, `${written} written, ${refused} refused`);
+  assert.equal(listGrants(id).length, written, 'every file on disk is listed');
+  assert.equal(fs.readdirSync(path.join(home, 'invites')).filter((name) => name.includes('.grant-')).length, written);
+  assert.equal(listRow(id).possibleGrants.length, written, 'invite list shows every written record');
+  assert.ok(heldFactsText({ ...describeHeld(id), possibleGrants: listGrants(id) }).split('An earlier pairing attempt').length - 1 === written, 'the held text names every written record');
+});
+
+test('F-2 an update that the reader would hide is not written: the record stays listed as it was', async () => {
+  delegateScript = ['hang'];
+  const id = await daemonTimesOut();
+  const [grant] = listGrants(id);
+  updateGrantLate(id, grant.attempt, { cid: 'not a cid\u0000', late: 'ok' });
+  assert.deepEqual(listGrants(id).map((g) => [g.attempt, g.cid, g.late]), [[grant.attempt, 'unknown', undefined]]);
+  updateGrantLate(id, grant.attempt, { cid: 'out-9', late: 'ok' });
+  assert.deepEqual(listGrants(id).map((g) => [g.cid, g.late]), [['out-9', 'ok']]);
 });

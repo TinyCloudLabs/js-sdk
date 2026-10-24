@@ -12,6 +12,7 @@ import { inviteFolder } from '../dist/invite-schema.js';
 import { newInviteId } from '../dist/invite-blob.js';
 import { writeSecure } from '../dist/profile.js';
 import { noticeText } from '../dist/notify.js';
+import { ed25519DidKey } from '../dist/did-key.js';
 import { memoryKv } from './memory-kv.mjs';
 
 const CLI = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
@@ -25,7 +26,7 @@ const HUNTER_OWNER = `did:pkh:eip155:1:${HUNTER_ADDR}`;
 const MALLORY_OWNER = `did:pkh:eip155:1:${MALLORY_ADDR}`;
 const SAM_COURIER = 'did:key:z6MkSamCourier';
 const HUNTER_COURIER = 'did:key:z6MkHunterCourier';
-const MALLORY_COURIER = 'did:key:z6MkMalloryCourier';
+const MALLORY_COURIER = ed25519DidKey('M'.repeat(43)); // a real ed25519 did:key: owner-facing texts print only those
 const EMAIL = 'hunter@example.test';
 const C_ARTIFACT = { type: 'courier-pair', v: 0, step: 'C', from: { owner: SAM_OWNER, courier: SAM_COURIER }, spaceId: `tinycloud:pkh:eip155:1:${SAM_ADDR}:agents`, peer: 'hunter', callMe: 'sam', delegation: 'DELEGATION-C', delegationExpiresAt: new Date(NOW + 3600e3).toISOString(), issuedAt: ISSUED };
 

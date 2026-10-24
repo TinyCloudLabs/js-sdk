@@ -34,6 +34,20 @@ function base58btcDecode(text: string): Buffer {
   return Buffer.from([...new Array<number>(zeros).fill(0), ...bytes]);
 }
 
+/** True for a bare did:key (no `#` fragment) that really is an ed25519 key. The one strict check the grant record parser and the owner-facing texts share. */
+export function isEd25519DidKey(value: unknown): value is string {
+  if (typeof value !== 'string' || value.includes('#')) return false;
+  try {
+    ed25519PublicKeyOfDidKey(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** How an owner-facing text names a peer's courier: the DID only if it is a real ed25519 did:key, never text the peer chose. */
+export const courierPhrase = (did: string): string => (isEd25519DidKey(did) ? `courier ${did}` : 'a courier in an unrecognised format');
+
 /** did:key for an ed25519 public key given as the JWK `x` value (base64url, 32 bytes). */
 export function ed25519DidKey(xBase64url: string): string {
   const x = Buffer.from(xBase64url, 'base64url');

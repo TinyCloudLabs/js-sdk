@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { ed25519PublicKeyOfDidKey } from './did-key.js';
+import { isEd25519DidKey } from './did-key.js';
 import { secureSubdir, writeSecure } from './profile.js';
 
 /**
@@ -38,16 +38,6 @@ const KEYS = ['v', 'inviteId', 'handle', 'attempt', 'peerCourierDid', 'peerOwner
 const OPTIONAL = ['late', 'lateAt', 'cause'] as const;
 const OWNER_DID = /^did:pkh:eip155:\d+:0x[0-9a-fA-F]{40}$/;
 
-function isDidKey(value: unknown): value is string {
-  if (typeof value !== 'string') return false;
-  try {
-    ed25519PublicKeyOfDidKey(value);
-    return !value.includes('#');
-  } catch {
-    return false;
-  }
-}
-
 const dir = () => secureSubdir('invites');
 export const grantPath = (inviteId: string, attempt: string): string => {
   if (!INVITE_ID.test(inviteId) || !ATTEMPT.test(attempt)) throw new Error('invalid grant record id');
@@ -66,7 +56,7 @@ function parseGrant(value: unknown, file: string): PossibleGrant | undefined {
   if (keys.some((k) => !(KEYS as readonly string[]).includes(k) && !(OPTIONAL as readonly string[]).includes(k))) return undefined;
   if (!KEYS.every((k) => keys.includes(k))) return undefined;
   if (r.v !== 1 || r.inviteId !== m[1] || r.attempt !== m[2]) return undefined;
-  if (!short(r.handle, 64) || !isDidKey(r.peerCourierDid) || typeof r.peerOwnerDid !== 'string' || !OWNER_DID.test(r.peerOwnerDid) || !short(r.space)) return undefined;
+  if (!short(r.handle, 64) || !isEd25519DidKey(r.peerCourierDid) || typeof r.peerOwnerDid !== 'string' || !OWNER_DID.test(r.peerOwnerDid) || !short(r.space)) return undefined;
   if (r.cause !== undefined && r.cause !== 'timeout' && r.cause !== 'error') return undefined;
   if (!isIso(r.startedAt) || !isIso(r.timedOutAt) || !isIso(r.notAfter)) return undefined;
   if (typeof r.cid !== 'string' || !CID.test(r.cid)) return undefined;
@@ -83,8 +73,15 @@ function readGrantFile(file: string): PossibleGrant | undefined {
   }
 }
 
+/**
+ * Writes the record, but only if `parseGrant` (the reader) will accept it: what is written is always listed. A record the reader would hide (for example a
+ * courier DID the loose hello check lets through but that is not an ed25519 did:key) is refused with a throw BEFORE anything is written; the caller logs it
+ * and carries the possible grant to the owner without the DID (`held.unrecordedGrantUntil`).
+ */
 export function writeGrant(grant: PossibleGrant): void {
-  writeSecure(grantPath(grant.inviteId, grant.attempt), grant);
+  const file = grantPath(grant.inviteId, grant.attempt);
+  if (parseGrant(JSON.parse(JSON.stringify(grant)) as unknown, file) === undefined) throw new Error('the grant record would not be readable: refused');
+  writeSecure(file, grant);
 }
 
 /**
@@ -100,6 +97,8 @@ export function updateGrantLate(inviteId: string, attempt: string, patch: { cid?
   if (patch.lateAt !== undefined) next.lateAt = patch.lateAt;
   if (patch.cid !== undefined) next.cid = patch.cid;
   if (patch.notAfter !== undefined) next.notAfter = patch.notAfter;
+  // The same rule as writeGrant: an update the reader would hide (a cid or time the node sent in an odd shape) is not written; the record as it was stays listed.
+  if (parseGrant(JSON.parse(JSON.stringify(next)) as unknown, file) === undefined) return;
   writeSecure(file, next);
 }
 

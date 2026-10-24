@@ -10,6 +10,7 @@ import { inviteFolder, ownerMatches, parseHello, type Hello, type Tier, type Wel
 import type { Notice, Notifier } from './notify.js';
 import type { WatchLog } from './wake.js';
 import { saveProfile, secureSubdir, writeSecure, type Profile } from './profile.js';
+import { courierPhrase } from './did-key.js';
 import { peersEntryProblem, peersFilesFor, peersMessage, type PeersFile } from './peers-guard.js';
 import { GRANT_LIFETIME_MS, newestGrant, possibleGrants, removeExpiredGrants, updateGrantLate, writeGrant, type PossibleGrant } from './grant-record.js';
 
@@ -47,7 +48,7 @@ export interface InviteRecord {
   status: InviteStatus;
   /** Public record directory, resolved from --invites-public-dir or the env at create. Unset means no public copy. */
   publicDir?: string;
-  held?: { reason: string; at: string; owner?: string; courierDid?: string };
+  held?: { reason: string; at: string; owner?: string; courierDid?: string; unrecordedGrantUntil?: string };
   /** Artifact C, persisted before the Welcome write so a retried approve reuses it instead of pairing again. */
   artifactC?: Welcome['artifactC'];
   completedPeer?: { handle: string; courierDid: string; ownerDid: string };
@@ -86,9 +87,9 @@ export interface LockGuard {
 
 /**
  * Runs `fn` while holding the invite's exclusive lock (`<id>.lock`, created `wx`, 0600, in the 0700 invites dir; it holds a random token of this holder).
- * Approve, deny and recovery take it so two of them cannot both read `held` and both pair. A lock that is already held makes the caller fail with
+ * Approve, deny, recovery, `revoke` and the sweep's expiry close take it so two of them cannot both read `held` and both pair (or one delete what the other writes). A lock that is already held makes the caller fail with
  * `invite-busy` at once (it never waits). While `fn` runs the lock's mtime is refreshed every LOCK_HEARTBEAT_MS, so a live holder is never stale; a lock with
- * no heartbeat for LOCK_STALE_MS is taken over. The lock is removed at the end only if it still holds this holder's token. `revoke` never takes it.
+ * no heartbeat for LOCK_STALE_MS is taken over. The lock is removed at the end only if it still holds this holder's token.
  * `fn` gets a guard and must call `assertHeld()` before it writes (a holder whose lock was taken over must stop writing).
  */
 async function withInviteLock<T>(id: string, timing: LockTiming | undefined, fn: (guard: LockGuard) => Promise<T>, busyMessage?: string): Promise<T> {
@@ -582,6 +583,8 @@ export class InviteWatcher {
     let outgoing: { cid: string; expiresAt: string } | undefined;
     let persisted = record.artifactC !== undefined;
     let grantRecorded = false;
+    // Set when a grant that may exist could not be written down: the hold then carries its latest end to the owner (no DID is shown for it).
+    let unrecordedGrantUntil: string | undefined;
     let space = '';
     const recordPossibleGrant = (cause: 'timeout' | 'error'): void => {
       // Writing this down must never get in the way of holding the invite: a failure here is logged and the hold goes on.
@@ -597,6 +600,7 @@ export class InviteWatcher {
         grantRecorded = true;
         this.env.log({ event: 'invite-possible-grant', inviteId: record.inviteId, cid: outgoing?.cid ?? 'unknown' });
       } catch (e) {
+        unrecordedGrantUntil = outgoing?.expiresAt ?? new Date(this.now().getTime() + GRANT_LIFETIME_MS).toISOString();
         this.env.log({ event: 'invite-possible-grant-failed', inviteId: record.inviteId, reason: reasonOf(e) });
       }
     };
@@ -649,7 +653,7 @@ export class InviteWatcher {
       this.env.log({ event: 'invite-error', inviteId: record.inviteId, reason: reasonOf(e) });
       delete record.completedPeer;
       record.status = 'consumed';
-      await this.hold(record, hello, timedOut ? 'node-timeout' : 'internal-error', guard);
+      await this.hold(record, hello, timedOut ? 'node-timeout' : 'internal-error', guard, unrecordedGrantUntil);
       if (timedOut) return 'node-timeout';
       return e instanceof CourierError && e.code === 'welcome-exists' ? 'welcome-exists' : 'internal-error';
     }
@@ -664,7 +668,7 @@ export class InviteWatcher {
    * Stores the hello for a decision, then removes the remote copy. The remote copy goes only after the held copy is written, so a crash
    * in between leaves a hello to recover. A failure here leaves the invite consumed; the next sweep holds it and notifies once.
    */
-  private async hold(record: InviteRecord, hello: Hello, reason: string, guard?: LockGuard): Promise<void> {
+  private async hold(record: InviteRecord, hello: Hello, reason: string, guard?: LockGuard, unrecordedGrantUntil?: string): Promise<void> {
     const claim = consumedClaim(record);
     try {
       this.cas(record.inviteId, claim, guard);
@@ -672,7 +676,7 @@ export class InviteWatcher {
       await delIfPresent(this.kv, `${inviteFolder(record.inviteId)}in/hello.json`);
       this.cas(record.inviteId, claim, guard);
       record.status = 'held';
-      record.held = { reason, at: this.now().toISOString(), owner: hello.artifactB.from.owner, courierDid: hello.artifactB.from.courier };
+      record.held = { reason, at: this.now().toISOString(), owner: hello.artifactB.from.owner, courierDid: hello.artifactB.from.courier, ...(unrecordedGrantUntil ? { unrecordedGrantUntil } : {}) };
       writeRecord(record);
     } catch (e) {
       if (e instanceof CourierError && e.code === 'invite-lock-lost') throw e;
@@ -713,9 +717,12 @@ export class InviteWatcher {
     const reason = await this.complete(record, hello, guard);
     if (reason === 'node-timeout') {
       const grant = newestGrant(possibleGrants(record.inviteId, this.now().getTime()), record.consumedBy);
+      const unrecorded = unrecordedUntil(record, this.now().getTime());
       fail(reason, grant
         ? `Pairing timed out (node-timeout); the invite is held again. A read grant to courier ${grant.peerCourierDid} may exist until ${grant.notAfter}; see courier invite list.`
-        : 'Pairing timed out (node-timeout); the invite is held again.');
+        : unrecorded
+          ? `Pairing timed out (node-timeout); the invite is held again. A read grant may exist until ${unrecorded}; it could not be written down here, so the courier it is for is not shown.`
+          : 'Pairing timed out (node-timeout); the invite is held again.');
     }
     if (reason !== undefined) fail(reason, 'Pairing failed; the invite is held again. Retry approve or deny.');
     return record.tier;
@@ -834,7 +841,7 @@ export class InviteWatcher {
 }
 
 function inviteFacts(record: InviteRecord, hello: Hello, reason: string, nowMs: number): NonNullable<Notice['invite']> {
-  const until = possibleGrants(record.inviteId, nowMs).map((g) => g.notAfter).sort().at(-1);
+  const until = [...possibleGrants(record.inviteId, nowMs).map((g) => g.notAfter), ...(unrecordedUntil(record, nowMs) ? [unrecordedUntil(record, nowMs)!] : [])].sort().at(-1);
   return { id: record.inviteId, handle: record.handle, label: hello.claimedLabel, owner: hello.artifactB.from.owner, courierDid: hello.artifactB.from.courier, reason, tier: record.tier, ...(until ? { possibleGrantUntil: until } : {}) };
 }
 
@@ -858,6 +865,14 @@ export interface HeldFacts {
   claimedLabel: string;
   /** Read grants an earlier, abandoned attempt may have left (still within their validity). */
   possibleGrants: PossibleGrant[];
+  /** Latest end of a read grant that may exist but could not be written down (so no courier is shown for it), while still possible. */
+  unrecordedGrantUntil?: string;
+}
+
+/** The end of a read grant that may exist but is not on file (`held.unrecordedGrantUntil`), while it can still be valid. */
+function unrecordedUntil(record: InviteRecord, nowMs: number): string | undefined {
+  const until = record.held?.unrecordedGrantUntil;
+  return until !== undefined && Date.parse(until) > nowMs ? until : undefined;
 }
 
 /** Reads the held invite and its hello from local files (no network). `invite-not-held` when the invite is not held or its hello is gone. */
@@ -875,15 +890,17 @@ export function describeHeld(id: string): HeldFacts {
     courierDid: hello.artifactB.from.courier,
     claimedLabel: hello.claimedLabel,
     possibleGrants: possibleGrants(id, Date.now()),
+    ...(unrecordedUntil(record, Date.now()) ? { unrecordedGrantUntil: unrecordedUntil(record, Date.now()) } : {}),
   };
 }
 
 export function heldFactsText(facts: HeldFacts): string {
   return [
     `Invite ${facts.inviteId} for handle "${facts.handle}" is held (${facts.reason}).`,
-    `  The hello that arrived is from owner ${facts.owner}, courier ${facts.courierDid}.`,
+    `  The hello that arrived is from owner ${facts.owner}, ${courierPhrase(facts.courierDid)}.`,
     `  Name it claims (not verified): ${facts.claimedLabel}`,
     `  Owner this invite expected: ${facts.expectOwner ?? 'any (no --expect-owner was set)'}`,
     ...facts.possibleGrants.map((g) => `  An earlier pairing attempt ${g.cause === 'error' ? 'failed' : 'timed out'} at ${g.timedOutAt} after asking the node for a read grant to courier ${g.peerCourierDid}. That grant may exist until ${g.notAfter} (cid ${g.cid}). It was not sent to the invitee and is not revoked automatically yet.`),
+    ...(facts.unrecordedGrantUntil ? [`  An earlier pairing attempt may have asked the node for a read grant that could not be written down here, so the courier it is for is not shown. That grant may exist until ${facts.unrecordedGrantUntil}. It was not sent to the invitee and is not revoked automatically yet.`] : []),
   ].join('\n');
 }
