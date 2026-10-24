@@ -256,10 +256,45 @@ describe("toasts part", () => {
     stop();
     layer.remove();
   });
+
+  test("the dismiss button is labelled with the toast.dismiss string", () => {
+    const store = createToastStore({ durationMs: 10_000 });
+    const { layer, stop } = mountPart(store);
+    store.push({ kind: "info", textCode: "a" });
+    expect(layer.querySelector(".toast__close")?.getAttribute("aria-label")).toBe("T:toast.dismiss");
+    stop();
+    layer.remove();
+  });
+
+  test("copy receipt writes each row as label and value, then confirms", async () => {
+    const written: string[] = [];
+    const pushed: string[] = [];
+    const realNavigator = globalThis.navigator;
+    Object.defineProperty(globalThis, "navigator", {
+      configurable: true,
+      value: { clipboard: { writeText: async (text: string) => { written.push(text); } } },
+    });
+    try {
+      const store = createToastStore({ durationMs: 10_000 });
+      store.subscribe((list) => {
+        pushed.splice(0, pushed.length, ...list.map((toast) => toast.textCode));
+      });
+      const { layer, stop } = mountPart(store);
+      store.push({ kind: "success", textCode: "a", slip: [{ labelCode: "rc", value: "rc-1" }, { labelCode: "cid", value: "cid-9" }] });
+      (layer.querySelector(".toast__copy") as HTMLButtonElement).click();
+      for (let turn = 0; turn < 10; turn++) await Promise.resolve();
+      expect(written).toEqual(["T:rc rc-1\nT:cid cid-9"]);
+      expect(pushed).toEqual(["a", "account.copied"]);
+      stop();
+      layer.remove();
+    } finally {
+      Object.defineProperty(globalThis, "navigator", { configurable: true, value: realNavigator });
+    }
+  });
 });
 
 describe("store defaults", () => {
-  test("shows at most 3 toasts and dismisses all of them after 5 s when no options are passed", () => {
+  test("shows at most 3 toasts and dismisses all of them after 7 s when no options are passed", () => {
     const store = createToastStore();
     const view = collect(store);
     store.push({ kind: "info", textCode: "a" });
@@ -267,7 +302,7 @@ describe("store defaults", () => {
     store.push({ kind: "info", textCode: "c" });
     store.push({ kind: "info", textCode: "d" });
     expect(view.latest().map((toast) => toast.textCode)).toEqual(["b", "c", "d"]);
-    jest.advanceTimersByTime(4999);
+    jest.advanceTimersByTime(6999);
     expect(view.latest().length).toBe(3);
     jest.advanceTimersByTime(1);
     expect(view.latest().length).toBe(0);

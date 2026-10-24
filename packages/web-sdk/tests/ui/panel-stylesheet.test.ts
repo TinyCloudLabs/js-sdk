@@ -331,7 +331,7 @@ for (const scheme of ["light", "dark"] as const) {
 }
 
 /** Interactive controls the panel renders. Each needs its own focus ring rule. */
-const FOCUS_SELECTORS = [".button", ".action", ".switch", ".nav-i", ".menu-i", ".icon-btn", ".glance-row", ".toast a", ".toast__close"] as const;
+const FOCUS_SELECTORS = [".button", ".action", ".switch", ".nav-i", ".menu-i", ".icon-btn", ".glance-row", ".toast a", ".toast__close", ".toast__copy"] as const;
 const RING_COLOUR: Record<"light" | "dark", string> = { light: "#111827", dark: "#fafafa" };
 /**
  * Page surfaces a ring can sit on: a light host page and a dark one. A ring is

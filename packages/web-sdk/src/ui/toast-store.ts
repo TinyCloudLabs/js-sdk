@@ -35,7 +35,7 @@ export interface ToastView {
 }
 
 export interface ToastStoreOptions {
-  /** Auto-dismiss delay per toast. Default 5000. */
+  /** Auto-dismiss delay per toast. Default 7000. */
   readonly durationMs?: number;
   /** Oldest toasts are dropped past this count. Default 3. */
   readonly maxVisible?: number;
@@ -79,7 +79,7 @@ function safeHref(href: string | undefined): string | undefined {
 }
 
 export function createToastStore(options: ToastStoreOptions = {}): ToastStore {
-  const durationMs = options.durationMs ?? 5000;
+  const durationMs = options.durationMs ?? 7000;
   const maxVisible = options.maxVisible ?? 3;
   const entries = new Map<string, Entry>();
   const listeners = new Set<(toasts: readonly ToastView[]) => void>();
