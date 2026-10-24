@@ -42,8 +42,6 @@ const STYLE = `
 .lc-h3::after{content:"";flex:1;height:1px;background:#e4e4e7}
 .lc-cnt{font-weight:500;color:#71717a}
 .lc-wipe p{max-width:56ch;margin:0 0 12px;font-size:14px;line-height:1.45}
-.lc-wipe .lc-wipe-none{max-width:56ch;margin:8px 0 0;font-size:13px}
-.lc-wipe>.action:disabled{opacity:.6;cursor:default}
 .lc-fail{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:12px}
 .lc-fail p{margin:0;font-size:14px}
 .lc-sec .confirm,.lc-sw+.confirm{margin-top:12px}
@@ -308,9 +306,6 @@ function mountLocalCopy(el: HTMLElement, ctx: SectionContext): () => void {
   wipeSec.setAttribute("aria-labelledby", wipeHead.id);
   const wipeBody = textLine("", ctx.text("local-copy.wipe.body"));
   wipeBody.id = `lc-wipe-text-${++mountCount}`;
-  // The note for a copy that is known to be empty: the block stays, as in the mockup, but there is nothing to wipe.
-  const wipeNone = textLine("note lc-wipe-none", ctx.text("local-copy.wipe.none"));
-  wipeNone.id = `lc-wipe-none-${mountCount}`;
   const wipeBtn = document.createElement("button");
   wipeBtn.type = "button";
   wipeBtn.className = "action";
@@ -326,7 +321,7 @@ function mountLocalCopy(el: HTMLElement, ctx: SectionContext): () => void {
   retryBtn.className = "action";
   retryBtn.textContent = ctx.text("local-copy.wipe.retry");
   wipeFail.append(wipeFailText, retryBtn);
-  wipeSec.append(wipeHead, wipeBody, wipeBtn, wipeNone, wipeFail);
+  wipeSec.append(wipeHead, wipeBody, wipeBtn, wipeFail);
 
   el.append(
     style,
@@ -461,12 +456,8 @@ function mountLocalCopy(el: HTMLElement, ctx: SectionContext): () => void {
     }
 
     const offered = wipeOffered();
-    // Off with a size known to be zero: show the block with its button disabled and a note, rather than hiding it.
-    const nothingToWipe = effective === "off" && copy?.bytesOnDevice === 0;
-    wipeSec.hidden = !offered && !nothingToWipe;
-    wipeNone.hidden = !nothingToWipe;
-    wipeBtn.setAttribute("aria-describedby", nothingToWipe ? `${wipeBody.id} ${wipeNone.id}` : wipeBody.id);
-    wipeBtn.disabled = busy || wiping || !offered || effective === "wiping" || effective === "enabling";
+    wipeSec.hidden = !offered;
+    wipeBtn.disabled = busy || wiping || effective === "wiping" || effective === "enabling";
     wipeFail.hidden = !wipeFailed;
     retryBtn.disabled = wipeBtn.disabled;
     // A confirm cannot outlive the state that allowed it, unless it is the one running.

@@ -119,7 +119,7 @@ const call = <T,>(page: Page, run: (tc: HarnessWindow["__tc"]) => T) =>
 
 for (const scheme of ["light", "dark"] as const) {
   test.describe(scheme, () => {
-    test("off with a known empty copy: heading, lede, switch off, plain explanation, the Wipe block shown but disabled", async ({ page }) => {
+    test("off with a known empty copy: heading, lede, switch off, plain explanation, no wipe", async ({ page }) => {
       await mount(page, { scheme, seed: seedOn({ requested: false, effective: "off", bytesOnDevice: 0, pending: 0, folders: [] }) });
       await openCopy(page);
       await expect(panel(page).locator(".lc-lede")).toHaveText(/Keep a copy of your data in this browser/);
@@ -127,14 +127,9 @@ for (const scheme of ["light", "dark"] as const) {
       await expect(panel(page)).toContainText("Reads and writes go straight to your TinyCloud");
       await expect(panel(page)).toContainText("The local copy is off.");
       await expect(panel(page)).toContainText("Nothing is kept on this device.");
-      // The mockup keeps the Wipe block in the Off state. With nothing to wipe it shows, disabled, with a note.
-      await expect(panel(page).locator(".lc-wipe")).toBeVisible();
-      await expect(panel(page).locator(".lc-wipe > p:not(.lc-wipe-none)")).toHaveText(
-        "Erases TinyCloud's copy on this device. Your data stays on your TinyCloud; the app's own files are not touched.",
-      );
-      await expect(wipeButton(page)).toBeVisible();
-      await expect(wipeButton(page)).toBeDisabled();
-      await expect(panel(page).locator(".lc-wipe-none")).toHaveText("Nothing to wipe: no copy is kept on this device.");
+      // The mockup hides the Wipe block when the copy is off and known empty.
+      await expect(panel(page).locator(".lc-wipe")).toBeHidden();
+      await expect(wipeButton(page)).toBeHidden();
     });
 
     test("off with an unknown size never says nothing is kept, and still offers the wipe", async ({ page }) => {
@@ -143,6 +138,7 @@ for (const scheme of ["light", "dark"] as const) {
       await expect(panel(page)).toContainText("What is kept on this device is unknown.");
       await expect(panel(page)).not.toContainText("Nothing is kept on this device");
       await expect(wipeButton(page)).toBeVisible();
+      await expect(wipeButton(page)).toBeEnabled();
     });
 
     test("unknown size, waiting count, sync time and folder figures read 'unknown', never zero", async ({ page }) => {
@@ -180,7 +176,7 @@ for (const scheme of ["light", "dark"] as const) {
     test("wipe is two steps: the button only asks; Keep takes the safe action and nothing is erased", async ({ page }) => {
       await mount(page, { scheme, seed: seedOn(), sync: SYNC.on });
       await openCopy(page);
-      await expect(panel(page).locator(".lc-wipe > p:not(.lc-wipe-none)")).toHaveText(
+      await expect(panel(page).locator(".lc-wipe > p")).toHaveText(
         "Erases TinyCloud's copy on this device. Your data stays on your TinyCloud; the app's own files are not touched.",
       );
       await call(page, (tc) => tc.createReplicaDb());
@@ -538,7 +534,7 @@ for (const scheme of ["light", "dark"] as const) {
     test(`${scheme} ${name}: the wipe explanation is visible before Wipe is pressed, and the confirm says what happens`, async ({ page }) => {
       await mount(page, { scheme, viewport, seed: seedOn(), sync: SYNC.on });
       await openCopy(page, layout);
-      const explanation = panel(page).locator(".lc-wipe > p:not(.lc-wipe-none)");
+      const explanation = panel(page).locator(".lc-wipe > p");
       await wipeButton(page).scrollIntoViewIfNeeded();
       await expect(explanation).toBeVisible();
       await expect(explanation).toHaveText(WIPE_EXPLAINS);

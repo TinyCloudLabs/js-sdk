@@ -250,38 +250,28 @@ describe("availability", () => {
 });
 
 describe("states", () => {
-  test("off with a known empty copy: the Wipe block still shows, with its button disabled and a note saying why", async () => {
-    const facade = makeFacade(state("off"));
-    const { el } = setup({ facade, copy: ready({ requested: false, effective: "off", bytesOnDevice: 0, folders: [], pending: 0 }) });
-    await flush();
-    expect(toggleOf(el).getAttribute("aria-checked")).toBe("false");
-    expect(toggleOf(el).disabled).toBe(false);
-    expect(bodyText(el)).toContain("The local copy is off. Nothing is kept on this device. Fieldnotes reads and writes your TinyCloud directly");
-    expect(wipeSection(el).hidden).toBe(false);
-    expect(wipeSection(el).textContent).toContain("Wipe local data");
-    expect(wipeSection(el).textContent).toContain(
-      "Erases TinyCloud's copy on this device. Your data stays on your TinyCloud; the app's own files are not touched.",
-    );
-    expect(wipeBtn(el).disabled).toBe(true);
-    const note = el.querySelector<HTMLElement>(".lc-wipe-none");
-    expect(note?.hidden).toBe(false);
-    expect(note?.textContent).toBe("Nothing to wipe: no copy is kept on this device.");
-    expect(wipeBtn(el).getAttribute("aria-describedby")?.split(" ")).toContain(note?.id ?? "missing");
-    wipeBtn(el).click();
-    expect(box(el)).toBeNull();
-    expect(facade.wipeCalls).toBe(0);
-    expect(el.querySelector(".lc-kv")?.closest("[hidden]")).not.toBeNull();
-  });
-
-  test("the nothing-to-wipe note is shown only for a known empty off copy", async () => {
+  test("off with a known empty copy hides the Wipe block; an unknown size, bytes on the device, or On show it with an enabled button", async () => {
+    const empty = setup({
+      facade: makeFacade(state("off")),
+      copy: ready({ requested: false, effective: "off", bytesOnDevice: 0, folders: [], pending: 0 }),
+    });
     const unknown = setup({ facade: makeFacade(state("off")), copy: ready({ requested: false, effective: "off", bytesOnDevice: undefined, folders: [] }) });
     const withBytes = setup({ facade: makeFacade(state("off")), copy: ready({ requested: false, effective: "off", bytesOnDevice: 2048, folders: [] }) });
     const on = setup({ facade: makeFacade(state("on")), copy: ready() });
     await flush();
+    // Known empty: the mockup shows no Wipe block, and neither does this.
+    expect(toggleOf(empty.el).getAttribute("aria-checked")).toBe("false");
+    expect(toggleOf(empty.el).disabled).toBe(false);
+    expect(bodyText(empty.el)).toContain("The local copy is off. Nothing is kept on this device. Fieldnotes reads and writes your TinyCloud directly");
+    expect(wipeSection(empty.el).hidden).toBe(true);
+    expect(empty.el.querySelector(".lc-kv")?.closest("[hidden]")).not.toBeNull();
+    // Something is, or may be, kept: the block shows, the explanation is on screen, and the button is enabled.
     for (const { el } of [unknown, withBytes, on]) {
-      expect(el.querySelector<HTMLElement>(".lc-wipe-none")?.hidden).toBe(true);
+      expect(wipeSection(el).hidden).toBe(false);
+      expect(wipeSection(el).textContent).toContain(
+        "Erases TinyCloud's copy on this device. Your data stays on your TinyCloud; the app's own files are not touched.",
+      );
       expect(wipeBtn(el).disabled).toBe(false);
-      expect(wipeBtn(el).getAttribute("aria-describedby")?.split(" ")).toHaveLength(1);
     }
   });
 
@@ -291,25 +281,13 @@ describe("states", () => {
     expect(wipeSection(el).hidden).toBe(true);
   });
 
-
-  test("the note leaves when the copy turns on again and the wipe is offered", async () => {
-    const facade = makeFacade(state("off"));
-    const { el } = setup({ facade, copy: ready({ requested: false, effective: "off", bytesOnDevice: 0, folders: [] }) });
-    await flush();
-    expect(wipeBtn(el).disabled).toBe(true);
-    facade.set(state("on"));
-    await flush();
-    expect(el.querySelector<HTMLElement>(".lc-wipe-none")?.hidden).toBe(true);
-    expect(wipeBtn(el).disabled).toBe(false);
-  });
-
   test("off with an unknown size: the Wipe button is enabled, opens the confirm, and wipes only once confirmed", async () => {
     const facade = makeFacade(state("off"));
     const { el } = setup({ facade, copy: ready({ requested: false, effective: "off", bytesOnDevice: undefined, folders: [] }) });
     await flush();
     expect(wipeSection(el).hidden).toBe(false);
     expect(wipeBtn(el).disabled).toBe(false);
-    expect(el.querySelector<HTMLElement>(".lc-wipe-none")?.hidden).toBe(true);
+    expect(wipeBtn(el).getAttribute("aria-describedby")).toBeTruthy();
     wipeBtn(el).click();
     expect(box(el)).not.toBeNull();
     expect(box(el)?.getAttribute("role")).toBe("alertdialog");
