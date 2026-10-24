@@ -29,6 +29,7 @@ import {
   parseServiceErrorBody,
   responseErrorMeta,
 } from "../responseErrors";
+import { requestTooLargeError } from "../statementSize";
 import type { ISQLService } from "./ISQLService";
 import type { IDatabaseHandle } from "./ISQLService";
 import { DatabaseHandle } from "./DatabaseHandle";
@@ -574,7 +575,8 @@ export class SQLService extends BaseService implements ISQLService {
 
     const errorBody = parseServiceErrorBody(errorText);
 
-    const errorCode = this.mapHttpStatusToErrorCode(
+    const sizeCode = requestTooLargeError("sql", operation, response.status, errorText);
+    const errorCode = sizeCode ?? this.mapHttpStatusToErrorCode(
       response.status,
       errorBody.error
     );

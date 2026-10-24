@@ -56,8 +56,15 @@ export interface Profile {
   peers: Record<string, StoredPeer>;
 }
 
+/**
+ * Courier home: `COURIER_HOME` when set, else `$HOME/.courier`. Refuses an unset or empty `HOME`
+ * rather than guessing a home directory.
+ */
 export function profileDir(): string {
-  return process.env.COURIER_HOME || path.join(process.env.HOME ?? '.', '.courier');
+  if (process.env.COURIER_HOME) return process.env.COURIER_HOME;
+  const home = process.env.HOME;
+  if (!home) throw new CourierError('home-unset', 'HOME is not set. Set HOME or COURIER_HOME to choose where Courier stores its state.');
+  return path.join(home, '.courier');
 }
 
 function profilePath(name: string, home = profileDir()): string {
@@ -68,10 +75,14 @@ export function profileExists(): boolean {
   return fs.existsSync(profilePath('profile.json'));
 }
 
-function ensureSecureDir(): void {
-  const dir = profileDir();
+export function mkdirOwnerOnly(dir: string): void {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  // mkdir's mode is masked by umask; chmod sets the final bits explicitly.
   fs.chmodSync(dir, 0o700);
+}
+
+function ensureSecureDir(): void {
+  mkdirOwnerOnly(profileDir());
 }
 
 export function writeSecure(file: string, obj: unknown): void {

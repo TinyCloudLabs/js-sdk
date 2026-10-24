@@ -386,6 +386,30 @@ test("a delegation approval outside the stored request is not imported", async (
   }
 });
 
+test("a stored session the node cannot confirm reports unavailable, not a new approval", async () => {
+  const hermetic = await createHermeticNode();
+  const store = await testStore(hermetic.host);
+  const requester = hermetic.ownerDid;
+  const connect = await store.connectStatus("openkey-user-a", [requester]);
+  const bootstrap = await openKeyCallbackBody({
+    tenantStateRoot: store.tenantStateRoot("openkey-user-a"),
+    privateKey: hermetic.ownerPrivateKey,
+    space: "account",
+    abilities: BOOTSTRAP_ABILITIES,
+  });
+  await activateOnNode(hermetic.host, bootstrap);
+  await store.completeApproval(new URL(connect.approvalUrl!).searchParams.get("state")!, callbackRequest(bootstrap));
+  const sessionPath = join(store.tenantStateRoot("openkey-user-a"), ".tinycloud/profiles/agent/session.json");
+
+  expect(await store.connectStatus("openkey-user-a", [requester])).toMatchObject({ connected: true });
+  hermetic.stop();
+  const unavailable = await store.connectStatus("openkey-user-a", [requester]);
+  expect(unavailable).toMatchObject({ connected: false, sessionDid: connect.sessionDid });
+  expect(unavailable.approvalUrl).toBeUndefined();
+  expect(unavailable.expiresAt).toBeUndefined();
+  expect(await exists(sessionPath)).toBe(true);
+});
+
 async function activateOnNode(host: string, callback: Record<string, unknown>): Promise<void> {
   const header = record(callback.delegationHeader).Authorization;
   if (typeof header !== "string") throw new Error("Missing approval authorization.");

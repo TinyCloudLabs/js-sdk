@@ -524,6 +524,13 @@ export const GenerateShareParamsSchema = z.object({
   description: z.string().optional(),
   /** Base URL for the share link */
   baseUrl: z.string().optional(),
+  /**
+   * Whether the recipient may re-delegate the share. Default `true`.
+   * `false` issues a terminal delegation: the node refuses onward `/delegate`.
+   * Without a session-key delegation that covers the path, `false` fails with PERMISSION_DENIED.
+   * Receive such a share with `receive(link, { autoSubdelegate: false })`; the default auto-subdelegation is refused for it.
+   */
+  allowSubDelegation: z.boolean().optional(),
 });
 
 export type GenerateShareParams = z.infer<typeof GenerateShareParamsSchema>;
@@ -688,6 +695,8 @@ export const CreateDelegationWasmParamsSchema = z.object({
   expirationSecs: z.number(),
   /** Optional not-before time in seconds since Unix epoch */
   notBeforeSecs: z.number().optional(),
+  /** Issue a terminal delegation: the node refuses onward delegation. Default `false`. */
+  disableSubDelegation: z.boolean().optional(),
 });
 
 export type CreateDelegationWasmParams = z.infer<typeof CreateDelegationWasmParamsSchema>;

@@ -38,7 +38,12 @@ export function toMcpToolResult(
   let serialized: string | undefined;
   if (options.surface === "hosted") {
     serialized = JSON.stringify(canonical);
-    if (options.readOnly === true && serialized.length > 100_000) {
+    if (
+      (options.readOnly === true ||
+        options.operationId === "tinycloud.apps.context" ||
+        options.operationId === "tinycloud.apps.query") &&
+      serialized.length > 100_000
+    ) {
       const sql = options.operationId?.startsWith("tinycloud.sql.") ||
         options.operationId === "tinycloud.apps.query";
       canonical = {

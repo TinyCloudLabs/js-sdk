@@ -197,6 +197,19 @@ describe("OpenKey device authorization", () => {
     }
   });
 
+  test("refuses a permission that carries a limit without contacting OpenKey", async () => {
+    for (const caveats of [[{ tenant: "alpha" }], [{}, { tenant: "alpha" }], [null], "tenant"]) {
+      const limited = { ...bearerPrefix, caveats } as unknown as PermissionEntry;
+      const openkey = fakeOpenKey(() => response({}), { start: response({}, 200) });
+      await expect(acquire(openkey, { permissions: [capabilityRead, limited] })).rejects.toMatchObject({
+        code: "CAVEATS_UNSUPPORTED",
+        exitCode: 2,
+      });
+      expect(openkey.urls).toEqual([]);
+      expect(openkey.startBodies).toEqual([]);
+    }
+  });
+
   test("still starts device authorization for KV paths named secrets outside the secrets space", async () => {
     const permissions: PermissionEntry[] = [capabilityRead, { service: "tinycloud.kv", space: "default", path: "vault/secrets/KEY", actions: ["tinycloud.kv/get"] }];
     const openkey = fakeOpenKey((start, id) => approved(start, id, { signed: permissions }));

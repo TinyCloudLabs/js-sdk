@@ -11,6 +11,8 @@ import { cmdApproval } from './approval.js';
 import { cmdPause, cmdResume } from './pause.js';
 import { cmdGuard } from './guard/command.js';
 import { cmdBroker, cmdRunApproved } from './broker.js';
+import { cmdCredential } from './credential.js';
+import { courierVersion } from './version.js';
 
 function usage(): string {
   const name = programName();
@@ -109,6 +111,11 @@ Delivery (one watcher per person per machine; never calls a model):
                                    Sender: accept one-line item requests over a Unix socket and send the
                                    named outbox item. Replies are ok or refused:<code>.
 
+  credential acquire --email <addr> [--code-stdin]
+                                   Email proof: send a verification code to the address, then enter it with
+                                   --code-stdin (reads one line from stdin; keeps the code off argv).
+  credential show --email <addr>   Show the stored email credential for this agent key (no secret printed).
+
   pause <peer> <threadId> [--reason "…"]   Humans: stop waking your agent for a thread; tells the peer
   resume <peer> <threadId>                 Humans: wake it again (the wake budget starts over)
 
@@ -125,6 +132,10 @@ api.openkey.so for openkey.so, otherwise the OpenKey host).
 export async function run(argv: string[]): Promise<void> {
   const args = parseArgs(argv);
   const command = args.positional[0];
+  if (!command && args.has('version')) {
+    process.stdout.write(`${courierVersion()}\n`);
+    return;
+  }
   if (command === 'request' && args.has('help')) {
     process.stdout.write(requestHelp());
     return;
@@ -154,6 +165,7 @@ export async function run(argv: string[]): Promise<void> {
     case 'approval': return cmdApproval(sub);
     case 'pause': return cmdPause(sub);
     case 'resume': return cmdResume(sub);
+    case 'credential': return cmdCredential(sub);
     case 'guard': return cmdGuard(sub);
     case 'run-approved': return cmdRunApproved(sub);
     case 'broker': return cmdBroker(sub);

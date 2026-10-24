@@ -73,6 +73,34 @@ local agent key: the verification method and the public `jwk.x` must match, and
 the JWK must carry no private fields. An expired or unknown code fails with
 `[code-not-found]`; paste the full grant code instead.
 
+### Email credentials
+
+`courier credential acquire --email <addr>` sends a verification code to the
+address and stores a pending request under `COURIER_HOME/credentials/` (owner-only).
+Run it again with `--code-stdin` and enter the code on stdin, for example
+`courier credential acquire --email <addr> --code-stdin < code.txt`. The code is
+never passed on argv: `--code <value>` and a bare `--code` are refused with a usage
+error that names `--code-stdin`, before any network call or credential directory is
+created. A pending request expires after 15 minutes. A new request for the same
+address replaces the older pending request only after the new request succeeds; if
+the new request fails, the older pending request is kept and `--code-stdin` still
+completes it.
+
+`courier credential show --email <addr>` prints one JSON document on stdout (pretty
+printed, nothing else on stdout) with `address`, `credentialId`, `issuedAt`,
+`expiresAt` and `status`. The credential itself is never printed. Every read
+re-verifies the stored record offline against the pinned issuer key before anything
+else. A record that fails is refused with `credential-record-invalid` and kept
+untouched for inspection; it is never deleted on the strength of its stored fields.
+Only a record that passed verification can be dropped, and only when its own
+verified `exp` is less than 60 seconds away or it was issued more than 3600 seconds
+ago: it is then deleted and reported as `credential.show.NOT_FOUND`.
+
+`acquire` prints one JSON document on stdout (pretty printed, nothing else on
+stdout). The first call (`status: "code-sent"`) returns `codeExpiresAt`; enter the
+code within 5 minutes. The second call (`status: "acquired"`) returns `issuedAt` and
+`expiresAt`, the end of the credential's validity. Human hints go to stderr.
+
 ### Settings
 
 | Setting | Flag | Env | Stored | Default |
