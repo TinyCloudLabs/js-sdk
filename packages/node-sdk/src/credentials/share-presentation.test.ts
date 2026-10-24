@@ -91,6 +91,11 @@ function pinnedWithoutMaxAge(): CredentialRequirement {
   return requirement as CredentialRequirement;
 }
 
+/** Pinned email requirement with an explicit maxAgeSeconds, for maxAge below and above the 300 s pin. */
+function pinnedWithMaxAge(maxAgeSeconds: number): CredentialRequirement {
+  return { ...requirementVector.sdkRequirement, maxAgeSeconds } as CredentialRequirement;
+}
+
 interface Fixture {
   readonly input: BuildSharePresentationInput;
   readonly policy: UnifiedPolicyV2;
@@ -609,6 +614,34 @@ describe("buildSharePresentation holder algorithm and credential freshness (sign
     const f = await fixture({ issuedMsAgo: 299_000 });
     const material = await buildSharePresentation(f.input);
     expect(material.credentialDigest).toBe(f.result.verified.credentialDigest);
+  });
+
+  test("a pinned email profile with maxAgeSeconds 120 is limited to 120 s, not 300: a 119 s credential is accepted", async () => {
+    const f = await fixture({ requirement: pinnedWithMaxAge(120), issuedMsAgo: 119_000 });
+    const material = await buildSharePresentation(f.input);
+    expect(material.credentialDigest).toBe(f.result.verified.credentialDigest);
+  });
+
+  test("a pinned email profile with maxAgeSeconds 120 refuses a 121 s credential: CREDENTIAL_TOO_OLD; nothing is signed", async () => {
+    const f = await fixture({ requirement: pinnedWithMaxAge(120), issuedMsAgo: 121_000 });
+    const { holderSigner, calls } = countingSigner(f);
+    const error = await rejectionOf(buildSharePresentation({ ...f.input, holderSigner }));
+    expect(error.code).toBe("CREDENTIAL_TOO_OLD");
+    expect(calls.n).toBe(0);
+  });
+
+  test("a pinned email profile with maxAgeSeconds 900 keeps the 300 s pin: a 299 s credential is accepted", async () => {
+    const f = await fixture({ requirement: pinnedWithMaxAge(900), issuedMsAgo: 299_000 });
+    const material = await buildSharePresentation(f.input);
+    expect(material.credentialDigest).toBe(f.result.verified.credentialDigest);
+  });
+
+  test("a pinned email profile with maxAgeSeconds 900 keeps the 300 s pin: a 301 s credential is CREDENTIAL_TOO_OLD; nothing is signed", async () => {
+    const f = await fixture({ requirement: pinnedWithMaxAge(900), issuedMsAgo: 301_000 });
+    const { holderSigner, calls } = countingSigner(f);
+    const error = await rejectionOf(buildSharePresentation({ ...f.input, holderSigner }));
+    expect(error.code).toBe("CREDENTIAL_TOO_OLD");
+    expect(calls.n).toBe(0);
   });
 
   test("CREDENTIAL_TOO_OLD when issuedAt is 3610 s old, past both the 300 s pin and maxAgeSeconds 3600; nothing is signed", async () => {
