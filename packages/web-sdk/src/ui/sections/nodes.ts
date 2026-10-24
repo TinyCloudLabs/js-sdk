@@ -20,9 +20,12 @@ const STYLE = `
 .nd-kv dt{margin:0;color:#52525b}
 .nd-kv dd{display:flex;align-items:center;gap:6px;margin:0;min-width:0;max-width:100%;text-align:right}
 .nd-did{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.8125rem;overflow-wrap:anywhere;text-align:right}
+.nd-did-row{display:flex;align-items:center;gap:6px;min-width:0;max-width:100%}
+.nd-did{min-width:0;word-break:break-all}
 .nd-chips{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:6px;margin:0;padding:0;list-style:none}
 .nd-chip{padding:2px 10px;border:1px solid #d4d4d8;border-radius:999px;font-size:.8125rem;overflow-wrap:anywhere}
 .nd-card .icon-btn{margin:-10px -10px -10px 0}
+.nd-did-row .icon-btn{margin:-10px 0}
 @media (prefers-color-scheme: dark){
 .nd-card{border-color:#3f3f46}
 .nd-kv>div{border-top-color:#27272a}
@@ -151,6 +154,7 @@ export const nodesSection: PanelSection = {
           void navigator.clipboard?.writeText(did.textContent ?? "").catch(() => undefined);
         });
         const wrap = document.createElement("span");
+        wrap.className = "nd-did-row";
         wrap.append(did, copy);
         addRow(ctx.text("nodes.nodeid"), wrap);
       }
