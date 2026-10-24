@@ -12,7 +12,7 @@ export const DELEGATIONS_STRINGS = {
   "delegations.app.subject": "This app",
 
   "delegations.g.app": "Granted to {app}",
-  "delegations.g.app.sub": "{app} and the helpers it started.",
+  "delegations.g.app.sub": "Access {app} holds on this device.",
   "delegations.g.others": "Granted to others",
   "delegations.g.others.sub": "Other apps and agents you gave access to.",
   "delegations.g.received": "Received",
@@ -24,6 +24,7 @@ export const DELEGATIONS_STRINGS = {
   "delegations.more.btn": "Show more",
   "delegations.more.busy": "Loading…",
   "delegations.more.err": "Couldn't load more.",
+  "delegations.reload": "Reload list",
   "delegations.more.loaded": "{count} more loaded.",
 
   "delegations.empty.title": "No one has access yet",
@@ -47,6 +48,7 @@ export const DELEGATIONS_STRINGS = {
   "delegations.st.expired": "Expired",
   "delegations.st.revoked": "Revoked",
   "delegations.st.pending": "Not active yet",
+  "delegations.st.unknown": "Unknown",
 
   "delegations.meta.space": "{space} space",
   "delegations.meta.spaces": "{count} spaces",
@@ -89,6 +91,7 @@ export const DELEGATIONS_STRINGS = {
   "delegations.ended.expired": "Expired grants can't be used. Nothing to revoke.",
   "delegations.ended.revoked": "Already revoked. Nothing to revoke.",
   "delegations.ended.pending": "Not active yet. Nothing to revoke.",
+  "delegations.ended.unknown": "Status unknown. Nothing to revoke here.",
   "delegations.ended.received": "Shared with you. Only the one who shared it can end it.",
 
   "delegations.confirm.title": "Revoke access for {name}?",
@@ -105,6 +108,9 @@ export const DELEGATIONS_STRINGS = {
   "delegations.busy": "Revoking…",
   "delegations.err.failed": "Couldn't revoke this access.",
   "delegations.err.unconfirmed": "We couldn't confirm whether this worked. The list was re-read; try again if this still shows Active.",
+  "delegations.err.unconfirmed.later": "We couldn't confirm whether this worked. Reload the list and check.",
+  "delegations.prev.ok": "A revoke for your previous account finished.",
+  "delegations.prev.failed": "A revoke for your previous account did not finish.",
   "delegations.err.denied": "This session can't change this access. Nothing was changed.",
   "delegations.err.stale": "This access had already ended, so nothing was changed.",
   "delegations.err.ended": "This access has ended.",

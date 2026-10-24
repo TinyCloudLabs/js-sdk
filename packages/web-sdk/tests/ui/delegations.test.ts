@@ -81,6 +81,9 @@ interface Harness {
   remount(): Promise<HTMLElement>;
   status(): SectionStatus | undefined;
   setPage(result: ViewResult<{ rows: readonly DelegationRow[]; nextCursor?: string }>): void;
+  reset(): void;
+  /** The next read of the first page waits until the returned function is called. */
+  holdNextFirstPage(): () => void;
   /** Cursors the section asked the source for, in order. */
   readonly cursors: string[];
 }
@@ -107,6 +110,7 @@ async function mountSection(options: Options = {}): Promise<Harness> {
   const revoked: string[] = [];
   const cursors: string[] = [];
   const reads = { count: 0 };
+  let firstGate: Promise<void> | undefined;
   const source = {
     subscribe: () => () => undefined,
     delegations: async (cursor?: string) => {
@@ -115,7 +119,12 @@ async function mountSection(options: Options = {}): Promise<Harness> {
         return options.pages !== undefined ? options.pages(cursor) : ({ state: "error", code: "no-page" } as const);
       }
       reads.count += 1;
-      return current;
+      // The list as it was when the read started; a held read answers with that, not with what was set while it waited.
+      const snapshot = current;
+      const gate = firstGate;
+      firstGate = undefined;
+      if (gate !== undefined) await gate;
+      return snapshot;
     },
     revoke:
       options.revoke ??
@@ -148,7 +157,8 @@ async function mountSection(options: Options = {}): Promise<Harness> {
     client: () => client,
     text: panelText,
     appLabel: () => (options.appLabel === null ? undefined : (options.appLabel ?? "Fieldnotes")),
-    requestRender: () => undefined,
+    // As the shell: tell every subscriber to repaint.
+    requestRender: () => data.notify(),
     toastsEnabled: () => options.toasts !== false,
     toast: (request: { textCode: string }) => {
       toasts.push(request.textCode);
@@ -193,6 +203,15 @@ async function mountSection(options: Options = {}): Promise<Harness> {
     },
     setPage: (result) => {
       current = result;
+    },
+    // An account change: the shell clears the cache; the new account's list is set with `setPage` and read with `refresh`.
+    reset: () => data.reset(),
+    holdNextFirstPage: () => {
+      let release: () => void = () => undefined;
+      firstGate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return release;
     },
   };
 }
@@ -876,10 +895,12 @@ describe("revoke", () => {
     go?.click();
     await flush();
     expect(h.revoked).toEqual(["bafyEXAMPLEcidcidcidk2dq"]);
-    // Busy: the first card says so and no other Revoke is live.
+    // Busy: the first card says so.
     expect(h.el.textContent).toContain("Revoking…");
-    const live = [...h.el.querySelectorAll<HTMLButtonElement>(".dl-acts .action")].filter((b) => b.textContent === "Revoke" && !b.hidden);
-    expect(live.every((b) => b.disabled)).toBe(true);
+    const revokeOf = (cid: string) => h.el.querySelector<HTMLButtonElement>(`[aria-label="Revoke access for Helper ${cid}"]`);
+    expect(revokeOf("bafyEXAMPLEcidcidcidk2dq")?.disabled).toBe(true);
+    // The lock is per grant: the other one is still revocable.
+    expect(revokeOf("b")?.disabled).toBe(false);
     expect(h.receipts).toHaveLength(0);
 
     const readsBefore = h.reads.count;
@@ -1134,23 +1155,27 @@ describe("one revoke per CID across close and reopen", () => {
     const again = await h.remount();
     expect(busyShown(again)).toBe(true);
     expect(revokeButton(again, "a")?.disabled).toBe(true);
-    expect(revokeButton(again, "b")?.disabled).toBe(true);
+    // The lock is on that grant only: the other one stays revocable.
+    expect(revokeButton(again, "b")?.disabled).toBe(false);
 
-    // Not just a disabled attribute: forcing the button and the confirm still reaches nothing.
-    for (const cid of ["a", "b"]) {
-      const button = revokeButton(again, cid);
-      if (button === null || button === undefined) throw new Error(`no revoke button for ${cid}`);
-      button.disabled = false;
-      button.click();
-    }
+    // Not just a disabled attribute: forcing the button on and clicking it still reaches nothing.
+    const forced = revokeButton(again, "a");
+    if (forced === null || forced === undefined) throw new Error("no revoke button for a");
+    forced.disabled = false;
+    forced.click();
     await flush();
     expect(again.querySelector('[role="alertdialog"]')).toBeNull();
     expect(h.revoked).toEqual(["a"]);
 
+    // The other grant can be revoked while the first request is still out, from the new mount.
+    await confirmRevoke(again, "b");
+    expect(h.revoked).toEqual(["a", "b"]);
+
     gate.settle({ ok: true, cid: "a" });
     await flush();
-    expect(h.revoked).toEqual(["a"]);
-    expect(h.receipts).toHaveLength(1);
+    // "a" was asked of the source once, and its receipt is raised once, with the one for "b".
+    expect(h.revoked.filter((cid) => cid === "a")).toEqual(["a"]);
+    expect(h.receipts).toHaveLength(2);
   });
 
   test("once the first request settles the latch clears: another CID can be revoked from the new mount", async () => {
@@ -1182,6 +1207,361 @@ describe("one revoke per CID across close and reopen", () => {
     button?.click();
     await flush();
     expect(again.querySelector('[role="alertdialog"]')).not.toBeNull();
+  });
+});
+
+/** A promise the test settles by hand. */
+function gate<T>() {
+  let resolve: (value: T) => void = () => undefined;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
+/** Opens the confirm for the first Revoke button on the page and returns the box. */
+async function openBox(h: Harness): Promise<HTMLElement> {
+  buttonIn(h.el, "Revoke")?.click();
+  await flush();
+  const box = h.el.querySelector<HTMLElement>('[role="alertdialog"]');
+  if (box === null) throw new Error("no confirm box");
+  return box;
+}
+
+type PageResult = ViewResult<{ rows: readonly DelegationRow[]; nextCursor?: string }>;
+const ready = (rows: DelegationRow[], nextCursor?: string): PageResult => ({
+  state: "ready",
+  data: nextCursor === undefined ? { rows } : { rows, nextCursor },
+});
+
+describe("a result that arrives after the account changed is discarded", () => {
+  const asking = (h: Harness) => h.el.querySelector<HTMLElement>(".dl-foot");
+
+  test("Show more: a page read for account A that lands after account B's list is not added to it, and offers no Revoke", async () => {
+    const second = gate<PageResult>();
+    const h = await mountSection({ result: ready([row("a")], "c1"), pages: () => second.promise });
+    buttonIn(h.el, "Show more")?.click();
+    await flush();
+    expect(buttonIn(h.el, "Loading…")).toBeDefined();
+
+    // The account changes: the cache is cleared, then account B's first page arrives.
+    h.reset();
+    h.setPage(ready([row("b1")]));
+    await h.refresh();
+    await flush();
+    expect(names(h.el)).toEqual(["Helper b1"]);
+
+    // Account A's second page finally answers.
+    second.resolve(ready([row("A-late")], "c2"));
+    await flush();
+    expect(names(h.el)).toEqual(["Helper b1"]);
+    expect(h.el.querySelector('[aria-label="Revoke access for Helper A-late"]')).toBeNull();
+    expect(h.el.textContent).not.toContain("A-late");
+    // It did not hand B's list a cursor either.
+    expect(asking(h)?.hidden).toBe(true);
+    expect(h.revoked).toEqual([]);
+    expect(h.toasts).toEqual([]);
+  });
+
+  test("Show more: a page that fails for account A does not put an error on account B's list", async () => {
+    const second = gate<PageResult>();
+    const h = await mountSection({ result: ready([row("a")], "c1"), pages: () => second.promise });
+    buttonIn(h.el, "Show more")?.click();
+    await flush();
+    h.reset();
+    h.setPage(ready([row("b1")], "d1"));
+    await h.refresh();
+    await flush();
+    second.resolve({ state: "error", code: "x" });
+    await flush();
+    expect(names(h.el)).toEqual(["Helper b1"]);
+    expect(h.el.querySelector('.dl-foot [role="alert"]:not([hidden])')).toBeNull();
+    // B's own cursor is untouched: its Show more still reads B's next page, not a stuck "Loading…".
+    expect(buttonIn(h.el, "Show more")).toBeDefined();
+  });
+
+  test("Allow: an answer to the permission ask made for account A does not touch account B", async () => {
+    const answer = gate<{ approved: boolean }>();
+    const h = await mountSection({
+      result: { state: "needs-permission", ability: "delegation/list" },
+      requestAuthority: () => answer.promise,
+    });
+    buttonIn(h.el, "Allow delegation list")?.click();
+    await flush();
+    h.reset();
+    h.setPage(ready([row("b1")]));
+    await h.refresh();
+    await flush();
+    const readsBefore = h.reads.count;
+    answer.resolve({ approved: true });
+    await flush();
+    // No re-read on A's say-so, no focus pulled to the heading, B's list as it was.
+    expect(h.reads.count).toBe(readsBefore);
+    expect(names(h.el)).toEqual(["Helper b1"]);
+    expect(active()).not.toBe(h.el.querySelector(".sec-title"));
+  });
+
+  test("Allow: a refusal for account A does not leave a 'wasn't allowed' note on account B's own ask", async () => {
+    const answer = gate<{ approved: boolean }>();
+    const h = await mountSection({
+      result: { state: "needs-permission", ability: "delegation/list" },
+      requestAuthority: () => answer.promise,
+    });
+    buttonIn(h.el, "Allow delegation list")?.click();
+    await flush();
+    h.reset();
+    h.setPage({ state: "needs-permission", ability: "delegation/list" });
+    await h.refresh();
+    await flush();
+    answer.resolve({ approved: false });
+    await flush();
+    expect(h.el.textContent).toContain("can't list delegations yet");
+    expect(h.el.textContent).not.toContain("That wasn't allowed");
+    expect(buttonIn(h.el, "Allow delegation list")?.disabled).toBe(false);
+  });
+
+  test("Try again on a failed read: a read started for account A does not hold account B's list behind a skeleton", async () => {
+    const h = await mountSection({ result: { state: "error", code: "x" } });
+    h.setPage({ state: "error", code: "x" });
+    const release = h.holdNextFirstPage();
+    buttonIn(h.el, "Try again")?.click();
+    await flush();
+    expect(h.el.querySelector<HTMLElement>(".dl-skel")?.hidden).toBe(false);
+
+    h.reset();
+    h.setPage(ready([row("b1")]));
+    await h.refresh();
+    await flush();
+    // B is on screen while A's read is still held.
+    expect(names(h.el)).toEqual(["Helper b1"]);
+    expect(h.el.querySelector<HTMLElement>(".dl-skel")?.hidden).toBe(true);
+    release();
+    await flush();
+    expect(names(h.el)).toEqual(["Helper b1"]);
+    expect(h.el.querySelector<HTMLElement>(".dl-skel")?.hidden).toBe(true);
+  });
+
+  test("Try again: account A's finished read does not end the loading of the retry started for account B", async () => {
+    const h = await mountSection({ result: { state: "error", code: "x" } });
+    const releaseA = h.holdNextFirstPage();
+    buttonIn(h.el, "Try again")?.click();
+    await flush();
+    h.reset();
+    h.setPage({ state: "error", code: "x" });
+    await h.refresh();
+    await flush();
+    // B's list failed to read too: its own Try again.
+    const releaseB = h.holdNextFirstPage();
+    buttonIn(h.el, "Try again")?.click();
+    await flush();
+    const skeleton = h.el.querySelector<HTMLElement>(".dl-skel");
+    expect(skeleton?.hidden).toBe(false);
+    // A's read comes back first. B's is still out, so B is still loading.
+    releaseA();
+    await flush();
+    expect(skeleton?.hidden).toBe(false);
+    h.setPage(ready([row("b1")]));
+    releaseB();
+    await flush();
+    await h.refresh();
+    await flush();
+    expect(names(h.el)).toEqual(["Helper b1"]);
+  });
+
+  test("Reload list: the read for account A does not move focus once account B's list is up", async () => {
+    const h = await mountSection({
+      result: ready([row("a")], "c1"),
+      pages: async () => ready([row("late")]),
+      revoke: async () => ({ ok: false, code: "NETWORK_ERROR" }),
+    });
+    buttonIn(h.el, "Show more")?.click();
+    await flush();
+    h.el.querySelector<HTMLButtonElement>('[aria-label="Revoke access for Helper late"]')?.click();
+    await flush();
+    buttonIn(h.el.querySelector<HTMLElement>('[role="alertdialog"]') ?? h.el, "Revoke access")?.click();
+    await flush();
+    const release = h.holdNextFirstPage();
+    buttonIn(h.el, "Reload list")?.click();
+    await flush();
+    h.reset();
+    h.setPage(ready([row("b1")]));
+    await h.refresh();
+    await flush();
+    release();
+    await flush();
+    expect(names(h.el)).toEqual(["Helper b1"]);
+    expect(active()).not.toBe(h.el.querySelector(".sec-title"));
+  });
+
+  /** Account A's revoke of "a" is out; the account changes to B, whose list is read; then A's answer arrives. */
+  async function lateRevoke(bRows: DelegationRow[], outcome: RevokeOutcome, options: Options = {}) {
+    const answer = gate<RevokeOutcome>();
+    const h = await mountSection({ rows: [row("a")], revoke: () => answer.promise, ...options });
+    buttonIn(await openBox(h), "Revoke access")?.click();
+    await flush();
+    h.reset();
+    h.setPage(ready(bRows));
+    await h.refresh();
+    await flush();
+    answer.resolve(outcome);
+    await flush();
+    return h;
+  }
+
+  test("a revoke of account A's grant that fails after the account changed is not shown as B's: one neutral toast, no error line, no Try again", async () => {
+    const h = await lateRevoke([row("b1")], { ok: false, code: "REVOCATION_FAILED" });
+    expect(h.toasts).toEqual(["delegations.prev.failed"]);
+    expect(panelText("delegations.prev.failed")).toBe("A revoke for your previous account did not finish.");
+    expect(names(h.el)).toEqual(["Helper b1"]);
+    expect(h.el.querySelector('[role="alert"]:not([hidden])')).toBeNull();
+    expect(buttonIn(h.el, "Try again")?.hidden ?? true).toBe(true);
+    expect(h.receipts).toHaveLength(0);
+    // B's grant is its own: nothing is locked or marked busy because of A's.
+    expect(h.el.querySelector<HTMLButtonElement>('[aria-label="Revoke access for Helper b1"]')?.disabled).toBe(false);
+  });
+
+  test("a revoke of account A's grant that goes through after the account changed raises no receipt and changes no row or count: one neutral toast", async () => {
+    const h = await lateRevoke([row("b1"), row("b2")], { ok: true, cid: "a" });
+    expect(h.receipts).toHaveLength(0);
+    expect(h.toasts).toEqual(["delegations.prev.ok"]);
+    expect(panelText("delegations.prev.ok")).toBe("A revoke for your previous account finished.");
+    expect(names(h.el)).toEqual(["Helper b1", "Helper b2"]);
+    expect(h.status()?.count).toBe("2");
+    expect(h.el.querySelector(".dl-live")?.textContent).toBe("");
+    expect(active()).not.toBe(h.el.querySelector(".sec-title"));
+  });
+
+  test("the same grant ID in the new account is unaffected: still listed, still revocable, counted, and revocable afterwards", async () => {
+    const h = await lateRevoke([row("a"), row("b2")], { ok: true, cid: "a" });
+    expect(names(h.el)).toEqual(["Helper a", "Helper b2"]);
+    expect(h.status()?.count).toBe("2");
+    expect(h.receipts).toHaveLength(0);
+    const button = h.el.querySelector<HTMLButtonElement>('[aria-label="Revoke access for Helper a"]');
+    expect(button?.hidden).toBe(false);
+    expect(button?.disabled).toBe(false);
+    expect(h.el.querySelector('[role="alert"]:not([hidden])')).toBeNull();
+    button?.click();
+    await flush();
+    buttonIn(h.el.querySelector<HTMLElement>('[role="alertdialog"]') ?? h.el, "Revoke access")?.click();
+    await flush();
+    // The latch was released when A's request settled, so B's own revoke of that ID reached the source.
+    expect(h.revoked).toEqual(["a", "a"]);
+  });
+
+  test("with toasts off the neutral toast is not raised either", async () => {
+    const h = await lateRevoke([row("b1")], { ok: true, cid: "a" }, { toasts: false });
+    expect(h.toasts).toEqual([]);
+    expect(h.receipts).toHaveLength(0);
+  });
+
+  test("the panel was closed before the account changed: the late answer still gets the neutral toast, never a receipt", async () => {
+    const answer = gate<RevokeOutcome>();
+    const h = await mountSection({ rows: [row("a")], revoke: () => answer.promise });
+    buttonIn(await openBox(h), "Revoke access")?.click();
+    await flush();
+    h.unmount();
+    h.reset();
+    answer.resolve({ ok: true, cid: "a" });
+    await flush();
+    expect(h.receipts).toHaveLength(0);
+    expect(h.toasts).toEqual(["delegations.prev.ok"]);
+  });
+
+  test("a revoke that finishes with the same account still has its receipt, closed panel or not", async () => {
+    const answer = gate<RevokeOutcome>();
+    const h = await mountSection({ rows: [row("a")], revoke: () => answer.promise });
+    buttonIn(await openBox(h), "Revoke access")?.click();
+    await flush();
+    h.unmount();
+    answer.resolve({ ok: true, cid: "a" });
+    await flush();
+    expect(h.receipts).toHaveLength(1);
+    expect(h.toasts).toEqual([]);
+  });
+
+  test("reading more of the same account's list is not cut short by a plain refresh of it", async () => {
+    const second = gate<PageResult>();
+    const h = await mountSection({ result: ready([row("a")], "c1"), pages: () => second.promise });
+    buttonIn(h.el, "Show more")?.click();
+    await flush();
+    // The shell refreshes on a timer; the list is still the same account's.
+    h.setPage(ready([row("a")], "c1"));
+    await h.refresh();
+    second.resolve(ready([row("late")]));
+    await flush();
+    expect(names(h.el)).toEqual(["Helper a", "Helper late"]);
+  });
+});
+
+describe("rows from a later page after a lost answer", () => {
+  async function lateFailure(code: string) {
+    const h = await mountSection({
+      result: ready([row("a")], "c1"),
+      pages: async () => ready([row("late")]),
+      revoke: async () => ({ ok: false, code }),
+    });
+    buttonIn(h.el, "Show more")?.click();
+    await flush();
+    h.el.querySelector<HTMLButtonElement>('[aria-label="Revoke access for Helper late"]')?.click();
+    await flush();
+    buttonIn(h.el.querySelector<HTMLElement>('[role="alertdialog"]') ?? h.el, "Revoke access")?.click();
+    await flush();
+    return h;
+  }
+  const lateCard = (h: Harness) => cards(h.el).find((card) => card.textContent?.includes("Helper late"));
+
+  test("it does not claim the list was re-read: it says to reload, and Reload list drops the later pages and reads the first again", async () => {
+    const h = await lateFailure("NETWORK_ERROR");
+    const card = lateCard(h);
+    const line = card?.querySelector('[role="alert"]:not([hidden]) p')?.textContent;
+    expect(line).toBe("We couldn't confirm whether this worked. Reload the list and check.");
+    expect(card?.textContent).not.toContain("was re-read");
+    const readsBefore = h.reads.count;
+    buttonIn(card as HTMLElement, "Reload list")?.click();
+    await flush();
+    expect(h.reads.count).toBeGreaterThan(readsBefore);
+    expect(names(h.el)).toEqual(["Helper a"]);
+    // The button is gone with the row; focus goes to the heading, not the page.
+    expect(active()).toBe(h.el.querySelector(".sec-title"));
+    // The first page's own cursor is back: the later page can be read again.
+    expect(buttonIn(h.el, "Show more")).toBeDefined();
+  });
+
+  test("a first-page row keeps the re-read wording and has no Reload list; a plain failure of a later row has none either", async () => {
+    const first = await mountSection({ rows: [row("a")], revoke: async () => ({ ok: false, code: "NETWORK_ERROR" }) });
+    buttonIn(await openBox(first), "Revoke access")?.click();
+    await flush();
+    expect(first.el.textContent).toContain("The list was re-read");
+    expect(buttonIn(first.el, "Reload list")?.hidden ?? true).toBe(true);
+
+    const later = await lateFailure("REVOCATION_FAILED");
+    expect(lateCard(later)?.querySelector('[role="alert"]:not([hidden]) p')?.textContent).toBe("Couldn't revoke this access.");
+    expect(buttonIn(lateCard(later) as HTMLElement, "Reload list")?.hidden ?? true).toBe(true);
+  });
+});
+
+describe("a status this panel does not know", () => {
+  test("reads 'Unknown', offers no Revoke, and is not 'Not active yet'; a real pending row still is", async () => {
+    const h = await mountSection({ rows: [row("w", { status: "suspended" as never }), row("p", { status: "pending" })] });
+    const [weird, pending] = cards(h.el);
+    expect(weird?.querySelector(".st")?.textContent).toBe("Unknown");
+    expect(weird?.querySelector(".st")?.className).toContain("st-info");
+    expect(weird?.textContent).not.toContain("Not active yet");
+    expect(weird?.querySelector<HTMLButtonElement>('[aria-label^="Revoke access for"]')?.hidden).toBe(true);
+    expect(weird?.textContent).toContain("Status unknown");
+    expect(pending?.querySelector(".st")?.textContent).toBe("Not active yet");
+    expect(shownStatus(row("w", { status: "" as never }), NOW)).toBe("unknown");
+    expect(shownStatus(row("w", { status: undefined as never }), NOW)).toBe("unknown");
+
+    // Even a forced click opens nothing and calls nothing.
+    weird?.querySelector<HTMLButtonElement>('[aria-label^="Revoke access for"]')?.click();
+    await flush();
+    expect(h.el.querySelector('[role="alertdialog"]')).toBeNull();
+    expect(h.revoked).toEqual([]);
+
+    weird?.querySelector<HTMLButtonElement>('[aria-label^="See details"]')?.click();
+    await flush();
+    expect(h.el.querySelector(".drawer")?.textContent).toContain("Unknown");
   });
 });
 

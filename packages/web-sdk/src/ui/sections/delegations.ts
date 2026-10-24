@@ -4,6 +4,7 @@ import type {
   DelegationResource,
   DelegationRow,
   DescribedAbilities,
+  PanelDataSource,
   PermissionAbility,
   RevokeOutcome,
   ViewResult,
@@ -270,7 +271,7 @@ export function describeAbilities(resources: readonly DelegationResource[]): Des
 // Row mapping
 // ---------------------------------------------------------------------------
 
-type Shown = "active" | "soon" | "expired" | "revoked" | "pending";
+type Shown = "active" | "soon" | "expired" | "revoked" | "pending" | "unknown";
 
 const SHOWN_TONE: Record<Shown, StatusTone> = {
   active: "ok",
@@ -278,6 +279,7 @@ const SHOWN_TONE: Record<Shown, StatusTone> = {
   expired: "info",
   revoked: "info",
   pending: "off",
+  unknown: "info",
 };
 
 /** What the card says. An active grant whose end has passed reads as expired, so it offers no revoke. */
@@ -293,8 +295,11 @@ export function shownStatus(row: DelegationRow, now: number): Shown {
     case "revoked":
     case "ancestor_revoked":
       return "revoked";
-    default:
+    case "pending":
       return "pending";
+    default:
+      // A status this panel does not know is not "not active yet" or anything else specific.
+      return "unknown";
   }
 }
 
@@ -452,6 +457,7 @@ interface Card {
   readonly err: HTMLElement;
   readonly errText: HTMLElement;
   readonly retry: HTMLButtonElement;
+  readonly reload: HTMLButtonElement;
 }
 
 let cardSeq = 0;
@@ -517,6 +523,12 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
 
   let disposed = false;
   let reloading = false;
+  // Moves on whenever the list is dropped (see `update`). Anything in flight remembers the value it started under.
+  let epoch = 0;
+  let retryId = 0;
+  let started = false;
+  let lastSource: PanelDataSource | undefined;
+  let lastResult: ViewResult<DelegationPage> | undefined;
   let declined = false;
   // The first page is the cache's. Pages after it are read here, kept apart, and dropped when the list goes.
   let firstPage: DelegationPage | undefined;
@@ -583,7 +595,9 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
     err.setAttribute("role", "alert");
     const errText = node("p", "dl-msg");
     const retry = actionButton(text("view.retry"));
-    err.append(errText, retry);
+    const reload = actionButton(text("delegations.reload"));
+    reload.hidden = true;
+    err.append(errText, retry, reload);
     article.setAttribute("aria-labelledby", name.id);
     article.append(top, what, meta, chips, acts, busy, err);
     inner.append(article);
@@ -611,10 +625,12 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
       err,
       errText,
       retry,
+      reload,
     };
     see.addEventListener("click", () => openDetails(card));
     revoke.addEventListener("click", () => askRevoke(card));
     retry.addEventListener("click", () => askRevoke(card));
+    reload.addEventListener("click", () => void reloadList());
     return card;
   }
 
@@ -643,7 +659,7 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
     card.see.setAttribute("aria-label", text("delegations.see.for", { name }));
     const mayRevoke = canRevoke(row, now);
     card.revoke.hidden = !mayRevoke;
-    card.revoke.disabled = IN_FLIGHT.size > 0;
+    card.revoke.disabled = IN_FLIGHT.has(card.cid);
     card.revoke.setAttribute("aria-label", text("delegations.revoke.for", { name }));
     card.ended.hidden = mayRevoke;
     if (!mayRevoke) {
@@ -654,22 +670,29 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
             ? "delegations.ended.expired"
             : shown === "revoked"
               ? "delegations.ended.revoked"
-              : "delegations.ended.pending",
+              : shown === "unknown"
+                ? "delegations.ended.unknown"
+                : "delegations.ended.pending",
       );
     }
 
     // A revoke started by an earlier mount of this section still counts: the panel may have been closed and opened again.
-    const busy = card.phase === "busy" || IN_FLIGHT.has(card.cid);
+    // The lock is per grant: other grants stay revocable while this one's request is out.
+    const locked = IN_FLIGHT.has(card.cid);
+    const busy = card.phase === "busy" || locked;
     card.busy.hidden = !busy;
     const refused = card.phase === "failed" || card.phase === "denied" || card.phase === "stale" || card.phase === "unconfirmed";
     card.err.hidden = !refused;
+    // Only the first page is re-read after a failure, so for a row that came from a later page the card cannot claim the list says where it stands.
+    const later = firstPage !== undefined && !firstPage.rows.some((r) => r.cid === card.cid);
     if (refused) {
       // After a failed try the row may have ended anyway; say what the fresh read shows, not what the failure implied.
-      const ended = !mayRevoke && (card.phase === "failed" || card.phase === "unconfirmed");
-      card.errText.textContent = text(`delegations.err.${ended ? "ended" : card.phase}`);
+      const ended = !mayRevoke && !later && (card.phase === "failed" || card.phase === "unconfirmed");
+      card.errText.textContent = text(`delegations.err.${ended ? "ended" : card.phase === "unconfirmed" && later ? "unconfirmed.later" : card.phase}`);
     }
+    card.reload.hidden = !(refused && card.phase === "unconfirmed" && later);
     card.retry.hidden = (card.phase !== "failed" && card.phase !== "unconfirmed") || !mayRevoke;
-    card.retry.disabled = IN_FLIGHT.size > 0;
+    card.retry.disabled = locked;
     if (card.detail !== undefined) card.detail.replaceChildren(...detailRows(row, shown, now));
   }
 
@@ -688,7 +711,7 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
 
   // --- revoke -------------------------------------------------------------
   function askRevoke(card: Card): void {
-    if (IN_FLIGHT.size > 0 || card.phase === "busy") return;
+    if (IN_FLIGHT.has(card.cid) || card.phase === "busy") return;
     if (!canRevoke(card.row, Date.now())) return;
     closeOtherConfirms();
     closeConfirm(card);
@@ -741,7 +764,7 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
   }
 
   async function doRevoke(card: Card): Promise<void> {
-    if (IN_FLIGHT.size > 0 || card.phase === "busy") return;
+    if (IN_FLIGHT.has(card.cid) || card.phase === "busy") return;
     const confirmed = card.confirm;
     if (confirmed !== undefined) confirmed.confirm.disabled = true;
     const source = ctx.data.source;
@@ -756,6 +779,8 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
       return;
     }
     closeConfirm(card);
+    const mine = epoch;
+    const account = watchAccount();
     IN_FLIGHT.add(card.cid);
     card.phase = "busy";
     paintAll();
@@ -768,14 +793,37 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
       outcome = { ok: false, code: "thrown" };
     } finally {
       IN_FLIGHT.delete(card.cid);
+      account.stop();
+    }
+    const ok = outcome !== undefined && outcome.ok === true;
+
+    // The account changed while the node was answering: the write was for the OLD account's grant. Its outcome is not shown
+    // as the new account's: no receipt, no row or count change, no failure line on the new list, no re-read for it. One
+    // neutral toast says it finished (or did not).
+    if (account.moved()) {
+      if (ctx.toastsEnabled()) ctx.toast({ kind: "info", textCode: ok ? "delegations.prev.ok" : "delegations.prev.failed" });
+      if (!disposed) destroy(card);
+      // The grant's lock is released: let every mounted list (the new account's card for the same ID, if any) repaint it.
+      // This repaints; it does not re-read.
+      ctx.requestRender();
+      return;
     }
 
-    if (outcome !== undefined && outcome.ok === true) {
+    // The answer is for a grant of the list that was on screen when the user confirmed. It still has to be reported: a
+    // revoke that went through is a fact (receipt), one that failed is something to be told. But it is not painted into
+    // a list that has since been replaced.
+    const sameList = !disposed && mine === epoch;
+
+    if (ok) {
       removed.add(card.cid);
       ctx.requestRender();
       receipt(card);
       void settleList();
       if (disposed) return;
+      if (!sameList) {
+        destroy(card);
+        return;
+      }
       live.textContent = text("delegations.live.revoked", { name: partyName(card.row) });
       leave(card);
       return;
@@ -784,14 +832,28 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
     card.phase = refusalPhase(code);
     // Whatever went wrong, re-read the list so the card shows where the grant really stands.
     void settleList();
-    if (disposed) {
-      // The panel was closed while the node answered; the failure still has to be seen.
+    if (!sameList) {
+      // The panel was closed, or the list replaced, while the node answered; the failure still has to be seen.
       if (ctx.toastsEnabled()) ctx.toast({ kind: "error", textCode: `delegations.err.${card.phase}` });
+      if (!disposed) destroy(card);
       return;
     }
     paintAll();
     if (card.retry.hidden) card.article.focus();
     else card.retry.focus();
+  }
+
+  /** Whether the account changed since this was called: the cache was cleared or its data source swapped. It listens on its own, so it still sees the change after the section has gone. */
+  function watchAccount(): { moved(): boolean; stop(): void } {
+    const source = ctx.data.source;
+    let last = ctx.data.latest("delegations");
+    let moved = false;
+    const off = ctx.data.subscribe(() => {
+      const now = ctx.data.latest("delegations");
+      if (now === undefined && last !== undefined) moved = true;
+      last = now;
+    });
+    return { moved: () => moved || ctx.data.source !== source, stop: off };
   }
 
   /** The slip: the delegation's CID and the time. The receipt id does not exist, so the CID is the only identifier. */
@@ -822,13 +884,25 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
     if (!shown && ctx.toastsEnabled()) ctx.toast({ kind: "success", textCode: "delegations.receipt.title" });
   }
 
-  /** Re-reads the list so counts, statuses and the rail follow the node. */
+  /** Re-reads the first page so counts, statuses and the rail follow the node. */
   async function settleList(): Promise<void> {
     try {
       await ctx.data.refresh("delegations");
     } catch {
       // The cache records a failed read as an error result; nothing to add here.
     }
+  }
+
+  /** Drops the pages read after the first and reads the first page again: the only way to see where a later-page row stands. */
+  async function reloadList(): Promise<void> {
+    const mine = ++epoch;
+    extra = [];
+    extraCursor = undefined;
+    paging = "idle";
+    update();
+    await settleList();
+    if (disposed || mine !== epoch) return;
+    title.focus({ preventScroll: true });
   }
 
   function leave(card: Card): void {
@@ -984,7 +1058,8 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
 
   // --- states -------------------------------------------------------------
   function destroy(card: Card): void {
-    cards.delete(card.cid);
+    // Only the card's own entry: after a list change the same grant may already have a newer card.
+    if (cards.get(card.cid) === card) cards.delete(card.cid);
     closeConfirm(card);
     card.drawer?.close();
     card.li.remove();
@@ -1019,6 +1094,7 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
       const allow = actionButton(text("delegations.ask.button"));
       allow.addEventListener("click", () => {
         allow.disabled = true;
+        const mine = epoch;
         void (async () => {
           let approved = false;
           try {
@@ -1026,9 +1102,11 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
           } catch {
             approved = false;
           }
+          // The ask was for the list that was on screen; if that list is gone, so is the answer.
+          if (disposed || mine !== epoch) return;
           declined = !approved;
           if (approved) await settleList();
-          if (disposed) return;
+          if (disposed || mine !== epoch) return;
           if (approved) title.focus({ preventScroll: true });
           update();
         })();
@@ -1048,9 +1126,12 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
     line.setAttribute("role", "status");
     const retry = actionButton(text("view.retry"));
     retry.addEventListener("click", () => {
+      // A read that was started for a list that has since been dropped does not get to end this one's loading state.
+      const mine = ++retryId;
       reloading = true;
       update();
       void settleList().then(() => {
+        if (mine !== retryId) return;
         reloading = false;
         update();
       });
@@ -1070,6 +1151,7 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
     if (paging === "loading" || page === undefined || source === undefined) return;
     const cursor = nextCursorOf(page);
     if (cursor === undefined) return;
+    const mine = epoch;
     paging = "loading";
     update();
     let result: ViewResult<DelegationPage>;
@@ -1078,7 +1160,7 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
     } catch {
       result = { state: "error", code: "thrown" };
     }
-    if (disposed) return;
+    if (disposed || mine !== epoch) return;
     if (result.state !== "ready") {
       paging = "error";
       update();
@@ -1174,7 +1256,27 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
     if (disposed) return;
     const source = ctx.data.source;
     const result = ctx.data.latest("delegations");
-    // Pages read after the first belong to one list of one account; when that list is gone or replaced, so are they.
+    // The list is dropped when it is no longer the one the pages were read for: the cache was cleared (account change,
+    // sign-out), the data source changed, or a ready list stopped being ready. Everything keyed to that list goes with it
+    // (pages read after the first, the paging state, a pending retry, an unanswered permission ask), and `epoch` moves on,
+    // so a result still in flight for the old list is discarded when it arrives instead of landing in the new one.
+    const dropped =
+      started &&
+      (source !== lastSource ||
+        (result === undefined && lastResult !== undefined) ||
+        (lastResult?.state === "ready" && result?.state !== "ready"));
+    started = true;
+    lastSource = source;
+    lastResult = result;
+    if (dropped) {
+      epoch += 1;
+      retryId += 1;
+      reloading = false;
+      declined = false;
+      // The cards belong to the list that was dropped, a card whose revoke is still out included; a list that comes back
+      // builds its own, and shows a grant with a request in flight as busy from the module's lock.
+      for (const old of [...cards.values()]) destroy(old);
+    }
     if (result === undefined || result.state !== "ready") {
       extra = [];
       extraCursor = undefined;
