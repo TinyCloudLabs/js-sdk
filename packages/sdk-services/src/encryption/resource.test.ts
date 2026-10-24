@@ -42,12 +42,12 @@ const validVectors: Array<[string, string, ParsedEncryptionResource]> = [
   ["#2 key", res("secrets/software-factory"), key("secrets/software-factory")],
   [
     "#3 key with did:key owner",
-    `urn:tinycloud:encryption:${KEY_OWNER}:default/apps/tinychat`,
-    key("apps/tinychat", "default", KEY_OWNER),
+    `urn:tinycloud:encryption:${KEY_OWNER}:default/apps/tinychat/session`,
+    key("apps/tinychat/session", "default", KEY_OWNER),
   ],
   ["#4 prefix", res("apps/tinychat/"), prefixOf("apps/tinychat")],
   ["#5 8 segments, 255 bytes", res(seg255), key(seg255)],
-  ["#6 dot, underscore, dash inside a segment", res("apps/v1.2_x-y"), key("apps/v1.2_x-y")],
+  ["#6 dot, underscore, dash inside a segment", res("apps/v1.2_x-y/z"), key("apps/v1.2_x-y/z")],
   [
     "#24 bare network with lowercase pkh owner is normalized",
     `urn:tinycloud:encryption:${LOWER_OWNER}:default`,
@@ -55,13 +55,13 @@ const validVectors: Array<[string, string, ParsedEncryptionResource]> = [
   ],
   [
     "#31 did:web owner with colons",
-    "urn:tinycloud:encryption:did:web:example.com:user:alice:default/apps/x",
-    key("apps/x", "default", "did:web:example.com:user:alice"),
+    "urn:tinycloud:encryption:did:web:example.com:user:alice:default/apps/x/y",
+    key("apps/x/y", "default", "did:web:example.com:user:alice"),
   ],
-  ["#32 node-rule network name in a key", `urn:tinycloud:encryption:${OWNER}:Default/apps/x`, key("apps/x", "Default")],
+  ["#32 node-rule network name in a key", `urn:tinycloud:encryption:${OWNER}:Default/apps/x/y`, key("apps/x/y", "Default")],
   ["#33 prefix with a 255-byte path", res(`${seg255}/`), prefixOf(seg255)],
-  ["#48 mixed-case network is a different network from 'default'", `urn:tinycloud:encryption:${OWNER}:DeFault/apps/x`, key("apps/x", "DeFault")],
-  ["#44 network of exactly 64 characters", `urn:tinycloud:encryption:${OWNER}:${seg(64)}/apps/x`, key("apps/x", seg(64))],
+  ["#48 mixed-case network is a different network from 'default'", `urn:tinycloud:encryption:${OWNER}:DeFault/apps/x/y`, key("apps/x/y", "DeFault")],
+  ["#44 network of exactly 64 characters", `urn:tinycloud:encryption:${OWNER}:${seg(64)}/apps/x/y`, key("apps/x/y", seg(64))],
   // #35 is a valid GRANT; the parser reports kind "prefix" so a caller can refuse it as an invocation target.
   ["#35 prefix parses as a prefix, never a key", res("apps/x/"), prefixOf("apps/x")],
 ];
@@ -100,8 +100,8 @@ const rejectVectors: Array<[string, string]> = [
   ["#42 network starting with '.'", `urn:tinycloud:encryption:${OWNER}:.a/apps/x`],
   ["#43 network of 65 characters", `urn:tinycloud:encryption:${OWNER}:${seg(65)}/apps/x`],
   ["#45 bidi network inside a prefix", `urn:tinycloud:encryption:${OWNER}:de\u202eault/apps/x/`],
-  ["#46 newline in the network part of a key", `urn:tinycloud:encryption:${OWNER}:default\n/apps/x`],
-  ["#47 trailing newline after the key path", `urn:tinycloud:encryption:${OWNER}:default/apps/x\n`],
+  ["#46 newline in the network part of a key", `urn:tinycloud:encryption:${OWNER}:default\n/apps/x/y`],
+  ["#47 trailing newline after the key path", `urn:tinycloud:encryption:${OWNER}:default/apps/x/y\n`],
   // Beyond the shared vectors.
   ["prefix with a '..' segment", res("apps/../")],
   ["prefix with an empty segment", res("apps//x/")],
@@ -142,13 +142,13 @@ const netOf = (ownerDid: string): string => `urn:tinycloud:encryption:${ownerDid
 
 describe("owner grammar", () => {
   test("generic owner with an empty colon component is accepted", () => {
-    const uri = `${netOf("did:web:a::b")}/apps/x`;
-    expect(parseEncryptionResource(uri)).toEqual(key("apps/x", "default", "did:web:a::b"));
+    const uri = `${netOf("did:web:a::b")}/apps/x/y`;
+    expect(parseEncryptionResource(uri)).toEqual(key("apps/x/y", "default", "did:web:a::b"));
   });
 
   test.each(["9007199254740992", "18446744073709551615"])("accepts did:pkh:eip155 chain id %s above 2^53 or at u64 max", (chain) => {
     const owner = `did:pkh:eip155:${chain}:${ADDR}`;
-    expect(parseEncryptionResource(`${netOf(owner)}/apps/x`)).toEqual(key("apps/x", "default", owner));
+    expect(parseEncryptionResource(`${netOf(owner)}/apps/x/y`)).toEqual(key("apps/x/y", "default", owner));
   });
 
   test.each([
@@ -252,10 +252,10 @@ describe("encryptionResourceContains", () => {
     // Contract containment vectors.
     ["V1 apps/foo/ vs apps/foobar/x", res("apps/foo/"), res("apps/foobar/x"), false],
     ["V2 apps/foo/ vs apps/foo", res("apps/foo/"), res("apps/foo"), false],
-    ["V3 apps/ covers apps/foo/", res("apps/"), res("apps/foo/"), true],
+    ["V3 apps/ is not a valid prefix and covers nothing", res("apps/"), res("apps/foo/"), false],
     ["V4 apps/foo/ covers apps/foo/a/b", res("apps/foo/"), res("apps/foo/a/b"), true],
-    ["V5 bare vs key", NET, res("apps/x"), false],
-    ["V6 key vs bare", res("apps/x"), NET, false],
+    ["V5 bare vs key", NET, res("apps/x/y"), false],
+    ["V6 key vs bare", res("apps/x/y"), NET, false],
     ["bare with lowercase owner equals the canonical bare network", `urn:tinycloud:encryption:${LOWER_OWNER}:default`, NET, true],
   ];
   test.each(table)("%s", (_name, granted, requested, expected) => {
@@ -287,5 +287,85 @@ describe("nodeSupportsNamedKeys", () => {
     ["null info", null, false],
   ])("%s", (_name, info, expected) => {
     expect(nodeSupportsNamedKeys(info)).toBe(expected);
+  });
+});
+
+// Depth rule for the reserved `apps` segment (R1). The rows below are the
+// groups `nodeKeyPathUnderApps`, `prefixValid` and `prefixCovers` copied
+// exactly from ~/scratch/tc1777-node/APP-ID-VECTORS.json (sha256 prefix
+// a5c46c1b7d02ccab), which is shared with the node and OpenKey.
+describe("apps/ depth rule (shared vectors)", () => {
+  const nodeKeyPathUnderApps: Array<[string, boolean]> = [
+    ["apps/foo/x", true],
+    ["apps/foo/x/y", true],
+    ["apps/foo", false],
+    ["apps", false],
+    ["apps/Foo/x", false],
+    ["apps/foo_bar/x", true],
+    ["apps/foo/x/", false],
+    ["secrets/x", true],
+    ["appsx/y", true],
+    ["apps.x/y", true],
+  ];
+  test.each(nodeKeyPathUnderApps)("key path %p accepted=%p", (keyPath, accepted) => {
+    if (accepted) {
+      expect(parseEncryptionResource(formatKeyResource(NET, keyPath))).toMatchObject({ kind: "key", path: keyPath });
+    } else {
+      expect(() => formatKeyResource(NET, keyPath)).toThrow(EncryptionResourceError);
+    }
+  });
+
+  const prefixValid: Array<[string, boolean]> = [
+    ["apps/", false],
+    ["apps/foo/", true],
+    ["apps/foo/x/", true],
+    ["apps/Foo/", false],
+    ["apps/foo//", false],
+    ["appsx/", true],
+    ["apps.x/", true],
+    ["apps", false],
+    ["apps/foo", false],
+  ];
+  test.each(prefixValid)("prefix %p valid=%p", (prefix, valid) => {
+    if (valid) {
+      expect(parseEncryptionResource(res(prefix)).kind).toBe("prefix");
+    } else {
+      expect(() => parseEncryptionResource(res(prefix))).toThrow(EncryptionResourceError);
+    }
+  });
+
+  const prefixCovers: Array<[string, string, boolean]> = [
+    ["apps/foo/", "apps/foo/x", true],
+    ["apps/foo/", "apps/foo/x/y", true],
+    ["apps/foo/", "apps/foo/x/y/z", true],
+    ["apps/foo/", "apps/foo", false],
+    ["apps/foo/", "apps/foobar/x", false],
+    ["apps/foo/", "apps/foo.bar/x", false],
+    ["apps/foo/", "apps/foo-bar/x", false],
+    ["apps/foo/", "apps/fo/x", false],
+    ["apps/foo/", "other/foo/x", false],
+    ["apps/foo/", "secrets/apps/foo/x", false],
+    ["apps/foo.bar/", "apps/foo.bar/x", true],
+    ["apps/foo_bar/", "apps/foo.bar/x", false],
+    ["apps/foo_bar/", "apps/foo-bar/x", false],
+    ["apps/foo_bar/", "apps/fooxbar/x", false],
+    ["apps/foo/x/", "apps/foo/x", false],
+  ];
+  test.each(prefixCovers)("prefix %p covers key %p = %p", (prefix, keyPath, covers) => {
+    expect(encryptionResourceContains(res(prefix), res(keyPath))).toBe(covers);
+  });
+
+  test("apps and apps/<id> are not keys, apps/ is not a prefix, and the builders refuse them", () => {
+    expect(() => parseEncryptionResource(res("apps"))).toThrow(EncryptionResourceError);
+    expect(() => parseEncryptionResource(res("apps/tinychat"))).toThrow(EncryptionResourceError);
+    expect(() => parseEncryptionResource(res("apps/"))).toThrow(EncryptionResourceError);
+    expect(() => formatPrefixResource(NET, "apps")).toThrow(EncryptionResourceError);
+    expect(() => formatKeyResource(NET, "apps/tinychat")).toThrow(EncryptionResourceError);
+    expect(parseEncryptionResource(res("apps/tinychat/"))).toEqual(prefixOf("apps/tinychat"));
+  });
+
+  test("no grant covers every app's keys: the prefix apps/ grants nothing", () => {
+    expect(encryptionResourceContains(res("apps/"), res("apps/foo/x"))).toBe(false);
+    expect(encryptionResourceContains(res("apps/"), res("apps/foo/"))).toBe(false);
   });
 });
