@@ -5,6 +5,7 @@ import {
   type PermissionRequestResult,
 } from './PermissionRequestModal';
 import { createPromptScope, mountPrompt, type PromptScope } from '../ui/parts/prompts';
+import { MODALS_KEY, type LoadedModals } from './modals-registry';
 
 /** Used when a caller shows a prompt without a UI client scope. Tracked by the host like any other. */
 const DEFAULT_PROMPT_SCOPE = createPromptScope(true);
@@ -144,3 +145,10 @@ export const showPermissionRequestModal = (
 ): Promise<PermissionRequestResult> => {
   return ModalManager.getInstance().showPermissionRequestModal(options, promptScope);
 };
+
+// The eager front (lazy-prompts.ts) finds this module through the registry, not through an import.
+(globalThis as Record<symbol, unknown>)[MODALS_KEY] = {
+  showPermissionRequestModal,
+  showSpaceCreationModal,
+  closeActiveModal: () => ModalManager.getInstance().closeActiveModal(),
+} satisfies LoadedModals;

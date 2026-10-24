@@ -27,8 +27,20 @@ interface OpenPrompt {
   readonly dismiss: () => void;
 }
 
-const openPrompts = new Set<OpenPrompt>();
-let promptLayer: HTMLElement | undefined;
+/**
+ * The open prompts and the layer they mount into. Kept on `globalThis` because the dialogs load in their own
+ * chunk, which carries its own copy of this module: both copies must see one registry, or `dismissPrompts`
+ * would miss a prompt the lazy copy mounted.
+ */
+interface PromptState {
+  readonly open: Set<OpenPrompt>;
+  layer: HTMLElement | undefined;
+}
+const STATE_KEY = Symbol.for("tinycloud.web-sdk.prompt-state");
+const state = ((globalThis as Record<symbol, PromptState | undefined>)[STATE_KEY] ??= {
+  open: new Set<OpenPrompt>(),
+  layer: undefined,
+});
 
 export function createPromptScope(uiEnabled: boolean): PromptScope {
   return { uiEnabled };
@@ -40,7 +52,7 @@ export function createPromptScope(uiEnabled: boolean): PromptScope {
  */
 function refusalFor(scope: PromptScope): PromptRefusal | undefined {
   if (!canRenderUi()) return "ui-unavailable-frame";
-  if (!scope.uiEnabled || promptLayer === undefined) return "ui-disabled";
+  if (!scope.uiEnabled || state.layer === undefined) return "ui-disabled";
   return undefined;
 }
 
@@ -59,12 +71,12 @@ export function mountPrompt(
     return { refusal };
   }
   // refusalFor() returned undefined, so the layer exists.
-  promptLayer?.appendChild(element);
+  state.layer?.appendChild(element);
   const entry: OpenPrompt = { scope, dismiss };
-  openPrompts.add(entry);
+  state.open.add(entry);
   return {
     release: () => {
-      openPrompts.delete(entry);
+      state.open.delete(entry);
     },
   };
 }
@@ -78,7 +90,7 @@ function dismissEntries(entries: readonly OpenPrompt[]): void {
   let failed = false;
   let firstError: unknown;
   for (const entry of entries) {
-    openPrompts.delete(entry);
+    state.open.delete(entry);
     try {
       entry.dismiss();
     } catch (error) {
@@ -97,16 +109,16 @@ function dismissEntries(entries: readonly OpenPrompt[]): void {
 
 /** Dismisses every pending prompt opened by `scope`. Used on reset and unregister. */
 export function dismissPrompts(scope: PromptScope): void {
-  dismissEntries([...openPrompts].filter((entry) => entry.scope === scope));
+  dismissEntries([...state.open].filter((entry) => entry.scope === scope));
 }
 
 export const prompts: HostPart = {
   id: "prompts",
   start(_context, layer) {
-    promptLayer = layer;
+    state.layer = layer;
     return () => {
-      promptLayer = undefined;
-      dismissEntries([...openPrompts]);
+      state.layer = undefined;
+      dismissEntries([...state.open]);
     };
   },
 };

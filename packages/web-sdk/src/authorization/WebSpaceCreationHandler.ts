@@ -11,9 +11,9 @@ import {
 } from "@tinycloud/sdk-core";
 import type { PromptScope } from "../ui/parts/prompts";
 import {
-  ModalManager,
+  closeActiveModal,
   showSpaceCreationModal,
-} from "../notifications/ModalManager";
+} from "../notifications/lazy-prompts";
 import {
   beginAwaitingUserInput,
   formatDuration,
@@ -157,7 +157,7 @@ export class ModalSpaceCreationHandler implements ISpaceCreationHandler {
       if (error instanceof SpaceCreationTimeoutError) {
         // Nothing is going to answer this dialog. Take it down so the page is
         // not left with an invisible modal trapping scroll and focus.
-        ModalManager.getInstance().closeActiveModal();
+        closeActiveModal();
         endBeacon("timeout");
         this.toast?.({ kind: "error", textCode: "toast.space_creation_timeout" });
       } else {

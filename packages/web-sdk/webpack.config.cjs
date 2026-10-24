@@ -220,13 +220,17 @@ const gatedCjsConfig = {
   output: { ...replicaCjsConfig.output, filename: "replica-gated.cjs" },
 };
 
-// The lazy panel and panel-data are their own entries (contracts-ade §1.4 budget applies to the eager root only).
+// The lazy chunks are their own entries (contracts-ade §1.4 budget applies to the eager root only).
 // The root loads each by relative sibling path, at first use, and never bundles it.
-const LAZY_ENTRIES = { "./panel-entry": "panel", "./panel-data-entry": "panel-data" };
+const LAZY_ENTRIES = [
+  { request: "./panel-entry", dir: "src/ui", file: "panel" },
+  { request: "./panel-data-entry", dir: "src/ui", file: "panel-data" },
+  { request: "./modals-entry", dir: "src/notifications", file: "modals" },
+];
 const lazyLoaderExternals = (type, ext) => ({ context, request }, callback) => {
-  const file = LAZY_ENTRIES[request];
-  if (file && context === path.resolve(__dirname, "src/ui")) {
-    callback(null, `${type} ./${file}.${ext}`);
+  const entry = LAZY_ENTRIES.find((e) => e.request === request && context === path.resolve(__dirname, e.dir));
+  if (entry) {
+    callback(null, `${type} ./${entry.file}.${ext}`);
     return;
   }
   callback();
@@ -281,6 +285,21 @@ const panelDataCjsConfig = {
   output: { ...cjsConfig.output, filename: "panel-data.cjs" },
 };
 
+// The permission and space-creation dialogs. Like the panel, they keep @tinycloud/* external.
+const modalsEsmConfig = {
+  ...esmConfig,
+  entry: "./src/notifications/modals-entry.ts",
+  externals: panelExternals("module", "mjs"),
+  output: { ...esmConfig.output, filename: "modals.mjs" },
+};
+
+const modalsCjsConfig = {
+  ...cjsConfig,
+  entry: "./src/notifications/modals-entry.ts",
+  externals: panelExternals("commonjs", "cjs"),
+  output: { ...cjsConfig.output, filename: "modals.cjs" },
+};
+
 // Headless subpath (`@tinycloud/web-sdk/credentials`). Built from the base
 // configs only: no replica externals or plugins, so index/replica are unchanged.
 const credentialsEsmConfig = {
@@ -305,6 +324,8 @@ module.exports = [
   panelCjsConfig,
   panelDataEsmConfig,
   panelDataCjsConfig,
+  modalsEsmConfig,
+  modalsCjsConfig,
   credentialsEsmConfig,
   credentialsCjsConfig,
 ];
