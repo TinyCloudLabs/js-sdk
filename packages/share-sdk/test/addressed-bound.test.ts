@@ -244,11 +244,12 @@ describe("addressed share size bound: derived delivery address and node timestam
     expect(grown).toBeGreaterThanOrEqual(mailbox.length + 16);
   });
 
-  /** An owner root whose times are at their widest and whose id is as long as the bound allows. */
-  function widestRoot(input: AddressedOwnerRootInput) {
+  /** An owner root whose times are at their maximum and whose id is as long as the bound allows. */
+  function maximalRoot(input: AddressedOwnerRootInput) {
     const [head, payload, signature] = signedRoot(input).delegationHeader.Authorization.split(".");
-    const widened = { ...(JSON.parse(new TextDecoder().decode(fromBase64Url(payload!))) as Record<string, unknown>), nbf: Number.MAX_SAFE_INTEGER, exp: Number.MAX_SAFE_INTEGER };
-    return { cid: "b".repeat(128), delegationHeader: { Authorization: `${head}.${toBase64Url(enc(canonicalize(widened)))}.${signature}` } };
+    const claims: unknown = JSON.parse(new TextDecoder().decode(fromBase64Url(payload!)));
+    const maximal = { ...(typeof claims === "object" && claims !== null ? claims : {}), nbf: Number.MAX_SAFE_INTEGER, exp: Number.MAX_SAFE_INTEGER };
+    return { cid: "b".repeat(128), delegationHeader: { Authorization: `${head}.${toBase64Url(enc(canonicalize(maximal)))}.${signature}` } };
   }
 
   it("covers an envelope whose node timestamps are at their longest, with no other slack to hide a shorter assumption", async () => {
@@ -260,7 +261,7 @@ describe("addressed share size bound: derived delivery address and node timestam
       contentSource: { ...options.contentSource, keyVersion: Number.MAX_SAFE_INTEGER },
       authority: {
         ...options.authority,
-        createOwnerRoot: async (input) => widestRoot(input),
+        createOwnerRoot: async (input) => maximalRoot(input),
         registerPolicy: async (input) => ({
           policyCid: input.policyCid, policyRootCid: input.policyRoot.cid, enforcementRootCid: input.enforcementRoot.cid,
           attestedEnforcerBinding: { ...signedBinding(EXPIRES_AT), issuedAt: LONGEST_TIMESTAMP, expiresAt: LONGEST_TIMESTAMP },
