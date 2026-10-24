@@ -2311,7 +2311,7 @@ describe("replica worker (TC-1827 follow-up) first ceiling ratchet", () => {
     expect(() => validateLedger(current)).not.toThrow();
     expect(JSON.stringify(current.tc1827ReplicaWorkerRatchet)).toBe(JSON.stringify(approvedTc1827ReplicaWorkerRatchet));
     expect(row().worker).toEqual({ delta: 0, ceiling: 770093 });
-    expect(current.tc1827ReplicaWorkerRatchet!.worker.ceiling).toBe(row().worker.ceiling);
+    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(row().worker.ceiling);
     expect(MAX_WORKER_GZIP_BYTES).toBe(newestKvWorkerCeiling());
     expect(row().canonicalCI.run).toBe("https://github.com/TinyCloudLabs/js-sdk/actions/runs/39949887460");
     expect(row().canonicalCI.jobs).toHaveLength(2);
@@ -2641,28 +2641,21 @@ describe("browser SIWE domain and URI (#604, TC-1488) raised root ceiling ratche
   });
 });
 
-describe("short links v=4 (#708, TC-1737) worker ceiling ratchet", () => {
+describe("short links v=4 (#708, TC-1737) root ceiling ratchet", () => {
   const row = () => structuredClone(approvedTc1737ShortLinkLazyChunkRatchet);
 
-  it("carries the index.mjs ceiling, sets index.cjs and both worker ceilings to the exact canonical CI bytes, carries every other ceiling, and is read by the checker", () => {
+  it("carries the index.mjs ceiling, sets index.cjs to the exact canonical CI bytes, and carries every other ceiling", () => {
     expect(() => validateLedger(current)).not.toThrow();
     expect(JSON.stringify(current.tc1737ShortLinkLazyChunkRatchet)).toBe(JSON.stringify(approvedTc1737ShortLinkLazyChunkRatchet));
-    expect(row().worker).toEqual({ delta: 46, ceiling: 776174 });
-    expect(row().replicaWorker).toEqual({ delta: 20, ceiling: 770113 });
     expect(row().root.delta).toEqual({ "index.mjs": 0, "index.cjs": 166 });
     expect(row().root.ceiling).toEqual({ "index.mjs": 1462509, "index.cjs": 1404942 });
-    expect(row().reason).toContain("index.mjs measured 1461950 in CI run 40136320965; ceiling not lowered: within the TC-1985 gzip-alignment swing");
+    expect(row().reason).toContain("index.mjs measured 1461950 in CI run 40136320965 and its ceiling is not lowered (within the TC-1985 gzip-alignment swing)");
     for (const format of ["index.mjs", "index.cjs"] as const) {
       expect(row().root.ceiling[format]).toBe(approvedTc1488SiweDomainUriRatchet.root.ceiling[format] + row().root.delta[format]);
     }
-    expect(row().worker.ceiling).toBe(approvedTc1488SiweDomainUriRatchet.worker.ceiling + row().worker.delta);
-    expect(row().replicaWorker.ceiling).toBe(approvedTc1827ReplicaWorkerRatchet.worker.ceiling + row().replicaWorker.delta);
-    expect(MAX_WORKER_GZIP_BYTES).toBe(row().worker.ceiling);
-    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(row().replicaWorker.ceiling);
-    expect(MAX_WORKER_GZIP_BYTES).toBe(newestKvWorkerCeiling());
     expect(row().firstImport).toEqual({ ...approvedTc1488SiweDomainUriRatchet.firstImport, delta: { "replica.mjs": 0, "replica.cjs": 0 } });
     expect(row().activation).toEqual({ ...approvedTc1488SiweDomainUriRatchet.activation, delta: { "activation.mjs": 0, "activation.cjs": 0 } });
-    expect(row().ruling).toContain("test-ruling: TC-1976");
+    expect(row().ruling).toContain("worker ceilings unchanged");
     expect(row().base).toBe("e6aad66159e81b47c937da584a4c7f019be54100");
     expect(row().sourceCommits).toEqual(["8d15cd6123fd37924db59065e1317682dbff2772"]);
     expect(row().canonicalCI.run).toBe("https://github.com/TinyCloudLabs/js-sdk/actions/runs/40136320965");
@@ -2683,9 +2676,6 @@ describe("short links v=4 (#708, TC-1737) worker ceiling ratchet", () => {
       (changed) => { changed.activation.ceiling["activation.cjs"]++; },
       (changed) => { changed.worker.ceiling--; },
       (changed) => { changed.worker.delta++; },
-      (changed) => { changed.replicaWorker.ceiling--; },
-      (changed) => { changed.replicaWorker.ceiling++; },
-      (changed) => { changed.replicaWorker.delta--; },
       (changed) => { changed.canonicalCI.run = "https://github.com/TinyCloudLabs/js-sdk/actions/runs/1"; },
       (changed) => { changed.sourceCommits = ["0".repeat(40)]; },
     ];
@@ -2705,7 +2695,7 @@ describe("short links v=4 (#708, TC-1737) worker ceiling ratchet", () => {
     expect(() => validateTc1737ShortLinkLazyChunkRatchetTransition(undefined, row())).not.toThrow();
     expect(() => validateTc1737ShortLinkLazyChunkRatchetTransition(row(), row())).not.toThrow();
     const changed = row();
-    changed.replicaWorker.ceiling++;
+    changed.root.ceiling["index.cjs"]++;
     expect(() => validateTc1737ShortLinkLazyChunkRatchetTransition(undefined, changed)).toThrow();
     expect(() => validateTc1737ShortLinkLazyChunkRatchetTransition(row(), undefined)).toThrow();
   });

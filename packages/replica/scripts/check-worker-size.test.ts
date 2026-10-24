@@ -31,8 +31,7 @@ test("uses the reviewed GitHub worker ceilings without additional headroom", () 
   const ledger = JSON.parse(readFileSync(join(import.meta.dir, "../../web-sdk/scripts/replica-size-ledger.json"), "utf8")) as Record<string, { worker?: { ceiling: number } } | undefined>;
   const kvRows = Object.keys(ledger).filter((key) => key !== "tc1827ReplicaWorkerRatchet" && ledger[key]?.worker !== undefined);
   expect(MAX_WORKER_GZIP_BYTES).toBe(ledger[kvRows.at(-1)!]!.worker!.ceiling);
-  const newestReplicaRow = (ledger.tc1737ShortLinkLazyChunkRatchet ?? ledger.tc1827ReplicaWorkerRatchet) as { replicaWorker?: { ceiling: number }; worker?: { ceiling: number } };
-  expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe((newestReplicaRow.replicaWorker ?? newestReplicaRow.worker)!.ceiling);
+  expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(ledger.tc1827ReplicaWorkerRatchet!.worker!.ceiling);
 });
 
 test("refuses worker size measurements from a different Bun or Rust toolchain", () => {

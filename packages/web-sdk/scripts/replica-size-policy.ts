@@ -279,11 +279,10 @@ export type Tc1855ManifestLimitGuardRatchet = HardeningRatchet;
  */
 export type Tc1488SiweDomainUriRatchet = HardeningRatchet;
 /**
- * One reviewed exact-byte row (js-sdk #708, TC-1737): short-link code reached the kv-storage and replica workers. Same
- * shape as the #565 hardening row, plus `replicaWorker`: the replica worker's own delta and ceiling, because a row's
- * `worker` field is the kv-storage worker's.
+ * One reviewed exact-byte row (js-sdk #708, TC-1737): short-link code raised the root index.cjs bytes. Same shape as the
+ * #565 hardening row; the worker ceilings are carried unchanged.
  */
-export type Tc1737ShortLinkLazyChunkRatchet = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
+export type Tc1737ShortLinkLazyChunkRatchet = HardeningRatchet;
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -1546,16 +1545,15 @@ export const approvedTc1488SiweDomainUriRatchet: Tc1488SiweDomainUriRatchet = {
 };
 
 /**
- * Short links v=4 (js-sdk #708, TC-1737), accepted by Naomi: short-link code in sdk-core/share-envelope reached the
- * worker bundles. The kv-storage worker ceiling (`MAX_WORKER_GZIP_BYTES`) rises from 776,128 to 776,174 (+46) and the
- * replica worker ceiling (`MAX_REPLICA_WORKER_GZIP_BYTES`, the row's `replicaWorker`) from 770,093 to 770,113 (+20).
- * The root index.cjs ceiling goes from 1,404,776 to 1,404,942 (+166); the index.mjs ceiling stays 1,462,509 (CI measured
- * 1,461,950, within the TC-1985 gzip-alignment swing). The worker and root ceilings are the bytes canonical CI printed on
- * the #708 head 8d15cd61 (Replica run 40136320965). First-import and activation ceilings are unchanged.
+ * Short links v=4 (js-sdk #708, TC-1737), approved by Naomi: the root index.cjs ceiling goes from 1,404,776 to 1,404,942
+ * (+166), the bytes canonical CI printed on the #708 head 8d15cd61 (Replica run 40136320965). The index.mjs ceiling stays
+ * 1,462,509: CI measured 1,461,950 there, within the TC-1985 gzip-alignment swing. The worker ceilings are unchanged
+ * (776,128 and 770,093): the kv-storage and replica workers measured those bytes on the #708 head 8df0083d after the
+ * replica's sdk-services pin moved to 3.6.1 (Replica run 40141627657). First-import and activation ceilings are unchanged.
  */
 export const approvedTc1737ShortLinkLazyChunkRatchet: Tc1737ShortLinkLazyChunkRatchet = {
-  label: "short links v=4 (TC-1737, #708): root index.cjs +166 B gzip, index.mjs ceiling carried; worker +46 B kv-storage / +20 B replica, at the exact CI bytes",
-  ruling: "Approved by Naomi (root, kv-storage worker and replica worker at the exact CI bytes, no headroom; test-ruling: TC-1976)",
+  label: "short links v=4 (TC-1737, #708): root index.cjs +166 B gzip, index.mjs ceiling carried, worker ceilings unchanged",
+  ruling: "Approved by Naomi (index.cjs at the exact CI bytes of run 40136320965, no headroom; index.mjs ceiling kept; worker ceilings unchanged, measured in run 40141627657)",
   base: "e6aad66159e81b47c937da584a4c7f019be54100",
   sourceCommits: [
     "8d15cd6123fd37924db59065e1317682dbff2772",
@@ -1579,9 +1577,8 @@ export const approvedTc1737ShortLinkLazyChunkRatchet: Tc1737ShortLinkLazyChunkRa
     delta: { "activation.mjs": 0, "activation.cjs": 0 },
     ceiling: { "activation.mjs": 23117, "activation.cjs": 24700 },
   },
-  worker: { delta: 46, ceiling: 776174 },
-  replicaWorker: { delta: 20, ceiling: 770113 },
-  reason: "short-link code in sdk-core/share-envelope reached the worker bundles; accepted for the short-links release; follow-up ticket to keep it out. index.mjs measured 1461950 in CI run 40136320965; ceiling not lowered: within the TC-1985 gzip-alignment swing",
+  worker: { delta: 0, ceiling: 776128 },
+  reason: "index.cjs grew by 166 B from the short-link code in sdk-core/share-envelope; index.mjs measured 1461950 in CI run 40136320965 and its ceiling is not lowered (within the TC-1985 gzip-alignment swing); the worker bundles are unchanged after the replica's sdk-services pin moved to 3.6.1 (TC-2014)",
 };
 
 export type GatedOnlyRatchet = {
