@@ -16,6 +16,7 @@ import { inviteFolder } from '../dist/invite-schema.js';
 import { newInviteId } from '../dist/invite-blob.js';
 import { writeSecure, saveProfile, loadProfile, secureSubdir } from '../dist/profile.js';
 import { acceptB } from '../dist/commands.js';
+import { ed25519DidKey } from '../dist/did-key.js';
 import { memoryKv } from './memory-kv.mjs';
 
 const CLI = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
@@ -26,7 +27,8 @@ const SAM_ADDR = '0x1234567890abcdef1234567890abcdef12345678';
 const SAM_OWNER = `did:pkh:eip155:1:${SAM_ADDR}`;
 const SAM_COURIER = 'did:key:z6MkSamCourier';
 const HUNTER_OWNER = `did:pkh:eip155:1:0x${'a'.repeat(40)}`;
-const HUNTER_COURIER = 'did:key:z6MkHunterCourier';
+const HUNTER_COURIER = ed25519DidKey('A'.repeat(43)); // a real ed25519 did:key: the grant record parser validates it
+const escaped = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const SPACE = `tinycloud:pkh:eip155:1:${SAM_ADDR}:agents`;
 const EMAIL = 'hunter@example.test';
 const EXPIRES = new Date(NOW + 7 * DAY).toISOString();
@@ -181,7 +183,7 @@ test('H-A (3) a late answer leaves profile.json and the invite record byte-ident
   const grant = listGrants(id)[0];
   assert.equal(grant.cid, 'out-1');
   assert.equal(grant.notAfter, new Date(NOW + 7 * DAY).toISOString());
-  assert.equal(grant.late, 'failed');
+  assert.equal(grant.late, 'ok', 'the node did issue the grant, although the abandoned step ended in an error');
   assert.ok(grant.lateAt);
 });
 
@@ -285,14 +287,14 @@ test('grant record (2) delegateTo hangs: a private file says a grant may exist (
   assert.equal(fs.readdirSync(secureSubdir('invites')).filter((n) => /^[a-z2-7]{26}\.json$/.test(n)).length, 1, 'the grant file is not an invite record');
   // held facts
   const text = heldFactsText(describeHeld(id));
-  assert.match(text, /An earlier pairing attempt timed out at \S+ after asking the node for a read grant to courier did:key:z6MkHunterCourier\. That grant may exist until \S+ \(cid unknown\)\. It was not sent to the invitee and is not revoked automatically yet\./);
+  assert.match(text, new RegExp(String.raw`An earlier pairing attempt timed out at \S+ after asking the node for a read grant to courier ${escaped(HUNTER_COURIER)}\. That grant may exist until \S+ \(cid unknown\)\. It was not sent to the invitee and is not revoked automatically yet\.`));
   // invite list
   const listed = spawnSync(process.execPath, [CLI, 'invite', 'list'], { env: { ...process.env, COURIER_HOME: home, HOME: home }, encoding: 'utf8' });
   assert.equal(listed.status, 0, listed.stderr);
   assert.deepEqual(JSON.parse(listed.stdout)[0].possibleGrants, [{ cid: 'unknown', peerCourierDid: HUNTER_COURIER, notAfter: grant.notAfter }]);
   // approve failure text (the second attempt times out too)
   delegateScript = ['hang', 'hang'];
-  await assert.rejects(approve(watcher(), id), (e) => e.code === 'node-timeout' && /Pairing timed out \(node-timeout\); the invite is held again\. A read grant to courier did:key:z6MkHunterCourier may exist until \S+; see courier invite list\./.test(e.message));
+  await assert.rejects(approve(watcher(), id), (e) => e.code === 'node-timeout' && new RegExp(String.raw`Pairing timed out \(node-timeout\); the invite is held again\. A read grant to courier ${escaped(HUNTER_COURIER)} may exist until \S+; see courier invite list\.`).test(e.message));
   // notice
   const held = notices.filter((n) => n.kind === 'invite-held').at(-1);
   assert.equal(held.invite.possibleGrantUntil !== undefined, true);
@@ -371,16 +373,53 @@ test('grant record: a late answer for another attempt or a changed marker update
 // ---- close() and the Welcome pre-check: the later checks matter when something changes DURING the awaits
 const lockFile = (id) => path.join(secureSubdir('invites'), `${id}.lock`);
 
-test('M-A close(): an invite that completes while close() is deleting remote state is not overwritten with expired', async () => {
+test('M-1 a revoke racing an approve: the approve holds the lock, so the revoke fails invite-busy and nothing of the finished invite is touched (record, Welcome, peer)', async () => {
+  delegateScript = ['hang'];
   const id = await daemonHeldForOwner();
+  delegateScript = [];
+  delegations = 0;
   const stale = readRecord(id);
-  const flipping = new InviteWatcher({
-    node, profile: () => loadProfile(), log: (e) => logs.push(e), now: () => new Date(clock), timing, accept: realAccept, peersFiles: [],
-    deleteSealed: async () => { await approve(watcher(), id); },
-  });
-  await assert.rejects(flipping.revoke(stale), (e) => e.code === 'invite-lock-lost');
+  // The approve is paused inside acceptB (the lock is held) while the owner's revoke arrives.
+  let releaseApprove;
+  const slowAccept = (p, n, a, h, deps) => new Promise((resolve, reject) => { releaseApprove = () => realAccept(p, n, a, h, deps).then(resolve, reject); });
+  const approving = approve(watcher({ accept: slowAccept }), id);
+  approving.catch(() => undefined);
+  for (let i = 0; i < 200 && releaseApprove === undefined; i++) await flush();
+  await assert.rejects(watcher().revoke(stale), (e) => e.code === 'invite-busy' && /Try again in a minute/.test(e.message));
+  releaseApprove();
+  await approving;
   assert.equal(readRecord(id).status, 'completed');
   assert.ok(readRecord(id).completedPeer);
+  assert.ok(welcomeOf(id), 'the Welcome is still there: the invitee can pair');
+  assert.equal(loadProfile().peers.hunter.status, 'paired');
+  // Retried after the approve finished: the invite is no longer open, so revoke refuses as it always did and still deletes nothing.
+  await assert.rejects(watcher().revoke(readRecord(id)), (e) => e.code === 'invite-not-open');
+  assert.ok(welcomeOf(id));
+});
+
+test('M-1 the reverse: an approve that starts while a revoke is closing the invite fails invite-busy, and the invite ends revoked', async () => {
+  const id = await daemonHeldForOwner();
+  let approveError;
+  const closing = new InviteWatcher({
+    node, profile: () => loadProfile(), log: (e) => logs.push(e), now: () => new Date(clock), timing, accept: realAccept, peersFiles: [],
+    deleteSealed: async () => { approveError = await approve(watcher(), id).then(() => undefined, (e) => e); },
+  });
+  await closing.revoke(readRecord(id));
+  assert.equal(approveError?.code, 'invite-busy');
+  assert.equal(readRecord(id).status, 'revoked');
+  assert.equal(welcomeOf(id), undefined);
+  assert.equal(loadProfile().peers.hunter, undefined, 'no pairing happened: the pending placeholder was dropped by the revoke');
+});
+
+test('M-1 the sweep skips an invite that is being decided instead of expiring it', async () => {
+  const id = await daemonHeldForOwner();
+  fs.writeFileSync(lockFile(id), '', { mode: 0o600 });
+  await watcher({ now: () => new Date(NOW + 25 * 3600e3) }).sweep();
+  assert.equal(readRecord(id).status, 'held', 'left for the next sweep');
+  assert.deepEqual(logs.filter((l) => l.event === 'invite-sweep-error'), [], 'a busy invite is skipped, not reported as an error');
+  fs.rmSync(lockFile(id));
+  await watcher({ now: () => new Date(NOW + 25 * 3600e3) }).sweep();
+  assert.equal(readRecord(id).status, 'expired');
 });
 
 test('M-A heldRecord: an expired held invite whose lock is lost while it is being closed is not written as expired', async () => {
@@ -408,4 +447,161 @@ test('M-B the lock is re-checked after the Welcome lookup: a holder that lost it
   });
   await assert.rejects(approve(w, id), (e) => e.code === 'invite-lock-lost');
   assert.equal(delegations, before);
+});
+
+// ---- H-1: an abandoned acceptB starts no node call after its abort (writePeerRecord's conflict path)
+test('H-1 the abandoned acceptB hangs in the peer-record put; the retry publishes its record; the late 412 must not start a get or a put', async () => {
+  const base = kv;
+  let hold = true;
+  let releaseLate;
+  let aborted = false;
+  const ops = [];
+  const peerKey = () => [...base.rows.keys()].find((key) => key.includes('me/peers/hunter'));
+  const peerOutbound = () => base.rows.get(peerKey()).value.outbound.map((o) => o.cid);
+  kv = {
+    ...base, rows: base.rows,
+    put: async (key, value, opts = {}) => {
+      if (key.includes('me/peers/hunter') && hold) {
+        hold = false;
+        await new Promise((resolve) => { releaseLate = resolve; });
+      }
+      if (aborted && key.includes('me/peers/hunter')) ops.push(`put ${opts.ifMatch ? 'ifMatch' : opts.ifNoneMatch ? 'ifNoneMatch' : 'plain'}`);
+      return base.put(key, value, opts);
+    },
+    get: async (key, ...rest) => { if (aborted && key.includes('me/peers/hunter')) ops.push('get'); return base.get(key, ...rest); },
+  };
+  try {
+    const id = await daemonTimesOut(); // attempt 1 hangs inside writePeerRecord's putCreate past the deadline
+    aborted = true;
+    assert.equal(readRecord(id).held.reason, 'node-timeout');
+    await approve(watcher(), id); // attempt 2 completes and publishes its peer record
+    assert.deepEqual(peerOutbound(), ['out-2']);
+    assert.deepEqual(loadProfile().peers.hunter.outbound.map((o) => o.cid), ['out-2']);
+    const before = ops.length;
+    releaseLate(); // attempt 1's put reaches the node only now and is refused: 412
+    await settle();
+    assert.deepEqual(ops.slice(before), ['put ifNoneMatch'], 'the only call is the put that was already on the wire; no get and no conditional put after the abort');
+    assert.deepEqual(peerOutbound(), ['out-2'], 'the retry\'s peer record was not overwritten with the stale grant');
+    assert.deepEqual(loadProfile().peers.hunter.outbound.map((o) => o.cid), ['out-2']);
+  } finally {
+    kv = base;
+  }
+});
+
+// ---- L-2, L-3, L-4, L-5, L-7
+test('L-2 the owner text says "timed out" only for a timeout; a failure after the grant says "failed"', async () => {
+  const id = newInvite();
+  await kv.put(`${inviteFolder(id)}in/hello.json`, helloBody(id));
+  const loaded = loadProfile();
+  const file = path.join(home, 'profile.json');
+  fs.rmSync(file);
+  fs.mkdirSync(file);
+  await watcher({ profile: () => loaded }).onHello(id);
+  assert.equal(listGrants(id)[0].cause, 'error');
+  const text = heldFactsText(describeHeld(id));
+  fs.rmdirSync(file);
+  assert.match(text, /An earlier pairing attempt failed at \S+ after asking the node for a read grant/);
+  assert.doesNotMatch(text, /timed out/);
+  saveProfile(loaded);
+  delegateScript = ['hang'];
+  delegations = 0;
+  const other = await daemonTimesOut();
+  assert.equal(listGrants(other)[0].cause, 'timeout');
+  assert.match(heldFactsText(describeHeld(other)), /An earlier pairing attempt timed out at/);
+});
+
+test('L-3 a grant record that cannot be written does not stop the invite from being held', async () => {
+  delegateScript = ['hang'];
+  const realRename = fs.renameSync;
+  fs.renameSync = (from, to, ...rest) => {
+    if (String(to).includes('.grant-')) throw new Error('disk full');
+    return realRename(from, to, ...rest);
+  };
+  let id;
+  try {
+    id = await daemonTimesOut();
+  } finally {
+    fs.renameSync = realRename;
+  }
+  assert.equal(readRecord(id).status, 'held');
+  assert.equal(readRecord(id).held.reason, 'node-timeout');
+  assert.ok(logs.some((l) => l.event === 'invite-possible-grant-failed' && l.inviteId === id));
+  assert.deepEqual(listGrants(id), []);
+});
+
+test('L-4 the node-timeout message names THIS attempt\'s grant, whatever the directory order, and several grants are listed oldest first', async () => {
+  delegateScript = ['hang', 'hang'];
+  const id = await daemonTimesOut();
+  const [first] = listGrants(id);
+  // Another attempt's record that sorts last (by name and by time): the wrong choice if the message took the last one.
+  const otherDid = ed25519DidKey('B'.repeat(43));
+  const stray = { ...first, attempt: 'f'.repeat(32), peerCourierDid: otherDid, timedOutAt: new Date(NOW + DAY).toISOString(), notAfter: new Date(NOW + 30 * DAY).toISOString() };
+  fs.writeFileSync(grantPath(id, stray.attempt), JSON.stringify(stray), { mode: 0o600 });
+  assert.deepEqual(listGrants(id).map((g) => g.attempt), [first.attempt, stray.attempt], 'oldest timedOutAt first, so the stray one is LAST');
+  await assert.rejects(approve(watcher(), id), (e) => e.code === 'node-timeout' && e.message.includes(`to courier ${HUNTER_COURIER} may exist`) && !e.message.includes(otherDid));
+});
+
+test('L-5 a grant file is not an invite record: listRecords and invite list see exactly one invite', async () => {
+  delegateScript = ['hang'];
+  const id = await daemonTimesOut();
+  assert.equal(listGrants(id).length, 1);
+  const { listRecords } = await import('../dist/invite-watch.js');
+  assert.deepEqual(listRecords().map((r) => r.inviteId), [id]);
+  const listed = spawnSync(process.execPath, [CLI, 'invite', 'list'], { env: { ...process.env, COURIER_HOME: home, HOME: home }, encoding: 'utf8' });
+  assert.equal(JSON.parse(listed.stdout).length, 1);
+});
+
+test('L-7 the grant record parser takes only a real ed25519 did:key and a did:pkh owner', async () => {
+  delegateScript = ['hang'];
+  const id = await daemonTimesOut();
+  const [grant] = listGrants(id);
+  const file = grantPath(id, grant.attempt);
+  const good = fs.readFileSync(file, 'utf8');
+  for (const [field, value] of [
+    ['peerCourierDid', 'did:key:z6MkHunterCourier'],
+    ['peerCourierDid', `${HUNTER_COURIER}#key-1`],
+    ['peerCourierDid', 'did:web:example.com'],
+    ['peerCourierDid', 'did:key:z6Mk x'],
+    ['peerOwnerDid', 'did:pkh:eip155:1:0xabc'],
+    ['peerOwnerDid', 'mallory'],
+  ]) {
+    fs.writeFileSync(file, JSON.stringify({ ...grant, [field]: value }));
+    assert.deepEqual(listGrants(id), [], `${field}=${value}`);
+  }
+  fs.writeFileSync(file, good);
+  assert.equal(listGrants(id).length, 1);
+});
+
+test('H-1b the abandoned acceptB is abandoned while it reads the existing peer record: the late answer starts no conditional put', async () => {
+  const base = kv;
+  await base.put('xyz.tinycloud.courier/me/peers/hunter.json', { stale: true });
+  const peerKey = [...base.rows.keys()].find((key) => key.includes('me/peers/hunter'));
+  let hold = true;
+  let releaseLate;
+  const puts = [];
+  kv = {
+    ...base, rows: base.rows,
+    get: async (key, ...rest) => {
+      if (key === peerKey && hold) {
+        hold = false;
+        await new Promise((resolve) => { releaseLate = resolve; });
+      }
+      return base.get(key, ...rest);
+    },
+    put: async (key, value, opts = {}) => {
+      if (key === peerKey) puts.push(opts.ifMatch ? 'ifMatch' : opts.ifNoneMatch ? 'ifNoneMatch' : 'plain');
+      return base.put(key, value, opts);
+    },
+  };
+  try {
+    const id = await daemonTimesOut();
+    assert.equal(readRecord(id).held.reason, 'node-timeout');
+    const before = puts.length;
+    releaseLate();
+    await settle();
+    assert.deepEqual(puts.slice(before), [], 'no conditional put after the abort');
+    assert.deepEqual(base.rows.get(peerKey).value, { stale: true }, 'the peer record was not written by the abandoned call');
+  } finally {
+    kv = base;
+  }
 });

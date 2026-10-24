@@ -142,13 +142,16 @@ tc courier join --resume
   `heldReason` and `helloOwner` for the gate.
 - A held invite keeps the hello that was held: recovery after a crash re-holds
   that hello and never swaps in a later one. `invite approve` and `invite deny`
-  take a per-invite lock, so a second one at the same time fails with
+  take a per-invite lock (so does `invite revoke`: while a pairing is finishing it
+  fails with `invite-busy`, try again in a minute), so a second one at the same
+  time fails with
   `invite-busy` (try again in a few minutes: a lock whose holder died is taken
   over after two minutes without a refresh). A holder whose lock was taken
   over, or whose invite was changed under it, stops with `invite-lock-lost`
   before it writes anything more. Node calls made while deciding an invite give
   up after 60 seconds (`node-timeout`) and leave the invite held again; the
-  pairing step that gave up writes nothing afterwards. If it may already have
+  pairing step that gave up starts no new write afterwards (a write already on the
+  wire cannot be recalled). If it may already have
   asked the node for a read grant, `invite list` shows it under `possibleGrants`
   (cid or `unknown`, the courier, and the latest date it can be valid), and
   `invite approve` shows it before pairing. It is not revoked automatically yet.

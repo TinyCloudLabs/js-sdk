@@ -288,11 +288,28 @@ test('lock: recovery skips an invite whose lock is held (an approve is working o
   assert.equal(readRecord(id).status, 'consumed');
 });
 
-test('lock: revoke is never blocked by a held lock', async () => {
+test('lock: revoke takes the lock: with an approve or deny working on the invite it fails invite-busy ("try again in a minute") and changes nothing', async () => {
   const id = await squatted();
   fs.writeFileSync(lockFile(id), '', { mode: 0o600 });
-  await watcher().revoke(readRecord(id));
-  assert.equal(readRecord(id).status, 'revoked');
+  const before = fs.readFileSync(recordPath(id), 'utf8');
+  await assert.rejects(watcher().revoke(readRecord(id)), (e) => e.code === 'invite-busy' && /A pairing for this invite is finishing\. Try again in a minute\./.test(e.message));
+  assert.equal(fs.readFileSync(recordPath(id), 'utf8'), before);
+  assert.equal(fs.existsSync(lockFile(id)), true, 'the other holder\'s lock is not removed');
+});
+
+test('lock: a revoke retried once the lock is free succeeds (after a failed approve), and one retried after a finished approve is refused as before', async () => {
+  const failed = await squatted();
+  fs.writeFileSync(lockFile(failed), '', { mode: 0o600 });
+  await assert.rejects(watcher().revoke(readRecord(failed)), (e) => e.code === 'invite-busy');
+  fs.rmSync(lockFile(failed));
+  await watcher().revoke(readRecord(failed));
+  assert.equal(readRecord(failed).status, 'revoked');
+  assert.equal(fs.existsSync(lockFile(failed)), false);
+
+  const done = await squatted();
+  await watcher({ accept: async () => C_ARTIFACT }).approveHeld(done, MALLORY_OWNER);
+  await assert.rejects(watcher().revoke(readRecord(done)), (e) => e.code === 'invite-not-open');
+  assert.equal(readRecord(done).status, 'completed');
 });
 
 test('lock: while held the lock file exists with mode 0600, and it is gone afterwards', async () => {

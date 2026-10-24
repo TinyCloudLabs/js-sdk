@@ -317,7 +317,7 @@ export async function acceptB(
     deps.onOutgoing?.({ cid: peer.outbound[peer.outbound.length - 1]!.cid, expiresAt: peer.outbound[peer.outbound.length - 1]!.expiresAt });
     stopIfAborted();
     peer.status = 'paired';
-    await writePeerRecord(node, peer);
+    await writePeerRecord(node, peer, deps.signal);
     // Commit point: profile.json is saved last. A failure before this leaves the peer pending-A, so a retry re-runs. Nothing is awaited between the
     // last abort check and the save, so a call that was abandoned never saves its stale copy of the profile.
     stopIfAborted();
@@ -411,7 +411,7 @@ function delegationCid(d: PortableDelegation): string {
 }
 
 
-async function writePeerRecord(node: TinyCloudNode, peer: StoredPeer) {
+async function writePeerRecord(node: TinyCloudNode, peer: StoredPeer, signal?: AbortSignal) {
   // Best-effort publication of pairing state in-space (spec §4); the profile
   // remains authoritative for the CLI.
   const kv = node.kv;
@@ -420,7 +420,10 @@ async function writePeerRecord(node: TinyCloudNode, peer: StoredPeer) {
   } catch (e) {
     const info = errInfo(e);
     if (info.code === 'conflict') {
+      // An abandoned caller starts no new node call: the record it would overwrite may by now be its successor's.
+      if (signal?.aborted) return;
       const cur = await getJson(kv, k.peerRecord(peer.handle));
+      if (signal?.aborted) return;
       if (cur?.etag) await putMatch(kv, k.peerRecord(peer.handle), peerRecordBody(peer), cur.etag);
       else console.error(`warning: could not update me/peers/${peer.handle}.json`);
     } else {

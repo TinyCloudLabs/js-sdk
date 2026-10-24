@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { ed25519PublicKeyOfDidKey } from './did-key.js';
 import { secureSubdir, writeSecure } from './profile.js';
 
 /**
@@ -24,6 +25,8 @@ export interface PossibleGrant {
   cid: string;
   late?: 'ok' | 'failed';
   lateAt?: string;
+  /** Why the attempt was abandoned: the node did not answer in time (`timeout`), or something else failed after the grant was issued (`error`). */
+  cause?: 'timeout' | 'error';
 }
 
 export const GRANT_LIFETIME_MS = 7 * 24 * 3600 * 1000;
@@ -32,7 +35,18 @@ const INVITE_ID = /^[a-z2-7]{26}$/;
 const ATTEMPT = /^[0-9a-f]{32}$/;
 const CID = /^(unknown|[A-Za-z0-9._:-]{1,200})$/;
 const KEYS = ['v', 'inviteId', 'handle', 'attempt', 'peerCourierDid', 'peerOwnerDid', 'space', 'startedAt', 'timedOutAt', 'notAfter', 'cid'] as const;
-const OPTIONAL = ['late', 'lateAt'] as const;
+const OPTIONAL = ['late', 'lateAt', 'cause'] as const;
+const OWNER_DID = /^did:pkh:eip155:\d+:0x[0-9a-fA-F]{40}$/;
+
+function isDidKey(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  try {
+    ed25519PublicKeyOfDidKey(value);
+    return !value.includes('#');
+  } catch {
+    return false;
+  }
+}
 
 const dir = () => secureSubdir('invites');
 export const grantPath = (inviteId: string, attempt: string): string => {
@@ -52,7 +66,8 @@ function parseGrant(value: unknown, file: string): PossibleGrant | undefined {
   if (keys.some((k) => !(KEYS as readonly string[]).includes(k) && !(OPTIONAL as readonly string[]).includes(k))) return undefined;
   if (!KEYS.every((k) => keys.includes(k))) return undefined;
   if (r.v !== 1 || r.inviteId !== m[1] || r.attempt !== m[2]) return undefined;
-  if (!short(r.handle, 64) || !short(r.peerCourierDid) || !short(r.peerOwnerDid) || !short(r.space)) return undefined;
+  if (!short(r.handle, 64) || !isDidKey(r.peerCourierDid) || typeof r.peerOwnerDid !== 'string' || !OWNER_DID.test(r.peerOwnerDid) || !short(r.space)) return undefined;
+  if (r.cause !== undefined && r.cause !== 'timeout' && r.cause !== 'error') return undefined;
   if (!isIso(r.startedAt) || !isIso(r.timedOutAt) || !isIso(r.notAfter)) return undefined;
   if (typeof r.cid !== 'string' || !CID.test(r.cid)) return undefined;
   if (r.late !== undefined && r.late !== 'ok' && r.late !== 'failed') return undefined;
@@ -92,7 +107,13 @@ export function listGrants(inviteId?: string): PossibleGrant[] {
   return fs.readdirSync(dir()).filter((n) => FILE.test(n) && (inviteId === undefined || n.startsWith(`${inviteId}.`))).flatMap((n) => {
     const grant = readGrantFile(path.join(dir(), n));
     return grant ? [grant] : [];
-  });
+  }).sort((a, b) => (Date.parse(a.timedOutAt) - Date.parse(b.timedOutAt)) || (a.attempt < b.attempt ? -1 : 1));
+}
+
+/** The grant to name when there are several: this attempt's own, else the newest by `timedOutAt` (then attempt), so the choice never depends on directory order. */
+export function newestGrant(grants: readonly PossibleGrant[], attempt?: string): PossibleGrant | undefined {
+  return grants.find((g) => attempt !== undefined && g.attempt === attempt)
+    ?? [...grants].sort((a, b) => (Date.parse(a.timedOutAt) - Date.parse(b.timedOutAt)) || (a.attempt < b.attempt ? -1 : 1)).at(-1);
 }
 
 /** The grants of an invite that can still be valid at `nowMs`. */
