@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/replica",
-  "version": "0.3.3",
+  "version": "0.3.4-beta.0",
   "description": "Durable, read-only local replicas of a TinyCloud KV prefix over the tinycloud.kv/sync change feed.",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
