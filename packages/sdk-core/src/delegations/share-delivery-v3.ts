@@ -1,4 +1,3 @@
-import type { ParsedLink } from "@tinycloud/share-envelope/links";
 import { ed25519 } from "@noble/curves/ed25519";
 import { sha256 } from "@noble/hashes/sha256";
 import { base58btc } from "multiformats/bases/base58";
@@ -162,22 +161,14 @@ export function validateShareDeliveryAuthorizationV3Bytes(
  * non-canonical spelling) is refused, so the node is only ever sent a link it can fetch by id.
  */
 export async function shortDeliveryLinkBodyCid(shareUrl: string): Promise<string> {
-  const links = await import("@tinycloud/share-envelope/links");
-  let parsed: ParsedLink;
-  try {
-    parsed = links.parseLink(shareUrl, { trustedOrigins: [new URL(shareUrl).origin] });
-  } catch {
-    throw new Error("share delivery requires a short share link");
-  }
-  if (parsed.form !== "short" || parsed.pathType !== "share") throw new Error("share delivery requires a short share link");
-  return parsed.c;
+  const cid = (await import("@tinycloud/share-envelope/links")).shortShareLinkCid(shareUrl);
+  if (cid === undefined) throw new Error("share delivery requires a short share link");
+  return cid;
 }
 
 /** The text with the share link and its key replaced, for an error that carries a node's reply. */
-export function withoutShareLink(text: string, shareUrl: string): string {
-  const key = /[#&]k=([A-Za-z0-9_-]{43})(?:&|$)/.exec(shareUrl)?.[1];
-  const withoutLink = text.split(shareUrl).join("[share link]");
-  return key === undefined ? withoutLink : withoutLink.split(key).join("[key]");
+export async function withoutShareLink(text: string, shareUrl: string): Promise<string> {
+  return (await import("@tinycloud/share-envelope/links")).redactLink(text, shareUrl);
 }
 
 /**
