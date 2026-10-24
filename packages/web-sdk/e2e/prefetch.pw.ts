@@ -55,6 +55,15 @@ const hold = (page: Page, closed: boolean) =>
 const callCount = async (page: Page, name: string) => (await calls(page)).filter((c) => c.name === name).length;
 const delegationsNav = (page: Page) => panel(page).getByRole("button", { name: "Delegations", exact: true });
 const storageNav = (page: Page) => panel(page).getByRole("button", { name: "Storage", exact: true });
+// At phone width the section nav is the Sections menu. The panel keeps the last section, so when Delegations is already open there is nothing to pick.
+async function goDelegations(page: Page) {
+  const menuButton = panel(page).getByRole("button", { name: "Sections", exact: true });
+  await expect(delegationsNav(page).or(menuButton)).toBeVisible();
+  if (await delegationsNav(page).isVisible()) return delegationsNav(page).click();
+  if (await panel(page).locator('section[data-section="delegations"]').isVisible()) return;
+  await menuButton.click();
+  await delegationsNav(page).click();
+}
 
 // `blockIdle` makes requestIdleCallback never fire, so only an intent can start the pull.
 async function boot(page: Page, blockIdle = false) {
@@ -247,7 +256,7 @@ test("freshness chip states at light and dark, desktop and phone widths", async 
       await age(page, 180_000);
       await close(page);
       await open(page);
-      await delegationsNav(page).click();
+      await goDelegations(page);
       await expect(panel(page).getByText("Updating…", { exact: true })).toBeVisible();
       const updatingShot = testInfo.outputPath(`updating-${scheme}-${size}.png`);
       await page.screenshot({ path: updatingShot });
@@ -258,7 +267,7 @@ test("freshness chip states at light and dark, desktop and phone widths", async 
       await age(page, 180_000);
       await close(page);
       await open(page);
-      await delegationsNav(page).click();
+      await goDelegations(page);
       await expect(panel(page).getByText("Couldn't refresh. Showing data from 3 min ago.", { exact: true })).toBeVisible({
         timeout: 5000,
       });
