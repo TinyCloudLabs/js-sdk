@@ -30,7 +30,7 @@ Setup & pairing (humans run these):
   pair accept <json|--file f|--stdin>
                                    Accept artifact A, B or C; prints B or C to pass on
   pair renew [peer] [--force]      Renew peer delegations; humans or watcher only
-  revoke <peer>                    Stop renewing + drop the peer (access lapses at delegation expiry)
+  revoke <peer>                    Revoke every outbound grant to the peer on the node, then drop the peer
 
 Threads (agents run these):
   send <peer> (--new <subject> | --thread <id>) [--text t | --file f | stdin]

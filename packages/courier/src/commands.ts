@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { ulid } from 'ulid';
 import { TinyCloudNode, NodeWasmBindings, activateValidatedRuntimeDelegation, deserializeDelegation, serializeDelegation } from '@tinycloud/node-sdk';
-import type { PortableDelegation } from '@tinycloud/node-sdk';
+import type { PortableDelegation, DelegationResult, DelegationRevocationReceipt } from '@tinycloud/node-sdk';
 import { cmd } from './program.js';
 import { CourierError, errInfo } from './errors.js';
 import { AGENT_GRANT, AGENT_GRANT_EXPIRY, COURIER_SPACE, DEFAULT_HOST, EXT, k, peerReadPermissions, PREFIX } from './keys.js';
@@ -30,7 +30,7 @@ import { requestHash } from './canonical.js';
 import { targetHelp } from './guard/target.js';
 import type { ParsedArgs } from './args.js';
 import { requireFlag, oneOf } from './args.js';
-import { assertPeerDelegation, bareDid, durationMs, AGENT_GRANT_MAX_MS } from './authority.js';
+import { assertPeerDelegation, bareDid, durationMs, grantCanRevoke, AGENT_GRANT_MAX_MS } from './authority.js';
 
 interface Ctx {
   profile: Profile;
@@ -375,18 +375,57 @@ async function writePeerRecord(node: TinyCloudNode, peer: StoredPeer) {
 
 // ---------- revoke ----------
 
-export async function cmdRevoke(args: ParsedArgs) {
-  const { profile, node } = await ctx();
-  const handle = args.positional[0] ?? fail('usage', `Usage: ${cmd('revoke <peer>')}`);
+/** The slice of the node `revoke` needs; a fake with these three members drives the unit tests. */
+export type RevokingNode = Pick<TinyCloudNode, 'revokeDelegation' | 'kv' | 'getVerifiedSessionCapabilities'>;
+
+/**
+ * Revokes every live outbound grant of `handle` on the node, then drops the peer. Any refused grant fails the
+ * command with `revoke-failed` and keeps the peer; confirmed grants are marked so a re-run only retries the rest.
+ * A grant that predates the revoke entry fails with `revoke-not-enabled` before any node call.
+ */
+export async function revokePeer(profile: Profile, node: RevokingNode, handle: string, now = Date.now()): Promise<string> {
   const peer = getPeer(profile, handle);
+  if (!grantCanRevoke(node.getVerifiedSessionCapabilities())) {
+    fail('revoke-not-enabled', `This install cannot revoke yet: re-run \`${cmd('init')}\` to enable revoke.`);
+  }
+  let revoked = 0;
+  let earlier = 0;
+  let expired = 0;
+  const failed: string[] = [];
+  for (const grant of peer.outbound) {
+    if (grant.revokedAt) { earlier++; continue; }
+    if (Date.parse(grant.expiresAt) <= now) { expired++; continue; }
+    let result: DelegationResult<DelegationRevocationReceipt>;
+    try {
+      result = await node.revokeDelegation(grant.cid);
+    } catch (e) {
+      failed.push(`${grant.cid} (error: ${errInfo(e).message})`);
+      continue;
+    }
+    if (result.ok) {
+      revoked++;
+      grant.revokedAt = new Date(now).toISOString();
+      saveProfile(profile);
+    } else {
+      failed.push(`${grant.cid} (${result.error.code}: ${result.error.message})`);
+    }
+  }
+  if (failed.length) {
+    fail('revoke-failed', `Could not revoke ${failed.length} outbound grant(s) for ${handle}; the peer is kept, re-run \`${cmd(`revoke ${handle}`)}\` to retry only these: ${failed.join('; ')}`);
+  }
   delete profile.peers[handle];
   saveProfile(profile);
   try { await del(node.kv, k.peerRecord(handle)); } catch { /* non-fatal */ }
-  console.log(
-    `Revoked ${handle} (${peer.courierDid}).\n` +
-    `Note: TC-721 prevents immediate revocation; access ends when the current outbound delegation expires (${peer.outbound.at(-1)?.expiresAt ?? 'unknown'}). ` +
-    `Rotating the agent key does not invalidate the old grant; it remains valid until its expiry.`,
-  );
+  const parts = [`${revoked} outbound grant(s) revoked`];
+  if (earlier) parts.push(`${earlier} revoked by an earlier run`);
+  if (expired) parts.push(`${expired} expired and skipped`);
+  return `Revoked ${handle} (${peer.courierDid}): ${parts.join(', ')}.`;
+}
+
+export async function cmdRevoke(args: ParsedArgs) {
+  const { profile, node } = await ctx();
+  const handle = args.positional[0] ?? fail('usage', `Usage: ${cmd('revoke <peer>')}`);
+  console.log(await revokePeer(profile, node, handle));
 }
 
 // ---------- send ----------

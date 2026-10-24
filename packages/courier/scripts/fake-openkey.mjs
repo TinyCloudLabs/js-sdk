@@ -4,7 +4,7 @@ import {
 } from '@tinycloud/node-sdk';
 import { activateSessionWithHost } from '@tinycloud/sdk-core';
 
-export const HOST = 'https://tee.node.tinycloud.xyz';
+export const HOST = process.env.COURIER_FAKE_OPENKEY_HOST ?? 'https://tee.node.tinycloud.xyz';
 const PREFIX = 'xyz.tinycloud.courier';
 const wasm = new NodeWasmBindings();
 const nodeOptions = {

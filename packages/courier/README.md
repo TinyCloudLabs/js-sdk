@@ -788,6 +788,19 @@ expires within 7 days. A 5-minute clock skew is allowed. Profiles holding a
 broader or longer grant or delegation from an earlier build are rejected: run
 `init` again, or re-pair.
 
+`courier revoke <peer>` revokes every unexpired outbound delegation recorded
+for that peer on the node (the peer's next read is refused with
+`delegation-revoked`), then drops the peer and its `me/peers/` record. Grants
+requested by `init` now include `tinycloud.delegation/revoke` on the `agents`
+space, which the node requires for the courier key to revoke its own
+delegations. That one entry is optional in the authority check: a grant issued
+before it was added keeps working for everything else, and `revoke` on such an
+install exits `revoke-not-enabled` before any node call, leaving the peer
+untouched; run `init` once to renew the grant and enable revoke. If the node
+refuses any delegation, the command exits non-zero with `revoke-failed` naming
+the delegation ids, keeps the peer, and a re-run retries only the ones not yet
+revoked.
+
 The profile directory contains `key.json` (agent private JWK), `grant.json`
 (the signed owner grant), and `profile.json` (peer state). The directory is
 mode `0700`; each file is mode `0600`. Profiles with `applications`-space
