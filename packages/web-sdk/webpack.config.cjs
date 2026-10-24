@@ -236,14 +236,17 @@ const lazyLoaderExternals = (type, ext) => ({ context, request }, callback) => {
   callback();
 };
 
-// The panel keeps every @tinycloud/* package external, like the replica entries.
-const panelExternals = (moduleType, ext) => ({ context, request }, callback) => {
-  if (request && /^@tinycloud\//.test(request)) {
+// The panel code keeps @tinycloud/* external, like the replica entries. The dialogs do not: they import runtime
+// constants from @tinycloud/sdk-core, and a bare import in a chunk loaded at the first prompt would not resolve for a
+// page that loads the SDK without a bundler. So only imports made from src/ui are external.
+const lazyExternals = (moduleType, ext) => ({ context, request }, callback) => {
+  const uiDir = path.resolve(__dirname, "src/ui");
+  if (request && /^@tinycloud\//.test(request) && context && context.startsWith(uiDir)) {
     callback(null, `${moduleType} ${request}`);
     return;
   }
   // The panel shares the eager root's panel-data singleton, so both loaders see one live source.
-  if (request === "./panel-data-entry" && context === path.resolve(__dirname, "src/ui")) {
+  if (request === "./panel-data-entry" && context === uiDir) {
     callback(null, `${moduleType} ./panel-data.${ext}`);
     return;
   }
@@ -257,47 +260,29 @@ const rootCjsConfig = {
   output: { ...cjsConfig.output, environment: { dynamicImport: true } },
 };
 
-const panelEsmConfig = {
+// The lazy entries share one compilation per format: they share most of their module graph, and a compilation per
+// entry runs the build out of memory at the default heap.
+const lazyEntries = {
+  panel: "./src/ui/panel-entry.ts",
+  "panel-data": "./src/ui/panel-data-entry.ts",
+  modals: "./src/notifications/modals-entry.ts",
+};
+const notChunkLimit = (plugin) => !(plugin instanceof webpack.optimize.LimitChunkCountPlugin);
+
+const lazyEsmConfig = {
   ...esmConfig,
-  entry: "./src/ui/panel-entry.ts",
-  externals: panelExternals("module", "mjs"),
-  output: { ...esmConfig.output, filename: "panel.mjs" },
+  entry: lazyEntries,
+  externals: lazyExternals("module", "mjs"),
+  plugins: esmConfig.plugins.filter(notChunkLimit),
+  output: { ...esmConfig.output, filename: "[name].mjs" },
 };
 
-const panelCjsConfig = {
+const lazyCjsConfig = {
   ...cjsConfig,
-  entry: "./src/ui/panel-entry.ts",
-  externals: panelExternals("commonjs", "cjs"),
-  output: { ...cjsConfig.output, filename: "panel.cjs" },
-};
-
-const panelDataEsmConfig = {
-  ...esmConfig,
-  entry: "./src/ui/panel-data-entry.ts",
-  externals: panelExternals("module", "mjs"),
-  output: { ...esmConfig.output, filename: "panel-data.mjs" },
-};
-
-const panelDataCjsConfig = {
-  ...cjsConfig,
-  entry: "./src/ui/panel-data-entry.ts",
-  externals: panelExternals("commonjs", "cjs"),
-  output: { ...cjsConfig.output, filename: "panel-data.cjs" },
-};
-
-// The permission and space-creation dialogs. Unlike the panel they import runtime constants from
-// @tinycloud/sdk-core, so nothing is external: a bare import in this chunk would not resolve for a page that loads
-// the SDK without a bundler.
-const modalsEsmConfig = {
-  ...esmConfig,
-  entry: "./src/notifications/modals-entry.ts",
-  output: { ...esmConfig.output, filename: "modals.mjs" },
-};
-
-const modalsCjsConfig = {
-  ...cjsConfig,
-  entry: "./src/notifications/modals-entry.ts",
-  output: { ...cjsConfig.output, filename: "modals.cjs" },
+  entry: lazyEntries,
+  externals: lazyExternals("commonjs", "cjs"),
+  plugins: cjsConfig.plugins.filter(notChunkLimit),
+  output: { ...cjsConfig.output, filename: "[name].cjs" },
 };
 
 // Headless subpath (`@tinycloud/web-sdk/credentials`). Built from the base
@@ -320,12 +305,8 @@ module.exports = [
   replicaCjsConfig,
   gatedEsmConfig,
   gatedCjsConfig,
-  panelEsmConfig,
-  panelCjsConfig,
-  panelDataEsmConfig,
-  panelDataCjsConfig,
-  modalsEsmConfig,
-  modalsCjsConfig,
+  lazyEsmConfig,
+  lazyCjsConfig,
   credentialsEsmConfig,
   credentialsCjsConfig,
 ];
