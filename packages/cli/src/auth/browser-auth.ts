@@ -4,6 +4,7 @@ import { randomBytes } from "node:crypto";
 import { createInterface } from "node:readline";
 import { DEFAULT_OPENKEY_HOST, DEFAULT_OPENKEY_DEVICE_API_HOST, ExitCode } from "../config/constants.js";
 import { CLIError } from "../output/errors.js";
+import { assertNoCaveatLimits } from "../lib/caveat-refusal.js";
 import { shouldOutputJson } from "../output/formatter.js";
 
 interface DelegationData {
@@ -88,6 +89,7 @@ export async function startAuthFlow(
   did: string,
   options: AuthFlowOptions = {}
 ): Promise<DelegationData> {
+  assertNoCaveatLimits(options.permissions);
   if (options.paste) {
     return pasteFlow(did, options);
   }
@@ -107,6 +109,7 @@ export async function startAuthFlow(
 }
 
 export function buildAuthUrl(did: string, options: AuthFlowOptions & { callback?: string } = {}): string {
+  assertNoCaveatLimits(options.permissions);
   const params = new URLSearchParams();
   params.set("did", did);
   if (options.callback) {
