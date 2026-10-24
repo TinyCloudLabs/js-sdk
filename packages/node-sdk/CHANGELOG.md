@@ -1,5 +1,81 @@
 # @tinycloudlabs/node-sdk
 
+## 3.6.1-beta.1
+
+### Patch Changes
+
+- 09b7dc0: Document that `tinycloud.delegation/revoke` on a space is space-wide, and that the CLI's own fallback asks for 5 minutes and stores nothing. Added to the tc-cli skill docs and the node-sdk README.
+
+  Details: TC-1923
+
+## 3.6.1-beta.0
+
+### Patch Changes
+
+- 271155a: In the browser, the SIWE sign-in `domain` now uses `window.location.host` (it keeps the port) and, when the domain comes from the page, the SIWE `uri` defaults to `window.location.origin` (it keeps the scheme), so local http dev origins satisfy OpenKey's origin check (TC-1486). Production https origins on default ports are unchanged. `TinyCloudNodeConfig` gains an optional `uri`; a caller `siweConfig.uri` still takes precedence. (TC-1488)
+
+  Details: TC-1488
+
+## 3.6.0
+
+### Minor Changes
+
+- 7bd4ae6: `@tinycloud/node-sdk/credentials` adds `verifyStoredEmailProof`, which re-verifies a stored email-proof credential offline: descriptor digest pin, envelope rebuild, pinned issuer keys, status check, and holder match. `@tinycloud/node-sdk/credential-pending-store` exports `ensureSecureDir` and `checkSecureDir`. The credentials directory must be a real directory with owner-only mode; a symlink or a file is refused, and a pre-existing directory with loose permissions is refused rather than chmodded. A pending request expires at the earlier of the witness expiry and 15 minutes after creation.
+
+  `courier credential acquire` writes one JSON document to stdout per call (pretty printed, nothing else on stdout; hints go to stderr): `status: "code-sent"` with `codeExpiresAt` on the first call, then `status: "acquired"` with `issuedAt` and `expiresAt` on the second. The verification code must be entered within 5 minutes. `courier credential show` writes one JSON document with `address`, `credentialId`, `issuedAt`, `expiresAt`, and `status`, never the credential. Stored credentials are re-verified offline on every read before any other rule applies; a record that fails is refused with `credential-record-invalid` and kept, and nothing is deleted on the strength of unverified stored fields. A credential that passed verification is dropped when less than 60 seconds of its own expiry remain or once older than the 3600-second maximum age. Courier refuses to run when both `HOME` and `COURIER_HOME` are unset. `courier --version` prints the package version.
+
+  Details: TC-1757
+
+- e32bc41: feat(credentials): add email-proof credential acquisition
+  - `@tinycloud/node-sdk/credentials` exports `requestEmailProofCode`, `completeEmailProof`, and `acquireEmailProof` for a two-step flow: request a one-time code for an address, then exchange it for a verifiable credential.
+  - Errors are `EmailProofError` with a `step`, a stable `code`, `retryAfterMs`, and `recoverable`.
+  - `@tinycloud/node-sdk/credential-pending-store` provides a file-backed pending store: owner-only files, 15-minute maximum lifetime, deleted after success or any unrecoverable failure.
+  - `@tinycloud/web-sdk` re-exports the same types. Existing root behaviour is unchanged; the root bundle contains no email-proof code.
+  - `@tinycloud/sdk-core`: `CredentialError` accepts an explicit `recoverable` flag that overrides the per-code default. `@tinycloud/node-sdk` needs this to keep the witness's recoverable flag on server errors.
+
+  Release order: `@tinycloud/sdk-core`, then `@tinycloud/node-sdk`, then `@tinycloud/web-sdk`. Node-sdk pins sdk-core exactly, so sdk-core must publish first for that pin to carry the recoverable override.
+
+  Details: TC-712
+
+- c0acb86: Adds email-proof credential acquisition as `@tinycloud/node-sdk/credentials-core` (narrow entry, no web-sdk dependency) and `@tinycloud/node-sdk/credential-pending-store` (owner-only, one file per pending request). The `@tinycloud/node-sdk/credentials` entry adds `requestEmailProofCode`, `completeEmailProof`, `acquireEmailProof`, `createEd25519HolderSigner`, `emailProofRequirement`, and `EmailProofError`. The root entry gains no email-proof exports.
+
+  Details: TC-712
+
+### Patch Changes
+
+- e600a1a: Runtime permission grants that include decrypt follow the same expiry handling as other grants. `secrets.get` still asks only for the permission entries that are not already covered.
+
+  Details: TC-1781
+
+- 0c09d7b: Add `allowSubDelegation` to share generation. It defaults to `true`, which keeps today's behavior. Passing `false` issues a terminal delegation: the node refuses onward delegation of the share. A non-transferable share must be covered by an existing session-key delegation; it is refused when none covers it, and the wallet root path is not used for it.
+
+  A non-transferable share is received with `receive(link, { autoSubdelegate: false })`; the default auto-subdelegation is refused for it.
+
+  Details: TC-1801
+
+- 1f831e3: Manifest sign-in and session preparation refuse a permission that carries caveats by throwing the existing `CaveatedDelegationUnsupportedError` (`CAVEATED_DELEGATION_UNSUPPORTED`) before any request or signature. Absent, `[]` and `[{}]` caveats are accepted; any other set, including `[{}, {}]`, is refused, the same rule the delegation paths apply through `recapCaveatsEqual`.
+
+  Refusing call sites: `TinyCloudNode.signIn`, `signInWithOpenKey`, `createOwnerDelegation` and `createSubDelegation` permissions; `NodeUserAuthorization.signIn`, `prepareSessionForSigning`, `signInWithOpenKey` and `createBootstrapSession`; `TinyCloudWeb.signIn` (before any persisted session is restored).
+
+  Details: TC-1855
+
+- 7bd4ae6: `courier credential show` no longer deletes a stored credential that fails offline re-verification. The record is refused with `credential-record-invalid` and kept under `COURIER_HOME/credentials/` for inspection. Lifecycle drops are unchanged: a credential within 60 seconds of its own expiry, or older than the 3600-second maximum age, is still deleted.
+
+  `@tinycloud/node-sdk/credentials` also exports the `StoredEmailProofInput` type.
+
+  `@tinycloud/web-sdk/credentials` adds `verifyStoredEmailProof` and the `StoredEmailProofInput` and `StoredEmailProofRecord` types, so headless clients can re-verify a stored email-proof credential offline without importing `@tinycloud/node-sdk` directly.
+
+  Details: TC-712
+
+- Updated dependencies [0c09d7b]
+- Updated dependencies [82cbd43]
+- Updated dependencies [dc61583]
+- Updated dependencies [1f831e3]
+- Updated dependencies [e32bc41]
+  - @tinycloud/sdk-core@3.6.0
+  - @tinycloud/sdk-services@3.6.0
+  - @tinycloud/replica@0.3.3
+
 ## 3.6.0-beta.8
 
 ### Patch Changes

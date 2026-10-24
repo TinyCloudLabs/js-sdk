@@ -126,6 +126,8 @@ as a disposable replica child grant.
 
 Local `remove` deletes every row matching that exact CID, and is available to delegates. `--revoke` alone is owner-only: it uses normal verified local-node discovery unless a host is explicit, revokes on the node, and removes the rows only after success. If the local removal then fails, `GRANT_REVOKED_LOCAL_REMOVE_FAILED` directs a local-only retry without `--revoke`. OpenKey cannot sign raw `urn:cid` authority on the deployed version; owner OpenKey revocation uses a verified CID-bound owner-space fallback, or immediately fails `RAW_RECAP_RESOURCE_UNSUPPORTED`. Local removal does not revoke the delegation; delegated sessions cannot use `--revoke` because this SDK cannot issue a delegatee self-revocation.
 
+`tinycloud.delegation/revoke` on a space is space-wide: it can revoke any delegation in that space, including other apps' grants and the owner's own sessions. Request it only for the command that needs it, with a short expiry, and don't keep it: the CLI's own fallback asks for 5 minutes and stores nothing. Never put it in a long-lived grant or an app manifest.
+
 A concurrent local removal after revocation reports `removed: 0` as success. Other local cleanup failures include `error.meta.causeCode` (for example `PROFILE_LOCK_TIMEOUT`).
 
 ## Spaces

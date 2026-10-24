@@ -1,5 +1,56 @@
 # @tinycloud/cli
 
+## 1.3.6-beta.2
+
+### Patch Changes
+
+- 3d814e8: `tc init` and other spinner steps print one plain progress line per step, with no animation, when the terminal reports 0 columns. Terminals with a normal size keep the animated spinner.
+
+  Details: TC-1893
+
+## 1.3.6-beta.1
+
+### Patch Changes
+
+- 09b7dc0: Document that `tinycloud.delegation/revoke` on a space is space-wide, and that the CLI's own fallback asks for 5 minutes and stores nothing. Added to the tc-cli skill docs and the node-sdk README.
+
+  Details: TC-1923
+
+- Updated dependencies [09b7dc0]
+  - @tinycloud/node-sdk@3.6.1-beta.1
+  - @tinycloud/operations@0.7.5-beta.1
+
+## 1.3.6-beta.0
+
+### Patch Changes
+
+- Updated dependencies [271155a]
+  - @tinycloud/node-sdk@3.6.1-beta.0
+  - @tinycloud/operations@0.7.5-beta.0
+
+## 1.3.5
+
+### Patch Changes
+
+- 217d82c: A manifest, grant or login permission that carries a limit (any `caveats` other than absent, `[]` or `[{}]`) is refused with `CAVEATS_UNSUPPORTED` (exit 2) before any OpenKey URL, device authorization or request is made. The check uses the same `recapCaveatsEqual` comparison as the SDK.
+
+  Details: TC-1856
+
+- Updated dependencies [e18946e]
+- Updated dependencies [e600a1a]
+- Updated dependencies [0c09d7b]
+- Updated dependencies [82cbd43]
+- Updated dependencies [dc61583]
+- Updated dependencies [1f831e3]
+- Updated dependencies [7bd4ae6]
+- Updated dependencies [7bd4ae6]
+- Updated dependencies [e32bc41]
+- Updated dependencies [c0acb86]
+  - @tinycloud/operations@0.7.4
+  - @tinycloud/node-sdk@3.6.0
+  - @tinycloud/sdk-core@3.6.0
+  - @tinycloud/sdk-services@3.6.0
+
 ## 1.3.5-beta.9
 
 ### Patch Changes

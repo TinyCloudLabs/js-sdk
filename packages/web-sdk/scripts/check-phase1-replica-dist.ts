@@ -14,6 +14,7 @@ import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequir
 import { rootCeilingFor, validateTc1757RatchetTransition, validateTc1777ExpiryRatchetTransition, validateTc1777RatchetTransition, validateTc1781DecryptExpiryRatchetTransition, validateTc1801NonTransferableShareRatchetTransition, validateTc1807CredentialDiscoveryRatchetTransition, validateTc1823SizeCodeRatchetTransition, validateTc712CredentialCoreRatchetTransition, validateTc1827ReplicaWorkerRatchetTransition, validateTc1827WorkerRatchetTransition, validateTc848PanelRatchetTransition } from "./replica-size-policy";
 import { validateTc1781DecryptStandardExpiryRatchetTransition } from "./replica-size-policy";
 import { validateTc1855ManifestLimitGuardRatchetTransition } from "./replica-size-policy";
+import { validateTc1488SiweDomainUriRatchetTransition } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 import { replicaOwnedPath } from "./replica-owned-path";
 import { webSdkTestExitFailure } from "./web-sdk-test-exit";
@@ -379,6 +380,13 @@ if (prBaseSha) {
   if (tc1855ManifestLimitGuard !== undefined && baseLedger.tc1855ManifestLimitGuardRatchet === undefined &&
       (baseLedger.tc1781DecryptStandardExpiryRatchet === undefined || !hasAncestor(repoRoot, tc1855ManifestLimitGuard.sourceCommits.at(-1)!))) {
     console.error("The manifest limit guard ratchet requires the merged decrypt standard expiry ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc1488SiweDomainUriRatchetTransition(baseLedger.tc1488SiweDomainUriRatchet, ledger.tc1488SiweDomainUriRatchet);
+  const tc1488SiweDomainUri = ledger.tc1488SiweDomainUriRatchet;
+  if (tc1488SiweDomainUri !== undefined && baseLedger.tc1488SiweDomainUriRatchet === undefined &&
+      (baseLedger.tc1855ManifestLimitGuardRatchet === undefined || !hasAncestor(repoRoot, tc1488SiweDomainUri.sourceCommits.at(-1)!))) {
+    console.error("The SIWE domain and URI ratchet requires the merged manifest limit guard ratchet and its measured source commit.");
     failed = true;
   }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";

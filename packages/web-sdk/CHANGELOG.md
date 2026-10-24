@@ -1,5 +1,74 @@
 # @tinycloudlabs/web-sdk
 
+## 3.6.1-beta.1
+
+### Patch Changes
+
+- Updated dependencies [09b7dc0]
+  - @tinycloud/node-sdk@3.6.1-beta.1
+
+## 3.6.1-beta.0
+
+### Patch Changes
+
+- 271155a: In the browser, the SIWE sign-in `domain` now uses `window.location.host` (it keeps the port) and, when the domain comes from the page, the SIWE `uri` defaults to `window.location.origin` (it keeps the scheme), so local http dev origins satisfy OpenKey's origin check (TC-1486). Production https origins on default ports are unchanged. `TinyCloudNodeConfig` gains an optional `uri`; a caller `siweConfig.uri` still takes precedence. (TC-1488)
+
+  Details: TC-1488
+
+- Updated dependencies [271155a]
+  - @tinycloud/node-sdk@3.6.1-beta.0
+
+## 3.6.0
+
+### Minor Changes
+
+- 7bd4ae6: `courier credential show` no longer deletes a stored credential that fails offline re-verification. The record is refused with `credential-record-invalid` and kept under `COURIER_HOME/credentials/` for inspection. Lifecycle drops are unchanged: a credential within 60 seconds of its own expiry, or older than the 3600-second maximum age, is still deleted.
+
+  `@tinycloud/node-sdk/credentials` also exports the `StoredEmailProofInput` type.
+
+  `@tinycloud/web-sdk/credentials` adds `verifyStoredEmailProof` and the `StoredEmailProofInput` and `StoredEmailProofRecord` types, so headless clients can re-verify a stored email-proof credential offline without importing `@tinycloud/node-sdk` directly.
+
+  Details: TC-712
+
+- e32bc41: feat(credentials): add email-proof credential acquisition
+  - `@tinycloud/node-sdk/credentials` exports `requestEmailProofCode`, `completeEmailProof`, and `acquireEmailProof` for a two-step flow: request a one-time code for an address, then exchange it for a verifiable credential.
+  - Errors are `EmailProofError` with a `step`, a stable `code`, `retryAfterMs`, and `recoverable`.
+  - `@tinycloud/node-sdk/credential-pending-store` provides a file-backed pending store: owner-only files, 15-minute maximum lifetime, deleted after success or any unrecoverable failure.
+  - `@tinycloud/web-sdk` re-exports the same types. Existing root behaviour is unchanged; the root bundle contains no email-proof code.
+  - `@tinycloud/sdk-core`: `CredentialError` accepts an explicit `recoverable` flag that overrides the per-code default. `@tinycloud/node-sdk` needs this to keep the witness's recoverable flag on server errors.
+
+  Release order: `@tinycloud/sdk-core`, then `@tinycloud/node-sdk`, then `@tinycloud/web-sdk`. Node-sdk pins sdk-core exactly, so sdk-core must publish first for that pin to carry the recoverable override.
+
+  Details: TC-712
+
+### Patch Changes
+
+- e600a1a: `TinyCloudWeb.requestPermissions` passes `expiryMs` through for decrypt grants, including wildcards, like any other entry.
+
+  Details: TC-1781
+
+- d867b7a: The default credential discovery URL is now `https://witness.credentials.org/.well-known/opencredentials`. A 2xx discovery response whose body is not JSON now rejects with a typed error whose `code` is `CREDENTIAL_DISCOVERY_FAILED`, carrying `host`, `status`, and `contentType`, instead of a raw parse error. A 503 still rejects with `ISSUER_UNREADY`, and other non-2xx responses and network failures still reject with `OFFLINE`.
+
+  Details: TC-1807
+
+- 1f831e3: Manifest sign-in and session preparation refuse a permission that carries caveats by throwing the existing `CaveatedDelegationUnsupportedError` (`CAVEATED_DELEGATION_UNSUPPORTED`) before any request or signature. Absent, `[]` and `[{}]` caveats are accepted; any other set, including `[{}, {}]`, is refused, the same rule the delegation paths apply through `recapCaveatsEqual`.
+
+  Refusing call sites: `TinyCloudNode.signIn`, `signInWithOpenKey`, `createOwnerDelegation` and `createSubDelegation` permissions; `NodeUserAuthorization.signIn`, `prepareSessionForSigning`, `signInWithOpenKey` and `createBootstrapSession`; `TinyCloudWeb.signIn` (before any persisted session is restored).
+
+  Details: TC-1855
+
+- Updated dependencies [e600a1a]
+- Updated dependencies [0c09d7b]
+- Updated dependencies [dc61583]
+- Updated dependencies [1f831e3]
+- Updated dependencies [7bd4ae6]
+- Updated dependencies [7bd4ae6]
+- Updated dependencies [e32bc41]
+- Updated dependencies [c0acb86]
+  - @tinycloud/node-sdk@3.6.0
+  - @tinycloud/sdk-core@3.6.0
+  - @tinycloud/replica@0.3.3
+
 ## 3.6.0-beta.8
 
 ### Patch Changes

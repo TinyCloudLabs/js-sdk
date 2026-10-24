@@ -887,6 +887,8 @@ export interface TinyCloudNodeConfig {
   prefix?: string;
   /** Domain for SIWE messages (default: derived from host) */
   domain?: string;
+  /** SIWE URI (default: `https://<domain>`). web-sdk defaults it to the page origin when domain is derived from the window. */
+  uri?: string;
   /** Session expiration time in milliseconds (default: 30 days, `EXPIRY.SESSION_MS`) */
   sessionExpirationMs?: number;
   /** Whether to automatically create space if it doesn't exist (default: false) */
@@ -1919,6 +1921,7 @@ export class TinyCloudNode {
       sessionManager: this.sessionManager,
       sessionStorage: config.sessionStorage ?? new MemorySessionStorage(),
       domain: this.siweDomain,
+      uri: config.uri,
       spacePrefix: config.prefix,
       sessionExpirationMs: config.sessionExpirationMs ?? DEFAULT_SESSION_EXPIRATION_MS,
       tinycloudHosts: this.explicitHost ? [this.explicitHost] : undefined,
@@ -4870,6 +4873,7 @@ export class TinyCloudNode {
       sessionManager: this.sessionManager,
       sessionStorage: options?.sessionStorage ?? this.config.sessionStorage ?? new MemorySessionStorage(),
       domain: this.siweDomain,
+      uri: this.config.uri,
       spacePrefix: prefix,
       sessionExpirationMs: this.config.sessionExpirationMs ?? DEFAULT_SESSION_EXPIRATION_MS,
       tinycloudHosts: this.explicitHost ? [this.explicitHost] : undefined,
@@ -4949,6 +4953,7 @@ export class TinyCloudNode {
       sessionManager: this.sessionManager,
       sessionStorage: options?.sessionStorage ?? this.config.sessionStorage ?? new MemorySessionStorage(),
       domain: this.siweDomain,
+      uri: this.config.uri,
       spacePrefix: prefix,
       sessionExpirationMs: this.config.sessionExpirationMs ?? DEFAULT_SESSION_EXPIRATION_MS,
       tinycloudHosts: this.explicitHost ? [this.explicitHost] : undefined,

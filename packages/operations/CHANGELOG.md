@@ -1,5 +1,48 @@
 # @tinycloud/operations
 
+## 0.7.5-beta.1
+
+### Patch Changes
+
+- Updated dependencies [09b7dc0]
+  - @tinycloud/node-sdk@3.6.1-beta.1
+
+## 0.7.5-beta.0
+
+### Patch Changes
+
+- Updated dependencies [271155a]
+  - @tinycloud/node-sdk@3.6.1-beta.0
+
+## 0.7.4
+
+### Patch Changes
+
+- e18946e: Add the separate `/chatgpt/mcp` public personal-record endpoint with exactly connect, context, read, write and query tools. Public OAuth audiences, tenant state, approvals and recovery suggestions are isolated from the existing broad `/mcp` service; excluded tools cannot be invoked by name. Preserve local/private integrations and return an inert browser recovery page for invalid approval links.
+
+  Correct context/query mutation annotations and operation effects, ask for an IANA timezone rather than location, and preserve the hosted 100,000-character context and derived-query output limit without truncating canonical write outcomes. Add reproducible MCP-only plugin packaging and explicit reviewer/publication gates.
+
+  Advertise equivalent JSON Schema 2020-12 tool inputs and results on stdio and both hosted surfaces so the official v2 client works with its default validator. Preserve the shared Draft-07 operations catalog for non-MCP consumers; reject unsupported dialect-specific forms rather than silently changing their validation.
+
+  Deploy the matching OpenKey API audience and exact web callback registrations before candidate acceptance. The package is not a published plugin: actual ChatGPT web/mobile tests, independent reviewer access, approved policies, recording and portal review remain required. Default-branch integration and deployment require explicit owner approval.
+
+- 82cbd43: A 413 from the SQL or DuckDB node is classified by side. A request rejected for size returns `SQL_REQUEST_TOO_LARGE` or `DUCKDB_REQUEST_TOO_LARGE`. A response that is too large keeps `SQL_RESPONSE_TOO_LARGE` or `DUCKDB_RESPONSE_TOO_LARGE`.
+
+  Details: TC-1823
+
+- Updated dependencies [e600a1a]
+- Updated dependencies [0c09d7b]
+- Updated dependencies [82cbd43]
+- Updated dependencies [dc61583]
+- Updated dependencies [1f831e3]
+- Updated dependencies [7bd4ae6]
+- Updated dependencies [7bd4ae6]
+- Updated dependencies [e32bc41]
+- Updated dependencies [c0acb86]
+  - @tinycloud/node-sdk@3.6.0
+  - @tinycloud/sdk-core@3.6.0
+  - @tinycloud/sdk-services@3.6.0
+
 ## 0.7.4-beta.8
 
 ### Patch Changes

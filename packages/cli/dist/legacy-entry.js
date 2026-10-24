@@ -458,6 +458,18 @@ async function withSpinner(label, fn) {
   if (shouldOutputJson()) {
     return fn();
   }
+  if (process.stdout.columns === 0 || process.stderr.columns === 0) {
+    try {
+      const result = await fn();
+      process.stderr.write(`${label}
+`);
+      return result;
+    } catch (error) {
+      process.stderr.write(`${label} failed
+`);
+      throw error;
+    }
+  }
   const spinner = ora(label).start();
   try {
     const result = await fn();

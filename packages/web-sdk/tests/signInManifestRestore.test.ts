@@ -191,6 +191,52 @@ test("forwards signStrategy to the underlying TinyCloudNode", async () => {
   expect((tcw as any)._node.config.signStrategy).toBe(signStrategy);
 });
 
+test("SIWE domain carries the origin host and port (TC-1488)", async () => {
+  const globalWithWindow = globalThis as unknown as { window: { location: unknown } };
+  const previousLocation = globalWithWindow.window.location;
+  globalWithWindow.window.location = { hostname: "localhost", host: "localhost:5173", origin: "http://localhost:5173" };
+  try {
+    const tcw = new TinyCloudWeb({});
+    const internals = tcw as unknown as { _initPromise: Promise<void>; _node: { config: { domain?: string } } };
+    await internals._initPromise;
+    expect(internals._node.config.domain).toBe("localhost:5173");
+  } finally {
+    globalWithWindow.window.location = previousLocation;
+  }
+});
+
+test("SIWE uri follows the page origin when domain comes from the window (TC-1488)", async () => {
+  const globalWithWindow = globalThis as unknown as { window: { location: unknown } };
+  const previousLocation = globalWithWindow.window.location;
+  const initWithOrigin = async (origin: string, host: string) => {
+    globalWithWindow.window.location = { hostname: new URL(origin).hostname, host, origin };
+    const tcw = new TinyCloudWeb({});
+    const internals = tcw as unknown as { _initPromise: Promise<void>; _node: { config: { uri?: string } } };
+    await internals._initPromise;
+    return internals._node.config.uri;
+  };
+  try {
+    expect(await initWithOrigin("http://localhost:5173", "localhost:5173")).toBe("http://localhost:5173");
+    expect(await initWithOrigin("https://app.example.com", "app.example.com")).toBe("https://app.example.com");
+  } finally {
+    globalWithWindow.window.location = previousLocation;
+  }
+});
+
+test("SIWE uri is not defaulted to the page origin when the caller sets domain (TC-1488)", async () => {
+  const globalWithWindow = globalThis as unknown as { window: { location: unknown } };
+  const previousLocation = globalWithWindow.window.location;
+  globalWithWindow.window.location = { hostname: "localhost", host: "localhost:5173", origin: "http://localhost:5173" };
+  try {
+    const tcw = new TinyCloudWeb({ domain: "app.example.com" });
+    const internals = tcw as unknown as { _initPromise: Promise<void>; _node: { config: { uri?: string } } };
+    await internals._initPromise;
+    expect(internals._node.config.uri).toBeUndefined();
+  } finally {
+    globalWithWindow.window.location = previousLocation;
+  }
+});
+
 test("accountAuthorizationCid returns the delegation CID of a restored walletless session", async () => {
   const address = "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1";
   const storage = {

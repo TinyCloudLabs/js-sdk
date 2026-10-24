@@ -1,5 +1,51 @@
 # @tinycloud/mcp
 
+## 0.8.1-beta.1
+
+### Patch Changes
+
+- Updated dependencies [09b7dc0]
+  - @tinycloud/node-sdk@3.6.1-beta.1
+  - @tinycloud/operations@0.7.5-beta.1
+
+## 0.8.1-beta.0
+
+### Patch Changes
+
+- Updated dependencies [271155a]
+  - @tinycloud/node-sdk@3.6.1-beta.0
+  - @tinycloud/operations@0.7.5-beta.0
+
+## 0.8.0
+
+### Minor Changes
+
+- e18946e: Add the separate `/chatgpt/mcp` public personal-record endpoint with exactly connect, context, read, write and query tools. Public OAuth audiences, tenant state, approvals and recovery suggestions are isolated from the existing broad `/mcp` service; excluded tools cannot be invoked by name. Preserve local/private integrations and return an inert browser recovery page for invalid approval links.
+
+  Correct context/query mutation annotations and operation effects, ask for an IANA timezone rather than location, and preserve the hosted 100,000-character context and derived-query output limit without truncating canonical write outcomes. Add reproducible MCP-only plugin packaging and explicit reviewer/publication gates.
+
+  Advertise equivalent JSON Schema 2020-12 tool inputs and results on stdio and both hosted surfaces so the official v2 client works with its default validator. Preserve the shared Draft-07 operations catalog for non-MCP consumers; reject unsupported dialect-specific forms rather than silently changing their validation.
+
+  Deploy the matching OpenKey API audience and exact web callback registrations before candidate acceptance. The package is not a published plugin: actual ChatGPT web/mobile tests, independent reviewer access, approved policies, recording and portal review remain required. Default-branch integration and deployment require explicit owner approval.
+
+### Patch Changes
+
+- 00e1d5a: `tinycloud_connect` reports `connected: true` only after the node confirms the account session. When the node cannot confirm it (timeout, unreachable, or an unexpected response), the tool reports `connected: false` with no approval URL instead of a connected state.
+
+  Details: TC-1627
+
+- Updated dependencies [e18946e]
+- Updated dependencies [e600a1a]
+- Updated dependencies [0c09d7b]
+- Updated dependencies [82cbd43]
+- Updated dependencies [1f831e3]
+- Updated dependencies [7bd4ae6]
+- Updated dependencies [7bd4ae6]
+- Updated dependencies [e32bc41]
+- Updated dependencies [c0acb86]
+  - @tinycloud/operations@0.7.4
+  - @tinycloud/node-sdk@3.6.0
+
 ## 0.8.0-beta.9
 
 ### Patch Changes

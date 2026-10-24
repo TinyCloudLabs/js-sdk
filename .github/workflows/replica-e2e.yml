@@ -32,6 +32,7 @@ on:
       # changes can move the web-sdk dist sizes this workflow checks.
       - "packages/share-sdk/**"
       - "packages/share-envelope/**"
+      - "tests/cli/**"
       - ".github/scripts/**"
       - ".github/workflows/replica-e2e.yml"
       - "tests/replication-harness/**"
@@ -241,6 +242,23 @@ jobs:
           TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
         run: bun test packages/cli/test/secrets-wait.e2e.test.ts
 
+      # The suite skips itself when the node binary variable is unset, so the
+      # step fails if any test was skipped.
+      # The step runs packages/cli/test/replica-secrets.e2e.test.ts and fails
+      # unless at least one test passed and none were skipped.
+      - name: tc replica Secrets against the node
+        if: matrix.database == 'sqlite'
+        timeout-minutes: 10
+        env:
+          TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
+        run: |
+          set -o pipefail
+          bun test packages/cli/test/replica-secrets.e2e.test.ts 2>&1 | tee "$RUNNER_TEMP/replica-secrets.log"
+          if grep -Eq '^ *[1-9][0-9]* skip' "$RUNNER_TEMP/replica-secrets.log" || ! grep -Eq '^ *[1-9][0-9]* pass' "$RUNNER_TEMP/replica-secrets.log"; then
+            echo "::error title=replica Secrets::tests were skipped or none passed"
+            exit 1
+          fi
+
       - name: tc delegation revoke from a profile with no grant record, against the node
         if: matrix.database == 'sqlite'
         env:
@@ -252,6 +270,33 @@ jobs:
         env:
           TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
         run: bun test --max-concurrency=1 packages/cli/src/commands/share-history-revoke.e2e.test.ts
+
+      # tests/cli suites that talk to a node through TC_TEST_SERVER (tests/cli/setup.ts).
+      # Each step starts its own loopback node from the pinned binary, waits for
+      # /version, runs one file and stops the node (.github/scripts/run-cli-node-suite.sh).
+      # tests/cli/duckdb is not run here: the pinned node is built without DuckDB (TC-1965).
+      - name: tests/cli kv against the node (TC-1902)
+        if: ${{ !cancelled() && matrix.database == 'sqlite' }}
+        timeout-minutes: 10
+        run: .github/scripts/run-cli-node-suite.sh "$RUNNER_TEMP/tinycloud" tests/cli/kv/kv.test.ts
+
+      - name: tests/cli sql against the node (TC-1902)
+        if: ${{ !cancelled() && matrix.database == 'sqlite' }}
+        timeout-minutes: 10
+        run: .github/scripts/run-cli-node-suite.sh "$RUNNER_TEMP/tinycloud" tests/cli/sql/sql.test.ts
+
+      - name: tests/cli secrets e2e against the node (TC-1902)
+        if: ${{ !cancelled() && matrix.database == 'sqlite' }}
+        timeout-minutes: 10
+        run: .github/scripts/run-cli-node-suite.sh "$RUNNER_TEMP/tinycloud" tests/cli/secrets/secrets-e2e.test.ts
+
+      - name: Stop any tests/cli node still running
+        if: ${{ always() && matrix.database == 'sqlite' }}
+        run: |
+          for pidfile in "$RUNNER_TEMP"/cli-node-suites/*.pid; do
+            [ -f "$pidfile" ] || continue
+            kill "$(cat "$pidfile")" 2>/dev/null || true
+          done
 
       - name: Save Rust/Cargo cache
         if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/')
