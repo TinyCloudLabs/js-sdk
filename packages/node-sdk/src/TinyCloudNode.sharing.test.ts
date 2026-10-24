@@ -1048,5 +1048,29 @@ describe("TinyCloudNode sharing", () => {
         expect(text).not.toContain("#v=3&k=");
       }
     });
+
+    test("a link or key that crosses the 512-character cut of the node's reply is redacted whole", async () => {
+      const keyStart = SHORT.indexOf(KEY);
+      const replies = [
+        "z".repeat(512 - keyStart - 20) + SHORT,
+        "z".repeat(492) + KEY,
+        `${"z".repeat(300)} ${SHORT} ${"z".repeat(300)}`,
+      ];
+      for (const reply of replies) {
+        const { node } = deliveryNode(() => new Response(reply, { status: 403 }));
+        let failure: unknown;
+        try {
+          await node.authorizeShareDeliveryV3(input(SHORT));
+        } catch (error) {
+          failure = error;
+        }
+        expect(failure).toMatchObject({ status: 403 });
+        const text = JSON.stringify(failure, Object.getOwnPropertyNames(failure)) + String(failure);
+        expect(text).not.toContain(KEY.slice(0, 12));
+        expect(text).not.toContain("#v=4&k=");
+        expect(text).toMatch(/\[(share link|key)\]/);
+        expect(String(failure).length).toBeLessThanOrEqual("Error: V3 share delivery authorization failed: HTTP 403 - ".length + 512);
+      }
+    });
   });
 });

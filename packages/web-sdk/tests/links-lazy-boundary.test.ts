@@ -10,17 +10,21 @@ import { build, type Plugin } from "esbuild";
  * the output: every import of the links module must be a dynamic one, and at least one must exist.
  */
 const LINKS = "@tinycloud/share-envelope/links";
-const KEEP = new Set(["@tinycloud/share-sdk", "@tinycloud/share-envelope"]);
+const KEEP: Readonly<Record<string, true>> = {
+  "@tinycloud/sdk-core": true,
+  "@tinycloud/share-sdk": true,
+  "@tinycloud/share-envelope": true,
+};
 const packages = resolve(import.meta.dir, "../..");
 
-/** Leaves every `@tinycloud/*` package except the two share packages, and the links module, as external imports. */
+/** Leaves every `@tinycloud/*` package except sdk-core and the two share packages, and the links module, as external imports. */
 const externals: Plugin = {
   name: "share-boundary-externals",
   setup(b) {
     b.onResolve({ filter: /^@tinycloud\// }, (args) => {
       if (args.path === LINKS) return { path: args.path, external: true };
       const name = args.path.split("/").slice(0, 2).join("/");
-      return KEEP.has(name) ? undefined : { path: args.path, external: true };
+      return KEEP[name] === true ? undefined : { path: args.path, external: true };
     });
   },
 };
