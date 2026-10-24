@@ -87,6 +87,7 @@ interface Options {
   requestAuthority?: PanelClient["requestAuthority"];
   source?: boolean;
   toasts?: boolean;
+  slip?: boolean;
 }
 
 async function mountSection(options: Options = {}): Promise<Harness> {
@@ -140,7 +141,7 @@ async function mountSection(options: Options = {}): Promise<Harness> {
     },
     receipt: (request: Harness["receipts"][number]) => {
       receipts.push(request);
-      return true;
+      return options.slip !== false;
     },
     data,
     confirm: (request: Parameters<typeof dialogs.confirm>[0]) => dialogs.confirm(request),
@@ -551,13 +552,18 @@ describe("revoke", () => {
     expect(h.el.textContent).toContain("Nothing to revoke");
   });
 
-  test("with toasts on and no slip shown, a plain toast confirms; with toasts off nothing is raised", async () => {
-    const h = await mountSection({ rows: [row("a")], toasts: false });
-    const box = await openConfirm(h);
-    buttonIn(box, "Revoke access")?.click();
+  test("when the slip is declined a plain toast confirms, unless toasts are off; the receipt is always offered", async () => {
+    const declined = await mountSection({ rows: [row("a")], slip: false });
+    buttonIn(await openConfirm(declined), "Revoke access")?.click();
     await flush();
-    expect(h.toasts).toEqual([]);
-    expect(h.receipts).toHaveLength(1);
+    expect(declined.receipts).toHaveLength(1);
+    expect(declined.toasts).toEqual(["delegations.receipt.title"]);
+
+    const off = await mountSection({ rows: [row("a")], slip: false, toasts: false });
+    buttonIn(await openConfirm(off), "Revoke access")?.click();
+    await flush();
+    expect(off.receipts).toHaveLength(1);
+    expect(off.toasts).toEqual([]);
   });
 });
 

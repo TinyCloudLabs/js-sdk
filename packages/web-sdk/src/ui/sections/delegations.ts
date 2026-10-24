@@ -77,6 +77,7 @@ const STYLE = `
 .dl-res .dl-chip{height:24px;padding:0 9px;background:#fff;font-size:12px;line-height:1}
 .section[data-section="delegations"] .confirm{margin-top:10px;padding:14px 16px;border-radius:16px;box-shadow:inset 0 0 0 1px #71717a}
 .section[data-section="delegations"] .confirm p{margin:0;font-size:14px;line-height:1.45;color:inherit}
+.section[data-section="delegations"] .confirm .actions .action:last-child,.section[data-section="delegations"] .confirm .actions .action:last-child:hover{border-color:#09090b;background:#09090b;color:#fff}
 .dl-q-title{display:block;margin-bottom:6px;font:400 1.25rem/1.25 ${DISPLAY}}
 .dl-q-dim{display:block;margin-top:8px;color:#52525b}
 .drawer .dl-what{margin:0 0 8px}
@@ -98,6 +99,7 @@ const STYLE = `
 .dl-res>li{background:#27272a}
 .dl-res .dl-chip{height:24px;padding:0 9px;background:#151517}
 .section[data-section="delegations"] .confirm{box-shadow:inset 0 0 0 1px #a1a1aa}
+.section[data-section="delegations"] .confirm .actions .action:last-child,.section[data-section="delegations"] .confirm .actions .action:last-child:hover{border-color:#fafafa;background:#fafafa;color:#09090b}
 .dl-q-dim{color:#d4d4d8}
 }
 `;
@@ -747,7 +749,7 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
     card.drawer?.close();
     card.drawer = undefined;
     const active = (el.getRootNode() as Document | ShadowRoot).activeElement;
-    if (active !== null && card.li.contains(active)) title.focus();
+    if (active !== null && card.li.contains(active)) title.focus({ preventScroll: true });
     const finish = (): void => card.li.remove();
     if (reducedMotion()) finish();
     else {
@@ -929,7 +931,7 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
           declined = !approved;
           if (approved) await settleList();
           if (disposed) return;
-          if (approved) title.focus();
+          if (approved) title.focus({ preventScroll: true });
           update();
         })();
       });
