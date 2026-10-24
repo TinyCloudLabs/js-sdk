@@ -149,16 +149,15 @@ jobs:
             [packages/cli/test/replica.e2e.test.ts]="needs a live node; run by replica-e2e.yml"
             [packages/cli/test/replication-flag.e2e.test.ts]="needs a live node; run by replica-e2e.yml"
             [packages/cli/test/secrets-wait.e2e.test.ts]="needs a live node; run by replica-e2e.yml"
-            [packages/cli/test/replica-secrets.e2e.test.ts]="needs a live node; its replica-e2e.yml step is excluded: secrets_sync_requires_opt_in fails in CI; TC-1899"
+            [packages/cli/test/replica-secrets.e2e.test.ts]="needs a live node; run by replica-e2e.yml; TC-1899"
+            [tests/cli/kv/kv.test.ts]="needs a live node; run by replica-e2e.yml; TC-1902"
+            [tests/cli/sql/sql.test.ts]="needs a live node; run by replica-e2e.yml; TC-1902"
+            [tests/cli/secrets/secrets-e2e.test.ts]="needs a live node; run by replica-e2e.yml; TC-1902"
             # Run in their own step above:
             [packages/cli/src/commands/secrets-private-key-production.test.ts]="run in isolation by its own step"
             # Known failures, tracked:
             [packages/cli/src/config/shared-state-writers.test.ts]="fails on master: test-support harness writes shared state directly; TC-1898"
-            # tests/cli suites that need a tinycloud-node on localhost:8000; no lane starts one:
-            [tests/cli/duckdb/duckdb.test.ts]="needs a node on localhost:8000; no lane starts one; TC-1902"
-            [tests/cli/kv/kv.test.ts]="needs a node on localhost:8000; no lane starts one; TC-1902"
-            [tests/cli/secrets/secrets-e2e.test.ts]="needs a node on localhost:8000; no lane starts one; TC-1902"
-            [tests/cli/sql/sql.test.ts]="needs a node on localhost:8000; no lane starts one; TC-1902"
+            [tests/cli/duckdb/duckdb.test.ts]="needs a DuckDB-enabled node; the node binary the live-node lanes use is built without DuckDB; TC-1965"
           )
           failed=()
           for root in "${roots[@]}"; do
