@@ -8,9 +8,9 @@ import { base58btc } from "multiformats/bases/base58";
 import { profilePath, withProfileLock, withTinyCloudStateRoot } from "@tinycloud/operations/state";
 import { fromBase64Url, unifiedPolicyV2Schema } from "@tinycloud/share-envelope";
 import { buildShortLink } from "@tinycloud/share-envelope/links";
-import { ADDRESSED_SHARE_TOO_LARGE_MESSAGE, historyRecordForPublishedShare, notifyShare, revokeShare, type PublishedShare, type SenderShareRecord, type SharePolicyRootRevocation, type TargetPublishInput } from "@tinycloud/share-sdk";
+import { ADDRESSED_SHARE_TOO_LARGE_MESSAGE, historyRecordForPublishedShare, notifyShare, revokeShare, type PublishedShare, type SenderShareRecord, type ShareNotifyResult, type SharePolicyRootRevocation, type TargetPublishInput } from "@tinycloud/share-sdk";
 import { shortLinkId } from "./short-links.js";
-import { createEmailCredentialRequirement, createEmailDomainCredentialRequirement, credentialRequirementDigest, LocationRecordValidationError, LocationRegistryHttpError } from "@tinycloud/sdk-core";
+import { createEmailCredentialRequirement, createEmailDomainCredentialRequirement, credentialRequirementDigest, LocationRecordValidationError, LocationRegistryHttpError, ShareDeliveryRefusedError } from "@tinycloud/sdk-core";
 import { CLIError } from "../output/errors.js";
 import { ShareHistoryReadError, ShareHistoryRetryError, ShareHistoryUnreadableError, SharePublishAuthorityError, shareHistoryReason } from "./errors.js";
 
@@ -1840,28 +1840,27 @@ describe("TinyCloud share authority adapter", () => {
     expect(invitations).toHaveLength(1);
   });
 
-  it("treats a 422 and a 400 from the delivery authorization as one refusal that names neither the link nor the key", async () => {
+  it("treats the node's refusal of a delivery authorization (its 422 and its 400) as one final refusal that names neither the link nor the key", async () => {
     const adapters = deliveringAdapters();
     const published = await adapters.targetAdapter.publish(addressedInput({ kind: "email", address: "alice@example.com" }));
     if ("state" in published) throw new Error("expected addressed publication");
     const record = recordWithShortLink(published);
     const original = node.authorizeShareDeliveryV3;
-    const outcomes: unknown[] = [];
+    const results: ShareNotifyResult[] = [];
     try {
-      for (const status of [422, 400]) {
-        const refusal = async (input: { readonly shareUrl: string; readonly envelopeKey: string }): Promise<never> => {
-          throw Object.assign(new Error(`V3 share delivery authorization failed: HTTP ${status} - ${input.shareUrl} ${input.envelopeKey}`), { status });
-        };
+      // The node answers 422 (body did not parse) or 400 (failed its checks); the node SDK raises this one error for both.
+      for (let answer = 0; answer < 2; answer += 1) {
+        const refusal = async (): Promise<never> => { throw new ShareDeliveryRefusedError(); };
         Object.defineProperty(node, "authorizeShareDeliveryV3", { value: refusal, configurable: true, writable: true });
-        outcomes.push(await notifyShare({ shareId: record.shareId, recipient: "alice@example.com", record, adapter: adapters.delivery }));
+        results.push(await notifyShare({ shareId: record.shareId, recipient: "alice@example.com", record, adapter: adapters.delivery }));
       }
     } finally {
       Object.defineProperty(node, "authorizeShareDeliveryV3", { value: original, configurable: true, writable: true });
     }
-    expect(outcomes[0]).toMatchObject({ state: "partial-failure", retryable: true });
-    expect(outcomes[1]).toEqual(outcomes[0]);
-    expect(JSON.stringify(outcomes)).not.toContain(record.link ?? "no link");
-    expect(JSON.stringify(outcomes)).not.toContain(published.deliveryMaterial!.envelopeKey);
+    expect(results[0]).toMatchObject({ state: "partial-failure", retryable: false, attempts: 1 });
+    expect(results[1]).toEqual(results[0]);
+    expect(JSON.stringify(results)).not.toContain(record.link ?? "no link");
+    expect(JSON.stringify(results)).not.toContain(published.deliveryMaterial!.envelopeKey);
   });
 
   it("publishes mailboxes the envelope cannot pin unpinned; node 1.17.3 still delivers them", async () => {

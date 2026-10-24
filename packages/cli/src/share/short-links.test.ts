@@ -17,6 +17,7 @@ import {
 } from "@tinycloud/share-envelope/links";
 import { ADDRESSED_SHARE_TOO_LARGE_MESSAGE, SharePublishError, type PublishedShare, type SenderShareRecord } from "@tinycloud/share-sdk";
 import { SharePublishAuthorityError } from "./errors.js";
+import { ShareDeliveryRefusedError } from "@tinycloud/sdk-core";
 import vectors from "../../../share-envelope/test/links-api-vectors.json";
 import { configureShareCommandServices, registerShareCommand, type ShareCommandServices } from "../commands/share.js";
 import { LINK_EXPIRY_WARNING, LINK_EXPIRY_WARNING_URL, createShareLinks, linkFormForLifetime, shortLinkId } from "./short-links.js";
@@ -425,22 +426,21 @@ describe("tc share with links", () => {
     expect(delivered).toBe(shortRecord.link);
   });
 
-  test("a 422 and a 400 from the node's delivery authorization give the same notify result, exit code and output, and name neither link nor key", async () => {
+  test("the node's refusal of a delivery authorization (its 422 and its 400) is final: one attempt, not retryable, the same exit code and output, naming neither link nor key", async () => {
     const api = fakeApi();
     const short = await publish([], { fetchFn: api.fetchFn });
     const record: SenderShareRecord = { ...short.records.get("share-cmd")!, actions: ["tinycloud.kv/get"] };
     const outputs: { readonly stdout: string; readonly stderr: string; readonly exitCode: number | undefined }[] = [];
-    for (const status of [422, 400]) {
+    // The node answers 422 (body did not parse) or 400 (failed its checks); the node SDK raises this one error for both.
+    for (let answer = 0; answer < 2; answer += 1) {
       const delivery = {
-        deliver: async (): Promise<"delivered"> => {
-          throw Object.assign(new Error(`V3 share delivery authorization failed: HTTP ${status} - ${record.link} ${short.published.key}`), { status });
-        },
+        deliver: async (): Promise<"delivered"> => { throw new ShareDeliveryRefusedError(); },
       };
       outputs.push(await run(["notify", "share-cmd", "--to", "alice@example.com", "--json"], { records: memoryRecordsWith(record).storage, delivery, shortLinkInvitations: true }));
     }
     expect(outputs[0]!.exitCode).toBe(9);
     expect(outputs[1]).toEqual(outputs[0]!);
-    expect(JSON.parse(outputs[0]!.stdout)).toMatchObject({ state: "partial-failure" });
+    expect(JSON.parse(outputs[0]!.stdout)).toMatchObject({ state: "partial-failure", retryable: false, attempts: 1 });
     for (const text of [outputs[0]!.stdout, outputs[0]!.stderr]) {
       expect(text).not.toContain(record.link!);
       expect(text).not.toContain(short.published.key);
