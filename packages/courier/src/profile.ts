@@ -1,6 +1,5 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { cmd } from './program.js';
 import { CourierError } from './errors.js';
@@ -57,8 +56,29 @@ export interface Profile {
   peers: Record<string, StoredPeer>;
 }
 
+/**
+ * Courier home: `COURIER_HOME` when set, else `$HOME/.courier`. Refuses an unset or empty `HOME`
+ * rather than guessing a home directory.
+ */
 export function profileDir(): string {
-  return process.env.COURIER_HOME || path.join(os.homedir(), '.courier');
+  let dir = process.env.COURIER_HOME;
+  if (!dir) {
+    const home = process.env.HOME;
+    if (!home) throw new CourierError('home-unset', 'HOME is not set. Set HOME or COURIER_HOME to choose where Courier stores its state.');
+    dir = path.join(home, '.courier');
+  }
+  assertTestHome(dir);
+  return dir;
+}
+
+/** Test fence: with `COURIER_TEST=1`, a home outside `COURIER_TEST_HOME` is refused. Without that variable this does nothing. */
+function assertTestHome(dir: string): void {
+  if (process.env.COURIER_TEST !== '1') return;
+  const root = process.env.COURIER_TEST_HOME ? path.resolve(process.env.COURIER_TEST_HOME) : undefined;
+  const resolved = path.resolve(dir);
+  if (!root || (resolved !== root && !resolved.startsWith(root + path.sep))) {
+    throw new CourierError('test-home-escape', `COURIER_TEST=1: ${resolved} is outside COURIER_TEST_HOME (${root ?? 'unset'}).`);
+  }
 }
 
 function profilePath(name: string, home = profileDir()): string {

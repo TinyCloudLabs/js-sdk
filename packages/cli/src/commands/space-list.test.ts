@@ -147,7 +147,7 @@ test("an owner session without tinycloud.space/list lists its spaces from the ac
 
 test("a walletless restored session holding tinycloud.space/list lists through the space/list fallback", async () => {
   node = spaceListNode;
-  expect(spaceListNode.spaceId).toBeUndefined();
+  expect(spaceListNode.spaceId).toBe(wasm.makeSpaceId(await signer.getAddress(), 1, "default"));
   const before = fixture.invocations().length;
 
   const result = await runSpaceList();

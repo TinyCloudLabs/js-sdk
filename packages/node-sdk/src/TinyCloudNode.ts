@@ -203,6 +203,7 @@ import {
 } from "@tinycloud/sdk-services";
 import { RequestLog, observeReplicaReads, readOnlyRequestLog } from "@tinycloud/sdk-services/telemetry/requestLog";
 import { NodeUserAuthorization } from "./authorization/NodeUserAuthorization";
+import { refuseCaveated } from "./authorization/caveatRefusal";
 import type { SignStrategy } from "./authorization/strategies";
 import { AccountService } from "./account/AccountService";
 import { FileSessionStorage } from "./storage/FileSessionStorage";
@@ -214,7 +215,6 @@ import {
   legacyParamsToPermissionEntries,
   resolveExpiryMs,
   extractSiweExpiration,
-  includesDecrypt,
 } from "./delegateToHelpers";
 import { NodeSecretsService } from "./NodeSecretsService";
 
@@ -737,6 +737,8 @@ function ownerDelegationPermissions(
     if (!Array.isArray(params.permissions)) {
       throw new Error("Owner delegation permissions are invalid");
     }
+    // `OwnerDelegationPermission` has no caveat field, but a spread argument can carry one.
+    refuseCaveated(params.permissions as readonly PermissionEntry[]);
     permissions.push(...params.permissions.map((permission) => ({
       service: permission.service,
       path: permission.path,
@@ -888,6 +890,8 @@ export interface TinyCloudNodeConfig {
   prefix?: string;
   /** Domain for SIWE messages (default: derived from host) */
   domain?: string;
+  /** SIWE URI (default: `https://<domain>`). web-sdk defaults it to the page origin when domain is derived from the window. */
+  uri?: string;
   /** Session expiration time in milliseconds (default: 30 days, `EXPIRY.SESSION_MS`) */
   sessionExpirationMs?: number;
   /** Whether to automatically create space if it doesn't exist (default: false) */
@@ -1022,13 +1026,6 @@ export interface DelegateToResult {
   delegation: PortableDelegation;
   prompted: boolean;
 }
-
-const DECRYPT_GRANT_MAX_EXPIRY_MS = 60 * 60 * 1000;
-/**
- * Expiry for runtime grants escalated by `secrets.get`. Kept under the one-hour
- * decrypt cap so a secret read never leaves a grant that outlives an hour.
- */
-const SECRET_GET_GRANT_EXPIRY_MS = 59 * 60 * 1000;
 
 /**
  * Options for runtime permission escalation.
@@ -1909,6 +1906,7 @@ export class TinyCloudNode {
       sessionManager: this.sessionManager,
       sessionStorage: config.sessionStorage ?? new MemorySessionStorage(),
       domain: this.siweDomain,
+      uri: config.uri,
       spacePrefix: config.prefix,
       sessionExpirationMs: config.sessionExpirationMs ?? DEFAULT_SESSION_EXPIRATION_MS,
       tinycloudHosts: this.explicitHost ? [this.explicitHost] : undefined,
@@ -2428,6 +2426,8 @@ export class TinyCloudNode {
   }
 
   private async signInWith(performSignIn: () => Promise<unknown>): Promise<void> {
+    // Refuse a caveated manifest before any signer, registry or host call.
+    refuseCaveated(this.auth?.capabilityRequest?.manifests);
     // Read synchronously: a sign-out called after this sign-in started wins,
     // while a sign-out already in progress finishes before it starts.
     const epoch = this.sessionEpoch;
@@ -4849,6 +4849,7 @@ export class TinyCloudNode {
       sessionManager: this.sessionManager,
       sessionStorage: options?.sessionStorage ?? this.config.sessionStorage ?? new MemorySessionStorage(),
       domain: this.siweDomain,
+      uri: this.config.uri,
       spacePrefix: prefix,
       sessionExpirationMs: this.config.sessionExpirationMs ?? DEFAULT_SESSION_EXPIRATION_MS,
       tinycloudHosts: this.explicitHost ? [this.explicitHost] : undefined,
@@ -4928,6 +4929,7 @@ export class TinyCloudNode {
       sessionManager: this.sessionManager,
       sessionStorage: options?.sessionStorage ?? this.config.sessionStorage ?? new MemorySessionStorage(),
       domain: this.siweDomain,
+      uri: this.config.uri,
       spacePrefix: prefix,
       sessionExpirationMs: this.config.sessionExpirationMs ?? DEFAULT_SESSION_EXPIRATION_MS,
       tinycloudHosts: this.explicitHost ? [this.explicitHost] : undefined,
@@ -6223,8 +6225,6 @@ export class TinyCloudNode {
         getManifest: () => this.manifest,
         hasPermissions: (permissions) => this.hasRuntimePermissions(permissions),
         grantPermissions: (additional) => this.grantRuntimePermissions(additional),
-        grantGetPermissions: (additional) =>
-          this.grantRuntimePermissions(additional, { expiry: SECRET_GET_GRANT_EXPIRY_MS }),
         uncoveredEntries: (permissions) =>
           permissions.filter((entry) => !this.hasRuntimePermissions([entry])),
         canEscalate: () => this.signer !== undefined && this.tc !== undefined,
@@ -6638,15 +6638,6 @@ export class TinyCloudNode {
     }
 
     const expanded = this.expandPermissionEntries(permissions);
-    const requestsDecrypt = includesDecrypt(expanded);
-    const requestedExpiryMs = requestsDecrypt && options?.expiry === undefined
-      ? DECRYPT_GRANT_MAX_EXPIRY_MS
-      : resolveExpiryMs(options?.expiry);
-    if (requestsDecrypt && requestedExpiryMs > DECRYPT_GRANT_MAX_EXPIRY_MS) {
-      throw Object.assign(new Error("decrypt grants last at most one hour"), {
-        code: "DECRYPT_EXPIRY_TOO_LONG",
-      });
-    }
     if (this.sessionCoversPermissionEntries(session, expanded)) {
       return [];
     }
@@ -6681,6 +6672,7 @@ export class TinyCloudNode {
     }
 
     const now = new Date();
+    const requestedExpiryMs = resolveExpiryMs(options?.expiry);
     let expiresAt = new Date(now.getTime() + requestedExpiryMs);
     if (sessionExpiry !== undefined && sessionExpiry < expiresAt) {
       expiresAt = sessionExpiry;
@@ -8837,6 +8829,8 @@ export class TinyCloudNode {
     // every grant in `delegation.resources[]`; the flat `path`/`actions`
     // mirror only the first resource. Building from the flat fields alone
     // silently drops every other resource from the activated session.
+    // Activation replays an already-signed delegation: this map restates that
+    // delegation's resources and is not a new permission request.
     const { abilities, rawAbilities } = this.buildActivationAbilities(delegation);
 
     const now = new Date();
@@ -8966,6 +8960,8 @@ export class TinyCloudNode {
     }
   ): Promise<PortableDelegation> {
     this.assertPortableDelegationCaveatsPreservable(parentDelegation);
+    // Requested resources have no caveat field; a spread argument can still carry one.
+    refuseCaveated(params.resources);
 
     if (!this.signer) {
       throw new Error("Cannot createSubDelegation() in session-only mode. Requires wallet mode.");

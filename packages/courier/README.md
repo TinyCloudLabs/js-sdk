@@ -86,9 +86,20 @@ address replaces the older pending request only after the new request succeeds; 
 the new request fails, the older pending request is kept and `--code-stdin` still
 completes it.
 
-`courier credential show --email <addr>` prints the stored credential's `email`,
-`credentialId`, `issuedAt`, `expiresAt` and `status`. The credential itself is
-never printed.
+`courier credential show --email <addr>` prints one JSON document on stdout (pretty
+printed, nothing else on stdout) with `address`, `credentialId`, `issuedAt`,
+`expiresAt` and `status`. The credential itself is never printed. Every read
+re-verifies the stored record offline against the pinned issuer key before anything
+else. A record that fails is refused with `credential-record-invalid` and kept
+untouched for inspection; it is never deleted on the strength of its stored fields.
+Only a record that passed verification can be dropped, and only when its own
+verified `exp` is less than 60 seconds away or it was issued more than 3600 seconds
+ago: it is then deleted and reported as `credential.show.NOT_FOUND`.
+
+`acquire` prints one JSON document on stdout (pretty printed, nothing else on
+stdout). The first call (`status: "code-sent"`) returns `codeExpiresAt`; enter the
+code within 5 minutes. The second call (`status: "acquired"`) returns `issuedAt` and
+`expiresAt`, the end of the credential's validity. Human hints go to stderr.
 
 ### Settings
 
@@ -814,6 +825,8 @@ bun run --cwd packages/courier build
 bun run --cwd packages/courier test       # offline
 bun run --cwd packages/courier test:live  # manual only
 ```
+
+`test` runs every test file under a fresh `/var/tmp/tc1920.*` home (`test/setup-home.mjs`, preloaded with `node --import`) and sets `COURIER_TEST=1`. With `COURIER_TEST=1`, a Courier home outside `COURIER_TEST_HOME` is refused with `test-home-escape`; without it nothing changes.
 
 `test:live` (`scripts/happy-path.mjs`) proves the flow end to end with two
 fresh throwaway identities on the production `https://tee.node.tinycloud.xyz`,

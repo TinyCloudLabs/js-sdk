@@ -104,7 +104,10 @@ The hosted server checks the account approval with the node when a client
 connects or calls an authenticated tool. Successful checks are cached for up
 to 30 seconds. A node response identifying a withdrawn account approval starts
 a fresh connection approval; one identifying a withdrawn per-request grant
-renews only that grant. Other node responses keep stored approvals available.
+renews only that grant. Other node responses keep stored approvals available for
+tool calls. `tinycloud_connect` reports `connected: true` only after a positive
+check; when the node cannot confirm the account, it reports `connected: false`
+without an approval URL and the caller retries shortly.
 The account's delegate key stays in place while the owner signs new permissions
 through the usual OpenKey approval flow.
 
@@ -162,8 +165,17 @@ environment requires `PHALA_CLOUD_API_KEY`, `CLOUDFLARE_API_TOKEN`, and a stable
 
 The workflow fails, before building or deploying, unless the `tinycloud-mcp` CVM
 runs the production OS image pinned in `PHALA_OS_IMAGE` / `PHALA_OS_IMAGE_HASH`
-(`dstack-0.5.12`, not a `dstack-dev-*` image), and checks again after the deploy.
-It never changes the OS. If the check fails, set the OS by hand and re-run:
+(`dstack-0.5.12`), or a dev image whose hash is listed in
+`.github/scripts/phala-dev-os-allowlist.txt` (today only `dstack-dev-0.5.12`) and
+that passes a fresh check in the same job: `download.dstack.org` serves
+`mr_<hash>.tar.gz`, and `sha256sum sha256sum.txt` of the extracted archive equals
+`<hash>`, and every file it lists matches (`sha256sum -c`). An unknown dev hash,
+a missing field, a failed fetch or a hash mismatch
+fails closed. The allowlist is changed only by a reviewed PR. The logic is
+`.github/scripts/phala-os-guard.sh`, tested by
+`.github/scripts/test-phala-os-guard.sh` (the preflight job runs it first). The
+workflow checks again after the deploy. It never changes the OS. If the check
+fails, set the OS by hand and re-run:
 `phala api -X PATCH /cvms/<id>/os-image -F os_image_name=dstack-0.5.12`.
 
 ### Post-deploy knowledge smoke

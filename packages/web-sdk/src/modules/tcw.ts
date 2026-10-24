@@ -25,6 +25,7 @@ import {
   type UnifiedOwnerRootReceipt,
   type RegisterPolicyV3Input,
   type RegisterPolicyV3Receipt,
+  refuseCaveated,
 } from "@tinycloud/node-sdk/core";
 import {
   resolveReplicationConfig,
@@ -217,7 +218,7 @@ export interface Config extends ClientConfig {
   /** Browser storage key prefix for isolating apps/environments. */
   sessionStorageKeyPrefix?: string;
 
-  /** SIWE domain (default: window.location.hostname in browser, app.tinycloud.xyz otherwise) */
+  /** SIWE domain (default: window.location.host in browser, app.tinycloud.xyz otherwise) */
   domain?: string;
 
   /** Shorthand for passing a Web3 provider */
@@ -472,7 +473,8 @@ export class TinyCloudWeb {
       localNodeIdentityStore:
         this.config.localNodeIdentityStore ??
         createLocalStorageLocalNodeIdentityStore(),
-      domain: this.config.domain ?? (typeof window !== 'undefined' ? window.location.hostname : 'app.tinycloud.xyz'),
+      domain: this.config.domain ?? (typeof window !== 'undefined' ? window.location.host : 'app.tinycloud.xyz'),
+      uri: this.config.domain === undefined && typeof window !== 'undefined' ? window.location.origin : undefined,
       prefix: this.config.spacePrefix,
       autoCreateSpace: this.config.autoCreateSpace ?? true,
       sessionExpirationMs: this.config.sessionExpirationMs,
@@ -857,6 +859,8 @@ export class TinyCloudWeb {
   }
 
   signIn = async (options?: SignInOptions): Promise<ClientSession> => {
+    // Refuse a caveated manifest before any restore, signer or network call.
+    refuseCaveated(this._capabilityRequest?.manifests ?? this._manifest);
     const signOuts = this.signOutCount;
     const assertNotSignedOut = (): void => {
       if (this.signOutCount !== signOuts || this.signOutInFlight > 0) {
@@ -1191,10 +1195,6 @@ export class TinyCloudWeb {
    * permissions are requested. Permissions already covered by the session
    * or an existing runtime grant return without a new delegation, so
    * `expiryMs` does not apply to them.
-   *
-   * Decrypt grants (including wildcards) with `expiryMs` over one hour
-   * reject with `DECRYPT_EXPIRY_TOO_LONG` before the modal opens. Covered
-   * permissions skip this check.
    */
   async requestPermissions(
     additional: PermissionEntry[],

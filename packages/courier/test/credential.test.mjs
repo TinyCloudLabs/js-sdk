@@ -71,6 +71,9 @@ function issuedResult(holderDid, now = new Date()) {
   return { envelope: verified, verified, credentialId: 'cred-1', issuedAt, expiresAt };
 }
 
+/** Stand-in for the offline re-verify. Only the success-path tests use it; the real verifier has its own tests. */
+const acceptStandIn = async () => {};
+
 test('step 1 stores one owner-only pending request and prints no code, verifier, or request id', async () => {
   const home = freshHome();
   const { loadKey } = identity();
@@ -83,7 +86,10 @@ test('step 1 stores one owner-only pending request and prints no code, verifier,
   const files = pendingFiles(home);
   assert.equal(files.length, 1);
   assert.equal(modeOf(join(credDir(home), files[0])), 0o600);
-  assert.match(r.out(), /Verification code sent to qa\.owner@example\.test/);
+  const printed = JSON.parse(r.out());
+  assert.equal(printed.ok, true);
+  assert.equal(printed.status, 'code-sent');
+  assert.equal(printed.address, ADDRESS);
   assert.ok(!r.out().includes(requestId), 'request id must not be printed');
 });
 
@@ -97,6 +103,7 @@ test('step 2 stores the credential, deletes the pending request, and show never 
   const acquire = runner(home, {
     loadKey,
     fetch: witness.fetch,
+    verifyStored: acceptStandIn,
     readStdinLine: async () => witness.code,
     completeProof: async (input) => {
       seen.requestId = input.pending.requestId;
@@ -110,16 +117,18 @@ test('step 2 stores the credential, deletes the pending request, and show never 
   assert.deepEqual([...witness.reqs.keys()], [seen.requestId]);
   assert.equal(seen.code, witness.code);
   assert.equal(seen.holderDid, holder.bare);
-  assert.match(acquire.out(), /Email credential stored for qa\.owner@example\.test/);
+  assert.equal(JSON.parse(acquire.out()).status, 'acquired');
   assert.equal(pendingFiles(home).length, 0);
   assert.equal(credentialFiles(home).length, 1);
   assert.ok(!acquire.out().includes(SECRET_CREDENTIAL));
 
-  const show = runner(home, { loadKey });
+  const show = runner(home, { loadKey, verifyStored: acceptStandIn });
   await show.run(['show', '--email', ADDRESS]);
-  assert.match(show.out(), /email: qa\.owner@example\.test/);
-  assert.match(show.out(), /credentialId: cred-1/);
-  assert.match(show.out(), /status: none/);
+  const shown = JSON.parse(show.out());
+  assert.deepEqual(Object.keys(shown).sort(), ['address', 'credentialId', 'expiresAt', 'issuedAt', 'ok', 'status']);
+  assert.equal(shown.address, ADDRESS);
+  assert.equal(shown.credentialId, 'cred-1');
+  assert.equal(shown.status, 'none');
   assert.ok(!show.out().includes(SECRET_CREDENTIAL), 'show must not print the SD-JWT');
 });
 
@@ -176,6 +185,7 @@ test('a failed new request keeps the still-valid older pending request', async (
   const complete = runner(home, {
     loadKey,
     fetch: witness.fetch,
+    verifyStored: acceptStandIn,
     readStdinLine: async () => witness.code,
     completeProof: async (input) => {
       seen.requestId = input.pending.requestId;
@@ -184,7 +194,7 @@ test('a failed new request keeps the still-valid older pending request', async (
   });
   await complete.run(['acquire', '--email', ADDRESS, '--code-stdin']);
   assert.equal(seen.requestId, originalId, 'the older pending request must still complete');
-  assert.match(complete.out(), /Email credential stored for qa\.owner@example\.test/);
+  assert.equal(JSON.parse(complete.out()).status, 'acquired');
 });
 
 test('a successful new request removes the older pending request', async () => {
