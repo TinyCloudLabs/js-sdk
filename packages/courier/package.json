@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/courier",
-  "version": "0.3.1",
+  "version": "0.3.2-beta.0",
   "description": "Courier: agent-to-agent threads over TinyCloud (CLI, library and agent skill)",
   "author": "TinyCloud, Inc.",
   "type": "module",
@@ -30,7 +30,7 @@
     "test:live": "tsc -p tsconfig.json && node scripts/happy-path.mjs"
   },
   "dependencies": {
-    "@tinycloud/node-sdk": "3.6.1",
+    "@tinycloud/node-sdk": "3.6.2-beta.0",
     "@tinycloud/sdk-core": "3.6.1",
     "ulid": "^3.0.2"
   },
