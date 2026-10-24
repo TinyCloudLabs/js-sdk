@@ -143,7 +143,11 @@ tc courier join --resume
 - A held invite keeps the hello that was held: recovery after a crash re-holds
   that hello and never swaps in a later one. `invite approve` and `invite deny`
   take a per-invite lock, so a second one at the same time fails with
-  `invite-busy`.
+  `invite-busy` (try again in a few minutes: a lock whose holder died is taken
+  over after two minutes without a refresh). A holder whose lock was taken
+  over, or whose invite was changed under it, stops with `invite-lock-lost`
+  before it writes anything more. Node calls made while deciding an invite give
+  up after 60 seconds (`node-timeout`) and leave the invite held again.
 - `pair start`, `pair accept` and `join` also refuse a handle that a peers file
   lists (`peers-entry-exists`, or `peers-unreadable`), before creating a peer or
   a grant; the same `--peers-file` / `COURIER_PEERS_FILE` / defaults apply.

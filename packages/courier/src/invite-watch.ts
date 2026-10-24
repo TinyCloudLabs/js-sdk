@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomBytes } from 'node:crypto';
 import type { TinyCloudNode } from '@tinycloud/node-sdk';
 import { acceptB, fail } from './commands.js';
 import { CourierError } from './errors.js';
@@ -52,45 +53,113 @@ export interface InviteRecord {
   cleanedAt?: string;
   /** Set when the record moves to consumed. Recovery waits RECOVER_AFTER_MS past it. */
   consumedAt?: string;
+  /** Random marker written with every move to consumed. A holder compares it before each state-changing write, so two consumes can be told apart. */
+  consumedBy?: string;
 }
 
 const RECORD_FILE = /^[a-z2-7]{26}\.json$/;
 const RECOVER_AFTER_MS = 10 * 60 * 1000;
-/** A lock older than this belongs to a process that died; it is removed so a crash cannot wedge an invite. */
+/** A lock whose mtime has not been refreshed for this long belongs to a holder that died; it is taken over. A live holder refreshes it every LOCK_HEARTBEAT_MS. */
 const LOCK_STALE_MS = 2 * 60 * 1000;
+const LOCK_HEARTBEAT_MS = 30 * 1000;
+/** Every node call made while an invite is being decided is abandoned after this long (shorter than LOCK_STALE_MS). */
+export const NODE_CALL_TIMEOUT_MS = 60 * 1000;
 const lockPath = (id: string) => path.join(secureSubdir('invites'), `${id}.lock`);
 
+/** Test seam: shorter windows than the production constants. */
+export interface LockTiming {
+  staleMs?: number;
+  /** 0 turns the heartbeat off (a holder that cannot beat). */
+  heartbeatMs?: number;
+  nodeTimeoutMs?: number;
+}
+
+/** What a lock holder checks before it writes. */
+export interface LockGuard {
+  /** Throws `invite-lock-lost` unless the lock file still holds this holder's token. */
+  assertHeld(): void;
+}
+
 /**
- * Runs `fn` while holding the invite's exclusive lock (`<id>.lock`, created `wx`, 0600, in the 0700 invites dir). Approve, deny and recovery take it so two
- * of them cannot both read `held` and both pair. A lock that is already held makes the caller fail with `invite-busy` at once (it never waits); a lock
- * older than LOCK_STALE_MS is taken over. Released in `finally`. `revoke` never takes it.
+ * Runs `fn` while holding the invite's exclusive lock (`<id>.lock`, created `wx`, 0600, in the 0700 invites dir; it holds a random token of this holder).
+ * Approve, deny and recovery take it so two of them cannot both read `held` and both pair. A lock that is already held makes the caller fail with
+ * `invite-busy` at once (it never waits). While `fn` runs the lock's mtime is refreshed every LOCK_HEARTBEAT_MS, so a live holder is never stale; a lock with
+ * no heartbeat for LOCK_STALE_MS is taken over. The lock is removed at the end only if it still holds this holder's token. `revoke` never takes it.
+ * `fn` gets a guard and must call `assertHeld()` before it writes (a holder whose lock was taken over must stop writing).
  */
-async function withInviteLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
+async function withInviteLock<T>(id: string, timing: LockTiming | undefined, fn: (guard: LockGuard) => Promise<T>): Promise<T> {
   const file = lockPath(id);
+  const staleMs = timing?.staleMs ?? LOCK_STALE_MS;
+  const heartbeatMs = timing?.heartbeatMs ?? LOCK_HEARTBEAT_MS;
+  const token = randomBytes(16).toString('hex');
   let fd: number | undefined;
   for (let attempt = 0; attempt < 2 && fd === undefined; attempt++) {
     try {
       fd = fs.openSync(file, 'wx', 0o600);
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
-      let ageMs = 0;
+      let seen: fs.Stats;
       try {
-        ageMs = Date.now() - fs.statSync(file).mtimeMs;
+        seen = fs.statSync(file);
       } catch {
         continue;
       }
-      if (ageMs < LOCK_STALE_MS) break;
+      if (Date.now() - seen.mtimeMs < staleMs) break;
+      // Only the lock that was judged stale is removed: if it was replaced in between, leave the new one.
+      try {
+        const again = fs.statSync(file);
+        if (again.ino !== seen.ino || again.mtimeMs !== seen.mtimeMs) continue;
+      } catch {
+        continue;
+      }
       fs.rmSync(file, { force: true });
     }
   }
-  if (fd === undefined) fail('invite-busy', 'Another approve, deny or recovery is working on this invite. Try again in a minute.');
+  if (fd === undefined) fail('invite-busy', 'Another approve, deny or recovery is working on this invite. Try again in a few minutes.');
+  fs.writeSync(fd, token);
   fs.closeSync(fd);
+  const readToken = (): string | undefined => {
+    try {
+      return fs.readFileSync(file, 'utf8');
+    } catch {
+      return undefined;
+    }
+  };
+  const guard: LockGuard = {
+    assertHeld() {
+      if (readToken() !== token) throw new CourierError('invite-lock-lost', 'The lock on this invite was taken over while it was being worked on; nothing more was written.');
+    },
+  };
+  let beat: ReturnType<typeof setInterval> | undefined;
+  if (heartbeatMs > 0) {
+    beat = setInterval(() => {
+      try {
+        if (readToken() === token) {
+          const now = new Date();
+          fs.utimesSync(file, now, now);
+        }
+      } catch {
+        // A failed beat is caught by the next assertHeld.
+      }
+    }, heartbeatMs);
+    beat.unref?.();
+  }
   try {
-    return await fn();
+    return await fn(guard);
   } finally {
-    fs.rmSync(file, { force: true });
+    if (beat !== undefined) clearInterval(beat);
+    if (readToken() === token) fs.rmSync(file, { force: true });
   }
 }
+
+/** What a holder expects the record on disk to still be, right before it writes. */
+interface Claim {
+  status: InviteStatus;
+  consumedBy: string | undefined;
+}
+const claimOf = (r: InviteRecord): Claim => ({ status: r.status, consumedBy: r.consumedBy });
+const consumedClaim = (r: InviteRecord): Claim => ({ status: 'consumed', consumedBy: r.consumedBy });
+const newMarker = () => randomBytes(16).toString('hex');
 const peerKey = (p: { handle: string; courierDid: string; ownerDid: string } | null | undefined): string => (p ? `${p.handle}|${p.courierDid}|${p.ownerDid}` : '');
 const invitesDir = () => secureSubdir('invites');
 export const recordPath = (id: string) => path.join(invitesDir(), `${id}.json`);
@@ -180,6 +249,8 @@ export interface InviteEnv {
   fault?: (step: 'before-welcome') => void;
   /** peers.json locations checked before pairing. Defaults to `peersFilesFor()`. */
   peersFiles?: readonly (string | PeersFile)[];
+  /** Test seam: shorter lock and node-call windows. */
+  timing?: LockTiming;
 }
 
 type Check = { ok: true; replayKey: string } | { ok: false; reason: string };
@@ -193,12 +264,62 @@ export class InviteWatcher {
   private readonly verify: (input: VerifyEmailProofInput) => Promise<VerifyEmailProofResult>;
   private readonly accept: typeof acceptB;
   private readonly deleteSealed: typeof deleteSealedReal;
+  /** The node's KV with every call bounded by NODE_CALL_TIMEOUT_MS. */
+  private readonly kv: TinyCloudNode['kv'];
 
   constructor(private readonly env: InviteEnv) {
     this.now = env.now ?? (() => new Date());
     this.verify = env.verify ?? verifyReal;
-    this.accept = env.accept ?? acceptB;
-    this.deleteSealed = env.deleteSealed ?? deleteSealedReal;
+    const realAccept = env.accept ?? acceptB;
+    const realDelete = env.deleteSealed ?? deleteSealedReal;
+    this.accept = (...args: Parameters<typeof acceptB>) => this.bounded('acceptB', () => realAccept(...args));
+    this.deleteSealed = (...args: Parameters<typeof deleteSealedReal>) => this.bounded('deleteSealed', () => realDelete(...args));
+    this.kv = new Proxy(env.node.kv, {
+      get: (target, prop) => {
+        const member = Reflect.get(target, prop, target) as unknown;
+        if (typeof member !== 'function') return member;
+        return (...args: unknown[]) => this.bounded(`kv.${String(prop)}`, async () => (member as (...a: unknown[]) => unknown).apply(target, args));
+      },
+    });
+  }
+
+  /**
+   * Runs one node call with a deadline. At the deadline the caller gets `node-timeout` and moves on (the invite stays recoverable); the call itself
+   * cannot be cancelled, so whatever it returns later is dropped and only logged.
+   */
+  private bounded<T>(label: string, run: () => Promise<T>): Promise<T> {
+    const ms = this.env.timing?.nodeTimeoutMs ?? NODE_CALL_TIMEOUT_MS;
+    return new Promise<T>((resolve, reject) => {
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        reject(new CourierError('node-timeout', `${label} did not answer within ${Math.round(ms / 1000)} s`));
+      }, ms);
+      run().then(
+        (value) => {
+          clearTimeout(timer);
+          if (timedOut) this.env.log({ event: 'node-call-late', step: label, outcome: 'ok' });
+          else resolve(value);
+        },
+        (error: unknown) => {
+          clearTimeout(timer);
+          if (timedOut) this.env.log({ event: 'node-call-late', step: label, outcome: 'failed', reason: reasonOf(error) });
+          else reject(error);
+        },
+      );
+    });
+  }
+
+  /**
+   * Compare-and-set: right before a state-changing write, the record on disk must still be what this holder took (status and consume marker) and the
+   * lock must still be this holder's. Otherwise nothing is written and the holder stops with `invite-lock-lost`.
+   */
+  private cas(id: string, claim: Claim, guard: LockGuard | undefined): void {
+    guard?.assertHeld();
+    const disk = readRecord(id);
+    if (!disk || disk.status !== claim.status || disk.consumedBy !== claim.consumedBy) {
+      throw new CourierError('invite-lock-lost', 'This invite was changed by someone else while it was being worked on; nothing more was written.');
+    }
   }
 
   openIds(): string[] {
@@ -235,7 +356,7 @@ export class InviteWatcher {
       return;
     }
     if ((record.status === 'completed' || record.status === 'denied') && record.cleanedAt === undefined) {
-      await delIfPresent(this.env.node.kv, `${inviteFolder(record.inviteId)}out/welcome.json`);
+      await delIfPresent(this.kv, `${inviteFolder(record.inviteId)}out/welcome.json`);
       record.cleanedAt = this.now().toISOString();
       writeRecord(record);
     }
@@ -248,10 +369,10 @@ export class InviteWatcher {
   private async recoverConsumed(snapshot: InviteRecord): Promise<void> {
     if (snapshot.status !== 'consumed') return;
     try {
-      await withInviteLock(snapshot.inviteId, async () => {
+      await withInviteLock(snapshot.inviteId, this.env.timing, async (guard) => {
         // Re-read under the lock: an approve or deny that held it may have moved the invite on.
         const record = readRecord(snapshot.inviteId);
-        if (record) await this.recoverLocked(record);
+        if (record) await this.recoverLocked(record, guard);
       });
     } catch (e) {
       if (e instanceof CourierError && e.code === 'invite-busy') return;
@@ -259,20 +380,21 @@ export class InviteWatcher {
     }
   }
 
-  private async recoverLocked(record: InviteRecord): Promise<void> {
+  private async recoverLocked(record: InviteRecord, guard: LockGuard): Promise<void> {
     if (record.status !== 'consumed') return;
     if (record.consumedAt !== undefined && this.now().getTime() - Date.parse(record.consumedAt) < RECOVER_AFTER_MS) return;
     if (Date.parse(record.expiresAt) <= this.now().getTime()) {
-      await this.close(record, 'expired');
+      await this.close(record, 'expired', guard);
       return;
     }
     // The held copy wins: a recovery must never let a later writer replace the identity the owner already saw. The remote hello is used only when
     // there is no held copy (a crash between the hello arriving and the hold).
     const hello = readHeld(record.inviteId) ?? (await this.remoteHello(record.inviteId));
     if (hello) {
-      await this.hold(record, hello, 'internal-error');
+      await this.hold(record, hello, 'internal-error', guard);
       return;
     }
+    this.cas(record.inviteId, consumedClaim(record), guard);
     record.status = 'failed';
     writeRecord(record);
     publishStatus(record, this.env.log);
@@ -283,7 +405,7 @@ export class InviteWatcher {
 
   /** The hello still under in/, or undefined when it is gone or invalid. An invalid hello is logged by reason; finish clears it. */
   private async remoteHello(id: string): Promise<Hello | undefined> {
-    const got = await getJson<unknown>(this.env.node.kv, `${inviteFolder(id)}in/hello.json`);
+    const got = await getJson<unknown>(this.kv, `${inviteFolder(id)}in/hello.json`);
     if (!got) return undefined;
     try {
       const text = typeof got.value === 'string' ? got.value : JSON.stringify(got.value);
@@ -323,7 +445,7 @@ export class InviteWatcher {
   }
 
   private async handleHello(id: string): Promise<void> {
-    const kv = this.env.node.kv;
+    const kv = this.kv;
     const folder = inviteFolder(id);
     const helloKey = `${folder}in/hello.json`;
     const record = readRecord(id);
@@ -359,6 +481,7 @@ export class InviteWatcher {
     }
     latest.status = 'consumed';
     latest.consumedAt = this.now().toISOString();
+    latest.consumedBy = newMarker();
     writeRecord(latest);
     publishStatus(latest, this.env.log);
     await this.decide(latest, hello);
@@ -411,7 +534,7 @@ export class InviteWatcher {
 
   /** Writes the Welcome once. An identical existing Welcome (a retried approve) is accepted; any other existing Welcome is a conflict. */
   private async writeWelcome(welcome: Welcome): Promise<void> {
-    const kv = this.env.node.kv;
+    const kv = this.kv;
     const key = `${inviteFolder(welcome.inviteId)}out/welcome.json`;
     try {
       await putCreate(kv, key, welcome);
@@ -431,23 +554,33 @@ export class InviteWatcher {
    * Any failure ends HELD with reason internal-error. A retried approve resumes from the persisted artifactC and an identical Welcome.
    * Returns the reason code on failure, undefined on success.
    */
-  private async complete(record: InviteRecord, hello: Hello): Promise<string | undefined> {
+  private async complete(record: InviteRecord, hello: Hello, guard?: LockGuard): Promise<string | undefined> {
+    // Before each step that writes (or mints a delegation) the record on disk must still be the consume this holder made, and the lock still ours.
+    const claim = consumedClaim(record);
     try {
       if (record.artifactC === undefined) {
-        record.artifactC = await this.accept(this.env.profile(), this.env.node, hello.artifactB, record.handle);
+        this.cas(record.inviteId, claim, guard);
+        const artifactC = await this.accept(this.env.profile(), this.env.node, hello.artifactB, record.handle);
+        this.cas(record.inviteId, claim, guard);
+        record.artifactC = artifactC;
         writeRecord(record);
       }
       this.env.fault?.('before-welcome');
+      this.cas(record.inviteId, claim, guard);
       await this.writeWelcome({ v: 1, inviteId: record.inviteId, tier: record.tier, artifactC: record.artifactC, sentAt: this.now().toISOString() });
+      this.cas(record.inviteId, claim, guard);
       record.status = 'completed';
       record.completedPeer = { handle: record.handle, courierDid: hello.artifactB.from.courier, ownerDid: hello.artifactB.from.owner };
       delete record.held;
       writeRecord(record);
     } catch (e) {
+      // A holder that lost its lock or whose record was changed under it writes nothing more; the invite is left for recovery.
+      if (e instanceof CourierError && e.code === 'invite-lock-lost') throw e;
       this.env.log({ event: 'invite-error', inviteId: record.inviteId, reason: reasonOf(e) });
       delete record.completedPeer;
-      await this.hold(record, hello, 'internal-error');
-      return 'internal-error';
+      record.status = 'consumed';
+      await this.hold(record, hello, 'internal-error', guard);
+      return e instanceof CourierError && e.code === 'node-timeout' ? 'node-timeout' : 'internal-error';
     }
     // The public copy is best-effort. A failed write is logged by reason and reconciled by the next sweep; it never changes the outcome.
     publishStatus(record, this.env.log);
@@ -460,14 +593,18 @@ export class InviteWatcher {
    * Stores the hello for a decision, then removes the remote copy. The remote copy goes only after the held copy is written, so a crash
    * in between leaves a hello to recover. A failure here leaves the invite consumed; the next sweep holds it and notifies once.
    */
-  private async hold(record: InviteRecord, hello: Hello, reason: string): Promise<void> {
+  private async hold(record: InviteRecord, hello: Hello, reason: string, guard?: LockGuard): Promise<void> {
+    const claim = consumedClaim(record);
     try {
+      this.cas(record.inviteId, claim, guard);
       writeSecure(heldPath(record.inviteId), hello);
-      await delIfPresent(this.env.node.kv, `${inviteFolder(record.inviteId)}in/hello.json`);
+      await delIfPresent(this.kv, `${inviteFolder(record.inviteId)}in/hello.json`);
+      this.cas(record.inviteId, claim, guard);
       record.status = 'held';
       record.held = { reason, at: this.now().toISOString(), owner: hello.artifactB.from.owner, courierDid: hello.artifactB.from.courier };
       writeRecord(record);
     } catch (e) {
+      if (e instanceof CourierError && e.code === 'invite-lock-lost') throw e;
       this.env.log({ event: 'invite-error', inviteId: record.inviteId, reason: reasonOf(e) });
       return;
     }
@@ -481,52 +618,61 @@ export class InviteWatcher {
    * actually held (`owner-mismatch` otherwise; nothing is paired or changed). The hello that is paired is the one that was checked.
    */
   async approveHeld(id: string, owner: string, tier?: AcceptedTier): Promise<AcceptedTier> {
-    return withInviteLock(id, async () => {
+    return withInviteLock(id, this.env.timing, async (guard) => {
       const record = await this.heldRecord(id);
       const hello = readHeld(id);
       if (!hello) fail('invite-not-held', 'Held hello is missing; nothing to approve.');
       if (!ownerConfirms(owner, hello.artifactB.from.owner)) {
         fail('owner-mismatch', 'The owner you gave is not the owner of the hello that is held; nothing was paired. Run the command again with the owner shown for this invite.');
       }
-      return this.pairHeld(record, hello, tier);
+      return this.pairHeld(record, hello, tier, guard);
     });
   }
 
-  private async pairHeld(record: InviteRecord, hello: Hello, tier: AcceptedTier | undefined): Promise<AcceptedTier> {
+  private async pairHeld(record: InviteRecord, hello: Hello, tier: AcceptedTier | undefined, guard: LockGuard): Promise<AcceptedTier> {
     const peersProblem = peersEntryProblem(record.handle, this.env.peersFiles ?? peersFilesFor());
     if (peersProblem !== undefined) fail(peersProblem, `${peersMessage(peersProblem)} The invite stays held.`);
+    this.cas(record.inviteId, claimOf(record), guard);
     if (tier !== undefined) record.tier = tier;
     record.status = 'consumed';
     record.consumedAt = this.now().toISOString();
+    record.consumedBy = newMarker();
     writeRecord(record);
     publishStatus(record, this.env.log);
-    const reason = await this.complete(record, hello);
+    const reason = await this.complete(record, hello, guard);
     if (reason !== undefined) fail(reason, 'Pairing failed; the invite is held again. Retry approve or deny.');
     return record.tier;
   }
 
   /** Owner denies a held invite. The invitee gets a rejected Welcome with no artifact. */
   async deny(id: string): Promise<void> {
-    return withInviteLock(id, () => this.denyLocked(id));
+    return withInviteLock(id, this.env.timing, (guard) => this.denyLocked(id, guard));
   }
 
-  private async denyLocked(id: string): Promise<void> {
+  private async denyLocked(id: string, guard: LockGuard): Promise<void> {
     const record = await this.heldRecord(id);
+    this.cas(id, claimOf(record), guard);
     record.status = 'consumed';
     record.consumedAt = this.now().toISOString();
+    record.consumedBy = newMarker();
     writeRecord(record);
     publishStatus(record, this.env.log);
     const welcome: Welcome = { v: 1, inviteId: id, tier: 'rejected', sentAt: this.now().toISOString() };
+    const claim = consumedClaim(record);
     try {
-      await putCreate(this.env.node.kv, `${inviteFolder(id)}out/welcome.json`, welcome);
+      this.cas(id, claim, guard);
+      await putCreate(this.kv, `${inviteFolder(id)}out/welcome.json`, welcome);
     } catch (e) {
+      if (e instanceof CourierError && e.code === 'invite-lock-lost') throw e;
       // Any failure leaves the invite held, so approve or a retried deny stays possible.
+      this.cas(id, claim, guard);
       record.status = 'held';
       writeRecord(record);
       publishStatus(record, this.env.log);
       if (e instanceof CourierError && e.code === 'conflict') fail('welcome-exists', 'Welcome already written for this invite; it cannot be denied.');
       throw e;
     }
+    this.cas(id, claim, guard);
     this.dropPendingPeer(record.handle);
     record.status = 'denied';
     delete record.held;
@@ -554,10 +700,11 @@ export class InviteWatcher {
   }
 
   /** Remote cleanup first, then the local status. A crash leaves the record open or held for the next sweep. */
-  private async close(record: InviteRecord, status: 'expired' | 'revoked'): Promise<void> {
+  private async close(record: InviteRecord, status: 'expired' | 'revoked', guard?: LockGuard): Promise<void> {
     await this.deleteSealedBlob(record);
-    const kv = this.env.node.kv;
+    const kv = this.kv;
     for (const key of await listAll(kv, inviteFolder(record.inviteId))) await delIfPresent(kv, key);
+    if (guard !== undefined) this.cas(record.inviteId, claimOf(record), guard);
     this.dropPendingPeer(record.handle);
     removeHeld(record.inviteId);
     record.status = status;
@@ -578,7 +725,7 @@ export class InviteWatcher {
   }
 
   private async clearInbound(folder: string): Promise<void> {
-    for (const key of await listAll(this.env.node.kv, `${folder}in/`)) await delIfPresent(this.env.node.kv, key);
+    for (const key of await listAll(this.kv, `${folder}in/`)) await delIfPresent(this.kv, key);
   }
 
   private async deleteSealedBlob(record: InviteRecord): Promise<void> {
