@@ -31,6 +31,7 @@ import { viewReady } from "../view-result";
 export interface StubSeed {
   storage?: ViewResult<StorageView>;
   nodes?: ViewResult<readonly NodeRow[]>;
+  delegations?: StubDelegationsSeed;
 }
 
 export function createStubPanelData(seed: StubSeed = {}): PanelDataFactory {
@@ -64,8 +65,7 @@ export function createStubPanelData(seed: StubSeed = {}): PanelDataFactory {
           }),
         );
       },
-      delegations: () => Promise.resolve(viewReady<DelegationPage>({ rows: [STUB_DELEGATION] })),
-      revoke: (cid: string) => Promise.resolve<RevokeOutcome>({ ok: true, cid }),
+      ...delegationsStub(seed.delegations),
       nodes: () => Promise.resolve(seed.nodes ?? viewReady<readonly NodeRow[]>([STUB_NODE])),
       storage: () =>
         Promise.resolve(
@@ -80,6 +80,86 @@ export function createStubPanelData(seed: StubSeed = {}): PanelDataFactory {
         ),
       requests: () => requests,
     } satisfies PanelDataSource;
+  };
+}
+
+/** A delegation row as a JSON seed: dates are ISO strings, and `source` is always "stub". */
+export type StubDelegationRowSeed = Omit<DelegationRow, "source" | "issuedAt" | "notBefore" | "expiresAt" | "revokedAt"> & {
+  readonly issuedAt?: string | null;
+  readonly notBefore?: string | null;
+  readonly expiresAt?: string | null;
+  readonly revokedAt?: string | null;
+};
+
+/** Delegations a preview or test can pin. Absent fields keep the one-row default. */
+export interface StubDelegationsSeed {
+  /** The read state of the first page. Default: ready. */
+  readonly state?: "ready" | "loading" | "needs-permission" | "error";
+  readonly rows?: readonly StubDelegationRowSeed[];
+  readonly nextCursor?: string;
+  /** Pages after the first, by the cursor that reads them. */
+  readonly pages?: Readonly<Record<string, { readonly rows: readonly StubDelegationRowSeed[]; readonly nextCursor?: string }>>;
+  /** Failure code `revoke(cid)` returns for a CID, with the row left as it is. */
+  readonly revokeFails?: Readonly<Record<string, string>>;
+  /** Milliseconds `revoke` waits before it answers. */
+  readonly revokeDelayMs?: number;
+}
+
+function seededDate(value: string | null | undefined): Date | null {
+  return typeof value === "string" ? new Date(value) : null;
+}
+
+/**
+ * Delegations that behave like the real adapter: a revoke of an active row marks it revoked, and a row that is not
+ * active is refused with `not-revocable`. A CID the list does not hold is accepted, as before.
+ */
+function delegationsStub(seed: StubDelegationsSeed = {}): Pick<PanelDataSource, "delegations" | "revoke"> {
+  const toRow = ({ revokedAt, ...row }: StubDelegationRowSeed): DelegationRow => ({
+    ...row,
+    source: "stub",
+    issuedAt: seededDate(row.issuedAt),
+    notBefore: seededDate(row.notBefore),
+    expiresAt: seededDate(row.expiresAt),
+    ...(revokedAt === undefined ? {} : { revokedAt: seededDate(revokedAt) }),
+  });
+  const rows: DelegationRow[] = seed.rows === undefined ? [STUB_DELEGATION] : seed.rows.map(toRow);
+  const later = new Map<string, { rows: DelegationRow[]; nextCursor?: string }>(
+    Object.entries(seed.pages ?? {}).map(([cursor, page]) => [
+      cursor,
+      { rows: page.rows.map(toRow), ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }) },
+    ]),
+  );
+  return {
+    delegations: (cursor?: string) => {
+      const state = seed.state ?? "ready";
+      if (state === "loading") return Promise.resolve<ViewResult<DelegationPage>>({ state });
+      if (state === "needs-permission") return Promise.resolve<ViewResult<DelegationPage>>({ state, ability: "delegation/list" });
+      if (state === "error") return Promise.resolve<ViewResult<DelegationPage>>({ state, code: "unknown" });
+      if (cursor !== undefined) {
+        const page = later.get(cursor);
+        return Promise.resolve<ViewResult<DelegationPage>>(
+          page === undefined ? { state: "error", code: "unknown-cursor" } : viewReady<DelegationPage>({ ...page, rows: [...page.rows] }),
+        );
+      }
+      return Promise.resolve(
+        viewReady<DelegationPage>({ rows: [...rows], ...(seed.nextCursor === undefined ? {} : { nextCursor: seed.nextCursor }) }),
+      );
+    },
+    revoke: async (cid: string): Promise<RevokeOutcome> => {
+      // The lib target has no Promise.withResolvers, so this uses the executor form.
+      if (seed.revokeDelayMs !== undefined) await new Promise((resolve) => setTimeout(resolve, seed.revokeDelayMs));
+      const code = seed.revokeFails?.[cid];
+      if (code !== undefined) return { ok: false, code };
+      for (const list of [rows, ...[...later.values()].map((page) => page.rows)]) {
+        const at = list.findIndex((row) => row.cid === cid);
+        const found = list[at];
+        if (found === undefined) continue;
+        if (found.status !== "active") return { ok: false, code: "not-revocable" };
+        list[at] = { ...found, status: "revoked", revokedAt: new Date() };
+        return { ok: true, cid };
+      }
+      return { ok: true, cid };
+    },
   };
 }
 

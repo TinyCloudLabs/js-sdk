@@ -6,7 +6,7 @@ import { toastStore } from "../../src/ui/parts/toasts";
 import type { ToastKind } from "../../src/ui/toast-store";
 import { createStubPanelData, type StubSeed } from "../../src/ui/stub/index";
 import { createRequestLog, sampleRows, type LogRow } from "./request-log";
-import type { NodeRow, ViewResult } from "../../src/ui/data";
+import type { NodeRow, PanelDataFactory, ViewResult } from "../../src/ui/data";
 
 // What a spec pins with page.addInitScript before the page loads: window.__TC_STUB_SEED__ (a JSON string).
 // The stub's per-view results, plus `requests`, the request log rows the harness itself serves.
@@ -88,6 +88,22 @@ const source = {
   },
 };
 
+const revokeLog: string[] = [];
+
+// Wraps the stub data factory so every revoke the panel asks for is recorded.
+function loggedRevokes(factory: PanelDataFactory): PanelDataFactory {
+  return (client) => {
+    const source = factory(client);
+    return {
+      ...source,
+      revoke: (cid: string) => {
+        revokeLog.push(cid);
+        return source.revoke(cid);
+      },
+    };
+  };
+}
+
 let handle: UiClientHandle | undefined;
 
 const w = window as unknown as Record<string, unknown>;
@@ -100,7 +116,7 @@ w.__tc = {
       ui: { developerMode: true, ...ui },
       source: source as never,
       manifestAppId: () => "e2e-settings-smoke",
-      data: createStubPanelData(harnessSeed()),
+      data: loggedRevokes(createStubPanelData(harnessSeed())),
     });
     w.tc = { ui: handle.api };
     return true;
@@ -154,5 +170,9 @@ w.__tc = {
   },
   logListeners() {
     return requestLog.listeners();
+  },
+  // The CIDs the panel asked the data source to revoke, in order. Checked by the delegations spec.
+  revokeCalls() {
+    return revokeLog.slice();
   },
 };
