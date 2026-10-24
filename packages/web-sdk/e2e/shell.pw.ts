@@ -339,8 +339,21 @@ test.describe("host layer, targets, and motion", () => {
     });
   });
 
+  // Test-only: stretch the slide-in to 4 s inside the shadow root so a loaded machine cannot finish it
+  // before the spec samples it. `!important` beats the panel's own duration whenever its stylesheet lands,
+  // and it leaves `animation-name` alone, so reduced motion (`animation:none`) still means no animation.
+  async function slowAnimations(page: Page) {
+    await page.evaluate(() => {
+      const root = document.querySelector("[data-tinycloud-ui]")?.shadowRoot;
+      const style = document.createElement("style");
+      style.textContent = "*{animation-duration:4s !important}";
+      root?.append(style);
+    });
+  }
+
   test("the drawer animates in when reduced motion is not requested", async ({ page }) => {
     await mountHarness(page, "light");
+    await slowAnimations(page);
     await openDrawer(page);
     const running = await panel(page).evaluate((el) => el.getAnimations().length);
     expect(running).toBeGreaterThan(0);
@@ -354,6 +367,7 @@ test.describe("host layer, targets, and motion", () => {
       await page.emulateMedia({ reducedMotion: "reduce" });
       const reduced = await page.evaluate(() => matchMedia("(prefers-reduced-motion: reduce)").matches);
       expect(reduced).toBe(true);
+      await slowAnimations(page);
       await openDrawer(page);
       await expect(panel(page)).toBeVisible();
       const running = await panel(page).evaluate((el) => el.getAnimations().length);
