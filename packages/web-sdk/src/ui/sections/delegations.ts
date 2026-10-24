@@ -71,7 +71,7 @@ const STYLE = `
 .dl-kv dd.dl-mono{font:500 12.5px ${MONO}}
 .dl-sub-h{margin:12px 0 8px;font-size:13px;font-weight:600}
 .dl-res{display:flex;flex-direction:column;gap:8px;margin:0 0 12px;padding:0;list-style:none}
-.dl-res li{display:flex;flex-direction:column;gap:6px;padding:10px 14px;border-radius:12px;background:#f4f4f5}
+.dl-res>li{display:flex;flex-direction:column;gap:6px;padding:10px 14px;border-radius:12px;background:#f4f4f5}
 .dl-res code{font:600 12px ${MONO};overflow-wrap:anywhere}
 .dl-res .dl-chips{gap:4px}
 .dl-res .dl-chip{height:24px;padding:0 9px;background:#fff;font-size:12px;line-height:1}
@@ -95,7 +95,7 @@ const STYLE = `
 .dl-ic{box-shadow:inset 0 0 0 1px #a1a1aa}
 .dl-skel-card,.dl-skel-line{background:#27272a}
 .dl-kv>div{border-bottom-color:#69696b}
-.dl-res li{background:#27272a}
+.dl-res>li{background:#27272a}
 .dl-res .dl-chip{height:24px;padding:0 9px;background:#151517}
 .section[data-section="delegations"] .confirm{box-shadow:inset 0 0 0 1px #a1a1aa}
 .dl-q-dim{color:#d4d4d8}
