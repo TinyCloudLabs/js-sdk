@@ -1176,7 +1176,7 @@ async function signBytesWithJwk(bytes: Uint8Array, jwk: object): Promise<Uint8Ar
 async function rewriteInvocationAudience(
   authorization: string,
   audience: string,
-  sessions: ServiceSession[],
+  jwk: object,
 ): Promise<string> {
   const [headerPart, payloadPart] = authorization.split(".");
   if (!headerPart || !payloadPart) {
@@ -1184,16 +1184,11 @@ async function rewriteInvocationAudience(
   }
   const header = JSON.parse(new TextDecoder().decode(base64UrlDecode(headerPart)));
   const payload = JSON.parse(new TextDecoder().decode(base64UrlDecode(payloadPart)));
-  // Re-sign with the key of the session named by the token's own `iss`, so key,
-  // iss and prf always come from one session.
-  const did = (value: string) => value.split("#", 1)[0];
-  const signer = sessions.find((s) => did(s.verificationMethod) === did(String(payload.iss)));
-  if (!signer) throw new Error("invocation issuer does not match a held session");
   payload.aud = audience;
   const signingInput = `${base64UrlEncode(
     new TextEncoder().encode(JSON.stringify(header)),
   )}.${base64UrlEncode(new TextEncoder().encode(JSON.stringify(payload)))}`;
-  const signature = await signJwtInputWithJwk(signingInput, signer.jwk);
+  const signature = await signJwtInputWithJwk(signingInput, jwk);
   return `${signingInput}.${base64UrlEncode(signature)}`;
 }
 
@@ -1666,14 +1661,16 @@ export class TinyCloudNode {
     return this.wasmBindings.invoke(invocationSession, service, path, action, facts);
   };
 
-  private readonly invokeAnyWithRuntimePermissions: InvokeAnyFunction = (
-    session,
-    entries,
-    facts,
-  ) => {
-    if (!this.wasmBindings.invokeAny) {
-      throw new Error("WASM binding does not support invokeAny");
-    }
+  /**
+   * The session (key, issuer, proof) that signs an invokeAny call for `entries`:
+   * the explicit revocation authority, else the covering non-primary runtime
+   * grant, else the caller's session. Everything that re-signs the resulting
+   * invocation must use this session's key.
+   */
+  private selectInvokeAnySession(
+    session: ServiceSession,
+    entries: Parameters<InvokeAnyFunction>[1],
+  ): { session: ServiceSession; grant: RuntimePermissionGrant | undefined } {
     const routedEntries = entries as Array<typeof entries[number] & {
       revokeAuthorityCid?: string;
     }>;
@@ -1694,6 +1691,22 @@ export class TinyCloudNode {
     const invocationSession = explicitGrant
       ? explicitGrant.session
       : !grant || grant.provenance === "primary" ? session : grant.session;
+    return { session: invocationSession, grant };
+  }
+
+  private readonly invokeAnyWithRuntimePermissions: InvokeAnyFunction = (
+    session,
+    entries,
+    facts,
+  ) => {
+    if (!this.wasmBindings.invokeAny) {
+      throw new Error("WASM binding does not support invokeAny");
+    }
+    const routedEntries = entries as Array<typeof entries[number] & {
+      revokeAuthorityCid?: string;
+    }>;
+    const { session: invocationSession, grant } =
+      this.selectInvokeAnySession(session, entries);
     const caveatPreservingEntries = routedEntries.map(({ revokeAuthorityCid: _cid, ...entry }) => {
       const requested = this.operationFromInvokeAnyEntry(entry);
       const granted = grant && requested && grant.operations.find((candidate) =>
@@ -4797,10 +4810,16 @@ export class TinyCloudNode {
   async bindInvocationAudience(authorization: string, audience: string): Promise<string> {
     const session = this.currentTinyCloudSession() ?? this._activeServiceSession;
     if (session === undefined) throw new Error("Not signed in. Call signIn() first.");
-    return rewriteInvocationAudience(authorization, audience, [
-      session,
-      ...this.runtimePermissionGrants.map((grant) => grant.session),
-    ]);
+    // Re-sign with the key of the session named by the token's own `iss`, so a
+    // token built under a runtime grant keeps one session's key, iss and prf.
+    const payload = JSON.parse(
+      new TextDecoder().decode(base64UrlDecode(authorization.split(".")[1] ?? "")),
+    ) as { iss?: unknown };
+    const did = (value: unknown) => String(value).split("#", 1)[0];
+    const signer = [session, ...this.runtimePermissionGrants.map((grant) => grant.session)]
+      .find((candidate) => did(candidate.verificationMethod) === did(payload.iss));
+    if (!signer) throw new Error("invocation issuer does not match a held session");
+    return rewriteInvocationAudience(authorization, audience, signer.jwk);
   }
 
   /**
@@ -5211,23 +5230,25 @@ export class TinyCloudNode {
       throw new Error("WASM binding does not support invocation CID computation");
     }
     const session = binding?.session ?? this.requireEncryptionSession();
+    const entries = [
+      {
+        resource: input.networkId,
+        service: "encryption",
+        path: input.networkId,
+        action: input.action,
+      },
+    ];
     const headers = this.invokeAnyWithRuntimePermissions(
       session,
-      [
-        {
-          resource: input.networkId,
-          service: "encryption",
-          path: input.networkId,
-          action: input.action,
-        },
-      ],
+      entries,
       [input.facts as Record<string, unknown>],
     );
+    const signingSession = this.selectInvokeAnySession(session, entries).session;
     const authorization = authorizationHeader(headers);
     const audienceBound = await rewriteInvocationAudience(
       authorization,
       input.targetNode,
-      [session, ...this.runtimePermissionGrants.map((grant) => grant.session)],
+      signingSession.jwk,
     );
     binding?.graph.assertActive();
     return {
@@ -5312,7 +5333,7 @@ export class TinyCloudNode {
           // re-sign-in only for the signed-in owner's own default network.
           const missingOwnNetwork = response.status === 404 &&
             networkId === this.getDefaultEncryptionNetworkId() &&
-            (await response.text().catch(() => "")).trim() === "network not found";
+            (await response.text().catch(() => "")).trim().toLowerCase() === "network not found";
           throw new DecryptTransportResponseError(
             response.status,
             permissionHint,
