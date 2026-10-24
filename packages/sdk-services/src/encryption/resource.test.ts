@@ -60,6 +60,7 @@ const validVectors: Array<[string, string, ParsedEncryptionResource]> = [
   ],
   ["#32 node-rule network name in a key", `urn:tinycloud:encryption:${OWNER}:Default/apps/x`, key("apps/x", "Default")],
   ["#33 prefix with a 255-byte path", res(`${seg255}/`), prefixOf(seg255)],
+  ["#48 mixed-case network is a different network from 'default'", `urn:tinycloud:encryption:${OWNER}:DeFault/apps/x`, key("apps/x", "DeFault")],
   ["#44 network of exactly 64 characters", `urn:tinycloud:encryption:${OWNER}:${seg(64)}/apps/x`, key("apps/x", seg(64))],
   // #35 is a valid GRANT; the parser reports kind "prefix" so a caller can refuse it as an invocation target.
   ["#35 prefix parses as a prefix, never a key", res("apps/x/"), prefixOf("apps/x")],
@@ -99,6 +100,8 @@ const rejectVectors: Array<[string, string]> = [
   ["#42 network starting with '.'", `urn:tinycloud:encryption:${OWNER}:.a/apps/x`],
   ["#43 network of 65 characters", `urn:tinycloud:encryption:${OWNER}:${seg(65)}/apps/x`],
   ["#45 bidi network inside a prefix", `urn:tinycloud:encryption:${OWNER}:de\u202eault/apps/x/`],
+  ["#46 newline in the network part of a key", `urn:tinycloud:encryption:${OWNER}:default\n/apps/x`],
+  ["#47 trailing newline after the key path", `urn:tinycloud:encryption:${OWNER}:default/apps/x\n`],
   // Beyond the shared vectors.
   ["prefix with a '..' segment", res("apps/../")],
   ["prefix with an empty segment", res("apps//x/")],
