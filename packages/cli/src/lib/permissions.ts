@@ -42,6 +42,7 @@ import { ExitCode } from "../config/constants.js";
 import { resolveSpaceUri } from "./space.js";
 import { isRawEncryptionPermission } from "./raw-encryption.js";
 import { canonicalOwnerDid } from "./owner-did.js";
+import { assertNoCaveatLimits } from "./caveat-refusal.js";
 import { SHARE_PUBLISHING_MANIFEST, SHARE_PUBLISHING_MANIFEST_REF } from "../share/publishing-manifest.js";
 import {
   resolveProfileOperatorType,
@@ -478,6 +479,8 @@ export async function loadManifestPermissions(
 ): Promise<PermissionEntry[]> {
   const raw = await loadManifestText(source);
   const manifest = JSON.parse(raw) as Record<string, unknown>;
+  // Checked on the manifest as written, before resolution rewrites its entries.
+  if (Array.isArray(manifest.permissions)) assertNoCaveatLimits(manifest.permissions);
   if (options.device && typeof manifest.app_id === "string" &&
     (manifest.secrets !== undefined ||
       manifest.space === "secrets" ||
