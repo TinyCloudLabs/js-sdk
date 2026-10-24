@@ -200,6 +200,7 @@ import {
 } from "@tinycloud/sdk-services";
 import { RequestLog, observeReplicaReads, readOnlyRequestLog } from "@tinycloud/sdk-services/telemetry/requestLog";
 import { NodeUserAuthorization } from "./authorization/NodeUserAuthorization";
+import { refuseCaveated } from "./authorization/caveatRefusal";
 import type { SignStrategy } from "./authorization/strategies";
 import { AccountService } from "./account/AccountService";
 import { FileSessionStorage } from "./storage/FileSessionStorage";
@@ -733,6 +734,8 @@ function ownerDelegationPermissions(
     if (!Array.isArray(params.permissions)) {
       throw new Error("Owner delegation permissions are invalid");
     }
+    // `OwnerDelegationPermission` has no caveat field, but a spread argument can carry one.
+    refuseCaveated(params.permissions as readonly PermissionEntry[]);
     permissions.push(...params.permissions.map((permission) => ({
       service: permission.service,
       path: permission.path,
@@ -884,6 +887,8 @@ export interface TinyCloudNodeConfig {
   prefix?: string;
   /** Domain for SIWE messages (default: derived from host) */
   domain?: string;
+  /** SIWE URI (default: `https://<domain>`). web-sdk defaults it to the page origin when domain is derived from the window. */
+  uri?: string;
   /** Session expiration time in milliseconds (default: 30 days, `EXPIRY.SESSION_MS`) */
   sessionExpirationMs?: number;
   /** Whether to automatically create space if it doesn't exist (default: false) */
@@ -1898,6 +1903,7 @@ export class TinyCloudNode {
       sessionManager: this.sessionManager,
       sessionStorage: config.sessionStorage ?? new MemorySessionStorage(),
       domain: this.siweDomain,
+      uri: config.uri,
       spacePrefix: config.prefix,
       sessionExpirationMs: config.sessionExpirationMs ?? DEFAULT_SESSION_EXPIRATION_MS,
       tinycloudHosts: this.explicitHost ? [this.explicitHost] : undefined,
@@ -2417,6 +2423,8 @@ export class TinyCloudNode {
   }
 
   private async signInWith(performSignIn: () => Promise<unknown>): Promise<void> {
+    // Refuse a caveated manifest before any signer, registry or host call.
+    refuseCaveated(this.auth?.capabilityRequest?.manifests);
     // Read synchronously: a sign-out called after this sign-in started wins,
     // while a sign-out already in progress finishes before it starts.
     const epoch = this.sessionEpoch;
@@ -4838,6 +4846,7 @@ export class TinyCloudNode {
       sessionManager: this.sessionManager,
       sessionStorage: options?.sessionStorage ?? this.config.sessionStorage ?? new MemorySessionStorage(),
       domain: this.siweDomain,
+      uri: this.config.uri,
       spacePrefix: prefix,
       sessionExpirationMs: this.config.sessionExpirationMs ?? DEFAULT_SESSION_EXPIRATION_MS,
       tinycloudHosts: this.explicitHost ? [this.explicitHost] : undefined,
@@ -4917,6 +4926,7 @@ export class TinyCloudNode {
       sessionManager: this.sessionManager,
       sessionStorage: options?.sessionStorage ?? this.config.sessionStorage ?? new MemorySessionStorage(),
       domain: this.siweDomain,
+      uri: this.config.uri,
       spacePrefix: prefix,
       sessionExpirationMs: this.config.sessionExpirationMs ?? DEFAULT_SESSION_EXPIRATION_MS,
       tinycloudHosts: this.explicitHost ? [this.explicitHost] : undefined,
@@ -8806,6 +8816,8 @@ export class TinyCloudNode {
     // every grant in `delegation.resources[]`; the flat `path`/`actions`
     // mirror only the first resource. Building from the flat fields alone
     // silently drops every other resource from the activated session.
+    // Activation replays an already-signed delegation: this map restates that
+    // delegation's resources and is not a new permission request.
     const { abilities, rawAbilities } = this.buildActivationAbilities(delegation);
 
     const now = new Date();
@@ -8935,6 +8947,8 @@ export class TinyCloudNode {
     }
   ): Promise<PortableDelegation> {
     this.assertPortableDelegationCaveatsPreservable(parentDelegation);
+    // Requested resources have no caveat field; a spread argument can still carry one.
+    refuseCaveated(params.resources);
 
     if (!this.signer) {
       throw new Error("Cannot createSubDelegation() in session-only mode. Requires wallet mode.");
