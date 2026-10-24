@@ -91,8 +91,13 @@ const wrappedClients = new WeakMap<PanelClient, PanelClient>();
 function sectionClient(client: PanelClient): PanelClient {
   let wrapped = wrappedClients.get(client);
   if (wrapped === undefined) {
+    // One proxy per client: sections compare `data.source` between paints, and a new object per read looks like a changed account.
+    let proxy: PanelDataSource | undefined;
     wrapped = Object.create(client, {
-      data: { get: () => client.data ?? (client.signedIn() ? proxyFor(client) : undefined), enumerable: true },
+      data: {
+        get: () => client.data ?? (client.signedIn() ? (proxy ??= proxyFor(client)) : undefined),
+        enumerable: true,
+      },
     }) as PanelClient;
     wrappedClients.set(client, wrapped);
   }
