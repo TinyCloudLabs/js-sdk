@@ -247,6 +247,7 @@ jobs:
       # unless at least one test passed and none were skipped.
       - name: tc replica Secrets against the node
         if: matrix.database == 'sqlite'
+        timeout-minutes: 10
         env:
           TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
         run: |
