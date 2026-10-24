@@ -1,5 +1,38 @@
 # @tinycloudlabs/sdk-core
 
+## 3.6.0
+
+### Minor Changes
+
+- 0c09d7b: Add `allowSubDelegation` to share generation. It defaults to `true`, which keeps today's behavior. Passing `false` issues a terminal delegation: the node refuses onward delegation of the share. A non-transferable share must be covered by an existing session-key delegation; it is refused when none covers it, and the wallet root path is not used for it.
+
+  A non-transferable share is received with `receive(link, { autoSubdelegate: false })`; the default auto-subdelegation is refused for it.
+
+  Details: TC-1801
+
+- e32bc41: feat(credentials): add email-proof credential acquisition
+  - `@tinycloud/node-sdk/credentials` exports `requestEmailProofCode`, `completeEmailProof`, and `acquireEmailProof` for a two-step flow: request a one-time code for an address, then exchange it for a verifiable credential.
+  - Errors are `EmailProofError` with a `step`, a stable `code`, `retryAfterMs`, and `recoverable`.
+  - `@tinycloud/node-sdk/credential-pending-store` provides a file-backed pending store: owner-only files, 15-minute maximum lifetime, deleted after success or any unrecoverable failure.
+  - `@tinycloud/web-sdk` re-exports the same types. Existing root behaviour is unchanged; the root bundle contains no email-proof code.
+  - `@tinycloud/sdk-core`: `CredentialError` accepts an explicit `recoverable` flag that overrides the per-code default. `@tinycloud/node-sdk` needs this to keep the witness's recoverable flag on server errors.
+
+  Release order: `@tinycloud/sdk-core`, then `@tinycloud/node-sdk`, then `@tinycloud/web-sdk`. Node-sdk pins sdk-core exactly, so sdk-core must publish first for that pin to carry the recoverable override.
+
+  Details: TC-712
+
+### Patch Changes
+
+- 1f831e3: Manifest sign-in and session preparation refuse a permission that carries caveats by throwing the existing `CaveatedDelegationUnsupportedError` (`CAVEATED_DELEGATION_UNSUPPORTED`) before any request or signature. Absent, `[]` and `[{}]` caveats are accepted; any other set, including `[{}, {}]`, is refused, the same rule the delegation paths apply through `recapCaveatsEqual`.
+
+  Refusing call sites: `TinyCloudNode.signIn`, `signInWithOpenKey`, `createOwnerDelegation` and `createSubDelegation` permissions; `NodeUserAuthorization.signIn`, `prepareSessionForSigning`, `signInWithOpenKey` and `createBootstrapSession`; `TinyCloudWeb.signIn` (before any persisted session is restored).
+
+  Details: TC-1855
+
+- Updated dependencies [82cbd43]
+- Updated dependencies [dc61583]
+  - @tinycloud/sdk-services@3.6.0
+
 ## 3.6.0-beta.8
 
 ### Patch Changes
