@@ -248,6 +248,7 @@ jobs:
         env:
           TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
         run: |
+          set -o pipefail
           bun test packages/cli/test/replica-secrets.e2e.test.ts 2>&1 | tee "$RUNNER_TEMP/replica-secrets.log"
           if grep -Eq '^ *[1-9][0-9]* skip' "$RUNNER_TEMP/replica-secrets.log" || ! grep -Eq '^ *[1-9][0-9]* pass' "$RUNNER_TEMP/replica-secrets.log"; then
             echo "::error title=replica Secrets::tests were skipped or none passed"
