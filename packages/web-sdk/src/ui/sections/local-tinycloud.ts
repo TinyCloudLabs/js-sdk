@@ -15,7 +15,7 @@ const STYLE = `
 .ll-sub{margin:2px 0 0;font-size:12.5px;color:#52525b}
 .ll-ctl{display:flex;align-items:center;gap:10px;flex:none}
 .ll-word{min-width:22px;text-align:right;font-size:13px;font-weight:700}
-.ll-label{font-family:${DISPLAY};font-size:16px;font-weight:500;letter-spacing:-.005em}
+.ll-label{margin:0;font-family:${DISPLAY};font-size:16px;font-weight:500;letter-spacing:-.005em}
 .ll-eyebrow{margin:0;font-size:13px;font-weight:600;line-height:1.3;color:#71717a}
 .ll-card{display:flex;flex-direction:column;gap:14px;margin-top:14px;padding:16px 18px;border-radius:16px;background:#fafafa;box-shadow:inset 0 0 0 1px #e4e4e7}
 .layer .panel[data-layout="page"] .ll-card{background:#fff}
