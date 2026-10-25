@@ -1,5 +1,17 @@
 # @tinycloudlabs/sdk-services
 
+## 3.7.0-beta.4
+
+### Minor Changes
+
+- c142537: Add a named encryption key client: key create, block and unblock, key descriptor reads, `ensureKey`, and key-scoped encrypt and decrypt. It is exposed under the `@tinycloud/sdk-services/encryption/named-keys` and `@tinycloud/node-sdk/encryption-keys` subpaths and is only used with nodes that advertise support.
+
+  Details: TC-1777
+
+- 4c3d073: Add a typed parser, builders and containment check for encryption key resources, the key ability constants, and a node feature check, under the `@tinycloud/sdk-services/encryption/resource` subpath.
+
+  Details: TC-1777
+
 ## 3.7.0-beta.3
 
 ### Minor Changes
