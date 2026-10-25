@@ -40,6 +40,9 @@ interface Fakes {
   setQuery(next: unknown): void;
   setStatus(next: unknown): void;
   setStorage(next: unknown): void;
+  setRevoke(next: unknown): void;
+  /** Runs inside the node call that is in flight: `revoke` once the node answers, `query` with the 1-based query number. */
+  during: { revoke?: () => void; query?: (n: number) => void };
 }
 
 function makeFakes(): Fakes {
@@ -47,6 +50,8 @@ function makeFakes(): Fakes {
   let queryResult: unknown = { ok: true, data: { schemaVersion: 2, items: [] } };
   let statusResult: unknown = { ok: true, data: { status: "active" } };
   let storageResult: unknown = { ok: true, data: { state: "ready" } };
+  let revokeResult: unknown;
+  const during: Fakes["during"] = {};
   let resetCb: (() => void) | undefined;
 
   const host = {
@@ -62,12 +67,14 @@ function makeFakes(): Fakes {
     delegations: {
       query: async () => {
         calls.query += 1;
+        during.query?.(calls.query);
         return queryResult;
       },
       status: async () => statusResult,
       revoke: async (cid: string) => {
         calls.revoke.push(cid);
-        return { ok: true, data: { revoked: true, cid } };
+        during.revoke?.();
+        return revokeResult ?? { ok: true, data: { revoked: true, cid } };
       },
     },
     storage: {
@@ -93,11 +100,15 @@ function makeFakes(): Fakes {
     host,
     client,
     calls,
+    during,
     setQuery: (next) => {
       queryResult = next;
     },
     setStatus: (next) => {
       statusResult = next;
+    },
+    setRevoke: (next) => {
+      revokeResult = next;
     },
     setStorage: (next) => {
       storageResult = next;
@@ -264,6 +275,133 @@ describe("createRealPanelData revoke", () => {
     expect(outcome).toEqual({ ok: true, cid: "c1" });
     expect(f.calls.revoke).toEqual(["c1"]);
     expect(f.calls.query).toBe(2);
+  });
+
+  test("a status that cannot be read (NOT_FOUND) does not stop the revoke: the node decides, then the list is refetched", async () => {
+    const f = makeFakes();
+    f.setStatus({ ok: false, error: { code: "NOT_FOUND", message: "no", service: "delegation" } });
+    const data = createRealPanelData(f.host, f.client, "app");
+    await data.delegations();
+
+    expect(await data.revoke("c1")).toEqual({ ok: true, cid: "c1" });
+    expect(f.calls.revoke).toEqual(["c1"]);
+    expect(f.calls.query).toBe(2);
+  });
+
+  test("a status that is not an explicit revoked answer (expired, unavailable) still attempts the revoke", async () => {
+    for (const status of ["expired", "unavailable"]) {
+      const f = makeFakes();
+      f.setStatus({ ok: true, data: { status } });
+      const data = createRealPanelData(f.host, f.client, "app");
+      expect(await data.revoke("c1"), status).toEqual({ ok: true, cid: "c1" });
+      expect(f.calls.revoke, status).toEqual(["c1"]);
+    }
+  });
+
+  test("a status NOT_FOUND then a failed revoke returns that failure's code and keeps the listed row", async () => {
+    const f = makeFakes();
+    f.setQuery({ ok: true, data: { schemaVersion: 2, items: [delegation("c1")] } });
+    f.setStatus({ ok: false, error: { code: "NOT_FOUND", message: "no", service: "delegation" } });
+    f.setRevoke({ ok: false, error: { code: "NETWORK_ERROR", message: "down", service: "delegation" } });
+    const data = createRealPanelData(f.host, f.client, "app");
+    await data.delegations();
+    expect(f.calls.query).toBe(1);
+
+    expect(await data.revoke("c1")).toEqual({ ok: false, code: "NETWORK_ERROR" });
+    expect(f.calls.revoke).toEqual(["c1"]);
+    expect(f.calls.query).toBe(1);
+    const view = await data.delegations();
+    expect(view.state).toBe("ready");
+    if (view.state === "ready") expect(view.data.rows.map((row) => row.cid)).toEqual(["c1"]);
+  });
+
+  test("a status of revoked ends it without calling revoke", async () => {
+    const f = makeFakes();
+    f.setStatus({ ok: true, data: { status: "revoked" } });
+    expect(await createRealPanelData(f.host, f.client, "app").revoke("c1")).toEqual({ ok: false, code: "not-revocable" });
+    expect(f.calls.revoke).toEqual([]);
+  });
+
+  describe("when the revoke call itself answers NOT_FOUND", () => {
+    const notFound = { ok: false, error: { code: "NOT_FOUND", message: "no", service: "delegation" } };
+
+    function setup() {
+      const f = makeFakes();
+      f.setQuery({ ok: true, data: { schemaVersion: 2, items: [delegation("c1")] } });
+      f.setRevoke(notFound);
+      const data = createRealPanelData(f.host, f.client, "app");
+      return { f, data };
+    }
+
+    test("it is ended only when the fresh list no longer holds the grant", async () => {
+      const { f, data } = setup();
+      await data.delegations();
+      f.setQuery({ ok: true, data: { schemaVersion: 2, items: [] } });
+      expect(await data.revoke("c1")).toEqual({ ok: false, code: "NOT_FOUND" });
+      expect(f.calls.query).toBe(2);
+    });
+
+    test("a grant the fresh list still shows as active is a plain failure and the row is kept", async () => {
+      const { f, data } = setup();
+      await data.delegations();
+      expect(await data.revoke("c1")).toEqual({ ok: false, code: "REVOCATION_FAILED" });
+      expect(f.calls.query).toBe(2);
+      const view = await data.delegations();
+      if (view.state === "ready") expect(view.data.rows.map((row) => row.cid)).toEqual(["c1"]);
+      else throw new Error(view.state);
+    });
+
+    test("a failed re-read is a plain failure, never ended, and the row is kept", async () => {
+      const { f, data } = setup();
+      await data.delegations();
+      f.setQuery({ ok: false, error: { code: "NETWORK_ERROR", message: "down", service: "delegation" } });
+      expect(await data.revoke("c1")).toEqual({ ok: false, code: "REVOCATION_FAILED" });
+      const view = await data.delegations();
+      if (view.state === "ready") expect(view.data.rows.map((row) => row.cid)).toEqual(["c1"]);
+      else throw new Error(view.state);
+    });
+
+    test("a list that does not hold the grant on its first page, with more pages to come, does not end it", async () => {
+      const { f, data } = setup();
+      await data.delegations();
+      f.setQuery({ ok: true, data: { schemaVersion: 2, items: [delegation("other")], nextCursor: "p2" } });
+      expect(await data.revoke("c1")).toEqual({ ok: false, code: "REVOCATION_FAILED" });
+    });
+
+    test("a grant the fresh list holds as revoked is ended", async () => {
+      const { f, data } = setup();
+      await data.delegations();
+      f.setQuery({ ok: true, data: { schemaVersion: 2, items: [delegation("c1", { status: "revoked" })] } });
+      expect(await data.revoke("c1")).toEqual({ ok: false, code: "NOT_FOUND" });
+    });
+
+    test("a reset while the node answers the revoke is stale and reads no list for the new account", async () => {
+      const { f, data } = setup();
+      await data.delegations();
+      f.during.revoke = () => f.client.reset();
+      expect(await data.revoke("c1")).toEqual({ ok: false, code: "stale" });
+      expect(f.calls.query).toBe(1);
+    });
+
+    test("a reset while the list is re-read is stale, never ended", async () => {
+      const { f, data } = setup();
+      await data.delegations();
+      f.setQuery({ ok: true, data: { schemaVersion: 2, items: [] } });
+      f.during.query = (n) => {
+        if (n === 2) f.client.reset();
+      };
+      expect(await data.revoke("c1")).toEqual({ ok: false, code: "stale" });
+    });
+  });
+
+  test("a reset while the node answers a successful revoke is stale and does not refetch into the new account", async () => {
+    const f = makeFakes();
+    const data = createRealPanelData(f.host, f.client, "app");
+    await data.delegations();
+    f.during.revoke = () => f.client.reset();
+    expect(await data.revoke("c1")).toEqual({ ok: false, code: "stale" });
+    expect(f.calls.revoke).toEqual(["c1"]);
+    expect(f.calls.query).toBe(1);
   });
 });
 
