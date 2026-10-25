@@ -56,6 +56,20 @@ function cliErrorFromNamedKey(error: unknown, command: KeysCommand, path: string
   return new CLIError(error.code, error.message, error.status === undefined ? ExitCode.ERROR : ExitCode.NODE_ERROR);
 }
 
+/**
+ * Run a key call; when the account has no encryption network yet, create it once and retry once.
+ * The session carries the network-create ability from sign-in.
+ */
+async function withNetworkSetup<T>(node: { ensureEncryptionNetwork(): Promise<unknown> }, call: () => Promise<T>): Promise<T> {
+  try {
+    return await call();
+  } catch (error) {
+    if (!(error instanceof NamedKeyError) || error.code !== "NETWORK_NOT_FOUND") throw error;
+    await node.ensureEncryptionNetwork();
+    return call();
+  }
+}
+
 /** The prefix this profile's session was signed for, or a refusal. */
 async function grantedPrefix(profileName: string): Promise<string> {
   const profile = await ProfileManager.getProfile(profileName);
@@ -106,7 +120,7 @@ export function registerKeysCommand(program: Command): void {
         assertInGrantedPrefix(await grantedPrefix(ctx.profile), path, ctx.profile);
         const node = await ensureAuthenticated(ctx);
         const client = createNamedKeyClient(node);
-        const descriptor = await withSpinner(`Getting or creating key ${path}…`, () => client.ensureKey(path)).catch((error) => {
+        const descriptor = await withSpinner(`Getting or creating key ${path}…`, () => withNetworkSetup(node, () => client.ensureKey(path))).catch((error) => {
           throw cliErrorFromNamedKey(error, "ensure", path);
         });
         outputJson({ ...descriptor });
@@ -128,7 +142,7 @@ export function registerKeysCommand(program: Command): void {
         const plaintext = await readInput(options.in);
         const node = await ensureAuthenticated(ctx);
         const client = createNamedKeyClient(node);
-        const envelope = await withSpinner(`Encrypting with ${path}…`, () => client.encrypt(path, plaintext)).catch((error) => {
+        const envelope = await withSpinner(`Encrypting with ${path}…`, () => withNetworkSetup(node, () => client.encrypt(path, plaintext))).catch((error) => {
           throw cliErrorFromNamedKey(error, "encrypt", path);
         });
         const json = JSON.stringify(envelope);

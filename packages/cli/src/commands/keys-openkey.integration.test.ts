@@ -123,7 +123,7 @@ test("OpenKey --keys with everything approved records the folder and signs the r
   expect(r.stderr).toContain('the row that mentions tinycloud.encryption lets this profile create and use keys in the folder "qa/"');
   expect(r.profile.namedKeys).toEqual({ prefix: "qa", resource: r.resource });
   // The stub node has no encryption network routes, so the login says the folder isn't ready and still succeeds.
-  expect(r.stderr).toContain("the key folder isn't ready yet");
+  expect(r.stderr).toContain("your encryption keys aren't set up yet");
   const stored = JSON.parse(await readFile(r.sessionFile, "utf8")) as { siwe: string };
   expect(extractRecapAttenuations(stored.siwe)[r.resource]).toBeDefined();
 });

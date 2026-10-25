@@ -19,6 +19,10 @@ const state = {
   authCalls: 0,
   clientCalls: [] as string[],
   failWith: undefined as undefined | { code: string; status?: number },
+  networkMissing: 0,
+  networkCreated: 0,
+  networkCreateFails: false,
+  networkStaysMissing: false,
 };
 
 class StubNamedKeyError extends Error {
@@ -31,11 +35,13 @@ const xor = (bytes: Uint8Array) => bytes.map((b) => b ^ 0x5a);
 const stubClient = {
   ensureKey: async (path: string) => {
     state.clientCalls.push(`ensure ${path}`);
+    if (state.networkMissing > 0) throw new StubNamedKeyError("NETWORK_NOT_FOUND", "no network");
     if (state.failWith) throw new StubNamedKeyError(state.failWith.code, "failed", state.failWith.status);
     return { networkId: NETWORK_ID, keyPath: path, alg: "a", keyVersion: 1, publicEncryptionKey: "AA==", state: "active", kind: "deterministic" };
   },
   encrypt: async (path: string, plaintext: Uint8Array) => {
     state.clientCalls.push(`encrypt ${path}`);
+    if (state.networkMissing > 0) throw new StubNamedKeyError("NETWORK_NOT_FOUND", "no network");
     return { v: 2, networkId: NETWORK_ID, keyPath: path, alg: "a", keyVersion: 1, encryptedSymmetricKey: "AA==", encryptedSymmetricKeyHash: "00", ciphertext: Buffer.from(xor(plaintext)).toString("base64") };
   },
   decrypt: async (envelope: { keyPath: string; ciphertext: string }) => {
@@ -55,7 +61,14 @@ mock.module("../config/profiles.js", () => ({
 }));
 mock.module("../lib/sdk.js", () => ({
   ...actualSdk,
-  ensureAuthenticated: async () => { state.authCalls += 1; return {}; },
+  ensureAuthenticated: async () => {
+    state.authCalls += 1;
+    return { ensureEncryptionNetwork: async () => {
+      state.networkCreated += 1;
+      if (state.networkCreateFails) throw new Error("create failed");
+      if (!state.networkStaysMissing) state.networkMissing = 0;
+    } };
+  },
 }));
 mock.module("@tinycloud/node-sdk/encryption-keys", () => ({
   NamedKeyError: StubNamedKeyError,
@@ -85,7 +98,7 @@ const realStdoutWrite = process.stdout.write;
 afterEach(() => { process.stdout.write = realStdoutWrite; });
 beforeEach(async () => {
   state.profile = { namedKeys: { prefix: "qa", resource: `${NETWORK_ID}/qa/` }, ownerDid: OWNER };
-  state.errors = []; state.outputs = []; state.stdout = []; state.authCalls = 0; state.clientCalls = []; state.failWith = undefined;
+  state.errors = []; state.outputs = []; state.stdout = []; state.authCalls = 0; state.clientCalls = []; state.failWith = undefined; state.networkMissing = 0; state.networkCreated = 0; state.networkCreateFails = false; state.networkStaysMissing = false; state.networkStaysMissing = false;
   if (dir) await rm(dir, { recursive: true, force: true });
   dir = await mkdtemp("/var/tmp/tc2034-keys-unit-");
   process.stdout.write = ((chunk: unknown) => {
@@ -182,5 +195,42 @@ describe("tc keys", () => {
     await runKeys(["ensure", "qa/k1"]);
     expect(state.errors[0]).toMatchObject({ code: "PERMISSION_DENIED", exitCode: 5 });
     expect(state.errors[1]).toMatchObject({ code: "NOT_FOUND", exitCode: 4 });
+  });
+
+  test("ensure creates a missing encryption network once and retries once", async () => {
+    state.networkMissing = 1;
+    await runKeys(["ensure", "qa/k1"]);
+    expect(state.errors).toEqual([]);
+    expect(state.networkCreated).toBe(1);
+    expect(state.clientCalls).toEqual(["ensure qa/k1", "ensure qa/k1"]);
+    expect(state.outputs).toEqual([expect.objectContaining({ keyPath: "qa/k1" })]);
+  });
+
+  test("encrypt creates a missing encryption network once and retries once", async () => {
+    state.networkMissing = 1;
+    const plain = join(dir, "plain.bin");
+    await writeFile(plain, Uint8Array.from([1, 2, 3]));
+    await runKeys(["encrypt", "qa/k1", "--in", plain, "--out", join(dir, "env.json")]);
+    expect(state.errors).toEqual([]);
+    expect(state.networkCreated).toBe(1);
+    expect(state.clientCalls).toEqual(["encrypt qa/k1", "encrypt qa/k1"]);
+  });
+
+  test("a network that is still missing after one setup is reported, not retried again", async () => {
+    state.networkMissing = 1;
+    state.networkStaysMissing = true;
+    await runKeys(["ensure", "qa/k1"]);
+    expect(state.networkCreated).toBe(1);
+    expect(state.clientCalls).toHaveLength(2);
+    expect(state.errors).toHaveLength(1);
+  });
+
+  test("a failing network setup is reported and not retried", async () => {
+    state.networkMissing = 1;
+    state.networkCreateFails = true;
+    await runKeys(["ensure", "qa/k1"]);
+    expect(state.networkCreated).toBe(1);
+    expect(state.clientCalls).toEqual(["ensure qa/k1"]);
+    expect(state.errors).toHaveLength(1);
   });
 });

@@ -2838,7 +2838,7 @@ async function readyNamedKeysNetwork(node: TinyCloudNode): Promise<void> {
   try {
     await node.ensureEncryptionNetwork();
   } catch {
-    process.stderr.write(`You're signed in, but the key folder isn't ready yet. Run \`${CLI_NAME} keys ensure <folder>/<name>\` again in a minute.\n`);
+    process.stderr.write(`You're signed in, but your encryption keys aren't set up yet. Try \`${CLI_NAME} keys ensure <folder>/<name>\` again in a minute.\n`);
   }
 }
 
@@ -3001,7 +3001,7 @@ export async function refreshOpenKeySession(
   if (options.keys !== undefined) {
     if (replication.prefixes.length > 0) {
       throw new CLIError("INVALID_ARGUMENT",
-        "`--keys` can't be used while this profile has replication prefixes (from `--replication-prefix` or an earlier sign-in). Use a separate profile for named keys. Nothing was started.",
+        `With OpenKey sign-in, \`--keys\` can't be used on a profile that has replication prefixes (given with \`--replication-prefix\` or saved from an earlier sign-in). Nothing was started. Use a separate profile for named keys: \`${CLI_NAME} --profile <name> auth login --owner did:pkh:eip155:<chain>:<address> --keys <folder>\`.`,
         ExitCode.USAGE_ERROR);
     }
     return refreshPreparedKeysSession({ profileName, host, profile, snapshot, options, expectedOwner, expiry });
