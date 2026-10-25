@@ -3,6 +3,7 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -20,7 +21,7 @@ let home;
 let saved;
 
 beforeEach(() => {
-  home = fs.mkdtempSync(path.join('/var/tmp', 'courier-pair-guard-'));
+  home = fs.mkdtempSync(path.join(os.tmpdir(), 'courier-pair-guard-'));
   saved = process.env.COURIER_PEERS_FILE;
   delete process.env.COURIER_PEERS_FILE;
   process.env.COURIER_HOME = home;

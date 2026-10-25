@@ -1,6 +1,7 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { cmdInvite } from '../dist/invite-commands.js';
 import { writeSecure, secureSubdir } from '../dist/profile.js';
@@ -15,7 +16,7 @@ const realLog = console.log;
 const realWrite = process.stdout.write.bind(process.stdout);
 
 beforeEach(() => {
-  home = fs.mkdtempSync(path.join('/var/tmp', 'courier-invrec-'));
+  home = fs.mkdtempSync(path.join(os.tmpdir(), 'courier-invrec-'));
   process.env.COURIER_HOME = home;
   logged = [];
   console.log = (...parts) => logged.push(parts.join(' '));

@@ -1,6 +1,7 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { InviteWatcher, loadSeenCredentials, readHeld, readRecord, recordPath, requestedTier } from '../dist/invite-watch.js';
 import { inviteFolder } from '../dist/invite-schema.js';
@@ -41,8 +42,8 @@ let notices;
 let deletes;
 
 beforeEach(() => {
-  home = fs.mkdtempSync(path.join('/var/tmp', 'courier-watch-home-'));
-  sentinel = fs.mkdtempSync(path.join('/var/tmp', 'courier-watch-sentinel-'));
+  home = fs.mkdtempSync(path.join(os.tmpdir(), 'courier-watch-home-'));
+  sentinel = fs.mkdtempSync(path.join(os.tmpdir(), 'courier-watch-sentinel-'));
   savedEnv = { COURIER_HOME: process.env.COURIER_HOME, HOME: process.env.HOME, PUBLIC: process.env.COURIER_INVITES_PUBLIC_DIR };
   process.env.COURIER_HOME = home;
   process.env.HOME = sentinel;
@@ -565,7 +566,7 @@ test('seen credentials persist across watcher instances and are passed to the ve
 });
 
 test('public record reaches consumed and completed, with the completed peer', async () => {
-  const pub = fs.mkdtempSync(path.join('/var/tmp', 'courier-watch-pub-'));
+  const pub = fs.mkdtempSync(path.join(os.tmpdir(), 'courier-watch-pub-'));
   try {
     seedPublic(pub, ID);
     invite(ID, { publicDir: pub });
@@ -582,7 +583,7 @@ test('public record reaches consumed and completed, with the completed peer', as
 });
 
 test('public record reaches held, denied, expired, and revoked', async () => {
-  const pub = fs.mkdtempSync(path.join('/var/tmp', 'courier-watch-pub-'));
+  const pub = fs.mkdtempSync(path.join(os.tmpdir(), 'courier-watch-pub-'));
   try {
     seedPublic(pub, ID);
     invite(ID, { publicDir: pub });
@@ -607,7 +608,7 @@ test('public record reaches held, denied, expired, and revoked', async () => {
 });
 
 test('no public directory on the record means no public writes, even with the env set', async () => {
-  const pub = fs.mkdtempSync(path.join('/var/tmp', 'courier-watch-pub-'));
+  const pub = fs.mkdtempSync(path.join(os.tmpdir(), 'courier-watch-pub-'));
   try {
     process.env.COURIER_INVITES_PUBLIC_DIR = pub;
     invite(ID);
@@ -621,7 +622,7 @@ test('no public directory on the record means no public writes, even with the en
 });
 
 test('a failed public write during complete does not change the pairing; the log keeps only the reason code', async () => {
-  const pub = fs.mkdtempSync(path.join('/var/tmp', 'courier-watch-pub-'));
+  const pub = fs.mkdtempSync(path.join(os.tmpdir(), 'courier-watch-pub-'));
   try {
     invite(ID, { publicDir: pub });
     await putHello(ID);

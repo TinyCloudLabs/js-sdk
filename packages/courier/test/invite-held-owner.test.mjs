@@ -3,6 +3,7 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { inviteRecordsFor, storedRecord } from '../dist/invite-commands.js';
 import { InviteWatcher, describeHeld, readHeld, readRecord, writeRecord, recordPath } from '../dist/invite-watch.js';
@@ -37,8 +38,8 @@ let accepted;
 let clock;
 
 beforeEach(() => {
-  home = fs.mkdtempSync(path.join('/var/tmp', 'courier-held-owner-home-'));
-  sentinel = fs.mkdtempSync(path.join('/var/tmp', 'courier-held-owner-sentinel-'));
+  home = fs.mkdtempSync(path.join(os.tmpdir(), 'courier-held-owner-home-'));
+  sentinel = fs.mkdtempSync(path.join(os.tmpdir(), 'courier-held-owner-sentinel-'));
   saved = { COURIER_HOME: process.env.COURIER_HOME, HOME: process.env.HOME, COURIER_PEERS_FILE: process.env.COURIER_PEERS_FILE };
   delete process.env.COURIER_PEERS_FILE;
   process.env.COURIER_HOME = home;
@@ -46,7 +47,7 @@ beforeEach(() => {
   kv = memoryKv();
   accepted = [];
   clock = NOW;
-  assert.ok(process.env.COURIER_HOME.startsWith('/var/tmp/courier-held-owner-') && process.env.HOME.startsWith('/var/tmp/courier-held-owner-'));
+  assert.ok([process.env.COURIER_HOME, process.env.HOME].every((p) => path.resolve(p).startsWith(path.resolve(process.env.COURIER_TEST_HOME) + path.sep)));
 });
 
 afterEach(() => {

@@ -3,6 +3,7 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { sendHello, driveJoin } from '../dist/invite-commands.js';
 import { secureSubdir } from '../dist/profile.js';
@@ -19,7 +20,7 @@ const OWNER_ADDRESS = '0x' + '1'.repeat(40);
 let home;
 
 beforeEach(() => {
-  home = fs.mkdtempSync(path.join('/var/tmp', 'courier-join-'));
+  home = fs.mkdtempSync(path.join(os.tmpdir(), 'courier-join-'));
   process.env.COURIER_HOME = home;
 });
 

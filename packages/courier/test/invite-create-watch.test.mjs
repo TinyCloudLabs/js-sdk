@@ -1,6 +1,7 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { inviteRecordsFor, storedRecord } from '../dist/invite-commands.js';
 import { InviteWatcher, readRecord, recordPath } from '../dist/invite-watch.js';
@@ -29,8 +30,8 @@ let kv;
 let notices;
 
 beforeEach(() => {
-  home = fs.mkdtempSync(path.join('/var/tmp', 'courier-create-watch-home-'));
-  sentinel = fs.mkdtempSync(path.join('/var/tmp', 'courier-create-watch-sentinel-'));
+  home = fs.mkdtempSync(path.join(os.tmpdir(), 'courier-create-watch-home-'));
+  sentinel = fs.mkdtempSync(path.join(os.tmpdir(), 'courier-create-watch-sentinel-'));
   saved = { COURIER_HOME: process.env.COURIER_HOME, HOME: process.env.HOME };
   process.env.COURIER_HOME = home;
   process.env.HOME = sentinel;

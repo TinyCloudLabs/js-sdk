@@ -4,6 +4,7 @@
 import { test, beforeEach, afterEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { inviteRecordsFor, storedRecord } from '../dist/invite-commands.js';
 import { InviteWatcher, INVITE_BUSY_WAIT, NODE_CALL_TIMEOUT_MS, readHeld, readRecord, writeRecord, recordPath } from '../dist/invite-watch.js';
@@ -38,8 +39,8 @@ let accepted;
 let clock;
 
 beforeEach(() => {
-  home = fs.mkdtempSync(path.join('/var/tmp', 'courier-lock-cas-home-'));
-  sentinel = fs.mkdtempSync(path.join('/var/tmp', 'courier-lock-cas-sentinel-'));
+  home = fs.mkdtempSync(path.join(os.tmpdir(), 'courier-lock-cas-home-'));
+  sentinel = fs.mkdtempSync(path.join(os.tmpdir(), 'courier-lock-cas-sentinel-'));
   saved = { COURIER_HOME: process.env.COURIER_HOME, HOME: process.env.HOME, COURIER_PEERS_FILE: process.env.COURIER_PEERS_FILE };
   delete process.env.COURIER_PEERS_FILE;
   process.env.COURIER_HOME = home;
@@ -49,7 +50,7 @@ beforeEach(() => {
   accepts = [];
   logs = [];
   clock = NOW;
-  assert.ok(process.env.COURIER_HOME.startsWith('/var/tmp/courier-lock-cas-') && process.env.HOME.startsWith('/var/tmp/courier-lock-cas-'));
+  assert.ok([process.env.COURIER_HOME, process.env.HOME].every((p) => path.resolve(p).startsWith(path.resolve(process.env.COURIER_TEST_HOME) + path.sep)));
 });
 
 afterEach(() => {

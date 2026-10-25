@@ -2,6 +2,7 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -37,8 +38,8 @@ let kv;
 let accepted;
 
 beforeEach(() => {
-  home = fs.mkdtempSync(path.join('/var/tmp', 'courier-approve-owner-home-'));
-  sentinel = fs.mkdtempSync(path.join('/var/tmp', 'courier-approve-owner-sentinel-'));
+  home = fs.mkdtempSync(path.join(os.tmpdir(), 'courier-approve-owner-home-'));
+  sentinel = fs.mkdtempSync(path.join(os.tmpdir(), 'courier-approve-owner-sentinel-'));
   saved = { COURIER_HOME: process.env.COURIER_HOME, HOME: process.env.HOME, COURIER_PEERS_FILE: process.env.COURIER_PEERS_FILE };
   delete process.env.COURIER_PEERS_FILE;
   process.env.COURIER_HOME = home;

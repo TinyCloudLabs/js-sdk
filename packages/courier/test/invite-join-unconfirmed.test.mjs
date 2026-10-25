@@ -4,6 +4,7 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { sendHello, driveJoin, claimCallMe, resumeBlob, inviteWatcher, readJoin } from '../dist/invite-commands.js';
 import { buildInviteBlob } from '../dist/invite-blob.js';
@@ -31,7 +32,7 @@ let home;
 let saved;
 
 beforeEach(() => {
-  home = fs.mkdtempSync(path.join('/var/tmp', 'courier-unconfirmed-'));
+  home = fs.mkdtempSync(path.join(os.tmpdir(), 'courier-unconfirmed-'));
   saved = process.env.COURIER_HOME;
   process.env.COURIER_HOME = home;
 });

@@ -1,6 +1,7 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { acceptB } from '../dist/commands.js';
 import { memoryKv } from './memory-kv.mjs';
@@ -19,7 +20,7 @@ let home;
 let saved;
 
 beforeEach(() => {
-  home = fs.mkdtempSync(path.join('/var/tmp', 'courier-accept-b-'));
+  home = fs.mkdtempSync(path.join(os.tmpdir(), 'courier-accept-b-'));
   fs.chmodSync(home, 0o700);
   saved = { COURIER_HOME: process.env.COURIER_HOME, HOME: process.env.HOME };
   process.env.COURIER_HOME = home;

@@ -4,6 +4,7 @@ import { test, before, after, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
+import os from 'node:os';
 import path from 'node:path';
 import { joinStart } from '../dist/invite-commands.js';
 import { parseArgs } from '../dist/args.js';
@@ -52,14 +53,14 @@ before(async () => {
 after(() => new Promise((resolve) => server.close(resolve)));
 
 beforeEach(() => {
-  home = fs.mkdtempSync(path.join('/var/tmp', 'tc712.join-flag.'));
+  home = fs.mkdtempSync(path.join(os.tmpdir(), 'tc712.join-flag.'));
   saved = { COURIER_HOME: process.env.COURIER_HOME, HOME: process.env.HOME, COURIER_PEERS_FILE: process.env.COURIER_PEERS_FILE, COURIER_INVITE_ORIGIN: process.env.COURIER_INVITE_ORIGIN };
   process.env.COURIER_HOME = home;
   process.env.HOME = home;
   delete process.env.COURIER_PEERS_FILE;
   process.env.COURIER_INVITE_ORIGIN = origin;
   fetches = 0;
-  assert.ok(process.env.COURIER_HOME.startsWith('/var/tmp/tc712.') && process.env.HOME.startsWith('/var/tmp/tc712.'));
+  assert.ok([process.env.COURIER_HOME, process.env.HOME].every((p) => path.resolve(p).startsWith(path.resolve(process.env.COURIER_TEST_HOME) + path.sep)));
 });
 
 afterEach(() => {
