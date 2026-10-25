@@ -36,7 +36,8 @@ export interface StoredPeer {
   spaceId: string;
   theirHandleForMe?: string;
   inbound?: { delegation: string; cid: string; expiresAt: string };
-  outbound: { cid: string; issuedAt: string; expiresAt: string }[];
+  /** `revokedAt` is set once the node has confirmed the grant revoked, so a re-run of `revoke` skips it. */
+  outbound: { cid: string; issuedAt: string; expiresAt: string; revokedAt?: string }[];
   status: 'pending-A' | 'awaiting-C' | 'paired';
   pairedAt: string;
 }

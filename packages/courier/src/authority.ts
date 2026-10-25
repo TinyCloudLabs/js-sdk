@@ -1,7 +1,7 @@
 import { extractSiweExpiration } from '@tinycloud/node-sdk';
 import type { PermissionEntry } from '@tinycloud/node-sdk';
 import { CourierError } from './errors.js';
-import { AGENT_GRANT, AGENT_GRANT_EXPIRY, peerReadPermissions } from './keys.js';
+import { AGENT_GRANT, AGENT_GRANT_EXPIRY, peerReadPermissions, REVOKE_GRANT_ENTRY } from './keys.js';
 import { PEER_DELEGATION_EXPIRY } from './pairing.js';
 
 const DAY_MS = 24 * 3600 * 1000;
@@ -47,11 +47,15 @@ function renderTuples(tuples: AuthorityTuple[]): string {
   return shown.join('; ');
 }
 
-/** Require the complete effective authority to equal an explicit allowlist. */
-export function assertExactAuthority(signed: readonly PermissionEntry[], allowed: readonly PermissionEntry[], label: string): void {
+/**
+ * Require the complete effective authority to equal an explicit allowlist. Tuples from `optional` may be present or
+ * absent; anything else outside `allowed` is too broad, anything in `allowed` that is absent is incomplete.
+ */
+export function assertExactAuthority(signed: readonly PermissionEntry[], allowed: readonly PermissionEntry[], label: string, optional: readonly PermissionEntry[] = []): void {
   const signedTuples = authorityTuples(signed);
   const allowedTuples = authorityTuples(allowed);
-  const extra = [...signedTuples].filter(([tuple]) => !allowedTuples.has(tuple)).map(([, value]) => value);
+  const optionalTuples = authorityTuples(optional);
+  const extra = [...signedTuples].filter(([tuple]) => !allowedTuples.has(tuple) && !optionalTuples.has(tuple)).map(([, value]) => value);
   if (extra.length) {
     throw new CourierError('grant-too-broad', `${label} carries authority Courier does not allow: ${renderTuples(extra)}`);
   }
@@ -59,6 +63,12 @@ export function assertExactAuthority(signed: readonly PermissionEntry[], allowed
   if (missing.length) {
     throw new CourierError('grant-incomplete', `${label} is missing ${renderTuples(missing)}`);
   }
+}
+
+/** Whether the signed authority includes the revoke entry (every action of it). */
+export function grantCanRevoke(signed: readonly PermissionEntry[]): boolean {
+  const signedTuples = authorityTuples(signed);
+  return [...authorityTuples([REVOKE_GRANT_ENTRY]).keys()].every((tuple) => signedTuples.has(tuple));
 }
 
 function formatDays(ms: number): string {
@@ -96,7 +106,7 @@ export function siweTimes(siwe: string): { issuedAt?: Date; expiresAt?: Date } {
 }
 
 export function assertAgentGrant(caps: readonly PermissionEntry[], times: { issuedAt?: Date; expiresAt?: Date }, now = Date.now()): void {
-  assertExactAuthority(caps, AGENT_GRANT, 'OpenKey grant');
+  assertExactAuthority(caps, AGENT_GRANT.filter((entry) => entry !== REVOKE_GRANT_ENTRY), 'OpenKey grant', [REVOKE_GRANT_ENTRY]);
   if (!times.issuedAt) throw new CourierError('bad-grant', 'OpenKey grant SIWE is missing Issued At.');
   assertLifetime('OpenKey grant', times.expiresAt, AGENT_GRANT_MAX_MS, now, times.issuedAt);
 }

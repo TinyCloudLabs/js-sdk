@@ -15,6 +15,17 @@ const kv = (path: string, actions: string[]): PermissionEntry => ({
   actions: actions.map((action) => `tinycloud.kv/${action}`),
 });
 
+/**
+ * Lets the courier key revoke the delegations it issued. New grants carry it; a grant without it still passes the
+ * authority check (`assertAgentGrant` treats this one entry as optional) but cannot run `courier revoke`.
+ */
+export const REVOKE_GRANT_ENTRY: PermissionEntry = {
+  service: 'tinycloud.delegation',
+  space: COURIER_SPACE,
+  path: '',
+  actions: ['tinycloud.delegation/revoke'],
+};
+
 export const AGENT_GRANT: PermissionEntry[] = [
   kv('to/', ['get', 'put', 'list', 'del', 'metadata']),
   kv('me/requests/', ['put']),
@@ -30,6 +41,7 @@ export const AGENT_GRANT: PermissionEntry[] = [
     path: `kv/${PREFIX}/`,
     actions: ['tinycloud.hooks/subscribe'],
   },
+  REVOKE_GRANT_ENTRY,
 ];
 
 
