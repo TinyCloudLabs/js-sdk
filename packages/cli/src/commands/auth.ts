@@ -9,7 +9,7 @@ import { createInterface } from "node:readline";
 import type { IncomingMessage } from "node:http";
 import { TinyCloudNode, grantAuthRequest, principalDidEquals, REPLICA_LOGOUT_PENDING_FILE, signedCompactUcanExpiry, type AuthDelegationArtifact, type PermissionEntry, type PortableDelegation, type RuntimeDelegationActivator, type TinyCloudSession } from "@tinycloud/node-sdk";
 import type { ProfileReplicaApprovalEntry, ProfileReplicaDeferredToken, ProfileReplicaLogoutPending, ProfileReplicaPreflight, ProfileReplicaPurge } from "@tinycloud/sdk-services/kv/replication";
-import { composeManifestRequest } from "@tinycloud/sdk-core";
+import { composeManifestRequest, extractRecapAttenuations } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
 import { namedProfilePath, profilePath } from "@tinycloud/operations/state";
 import { principalHashOf, readGateSnapshot, REPLICA_DENY_FLOOR_FILE } from "@tinycloud/replica/profile-gate";
@@ -142,7 +142,7 @@ import {
   resolveAppsAgentRequest,
 } from "../lib/apps-agent-preset.js";
 import { permissionConsentLine, signExtrasQuestion } from "../lib/consent-text.js";
-import { assertNodeSupportsNamedKeys, keyAbilitiesFor, parseKeysPrefix } from "../lib/named-keys.js";
+import { assertNodeSupportsNamedKeys, keyAbilitiesFor, parseKeysPrefix, type ProfileNamedKeys } from "../lib/named-keys.js";
 import { buildReplicationLoginRequest, type ReplicationLoginOptions } from "../auth/replication-login.js";
 
 /** The one function dependency used by owner OpenKey permission acquisition. */
@@ -651,8 +651,8 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             ExitCode.USAGE_ERROR,
           );
         }
-        if (options.keys !== undefined && (options.device || options.manifest || options.paste || options.method === "openkey")) {
-          throw new CLIError("INVALID_ARGUMENT", "--keys is available with local-key login only (--method local).", ExitCode.USAGE_ERROR);
+        if (options.keys !== undefined && (options.device || options.manifest)) {
+          throw new CLIError("INVALID_ARGUMENT", "--keys works with local-key or OpenKey sign-in, not --device or --manifest.", ExitCode.USAGE_ERROR);
         }
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
@@ -727,7 +727,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           }
           method = options.method;
         } else if (options.keys !== undefined) {
-          method = "local";
+          method = (profileConfig?.authMethod === "openkey" || options.paste || options.owner) ? "openkey" : "local";
         } else {
           method = scoped ? "openkey" : await promptAuthMethod();
         }
@@ -756,6 +756,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             replaceSession: options.replaceSession === true,
             persistHost,
             force: options.force === true,
+            keys: options.keys,
           });
           if (!preparedCommitted) await persistReplicationLogin(ctx.profile, replicationOptions);
           if (replicationOptions.allowSecrets) writeReplicationSecretsWarning();
@@ -2442,6 +2443,7 @@ async function rotateAuthKey(
     paste: options.paste,
     noPopup: options.noPopup,
     permissions,
+    ...(profile.namedKeys === undefined ? {} : { keys: profile.namedKeys.prefix, expectedOwner: profile.ownerDid }),
   });
   outputRotationResult(result.profile, profileName, oldDid, "openkey");
 }
@@ -2714,6 +2716,8 @@ interface OpenKeyLoginOptions {
   openKeyAcquisition?: OpenKeyAcquisition;
   /** Bypass the share-history check that guards replacing the stored session key. */
   force?: boolean;
+  /** `--keys` folder: also ask OpenKey to approve named-key create and decrypt there. */
+  keys?: string;
 }
 
 /** Only a fresh SDK-prepared, OpenKey-signed owner session may establish replica consent. */
@@ -2813,6 +2817,111 @@ async function refreshPreparedOpenKeySession(params: {
   }
 }
 
+/** What the signed ReCap says about the named-key folder that was requested. */
+function namedKeysGrantOf(siwe: string | undefined, keys: ProfileNamedKeys): "both" | "none" | "partial" {
+  const recap = siwe === undefined ? {} : extractRecapAttenuations(siwe) as Record<string, Record<string, unknown>>;
+  const row = recap[keys.resource] ?? {};
+  const wanted = keyAbilitiesFor(keys)[keys.resource]!;
+  const granted = wanted.filter((ability) => ability in row);
+  if (granted.length === 0) return "none";
+  return granted.length === wanted.length && Object.keys(row).length === wanted.length ? "both" : "partial";
+}
+
+function isNarrowedRecapMismatch(error: unknown): boolean {
+  const text = error instanceof Error ? `${(error as { code?: unknown }).code ?? ""} ${error.message}` : String(error);
+  return text.includes("narrowed_recap_mismatch");
+}
+
+/**
+ * OpenKey sign-in with `--keys <folder>`: the SDK-prepared hand-off carries the folder's key
+ * row beside the default session abilities, and the signed ReCap decides what the profile records.
+ */
+async function refreshPreparedKeysSession(params: {
+  profileName: string;
+  host: string;
+  profile: ProfileConfig;
+  snapshot: Awaited<ReturnType<typeof readProfileSnapshot>>;
+  options: OpenKeyLoginOptions;
+  expectedOwner: string | undefined;
+  expiry: RequestedExpiry | undefined;
+}): Promise<{ profile: ProfileConfig; delegationData: Record<string, unknown>; declined: PermissionEntry[]; legacyNested: PermissionEntry[] }> {
+  const { profileName, host, profile, snapshot, options, expectedOwner, expiry } = params;
+  const storedOwner = snapshot.session && snapshot.key && profile.sessionDid
+    ? verifySignedSession(snapshot.session, snapshot.key, profile.sessionDid).ownerDid
+    : undefined;
+  const owner = options.expectedOwner
+    ? canonicalOwnerDid(options.expectedOwner)
+    : storedOwner ?? (profile.ownerDid ? canonicalOwnerDid(profile.ownerDid) : undefined);
+  if (!owner) {
+    throw new CLIError("OWNER_REQUIRED",
+      "`--keys` with OpenKey needs `--owner did:pkh:eip155:CHAIN:ADDRESS` or a profile that has signed in before. No approval was started.",
+      ExitCode.AUTH_REQUIRED);
+  }
+  if (expectedOwner && normalizePkhIdentifier(owner) !== normalizePkhIdentifier(expectedOwner)) {
+    throw new CLIError("OPENKEY_OWNER_MISMATCH", "The verified owner differs from this profile. No approval was started.", ExitCode.PERMISSION_DENIED);
+  }
+  // Validate the folder and the node before the hand-off opens.
+  const namedKeys = parseKeysPrefix(options.keys!, owner);
+  await assertNodeSupportsNamedKeys(host);
+  if (options.force !== true) await assertShareHistoryAllowsKeyDrop(profileName, "login");
+  const node = new TinyCloudNode({
+    host, signer: ownerIdentitySigner(owner),
+    additionalRawAbilities: keyAbilitiesFor(namedKeys),
+    includeAccountRegistryPermissions: false, autoBootstrapAccount: false,
+    ...(expiry ? { sessionExpirationMs: expiry.durationMs } : {}),
+  });
+  let handoff: PreparedOpenKeyHandoff | undefined;
+  let preparedDid: string | undefined;
+  try {
+    process.stderr.write(`The approval page will ask to create and use encryption keys in the folder "${namedKeys.prefix}/". Approve every row to keep this access.\n`);
+    await node.signInWithOpenKey(async (prepared) => {
+      preparedDid = prepared.verificationMethod;
+      handoff = await startPreparedOpenKeyHandoff({
+        prepared, openKeyHost: resolveOpenKeyHost(profile),
+        noPopup: options.noPopup, paste: options.paste,
+      });
+      return handoff.result;
+    });
+    const active = node.restorableSession;
+    if (!active || !preparedDid || node.sessionDid !== preparedDid || active.verificationMethod !== preparedDid) {
+      throw new CLIError("OPENKEY_SESSION_MISMATCH", "OpenKey signed a different SDK session key; no profile or session was saved.", ExitCode.PERMISSION_DENIED);
+    }
+    const key = active.jwk;
+    const signed = verifySignedSession({ ...active }, key, preparedDid, { expectedOwner: owner, expiry });
+    const grant = namedKeysGrantOf(active.siwe, namedKeys);
+    if (grant === "partial") throw partialKeysGrantError();
+    const session = { ...withVerifiedAuthority({ ...active, jwk: key }, signed), authMethod: "openkey" };
+    const updatedProfile: ProfileConfig = {
+      ...profile,
+      host: options.persistHost === true || !profile.host ? host : profile.host,
+      did: preparedDid, sessionDid: preparedDid,
+      posture: profile.posture ?? "owner-openkey",
+      operatorType: profile.operatorType ?? "human",
+      authMethod: "openkey",
+      ownerDid: signed.ownerDid,
+      spaceId: active.spaceId,
+    };
+    delete updatedProfile.namedKeys;
+    if (grant === "both") updatedProfile.namedKeys = namedKeys;
+    await commitLogin(profileName, snapshot, { key, session, profile: updatedProfile });
+    await handoff?.complete(true);
+    if (grant === "none") {
+      process.stderr.write(`Profile "${profileName}" can't use named keys yet. Sign in with \`${CLI_NAME} --profile ${profileName} auth login --method openkey --keys <folder>\` and approve every row.\n`);
+    }
+    return { profile: updatedProfile, delegationData: session, declined: [], legacyNested: [] };
+  } catch (error) {
+    await handoff?.complete(false);
+    await node.replication?.close();
+    throw isNarrowedRecapMismatch(error) ? partialKeysGrantError() : error;
+  }
+}
+
+function partialKeysGrantError(): CLIError {
+  return new CLIError("KEYS_PARTIAL_GRANT",
+    "Named-key access needs both permissions approved (create and use). Only part of it was approved, so no session was saved.",
+    ExitCode.PERMISSION_DENIED);
+}
+
 /**
  * A failed prepared login undoes only what that attempt established. It never denies a gate that
  * was already active: that is the session it meant to replace, and a deny there would let the next
@@ -2872,6 +2981,12 @@ export async function refreshOpenKeySession(
   if (permissions !== undefined && options.replaceSession !== true) {
     const estimatedExpiry = expiry === undefined ? undefined : new Date(Date.now() + expiry.durationMs).toISOString();
     assertSessionReplaceable(profileName, snapshot, expectedOwner, permissions, estimatedExpiry);
+  }
+  if (options.keys !== undefined) {
+    if (replication.prefixes.length > 0 || permissions !== undefined) {
+      throw new CLIError("INVALID_ARGUMENT", "--keys can't be combined with --manifest or replication prefixes.", ExitCode.USAGE_ERROR);
+    }
+    return refreshPreparedKeysSession({ profileName, host, profile, snapshot, options, expectedOwner, expiry });
   }
   if (replication.prefixes.length > 0) {
     return refreshPreparedOpenKeySession({
@@ -2943,6 +3058,7 @@ export async function refreshOpenKeySession(
     ...(typeof sanitizedSession.spaceId === "string" ? { spaceId: sanitizedSession.spaceId } : {}),
     ...(verifiedOwner === undefined ? {} : { ownerDid: verifiedOwner }),
   }, ownerKeyPrimary);
+  delete updatedProfile.namedKeys;
 
   await commitLogin(profileName, snapshot, {
     key,

@@ -121,10 +121,3 @@ test.each([
   expect(t.requests).toEqual([]);
   expect(await exists(t.sessionFile)).toBe(false);
 });
-
-test("--keys is refused with OpenKey login", async () => {
-  const t = await setup(["encryption-named-keys-v1"]);
-  const login = await run(t.home, ["auth", "login", "--method", "openkey", "--keys", "qa/"]);
-  expect(login.exitCode).toBe(2);
-  expect(t.requests).toEqual([]);
-});

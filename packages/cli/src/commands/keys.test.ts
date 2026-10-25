@@ -7,6 +7,9 @@ const OWNER = "did:pkh:eip155:1:0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed";
 const NETWORK_ID = `urn:tinycloud:encryption:${OWNER}:default`;
 
 const actualErrors = await import("../output/errors.js");
+const actualSdk = await import("../lib/sdk.js");
+const actualProfiles = await import("../config/profiles.js");
+const actualFormatter = await import("../output/formatter.js");
 
 const state = {
   profile: { namedKeys: { prefix: "qa", resource: `${NETWORK_ID}/qa/` } as unknown, ownerDid: OWNER } as Record<string, unknown>,
@@ -43,12 +46,15 @@ const stubClient = {
 };
 
 mock.module("../config/profiles.js", () => ({
+  ...actualProfiles,
   ProfileManager: {
+    ...actualProfiles.ProfileManager,
     resolveContext: async () => ({ profile: "keys-test", host: "https://host" }),
     getProfile: async () => state.profile,
   },
 }));
 mock.module("../lib/sdk.js", () => ({
+  ...actualSdk,
   ensureAuthenticated: async () => { state.authCalls += 1; return {}; },
 }));
 mock.module("@tinycloud/node-sdk/encryption-keys", () => ({
@@ -56,6 +62,7 @@ mock.module("@tinycloud/node-sdk/encryption-keys", () => ({
   createNamedKeyClient: () => stubClient,
 }));
 mock.module("../output/formatter.js", () => ({
+  ...actualFormatter,
   outputJson: (payload: unknown) => { state.outputs.push(payload); },
   withSpinner: async (_message: string, fn: () => unknown) => await fn(),
   shouldOutputJson: () => true,
