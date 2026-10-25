@@ -49,6 +49,7 @@ Setup & pairing (humans run these):
                                    Prefer --stdin or --file: an invite passed as an argument is visible in ps.
   join <invite-link> --expect-inviter <owner-did> [--email <address>] [--credential-file f | --credential-stdin] [--peers-file f]
                                    Same as above with the invite on the command line
+                                   inviter-unchecked: host unavailable; try again later.
   join --resume [invite-id]        Resume a pending join; id may be omitted when only one is pending
 
 Threads (agents run these):

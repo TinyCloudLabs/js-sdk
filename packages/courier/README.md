@@ -148,18 +148,17 @@ tc courier join --resume
   link lives to its expiry. The invitation names that key as its `issuer`, and
   `join` refuses an invitation whose `issuer` is not the key that signed the
   link (`invite-issuer-mismatch`) before it reads anything else in it.
-- The invitation carries a hash of the invited address, not the address: SHA-256
+- The invitee address is stored as a salted hash: SHA-256
   over the domain `tinycloud.courier.invite-email/v1`, a 0x00 byte, the invite id,
   a 0x00 byte and the lowercase address (no byte after the address), as 43
   base64url characters.
   The public record carries the same hash. The owner's private record keeps the
-  address for `watch`. A link holder can test a guessed address against the hash
-  but cannot read one from it.
+  address for `watch`.
 - Send the link by a different channel than the invited email address. If it
   goes by email, add `--also-ask` (you approve each hello) or `--expect-owner`
   (the invitee's account must match), so one mailbox alone cannot pair.
   Anyone who holds the link can read your owner address, space and handles
-  until it expires, and can check a guessed invitee address against the hash.
+  until it expires. The invitee address is stored as a salted hash.
 - `invite approve <invite-id> --owner <did>` first prints the owner and courier
   of the hello that is held and why it is held; `--owner` (a `did:pkh` DID or
   its `0x` address) must name that owner, otherwise it stops with
@@ -240,6 +239,7 @@ tc courier join --resume
   placeholder: take the DID from the inviter by another channel, never from the
   link (`inviter-unconfirmed`, `inviter-mismatch`). A grant that does not verify
   stops with `inviter-unproven` and nothing is created.
+  An unreachable host or 5xx response stops with `inviter-unchecked`; try again later.
 - `join --email <address>` is checked against the hash in the invitation before
   anything is created or requested (`invite-email-mismatch`); it is required with
   `--credential-file` or `--credential-stdin`, because the invitation does not

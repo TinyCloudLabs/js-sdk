@@ -11,7 +11,7 @@ import { joinStart } from '../dist/invite-commands.js';
 import { parseArgs } from '../dist/args.js';
 import { buildInviteBlob } from '../dist/invite-blob.js';
 import { createInviteLink, newInviteLinkKey } from '../dist/invite-links.js';
-import { proveInviter, oneTimeKeyActivator } from '../dist/invite-proof.js';
+import { proveInviter, oneTimeKeyActivator, HOST_TIMEOUT_MS } from '../dist/invite-proof.js';
 import { startLinksApi } from './support/links-standin.mjs';
 import { ONE_TIME_DID, ONE_TIME_X, StandInHost, delegationText, honestPermissions } from './support/invite-proof-fixture.mjs';
 
@@ -65,10 +65,10 @@ const permission = (which, over = {}, issued = true) => {
 const honest = () => honestPermissions(host, { inviteId: INVITE_ID, space: SPACE, courier: COURIER, ownerAddress: ADDR });
 
 /** An invitation naming the real owner and space, carrying the given permissions. */
-async function invitation(permissions) {
+async function invitation(permissions, inviteHost = HOST) {
   const key = newInviteLinkKey();
   const blobText = buildInviteBlob({
-    inviteId: INVITE_ID, host: HOST, spaceId: SPACE,
+    inviteId: INVITE_ID, host: inviteHost, spaceId: SPACE,
     oneTimeKey: { kty: 'OKP', crv: 'Ed25519', x: ONE_TIME_X, d: 'B'.repeat(43) },
     permissions,
     artifactA: { type: 'courier-pair', v: 0, step: 'A', from: { owner: OWNER, courier: COURIER, label: 'Sam' }, spaceId: SPACE, peer: 'me', callMe: 'hunter', issuedAt: new Date(NOW).toISOString() },
@@ -228,6 +228,158 @@ test('without the test seam the delegations are activated at the invitation\'s h
     await assert.rejects(proveInviter(node, blob, OWNER), (e) => e.code === 'inviter-unproven' && e.message.includes('(host)') && !e.message.includes('no parent'));
   } finally {
     await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+
+/** Real HTTP host for production activation. A null status accepts the request and never answers. */
+async function loopbackHost(t, status = 401) {
+  const seen = [];
+  const server = http.createServer((req, res) => {
+    seen.push({ method: req.method, url: req.url });
+    if (status !== null) res.writeHead(status).end('host response must never appear in the refusal');
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  // Invitations require HTTPS. Route only this host's production fetch to our loopback transport.
+  const url = `https://127.0.0.1:${server.address().port}`;
+  const fetch = globalThis.fetch;
+  t.mock.method(globalThis, 'fetch', (input, options) =>
+    fetch(String(input) === `${url}/delegate` ? String(input).replace('https:', 'http:') : input, options));
+  return {
+    url,
+    seen,
+    stop: async () => {
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    },
+  };
+}
+
+/** The production proof may calculate a CID; every access to the joiner's stateful node is still recorded and refused. */
+function productionRecorderNode() {
+  const { node: recorder, touched } = recorderNode();
+  const node = new Proxy({}, {
+    get(_, name) {
+      return name === 'computeDelegationCid' ? (authorization) => `cid:${authorization}` : recorder[name];
+    },
+  });
+  return { node, touched };
+}
+
+/** Join through the production activator, pinning the refusal and all no-write guarantees. */
+async function refusedAtHost({ inviteHost, profileHost = inviteHost, permissions = honest(), code, reason, proof, strictRecorder = false }) {
+  const link = await invitation(permissions, inviteHost);
+  standin.requests.length = 0;
+  const { node, touched } = strictRecorder ? recorderNode() : productionRecorderNode();
+  const p = { ...profile(), host: profileHost };
+  fs.writeFileSync(path.join(home, 'unchanged.bin'), Buffer.from([0, 255, 128, 10]));
+  const bytes = () => Object.fromEntries(Object.keys(snapshot(home)).map((file) => [file, fs.readFileSync(path.join(home, file))]));
+  const before = bytes();
+  let watchdog;
+  try {
+    await assert.rejects(Promise.race([
+      joinStart(parseArgs(['--stdin', '--expect-inviter', OWNER]), link, {
+        ctx: async () => ({ profile: p, node }), links: standin.config, now: NOW, proof,
+      }),
+      new Promise((_, reject) => { watchdog = setTimeout(() => reject(new Error('host proof did not finish within 2 s')), 2000); }),
+    ]), (e) => {
+      assert.equal(e.name, 'CourierError');
+      assert.equal(e.code, code, e.message);
+      if (reason !== undefined) assert.ok(e.message.includes(`(${reason})`), e.message);
+      if (code === 'inviter-unchecked') assert.equal(e.message, "Couldn't check the inviter right now. Try again in a few minutes.");
+      if (code !== 'host-mismatch') {
+        for (const text of [inviteHost, 'host response', 'hunter', 'Sam', EMAIL, 'k=', '#v=']) {
+          assert.equal(e.message.includes(text), false, `no host or invitation text (${text})`);
+        }
+      }
+      return true;
+    });
+  } finally {
+    clearTimeout(watchdog);
+  }
+  assert.deepEqual(touched, [], 'the node recorder was untouched: no grants or peer writes');
+  assert.deepEqual(p.peers, {}, 'no call-me claim and no peer');
+  assert.deepEqual(bytes(), before, 'the home is byte-identical');
+  assert.equal(fs.existsSync(path.join(home, 'joins')) ? fs.readdirSync(path.join(home, 'joins')).length : 0, 0, 'no join file');
+  assert.equal(standin.requests.every((r) => r.method === 'GET'), true, 'only invitation GETs to the links service');
+  assert.deepEqual(host.attempts, [], 'the stand-in host was not used');
+}
+
+test('blob host differs from profile host: host-mismatch before any host request, nothing created', async (t) => {
+  const server = await loopbackHost(t);
+  try {
+    await refusedAtHost({ inviteHost: server.url, profileHost: HOST, code: 'host-mismatch', strictRecorder: true });
+    assert.deepEqual(server.seen, [], 'zero requests to the invitation host');
+  } finally {
+    await server.stop();
+  }
+});
+
+test('delegation host differs from blob host: inviter-unproven (malformed) before any host request, nothing created', async (t) => {
+  const server = await loopbackHost(t);
+  try {
+    await refusedAtHost({
+      inviteHost: server.url,
+      permissions: { ...honest(), read: permission('read', { host: 'https://other.example.test' }) },
+      code: 'inviter-unproven', reason: 'malformed', strictRecorder: true,
+    });
+    assert.deepEqual(server.seen, [], 'zero requests to the configured host');
+  } finally {
+    await server.stop();
+  }
+});
+
+for (const status of [500, 503, 401, 403, 422]) {
+  const unavailable = status >= 500;
+  test(`host activation HTTP ${status}: ${unavailable ? 'inviter-unchecked' : 'inviter-unproven (host)'}, nothing created`, async (t) => {
+    const server = await loopbackHost(t, status);
+    try {
+      await refusedAtHost({ inviteHost: server.url, code: unavailable ? 'inviter-unchecked' : 'inviter-unproven', reason: unavailable ? undefined : 'host' });
+      assert.deepEqual(server.seen, [{ method: 'POST', url: '/delegate' }], 'only the first proof POST, no retry or join');
+    } finally {
+      await server.stop();
+    }
+  });
+}
+
+test('host activation connection refused: inviter-unchecked, nothing created', async (t) => {
+  const server = await loopbackHost(t);
+  await server.stop(); // an unused loopback port, not an external host
+  const fetch = globalThis.fetch;
+  let refused = false;
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    try {
+      return await fetch(url, options);
+    } catch (error) {
+      if (String(url) === `${server.url}/delegate`) refused = error.cause?.code === 'ECONNREFUSED';
+      throw error;
+    }
+  });
+  await refusedAtHost({ inviteHost: server.url, code: 'inviter-unchecked' });
+  assert.equal(refused, true, 'the production request failed with connection refused');
+  assert.deepEqual(server.seen, [], 'the closed host received no requests');
+});
+
+test('host activation timeout aborts the request: inviter-unchecked, nothing created', async (t) => {
+  const server = await loopbackHost(t, null);
+  const fetch = globalThis.fetch;
+  let signal;
+  let aborted = false;
+  t.mock.method(globalThis, 'fetch', (url, options) => {
+    if (String(url) === `${server.url}/delegate`) {
+      signal = options.signal;
+      signal?.addEventListener('abort', () => { aborted = true; }, { once: true });
+    }
+    return fetch(url, options);
+  });
+  try {
+    assert.equal(HOST_TIMEOUT_MS, 15_000, 'the production default remains 15 seconds');
+    await refusedAtHost({ inviteHost: server.url, code: 'inviter-unchecked', proof: { hostTimeoutMs: 100 } });
+    assert.equal(signal?.aborted, true, 'the abort signal fired');
+    assert.equal(aborted, true, 'the pending fetch observed the abort event');
+    assert.deepEqual(server.seen, [{ method: 'POST', url: '/delegate' }], 'the host accepted a request and never answered');
+  } finally {
+    await server.stop();
   }
 });
 

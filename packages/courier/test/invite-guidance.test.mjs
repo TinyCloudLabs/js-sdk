@@ -24,7 +24,7 @@ test('invite screen text: bearer link, a different channel than the invited addr
   assert.match(text, /bearer link: keep it private until revoked or expired/);
   assert.match(text, /different channel than the invited email address/);
   assert.match(text, /If it goes by email, add --also-ask or --expect-owner/);
-  assert.match(text, /Anyone who holds the link can read your owner address, space and handles until it expires, and can check a guessed invitee address against it/);
+  assert.match(text, /Anyone who holds the link can read your owner address, space and handles until it expires\. The invitee address is stored as a salted hash\./);
 });
 
 test('invite prints every guidance line on stdout, after the summary and above the invite string, which comes last', () => {

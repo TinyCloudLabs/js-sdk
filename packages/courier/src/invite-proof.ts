@@ -20,13 +20,17 @@ import { ownerMatches, type InviteBlob } from './invite-schema.js';
  * The invitation is a bearer string anyone can make, so its `from.owner` is only a claim. What cannot be made up is the chain behind the two
  * delegations it carries (the one-time key's `put` and `read`): the host accepts a delegation only when its chain ends at the owner of the space it names.
  * Each delegation is therefore activated at the host (the one-time key is its audience, so the activation runs as that key) and then read back from the
- * signed authority: space, issuer, audience and exact capabilities. The failure is one code with a fixed message; the reason is one word from a fixed set
- * and nothing from the invitation or the host is printed.
+ * signed authority: space, issuer, audience and exact capabilities. Refusals have fixed messages; an unavailable host is distinguished from a grant
+ * that does not verify, and nothing from the invitation or the host is printed.
  */
 
 export const INVITER_UNPROVEN = 'inviter-unproven';
+export const INVITER_UNCHECKED = 'inviter-unchecked';
 
-/** The host answers within this, or the proof fails (`host`); a join never waits on a silent host. */
+const unchecked = (): CourierError =>
+  new CourierError(INVITER_UNCHECKED, "Couldn't check the inviter right now. Try again in a few minutes.");
+
+/** The host answers within this, or the proof is unchecked; a join never waits on a silent host. */
 export const HOST_TIMEOUT_MS = 15_000;
 
 /** Why the proof failed. A fixed set: the message never carries invitation or host text. */
@@ -40,23 +44,32 @@ export const unproven = (which: 'read' | 'put', reason: UnprovenReason): Courier
 
 const SPACE_OWNER = /^tinycloud:pkh:eip155:(\d+):(0x[a-fA-F0-9]{40}):/;
 
-/** `authorize` is a test seam: the activator the delegations are activated through (production activates them at the host). */
+/** Production activates at the host; tests can supply an activator or shorten the activation timeout. */
 export interface ProofDeps {
   activator?: (blob: InviteBlob) => RuntimeDelegationActivator;
+  hostTimeoutMs?: number;
 }
 
 /**
  * Acts as the one-time key (the audience of both delegations) and activates a delegation at the invitation's host. Nothing is installed in the joiner's
  * own node: the installed list is local to this proof.
  */
-export function oneTimeKeyActivator(node: Pick<TinyCloudNode, 'computeDelegationCid'>, blob: InviteBlob): RuntimeDelegationActivator {
+export function oneTimeKeyActivator(node: Pick<TinyCloudNode, 'computeDelegationCid'>, blob: InviteBlob, hostTimeoutMs = HOST_TIMEOUT_MS): RuntimeDelegationActivator {
   const installed: PortableDelegation[] = [];
   return {
     sessionDid: ed25519DidKey(blob.oneTimeKey.x),
     computeDelegationCid: (authorization) => node.computeDelegationCid(authorization),
     getRuntimePermissionDelegations: () => installed,
     async useRuntimeDelegation(delegation) {
-      const result = await activateSessionWithHost(delegation.host ?? blob.host, delegation.delegationHeader, AbortSignal.timeout(HOST_TIMEOUT_MS));
+      const signal = AbortSignal.timeout(hostTimeoutMs);
+      let result;
+      try {
+        result = await activateSessionWithHost(delegation.host ?? blob.host, delegation.delegationHeader, signal);
+        signal.throwIfAborted();
+      } catch {
+        throw Object.assign(new Error('The host could not be reached.'), { code: 'ACTIVATION_TRANSPORT_FAILED' });
+      }
+      if (result.status >= 500) throw new Error('The host is unavailable.', { cause: { status: result.status } });
       if (!result.success) throw new Error('The host did not accept the delegation.');
       installed.push(delegation);
     },
@@ -92,6 +105,7 @@ async function proveOne(
     active = await activateValidatedRuntimeDelegation(activator, delegation, { host: blob.host });
   } catch (error) {
     if (error instanceof RuntimeDelegationRejectedError) {
+      if (error.reason === 'activation_unavailable') throw unchecked();
       if (error.reason === 'audience_mismatch') throw unproven(which, 'audience');
       if (error.reason.startsWith('activation_')) throw unproven(which, 'host');
     }
@@ -106,9 +120,9 @@ async function proveOne(
   }
 }
 
-/** Refuses with `inviter-unproven` unless both the read and the put delegation of the invitation verify as the named inviter's. Creates nothing. */
+/** Refuses with `inviter-unproven` (or `inviter-unchecked` if the host is unavailable) unless both the read and the put delegation of the invitation verify as the named inviter's. Creates nothing. */
 export async function proveInviter(node: Pick<TinyCloudNode, 'computeDelegationCid'>, blob: InviteBlob, expectedInviter: string, deps: ProofDeps = {}): Promise<void> {
-  const activator = (deps.activator ?? ((b: InviteBlob) => oneTimeKeyActivator(node, b)))(blob);
+  const activator = (deps.activator ?? ((b: InviteBlob) => oneTimeKeyActivator(node, b, deps.hostTimeoutMs)))(blob);
   await proveOne(activator, blob, expectedInviter, 'read');
   await proveOne(activator, blob, expectedInviter, 'put');
 }

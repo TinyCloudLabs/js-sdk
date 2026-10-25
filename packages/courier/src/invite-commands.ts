@@ -53,7 +53,7 @@ interface JoinState {
 export const INVITE_GUIDANCE: readonly string[] = [
   'Send this string to the invitee. It is a bearer link: keep it private until revoked or expired.',
   'Send it by a different channel than the invited email address. If it goes by email, add --also-ask or --expect-owner so a mailbox alone cannot pair.',
-  'Anyone who holds the link can read your owner address, space and handles until it expires, and can check a guessed invitee address against it.',
+  'Anyone who holds the link can read your owner address, space and handles until it expires. The invitee address is stored as a salted hash.',
 ];
 
 /** What `invite` prints on success, on stdout: the summary, the guidance, then the invite string last. */

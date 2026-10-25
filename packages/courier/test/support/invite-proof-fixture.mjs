@@ -10,7 +10,7 @@ export const ONE_TIME_X = 'A'.repeat(43);
 export const ONE_TIME_DID = ed25519DidKey(ONE_TIME_X);
 
 /** One serialized delegation. Every field of the signed payload can be set to something wrong. */
-export function delegationText({ inviteId, which, space, issuer, audience = ONE_TIME_DID, path, actions, ownerAddress, transportSpace, expSeconds }) {
+export function delegationText({ inviteId, which, space, issuer, audience = ONE_TIME_DID, path, actions, ownerAddress, transportSpace, expSeconds, host }) {
   const folder = inviteFolder(inviteId);
   const entryPath = path ?? (which === 'read' ? `${folder}out/` : `${folder}in/hello.json`);
   const entryActions = actions ?? (which === 'read' ? ['tinycloud.kv/get', 'tinycloud.kv/list'] : ['tinycloud.kv/put']);
@@ -35,7 +35,7 @@ export function delegationText({ inviteId, which, space, issuer, audience = ONE_
       ownerAddress,
       chainId: 1,
       delegateDID: audience,
-      host: undefined,
+      host,
     }),
   };
 }
