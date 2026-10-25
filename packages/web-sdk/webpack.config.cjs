@@ -272,10 +272,10 @@ const lazyExternals = (moduleType, ext) => ({ context, request }, callback) => {
   callback();
 };
 
-const rootEsmConfig = { ...esmConfig, externals: lazyLoaderExternals("import", "mjs") };
+const rootEsmConfig = { ...esmConfig, externals: [linksExternal, lazyLoaderExternals("import", "mjs")] };
 const rootCjsConfig = {
   ...cjsConfig,
-  externals: lazyLoaderExternals("commonjs", "cjs"),
+  externals: [linksExternal, lazyLoaderExternals("commonjs", "cjs")],
   output: { ...cjsConfig.output, environment: { dynamicImport: true } },
 };
 
