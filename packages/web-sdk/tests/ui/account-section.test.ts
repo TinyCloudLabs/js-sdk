@@ -137,6 +137,36 @@ const button = (root: ParentNode, label: string): HTMLButtonElement => {
 };
 
 describe("Overview section", () => {
+  describe("identity title", () => {
+    const LONG_DID = "did:pkh:eip155:1:0x00000000000000000000000000000000000c41d0";
+    const title = (el: HTMLElement) => el.querySelector(".account-ident .name") as HTMLElement;
+    const didLine = (el: HTMLElement) => el.querySelector(".account-did") as HTMLElement;
+
+    test("no ENS name: the short DID is the one title, the full DID is not on screen and one copy button remains", async () => {
+      const { el } = mountWith({ account: { did: LONG_DID } });
+      await flush();
+      expect(title(el).textContent).toBe(`${LONG_DID.slice(0, 20)}…${LONG_DID.slice(-4)}`);
+      expect(title(el).title).toBe(LONG_DID);
+      expect(didLine(el).hidden).toBe(true);
+      expect(el.querySelectorAll(".account-copy")).toHaveLength(1);
+      // The short form shows once, and the long form never shows as text.
+      const identityText = [...el.querySelectorAll(".account-ident *")]
+        .filter((node) => !(node as HTMLElement).hidden && node.children.length === 0)
+        .map((node) => node.textContent)
+        .join("|");
+      expect(identityText).not.toContain(LONG_DID);
+    });
+
+    test("with an ENS name: the name is the title and the short DID sits under it", async () => {
+      const { el } = mountWith({ account: { did: LONG_DID, displayName: "maya.example.eth" } });
+      await flush();
+      expect(title(el).textContent).toBe("maya.example.eth");
+      expect(didLine(el).hidden).toBe(false);
+      expect(didLine(el).textContent).toBe(`${LONG_DID.slice(0, 20)}…${LONG_DID.slice(-4)}`);
+      expect(el.querySelectorAll(".account-copy")).toHaveLength(1);
+    });
+  });
+
   test("signed out: shows the signed-out note and hides the account columns", async () => {
     const { el } = mountWith({ signedIn: () => false });
     await flush();

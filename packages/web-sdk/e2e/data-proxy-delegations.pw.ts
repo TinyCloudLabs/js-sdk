@@ -251,3 +251,17 @@ test("the manifest display name names the app wherever the panel names it; the a
   await expect(box).toContainText("Notes Pro will stop working here until you sign in again.");
   await expect(panel(page)).not.toContainText("e2e-data-proxy");
 });
+
+test("Overview with no ENS name shows the short DID once, as one line, with one copy button", async ({ page }) => {
+  await boot(page);
+  await tc(page, (api) => api.arm());
+  await page.evaluate(() => (window as unknown as HarnessWindow).tc?.ui.open("account"));
+  const account = panel(page).locator('section[data-section="account"]');
+  const title = account.locator(".account-ident .name");
+  await expect(title).toHaveText("did:key:z6MkAccountA…mple");
+  await expect(title).toHaveAttribute("title", "did:key:z6MkAccountAExample");
+  expect((await title.boundingBox())?.height).toBeLessThan(40);
+  await expect(account.locator(".account-did")).toBeHidden();
+  await expect(account).not.toContainText("did:key:z6MkAccountAExample");
+  await expect(account.getByRole("button", { name: /^Copy/ })).toHaveCount(1);
+});

@@ -229,11 +229,16 @@ function mountAccount(el: HTMLElement, ctx: SectionContext): () => void {
     identity.hidden = ready === undefined;
     facts.hidden = ready === undefined;
     if (ready !== undefined) {
-      const label = ready.displayName ?? ready.did;
+      // With a name (ENS), the name is the title and the short DID sits under it. Without one, the short DID is
+      // the title and appears once; the copy button still copies the full DID.
+      const shortId = middleTruncate(ready.did);
+      const label = ready.displayName ?? shortId;
       name.textContent = label;
+      name.title = ready.displayName === undefined ? ready.did : "";
       avatar.textContent = label.charAt(0).toUpperCase();
-      did.textContent = middleTruncate(ready.did);
+      did.textContent = shortId;
       did.title = ready.did;
+      did.hidden = ready.displayName === undefined;
       sessionRow.hidden = ready.sessionExpiresAt === undefined;
       if (ready.sessionExpiresAt !== undefined) {
         const { hours, minutes } = remaining(ready.sessionExpiresAt, Date.now());
