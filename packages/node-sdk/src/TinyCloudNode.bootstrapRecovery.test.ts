@@ -490,6 +490,14 @@ describe("TC-393 bootstrap recovery matrix", () => {
     await bootstrap(node);
     expect(node.freshEncryptionNetworkCreated).toBe(false);
     expect(cloud.encryptionAssumeMissing).toEqual([true]);
+
+    const repairCloud = new FakeCloud();
+    repairCloud.hostedSpaces.add(bootstrapSpaceId("default"));
+    const repairNode = makeRecoveryHarness(repairCloud);
+    installActivationTransport(repairCloud);
+    await bootstrap(repairNode);
+    expect(repairNode.freshEncryptionNetworkCreated).toBe(false);
+    expect(repairCloud.encryptionAssumeMissing).toEqual([false]);
   });
 
   for (const boundary of ceremonyFaultPoints) {
