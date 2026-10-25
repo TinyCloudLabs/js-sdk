@@ -1688,5 +1688,55 @@
       "ceiling": 776128
     },
     "reason": "panel eager launcher, host and toasts; both figures include gzip alignment against the inline wasm payload (TC-1985)."
+  },
+  "tc2034NamedKeysCliRatchet": {
+    "label": "node-sdk reports whether sign-in's bootstrap created the encryption network (CLI named keys, TC-2034, #739)",
+    "ruling": "Approved by Naomi (exact canonical CI bytes at run 40240409880; no headroom)",
+    "base": "d01d67c02ef6587295212f507863d164f05961f9",
+    "sourceCommits": [
+      "331a52de6b06a350cd62f149d74b6ebe315bc0c5"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40240409880",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40240409880/job/121310795747",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40240409880/job/121310795576"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 139,
+        "index.cjs": 145
+      },
+      "ceiling": {
+        "index.mjs": 1464317,
+        "index.cjs": 1406152
+      }
+    },
+    "firstImport": {
+      "delta": {
+        "replica.mjs": 0,
+        "replica.cjs": 0
+      },
+      "ceiling": {
+        "replica.mjs": 51925,
+        "replica.cjs": 67141
+      }
+    },
+    "activation": {
+      "delta": {
+        "activation.mjs": 0,
+        "activation.cjs": 0
+      },
+      "ceiling": {
+        "activation.mjs": 23117,
+        "activation.cjs": 24700
+      }
+    },
+    "worker": {
+      "delta": 0,
+      "ceiling": 776128
+    },
+    "reason": "node-sdk reports whether sign-in's bootstrap created the encryption network (named-keys CLI)"
   }
 }

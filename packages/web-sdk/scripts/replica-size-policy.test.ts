@@ -25,6 +25,7 @@ import { approvedTc1488SiweDomainUriRatchet, validateTc1488SiweDomainUriRatchetT
 import { approvedTc1737ShortLinkLazyChunkRatchet, validateTc1737ShortLinkLazyChunkRatchetTransition, type Tc1737ShortLinkLazyChunkRatchet } from "./replica-size-policy";
 import { approvedTc1910SigningConsistencyRatchet, validateTc1910SigningConsistencyRatchetTransition, type Tc1910SigningConsistencyRatchet } from "./replica-size-policy";
 import { approvedTc848SettingsPanelRatchet, validateTc848SettingsPanelRatchetTransition, type Tc848SettingsPanelRatchet } from "./replica-size-policy";
+import { approvedTc2034NamedKeysCliRatchet, validateTc2034NamedKeysCliRatchetTransition, type Tc2034NamedKeysCliRatchet } from "./replica-size-policy";
 import { activeRootCeiling, approvedLedgerRows, rootCeilingFor, rootCeilings } from "./replica-size-policy";
 import { approvedTc1443Ratchet, approvedTc1443bRatchet, approvedTc1448Ratchet, approvedTc1466Ratchet, validateTc1443RatchetTransition, validateTc1443bRatchetTransition, validateTc1448RatchetTransition, validateTc1466RatchetTransition, type Tc1443Ratchet, type Tc1443bRatchet, type Tc1448Ratchet, type Tc1466Ratchet } from "./replica-size-policy";
 import { ancestryPins, assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedHardeningRatchet, approvedLogoutRatchet, approvedTc1413Ratchet, approvedTc1424Ratchet, approvedTc1432Ratchet, approvedTc1436Ratchet, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, landingCommit, pinLandedOn, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateLogoutRatchetTransition, validateMasterMergeResolutionTransition, validateTc1413RatchetTransition, validateTc1424RatchetTransition, validateTc1432RatchetTransition, validateTc1436RatchetTransition, type HardeningRatchet, type Ledger, type LogoutRatchet, type MasterMergeResolution, type Tc1413Ratchet, type Tc1424Ratchet, type Tc1432Ratchet, type Tc1436Ratchet } from "./replica-size-policy";
@@ -2818,6 +2819,65 @@ describe("settings panel launcher, host and toasts (#731, TC-848) root ceiling r
     changed.root.ceiling["index.cjs"]++;
     expect(() => validateTc848SettingsPanelRatchetTransition(undefined, changed)).toThrow();
     expect(() => validateTc848SettingsPanelRatchetTransition(row(), undefined)).toThrow();
+  });
+});
+
+describe("named-keys CLI sign-in report (#739, TC-2034) root ceiling ratchet", () => {
+  const row = () => structuredClone(approvedTc2034NamedKeysCliRatchet);
+
+  it("raises the two root ceilings by the exact canonical CI bytes over the settings panel row, and carries every other ceiling", () => {
+    expect(() => validateLedger(current)).not.toThrow();
+    expect(JSON.stringify(current.tc2034NamedKeysCliRatchet)).toBe(JSON.stringify(approvedTc2034NamedKeysCliRatchet));
+    expect(row().root.delta).toEqual({ "index.mjs": 139, "index.cjs": 145 });
+    expect(row().root.ceiling).toEqual({ "index.mjs": 1464317, "index.cjs": 1406152 });
+    expect(row().reason).toContain("named-keys CLI");
+    for (const format of ["index.mjs", "index.cjs"] as const) {
+      expect(row().root.ceiling[format]).toBe(approvedTc848SettingsPanelRatchet.root.ceiling[format] + row().root.delta[format]);
+    }
+    expect(row().firstImport).toEqual({ ...approvedTc848SettingsPanelRatchet.firstImport, delta: { "replica.mjs": 0, "replica.cjs": 0 } });
+    expect(row().activation).toEqual({ ...approvedTc848SettingsPanelRatchet.activation, delta: { "activation.mjs": 0, "activation.cjs": 0 } });
+    expect(row().worker).toEqual({ delta: 0, ceiling: approvedTc848SettingsPanelRatchet.worker.ceiling });
+    expect(row().base).toBe("d01d67c02ef6587295212f507863d164f05961f9");
+    expect(row().sourceCommits).toEqual(["331a52de6b06a350cd62f149d74b6ebe315bc0c5"]);
+    expect(row().canonicalCI.run).toBe("https://github.com/TinyCloudLabs/js-sdk/actions/runs/40240409880");
+    expect(row().canonicalCI.jobs).toHaveLength(2);
+    expect(ancestryPins(current, false)).toContainEqual({
+      row: "tc2034NamedKeysCliRatchet", pin: row().sourceCommits.at(-1)!,
+    });
+    expect(rootCeilings(current).find((e) => e.row === "tc2034NamedKeysCliRatchet")).toEqual({ row: "tc2034NamedKeysCliRatchet", ceiling: row().root.ceiling });
+  });
+
+  it("refuses one byte of drift in any bucket, other CI provenance, or a missing settings panel row", () => {
+    const mutations: Array<(changed: Tc2034NamedKeysCliRatchet) => void> = [
+      (changed) => { changed.root.ceiling["index.mjs"]++; },
+      (changed) => { changed.root.ceiling["index.cjs"]++; },
+      (changed) => { changed.root.ceiling["index.cjs"]--; },
+      (changed) => { changed.root.delta["index.cjs"]++; },
+      (changed) => { changed.firstImport.ceiling["replica.cjs"]++; },
+      (changed) => { changed.activation.ceiling["activation.cjs"]++; },
+      (changed) => { changed.worker.ceiling--; },
+      (changed) => { changed.canonicalCI.run = "https://github.com/TinyCloudLabs/js-sdk/actions/runs/1"; },
+      (changed) => { changed.sourceCommits = ["0".repeat(40)]; },
+    ];
+    for (const mutate of mutations) {
+      const ledger = copy(current);
+      const changed = row();
+      mutate(changed);
+      ledger.tc2034NamedKeysCliRatchet = changed;
+      expect(() => validateLedger(ledger)).toThrow();
+    }
+    const withoutPrerequisite = copy(current);
+    delete withoutPrerequisite.tc848SettingsPanelRatchet;
+    expect(() => validateLedger(withoutPrerequisite)).toThrow("named-keys");
+  });
+
+  it("may be introduced once and never changed or removed in a later base", () => {
+    expect(() => validateTc2034NamedKeysCliRatchetTransition(undefined, row())).not.toThrow();
+    expect(() => validateTc2034NamedKeysCliRatchetTransition(row(), row())).not.toThrow();
+    const changed = row();
+    changed.root.ceiling["index.cjs"]++;
+    expect(() => validateTc2034NamedKeysCliRatchetTransition(undefined, changed)).toThrow();
+    expect(() => validateTc2034NamedKeysCliRatchetTransition(row(), undefined)).toThrow();
   });
 });
 

@@ -293,6 +293,11 @@ export type Tc1910SigningConsistencyRatchet = HardeningRatchet;
  * bytes. Same shape as the #565 hardening row; the worker, first-import and activation ceilings are carried unchanged.
  */
 export type Tc848SettingsPanelRatchet = HardeningRatchet;
+/**
+ * One reviewed exact-byte row (js-sdk #739, TC-2034): the named-keys CLI sign-in report raised the root
+ * bytes. Same shape as the #565 hardening row; worker, first-import and activation ceilings are carried unchanged.
+ */
+export type Tc2034NamedKeysCliRatchet = HardeningRatchet;
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -333,6 +338,7 @@ export type Ledger = {
   tc1737ShortLinkLazyChunkRatchet?: Tc1737ShortLinkLazyChunkRatchet;
   tc1910SigningConsistencyRatchet?: Tc1910SigningConsistencyRatchet;
   tc848SettingsPanelRatchet?: Tc848SettingsPanelRatchet;
+  tc2034NamedKeysCliRatchet?: Tc2034NamedKeysCliRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -903,6 +909,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc1737ShortLinkLazyChunkRatchet !== undefined) pins.push({ row: "tc1737ShortLinkLazyChunkRatchet", pin: root.tc1737ShortLinkLazyChunkRatchet.sourceCommits.at(-1)! });
   if (root.tc1910SigningConsistencyRatchet !== undefined) pins.push({ row: "tc1910SigningConsistencyRatchet", pin: root.tc1910SigningConsistencyRatchet.sourceCommits.at(-1)! });
   if (root.tc848SettingsPanelRatchet !== undefined) pins.push({ row: "tc848SettingsPanelRatchet", pin: root.tc848SettingsPanelRatchet.sourceCommits.at(-1)! });
+  if (root.tc2034NamedKeysCliRatchet !== undefined) pins.push({ row: "tc2034NamedKeysCliRatchet", pin: root.tc2034NamedKeysCliRatchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -949,6 +956,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc1737ShortLinkLazyChunkRatchet", root.tc1737ShortLinkLazyChunkRatchet?.root.ceiling],
     ["tc1910SigningConsistencyRatchet", root.tc1910SigningConsistencyRatchet?.root.ceiling],
     ["tc848SettingsPanelRatchet", root.tc848SettingsPanelRatchet?.root.ceiling],
+    ["tc2034NamedKeysCliRatchet", root.tc2034NamedKeysCliRatchet?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -1667,6 +1675,41 @@ export const approvedTc848SettingsPanelRatchet: Tc848SettingsPanelRatchet = {
   reason: "panel eager launcher, host and toasts; both figures include gzip alignment against the inline wasm payload (TC-1985).",
 };
 
+/**
+ * Named-keys CLI sign-in report (js-sdk #739, TC-2034), approved by Naomi: the root index.mjs ceiling goes from
+ * 1,464,178 to 1,464,317 (+139) and index.cjs from 1,406,007 to 1,406,152 (+145), the exact bytes canonical CI printed
+ * on the #739 head 331a52de (run 40240409880). Worker, first-import and activation ceilings are carried unchanged.
+ */
+export const approvedTc2034NamedKeysCliRatchet: Tc2034NamedKeysCliRatchet = {
+  label: "node-sdk reports whether sign-in's bootstrap created the encryption network (CLI named keys, TC-2034, #739)",
+  ruling: "Approved by Naomi (exact canonical CI bytes at run 40240409880; no headroom)",
+  base: "d01d67c02ef6587295212f507863d164f05961f9",
+  sourceCommits: [
+    "331a52de6b06a350cd62f149d74b6ebe315bc0c5",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40240409880",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40240409880/job/121310795747",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40240409880/job/121310795576",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 139, "index.cjs": 145 },
+    ceiling: { "index.mjs": 1464317, "index.cjs": 1406152 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 51925, "replica.cjs": 67141 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23117, "activation.cjs": 24700 },
+  },
+  worker: { delta: 0, ceiling: 776128 },
+  reason: "node-sdk reports whether sign-in's bootstrap created the encryption network (named-keys CLI)",
+};
+
 export type GatedOnlyRatchet = {
   label: string;
   sourceCommit: string;
@@ -1735,6 +1778,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc1737ShortLinkLazyChunkRatchet: approvedTc1737ShortLinkLazyChunkRatchet,
   tc1910SigningConsistencyRatchet: approvedTc1910SigningConsistencyRatchet,
   tc848SettingsPanelRatchet: approvedTc848SettingsPanelRatchet,
+  tc2034NamedKeysCliRatchet: approvedTc2034NamedKeysCliRatchet,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -1928,6 +1972,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc1910SigningConsistencyRatchet || JSON.stringify(value.tc848SettingsPanelRatchet) !== JSON.stringify(approvedTc848SettingsPanelRatchet))) {
     throw new Error("Only Naomi's exact canonical panel ratchet is approved.");
   }
+  if (value.tc2034NamedKeysCliRatchet !== undefined &&
+      (!value.tc848SettingsPanelRatchet || JSON.stringify(value.tc2034NamedKeysCliRatchet) !== JSON.stringify(approvedTc2034NamedKeysCliRatchet))) {
+    throw new Error("Only Naomi's exact canonical named-keys ratchet is approved.");
+  }
 }
 
 /** The #606 worker ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
@@ -2087,6 +2135,14 @@ export function validateTc848SettingsPanelRatchetTransition(base?: Tc848Settings
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc848SettingsPanelRatchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact TC-848 settings panel ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-2034 named-keys CLI ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc2034NamedKeysCliRatchetTransition(base?: Tc2034NamedKeysCliRatchet, current?: Tc2034NamedKeysCliRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2034NamedKeysCliRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-2034 named-keys ratchet may be introduced once and cannot change later.");
   }
 }
 
