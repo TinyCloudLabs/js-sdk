@@ -2748,7 +2748,7 @@ async function refreshPreparedOpenKeySession(params: {
   if (expectedOwner && normalizePkhIdentifier(owner) !== normalizePkhIdentifier(expectedOwner)) {
     throw new CLIError("OPENKEY_OWNER_MISMATCH", "The verified owner differs from this profile. No approval was started.", ExitCode.PERMISSION_DENIED);
   }
-  const namedKeys = options.keys === undefined ? undefined : parseKeysPrefix(options.keys, owner);
+  const namedKeys = options.keys === undefined ? undefined : parseKeysPrefix(options.keys, canonicalOwnerDid(owner));
   if (namedKeys !== undefined) await assertNodeSupportsNamedKeys(host);
   if (options.force !== true) await assertShareHistoryAllowsKeyDrop(profileName, "login");
   const replicationConfig = createCliReplicationConfig(profileName, replication, { debug: false, quiet: true }, true);
@@ -2767,6 +2767,7 @@ async function refreshPreparedOpenKeySession(params: {
   });
   let handoff: PreparedOpenKeyHandoff | undefined;
   let preparedDid: string | undefined;
+  let handedBackSiwe: string | undefined;
   // An unreadable gate counts as active: a failed attempt then never denies it.
   const gateWasActive = await readGateSnapshot(profilePath(profileName))
     .then((gate) => gate !== undefined && gate.principalHash !== null, () => true);
@@ -2778,7 +2779,10 @@ async function refreshPreparedOpenKeySession(params: {
         prepared, openKeyHost: resolveOpenKeyHost(profile),
         noPopup: options.noPopup, paste: options.paste,
       });
-      return handoff.result;
+      return handoff.result.then((result) => {
+        handedBackSiwe = result.signedMessage;
+        return result;
+      });
     });
     const active = node.restorableSession;
     if (!active || !preparedDid || node.sessionDid !== preparedDid || active.verificationMethod !== preparedDid) {
@@ -2831,7 +2835,8 @@ async function refreshPreparedOpenKeySession(params: {
   } catch (error) {
     await handoff?.complete(false);
     await undoPreparedAttempt(profileName, node, owner, gateWasActive).catch(() => undefined);
-    throw namedKeys !== undefined && isNarrowedRecapMismatch(error) ? partialKeysGrantError() : error;
+    throw namedKeys !== undefined && isNarrowedRecapMismatch(error) &&
+      namedKeysGrantIn(handedBackSiwe, namedKeys) === "partial" ? partialKeysGrantError() : error;
   }
 }
 
@@ -2886,7 +2891,7 @@ async function refreshPreparedKeysSession(params: {
     throw new CLIError("OPENKEY_OWNER_MISMATCH", "The verified owner differs from this profile. No approval was started.", ExitCode.PERMISSION_DENIED);
   }
   // Validate the folder and the node before the hand-off opens.
-  const namedKeys = parseKeysPrefix(options.keys!, owner);
+  const namedKeys = parseKeysPrefix(options.keys!, canonicalOwnerDid(owner));
   await assertNodeSupportsNamedKeys(host);
   if (options.force !== true) await assertShareHistoryAllowsKeyDrop(profileName, "login");
   const node = new TinyCloudNode({
@@ -2897,6 +2902,7 @@ async function refreshPreparedKeysSession(params: {
   });
   let handoff: PreparedOpenKeyHandoff | undefined;
   let preparedDid: string | undefined;
+  let handedBackSiwe: string | undefined;
   try {
     process.stderr.write(KEYS_APPROVAL_NOTE(namedKeys.prefix));
     await node.signInWithOpenKey(async (prepared) => {
@@ -2905,7 +2911,10 @@ async function refreshPreparedKeysSession(params: {
         prepared, openKeyHost: resolveOpenKeyHost(profile),
         noPopup: options.noPopup, paste: options.paste,
       });
-      return handoff.result;
+      return handoff.result.then((result) => {
+        handedBackSiwe = result.signedMessage;
+        return result;
+      });
     });
     const active = node.restorableSession;
     if (!active || !preparedDid || node.sessionDid !== preparedDid || active.verificationMethod !== preparedDid) {
@@ -2938,7 +2947,8 @@ async function refreshPreparedKeysSession(params: {
   } catch (error) {
     await handoff?.complete(false);
     await node.replication?.close();
-    throw isNarrowedRecapMismatch(error) ? partialKeysGrantError() : error;
+    throw isNarrowedRecapMismatch(error) &&
+      namedKeysGrantIn(handedBackSiwe, namedKeys) === "partial" ? partialKeysGrantError() : error;
   }
 }
 

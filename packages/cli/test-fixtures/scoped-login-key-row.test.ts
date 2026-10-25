@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { NodeWasmBindings, PrivateKeySigner, type PermissionEntry } from "@tinycloud/node-sdk";
-import { verifyScopedLogin } from "../src/auth/scoped-login.js";
+import { verifyScopedLogin, verifySignedSession } from "../src/auth/scoped-login.js";
 import { withRecapCaveat } from "../src/auth/test-support/recap-caveat.js";
 import { keyAbilitiesFor, parseKeysPrefix, type ProfileNamedKeys } from "../src/lib/named-keys.js";
+import { CLI_NAME } from "@tinycloud/operations/cli-name";
 
 const wasm = new NodeWasmBindings();
 const signer = new PrivateKeySigner("4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d9c5c1b5605dce6f");
@@ -46,6 +47,14 @@ describe("a signed grant carrying the requested named-key folder row", () => {
     expect(paths).toContain("example/");
   });
 
+  test("accepts duplicate identical key actions, and records no key row in approved scope", async () => {
+    const signed = await proof({ [qa.resource]: [CREATE, DECRYPT, CREATE, DECRYPT] });
+    const keyRows = verifySignedSession(signed, key, did).permissions.filter((entry) => entry.path === qa.resource);
+    expect(keyRows.length).toBeGreaterThan(1);
+    const { session } = verifyScopedLogin(signed, key, did, requested, { expectedOwner: ownerDid, namedKeyRow: qa });
+    expect((session.permissions as PermissionEntry[]).some((entry) => entry.path === qa.resource)).toBe(false);
+  });
+
   test("is accepted with the row unticked (absent)", async () => {
     await verify({}, qa);
   });
@@ -75,7 +84,16 @@ describe("a signed grant carrying the requested named-key folder row", () => {
 
   test("is refused for another owner's folder", async () => {
     const other = parseKeysPrefix("qa/", OTHER);
-    await expect(verify(keyAbilitiesFor(other), other)).rejects.toMatchObject({ code: "OPENKEY_SCOPE_MISMATCH" });
+    await expect(verify(keyAbilitiesFor(other), other)).rejects.toMatchObject({
+      code: "OPENKEY_SCOPE_MISMATCH",
+      message: `The key permission in the approval didn't match what was asked for "<folder>/", so this sign-in wasn't saved. Sign in again with \`${CLI_NAME} auth login --keys <folder>\`.`,
+    });
+  });
+
+  test("is refused when the requested folder row spells its owner in lowercase", async () => {
+    const lowercaseResource = qa.resource.replace(address, address.toLowerCase());
+    await expect(verify({ [lowercaseResource]: [CREATE, DECRYPT] }, qa))
+      .rejects.toMatchObject({ code: "OPENKEY_SCOPE_MISMATCH" });
   });
 
   test("is refused for another network name", async () => {

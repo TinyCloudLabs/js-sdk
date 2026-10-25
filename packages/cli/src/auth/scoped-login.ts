@@ -1,5 +1,6 @@
 import { NodeWasmBindings, signedCompactUcanExpiry, type PermissionEntry } from "@tinycloud/node-sdk";
 import { isLocalOwnerProfile, ownerSessionLacksProof } from "@tinycloud/operations/profile";
+import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import type { ProfileConfig } from "../config/types.js";
@@ -463,10 +464,10 @@ export function verifySignedSession(
  * caveats. A partial row is refused; any other row is left for the usual checks.
  */
 function withoutRequestedKeyRow(
-  signed: readonly PermissionEntry[], keys: ProfileNamedKeys, signerDid: string, notStored: string,
+  signed: readonly PermissionEntry[], keys: ProfileNamedKeys, signerDid: string,
 ): PermissionEntry[] {
   const mismatch = (): CLIError => new CLIError("OPENKEY_SCOPE_MISMATCH",
-    `The signed named-key permission differs from the requested folder. ${notStored}`, ExitCode.PERMISSION_DENIED);
+    `The key permission in the approval didn't match what was asked for "<folder>/", so this sign-in wasn't saved. Sign in again with \`${CLI_NAME} auth login --keys <folder>\`.`, ExitCode.PERMISSION_DENIED);
   let expectedResource: string;
   try {
     expectedResource = parseKeysPrefix(keys.prefix, canonicalOwnerDid(signerDid)).resource;
@@ -531,7 +532,7 @@ export function verifyScopedLogin(
   const approved: PermissionEntry[] = [];
   const keyRowRest = expected.namedKeyRow === undefined
     ? signed.permissions
-    : withoutRequestedKeyRow(signed.permissions, expected.namedKeyRow, signed.ownerDid, notStored);
+    : withoutRequestedKeyRow(signed.permissions, expected.namedKeyRow, signed.ownerDid);
   for (const permission of keyRowRest) {
     (isLegacyNestedDecrypt(permission, requested, signed.ownerDid, spaceId) ? legacyNested : approved).push(permission);
   }

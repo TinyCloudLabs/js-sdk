@@ -8,5 +8,5 @@ test("the requested named-key row is verified in an isolated process", async () 
     new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
   ]);
   expect(exitCode, `${stdout}\n${stderr}`).toBe(0);
-  expect(stderr).toContain("14 pass");
+  expect(stderr).toContain("16 pass");
 }, 60_000);
