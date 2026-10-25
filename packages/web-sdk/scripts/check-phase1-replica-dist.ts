@@ -17,6 +17,7 @@ import { validateTc1855ManifestLimitGuardRatchetTransition } from "./replica-siz
 import { validateTc1488SiweDomainUriRatchetTransition } from "./replica-size-policy";
 import { validateTc1737ShortLinkLazyChunkRatchetTransition } from "./replica-size-policy";
 import { validateTc1910SigningConsistencyRatchetTransition } from "./replica-size-policy";
+import { validateTc848SettingsPanelRatchetTransition } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 import { replicaOwnedPath } from "./replica-owned-path";
 import { webSdkTestExitFailure } from "./web-sdk-test-exit";
@@ -403,6 +404,13 @@ if (prBaseSha) {
   if (tc1910SigningConsistency !== undefined && baseLedger.tc1910SigningConsistencyRatchet === undefined &&
       (baseLedger.tc1737ShortLinkLazyChunkRatchet === undefined || !hasAncestor(repoRoot, tc1910SigningConsistency.sourceCommits.at(-1)!))) {
     console.error("The signing-consistency ratchet requires the merged short-link ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc848SettingsPanelRatchetTransition(baseLedger.tc848SettingsPanelRatchet, ledger.tc848SettingsPanelRatchet);
+  const tc848SettingsPanel = ledger.tc848SettingsPanelRatchet;
+  if (tc848SettingsPanel !== undefined && baseLedger.tc848SettingsPanelRatchet === undefined &&
+      (baseLedger.tc1910SigningConsistencyRatchet === undefined || !hasAncestor(repoRoot, tc848SettingsPanel.sourceCommits.at(-1)!))) {
+    console.error("The panel ratchet requires the merged signing-consistency ratchet and its measured source commit.");
     failed = true;
   }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";

@@ -1,9 +1,7 @@
 /**
- * Zod schemas for TinyCloud notification and modal types.
+ * Zod schemas for TinyCloud notification configuration and modal types.
  *
- * These schemas provide runtime validation for toast notifications,
- * notification configuration, and modal types. Types are derived from
- * schemas using z.infer<>.
+ * Types are derived from schemas using z.infer<>.
  *
  * @packageDocumentation
  */
@@ -11,95 +9,19 @@
 import { z } from "zod";
 
 // =============================================================================
-// Toast Types
+// Notification Config
 // =============================================================================
 
 /**
- * Toast notification type.
+ * Notification configuration. Toast placement and visibility are set through
+ * `ui`. `.strict()` rejects the removed `popups`, `position`, `duration`, and
+ * `maxVisible` keys.
  */
-export const ToastTypeSchema = z.enum(["success", "error", "warning", "info", "loading"]);
-export type ToastType = z.infer<typeof ToastTypeSchema>;
-
-/**
- * Toast position on screen.
- */
-export const ToastPositionSchema = z.enum([
-  "top-left",
-  "top-center",
-  "top-right",
-  "bottom-left",
-  "bottom-center",
-  "bottom-right",
-]);
-export type ToastPosition = z.infer<typeof ToastPositionSchema>;
-
-/**
- * Action button for a toast notification.
- */
-export const ToastActionSchema = z.object({
-  label: z.string(),
-  onClick: z.function(),
-});
-export type ToastAction = z.infer<typeof ToastActionSchema>;
-
-/**
- * Toast notification.
- */
-export const ToastSchema = z.object({
-  id: z.string(),
-  type: ToastTypeSchema,
-  title: z.string(),
-  description: z.string().optional(),
-  duration: z.number().optional(),
-  action: ToastActionSchema.optional(),
-  timestamp: z.number(),
-});
-export type Toast = z.infer<typeof ToastSchema>;
-
-/**
- * Toast configuration.
- */
-export const ToastConfigSchema = z.object({
-  position: ToastPositionSchema.optional(),
-  duration: z.number().optional(),
-  maxVisible: z.number().optional(),
-});
-export type ToastConfig = z.infer<typeof ToastConfigSchema>;
-
-/**
- * Notification configuration.
- */
-export const NotificationConfigSchema = z.object({
-  popups: z.boolean().optional(),
-  throwErrors: z.boolean().optional(),
-  position: ToastPositionSchema.optional(),
-  duration: z.number().optional(),
-  maxVisible: z.number().optional(),
-});
-export type NotificationConfig = z.infer<typeof NotificationConfigSchema>;
-
-// =============================================================================
-// SDK Event Types
-// =============================================================================
-
-/**
- * SDK error detail.
- */
-export const SDKErrorDetailSchema = z.object({
-  category: z.string(),
-  message: z.string(),
-  description: z.string().optional(),
-});
-export type SDKErrorDetail = z.infer<typeof SDKErrorDetailSchema>;
-
-/**
- * SDK event detail.
- */
-export const SDKEventDetailSchema = z.object({
-  message: z.string(),
-  description: z.string().optional(),
-});
-export type SDKEventDetail = z.infer<typeof SDKEventDetailSchema>;
+export const NotificationConfigSchema = z
+  .object({
+    throwErrors: z.boolean().optional(),
+  })
+  .strict();
 
 // =============================================================================
 // Modal Types
@@ -148,45 +70,11 @@ export type ValidationResult<T> =
   | { ok: false; error: ValidationError };
 
 /**
- * Validates Toast.
- */
-export function validateToast(data: unknown): ValidationResult<Toast> {
-  const result = ToastSchema.safeParse(data);
-  if (!result.success) {
-    return {
-      ok: false,
-      error: {
-        code: "VALIDATION_ERROR",
-        message: result.error.message,
-        issues: result.error.issues,
-      },
-    };
-  }
-  return { ok: true, data: result.data };
-}
-
-/**
- * Validates ToastConfig.
- */
-export function validateToastConfig(data: unknown): ValidationResult<ToastConfig> {
-  const result = ToastConfigSchema.safeParse(data);
-  if (!result.success) {
-    return {
-      ok: false,
-      error: {
-        code: "VALIDATION_ERROR",
-        message: result.error.message,
-        issues: result.error.issues,
-      },
-    };
-  }
-  return { ok: true, data: result.data };
-}
-
-/**
  * Validates NotificationConfig.
  */
-export function validateNotificationConfig(data: unknown): ValidationResult<NotificationConfig> {
+export function validateNotificationConfig(
+  data: unknown
+): ValidationResult<z.infer<typeof NotificationConfigSchema>> {
   const result = NotificationConfigSchema.safeParse(data);
   if (!result.success) {
     return {
@@ -226,24 +114,6 @@ export function validateSpaceCreationModalOptions(
  */
 export function validateSpaceCreationResult(data: unknown): ValidationResult<SpaceCreationResult> {
   const result = SpaceCreationResultSchema.safeParse(data);
-  if (!result.success) {
-    return {
-      ok: false,
-      error: {
-        code: "VALIDATION_ERROR",
-        message: result.error.message,
-        issues: result.error.issues,
-      },
-    };
-  }
-  return { ok: true, data: result.data };
-}
-
-/**
- * Validates SDKErrorDetail.
- */
-export function validateSDKErrorDetail(data: unknown): ValidationResult<SDKErrorDetail> {
-  const result = SDKErrorDetailSchema.safeParse(data);
   if (!result.success) {
     return {
       ok: false,

@@ -1,4 +1,6 @@
 import { debug } from "../utils/debug";
+import { acquireScrollLock } from "./scrollLock";
+import { deepActiveElement, focusableControls, isTopmostControl, nextTabIndex, restoreFocusTo } from './dialogFocus';
 
 export interface SpaceCreationModalOptions {
   onCreateSpace: () => Promise<void>;
@@ -13,6 +15,8 @@ export interface SpaceCreationResult {
 export class TinyCloudSpaceModal extends HTMLElement {
   private options: SpaceCreationModalOptions;
   private isVisible: boolean = false;
+  private releaseScrollLock: (() => void) | null = null;
+  private opener: HTMLElement | null = null;
   private isCreating: boolean = false;
   private resolveResult: ((result: SpaceCreationResult) => void) | null = null;
   private completionPromise: Promise<SpaceCreationResult>;
@@ -43,7 +47,8 @@ export class TinyCloudSpaceModal extends HTMLElement {
     // confirmation times out), not just via hide(), so all document-level
     // state has to be released here too.
     this.isVisible = false;
-    document.body.style.overflow = '';
+    this.restoreFocus();
+    this.releaseLock();
     document.removeEventListener('keydown', this.handleKeyDown);
   }
 
@@ -51,7 +56,7 @@ export class TinyCloudSpaceModal extends HTMLElement {
     this.shadowRoot!.innerHTML = `
       <style>${this.getModalStyles()}</style>
       <div class="modal-backdrop" data-state="hidden">
-        <div class="modal-container">
+        <div class="modal-container" role="dialog" aria-modal="true" aria-labelledby="tc-space-title" aria-describedby="tc-space-description" tabindex="-1">
           <div class="modal-content">
             <div class="modal-header">
               <div class="modal-icon">
@@ -60,7 +65,7 @@ export class TinyCloudSpaceModal extends HTMLElement {
                   <path d="M8 12l2 2 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
               </div>
-              <h2 class="modal-title">Create Your TinyCloud Space</h2>
+              <h2 class="modal-title" id="tc-space-title">Create Your TinyCloud Space</h2>
               <button class="modal-close" aria-label="Close">
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
                   <path d="M1 1L13 13M13 1L1 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
@@ -69,7 +74,7 @@ export class TinyCloudSpaceModal extends HTMLElement {
             </div>
 
             <div class="modal-body">
-              <p class="modal-description">
+              <p class="modal-description" id="tc-space-description">
                 A TinyCloud Space is your personal data container where only you control access.
                 Your signature is required for any operations on the data stored there.
               </p>
@@ -125,8 +130,9 @@ export class TinyCloudSpaceModal extends HTMLElement {
         -webkit-backdrop-filter: blur(8px);
         z-index: 2000000;
         display: flex;
-        align-items: center;
+        align-items: flex-start;
         justify-content: center;
+        overflow-y: auto;
         padding: 20px;
         opacity: 0;
         transition: opacity 0.2s cubic-bezier(0.4, 0, 0.2, 1);
@@ -139,6 +145,7 @@ export class TinyCloudSpaceModal extends HTMLElement {
       }
 
       .modal-container {
+        margin: auto;
         transform: scale(0.95) translateY(10px);
         transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
       }
@@ -154,8 +161,10 @@ export class TinyCloudSpaceModal extends HTMLElement {
         box-shadow:
           0 25px 50px -12px rgba(0, 0, 0, 0.25),
           0 0 0 1px rgba(255, 255, 255, 0.05);
+        box-sizing: border-box;
         max-width: 480px;
         width: 100%;
+        overflow-wrap: anywhere;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
         color: var(--modal-foreground);
       }
@@ -183,6 +192,7 @@ export class TinyCloudSpaceModal extends HTMLElement {
 
       .modal-title {
         flex: 1;
+        min-width: 0;
         font-size: 20px;
         font-weight: 600;
         line-height: 1.3;
@@ -328,6 +338,7 @@ export class TinyCloudSpaceModal extends HTMLElement {
           width: 100%;
         }
       }
+      .modal-container:focus { outline: none; }
     `;
   }
 
@@ -354,7 +365,9 @@ export class TinyCloudSpaceModal extends HTMLElement {
     });
 
     createButton?.addEventListener('click', () => {
-      if (!this.isCreating) {
+      // Create acts only when it is the topmost element at its centre; an overlay
+      // covering it blocks the click and the keyboard Enter/Space that clicks it.
+      if (!this.isCreating && createButton && isTopmostControl(createButton)) {
         this.handleCreateSpace();
       }
     });
@@ -366,10 +379,25 @@ export class TinyCloudSpaceModal extends HTMLElement {
   }
 
   private handleKeyDown = (e: KeyboardEvent) => {
-    if (e.key === 'Escape' && this.isVisible && !this.isCreating) {
+    if (!this.isVisible) return;
+    if (e.key === 'Escape' && !this.isCreating) {
       this.dismiss();
+    } else if (e.key === 'Tab') {
+      this.trapTab(e);
     }
   };
+
+  // Keeps Tab and Shift+Tab on this dialog's enabled controls. Tabs that start
+  // outside the dialog (for example from an overlay above it) are left to the browser.
+  private trapTab(e: KeyboardEvent): void {
+    if (!e.composedPath().includes(this)) return;
+    const root = this.shadowRoot!;
+    const controls = focusableControls(root);
+    const current = controls.indexOf(root.activeElement as HTMLElement);
+    e.preventDefault();
+    const next = nextTabIndex(controls.length, current, e.shiftKey);
+    if (next >= 0) controls[next].focus();
+  }
 
   private async handleCreateSpace(): Promise<void> {
     this.isCreating = true;
@@ -394,8 +422,11 @@ export class TinyCloudSpaceModal extends HTMLElement {
   }
 
   private show(): void {
+    if (!this.isVisible) this.opener = deepActiveElement();
     this.isVisible = true;
-    document.body.style.overflow = 'hidden';
+    if (!this.releaseScrollLock) this.releaseScrollLock = acquireScrollLock();
+    // Focus the dialog container, never Create: Enter must not start creation.
+    (this.shadowRoot!.querySelector('.modal-container') as HTMLElement).focus();
 
     requestAnimationFrame(() => {
       const backdrop = this.shadowRoot!.querySelector('.modal-backdrop');
@@ -406,21 +437,43 @@ export class TinyCloudSpaceModal extends HTMLElement {
   private hide(): void {
     const backdrop = this.shadowRoot!.querySelector('.modal-backdrop');
     backdrop?.setAttribute('data-state', 'hidden');
+    this.restoreFocus();
 
     setTimeout(() => {
       this.remove();
-      document.body.style.overflow = '';
+      this.releaseLock();
       document.removeEventListener('keydown', this.handleKeyDown);
     }, 200);
 
     this.isVisible = false;
   }
 
-  private dismiss(): void {
-    this.resolveResult?.({ success: false, dismissed: true });
-    this.options.onDismiss?.();
-    this.hide();
+  private restoreFocus(): void {
+    const opener = this.opener;
+    this.opener = null;
+    restoreFocusTo(opener, this.shadowRoot!);
+  }
+
+  private releaseLock(): void {
+    this.releaseScrollLock?.();
+    this.releaseScrollLock = null;
+  }
+
+  dismiss(): void {
+    try {
+      this.resolveResult?.({ success: false, dismissed: true });
+      this.options.onDismiss?.();
+    } finally {
+      this.hide();
+    }
+  }
+
+  /** True until the prompt starts closing (confirm, dismiss, or teardown). */
+  get isOpen(): boolean {
+    return this.isVisible;
   }
 }
 
-customElements.define('tinycloud-space-modal', TinyCloudSpaceModal);
+if (!customElements.get('tinycloud-space-modal')) {
+  customElements.define('tinycloud-space-modal', TinyCloudSpaceModal);
+}

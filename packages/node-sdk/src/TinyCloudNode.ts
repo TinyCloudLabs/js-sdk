@@ -1488,21 +1488,47 @@ export class TinyCloudNode {
    * and remembers whose storage is full so sign-in and listing skip their
    * best-effort writes. Lives as long as this instance, across sign-ins.
    */
-  private readonly storageFull = new StorageFullMonitor((spaceId) => spaceOwnerKey(spaceId) ?? spaceId);
+  private readonly storageFull = new StorageFullMonitor(
+    (spaceId) => spaceOwnerKey(spaceId) ?? spaceId,
+    () => this.currentStorageOwner(),
+  );
 
   /**
-   * Subscribe to `storage.full`. It fires once, on the first write any
-   * service had rejected because the owner's TinyCloud storage is full
+   * Subscribe to `storage.full`. It fires on the first write any service had
+   * rejected because the owner's TinyCloud storage is full
    * (`STORAGE_QUOTA_EXCEEDED` or `STORAGE_LIMIT_REACHED`), so an app can show
-   * one read-only banner. Reads keep working. It fires again only after
-   * `storage.status()` has reported space again for every owner whose write
-   * was rejected. Returns the unsubscribe function.
+   * one read-only banner. Reads keep working. For the signed-in account's own
+   * storage it fires once per episode: the episode ends only when a write to
+   * that storage succeeds, or on sign-out. A `storage.status()` read does not
+   * end it. A rejection on another owner's delegated space fires once per
+   * owner, until that owner's `storage.status()` reports space again. Returns
+   * the unsubscribe function.
    */
   on(event: "storage.full", handler: (event: StorageFullEvent) => void): () => void {
     if (event !== "storage.full") {
       throw new Error(`Unknown TinyCloud event: ${String(event)}`);
     }
     return this.storageFull.on(handler);
+  }
+
+  /**
+   * Storage episode state for the UI mount. @internal
+   *
+   * `current()` returns the own-storage rejection that started the episode, or
+   * undefined. `subscribe` calls its listener when the own episode starts or
+   * ends; read `current()` inside it. `subscribeDelegated` calls its listener
+   * once per delegated owner found full, until that owner is cleared.
+   */
+  get storageEpisode(): {
+    current(): StorageFullEvent | undefined;
+    subscribe(listener: () => void): () => void;
+    subscribeDelegated(listener: () => void): () => void;
+  } {
+    return {
+      current: () => this.storageFull.rejection,
+      subscribe: (listener) => this.storageFull.onEpisode(listener),
+      subscribeDelegated: (listener) => this.storageFull.onDelegated(listener),
+    };
   }
 
   /** Owner key of the account the current session's own storage belongs to. */
@@ -1590,8 +1616,8 @@ export class TinyCloudNode {
           { meta: { status: response.status } },
         ));
       }
-      // Room again on this space's owner: let read paths register and repair,
-      // and let the next rejection announce itself. Other owners stay full.
+      // Room again on this space's owner: best-effort writes resume there. The
+      // storage.full episode is not ended here; only a successful write ends it.
       if (status.state !== "full") {
         this.storageFull.clearFor(spaceId);
         // A rejection whose space was unknown counted against the signed-in account.

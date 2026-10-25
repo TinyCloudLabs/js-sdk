@@ -288,6 +288,11 @@ export type Tc1737ShortLinkLazyChunkRatchet = HardeningRatchet;
  * index.cjs bytes. Same shape as the #565 hardening row; the other ceilings are carried unchanged.
  */
 export type Tc1910SigningConsistencyRatchet = HardeningRatchet;
+/**
+ * One reviewed exact-byte row (js-sdk #731, TC-848): the settings panel launcher, host and toasts raised the root
+ * bytes. Same shape as the #565 hardening row; the worker, first-import and activation ceilings are carried unchanged.
+ */
+export type Tc848SettingsPanelRatchet = HardeningRatchet;
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -327,6 +332,7 @@ export type Ledger = {
   tc1488SiweDomainUriRatchet?: Tc1488SiweDomainUriRatchet;
   tc1737ShortLinkLazyChunkRatchet?: Tc1737ShortLinkLazyChunkRatchet;
   tc1910SigningConsistencyRatchet?: Tc1910SigningConsistencyRatchet;
+  tc848SettingsPanelRatchet?: Tc848SettingsPanelRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -896,6 +902,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc1488SiweDomainUriRatchet !== undefined) pins.push({ row: "tc1488SiweDomainUriRatchet", pin: root.tc1488SiweDomainUriRatchet.sourceCommits.at(-1)! });
   if (root.tc1737ShortLinkLazyChunkRatchet !== undefined) pins.push({ row: "tc1737ShortLinkLazyChunkRatchet", pin: root.tc1737ShortLinkLazyChunkRatchet.sourceCommits.at(-1)! });
   if (root.tc1910SigningConsistencyRatchet !== undefined) pins.push({ row: "tc1910SigningConsistencyRatchet", pin: root.tc1910SigningConsistencyRatchet.sourceCommits.at(-1)! });
+  if (root.tc848SettingsPanelRatchet !== undefined) pins.push({ row: "tc848SettingsPanelRatchet", pin: root.tc848SettingsPanelRatchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -941,6 +948,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc1488SiweDomainUriRatchet", root.tc1488SiweDomainUriRatchet?.root.ceiling],
     ["tc1737ShortLinkLazyChunkRatchet", root.tc1737ShortLinkLazyChunkRatchet?.root.ceiling],
     ["tc1910SigningConsistencyRatchet", root.tc1910SigningConsistencyRatchet?.root.ceiling],
+    ["tc848SettingsPanelRatchet", root.tc848SettingsPanelRatchet?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -1624,6 +1632,41 @@ export const approvedTc1910SigningConsistencyRatchet: Tc1910SigningConsistencyRa
   reason: "signing-consistency fix plus the approved recovery hint; smallest version that keeps every existing test; index.mjs measured 1,462,173 (ceiling carried)",
 };
 
+/**
+ * Settings panel launcher, host and toasts (js-sdk #731, TC-848), approved by Naomi: the root index.mjs ceiling goes from
+ * 1,462,509 to 1,464,178 (+1669) and index.cjs from 1,405,179 to 1,406,007 (+828), the bytes canonical CI printed on the
+ * #731 head 5d8535af (run 40220911012). The worker, first-import and activation ceilings are carried unchanged.
+ */
+export const approvedTc848SettingsPanelRatchet: Tc848SettingsPanelRatchet = {
+  label: "settings panel launcher, host and toasts (TC-848, #731): root index.mjs +1669 B, index.cjs +828 B gzip",
+  ruling: "Approved by Naomi (exact CI bytes of run 40220911012 on 5d8535af; first import, activation and worker carried)",
+  base: "b90a608ea0b079073845e0a0995f0c55e529d3af",
+  sourceCommits: [
+    "5d8535af1444d636029eb0733229006c2249b444",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40220911012",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40220911012/job/121252076932",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40220911012/job/121252076746",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 1669, "index.cjs": 828 },
+    ceiling: { "index.mjs": 1464178, "index.cjs": 1406007 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 51925, "replica.cjs": 67141 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23117, "activation.cjs": 24700 },
+  },
+  worker: { delta: 0, ceiling: 776128 },
+  reason: "panel eager launcher, host and toasts; both figures include gzip alignment against the inline wasm payload (TC-1985).",
+};
+
 export type GatedOnlyRatchet = {
   label: string;
   sourceCommit: string;
@@ -1691,6 +1734,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc1488SiweDomainUriRatchet: approvedTc1488SiweDomainUriRatchet,
   tc1737ShortLinkLazyChunkRatchet: approvedTc1737ShortLinkLazyChunkRatchet,
   tc1910SigningConsistencyRatchet: approvedTc1910SigningConsistencyRatchet,
+  tc848SettingsPanelRatchet: approvedTc848SettingsPanelRatchet,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -1880,6 +1924,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc1737ShortLinkLazyChunkRatchet || JSON.stringify(value.tc1910SigningConsistencyRatchet) !== JSON.stringify(approvedTc1910SigningConsistencyRatchet))) {
     throw new Error("Only Naomi's exact canonical signing-consistency ratchet is approved.");
   }
+  if (value.tc848SettingsPanelRatchet !== undefined &&
+      (!value.tc1910SigningConsistencyRatchet || JSON.stringify(value.tc848SettingsPanelRatchet) !== JSON.stringify(approvedTc848SettingsPanelRatchet))) {
+    throw new Error("Only Naomi's exact canonical panel ratchet is approved.");
+  }
 }
 
 /** The #606 worker ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
@@ -2031,6 +2079,14 @@ export function validateTc1910SigningConsistencyRatchetTransition(base?: Tc1910S
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1910SigningConsistencyRatchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact TC-1910 signing-consistency ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-848 settings panel ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc848SettingsPanelRatchetTransition(base?: Tc848SettingsPanelRatchet, current?: Tc848SettingsPanelRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc848SettingsPanelRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-848 settings panel ratchet may be introduced once and cannot change later.");
   }
 }
 

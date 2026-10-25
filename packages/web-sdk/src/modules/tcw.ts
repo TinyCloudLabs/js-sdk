@@ -80,7 +80,8 @@ import {
   type StorageFullEvent,
   type IStorageService,
 } from "@tinycloud/sdk-core";
-import { showPermissionRequestModal } from "../notifications/ModalManager";
+import { showPermissionRequestModal } from "../notifications/lazy-prompts";
+import { applyLegacyNotificationKeys } from "../notifications/legacy-config";
 import {
   requestPermissionsCore,
   validateAdditionalPermissions,
@@ -102,6 +103,8 @@ import {
 
 import { BrowserWalletSigner } from "../adapters/BrowserWalletSigner";
 import { BrowserNotificationHandler } from "../adapters/BrowserNotificationHandler";
+import { registerUiClient, type TinyCloudUI, type UiClientHandle, type UiConfig } from "../ui";
+import type { ToastSink } from "../ui/toast-store";
 import { BrowserWasmBindings } from "../adapters/BrowserWasmBindings";
 import { BrowserENSResolver } from "../adapters/BrowserENSResolver";
 import {
@@ -131,7 +134,7 @@ declare global {
  * Extends ClientConfig with browser-specific options.
  */
 export interface Config extends ClientConfig {
-  /** Notification configuration for error popups and toasts */
+  /** Notifications. `throwErrors` rethrows each error's raw message asynchronously, once per burst of identical errors (200 ms window). It applies unless `ui: false` or `ui.toasts: false`, which turn off toasts and throws together, as the old `popups: false` did; `ui.button: false` leaves throws on. Toast placement and visibility are set through `ui`. */
   notifications?: NotificationConfig;
 
   /** Optional prefix for KV service keys */
@@ -250,6 +253,8 @@ export interface Config extends ClientConfig {
   retryPolicy?: Partial<RetryPolicy>;
   /** Accountless share receiver transport and session-custody configuration. */
   shareReceiver?: ShareReceiverServiceOptions;
+  /** Floating button, panel, and toasts. `false` creates no host, button, toasts, or listeners. See {@link UiConfig}. */
+  ui?: UiConfig | false;
 }
 
 /**
@@ -348,6 +353,30 @@ export class TinyCloudWeb {
 
   /** Underlying TinyCloudNode (created after WASM init) */
   private _node: TinyCloudNode | null = null;
+  private readonly uiClient: UiClientHandle;
+  /** Listeners for the own-storage episode, forwarded from the current node. */
+  private readonly storageEpisodeListeners = new Set<() => void>();
+  /** Listeners for a delegated owner's storage being found full, forwarded from the current node. */
+  private readonly delegatedStorageListeners = new Set<() => void>();
+  /** The episode the UI reads. Lazy: the node is created after UI registration. */
+  private readonly uiStorageEpisode = {
+    current: () => this._node?.storageEpisode.current(),
+    subscribe: (listener: () => void) => {
+      this.storageEpisodeListeners.add(listener);
+      return () => {
+        this.storageEpisodeListeners.delete(listener);
+      };
+    },
+    subscribeDelegated: (listener: () => void) => {
+      this.delegatedStorageListeners.add(listener);
+      return () => {
+        this.delegatedStorageListeners.delete(listener);
+      };
+    },
+  };
+
+  /** Shows a toast in this instance's host. Returns false when nothing was shown. */
+  private readonly showToast: ToastSink = (request) => this.uiClient.toast(request);
 
   /** Browser notification handler */
   private notificationHandler: BrowserNotificationHandler;
@@ -416,14 +445,36 @@ export class TinyCloudWeb {
     ) => Promise<readonly PortableDelegation[] | void>;
   };
 
-  constructor(config: Config = {}) {
+  constructor(callerConfig: Config = {}) {
+    const config = applyLegacyNotificationKeys(callerConfig);
     validateReplicationConfig(config);
     this.config = config;
     this._manifest = config.manifest;
     this._capabilityRequest = config.capabilityRequest;
 
+    this.uiClient = registerUiClient({
+      ui: config.ui,
+      source: {
+        signedIn: () => this.session() !== undefined,
+        waitForAccountRegistrySync: () => this._node?.waitForAccountRegistrySync() ?? Promise.resolve(),
+        storage: { status: () => this.storage.status() },
+        storageEpisode: this.uiStorageEpisode,
+        signOut: this.signOut,
+      },
+      manifestAppId: () => {
+        const manifest = this._manifest;
+        const fromManifest = (Array.isArray(manifest) ? manifest[0] : manifest)?.app_id;
+        return fromManifest ?? this._capabilityRequest?.manifests[0]?.app_id;
+      },
+      manifestName: () => ((Array.isArray(this._manifest) ? this._manifest[0] : this._manifest) ?? this._capabilityRequest?.manifests[0])?.name,
+    });
+
     // Initialize browser notification handler
-    this.notificationHandler = new BrowserNotificationHandler(config.notifications);
+    // With `notifications.throwErrors`, error events rethrow even when no toast is shown.
+    this.notificationHandler = new BrowserNotificationHandler(
+      this.showToast,
+      this.config.notifications?.throwErrors === true && this.config.ui !== false && this.config.ui?.toasts !== false,
+    );
 
     // Create browser WASM bindings
     this.wasmBindings = new BrowserWasmBindings();
@@ -512,7 +563,7 @@ export class TinyCloudWeb {
     // explicit handler precedence over `autoCreateSpace`, so always setting one
     // made `autoCreateSpace` dead config in the browser and forced every app
     // through a dialog it may have opted out of.
-    nodeConfig.spaceCreationHandler = resolveSpaceCreationHandler(this.config);
+    nodeConfig.spaceCreationHandler = resolveSpaceCreationHandler({ ...this.config, toast: this.showToast, promptScope: this.uiClient.promptScope });
 
     this._node = new TinyCloudNode(nodeConfig);
     this._node.on("storage.full", (event) => {
@@ -521,6 +572,24 @@ export class TinyCloudWeb {
           handler(event);
         } catch (error) {
           console.error('Error in "storage.full" handler:', error);
+        }
+      }
+    });
+    this._node.storageEpisode.subscribe(() => {
+      for (const listener of [...this.storageEpisodeListeners]) {
+        try {
+          listener();
+        } catch (error) {
+          console.error("Error in storage episode listener:", error);
+        }
+      }
+    });
+    this._node.storageEpisode.subscribeDelegated(() => {
+      for (const listener of [...this.delegatedStorageListeners]) {
+        try {
+          listener();
+        } catch (error) {
+          console.error("Error in delegated storage listener:", error);
         }
       }
     });
@@ -592,6 +661,9 @@ export class TinyCloudWeb {
 
   /** The owner's TinyCloud storage; `storage.status()` reads usage and plan from the node. */
   get storage(): IStorageService { return this.node.storage; }
+
+  /** Browser UI API: `open`, `close`, `toggle`, `isOpen`, and `available`. Inert when `ui: false` or the page cannot render UI. */
+  get ui(): TinyCloudUI { return this.uiClient.api; }
 
   /** Space-scoped SQL service for a non-primary space (e.g. the owner's `applications` space). */
   sqlForSpace(spaceId: string): ISQLService { return this.node.sqlForSpace(spaceId); }
@@ -796,9 +868,16 @@ export class TinyCloudWeb {
       }
       const node = await this.ensureNode();
       assertNotSignedOut();
-      await node.restoreSession(restoreDataFromPersisted(loaded.data));
+      const was = node.spaceId;
+      try {
+        await node.restoreSession(restoreDataFromPersisted(loaded.data));
+      } finally {
+        // Also when a later step throws after the node committed the new account. A sign-out resets itself.
+        if (was && was !== node.spaceId && this.signOutCount === signOuts && !this.signOutInFlight) this.uiClient.reset();
+      }
       assertNotSignedOut();
       this.resetSessionScopedCaches();
+      this.uiClient.armPrefetch(this);
       this._sessionRestoreStatus = "restored";
       return {
         status: "restored",
@@ -889,9 +968,15 @@ export class TinyCloudWeb {
     // A sign-out during the restore must not fall through to a fresh sign-in.
     assertNotSignedOut();
     this._sessionRestoreStatus = "logging-in";
-    await node.signIn(options);
+    const was = node.spaceId;
+    try {
+      await node.signIn(options);
+    } finally {
+      if (was && was !== node.spaceId && this.signOutCount === signOuts && !this.signOutInFlight) this.uiClient.reset();
+    }
     assertNotSignedOut();
     this.resetSessionScopedCaches();
+    this.uiClient.armPrefetch(this);
     const session = node.session;
     if (!session) throw new Error("Sign-in completed but no session available");
     // Explicit logout never permits an older tab's persisted proof to satisfy the next sign-in.
@@ -930,7 +1015,7 @@ export class TinyCloudWeb {
         this._credentialsService = undefined;
         this._shareReceiverService = undefined;
         this._sessionRestoreStatus = "idle";
-        this.notificationHandler.cleanup?.();
+        this.uiClient.reset();
         const address = liveAddress ?? await this.resolveRestoreAddress().catch(() => undefined);
         if (address) await this.clearPersistedSession(address);
         for (const pendingAddress of pendingAddresses ?? []) {
@@ -1026,7 +1111,8 @@ export class TinyCloudWeb {
   }
 
   cleanup(): void {
-    this.notificationHandler.cleanup?.();
+    this.uiClient.unregister();
+    this.notificationHandler.cancelPendingThrows();
   }
 
   connectWallet(
@@ -1227,7 +1313,7 @@ export class TinyCloudWeb {
 
     const result = await requestPermissionsCore(additional, {
       manifest,
-      showModal: this._testHooks?.showModal ?? showPermissionRequestModal,
+      showModal: this._testHooks?.showModal ?? ((options) => showPermissionRequestModal(options, this.uiClient.promptScope)),
       isPromptSuppressed: () => isPermissionPromptSuppressed(manifest),
       suppressPromptFor30Days: () =>
         suppressPermissionPromptFor30Days(manifest),
