@@ -40,6 +40,7 @@
     "tc1737-links-web-sdk",
     "tc1910-invocation-signing",
     "tc2014-replica-sdk-services-pin",
+    "tc2031-revoke-not-ended",
     "tc848-settings-panel"
   ]
 }

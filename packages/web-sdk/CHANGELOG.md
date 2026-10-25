@@ -1,5 +1,13 @@
 # @tinycloudlabs/web-sdk
 
+## 3.7.0-beta.5
+
+### Patch Changes
+
+- 0deb6e1: Revoking a grant now asks the node to revoke it when its status cannot be read, instead of reporting it as already ended.
+
+  Details: TC-2031
+
 ## 3.7.0-beta.4
 
 ### Patch Changes
