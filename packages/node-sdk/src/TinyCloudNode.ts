@@ -949,6 +949,8 @@ export interface TinyCloudNodeConfig {
    * the same cross-process profile lock as SQLite and pending writes. Browser storage uses
    * its mandatory origin Web Lock instead. Missing guards gate the replica, not the session.
    */
+  /** Extra top-level resource URIs and their abilities added to the sign-in ReCap (e.g. named-key prefixes). */
+  additionalRawAbilities?: Record<string, string[]>;
   replication?: ReplicationOptions & {
     storage: KVReplicaStorage;
     mode?: "background" | "foreground";
@@ -1947,6 +1949,7 @@ export class TinyCloudNode {
       signStrategy: config.signStrategy ?? { type: "auto-sign" },
       wasmBindings: this.wasmBindings,
       ...(config.replication?.enabled === true ? { establishReplicaStamp: this.establishReplicaStamp } : {}),
+      ...(config.additionalRawAbilities === undefined ? {} : { additionalRawAbilities: config.additionalRawAbilities }),
       sessionManager: this.sessionManager,
       sessionStorage: config.sessionStorage ?? new MemorySessionStorage(),
       domain: this.siweDomain,

@@ -85,6 +85,8 @@ export async function localKeySignIn(options: {
   host: string;
   profile?: string;
   replication?: ProfileReplicationSettings;
+  /** Extra top-level resource abilities for the sign-in ReCap (named-key prefix grants). */
+  keyAbilities?: Record<string, string[]>;
 }): Promise<{
   spaceId: string;
   address: string;
@@ -110,6 +112,7 @@ export async function localKeySignIn(options: {
     privateKey: options.privateKey,
     host: options.host,
     autoCreateSpace: true,
+    ...(options.keyAbilities ? { additionalRawAbilities: options.keyAbilities } : {}),
     ...(replication ? { replication } : {}),
   });
 

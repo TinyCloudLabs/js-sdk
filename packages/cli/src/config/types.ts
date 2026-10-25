@@ -103,6 +103,8 @@ export interface ProfileConfig {
    * re-pin (e.g. after intentionally re-keying a local node).
    */
   pinnedLocalNodeDids?: Record<string, string>;
+  /** Named-key prefix the current session was signed for (`auth login --keys`). Unsigned metadata: never authority. */
+  namedKeys?: { prefix: string; resource: string };
   /** Prefixes explicitly opted into the read-through replication flag at login. */
   replication?: { prefixes: string[]; allowSecrets?: boolean };
 }

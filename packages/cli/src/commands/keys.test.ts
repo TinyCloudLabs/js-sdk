@@ -1,0 +1,179 @@
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { Command } from "commander";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+
+const OWNER = "did:pkh:eip155:1:0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed";
+const NETWORK_ID = `urn:tinycloud:encryption:${OWNER}:default`;
+
+const actualErrors = await import("../output/errors.js");
+
+const state = {
+  profile: { namedKeys: { prefix: "qa", resource: `${NETWORK_ID}/qa/` } as unknown, ownerDid: OWNER } as Record<string, unknown>,
+  errors: [] as any[],
+  outputs: [] as unknown[],
+  stdout: [] as Uint8Array[],
+  authCalls: 0,
+  clientCalls: [] as string[],
+  failWith: undefined as undefined | { code: string; status?: number },
+};
+
+class StubNamedKeyError extends Error {
+  constructor(public code: string, message: string, public status?: number) { super(message); }
+}
+
+// A stand-in client: the envelope is a reversible xor of the plaintext, so the CLI's
+// own file and stdout handling is what the round trip exercises.
+const xor = (bytes: Uint8Array) => bytes.map((b) => b ^ 0x5a);
+const stubClient = {
+  ensureKey: async (path: string) => {
+    state.clientCalls.push(`ensure ${path}`);
+    if (state.failWith) throw new StubNamedKeyError(state.failWith.code, "failed", state.failWith.status);
+    return { networkId: NETWORK_ID, keyPath: path, alg: "a", keyVersion: 1, publicEncryptionKey: "AA==", state: "active", kind: "deterministic" };
+  },
+  encrypt: async (path: string, plaintext: Uint8Array) => {
+    state.clientCalls.push(`encrypt ${path}`);
+    return { v: 2, networkId: NETWORK_ID, keyPath: path, alg: "a", keyVersion: 1, encryptedSymmetricKey: "AA==", encryptedSymmetricKeyHash: "00", ciphertext: Buffer.from(xor(plaintext)).toString("base64") };
+  },
+  decrypt: async (envelope: { keyPath: string; ciphertext: string }) => {
+    state.clientCalls.push(`decrypt ${envelope.keyPath}`);
+    if (state.failWith) throw new StubNamedKeyError(state.failWith.code, "failed", state.failWith.status);
+    return xor(Buffer.from(envelope.ciphertext, "base64"));
+  },
+};
+
+mock.module("../config/profiles.js", () => ({
+  ProfileManager: {
+    resolveContext: async () => ({ profile: "keys-test", host: "https://host" }),
+    getProfile: async () => state.profile,
+  },
+}));
+mock.module("../lib/sdk.js", () => ({
+  ensureAuthenticated: async () => { state.authCalls += 1; return {}; },
+}));
+mock.module("@tinycloud/node-sdk/encryption-keys", () => ({
+  NamedKeyError: StubNamedKeyError,
+  createNamedKeyClient: () => stubClient,
+}));
+mock.module("../output/formatter.js", () => ({
+  outputJson: (payload: unknown) => { state.outputs.push(payload); },
+  withSpinner: async (_message: string, fn: () => unknown) => await fn(),
+  shouldOutputJson: () => true,
+}));
+mock.module("../output/errors.js", () => ({
+  ...actualErrors,
+  handleError: (error: unknown) => { state.errors.push(error); },
+}));
+
+const { registerKeysCommand } = await import("./keys.js");
+
+async function runKeys(args: string[]): Promise<void> {
+  const program = new Command();
+  registerKeysCommand(program);
+  await program.parseAsync(["node", "tc", "keys", ...args], { from: "node" });
+}
+
+let dir: string;
+const realStdoutWrite = process.stdout.write;
+afterEach(() => { process.stdout.write = realStdoutWrite; });
+beforeEach(async () => {
+  state.profile = { namedKeys: { prefix: "qa", resource: `${NETWORK_ID}/qa/` }, ownerDid: OWNER };
+  state.errors = []; state.outputs = []; state.stdout = []; state.authCalls = 0; state.clientCalls = []; state.failWith = undefined;
+  if (dir) await rm(dir, { recursive: true, force: true });
+  dir = await mkdtemp("/var/tmp/tc2034-keys-unit-");
+  process.stdout.write = ((chunk: unknown) => {
+    state.stdout.push(typeof chunk === "string" ? new TextEncoder().encode(chunk) : (chunk as Uint8Array));
+    return true;
+  }) as typeof process.stdout.write;
+});
+
+describe("tc keys", () => {
+  test("ensure reports the key", async () => {
+    await runKeys(["ensure", "qa/k1"]);
+    expect(state.errors).toEqual([]);
+    expect(state.outputs).toEqual([expect.objectContaining({ keyPath: "qa/k1", state: "active", kind: "deterministic" })]);
+  });
+
+  test("encrypt then decrypt round trip through files returns the original bytes", async () => {
+    const plain = join(dir, "plain.bin");
+    const envelope = join(dir, "env.json");
+    const out = join(dir, "out.bin");
+    const bytes = Uint8Array.from([0, 255, 1, 128, 7, 200]);
+    await writeFile(plain, bytes);
+
+    await runKeys(["encrypt", "qa/k1", "--in", plain, "--out", envelope]);
+    expect(state.errors).toEqual([]);
+    expect(JSON.parse(await readFile(envelope, "utf8"))).toMatchObject({ v: 2, keyPath: "qa/k1", networkId: NETWORK_ID });
+
+    await runKeys(["decrypt", "--in", envelope, "--out", out]);
+    expect(state.errors).toEqual([]);
+    expect(new Uint8Array(await readFile(out))).toEqual(bytes);
+  });
+
+  test("encrypt writes the envelope JSON to stdout and decrypt writes raw bytes to stdout", async () => {
+    const plain = join(dir, "plain.bin");
+    const envelope = join(dir, "env.json");
+    const bytes = Uint8Array.from([9, 0, 255]);
+    await writeFile(plain, bytes);
+
+    await runKeys(["encrypt", "qa/k1", "--in", plain]);
+    const json = Buffer.concat(state.stdout).toString("utf8");
+    expect(JSON.parse(json).keyPath).toBe("qa/k1");
+    await writeFile(envelope, json);
+
+    state.stdout = [];
+    await runKeys(["decrypt", "--in", envelope]);
+    expect(new Uint8Array(Buffer.concat(state.stdout))).toEqual(bytes);
+  });
+
+  test.each([["qa", "the prefix itself"], ["qax/k", "a sibling prefix"], ["other/k", "another prefix"]])(
+    "ensure and encrypt refuse %s (%s) before authenticating, exit 5",
+    async (path) => {
+      await runKeys(["ensure", path]);
+      await runKeys(["encrypt", path, "--in", join(dir, "none")]);
+      expect(state.errors).toHaveLength(2);
+      for (const error of state.errors) expect(error).toMatchObject({ code: "KEY_OUTSIDE_GRANTED_PREFIX", exitCode: 5 });
+      expect(state.authCalls).toBe(0);
+      expect(state.clientCalls).toEqual([]);
+    },
+  );
+
+  test("decrypt refuses an envelope outside the granted prefix before authenticating, exit 5", async () => {
+    const envelope = join(dir, "env.json");
+    await writeFile(envelope, JSON.stringify({ v: 2, networkId: NETWORK_ID, keyPath: "other/k", ciphertext: "AA==" }));
+    await runKeys(["decrypt", "--in", envelope]);
+    expect(state.errors[0]).toMatchObject({ code: "KEY_OUTSIDE_GRANTED_PREFIX", exitCode: 5 });
+    expect(state.authCalls).toBe(0);
+  });
+
+  test("decrypt refuses an envelope from another network before authenticating, exit 5", async () => {
+    const envelope = join(dir, "env.json");
+    await writeFile(envelope, JSON.stringify({ v: 2, networkId: "urn:tinycloud:encryption:did:pkh:eip155:1:0x0000000000000000000000000000000000000001:default", keyPath: "qa/k1", ciphertext: "AA==" }));
+    await runKeys(["decrypt", "--in", envelope]);
+    expect(state.errors[0]).toMatchObject({ exitCode: 5 });
+    expect(state.authCalls).toBe(0);
+  });
+
+  test("a profile signed in without --keys is refused with exit 5", async () => {
+    state.profile = { ownerDid: OWNER };
+    await runKeys(["ensure", "qa/k1"]);
+    expect(state.errors[0]).toMatchObject({ code: "KEYS_NOT_GRANTED", exitCode: 5 });
+    expect(state.authCalls).toBe(0);
+  });
+
+  test("a non-envelope input is a usage error (exit 2)", async () => {
+    const envelope = join(dir, "env.json");
+    await writeFile(envelope, "not json");
+    await runKeys(["decrypt", "--in", envelope]);
+    expect(state.errors[0]).toMatchObject({ code: "INVALID_ENVELOPE", exitCode: 2 });
+  });
+
+  test("node 401/403 answers map to PERMISSION_DENIED (exit 5) and a missing key to NOT_FOUND (exit 4)", async () => {
+    state.failWith = { code: "NODE_ERROR", status: 401 };
+    await runKeys(["ensure", "qa/k1"]);
+    state.failWith = { code: "KEY_NOT_FOUND" };
+    await runKeys(["ensure", "qa/k1"]);
+    expect(state.errors[0]).toMatchObject({ code: "PERMISSION_DENIED", exitCode: 5 });
+    expect(state.errors[1]).toMatchObject({ code: "NOT_FOUND", exitCode: 4 });
+  });
+});

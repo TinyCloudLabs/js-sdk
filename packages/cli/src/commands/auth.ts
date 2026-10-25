@@ -142,6 +142,7 @@ import {
   resolveAppsAgentRequest,
 } from "../lib/apps-agent-preset.js";
 import { permissionConsentLine, signExtrasQuestion } from "../lib/consent-text.js";
+import { assertNodeSupportsNamedKeys, keyAbilitiesFor, parseKeysPrefix } from "../lib/named-keys.js";
 import { buildReplicationLoginRequest, type ReplicationLoginOptions } from "../auth/replication-login.js";
 
 /** The one function dependency used by owner OpenKey permission acquisition. */
@@ -631,6 +632,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .option("--owner <did>", "Sign in as this owner (did:pkh:eip155:CHAIN:ADDRESS): OpenKey preselects that key, e.g. one that is not the account's primary key, and an approval by any other identity is refused. With --manifest, also names the secrets owner for a manifest's `secrets` on a profile with no recorded owner")
     .option("--replace-session", "Scoped or device login: replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)")
     .option("--force", "Replica-enabled OpenKey login: replace the stored session key even when recorded shares could not be checked or hold unexpired shares that need the current key")
+    .option("--keys <prefix>", "Local-key login: also grant named-key create and decrypt on keys below this prefix (e.g. qa/); the node must support named keys")
     .option("--replication-prefix <prefix>", "Add replication get+sync authority for a folder prefix ending in /, or root (repeatable)", (prefix: string, values: string[] = []) => [...values, prefix])
     .option("--replication-allow-secrets", "Allow replication of secret material (network-wide decrypt warning)")
     .action(async (options, cmd) => {
@@ -648,6 +650,9 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             `Device login requests an explicit scope. Pass --manifest FILE, or --manifest ${SHARE_PUBLISHING_MANIFEST_REF} for Share publishing.`,
             ExitCode.USAGE_ERROR,
           );
+        }
+        if (options.keys !== undefined && (options.device || options.manifest || options.paste || options.method === "openkey")) {
+          throw new CLIError("INVALID_ARGUMENT", "--keys is available with local-key login only (--method local).", ExitCode.USAGE_ERROR);
         }
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
@@ -721,6 +726,8 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             );
           }
           method = options.method;
+        } else if (options.keys !== undefined) {
+          method = "local";
         } else {
           method = scoped ? "openkey" : await promptAuthMethod();
         }
@@ -735,7 +742,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
 
         if (method === "local") {
           buildReplicationLoginRequest(undefined, replicationOptions);
-          await handleLocalAuth(ctx.profile, ctx.host, { replication: replicationOptions });
+          await handleLocalAuth(ctx.profile, ctx.host, { replication: replicationOptions, keys: options.keys });
           await persistReplicationLogin(ctx.profile, replicationOptions);
           if (replicationOptions.allowSecrets) writeReplicationSecretsWarning();
         } else {
@@ -2392,6 +2399,7 @@ async function rotateAuthKey(
     // if the profile changed meanwhile, the commit refuses and keeps it.
     const result = await handleLocalAuth(profileName, host, {
       emitOutput: false,
+      keys: profile.namedKeys?.prefix,
     });
     outputRotationResult(result.profile, profileName, oldDid, "local");
     return;
@@ -2514,7 +2522,7 @@ type LocalAuthResult = {
 async function handleLocalAuth(
   profileName: string,
   host: string,
-  options: { emitOutput?: boolean; replication?: ReplicationLoginOptions } = {},
+  options: { emitOutput?: boolean; replication?: ReplicationLoginOptions; keys?: string } = {},
 ): Promise<LocalAuthResult> {
   const snapshot = await readProfileSnapshot(profileName);
   const profile = snapshot.profile;
@@ -2553,12 +2561,17 @@ async function handleLocalAuth(
     }
   }
 
+  // Named keys: validate the prefix and the node's support before any signature.
+  const namedKeys = options.keys === undefined ? undefined : parseKeysPrefix(options.keys, did);
+  if (namedKeys !== undefined) await assertNodeSupportsNamedKeys(host);
+
   // Sign in using the private key
   const sessionResult = await withSpinner("Signing in...", async () => {
     const replication = options.replication ?? profile?.replication;
     return localKeySignIn({
       privateKey,
       host,
+      ...(namedKeys === undefined ? {} : { keyAbilities: keyAbilitiesFor(namedKeys) }),
       ...(replication?.prefixes.length ? { profile: profileName, replication } : {}),
     });
   });
@@ -2599,7 +2612,9 @@ async function handleLocalAuth(
     authMethod: "local",
     privateKey,
     address,
+    ...(namedKeys === undefined ? {} : { namedKeys }),
   } satisfies ProfileConfig;
+  if (namedKeys === undefined) delete (updatedProfile as ProfileConfig).namedKeys;
 
   await commitLogin(profileName, snapshot, { key, session, profile: updatedProfile });
 
