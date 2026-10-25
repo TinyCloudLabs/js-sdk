@@ -1,5 +1,32 @@
 # @tinycloudlabs/web-sdk
 
+## 3.7.0-beta.1
+
+### Patch Changes
+
+- 5f38da5: The root, `credentials` and `replica` bundles do not carry the share links reader. `@tinycloud/share-envelope/links` is a package import that the bundles load with `import()` the first time a share link is resolved or published; it resolves to the installed `@tinycloud/share-envelope` dependency (`dist/links.js`). The CommonJS bundle sets `output.environment.dynamicImport` so that import is a real `import()` there too.
+
+  A test bundles the web-sdk root and the share-sdk entries it can reach and checks that every import of the links module is a dynamic one.
+
+  Details: TC-1737
+
+- Updated dependencies [71fa087]
+- Updated dependencies [60b79d0]
+- Updated dependencies [60b79d0]
+- Updated dependencies [20bc8d1]
+  - @tinycloud/node-sdk@3.7.0-beta.1
+  - @tinycloud/sdk-core@3.7.0-beta.1
+  - @tinycloud/share-envelope@1.3.0-beta.0
+  - @tinycloud/share-sdk@1.4.0-beta.0
+
+## 3.6.2-beta.0
+
+### Patch Changes
+
+- Updated dependencies [14c685e]
+  - @tinycloud/replica@0.3.4-beta.0
+  - @tinycloud/node-sdk@3.6.2-beta.0
+
 ## 3.6.1
 
 ### Patch Changes

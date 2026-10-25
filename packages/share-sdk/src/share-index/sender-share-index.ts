@@ -4,7 +4,7 @@ import { AgentRecordError, OwnerUnwrapUnavailableError, openAgentRecordAsOwner, 
 import type { ShareIndexBackend } from "./backend.js";
 import { DEFAULT_CAS_POLICY, runCas, type CasPolicy } from "./cas.js";
 import { agentIdFromDid, agentRecordPrefix, classifyRecordKey, INDEX_MAIN_KEY, rejectedKeyEntry, SHARE_RECORDS_VAULT_PREFIX } from "./ids.js";
-import type { StoredShareRecord } from "./delivery.js";
+import { assertLinkBoundToMaterial, type StoredShareRecord } from "./delivery.js";
 import { validateShareLink } from "./link.js";
 import { claimRank, decideClaim } from "./precedence.js";
 import {
@@ -467,9 +467,12 @@ export class SenderShareIndex {
     } catch (error) {
       return { kind: "reject", reason: error instanceof ShareRecordSchemaError && error.reason === "provenance" ? "provenance" : "schema" };
     }
-    // 6. link. A bearer record's stored link; a Policy/v3 record stores no link (it is rebuilt at Open/Copy from the
-    // sealed material, which its chain check opens and binds to shareCid below).
+    // 6. link. The stored link must be a share link on a configured origin; a Policy/v3 record's link must also be the
+    // link of its sealed material (its key and body), which its chain check opens and binds to shareCid below.
     if (record.link !== undefined && !validateShareLink(record.link, this.options.shareOrigins).ok) return { kind: "reject", reason: "link" };
+    if (record.link !== undefined && record.deliveryMaterial !== undefined) {
+      try { assertLinkBoundToMaterial(record.link, record.deliveryMaterial); } catch { return { kind: "reject", reason: "link" }; }
+    }
     // 7. CID ownership by proof. A migrated record has no agent binding, so it is never `proven`.
     const verdict = await verifyAgentRecordChain(record, {
       accountOwnerDid: this.options.ownerDid, agentDid: input.agentDid, now: this.now(), parseSiweCacao: this.options.parseSiweCacao,

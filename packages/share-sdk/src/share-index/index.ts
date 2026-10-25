@@ -21,4 +21,4 @@ export { DEFAULT_SHARE_INDEX_LIMITS, MemoryShareIndexOutbox, SenderShareIndex, h
 export type { SenderShareRecord, SenderShareRecordProofs } from "../history.js";
 export { checkRegistrationReceipt, type CheckedRegistration, type RegistrationKey } from "./verify/registration.js";
 export { verifyEnvelopeV3At } from "./verify/policy-v3.js";
-export { DeliveryMaterialError, STORED_DELIVERY_MATERIAL_KEYS, compactShareRecord, expandShareRecord, openDeliveryEnvelope, shareLinkForRecord, type StoredDeliveryMaterial, type StoredShareRecord } from "./delivery.js";
+export { DeliveryMaterialError, STORED_DELIVERY_MATERIAL_KEYS, assertLinkBoundToMaterial, compactShareRecord, expandShareRecord, openDeliveryEnvelope, type StoredDeliveryMaterial, type StoredShareRecord } from "./delivery.js";
