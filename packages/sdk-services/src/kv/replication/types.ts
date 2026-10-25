@@ -540,6 +540,8 @@ export interface ReplicationOptions {
   prefixes: string[];
   /** Required for prefixes/spaces where requiresSecretsOptIn returns true. */
   allowSecrets?: boolean;
+  /** Sign-in asks for kv/sync on each declared prefix only and never widens to a root entry that covers them. */
+  syncScope?: "prefixes";
   /** Background interval; default 60 seconds. */
   syncIntervalMs?: number;
   maxStalenessMs?: number;
