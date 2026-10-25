@@ -313,6 +313,8 @@ export interface NodeUserAuthorizationConfig {
    * scheduling never reach this layer.
    */
   replication?: Pick<ReplicationOptions, "enabled" | "prefixes" | "allowSecrets">;
+  /** Extra top-level resource URIs and their abilities added to the sign-in ReCap (e.g. named-key prefixes). */
+  additionalRawAbilities?: Record<string, string[]>;
   /**
    * Mints the replica session stamp on each fresh sign-in (TC-858 §4). Returns
    * `undefined` when replication is off, so the persisted session carries no stamp.
@@ -387,6 +389,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private readonly localNodeIdentityStore?: LocalNodeIdentityStore;
   private readonly enablePublicSpace: boolean;
   private readonly replication?: Pick<ReplicationOptions, "enabled" | "prefixes" | "allowSecrets">;
+  private readonly additionalRawAbilities?: Record<string, string[]>;
   private readonly establishReplicaStamp?: NodeUserAuthorizationConfig["establishReplicaStamp"];
   private readonly nonce?: string;
   private readonly siweConfig?: SiweConfig;
@@ -489,6 +492,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this.replication =
       config.replication?.enabled === true ? config.replication : undefined;
     this.establishReplicaStamp = config.establishReplicaStamp;
+    this.additionalRawAbilities = config.additionalRawAbilities;
     this._manifest = config.manifest;
     this._capabilityRequest = config.capabilityRequest;
 
@@ -998,7 +1002,27 @@ export class NodeUserAuthorization implements IUserAuthorization {
     return `urn:tinycloud:encryption:${pkhDid(address, chainId)}:default`;
   }
 
+  /** Sign-in capabilities plus the caller's additional top-level resource abilities. */
   private resolveSignInCapabilities(
+    address: string,
+    chainId: number,
+  ): {
+    abilities: AbilitiesMap;
+    spaceId: string;
+    spaceAbilities?: Record<string, AbilitiesMap>;
+    rawAbilities?: Record<string, string[]>;
+  } {
+    const base = this.resolveBaseSignInCapabilities(address, chainId);
+    const extra = this.additionalRawAbilities;
+    if (extra === undefined || Object.keys(extra).length === 0) return base;
+    const rawAbilities: Record<string, string[]> = { ...(base.rawAbilities ?? {}) };
+    for (const [resource, actions] of Object.entries(extra)) {
+      for (const action of actions) addRawAbility(rawAbilities, resource, action);
+    }
+    return { ...base, rawAbilities };
+  }
+
+  private resolveBaseSignInCapabilities(
     address: string,
     chainId: number,
   ): {

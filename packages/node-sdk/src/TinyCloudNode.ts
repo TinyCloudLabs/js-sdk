@@ -949,6 +949,8 @@ export interface TinyCloudNodeConfig {
    * the same cross-process profile lock as SQLite and pending writes. Browser storage uses
    * its mandatory origin Web Lock instead. Missing guards gate the replica, not the session.
    */
+  /** Extra top-level resource URIs and their abilities added to the sign-in ReCap (e.g. named-key prefixes). */
+  additionalRawAbilities?: Record<string, string[]>;
   replication?: ReplicationOptions & {
     storage: KVReplicaStorage;
     mode?: "background" | "foreground";
@@ -1483,6 +1485,13 @@ export class TinyCloudNode {
     return this._bootstrapStatus;
   }
 
+  private _freshEncryptionNetworkCreated = false;
+
+  /** Whether the last sign-in's fresh account bootstrap created its encryption network. */
+  get freshEncryptionNetworkCreated(): boolean {
+    return this._freshEncryptionNetworkCreated;
+  }
+
   /**
    * Turns every service's storage rejections into one `storage.full` event,
    * and remembers whose storage is full so sign-in and listing skip their
@@ -1947,6 +1956,7 @@ export class TinyCloudNode {
       signStrategy: config.signStrategy ?? { type: "auto-sign" },
       wasmBindings: this.wasmBindings,
       ...(config.replication?.enabled === true ? { establishReplicaStamp: this.establishReplicaStamp } : {}),
+      ...(config.additionalRawAbilities === undefined ? {} : { additionalRawAbilities: config.additionalRawAbilities }),
       sessionManager: this.sessionManager,
       sessionStorage: config.sessionStorage ?? new MemorySessionStorage(),
       domain: this.siweDomain,
@@ -2645,6 +2655,7 @@ export class TinyCloudNode {
   private async bootstrapAccountIfNeeded(): Promise<boolean> {
     this._bootstrapSkipped = false;
     this._bootstrapStatus = { skipped: false };
+    this._freshEncryptionNetworkCreated = false;
 
     if (this.config.autoBootstrapAccount === false) {
       this._bootstrapStatus = { skipped: true, reason: "auto-bootstrap-disabled" };
@@ -3020,6 +3031,7 @@ export class TinyCloudNode {
         // A repair probes before creating because the network may already
         // exist; a 409 remains a race guard in both modes.
         await this.ensureEncryptionNetwork(step.networkId, { assumeMissing: mode === "fresh" });
+        if (mode === "fresh") this._freshEncryptionNetworkCreated = true;
       }
 
       if (step.kind === "secret-records-schema") {
