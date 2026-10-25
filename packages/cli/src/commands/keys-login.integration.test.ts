@@ -2,8 +2,6 @@ import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { extractRecapAttenuations } from "@tinycloud/sdk-core";
-import { withTinyCloudStateRoot } from "@tinycloud/operations/state";
-import { clearProfileCredentials } from "../lib/logout-pending.js";
 
 const PROFILE = "keys";
 const OWNER_KEY = "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d4b2c197a7e5e7b7";
@@ -205,7 +203,8 @@ test("logging out a keyed profile removes its grant before encrypt reads input",
   expect(login.exitCode, login.stderr).toBe(0);
   expect((await t.readProfile()).namedKeys).toBeDefined();
 
-  await withTinyCloudStateRoot(t.home, () => clearProfileCredentials(PROFILE));
+  const logout = await run(t.home, ["auth", "logout", "--force"]);
+  expect(logout.exitCode, logout.stderr).toBe(0);
   expect((await t.readProfile()).namedKeys).toBeUndefined();
 
   const encrypt = await run(t.home, ["keys", "encrypt", "qa/k1", "--in", join(t.home, "absent.bin")]);
