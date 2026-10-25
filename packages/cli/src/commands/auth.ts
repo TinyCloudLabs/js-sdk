@@ -9,7 +9,7 @@ import { createInterface } from "node:readline";
 import type { IncomingMessage } from "node:http";
 import { TinyCloudNode, grantAuthRequest, principalDidEquals, REPLICA_LOGOUT_PENDING_FILE, signedCompactUcanExpiry, type AuthDelegationArtifact, type PermissionEntry, type PortableDelegation, type RuntimeDelegationActivator, type TinyCloudSession } from "@tinycloud/node-sdk";
 import type { ProfileReplicaApprovalEntry, ProfileReplicaDeferredToken, ProfileReplicaLogoutPending, ProfileReplicaPreflight, ProfileReplicaPurge } from "@tinycloud/sdk-services/kv/replication";
-import { composeManifestRequest, extractRecapAttenuations } from "@tinycloud/sdk-core";
+import { composeManifestRequest } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
 import { namedProfilePath, profilePath } from "@tinycloud/operations/state";
 import { principalHashOf, readGateSnapshot, REPLICA_DENY_FLOOR_FILE } from "@tinycloud/replica/profile-gate";
@@ -142,7 +142,7 @@ import {
   resolveAppsAgentRequest,
 } from "../lib/apps-agent-preset.js";
 import { permissionConsentLine, signExtrasQuestion } from "../lib/consent-text.js";
-import { assertNodeSupportsNamedKeys, keyAbilitiesFor, namedKeysGrantIn, parseKeysPrefix, withVerifiedNamedKeys, type ProfileNamedKeys } from "../lib/named-keys.js";
+import { assertNodeSupportsNamedKeys, keyAbilitiesFor, namedKeysGrantIn, parseKeysPrefix, partialKeysGrantError, withVerifiedNamedKeys, type ProfileNamedKeys } from "../lib/named-keys.js";
 import { buildReplicationLoginRequest, type ReplicationLoginOptions } from "../auth/replication-login.js";
 
 /** The one function dependency used by owner OpenKey permission acquisition. */
@@ -2748,6 +2748,8 @@ async function refreshPreparedOpenKeySession(params: {
   if (expectedOwner && normalizePkhIdentifier(owner) !== normalizePkhIdentifier(expectedOwner)) {
     throw new CLIError("OPENKEY_OWNER_MISMATCH", "The verified owner differs from this profile. No approval was started.", ExitCode.PERMISSION_DENIED);
   }
+  const namedKeys = options.keys === undefined ? undefined : parseKeysPrefix(options.keys, canonicalOwnerDid(owner));
+  if (namedKeys !== undefined) await assertNodeSupportsNamedKeys(host);
   if (options.force !== true) await assertShareHistoryAllowsKeyDrop(profileName, "login");
   const replicationConfig = createCliReplicationConfig(profileName, replication, { debug: false, quiet: true }, true);
   if (!replicationConfig) throw new CLIError("V2_REQUIRED", "Replica configuration is unavailable; no approval was started.", ExitCode.AUTH_REQUIRED);
@@ -2761,27 +2763,37 @@ async function refreshPreparedOpenKeySession(params: {
     host, signer: ownerIdentitySigner(owner), capabilityRequest,
     includeAccountRegistryPermissions: false, autoBootstrapAccount: false,
     replication: replicationConfig,
+    ...(namedKeys === undefined ? {} : { additionalRawAbilities: keyAbilitiesFor(namedKeys) }),
   });
   let handoff: PreparedOpenKeyHandoff | undefined;
   let preparedDid: string | undefined;
+  let handedBackSiwe: string | undefined;
   // An unreadable gate counts as active: a failed attempt then never denies it.
   const gateWasActive = await readGateSnapshot(profilePath(profileName))
     .then((gate) => gate !== undefined && gate.principalHash !== null, () => true);
   try {
+    if (namedKeys !== undefined) process.stderr.write(KEYS_APPROVAL_NOTE(namedKeys.prefix));
     await node.signInWithOpenKey(async (prepared) => {
       preparedDid = prepared.verificationMethod;
       handoff = await startPreparedOpenKeyHandoff({
         prepared, openKeyHost: resolveOpenKeyHost(profile),
         noPopup: options.noPopup, paste: options.paste,
       });
-      return handoff.result;
+      return handoff.result.then((result) => {
+        handedBackSiwe = result.signedMessage;
+        return result;
+      });
     });
     const active = node.restorableSession;
     if (!active || !preparedDid || node.sessionDid !== preparedDid || active.verificationMethod !== preparedDid) {
       throw new CLIError("OPENKEY_SESSION_MISMATCH", "OpenKey signed a different SDK session key; no profile or session was saved.", ExitCode.PERMISSION_DENIED);
     }
     const key = active.jwk;
-    const verified = verifyScopedLogin({ ...active }, key, preparedDid, permissions, { expectedOwner: owner, expiry });
+    const verified = verifyScopedLogin({ ...active }, key, preparedDid, permissions, {
+      expectedOwner: owner, expiry, ...(namedKeys === undefined ? {} : { namedKeyRow: namedKeys }),
+    });
+    const grant = namedKeys === undefined ? "none" : namedKeysGrantIn(active.siwe, namedKeys);
+    if (grant === "partial") throw partialKeysGrantError();
     const session = {
       ...verified.session,
       ...(node.replicaStamp ? { replicaStamp: node.replicaStamp } : {}),
@@ -2801,12 +2813,20 @@ async function refreshPreparedOpenKeySession(params: {
         ...(replication.allowSecrets === true ? { allowSecrets: true } : {}),
       },
     };
+    if (namedKeys !== undefined) {
+      delete updatedProfile.namedKeys;
+      if (grant === "both") updatedProfile.namedKeys = namedKeys;
+    }
     await commitLogin(profileName, snapshot, {
       key, session, profile: updatedProfile, durable: true,
       approved: { scope: session.permissions as PermissionEntry[], ownerDid: owner, replaceSession: options.replaceSession === true },
     });
     await handoff?.complete(true);
     announceFirstOwner(profileName, expectedOwner, owner);
+    if (namedKeys !== undefined) {
+      if (grant === "both") await readyNamedKeysNetwork(node);
+      else process.stderr.write(keysNotGrantedAfterLogin(profileName));
+    }
     return {
       profile: updatedProfile, delegationData: session,
       declined: declinedPermissions(permissions, session.permissions as PermissionEntry[], owner),
@@ -2815,7 +2835,8 @@ async function refreshPreparedOpenKeySession(params: {
   } catch (error) {
     await handoff?.complete(false);
     await undoPreparedAttempt(profileName, node, owner, gateWasActive).catch(() => undefined);
-    throw error;
+    throw namedKeys !== undefined && isNarrowedRecapMismatch(error) &&
+      namedKeysGrantIn(handedBackSiwe, namedKeys) === "partial" ? partialKeysGrantError() : error;
   }
 }
 
@@ -2870,7 +2891,7 @@ async function refreshPreparedKeysSession(params: {
     throw new CLIError("OPENKEY_OWNER_MISMATCH", "The verified owner differs from this profile. No approval was started.", ExitCode.PERMISSION_DENIED);
   }
   // Validate the folder and the node before the hand-off opens.
-  const namedKeys = parseKeysPrefix(options.keys!, owner);
+  const namedKeys = parseKeysPrefix(options.keys!, canonicalOwnerDid(owner));
   await assertNodeSupportsNamedKeys(host);
   if (options.force !== true) await assertShareHistoryAllowsKeyDrop(profileName, "login");
   const node = new TinyCloudNode({
@@ -2881,6 +2902,7 @@ async function refreshPreparedKeysSession(params: {
   });
   let handoff: PreparedOpenKeyHandoff | undefined;
   let preparedDid: string | undefined;
+  let handedBackSiwe: string | undefined;
   try {
     process.stderr.write(KEYS_APPROVAL_NOTE(namedKeys.prefix));
     await node.signInWithOpenKey(async (prepared) => {
@@ -2889,7 +2911,10 @@ async function refreshPreparedKeysSession(params: {
         prepared, openKeyHost: resolveOpenKeyHost(profile),
         noPopup: options.noPopup, paste: options.paste,
       });
-      return handoff.result;
+      return handoff.result.then((result) => {
+        handedBackSiwe = result.signedMessage;
+        return result;
+      });
     });
     const active = node.restorableSession;
     if (!active || !preparedDid || node.sessionDid !== preparedDid || active.verificationMethod !== preparedDid) {
@@ -2922,14 +2947,9 @@ async function refreshPreparedKeysSession(params: {
   } catch (error) {
     await handoff?.complete(false);
     await node.replication?.close();
-    throw isNarrowedRecapMismatch(error) ? partialKeysGrantError() : error;
+    throw isNarrowedRecapMismatch(error) &&
+      namedKeysGrantIn(handedBackSiwe, namedKeys) === "partial" ? partialKeysGrantError() : error;
   }
-}
-
-function partialKeysGrantError(): CLIError {
-  return new CLIError("KEYS_PARTIAL_GRANT",
-    "Named keys need both permissions (create and use), but only one was approved, so this sign-in wasn't saved. Sign in again and approve both.",
-    ExitCode.PERMISSION_DENIED);
 }
 
 /**
@@ -2992,12 +3012,7 @@ export async function refreshOpenKeySession(
     const estimatedExpiry = expiry === undefined ? undefined : new Date(Date.now() + expiry.durationMs).toISOString();
     assertSessionReplaceable(profileName, snapshot, expectedOwner, permissions, estimatedExpiry);
   }
-  if (options.keys !== undefined) {
-    if (replication.prefixes.length > 0) {
-      throw new CLIError("INVALID_ARGUMENT",
-        `With OpenKey sign-in, \`--keys\` can't be used on a profile that has replication prefixes (given with \`--replication-prefix\` or saved from an earlier sign-in). Nothing was started. Use a separate profile for named keys: \`${CLI_NAME} --profile <name> auth login --owner did:pkh:eip155:<chain>:<address> --keys <folder>\`.`,
-        ExitCode.USAGE_ERROR);
-    }
+  if (options.keys !== undefined && replication.prefixes.length === 0) {
     return refreshPreparedKeysSession({ profileName, host, profile, snapshot, options, expectedOwner, expiry });
   }
   if (replication.prefixes.length > 0) {

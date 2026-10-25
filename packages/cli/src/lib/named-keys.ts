@@ -73,6 +73,12 @@ export async function assertNodeSupportsNamedKeys(host: string, fetchImpl: typeo
   }
 }
 
+export function partialKeysGrantError(): CLIError {
+  return new CLIError("KEYS_PARTIAL_GRANT",
+    "Named keys need both permissions (create and use), but only one was approved, so this sign-in wasn't saved. Sign in again and approve both.",
+    ExitCode.PERMISSION_DENIED);
+}
+
 /** What a signed ReCap says about a requested key folder: both abilities, neither, or only one. */
 export function namedKeysGrantIn(siwe: string | undefined, keys: ProfileNamedKeys): "both" | "none" | "partial" {
   let recap: Record<string, Record<string, unknown>> = {};
