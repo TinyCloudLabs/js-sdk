@@ -9,6 +9,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { inviteRecordsFor, storedRecord, approveSummary } from '../dist/invite-commands.js';
+import { storedLink } from './support/invite-link-fixture.mjs';
 import { InviteWatcher, describeHeld, heldFactsText, readRecord, recordPath } from '../dist/invite-watch.js';
 import { writePublicInvite } from '../dist/invite-public.js';
 import { listGrants, grantPath, writeGrant, updateGrantLate } from '../dist/grant-record.js';
@@ -96,7 +97,7 @@ function watcher({ profile = () => loadProfile(), now = () => new Date(clock), a
   return new InviteWatcher({
     node, profile, log: (e) => logs.push(e), notify, now, timing,
     verify: async () => ({ ok: true, address: EMAIL, credentialId: 'cred-1', issuedAt: ISSUED }),
-    accept, deleteSealed: async () => undefined, peersFiles: [],
+    accept, deleteLink: async () => undefined, peersFiles: [],
   });
 }
 
@@ -105,7 +106,7 @@ function newInvite({ withPublic = false } = {}) {
   const inviteId = newInviteId();
   const { record, publicRecord } = inviteRecordsFor({
     inviteId, handle: 'hunter', callMe: 'sam', expectEmail: EMAIL, tier: 'strict', expectOwner: null, alsoAsk: false,
-    expiresAt: new Date(NOW + 24 * 3600e3), createdAt: ISSUED, store: { id: 's', cid: 'bafkrei' + 'a'.repeat(52), deleteToken: 'T' },
+    expiresAt: new Date(NOW + 24 * 3600e3), createdAt: ISSUED, link: storedLink('s'),
     publicDir: withPublic ? publicDir() : undefined,
   });
   writeSecure(recordPath(inviteId), storedRecord(record, 'hash'));
@@ -254,7 +255,7 @@ test('M-B a Welcome that is already out is found before any grant is minted', as
 /** An invite held for a hello that expected a different owner, with a quick (not hanging) node. */
 async function daemonHeldForOwner() {
   const inviteId = newInvite({ withPublic: true });
-  const { record } = inviteRecordsFor({ inviteId, handle: 'hunter', callMe: 'sam', expectEmail: EMAIL, tier: 'strict', expectOwner: `did:pkh:eip155:1:0x${'c'.repeat(40)}`, alsoAsk: false, expiresAt: new Date(NOW + 24 * 3600e3), createdAt: ISSUED, store: { id: 's', cid: 'bafkrei' + 'a'.repeat(52), deleteToken: 'T' } });
+  const { record } = inviteRecordsFor({ inviteId, handle: 'hunter', callMe: 'sam', expectEmail: EMAIL, tier: 'strict', expectOwner: `did:pkh:eip155:1:0x${'c'.repeat(40)}`, alsoAsk: false, expiresAt: new Date(NOW + 24 * 3600e3), createdAt: ISSUED, link: storedLink('s') });
   writeSecure(recordPath(inviteId), storedRecord(record, 'hash'));
   await kv.put(`${inviteFolder(inviteId)}in/hello.json`, helloBody(inviteId));
   await watcher().onHello(inviteId);
@@ -302,7 +303,7 @@ test('grant record (2) delegateTo hangs: a private file says a grant may exist (
   assert.match(noticeText(held, '').body, /A read grant from an earlier attempt may exist until \S+\. No agent was woken\./);
   // public copy: only the allowed keys, nothing about a grant
   const pub = JSON.parse(fs.readFileSync(path.join(publicDir(), `${id}.json`), 'utf8'));
-  assert.deepEqual(Object.keys(pub), ['v', 'inviteId', 'handle', 'expectEmail', 'expectOwner', 'tier', 'createdAt', 'expiresAt', 'status', 'completedPeer', 'heldReason', 'helloOwner']);
+  assert.deepEqual(Object.keys(pub), ['v', 'inviteId', 'handle', 'expectEmailHash', 'expectOwner', 'tier', 'createdAt', 'expiresAt', 'status', 'completedPeer', 'heldReason', 'helloOwner']);
   assert.equal(pub.heldReason, 'node-timeout');
   assert.doesNotMatch(JSON.stringify(pub), /unknown|out-1|grant|attempt|did:key/);
   // the invite record does not carry it either
@@ -403,7 +404,7 @@ test('M-1 the reverse: an approve that starts while a revoke is closing the invi
   let approveError;
   const closing = new InviteWatcher({
     node, profile: () => loadProfile(), log: (e) => logs.push(e), now: () => new Date(clock), timing, accept: realAccept, peersFiles: [],
-    deleteSealed: async () => { approveError = await approve(watcher(), id).then(() => undefined, (e) => e); },
+    deleteLink: async () => { approveError = await approve(watcher(), id).then(() => undefined, (e) => e); },
   });
   await closing.revoke(readRecord(id));
   assert.equal(approveError?.code, 'invite-busy');
@@ -428,7 +429,7 @@ test('M-A heldRecord: an expired held invite whose lock is lost while it is bein
   clock = NOW + 25 * 3600e3;
   const stealing = new InviteWatcher({
     node, profile: () => loadProfile(), log: (e) => logs.push(e), now: () => new Date(clock), timing, accept: realAccept, peersFiles: [],
-    deleteSealed: async () => { fs.writeFileSync(lockFile(id), 'thief-token'); },
+    deleteLink: async () => { fs.writeFileSync(lockFile(id), 'thief-token'); },
   });
   await assert.rejects(approve(stealing, id), (e) => e.code === 'invite-lock-lost');
   assert.equal(readRecord(id).status, 'held', 'not closed by a holder that no longer has the lock');
@@ -444,7 +445,7 @@ test('M-B the lock is re-checked after the Welcome lookup: a holder that lost it
   const before = delegations;
   const w = new InviteWatcher({
     node: { kv: stealing, delegateTo: node.delegateTo }, profile: () => loadProfile(), log: (e) => logs.push(e), now: () => new Date(clock), timing, accept: realAccept, peersFiles: [],
-    deleteSealed: async () => undefined,
+    deleteLink: async () => undefined,
   });
   await assert.rejects(approve(w, id), (e) => e.code === 'invite-lock-lost');
   assert.equal(delegations, before);
@@ -828,7 +829,7 @@ test('F-A the date never reaches the public copy: the public record has exactly 
   const keys = Object.keys(JSON.parse(raw)).sort();
   assert.ok(readRecord(id).unrecordedGrantUntil);
   assert.ok(!raw.includes(readRecord(id).unrecordedGrantUntil) && !/unrecorded/i.test(raw));
-  assert.deepEqual(keys, ['completedPeer', 'createdAt', 'expectEmail', 'expectOwner', 'expiresAt', 'handle', 'heldReason', 'helloOwner', 'inviteId', 'status', 'tier', 'v']);
+  assert.deepEqual(keys, ['completedPeer', 'createdAt', 'expectEmailHash', 'expectOwner', 'expiresAt', 'handle', 'heldReason', 'helloOwner', 'inviteId', 'status', 'tier', 'v']);
 });
 
 test('F-A migration: a record that has the date inside `held` (the previous commit) is read with it lifted to the record, and the next write keeps it there', async () => {

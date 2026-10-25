@@ -7,8 +7,10 @@ import { requestedOwnerAndTier, inviteRecordsFor } from '../dist/invite-commands
 import { newInviteId, buildInviteBlob } from '../dist/invite-blob.js';
 import { parseInviteBlob } from '../dist/invite-schema.js';
 import { writePublicInvite } from '../dist/invite-public.js';
+import { LINK_ISSUER, storedLink } from './support/invite-link-fixture.mjs';
 
-const NOW = Math.floor(Date.now() / 1000) * 1000;
+// A fixed clock: the build and the parse are both checked against it, so nothing here depends on the wall clock.
+const NOW = Date.parse('2026-10-24T12:00:00.000Z');
 const LATER = new Date(NOW + 24 * 3600e3);
 const SAM_ADDR = '0x1234567890abcdef1234567890abcdef12345678';
 const HUNTER_ADDR = '0xfedcba0987654321fedcba0987654321fedcba09';
@@ -37,9 +39,11 @@ const blobInput = (over = {}) => ({
   permissions,
   artifactA: artifactA(),
   expiresAt: LATER,
+  issuer: LINK_ISSUER,
   expectEmail: 'hunter@example.test',
   expectOwner: null,
   tier: 'strict',
+  now: NOW,
   ...over,
 });
 
@@ -106,7 +110,7 @@ test('create records: the private and public records carry the same expectOwner 
     alsoAsk: false,
     expiresAt: LATER,
     createdAt: ISSUED,
-    store: { id: 'store-id', cid: 'cid', deleteToken: 'token' },
+    link: storedLink('store-id'),
     publicDir: undefined,
   });
   assert.equal(records.record.expectOwner, HUNTER_OWNER);
@@ -126,7 +130,7 @@ test('create records: with no flags the public record shows null and strict', ()
     alsoAsk: false,
     expiresAt: LATER,
     createdAt: ISSUED,
-    store: { id: 'store-id', cid: 'cid', deleteToken: 'token' },
+    link: storedLink('store-id'),
     publicDir: undefined,
   });
   assert.equal(records.publicRecord.expectOwner, null);
@@ -145,7 +149,7 @@ test('create records: the public record written to disk reads back with the same
     alsoAsk: false,
     expiresAt: LATER,
     createdAt: ISSUED,
-    store: { id: 'store-id', cid: 'cid', deleteToken: 'token' },
+    link: storedLink('store-id'),
     publicDir: dir,
   });
   writePublicInvite(dir, publicRecord);

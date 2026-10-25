@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash, generateKeyPairSync, sign as nodeSign } from 'node:crypto';
 import { inviteRecordsFor, storedRecord } from '../dist/invite-commands.js';
+import { storedLink } from './support/invite-link-fixture.mjs';
 import { InviteWatcher, readRecord, recordPath } from '../dist/invite-watch.js';
 import { inviteFolder } from '../dist/invite-schema.js';
 import { newInviteId } from '../dist/invite-blob.js';
@@ -87,7 +88,7 @@ function openInvite() {
   const { record } = inviteRecordsFor({
     inviteId, handle: 'alice', callMe: 'sam', expectEmail: EMAIL, tier: 'strict', expectOwner: null, alsoAsk: false,
     expiresAt: new Date(NOW + 24 * 3600e3), createdAt: ISSUED,
-    store: { id: 'store-1', cid: 'bafkrei' + 'a'.repeat(52), deleteToken: 'DELETE-TOKEN-FIXTURE' },
+    link: storedLink('store-1'),
     publicDir: undefined,
   });
   writeSecure(recordPath(inviteId), storedRecord(record, oneTimeKeyHash(OTK_X)));
@@ -123,7 +124,7 @@ function watcher() {
     now: () => new Date(NOW),
     verify: (input) => verifyEmailProofWithPin(input, TEST_PIN),
     accept: async (_profile, _node, artifact) => { accepted.push(artifact.from.courier); return C_ARTIFACT; },
-    deleteSealed: async () => undefined,
+    deleteLink: async () => undefined,
   });
 }
 

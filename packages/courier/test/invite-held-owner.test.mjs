@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { inviteRecordsFor, storedRecord } from '../dist/invite-commands.js';
+import { storedLink } from './support/invite-link-fixture.mjs';
 import { InviteWatcher, describeHeld, readHeld, readRecord, writeRecord, recordPath } from '../dist/invite-watch.js';
 import { writePublicInvite } from '../dist/invite-public.js';
 import { inviteFolder } from '../dist/invite-schema.js';
@@ -67,7 +68,7 @@ function invite({ expectOwner = null, withPublic = false, alsoAsk = false } = {}
   const { record, publicRecord } = inviteRecordsFor({
     inviteId, handle: 'hunter', callMe: 'sam', expectEmail: EMAIL, tier: 'strict', expectOwner, alsoAsk,
     expiresAt: new Date(NOW + 24 * 3600e3), createdAt: ISSUED,
-    store: { id: 'store-1', cid: 'bafkrei' + 'a'.repeat(52), deleteToken: 'DELETE-TOKEN-FIXTURE' },
+    link: storedLink('store-1'),
     publicDir: withPublic ? publicDir() : undefined,
   });
   writeSecure(recordPath(inviteId), storedRecord(record, 'hash-of-one-time-key'));
@@ -101,7 +102,7 @@ function watcher() {
     now: () => new Date(clock),
     verify: async () => ({ ok: true, address: EMAIL, credentialId: 'cred-1', issuedAt: ISSUED }),
     accept: async (_profile, _node, artifact) => { accepted.push(artifact.from.courier); return C_ARTIFACT; },
-    deleteSealed: async () => undefined,
+    deleteLink: async () => undefined,
     peersFiles: [],
   });
 }
@@ -276,7 +277,7 @@ test('lock: released after a failure (owner-mismatch, failed pairing) so the nex
   const id = await squatted();
   await assert.rejects(watcher().approveHeld(id, EVE_OWNER), (e) => e.code === 'owner-mismatch');
   assert.equal(fs.existsSync(lockFile(id)), false);
-  const failing = new InviteWatcher({ node: { kv }, profile: () => ({ version: 3, host: 'h', openkeyHost: 'h', label: 'sam', courierDid: SAM_COURIER, ownerDid: SAM_OWNER, spaceId: `tinycloud:pkh:eip155:1:${SAM_ADDR}:agents`, status: 'ready', peers: {} }), log: () => undefined, now: () => new Date(clock), verify: async () => ({ ok: true, address: EMAIL, credentialId: 'c', issuedAt: ISSUED }), accept: async () => { throw new Error('boom'); }, deleteSealed: async () => undefined, peersFiles: [] });
+  const failing = new InviteWatcher({ node: { kv }, profile: () => ({ version: 3, host: 'h', openkeyHost: 'h', label: 'sam', courierDid: SAM_COURIER, ownerDid: SAM_OWNER, spaceId: `tinycloud:pkh:eip155:1:${SAM_ADDR}:agents`, status: 'ready', peers: {} }), log: () => undefined, now: () => new Date(clock), verify: async () => ({ ok: true, address: EMAIL, credentialId: 'c', issuedAt: ISSUED }), accept: async () => { throw new Error('boom'); }, deleteLink: async () => undefined, peersFiles: [] });
   await assert.rejects(failing.approveHeld(id, MALLORY_OWNER));
   assert.equal(fs.existsSync(lockFile(id)), false);
   assert.equal(await watcher().approveHeld(id, MALLORY_OWNER), 'strict');
@@ -321,7 +322,7 @@ test('lock: while held the lock file exists with mode 0600, and it is gone after
     node: { kv }, profile: () => ({ version: 3, host: 'h', openkeyHost: 'h', label: 'sam', courierDid: SAM_COURIER, ownerDid: SAM_OWNER, spaceId: `tinycloud:pkh:eip155:1:${SAM_ADDR}:agents`, status: 'ready', peers: {} }),
     log: () => undefined, now: () => new Date(clock), verify: async () => ({ ok: true, address: EMAIL, credentialId: 'c', issuedAt: ISSUED }),
     accept: async () => { existed = fs.existsSync(lockFile(id)); mode = fs.statSync(lockFile(id)).mode & 0o777; return C_ARTIFACT; },
-    deleteSealed: async () => undefined, peersFiles: [],
+    deleteLink: async () => undefined, peersFiles: [],
   });
   await spy.approveHeld(id, MALLORY_OWNER);
   assert.equal(existed, true);

@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseInviteBlob, parseHello, parseWelcome, ownerMatches, inviteFolder } from '../dist/invite-schema.js';
+import { parseInviteBlob, parseHello, parseWelcome, ownerMatches, inviteFolder, printableKey } from '../dist/invite-schema.js';
+import { inviteEmailHash } from '../dist/invite-email-hash.js';
+import { LINK_ISSUER } from './support/invite-link-fixture.mjs';
 
 const NOW = Date.parse('2026-10-21T00:00:00.000Z');
 const LATER = '2026-10-22T00:00:00.000Z';
@@ -64,7 +66,8 @@ const blob = () => ({
   permissions: { put: 'PUT-DELEGATION', read: 'READ-DELEGATION', hooks: 'HOOKS-DELEGATION' },
   artifactA: artifactA(),
   expiresAt: LATER,
-  expectEmail: 'invitee@example.com',
+  issuer: LINK_ISSUER,
+  expectEmailHash: inviteEmailHash(INVITE_ID, 'invitee@example.com'),
   expectOwner: null,
   tier: 'strict',
 });
@@ -121,9 +124,15 @@ const BLOB_REJECTS = [
   ['expiresAt already past', (d) => { d.expiresAt = '2026-10-20T00:00:00.000Z'; return d; }, /invite is expired/],
   ['control character in spaceId', (d) => { d.spaceId = `${d.spaceId}\u0007`; return d; }, /spaceId has an invalid format|control character/],
   ['over 128 KiB file', (d) => { d.pad = 'x'.repeat(128 * 1024); return d; }, /invite file is over 131072 bytes/],
-  ['expectEmail missing', (d) => { delete d.expectEmail; return d; }, /missing "expectEmail"/],
-  ['expectEmail mixed case', (d) => { d.expectEmail = 'Invitee@Example.com'; return d; }, /expectEmail must be lowercase/],
-  ['expectEmail malformed', (d) => { d.expectEmail = 'not-an-address'; return d; }, /expectEmail has an invalid format/],
+  ['expectEmailHash missing', (d) => { delete d.expectEmailHash; return d; }, /missing "expectEmailHash"/],
+  ['the address in place of its hash', (d) => { d.expectEmailHash = 'invitee@example.com'; return d; }, /expectEmailHash has an invalid format/],
+  ['expectEmailHash short', (d) => { d.expectEmailHash = d.expectEmailHash.slice(1); return d; }, /expectEmailHash has an invalid format/],
+  ['expectEmailHash not canonical base64url', (d) => { d.expectEmailHash = `${d.expectEmailHash.slice(0, 42)}B`; return d; }, /expectEmailHash is not canonical base64url/],
+  ['the old expectEmail key still present', (d) => { d.expectEmail = 'invitee@example.com'; return d; }, /unknown key "expectEmail"/],
+  ['issuer missing', (d) => { delete d.issuer; return d; }, /missing "issuer"/],
+  ['issuer is a did:web', (d) => { d.issuer = 'did:web:issuer.example'; return d; }, /issuer must be an Ed25519 did:key/],
+  ['issuer is a did:key with a fragment', (d) => { d.issuer = `${LINK_ISSUER}#${LINK_ISSUER.slice(8)}`; return d; }, /issuer must be an Ed25519 did:key/],
+  ['issuer is not a string', (d) => { d.issuer = 7; return d; }, /issuer must be an Ed25519 did:key/],
 ];
 
 test('invite blob: golden object parses and keeps the exact fields', () => {
@@ -256,4 +265,33 @@ test('ownerMatches: malformed or non-string input does not match', () => {
   assert.equal(ownerMatches('sam', SAM_OWNER), false);
   assert.equal(ownerMatches(SAM_OWNER, undefined), false);
   assert.equal(ownerMatches(SAM_OWNER, `${SAM_OWNER} `), false);
+});
+
+const messageOf = (text) => {
+  try {
+    parseInviteBlob(text, NOW);
+  } catch (e) {
+    return e.message;
+  }
+  return assert.fail('expected a refusal');
+};
+
+test('an unknown key holding an ESC or other control byte is refused with a fixed message: no raw key text reaches the joiner', () => {
+  const d = blob();
+  d[`\u001b[2J\u001b]0;pwned\u0007${'x'.repeat(100)}`] = 1;
+  const message = messageOf(JSON.stringify(d));
+  assert.equal(message, 'invite file contains a control character');
+  assert.equal(/[\u0000-\u001f\u007f-\u009f]/.test(message), false);
+});
+
+test('an unknown key with other text a terminal or a reader could be fooled by is printed escaped and capped', () => {
+  const d = blob();
+  d[`ev\u202eil"\u200b${'x'.repeat(100)}`] = 1;
+  const message = messageOf(JSON.stringify(d));
+  assert.match(message, /^invite has unknown key "ev\\u202eil\\u0022\\u200bxxxx/);
+  assert.equal(/[^\x20-\x7e]/.test(message), false, 'printable ASCII only');
+  assert.equal(message.includes('x'.repeat(40)), false, 'the key is capped at 40 characters (the first 7 are escapes or letters)');
+  assert.ok(message.includes('x'.repeat(33)));
+  assert.equal(printableKey('expectEmail'), 'expectEmail');
+  assert.equal(printableKey('a"b\\c\n'), 'a\\u0022b\\u005cc\\u000a');
 });

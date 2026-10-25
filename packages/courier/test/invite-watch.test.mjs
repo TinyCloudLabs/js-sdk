@@ -4,6 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { InviteWatcher, loadSeenCredentials, readHeld, readRecord, recordPath, requestedTier } from '../dist/invite-watch.js';
+import { LINK_ISSUER, LINK_SEED, storedLink } from './support/invite-link-fixture.mjs';
+import { inviteEmailHash } from '../dist/invite-email-hash.js';
 import { inviteFolder } from '../dist/invite-schema.js';
 import { writePublicInvite } from '../dist/invite-public.js';
 import { writeSecure, secureSubdir } from '../dist/profile.js';
@@ -21,7 +23,6 @@ const SAM_COURIER = 'did:key:z6MkSamCourier';
 const HUNTER_COURIER = 'did:key:z6MkHunterCourier';
 const EMAIL = 'hunter@example.test';
 const CRED = 'cred-1';
-const DELETE_TOKEN = 'DELETE-TOKEN-FIXTURE';
 const idOf = (n) => 'a'.repeat(25) + 'abcdefghijklmnopqrstuvwxyz'[n];
 const ID = idOf(0);
 const ID2 = idOf(1);
@@ -75,8 +76,8 @@ function watcher(over = {}) {
     now: () => new Date(NOW),
     verify: okVerify,
     accept: okAccept,
-    deleteSealed: async (_origin, id, token) => {
-      deletes.push({ id, token });
+    deleteLink: async (link) => {
+      deletes.push({ id: link.id, issuer: link.issuer, seed: link.seed });
     },
     ...over,
   });
@@ -92,7 +93,7 @@ function invite(id, over = {}) {
     tier: 'strict',
     alsoAsk: false,
     expiresAt: new Date(NOW + TTL_MS).toISOString(),
-    store: { id: 'store-1', cid: 'bafkrei' + 'a'.repeat(52), deleteToken: DELETE_TOKEN },
+    link: storedLink('store-1'),
     oneTimeKeyHash: 'hash-of-one-time-key',
     status: 'open',
     ...over,
@@ -145,7 +146,7 @@ const readPublic = (dir, id) => JSON.parse(fs.readFileSync(publicFile(dir, id), 
 
 function seedPublic(dir, id) {
   writePublicInvite(dir, {
-    v: 1, inviteId: id, handle: 'hunter', expectEmail: EMAIL, expectOwner: null, tier: 'strict',
+    v: 1, inviteId: id, handle: 'hunter', expectEmailHash: inviteEmailHash(id, EMAIL), expectOwner: null, tier: 'strict',
     createdAt: ISSUED, expiresAt: new Date(NOW + TTL_MS).toISOString(), status: 'open', completedPeer: null,
   });
 }
@@ -163,7 +164,7 @@ test('valid hello pairs, writes one strict Welcome, and notifies invite-complete
   assert.equal(notices.length, 1);
   assert.equal(notices[0].kind, 'invite-completed');
   assert.deepEqual(notices[0].invite, { id: ID, handle: 'hunter', label: 'Hunter Agent', owner: HUNTER_OWNER, courierDid: HUNTER_COURIER, reason: '', tier: 'strict' });
-  assert.deepEqual(deletes, [{ id: 'store-1', token: DELETE_TOKEN }]);
+  assert.deepEqual(deletes, [{ id: 'store-1', issuer: LINK_ISSUER, seed: LINK_SEED }]);
   assert.deepEqual(inKeys(ID), []);
   assert.deepEqual([...loadSeenCredentials()], [`${CRED}:${ID}`]);
   assert.equal(verifyInput.expectEmail, EMAIL);

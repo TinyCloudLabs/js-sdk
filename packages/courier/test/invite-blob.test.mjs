@@ -1,9 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { newInviteId, buildInviteBlob, buildHello } from '../dist/invite-blob.js';
+import { inviteEmailHash } from '../dist/invite-email-hash.js';
+import { LINK_ISSUER } from './support/invite-link-fixture.mjs';
 import { parseInviteBlob, parseHello, inviteFolder, CREDENTIAL_MAX_BYTES } from '../dist/invite-schema.js';
 
-const NOW = Math.floor(Date.now() / 1000) * 1000;
+// A fixed clock: the build and the parse are both checked against it, so nothing here depends on the wall clock.
+const NOW = Date.parse('2026-10-24T12:00:00.000Z');
 const LATER = new Date(NOW + 24 * 3600e3);
 const SAM_ADDR = '0x1234567890abcdef1234567890abcdef12345678';
 const HUNTER_ADDR = '0xfedcba0987654321fedcba0987654321fedcba09';
@@ -56,16 +59,20 @@ test('built invite blob parses back to the same fields and folder', () => {
     permissions,
     artifactA: artifactA(),
     expiresAt: LATER,
+    issuer: LINK_ISSUER,
     expectEmail: 'hunter@example.test',
     expectOwner: null,
     tier: 'strict',
-  }, );
+    now: NOW,
+  });
   const blob = parseInviteBlob(text, NOW);
   assert.equal(blob.inviteId, inviteId);
   assert.equal(blob.host, 'https://node.example.test');
   assert.equal(blob.folder, inviteFolder(inviteId));
   assert.equal(blob.expiresAt, LATER.toISOString());
-  assert.equal(blob.expectEmail, 'hunter@example.test');
+  assert.equal(blob.expectEmailHash, inviteEmailHash(inviteId, 'hunter@example.test'));
+  assert.equal(blob.issuer, LINK_ISSUER);
+  assert.equal(text.includes('hunter@example.test'), false, 'the address is not in the blob');
   assert.deepEqual(blob.permissions, permissions);
   assert.equal(blob.artifactA.callMe, 'sam');
 });
@@ -79,10 +86,13 @@ test('an invite blob whose expiry has passed is refused by the parser', () => {
     permissions,
     artifactA: artifactA(),
     expiresAt: LATER,
+    issuer: LINK_ISSUER,
     expectEmail: 'hunter@example.test',
     expectOwner: null,
     tier: 'strict',
+    now: NOW,
   });
+  assert.equal(parseInviteBlob(text, LATER.getTime() - 1).inviteId.length, 26, 'one millisecond before expiry it parses');
   assert.throws(() => parseInviteBlob(text, LATER.getTime() + 1));
 });
 
@@ -95,9 +105,11 @@ test('building an invite blob refuses a mixed-case expected email', () => {
     permissions,
     artifactA: artifactA(),
     expiresAt: LATER,
+    issuer: LINK_ISSUER,
     expectEmail: 'Hunter@Example.test',
     expectOwner: null,
     tier: 'strict',
+    now: NOW,
   }));
 });
 

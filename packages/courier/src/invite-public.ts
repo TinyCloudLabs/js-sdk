@@ -29,7 +29,8 @@ export interface PublicInvite {
   v: 1;
   inviteId: string;
   handle: string;
-  expectEmail: string;
+  /** Hash of the invited address (`invite-email-hash.ts`), not the address. */
+  expectEmailHash: string;
   expectOwner: string | null;
   /** Requested tier. The peer starts strict until the owner confirms trusted by hand. */
   tier: string;
@@ -43,11 +44,12 @@ export interface PublicInvite {
   helloOwner?: string;
 }
 
-const FIELDS = ['v', 'inviteId', 'handle', 'expectEmail', 'expectOwner', 'tier', 'createdAt', 'expiresAt', 'status', 'completedPeer'] as const;
+const FIELDS = ['v', 'inviteId', 'handle', 'expectEmailHash', 'expectOwner', 'tier', 'createdAt', 'expiresAt', 'status', 'completedPeer'] as const;
 const HELD_FIELDS = ['heldReason', 'helloOwner'] as const;
 const PATCHABLE = ['status', 'completedPeer', ...HELD_FIELDS] as const;
 const PEER_FIELDS = ['handle', 'courierDid', 'ownerDid'] as const;
 const INVITE_ID = /^[a-z2-7]{26}$/;
+const EMAIL_HASH = /^[A-Za-z0-9_-]{43}$/;
 const OWNER_DID = /^did:pkh:eip155:\d+:0x[a-fA-F0-9]{40}$/;
 const FILE_MODE = 0o640;
 const DIR_MODE = 0o750;
@@ -72,9 +74,10 @@ function checkRecord(record: unknown): PublicInvite {
   const r = record as Record<string, unknown>;
   if (r.v !== 1) invalid('v must be 1');
   if (typeof r.inviteId !== 'string' || !INVITE_ID.test(r.inviteId)) invalid('inviteId must be 26 characters from a-z and 2-7');
-  for (const k of ['handle', 'expectEmail', 'tier', 'createdAt', 'expiresAt'] as const) {
+  for (const k of ['handle', 'expectEmailHash', 'tier', 'createdAt', 'expiresAt'] as const) {
     if (typeof r[k] !== 'string') invalid(`${k} must be a string`);
   }
+  if (!EMAIL_HASH.test(r.expectEmailHash as string)) invalid('expectEmailHash must be 43 base64url characters');
   if (r.expectOwner !== null && typeof r.expectOwner !== 'string') invalid('expectOwner must be a string or null');
   if (!(PUBLIC_INVITE_STATUSES as readonly unknown[]).includes(r.status)) invalid(`status must be one of ${PUBLIC_INVITE_STATUSES.join(', ')}`);
   if (r.completedPeer !== null) {

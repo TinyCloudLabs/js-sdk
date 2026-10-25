@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto';
 import type { TinyCloudNode } from '@tinycloud/node-sdk';
 import { acceptB, fail } from './commands.js';
 import { CourierError } from './errors.js';
-import { deleteSealed as deleteSealedReal, inviteOrigin } from './invite-link.js';
+import { deleteInviteLink, linksApi, type StoredLink } from './invite-links.js';
 import { publicHeldReason, readPublicStatus, updatePublicInvite, type HeldReason } from './invite-public.js';
 import { inviteFolder, ownerMatches, parseHello, type Hello, type Tier, type Welcome } from './invite-schema.js';
 import type { Notice, Notifier } from './notify.js';
@@ -40,7 +40,8 @@ export interface InviteRecord {
   tier: AcceptedTier;
   alsoAsk: boolean;
   expiresAt: string;
-  store: { id: string; cid: string; deleteToken: string };
+  /** The invitation's link and its per-invite signing key. Private: `seed` is only ever used to sign the delete. */
+  link: StoredLink;
   /** SHA-256 of the one-time public key, fixed at create. Verification binds the credential to it. */
   oneTimeKeyHash: string;
   /** Owner DID the peer must match when set. Unset means no owner check. */
@@ -268,7 +269,8 @@ export interface InviteEnv {
   now?: () => Date;
   verify?: (input: VerifyEmailProofInput) => Promise<VerifyEmailProofResult>;
   accept?: typeof acceptB;
-  deleteSealed?: typeof deleteSealedReal;
+  /** Deletes the invitation's link (signed by its own key). Defaults to the real client on the configured API. */
+  deleteLink?: (link: StoredLink) => Promise<void>;
   /** Test seam: runs after acceptB's artifact is persisted and before the Welcome write. */
   fault?: (step: 'before-welcome') => void;
   /** peers.json locations checked before pairing. Defaults to `peersFilesFor()`. */
@@ -287,7 +289,7 @@ export class InviteWatcher {
   private readonly now: () => Date;
   private readonly verify: (input: VerifyEmailProofInput) => Promise<VerifyEmailProofResult>;
   private readonly realAccept: typeof acceptB;
-  private readonly deleteSealed: typeof deleteSealedReal;
+  private readonly deleteLink: (link: StoredLink) => Promise<void>;
   /** The node's KV with every call bounded by NODE_CALL_TIMEOUT_MS. */
   private readonly kv: TinyCloudNode['kv'];
 
@@ -295,8 +297,8 @@ export class InviteWatcher {
     this.now = env.now ?? (() => new Date());
     this.verify = env.verify ?? verifyReal;
     this.realAccept = env.accept ?? acceptB;
-    const realDelete = env.deleteSealed ?? deleteSealedReal;
-    this.deleteSealed = (...args: Parameters<typeof deleteSealedReal>) => this.bounded('deleteSealed', async () => realDelete(...args));
+    const realDelete = env.deleteLink ?? ((link: StoredLink) => deleteInviteLink(linksApi(), link));
+    this.deleteLink = (link) => this.bounded('deleteLink', async () => realDelete(link));
     this.kv = new Proxy(env.node.kv, {
       get: (target, prop) => {
         const member = Reflect.get(target, prop, target) as unknown;
@@ -842,7 +844,7 @@ export class InviteWatcher {
   private async close(record: InviteRecord, status: 'expired' | 'revoked', guard?: LockGuard): Promise<void> {
     // Whoever closes works from a record it read earlier: it may only close the invite if it is still in that state (not completed or re-consumed since).
     this.cas(record.inviteId, claimOf(record), guard);
-    await this.deleteSealedBlob(record);
+    await this.deleteInvitationLink(record);
     const kv = this.kv;
     for (const key of await listAll(kv, inviteFolder(record.inviteId))) await delIfPresent(kv, key);
     this.cas(record.inviteId, claimOf(record), guard);
@@ -861,7 +863,7 @@ export class InviteWatcher {
     } catch (e) {
       this.env.log({ event: 'invite-error', inviteId: record.inviteId, reason: reasonOf(e) });
     }
-    await this.deleteSealedBlob(record);
+    await this.deleteInvitationLink(record);
     removeHeld(record.inviteId);
   }
 
@@ -869,11 +871,11 @@ export class InviteWatcher {
     for (const key of await listAll(this.kv, `${folder}in/`)) await delIfPresent(this.kv, key);
   }
 
-  private async deleteSealedBlob(record: InviteRecord): Promise<void> {
+  private async deleteInvitationLink(record: InviteRecord): Promise<void> {
     try {
-      await this.deleteSealed(inviteOrigin(), record.store.id, record.store.deleteToken);
+      await this.deleteLink(record.link);
     } catch (e) {
-      this.env.log({ event: 'invite-error', inviteId: record.inviteId, step: 'delete-sealed', reason: reasonOf(e) });
+      this.env.log({ event: 'invite-error', inviteId: record.inviteId, step: 'delete-link', reason: reasonOf(e) });
     }
   }
 

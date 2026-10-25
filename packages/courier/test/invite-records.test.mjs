@@ -4,11 +4,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { cmdInvite } from '../dist/invite-commands.js';
+import { LINK_SEED, storedLink } from './support/invite-link-fixture.mjs';
 import { writeSecure, secureSubdir } from '../dist/profile.js';
 
 const INVITE_ID = 'a'.repeat(25) + 'b';
 const OTHER_ID = 'a'.repeat(25) + 'c';
-const DELETE_TOKEN = 'DELETE-TOKEN-SECRET-VALUE';
+// (The delete token of the old invitation store no longer exists; the per-invite seed is what must stay out of every public place.)
 
 let home;
 let logged;
@@ -46,7 +47,7 @@ function writeRecord(id, overrides = {}) {
     tier: 'trusted',
     alsoAsk: false,
     expiresAt: new Date(Date.now() + 3600e3).toISOString(),
-    store: { id: 'store-id-1', cid: 'bafkrei' + 'a'.repeat(52), deleteToken: DELETE_TOKEN },
+    link: storedLink('store-id-1'),
     status: 'open',
     ...overrides,
   };
@@ -76,11 +77,12 @@ test('invite list shows an open invite past its expiry as expired', async () => 
   assert.match(out, /expired/);
 });
 
-test('invite list never prints the delete token', async () => {
+test('invite list never prints the per-invite link seed', async () => {
   writeRecord(INVITE_ID);
   await cmdInvite(args(['list']));
-  assert.match(logged.join('\n'), new RegExp(INVITE_ID));
-  assert.doesNotMatch(logged.join('\n'), new RegExp(DELETE_TOKEN));
+  const printed = logged.join('\n');
+  assert.match(printed, new RegExp(INVITE_ID));
+  assert.equal(printed.includes(LINK_SEED), false);
 });
 
 test('revoking an already-revoked invite is a no-op notice', async () => {
