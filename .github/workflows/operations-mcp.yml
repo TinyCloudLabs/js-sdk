@@ -70,71 +70,150 @@ jobs:
           bun run --cwd packages/courier build
           bun run --cwd packages/cli build
           bun run --cwd packages/mcp build
+      # One bun process per file, found by glob so new files are picked up.
+      # Fails on any failing file, on a file that reports `0 pass` with skips,
+      # and on a file that runs past its per-file timeout.
+      - name: Run share-envelope and share-sdk unit tests
+        timeout-minutes: 10
+        env:
+          BUN_JSC_useConcurrentJIT: "0"
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/share-unit-tests.log"
+          mapfile -t files < <(find packages/share-envelope/test packages/share-sdk/test -name '*.test.ts' | sort)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error title=share tests::no test files found"
+            exit 1
+          fi
+          failed=()
+          for file in "${files[@]}"; do
+            echo "::group::$file"
+            if ! timeout 120 bun test "./$file" 2>&1 | tee "$log"; then
+              failed+=("$file")
+              echo "::error title=share test failed::$file"
+            elif grep -Eq '\b0 pass\b' "$log" && grep -Eq '\b[1-9][0-9]* skip\b' "$log"; then
+              failed+=("$file (0 pass, all skipped)")
+              echo "::error title=share test skipped entirely::$file"
+            fi
+            echo "::endgroup::"
+          done
+          echo "ran ${#files[@]} files, ${#failed[@]} failed"
+          if [ "${#failed[@]}" -gt 0 ]; then
+            printf 'FAILED: %s\n' "${failed[@]}"
+            exit 1
+          fi
       - name: Run focused conformance and concurrency tests
         run: |
           bun test tests/operations-mcp-conformance/conformance.test.ts
           bun test packages/operations/src/legacy-cli-concurrency.test.ts
-          bun test packages/cli/src/commands/auth.test.ts
-          bun test packages/cli/src/auth/prepared-openkey.test.ts
-          bun test packages/cli/src/auth/browser-auth.test.ts
-          bun test packages/cli/src/commands/auth.portable-proof.test.ts
-          bun test packages/cli/src/commands/auth-logout-gate.integration.test.ts
-          bun test packages/cli/src/commands/auth-logout-history-guard.integration.test.ts
-          bun test packages/cli/src/commands/auth-logout-account.integration.test.ts
-          bun test packages/cli/src/commands/auth-logout-legacy.integration.test.ts
-          bun test packages/cli/src/commands/auth-logout-marker.integration.test.ts
-          bun test packages/cli/src/commands/auth-null-marker.integration.test.ts
-          bun test packages/cli/src/commands/auth-prepared.integration.test.ts
-          bun test packages/cli/src/commands/auth-revoke.integration.test.ts
-          bun test packages/cli/src/commands/auth-signin-stamp.integration.test.ts
-          bun test packages/cli/src/lib/logout-revocation.test.ts
-          bun test packages/cli/src/lib/profile-replicas.test.ts
-          bun test packages/cli/src/lib/profile-replicas.defer.test.ts
-          bun test packages/cli/src/commands/secrets.test.ts
-          bun test packages/cli/src/commands/secrets-owner-retry.test.ts
-          bun test packages/cli/src/commands/expired-session.test.ts
-          bun test packages/cli/src/commands/secrets-grant-replay.test.ts
-          bun test packages/cli/src/commands/import-expiry-race.test.ts
-          bun test packages/cli/src/lib/host.discovery.test.ts
-          bun test packages/cli/src/commands/stored-grant-warnings.test.ts
-          bun test packages/cli/src/commands/auth-grants.test.ts
-          bun test packages/cli/src/commands/auth-import-signed.test.ts
-          bun test packages/cli/src/lib/revoke-delegation.test.ts
-          bun test packages/cli/src/commands/delegation.test.ts
-          bun test packages/cli/src/commands/delegation-openkey-revoke.test.ts
-          bun test packages/cli/src/commands/raw-decrypt-grant.test.ts
-          bun test packages/cli/src/commands/secrets-put-classification.test.ts
-          bun test packages/cli/src/output/errors.test.ts
-          bun test packages/cli/src/commands/account.test.ts
-          bun test packages/cli/src/commands/account-invocations.test.ts
-          bun test packages/cli/src/commands/storage-full.test.ts
-          bun test packages/cli/src/lib/account-access.test.ts
-          bun test packages/cli/src/lib/approval-notices.test.ts
           bun test packages/node-sdk/src/TinyCloudNode.accountRegistrySync.test.ts
-          bun test packages/cli/src/commands/secrets-request.test.ts
-          bun test packages/cli/src/lib/secrets-wait.test.ts
-          bun test packages/cli/src/lib/probe-child.test.ts
-          bun test packages/cli/src/lib/node-release.test.ts
-          bun test packages/cli/src/lib/node-fetch.test.ts
-          bun test packages/cli/src/commands/secrets-wait.test.ts
-          bun test packages/cli/src/commands/kv-retry.test.ts
-          bun test packages/cli/test/node-retry.node.test.ts
           bun test packages/mcp/src/results.test.ts packages/mcp/src/tools.test.ts packages/mcp/src/stdio.test.ts packages/mcp/src/http.test.ts packages/mcp/src/remote-store.test.ts packages/mcp/src/http.e2e.test.ts
           bun test packages/cli/src/commands/share.test.ts
           bun test packages/cli/src/commands/share-artifact.test.ts
           bun test packages/cli/src/commands/share.integration.test.ts
           bun test packages/cli/src/share/adapters.test.ts
+          bun test packages/cli/src/share/short-links.test.ts
           bun test packages/cli/src/share/bearer-revoke.test.ts
           bun test packages/cli/src/share/native-receive.test.ts
           bun test packages/cli/src/commands/share-folder.test.ts
           bun test packages/cli/src/share/html-folder.test.ts
-          bun test packages/share-sdk/test/html-bundle
       - name: Run production private-key secrets regression in isolation
         run: bun test packages/cli/src/commands/secrets-private-key-production.test.ts
       - name: Run MCP CLI regression in isolation
         run: bun test packages/mcp/src/cli.test.ts
       - name: Run packed MCP CLI regression in isolation
         run: bun test packages/mcp/src/packed-cli.test.ts
+      # One bun process per file, found by glob so new files are picked up.
+      # Fails on a failing file, on a file that runs past its per-file timeout,
+      # on a file with no passing test (all skipped, only todo, or empty), on an
+      # empty file set, on a configured path that does not exist, and on an
+      # excluded file that no longer exists.
+      # This job holds every build these files import (node/web wasm runtime,
+      # sdk-core, node-sdk, operations, replica, courier, CLI), so one loop
+      # covers the CLI, bootstrap, server, mcp oauth and tests/cli files.
+      - name: Run CLI, bootstrap, server, MCP OAuth and tests/cli unit tests
+        timeout-minutes: 30
+        env:
+          BUN_JSC_useConcurrentJIT: "0"
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/remaining-unit-tests.log"
+          roots=(packages/cli/src packages/cli/test packages/bootstrap/src packages/server/src tests/cli)
+          single_files=(packages/mcp/src/oauth.test.ts)
+          declare -A excluded=(
+            # Live-node suites, each run by a node lane:
+            [packages/cli/src/commands/agent-grant-openkey.e2e.test.ts]="needs a live node; run by node-replication-e2e.yml"
+            [packages/cli/src/commands/knowledge.e2e.test.ts]="needs a live node; run by node-replication-e2e.yml"
+            [packages/cli/src/commands/delegation-revoke-lookup.e2e.test.ts]="needs a live node; run by replica-e2e.yml"
+            [packages/cli/src/commands/share-history-revoke.e2e.test.ts]="needs a live node; run by replica-e2e.yml"
+            [packages/cli/test/replica.e2e.test.ts]="needs a live node; run by replica-e2e.yml"
+            [packages/cli/test/replication-flag.e2e.test.ts]="needs a live node; run by replica-e2e.yml"
+            [packages/cli/test/secrets-wait.e2e.test.ts]="needs a live node; run by replica-e2e.yml"
+            [packages/cli/test/replica-secrets.e2e.test.ts]="needs a live node; run by replica-e2e.yml; TC-1899"
+            [tests/cli/kv/kv.test.ts]="needs a live node; run by replica-e2e.yml; TC-1902"
+            [tests/cli/sql/sql.test.ts]="needs a live node; run by replica-e2e.yml; TC-1902"
+            [tests/cli/secrets/secrets-e2e.test.ts]="needs a live node; run by replica-e2e.yml; TC-1902"
+            # Run in their own step above:
+            [packages/cli/src/commands/secrets-private-key-production.test.ts]="run in isolation by its own step"
+            # Known failures, tracked:
+            [packages/cli/src/config/shared-state-writers.test.ts]="fails on master: test-support harness writes shared state directly; TC-1898"
+            [tests/cli/duckdb/duckdb.test.ts]="needs a DuckDB-enabled node; the node binary the live-node lanes use is built without DuckDB; TC-1965"
+          )
+          failed=()
+          for root in "${roots[@]}"; do
+            if [ ! -d "$root" ]; then
+              echo "::error title=unit tests::configured test directory does not exist: $root"
+              failed+=("$root (directory does not exist)")
+            fi
+          done
+          for file in "${single_files[@]}"; do
+            if [ ! -f "$file" ]; then
+              echo "::error title=unit tests::configured test file does not exist: $file"
+              failed+=("$file (file does not exist)")
+            fi
+          done
+          existing_roots=()
+          for root in "${roots[@]}"; do [ -d "$root" ] && existing_roots+=("$root"); done
+          files=()
+          if [ "${#existing_roots[@]}" -gt 0 ]; then
+            mapfile -t files < <(find "${existing_roots[@]}" -name '*.test.*' -not -path '*/node_modules/*' -not -path '*/dist/*' | sort)
+          fi
+          for file in "${single_files[@]}"; do [ -f "$file" ] && files+=("$file"); done
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error title=unit tests::no test files found"
+            exit 1
+          fi
+          for file in "${!excluded[@]}"; do
+            if [ ! -f "$file" ]; then
+              echo "::error title=unit tests::excluded file does not exist: $file"
+              failed+=("$file (excluded file does not exist)")
+            fi
+          done
+          ran=0
+          for file in "${files[@]}"; do
+            if [ -n "${excluded[$file]+set}" ]; then
+              echo "EXCLUDED: $file: ${excluded[$file]}"
+              continue
+            fi
+            ran=$((ran + 1))
+            echo "::group::$file"
+            if ! timeout 120 bun test "./$file" 2>&1 | tee "$log"; then
+              failed+=("$file (failed, or ran past 120s)")
+              echo "::error title=unit test failed::$file"
+            elif ! grep -Eq '^ *[1-9][0-9]* pass' "$log"; then
+              if grep -Eq '^ *[1-9][0-9]* skip' "$log"; then reason="0 pass, all skipped"
+              elif grep -Eq '^ *[1-9][0-9]* todo' "$log"; then reason="0 pass, only todo"
+              else reason="0 pass, empty"; fi
+              failed+=("$file ($reason)")
+              echo "::error title=unit test ran nothing::$file ($reason)"
+            fi
+            echo "::endgroup::"
+          done
+          echo "ran $ran files, ${#excluded[@]} excluded, ${#failed[@]} failed"
+          if [ "${#failed[@]}" -gt 0 ]; then
+            printf 'FAILED: %s\n' "${failed[@]}"
+            exit 1
+          fi
       - name: Verify generated files and coverage ledger
         run: |
           bun run check:operations-mcp

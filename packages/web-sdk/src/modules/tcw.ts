@@ -218,7 +218,7 @@ export interface Config extends ClientConfig {
   /** Browser storage key prefix for isolating apps/environments. */
   sessionStorageKeyPrefix?: string;
 
-  /** SIWE domain (default: window.location.hostname in browser, app.tinycloud.xyz otherwise) */
+  /** SIWE domain (default: window.location.host in browser, app.tinycloud.xyz otherwise) */
   domain?: string;
 
   /** Shorthand for passing a Web3 provider */
@@ -473,7 +473,8 @@ export class TinyCloudWeb {
       localNodeIdentityStore:
         this.config.localNodeIdentityStore ??
         createLocalStorageLocalNodeIdentityStore(),
-      domain: this.config.domain ?? (typeof window !== 'undefined' ? window.location.hostname : 'app.tinycloud.xyz'),
+      domain: this.config.domain ?? (typeof window !== 'undefined' ? window.location.host : 'app.tinycloud.xyz'),
+      uri: this.config.domain === undefined && typeof window !== 'undefined' ? window.location.origin : undefined,
       prefix: this.config.spacePrefix,
       autoCreateSpace: this.config.autoCreateSpace ?? true,
       sessionExpirationMs: this.config.sessionExpirationMs,

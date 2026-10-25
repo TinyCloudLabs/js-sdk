@@ -1,5 +1,25 @@
 # @tinycloud/replica
 
+## 0.3.4-beta.0
+
+### Patch Changes
+
+- 14c685e: The replica package depends on the current @tinycloud/sdk-services release.
+
+  Details: TC-2014
+
+## 0.3.3
+
+### Patch Changes
+
+- dc61583: The replica workers import only the sdk-services modules they use, so the kv-storage and replica worker bundles no longer include the SQL, DuckDB, vault, and hooks services. Adds a `./context` subpath export to `@tinycloud/sdk-services`.
+
+  Details: TC-1827
+
+- Updated dependencies [82cbd43]
+- Updated dependencies [dc61583]
+  - @tinycloud/sdk-services@3.6.0
+
 ## 0.3.3-beta.1
 
 ### Patch Changes

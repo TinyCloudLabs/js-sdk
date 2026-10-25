@@ -938,6 +938,8 @@ bun run --cwd packages/courier test       # offline
 bun run --cwd packages/courier test:live  # manual only
 ```
 
+`test` runs every test file under a fresh `/var/tmp/tc1920.*` home (`test/setup-home.mjs`, preloaded with `node --import`) and sets `COURIER_TEST=1`. With `COURIER_TEST=1`, a Courier home outside `COURIER_TEST_HOME` is refused with `test-home-escape`; without it nothing changes.
+
 `test:live` (`scripts/happy-path.mjs`) proves the flow end to end with two
 fresh throwaway identities on the production `https://tee.node.tinycloud.xyz`,
 including a grant installed through a short code served by a local fake

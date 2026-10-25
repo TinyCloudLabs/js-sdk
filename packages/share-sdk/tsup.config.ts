@@ -19,5 +19,8 @@ export default defineConfig({
   clean: true,
   sourcemap: true,
   splitting: false,
-  noExternal: ["multiformats", "@tinycloud/share-envelope"],
+  // `@tinycloud/share-envelope/links` stays an import of the package (loaded on demand by receive, publish and
+  // invitations) so the bundles that embed this one do not carry the links code.
+  noExternal: ["multiformats", /^@tinycloud\/share-envelope$/],
+  external: ["@tinycloud/share-envelope/links"],
 });

@@ -108,12 +108,8 @@ export {
 } from "./sign.js";
 export {
   encodeShareUrl,
-  encodeSealedInlineShareUrl,
-  parseSealedInlineShareUrl,
   parseShareUrl,
-  type SealedInlineShareUrlParts,
   type ParseShareUrlOptions,
-  type ParsedSealedInlineShareUrl,
   type ShareUrlParts,
 } from "./link.js";
 export { getBearerSessionJwk } from "./bearer.js";

@@ -185,6 +185,13 @@
       "index.mjs": 0,
       "index.cjs": 0,
       "note": "replica worker size ratchet; no measured-bundle change"
+    },
+    {
+      "pr": "#735",
+      "ticket": "TC-2014",
+      "index.mjs": 0,
+      "index.cjs": 0,
+      "note": "Replica gzip growth measured against this PR's merge base"
     }
   ],
   "phase2Ratchet": {
@@ -1481,5 +1488,105 @@
       "ceiling": 776128
     },
     "reason": "refuse manifest permissions that carry a limit (TC-1855, #702): guards on both runtime-permission paths, +155 B mjs / +106 B cjs gzip"
+  },
+  "tc1488SiweDomainUriRatchet": {
+    "label": "the browser SIWE domain and URI follow the page origin (TC-1488, #604): +35 B mjs / +35 B cjs gzip",
+    "ruling": "Approved by Naomi (2026-10-24; exact canonical CI bytes, no headroom)",
+    "base": "8e431447f23a164da75faed067d4b16af5c77ef0",
+    "sourceCommits": [
+      "aaa4ce3e6c9182c8022aaff3511c9f2144a5b756"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40089434307",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40089434307/job/120858912359",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40089434307/job/120858912529"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 35,
+        "index.cjs": 35
+      },
+      "ceiling": {
+        "index.mjs": 1462509,
+        "index.cjs": 1404776
+      }
+    },
+    "firstImport": {
+      "delta": {
+        "replica.mjs": 0,
+        "replica.cjs": 0
+      },
+      "ceiling": {
+        "replica.mjs": 51925,
+        "replica.cjs": 67141
+      }
+    },
+    "activation": {
+      "delta": {
+        "activation.mjs": 0,
+        "activation.cjs": 0
+      },
+      "ceiling": {
+        "activation.mjs": 23117,
+        "activation.cjs": 24700
+      }
+    },
+    "worker": {
+      "delta": 0,
+      "ceiling": 776128
+    },
+    "reason": "the browser SIWE domain and URI follow the page origin (TC-1488, #604): +35 B mjs / +35 B cjs gzip"
+  },
+  "tc1737ShortLinkLazyChunkRatchet": {
+    "label": "short links v=4 (TC-1737, #708): root index.cjs +166 B gzip, index.mjs ceiling carried, worker ceilings unchanged",
+    "ruling": "Approved by Naomi (index.cjs at the exact CI bytes of run 40136320965, no headroom; index.mjs ceiling kept; worker ceilings unchanged, measured in run 40141627657)",
+    "base": "e6aad66159e81b47c937da584a4c7f019be54100",
+    "sourceCommits": [
+      "8d15cd6123fd37924db59065e1317682dbff2772"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40136320965",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40136320965/job/120998491772",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40136320965/job/120998491418"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 0,
+        "index.cjs": 166
+      },
+      "ceiling": {
+        "index.mjs": 1462509,
+        "index.cjs": 1404942
+      }
+    },
+    "firstImport": {
+      "delta": {
+        "replica.mjs": 0,
+        "replica.cjs": 0
+      },
+      "ceiling": {
+        "replica.mjs": 51925,
+        "replica.cjs": 67141
+      }
+    },
+    "activation": {
+      "delta": {
+        "activation.mjs": 0,
+        "activation.cjs": 0
+      },
+      "ceiling": {
+        "activation.mjs": 23117,
+        "activation.cjs": 24700
+      }
+    },
+    "worker": {
+      "delta": 0,
+      "ceiling": 776128
+    },
+    "reason": "index.cjs grew by 166 B from the short-link code in sdk-core/share-envelope; index.mjs measured 1461950 in CI run 40136320965 and its ceiling is not lowered (within the TC-1985 gzip-alignment swing); the worker bundles are unchanged after the replica's sdk-services pin moved to 3.6.1 (TC-2014)"
   }
 }
