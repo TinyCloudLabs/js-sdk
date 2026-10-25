@@ -167,6 +167,15 @@ describe("account index not created yet", () => {
       { read: "spaces", code: "SQL_ERROR", message: "retry later (SQLite error: no such table: spaces)", ready: false },
       { read: "applications", code: "SQL_ERROR", message: "SQL query failed: 500 - SQLite error: no such table: applications", ready: false },
       { read: "spaces", code: "SQL_ERROR", message: "SQL batch failed: 400 - SQLite error: no such table: spaces", ready: false },
+      // A longer identifier is another table, whatever character continues it (quoted names can carry these).
+      { read: "spaces", code: "SQL_ERROR", message: "SQLite error: no such table: spaces-v2", ready: false },
+      { read: "applications", code: "SQL_ERROR", message: "SQLite error: no such table: applications.v2", ready: false },
+      { read: "spaces", code: "SQL_ERROR", message: "SQL query failed: 400 - SQLite error: no such table: spaces$x", ready: false },
+      { read: "spaces", code: "SQL_ERROR", message: "SQLite error: no such table: spaces.v2", ready: false },
+      { read: "applications", code: "SQL_ERROR", message: "SQL query failed: 400 - SQLite error: no such table: applications-old", ready: false },
+      // The name ends at whitespace, a quote or a bracket, or at the end of the message.
+      { read: "spaces", code: "SQL_ERROR", message: "SQL query failed: 400 - SQLite error: no such table: spaces ", ready: true },
+      { read: "applications", code: "SQL_ERROR", message: 'SQLite error: no such table: applications"', ready: true },
     ];
     for (const { read, code, message, ready } of cases) {
       const f = makeFakes();

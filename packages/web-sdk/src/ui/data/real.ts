@@ -26,14 +26,15 @@ const ACCOUNT_RETRY_MS = 5_000;
  * messages (SQLService handleErrorResponse, responseErrors formatServiceResponseError): for the node's
  * plain-text body `SQL query failed: 400 - SQLite error: no such table: <table>`, for a JSON body its
  * parsed message `SQLite error: no such table: <table>`. Only a message that STARTS with that error, for
- * the table THIS read expects, is "not created yet". Any other code, another table (`spaces_old`
- * included) and any error that merely quotes the text (mid-message, in a JSON body, after another
+ * the table THIS read expects, is "not created yet", and the name must END there: any further identifier
+ * character (`spaces_old`, `spaces-v2`, `spaces.v2`, `spaces$x`) makes it another table. Any other code,
+ * another table and any error that merely quotes the text (mid-message, in a JSON body, after another
  * prefix) stay errors.
  */
 const SQL_ERROR = "SQL_ERROR";
 const MISSING_TABLE: Record<"spaces" | "applications", RegExp> = {
-  spaces: /^(?:SQL query failed: 400 - )?SQLite error: no such table:\s*spaces\b/i,
-  applications: /^(?:SQL query failed: 400 - )?SQLite error: no such table:\s*applications\b/i,
+  spaces: /^(?:SQL query failed: 400 - )?SQLite error: no such table:\s*spaces(?![\w$.\-])/i,
+  applications: /^(?:SQL query failed: 400 - )?SQLite error: no such table:\s*applications(?![\w$.\-])/i,
 };
 
 /**
