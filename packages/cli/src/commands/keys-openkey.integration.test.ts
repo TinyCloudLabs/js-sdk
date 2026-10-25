@@ -120,7 +120,7 @@ async function keysLogin(approval: Approval, folder = "qa/") {
 test("OpenKey --keys with everything approved records the folder and signs the requested ReCap", async () => {
   const r = await keysLogin("all");
   expect(r.exitCode, r.stderr).toBe(0);
-  expect(r.stderr).toContain('encryption keys in the folder "qa/"');
+  expect(r.stderr).toContain('the row that mentions tinycloud.encryption lets this profile create and use keys in the folder "qa/"');
   expect(r.profile.namedKeys).toEqual({ prefix: "qa", resource: r.resource });
   const stored = JSON.parse(await readFile(r.sessionFile, "utf8")) as { siwe: string };
   expect(extractRecapAttenuations(stored.siwe)[r.resource]).toBeDefined();
@@ -148,7 +148,7 @@ test("OpenKey --keys with the row unticked still signs in, records no folder and
   expect(r.exitCode, r.stderr).toBe(0);
   expect(r.sessionStored).toBe(true);
   expect(r.profile.namedKeys).toBeUndefined();
-  expect(r.stderr).toContain("can't use named keys yet");
+  expect(r.stderr).toContain("signed in, but without named keys");
 });
 
 test("OpenKey --keys with only one ability approved stores nothing and exits 5", async () => {

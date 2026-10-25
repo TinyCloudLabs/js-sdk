@@ -50,7 +50,7 @@ function cliErrorFromNamedKey(error: unknown, command: KeysCommand, path: string
   }
   if (error.status === 401 || error.status === 403) {
     return new CLIError("PERMISSION_DENIED", error.message, ExitCode.PERMISSION_DENIED, {
-      hint: `Sign in with \`${CLI_NAME} auth login --method local --keys <folder>\` for the key's prefix.`,
+      hint: `Sign in with \`${CLI_NAME} auth login --keys <folder>\` for this key's folder.`,
     });
   }
   return new CLIError(error.code, error.message, error.status === undefined ? ExitCode.ERROR : ExitCode.NODE_ERROR);
@@ -63,7 +63,7 @@ async function grantedPrefix(profileName: string): Promise<string> {
   if (keys === undefined) {
     throw new CLIError(
       "KEYS_NOT_GRANTED",
-      `Profile "${profileName}" has no named-key access. Sign in with \`${CLI_NAME} --profile ${profileName} auth login --method local --keys <folder>\`.`,
+      `Profile "${profileName}" can't use named keys yet. Sign in with \`${CLI_NAME} --profile ${profileName} auth login --keys <folder>\`.`,
       ExitCode.PERMISSION_DENIED,
     );
   }
@@ -95,7 +95,7 @@ function parseEnvelope(bytes: Buffer): NamedKeyEnvelope {
 }
 
 export function registerKeysCommand(program: Command): void {
-  const keys = program.command("keys").description("Named encryption keys (sign in with `auth login --keys <folder>`)");
+  const keys = program.command("keys").description(`Named encryption keys (sign in with \`${CLI_NAME} auth login --keys <folder>\` first)`);
 
   keys
     .command("ensure <path>")

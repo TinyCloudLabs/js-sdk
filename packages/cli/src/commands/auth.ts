@@ -632,7 +632,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .option("--owner <did>", "Sign in as this owner (did:pkh:eip155:CHAIN:ADDRESS): OpenKey preselects that key, e.g. one that is not the account's primary key, and an approval by any other identity is refused. With --manifest, also names the secrets owner for a manifest's `secrets` on a profile with no recorded owner")
     .option("--replace-session", "Scoped or device login: replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)")
     .option("--force", "Replica-enabled OpenKey login: replace the stored session key even when recorded shares could not be checked or hold unexpired shares that need the current key")
-    .option("--keys <folder>", "Local-key login: also grant named-key create and decrypt on keys below this folder (e.g. qa); the node must support named keys")
+    .option("--keys <folder>", "Also let this sign-in create and use encryption keys in this folder (for example `qa`). The node must support named keys. With OpenKey, the first time on a profile also needs `--owner`.")
     .option("--replication-prefix <prefix>", "Add replication get+sync authority for a folder prefix ending in /, or root (repeatable)", (prefix: string, values: string[] = []) => [...values, prefix])
     .option("--replication-allow-secrets", "Allow replication of secret material (network-wide decrypt warning)")
     .action(async (options, cmd) => {
@@ -652,7 +652,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           );
         }
         if (options.keys !== undefined && (options.device || options.manifest)) {
-          throw new CLIError("INVALID_ARGUMENT", "--keys works with local-key or OpenKey sign-in, not --device or --manifest.", ExitCode.USAGE_ERROR);
+          throw new CLIError("INVALID_ARGUMENT", "`--keys` can't be used with `--device` or `--manifest`.", ExitCode.USAGE_ERROR);
         }
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
@@ -2854,7 +2854,7 @@ async function refreshPreparedKeysSession(params: {
     : storedOwner ?? (profile.ownerDid ? canonicalOwnerDid(profile.ownerDid) : undefined);
   if (!owner) {
     throw new CLIError("OWNER_REQUIRED",
-      "`--keys` with OpenKey needs `--owner did:pkh:eip155:CHAIN:ADDRESS` or a profile that has signed in before. No approval was started.",
+      "The first OpenKey sign-in with `--keys` needs your account: add `--owner did:pkh:eip155:<chain>:<address>`. Nothing was started.",
       ExitCode.AUTH_REQUIRED);
   }
   if (expectedOwner && normalizePkhIdentifier(owner) !== normalizePkhIdentifier(expectedOwner)) {
@@ -2873,7 +2873,8 @@ async function refreshPreparedKeysSession(params: {
   let handoff: PreparedOpenKeyHandoff | undefined;
   let preparedDid: string | undefined;
   try {
-    process.stderr.write(`The approval page will ask to create and use encryption keys in the folder "${namedKeys.prefix}/". Approve every row to keep this access.\n`);
+    process.stderr.write(`On the OpenKey page, the row that mentions tinycloud.encryption lets this profile create and use keys in the folder "${namedKeys.prefix}/". Leave that row ticked in full: if you untick only part of it, OpenKey refuses the sign-in.
+`);
     await node.signInWithOpenKey(async (prepared) => {
       preparedDid = prepared.verificationMethod;
       handoff = await startPreparedOpenKeyHandoff({
@@ -2906,7 +2907,7 @@ async function refreshPreparedKeysSession(params: {
     await commitLogin(profileName, snapshot, { key, session, profile: updatedProfile });
     await handoff?.complete(true);
     if (grant === "none") {
-      process.stderr.write(`Profile "${profileName}" can't use named keys yet. Sign in with \`${CLI_NAME} --profile ${profileName} auth login --method openkey --keys <folder>\` and approve every row.\n`);
+      process.stderr.write(`You're signed in, but without named keys: the tinycloud.encryption permission wasn't approved. To add them, sign in again with \`${CLI_NAME} --profile ${profileName} auth login --keys <folder>\` and leave the row that mentions tinycloud.encryption ticked.\n`);
     }
     return { profile: updatedProfile, delegationData: session, declined: [], legacyNested: [] };
   } catch (error) {
@@ -2918,7 +2919,7 @@ async function refreshPreparedKeysSession(params: {
 
 function partialKeysGrantError(): CLIError {
   return new CLIError("KEYS_PARTIAL_GRANT",
-    "Named-key access needs both permissions approved (create and use). Only part of it was approved, so no session was saved.",
+    "Named keys need both permissions (create and use), but only one was approved, so this sign-in wasn't saved. Sign in again and approve both.",
     ExitCode.PERMISSION_DENIED);
 }
 
@@ -2984,7 +2985,7 @@ export async function refreshOpenKeySession(
   }
   if (options.keys !== undefined) {
     if (replication.prefixes.length > 0 || permissions !== undefined) {
-      throw new CLIError("INVALID_ARGUMENT", "--keys can't be combined with --manifest or replication prefixes.", ExitCode.USAGE_ERROR);
+      throw new CLIError("INVALID_ARGUMENT", "`--keys` can't be combined with replication prefixes on OpenKey sign-in.", ExitCode.USAGE_ERROR);
     }
     return refreshPreparedKeysSession({ profileName, host, profile, snapshot, options, expectedOwner, expiry });
   }
