@@ -2827,6 +2827,21 @@ function namedKeysGrantOf(siwe: string | undefined, keys: ProfileNamedKeys): "bo
   return granted.length === wanted.length && Object.keys(row).length === wanted.length ? "both" : "partial";
 }
 
+const KEYS_APPROVAL_NOTE = (folder: string): string =>
+  `On the OpenKey page, the row that mentions tinycloud.encryption lets this profile create and use keys in the folder "${folder}/". Keep every row ticked. To sign in without keys, untick that whole row and nothing else; any other change makes OpenKey refuse the sign-in.\n`;
+
+const keysNotGrantedAfterLogin = (profileName: string): string =>
+  `You're signed in, but without named keys: the tinycloud.encryption permission wasn't approved. To add them, sign in again with \`${CLI_NAME} --profile ${profileName} auth login --keys <folder>\` and leave the row that mentions tinycloud.encryption ticked.\n`;
+
+/** Create the default encryption network when the account has none yet; a failure only means the folder isn't ready. */
+async function readyNamedKeysNetwork(node: TinyCloudNode): Promise<void> {
+  try {
+    await node.ensureEncryptionNetwork();
+  } catch {
+    process.stderr.write(`You're signed in, but the key folder isn't ready yet. Run \`${CLI_NAME} keys ensure <folder>/<name>\` again in a minute.\n`);
+  }
+}
+
 function isNarrowedRecapMismatch(error: unknown): boolean {
   const text = error instanceof Error ? `${(error as { code?: unknown }).code ?? ""} ${error.message}` : String(error);
   return text.includes("narrowed_recap_mismatch");
@@ -2873,8 +2888,7 @@ async function refreshPreparedKeysSession(params: {
   let handoff: PreparedOpenKeyHandoff | undefined;
   let preparedDid: string | undefined;
   try {
-    process.stderr.write(`On the OpenKey page, the row that mentions tinycloud.encryption lets this profile create and use keys in the folder "${namedKeys.prefix}/". Leave that row ticked in full: if you untick only part of it, OpenKey refuses the sign-in.
-`);
+    process.stderr.write(KEYS_APPROVAL_NOTE(namedKeys.prefix));
     await node.signInWithOpenKey(async (prepared) => {
       preparedDid = prepared.verificationMethod;
       handoff = await startPreparedOpenKeyHandoff({
@@ -2906,8 +2920,9 @@ async function refreshPreparedKeysSession(params: {
     if (grant === "both") updatedProfile.namedKeys = namedKeys;
     await commitLogin(profileName, snapshot, { key, session, profile: updatedProfile });
     await handoff?.complete(true);
+    if (grant === "both") await readyNamedKeysNetwork(node);
     if (grant === "none") {
-      process.stderr.write(`You're signed in, but without named keys: the tinycloud.encryption permission wasn't approved. To add them, sign in again with \`${CLI_NAME} --profile ${profileName} auth login --keys <folder>\` and leave the row that mentions tinycloud.encryption ticked.\n`);
+      process.stderr.write(keysNotGrantedAfterLogin(profileName));
     }
     return { profile: updatedProfile, delegationData: session, declined: [], legacyNested: [] };
   } catch (error) {
@@ -2984,8 +2999,10 @@ export async function refreshOpenKeySession(
     assertSessionReplaceable(profileName, snapshot, expectedOwner, permissions, estimatedExpiry);
   }
   if (options.keys !== undefined) {
-    if (replication.prefixes.length > 0 || permissions !== undefined) {
-      throw new CLIError("INVALID_ARGUMENT", "`--keys` can't be combined with replication prefixes on OpenKey sign-in.", ExitCode.USAGE_ERROR);
+    if (replication.prefixes.length > 0) {
+      throw new CLIError("INVALID_ARGUMENT",
+        "`--keys` can't be used while this profile has replication prefixes (from `--replication-prefix` or an earlier sign-in). Use a separate profile for named keys. Nothing was started.",
+        ExitCode.USAGE_ERROR);
     }
     return refreshPreparedKeysSession({ profileName, host, profile, snapshot, options, expectedOwner, expiry });
   }

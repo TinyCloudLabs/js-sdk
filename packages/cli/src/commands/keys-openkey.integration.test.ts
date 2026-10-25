@@ -24,10 +24,10 @@ type Approval = "all" | "row-unticked" | "create-only";
  * It rewrites the statement to describe the narrowed ReCap, as the node-side proof check requires.
  */
 function narrow(siwe: string, resource: string, keep: string[]): string {
-  const item = ` (8) 'tinycloud.encryption': 'decrypt', 'key.create' for '${resource}'.`;
-  expect(siwe).toContain(item);
+  const found = new RegExp(` \\((\\d+)\\) 'tinycloud\\.encryption': 'decrypt', 'key\\.create' for '${resource}'\\.`).exec(siwe);
+  expect(found).not.toBeNull();
   const abilities = keep.map((ability) => `'${ability.split("/")[1]}'`).join(", ");
-  const rewritten = siwe.replace(item, keep.length === 0 ? "" : ` (8) 'tinycloud.encryption': ${abilities} for '${resource}'.`);
+  const rewritten = siwe.replace(found![0], keep.length === 0 ? "" : ` (${found![1]}) 'tinycloud.encryption': ${abilities} for '${resource}'.`);
   return rewritten.split("\n").map((line) => {
     const match = /^(- urn:recap:)([A-Za-z0-9_-]+=*)$/.exec(line);
     if (!match) return line;
@@ -65,10 +65,10 @@ async function setup(features = ["encryption-named-keys-v1"]) {
   return { home, node, openKeyApi, signer, ownerDid, directory, sessionFile, resource: `urn:tinycloud:encryption:${ownerDid}:default/qa/` };
 }
 
-async function keysLogin(approval: Approval, folder = "qa/") {
+async function keysLogin(approval: Approval, folder = "qa/", extraArgs: string[] = []) {
   const t = await setup();
   const child = Bun.spawn([process.execPath, cliEntry, "--quiet", "--json", "--profile", PROFILE,
-    "auth", "login", "--method", "openkey", "--keys", folder, "--owner", t.ownerDid, "--no-popup"], {
+    "auth", "login", "--method", "openkey", "--keys", folder, "--owner", t.ownerDid, "--no-popup", ...extraArgs], {
     env: { ...process.env, HOME: t.home, TC_HOME: t.home, TC_OPENKEY_HOST: "https://openkey.test", TC_OPENKEY_API_HOST: t.openKeyApi.url.origin },
     stdin: "pipe", stdout: "pipe", stderr: "pipe",
   });
@@ -122,6 +122,8 @@ test("OpenKey --keys with everything approved records the folder and signs the r
   expect(r.exitCode, r.stderr).toBe(0);
   expect(r.stderr).toContain('the row that mentions tinycloud.encryption lets this profile create and use keys in the folder "qa/"');
   expect(r.profile.namedKeys).toEqual({ prefix: "qa", resource: r.resource });
+  // The stub node has no encryption network routes, so the login says the folder isn't ready and still succeeds.
+  expect(r.stderr).toContain("the key folder isn't ready yet");
   const stored = JSON.parse(await readFile(r.sessionFile, "utf8")) as { siwe: string };
   expect(extractRecapAttenuations(stored.siwe)[r.resource]).toBeDefined();
 });
@@ -180,5 +182,18 @@ test("OpenKey --keys against a node without named keys is refused before the han
   });
   const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
   expect(code).toBe(7);
+  expect(err + out).not.toContain("openkey.test/delegate");
+});
+
+test("OpenKey --keys with a replication prefix is refused before the hand-off opens", async () => {
+  const t = await setup();
+  const child = Bun.spawn([process.execPath, cliEntry, "--quiet", "--json", "--profile", PROFILE,
+    "auth", "login", "--method", "openkey", "--keys", "qa", "--owner", t.ownerDid, "--replication-prefix", "notes/", "--no-popup"], {
+    env: { ...process.env, HOME: t.home, TC_HOME: t.home, TC_OPENKEY_HOST: "https://openkey.test", TC_OPENKEY_API_HOST: t.openKeyApi.url.origin },
+    stdin: "ignore", stdout: "pipe", stderr: "pipe",
+  });
+  const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect(code).toBe(2);
+  expect(err + out).toContain("replication prefixes");
   expect(err + out).not.toContain("openkey.test/delegate");
 });
