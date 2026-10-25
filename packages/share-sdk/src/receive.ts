@@ -1,12 +1,10 @@
 import {
   canonicalize,
-  computeCid,
-  open,
-  parseSealedInlineShareUrl,
   shareEnvelopeV3Schema,
   verifyEnvelopeV3,
   type ShareEnvelopeV3,
 } from "@tinycloud/share-envelope";
+import type { LinkError, ResolvedLink } from "@tinycloud/share-envelope/links";
 import { ArtifactPinError, verifyArtifactShare } from "./artifact-pin.js";
 import type { ShareAuthorizationMethod } from "./authorization.js";
 
@@ -39,9 +37,17 @@ export function toShareErrorInfo(error: unknown): ShareErrorInfo {
   return { protocol: "tinycloud-share", version: SHARE_RESULT_VERSION, error: { code: "fetch-failed" } };
 }
 
-/** Policy/v3 links seal their authorization metadata in a fragment; no blob fetch adapter exists. */
+/**
+ * A Policy/v3 link is a `v=4` link: a short link whose sealed envelope the links
+ * API serves, or a full link that carries it. The key and body CID stay in the
+ * fragment and are never sent.
+ */
 export interface ShareFetchOptions {
+  /** The trusted viewer origin. Defaults to the link's own origin. */
   readonly expectedOrigin?: string;
+  /** The links API origin a short link is read from. A link never names it. Defaults to `https://api.tinycloud.xyz`. */
+  readonly apiOrigin?: string;
+  readonly fetch?: typeof globalThis.fetch;
   readonly signal?: AbortSignal;
   readonly now?: () => number;
   readonly maxSealedBlobBytes?: number;
@@ -107,26 +113,82 @@ function metadataFor(envelope: ShareEnvelopeV3, origin: string): ShareMetadata {
   };
 }
 
+function receiveErrorFor(error: LinkError): ShareReceiveError {
+  switch (error.code) {
+    case "origin_not_trusted":
+      return new ShareReceiveError("origin-mismatch", "share link origin is not trusted");
+    case "body_over_cap":
+    case "response_too_large":
+      return new ShareReceiveError("max-bytes-exceeded", "sealed policy envelope exceeds the size limit");
+    case "body_hash_mismatch":
+    case "link_cid_mismatch":
+      return new ShareReceiveError("cid-mismatch", "sealed envelope bytes do not match the link CID");
+    case "body_open_failed":
+      return new ShareReceiveError("decrypt-failed", "share envelope could not be opened");
+    case "gone":
+    case "expired":
+      return new ShareReceiveError("expired", "share link has expired, was deleted, or never existed");
+    case "bad_signature":
+    case "issuer_binding_mismatch":
+      return new ShareReceiveError("signature-invalid", "share link signature is invalid");
+    case "service_refused":
+    case "service_unavailable":
+    case "invalid_response":
+      return new ShareReceiveError("fetch-failed", "share link could not be fetched");
+    case "not_a_url":
+    case "not_https":
+    case "userinfo":
+    case "not_canonical":
+    case "query_present":
+    case "removed_version":
+    case "path_grammar":
+    case "fragment_grammar":
+    case "key_noncanonical":
+    case "cid_grammar":
+    case "record_encoding":
+    case "record_json":
+    case "record_not_canonical":
+    case "type_path_mismatch":
+    case "full_non_share":
+      return new ShareReceiveError("invalid-link", "share link format is invalid");
+    default:
+      return new ShareReceiveError("envelope-invalid", "share envelope is invalid");
+  }
+}
+
 async function resolvePolicyShare(link: string, options: ShareFetchOptions): Promise<{ readonly envelope: ShareEnvelopeV3; readonly origin: string; readonly cid: string }> {
   options.signal?.throwIfAborted();
   let url: URL;
-  let parsed: Awaited<ReturnType<typeof parseSealedInlineShareUrl>>;
   try {
     url = new URL(link);
-    parsed = await parseSealedInlineShareUrl(link, { ...(options.expectedOrigin === undefined ? {} : { expectedOrigin: options.expectedOrigin }) });
   } catch {
     throw new ShareReceiveError("invalid-link", "share link format is invalid");
   }
+  // The links module is a separate file of `@tinycloud/share-envelope`, loaded when a link is first resolved.
+  const links = await import("@tinycloud/share-envelope/links");
+  let resolved: ResolvedLink;
+  try {
+    resolved = await links.resolveLink(link, {
+      trustedOrigins: [options.expectedOrigin ?? url.origin],
+      apiOrigin: options.apiOrigin ?? links.DEFAULT_LINKS_API_ORIGIN,
+      ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+      now: options.now?.() ?? Date.now(),
+    });
+  } catch (error) {
+    options.signal?.throwIfAborted();
+    throw error instanceof links.LinkError ? receiveErrorFor(error) : error;
+  }
+  if (resolved.type !== "share") throw new ShareReceiveError("invalid-link", "share link is not a share");
   const limit = options.maxSealedBlobBytes ?? DEFAULT_MAX_SEALED_BLOB_BYTES;
-  if (!Number.isSafeInteger(limit) || limit <= 0 || parsed.ciphertext.byteLength > limit) throw new ShareReceiveError("max-bytes-exceeded", "sealed policy envelope exceeds the configured byte limit");
-  if (await computeCid(parsed.ciphertext) !== parsed.ciphertextCid) throw new ShareReceiveError("cid-mismatch", "sealed envelope bytes do not match the link CID");
+  if (!Number.isSafeInteger(limit) || limit <= 0 || resolved.body.byteLength > limit) throw new ShareReceiveError("max-bytes-exceeded", "sealed policy envelope exceeds the configured byte limit");
+  const cid = resolved.header.bodyCid;
   options.signal?.throwIfAborted();
   let envelope: ShareEnvelopeV3;
   try {
-    const encoded = new TextDecoder("utf-8", { fatal: true }).decode(await open(parsed.ciphertext, parsed.key32));
-    const value = JSON.parse(encoded) as unknown;
-    if (canonicalize(value) !== encoded) throw new Error("non-canonical envelope");
-    envelope = shareEnvelopeV3Schema.parse(value);
+    const encoded = new TextDecoder("utf-8", { fatal: true }).decode(resolved.plaintext);
+    if (canonicalize(resolved.value) !== encoded) throw new Error("non-canonical envelope");
+    envelope = shareEnvelopeV3Schema.parse(resolved.value);
   } catch {
     throw new ShareReceiveError("envelope-invalid", "share envelope is invalid");
   }
@@ -147,8 +209,8 @@ async function resolvePolicyShare(link: string, options: ShareFetchOptions): Pro
   const expiry = Date.parse(envelope.expiry);
   if (!Number.isFinite(expiry)) throw new ShareReceiveError("envelope-invalid", "share expiry is invalid");
   if (expiry <= (options.now?.() ?? Date.now())) throw new ShareReceiveError("expired", "share has expired", { expiresAt: envelope.expiry });
-  options.onResolvedAddressedEnvelope?.(envelope, parsed.ciphertextCid);
-  return { envelope, origin: url.origin, cid: parsed.ciphertextCid };
+  options.onResolvedAddressedEnvelope?.(envelope, cid);
+  return { envelope, origin: url.origin, cid };
 }
 
 export async function inspectShare(link: string, options: ShareFetchOptions = {}): Promise<ShareInspection> {

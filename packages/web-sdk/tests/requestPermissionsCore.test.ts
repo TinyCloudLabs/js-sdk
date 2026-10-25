@@ -171,6 +171,25 @@ describe("requestPermissionsCore: approve", () => {
     expect(suppressPromptFor30Days).not.toHaveBeenCalled();
   });
 
+  test("does not persist prompt suppression when the user declines", async () => {
+    const suppressPromptFor30Days = mock(() => {});
+    const grantPermissions = mock(async () => {});
+
+    const result = await requestPermissionsCore(additional, {
+      manifest: baseManifest,
+      showModal: async () => ({
+        approved: false,
+        suppressPromptFor30Days: true,
+      }),
+      suppressPromptFor30Days,
+      grantPermissions,
+    });
+
+    expect(result).toEqual({ approved: false });
+    expect(grantPermissions).not.toHaveBeenCalled();
+    expect(suppressPromptFor30Days).not.toHaveBeenCalled();
+  });
+
   test("skips the modal when the page/app prompt is suppressed", async () => {
     const showModal = mock(async () => ({ approved: false }));
     const grantPermissions = mock(async () => {});

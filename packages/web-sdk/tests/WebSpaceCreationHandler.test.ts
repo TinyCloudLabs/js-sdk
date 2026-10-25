@@ -14,6 +14,8 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { prompts } from "../src/ui/parts/prompts";
+import type { HostContext } from "../src/ui/slots";
 
 // ---------------------------------------------------------------------------
 // Minimal DOM shim
@@ -98,42 +100,49 @@ class FakeCustomEvent<T> {
 const dispatchedWindowEvents: Array<{ type: string; detail: any }> = [];
 
 const originalGlobals = {
-  HTMLElement: (globalThis as any).HTMLElement,
-  customElements: (globalThis as any).customElements,
-  document: (globalThis as any).document,
-  window: (globalThis as any).window,
-  CustomEvent: (globalThis as any).CustomEvent,
-  requestAnimationFrame: (globalThis as any).requestAnimationFrame,
+  HTMLElement: (globalThis as unknown as typeof globalThis).HTMLElement,
+  customElements: (globalThis as unknown as typeof globalThis).customElements,
+  document: (globalThis as unknown as typeof globalThis).document,
+  window: (globalThis as unknown as typeof globalThis).window,
+  CustomEvent: (globalThis as unknown as typeof globalThis).CustomEvent,
+  requestAnimationFrame: (globalThis as unknown as typeof globalThis).requestAnimationFrame,
   consoleWarn: console.warn,
 };
 
 let documentElement: FakeElement;
+let stopPrompts: (() => void) | undefined;
 
 beforeAll(() => {
-  (globalThis as any).HTMLElement = FakeHTMLElement;
-  (globalThis as any).customElements = { define: () => {}, get: () => undefined };
+  (globalThis as unknown as typeof globalThis).HTMLElement = FakeHTMLElement;
+  (globalThis as unknown as typeof globalThis).customElements = { define: () => {}, get: () => undefined };
   const body: any = new FakeElement();
   body.style = {};
   documentElement = new FakeElement();
-  (globalThis as any).document = {
+  (globalThis as unknown as typeof globalThis).document = {
     body,
     documentElement,
     addEventListener: () => {},
     removeEventListener: () => {},
   };
-  (globalThis as any).CustomEvent = FakeCustomEvent;
-  (globalThis as any).window = {
+  (globalThis as unknown as typeof globalThis).CustomEvent = FakeCustomEvent;
+  const fakeWindow = {
     dispatchEvent: (event: any) => {
       dispatchedWindowEvents.push({ type: event.type, detail: event.detail });
       return true;
     },
     addEventListener: () => {},
     removeEventListener: () => {},
+    location: { origin: "http://localhost" },
+    top: undefined as unknown,
   };
-  (globalThis as any).requestAnimationFrame = (cb: () => void) => {
+  fakeWindow.top = fakeWindow;
+  (globalThis as unknown as typeof globalThis).window = fakeWindow as unknown as Window & typeof globalThis;
+  (globalThis as unknown as typeof globalThis).requestAnimationFrame = (cb: () => void) => {
     cb();
     return 0;
   };
+  // Prompts render into the host layer; start the prompt part so they can mount.
+  stopPrompts = prompts.start(undefined as unknown as HostContext, new FakeElement() as unknown as HTMLElement);
   // The handler intentionally warns when it starts blocking on the user.
   // Keep the test output readable while still recording the calls.
   console.warn = (...args: unknown[]) => {
@@ -145,12 +154,13 @@ afterAll(async () => {
   // The modal's hide() animation runs on a 200ms timer that touches `document`.
   // Let it drain before the globals are restored.
   await new Promise((resolve) => setTimeout(resolve, 300));
-  (globalThis as any).HTMLElement = originalGlobals.HTMLElement;
-  (globalThis as any).customElements = originalGlobals.customElements;
-  (globalThis as any).document = originalGlobals.document;
-  (globalThis as any).window = originalGlobals.window;
-  (globalThis as any).CustomEvent = originalGlobals.CustomEvent;
-  (globalThis as any).requestAnimationFrame = originalGlobals.requestAnimationFrame;
+  stopPrompts?.();
+  (globalThis as unknown as typeof globalThis).HTMLElement = originalGlobals.HTMLElement;
+  (globalThis as unknown as typeof globalThis).customElements = originalGlobals.customElements;
+  (globalThis as unknown as typeof globalThis).document = originalGlobals.document;
+  (globalThis as unknown as typeof globalThis).window = originalGlobals.window;
+  (globalThis as unknown as typeof globalThis).CustomEvent = originalGlobals.CustomEvent;
+  (globalThis as unknown as typeof globalThis).requestAnimationFrame = originalGlobals.requestAnimationFrame;
   console.warn = originalGlobals.consoleWarn;
 });
 
@@ -192,7 +202,7 @@ const context = {
  * this regression is the handler's contract with the modal's callbacks.
  */
 function activeModal(manager: any): any {
-  return (manager.ModalManager.getInstance() as any).activeModal;
+  return manager.ModalManager.getInstance().activeModal;
 }
 
 describe("ModalSpaceCreationHandler", () => {
@@ -228,7 +238,7 @@ describe("ModalSpaceCreationHandler", () => {
 
     expect(caught).toBeInstanceOf(SpaceCreationTimeoutError);
     expect((caught as Error).name).toBe("SpaceCreationTimeoutError");
-    expect((caught as any).code).toBe("SPACE_CREATION_TIMEOUT");
+    expect((caught as Error & { code?: string }).code).toBe("SPACE_CREATION_TIMEOUT");
     // Actionable, not generic.
     expect((caught as Error).message).toContain("autoCreateSpace: true");
     expect((caught as Error).message).toContain("tinycloud-space-modal");
@@ -345,6 +355,6 @@ describe("resolveSpaceCreationHandler", () => {
       caught = error;
     }
     expect(caught).toBeInstanceOf(SpaceCreationTimeoutError);
-    expect((caught as any).timeoutMs).toBe(30);
+    expect((caught as Error & { timeoutMs?: number }).timeoutMs).toBe(30);
   });
 });

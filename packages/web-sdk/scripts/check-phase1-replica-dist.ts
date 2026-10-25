@@ -14,6 +14,10 @@ import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequir
 import { rootCeilingFor, validateTc1757RatchetTransition, validateTc1777ExpiryRatchetTransition, validateTc1777RatchetTransition, validateTc1781DecryptExpiryRatchetTransition, validateTc1801NonTransferableShareRatchetTransition, validateTc1807CredentialDiscoveryRatchetTransition, validateTc1823SizeCodeRatchetTransition, validateTc712CredentialCoreRatchetTransition, validateTc1827ReplicaWorkerRatchetTransition, validateTc1827WorkerRatchetTransition, validateTc848PanelRatchetTransition } from "./replica-size-policy";
 import { validateTc1781DecryptStandardExpiryRatchetTransition } from "./replica-size-policy";
 import { validateTc1855ManifestLimitGuardRatchetTransition } from "./replica-size-policy";
+import { validateTc1488SiweDomainUriRatchetTransition } from "./replica-size-policy";
+import { validateTc1737ShortLinkLazyChunkRatchetTransition } from "./replica-size-policy";
+import { validateTc1910SigningConsistencyRatchetTransition } from "./replica-size-policy";
+import { validateTc848SettingsPanelRatchetTransition } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 import { replicaOwnedPath } from "./replica-owned-path";
 import { webSdkTestExitFailure } from "./web-sdk-test-exit";
@@ -379,6 +383,34 @@ if (prBaseSha) {
   if (tc1855ManifestLimitGuard !== undefined && baseLedger.tc1855ManifestLimitGuardRatchet === undefined &&
       (baseLedger.tc1781DecryptStandardExpiryRatchet === undefined || !hasAncestor(repoRoot, tc1855ManifestLimitGuard.sourceCommits.at(-1)!))) {
     console.error("The manifest limit guard ratchet requires the merged decrypt standard expiry ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc1488SiweDomainUriRatchetTransition(baseLedger.tc1488SiweDomainUriRatchet, ledger.tc1488SiweDomainUriRatchet);
+  const tc1488SiweDomainUri = ledger.tc1488SiweDomainUriRatchet;
+  if (tc1488SiweDomainUri !== undefined && baseLedger.tc1488SiweDomainUriRatchet === undefined &&
+      (baseLedger.tc1855ManifestLimitGuardRatchet === undefined || !hasAncestor(repoRoot, tc1488SiweDomainUri.sourceCommits.at(-1)!))) {
+    console.error("The SIWE domain and URI ratchet requires the merged manifest limit guard ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc1737ShortLinkLazyChunkRatchetTransition(baseLedger.tc1737ShortLinkLazyChunkRatchet, ledger.tc1737ShortLinkLazyChunkRatchet);
+  const tc1737ShortLink = ledger.tc1737ShortLinkLazyChunkRatchet;
+  if (tc1737ShortLink !== undefined && baseLedger.tc1737ShortLinkLazyChunkRatchet === undefined &&
+      (baseLedger.tc1488SiweDomainUriRatchet === undefined || !hasAncestor(repoRoot, tc1737ShortLink.sourceCommits.at(-1)!))) {
+    console.error("The short-link ratchet requires the merged SIWE domain and URI ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc1910SigningConsistencyRatchetTransition(baseLedger.tc1910SigningConsistencyRatchet, ledger.tc1910SigningConsistencyRatchet);
+  const tc1910SigningConsistency = ledger.tc1910SigningConsistencyRatchet;
+  if (tc1910SigningConsistency !== undefined && baseLedger.tc1910SigningConsistencyRatchet === undefined &&
+      (baseLedger.tc1737ShortLinkLazyChunkRatchet === undefined || !hasAncestor(repoRoot, tc1910SigningConsistency.sourceCommits.at(-1)!))) {
+    console.error("The signing-consistency ratchet requires the merged short-link ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc848SettingsPanelRatchetTransition(baseLedger.tc848SettingsPanelRatchet, ledger.tc848SettingsPanelRatchet);
+  const tc848SettingsPanel = ledger.tc848SettingsPanelRatchet;
+  if (tc848SettingsPanel !== undefined && baseLedger.tc848SettingsPanelRatchet === undefined &&
+      (baseLedger.tc1910SigningConsistencyRatchet === undefined || !hasAncestor(repoRoot, tc848SettingsPanel.sourceCommits.at(-1)!))) {
+    console.error("The panel ratchet requires the merged signing-consistency ratchet and its measured source commit.");
     failed = true;
   }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";

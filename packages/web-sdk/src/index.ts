@@ -6,6 +6,7 @@ export {
   type SessionRestoreResult,
   type SessionRestoreStatus,
 } from "./modules/tcw";
+export type { TinyCloudUI, UiConfig, UiPosition } from "./ui";
 export {
   establishOpenKeySession,
   type EstablishOpenKeySessionOptions,
