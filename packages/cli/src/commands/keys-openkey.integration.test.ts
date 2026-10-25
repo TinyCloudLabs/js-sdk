@@ -20,7 +20,7 @@ afterEach(async () => {
 type Approval = "all" | "row-unticked" | "create-only";
 
 /**
- * What OpenKey's approval page does to the encryption row: keep it, drop it, or keep one ability.
+ * What OpenKey's approval page does to the encryption row: keep it, remove it, or keep one ability.
  * It rewrites the statement to describe the narrowed ReCap, as the node-side proof check requires.
  */
 function narrow(siwe: string, resource: string, keep: string[]): string {
