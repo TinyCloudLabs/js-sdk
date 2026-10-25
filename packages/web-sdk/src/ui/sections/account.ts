@@ -94,6 +94,8 @@ function mountAccount(el: HTMLElement, ctx: SectionContext): () => void {
   let signingOut = false;
   let signOutFailed = false;
   let confirming: ConfirmBox | undefined;
+  // The DID on screen: the account's when its read is ready, the one the source already knows when it failed.
+  let shownDid: string | undefined;
 
   const signedOut = document.createElement("p");
   signedOut.className = "note";
@@ -223,35 +225,41 @@ function mountAccount(el: HTMLElement, ctx: SectionContext): () => void {
     if (!signed) return;
 
     const ready = view.state === "ready" ? view.data : undefined;
+    // A failed read keeps what the panel already knows without it: the account DID and the app name.
+    const knownDid = view.state === "error" ? client?.data?.knownDid?.() : undefined;
+    const knownApp = view.state === "error" ? ctx.appLabel() : undefined;
     status.hidden = ready !== undefined;
     status.textContent =
       view.state === "loading" ? ctx.text("account.loading") : ready === undefined ? ctx.text("account.unavailable") : "";
-    identity.hidden = ready === undefined;
-    facts.hidden = ready === undefined;
-    if (ready !== undefined) {
+    shownDid = ready?.did ?? knownDid;
+    identity.hidden = shownDid === undefined;
+    facts.hidden = ready === undefined && knownApp === undefined;
+    if (shownDid !== undefined) {
       // With a name (ENS), the name is the title and the short DID sits under it. Without one, the short DID is
       // the title and appears once; the copy button still copies the full DID.
-      const shortId = middleTruncate(ready.did);
-      const label = ready.displayName ?? shortId;
+      const shortId = middleTruncate(shownDid);
+      const label = ready?.displayName ?? shortId;
       name.textContent = label;
-      name.title = ready.displayName === undefined ? ready.did : "";
+      name.title = ready?.displayName === undefined ? shownDid : "";
       avatar.textContent = label.charAt(0).toUpperCase();
       did.textContent = shortId;
-      did.title = ready.did;
-      did.hidden = ready.displayName === undefined;
-      sessionRow.hidden = ready.sessionExpiresAt === undefined;
-      if (ready.sessionExpiresAt !== undefined) {
-        const { hours, minutes } = remaining(ready.sessionExpiresAt, Date.now());
-        const expires = ctx
-          .text("account.session.expires")
-          .replace("{hours}", String(hours))
-          .replace("{minutes}", String(minutes).padStart(2, "0"));
-        sessionValue.replaceChildren(statusNode({ text: expires, tone: "ok" }));
-      }
-      appName.textContent = ready.appName;
-      appHost.textContent = ready.appHost ?? "";
-      appHost.hidden = ready.appHost === undefined;
+      did.title = shownDid;
+      did.hidden = ready?.displayName === undefined;
     }
+    sessionRow.hidden = ready?.sessionExpiresAt === undefined;
+    if (ready?.sessionExpiresAt !== undefined) {
+      const { hours, minutes } = remaining(ready.sessionExpiresAt, Date.now());
+      const expires = ctx
+        .text("account.session.expires")
+        .replace("{hours}", String(hours))
+        .replace("{minutes}", String(minutes).padStart(2, "0"));
+      sessionValue.replaceChildren(statusNode({ text: expires, tone: "ok" }));
+    }
+    const appText = ready?.appName ?? knownApp;
+    appRow.hidden = appText === undefined;
+    if (appText !== undefined) appName.textContent = appText;
+    appHost.textContent = ready?.appHost ?? "";
+    appHost.hidden = ready?.appHost === undefined;
 
     signOutBtn.hidden = client?.signOut === undefined;
     signOutBtn.disabled = signingOut;
@@ -323,11 +331,12 @@ function mountAccount(el: HTMLElement, ctx: SectionContext): () => void {
   signOutBtn.addEventListener("click", () => openConfirm());
 
   async function copyDid(): Promise<void> {
-    if (view.state !== "ready") return;
+    if (shownDid === undefined) return;
+    const copied = shownDid;
     const generation = ctx.data.generation();
     let ok = true;
     try {
-      await navigator.clipboard.writeText(view.data.did);
+      await navigator.clipboard.writeText(copied);
     } catch {
       ok = false;
     }
@@ -347,8 +356,8 @@ function mountAccount(el: HTMLElement, ctx: SectionContext): () => void {
       render();
       return;
     }
-    // A refetch keeps the previous facts on screen; `loading` shows only with none.
-    view = view.state === "ready" ? view : { state: "loading" };
+    // A refetch keeps the previous facts on screen (and a failed read's local identity); `loading` shows only with none.
+    view = view.state === "ready" || view.state === "error" ? view : { state: "loading" };
     render();
     let next: ViewResult<AccountInfo>;
     try {
@@ -368,6 +377,10 @@ function mountAccount(el: HTMLElement, ctx: SectionContext): () => void {
   });
   // The shell refreshes the cache on open, on data change and each minute; each refresh repaints the rows.
   const offData = ctx.data.subscribe(paintGlance);
+  // A read that failed is retried once by the data source; when it settles, show it without leaving Overview.
+  const offSource = client?.data?.subscribe((changed) => {
+    if (changed === "overview" && view.state === "error") void load();
+  });
   // The session countdown is minute-grained, so one tick a minute is enough.
   const timer = setInterval(render, 60_000);
   void load();
@@ -378,6 +391,7 @@ function mountAccount(el: HTMLElement, ctx: SectionContext): () => void {
     clearInterval(timer);
     offReset?.();
     offData();
+    offSource?.();
     el.replaceChildren();
   };
 }

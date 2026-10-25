@@ -94,7 +94,11 @@ export type ActionResult = { readonly ok: true } | { readonly ok: false; readonl
 // Account (real: tc.account.status(), tc.did, tc.sessionDid)
 // ---------------------------------------------------------------------------
 
-export interface AccountInfo extends Tagged, AccountStatus {
+export interface AccountInfo extends Tagged, Omit<AccountStatus, "applications" | "spaces"> {
+  /** Indexed application count. Absent while the account index does not exist yet: unknown, never 0. */
+  readonly applications?: number;
+  /** Indexed space count. Absent while the account index does not exist yet: unknown, never 0. */
+  readonly spaces?: number;
   /** ENS name when one resolves. No SDK source today, so absent or stub. */
   readonly displayName?: string;
   /** Stub: no public getter for session expiry. */
@@ -301,6 +305,12 @@ export interface PanelDataHost {
 export interface PanelDataSource {
   /** Fires when any view's data changes (toggle, revoke, stub change). Returns unsubscribe. */
   subscribe(listener: (view: PanelView) => void): () => void;
+
+  /**
+   * Account DID this source reads for, known without a network read. Lets Overview keep the identity on
+   * screen when the account read fails. Absent on sources that cannot tell.
+   */
+  knownDid?(): string | undefined;
 
   account(): Promise<ViewResult<AccountInfo>>;
 

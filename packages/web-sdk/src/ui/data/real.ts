@@ -17,6 +17,26 @@ import { viewError, viewLoading, viewNeedsPermission, viewReady } from "../view-
 
 import { toDelegationRow } from "./map";
 
+/** One bounded retry for a first account read that failed (no ready value yet). */
+const ACCOUNT_RETRY_MS = 5_000;
+
+/**
+ * The account index tables are created by the first index write, so a brand-new account reads
+ * "no such table". Same test as the SDK (AccountService isMissingIndexError).
+ */
+const MISSING_INDEX = /no such table:/i;
+
+/**
+ * Count from an index read: a number, `undefined` when the index does not exist yet (unknown, never 0),
+ * or the error code (a string) for any other failure.
+ */
+function indexCount(
+  res: { readonly ok: true; readonly data: readonly unknown[] } | { readonly ok: false; readonly error: { readonly code: string; readonly message?: string } },
+): number | string | undefined {
+  if (res.ok === true) return res.data.length;
+  return MISSING_INDEX.test(res.error.message ?? "") ? undefined : res.error.code;
+}
+
 const ACCOUNT_TTL_MS = 60_000;
 const STORAGE_TTL_MS = 60_000;
 const DELEGATIONS_TTL_MS = 10_000;
@@ -34,6 +54,8 @@ interface Snapshot {
   refreshing: boolean;
   /** Code of the last failed refresh. Set while a ready value is kept. */
   lastError?: string;
+  /** An account retry is scheduled or spent for the current failure. */
+  retried?: boolean;
   inflight?: Promise<void>;
 }
 
@@ -97,6 +119,7 @@ export function createRealPanelData(
         snap.value = result;
         snap.at = Date.now();
         snap.lastError = undefined;
+        if (result.state === "ready") snap.retried = false;
       })
       .finally(() => {
         if (run !== epoch) return;
@@ -104,6 +127,14 @@ export function createRealPanelData(
         snap.checkedAt = Date.now();
         snap.refreshing = false;
         emit(key);
+        // A first account read that failed gets one more attempt, so an open Overview recovers without
+        // the user leaving it. The epoch guard drops it after a reset; a ready value re-arms it.
+        if (key === "account" && snap.value?.state === "error" && !snap.retried) {
+          snap.retried = true;
+          setTimeout(() => {
+            if (run === epoch) void refresh(key, fetch);
+          }, ACCOUNT_RETRY_MS);
+        }
       });
     snap.inflight = inflight;
     snap.refreshing = true;
@@ -165,8 +196,10 @@ export function createRealPanelData(
       host.account.index.applications.list(),
       read("delegations", DELEGATIONS_TTL_MS, () => fetchDelegations()),
     ]);
-    if (spaces.ok === false) return viewError(spaces.error.code);
-    if (applications.ok === false) return viewError(applications.error.code);
+    const spaceCount = indexCount(spaces);
+    if (typeof spaceCount === "string") return viewError(spaceCount);
+    const applicationCount = indexCount(applications);
+    if (typeof applicationCount === "string") return viewError(applicationCount);
 
     // Delegation counts come from the first page only. They are lower bounds
     // when the delegations read is not ready, and are reported as derived.
@@ -179,8 +212,8 @@ export function createRealPanelData(
       fieldSources: { grantedDelegations: "derived", receivedDelegations: "derived" },
       did: host.did,
       host: host.hosts[0] ?? "",
-      applications: applications.data.length,
-      spaces: spaces.data.length,
+      ...(applicationCount !== undefined ? { applications: applicationCount } : {}),
+      ...(spaceCount !== undefined ? { spaces: spaceCount } : {}),
       grantedDelegations: granted,
       receivedDelegations: received,
       appName,
@@ -210,6 +243,8 @@ export function createRealPanelData(
     },
 
     account: () => read("account", ACCOUNT_TTL_MS, fetchAccount),
+    // After a reset this source belongs to the previous account.
+    knownDid: () => (epoch === 0 ? host.did : undefined),
 
     async localNode(): Promise<ViewResult<LocalNodeState>> {
       const run = epoch;

@@ -70,6 +70,7 @@ function proxyFor(client: PanelClient): PanelDataSource {
       };
     },
     account: () => real?.account() ?? viewLoading(),
+    knownDid: () => real?.knownDid?.(),
     localNode: () => real?.localNode() ?? viewLoading(),
     localCopy: () => real?.localCopy() ?? viewLoading(),
     nodes: () => real?.nodes() ?? viewLoading(),

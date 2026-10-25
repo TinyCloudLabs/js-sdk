@@ -68,6 +68,24 @@ let gate: Promise<void> | undefined;
 let openGate: (() => void) | undefined;
 const faults = { denyDelegations: false };
 
+// Account index reads (the Overview's spaces and applications lists). "missing" is a brand-new account whose
+// index tables do not exist yet; "down" is any other failure; "ok" lists nothing.
+let indexMode: "ok" | "missing" | "down" = "ok";
+let indexReads = 0;
+const indexRead = () => {
+  indexReads += 1;
+  if (indexMode === "missing") {
+    return {
+      ok: false as const,
+      error: { code: "SQL_ERROR", message: "SQL query failed: 400 - SQLite error: no such table: spaces", service: "sql" },
+    };
+  }
+  if (indexMode === "down") {
+    return { ok: false as const, error: { code: "NETWORK_ERROR", message: "Failed to fetch", service: "sql" } };
+  }
+  return empty;
+};
+
 const removed = new Set<string>();
 const live = (items: AccountDelegationRecord[]) => items.filter((r) => !removed.has(r.cid));
 
@@ -76,8 +94,8 @@ const empty = { ok: true as const, data: [] };
 const host = {
   account: {
     index: {
-      spaces: { async list() { return empty; } },
-      applications: { async list() { return empty; } },
+      spaces: { async list() { return indexRead(); } },
+      applications: { async list() { return indexRead(); } },
     },
   },
   delegations: {
@@ -187,6 +205,13 @@ w.__tc = {
   deny(on: boolean) {
     faults.denyDelegations = on;
     return true;
+  },
+  index(mode: "ok" | "missing" | "down") {
+    indexMode = mode;
+    return true;
+  },
+  indexReads() {
+    return indexReads;
   },
   calls() {
     return calls.map((c) => ({ ...c }));
