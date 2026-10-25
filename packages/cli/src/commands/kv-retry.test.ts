@@ -130,6 +130,7 @@ describe("CLI kv put --if-none-match with a node response", () => {
     expect(JSON.parse(first.stdout)).toMatchObject({ key: "feed/item", written: true });
     expect(second.exitCode).toBe(5);
     expect(second.stdout + second.stderr).toContain("KV_ALREADY_EXISTS");
+    expect(JSON.parse(second.stdout + second.stderr).error.message).toBe('Key "feed/item" already exists, so nothing was written.');
     expect(requests).toBe(2);
     expect(headersSeen).toEqual(["*", "*"]);
     expect(stored.get("feed/item")).toBe("first");
@@ -139,7 +140,7 @@ describe("CLI kv put --if-none-match with a node response", () => {
     const result = await runTc(["--json", "kv", "put", "feed/item", "first", "--if-none-match", "foo"]);
 
     expect(result.exitCode).toBe(2);
-    expect(result.stdout + result.stderr).toContain("--if-none-match accepts only *");
+    expect(result.stdout + result.stderr).toContain("`--if-none-match` only accepts `'*'`.");
     expect(requests).toBe(0);
     expect(stored.size).toBe(0);
   });

@@ -153,13 +153,13 @@ export function registerKvCommand(program: Command): void {
     .description("Set a value")
     .option("--file <path>", "Read value from file")
     .option("--stdin", "Read value from stdin")
-    .option("--if-none-match <value>", "Create only if the key does not exist (use *)")
+    .option("--if-none-match <value>", "`--if-none-match '*'`: Write only if the key doesn't exist yet; never overwrite")
     .option("--space <name|uri>", "Target a non-primary space (short name or full URI)")
     .action(async (key: string, value: string | undefined, options, cmd) => {
       try {
         assertAddressableKey(key);
         if (options.ifNoneMatch !== undefined && options.ifNoneMatch !== "*") {
-          throw new CLIError("USAGE_ERROR", "--if-none-match accepts only *", ExitCode.USAGE_ERROR);
+          throw new CLIError("USAGE_ERROR", "`--if-none-match` only accepts `'*'`.", ExitCode.USAGE_ERROR);
         }
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
@@ -195,7 +195,7 @@ export function registerKvCommand(program: Command): void {
 
         if (!result.ok) {
           if (options.ifNoneMatch === "*" && result.error.code === "KV_PRECONDITION_FAILED") {
-            throw new CLIError("KV_ALREADY_EXISTS", `Key "${key}" already exists; no value was written.`, ExitCode.PERMISSION_DENIED);
+            throw new CLIError("KV_ALREADY_EXISTS", `Key "${key}" already exists, so nothing was written.`, ExitCode.PERMISSION_DENIED);
           }
           await throwKvError(result.error, spaceUri, ctx.profile);
         }
