@@ -72,16 +72,22 @@ const faults = { denyDelegations: false };
 // index tables do not exist yet; "down" is any other failure; "ok" lists nothing.
 let indexMode: "ok" | "missing" | "down" = "ok";
 let indexReads = 0;
-const indexRead = () => {
+const indexRead = (table: "spaces" | "applications") => {
   indexReads += 1;
   if (indexMode === "missing") {
     return {
       ok: false as const,
-      error: { code: "SQL_ERROR", message: "SQL query failed: 400 - SQLite error: no such table: spaces", service: "sql" },
+      // The shape AccountService returns for the node's 400 on a cold index (SQLService + AccountService.accountErr).
+      error: {
+        code: "SQL_ERROR",
+        message: `SQL query failed: 400 - SQLite error: no such table: ${table}`,
+        service: "account",
+        meta: { status: 400, statusText: "Bad Request", responseSnippet: `SQLite error: no such table: ${table}` },
+      },
     };
   }
   if (indexMode === "down") {
-    return { ok: false as const, error: { code: "NETWORK_ERROR", message: "Failed to fetch", service: "sql" } };
+    return { ok: false as const, error: { code: "NETWORK_ERROR", message: "Failed to fetch", service: "account" } };
   }
   return empty;
 };
@@ -94,8 +100,8 @@ const empty = { ok: true as const, data: [] };
 const host = {
   account: {
     index: {
-      spaces: { async list() { return indexRead(); } },
-      applications: { async list() { return indexRead(); } },
+      spaces: { async list() { return indexRead("spaces"); } },
+      applications: { async list() { return indexRead("applications"); } },
     },
   },
   delegations: {
@@ -187,6 +193,11 @@ w.__tc = {
   signOut() {
     signedIn = false;
     handle?.reset();
+    return true;
+  },
+  // The app drops its panel client (tcw's teardown): the client's live source must stop reading.
+  unregister() {
+    handle?.unregister();
     return true;
   },
   hold(closed: boolean) {

@@ -113,6 +113,8 @@ export function registerUiClient(options: UiClientOptions): UiClientHandle {
       target = undefined;
       dismissPrompts(promptScope);
       runtime.unregister(id);
+      // Aborts the client's live data source (in-flight reads, retry timer) so a detached client makes no reads.
+      panel.reset();
     },
     toast(request) {
       if (target === undefined) return false;

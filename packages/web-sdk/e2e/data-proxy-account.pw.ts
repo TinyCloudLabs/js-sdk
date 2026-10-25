@@ -28,6 +28,8 @@ interface HarnessWindow {
     arm(): Promise<boolean>;
     index(mode: "ok" | "missing" | "down"): boolean;
     indexReads(): number;
+    unregister(): boolean;
+    hold(closed: boolean): boolean;
   };
   tc?: { ui: { open(section?: string): void } };
 }
@@ -38,7 +40,7 @@ const panel = (page: Page) => page.locator("#tinycloud-ui-panel");
 const overview = (page: Page) => panel(page).locator('section[data-section="account"]');
 const UNAVAILABLE = "Account details are unavailable.";
 
-async function boot(page: Page, mode: "ok" | "missing" | "down") {
+async function boot(page: Page, mode: "ok" | "missing" | "down", options: { hold?: boolean } = {}) {
   await page.setViewportSize({ width: 1280, height: 800 });
   await routeUiHarness(
     page,
@@ -48,9 +50,24 @@ async function boot(page: Page, mode: "ok" | "missing" | "down") {
   await page.goto(`${ORIGIN}/`);
   await page.evaluate(() => (window as unknown as HarnessWindow).__tc.mount({ name: "Notes Pro" }));
   await page.evaluate((m) => (window as unknown as HarnessWindow).__tc.index(m), mode);
+  // A held delegations read keeps the account read (which waits on it) in flight.
+  if (options.hold) await tc(page, (api) => api.hold(true));
   await tc(page, (api) => api.arm());
   await page.evaluate(() => (window as unknown as HarnessWindow).tc?.ui.open("account"));
 }
+
+test("while the account read is still out, the known DID and the app name are already on screen", async ({ page }) => {
+  await boot(page, "ok", { hold: true });
+  await expect(overview(page).getByText("Loading account…")).toBeVisible();
+  const title = overview(page).locator(".account-ident .name");
+  await expect(title).toHaveText("did:key:z6MkAccountA…mple");
+  await expect(overview(page)).toContainText("You're inNotes Pro");
+  await expect(overview(page).getByRole("button", { name: /^Copy/ })).toHaveCount(1);
+
+  await tc(page, (api) => api.hold(false));
+  await expect(overview(page).getByText("Loading account…")).toBeHidden();
+  await expect(title).toHaveText("did:key:z6MkAccountA…mple");
+});
 
 test("a brand-new account (no index tables yet) still shows the identity and the app, with no unavailable note", async ({ page }) => {
   await boot(page, "missing");
@@ -90,4 +107,15 @@ test("a read that keeps failing is retried once, not in a loop", async ({ page }
   expect(await tc(page, (api) => api.indexReads())).toBe(4);
   await expect(overview(page).getByText(UNAVAILABLE)).toBeVisible();
   await expect(overview(page).locator(".account-ident .name")).toHaveText("did:key:z6MkAccountA…mple");
+});
+
+test("a client that unregisters while its account read is in error makes no further reads", async ({ page }) => {
+  await boot(page, "down");
+  await expect(overview(page).getByText(UNAVAILABLE)).toBeVisible();
+  const before = await tc(page, (api) => api.indexReads());
+  expect(before).toBe(2);
+  await tc(page, (api) => api.unregister());
+  // The retry would fire 5 s after the failed read.
+  await page.waitForTimeout(8_000);
+  expect(await tc(page, (api) => api.indexReads())).toBe(before);
 });

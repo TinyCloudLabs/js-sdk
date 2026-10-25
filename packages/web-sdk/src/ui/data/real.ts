@@ -22,9 +22,15 @@ const ACCOUNT_RETRY_MS = 5_000;
 
 /**
  * The account index tables are created by the first index write, so a brand-new account reads
- * "no such table". Same test as the SDK (AccountService isMissingIndexError).
+ * "no such table". The SDK's SQL read fails that way with code SQL_ERROR (HTTP 400) and a message
+ * naming the table. Only that error, for the table THIS read expects, is "not created yet": any other
+ * code, any other table (`spaces_old` included) and any error that merely quotes the text stay errors.
  */
-const MISSING_INDEX = /no such table:/i;
+const SQL_ERROR = "SQL_ERROR";
+const MISSING_TABLE: Record<"spaces" | "applications", RegExp> = {
+  spaces: /no such table:\s*spaces\b/i,
+  applications: /no such table:\s*applications\b/i,
+};
 
 /**
  * Count from an index read: a number, `undefined` when the index does not exist yet (unknown, never 0),
@@ -32,9 +38,11 @@ const MISSING_INDEX = /no such table:/i;
  */
 function indexCount(
   res: { readonly ok: true; readonly data: readonly unknown[] } | { readonly ok: false; readonly error: { readonly code: string; readonly message?: string } },
+  table: "spaces" | "applications",
 ): number | string | undefined {
   if (res.ok === true) return res.data.length;
-  return MISSING_INDEX.test(res.error.message ?? "") ? undefined : res.error.code;
+  const missing = res.error.code === SQL_ERROR && MISSING_TABLE[table].test(res.error.message ?? "");
+  return missing ? undefined : res.error.code;
 }
 
 const ACCOUNT_TTL_MS = 60_000;
@@ -56,6 +64,8 @@ interface Snapshot {
   lastError?: string;
   /** An account retry is scheduled or spent for the current failure. */
   retried?: boolean;
+  /** The pending retry timer. Cleared on reset and when a ready value lands. */
+  retryTimer?: ReturnType<typeof setTimeout>;
   inflight?: Promise<void>;
 }
 
@@ -84,6 +94,8 @@ export function createRealPanelData(
   const cursors = new Set<string>();
 
   client.onReset(() => {
+    // The pending retry must not fire for an account or a panel that is gone.
+    for (const snap of snaps.values()) clearTimeout(snap.retryTimer);
     epoch += 1;
     snaps.clear();
     cursors.clear();
@@ -119,7 +131,11 @@ export function createRealPanelData(
         snap.value = result;
         snap.at = Date.now();
         snap.lastError = undefined;
-        if (result.state === "ready") snap.retried = false;
+        if (result.state === "ready") {
+          snap.retried = false;
+          clearTimeout(snap.retryTimer);
+          snap.retryTimer = undefined;
+        }
       })
       .finally(() => {
         if (run !== epoch) return;
@@ -131,7 +147,8 @@ export function createRealPanelData(
         // the user leaving it. The epoch guard drops it after a reset; a ready value re-arms it.
         if (key === "account" && snap.value?.state === "error" && !snap.retried) {
           snap.retried = true;
-          setTimeout(() => {
+          snap.retryTimer = setTimeout(() => {
+            snap.retryTimer = undefined;
             if (run === epoch) void refresh(key, fetch);
           }, ACCOUNT_RETRY_MS);
         }
@@ -196,9 +213,9 @@ export function createRealPanelData(
       host.account.index.applications.list(),
       read("delegations", DELEGATIONS_TTL_MS, () => fetchDelegations()),
     ]);
-    const spaceCount = indexCount(spaces);
+    const spaceCount = indexCount(spaces, "spaces");
     if (typeof spaceCount === "string") return viewError(spaceCount);
-    const applicationCount = indexCount(applications);
+    const applicationCount = indexCount(applications, "applications");
     if (typeof applicationCount === "string") return viewError(applicationCount);
 
     // Delegation counts come from the first page only. They are lower bounds

@@ -225,9 +225,10 @@ function mountAccount(el: HTMLElement, ctx: SectionContext): () => void {
     if (!signed) return;
 
     const ready = view.state === "ready" ? view.data : undefined;
-    // A failed read keeps what the panel already knows without it: the account DID and the app name.
-    const knownDid = view.state === "error" ? client?.data?.knownDid?.() : undefined;
-    const knownApp = view.state === "error" ? ctx.appLabel() : undefined;
+    // Until the read is ready (loading, or failed) the panel shows what it already knows without it: the DID of
+    // the current account (the source drops it on a reset) and the app name. The read fills in the rest.
+    const knownDid = ready === undefined ? client?.data?.knownDid?.() : undefined;
+    const knownApp = ready === undefined ? ctx.appLabel() : undefined;
     status.hidden = ready !== undefined;
     status.textContent =
       view.state === "loading" ? ctx.text("account.loading") : ready === undefined ? ctx.text("account.unavailable") : "";

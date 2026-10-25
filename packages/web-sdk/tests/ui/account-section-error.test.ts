@@ -49,6 +49,8 @@ interface Opts {
   reads: Array<ViewResult<unknown>>;
   knownDid?: () => string | undefined;
   appLabel?: string;
+  /** The first read waits on this, so the view stays loading. */
+  hold?: Promise<ViewResult<unknown>>;
 }
 
 function mountWith(opts: Opts) {
@@ -67,7 +69,7 @@ function mountWith(opts: Opts) {
         };
       },
       knownDid: opts.knownDid,
-      account: async () => opts.reads[Math.min(reads++, opts.reads.length - 1)],
+      account: async () => (opts.hold !== undefined && reads++ === 0 ? opts.hold : opts.reads[Math.min(reads++, opts.reads.length - 1)]),
     },
     sync: {},
     signOut: async () => undefined,
@@ -157,11 +159,47 @@ describe("Overview when the account read fails", () => {
     expect(note(el).textContent).toBe(text("account.unavailable"));
   });
 
-  test("while the first read is out nothing is shown from the source", async () => {
-    const { el } = mountWith({ reads: [{ state: "loading" }], knownDid: () => DID, appLabel: "Notes" });
+  test("while the first read is out the known DID and the app name are on screen at once, with the loading line", async () => {
+    const hold = new Promise<ViewResult<unknown>>(() => undefined);
+    const { el } = mountWith({ reads: [], hold, knownDid: () => DID, appLabel: "Notes Pro" });
+    await flush();
+    expect(ident(el).hidden).toBe(false);
+    expect(name(el).textContent).toBe(SHORT);
+    expect(name(el).title).toBe(DID);
+    expect(el.querySelectorAll(".account-copy")).toHaveLength(1);
+    expect(facts(el).hidden).toBe(false);
+    expect(facts(el).textContent).toContain("Notes Pro");
+    const rows = [...facts(el).querySelectorAll(":scope > div")] as HTMLElement[];
+    expect(rows.find((r) => r.textContent?.includes(text("account.session.label")))?.hidden).toBe(true);
+    expect(note(el).hidden).toBe(false);
+    expect(note(el).textContent).toBe(text("account.loading"));
+  });
+
+  test("while the first read is out and no DID is known (the source was reset) no DID is shown", async () => {
+    const hold = new Promise<ViewResult<unknown>>(() => undefined);
+    const { el } = mountWith({ reads: [], hold, knownDid: () => undefined });
     await flush();
     expect(ident(el).hidden).toBe(true);
     expect(facts(el).hidden).toBe(true);
+    expect(note(el).textContent).toBe(text("account.loading"));
+  });
+
+  test("the read becoming ready updates the same elements: no remount, no flicker", async () => {
+    let release: (view: ViewResult<unknown>) => void = () => undefined;
+    const hold = new Promise<ViewResult<unknown>>((resolve) => (release = resolve));
+    const { el } = mountWith({ reads: [], hold, knownDid: () => DID, appLabel: "Notes" });
+    await flush();
+    const title = name(el);
+    const seen: boolean[] = [];
+    const Observer = (page as unknown as { MutationObserver: typeof MutationObserver }).MutationObserver;
+    new Observer(() => seen.push(ident(el).hidden)).observe(el, { subtree: true, attributes: true, childList: true });
+    release({ state: "ready", data: { ...READY, displayName: "maya.example.eth" } });
+    await flush();
+    expect(name(el)).toBe(title);
+    expect(title.textContent).toBe("maya.example.eth");
+    expect(note(el).hidden).toBe(true);
+    // The identity stayed visible through the swap.
+    expect(seen).not.toContain(true);
   });
 
   test("when the source announces a change, Overview reads again and shows the account without leaving", async () => {
