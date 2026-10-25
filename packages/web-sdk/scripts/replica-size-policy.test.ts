@@ -22,6 +22,7 @@ import { approvedTc712CredentialCoreRatchet, validateTc712CredentialCoreRatchetT
 import { approvedTc1781DecryptStandardExpiryRatchet, validateTc1781DecryptStandardExpiryRatchetTransition, type Tc1781DecryptStandardExpiryRatchet } from "./replica-size-policy";
 import { approvedTc1855ManifestLimitGuardRatchet, validateTc1855ManifestLimitGuardRatchetTransition, type Tc1855ManifestLimitGuardRatchet } from "./replica-size-policy";
 import { approvedTc1488SiweDomainUriRatchet, validateTc1488SiweDomainUriRatchetTransition, type Tc1488SiweDomainUriRatchet } from "./replica-size-policy";
+import { approvedTc1737ShortLinkLazyChunkRatchet, validateTc1737ShortLinkLazyChunkRatchetTransition, type Tc1737ShortLinkLazyChunkRatchet } from "./replica-size-policy";
 import { activeRootCeiling, approvedLedgerRows, rootCeilingFor, rootCeilings } from "./replica-size-policy";
 import { approvedTc1443Ratchet, approvedTc1443bRatchet, approvedTc1448Ratchet, approvedTc1466Ratchet, validateTc1443RatchetTransition, validateTc1443bRatchetTransition, validateTc1448RatchetTransition, validateTc1466RatchetTransition, type Tc1443Ratchet, type Tc1443bRatchet, type Tc1448Ratchet, type Tc1466Ratchet } from "./replica-size-policy";
 import { ancestryPins, assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedHardeningRatchet, approvedLogoutRatchet, approvedTc1413Ratchet, approvedTc1424Ratchet, approvedTc1432Ratchet, approvedTc1436Ratchet, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, landingCommit, pinLandedOn, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateLogoutRatchetTransition, validateMasterMergeResolutionTransition, validateTc1413RatchetTransition, validateTc1424RatchetTransition, validateTc1432RatchetTransition, validateTc1436RatchetTransition, type HardeningRatchet, type Ledger, type LogoutRatchet, type MasterMergeResolution, type Tc1413Ratchet, type Tc1424Ratchet, type Tc1432Ratchet, type Tc1436Ratchet } from "./replica-size-policy";
@@ -2603,7 +2604,7 @@ describe("browser SIWE domain and URI (#604, TC-1488) raised root ceiling ratche
     expect(ancestryPins(current, false)).toContainEqual({
       row: "tc1488SiweDomainUriRatchet", pin: row().sourceCommits.at(-1)!,
     });
-    expect(activeRootCeiling(current)).toEqual({ row: "tc1488SiweDomainUriRatchet", ceiling: row().root.ceiling });
+    expect(rootCeilings(current).find((e) => e.row === "tc1488SiweDomainUriRatchet")).toEqual({ row: "tc1488SiweDomainUriRatchet", ceiling: row().root.ceiling });
   });
 
   it("refuses one byte of drift in any bucket, other CI provenance, or a missing manifest limit guard row", () => {
@@ -2637,6 +2638,66 @@ describe("browser SIWE domain and URI (#604, TC-1488) raised root ceiling ratche
     changed.root.ceiling["index.mjs"]++;
     expect(() => validateTc1488SiweDomainUriRatchetTransition(undefined, changed)).toThrow();
     expect(() => validateTc1488SiweDomainUriRatchetTransition(row(), undefined)).toThrow();
+  });
+});
+
+describe("short links v=4 (#708, TC-1737) root ceiling ratchet", () => {
+  const row = () => structuredClone(approvedTc1737ShortLinkLazyChunkRatchet);
+
+  it("carries the index.mjs ceiling, sets index.cjs to the exact canonical CI bytes, and carries every other ceiling", () => {
+    expect(() => validateLedger(current)).not.toThrow();
+    expect(JSON.stringify(current.tc1737ShortLinkLazyChunkRatchet)).toBe(JSON.stringify(approvedTc1737ShortLinkLazyChunkRatchet));
+    expect(row().root.delta).toEqual({ "index.mjs": 0, "index.cjs": 166 });
+    expect(row().root.ceiling).toEqual({ "index.mjs": 1462509, "index.cjs": 1404942 });
+    expect(row().reason).toContain("index.mjs measured 1461950 in CI run 40136320965 and its ceiling is not lowered (within the TC-1985 gzip-alignment swing)");
+    for (const format of ["index.mjs", "index.cjs"] as const) {
+      expect(row().root.ceiling[format]).toBe(approvedTc1488SiweDomainUriRatchet.root.ceiling[format] + row().root.delta[format]);
+    }
+    expect(row().firstImport).toEqual({ ...approvedTc1488SiweDomainUriRatchet.firstImport, delta: { "replica.mjs": 0, "replica.cjs": 0 } });
+    expect(row().activation).toEqual({ ...approvedTc1488SiweDomainUriRatchet.activation, delta: { "activation.mjs": 0, "activation.cjs": 0 } });
+    expect(row().ruling).toContain("worker ceilings unchanged");
+    expect(row().base).toBe("e6aad66159e81b47c937da584a4c7f019be54100");
+    expect(row().sourceCommits).toEqual(["8d15cd6123fd37924db59065e1317682dbff2772"]);
+    expect(row().canonicalCI.run).toBe("https://github.com/TinyCloudLabs/js-sdk/actions/runs/40136320965");
+    expect(row().canonicalCI.jobs).toHaveLength(2);
+    expect(ancestryPins(current, false)).toContainEqual({
+      row: "tc1737ShortLinkLazyChunkRatchet", pin: row().sourceCommits.at(-1)!,
+    });
+    expect(rootCeilings(current).find((e) => e.row === "tc1737ShortLinkLazyChunkRatchet")).toEqual({ row: "tc1737ShortLinkLazyChunkRatchet", ceiling: row().root.ceiling });
+    expect(rootCeilings(current).map(({ row: name }) => name)).not.toContain("tc1827ReplicaWorkerRatchet");
+  });
+
+  it("refuses one byte of drift in any bucket, other CI provenance, or a missing SIWE domain and URI row", () => {
+    const mutations: Array<(changed: Tc1737ShortLinkLazyChunkRatchet) => void> = [
+      (changed) => { changed.root.ceiling["index.mjs"]++; },
+      (changed) => { changed.root.ceiling["index.cjs"]--; },
+      (changed) => { changed.root.delta["index.cjs"]++; },
+      (changed) => { changed.firstImport.ceiling["replica.cjs"]++; },
+      (changed) => { changed.activation.ceiling["activation.cjs"]++; },
+      (changed) => { changed.worker.ceiling--; },
+      (changed) => { changed.worker.delta++; },
+      (changed) => { changed.canonicalCI.run = "https://github.com/TinyCloudLabs/js-sdk/actions/runs/1"; },
+      (changed) => { changed.sourceCommits = ["0".repeat(40)]; },
+    ];
+    for (const mutate of mutations) {
+      const ledger = copy(current);
+      const changed = row();
+      mutate(changed);
+      ledger.tc1737ShortLinkLazyChunkRatchet = changed;
+      expect(() => validateLedger(ledger)).toThrow();
+    }
+    const withoutPrerequisite = copy(current);
+    delete withoutPrerequisite.tc1488SiweDomainUriRatchet;
+    expect(() => validateLedger(withoutPrerequisite)).toThrow("short-link");
+  });
+
+  it("may be introduced once and never changed or removed in a later base", () => {
+    expect(() => validateTc1737ShortLinkLazyChunkRatchetTransition(undefined, row())).not.toThrow();
+    expect(() => validateTc1737ShortLinkLazyChunkRatchetTransition(row(), row())).not.toThrow();
+    const changed = row();
+    changed.root.ceiling["index.cjs"]++;
+    expect(() => validateTc1737ShortLinkLazyChunkRatchetTransition(undefined, changed)).toThrow();
+    expect(() => validateTc1737ShortLinkLazyChunkRatchetTransition(row(), undefined)).toThrow();
   });
 });
 

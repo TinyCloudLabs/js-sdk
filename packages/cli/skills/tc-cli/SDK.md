@@ -56,6 +56,8 @@ await tc.account.delegations.query({ direction: "all" });
 await tc.delegationManager.revoke(cid);
 ```
 
+`tinycloud.delegation/revoke` on a space is space-wide: it can revoke any delegation in that space, including other apps' grants and the owner's own sessions. Request it only for the command that needs it, with a short expiry, and don't keep it: the CLI's own fallback asks for 5 minutes and stores nothing. Never put it in a long-lived grant or an app manifest.
+
 ## Properties
 
 ```typescript

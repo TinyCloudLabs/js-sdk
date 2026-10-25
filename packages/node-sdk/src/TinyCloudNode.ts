@@ -173,7 +173,10 @@ import {
   type RegisterPolicyV3Receipt,
   type ShareDeliveryAuthorizationV3Receipt,
   CREDENTIAL_INVITATION_REQUEST_DOMAIN,
-  validateShareDeliveryAuthorizationV3Bytes,
+  ShareDeliveryRefusedError,
+  shortDeliveryLinkBodyCid,
+  verifyShareDeliveryAuthorizationV3Bytes,
+  withoutShareLink,
   verifyEip191MessageSignature,
   signCompactUcanRootAuthorization,
   markDelegationTerminal,
@@ -5858,14 +5861,14 @@ export class TinyCloudNode {
     });
   }
 
-  /** Authorize one short-lived v3 delivery against the signed v3 envelope and registered roots. */
+  /**
+   * Authorize one short-lived v3 delivery. `shareUrl` is the short `/s/<id>#v=4&k=…&c=…` link: the node fetches the
+   * sealed body by id and opens it with the link's key, so the body of the request carries the link and nothing else
+   * of the share. `envelope` is the signed v3 envelope the sender holds; it checks the node's admission here and is
+   * not sent.
+   */
   async authorizeShareDeliveryV3(input: {
     readonly envelope: Record<string, CanonicalJson | undefined>;
-    /** Canonical sealed recipient envelope: version || nonce || ciphertext+tag. */
-    readonly sealedEnvelope: string;
-    /** Base64url 32-byte envelope key; it must also be the URL fragment key. */
-    readonly envelopeKey: string;
-    readonly shareCid: string;
     readonly resourcePath: string;
     readonly recipientEmail: string;
     readonly shareUrl: string;
@@ -5874,7 +5877,10 @@ export class TinyCloudNode {
     readonly deliveryAudience: string;
     /** Stable caller retry identity. It is hashed into the protocol's 16-byte JTI. */
     readonly idempotencyKey: string;
+    /** The origins `shareUrl` may be on: the node's `return_origin`. Default: `https://share.tinycloud.xyz`. */
+    readonly trustedOrigins?: readonly string[];
   }): Promise<ShareDeliveryAuthorizationV3Receipt> {
+    const envelopeRef = await shortDeliveryLinkBodyCid(input.shareUrl, input.trustedOrigins);
     const session = this.currentTinyCloudSession();
     const serviceSession = this._serviceContext?.session;
     if (!session || !serviceSession) throw new Error("Share delivery requires an authenticated session");
@@ -5887,15 +5893,12 @@ export class TinyCloudNode {
     // application identifiers and has no protocol meaning beyond this binding.
     const jtiDigest = new Uint8Array(await crypto.subtle.digest("SHA-256", idempotencyBytes));
     const body = {
-      envelope: input.envelope,
-      sealedEnvelope: input.sealedEnvelope,
-      envelopeKey: input.envelopeKey,
-      shareCid: input.shareCid,
       recipientEmail: input.recipientEmail,
       shareUrl: input.shareUrl,
       documentName: input.documentName,
       jti: base64UrlEncode(jtiDigest.slice(0, 16)),
-      expiresAt: new Date(input.expiresAt).toISOString().replace(/\.\d{3}Z$/, "Z"),
+      // Re-normalised through Date, so the sent value is always `YYYY-MM-DDTHH:mm:ss.SSSZ` (UTC, three digits).
+      expiresAt: new Date(input.expiresAt).toISOString(),
     };
     const requestBodyDigest = base64UrlEncode(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalizeEncryptionJson(body)))));
     const request = { ...body, requestBodyDigest };
@@ -5912,9 +5915,19 @@ export class TinyCloudNode {
       headers: { accept: "application/json", "content-type": "application/json", authorization },
       body: canonicalizeEncryptionJson(request),
     });
-    if (!response.ok) throw await httpResponseError(response, "V3 share delivery authorization failed");
-    const verified = validateShareDeliveryAuthorizationV3Bytes(new Uint8Array(await response.arrayBuffer()), {
+    // 422 (the body did not parse) and 400 (it failed the node's checks) are one refusal with one error.
+    if (response.status === 400 || response.status === 422) throw new ShareDeliveryRefusedError();
+    if (!response.ok) {
+      // The node's reply is part of the message. The whole reply is redacted before it is cut to 512 characters, so a
+      // link or key that crosses the cut is replaced too.
+      const reply = await response.text().catch(() => response.statusText);
+      const body = (await withoutShareLink(reply, input.shareUrl)).trim().slice(0, 512);
+      throw Object.assign(new Error(`V3 share delivery authorization failed: HTTP ${response.status}${body ? ` - ${body}` : ""}`), { status: response.status });
+    }
+    const verified = await verifyShareDeliveryAuthorizationV3Bytes(new Uint8Array(await response.arrayBuffer()), {
       request,
+      envelope: input.envelope,
+      envelopeRef,
       senderKeyDid: this.credentialHolderDid,
       deliveryAudience: input.deliveryAudience,
     });

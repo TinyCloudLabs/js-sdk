@@ -100,6 +100,18 @@ const resolveConfig = {
   },
 };
 
+// The links reader of `@tinycloud/share-envelope` is its own file, loaded by an `import()` when a share link is first
+// resolved or published. It stays a package import (the bundle does not carry it), like the replica deferred imports
+// below; `@tinycloud/share-envelope` is a dependency of this package.
+const LINKS_REQUEST = "@tinycloud/share-envelope/links";
+const linksExternal = ({ request }, callback) => {
+  if (request === LINKS_REQUEST) {
+    callback(null, `import ${request}`);
+    return;
+  }
+  callback();
+};
+
 const baseConfig = {
   mode: isProduction ? "production" : "development",
   target: "web",
@@ -107,6 +119,7 @@ const baseConfig = {
   devtool: isProduction ? false : 'source-map',
   module: { rules },
   resolve: resolveConfig,
+  externals: [linksExternal],
   optimization: {
     splitChunks: false,
     runtimeChunk: false,
@@ -152,6 +165,8 @@ const cjsConfig = {
     library: {
       type: "commonjs2",
     },
+    // The deferred import of the links reader is a real `import()` in the CommonJS bundle too.
+    environment: { dynamicImport: true },
   },
 };
 
@@ -164,6 +179,10 @@ const replicaExternals = (moduleType) => ({ context, request }, callback) => {
   }
   if (request === "./replica-gated" && context === path.resolve(__dirname, "src")) {
     callback(null, `${moduleType} @tinycloud/web-sdk/replica-gated`);
+    return;
+  }
+  if (request === LINKS_REQUEST) {
+    callback(null, `import ${request}`);
     return;
   }
   if (request && /^@tinycloud\/replica(?:\/|$)/.test(request)) {
