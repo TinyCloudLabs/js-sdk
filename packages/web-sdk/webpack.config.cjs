@@ -100,6 +100,18 @@ const resolveConfig = {
   },
 };
 
+// The links reader of `@tinycloud/share-envelope` is its own file, loaded by an `import()` when a share link is first
+// resolved or published. It stays a package import (the bundle does not carry it), like the replica deferred imports
+// below; `@tinycloud/share-envelope` is a dependency of this package.
+const LINKS_REQUEST = "@tinycloud/share-envelope/links";
+const linksExternal = ({ request }, callback) => {
+  if (request === LINKS_REQUEST) {
+    callback(null, `import ${request}`);
+    return;
+  }
+  callback();
+};
+
 const baseConfig = {
   mode: isProduction ? "production" : "development",
   target: "web",
@@ -107,6 +119,7 @@ const baseConfig = {
   devtool: isProduction ? false : 'source-map',
   module: { rules },
   resolve: resolveConfig,
+  externals: [linksExternal],
   optimization: {
     splitChunks: false,
     runtimeChunk: false,
@@ -152,6 +165,8 @@ const cjsConfig = {
     library: {
       type: "commonjs2",
     },
+    // The deferred import of the links reader is a real `import()` in the CommonJS bundle too.
+    environment: { dynamicImport: true },
   },
 };
 
@@ -164,6 +179,10 @@ const replicaExternals = (moduleType) => ({ context, request }, callback) => {
   }
   if (request === "./replica-gated" && context === path.resolve(__dirname, "src")) {
     callback(null, `${moduleType} @tinycloud/web-sdk/replica-gated`);
+    return;
+  }
+  if (request === LINKS_REQUEST) {
+    callback(null, `import ${request}`);
     return;
   }
   if (request && /^@tinycloud\/replica(?:\/|$)/.test(request)) {
@@ -220,6 +239,71 @@ const gatedCjsConfig = {
   output: { ...replicaCjsConfig.output, filename: "replica-gated.cjs" },
 };
 
+// The lazy chunks are their own entries (contracts-ade §1.4 budget applies to the eager root only).
+// The root loads each by relative sibling path, at first use, and never bundles it.
+const LAZY_ENTRIES = [
+  { request: "./panel-entry", dir: "src/ui", file: "panel" },
+  { request: "./panel-data-entry", dir: "src/ui", file: "panel-data" },
+  { request: "./modals-entry", dir: "src/notifications", file: "modals" },
+];
+const lazyLoaderExternals = (type, ext) => ({ context, request }, callback) => {
+  const entry = LAZY_ENTRIES.find((e) => e.request === request && context === path.resolve(__dirname, e.dir));
+  if (entry) {
+    callback(null, `${type} ./${entry.file}.${ext}`);
+    return;
+  }
+  callback();
+};
+
+// The panel code keeps @tinycloud/* external, like the replica entries. The dialogs do not: they import runtime
+// constants from @tinycloud/sdk-core, and a bare import in a chunk loaded at the first prompt would not resolve for a
+// page that loads the SDK without a bundler. So only imports made from src/ui are external.
+const lazyExternals = (moduleType, ext) => ({ context, request }, callback) => {
+  const uiDir = path.resolve(__dirname, "src/ui");
+  if (request && /^@tinycloud\//.test(request) && context && context.startsWith(uiDir)) {
+    callback(null, `${moduleType} ${request}`);
+    return;
+  }
+  // The panel shares the eager root's panel-data singleton, so both loaders see one live source.
+  if (request === "./panel-data-entry" && context === uiDir) {
+    callback(null, `${moduleType} ./panel-data.${ext}`);
+    return;
+  }
+  callback();
+};
+
+const rootEsmConfig = { ...esmConfig, externals: [linksExternal, lazyLoaderExternals("import", "mjs")] };
+const rootCjsConfig = {
+  ...cjsConfig,
+  externals: [linksExternal, lazyLoaderExternals("commonjs", "cjs")],
+  output: { ...cjsConfig.output, environment: { dynamicImport: true } },
+};
+
+// The lazy entries share one compilation per format: they share most of their module graph, and a compilation per
+// entry runs the build out of memory at the default heap.
+const lazyEntries = {
+  panel: "./src/ui/panel-entry.ts",
+  "panel-data": "./src/ui/panel-data-entry.ts",
+  modals: "./src/notifications/modals-entry.ts",
+};
+const notChunkLimit = (plugin) => !(plugin instanceof webpack.optimize.LimitChunkCountPlugin);
+
+const lazyEsmConfig = {
+  ...esmConfig,
+  entry: lazyEntries,
+  externals: lazyExternals("module", "mjs"),
+  plugins: esmConfig.plugins.filter(notChunkLimit),
+  output: { ...esmConfig.output, filename: "[name].mjs" },
+};
+
+const lazyCjsConfig = {
+  ...cjsConfig,
+  entry: lazyEntries,
+  externals: lazyExternals("commonjs", "cjs"),
+  plugins: cjsConfig.plugins.filter(notChunkLimit),
+  output: { ...cjsConfig.output, filename: "[name].cjs" },
+};
+
 // Headless subpath (`@tinycloud/web-sdk/credentials`). Built from the base
 // configs only: no replica externals or plugins, so index/replica are unchanged.
 const credentialsEsmConfig = {
@@ -234,12 +318,14 @@ const credentialsCjsConfig = {
 };
 
 module.exports = [
-  esmConfig,
-  cjsConfig,
+  rootEsmConfig,
+  rootCjsConfig,
   replicaEsmConfig,
   replicaCjsConfig,
   gatedEsmConfig,
   gatedCjsConfig,
+  lazyEsmConfig,
+  lazyCjsConfig,
   credentialsEsmConfig,
   credentialsCjsConfig,
 ];

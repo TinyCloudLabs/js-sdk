@@ -4,6 +4,7 @@ export default defineConfig({
   entry: {
     index: 'src/index.ts',
     core: 'src/core.ts',
+    'encryption-keys': 'src/encryption-keys.ts',
     'credential-pending-store': 'src/credential-pending-store.ts',
     credentials: 'src/credentials/index.ts',
     'credentials-core': 'src/credentials/core.ts',
@@ -21,6 +22,7 @@ export default defineConfig({
     '@tinycloud/sdk-core',
     '@tinycloud/sdk-services',
     '@tinycloud/sdk-services/kv/replication',
+    '@tinycloud/sdk-services/encryption/named-keys',
     '@tinycloud/node-sdk-wasm',
     '@tinycloud/replica',
     '@tinycloud/replica/sqlite',

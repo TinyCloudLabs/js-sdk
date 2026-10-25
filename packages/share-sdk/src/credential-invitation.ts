@@ -1,4 +1,3 @@
-import { parseSealedInlineShareUrl } from "@tinycloud/share-envelope";
 
 /** The signed, app-neutral receipt accepted by OpenCredentials' invitation endpoint. */
 export interface CredentialInvitationReceipt {
@@ -61,6 +60,9 @@ function object(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** The longest link OpenCredentials accepts as a return link. */
+const MAX_INVITATION_LINK_BYTES = 512;
+
 async function validateReceipt(
   receipt: CredentialInvitationReceipt,
   shareUrl: string,
@@ -82,27 +84,24 @@ async function validateReceipt(
       "credential invitation is not bound to the share link",
     );
   }
-  let link: URL;
+  const links = await import("@tinycloud/share-envelope/links");
   try {
-    link = new URL(shareUrl);
+    const origin = new URL(shareUrl).origin;
+    const parsed = links.parseLink(shareUrl, { trustedOrigins: [origin] });
+    // The email carries the short link only: a full link is too large to mail. The id is lowercase and the
+    // fragment exactly `#v=4&k=&c=`, within the invitation size limit.
+    if (
+      parsed.form !== "short" ||
+      parsed.pathType !== "share" ||
+      shareUrl.length > MAX_INVITATION_LINK_BYTES ||
+      shareUrl !== links.buildShortLink({ origin, type: "share", id: parsed.id, key: parsed.key, bodyCid: parsed.c })
+    ) {
+      throw new Error("not a short share link");
+    }
   } catch {
     throw new CredentialInvitationError(
       "invalid-receipt",
-      "credential invitation share link is invalid",
-    );
-  }
-  if (link.search !== "" || link.pathname !== "/s/inline") {
-    throw new CredentialInvitationError(
-      "invalid-receipt",
-      "credential invitation share link must be sealed inline",
-    );
-  }
-  try {
-    await parseSealedInlineShareUrl(shareUrl);
-  } catch {
-    throw new CredentialInvitationError(
-      "invalid-receipt",
-      "credential invitation share link is invalid",
+      "credential invitation share link must be a short share link",
     );
   }
 }

@@ -1,5 +1,89 @@
 # @tinycloudlabs/node-sdk
 
+## 3.7.0-beta.3
+
+### Minor Changes
+
+- 279c8e9: `storage.full` now fires once per episode of the signed-in account's own storage being full, instead of re-arming on every status read. The episode ends only when a committing write succeeds on that account's own space (kv `put` and `batchPut`, vault `put`, and SQL and DuckDB write actions). A successful `delete` or `get`, or a committed write to another owner's space, does not end it, and `storage.status()` reporting room no longer re-arms the event. `StorageFullMonitor.rejection` reports the own episode only, and `clear()` (sign-out, sign-in as another account) ends it. Breaking for code that relied on a status read to re-arm `storage.full`: call a committing write to see the next event. Delegated owners each emit once until a status read or a successful committing write clears them.
+
+  web-sdk panel: adds a storage section showing the account's usage and state (ok, nearly full, full, unlimited). While the own-storage episode is active the panel shows "Storage is full" and hides the numbers, even if status still reports room. The needs-permission state offers "Allow" only when the client can ask for authority; otherwise it shows the permission note with no action. The manage link uses the status `manageUrl` only when it is https and otherwise falls back to the SDK's storage manage URL.
+
+  web-sdk host: while the own-storage episode is on, the button and panel show "Storage is full", and one info toast with a manage link is shown per episode, even with the panel closed. A new toast appears only after the episode ends and a new one starts. Each full delegated owner gets one info toast with the same copy. The toast reads the manage link from status at toast time, so each toast adds one status request. A toast whose status read finishes after its episode has ended is not shown. With `ui.toasts` off, no toast is shown and no status request is made.
+
+  Details: TC-848
+
+### Patch Changes
+
+- Updated dependencies [279c8e9]
+  - @tinycloud/sdk-services@3.7.0-beta.3
+  - @tinycloud/replica@0.3.4-beta.2
+  - @tinycloud/sdk-core@3.7.0-beta.3
+
+## 3.7.0-beta.2
+
+### Patch Changes
+
+- 147bb78: Encryption network invocations are re-signed with the key of the session that built them, so a sign-in with a manifest creates the account encryption network. Decrypting for an account with no default encryption network reports that the account needs to sign in again with a current SDK.
+
+  Details: TC-1910
+
+- Updated dependencies [147bb78]
+  - @tinycloud/sdk-services@3.7.0-beta.2
+  - @tinycloud/replica@0.3.4-beta.1
+  - @tinycloud/sdk-core@3.7.0-beta.2
+
+## 3.7.0-beta.1
+
+### Minor Changes
+
+- 71fa087: `authorizeShareDeliveryV3` sends the strict short-link body of `POST /policy/v3/deliveries/authorize` and checks the node's delivery admission v1.
+  - The request body is exactly `{shareUrl, recipientEmail, documentName, jti, expiresAt, requestBodyDigest}`. `expiresAt` is `new Date(expiresAt).toISOString()` (`YYYY-MM-DDTHH:mm:ss.SSSZ`, UTC), whatever form the caller passes. `requestBodyDigest` is the base64url SHA-256 of the JCS of the body without it.
+  - `shareUrl` must be a short share link (`/s/<id>#v=4&k=…&c=…`) on one of `trustedOrigins` (new optional input; default `https://share.tinycloud.xyz`, the `DEFAULT_SHARE_ORIGINS` of `@tinycloud/share-envelope/links`) with a lowercase id. Any other link throws `share delivery requires a short share link` before a request is made.
+  - The `sealedEnvelope`, `envelopeKey` and `shareCid` inputs are removed. `envelope` stays an input: it checks the admission locally and is not sent.
+  - The admission has the schema `xyz.tinycloud.policy/delivery-admission/v1` and the signing domain `xyz.tinycloud.policy/delivery-admission/v1\0`; `returnLink` is the submitted short link and `envelopeRef` is its `c`. A v0 admission is refused. `verifyShareDeliveryAuthorizationV3Bytes` (async) verifies a delivery admission with the strict Ed25519 rule of the links contract (`S < L`, canonical and prime-order `A` and `R`) and a canonical base64url signature, through `assertDidKeySignature` of `@tinycloud/share-envelope/links`.
+  - HTTP 400 and HTTP 422 from the node are one refusal: a `ShareDeliveryRefusedError` (code `delivery-authorization-invalid`, status 400, message `share delivery authorization refused`) that carries nothing of the reply. Any other HTTP error carries the node's reply with the share link and its key replaced, so neither reaches a log or a thrown message.
+  - HTTP 429 is not the refusal: it keeps its status and is retried by `notifyShare` like any other server answer.
+  - `@tinycloud/sdk-core` exports `ShareDeliveryRefusedError`, `shortDeliveryLinkBodyCid`, `verifyShareDeliveryAuthorizationV3Bytes` and `withoutShareLink`, and loads `@tinycloud/share-envelope/links` with `import()` when it first needs it.
+  - `@tinycloud/sdk-core` no longer exports `validateShareDeliveryAuthorizationV3Bytes`.
+
+  Do not release before the node release that serves the new body.
+
+  Details: TC-1737
+
+### Patch Changes
+
+- Updated dependencies [71fa087]
+  - @tinycloud/sdk-core@3.7.0-beta.1
+
+## 3.6.2-beta.0
+
+### Patch Changes
+
+- Updated dependencies [14c685e]
+  - @tinycloud/replica@0.3.4-beta.0
+
+## 3.6.1
+
+### Patch Changes
+
+- 271155a: In the browser, the SIWE sign-in `domain` now uses `window.location.host` (it keeps the port) and, when the domain comes from the page, the SIWE `uri` defaults to `window.location.origin` (it keeps the scheme), so local http dev origins satisfy OpenKey's origin check (TC-1486). Production https origins on default ports are unchanged. `TinyCloudNodeConfig` gains an optional `uri`; a caller `siweConfig.uri` still takes precedence. (TC-1488)
+
+  Details: TC-1488
+
+- 09b7dc0: Document that `tinycloud.delegation/revoke` on a space is space-wide, and that the CLI's own fallback asks for 5 minutes and stores nothing. Added to the tc-cli skill docs and the node-sdk README.
+
+  Details: TC-1923
+  - @tinycloud/sdk-core@3.6.1
+  - @tinycloud/sdk-services@3.6.1
+
+## 3.6.1-beta.1
+
+### Patch Changes
+
+- 09b7dc0: Document that `tinycloud.delegation/revoke` on a space is space-wide, and that the CLI's own fallback asks for 5 minutes and stores nothing. Added to the tc-cli skill docs and the node-sdk README.
+
+  Details: TC-1923
+
 ## 3.6.1-beta.0
 
 ### Patch Changes
