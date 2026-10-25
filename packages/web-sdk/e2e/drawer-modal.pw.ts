@@ -358,6 +358,57 @@ test.describe("focus trap", () => {
     await expect(panel(page)).toBeVisible();
   });
 
+  for (const removal of ["auto-expiry", "dismiss click"] as const) {
+    test(`focus returns to the drawer when a focused toast leaves on ${removal}`, async ({ page }) => {
+      await mount(page, "light", DESKTOP, true);
+      await openDrawer(page);
+      await page.evaluate(() => (window as unknown as HarnessWindow).__tc.toast("info"));
+      const toast = page.locator(".tstack .toast");
+      const dismiss = toast.getByRole("button", { name: "Dismiss" });
+      await expect(dismiss).toBeVisible();
+      if (removal === "auto-expiry") await dismiss.focus();
+      else await dismiss.click();
+      if (removal === "auto-expiry") await expect(toast).toHaveCount(0, { timeout: 10_000 });
+      else await expect(toast).toHaveCount(0);
+      await expect.poll(() => focusAt(page)).toMatch(/^panel:/);
+      await page.keyboard.press("Escape");
+      await expect(panel(page)).toBeHidden();
+    });
+  }
+
+  test("a prompt still owns Escape after a toast expires over the drawer", async ({ page }) => {
+    await mount(page, "light", DESKTOP, true);
+    await openDrawer(page);
+    await page.evaluate(() => (window as unknown as HarnessWindow).__tc.toast("info"));
+    const toast = page.locator(".tstack .toast");
+    await toast.getByRole("button", { name: "Dismiss" }).focus();
+    await page.evaluate(() => (window as unknown as HarnessWindow).__tc.openPermission());
+    const prompt = page.locator("tinycloud-permission-request-modal");
+    await expect(prompt.locator(".modal-content")).toBeVisible();
+    await expect(toast).toHaveCount(0, { timeout: 10_000 });
+    expect(await focusInPrompt(page, "tinycloud-permission-request-modal")).toBe(true);
+    await page.keyboard.press("Escape");
+    await expect.poll(() => page.evaluate(() => (window as unknown as HarnessWindow).__permResult)).toBe(false);
+    await expect(panel(page)).toBeVisible();
+  });
+
+  test("a body-targeted Escape does not skip an open revoke confirmation", async ({ page }) => {
+    await mount(page, "light", DESKTOP, true);
+    await page.evaluate(() => (window as unknown as HarnessWindow).tc?.ui.open("delegations"));
+    const section = panel(page).locator('section[data-section="delegations"]');
+    await expect(section.locator(".dl-card").first()).toBeVisible();
+    await section.getByRole("button", { name: /^Revoke access for / }).first().click();
+    const confirm = section.locator('[role="alertdialog"]');
+    await expect(confirm).toBeVisible();
+    await page.evaluate(() => document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    await expect(panel(page)).toBeVisible();
+    await expect(confirm).toBeVisible();
+    await expect(confirm.getByRole("button", { name: "Keep access" })).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(confirm).toHaveCount(0);
+    await expect(panel(page)).toBeVisible();
+  });
+
   for (const kind of ["permission", "space creation"] as const) {
     test(`${kind} prompt mounted before the delayed panel keeps focus and Escape declines it without closing the drawer`, async ({ page }) => {
       await mount(page, "light", DESKTOP, true);

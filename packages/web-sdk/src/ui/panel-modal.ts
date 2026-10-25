@@ -109,6 +109,45 @@ export function mountDrawerModal(root: ShadowRoot, layer: HTMLElement, panel: HT
     else if (target.matches(".button")) pullBack();
   }
 
+  /** Removing the focused node need not fire focusin/blur (notably in Chromium). */
+  function focusWasLost(): boolean {
+    const focused = document.activeElement;
+    return focused === null || focused === document.body || (focused === root.host && root.activeElement === null);
+  }
+
+  // A connected control may be temporarily disabled and restore its own focus when enabled again.
+  function recoverLostFocus(): void {
+    if (!active || hasMountedPrompt() || !lastInside || lastInside.isConnected || !focusWasLost()) return;
+    const dialog = panel.querySelector<HTMLElement>('[role="alertdialog"],.drawer');
+    const dialogButton = dialog && shown(dialog) ? Array.from(dialog.querySelectorAll<HTMLElement>(CONTROLS)).find(shown) : undefined;
+    const toastButton = Array.from(toasts()?.querySelectorAll<HTMLElement>(CONTROLS) ?? []).find(shown);
+    const main = panel.querySelector<HTMLElement>(".main");
+    const section = main?.querySelector<HTMLElement>(".sec-title") ?? main?.firstElementChild;
+    const target = dialogButton ?? toastButton ?? (section instanceof HTMLElement ? section : controls()[0]);
+    if (target && target === section) target.tabIndex = -1;
+    target?.focus();
+  }
+
+  const observer = new (root.ownerDocument.defaultView?.MutationObserver ?? MutationObserver)(() => recoverLostFocus());
+  function onLayerFocusOut(event: FocusEvent): void {
+    if (event.relatedTarget === null) queueMicrotask(recoverLostFocus);
+  }
+
+  function onDocumentKeydown(event: KeyboardEvent): void {
+    if (!active || hasMountedPrompt() || event.key !== "Escape" || event.composedPath().includes(layer)) return;
+    if (event.target !== document.body && event.target !== document.documentElement) return;
+    queueMicrotask(() => {
+      if (!active || hasMountedPrompt() || event.defaultPrevented) return;
+      const dialog = panel.querySelector<HTMLElement>('[role="alertdialog"],.drawer');
+      if (dialog && shown(dialog)) {
+        Array.from(dialog.querySelectorAll<HTMLElement>(CONTROLS)).find(shown)?.focus();
+      } else {
+        dismiss();
+      }
+    });
+  }
+
+
   // A delayed panel has no prior focused control for the prompt to restore. Claim focus once the prompt settles.
   function onPromptSettled(): void {
     queueMicrotask(() => {
@@ -124,9 +163,15 @@ export function mountDrawerModal(root: ShadowRoot, layer: HTMLElement, panel: HT
       lastInside = undefined;
       document.addEventListener("focusin", onPageFocus, true);
       layer.addEventListener("focusin", onLayerFocus);
+      layer.addEventListener("focusout", onLayerFocusOut);
+      document.addEventListener("keydown", onDocumentKeydown, true);
+      observer.observe(layer, { childList: true, subtree: true });
     } else {
       document.removeEventListener("focusin", onPageFocus, true);
       layer.removeEventListener("focusin", onLayerFocus);
+      layer.removeEventListener("focusout", onLayerFocusOut);
+      document.removeEventListener("keydown", onDocumentKeydown, true);
+      observer.disconnect();
     }
   }
 

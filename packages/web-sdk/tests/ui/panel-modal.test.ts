@@ -7,7 +7,7 @@ import { mountDrawerModal, type DrawerModal } from "../../src/ui/panel-modal";
 type Loose = Record<PropertyKey, unknown>;
 
 const g = globalThis as unknown as Loose;
-const GLOBAL_NAMES = ["window", "document", "HTMLElement", "Element", "Node", "Event", "KeyboardEvent", "FocusEvent"];
+const GLOBAL_NAMES = ["window", "document", "HTMLElement", "Element", "Node", "Event", "KeyboardEvent", "FocusEvent", "MutationObserver"];
 
 let page: Window;
 const saved = new Map<string, unknown>();
@@ -215,6 +215,32 @@ describe("focus that leaves the panel", () => {
     f.layer.append(prompt);
     approve.focus();
     expect(f.root.activeElement).toBe(approve);
+  });
+
+  test("a removed focused toast recovers inside the drawer, but not after the drawer closes", async () => {
+    const f = fixture();
+    f.modal.sync(true, true);
+    const toast = f.addToast();
+    toast.focus();
+    toast.remove();
+    await Promise.resolve();
+    expect(f.root.activeElement).toBe(f.controls[0]);
+    const secondToast = f.addToast();
+    secondToast.focus();
+    f.modal.sync(false, false);
+    secondToast.remove();
+    await Promise.resolve();
+    expect(f.root.activeElement === f.controls[0]).toBe(false);
+  });
+
+  test("Escape from the body closes an active drawer when no inner control owns the key", async () => {
+    const f = fixture();
+    f.modal.sync(true, true);
+    f.addToast().focus();
+    f.layer.querySelector(".tstack")?.remove();
+    press(page.document.body, "Escape");
+    await Promise.resolve();
+    expect(f.dismissed.count).toBe(1);
   });
 
   test("page focus is free again once the drawer is not the active layout", () => {
