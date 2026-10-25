@@ -288,7 +288,13 @@ export class EncryptionService
         if (error instanceof DecryptTransportResponseError) {
           return encErr(
             encryptionError(
-              error.status === 401 || error.status === 403
+              error.status === 404
+                ? {
+                  code: "NETWORK_NOT_FOUND",
+                  networkId: envelope.networkId,
+                  message: error.notFoundMessage,
+                }
+                : error.status === 401 || error.status === 403
                 ? {
                   code: "DECRYPT_DENIED",
                   message: "Node denied decrypt request",

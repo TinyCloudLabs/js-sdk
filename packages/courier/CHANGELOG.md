@@ -1,5 +1,70 @@
 # @tinycloud/courier
 
+## 0.3.2-beta.3
+
+### Patch Changes
+
+- Updated dependencies [279c8e9]
+  - @tinycloud/node-sdk@3.7.0-beta.3
+  - @tinycloud/sdk-core@3.7.0-beta.3
+
+## 0.3.2-beta.2
+
+### Patch Changes
+
+- Updated dependencies [147bb78]
+  - @tinycloud/node-sdk@3.7.0-beta.2
+  - @tinycloud/sdk-core@3.7.0-beta.2
+
+## 0.3.2-beta.1
+
+### Patch Changes
+
+- Updated dependencies [71fa087]
+  - @tinycloud/node-sdk@3.7.0-beta.1
+  - @tinycloud/sdk-core@3.7.0-beta.1
+
+## 0.3.2-beta.0
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.6.2-beta.0
+
+## 0.3.1
+
+### Patch Changes
+
+- 8acd73d: The courier test suite now runs every test file under a temporary home, and with `COURIER_TEST=1` the profile directory resolver refuses a home outside `COURIER_TEST_HOME` (`test-home-escape`). Without `COURIER_TEST=1` behaviour is unchanged.
+
+  Details: TC-712
+
+- Updated dependencies [271155a]
+- Updated dependencies [09b7dc0]
+  - @tinycloud/node-sdk@3.6.1
+  - @tinycloud/sdk-core@3.6.1
+
+## 0.3.1-beta.2
+
+### Patch Changes
+
+- 8acd73d: The courier test suite now runs every test file under a temporary home, and with `COURIER_TEST=1` the profile directory resolver refuses a home outside `COURIER_TEST_HOME` (`test-home-escape`). Without `COURIER_TEST=1` behaviour is unchanged.
+
+  Details: TC-712
+
+## 0.3.1-beta.1
+
+### Patch Changes
+
+- Updated dependencies [09b7dc0]
+  - @tinycloud/node-sdk@3.6.1-beta.1
+
+## 0.3.1-beta.0
+
+### Patch Changes
+
+- Updated dependencies [271155a]
+  - @tinycloud/node-sdk@3.6.1-beta.0
+
 ## 0.3.0
 
 ### Minor Changes

@@ -35,7 +35,7 @@ async function webRecord(backend: MemoryBackend, shareId: string, extra: Partial
   const record: SenderShareRecord = {
     shareId, target: { origin: "https://node.test", nodeAudience: "did:key:z6MkNode", spaceId: SPACE_ID }, resource: { kind: "exact", path: `shares/${shareId}/doc.txt` },
     actions: ["tinycloud.kv/get"], recipientMatcher: { kind: "exactEmail", value: "alice@example.com" }, registeredAt: new Date().toISOString(),
-    expiresAt: new Date(Date.now() + 86_400_000).toISOString(), filename: "doc.txt", link: `${SHARE_ORIGIN}/s/inline#v=2&p=c2VjcmV0`, ...extra,
+    expiresAt: new Date(Date.now() + 86_400_000).toISOString(), filename: "doc.txt", link: `${SHARE_ORIGIN}/s/lqdw5iopqq2tkkvjj6gbbi5vbv#v=4&k=${"A".repeat(43)}&c=bafkreiewixmt5nwgi3ych6durcsheaql3ybswbplpjmpbdhfkvdkidzt5u`, ...extra,
   };
   await backend.writeVault(shareId, record);
   return record;

@@ -173,7 +173,10 @@ import {
   type RegisterPolicyV3Receipt,
   type ShareDeliveryAuthorizationV3Receipt,
   CREDENTIAL_INVITATION_REQUEST_DOMAIN,
-  validateShareDeliveryAuthorizationV3Bytes,
+  ShareDeliveryRefusedError,
+  shortDeliveryLinkBodyCid,
+  verifyShareDeliveryAuthorizationV3Bytes,
+  withoutShareLink,
   verifyEip191MessageSignature,
   signCompactUcanRootAuthorization,
   markDelegationTerminal,
@@ -887,6 +890,8 @@ export interface TinyCloudNodeConfig {
   prefix?: string;
   /** Domain for SIWE messages (default: derived from host) */
   domain?: string;
+  /** SIWE URI (default: `https://<domain>`). web-sdk defaults it to the page origin when domain is derived from the window. */
+  uri?: string;
   /** Session expiration time in milliseconds (default: 30 days, `EXPIRY.SESSION_MS`) */
   sessionExpirationMs?: number;
   /** Whether to automatically create space if it doesn't exist (default: false) */
@@ -1483,21 +1488,47 @@ export class TinyCloudNode {
    * and remembers whose storage is full so sign-in and listing skip their
    * best-effort writes. Lives as long as this instance, across sign-ins.
    */
-  private readonly storageFull = new StorageFullMonitor((spaceId) => spaceOwnerKey(spaceId) ?? spaceId);
+  private readonly storageFull = new StorageFullMonitor(
+    (spaceId) => spaceOwnerKey(spaceId) ?? spaceId,
+    () => this.currentStorageOwner(),
+  );
 
   /**
-   * Subscribe to `storage.full`. It fires once, on the first write any
-   * service had rejected because the owner's TinyCloud storage is full
+   * Subscribe to `storage.full`. It fires on the first write any service had
+   * rejected because the owner's TinyCloud storage is full
    * (`STORAGE_QUOTA_EXCEEDED` or `STORAGE_LIMIT_REACHED`), so an app can show
-   * one read-only banner. Reads keep working. It fires again only after
-   * `storage.status()` has reported space again for every owner whose write
-   * was rejected. Returns the unsubscribe function.
+   * one read-only banner. Reads keep working. For the signed-in account's own
+   * storage it fires once per episode: the episode ends only when a write to
+   * that storage succeeds, or on sign-out. A `storage.status()` read does not
+   * end it. A rejection on another owner's delegated space fires once per
+   * owner, until that owner's `storage.status()` reports space again. Returns
+   * the unsubscribe function.
    */
   on(event: "storage.full", handler: (event: StorageFullEvent) => void): () => void {
     if (event !== "storage.full") {
       throw new Error(`Unknown TinyCloud event: ${String(event)}`);
     }
     return this.storageFull.on(handler);
+  }
+
+  /**
+   * Storage episode state for the UI mount. @internal
+   *
+   * `current()` returns the own-storage rejection that started the episode, or
+   * undefined. `subscribe` calls its listener when the own episode starts or
+   * ends; read `current()` inside it. `subscribeDelegated` calls its listener
+   * once per delegated owner found full, until that owner is cleared.
+   */
+  get storageEpisode(): {
+    current(): StorageFullEvent | undefined;
+    subscribe(listener: () => void): () => void;
+    subscribeDelegated(listener: () => void): () => void;
+  } {
+    return {
+      current: () => this.storageFull.rejection,
+      subscribe: (listener) => this.storageFull.onEpisode(listener),
+      subscribeDelegated: (listener) => this.storageFull.onDelegated(listener),
+    };
   }
 
   /** Owner key of the account the current session's own storage belongs to. */
@@ -1585,8 +1616,8 @@ export class TinyCloudNode {
           { meta: { status: response.status } },
         ));
       }
-      // Room again on this space's owner: let read paths register and repair,
-      // and let the next rejection announce itself. Other owners stay full.
+      // Room again on this space's owner: best-effort writes resume there. The
+      // storage.full episode is not ended here; only a successful write ends it.
       if (status.state !== "full") {
         this.storageFull.clearFor(spaceId);
         // A rejection whose space was unknown counted against the signed-in account.
@@ -1657,14 +1688,16 @@ export class TinyCloudNode {
     return this.wasmBindings.invoke(invocationSession, service, path, action, facts);
   };
 
-  private readonly invokeAnyWithRuntimePermissions: InvokeAnyFunction = (
-    session,
-    entries,
-    facts,
-  ) => {
-    if (!this.wasmBindings.invokeAny) {
-      throw new Error("WASM binding does not support invokeAny");
-    }
+  /**
+   * The session (key, issuer, proof) that signs an invokeAny call for `entries`:
+   * the explicit revocation authority, else the covering non-primary runtime
+   * grant, else the caller's session. Everything that re-signs the resulting
+   * invocation must use this session's key.
+   */
+  private selectInvokeAnySession(
+    session: ServiceSession,
+    entries: Parameters<InvokeAnyFunction>[1],
+  ): { session: ServiceSession; grant: RuntimePermissionGrant | undefined } {
     const routedEntries = entries as Array<typeof entries[number] & {
       revokeAuthorityCid?: string;
     }>;
@@ -1685,6 +1718,22 @@ export class TinyCloudNode {
     const invocationSession = explicitGrant
       ? explicitGrant.session
       : !grant || grant.provenance === "primary" ? session : grant.session;
+    return { session: invocationSession, grant };
+  }
+
+  private readonly invokeAnyWithRuntimePermissions: InvokeAnyFunction = (
+    session,
+    entries,
+    facts,
+  ) => {
+    if (!this.wasmBindings.invokeAny) {
+      throw new Error("WASM binding does not support invokeAny");
+    }
+    const routedEntries = entries as Array<typeof entries[number] & {
+      revokeAuthorityCid?: string;
+    }>;
+    const { session: invocationSession, grant } =
+      this.selectInvokeAnySession(session, entries);
     const caveatPreservingEntries = routedEntries.map(({ revokeAuthorityCid: _cid, ...entry }) => {
       const requested = this.operationFromInvokeAnyEntry(entry);
       const granted = grant && requested && grant.operations.find((candidate) =>
@@ -1901,6 +1950,7 @@ export class TinyCloudNode {
       sessionManager: this.sessionManager,
       sessionStorage: config.sessionStorage ?? new MemorySessionStorage(),
       domain: this.siweDomain,
+      uri: config.uri,
       spacePrefix: config.prefix,
       sessionExpirationMs: config.sessionExpirationMs ?? DEFAULT_SESSION_EXPIRATION_MS,
       tinycloudHosts: this.explicitHost ? [this.explicitHost] : undefined,
@@ -4788,7 +4838,16 @@ export class TinyCloudNode {
   async bindInvocationAudience(authorization: string, audience: string): Promise<string> {
     const session = this.currentTinyCloudSession() ?? this._activeServiceSession;
     if (session === undefined) throw new Error("Not signed in. Call signIn() first.");
-    return rewriteInvocationAudience(authorization, audience, session.jwk);
+    // Re-sign with the key of the session named by the token's own `iss`, so a
+    // token built under a runtime grant keeps one session's key, iss and prf.
+    const payload = JSON.parse(
+      new TextDecoder().decode(base64UrlDecode(authorization.split(".")[1] ?? "")),
+    ) as { iss?: unknown };
+    const did = (value: unknown) => String(value).split("#", 1)[0];
+    const signer = [session, ...this.runtimePermissionGrants.map((grant) => grant.session)]
+      .find((candidate) => did(candidate.verificationMethod) === did(payload.iss));
+    if (!signer) throw new Error("invocation issuer does not match a held session");
+    return rewriteInvocationAudience(authorization, audience, signer.jwk);
   }
 
   /**
@@ -4843,6 +4902,7 @@ export class TinyCloudNode {
       sessionManager: this.sessionManager,
       sessionStorage: options?.sessionStorage ?? this.config.sessionStorage ?? new MemorySessionStorage(),
       domain: this.siweDomain,
+      uri: this.config.uri,
       spacePrefix: prefix,
       sessionExpirationMs: this.config.sessionExpirationMs ?? DEFAULT_SESSION_EXPIRATION_MS,
       tinycloudHosts: this.explicitHost ? [this.explicitHost] : undefined,
@@ -4922,6 +4982,7 @@ export class TinyCloudNode {
       sessionManager: this.sessionManager,
       sessionStorage: options?.sessionStorage ?? this.config.sessionStorage ?? new MemorySessionStorage(),
       domain: this.siweDomain,
+      uri: this.config.uri,
       spacePrefix: prefix,
       sessionExpirationMs: this.config.sessionExpirationMs ?? DEFAULT_SESSION_EXPIRATION_MS,
       tinycloudHosts: this.explicitHost ? [this.explicitHost] : undefined,
@@ -5199,23 +5260,25 @@ export class TinyCloudNode {
       throw new Error("WASM binding does not support invocation CID computation");
     }
     const session = binding?.session ?? this.requireEncryptionSession();
+    const entries = [
+      {
+        resource: input.networkId,
+        service: "encryption",
+        path: input.networkId,
+        action: input.action,
+      },
+    ];
     const headers = this.invokeAnyWithRuntimePermissions(
       session,
-      [
-        {
-          resource: input.networkId,
-          service: "encryption",
-          path: input.networkId,
-          action: input.action,
-        },
-      ],
+      entries,
       [input.facts as Record<string, unknown>],
     );
+    const signingSession = this.selectInvokeAnySession(session, entries).session;
     const authorization = authorizationHeader(headers);
     const audienceBound = await rewriteInvocationAudience(
       authorization,
       input.targetNode,
-      session.jwk,
+      signingSession.jwk,
     );
     binding?.graph.assertActive();
     return {
@@ -5295,7 +5358,17 @@ export class TinyCloudNode {
               actions: ["tinycloud.encryption/decrypt"],
             })
             : undefined;
-          throw new DecryptTransportResponseError(response.status, permissionHint);
+          // The node answers a missing network with 404 and the body "network
+          // not found"; advise re-sign-in only for the owner's default network.
+          throw new DecryptTransportResponseError(
+            response.status,
+            permissionHint,
+            response.status === 404 &&
+              networkId === this.getDefaultEncryptionNetworkId() &&
+              (await response.text().catch(() => "")) === "network not found"
+              ? `Network not found: ${networkId}. Sign in again with a current SDK to create the account's encryption network.`
+              : undefined,
+          );
         }
         return (await response.json()) as DecryptResponseBody;
       },
@@ -5827,14 +5900,14 @@ export class TinyCloudNode {
     });
   }
 
-  /** Authorize one short-lived v3 delivery against the signed v3 envelope and registered roots. */
+  /**
+   * Authorize one short-lived v3 delivery. `shareUrl` is the short `/s/<id>#v=4&k=…&c=…` link: the node fetches the
+   * sealed body by id and opens it with the link's key, so the body of the request carries the link and nothing else
+   * of the share. `envelope` is the signed v3 envelope the sender holds; it checks the node's admission here and is
+   * not sent.
+   */
   async authorizeShareDeliveryV3(input: {
     readonly envelope: Record<string, CanonicalJson | undefined>;
-    /** Canonical sealed recipient envelope: version || nonce || ciphertext+tag. */
-    readonly sealedEnvelope: string;
-    /** Base64url 32-byte envelope key; it must also be the URL fragment key. */
-    readonly envelopeKey: string;
-    readonly shareCid: string;
     readonly resourcePath: string;
     readonly recipientEmail: string;
     readonly shareUrl: string;
@@ -5843,7 +5916,10 @@ export class TinyCloudNode {
     readonly deliveryAudience: string;
     /** Stable caller retry identity. It is hashed into the protocol's 16-byte JTI. */
     readonly idempotencyKey: string;
+    /** The origins `shareUrl` may be on: the node's `return_origin`. Default: `https://share.tinycloud.xyz`. */
+    readonly trustedOrigins?: readonly string[];
   }): Promise<ShareDeliveryAuthorizationV3Receipt> {
+    const envelopeRef = await shortDeliveryLinkBodyCid(input.shareUrl, input.trustedOrigins);
     const session = this.currentTinyCloudSession();
     const serviceSession = this._serviceContext?.session;
     if (!session || !serviceSession) throw new Error("Share delivery requires an authenticated session");
@@ -5856,15 +5932,12 @@ export class TinyCloudNode {
     // application identifiers and has no protocol meaning beyond this binding.
     const jtiDigest = new Uint8Array(await crypto.subtle.digest("SHA-256", idempotencyBytes));
     const body = {
-      envelope: input.envelope,
-      sealedEnvelope: input.sealedEnvelope,
-      envelopeKey: input.envelopeKey,
-      shareCid: input.shareCid,
       recipientEmail: input.recipientEmail,
       shareUrl: input.shareUrl,
       documentName: input.documentName,
       jti: base64UrlEncode(jtiDigest.slice(0, 16)),
-      expiresAt: new Date(input.expiresAt).toISOString().replace(/\.\d{3}Z$/, "Z"),
+      // Re-normalised through Date, so the sent value is always `YYYY-MM-DDTHH:mm:ss.SSSZ` (UTC, three digits).
+      expiresAt: new Date(input.expiresAt).toISOString(),
     };
     const requestBodyDigest = base64UrlEncode(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalizeEncryptionJson(body)))));
     const request = { ...body, requestBodyDigest };
@@ -5881,9 +5954,19 @@ export class TinyCloudNode {
       headers: { accept: "application/json", "content-type": "application/json", authorization },
       body: canonicalizeEncryptionJson(request),
     });
-    if (!response.ok) throw await httpResponseError(response, "V3 share delivery authorization failed");
-    const verified = validateShareDeliveryAuthorizationV3Bytes(new Uint8Array(await response.arrayBuffer()), {
+    // 422 (the body did not parse) and 400 (it failed the node's checks) are one refusal with one error.
+    if (response.status === 400 || response.status === 422) throw new ShareDeliveryRefusedError();
+    if (!response.ok) {
+      // The node's reply is part of the message. The whole reply is redacted before it is cut to 512 characters, so a
+      // link or key that crosses the cut is replaced too.
+      const reply = await response.text().catch(() => response.statusText);
+      const body = (await withoutShareLink(reply, input.shareUrl)).trim().slice(0, 512);
+      throw Object.assign(new Error(`V3 share delivery authorization failed: HTTP ${response.status}${body ? ` - ${body}` : ""}`), { status: response.status });
+    }
+    const verified = await verifyShareDeliveryAuthorizationV3Bytes(new Uint8Array(await response.arrayBuffer()), {
       request,
+      envelope: input.envelope,
+      envelopeRef,
       senderKeyDid: this.credentialHolderDid,
       deliveryAudience: input.deliveryAudience,
     });

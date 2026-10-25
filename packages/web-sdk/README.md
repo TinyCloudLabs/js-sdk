@@ -272,6 +272,46 @@ and [Postgres Node size job 117210798348](https://github.com/TinyCloudLabs/js-sd
 independently reported identical root and optional gzip bytes on `e5b080d5`;
 the historical local measurements cannot set ledger ceilings.
 
+## Floating button and panel
+
+`TinyCloudWeb` adds a floating button and a panel to the page. The panel is rendered in an open shadow root, so host page styles do not reach it. It is not rendered inside an iframe or an opaque origin. In those cases, and with `ui: false`, nothing is added to the page.
+
+```typescript
+const tc = new TinyCloudWeb({
+  ui: {
+    button: true,         // default true; false hides the button only
+    toasts: true,         // default true; false shows no toasts and stops the unhandled-rejection listener; prompts still render
+    developerMode: false, // default false; shows the developer section
+    position: "bottom-right", // "bottom-right" | "bottom-left" | "bottom-center"; each "top-*" value places at the matching bottom position; an unrecognised value falls back to "bottom-right"
+    appId: "my-app",      // identity for the hide flag when no manifest is set
+  },
+});
+
+tc.ui.open();
+tc.ui.close();
+tc.ui.toggle();
+tc.ui.isOpen;    // boolean
+tc.ui.available; // false in iframes, opaque origins, SSR, or when ui is false
+```
+
+`open()` also clears the user's hidden flag for the button. The hidden flag is stored per origin and app id under `tinycloud:ui:button-hidden:v1:`. The panel shows sections only for capabilities the client exposes.
+
+### Storage section and storage-full toast
+
+When the client exposes `storage.status()`, the panel shows a Storage section with the account's usage: "Room left", "Nearly full", "Storage is full", or "No limit", plus a bar and a "Manage storage" link. The link uses the status `manageUrl` only when it is https; otherwise it falls back to `https://account.tinycloud.xyz/storage`. When the storage needs permission, the section shows a neutral note with no numbers.
+
+The host also watches the own-storage `storage.full` episode. While the episode is on, the button and panel show "Storage is full", and one info toast with the manage link is shown per episode, even when the panel is closed. The toast shows again only after the episode ends and a new one starts. The episode ends only on a successful write to that storage, so a status read alone does not end it.
+
+### Toasts and notification errors
+
+Toasts render in the host panel layer and follow the same `ui` options. `ui: false` creates no host, button, toasts, or listeners. `ui: false` refuses SDK prompts (explicit opt-in); `popups: false` and `ui: { button: false, toasts: false }` keep them. `ui: { toasts: false }` shows no toasts and stops the unhandled-rejection listener, and prompts still render. `ui.position` sets placement. Toast copy is fixed text per error kind. The raw error message is written to the console. A toast auto-dismisses after 5 seconds, at most 3 show at once, and an identical visible toast is not shown twice.
+
+Consent and space-creation prompts render in the same open shadow root as the panel. Each is a `role="dialog"` with `aria-modal="true"`, named by its title and described by its explanation. Focus moves to the dialog itself, never to Approve or Create, so Enter alone cannot confirm consent. Tab and Shift+Tab stay inside the dialog. When a prompt closes, focus returns to the element that had it before the prompt opened, unless focus has moved elsewhere on the page. While a prompt is open the page's scroll is locked. Releasing the lock restores the page's previous `body` `overflow` value, so a page that set `overflow: clip` keeps it.
+
+Space creation has three modes, in this order of precedence. An explicit `spaceCreationHandler` always handles the request. Otherwise `autoCreateSpace: true` creates the space without a dialog, and `autoCreateSpace: false` creates nothing and opens no dialog. When neither is set, the default confirmation dialog opens. With `ui: false` the SDK's own prompts do not render: a consent request resolves as declined and a space-creation request resolves as dismissed, with one console warning.
+
+`notifications.throwErrors: true` rethrows the raw error message asynchronously, so global error handlers see it. Identical errors within 200 ms collapse into one throw; distinct errors each throw. It applies whenever `ui` is enabled and `ui.toasts` is not `false`, including on a framed page where the toast is dropped. It never applies with `ui: false` or `ui: { toasts: false }`. The legacy `popups`, `position`, `duration`, and `maxVisible` keys under `notifications` are removed from the TypeScript types. JavaScript callers that still pass them are mapped onto `ui` once per page load, with a console warning per key: `popups: false` becomes `ui: { button: false, toasts: false }` only when `ui` is not set. An explicit `ui` replaces that mapping as a whole, so `popups: false` with `ui: { position: 'bottom-left' }` keeps the button and toasts. `position` becomes `ui.position` unless `ui.position` is set. `duration` and `maxVisible` are ignored, and their warning says so. Migrate to `ui`.
+
 ## Basic Storage Operations
 
 ### Storing Data

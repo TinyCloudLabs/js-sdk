@@ -85,12 +85,6 @@ export interface AgentShareRecordStoreOptions {
   /** KEK_a from the same key; absent for a remote-signer-only profile (records are then owner-readable only). */
   readonly agentKey?: AgentKeyMaterial;
   readonly cas?: CasPolicy;
-  /**
-   * The share origin on which records read back get their Policy/v3
-   * `/s/inline` link rebuilt (the stored form keeps no link; see
-   * `delivery.ts`). Absent: records read back carry no v3 link.
-   */
-  readonly shareOrigin?: string;
 }
 
 export class AgentShareRecordStore implements SenderShareRecordStorage {
@@ -139,8 +133,8 @@ export class AgentShareRecordStore implements SenderShareRecordStorage {
     let value: unknown;
     try { value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(plaintext)); } catch { throw new AgentRecordError("shape"); }
     if (!isRecordShape(value) || value.shareId !== shareId) throw new AgentRecordError("shape");
-    // The stored form back to the full record: the envelope reopened, the v3 link rebuilt on the configured origin.
-    try { return await expandShareRecord(value as StoredShareRecord, this.options.shareOrigin); } catch { throw new AgentRecordError("shape"); }
+    // The stored form back to the full record: the envelope reopened from the sealed material.
+    try { return await expandShareRecord(value as StoredShareRecord); } catch { throw new AgentRecordError("shape"); }
   }
 
   /** Create or replace; each write is a fresh seal under CAS (If-None-Match `*` for a new key). */

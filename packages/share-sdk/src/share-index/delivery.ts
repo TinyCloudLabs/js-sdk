@@ -1,4 +1,5 @@
-import { canonicalize, computeCid, encodeSealedInlineShareUrl, fromBase64Url, open, parseSealedInlineShareUrl } from "@tinycloud/share-envelope";
+import { canonicalize, computeCid, fromBase64Url, open, toBase64Url } from "@tinycloud/share-envelope";
+import { parseLink, type ParsedLink } from "@tinycloud/share-envelope/links";
 import type { SenderShareRecord } from "../history.js";
 import type { PublishedShareDeliveryMaterial } from "../publish.js";
 
@@ -8,14 +9,13 @@ import type { PublishedShareDeliveryMaterial } from "../publish.js";
  *
  * A Policy/v3 record's `deliveryMaterial.envelope` is exactly what
  * `sealedEnvelope` decrypts to under `envelopeKey` (`publishAddressedShare`
- * seals `canonicalize(envelope)`), and its `/s/inline` link is
- * `sealedEnvelope`, its CID and `envelopeKey` encoded again. Both are
- * dropped before an agent record is sealed and rebuilt when needed:
- * {@link openDeliveryEnvelope} for the verifier and a delivery retry,
- * {@link shareLinkForRecord} at Open/Copy. `sealedEnvelope` stays (the node
- * reopens that exact value and its nonce is random) and so does the session
- * CACAO (it proves the chain). A bearer record keeps its `link`, which is
- * not derivable.
+ * seals `canonicalize(envelope)`). It is omitted before an agent record is
+ * sealed and rebuilt when needed by {@link openDeliveryEnvelope}, for the
+ * verifier and a delivery retry. `sealedEnvelope` stays (the node reopens that
+ * exact value and its nonce is random) and so does the session CACAO (it
+ * proves the chain). A short `v=4` link the sender printed is kept (it is not
+ * derivable: it carries an id only the links service knows) and must be the
+ * link of this material; a full link is not kept (see {@link compactShareRecord}).
  *
  * Security-sensitive: the sealed bytes are checked against `shareCid` before
  * they are opened, and the plaintext must be the canonical JSON of the
@@ -67,24 +67,34 @@ export async function openDeliveryEnvelope(material: StoredDeliveryMaterial): Pr
 }
 
 /**
- * The link to show at Open/Copy: a bearer record's stored `link`, or a
- * Policy/v3 record's `/s/inline` link rebuilt on `shareOrigin` (the
- * viewer's configured share origin) from `sealedEnvelope` and `envelopeKey`.
+ * A `v=4` link names its content key and body: a short link by the key `k` and
+ * the body CID `c`, a full link by `k` and the record whose body it carries.
+ * Either must be exactly this delivery material's key and sealed envelope.
+ * Returns the link's form.
  */
-export async function shareLinkForRecord(record: Pick<StoredShareRecord, "link" | "deliveryMaterial">, shareOrigin: string): Promise<string | undefined> {
-  if (record.link !== undefined) return record.link;
-  const material = record.deliveryMaterial;
-  if (material === undefined) return undefined;
+export function assertLinkBoundToMaterial(link: string, material: StoredDeliveryMaterial): "short" | "full" {
   const { sealed, key } = sealedParts(material);
-  if (await computeCid(sealed) !== material.shareCid) throw new DeliveryMaterialError("sealed envelope does not match shareCid");
-  return encodeSealedInlineShareUrl({ origin: shareOrigin, ciphertext: sealed, key32: key });
+  let parsed: ParsedLink;
+  try {
+    parsed = parseLink(link, { trustedOrigins: [new URL(link).origin] });
+  } catch {
+    throw new DeliveryMaterialError("link is not a v=4 share link");
+  }
+  const sameBody = parsed.form === "short"
+    ? parsed.c === material.shareCid
+    : typeof parsed.record === "object" && parsed.record !== null && "body" in parsed.record && parsed.record.body === toBase64Url(sealed);
+  if (!sameBody || !equalBytes(parsed.key, key)) throw new DeliveryMaterialError("link is not the link of this delivery material");
+  return parsed.form;
 }
 
 /**
  * The stored form of `record`. For a Policy/v3 record (one with
- * `deliveryMaterial`), drops `deliveryMaterial.envelope` and `link` after
- * checking they are exactly what the sealed material rebuilds, so nothing is
- * lost. Throws {@link DeliveryMaterialError} otherwise.
+ * `deliveryMaterial`), omits `deliveryMaterial.envelope` after checking it is
+ * exactly what the sealed material opens to, and checks that a `link` is the
+ * link of that material. A short link is kept. A full link is not: it embeds
+ * the sealed envelope a second time, which the record size cap does not leave
+ * room for, so the sender's own history holds it. Throws
+ * {@link DeliveryMaterialError} otherwise.
  */
 export async function compactShareRecord(record: SenderShareRecord | StoredShareRecord): Promise<StoredShareRecord> {
   const material = record.deliveryMaterial as Partial<PublishedShareDeliveryMaterial> | undefined;
@@ -94,15 +104,8 @@ export async function compactShareRecord(record: SenderShareRecord | StoredShare
   const opened = await openDeliveryEnvelope(stored);
   if (material.envelope !== undefined && canonicalize(opened) !== canonicalize(material.envelope)) throw new DeliveryMaterialError("envelope is not the sealed envelope");
   const { link, deliveryMaterial: _material, ...rest } = record;
-  if (link !== undefined) {
-    const { sealed, key } = sealedParts(stored);
-    let parsed: Awaited<ReturnType<typeof parseSealedInlineShareUrl>> | undefined;
-    try { parsed = await parseSealedInlineShareUrl(link); } catch { parsed = undefined; }
-    if (parsed === undefined || parsed.ciphertextCid !== stored.shareCid || !equalBytes(parsed.ciphertext, sealed) || !equalBytes(parsed.key32, key)) {
-      throw new DeliveryMaterialError("link is not the sealed-inline link of this delivery material");
-    }
-  }
-  return { ...rest, deliveryMaterial: stored };
+  const keptLink = link !== undefined && assertLinkBoundToMaterial(link, stored) === "short" ? link : undefined;
+  return { ...rest, ...(keptLink === undefined ? {} : { link: keptLink }), deliveryMaterial: stored };
 }
 
 function equalBytes(left: Uint8Array, right: Uint8Array): boolean {
@@ -112,12 +115,11 @@ function equalBytes(left: Uint8Array, right: Uint8Array): boolean {
 /**
  * The full record again (for a delivery retry or a caller that wants the
  * {@link SenderShareRecord} shape): the envelope reopened from the sealed
- * material and, when `shareOrigin` is given, the `/s/inline` link rebuilt.
+ * material. The stored `link` is returned as it was stored.
  */
-export async function expandShareRecord(record: StoredShareRecord, shareOrigin?: string): Promise<SenderShareRecord> {
+export async function expandShareRecord(record: StoredShareRecord): Promise<SenderShareRecord> {
   const material = record.deliveryMaterial;
   if (material === undefined) return record as SenderShareRecord;
   const envelope = await openDeliveryEnvelope(material);
-  const link = shareOrigin === undefined ? record.link : await shareLinkForRecord(record, shareOrigin);
-  return { ...record, ...(link === undefined ? {} : { link }), deliveryMaterial: { ...material, envelope } };
+  return { ...record, deliveryMaterial: { ...material, envelope } };
 }

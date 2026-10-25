@@ -22,6 +22,8 @@ import {
   HOOKS,
   ENCRYPTION,
 } from "@tinycloud/sdk-core";
+import { acquireScrollLock } from "./scrollLock";
+import { deepActiveElement, focusableControls, isTopmostControl, nextTabIndex, restoreFocusTo } from "./dialogFocus";
 
 export interface PermissionRequestModalOptions {
   /** Display name of the app requesting permissions (from the manifest). */
@@ -44,6 +46,8 @@ export interface PermissionRequestResult {
 export class TinyCloudPermissionRequestModal extends HTMLElement {
   private options: PermissionRequestModalOptions;
   private isVisible: boolean = false;
+  private releaseScrollLock: (() => void) | null = null;
+  private opener: HTMLElement | null = null;
   private resolveResult: ((result: PermissionRequestResult) => void) | null =
     null;
   private completionPromise: Promise<PermissionRequestResult>;
@@ -69,7 +73,10 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
   }
 
   disconnectedCallback() {
-    document.body.style.overflow = "";
+    this.isVisible = false;
+    this.restoreFocus();
+    this.releaseLock();
+    document.removeEventListener("keydown", this.handleKeyDown);
   }
 
   private render(): void {
@@ -92,11 +99,11 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
     this.shadowRoot!.innerHTML = `
       <style>${this.getModalStyles()}</style>
       <div class="modal-backdrop" data-state="hidden">
-        <div class="modal-container">
+        <div class="modal-container" role="dialog" aria-modal="true" aria-labelledby="tc-permission-title" aria-describedby="tc-permission-description" tabindex="-1">
           <div class="modal-content">
             <div class="modal-header">
               ${iconMarkup}
-              <h2 class="modal-title">${appName} is requesting additional permissions</h2>
+              <h2 class="modal-title" id="tc-permission-title">${appName} is requesting additional permissions</h2>
               <button class="modal-close" aria-label="Close">
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
                   <path d="M1 1L13 13M13 1L1 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
@@ -105,7 +112,7 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
             </div>
 
             <div class="modal-body">
-              <p class="modal-description">
+              <p class="modal-description" id="tc-permission-description">
                 This app is asking you to grant scoped permission. Review what it will be allowed to do before approving.
               </p>
               <ul class="permission-list">${entriesHtml}</ul>
@@ -194,23 +201,26 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
         backdrop-filter: blur(8px);
         -webkit-backdrop-filter: blur(8px);
         z-index: 2000000;
-        display: flex; align-items: center; justify-content: center;
+        display: flex; align-items: flex-start; justify-content: center; overflow-y: auto;
         padding: 20px; opacity: 0;
         transition: opacity 0.2s cubic-bezier(0.4, 0, 0.2, 1);
         pointer-events: none;
       }
       .modal-backdrop[data-state="visible"] { opacity: 1; pointer-events: auto; }
       .modal-container {
+        margin: auto;
         transform: scale(0.95) translateY(10px);
         transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
       }
+      .modal-container:focus { outline: none; }
       .modal-backdrop[data-state="visible"] .modal-container { transform: scale(1) translateY(0); }
       .modal-content {
         background: var(--modal-bg);
         border: 1px solid var(--modal-border);
         border-radius: 16px;
         box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(255, 255, 255, 0.05);
-        max-width: 520px; width: 100%;
+        box-sizing: border-box; max-width: 520px; width: 100%;
+        overflow-wrap: anywhere;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
         color: var(--modal-foreground);
       }
@@ -228,7 +238,7 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
         background: var(--modal-accent); color: white;
       }
       .modal-title {
-        flex: 1; font-size: 18px; font-weight: 600; line-height: 1.3;
+        flex: 1; min-width: 0; font-size: 18px; font-weight: 600; line-height: 1.3;
         margin: 0; margin-top: 4px;
       }
       .modal-close {
@@ -276,7 +286,7 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
         display: flex; flex-direction: column; gap: 6px;
       }
       .permission-summary-row {
-        display: grid; grid-template-columns: 88px 1fr;
+        display: grid; grid-template-columns: 88px minmax(0, 1fr);
         gap: 10px; align-items: baseline;
       }
       .permission-summary-label {
@@ -374,16 +384,35 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
 
     closeButton?.addEventListener("click", () => this.dismiss());
     declineButton?.addEventListener("click", () => this.dismiss());
-    approveButton?.addEventListener("click", () => this.handleApprove());
+    approveButton?.addEventListener("click", () => {
+      // Approve acts only when it is the topmost element at its centre; an overlay
+      // covering it blocks the click and the keyboard Enter/Space that clicks it.
+      if (approveButton && isTopmostControl(approveButton)) this.handleApprove();
+    });
 
     document.addEventListener("keydown", this.handleKeyDown);
   }
 
   private handleKeyDown = (e: KeyboardEvent): void => {
-    if (e.key === "Escape" && this.isVisible) {
+    if (!this.isVisible) return;
+    if (e.key === "Escape") {
       this.dismiss();
+    } else if (e.key === "Tab") {
+      this.trapTab(e);
     }
   };
+
+  // Keeps Tab and Shift+Tab on this dialog's controls. Tabs that start outside
+  // the dialog (for example from an overlay above it) are left to the browser.
+  private trapTab(e: KeyboardEvent): void {
+    if (!e.composedPath().includes(this)) return;
+    const root = this.shadowRoot!;
+    const controls = focusableControls(root);
+    const current = controls.indexOf(root.activeElement as HTMLElement);
+    e.preventDefault();
+    const next = nextTabIndex(controls.length, current, e.shiftKey);
+    if (next >= 0) controls[next].focus();
+  }
 
   private handleApprove(): void {
     const checkbox = this.shadowRoot!.querySelector(
@@ -397,8 +426,11 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
   }
 
   private show(): void {
+    if (!this.isVisible) this.opener = deepActiveElement();
     this.isVisible = true;
-    document.body.style.overflow = "hidden";
+    if (!this.releaseScrollLock) this.releaseScrollLock = acquireScrollLock();
+    // Focus the dialog container, never Approve: Enter must not approve consent.
+    (this.shadowRoot!.querySelector(".modal-container") as HTMLElement).focus();
     requestAnimationFrame(() => {
       const backdrop = this.shadowRoot!.querySelector(".modal-backdrop");
       backdrop?.setAttribute("data-state", "visible");
@@ -408,18 +440,38 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
   private hide(): void {
     const backdrop = this.shadowRoot!.querySelector(".modal-backdrop");
     backdrop?.setAttribute("data-state", "hidden");
+    this.restoreFocus();
     setTimeout(() => {
       this.remove();
-      document.body.style.overflow = "";
+      this.releaseLock();
       document.removeEventListener("keydown", this.handleKeyDown);
     }, 200);
     this.isVisible = false;
   }
 
-  private dismiss(): void {
-    this.resolveResult?.({ approved: false });
-    this.options.onDismiss?.();
-    this.hide();
+  private restoreFocus(): void {
+    const opener = this.opener;
+    this.opener = null;
+    restoreFocusTo(opener, this.shadowRoot!);
+  }
+
+  private releaseLock(): void {
+    this.releaseScrollLock?.();
+    this.releaseScrollLock = null;
+  }
+
+  dismiss(): void {
+    try {
+      this.resolveResult?.({ approved: false });
+      this.options.onDismiss?.();
+    } finally {
+      this.hide();
+    }
+  }
+
+  /** True until the prompt starts closing (approve, decline, dismiss, or teardown). */
+  get isOpen(): boolean {
+    return this.isVisible;
   }
 }
 

@@ -15,6 +15,7 @@ describe("tc kv", () => {
       await node.kv.delete("cli-test-greeting");
       await node.kv.delete("cli-test-number");
       await node.kv.delete("cli-test-delete-me");
+      await node.kv.delete("cli-test-seg/a");
     } catch {}
   });
 
@@ -56,9 +57,22 @@ describe("tc kv", () => {
     });
 
     test("lists keys with prefix filter", async () => {
-      const result = await tc("kv", "list", "--prefix", "cli-test-");
+      const result = await tc("kv", "list", "--prefix", "cli-test-greeting");
       expect(result.exitCode).toBe(0);
       expect(result.json.keys.length).toBeGreaterThanOrEqual(1);
+    });
+
+    test("prefix matches whole path segments", async () => {
+      const put = await tc("kv", "put", "cli-test-seg/a", "segment");
+      expect(put.exitCode).toBe(0);
+
+      const whole = await tc("kv", "list", "--prefix", "cli-test-seg");
+      expect(whole.exitCode).toBe(0);
+      expect(whole.json.keys).toContain("cli-test-seg/a");
+
+      const partial = await tc("kv", "list", "--prefix", "cli-test-se");
+      expect(partial.exitCode).toBe(0);
+      expect(partial.json.keys).toEqual([]);
     });
   });
 

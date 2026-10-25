@@ -1,50 +1,9 @@
-export type ToastType = 'success' | 'error' | 'warning' | 'info' | 'loading';
-
-export type ToastPosition = 
-  | 'top-left' 
-  | 'top-center' 
-  | 'top-right' 
-  | 'bottom-left' 
-  | 'bottom-center' 
-  | 'bottom-right';
-
-export interface ToastAction {
-  label: string;
-  onClick: () => void;
-}
-
-export interface Toast {
-  id: string;
-  type: ToastType;
-  title: string;
-  description?: string;
-  duration?: number;
-  action?: ToastAction;
-  timestamp: number;
-}
-
-export interface ToastConfig {
-  position?: ToastPosition;
-  duration?: number;
-  maxVisible?: number;
-}
-
+/** Notification configuration. Toast placement and visibility are set through `ui`. */
 export interface NotificationConfig {
-  popups?: boolean;
+  /**
+   * Rethrow each reported error asynchronously as an uncaught exception, unless
+   * `ui: false`. Identical errors within 200 ms collapse into one throw. The
+   * caller is not affected.
+   */
   throwErrors?: boolean;
-  position?: ToastPosition;
-  duration?: number;
-  maxVisible?: number;
 }
-
-export interface SDKErrorDetail {
-  category: string;
-  message: string;
-  description?: string;
-}
-
-export interface SDKEventDetail {
-  message: string;
-  description?: string;
-}
-

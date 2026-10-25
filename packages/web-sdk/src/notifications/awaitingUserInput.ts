@@ -111,7 +111,7 @@ export function beginAwaitingUserInput(
   console.warn(
     `[TinyCloud] Waiting for you: ${detail.message}` +
       (detail.element
-        ? ` The prompt is a <${detail.element}> element appended to <body>; it uses a shadow root, so it will not appear in the page's own DOM tree and may be hidden behind a full-screen loading overlay.`
+        ? ` The prompt is a <${detail.element}> element in the TinyCloud panel host's open shadow root, so it will not appear in the page's own DOM tree and may be hidden behind a full-screen loading overlay.`
         : "") +
       timeoutNote
   );

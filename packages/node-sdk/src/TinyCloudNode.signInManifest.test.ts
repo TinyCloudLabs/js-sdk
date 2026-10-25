@@ -19,7 +19,7 @@
  * `abilities` argument directly without standing up a real session.
  */
 
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 
 import {
   type IWasmBindings,
@@ -1197,5 +1197,113 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
         "com.demo.app/config": ["tinycloud.kv/get"],
       },
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SIWE uri precedence (TC-1488)
+// ---------------------------------------------------------------------------
+
+describe("TinyCloudNode SIWE uri precedence (TC-1488)", () => {
+  const baseConfig = {
+    autoBootstrapAccount: false,
+    includeAccountRegistryPermissions: false,
+    manifest: {
+      app_id: "xyz.tinycloud.feed.host",
+      name: "Feed Host",
+      defaults: false,
+      permissions: [],
+    },
+  };
+
+  function makeCapturingWasm(captured: Record<string, unknown>[]): IWasmBindings {
+    return makeFakeWasmBindings({
+      prepareSession: mock((params: Record<string, unknown>) => {
+        captured.push(params);
+        return {
+          jwk: params.jwk,
+          spaceId: params.spaceId,
+          verificationMethod: "did:key:z6MkTestSession",
+        };
+      }) as never,
+    });
+  }
+
+  async function runSignIn(node: TinyCloudNode, wasm: IWasmBindings): Promise<void> {
+    await withFetchResponses(
+      [
+        new Response(
+          JSON.stringify({ protocol: 1, version: "test", features: [], nodeId: "did:key:z6MkNode" }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+        new Response(JSON.stringify({ activated: ["space://test"], skipped: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ],
+      async () => {
+        await node.signIn();
+      },
+      expectedActivationAuthorizationFor(wasm),
+    );
+  }
+
+  test("signIn sign-in SIWE uses the configured uri", async () => {
+    const captured: Record<string, unknown>[] = [];
+    const wasm = makeCapturingWasm(captured);
+    const node = makeNodeWithSigner(wasm, { ...baseConfig, uri: "http://localhost:5173" });
+
+    await runSignIn(node, wasm);
+
+    expect(captured[0]?.uri).toBe("http://localhost:5173");
+  });
+
+  test("siweConfig.uri overrides the configured uri on signIn", async () => {
+    const captured: Record<string, unknown>[] = [];
+    const wasm = makeCapturingWasm(captured);
+    const node = makeNodeWithSigner(wasm, {
+      ...baseConfig,
+      uri: "http://localhost:5173",
+      siweConfig: { uri: "https://custom.example" },
+    });
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await runSignIn(node, wasm);
+      expect(captured[0]?.uri).toBe("https://custom.example");
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("signIn falls back to https://<default domain> when no uri is configured", async () => {
+    const captured: Record<string, unknown>[] = [];
+    const wasm = makeCapturingWasm(captured);
+    const node = makeNodeWithSigner(wasm, { ...baseConfig });
+
+    await runSignIn(node, wasm);
+
+    expect(captured[0]?.uri).toBe("https://app.tinycloud.xyz");
+  });
+
+  test("prepareSessionForSigning (delegation path) uses the configured uri", async () => {
+    const captured: Record<string, unknown>[] = [];
+    const wasm = makeCapturingWasm(captured);
+    const node = makeNodeWithSigner(wasm, { ...baseConfig, uri: "http://localhost:5173" });
+
+    // `auth` is private; the delegation path has no public entry point.
+    // Read it reflectively and narrow at runtime rather than casting.
+    const auth: unknown = Reflect.get(node, "auth");
+    if (
+      !auth ||
+      typeof auth !== "object" ||
+      !("prepareSessionForSigning" in auth) ||
+      typeof auth.prepareSessionForSigning !== "function"
+    ) {
+      throw new Error("expected auth handler with prepareSessionForSigning");
+    }
+    await auth.prepareSessionForSigning();
+
+    expect(captured[0]?.uri).toBe("http://localhost:5173");
   });
 });

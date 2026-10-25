@@ -271,6 +271,28 @@ export type Tc1781DecryptStandardExpiryRatchet = HardeningRatchet;
  * expiry row. Same shape as the #565 hardening row.
  */
 export type Tc1855ManifestLimitGuardRatchet = HardeningRatchet;
+/**
+ * One reviewed exact-delta RAISE of the root ceilings (js-sdk #604, TC-1488): the browser SIWE domain and URI follow the
+ * page origin. #604 is not a replica-owned PR, so this is a plain root row; the root ceilings rise to the bytes canonical
+ * CI measured on the #604 head, every other ceiling stays that of the manifest limit guard row. Same shape as the #565
+ * hardening row.
+ */
+export type Tc1488SiweDomainUriRatchet = HardeningRatchet;
+/**
+ * One reviewed exact-byte row (js-sdk #708, TC-1737): short-link code raised the root index.cjs bytes. Same shape as the
+ * #565 hardening row; the worker ceilings are carried unchanged.
+ */
+export type Tc1737ShortLinkLazyChunkRatchet = HardeningRatchet;
+/**
+ * One reviewed exact-byte row (js-sdk #721, TC-1910): the invocation signing-consistency change raised the root
+ * index.cjs bytes. Same shape as the #565 hardening row; the other ceilings are carried unchanged.
+ */
+export type Tc1910SigningConsistencyRatchet = HardeningRatchet;
+/**
+ * One reviewed exact-byte row (js-sdk #731, TC-848): the settings panel launcher, host and toasts raised the root
+ * bytes. Same shape as the #565 hardening row; the worker, first-import and activation ceilings are carried unchanged.
+ */
+export type Tc848SettingsPanelRatchet = HardeningRatchet;
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -307,6 +329,10 @@ export type Ledger = {
   tc712CredentialCoreRatchet?: Tc712CredentialCoreRatchet;
   tc1781DecryptStandardExpiryRatchet?: Tc1781DecryptStandardExpiryRatchet;
   tc1855ManifestLimitGuardRatchet?: Tc1855ManifestLimitGuardRatchet;
+  tc1488SiweDomainUriRatchet?: Tc1488SiweDomainUriRatchet;
+  tc1737ShortLinkLazyChunkRatchet?: Tc1737ShortLinkLazyChunkRatchet;
+  tc1910SigningConsistencyRatchet?: Tc1910SigningConsistencyRatchet;
+  tc848SettingsPanelRatchet?: Tc848SettingsPanelRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -873,6 +899,10 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc712CredentialCoreRatchet !== undefined) pins.push({ row: "tc712CredentialCoreRatchet", pin: root.tc712CredentialCoreRatchet.sourceCommits.at(-1)! });
   if (root.tc1781DecryptStandardExpiryRatchet !== undefined) pins.push({ row: "tc1781DecryptStandardExpiryRatchet", pin: root.tc1781DecryptStandardExpiryRatchet.sourceCommits.at(-1)! });
   if (root.tc1855ManifestLimitGuardRatchet !== undefined) pins.push({ row: "tc1855ManifestLimitGuardRatchet", pin: root.tc1855ManifestLimitGuardRatchet.sourceCommits.at(-1)! });
+  if (root.tc1488SiweDomainUriRatchet !== undefined) pins.push({ row: "tc1488SiweDomainUriRatchet", pin: root.tc1488SiweDomainUriRatchet.sourceCommits.at(-1)! });
+  if (root.tc1737ShortLinkLazyChunkRatchet !== undefined) pins.push({ row: "tc1737ShortLinkLazyChunkRatchet", pin: root.tc1737ShortLinkLazyChunkRatchet.sourceCommits.at(-1)! });
+  if (root.tc1910SigningConsistencyRatchet !== undefined) pins.push({ row: "tc1910SigningConsistencyRatchet", pin: root.tc1910SigningConsistencyRatchet.sourceCommits.at(-1)! });
+  if (root.tc848SettingsPanelRatchet !== undefined) pins.push({ row: "tc848SettingsPanelRatchet", pin: root.tc848SettingsPanelRatchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -915,6 +945,10 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc712CredentialCoreRatchet", root.tc712CredentialCoreRatchet?.root.ceiling],
     ["tc1781DecryptStandardExpiryRatchet", root.tc1781DecryptStandardExpiryRatchet?.root.ceiling],
     ["tc1855ManifestLimitGuardRatchet", root.tc1855ManifestLimitGuardRatchet?.root.ceiling],
+    ["tc1488SiweDomainUriRatchet", root.tc1488SiweDomainUriRatchet?.root.ceiling],
+    ["tc1737ShortLinkLazyChunkRatchet", root.tc1737ShortLinkLazyChunkRatchet?.root.ceiling],
+    ["tc1910SigningConsistencyRatchet", root.tc1910SigningConsistencyRatchet?.root.ceiling],
+    ["tc848SettingsPanelRatchet", root.tc848SettingsPanelRatchet?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -1490,6 +1524,149 @@ export const approvedTc1855ManifestLimitGuardRatchet: Tc1855ManifestLimitGuardRa
   reason: "refuse manifest permissions that carry a limit (TC-1855, #702): guards on both runtime-permission paths, +155 B mjs / +106 B cjs gzip",
 };
 
+/**
+ * Browser SIWE domain and URI (js-sdk #604, TC-1488), approved by Naomi, 2026-10-24: the root index.mjs / index.cjs
+ * ceilings rise from 1,462,474 / 1,404,741 to 1,462,509 / 1,404,776, the bytes canonical CI printed on the #604 head
+ * aaa4ce3e (Replica run 40089434307). Measured change against the previous newest row is +35 / +35. First-import,
+ * activation and worker ceilings are unchanged.
+ */
+export const approvedTc1488SiweDomainUriRatchet: Tc1488SiweDomainUriRatchet = {
+  label: "the browser SIWE domain and URI follow the page origin (TC-1488, #604): +35 B mjs / +35 B cjs gzip",
+  ruling: "Approved by Naomi (2026-10-24; exact canonical CI bytes, no headroom)",
+  base: "8e431447f23a164da75faed067d4b16af5c77ef0",
+  sourceCommits: [
+    "aaa4ce3e6c9182c8022aaff3511c9f2144a5b756",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40089434307",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40089434307/job/120858912359",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40089434307/job/120858912529",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 35, "index.cjs": 35 },
+    ceiling: { "index.mjs": 1462509, "index.cjs": 1404776 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 51925, "replica.cjs": 67141 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23117, "activation.cjs": 24700 },
+  },
+  worker: { delta: 0, ceiling: 776128 },
+  reason: "the browser SIWE domain and URI follow the page origin (TC-1488, #604): +35 B mjs / +35 B cjs gzip",
+};
+
+/**
+ * Short links v=4 (js-sdk #708, TC-1737), approved by Naomi: the root index.cjs ceiling goes from 1,404,776 to 1,404,942
+ * (+166), the bytes canonical CI printed on the #708 head 8d15cd61 (Replica run 40136320965). The index.mjs ceiling stays
+ * 1,462,509: CI measured 1,461,950 there, within the TC-1985 gzip-alignment swing. The worker ceilings are unchanged
+ * (776,128 and 770,093): the kv-storage and replica workers measured those bytes on the #708 head 8df0083d after the
+ * replica's sdk-services pin moved to 3.6.1 (Replica run 40141627657). First-import and activation ceilings are unchanged.
+ */
+export const approvedTc1737ShortLinkLazyChunkRatchet: Tc1737ShortLinkLazyChunkRatchet = {
+  label: "short links v=4 (TC-1737, #708): root index.cjs +166 B gzip, index.mjs ceiling carried, worker ceilings unchanged",
+  ruling: "Approved by Naomi (index.cjs at the exact CI bytes of run 40136320965, no headroom; index.mjs ceiling kept; worker ceilings unchanged, measured in run 40141627657)",
+  base: "e6aad66159e81b47c937da584a4c7f019be54100",
+  sourceCommits: [
+    "8d15cd6123fd37924db59065e1317682dbff2772",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40136320965",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40136320965/job/120998491772",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40136320965/job/120998491418",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 0, "index.cjs": 166 },
+    ceiling: { "index.mjs": 1462509, "index.cjs": 1404942 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 51925, "replica.cjs": 67141 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23117, "activation.cjs": 24700 },
+  },
+  worker: { delta: 0, ceiling: 776128 },
+  reason: "index.cjs grew by 166 B from the short-link code in sdk-core/share-envelope; index.mjs measured 1461950 in CI run 40136320965 and its ceiling is not lowered (within the TC-1985 gzip-alignment swing); the worker bundles are unchanged after the replica's sdk-services pin moved to 3.6.1 (TC-2014)",
+};
+
+/**
+ * Invocation signing consistency (js-sdk #721, TC-1910), approved by Naomi: the root index.cjs ceiling goes from 1,404,942
+ * to 1,405,179 (+237), the bytes canonical CI printed on the #721 head f5f76a58 (Replica run 40176697796). The index.mjs
+ * ceiling stays 1,462,509: CI measured 1,462,173 there. The worker, first-import and activation ceilings are unchanged.
+ */
+export const approvedTc1910SigningConsistencyRatchet: Tc1910SigningConsistencyRatchet = {
+  label: "invocation signing consistency (TC-1910, #721): root index.cjs +237 B gzip, index.mjs ceiling carried",
+  ruling: "Approved by Naomi (index.cjs at the exact CI bytes of run 40176697796, no headroom; index.mjs ceiling carried; worker ceilings unchanged)",
+  base: "be28faab7608bf12ef4308666c3163b5ccceda93",
+  sourceCommits: [
+    "f5f76a58f87afda5054969847c716bfac63fbbf3",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40176697796",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40176697796/job/121118801100",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40176697796/job/121118801300",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 0, "index.cjs": 237 },
+    ceiling: { "index.mjs": 1462509, "index.cjs": 1405179 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 51925, "replica.cjs": 67141 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23117, "activation.cjs": 24700 },
+  },
+  worker: { delta: 0, ceiling: 776128 },
+  reason: "signing-consistency fix plus the approved recovery hint; smallest version that keeps every existing test; index.mjs measured 1,462,173 (ceiling carried)",
+};
+
+/**
+ * Settings panel launcher, host and toasts (js-sdk #731, TC-848), approved by Naomi: the root index.mjs ceiling goes from
+ * 1,462,509 to 1,464,178 (+1669) and index.cjs from 1,405,179 to 1,406,007 (+828), the bytes canonical CI printed on the
+ * #731 head 5d8535af (run 40220911012). The worker, first-import and activation ceilings are carried unchanged.
+ */
+export const approvedTc848SettingsPanelRatchet: Tc848SettingsPanelRatchet = {
+  label: "settings panel launcher, host and toasts (TC-848, #731): root index.mjs +1669 B, index.cjs +828 B gzip",
+  ruling: "Approved by Naomi (exact CI bytes of run 40220911012 on 5d8535af; first import, activation and worker carried)",
+  base: "b90a608ea0b079073845e0a0995f0c55e529d3af",
+  sourceCommits: [
+    "5d8535af1444d636029eb0733229006c2249b444",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40220911012",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40220911012/job/121252076932",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40220911012/job/121252076746",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 1669, "index.cjs": 828 },
+    ceiling: { "index.mjs": 1464178, "index.cjs": 1406007 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 51925, "replica.cjs": 67141 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23117, "activation.cjs": 24700 },
+  },
+  worker: { delta: 0, ceiling: 776128 },
+  reason: "panel eager launcher, host and toasts; both figures include gzip alignment against the inline wasm payload (TC-1985).",
+};
+
 export type GatedOnlyRatchet = {
   label: string;
   sourceCommit: string;
@@ -1554,6 +1731,10 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc712CredentialCoreRatchet: approvedTc712CredentialCoreRatchet,
   tc1781DecryptStandardExpiryRatchet: approvedTc1781DecryptStandardExpiryRatchet,
   tc1855ManifestLimitGuardRatchet: approvedTc1855ManifestLimitGuardRatchet,
+  tc1488SiweDomainUriRatchet: approvedTc1488SiweDomainUriRatchet,
+  tc1737ShortLinkLazyChunkRatchet: approvedTc1737ShortLinkLazyChunkRatchet,
+  tc1910SigningConsistencyRatchet: approvedTc1910SigningConsistencyRatchet,
+  tc848SettingsPanelRatchet: approvedTc848SettingsPanelRatchet,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -1731,6 +1912,22 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc1781DecryptStandardExpiryRatchet || JSON.stringify(value.tc1855ManifestLimitGuardRatchet) !== JSON.stringify(approvedTc1855ManifestLimitGuardRatchet))) {
     throw new Error("Only Naomi's exact canonical manifest limit guard ratchet is approved.");
   }
+  if (value.tc1488SiweDomainUriRatchet !== undefined &&
+      (!value.tc1855ManifestLimitGuardRatchet || JSON.stringify(value.tc1488SiweDomainUriRatchet) !== JSON.stringify(approvedTc1488SiweDomainUriRatchet))) {
+    throw new Error("Only Naomi's exact canonical SIWE domain and URI ratchet is approved.");
+  }
+  if (value.tc1737ShortLinkLazyChunkRatchet !== undefined &&
+      (!value.tc1488SiweDomainUriRatchet || JSON.stringify(value.tc1737ShortLinkLazyChunkRatchet) !== JSON.stringify(approvedTc1737ShortLinkLazyChunkRatchet))) {
+    throw new Error("Only Naomi's exact canonical short-link ratchet is approved.");
+  }
+  if (value.tc1910SigningConsistencyRatchet !== undefined &&
+      (!value.tc1737ShortLinkLazyChunkRatchet || JSON.stringify(value.tc1910SigningConsistencyRatchet) !== JSON.stringify(approvedTc1910SigningConsistencyRatchet))) {
+    throw new Error("Only Naomi's exact canonical signing-consistency ratchet is approved.");
+  }
+  if (value.tc848SettingsPanelRatchet !== undefined &&
+      (!value.tc1910SigningConsistencyRatchet || JSON.stringify(value.tc848SettingsPanelRatchet) !== JSON.stringify(approvedTc848SettingsPanelRatchet))) {
+    throw new Error("Only Naomi's exact canonical panel ratchet is approved.");
+  }
 }
 
 /** The #606 worker ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
@@ -1858,6 +2055,38 @@ export function validateTc1855ManifestLimitGuardRatchetTransition(base?: Tc1855M
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1855ManifestLimitGuardRatchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact TC-1855 manifest limit guard ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-1488 SIWE domain/URI ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc1488SiweDomainUriRatchetTransition(base?: Tc1488SiweDomainUriRatchet, current?: Tc1488SiweDomainUriRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1488SiweDomainUriRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-1488 SIWE domain and URI ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-1737 short-link ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc1737ShortLinkLazyChunkRatchetTransition(base?: Tc1737ShortLinkLazyChunkRatchet, current?: Tc1737ShortLinkLazyChunkRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1737ShortLinkLazyChunkRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-1737 short-link ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-1910 signing-consistency ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc1910SigningConsistencyRatchetTransition(base?: Tc1910SigningConsistencyRatchet, current?: Tc1910SigningConsistencyRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1910SigningConsistencyRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-1910 signing-consistency ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-848 settings panel ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc848SettingsPanelRatchetTransition(base?: Tc848SettingsPanelRatchet, current?: Tc848SettingsPanelRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc848SettingsPanelRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-848 settings panel ratchet may be introduced once and cannot change later.");
   }
 }
 
