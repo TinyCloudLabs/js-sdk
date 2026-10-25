@@ -34,6 +34,7 @@ interface HarnessWindow {
     signOut(): boolean;
     hold(closed: boolean): boolean;
     deny(on: boolean): boolean;
+    statusNotFound(on: boolean): boolean;
     calls(): Call[];
     revokes(): string[];
   };
@@ -117,6 +118,23 @@ test("a revoke goes through the adapter: the node is asked, the row leaves and t
   const revokeAt = names.indexOf("delegations.revoke");
   expect(names[revokeAt - 1]).toBe("delegations.status");
   expect(names.slice(revokeAt + 1)).toContain("delegations.query");
+});
+
+test("a grant whose status the node cannot read is still revoked: the revoke is asked, never reported as already ended", async ({ page }) => {
+  await boot(page);
+  await tc(page, (api) => api.arm());
+  await tc(page, (api) => api.statusNotFound(true));
+  await openDelegations(page);
+  await expect(cards(page)).toHaveCount(3);
+
+  await card(page, "A", 2).getByRole("button", { name: `Revoke access for ${delegate("A", 2)}` }).click();
+  const box = body(page).locator('[role="alertdialog"]');
+  await box.getByRole("button", { name: "Revoke access" }).click();
+
+  await expect(card(page, "A", 2)).toHaveCount(0);
+  await expect(slips(page)).toContainText("Access revoked");
+  await expect(body(page)).not.toContainText("had already ended");
+  expect(await tc(page, (api) => api.revokes())).toEqual(["bafyAccountA2"]);
 });
 
 test("Show more reads the next page by the cursor the first page gave", async ({ page }) => {
