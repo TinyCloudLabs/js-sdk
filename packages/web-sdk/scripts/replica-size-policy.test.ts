@@ -2765,7 +2765,7 @@ describe("invocation signing consistency (#721, TC-1910) root ceiling ratchet", 
 describe("settings panel launcher, host and toasts (#731, TC-848) root ceiling ratchet", () => {
   const row = () => structuredClone(approvedTc848SettingsPanelRatchet);
 
-  it("carries the index.mjs ceiling, sets index.cjs to the exact canonical CI bytes, and carries every other ceiling", () => {
+  it("raises the index.mjs ceiling by 1669 and the index.cjs ceiling by 828 over the signing-consistency row, and carries every other ceiling", () => {
     expect(() => validateLedger(current)).not.toThrow();
     expect(JSON.stringify(current.tc848SettingsPanelRatchet)).toBe(JSON.stringify(approvedTc848SettingsPanelRatchet));
     expect(row().root.delta).toEqual({ "index.mjs": 1669, "index.cjs": 828 });
