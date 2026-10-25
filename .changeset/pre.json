@@ -29,6 +29,7 @@
     "@tinycloud/sdk-services-test": "21.0.1"
   },
   "changesets": [
+    "storage-full-episode",
     "tc1737-links-cli",
     "tc1737-links-node-sdk",
     "tc1737-links-share-envelope",
@@ -36,6 +37,7 @@
     "tc1737-links-size-bound-share-sdk",
     "tc1737-links-web-sdk",
     "tc1910-invocation-signing",
-    "tc2014-replica-sdk-services-pin"
+    "tc2014-replica-sdk-services-pin",
+    "tc848-settings-panel"
   ]
 }
