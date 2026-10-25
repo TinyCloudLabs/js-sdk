@@ -217,6 +217,10 @@ w.__tc = {
     manifestName = name;
     return true;
   },
+  setSignedIn(value: boolean) {
+    signedIn = value;
+    return true;
+  },
   // Dispatches the same window rejection the SDK's error path raises for a TinyCloud failure.
   rejectWithTinyCloudError() {
     const event = new Event("unhandledrejection");
