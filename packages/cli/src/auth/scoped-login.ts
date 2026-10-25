@@ -1,5 +1,6 @@
 import { NodeWasmBindings, signedCompactUcanExpiry, type PermissionEntry } from "@tinycloud/node-sdk";
 import { isLocalOwnerProfile, ownerSessionLacksProof } from "@tinycloud/operations/profile";
+import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import type { ProfileConfig } from "../config/types.js";
@@ -7,8 +8,9 @@ import { parseDuration } from "../lib/duration.js";
 import { normalizePkhIdentifier } from "../lib/space.js";
 import { ENCRYPTION_MANIFEST_SPACE } from "../../../sdk-core/src/manifest.js";
 import { isRawEncryptionPermission, isVerifiedRawEncryptionPermission } from "../lib/raw-encryption.js";
-import { canonicalNetworkUrn, rawEncryptionOwnerMatches } from "../lib/owner-did.js";
+import { canonicalNetworkUrn, canonicalOwnerDid, rawEncryptionOwnerMatches } from "../lib/owner-did.js";
 import { assertNoCaveatLimits } from "../lib/caveat-refusal.js";
+import { keyAbilitiesFor, parseKeysPrefix, partialKeysGrantError, type ProfileNamedKeys } from "../lib/named-keys.js";
 
 /** OpenKey signs a scoped delegation only when it carries this read on the session space. */
 const CAPABILITIES_READ = "tinycloud.capabilities/read";
@@ -377,6 +379,8 @@ export interface SignedSessionExpectations {
   purpose?: "grant";
   /** Agent grant: the approval must cover every requested action, or no grant is stored. */
   exactApproval?: boolean;
+  /** The named-key folder row this login asked for; the only encryption folder row a signed grant may carry. */
+  namedKeyRow?: ProfileNamedKeys;
 }
 
 /** What the WASM verifier returns (its binding is untyped). Caveats arrive as `Map`s. */
@@ -454,6 +458,40 @@ export function verifySignedSession(
   return { ownerDid, permissions, expiresAt };
 }
 
+/**
+ * Set aside the one named-key folder row this login requested: the exact
+ * resource, owned by the signer, with exactly key.create and decrypt and no
+ * caveats. A partial row is refused; any other row is left for the usual checks.
+ */
+function withoutRequestedKeyRow(
+  signed: readonly PermissionEntry[], keys: ProfileNamedKeys, signerDid: string,
+): PermissionEntry[] {
+  const mismatch = (): CLIError => new CLIError("OPENKEY_SCOPE_MISMATCH",
+    `The key permission in the approval didn't match what was asked for "<folder>/", so this sign-in wasn't saved. Sign in again with \`${CLI_NAME} auth login --keys <folder>\`.`, ExitCode.PERMISSION_DENIED);
+  let expectedResource: string;
+  try {
+    expectedResource = parseKeysPrefix(keys.prefix, canonicalOwnerDid(signerDid)).resource;
+  } catch {
+    throw mismatch();
+  }
+  if (keys.resource !== expectedResource) throw mismatch();
+  const rest: PermissionEntry[] = [];
+  const actions = new Set<string>();
+  for (const permission of signed) {
+    if (!isVerifiedRawEncryptionPermission(permission) || permission.path !== expectedResource) {
+      rest.push(permission);
+      continue;
+    }
+    if (permission.caveats?.some((caveat) => Object.keys(caveat).length > 0)) throw mismatch();
+    for (const action of permission.actions) actions.add(action);
+  }
+  if (actions.size === 0) return rest;
+  const wanted = keyAbilitiesFor(keys)[expectedResource]!;
+  if ([...actions].some((action) => !wanted.includes(action))) throw mismatch();
+  if (actions.size !== wanted.length) throw partialKeysGrantError();
+  return rest;
+}
+
 /** Verify signed authority, and that it stays inside the requested manifest, before a scoped login saves anything. */
 export function verifyScopedLogin(
   data: Record<string, unknown>,
@@ -492,10 +530,13 @@ export function verifyScopedLogin(
   // the proof, but omit the unusable nested resource from approved authority.
   const legacyNested: PermissionEntry[] = [];
   const approved: PermissionEntry[] = [];
-  for (const permission of signed.permissions) {
+  const keyRowRest = expected.namedKeyRow === undefined
+    ? signed.permissions
+    : withoutRequestedKeyRow(signed.permissions, expected.namedKeyRow, signed.ownerDid);
+  for (const permission of keyRowRest) {
     (isLegacyNestedDecrypt(permission, requested, signed.ownerDid, spaceId) ? legacyNested : approved).push(permission);
   }
-  for (const permission of signed.permissions) {
+  for (const permission of keyRowRest) {
     if (isVerifiedRawEncryptionPermission(permission) &&
       !rawEncryptionOwnerMatches(permission.path, signed.ownerDid)) {
       throw new CLIError("OPENKEY_SCOPE_MISMATCH", `OpenKey signed decrypt for a network not owned by the approving identity. ${notStored}`, ExitCode.PERMISSION_DENIED);
