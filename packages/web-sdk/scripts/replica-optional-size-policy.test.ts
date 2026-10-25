@@ -5,7 +5,7 @@ import {
   compactFixOptionalAllowance, correctedOptionalAllowance, hardeningOptionalAllowance, tc1413OptionalAllowance, tc1432OptionalAllowance, tc1475OptionalAllowance, masterDriftOptionalAllowance, tc1789OptionalAllowance, validateIntroducedOptionalSources,
   validateOptionalEntryTransition, validateOptionalLedger, type OptionalLedger,
 } from "./replica-optional-size-policy";
-import { approvedMasterDriftRatchet, approvedTc1432Ratchet, approvedTc1475Ratchet, approvedTc1789Ratchet } from "./replica-size-policy";
+import { approvedMasterDriftRatchet, approvedTc1432Ratchet, approvedTc1475Ratchet, approvedTc1789Ratchet, approvedTc1888PurgeLocalCopyRatchet } from "./replica-size-policy";
 
 const shipped = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-optional-size-ledger.json"), "utf8")) as OptionalLedger;
 // The tests below cover the #565 hardening-era ledger; TC-1413's own allowance is tested at the end.
@@ -355,10 +355,16 @@ describe("master-drift optional allowance", () => {
   });
 });
 
+const tc1789Ledger: OptionalLedger = {
+  ...structuredClone(shipped),
+  allowance: { ...tc1789OptionalAllowance },
+  entries: structuredClone(shipped.entries.slice(0, shipped.entries.findIndex((entry) => entry.pr === "#728"))),
+};
+
 describe("sdk-services 3.3.1 pin optional allowance", () => {
   it("accepts exactly the canonical ceilings: master drift's plus replica.cjs +1", () => {
-    expect(() => validateOptionalLedger(shipped, true, true, true, true, true, true, true, true)).not.toThrow();
-    expect(shipped.allowance).toEqual(tc1789OptionalAllowance);
+    expect(() => validateOptionalLedger(tc1789Ledger, true, true, true, true, true, true, true, true)).not.toThrow();
+    expect(tc1789Ledger.allowance).toEqual(tc1789OptionalAllowance);
     for (const format of ["replica.mjs", "replica.cjs", "activation.mjs", "activation.cjs"] as const) {
       expect(tc1789OptionalAllowance[format] - masterDriftOptionalAllowance[format])
         .toBe({ ...approvedTc1789Ratchet.firstImport.delta, ...approvedTc1789Ratchet.activation.delta }[format]);
@@ -367,21 +373,42 @@ describe("sdk-services 3.3.1 pin optional allowance", () => {
 
   it("refuses one extra byte, the allowance without master drift's, or the old allowance after it", () => {
     for (const format of ["replica.mjs", "replica.cjs", "activation.mjs", "activation.cjs"] as const) {
-      const changed = structuredClone(shipped);
+      const changed = structuredClone(tc1789Ledger);
       changed.allowance[format]++;
       expect(() => validateOptionalLedger(changed, true, true, true, true, true, true, true, true)).toThrow();
     }
-    expect(() => validateOptionalLedger(shipped, true, true, true, true, true, true, false, true)).toThrow();
-    expect(() => validateOptionalLedger(shipped, true, true, true, true, true, true, true)).toThrow();
+    expect(() => validateOptionalLedger(tc1789Ledger, true, true, true, true, true, true, false, true)).toThrow();
+    expect(() => validateOptionalLedger(tc1789Ledger, true, true, true, true, true, true, true)).toThrow();
     expect(() => validateOptionalLedger(masterDriftLedger, true, true, true, true, true, true, true, true)).toThrow();
   });
 
   it("keeps the cumulative entries within the allowance, with #667's row carrying the observed deltas", () => {
     for (const format of ["replica.mjs", "replica.cjs", "activation.mjs", "activation.cjs"] as const) {
-      expect(shipped.entries.reduce((sum, entry) => sum + entry[format], 0)).toBeLessThanOrEqual(shipped.allowance[format]);
+      expect(tc1789Ledger.entries.reduce((sum, entry) => sum + entry[format], 0)).toBeLessThanOrEqual(tc1789Ledger.allowance[format]);
     }
-    expect(shipped.entries.find((entry) => entry.pr === "#667")).toMatchObject({
+    expect(tc1789Ledger.entries.find((entry) => entry.pr === "#667")).toMatchObject({
       pr: "#667", "replica.mjs": -1, "replica.cjs": 1, "activation.mjs": 0, "activation.cjs": 1,
     });
+  });
+});
+
+describe("TC-1888 sign-out optional allowance", () => {
+  it("pins the cumulative caps to the approved row and includes only its measured deltas", () => {
+    expect(() => validateOptionalLedger(shipped, true, true, true, true, true, true, true, true, true)).not.toThrow();
+    const deltas = { ...approvedTc1888PurgeLocalCopyRatchet.firstImport.delta, ...approvedTc1888PurgeLocalCopyRatchet.activation.delta };
+    for (const format of ["replica.mjs", "replica.cjs", "activation.mjs", "activation.cjs"] as const) {
+      expect(shipped.allowance[format]).toBe(tc1789Ledger.entries.reduce((sum, entry) => sum + entry[format], 0) + deltas[format]);
+      expect(shipped.entries.reduce((sum, entry) => sum + entry[format], 0)).toBe(shipped.allowance[format]);
+    }
+    expect(shipped.entries.at(-1)).toMatchObject({ pr: "#728", ticket: "TC-1888", ...deltas });
+  });
+
+  it("refuses extra allowance bytes or the new allowance without the TC-1888 row", () => {
+    for (const format of ["replica.mjs", "replica.cjs", "activation.mjs", "activation.cjs"] as const) {
+      const changed = structuredClone(shipped);
+      changed.allowance[format]++;
+      expect(() => validateOptionalLedger(changed, true, true, true, true, true, true, true, true, true)).toThrow();
+    }
+    expect(() => validateOptionalLedger(shipped, true, true, true, true, true, true, true, true)).toThrow();
   });
 });

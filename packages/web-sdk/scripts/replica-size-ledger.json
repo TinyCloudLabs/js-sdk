@@ -1688,5 +1688,34 @@
       "ceiling": 776128
     },
     "reason": "panel eager launcher, host and toasts; both figures include gzip alignment against the inline wasm payload (TC-1985)."
+  },
+  "tc1888PurgeLocalCopyRatchet": {
+    "label": "sign-out erases the local copy and purgeLocalCopy (TC-1888, #728)",
+    "ruling": "Approved by Naomi (exact reviewed deltas at run 40234728208; optional caps include existing cumulative-ledger slack)",
+    "base": "1c15c1b5140b2aeb5222bba814764dfe642e4b07",
+    "sourceCommits": [
+      "5979c35e8201f2c6f7256c7edd86f2b6669c890f"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40234728208",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40234728208/job/121293733818",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40234728208/job/121293733654"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 286, "index.cjs": 281 },
+      "ceiling": { "index.mjs": 1464464, "index.cjs": 1406288 }
+    },
+    "firstImport": {
+      "delta": { "replica.mjs": 408, "replica.cjs": 394 },
+      "ceiling": { "replica.mjs": 52333, "replica.cjs": 67533 }
+    },
+    "activation": {
+      "delta": { "activation.mjs": 270, "activation.cjs": 261 },
+      "ceiling": { "activation.mjs": 23386, "activation.cjs": 24959 }
+    },
+    "worker": { "delta": 0, "ceiling": 776128 },
+    "reason": "sign-out and account switch erase the local copy with an SDK retry and a failure event; the minimum reviewed shape; optional code in the replica chunk."
   }
 }

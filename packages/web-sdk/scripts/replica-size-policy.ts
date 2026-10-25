@@ -293,6 +293,8 @@ export type Tc1910SigningConsistencyRatchet = HardeningRatchet;
  * bytes. Same shape as the #565 hardening row; the worker, first-import and activation ceilings are carried unchanged.
  */
 export type Tc848SettingsPanelRatchet = HardeningRatchet;
+/** One reviewed exact-delta row for sign-out local-copy erase (TC-1888, #728). */
+export type Tc1888PurgeLocalCopyRatchet = HardeningRatchet;
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -333,6 +335,7 @@ export type Ledger = {
   tc1737ShortLinkLazyChunkRatchet?: Tc1737ShortLinkLazyChunkRatchet;
   tc1910SigningConsistencyRatchet?: Tc1910SigningConsistencyRatchet;
   tc848SettingsPanelRatchet?: Tc848SettingsPanelRatchet;
+  tc1888PurgeLocalCopyRatchet?: Tc1888PurgeLocalCopyRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -903,6 +906,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc1737ShortLinkLazyChunkRatchet !== undefined) pins.push({ row: "tc1737ShortLinkLazyChunkRatchet", pin: root.tc1737ShortLinkLazyChunkRatchet.sourceCommits.at(-1)! });
   if (root.tc1910SigningConsistencyRatchet !== undefined) pins.push({ row: "tc1910SigningConsistencyRatchet", pin: root.tc1910SigningConsistencyRatchet.sourceCommits.at(-1)! });
   if (root.tc848SettingsPanelRatchet !== undefined) pins.push({ row: "tc848SettingsPanelRatchet", pin: root.tc848SettingsPanelRatchet.sourceCommits.at(-1)! });
+  if (root.tc1888PurgeLocalCopyRatchet !== undefined) pins.push({ row: "tc1888PurgeLocalCopyRatchet", pin: root.tc1888PurgeLocalCopyRatchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -949,6 +953,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc1737ShortLinkLazyChunkRatchet", root.tc1737ShortLinkLazyChunkRatchet?.root.ceiling],
     ["tc1910SigningConsistencyRatchet", root.tc1910SigningConsistencyRatchet?.root.ceiling],
     ["tc848SettingsPanelRatchet", root.tc848SettingsPanelRatchet?.root.ceiling],
+    ["tc1888PurgeLocalCopyRatchet", root.tc1888PurgeLocalCopyRatchet?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -1667,6 +1672,35 @@ export const approvedTc848SettingsPanelRatchet: Tc848SettingsPanelRatchet = {
   reason: "panel eager launcher, host and toasts; both figures include gzip alignment against the inline wasm payload (TC-1985).",
 };
 
+/** Canonical CI run 40234728208: root, first import and activation rise by the approved deltas; worker is unchanged. */
+export const approvedTc1888PurgeLocalCopyRatchet: Tc1888PurgeLocalCopyRatchet = {
+  label: "sign-out erases the local copy and purgeLocalCopy (TC-1888, #728)",
+  ruling: "Approved by Naomi (exact reviewed deltas at run 40234728208; optional caps include existing cumulative-ledger slack)",
+  base: "1c15c1b5140b2aeb5222bba814764dfe642e4b07",
+  sourceCommits: ["5979c35e8201f2c6f7256c7edd86f2b6669c890f"],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40234728208",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40234728208/job/121293733818",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40234728208/job/121293733654",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 286, "index.cjs": 281 },
+    ceiling: { "index.mjs": 1464464, "index.cjs": 1406288 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 408, "replica.cjs": 394 },
+    ceiling: { "replica.mjs": 52333, "replica.cjs": 67533 },
+  },
+  activation: {
+    delta: { "activation.mjs": 270, "activation.cjs": 261 },
+    ceiling: { "activation.mjs": 23386, "activation.cjs": 24959 },
+  },
+  worker: { delta: 0, ceiling: 776128 },
+  reason: "sign-out and account switch erase the local copy with an SDK retry and a failure event; the minimum reviewed shape; optional code in the replica chunk.",
+};
+
 export type GatedOnlyRatchet = {
   label: string;
   sourceCommit: string;
@@ -1735,6 +1769,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc1737ShortLinkLazyChunkRatchet: approvedTc1737ShortLinkLazyChunkRatchet,
   tc1910SigningConsistencyRatchet: approvedTc1910SigningConsistencyRatchet,
   tc848SettingsPanelRatchet: approvedTc848SettingsPanelRatchet,
+  tc1888PurgeLocalCopyRatchet: approvedTc1888PurgeLocalCopyRatchet,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -1928,6 +1963,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc1910SigningConsistencyRatchet || JSON.stringify(value.tc848SettingsPanelRatchet) !== JSON.stringify(approvedTc848SettingsPanelRatchet))) {
     throw new Error("Only Naomi's exact canonical panel ratchet is approved.");
   }
+  if (value.tc1888PurgeLocalCopyRatchet !== undefined &&
+      (!value.tc848SettingsPanelRatchet || JSON.stringify(value.tc1888PurgeLocalCopyRatchet) !== JSON.stringify(approvedTc1888PurgeLocalCopyRatchet))) {
+    throw new Error("Only Naomi's exact canonical sign-out local copy ratchet is approved.");
+  }
 }
 
 /** The #606 worker ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
@@ -2087,6 +2126,14 @@ export function validateTc848SettingsPanelRatchetTransition(base?: Tc848Settings
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc848SettingsPanelRatchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact TC-848 settings panel ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-1888 sign-out local copy ratchet is introduced once and immutable afterwards. */
+export function validateTc1888PurgeLocalCopyRatchetTransition(base?: Tc1888PurgeLocalCopyRatchet, current?: Tc1888PurgeLocalCopyRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1888PurgeLocalCopyRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-1888 sign-out local copy ratchet may be introduced once and cannot change later.");
   }
 }
 
