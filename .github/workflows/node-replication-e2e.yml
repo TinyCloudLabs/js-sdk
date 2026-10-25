@@ -101,7 +101,7 @@ jobs:
       - name: Run node-sdk replication e2e
         env:
           TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
-        run: bun test --max-concurrency=1 packages/node-sdk/src/replication/replication.e2e.test.ts packages/node-sdk/src/TinyCloudNode.revokeDelegation.e2e.test.ts
+        run: bun test --max-concurrency=1 packages/node-sdk/src/replication/replication.e2e.test.ts packages/node-sdk/src/TinyCloudNode.revokeDelegation.e2e.test.ts packages/node-sdk/src/TinyCloudNode.encryptionNetwork.e2e.test.ts
 
       - name: Run node-sdk terminal delegation e2e
         env:

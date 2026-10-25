@@ -1588,5 +1588,55 @@
       "ceiling": 776128
     },
     "reason": "index.cjs grew by 166 B from the short-link code in sdk-core/share-envelope; index.mjs measured 1461950 in CI run 40136320965 and its ceiling is not lowered (within the TC-1985 gzip-alignment swing); the worker bundles are unchanged after the replica's sdk-services pin moved to 3.6.1 (TC-2014)"
+  },
+  "tc1910SigningConsistencyRatchet": {
+    "label": "invocation signing consistency (TC-1910, #721): root index.cjs +237 B gzip, index.mjs ceiling carried",
+    "ruling": "Approved by Naomi (index.cjs at the exact CI bytes of run 40176697796, no headroom; index.mjs ceiling carried; worker ceilings unchanged)",
+    "base": "be28faab7608bf12ef4308666c3163b5ccceda93",
+    "sourceCommits": [
+      "f5f76a58f87afda5054969847c716bfac63fbbf3"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40176697796",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40176697796/job/121118801100",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40176697796/job/121118801300"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 0,
+        "index.cjs": 237
+      },
+      "ceiling": {
+        "index.mjs": 1462509,
+        "index.cjs": 1405179
+      }
+    },
+    "firstImport": {
+      "delta": {
+        "replica.mjs": 0,
+        "replica.cjs": 0
+      },
+      "ceiling": {
+        "replica.mjs": 51925,
+        "replica.cjs": 67141
+      }
+    },
+    "activation": {
+      "delta": {
+        "activation.mjs": 0,
+        "activation.cjs": 0
+      },
+      "ceiling": {
+        "activation.mjs": 23117,
+        "activation.cjs": 24700
+      }
+    },
+    "worker": {
+      "delta": 0,
+      "ceiling": 776128
+    },
+    "reason": "signing-consistency fix plus the approved recovery hint; smallest version that keeps every existing test; index.mjs measured 1,462,173 (ceiling carried)"
   }
 }

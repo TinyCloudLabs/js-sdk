@@ -1,5 +1,18 @@
 # @tinycloudlabs/node-sdk
 
+## 3.7.0-beta.2
+
+### Patch Changes
+
+- 147bb78: Encryption network invocations are re-signed with the key of the session that built them, so a sign-in with a manifest creates the account encryption network. Decrypting for an account with no default encryption network reports that the account needs to sign in again with a current SDK.
+
+  Details: TC-1910
+
+- Updated dependencies [147bb78]
+  - @tinycloud/sdk-services@3.7.0-beta.2
+  - @tinycloud/replica@0.3.4-beta.1
+  - @tinycloud/sdk-core@3.7.0-beta.2
+
 ## 3.7.0-beta.1
 
 ### Minor Changes

@@ -1688,14 +1688,16 @@ export class TinyCloudNode {
     return this.wasmBindings.invoke(invocationSession, service, path, action, facts);
   };
 
-  private readonly invokeAnyWithRuntimePermissions: InvokeAnyFunction = (
-    session,
-    entries,
-    facts,
-  ) => {
-    if (!this.wasmBindings.invokeAny) {
-      throw new Error("WASM binding does not support invokeAny");
-    }
+  /**
+   * The session (key, issuer, proof) that signs an invokeAny call for `entries`:
+   * the explicit revocation authority, else the covering non-primary runtime
+   * grant, else the caller's session. Everything that re-signs the resulting
+   * invocation must use this session's key.
+   */
+  private selectInvokeAnySession(
+    session: ServiceSession,
+    entries: Parameters<InvokeAnyFunction>[1],
+  ): { session: ServiceSession; grant: RuntimePermissionGrant | undefined } {
     const routedEntries = entries as Array<typeof entries[number] & {
       revokeAuthorityCid?: string;
     }>;
@@ -1716,6 +1718,22 @@ export class TinyCloudNode {
     const invocationSession = explicitGrant
       ? explicitGrant.session
       : !grant || grant.provenance === "primary" ? session : grant.session;
+    return { session: invocationSession, grant };
+  }
+
+  private readonly invokeAnyWithRuntimePermissions: InvokeAnyFunction = (
+    session,
+    entries,
+    facts,
+  ) => {
+    if (!this.wasmBindings.invokeAny) {
+      throw new Error("WASM binding does not support invokeAny");
+    }
+    const routedEntries = entries as Array<typeof entries[number] & {
+      revokeAuthorityCid?: string;
+    }>;
+    const { session: invocationSession, grant } =
+      this.selectInvokeAnySession(session, entries);
     const caveatPreservingEntries = routedEntries.map(({ revokeAuthorityCid: _cid, ...entry }) => {
       const requested = this.operationFromInvokeAnyEntry(entry);
       const granted = grant && requested && grant.operations.find((candidate) =>
@@ -4820,7 +4838,16 @@ export class TinyCloudNode {
   async bindInvocationAudience(authorization: string, audience: string): Promise<string> {
     const session = this.currentTinyCloudSession() ?? this._activeServiceSession;
     if (session === undefined) throw new Error("Not signed in. Call signIn() first.");
-    return rewriteInvocationAudience(authorization, audience, session.jwk);
+    // Re-sign with the key of the session named by the token's own `iss`, so a
+    // token built under a runtime grant keeps one session's key, iss and prf.
+    const payload = JSON.parse(
+      new TextDecoder().decode(base64UrlDecode(authorization.split(".")[1] ?? "")),
+    ) as { iss?: unknown };
+    const did = (value: unknown) => String(value).split("#", 1)[0];
+    const signer = [session, ...this.runtimePermissionGrants.map((grant) => grant.session)]
+      .find((candidate) => did(candidate.verificationMethod) === did(payload.iss));
+    if (!signer) throw new Error("invocation issuer does not match a held session");
+    return rewriteInvocationAudience(authorization, audience, signer.jwk);
   }
 
   /**
@@ -5233,23 +5260,25 @@ export class TinyCloudNode {
       throw new Error("WASM binding does not support invocation CID computation");
     }
     const session = binding?.session ?? this.requireEncryptionSession();
+    const entries = [
+      {
+        resource: input.networkId,
+        service: "encryption",
+        path: input.networkId,
+        action: input.action,
+      },
+    ];
     const headers = this.invokeAnyWithRuntimePermissions(
       session,
-      [
-        {
-          resource: input.networkId,
-          service: "encryption",
-          path: input.networkId,
-          action: input.action,
-        },
-      ],
+      entries,
       [input.facts as Record<string, unknown>],
     );
+    const signingSession = this.selectInvokeAnySession(session, entries).session;
     const authorization = authorizationHeader(headers);
     const audienceBound = await rewriteInvocationAudience(
       authorization,
       input.targetNode,
-      session.jwk,
+      signingSession.jwk,
     );
     binding?.graph.assertActive();
     return {
@@ -5329,7 +5358,17 @@ export class TinyCloudNode {
               actions: ["tinycloud.encryption/decrypt"],
             })
             : undefined;
-          throw new DecryptTransportResponseError(response.status, permissionHint);
+          // The node answers a missing network with 404 and the body "network
+          // not found"; advise re-sign-in only for the owner's default network.
+          throw new DecryptTransportResponseError(
+            response.status,
+            permissionHint,
+            response.status === 404 &&
+              networkId === this.getDefaultEncryptionNetworkId() &&
+              (await response.text().catch(() => "")) === "network not found"
+              ? `Network not found: ${networkId}. Sign in again with a current SDK to create the account's encryption network.`
+              : undefined,
+          );
         }
         return (await response.json()) as DecryptResponseBody;
       },
