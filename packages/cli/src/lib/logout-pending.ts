@@ -133,8 +133,9 @@ export async function assertPendingRemoteLogoutSession(
 /** Attempt both unlinks independently; the durable marker remains until both are absent and fsynced. */
 export async function clearProfileCredentials(name: string, syncDirectory = false, legacyCleanup = false): Promise<void> {
   const profile = await ProfileManager.getProfile(name);
+  const { namedKeys: _namedKeys, ...signedOutProfile } = profile;
   // Another account's logout records, in the same durable write, that the legacy mirror still has to go.
-  await ProfileManager.setProfileDurable(name, { ...profile, authSignedOut: true, ...(legacyCleanup ? { legacyReplicaCleanup: true } : {}) });
+  await ProfileManager.setProfileDurable(name, { ...signedOutProfile, authSignedOut: true, ...(legacyCleanup ? { legacyReplicaCleanup: true } : {}) });
   let failed = false;
   let error: unknown;
   try { await ProfileManager.removeKey(name); } catch (cause) { failed = true; error = cause; }

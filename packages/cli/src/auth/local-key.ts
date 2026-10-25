@@ -123,8 +123,10 @@ export async function localKeySignIn(options: {
   // A key folder needs the account's default encryption network. An account that is already
   // provisioned skips the sign-in bootstrap, so check it (a read first, a create only if missing).
   let networkReady: boolean | undefined;
-  if (options.keyAbilities) {
+  if (options.keyAbilities && !node.freshEncryptionNetworkCreated) {
     networkReady = await node.ensureEncryptionNetwork().then(() => true, () => false);
+  } else if (options.keyAbilities) {
+    networkReady = true;
   }
 
   const address = await new PrivateKeySigner(options.privateKey).getAddress();
