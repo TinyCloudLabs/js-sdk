@@ -4,16 +4,12 @@ import { base58btc } from "multiformats/bases/base58";
 import { canonicalizeSignedObjectUnsigned as canonicalize } from "../policy/signed-object.js";
 
 export const CREDENTIAL_INVITATION_REQUEST_DOMAIN = "xyz.tinycloud.credentials/invitation-request/v1\0";
-export const DELIVERY_ADMISSION_DOMAIN = "xyz.tinycloud.policy/delivery-admission/v0\0";
+export const DELIVERY_ADMISSION_DOMAIN = "xyz.tinycloud.policy/delivery-admission/v1\0";
 
+/** The strict body of `POST /policy/v3/deliveries/authorize`: the link carries the key, the node fetches the sealed body. */
 export interface ShareDeliveryAuthorizationV3Request {
-  readonly envelope: Record<string, unknown>;
-  /** Base64url canonical sealed envelope bytes, bound by the Node before delivery. */
-  readonly sealedEnvelope: string;
-  /** Base64url 32-byte AES-GCM key; this is the #k fragment value in the return link. */
-  readonly envelopeKey: string;
-  readonly shareCid: string;
   readonly recipientEmail: string;
+  /** The short `/s/<id>#v=4&k=…&c=…` share link. */
   readonly shareUrl: string;
   readonly documentName: string;
   readonly jti: string;
@@ -38,7 +34,7 @@ export interface CredentialInvitationRequest {
 }
 
 export interface DeliveryAdmission {
-  readonly schema: "xyz.tinycloud.policy/delivery-admission/v0";
+  readonly schema: "xyz.tinycloud.policy/delivery-admission/v1";
   readonly policyId: string;
   readonly ownerDid: string;
   readonly recipient: string;
@@ -103,6 +99,10 @@ export function validateShareDeliveryAuthorizationV3Bytes(
   bytes: Uint8Array,
   expected: {
     readonly request: ShareDeliveryAuthorizationV3Request;
+    /** The signed v3 envelope the sender holds. It checks the admission locally and is not sent. */
+    readonly envelope: Record<string, unknown>;
+    /** The `c` of the short link: the admission's `envelopeRef`. */
+    readonly envelopeRef: string;
     readonly senderKeyDid: string;
     readonly deliveryAudience: string;
   },
@@ -114,7 +114,7 @@ export function validateShareDeliveryAuthorizationV3Bytes(
   const request = exactObject(root.request, REQUEST_KEYS, "credential invitation request");
   const admission = exactObject(root.admission, ADMISSION_KEYS, "delivery admission");
   const signature = exactObject(admission.signature, ["suite", "signerDid", "value"], "delivery admission signature");
-  const envelope = object(expected.request.envelope, "v3 share envelope");
+  const envelope = object(expected.envelope, "v3 share envelope");
   const policy = object(envelope.policy, "v3 share policy");
   const requirement = object(policy.credentialRequirement, "v3 credential requirement");
   const credentialType = object(requirement.credentialType, "v3 credential type");
@@ -125,7 +125,7 @@ export function validateShareDeliveryAuthorizationV3Bytes(
   const fields = ["policyId", "recipient", "resource", "credentialType", "returnLink", "envelopeRef", "label", "shareExpiresAt", "audience", "issuedAt", "expiresAt", "nonce"];
   if (
     request.schema !== "xyz.tinycloud.credentials/invitation-request/v1"
-    || admission.schema !== "xyz.tinycloud.policy/delivery-admission/v0"
+    || admission.schema !== "xyz.tinycloud.policy/delivery-admission/v1"
     || fields.some((field) => request[field] !== admission[field])
     || request.policyId !== envelope.policyCid
     || request.recipient !== expected.request.recipientEmail
@@ -133,7 +133,7 @@ export function validateShareDeliveryAuthorizationV3Bytes(
     || request.credentialType !== credentialType.id
     || request.credentialType !== "opencredentials.email/v1"
     || request.returnLink !== expected.request.shareUrl
-    || request.envelopeRef !== expected.request.shareCid
+    || request.envelopeRef !== expected.envelopeRef
     || request.label !== expected.request.documentName
     || request.shareExpiresAt !== envelope.expiry
     || request.audience !== expected.deliveryAudience
@@ -151,7 +151,57 @@ export function validateShareDeliveryAuthorizationV3Bytes(
   if (!Number.isFinite(issuedAt) || !Number.isFinite(expiresAt) || expiresAt <= issuedAt || expiresAt - issuedAt > 15 * 60_000) throw new Error("v3 share delivery authorization time is invalid");
   const admissionSignature = decodeBase64Url(signature.value);
   const { signature: _signature, ...unsignedAdmission } = admission;
-  const digest = sha256(new TextEncoder().encode(`${DELIVERY_ADMISSION_DOMAIN}${canonicalize(unsignedAdmission)}`));
+  const digest = admissionDigest(unsignedAdmission);
   if (admissionSignature.length !== 64 || !ed25519.verify(admissionSignature, digest, didKeyBytes(String(signature.signerDid)))) throw new Error("v3 share delivery admission signature is invalid");
   return { request: request as unknown as CredentialInvitationRequest, admission: admission as unknown as DeliveryAdmission };
+}
+
+function admissionDigest(unsignedAdmission: Record<string, unknown>): Uint8Array {
+  return sha256(new TextEncoder().encode(`${DELIVERY_ADMISSION_DOMAIN}${canonicalize(unsignedAdmission)}`));
+}
+
+/**
+ * {@link validateShareDeliveryAuthorizationV3Bytes}, then the signature again under the strict Ed25519 rule of the
+ * links contract (`S < L`, canonical and prime-order `A` and `R`), checked by `@tinycloud/share-envelope/links`.
+ */
+export async function verifyShareDeliveryAuthorizationV3Bytes(
+  bytes: Uint8Array,
+  expected: Parameters<typeof validateShareDeliveryAuthorizationV3Bytes>[1],
+): Promise<Omit<ShareDeliveryAuthorizationV3Receipt, "proof">> {
+  const verified = validateShareDeliveryAuthorizationV3Bytes(bytes, expected);
+  const { signature, ...unsignedAdmission } = verified.admission;
+  (await import("@tinycloud/share-envelope/links")).assertDidKeySignature(signature.signerDid, admissionDigest(unsignedAdmission), signature.value);
+  return verified;
+}
+
+/**
+ * The body CID of a short share link on one of `trustedOrigins` (default: the production share origin). Any other
+ * link (another origin, the full form, another type or version, a query, a non-canonical spelling, an id that is
+ * not lowercase) is refused, so the node is only ever sent a link it can fetch by id.
+ */
+export async function shortDeliveryLinkBodyCid(shareUrl: string, trustedOrigins?: readonly string[]): Promise<string> {
+  const links = await import("@tinycloud/share-envelope/links");
+  const cid = links.shortShareLinkCid(shareUrl, { trustedOrigins: trustedOrigins ?? links.DEFAULT_SHARE_ORIGINS });
+  if (cid === undefined) throw new Error("share delivery requires a short share link");
+  return cid;
+}
+
+/** The text with the share link and its key replaced, for an error that carries a node's reply. */
+export async function withoutShareLink(text: string, shareUrl: string): Promise<string> {
+  return (await import("@tinycloud/share-envelope/links")).redactLink(text, shareUrl);
+}
+
+/**
+ * The node refused a delivery authorization: its body did not parse (HTTP 422) or it failed the node's checks (HTTP
+ * 400 `delivery-authorization-invalid`). Both are the same refusal, so the error carries no status, body or link of
+ * the reply.
+ */
+export class ShareDeliveryRefusedError extends Error {
+  readonly code = "delivery-authorization-invalid";
+  readonly status = 400;
+
+  constructor() {
+    super("share delivery authorization refused");
+    this.name = "ShareDeliveryRefusedError";
+  }
 }

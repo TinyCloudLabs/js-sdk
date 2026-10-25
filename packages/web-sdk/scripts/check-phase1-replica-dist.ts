@@ -15,6 +15,7 @@ import { rootCeilingFor, validateTc1757RatchetTransition, validateTc1777ExpiryRa
 import { validateTc1781DecryptStandardExpiryRatchetTransition } from "./replica-size-policy";
 import { validateTc1855ManifestLimitGuardRatchetTransition } from "./replica-size-policy";
 import { validateTc1488SiweDomainUriRatchetTransition } from "./replica-size-policy";
+import { validateTc1737ShortLinkLazyChunkRatchetTransition } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 import { replicaOwnedPath } from "./replica-owned-path";
 import { webSdkTestExitFailure } from "./web-sdk-test-exit";
@@ -387,6 +388,13 @@ if (prBaseSha) {
   if (tc1488SiweDomainUri !== undefined && baseLedger.tc1488SiweDomainUriRatchet === undefined &&
       (baseLedger.tc1855ManifestLimitGuardRatchet === undefined || !hasAncestor(repoRoot, tc1488SiweDomainUri.sourceCommits.at(-1)!))) {
     console.error("The SIWE domain and URI ratchet requires the merged manifest limit guard ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc1737ShortLinkLazyChunkRatchetTransition(baseLedger.tc1737ShortLinkLazyChunkRatchet, ledger.tc1737ShortLinkLazyChunkRatchet);
+  const tc1737ShortLink = ledger.tc1737ShortLinkLazyChunkRatchet;
+  if (tc1737ShortLink !== undefined && baseLedger.tc1737ShortLinkLazyChunkRatchet === undefined &&
+      (baseLedger.tc1488SiweDomainUriRatchet === undefined || !hasAncestor(repoRoot, tc1737ShortLink.sourceCommits.at(-1)!))) {
+    console.error("The short-link ratchet requires the merged SIWE domain and URI ratchet and its measured source commit.");
     failed = true;
   }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
