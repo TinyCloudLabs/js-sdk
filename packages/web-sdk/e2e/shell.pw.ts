@@ -58,14 +58,14 @@ async function openPageLayout(page: Page, section?: string) {
 
 for (const scheme of ["light", "dark"] as const) {
   test.describe(`${scheme}`, () => {
-    test("open() shows a non-modal drawer with the signed-in nav and Overview active", async ({ page }) => {
+    test("open() shows a modal drawer with the signed-in nav and Overview active", async ({ page }) => {
       await mountHarness(page, scheme);
       await openDrawer(page);
 
       const dialog = panel(page);
       await expect(dialog).toBeVisible();
       await expect(dialog).toHaveAttribute("role", "dialog");
-      await expect(dialog).toHaveAttribute("aria-modal", "false");
+      await expect(dialog).toHaveAttribute("aria-modal", "true");
       await expect(dialog).toHaveAttribute("aria-label", "TinyCloud settings");
       await expect(dialog).toHaveAttribute("data-layout", "drawer");
 
@@ -121,10 +121,9 @@ for (const scheme of ["light", "dark"] as const) {
       await mountHarness(page, scheme);
       await openDrawer(page);
 
-      // The launcher sits outside the panel element, so its keydown must not
-      // reach the panel's Escape handler.
-      await launcher(page).focus();
-      await page.keyboard.press("Escape");
+      // The launcher sits outside the panel element, so its keydown must not reach the panel's Escape handler.
+      // The modal drawer no longer lets the launcher hold focus, so the keydown is dispatched on it.
+      await launcher(page).dispatchEvent("keydown", { key: "Escape", bubbles: true, composed: true });
 
       await expect(panel(page)).toBeVisible();
     });
@@ -189,7 +188,7 @@ test.describe("host layer, targets, and motion", () => {
     });
   });
 
-  test("the panel is a non-modal dialog outside the top layer", async ({ page }) => {
+  test("the drawer is an aria-modal dialog outside the top layer", async ({ page }) => {
     await mountHarness(page, "light");
     await openDrawer(page);
     const state = await panel(page).evaluate((el) => ({
@@ -198,7 +197,7 @@ test.describe("host layer, targets, and motion", () => {
       role: el.getAttribute("role"),
       label: el.getAttribute("aria-label"),
     }));
-    expect(state).toEqual({ modal: false, ariaModal: "false", role: "dialog", label: "TinyCloud settings" });
+    expect(state).toEqual({ modal: false, ariaModal: "true", role: "dialog", label: "TinyCloud settings" });
   });
 
   test("launcher is at least 44px square", async ({ page }) => {

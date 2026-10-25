@@ -62,8 +62,8 @@ const SWITCH_LABEL: Record<ShellLayout, PanelStringKey> = {
 };
 
 /**
- * Non-modal `role="dialog"` (`aria-modal="false"`). Rendered as a drawer or a
- * full page, chosen by `data-layout`. Escape is handled on the panel element only.
+ * `role="dialog"`: modal (`aria-modal="true"`) while it is the drawer, which dims the page and holds focus,
+ * and non-modal as the full page. Rendered as one or the other, chosen by `data-layout`. Escape is handled on the panel element only.
  */
 export function createPanel(options: PanelOptions): PanelHandle {
   const el = document.createElement("div");
@@ -71,7 +71,7 @@ export function createPanel(options: PanelOptions): PanelHandle {
   el.className = "panel";
   el.dataset.layout = "drawer";
   el.setAttribute("role", "dialog");
-  el.setAttribute("aria-modal", "false");
+  el.setAttribute("aria-modal", "true");
   el.setAttribute("aria-label", text("button.aria"));
   el.hidden = true;
 
@@ -271,6 +271,7 @@ export function createPanel(options: PanelOptions): PanelHandle {
       layout = next;
       phone = options.phone;
       el.dataset.layout = next;
+      el.setAttribute("aria-modal", String(next === "drawer"));
       nextLayout = next === "drawer" ? "page" : "drawer";
       paintSwitch(nextLayout);
       layoutToggle.hidden = !options.showLayoutToggle;

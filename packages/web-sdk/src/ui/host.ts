@@ -236,13 +236,13 @@ export function createHostRuntime(): HostRuntime {
     if (!wasOpen || shownLayout() !== previous) panel.focusFirst();
   }
 
-  /** Closing never changes the hidden flag. Focus returns to the button only when the shell owned focus. */
+  /** Closing never changes the hidden flag. Focus returns to the drawer's opener, else the button, only when the shell owned focus. */
   function closeShell(returnFocus: boolean): void {
     if (!isPanelOpen) return;
     isPanelOpen = false;
     syncDom();
     renderPanel();
-    if (returnFocus) mounted?.button?.focus();
+    if (returnFocus && !mounted?.panel?.restoreFocus()) mounted?.button?.focus();
   }
 
   /** Overview's hide control: persists the flag and closes. */

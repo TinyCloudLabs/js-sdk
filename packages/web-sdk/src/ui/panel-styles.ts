@@ -72,10 +72,14 @@ export const PANEL_CSS = `
 .layer[data-phone] .panel[data-layout="page"]{grid-template-columns:minmax(0,1fr);grid-template-areas:"head" "main"}
 .layer[data-phone] .panel[data-layout="page"] .head{padding:12px 12px 12px 16px}
 .layer[data-phone] .panel[data-layout="page"] .main{padding:24px 16px 56px}
+.layer{--tc-color-overlay:rgb(9 9 11 / .4)}
+.scrim{position:fixed;inset:0;background:var(--tc-color-overlay);opacity:0;visibility:hidden;pointer-events:none;transition:opacity .35s cubic-bezier(.22,1,.36,1),visibility 0s .35s}
+.layer[data-panel-open][data-layout="drawer"] .scrim{opacity:1;visibility:visible;pointer-events:auto;transition:opacity .35s cubic-bezier(.22,1,.36,1)}
 @media (prefers-reduced-motion:reduce){
-.panel,.knob::after{animation:none;transition:none}
+.panel,.knob::after,.scrim,.layer[data-panel-open][data-layout="drawer"] .scrim{animation:none;transition:none}
 }
 @media (prefers-color-scheme: dark){
+.layer{--tc-color-overlay:rgb(0 0 0 / .6)}
 .glance-row:focus-visible,.nav-i:focus-visible,.action:focus-visible,.switch:focus-visible,.icon-btn:focus-visible,.menu-i:focus-visible{outline-color:#fafafa;box-shadow:0 0 0 6px #111827}
 .panel{border-left-color:#69696b;background:#151517;color:#fafafa}
 .main{border-top-color:#fafafa}

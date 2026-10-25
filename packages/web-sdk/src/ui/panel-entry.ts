@@ -10,6 +10,7 @@ import { PANEL_VIEWS } from "./data";
 import type { LayoutOptions, NavItem, PanelHandle, PanelOptions, ShellLayout } from "./panel";
 import { livePanelData, onLivePanelDataChange } from "./panel-data-entry";
 import { createPanel } from "./panel";
+import { mountDrawerModal } from "./panel-modal";
 import { mountToastRegion, TOAST_REGION_CSS, type ReceiptRequest } from "./panel-toasts";
 import { PANEL_CSS } from "./panel-styles";
 import { PANEL_SECTIONS } from "./sections";
@@ -33,6 +34,8 @@ export interface ShellPanel extends PanelHandle {
   render(view: ShellView): void;
   /** Disposes the mounted section. The host calls it on unmount. */
   dispose(): void;
+  /** After a close that returns focus: puts it back on the page element that had it before the drawer opened. False when there is none. */
+  restoreFocus(): boolean;
 }
 
 const NOT_READY: ActionResult & RevokeOutcome = { ok: false, code: "stale" };
@@ -124,6 +127,7 @@ export function mountPanel(root: ShadowRoot, options: Omit<PanelOptions, "onNavi
   });
   const layer = root.querySelector<HTMLElement>(".layer");
   const region = layer ? mountToastRegion(layer, toasts, (request) => base.toast(request)) : undefined;
+  const modal = layer ? mountDrawerModal(root, layer, handle.el, options.onClose) : undefined;
   /** The client as sections see it: `data` routes through the proxy until the live source is armed. */
   const seen = (): PanelClient | undefined => {
     const client = base.client();
@@ -226,11 +230,13 @@ export function mountPanel(root: ShadowRoot, options: Omit<PanelOptions, "onNavi
       view = next;
       if (next.section !== undefined) active = next.section;
       // Statuses are read while the panel is open, so a closed panel makes no requests.
+      modal?.sync(next.open, next.open && next.layout === "drawer");
       if (next.open && !wasOpen) data.start();
       else if (!next.open && wasOpen) data.stop();
       wasOpen = next.open;
       draw();
     },
+    restoreFocus: () => modal?.restoreFocus() ?? false,
     dispose() {
       closeSections();
       data.stop();
@@ -238,6 +244,7 @@ export function mountPanel(root: ShadowRoot, options: Omit<PanelOptions, "onNavi
       offReset?.();
       offClient();
       region?.dispose();
+      modal?.dispose();
     },
   });
 }
