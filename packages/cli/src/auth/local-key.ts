@@ -98,6 +98,8 @@ export async function localKeySignIn(options: {
   siwe?: string;
   signature?: string;
   replicaStamp?: NonNullable<TinyCloudNode["replicaStamp"]>;
+  /** With `keyAbilities`: whether the default encryption network exists (created here when missing). */
+  networkReady?: boolean;
 }> {
   const { TinyCloudNode } = await import("@tinycloud/node-sdk");
   const profile = options.profile ?? "default";
@@ -118,6 +120,13 @@ export async function localKeySignIn(options: {
 
   await node.signIn();
 
+  // A key folder needs the account's default encryption network. An account that is already
+  // provisioned skips the sign-in bootstrap, so check it (a read first, a create only if missing).
+  let networkReady: boolean | undefined;
+  if (options.keyAbilities) {
+    networkReady = await node.ensureEncryptionNetwork().then(() => true, () => false);
+  }
+
   const address = await new PrivateKeySigner(options.privateKey).getAddress();
   const session = node.session;
   if (!session) {
@@ -135,5 +144,6 @@ export async function localKeySignIn(options: {
     siwe: session.siwe,
     signature: session.signature,
     ...(node.replicaStamp === undefined ? {} : { replicaStamp: node.replicaStamp }),
+    ...(networkReady === undefined ? {} : { networkReady }),
   };
 }

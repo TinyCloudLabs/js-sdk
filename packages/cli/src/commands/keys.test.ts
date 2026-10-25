@@ -1,15 +1,12 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { NamedKeyError } from "@tinycloud/node-sdk/encryption-keys";
+import { registerKeysCommand, type KeysCommandDeps } from "./keys.js";
 import { Command } from "commander";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 const OWNER = "did:pkh:eip155:1:0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed";
 const NETWORK_ID = `urn:tinycloud:encryption:${OWNER}:default`;
-
-const actualErrors = await import("../output/errors.js");
-const actualSdk = await import("../lib/sdk.js");
-const actualProfiles = await import("../config/profiles.js");
-const actualFormatter = await import("../output/formatter.js");
 
 const state = {
   profile: { namedKeys: { prefix: "qa", resource: `${NETWORK_ID}/qa/` } as unknown, ownerDid: OWNER } as Record<string, unknown>,
@@ -25,43 +22,32 @@ const state = {
   networkStaysMissing: false,
 };
 
-class StubNamedKeyError extends Error {
-  constructor(public code: string, message: string, public status?: number) { super(message); }
-}
-
 // A stand-in client: the envelope is a reversible xor of the plaintext, so the CLI's
 // own file and stdout handling is what the round trip exercises.
 const xor = (bytes: Uint8Array) => bytes.map((b) => b ^ 0x5a);
 const stubClient = {
   ensureKey: async (path: string) => {
     state.clientCalls.push(`ensure ${path}`);
-    if (state.networkMissing > 0) throw new StubNamedKeyError("NETWORK_NOT_FOUND", "no network");
-    if (state.failWith) throw new StubNamedKeyError(state.failWith.code, "failed", state.failWith.status);
+    if (state.networkMissing > 0) throw new NamedKeyError("NETWORK_NOT_FOUND", "no network");
+    if (state.failWith) throw new NamedKeyError(state.failWith.code as ConstructorParameters<typeof NamedKeyError>[0], "failed", { status: state.failWith.status });
     return { networkId: NETWORK_ID, keyPath: path, alg: "a", keyVersion: 1, publicEncryptionKey: "AA==", state: "active", kind: "deterministic" };
   },
   encrypt: async (path: string, plaintext: Uint8Array) => {
     state.clientCalls.push(`encrypt ${path}`);
-    if (state.networkMissing > 0) throw new StubNamedKeyError("NETWORK_NOT_FOUND", "no network");
+    if (state.networkMissing > 0) throw new NamedKeyError("NETWORK_NOT_FOUND", "no network");
     return { v: 2, networkId: NETWORK_ID, keyPath: path, alg: "a", keyVersion: 1, encryptedSymmetricKey: "AA==", encryptedSymmetricKeyHash: "00", ciphertext: Buffer.from(xor(plaintext)).toString("base64") };
   },
   decrypt: async (envelope: { keyPath: string; ciphertext: string }) => {
     state.clientCalls.push(`decrypt ${envelope.keyPath}`);
-    if (state.failWith) throw new StubNamedKeyError(state.failWith.code, "failed", state.failWith.status);
+    if (state.failWith) throw new NamedKeyError(state.failWith.code as ConstructorParameters<typeof NamedKeyError>[0], "failed", { status: state.failWith.status });
     return xor(Buffer.from(envelope.ciphertext, "base64"));
   },
 };
 
-mock.module("../config/profiles.js", () => ({
-  ...actualProfiles,
-  ProfileManager: {
-    ...actualProfiles.ProfileManager,
-    resolveContext: async () => ({ profile: "keys-test", host: "https://host" }),
-    getProfile: async () => state.profile,
-  },
-}));
-mock.module("../lib/sdk.js", () => ({
-  ...actualSdk,
-  ensureAuthenticated: async () => {
+const deps = {
+  resolveContext: async () => ({ profile: "keys-test", host: "https://host" }),
+  getProfile: async () => state.profile,
+  authenticate: async () => {
     state.authCalls += 1;
     return { ensureEncryptionNetwork: async () => {
       state.networkCreated += 1;
@@ -69,27 +55,14 @@ mock.module("../lib/sdk.js", () => ({
       if (!state.networkStaysMissing) state.networkMissing = 0;
     } };
   },
-}));
-mock.module("@tinycloud/node-sdk/encryption-keys", () => ({
-  NamedKeyError: StubNamedKeyError,
-  createNamedKeyClient: () => stubClient,
-}));
-mock.module("../output/formatter.js", () => ({
-  ...actualFormatter,
+  createClient: () => stubClient,
   outputJson: (payload: unknown) => { state.outputs.push(payload); },
-  withSpinner: async (_message: string, fn: () => unknown) => await fn(),
-  shouldOutputJson: () => true,
-}));
-mock.module("../output/errors.js", () => ({
-  ...actualErrors,
   handleError: (error: unknown) => { state.errors.push(error); },
-}));
-
-const { registerKeysCommand } = await import("./keys.js");
+} as unknown as KeysCommandDeps;
 
 async function runKeys(args: string[]): Promise<void> {
   const program = new Command();
-  registerKeysCommand(program);
+  registerKeysCommand(program, deps);
   await program.parseAsync(["node", "tc", "keys", ...args], { from: "node" });
 }
 
@@ -98,7 +71,7 @@ const realStdoutWrite = process.stdout.write;
 afterEach(() => { process.stdout.write = realStdoutWrite; });
 beforeEach(async () => {
   state.profile = { namedKeys: { prefix: "qa", resource: `${NETWORK_ID}/qa/` }, ownerDid: OWNER };
-  state.errors = []; state.outputs = []; state.stdout = []; state.authCalls = 0; state.clientCalls = []; state.failWith = undefined; state.networkMissing = 0; state.networkCreated = 0; state.networkCreateFails = false; state.networkStaysMissing = false; state.networkStaysMissing = false;
+  state.errors = []; state.outputs = []; state.stdout = []; state.authCalls = 0; state.clientCalls = []; state.failWith = undefined; state.networkMissing = 0; state.networkCreated = 0; state.networkCreateFails = false; state.networkStaysMissing = false;
   if (dir) await rm(dir, { recursive: true, force: true });
   dir = await mkdtemp("/var/tmp/tc2034-keys-unit-");
   process.stdout.write = ((chunk: unknown) => {

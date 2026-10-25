@@ -1,9 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
-import { access, mkdtemp, readFile, rm } from "node:fs/promises";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { PrivateKeySigner, TinyCloudNode } from "@tinycloud/node-sdk";
+const { PrivateKeySigner, TinyCloudNode } = await import(new URL("../../../node-sdk/src/index.ts", import.meta.url).href) as typeof import("@tinycloud/node-sdk");
 import { extractRecapAttenuations } from "@tinycloud/sdk-core";
-import { profileConfigPath, profilePath, sessionPath, withTinyCloudStateRoot, writeJsonAtomic } from "@tinycloud/operations/state";
 
 const PROFILE = "owner";
 const OWNER_KEY = "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d4b2c197a7e5e7b7";
@@ -14,7 +13,7 @@ const homes: string[] = [];
 const servers: Array<{ stop(closeActiveConnections?: boolean): void }> = [];
 afterEach(async () => {
   for (const server of servers.splice(0)) server.stop(true);
-  await Promise.all(homes.splice(0).map((home) => rm(home, { recursive: true, force: true })));
+  for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true });
 });
 
 type Approval = "all" | "row-unticked" | "create-only";
@@ -40,7 +39,7 @@ function narrow(siwe: string, resource: string, keep: string[]): string {
 }
 
 async function setup(features = ["encryption-named-keys-v1"]) {
-  const home = await mkdtemp("/var/tmp/tc2034-okkeys-");
+  const home = mkdtempSync("/var/tmp/tc2034-okkeys-");
   homes.push(home);
   const node = Bun.serve({ port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
@@ -54,14 +53,13 @@ async function setup(features = ["encryption-named-keys-v1"]) {
   const signer = new PrivateKeySigner(OWNER_KEY);
   const address = await signer.getAddress();
   const ownerDid = `did:pkh:eip155:1:${address}`;
-  const directory = await withTinyCloudStateRoot(home, async () => {
-    await writeJsonAtomic(profileConfigPath(PROFILE), {
+  const directory = join(home, ".tinycloud", "profiles", PROFILE);
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(join(directory, "profile.json"), JSON.stringify({
       name: PROFILE, host: node.url.origin, chainId: 1, spaceName: "default", did: "did:key:prior",
       ownerDid, posture: "owner-openkey", authMethod: "openkey", createdAt: "2026-10-01T00:00:00.000Z",
-    });
-    return profilePath(PROFILE);
-  });
-  const sessionFile = await withTinyCloudStateRoot(home, () => Promise.resolve(sessionPath(PROFILE)));
+    }));
+  const sessionFile = join(directory, "session.json");
   return { home, node, openKeyApi, signer, ownerDid, directory, sessionFile, resource: `urn:tinycloud:encryption:${ownerDid}:default/qa/` };
 }
 
@@ -111,9 +109,8 @@ async function keysLogin(approval: Approval, folder = "qa/", extraArgs: string[]
   await fetch(payload.delivery.callback, { method: "POST", headers: { Origin: "https://openkey.test", "Content-Type": "application/json" }, body: JSON.stringify(envelope) });
   const [stdout, exitCode] = await Promise.all([new Response(child.stdout).text(), child.exited]);
   while (true) { const { value, done } = await reader.read(); if (done) break; stderr += new TextDecoder().decode(value); }
-  const exists = await access(t.sessionFile).then(() => true, () => false);
-  const profile = await withTinyCloudStateRoot(t.home, async () =>
-    JSON.parse(await readFile(profileConfigPath(PROFILE), "utf8")) as Record<string, unknown>);
+  const exists = existsSync(t.sessionFile);
+  const profile = JSON.parse(readFileSync(join(t.directory, "profile.json"), "utf8")) as Record<string, unknown>;
   return { ...t, prepared, stdout, stderr, exitCode, sessionStored: exists, profile };
 }
 
@@ -124,7 +121,7 @@ test("OpenKey --keys with everything approved records the folder and signs the r
   expect(r.profile.namedKeys).toEqual({ prefix: "qa", resource: r.resource });
   // The stub node has no encryption network routes, so the login says the folder isn't ready and still succeeds.
   expect(r.stderr).toContain("your encryption keys aren't set up yet");
-  const stored = JSON.parse(await readFile(r.sessionFile, "utf8")) as { siwe: string };
+  const stored = JSON.parse(readFileSync(r.sessionFile, "utf8")) as { siwe: string };
   expect(extractRecapAttenuations(stored.siwe)[r.resource]).toBeDefined();
 });
 

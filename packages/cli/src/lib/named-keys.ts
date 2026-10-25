@@ -1,3 +1,4 @@
+import { extractRecapAttenuations } from "@tinycloud/sdk-core";
 import {
   EncryptionResourceError,
   KEY_CREATE_ABILITY,
@@ -70,4 +71,28 @@ export async function assertNodeSupportsNamedKeys(host: string, fetchImpl: typeo
       ExitCode.NODE_ERROR,
     );
   }
+}
+
+/** What a signed ReCap says about a requested key folder: both abilities, neither, or only one. */
+export function namedKeysGrantIn(siwe: string | undefined, keys: ProfileNamedKeys): "both" | "none" | "partial" {
+  let recap: Record<string, Record<string, unknown>> = {};
+  try {
+    recap = siwe === undefined ? {} : extractRecapAttenuations(siwe) as Record<string, Record<string, unknown>>;
+  } catch {
+    return "none";
+  }
+  const row = recap[keys.resource] ?? {};
+  const wanted = keyAbilitiesFor(keys)[keys.resource]!;
+  const granted = wanted.filter((ability) => ability in row);
+  if (granted.length === 0) return "none";
+  return granted.length === wanted.length && Object.keys(row).length === wanted.length ? "both" : "partial";
+}
+
+/** The profile with `namedKeys` kept only when the session's signed ReCap carries exactly both abilities. */
+export function withVerifiedNamedKeys<T extends { namedKeys?: ProfileNamedKeys }>(profile: T, session: unknown): T {
+  if (profile.namedKeys === undefined) return profile;
+  const siwe = typeof session === "object" && session !== null ? (session as { siwe?: unknown }).siwe : undefined;
+  if (typeof siwe === "string" && namedKeysGrantIn(siwe, profile.namedKeys) === "both") return profile;
+  const { namedKeys: _dropped, ...rest } = profile;
+  return rest as T;
 }

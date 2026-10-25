@@ -615,6 +615,8 @@ export async function loginWithDeviceAuthorization(input: Omit<DeviceAuthorizati
     operatorType: existing?.operatorType ?? "human",
     authMethod: "openkey",
   }, result.primary);
+  // A device session never carries named-key authority.
+  delete profile.namedKeys;
   await commitLogin(input.profileName, snapshot, {
     key,
     session: result.session,
