@@ -10,6 +10,7 @@ import { parseArgs } from '../dist/args.js';
 import { buildInviteBlob } from '../dist/invite-blob.js';
 import { createInviteLink, newInviteLinkKey } from '../dist/invite-links.js';
 import { startLinksApi } from './support/links-standin.mjs';
+import { StandInHost, honestPermissions } from './support/invite-proof-fixture.mjs';
 
 assert.ok(process.env.COURIER_TEST === '1' && process.env.COURIER_TEST_HOME, 'the test home fence is armed');
 
@@ -26,14 +27,16 @@ let standin;
 let link;
 let home;
 let saved;
+let host;
 
 before(async () => {
+  host = new StandInHost();
   standin = await startLinksApi({ now: () => NOW });
   const key = newInviteLinkKey();
   const blobText = buildInviteBlob({
     inviteId: INVITE_ID, host: HOST, spaceId: SPACE,
     oneTimeKey: { kty: 'OKP', crv: 'Ed25519', x: 'A'.repeat(43), d: 'B'.repeat(43) },
-    permissions: { put: 'P', read: 'R', hooks: 'H' },
+    permissions: honestPermissions(host, { inviteId: INVITE_ID, space: SPACE, courier: INVITER_COURIER, ownerAddress: INVITER_ADDR }),
     artifactA: { type: 'courier-pair', v: 0, step: 'A', from: { owner: INVITER_OWNER, courier: INVITER_COURIER, label: 'Sam' }, spaceId: SPACE, peer: 'me', callMe: 'hunter', issuedAt: new Date(NOW).toISOString() },
     expiresAt: new Date(NOW + 3600e3), issuer: key.signer.did, expectEmail: EMAIL, expectOwner: null, tier: 'strict', now: NOW,
   });
@@ -59,7 +62,7 @@ afterEach(() => {
 });
 
 const profile = () => ({ version: 3, host: HOST, openkeyHost: 'https://o.example.test', label: 'me', courierDid: 'did:key:z6MkMe', ownerDid: `did:pkh:eip155:1:0x${'2'.repeat(40)}`, spaceId: `tinycloud:pkh:eip155:1:0x${'2'.repeat(40)}:agents`, status: 'ready', peers: {} });
-const run = (flags, p = profile()) => joinStart(parseArgs(['--stdin', ...flags]), link, { ctx: async () => ({ profile: p, node: {} }), links: standin.config, now: NOW });
+const run = (flags, p = profile()) => joinStart(parseArgs(['--stdin', ...flags]), link, { ctx: async () => ({ profile: p, node: {} }), links: standin.config, now: NOW, proof: { activator: () => host.activator() } });
 /** A peers file that lists the handle the invitation picks: a join that gets past the inviter and address checks stops here, before it creates anything. */
 function gate() {
   const file = path.join(home, 'gate', 'peers.json');
@@ -81,7 +84,7 @@ test('join without --expect-inviter prints the inviter (owner, handle, space) an
   const p = profile();
   await assert.rejects(run([], p), (e) => {
     assert.ok(refusedWith('inviter-unconfirmed')(e));
-    for (const fact of [INVITER_OWNER, 'handle "hunter"', SPACE, `join --stdin --expect-inviter ${INVITER_OWNER}`, 'Nothing was sent']) assert.ok(e.message.includes(fact), fact);
+    for (const fact of [INVITER_OWNER, 'handle "hunter"', SPACE, 'join --stdin --expect-inviter <did you expect>', 'Nothing was sent']) assert.ok(e.message.includes(fact), fact);
     assert.equal(/#v=4|k=[A-Za-z0-9_-]{43}/.test(e.message), false, 'the link is not echoed');
     return true;
   });

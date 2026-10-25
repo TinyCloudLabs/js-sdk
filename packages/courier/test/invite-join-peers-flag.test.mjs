@@ -10,6 +10,7 @@ import { parseArgs } from '../dist/args.js';
 import { buildInviteBlob } from '../dist/invite-blob.js';
 import { createInviteLink, newInviteLinkKey } from '../dist/invite-links.js';
 import { startLinksApi } from './support/links-standin.mjs';
+import { StandInHost, honestPermissions } from './support/invite-proof-fixture.mjs';
 
 const HOST = 'https://node.example.test';
 const INVITER_OWNER = `did:pkh:eip155:1:0x${'1'.repeat(40)}`;
@@ -23,14 +24,16 @@ let standin;
 let inviteString;
 let home;
 let saved;
+let host;
 
 before(async () => {
+  host = new StandInHost();
   standin = await startLinksApi({ now: () => NOW });
   const key = newInviteLinkKey();
   const blobText = buildInviteBlob({
     inviteId: INVITE_ID, host: HOST, spaceId: SPACE,
     oneTimeKey: { kty: 'OKP', crv: 'Ed25519', x: 'A'.repeat(43), d: 'B'.repeat(43) },
-    permissions: { put: 'P', read: 'R', hooks: 'H' },
+    permissions: honestPermissions(host, { inviteId: INVITE_ID, space: SPACE, courier: INVITER_COURIER, ownerAddress: `0x${'1'.repeat(40)}` }),
     artifactA: { type: 'courier-pair', v: 0, step: 'A', from: { owner: INVITER_OWNER, courier: INVITER_COURIER, label: 'Sam' }, spaceId: SPACE, peer: 'me', callMe: 'hunter', issuedAt: new Date(NOW).toISOString() },
     expiresAt: new Date(NOW + 3600e3), issuer: key.signer.did, expectEmail: 'hunter@example.test', expectOwner: null, tier: 'strict', now: NOW,
   });
@@ -61,7 +64,7 @@ afterEach(() => {
 });
 
 const profile = () => ({ version: 3, host: HOST, openkeyHost: 'https://o.example.test', label: 'me', courierDid: 'did:key:z6MkMe', ownerDid: `did:pkh:eip155:1:0x${'2'.repeat(40)}`, spaceId: `tinycloud:pkh:eip155:1:0x${'2'.repeat(40)}:agents`, status: 'ready', peers: {} });
-const run = (flags, p) => joinStart(parseArgs(['--stdin', '--expect-inviter', INVITER_OWNER, ...flags]), inviteString, { ctx: async () => ({ profile: p, node: {} }), links: standin.config, now: NOW });
+const run = (flags, p) => joinStart(parseArgs(['--stdin', '--expect-inviter', INVITER_OWNER, ...flags]), inviteString, { ctx: async () => ({ profile: p, node: {} }), links: standin.config, now: NOW, proof: { activator: () => host.activator() } });
 
 test('join: a handle listed in a peers file given ONLY by --peers-file is refused after the invite is fetched, before any peer is created', async () => {
   const file = path.join(home, 'gate', 'peers.json');

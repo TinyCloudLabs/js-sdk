@@ -17,6 +17,7 @@ import {
 import { publicInvitesDir, updatePublicInvite, writePublicInvite, type PublicInvite } from './invite-public.js';
 import { emailAddress, inviteFolder, isOwnerDid, ownerMatches, parseInviteBlob, parseWelcome, type InviteBlob, type OneTimeKey, type RequestedTier } from './invite-schema.js';
 import { artifactA, validateArtifactIdentity } from './pairing.js';
+import { proveInviter, type ProofDeps } from './invite-proof.js';
 import { HANDLE } from './request.js';
 import { cmd } from './program.js';
 import { credentialDigest, oneTimeKeyHash, signPossession, verifyPossession } from './possession.js';
@@ -108,7 +109,7 @@ export function inviteRecordsFor(input: {
     record: {
       v: 1, inviteId: input.inviteId, handle: input.handle, callMe: input.callMe, email: input.expectEmail,
       expectOwner: input.expectOwner, tier: input.tier, alsoAsk: input.alsoAsk, expiresAt,
-      link: { id: input.link.id, cid: input.link.cid, issuer: input.link.issuer, seed: input.link.seed },
+      link: { id: input.link.id, cid: input.link.cid, issuer: input.link.issuer, seed: input.link.seed, ...(input.link.apiOrigin === undefined ? {} : { apiOrigin: input.link.apiOrigin }) },
       status: 'open', publicDir: input.publicDir,
     },
     publicRecord: {
@@ -390,12 +391,13 @@ function checkBlob(profile: Profile, blob: InviteBlob): void {
 /**
  * What `join` shows before it does anything: the inviter named by the invitation (owner, handle, space). The link is a bearer string anyone can make, so the
  * person joining must say whom they expect. `--expect-inviter <owner did>` is required and must match; without it, or on a mismatch, nothing is sent and
- * the facts are printed with the exact command to run once they are confirmed with the inviter by another channel.
+ * the facts are printed with a command to run once the owner is confirmed with the inviter by another channel. The command carries a placeholder, never the
+ * link's own owner value: the DID to pass comes from the inviter, not from the link. Returns the DID the person joining expects.
  */
-export function requireExpectedInviter(args: ParsedArgs, blob: InviteBlob): void {
+export function requireExpectedInviter(args: ParsedArgs, blob: InviteBlob): string {
   const owner = blob.artifactA.from.owner;
   const facts = `This invitation names the inviter: owner ${owner}, handle "${blob.artifactA.callMe}", space ${blob.spaceId}.`;
-  const rerun = `Check that owner address with the person who invited you, by another channel. If it is theirs, run: ${cmd(`join --stdin --expect-inviter ${owner}`)} (the link on stdin, the same other flags).`;
+  const rerun = `Ask the person who invited you for their owner address, by another channel (not from this link), then run: ${cmd('join --stdin --expect-inviter <did you expect>')} (the link on stdin, the same other flags).`;
   const expected = args.get('expect-inviter');
   if (expected === undefined || expected === 'true') {
     fail('inviter-unconfirmed', `${facts} Nothing was sent. --expect-inviter <owner did> is required. ${rerun}`);
@@ -404,6 +406,7 @@ export function requireExpectedInviter(args: ParsedArgs, blob: InviteBlob): void
   if (!ownerMatches(expected, owner)) {
     fail('inviter-mismatch', `${facts} That is not the inviter you expected (${expected}). Nothing was sent. ${rerun}`);
   }
+  return expected;
 }
 
 /** The address the invitee says the invitation was made for, checked against the hash in the invitation. `undefined` when no address was given. */
@@ -425,11 +428,14 @@ function invitedAddress(args: ParsedArgs, blob: InviteBlob, needed: boolean): st
   return address;
 }
 
-/** `deps.ctx` is a test seam: the profile and node a join runs with. `deps.links` and `deps.now` are test seams for the links client and its clock. */
+/**
+ * `deps.ctx` is a test seam: the profile and node a join runs with. `deps.links` and `deps.now` are test seams for the links client and its clock;
+ * `deps.proof` is the seam for the activator the invitation's delegations are proven through (production activates them at the invitation's host).
+ */
 export async function joinStart(
   args: ParsedArgs,
   input: string,
-  deps: { ctx: typeof ctx; links?: LinksConfig; now?: number } = { ctx },
+  deps: { ctx: typeof ctx; links?: LinksConfig; now?: number; proof?: ProofDeps } = { ctx },
 ): Promise<void> {
   const peersFiles = peersFilesFor(args.get('peers-file'));
   const links = deps.links ?? linksConfig();
@@ -437,11 +443,13 @@ export async function joinStart(
   const credentials = credentialSourceFromArgs(args);
   const { blob, blobText } = await resolveInviteLink(links, input, deps.now);
   checkBlob(profile, blob);
-  requireExpectedInviter(args, blob);
+  const expectedInviter = requireExpectedInviter(args, blob);
   const address = invitedAddress(args, blob, credentials !== undefined);
   if (readJoin(blob.inviteId)) {
     fail('join-exists', `A join for this invite is already pending; run \`${cmd(`join --resume ${blob.inviteId}`)}\`.`);
   }
+  // Nothing below this line may run for an invitation whose grants are not the named inviter's: no handle is claimed and no grant is made first.
+  await proveInviter(node, blob, expectedInviter, deps.proof);
   claimCallMe(profile, blob, peersFiles);
 
   const credential = credentials && address !== undefined

@@ -290,9 +290,14 @@ function asRecord(value: unknown, where: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+/** A key name from the invite, safe to print: at most 40 characters, anything but letters, digits, `_`, `.` and `-` written as a \uXXXX escape (no raw control or escape bytes). */
+export function printableKey(key: string): string {
+  return key.slice(0, 40).replace(/[^A-Za-z0-9_.-]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
+}
+
 function exactKeys(obj: Record<string, unknown>, where: string, required: readonly string[], optional: readonly string[] = []): void {
   for (const key of Object.keys(obj)) {
-    if (!required.includes(key) && !optional.includes(key)) fail(`${where} has unknown key "${key.slice(0, 40)}"`);
+    if (!required.includes(key) && !optional.includes(key)) fail(`${where} has unknown key "${printableKey(key)}"`);
   }
   for (const key of required) {
     if (!Object.hasOwn(obj, key)) fail(`${where} is missing "${key}"`);

@@ -57,3 +57,11 @@ test('the public record carries the hash and not the address; the owner\'s priva
   assert.equal('expectEmail' in publicRecord, false);
   assert.equal(record.email, EMAIL);
 });
+
+test('the exact bytes hashed, pinned with a fixed vector: domain, 0x00, invite id, 0x00, address, and nothing after the address', () => {
+  const bytes = Buffer.from('74696e79636c6f75642e636f75726965722e696e766974652d656d61696c2f76310061616161616161616161616161616161616161616161616161620068756e746572406578616d706c652e74657374', 'hex');
+  assert.equal(bytes.toString('latin1'), `tinycloud.courier.invite-email/v1\0${ID_A}\0${EMAIL}`);
+  assert.equal(bytes.at(-1), EMAIL.charCodeAt(EMAIL.length - 1), 'no 0x00 after the address');
+  assert.equal(createHash('sha256').update(bytes).digest('base64url'), 'XWcep_LaPpNA_aYItwZfnJe2954Y02pvF7SL61yhYCI');
+  assert.equal(inviteEmailHash(ID_A, EMAIL), 'XWcep_LaPpNA_aYItwZfnJe2954Y02pvF7SL61yhYCI');
+});

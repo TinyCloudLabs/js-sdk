@@ -8,6 +8,8 @@ import path from 'node:path';
 import { parseArgs } from '../dist/args.js';
 import { cmdInvite } from '../dist/invite-commands.js';
 import { inviteEmailHash } from '../dist/invite-email-hash.js';
+import { DEFAULT_SHARE_ORIGINS } from '@tinycloud/share-envelope/links';
+import { linksConfig } from '../dist/invite-links.js';
 import { deleteInviteLink, resolveInviteLink } from '../dist/invite-links.js';
 import { InviteWatcher, listRecords, readRecord } from '../dist/invite-watch.js';
 import { memoryKv } from './memory-kv.mjs';
@@ -80,7 +82,7 @@ test('invite: the printed link is a courier link; the record keeps the per-invit
 
   const [record] = listRecords();
   assert.equal(fs.statSync(path.join(home, 'invites', `${record.inviteId}.json`)).mode & 0o777, 0o600);
-  assert.deepEqual(Object.keys(record.link).sort(), ['cid', 'id', 'issuer', 'seed']);
+  assert.deepEqual(Object.keys(record.link).sort(), ['apiOrigin', 'cid', 'id', 'issuer', 'seed']);
   assert.match(record.link.seed, /^[A-Za-z0-9_-]{43}$/);
   assert.equal(record.email, EMAIL, 'the owner\'s own record keeps the address');
   assert.equal(Object.hasOwn(record, 'store'), false);
@@ -132,18 +134,21 @@ test('invite whose link cannot be created leaves nothing behind: no peer, no rec
   assert.equal(standin.records.size, 0);
 });
 
-test('invite without COURIER_LINK_ORIGIN is refused before the node is asked for anything', async () => {
+test('invite without COURIER_LINK_ORIGIN prints a link on the SDK\'s production viewer and records the API origin it was created on', async () => {
   const p = profile();
-  const bare = { ctx: async () => ({ profile: p, node: fakeNode() }), now: () => NOW };
   const before = process.env.COURIER_LINK_ORIGIN;
   delete process.env.COURIER_LINK_ORIGIN;
+  let lines;
   try {
-    await assert.rejects(stdoutOf(cmdInvite(parseArgs(['hunter', '--email', EMAIL]), bare)), (e) => e.code === 'link-origin-unset');
+    // The viewer comes from the environment-derived default; only the API (a loopback stand-in) is the test's.
+    const links = { ...linksConfig({}), apiOrigin: standin.config.apiOrigin, fetch: standin.config.fetch };
+    lines = await stdoutOf(cmdInvite(parseArgs(['hunter', '--email', EMAIL]), deps(p, { links })));
   } finally {
     if (before !== undefined) process.env.COURIER_LINK_ORIGIN = before;
   }
-  assert.equal(delegations.length, 0);
-  assert.deepEqual(p.peers, {});
+  assert.ok(lines.at(-1).startsWith(`${DEFAULT_SHARE_ORIGINS[0]}/c/`), lines.at(-1));
+  const [record] = listRecords();
+  assert.equal(record.link.apiOrigin, standin.config.apiOrigin);
 });
 
 test('revoke deletes the link with the key the record holds: gone at the service, revoked locally; a failed delete is logged without the key and the invite still closes', async () => {

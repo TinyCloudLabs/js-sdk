@@ -19,6 +19,8 @@ import {
 } from '../dist/invite-links.js';
 import { readRecord, writeRecord } from '../dist/invite-watch.js';
 import { LINK_SEED, storedLink } from './support/invite-link-fixture.mjs';
+import { DEFAULT_LINKS_API_ORIGIN, DEFAULT_SHARE_ORIGINS } from '@tinycloud/share-envelope/links';
+import { assertBlobIssuer } from '../dist/invite-links.js';
 import { API_ORIGIN, VIEWER_ORIGIN, startLinksApi } from './support/links-standin.mjs';
 
 assert.ok(process.env.COURIER_TEST === '1' && process.env.COURIER_TEST_HOME, 'the test home fence is armed');
@@ -75,7 +77,7 @@ test('what the service stored: a courier record signed by the per-invite key (th
   assert.equal(record.header.audience, API_ORIGIN);
   assert.equal(Date.parse(record.header.expiresAt) - Date.parse(record.header.issuedAt), 90 * 60_000);
   assert.equal(verifyHeader(record.header, record.signature), true);
-  assert.deepEqual(stored, { id: stored.id, cid: record.header.bodyCid, issuer: key.signer.did, seed: key.seed });
+  assert.deepEqual(stored, { id: stored.id, cid: record.header.bodyCid, issuer: key.signer.did, seed: key.seed, apiOrigin: API_ORIGIN });
 });
 
 // --- ttl ------------------------------------------------------------------------------------------------------------------------------------------
@@ -319,15 +321,74 @@ test('linkFailure: each refusal of the contract maps to a stable Courier code, a
   assert.equal(linkFailure(new Error('SECRET store text'), 'open').message.includes('SECRET'), false);
 });
 
-test('COURIER_LINK_ORIGIN has no default; an invalid one is refused; COURIER_LINKS_API_ORIGIN defaults to the SDK\'s', () => {
-  assert.throws(() => linksConfig({}), (e) => e.code === 'link-origin-unset');
-  assert.throws(() => linksConfig({ COURIER_LINK_ORIGIN: '  ' }), (e) => e.code === 'link-origin-unset');
+test('COURIER_LINKS_API_ORIGIN defaults to the SDK\'s; an invalid COURIER_LINK_ORIGIN is refused', () => {
   for (const bad of ['http://share.example', 'https://share.example/path', 'share.example', 'https://user@share.example', 'https://share.example?x=1']) {
     assert.throws(() => linksConfig({ COURIER_LINK_ORIGIN: bad }), (e) => e.code === 'link-origin-invalid', bad);
   }
   assert.deepEqual(linksConfig({ COURIER_LINK_ORIGIN: 'https://share.example/' }), { apiOrigin: 'https://api.tinycloud.xyz', viewerOrigin: 'https://share.example' });
   assert.equal(linksConfig({ COURIER_LINK_ORIGIN: 'https://share.example', COURIER_LINKS_API_ORIGIN: 'https://api.example:8443' }).apiOrigin, 'https://api.example:8443');
   assert.throws(() => linksConfig({ COURIER_LINK_ORIGIN: 'https://share.example', COURIER_LINKS_API_ORIGIN: 'http://api.example' }), (e) => e.code === 'link-origin-invalid');
+});
+
+test('COURIER_LINK_ORIGIN unset or blank: the viewer is the SDK\'s production viewer, the API the SDK\'s default; an override wins; an invalid override is still refused', () => {
+  for (const env of [{}, { COURIER_LINK_ORIGIN: '' }, { COURIER_LINK_ORIGIN: '   ' }]) {
+    assert.deepEqual(linksConfig(env), { apiOrigin: DEFAULT_LINKS_API_ORIGIN, viewerOrigin: DEFAULT_SHARE_ORIGINS[0] });
+  }
+  assert.equal(linksConfig({ COURIER_LINK_ORIGIN: 'https://share.example' }).viewerOrigin, 'https://share.example', 'an override beats the default');
+  assert.notEqual(linksConfig({ COURIER_LINK_ORIGIN: 'https://share.example' }).viewerOrigin, DEFAULT_SHARE_ORIGINS[0]);
+  for (const bad of ['http://share.tinycloud.xyz', 'https://share.tinycloud.xyz/x', 'share.tinycloud.xyz']) {
+    assert.throws(() => linksConfig({ COURIER_LINK_ORIGIN: bad }), (e) => e.code === 'link-origin-invalid', bad);
+  }
+});
+
+test('the default viewer origin is one the SDK reader trusts: a link made on it parses under DEFAULT_SHARE_ORIGINS, and one made on an override does not', async () => {
+  const viewerOrigin = linksConfig({}).viewerOrigin;
+  assert.ok(DEFAULT_SHARE_ORIGINS.includes(viewerOrigin));
+  const key = newInviteLinkKey();
+  const { link } = await createInviteLink({ ...standin.config, viewerOrigin }, { blobText: blobFor(key), expiresAt: new Date(NOW + 3600e3), key, now: NOW });
+  assert.equal(new URL(link).origin, viewerOrigin);
+  assert.equal(parseLink(link, { trustedOrigins: DEFAULT_SHARE_ORIGINS }).pathType, 'courier');
+  const { link: overridden } = await create();
+  assert.throws(() => parseLink(overridden, { trustedOrigins: DEFAULT_SHARE_ORIGINS }), (e) => e.code === 'origin_not_trusted');
+});
+
+test('Courier\'s own issuer check: the invitation must name the did:key that signed the link', () => {
+  const key = newInviteLinkKey();
+  const blob = { issuer: key.signer.did };
+  assert.doesNotThrow(() => assertBlobIssuer(blob, key.signer.did));
+  assert.throws(() => assertBlobIssuer(blob, newInviteLinkKey().signer.did), (e) => e.name === 'CourierError' && e.code === 'invite-issuer-mismatch');
+  assert.throws(() => assertBlobIssuer({ issuer: `${key.signer.did}x` }, key.signer.did), (e) => e.code === 'invite-issuer-mismatch');
+});
+
+test('a stored link keeps the API origin it was created on, and the delete goes there, not to the origin the environment names now', async () => {
+  const key = newInviteLinkKey();
+  const { stored } = await create(key);
+  assert.equal(stored.apiOrigin, API_ORIGIN);
+  const urls = [];
+  const recording = async (url) => { urls.push(String(url)); return new Response('{}', { status: 404 }); };
+  const before = process.env.COURIER_LINKS_API_ORIGIN;
+  process.env.COURIER_LINKS_API_ORIGIN = 'https://api.elsewhere.example';
+  try {
+    await deleteInviteLink({ fetch: recording }, stored);
+    await deleteInviteLink({ fetch: recording }, { ...stored, apiOrigin: 'https://api.recorded.example' });
+    await deleteInviteLink({ fetch: recording }, { id: stored.id, cid: stored.cid, issuer: stored.issuer, seed: stored.seed });
+  } finally {
+    if (before === undefined) delete process.env.COURIER_LINKS_API_ORIGIN;
+    else process.env.COURIER_LINKS_API_ORIGIN = before;
+  }
+  assert.equal(urls.length, 3);
+  assert.ok(urls[0].startsWith(`${API_ORIGIN}/`), 'the recorded origin');
+  assert.ok(urls[1].startsWith('https://api.recorded.example/'), 'another recorded origin');
+  assert.ok(urls[2].startsWith(`${DEFAULT_LINKS_API_ORIGIN}/`), 'a record from before the origin was kept: the SDK default, not the environment');
+  assert.equal(urls.some((u) => u.includes('elsewhere.example')), false);
+});
+
+test('a recorded API origin that is not a canonical https origin is refused before anything is sent', async () => {
+  let sent = 0;
+  for (const apiOrigin of ['http://api.example', 'https://api.example/x', 'api.example']) {
+    await assert.rejects(deleteInviteLink({ fetch: () => { sent += 1; throw new Error('sent'); } }, { ...storedLink('x'), apiOrigin }), (e) => e.code === 'link-origin-invalid');
+  }
+  assert.equal(sent, 0);
 });
 
 // --- contract vectors -----------------------------------------------------------------------------------------------------------------------

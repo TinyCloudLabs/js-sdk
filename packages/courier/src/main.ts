@@ -146,7 +146,7 @@ Env: COURIER_HOME (profile dir, default ~/.courier), COURIER_HOST (default tee.n
 COURIER_OPENKEY_HOST (default openkey.so), COURIER_OPENKEY_API_HOST (short-code lookup; default
 api.openkey.so for openkey.so, otherwise the OpenKey host), COURIER_PEERS_FILE (absolute path of the
 peers.json that invite, invite approve and watch check; --peers-file wins), COURIER_LINK_ORIGIN (https
-origin of the share viewer in invite links; no default; required by invite and join),
+origin of the share viewer in invite links; default https://share.tinycloud.xyz, an override),
 COURIER_LINKS_API_ORIGIN (links API; default api.tinycloud.xyz).
 `;
 }

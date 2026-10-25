@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import {
   DEFAULT_LINKS_API_ORIGIN,
+  DEFAULT_SHARE_ORIGINS,
   LINK_MIN_LIFE_SECONDS,
   LINK_SEAL_OVERHEAD_BYTES,
   LINK_TYPE_SPECS,
@@ -57,13 +58,13 @@ export function linksApi(env: NodeJS.ProcessEnv = process.env): LinksApi {
   return { apiOrigin: given === undefined || given.trim() === '' ? DEFAULT_LINKS_API_ORIGIN : origin(given, 'COURIER_LINKS_API_ORIGIN') };
 }
 
-/** The viewer origin has no default: `COURIER_LINK_ORIGIN` must name it. */
+/** The viewer origin: `COURIER_LINK_ORIGIN` when set (an override, for tests and non-production viewers), else the SDK's production viewer origin. */
 export function linksConfig(env: NodeJS.ProcessEnv = process.env): LinksConfig {
   const given = env.COURIER_LINK_ORIGIN;
-  if (given === undefined || given.trim() === '') {
-    throw new CourierError('link-origin-unset', 'Set COURIER_LINK_ORIGIN to the https origin of the share viewer that opens invite links.');
-  }
-  return { ...linksApi(env), viewerOrigin: origin(given, 'COURIER_LINK_ORIGIN') };
+  return {
+    ...linksApi(env),
+    viewerOrigin: given === undefined || given.trim() === '' ? DEFAULT_SHARE_ORIGINS[0]! : origin(given, 'COURIER_LINK_ORIGIN'),
+  };
 }
 
 const spell = (ms: number): string => {
@@ -111,6 +112,8 @@ export interface StoredLink {
   issuer: string;
   /** Private. Base64url Ed25519 seed of the per-invite key. */
   seed: string;
+  /** The links API the link was created on; delete goes there. Absent in records from before it was kept (the SDK default is used). */
+  apiOrigin?: string;
 }
 
 export function signerFromStored(link: StoredLink): LinkSigner {
@@ -135,7 +138,7 @@ export function linkFailure(error: unknown, action: 'create' | 'open' | 'delete'
     case 'expired':
       return new CourierError('invite-gone', 'The invitation is gone: it expired, was revoked, or never existed.');
     case 'origin_not_trusted':
-      return new CourierError('invite-origin', 'The link is not on the viewer origin set in COURIER_LINK_ORIGIN.');
+      return new CourierError('invite-origin', 'The link is not on the viewer origin this courier trusts (COURIER_LINK_ORIGIN, else the production viewer).');
     case 'issuer_binding_mismatch':
       return new CourierError('invite-issuer-mismatch', 'The invitation is not signed by the key it names; it was refused.');
     case 'body_validation_failed':
@@ -200,7 +203,7 @@ export async function createInviteLink(
       ...(input.now === undefined ? {} : { now: input.now }),
       ...(config.fetch === undefined ? {} : { fetch: config.fetch }),
     });
-    return { link: created.link, stored: { id: created.id, cid: created.bodyCid, issuer: input.key.signer.did, seed: input.key.seed } };
+    return { link: created.link, stored: { id: created.id, cid: created.bodyCid, issuer: input.key.signer.did, seed: input.key.seed, apiOrigin: config.apiOrigin } };
   } catch (error) {
     throw linkFailure(error, 'create');
   }
@@ -212,6 +215,11 @@ export interface OpenedInvite {
   blobText: string;
   /** The did:key that signed the link. */
   issuer: string;
+}
+
+/** The invitation must name, as its issuer, the did:key that signed the link. The SDK checks this too; this is Courier's own check on the strictly parsed blob. */
+export function assertBlobIssuer(blob: Pick<InviteBlob, 'issuer'>, headerIssuer: string): void {
+  if (blob.issuer !== headerIssuer) throw new CourierError('invite-issuer-mismatch', 'The invitation is not signed by the key it names; it was refused.');
 }
 
 /**
@@ -232,19 +240,24 @@ export async function resolveInviteLink(config: LinksConfig, link: string, now: 
       },
     });
     const blobText = new TextDecoder('utf-8', { fatal: true }).decode(opened.plaintext);
-    return { blob: parseInviteBlob(blobText, now), blobText, issuer: opened.header.issuer };
+    const blob = parseInviteBlob(blobText, now);
+    assertBlobIssuer(blob, opened.header.issuer);
+    return { blob, blobText, issuer: opened.header.issuer };
   } catch (error) {
     throw linkFailure(error, 'open');
   }
 }
 
-/** Deletes a link with the invite's own key. A link that is already gone counts as deleted. */
-export async function deleteInviteLink(api: LinksApi, link: StoredLink): Promise<void> {
+/**
+ * Deletes a link with the invite's own key, against the links API the link was created on (`link.apiOrigin`; a record from before it was kept uses the
+ * SDK's default). The current environment's `COURIER_LINKS_API_ORIGIN` is not consulted. A link that is already gone counts as deleted.
+ */
+export async function deleteInviteLink(api: Pick<LinksApi, 'fetch'>, link: StoredLink): Promise<void> {
   try {
     await deleteLink({
       id: link.id,
       issuerKey: signerFromStored(link),
-      apiOrigin: api.apiOrigin,
+      apiOrigin: link.apiOrigin === undefined ? DEFAULT_LINKS_API_ORIGIN : origin(link.apiOrigin, 'The invite record API origin'),
       ...(api.fetch === undefined ? {} : { fetch: api.fetch }),
     });
   } catch (error) {

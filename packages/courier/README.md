@@ -109,7 +109,7 @@ code within 5 minutes. The second call (`status: "acquired"`) returns `issuedAt`
 | Node host | `init --host` | `COURIER_HOST` (first init only) | `profile.host` | `https://tee.node.tinycloud.xyz` |
 | OpenKey | `init --openkey-host` | `COURIER_OPENKEY_HOST` | `profile.openkeyHost` | `https://openkey.so` |
 | OpenKey API (short codes) | `init --openkey-api-host` | `COURIER_OPENKEY_API_HOST` | not stored | `https://api.openkey.so` for `https://openkey.so`, otherwise the OpenKey host |
-| Invite link viewer | — | `COURIER_LINK_ORIGIN` | not stored | none: `invite` and `join` refuse until it names the https origin of the share viewer that opens invite links |
+| Invite link viewer | — | `COURIER_LINK_ORIGIN` (override, for tests and non-production viewers) | not stored | `https://share.tinycloud.xyz`, the SDK's `DEFAULT_SHARE_ORIGINS[0]` |
 | Links API | — | `COURIER_LINKS_API_ORIGIN` | not stored | `https://api.tinycloud.xyz` |
 
 Precedence for the node host and OpenKey host is flag > stored > env > default.
@@ -121,7 +121,10 @@ For the OpenKey API host it is flag > env > derived. `TC_HOME`, `TC_PROFILE`,
 An invite is a bearer link that starts a pairing without an artifact exchange.
 The owner creates it for a handle and an email address; the invitee joins with
 it. The link is a `courier` link of the links API:
-`https://<COURIER_LINK_ORIGIN>/c/<id>#v=4&k=<key>&c=<content id>`. The invitation
+`https://<viewer origin>/c/<id>#v=4&k=<key>&c=<content id>`, where the viewer origin
+is `COURIER_LINK_ORIGIN` when set and otherwise the production viewer
+(`https://share.tinycloud.xyz`). An override must be a canonical https origin
+(`link-origin-invalid` otherwise). The invitation
 is sealed under the key in the fragment, which is never sent to the service.
 Every request goes through `@tinycloud/share-envelope/links`.
 
@@ -146,8 +149,9 @@ tc courier join --resume
   `join` refuses an invitation whose `issuer` is not the key that signed the
   link (`invite-issuer-mismatch`) before it reads anything else in it.
 - The invitation carries a hash of the invited address, not the address: SHA-256
-  over the domain `tinycloud.courier.invite-email/v1`, the invite id and the
-  lowercase address, each followed by a zero byte, as 43 base64url characters.
+  over the domain `tinycloud.courier.invite-email/v1`, a 0x00 byte, the invite id,
+  a 0x00 byte and the lowercase address (no byte after the address), as 43
+  base64url characters.
   The public record carries the same hash. The owner's private record keeps the
   address for `watch`. A link holder can test a guessed address against the hash
   but cannot read one from it.
@@ -226,10 +230,16 @@ tc courier join --resume
   in `ps` to other users on the machine.
 - `join` needs `--expect-inviter <owner-did>`: the link is a bearer string anyone
   can make, so `join` first prints the inviter it names (owner DID, handle,
-  space) and proceeds only when the owner equals the DID you pass. Without it, or
-  with another owner, it sends nothing, prints those facts and the exact command
-  to run once the owner address is confirmed with the inviter by another channel
-  (`inviter-unconfirmed`, `inviter-mismatch`).
+  space) and proceeds only when the owner equals the DID you pass **and the
+  invitation's grants verify as that owner's**: before anything is granted or
+  written, `join` checks the invitation's read and put delegations (signed
+  issuer is the inviter's courier, audience is the invitation's one-time key,
+  space is the inviter's space, the space belongs to the DID you passed, and the
+  host accepts the chain). Without the flag, or with another owner, it sends
+  nothing, prints those facts and the command with a `<did you expect>`
+  placeholder: take the DID from the inviter by another channel, never from the
+  link (`inviter-unconfirmed`, `inviter-mismatch`). A grant that does not verify
+  stops with `inviter-unproven` and nothing is created.
 - `join --email <address>` is checked against the hash in the invitation before
   anything is created or requested (`invite-email-mismatch`); it is required with
   `--credential-file` or `--credential-stdin`, because the invitation does not
