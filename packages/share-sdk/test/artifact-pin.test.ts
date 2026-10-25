@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { ed25519 } from "@noble/curves/ed25519";
 import { artifactPinSchema, signEnvelopeV3, type ArtifactPin, type ShareEnvelopeV3 } from "@tinycloud/share-envelope";
-import { attackerSeed, didFor, enc, linkFor, nodeDid, ownerDid, ownerSeed, signedBinding, signedRoot } from "./support/signed-share.js";
+import { foreignSeed, didFor, enc, linkFor, nodeDid, ownerDid, ownerSeed, signedBinding, signedRoot } from "./support/signed-share.js";
 import {
   ArtifactPinError,
   ShareRecipientClient,
@@ -144,10 +144,10 @@ describe("artifact pin: negative cases", () => {
   it("wrong key: another signer, a forged signer claim, and a tampered pin all fail", async () => {
     const { envelope } = await publishPinned();
     // Signed in full by an attacker: the signer is not the owner we trust.
-    const byAttacker = resign(envelope, () => {}, attackerSeed);
-    expect(await code(() => verifyArtifactShare(byAttacker, { expectedOwnerDid: ownerDid }))).toBe("wrong-signer");
+    const byForeignKey = resign(envelope, () => {}, foreignSeed);
+    expect(await code(() => verifyArtifactShare(byForeignKey, { expectedOwnerDid: ownerDid }))).toBe("wrong-signer");
     // Claims the owner as signer but carries the attacker's signature bytes.
-    const forged = { ...byAttacker, signature: { ...byAttacker.signature, signerDid: ownerDid } } as ShareEnvelopeV3;
+    const forged = { ...byForeignKey, signature: { ...byForeignKey.signature, signerDid: ownerDid } } as ShareEnvelopeV3;
     expect(await code(() => verifyArtifactShare(forged, { expectedOwnerDid: ownerDid }))).toBe("bad-signature");
     // The pin is edited after signing: the owner's signature no longer covers the bytes.
     const edited = structuredClone(envelope) as ShareEnvelopeV3;
@@ -291,8 +291,8 @@ describe("artifact pin: through the receive path (inspectShare, full verifyEnvel
 
   it("refuses an envelope signed by another key, or edited after signing, as a signature failure", async () => {
     const { envelope } = await publishPinned();
-    const byAttacker = resign(envelope, () => {}, attackerSeed);
-    await expect(inspectShare(await linkFor(byAttacker))).rejects.toMatchObject({ code: "signature-invalid" });
+    const byForeignKey = resign(envelope, () => {}, foreignSeed);
+    await expect(inspectShare(await linkFor(byForeignKey))).rejects.toMatchObject({ code: "signature-invalid" });
     const edited = structuredClone(envelope) as ShareEnvelopeV3;
     (edited.artifactPin as { version: number }).version = 2;
     await expect(inspectShare(await linkFor(edited))).rejects.toMatchObject({ code: "signature-invalid" });
@@ -315,8 +315,8 @@ describe("artifact pin: each binding check fails alone", () => {
 
   it("an envelope signed by one key whose policy names another owner is refused", async () => {
     const { envelope } = await publishPinned();
-    const byAttacker = resign(envelope, () => {}, attackerSeed);
-    expect(await code(() => verifyArtifactShare(byAttacker, { expectedOwnerDid: didFor(attackerSeed) }))).toBe("bad-signature");
+    const byForeignKey = resign(envelope, () => {}, foreignSeed);
+    expect(await code(() => verifyArtifactShare(byForeignKey, { expectedOwnerDid: didFor(foreignSeed) }))).toBe("bad-signature");
   });
 });
 
