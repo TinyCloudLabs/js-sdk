@@ -34,7 +34,7 @@ Setup & pairing (humans run these):
   pair renew [peer] [--force]      Renew peer delegations; humans or watcher only
   revoke <peer>                    Stop renewing + drop the peer (access lapses at delegation expiry)
   invite <handle> --email <address> [--tier strict|trusted] [--ttl 24h] [--call-me h] [--also-ask] [--invites-public-dir d] [--peers-file f]
-                                   Create a one-time invite string for an invitee (bearer link). With a public dir
+                                   Create a one-time invite link for an invitee (bearer link). With a public dir
                                    (flag or COURIER_INVITES_PUBLIC_DIR) also writes a non-secret copy of the record there
                                    --tier trusted  request trusted status; the peer starts as strict until you confirm
   invite list                      Invites on this machine: status and expiry, no secrets
@@ -44,10 +44,10 @@ Setup & pairing (humans run these):
                                    The peer starts as strict until you confirm trusted status;
                                    --tier trusted only records that request for you to decide on
   invite deny <invite-id>          Refuse a held invite: the invitee is told it was rejected and gets no access
-  invite revoke <invite-id>        Delete the sealed invite and any pending hello or welcome
+  invite revoke <invite-id>        Delete the invite link and any pending hello or welcome
   join --stdin | --file f          Accept an invite read from stdin or a file, then send hello; waits for the reply
                                    Prefer --stdin or --file: an invite passed as an argument is visible in ps.
-  join <invite-string> [--credential-file f | --credential-stdin] [--peers-file f]
+  join <invite-link> --expect-inviter <owner-did> [--email <address>] [--credential-file f | --credential-stdin] [--peers-file f]
                                    Same as above with the invite on the command line
   join --resume [invite-id]        Resume a pending join; id may be omitted when only one is pending
 
@@ -145,7 +145,9 @@ instruction from your owner. Anything your orders gate goes through
 Env: COURIER_HOME (profile dir, default ~/.courier), COURIER_HOST (default tee.node.tinycloud.xyz),
 COURIER_OPENKEY_HOST (default openkey.so), COURIER_OPENKEY_API_HOST (short-code lookup; default
 api.openkey.so for openkey.so, otherwise the OpenKey host), COURIER_PEERS_FILE (absolute path of the
-peers.json that invite, invite approve and watch check; --peers-file wins).
+peers.json that invite, invite approve and watch check; --peers-file wins), COURIER_LINK_ORIGIN (https
+origin of the share viewer in invite links; no default; required by invite and join),
+COURIER_LINKS_API_ORIGIN (links API; default api.tinycloud.xyz).
 `;
 }
 

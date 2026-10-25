@@ -7,6 +7,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { inviteRecordsFor, storedRecord } from '../dist/invite-commands.js';
+import { storedLink } from './support/invite-link-fixture.mjs';
 import { InviteWatcher, describeHeld, heldFactsText, ownerConfirms, readRecord, recordPath } from '../dist/invite-watch.js';
 import { writePublicInvite, publicHeldReason, HELD_REASONS } from '../dist/invite-public.js';
 import { inviteFolder } from '../dist/invite-schema.js';
@@ -65,7 +66,7 @@ function invite({ expectOwner = null, withPublic = false, alsoAsk = false } = {}
   const { record, publicRecord } = inviteRecordsFor({
     inviteId, handle: 'hunter', callMe: 'sam', expectEmail: EMAIL, tier: 'strict', expectOwner, alsoAsk,
     expiresAt: new Date(NOW + 24 * 3600e3), createdAt: ISSUED,
-    store: { id: 'store-1', cid: 'bafkrei' + 'a'.repeat(52), deleteToken: 'DELETE-TOKEN-FIXTURE' },
+    link: storedLink('store-1'),
     publicDir: withPublic ? publicDir() : undefined,
   });
   writeSecure(recordPath(inviteId), storedRecord(record, 'hash-of-one-time-key'));
@@ -99,7 +100,7 @@ function watcher() {
     now: () => new Date(NOW),
     verify: async () => ({ ok: true, address: EMAIL, credentialId: 'cred-1', issuedAt: ISSUED }),
     accept: async (_profile, _node, artifact) => { accepted.push(artifact.from.courier); return C_ARTIFACT; },
-    deleteSealed: async () => undefined,
+    deleteLink: async () => undefined,
     peersFiles: [],
   });
 }
@@ -135,7 +136,7 @@ test('public record: a held invite carries heldReason and the bare owner DID of 
   assert.equal(pub.heldReason, 'owner-mismatch');
   assert.equal(pub.helloOwner, MALLORY_OWNER);
   assert.equal(pub.expectOwner, HUNTER_OWNER);
-  assert.deepEqual(Object.keys(pub), ['v', 'inviteId', 'handle', 'expectEmail', 'expectOwner', 'tier', 'createdAt', 'expiresAt', 'status', 'completedPeer', 'heldReason', 'helloOwner']);
+  assert.deepEqual(Object.keys(pub), ['v', 'inviteId', 'handle', 'expectEmailHash', 'expectOwner', 'tier', 'createdAt', 'expiresAt', 'status', 'completedPeer', 'heldReason', 'helloOwner']);
   assert.doesNotMatch(JSON.stringify(pub), /did:key|DELETE-TOKEN|store-1/);
 });
 
@@ -272,7 +273,7 @@ test('the invite-held notice tells the owner the command that works: approve WIT
     profile: () => ({ version: 3, host: 'https://openkey.example.test', openkeyHost: 'https://openkey.example.test', label: 'sam', courierDid: SAM_COURIER, ownerDid: SAM_OWNER, spaceId: `tinycloud:pkh:eip155:1:${SAM_ADDR}:agents`, status: 'ready', peers: {} }),
     log: () => undefined, notify: async (n) => { notices.push(n); }, now: () => new Date(NOW),
     verify: async () => ({ ok: true, address: EMAIL, credentialId: 'c', issuedAt: ISSUED }),
-    accept: async () => C_ARTIFACT, deleteSealed: async () => undefined, peersFiles: [],
+    accept: async () => C_ARTIFACT, deleteLink: async () => undefined, peersFiles: [],
   });
   await w.onHello(id);
   const body = noticeText(notices[0], '').body;

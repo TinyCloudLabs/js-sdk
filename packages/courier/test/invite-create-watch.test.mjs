@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { inviteRecordsFor, storedRecord } from '../dist/invite-commands.js';
+import { storedLink } from './support/invite-link-fixture.mjs';
 import { InviteWatcher, readRecord, recordPath } from '../dist/invite-watch.js';
 import { inviteFolder, parseWelcome } from '../dist/invite-schema.js';
 import { newInviteId } from '../dist/invite-blob.js';
@@ -53,7 +54,7 @@ function createdRecord(over) {
   const { record } = inviteRecordsFor({
     inviteId, handle: 'hunter', callMe: 'sam', expectEmail: EMAIL, tier: 'strict', expectOwner: null, alsoAsk: false,
     expiresAt: new Date(NOW + 24 * 3600e3), createdAt: ISSUED,
-    store: { id: 'store-1', cid: 'bafkrei' + 'a'.repeat(52), deleteToken: 'DELETE-TOKEN-FIXTURE' },
+    link: storedLink('store-1'),
     publicDir: undefined,
     ...over,
   });
@@ -87,7 +88,7 @@ function watcher() {
     now: () => new Date(NOW),
     verify: async () => ({ ok: true, address: EMAIL, credentialId: 'cred-1', issuedAt: ISSUED }),
     accept: async () => C_ARTIFACT,
-    deleteSealed: async () => undefined,
+    deleteLink: async () => undefined,
   });
 }
 

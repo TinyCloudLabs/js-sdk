@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { inviteRecordsFor, storedRecord } from '../dist/invite-commands.js';
+import { storedLink } from './support/invite-link-fixture.mjs';
 import { InviteWatcher, INVITE_BUSY_WAIT, NODE_CALL_TIMEOUT_MS, readHeld, readRecord, writeRecord, recordPath } from '../dist/invite-watch.js';
 import { writePublicInvite } from '../dist/invite-public.js';
 import { inviteFolder } from '../dist/invite-schema.js';
@@ -70,7 +71,7 @@ function invite({ expectOwner = null, withPublic = false, alsoAsk = false } = {}
   const { record, publicRecord } = inviteRecordsFor({
     inviteId, handle: 'hunter', callMe: 'sam', expectEmail: EMAIL, tier: 'strict', expectOwner, alsoAsk,
     expiresAt: new Date(NOW + 24 * 3600e3), createdAt: ISSUED,
-    store: { id: 'store-1', cid: 'bafkrei' + 'a'.repeat(52), deleteToken: 'DELETE-TOKEN-FIXTURE' },
+    link: storedLink('store-1'),
     publicDir: withPublic ? publicDir() : undefined,
   });
   writeSecure(recordPath(inviteId), storedRecord(record, 'hash-of-one-time-key'));
@@ -116,7 +117,7 @@ function watcher({ timing, accept = blockingAccept(), kv: kvOverride, fault } = 
     now: () => new Date(clock),
     verify: async () => ({ ok: true, address: EMAIL, credentialId: 'cred-1', issuedAt: ISSUED }),
     accept,
-    deleteSealed: async () => undefined,
+    deleteLink: async () => undefined,
     peersFiles: [],
     ...(timing ? { timing } : {}),
     ...(fault ? { fault } : {}),

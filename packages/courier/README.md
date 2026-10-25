@@ -109,6 +109,8 @@ code within 5 minutes. The second call (`status: "acquired"`) returns `issuedAt`
 | Node host | `init --host` | `COURIER_HOST` (first init only) | `profile.host` | `https://tee.node.tinycloud.xyz` |
 | OpenKey | `init --openkey-host` | `COURIER_OPENKEY_HOST` | `profile.openkeyHost` | `https://openkey.so` |
 | OpenKey API (short codes) | `init --openkey-api-host` | `COURIER_OPENKEY_API_HOST` | not stored | `https://api.openkey.so` for `https://openkey.so`, otherwise the OpenKey host |
+| Invite link viewer | — | `COURIER_LINK_ORIGIN` | not stored | none: `invite` and `join` refuse until it names the https origin of the share viewer that opens invite links |
+| Links API | — | `COURIER_LINKS_API_ORIGIN` | not stored | `https://api.tinycloud.xyz` |
 
 Precedence for the node host and OpenKey host is flag > stored > env > default.
 For the OpenKey API host it is flag > env > derived. `TC_HOME`, `TC_PROFILE`,
@@ -116,25 +118,44 @@ For the OpenKey API host it is flag > env > derived. `TC_HOME`, `TC_PROFILE`,
 
 ### Invites
 
-An invite is a one-time bearer string that starts a pairing without an
-artifact exchange. The owner creates it for a handle and an email address; the
-invitee joins with it.
+An invite is a bearer link that starts a pairing without an artifact exchange.
+The owner creates it for a handle and an email address; the invitee joins with
+it. The link is a `courier` link of the links API:
+`https://<COURIER_LINK_ORIGIN>/c/<id>#v=4&k=<key>&c=<content id>`. The invitation
+is sealed under the key in the fragment, which is never sent to the service.
+Every request goes through `@tinycloud/share-envelope/links`.
 
 ```bash
 tc courier invite alice --email alice@example.com --tier strict --ttl 24h
 tc courier invite list
 tc courier invite revoke <invite-id>
-tc courier join --file invite.txt --credential-file proof.txt
+tc courier join --file invite.txt --expect-inviter <owner-did> --email alice@example.com --credential-file proof.txt
 tc courier join --resume
 ```
 
-- `invite <handle>` prints the string once. `--call-me` sets the name the
-  invitee uses for the owner; it defaults to the owner's handle.
+- `invite <handle>` prints the link once. `--call-me` sets the name the
+  invitee uses for the owner; it defaults to the owner's handle. `--ttl` is
+  checked before anything is requested: at least 2 minutes (120 s), at most 7
+  days, 24 hours by default (the `courier` link type's bounds). An invitation
+  over the link size limit (65,536 bytes sealed) is refused before it is signed
+  (`invite-too-large`).
+- Each invite is signed with its own throwaway Ed25519 key, made at `invite`
+  and used for nothing else; it is not the agent's key. Its seed is kept only in
+  the private invite record (mode 0600), to sign the delete: losing it means the
+  link lives to its expiry. The invitation names that key as its `issuer`, and
+  `join` refuses an invitation whose `issuer` is not the key that signed the
+  link (`invite-issuer-mismatch`) before it reads anything else in it.
+- The invitation carries a hash of the invited address, not the address: SHA-256
+  over the domain `tinycloud.courier.invite-email/v1`, the invite id and the
+  lowercase address, each followed by a zero byte, as 43 base64url characters.
+  The public record carries the same hash. The owner's private record keeps the
+  address for `watch`. A link holder can test a guessed address against the hash
+  but cannot read one from it.
 - Send the link by a different channel than the invited email address. If it
   goes by email, add `--also-ask` (you approve each hello) or `--expect-owner`
   (the invitee's account must match), so one mailbox alone cannot pair.
-  Anyone who holds the link can read the invitee address and your owner
-  address, space and handles until it expires.
+  Anyone who holds the link can read your owner address, space and handles
+  until it expires, and can check a guessed invitee address against the hash.
 - `invite approve <invite-id> --owner <did>` first prints the owner and courier
   of the hello that is held and why it is held; `--owner` (a `did:pkh` DID or
   its `0x` address) must name that owner, otherwise it stops with
@@ -171,12 +192,14 @@ tc courier join --resume
   paired peer starts strict until you confirm trusted by hand. Self-service
   invites never create a trusted peer.
 - `invite list` shows invite id, handle, status and expiry. It never prints
-  the revoke token or the invite key.
-- `invite revoke` deletes the sealed invite and any pending hello or welcome.
+  the link key, the link id or the invite's signing key.
+- `invite revoke` deletes the invitation link (signed with the invite's own key; a
+  failed delete is logged and the invite still closes, the link then lives to its
+  expiry) and any pending hello or welcome.
   Delegations granted to the one-time key remain until their TTL ends.
 - With `--invites-public-dir <dir>` (or `COURIER_INVITES_PUBLIC_DIR`), `invite`
   also writes `<invite-id>.json` there with mode 0640: the handle, expected
-  email, requested tier, timestamps and status, with no keys, tokens or blob ids.
+  address hash, requested tier, timestamps and status, with no address, keys or link ids.
   `invite revoke` updates the status in that file.
 - `join` sends a hello and waits for the owner's reply. If none arrives in
   about 10 minutes it prints the resume command and exits. `join --resume`
@@ -198,9 +221,19 @@ tc courier join --resume
   started.
 - A hello's credential and possession proof must belong to the courier named in
   its pairing artifact; otherwise `watch` holds it (`holder-mismatch`).
-- `join --stdin` and `join --file` read the invite string without putting it
-  on the command line. The positional form works, but the string is visible
+- `join --stdin` and `join --file` read the invite link without putting it
+  on the command line. The positional form works, but the link is visible
   in `ps` to other users on the machine.
+- `join` needs `--expect-inviter <owner-did>`: the link is a bearer string anyone
+  can make, so `join` first prints the inviter it names (owner DID, handle,
+  space) and proceeds only when the owner equals the DID you pass. Without it, or
+  with another owner, it sends nothing, prints those facts and the exact command
+  to run once the owner address is confirmed with the inviter by another channel
+  (`inviter-unconfirmed`, `inviter-mismatch`).
+- `join --email <address>` is checked against the hash in the invitation before
+  anything is created or requested (`invite-email-mismatch`); it is required with
+  `--credential-file` or `--credential-stdin`, because the invitation does not
+  hold the address to prove.
 - Handles may not begin with `_`. The words `list` and `revoke` cannot be
   invitee handles, because they select the `invite` subcommands.
 - The box's `peers.json` is keyed by handle and carries the trust tier. `invite`

@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { sendHello, driveJoin, claimCallMe, resumeBlob, inviteWatcher, readJoin } from '../dist/invite-commands.js';
+import { LINK_ISSUER, storedLink } from './support/invite-link-fixture.mjs';
 import { buildInviteBlob } from '../dist/invite-blob.js';
 import { acceptC as realAcceptC } from '../dist/commands.js';
 import { assertPeerDelegation } from '../dist/authority.js';
@@ -284,13 +285,13 @@ test('claimCallMe: no peer under the handle is free', () => {
 
 // Inviter side: an invite revoked or expired before it completed frees the handle; a paired peer does not.
 function inviterWatcher(p, kv) {
-  return new InviteWatcher({ node: { kv }, profile: () => p, log: () => undefined, now: () => new Date(), deleteSealed: async () => undefined, peersFiles: [] });
+  return new InviteWatcher({ node: { kv }, profile: () => p, log: () => undefined, now: () => new Date(), deleteLink: async () => undefined, peersFiles: [] });
 }
 function openRecord(handle) {
   const inviteId = 'c'.repeat(26);
   const record = {
     v: 1, inviteId, handle, callMe: 'sam', email: 'hunter@example.test', tier: 'strict', alsoAsk: false, expiresAt: soon(3600e3),
-    store: { id: 's', cid: 'bafkrei' + 'a'.repeat(52), deleteToken: 'T' }, oneTimeKeyHash: 'h', status: 'open',
+    link: storedLink('s'), oneTimeKeyHash: 'h', status: 'open',
   };
   writeSecure(path.join(secureSubdir('invites'), `${inviteId}.json`), record);
   return record;
@@ -312,7 +313,7 @@ const realBlobText = () => buildInviteBlob({
   inviteId: INVITE_ID, host: 'https://node.example.test', spaceId: SPACE,
   oneTimeKey: { kty: 'OKP', crv: 'Ed25519', x: 'A'.repeat(43), d: 'B'.repeat(43) },
   permissions: { put: 'P', read: 'R', hooks: 'H' }, artifactA: artifactA(), expiresAt: new Date(Date.now() + 3600e3),
-  expectEmail: 'hunter@example.test', expectOwner: null, tier: 'strict',
+  issuer: LINK_ISSUER, expectEmail: 'hunter@example.test', expectOwner: null, tier: 'strict',
 });
 const afterExpiry = () => Date.now() + 2 * 3600e3;
 

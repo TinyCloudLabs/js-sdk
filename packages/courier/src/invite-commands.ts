@@ -3,18 +3,19 @@ import path from 'node:path';
 import { DelegatedAccess, NodeWasmBindings, deserializeDelegation, serializeDelegation } from '@tinycloud/node-sdk';
 import type { TinyCloudNode, TinyCloudSession } from '@tinycloud/node-sdk';
 import type { ParsedArgs } from './args.js';
-import { PEER_DELEGATION_MAX_MS, bareDid, durationMs } from './authority.js';
+import { bareDid } from './authority.js';
 import { acceptA, acceptC, ctx, fail, newAgentKey, printJson } from './commands.js';
 import { credentialSourceFromArgs } from './invite-credential-source.js';
 import { CourierError } from './errors.js';
 import { ed25519DidKey } from './did-key.js';
 import { buildHello, buildInviteBlob, newInviteId } from './invite-blob.js';
+import { inviteEmailHash } from './invite-email-hash.js';
 import {
-  deleteSealed, fetchSealed, formatInviteString, inviteOrigin, openInvitation, parseInviteString,
-  sealInvitation, uploadSealed, type UploadedInvite,
-} from './invite-link.js';
+  createInviteLink, deleteInviteLink, inviteTtl, linksConfig, newInviteLinkKey, resolveInviteLink,
+  type CreatedInviteLink, type LinksConfig, type StoredLink,
+} from './invite-links.js';
 import { publicInvitesDir, updatePublicInvite, writePublicInvite, type PublicInvite } from './invite-public.js';
-import { emailAddress, inviteFolder, isOwnerDid, parseInviteBlob, parseWelcome, type InviteBlob, type OneTimeKey, type RequestedTier } from './invite-schema.js';
+import { emailAddress, inviteFolder, isOwnerDid, ownerMatches, parseInviteBlob, parseWelcome, type InviteBlob, type OneTimeKey, type RequestedTier } from './invite-schema.js';
 import { artifactA, validateArtifactIdentity } from './pairing.js';
 import { HANDLE } from './request.js';
 import { cmd } from './program.js';
@@ -29,7 +30,6 @@ import { jsonLineLog } from './wake.js';
 
 const INVITE_ID = /^[a-z2-7]{26}$/;
 const TIERS = ['strict', 'trusted'] as const;
-const DEFAULT_TTL = '24h';
 const WELCOME_POLL_MS = 30_000;
 const WELCOME_WAIT_MS = 10 * 60_000;
 
@@ -52,7 +52,7 @@ interface JoinState {
 export const INVITE_GUIDANCE: readonly string[] = [
   'Send this string to the invitee. It is a bearer link: keep it private until revoked or expired.',
   'Send it by a different channel than the invited email address. If it goes by email, add --also-ask or --expect-owner so a mailbox alone cannot pair.',
-  'Anyone who holds the link can read the invitee address and your owner address, space and handles until it expires.',
+  'Anyone who holds the link can read your owner address, space and handles until it expires, and can check a guessed invitee address against it.',
 ];
 
 /** What `invite` prints on success, on stdout: the summary, the guidance, then the invite string last. */
@@ -90,7 +90,7 @@ interface CreatedInviteRecord {
   expectOwner: string | null;
   alsoAsk: boolean;
   expiresAt: string;
-  store: { id: string; cid: string; deleteToken: string };
+  link: StoredLink;
   status: 'open';
   publicDir?: string;
 }
@@ -100,7 +100,7 @@ export function inviteRecordsFor(input: {
   inviteId: string; handle: string; callMe: string; expectEmail: string;
   tier: RequestedTier; expectOwner: string | null; alsoAsk: boolean;
   expiresAt: Date; createdAt: string;
-  store: Pick<UploadedInvite, 'id' | 'cid' | 'deleteToken'>;
+  link: StoredLink;
   publicDir: string | undefined;
 }): { record: CreatedInviteRecord; publicRecord: PublicInvite } {
   const expiresAt = input.expiresAt.toISOString();
@@ -108,11 +108,11 @@ export function inviteRecordsFor(input: {
     record: {
       v: 1, inviteId: input.inviteId, handle: input.handle, callMe: input.callMe, email: input.expectEmail,
       expectOwner: input.expectOwner, tier: input.tier, alsoAsk: input.alsoAsk, expiresAt,
-      store: { id: input.store.id, cid: input.store.cid, deleteToken: input.store.deleteToken },
+      link: { id: input.link.id, cid: input.link.cid, issuer: input.link.issuer, seed: input.link.seed },
       status: 'open', publicDir: input.publicDir,
     },
     publicRecord: {
-      v: 1, inviteId: input.inviteId, handle: input.handle, expectEmail: input.expectEmail,
+      v: 1, inviteId: input.inviteId, handle: input.handle, expectEmailHash: inviteEmailHash(input.inviteId, input.expectEmail),
       expectOwner: input.expectOwner, tier: input.tier, createdAt: input.createdAt,
       expiresAt, status: 'open', completedPeer: null,
     },
@@ -167,21 +167,31 @@ function toOneTimeKey(jwk: unknown): OneTimeKey {
   return { kty: 'OKP', crv: 'Ed25519', x, d };
 }
 
-export async function cmdInvite(args: ParsedArgs): Promise<void> {
+/** Test seams of `invite` (create): the profile and node it runs with, the links client and the clock. */
+export interface InviteCreateDeps {
+  ctx: typeof ctx;
+  links?: LinksConfig;
+  now?: () => number;
+}
+
+export async function cmdInvite(args: ParsedArgs, deps: InviteCreateDeps = { ctx }): Promise<void> {
   const sub = args.positional[0];
   if (sub === 'list') return inviteList();
   if (sub === 'revoke') return inviteRevoke(args.positional[1]);
   if (sub === 'approve') return inviteApprove(args);
   if (sub === 'deny') return inviteDeny(args.positional[1]);
-  return inviteCreate(args);
+  return inviteCreate(args, deps);
 }
 
-async function inviteCreate(args: ParsedArgs): Promise<void> {
+async function inviteCreate(args: ParsedArgs, deps: InviteCreateDeps): Promise<void> {
   const handle = args.positional[0] ?? fail('usage', inviteUsage());
   const peersProblem = peersEntryProblem(handle, peersFilesFor(args.get('peers-file')));
   if (peersProblem !== undefined) fail(peersProblem, peersMessage(peersProblem));
   const { tier, expectOwner } = requestedOwnerAndTier(args);
-  const { profile, node } = await ctx();
+  // The life is checked before the node is reached, a key is made or anything is requested.
+  const ttl = inviteTtl(args.get('ttl'));
+  const { profile, node } = await deps.ctx();
+  const links = deps.links ?? linksConfig();
   const spaceId = profile.spaceId ?? fail('no-space', `No TinyCloud space yet; run \`${cmd('init')}\` first.`);
   if (!HANDLE.test(handle)) fail('usage', `Handles are letters, digits, "-" or "_", not starting with "_" (got "${handle}").`);
   const emailArg = args.get('email');
@@ -190,11 +200,6 @@ async function inviteCreate(args: ParsedArgs): Promise<void> {
 
   const callMe = args.get('call-me') ?? profile.selfHandle ?? handle;
   if (!HANDLE.test(callMe)) fail('usage', `Handles are letters, digits, "-" or "_", not starting with "_" (got "${callMe}").`);
-  const ttl = args.get('ttl') ?? DEFAULT_TTL;
-  const ttlMs = durationMs(ttl);
-  if (ttlMs === undefined || ttlMs <= 0 || ttlMs > PEER_DELEGATION_MAX_MS) {
-    fail('usage', `--ttl must be a duration like 24h, at most 7d (got "${ttl}").`);
-  }
   const publicDir = publicInvitesDir(args.get('invites-public-dir'), process.env.COURIER_INVITES_PUBLIC_DIR);
   const existing = profile.peers[handle];
   if (existing) fail('usage', `Peer "${handle}" already exists (${existing.status}); revoke it first.`);
@@ -202,20 +207,23 @@ async function inviteCreate(args: ParsedArgs): Promise<void> {
   const oneTime = newAgentKey();
   const oneTimeKey = toOneTimeKey(oneTime.jwk);
   if (bareDid(oneTime.did) !== ed25519DidKey(oneTimeKey.x)) fail('internal', 'One-time key DID does not match its Ed25519 public key.');
+  // A throwaway signing key for this invitation's link only: never the agent's key, never reused. Its seed goes into the private record, nowhere else.
+  const linkKey = newInviteLinkKey();
 
   const inviteId = newInviteId();
-  const expiresAt = new Date(Date.now() + ttlMs);
-  const createdAt = new Date().toISOString();
+  const nowMs = (deps.now ?? Date.now)();
+  const expiresAt = new Date(nowMs + ttl.ms);
+  const createdAt = new Date(nowMs).toISOString();
   const folder = inviteFolder(inviteId);
-  const delegate = (entries: Entries) => node.delegateTo(bareDid(oneTime.did), entries, { expiry: ttl });
+  const delegate = (entries: Entries) => node.delegateTo(bareDid(oneTime.did), entries, { expiry: ttl.text });
 
   profile.peers[handle] = {
     handle, ownerDid: '', courierDid: '', spaceId: '', outbound: [],
-    theirHandleForMe: handle, status: 'pending-A', pairedAt: new Date().toISOString(),
+    theirHandleForMe: handle, status: 'pending-A', pairedAt: new Date(nowMs).toISOString(),
   };
   saveProfile(profile);
 
-  let uploaded: UploadedInvite | undefined;
+  let created: CreatedInviteLink | undefined;
   let recordWritten = false;
   try {
     const put = await delegate([{ space: spaceId, service: 'tinycloud.kv', path: `${folder}in/hello.json`, actions: ['tinycloud.kv/put'] }]);
@@ -234,15 +242,16 @@ async function inviteCreate(args: ParsedArgs): Promise<void> {
       },
       artifactA: artifactA(profile, handle, callMe),
       expiresAt,
+      issuer: linkKey.signer.did,
       expectEmail,
       expectOwner,
       tier,
+      now: nowMs,
     });
-    const seal = sealInvitation(new TextEncoder().encode(blob));
-    uploaded = await uploadSealed(inviteOrigin(), seal.sealed, expiresAt);
+    created = await createInviteLink(links, { blobText: blob, expiresAt, key: linkKey, now: nowMs });
     const records = inviteRecordsFor({
       inviteId, handle, callMe, expectEmail, tier, expectOwner, alsoAsk: args.has('also-ask'),
-      expiresAt, createdAt, store: uploaded, publicDir,
+      expiresAt, createdAt, link: created.stored, publicDir,
     });
     writeRecord(storedRecord(records.record, oneTimeKeyHash(oneTimeKey.x)));
     recordWritten = true;
@@ -253,12 +262,12 @@ async function inviteCreate(args: ParsedArgs): Promise<void> {
         console.error(`Public invite record not written (${reasonOf(e)}). The invite itself is unaffected.`);
       }
     }
-    printInviteCreated({ expectEmail, handle, tier, expiresAt, invite: formatInviteString({ id: uploaded.id, key: seal.key, cid: uploaded.cid }) });
+    printInviteCreated({ expectEmail, handle, tier, expiresAt, invite: created.link });
   } catch (e) {
     if (recordWritten) fs.rmSync(recordPath(inviteId), { force: true });
     delete profile.peers[handle];
     saveProfile(profile);
-    if (uploaded) await deleteSealed(inviteOrigin(), uploaded.id, uploaded.deleteToken).catch(() => undefined);
+    if (created) await deleteInviteLink(links, created.stored).catch(() => undefined);
     throw e;
   }
 }
@@ -378,23 +387,65 @@ function checkBlob(profile: Profile, blob: InviteBlob): void {
   }
 }
 
-/** `deps.ctx` is a test seam: the profile and node a join runs with. */
-export async function joinStart(args: ParsedArgs, input: string, deps: { ctx: typeof ctx } = { ctx }): Promise<void> {
+/**
+ * What `join` shows before it does anything: the inviter named by the invitation (owner, handle, space). The link is a bearer string anyone can make, so the
+ * person joining must say whom they expect. `--expect-inviter <owner did>` is required and must match; without it, or on a mismatch, nothing is sent and
+ * the facts are printed with the exact command to run once they are confirmed with the inviter by another channel.
+ */
+export function requireExpectedInviter(args: ParsedArgs, blob: InviteBlob): void {
+  const owner = blob.artifactA.from.owner;
+  const facts = `This invitation names the inviter: owner ${owner}, handle "${blob.artifactA.callMe}", space ${blob.spaceId}.`;
+  const rerun = `Check that owner address with the person who invited you, by another channel. If it is theirs, run: ${cmd(`join --stdin --expect-inviter ${owner}`)} (the link on stdin, the same other flags).`;
+  const expected = args.get('expect-inviter');
+  if (expected === undefined || expected === 'true') {
+    fail('inviter-unconfirmed', `${facts} Nothing was sent. --expect-inviter <owner did> is required. ${rerun}`);
+  }
+  if (!isOwnerDid(expected)) fail('usage', '--expect-inviter must be a DID of the form did:pkh:eip155:<chain>:0x<address>.');
+  if (!ownerMatches(expected, owner)) {
+    fail('inviter-mismatch', `${facts} That is not the inviter you expected (${expected}). Nothing was sent. ${rerun}`);
+  }
+}
+
+/** The address the invitee says the invitation was made for, checked against the hash in the invitation. `undefined` when no address was given. */
+function invitedAddress(args: ParsedArgs, blob: InviteBlob, needed: boolean): string | undefined {
+  const given = args.get('email');
+  if (given === undefined || given === 'true') {
+    if (needed) fail('usage', '--email <address> is required with --credential-file or --credential-stdin: the address this invitation was made for.');
+    return undefined;
+  }
+  const address = given.trim().toLowerCase();
+  try {
+    emailAddress(address, '--email');
+  } catch {
+    fail('usage', '--email must be an email address.');
+  }
+  if (inviteEmailHash(blob.inviteId, address) !== blob.expectEmailHash) {
+    fail('invite-email-mismatch', 'That address is not the one this invitation was made for. Nothing was sent.');
+  }
+  return address;
+}
+
+/** `deps.ctx` is a test seam: the profile and node a join runs with. `deps.links` and `deps.now` are test seams for the links client and its clock. */
+export async function joinStart(
+  args: ParsedArgs,
+  input: string,
+  deps: { ctx: typeof ctx; links?: LinksConfig; now?: number } = { ctx },
+): Promise<void> {
   const peersFiles = peersFilesFor(args.get('peers-file'));
+  const links = deps.links ?? linksConfig();
   const { profile, node } = await deps.ctx();
-  const parts = parseInviteString(input);
   const credentials = credentialSourceFromArgs(args);
-  const sealed = await fetchSealed(inviteOrigin(), parts.id, parts.cid);
-  const blobText = Buffer.from(openInvitation(sealed, parts.key)).toString('utf8');
-  const blob = parseInviteBlob(blobText);
+  const { blob, blobText } = await resolveInviteLink(links, input, deps.now);
   checkBlob(profile, blob);
+  requireExpectedInviter(args, blob);
+  const address = invitedAddress(args, blob, credentials !== undefined);
   if (readJoin(blob.inviteId)) {
     fail('join-exists', `A join for this invite is already pending; run \`${cmd(`join --resume ${blob.inviteId}`)}\`.`);
   }
   claimCallMe(profile, blob, peersFiles);
 
-  const credential = credentials
-    ? await credentials.getEmailProof(blob.expectEmail, { courierDid: profile.courierDid, inviteId: blob.inviteId })
+  const credential = credentials && address !== undefined
+    ? await credentials.getEmailProof(address, { courierDid: profile.courierDid, inviteId: blob.inviteId })
     : undefined;
   const now = Date.now();
   const possession = credential === undefined ? undefined : possessionFor(blob, profile.courierDid, credential, now);

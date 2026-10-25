@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { cmdInvite } from '../dist/invite-commands.js';
+import { storedLink } from './support/invite-link-fixture.mjs';
 import { writeSecure, secureSubdir } from '../dist/profile.js';
 
 const INVITE_ID = 'a'.repeat(25) + 'b';
@@ -46,7 +47,7 @@ function writeRecord(id, overrides = {}) {
     tier: 'trusted',
     alsoAsk: false,
     expiresAt: new Date(Date.now() + 3600e3).toISOString(),
-    store: { id: 'store-id-1', cid: 'bafkrei' + 'a'.repeat(52), deleteToken: DELETE_TOKEN },
+    link: storedLink('store-id-1'),
     status: 'open',
     ...overrides,
   };

@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { inviteEmailHash } from '../dist/invite-email-hash.js';
 import { publicInvitesDir, updatePublicInvite, writePublicInvite } from '../dist/invite-public.js';
 
 const ID = 'abcdefghijklmnopqrstuvwxyz';
@@ -10,7 +11,7 @@ const record = (over = {}) => ({
   v: 1,
   inviteId: ID,
   handle: 'alice',
-  expectEmail: 'alice@example.com',
+  expectEmailHash: inviteEmailHash(ID, 'alice@example.com'),
   expectOwner: null,
   tier: 'strict',
   createdAt: '2026-01-01T00:00:00.000Z',

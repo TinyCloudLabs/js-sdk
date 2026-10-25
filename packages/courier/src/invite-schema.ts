@@ -1,4 +1,5 @@
 import { CourierError } from './errors.js';
+import { isEd25519DidKey } from './did-key.js';
 import { PREFIX } from './keys.js';
 import { HANDLE } from './request.js';
 import { validateArtifactIdentity, type PairArtifact } from './pairing.js';
@@ -59,7 +60,10 @@ export interface InviteBlob {
   permissions: Permissions;
   artifactA: PairArtifact;
   expiresAt: string;
-  expectEmail: string;
+  /** The did:key that signs the link. The reader refuses the invitation unless it equals the link's own signer. */
+  issuer: string;
+  /** Hash of the invited address (see `invite-email-hash.ts`), not the address. */
+  expectEmailHash: string;
   /** Owner DID the invitee must match, or null for any owner. */
   expectOwner: string | null;
   /** Requested tier only. The paired peer starts strict; the owner confirms trusted by hand. */
@@ -92,7 +96,7 @@ export function inviteFolder(inviteId: string): string {
 
 export function parseInviteBlob(text: string, now: number = Date.now()): InviteBlob {
   const b = parseStrict(text, INVITE_BLOB_MAX_BYTES);
-  exactKeys(b, 'invite', ['v', 'inviteId', 'host', 'spaceId', 'folder', 'helloKey', 'outPrefix', 'oneTimeKey', 'permissions', 'artifactA', 'expiresAt', 'expectEmail', 'expectOwner', 'tier']);
+  exactKeys(b, 'invite', ['v', 'inviteId', 'host', 'spaceId', 'folder', 'helloKey', 'outPrefix', 'oneTimeKey', 'permissions', 'artifactA', 'expiresAt', 'issuer', 'expectEmailHash', 'expectOwner', 'tier']);
   if (b.v !== 1) fail('invite: v must be 1');
   const inviteId = str(b.inviteId, 'inviteId', 26, INVITE_ID);
   const folder = inviteFolder(inviteId);
@@ -103,7 +107,8 @@ export function parseInviteBlob(text: string, now: number = Date.now()): InviteB
   const spaceId = str(b.spaceId, 'spaceId', 256);
   if (artifactA.spaceId !== spaceId) fail('spaceId does not match artifactA');
   const expiresAt = isoUtc(b.expiresAt, 'expiresAt');
-  const expectEmail = emailAddress(b.expectEmail, 'expectEmail');
+  const issuer = typeof b.issuer === 'string' && isEd25519DidKey(b.issuer) ? b.issuer : fail('issuer must be an Ed25519 did:key');
+  const expectEmailHash = emailHash(b.expectEmailHash, 'expectEmailHash');
   const expectOwner = expectOwnerField(b.expectOwner);
   const tier = requestedTierField(b.tier);
   if (Date.parse(expiresAt) <= now) fail('invite is expired');
@@ -119,7 +124,8 @@ export function parseInviteBlob(text: string, now: number = Date.now()): InviteB
     permissions: parsePermissions(b.permissions),
     artifactA,
     expiresAt,
-    expectEmail,
+    issuer,
+    expectEmailHash,
     expectOwner,
     tier,
   };
@@ -164,6 +170,13 @@ export function parseWelcome(text: string): Welcome {
     ...(tier === 'rejected' ? {} : { artifactC: checkArtifact(w.artifactC, 'C', 'artifactC') }),
     sentAt: isoUtc(w.sentAt, 'sentAt'),
   };
+}
+
+/** The 43-character base64url hash of an invited address, in its one canonical spelling. */
+export function emailHash(value: unknown, where: string): string {
+  const s = str(value, where, 43, B64URL_32_BYTES);
+  if (Buffer.from(s, 'base64url').toString('base64url') !== s) fail(`${where} is not canonical base64url`);
+  return s;
 }
 
 /** Lowercase email address, at most 254 bytes. Format check only: ownership is proven by the credential, not here. */
