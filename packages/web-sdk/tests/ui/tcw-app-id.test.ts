@@ -4,6 +4,7 @@ import { JSDOM } from "jsdom";
 import type { TinyCloudWeb as TinyCloudWebType } from "../../src/modules/tcw";
 import { REGISTRY_KEY } from "../../src/ui/host";
 import { FALLBACK_APP_ID, hideStorageKey } from "../../src/ui/persistence";
+import { panelMounted } from "./panel-ready";
 
 type Config = NonNullable<ConstructorParameters<typeof TinyCloudWebType>[0]>;
 type Loose = Record<PropertyKey, unknown>;
@@ -89,5 +90,40 @@ describe("TinyCloudWeb UI app id", () => {
 
   test("falls back to _page when neither source carries an app_id", () => {
     expect(clearedBy({})).toEqual([FALLBACK_APP_ID]);
+  });
+});
+
+describe("TinyCloudWeb UI app name", () => {
+  const headerContext = () =>
+    document.querySelector<HTMLElement>("[data-tinycloud-ui]")?.shadowRoot?.querySelector(".ctx")?.textContent;
+
+  async function opened(config: Config): Promise<void> {
+    const tc = new TinyCloudWeb({ persistSession: false, ...config });
+    tc.ui.open();
+    await panelMounted();
+  }
+
+  test("the header names the app by the manifest display name", async () => {
+    const manifest = { app_id: "app-manifest", name: "Notes" } as unknown as NonNullable<Config["manifest"]>;
+    await opened({ manifest });
+    expect(headerContext()).toBe("in Notes");
+  });
+
+  test("the first manifest of a list names the app", async () => {
+    const manifest = [
+      { app_id: "app-manifest", name: "Notes" },
+      { app_id: "other", name: "Other" },
+    ] as unknown as NonNullable<Config["manifest"]>;
+    await opened({ manifest });
+    expect(headerContext()).toBe("in Notes");
+  });
+
+  test("the capabilityRequest manifest names the app when only it is set", async () => {
+    const capabilityRequest = {
+      manifests: [{ app_id: "app-capability", name: "Capability App" }],
+      resources: [],
+    } as unknown as NonNullable<Config["capabilityRequest"]>;
+    await opened({ capabilityRequest });
+    expect(headerContext()).toBe("in Capability App");
   });
 });

@@ -28,7 +28,7 @@ interface Call {
 }
 interface HarnessWindow {
   __tc: {
-    mount(options?: { signedIn?: boolean }): boolean;
+    mount(options?: { signedIn?: boolean; name?: string }): boolean;
     arm(): Promise<boolean>;
     switchAccount(to: "A" | "B" | "S"): Promise<boolean>;
     signOut(): boolean;
@@ -68,7 +68,7 @@ const watchFor = (page: Page, needle: string) =>
 const seen = (page: Page, needle: string) =>
   page.evaluate((text) => (window as unknown as { __seen: Record<string, boolean> }).__seen[text] === true, needle);
 
-async function boot(page: Page, options: { signedIn?: boolean } = {}) {
+async function boot(page: Page, options: { signedIn?: boolean; name?: string } = {}) {
   await page.setViewportSize({ width: 1280, height: 800 });
   await routeUiHarness(
     page,
@@ -229,4 +229,25 @@ test("the app's own session grant, listed under the bare DID while sessionDid ca
   // A helper's grant is still under others, with the ordinary confirm.
   await card(page, "S", 1).getByRole("button", { name: `Revoke access for ${delegate("S", 1)}` }).click();
   await expect(body(page).locator('[role="alertdialog"]')).not.toContainText("will stop working here");
+});
+
+test("the manifest display name names the app wherever the panel names it; the app id stays out of the copy", async ({ page }) => {
+  await boot(page, { name: "Notes Pro" });
+  await tc(page, (api) => api.arm());
+  await tc(page, (api) => api.switchAccount("S"));
+
+  // Header context, from the same name the delegations copy uses.
+  await page.evaluate(() => (window as unknown as HarnessWindow).tc?.ui.open("account"));
+  await expect(panel(page).locator(".head .ctx")).toHaveText("in Notes Pro");
+  // Overview "You're in" comes from the real adapter's account view.
+  await expect(panel(page).locator('section[data-section="account"]')).toContainText("You're inNotes Pro");
+
+  await panel(page).getByRole("button", { name: "Delegations", exact: true }).click();
+  await expect(cards(page)).toHaveCount(2);
+  await expect(body(page).locator(".dl-h")).toHaveText(["Granted to Notes Pro1", "Granted to others1"]);
+  await cards(page).filter({ hasText: "This app" }).getByRole("button", { name: /^Revoke access for / }).click();
+  const box = body(page).locator('[role="alertdialog"]');
+  await expect(box).toContainText("Revoke access for Notes Pro on this device?");
+  await expect(box).toContainText("Notes Pro will stop working here until you sign in again.");
+  await expect(panel(page)).not.toContainText("e2e-data-proxy");
 });

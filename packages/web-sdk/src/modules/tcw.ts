@@ -466,6 +466,7 @@ export class TinyCloudWeb {
         const fromManifest = (Array.isArray(manifest) ? manifest[0] : manifest)?.app_id;
         return fromManifest ?? this._capabilityRequest?.manifests[0]?.app_id;
       },
+      manifestName: () => ((Array.isArray(this._manifest) ? this._manifest[0] : this._manifest) ?? this._capabilityRequest?.manifests[0])?.name,
     });
 
     // Initialize browser notification handler

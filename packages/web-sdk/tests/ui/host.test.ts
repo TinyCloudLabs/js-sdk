@@ -934,3 +934,42 @@ describe("at-a-glance navigation", () => {
     expect(ui.api.isOpen).toBe(true);
   });
 });
+
+describe("the app name the panel shows", () => {
+  const headerContext = () => shadow().querySelector(".ctx")?.textContent;
+  const pageCloseLabel = () => shadow().querySelector(".head button.action:not(.layout-switch)")?.textContent;
+
+  function mountNamed(name: string | undefined, appId = "com.example.notes"): UiClientHandle {
+    return registerUiClient({
+      ui: undefined,
+      source: source(false),
+      manifestAppId: () => appId,
+      manifestName: () => name,
+    });
+  }
+
+  test("the manifest display name is shown, not the app id", async () => {
+    const ui = mountNamed("Notes");
+    ui.api.open();
+    await panelMounted();
+    expect(headerContext()).toBe(`${text("panel.in")} Notes`);
+  });
+
+  test("the page layout's way back names the display name too", async () => {
+    const ui = mountNamed("Notes");
+    ui.api.openPage();
+    await panelMounted();
+    expect(pageCloseLabel()).toBe(`${text("panel.back")} Notes`);
+  });
+
+  test("a missing or blank display name falls back to the app id", async () => {
+    for (const name of [undefined, "", "   "]) {
+      page.document.body.innerHTML = "";
+      delete g[REGISTRY_KEY];
+      const ui = mountNamed(name);
+      ui.api.open();
+      await panelMounted();
+      expect(headerContext()).toBe(`${text("panel.in")} com.example.notes`);
+    }
+  });
+});

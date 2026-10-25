@@ -33,6 +33,7 @@ export interface ClientRegistration {
   readonly handle: PanelClientHandle;
   readonly config: ResolvedUiConfig;
   readonly manifestAppId: () => string | undefined;
+  readonly manifestName?: () => string | undefined;
 }
 
 export interface HostRuntime {
@@ -182,6 +183,8 @@ export function createHostRuntime(): HostRuntime {
     toast: (t) => (context.toastsEnabled() ? toastStore.push(t) : null),
     text,
     appLabel() {
+      const named = activeEntry()?.registration.manifestName?.();
+      if (named !== undefined) return named;
       const appId = hideScope().appId;
       return appId === FALLBACK_APP_ID ? undefined : appId;
     },

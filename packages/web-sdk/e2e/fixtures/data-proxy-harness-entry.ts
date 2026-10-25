@@ -140,13 +140,14 @@ let handle: UiClientHandle | undefined;
 
 const w = window as unknown as Record<string, unknown>;
 w.__tc = {
-  mount(options: { signedIn?: boolean } = {}) {
+  mount(options: { signedIn?: boolean; name?: string } = {}) {
     handle?.unregister();
     signedIn = options.signedIn ?? true;
     handle = registerUiClient({
       ui: { developerMode: false },
       source: source as never,
       manifestAppId: () => "e2e-data-proxy",
+      manifestName: () => options.name,
     });
     w.tc = { ui: handle.api };
     return true;

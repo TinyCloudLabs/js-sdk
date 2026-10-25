@@ -30,6 +30,8 @@ export interface UiClientOptions {
   readonly source: ClientSource;
   /** manifest.app_id, read lazily so setManifest() re-keys the hide flag. */
   readonly manifestAppId: () => string | undefined;
+  /** manifest.name, the display name the panel shows the user. Read lazily like `manifestAppId`. */
+  readonly manifestName?: () => string | undefined;
   /** Panel data factory. Production passes the live adapter; the harness passes its stub. */
   readonly data?: PanelDataFactory;
 }
@@ -82,10 +84,13 @@ export function registerUiClient(options: UiClientOptions): UiClientHandle {
   const id = runtime.nextClientId();
   const promptScope = createPromptScope(true);
   const panel = createPanelClient(id, options.source, options.data);
+  // An empty display name is no name: the panel then shows the app id.
+  const displayName = () => options.manifestName?.()?.trim() || undefined;
   runtime.register(id, {
     handle: panel,
     config: resolveUiConfig(options.ui),
     manifestAppId: options.manifestAppId,
+    manifestName: displayName,
   });
 
   let target: UiTarget | undefined = {
@@ -115,7 +120,7 @@ export function registerUiClient(options: UiClientOptions): UiClientHandle {
     },
     promptScope,
     armPrefetch(host) {
-      armPanelData(panel.client, { host, gate: options.source, appName: options.manifestAppId });
+      armPanelData(panel.client, { host, gate: options.source, appName: () => displayName() ?? options.manifestAppId() });
     },
   };
 }
