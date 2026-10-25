@@ -266,13 +266,19 @@ describe("returning focus", () => {
   });
 });
 
-describe("aria-modal follows the layout", () => {
-  test("true as the drawer, false as the page, and back", () => {
+describe("aria-modal follows visible drawer state", () => {
+  test("closed, drawer, page, close and reopen", () => {
     const panel = createPanel({ onClose() {}, onEscape() {}, onLayout() {}, onNavigate() {} });
+    expect(panel.el.getAttribute("aria-modal")).not.toBe("true");
+    panel.setOpen(true);
     expect(panel.el.getAttribute("aria-modal")).toBe("true");
     panel.setLayout("page", { showLayoutToggle: true, phone: false });
     expect(panel.el.getAttribute("aria-modal")).toBe("false");
     panel.setLayout("drawer", { showLayoutToggle: true, phone: false });
+    expect(panel.el.getAttribute("aria-modal")).toBe("true");
+    panel.setOpen(false);
+    expect(panel.el.getAttribute("aria-modal")).toBe("false");
+    panel.setOpen(true);
     expect(panel.el.getAttribute("aria-modal")).toBe("true");
   });
 });

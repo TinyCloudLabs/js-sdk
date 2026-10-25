@@ -62,8 +62,8 @@ const SWITCH_LABEL: Record<ShellLayout, PanelStringKey> = {
 };
 
 /**
- * `role="dialog"`: modal (`aria-modal="true"`) while it is the drawer, which dims the page and holds focus,
- * and non-modal as the full page. Rendered as one or the other, chosen by `data-layout`. Escape is handled on the panel element only.
+ * `role="dialog"`: modal (`aria-modal="true"`) only while open as a desktop drawer, which dims the page and
+ * holds focus; non-modal while hidden, on phones, or as the full page. Escape is handled on the panel element only.
  */
 export function createPanel(options: PanelOptions): PanelHandle {
   const el = document.createElement("div");
@@ -71,7 +71,7 @@ export function createPanel(options: PanelOptions): PanelHandle {
   el.className = "panel";
   el.dataset.layout = "drawer";
   el.setAttribute("role", "dialog");
-  el.setAttribute("aria-modal", "true");
+  el.setAttribute("aria-modal", "false");
   el.setAttribute("aria-label", text("button.aria"));
   el.hidden = true;
 
@@ -118,6 +118,7 @@ export function createPanel(options: PanelOptions): PanelHandle {
   const close = document.createElement("button");
   close.type = "button";
   close.addEventListener("click", () => options.onClose());
+  const closeLabel = document.createElement("span");
   const glyph = document.createElementNS(SVG_NS, "svg");
   glyph.setAttribute("viewBox", "0 0 24 24");
   glyph.setAttribute("aria-hidden", "true");
@@ -133,8 +134,9 @@ export function createPanel(options: PanelOptions): PanelHandle {
       return;
     }
     close.className = "action";
-    close.removeAttribute("aria-label");
-    close.textContent = appLabel === undefined ? text("panel.close") : `${text("panel.back")} ${appLabel}`;
+    closeLabel.textContent = appLabel === undefined ? text("panel.close") : `${text("panel.back")} ${appLabel}`;
+    close.setAttribute("aria-label", closeLabel.textContent);
+    close.replaceChildren(closeLabel);
   }
   paintClose();
 
@@ -265,13 +267,14 @@ export function createPanel(options: PanelOptions): PanelHandle {
     main,
     setOpen(open) {
       el.hidden = !open;
+      el.setAttribute("aria-modal", String(open && layout === "drawer" && !phone));
       if (!open) setMenuOpen(false);
     },
     setLayout(next, options) {
       layout = next;
       phone = options.phone;
       el.dataset.layout = next;
-      el.setAttribute("aria-modal", String(next === "drawer"));
+      el.setAttribute("aria-modal", String(!el.hidden && next === "drawer" && !phone));
       nextLayout = next === "drawer" ? "page" : "drawer";
       paintSwitch(nextLayout);
       layoutToggle.hidden = !options.showLayoutToggle;

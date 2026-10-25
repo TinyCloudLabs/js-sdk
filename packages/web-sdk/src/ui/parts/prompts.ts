@@ -25,6 +25,7 @@ export type PromptMount =
 interface OpenPrompt {
   readonly scope: PromptScope;
   readonly dismiss: () => void;
+  readonly element?: HTMLElement;
 }
 
 /**
@@ -42,8 +43,18 @@ const state = ((globalThis as Record<symbol, PromptState | undefined>)[STATE_KEY
   layer: undefined,
 });
 
+export const PROMPT_SETTLED_EVENT = "tinycloud-prompt-settled";
+
 export function createPromptScope(uiEnabled: boolean): PromptScope {
   return { uiEnabled };
+}
+
+/** A held lazy dialog has no visible element and must not displace panel focus. */
+export function hasMountedPrompt(): boolean {
+  for (const prompt of state.open) {
+    if (prompt.element?.isConnected && !prompt.element.hidden) return true;
+  }
+  return false;
 }
 
 /**
@@ -72,11 +83,12 @@ export function mountPrompt(
   }
   // refusalFor() returned undefined, so the layer exists.
   state.layer?.appendChild(element);
-  const entry: OpenPrompt = { scope, dismiss };
+  const entry: OpenPrompt = { scope, dismiss, element };
   state.open.add(entry);
   return {
     release: () => {
       state.open.delete(entry);
+      state.layer?.dispatchEvent(new Event(PROMPT_SETTLED_EVENT));
     },
   };
 }

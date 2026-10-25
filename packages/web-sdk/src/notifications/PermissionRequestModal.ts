@@ -219,7 +219,8 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
         border: 1px solid var(--modal-border);
         border-radius: 16px;
         box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(255, 255, 255, 0.05);
-        max-width: 520px; width: 100%;
+        box-sizing: border-box; max-width: 520px; width: 100%;
+        overflow-wrap: anywhere;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
         color: var(--modal-foreground);
       }
@@ -237,7 +238,7 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
         background: var(--modal-accent); color: white;
       }
       .modal-title {
-        flex: 1; font-size: 18px; font-weight: 600; line-height: 1.3;
+        flex: 1; min-width: 0; font-size: 18px; font-weight: 600; line-height: 1.3;
         margin: 0; margin-top: 4px;
       }
       .modal-close {
@@ -285,7 +286,7 @@ export class TinyCloudPermissionRequestModal extends HTMLElement {
         display: flex; flex-direction: column; gap: 6px;
       }
       .permission-summary-row {
-        display: grid; grid-template-columns: 88px 1fr;
+        display: grid; grid-template-columns: 88px minmax(0, 1fr);
         gap: 10px; align-items: baseline;
       }
       .permission-summary-label {

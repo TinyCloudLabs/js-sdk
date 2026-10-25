@@ -20,8 +20,9 @@ test.afterEach(({ page }) => {
 });
 
 interface HarnessWindow {
-  __tc: { mount(ui?: Record<string, unknown>): boolean; toast(kind: string): string | null; openPermission(): boolean };
+  __tc: { mount(ui?: Record<string, unknown>): boolean; toast(kind: string): string | null; openPermission(appName?: string): boolean; openSpaceCreation(): boolean };
   __permResult?: boolean;
+  __spaceResult?: boolean;
   tc?: { ui: { open(section?: string): void; openPage(section?: string): void } };
 }
 
@@ -70,6 +71,14 @@ const focusAt = (page: Page): Promise<string> =>
     const mark = inner.dataset.e2e;
     return `${area}:${mark ?? inner.getAttribute("aria-label") ?? inner.textContent?.trim().slice(0, 30)}`;
   });
+
+/** The host's active element must be the prompt itself, with focus inside its shadow dialog. */
+const focusInPrompt = (page: Page, selector: string): Promise<boolean> =>
+  page.evaluate((promptSelector) => {
+    const root = (document.querySelector("[data-tinycloud-ui]") as HTMLElement).shadowRoot as ShadowRoot;
+    const prompt = root.querySelector<HTMLElement>(promptSelector);
+    return Boolean(prompt && root.activeElement === prompt && prompt.shadowRoot?.activeElement);
+  }, selector);
 
 /** Marks the first and last control Tab visits (panel, then toasts) and returns how many there are. */
 const markEnds = (page: Page): Promise<number> =>
@@ -212,6 +221,23 @@ test.describe("closing", () => {
     expect(await focusAt(page)).toBe("page:page-btn");
   });
 
+  test("aria-modal follows the visible drawer through close, reopen, page, and phone", async ({ page }) => {
+    await mount(page);
+    await openDrawer(page);
+    await expect(panel(page)).toHaveAttribute("aria-modal", "true");
+    await panel(page).getByRole("button", { name: "Close", exact: true }).click();
+    await expect(panel(page)).toBeHidden();
+    await expect(panel(page)).toHaveAttribute("aria-modal", "false");
+    await page.evaluate(() => (window as unknown as HarnessWindow).tc?.ui.open());
+    await expect(panel(page)).toBeVisible();
+    await expect(panel(page)).toHaveAttribute("aria-modal", "true");
+    await page.evaluate(() => (window as unknown as HarnessWindow).tc?.ui.openPage());
+    await expect(panel(page)).toHaveAttribute("aria-modal", "false");
+    await page.setViewportSize(PHONE);
+    await page.evaluate(() => (window as unknown as HarnessWindow).tc?.ui.open());
+    await expect(panel(page)).toHaveAttribute("aria-modal", "false");
+  });
+
   test("an element the page removed while the drawer was open falls back to the launcher", async ({ page }) => {
     await mount(page);
     await page.evaluate(() => document.getElementById("page-btn")?.focus());
@@ -331,6 +357,61 @@ test.describe("focus trap", () => {
     await expect.poll(() => focusAt(page)).toMatch(/^panel:/);
     await expect(panel(page)).toBeVisible();
   });
+
+  for (const kind of ["permission", "space creation"] as const) {
+    test(`${kind} prompt mounted before the delayed panel keeps focus and Escape declines it without closing the drawer`, async ({ page }) => {
+      await mount(page, "light", DESKTOP, true);
+      let release: (() => void) | undefined;
+      await page.route("**/panel-entry-*.js", async (route) => {
+        await new Promise<void>((resolve) => {
+          release = () => { void route.fallback().then(resolve); };
+        });
+      });
+      await page.evaluate(() => (window as unknown as HarnessWindow).tc?.ui.open());
+      await expect.poll(() => Boolean(release)).toBe(true);
+      await page.evaluate((prompt) => {
+        const harness = (window as unknown as HarnessWindow).__tc;
+        if (prompt === "permission") harness.openPermission();
+        else harness.openSpaceCreation();
+      }, kind);
+      const selector = kind === "permission" ? "tinycloud-permission-request-modal" : "tinycloud-space-modal";
+      const prompt = page.locator(selector);
+      await expect(prompt.locator(".modal-content")).toBeVisible();
+      expect(await focusInPrompt(page, selector)).toBe(true);
+      release?.();
+      await expect(panel(page).locator(".nav-i").first()).toBeAttached();
+      expect(await focusInPrompt(page, selector)).toBe(true);
+      await page.keyboard.press("Tab");
+      expect(await focusInPrompt(page, selector)).toBe(true);
+      await page.keyboard.press("Escape");
+      await expect.poll(() => page.evaluate((promptKind) => {
+        const w = window as unknown as HarnessWindow;
+        return promptKind === "permission" ? w.__permResult : w.__spaceResult;
+      }, kind)).toBe(false);
+      await expect(prompt).toHaveCount(0);
+      await expect(panel(page)).toBeVisible();
+      await expect.poll(() => focusAt(page)).toMatch(/^panel:/);
+    });
+  }
+});
+
+test("a long unbroken app name remains readable inside the permission prompt on a phone", async ({ page }) => {
+  await mount(page, "light", PHONE, true);
+  const longName = "A".repeat(120);
+  await page.evaluate((name) => (window as unknown as HarnessWindow).__tc.openPermission(name), longName);
+  const prompt = page.locator("tinycloud-permission-request-modal");
+  const content = prompt.locator(".modal-content");
+  await expect(content).toBeVisible();
+  const bounds = await content.evaluate((el) => {
+    const title = el.querySelector<HTMLElement>(".modal-title");
+    const rect = el.getBoundingClientRect();
+    return { width: el.clientWidth, scrollWidth: el.scrollWidth, right: rect.right,
+      titleRight: title?.getBoundingClientRect().right, titleText: title?.textContent };
+  });
+  expect(bounds.titleText).toContain(longName);
+  expect(bounds.scrollWidth).toBeLessThanOrEqual(bounds.width);
+  expect(bounds.titleRight).toBeLessThanOrEqual(bounds.right);
+  expect(bounds.right).toBeLessThanOrEqual(PHONE.width);
 });
 
 test("the scrim fades in over .35s", async ({ page }) => {

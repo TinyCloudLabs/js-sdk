@@ -8,7 +8,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import type * as ModalManagerNs from "../../src/notifications/ModalManager";
 import type { HostContext } from "../../src/ui/slots";
-import { createPromptScope, dismissPrompts, mountPrompt, prompts } from "../../src/ui/parts/prompts";
+import { createPromptScope, dismissPrompts, hasMountedPrompt, holdPrompt, mountPrompt, prompts } from "../../src/ui/parts/prompts";
 
 // ---------------------------------------------------------------------------
 // Minimal DOM shim
@@ -19,6 +19,7 @@ class FakeNode {
   children: FakeNode[] = [];
   parent: FakeNode | undefined;
   innerHTML = "";
+  get isConnected(): boolean { return this.parent !== undefined; }
   private attrs = new Map<string, string>();
 
   appendChild(child: FakeNode): FakeNode {
@@ -314,6 +315,20 @@ describe("teardown settles pending prompts", () => {
 });
 
 describe("scoped dismissal", () => {
+  test("only a mounted, connected prompt takes focus precedence over the panel", () => {
+    const scope = createPromptScope(true);
+    const releaseHold = holdPrompt(scope, () => {});
+    expect(hasMountedPrompt()).toBe(false);
+    const node = new FakeNode();
+    const mount = mountPrompt(scope, node as unknown as HTMLElement, () => {});
+    if (!("release" in mount)) throw new Error("expected prompt to mount");
+    expect(hasMountedPrompt()).toBe(true);
+    node.remove();
+    expect(hasMountedPrompt()).toBe(false);
+    mount.release();
+    releaseHold();
+  });
+
   test("dismissPrompts settles only the given scope's prompts", () => {
     const scopeA = createPromptScope(true);
     const scopeB = createPromptScope(true);

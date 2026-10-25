@@ -6,6 +6,7 @@ import type { ArmOptions } from "./panel-data-entry";
 import type * as PanelEntry from "./panel-entry";
 import { createPendingPanel, type PendingPanel } from "./pending";
 import { HOST_PARTS } from "./parts";
+import { hasMountedPrompt } from "./parts/prompts";
 import { toastStore } from "./parts/toasts";
 import type { ToastRequest } from "./toast-store";
 import { createButtonHideStore, defaultLocalStorage, FALLBACK_APP_ID, resolveUiAppId, type HideScope } from "./persistence";
@@ -233,7 +234,7 @@ export function createHostRuntime(): HostRuntime {
       return;
     }
     renderPanel();
-    if (!wasOpen || shownLayout() !== previous) panel.focusFirst();
+    if ((!wasOpen || shownLayout() !== previous) && !hasMountedPrompt()) panel.focusFirst();
   }
 
   /** Closing never changes the hidden flag. Focus returns to the drawer's opener, else the button, only when the shell owned focus. */
@@ -304,7 +305,7 @@ export function createHostRuntime(): HostRuntime {
     panel.setStatus(board.top());
     syncDom();
     renderPanel();
-    if (isPanelOpen) panel.focusFirst();
+    if (isPanelOpen && !hasMountedPrompt()) panel.focusFirst();
   }
 
   function mount(config: ResolvedUiConfig): Mounted {

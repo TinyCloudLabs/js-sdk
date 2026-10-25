@@ -33,8 +33,8 @@ const STYLE = `
 .ll-kv dt{display:flex;flex:1 1 auto;align-items:baseline;gap:10px;min-width:0;font-size:14px;color:#52525b;white-space:nowrap}
 .ll-kv dt::after{content:"";flex:1 1 12px;min-width:12px;border-bottom:2px dotted #a1a1aa;transform:translateY(-3px)}
 .ll-kv dd{display:flex;flex:0 1 auto;align-items:center;justify-content:flex-end;gap:2px;max-width:100%;min-width:0;margin:0;font-size:14px;font-weight:600;text-align:right;overflow-wrap:anywhere}
-.ll-mono,.ll-did{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:${MONO};font-size:12.5px}
-.ll-host{white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
+.ll-mono,.ll-did{min-width:0;font-family:${MONO};font-size:12.5px;overflow-wrap:anywhere}
+.ll-host{overflow-wrap:anywhere}
 .ll-cell{display:flex;align-items:center;gap:8px;min-width:0}
 .ll-codeline{display:flex;align-items:center;justify-content:space-between;gap:4px;box-sizing:border-box;margin-top:8px;padding:2px 4px 2px 14px;border-radius:12px;background:#f4f4f5;min-height:44px;font-family:${MONO};font-size:13px}
 .ll-codeline code{min-width:0;overflow-wrap:anywhere}

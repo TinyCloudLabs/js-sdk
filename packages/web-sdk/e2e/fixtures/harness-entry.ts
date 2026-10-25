@@ -5,6 +5,7 @@ import { registerUiClient, type UiClientHandle } from "../../src/ui/index";
 import { toastStore } from "../../src/ui/parts/toasts";
 import type { ToastKind } from "../../src/ui/toast-store";
 import { showPermissionRequestModal } from "../../src/notifications/lazy-prompts";
+import { ModalSpaceCreationHandler } from "../../src/authorization/WebSpaceCreationHandler";
 import { createStubPanelData, type StubSeed } from "../../src/ui/stub/index";
 import { createRequestLog, sampleRows, type LogRow } from "./request-log";
 import type { LocalCopyStatus, NodeRow, PanelDataFactory, ViewResult } from "../../src/ui/data";
@@ -205,12 +206,20 @@ w.__tc = {
     return true;
   },
   // A permission prompt raised through the eager front, as tcw does. Its answer lands on window.__permResult.
-  openPermission() {
+  openPermission(appName = "E2E App") {
     if (handle === undefined) throw new Error("mount() must run first");
     delete w.__permResult;
-    showPermissionRequestModal({ appName: "E2E App", additional: [] }, handle.promptScope).then((result) => {
+    showPermissionRequestModal({ appName, additional: [] }, handle.promptScope).then((result) => {
       w.__permResult = result.approved;
     });
+    return true;
+  },
+  openSpaceCreation() {
+    if (handle === undefined) throw new Error("mount() must run first");
+    delete w.__spaceResult;
+    new ModalSpaceCreationHandler({ promptScope: handle.promptScope, timeoutMs: 0 })
+      .confirmSpaceCreation({ spaceId: "space-e2e", host: "tinycloud.test" } as never)
+      .then((result) => { w.__spaceResult = result; });
     return true;
   },
   setManifestName(name: string | undefined) {

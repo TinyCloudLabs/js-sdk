@@ -161,8 +161,10 @@ export class TinyCloudSpaceModal extends HTMLElement {
         box-shadow:
           0 25px 50px -12px rgba(0, 0, 0, 0.25),
           0 0 0 1px rgba(255, 255, 255, 0.05);
+        box-sizing: border-box;
         max-width: 480px;
         width: 100%;
+        overflow-wrap: anywhere;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
         color: var(--modal-foreground);
       }
@@ -190,6 +192,7 @@ export class TinyCloudSpaceModal extends HTMLElement {
 
       .modal-title {
         flex: 1;
+        min-width: 0;
         font-size: 20px;
         font-weight: 600;
         line-height: 1.3;

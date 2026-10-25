@@ -25,9 +25,8 @@ const STYLE = `
 .nd-kv dd{display:flex;align-items:center;justify-content:flex-end;gap:2px;flex:0 1 auto;max-width:78%;min-width:0;margin:0;font-size:14px;font-weight:600;text-align:right;overflow-wrap:anywhere}
 .nd-kv dd.nd-mono{font-size:12px;font-weight:500}
 .nd-did-row{display:flex;align-items:center;gap:6px;min-width:0;max-width:100%}
-.nd-did{display:flex;min-width:0;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-.nd-did-head{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.nd-did-tail{flex:none;white-space:nowrap}
+.nd-did{min-width:0;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;overflow-wrap:anywhere}
+.nd-did-head,.nd-did-tail{overflow-wrap:anywhere}
 .nd-chips{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:6px;margin:0;padding:0;list-style:none}
 .nd-chip{display:inline-flex;align-items:center;min-height:28px;padding:0 11px;border-radius:999px;background:#f4f4f5;font-size:12.5px;font-weight:600;overflow-wrap:anywhere}
 .nd-card .icon-btn{margin:-10px -10px -10px 0}

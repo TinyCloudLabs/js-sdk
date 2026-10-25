@@ -8,6 +8,7 @@
  * eager host needs no code for it. Everything here only has to agree with those attributes.
  */
 import { nextTabIndex } from "../notifications/dialogFocus";
+import { hasMountedPrompt, PROMPT_SETTLED_EVENT } from "./parts/prompts";
 
 const CONTROLS =
   'button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),a[href],[tabindex]:not([tabindex="-1"])';
@@ -55,7 +56,7 @@ export function mountDrawerModal(root: ShadowRoot, layer: HTMLElement, panel: HT
   const inScope = (el: Element | null): boolean => el !== null && (panel.contains(el) || (toasts()?.contains(el) ?? false));
 
   function onKeydown(event: KeyboardEvent): void {
-    if (!active) return;
+    if (!active || hasMountedPrompt()) return;
     const current = root.activeElement;
     if (!inScope(current)) return;
     if (event.key === "Escape") {
@@ -97,16 +98,24 @@ export function mountDrawerModal(root: ShadowRoot, layer: HTMLElement, panel: HT
 
   /** Focus that lands on a page element goes back into the panel. Focus inside the host's own layer is judged by `onLayerFocus`. */
   function onPageFocus(event: FocusEvent): void {
-    if (event.target !== root.host) pullBack();
+    if (!hasMountedPrompt() && event.target !== root.host) pullBack();
   }
 
   /** Inside the layer: the panel and its toasts are remembered; the launcher under the scrim is sent back; a prompt above the panel keeps focus. */
   function onLayerFocus(event: FocusEvent): void {
-    if (pulling) return;
+    if (pulling || hasMountedPrompt()) return;
     const target = event.target as HTMLElement;
     if (inScope(target)) lastInside = target;
     else if (target.matches(".button")) pullBack();
   }
+
+  // A delayed panel has no prior focused control for the prompt to restore. Claim focus once the prompt settles.
+  function onPromptSettled(): void {
+    queueMicrotask(() => {
+      if (active && !hasMountedPrompt() && !inScope(root.activeElement)) pullBack();
+    });
+  }
+  layer.addEventListener(PROMPT_SETTLED_EVENT, onPromptSettled);
 
   layer.addEventListener("keydown", onKeydown);
 
@@ -147,6 +156,7 @@ export function mountDrawerModal(root: ShadowRoot, layer: HTMLElement, panel: HT
     dispose() {
       hold(false);
       layer.removeEventListener("keydown", onKeydown);
+      layer.removeEventListener(PROMPT_SETTLED_EVENT, onPromptSettled);
       scrim.remove();
     },
   };
