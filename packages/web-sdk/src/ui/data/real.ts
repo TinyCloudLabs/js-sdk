@@ -313,6 +313,7 @@ export function createRealPanelData(
       if (run !== epoch) return { ok: false, code: "stale" };
       if (before.ok && before.data.status === "revoked") return { ok: false, code: "not-revocable" };
       const res = await host.delegations.revoke(cid);
+      if (run !== epoch) return { ok: false, code: "stale" };
 
       if (res.ok === false) {
         if (res.error.code !== "NOT_FOUND") return { ok: false, code: res.error.code };
@@ -321,6 +322,7 @@ export function createRealPanelData(
         snapFor("account").at = 0;
         let listed: ViewResult<DelegationPage> | undefined;
         await refresh("delegations", async () => (listed = await fetchDelegations()));
+        if (run !== epoch) return { ok: false, code: "stale" };
         const page = listed?.state === "ready" ? listed.data : undefined;
         const row = page?.rows.find((r) => r.cid === cid);
         const gone = page !== undefined && (row === undefined ? page.nextCursor === undefined : row.status === "revoked");
@@ -330,6 +332,7 @@ export function createRealPanelData(
       // Refetch after the write so the panel shows the node's state.
       snapFor("account").at = 0;
       await refresh("delegations", () => fetchDelegations());
+      if (run !== epoch) return { ok: false, code: "stale" };
       return { ok: true, cid };
     },
 
