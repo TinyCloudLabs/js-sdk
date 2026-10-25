@@ -41,6 +41,8 @@ type Entries = Parameters<TinyCloudNode['delegateTo']>[1];
 interface JoinState {
   v: 1;
   inviteId: string;
+  ownerDid: string;
+  proof: { v: 1; inviter: string; at: string };
   blob: string;
   helloText: string;
   /** `hello-unconfirmed`: a hello was already stored that could not be confirmed as ours; only a verified Welcome ends the wait. Never re-puts. */
@@ -142,6 +144,28 @@ export function readJoin(id: string): JoinState | undefined {
 }
 const writeJoin = (state: JoinState) => writeSecure(joinPath(state.inviteId), state);
 const removeJoin = (id: string) => fs.rmSync(joinPath(id), { force: true });
+
+const UNPROVEN_JOIN_MESSAGE = 'This join state cannot be verified. Remove the pending join state, then run the join again from the invitation link with --expect-inviter.';
+
+/** Only state written after inviter proof by this build may drive a resumed join. */
+function requireProvenJoin(state: unknown): asserts state is JoinState {
+  const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
+  const keys = (value: Record<string, unknown>, required: readonly string[], optional: readonly string[] = []) =>
+    required.every((key) => Object.hasOwn(value, key)) && Object.keys(value).every((key) => required.includes(key) || optional.includes(key));
+  if (!record(state)
+    || !keys(state, ['v', 'inviteId', 'ownerDid', 'proof', 'blob', 'helloText', 'stage'], ['welcomeFailure'])
+    || state.v !== 1 || typeof state.inviteId !== 'string' || !INVITE_ID.test(state.inviteId)
+    || typeof state.ownerDid !== 'string' || !isOwnerDid(state.ownerDid)
+    || typeof state.blob !== 'string' || typeof state.helloText !== 'string'
+    || !['hello-ready', 'hello-sent', 'hello-unconfirmed'].includes(state.stage as string)
+    || (Object.hasOwn(state, 'welcomeFailure') && typeof state.welcomeFailure !== 'string')
+    || !record(state.proof) || !keys(state.proof, ['v', 'inviter', 'at'])
+    || state.proof.v !== 1 || state.proof.inviter !== state.ownerDid
+    || typeof state.proof.at !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(state.proof.at)
+    || Number.isNaN(Date.parse(state.proof.at)) || new Date(state.proof.at).toISOString() !== state.proof.at) {
+    fail('join-state-unproven', UNPROVEN_JOIN_MESSAGE);
+  }
+}
 
 /** Join state files by NAME: regular files called `<invite-id>.json`. A symlink or any other name is skipped. */
 function joinFiles(): { id: string; file: string }[] {
@@ -463,6 +487,8 @@ export async function joinStart(
     state = {
       v: 1,
       inviteId: blob.inviteId,
+      ownerDid: blob.artifactA.from.owner,
+      proof: { v: 1, inviter: blob.artifactA.from.owner, at: new Date(now).toISOString() },
       blob: blobText,
       helloText: buildHello({
         inviteId: blob.inviteId,
@@ -484,9 +510,9 @@ export async function joinStart(
   await driveJoin(profile, node, blob, state);
 }
 
-async function joinResume(args: ParsedArgs): Promise<void> {
+export async function joinResume(args: ParsedArgs, deps: { ctx: typeof ctx; io?: JoinIO } = { ctx }): Promise<void> {
   const usage = `Usage: ${cmd('join --resume [invite-id]')}`;
-  const { profile, node } = await ctx();
+  const { profile, node } = await deps.ctx();
   const given = args.positional[0];
   let state: JoinState;
   if (given !== undefined) {
@@ -497,10 +523,12 @@ async function joinResume(args: ParsedArgs): Promise<void> {
     if (pending.length > 1) fail('usage', `Several pending joins (${pending.map((s) => s.inviteId).join(', ')}); pass one invite id.`);
     state = pending[0];
   }
+  requireProvenJoin(state);
   const blob = resumeBlob(state);
+  if (!ownerMatches(state.ownerDid, blob.artifactA.from.owner)) fail('join-state-unproven', UNPROVEN_JOIN_MESSAGE);
   checkBlob(profile, blob);
-  await sendHello(blob, state);
-  await driveJoin(profile, node, blob, state);
+  await sendHello(blob, state, deps.io);
+  await driveJoin(profile, node, blob, state, deps.io);
 }
 
 let wasm: NodeWasmBindings | undefined;

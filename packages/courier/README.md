@@ -207,6 +207,7 @@ tc courier join --resume
 - `join` sends a hello and waits for the owner's reply. If none arrives in
   about 10 minutes it prints the resume command and exits. `join --resume`
   continues a pending join without sending a second hello.
+  Pending joins from older builds without an inviter proof marker cannot resume; remove their join state and run the join again from the invitation link with `--expect-inviter`.
 - If a hello is already stored for the invite and it is not the one this
   machine wrote, or cannot be read back, `join` does not write over it. It
   keeps polling `out/welcome.json` and pairs only if the Welcome is addressed to
