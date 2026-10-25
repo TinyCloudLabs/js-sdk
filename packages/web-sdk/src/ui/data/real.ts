@@ -307,16 +307,25 @@ export function createRealPanelData(
     },
 
     async revoke(cid: string): Promise<RevokeOutcome> {
-      // The node is the arbiter: check the current status before acting.
+      // Status can answer NOT_FOUND for authorization reasons; only an explicit revoked answer ends the grant.
       const run = epoch;
       const before = await host.delegations.status(cid);
       if (run !== epoch) return { ok: false, code: "stale" };
-      if (before.ok === false) return { ok: false, code: before.error.code };
-      if (before.data.status !== "active") {
-        return { ok: false, code: "not-revocable" };
-      }
+      if (before.ok && before.data.status === "revoked") return { ok: false, code: "not-revocable" };
       const res = await host.delegations.revoke(cid);
-      if (res.ok === false) return { ok: false, code: res.error.code };
+
+      if (res.ok === false) {
+        if (res.error.code !== "NOT_FOUND") return { ok: false, code: res.error.code };
+        // Revoke found nothing while the list may still show the grant: it counts as ended only when a fresh
+        // list no longer holds it (or holds it as revoked). A failed or partial re-read is a plain failure.
+        snapFor("account").at = 0;
+        let listed: ViewResult<DelegationPage> | undefined;
+        await refresh("delegations", async () => (listed = await fetchDelegations()));
+        const page = listed?.state === "ready" ? listed.data : undefined;
+        const row = page?.rows.find((r) => r.cid === cid);
+        const gone = page !== undefined && (row === undefined ? page.nextCursor === undefined : row.status === "revoked");
+        return { ok: false, code: gone ? "NOT_FOUND" : "REVOCATION_FAILED" };
+      }
 
       // Refetch after the write so the panel shows the node's state.
       snapFor("account").at = 0;
