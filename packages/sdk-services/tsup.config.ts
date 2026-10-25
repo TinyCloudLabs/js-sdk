@@ -17,6 +17,8 @@ export default defineConfig({
     "kv/replication/grantPolicy": "src/kv/replication/grantPolicy.ts",
     "sql/index": "src/sql/index.ts",
     "encryption/index": "src/encryption/index.ts",
+    "encryption/resource": "src/encryption/resource.ts",
+    "encryption/named-keys": "src/encryption/namedKeys.ts",
     "internal/decrypt-transport-response-error":
       "src/encryption/DecryptTransportResponseError.ts",
   },

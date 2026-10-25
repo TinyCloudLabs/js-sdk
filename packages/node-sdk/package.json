@@ -19,6 +19,16 @@
       "import": "./dist/core.js",
       "require": "./dist/core.cjs"
     },
+    "./encryption-keys": {
+      "import": {
+        "types": "./dist/encryption-keys.d.ts",
+        "default": "./dist/encryption-keys.js"
+      },
+      "require": {
+        "types": "./dist/encryption-keys.d.cts",
+        "default": "./dist/encryption-keys.cjs"
+      }
+    },
     "./credential-pending-store": {
       "types": "./dist/credential-pending-store.d.ts",
       "import": "./dist/credential-pending-store.js",

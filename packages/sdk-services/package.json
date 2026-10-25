@@ -111,6 +111,26 @@
       "import": "./dist/encryption/index.js",
       "require": "./dist/encryption/index.cjs"
     },
+    "./encryption/resource": {
+      "import": {
+        "types": "./dist/encryption/resource.d.ts",
+        "default": "./dist/encryption/resource.js"
+      },
+      "require": {
+        "types": "./dist/encryption/resource.d.cts",
+        "default": "./dist/encryption/resource.cjs"
+      }
+    },
+    "./encryption/named-keys": {
+      "import": {
+        "types": "./dist/encryption/named-keys.d.ts",
+        "default": "./dist/encryption/named-keys.js"
+      },
+      "require": {
+        "types": "./dist/encryption/named-keys.d.cts",
+        "default": "./dist/encryption/named-keys.cjs"
+      }
+    },
     "./internal/decrypt-transport-response-error": {
       "types": "./dist/internal/decrypt-transport-response-error.d.cts",
       "import": "./dist/internal/decrypt-transport-response-error.cjs",
@@ -136,6 +156,12 @@
       ],
       "kv/replication/grantPolicy": [
         "dist/kv/replication/grantPolicy.d.ts"
+      ],
+      "encryption/resource": [
+        "dist/encryption/resource.d.ts"
+      ],
+      "encryption/named-keys": [
+        "dist/encryption/named-keys.d.ts"
       ],
       "telemetry/requestLog": [
         "dist/telemetry/requestLog.d.ts"
