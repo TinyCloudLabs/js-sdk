@@ -71,3 +71,9 @@ export async function assertNodeSupportsNamedKeys(host: string, fetchImpl: typeo
     );
   }
 }
+
+export function partialKeysGrantError(): CLIError {
+  return new CLIError("KEYS_PARTIAL_GRANT",
+    "Named keys need both permissions (create and use), but only one was approved, so this sign-in wasn't saved. Sign in again and approve both.",
+    ExitCode.PERMISSION_DENIED);
+}

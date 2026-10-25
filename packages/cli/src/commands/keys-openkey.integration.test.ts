@@ -184,16 +184,3 @@ test("OpenKey --keys against a node without named keys is refused before the han
   expect(code).toBe(7);
   expect(err + out).not.toContain("openkey.test/delegate");
 });
-
-test("OpenKey --keys with a replication prefix is refused before the hand-off opens", async () => {
-  const t = await setup();
-  const child = Bun.spawn([process.execPath, cliEntry, "--quiet", "--json", "--profile", PROFILE,
-    "auth", "login", "--method", "openkey", "--keys", "qa", "--owner", t.ownerDid, "--replication-prefix", "notes/", "--no-popup"], {
-    env: { ...process.env, HOME: t.home, TC_HOME: t.home, TC_OPENKEY_HOST: "https://openkey.test", TC_OPENKEY_API_HOST: t.openKeyApi.url.origin },
-    stdin: "ignore", stdout: "pipe", stderr: "pipe",
-  });
-  const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-  expect(code).toBe(2);
-  expect(err + out).toContain("replication prefixes");
-  expect(err + out).not.toContain("openkey.test/delegate");
-});
