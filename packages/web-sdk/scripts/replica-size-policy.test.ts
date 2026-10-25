@@ -24,6 +24,7 @@ import { approvedTc1855ManifestLimitGuardRatchet, validateTc1855ManifestLimitGua
 import { approvedTc1488SiweDomainUriRatchet, validateTc1488SiweDomainUriRatchetTransition, type Tc1488SiweDomainUriRatchet } from "./replica-size-policy";
 import { approvedTc1737ShortLinkLazyChunkRatchet, validateTc1737ShortLinkLazyChunkRatchetTransition, type Tc1737ShortLinkLazyChunkRatchet } from "./replica-size-policy";
 import { approvedTc1910SigningConsistencyRatchet, validateTc1910SigningConsistencyRatchetTransition, type Tc1910SigningConsistencyRatchet } from "./replica-size-policy";
+import { approvedTc848SettingsPanelRatchet, validateTc848SettingsPanelRatchetTransition, type Tc848SettingsPanelRatchet } from "./replica-size-policy";
 import { activeRootCeiling, approvedLedgerRows, rootCeilingFor, rootCeilings } from "./replica-size-policy";
 import { approvedTc1443Ratchet, approvedTc1443bRatchet, approvedTc1448Ratchet, approvedTc1466Ratchet, validateTc1443RatchetTransition, validateTc1443bRatchetTransition, validateTc1448RatchetTransition, validateTc1466RatchetTransition, type Tc1443Ratchet, type Tc1443bRatchet, type Tc1448Ratchet, type Tc1466Ratchet } from "./replica-size-policy";
 import { ancestryPins, assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedHardeningRatchet, approvedLogoutRatchet, approvedTc1413Ratchet, approvedTc1424Ratchet, approvedTc1432Ratchet, approvedTc1436Ratchet, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, landingCommit, pinLandedOn, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateLogoutRatchetTransition, validateMasterMergeResolutionTransition, validateTc1413RatchetTransition, validateTc1424RatchetTransition, validateTc1432RatchetTransition, validateTc1436RatchetTransition, type HardeningRatchet, type Ledger, type LogoutRatchet, type MasterMergeResolution, type Tc1413Ratchet, type Tc1424Ratchet, type Tc1432Ratchet, type Tc1436Ratchet } from "./replica-size-policy";
@@ -2758,6 +2759,65 @@ describe("invocation signing consistency (#721, TC-1910) root ceiling ratchet", 
     changed.root.ceiling["index.cjs"]++;
     expect(() => validateTc1910SigningConsistencyRatchetTransition(undefined, changed)).toThrow();
     expect(() => validateTc1910SigningConsistencyRatchetTransition(row(), undefined)).toThrow();
+  });
+});
+
+describe("settings panel launcher, host and toasts (#731, TC-848) root ceiling ratchet", () => {
+  const row = () => structuredClone(approvedTc848SettingsPanelRatchet);
+
+  it("carries the index.mjs ceiling, sets index.cjs to the exact canonical CI bytes, and carries every other ceiling", () => {
+    expect(() => validateLedger(current)).not.toThrow();
+    expect(JSON.stringify(current.tc848SettingsPanelRatchet)).toBe(JSON.stringify(approvedTc848SettingsPanelRatchet));
+    expect(row().root.delta).toEqual({ "index.mjs": 1669, "index.cjs": 828 });
+    expect(row().root.ceiling).toEqual({ "index.mjs": 1464178, "index.cjs": 1406007 });
+    expect(row().reason).toContain("panel eager launcher");
+    for (const format of ["index.mjs", "index.cjs"] as const) {
+      expect(row().root.ceiling[format]).toBe(approvedTc1910SigningConsistencyRatchet.root.ceiling[format] + row().root.delta[format]);
+    }
+    expect(row().firstImport).toEqual({ ...approvedTc1910SigningConsistencyRatchet.firstImport, delta: { "replica.mjs": 0, "replica.cjs": 0 } });
+    expect(row().activation).toEqual({ ...approvedTc1910SigningConsistencyRatchet.activation, delta: { "activation.mjs": 0, "activation.cjs": 0 } });
+    expect(row().worker).toEqual({ delta: 0, ceiling: approvedTc1910SigningConsistencyRatchet.worker.ceiling });
+    expect(row().base).toBe("b90a608ea0b079073845e0a0995f0c55e529d3af");
+    expect(row().sourceCommits).toEqual(["5d8535af1444d636029eb0733229006c2249b444"]);
+    expect(row().canonicalCI.run).toBe("https://github.com/TinyCloudLabs/js-sdk/actions/runs/40220911012");
+    expect(row().canonicalCI.jobs).toHaveLength(2);
+    expect(ancestryPins(current, false)).toContainEqual({
+      row: "tc848SettingsPanelRatchet", pin: row().sourceCommits.at(-1)!,
+    });
+    expect(rootCeilings(current).find((e) => e.row === "tc848SettingsPanelRatchet")).toEqual({ row: "tc848SettingsPanelRatchet", ceiling: row().root.ceiling });
+  });
+
+  it("refuses one byte of drift in any bucket, other CI provenance, or a missing signing-consistency row", () => {
+    const mutations: Array<(changed: Tc848SettingsPanelRatchet) => void> = [
+      (changed) => { changed.root.ceiling["index.mjs"]++; },
+      (changed) => { changed.root.ceiling["index.cjs"]++; },
+      (changed) => { changed.root.ceiling["index.cjs"]--; },
+      (changed) => { changed.root.delta["index.cjs"]++; },
+      (changed) => { changed.firstImport.ceiling["replica.cjs"]++; },
+      (changed) => { changed.activation.ceiling["activation.cjs"]++; },
+      (changed) => { changed.worker.ceiling--; },
+      (changed) => { changed.canonicalCI.run = "https://github.com/TinyCloudLabs/js-sdk/actions/runs/1"; },
+      (changed) => { changed.sourceCommits = ["0".repeat(40)]; },
+    ];
+    for (const mutate of mutations) {
+      const ledger = copy(current);
+      const changed = row();
+      mutate(changed);
+      ledger.tc848SettingsPanelRatchet = changed;
+      expect(() => validateLedger(ledger)).toThrow();
+    }
+    const withoutPrerequisite = copy(current);
+    delete withoutPrerequisite.tc1910SigningConsistencyRatchet;
+    expect(() => validateLedger(withoutPrerequisite)).toThrow("panel");
+  });
+
+  it("may be introduced once and never changed or removed in a later base", () => {
+    expect(() => validateTc848SettingsPanelRatchetTransition(undefined, row())).not.toThrow();
+    expect(() => validateTc848SettingsPanelRatchetTransition(row(), row())).not.toThrow();
+    const changed = row();
+    changed.root.ceiling["index.cjs"]++;
+    expect(() => validateTc848SettingsPanelRatchetTransition(undefined, changed)).toThrow();
+    expect(() => validateTc848SettingsPanelRatchetTransition(row(), undefined)).toThrow();
   });
 });
 

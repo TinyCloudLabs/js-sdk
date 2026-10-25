@@ -1638,5 +1638,55 @@
       "ceiling": 776128
     },
     "reason": "signing-consistency fix plus the approved recovery hint; smallest version that keeps every existing test; index.mjs measured 1,462,173 (ceiling carried)"
+  },
+  "tc848SettingsPanelRatchet": {
+    "label": "settings panel launcher, host and toasts (TC-848, #731): root index.mjs +1669 B, index.cjs +828 B gzip",
+    "ruling": "Approved by Naomi (exact CI bytes of run 40220911012 on 5d8535af; first import, activation and worker carried)",
+    "base": "b90a608ea0b079073845e0a0995f0c55e529d3af",
+    "sourceCommits": [
+      "5d8535af1444d636029eb0733229006c2249b444"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40220911012",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40220911012/job/121252076932",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40220911012/job/121252076746"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 1669,
+        "index.cjs": 828
+      },
+      "ceiling": {
+        "index.mjs": 1464178,
+        "index.cjs": 1406007
+      }
+    },
+    "firstImport": {
+      "delta": {
+        "replica.mjs": 0,
+        "replica.cjs": 0
+      },
+      "ceiling": {
+        "replica.mjs": 51925,
+        "replica.cjs": 67141
+      }
+    },
+    "activation": {
+      "delta": {
+        "activation.mjs": 0,
+        "activation.cjs": 0
+      },
+      "ceiling": {
+        "activation.mjs": 23117,
+        "activation.cjs": 24700
+      }
+    },
+    "worker": {
+      "delta": 0,
+      "ceiling": 776128
+    },
+    "reason": "panel eager launcher, host and toasts; both figures include gzip alignment against the inline wasm payload (TC-1985)."
   }
 }
