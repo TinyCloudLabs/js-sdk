@@ -29,6 +29,8 @@
     "@tinycloud/sdk-services-test": "21.0.1"
   },
   "changesets": [
+    "named-key-client",
+    "named-key-resource-parser",
     "storage-full-episode",
     "tc1737-links-cli",
     "tc1737-links-node-sdk",
