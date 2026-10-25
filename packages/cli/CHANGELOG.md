@@ -1,5 +1,19 @@
 # @tinycloud/cli
 
+## 1.5.0-beta.0
+
+### Minor Changes
+
+- 15080ed: `tc auth login --keys <folder>` (local-key or OpenKey sign-in) also grants named-key create and decrypt on keys below the folder, and `tc keys ensure|encrypt|decrypt` use them. Node SDK: `additionalRawAbilities` adds top-level resource abilities to the sign-in request.
+
+  Details: TC-2034
+
+### Patch Changes
+
+- Updated dependencies [15080ed]
+  - @tinycloud/node-sdk@3.8.0-beta.0
+  - @tinycloud/operations@0.7.7-beta.0
+
 ## 1.4.0
 
 ### Minor Changes
