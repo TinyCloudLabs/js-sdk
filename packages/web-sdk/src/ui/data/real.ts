@@ -22,14 +22,18 @@ const ACCOUNT_RETRY_MS = 5_000;
 
 /**
  * The account index tables are created by the first index write, so a brand-new account reads
- * "no such table". The SDK's SQL read fails that way with code SQL_ERROR (HTTP 400) and a message
- * naming the table. Only that error, for the table THIS read expects, is "not created yet": any other
- * code, any other table (`spaces_old` included) and any error that merely quotes the text stay errors.
+ * "no such table". The SDK's SQL read fails that way with code SQL_ERROR (HTTP 400) and one of two
+ * messages (SQLService handleErrorResponse, responseErrors formatServiceResponseError): for the node's
+ * plain-text body `SQL query failed: 400 - SQLite error: no such table: <table>`, for a JSON body its
+ * parsed message `SQLite error: no such table: <table>`. Only a message that STARTS with that error, for
+ * the table THIS read expects, is "not created yet". Any other code, another table (`spaces_old`
+ * included) and any error that merely quotes the text (mid-message, in a JSON body, after another
+ * prefix) stay errors.
  */
 const SQL_ERROR = "SQL_ERROR";
 const MISSING_TABLE: Record<"spaces" | "applications", RegExp> = {
-  spaces: /no such table:\s*spaces\b/i,
-  applications: /no such table:\s*applications\b/i,
+  spaces: /^(?:SQL query failed: 400 - )?SQLite error: no such table:\s*spaces\b/i,
+  applications: /^(?:SQL query failed: 400 - )?SQLite error: no such table:\s*applications\b/i,
 };
 
 /**

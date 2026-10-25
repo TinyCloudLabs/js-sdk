@@ -192,9 +192,16 @@ describe("Overview when the account read fails", () => {
     const title = name(el);
     const seen: boolean[] = [];
     const Observer = (page as unknown as { MutationObserver: typeof MutationObserver }).MutationObserver;
-    new Observer(() => seen.push(ident(el).hidden)).observe(el, { subtree: true, attributes: true, childList: true });
-    release({ state: "ready", data: { ...READY, displayName: "maya.example.eth" } });
-    await flush();
+    const observer = new Observer(() => seen.push(ident(el).hidden));
+    observer.observe(el, { subtree: true, attributes: true, childList: true });
+    try {
+      release({ state: "ready", data: { ...READY, displayName: "maya.example.eth" } });
+      await flush();
+      // Records pending mutations now, while the section is still mounted.
+      seen.push(...observer.takeRecords().map(() => ident(el).hidden));
+    } finally {
+      observer.disconnect();
+    }
     expect(name(el)).toBe(title);
     expect(title.textContent).toBe("maya.example.eth");
     expect(note(el).hidden).toBe(true);

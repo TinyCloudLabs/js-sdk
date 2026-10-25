@@ -114,6 +114,7 @@ export function registerUiClient(options: UiClientOptions): UiClientHandle {
       dismissPrompts(promptScope);
       runtime.unregister(id);
       // Aborts the client's live data source (in-flight reads, retry timer) so a detached client makes no reads.
+      // Idempotent: reset listeners only drop per-account state, so a repeat after sign-out has no visible effect.
       panel.reset();
     },
     toast(request) {

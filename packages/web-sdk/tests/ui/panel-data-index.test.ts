@@ -154,6 +154,19 @@ describe("account index not created yet", () => {
       { read: "spaces", code: "SQL_DATABASE_NOT_FOUND", message: "SQL query failed: 404 - database not found", ready: false },
       // A JSON error body: the SDK's message is the parsed body message, without the "SQL query failed" prefix.
       { read: "applications", code: "SQL_ERROR", message: "SQLite error: no such table: applications", ready: true },
+      { read: "spaces", code: "SQL_ERROR", message: "SQLite error: no such table: spaces", ready: true },
+      // The phrase must be the error itself, at the start: a 400 that only quotes it is some other failure.
+      {
+        read: "spaces",
+        code: "SQL_ERROR",
+        message: 'SQL query failed: 400 - {"error":"bad_request","detail":"upstream log included no such table: spaces"}',
+        ready: false,
+      },
+      { read: "applications", code: "SQL_ERROR", message: "Bad request: cached diagnostic no such table: applications", ready: false },
+      { read: "spaces", code: "SQL_ERROR", message: "SQL query failed: 400 - upstream said SQLite error: no such table: spaces", ready: false },
+      { read: "spaces", code: "SQL_ERROR", message: "retry later (SQLite error: no such table: spaces)", ready: false },
+      { read: "applications", code: "SQL_ERROR", message: "SQL query failed: 500 - SQLite error: no such table: applications", ready: false },
+      { read: "spaces", code: "SQL_ERROR", message: "SQL batch failed: 400 - SQLite error: no such table: spaces", ready: false },
     ];
     for (const { read, code, message, ready } of cases) {
       const f = makeFakes();
