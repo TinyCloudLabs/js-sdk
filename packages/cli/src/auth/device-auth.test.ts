@@ -116,6 +116,8 @@ function openKeyRelayStub(approve: (start: Record<string, unknown>, transactionI
   return { fetchFn, startBodies, urls, get polls() { return polls; } };
 }
 
+const fakeOpenKey = openKeyRelayStub;
+
 async function approved(start: Record<string, unknown>, transactionId: string, input: { signed: PermissionEntry[]; claimed?: PermissionEntry[]; binding?: PermissionEntry[]; shareOrigin?: string; lifetimeMs?: number; caveat?: Record<string, unknown>; primary?: boolean; space?: Record<string, unknown> }) {
   const delegation = await signedDelegation(input.signed, start.publicJwk as object, input.claimed ?? input.signed, input.lifetimeMs, input.caveat);
   // OpenKey's unsigned report that the approving key is the account's primary key, and how far it got hosting the space.
@@ -365,7 +367,7 @@ describe("OpenKey device authorization", () => {
   });
 
   test("leaves other device-start errors unchanged", async () => {
-    await expect(acquire(openKeyRelayStub(() => response({}), {
+    await expect(acquire(fakeOpenKey(() => response({}), {
       start: response({ error: "temporarily_unavailable" }, 503),
     }))).rejects.toMatchObject({
       code: "DEVICE_AUTH_FAILED",
@@ -375,8 +377,8 @@ describe("OpenKey device authorization", () => {
   });
 
   test("stops on denial or expiry instead of retrying", async () => {
-    await expect(acquire(openKeyRelayStub(() => response({ error: "access_denied" }, 400)))).rejects.toMatchObject({ code: "DEVICE_AUTH_DENIED" });
-    await expect(acquire(openKeyRelayStub(() => response({ error: "expired_token" }, 410)), { openkeyHost: "https://openkey.localhost" }))
+    await expect(acquire(fakeOpenKey(() => response({ error: "access_denied" }, 400)))).rejects.toMatchObject({ code: "DEVICE_AUTH_DENIED" });
+    await expect(acquire(fakeOpenKey(() => response({ error: "expired_token" }, 410)), { openkeyHost: "https://openkey.localhost" }))
       .rejects.toMatchObject({ code: "DEVICE_AUTH_EXPIRED" });
   });
 
@@ -605,8 +607,8 @@ describe("device login persistence", () => {
     // Explicitly replacing installs the narrowed session...
     await login(openKeyRelayStub((start, id) => approved(start, id, { signed: bearerOnly })), { replaceSession: true });
     // ...and renewing with the full manifest widens it again without the flag.
-    const changed = await login(openKeyRelayStub((start, id) => approved(start, id, { signed: requested })));
-    expect(changed.result.declined).toEqual([]);
+    const widened = await login(openKeyRelayStub((start, id) => approved(start, id, { signed: requested })));
+    expect(widened.result.declined).toEqual([]);
   });
 
   test("an approval that signs a caveat onto the same actions does not replace the unrestricted session", async () => {

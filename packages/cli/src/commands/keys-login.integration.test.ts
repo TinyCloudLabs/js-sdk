@@ -2,6 +2,8 @@ import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { extractRecapAttenuations } from "@tinycloud/sdk-core";
+import { withTinyCloudStateRoot } from "@tinycloud/operations/state";
+import { clearProfileCredentials } from "../lib/logout-pending.js";
 
 const PROFILE = "keys";
 const OWNER_KEY = "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d4b2c197a7e5e7b7";
@@ -144,18 +146,48 @@ async function setupWithNetwork(handler: (request: Request, path: string) => Res
 
 test("a local --keys login on an account whose encryption network is missing creates it once", async () => {
   let created = 0;
+  let networkExists = false;
   const t = await setupWithNetwork((request, path) => {
     if (path === "/encryption/networks" && request.method === "POST") {
       created += 1;
+      networkExists = true;
       return Response.json({ descriptor: { networkId: "urn:stub", name: "default" } }, { status: 201 });
     }
-    return undefined; // network GET answers 404: the network does not exist yet
+    if (path.startsWith("/encryption/networks/") && request.method === "GET" && networkExists) {
+      return Response.json({ descriptor: { networkId: "urn:stub", name: "default" } });
+    }
+    return undefined;
   });
   const login = await run(t.home, ["auth", "login", "--method", "local", "--keys", "qa"]);
   expect(login.exitCode, login.stderr).toBe(0);
   expect(login.stderr).not.toContain("aren't set up yet");
   expect(created).toBeGreaterThanOrEqual(1);
+  expect(created).toBe(1);
   expect((await t.readProfile()).namedKeys).toBeDefined();
+});
+
+test.each([
+  [false, 1],
+  [true, 0],
+])("a provisioned account with network present=%s issues exactly %i create request(s)", async (present, expectedCreates) => {
+  let networkExists = present;
+  let created = 0;
+  const t = await setupWithNetwork((request, path) => {
+    if (path.startsWith("/encryption/networks/") && request.method === "GET") {
+      return networkExists
+        ? Response.json({ descriptor: { networkId: "urn:stub", name: "default" } })
+        : new Response("missing", { status: 404 });
+    }
+    if (path === "/encryption/networks" && request.method === "POST") {
+      created += 1;
+      networkExists = true;
+      return Response.json({ descriptor: { networkId: "urn:stub", name: "default" } }, { status: 201 });
+    }
+    return undefined;
+  });
+  const login = await run(t.home, ["auth", "login", "--method", "local", "--keys", "qa/"]);
+  expect(login.exitCode, login.stderr).toBe(0);
+  expect(created).toBe(expectedCreates);
 });
 
 test("a local --keys login whose network cannot be created still succeeds and says the keys aren't set up yet", async () => {
@@ -166,3 +198,18 @@ test("a local --keys login whose network cannot be created still succeeds and sa
   expect(login.stderr).toContain("your encryption keys aren't set up yet");
   expect((await t.readProfile()).namedKeys).toBeDefined();
 });
+
+test("logging out a keyed profile removes its grant before encrypt reads input", async () => {
+  const t = await setup(["encryption-named-keys-v1"]);
+  const login = await run(t.home, ["auth", "login", "--method", "local", "--keys", "qa/"]);
+  expect(login.exitCode, login.stderr).toBe(0);
+  expect((await t.readProfile()).namedKeys).toBeDefined();
+
+  await withTinyCloudStateRoot(t.home, () => clearProfileCredentials(PROFILE));
+  expect((await t.readProfile()).namedKeys).toBeUndefined();
+
+  const encrypt = await run(t.home, ["keys", "encrypt", "qa/k1", "--in", join(t.home, "absent.bin")]);
+  expect(encrypt.exitCode).toBe(5);
+  expect(encrypt.stderr).toContain("KEYS_NOT_GRANTED");
+  expect(encrypt.stderr).not.toContain("ENOENT");
+}, 20_000);

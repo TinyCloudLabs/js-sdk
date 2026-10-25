@@ -478,6 +478,20 @@ function installActivationTransport(fake: FakeCloud): void {
 }
 
 describe("TC-393 bootstrap recovery matrix", () => {
+  test("reports a network created by fresh bootstrap only for that sign-in", async () => {
+    const cloud = new FakeCloud();
+    const node = makeRecoveryHarness(cloud);
+    installActivationTransport(cloud);
+
+    await bootstrap(node);
+    expect(node.freshEncryptionNetworkCreated).toBe(true);
+    expect(cloud.encryptionAssumeMissing).toEqual([true]);
+
+    await bootstrap(node);
+    expect(node.freshEncryptionNetworkCreated).toBe(false);
+    expect(cloud.encryptionAssumeMissing).toEqual([true]);
+  });
+
   for (const boundary of ceremonyFaultPoints) {
     test(`converges after commit-then-throw at ${boundary}`, async () => {
       const fake = new FakeCloud();
