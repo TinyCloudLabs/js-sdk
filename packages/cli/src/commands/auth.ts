@@ -9,7 +9,7 @@ import { createInterface } from "node:readline";
 import type { IncomingMessage } from "node:http";
 import { TinyCloudNode, grantAuthRequest, principalDidEquals, REPLICA_LOGOUT_PENDING_FILE, signedCompactUcanExpiry, type AuthDelegationArtifact, type PermissionEntry, type PortableDelegation, type RuntimeDelegationActivator, type TinyCloudSession } from "@tinycloud/node-sdk";
 import type { ProfileReplicaApprovalEntry, ProfileReplicaDeferredToken, ProfileReplicaLogoutPending, ProfileReplicaPreflight, ProfileReplicaPurge } from "@tinycloud/sdk-services/kv/replication";
-import { composeManifestRequest, extractRecapAttenuations } from "@tinycloud/sdk-core";
+import { composeManifestRequest } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
 import { namedProfilePath, profilePath } from "@tinycloud/operations/state";
 import { principalHashOf, readGateSnapshot, REPLICA_DENY_FLOOR_FILE } from "@tinycloud/replica/profile-gate";
@@ -142,7 +142,7 @@ import {
   resolveAppsAgentRequest,
 } from "../lib/apps-agent-preset.js";
 import { permissionConsentLine, signExtrasQuestion } from "../lib/consent-text.js";
-import { assertNodeSupportsNamedKeys, keyAbilitiesFor, parseKeysPrefix, partialKeysGrantError, type ProfileNamedKeys } from "../lib/named-keys.js";
+import { assertNodeSupportsNamedKeys, keyAbilitiesFor, namedKeysGrantIn, parseKeysPrefix, partialKeysGrantError, withVerifiedNamedKeys, type ProfileNamedKeys } from "../lib/named-keys.js";
 import { buildReplicationLoginRequest, type ReplicationLoginOptions } from "../auth/replication-login.js";
 
 /** The one function dependency used by owner OpenKey permission acquisition. */
@@ -2428,8 +2428,9 @@ async function rotateAuthKey(
     }
     await ProfileManager.setKey(profileName, jwk);
     await ProfileManager.clearSession(profileName);
+    const { namedKeys: _rotated, ...currentFields } = current;
     await ProfileManager.setProfile(profileName, {
-      ...current,
+      ...currentFields,
       host,
       did,
       sessionDid: did,
@@ -2501,12 +2502,12 @@ async function persistCurrentLocalSession(
       signature: session.signature,
       ...(replicaStamp === undefined ? {} : { replicaStamp }),
     });
-    if (profile.sessionDid !== session.verificationMethod || profile.spaceId !== session.spaceId) {
-      await ProfileManager.updateProfile(profileName, (current) => ({
+    if (profile.sessionDid !== session.verificationMethod || profile.spaceId !== session.spaceId || profile.namedKeys !== undefined) {
+      await ProfileManager.updateProfile(profileName, (current) => withVerifiedNamedKeys({
         ...current,
         sessionDid: session.verificationMethod,
         spaceId: session.spaceId,
-      }));
+      }, session));
     }
   });
 }
@@ -2619,6 +2620,7 @@ async function handleLocalAuth(
   if (namedKeys === undefined) delete (updatedProfile as ProfileConfig).namedKeys;
 
   await commitLogin(profileName, snapshot, { key, session, profile: updatedProfile });
+  if (namedKeys !== undefined && sessionResult.networkReady === false) process.stderr.write(KEYS_FOLDER_NOT_READY);
 
   if (options.emitOutput ?? true) {
     outputJson({
@@ -2786,7 +2788,7 @@ async function refreshPreparedOpenKeySession(params: {
     const verified = verifyScopedLogin({ ...active }, key, preparedDid, permissions, {
       expectedOwner: owner, expiry, ...(namedKeys === undefined ? {} : { namedKeyRow: namedKeys }),
     });
-    const grant = namedKeys === undefined ? "none" : namedKeysGrantOf(active.siwe, namedKeys);
+    const grant = namedKeys === undefined ? "none" : namedKeysGrantIn(active.siwe, namedKeys);
     if (grant === "partial") throw partialKeysGrantError();
     const session = {
       ...verified.session,
@@ -2833,28 +2835,20 @@ async function refreshPreparedOpenKeySession(params: {
   }
 }
 
-/** What the signed ReCap says about the named-key folder that was requested. */
-function namedKeysGrantOf(siwe: string | undefined, keys: ProfileNamedKeys): "both" | "none" | "partial" {
-  const recap = siwe === undefined ? {} : extractRecapAttenuations(siwe) as Record<string, Record<string, unknown>>;
-  const row = recap[keys.resource] ?? {};
-  const wanted = keyAbilitiesFor(keys)[keys.resource]!;
-  const granted = wanted.filter((ability) => ability in row);
-  if (granted.length === 0) return "none";
-  return granted.length === wanted.length && Object.keys(row).length === wanted.length ? "both" : "partial";
-}
-
 const KEYS_APPROVAL_NOTE = (folder: string): string =>
   `On the OpenKey page, the row that mentions tinycloud.encryption lets this profile create and use keys in the folder "${folder}/". Keep every row ticked. To sign in without keys, untick that whole row and nothing else; any other change makes OpenKey refuse the sign-in.\n`;
 
 const keysNotGrantedAfterLogin = (profileName: string): string =>
   `You're signed in, but without named keys: the tinycloud.encryption permission wasn't approved. To add them, sign in again with \`${CLI_NAME} --profile ${profileName} auth login --keys <folder>\` and leave the row that mentions tinycloud.encryption ticked.\n`;
 
-/** Create the default encryption network when the account has none yet; a failure only means the folder isn't ready. */
+const KEYS_FOLDER_NOT_READY = `You're signed in, but your encryption keys aren't set up yet. Try \`${CLI_NAME} keys ensure <folder>/<name>\` again in a minute.\n`;
+
+/** Create the default encryption network when the account has none yet; a failure only means the keys aren't ready. */
 async function readyNamedKeysNetwork(node: TinyCloudNode): Promise<void> {
   try {
     await node.ensureEncryptionNetwork();
   } catch {
-    process.stderr.write(`You're signed in, but your encryption keys aren't set up yet. Try \`${CLI_NAME} keys ensure <folder>/<name>\` again in a minute.\n`);
+    process.stderr.write(KEYS_FOLDER_NOT_READY);
   }
 }
 
@@ -2919,7 +2913,7 @@ async function refreshPreparedKeysSession(params: {
     }
     const key = active.jwk;
     const signed = verifySignedSession({ ...active }, key, preparedDid, { expectedOwner: owner, expiry });
-    const grant = namedKeysGrantOf(active.siwe, namedKeys);
+    const grant = namedKeysGrantIn(active.siwe, namedKeys);
     if (grant === "partial") throw partialKeysGrantError();
     const session = { ...withVerifiedAuthority({ ...active, jwk: key }, signed), authMethod: "openkey" };
     const updatedProfile: ProfileConfig = {

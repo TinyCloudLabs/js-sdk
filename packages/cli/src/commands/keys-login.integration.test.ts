@@ -1,12 +1,11 @@
 import { afterEach, expect, test } from "bun:test";
-import { access, mkdtemp, readFile, rm } from "node:fs/promises";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { PrivateKeySigner } from "@tinycloud/node-sdk";
 import { extractRecapAttenuations } from "@tinycloud/sdk-core";
-import { profileConfigPath, sessionPath, withTinyCloudStateRoot, writeJsonAtomic } from "@tinycloud/operations/state";
 
 const PROFILE = "keys";
 const OWNER_KEY = "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d4b2c197a7e5e7b7";
+const OWNER_ADDRESS = "0xf0637362cc9723AaB6Db526a46772E4473097f2C";
 const KEY_CREATE = "tinycloud.encryption/key.create";
 const DECRYPT = "tinycloud.encryption/decrypt";
 const cliEntry = join(import.meta.dir, "../index.ts");
@@ -15,7 +14,7 @@ const servers: Array<{ stop(closeActiveConnections?: boolean): void }> = [];
 
 afterEach(async () => {
   for (const server of servers.splice(0)) server.stop(true);
-  await Promise.all(homes.splice(0).map((home) => rm(home, { recursive: true, force: true })));
+  for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true });
 });
 
 async function run(home: string, args: string[]): Promise<{ stdout: string; stderr: string; exitCode: number }> {
@@ -29,7 +28,7 @@ async function run(home: string, args: string[]): Promise<{ stdout: string; stde
 }
 
 async function setup(features: string[]) {
-  const home = await mkdtemp("/var/tmp/tc2034-keys-");
+  const home = mkdtempSync("/var/tmp/tc2034-keys-");
   homes.push(home);
   const requests: string[] = [];
   const node = Bun.serve({
@@ -43,27 +42,26 @@ async function setup(features: string[]) {
     },
   });
   servers.push(node);
-  const address = await new PrivateKeySigner(OWNER_KEY).getAddress();
+  const address = OWNER_ADDRESS;
   const ownerDid = `did:pkh:eip155:1:${address}`;
-  const sessionFile = await withTinyCloudStateRoot(home, async () => {
-    await writeJsonAtomic(profileConfigPath(PROFILE), {
+  const profileDir = join(home, ".tinycloud", "profiles", PROFILE);
+  mkdirSync(profileDir, { recursive: true });
+  writeFileSync(join(profileDir, "profile.json"), JSON.stringify({
       name: PROFILE, host: node.url.origin, chainId: 1, spaceName: "default", did: ownerDid,
       ownerDid, privateKey: OWNER_KEY, authMethod: "local", posture: "local-owner-key",
       createdAt: "2026-10-01T00:00:00.000Z",
-    });
-    return sessionPath(PROFILE);
-  });
-  const readProfile = () => withTinyCloudStateRoot(home, async () =>
-    JSON.parse(await readFile(profileConfigPath(PROFILE), "utf8")) as Record<string, unknown>);
+    }));
+  const sessionFile = join(profileDir, "session.json");
+  const readProfile = async () => JSON.parse(readFileSync(join(profileDir, "profile.json"), "utf8")) as Record<string, unknown>;
   return { home, requests, address, ownerDid, sessionFile, readProfile };
 }
 
 async function recapOf(sessionFile: string): Promise<Record<string, Record<string, unknown>>> {
-  const session = JSON.parse(await readFile(sessionFile, "utf8"));
+  const session = JSON.parse(readFileSync(sessionFile, "utf8"));
   return extractRecapAttenuations(session.siwe) as Record<string, Record<string, unknown>>;
 }
 
-const exists = (path: string) => access(path).then(() => true, () => false);
+const exists = async (path: string) => existsSync(path);
 
 test("--keys adds exactly the two abilities on the exact prefix URN and changes nothing else in the ReCap", async () => {
   const plain = await setup(["encryption-named-keys-v1"]);
@@ -120,4 +118,51 @@ test.each([
   expect(login.exitCode).toBe(2);
   expect(t.requests).toEqual([]);
   expect(await exists(t.sessionFile)).toBe(false);
+});
+
+/** A node whose encryption-network routes the test controls. */
+async function setupWithNetwork(handler: (request: Request, path: string) => Response | undefined) {
+  const t = await setup(["encryption-named-keys-v1"]);
+  t.requests.length = 0;
+  servers.pop()!.stop(true);
+  const node = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      const path = new URL(request.url).pathname;
+      t.requests.push(`${request.method} ${path}`);
+      if (path === "/info") return Response.json({ protocol: 1, version: "1.0.0", nodeId: "did:key:z6MkStubNode", features: ["encryption-named-keys-v1"] });
+      if (path === "/delegate" && request.method === "POST") return Response.json({ activated: [], skipped: [] });
+      return handler(request, path) ?? new Response("Unsupported stub node request", { status: 404 });
+    },
+  });
+  servers.push(node);
+  const profileFile = join(t.home, ".tinycloud", "profiles", PROFILE, "profile.json");
+  const profile = JSON.parse(readFileSync(profileFile, "utf8"));
+  writeFileSync(profileFile, JSON.stringify({ ...profile, host: node.url.origin }));
+  return t;
+}
+
+test("a local --keys login on an account whose encryption network is missing creates it once", async () => {
+  let created = 0;
+  const t = await setupWithNetwork((request, path) => {
+    if (path === "/encryption/networks" && request.method === "POST") {
+      created += 1;
+      return Response.json({ descriptor: { networkId: "urn:stub", name: "default" } }, { status: 201 });
+    }
+    return undefined; // network GET answers 404: the network does not exist yet
+  });
+  const login = await run(t.home, ["auth", "login", "--method", "local", "--keys", "qa"]);
+  expect(login.exitCode, login.stderr).toBe(0);
+  expect(login.stderr).not.toContain("aren't set up yet");
+  expect(created).toBeGreaterThanOrEqual(1);
+  expect((await t.readProfile()).namedKeys).toBeDefined();
+});
+
+test("a local --keys login whose network cannot be created still succeeds and says the keys aren't set up yet", async () => {
+  const t = await setupWithNetwork((request, path) =>
+    path === "/encryption/networks" && request.method === "POST" ? new Response("down", { status: 500 }) : undefined);
+  const login = await run(t.home, ["auth", "login", "--method", "local", "--keys", "qa"]);
+  expect(login.exitCode, login.stderr).toBe(0);
+  expect(login.stderr).toContain("your encryption keys aren't set up yet");
+  expect((await t.readProfile()).namedKeys).toBeDefined();
 });

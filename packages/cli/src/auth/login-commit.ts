@@ -1,4 +1,5 @@
 import { lstat } from "node:fs/promises";
+import { withVerifiedNamedKeys } from "../lib/named-keys.js";
 import { join } from "node:path";
 import { REPLICA_LOGOUT_PENDING_FILE, type PermissionEntry } from "@tinycloud/node-sdk";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
@@ -198,13 +199,15 @@ export async function commitLogin(profileName: string, snapshot: ProfileSnapshot
       assertSessionReplaceable(profileName, current, commit.approved.ownerDid, commit.approved.scope, newExpiresAt);
     }
     try {
+      // A key folder stays on the profile only when this session's signed ReCap carries it.
+      const profile = withVerifiedNamedKeys(commit.profile, commit.session);
       await ProfileManager.setKey(profileName, commit.key);
       await ProfileManager.setSession(profileName, commit.session);
       if (current.profile?.authSignedOut === true || commit.durable === true) {
         await syncAuthCredentialFiles(profilePath(profileName));
-        await ProfileManager.setProfileDurable(profileName, { ...commit.profile, authSignedOut: false });
+        await ProfileManager.setProfileDurable(profileName, { ...profile, authSignedOut: false });
       } else {
-        await ProfileManager.setProfile(profileName, commit.profile);
+        await ProfileManager.setProfile(profileName, profile);
       }
     } catch (error) {
       const failures = await restore(profileName, current);

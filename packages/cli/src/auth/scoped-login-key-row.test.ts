@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { NodeWasmBindings, PrivateKeySigner, type PermissionEntry } from "@tinycloud/node-sdk";
 import { verifyScopedLogin } from "./scoped-login.js";
+import { withRecapCaveat } from "./test-support/recap-caveat.js";
 import { keyAbilitiesFor, parseKeysPrefix, type ProfileNamedKeys } from "../lib/named-keys.js";
 
 const wasm = new NodeWasmBindings();
@@ -18,7 +19,7 @@ const OTHER = "did:pkh:eip155:1:0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
 const qa = parseKeysPrefix("qa/", ownerDid);
 
 /** A real owner-signed session for kv `example/` plus the given raw encryption rows. */
-async function proof(rawAbilities: Record<string, string[]>) {
+async function proof(rawAbilities: Record<string, string[]>, caveat?: Record<string, unknown>) {
   const now = Date.now();
   const prepared = wasm.prepareSession({
     abilities: { kv: { "example/": ["tinycloud.kv/get"] } },
@@ -27,10 +28,11 @@ async function proof(rawAbilities: Record<string, string[]>) {
     issuedAt: new Date(now - 60_000).toISOString(),
     expirationTime: new Date(now + 3600_000).toISOString(),
   });
-  const signature = await signer.signMessage(prepared.siwe);
-  const session = wasm.completeSessionSetup({ ...prepared, signature });
+  const siwe = caveat === undefined ? prepared.siwe : withRecapCaveat(prepared.siwe, caveat, "/qa/");
+  const signature = await signer.signMessage(siwe);
+  const session = wasm.completeSessionSetup({ ...prepared, siwe, signature });
   return { ...session, jwk: { kty: key.kty, crv: key.crv, x: key.x }, verificationMethod: did,
-    address, chainId: 1, spaceId, ownerDid, siwe: prepared.siwe, signature };
+    address, chainId: 1, spaceId, ownerDid, siwe, signature };
 }
 
 const verify = async (rows: Record<string, string[]>, namedKeyRow?: ProfileNamedKeys) =>
@@ -59,6 +61,12 @@ describe("a signed grant carrying the requested named-key folder row", () => {
   test("is refused with an extra ability", async () => {
     await expect(verify({ [qa.resource]: [CREATE, DECRYPT, "tinycloud.encryption/key.read"] }, qa))
       .rejects.toMatchObject({ code: "OPENKEY_SCOPE_MISMATCH" });
+  });
+
+  test("is refused when the requested folder row has a caveat", async () => {
+    const signed = await proof(keyAbilitiesFor(qa), { limit: 1 });
+    expect(() => verifyScopedLogin(signed, key, did, requested, { expectedOwner: ownerDid, namedKeyRow: qa }))
+      .toThrow(expect.objectContaining({ code: "OPENKEY_SCOPE_MISMATCH" }));
   });
 
   test.each([[CREATE], [DECRYPT]])("is refused as a partial grant (%s only)", async (only) => {

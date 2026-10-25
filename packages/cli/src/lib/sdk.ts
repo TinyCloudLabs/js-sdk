@@ -399,7 +399,9 @@ export async function bootstrapDelegatedSession(
       jwk,
       verificationMethod: sessionDid,
     };
-    const profile = { ...previousProfile, sessionDid, spaceId: delegation.spaceId };
+    // A delegated session never carries named-key authority.
+    const { namedKeys: _namedKeys, ...previousFields } = previousProfile;
+    const profile = { ...previousFields, sessionDid, spaceId: delegation.spaceId };
     try {
       await ProfileManager.setSession(ctx.profile, session);
       await ProfileManager.setProfile(ctx.profile, profile);

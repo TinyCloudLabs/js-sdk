@@ -7,6 +7,7 @@ import { ExitCode } from "../config/constants.js";
 import { outputJson, withSpinner } from "../output/formatter.js";
 import { CLIError, handleError } from "../output/errors.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
+import type { CLIContext, ProfileConfig } from "../config/types.js";
 import { keyPathInPrefix, namedKeysNetworkId } from "../lib/named-keys.js";
 import { validatePrivateOutput, writePrivateOutput } from "../lib/private-output.js";
 
@@ -71,8 +72,8 @@ async function withNetworkSetup<T>(node: { ensureEncryptionNetwork(): Promise<un
 }
 
 /** The prefix this profile's session was signed for, or a refusal. */
-async function grantedPrefix(profileName: string): Promise<string> {
-  const profile = await ProfileManager.getProfile(profileName);
+async function grantedPrefix(deps: KeysCommandDeps, profileName: string): Promise<string> {
+  const profile = await deps.getProfile(profileName);
   const keys = profile.namedKeys;
   if (keys === undefined) {
     throw new CLIError(
@@ -108,7 +109,27 @@ function parseEnvelope(bytes: Buffer): NamedKeyEnvelope {
   return envelope as NamedKeyEnvelope;
 }
 
-export function registerKeysCommand(program: Command): void {
+/** What the key commands reach outside themselves; tests pass stand-ins. */
+export interface KeysCommandDeps {
+  resolveContext(options: Record<string, unknown>): Promise<CLIContext>;
+  getProfile(name: string): Promise<ProfileConfig>;
+  authenticate(ctx: CLIContext): Promise<Awaited<ReturnType<typeof ensureAuthenticated>>>;
+  createClient: typeof createNamedKeyClient;
+  outputJson(payload: unknown): void;
+  handleError(error: unknown): void | Promise<void>;
+}
+
+const defaultDeps: KeysCommandDeps = {
+  resolveContext: (options) => ProfileManager.resolveContext(options),
+  getProfile: (name) => ProfileManager.getProfile(name),
+  authenticate: (ctx) => ensureAuthenticated(ctx),
+  createClient: createNamedKeyClient,
+  outputJson,
+  handleError,
+};
+
+export function registerKeysCommand(program: Command, deps: KeysCommandDeps = defaultDeps): void {
+  const { outputJson, handleError } = deps;
   const keys = program.command("keys").description(`Named encryption keys (sign in with \`${CLI_NAME} auth login --keys <folder>\` first)`);
 
   keys
@@ -116,16 +137,16 @@ export function registerKeysCommand(program: Command): void {
     .description("Create the named key if it doesn't exist yet, then show it")
     .action(async (path: string, _options, cmd) => {
       try {
-        const ctx = await ProfileManager.resolveContext(cmd.optsWithGlobals());
-        assertInGrantedPrefix(await grantedPrefix(ctx.profile), path, ctx.profile);
-        const node = await ensureAuthenticated(ctx);
-        const client = createNamedKeyClient(node);
+        const ctx = await deps.resolveContext(cmd.optsWithGlobals());
+        assertInGrantedPrefix(await grantedPrefix(deps, ctx.profile), path, ctx.profile);
+        const node = await deps.authenticate(ctx);
+        const client = deps.createClient(node);
         const descriptor = await withSpinner(`Getting or creating key ${path}…`, () => withNetworkSetup(node, () => client.ensureKey(path))).catch((error) => {
           throw cliErrorFromNamedKey(error, "ensure", path);
         });
         outputJson({ ...descriptor });
       } catch (error) {
-        return handleError(error);
+        await handleError(error);
       }
     });
 
@@ -136,12 +157,12 @@ export function registerKeysCommand(program: Command): void {
     .option("--out <file>", "Write the envelope to a file (default: standard output)")
     .action(async (path: string, options, cmd) => {
       try {
-        const ctx = await ProfileManager.resolveContext(cmd.optsWithGlobals());
-        assertInGrantedPrefix(await grantedPrefix(ctx.profile), path, ctx.profile);
+        const ctx = await deps.resolveContext(cmd.optsWithGlobals());
+        assertInGrantedPrefix(await grantedPrefix(deps, ctx.profile), path, ctx.profile);
         if (options.out) await validatePrivateOutput(options.out, "--out");
         const plaintext = await readInput(options.in);
-        const node = await ensureAuthenticated(ctx);
-        const client = createNamedKeyClient(node);
+        const node = await deps.authenticate(ctx);
+        const client = deps.createClient(node);
         const envelope = await withSpinner(`Encrypting with ${path}…`, () => withNetworkSetup(node, () => client.encrypt(path, plaintext))).catch((error) => {
           throw cliErrorFromNamedKey(error, "encrypt", path);
         });
@@ -153,7 +174,7 @@ export function registerKeysCommand(program: Command): void {
         }
         process.stdout.write(json + "\n");
       } catch (error) {
-        return handleError(error);
+        await handleError(error);
       }
     });
 
@@ -164,12 +185,12 @@ export function registerKeysCommand(program: Command): void {
     .option("--out <file>", "Write the decrypted data to a file (default: standard output)")
     .action(async (options, cmd) => {
       try {
-        const ctx = await ProfileManager.resolveContext(cmd.optsWithGlobals());
-        const prefix = await grantedPrefix(ctx.profile);
+        const ctx = await deps.resolveContext(cmd.optsWithGlobals());
+        const prefix = await grantedPrefix(deps, ctx.profile);
         if (options.out) await validatePrivateOutput(options.out, "--out");
         const envelope = parseEnvelope(await readInput(options.in));
         assertInGrantedPrefix(prefix, envelope.keyPath, ctx.profile);
-        const profile = await ProfileManager.getProfile(ctx.profile);
+        const profile = await deps.getProfile(ctx.profile);
         if (profile.ownerDid !== undefined && envelope.networkId !== namedKeysNetworkId(profile.ownerDid)) {
           throw new CLIError(
             "KEY_OUTSIDE_GRANTED_PREFIX",
@@ -177,8 +198,8 @@ export function registerKeysCommand(program: Command): void {
             ExitCode.PERMISSION_DENIED,
           );
         }
-        const node = await ensureAuthenticated(ctx);
-        const client = createNamedKeyClient(node);
+        const node = await deps.authenticate(ctx);
+        const client = deps.createClient(node);
         const plaintext = await withSpinner("Decrypting…", () => client.decrypt(envelope)).catch((error) => {
           throw cliErrorFromNamedKey(error, "decrypt", envelope.keyPath);
         });
@@ -189,7 +210,7 @@ export function registerKeysCommand(program: Command): void {
         }
         process.stdout.write(plaintext);
       } catch (error) {
-        return handleError(error);
+        await handleError(error);
       }
     });
 }
