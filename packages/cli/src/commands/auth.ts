@@ -632,7 +632,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .option("--owner <did>", "Sign in as this owner (did:pkh:eip155:CHAIN:ADDRESS): OpenKey preselects that key, e.g. one that is not the account's primary key, and an approval by any other identity is refused. With --manifest, also names the secrets owner for a manifest's `secrets` on a profile with no recorded owner")
     .option("--replace-session", "Scoped or device login: replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)")
     .option("--force", "Replica-enabled OpenKey login: replace the stored session key even when recorded shares could not be checked or hold unexpired shares that need the current key")
-    .option("--keys <prefix>", "Local-key login: also grant named-key create and decrypt on keys below this prefix (e.g. qa/); the node must support named keys")
+    .option("--keys <folder>", "Local-key login: also grant named-key create and decrypt on keys below this folder (e.g. qa); the node must support named keys")
     .option("--replication-prefix <prefix>", "Add replication get+sync authority for a folder prefix ending in /, or root (repeatable)", (prefix: string, values: string[] = []) => [...values, prefix])
     .option("--replication-allow-secrets", "Allow replication of secret material (network-wide decrypt warning)")
     .action(async (options, cmd) => {

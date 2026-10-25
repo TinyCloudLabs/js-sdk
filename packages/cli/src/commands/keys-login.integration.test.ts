@@ -100,7 +100,7 @@ test("--keys against a node without encryption-named-keys-v1 is refused before s
   const t = await setup(["sql"]);
   const login = await run(t.home, ["auth", "login", "--method", "local", "--keys", "qa/"]);
   expect(login.exitCode).toBe(7);
-  expect(login.stderr + login.stdout).toContain("encryption-named-keys-v1");
+  expect(login.stderr + login.stdout).toContain("doesn't support named keys");
   expect(t.requests).toEqual(["GET /info"]);
   expect(await exists(t.sessionFile)).toBe(false);
   expect((await t.readProfile()).namedKeys).toBeUndefined();

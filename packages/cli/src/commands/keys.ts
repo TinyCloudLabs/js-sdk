@@ -22,24 +22,35 @@ async function readInput(file: string | undefined): Promise<Buffer> {
   return file === undefined ? readStdin() : readFile(file);
 }
 
-const NAMED_KEY_EXIT: Partial<Record<string, { code: string; exit: number }>> = {
-  NAMED_KEYS_UNSUPPORTED: { code: "NAMED_KEYS_UNAVAILABLE", exit: ExitCode.NODE_ERROR },
-  INVALID_KEY_TARGET: { code: "INVALID_KEY_PATH", exit: ExitCode.USAGE_ERROR },
-  KEY_PATH_INVALID: { code: "INVALID_KEY_PATH", exit: ExitCode.USAGE_ERROR },
-  INVALID_ENVELOPE: { code: "INVALID_ENVELOPE", exit: ExitCode.USAGE_ERROR },
-  KEY_NOT_FOUND: { code: "NOT_FOUND", exit: ExitCode.NOT_FOUND },
-  KEY_BLOCKED: { code: "KEY_BLOCKED", exit: ExitCode.PERMISSION_DENIED },
-  DECRYPT_FAILED: { code: "DECRYPT_FAILED", exit: ExitCode.ERROR },
-};
+type KeysCommand = "ensure" | "encrypt" | "decrypt";
 
-/** Map a named-key client failure onto the CLI's error codes and exit codes. */
-function cliErrorFromNamedKey(error: unknown): unknown {
+/** Map a named-key client failure onto the CLI's error codes, exit codes and one-line messages. */
+function cliErrorFromNamedKey(error: unknown, command: KeysCommand, path: string): unknown {
   if (!(error instanceof NamedKeyError)) return error;
-  const mapped = NAMED_KEY_EXIT[error.code];
-  if (mapped) return new CLIError(mapped.code, error.message, mapped.exit);
+  switch (error.code) {
+    case "NAMED_KEYS_UNSUPPORTED":
+      return new CLIError("NAMED_KEYS_UNAVAILABLE", "This node doesn't support named keys.", ExitCode.NODE_ERROR);
+    case "INVALID_KEY_TARGET":
+    case "KEY_PATH_INVALID":
+      return new CLIError("INVALID_KEY_PATH", "That key name isn't valid.", ExitCode.USAGE_ERROR);
+    case "INVALID_ENVELOPE":
+      return new CLIError("INVALID_ENVELOPE", "The envelope is damaged or incomplete.", ExitCode.USAGE_ERROR);
+    case "KEY_NOT_FOUND":
+      return new CLIError(
+        "NOT_FOUND",
+        command === "decrypt"
+          ? "The key this envelope needs doesn't exist on this node, so it can't be decrypted here."
+          : `There's no key at ${path} yet. Create it with \`${CLI_NAME} keys ensure ${path}\`.`,
+        ExitCode.NOT_FOUND,
+      );
+    case "KEY_BLOCKED":
+      return new CLIError("KEY_BLOCKED", `Key ${path} is blocked, so it can't be used.`, ExitCode.PERMISSION_DENIED);
+    case "DECRYPT_FAILED":
+      return new CLIError("DECRYPT_FAILED", `Couldn't decrypt this envelope with key ${path}.`, ExitCode.ERROR);
+  }
   if (error.status === 401 || error.status === 403) {
     return new CLIError("PERMISSION_DENIED", error.message, ExitCode.PERMISSION_DENIED, {
-      hint: `Sign in with \`${CLI_NAME} auth login --method local --keys <prefix>\` for the key's prefix.`,
+      hint: `Sign in with \`${CLI_NAME} auth login --method local --keys <folder>\` for the key's prefix.`,
     });
   }
   return new CLIError(error.code, error.message, error.status === undefined ? ExitCode.ERROR : ExitCode.NODE_ERROR);
@@ -52,7 +63,7 @@ async function grantedPrefix(profileName: string): Promise<string> {
   if (keys === undefined) {
     throw new CLIError(
       "KEYS_NOT_GRANTED",
-      `Profile "${profileName}" has no named-key access. Sign in with \`${CLI_NAME} --profile ${profileName} auth login --method local --keys <prefix>\`.`,
+      `Profile "${profileName}" has no named-key access. Sign in with \`${CLI_NAME} --profile ${profileName} auth login --method local --keys <folder>\`.`,
       ExitCode.PERMISSION_DENIED,
     );
   }
@@ -63,7 +74,7 @@ function assertInGrantedPrefix(prefix: string, path: string, profileName: string
   if (!keyPathInPrefix(prefix, path)) {
     throw new CLIError(
       "KEY_OUTSIDE_GRANTED_PREFIX",
-      `Key "${path}" is outside the prefix "${prefix}/" this session was signed for. Sign in with \`${CLI_NAME} --profile ${profileName} auth login --method local --keys <prefix>\` for that key.`,
+      `Key "${path}" is outside the folder "${prefix}/" this sign-in covers. To use it, sign in with \`${CLI_NAME} --profile ${profileName} auth login --method local --keys <folder>\`.`,
       ExitCode.PERMISSION_DENIED,
     );
   }
@@ -74,29 +85,29 @@ function parseEnvelope(bytes: Buffer): NamedKeyEnvelope {
   try {
     parsed = JSON.parse(bytes.toString("utf8"));
   } catch {
-    throw new CLIError("INVALID_ENVELOPE", "The input is not a JSON envelope.", ExitCode.USAGE_ERROR);
+    throw new CLIError("INVALID_ENVELOPE", "The input isn't an envelope (expected JSON).", ExitCode.USAGE_ERROR);
   }
   const envelope = parsed as Partial<NamedKeyEnvelope> | null;
   if (typeof envelope !== "object" || envelope === null || envelope.v !== 2 || typeof envelope.keyPath !== "string") {
-    throw new CLIError("INVALID_ENVELOPE", "The input is not a v2 named-key envelope.", ExitCode.USAGE_ERROR);
+    throw new CLIError("INVALID_ENVELOPE", "The input isn't a named-key envelope (it needs `\"v\": 2` and a `keyPath`).", ExitCode.USAGE_ERROR);
   }
   return envelope as NamedKeyEnvelope;
 }
 
 export function registerKeysCommand(program: Command): void {
-  const keys = program.command("keys").description("Named encryption keys (sign in with `auth login --keys <prefix>`)");
+  const keys = program.command("keys").description("Named encryption keys (sign in with `auth login --keys <folder>`)");
 
   keys
     .command("ensure <path>")
-    .description("Create the named key if it does not exist and report it")
+    .description("Create the named key if it doesn't exist yet, then show it")
     .action(async (path: string, _options, cmd) => {
       try {
         const ctx = await ProfileManager.resolveContext(cmd.optsWithGlobals());
         assertInGrantedPrefix(await grantedPrefix(ctx.profile), path, ctx.profile);
         const node = await ensureAuthenticated(ctx);
         const client = createNamedKeyClient(node);
-        const descriptor = await withSpinner(`Ensuring ${path}...`, () => client.ensureKey(path)).catch((error) => {
-          throw cliErrorFromNamedKey(error);
+        const descriptor = await withSpinner(`Getting or creating key ${path}…`, () => client.ensureKey(path)).catch((error) => {
+          throw cliErrorFromNamedKey(error, "ensure", path);
         });
         outputJson({ ...descriptor });
       } catch (error) {
@@ -106,9 +117,9 @@ export function registerKeysCommand(program: Command): void {
 
   keys
     .command("encrypt <path>")
-    .description("Encrypt input to a named key and write the envelope as JSON")
-    .option("--in <file>", "Read plaintext from a file (default: stdin)")
-    .option("--out <file>", "Write the envelope to a file (default: stdout)")
+    .description("Encrypt data with a named key and output the encrypted envelope as JSON")
+    .option("--in <file>", "Read the data to encrypt from a file (default: standard input)")
+    .option("--out <file>", "Write the envelope to a file (default: standard output)")
     .action(async (path: string, options, cmd) => {
       try {
         const ctx = await ProfileManager.resolveContext(cmd.optsWithGlobals());
@@ -117,8 +128,8 @@ export function registerKeysCommand(program: Command): void {
         const plaintext = await readInput(options.in);
         const node = await ensureAuthenticated(ctx);
         const client = createNamedKeyClient(node);
-        const envelope = await withSpinner(`Encrypting to ${path}...`, () => client.encrypt(path, plaintext)).catch((error) => {
-          throw cliErrorFromNamedKey(error);
+        const envelope = await withSpinner(`Encrypting with ${path}…`, () => client.encrypt(path, plaintext)).catch((error) => {
+          throw cliErrorFromNamedKey(error, "encrypt", path);
         });
         const json = JSON.stringify(envelope);
         if (options.out) {
@@ -134,9 +145,9 @@ export function registerKeysCommand(program: Command): void {
 
   keys
     .command("decrypt")
-    .description("Decrypt a named-key envelope and write the raw bytes")
-    .option("--in <file>", "Read the envelope JSON from a file (default: stdin)")
-    .option("--out <file>", "Write the plaintext to a file (default: stdout)")
+    .description("Decrypt an envelope made with a named key and output the original data")
+    .option("--in <file>", "Read the envelope from a file (default: standard input)")
+    .option("--out <file>", "Write the decrypted data to a file (default: standard output)")
     .action(async (options, cmd) => {
       try {
         const ctx = await ProfileManager.resolveContext(cmd.optsWithGlobals());
@@ -148,14 +159,14 @@ export function registerKeysCommand(program: Command): void {
         if (profile.ownerDid !== undefined && envelope.networkId !== namedKeysNetworkId(profile.ownerDid)) {
           throw new CLIError(
             "KEY_OUTSIDE_GRANTED_PREFIX",
-            `The envelope belongs to a different network than this profile's ${namedKeysNetworkId(profile.ownerDid)}.`,
+            "This envelope was made with a different encryption network than this profile's, so this profile can't decrypt it.",
             ExitCode.PERMISSION_DENIED,
           );
         }
         const node = await ensureAuthenticated(ctx);
         const client = createNamedKeyClient(node);
-        const plaintext = await withSpinner("Decrypting...", () => client.decrypt(envelope)).catch((error) => {
-          throw cliErrorFromNamedKey(error);
+        const plaintext = await withSpinner("Decrypting…", () => client.decrypt(envelope)).catch((error) => {
+          throw cliErrorFromNamedKey(error, "decrypt", envelope.keyPath);
         });
         if (options.out) {
           await writePrivateOutput(options.out, plaintext);

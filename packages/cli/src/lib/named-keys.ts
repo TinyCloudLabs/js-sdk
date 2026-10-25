@@ -1,7 +1,6 @@
 import {
   EncryptionResourceError,
   KEY_CREATE_ABILITY,
-  NAMED_KEYS_FEATURE,
   formatPrefixResource,
   nodeSupportsNamedKeys,
 } from "@tinycloud/sdk-services/encryption/resource";
@@ -32,10 +31,10 @@ export function namedKeysNetworkId(ownerDid: string): string {
 export function parseKeysPrefix(input: string, ownerDid: string): ProfileNamedKeys {
   const prefix = input.endsWith("/") ? input.slice(0, -1) : input;
   const invalid = (reason: string): CLIError =>
-    new CLIError("INVALID_KEY_PREFIX", `Invalid --keys prefix "${input}": ${reason}`, ExitCode.USAGE_ERROR);
-  if (prefix.length === 0) throw invalid("the prefix must not be empty.");
+    new CLIError("INVALID_KEY_PREFIX", `Invalid \`--keys\` folder "${input}": ${reason}`, ExitCode.USAGE_ERROR);
+  if (prefix.length === 0) throw invalid("the folder can't be empty.");
   if (prefix === "apps" || prefix.startsWith("apps/")) {
-    throw invalid("app key prefixes (apps/…) are not available from the CLI.");
+    throw invalid("folders under `apps/` belong to apps and can't be used from the CLI.");
   }
   try {
     return { prefix, resource: formatPrefixResource(namedKeysNetworkId(ownerDid), prefix) };
@@ -67,7 +66,7 @@ export async function assertNodeSupportsNamedKeys(host: string, fetchImpl: typeo
   if (!nodeSupportsNamedKeys(info)) {
     throw new CLIError(
       "NAMED_KEYS_UNAVAILABLE",
-      `${host} does not list ${NAMED_KEYS_FEATURE}, so named keys are not available there. Nothing was signed.`,
+      `${host} doesn't support named keys, so \`--keys\` can't be used there. Nothing was signed.`,
       ExitCode.NODE_ERROR,
     );
   }
