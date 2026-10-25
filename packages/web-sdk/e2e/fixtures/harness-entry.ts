@@ -184,6 +184,8 @@ function loggedRevokes(factory: PanelDataFactory): PanelDataFactory {
 }
 
 let handle: UiClientHandle | undefined;
+// The manifest display name the next mount() reports; undefined keeps the app id as the label.
+let manifestName: string | undefined;
 
 const w = window as unknown as Record<string, unknown>;
 w.__tc = {
@@ -195,9 +197,14 @@ w.__tc = {
       ui: { developerMode: true, ...ui },
       source: source as never,
       manifestAppId: () => "e2e-settings-smoke",
+      manifestName: () => manifestName,
       data: loggedRevokes(createStubPanelData(harnessSeed())),
     });
     w.tc = { ui: handle.api };
+    return true;
+  },
+  setManifestName(name: string | undefined) {
+    manifestName = name;
     return true;
   },
   // Dispatches the same window rejection the SDK's error path raises for a TinyCloud failure.

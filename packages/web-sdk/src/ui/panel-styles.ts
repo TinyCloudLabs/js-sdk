@@ -11,11 +11,11 @@ export const PANEL_CSS = `
 .panel{position:fixed;top:0;bottom:0;right:0;box-sizing:border-box;width:min(420px,100%);display:grid;grid-template-rows:auto auto minmax(0,1fr);grid-template-areas:"head" "nav" "main";overflow:hidden;border-left:1px solid #e4e4e7;background:#fff;color:#111827;box-shadow:-18px 0 48px -18px rgba(0,0,0,.35);pointer-events:auto;animation:tc-in .42s cubic-bezier(.22,1,.36,1)}
 .layer[data-position="bottom-left"] .panel{left:0;right:auto;border-left:0;border-right:1px solid #e4e4e7;box-shadow:18px 0 48px -18px rgba(0,0,0,.35);animation-name:tc-in-l}
 .layer .panel[data-layout="page"]{top:0;bottom:0;left:0;right:0;width:auto;border:0;box-shadow:none;grid-template-rows:auto minmax(0,1fr);grid-template-columns:288px minmax(0,1fr);grid-template-areas:"head head" "nav main"}
-.head{grid-area:head;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;box-sizing:border-box;min-height:68px;padding:14px 12px 10px 20px}
-.brand{display:flex;flex-direction:column;min-width:0;flex:1 1 auto}
+.head{grid-area:head;display:flex;flex-wrap:nowrap;align-items:center;justify-content:space-between;gap:8px;box-sizing:border-box;min-height:68px;padding:14px 12px 10px 20px}
+.brand{display:flex;flex-direction:column;min-width:0;flex:1 1 0}
 .title{margin:0;font-size:15px;font-weight:600}
 .ctx{overflow:hidden;font-size:12.5px;color:#71717a;text-overflow:ellipsis;white-space:nowrap}
-.head-actions{display:flex;flex-wrap:wrap;align-items:center;flex-shrink:0;gap:6px}
+.head-actions{display:flex;flex-wrap:nowrap;align-items:center;flex-shrink:0;gap:6px}
 .icon-btn{display:inline-flex;flex:none;align-items:center;justify-content:center;box-sizing:border-box;width:44px;height:44px;min-width:44px;min-height:44px;padding:0;border:0;border-radius:50%;background:transparent;color:inherit;cursor:pointer}
 .icon-btn.ring{box-shadow:inset 0 0 0 1px #71717a}
 .icon-btn svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
