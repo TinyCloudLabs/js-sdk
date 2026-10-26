@@ -757,6 +757,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             persistHost,
             force: options.force === true,
             keys: options.keys,
+            createProfile: true,
           });
           if (!preparedCommitted) await persistReplicationLogin(ctx.profile, replicationOptions);
           if (replicationOptions.allowSecrets) writeReplicationSecretsWarning();
@@ -2720,6 +2721,8 @@ interface OpenKeyLoginOptions {
   force?: boolean;
   /** `--keys` folder: also ask OpenKey to approve named-key create and decrypt there. */
   keys?: string;
+  /** `auth login`: a profile that does not exist yet is created by this login. */
+  createProfile?: boolean;
 }
 
 /** Only a fresh SDK-prepared, OpenKey-signed owner session may establish replica consent. */
@@ -2982,9 +2985,22 @@ export async function refreshOpenKeySession(
 ): Promise<{ profile: ProfileConfig; delegationData: Record<string, unknown>; declined: PermissionEntry[]; legacyNested: PermissionEntry[] }> {
   await recoverPendingLogout(profileName);
   const snapshot = await readProfileSnapshot(profileName);
-  // A missing profile is PROFILE_NOT_FOUND, not a missing key: `tc init` alone
-  // would create the default profile instead of this one.
-  const profile = snapshot.profile ?? await ProfileManager.getProfile(profileName);
+  // A missing profile is created by `auth login` (`createProfile`) and
+  // otherwise PROFILE_NOT_FOUND. It exists only in memory until the signed
+  // OpenKey result verifies and commitLogin writes it with the key and session.
+  const created = snapshot.profile === null && snapshot.key === null && options.createProfile === true ? generateKey() : null;
+  const profile: ProfileConfig = snapshot.profile ?? (created !== null
+    ? {
+        name: profileName,
+        host,
+        chainId: DEFAULT_CHAIN_ID,
+        spaceName: "default",
+        did: created.did,
+        createdAt: new Date().toISOString(),
+        posture: "owner-openkey",
+        operatorType: "human",
+      }
+    : await ProfileManager.getProfile(profileName));
   // Resolve before consent so an invalid scope, --expiry, owner conflict or
   // live session in use never opens OpenKey.
   const expiry = options.expiry === undefined ? undefined : parseRequestedExpiry(options.expiry);
@@ -3024,7 +3040,7 @@ export async function refreshOpenKeySession(
   // A logged-out nonreplica profile has no restorable signer. Keep the
   // candidate private key in memory until the signed OpenKey result verifies
   // and commitLogin atomically writes the key, session and matching DID.
-  const fresh = snapshot.key === null ? generateKey() : null;
+  const fresh = created ?? (snapshot.key === null ? generateKey() : null);
   const key = snapshot.key ?? fresh!.jwk;
   const sessionDid = fresh?.did ?? profile.sessionDid ?? profile.did;
   const requestDid = fresh && profile.did.startsWith("did:key:") ? fresh.did : profile.did;

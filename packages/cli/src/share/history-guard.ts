@@ -38,6 +38,8 @@ export async function checkShareHistoryForKeyDrop(profileName: string, now: Date
  * Callers skip this for signed-out profiles and for the explicit bypass flags.
  */
 export async function assertShareHistoryAllowsKeyDrop(profileName: string, action: "logout" | "rotate" | "login"): Promise<void> {
+  // A login that creates the profile has no recorded shares to strand.
+  if (action === "login" && !(await ProfileManager.profileExists(profileName))) return;
   const config = await ProfileManager.getProfile(profileName);
   if (config.authSignedOut === true) return;
   const check = await checkShareHistoryForKeyDrop(profileName);
