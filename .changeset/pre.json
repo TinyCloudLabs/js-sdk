@@ -29,6 +29,7 @@
     "@tinycloud/sdk-services-test": "21.0.1"
   },
   "changesets": [
+    "cli-keys-replication",
     "cli-named-keys"
   ]
 }
