@@ -79,6 +79,18 @@ import { MemorySessionStorage } from "../storage/MemorySessionStorage";
 import type { OpenKeyBridgeInput, NodeUserAuthorizationAuthorizeFn } from "./openKeyBridge";
 
 export type OpenKeyAuthorizeInput = OpenKeyBridgeInput;
+
+/** SIWE and session key prepared before an OpenKey approval click. */
+export interface PreparedOpenKeyAuthorization {
+  readonly request: OpenKeyAuthorizeInput;
+  readonly prepared: PreparedOpenKeySession;
+  readonly keyId: string;
+  readonly jwk: Record<string, unknown>;
+  readonly address: string;
+  readonly chainId: number;
+  readonly generation: number;
+  readonly createdAt: number;
+}
 export type OpenKeyAuthorizationResultV1 = Awaited<ReturnType<NodeUserAuthorizationAuthorizeFn>>;
 
 type PreparedOpenKeySession = {
@@ -408,6 +420,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
 
   private sessionManager: ISessionManager;
   private activeSessionKeyId = "default";
+  private preparedSessionCounter = 0;
   /** Incremented by resetSession; a sign-in started earlier publishes nothing. */
   private sessionGeneration = 0;
   /**
@@ -1865,9 +1878,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
     await this.refreshNamedKeyFeatureForSignIn(address, chainId);
 
     // Create a session key
-    const keyId = `session-${Date.now()}`;
-    this.sessionManager.renameSessionKeyId(this.activeSessionKeyId, keyId);
-    this.activeSessionKeyId = keyId;
+    const keyId = `openkey-session-${Date.now()}-${++this.preparedSessionCounter}`;
+    this.sessionManager.createSessionKey(keyId);
 
     // Get JWK for session key
     const jwkString = this.sessionManager.jwk(keyId);
@@ -1998,6 +2010,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     // Set current session
     this._session = clientSession;
     this._tinyCloudSession = tinyCloudSession;
+    this.activeSessionKeyId = keyId;
     this._address = address;
     this._chainId = chainId;
 
@@ -2070,6 +2083,14 @@ export class NodeUserAuthorization implements IUserAuthorization {
       ) => Promise<OpenKeyAuthorizationResultV1 | null>;
     },
   ): Promise<ClientSession> {
+    const pending = await this.prepareOpenKeySignIn(options);
+    return this.completeOpenKeySignIn(pending, authorizeFn(pending.request), options);
+  }
+
+  /** Finish address, host and SIWE preparation before an approval click. */
+  async prepareOpenKeySignIn(
+    options?: Parameters<NodeUserAuthorization["signInWithOpenKey"]>[1],
+  ): Promise<PreparedOpenKeyAuthorization> {
     refuseCaveated(this.getCapabilityRequest()?.manifests);
     // A per-call host override is the host this session will actually use,
     // not merely a display hint for OpenKey. Install it before preparation so
@@ -2091,7 +2112,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     await this.resolveTinyCloudHostsForSignIn(signingAddress, signingChainId);
 
     // 1. Prepare — this creates a SIWE bound to a fresh session key.
-    const { prepared, keyId, jwk } = await this.prepareSessionForSigning();
+    const { prepared, keyId, jwk, address, chainId } = await this.prepareSessionForSigning();
 
     // 2. Build the presentation envelope from the instance manifest (if
     //    any). This is the SUPPORTED production path for surfacing an
@@ -2121,12 +2142,37 @@ export class NodeUserAuthorization implements IUserAuthorization {
       keyId: options?.openkeyKeyId,
       presentation,
     };
+    return {
+      request: originalRequest,
+      prepared,
+      keyId,
+      jwk,
+      address,
+      chainId,
+      generation: this.sessionGeneration,
+      createdAt: Date.now(),
+    };
+  }
+
+  /** Complete a prepared approval. The caller starts authorization before awaiting this method. */
+  async completeOpenKeySignIn(
+    pending: PreparedOpenKeyAuthorization,
+    authorization: Promise<OpenKeyAuthorizationResultV1>,
+    options?: Parameters<NodeUserAuthorization["signInWithOpenKey"]>[1],
+  ): Promise<ClientSession> {
+    if (Date.now() - pending.createdAt > 5 * 60_000) {
+      throw new Error("Prepared OpenKey sign-in expired; prepare again");
+    }
+    if (pending.generation !== this.sessionGeneration) {
+      throw new Error("Prepared OpenKey sign-in expired after sign-out");
+    }
+    const { request: originalRequest, prepared, keyId, jwk } = pending;
     let result: OpenKeyAuthorizationResultV1 | undefined;
     let signed: PreparedOpenKeySession;
     let signature: string;
     for (let attempt = 0; ; ) {
       try {
-        result ??= await authorizeFn(originalRequest);
+        result ??= await authorization;
         signed = await this.verifyOpenKeyResult(result, prepared);
         signature = result.signature;
         break;

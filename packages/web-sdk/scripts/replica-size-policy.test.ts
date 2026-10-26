@@ -31,6 +31,7 @@ import { approvedTc1977ManifestKeysRatchet, validateTc1977ManifestKeysRatchetTra
 import { approvedTc2096LazyContentRatchet, validateTc2096LazyContentRatchetTransition } from "./replica-size-policy";
 import { approvedTc2113PanelGrantRatchet, validateTc2113PanelGrantRatchetTransition } from "./replica-size-policy";
 import { approvedTc2127WindowLocationRatchet, validateTc2127WindowLocationRatchetTransition } from "./replica-size-policy";
+import { approvedTc1977OpenKeySigninRatchet, validateTc1977OpenKeySigninRatchetTransition } from "./replica-size-policy";
 import { approvedTc2038PanelPrefetchRatchet, validateTc2038PanelPrefetchRatchetTransition, type Tc2038PanelPrefetchRatchet } from "./replica-size-policy";
 import { approvedTc2005RevokeWindowRatchet, validateTc2005RevokeWindowRatchetTransition, type Tc2005RevokeWindowRatchet } from "./replica-size-policy";
 import { approvedTc2096RepairBackoffRatchet, validateTc2096RepairBackoffRatchetTransition, type Tc2096RepairBackoffRatchet } from "./replica-size-policy";
@@ -2905,6 +2906,7 @@ delete tc2043Ledger.tc2096LazyContentRatchet;
 delete tc2043Ledger.tc2072LocationGuardRatchet;
 delete tc2043Ledger.tc2113PanelGrantRatchet;
 delete tc2043Ledger.tc2127WindowLocationRatchet;
+delete tc2043Ledger.tc1977OpenKeySigninRatchet;
 tc2043Ledger.entries = structuredClone(current.entries.slice(0, current.entries.findIndex((entry) => entry.pr === "#728")));
 describe("replication syncScope opt-in (#742, TC-2043) size ratchet", () => {
   const row = () => structuredClone(approvedTc2043SyncScopeRatchet);
@@ -3385,6 +3387,45 @@ describe("window location SIWE domain size ratchet (TC-2127, #764)", () => {
     changed.worker.ceiling++;
     expect(() => validateTc2127WindowLocationRatchetTransition(undefined, changed)).toThrow();
     expect(() => validateTc2127WindowLocationRatchetTransition(row(), undefined)).toThrow();
+  });
+});
+
+describe("signInWithOpenKey (TC-1977, #747) size ratchet", () => {
+  const row = () => structuredClone(approvedTc1977OpenKeySigninRatchet);
+  const prerequisite = () => approvedTc2127WindowLocationRatchet;
+
+  it("pins the OpenKey sign-in root delta over the window location row and keeps the worker ceilings unchanged", () => {
+    expect(() => validateLedger(current)).not.toThrow();
+    expect(current.tc1977OpenKeySigninRatchet).toEqual(approvedTc1977OpenKeySigninRatchet);
+    expect(row().root).toEqual({ delta: { "index.mjs": 957, "index.cjs": 1025 }, ceiling: { "index.mjs": 1469957, "index.cjs": 1411550 } });
+    expect(row().root.ceiling["index.mjs"]).toBe(prerequisite().root.ceiling["index.mjs"] + row().root.delta["index.mjs"]);
+    expect(row().root.ceiling["index.cjs"]).toBe(prerequisite().root.ceiling["index.cjs"] + row().root.delta["index.cjs"]);
+    expect(row().firstImport.ceiling).toEqual(prerequisite().firstImport.ceiling);
+    expect(row().activation.ceiling).toEqual(prerequisite().activation.ceiling);
+    expect(row().worker).toEqual({ delta: 0, ceiling: prerequisite().worker.ceiling });
+    expect(row().replicaWorker).toEqual({ delta: 0, ceiling: prerequisite().replicaWorker.ceiling });
+    expect(rootCeilings(current).find(({ row: name }) => name === "tc1977OpenKeySigninRatchet")).toEqual({ row: "tc1977OpenKeySigninRatchet", ceiling: row().root.ceiling });
+    expect(ancestryPins(current, false)).toContainEqual({ row: "tc1977OpenKeySigninRatchet", pin: row().sourceCommits[0] });
+    expect(MAX_WORKER_GZIP_BYTES).toBe(newestKvWorkerCeiling());
+    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(newestReplicaWorkerCeiling());
+  });
+
+  it("refuses changed bytes or a missing window location prerequisite", () => {
+    const changedRoot = copy(current);
+    changedRoot.tc1977OpenKeySigninRatchet!.root.ceiling["index.mjs"]++;
+    expect(() => validateLedger(changedRoot)).toThrow("OpenKey");
+    const withoutPrerequisite = copy(current);
+    delete withoutPrerequisite.tc2127WindowLocationRatchet;
+    expect(() => validateLedger(withoutPrerequisite)).toThrow("OpenKey");
+  });
+
+  it("may be introduced once and never changed or removed", () => {
+    expect(() => validateTc1977OpenKeySigninRatchetTransition(undefined, row())).not.toThrow();
+    expect(() => validateTc1977OpenKeySigninRatchetTransition(row(), row())).not.toThrow();
+    const changed = row();
+    changed.root.ceiling["index.cjs"]++;
+    expect(() => validateTc1977OpenKeySigninRatchetTransition(undefined, changed)).toThrow("TC-1977");
+    expect(() => validateTc1977OpenKeySigninRatchetTransition(row(), undefined)).toThrow("TC-1977");
   });
 });
 

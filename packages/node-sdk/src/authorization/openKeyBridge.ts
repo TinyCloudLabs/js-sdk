@@ -36,7 +36,7 @@ export interface OpenKeyAuthorizeTinyCloud {
      * validates and size-bounds it before use.
      */
     presentation?: CapabilityPresentationEnvelopeV1;
-  }): Promise<{
+  }, opts?: { mode?: "iframe" | "popup" | "redirect" }): Promise<{
     protocolVersion: 1;
     address: string;
     signature: string;
@@ -100,6 +100,7 @@ export type NodeUserAuthorizationAuthorizeFn = (
  */
 export function wireOpenKeyAuthorize(
   openkey: OpenKeyAuthorizeTinyCloud,
+  opts?: { mode?: "iframe" | "popup" | "redirect" },
 ): NodeUserAuthorizationAuthorizeFn {
   return async (input) => {
     // The bridge does not fabricate any protocol fields — every value
@@ -116,7 +117,7 @@ export function wireOpenKeyAuthorize(
       // Forward the presentation envelope verbatim — the OpenKey SDK
       // validates and size-bounds it before use.
       presentation: input.presentation,
-    });
+    }, opts);
     if (result.protocolVersion !== 1) {
       throw new Error(
         `wireOpenKeyAuthorize: OpenKey returned unsupported protocolVersion ${result.protocolVersion}`,

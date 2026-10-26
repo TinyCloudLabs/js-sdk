@@ -212,7 +212,7 @@ import {
 import { RequestLog, observeReplicaReads, readOnlyRequestLog } from "@tinycloud/sdk-services/telemetry/requestLog";
 import { parseEncryptionResource } from "@tinycloud/sdk-services/encryption/resource";
 import type { NamedKeyClient } from "./encryption-keys";
-import { NodeUserAuthorization } from "./authorization/NodeUserAuthorization";
+import { NodeUserAuthorization, type PreparedOpenKeyAuthorization } from "./authorization/NodeUserAuthorization";
 import { refuseCaveated } from "./authorization/caveatRefusal";
 import type { SignStrategy } from "./authorization/strategies";
 import { AccountService } from "./account/AccountService";
@@ -1320,6 +1320,7 @@ export class TinyCloudNode {
   private readonly explicitHost?: string;
   private signer: ISigner | null = null;
   private auth: NodeUserAuthorization | null = null;
+  private readonly consumedOpenKeyPendings = new WeakSet<PreparedOpenKeyAuthorization>();
   private tc: TinyCloud | null = null;
   private _address?: string;
   private _chainId: number = 1;
@@ -2545,6 +2546,43 @@ export class TinyCloudNode {
       throw new Error("Cannot signInWithOpenKey() in session-only mode. Provide a signer in config.");
     }
     await this.signInWith(() => this.auth!.signInWithOpenKey(authorizeFn, options));
+  }
+
+  /** Prepare the OpenKey request before the approval click. */
+  async prepareOpenKeySignIn(): Promise<PreparedOpenKeyAuthorization> {
+    if (!this.signer || !this.tc || !this.auth) {
+      throw new Error("Cannot prepare OpenKey sign-in in session-only mode. Provide a signer in config.");
+    }
+    await this.signOutInFlight;
+    await this.accountRegistryTail;
+    await this.wasmBindings.ensureInitialized?.();
+    return this.auth.prepareOpenKeySignIn();
+  }
+
+  /** Start OpenKey authorization synchronously, then complete normal session setup. */
+  signInWithPreparedOpenKey(
+    pending: PreparedOpenKeyAuthorization,
+    authorizeFn: Parameters<NodeUserAuthorization["signInWithOpenKey"]>[0],
+  ): Promise<void> {
+    if (!this.signer || !this.tc || !this.auth || this.signOutInFlight) {
+      throw new Error("Prepared OpenKey sign-in is unavailable");
+    }
+    if (this.consumedOpenKeyPendings.has(pending)) {
+      throw new Error("Prepared OpenKey sign-in was already used");
+    }
+    if (Date.now() - pending.createdAt > 5 * 60_000) {
+      throw new Error("Prepared OpenKey sign-in expired; prepare again");
+    }
+    this.consumedOpenKeyPendings.add(pending);
+    const authorization = authorizeFn(pending.request);
+    // The normal sign-in preflight may still reject before it awaits this result.
+    void authorization.catch(() => undefined);
+    return this.signInWith(() => {
+      if (this._address !== pending.address || this._chainId !== pending.chainId) {
+        throw new Error("OpenKey account changed after sign-in preparation");
+      }
+      return this.auth!.completeOpenKeySignIn(pending, authorization);
+    });
   }
 
   private async signInWith(performSignIn: () => Promise<unknown>): Promise<void> {
