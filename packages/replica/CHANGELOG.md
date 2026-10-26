@@ -1,5 +1,18 @@
 # @tinycloud/replica
 
+## 0.4.0-beta.3
+
+### Minor Changes
+
+- 92e4bd0: Replication accepts contentFetch "lazy", which syncs entry names without downloading values; reads of values not held go to the network.
+
+  Details: TC-2096
+
+### Patch Changes
+
+- Updated dependencies [92e4bd0]
+  - @tinycloud/sdk-services@3.8.0-beta.9
+
 ## 0.4.0-beta.2
 
 ### Patch Changes
