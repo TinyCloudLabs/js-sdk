@@ -30,6 +30,7 @@ import { approvedTc2043SyncScopeRatchet, validateTc2043SyncScopeRatchetTransitio
 import { approvedTc1977ManifestKeysRatchet, validateTc1977ManifestKeysRatchetTransition, type Tc1977ManifestKeysRatchet } from "./replica-size-policy";
 import { approvedTc2096LazyContentRatchet, validateTc2096LazyContentRatchetTransition } from "./replica-size-policy";
 import { approvedTc2113PanelGrantRatchet, validateTc2113PanelGrantRatchetTransition } from "./replica-size-policy";
+import { approvedTc2127WindowLocationRatchet, validateTc2127WindowLocationRatchetTransition } from "./replica-size-policy";
 import { approvedTc2038PanelPrefetchRatchet, validateTc2038PanelPrefetchRatchetTransition, type Tc2038PanelPrefetchRatchet } from "./replica-size-policy";
 import { approvedTc2005RevokeWindowRatchet, validateTc2005RevokeWindowRatchetTransition, type Tc2005RevokeWindowRatchet } from "./replica-size-policy";
 import { approvedTc2096RepairBackoffRatchet, validateTc2096RepairBackoffRatchetTransition, type Tc2096RepairBackoffRatchet } from "./replica-size-policy";
@@ -2903,6 +2904,7 @@ delete tc2043Ledger.tc2096RepairBackoffRatchet;
 delete tc2043Ledger.tc2096LazyContentRatchet;
 delete tc2043Ledger.tc2072LocationGuardRatchet;
 delete tc2043Ledger.tc2113PanelGrantRatchet;
+delete tc2043Ledger.tc2127WindowLocationRatchet;
 tc2043Ledger.entries = structuredClone(current.entries.slice(0, current.entries.findIndex((entry) => entry.pr === "#728")));
 describe("replication syncScope opt-in (#742, TC-2043) size ratchet", () => {
   const row = () => structuredClone(approvedTc2043SyncScopeRatchet);
@@ -3346,6 +3348,43 @@ describe("panel grant delegation-list ask (TC-2113, #763) size ratchet", () => {
     changed.worker.ceiling++;
     expect(() => validateTc2113PanelGrantRatchetTransition(undefined, changed)).toThrow();
     expect(() => validateTc2113PanelGrantRatchetTransition(row(), undefined)).toThrow();
+  });
+});
+
+describe("window location SIWE domain size ratchet (TC-2127, #764)", () => {
+  const row = () => structuredClone(approvedTc2127WindowLocationRatchet);
+  const prerequisite = () => approvedTc2113PanelGrantRatchet;
+
+  it("pins the window-location root delta over the panel-grant row and keeps the other tiers unchanged", () => {
+    expect(() => validateLedger(current)).not.toThrow();
+    expect(current.tc2127WindowLocationRatchet).toEqual(approvedTc2127WindowLocationRatchet);
+    expect(row().root).toEqual({ delta: { "index.mjs": 1, "index.cjs": 3 }, ceiling: { "index.mjs": 1469000, "index.cjs": 1410525 } });
+    expect(row().firstImport).toEqual(prerequisite().firstImport);
+    expect(row().activation).toEqual(prerequisite().activation);
+    expect(row().worker).toEqual(prerequisite().worker);
+    expect(row().replicaWorker).toEqual(prerequisite().replicaWorker);
+    expect(rootCeilings(current).find(({ row: name }) => name === "tc2127WindowLocationRatchet")).toEqual({ row: "tc2127WindowLocationRatchet", ceiling: row().root.ceiling });
+    expect(ancestryPins(current, false)).toContainEqual({ row: "tc2127WindowLocationRatchet", pin: row().sourceCommits[0] });
+    expect(MAX_WORKER_GZIP_BYTES).toBe(newestKvWorkerCeiling());
+    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(newestReplicaWorkerCeiling());
+  });
+
+  it("refuses changed bytes or a missing panel-grant prerequisite", () => {
+    const changedRoot = copy(current);
+    changedRoot.tc2127WindowLocationRatchet!.root.ceiling["index.cjs"]++;
+    expect(() => validateLedger(changedRoot)).toThrow("window location");
+    const withoutPrerequisite = copy(current);
+    delete withoutPrerequisite.tc2113PanelGrantRatchet;
+    expect(() => validateLedger(withoutPrerequisite)).toThrow("window location");
+  });
+
+  it("may be introduced once and never changed or removed", () => {
+    expect(() => validateTc2127WindowLocationRatchetTransition(undefined, row())).not.toThrow();
+    expect(() => validateTc2127WindowLocationRatchetTransition(row(), row())).not.toThrow();
+    const changed = row();
+    changed.worker.ceiling++;
+    expect(() => validateTc2127WindowLocationRatchetTransition(undefined, changed)).toThrow();
+    expect(() => validateTc2127WindowLocationRatchetTransition(row(), undefined)).toThrow();
   });
 });
 
