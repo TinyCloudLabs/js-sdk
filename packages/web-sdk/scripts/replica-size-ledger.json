@@ -1852,5 +1852,34 @@
       "ceiling": 776128
     },
     "reason": "sign-out and account switch erase the local copy with an SDK retry and a failure event; the minimum reviewed shape; optional code in the replica chunk."
+  },
+  "tc1977ManifestKeysRatchet": {
+    "label": "sdk: manifest named keys (TC-1977, #748): +2,665 B mjs / +2,808 B cjs gzip",
+    "ruling": "Approved by Naomi (measured at run 40318285314 within 10 bytes of the approved +2,666/+2,814; no headroom)",
+    "base": "5467d1248b20e59d3b7eca508da417c2b35316b3",
+    "sourceCommits": [
+      "796fdd2a13c0f6b0e6f767e0347151c0cbaf84fe"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40318285314",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40318285314/job/121556330989",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40318285314/job/121556331284"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 2665, "index.cjs": 2808 },
+      "ceiling": { "index.mjs": 1467294, "index.cjs": 1409264 }
+    },
+    "firstImport": {
+      "delta": { "replica.mjs": 0, "replica.cjs": 0 },
+      "ceiling": { "replica.mjs": 52374, "replica.cjs": 67571 }
+    },
+    "activation": {
+      "delta": { "activation.mjs": 0, "activation.cjs": 0 },
+      "ceiling": { "activation.mjs": 23386, "activation.cjs": 24959 }
+    },
+    "worker": { "delta": 0, "ceiling": 776128 },
+    "reason": "manifest named keys: the `keys` block, key resource derivation and sign-in abilities (TC-1977)"
   }
 }

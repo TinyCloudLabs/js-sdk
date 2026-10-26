@@ -68,6 +68,13 @@ describe("expandPermissionEntries (encryption)", () => {
     ).toThrow(ManifestValidationError);
   });
 
+  it("requires manifest.keys for key and prefix encryption URNs", () => {
+    for (const path of [`${NETWORK_ID}/apps/example/token`, `${NETWORK_ID}/apps/example/`]) {
+      expect(() => expandPermissionEntries([{ service: ENCRYPTION_PERMISSION_SERVICE, path, actions: ["decrypt"] }]))
+        .toThrow("named keys go in manifest.keys");
+    }
+  });
+
   it("rejects unknown encryption actions", () => {
     expect(() =>
       expandPermissionEntries([

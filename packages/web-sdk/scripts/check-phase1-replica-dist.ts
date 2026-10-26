@@ -21,6 +21,7 @@ import { validateTc848SettingsPanelRatchetTransition } from "./replica-size-poli
 import { validateTc2034NamedKeysCliRatchetTransition } from "./replica-size-policy";
 import { validateTc2043SyncScopeRatchetTransition } from "./replica-size-policy";
 import { validateTc1888PurgeLocalCopyRatchetTransition } from "./replica-size-policy";
+import { validateTc1977ManifestKeysRatchetTransition } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 import { replicaOwnedPath } from "./replica-owned-path";
 import { webSdkTestExitFailure } from "./web-sdk-test-exit";
@@ -435,6 +436,13 @@ if (prBaseSha) {
   if (tc1888PurgeLocalCopy !== undefined && baseLedger.tc1888PurgeLocalCopyRatchet === undefined &&
       (baseLedger.tc2043SyncScopeRatchet === undefined || !hasAncestor(repoRoot, tc1888PurgeLocalCopy.sourceCommits.at(-1)!))) {
     console.error("The sign-out local copy ratchet requires the merged replication syncScope ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc1977ManifestKeysRatchetTransition(baseLedger.tc1977ManifestKeysRatchet, ledger.tc1977ManifestKeysRatchet);
+  const tc1977ManifestKeys = ledger.tc1977ManifestKeysRatchet;
+  if (tc1977ManifestKeys !== undefined && baseLedger.tc1977ManifestKeysRatchet === undefined &&
+      (baseLedger.tc1888PurgeLocalCopyRatchet === undefined || !hasAncestor(repoRoot, tc1977ManifestKeys.sourceCommits.at(-1)!))) {
+    console.error("The manifest-keys ratchet requires the merged sign-out local copy ratchet and its measured source commit.");
     failed = true;
   }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
