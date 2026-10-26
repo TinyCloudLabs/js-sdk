@@ -1619,6 +1619,7 @@ class SqliteReplicaHandle implements KVReplicaHandle {
     const engine = new this.#replica.Replica({
       store: this.#store,
       transportFor,
+      ...(this.spec.contentFetch === undefined ? {} : { contentFetch: this.spec.contentFetch }),
     });
     const running = engine.sync({ signal: abort.signal });
     const registration = { promise: running, abort: () => abort.abort() };

@@ -1,5 +1,74 @@
 # @tinycloud/mcp
 
+## 0.8.3-beta.10
+
+### Patch Changes
+
+- Updated dependencies [92e4bd0]
+  - @tinycloud/node-sdk@3.8.0-beta.9
+  - @tinycloud/operations@0.7.7-beta.9
+
+## 0.8.3-beta.9
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.8.0-beta.7
+- @tinycloud/operations@0.7.7-beta.8
+
+## 0.8.3-beta.8
+
+### Patch Changes
+
+- 255772f: The hosted MCP server checks each access token's status with OpenKey's resource-server token introspection endpoint before serving a call. Only a 200 answer with `active: true` is active, and only when its `sub` and `client_id` equal the verified token's and its `aud` is a non-empty subset of the token's audiences that includes the server's resource URL; an active answer is reused for 30 seconds. An inactive token is answered with 401 `invalid_token`, and that answer is kept for the token. When OpenKey cannot be reached or answers otherwise, a call is served only when OpenKey itself answered that same token active to this server, and only until the token expires; every other call is answered with 500 `server_error`. A 401 from the endpoint is logged once and refused. The server needs `TC_MCP_INTROSPECTION_URL`, `TC_MCP_INTROSPECTION_CLIENT_ID` and `TC_MCP_INTROSPECTION_CLIENT_SECRET` (and optionally `TC_MCP_INTROSPECTION_AUTH_METHOD=basic|post`) and does not start without them. The README lists where an owner manages the hosted MCP's delegation.
+
+  Details: TC-1627
+
+## 0.8.3-beta.7
+
+### Patch Changes
+
+- Updated dependencies [479205d]
+  - @tinycloud/node-sdk@3.8.0-beta.6
+  - @tinycloud/operations@0.7.7-beta.7
+
+## 0.8.3-beta.6
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.8.0-beta.5
+- @tinycloud/operations@0.7.7-beta.6
+
+## 0.8.3-beta.5
+
+### Patch Changes
+
+- Updated dependencies [c541786]
+  - @tinycloud/node-sdk@3.8.0-beta.4
+  - @tinycloud/operations@0.7.7-beta.5
+
+## 0.8.3-beta.4
+
+### Patch Changes
+
+- 1fc87b6: Fix personal-app MCP guidance and generated write schemas for server-owned `by` metadata. Write examples omit `by`, and edit/move instructions tell clients to remove it from read-back values before submitting them. Advertised put/move schemas now reject top-level `by` before invocation, matching the existing runtime restriction. CLI records, nested data fields and stored/read-back attribution remain unchanged.
+- Updated dependencies [1fc87b6]
+  - @tinycloud/operations@0.7.7-beta.4
+
+## 0.8.3-beta.3
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.8.0-beta.3
+- @tinycloud/operations@0.7.7-beta.3
+
+## 0.8.3-beta.2
+
+### Patch Changes
+
+- Updated dependencies [4a19c47]
+  - @tinycloud/node-sdk@3.8.0-beta.2
+  - @tinycloud/operations@0.7.7-beta.2
+
 ## 0.8.3-beta.1
 
 ### Patch Changes

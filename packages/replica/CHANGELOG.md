@@ -1,5 +1,45 @@
 # @tinycloud/replica
 
+## 0.4.0-beta.3
+
+### Minor Changes
+
+- 92e4bd0: Replication accepts contentFetch "lazy", which syncs entry names without downloading values; reads of values not held go to the network.
+
+  Details: TC-2096
+
+### Patch Changes
+
+- Updated dependencies [92e4bd0]
+  - @tinycloud/sdk-services@3.8.0-beta.9
+
+## 0.4.0-beta.2
+
+### Patch Changes
+
+- c6b4703: The replica retries a value it could not verify with growing gaps and gives up after five tries until the next session.
+
+  Details: TC-2096
+
+## 0.4.0-beta.1
+
+### Minor Changes
+
+- 4a19c47: Signing out erases the local copy before `signOut()` resolves: the browser replica database is deleted under the origin gate lock after the deny commit, and the same erase runs when a different account signs in on a live session. The deny floor and logout marker in `localStorage` are kept.
+
+  If the delete is blocked or the deny kept the keys (`marker`, `unguarded`), the erase is retried three times in total (150 ms, then 450 ms apart), the logout marker makes the next load finish it, and `signOut()` still resolves for `marker`. `unguarded` still rejects, now with `code: "REPLICA_PURGE_FAILED"` unless the erase completed. After the retries `replica.purge.failed` fires (`TinyCloudWeb.on` / `TinyCloudNode.on`) with `trigger`, a typed `reason` and `retryNow`.
+
+  `tcw.replication.purgeLocalCopy()` runs the erase on demand and returns `{ ok: true }` or `{ ok: false, retryNow }`; it never touches a live session. New exported types: `ReplicaPurgeFailedEvent`, `ReplicaPurgeLocalCopyResult`, `ReplicaPurgeTrigger`, `ReplicaLocalEraseOutcome`, `ReplicaPurgeError`. `ReplicaLifecycleGate` gains the optional browser method `eraseLocalCopy`.
+
+  A restore with replication configured and no wallet provider stays gated, now with the gate reason `wallet_provider_required` instead of `gate_unavailable`. A read-only provider (silent `eth_accounts`, signing methods that throw) still restores.
+
+  Details: TC-1888
+
+### Patch Changes
+
+- Updated dependencies [4a19c47]
+  - @tinycloud/sdk-services@3.8.0-beta.2
+
 ## 0.3.5-beta.0
 
 ### Patch Changes

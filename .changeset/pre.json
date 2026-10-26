@@ -29,9 +29,22 @@
     "@tinycloud/sdk-services-test": "21.0.1"
   },
   "changesets": [
+    "cli-account-revoke-fallback",
     "cli-keys-replication",
     "cli-kv-create-only",
     "cli-named-keys",
-    "tc2043-sync-scope"
+    "cli-secrets-run",
+    "cli-share-json-short-link",
+    "mcp-token-status",
+    "owner-revocation-window",
+    "replica-repair-backoff",
+    "replication-content-fetch-lazy",
+    "sdk-manifest-app-keys",
+    "tc-apps-mcp-write-attribution",
+    "tc1737-createlink-floor",
+    "tc1888-purge-local-copy",
+    "tc2038-panel-prefetch",
+    "tc2043-sync-scope",
+    "tc2072-web-location-guard"
   ]
 }

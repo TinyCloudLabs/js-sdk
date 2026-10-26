@@ -22,11 +22,19 @@ import { join, resolve } from "node:path";
 // #694 (TC-1827: replica workers import only the KV service and its ServiceContext) measured 776,128 (-46,625) in GitHub
 // run 39943720009 (head 7a7303a8, merge base 6076581d); approved by Naomi, 2026-10-23; the ledger's tc1827WorkerRatchet row records it.
 // Zero additional headroom; independent of the web-sdk ledger, including WASM.
-export const MAX_WORKER_GZIP_BYTES = 776_128;
+// TC-2096 (#759: capped replica repair backoff) measured 776,468 (+340) in GitHub run 40343675308 (source c6b4703d);
+// approved by Naomi; the ledger's tc2096RepairBackoffRatchet row records it. Zero additional headroom.
+// TC-2096 (#761: lazy content fetch) measured 776,539 (+71) in GitHub run 40366506455 (source 10470576f); the ledger's
+// tc2096LazyContentRatchet row records it; approved by Naomi (replica first import +104/+111, activation +26/+22 at run 40370497109). Zero additional headroom.
+export const MAX_WORKER_GZIP_BYTES = 776_539;
 // TC-1827 follow-up: `replica.worker.js` (the @tinycloud/replica/browser worker) is unhashed and had no ceiling. It
 // measured 770,093 in GitHub run 39949887460 (head f2e2f9fc, merge base dc615834); requested by Naomi, 2026-10-23; the
 // ledger's tc1827ReplicaWorkerRatchet row records it. Zero additional headroom.
-export const MAX_REPLICA_WORKER_GZIP_BYTES = 770_093;
+// TC-2096 (#759) measured 770,416 (+323) in the same run 40343675308; the ledger's tc2096RepairBackoffRatchet row
+// records it as replicaWorker. Zero additional headroom.
+// TC-2096 (#761) measured 770,467 (+51) in run 40366506455; the ledger's tc2096LazyContentRatchet row records it as
+// replicaWorker; approved by Naomi. Zero additional headroom.
+export const MAX_REPLICA_WORKER_GZIP_BYTES = 770_467;
 const canonicalName = /^kv-storage\.worker\.([0-9a-f]{64})\.js$/;
 const replicaWorkerName = "replica.worker.js";
 

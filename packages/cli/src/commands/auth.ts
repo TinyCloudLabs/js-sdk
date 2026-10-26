@@ -333,7 +333,7 @@ export async function prepareProfileRemoteLogout(
   if (selected.profile.authMethod !== "local" || !selected.profile.privateKey) {
     throw new CLIError("REVOCATION_AUTHORITY_UNAVAILABLE",
       "OpenKey owner CID revocation requires a verified signed revoke-control grant or wallet proof. No CID was revoked; session, key and replica files remain for retry, while local replica reads stay denied.",
-      ExitCode.AUTH_REQUIRED, { hint: "Obtain verified owner revoke authority before retrying `auth logout --revoke`, or use plain `auth logout` to end this local session without node revocation." });
+      ExitCode.AUTH_REQUIRED, { hint: `This sign-in can't be revoked from the CLI yet. Revoke it at https://account.tinycloud.xyz/delegations. To sign out on this computer only, run \`${CLI_NAME} auth logout\`.` });
   }
   const signerDid = addressToDID(
     await deriveAddress(selected.profile.privateKey),

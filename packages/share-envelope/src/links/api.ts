@@ -168,7 +168,8 @@ async function refusal(response: Response): Promise<LinkError> {
 export async function prepareLinkRecord(input: PrepareLinkRecordInput): Promise<PreparedLinkRecord> {
   const apiOrigin = checkApiOrigin(input.apiOrigin);
   const nowMs = toEpochMs(input.now);
-  const expiresMs = input.expiresAt.getTime();
+  // The header carries whole seconds, truncated toward the past: it never runs later than the caller's expiresAt.
+  const expiresMs = Math.floor(input.expiresAt.getTime() / 1000) * 1000;
   if (!Number.isFinite(nowMs) || !Number.isFinite(expiresMs)) throw new LinkError("invalid_argument", "now and expiresAt must be valid dates");
   let blob: Uint8Array;
   let key: Uint8Array;

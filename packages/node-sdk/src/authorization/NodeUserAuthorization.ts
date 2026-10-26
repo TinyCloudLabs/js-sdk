@@ -21,12 +21,12 @@ import {
   IWasmBindings,
   ISessionManager,
   Manifest,
+  ManifestValidationError,
   ComposedManifestRequest,
   AbilitiesMap,
   DEFAULT_MANIFEST_SPACE,
   ENCRYPTION_PERMISSION_SERVICE,
   composeManifestRequest,
-  parseNetworkId,
   principalDidEquals,
   resourceCapabilitiesToAbilitiesMap,
   resourceCapabilitiesToSpaceAbilitiesMap,
@@ -62,6 +62,9 @@ import {
   ENCRYPTION,
   type CapabilityPresentationEnvelopeV1,
 } from "@tinycloud/sdk-core";
+import { parseEncryptionResource } from "@tinycloud/sdk-services/encryption/resource";
+import { parseNetworkId } from "@tinycloud/sdk-services";
+import { appKeyHostBinding } from "./appKeyHostBinding";
 import type { ReplicationOptions } from "@tinycloud/sdk-core";
 import type { PermissionEntry } from "@tinycloud/sdk-core";
 import { augmentSignInEntriesWithReplication } from "../replication/authority-sign-in";
@@ -846,6 +849,29 @@ export class NodeUserAuthorization implements IUserAuthorization {
     return this._capabilityRequest;
   }
 
+  private async refreshNamedKeyFeatureForSignIn(address: string, chainId: number): Promise<void> {
+    const request = this.getCapabilityRequest();
+    const siweDomain = this.siweConfig?.domain ?? this.domain;
+    const hasNamedKeys = request?.manifests.some((manifest) =>
+      manifest.keys?.length && appKeyHostBinding(siweDomain, manifest.keys_app_id ?? manifest.app_id));
+    if (hasNamedKeys) {
+      await this.resolveTinyCloudHostsForSignIn(address, chainId);
+      await this.refreshNodeInfo();
+    }
+  }
+
+  /** Manifest key paths that this sign-in cannot grant. */
+  get unavailableKeyPaths(): string[] {
+    const request = this.getCapabilityRequest();
+    const siweDomain = this.siweConfig?.domain ?? this.domain;
+    return (request?.manifests ?? []).flatMap((manifest) =>
+      this._nodeFeatures.includes("encryption-named-keys-v1") &&
+      appKeyHostBinding(siweDomain, manifest.keys_app_id ?? manifest.app_id)
+        ? []
+        : (manifest.keys ?? []).map((entry) => "path" in entry ? entry.path : entry.prefix),
+    );
+  }
+
   private resolveSpaceName(space: string, address: string, chainId: number): string {
     if (space.startsWith("tinycloud:")) {
       return space;
@@ -1090,15 +1116,33 @@ export class NodeUserAuthorization implements IUserAuthorization {
 
     const rawAbilities: Record<string, string[]> = {};
     const currentDid = pkhDid(address, chainId);
+    if (this._nodeFeatures.includes("encryption-named-keys-v1")) {
+      const siweDomain = this.siweConfig?.domain ?? this.domain;
+      for (const manifest of request.manifests) {
+        if (!appKeyHostBinding(siweDomain, manifest.keys_app_id ?? manifest.app_id)) continue;
+        for (const declaration of manifest.keys ?? []) {
+          const path = "path" in declaration ? declaration.path : declaration.prefix;
+          const resource = `urn:tinycloud:encryption:${currentDid}:default/${path}`;
+          for (const ability of declaration.abilities) {
+            addRawAbility(rawAbilities, resource, `tinycloud.encryption/${ability}`);
+          }
+        }
+      }
+    }
     const spaceResources = request.resources.filter((entry) => {
       if (entry.service !== ENCRYPTION_PERMISSION_SERVICE) {
         return true;
       }
+      const parsed = entry.path.includes("/")
+        ? parseEncryptionResource(entry.path)
+        : { ...parseNetworkId(entry.path), kind: "network" as const };
+      if (parsed.kind !== "network") {
+        throw new ManifestValidationError("named keys go in manifest.keys");
+      }
       for (const action of entry.actions) {
         addRawAbility(rawAbilities, entry.path, action);
       }
-      if (entry.actions.includes(DECRYPT_ACTION)) {
-        const parsed = parseNetworkId(entry.path);
+      if (entry.actions.includes(DECRYPT_ACTION) && parsed.kind === "network") {
         if (didPrincipalMatches(parsed.ownerDid, currentDid)) {
           addRawAbility(rawAbilities, entry.path, NETWORK_CREATE_ACTION);
         }
@@ -1616,6 +1660,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
 
     await this.resolveTinyCloudHostsForSignIn(address, chainId);
     this.assertSignInCurrent(generation);
+    await this.refreshNamedKeyFeatureForSignIn(address, chainId);
+    this.assertSignInCurrent(generation);
 
     // Create a session key
     const keyId = `session-${Date.now()}`;
@@ -1829,6 +1875,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     refuseCaveated(this.getCapabilityRequest()?.manifests);
     const address = canonicalizeAddress(await this.signer.getAddress());
     const chainId = await this.signer.getChainId();
+    await this.refreshNamedKeyFeatureForSignIn(address, chainId);
 
     // Create a session key
     const keyId = `openkey-session-${Date.now()}-${++this.preparedSessionCounter}`;

@@ -28,6 +28,7 @@ export type KvOpenSpec = {
   stamp?: ReplicaSessionStamp;
   grantPolicy?: ReplicaGrantPolicy;
   quota?: ReplicaQuotaSpec;
+  contentFetch?: "eager" | "lazy";
 };
 
 export type KvRequest =

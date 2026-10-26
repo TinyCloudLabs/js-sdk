@@ -1857,7 +1857,7 @@ var init_sha256 = __esm({
 });
 
 // ../sdk-core/src/manifest.ts
-import { resolveSecretPath, SECRET_NAME_RE } from "@tinycloud/sdk-services";
+import { resolveSecretPath, SECRET_NAME_RE, parseNetworkId } from "@tinycloud/sdk-services";
 function parseExpiry(duration) {
   if (typeof duration !== "string" || duration.length === 0) {
     throw new ManifestValidationError(
@@ -1899,6 +1899,14 @@ function expandEncryptionPermissionEntry(entry) {
     throw new ManifestValidationError(
       `tinycloud.encryption entries require path to be a networkId URN (got ${JSON.stringify(entry.path)})`
     );
+  }
+  if (entry.path.includes("/")) {
+    throw new ManifestValidationError("named keys go in manifest.keys");
+  }
+  try {
+    parseNetworkId(entry.path);
+  } catch {
+    throw new ManifestValidationError("tinycloud.encryption entries require a valid networkId URN");
   }
   const normalizedActions = [];
   for (const action of entry.actions) {
@@ -2004,7 +2012,51 @@ function validateManifest(input) {
   if (m.secrets !== void 0) {
     validateManifestSecrets(m.secrets);
   }
+  if (Object.prototype.hasOwnProperty.call(m, "keys_app_id") && (typeof m.keys_app_id !== "string" || !KEY_APP_ID.test(m.keys_app_id))) {
+    throw new ManifestValidationError("manifest.keys_app_id is invalid");
+  }
+  validateManifestKeys(m.keys_app_id ?? m.app_id, m.keys);
   return m;
+}
+function validateManifestKeys(appId, keys) {
+  if (keys === void 0) return;
+  if (!Array.isArray(keys) || keys.length > 32) {
+    throw new ManifestValidationError("manifest.keys must contain at most 32 entries");
+  }
+  if (keys.length === 0) return;
+  if (!KEY_APP_ID.test(appId)) {
+    throw new ManifestValidationError("manifest.keys requires a valid app_id");
+  }
+  const paths = /* @__PURE__ */ new Set();
+  let prefixSeen = false;
+  for (const [index, value] of keys.entries()) {
+    const label = `manifest.keys[${index}]`;
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      throw new ManifestValidationError(`${label} must be an object`);
+    }
+    const entry = value;
+    const fields = Object.keys(entry);
+    const hasPath = Object.prototype.hasOwnProperty.call(entry, "path");
+    const hasPrefix = Object.prototype.hasOwnProperty.call(entry, "prefix");
+    if (hasPath === hasPrefix || fields.some((field) => !["path", "prefix", "abilities"].includes(field))) {
+      throw new ManifestValidationError(`${label} must have one path or prefix and abilities`);
+    }
+    if (!Array.isArray(entry.abilities) || entry.abilities.length === 0 || new Set(entry.abilities).size !== entry.abilities.length || entry.abilities.some((ability) => typeof ability !== "string" || !KEY_ABILITIES.includes(ability))) {
+      throw new ManifestValidationError(`${label}.abilities is invalid`);
+    }
+    if (hasPath) {
+      const path = entry.path;
+      if (typeof path !== "string" || path.length > 255 || !KEY_PATH.test(path) || !path.startsWith(`apps/${appId}/`) || paths.has(path)) {
+        throw new ManifestValidationError(`${label}.path is invalid`);
+      }
+      paths.add(path);
+    } else {
+      if (entry.prefix !== `apps/${appId}/` || prefixSeen) {
+        throw new ManifestValidationError(`${label}.prefix is invalid`);
+      }
+      prefixSeen = true;
+    }
+  }
 }
 function resolveManifestKnowledgeRoot(knowledge) {
   if (knowledge === void 0) {
@@ -2405,7 +2457,7 @@ function withCapabilitiesReadForSpaces(resources) {
     ...[...spaces].map(capabilitiesReadPermission)
   ]);
 }
-var import_ms, DEFAULT_KNOWLEDGE_ROOT, ManifestValidationError, DEFAULT_EXPIRY, DEFAULT_DEFAULTS, DEFAULT_MANIFEST_VERSION, DEFAULT_MANIFEST_SPACE, SECRETS_SPACE, VAULT_PERMISSION_SERVICE, SERVICE_SHORT_TO_LONG, ENCRYPTION_PERMISSION_SERVICE, ENCRYPTION_MANIFEST_SPACE, SERVICE_LONG_TO_SHORT2, DEFAULT_STANDARD_ENTRIES, DEFAULT_ADMIN_ENTRIES, DEFAULT_ALL_ENTRIES;
+var import_ms, DEFAULT_KNOWLEDGE_ROOT, ManifestValidationError, DEFAULT_EXPIRY, DEFAULT_DEFAULTS, DEFAULT_MANIFEST_VERSION, DEFAULT_MANIFEST_SPACE, SECRETS_SPACE, VAULT_PERMISSION_SERVICE, SERVICE_SHORT_TO_LONG, ENCRYPTION_PERMISSION_SERVICE, ENCRYPTION_MANIFEST_SPACE, SERVICE_LONG_TO_SHORT2, DEFAULT_STANDARD_ENTRIES, DEFAULT_ADMIN_ENTRIES, DEFAULT_ALL_ENTRIES, KEY_SEGMENT, KEY_APP_ID, KEY_PATH, KEY_ABILITIES;
 var init_manifest = __esm({
   "../sdk-core/src/manifest.ts"() {
     "use strict";
@@ -2488,6 +2540,10 @@ var init_manifest = __esm({
         actions: ["read", "write"]
       }
     ];
+    KEY_SEGMENT = "[a-z0-9][a-z0-9._-]{0,63}";
+    KEY_APP_ID = new RegExp(`^${KEY_SEGMENT}$`);
+    KEY_PATH = new RegExp(`^${KEY_SEGMENT}(?:/${KEY_SEGMENT}){2,7}$`);
+    KEY_ABILITIES = ["key.create", "decrypt", "key.block", "key.unblock"];
   }
 });
 
@@ -5203,6 +5259,9 @@ function assertReadable(authority, now) {
 function contentHash(bytes) {
   return bytesToHex(blake3(bytes));
 }
+function repairId(entry) {
+  return `${entry.hash}\0${entry.key}`;
+}
 function sameEtag(a, b) {
   return a.replace(/^"|"$/g, "") === b.replace(/^"|"$/g, "");
 }
@@ -5572,7 +5631,7 @@ function kvSyncTransport(kv, options = {}) {
     }
   };
 }
-var ReplicaErrorCode, REPLICA_ERROR, ReplicaError, RFC3339, DEFAULT_PAGE_LIMIT, DEFAULT_LEASE_TTL_MS, FETCH_CHUNK, REPAIR_BATCH, RETENTION_REVOKED, PENDING_REFUSALS, Replica, BASE58, BASE32, featureCache, REVOKED_CODES, REVOKED_BODY, encoder;
+var ReplicaErrorCode, REPLICA_ERROR, ReplicaError, RFC3339, DEFAULT_PAGE_LIMIT, DEFAULT_LEASE_TTL_MS, FETCH_CHUNK, REPAIR_BATCH, REPAIR_MAX_TRIES, REPAIR_BACKOFF_BASE_MS, RETENTION_REVOKED, PENDING_REFUSALS, Replica, BASE58, BASE32, featureCache, REVOKED_CODES, REVOKED_BODY, encoder;
 var init_dist = __esm({
   "../replica/dist/index.js"() {
     "use strict";
@@ -5660,6 +5719,8 @@ var init_dist = __esm({
     DEFAULT_LEASE_TTL_MS = 12e4;
     FETCH_CHUNK = 100;
     REPAIR_BATCH = 100;
+    REPAIR_MAX_TRIES = 5;
+    REPAIR_BACKOFF_BASE_MS = 6e4;
     RETENTION_REVOKED = /* @__PURE__ */ new Set(["retention-grant-revoked", "retention-grant-ancestor-revoked"]);
     PENDING_REFUSALS = /* @__PURE__ */ new Set([
       ReplicaErrorCode.GRANT_UNAUTHORIZED,
@@ -5672,6 +5733,9 @@ var init_dist = __esm({
       #now;
       #leaseTtlMs;
       #onCommit;
+      #contentFetch;
+      /** Failed repair fetches of this session, by key and ETag hash. Never persisted: a new `Replica` retries afresh. */
+      #repairTries = /* @__PURE__ */ new Map();
       constructor(options) {
         this.#store = options.store;
         const transport = options.transport;
@@ -5679,6 +5743,7 @@ var init_dist = __esm({
         this.#now = options.now ?? Date.now;
         this.#leaseTtlMs = options.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS;
         this.#onCommit = options.onCommit;
+        this.#contentFetch = options.contentFetch ?? "eager";
       }
       async #state() {
         const state2 = await this.#store.open();
@@ -6007,6 +6072,7 @@ var init_dist = __esm({
           changes[candidate.index].content = true;
           return false;
         });
+        if (this.#contentFetch === "lazy") return { changes, blobs, fetched: 0 };
         let fetched2 = 0;
         for (let start = 0; start < needed.length; start += FETCH_CHUNK) {
           const chunk = needed.slice(start, start + FETCH_CHUNK);
@@ -6026,7 +6092,15 @@ var init_dist = __esm({
         return { changes, blobs, fetched: fetched2 };
       }
       async #repair(attempt, cursor, nodeDid, coverage, retentionGrantCid) {
-        const pending = await this.#store.pendingRepairs(Number.MAX_SAFE_INTEGER);
+        if (this.#contentFetch === "lazy") return 0;
+        const all = await this.#store.pendingRepairs(Number.MAX_SAFE_INTEGER);
+        const now = this.#now();
+        const pendingIds = new Set(all.map((entry) => repairId(entry)));
+        for (const id of this.#repairTries.keys()) if (!pendingIds.has(id)) this.#repairTries.delete(id);
+        const pending = all.filter((entry) => {
+          const state2 = this.#repairTries.get(repairId(entry));
+          return state2 === void 0 || state2.tries < REPAIR_MAX_TRIES && now >= state2.nextAttemptAt;
+        });
         let repaired = 0;
         for (let start = 0; start < pending.length; start += REPAIR_BATCH) {
           const chunk = pending.slice(start, start + REPAIR_BATCH);
@@ -6038,7 +6112,14 @@ var init_dist = __esm({
           const changes = [];
           for (const entry of chunk) {
             const bytes = acceptContent(entry, contents.get(entry.key));
-            if (bytes === void 0) continue;
+            const id = repairId(entry);
+            if (bytes === void 0) {
+              const tries = (this.#repairTries.get(id)?.tries ?? 0) + 1;
+              const wait = tries === 1 ? 0 : REPAIR_BACKOFF_BASE_MS * 2 ** (tries - 2);
+              this.#repairTries.set(id, { tries, nextAttemptAt: this.#now() + wait });
+              continue;
+            }
+            this.#repairTries.delete(id);
             blobs.set(entry.hash, bytes);
             changes.push({ ...entry, content: true });
           }
@@ -15794,7 +15875,7 @@ async function refusal(response) {
 async function prepareLinkRecord(input) {
   const apiOrigin2 = checkApiOrigin(input.apiOrigin);
   const nowMs = toEpochMs(input.now);
-  const expiresMs = input.expiresAt.getTime();
+  const expiresMs = Math.floor(input.expiresAt.getTime() / 1e3) * 1e3;
   if (!Number.isFinite(nowMs) || !Number.isFinite(expiresMs)) throw new LinkError("invalid_argument", "now and expiresAt must be valid dates");
   let blob;
   let key;
@@ -33002,7 +33083,8 @@ async function revokeDelegationOnNode(params) {
         throw new CLIError(
           "RAW_RECAP_RESOURCE_UNSUPPORTED",
           `Cannot revoke "${cid}": this CLI profile has no record of this grant and the node's record does not match the signed-in owner.`,
-          ExitCode.PERMISSION_DENIED
+          ExitCode.PERMISSION_DENIED,
+          profile.authMethod === "openkey" ? { hint: "This permission can't be revoked from the CLI yet. Revoke it at https://account.tinycloud.xyz/delegations." } : void 0
         );
       }
       fallbackSpaceId = fallback.space;
@@ -33827,7 +33909,7 @@ async function prepareProfileRemoteLogout(ctx, expectedSessionCid, discardLocalC
       "REVOCATION_AUTHORITY_UNAVAILABLE",
       "OpenKey owner CID revocation requires a verified signed revoke-control grant or wallet proof. No CID was revoked; session, key and replica files remain for retry, while local replica reads stay denied.",
       ExitCode.AUTH_REQUIRED,
-      { hint: "Obtain verified owner revoke authority before retrying `auth logout --revoke`, or use plain `auth logout` to end this local session without node revocation." }
+      { hint: `This sign-in can't be revoked from the CLI yet. Revoke it at https://account.tinycloud.xyz/delegations. To sign out on this computer only, run \`${CLI_NAME18} auth logout\`.` }
     );
   }
   const signerDid = addressToDID(
@@ -39110,7 +39192,7 @@ init_constants();
 import { CLI_NAME as CLI_NAME32 } from "@tinycloud/operations/cli-name";
 import { readFile as readFile14 } from "fs/promises";
 import { join as join17 } from "path";
-import { homedir, hostname, userInfo } from "os";
+import { constants as osConstants, homedir, hostname, userInfo } from "os";
 import { appSecretScope } from "@tinycloud/sdk-core";
 import { invokeOperation as invokeOperation3 } from "@tinycloud/operations";
 import { isLocalOwnerProfile as isLocalOwnerProfile4, ownerSessionLacksProof as ownerSessionLacksProof5 } from "@tinycloud/operations/profile";
@@ -39131,6 +39213,7 @@ import {
 } from "@tinycloud/operations/secret-capabilities";
 import { invokeSecretsGetWithLocalAuthorityRetry } from "@tinycloud/operations/cli-runtime";
 init_sdk();
+init_replication_registry();
 init_session_expired();
 init_space();
 
@@ -39196,14 +39279,14 @@ function runProbeChild(request, options = {}) {
   const args = options.argv ?? probeChildArgv(request);
   const budgetMs = options.budgetMs ?? ATTEMPT_BUDGET_MS;
   const killGraceMs = options.killGraceMs ?? KILL_GRACE_MS;
-  const spawn2 = options.spawn ?? nodeSpawn;
+  const spawn3 = options.spawn ?? nodeSpawn;
   const signal = options.signal;
   return new Promise((resolve9) => {
     if (signal?.aborted) {
       resolve9({ kind: "cancelled" });
       return;
     }
-    const child = spawn2(command, args, { env: process.env, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn3(command, args, { env: process.env, stdio: ["ignore", "pipe", "pipe"] });
     let outcome;
     let stdout = Buffer.alloc(0);
     let stderr = Buffer.alloc(0);
@@ -39314,6 +39397,75 @@ function parseStatusEnvelope(line) {
   }
   return void 0;
 }
+
+// src/lib/run-command.ts
+import { execFileSync, spawn as spawn2 } from "child_process";
+import { existsSync, readFileSync as readFileSync2 } from "fs";
+var FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"];
+var TERMINAL_SIGNALS = { SIGINT: true, SIGQUIT: true, SIGHUP: true };
+function psGroupArgs(pid) {
+  return ["-o", "pgid=", "-o", "tpgid=", "-p", String(pid)];
+}
+function parsePsGroups(output2) {
+  const columns = output2.trim().split(/\s+/);
+  if (columns.length !== 2) return void 0;
+  const group = Number(columns[0]);
+  const foreground = Number(columns[1]);
+  return Number.isSafeInteger(group) && Number.isSafeInteger(foreground) ? { group, foreground } : void 0;
+}
+function processGroups() {
+  try {
+    const stat8 = readFileSync2("/proc/self/stat", "utf8");
+    const fields = stat8.slice(stat8.lastIndexOf(")") + 2).split(" ");
+    return { group: Number(fields[2]), foreground: Number(fields[5]) };
+  } catch {
+  }
+  try {
+    const ps = existsSync("/bin/ps") ? "/bin/ps" : "/usr/bin/ps";
+    return parsePsGroups(execFileSync(ps, psGroupArgs(process.pid), {
+      env: {},
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 2e3
+    }));
+  } catch {
+    return void 0;
+  }
+}
+function inTerminalForeground() {
+  const groups = processGroups();
+  return groups !== void 0 && groups.foreground > 0 && groups.group === groups.foreground;
+}
+function runCommand(argv, env) {
+  return new Promise((resolve9) => {
+    let child;
+    try {
+      child = spawn2(argv[0], argv.slice(1), { stdio: "inherit", env, shell: false });
+    } catch (error) {
+      const code5 = error instanceof Error && "code" in error && typeof error.code === "string" ? error.code : void 0;
+      resolve9({ kind: "not_started", ...code5 === void 0 ? {} : { errno: code5 } });
+      return;
+    }
+    const forward = (signal) => {
+      if (TERMINAL_SIGNALS[signal] && inTerminalForeground()) return;
+      child.kill(signal);
+    };
+    for (const signal of FORWARDED_SIGNALS) process.on(signal, forward);
+    const settle = (outcome) => {
+      for (const signal of FORWARDED_SIGNALS) process.off(signal, forward);
+      resolve9(outcome);
+    };
+    child.on("error", (error) => {
+      if (child.pid === void 0) settle({ kind: "not_started", ...error.code === void 0 ? {} : { errno: error.code } });
+    });
+    child.once("exit", (code5, signal) => {
+      settle(signal !== null ? { kind: "signaled", signal } : { kind: "exited", code: code5 ?? 1 });
+    });
+  });
+}
+
+// src/commands/secrets.ts
+init_safe_text();
 
 // src/lib/secrets-wait.ts
 init_constants();
@@ -40269,6 +40421,153 @@ function outputSecretDoctor(result) {
     process.stdout.write(theme.warn(`${failed} secrets check${failed > 1 ? "s" : ""} need attention.`) + "\n");
   }
 }
+async function resolveSecretReadTarget(ctx, name, options) {
+  const scopeOptions = resolveSecretScope(options);
+  const legacySpaceUri = await resolveSecretSpace(options.space, ctx.profile);
+  const resolved = resolveSecretPath2(name, scopeOptions);
+  return { name, scopeOptions, scope: resolved.scope, legacySpaceUri, secretPath: resolved.permissionPaths.vault };
+}
+async function readSecret(params) {
+  const { ctx, target, options } = params;
+  const { name } = target;
+  if (options.delegation) {
+    const delegated = await resolveDelegatedSecretSource(
+      options.delegation,
+      target.secretPath,
+      target.legacySpaceUri ?? SECRETS_SPACE2
+    );
+    const effectiveHost = params.host ?? delegated.delegation.host ?? ctx.host;
+    const delegatedCtx = { ...ctx, host: effectiveHost };
+    const local = effectiveLocal(await ProfileManager.getProfile(ctx.profile).catch(() => null), options);
+    const node = await ensureSecretsNode(delegatedCtx, options);
+    const value = await withSpinner(
+      `Getting secret ${name}...`,
+      () => readDelegatedSecretValue({
+        node,
+        delegation: delegated.delegation,
+        delegationCid: delegated.delegation.cid,
+        permissions: delegated.permissions,
+        secretPath: target.secretPath,
+        space: target.legacySpaceUri ?? SECRETS_SPACE2,
+        name,
+        ...target.scope === void 0 ? {} : { scope: target.scope },
+        local
+      })
+    );
+    return { value };
+  }
+  const privateKey = authOptions(options)?.privateKey;
+  const spaceUri = privateKey !== void 0 && options.space !== void 0 && !options.space.startsWith("tinycloud:") ? options.space : target.legacySpaceUri;
+  const result = await invokeCanonicalSecretGet({
+    ctx,
+    name,
+    ...target.scopeOptions?.scope === void 0 ? {} : { scope: target.scopeOptions.scope },
+    ...spaceUri === void 0 ? {} : { space: spaceUri },
+    options,
+    label: `Getting secret ${name}...`,
+    openKeyAcquisition: params.openKeyAcquisition
+  });
+  if (result.status !== "ok") {
+    try {
+      throwCanonicalSecretGetError(result, name);
+    } catch (error) {
+      throw withOperationWarnings(error, result.warnings);
+    }
+  }
+  return { value: result.output.value, warnings: result.warnings };
+}
+var ENV_VAR_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+function argvAfterSeparator(cmd) {
+  let root = cmd;
+  while (root.parent) root = root.parent;
+  const raw = "rawArgs" in root ? root.rawArgs : void 0;
+  if (!Array.isArray(raw)) return void 0;
+  const args = raw.map(String);
+  const withValue = (flag) => root.options.some((option) => option.required && (option.long === flag || option.short === flag));
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--") return args.slice(index + 1);
+    if (arg.startsWith("--")) {
+      if (withValue(arg)) index += 1;
+      continue;
+    }
+    if (arg.length < 2 || !arg.startsWith("-")) continue;
+    for (let char = 1; char < arg.length; char += 1) {
+      const option = root.options.find((candidate) => candidate.short === `-${arg[char]}`);
+      if (option === void 0) break;
+      if (option.required) {
+        if (char === arg.length - 1) index += 1;
+        break;
+      }
+    }
+  }
+  return void 0;
+}
+function secretRunPlan(cmd, operands, maps) {
+  const usage3 = `${CLI_NAME32} secrets run NAME... [--map NAME=ENV_VAR] -- <command> [args...]`;
+  const after = argvAfterSeparator(cmd);
+  if (after === void 0 || after.length > operands.length) {
+    throw new CLIError("USAGE_ERROR", `Put the command after \`--\`: ${usage3}`, ExitCode.USAGE_ERROR);
+  }
+  const [program, ...args] = after;
+  if (program === void 0) {
+    throw new CLIError("USAGE_ERROR", `Add the command to run after \`--\`: ${usage3}`, ExitCode.USAGE_ERROR);
+  }
+  const exports = [];
+  for (const name of operands.slice(0, operands.length - after.length)) {
+    if (!ENV_VAR_RE.test(name)) {
+      throw new CLIError(
+        "USAGE_ERROR",
+        `${JSON.stringify(name)} can't be used as an environment variable name. Use \`--map ${name}=ENV_VAR\` to choose one.`,
+        ExitCode.USAGE_ERROR
+      );
+    }
+    exports.push({ name, variable: name });
+  }
+  for (const map of maps) {
+    const equals7 = map.indexOf("=");
+    const variable = map.slice(equals7 + 1);
+    if (equals7 <= 0 || !ENV_VAR_RE.test(variable)) {
+      throw new CLIError(
+        "USAGE_ERROR",
+        `Invalid \`--map ${JSON.stringify(map)}\`: use NAME=ENV_VAR, where ENV_VAR starts with a letter or _ and uses only letters, digits and _.`,
+        ExitCode.USAGE_ERROR
+      );
+    }
+    exports.push({ name: map.slice(0, equals7), variable });
+  }
+  if (exports.length === 0) {
+    throw new CLIError("USAGE_ERROR", `Name at least one secret: ${usage3}`, ExitCode.USAGE_ERROR);
+  }
+  const variables = /* @__PURE__ */ new Set();
+  for (const { variable } of exports) {
+    if (variables.has(variable)) {
+      throw new CLIError("USAGE_ERROR", `Two secrets are mapped to ${variable}. Give each its own variable.`, ExitCode.USAGE_ERROR);
+    }
+    variables.add(variable);
+  }
+  return { command: [program, ...args], exports };
+}
+var RERAISED_SIGNALS = {
+  SIGINT: true,
+  SIGTERM: true,
+  SIGHUP: true,
+  SIGKILL: true,
+  SIGALRM: true,
+  SIGUSR2: true
+};
+var TC_CREDENTIAL_VARIABLES = ["TC_PRIVATE_KEY"];
+function exitAsCommand(outcome, program) {
+  if (outcome.kind === "exited") return process.exit(outcome.code);
+  if (outcome.kind === "signaled") {
+    if (RERAISED_SIGNALS[outcome.signal]) process.kill(process.pid, outcome.signal);
+    return process.exit(128 + (osConstants.signals[outcome.signal] ?? 0));
+  }
+  const reason = outcome.errno === "ENOENT" ? "command not found" : outcome.errno === "EACCES" ? "permission denied" : `cannot run (${outcome.errno ?? "unknown error"})`;
+  process.stderr.write(`${CLI_NAME32} secrets run: ${safeInline(program)}: ${reason}
+`);
+  return process.exit(outcome.errno === "ENOENT" ? 127 : 126);
+}
 function registerSecretsCommand(program, openKeyAcquisition) {
   const secrets = program.command("secrets").description("Encrypted secrets management");
   const network = secrets.command("network").description("Manage the default secrets encryption network");
@@ -40436,66 +40735,23 @@ function registerSecretsCommand(program, openKeyAcquisition) {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
-      const scopeOptions = resolveSecretScope(options);
-      const legacySpaceUri = await resolveSecretSpace(options.space, ctx.profile);
-      const secretPath = resolveSecretPath2(name, scopeOptions).permissionPaths.vault;
+      const target = await resolveSecretReadTarget(ctx, name, options);
       if (options.output) await validatePrivateOutput(options.output, "Secret output");
+      const secret = await readSecret({ ctx, host: globalOpts.host, target, options, openKeyAcquisition });
+      const value = secret.value;
       if (options.delegation) {
-        const delegated = await resolveDelegatedSecretSource(
-          options.delegation,
-          secretPath,
-          legacySpaceUri ?? SECRETS_SPACE2
-        );
-        const effectiveHost = globalOpts.host ?? delegated.delegation.host ?? ctx.host;
-        const delegatedCtx = { ...ctx, host: effectiveHost };
-        const local = effectiveLocal(await ProfileManager.getProfile(ctx.profile).catch(() => null), options);
-        const scope = resolveSecretPath2(name, scopeOptions).scope;
-        const node = await ensureSecretsNode(delegatedCtx, options);
-        const value2 = await withSpinner(
-          `Getting secret ${name}...`,
-          () => readDelegatedSecretValue({
-            node,
-            delegation: delegated.delegation,
-            delegationCid: delegated.delegation.cid,
-            permissions: delegated.permissions,
-            secretPath,
-            space: legacySpaceUri ?? SECRETS_SPACE2,
-            name,
-            ...scope === void 0 ? {} : { scope },
-            local
-          })
-        );
         if (options.output) {
-          await writePrivateOutput(options.output, value2, "Secret output");
+          await writePrivateOutput(options.output, value, "Secret output");
           outputJson({ name, written: options.output });
           return;
         }
         if (options.raw) {
-          process.stdout.write(value2);
+          process.stdout.write(value);
           return;
         }
-        outputJson({ name, value: value2 });
+        outputJson({ name, value });
         return;
       }
-      const privateKey = authOptions(options)?.privateKey;
-      const spaceUri = privateKey !== void 0 && options.space !== void 0 && !options.space.startsWith("tinycloud:") ? options.space : legacySpaceUri;
-      const result = await invokeCanonicalSecretGet({
-        ctx,
-        name,
-        ...scopeOptions?.scope === void 0 ? {} : { scope: scopeOptions.scope },
-        ...spaceUri === void 0 ? {} : { space: spaceUri },
-        options,
-        label: `Getting secret ${name}...`,
-        openKeyAcquisition
-      });
-      if (result.status !== "ok") {
-        try {
-          throwCanonicalSecretGetError(result, name);
-        } catch (error) {
-          throw withOperationWarnings(error, result.warnings);
-        }
-      }
-      const value = result.output.value;
       try {
         if (options.output) {
           await writePrivateOutput(options.output, value, "Secret output");
@@ -40506,9 +40762,47 @@ function registerSecretsCommand(program, openKeyAcquisition) {
           outputJson({ name, value });
         }
       } catch (error) {
-        throw withOperationWarnings(error, result.warnings);
+        throw withOperationWarnings(error, secret.warnings);
       }
-      outputWarnings(operationWarnings(result.warnings));
+      outputWarnings(operationWarnings(secret.warnings));
+    } catch (error) {
+      return handleError(error);
+    }
+  });
+  secrets.command("run [names...]").description("Run a command with secrets in its environment").usage("[options] [names...] -- <command> [args...]").option(
+    "--map <NAME=ENV_VAR>",
+    "Give secret NAME to the command as environment variable ENV_VAR (repeatable)",
+    (value, previous) => [...previous ?? [], value]
+  ).option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--delegation <source>", "Delegation file path or imported profile name").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (operands, options, cmd) => {
+    try {
+      const plan = secretRunPlan(cmd, operands, options.map ?? []);
+      const globalOpts = cmd.optsWithGlobals();
+      const ctx = await ProfileManager.resolveContext(globalOpts);
+      const targets = [];
+      for (const name of new Set(plan.exports.map((entry) => entry.name))) {
+        targets.push(await resolveSecretReadTarget(ctx, name, options));
+      }
+      const values = /* @__PURE__ */ new Map();
+      let warnings = [];
+      for (const target of targets) {
+        const secret = await readSecret({ ctx, host: globalOpts.host, target, options, openKeyAcquisition });
+        if (secret.value.includes("\0")) {
+          throw new CLIError(
+            "SECRET_NOT_EXPORTABLE",
+            `Secret "${target.name}" contains a NUL character, so it can't be put in an environment variable. The command wasn't started.`,
+            ExitCode.ERROR
+          );
+        }
+        values.set(target.name, secret.value);
+        warnings = mergeWarnings(warnings, secret.warnings ?? []);
+      }
+      outputWarnings(operationWarnings(warnings));
+      await closeReplication();
+      const env = { ...process.env };
+      for (const variable of TC_CREDENTIAL_VARIABLES) delete env[variable];
+      for (const entry of plan.exports) env[entry.variable] = values.get(entry.name);
+      values.clear();
+      exitAsCommand(await runCommand(plan.command, env), plan.command[0]);
     } catch (error) {
       return handleError(error);
     }
@@ -40970,7 +41264,7 @@ async function writeShareOutput(directory, filename, bytes, force) {
 init_profiles();
 
 // src/share/html-folder.ts
-import { constants as constants2, existsSync } from "fs";
+import { constants as constants2, existsSync as existsSync2 } from "fs";
 import { lstat as lstat11, open as open14, readdir as readdir7, realpath as realpath3, stat as stat7 } from "fs/promises";
 import { basename as basename5, dirname as dirname9, isAbsolute, join as join19, relative as relativePath, resolve as resolve7, sep as sep4 } from "path";
 
@@ -41908,7 +42202,7 @@ function isRaceError(error) {
 }
 var PROC_FD = "/proc/self/fd";
 async function linuxDescriptorPath(fd) {
-  if (process.platform !== "linux" || !existsSync(PROC_FD)) return void 0;
+  if (process.platform !== "linux" || !existsSync2(PROC_FD)) return void 0;
   return realpath3(`${PROC_FD}/${fd}`);
 }
 async function parentChainIsRealDirectories(root, path) {
@@ -43545,11 +43839,11 @@ function plural(count, label) {
 init_theme();
 init_errors();
 import { execSync } from "child_process";
-import { readFileSync as readFileSync2 } from "fs";
+import { readFileSync as readFileSync3 } from "fs";
 var PACKAGE_NAME = "@tinycloud/cli";
 function getCurrentVersion() {
   const pkg = JSON.parse(
-    readFileSync2(new URL("../package.json", import.meta.url), "utf-8")
+    readFileSync3(new URL("../package.json", import.meta.url), "utf-8")
   );
   return pkg.version;
 }

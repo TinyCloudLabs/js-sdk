@@ -247,6 +247,10 @@ const LAZY_ENTRIES = [
   { request: "./modals-entry", dir: "src/notifications", file: "modals" },
 ];
 const lazyLoaderExternals = (type, ext) => ({ context, request }, callback) => {
+  if (request === "./encryption-keys.js" && context === path.resolve(__dirname, "../node-sdk/dist")) {
+    callback(null, `${type} ./encryption-keys.${ext}`);
+    return;
+  }
   const entry = LAZY_ENTRIES.find((e) => e.request === request && context === path.resolve(__dirname, e.dir));
   if (entry) {
     callback(null, `${type} ./${entry.file}.${ext}`);
@@ -285,6 +289,7 @@ const lazyEntries = {
   panel: "./src/ui/panel-entry.ts",
   "panel-data": "./src/ui/panel-data-entry.ts",
   modals: "./src/notifications/modals-entry.ts",
+  "encryption-keys": "./src/encryption-keys-entry.ts",
 };
 const notChunkLimit = (plugin) => !(plugin instanceof webpack.optimize.LimitChunkCountPlugin);
 

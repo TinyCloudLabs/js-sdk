@@ -53,6 +53,7 @@ function resolvedOptions(options: ReplicationRuntimeOptions) {
     maxStalenessMs: options.maxStalenessMs ?? 120_000,
     staleSyncTimeoutMs: options.staleSyncTimeoutMs ?? 5_000,
     allowSecrets: options.allowSecrets === true,
+    contentFetch: options.contentFetch ?? "eager",
     verify: options.verify === true,
   };
 }
@@ -62,7 +63,8 @@ type ReadThroughKV = {
 };
 
 export class ReplicationRuntime {
-  readonly control: ReplicationControl;
+  /** The node facade adds `purgeLocalCopy`: it needs the node's deny state, not the runtime's. */
+  readonly control: Omit<ReplicationControl, "purgeLocalCopy">;
   private readonly pending = new Map<string, { stamp?: ReplicaSessionStamp; store: PendingWriteStore }>();
   private readonly attached = new Map<ReadThroughKV, string>();
   private current?: KVReplicationController;

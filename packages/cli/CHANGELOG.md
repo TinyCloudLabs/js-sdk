@@ -1,5 +1,100 @@
 # @tinycloud/cli
 
+## 1.5.0-beta.14
+
+### Patch Changes
+
+- Updated dependencies [92e4bd0]
+  - @tinycloud/sdk-services@3.8.0-beta.9
+  - @tinycloud/node-sdk@3.8.0-beta.9
+  - @tinycloud/operations@0.7.7-beta.9
+  - @tinycloud/sdk-core@3.8.0-beta.9
+
+## 1.5.0-beta.13
+
+### Minor Changes
+
+- 8398c72: Add `tc secrets run NAME... [--map NAME=ENV_VAR] -- <command> [args...]`: it reads the named secrets as `tc secrets get` does and starts the command directly, without a shell, with the values only in its environment. If a secret cannot be read, the command does not start and tc exits as `get` would. tc exits with the command's exit code or signal, passes SIGINT, SIGTERM, SIGHUP and SIGQUIT on to it (except SIGINT, SIGQUIT and SIGHUP when tc runs in a terminal's foreground, since the terminal sends those to the command already), and exits 127 or 126 when the command isn't found or can't be run. tc doesn't pass its own `TC_PRIVATE_KEY` to the command. The command, and anything it starts, still receives the values and can print or pass them on.
+
+  Details: TC-2093
+
+## 1.5.0-beta.12
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.8.0-beta.7
+- @tinycloud/operations@0.7.7-beta.8
+
+## 1.5.0-beta.11
+
+### Patch Changes
+
+- Updated dependencies [479205d]
+  - @tinycloud/node-sdk@3.8.0-beta.6
+  - @tinycloud/operations@0.7.7-beta.7
+
+## 1.5.0-beta.10
+
+### Patch Changes
+
+- Updated dependencies [44c439a]
+  - @tinycloud/sdk-core@3.8.0-beta.5
+  - @tinycloud/node-sdk@3.8.0-beta.5
+  - @tinycloud/operations@0.7.7-beta.6
+
+## 1.5.0-beta.9
+
+### Patch Changes
+
+- Updated dependencies [c541786]
+  - @tinycloud/sdk-core@3.8.0-beta.4
+  - @tinycloud/node-sdk@3.8.0-beta.4
+  - @tinycloud/operations@0.7.7-beta.5
+
+## 1.5.0-beta.8
+
+### Patch Changes
+
+- Updated dependencies [1fc87b6]
+  - @tinycloud/operations@0.7.7-beta.4
+
+## 1.5.0-beta.7
+
+### Patch Changes
+
+- Updated dependencies [7b22f61]
+  - @tinycloud/share-envelope@1.3.1-beta.0
+  - @tinycloud/sdk-core@3.8.0-beta.3
+  - @tinycloud/share-sdk@1.4.1-beta.0
+  - @tinycloud/node-sdk@3.8.0-beta.3
+  - @tinycloud/operations@0.7.7-beta.3
+
+## 1.5.0-beta.6
+
+### Patch Changes
+
+- Updated dependencies [4a19c47]
+  - @tinycloud/sdk-services@3.8.0-beta.2
+  - @tinycloud/sdk-core@3.8.0-beta.2
+  - @tinycloud/node-sdk@3.8.0-beta.2
+  - @tinycloud/operations@0.7.7-beta.2
+
+## 1.5.0-beta.5
+
+### Patch Changes
+
+- ac50932: Show the account site delegation page when an OpenKey profile cannot complete a CLI revocation.
+
+  Details: TC-2005
+
+## 1.5.0-beta.4
+
+### Patch Changes
+
+- 30da240: Share publishing can create a short link from the signed full policy link when the publish result has no separate delivery material. JSON output keeps link details redacted.
+
+  Details: TC-1737
+
 ## 1.5.0-beta.3
 
 ### Patch Changes

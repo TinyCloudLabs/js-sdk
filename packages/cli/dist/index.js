@@ -13419,7 +13419,7 @@ async function refusal(response) {
 async function prepareLinkRecord(input) {
   const apiOrigin = checkApiOrigin(input.apiOrigin);
   const nowMs = toEpochMs(input.now);
-  const expiresMs = input.expiresAt.getTime();
+  const expiresMs = Math.floor(input.expiresAt.getTime() / 1e3) * 1e3;
   if (!Number.isFinite(nowMs) || !Number.isFinite(expiresMs)) throw new LinkError("invalid_argument", "now and expiresAt must be valid dates");
   let blob;
   let key;
@@ -28764,17 +28764,30 @@ function createShareLinks(input) {
   return {
     async show(published, options) {
       const material = published.deliveryMaterial;
-      if (published.link.kind !== "policy" || material === void 0) return { url: published.url, short: false };
+      if (published.link.kind !== "policy") return { url: published.url, short: false };
       if (options.fullLink) return { url: published.url, short: false };
       const now = options.now ?? /* @__PURE__ */ new Date();
       const expiresAt = new Date(published.metadata.expiresAt);
       const choice = linkFormForLifetime((expiresAt.getTime() - now.getTime()) / 1e3);
       if (choice.form === "full") return { url: published.url, short: false, ...choice.warning ? { notice: LINK_EXPIRY_WARNING } : {} };
       try {
+        const issuerKey = await input.signer();
+        let sealed;
+        if (material !== void 0) {
+          sealed = { blob: fromBase64Url4(material.sealedEnvelope), key: fromBase64Url4(material.envelopeKey) };
+        } else {
+          const parsed = parseLink(published.url, { trustedOrigins: [published.metadata.origin] });
+          if (parsed.form !== "full") throw new LinkError("invalid_argument");
+          const opened = await openLinkRecord(parsed.record, parsed.key, { now });
+          if (opened.type !== "share" || opened.header.issuer !== issuerKey.did || opened.header.bodyCid !== published.link.cid || opened.header.expiresAt !== published.metadata.expiresAt) {
+            throw new LinkError("invalid_argument");
+          }
+          sealed = { blob: opened.body, key: parsed.key };
+        }
         const created = await createLink({
           type: "share",
-          sealed: { blob: fromBase64Url4(material.sealedEnvelope), key: fromBase64Url4(material.envelopeKey) },
-          issuerKey: await input.signer(),
+          sealed,
+          issuerKey,
           apiOrigin,
           linkOrigin: new URL(published.url).origin,
           expiresAt,

@@ -342,6 +342,8 @@ export type ReplicaOptions = {
    * that later fails. Lets the caller report partial progress immediately.
    */
   onCommit?: () => void;
+  /** `"lazy"` syncs entry names without downloading values; default `"eager"`. */
+  contentFetch?: "eager" | "lazy";
 };
 
 /** The instance shape of replica's `Replica` engine class (the members the adapter calls). */

@@ -1,6 +1,6 @@
 import type { Result, FetchFunction } from "../../types";
 import type { KVGetOptions, KVListOptions, KVResponse } from "../types";
-import type { ReplicaGateReason, ReplicaLifecycleGate, ReplicaSessionStamp } from "./lifecycle";
+import type { ReplicaGateReason, ReplicaLifecycleGate, ReplicaPurgeLocalCopyResult, ReplicaSessionStamp } from "./lifecycle";
 import type { ReplicaQuotaSpec } from "./quota";
 import type { ReplicaConsentAnchor, ReplicaGrantPolicy } from "./grantPolicyTypes";
 
@@ -174,6 +174,8 @@ export interface KVReplicaSpec {
   grantPolicy?: ReplicaGrantPolicy;
   /** Quota settings; absent means unbounded. */
   quota?: ReplicaQuotaSpec;
+  /** Value download policy for syncs of this handle; absent means `"eager"`. See `ReplicationOptions.contentFetch`. */
+  contentFetch?: "eager" | "lazy";
   /**
    * Called when another tab/process commits a sync for this partition (browser: the worker's
    * `committed` BroadcastChannel message). The controller emits `replication.sync` with
@@ -531,6 +533,15 @@ export interface ReplicationControl {
    * and committed records remain. Exposed callers MUST show CLEAR_PENDING_WARNING first.
    */
   clearPending(): Promise<number>;
+  /**
+   * Browser: erases the whole local copy (the IndexedDB database) once the account has been
+   * denied by sign-out or account switch; `signOut()` and account switch already do this. Retries
+   * a few times when the delete is blocked. `{ ok: false, retryNow: true }`: the copy is still
+   * there and a short bounded retry is meaningful (the deny outcome kept the keys, or the delete
+   * is blocked); the SDK also finishes the erase on the next load. `retryNow: false`: nothing is
+   * erasable now (a session is live, or the storage has no browser database). Never rejects.
+   */
+  purgeLocalCopy(): Promise<ReplicaPurgeLocalCopyResult>;
   close(): Promise<void>;
 }
 
@@ -542,6 +553,11 @@ export interface ReplicationOptions {
   allowSecrets?: boolean;
   /** Sign-in asks for kv/sync on each declared prefix only and never widens to a root entry that covers them. */
   syncScope?: "prefixes";
+  /**
+   * `"eager"` (default) downloads each changed value while syncing. `"lazy"` syncs entry names
+   * without downloading values; a read of a value the replica does not hold goes to the network.
+   */
+  contentFetch?: "eager" | "lazy";
   /** Background interval; default 60 seconds. */
   syncIntervalMs?: number;
   maxStalenessMs?: number;

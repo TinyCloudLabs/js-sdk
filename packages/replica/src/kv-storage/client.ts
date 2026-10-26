@@ -403,6 +403,7 @@ class IndexedDbReplicaStorage implements ReplicaGatedStorage {
       ...(spec.device === undefined ? {} : { device: { did: spec.device.did, jwk: spec.device.jwk } }),
       grantPolicy: structuredClone(spec.grantPolicy),
       ...(spec.quota === undefined ? {} : { quota: { ...spec.quota } }),
+      ...(spec.contentFetch === undefined ? {} : { contentFetch: spec.contentFetch }),
     };
     const connection = this.connection();
     const reply = await connection.call({ op: "open", spec: wire });

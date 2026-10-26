@@ -5,7 +5,7 @@ This release has **Commander coverage tracked, not complete parity**:
 
 - 4 migrated registration(s).
 - 1 partially migrated registration(s).
-- 136 legacy registration(s) remain Commander-owned.
+- 137 legacy registration(s) remain Commander-owned.
 
 - `auth import [source]` → `tinycloud.auth.import@1` (partial; legacy inputs: v1 delegation artifact, v1 permission artifact without command, bare portable delegation, stored delegation wrapper, cross-user delegation persisted with activated=false).
 - `secrets get <name>` → `tinycloud.secrets.get@1` (migrated).
@@ -180,6 +180,25 @@ printf '%s' "$ANTHROPIC_API_KEY" | "$TC" secrets put ANTHROPIC_API_KEY --stdin  
 ```
 
 A missing secret makes `tinycloud secrets get` exit 4 (`NOT_FOUND`). For an identity that is not local, `error.setup` carries the owner's request link; a local identity (or a name/scope no link can express) gets only a hint naming `tinycloud secrets put NAME --stdin`. `tinycloud secrets doctor NAME` hints `tinycloud secrets request NAME` for a missing secret, or `tinycloud secrets put NAME --stdin` for a local identity. `tinycloud secrets get --delegation` follows the same rule, and a delegated read the node refuses (403, a capability 401, `AUTH_UNAUTHORIZED`) exits 5.
+
+### Running a command with secrets: `run`
+
+```bash
+"$TC" secrets run NAME... [--map NAME=ENV_VAR]... [--scope S] [--space S] [--delegation SOURCE] [--private-key HEX] -- <command> [args...]
+"$TC" --profile agent secrets run OPENAI_API_KEY -- python train.py
+"$TC" --profile agent secrets run --map ANTHROPIC_KEY=ANTHROPIC_API_KEY -- node server.js
+```
+
+`tinycloud secrets run` reads every named secret as `tinycloud secrets get` does, then starts `<command>` directly, without a shell, with each value in its environment: under the secret's name, or under `ENV_VAR` for `--map NAME=ENV_VAR`. A value replaces an inherited variable of the same name. The CLI doesn't pass its own `TC_PRIVATE_KEY` to the command. To give the command a key from a secret, use `--map NAME=TC_PRIVATE_KEY`. Everything after the first `--`, including any further `--`, goes to the command unchanged. The command uses the CLI's stdin, stdout and stderr; the CLI itself writes nothing to stdout, and its own messages go to stderr.
+
+- Name at least one secret, as an argument or with `--map`. `ENV_VAR` must match `[A-Za-z_][A-Za-z0-9_]*`; two secrets mapped to the same variable, no `--`, or nothing after it exit 2 (`USAGE_ERROR`) before any read.
+- If any secret cannot be read, the command does not start and the CLI exits with the code and error `tinycloud secrets get` gives for that secret. A value containing a NUL character exits 1 (`SECRET_NOT_EXPORTABLE`) without starting the command.
+- Otherwise the CLI exits with the command's exit code. If the command was ended by SIGINT, SIGTERM, SIGHUP, SIGKILL, SIGALRM or SIGUSR2, the CLI ends by the same signal (or exits with 128 plus the signal number if that signal doesn't end it). If any other signal ended it, such as SIGQUIT or SIGSEGV, the CLI exits with 128 plus the signal number instead, so it does not cause a core dump (SIGUSR1 and SIGPIPE are left out too: Node uses SIGUSR1 for its inspector and ignores SIGPIPE).
+- SIGINT, SIGTERM, SIGHUP and SIGQUIT sent to the CLI go to the command. When the CLI runs in the foreground of a terminal, it doesn't pass on SIGINT, SIGQUIT or SIGHUP: the terminal already sends them (Ctrl-C, Ctrl-\, hangup) to the command, so the command normally gets each one once. The CLI checks whether it's in the foreground using `/proc`, or `ps` where `/proc` isn't available. If neither works, it passes the signals on. When the CLI runs in the background, it passes them on, so a signal sent to the whole job (for example `kill -INT %1`) can reach the command twice.
+- From a script, stop the command by sending SIGTERM to the CLI's process ID. The CLI passes it on, waits for the command to exit, then exits the way the command did (the command's own exit code if it handles SIGTERM itself). If the command ignores SIGTERM, the CLI keeps waiting.
+- A command that does not exist exits 127; one that cannot be executed, or cannot be started for another reason, exits 126. These cases print one plain stderr line even with `--json`: `tinycloud secrets run: <command>: command not found`, `…: permission denied` or `…: cannot run (<error code>)`.
+
+Limits: `tinycloud secrets run` keeps values out of the command line, your shell history and the CLI's own output. It doesn't hide them from the command: the command, and anything it starts, receives the values and can print, log or pass them on. Other programs running as the same user can often read a process's environment too.
 
 ### Asking the owner for a secret: `request`, `wait`, `manage`
 
@@ -527,6 +546,8 @@ On either recovery path, an orphaned `.recover-*` claim can hold a replacement o
 Use `--json` for machine-readable output; interactive commands can render human output. General command errors go to stderr as `{error: {code, message, hint?, recovery?, setup?, progress?, meta?, warnings?}}` (`recovery`, `setup` and `progress` are described under [Secrets](#asking-the-owner-for-a-secret-request-wait-manage)). `meta` contains a typed HTTP `status` and, only when validated as a TinyCloud capability (and against the KV request when available), a `resource` and `requiredAction`. Inspect the structured code, not only the exit status.
 
 General storage/auth exit codes: 0 success, 1 operation error (including `PROFILE_MIGRATION_REQUIRED` and `PROBE_FAILED`), 2 invalid input, 3 authentication required, 4 not found, 5 permission denied, 6 network error, 7 node error, 8 pending (`tinycloud secrets wait` only), 10 storage full, 130 interrupted (`CANCELLED`). `tinycloud share` uses its own: 1 profile lock timeout, sender-history retry or unconfirmed revocation (`PROFILE_LOCK_TIMEOUT`, `SHARE_HISTORY_RETRY`, `SHARE_REVOKE_UNCONFIRMED`), 3 upload authority required, 4 unavailable, expired, revoked bearer link, upload failed or revocation refused (`SHARE_LINK_UNAVAILABLE`, `SHARE_REVOKED`, `SHARE_REVOKE_REJECTED`), 5 permission denied (`PERMISSION_DENIED`, `SHARE_ISSUER_KEY_UNAVAILABLE`) or verification failed, 6 recipient authorization required or network error, 7 byte limit, 8 output conflict or unsafe filename, 9 partial success, 10 storage full.
+
+`tinycloud secrets run` exits with its command's status once the command has started. Before that it uses the codes above, plus 126 (the command cannot be executed or started) and 127 (the command does not exist).
 
 For `tinycloud kv get|put|head|list|delete`, `tinycloud space list|host`, `tinycloud sql`, `tinycloud vault`, `tinycloud vars`, `tinycloud duckdb`, `tinycloud secrets list|put|delete`, `tinycloud delegation`, and `tinycloud account`, service-result errors use typed authorization: a plain HTTP 401 is `AUTH_REQUIRED` (exit 3); a 403 is `PERMISSION_DENIED` (exit 5). A 401 with a validated missing capability, or `AUTH_UNAUTHORIZED` without an HTTP status, is `PERMISSION_DENIED` (exit 5); a validated capability also produces a `tinycloud auth request --cap` hint. This changes the former exit 1 for status-less `AUTH_UNAUTHORIZED` in the listed commands. Other HTTP failures retain their service-specific codes. `tinycloud share` has separate exit mappings below.
 
