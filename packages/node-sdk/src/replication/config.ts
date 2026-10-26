@@ -9,6 +9,9 @@ export function assertValidReplicationConfig(
   if (replication?.syncScope !== undefined && replication.syncScope !== "prefixes") {
     throw new TypeError('replication.syncScope must be "prefixes"');
   }
+  if (replication?.contentFetch !== undefined && replication.contentFetch !== "eager" && replication.contentFetch !== "lazy") {
+    throw new TypeError('replication.contentFetch must be "eager" or "lazy"');
+  }
   if (replication === undefined || !replication.enabled) return;
   if (replication.storage === undefined || replication.storage === null) {
     throw new TypeError("replication.enabled requires replication.storage");

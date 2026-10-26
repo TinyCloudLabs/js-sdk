@@ -71,6 +71,7 @@ Duplicate registration throws immediately; enabling replication without
 registration throws at construction. Replication off requires no plugin, and a
 refused local replica does not end an otherwise valid network session.
 Set `replication.syncScope: 'prefixes'` to request sign-in sync only on the declared prefixes.
+Set `replication.contentFetch: 'lazy'` to sync entry names without downloading values; reads of values the replica does not hold go to the network. The default is `'eager'`.
 
 Use the same module format for registration and the client: importing both
 ESM and CJS root bundles in one process creates independent module registries.
