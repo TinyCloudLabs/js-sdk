@@ -1881,5 +1881,34 @@
     },
     "worker": { "delta": 0, "ceiling": 776128 },
     "reason": "manifest named keys: the `keys` block, key resource derivation and sign-in abilities (TC-1977)"
+  },
+  "tc2038PanelPrefetchRatchet": {
+    "label": "sdk: panel prefetch ability gating (TC-2038): +15 B mjs / +4 B cjs gzip",
+    "ruling": "Pending Naomi's ruling: measured at run 40326896148 on head 3da3c746f (before the master merge); ceilings are TC-1977's plus the measured +15/+4",
+    "base": "c59bcd3ac04c18583025d402283aa687545ab9f3",
+    "sourceCommits": [
+      "97908f96321acf89ee463f5a71d25798b9ace648"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40326896148",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40326896148/job/121585817391",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40326896148/job/121585817920"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 15, "index.cjs": 4 },
+      "ceiling": { "index.mjs": 1467309, "index.cjs": 1409268 }
+    },
+    "firstImport": {
+      "delta": { "replica.mjs": 0, "replica.cjs": 0 },
+      "ceiling": { "replica.mjs": 52374, "replica.cjs": 67571 }
+    },
+    "activation": {
+      "delta": { "activation.mjs": 0, "activation.cjs": 0 },
+      "ceiling": { "activation.mjs": 23386, "activation.cjs": 24959 }
+    },
+    "worker": { "delta": 0, "ceiling": 776128 },
+    "reason": "panel background reads (account index, delegation query, storage status) go out only when the session holds the matching ReCap ability (TC-2038)"
   }
 }

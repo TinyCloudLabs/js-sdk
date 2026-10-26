@@ -304,6 +304,8 @@ export type Tc2043SyncScopeRatchet = HardeningRatchet;
 export type Tc1888PurgeLocalCopyRatchet = HardeningRatchet;
 /** One reviewed exact-byte row for manifest named keys (js-sdk #748, TC-1977). */
 export type Tc1977ManifestKeysRatchet = HardeningRatchet;
+/** One reviewed exact-byte row for panel background-read ability gating (js-sdk TC-2038). */
+export type Tc2038PanelPrefetchRatchet = HardeningRatchet;
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -348,6 +350,7 @@ export type Ledger = {
   tc2043SyncScopeRatchet?: Tc2043SyncScopeRatchet;
   tc1888PurgeLocalCopyRatchet?: Tc1888PurgeLocalCopyRatchet;
   tc1977ManifestKeysRatchet?: Tc1977ManifestKeysRatchet;
+  tc2038PanelPrefetchRatchet?: Tc2038PanelPrefetchRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -922,6 +925,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2043SyncScopeRatchet !== undefined) pins.push({ row: "tc2043SyncScopeRatchet", pin: root.tc2043SyncScopeRatchet.sourceCommits.at(-1)! });
   if (root.tc1888PurgeLocalCopyRatchet !== undefined) pins.push({ row: "tc1888PurgeLocalCopyRatchet", pin: root.tc1888PurgeLocalCopyRatchet.sourceCommits.at(-1)! });
   if (root.tc1977ManifestKeysRatchet !== undefined) pins.push({ row: "tc1977ManifestKeysRatchet", pin: root.tc1977ManifestKeysRatchet.sourceCommits.at(-1)! });
+  if (root.tc2038PanelPrefetchRatchet !== undefined) pins.push({ row: "tc2038PanelPrefetchRatchet", pin: root.tc2038PanelPrefetchRatchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -972,6 +976,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2043SyncScopeRatchet", root.tc2043SyncScopeRatchet?.root.ceiling],
     ["tc1888PurgeLocalCopyRatchet", root.tc1888PurgeLocalCopyRatchet?.root.ceiling],
     ["tc1977ManifestKeysRatchet", root.tc1977ManifestKeysRatchet?.root.ceiling],
+    ["tc2038PanelPrefetchRatchet", root.tc2038PanelPrefetchRatchet?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -1814,6 +1819,38 @@ export const approvedTc1977ManifestKeysRatchet: Tc1977ManifestKeysRatchet = {
   reason: "manifest named keys: the `keys` block, key resource derivation and sign-in abilities (TC-1977)",
 };
 
+/** Panel background-read ability gating (TC-2038). Root delta +15 mjs / +4 cjs is the measured excess over the TC-858 cap in canonical CI run 40326896148 (job 121585817391, head 3da3c746f, before the master merge): current index.mjs 1464644 vs cap 1464629, index.cjs 1406460 vs cap 1406456. Ceilings are TC-1977's root ceiling plus that delta; they are NOT measured on the pinned merge commit 97908f96. First-import and activation match the measured values; worker ceiling is carried from TC-1977 (not in the logs). */
+export const approvedTc2038PanelPrefetchRatchet: Tc2038PanelPrefetchRatchet = {
+  label: "sdk: panel prefetch ability gating (TC-2038): +15 B mjs / +4 B cjs gzip",
+  ruling: "Pending Naomi's ruling: measured at run 40326896148 on head 3da3c746f (before the master merge); ceilings are TC-1977's plus the measured +15/+4",
+  base: "c59bcd3ac04c18583025d402283aa687545ab9f3",
+  sourceCommits: [
+    "97908f96321acf89ee463f5a71d25798b9ace648",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40326896148",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40326896148/job/121585817391",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40326896148/job/121585817920",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 15, "index.cjs": 4 },
+    ceiling: { "index.mjs": 1467309, "index.cjs": 1409268 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 52374, "replica.cjs": 67571 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23386, "activation.cjs": 24959 },
+  },
+  worker: { delta: 0, ceiling: 776128 },
+  reason: "panel background reads (account index, delegation query, storage status) go out only when the session holds the matching ReCap ability (TC-2038)",
+};
+
+
 export type GatedOnlyRatchet = {
   label: string;
   sourceCommit: string;
@@ -1886,6 +1923,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2043SyncScopeRatchet: approvedTc2043SyncScopeRatchet,
   tc1888PurgeLocalCopyRatchet: approvedTc1888PurgeLocalCopyRatchet,
   tc1977ManifestKeysRatchet: approvedTc1977ManifestKeysRatchet,
+  tc2038PanelPrefetchRatchet: approvedTc2038PanelPrefetchRatchet,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -2095,6 +2133,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc1888PurgeLocalCopyRatchet || JSON.stringify(value.tc1977ManifestKeysRatchet) !== JSON.stringify(approvedTc1977ManifestKeysRatchet))) {
     throw new Error("Only Naomi's exact canonical manifest-keys ratchet is approved.");
   }
+  if (value.tc2038PanelPrefetchRatchet !== undefined &&
+      (!value.tc1977ManifestKeysRatchet || JSON.stringify(value.tc2038PanelPrefetchRatchet) !== JSON.stringify(approvedTc2038PanelPrefetchRatchet))) {
+    throw new Error("Only Naomi's exact canonical panel-prefetch ratchet is approved.");
+  }
 }
 
 /** The #606 worker ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
@@ -2286,6 +2328,14 @@ export function validateTc1977ManifestKeysRatchetTransition(base?: Tc1977Manifes
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1977ManifestKeysRatchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact TC-1977 manifest-keys ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-2038 panel-prefetch ratchet is introduced once and immutable afterwards. */
+export function validateTc2038PanelPrefetchRatchetTransition(base?: Tc2038PanelPrefetchRatchet, current?: Tc2038PanelPrefetchRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2038PanelPrefetchRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-2038 panel-prefetch ratchet may be introduced once and cannot change later.");
   }
 }
 
