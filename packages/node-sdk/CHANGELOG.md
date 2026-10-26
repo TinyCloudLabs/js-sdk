@@ -1,5 +1,13 @@
 # @tinycloudlabs/node-sdk
 
+## 3.8.0-beta.10
+
+### Patch Changes
+
+- 20a872e: `@tinycloud/node-sdk/core` now exports `activateValidatedRuntimeDelegation`, `RuntimeDelegationRejectedError` and the `RuntimeDelegationRejection` type, which the root entry already exported. The web SDK uses them to verify and activate a stored panel grant after a reload.
+
+  Details: TC-2113
+
 ## 3.8.0-beta.9
 
 ### Minor Changes
