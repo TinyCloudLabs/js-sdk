@@ -107,6 +107,7 @@
       "operationId": "tinycloud.secrets.get",
       "operationVersion": 1
     },
+    { "command": "secrets run [names]", "status": "legacy" },
     { "command": "secrets put <name> [value]", "status": "legacy" },
     { "command": "secrets delete <name>", "status": "legacy" },
     { "command": "secrets network grant <recipientDid> [name]", "status": "legacy" },

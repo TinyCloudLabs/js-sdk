@@ -1984,6 +1984,36 @@
     "replicaWorker": { "delta": 323, "ceiling": 770416 },
     "reason": "the replica retries a value it could not verify with growing gaps and gives up after five tries (TC-2096)"
   },
+  "tc2072LocationGuardRatchet": {
+    "label": "constructing TinyCloudWeb without a location skips UI client registration (TC-2072, #754): +0 B mjs / +8 B cjs gzip",
+    "ruling": "Approved by Naomi (measured at run 40348214990 within 10 bytes of the approved +7/+7; the mjs ceiling is carried)",
+    "base": "5467d1248b20e59d3b7eca508da417c2b35316b3",
+    "sourceCommits": [
+      "1b6b4fddd31630f0287464808feb1ef82e449ef6"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40348214990",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40348214990/job/121660792942",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40348214990/job/121660792806"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 0, "index.cjs": 8 },
+      "ceiling": { "index.mjs": 1467358, "index.cjs": 1409281 }
+    },
+    "firstImport": {
+      "delta": { "replica.mjs": 0, "replica.cjs": 0 },
+      "ceiling": { "replica.mjs": 52653, "replica.cjs": 67846 }
+    },
+    "activation": {
+      "delta": { "activation.mjs": 0, "activation.cjs": 0 },
+      "ceiling": { "activation.mjs": 23386, "activation.cjs": 24959 }
+    },
+    "worker": { "delta": 0, "ceiling": 776468 },
+    "replicaWorker": { "delta": 0, "ceiling": 770416 },
+    "reason": "constructing TinyCloudWeb without a location skips UI client registration (TC-2072)"
+  },
   "tc2096LazyContentRatchet": {
     "label": "lazy content fetch (TC-2096, #761): kv-storage worker +71 B, replica worker +51 B, replica first import +104/+111 B, activation +26/+22 B gzip; root unchanged",
     "ruling": "Worker bytes measured at canonical CI run 40366506455; replica first-import and activation bytes measured at canonical CI run 40370497109 (sqlite and postgres identical); exact-byte approval by Naomi",
@@ -2000,7 +2030,7 @@
     },
     "root": {
       "delta": { "index.mjs": 0, "index.cjs": 0 },
-      "ceiling": { "index.mjs": 1467358, "index.cjs": 1409273 }
+      "ceiling": { "index.mjs": 1467358, "index.cjs": 1409281 }
     },
     "firstImport": {
       "delta": { "replica.mjs": 104, "replica.cjs": 111 },

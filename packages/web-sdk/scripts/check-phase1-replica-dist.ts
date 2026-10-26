@@ -27,6 +27,7 @@ import { validateTc1977ManifestKeysRatchetTransition } from "./replica-size-poli
 import { validateTc2038PanelPrefetchRatchetTransition } from "./replica-size-policy";
 import { validateTc2005RevokeWindowRatchetTransition } from "./replica-size-policy";
 import { validateTc2096RepairBackoffRatchetTransition } from "./replica-size-policy";
+import { validateTc2072LocationGuardRatchetTransition } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 import { replicaOwnedPath } from "./replica-owned-path";
 import { webSdkTestExitFailure } from "./web-sdk-test-exit";
@@ -471,11 +472,18 @@ if (prBaseSha) {
     console.error("The repair-backoff ratchet requires the merged revocation-window ratchet and its measured source commit.");
     failed = true;
   }
+  validateTc2072LocationGuardRatchetTransition(baseLedger.tc2072LocationGuardRatchet, ledger.tc2072LocationGuardRatchet);
+  const tc2072LocationGuard = ledger.tc2072LocationGuardRatchet;
+  if (tc2072LocationGuard !== undefined && baseLedger.tc2072LocationGuardRatchet === undefined &&
+      (baseLedger.tc2096RepairBackoffRatchet === undefined || !hasAncestor(repoRoot, tc2072LocationGuard.sourceCommits.at(-1)!))) {
+    console.error("The location-guard ratchet requires the merged repair-backoff ratchet and its measured source commit.");
+    failed = true;
+  }
   validateTc2096LazyContentRatchetTransition(baseLedger.tc2096LazyContentRatchet, ledger.tc2096LazyContentRatchet);
   const tc2096LazyContent = ledger.tc2096LazyContentRatchet;
   if (tc2096LazyContent !== undefined && baseLedger.tc2096LazyContentRatchet === undefined &&
-      (baseLedger.tc2096RepairBackoffRatchet === undefined || !hasAncestor(repoRoot, tc2096LazyContent.sourceCommits.at(-1)!))) {
-    console.error("The lazy-content ratchet requires the merged repair-backoff ratchet and its measured source commit.");
+      (baseLedger.tc2072LocationGuardRatchet === undefined || !hasAncestor(repoRoot, tc2096LazyContent.sourceCommits.at(-1)!))) {
+    console.error("The lazy-content ratchet requires the merged location-guard ratchet and its measured source commit.");
     failed = true;
   }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
@@ -493,7 +501,7 @@ if (prBaseSha) {
   }
   validateOptionalLedger(baseOptional, baseLedger.fixRequiredRatchet !== undefined,
     baseLedger.canonicalToolchainCorrection !== undefined, baseLedger.hardeningRatchet !== undefined,
-    baseLedger.tc1413Ratchet !== undefined, baseLedger.tc1432Ratchet !== undefined, baseLedger.tc1475Ratchet !== undefined, baseLedger.masterDriftRatchet !== undefined, baseLedger.tc1789Ratchet !== undefined, baseLedger.tc2043SyncScopeRatchet !== undefined, baseLedger.tc1888PurgeLocalCopyRatchet !== undefined, baseLedger.tc2096RepairBackoffRatchet !== undefined);
+    baseLedger.tc1413Ratchet !== undefined, baseLedger.tc1432Ratchet !== undefined, baseLedger.tc1475Ratchet !== undefined, baseLedger.masterDriftRatchet !== undefined, baseLedger.tc1789Ratchet !== undefined, baseLedger.tc2043SyncScopeRatchet !== undefined, baseLedger.tc1888PurgeLocalCopyRatchet !== undefined, baseLedger.tc2096RepairBackoffRatchet !== undefined, baseLedger.tc2096LazyContentRatchet !== undefined);
   validateIntroducedOptionalSources(baseOptional, optionalLedger);
   // Consistency check: each merged row's pin is on the base or was landed by it (see pinLandedOn).
   for (const { row, pin } of mergedPinsNotLandedOn(repoRoot, baseLedger, baseOptional, prBaseSha)) {
