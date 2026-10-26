@@ -1,5 +1,13 @@
 # @tinycloud/cli
 
+## 1.5.0-beta.1
+
+### Patch Changes
+
+- 90941f8: `tc auth login --method openkey --keys <folder>` works together with replication prefixes: one OpenKey approval covers the replica request and the folder's key row.
+
+  Details: TC-2034
+
 ## 1.5.0-beta.0
 
 ### Minor Changes
