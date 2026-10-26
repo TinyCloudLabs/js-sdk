@@ -320,6 +320,8 @@ export type Tc2113PanelGrantRatchet = HardeningRatchet & { replicaWorker: { delt
 export type Tc2127WindowLocationRatchet = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
 /** One reviewed exact-byte row for signInWithOpenKey (TC-1977, #747); replicaWorker is carried at TC-2127's replica.worker.js ceiling. */
 export type Tc1977OpenKeySigninRatchet = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
+/** One reviewed exact-byte row for the iPhone panel safe-area and ui.setButtonVisible (TC-2130, #765); replicaWorker is carried at TC-1977's replica.worker.js ceiling. */
+export type Tc2130PanelIphoneRatchet = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -372,6 +374,7 @@ export type Ledger = {
   tc2113PanelGrantRatchet?: Tc2113PanelGrantRatchet;
   tc2127WindowLocationRatchet?: Tc2127WindowLocationRatchet;
   tc1977OpenKeySigninRatchet?: Tc1977OpenKeySigninRatchet;
+  tc2130PanelIphoneRatchet?: Tc2130PanelIphoneRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -954,6 +957,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2113PanelGrantRatchet !== undefined) pins.push({ row: "tc2113PanelGrantRatchet", pin: root.tc2113PanelGrantRatchet.sourceCommits.at(-1)! });
   if (root.tc2127WindowLocationRatchet !== undefined) pins.push({ row: "tc2127WindowLocationRatchet", pin: root.tc2127WindowLocationRatchet.sourceCommits.at(-1)! });
   if (root.tc1977OpenKeySigninRatchet !== undefined) pins.push({ row: "tc1977OpenKeySigninRatchet", pin: root.tc1977OpenKeySigninRatchet.sourceCommits.at(-1)! });
+  if (root.tc2130PanelIphoneRatchet !== undefined) pins.push({ row: "tc2130PanelIphoneRatchet", pin: root.tc2130PanelIphoneRatchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1012,6 +1016,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2113PanelGrantRatchet", root.tc2113PanelGrantRatchet?.root.ceiling],
     ["tc2127WindowLocationRatchet", root.tc2127WindowLocationRatchet?.root.ceiling],
     ["tc1977OpenKeySigninRatchet", root.tc1977OpenKeySigninRatchet?.root.ceiling],
+    ["tc2130PanelIphoneRatchet", root.tc2130PanelIphoneRatchet?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -2095,6 +2100,36 @@ export const approvedTc1977OpenKeySigninRatchet: Tc1977OpenKeySigninRatchet = {
   reason: "signInWithOpenKey adds the OpenKey sign-in path to the node and web SDKs (TC-1977)",
 };
 
+/** Predicted canonical bytes for the iPhone panel safe-area and ui.setButtonVisible (TC-2130, #765): TC-1977 plus +294 mjs / +278 cjs measured at run 40403026528 on head 517e6726; CI at the merged head is the authority. Worker and replica-worker ceilings are carried from TC-1977 with zero delta. */
+export const approvedTc2130PanelIphoneRatchet: Tc2130PanelIphoneRatchet = {
+  label: "iPhone panel safe-area and ui.setButtonVisible (TC-2130, #765): +294 B mjs / +278 B cjs gzip",
+  ruling: "Approved by Naomi (root ~+344 mjs / +303 cjs gz; measured +294 / +278 at run 40403026528 at 517e6726; re-stacked on #747)",
+  base: "33b16c5569efa4aa8458ee9ea4b2c53da8c2c820",
+  sourceCommits: ["517e67264730211ea4df9b3225b842000578185b"],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40403026528",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40403026528/job/121853554373",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40403026528/job/121853554929",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 294, "index.cjs": 278 },
+    ceiling: { "index.mjs": 1470251, "index.cjs": 1411828 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 52757, "replica.cjs": 67957 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23412, "activation.cjs": 24981 },
+  },
+  worker: { delta: 0, ceiling: 776539 },
+  replicaWorker: { delta: 0, ceiling: 770467 },
+  reason: "iPhone panel safe-area and ui.setButtonVisible (TC-2130)",
+};
+
 export type GatedOnlyRatchet = {
   label: string;
   sourceCommit: string;
@@ -2175,6 +2210,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2113PanelGrantRatchet: approvedTc2113PanelGrantRatchet,
   tc2127WindowLocationRatchet: approvedTc2127WindowLocationRatchet,
   tc1977OpenKeySigninRatchet: approvedTc1977OpenKeySigninRatchet,
+  tc2130PanelIphoneRatchet: approvedTc2130PanelIphoneRatchet,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -2415,6 +2451,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
   if (value.tc1977OpenKeySigninRatchet !== undefined &&
       (!value.tc2127WindowLocationRatchet || JSON.stringify(value.tc1977OpenKeySigninRatchet) !== JSON.stringify(approvedTc1977OpenKeySigninRatchet))) {
     throw new Error("Only Naomi's exact canonical OpenKey sign-in ratchet is approved.");
+  }
+  if (value.tc2130PanelIphoneRatchet !== undefined &&
+      (!value.tc1977OpenKeySigninRatchet || JSON.stringify(value.tc2130PanelIphoneRatchet) !== JSON.stringify(approvedTc2130PanelIphoneRatchet))) {
+    throw new Error("Only Naomi's exact canonical panel safe-area ratchet is approved.");
   }
 }
 
@@ -2671,6 +2711,14 @@ export function validateTc1977OpenKeySigninRatchetTransition(base?: Tc1977OpenKe
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1977OpenKeySigninRatchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact TC-1977 OpenKey sign-in ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-2130 panel safe-area ratchet is introduced once and immutable afterwards. */
+export function validateTc2130PanelIphoneRatchetTransition(base?: Tc2130PanelIphoneRatchet, current?: Tc2130PanelIphoneRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2130PanelIphoneRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-2130 panel safe-area ratchet may be introduced once and cannot change later.");
   }
 }
 
