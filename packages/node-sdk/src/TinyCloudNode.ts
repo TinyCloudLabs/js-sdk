@@ -1996,6 +1996,7 @@ export class TinyCloudNode {
             enabled: true,
             prefixes: config.replication.prefixes,
             allowSecrets: config.replication.allowSecrets === true,
+            syncScope: config.replication.syncScope,
           }
         : undefined,
     });
@@ -4948,6 +4949,7 @@ export class TinyCloudNode {
             enabled: true,
             prefixes: this.config.replication.prefixes,
             allowSecrets: this.config.replication.allowSecrets === true,
+            syncScope: this.config.replication.syncScope,
           }
         : undefined,
     });
@@ -5028,6 +5030,7 @@ export class TinyCloudNode {
             enabled: true,
             prefixes: this.config.replication.prefixes,
             allowSecrets: this.config.replication.allowSecrets === true,
+            syncScope: this.config.replication.syncScope,
           }
         : undefined,
     });

@@ -312,7 +312,7 @@ export interface NodeUserAuthorizationConfig {
    * unrestricted `get` covering it is already requested. Storage and
    * scheduling never reach this layer.
    */
-  replication?: Pick<ReplicationOptions, "enabled" | "prefixes" | "allowSecrets">;
+  replication?: Pick<ReplicationOptions, "enabled" | "prefixes" | "allowSecrets" | "syncScope">;
   /** Extra top-level resource URIs and their abilities added to the sign-in ReCap (e.g. named-key prefixes). */
   additionalRawAbilities?: Record<string, string[]>;
   /**
@@ -388,7 +388,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private readonly expectedNodeDid?: string;
   private readonly localNodeIdentityStore?: LocalNodeIdentityStore;
   private readonly enablePublicSpace: boolean;
-  private readonly replication?: Pick<ReplicationOptions, "enabled" | "prefixes" | "allowSecrets">;
+  private readonly replication?: Pick<ReplicationOptions, "enabled" | "prefixes" | "allowSecrets" | "syncScope">;
   private readonly additionalRawAbilities?: Record<string, string[]>;
   private readonly establishReplicaStamp?: NodeUserAuthorizationConfig["establishReplicaStamp"];
   private readonly nonce?: string;

@@ -171,6 +171,25 @@ describe("augmentSignInEntriesWithReplication (§4.1)", () => {
     }).map((entry) => entry.path)).toEqual([""]);
   });
 
+  test("prefix sync scope keeps whole-space owner sync on declared prefixes", () => {
+    const out = augmentSignInEntriesWithReplication({
+      entries: [kvEntry({ path: "" })],
+      primarySpaceId: SPACE,
+      replication: { prefixes: ["notes/", "other/"], syncScope: "prefixes" },
+    });
+    expect(out).toEqual([
+      { service: "tinycloud.kv", space: SPACE, path: "notes/", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] },
+      { service: "tinycloud.kv", space: SPACE, path: "other/", actions: ["tinycloud.kv/get", "tinycloud.kv/sync"] },
+    ]);
+    expect(out.some((entry) => entry.path === "" && entry.actions.includes("tinycloud.kv/sync"))).toBe(false);
+    expect(() => assertValidReplicationConfig({
+      enabled: true,
+      storage: {},
+      prefixes: ["notes/"],
+      syncScope: "root" as "prefixes",
+    })).toThrow(/replication\.syncScope/);
+  });
+
 
   test("a caveated covering get produces no entry", () => {
     const out = augmentSignInEntriesWithReplication({
