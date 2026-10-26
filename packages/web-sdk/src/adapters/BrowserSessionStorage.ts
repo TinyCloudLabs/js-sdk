@@ -198,28 +198,48 @@ export class BrowserSessionStorage implements ISessionStorage {
    * Stores `grants` (runtime delegations to the stored session's key) beside the session record, in the same storage.
    * They are bearer proofs for that key, so they live and die with the session record: `save` of a new session,
    * `clear` and sign-out remove them, and `loadRuntimeGrants` returns none once the session is missing or expired.
-   * An empty list removes the entry.
+   * An empty list removes the entry. A storage that refuses the write (quota, blocked) leaves the grants unsaved:
+   * the grant then lasts until the page reloads. Never rejects.
    */
   saveRuntimeGrants(address: string, grants: readonly PortableDelegation[]): Promise<void> {
-    if (!this.storage) return Promise.resolve();
-    if (grants.length === 0) {
-      this.storage.removeItem(this.grantsKey(address));
-      return Promise.resolve();
+    try {
+      this.writeRuntimeGrants(address, grants);
+    } catch {
+      // Grants that cannot be stored are lost on reload; the session is unaffected.
     }
-    const stored = grants.map((grant) => ({ ...grant, expiry: grant.expiry.toISOString() }));
-    this.storage.setItem(this.grantsKey(address), JSON.stringify(stored));
     return Promise.resolve();
   }
 
-  /** The unexpired, well-formed grants saved for `address` while its session record is valid. Expired or malformed ones are removed. */
+  private writeRuntimeGrants(address: string, grants: readonly PortableDelegation[]): void {
+    if (!this.storage) return;
+    if (grants.length === 0) {
+      this.storage.removeItem(this.grantsKey(address));
+      return;
+    }
+    const stored = grants.map((grant) => ({ ...grant, expiry: grant.expiry.toISOString() }));
+    this.storage.setItem(this.grantsKey(address), JSON.stringify(stored));
+  }
+
+  /**
+   * The unexpired, well-formed grants saved for `address` while its session record is valid. Expired or malformed ones
+   * are removed. Never rejects: an unreadable storage answers none.
+   */
   loadRuntimeGrants(address: string): Promise<PortableDelegation[]> {
-    if (!this.storage) return Promise.resolve([]);
+    try {
+      return Promise.resolve(this.readRuntimeGrants(address));
+    } catch {
+      return Promise.resolve([]);
+    }
+  }
+
+  private readRuntimeGrants(address: string): PortableDelegation[] {
+    if (!this.storage) return [];
     const key = this.grantsKey(address);
     const raw = this.storage.getItem(key);
-    if (raw === null) return Promise.resolve([]);
+    if (raw === null) return [];
     if (!this.exists(address)) {
       this.storage.removeItem(key);
-      return Promise.resolve([]);
+      return [];
     }
     const kept: PortableDelegation[] = [];
     let parsed: unknown;
@@ -236,7 +256,7 @@ export class BrowserSessionStorage implements ISessionStorage {
     if (kept.length !== entries.length || !Array.isArray(parsed)) {
       void this.saveRuntimeGrants(address, kept);
     }
-    return Promise.resolve(kept);
+    return kept;
   }
 
   exists(address: string): boolean {

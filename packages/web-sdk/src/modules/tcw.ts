@@ -12,6 +12,8 @@
 
 import {
   activateCompactRuntimeDelegation as activateCompactRuntimeDelegationOnNode,
+  activateValidatedRuntimeDelegation as activateValidatedRuntimeDelegationOnNode,
+  RuntimeDelegationRejectedError,
   TinyCloudNode,
   TinyCloudNodeConfig,
   type BootstrapWarning,
@@ -112,7 +114,7 @@ import {
   BrowserSessionStorage,
   type BrowserSessionLoadResult,
 } from "../adapters/BrowserSessionStorage";
-import { rememberRuntimeGrants, reuseRuntimeGrants, type RuntimeGrantStore } from "./runtimeGrantPersistence";
+import { isPanelResourceSet, rememberRuntimeGrants, reuseRuntimeGrants, type RuntimeGrantStore } from "./runtimeGrantPersistence";
 import { RPCProviders, ClientConfig, Extension as ExtensionType } from "../providers";
 import { resolveSpaceCreationHandler } from "../authorization/WebSpaceCreationHandler";
 import type { NotificationConfig } from "../notifications/types";
@@ -911,10 +913,26 @@ export class TinyCloudWeb {
         if (was && was !== node.spaceId && this.signOutCount === signOuts && !this.signOutInFlight) this.uiClient.reset();
       }
       assertNotSignedOut();
-      // Grants the panel requested earlier come back with the session: the same key, no signer.
+      // Grants the panel requested earlier come back with the session: the same key, no signer. Each is verified from
+      // its signed bytes and must be exactly a panel grant. Never fails the restore and never waits long for the node.
       const grantStore = this.runtimeGrantStore();
       if (grantStore !== undefined) {
-        await reuseRuntimeGrants(grantStore, restoreAddress, (grant) => node.useRuntimeDelegation(grant));
+        const owner = { address: loaded.data.address, chainId: loaded.data.chainId };
+        await reuseRuntimeGrants(
+          grantStore,
+          restoreAddress,
+          (grant) =>
+            activateValidatedRuntimeDelegationOnNode(node, grant, {
+              host: node.hosts[0]!,
+              authorize: (permissions) => {
+                if (!isPanelResourceSet(permissions.map((entry) => ({ ...entry, space: entry.space ?? "" })), owner)) {
+                  throw new RuntimeDelegationRejectedError("authority_invalid", "Stored grant is not a panel grant.");
+                }
+                return true;
+              },
+            }),
+          { isCurrent: () => this.signOutCount === signOuts && this.signOutInFlight === 0 },
+        );
       }
       assertNotSignedOut();
       this.resetSessionScopedCaches();
