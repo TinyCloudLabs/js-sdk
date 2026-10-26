@@ -25,9 +25,10 @@ jobs:
     if: github.event_name == 'push' && !contains(github.event.head_commit.message, '[skip ci]')
     runs-on: ubuntu-latest
     # actions: read lets pre-publish read earlier Release runs' logs (TC-1457).
+    # contents: write lets the release step create GitHub Releases (O25).
     permissions:
       actions: read
-      contents: read
+      contents: write
     steps:
       # The deploy key is not left in git config or ~/.ssh for install and
       # build steps; only the push step below uses it.
@@ -235,6 +236,17 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           RELEASE_SHA: ${{ steps.release.outputs.sha }}
 
+      # One GitHub Release per package version this run published (O25). A
+      # failure is reported as an error annotation; npm already has the
+      # versions, so the job does not fail.
+      - name: Create GitHub Releases for published versions
+        if: steps.check.outputs.pending != '0'
+        run: node .github/scripts/github-releases.mjs create "$RUNNER_TEMP/changeset-publish.log" "$RELEASE_SHA"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_SHA: ${{ steps.release.outputs.sha }}
+
       # Fails red when a published version requires an internal version npm
       # does not show (even one npm accepted), and prints the commands that move
       # its dist-tag back and forward. It never moves a dist-tag itself.
@@ -264,6 +276,11 @@ jobs:
           fetch-depth: 0
           ref: master
           persist-credentials: false
+
+      # Recovery runs check out an older release commit that may predate this
+      # script, so keep a copy from master for the release step.
+      - name: Keep the GitHub release script
+        run: cp .github/scripts/github-releases.mjs "$RUNNER_TEMP/github-releases.mjs"
 
       - uses: oven-sh/setup-bun@v1
         with:
@@ -471,9 +488,24 @@ jobs:
           # Use `changeset publish` instead of a hand-rolled loop so that
           # already-published versions are skipped gracefully, matching the
           # beta job's behavior.
-          bunx changeset publish
+          # Keep the output for the GitHub release step (O25).
+          set +e
+          bunx changeset publish 2>&1 | tee "$RUNNER_TEMP/changeset-publish.log"
+          status=${PIPESTATUS[0]}
+          set -e
+          exit "$status"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          RELEASE_SHA: ${{ steps.release.outputs.sha || steps.unfinished.outputs.sha }}
+
+      # One GitHub Release per package version this run published (O25). A
+      # failure is reported as an error annotation; npm already has the
+      # versions, so the job does not fail.
+      - name: Create GitHub Releases for published versions
+        run: node "$RUNNER_TEMP/github-releases.mjs" create "$RUNNER_TEMP/changeset-publish.log" "$RELEASE_SHA"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           RELEASE_SHA: ${{ steps.release.outputs.sha || steps.unfinished.outputs.sha }}
 
       - name: Confirm npm has every current version
