@@ -326,6 +326,8 @@ export interface CreateBootstrapSessionOptions {
   spaceId: string;
   capabilityRequest: ComposedManifestRequest;
   rawAbilities?: Record<string, string[]>;
+  /** Lifetime of this session in milliseconds; defaults to the sign-in session lifetime. */
+  expirationMs?: number;
 }
 
 /**
@@ -1482,7 +1484,9 @@ export class NodeUserAuthorization implements IUserAuthorization {
     }
     const jwk = JSON.parse(jwkString);
     const now = new Date();
-    const expirationTime = new Date(now.getTime() + this.sessionExpirationMs);
+    const expirationTime = new Date(
+      now.getTime() + (options.expirationMs ?? this.sessionExpirationMs),
+    );
     // Sign every requested permission onto its own space. The widened
     // default request carries account-space entries; flattening them under
     // `options.spaceId` signed `…:default/sql/account`, which the node
