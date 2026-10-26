@@ -310,6 +310,8 @@ export type Tc2038PanelPrefetchRatchet = HardeningRatchet;
 export type Tc2005RevokeWindowRatchet = HardeningRatchet;
 /** One reviewed exact-byte row for the capped replica repair backoff (TC-2096, #759); replicaWorker is the replica.worker.js ceiling. */
 export type Tc2096RepairBackoffRatchet = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
+/** One reviewed exact-byte row for the TinyCloudWeb location guard (TC-2072, #754); replicaWorker is carried at TC-2096's replica.worker.js ceiling. */
+export type Tc2072LocationGuardRatchet = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -357,6 +359,7 @@ export type Ledger = {
   tc2038PanelPrefetchRatchet?: Tc2038PanelPrefetchRatchet;
   tc2005RevokeWindowRatchet?: Tc2005RevokeWindowRatchet;
   tc2096RepairBackoffRatchet?: Tc2096RepairBackoffRatchet;
+  tc2072LocationGuardRatchet?: Tc2072LocationGuardRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -934,6 +937,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2038PanelPrefetchRatchet !== undefined) pins.push({ row: "tc2038PanelPrefetchRatchet", pin: root.tc2038PanelPrefetchRatchet.sourceCommits.at(-1)! });
   if (root.tc2005RevokeWindowRatchet !== undefined) pins.push({ row: "tc2005RevokeWindowRatchet", pin: root.tc2005RevokeWindowRatchet.sourceCommits.at(-1)! });
   if (root.tc2096RepairBackoffRatchet !== undefined) pins.push({ row: "tc2096RepairBackoffRatchet", pin: root.tc2096RepairBackoffRatchet.sourceCommits.at(-1)! });
+  if (root.tc2072LocationGuardRatchet !== undefined) pins.push({ row: "tc2072LocationGuardRatchet", pin: root.tc2072LocationGuardRatchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -987,6 +991,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2038PanelPrefetchRatchet", root.tc2038PanelPrefetchRatchet?.root.ceiling],
     ["tc2005RevokeWindowRatchet", root.tc2005RevokeWindowRatchet?.root.ceiling],
     ["tc2096RepairBackoffRatchet", root.tc2096RepairBackoffRatchet?.root.ceiling],
+    ["tc2072LocationGuardRatchet", root.tc2072LocationGuardRatchet?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -1920,6 +1925,36 @@ export const approvedTc2096RepairBackoffRatchet: Tc2096RepairBackoffRatchet = {
   reason: "the replica retries a value it could not verify with growing gaps and gives up after five tries (TC-2096)",
 };
 
+/** Canonical CI run 40348214990 (TC-2072, #754): root index.mjs is carried (delta 0) and index.cjs rises by 8 bytes over TC-2096; first import, activation and worker carry TC-2096's ceilings. */
+export const approvedTc2072LocationGuardRatchet: Tc2072LocationGuardRatchet = {
+  label: "constructing TinyCloudWeb without a location skips UI client registration (TC-2072, #754): +0 B mjs / +8 B cjs gzip",
+  ruling: "Approved by Naomi (measured at run 40348214990 within 10 bytes of the approved +7/+7; the mjs ceiling is carried)",
+  base: "5467d1248b20e59d3b7eca508da417c2b35316b3",
+  sourceCommits: ["1b6b4fddd31630f0287464808feb1ef82e449ef6"],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40348214990",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40348214990/job/121660792942",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40348214990/job/121660792806",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 0, "index.cjs": 8 },
+    ceiling: { "index.mjs": 1467358, "index.cjs": 1409281 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 52653, "replica.cjs": 67846 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23386, "activation.cjs": 24959 },
+  },
+  worker: { delta: 0, ceiling: 776468 },
+  replicaWorker: { delta: 0, ceiling: 770416 },
+  reason: "constructing TinyCloudWeb without a location skips UI client registration (TC-2072)",
+};
+
 export type GatedOnlyRatchet = {
   label: string;
   sourceCommit: string;
@@ -1995,6 +2030,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2038PanelPrefetchRatchet: approvedTc2038PanelPrefetchRatchet,
   tc2005RevokeWindowRatchet: approvedTc2005RevokeWindowRatchet,
   tc2096RepairBackoffRatchet: approvedTc2096RepairBackoffRatchet,
+  tc2072LocationGuardRatchet: approvedTc2072LocationGuardRatchet,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -2216,6 +2252,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc2005RevokeWindowRatchet || JSON.stringify(value.tc2096RepairBackoffRatchet) !== JSON.stringify(approvedTc2096RepairBackoffRatchet))) {
     throw new Error("Only Naomi's exact canonical repair-backoff ratchet is approved.");
   }
+  if (value.tc2072LocationGuardRatchet !== undefined &&
+      (!value.tc2096RepairBackoffRatchet || JSON.stringify(value.tc2072LocationGuardRatchet) !== JSON.stringify(approvedTc2072LocationGuardRatchet))) {
+    throw new Error("Only Naomi's exact canonical location-guard ratchet is approved.");
+  }
 }
 
 /** The #606 worker ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
@@ -2431,6 +2471,14 @@ export function validateTc2096RepairBackoffRatchetTransition(base?: Tc2096Repair
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2096RepairBackoffRatchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact TC-2096 repair-backoff ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-2072 location-guard ratchet is introduced once and immutable afterwards. */
+export function validateTc2072LocationGuardRatchetTransition(base?: Tc2072LocationGuardRatchet, current?: Tc2072LocationGuardRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2072LocationGuardRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-2072 location-guard ratchet may be introduced once and cannot change later.");
   }
 }
 

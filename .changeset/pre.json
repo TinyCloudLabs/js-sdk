@@ -33,6 +33,7 @@
     "cli-keys-replication",
     "cli-kv-create-only",
     "cli-named-keys",
+    "cli-secrets-run",
     "cli-share-json-short-link",
     "mcp-token-status",
     "owner-revocation-window",
@@ -42,6 +43,7 @@
     "tc1737-createlink-floor",
     "tc1888-purge-local-copy",
     "tc2038-panel-prefetch",
-    "tc2043-sync-scope"
+    "tc2043-sync-scope",
+    "tc2072-web-location-guard"
   ]
 }

@@ -76,7 +76,7 @@ function detachedHandle(): UiClientHandle {
  * frames/opaque origins never create a host element or listener.
  */
 export function registerUiClient(options: UiClientOptions): UiClientHandle {
-  if (options.ui === false || !canRenderUi()) return detachedHandle();
+  if (options.ui === false || typeof globalThis.location === "undefined" || !canRenderUi()) return detachedHandle();
 
   const runtime = acquireRuntime();
   if (!runtime) return detachedHandle();
