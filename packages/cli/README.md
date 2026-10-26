@@ -174,6 +174,8 @@ tc secrets run --map ANTHROPIC_KEY=ANTHROPIC_API_KEY -- node server.js
 starts `<command>` directly, without a shell, with each value in its
 environment: under the secret's name, or under `ENV_VAR` for `--map
 NAME=ENV_VAR`. A value replaces an inherited variable of the same name.
+tc's own `TC_PRIVATE_KEY` is not passed to the command; `--map
+NAME=TC_PRIVATE_KEY` sets that variable from a secret.
 Everything after the first `--`, including any further `--`, goes to the
 command unchanged. The command uses tc's stdin, stdout and stderr; tc itself
 writes nothing to stdout, and its own messages go to stderr.
@@ -182,14 +184,21 @@ Name at least one secret, as an argument or with `--map`. `ENV_VAR` must
 match `[A-Za-z_][A-Za-z0-9_]*`, and two secrets cannot be mapped to the same
 variable (exit 2). If any secret cannot be read, the command does not start
 and tc exits with the code and error `tc secrets get` gives for that secret.
-Otherwise tc exits with the command's exit code; if a signal ended the
-command, tc ends by the same signal (or, if that signal does not end tc,
-exits with 128 plus the signal number).
+Otherwise tc exits with the command's exit code. If SIGINT, SIGTERM, SIGHUP,
+SIGKILL, SIGALRM or SIGUSR2 ended the command, tc ends by the same signal (or
+exits with 128 plus the signal number if that signal does not end tc). Any
+other signal, such as SIGQUIT or SIGSEGV, makes tc exit with 128 plus the
+signal number: tc does not raise a signal that would dump its memory to a
+core file.
 
 SIGINT, SIGTERM, SIGHUP and SIGQUIT sent to tc go to the command. When tc is
-the foreground job of a terminal on Linux, it does not pass on SIGINT,
-SIGQUIT or SIGHUP: the terminal sends those (Ctrl-C, Ctrl-\, hangup) to the
-command too, so the command gets them once.
+the foreground job of a terminal, it does not pass on SIGINT, SIGQUIT or
+SIGHUP: the terminal sends those (Ctrl-C, Ctrl-\, hangup) to the command too,
+so the command gets them once. tc checks this with `/proc` or, without it,
+`ps`; if neither works, it passes them on. A tc running in the background
+passes them on, so a signal sent to the whole job (`kill -INT %1`) can reach
+the command twice. From a script, stop it by sending SIGTERM to tc's process
+ID.
 
 A command that does not exist exits 127; one that cannot be executed, or
 cannot be started for another reason, exits 126. These cases print one plain

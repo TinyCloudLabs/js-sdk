@@ -2,6 +2,8 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { NodeWasmBindings, PrivateKeySigner } from "@tinycloud/node-sdk";
+import { profileConfigPath, profilePath, sessionPath, withTinyCloudStateRoot, writeJsonAtomic } from "@tinycloud/operations/state";
 import { TC_BIN, writeDelegateProfile, type WaitHermetic } from "../test-support/secrets-wait-harness.js";
 
 // `tc secrets run` end to end: the real `bin/tc` under Node (needs a fresh
@@ -77,13 +79,14 @@ async function tc(
   options: {
     profile?: string;
     env?: Readonly<Record<string, string>>;
+    stdin?: string;
     whileRunning?: (pid: number, stdoutContains: (text: string) => Promise<void>) => Promise<void>;
   } = {},
 ): Promise<Run> {
   const proc = Bun.spawn([process.env.NODE_BINARY ?? "node", TC_BIN, "--profile", options.profile ?? PROFILE, ...args], {
     env: tcEnv(options.env),
     detached: true,
-    stdin: "ignore",
+    stdin: options.stdin === undefined ? "ignore" : new Blob([options.stdin]),
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -165,6 +168,17 @@ describe("tc secrets run", () => {
     expect(filesContainingValue()).toEqual([]);
   }, TIMEOUT_MS);
 
+  test("the child reads tc's stdin and writes to tc's stderr", async () => {
+    const run = await tc(["secrets", "run", SECRET, ...child(
+      `let input = "";
+       process.stdin.on("data", (chunk) => { input += chunk; });
+       process.stdin.on("end", () => { process.stdout.write(JSON.stringify(input)); process.stderr.write("child stderr\\n"); });`,
+    )], { stdin: "piped into tc\n" });
+
+    expect({ exitCode: run.exitCode, stdout: run.stdout, stderr: run.stderr })
+      .toEqual({ exitCode: 0, stdout: JSON.stringify("piped into tc\n"), stderr: "child stderr\n" });
+  }, TIMEOUT_MS);
+
   const verbatim = [
     "--raw", "-o", "x", "two words", "$HOME", "a;b", "`id`", "$(id)", "*", "",
     "--scope", "s", "--profile", "p", "--map", "A=B", "--json", "--help", "-h", "--version", "-V", "--", "--private-key", "k",
@@ -231,6 +245,13 @@ describe("tc secrets run", () => {
       .toEqual({ exitCode: null, signalCode: "SIGTERM", stdout: "", stderr: "" });
   }, TIMEOUT_MS);
 
+  test("a child killed by SIGQUIT ends tc with exit 131, not by SIGQUIT (tc never dumps its memory)", async () => {
+    const run = await tc(["secrets", "run", SECRET, "--", "sh", "-c", "ulimit -c 0; kill -QUIT $$"]);
+
+    expect({ exitCode: run.exitCode, signalCode: run.signalCode, stdout: run.stdout, stderr: run.stderr })
+      .toEqual({ exitCode: 131, signalCode: null, stdout: "", stderr: "" });
+  }, TIMEOUT_MS);
+
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"] as const) {
     test(`${signal} sent to tc reaches the child`, async () => {
       const run = await tc(["secrets", "run", SECRET, ...child(
@@ -249,25 +270,33 @@ describe("tc secrets run", () => {
     }, TIMEOUT_MS);
   }
 
-  test("a Ctrl-C at the terminal reaches the child once: tc, as the foreground job, does not pass it on again", async () => {
-    const proc = Bun.spawn([
-      "python3", join(import.meta.dir, "../../test-support/pty-interrupt.py"), "child-ready",
-      process.env.NODE_BINARY ?? "node", TC_BIN, "--profile", PROFILE, "secrets", "run", SECRET, ...child(
-        `let count = 0;
-         process.on("SIGINT", () => {
-           count += 1;
-           // A second delivery would arrive well within this window.
-           if (count === 1) setTimeout(() => { process.stdout.write("sigint count=" + count + "\\n"); process.exit(42); }, 500);
-         });
-         process.stdout.write("child-ready\\n");
-         setTimeout(() => process.exit(9), 15000);`,
-      ),
-    ], { env: tcEnv(), stdin: "ignore", stdout: "pipe", stderr: "pipe" });
-    const [stdout] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+  for (const [label, nodeArgs, blocksProc] of [
+    ["read from /proc", [], false],
+    ["read with ps, as without /proc", ["--import", join(import.meta.dir, "../../test-support/no-proc-stat.mjs")], true],
+  ] as const) {
+    test(`a Ctrl-C at the terminal reaches the child once: tc, as the foreground job (${label}), does not pass it on again`, async () => {
+      const proc = Bun.spawn([
+        "python3", join(import.meta.dir, "../../test-support/pty-interrupt.py"), "child-ready",
+        process.env.NODE_BINARY ?? "node", ...nodeArgs, TC_BIN, "--profile", PROFILE, "secrets", "run", SECRET, ...child(
+          `let count = 0;
+           process.on("SIGINT", () => {
+             count += 1;
+             // A second delivery would arrive well within this window.
+             if (count === 1) setTimeout(() => { process.stdout.write("sigint count=" + count + "\\n"); process.exit(42); }, 500);
+           });
+           process.stdout.write("child-ready\\n");
+           setTimeout(() => process.exit(9), 15000);`,
+        ),
+      ], { env: tcEnv(), stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+      const [stdout] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
 
-    const result: unknown = JSON.parse(stdout);
-    expect(result).toMatchObject({ exit: 42, signal: null, output: expect.stringContaining("sigint count=1\r\n") });
-  }, TIMEOUT_MS);
+      const result: unknown = JSON.parse(stdout);
+      expect(result).toMatchObject({ exit: 42, signal: null });
+      const output = typeof result === "object" && result !== null && "output" in result ? String(result.output) : "";
+      expect(output).toContain("sigint count=1\r\n");
+      expect(output.includes("no-proc-stat: blocked /proc/self/stat")).toBe(blocksProc);
+    }, TIMEOUT_MS);
+  }
 
   for (const [label, names, failing, arrange] of [
     ["a missing secret", [SECRET], SECRET, () => hermetic.setSecretPresent(false)],
@@ -324,4 +353,106 @@ describe("tc secrets run", () => {
       nul.stop();
     }
   }, TIMEOUT_MS);
+});
+
+describe("tc secrets run on a local owner key profile", () => {
+  const LOCAL_VALUE = "tc2093 local owner dummy value";
+  const wasm = new NodeWasmBindings();
+  let local: Hermetic;
+  let profiles = 0;
+
+  beforeAll(async () => {
+    local = await hermeticModule.createHermeticEncryptedNode({ secretPayloadValue: LOCAL_VALUE });
+    local.provisionSecret();
+  });
+
+  afterAll(() => {
+    local?.stop();
+  });
+
+  /**
+   * A fresh local-owner-key profile whose signed session reads the secret's
+   * KV entry but cannot decrypt it, so its first read escalates through the
+   * CLI's own node (which registers replication when it is enabled).
+   */
+  async function localOwnerProfile(settings: Record<string, unknown> = {}): Promise<string> {
+    profiles += 1;
+    const name = `local-owner-${profiles}`;
+    const owner = new PrivateKeySigner(local.ownerPrivateKey);
+    const address = await owner.getAddress();
+    const spaceId = wasm.makeSpaceId(address, 1, "secrets");
+    const manager = wasm.createSessionManager();
+    const sessionKey: object = JSON.parse(manager.jwk("default")!);
+    const sessionDid = manager.getDID("default");
+    const expiresAt = new Date(Date.now() + 3_600_000).toISOString();
+    const prepared = wasm.prepareSession({
+      abilities: {
+        capabilities: { "": ["tinycloud.capabilities/read"] },
+        kv: { [`vault/secrets/${SECRET}`]: ["tinycloud.kv/get"] },
+      },
+      address, chainId: 1, domain: "cli.tinycloud.xyz", spaceId, jwk: sessionKey,
+      issuedAt: new Date(Date.now() - 60_000).toISOString(),
+      expirationTime: expiresAt,
+    });
+    const signature = await owner.signMessage(prepared.siwe);
+    const session = wasm.completeSessionSetup({ ...prepared, signature });
+    const activated = await fetch(`${local.host}/delegate`, {
+      method: "POST",
+      headers: { Authorization: session.delegationHeader.Authorization },
+    });
+    expect(activated.status).toBe(200);
+    await withTinyCloudStateRoot(ROOT, async () => {
+      await writeJsonAtomic(profileConfigPath(name), {
+        name, host: local.host, chainId: 1, spaceName: "secrets", spaceId,
+        did: local.ownerDid, sessionDid, ownerDid: local.ownerDid, operatorType: "human",
+        createdAt: "2026-10-26T00:00:00.000Z",
+        authMethod: "local", posture: "local-owner-key", privateKey: local.ownerPrivateKey,
+        ...settings,
+      });
+      await writeJsonAtomic(join(profilePath(name), "key.json"), sessionKey);
+      await writeJsonAtomic(sessionPath(name), {
+        ...session,
+        jwk: sessionKey, address, chainId: 1, spaceId, verificationMethod: sessionDid,
+        siwe: prepared.siwe, signature, ownerDid: local.ownerDid, expiresAt, tinycloudHosts: [local.host],
+      });
+    });
+    return name;
+  }
+
+  test("tc's TC_PRIVATE_KEY never reaches the command; --map can still set that name", async () => {
+    const profile = await localOwnerProfile();
+    const env = { TC_PRIVATE_KEY: local.ownerPrivateKey };
+    const printKey = `const { createHash } = require("node:crypto");
+      const key = process.env.TC_PRIVATE_KEY;
+      process.stdout.write(JSON.stringify(key === undefined ? null : createHash("sha256").update(key).digest("hex")));`;
+
+    const unset = await tc(["secrets", "run", SECRET, ...child(printKey)], { profile, env });
+    const mapped = await tc(["secrets", "run", "--map", `${SECRET}=TC_PRIVATE_KEY`, ...child(printKey)], { profile, env });
+
+    // An explicit key signs in through node-sdk, which logs the loopback node's missing account index on stderr.
+    expect({ exitCode: unset.exitCode, stdout: unset.stdout }).toEqual({ exitCode: 0, stdout: "null" });
+    expect(mapped.exitCode).toBe(0);
+    expect(JSON.parse(mapped.stdout)).toBe(createHash("sha256").update(LOCAL_VALUE).digest("hex"));
+    for (const run of [unset, mapped]) expect(run.stderr).not.toContain(local.ownerPrivateKey.replace(/^0x/, ""));
+  }, TIMEOUT_MS);
+
+  for (const signal of ["SIGTERM", "SIGINT"] as const) {
+    test(`with replication enabled, ${signal} sent to tc still reaches the child and tc exits as the child does`, async () => {
+      const profile = await localOwnerProfile({ replication: { prefixes: ["notes/"] } });
+      const run = await tc(["--replication", "secrets", "run", SECRET, ...child(
+        `process.on(${JSON.stringify(signal)}, () => { process.stdout.write("got ${signal}\\n"); process.exit(42); });
+         process.stdout.write("ready\\n");
+         setTimeout(() => process.exit(9), 15000);`,
+      )], {
+        profile,
+        whileRunning: async (pid, stdoutContains) => {
+          await stdoutContains("ready\n");
+          process.kill(pid, signal);
+        },
+      });
+
+      expect({ exitCode: run.exitCode, signalCode: run.signalCode, stdout: run.stdout })
+        .toEqual({ exitCode: 42, signalCode: null, stdout: `ready\ngot ${signal}\n` });
+    }, TIMEOUT_MS);
+  }
 });

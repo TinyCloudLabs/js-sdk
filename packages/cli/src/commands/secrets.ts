@@ -1357,14 +1357,34 @@ function secretRunPlan(cmd: Command, operands: readonly string[], maps: readonly
 }
 
 /**
- * End tc as the command ended: with its exit code, by its signal (128 + the
- * signal number if the signal does not end tc), or 127 / 126 when it could
- * not start. Only the program name is printed, never its arguments.
+ * Signals tc raises on itself to end as the command ended; their default
+ * action ends a process without a core dump. Any other signal exits 128 + its
+ * number: SIGQUIT, SIGABRT, SIGSEGV and others dump core by default and would
+ * write tc's memory, which holds the values, to disk, and Node itself handles
+ * SIGUSR1 (inspector) and ignores SIGPIPE.
+ */
+const RERAISED_SIGNALS: Partial<Record<NodeJS.Signals, true>> = {
+  SIGINT: true,
+  SIGTERM: true,
+  SIGHUP: true,
+  SIGKILL: true,
+  SIGALRM: true,
+  SIGUSR2: true,
+};
+
+/** Environment variables tc reads as its own credentials; the command never inherits them. */
+const TC_CREDENTIAL_VARIABLES = ["TC_PRIVATE_KEY"] as const;
+
+/**
+ * End tc as the command ended: with its exit code, by its signal for the
+ * signals in {@link RERAISED_SIGNALS} (else, or if that signal does not end
+ * tc, 128 + the signal number), or 127 / 126 when it could not start. Only
+ * the program name is printed, never its arguments.
  */
 function exitAsCommand(outcome: CommandOutcome, program: string): never {
   if (outcome.kind === "exited") return process.exit(outcome.code);
   if (outcome.kind === "signaled") {
-    process.kill(process.pid, outcome.signal);
+    if (RERAISED_SIGNALS[outcome.signal]) process.kill(process.pid, outcome.signal);
     return process.exit(128 + (osConstants.signals[outcome.signal] ?? 0));
   }
   const reason = outcome.errno === "ENOENT"
@@ -1688,6 +1708,7 @@ export function registerSecretsCommand(
         // signal handlers, before the command runs.
         await closeReplication();
         const env: NodeJS.ProcessEnv = { ...process.env };
+        for (const variable of TC_CREDENTIAL_VARIABLES) delete env[variable];
         for (const entry of plan.exports) env[entry.variable] = values.get(entry.name);
         values.clear();
         exitAsCommand(await runCommand(plan.command, env), plan.command[0]);
