@@ -47,9 +47,14 @@ function ownerRevocationSiwe(request: OwnerRevocationRequest, address: string): 
 
 async function runLogoutWithOwnerTransport(home: string, host: string, transport: OwnerSignatureTransport) {
   const messages: string[] = [];
+  const errors: string[] = [];
   const originalExitCode = process.exitCode;
   const stdout = spyOn(process.stdout, "write").mockImplementation((chunk) => { messages.push(String(chunk)); return true; });
-  const stderr = spyOn(process.stderr, "write").mockImplementation((chunk) => { messages.push(String(chunk)); return true; });
+  const stderr = spyOn(process.stderr, "write").mockImplementation((chunk) => {
+    messages.push(String(chunk));
+    errors.push(String(chunk));
+    return true;
+  });
   const exit = spyOn(process, "exit").mockImplementation((code) => {
     throw Object.assign(new Error("CLI exited"), { cliExitCode: code });
   });
@@ -76,7 +81,7 @@ async function runLogoutWithOwnerTransport(home: string, host: string, transport
   }
   const json = messages.map((message) => { try { return JSON.parse(message); } catch { return null; } })
     .find((value) => value && typeof value === "object");
-  return { exitCode, json, messages: messages.join("") };
+  return { exitCode, json, messages: messages.join(""), stderr: errors.join("") };
 }
 
 test("OpenKey logout requests one owner signature, posts one verified revoke, then removes local session", async () => {
@@ -662,15 +667,12 @@ describe("tc auth logout --revoke with durable replica denial", () => {
     }
     const sessionBefore = await readFile(paths.session);
     const keyBefore = await readFile(paths.key);
-    const historyCid = new NodeWasmBindings().computeCid(new TextEncoder().encode("tc841-openkey-owned-history"), 0x55n);
-    await withTinyCloudStateRoot(home, () =>
-      writeFile(join(profilePath(PROFILE), "auth-grants.jsonl"), JSON.stringify({
-        ts: new Date().toISOString(), profile: PROFILE, source: "cli",
-        delegationCid: historyCid, expiry: new Date(Date.now() + 3_600_000).toISOString(), addedCaps: [],
-      }) + "\n", { mode: 0o600 }));
     expect(node.networkPaths).toEqual([]);
 
-    const refused = await run(home, ["auth", "logout", "--revoke"]);
+    const unavailable: OwnerSignatureTransport = async () => {
+      throw new Error("OpenKey owner-revocation hand-off unavailable");
+    };
+    const refused = await runLogoutWithOwnerTransport(home, node.host, unavailable);
     expect(refused.exitCode).toBeGreaterThan(0);
     const error = JSON.parse(refused.stderr) as { error?: { code?: string; message?: string } };
     expect(error.error?.code).toBe("REVOCATION_AUTHORITY_UNAVAILABLE");
