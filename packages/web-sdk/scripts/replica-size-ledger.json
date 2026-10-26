@@ -2133,5 +2133,33 @@
     "worker": { "delta": 0, "ceiling": 776539 },
     "replicaWorker": { "delta": 0, "ceiling": 770467 },
     "reason": "signInWithOpenKey adds the OpenKey sign-in path to the node and web SDKs (TC-1977)"
+  },
+  "tc2130PanelIphoneRatchet": {
+    "label": "iPhone panel safe-area and ui.setButtonVisible (TC-2130, #765): +303 B mjs / +282 B cjs gzip",
+    "ruling": "Approved by Naomi (root ~+344 mjs / +303 cjs gz; measured +303 / +282 stacked on #747 at run 40410108641 at 89ef6f52)",
+    "base": "33b16c5569efa4aa8458ee9ea4b2c53da8c2c820",
+    "sourceCommits": ["517e67264730211ea4df9b3225b842000578185b"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40410108641",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40410108641/job/121878363620",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40410108641/job/121878363692"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 303, "index.cjs": 282 },
+      "ceiling": { "index.mjs": 1470260, "index.cjs": 1411832 }
+    },
+    "firstImport": {
+      "delta": { "replica.mjs": 0, "replica.cjs": 0 },
+      "ceiling": { "replica.mjs": 52757, "replica.cjs": 67957 }
+    },
+    "activation": {
+      "delta": { "activation.mjs": 0, "activation.cjs": 0 },
+      "ceiling": { "activation.mjs": 23412, "activation.cjs": 24981 }
+    },
+    "worker": { "delta": 0, "ceiling": 776539 },
+    "replicaWorker": { "delta": 0, "ceiling": 770467 },
+    "reason": "iPhone panel safe-area and ui.setButtonVisible (TC-2130)"
   }
 }

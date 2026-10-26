@@ -50,6 +50,8 @@ interface NavEntry {
 }
 
 const SVG_NS = "http://www.w3.org/2000/svg";
+/** A downward drag on the header of at least this many CSS pixels closes the panel. */
+const SWIPE_CLOSE_PX = 60;
 
 /** Glyph for the layout the switch moves to: expand arrows for a full page, a sidebar frame for the drawer. */
 const SWITCH_GLYPH: Record<ShellLayout, string> = {
@@ -173,6 +175,22 @@ export function createPanel(options: PanelOptions): PanelHandle {
   const head = document.createElement("header");
   head.className = "head";
   head.append(brand, status, actions);
+
+  // Swipe down on the header (touch only, not starting on a control) closes the panel.
+  let swipe: { readonly id: number; readonly x: number; readonly y: number } | undefined;
+  head.addEventListener("pointerdown", (event) => {
+    swipe = event.pointerType === "touch" && !(event.target as Element).closest("button") ? { id: event.pointerId, x: event.clientX, y: event.clientY } : undefined;
+  });
+  head.addEventListener("pointerup", (event) => {
+    const start = swipe;
+    swipe = undefined;
+    if (!start || start.id !== event.pointerId) return;
+    const down = event.clientY - start.y;
+    if (down >= SWIPE_CLOSE_PX && down > Math.abs(event.clientX - start.x)) options.onClose();
+  });
+  head.addEventListener("pointercancel", () => {
+    swipe = undefined;
+  });
 
   const nav = document.createElement("nav");
   nav.className = "nav";

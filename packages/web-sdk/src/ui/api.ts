@@ -14,6 +14,13 @@ export interface TinyCloudUI {
   /** Closes the panel only. Never changes the hidden flag. */
   close(): void;
   toggle(): void;
+  /**
+   * Shows or hides the floating button now. `true` shows it even under `ui.button: false` for this page
+   * session and clears the persisted hidden flag. `false` hides it without writing that flag. The SDK
+   * does not persist the choice: the host app calls this on load from its own setting. `open()`,
+   * `openPage()` and `toggle()` work whether the button is shown or not.
+   */
+  setButtonVisible(visible: boolean): void;
   readonly isOpen: boolean;
   /** False in iframes, opaque origins, SSR, no document, or when `ui: false`. */
   readonly available: boolean;
@@ -24,6 +31,7 @@ export interface UiTarget {
   openPage(section?: SectionId): void;
   close(): void;
   isOpen(): boolean;
+  setButtonVisible(visible: boolean): void;
 }
 
 /**
@@ -54,6 +62,11 @@ export function createUiApi(getTarget: () => UiTarget | undefined): TinyCloudUI 
     toggle() {
       if (api.isOpen) api.close();
       else api.open();
+    },
+    setButtonVisible(visible) {
+      const target = getTarget();
+      if (!target || !canRenderUi()) return;
+      target.setButtonVisible(visible);
     },
   };
   return api;

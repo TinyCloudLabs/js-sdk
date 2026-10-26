@@ -32,6 +32,7 @@ import { approvedTc2096LazyContentRatchet, validateTc2096LazyContentRatchetTrans
 import { approvedTc2113PanelGrantRatchet, validateTc2113PanelGrantRatchetTransition } from "./replica-size-policy";
 import { approvedTc2127WindowLocationRatchet, validateTc2127WindowLocationRatchetTransition } from "./replica-size-policy";
 import { approvedTc1977OpenKeySigninRatchet, validateTc1977OpenKeySigninRatchetTransition } from "./replica-size-policy";
+import { approvedTc2130PanelIphoneRatchet, validateTc2130PanelIphoneRatchetTransition } from "./replica-size-policy";
 import { approvedTc2038PanelPrefetchRatchet, validateTc2038PanelPrefetchRatchetTransition, type Tc2038PanelPrefetchRatchet } from "./replica-size-policy";
 import { approvedTc2005RevokeWindowRatchet, validateTc2005RevokeWindowRatchetTransition, type Tc2005RevokeWindowRatchet } from "./replica-size-policy";
 import { approvedTc2096RepairBackoffRatchet, validateTc2096RepairBackoffRatchetTransition, type Tc2096RepairBackoffRatchet } from "./replica-size-policy";
@@ -2907,6 +2908,7 @@ delete tc2043Ledger.tc2072LocationGuardRatchet;
 delete tc2043Ledger.tc2113PanelGrantRatchet;
 delete tc2043Ledger.tc2127WindowLocationRatchet;
 delete tc2043Ledger.tc1977OpenKeySigninRatchet;
+delete tc2043Ledger.tc2130PanelIphoneRatchet;
 tc2043Ledger.entries = structuredClone(current.entries.slice(0, current.entries.findIndex((entry) => entry.pr === "#728")));
 describe("replication syncScope opt-in (#742, TC-2043) size ratchet", () => {
   const row = () => structuredClone(approvedTc2043SyncScopeRatchet);
@@ -3406,8 +3408,8 @@ describe("signInWithOpenKey (TC-1977, #747) size ratchet", () => {
     expect(row().replicaWorker).toEqual({ delta: 0, ceiling: prerequisite().replicaWorker.ceiling });
     expect(rootCeilings(current).find(({ row: name }) => name === "tc1977OpenKeySigninRatchet")).toEqual({ row: "tc1977OpenKeySigninRatchet", ceiling: row().root.ceiling });
     expect(ancestryPins(current, false)).toContainEqual({ row: "tc1977OpenKeySigninRatchet", pin: row().sourceCommits[0] });
-    expect(MAX_WORKER_GZIP_BYTES).toBe(newestKvWorkerCeiling());
-    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(newestReplicaWorkerCeiling());
+    expect(MAX_WORKER_GZIP_BYTES).toBe(row().worker.ceiling);
+    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(row().replicaWorker.ceiling);
   });
 
   it("refuses changed bytes or a missing window location prerequisite", () => {
@@ -3426,6 +3428,45 @@ describe("signInWithOpenKey (TC-1977, #747) size ratchet", () => {
     changed.root.ceiling["index.cjs"]++;
     expect(() => validateTc1977OpenKeySigninRatchetTransition(undefined, changed)).toThrow("TC-1977");
     expect(() => validateTc1977OpenKeySigninRatchetTransition(row(), undefined)).toThrow("TC-1977");
+  });
+});
+
+describe("iPhone panel safe-area and ui.setButtonVisible (TC-2130, #765) size ratchet", () => {
+  const row = () => structuredClone(approvedTc2130PanelIphoneRatchet);
+  const prerequisite = () => approvedTc1977OpenKeySigninRatchet;
+
+  it("pins the panel safe-area root delta over the OpenKey sign-in row and keeps the worker ceilings unchanged", () => {
+    expect(() => validateLedger(current)).not.toThrow();
+    expect(current.tc2130PanelIphoneRatchet).toEqual(approvedTc2130PanelIphoneRatchet);
+    expect(row().root).toEqual({ delta: { "index.mjs": 303, "index.cjs": 282 }, ceiling: { "index.mjs": 1470260, "index.cjs": 1411832 } });
+    expect(row().root.ceiling["index.mjs"]).toBe(prerequisite().root.ceiling["index.mjs"] + row().root.delta["index.mjs"]);
+    expect(row().root.ceiling["index.cjs"]).toBe(prerequisite().root.ceiling["index.cjs"] + row().root.delta["index.cjs"]);
+    expect(row().firstImport.ceiling).toEqual(prerequisite().firstImport.ceiling);
+    expect(row().activation.ceiling).toEqual(prerequisite().activation.ceiling);
+    expect(row().worker).toEqual({ delta: 0, ceiling: prerequisite().worker.ceiling });
+    expect(row().replicaWorker).toEqual({ delta: 0, ceiling: prerequisite().replicaWorker.ceiling });
+    expect(rootCeilings(current).find(({ row: name }) => name === "tc2130PanelIphoneRatchet")).toEqual({ row: "tc2130PanelIphoneRatchet", ceiling: row().root.ceiling });
+    expect(ancestryPins(current, false)).toContainEqual({ row: "tc2130PanelIphoneRatchet", pin: row().sourceCommits[0] });
+    expect(MAX_WORKER_GZIP_BYTES).toBe(row().worker.ceiling);
+    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(row().replicaWorker.ceiling);
+  });
+
+  it("refuses changed bytes or a missing OpenKey sign-in prerequisite", () => {
+    const changedRoot = copy(current);
+    changedRoot.tc2130PanelIphoneRatchet!.root.ceiling["index.mjs"]++;
+    expect(() => validateLedger(changedRoot)).toThrow("panel safe-area");
+    const withoutPrerequisite = copy(current);
+    delete withoutPrerequisite.tc1977OpenKeySigninRatchet;
+    expect(() => validateLedger(withoutPrerequisite)).toThrow("panel safe-area");
+  });
+
+  it("may be introduced once and never changed or removed", () => {
+    expect(() => validateTc2130PanelIphoneRatchetTransition(undefined, row())).not.toThrow();
+    expect(() => validateTc2130PanelIphoneRatchetTransition(row(), row())).not.toThrow();
+    const changed = row();
+    changed.root.ceiling["index.cjs"]++;
+    expect(() => validateTc2130PanelIphoneRatchetTransition(undefined, changed)).toThrow("TC-2130");
+    expect(() => validateTc2130PanelIphoneRatchetTransition(row(), undefined)).toThrow("TC-2130");
   });
 });
 

@@ -13,7 +13,7 @@ export interface PendingPanel {
   showError(retry: () => void): void;
 }
 
-export function createPendingPanel(onEscape: () => void): PendingPanel {
+export function createPendingPanel(onClose: () => void): PendingPanel {
   const el = document.createElement("div");
   el.id = PANEL_ID;
   el.className = "pending";
@@ -37,11 +37,19 @@ export function createPendingPanel(onEscape: () => void): PendingPanel {
     onRetry?.();
   });
 
-  el.append(status, retry);
+  // The close control comes first so it is reachable while the panel loads or fails to load.
+  const close = document.createElement("button");
+  close.type = "button";
+  close.className = "pclose";
+  close.setAttribute("aria-label", text("panel.close"));
+  close.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+  close.addEventListener("click", onClose);
+
+  el.append(close, status, retry);
   el.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
     event.stopPropagation();
-    onEscape();
+    onClose();
   });
 
   return {

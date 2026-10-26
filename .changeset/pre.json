@@ -49,6 +49,7 @@
     "tc2043-sync-scope",
     "tc2072-web-location-guard",
     "tc2127-window-without-location",
-    "web-panel-ask-permission"
+    "web-panel-ask-permission",
+    "web-sdk-panel-safe-area"
   ]
 }
