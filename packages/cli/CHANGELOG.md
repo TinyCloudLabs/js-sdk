@@ -1,5 +1,13 @@
 # @tinycloud/cli
 
+## 1.5.0-beta.2
+
+### Minor Changes
+
+- 0f7a069: `tc kv put --if-none-match '*'` creates a key only when it is absent and reports an existing key as a refused write.
+
+  Details: TC-2049
+
 ## 1.5.0-beta.1
 
 ### Patch Changes
