@@ -141,6 +141,9 @@ Run the service with an encrypted persistent volume:
 docker run --rm -p 3000:3000 \
   -e TC_MCP_PUBLIC_URL=https://mcp.example.com/mcp \
   -e TC_MCP_STATE_SECRET="$(openssl rand -hex 32)" \
+  -e TC_MCP_INTROSPECTION_URL=<introspection endpoint> \
+  -e TC_MCP_INTROSPECTION_CLIENT_ID=<client id> \
+  -e TC_MCP_INTROSPECTION_CLIENT_SECRET=<client secret> \
   -v tinycloud-mcp-state:/var/lib/tinycloud-mcp \
   ghcr.io/tinycloudlabs/tinycloud-mcp:latest
 ```
@@ -148,6 +151,28 @@ docker run --rm -p 3000:3000 \
 Set `TC_MCP_OAUTH_METADATA_URL` for a self-hosted OpenKey issuer and
 `TC_MCP_ALLOWED_ORIGINS` when browsers call the MCP endpoint directly. The
 default TinyCloud node is `https://tee.node.tinycloud.xyz`.
+The MCP server asks OpenKey's resource-server token introspection endpoint
+(RFC 7662) about each access token before serving a call.
+`TC_MCP_INTROSPECTION_URL` (the endpoint; HTTPS outside localhost),
+`TC_MCP_INTROSPECTION_CLIENT_ID` and `TC_MCP_INTROSPECTION_CLIENT_SECRET` (a
+registered confidential OpenKey client) are required, and the server does not
+start without them. The OAuth metadata's `introspection_endpoint` is not used.
+`TC_MCP_INTROSPECTION_AUTH_METHOD` is `basic` (default, `client_secret_basic`)
+or `post` (`client_secret_post`). Only a 200 answer with `active: true` is
+active, and only when its `sub` and `client_id` equal the verified token's and
+its `aud` is a non-empty subset of the token's audiences that includes this
+server's resource URL; any other `active: true` answer is treated like an
+inactive one. A 200 answer with `active: false` is answered with 401
+`invalid_token` and kept for that token. An active answer is reused for 30
+seconds. A 401 from the endpoint (`invalid_client`) is logged once and refused
+with 500 `server_error`. If OpenKey cannot be reached or answers otherwise
+(429, 5xx, timeout), a call is served only when OpenKey itself answered that
+same token active to this server, and only until the token expires; every other
+call is answered with 500 `server_error`.
+
+The account owner can see the hosted MCP's delegation, and revoke it, on the
+account site at https://account.tinycloud.xyz/delegations.
+
 Standalone defaults are `TC_MCP_DELEGATION_EXPIRY=1h` and
 `TC_MCP_APPROVAL_TTL_SECONDS=300`. Production `docker-compose.phala.yml`
 explicitly overrides these to `30d` and `900`; the container command above

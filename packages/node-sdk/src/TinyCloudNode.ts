@@ -325,6 +325,7 @@ const ROOT_DELEGATION_ACTIONS: string[] = [
  * for the tier rationale.
  */
 const DEFAULT_SESSION_EXPIRATION_MS = EXPIRY.SESSION_MS;
+const OWNER_REVOCATION_WINDOW_MS = 10 * 60_000;
 
 export type CreateOwnerDelegationParams = CoreCreateOwnerDelegationParams;
 
@@ -5983,7 +5984,7 @@ export class TinyCloudNode {
    * Sign a wallet (CACAO) revocation of the delegation `cid` for the node's
    * `POST /revoke`, and return its Authorization header value. The node
    * accepts it when the owner delegated `cid` or owns a space its abilities
-   * target, whichever key issued it. Valid for 60 seconds. Requires the
+   * target, whichever key issued it. Valid for 10 minutes. Requires the
    * owner wallet signer.
    */
   async signOwnerRevocation(cid: string): Promise<string> {
@@ -5999,7 +6000,7 @@ export class TinyCloudNode {
       chainId: session.chainId,
       nonce: generateNonce(),
       issuedAt: issuedAt.toISOString(),
-      expirationTime: new Date(issuedAt.getTime() + 60_000).toISOString(),
+      expirationTime: new Date(issuedAt.getTime() + OWNER_REVOCATION_WINDOW_MS).toISOString(),
     }).prepareMessage();
     const signature = await this.signer.signMessage(siwe);
     return this.wasmBindings.siweToDelegationHeaders({ siwe, signature }).Authorization;
