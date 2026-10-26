@@ -14,6 +14,7 @@ import {
 import { RUNTIME_DELEGATION_REJECTIONS } from "@tinycloud/node-sdk";
 
 import { createOpenKeyTokenVerifier } from "./oauth.js";
+import { createTokenStatusChecker, type TokenStatusChecker, type TokenStatusConfig } from "./token-status.js";
 import { logToolCall } from "./logging.js";
 import {
   ApprovalOwnerMismatchError,
@@ -31,6 +32,12 @@ const REQUIRED_SCOPE = "tinycloud:mcp";
 export interface HostedMcpConfig extends RemoteStoreConfig {
   readonly oauthMetadata: OAuthMetadata;
   readonly allowedOrigins?: readonly string[];
+  /**
+   * OpenKey token introspection client. The endpoint is the metadata's
+   * `introspection_endpoint`. The hosted server always sets this; without it
+   * only the signed token claims are checked.
+   */
+  readonly introspection?: Omit<TokenStatusConfig, "endpoint">;
 }
 
 export interface HostedMcpApp {
@@ -41,12 +48,18 @@ export interface HostedMcpApp {
 export function createHostedMcpApp(config: HostedMcpConfig): HostedMcpApp {
   const resourceUrl = canonicalResourceUrl(config.publicUrl);
   const pluginUrl = new URL("./chatgpt/mcp", resourceUrl);
-  const hosted = createHostedSurface(config, resourceUrl, "hosted");
+  const tokenStatus = config.introspection === undefined
+    ? undefined
+    : createTokenStatusChecker({
+      ...config.introspection,
+      endpoint: introspectionEndpoint(config.oauthMetadata),
+    });
+  const hosted = createHostedSurface(config, resourceUrl, "hosted", tokenStatus);
   const plugin = createHostedSurface({
     ...config,
     stateDir: join(config.stateDir, "chatgpt"),
     approvalPath: new URL("./connect", pluginUrl).pathname,
-  }, pluginUrl, "public");
+  }, pluginUrl, "public", tokenStatus);
   const pluginPaths: Record<string, true> = {
     [pluginUrl.pathname]: true,
     [new URL("./connect", pluginUrl).pathname]: true,
@@ -65,6 +78,7 @@ function createHostedSurface(
   config: HostedMcpConfig,
   resourceUrl: URL,
   surface: "hosted" | "public",
+  tokenStatus: TokenStatusChecker | undefined,
 ): HostedMcpApp {
   const connectPath = config.approvalPath ?? "/connect";
   const callbackPath = `${connectPath}/callback`;
@@ -75,6 +89,7 @@ function createHostedSurface(
     audience: resourceUrl.toString(),
     jwksUri,
     requiredScope: REQUIRED_SCOPE,
+    ...(tokenStatus === undefined ? {} : { tokenStatus }),
   });
   const resourceMetadataUrl = getOAuthProtectedResourceMetadataUrl(resourceUrl);
   const authenticate = requireBearerAuth({
@@ -291,6 +306,14 @@ function oauthIdentity(authInfo: AuthInfo | undefined): OAuthIdentity {
     throw new Error("The authenticated MCP request has no OpenKey owner identity.");
   }
   return { subject, ownerDids };
+}
+
+function introspectionEndpoint(metadata: OAuthMetadata): string {
+  const endpoint = "introspection_endpoint" in metadata ? metadata.introspection_endpoint : undefined;
+  if (typeof endpoint !== "string" || endpoint.length === 0) {
+    throw new Error("OpenKey OAuth metadata has no introspection endpoint.");
+  }
+  return endpoint;
 }
 
 function canonicalResourceUrl(url: URL): URL {

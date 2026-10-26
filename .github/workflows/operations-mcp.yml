@@ -139,7 +139,7 @@ jobs:
           set -o pipefail
           log="$RUNNER_TEMP/remaining-unit-tests.log"
           roots=(packages/cli/src packages/cli/test packages/bootstrap/src packages/server/src tests/cli)
-          single_files=(packages/mcp/src/oauth.test.ts)
+          single_files=(packages/mcp/src/oauth.test.ts packages/mcp/src/token-status.test.ts)
           declare -A excluded=(
             # Live-node suites, each run by a node lane:
             [packages/cli/src/commands/agent-grant-openkey.e2e.test.ts]="needs a live node; run by node-replication-e2e.yml"
