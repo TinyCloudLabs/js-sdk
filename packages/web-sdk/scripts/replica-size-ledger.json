@@ -2105,22 +2105,22 @@
     "reason": "TinyCloudWeb._init reads the SIWE domain defensively when window.location is absent (TC-2127)"
   },
   "tc1977OpenKeySigninRatchet": {
-    "label": "signInWithOpenKey for the node SDK and web SDK (TC-1977, #747): +955 B mjs / +1027 B cjs gzip",
-    "ruling": "Approved by Naomi (root +955 mjs / +1,027 cjs gz; measured at run 40398554596 at 6e09b322; re-stacked on #764)",
+    "label": "signInWithOpenKey for the node SDK and web SDK (TC-1977, #747): +957 B mjs / +1025 B cjs gzip",
+    "ruling": "Approved by Naomi (root +955 mjs / +1,027 cjs gz at run 40398554596; stacked measurement at run 40405133617 at 1d937c89: +957 / +1,025, within ±10 B)",
     "base": "f926276e5c97c36e3dbff5c18accbcddbb11e56b",
     "sourceCommits": [
       "a21c5edce78ff53dcd3e075ef1658a092f931052"
     ],
     "canonicalCI": {
-      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40398554596",
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40405133617",
       "jobs": [
-        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40398554596/job/121837975795",
-        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40398554596/job/121837975928"
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40405133617/job/121860849330",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40405133617/job/121860849456"
       ]
     },
     "root": {
-      "delta": { "index.mjs": 955, "index.cjs": 1027 },
-      "ceiling": { "index.mjs": 1469955, "index.cjs": 1411552 }
+      "delta": { "index.mjs": 957, "index.cjs": 1025 },
+      "ceiling": { "index.mjs": 1469957, "index.cjs": 1411550 }
     },
     "firstImport": {
       "delta": { "replica.mjs": 0, "replica.cjs": 0 },

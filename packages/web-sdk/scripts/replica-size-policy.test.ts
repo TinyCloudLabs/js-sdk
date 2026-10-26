@@ -3397,7 +3397,7 @@ describe("signInWithOpenKey (TC-1977, #747) size ratchet", () => {
   it("pins the OpenKey sign-in root delta over the window location row and keeps the worker ceilings unchanged", () => {
     expect(() => validateLedger(current)).not.toThrow();
     expect(current.tc1977OpenKeySigninRatchet).toEqual(approvedTc1977OpenKeySigninRatchet);
-    expect(row().root).toEqual({ delta: { "index.mjs": 955, "index.cjs": 1027 }, ceiling: { "index.mjs": 1469955, "index.cjs": 1411552 } });
+    expect(row().root).toEqual({ delta: { "index.mjs": 957, "index.cjs": 1025 }, ceiling: { "index.mjs": 1469957, "index.cjs": 1411550 } });
     expect(row().root.ceiling["index.mjs"]).toBe(prerequisite().root.ceiling["index.mjs"] + row().root.delta["index.mjs"]);
     expect(row().root.ceiling["index.cjs"]).toBe(prerequisite().root.ceiling["index.cjs"] + row().root.delta["index.cjs"]);
     expect(row().firstImport.ceiling).toEqual(prerequisite().firstImport.ceiling);
