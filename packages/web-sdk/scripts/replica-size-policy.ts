@@ -308,6 +308,8 @@ export type Tc1977ManifestKeysRatchet = HardeningRatchet;
 export type Tc2038PanelPrefetchRatchet = HardeningRatchet;
 /** One reviewed exact-byte row for the owner revocation window (TC-2005, #745). */
 export type Tc2005RevokeWindowRatchet = HardeningRatchet;
+/** One reviewed exact-byte row for the TinyCloudWeb location guard (TC-2072, #754). */
+export type Tc2072LocationGuardRatchet = HardeningRatchet;
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -354,6 +356,7 @@ export type Ledger = {
   tc1977ManifestKeysRatchet?: Tc1977ManifestKeysRatchet;
   tc2038PanelPrefetchRatchet?: Tc2038PanelPrefetchRatchet;
   tc2005RevokeWindowRatchet?: Tc2005RevokeWindowRatchet;
+  tc2072LocationGuardRatchet?: Tc2072LocationGuardRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -930,6 +933,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc1977ManifestKeysRatchet !== undefined) pins.push({ row: "tc1977ManifestKeysRatchet", pin: root.tc1977ManifestKeysRatchet.sourceCommits.at(-1)! });
   if (root.tc2038PanelPrefetchRatchet !== undefined) pins.push({ row: "tc2038PanelPrefetchRatchet", pin: root.tc2038PanelPrefetchRatchet.sourceCommits.at(-1)! });
   if (root.tc2005RevokeWindowRatchet !== undefined) pins.push({ row: "tc2005RevokeWindowRatchet", pin: root.tc2005RevokeWindowRatchet.sourceCommits.at(-1)! });
+  if (root.tc2072LocationGuardRatchet !== undefined) pins.push({ row: "tc2072LocationGuardRatchet", pin: root.tc2072LocationGuardRatchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -982,6 +986,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc1977ManifestKeysRatchet", root.tc1977ManifestKeysRatchet?.root.ceiling],
     ["tc2038PanelPrefetchRatchet", root.tc2038PanelPrefetchRatchet?.root.ceiling],
     ["tc2005RevokeWindowRatchet", root.tc2005RevokeWindowRatchet?.root.ceiling],
+    ["tc2072LocationGuardRatchet", root.tc2072LocationGuardRatchet?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -1885,6 +1890,35 @@ export const approvedTc2005RevokeWindowRatchet: Tc2005RevokeWindowRatchet = {
   reason: "the owner revocation window extends; one constant in node-sdk (TC-2005)",
 };
 
+/** Canonical CI run 40319729629 (TC-2072, #754): root index.mjs and index.cjs each rise by 7 bytes; first import, activation and worker are unchanged. */
+export const approvedTc2072LocationGuardRatchet: Tc2072LocationGuardRatchet = {
+  label: "constructing TinyCloudWeb without a location skips UI client registration (TC-2072, #754): +7 B mjs / +7 B cjs gzip",
+  ruling: "Approved by Naomi (exact CI bytes at run 40319729629; ceilings are measured on the merged master within 10 bytes)",
+  base: "5467d1248b20e59d3b7eca508da417c2b35316b3",
+  sourceCommits: ["26330c87a8c07a75709eed979d349036d85ed3fd"],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40319729629",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40319729629/job/121561291672",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40319729629/job/121561291717",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 7, "index.cjs": 7 },
+    ceiling: { "index.mjs": 1467365, "index.cjs": 1409280 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 52374, "replica.cjs": 67571 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23386, "activation.cjs": 24959 },
+  },
+  worker: { delta: 0, ceiling: 776128 },
+  reason: "constructing TinyCloudWeb without a location skips UI client registration (TC-2072)",
+};
+
 export type GatedOnlyRatchet = {
   label: string;
   sourceCommit: string;
@@ -1959,6 +1993,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc1977ManifestKeysRatchet: approvedTc1977ManifestKeysRatchet,
   tc2038PanelPrefetchRatchet: approvedTc2038PanelPrefetchRatchet,
   tc2005RevokeWindowRatchet: approvedTc2005RevokeWindowRatchet,
+  tc2072LocationGuardRatchet: approvedTc2072LocationGuardRatchet,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -2176,6 +2211,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc2038PanelPrefetchRatchet || JSON.stringify(value.tc2005RevokeWindowRatchet) !== JSON.stringify(approvedTc2005RevokeWindowRatchet))) {
     throw new Error("Only Naomi's exact canonical owner revocation-window ratchet is approved.");
   }
+  if (value.tc2072LocationGuardRatchet !== undefined &&
+      (!value.tc2005RevokeWindowRatchet || JSON.stringify(value.tc2072LocationGuardRatchet) !== JSON.stringify(approvedTc2072LocationGuardRatchet))) {
+    throw new Error("Only Naomi's exact canonical location-guard ratchet is approved.");
+  }
 }
 
 /** The #606 worker ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
@@ -2383,6 +2422,14 @@ export function validateTc2005RevokeWindowRatchetTransition(base?: Tc2005RevokeW
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2005RevokeWindowRatchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact TC-2005 owner revocation-window ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-2072 location-guard ratchet is introduced once and immutable afterwards. */
+export function validateTc2072LocationGuardRatchetTransition(base?: Tc2072LocationGuardRatchet, current?: Tc2072LocationGuardRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2072LocationGuardRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-2072 location-guard ratchet may be introduced once and cannot change later.");
   }
 }
 

@@ -1939,5 +1939,34 @@
     },
     "worker": { "delta": 0, "ceiling": 776128 },
     "reason": "the owner revocation window extends; one constant in node-sdk (TC-2005)"
+  },
+  "tc2072LocationGuardRatchet": {
+    "label": "constructing TinyCloudWeb without a location skips UI client registration (TC-2072, #754): +7 B mjs / +7 B cjs gzip",
+    "ruling": "Approved by Naomi (exact CI bytes at run 40319729629; ceilings are measured on the merged master within 10 bytes)",
+    "base": "5467d1248b20e59d3b7eca508da417c2b35316b3",
+    "sourceCommits": [
+      "26330c87a8c07a75709eed979d349036d85ed3fd"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40319729629",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40319729629/job/121561291672",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40319729629/job/121561291717"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 7, "index.cjs": 7 },
+      "ceiling": { "index.mjs": 1467365, "index.cjs": 1409280 }
+    },
+    "firstImport": {
+      "delta": { "replica.mjs": 0, "replica.cjs": 0 },
+      "ceiling": { "replica.mjs": 52374, "replica.cjs": 67571 }
+    },
+    "activation": {
+      "delta": { "activation.mjs": 0, "activation.cjs": 0 },
+      "ceiling": { "activation.mjs": 23386, "activation.cjs": 24959 }
+    },
+    "worker": { "delta": 0, "ceiling": 776128 },
+    "reason": "constructing TinyCloudWeb without a location skips UI client registration (TC-2072)"
   }
 }

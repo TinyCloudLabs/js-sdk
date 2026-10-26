@@ -24,6 +24,7 @@ import { validateTc1888PurgeLocalCopyRatchetTransition } from "./replica-size-po
 import { validateTc1977ManifestKeysRatchetTransition } from "./replica-size-policy";
 import { validateTc2038PanelPrefetchRatchetTransition } from "./replica-size-policy";
 import { validateTc2005RevokeWindowRatchetTransition } from "./replica-size-policy";
+import { validateTc2072LocationGuardRatchetTransition } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 import { replicaOwnedPath } from "./replica-owned-path";
 import { webSdkTestExitFailure } from "./web-sdk-test-exit";
@@ -459,6 +460,13 @@ if (prBaseSha) {
   if (tc2005RevokeWindow !== undefined && baseLedger.tc2005RevokeWindowRatchet === undefined &&
       (baseLedger.tc2038PanelPrefetchRatchet === undefined || !hasAncestor(repoRoot, tc2005RevokeWindow.sourceCommits.at(-1)!))) {
     console.error("The revocation-window ratchet requires the merged panel-prefetch ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc2072LocationGuardRatchetTransition(baseLedger.tc2072LocationGuardRatchet, ledger.tc2072LocationGuardRatchet);
+  const tc2072LocationGuard = ledger.tc2072LocationGuardRatchet;
+  if (tc2072LocationGuard !== undefined && baseLedger.tc2072LocationGuardRatchet === undefined &&
+      (baseLedger.tc2005RevokeWindowRatchet === undefined || !hasAncestor(repoRoot, tc2072LocationGuard.sourceCommits.at(-1)!))) {
+    console.error("The location-guard ratchet requires the merged revocation-window ratchet and its measured source commit.");
     failed = true;
   }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
