@@ -1,5 +1,20 @@
 # @tinycloudlabs/web-sdk
 
+## 3.8.0-beta.1
+
+### Minor Changes
+
+- 2789240: Replication accepts `syncScope: "prefixes"`, which keeps kv/sync on the declared prefixes at sign-in instead of widening to a root entry that covers them.
+
+  Details: TC-2043
+
+### Patch Changes
+
+- Updated dependencies [2789240]
+  - @tinycloud/sdk-core@3.8.0-beta.1
+  - @tinycloud/node-sdk@3.8.0-beta.1
+  - @tinycloud/replica@0.3.5-beta.0
+
 ## 3.8.0-beta.0
 
 ### Patch Changes

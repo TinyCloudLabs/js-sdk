@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { measureReplicaOptionalLoaded, type LoadedSizes } from "./measure-replica-optional";
 import {
   approvedCompactFixRequired, approvedMeasurementCorrection, approvedRelocations, compactFixOptionalAllowance,
-  correctedOptionalAllowance, ciOptionalAllowance, fixRequiredOptionalAllowance, hardeningOptionalAllowance, optionalFormats, tc1413OptionalAllowance, tc1432OptionalAllowance, tc1475OptionalAllowance, masterDriftOptionalAllowance, tc1789OptionalAllowance,
+  correctedOptionalAllowance, ciOptionalAllowance, fixRequiredOptionalAllowance, hardeningOptionalAllowance, optionalFormats, tc1413OptionalAllowance, tc1432OptionalAllowance, tc1475OptionalAllowance, masterDriftOptionalAllowance, tc1789OptionalAllowance, tc2043OptionalAllowance,
   mergedPinsNotLandedOn, priorOptionalAllowance, relocatedOptionalAllowance, validateIntroducedOptionalSources,
   validateOptionalEntryTransition, validateOptionalLedger, type OptionalLedger,
 } from "./replica-optional-size-policy";
@@ -19,6 +19,7 @@ import { validateTc1737ShortLinkLazyChunkRatchetTransition } from "./replica-siz
 import { validateTc1910SigningConsistencyRatchetTransition } from "./replica-size-policy";
 import { validateTc848SettingsPanelRatchetTransition } from "./replica-size-policy";
 import { validateTc2034NamedKeysCliRatchetTransition } from "./replica-size-policy";
+import { validateTc2043SyncScopeRatchetTransition } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 import { replicaOwnedPath } from "./replica-owned-path";
 import { webSdkTestExitFailure } from "./web-sdk-test-exit";
@@ -97,7 +98,7 @@ if (ciCorrection) {
   console.log(`Current size toolchain: Bun ${bun}; ${rustc}`);
 }
 validateOptionalLedger(optionalLedger, ledger.fixRequiredRatchet !== undefined, ciCorrection !== undefined,
-  ledger.hardeningRatchet !== undefined, ledger.tc1413Ratchet !== undefined, ledger.tc1432Ratchet !== undefined, ledger.tc1475Ratchet !== undefined, ledger.masterDriftRatchet !== undefined, ledger.tc1789Ratchet !== undefined);
+  ledger.hardeningRatchet !== undefined, ledger.tc1413Ratchet !== undefined, ledger.tc1432Ratchet !== undefined, ledger.tc1475Ratchet !== undefined, ledger.masterDriftRatchet !== undefined, ledger.tc1789Ratchet !== undefined, ledger.tc2043SyncScopeRatchet !== undefined);
 const optionalCurrent = await measureReplicaOptionalLoaded(distDir);
 for (const format of optionalFormats) {
   const total = optionalLedger.entries.reduce((sum, entry) => sum + entry[format], 0);
@@ -421,6 +422,13 @@ if (prBaseSha) {
     console.error("The named-keys ratchet requires the merged settings panel ratchet and its measured source commit.");
     failed = true;
   }
+  validateTc2043SyncScopeRatchetTransition(baseLedger.tc2043SyncScopeRatchet, ledger.tc2043SyncScopeRatchet);
+  const tc2043SyncScope = ledger.tc2043SyncScopeRatchet;
+  if (tc2043SyncScope !== undefined && baseLedger.tc2043SyncScopeRatchet === undefined &&
+      (baseLedger.tc2034NamedKeysCliRatchet === undefined || !hasAncestor(repoRoot, tc2043SyncScope.sourceCommits.at(-1)!))) {
+    console.error("The replication syncScope ratchet requires the merged named-keys ratchet and its measured source commit.");
+    failed = true;
+  }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
   const optionalResult = spawnSync("git", ["show", `${mergeBase}:${baseOptionalPath}`], {
     cwd: repoRoot, encoding: "utf8",
@@ -436,7 +444,7 @@ if (prBaseSha) {
   }
   validateOptionalLedger(baseOptional, baseLedger.fixRequiredRatchet !== undefined,
     baseLedger.canonicalToolchainCorrection !== undefined, baseLedger.hardeningRatchet !== undefined,
-    baseLedger.tc1413Ratchet !== undefined, baseLedger.tc1432Ratchet !== undefined, baseLedger.tc1475Ratchet !== undefined, baseLedger.masterDriftRatchet !== undefined, baseLedger.tc1789Ratchet !== undefined);
+    baseLedger.tc1413Ratchet !== undefined, baseLedger.tc1432Ratchet !== undefined, baseLedger.tc1475Ratchet !== undefined, baseLedger.masterDriftRatchet !== undefined, baseLedger.tc1789Ratchet !== undefined, baseLedger.tc2043SyncScopeRatchet !== undefined);
   validateIntroducedOptionalSources(baseOptional, optionalLedger);
   // Consistency check: each merged row's pin is on the base or was landed by it (see pinLandedOn).
   for (const { row, pin } of mergedPinsNotLandedOn(repoRoot, baseLedger, baseOptional, prBaseSha)) {
@@ -529,9 +537,13 @@ if (prBaseSha) {
       optionalFormats.every((format) =>
         baseOptional.allowance[format] === masterDriftOptionalAllowance[format] &&
         optionalLedger.allowance[format] === tc1789OptionalAllowance[format]);
+    const tc2043Transition = baseLedger.tc2043SyncScopeRatchet === undefined && ledger.tc2043SyncScopeRatchet !== undefined &&
+      optionalFormats.every((format) =>
+        baseOptional.allowance[format] === tc1789OptionalAllowance[format] &&
+        optionalLedger.allowance[format] === tc2043OptionalAllowance[format]);
     if (!pairedTransition && !measurementCorrection && !reviewedFixTransition && !ciCorrectionTransition &&
-        !compactFixTransition && !hardeningTransition && !tc1413Transition && !tc1432Transition && !tc1475Transition && !masterDriftTransition && !tc1789Transition) {
-      console.error(`${baseOptionalPath}: optional allowance may increase only with an exact reviewed relocation, toolchain correction, fix-required source row, hardening ratchet, TC-1413 ratchet, TC-1432 ratchet, TC-1475 ratchet, master-drift ratchet or sdk-services 3.3.1 pin ratchet.`);
+        !compactFixTransition && !hardeningTransition && !tc1413Transition && !tc1432Transition && !tc1475Transition && !masterDriftTransition && !tc1789Transition && !tc2043Transition) {
+      console.error(`${baseOptionalPath}: optional allowance may increase only with an exact reviewed relocation, toolchain correction, fix-required source row, hardening ratchet, TC-1413 ratchet, TC-1432 ratchet, TC-1475 ratchet, master-drift ratchet, sdk-services 3.3.1 pin ratchet or TC-2043 syncScope ratchet.`);
       failed = true;
     }
   }
