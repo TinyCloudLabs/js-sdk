@@ -28,6 +28,12 @@ export async function main(): Promise<void> {
     delegationExpiry: process.env.TC_MCP_DELEGATION_EXPIRY ?? "1h",
     allowedOrigins: commaList(process.env.TC_MCP_ALLOWED_ORIGINS),
     oauthMetadata,
+    introspection: {
+      endpoint: requiredUrl("TC_MCP_INTROSPECTION_URL").toString(),
+      clientId: requiredString("TC_MCP_INTROSPECTION_CLIENT_ID"),
+      clientSecret: requiredString("TC_MCP_INTROSPECTION_CLIENT_SECRET"),
+      authMethod: introspectionAuthMethod(process.env.TC_MCP_INTROSPECTION_AUTH_METHOD),
+    },
   });
   const nodeHandler = toNodeHandler(app);
   const server = createServer(nodeHandler);
@@ -61,6 +67,12 @@ function requiredAbsolutePath(name: string): string {
   const value = requiredString(name);
   if (!isAbsolute(value)) throw new Error(`${name} must be an absolute path.`);
   return resolve(value);
+}
+
+function introspectionAuthMethod(value: string | undefined): "basic" | "post" {
+  if (value === undefined || value === "basic") return "basic";
+  if (value === "post") return "post";
+  throw new Error("TC_MCP_INTROSPECTION_AUTH_METHOD must be basic or post.");
 }
 
 function positiveInteger(value: string | undefined, fallback: number): number {

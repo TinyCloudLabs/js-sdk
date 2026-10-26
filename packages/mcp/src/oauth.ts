@@ -8,6 +8,8 @@ import {
 import { pkhDid } from "@tinycloud/node-sdk";
 import { createRemoteJWKSet, errors, jwtVerify, type JWTPayload } from "jose";
 
+import type { TokenStatusChecker } from "./token-status.js";
+
 const OWNER_DIDS_CLAIM = "https://tinycloud.xyz/owner_dids";
 
 export interface OpenKeyOAuthConfig {
@@ -15,6 +17,12 @@ export interface OpenKeyOAuthConfig {
   readonly audience: string;
   readonly jwksUri: string;
   readonly requiredScope?: string;
+  /**
+   * OpenKey token status check run after the signature check on every call.
+   * Hosted deployments always set it; a verifier built without one checks the
+   * signed claims only.
+   */
+  readonly tokenStatus?: TokenStatusChecker;
 }
 
 export function createOpenKeyTokenVerifier(config: OpenKeyOAuthConfig): OAuthTokenVerifier {
@@ -26,7 +34,9 @@ export function createOpenKeyTokenVerifier(config: OpenKeyOAuthConfig): OAuthTok
           issuer: config.issuer,
           audience: config.audience,
         });
-        return authInfo(token, payload, config);
+        const info = authInfo(token, payload, config);
+        if (config.tokenStatus !== undefined) await requireUsableStatus(config.tokenStatus, token);
+        return info;
       } catch (error) {
         if (error instanceof errors.JOSEError) {
           throw new OAuthError(OAuthErrorCode.InvalidToken, "The OpenKey access token is invalid.");
@@ -35,6 +45,24 @@ export function createOpenKeyTokenVerifier(config: OpenKeyOAuthConfig): OAuthTok
       }
     },
   };
+}
+
+/**
+ * `inactive` is a 401 invalid_token. `unknown` (OpenKey unreachable, 4xx/5xx,
+ * timeout, unreadable answer) is accepted only while `toleratesUnknown` holds;
+ * after that it is refused as a 500 server_error, the transport's answer for a
+ * fault that is not the token's: a 401 would send clients into re-authorisation
+ * that cannot succeed while OpenKey is unavailable.
+ */
+async function requireUsableStatus(checker: TokenStatusChecker, token: string): Promise<void> {
+  const status = await checker.tokenStatus(token);
+  if (status === "active") return;
+  if (status === "inactive") {
+    throw new OAuthError(OAuthErrorCode.InvalidToken, "The OpenKey access token is no longer active.");
+  }
+  if (!checker.toleratesUnknown(token)) {
+    throw new OAuthError(OAuthErrorCode.ServerError, "The OpenKey access token status is unavailable.");
+  }
 }
 
 export async function loadOAuthMetadata(metadataUrl: URL): Promise<OAuthMetadata> {
