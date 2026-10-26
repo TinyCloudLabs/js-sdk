@@ -377,9 +377,16 @@ export class DelegationManager {
     }
   }
 
-  /** Query lifecycle-complete delegation history for the authenticated account. */
+  /**
+   * Query lifecycle-complete delegation history for the authenticated account.
+   *
+   * `scope.spaces` lists the spaces to sign `tinycloud.delegation/list` for, in order. Omitted, the
+   * account space is tried, then the session's own space. A caller that knows which of them the session
+   * holds passes only those; an empty list sends nothing and answers PERMISSION_DENIED.
+   */
   async query(
     options: AccountDelegationQueryOptions = {},
+    scope: { readonly spaces?: readonly string[] } = {},
   ): Promise<Result<AccountDelegationPage>> {
     const validated = AccountDelegationQueryOptionsSchema.safeParse(options);
     if (!validated.success) {
@@ -417,7 +424,7 @@ export class DelegationManager {
       // owner's spaces works. Sign for the account space if the session holds it there, else for the
       // session's own space (a plain OpenKey login grants only that one).
       let response: FetchResponse | undefined;
-      for (const spaceId of new Set([accountSpaceId, this.session.spaceId])) {
+      for (const spaceId of new Set(scope.spaces ?? [accountSpaceId, this.session.spaceId])) {
         // A signing failure is not a permission refusal: it propagates as a typed error below.
         const headers = Object.fromEntries(new Headers(this.invokeAny(this.session, [{
           spaceId,

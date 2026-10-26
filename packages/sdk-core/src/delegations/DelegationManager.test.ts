@@ -425,4 +425,21 @@ describe("DelegationManager.query space choice", () => {
     });
     expect(fetch).toHaveBeenCalledTimes(2);
   });
+
+  test("scope.spaces signs only for the listed spaces", async () => {
+    const { manager, invokeAny, fetch } = make([page]);
+    expect((await manager.query({}, { spaces: [defaultSpaceId] })).ok).toBe(true);
+    expect(invokeAny.mock.calls.map(([, requests]) => requests[0]?.spaceId)).toEqual([defaultSpaceId]);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  test("an empty scope.spaces sends nothing and answers a typed permission error", async () => {
+    const { manager, invokeAny, fetch } = make([page]);
+    expect(await manager.query({}, { spaces: [] })).toEqual({
+      ok: false,
+      error: expect.objectContaining({ code: "PERMISSION_DENIED" }),
+    });
+    expect(invokeAny).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
 });
