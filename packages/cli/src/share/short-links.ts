@@ -5,6 +5,7 @@ import {
   LinkError,
   createLink,
   deleteLink,
+  openLinkRecord,
   parseLink,
   type LinkSigner,
 } from "@tinycloud/share-envelope/links";
@@ -105,18 +106,32 @@ export function createShareLinks(input: {
   return {
     async show(published, options) {
       const material = published.deliveryMaterial;
-      // Bearer shares and anything without sealed delivery material have no stored form: their link is the link.
-      if (published.link.kind !== "policy" || material === undefined) return { url: published.url, short: false };
+      if (published.link.kind !== "policy") return { url: published.url, short: false };
       if (options.fullLink) return { url: published.url, short: false };
       const now = options.now ?? new Date();
       const expiresAt = new Date(published.metadata.expiresAt);
       const choice = linkFormForLifetime((expiresAt.getTime() - now.getTime()) / 1000);
       if (choice.form === "full") return { url: published.url, short: false, ...(choice.warning ? { notice: LINK_EXPIRY_WARNING } : {}) };
       try {
+        const issuerKey = await input.signer();
+        let sealed: { blob: Uint8Array; key: Uint8Array };
+        if (material !== undefined) {
+          sealed = { blob: fromBase64Url(material.sealedEnvelope), key: fromBase64Url(material.envelopeKey) };
+        } else {
+          // A full policy link carries the same sealed body and key when the publish result has no separate material.
+          const parsed = parseLink(published.url, { trustedOrigins: [published.metadata.origin] });
+          if (parsed.form !== "full") throw new LinkError("invalid_argument");
+          const opened = await openLinkRecord(parsed.record, parsed.key, { now });
+          if (opened.type !== "share" || opened.header.issuer !== issuerKey.did ||
+              opened.header.bodyCid !== published.link.cid || opened.header.expiresAt !== published.metadata.expiresAt) {
+            throw new LinkError("invalid_argument");
+          }
+          sealed = { blob: opened.body, key: parsed.key };
+        }
         const created = await createLink({
           type: "share",
-          sealed: { blob: fromBase64Url(material.sealedEnvelope), key: fromBase64Url(material.envelopeKey) },
-          issuerKey: await input.signer(),
+          sealed,
+          issuerKey,
           apiOrigin,
           linkOrigin: new URL(published.url).origin,
           expiresAt,
