@@ -8,6 +8,8 @@ import {
   type ISigner,
   type TinyCloudSession,
   BOOTSTRAP_SESSION_REQUESTS,
+  pkhDid,
+  type Manifest,
 } from "@tinycloud/sdk-core";
 import {
   canonicalizeOpenKeyManifestJson,
@@ -152,12 +154,12 @@ afterEach(() => {
   }
 });
 
-async function withSignInHost<T>(run: () => Promise<T>): Promise<T> {
+async function withSignInHost<T>(run: () => Promise<T>, features: string[] = []): Promise<T> {
   const previousFetch = globalThis.fetch;
   globalThis.fetch = async (input, init) => {
     const url = String(input);
     if (url.endsWith("/info")) {
-      return new Response(JSON.stringify({ protocol: 1, version: "1.0.0", features: [] }), {
+      return new Response(JSON.stringify({ protocol: 1, version: "1.0.0", features }), {
         status: 200, headers: { "content-type": "application/json" },
       });
     }
@@ -174,6 +176,122 @@ async function withSignInHost<T>(run: () => Promise<T>): Promise<T> {
     globalThis.fetch = previousFetch;
   }
 }
+
+test("manifest keys expand to top-level ReCap resources only when the node lists named keys", async () => {
+  const owner = pkhDid("0x1234567890abcdef1234567890abcdef12345678", 1);
+  const manifest: Manifest = {
+    app_id: "billing", keys_app_id: "xyz.tinycloud.healthlog", name: "Healthlog",
+    defaults: false, includePublicSpace: false,
+    keys: [
+      { prefix: "apps/xyz.tinycloud.healthlog/", abilities: ["key.create", "decrypt"] },
+      { path: "apps/xyz.tinycloud.healthlog/token", abilities: ["key.block"] },
+    ],
+  };
+  for (const [caseManifest, features, expected] of [
+    [manifest, ["encryption-named-keys-v1"], {
+      [`urn:tinycloud:encryption:${owner}:default/apps/xyz.tinycloud.healthlog/`]:
+        ["tinycloud.encryption/key.create", "tinycloud.encryption/decrypt"],
+      [`urn:tinycloud:encryption:${owner}:default/apps/xyz.tinycloud.healthlog/token`]:
+        ["tinycloud.encryption/key.block"],
+    }],
+    [manifest, [], {}],
+    [{ ...manifest, keys: [] }, ["encryption-named-keys-v1"], {}],
+    [{ ...manifest, keys: undefined }, ["encryption-named-keys-v1"], {}],
+  ] as const) {
+    const captured: Array<Record<string, unknown>> = [];
+    const auth = new NodeUserAuthorization({
+      signer: createSigner([]), wasmBindings: createWasmBindings(captured),
+      signStrategy: { type: "auto-sign" }, domain: "healthlog.tinycloud.xyz",
+      tinycloudHosts: ["https://tinycloud.test"], sessionStorage: new MemorySessionStorage(),
+      manifest: caseManifest, includeAccountRegistryPermissions: false,
+    });
+    await withSignInHost(() => auth.signIn(), [...features]);
+    const raw = (captured[0]?.rawAbilities ?? {}) as Record<string, string[]>;
+    expect(Object.fromEntries(Object.entries(raw).filter(([resource]) => resource.includes("/apps/")))).toEqual(expected);
+  }
+});
+
+test("a non-binding SIWE host omits manifest key grants and reports their paths", async () => {
+  const captured: Array<Record<string, unknown>> = [];
+  const auth = new NodeUserAuthorization({
+    signer: createSigner([]), wasmBindings: createWasmBindings(captured),
+    signStrategy: { type: "auto-sign" }, domain: "billing.example.com",
+    siweConfig: { domain: "other.example.com" },
+    tinycloudHosts: ["https://tinycloud.test"], sessionStorage: new MemorySessionStorage(),
+    manifest: { app_id: "com.example.billing", name: "Billing", defaults: false,
+      keys: [{ path: "apps/com.example.billing/token", abilities: ["key.create"] }] },
+    includeAccountRegistryPermissions: false,
+  });
+  await withSignInHost(() => auth.signIn(), ["encryption-named-keys-v1"]);
+  expect(auth.unavailableKeyPaths).toEqual(["apps/com.example.billing/token"]);
+  expect(Object.keys((captured[0]?.rawAbilities ?? {}) as object).some((path) => path.includes("/apps/"))).toBe(false);
+});
+
+test("a non-binding host does not fetch the named-key feature before preparing", async () => {
+  const auth = new NodeUserAuthorization({
+    signer: createSigner([]), wasmBindings: createWasmBindings([]),
+    signStrategy: { type: "auto-sign" }, domain: "localhost",
+    tinycloudHosts: ["https://tinycloud.test"], sessionStorage: new MemorySessionStorage(),
+    manifest: { app_id: "com.example.billing", name: "Billing", defaults: false,
+      keys: [{ path: "apps/com.example.billing/token", abilities: ["decrypt"] }] },
+    includeAccountRegistryPermissions: false,
+  });
+  (auth as any).refreshNodeInfo = async () => { throw new Error("unexpected /info"); };
+  await auth.prepareSessionForSigning();
+  expect(auth.unavailableKeyPaths).toEqual(["apps/com.example.billing/token"]);
+});
+
+test("prepared sign-in with manifest keys resolves hosts from its signer parameters", async () => {
+  const captured: Array<Record<string, unknown>> = [];
+  const auth = new NodeUserAuthorization({
+    signer: createSigner([]), wasmBindings: createWasmBindings(captured),
+    signStrategy: { type: "auto-sign" }, domain: "billing.example.com",
+    sessionStorage: new MemorySessionStorage(),
+    manifest: { app_id: "com.example.billing", name: "Billing", defaults: false,
+      keys: [{ path: "apps/com.example.billing/token", abilities: ["decrypt"] }] },
+    includeAccountRegistryPermissions: false,
+  });
+  const hosts: Array<[string, number]> = [];
+  (auth as any).resolveTinyCloudHostsForSignIn = async (address: string, chainId: number) => {
+    hosts.push([address, chainId]);
+    (auth as any).tinycloudHosts = ["https://tinycloud.test"];
+  };
+  (auth as any).refreshNodeInfo = async () => { (auth as any)._nodeFeatures = ["encryption-named-keys-v1"]; };
+  await auth.prepareSessionForSigning();
+  expect(hosts[0]?.[0].toLowerCase()).toBe("0x1234567890abcdef1234567890abcdef12345678");
+  expect(hosts[0]?.[1]).toBe(1);
+  expect((captured[0]?.rawAbilities as Record<string, string[]>)[
+    `urn:tinycloud:encryption:${pkhDid(hosts[0]![0], 1)}:default/apps/com.example.billing/token`
+  ]).toEqual(["tinycloud.encryption/decrypt"]);
+});
+
+test("manifest sign-in without keys keeps full capabilities identical across feature states and skips /info", async () => {
+  const captures: Array<Record<string, unknown>> = [];
+  for (const features of [[], ["encryption-named-keys-v1"]]) {
+    const prepared: Array<Record<string, unknown>> = [];
+    const auth = new NodeUserAuthorization({
+      signer: createSigner([]), wasmBindings: createWasmBindings(prepared),
+      signStrategy: { type: "auto-sign" }, domain: "billing.example.com",
+      tinycloudHosts: ["https://tinycloud.test"], sessionStorage: new MemorySessionStorage(),
+      manifest: { app_id: "com.example.billing", name: "Billing", defaults: false,
+        permissions: [{ service: "tinycloud.kv", path: "records/", actions: ["get"] }] },
+      includeAccountRegistryPermissions: false,
+    });
+    let infoFetches = 0;
+    const previousFetch = globalThis.fetch;
+    globalThis.fetch = async (input) => {
+      if (String(input).endsWith("/info")) infoFetches++;
+      throw new Error(`unexpected fetch: ${String(input)}`);
+    };
+    try {
+      (auth as any)._nodeFeatures = features;
+      await auth.prepareSessionForSigning();
+    } finally { globalThis.fetch = previousFetch; }
+    expect(infoFetches).toBe(0);
+    captures.push({ abilities: prepared[0]?.abilities, rawAbilities: prepared[0]?.rawAbilities });
+  }
+  expect(captures[0]).toEqual(captures[1]);
+});
 
 test("regular network sign-in does not invent replica issuance when signed SIWE omits Issued At", async () => {
   const wasm = createWasmBindings([]);

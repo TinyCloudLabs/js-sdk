@@ -302,6 +302,8 @@ export type Tc2034NamedKeysCliRatchet = HardeningRatchet;
 export type Tc2043SyncScopeRatchet = HardeningRatchet;
 /** One reviewed exact-byte row for sign-out local-copy erase (TC-1888, #728). */
 export type Tc1888PurgeLocalCopyRatchet = HardeningRatchet;
+/** One reviewed exact-byte row for manifest named keys (js-sdk #748, TC-1977). */
+export type Tc1977ManifestKeysRatchet = HardeningRatchet;
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -345,6 +347,7 @@ export type Ledger = {
   tc2034NamedKeysCliRatchet?: Tc2034NamedKeysCliRatchet;
   tc2043SyncScopeRatchet?: Tc2043SyncScopeRatchet;
   tc1888PurgeLocalCopyRatchet?: Tc1888PurgeLocalCopyRatchet;
+  tc1977ManifestKeysRatchet?: Tc1977ManifestKeysRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -918,6 +921,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2034NamedKeysCliRatchet !== undefined) pins.push({ row: "tc2034NamedKeysCliRatchet", pin: root.tc2034NamedKeysCliRatchet.sourceCommits.at(-1)! });
   if (root.tc2043SyncScopeRatchet !== undefined) pins.push({ row: "tc2043SyncScopeRatchet", pin: root.tc2043SyncScopeRatchet.sourceCommits.at(-1)! });
   if (root.tc1888PurgeLocalCopyRatchet !== undefined) pins.push({ row: "tc1888PurgeLocalCopyRatchet", pin: root.tc1888PurgeLocalCopyRatchet.sourceCommits.at(-1)! });
+  if (root.tc1977ManifestKeysRatchet !== undefined) pins.push({ row: "tc1977ManifestKeysRatchet", pin: root.tc1977ManifestKeysRatchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -967,6 +971,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2034NamedKeysCliRatchet", root.tc2034NamedKeysCliRatchet?.root.ceiling],
     ["tc2043SyncScopeRatchet", root.tc2043SyncScopeRatchet?.root.ceiling],
     ["tc1888PurgeLocalCopyRatchet", root.tc1888PurgeLocalCopyRatchet?.root.ceiling],
+    ["tc1977ManifestKeysRatchet", root.tc1977ManifestKeysRatchet?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -1778,6 +1783,37 @@ export const approvedTc1888PurgeLocalCopyRatchet: Tc1888PurgeLocalCopyRatchet = 
   reason: "sign-out and account switch erase the local copy with an SDK retry and a failure event; the minimum reviewed shape; optional code in the replica chunk.",
 };
 
+/** Manifest named keys (js-sdk #748, TC-1977), approved by Naomi: root index.mjs 1,464,629 -> 1,467,294 (+2,665) and index.cjs 1,406,456 -> 1,409,264 (+2,808), the exact deltas canonical CI printed on head 796fdd2a (run 40318285314). Worker is unchanged; first-import and activation deltas are 0, so their ceilings are the tc1888 caps. */
+export const approvedTc1977ManifestKeysRatchet: Tc1977ManifestKeysRatchet = {
+  label: "sdk: manifest named keys (TC-1977, #748): +2,665 B mjs / +2,808 B cjs gzip",
+  ruling: "Approved by Naomi (measured at run 40318285314 within 10 bytes of the approved +2,666/+2,814; no headroom)",
+  base: "5467d1248b20e59d3b7eca508da417c2b35316b3",
+  sourceCommits: [
+    "796fdd2a13c0f6b0e6f767e0347151c0cbaf84fe",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40318285314",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40318285314/job/121556330989",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40318285314/job/121556331284",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 2665, "index.cjs": 2808 },
+    ceiling: { "index.mjs": 1467294, "index.cjs": 1409264 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 52374, "replica.cjs": 67571 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23386, "activation.cjs": 24959 },
+  },
+  worker: { delta: 0, ceiling: 776128 },
+  reason: "manifest named keys: the `keys` block, key resource derivation and sign-in abilities (TC-1977)",
+};
+
 export type GatedOnlyRatchet = {
   label: string;
   sourceCommit: string;
@@ -1849,6 +1885,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2034NamedKeysCliRatchet: approvedTc2034NamedKeysCliRatchet,
   tc2043SyncScopeRatchet: approvedTc2043SyncScopeRatchet,
   tc1888PurgeLocalCopyRatchet: approvedTc1888PurgeLocalCopyRatchet,
+  tc1977ManifestKeysRatchet: approvedTc1977ManifestKeysRatchet,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -2054,6 +2091,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc2043SyncScopeRatchet || JSON.stringify(value.tc1888PurgeLocalCopyRatchet) !== JSON.stringify(approvedTc1888PurgeLocalCopyRatchet))) {
     throw new Error("Only Naomi's exact canonical sign-out local copy ratchet is approved.");
   }
+  if (value.tc1977ManifestKeysRatchet !== undefined &&
+      (!value.tc1888PurgeLocalCopyRatchet || JSON.stringify(value.tc1977ManifestKeysRatchet) !== JSON.stringify(approvedTc1977ManifestKeysRatchet))) {
+    throw new Error("Only Naomi's exact canonical manifest-keys ratchet is approved.");
+  }
 }
 
 /** The #606 worker ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
@@ -2237,6 +2278,14 @@ export function validateTc2043SyncScopeRatchetTransition(base?: Tc2043SyncScopeR
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2043SyncScopeRatchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact TC-2043 replication syncScope ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-1977 manifest-keys ratchet is introduced once and immutable afterwards. */
+export function validateTc1977ManifestKeysRatchetTransition(base?: Tc1977ManifestKeysRatchet, current?: Tc1977ManifestKeysRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1977ManifestKeysRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-1977 manifest-keys ratchet may be introduced once and cannot change later.");
   }
 }
 

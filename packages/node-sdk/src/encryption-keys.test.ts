@@ -232,6 +232,21 @@ test("createNamedKeyClient resolves both signing hooks on an unstubbed TinyCloud
   expect(() => createNamedKeyClient(node)).not.toThrow();
 });
 
+test("TinyCloudNode.keys loads the named-key client when first used", async () => {
+  const { node } = makeNode();
+  const seen: Seen[] = [];
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = recordingFetch(["encryption-named-keys-v1"], seen);
+  try {
+    const descriptor = await node.keys.describeKey(PATH);
+    expect(descriptor.keyPath).toBe(PATH);
+    expect(seen[0]?.url).toBe(`${HOST}/info`);
+    expect(seen.some((call) => call.url.includes("/keys/") && call.method === "GET")).toBe(true);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
 test("a node missing a hook throws a typed error naming it", () => {
   for (const hook of ["signRawNetworkAuthorization", "createEncryptionCrypto"]) {
     const { node } = makeNode();
