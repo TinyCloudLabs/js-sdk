@@ -316,6 +316,8 @@ export type Tc2072LocationGuardRatchet = HardeningRatchet & { replicaWorker: { d
 export type Tc2096LazyContentRatchet = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
 /** One reviewed exact-byte row for the panel delegation-list permission ask (TC-2113, #763); replicaWorker is carried at TC-2096's lazy-content replica.worker.js ceiling. */
 export type Tc2113PanelGrantRatchet = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
+/** One reviewed exact-byte row for signInWithOpenKey (TC-1977, #747); replicaWorker is carried at TC-2113's replica.worker.js ceiling. */
+export type Tc1977OpenKeySigninRatchet = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -366,6 +368,7 @@ export type Ledger = {
   tc2072LocationGuardRatchet?: Tc2072LocationGuardRatchet;
   tc2096LazyContentRatchet?: Tc2096LazyContentRatchet;
   tc2113PanelGrantRatchet?: Tc2113PanelGrantRatchet;
+  tc1977OpenKeySigninRatchet?: Tc1977OpenKeySigninRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -946,6 +949,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2072LocationGuardRatchet !== undefined) pins.push({ row: "tc2072LocationGuardRatchet", pin: root.tc2072LocationGuardRatchet.sourceCommits.at(-1)! });
   if (root.tc2096LazyContentRatchet !== undefined) pins.push({ row: "tc2096LazyContentRatchet", pin: root.tc2096LazyContentRatchet.sourceCommits.at(-1)! });
   if (root.tc2113PanelGrantRatchet !== undefined) pins.push({ row: "tc2113PanelGrantRatchet", pin: root.tc2113PanelGrantRatchet.sourceCommits.at(-1)! });
+  if (root.tc1977OpenKeySigninRatchet !== undefined) pins.push({ row: "tc1977OpenKeySigninRatchet", pin: root.tc1977OpenKeySigninRatchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1002,6 +1006,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2072LocationGuardRatchet", root.tc2072LocationGuardRatchet?.root.ceiling],
     ["tc2096LazyContentRatchet", root.tc2096LazyContentRatchet?.root.ceiling],
     ["tc2113PanelGrantRatchet", root.tc2113PanelGrantRatchet?.root.ceiling],
+    ["tc1977OpenKeySigninRatchet", root.tc1977OpenKeySigninRatchet?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -2025,6 +2030,36 @@ export const approvedTc2113PanelGrantRatchet: Tc2113PanelGrantRatchet = {
   reason: "the panel button asks for the missing delegation-list permission (TC-2113)",
 };
 
+/** Canonical CI run 40394725836 measured signInWithOpenKey on head 5e30ac3e: root +940 mjs / +866 cjs gzip (TC-1977, #747). The worker and replica-worker ceilings are carried from the panel-grant row (TC-2113) with zero delta. */
+export const approvedTc1977OpenKeySigninRatchet: Tc1977OpenKeySigninRatchet = {
+  label: "signInWithOpenKey for the node SDK and web SDK (TC-1977, #747): +940 B mjs / +866 B cjs gzip",
+  ruling: "Approved by Naomi (root +940 mjs / +866 cjs gz; measured at run 40394725836 at 5e30ac3e)",
+  base: "f926276e5c97c36e3dbff5c18accbcddbb11e56b",
+  sourceCommits: ["a21c5edce78ff53dcd3e075ef1658a092f931052"],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40394725836",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40394725836/job/121824610898",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40394725836/job/121824611296",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 940, "index.cjs": 866 },
+    ceiling: { "index.mjs": 1469939, "index.cjs": 1411388 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 52757, "replica.cjs": 67957 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23412, "activation.cjs": 24981 },
+  },
+  worker: { delta: 0, ceiling: 776539 },
+  replicaWorker: { delta: 0, ceiling: 770467 },
+  reason: "signInWithOpenKey adds the OpenKey sign-in path to the node and web SDKs (TC-1977)",
+};
+
 export type GatedOnlyRatchet = {
   label: string;
   sourceCommit: string;
@@ -2103,6 +2138,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2072LocationGuardRatchet: approvedTc2072LocationGuardRatchet,
   tc2096LazyContentRatchet: approvedTc2096LazyContentRatchet,
   tc2113PanelGrantRatchet: approvedTc2113PanelGrantRatchet,
+  tc1977OpenKeySigninRatchet: approvedTc1977OpenKeySigninRatchet,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -2335,6 +2371,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
   if (value.tc2113PanelGrantRatchet !== undefined &&
       (!value.tc2096LazyContentRatchet || JSON.stringify(value.tc2113PanelGrantRatchet) !== JSON.stringify(approvedTc2113PanelGrantRatchet))) {
     throw new Error("Only Naomi's exact canonical panel grant ratchet is approved.");
+  }
+  if (value.tc1977OpenKeySigninRatchet !== undefined &&
+      (!value.tc2113PanelGrantRatchet || JSON.stringify(value.tc1977OpenKeySigninRatchet) !== JSON.stringify(approvedTc1977OpenKeySigninRatchet))) {
+    throw new Error("Only Naomi's exact canonical OpenKey sign-in ratchet is approved.");
   }
 }
 
@@ -2575,6 +2615,14 @@ export function validateTc2113PanelGrantRatchetTransition(base?: Tc2113PanelGran
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2113PanelGrantRatchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact TC-2113 panel grant ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-1977 OpenKey sign-in ratchet is introduced once and immutable afterwards. */
+export function validateTc1977OpenKeySigninRatchetTransition(base?: Tc1977OpenKeySigninRatchet, current?: Tc1977OpenKeySigninRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1977OpenKeySigninRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-1977 OpenKey sign-in ratchet may be introduced once and cannot change later.");
   }
 }
 

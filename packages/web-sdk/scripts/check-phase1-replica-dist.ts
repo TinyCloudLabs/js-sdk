@@ -29,6 +29,7 @@ import { validateTc2005RevokeWindowRatchetTransition } from "./replica-size-poli
 import { validateTc2096RepairBackoffRatchetTransition } from "./replica-size-policy";
 import { validateTc2072LocationGuardRatchetTransition } from "./replica-size-policy";
 import { validateTc2113PanelGrantRatchetTransition } from "./replica-size-policy";
+import { validateTc1977OpenKeySigninRatchetTransition } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 import { replicaOwnedPath } from "./replica-owned-path";
 import { webSdkTestExitFailure } from "./web-sdk-test-exit";
@@ -492,6 +493,13 @@ if (prBaseSha) {
   if (tc2113PanelGrant !== undefined && baseLedger.tc2113PanelGrantRatchet === undefined &&
       (baseLedger.tc2096LazyContentRatchet === undefined || !hasAncestor(repoRoot, tc2113PanelGrant.sourceCommits.at(-1)!))) {
     console.error("The panel grant ratchet requires the merged lazy-content ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc1977OpenKeySigninRatchetTransition(baseLedger.tc1977OpenKeySigninRatchet, ledger.tc1977OpenKeySigninRatchet);
+  const tc1977OpenKeySignin = ledger.tc1977OpenKeySigninRatchet;
+  if (tc1977OpenKeySignin !== undefined && baseLedger.tc1977OpenKeySigninRatchet === undefined &&
+      (baseLedger.tc2113PanelGrantRatchet === undefined || !hasAncestor(repoRoot, tc1977OpenKeySignin.sourceCommits.at(-1)!))) {
+    console.error("The OpenKey sign-in ratchet requires the merged panel-grant ratchet and its measured source commit.");
     failed = true;
   }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";

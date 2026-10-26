@@ -2073,5 +2073,35 @@
     "worker": { "delta": 0, "ceiling": 776539 },
     "replicaWorker": { "delta": 0, "ceiling": 770467 },
     "reason": "the panel button asks for the missing delegation-list permission (TC-2113)"
+  },
+  "tc1977OpenKeySigninRatchet": {
+    "label": "signInWithOpenKey for the node SDK and web SDK (TC-1977, #747): +940 B mjs / +866 B cjs gzip",
+    "ruling": "Approved by Naomi (root +940 mjs / +866 cjs gz; measured at run 40394725836 at 5e30ac3e)",
+    "base": "f926276e5c97c36e3dbff5c18accbcddbb11e56b",
+    "sourceCommits": [
+      "a21c5edce78ff53dcd3e075ef1658a092f931052"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40394725836",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40394725836/job/121824610898",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40394725836/job/121824611296"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 940, "index.cjs": 866 },
+      "ceiling": { "index.mjs": 1469939, "index.cjs": 1411388 }
+    },
+    "firstImport": {
+      "delta": { "replica.mjs": 0, "replica.cjs": 0 },
+      "ceiling": { "replica.mjs": 52757, "replica.cjs": 67957 }
+    },
+    "activation": {
+      "delta": { "activation.mjs": 0, "activation.cjs": 0 },
+      "ceiling": { "activation.mjs": 23412, "activation.cjs": 24981 }
+    },
+    "worker": { "delta": 0, "ceiling": 776539 },
+    "replicaWorker": { "delta": 0, "ceiling": 770467 },
+    "reason": "signInWithOpenKey adds the OpenKey sign-in path to the node and web SDKs (TC-1977)"
   }
 }
