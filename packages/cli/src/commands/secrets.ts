@@ -2,7 +2,7 @@ import { Command } from "commander";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { homedir, hostname, userInfo } from "node:os";
+import { constants as osConstants, homedir, hostname, userInfo } from "node:os";
 import {
   type PermissionEntry,
   type PortableDelegation,
@@ -44,11 +44,14 @@ import { mergeWarnings } from "../output/warnings.js";
 import { ExitCode } from "../config/constants.js";
 import { validatePrivateOutput, writePrivateOutput } from "../lib/private-output.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
+import { closeReplication } from "../lib/replication-registry.js";
 import { sessionExpiredError, withSignInHint } from "../auth/session-expired.js";
 import { sessionExpiresAt } from "../auth/scoped-login.js";
 import { resolveSpaceUri } from "../lib/space.js";
 import { tryOpenBrowser, warnBrowserNotOpened } from "../lib/browser.js";
 import { runProbeChild, type ProbeRequest } from "../lib/probe-child.js";
+import { runCommand, type CommandOutcome } from "../lib/run-command.js";
+import { safeInline } from "../output/safe-text.js";
 import { abortableSleep, DEFAULT_WAIT_TIMEOUT, parseWaitTimeout, runSecretsWait } from "../lib/secrets-wait.js";
 import { resolveProfilePosture, type CLIContext, type ProfileConfig } from "../config/types.js";
 import {
@@ -1161,6 +1164,236 @@ function outputSecretDoctor(result: SecretDoctorResult): void {
   }
 }
 
+/** What `secrets get` and `secrets run` take to select and read a secret. */
+interface SecretReadOptions {
+  scope?: string;
+  space?: string;
+  delegation?: string;
+  privateKey?: string;
+}
+
+/** One secret to read, checked before anything is read. */
+interface SecretReadTarget {
+  name: string;
+  scopeOptions?: { scope?: string };
+  scope?: string;
+  legacySpaceUri?: string;
+  secretPath: string;
+}
+
+async function resolveSecretReadTarget(
+  ctx: CLIContext,
+  name: string,
+  options: SecretReadOptions,
+): Promise<SecretReadTarget> {
+  const scopeOptions = resolveSecretScope(options);
+  const legacySpaceUri = await resolveSecretSpace(options.space, ctx.profile);
+  const resolved = resolveSecretPath(name, scopeOptions);
+  return { name, scopeOptions, scope: resolved.scope, legacySpaceUri, secretPath: resolved.permissionPaths.vault };
+}
+
+/**
+ * Read one secret as `tc secrets get` does. A failure throws the CLI error
+ * `get` reports for it; a canonical read returns its warnings with the value.
+ */
+async function readSecret(params: {
+  ctx: CLIContext;
+  /** `--host` from the command line; it wins over a delegation's host. */
+  host?: string;
+  target: SecretReadTarget;
+  options: SecretReadOptions;
+  openKeyAcquisition?: OpenKeyAcquisition;
+}): Promise<{ value: string; warnings?: CanonicalSecretGetResult["warnings"] }> {
+  const { ctx, target, options } = params;
+  const { name } = target;
+  if (options.delegation) {
+    const delegated = await resolveDelegatedSecretSource(
+      options.delegation,
+      target.secretPath,
+      target.legacySpaceUri ?? SECRETS_SPACE,
+    );
+    const effectiveHost = params.host ?? delegated.delegation.host ?? ctx.host;
+    const delegatedCtx = { ...ctx, host: effectiveHost };
+    // Decide D4 before the node exists: the profile or an explicit key.
+    const local = effectiveLocal(await ProfileManager.getProfile(ctx.profile).catch(() => null), options);
+    const node = await ensureSecretsNode(delegatedCtx, options);
+    const value = await withSpinner(
+      `Getting secret ${name}...`,
+      () => readDelegatedSecretValue({
+        node,
+        delegation: delegated.delegation,
+        delegationCid: delegated.delegation.cid,
+        permissions: delegated.permissions,
+        secretPath: target.secretPath,
+        space: target.legacySpaceUri ?? SECRETS_SPACE,
+        name,
+        ...(target.scope === undefined ? {} : { scope: target.scope }),
+        local,
+      }),
+    );
+    return { value };
+  }
+
+  // An explicit local key changes the authenticated owner. Keep a short
+  // CLI space unresolved so the registered operation resolves it against
+  // that live owner; full URIs remain explicit cross-owner inputs.
+  const privateKey = authOptions(options)?.privateKey;
+  const spaceUri = privateKey !== undefined &&
+      options.space !== undefined &&
+      !options.space.startsWith("tinycloud:")
+    ? options.space
+    : target.legacySpaceUri;
+
+  const result = await invokeCanonicalSecretGet({
+    ctx,
+    name,
+    ...(target.scopeOptions?.scope === undefined ? {} : { scope: target.scopeOptions.scope }),
+    ...(spaceUri === undefined ? {} : { space: spaceUri }),
+    options,
+    label: `Getting secret ${name}...`,
+    openKeyAcquisition: params.openKeyAcquisition,
+  });
+
+  if (result.status !== "ok") {
+    try {
+      throwCanonicalSecretGetError(result, name);
+    } catch (error) {
+      throw withOperationWarnings(error, result.warnings);
+    }
+  }
+  return { value: result.output.value, warnings: result.warnings };
+}
+
+/** Environment variable names `secrets run` sets: the portable POSIX form. */
+const ENV_VAR_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * The arguments after the first `--` tc's root command left literal, or none
+ * without one. Commander keeps that `--` out of the operands when no unknown
+ * option precedes it, so it is found in the argv the root command parsed
+ * (Commander keeps it, untyped, as `rawArgs`), skipping the values of tc's
+ * global options as Commander does.
+ */
+function argvAfterSeparator(cmd: Command): string[] | undefined {
+  let root = cmd;
+  while (root.parent) root = root.parent;
+  const raw: unknown = "rawArgs" in root ? root.rawArgs : undefined;
+  if (!Array.isArray(raw)) return undefined;
+  const args = raw.map(String);
+  const withValue = (flag: string): boolean =>
+    root.options.some((option) => option.required && (option.long === flag || option.short === flag));
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]!;
+    if (arg === "--") return args.slice(index + 1);
+    if (arg.startsWith("--")) {
+      if (withValue(arg)) index += 1;
+      continue;
+    }
+    if (arg.length < 2 || !arg.startsWith("-")) continue;
+    // A short cluster (-vp NAME): the first flag that takes a value ends it.
+    for (let char = 1; char < arg.length; char += 1) {
+      const option = root.options.find((candidate) => candidate.short === `-${arg[char]}`);
+      if (option === undefined) break;
+      if (option.required) {
+        if (char === arg.length - 1) index += 1;
+        break;
+      }
+    }
+  }
+  return undefined;
+}
+
+interface SecretRunPlan {
+  command: [string, ...string[]];
+  /** Secret `name` is exported as `variable`. */
+  exports: { name: string; variable: string }[];
+}
+
+/** `secrets run`'s command and exports, or a usage error; nothing is read here. */
+function secretRunPlan(cmd: Command, operands: readonly string[], maps: readonly string[]): SecretRunPlan {
+  const usage = `${CLI_NAME} secrets run NAME... [--map NAME=ENV_VAR] -- <command> [args...]`;
+  const after = argvAfterSeparator(cmd);
+  if (after === undefined || after.length > operands.length) {
+    throw new CLIError("USAGE_ERROR", `Put the command after \`--\`: ${usage}`, ExitCode.USAGE_ERROR);
+  }
+  const [program, ...args] = after;
+  if (program === undefined) {
+    throw new CLIError("USAGE_ERROR", `Add the command to run after \`--\`: ${usage}`, ExitCode.USAGE_ERROR);
+  }
+  const exports: SecretRunPlan["exports"] = [];
+  for (const name of operands.slice(0, operands.length - after.length)) {
+    if (!ENV_VAR_RE.test(name)) {
+      throw new CLIError(
+        "USAGE_ERROR",
+        `${JSON.stringify(name)} can't be used as an environment variable name. Use \`--map ${name}=ENV_VAR\` to choose one.`,
+        ExitCode.USAGE_ERROR,
+      );
+    }
+    exports.push({ name, variable: name });
+  }
+  for (const map of maps) {
+    const equals = map.indexOf("=");
+    const variable = map.slice(equals + 1);
+    if (equals <= 0 || !ENV_VAR_RE.test(variable)) {
+      throw new CLIError(
+        "USAGE_ERROR",
+        `Invalid \`--map ${JSON.stringify(map)}\`: use NAME=ENV_VAR, where ENV_VAR starts with a letter or _ and uses only letters, digits and _.`,
+        ExitCode.USAGE_ERROR,
+      );
+    }
+    exports.push({ name: map.slice(0, equals), variable });
+  }
+  if (exports.length === 0) {
+    throw new CLIError("USAGE_ERROR", `Name at least one secret: ${usage}`, ExitCode.USAGE_ERROR);
+  }
+  const variables = new Set<string>();
+  for (const { variable } of exports) {
+    if (variables.has(variable)) {
+      throw new CLIError("USAGE_ERROR", `Two secrets are mapped to ${variable}. Give each its own variable.`, ExitCode.USAGE_ERROR);
+    }
+    variables.add(variable);
+  }
+  return { command: [program, ...args], exports };
+}
+
+/**
+ * Signals tc raises on itself to end as the command ended; their default
+ * action ends a process without a core dump. Any other signal exits 128 + its
+ * number: SIGQUIT, SIGABRT, SIGSEGV and others dump core by default and would
+ * write tc's memory, which holds the values, to disk, and Node itself handles
+ * SIGUSR1 (inspector) and ignores SIGPIPE.
+ */
+const RERAISED_SIGNALS: Partial<Record<NodeJS.Signals, true>> = {
+  SIGINT: true,
+  SIGTERM: true,
+  SIGHUP: true,
+  SIGKILL: true,
+  SIGALRM: true,
+  SIGUSR2: true,
+};
+
+/** Environment variables tc reads as its own credentials; the command never inherits them. */
+const TC_CREDENTIAL_VARIABLES = ["TC_PRIVATE_KEY"] as const;
+
+/**
+ * End tc as the command ended: with its exit code, by its signal for the
+ * signals in {@link RERAISED_SIGNALS} (else, or if that signal does not end
+ * tc, 128 + the signal number), or 127 / 126 when it could not start. Only
+ * the program name is printed, never its arguments.
+ */
+function exitAsCommand(outcome: CommandOutcome, program: string): never {
+  if (outcome.kind === "exited") return process.exit(outcome.code);
+  if (outcome.kind === "signaled") {
+    if (RERAISED_SIGNALS[outcome.signal]) process.kill(process.pid, outcome.signal);
+    return process.exit(128 + (osConstants.signals[outcome.signal] ?? 0));
+  }
+  const reason = outcome.errno === "ENOENT"
+    ? "command not found"
+    : outcome.errno === "EACCES" ? "permission denied" : `cannot run (${outcome.errno ?? "unknown error"})`;
+  process.stderr.write(`${CLI_NAME} secrets run: ${safeInline(program)}: ${reason}\n`);
+  return process.exit(outcome.errno === "ENOENT" ? 127 : 126);
+}
+
 export function registerSecretsCommand(
   program: Command,
   openKeyAcquisition?: OpenKeyAcquisition,
@@ -1389,38 +1622,12 @@ export function registerSecretsCommand(
       try {
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
-        const scopeOptions = resolveSecretScope(options);
-        const legacySpaceUri = await resolveSecretSpace(options.space, ctx.profile);
-        const secretPath = resolveSecretPath(name, scopeOptions).permissionPaths.vault;
+        const target = await resolveSecretReadTarget(ctx, name, options);
         if (options.output) await validatePrivateOutput(options.output, "Secret output");
+        const secret = await readSecret({ ctx, host: globalOpts.host, target, options, openKeyAcquisition });
+        const value = secret.value;
 
         if (options.delegation) {
-          const delegated = await resolveDelegatedSecretSource(
-            options.delegation,
-            secretPath,
-            legacySpaceUri ?? SECRETS_SPACE,
-          );
-          const effectiveHost = globalOpts.host ?? delegated.delegation.host ?? ctx.host;
-          const delegatedCtx = { ...ctx, host: effectiveHost };
-          // Decide D4 before the node exists: the profile or an explicit key.
-          const local = effectiveLocal(await ProfileManager.getProfile(ctx.profile).catch(() => null), options);
-          const scope = resolveSecretPath(name, scopeOptions).scope;
-          const node = await ensureSecretsNode(delegatedCtx, options);
-          const value = await withSpinner(
-            `Getting secret ${name}...`,
-            () => readDelegatedSecretValue({
-              node,
-              delegation: delegated.delegation,
-              delegationCid: delegated.delegation.cid,
-              permissions: delegated.permissions,
-              secretPath,
-              space: legacySpaceUri ?? SECRETS_SPACE,
-              name,
-              ...(scope === undefined ? {} : { scope }),
-              local,
-            }),
-          );
-
           if (options.output) {
             await writePrivateOutput(options.output, value, "Secret output");
             outputJson({ name, written: options.output });
@@ -1436,36 +1643,8 @@ export function registerSecretsCommand(
           return;
         }
 
-        // An explicit local key changes the authenticated owner. Keep a short
-        // CLI space unresolved so the registered operation resolves it against
-        // that live owner; full URIs remain explicit cross-owner inputs.
-        const privateKey = authOptions(options)?.privateKey;
-        const spaceUri = privateKey !== undefined &&
-            options.space !== undefined &&
-            !options.space.startsWith("tinycloud:")
-          ? options.space
-          : legacySpaceUri;
-
-        const result = await invokeCanonicalSecretGet({
-          ctx,
-          name,
-          ...(scopeOptions?.scope === undefined ? {} : { scope: scopeOptions.scope }),
-          ...(spaceUri === undefined ? {} : { space: spaceUri }),
-          options,
-          label: `Getting secret ${name}...`,
-          openKeyAcquisition,
-        });
-
-        if (result.status !== "ok") {
-          try {
-            throwCanonicalSecretGetError(result, name);
-          } catch (error) {
-            throw withOperationWarnings(error, result.warnings);
-          }
-        }
         // Success warnings go out only once the command's output has; a
         // failed write reports them inside its error instead.
-        const value = result.output.value;
         try {
           if (options.output) {
             await writePrivateOutput(options.output, value, "Secret output");
@@ -1476,9 +1655,63 @@ export function registerSecretsCommand(
             outputJson({ name, value });
           }
         } catch (error) {
-          throw withOperationWarnings(error, result.warnings);
+          throw withOperationWarnings(error, secret.warnings);
         }
-        outputWarnings(operationWarnings(result.warnings));
+        outputWarnings(operationWarnings(secret.warnings));
+      } catch (error) {
+        return handleError(error);
+      }
+    });
+
+  // tc secrets run [names...] -- <command> [args...]
+  secrets
+    .command("run [names...]")
+    .description("Run a command with secrets in its environment")
+    .usage("[options] [names...] -- <command> [args...]")
+    .option(
+      "--map <NAME=ENV_VAR>",
+      "Give secret NAME to the command as environment variable ENV_VAR (repeatable)",
+      (value: string, previous: string[] | undefined) => [...(previous ?? []), value],
+    )
+    .option("--scope <scope>", "Logical secret scope")
+    .option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)")
+    .option("--delegation <source>", "Delegation file path or imported profile name")
+    .option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)")
+    .action(async (operands: string[], options, cmd: Command) => {
+      try {
+        const plan = secretRunPlan(cmd, operands, options.map ?? []);
+        const globalOpts = cmd.optsWithGlobals();
+        const ctx = await ProfileManager.resolveContext(globalOpts);
+        // Every name is checked before any secret is read.
+        const targets: SecretReadTarget[] = [];
+        for (const name of new Set(plan.exports.map((entry) => entry.name))) {
+          targets.push(await resolveSecretReadTarget(ctx, name, options));
+        }
+        // All secrets are read before the command starts; any failure ends tc as `secrets get` would.
+        const values = new Map<string, string>();
+        let warnings: CanonicalSecretGetWarning[] = [];
+        for (const target of targets) {
+          const secret = await readSecret({ ctx, host: globalOpts.host, target, options, openKeyAcquisition });
+          // Node refuses such an environment with an error that quotes the value.
+          if (secret.value.includes("\u0000")) {
+            throw new CLIError(
+              "SECRET_NOT_EXPORTABLE",
+              `Secret "${target.name}" contains a NUL character, so it can't be put in an environment variable. The command wasn't started.`,
+              ExitCode.ERROR,
+            );
+          }
+          values.set(target.name, secret.value);
+          warnings = mergeWarnings(warnings, secret.warnings ?? []);
+        }
+        outputWarnings(operationWarnings(warnings));
+        // tc reads nothing more: stop its replication, and that replication's
+        // signal handlers, before the command runs.
+        await closeReplication();
+        const env: NodeJS.ProcessEnv = { ...process.env };
+        for (const variable of TC_CREDENTIAL_VARIABLES) delete env[variable];
+        for (const entry of plan.exports) env[entry.variable] = values.get(entry.name);
+        values.clear();
+        exitAsCommand(await runCommand(plan.command, env), plan.command[0]);
       } catch (error) {
         return handleError(error);
       }
