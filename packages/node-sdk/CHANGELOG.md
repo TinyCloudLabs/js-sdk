@@ -1,5 +1,12 @@
 # @tinycloudlabs/node-sdk
 
+## 3.8.0-beta.5
+
+### Patch Changes
+
+- Updated dependencies [44c439a]
+  - @tinycloud/sdk-core@3.8.0-beta.5
+
 ## 3.8.0-beta.4
 
 ### Minor Changes

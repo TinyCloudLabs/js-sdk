@@ -38,6 +38,7 @@
     "tc-apps-mcp-write-attribution",
     "tc1737-createlink-floor",
     "tc1888-purge-local-copy",
+    "tc2038-panel-prefetch",
     "tc2043-sync-scope"
   ]
 }
