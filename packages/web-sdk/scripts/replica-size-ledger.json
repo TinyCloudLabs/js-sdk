@@ -206,6 +206,13 @@
       "index.mjs": 0,
       "index.cjs": 0,
       "note": "Replica gzip growth measured against this PR's merge base"
+    },
+    {
+      "pr": "#759",
+      "ticket": "TC-2096",
+      "index.mjs": 0,
+      "index.cjs": 0,
+      "note": "Replica gzip growth measured against this PR's merge base"
     }
   ],
   "phase2Ratchet": {
@@ -1940,6 +1947,36 @@
     "worker": { "delta": 0, "ceiling": 776128 },
     "reason": "the owner revocation window extends; one constant in node-sdk (TC-2005)"
   },
+  "tc2096RepairBackoffRatchet": {
+    "label": "capped replica repair backoff (TC-2096, #759): kv-storage worker +340 B, replica worker +323 B gzip, replica first import +279/+275 B, activation -2/-2 B",
+    "ruling": "Approved by Naomi (exact canonical CI bytes at runs 40343675308 and 40348732196; no headroom)",
+    "base": "dc74efaad0363281b19dc389e3a6a5467cfde2cb",
+    "sourceCommits": [
+      "c6b4703d15cb8b711f16629d8ee0fe2da1b3c675"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40343675308",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40343675308/job/121644785274",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40343675308/job/121644785810"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 0, "index.cjs": 0 },
+      "ceiling": { "index.mjs": 1467358, "index.cjs": 1409273 }
+    },
+    "firstImport": {
+      "delta": { "replica.mjs": 279, "replica.cjs": 275 },
+      "ceiling": { "replica.mjs": 52653, "replica.cjs": 67846 }
+    },
+    "activation": {
+      "delta": { "activation.mjs": -2, "activation.cjs": -2 },
+      "ceiling": { "activation.mjs": 23386, "activation.cjs": 24959 }
+    },
+    "worker": { "delta": 340, "ceiling": 776468 },
+    "replicaWorker": { "delta": 323, "ceiling": 770416 },
+    "reason": "the replica retries a value it could not verify with growing gaps and gives up after five tries (TC-2096)"
+  },
   "tc2072LocationGuardRatchet": {
     "label": "constructing TinyCloudWeb without a location skips UI client registration (TC-2072, #754): +0 B mjs / +8 B cjs gzip",
     "ruling": "Approved by Naomi (measured at run 40348214990 within 10 bytes of the approved +7/+7; the mjs ceiling is carried)",
@@ -1960,13 +1997,14 @@
     },
     "firstImport": {
       "delta": { "replica.mjs": 0, "replica.cjs": 0 },
-      "ceiling": { "replica.mjs": 52374, "replica.cjs": 67571 }
+      "ceiling": { "replica.mjs": 52653, "replica.cjs": 67846 }
     },
     "activation": {
       "delta": { "activation.mjs": 0, "activation.cjs": 0 },
       "ceiling": { "activation.mjs": 23386, "activation.cjs": 24959 }
     },
-    "worker": { "delta": 0, "ceiling": 776128 },
+    "worker": { "delta": 0, "ceiling": 776468 },
+    "replicaWorker": { "delta": 0, "ceiling": 770416 },
     "reason": "constructing TinyCloudWeb without a location skips UI client registration (TC-2072)"
   }
 }

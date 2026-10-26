@@ -308,8 +308,10 @@ export type Tc1977ManifestKeysRatchet = HardeningRatchet;
 export type Tc2038PanelPrefetchRatchet = HardeningRatchet;
 /** One reviewed exact-byte row for the owner revocation window (TC-2005, #745). */
 export type Tc2005RevokeWindowRatchet = HardeningRatchet;
-/** One reviewed exact-byte row for the TinyCloudWeb location guard (TC-2072, #754). */
-export type Tc2072LocationGuardRatchet = HardeningRatchet;
+/** One reviewed exact-byte row for the capped replica repair backoff (TC-2096, #759); replicaWorker is the replica.worker.js ceiling. */
+export type Tc2096RepairBackoffRatchet = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
+/** One reviewed exact-byte row for the TinyCloudWeb location guard (TC-2072, #754); replicaWorker is carried at TC-2096's replica.worker.js ceiling. */
+export type Tc2072LocationGuardRatchet = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -356,6 +358,7 @@ export type Ledger = {
   tc1977ManifestKeysRatchet?: Tc1977ManifestKeysRatchet;
   tc2038PanelPrefetchRatchet?: Tc2038PanelPrefetchRatchet;
   tc2005RevokeWindowRatchet?: Tc2005RevokeWindowRatchet;
+  tc2096RepairBackoffRatchet?: Tc2096RepairBackoffRatchet;
   tc2072LocationGuardRatchet?: Tc2072LocationGuardRatchet;
 };
 
@@ -933,6 +936,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc1977ManifestKeysRatchet !== undefined) pins.push({ row: "tc1977ManifestKeysRatchet", pin: root.tc1977ManifestKeysRatchet.sourceCommits.at(-1)! });
   if (root.tc2038PanelPrefetchRatchet !== undefined) pins.push({ row: "tc2038PanelPrefetchRatchet", pin: root.tc2038PanelPrefetchRatchet.sourceCommits.at(-1)! });
   if (root.tc2005RevokeWindowRatchet !== undefined) pins.push({ row: "tc2005RevokeWindowRatchet", pin: root.tc2005RevokeWindowRatchet.sourceCommits.at(-1)! });
+  if (root.tc2096RepairBackoffRatchet !== undefined) pins.push({ row: "tc2096RepairBackoffRatchet", pin: root.tc2096RepairBackoffRatchet.sourceCommits.at(-1)! });
   if (root.tc2072LocationGuardRatchet !== undefined) pins.push({ row: "tc2072LocationGuardRatchet", pin: root.tc2072LocationGuardRatchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
@@ -986,6 +990,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc1977ManifestKeysRatchet", root.tc1977ManifestKeysRatchet?.root.ceiling],
     ["tc2038PanelPrefetchRatchet", root.tc2038PanelPrefetchRatchet?.root.ceiling],
     ["tc2005RevokeWindowRatchet", root.tc2005RevokeWindowRatchet?.root.ceiling],
+    ["tc2096RepairBackoffRatchet", root.tc2096RepairBackoffRatchet?.root.ceiling],
     ["tc2072LocationGuardRatchet", root.tc2072LocationGuardRatchet?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
@@ -1890,7 +1895,37 @@ export const approvedTc2005RevokeWindowRatchet: Tc2005RevokeWindowRatchet = {
   reason: "the owner revocation window extends; one constant in node-sdk (TC-2005)",
 };
 
-/** Canonical CI run 40348214990 (TC-2072, #754): root index.mjs is carried (delta 0) and index.cjs rises by 8 bytes; first import, activation and worker are unchanged. */
+/** Canonical CI run 40343675308 (TC-2096, #759): the kv-storage worker rises by 340 bytes and replica.worker.js by 323; root is unchanged. Replica first import +279/+275 and activation -2/-2 were measured at run 40348732196 (Node 22 sqlite+postgres identical). */
+export const approvedTc2096RepairBackoffRatchet: Tc2096RepairBackoffRatchet = {
+  label: "capped replica repair backoff (TC-2096, #759): kv-storage worker +340 B, replica worker +323 B gzip, replica first import +279/+275 B, activation -2/-2 B",
+  ruling: "Approved by Naomi (exact canonical CI bytes at runs 40343675308 and 40348732196; no headroom)",
+  base: "dc74efaad0363281b19dc389e3a6a5467cfde2cb",
+  sourceCommits: ["c6b4703d15cb8b711f16629d8ee0fe2da1b3c675"],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40343675308",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40343675308/job/121644785274",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40343675308/job/121644785810",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 0, "index.cjs": 0 },
+    ceiling: { "index.mjs": 1467358, "index.cjs": 1409273 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 279, "replica.cjs": 275 },
+    ceiling: { "replica.mjs": 52653, "replica.cjs": 67846 },
+  },
+  activation: {
+    delta: { "activation.mjs": -2, "activation.cjs": -2 },
+    ceiling: { "activation.mjs": 23386, "activation.cjs": 24959 },
+  },
+  worker: { delta: 340, ceiling: 776468 },
+  replicaWorker: { delta: 323, ceiling: 770416 },
+  reason: "the replica retries a value it could not verify with growing gaps and gives up after five tries (TC-2096)",
+};
+
+/** Canonical CI run 40348214990 (TC-2072, #754): root index.mjs is carried (delta 0) and index.cjs rises by 8 bytes over TC-2096; first import, activation and worker carry TC-2096's ceilings. */
 export const approvedTc2072LocationGuardRatchet: Tc2072LocationGuardRatchet = {
   label: "constructing TinyCloudWeb without a location skips UI client registration (TC-2072, #754): +0 B mjs / +8 B cjs gzip",
   ruling: "Approved by Naomi (measured at run 40348214990 within 10 bytes of the approved +7/+7; the mjs ceiling is carried)",
@@ -1909,13 +1944,14 @@ export const approvedTc2072LocationGuardRatchet: Tc2072LocationGuardRatchet = {
   },
   firstImport: {
     delta: { "replica.mjs": 0, "replica.cjs": 0 },
-    ceiling: { "replica.mjs": 52374, "replica.cjs": 67571 },
+    ceiling: { "replica.mjs": 52653, "replica.cjs": 67846 },
   },
   activation: {
     delta: { "activation.mjs": 0, "activation.cjs": 0 },
     ceiling: { "activation.mjs": 23386, "activation.cjs": 24959 },
   },
-  worker: { delta: 0, ceiling: 776128 },
+  worker: { delta: 0, ceiling: 776468 },
+  replicaWorker: { delta: 0, ceiling: 770416 },
   reason: "constructing TinyCloudWeb without a location skips UI client registration (TC-2072)",
 };
 
@@ -1993,6 +2029,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc1977ManifestKeysRatchet: approvedTc1977ManifestKeysRatchet,
   tc2038PanelPrefetchRatchet: approvedTc2038PanelPrefetchRatchet,
   tc2005RevokeWindowRatchet: approvedTc2005RevokeWindowRatchet,
+  tc2096RepairBackoffRatchet: approvedTc2096RepairBackoffRatchet,
   tc2072LocationGuardRatchet: approvedTc2072LocationGuardRatchet,
 };
 
@@ -2211,8 +2248,12 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc2038PanelPrefetchRatchet || JSON.stringify(value.tc2005RevokeWindowRatchet) !== JSON.stringify(approvedTc2005RevokeWindowRatchet))) {
     throw new Error("Only Naomi's exact canonical owner revocation-window ratchet is approved.");
   }
+  if (value.tc2096RepairBackoffRatchet !== undefined &&
+      (!value.tc2005RevokeWindowRatchet || JSON.stringify(value.tc2096RepairBackoffRatchet) !== JSON.stringify(approvedTc2096RepairBackoffRatchet))) {
+    throw new Error("Only Naomi's exact canonical repair-backoff ratchet is approved.");
+  }
   if (value.tc2072LocationGuardRatchet !== undefined &&
-      (!value.tc2005RevokeWindowRatchet || JSON.stringify(value.tc2072LocationGuardRatchet) !== JSON.stringify(approvedTc2072LocationGuardRatchet))) {
+      (!value.tc2096RepairBackoffRatchet || JSON.stringify(value.tc2072LocationGuardRatchet) !== JSON.stringify(approvedTc2072LocationGuardRatchet))) {
     throw new Error("Only Naomi's exact canonical location-guard ratchet is approved.");
   }
 }
@@ -2422,6 +2463,14 @@ export function validateTc2005RevokeWindowRatchetTransition(base?: Tc2005RevokeW
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2005RevokeWindowRatchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact TC-2005 owner revocation-window ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-2096 repair-backoff ratchet is introduced once and immutable afterwards. */
+export function validateTc2096RepairBackoffRatchetTransition(base?: Tc2096RepairBackoffRatchet, current?: Tc2096RepairBackoffRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2096RepairBackoffRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-2096 repair-backoff ratchet may be introduced once and cannot change later.");
   }
 }
 
