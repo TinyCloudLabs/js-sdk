@@ -31,6 +31,7 @@
   "changesets": [
     "cli-keys-replication",
     "cli-kv-create-only",
-    "cli-named-keys"
+    "cli-named-keys",
+    "tc2043-sync-scope"
   ]
 }
