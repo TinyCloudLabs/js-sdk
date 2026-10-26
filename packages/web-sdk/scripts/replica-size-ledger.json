@@ -2161,5 +2161,33 @@
     "worker": { "delta": 0, "ceiling": 776539 },
     "replicaWorker": { "delta": 0, "ceiling": 770467 },
     "reason": "iPhone panel safe-area and ui.setButtonVisible (TC-2130)"
+  },
+  "tc1977HostBindingRatchet": {
+    "label": "isAppKeyHostBound export for the node SDK and web SDK (TC-1977, #767): +55 B mjs / +171 B cjs gzip",
+    "ruling": "Approved by Naomi (root +55 mjs / +171 cjs gz; measured at run 40419335009 at 32ed8997)",
+    "base": "c91a76fd298c1ee0ae68f56b2dca6506bf77ac2c",
+    "sourceCommits": ["32ed899747876650da43fe204d7f61434902dd12"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40419335009",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40419335009/job/121909541826",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40419335009/job/121909542255"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 55, "index.cjs": 171 },
+      "ceiling": { "index.mjs": 1470315, "index.cjs": 1412003 }
+    },
+    "firstImport": {
+      "delta": { "replica.mjs": 0, "replica.cjs": 0 },
+      "ceiling": { "replica.mjs": 52757, "replica.cjs": 67957 }
+    },
+    "activation": {
+      "delta": { "activation.mjs": 0, "activation.cjs": 0 },
+      "ceiling": { "activation.mjs": 23412, "activation.cjs": 24981 }
+    },
+    "worker": { "delta": 0, "ceiling": 776539 },
+    "replicaWorker": { "delta": 0, "ceiling": 770467 },
+    "reason": "isAppKeyHostBound export for the node SDK and web SDK (TC-1977)"
   }
 }
