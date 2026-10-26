@@ -3156,9 +3156,9 @@ describe("TinyCloudWeb location guard (TC-2072, #754) size ratchet", () => {
   it("pins exact CI bytes over the revocation-window row and carries unchanged first-import, activation and worker ceilings", () => {
     expect(() => validateLedger(current)).not.toThrow();
     expect(current.tc2072LocationGuardRatchet).toEqual(approvedTc2072LocationGuardRatchet);
-    expect(row().root).toEqual({ delta: { "index.mjs": 7, "index.cjs": 7 }, ceiling: { "index.mjs": 1467365, "index.cjs": 1409280 } });
-    expect(row().root.ceiling["index.mjs"]).toBe(approvedTc2005RevokeWindowRatchet.root.ceiling["index.mjs"] + 7);
-    expect(row().root.ceiling["index.cjs"]).toBe(approvedTc2005RevokeWindowRatchet.root.ceiling["index.cjs"] + 7);
+    expect(row().root).toEqual({ delta: { "index.mjs": 0, "index.cjs": 8 }, ceiling: { "index.mjs": 1467358, "index.cjs": 1409281 } });
+    expect(row().root.ceiling["index.mjs"]).toBe(approvedTc2005RevokeWindowRatchet.root.ceiling["index.mjs"] + 0);
+    expect(row().root.ceiling["index.cjs"]).toBe(approvedTc2005RevokeWindowRatchet.root.ceiling["index.cjs"] + 8);
     expect(row().firstImport).toEqual({ delta: { "replica.mjs": 0, "replica.cjs": 0 }, ceiling: { "replica.mjs": 52374, "replica.cjs": 67571 } });
     expect(row().activation).toEqual({ delta: { "activation.mjs": 0, "activation.cjs": 0 }, ceiling: { "activation.mjs": 23386, "activation.cjs": 24959 } });
     expect(row().worker).toEqual({ delta: 0, ceiling: 776128 });

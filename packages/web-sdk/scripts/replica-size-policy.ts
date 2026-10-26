@@ -1890,22 +1890,22 @@ export const approvedTc2005RevokeWindowRatchet: Tc2005RevokeWindowRatchet = {
   reason: "the owner revocation window extends; one constant in node-sdk (TC-2005)",
 };
 
-/** Canonical CI run 40319729629 (TC-2072, #754): root index.mjs and index.cjs each rise by 7 bytes; first import, activation and worker are unchanged. */
+/** Canonical CI run 40348214990 (TC-2072, #754): root index.mjs is carried (delta 0) and index.cjs rises by 8 bytes; first import, activation and worker are unchanged. */
 export const approvedTc2072LocationGuardRatchet: Tc2072LocationGuardRatchet = {
-  label: "constructing TinyCloudWeb without a location skips UI client registration (TC-2072, #754): +7 B mjs / +7 B cjs gzip",
-  ruling: "Approved by Naomi (exact CI bytes at run 40319729629; ceilings are measured on the merged master within 10 bytes)",
+  label: "constructing TinyCloudWeb without a location skips UI client registration (TC-2072, #754): +0 B mjs / +8 B cjs gzip",
+  ruling: "Approved by Naomi (measured at run 40348214990 within 10 bytes of the approved +7/+7; the mjs ceiling is carried)",
   base: "5467d1248b20e59d3b7eca508da417c2b35316b3",
-  sourceCommits: ["26330c87a8c07a75709eed979d349036d85ed3fd"],
+  sourceCommits: ["1b6b4fddd31630f0287464808feb1ef82e449ef6"],
   canonicalCI: {
-    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40319729629",
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40348214990",
     jobs: [
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40319729629/job/121561291672",
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40319729629/job/121561291717",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40348214990/job/121660792942",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40348214990/job/121660792806",
     ],
   },
   root: {
-    delta: { "index.mjs": 7, "index.cjs": 7 },
-    ceiling: { "index.mjs": 1467365, "index.cjs": 1409280 },
+    delta: { "index.mjs": 0, "index.cjs": 8 },
+    ceiling: { "index.mjs": 1467358, "index.cjs": 1409281 },
   },
   firstImport: {
     delta: { "replica.mjs": 0, "replica.cjs": 0 },
