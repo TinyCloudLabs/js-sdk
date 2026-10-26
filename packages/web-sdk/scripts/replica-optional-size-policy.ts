@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import type { LoadedSizes } from "./measure-replica-optional";
-import { ancestryPins, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedHardeningRatchet, approvedTc1413Ratchet, approvedTc1432Ratchet, approvedMasterDriftRatchet, approvedTc1475Ratchet, approvedTc1789Ratchet, approvedTc2043SyncScopeRatchet, pinLandedOn, validateGatedOnlyRatchet, type GatedOnlyRatchet, type Ledger } from "./replica-size-policy";
+import { ancestryPins, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedHardeningRatchet, approvedTc1413Ratchet, approvedTc1432Ratchet, approvedMasterDriftRatchet, approvedTc1475Ratchet, approvedTc1789Ratchet, approvedTc2043SyncScopeRatchet, approvedTc1888PurgeLocalCopyRatchet, pinLandedOn, validateGatedOnlyRatchet, type GatedOnlyRatchet, type Ledger } from "./replica-size-policy";
 export type CompactFixRequired = {
   sourceCommit: string;
   integratedCommit: string;
@@ -108,6 +108,10 @@ export const tc1789OptionalAllowance: LoadedSizes = {
 export const tc2043OptionalAllowance: LoadedSizes = {
   ...approvedTc2043SyncScopeRatchet.firstImport.ceiling, ...approvedTc2043SyncScopeRatchet.activation.ceiling,
 };
+/** The TC-1888 sign-out local copy ratchet's cumulative optional ledger caps. */
+export const tc1888OptionalAllowance: LoadedSizes = {
+  ...approvedTc1888PurgeLocalCopyRatchet.firstImport.ceiling, ...approvedTc1888PurgeLocalCopyRatchet.activation.ceiling,
+};
 export const approvedMeasurementCorrection = {
   commit: "ce52494d0cb1ea236578bc6b709e9e6e016f8c78",
   ciRun: "38958197518",
@@ -126,7 +130,7 @@ export const approvedRelocations = [
 
 /** Validate the actual ledger before comparing its immutable prefix or built artifacts. */
 export function validateOptionalLedger(
-  value: OptionalLedger, fixRequired = false, ciToolchainCorrection = false, hardening = false, tc1413 = false, tc1432 = false, tc1475 = false, masterDrift = false, tc1789 = false, tc2043 = false,
+  value: OptionalLedger, fixRequired = false, ciToolchainCorrection = false, hardening = false, tc1413 = false, tc1432 = false, tc1475 = false, masterDrift = false, tc1789 = false, tc2043 = false, tc1888 = false,
 ): void {
   const path = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
   if (!value || !value.allowance || !Array.isArray(value.entries) ||
@@ -146,13 +150,13 @@ export function validateOptionalLedger(
   const relocated = value.relocations !== undefined;
   const corrected = value.measurementCorrection !== undefined;
   const hasCompactFix = value.fixRequired !== undefined;
-  const ceiling = tc2043 ? tc2043OptionalAllowance : tc1789 ? tc1789OptionalAllowance : masterDrift ? masterDriftOptionalAllowance : tc1475 ? tc1475OptionalAllowance : tc1432 ? tc1432OptionalAllowance : tc1413 ? tc1413OptionalAllowance : hardening ? hardeningOptionalAllowance : hasCompactFix ? compactFixOptionalAllowance
+  const ceiling = tc1888 ? tc1888OptionalAllowance : tc2043 ? tc2043OptionalAllowance : tc1789 ? tc1789OptionalAllowance : masterDrift ? masterDriftOptionalAllowance : tc1475 ? tc1475OptionalAllowance : tc1432 ? tc1432OptionalAllowance : tc1413 ? tc1413OptionalAllowance : hardening ? hardeningOptionalAllowance : hasCompactFix ? compactFixOptionalAllowance
     : ciToolchainCorrection ? ciOptionalAllowance : fixRequired ? fixRequiredOptionalAllowance
       : corrected ? correctedOptionalAllowance : relocated ? relocatedOptionalAllowance : priorOptionalAllowance;
   if (optionalFormats.some((format) => value.allowance[format] !== ceiling[format]) ||
       (relocated && JSON.stringify(value.relocations) !== JSON.stringify(approvedRelocations)) ||
       (corrected && (!relocated || JSON.stringify(value.measurementCorrection) !== JSON.stringify(approvedMeasurementCorrection))) ||
-      (fixRequired && !corrected) || (ciToolchainCorrection && !fixRequired) || (hardening && !hasCompactFix) || (tc1413 && !hardening) || (tc1432 && !tc1413) || (tc1475 && !tc1432) || (masterDrift && !tc1475) || (tc1789 && !masterDrift) || (tc2043 && !tc1789) ||
+      (fixRequired && !corrected) || (ciToolchainCorrection && !fixRequired) || (hardening && !hasCompactFix) || (tc1413 && !hardening) || (tc1432 && !tc1413) || (tc1475 && !tc1432) || (masterDrift && !tc1475) || (tc1789 && !masterDrift) || (tc2043 && !tc1789) || (tc1888 && !tc2043) ||
       (hasCompactFix && (!ciToolchainCorrection ||
         JSON.stringify(value.fixRequired) !== JSON.stringify([approvedCompactFixRequired])))) {
     throw new Error(`${path}: only the exact paired relocation, canonical toolchain correction and reviewed fix-required first-import caps are approved`);

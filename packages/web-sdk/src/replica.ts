@@ -46,7 +46,9 @@ async function recoveredBrowserReplication(
   let walletPrincipal: string | undefined;
   let walletSequence = 0;
   let recoveryRetries = 0;
-  let walletGate: "gate_unavailable" | "principal_mismatch" = "gate_unavailable";
+  // No wallet provider is a distinct, typed refusal: restore with replication configured needs one.
+  let walletGate: "gate_unavailable" | "principal_mismatch" | "wallet_provider_required" =
+    signer === undefined ? "wallet_provider_required" : "gate_unavailable";
   /** The only admit path: a fresh recovery report under the origin gate lock. */
   const recoverAndAdmit = async (input: { signal: AbortSignal }): Promise<Report> => {
     const result = await lifecycle.recover(input);
@@ -97,7 +99,7 @@ async function recoveredBrowserReplication(
   const matchesWallet = async (principal: string): Promise<boolean> => {
     const address = parsePkhDid(principal)?.address;
     const connected = await signer?.getConnectedAddress().catch(() => undefined);
-    walletGate = connected ? "principal_mismatch" : "gate_unavailable";
+    walletGate = signer === undefined ? "wallet_provider_required" : connected ? "principal_mismatch" : "gate_unavailable";
     return address !== undefined && connected !== undefined &&
       address.toLowerCase() === connected.toLowerCase();
   };

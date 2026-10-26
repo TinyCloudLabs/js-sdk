@@ -24,6 +24,7 @@ packages/sdk-rs/.zshenv
 packages/sdk-services/dist/
 tests/sdk-services/dist
 packages/replica/test/browser/acceptance/dist/
+packages/replica/test/browser/purge/dist/
 tests/node-sdk/benchmarks/results/
 packages/cli/dist
 packages/operations/dist/

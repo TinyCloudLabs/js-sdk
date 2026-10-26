@@ -30,6 +30,7 @@ import {
 import {
   resolveReplicationConfig,
   validateReplicationConfig,
+  type LocalCopyPurgeFailedEvent,
 } from "./replica-wiring";
 import {
   IKVService,
@@ -398,6 +399,7 @@ export class TinyCloudWeb {
   private _credentialsService?: CredentialsService;
   private _shareReceiverService?: ShareReceiverService;
   private readonly storageFullHandlers = new Set<(event: StorageFullEvent) => void>();
+  private readonly purgeFailedHandlers = new Set<(event: LocalCopyPurgeFailedEvent) => void>();
 
   /** Promise that resolves when WASM + node are ready */
   private _initPromise: Promise<void>;
@@ -575,6 +577,15 @@ export class TinyCloudWeb {
         }
       }
     });
+    this._node.on("replica.purge.failed", (event) => {
+      for (const handler of this.purgeFailedHandlers) {
+        try {
+          handler(event);
+        } catch (error) {
+          console.error('Error in "replica.purge.failed" handler:', error);
+        }
+      }
+    });
     this._node.storageEpisode.subscribe(() => {
       for (const listener of [...this.storageEpisodeListeners]) {
         try {
@@ -649,13 +660,32 @@ export class TinyCloudWeb {
    * app can show one read-only banner. Reads keep working. Safe to call before
    * initialization finishes. Returns the unsubscribe function.
    */
-  on(event: "storage.full", handler: (event: StorageFullEvent) => void): () => void {
+  on(event: "storage.full", handler: (event: StorageFullEvent) => void): () => void;
+  /**
+   * Subscribe to `replica.purge.failed`. It fires when the local copy could not be erased after
+   * sign-out or account switch, after the SDK's bounded retries; the event carries the typed
+   * reason and `retryNow`. The SDK retries again on the next load; `replication.purgeLocalCopy()`
+   * retries now. Safe to call before initialization finishes. Returns the unsubscribe function.
+   */
+  on(event: "replica.purge.failed", handler: (event: LocalCopyPurgeFailedEvent) => void): () => void;
+  on(
+    event: "storage.full" | "replica.purge.failed",
+    handler: ((event: StorageFullEvent) => void) | ((event: LocalCopyPurgeFailedEvent) => void),
+  ): () => void {
+    if (event === "replica.purge.failed") {
+      const listener = handler as (event: LocalCopyPurgeFailedEvent) => void;
+      this.purgeFailedHandlers.add(listener);
+      return () => {
+        this.purgeFailedHandlers.delete(listener);
+      };
+    }
     if (event !== "storage.full") {
       throw new Error(`Unknown TinyCloud event: ${String(event)}`);
     }
-    this.storageFullHandlers.add(handler);
+    const listener = handler as (event: StorageFullEvent) => void;
+    this.storageFullHandlers.add(listener);
     return () => {
-      this.storageFullHandlers.delete(handler);
+      this.storageFullHandlers.delete(listener);
     };
   }
 

@@ -300,6 +300,8 @@ export type Tc848SettingsPanelRatchet = HardeningRatchet;
 export type Tc2034NamedKeysCliRatchet = HardeningRatchet;
 /** One reviewed exact-byte row for replication syncScope (TC-2043, #742). */
 export type Tc2043SyncScopeRatchet = HardeningRatchet;
+/** One reviewed exact-byte row for sign-out local-copy erase (TC-1888, #728). */
+export type Tc1888PurgeLocalCopyRatchet = HardeningRatchet;
 /** One reviewed exact-byte row for manifest named keys (js-sdk #748, TC-1977). */
 export type Tc1977ManifestKeysRatchet = HardeningRatchet;
 export type Ledger = {
@@ -344,6 +346,7 @@ export type Ledger = {
   tc848SettingsPanelRatchet?: Tc848SettingsPanelRatchet;
   tc2034NamedKeysCliRatchet?: Tc2034NamedKeysCliRatchet;
   tc2043SyncScopeRatchet?: Tc2043SyncScopeRatchet;
+  tc1888PurgeLocalCopyRatchet?: Tc1888PurgeLocalCopyRatchet;
   tc1977ManifestKeysRatchet?: Tc1977ManifestKeysRatchet;
 };
 
@@ -917,6 +920,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc848SettingsPanelRatchet !== undefined) pins.push({ row: "tc848SettingsPanelRatchet", pin: root.tc848SettingsPanelRatchet.sourceCommits.at(-1)! });
   if (root.tc2034NamedKeysCliRatchet !== undefined) pins.push({ row: "tc2034NamedKeysCliRatchet", pin: root.tc2034NamedKeysCliRatchet.sourceCommits.at(-1)! });
   if (root.tc2043SyncScopeRatchet !== undefined) pins.push({ row: "tc2043SyncScopeRatchet", pin: root.tc2043SyncScopeRatchet.sourceCommits.at(-1)! });
+  if (root.tc1888PurgeLocalCopyRatchet !== undefined) pins.push({ row: "tc1888PurgeLocalCopyRatchet", pin: root.tc1888PurgeLocalCopyRatchet.sourceCommits.at(-1)! });
   if (root.tc1977ManifestKeysRatchet !== undefined) pins.push({ row: "tc1977ManifestKeysRatchet", pin: root.tc1977ManifestKeysRatchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
@@ -966,6 +970,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc848SettingsPanelRatchet", root.tc848SettingsPanelRatchet?.root.ceiling],
     ["tc2034NamedKeysCliRatchet", root.tc2034NamedKeysCliRatchet?.root.ceiling],
     ["tc2043SyncScopeRatchet", root.tc2043SyncScopeRatchet?.root.ceiling],
+    ["tc1888PurgeLocalCopyRatchet", root.tc1888PurgeLocalCopyRatchet?.root.ceiling],
     ["tc1977ManifestKeysRatchet", root.tc1977ManifestKeysRatchet?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
@@ -1749,7 +1754,36 @@ export const approvedTc2043SyncScopeRatchet: Tc2043SyncScopeRatchet = {
   reason: "opt-in `replication.syncScope: 'prefixes'` keeps sign-in kv/sync on declared prefixes when the manifest grants root KV (TinyCloud Home).",
 };
 
-/** Manifest named keys (js-sdk #748, TC-1977), approved by Naomi: root index.mjs 1,464,358 -> 1,467,024 (+2,666) and index.cjs 1,406,182 -> 1,408,996 (+2,814), the exact bytes canonical CI printed on head 545e2700 (run 40312328298). Worker, first-import and activation ceilings are carried unchanged. */
+/** Canonical CI run 40303939643: root, first import and activation rise by the approved deltas; worker is unchanged. */
+export const approvedTc1888PurgeLocalCopyRatchet: Tc1888PurgeLocalCopyRatchet = {
+  label: "sign-out erases the local copy and purgeLocalCopy (TC-1888, #728)",
+  ruling: "Approved by Naomi (exact canonical CI bytes at run 40303939643; no headroom)",
+  base: "bd41ce30df6cad86ce501a2230ecd2afebef2e66",
+  sourceCommits: ["36dd6e5061735907e200222fc5cac362076d024d"],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40303939643",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40303939643/job/121508294847",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40303939643/job/121508294935",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 271, "index.cjs": 274 },
+    ceiling: { "index.mjs": 1464629, "index.cjs": 1406456 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 409, "replica.cjs": 393 },
+    ceiling: { "replica.mjs": 52374, "replica.cjs": 67571 },
+  },
+  activation: {
+    delta: { "activation.mjs": 270, "activation.cjs": 261 },
+    ceiling: { "activation.mjs": 23386, "activation.cjs": 24959 },
+  },
+  worker: { delta: 0, ceiling: 776128 },
+  reason: "sign-out and account switch erase the local copy with an SDK retry and a failure event; the minimum reviewed shape; optional code in the replica chunk.",
+};
+
+/** Manifest named keys (js-sdk #748, TC-1977), approved by Naomi: root index.mjs 1,464,629 -> 1,467,295 (+2,666) and index.cjs 1,406,456 -> 1,409,270 (+2,814), the exact deltas canonical CI printed on head 545e2700 (run 40312328298). Worker is unchanged; first-import and activation deltas are 0, so their ceilings are the tc1888 caps. */
 export const approvedTc1977ManifestKeysRatchet: Tc1977ManifestKeysRatchet = {
   label: "sdk: manifest named keys (TC-1977, #748): +2,666 B mjs / +2,814 B cjs gzip",
   ruling: "Approved by Naomi (exact canonical CI bytes at run 40312328298; no headroom)",
@@ -1766,15 +1800,15 @@ export const approvedTc1977ManifestKeysRatchet: Tc1977ManifestKeysRatchet = {
   },
   root: {
     delta: { "index.mjs": 2666, "index.cjs": 2814 },
-    ceiling: { "index.mjs": 1467024, "index.cjs": 1408996 },
+    ceiling: { "index.mjs": 1467295, "index.cjs": 1409270 },
   },
   firstImport: {
     delta: { "replica.mjs": 0, "replica.cjs": 0 },
-    ceiling: { "replica.mjs": 51965, "replica.cjs": 67178 },
+    ceiling: { "replica.mjs": 52374, "replica.cjs": 67571 },
   },
   activation: {
     delta: { "activation.mjs": 0, "activation.cjs": 0 },
-    ceiling: { "activation.mjs": 23117, "activation.cjs": 24700 },
+    ceiling: { "activation.mjs": 23386, "activation.cjs": 24959 },
   },
   worker: { delta: 0, ceiling: 776128 },
   reason: "manifest named keys: the `keys` block, key resource derivation and sign-in abilities (TC-1977)",
@@ -1850,6 +1884,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc848SettingsPanelRatchet: approvedTc848SettingsPanelRatchet,
   tc2034NamedKeysCliRatchet: approvedTc2034NamedKeysCliRatchet,
   tc2043SyncScopeRatchet: approvedTc2043SyncScopeRatchet,
+  tc1888PurgeLocalCopyRatchet: approvedTc1888PurgeLocalCopyRatchet,
   tc1977ManifestKeysRatchet: approvedTc1977ManifestKeysRatchet,
 };
 
@@ -2052,8 +2087,12 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc2034NamedKeysCliRatchet || JSON.stringify(value.tc2043SyncScopeRatchet) !== JSON.stringify(approvedTc2043SyncScopeRatchet))) {
     throw new Error("Only Naomi's exact canonical replication syncScope ratchet is approved.");
   }
+  if (value.tc1888PurgeLocalCopyRatchet !== undefined &&
+      (!value.tc2043SyncScopeRatchet || JSON.stringify(value.tc1888PurgeLocalCopyRatchet) !== JSON.stringify(approvedTc1888PurgeLocalCopyRatchet))) {
+    throw new Error("Only Naomi's exact canonical sign-out local copy ratchet is approved.");
+  }
   if (value.tc1977ManifestKeysRatchet !== undefined &&
-      (!value.tc2043SyncScopeRatchet || JSON.stringify(value.tc1977ManifestKeysRatchet) !== JSON.stringify(approvedTc1977ManifestKeysRatchet))) {
+      (!value.tc1888PurgeLocalCopyRatchet || JSON.stringify(value.tc1977ManifestKeysRatchet) !== JSON.stringify(approvedTc1977ManifestKeysRatchet))) {
     throw new Error("Only Naomi's exact canonical manifest-keys ratchet is approved.");
   }
 }
@@ -2223,6 +2262,14 @@ export function validateTc2034NamedKeysCliRatchetTransition(base?: Tc2034NamedKe
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2034NamedKeysCliRatchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact TC-2034 named-keys ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-1888 sign-out local copy ratchet is introduced once and immutable afterwards. */
+export function validateTc1888PurgeLocalCopyRatchetTransition(base?: Tc1888PurgeLocalCopyRatchet, current?: Tc1888PurgeLocalCopyRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1888PurgeLocalCopyRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-1888 sign-out local copy ratchet may be introduced once and cannot change later.");
   }
 }
 

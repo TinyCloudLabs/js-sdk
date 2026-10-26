@@ -26,7 +26,7 @@ import { approvedTc1737ShortLinkLazyChunkRatchet, validateTc1737ShortLinkLazyChu
 import { approvedTc1910SigningConsistencyRatchet, validateTc1910SigningConsistencyRatchetTransition, type Tc1910SigningConsistencyRatchet } from "./replica-size-policy";
 import { approvedTc848SettingsPanelRatchet, validateTc848SettingsPanelRatchetTransition, type Tc848SettingsPanelRatchet } from "./replica-size-policy";
 import { approvedTc2034NamedKeysCliRatchet, validateTc2034NamedKeysCliRatchetTransition, type Tc2034NamedKeysCliRatchet } from "./replica-size-policy";
-import { approvedTc2043SyncScopeRatchet, validateTc2043SyncScopeRatchetTransition, type Tc2043SyncScopeRatchet } from "./replica-size-policy";
+import { approvedTc2043SyncScopeRatchet, validateTc2043SyncScopeRatchetTransition, type Tc2043SyncScopeRatchet, approvedTc1888PurgeLocalCopyRatchet, validateTc1888PurgeLocalCopyRatchetTransition, type Tc1888PurgeLocalCopyRatchet } from "./replica-size-policy";
 import { approvedTc1977ManifestKeysRatchet, validateTc1977ManifestKeysRatchetTransition, type Tc1977ManifestKeysRatchet } from "./replica-size-policy";
 import { activeRootCeiling, approvedLedgerRows, rootCeilingFor, rootCeilings } from "./replica-size-policy";
 import { approvedTc1443Ratchet, approvedTc1443bRatchet, approvedTc1448Ratchet, approvedTc1466Ratchet, validateTc1443RatchetTransition, validateTc1443bRatchetTransition, validateTc1448RatchetTransition, validateTc1466RatchetTransition, type Tc1443Ratchet, type Tc1443bRatchet, type Tc1448Ratchet, type Tc1466Ratchet } from "./replica-size-policy";
@@ -2883,12 +2883,17 @@ describe("named-keys CLI sign-in report (#739, TC-2034) root ceiling ratchet", (
   });
 });
 
+const tc2043Ledger: Ledger = copy(current);
+delete tc2043Ledger.tc1888PurgeLocalCopyRatchet;
+delete tc2043Ledger.tc1977ManifestKeysRatchet;
+tc2043Ledger.entries = structuredClone(current.entries.slice(0, current.entries.findIndex((entry) => entry.pr === "#728")));
 describe("replication syncScope opt-in (#742, TC-2043) size ratchet", () => {
   const row = () => structuredClone(approvedTc2043SyncScopeRatchet);
 
   it("pins exact CI bytes and carries unchanged activation and worker ceilings", () => {
-    expect(() => validateLedger(current)).not.toThrow();
-    expect(current.tc2043SyncScopeRatchet).toEqual(approvedTc2043SyncScopeRatchet);
+    expect(() => validateLedger(tc2043Ledger)).not.toThrow();
+    expect(tc2043Ledger.tc2043SyncScopeRatchet).toEqual(approvedTc2043SyncScopeRatchet);
+    expect(tc2043Ledger.entries.at(-1)).toMatchObject({ pr: "#742", ticket: "TC-2043" });
     expect(row().root).toEqual({ delta: { "index.mjs": 41, "index.cjs": 30 }, ceiling: { "index.mjs": 1464358, "index.cjs": 1406182 } });
     expect(row().firstImport).toEqual({ delta: { "replica.mjs": 40, "replica.cjs": 39 }, ceiling: { "replica.mjs": 51965, "replica.cjs": 67178 } });
     expect(row().activation).toEqual({ ...approvedTc2034NamedKeysCliRatchet.activation, delta: { "activation.mjs": 0, "activation.cjs": 0 } });
@@ -2899,8 +2904,8 @@ describe("replication syncScope opt-in (#742, TC-2043) size ratchet", () => {
     expect(row().sourceCommits).toEqual(["f6740607a9c5ef1ac9b979388add8515aea7e929"]);
     expect(row().canonicalCI.run).toBe("https://github.com/TinyCloudLabs/js-sdk/actions/runs/40247206055");
     expect(row().canonicalCI.jobs).toHaveLength(2);
-    expect(ancestryPins(current, false)).toContainEqual({ row: "tc2043SyncScopeRatchet", pin: row().sourceCommits[0] });
-    expect(rootCeilings(current).find((row) => row.row === "tc2043SyncScopeRatchet")).toEqual({ row: "tc2043SyncScopeRatchet", ceiling: row().root.ceiling });
+    expect(ancestryPins(tc2043Ledger, false)).toContainEqual({ row: "tc2043SyncScopeRatchet", pin: row().sourceCommits[0] });
+    expect(rootCeilings(tc2043Ledger).at(-1)).toEqual({ row: "tc2043SyncScopeRatchet", ceiling: row().root.ceiling });
   });
 
   it("refuses changed bytes, provenance or a missing named-keys prerequisite", () => {
@@ -2915,13 +2920,13 @@ describe("replication syncScope opt-in (#742, TC-2043) size ratchet", () => {
       (changed) => { changed.sourceCommits = ["0".repeat(40)]; },
     ];
     for (const mutate of mutations) {
-      const ledger = copy(current);
+      const ledger = copy(tc2043Ledger);
       const changed = row();
       mutate(changed);
       ledger.tc2043SyncScopeRatchet = changed;
       expect(() => validateLedger(ledger)).toThrow();
     }
-    const withoutPrerequisite = copy(current);
+    const withoutPrerequisite = copy(tc2043Ledger);
     delete withoutPrerequisite.tc2034NamedKeysCliRatchet;
     expect(() => validateLedger(withoutPrerequisite)).toThrow("syncScope");
   });
@@ -2936,6 +2941,58 @@ describe("replication syncScope opt-in (#742, TC-2043) size ratchet", () => {
   });
 });
 
+describe("sign-out local copy erase (#728, TC-1888) size ratchet", () => {
+  const row = () => structuredClone(approvedTc1888PurgeLocalCopyRatchet);
+
+  it("pins exact CI bytes and the merged TC-2043 prerequisite", () => {
+    expect(() => validateLedger(current)).not.toThrow();
+    expect(current.tc1888PurgeLocalCopyRatchet).toEqual(approvedTc1888PurgeLocalCopyRatchet);
+    expect(row().root).toEqual({ delta: { "index.mjs": 271, "index.cjs": 274 }, ceiling: { "index.mjs": 1464629, "index.cjs": 1406456 } });
+    expect(row().firstImport).toEqual({ delta: { "replica.mjs": 409, "replica.cjs": 393 }, ceiling: { "replica.mjs": 52374, "replica.cjs": 67571 } });
+    expect(row().activation).toEqual({ delta: { "activation.mjs": 270, "activation.cjs": 261 }, ceiling: { "activation.mjs": 23386, "activation.cjs": 24959 } });
+    expect(row().worker).toEqual({ delta: 0, ceiling: 776128 });
+    expect(row().base).toBe("bd41ce30df6cad86ce501a2230ecd2afebef2e66");
+    expect(row().sourceCommits).toEqual(["36dd6e5061735907e200222fc5cac362076d024d"]);
+    expect(row().canonicalCI.run).toBe("https://github.com/TinyCloudLabs/js-sdk/actions/runs/40303939643");
+    expect(row().canonicalCI.jobs).toHaveLength(2);
+    expect(ancestryPins(current, false)).toContainEqual({ row: "tc1888PurgeLocalCopyRatchet", pin: row().sourceCommits[0] });
+    expect(rootCeilings(current).find((row) => row.row === "tc1888PurgeLocalCopyRatchet")).toEqual({ row: "tc1888PurgeLocalCopyRatchet", ceiling: row().root.ceiling });
+    expect(current.entries.at(-1)).toMatchObject({ pr: "#728", ticket: "TC-1888", "index.mjs": 0, "index.cjs": 0 });
+  });
+
+  it("refuses changed bytes, provenance or a missing TC-2043 prerequisite", () => {
+    const mutations: Array<(changed: Tc1888PurgeLocalCopyRatchet) => void> = [
+      (changed) => { changed.root.ceiling["index.mjs"]++; },
+      (changed) => { changed.root.delta["index.cjs"]++; },
+      (changed) => { changed.firstImport.ceiling["replica.cjs"]++; },
+      (changed) => { changed.firstImport.delta["replica.mjs"]++; },
+      (changed) => { changed.activation.ceiling["activation.mjs"]++; },
+      (changed) => { changed.worker.ceiling++; },
+      (changed) => { changed.canonicalCI.run = "https://github.com/TinyCloudLabs/js-sdk/actions/runs/1"; },
+      (changed) => { changed.sourceCommits = ["0".repeat(40)]; },
+    ];
+    for (const mutate of mutations) {
+      const ledger = copy(current);
+      const changed = row();
+      mutate(changed);
+      ledger.tc1888PurgeLocalCopyRatchet = changed;
+      expect(() => validateLedger(ledger)).toThrow();
+    }
+    const withoutPrerequisite = copy(current);
+    delete withoutPrerequisite.tc2043SyncScopeRatchet;
+    expect(() => validateLedger(withoutPrerequisite)).toThrow("local copy");
+  });
+
+  it("may be introduced once and never changed or removed", () => {
+    expect(() => validateTc1888PurgeLocalCopyRatchetTransition(undefined, row())).not.toThrow();
+    expect(() => validateTc1888PurgeLocalCopyRatchetTransition(row(), row())).not.toThrow();
+    const changed = row();
+    changed.root.ceiling["index.cjs"]++;
+    expect(() => validateTc1888PurgeLocalCopyRatchetTransition(undefined, changed)).toThrow();
+    expect(() => validateTc1888PurgeLocalCopyRatchetTransition(row(), undefined)).toThrow();
+  });
+});
+
 describe("manifest named keys (#748, TC-1977) size ratchet", () => {
   const row = () => structuredClone(approvedTc1977ManifestKeysRatchet);
 
@@ -2943,10 +3000,10 @@ describe("manifest named keys (#748, TC-1977) size ratchet", () => {
     expect(() => validateLedger(current)).not.toThrow();
     expect(current.tc1977ManifestKeysRatchet).toEqual(approvedTc1977ManifestKeysRatchet);
     expect(row().root.delta).toEqual({ "index.mjs": 2666, "index.cjs": 2814 });
-    expect(row().root.ceiling).toEqual({ "index.mjs": 1467024, "index.cjs": 1408996 });
-    expect(row().firstImport).toEqual({ ...approvedTc2043SyncScopeRatchet.firstImport, delta: { "replica.mjs": 0, "replica.cjs": 0 } });
-    expect(row().activation).toEqual({ ...approvedTc2043SyncScopeRatchet.activation, delta: { "activation.mjs": 0, "activation.cjs": 0 } });
-    expect(row().worker).toEqual({ delta: 0, ceiling: approvedTc2043SyncScopeRatchet.worker.ceiling });
+    expect(row().root.ceiling).toEqual({ "index.mjs": 1467295, "index.cjs": 1409270 });
+    expect(row().firstImport).toEqual({ ...approvedTc1888PurgeLocalCopyRatchet.firstImport, delta: { "replica.mjs": 0, "replica.cjs": 0 } });
+    expect(row().activation).toEqual({ ...approvedTc1888PurgeLocalCopyRatchet.activation, delta: { "activation.mjs": 0, "activation.cjs": 0 } });
+    expect(row().worker).toEqual({ delta: 0, ceiling: approvedTc1888PurgeLocalCopyRatchet.worker.ceiling });
     expect(row().base).toBe("fb44626f80951444bf666df003209a2739a7953a");
     expect(row().sourceCommits).toEqual(["545e270032f8f8b593ac9e55fee504a58943534d"]);
     expect(row().canonicalCI.run).toBe("https://github.com/TinyCloudLabs/js-sdk/actions/runs/40312328298");
@@ -2954,7 +3011,7 @@ describe("manifest named keys (#748, TC-1977) size ratchet", () => {
     expect(rootCeilings(current).find(({ row: name }) => name === "tc1977ManifestKeysRatchet")).toEqual({ row: "tc1977ManifestKeysRatchet", ceiling: row().root.ceiling });
   });
 
-  it("refuses changed bytes, provenance or a missing syncScope prerequisite", () => {
+  it("refuses changed bytes, provenance or a missing sign-out local copy prerequisite", () => {
     const mutations: Array<(changed: Tc1977ManifestKeysRatchet) => void> = [
       (changed) => { changed.root.ceiling["index.mjs"]++; },
       (changed) => { changed.root.delta["index.cjs"]++; },
@@ -2972,7 +3029,7 @@ describe("manifest named keys (#748, TC-1977) size ratchet", () => {
       expect(() => validateLedger(ledger)).toThrow();
     }
     const withoutPrerequisite = copy(current);
-    delete withoutPrerequisite.tc2043SyncScopeRatchet;
+    delete withoutPrerequisite.tc1888PurgeLocalCopyRatchet;
     expect(() => validateLedger(withoutPrerequisite)).toThrow("manifest-keys");
   });
 

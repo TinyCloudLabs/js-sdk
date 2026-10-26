@@ -380,6 +380,8 @@ never selected with replication on.
 
   Restored sessions validate their persisted stamp; they never establish one.
 
+  **Browser restore needs a wallet provider.** The web-sdk wrapper admits a restored stamp only when the connected wallet account matches the stamp principal, read silently through `eth_accounts` (a read-only provider whose signing methods throw is enough). With replication configured and **no** provider the restore stays fail-closed and the replica is gated with `wallet_provider_required`; a provider with no connected account stays `gate_unavailable`, another account `principal_mismatch`.
+
 A refused, stale, missing or malformed stamp gates **only the replica**: the
 controller constructor must not throw on that refusal. Network-valid
 `signIn()` and session restore continue under their existing rules; replica
@@ -532,13 +534,14 @@ a stamp is dropped. This includes get bytes, list keys and replica-derived diver
      erase a partition, `pending.json` or `device.jwk`, or clear an intent.
      The full intent set and generation fences still block every guarded read,
      write and new establishment. Browser denial and erasure are unchanged.
+   - **Browser local copy (`eraseLocalCopy`, step 3b):** after the deny, and once the replica runtime has closed its handles, the browser runs `eraseLocalCopy({ signal })` under the origin gate lock: it erases outstanding intents, then deletes the whole `REPLICA_KV_DATABASE` (never the `REPLICA_DENY_TOMBSTONE`). It deletes only when nothing live is at stake: the gate principal is null (denied), the gate epoch is behind the persisted tombstone (a commit that crashed after the tombstone), or `REPLICA_LOGOUT_MARKER` is set **with** a tombstone. A live or other-account gate, an unreadable tombstone, or a marker without a tombstone is `refused` and nothing is touched. A failed delete sets the marker (when a tombstone exists) so the next load's `recover()` finishes the erase and clears it, and returns `failed`. The node facade attempts it up to 3 times (retries after 150 ms, then 450 ms; 3 s per attempt); after the last failure it emits `replica.purge.failed` `{ trigger, reason, code, retryNow }`. `marker` leaves `signOut()` resolving; `unguarded` rejects with `REPLICA_PURGE_FAILED` unless the erase completed. `replication.purgeLocalCopy()` runs the same erase on demand and returns `{ ok: true }` or `{ ok: false, retryNow }` (`retryNow` is true for a `failed` erase, false for `refused`).
 4. **Activate** (switch only). `activationAllowed(next)` requires a **non-null**
    gate principal hash computed under the **current** gate key matching `next`, no old
    intent and no marker. A null gate returns false; only `establishSessionStamp` on a
    **fresh authenticated session** can set it after the old purge and mint new keys.
    Until then, B's KV goes to the network. Old-key `nextHash` is never reused.
 
-**`signOut` resolves** only after this tab's handles are cancelled and closed **and** step 1 has committed (or returned a fallback outcome). It does not wait for erasure: in the browser, the outstanding purge intents are erased on the next load or `recover()` (§ Startup step 4).
+**`signOut` resolves** only after this tab's handles are cancelled and closed **and** step 1 has committed (or returned a fallback outcome). Node/CLI sign-out does not wait for erasure. **Browser** sign-out and account switch then erase the local copy (step 3b) before they resolve.
 
 A transient `BUSY`, lock timeout or I/O failure **after committed denial**
 does not resurrect replica reads; erase is resumable.
