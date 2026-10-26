@@ -26,7 +26,7 @@ import { approvedTc1737ShortLinkLazyChunkRatchet, validateTc1737ShortLinkLazyChu
 import { approvedTc1910SigningConsistencyRatchet, validateTc1910SigningConsistencyRatchetTransition, type Tc1910SigningConsistencyRatchet } from "./replica-size-policy";
 import { approvedTc848SettingsPanelRatchet, validateTc848SettingsPanelRatchetTransition, type Tc848SettingsPanelRatchet } from "./replica-size-policy";
 import { approvedTc2034NamedKeysCliRatchet, validateTc2034NamedKeysCliRatchetTransition, type Tc2034NamedKeysCliRatchet } from "./replica-size-policy";
-import { approvedTc2043SyncScopeRatchet, validateTc2043SyncScopeRatchetTransition, type Tc2043SyncScopeRatchet } from "./replica-size-policy";
+import { approvedTc2043SyncScopeRatchet, validateTc2043SyncScopeRatchetTransition, type Tc2043SyncScopeRatchet, approvedTc1888PurgeLocalCopyRatchet, validateTc1888PurgeLocalCopyRatchetTransition, type Tc1888PurgeLocalCopyRatchet } from "./replica-size-policy";
 import { activeRootCeiling, approvedLedgerRows, rootCeilingFor, rootCeilings } from "./replica-size-policy";
 import { approvedTc1443Ratchet, approvedTc1443bRatchet, approvedTc1448Ratchet, approvedTc1466Ratchet, validateTc1443RatchetTransition, validateTc1443bRatchetTransition, validateTc1448RatchetTransition, validateTc1466RatchetTransition, type Tc1443Ratchet, type Tc1443bRatchet, type Tc1448Ratchet, type Tc1466Ratchet } from "./replica-size-policy";
 import { ancestryPins, assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedHardeningRatchet, approvedLogoutRatchet, approvedTc1413Ratchet, approvedTc1424Ratchet, approvedTc1432Ratchet, approvedTc1436Ratchet, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, landingCommit, pinLandedOn, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateLogoutRatchetTransition, validateMasterMergeResolutionTransition, validateTc1413RatchetTransition, validateTc1424RatchetTransition, validateTc1432RatchetTransition, validateTc1436RatchetTransition, type HardeningRatchet, type Ledger, type LogoutRatchet, type MasterMergeResolution, type Tc1413Ratchet, type Tc1424Ratchet, type Tc1432Ratchet, type Tc1436Ratchet } from "./replica-size-policy";
@@ -2882,12 +2882,16 @@ describe("named-keys CLI sign-in report (#739, TC-2034) root ceiling ratchet", (
   });
 });
 
+const tc2043Ledger: Ledger = copy(current);
+delete tc2043Ledger.tc1888PurgeLocalCopyRatchet;
+tc2043Ledger.entries = structuredClone(current.entries.slice(0, current.entries.findIndex((entry) => entry.pr === "#728")));
 describe("replication syncScope opt-in (#742, TC-2043) size ratchet", () => {
   const row = () => structuredClone(approvedTc2043SyncScopeRatchet);
 
   it("pins exact CI bytes and carries unchanged activation and worker ceilings", () => {
-    expect(() => validateLedger(current)).not.toThrow();
-    expect(current.tc2043SyncScopeRatchet).toEqual(approvedTc2043SyncScopeRatchet);
+    expect(() => validateLedger(tc2043Ledger)).not.toThrow();
+    expect(tc2043Ledger.tc2043SyncScopeRatchet).toEqual(approvedTc2043SyncScopeRatchet);
+    expect(tc2043Ledger.entries.at(-1)).toMatchObject({ pr: "#742", ticket: "TC-2043" });
     expect(row().root).toEqual({ delta: { "index.mjs": 41, "index.cjs": 30 }, ceiling: { "index.mjs": 1464358, "index.cjs": 1406182 } });
     expect(row().firstImport).toEqual({ delta: { "replica.mjs": 40, "replica.cjs": 39 }, ceiling: { "replica.mjs": 51965, "replica.cjs": 67178 } });
     expect(row().activation).toEqual({ ...approvedTc2034NamedKeysCliRatchet.activation, delta: { "activation.mjs": 0, "activation.cjs": 0 } });
@@ -2898,8 +2902,8 @@ describe("replication syncScope opt-in (#742, TC-2043) size ratchet", () => {
     expect(row().sourceCommits).toEqual(["f6740607a9c5ef1ac9b979388add8515aea7e929"]);
     expect(row().canonicalCI.run).toBe("https://github.com/TinyCloudLabs/js-sdk/actions/runs/40247206055");
     expect(row().canonicalCI.jobs).toHaveLength(2);
-    expect(ancestryPins(current, false)).toContainEqual({ row: "tc2043SyncScopeRatchet", pin: row().sourceCommits[0] });
-    expect(rootCeilings(current).at(-1)).toEqual({ row: "tc2043SyncScopeRatchet", ceiling: row().root.ceiling });
+    expect(ancestryPins(tc2043Ledger, false)).toContainEqual({ row: "tc2043SyncScopeRatchet", pin: row().sourceCommits[0] });
+    expect(rootCeilings(tc2043Ledger).at(-1)).toEqual({ row: "tc2043SyncScopeRatchet", ceiling: row().root.ceiling });
   });
 
   it("refuses changed bytes, provenance or a missing named-keys prerequisite", () => {
@@ -2914,13 +2918,13 @@ describe("replication syncScope opt-in (#742, TC-2043) size ratchet", () => {
       (changed) => { changed.sourceCommits = ["0".repeat(40)]; },
     ];
     for (const mutate of mutations) {
-      const ledger = copy(current);
+      const ledger = copy(tc2043Ledger);
       const changed = row();
       mutate(changed);
       ledger.tc2043SyncScopeRatchet = changed;
       expect(() => validateLedger(ledger)).toThrow();
     }
-    const withoutPrerequisite = copy(current);
+    const withoutPrerequisite = copy(tc2043Ledger);
     delete withoutPrerequisite.tc2034NamedKeysCliRatchet;
     expect(() => validateLedger(withoutPrerequisite)).toThrow("syncScope");
   });
@@ -2932,6 +2936,58 @@ describe("replication syncScope opt-in (#742, TC-2043) size ratchet", () => {
     changed.root.ceiling["index.cjs"]++;
     expect(() => validateTc2043SyncScopeRatchetTransition(undefined, changed)).toThrow();
     expect(() => validateTc2043SyncScopeRatchetTransition(row(), undefined)).toThrow();
+  });
+});
+
+describe("sign-out local copy erase (#728, TC-1888) size ratchet", () => {
+  const row = () => structuredClone(approvedTc1888PurgeLocalCopyRatchet);
+
+  it("pins exact CI bytes and the merged TC-2043 prerequisite", () => {
+    expect(() => validateLedger(current)).not.toThrow();
+    expect(current.tc1888PurgeLocalCopyRatchet).toEqual(approvedTc1888PurgeLocalCopyRatchet);
+    expect(row().root).toEqual({ delta: { "index.mjs": 271, "index.cjs": 274 }, ceiling: { "index.mjs": 1464629, "index.cjs": 1406456 } });
+    expect(row().firstImport).toEqual({ delta: { "replica.mjs": 409, "replica.cjs": 393 }, ceiling: { "replica.mjs": 52374, "replica.cjs": 67571 } });
+    expect(row().activation).toEqual({ delta: { "activation.mjs": 270, "activation.cjs": 261 }, ceiling: { "activation.mjs": 23386, "activation.cjs": 24959 } });
+    expect(row().worker).toEqual({ delta: 0, ceiling: 776128 });
+    expect(row().base).toBe("bd41ce30df6cad86ce501a2230ecd2afebef2e66");
+    expect(row().sourceCommits).toEqual(["36dd6e5061735907e200222fc5cac362076d024d"]);
+    expect(row().canonicalCI.run).toBe("https://github.com/TinyCloudLabs/js-sdk/actions/runs/40303939643");
+    expect(row().canonicalCI.jobs).toHaveLength(2);
+    expect(ancestryPins(current, false)).toContainEqual({ row: "tc1888PurgeLocalCopyRatchet", pin: row().sourceCommits[0] });
+    expect(rootCeilings(current).at(-1)).toEqual({ row: "tc1888PurgeLocalCopyRatchet", ceiling: row().root.ceiling });
+    expect(current.entries.at(-1)).toMatchObject({ pr: "#728", ticket: "TC-1888", "index.mjs": 0, "index.cjs": 0 });
+  });
+
+  it("refuses changed bytes, provenance or a missing TC-2043 prerequisite", () => {
+    const mutations: Array<(changed: Tc1888PurgeLocalCopyRatchet) => void> = [
+      (changed) => { changed.root.ceiling["index.mjs"]++; },
+      (changed) => { changed.root.delta["index.cjs"]++; },
+      (changed) => { changed.firstImport.ceiling["replica.cjs"]++; },
+      (changed) => { changed.firstImport.delta["replica.mjs"]++; },
+      (changed) => { changed.activation.ceiling["activation.mjs"]++; },
+      (changed) => { changed.worker.ceiling++; },
+      (changed) => { changed.canonicalCI.run = "https://github.com/TinyCloudLabs/js-sdk/actions/runs/1"; },
+      (changed) => { changed.sourceCommits = ["0".repeat(40)]; },
+    ];
+    for (const mutate of mutations) {
+      const ledger = copy(current);
+      const changed = row();
+      mutate(changed);
+      ledger.tc1888PurgeLocalCopyRatchet = changed;
+      expect(() => validateLedger(ledger)).toThrow();
+    }
+    const withoutPrerequisite = copy(current);
+    delete withoutPrerequisite.tc2043SyncScopeRatchet;
+    expect(() => validateLedger(withoutPrerequisite)).toThrow("local copy");
+  });
+
+  it("may be introduced once and never changed or removed", () => {
+    expect(() => validateTc1888PurgeLocalCopyRatchetTransition(undefined, row())).not.toThrow();
+    expect(() => validateTc1888PurgeLocalCopyRatchetTransition(row(), row())).not.toThrow();
+    const changed = row();
+    changed.root.ceiling["index.cjs"]++;
+    expect(() => validateTc1888PurgeLocalCopyRatchetTransition(undefined, changed)).toThrow();
+    expect(() => validateTc1888PurgeLocalCopyRatchetTransition(row(), undefined)).toThrow();
   });
 });
 

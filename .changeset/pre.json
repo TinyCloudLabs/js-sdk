@@ -29,6 +29,7 @@
     "@tinycloud/sdk-services-test": "21.0.1"
   },
   "changesets": [
+    "cli-account-revoke-fallback",
     "cli-keys-replication",
     "cli-kv-create-only",
     "cli-named-keys",
