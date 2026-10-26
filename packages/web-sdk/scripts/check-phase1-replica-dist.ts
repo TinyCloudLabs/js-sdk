@@ -22,6 +22,7 @@ import { validateTc2034NamedKeysCliRatchetTransition } from "./replica-size-poli
 import { validateTc2043SyncScopeRatchetTransition } from "./replica-size-policy";
 import { validateTc1888PurgeLocalCopyRatchetTransition } from "./replica-size-policy";
 import { validateTc1977ManifestKeysRatchetTransition } from "./replica-size-policy";
+import { validateTc2038PanelPrefetchRatchetTransition } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 import { replicaOwnedPath } from "./replica-owned-path";
 import { webSdkTestExitFailure } from "./web-sdk-test-exit";
@@ -443,6 +444,13 @@ if (prBaseSha) {
   if (tc1977ManifestKeys !== undefined && baseLedger.tc1977ManifestKeysRatchet === undefined &&
       (baseLedger.tc1888PurgeLocalCopyRatchet === undefined || !hasAncestor(repoRoot, tc1977ManifestKeys.sourceCommits.at(-1)!))) {
     console.error("The manifest-keys ratchet requires the merged sign-out local copy ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc2038PanelPrefetchRatchetTransition(baseLedger.tc2038PanelPrefetchRatchet, ledger.tc2038PanelPrefetchRatchet);
+  const tc2038PanelPrefetch = ledger.tc2038PanelPrefetchRatchet;
+  if (tc2038PanelPrefetch !== undefined && baseLedger.tc2038PanelPrefetchRatchet === undefined &&
+      (baseLedger.tc1977ManifestKeysRatchet === undefined || !hasAncestor(repoRoot, tc2038PanelPrefetch.sourceCommits.at(-1)!))) {
+    console.error("The panel-prefetch ratchet requires the merged manifest-keys ratchet and its measured source commit.");
     failed = true;
   }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
