@@ -72,3 +72,29 @@ test("rejects dialect-specific forms instead of silently changing their validati
     expect(() => toMcpJsonSchema(schema)).toThrow();
   }
 });
+
+test("personal-app write schemas reserve attribution without restricting nested data or read-back values", async () => {
+  const catalog = await Bun.file(new URL("../../operations/generated/operations.json", import.meta.url)).json() as {
+    operations: Array<{ id: string; input: Record<string, unknown>; output: Record<string, unknown> }>;
+  };
+  const validator = new AjvJsonSchemaValidator();
+  const write = validator.getValidator(toMcpJsonSchema(catalog.operations.find((operation) => operation.id === "tinycloud.apps.write")!.input));
+  const read = validator.getValidator(toMcpJsonSchema(catalog.operations.find((operation) => operation.id === "tinycloud.apps.read")!.output));
+  const root = "xyz.tinycloud.agent-data/";
+  const etag = `"blake3-${"a".repeat(64)}"`;
+  const key = `${root}todos/todo/open/2026-10-06-example`;
+  const record = { v: 1, at: "2026-10-06", data: { title: "Example", by: "owner", detail: { by: "guest" } } };
+  const ops = [
+    { op: "put", key: `${root}catalog/todos`, value: { app: "todos", title: "Todos", about: "Tasks", created: "2026-10-06" } },
+    { op: "put", key: `${root}catalog/todos/todo`, value: { app: "todos", kind: "todo", about: "Tasks", shape: "item", states: ["open", "done"], v: 1, fields: { title: "text", by: "text: author" }, created: "2026-10-06" } },
+    { op: "put", key, value: record, etag },
+    { op: "move", from: key, to: `${root}todos/todo/done/2026-10-06-example`, value: { ...record, data: { ...record.data, done: "2026-10-07" } }, etag },
+  ];
+  expect(write({ ops }).valid).toBe(true);
+  for (const op of ops) {
+    for (const by of ["claude-code", "tinycloud-mcp", null]) {
+      expect(write({ ops: [{ ...op, value: { ...op.value, by } }] }).valid).toBe(false);
+    }
+  }
+  expect(read({ lists: [], records: [{ key, etag, value: { ...record, by: "codex" } }] }).valid).toBe(true);
+});

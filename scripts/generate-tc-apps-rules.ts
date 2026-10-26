@@ -29,7 +29,24 @@ function between(text: string, start: string, end: string): string {
 }
 const skill = await source("SKILL.md");
 const sql = await source("SQL.md");
-const organization = between(skill, "## 2. How the records are organised\n", "## 3. Check the sign-in and read the catalog\n");
+let organization = between(skill, "## 2. How the records are organised\n", "## 3. Check the sign-in and read the catalog\n");
+// Adapt the CLI's stored-record examples to MCP write inputs without changing the vendor source.
+for (const [sourceLabel, hostedLabel] of [
+  ["**A record** is one line of JSON: ", "**A record write value:** "],
+  ["**An app record:** ", "**An app catalog write value:** "],
+  ["**A kind record:** ", "**A kind catalog write value:** "],
+]) {
+  const start = anchor(organization, `${sourceLabel}\``);
+  const valueStart = start + sourceLabel.length + 1;
+  const end = organization.indexOf("`", valueStart);
+  if (end < 0) throw new Error(`Missing JSON example terminator: ${sourceLabel}`);
+  const value = JSON.parse(organization.slice(valueStart, end)) as Record<string, unknown>;
+  delete value.by;
+  organization = organization.slice(0, start) + `${hostedLabel}\`${JSON.stringify(value)}\`` + organization.slice(end + 1);
+}
+const cliByRule = "- `by`: your client: `claude-code`, `codex` or `opencode`.";
+anchor(organization, cliByRule);
+organization = organization.replace(cliByRule, "- `by`: server-owned attribution on stored/read-back records; omit it from every MCP write value.");
 const readSection = between(skill, "## 5. Read\n", "## 6. Write\n");
 const answers = readSection.slice(anchor(readSection, "To answer a question:\n")).trim();
 const copySection = between(skill, "## 7. The fast copy (SQL index)\n", "## 8. Errors\n");
