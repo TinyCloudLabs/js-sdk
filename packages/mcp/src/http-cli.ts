@@ -29,6 +29,7 @@ export async function main(): Promise<void> {
     allowedOrigins: commaList(process.env.TC_MCP_ALLOWED_ORIGINS),
     oauthMetadata,
     introspection: {
+      endpoint: requiredUrl("TC_MCP_INTROSPECTION_URL").toString(),
       clientId: requiredString("TC_MCP_INTROSPECTION_CLIENT_ID"),
       clientSecret: requiredString("TC_MCP_INTROSPECTION_CLIENT_SECRET"),
       authMethod: introspectionAuthMethod(process.env.TC_MCP_INTROSPECTION_AUTH_METHOD),
