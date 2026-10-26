@@ -316,6 +316,8 @@ export type Tc2072LocationGuardRatchet = HardeningRatchet & { replicaWorker: { d
 export type Tc2096LazyContentRatchet = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
 /** One reviewed exact-byte row for the panel delegation-list permission ask (TC-2113, #763); replicaWorker is carried at TC-2096's lazy-content replica.worker.js ceiling. */
 export type Tc2113PanelGrantRatchet = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
+/** One reviewed exact-byte row for TinyCloudWeb reading the SIWE domain without a window location (TC-2127, #764); replicaWorker is carried at TC-2113's replica.worker.js ceiling. */
+export type Tc2127WindowLocationRatchet = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -366,6 +368,7 @@ export type Ledger = {
   tc2072LocationGuardRatchet?: Tc2072LocationGuardRatchet;
   tc2096LazyContentRatchet?: Tc2096LazyContentRatchet;
   tc2113PanelGrantRatchet?: Tc2113PanelGrantRatchet;
+  tc2127WindowLocationRatchet?: Tc2127WindowLocationRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -946,6 +949,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2072LocationGuardRatchet !== undefined) pins.push({ row: "tc2072LocationGuardRatchet", pin: root.tc2072LocationGuardRatchet.sourceCommits.at(-1)! });
   if (root.tc2096LazyContentRatchet !== undefined) pins.push({ row: "tc2096LazyContentRatchet", pin: root.tc2096LazyContentRatchet.sourceCommits.at(-1)! });
   if (root.tc2113PanelGrantRatchet !== undefined) pins.push({ row: "tc2113PanelGrantRatchet", pin: root.tc2113PanelGrantRatchet.sourceCommits.at(-1)! });
+  if (root.tc2127WindowLocationRatchet !== undefined) pins.push({ row: "tc2127WindowLocationRatchet", pin: root.tc2127WindowLocationRatchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1002,6 +1006,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2072LocationGuardRatchet", root.tc2072LocationGuardRatchet?.root.ceiling],
     ["tc2096LazyContentRatchet", root.tc2096LazyContentRatchet?.root.ceiling],
     ["tc2113PanelGrantRatchet", root.tc2113PanelGrantRatchet?.root.ceiling],
+    ["tc2127WindowLocationRatchet", root.tc2127WindowLocationRatchet?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -2025,6 +2030,36 @@ export const approvedTc2113PanelGrantRatchet: Tc2113PanelGrantRatchet = {
   reason: "the panel button asks for the missing delegation-list permission (TC-2113)",
 };
 
+/** Canonical CI run 40398188413 measured TinyCloudWeb._init reading window.location defensively at bad61a5c: root +1 mjs / +3 cjs gzip (TC-2127, #764). The worker and replica-worker ceilings are carried from the panel-grant row (TC-2113) with zero delta. */
+export const approvedTc2127WindowLocationRatchet: Tc2127WindowLocationRatchet = {
+  label: "TinyCloudWeb reads the SIWE domain without a window location (TC-2127, #764): +1 B mjs / +3 B cjs gzip",
+  ruling: "Approved by Naomi (root +1 mjs / +3 cjs gz; measured at run 40398188413 at bad61a5c)",
+  base: "533992691700b413fe64e1a9e9bfbca0f1f576b9",
+  sourceCommits: ["134bc7b152166a617997a85851ebad98e62c93c0"],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40398188413",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40398188413/job/121836727416",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40398188413/job/121836727922",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 1, "index.cjs": 3 },
+    ceiling: { "index.mjs": 1469000, "index.cjs": 1410525 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 52757, "replica.cjs": 67957 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23412, "activation.cjs": 24981 },
+  },
+  worker: { delta: 0, ceiling: 776539 },
+  replicaWorker: { delta: 0, ceiling: 770467 },
+  reason: "TinyCloudWeb._init reads the SIWE domain defensively when window.location is absent (TC-2127)",
+};
+
 export type GatedOnlyRatchet = {
   label: string;
   sourceCommit: string;
@@ -2103,6 +2138,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2072LocationGuardRatchet: approvedTc2072LocationGuardRatchet,
   tc2096LazyContentRatchet: approvedTc2096LazyContentRatchet,
   tc2113PanelGrantRatchet: approvedTc2113PanelGrantRatchet,
+  tc2127WindowLocationRatchet: approvedTc2127WindowLocationRatchet,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -2335,6 +2371,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
   if (value.tc2113PanelGrantRatchet !== undefined &&
       (!value.tc2096LazyContentRatchet || JSON.stringify(value.tc2113PanelGrantRatchet) !== JSON.stringify(approvedTc2113PanelGrantRatchet))) {
     throw new Error("Only Naomi's exact canonical panel grant ratchet is approved.");
+  }
+  if (value.tc2127WindowLocationRatchet !== undefined &&
+      (!value.tc2113PanelGrantRatchet || JSON.stringify(value.tc2127WindowLocationRatchet) !== JSON.stringify(approvedTc2127WindowLocationRatchet))) {
+    throw new Error("Only Naomi's exact canonical window location ratchet is approved.");
   }
 }
 
@@ -2575,6 +2615,14 @@ export function validateTc2113PanelGrantRatchetTransition(base?: Tc2113PanelGran
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2113PanelGrantRatchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact TC-2113 panel grant ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-2127 window location ratchet is introduced once and immutable afterwards. */
+export function validateTc2127WindowLocationRatchetTransition(base?: Tc2127WindowLocationRatchet, current?: Tc2127WindowLocationRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2127WindowLocationRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-2127 window location ratchet may be introduced once and cannot change later.");
   }
 }
 

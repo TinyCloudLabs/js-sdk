@@ -2073,5 +2073,35 @@
     "worker": { "delta": 0, "ceiling": 776539 },
     "replicaWorker": { "delta": 0, "ceiling": 770467 },
     "reason": "the panel button asks for the missing delegation-list permission (TC-2113)"
+  },
+  "tc2127WindowLocationRatchet": {
+    "label": "TinyCloudWeb reads the SIWE domain without a window location (TC-2127, #764): +1 B mjs / +3 B cjs gzip",
+    "ruling": "Approved by Naomi (root +1 mjs / +3 cjs gz; measured at run 40398188413 at bad61a5c)",
+    "base": "533992691700b413fe64e1a9e9bfbca0f1f576b9",
+    "sourceCommits": [
+      "134bc7b152166a617997a85851ebad98e62c93c0"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40398188413",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40398188413/job/121836727416",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40398188413/job/121836727922"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 1, "index.cjs": 3 },
+      "ceiling": { "index.mjs": 1469000, "index.cjs": 1410525 }
+    },
+    "firstImport": {
+      "delta": { "replica.mjs": 0, "replica.cjs": 0 },
+      "ceiling": { "replica.mjs": 52757, "replica.cjs": 67957 }
+    },
+    "activation": {
+      "delta": { "activation.mjs": 0, "activation.cjs": 0 },
+      "ceiling": { "activation.mjs": 23412, "activation.cjs": 24981 }
+    },
+    "worker": { "delta": 0, "ceiling": 776539 },
+    "replicaWorker": { "delta": 0, "ceiling": 770467 },
+    "reason": "TinyCloudWeb._init reads the SIWE domain defensively when window.location is absent (TC-2127)"
   }
 }
