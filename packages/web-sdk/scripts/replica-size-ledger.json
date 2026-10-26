@@ -213,6 +213,13 @@
       "index.mjs": 0,
       "index.cjs": 0,
       "note": "Replica gzip growth measured against this PR's merge base"
+    },
+    {
+      "pr": "#761",
+      "ticket": "TC-2096",
+      "index.mjs": 0,
+      "index.cjs": 0,
+      "note": "Replica gzip growth measured against this PR's merge base"
     }
   ],
   "phase2Ratchet": {
@@ -1976,5 +1983,35 @@
     "worker": { "delta": 340, "ceiling": 776468 },
     "replicaWorker": { "delta": 323, "ceiling": 770416 },
     "reason": "the replica retries a value it could not verify with growing gaps and gives up after five tries (TC-2096)"
+  },
+  "tc2096LazyContentRatchet": {
+    "label": "lazy content fetch (TC-2096, #761): kv-storage worker +71 B, replica worker +51 B gzip; root, first import and activation unchanged",
+    "ruling": "Worker bytes measured at canonical CI run 40366506455 (sqlite and postgres identical); exact-byte approval pending Naomi",
+    "base": "7ed3546aa5211798aef89bdc0414131f2d7af6fb",
+    "sourceCommits": [
+      "10470576f0f2b2abbec3fb760a199e046929c5af"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40366506455",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40366506455/job/121725561028",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40366506455/job/121725561220"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 0, "index.cjs": 0 },
+      "ceiling": { "index.mjs": 1467358, "index.cjs": 1409273 }
+    },
+    "firstImport": {
+      "delta": { "replica.mjs": 0, "replica.cjs": 0 },
+      "ceiling": { "replica.mjs": 52653, "replica.cjs": 67846 }
+    },
+    "activation": {
+      "delta": { "activation.mjs": 0, "activation.cjs": 0 },
+      "ceiling": { "activation.mjs": 23386, "activation.cjs": 24959 }
+    },
+    "worker": { "delta": 71, "ceiling": 776539 },
+    "replicaWorker": { "delta": 51, "ceiling": 770467 },
+    "reason": "lazy content fetch syncs entry names without downloading values; reads of values the replica does not hold go to the network (TC-2096)"
   }
 }

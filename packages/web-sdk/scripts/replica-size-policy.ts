@@ -310,6 +310,8 @@ export type Tc2038PanelPrefetchRatchet = HardeningRatchet;
 export type Tc2005RevokeWindowRatchet = HardeningRatchet;
 /** One reviewed exact-byte row for the capped replica repair backoff (TC-2096, #759); replicaWorker is the replica.worker.js ceiling. */
 export type Tc2096RepairBackoffRatchet = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
+/** One reviewed exact-byte row for lazy replica content fetch (TC-2096, #761); replicaWorker is the replica.worker.js ceiling. */
+export type Tc2096LazyContentRatchet = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -357,6 +359,7 @@ export type Ledger = {
   tc2038PanelPrefetchRatchet?: Tc2038PanelPrefetchRatchet;
   tc2005RevokeWindowRatchet?: Tc2005RevokeWindowRatchet;
   tc2096RepairBackoffRatchet?: Tc2096RepairBackoffRatchet;
+  tc2096LazyContentRatchet?: Tc2096LazyContentRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -934,6 +937,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2038PanelPrefetchRatchet !== undefined) pins.push({ row: "tc2038PanelPrefetchRatchet", pin: root.tc2038PanelPrefetchRatchet.sourceCommits.at(-1)! });
   if (root.tc2005RevokeWindowRatchet !== undefined) pins.push({ row: "tc2005RevokeWindowRatchet", pin: root.tc2005RevokeWindowRatchet.sourceCommits.at(-1)! });
   if (root.tc2096RepairBackoffRatchet !== undefined) pins.push({ row: "tc2096RepairBackoffRatchet", pin: root.tc2096RepairBackoffRatchet.sourceCommits.at(-1)! });
+  if (root.tc2096LazyContentRatchet !== undefined) pins.push({ row: "tc2096LazyContentRatchet", pin: root.tc2096LazyContentRatchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -987,6 +991,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2038PanelPrefetchRatchet", root.tc2038PanelPrefetchRatchet?.root.ceiling],
     ["tc2005RevokeWindowRatchet", root.tc2005RevokeWindowRatchet?.root.ceiling],
     ["tc2096RepairBackoffRatchet", root.tc2096RepairBackoffRatchet?.root.ceiling],
+    ["tc2096LazyContentRatchet", root.tc2096LazyContentRatchet?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -1920,6 +1925,36 @@ export const approvedTc2096RepairBackoffRatchet: Tc2096RepairBackoffRatchet = {
   reason: "the replica retries a value it could not verify with growing gaps and gives up after five tries (TC-2096)",
 };
 
+/** Canonical CI run 40366506455 (TC-2096, #761): kv-storage worker +71 bytes and replica.worker.js +51 over the repair-backoff row. Root, first import and activation are carried at the repair-backoff ceilings with zero delta (not measured for this row). */
+export const approvedTc2096LazyContentRatchet: Tc2096LazyContentRatchet = {
+  label: "lazy content fetch (TC-2096, #761): kv-storage worker +71 B, replica worker +51 B gzip; root, first import and activation unchanged",
+  ruling: "Worker bytes measured at canonical CI run 40366506455 (sqlite and postgres identical); exact-byte approval pending Naomi",
+  base: "7ed3546aa5211798aef89bdc0414131f2d7af6fb",
+  sourceCommits: ["10470576f0f2b2abbec3fb760a199e046929c5af"],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40366506455",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40366506455/job/121725561028",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40366506455/job/121725561220",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 0, "index.cjs": 0 },
+    ceiling: { "index.mjs": 1467358, "index.cjs": 1409273 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 52653, "replica.cjs": 67846 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23386, "activation.cjs": 24959 },
+  },
+  worker: { delta: 71, ceiling: 776539 },
+  replicaWorker: { delta: 51, ceiling: 770467 },
+  reason: "lazy content fetch syncs entry names without downloading values; reads of values the replica does not hold go to the network (TC-2096)",
+};
+
 export type GatedOnlyRatchet = {
   label: string;
   sourceCommit: string;
@@ -1995,6 +2030,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2038PanelPrefetchRatchet: approvedTc2038PanelPrefetchRatchet,
   tc2005RevokeWindowRatchet: approvedTc2005RevokeWindowRatchet,
   tc2096RepairBackoffRatchet: approvedTc2096RepairBackoffRatchet,
+  tc2096LazyContentRatchet: approvedTc2096LazyContentRatchet,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -2216,6 +2252,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc2005RevokeWindowRatchet || JSON.stringify(value.tc2096RepairBackoffRatchet) !== JSON.stringify(approvedTc2096RepairBackoffRatchet))) {
     throw new Error("Only Naomi's exact canonical repair-backoff ratchet is approved.");
   }
+  if (value.tc2096LazyContentRatchet !== undefined &&
+      (!value.tc2096RepairBackoffRatchet || JSON.stringify(value.tc2096LazyContentRatchet) !== JSON.stringify(approvedTc2096LazyContentRatchet))) {
+    throw new Error("Only the exact canonical lazy-content ratchet is approved.");
+  }
 }
 
 /** The #606 worker ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
@@ -2431,6 +2471,14 @@ export function validateTc2096RepairBackoffRatchetTransition(base?: Tc2096Repair
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2096RepairBackoffRatchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact TC-2096 repair-backoff ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-2096 lazy-content ratchet is introduced once and immutable afterwards. */
+export function validateTc2096LazyContentRatchetTransition(base?: Tc2096LazyContentRatchet, current?: Tc2096LazyContentRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2096LazyContentRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-2096 lazy-content ratchet may be introduced once and cannot change later.");
   }
 }
 

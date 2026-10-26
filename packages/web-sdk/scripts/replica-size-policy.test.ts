@@ -28,6 +28,7 @@ import { approvedTc848SettingsPanelRatchet, validateTc848SettingsPanelRatchetTra
 import { approvedTc2034NamedKeysCliRatchet, validateTc2034NamedKeysCliRatchetTransition, type Tc2034NamedKeysCliRatchet } from "./replica-size-policy";
 import { approvedTc2043SyncScopeRatchet, validateTc2043SyncScopeRatchetTransition, type Tc2043SyncScopeRatchet, approvedTc1888PurgeLocalCopyRatchet, validateTc1888PurgeLocalCopyRatchetTransition, type Tc1888PurgeLocalCopyRatchet } from "./replica-size-policy";
 import { approvedTc1977ManifestKeysRatchet, validateTc1977ManifestKeysRatchetTransition, type Tc1977ManifestKeysRatchet } from "./replica-size-policy";
+import { approvedTc2096LazyContentRatchet, validateTc2096LazyContentRatchetTransition } from "./replica-size-policy";
 import { approvedTc2038PanelPrefetchRatchet, validateTc2038PanelPrefetchRatchetTransition, type Tc2038PanelPrefetchRatchet } from "./replica-size-policy";
 import { approvedTc2005RevokeWindowRatchet, validateTc2005RevokeWindowRatchetTransition, type Tc2005RevokeWindowRatchet } from "./replica-size-policy";
 import { approvedTc2096RepairBackoffRatchet, validateTc2096RepairBackoffRatchetTransition, type Tc2096RepairBackoffRatchet } from "./replica-size-policy";
@@ -2897,6 +2898,7 @@ delete tc2043Ledger.tc1977ManifestKeysRatchet;
 delete tc2043Ledger.tc2038PanelPrefetchRatchet;
 delete tc2043Ledger.tc2005RevokeWindowRatchet;
 delete tc2043Ledger.tc2096RepairBackoffRatchet;
+delete tc2043Ledger.tc2096LazyContentRatchet;
 tc2043Ledger.entries = structuredClone(current.entries.slice(0, current.entries.findIndex((entry) => entry.pr === "#728")));
 describe("replication syncScope opt-in (#742, TC-2043) size ratchet", () => {
   const row = () => structuredClone(approvedTc2043SyncScopeRatchet);
@@ -3170,7 +3172,7 @@ describe("capped replica repair backoff (TC-2096, #759) size ratchet", () => {
     expect(row().replicaWorker.ceiling).toBe(approvedTc1827ReplicaWorkerRatchet.worker.ceiling + row().replicaWorker.delta);
     expect(row().canonicalCI.jobs).toHaveLength(2);
     expect(ancestryPins(current, false)).toContainEqual({ row: "tc2096RepairBackoffRatchet", pin: row().sourceCommits[0] });
-    expect(rootCeilings(current).at(-1)).toEqual({ row: "tc2096RepairBackoffRatchet", ceiling: row().root.ceiling });
+    expect(rootCeilings(current).find((entry) => entry.row === "tc2096RepairBackoffRatchet")).toEqual({ row: "tc2096RepairBackoffRatchet", ceiling: row().root.ceiling });
     expect(MAX_WORKER_GZIP_BYTES).toBe(row().worker.ceiling);
     expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(row().replicaWorker.ceiling);
   });
@@ -3202,6 +3204,46 @@ describe("capped replica repair backoff (TC-2096, #759) size ratchet", () => {
     changed.worker.ceiling++;
     expect(() => validateTc2096RepairBackoffRatchetTransition(undefined, changed)).toThrow();
     expect(() => validateTc2096RepairBackoffRatchetTransition(row(), undefined)).toThrow();
+  });
+});
+
+describe("lazy replica content fetch (TC-2096, #761) size ratchet", () => {
+  const row = () => structuredClone(approvedTc2096LazyContentRatchet);
+  const prerequisite = () => approvedTc2096RepairBackoffRatchet;
+
+  it("pins the lazy-fetch worker deltas over the repair-backoff row and keeps root, first import and activation unchanged", () => {
+    expect(() => validateLedger(current)).not.toThrow();
+    expect(current.tc2096LazyContentRatchet).toEqual(approvedTc2096LazyContentRatchet);
+    expect(row().root).toEqual({ delta: { "index.mjs": 0, "index.cjs": 0 }, ceiling: prerequisite().root.ceiling });
+    expect(row().firstImport).toEqual({ delta: { "replica.mjs": 0, "replica.cjs": 0 }, ceiling: prerequisite().firstImport.ceiling });
+    expect(row().activation).toEqual({ delta: { "activation.mjs": 0, "activation.cjs": 0 }, ceiling: prerequisite().activation.ceiling });
+    expect(row().worker.delta).toBe(71);
+    expect(row().worker.ceiling).toBe(prerequisite().worker.ceiling + row().worker.delta);
+    expect(row().replicaWorker.delta).toBe(51);
+    expect(row().replicaWorker.ceiling).toBe(prerequisite().replicaWorker.ceiling + row().replicaWorker.delta);
+    expect(rootCeilings(current).at(-1)).toEqual({ row: "tc2096LazyContentRatchet", ceiling: row().root.ceiling });
+    expect(ancestryPins(current, false)).toContainEqual({ row: "tc2096LazyContentRatchet", pin: row().sourceCommits[0] });
+  });
+
+  it("refuses changed bytes or a missing repair-backoff prerequisite", () => {
+    const changedWorker = copy(current);
+    changedWorker.tc2096LazyContentRatchet!.worker.ceiling++;
+    expect(() => validateLedger(changedWorker)).toThrow("lazy-content");
+    const changedReplica = copy(current);
+    changedReplica.tc2096LazyContentRatchet!.replicaWorker!.ceiling++;
+    expect(() => validateLedger(changedReplica)).toThrow("lazy-content");
+    const withoutPrerequisite = copy(current);
+    delete withoutPrerequisite.tc2096RepairBackoffRatchet;
+    expect(() => validateLedger(withoutPrerequisite)).toThrow("lazy-content");
+  });
+
+  it("may be introduced once and never changed or removed", () => {
+    expect(() => validateTc2096LazyContentRatchetTransition(undefined, row())).not.toThrow();
+    expect(() => validateTc2096LazyContentRatchetTransition(row(), row())).not.toThrow();
+    const changed = row();
+    changed.worker.ceiling++;
+    expect(() => validateTc2096LazyContentRatchetTransition(undefined, changed)).toThrow();
+    expect(() => validateTc2096LazyContentRatchetTransition(row(), undefined)).toThrow();
   });
 });
 

@@ -14,6 +14,7 @@ import {
 import { assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedPhase2, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, preexistingS3EntryCommit, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateLogoutRatchetTransition, validateMasterMergeResolutionTransition, validateTc1413RatchetTransition, validateTc1424RatchetTransition, validateTc1448RatchetTransition, validateTc1432RatchetTransition, validateTc1436RatchetTransition, validateTc1443RatchetTransition, validateTc1443bRatchetTransition, validateTc1428RatchetTransition, validateTc1475RatchetTransition, validateTc606WorkerRatchetTransition, validateMasterDriftRatchetTransition, validateTc1789RatchetTransition, validateTc1476RatchetTransition, validateTc1466RatchetTransition, type GzipSizes, type Ledger, type LedgerEntry } from "./replica-size-policy";
 import { rootCeilingFor, validateTc1757RatchetTransition, validateTc1777ExpiryRatchetTransition, validateTc1777RatchetTransition, validateTc1781DecryptExpiryRatchetTransition, validateTc1801NonTransferableShareRatchetTransition, validateTc1807CredentialDiscoveryRatchetTransition, validateTc1823SizeCodeRatchetTransition, validateTc712CredentialCoreRatchetTransition, validateTc1827ReplicaWorkerRatchetTransition, validateTc1827WorkerRatchetTransition, validateTc848PanelRatchetTransition } from "./replica-size-policy";
 import { validateTc1781DecryptStandardExpiryRatchetTransition } from "./replica-size-policy";
+import { validateTc2096LazyContentRatchetTransition } from "./replica-size-policy";
 import { validateTc1855ManifestLimitGuardRatchetTransition } from "./replica-size-policy";
 import { validateTc1488SiweDomainUriRatchetTransition } from "./replica-size-policy";
 import { validateTc1737ShortLinkLazyChunkRatchetTransition } from "./replica-size-policy";
@@ -468,6 +469,13 @@ if (prBaseSha) {
   if (tc2096RepairBackoff !== undefined && baseLedger.tc2096RepairBackoffRatchet === undefined &&
       (baseLedger.tc2005RevokeWindowRatchet === undefined || !hasAncestor(repoRoot, tc2096RepairBackoff.sourceCommits.at(-1)!))) {
     console.error("The repair-backoff ratchet requires the merged revocation-window ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc2096LazyContentRatchetTransition(baseLedger.tc2096LazyContentRatchet, ledger.tc2096LazyContentRatchet);
+  const tc2096LazyContent = ledger.tc2096LazyContentRatchet;
+  if (tc2096LazyContent !== undefined && baseLedger.tc2096LazyContentRatchet === undefined &&
+      (baseLedger.tc2096RepairBackoffRatchet === undefined || !hasAncestor(repoRoot, tc2096LazyContent.sourceCommits.at(-1)!))) {
+    console.error("The lazy-content ratchet requires the merged repair-backoff ratchet and its measured source commit.");
     failed = true;
   }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
