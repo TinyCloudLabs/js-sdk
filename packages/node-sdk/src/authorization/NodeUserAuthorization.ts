@@ -75,6 +75,9 @@ import {
 import { MemorySessionStorage } from "../storage/MemorySessionStorage";
 import type { OpenKeyBridgeInput, NodeUserAuthorizationAuthorizeFn } from "./openKeyBridge";
 
+const RAW_ENCRYPTION_RESOURCE_PREFIX = "urn:tinycloud:encryption:";
+const WASM_RAW_ENCRYPTION_SPACE = "encryption";
+
 export type OpenKeyAuthorizeInput = OpenKeyBridgeInput;
 export type OpenKeyAuthorizationResultV1 = Awaited<ReturnType<NodeUserAuthorizationAuthorizeFn>>;
 
@@ -2391,6 +2394,15 @@ export class NodeUserAuthorization implements IUserAuthorization {
             `${service}\0${space}\0${path}\0${action}`,
             `${resource}\0${action}`,
           );
+          // Raw encryption resources: the WASM emitter (and OpenKey's
+          // authorize-sign, which builds its action IDs from it) reports
+          // `space = "encryption"` and `path = <full resource URN>`.
+          if (resource.startsWith(RAW_ENCRYPTION_RESOURCE_PREFIX)) {
+            grantedFourPartIndex.set(
+              `${service}\0${WASM_RAW_ENCRYPTION_SPACE}\0${resource}\0${action}`,
+              `${resource}\0${action}`,
+            );
+          }
         }
       }
     }
@@ -2562,6 +2574,16 @@ export class NodeUserAuthorization implements IUserAuthorization {
         expectedResource = path
           ? `${space}/${shortService}/${path}`
           : `${space}/${shortService}`;
+      } else if (
+        (service === "encryption" || service === "tinycloud.encryption") &&
+        space === WASM_RAW_ENCRYPTION_SPACE &&
+        path.startsWith(RAW_ENCRYPTION_RESOURCE_PREFIX)
+      ) {
+        // Raw encryption resource as reported by the WASM
+        // `parseRecapFromSiwe` emitter: `space` is the literal
+        // `encryption` and `path` is the full resource URN, which is the
+        // ReCap resource key.
+        expectedResource = path;
       } else {
         // Raw ability resource: URI is the resource key verbatim.
         // A non-empty `path` on a non-tinycloud URI would be a wire
