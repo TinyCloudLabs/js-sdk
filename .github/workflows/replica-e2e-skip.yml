@@ -1,0 +1,58 @@
+# No-op twin of replica-e2e.yml for pull requests that touch no replica path.
+#
+# GitHub starts no workflow for a pull request whose changed files match none
+# of its `paths:`, so a required check named after a job in replica-e2e.yml
+# would stay "Expected" forever. This workflow runs on the complement: the
+# `paths-ignore:` list below MUST stay identical to replica-e2e.yml's
+# `on.pull_request.paths` (same entries, same order). Edit both files together.
+# .github/scripts/replica-e2e-paths.test.ts fails when they drift.
+#
+# Only pull_request triggers this workflow. The real workflow owns push and schedule.
+
+name: Replica e2e (no relevant paths)
+
+on:
+  pull_request:
+    paths-ignore:
+      - "packages/replica/**"
+      - "packages/cli/**"
+      - "packages/node-sdk/**"
+      - "packages/sdk-core/**"
+      - "packages/sdk-services/src/**"
+      - "packages/sdk-services/package.json"
+      - "packages/sdk-services/tsconfig*.json"
+      - "packages/operations/**"
+      - "packages/web-sdk/**"
+      - "packages/share-sdk/**"
+      - "packages/share-envelope/**"
+      - "tests/cli/**"
+      - ".github/scripts/**"
+      - ".github/workflows/replica-e2e.yml"
+      - "tests/replication-harness/**"
+      - ".github/workflows/replication-harness.yml"
+      - "bun.lock"
+      - "package.json"
+
+permissions:
+  contents: read
+
+jobs:
+  replica-e2e:
+    name: Replica (Node 22, Bun 1.3.14, ${{ matrix.database }} node)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        database: [sqlite, postgres]
+    steps:
+      - name: No replica-relevant paths changed
+        run: echo "no replica-relevant paths changed"
+
+  browser-e2e:
+    name: Replica (Chromium, browser worker + IndexedDB)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: No replica-relevant paths changed
+        run: echo "no replica-relevant paths changed"
