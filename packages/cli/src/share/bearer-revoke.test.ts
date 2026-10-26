@@ -242,7 +242,8 @@ describe("bearer share revocation", () => {
     expect(revoked.has(record.shareId)).toBe(true);
     const cacao = await parseSignedSiweCacao(revocations[0]!);
     expect({ issuer: cacao.issuer, audience: cacao.audience }).toEqual({ issuer: OWNER_DID, audience: `ucan:${record.shareId}` });
-    expect(Date.parse(cacao.expiresAt!) - Date.now()).toBeLessThanOrEqual(60_000);
+    expect(Date.parse(cacao.expiresAt!) - Date.now()).toBeLessThanOrEqual(600_000);
+    expect(Date.parse(cacao.expiresAt!) - Date.now()).toBeGreaterThan(540_000);
   });
 
   it("revokes a link an earlier session key signed with the owner key", async () => {
