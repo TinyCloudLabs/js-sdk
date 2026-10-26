@@ -302,6 +302,8 @@ export type Tc2034NamedKeysCliRatchet = HardeningRatchet;
 export type Tc2043SyncScopeRatchet = HardeningRatchet;
 /** One reviewed exact-byte row for sign-out local-copy erase (TC-1888, #728). */
 export type Tc1888PurgeLocalCopyRatchet = HardeningRatchet;
+/** One reviewed exact-byte row for the owner revocation window (TC-2005, #745). */
+export type Tc2005RevokeWindowRatchet = HardeningRatchet;
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -345,6 +347,7 @@ export type Ledger = {
   tc2034NamedKeysCliRatchet?: Tc2034NamedKeysCliRatchet;
   tc2043SyncScopeRatchet?: Tc2043SyncScopeRatchet;
   tc1888PurgeLocalCopyRatchet?: Tc1888PurgeLocalCopyRatchet;
+  tc2005RevokeWindowRatchet?: Tc2005RevokeWindowRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -918,6 +921,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2034NamedKeysCliRatchet !== undefined) pins.push({ row: "tc2034NamedKeysCliRatchet", pin: root.tc2034NamedKeysCliRatchet.sourceCommits.at(-1)! });
   if (root.tc2043SyncScopeRatchet !== undefined) pins.push({ row: "tc2043SyncScopeRatchet", pin: root.tc2043SyncScopeRatchet.sourceCommits.at(-1)! });
   if (root.tc1888PurgeLocalCopyRatchet !== undefined) pins.push({ row: "tc1888PurgeLocalCopyRatchet", pin: root.tc1888PurgeLocalCopyRatchet.sourceCommits.at(-1)! });
+  if (root.tc2005RevokeWindowRatchet !== undefined) pins.push({ row: "tc2005RevokeWindowRatchet", pin: root.tc2005RevokeWindowRatchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -967,6 +971,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2034NamedKeysCliRatchet", root.tc2034NamedKeysCliRatchet?.root.ceiling],
     ["tc2043SyncScopeRatchet", root.tc2043SyncScopeRatchet?.root.ceiling],
     ["tc1888PurgeLocalCopyRatchet", root.tc1888PurgeLocalCopyRatchet?.root.ceiling],
+    ["tc2005RevokeWindowRatchet", root.tc2005RevokeWindowRatchet?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -1778,6 +1783,35 @@ export const approvedTc1888PurgeLocalCopyRatchet: Tc1888PurgeLocalCopyRatchet = 
   reason: "sign-out and account switch erase the local copy with an SDK retry and a failure event; the minimum reviewed shape; optional code in the replica chunk.",
 };
 
+/** Canonical CI run 40316432428 (TC-2005, #745): root index.mjs rises by 52 bytes; index.cjs, first import, activation and worker are unchanged. */
+export const approvedTc2005RevokeWindowRatchet: Tc2005RevokeWindowRatchet = {
+  label: "node-sdk owner revocation window (TC-2005, #745): +52 B mjs / +0 B cjs gzip",
+  ruling: "Approved by Naomi (exact canonical CI bytes at run 40316432428; no headroom)",
+  base: "b7c43e45a687ddff74190d9713bb9e317ad0274e",
+  sourceCommits: ["411069ff7116553ad69cdc2d5a4c2ed09f3c5449"],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40316432428",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40316432428/job/121550076548",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40316432428/job/121550076779",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 52, "index.cjs": 0 },
+    ceiling: { "index.mjs": 1464681, "index.cjs": 1406456 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 52374, "replica.cjs": 67571 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23386, "activation.cjs": 24959 },
+  },
+  worker: { delta: 0, ceiling: 776128 },
+  reason: "the owner revocation window extends; one constant in node-sdk (TC-2005)",
+};
+
 export type GatedOnlyRatchet = {
   label: string;
   sourceCommit: string;
@@ -1849,6 +1883,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2034NamedKeysCliRatchet: approvedTc2034NamedKeysCliRatchet,
   tc2043SyncScopeRatchet: approvedTc2043SyncScopeRatchet,
   tc1888PurgeLocalCopyRatchet: approvedTc1888PurgeLocalCopyRatchet,
+  tc2005RevokeWindowRatchet: approvedTc2005RevokeWindowRatchet,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -2054,6 +2089,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc2043SyncScopeRatchet || JSON.stringify(value.tc1888PurgeLocalCopyRatchet) !== JSON.stringify(approvedTc1888PurgeLocalCopyRatchet))) {
     throw new Error("Only Naomi's exact canonical sign-out local copy ratchet is approved.");
   }
+  if (value.tc2005RevokeWindowRatchet !== undefined &&
+      (!value.tc1888PurgeLocalCopyRatchet || JSON.stringify(value.tc2005RevokeWindowRatchet) !== JSON.stringify(approvedTc2005RevokeWindowRatchet))) {
+    throw new Error("Only Naomi's exact canonical owner revocation-window ratchet is approved.");
+  }
 }
 
 /** The #606 worker ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
@@ -2229,6 +2268,14 @@ export function validateTc1888PurgeLocalCopyRatchetTransition(base?: Tc1888Purge
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1888PurgeLocalCopyRatchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact TC-1888 sign-out local copy ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-2005 owner revocation-window ratchet is introduced once and immutable afterwards. */
+export function validateTc2005RevokeWindowRatchetTransition(base?: Tc2005RevokeWindowRatchet, current?: Tc2005RevokeWindowRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2005RevokeWindowRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-2005 owner revocation-window ratchet may be introduced once and cannot change later.");
   }
 }
 

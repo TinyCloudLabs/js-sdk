@@ -1852,5 +1852,55 @@
       "ceiling": 776128
     },
     "reason": "sign-out and account switch erase the local copy with an SDK retry and a failure event; the minimum reviewed shape; optional code in the replica chunk."
+  },
+  "tc2005RevokeWindowRatchet": {
+    "label": "node-sdk owner revocation window (TC-2005, #745): +52 B mjs / +0 B cjs gzip",
+    "ruling": "Approved by Naomi (exact canonical CI bytes at run 40316432428; no headroom)",
+    "base": "b7c43e45a687ddff74190d9713bb9e317ad0274e",
+    "sourceCommits": [
+      "411069ff7116553ad69cdc2d5a4c2ed09f3c5449"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40316432428",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40316432428/job/121550076548",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40316432428/job/121550076779"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 52,
+        "index.cjs": 0
+      },
+      "ceiling": {
+        "index.mjs": 1464681,
+        "index.cjs": 1406456
+      }
+    },
+    "firstImport": {
+      "delta": {
+        "replica.mjs": 0,
+        "replica.cjs": 0
+      },
+      "ceiling": {
+        "replica.mjs": 52374,
+        "replica.cjs": 67571
+      }
+    },
+    "activation": {
+      "delta": {
+        "activation.mjs": 0,
+        "activation.cjs": 0
+      },
+      "ceiling": {
+        "activation.mjs": 23386,
+        "activation.cjs": 24959
+      }
+    },
+    "worker": {
+      "delta": 0,
+      "ceiling": 776128
+    },
+    "reason": "the owner revocation window extends; one constant in node-sdk (TC-2005)"
   }
 }
