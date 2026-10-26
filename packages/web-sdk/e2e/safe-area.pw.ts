@@ -56,7 +56,15 @@ async function swipe(cdp: CDPSession, x: number, y: number, dy: number): Promise
 for (const c of CASES) {
   test(`${c.name}: the header and the close control sit inside the safe area`, async ({ page }) => {
     await openPhone(page, c.viewport, c.insets);
-    if (SHOTS) await page.screenshot({ path: `${SHOTS}/${c.name}.png` });
+    if (SHOTS) {
+      // Red bands mark the emulated insets (status bar / notch / home indicator / landscape sides).
+      await page.evaluate((i) => {
+        const bands = document.createElement("div");
+        bands.style.cssText = `position:fixed;inset:0;z-index:2147483647;pointer-events:none;box-sizing:border-box;border:solid rgba(255,0,0,.4);border-width:${i.top}px ${i.right}px ${i.bottom}px ${i.left}px`;
+        document.body.append(bands);
+      }, c.insets);
+      await page.screenshot({ path: `${SHOTS}/${c.name}.png` });
+    }
     const box = await panel(page).evaluate((el) => {
       const rect = (selector: string) => {
         const r = (el.querySelector(selector) as HTMLElement).getBoundingClientRect();
