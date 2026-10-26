@@ -174,6 +174,8 @@ export interface KVReplicaSpec {
   grantPolicy?: ReplicaGrantPolicy;
   /** Quota settings; absent means unbounded. */
   quota?: ReplicaQuotaSpec;
+  /** Value download policy for syncs of this handle; absent means `"eager"`. See `ReplicationOptions.contentFetch`. */
+  contentFetch?: "eager" | "lazy";
   /**
    * Called when another tab/process commits a sync for this partition (browser: the worker's
    * `committed` BroadcastChannel message). The controller emits `replication.sync` with
@@ -551,6 +553,11 @@ export interface ReplicationOptions {
   allowSecrets?: boolean;
   /** Sign-in asks for kv/sync on each declared prefix only and never widens to a root entry that covers them. */
   syncScope?: "prefixes";
+  /**
+   * `"eager"` (default) downloads each changed value while syncing. `"lazy"` syncs entry names
+   * without downloading values; a read of a value the replica does not hold goes to the network.
+   */
+  contentFetch?: "eager" | "lazy";
   /** Background interval; default 60 seconds. */
   syncIntervalMs?: number;
   maxStalenessMs?: number;

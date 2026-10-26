@@ -28,11 +28,12 @@ import { approvedTc848SettingsPanelRatchet, validateTc848SettingsPanelRatchetTra
 import { approvedTc2034NamedKeysCliRatchet, validateTc2034NamedKeysCliRatchetTransition, type Tc2034NamedKeysCliRatchet } from "./replica-size-policy";
 import { approvedTc2043SyncScopeRatchet, validateTc2043SyncScopeRatchetTransition, type Tc2043SyncScopeRatchet, approvedTc1888PurgeLocalCopyRatchet, validateTc1888PurgeLocalCopyRatchetTransition, type Tc1888PurgeLocalCopyRatchet } from "./replica-size-policy";
 import { approvedTc1977ManifestKeysRatchet, validateTc1977ManifestKeysRatchetTransition, type Tc1977ManifestKeysRatchet } from "./replica-size-policy";
+import { approvedTc2096LazyContentRatchet, validateTc2096LazyContentRatchetTransition } from "./replica-size-policy";
+import { approvedTc2113PanelGrantRatchet, validateTc2113PanelGrantRatchetTransition } from "./replica-size-policy";
 import { approvedTc2038PanelPrefetchRatchet, validateTc2038PanelPrefetchRatchetTransition, type Tc2038PanelPrefetchRatchet } from "./replica-size-policy";
 import { approvedTc2005RevokeWindowRatchet, validateTc2005RevokeWindowRatchetTransition, type Tc2005RevokeWindowRatchet } from "./replica-size-policy";
 import { approvedTc2096RepairBackoffRatchet, validateTc2096RepairBackoffRatchetTransition, type Tc2096RepairBackoffRatchet } from "./replica-size-policy";
 import { approvedTc2072LocationGuardRatchet, validateTc2072LocationGuardRatchetTransition, type Tc2072LocationGuardRatchet } from "./replica-size-policy";
-import { approvedTc2113PanelGrantRatchet, validateTc2113PanelGrantRatchetTransition, type Tc2113PanelGrantRatchet } from "./replica-size-policy";
 import { activeRootCeiling, approvedLedgerRows, rootCeilingFor, rootCeilings } from "./replica-size-policy";
 import { approvedTc1443Ratchet, approvedTc1443bRatchet, approvedTc1448Ratchet, approvedTc1466Ratchet, validateTc1443RatchetTransition, validateTc1443bRatchetTransition, validateTc1448RatchetTransition, validateTc1466RatchetTransition, type Tc1443Ratchet, type Tc1443bRatchet, type Tc1448Ratchet, type Tc1466Ratchet } from "./replica-size-policy";
 import { ancestryPins, assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedHardeningRatchet, approvedLogoutRatchet, approvedTc1413Ratchet, approvedTc1424Ratchet, approvedTc1432Ratchet, approvedTc1436Ratchet, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, landingCommit, pinLandedOn, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateLogoutRatchetTransition, validateMasterMergeResolutionTransition, validateTc1413RatchetTransition, validateTc1424RatchetTransition, validateTc1432RatchetTransition, validateTc1436RatchetTransition, type HardeningRatchet, type Ledger, type LogoutRatchet, type MasterMergeResolution, type Tc1413Ratchet, type Tc1424Ratchet, type Tc1432Ratchet, type Tc1436Ratchet } from "./replica-size-policy";
@@ -2899,6 +2900,7 @@ delete tc2043Ledger.tc1977ManifestKeysRatchet;
 delete tc2043Ledger.tc2038PanelPrefetchRatchet;
 delete tc2043Ledger.tc2005RevokeWindowRatchet;
 delete tc2043Ledger.tc2096RepairBackoffRatchet;
+delete tc2043Ledger.tc2096LazyContentRatchet;
 delete tc2043Ledger.tc2072LocationGuardRatchet;
 delete tc2043Ledger.tc2113PanelGrantRatchet;
 tc2043Ledger.entries = structuredClone(current.entries.slice(0, current.entries.findIndex((entry) => entry.pr === "#728")));
@@ -3174,9 +3176,9 @@ describe("capped replica repair backoff (TC-2096, #759) size ratchet", () => {
     expect(row().replicaWorker.ceiling).toBe(approvedTc1827ReplicaWorkerRatchet.worker.ceiling + row().replicaWorker.delta);
     expect(row().canonicalCI.jobs).toHaveLength(2);
     expect(ancestryPins(current, false)).toContainEqual({ row: "tc2096RepairBackoffRatchet", pin: row().sourceCommits[0] });
-    expect(rootCeilings(current).find(({ row: name }) => name === "tc2096RepairBackoffRatchet")).toEqual({ row: "tc2096RepairBackoffRatchet", ceiling: row().root.ceiling });
-    expect(MAX_WORKER_GZIP_BYTES).toBe(row().worker.ceiling);
-    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(row().replicaWorker.ceiling);
+    expect(rootCeilings(current).find((entry) => entry.row === "tc2096RepairBackoffRatchet")).toEqual({ row: "tc2096RepairBackoffRatchet", ceiling: row().root.ceiling });
+    expect(MAX_WORKER_GZIP_BYTES).toBe(newestKvWorkerCeiling());
+    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(newestReplicaWorkerCeiling());
   });
 
   it("pins the TC-2096 first-import +279/+275 and activation -2/-2 deltas with their measured ceilings", () => {
@@ -3224,9 +3226,10 @@ describe("TinyCloudWeb location guard (TC-2072, #754) size ratchet", () => {
     expect(row().replicaWorker).toEqual({ delta: 0, ceiling: 770416 });
     expect(row().canonicalCI.jobs).toHaveLength(2);
     expect(ancestryPins(current, false)).toContainEqual({ row: "tc2072LocationGuardRatchet", pin: row().sourceCommits[0] });
+    expect(rootRowsInFileOrder(current)).toContain("tc2072LocationGuardRatchet");
     expect(rootCeilings(current).find(({ row: name }) => name === "tc2072LocationGuardRatchet")).toEqual({ row: "tc2072LocationGuardRatchet", ceiling: row().root.ceiling });
-    expect(MAX_WORKER_GZIP_BYTES).toBe(row().worker.ceiling);
-    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(row().replicaWorker.ceiling);
+    expect(MAX_WORKER_GZIP_BYTES).toBe(newestKvWorkerCeiling());
+    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(newestReplicaWorkerCeiling());
   });
 
   it("refuses changed bytes, provenance or a missing repair-backoff prerequisite", () => {
@@ -3262,47 +3265,77 @@ describe("TinyCloudWeb location guard (TC-2072, #754) size ratchet", () => {
   });
 });
 
-describe("TC-2113 panel delegation-list permission ask (#763) size ratchet", () => {
-  const row = () => structuredClone(approvedTc2113PanelGrantRatchet);
+describe("lazy replica content fetch (TC-2096, #761) size ratchet", () => {
+  const row = () => structuredClone(approvedTc2096LazyContentRatchet);
+  const prerequisite = () => approvedTc2072LocationGuardRatchet;
 
-  it("pins exact CI bytes over the location-guard row and carries its first-import, activation, worker and replica-worker ceilings", () => {
+  it("pins the lazy-fetch worker, first-import and activation deltas over the location-guard row and keeps root unchanged", () => {
+    expect(() => validateLedger(current)).not.toThrow();
+    expect(current.tc2096LazyContentRatchet).toEqual(approvedTc2096LazyContentRatchet);
+    expect(row().root).toEqual({ delta: { "index.mjs": 0, "index.cjs": 0 }, ceiling: prerequisite().root.ceiling });
+    expect(row().firstImport).toEqual({ delta: { "replica.mjs": 104, "replica.cjs": 111 }, ceiling: { "replica.mjs": 52757, "replica.cjs": 67957 } });
+    expect(row().activation).toEqual({ delta: { "activation.mjs": 26, "activation.cjs": 22 }, ceiling: { "activation.mjs": 23412, "activation.cjs": 24981 } });
+    expect(row().worker.delta).toBe(71);
+    expect(row().worker.ceiling).toBe(prerequisite().worker.ceiling + row().worker.delta);
+    expect(row().replicaWorker.delta).toBe(51);
+    expect(row().replicaWorker.ceiling).toBe(prerequisite().replicaWorker.ceiling + row().replicaWorker.delta);
+    expect(rootCeilings(current).find(({ row: name }) => name === "tc2096LazyContentRatchet")).toEqual({ row: "tc2096LazyContentRatchet", ceiling: row().root.ceiling });
+    expect(ancestryPins(current, false)).toContainEqual({ row: "tc2096LazyContentRatchet", pin: row().sourceCommits[0] });
+    expect(MAX_WORKER_GZIP_BYTES).toBe(newestKvWorkerCeiling());
+    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(newestReplicaWorkerCeiling());
+  });
+
+  it("refuses changed bytes or a missing location-guard prerequisite", () => {
+    const changedWorker = copy(current);
+    changedWorker.tc2096LazyContentRatchet!.worker.ceiling++;
+    expect(() => validateLedger(changedWorker)).toThrow("lazy-content");
+    const changedReplica = copy(current);
+    changedReplica.tc2096LazyContentRatchet!.replicaWorker!.ceiling++;
+    expect(() => validateLedger(changedReplica)).toThrow("lazy-content");
+    const withoutPrerequisite = copy(current);
+    delete withoutPrerequisite.tc2072LocationGuardRatchet;
+    expect(() => validateLedger(withoutPrerequisite)).toThrow("lazy-content");
+  });
+
+  it("may be introduced once and never changed or removed", () => {
+    expect(() => validateTc2096LazyContentRatchetTransition(undefined, row())).not.toThrow();
+    expect(() => validateTc2096LazyContentRatchetTransition(row(), row())).not.toThrow();
+    const changed = row();
+    changed.worker.ceiling++;
+    expect(() => validateTc2096LazyContentRatchetTransition(undefined, changed)).toThrow();
+    expect(() => validateTc2096LazyContentRatchetTransition(row(), undefined)).toThrow();
+  });
+});
+
+describe("panel grant delegation-list ask (TC-2113, #763) size ratchet", () => {
+  const row = () => structuredClone(approvedTc2113PanelGrantRatchet);
+  const prerequisite = () => approvedTc2096LazyContentRatchet;
+
+  it("pins the panel-grant root delta over the lazy-content row and keeps the other tiers unchanged", () => {
     expect(() => validateLedger(current)).not.toThrow();
     expect(current.tc2113PanelGrantRatchet).toEqual(approvedTc2113PanelGrantRatchet);
     expect(row().root).toEqual({ delta: { "index.mjs": 1636, "index.cjs": 1244 }, ceiling: { "index.mjs": 1468994, "index.cjs": 1410525 } });
-    expect(row().root.ceiling["index.mjs"]).toBe(approvedTc2072LocationGuardRatchet.root.ceiling["index.mjs"] + 1636);
-    expect(row().root.ceiling["index.cjs"]).toBe(approvedTc2072LocationGuardRatchet.root.ceiling["index.cjs"] + 1244);
-    expect(row().firstImport).toEqual({ delta: { "replica.mjs": 0, "replica.cjs": 0 }, ceiling: { "replica.mjs": 52653, "replica.cjs": 67846 } });
-    expect(row().activation).toEqual({ delta: { "activation.mjs": 0, "activation.cjs": 0 }, ceiling: { "activation.mjs": 23386, "activation.cjs": 24959 } });
-    expect(row().worker).toEqual({ delta: 0, ceiling: 776468 });
-    expect(row().replicaWorker).toEqual({ delta: 0, ceiling: 770416 });
-    expect(row().canonicalCI.jobs).toHaveLength(2);
-    expect(ancestryPins(current, false)).toContainEqual({ row: "tc2113PanelGrantRatchet", pin: row().sourceCommits[0] });
-    expect(newestRootRow()).toBe("tc2113PanelGrantRatchet");
+    expect(row().firstImport).toEqual({ delta: { "replica.mjs": 0, "replica.cjs": 0 }, ceiling: { "replica.mjs": 52757, "replica.cjs": 67957 } });
+    expect(row().activation).toEqual({ delta: { "activation.mjs": 0, "activation.cjs": 0 }, ceiling: { "activation.mjs": 23412, "activation.cjs": 24981 } });
+    expect(row().worker.delta).toBe(0);
+    expect(row().worker.ceiling).toBe(prerequisite().worker.ceiling);
+    expect(row().replicaWorker.delta).toBe(0);
+    expect(row().replicaWorker.ceiling).toBe(prerequisite().replicaWorker.ceiling);
     expect(rootCeilings(current).find(({ row: name }) => name === "tc2113PanelGrantRatchet")).toEqual({ row: "tc2113PanelGrantRatchet", ceiling: row().root.ceiling });
-    expect(MAX_WORKER_GZIP_BYTES).toBe(row().worker.ceiling);
-    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(row().replicaWorker.ceiling);
+    expect(ancestryPins(current, false)).toContainEqual({ row: "tc2113PanelGrantRatchet", pin: row().sourceCommits[0] });
+    expect(MAX_WORKER_GZIP_BYTES).toBe(newestKvWorkerCeiling());
+    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(newestReplicaWorkerCeiling());
   });
 
-  it("refuses changed bytes, provenance or a missing location-guard prerequisite", () => {
-    const mutations: Array<(changed: Tc2113PanelGrantRatchet) => void> = [
-      (changed) => { changed.root.ceiling["index.mjs"]++; },
-      (changed) => { changed.root.delta["index.cjs"]++; },
-      (changed) => { changed.firstImport.ceiling["replica.cjs"]++; },
-      (changed) => { changed.activation.ceiling["activation.mjs"]++; },
-      (changed) => { changed.worker.ceiling++; },
-      (changed) => { changed.replicaWorker.ceiling++; },
-      (changed) => { changed.canonicalCI.run = "https://github.com/TinyCloudLabs/js-sdk/actions/runs/1"; },
-      (changed) => { changed.sourceCommits = ["0".repeat(40)]; },
-    ];
-    for (const mutate of mutations) {
-      const ledger = copy(current);
-      const changed = row();
-      mutate(changed);
-      ledger.tc2113PanelGrantRatchet = changed;
-      expect(() => validateLedger(ledger)).toThrow("panel grant");
-    }
+  it("refuses changed bytes or a missing lazy-content prerequisite", () => {
+    const changedWorker = copy(current);
+    changedWorker.tc2113PanelGrantRatchet!.worker.ceiling++;
+    expect(() => validateLedger(changedWorker)).toThrow("panel grant");
+    const changedRoot = copy(current);
+    changedRoot.tc2113PanelGrantRatchet!.root.ceiling["index.cjs"]++;
+    expect(() => validateLedger(changedRoot)).toThrow("panel grant");
     const withoutPrerequisite = copy(current);
-    delete withoutPrerequisite.tc2072LocationGuardRatchet;
+    delete withoutPrerequisite.tc2096LazyContentRatchet;
     expect(() => validateLedger(withoutPrerequisite)).toThrow("panel grant");
   });
 
@@ -3310,7 +3343,7 @@ describe("TC-2113 panel delegation-list permission ask (#763) size ratchet", () 
     expect(() => validateTc2113PanelGrantRatchetTransition(undefined, row())).not.toThrow();
     expect(() => validateTc2113PanelGrantRatchetTransition(row(), row())).not.toThrow();
     const changed = row();
-    changed.root.ceiling["index.cjs"]++;
+    changed.worker.ceiling++;
     expect(() => validateTc2113PanelGrantRatchetTransition(undefined, changed)).toThrow();
     expect(() => validateTc2113PanelGrantRatchetTransition(row(), undefined)).toThrow();
   });

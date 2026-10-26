@@ -53,6 +53,7 @@ function resolvedOptions(options: ReplicationRuntimeOptions) {
     maxStalenessMs: options.maxStalenessMs ?? 120_000,
     staleSyncTimeoutMs: options.staleSyncTimeoutMs ?? 5_000,
     allowSecrets: options.allowSecrets === true,
+    contentFetch: options.contentFetch ?? "eager",
     verify: options.verify === true,
   };
 }
