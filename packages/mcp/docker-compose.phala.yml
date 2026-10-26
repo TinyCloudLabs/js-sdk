@@ -7,6 +7,9 @@ services:
       - TC_MCP_PUBLIC_URL=https://mcp.tinycloud.xyz/mcp
       - TC_MCP_STATE_DIR=/var/lib/tinycloud-mcp
       - TC_MCP_STATE_SECRET=${TC_MCP_STATE_SECRET}
+      - TC_MCP_INTROSPECTION_URL=https://api.openkey.so/api/oauth/resource/introspect
+      - TC_MCP_INTROSPECTION_CLIENT_ID=${TC_MCP_INTROSPECTION_CLIENT_ID}
+      - TC_MCP_INTROSPECTION_CLIENT_SECRET=${TC_MCP_INTROSPECTION_CLIENT_SECRET}
       - TC_MCP_DELEGATION_EXPIRY=30d
       - TC_MCP_APPROVAL_TTL_SECONDS=900
       - TC_MCP_ALLOWED_ORIGINS=https://claude.ai,https://chatgpt.com

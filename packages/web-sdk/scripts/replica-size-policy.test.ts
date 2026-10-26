@@ -2968,7 +2968,7 @@ describe("sign-out local copy erase (#728, TC-1888) size ratchet", () => {
     expect(row().canonicalCI.jobs).toHaveLength(2);
     expect(ancestryPins(current, false)).toContainEqual({ row: "tc1888PurgeLocalCopyRatchet", pin: row().sourceCommits[0] });
     expect(rootCeilings(current).find((row) => row.row === "tc1888PurgeLocalCopyRatchet")).toEqual({ row: "tc1888PurgeLocalCopyRatchet", ceiling: row().root.ceiling });
-    expect(current.entries.at(-1)).toMatchObject({ pr: "#728", ticket: "TC-1888", "index.mjs": 0, "index.cjs": 0 });
+    expect(current.entries.find((entry) => entry.pr === "#728")).toMatchObject({ pr: "#728", ticket: "TC-1888", "index.mjs": 0, "index.cjs": 0 });
   });
 
   it("refuses changed bytes, provenance or a missing TC-2043 prerequisite", () => {
@@ -3162,8 +3162,8 @@ describe("capped replica repair backoff (TC-2096, #759) size ratchet", () => {
     expect(() => validateLedger(current)).not.toThrow();
     expect(current.tc2096RepairBackoffRatchet).toEqual(approvedTc2096RepairBackoffRatchet);
     expect(row().root).toEqual({ delta: { "index.mjs": 0, "index.cjs": 0 }, ceiling: approvedTc2005RevokeWindowRatchet.root.ceiling });
-    expect(row().firstImport).toEqual({ delta: { "replica.mjs": 0, "replica.cjs": 0 }, ceiling: approvedTc2005RevokeWindowRatchet.firstImport.ceiling });
-    expect(row().activation).toEqual({ delta: { "activation.mjs": 0, "activation.cjs": 0 }, ceiling: approvedTc2005RevokeWindowRatchet.activation.ceiling });
+    expect(structuredClone(approvedTc2005RevokeWindowRatchet).firstImport).toEqual({ delta: { "replica.mjs": 0, "replica.cjs": 0 }, ceiling: approvedTc2005RevokeWindowRatchet.firstImport.ceiling });
+    expect(structuredClone(approvedTc2005RevokeWindowRatchet).activation).toEqual({ delta: { "activation.mjs": 0, "activation.cjs": 0 }, ceiling: approvedTc2005RevokeWindowRatchet.activation.ceiling });
     expect(row().worker.delta).toBe(340);
     expect(row().worker.ceiling).toBe(approvedTc2005RevokeWindowRatchet.worker.ceiling + row().worker.delta);
     expect(row().replicaWorker.delta).toBe(323);
@@ -3173,6 +3173,11 @@ describe("capped replica repair backoff (TC-2096, #759) size ratchet", () => {
     expect(rootCeilings(current).at(-1)).toEqual({ row: "tc2096RepairBackoffRatchet", ceiling: row().root.ceiling });
     expect(MAX_WORKER_GZIP_BYTES).toBe(row().worker.ceiling);
     expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(row().replicaWorker.ceiling);
+  });
+
+  it("pins the TC-2096 first-import +279/+275 and activation -2/-2 deltas with their measured ceilings", () => {
+    expect(row().firstImport).toEqual({ delta: { "replica.mjs": 279, "replica.cjs": 275 }, ceiling: { "replica.mjs": 52653, "replica.cjs": 67846 } });
+    expect(row().activation).toEqual({ delta: { "activation.mjs": -2, "activation.cjs": -2 }, ceiling: { "activation.mjs": 23386, "activation.cjs": 24959 } });
   });
 
   it("refuses changed bytes, provenance or a missing revocation-window prerequisite", () => {

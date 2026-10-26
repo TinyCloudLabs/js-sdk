@@ -7,6 +7,7 @@ import { measureReplicaOptionalLoaded, type LoadedSizes } from "./measure-replic
 import {
   approvedCompactFixRequired, approvedMeasurementCorrection, approvedRelocations, compactFixOptionalAllowance,
   correctedOptionalAllowance, ciOptionalAllowance, fixRequiredOptionalAllowance, hardeningOptionalAllowance, optionalFormats, tc1413OptionalAllowance, tc1432OptionalAllowance, tc1475OptionalAllowance, masterDriftOptionalAllowance, tc1789OptionalAllowance, tc2043OptionalAllowance, tc1888OptionalAllowance,
+  tc2096OptionalAllowance,
   mergedPinsNotLandedOn, priorOptionalAllowance, relocatedOptionalAllowance, validateIntroducedOptionalSources,
   validateOptionalEntryTransition, validateOptionalLedger, type OptionalLedger,
 } from "./replica-optional-size-policy";
@@ -103,7 +104,7 @@ if (ciCorrection) {
   console.log(`Current size toolchain: Bun ${bun}; ${rustc}`);
 }
 validateOptionalLedger(optionalLedger, ledger.fixRequiredRatchet !== undefined, ciCorrection !== undefined,
-  ledger.hardeningRatchet !== undefined, ledger.tc1413Ratchet !== undefined, ledger.tc1432Ratchet !== undefined, ledger.tc1475Ratchet !== undefined, ledger.masterDriftRatchet !== undefined, ledger.tc1789Ratchet !== undefined, ledger.tc2043SyncScopeRatchet !== undefined, ledger.tc1888PurgeLocalCopyRatchet !== undefined);
+  ledger.hardeningRatchet !== undefined, ledger.tc1413Ratchet !== undefined, ledger.tc1432Ratchet !== undefined, ledger.tc1475Ratchet !== undefined, ledger.masterDriftRatchet !== undefined, ledger.tc1789Ratchet !== undefined, ledger.tc2043SyncScopeRatchet !== undefined, ledger.tc1888PurgeLocalCopyRatchet !== undefined, ledger.tc2096RepairBackoffRatchet !== undefined);
 const optionalCurrent = await measureReplicaOptionalLoaded(distDir);
 for (const format of optionalFormats) {
   const total = optionalLedger.entries.reduce((sum, entry) => sum + entry[format], 0);
@@ -484,7 +485,7 @@ if (prBaseSha) {
   }
   validateOptionalLedger(baseOptional, baseLedger.fixRequiredRatchet !== undefined,
     baseLedger.canonicalToolchainCorrection !== undefined, baseLedger.hardeningRatchet !== undefined,
-    baseLedger.tc1413Ratchet !== undefined, baseLedger.tc1432Ratchet !== undefined, baseLedger.tc1475Ratchet !== undefined, baseLedger.masterDriftRatchet !== undefined, baseLedger.tc1789Ratchet !== undefined, baseLedger.tc2043SyncScopeRatchet !== undefined, baseLedger.tc1888PurgeLocalCopyRatchet !== undefined);
+    baseLedger.tc1413Ratchet !== undefined, baseLedger.tc1432Ratchet !== undefined, baseLedger.tc1475Ratchet !== undefined, baseLedger.masterDriftRatchet !== undefined, baseLedger.tc1789Ratchet !== undefined, baseLedger.tc2043SyncScopeRatchet !== undefined, baseLedger.tc1888PurgeLocalCopyRatchet !== undefined, baseLedger.tc2096RepairBackoffRatchet !== undefined);
   validateIntroducedOptionalSources(baseOptional, optionalLedger);
   // Consistency check: each merged row's pin is on the base or was landed by it (see pinLandedOn).
   for (const { row, pin } of mergedPinsNotLandedOn(repoRoot, baseLedger, baseOptional, prBaseSha)) {
@@ -585,9 +586,13 @@ if (prBaseSha) {
       optionalFormats.every((format) =>
         baseOptional.allowance[format] === tc2043OptionalAllowance[format] &&
         optionalLedger.allowance[format] === tc1888OptionalAllowance[format]);
+    const tc2096Transition = baseLedger.tc2096RepairBackoffRatchet === undefined && ledger.tc2096RepairBackoffRatchet !== undefined &&
+      optionalFormats.every((format) =>
+        baseOptional.allowance[format] === tc1888OptionalAllowance[format] &&
+        optionalLedger.allowance[format] === tc2096OptionalAllowance[format]);
     if (!pairedTransition && !measurementCorrection && !reviewedFixTransition && !ciCorrectionTransition &&
-        !compactFixTransition && !hardeningTransition && !tc1413Transition && !tc1432Transition && !tc1475Transition && !masterDriftTransition && !tc1789Transition && !tc2043Transition && !tc1888Transition) {
-      console.error(`${baseOptionalPath}: optional allowance may increase only with an exact reviewed relocation, toolchain correction, fix-required source row, hardening ratchet, TC-1413 ratchet, TC-1432 ratchet, TC-1475 ratchet, master-drift ratchet, sdk-services 3.3.1 pin ratchet, TC-2043 syncScope ratchet or TC-1888 sign-out ratchet.`);
+        !compactFixTransition && !hardeningTransition && !tc1413Transition && !tc1432Transition && !tc1475Transition && !masterDriftTransition && !tc1789Transition && !tc2043Transition && !tc1888Transition && !tc2096Transition) {
+      console.error(`${baseOptionalPath}: optional allowance may increase only with an exact reviewed relocation, toolchain correction, fix-required source row, hardening ratchet, TC-1413 ratchet, TC-1432 ratchet, TC-1475 ratchet, master-drift ratchet, sdk-services 3.3.1 pin ratchet, TC-2043 syncScope ratchet, TC-1888 sign-out ratchet or TC-2096 repair-backoff ratchet.`);
       failed = true;
     }
   }
