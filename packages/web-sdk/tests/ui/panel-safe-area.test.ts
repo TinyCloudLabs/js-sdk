@@ -3,6 +3,8 @@ import { JSDOM } from "jsdom";
 
 import { createPanel, type PanelHandle } from "../../src/ui/panel";
 import { PANEL_CSS } from "../../src/ui/panel-styles";
+import { createPendingPanel } from "../../src/ui/pending";
+import { HOST_CSS } from "../../src/ui/styles";
 
 type Loose = Record<PropertyKey, unknown>;
 
@@ -122,5 +124,27 @@ describe("the header and the safe area", () => {
     const rule = PANEL_CSS.match(/\.icon-btn\{[^}]*\}/)?.[0] ?? "";
     expect(rule).toContain("width:44px");
     expect(rule).toContain("height:44px");
+  });
+});
+
+describe("the loading stand-in", () => {
+  test("has a close control that closes, Escape closes, and the stand-in pads for every inset", () => {
+    let closed = 0;
+    const pending = createPendingPanel(() => void (closed += 1));
+    page.document.body.append(pending.el);
+    pending.setOpen(true);
+    pending.showError(() => {});
+    const close = pending.el.querySelector<HTMLButtonElement>("button.pclose");
+    expect(close?.getAttribute("aria-label")).toBe("Close");
+    close?.click();
+    expect(closed).toBe(1);
+    pending.el.dispatchEvent(new (page as unknown as { KeyboardEvent: typeof KeyboardEvent }).KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(closed).toBe(2);
+
+    // jsdom discards env() values, so the rules are read as text.
+    const standIn = HOST_CSS.match(/\n\.pending\{[^}]*\}/)?.[0] ?? "";
+    for (const side of ["top", "right", "bottom", "left"]) expect(standIn).toContain(`max(20px,env(safe-area-inset-${side},0px))`);
+    expect(HOST_CSS.match(/\.pending \.pclose\{[^}]*\}/)?.[0]).toContain("width:44px");
+    expect(HOST_CSS.match(/\.pending button\{[^}]*\}/)?.[0]).toContain("min-height:44px");
   });
 });
