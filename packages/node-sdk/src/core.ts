@@ -229,11 +229,14 @@ export {
 export { DelegatedAccess } from "./DelegatedAccess";
 export {
   activateCompactRuntimeDelegation,
+  activateValidatedRuntimeDelegation,
+  RuntimeDelegationRejectedError,
   serializeDelegation,
   deserializeDelegation,
 } from "./delegation";
 export type {
   CompactRuntimeDelegationInput,
+  RuntimeDelegationRejection,
   PortableDelegation,
   ValidatedRuntimeDelegation,
 } from "./delegation";

@@ -28,6 +28,7 @@ import { validateTc2038PanelPrefetchRatchetTransition } from "./replica-size-pol
 import { validateTc2005RevokeWindowRatchetTransition } from "./replica-size-policy";
 import { validateTc2096RepairBackoffRatchetTransition } from "./replica-size-policy";
 import { validateTc2072LocationGuardRatchetTransition } from "./replica-size-policy";
+import { validateTc2113PanelGrantRatchetTransition } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 import { replicaOwnedPath } from "./replica-owned-path";
 import { webSdkTestExitFailure } from "./web-sdk-test-exit";
@@ -484,6 +485,13 @@ if (prBaseSha) {
   if (tc2096LazyContent !== undefined && baseLedger.tc2096LazyContentRatchet === undefined &&
       (baseLedger.tc2072LocationGuardRatchet === undefined || !hasAncestor(repoRoot, tc2096LazyContent.sourceCommits.at(-1)!))) {
     console.error("The lazy-content ratchet requires the merged location-guard ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc2113PanelGrantRatchetTransition(baseLedger.tc2113PanelGrantRatchet, ledger.tc2113PanelGrantRatchet);
+  const tc2113PanelGrant = ledger.tc2113PanelGrantRatchet;
+  if (tc2113PanelGrant !== undefined && baseLedger.tc2113PanelGrantRatchet === undefined &&
+      (baseLedger.tc2096LazyContentRatchet === undefined || !hasAncestor(repoRoot, tc2113PanelGrant.sourceCommits.at(-1)!))) {
+    console.error("The panel grant ratchet requires the merged lazy-content ratchet and its measured source commit.");
     failed = true;
   }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";

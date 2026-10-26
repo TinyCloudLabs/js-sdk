@@ -6,7 +6,7 @@
  */
 import type { PermissionEntry } from "@tinycloud/sdk-core";
 
-import type { PanelDataHost } from "../data";
+import type { PanelDataHost, PermissionAbility } from "../data";
 
 /** The account index read: `tinycloud.sql/read` on the `account` database of the account space. */
 export const ACCOUNT_INDEX_READ: PermissionEntry = {
@@ -28,6 +28,18 @@ export function spaceInfoOn(spaceId: string): PermissionEntry {
 export function sessionHolds(host: Pick<PanelDataHost, "hasPermissions">, entry: PermissionEntry): boolean {
   return host.hasPermissions === undefined || host.hasPermissions([entry]);
 }
+
+/**
+ * The one read-only entry a tab asks for when its no-access state shows a button, keyed by the ability that state
+ * names. Delegations: `delegation/list` on this app's own space (`applications`), never the account space.
+ * A tab with no entry here has no button.
+ */
+export const TAB_PERMISSION: Readonly<Partial<Record<PermissionAbility, PermissionEntry>>> = {
+  "delegation/list": { service: "tinycloud.delegation", space: "applications", path: "", actions: ["list"] },
+};
+
+/** Requested lifetime of a panel-requested grant: 7 days. The SDK shortens it to the session's own expiry. */
+export const TAB_PERMISSION_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
  * The spaces to sign the delegation query for, in the order the SDK tries them (account space, then the
