@@ -30,6 +30,7 @@
   },
   "changesets": [
     "cli-keys-replication",
+    "cli-kv-create-only",
     "cli-named-keys"
   ]
 }

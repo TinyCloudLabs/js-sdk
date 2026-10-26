@@ -37447,9 +37447,12 @@ function registerKvCommand(program) {
       return handleError(error);
     }
   });
-  kv.command("put <key> [value]").description("Set a value").option("--file <path>", "Read value from file").option("--stdin", "Read value from stdin").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").action(async (key, value, options, cmd) => {
+  kv.command("put <key> [value]").description("Set a value").option("--file <path>", "Read value from file").option("--stdin", "Read value from stdin").option("--if-none-match <value>", "`--if-none-match '*'`: Write only if the key doesn't exist yet; never overwrite").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").action(async (key, value, options, cmd) => {
     try {
       assertAddressableKey(key);
+      if (options.ifNoneMatch !== void 0 && options.ifNoneMatch !== "*") {
+        throw new CLIError("USAGE_ERROR", "`--if-none-match` only accepts `'*'`.", ExitCode.USAGE_ERROR);
+      }
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureAuthenticated(ctx);
@@ -37473,8 +37476,15 @@ function registerKvCommand(program) {
         }
       }
       const { kv: kv2, spaceUri } = await kvHandle(node, options.space, ctx.profile);
-      const result = await withSpinner(`Writing ${key}...`, () => kv2.put(key, putValue));
+      const result = await withSpinner(`Writing ${key}...`, () => kv2.put(
+        key,
+        putValue,
+        options.ifNoneMatch === "*" ? { ifNoneMatch: "*" } : void 0
+      ));
       if (!result.ok) {
+        if (options.ifNoneMatch === "*" && result.error.code === "KV_PRECONDITION_FAILED") {
+          throw new CLIError("KV_ALREADY_EXISTS", `Key "${key}" already exists, so nothing was written.`, ExitCode.PERMISSION_DENIED);
+        }
         await throwKvError(result.error, spaceUri, ctx.profile);
       }
       outputJson({ key, written: true, ...retryFields(result.data?.retry) });

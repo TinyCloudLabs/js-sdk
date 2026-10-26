@@ -192,6 +192,13 @@
       "index.mjs": 0,
       "index.cjs": 0,
       "note": "Replica gzip growth measured against this PR's merge base"
+    },
+    {
+      "pr": "#742",
+      "ticket": "TC-2043",
+      "index.mjs": 41,
+      "index.cjs": 30,
+      "note": "Replica gzip growth measured against this PR's merge base"
     }
   ],
   "phase2Ratchet": {
@@ -1738,5 +1745,55 @@
       "ceiling": 776128
     },
     "reason": "node-sdk reports whether sign-in's bootstrap created the encryption network (named-keys CLI)"
+  },
+  "tc2043SyncScopeRatchet": {
+    "label": "replication syncScope opt-in (TC-2043, #742)",
+    "ruling": "Approved by Naomi (exact canonical CI bytes at run 40247206055; no headroom)",
+    "base": "ddfb8bb54f1d977718631735b5fc4aac3b84e9a3",
+    "sourceCommits": [
+      "f6740607a9c5ef1ac9b979388add8515aea7e929"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40247206055",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40247206055/job/121331195222",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40247206055/job/121331195022"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 41,
+        "index.cjs": 30
+      },
+      "ceiling": {
+        "index.mjs": 1464358,
+        "index.cjs": 1406182
+      }
+    },
+    "firstImport": {
+      "delta": {
+        "replica.mjs": 40,
+        "replica.cjs": 39
+      },
+      "ceiling": {
+        "replica.mjs": 51965,
+        "replica.cjs": 67178
+      }
+    },
+    "activation": {
+      "delta": {
+        "activation.mjs": 0,
+        "activation.cjs": 0
+      },
+      "ceiling": {
+        "activation.mjs": 23117,
+        "activation.cjs": 24700
+      }
+    },
+    "worker": {
+      "delta": 0,
+      "ceiling": 776128
+    },
+    "reason": "opt-in `replication.syncScope: 'prefixes'` keeps sign-in kv/sync on declared prefixes when the manifest grants root KV (TinyCloud Home)."
   }
 }
