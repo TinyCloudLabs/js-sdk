@@ -15,10 +15,17 @@ import type {
 import type { PanelClient } from "../slots";
 import { viewError, viewLoading, viewNeedsPermission, viewReady } from "../view-result";
 
+import { ACCOUNT_INDEX_READ, delegationQuerySpaces, sessionHolds, spaceInfoOn } from "./authority";
 import { toDelegationRow } from "./map";
 
 /** One bounded retry for a first account read that failed (no ready value yet). */
 const ACCOUNT_RETRY_MS = 5_000;
+
+/** Error code of a read that was not sent because the session does not hold the ability it needs. */
+const NOT_GRANTED = "not-granted";
+
+/** Codes that end a read for good: retrying an authorization refusal only repeats it. */
+const REFUSAL_CODES: ReadonlySet<string> = new Set([NOT_GRANTED, "AUTH_UNAUTHORIZED", "PERMISSION_DENIED"]);
 
 /**
  * The account index tables are created by the first index write, so a brand-new account reads
@@ -149,8 +156,9 @@ export function createRealPanelData(
         snap.refreshing = false;
         emit(key);
         // A first account read that failed gets one more attempt, so an open Overview recovers without
-        // the user leaving it. The epoch guard drops it after a reset; a ready value re-arms it.
-        if (key === "account" && snap.value?.state === "error" && !snap.retried) {
+        // the user leaving it. The epoch guard cancels it after a reset; a ready value re-arms it.
+        // An authorization refusal or a read that was never sent does not: the same request gets the same answer.
+        if (key === "account" && snap.value?.state === "error" && !REFUSAL_CODES.has(snap.value.code) && !snap.retried) {
           snap.retried = true;
           snap.retryTimer = setTimeout(() => {
             snap.retryTimer = undefined;
@@ -193,11 +201,15 @@ export function createRealPanelData(
 
   async function fetchDelegations(cursor?: string): Promise<ViewResult<DelegationPage>> {
     const run = epoch;
-    const res = await host.delegations.query({
+    const spaces = delegationQuerySpaces(host);
+    // Nothing the session may list on: no request, the same needs-permission answer a refusal gives.
+    if (spaces?.length === 0) return viewNeedsPermission("delegation/list");
+    const query = {
       direction: "all",
       limit: PAGE_LIMIT,
       ...(cursor ? { cursor } : {}),
-    });
+    } as const;
+    const res = await (spaces === undefined ? host.delegations.query(query) : host.delegations.query(query, { spaces }));
     if (run !== epoch) return viewError("stale");
     if (res.ok === false) {
       return res.error.code === "PERMISSION_DENIED"
@@ -213,6 +225,8 @@ export function createRealPanelData(
   }
 
   async function fetchAccount(): Promise<ViewResult<AccountInfo>> {
+    // The index reads go to the account space. A session without that grant would only collect refusals.
+    if (!sessionHolds(host, ACCOUNT_INDEX_READ)) return viewError(NOT_GRANTED);
     const [spaces, applications, delegations] = await Promise.all([
       host.account.index.spaces.list(),
       host.account.index.applications.list(),
@@ -243,7 +257,12 @@ export function createRealPanelData(
   }
 
   async function fetchStorage(): Promise<ViewResult<StorageView>> {
-    // The SDK fails closed locally (PERMISSION_DENIED, nothing sent) when the
+    // The read is for the session's own space, which needs space/info. Without it nothing is sent:
+    // the same needs-permission answer the SDK's own local refusal gives.
+    if (host.spaceId !== undefined && !sessionHolds(host, spaceInfoOn(host.spaceId))) {
+      return viewNeedsPermission("space/info");
+    }
+    // The SDK also fails closed locally (PERMISSION_DENIED, nothing sent) when the
     // space/info grant cannot be confirmed, so this read never reaches the node unauthorised.
     const res = await host.storage.status();
     if (res.ok === false) {

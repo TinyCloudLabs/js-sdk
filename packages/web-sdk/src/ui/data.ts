@@ -20,6 +20,7 @@ import type {
   AccountStatus,
   DelegationManager,
   IStorageService,
+  PermissionEntry,
   StorageStatus,
   StorageUsage,
 } from "@tinycloud/sdk-core";
@@ -294,6 +295,15 @@ export interface PanelDataHost {
   /** Session DID (`tc.sessionDid`). Compared against `delegateDid` for `this-app`. */
   readonly sessionDid: string;
   activeNodeIdentity(): Promise<{ readonly origin: string; readonly nodeDid: string }>;
+  /**
+   * Whether the session or an unexpired runtime grant covers every entry (`tc.hasPermissions`). Never prompts.
+   * Absent on a host that cannot tell: panel reads then go out as they always did.
+   */
+  hasPermissions?(entries: PermissionEntry[]): boolean;
+  /** Account space id (`tc.accountSpaceId`). The delegation query signs for it first. */
+  readonly accountSpaceId?: string;
+  /** The session's own space id (`tc.spaceId`). The delegation query falls back to it. */
+  readonly spaceId?: string;
 }
 
 // ---------------------------------------------------------------------------
