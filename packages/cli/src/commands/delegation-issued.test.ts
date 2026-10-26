@@ -46,7 +46,6 @@ type QueryBody = { direction?: string; limit?: number; cursor?: string; space?: 
 type Output = {
   cid?: string;
   revoked?: boolean;
-  alreadyRevoked?: boolean;
   note?: string;
   count?: number;
   delegations?: Array<Record<string, unknown> & { cid: string; status: string }>;
@@ -223,7 +222,7 @@ describe("tc delegation list --granted from a delegate profile", () => {
       expiry: "2026-11-26T10:00:00.000Z",
       resources: [{ space: "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:agents", service: "kv", path: "work/", actions: ["tinycloud.kv/get"] }],
     });
-    expect(outputs[0]!.note).toBe("Delegations are ordered by id, not by time.");
+    expect(outputs[0]!.note).toBe("Sorted by delegation ID, not by date.");
     expect(ownerQueryCalls).toEqual([]);
     const queries = requests.filter((r) => r.url.endsWith("/delegation/query"));
     expect(queries.map((q) => q.body)).toEqual([
@@ -251,7 +250,7 @@ describe("tc delegation list --granted from a delegate profile", () => {
 
     expect(outputs).toEqual([]);
     expect(errors[0]).toMatchObject({ code: "ISSUED_DELEGATIONS_UNAVAILABLE", exitCode: 7 });
-    expect(errors[0].message).toBe(`${HOST} does not support listing the delegations you issued yet.`);
+    expect(errors[0].message).toBe(`${HOST} can't list the delegations you issued yet.`);
     expect(requests.some((r) => r.url.endsWith("/delegation/query"))).toBe(false);
   });
 
@@ -302,14 +301,14 @@ describe("tc delegation revoke from a delegate profile", () => {
     expect(ownerRevokeCalls).toEqual([]);
   });
 
-  test("a delegation already listed as revoked succeeds with a note and sends no second revocation", async () => {
+  test("revokes directly, with no listing first: an already revoked delegation answers 200 and reads as a first revocation", async () => {
     issued = [{ cid: "bafy-old", status: "revoked" }];
 
     await run("revoke", "bafy-old");
 
     expect(errors).toEqual([]);
-    expect(outputs).toEqual([{ cid: "bafy-old", revoked: true, alreadyRevoked: true, note: "This delegation was already revoked; nothing changed." }]);
-    expect(requests.some((r) => r.url === `${HOST}/revoke`)).toBe(false);
+    expect(outputs).toEqual([{ cid: "bafy-old", revoked: true }]);
+    expect(requests.map((r) => r.url)).toEqual([`${HOST}/revoke`]);
   });
 
   test("a node without the issued listing still revokes", async () => {
@@ -328,7 +327,7 @@ describe("tc delegation revoke from a delegate profile", () => {
 
     expect(outputs).toEqual([]);
     expect(errors[0]).toMatchObject({ code: "REVOKE_UNAUTHORIZED", exitCode: 5 });
-    expect(errors[0].message).toBe("The node rejected this revocation: Unauthorized Revoker.");
+    expect(errors[0].message).toBe("The node refused this revocation: Unauthorized Revoker.");
     expect(errors[0]!.metadata?.hint).toContain("delegation list --granted");
     expect(authorityRequests).toEqual([]);
   });

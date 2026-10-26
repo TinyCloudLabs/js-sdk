@@ -55,8 +55,7 @@ function listedDelegation(d: AccountDelegationRecord) {
   };
 }
 
-const ISSUED_ORDER_NOTE = "Delegations are ordered by id, not by time.";
-const ALREADY_REVOKED_NOTE = "This delegation was already revoked; nothing changed.";
+const ISSUED_ORDER_NOTE = "Sorted by delegation ID, not by date.";
 
 /** Maps the SDK's issued-delegation errors to CLI errors; everything else takes the common mapping. */
 function issuedFailure(
@@ -66,14 +65,14 @@ function issuedFailure(
   if (error.code === "UNSUPPORTED_OPERATION") {
     return new CLIError(
       "ISSUED_DELEGATIONS_UNAVAILABLE",
-      `${host} does not support listing the delegations you issued yet.`,
+      `${host} can't list the delegations you issued yet.`,
       ExitCode.NODE_ERROR,
     );
   }
   if (error.code === "CHAIN_TOO_DEEP") {
     return new CLIError(
       "CHAIN_TOO_DEEP",
-      "A delegation chain is too deep for the node to evaluate right now. Try again later.",
+      "The node can't check this delegation chain right now because it's too long. Try again later.",
       ExitCode.NODE_ERROR,
       { status: 503 },
     );
@@ -81,7 +80,7 @@ function issuedFailure(
   if (error.code === "INVALID_CURSOR") {
     return new CLIError(
       "INVALID_CURSOR",
-      "The node rejected the page cursor while listing delegations. Run the command again.",
+      "The node couldn't continue the list. Run the command again.",
       ExitCode.NODE_ERROR,
       { status: 400 },
     );
@@ -91,29 +90,24 @@ function issuedFailure(
 
 /**
  * Revokes a delegation this profile's own key issued, with a revocation signed by that key and no
- * proof. A delegation already listed as revoked is reported as such without a second revocation.
+ * proof. Revoking a delegation that is already revoked succeeds like a first revocation (the node answers 200).
  */
 async function revokeIssuedDelegation(node: TinyCloudNode, ctx: { profile: string; host: string }, cid: string) {
-  // Best effort: a node without the issued listing still revokes, it just cannot say "already revoked".
-  const known = await node.delegationManager.queryAllIssued({ untilCid: cid });
-  if (known.ok && known.data.find((d) => d.cid === cid)?.status === "revoked") {
-    return { cid, revoked: true as const, alreadyRevoked: true, note: ALREADY_REVOKED_NOTE };
-  }
   const result = await node.delegationManager.revokeIssued(cid);
   if (result.ok) return { cid: result.data.cid, revoked: true as const };
   if (result.error.code === "PERMISSION_DENIED") {
     throw new CLIError(
       "REVOKE_UNAUTHORIZED",
-      `The node rejected this revocation: ${result.error.message}.`,
+      `The node refused this revocation: ${result.error.message}.`,
       ExitCode.PERMISSION_DENIED,
       {
         status: 403,
-        hint: `A delegate profile can revoke only delegations its own key issued. List them with \`${CLI_NAME} --profile ${ctx.profile} delegation list --granted\`.`,
+        hint: `A profile can revoke only the delegations its own key issued. See them with \`${CLI_NAME} --profile ${ctx.profile} delegation list --granted\`.`,
       },
     );
   }
   if (result.error.code === "NOT_FOUND") {
-    throw new CLIError("TARGET_NOT_FOUND", `Delegation "${cid}" was not found by the node.`, ExitCode.NOT_FOUND);
+    throw new CLIError("TARGET_NOT_FOUND", `The node has no delegation "${cid}".`, ExitCode.NOT_FOUND);
   }
   throw issuedFailure(result.error, ctx.host);
 }

@@ -133,7 +133,7 @@ describe("DelegationManager.query direction issued", () => {
       ok: false,
       error: expect.objectContaining({
         code: "UNSUPPORTED_OPERATION",
-        message: "this node does not support listing issued delegations yet",
+        message: "This node doesn't support listing issued delegations yet",
       }),
     });
     expect(calls.map((call) => call.url)).toEqual([`${HOST}/info`]);

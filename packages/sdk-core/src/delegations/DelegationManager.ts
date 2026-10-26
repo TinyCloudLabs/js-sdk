@@ -88,7 +88,7 @@ async function issuedHttpError(
   if (response.status === 503) {
     return createError(
       DelegationErrorCodes.CHAIN_TOO_DEEP,
-      "A delegation chain is too deep for the node to evaluate right now; try again later",
+      "This delegation chain is too long for the node to check right now; try again later",
       undefined,
       { ...details, retryable: true },
     );
@@ -559,7 +559,7 @@ export class DelegationManager {
         ok: false,
         error: createError(
           DelegationErrorCodes.NETWORK_ERROR,
-          `Failed to read node info: ${response.status}`,
+          `Couldn't read the node's info: ${response.status}`,
           undefined,
           { status: response.status },
         ),
@@ -586,7 +586,7 @@ export class DelegationManager {
         ok: false,
         error: createError(
           DelegationErrorCodes.NOT_INITIALIZED,
-          "Listing issued delegations requires a session key signer",
+          "Listing issued delegations needs a session key signer",
         ),
       };
     }
@@ -598,7 +598,7 @@ export class DelegationManager {
           ok: false,
           error: createError(
             DelegationErrorCodes.UNSUPPORTED_OPERATION,
-            "this node does not support listing issued delegations yet",
+            "This node doesn't support listing issued delegations yet",
             undefined,
             { feature: ISSUED_QUERY_FEATURE },
           ),
@@ -681,7 +681,7 @@ export class DelegationManager {
             ok: false,
             error: createError(
               DelegationErrorCodes.INVALID_TOKEN,
-              "Node returned a repeated page cursor for the issued delegation query",
+              "The node returned the same page cursor twice while listing issued delegations",
             ),
           };
         }
@@ -698,8 +698,7 @@ export class DelegationManager {
   /**
    * Revokes a delegation this session's key issued, with no proof: a UCAN
    * signed by the session's own did:key carrying `urn:cid:<cid>` and
-   * `tinycloud.delegation/revoke`. It does not depend on the session's own
-   * delegation staying valid. Revoking a delegation that is already revoked
+   * `tinycloud.delegation/revoke`. Revoking a delegation that is already revoked
    * succeeds. A refusal (the key is not the delegator) carries the node's
    * message; 503 means the chain is too deep right now, retry later.
    */
@@ -716,7 +715,7 @@ export class DelegationManager {
         ok: false,
         error: createError(
           DelegationErrorCodes.NOT_INITIALIZED,
-          "Revoking an issued delegation requires a session key signer",
+          "Revoking an issued delegation needs a session key signer",
         ),
       };
     }
