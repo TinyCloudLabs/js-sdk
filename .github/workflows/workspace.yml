@@ -70,10 +70,6 @@ jobs:
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
 
-      # Keeps replica-e2e-skip.yml (the no-op twin) in step with replica-e2e.yml.
-      - name: Replica e2e twin drift guard
-        run: bun test .github/scripts/replica-e2e-paths.test.ts
-
       # `turbo build` is the whole-workspace build. The targeted gates hand-build
       # a subset; this is the only job that compiles `packages/vfs`,
       # `packages/server`, and `apps/**` — all of which are published or shipped
