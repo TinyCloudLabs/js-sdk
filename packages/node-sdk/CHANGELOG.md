@@ -1,5 +1,13 @@
 # @tinycloudlabs/node-sdk
 
+## 3.8.0-beta.11
+
+### Minor Changes
+
+- 5d9d314: TinyCloudWeb supports OpenKey authorize-sign with popup approval and an optional prepared SIWE for click-triggered sign-in.
+
+  Details: TC-1977
+
 ## 3.8.0-beta.10
 
 ### Patch Changes
