@@ -113,6 +113,25 @@ describe("publishReleases", () => {
     assert.equal(calls.some((c) => c.args[1] === "create"), false);
   });
 
+  test("does not create a second release for web-sdk stable, but does for its betas", () => {
+    const root = fixtureRoot([
+      { dir: "web", name: "@tinycloud/web-sdk", changelog: "## 3.3.0\n\n- Stable\n\n## 3.3.0-beta.7\n\n- Beta\n" },
+    ]);
+    const { gh, calls } = stubGh({});
+    const results = publishReleases({
+      published: [
+        { name: "@tinycloud/web-sdk", version: "3.3.0" },
+        { name: "@tinycloud/web-sdk", version: "3.3.0-beta.7" },
+      ],
+      sha,
+      root,
+      gh,
+    });
+    assert.deepEqual(results.map((r) => r.action), ["skipped", "created"]);
+    assert.equal(calls.some((c) => c.args[2] === "@tinycloud/web-sdk@3.3.0"), false);
+    assert.equal(calls.find((c) => c.args[1] === "create").args[2], "@tinycloud/web-sdk@3.3.0-beta.7");
+  });
+
   test("creates a stable release at the release sha with the version's notes on stdin", () => {
     const root = fixtureRoot([{ dir: "cli", name: "@tinycloud/cli", changelog: CLI_CHANGELOG }]);
     const { gh, calls } = stubGh({});

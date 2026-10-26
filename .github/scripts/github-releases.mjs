@@ -99,12 +99,20 @@ export function runGh(args, input) {
   return { status: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
 }
 
+// web-sdk stable versions already get a v<version> release from the stable
+// job's "Create GitHub Release" step, so no second release is created here.
+const WEB_SDK = "@tinycloud/web-sdk";
+
 // Creates a release for each published version that has none. Returns one
 // result per version: { tag, action: "created" | "skipped" | "failed", detail }.
 export function publishReleases({ published, sha, root = process.cwd(), gh = runGh, dryRun = false }) {
   const results = [];
   for (const { name, version } of published) {
     const tag = releaseTag(name, version);
+    if (name === WEB_SDK && !isPrerelease(version)) {
+      results.push({ tag, action: "skipped", detail: "covered by the v<version> release from the stable job" });
+      continue;
+    }
     try {
       const view = gh(["release", "view", tag, "--json", "tagName"], undefined);
       if (view.status === 0) {
