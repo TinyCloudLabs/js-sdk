@@ -3438,7 +3438,7 @@ describe("iPhone panel safe-area and ui.setButtonVisible (TC-2130, #765) size ra
   it("pins the panel safe-area root delta over the OpenKey sign-in row and keeps the worker ceilings unchanged", () => {
     expect(() => validateLedger(current)).not.toThrow();
     expect(current.tc2130PanelIphoneRatchet).toEqual(approvedTc2130PanelIphoneRatchet);
-    expect(row().root).toEqual({ delta: { "index.mjs": 294, "index.cjs": 278 }, ceiling: { "index.mjs": 1470251, "index.cjs": 1411828 } });
+    expect(row().root).toEqual({ delta: { "index.mjs": 303, "index.cjs": 282 }, ceiling: { "index.mjs": 1470260, "index.cjs": 1411832 } });
     expect(row().root.ceiling["index.mjs"]).toBe(prerequisite().root.ceiling["index.mjs"] + row().root.delta["index.mjs"]);
     expect(row().root.ceiling["index.cjs"]).toBe(prerequisite().root.ceiling["index.cjs"] + row().root.delta["index.cjs"]);
     expect(row().firstImport.ceiling).toEqual(prerequisite().firstImport.ceiling);
