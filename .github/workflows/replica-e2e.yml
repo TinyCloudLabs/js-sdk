@@ -411,6 +411,26 @@ jobs:
           fi
           grep -qE '^ *[1-9][0-9]* pass$' "$RUNNER_TEMP/acceptance.log"
 
+      - name: Build the purge fixture page
+        if: ${{ !cancelled() }}
+        run: bunx vite build
+        working-directory: packages/replica/test/browser/purge
+
+      - name: Browser local-copy purge (TC-1888, Chromium)
+        if: ${{ !cancelled() }}
+        env:
+          TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
+          TC1888_ACCEPTANCE_STRICT: "1"
+        run: |
+          set -o pipefail
+          bun test packages/replica/test/browser.purge-local-copy.acceptance.test.ts --timeout 150000 2>&1 | tee "$RUNNER_TEMP/purge-acceptance.log"
+          # Strict mode means every scenario ran: a todo or skipped entry proves nothing.
+          if grep -E '^\((todo|skip)\)' "$RUNNER_TEMP/purge-acceptance.log"; then
+            echo "::error::local-copy purge acceptance has todo/skipped scenarios"
+            exit 1
+          fi
+          grep -qE '^ *[1-9][0-9]* pass$' "$RUNNER_TEMP/purge-acceptance.log"
+
       - name: kv-storage adapter in Chromium (fake feed and the node)
         if: always()
         env:
