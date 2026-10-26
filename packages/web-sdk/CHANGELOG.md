@@ -1,5 +1,13 @@
 # @tinycloudlabs/web-sdk
 
+## 3.8.0-beta.8
+
+### Patch Changes
+
+- ced1bbf: Constructing TinyCloudWeb without a location no longer throws; the UI client registers only when a location is present.
+
+  Details: TC-2072
+
 ## 3.8.0-beta.7
 
 ### Patch Changes
