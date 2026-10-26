@@ -1786,7 +1786,7 @@ export const approvedTc1888PurgeLocalCopyRatchet: Tc1888PurgeLocalCopyRatchet = 
 /** Manifest named keys (js-sdk #748, TC-1977), approved by Naomi: root index.mjs 1,464,629 -> 1,467,294 (+2,665) and index.cjs 1,406,456 -> 1,409,264 (+2,808), the exact deltas canonical CI printed on head 796fdd2a (run 40318285314). Worker is unchanged; first-import and activation deltas are 0, so their ceilings are the tc1888 caps. */
 export const approvedTc1977ManifestKeysRatchet: Tc1977ManifestKeysRatchet = {
   label: "sdk: manifest named keys (TC-1977, #748): +2,665 B mjs / +2,808 B cjs gzip",
-  ruling: "Approved by Naomi (exact canonical CI bytes at run 40312328298; no headroom)",
+  ruling: "Approved by Naomi (measured at run 40318285314 within 10 bytes of the approved +2,666/+2,814; no headroom)",
   base: "5467d1248b20e59d3b7eca508da417c2b35316b3",
   sourceCommits: [
     "796fdd2a13c0f6b0e6f767e0347151c0cbaf84fe",
