@@ -1857,7 +1857,7 @@ var init_sha256 = __esm({
 });
 
 // ../sdk-core/src/manifest.ts
-import { resolveSecretPath, SECRET_NAME_RE } from "@tinycloud/sdk-services";
+import { resolveSecretPath, SECRET_NAME_RE, parseNetworkId } from "@tinycloud/sdk-services";
 function parseExpiry(duration) {
   if (typeof duration !== "string" || duration.length === 0) {
     throw new ManifestValidationError(
@@ -1899,6 +1899,14 @@ function expandEncryptionPermissionEntry(entry) {
     throw new ManifestValidationError(
       `tinycloud.encryption entries require path to be a networkId URN (got ${JSON.stringify(entry.path)})`
     );
+  }
+  if (entry.path.includes("/")) {
+    throw new ManifestValidationError("named keys go in manifest.keys");
+  }
+  try {
+    parseNetworkId(entry.path);
+  } catch {
+    throw new ManifestValidationError("tinycloud.encryption entries require a valid networkId URN");
   }
   const normalizedActions = [];
   for (const action of entry.actions) {
@@ -2004,7 +2012,51 @@ function validateManifest(input) {
   if (m.secrets !== void 0) {
     validateManifestSecrets(m.secrets);
   }
+  if (Object.prototype.hasOwnProperty.call(m, "keys_app_id") && (typeof m.keys_app_id !== "string" || !KEY_APP_ID.test(m.keys_app_id))) {
+    throw new ManifestValidationError("manifest.keys_app_id is invalid");
+  }
+  validateManifestKeys(m.keys_app_id ?? m.app_id, m.keys);
   return m;
+}
+function validateManifestKeys(appId, keys) {
+  if (keys === void 0) return;
+  if (!Array.isArray(keys) || keys.length > 32) {
+    throw new ManifestValidationError("manifest.keys must contain at most 32 entries");
+  }
+  if (keys.length === 0) return;
+  if (!KEY_APP_ID.test(appId)) {
+    throw new ManifestValidationError("manifest.keys requires a valid app_id");
+  }
+  const paths = /* @__PURE__ */ new Set();
+  let prefixSeen = false;
+  for (const [index, value] of keys.entries()) {
+    const label = `manifest.keys[${index}]`;
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      throw new ManifestValidationError(`${label} must be an object`);
+    }
+    const entry = value;
+    const fields = Object.keys(entry);
+    const hasPath = Object.prototype.hasOwnProperty.call(entry, "path");
+    const hasPrefix = Object.prototype.hasOwnProperty.call(entry, "prefix");
+    if (hasPath === hasPrefix || fields.some((field) => !["path", "prefix", "abilities"].includes(field))) {
+      throw new ManifestValidationError(`${label} must have one path or prefix and abilities`);
+    }
+    if (!Array.isArray(entry.abilities) || entry.abilities.length === 0 || new Set(entry.abilities).size !== entry.abilities.length || entry.abilities.some((ability) => typeof ability !== "string" || !KEY_ABILITIES.includes(ability))) {
+      throw new ManifestValidationError(`${label}.abilities is invalid`);
+    }
+    if (hasPath) {
+      const path = entry.path;
+      if (typeof path !== "string" || path.length > 255 || !KEY_PATH.test(path) || !path.startsWith(`apps/${appId}/`) || paths.has(path)) {
+        throw new ManifestValidationError(`${label}.path is invalid`);
+      }
+      paths.add(path);
+    } else {
+      if (entry.prefix !== `apps/${appId}/` || prefixSeen) {
+        throw new ManifestValidationError(`${label}.prefix is invalid`);
+      }
+      prefixSeen = true;
+    }
+  }
 }
 function resolveManifestKnowledgeRoot(knowledge) {
   if (knowledge === void 0) {
@@ -2405,7 +2457,7 @@ function withCapabilitiesReadForSpaces(resources) {
     ...[...spaces].map(capabilitiesReadPermission)
   ]);
 }
-var import_ms, DEFAULT_KNOWLEDGE_ROOT, ManifestValidationError, DEFAULT_EXPIRY, DEFAULT_DEFAULTS, DEFAULT_MANIFEST_VERSION, DEFAULT_MANIFEST_SPACE, SECRETS_SPACE, VAULT_PERMISSION_SERVICE, SERVICE_SHORT_TO_LONG, ENCRYPTION_PERMISSION_SERVICE, ENCRYPTION_MANIFEST_SPACE, SERVICE_LONG_TO_SHORT2, DEFAULT_STANDARD_ENTRIES, DEFAULT_ADMIN_ENTRIES, DEFAULT_ALL_ENTRIES;
+var import_ms, DEFAULT_KNOWLEDGE_ROOT, ManifestValidationError, DEFAULT_EXPIRY, DEFAULT_DEFAULTS, DEFAULT_MANIFEST_VERSION, DEFAULT_MANIFEST_SPACE, SECRETS_SPACE, VAULT_PERMISSION_SERVICE, SERVICE_SHORT_TO_LONG, ENCRYPTION_PERMISSION_SERVICE, ENCRYPTION_MANIFEST_SPACE, SERVICE_LONG_TO_SHORT2, DEFAULT_STANDARD_ENTRIES, DEFAULT_ADMIN_ENTRIES, DEFAULT_ALL_ENTRIES, KEY_SEGMENT, KEY_APP_ID, KEY_PATH, KEY_ABILITIES;
 var init_manifest = __esm({
   "../sdk-core/src/manifest.ts"() {
     "use strict";
@@ -2488,6 +2540,10 @@ var init_manifest = __esm({
         actions: ["read", "write"]
       }
     ];
+    KEY_SEGMENT = "[a-z0-9][a-z0-9._-]{0,63}";
+    KEY_APP_ID = new RegExp(`^${KEY_SEGMENT}$`);
+    KEY_PATH = new RegExp(`^${KEY_SEGMENT}(?:/${KEY_SEGMENT}){2,7}$`);
+    KEY_ABILITIES = ["key.create", "decrypt", "key.block", "key.unblock"];
   }
 });
 
