@@ -5259,6 +5259,9 @@ function assertReadable(authority, now) {
 function contentHash(bytes) {
   return bytesToHex(blake3(bytes));
 }
+function repairId(entry) {
+  return `${entry.hash}\0${entry.key}`;
+}
 function sameEtag(a, b) {
   return a.replace(/^"|"$/g, "") === b.replace(/^"|"$/g, "");
 }
@@ -5628,7 +5631,7 @@ function kvSyncTransport(kv, options = {}) {
     }
   };
 }
-var ReplicaErrorCode, REPLICA_ERROR, ReplicaError, RFC3339, DEFAULT_PAGE_LIMIT, DEFAULT_LEASE_TTL_MS, FETCH_CHUNK, REPAIR_BATCH, RETENTION_REVOKED, PENDING_REFUSALS, Replica, BASE58, BASE32, featureCache, REVOKED_CODES, REVOKED_BODY, encoder;
+var ReplicaErrorCode, REPLICA_ERROR, ReplicaError, RFC3339, DEFAULT_PAGE_LIMIT, DEFAULT_LEASE_TTL_MS, FETCH_CHUNK, REPAIR_BATCH, REPAIR_MAX_TRIES, REPAIR_BACKOFF_BASE_MS, RETENTION_REVOKED, PENDING_REFUSALS, Replica, BASE58, BASE32, featureCache, REVOKED_CODES, REVOKED_BODY, encoder;
 var init_dist = __esm({
   "../replica/dist/index.js"() {
     "use strict";
@@ -5716,6 +5719,8 @@ var init_dist = __esm({
     DEFAULT_LEASE_TTL_MS = 12e4;
     FETCH_CHUNK = 100;
     REPAIR_BATCH = 100;
+    REPAIR_MAX_TRIES = 5;
+    REPAIR_BACKOFF_BASE_MS = 6e4;
     RETENTION_REVOKED = /* @__PURE__ */ new Set(["retention-grant-revoked", "retention-grant-ancestor-revoked"]);
     PENDING_REFUSALS = /* @__PURE__ */ new Set([
       ReplicaErrorCode.GRANT_UNAUTHORIZED,
@@ -5728,6 +5733,8 @@ var init_dist = __esm({
       #now;
       #leaseTtlMs;
       #onCommit;
+      /** Failed repair fetches of this session, by key and ETag hash. Never persisted: a new `Replica` retries afresh. */
+      #repairTries = /* @__PURE__ */ new Map();
       constructor(options) {
         this.#store = options.store;
         const transport = options.transport;
@@ -6082,7 +6089,14 @@ var init_dist = __esm({
         return { changes, blobs, fetched: fetched2 };
       }
       async #repair(attempt, cursor, nodeDid, coverage, retentionGrantCid) {
-        const pending = await this.#store.pendingRepairs(Number.MAX_SAFE_INTEGER);
+        const all = await this.#store.pendingRepairs(Number.MAX_SAFE_INTEGER);
+        const now = this.#now();
+        const pendingIds = new Set(all.map((entry) => repairId(entry)));
+        for (const id of this.#repairTries.keys()) if (!pendingIds.has(id)) this.#repairTries.delete(id);
+        const pending = all.filter((entry) => {
+          const state2 = this.#repairTries.get(repairId(entry));
+          return state2 === void 0 || state2.tries < REPAIR_MAX_TRIES && now >= state2.nextAttemptAt;
+        });
         let repaired = 0;
         for (let start = 0; start < pending.length; start += REPAIR_BATCH) {
           const chunk = pending.slice(start, start + REPAIR_BATCH);
@@ -6094,7 +6108,14 @@ var init_dist = __esm({
           const changes = [];
           for (const entry of chunk) {
             const bytes = acceptContent(entry, contents.get(entry.key));
-            if (bytes === void 0) continue;
+            const id = repairId(entry);
+            if (bytes === void 0) {
+              const tries = (this.#repairTries.get(id)?.tries ?? 0) + 1;
+              const wait = tries === 1 ? 0 : REPAIR_BACKOFF_BASE_MS * 2 ** (tries - 2);
+              this.#repairTries.set(id, { tries, nextAttemptAt: this.#now() + wait });
+              continue;
+            }
+            this.#repairTries.delete(id);
             blobs.set(entry.hash, bytes);
             changes.push({ ...entry, content: true });
           }
