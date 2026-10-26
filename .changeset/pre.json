@@ -32,6 +32,7 @@
     "cli-keys-replication",
     "cli-kv-create-only",
     "cli-named-keys",
+    "cli-share-json-short-link",
     "tc2043-sync-scope"
   ]
 }

@@ -1,5 +1,13 @@
 # @tinycloud/cli
 
+## 1.5.0-beta.4
+
+### Patch Changes
+
+- 30da240: Share publishing can create a short link from the signed full policy link when the publish result has no separate delivery material. JSON output keeps link details redacted.
+
+  Details: TC-1737
+
 ## 1.5.0-beta.3
 
 ### Patch Changes
