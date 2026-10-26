@@ -14,6 +14,9 @@ import {
   activateCompactRuntimeDelegation as activateCompactRuntimeDelegationOnNode,
   TinyCloudNode,
   TinyCloudNodeConfig,
+  wireOpenKeyAuthorize,
+  type OpenKeyAuthorizeTinyCloud,
+  type PreparedOpenKeyAuthorization,
   type BootstrapWarning,
   type DelegateToOptions,
   type DelegateToResult,
@@ -134,6 +137,11 @@ declare global {
  * Extends ClientConfig with browser-specific options.
  */
 export interface Config extends ClientConfig {
+  /** OpenKey authorize-sign client. Requires @openkey/sdk >=0.12.2; popup is the default mode. */
+  openkey?: {
+    client: OpenKeyAuthorizeTinyCloud;
+    mode?: "iframe" | "popup" | "redirect";
+  };
   /** Notifications. `throwErrors` rethrows each error's raw message asynchronously, once per burst of identical errors (200 ms window). It applies unless `ui: false` or `ui.toasts: false`, which turn off toasts and throws together, as the old `popups: false` did; `ui.button: false` leaves throws on. Toast placement and visibility are set through `ui`. */
   notifications?: NotificationConfig;
 
@@ -342,6 +350,12 @@ export interface ShareReceiveResult<T = unknown> {
 // TinyCloudWeb
 
 export class TinyCloudWeb {
+  private preparedSignIn?: {
+    node: TinyCloudNode;
+    request: PreparedOpenKeyAuthorization;
+    createdAt: number;
+    signOuts: number;
+  };
   /** The connected wallet's raw EIP-1193 provider. */
   public provider!: BrowserProvider;
 
@@ -937,6 +951,32 @@ export class TinyCloudWeb {
     }));
   }
 
+  /**
+   * Prepare an OpenKey SIWE before showing an approval button. Call after
+   * OpenKey connect(), then call signIn() from the button's click handler.
+   * A prepared request is single-use and valid for five minutes; call this
+   * method again if the approval button remains visible longer.
+   */
+  async prepareSignIn(): Promise<void> {
+    if (!this.config.openkey) throw new Error("prepareSignIn requires an OpenKey client");
+    refuseCaveated(this._capabilityRequest?.manifests ?? this._manifest);
+    this.preparedSignIn = undefined;
+    const signOuts = this.signOutCount;
+    const connected = await this.walletSigner?.getConnectedAddress().catch(() => undefined);
+    const restored = await this.restoreSession(connected);
+    if (this.signOutCount !== signOuts) throw new Error("Sign-in was cancelled by sign-out.");
+    const node = await this.ensureNode();
+    if (restored.status === "restored" && restored.session) {
+      const permissions = this.configuredManifestPermissions(node);
+      if (permissions.length === 0 || node.hasRuntimePermissions(permissions)) return;
+      await this.clearPersistedSession(restored.session.address);
+      this._sessionRestoreStatus = "stale";
+    }
+    const request = await node.prepareOpenKeySignIn();
+    if (this.signOutCount !== signOuts) throw new Error("Sign-in was cancelled by sign-out.");
+    this.preparedSignIn = { node, request, createdAt: Date.now(), signOuts };
+  }
+
   signIn = async (options?: SignInOptions): Promise<ClientSession> => {
     // Refuse a caveated manifest before any restore, signer or network call.
     refuseCaveated(this._capabilityRequest?.manifests ?? this._manifest);
@@ -947,30 +987,54 @@ export class TinyCloudWeb {
       }
     };
     assertNotSignedOut();
-    const connected = await this.walletSigner?.getConnectedAddress().catch(() => undefined);
-    assertNotSignedOut();
-    const restored = await this.restoreSession(connected);
-    assertNotSignedOut();
-    if (restored.status === "restored" && restored.session) {
-      const node = await this.ensureNode();
-      assertNotSignedOut();
-      const permissions = this.configuredManifestPermissions(node);
-      if (permissions.length === 0 || node.hasRuntimePermissions(permissions)) {
-        assertNotSignedOut();
-        return restored.session;
+    const pending = this.preparedSignIn;
+    if (pending) {
+      this.preparedSignIn = undefined;
+      if (Date.now() - pending.createdAt > 5 * 60_000 || pending.signOuts !== signOuts) {
+        throw new Error("Prepared OpenKey sign-in expired; call prepareSignIn() again");
       }
-      await this.clearPersistedSession(restored.session.address);
-      assertNotSignedOut();
-      this._sessionRestoreStatus = "stale";
     }
-
-    const node = await this.ensureNode();
-    // A sign-out during the restore must not fall through to a fresh sign-in.
-    assertNotSignedOut();
+    if (this.config.openkey && options) {
+      throw new Error("OpenKey sign-in does not accept wallet SIWE overrides");
+    }
+    let node: TinyCloudNode;
+    if (pending) {
+      node = pending.node;
+    } else {
+      const connected = await this.walletSigner?.getConnectedAddress().catch(() => undefined);
+      assertNotSignedOut();
+      const restored = await this.restoreSession(connected);
+      assertNotSignedOut();
+      if (restored.status === "restored" && restored.session) {
+        const restoredNode = await this.ensureNode();
+        assertNotSignedOut();
+        const permissions = this.configuredManifestPermissions(restoredNode);
+        if (permissions.length === 0 || restoredNode.hasRuntimePermissions(permissions)) {
+          assertNotSignedOut();
+          return restored.session;
+        }
+        await this.clearPersistedSession(restored.session.address);
+        assertNotSignedOut();
+        this._sessionRestoreStatus = "stale";
+      }
+      node = await this.ensureNode();
+      assertNotSignedOut();
+    }
     this._sessionRestoreStatus = "logging-in";
     const was = node.spaceId;
     try {
-      await node.signIn(options);
+      if (pending) {
+        await node.signInWithPreparedOpenKey(
+          pending.request,
+          wireOpenKeyAuthorize(this.config.openkey!.client, { mode: this.config.openkey!.mode ?? "popup" }),
+        );
+      } else if (this.config.openkey) {
+        await node.signInWithOpenKey(
+          wireOpenKeyAuthorize(this.config.openkey.client, { mode: this.config.openkey.mode ?? "popup" }),
+        );
+      } else {
+        await node.signIn(options);
+      }
     } finally {
       if (was && was !== node.spaceId && this.signOutCount === signOuts && !this.signOutInFlight) this.uiClient.reset();
     }
@@ -1004,6 +1068,7 @@ export class TinyCloudWeb {
       ? [...this.pendingRestoreAddresses.keys()]
       : undefined;
     this.signOutCount++;
+    this.preparedSignIn = undefined;
     this.signOutInFlight++;
     this.persistedRestoreBlocked = true;
     let cleaned = false;
@@ -1119,6 +1184,7 @@ export class TinyCloudWeb {
     provider: BrowserWalletProvider,
     options?: { spacePrefix?: string }
   ): void {
+    this.preparedSignIn = undefined;
     this.walletSigner = new BrowserWalletSigner(provider);
     this.provider = this.walletSigner.getProvider();
     this.eip1193Provider = this.provider;
@@ -1244,6 +1310,7 @@ export class TinyCloudWeb {
    * later inside `_init`.
    */
   setManifest(manifest: Manifest | Manifest[]): void {
+    this.preparedSignIn = undefined;
     this._manifest = manifest;
     this._capabilityRequest = undefined;
     // Forward eagerly if the node is already up. Pre-init, the
@@ -1255,6 +1322,7 @@ export class TinyCloudWeb {
   }
 
   setCapabilityRequest(request: ComposedManifestRequest): void {
+    this.preparedSignIn = undefined;
     this._capabilityRequest = request;
     this._manifest = request.manifests;
     if (this._node) {
