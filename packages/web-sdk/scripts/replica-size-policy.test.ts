@@ -29,6 +29,7 @@ import { approvedTc2034NamedKeysCliRatchet, validateTc2034NamedKeysCliRatchetTra
 import { approvedTc2043SyncScopeRatchet, validateTc2043SyncScopeRatchetTransition, type Tc2043SyncScopeRatchet, approvedTc1888PurgeLocalCopyRatchet, validateTc1888PurgeLocalCopyRatchetTransition, type Tc1888PurgeLocalCopyRatchet } from "./replica-size-policy";
 import { approvedTc1977ManifestKeysRatchet, validateTc1977ManifestKeysRatchetTransition, type Tc1977ManifestKeysRatchet } from "./replica-size-policy";
 import { approvedTc2096LazyContentRatchet, validateTc2096LazyContentRatchetTransition } from "./replica-size-policy";
+import { approvedTc2113PanelGrantRatchet, validateTc2113PanelGrantRatchetTransition } from "./replica-size-policy";
 import { approvedTc2038PanelPrefetchRatchet, validateTc2038PanelPrefetchRatchetTransition, type Tc2038PanelPrefetchRatchet } from "./replica-size-policy";
 import { approvedTc2005RevokeWindowRatchet, validateTc2005RevokeWindowRatchetTransition, type Tc2005RevokeWindowRatchet } from "./replica-size-policy";
 import { approvedTc2096RepairBackoffRatchet, validateTc2096RepairBackoffRatchetTransition, type Tc2096RepairBackoffRatchet } from "./replica-size-policy";
@@ -2901,6 +2902,7 @@ delete tc2043Ledger.tc2005RevokeWindowRatchet;
 delete tc2043Ledger.tc2096RepairBackoffRatchet;
 delete tc2043Ledger.tc2096LazyContentRatchet;
 delete tc2043Ledger.tc2072LocationGuardRatchet;
+delete tc2043Ledger.tc2113PanelGrantRatchet;
 tc2043Ledger.entries = structuredClone(current.entries.slice(0, current.entries.findIndex((entry) => entry.pr === "#728")));
 describe("replication syncScope opt-in (#742, TC-2043) size ratchet", () => {
   const row = () => structuredClone(approvedTc2043SyncScopeRatchet);
@@ -3302,6 +3304,48 @@ describe("lazy replica content fetch (TC-2096, #761) size ratchet", () => {
     changed.worker.ceiling++;
     expect(() => validateTc2096LazyContentRatchetTransition(undefined, changed)).toThrow();
     expect(() => validateTc2096LazyContentRatchetTransition(row(), undefined)).toThrow();
+  });
+});
+
+describe("panel grant delegation-list ask (TC-2113, #763) size ratchet", () => {
+  const row = () => structuredClone(approvedTc2113PanelGrantRatchet);
+  const prerequisite = () => approvedTc2096LazyContentRatchet;
+
+  it("pins the panel-grant root delta over the lazy-content row and keeps the other tiers unchanged", () => {
+    expect(() => validateLedger(current)).not.toThrow();
+    expect(current.tc2113PanelGrantRatchet).toEqual(approvedTc2113PanelGrantRatchet);
+    expect(row().root).toEqual({ delta: { "index.mjs": 1641, "index.cjs": 1241 }, ceiling: { "index.mjs": 1468999, "index.cjs": 1410522 } });
+    expect(row().firstImport).toEqual({ delta: { "replica.mjs": 0, "replica.cjs": 0 }, ceiling: { "replica.mjs": 52757, "replica.cjs": 67957 } });
+    expect(row().activation).toEqual({ delta: { "activation.mjs": 0, "activation.cjs": 0 }, ceiling: { "activation.mjs": 23412, "activation.cjs": 24981 } });
+    expect(row().worker.delta).toBe(0);
+    expect(row().worker.ceiling).toBe(prerequisite().worker.ceiling);
+    expect(row().replicaWorker.delta).toBe(0);
+    expect(row().replicaWorker.ceiling).toBe(prerequisite().replicaWorker.ceiling);
+    expect(rootCeilings(current).find(({ row: name }) => name === "tc2113PanelGrantRatchet")).toEqual({ row: "tc2113PanelGrantRatchet", ceiling: row().root.ceiling });
+    expect(ancestryPins(current, false)).toContainEqual({ row: "tc2113PanelGrantRatchet", pin: row().sourceCommits[0] });
+    expect(MAX_WORKER_GZIP_BYTES).toBe(newestKvWorkerCeiling());
+    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(newestReplicaWorkerCeiling());
+  });
+
+  it("refuses changed bytes or a missing lazy-content prerequisite", () => {
+    const changedWorker = copy(current);
+    changedWorker.tc2113PanelGrantRatchet!.worker.ceiling++;
+    expect(() => validateLedger(changedWorker)).toThrow("panel grant");
+    const changedRoot = copy(current);
+    changedRoot.tc2113PanelGrantRatchet!.root.ceiling["index.cjs"]++;
+    expect(() => validateLedger(changedRoot)).toThrow("panel grant");
+    const withoutPrerequisite = copy(current);
+    delete withoutPrerequisite.tc2096LazyContentRatchet;
+    expect(() => validateLedger(withoutPrerequisite)).toThrow("panel grant");
+  });
+
+  it("may be introduced once and never changed or removed", () => {
+    expect(() => validateTc2113PanelGrantRatchetTransition(undefined, row())).not.toThrow();
+    expect(() => validateTc2113PanelGrantRatchetTransition(row(), row())).not.toThrow();
+    const changed = row();
+    changed.worker.ceiling++;
+    expect(() => validateTc2113PanelGrantRatchetTransition(undefined, changed)).toThrow();
+    expect(() => validateTc2113PanelGrantRatchetTransition(row(), undefined)).toThrow();
   });
 });
 

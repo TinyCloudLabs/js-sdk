@@ -2043,5 +2043,35 @@
     "worker": { "delta": 71, "ceiling": 776539 },
     "replicaWorker": { "delta": 51, "ceiling": 770467 },
     "reason": "lazy content fetch syncs entry names without downloading values; reads of values the replica does not hold go to the network (TC-2096)"
+  },
+  "tc2113PanelGrantRatchet": {
+    "label": "panel button asks for the missing delegation-list permission (TC-2113, #763): +1641 B mjs / +1241 B cjs gzip",
+    "ruling": "Approved by Naomi (root ~+1,638 mjs / +1,397 cjs gz; measured at run 40385555260 at 2cd7543e: +1,641 / +1,241, within ±10 B)",
+    "base": "3b372a100fa7841d9a359d8f5d2f5995588e93e4",
+    "sourceCommits": [
+      "20a872e061bf2818a7234b9dbe1b6dc29e497e3d"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40385555260",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40385555260/job/121792750507",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40385555260/job/121792750969"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 1641, "index.cjs": 1241 },
+      "ceiling": { "index.mjs": 1468999, "index.cjs": 1410522 }
+    },
+    "firstImport": {
+      "delta": { "replica.mjs": 0, "replica.cjs": 0 },
+      "ceiling": { "replica.mjs": 52757, "replica.cjs": 67957 }
+    },
+    "activation": {
+      "delta": { "activation.mjs": 0, "activation.cjs": 0 },
+      "ceiling": { "activation.mjs": 23412, "activation.cjs": 24981 }
+    },
+    "worker": { "delta": 0, "ceiling": 776539 },
+    "replicaWorker": { "delta": 0, "ceiling": 770467 },
+    "reason": "the panel button asks for the missing delegation-list permission (TC-2113)"
   }
 }
