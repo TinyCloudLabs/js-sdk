@@ -37,6 +37,9 @@ let issued: Array<{ cid: string; status: string }>;
 /** CIDs the node refuses to revoke for the agent key (not its delegator). */
 let notIssuedByAgent: Set<string>;
 let revokeStatus: number | undefined;
+let revokeText = "too deep";
+/** The wallet/OpenKey address of a restored session that carries owner authority; undefined for a delegate session. */
+let restoredOwnerAddress: string | undefined;
 let queryStatus: number | undefined;
 /** When set, a request that carries a cursor is answered with the node's invalid-cursor 400. */
 let queryStatusOnCursor: number | undefined;
@@ -99,7 +102,7 @@ async function nodeFetch(url: string, init: { method?: string; headers?: Record<
     }), { status: 200 });
   }
   if (url === `${HOST}/revoke`) {
-    if (revokeStatus !== undefined) return new Response("too deep", { status: revokeStatus });
+    if (revokeStatus !== undefined) return new Response(revokeText, { status: revokeStatus });
     const cid = Object.keys(claimsOf(headers.Authorization!).att)[0]!.slice("urn:cid:".length);
     if (notIssuedByAgent.has(cid)) return new Response("Unauthorized Revoker", { status: 403 });
     return new Response(JSON.stringify({ revoked: true, cid }), { status: 200 });
@@ -117,6 +120,7 @@ function buildNode() {
   });
   return {
     delegationManager,
+    address: restoredOwnerAddress,
     // The owner-profile path of `delegation list`: the account query, which a delegate with --granted must not use.
     account: {
       delegations: {
@@ -187,6 +191,8 @@ beforeEach(() => {
   issued = [];
   notIssuedByAgent = new Set();
   revokeStatus = undefined;
+  revokeText = "too deep";
+  restoredOwnerAddress = undefined;
   queryStatus = undefined;
   queryStatusOnCursor = undefined;
   pageSize = 100;
@@ -338,6 +344,54 @@ describe("tc delegation revoke from a delegate profile", () => {
     await run("revoke", "bafy-child");
 
     expect(errors[0]).toMatchObject({ code: "CHAIN_TOO_DEEP", exitCode: 7 });
+  });
+
+  test.each([401, 403])("a %i from the node is a refusal with the node's message and exit code 5", async (status) => {
+    revokeStatus = status;
+    revokeText = "Unauthorized Revoker";
+
+    await run("revoke", "bafy-child");
+
+    expect(outputs).toEqual([]);
+    expect(errors[0]).toMatchObject({ code: "REVOKE_UNAUTHORIZED", exitCode: 5, metadata: { status } });
+    expect(errors[0].message).toBe("The node refused this revocation: Unauthorized Revoker.");
+  });
+});
+
+describe("the branch follows the verified session authority, not the profile's posture alone", () => {
+  const ownerAddress = "0x1111111111111111111111111111111111111111";
+
+  test("a delegate-posture profile signed in by its owner lists --granted through the owner path", async () => {
+    posture = "delegate-session";
+    restoredOwnerAddress = ownerAddress;
+
+    await run("list", "--granted");
+
+    expect(errors).toEqual([]);
+    expect(ownerQueryCalls).toMatchObject([{ direction: "granted" }]);
+    expect(requests).toEqual([]);
+  });
+
+  test("a delegate-posture profile signed in by its owner revokes through the owner flow, not the session key", async () => {
+    posture = "delegate-session";
+    restoredOwnerAddress = ownerAddress;
+
+    await run("revoke", "bafy-child");
+
+    expect(ownerRevokeCalls).toEqual(["bafy-child"]);
+    expect(requests).toEqual([]);
+  });
+
+  test("an owner-posture profile never takes the session-key path, even without a restored address", async () => {
+    posture = "owner-openkey";
+    restoredOwnerAddress = undefined;
+
+    await run("list", "--granted");
+    await run("revoke", "bafy-child");
+
+    expect(ownerQueryCalls).toMatchObject([{ direction: "granted" }]);
+    expect(ownerRevokeCalls).toEqual(["bafy-child"]);
+    expect(requests).toEqual([]);
   });
 });
 

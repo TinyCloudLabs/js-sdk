@@ -57,7 +57,7 @@ async function refusalText(response: FetchResponse): Promise<string> {
 
 /**
  * Maps a non-2xx answer to an issued-delegation query or proofless revocation.
- * The node refuses with a plain-text 403, answers 400 for a cursor it will not
+ * The node refuses with a plain-text 401 or 403, answers 400 for a cursor it will not
  * accept (the same answer for a malformed, foreign or other-filter cursor) and
  * 503 "Delegation query unavailable" for a chain it will not evaluate (deeper
  * than 64 levels or 4096 nodes; the whole page fails, no partial items).
@@ -69,7 +69,7 @@ async function issuedHttpError(
 ): Promise<DelegationError> {
   const text = await refusalText(response);
   const details = { ...meta, status: response.status };
-  if (response.status === 403) {
+  if (response.status === 401 || response.status === 403) {
     return createError(
       DelegationErrorCodes.PERMISSION_DENIED,
       text === "" ? "The node refused the request" : text,

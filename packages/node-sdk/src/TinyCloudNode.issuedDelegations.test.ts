@@ -7,6 +7,7 @@ import { PrivateKeySigner } from "./signers/PrivateKeySigner";
 import "./replication/node-loader";
 import { TinyCloudNode } from "./TinyCloudNode";
 import { PROOF_PRIVATE_KEY, signedRestorableSession } from "./test-support/signed-restorable-session";
+import { mintCompactDelegation } from "./test-support/compact-delegation";
 
 const HOST = "https://issued.example";
 const NODE_DID = "did:key:z6MkNodeFixtureOnly";
@@ -49,6 +50,8 @@ describe("TinyCloudNode session-key invocations for issued delegations", () => {
     const node = new TinyCloudNode({ signer: new PrivateKeySigner(PROOF_PRIVATE_KEY), wasmBindings: new NodeWasmBindings() });
     await node.restoreSession({ ...proof, tinycloudHosts: [HOST] });
     const sessionDid = node.credentialHolderDid;
+    // A SIWE-backed (owner) session carries a verified wallet address; the CLI reads that to refuse the delegate path.
+    expect(node.address).toBeDefined();
 
     expect((await node.delegationManager.query({ direction: "issued" })).ok).toBe(true);
     expect(await node.delegationManager.revokeIssued("bafy-issued")).toEqual({ ok: true, data: { revoked: true, cid: "bafy-issued" } });
@@ -67,5 +70,23 @@ describe("TinyCloudNode session-key invocations for issued delegations", () => {
       expect(ed25519.verify(signature, signed, publicKeyOf(sessionDid))).toBe(true);
     }
     expect(JSON.parse(list.body!)).toEqual({ direction: "issued" });
+  });
+
+  test("a delegate session restored from a compact delegation has no owner address", async () => {
+    const wasm = new NodeWasmBindings();
+    const manager = wasm.createSessionManager();
+    const delegateDid = manager.getDID("default").split("#", 1)[0]!;
+    const imported = await mintCompactDelegation({ audience: delegateDid, expSecs: Math.floor(Date.now() / 1000) + 3_600, host: HOST });
+    const node = new TinyCloudNode({ host: HOST, wasmBindings: wasm });
+
+    await node.restoreSession({
+      delegationHeader: imported.delegation.delegationHeader,
+      delegationCid: imported.delegation.cid,
+      spaceId: imported.spaceId,
+      jwk: JSON.parse(manager.jwk("default")!),
+      verificationMethod: delegateDid,
+    });
+
+    expect(node.address).toBeUndefined();
   });
 });

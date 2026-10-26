@@ -180,6 +180,18 @@ describe("DelegationManager.query direction issued", () => {
     });
   });
 
+  test("a plain-text 401 is the same refusal, with the node's message and status 401", async () => {
+    const { manager } = managerWith(sessionKey().signer, ({ url }) =>
+      url.endsWith("/info") ? info(["delegation-issued-query-v1"]) : new Response("Unauthorized", { status: 401 }));
+
+    const result = await manager.query({ direction: "issued" });
+
+    expect(result).toEqual({
+      ok: false,
+      error: expect.objectContaining({ code: "PERMISSION_DENIED", message: "Unauthorized", meta: expect.objectContaining({ status: 401 }) }),
+    });
+  });
+
   test("503 is a retryable too-deep error", async () => {
     const { manager } = managerWith(sessionKey().signer, ({ url }) =>
       url.endsWith("/info") ? info(["delegation-issued-query-v1"]) : new Response("chain too deep", { status: 503 }));
@@ -401,6 +413,21 @@ describe("DelegationManager.revokeIssued", () => {
         code: "PERMISSION_DENIED",
         message: "Unauthorized Revoker",
         meta: expect.objectContaining({ status: 403, cid: "bafy-child" }),
+      }),
+    });
+  });
+
+  test("a plain-text 401 is the same refusal, with the node's message and status 401", async () => {
+    const { manager } = managerWith(sessionKey().signer, () => new Response("Unauthorized Revoker", { status: 401 }));
+
+    const result = await manager.revokeIssued("bafy-child");
+
+    expect(result).toEqual({
+      ok: false,
+      error: expect.objectContaining({
+        code: "PERMISSION_DENIED",
+        message: "Unauthorized Revoker",
+        meta: expect.objectContaining({ status: 401, cid: "bafy-child" }),
       }),
     });
   });
