@@ -326,6 +326,8 @@ export interface CreateBootstrapSessionOptions {
   spaceId: string;
   capabilityRequest: ComposedManifestRequest;
   rawAbilities?: Record<string, string[]>;
+  /** Lifetime of this session in milliseconds; defaults to the sign-in session lifetime. */
+  expirationMs?: number;
 }
 
 /**
@@ -1482,7 +1484,21 @@ export class NodeUserAuthorization implements IUserAuthorization {
     }
     const jwk = JSON.parse(jwkString);
     const now = new Date();
-    const expirationTime = new Date(now.getTime() + this.sessionExpirationMs);
+    // A configured `siweConfig` can shorten the window but never lengthen it
+    // or move its start: its issue and not-before times are not applied, and
+    // its expiry applies only when earlier than the session's own lifetime.
+    const siweOverrides = this.buildSiweOverrides();
+    const overrideExpiry =
+      typeof siweOverrides.expirationTime === "string"
+        ? Date.parse(siweOverrides.expirationTime)
+        : Number.NaN;
+    delete siweOverrides.expirationTime;
+    delete siweOverrides.notBefore;
+    delete siweOverrides.issuedAt;
+    const lifetimeEnd = now.getTime() + (options.expirationMs ?? this.sessionExpirationMs);
+    const expirationTime = new Date(
+      Number.isNaN(overrideExpiry) ? lifetimeEnd : Math.min(overrideExpiry, lifetimeEnd),
+    );
     // Sign every requested permission onto its own space. The widened
     // default request carries account-space entries; flattening them under
     // `options.spaceId` signed `…:default/sql/account`, which the node
@@ -1522,10 +1538,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
       chainId,
       domain: this.domain,
       issuedAt: now.toISOString(),
-      expirationTime: expirationTime.toISOString(),
       spaceId: options.spaceId,
       jwk,
-      ...this.buildSiweOverrides(),
+      ...siweOverrides,
+      expirationTime: expirationTime.toISOString(),
     });
     const signature = await this.requestSignature({
       address,

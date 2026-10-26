@@ -211,6 +211,10 @@ import {
 } from "@tinycloud/sdk-services";
 import { RequestLog, observeReplicaReads, readOnlyRequestLog } from "@tinycloud/sdk-services/telemetry/requestLog";
 import { NodeUserAuthorization } from "./authorization/NodeUserAuthorization";
+import {
+  BOOTSTRAP_SESSION_EXPIRY_MS,
+  bootstrapSessionRequest,
+} from "./authorization/bootstrapSessionScope";
 import { refuseCaveated } from "./authorization/caveatRefusal";
 import type { SignStrategy } from "./authorization/strategies";
 import { AccountService } from "./account/AccountService";
@@ -2747,6 +2751,8 @@ export class TinyCloudNode {
     }
 
     const steps = bootstrapSteps(this._address, this._chainId);
+    // Credentials of the bootstrap sessions installed during this run.
+    const installedGrantCids = new Set<string>();
     try {
       const decision = await this.resolveBootstrapDecision(steps);
       if (decision.action === "skip") {
@@ -2762,7 +2768,10 @@ export class TinyCloudNode {
         return false;
       }
 
-      const warnings = await this.runAccountBootstrap(steps, { mode: decision.mode });
+      const warnings = await this.runAccountBootstrap(steps, {
+        mode: decision.mode,
+        installedGrantCids,
+      });
       await this.writeBootstrapCompletionMarker(steps);
       if (warnings.length > 0) {
         this._bootstrapStatus = { skipped: false, warnings };
@@ -2784,6 +2793,10 @@ export class TinyCloudNode {
       );
       console.warn(`[TinyCloudNode] account bootstrap failed: ${reason}`);
       return false;
+    } finally {
+      // The bootstrap sessions served the steps and the completion marker
+      // above and nothing else; they are never kept as runtime grants.
+      this.discardBootstrapRuntimeGrants(installedGrantCids);
     }
     return true;
   }
@@ -2926,7 +2939,10 @@ export class TinyCloudNode {
 
   private async runAccountBootstrap(
     steps: BootstrapStep[],
-    { mode }: { mode: "fresh" | "repair" } = { mode: "fresh" },
+    {
+      mode,
+      installedGrantCids,
+    }: { mode: "fresh" | "repair"; installedGrantCids?: Set<string> } = { mode: "fresh" },
   ): Promise<BootstrapWarning[]> {
     if (!this.auth || !this._address) {
       throw new Error("Account bootstrap requires an active wallet session");
@@ -2942,25 +2958,29 @@ export class TinyCloudNode {
     const graph = this._serviceGraph;
     const sessions = new Map<BootstrapSpaceName, TinyCloudSession>();
     const rawAbilitiesBySpace = new Map<BootstrapSpaceName, Record<string, string[]>>();
+    const requestsBySpace = new Map<BootstrapSpaceName, ComposedManifestRequest>();
     const warnings: BootstrapWarning[] = [];
-    const primarySession = auth.tinyCloudSession;
-    const defaultSpaceId = this.ownedSpaceId("default");
-    const canReusePrimaryBootstrapSession =
-      primarySession?.spaceId === defaultSpaceId &&
-      auth.capabilityRequest === BOOTSTRAP_SESSION_REQUESTS.default;
 
     // Refuse before any bootstrap signature is requested.
     if (steps.some((step) => step.kind === "host")) {
       await this.assertMayCreateSpace();
     }
 
+    // Only the spaces whose data the steps write get a session; the other
+    // bootstrap spaces are hosted by the wallet-signed `host` steps and need
+    // no delegation.
     for (const step of steps) {
       if (step.kind !== "session") continue;
       graph.assertActive();
-      if (step.space === "default" && canReusePrimaryBootstrapSession && primarySession) {
-        sessions.set(step.space, primarySession);
-        continue;
-      }
+      // The account session carries the completion marker only when the
+      // sign-in session does not already cover writing it.
+      const request = bootstrapSessionRequest(step.space, {
+        markerKey: this.currentSessionCoversBootstrapMarker()
+          ? undefined
+          : BOOTSTRAP_COMPLETION_MARKER_KEY,
+      });
+      if (!request) continue;
+      requestsBySpace.set(step.space, request);
       const rawAbilities = step.rawAbilities;
       if (rawAbilities) {
         rawAbilitiesBySpace.set(step.space, rawAbilities);
@@ -2969,8 +2989,9 @@ export class TinyCloudNode {
       try {
         session = await auth.createBootstrapSession({
           spaceId: step.spaceId,
-          capabilityRequest: step.request ?? BOOTSTRAP_SESSION_REQUESTS[step.space],
+          capabilityRequest: request,
           rawAbilities,
+          expirationMs: BOOTSTRAP_SESSION_EXPIRY_MS,
         });
       } catch (err) {
         // Abort immediately — do not cascade into remaining bootstrap steps.
@@ -3003,6 +3024,9 @@ export class TinyCloudNode {
     for (const step of steps) {
       if (step.kind !== "activate") continue;
       graph.assertActive();
+      // Spaces without a bootstrap session have nothing to activate.
+      const request = requestsBySpace.get(step.space);
+      if (!request) continue;
       const session = sessions.get(step.space);
       if (!session) {
         throw new Error(`Missing bootstrap session for ${step.space}`);
@@ -3024,11 +3048,13 @@ export class TinyCloudNode {
           { cause: activated },
         );
       }
-      this.registerBootstrapRuntimeGrant(
+      // `request` is the same recap the session was signed with.
+      const cid = this.registerBootstrapRuntimeGrant(
         session,
-        BOOTSTRAP_SESSION_REQUESTS[step.space],
+        request,
         rawAbilitiesBySpace.get(step.space),
       );
+      if (cid) installedGrantCids?.add(cid);
     }
 
     for (const step of steps) {
@@ -3127,7 +3153,7 @@ export class TinyCloudNode {
     session: TinyCloudSession,
     request: { resources: readonly { service: string; space: string; path: string; actions: readonly string[] }[] },
     rawAbilities?: Record<string, string[]>,
-  ): void {
+  ): string {
     const operations: RuntimePermissionOperation[] = [];
     for (const resource of request.resources) {
       const service = resource.service.startsWith("tinycloud.")
@@ -3184,6 +3210,18 @@ export class TinyCloudNode {
       expiresAt,
       provenance: "bootstrap",
     });
+    return session.delegationCid;
+  }
+
+  /**
+   * Remove the runtime grants of this bootstrap run. Matches by delegation
+   * CID so grants installed by a newer sign-in are left alone.
+   */
+  private discardBootstrapRuntimeGrants(cids: ReadonlySet<string>): void {
+    if (cids.size === 0) return;
+    this.runtimePermissionGrants = this.runtimePermissionGrants.filter(
+      (grant) => !(grant.provenance === "bootstrap" && cids.has(grant.delegation.cid)),
+    );
   }
 
   /**
@@ -3557,6 +3595,23 @@ export class TinyCloudNode {
       action: "tinycloud.sql/read",
     };
     return operations.some((granted) => this.operationCovers(granted, indexRead));
+  }
+
+  /**
+   * Whether the sign-in session's own recap already covers a completion
+   * marker write. Read from the recap itself, so it holds for an account
+   * whose space is not hosted yet at sign-in.
+   */
+  private currentSessionCoversBootstrapMarker(): boolean {
+    const session = this.currentTinyCloudSession();
+    const operations = session ? this.recapOperationsFromSession(session) : [];
+    const markerWrite: RuntimePermissionOperation = {
+      spaceId: this.ownedSpaceId(ACCOUNT_REGISTRY_SPACE),
+      service: "kv",
+      path: BOOTSTRAP_COMPLETION_MARKER_KEY,
+      action: "tinycloud.kv/put",
+    };
+    return operations.some((granted) => this.operationCovers(granted, markerWrite));
   }
 
   private async withAccountRegistryRetry(

@@ -985,6 +985,22 @@ test.skipIf(!nodeBinary)("a local node revocation sequence refuses each stored g
     domain: "mcp.test",
     autoCreateSpace: true,
     enablePublicSpace: false,
+    // The seed write below is declared in the sign-in manifest.
+    manifest: {
+      app_id: "xyz.tinycloud.mcp-e2e-owner",
+      name: "MCP e2e owner",
+      defaults: false,
+      includePublicSpace: false,
+      prefix: "",
+      space: "applications",
+      permissions: [{
+        service: "tinycloud.kv",
+        space: "applications",
+        path: "agents/demo/",
+        actions: ["put"],
+        skipPrefix: true,
+      }],
+    },
   });
   await owner.signIn();
   const applicationsSpace = await owner.hostOwnedSpace("applications");

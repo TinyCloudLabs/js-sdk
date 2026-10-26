@@ -84,7 +84,9 @@ class FakeCloud {
   completeArtifacts(steps: BootstrapStep[]): void {
     for (const step of steps) {
       if (step.kind === "host") expect(this.hostedSpaces.has(step.spaceId)).toBe(true);
-      if (step.kind === "activate") expect(this.activatedSpaces.has(step.spaceId)).toBe(true);
+      if (step.kind === "activate" && (step.space === "account" || step.space === "secrets")) {
+        expect(this.activatedSpaces.has(step.spaceId)).toBe(true);
+      }
     }
     expect(this.registry.size).toBe(6);
     expect(this.appRecords.size).toBeGreaterThan(0);
@@ -452,9 +454,9 @@ function bootstrapSpaceId(name: "default" | "applications" | "account" | "secret
 }
 
 const ceremonyFaultPoints = [
-  ...["default", "applications", "account", "secrets", "public", "agents"].map((space) => `session:${space}`),
+  ...["account", "secrets"].map((space) => `session:${space}`),
   ...["default", "applications", "account", "secrets", "public", "agents"].map((space) => `host:${space}`),
-  ...["default", "applications", "account", "secrets", "public", "agents"].map((space) => `activate:${space}`),
+  ...["account", "secrets"].map((space) => `activate:${space}`),
   "account:index-schema",
   "account:seed-spaces",
   "account:seed-applications",
@@ -819,7 +821,7 @@ test("real KVService 404 classification distinguishes unhosted default from miss
 
 test("bootstrap host and activation failures retain the HTTP verdict", async () => {
   const node = makeNode();
-  const spaceId = bootstrapSpaceId("default");
+  const spaceId = bootstrapSpaceId("account");
   const session = {
     spaceId,
     delegationHeader: { Authorization: `Bearer ${spaceId}` },
