@@ -8,6 +8,8 @@ import {
   type ISigner,
   type TinyCloudSession,
   BOOTSTRAP_SESSION_REQUESTS,
+  pkhDid,
+  type Manifest,
 } from "@tinycloud/sdk-core";
 import {
   canonicalizeOpenKeyManifestJson,
@@ -152,12 +154,12 @@ afterEach(() => {
   }
 });
 
-async function withSignInHost<T>(run: () => Promise<T>): Promise<T> {
+async function withSignInHost<T>(run: () => Promise<T>, features: string[] = []): Promise<T> {
   const previousFetch = globalThis.fetch;
   globalThis.fetch = async (input, init) => {
     const url = String(input);
     if (url.endsWith("/info")) {
-      return new Response(JSON.stringify({ protocol: 1, version: "1.0.0", features: [] }), {
+      return new Response(JSON.stringify({ protocol: 1, version: "1.0.0", features }), {
         status: 200, headers: { "content-type": "application/json" },
       });
     }
@@ -174,6 +176,40 @@ async function withSignInHost<T>(run: () => Promise<T>): Promise<T> {
     globalThis.fetch = previousFetch;
   }
 }
+
+test("manifest keys expand to top-level ReCap resources only when the node lists named keys", async () => {
+  const owner = pkhDid("0x1234567890abcdef1234567890abcdef12345678", 1);
+  const manifest: Manifest = {
+    app_id: "billing", keys_app_id: "xyz.tinycloud.healthlog", name: "Healthlog",
+    defaults: false, includePublicSpace: false,
+    keys: [
+      { prefix: "apps/xyz.tinycloud.healthlog/", abilities: ["key.create", "decrypt"] },
+      { path: "apps/xyz.tinycloud.healthlog/token", abilities: ["key.block"] },
+    ],
+  };
+  for (const [caseManifest, features, expected] of [
+    [manifest, ["encryption-named-keys-v1"], {
+      [`urn:tinycloud:encryption:${owner}:default/apps/xyz.tinycloud.healthlog/`]:
+        ["tinycloud.encryption/key.create", "tinycloud.encryption/decrypt"],
+      [`urn:tinycloud:encryption:${owner}:default/apps/xyz.tinycloud.healthlog/token`]:
+        ["tinycloud.encryption/key.block"],
+    }],
+    [manifest, [], {}],
+    [{ ...manifest, keys: [] }, ["encryption-named-keys-v1"], {}],
+    [{ ...manifest, keys: undefined }, ["encryption-named-keys-v1"], {}],
+  ] as const) {
+    const captured: Array<Record<string, unknown>> = [];
+    const auth = new NodeUserAuthorization({
+      signer: createSigner([]), wasmBindings: createWasmBindings(captured),
+      signStrategy: { type: "auto-sign" }, domain: "example.com",
+      tinycloudHosts: ["https://tinycloud.test"], sessionStorage: new MemorySessionStorage(),
+      manifest: caseManifest, includeAccountRegistryPermissions: false,
+    });
+    await withSignInHost(() => auth.signIn(), [...features]);
+    const raw = (captured[0]?.rawAbilities ?? {}) as Record<string, string[]>;
+    expect(Object.fromEntries(Object.entries(raw).filter(([resource]) => resource.includes("/apps/")))).toEqual(expected);
+  }
+});
 
 test("regular network sign-in does not invent replica issuance when signed SIWE omits Issued At", async () => {
   const wasm = createWasmBindings([]);

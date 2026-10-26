@@ -312,6 +312,71 @@ function stubAuthNetworkCalls(node: TinyCloudNode): void {
 // ---------------------------------------------------------------------------
 
 describe("TinyCloudNode.signIn — manifest-driven recap", () => {
+  test("sign-in ensures only declared creatable key paths when named keys are available", async () => {
+    const wasm = makeFakeWasmBindings();
+    const node = makeNodeWithSigner(wasm, {
+      autoBootstrapAccount: false, includeAccountRegistryPermissions: false,
+      manifest: {
+        app_id: "billing", keys_app_id: "xyz.tinycloud.healthlog", name: "Healthlog",
+        defaults: false, includePublicSpace: false,
+        keys: [
+          { path: "apps/xyz.tinycloud.healthlog/token", abilities: ["key.create", "decrypt"] },
+          { path: "apps/xyz.tinycloud.healthlog/read-only", abilities: ["decrypt"] },
+          { prefix: "apps/xyz.tinycloud.healthlog/", abilities: ["key.create", "decrypt"] },
+        ],
+      },
+    });
+    const auth = (node as any).auth;
+    auth.refreshNodeInfo = async () => { auth._nodeFeatures = ["encryption-named-keys-v1"]; };
+    auth.ensureSpaceExists = async () => {};
+    const ensureKey = mock(async () => ({}));
+    Object.defineProperty(node, "keys", { get: () => ({ ensureKey }) });
+
+    await node.signIn();
+
+    expect(ensureKey).toHaveBeenCalledTimes(1);
+    expect(ensureKey).toHaveBeenCalledWith("apps/xyz.tinycloud.healthlog/token");
+  });
+
+  test("sign-in keeps key declarations inactive when named keys are unavailable", async () => {
+    const node = makeNodeWithSigner(makeFakeWasmBindings(), {
+      autoBootstrapAccount: false, includeAccountRegistryPermissions: false,
+      manifest: { app_id: "billing", name: "Billing", defaults: false, includePublicSpace: false,
+        keys: [{ path: "apps/billing/token", abilities: ["key.create", "decrypt"] }] },
+    });
+    const auth = (node as any).auth;
+    auth.refreshNodeInfo = async () => { auth._nodeFeatures = []; };
+    auth.ensureSpaceExists = async () => {};
+    const ensureKey = mock(async () => ({}));
+    Object.defineProperty(node, "keys", { get: () => ({ ensureKey }) });
+
+    await node.signIn();
+
+    expect(ensureKey).not.toHaveBeenCalled();
+  });
+
+  test("key-path encryption permissions do not enter network setup", async () => {
+    const wasm = makeFakeWasmBindings();
+    const owner = "did:pkh:eip155:1:0x0000000000000000000000000000000000000001";
+    const node = makeNodeWithSigner(wasm, {
+      autoBootstrapAccount: false, includeAccountRegistryPermissions: false,
+      manifest: {
+        app_id: "billing", name: "Billing", defaults: false, includePublicSpace: false,
+        permissions: [{ service: "tinycloud.encryption",
+          path: `urn:tinycloud:encryption:${owner}:default/apps/billing/token`, actions: ["decrypt"] }],
+      },
+    });
+    const auth = (node as any).auth;
+    auth.refreshNodeInfo = async () => { auth._nodeFeatures = ["encryption-named-keys-v1"]; };
+    auth.ensureSpaceExists = async () => {};
+    const ensureNetwork = mock(async () => ({}));
+    (node as any).ensureEncryptionNetwork = ensureNetwork;
+
+    await node.signIn();
+
+    expect(ensureNetwork).not.toHaveBeenCalled();
+  });
+
   test("network sign-in without replication does not inspect absent replica SIWE metadata", async () => {
     const wasm = makeFakeWasmBindings({
       prepareSession: mock((params: Record<string, unknown>) => ({

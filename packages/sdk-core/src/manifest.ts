@@ -75,6 +75,12 @@ export type ManifestSecretActions =
       description?: string;
     };
 
+export type ManifestKeyAbility = "key.create" | "decrypt" | "key.block" | "key.unblock";
+
+export type ManifestKeyDeclaration =
+  | { path: string; abilities: ManifestKeyAbility[] }
+  | { prefix: string; abilities: ManifestKeyAbility[] };
+
 /**
  * The valid values for `Manifest.defaults`.
  *
@@ -107,6 +113,8 @@ export interface Manifest {
   manifest_version?: 1;
   /** Application identifier / namespace prefix. Required. */
   app_id: string;
+  /** App key namespace when it differs from app_id. */
+  keys_app_id?: string;
   /** Display name. Required. */
   name: string;
   /** Description of what the app or delegate does. Optional. */
@@ -146,6 +154,8 @@ export interface Manifest {
    * the `secrets` space.
    */
   secrets?: Record<string, ManifestSecretActions>;
+  /** Named keys on the app's default encryption network. */
+  keys?: ManifestKeyDeclaration[];
 }
 
 /**
@@ -688,7 +698,62 @@ export function validateManifest(input: unknown): Manifest {
   if (m.secrets !== undefined) {
     validateManifestSecrets(m.secrets);
   }
+  if (Object.prototype.hasOwnProperty.call(m, "keys_app_id") &&
+      (typeof m.keys_app_id !== "string" || !KEY_APP_ID.test(m.keys_app_id))) {
+    throw new ManifestValidationError("manifest.keys_app_id is invalid");
+  }
+  validateManifestKeys(m.keys_app_id ?? m.app_id, m.keys);
   return m;
+}
+
+const KEY_SEGMENT = "[a-z0-9][a-z0-9._-]{0,63}";
+const KEY_APP_ID = new RegExp(`^${KEY_SEGMENT}$`);
+const KEY_PATH = new RegExp(`^${KEY_SEGMENT}(?:/${KEY_SEGMENT}){2,7}$`);
+const KEY_ABILITIES: readonly string[] = ["key.create", "decrypt", "key.block", "key.unblock"];
+
+/** Match OpenKey's manifest key declaration grammar without echoing input. */
+function validateManifestKeys(appId: string, keys: unknown): void {
+  if (keys === undefined) return;
+  if (!Array.isArray(keys) || keys.length > 32) {
+    throw new ManifestValidationError("manifest.keys must contain at most 32 entries");
+  }
+  if (keys.length === 0) return;
+  if (!KEY_APP_ID.test(appId)) {
+    throw new ManifestValidationError("manifest.keys requires a valid app_id");
+  }
+  const paths = new Set<string>();
+  let prefixSeen = false;
+  for (const [index, value] of keys.entries()) {
+    const label = `manifest.keys[${index}]`;
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      throw new ManifestValidationError(`${label} must be an object`);
+    }
+    const entry = value as Record<string, unknown>;
+    const fields = Object.keys(entry);
+    const hasPath = Object.prototype.hasOwnProperty.call(entry, "path");
+    const hasPrefix = Object.prototype.hasOwnProperty.call(entry, "prefix");
+    if (hasPath === hasPrefix || fields.some((field) => !["path", "prefix", "abilities"].includes(field))) {
+      throw new ManifestValidationError(`${label} must have one path or prefix and abilities`);
+    }
+    if (!Array.isArray(entry.abilities) || entry.abilities.length === 0 ||
+        new Set(entry.abilities).size !== entry.abilities.length ||
+        entry.abilities.some((ability) => typeof ability !== "string" || !KEY_ABILITIES.includes(ability))) {
+      throw new ManifestValidationError(`${label}.abilities is invalid`);
+    }
+    if (hasPath) {
+      const path = entry.path;
+      if (typeof path !== "string" || path.length > 255 || !KEY_PATH.test(path) ||
+          !path.startsWith(`apps/${appId}/`) || paths.has(path)) {
+        throw new ManifestValidationError(`${label}.path is invalid`);
+      }
+      paths.add(path);
+    } else {
+      if (entry.prefix !== `apps/${appId}/` || prefixSeen) {
+        throw new ManifestValidationError(`${label}.prefix is invalid`);
+      }
+      prefixSeen = true;
+    }
+  }
 }
 
 /**

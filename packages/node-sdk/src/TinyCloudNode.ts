@@ -202,6 +202,8 @@ import {
   type RequestSink,
 } from "@tinycloud/sdk-services";
 import { RequestLog, observeReplicaReads, readOnlyRequestLog } from "@tinycloud/sdk-services/telemetry/requestLog";
+import { parseEncryptionResource } from "@tinycloud/sdk-services/encryption/resource";
+import { createNamedKeyClient, type NamedKeyClient } from "./encryption-keys";
 import { NodeUserAuthorization } from "./authorization/NodeUserAuthorization";
 import { refuseCaveated } from "./authorization/caveatRefusal";
 import type { SignStrategy } from "./authorization/strategies";
@@ -2616,6 +2618,17 @@ export class TinyCloudNode {
     await this.ensureRequestedEncryptionNetworks();
     this.assertSessionEpoch(epoch, "Sign-in");
 
+    if (this.nodeFeatures.includes("encryption-named-keys-v1")) {
+      for (const manifest of this.auth?.capabilityRequest?.manifests ?? []) {
+        for (const declaration of manifest.keys ?? []) {
+          if ("path" in declaration && declaration.abilities.includes("key.create")) {
+            await this.keys.ensureKey(declaration.path);
+            this.assertSessionEpoch(epoch, "Sign-in");
+          }
+        }
+      }
+    }
+
     if (
       !bootstrapped &&
       this.config.manifest === undefined &&
@@ -3589,7 +3602,8 @@ export class TinyCloudNode {
         resource.path.startsWith("urn:tinycloud:encryption:") &&
         resource.actions.includes(DECRYPT_ACTION)
       ) {
-        networkIds.add(resource.path);
+        const parsed = parseEncryptionResource(resource.path);
+        if (parsed.kind === "network") networkIds.add(resource.path);
       }
     }
     return [...networkIds];
@@ -6173,6 +6187,11 @@ export class TinyCloudNode {
    */
   get encryption(): IEncryptionService {
     return this.getEncryptionService();
+  }
+
+  /** Named keys bound to the current session. */
+  get keys(): NamedKeyClient {
+    return createNamedKeyClient(this);
   }
 
   async getEncryptionNetwork(
