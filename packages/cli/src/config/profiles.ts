@@ -32,7 +32,7 @@ import {
   listDirs,
   PRIVATE_DIR_MODE,
 } from "./storage.js";
-import type { GlobalConfig, ProfileConfig, CLIContext } from "./types.js";
+import { resolveProfilePosture, type GlobalConfig, type ProfileConfig, type CLIContext } from "./types.js";
 import { CLIError, setActiveProfileName } from "../output/errors.js";
 
 export class ProfileManager {
@@ -368,6 +368,7 @@ export class ProfileManager {
       quiet: options.quiet ?? false,
       replication,
       replicationDebug: options.replicationDebug === true || process.env.TC_REPLICATION_DEBUG === "1",
+      ...(profileConfig === undefined ? {} : { posture: resolveProfilePosture(profileConfig) }),
       ...(localDiscovery === undefined ? {} : { localDiscovery }),
     };
   }

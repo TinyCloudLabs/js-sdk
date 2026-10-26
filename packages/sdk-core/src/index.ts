@@ -760,6 +760,7 @@ export {
   DelegationApiResponse,
   // Configuration types
   DelegationManagerConfig,
+  SessionInvocationSigner,
   KeyProvider,
   // Classes
   DelegationManager,

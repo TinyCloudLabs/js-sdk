@@ -29,6 +29,8 @@ import {
   AccountDelegationPageSchema,
   AccountDelegationQueryOptionsSchema,
   AccountDelegationQueryOptions,
+  AccountDelegationRecord,
+  SessionInvocationSigner,
   DelegationChain,
   DelegationManagerConfig,
 } from "./types";
@@ -43,6 +45,61 @@ const DelegationAction = {
   GET: "tinycloud.delegation/get",
   CHECK: "tinycloud.delegation/check",
 } as const;
+
+/** `GET /info` feature that marks a node able to answer `direction: "issued"` queries. */
+const ISSUED_QUERY_FEATURE = "delegation-issued-query-v1";
+
+/** The node's plain-text refusal reason, without control characters and bounded in length. */
+async function refusalText(response: FetchResponse): Promise<string> {
+  const text = await response.text();
+  return text.replace(/[\u0000-\u001f\u007f]+/g, " ").trim().slice(0, 200);
+}
+
+/**
+ * Maps a non-2xx answer to an issued-delegation query or proofless revocation.
+ * The node refuses with a plain-text 403, answers 400 for a cursor it will not
+ * accept (the same answer for a malformed, foreign or other-filter cursor) and
+ * 503 "Delegation query unavailable" for a chain it will not evaluate (deeper
+ * than 64 levels or 4096 nodes; the whole page fails, no partial items).
+ */
+async function issuedHttpError(
+  response: FetchResponse,
+  what: string,
+  meta: Record<string, unknown>,
+): Promise<DelegationError> {
+  const text = await refusalText(response);
+  const details = { ...meta, status: response.status };
+  if (response.status === 403) {
+    return createError(
+      DelegationErrorCodes.PERMISSION_DENIED,
+      text === "" ? "The node refused the request" : text,
+      undefined,
+      details,
+    );
+  }
+  if (response.status === 400 && text.includes("invalid delegation query cursor")) {
+    return createError(
+      DelegationErrorCodes.INVALID_CURSOR,
+      "The node rejected the page cursor; list again from the start",
+      undefined,
+      details,
+    );
+  }
+  if (response.status === 503) {
+    return createError(
+      DelegationErrorCodes.CHAIN_TOO_DEEP,
+      "A delegation chain is too deep for the node to evaluate right now; try again later",
+      undefined,
+      { ...details, retryable: true },
+    );
+  }
+  return createError(
+    DelegationErrorCodes.NETWORK_ERROR,
+    `${what}: ${response.status} - ${text}`,
+    undefined,
+    details,
+  );
+}
 
 /**
  * Creates a DelegationError with the given parameters.
@@ -112,6 +169,8 @@ export class DelegationManager {
   private signOwnerRevocation?: (cid: string) => Promise<string>;
   private fetchFn: FetchFunction;
   private accountSpaceId?: string;
+  private sessionInvocationSigner?: SessionInvocationSigner;
+  private issuedQuerySupported = false;
 
   /**
    * Creates a new DelegationManager instance.
@@ -124,6 +183,7 @@ export class DelegationManager {
     this.invoke = config.invoke;
     this.invokeAny = config.invokeAny;
     this.signOwnerRevocation = config.signOwnerRevocation;
+    this.sessionInvocationSigner = config.sessionInvocationSigner;
     this.fetchFn = config.fetch ?? globalThis.fetch.bind(globalThis);
     this.accountSpaceId = config.accountSpaceId;
   }
@@ -400,6 +460,7 @@ export class DelegationManager {
         ),
       };
     }
+    if (validated.data.direction === "issued") return this.queryIssued(validated.data);
     if (!this.invokeAny) {
       return {
         ok: false,
@@ -480,6 +541,224 @@ export class DelegationManager {
         error: createError(
           DelegationErrorCodes.NETWORK_ERROR,
           `Network error during delegation query: ${String(error)}`,
+          error instanceof Error ? error : undefined,
+        ),
+      };
+    }
+  }
+
+  /**
+   * Whether the node advertises `delegation-issued-query-v1` in `GET /info`.
+   * A positive answer is remembered; an absent flag is read again next time.
+   */
+  private async nodeListsIssued(): Promise<Result<boolean>> {
+    if (this.issuedQuerySupported) return { ok: true, data: true };
+    const response = await this.fetchFn(`${this.host}/info`);
+    if (!response.ok) {
+      return {
+        ok: false,
+        error: createError(
+          DelegationErrorCodes.NETWORK_ERROR,
+          `Failed to read node info: ${response.status}`,
+          undefined,
+          { status: response.status },
+        ),
+      };
+    }
+    const info = (await response.json()) as { features?: unknown };
+    this.issuedQuerySupported =
+      Array.isArray(info.features) && info.features.includes(ISSUED_QUERY_FEATURE);
+    return { ok: true, data: this.issuedQuerySupported };
+  }
+
+  /**
+   * Lists the delegations this session's own key issued: one invocation signed
+   * by that key with the single capability `tinycloud.delegation/list` on
+   * `<key DID>/delegation` and no proof. Pages are ordered by delegation CID,
+   * not by time, and may be short; only a missing `nextCursor` ends the list.
+   */
+  private async queryIssued(
+    options: AccountDelegationQueryOptions,
+  ): Promise<Result<AccountDelegationPage>> {
+    const signer = this.sessionInvocationSigner;
+    if (!signer) {
+      return {
+        ok: false,
+        error: createError(
+          DelegationErrorCodes.NOT_INITIALIZED,
+          "Listing issued delegations requires a session key signer",
+        ),
+      };
+    }
+    try {
+      const supported = await this.nodeListsIssued();
+      if (!supported.ok) return supported;
+      if (!supported.data) {
+        return {
+          ok: false,
+          error: createError(
+            DelegationErrorCodes.UNSUPPORTED_OPERATION,
+            "this node does not support listing issued delegations yet",
+            undefined,
+            { feature: ISSUED_QUERY_FEATURE },
+          ),
+        };
+      }
+      const authorization = await signer.sign({
+        [`${signer.did()}/delegation`]: { [DelegationAction.LIST]: [{}] },
+      });
+      const response = await this.fetchFn(`${this.host}/delegation/query`, {
+        method: "POST",
+        headers: { Authorization: authorization, "content-type": "application/json" },
+        body: JSON.stringify(options),
+      });
+      if (!response.ok) {
+        return {
+          ok: false,
+          error: await issuedHttpError(response, "Failed to query issued delegations", {}),
+        };
+      }
+      const parsed = AccountDelegationPageSchema.safeParse(await response.json());
+      if (!parsed.success) {
+        return {
+          ok: false,
+          error: createError(
+            DelegationErrorCodes.INVALID_TOKEN,
+            "Node returned an invalid delegation query response",
+          ),
+        };
+      }
+      return { ok: true, data: parsed.data };
+    } catch (error) {
+      return {
+        ok: false,
+        error: createError(
+          DelegationErrorCodes.NETWORK_ERROR,
+          `Network error during delegation query: ${String(error)}`,
+          error instanceof Error ? error : undefined,
+        ),
+      };
+    }
+  }
+
+  /**
+   * Every delegation this session's key issued, following `nextCursor` until
+   * it is absent. `maxItems` stops early once that many are collected;
+   * `untilCid` stops after the page that contains that delegation. Items come
+   * in CID order (each carries `issuedAt`).
+   */
+  async queryAllIssued(
+    options: Pick<AccountDelegationQueryOptions, "status" | "space"> & {
+      pageSize?: number;
+      maxItems?: number;
+      untilCid?: string;
+    } = {},
+  ): Promise<Result<AccountDelegationRecord[]>> {
+    const { pageSize = 100, maxItems, untilCid, ...filters } = options;
+    if (maxItems !== undefined && (!Number.isInteger(maxItems) || maxItems < 1)) {
+      return {
+        ok: false,
+        error: createError(DelegationErrorCodes.INVALID_INPUT, "maxItems must be a positive integer"),
+      };
+    }
+    const items: AccountDelegationRecord[] = [];
+    const seen = new Set<string>();
+    let cursor: string | undefined;
+    do {
+      const limit = Math.min(pageSize, maxItems === undefined ? pageSize : maxItems - items.length);
+      const page = await this.query({
+        ...filters,
+        direction: "issued",
+        limit,
+        ...(cursor === undefined ? {} : { cursor }),
+      });
+      if (!page.ok) return page;
+      items.push(...page.data.items);
+      cursor = page.data.nextCursor;
+      if (cursor !== undefined) {
+        if (seen.has(cursor)) {
+          return {
+            ok: false,
+            error: createError(
+              DelegationErrorCodes.INVALID_TOKEN,
+              "Node returned a repeated page cursor for the issued delegation query",
+            ),
+          };
+        }
+        seen.add(cursor);
+      }
+    } while (
+      cursor !== undefined &&
+      (maxItems === undefined || items.length < maxItems) &&
+      !(untilCid !== undefined && items.some((item) => item.cid === untilCid))
+    );
+    return { ok: true, data: maxItems === undefined ? items : items.slice(0, maxItems) };
+  }
+
+  /**
+   * Revokes a delegation this session's key issued, with no proof: a UCAN
+   * signed by the session's own did:key carrying `urn:cid:<cid>` and
+   * `tinycloud.delegation/revoke`. It does not depend on the session's own
+   * delegation staying valid. Revoking a delegation that is already revoked
+   * succeeds. A refusal (the key is not the delegator) carries the node's
+   * message; 503 means the chain is too deep right now, retry later.
+   */
+  async revokeIssued(cid: string): Promise<Result<DelegationRevocationReceipt>> {
+    if (!cid) {
+      return {
+        ok: false,
+        error: createError(DelegationErrorCodes.INVALID_INPUT, "cid is required"),
+      };
+    }
+    const signer = this.sessionInvocationSigner;
+    if (!signer) {
+      return {
+        ok: false,
+        error: createError(
+          DelegationErrorCodes.NOT_INITIALIZED,
+          "Revoking an issued delegation requires a session key signer",
+        ),
+      };
+    }
+    try {
+      const authorization = await signer.sign({
+        [`urn:cid:${cid}`]: { [DelegationAction.REVOKE]: [{}] },
+      });
+      const response = await this.fetchFn(`${this.host}/revoke`, {
+        method: "POST",
+        headers: { Authorization: authorization },
+      });
+      if (!response.ok) {
+        if (response.status === 404) {
+          return {
+            ok: false,
+            error: createError(DelegationErrorCodes.NOT_FOUND, `Delegation not found: ${cid}`),
+          };
+        }
+        return {
+          ok: false,
+          error: await issuedHttpError(response, "Failed to revoke delegation", { cid }),
+        };
+      }
+      const parsed = DelegationRevocationReceiptSchema.safeParse(await response.json());
+      if (!parsed.success || parsed.data.cid !== cid) {
+        return {
+          ok: false,
+          error: createError(
+            DelegationErrorCodes.REVOCATION_FAILED,
+            "Node returned an invalid delegation revocation receipt",
+            undefined,
+            { cid },
+          ),
+        };
+      }
+      return { ok: true, data: parsed.data };
+    } catch (error) {
+      return {
+        ok: false,
+        error: createError(
+          DelegationErrorCodes.NETWORK_ERROR,
+          `Network error during delegation revocation: ${String(error)}`,
           error instanceof Error ? error : undefined,
         ),
       };

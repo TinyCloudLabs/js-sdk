@@ -129,6 +129,7 @@ tc delegation create --to did:pkh:eip155:1:0x...
 | `tc space create` | Create a new space |
 | `tc delegation create` | Grant access to another user |
 | `tc delegation list` | List delegations |
+| `tc delegation revoke <cid>` | Revoke a delegation; a delegate profile revokes the ones its own key issued |
 | `tc share` | Share data with another user |
 | `tc node` | Manage TinyCloud nodes |
 | `tc profile list` | List profiles |

@@ -147,6 +147,10 @@ export const DelegationErrorCodes = {
   DATA_FETCH_FAILED: "DATA_FETCH_FAILED",
   VALIDATION_ERROR: "VALIDATION_ERROR",
   UNSUPPORTED_OPERATION: "UNSUPPORTED_OPERATION",
+  /** The node answered 503: the delegation chain is too deep to evaluate right now. Retry later. */
+  CHAIN_TOO_DEEP: "CHAIN_TOO_DEEP",
+  /** The node answered 400 "invalid delegation query cursor": malformed, foreign or from another filter. Start the listing again without it. */
+  INVALID_CURSOR: "INVALID_CURSOR",
 } as const;
 
 export type DelegationErrorCode =
@@ -263,7 +267,7 @@ export type AccountDelegationRecord = z.infer<typeof AccountDelegationRecordSche
 export type AccountDelegationPage = z.infer<typeof AccountDelegationPageSchema>;
 
 export const AccountDelegationQueryOptionsSchema = z.object({
-  direction: z.enum(["granted", "received", "all"]).optional(),
+  direction: z.enum(["granted", "received", "all", "issued"]).optional(),
   status: z.enum(["active", "pending", "expired", "revoked", "ancestor_revoked"]).optional(),
   space: z.string().trim().min(1).optional(),
   limit: z.number().int().min(1).max(100).optional(),
@@ -543,6 +547,21 @@ export type GenerateShareParams = z.infer<typeof GenerateShareParamsSchema>;
 // We use z.unknown().refine() for runtime type checking while preserving TypeScript types.
 
 /**
+ * Signs invocations with the session's own did:key and no proof. The node
+ * accepts these for listing the delegations that key issued and for revoking
+ * a delegation that key is the delegator of.
+ */
+export interface SessionInvocationSigner {
+  /** The session key's bare did:key (no fragment). */
+  did(): string;
+  /**
+   * Signs one short-lived invocation carrying exactly `attenuation` and no
+   * proof; returns the `Authorization` header value.
+   */
+  sign(attenuation: Readonly<Record<string, Readonly<Record<string, readonly unknown[]>>>>): Promise<string>;
+}
+
+/**
  * Configuration for DelegationManager.
  * Note: ServiceSession, InvokeFunction, and FetchFunction are external types.
  */
@@ -568,6 +587,8 @@ export const DelegationManagerConfigSchema = z.object({
   ).optional(),
   /** Optional owner-signed authorization for direct CID revocation */
   signOwnerRevocation: z.custom<(cid: string) => Promise<string>>().optional(),
+  /** Optional signer for proofless invocations by the session's own did:key (issued-delegation list and revoke) */
+  sessionInvocationSigner: z.custom<SessionInvocationSigner>().optional(),
   /** Optional custom fetch implementation */
   fetch: z.unknown().refine(
     (val): val is FetchFunction => val === undefined || typeof val === "function",
