@@ -3,6 +3,7 @@ name: Node SDK replication e2e
 on:
   pull_request:
     paths:
+      - "packages/courier/**"
       - "packages/node-sdk/**"
       - "packages/sdk-services/src/kv/**"
       - "packages/sdk-core/src/**"
@@ -97,6 +98,11 @@ jobs:
           docker cp "$container:/tinycloud" "$RUNNER_TEMP/tinycloud"
           docker rm "$container"
           chmod +x "$RUNNER_TEMP/tinycloud"
+
+      - name: Run Courier QA stub peer e2e
+        env:
+          TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
+        run: node --test packages/courier/scripts/qa-stub-peer.test.mjs
 
       - name: Run node-sdk replication e2e
         env:

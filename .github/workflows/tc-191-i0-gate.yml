@@ -115,6 +115,7 @@ jobs:
           bun test packages/cli/src/commands/context.test.ts
           bun run --cwd packages/cli check:skill-pack
           bun run --cwd packages/courier test
+          node --test packages/courier/scripts/qa-stub-peer.test.mjs
           bun test packages/cli/src/commands/courier.test.ts
           bun test packages/cli/src/lib/permissions.test.ts
           bun test packages/cli/src/output/errors.test.ts
