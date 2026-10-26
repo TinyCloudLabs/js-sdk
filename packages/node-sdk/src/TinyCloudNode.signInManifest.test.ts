@@ -390,13 +390,16 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
     const auth = (node as any).auth;
     auth.refreshNodeInfo = async () => { auth._nodeFeatures = ["encryption-named-keys-v1"]; };
     auth.ensureSpaceExists = async () => {};
-    Object.defineProperty(node, "keys", { get: () => ({ ensureKey: async () => { throw new Error("key unavailable"); } }) });
+    Object.defineProperty(node, "keys", { get: () => ({ ensureKey: async () => {
+      throw Object.assign(new Error("key unavailable"), { code: "KEY_UNAVAILABLE" });
+    } }) });
 
     await node.signIn();
 
     expect(node.session).toBeDefined();
     expect(node.keysUnavailable).toEqual(["apps/xyz.tinycloud.billing/token"]);
     expect(warnings.some((message) => message.includes("apps/xyz.tinycloud.billing/token"))).toBe(true);
+    expect(warnings.some((message) => message.includes("(KEY_UNAVAILABLE)"))).toBe(true);
   });
 
   test("localhost omits manifest keys and completes sign-in", async () => {

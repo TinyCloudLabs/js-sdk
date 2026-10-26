@@ -2637,7 +2637,10 @@ export class TinyCloudNode {
               await this.keys.ensureKey(declaration.path);
             } catch (error) {
               this._keysUnavailable.push(declaration.path);
-              this.notificationHandler.warning(`Named key unavailable: ${declaration.path}`);
+              const code = error && typeof error === "object" && "code" in error &&
+                typeof error.code === "string" && /^[A-Z_]+$/.test(error.code)
+                ? error.code : "UNKNOWN";
+              this.notificationHandler.warning(`Named key unavailable: ${declaration.path} (${code})`);
             }
             this.assertSessionEpoch(epoch, "Sign-in");
           }
@@ -4312,6 +4315,8 @@ export class TinyCloudNode {
     this._hooks = stagedGraph.hooks;
     this._vault = stagedGraph.vault;
     this._encryption = stagedGraph.encryption;
+    this._namedKeyClient = undefined;
+    this._keysUnavailable = [];
     this._capabilityRegistry = stagedGraph.capabilityRegistry;
     this._keyProvider = stagedGraph.keyProvider;
     this._sharingService = stagedGraph.sharingService;
@@ -6214,7 +6219,10 @@ export class TinyCloudNode {
         if (property === "refreshNodeInfo") {
           return () => { void this._namedKeyClient?.then((client) => client.refreshNodeInfo()); };
         }
-        if (typeof property !== "string") return undefined;
+        if (typeof property !== "string" || ![
+          "getPublicKey", "describeKey", "createKey", "blockKey", "unblockKey",
+          "ensureKey", "encrypt", "decrypt", "decryptMany",
+        ].includes(property)) return undefined;
         return (...args: unknown[]) => {
           this._namedKeyClient ??= import("./encryption-keys.js").then(({ createNamedKeyClient }) => createNamedKeyClient(this));
           return this._namedKeyClient.then((client) => {
@@ -6226,7 +6234,7 @@ export class TinyCloudNode {
     });
   }
 
-  /** Manifest key paths unavailable during the active sign-in. */
+  /** Manifest key paths unavailable during the latest `signIn()` attempt. */
   get keysUnavailable(): readonly string[] {
     return this._keysUnavailable;
   }
