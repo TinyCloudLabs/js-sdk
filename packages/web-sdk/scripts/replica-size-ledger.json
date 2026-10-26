@@ -1910,5 +1910,34 @@
     },
     "worker": { "delta": 0, "ceiling": 776128 },
     "reason": "panel background reads (account index, delegation query, storage status) go out only when the session holds the matching ReCap ability (TC-2038)"
+  },
+  "tc2005RevokeWindowRatchet": {
+    "label": "node-sdk owner revocation window (TC-2005, #745): +52 B mjs / +0 B cjs gzip",
+    "ruling": "Approved by Naomi (exact CI bytes at run 40316432428; ceilings measured on the merged master within 10 bytes)",
+    "base": "dc74efaad0363281b19dc389e3a6a5467cfde2cb",
+    "sourceCommits": [
+      "e7706b989018cad874da7e6577558c566359c5a2"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40316432428",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40316432428/job/121550076548",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40316432428/job/121550076779"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 52, "index.cjs": 0 },
+      "ceiling": { "index.mjs": 1467358, "index.cjs": 1409273 }
+    },
+    "firstImport": {
+      "delta": { "replica.mjs": 0, "replica.cjs": 0 },
+      "ceiling": { "replica.mjs": 52374, "replica.cjs": 67571 }
+    },
+    "activation": {
+      "delta": { "activation.mjs": 0, "activation.cjs": 0 },
+      "ceiling": { "activation.mjs": 23386, "activation.cjs": 24959 }
+    },
+    "worker": { "delta": 0, "ceiling": 776128 },
+    "reason": "the owner revocation window extends; one constant in node-sdk (TC-2005)"
   }
 }
