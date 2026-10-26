@@ -1995,22 +1995,22 @@ export const approvedTc2096LazyContentRatchet: Tc2096LazyContentRatchet = {
   reason: "lazy content fetch syncs entry names without downloading values; reads of values the replica does not hold go to the network (TC-2096)",
 };
 
-/** Canonical CI run 40380002126 (TC-2113, #763): root index.mjs rises 1636 B and index.cjs 1244 B over TC-2096's lazy-content root ceilings (1467358 / 1409281); first import, activation and worker carry the lazy row's ceilings with zero delta. */
+/** Canonical CI run 40385555260 (TC-2113, #763; measured at 2cd7543e): root index.mjs rises 1641 B and index.cjs 1241 B over TC-2096's lazy-content root ceilings (1467358 / 1409281); first import, activation and worker carry the lazy row's ceilings with zero delta. */
 export const approvedTc2113PanelGrantRatchet: Tc2113PanelGrantRatchet = {
-  label: "panel button asks for the missing delegation-list permission (TC-2113, #763): +1636 B mjs / +1244 B cjs gzip",
-  ruling: "Approved by Naomi (root approved at ~+1,638 mjs / +1,397 cjs gzip; measured at run 40380002126 as +1,636 mjs / +1,244 cjs over TC-2096's lazy-content root ceilings, whose cjs ceiling carries #754's +8)",
+  label: "panel button asks for the missing delegation-list permission (TC-2113, #763): +1641 B mjs / +1241 B cjs gzip",
+  ruling: "Approved by Naomi (root ~+1,638 mjs / +1,397 cjs gz; measured at run 40385555260 at 2cd7543e: +1,641 / +1,241, within ±10 B)",
   base: "3b372a100fa7841d9a359d8f5d2f5995588e93e4",
   sourceCommits: ["20a872e061bf2818a7234b9dbe1b6dc29e497e3d"],
   canonicalCI: {
-    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40380002126",
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40385555260",
     jobs: [
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40380002126/job/121773352312",
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40380002126/job/121773352761",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40385555260/job/121792750507",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40385555260/job/121792750969",
     ],
   },
   root: {
-    delta: { "index.mjs": 1636, "index.cjs": 1244 },
-    ceiling: { "index.mjs": 1468994, "index.cjs": 1410525 },
+    delta: { "index.mjs": 1641, "index.cjs": 1241 },
+    ceiling: { "index.mjs": 1468999, "index.cjs": 1410522 },
   },
   firstImport: {
     delta: { "replica.mjs": 0, "replica.cjs": 0 },

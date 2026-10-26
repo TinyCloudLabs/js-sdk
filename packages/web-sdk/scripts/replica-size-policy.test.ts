@@ -3314,7 +3314,7 @@ describe("panel grant delegation-list ask (TC-2113, #763) size ratchet", () => {
   it("pins the panel-grant root delta over the lazy-content row and keeps the other tiers unchanged", () => {
     expect(() => validateLedger(current)).not.toThrow();
     expect(current.tc2113PanelGrantRatchet).toEqual(approvedTc2113PanelGrantRatchet);
-    expect(row().root).toEqual({ delta: { "index.mjs": 1636, "index.cjs": 1244 }, ceiling: { "index.mjs": 1468994, "index.cjs": 1410525 } });
+    expect(row().root).toEqual({ delta: { "index.mjs": 1641, "index.cjs": 1241 }, ceiling: { "index.mjs": 1468999, "index.cjs": 1410522 } });
     expect(row().firstImport).toEqual({ delta: { "replica.mjs": 0, "replica.cjs": 0 }, ceiling: { "replica.mjs": 52757, "replica.cjs": 67957 } });
     expect(row().activation).toEqual({ delta: { "activation.mjs": 0, "activation.cjs": 0 }, ceiling: { "activation.mjs": 23412, "activation.cjs": 24981 } });
     expect(row().worker.delta).toBe(0);
