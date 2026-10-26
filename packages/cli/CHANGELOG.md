@@ -1,5 +1,13 @@
 # @tinycloud/cli
 
+## 1.5.0-beta.5
+
+### Patch Changes
+
+- ac50932: Show the account site delegation page when an OpenKey profile cannot complete a CLI revocation.
+
+  Details: TC-2005
+
 ## 1.5.0-beta.4
 
 ### Patch Changes
