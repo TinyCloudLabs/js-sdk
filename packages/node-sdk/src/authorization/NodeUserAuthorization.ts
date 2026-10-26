@@ -86,6 +86,7 @@ export interface PreparedOpenKeyAuthorization {
   readonly address: string;
   readonly chainId: number;
   readonly generation: number;
+  readonly createdAt: number;
 }
 export type OpenKeyAuthorizationResultV1 = Awaited<ReturnType<NodeUserAuthorizationAuthorizeFn>>;
 
@@ -416,6 +417,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
 
   private sessionManager: ISessionManager;
   private activeSessionKeyId = "default";
+  private preparedSessionCounter = 0;
   /** Incremented by resetSession; a sign-in started earlier publishes nothing. */
   private sessionGeneration = 0;
   /**
@@ -1829,9 +1831,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const chainId = await this.signer.getChainId();
 
     // Create a session key
-    const keyId = `session-${Date.now()}`;
-    this.sessionManager.renameSessionKeyId(this.activeSessionKeyId, keyId);
-    this.activeSessionKeyId = keyId;
+    const keyId = `openkey-session-${Date.now()}-${++this.preparedSessionCounter}`;
+    this.sessionManager.createSessionKey(keyId);
 
     // Get JWK for session key
     const jwkString = this.sessionManager.jwk(keyId);
@@ -1962,6 +1963,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     // Set current session
     this._session = clientSession;
     this._tinyCloudSession = tinyCloudSession;
+    this.activeSessionKeyId = keyId;
     this._address = address;
     this._chainId = chainId;
 
@@ -2101,6 +2103,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
       address,
       chainId,
       generation: this.sessionGeneration,
+      createdAt: Date.now(),
     };
   }
 
@@ -2110,6 +2113,9 @@ export class NodeUserAuthorization implements IUserAuthorization {
     authorization: Promise<OpenKeyAuthorizationResultV1>,
     options?: Parameters<NodeUserAuthorization["signInWithOpenKey"]>[1],
   ): Promise<ClientSession> {
+    if (Date.now() - pending.createdAt > 5 * 60_000) {
+      throw new Error("Prepared OpenKey sign-in expired; prepare again");
+    }
     if (pending.generation !== this.sessionGeneration) {
       throw new Error("Prepared OpenKey sign-in expired after sign-out");
     }

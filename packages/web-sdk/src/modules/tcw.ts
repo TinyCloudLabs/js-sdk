@@ -350,12 +350,19 @@ export interface ShareReceiveResult<T = unknown> {
 // TinyCloudWeb
 
 export class TinyCloudWeb {
+  private openkeySignInInFlight = 0;
+  private prepareSignInToken = 0;
   private preparedSignIn?: {
     node: TinyCloudNode;
     request: PreparedOpenKeyAuthorization;
     createdAt: number;
     signOuts: number;
   };
+
+  private invalidatePreparedSignIn(): void {
+    this.prepareSignInToken++;
+    this.preparedSignIn = undefined;
+  }
   /** The connected wallet's raw EIP-1193 provider. */
   public provider!: BrowserProvider;
 
@@ -959,25 +966,47 @@ export class TinyCloudWeb {
    */
   async prepareSignIn(): Promise<void> {
     if (!this.config.openkey) throw new Error("prepareSignIn requires an OpenKey client");
+    if (this.openkeySignInInFlight > 0) {
+      throw new Error("OpenKey sign-in is in progress; prepare after it finishes");
+    }
     refuseCaveated(this._capabilityRequest?.manifests ?? this._manifest);
-    this.preparedSignIn = undefined;
+    this.invalidatePreparedSignIn();
+    const token = this.prepareSignInToken;
     const signOuts = this.signOutCount;
+    const assertCurrent = (): void => {
+      if (this.signOutCount !== signOuts) throw new Error("Sign-in was cancelled by sign-out.");
+      if (token !== this.prepareSignInToken || this.openkeySignInInFlight > 0) {
+        throw new Error("OpenKey sign-in preparation was superseded");
+      }
+    };
     const connected = await this.walletSigner?.getConnectedAddress().catch(() => undefined);
     const restored = await this.restoreSession(connected);
-    if (this.signOutCount !== signOuts) throw new Error("Sign-in was cancelled by sign-out.");
+    assertCurrent();
     const node = await this.ensureNode();
     if (restored.status === "restored" && restored.session) {
       const permissions = this.configuredManifestPermissions(node);
-      if (permissions.length === 0 || node.hasRuntimePermissions(permissions)) return;
+      if (permissions.length === 0 || node.hasRuntimePermissions(permissions)) {
+        assertCurrent();
+        return;
+      }
       await this.clearPersistedSession(restored.session.address);
       this._sessionRestoreStatus = "stale";
     }
+    assertCurrent();
     const request = await node.prepareOpenKeySignIn();
-    if (this.signOutCount !== signOuts) throw new Error("Sign-in was cancelled by sign-out.");
+    assertCurrent();
     this.preparedSignIn = { node, request, createdAt: Date.now(), signOuts };
   }
 
-  signIn = async (options?: SignInOptions): Promise<ClientSession> => {
+  signIn = (options?: SignInOptions): Promise<ClientSession> => {
+    if (!this.config.openkey) return this.performSignIn(options);
+    this.openkeySignInInFlight++;
+    return this.performSignIn(options).finally(() => {
+      this.openkeySignInInFlight--;
+    });
+  };
+
+  private performSignIn = async (options?: SignInOptions): Promise<ClientSession> => {
     // Refuse a caveated manifest before any restore, signer or network call.
     refuseCaveated(this._capabilityRequest?.manifests ?? this._manifest);
     const signOuts = this.signOutCount;
@@ -987,15 +1016,15 @@ export class TinyCloudWeb {
       }
     };
     assertNotSignedOut();
+    if (this.config.openkey && options) {
+      throw new Error("OpenKey sign-in does not accept wallet SIWE overrides");
+    }
     const pending = this.preparedSignIn;
+    this.invalidatePreparedSignIn();
     if (pending) {
-      this.preparedSignIn = undefined;
       if (Date.now() - pending.createdAt > 5 * 60_000 || pending.signOuts !== signOuts) {
         throw new Error("Prepared OpenKey sign-in expired; call prepareSignIn() again");
       }
-    }
-    if (this.config.openkey && options) {
-      throw new Error("OpenKey sign-in does not accept wallet SIWE overrides");
     }
     let node: TinyCloudNode;
     if (pending) {
@@ -1068,7 +1097,7 @@ export class TinyCloudWeb {
       ? [...this.pendingRestoreAddresses.keys()]
       : undefined;
     this.signOutCount++;
-    this.preparedSignIn = undefined;
+    this.invalidatePreparedSignIn();
     this.signOutInFlight++;
     this.persistedRestoreBlocked = true;
     let cleaned = false;
@@ -1184,7 +1213,7 @@ export class TinyCloudWeb {
     provider: BrowserWalletProvider,
     options?: { spacePrefix?: string }
   ): void {
-    this.preparedSignIn = undefined;
+    this.invalidatePreparedSignIn();
     this.walletSigner = new BrowserWalletSigner(provider);
     this.provider = this.walletSigner.getProvider();
     this.eip1193Provider = this.provider;
@@ -1310,7 +1339,7 @@ export class TinyCloudWeb {
    * later inside `_init`.
    */
   setManifest(manifest: Manifest | Manifest[]): void {
-    this.preparedSignIn = undefined;
+    this.invalidatePreparedSignIn();
     this._manifest = manifest;
     this._capabilityRequest = undefined;
     // Forward eagerly if the node is already up. Pre-init, the
@@ -1322,7 +1351,7 @@ export class TinyCloudWeb {
   }
 
   setCapabilityRequest(request: ComposedManifestRequest): void {
-    this.preparedSignIn = undefined;
+    this.invalidatePreparedSignIn();
     this._capabilityRequest = request;
     this._manifest = request.manifests;
     if (this._node) {

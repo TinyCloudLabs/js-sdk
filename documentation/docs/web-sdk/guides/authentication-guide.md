@@ -87,7 +87,7 @@ await tc.prepareSignIn(); // Complete SIWE and host preparation before showing a
 approveButton.addEventListener('click', () => { void tc.signIn(); });
 ```
 
-OpenKey approval uses a popup by default. You can set `openkey: { client: openkey, mode: 'redirect' }` or `mode: 'iframe'` when your app needs another display mode. `prepareSignIn()` makes the popup start in the click handler, which Safari requires. In Chrome and Firefox, `signIn()` also works without preparation within their user activation window. A prepared request is used once and expires after five minutes; call `prepareSignIn()` again before showing the button if it has expired. If sign-in reports an expired request, call `prepareSignIn()` before the next click.
+OpenKey approval uses a popup by default. You can set `openkey: { client: openkey, mode: 'redirect' }` or `mode: 'iframe'` when your app needs another display mode. `prepareSignIn()` makes the popup start in the click handler, which Safari requires. In Chrome and Firefox, `signIn()` also works without preparation within their user activation window. A prepared request is used once and expires after five minutes. Call `prepareSignIn()` again after every sign-in attempt, including a canceled approval or a failed sign-in, and before the next click. Preparation also needs to be repeated if the button remains visible for more than five minutes.
 
 ## Working with Sessions
 

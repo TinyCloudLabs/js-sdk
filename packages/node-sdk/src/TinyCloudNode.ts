@@ -1308,6 +1308,7 @@ export class TinyCloudNode {
   private readonly explicitHost?: string;
   private signer: ISigner | null = null;
   private auth: NodeUserAuthorization | null = null;
+  private readonly consumedOpenKeyPendings = new WeakSet<PreparedOpenKeyAuthorization>();
   private tc: TinyCloud | null = null;
   private _address?: string;
   private _chainId: number = 1;
@@ -2499,6 +2500,13 @@ export class TinyCloudNode {
     if (!this.signer || !this.tc || !this.auth || this.signOutInFlight) {
       throw new Error("Prepared OpenKey sign-in is unavailable");
     }
+    if (this.consumedOpenKeyPendings.has(pending)) {
+      throw new Error("Prepared OpenKey sign-in was already used");
+    }
+    if (Date.now() - pending.createdAt > 5 * 60_000) {
+      throw new Error("Prepared OpenKey sign-in expired; prepare again");
+    }
+    this.consumedOpenKeyPendings.add(pending);
     const authorization = authorizeFn(pending.request);
     // The normal sign-in preflight may still reject before it awaits this result.
     void authorization.catch(() => undefined);
