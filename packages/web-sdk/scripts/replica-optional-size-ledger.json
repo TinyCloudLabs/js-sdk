@@ -1,9 +1,9 @@
 {
   "allowance": {
-    "replica.mjs": 52333,
-    "replica.cjs": 67533,
-    "activation.mjs": 23386,
-    "activation.cjs": 24959
+    "replica.mjs": 51965,
+    "replica.cjs": 67178,
+    "activation.mjs": 23117,
+    "activation.cjs": 24700
   },
   "relocations": [
     {
@@ -256,12 +256,12 @@
       "note": "Optional first-import and IDB activation gzip deltas against this PR's merge base"
     },
     {
-      "pr": "#728",
-      "ticket": "TC-1888",
-      "replica.mjs": 408,
-      "replica.cjs": 394,
-      "activation.mjs": 270,
-      "activation.cjs": 261,
+      "pr": "#742",
+      "ticket": "TC-2043",
+      "replica.mjs": 40,
+      "replica.cjs": 39,
+      "activation.mjs": 0,
+      "activation.cjs": 0,
       "note": "Optional first-import and IDB activation gzip deltas against this PR's merge base"
     }
   ]

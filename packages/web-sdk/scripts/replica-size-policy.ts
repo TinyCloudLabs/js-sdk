@@ -293,8 +293,13 @@ export type Tc1910SigningConsistencyRatchet = HardeningRatchet;
  * bytes. Same shape as the #565 hardening row; the worker, first-import and activation ceilings are carried unchanged.
  */
 export type Tc848SettingsPanelRatchet = HardeningRatchet;
-/** One reviewed exact-delta row for sign-out local-copy erase (TC-1888, #728). */
-export type Tc1888PurgeLocalCopyRatchet = HardeningRatchet;
+/**
+ * One reviewed exact-byte row (js-sdk #739, TC-2034): the named-keys CLI sign-in report raised the root
+ * bytes. Same shape as the #565 hardening row; worker, first-import and activation ceilings are carried unchanged.
+ */
+export type Tc2034NamedKeysCliRatchet = HardeningRatchet;
+/** One reviewed exact-byte row for replication syncScope (TC-2043, #742). */
+export type Tc2043SyncScopeRatchet = HardeningRatchet;
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -335,7 +340,8 @@ export type Ledger = {
   tc1737ShortLinkLazyChunkRatchet?: Tc1737ShortLinkLazyChunkRatchet;
   tc1910SigningConsistencyRatchet?: Tc1910SigningConsistencyRatchet;
   tc848SettingsPanelRatchet?: Tc848SettingsPanelRatchet;
-  tc1888PurgeLocalCopyRatchet?: Tc1888PurgeLocalCopyRatchet;
+  tc2034NamedKeysCliRatchet?: Tc2034NamedKeysCliRatchet;
+  tc2043SyncScopeRatchet?: Tc2043SyncScopeRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -906,7 +912,8 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc1737ShortLinkLazyChunkRatchet !== undefined) pins.push({ row: "tc1737ShortLinkLazyChunkRatchet", pin: root.tc1737ShortLinkLazyChunkRatchet.sourceCommits.at(-1)! });
   if (root.tc1910SigningConsistencyRatchet !== undefined) pins.push({ row: "tc1910SigningConsistencyRatchet", pin: root.tc1910SigningConsistencyRatchet.sourceCommits.at(-1)! });
   if (root.tc848SettingsPanelRatchet !== undefined) pins.push({ row: "tc848SettingsPanelRatchet", pin: root.tc848SettingsPanelRatchet.sourceCommits.at(-1)! });
-  if (root.tc1888PurgeLocalCopyRatchet !== undefined) pins.push({ row: "tc1888PurgeLocalCopyRatchet", pin: root.tc1888PurgeLocalCopyRatchet.sourceCommits.at(-1)! });
+  if (root.tc2034NamedKeysCliRatchet !== undefined) pins.push({ row: "tc2034NamedKeysCliRatchet", pin: root.tc2034NamedKeysCliRatchet.sourceCommits.at(-1)! });
+  if (root.tc2043SyncScopeRatchet !== undefined) pins.push({ row: "tc2043SyncScopeRatchet", pin: root.tc2043SyncScopeRatchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -953,7 +960,8 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc1737ShortLinkLazyChunkRatchet", root.tc1737ShortLinkLazyChunkRatchet?.root.ceiling],
     ["tc1910SigningConsistencyRatchet", root.tc1910SigningConsistencyRatchet?.root.ceiling],
     ["tc848SettingsPanelRatchet", root.tc848SettingsPanelRatchet?.root.ceiling],
-    ["tc1888PurgeLocalCopyRatchet", root.tc1888PurgeLocalCopyRatchet?.root.ceiling],
+    ["tc2034NamedKeysCliRatchet", root.tc2034NamedKeysCliRatchet?.root.ceiling],
+    ["tc2043SyncScopeRatchet", root.tc2043SyncScopeRatchet?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -1672,33 +1680,68 @@ export const approvedTc848SettingsPanelRatchet: Tc848SettingsPanelRatchet = {
   reason: "panel eager launcher, host and toasts; both figures include gzip alignment against the inline wasm payload (TC-1985).",
 };
 
-/** Canonical CI run 40234728208: root, first import and activation rise by the approved deltas; worker is unchanged. */
-export const approvedTc1888PurgeLocalCopyRatchet: Tc1888PurgeLocalCopyRatchet = {
-  label: "sign-out erases the local copy and purgeLocalCopy (TC-1888, #728)",
-  ruling: "Approved by Naomi (exact reviewed deltas at run 40234728208; optional caps include existing cumulative-ledger slack)",
-  base: "1c15c1b5140b2aeb5222bba814764dfe642e4b07",
-  sourceCommits: ["5979c35e8201f2c6f7256c7edd86f2b6669c890f"],
+/**
+ * Named-keys CLI sign-in report (js-sdk #739, TC-2034), approved by Naomi: the root index.mjs ceiling goes from
+ * 1,464,178 to 1,464,317 (+139) and index.cjs from 1,406,007 to 1,406,152 (+145), the exact bytes canonical CI printed
+ * on the #739 head 331a52de (run 40240409880). Worker, first-import and activation ceilings are carried unchanged.
+ */
+export const approvedTc2034NamedKeysCliRatchet: Tc2034NamedKeysCliRatchet = {
+  label: "node-sdk reports whether sign-in's bootstrap created the encryption network (CLI named keys, TC-2034, #739)",
+  ruling: "Approved by Naomi (exact canonical CI bytes at run 40240409880; no headroom)",
+  base: "d01d67c02ef6587295212f507863d164f05961f9",
+  sourceCommits: [
+    "331a52de6b06a350cd62f149d74b6ebe315bc0c5",
+  ],
   canonicalCI: {
-    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40234728208",
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40240409880",
     jobs: [
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40234728208/job/121293733818",
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40234728208/job/121293733654",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40240409880/job/121310795747",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40240409880/job/121310795576",
     ],
   },
   root: {
-    delta: { "index.mjs": 286, "index.cjs": 281 },
-    ceiling: { "index.mjs": 1464464, "index.cjs": 1406288 },
+    delta: { "index.mjs": 139, "index.cjs": 145 },
+    ceiling: { "index.mjs": 1464317, "index.cjs": 1406152 },
   },
   firstImport: {
-    delta: { "replica.mjs": 408, "replica.cjs": 394 },
-    ceiling: { "replica.mjs": 52333, "replica.cjs": 67533 },
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 51925, "replica.cjs": 67141 },
   },
   activation: {
-    delta: { "activation.mjs": 270, "activation.cjs": 261 },
-    ceiling: { "activation.mjs": 23386, "activation.cjs": 24959 },
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23117, "activation.cjs": 24700 },
   },
   worker: { delta: 0, ceiling: 776128 },
-  reason: "sign-out and account switch erase the local copy with an SDK retry and a failure event; the minimum reviewed shape; optional code in the replica chunk.",
+  reason: "node-sdk reports whether sign-in's bootstrap created the encryption network (named-keys CLI)",
+};
+
+/** Canonical CI run 40247206055: opt-in prefix sync raises root and first-import ceilings; activation and workers are unchanged. */
+export const approvedTc2043SyncScopeRatchet: Tc2043SyncScopeRatchet = {
+  label: "replication syncScope opt-in (TC-2043, #742)",
+  ruling: "Approved by Naomi (exact canonical CI bytes at run 40247206055; no headroom)",
+  base: "ddfb8bb54f1d977718631735b5fc4aac3b84e9a3",
+  sourceCommits: ["f6740607a9c5ef1ac9b979388add8515aea7e929"],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40247206055",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40247206055/job/121331195222",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40247206055/job/121331195022",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 41, "index.cjs": 30 },
+    ceiling: { "index.mjs": 1464358, "index.cjs": 1406182 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 40, "replica.cjs": 39 },
+    ceiling: { "replica.mjs": 51965, "replica.cjs": 67178 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23117, "activation.cjs": 24700 },
+  },
+  worker: { delta: 0, ceiling: 776128 },
+  reason: "opt-in `replication.syncScope: 'prefixes'` keeps sign-in kv/sync on declared prefixes when the manifest grants root KV (TinyCloud Home).",
 };
 
 export type GatedOnlyRatchet = {
@@ -1769,7 +1812,8 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc1737ShortLinkLazyChunkRatchet: approvedTc1737ShortLinkLazyChunkRatchet,
   tc1910SigningConsistencyRatchet: approvedTc1910SigningConsistencyRatchet,
   tc848SettingsPanelRatchet: approvedTc848SettingsPanelRatchet,
-  tc1888PurgeLocalCopyRatchet: approvedTc1888PurgeLocalCopyRatchet,
+  tc2034NamedKeysCliRatchet: approvedTc2034NamedKeysCliRatchet,
+  tc2043SyncScopeRatchet: approvedTc2043SyncScopeRatchet,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -1963,9 +2007,13 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc1910SigningConsistencyRatchet || JSON.stringify(value.tc848SettingsPanelRatchet) !== JSON.stringify(approvedTc848SettingsPanelRatchet))) {
     throw new Error("Only Naomi's exact canonical panel ratchet is approved.");
   }
-  if (value.tc1888PurgeLocalCopyRatchet !== undefined &&
-      (!value.tc848SettingsPanelRatchet || JSON.stringify(value.tc1888PurgeLocalCopyRatchet) !== JSON.stringify(approvedTc1888PurgeLocalCopyRatchet))) {
-    throw new Error("Only Naomi's exact canonical sign-out local copy ratchet is approved.");
+  if (value.tc2034NamedKeysCliRatchet !== undefined &&
+      (!value.tc848SettingsPanelRatchet || JSON.stringify(value.tc2034NamedKeysCliRatchet) !== JSON.stringify(approvedTc2034NamedKeysCliRatchet))) {
+    throw new Error("Only Naomi's exact canonical named-keys ratchet is approved.");
+  }
+  if (value.tc2043SyncScopeRatchet !== undefined &&
+      (!value.tc2034NamedKeysCliRatchet || JSON.stringify(value.tc2043SyncScopeRatchet) !== JSON.stringify(approvedTc2043SyncScopeRatchet))) {
+    throw new Error("Only Naomi's exact canonical replication syncScope ratchet is approved.");
   }
 }
 
@@ -2129,11 +2177,19 @@ export function validateTc848SettingsPanelRatchetTransition(base?: Tc848Settings
   }
 }
 
-/** The TC-1888 sign-out local copy ratchet is introduced once and immutable afterwards. */
-export function validateTc1888PurgeLocalCopyRatchetTransition(base?: Tc1888PurgeLocalCopyRatchet, current?: Tc1888PurgeLocalCopyRatchet): void {
-  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1888PurgeLocalCopyRatchet) ||
+/** The TC-2034 named-keys CLI ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
+export function validateTc2034NamedKeysCliRatchetTransition(base?: Tc2034NamedKeysCliRatchet, current?: Tc2034NamedKeysCliRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2034NamedKeysCliRatchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
-    throw new Error("The exact TC-1888 sign-out local copy ratchet may be introduced once and cannot change later.");
+    throw new Error("The exact TC-2034 named-keys ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-2043 replication syncScope ratchet is introduced once and immutable afterwards. */
+export function validateTc2043SyncScopeRatchetTransition(base?: Tc2043SyncScopeRatchet, current?: Tc2043SyncScopeRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2043SyncScopeRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-2043 replication syncScope ratchet may be introduced once and cannot change later.");
   }
 }
 

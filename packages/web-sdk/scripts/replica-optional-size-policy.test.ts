@@ -2,10 +2,10 @@ import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
-  compactFixOptionalAllowance, correctedOptionalAllowance, hardeningOptionalAllowance, tc1413OptionalAllowance, tc1432OptionalAllowance, tc1475OptionalAllowance, masterDriftOptionalAllowance, tc1789OptionalAllowance, validateIntroducedOptionalSources,
+  compactFixOptionalAllowance, correctedOptionalAllowance, hardeningOptionalAllowance, tc1413OptionalAllowance, tc1432OptionalAllowance, tc1475OptionalAllowance, masterDriftOptionalAllowance, tc1789OptionalAllowance, tc2043OptionalAllowance, validateIntroducedOptionalSources,
   validateOptionalEntryTransition, validateOptionalLedger, type OptionalLedger,
 } from "./replica-optional-size-policy";
-import { approvedMasterDriftRatchet, approvedTc1432Ratchet, approvedTc1475Ratchet, approvedTc1789Ratchet, approvedTc1888PurgeLocalCopyRatchet } from "./replica-size-policy";
+import { approvedMasterDriftRatchet, approvedTc1432Ratchet, approvedTc1475Ratchet, approvedTc1789Ratchet, approvedTc2043SyncScopeRatchet } from "./replica-size-policy";
 
 const shipped = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-optional-size-ledger.json"), "utf8")) as OptionalLedger;
 // The tests below cover the #565 hardening-era ledger; TC-1413's own allowance is tested at the end.
@@ -358,7 +358,7 @@ describe("master-drift optional allowance", () => {
 const tc1789Ledger: OptionalLedger = {
   ...structuredClone(shipped),
   allowance: { ...tc1789OptionalAllowance },
-  entries: structuredClone(shipped.entries.slice(0, shipped.entries.findIndex((entry) => entry.pr === "#728"))),
+  entries: structuredClone(shipped.entries.slice(0, shipped.entries.findIndex((entry) => entry.pr === "#742"))),
 };
 
 describe("sdk-services 3.3.1 pin optional allowance", () => {
@@ -392,18 +392,24 @@ describe("sdk-services 3.3.1 pin optional allowance", () => {
   });
 });
 
-describe("TC-1888 sign-out optional allowance", () => {
-  it("pins the cumulative caps to the approved row and includes only its measured deltas", () => {
+describe("TC-2043 replication syncScope optional allowance", () => {
+  it("pins the approved caps and the measured #742 entry", () => {
     expect(() => validateOptionalLedger(shipped, true, true, true, true, true, true, true, true, true)).not.toThrow();
-    const deltas = { ...approvedTc1888PurgeLocalCopyRatchet.firstImport.delta, ...approvedTc1888PurgeLocalCopyRatchet.activation.delta };
-    for (const format of ["replica.mjs", "replica.cjs", "activation.mjs", "activation.cjs"] as const) {
+    const deltas = { ...approvedTc2043SyncScopeRatchet.firstImport.delta, ...approvedTc2043SyncScopeRatchet.activation.delta };
+    expect(shipped.allowance).toEqual({ "replica.mjs": 51965, "replica.cjs": 67178, "activation.mjs": 23117, "activation.cjs": 24700 });
+    expect(shipped.allowance).toEqual(tc2043OptionalAllowance);
+    for (const format of ["replica.mjs", "replica.cjs"] as const) {
       expect(shipped.allowance[format]).toBe(tc1789Ledger.entries.reduce((sum, entry) => sum + entry[format], 0) + deltas[format]);
       expect(shipped.entries.reduce((sum, entry) => sum + entry[format], 0)).toBe(shipped.allowance[format]);
     }
-    expect(shipped.entries.at(-1)).toMatchObject({ pr: "#728", ticket: "TC-1888", ...deltas });
+    for (const format of ["activation.mjs", "activation.cjs"] as const) {
+      expect(shipped.allowance[format]).toBe(tc1789OptionalAllowance[format]);
+      expect(shipped.entries.reduce((sum, entry) => sum + entry[format], 0)).toBeLessThanOrEqual(shipped.allowance[format]);
+    }
+    expect(shipped.entries.at(-1)).toMatchObject({ pr: "#742", ticket: "TC-2043", ...deltas });
   });
 
-  it("refuses extra allowance bytes or the new allowance without the TC-1888 row", () => {
+  it("refuses extra allowance bytes or the new allowance without its ratchet", () => {
     for (const format of ["replica.mjs", "replica.cjs", "activation.mjs", "activation.cjs"] as const) {
       const changed = structuredClone(shipped);
       changed.allowance[format]++;

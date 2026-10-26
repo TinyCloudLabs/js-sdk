@@ -1,5 +1,75 @@
 # @tinycloudlabs/node-sdk
 
+## 3.8.0-beta.0
+
+### Minor Changes
+
+- 15080ed: `tc auth login --keys <folder>` (local-key or OpenKey sign-in) also grants named-key create and decrypt on keys below the folder, and `tc keys ensure|encrypt|decrypt` use them. Node SDK: `additionalRawAbilities` adds top-level resource abilities to the sign-in request.
+
+  Details: TC-2034
+
+## 3.7.0
+
+### Minor Changes
+
+- c142537: Add a named encryption key client: key create, block and unblock, key descriptor reads, `ensureKey`, and key-scoped encrypt and decrypt. It is exposed under the `@tinycloud/sdk-services/encryption/named-keys` and `@tinycloud/node-sdk/encryption-keys` subpaths and is only used with nodes that advertise support.
+
+  Details: TC-1777
+
+- 279c8e9: `storage.full` now fires once per episode of the signed-in account's own storage being full, instead of re-arming on every status read. The episode ends only when a committing write succeeds on that account's own space (kv `put` and `batchPut`, vault `put`, and SQL and DuckDB write actions). A successful `delete` or `get`, or a committed write to another owner's space, does not end it, and `storage.status()` reporting room no longer re-arms the event. `StorageFullMonitor.rejection` reports the own episode only, and `clear()` (sign-out, sign-in as another account) ends it. Breaking for code that relied on a status read to re-arm `storage.full`: call a committing write to see the next event. Delegated owners each emit once until a status read or a successful committing write clears them.
+
+  web-sdk panel: adds a storage section showing the account's usage and state (ok, nearly full, full, unlimited). While the own-storage episode is active the panel shows "Storage is full" and hides the numbers, even if status still reports room. The needs-permission state offers "Allow" only when the client can ask for authority; otherwise it shows the permission note with no action. The manage link uses the status `manageUrl` only when it is https and otherwise falls back to the SDK's storage manage URL.
+
+  web-sdk host: while the own-storage episode is on, the button and panel show "Storage is full", and one info toast with a manage link is shown per episode, even with the panel closed. A new toast appears only after the episode ends and a new one starts. Each full delegated owner gets one info toast with the same copy. The toast reads the manage link from status at toast time, so each toast adds one status request. A toast whose status read finishes after its episode has ended is not shown. With `ui.toasts` off, no toast is shown and no status request is made.
+
+  Details: TC-848
+
+- 71fa087: `authorizeShareDeliveryV3` sends the strict short-link body of `POST /policy/v3/deliveries/authorize` and checks the node's delivery admission v1.
+  - The request body is exactly `{shareUrl, recipientEmail, documentName, jti, expiresAt, requestBodyDigest}`. `expiresAt` is `new Date(expiresAt).toISOString()` (`YYYY-MM-DDTHH:mm:ss.SSSZ`, UTC), whatever form the caller passes. `requestBodyDigest` is the base64url SHA-256 of the JCS of the body without it.
+  - `shareUrl` must be a short share link (`/s/<id>#v=4&k=…&c=…`) on one of `trustedOrigins` (new optional input; default `https://share.tinycloud.xyz`, the `DEFAULT_SHARE_ORIGINS` of `@tinycloud/share-envelope/links`) with a lowercase id. Any other link throws `share delivery requires a short share link` before a request is made.
+  - The `sealedEnvelope`, `envelopeKey` and `shareCid` inputs are removed. `envelope` stays an input: it checks the admission locally and is not sent.
+  - The admission has the schema `xyz.tinycloud.policy/delivery-admission/v1` and the signing domain `xyz.tinycloud.policy/delivery-admission/v1\0`; `returnLink` is the submitted short link and `envelopeRef` is its `c`. A v0 admission is refused. `verifyShareDeliveryAuthorizationV3Bytes` (async) verifies a delivery admission with the strict Ed25519 rule of the links contract (`S < L`, canonical and prime-order `A` and `R`) and a canonical base64url signature, through `assertDidKeySignature` of `@tinycloud/share-envelope/links`.
+  - HTTP 400 and HTTP 422 from the node are one refusal: a `ShareDeliveryRefusedError` (code `delivery-authorization-invalid`, status 400, message `share delivery authorization refused`) that carries nothing of the reply. Any other HTTP error carries the node's reply with the share link and its key replaced, so neither reaches a log or a thrown message.
+  - HTTP 429 is not the refusal: it keeps its status and is retried by `notifyShare` like any other server answer.
+  - `@tinycloud/sdk-core` exports `ShareDeliveryRefusedError`, `shortDeliveryLinkBodyCid`, `verifyShareDeliveryAuthorizationV3Bytes` and `withoutShareLink`, and loads `@tinycloud/share-envelope/links` with `import()` when it first needs it.
+  - `@tinycloud/sdk-core` no longer exports `validateShareDeliveryAuthorizationV3Bytes`.
+
+  Do not release before the node release that serves the new body.
+
+  Details: TC-1737
+
+### Patch Changes
+
+- 147bb78: Encryption network invocations are re-signed with the key of the session that built them, so a sign-in with a manifest creates the account encryption network. Decrypting for an account with no default encryption network reports that the account needs to sign in again with a current SDK.
+
+  Details: TC-1910
+
+- Updated dependencies [c142537]
+- Updated dependencies [4c3d073]
+- Updated dependencies [279c8e9]
+- Updated dependencies [71fa087]
+- Updated dependencies [147bb78]
+- Updated dependencies [14c685e]
+  - @tinycloud/sdk-services@3.7.0
+  - @tinycloud/sdk-core@3.7.0
+  - @tinycloud/replica@0.3.4
+
+## 3.7.0-beta.4
+
+### Minor Changes
+
+- c142537: Add a named encryption key client: key create, block and unblock, key descriptor reads, `ensureKey`, and key-scoped encrypt and decrypt. It is exposed under the `@tinycloud/sdk-services/encryption/named-keys` and `@tinycloud/node-sdk/encryption-keys` subpaths and is only used with nodes that advertise support.
+
+  Details: TC-1777
+
+### Patch Changes
+
+- Updated dependencies [c142537]
+- Updated dependencies [4c3d073]
+  - @tinycloud/sdk-services@3.7.0-beta.4
+  - @tinycloud/replica@0.3.4-beta.3
+  - @tinycloud/sdk-core@3.7.0-beta.4
+
 ## 3.7.0-beta.3
 
 ### Minor Changes

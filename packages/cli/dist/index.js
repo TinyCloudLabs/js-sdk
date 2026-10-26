@@ -6674,7 +6674,8 @@ async function assertPendingRemoteLogoutSession(name, expected) {
 }
 async function clearProfileCredentials(name, syncDirectory = false, legacyCleanup = false) {
   const profile = await ProfileManager.getProfile(name);
-  await ProfileManager.setProfileDurable(name, { ...profile, authSignedOut: true, ...legacyCleanup ? { legacyReplicaCleanup: true } : {} });
+  const { namedKeys: _namedKeys, ...signedOutProfile } = profile;
+  await ProfileManager.setProfileDurable(name, { ...signedOutProfile, authSignedOut: true, ...legacyCleanup ? { legacyReplicaCleanup: true } : {} });
   let failed = false;
   let error;
   try {
@@ -7106,7 +7107,8 @@ async function bootstrapDelegatedSession(ctx, delegation) {
       jwk,
       verificationMethod: sessionDid
     };
-    const profile = { ...previousProfile, sessionDid, spaceId: delegation.spaceId };
+    const { namedKeys: _namedKeys, ...previousFields } = previousProfile;
+    const profile = { ...previousFields, sessionDid, spaceId: delegation.spaceId };
     try {
       await ProfileManager.setSession(ctx.profile, session);
       await ProfileManager.setProfile(ctx.profile, profile);

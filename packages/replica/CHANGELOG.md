@@ -1,5 +1,27 @@
 # @tinycloud/replica
 
+## 0.3.4
+
+### Patch Changes
+
+- 14c685e: The replica package depends on the current @tinycloud/sdk-services release.
+
+  Details: TC-2014
+
+- Updated dependencies [c142537]
+- Updated dependencies [4c3d073]
+- Updated dependencies [279c8e9]
+- Updated dependencies [147bb78]
+  - @tinycloud/sdk-services@3.7.0
+
+## 0.3.4-beta.3
+
+### Patch Changes
+
+- Updated dependencies [c142537]
+- Updated dependencies [4c3d073]
+  - @tinycloud/sdk-services@3.7.0-beta.4
+
 ## 0.3.4-beta.2
 
 ### Patch Changes

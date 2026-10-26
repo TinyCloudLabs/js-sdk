@@ -25,7 +25,8 @@ import { approvedTc1488SiweDomainUriRatchet, validateTc1488SiweDomainUriRatchetT
 import { approvedTc1737ShortLinkLazyChunkRatchet, validateTc1737ShortLinkLazyChunkRatchetTransition, type Tc1737ShortLinkLazyChunkRatchet } from "./replica-size-policy";
 import { approvedTc1910SigningConsistencyRatchet, validateTc1910SigningConsistencyRatchetTransition, type Tc1910SigningConsistencyRatchet } from "./replica-size-policy";
 import { approvedTc848SettingsPanelRatchet, validateTc848SettingsPanelRatchetTransition, type Tc848SettingsPanelRatchet } from "./replica-size-policy";
-import { approvedTc1888PurgeLocalCopyRatchet, validateTc1888PurgeLocalCopyRatchetTransition, type Tc1888PurgeLocalCopyRatchet } from "./replica-size-policy";
+import { approvedTc2034NamedKeysCliRatchet, validateTc2034NamedKeysCliRatchetTransition, type Tc2034NamedKeysCliRatchet } from "./replica-size-policy";
+import { approvedTc2043SyncScopeRatchet, validateTc2043SyncScopeRatchetTransition, type Tc2043SyncScopeRatchet } from "./replica-size-policy";
 import { activeRootCeiling, approvedLedgerRows, rootCeilingFor, rootCeilings } from "./replica-size-policy";
 import { approvedTc1443Ratchet, approvedTc1443bRatchet, approvedTc1448Ratchet, approvedTc1466Ratchet, validateTc1443RatchetTransition, validateTc1443bRatchetTransition, validateTc1448RatchetTransition, validateTc1466RatchetTransition, type Tc1443Ratchet, type Tc1443bRatchet, type Tc1448Ratchet, type Tc1466Ratchet } from "./replica-size-policy";
 import { ancestryPins, assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedHardeningRatchet, approvedLogoutRatchet, approvedTc1413Ratchet, approvedTc1424Ratchet, approvedTc1432Ratchet, approvedTc1436Ratchet, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, landingCommit, pinLandedOn, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateLogoutRatchetTransition, validateMasterMergeResolutionTransition, validateTc1413RatchetTransition, validateTc1424RatchetTransition, validateTc1432RatchetTransition, validateTc1436RatchetTransition, type HardeningRatchet, type Ledger, type LogoutRatchet, type MasterMergeResolution, type Tc1413Ratchet, type Tc1424Ratchet, type Tc1432Ratchet, type Tc1436Ratchet } from "./replica-size-policy";
@@ -2822,31 +2823,92 @@ describe("settings panel launcher, host and toasts (#731, TC-848) root ceiling r
   });
 });
 
-describe("sign-out local copy erase (#728, TC-1888) size ratchet", () => {
-  const row = () => structuredClone(approvedTc1888PurgeLocalCopyRatchet);
+describe("named-keys CLI sign-in report (#739, TC-2034) root ceiling ratchet", () => {
+  const row = () => structuredClone(approvedTc2034NamedKeysCliRatchet);
 
-  it("pins the approved root and optional deltas and carries the worker ceiling", () => {
+  it("raises the two root ceilings by the exact canonical CI bytes over the settings panel row, and carries every other ceiling", () => {
     expect(() => validateLedger(current)).not.toThrow();
-    expect(current.tc1888PurgeLocalCopyRatchet).toEqual(approvedTc1888PurgeLocalCopyRatchet);
-    expect(row().root).toEqual({ delta: { "index.mjs": 286, "index.cjs": 281 }, ceiling: { "index.mjs": 1464464, "index.cjs": 1406288 } });
-    expect(row().firstImport).toEqual({ delta: { "replica.mjs": 408, "replica.cjs": 394 }, ceiling: { "replica.mjs": 52333, "replica.cjs": 67533 } });
-    expect(row().activation).toEqual({ delta: { "activation.mjs": 270, "activation.cjs": 261 }, ceiling: { "activation.mjs": 23386, "activation.cjs": 24959 } });
+    expect(JSON.stringify(current.tc2034NamedKeysCliRatchet)).toBe(JSON.stringify(approvedTc2034NamedKeysCliRatchet));
+    expect(row().root.delta).toEqual({ "index.mjs": 139, "index.cjs": 145 });
+    expect(row().root.ceiling).toEqual({ "index.mjs": 1464317, "index.cjs": 1406152 });
+    expect(row().reason).toContain("named-keys CLI");
+    for (const format of ["index.mjs", "index.cjs"] as const) {
+      expect(row().root.ceiling[format]).toBe(approvedTc848SettingsPanelRatchet.root.ceiling[format] + row().root.delta[format]);
+    }
+    expect(row().firstImport).toEqual({ ...approvedTc848SettingsPanelRatchet.firstImport, delta: { "replica.mjs": 0, "replica.cjs": 0 } });
+    expect(row().activation).toEqual({ ...approvedTc848SettingsPanelRatchet.activation, delta: { "activation.mjs": 0, "activation.cjs": 0 } });
     expect(row().worker).toEqual({ delta: 0, ceiling: approvedTc848SettingsPanelRatchet.worker.ceiling });
-    expect(row().base).toBe("1c15c1b5140b2aeb5222bba814764dfe642e4b07");
-    expect(row().sourceCommits).toEqual(["5979c35e8201f2c6f7256c7edd86f2b6669c890f"]);
+    expect(row().base).toBe("d01d67c02ef6587295212f507863d164f05961f9");
+    expect(row().sourceCommits).toEqual(["331a52de6b06a350cd62f149d74b6ebe315bc0c5"]);
+    expect(row().canonicalCI.run).toBe("https://github.com/TinyCloudLabs/js-sdk/actions/runs/40240409880");
     expect(row().canonicalCI.jobs).toHaveLength(2);
-    expect(ancestryPins(current, false)).toContainEqual({ row: "tc1888PurgeLocalCopyRatchet", pin: row().sourceCommits[0] });
-    expect(rootCeilings(current).at(-1)).toEqual({ row: "tc1888PurgeLocalCopyRatchet", ceiling: row().root.ceiling });
+    expect(ancestryPins(current, false)).toContainEqual({
+      row: "tc2034NamedKeysCliRatchet", pin: row().sourceCommits.at(-1)!,
+    });
+    expect(rootCeilings(current).find((e) => e.row === "tc2034NamedKeysCliRatchet")).toEqual({ row: "tc2034NamedKeysCliRatchet", ceiling: row().root.ceiling });
   });
 
-  it("refuses byte drift, altered provenance, and a missing settings panel prerequisite", () => {
-    const mutations: Array<(changed: Tc1888PurgeLocalCopyRatchet) => void> = [
+  it("refuses one byte of drift in any bucket, other CI provenance, or a missing settings panel row", () => {
+    const mutations: Array<(changed: Tc2034NamedKeysCliRatchet) => void> = [
+      (changed) => { changed.root.ceiling["index.mjs"]++; },
+      (changed) => { changed.root.ceiling["index.cjs"]++; },
+      (changed) => { changed.root.ceiling["index.cjs"]--; },
+      (changed) => { changed.root.delta["index.cjs"]++; },
+      (changed) => { changed.firstImport.ceiling["replica.cjs"]++; },
+      (changed) => { changed.activation.ceiling["activation.cjs"]++; },
+      (changed) => { changed.worker.ceiling--; },
+      (changed) => { changed.canonicalCI.run = "https://github.com/TinyCloudLabs/js-sdk/actions/runs/1"; },
+      (changed) => { changed.sourceCommits = ["0".repeat(40)]; },
+    ];
+    for (const mutate of mutations) {
+      const ledger = copy(current);
+      const changed = row();
+      mutate(changed);
+      ledger.tc2034NamedKeysCliRatchet = changed;
+      expect(() => validateLedger(ledger)).toThrow();
+    }
+    const withoutPrerequisite = copy(current);
+    delete withoutPrerequisite.tc848SettingsPanelRatchet;
+    expect(() => validateLedger(withoutPrerequisite)).toThrow("named-keys");
+  });
+
+  it("may be introduced once and never changed or removed in a later base", () => {
+    expect(() => validateTc2034NamedKeysCliRatchetTransition(undefined, row())).not.toThrow();
+    expect(() => validateTc2034NamedKeysCliRatchetTransition(row(), row())).not.toThrow();
+    const changed = row();
+    changed.root.ceiling["index.cjs"]++;
+    expect(() => validateTc2034NamedKeysCliRatchetTransition(undefined, changed)).toThrow();
+    expect(() => validateTc2034NamedKeysCliRatchetTransition(row(), undefined)).toThrow();
+  });
+});
+
+describe("replication syncScope opt-in (#742, TC-2043) size ratchet", () => {
+  const row = () => structuredClone(approvedTc2043SyncScopeRatchet);
+
+  it("pins exact CI bytes and carries unchanged activation and worker ceilings", () => {
+    expect(() => validateLedger(current)).not.toThrow();
+    expect(current.tc2043SyncScopeRatchet).toEqual(approvedTc2043SyncScopeRatchet);
+    expect(row().root).toEqual({ delta: { "index.mjs": 41, "index.cjs": 30 }, ceiling: { "index.mjs": 1464358, "index.cjs": 1406182 } });
+    expect(row().firstImport).toEqual({ delta: { "replica.mjs": 40, "replica.cjs": 39 }, ceiling: { "replica.mjs": 51965, "replica.cjs": 67178 } });
+    expect(row().activation).toEqual({ ...approvedTc2034NamedKeysCliRatchet.activation, delta: { "activation.mjs": 0, "activation.cjs": 0 } });
+    expect(row().worker).toEqual({ delta: 0, ceiling: approvedTc2034NamedKeysCliRatchet.worker.ceiling });
+    expect(row().root.ceiling["index.mjs"]).toBe(approvedTc2034NamedKeysCliRatchet.root.ceiling["index.mjs"] + 41);
+    expect(row().root.ceiling["index.cjs"]).toBe(approvedTc2034NamedKeysCliRatchet.root.ceiling["index.cjs"] + 30);
+    expect(row().base).toBe("ddfb8bb54f1d977718631735b5fc4aac3b84e9a3");
+    expect(row().sourceCommits).toEqual(["f6740607a9c5ef1ac9b979388add8515aea7e929"]);
+    expect(row().canonicalCI.run).toBe("https://github.com/TinyCloudLabs/js-sdk/actions/runs/40247206055");
+    expect(row().canonicalCI.jobs).toHaveLength(2);
+    expect(ancestryPins(current, false)).toContainEqual({ row: "tc2043SyncScopeRatchet", pin: row().sourceCommits[0] });
+    expect(rootCeilings(current).at(-1)).toEqual({ row: "tc2043SyncScopeRatchet", ceiling: row().root.ceiling });
+  });
+
+  it("refuses changed bytes, provenance or a missing named-keys prerequisite", () => {
+    const mutations: Array<(changed: Tc2043SyncScopeRatchet) => void> = [
       (changed) => { changed.root.ceiling["index.mjs"]++; },
       (changed) => { changed.root.delta["index.cjs"]++; },
-      (changed) => { changed.firstImport.ceiling["replica.mjs"]++; },
-      (changed) => { changed.firstImport.delta["replica.cjs"]++; },
+      (changed) => { changed.firstImport.ceiling["replica.cjs"]++; },
+      (changed) => { changed.firstImport.delta["replica.mjs"]++; },
       (changed) => { changed.activation.ceiling["activation.mjs"]++; },
-      (changed) => { changed.activation.delta["activation.cjs"]++; },
       (changed) => { changed.worker.ceiling++; },
       (changed) => { changed.canonicalCI.run = "https://github.com/TinyCloudLabs/js-sdk/actions/runs/1"; },
       (changed) => { changed.sourceCommits = ["0".repeat(40)]; },
@@ -2855,21 +2917,21 @@ describe("sign-out local copy erase (#728, TC-1888) size ratchet", () => {
       const ledger = copy(current);
       const changed = row();
       mutate(changed);
-      ledger.tc1888PurgeLocalCopyRatchet = changed;
+      ledger.tc2043SyncScopeRatchet = changed;
       expect(() => validateLedger(ledger)).toThrow();
     }
     const withoutPrerequisite = copy(current);
-    delete withoutPrerequisite.tc848SettingsPanelRatchet;
-    expect(() => validateLedger(withoutPrerequisite)).toThrow("sign-out");
+    delete withoutPrerequisite.tc2034NamedKeysCliRatchet;
+    expect(() => validateLedger(withoutPrerequisite)).toThrow("syncScope");
   });
 
-  it("may be introduced once and never changed or removed in a later base", () => {
-    expect(() => validateTc1888PurgeLocalCopyRatchetTransition(undefined, row())).not.toThrow();
-    expect(() => validateTc1888PurgeLocalCopyRatchetTransition(row(), row())).not.toThrow();
+  it("may be introduced once and never changed or removed", () => {
+    expect(() => validateTc2043SyncScopeRatchetTransition(undefined, row())).not.toThrow();
+    expect(() => validateTc2043SyncScopeRatchetTransition(row(), row())).not.toThrow();
     const changed = row();
-    changed.firstImport.ceiling["replica.cjs"]++;
-    expect(() => validateTc1888PurgeLocalCopyRatchetTransition(undefined, changed)).toThrow();
-    expect(() => validateTc1888PurgeLocalCopyRatchetTransition(row(), undefined)).toThrow();
+    changed.root.ceiling["index.cjs"]++;
+    expect(() => validateTc2043SyncScopeRatchetTransition(undefined, changed)).toThrow();
+    expect(() => validateTc2043SyncScopeRatchetTransition(row(), undefined)).toThrow();
   });
 });
 

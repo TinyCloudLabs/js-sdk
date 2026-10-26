@@ -66,7 +66,7 @@ let signedIn = true;
 // Read gate: while closed, delegations reads wait on it, so a read stays in flight across an account switch.
 let gate: Promise<void> | undefined;
 let openGate: (() => void) | undefined;
-const faults = { denyDelegations: false };
+const faults = { denyDelegations: false, statusNotFound: false };
 
 // Account index reads (the Overview's spaces and applications lists). "missing" is a brand-new account whose
 // index tables do not exist yet; "down" is any other failure; "ok" lists nothing.
@@ -129,6 +129,9 @@ const host = {
     },
     async status(cid: string) {
       calls.push({ name: "delegations.status", args: cid });
+      if (faults.statusNotFound) {
+        return { ok: false as const, error: { code: "NOT_FOUND", message: "not found", service: "delegation" } };
+      }
       return { ok: true as const, data: { status: "active" as const } };
     },
     async revoke(cid: string) {
@@ -215,6 +218,10 @@ w.__tc = {
   },
   deny(on: boolean) {
     faults.denyDelegations = on;
+    return true;
+  },
+  statusNotFound(on: boolean) {
+    faults.statusNotFound = on;
     return true;
   },
   index(mode: "ok" | "missing" | "down") {
