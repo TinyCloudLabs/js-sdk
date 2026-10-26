@@ -1,5 +1,13 @@
 # @tinycloud/share-envelope
 
+## 1.3.1-beta.0
+
+### Patch Changes
+
+- 7b22f61: `prepareLinkRecord` and `createLink` set the link header `expiresAt` to whole seconds, truncated toward the past, so it never runs later than the caller's `expiresAt`.
+
+  Details: TC-1737
+
 ## 1.3.0
 
 ### Minor Changes
