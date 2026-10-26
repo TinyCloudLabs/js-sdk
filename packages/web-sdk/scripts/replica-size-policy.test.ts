@@ -3211,12 +3211,12 @@ describe("lazy replica content fetch (TC-2096, #761) size ratchet", () => {
   const row = () => structuredClone(approvedTc2096LazyContentRatchet);
   const prerequisite = () => approvedTc2096RepairBackoffRatchet;
 
-  it("pins the lazy-fetch worker deltas over the repair-backoff row and keeps root, first import and activation unchanged", () => {
+  it("pins the lazy-fetch worker, first-import and activation deltas over the repair-backoff row and keeps root unchanged", () => {
     expect(() => validateLedger(current)).not.toThrow();
     expect(current.tc2096LazyContentRatchet).toEqual(approvedTc2096LazyContentRatchet);
     expect(row().root).toEqual({ delta: { "index.mjs": 0, "index.cjs": 0 }, ceiling: prerequisite().root.ceiling });
-    expect(row().firstImport).toEqual({ delta: { "replica.mjs": 0, "replica.cjs": 0 }, ceiling: prerequisite().firstImport.ceiling });
-    expect(row().activation).toEqual({ delta: { "activation.mjs": 0, "activation.cjs": 0 }, ceiling: prerequisite().activation.ceiling });
+    expect(row().firstImport).toEqual({ delta: { "replica.mjs": 104, "replica.cjs": 111 }, ceiling: { "replica.mjs": 52757, "replica.cjs": 67957 } });
+    expect(row().activation).toEqual({ delta: { "activation.mjs": 26, "activation.cjs": 22 }, ceiling: { "activation.mjs": 23412, "activation.cjs": 24981 } });
     expect(row().worker.delta).toBe(71);
     expect(row().worker.ceiling).toBe(prerequisite().worker.ceiling + row().worker.delta);
     expect(row().replicaWorker.delta).toBe(51);

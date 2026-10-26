@@ -1985,17 +1985,17 @@
     "reason": "the replica retries a value it could not verify with growing gaps and gives up after five tries (TC-2096)"
   },
   "tc2096LazyContentRatchet": {
-    "label": "lazy content fetch (TC-2096, #761): kv-storage worker +71 B, replica worker +51 B gzip; root, first import and activation unchanged",
-    "ruling": "Worker bytes measured at canonical CI run 40366506455 (sqlite and postgres identical); exact-byte approval pending Naomi",
+    "label": "lazy content fetch (TC-2096, #761): kv-storage worker +71 B, replica worker +51 B, replica first import +104/+111 B, activation +26/+22 B gzip; root unchanged",
+    "ruling": "Worker bytes measured at canonical CI run 40366506455; replica first-import and activation bytes measured at canonical CI run 40370497109 (sqlite and postgres identical); exact-byte approval by Naomi",
     "base": "7ed3546aa5211798aef89bdc0414131f2d7af6fb",
     "sourceCommits": [
       "10470576f0f2b2abbec3fb760a199e046929c5af"
     ],
     "canonicalCI": {
-      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40366506455",
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40370497109",
       "jobs": [
-        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40366506455/job/121725561028",
-        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40366506455/job/121725561220"
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40370497109/job/121739610898",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40370497109/job/121739611355"
       ]
     },
     "root": {
@@ -2003,12 +2003,12 @@
       "ceiling": { "index.mjs": 1467358, "index.cjs": 1409273 }
     },
     "firstImport": {
-      "delta": { "replica.mjs": 0, "replica.cjs": 0 },
-      "ceiling": { "replica.mjs": 52653, "replica.cjs": 67846 }
+      "delta": { "replica.mjs": 104, "replica.cjs": 111 },
+      "ceiling": { "replica.mjs": 52757, "replica.cjs": 67957 }
     },
     "activation": {
-      "delta": { "activation.mjs": 0, "activation.cjs": 0 },
-      "ceiling": { "activation.mjs": 23386, "activation.cjs": 24959 }
+      "delta": { "activation.mjs": 26, "activation.cjs": 22 },
+      "ceiling": { "activation.mjs": 23412, "activation.cjs": 24981 }
     },
     "worker": { "delta": 71, "ceiling": 776539 },
     "replicaWorker": { "delta": 51, "ceiling": 770467 },
