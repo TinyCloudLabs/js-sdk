@@ -43,7 +43,8 @@ export interface HostRuntime {
   unregister(id: number): void;
   reset(id: number): void;
   open(section?: SectionId): void;
-  setButtonVisible(visible: boolean): void;
+  /** Absent on a runtime created by an older web-sdk bundle that shares the page. */
+  setButtonVisible?(visible: boolean): void;
   openPage(section?: SectionId): void;
   close(): void;
   isOpen(): boolean;
@@ -86,6 +87,7 @@ export function createHostRuntime(): HostRuntime {
   const clients = new Map<number, ClientEntry>();
   const clientListeners = new Set<() => void>();
   const statusListeners = new Set<() => void>();
+  const buttonListeners = new Set<() => void>();
   const hideStore = createButtonHideStore(defaultLocalStorage);
   const board = createStatusBoard((top) => {
     mounted?.button?.setStatus(top);
@@ -192,7 +194,13 @@ export function createHostRuntime(): HostRuntime {
       const appId = hideScope().appId;
       return appId === FALLBACK_APP_ID ? undefined : appId;
     },
-    canHideButton: () => primaryConfig()?.button === true,
+    canHideButton: buttonOn,
+    onButtonChange(cb) {
+      buttonListeners.add(cb);
+      return () => {
+        buttonListeners.delete(cb);
+      };
+    },
     hideButton: hideFromPanel,
   };
 
@@ -281,6 +289,7 @@ export function createHostRuntime(): HostRuntime {
       buttonHidden = true;
     }
     syncDom();
+    for (const listener of [...buttonListeners]) listener();
   }
 
   /** `open()` and `openPage()`: clear the hidden flag, restore the button, then open. */

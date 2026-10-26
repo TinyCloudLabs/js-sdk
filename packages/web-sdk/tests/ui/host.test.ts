@@ -3,7 +3,7 @@ import { JSDOM } from "jsdom";
 
 import { registerUiClient, type UiClientHandle } from "../../src/ui";
 import type { ClientSource } from "../../src/ui/client";
-import { REGISTRY_KEY } from "../../src/ui/host";
+import { createHostRuntime, HOST_API_VERSION, REGISTRY_KEY } from "../../src/ui/host";
 import { HIDE_KEY_PREFIX } from "../../src/ui/persistence";
 import { text } from "../../src/ui/strings";
 import type { HostContext, SyncFacade, SyncState } from "../../src/ui/slots";
@@ -1038,5 +1038,43 @@ describe("setButtonVisible", () => {
     expect(buttonEl()?.hidden).toBe(true);
     ui.api.setButtonVisible(true);
     expect(buttonEl()?.hidden).toBe(false);
+  });
+});
+
+describe("setButtonVisible with a shared page", () => {
+  test("a runtime from an older bundle registered first: the call is a no-op with one warning, the rest keeps working", () => {
+    const older = createHostRuntime();
+    delete older.setButtonVisible;
+    g[REGISTRY_KEY] = { apiVersion: HOST_API_VERSION, runtime: older };
+    const warnings: unknown[][] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args);
+    };
+    try {
+      const ui = mountClient();
+      expect(() => ui.api.setButtonVisible(true)).not.toThrow();
+      expect(() => ui.api.setButtonVisible(false)).not.toThrow();
+      ui.api.open();
+      expect(ui.api.isOpen).toBe(true);
+    } finally {
+      console.warn = originalWarn;
+    }
+    expect(warnings).toEqual([["[tinycloud] ui-host-set-button-visible-unsupported"]]);
+  });
+
+  test("ui.button:false then setButtonVisible(true): the panel's Overview offers Hide button, also while it is already open", async () => {
+    const ui = mountClient({ button: false });
+    ui.api.open();
+    await panelMounted();
+    expect(actionEl(text("panel.hide"))).toBeUndefined();
+    ui.api.setButtonVisible(true);
+    expect(actionEl(text("panel.hide"))).toBeDefined();
+    ui.api.setButtonVisible(false);
+    expect(actionEl(text("panel.hide"))).toBeUndefined();
+    ui.api.setButtonVisible(true);
+    ui.api.close();
+    ui.api.open();
+    expect(actionEl(text("panel.hide"))).toBeDefined();
   });
 });

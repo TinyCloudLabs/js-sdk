@@ -81,6 +81,8 @@ export interface HostContext {
   canHideButton(): boolean;
   /** Hides the launcher button, persists it, and closes the panel. */
   hideButton(): void;
+  /** Fires when the button's presence changes (`setButtonVisible`), so an open section can follow `canHideButton()`. Optional: a context without it never changes. */
+  onButtonChange?(cb: () => void): () => void;
 }
 
 /** Views the shell reads for statuses. `account` is read by Overview itself. */

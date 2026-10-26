@@ -190,30 +190,38 @@ function mountAccount(el: HTMLElement, ctx: SectionContext): () => void {
   cols.append(left, right);
   el.append(signedOut, hint, cols);
 
-  if (ctx.canHideButton()) {
-    const block = document.createElement("div");
-    block.className = "account-button";
-    const title = document.createElement("h4");
-    title.className = "account-rule";
-    title.textContent = ctx.text("account.button.title");
-    const body = document.createElement("p");
-    body.className = "account-small";
-    body.textContent = ctx.text("account.button.body").replace("{app}", ctx.appLabel() ?? ctx.text("account.button.app"));
-    const hide = actionButton(ctx.text("panel.hide"));
-    hide.prepend(icon("eyeoff"));
-    hide.addEventListener("click", () => ctx.hideButton());
-    const dev = document.createElement("div");
-    dev.className = "account-devnote";
-    const lead = document.createElement("b");
-    lead.textContent = ctx.text("account.button.dev.lead");
-    const call = document.createElement("code");
-    call.textContent = "tc.ui.open()";
-    const words = document.createElement("div");
-    words.append(lead, ` ${ctx.text("account.button.dev.body")} `, call, `. ${ctx.text("account.button.dev.tail")}`);
-    dev.append(icon("info"), words);
-    block.append(title, body, hide, dev);
-    el.append(block);
+  // The "Hide button" block is built once and attached only while the launcher button is part of the page; the host
+  // tells the section when that changes (`setButtonVisible`), so an open Overview follows it.
+  const block = document.createElement("div");
+  block.className = "account-button";
+  const title = document.createElement("h4");
+  title.className = "account-rule";
+  title.textContent = ctx.text("account.button.title");
+  const body = document.createElement("p");
+  body.className = "account-small";
+  body.textContent = ctx.text("account.button.body").replace("{app}", ctx.appLabel() ?? ctx.text("account.button.app"));
+  const hide = actionButton(ctx.text("panel.hide"));
+  hide.prepend(icon("eyeoff"));
+  hide.addEventListener("click", () => ctx.hideButton());
+  const dev = document.createElement("div");
+  dev.className = "account-devnote";
+  const lead = document.createElement("b");
+  lead.textContent = ctx.text("account.button.dev.lead");
+  const call = document.createElement("code");
+  call.textContent = "tc.ui.open()";
+  const words = document.createElement("div");
+  words.append(lead, ` ${ctx.text("account.button.dev.body")} `, call, `. ${ctx.text("account.button.dev.tail")}`);
+  dev.append(icon("info"), words);
+  block.append(title, body, hide, dev);
+  function syncHideBlock(): void {
+    if (ctx.canHideButton()) {
+      if (!block.isConnected) el.append(block);
+    } else {
+      block.remove();
+    }
   }
+  syncHideBlock();
+  const offButton = ctx.onButtonChange?.(syncHideBlock);
 
   function render(): void {
     if (disposed) return;
@@ -393,6 +401,7 @@ function mountAccount(el: HTMLElement, ctx: SectionContext): () => void {
     offReset?.();
     offData();
     offSource?.();
+    offButton?.();
     el.replaceChildren();
   };
 }
