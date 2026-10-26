@@ -159,6 +159,12 @@ async function main([mode, ...args]) {
     console.log(body);
     return;
   }
+  if (mode === "count" && args.length === 1) {
+    const [logPath] = args;
+    const published = existsSync(logPath) ? publishedFromLog(readFileSync(logPath, "utf8")) : [];
+    console.log(published.length);
+    return;
+  }
   if (mode === "create" && (args.length === 2 || args.length === 3)) {
     const [logPath, sha, flag] = args;
     const dryRun = flag === "--dry-run";
@@ -184,7 +190,7 @@ async function main([mode, ...args]) {
     }
     return;
   }
-  throw new Error("usage: github-releases.mjs create <publish-log> <sha> [--dry-run] | notes <name@version>");
+  throw new Error("usage: github-releases.mjs create <publish-log> <sha> [--dry-run] | notes <name@version> | count <publish-log>");
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {

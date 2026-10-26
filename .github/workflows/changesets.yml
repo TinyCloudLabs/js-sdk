@@ -25,10 +25,14 @@ jobs:
     if: github.event_name == 'push' && !contains(github.event.head_commit.message, '[skip ci]')
     runs-on: ubuntu-latest
     # actions: read lets pre-publish read earlier Release runs' logs (TC-1457).
-    # contents: write lets the release step create GitHub Releases (O25).
+    # contents: read is all this job needs. beta-github-releases holds
+    # contents: write and creates the GitHub Releases (O25).
     permissions:
       actions: read
-      contents: write
+      contents: read
+    outputs:
+      published: ${{ steps.published.outputs.published }}
+      release-sha: ${{ steps.release.outputs.sha }}
     steps:
       # The deploy key is not left in git config or ~/.ssh for install and
       # build steps; only the push step below uses it.
@@ -236,16 +240,29 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           RELEASE_SHA: ${{ steps.release.outputs.sha }}
 
-      # One GitHub Release per package version this run published (O25). A
-      # failure is reported as an error annotation; npm already has the
-      # versions, so the job does not fail.
-      - name: Create GitHub Releases for published versions
-        if: steps.check.outputs.pending != '0'
-        run: node .github/scripts/github-releases.mjs create "$RUNNER_TEMP/changeset-publish.log" "$RELEASE_SHA"
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_SHA: ${{ steps.release.outputs.sha }}
+      # Records whether this run's publish reported any versions. It runs even
+      # when publish failed partway, so versions npm accepted still get releases.
+      - name: Record whether this run published versions
+        id: published
+        if: always() && steps.check.outputs.pending != '0'
+        run: |
+          COUNT=$(node .github/scripts/github-releases.mjs count "$RUNNER_TEMP/changeset-publish.log")
+          if [ "${COUNT:-0}" -gt 0 ]; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The log is kept one day for beta-github-releases, which runs in a
+      # separate job so that only it holds contents: write.
+      - name: Keep the publish log for beta-github-releases
+        if: always() && steps.published.outputs.published == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: beta-publish-log
+          path: ${{ runner.temp }}/changeset-publish.log
+          retention-days: 1
+          if-no-files-found: error
 
       # Fails red when a published version requires an internal version npm
       # does not show (even one npm accepted), and prints the commands that move
@@ -259,6 +276,42 @@ jobs:
       - name: Remove release deploy key
         if: always()
         run: .github/scripts/release-deploy-key.sh remove
+
+  # Creates the GitHub Releases for what the beta job published (O25). Only
+  # this job holds contents: write, and it installs no dependencies.
+  beta-github-releases:
+    name: Beta GitHub Releases
+    needs: beta
+    if: always() && needs.beta.outputs.published == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # Checked out at the version commit the beta job published, so the
+      # CHANGELOG sections match the published versions. That commit's copy of
+      # the script is the one the beta job ran.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.beta.outputs.release-sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: beta-publish-log
+          path: ${{ runner.temp }}/beta-publish
+
+      # A failure is reported as an error annotation. npm already has the
+      # versions, so this job does not fail.
+      - name: Create GitHub Releases for published versions
+        run: node .github/scripts/github-releases.mjs create "$RUNNER_TEMP/beta-publish/changeset-publish.log" "$RELEASE_SHA"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_SHA: ${{ needs.beta.outputs.release-sha }}
 
   # Manual trigger: graduate betas to stable release
   stable:

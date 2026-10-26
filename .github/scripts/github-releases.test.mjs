@@ -242,4 +242,15 @@ describe("github-releases.mjs create (CLI, dry run)", () => {
     assert.equal(run.status, 0, run.stderr);
     assert.match(run.stdout, /nothing to release/);
   });
+
+  test("count prints how many versions the publish log lists, and 0 with no log", () => {
+    const root = fixtureRoot([]);
+    const log = root + "/publish.log";
+    writeFileSync(log, "packages published successfully:\n@tinycloud/cli@1.5.0-beta.6\n@tinycloud/web-sdk@3.3.0-beta.7\n");
+    const counted = spawnSync(process.execPath, [SCRIPT, "count", log], { cwd: root, encoding: "utf8", env: isolatedEnv(root) });
+    assert.equal(counted.status, 0, counted.stderr);
+    assert.equal(counted.stdout.trim(), "2");
+    const missing = spawnSync(process.execPath, [SCRIPT, "count", join(root, "missing.log")], { cwd: root, encoding: "utf8", env: isolatedEnv(root) });
+    assert.equal(missing.stdout.trim(), "0");
+  });
 });
