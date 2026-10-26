@@ -87,6 +87,7 @@ tc kv list
 tc secrets network init
 printf '%s' "$ANTHROPIC_API_KEY" | tc secrets put ANTHROPIC_API_KEY --stdin
 tc secrets get ANTHROPIC_API_KEY
+tc secrets run ANTHROPIC_API_KEY -- python train.py   # the value only in the command's environment
 
 # Ask the owner for a secret an agent needs, then wait for it
 # (call TinyCloud's CLI by absolute path: a bare `tc` can be iproute2's /usr/sbin/tc)
@@ -138,6 +139,7 @@ tc delegation create --to did:pkh:eip155:1:0x...
 | `tc secrets network show` | Show a secrets decryption network |
 | `tc secrets network init` | Create or fetch the default secrets network |
 | `tc secrets network grant` | Grant `tinycloud.encryption/decrypt` on a secrets network |
+| `tc secrets run` | Run a command with secrets in its environment |
 | `tc secrets request` | Print a Secret Manager link asking the owner to add secrets (offline) |
 | `tc secrets wait` | Wait until secrets exist and are readable (never signs in; needs a stored session; exit 8 pending, 130 interrupted) |
 | `tc secrets manage` | Print or open the Secret Manager page, `{url, opened}` |
@@ -158,6 +160,62 @@ are left as you edited them and listed under `conflicts` (JSON); the command
 still exits 0 and installs the rest. If the schema fails after notes were
 written, it says "notes saved; tables not set up: run again"; running it again
 is safe.
+
+### Running a command with secrets
+
+```bash
+tc secrets run NAME... [--map NAME=ENV_VAR]... [--scope S] [--space S] [--delegation SOURCE] [--private-key HEX] -- <command> [args...]
+
+tc secrets run ANTHROPIC_API_KEY OPENAI_API_KEY -- python train.py
+tc secrets run --map ANTHROPIC_KEY=ANTHROPIC_API_KEY -- node server.js
+```
+
+`tc secrets run` reads every named secret as `tc secrets get` does, then
+starts `<command>` directly, without a shell, with each value in its
+environment: under the secret's name, or under `ENV_VAR` for `--map
+NAME=ENV_VAR`. A value replaces an inherited variable of the same name.
+tc doesn't pass its own `TC_PRIVATE_KEY` to the command. To give the command
+a key from a secret, use `--map NAME=TC_PRIVATE_KEY`.
+Everything after the first `--`, including any further `--`, goes to the
+command unchanged. The command uses tc's stdin, stdout and stderr; tc itself
+writes nothing to stdout, and its own messages go to stderr.
+
+Name at least one secret, as an argument or with `--map`. `ENV_VAR` must
+match `[A-Za-z_][A-Za-z0-9_]*`, and two secrets cannot be mapped to the same
+variable (exit 2). If any secret cannot be read, the command does not start
+and tc exits with the code and error `tc secrets get` gives for that secret.
+Otherwise tc exits with the command's exit code. If the command was ended by
+SIGINT, SIGTERM, SIGHUP, SIGKILL, SIGALRM or SIGUSR2, tc ends by the same
+signal (or exits with 128 plus the signal number if that signal doesn't end
+tc). If any other signal ended it, such as SIGQUIT or SIGSEGV, tc exits with
+128 plus the signal number instead, so tc does not cause a core dump
+(SIGUSR1 and SIGPIPE are left out too: Node uses SIGUSR1 for its inspector
+and ignores SIGPIPE).
+
+SIGINT, SIGTERM, SIGHUP and SIGQUIT sent to tc go to the command. When tc
+runs in the foreground of a terminal, it doesn't pass on SIGINT, SIGQUIT or
+SIGHUP: the terminal already sends them (Ctrl-C, Ctrl-\, hangup) to the
+command, so the command normally gets each one once. tc checks whether it's
+in the foreground using `/proc`, or `ps` where `/proc` isn't available. If
+neither works, it passes the signals on. When tc runs in the background, it
+passes them on, so a signal sent to the whole job (for example `kill -INT
+%1`) can reach the command twice.
+
+From a script, stop the command by sending SIGTERM to tc's process ID. tc
+passes it on, waits for the command to exit, then exits the way the command
+did (the command's own exit code if it handles SIGTERM itself). If the
+command ignores SIGTERM, tc keeps waiting.
+
+A command that does not exist exits 127; one that cannot be executed, or
+cannot be started for another reason, exits 126. These cases print one plain
+line on stderr, even with `--json`: `tc secrets run: <command>: command not
+found`, `…: permission denied` or `…: cannot run (<error code>)`.
+
+Limits: `tc secrets run` keeps values out of the command line, your shell
+history and tc's own output. It doesn't hide them from the command: the
+command, and anything it starts, receives the values and can print, log or
+pass them on. Other programs running as the same user can often read a
+process's environment too.
 
 ## Global Options
 
