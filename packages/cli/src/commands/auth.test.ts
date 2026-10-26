@@ -936,16 +936,47 @@ describe("CLI auth commands on a missing profile (TC-682)", () => {
       replicasKept: true,
     })]);
   });
-  test("OpenKey login reports PROFILE_NOT_FOUND, not NO_KEY, before any approval starts", async () => {
+  test("OpenKey login on a missing profile starts the approval and saves profile, key and session after it verifies", async () => {
+    const key = { kty: "OKP", crv: "Ed25519", x: "new-public", d: "new-private" };
+    generatedKeys.push({ jwk: key, did: "did:key:new-openkey" });
+
     await runAuthCommand(["auth", "login", "--method", "openkey", "--paste"]);
 
-    expect(recorded.errors).toEqual([expect.objectContaining({
-      code: "PROFILE_NOT_FOUND",
-      message: expect.stringContaining("tc init --name owner"),
+    expect(recorded.errors).toEqual([]);
+    expect(recorded.startAuthFlows).toEqual([expect.objectContaining({
+      did: "did:key:new-openkey",
+      options: expect.objectContaining({ jwk: key }),
     })]);
-    expect(recorded.startAuthFlows).toEqual([]);
-    expect(recorded.outputs).toEqual([]);
+    expect(keys.get("owner")).toEqual(key);
+    expect(sessions.has("owner")).toBe(true);
+    expect(profiles.get("owner")).toEqual(expect.objectContaining({
+      name: "owner",
+      authMethod: "openkey",
+      posture: "owner-openkey",
+      did: "did:key:new-openkey",
+      sessionDid: "did:key:new-openkey",
+      ownerDid: "did:pkh:eip155:1:0xowner",
+    }));
+    expect(recorded.outputs).toContainEqual(expect.objectContaining({ authenticated: true, profile: "owner" }));
+  });
+  test("a failed OpenKey login on a missing profile leaves no profile, key or session", async () => {
+    generatedKeys.push({
+      jwk: { kty: "OKP", crv: "Ed25519", x: "candidate-public", d: "candidate-private" },
+      did: "did:key:candidate",
+    });
+    openKeyDelegation = { ...openKeyDelegation, delegationCid: "" };
+
+    await runAuthCommand(["auth", "login", "--method", "openkey", "--paste"]);
+
+    expect(recorded.errors).toHaveLength(1);
+    expect(recorded.startAuthFlows).toHaveLength(1);
     expect(profiles.has("owner")).toBe(false);
+    expect(keys.has("owner")).toBe(false);
+    expect(sessions.has("owner")).toBe(false);
+    expect(recorded.setProfiles).toEqual([]);
+    expect(recorded.setKeys).toEqual([]);
+    expect(recorded.setSessions).toEqual([]);
+    expect(recorded.outputs).toEqual([]);
   });
   test("local login bootstraps a profile that does not yet exist", async () => {
     await runAuthCommand(["auth", "login", "--method", "local"]);
