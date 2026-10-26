@@ -71,6 +71,12 @@ export type ReplicaOptions = {
    * that later fails. Lets the caller report partial progress immediately.
    */
   onCommit?: () => void;
+  /**
+   * `"eager"` (default) downloads each changed value while syncing. `"lazy"` syncs entry names only:
+   * no value is fetched while syncing or repairing, a value not already held is committed without
+   * content, and a read of it reports `content_missing`.
+   */
+  contentFetch?: "eager" | "lazy";
 };
 
 const DEFAULT_PAGE_LIMIT = 500;
@@ -136,6 +142,7 @@ export class Replica {
   readonly #now: () => number;
   readonly #leaseTtlMs: number;
   readonly #onCommit: (() => void) | undefined;
+  readonly #contentFetch: "eager" | "lazy";
 
   /** Failed repair fetches of this session, by key and ETag hash. Never persisted: a new `Replica` retries afresh. */
   readonly #repairTries = new Map<string, { tries: number; nextAttemptAt: number }>();
@@ -147,6 +154,7 @@ export class Replica {
     this.#now = options.now ?? Date.now;
     this.#leaseTtlMs = options.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS;
     this.#onCommit = options.onCommit;
+    this.#contentFetch = options.contentFetch ?? "eager";
   }
 
   async #state(): Promise<ReplicaState> {
@@ -515,6 +523,8 @@ export class Replica {
       return false;
     });
 
+    // Lazy: commit the names with content=0; reads of those values go to the network.
+    if (this.#contentFetch === "lazy") return { changes, blobs, fetched: 0 };
     let fetched = 0;
     for (let start = 0; start < needed.length; start += FETCH_CHUNK) {
       const chunk = needed.slice(start, start + FETCH_CHUNK);
@@ -534,6 +544,8 @@ export class Replica {
     return { changes, blobs, fetched };
   }
   async #repair(attempt: Attempt, cursor: string | null, nodeDid: string | null, coverage: Coverage, retentionGrantCid: string | null): Promise<number> {
+    // Lazy: entries committed without content are not failed fetches; never download them in the background.
+    if (this.#contentFetch === "lazy") return 0;
     const all = await this.#store.pendingRepairs(Number.MAX_SAFE_INTEGER);
     const now = this.#now();
     // A value that stopped being pending (verified by a feed page, rewritten, deleted) leaves the map.

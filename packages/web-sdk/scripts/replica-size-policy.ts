@@ -312,6 +312,8 @@ export type Tc2005RevokeWindowRatchet = HardeningRatchet;
 export type Tc2096RepairBackoffRatchet = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
 /** One reviewed exact-byte row for the TinyCloudWeb location guard (TC-2072, #754); replicaWorker is carried at TC-2096's replica.worker.js ceiling. */
 export type Tc2072LocationGuardRatchet = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
+/** One reviewed exact-byte row for lazy replica content fetch (TC-2096, #761); replicaWorker is the replica.worker.js ceiling. */
+export type Tc2096LazyContentRatchet = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -360,6 +362,7 @@ export type Ledger = {
   tc2005RevokeWindowRatchet?: Tc2005RevokeWindowRatchet;
   tc2096RepairBackoffRatchet?: Tc2096RepairBackoffRatchet;
   tc2072LocationGuardRatchet?: Tc2072LocationGuardRatchet;
+  tc2096LazyContentRatchet?: Tc2096LazyContentRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -938,6 +941,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2005RevokeWindowRatchet !== undefined) pins.push({ row: "tc2005RevokeWindowRatchet", pin: root.tc2005RevokeWindowRatchet.sourceCommits.at(-1)! });
   if (root.tc2096RepairBackoffRatchet !== undefined) pins.push({ row: "tc2096RepairBackoffRatchet", pin: root.tc2096RepairBackoffRatchet.sourceCommits.at(-1)! });
   if (root.tc2072LocationGuardRatchet !== undefined) pins.push({ row: "tc2072LocationGuardRatchet", pin: root.tc2072LocationGuardRatchet.sourceCommits.at(-1)! });
+  if (root.tc2096LazyContentRatchet !== undefined) pins.push({ row: "tc2096LazyContentRatchet", pin: root.tc2096LazyContentRatchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -992,6 +996,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2005RevokeWindowRatchet", root.tc2005RevokeWindowRatchet?.root.ceiling],
     ["tc2096RepairBackoffRatchet", root.tc2096RepairBackoffRatchet?.root.ceiling],
     ["tc2072LocationGuardRatchet", root.tc2072LocationGuardRatchet?.root.ceiling],
+    ["tc2096LazyContentRatchet", root.tc2096LazyContentRatchet?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -1955,6 +1960,36 @@ export const approvedTc2072LocationGuardRatchet: Tc2072LocationGuardRatchet = {
   reason: "constructing TinyCloudWeb without a location skips UI client registration (TC-2072)",
 };
 
+/** Canonical CI run 40366506455 measured the kv-storage worker +71 bytes and the replica worker +51 bytes (TC-2096, #761). Canonical CI run 40370497109 measured the replica first import +104/+111 bytes and IDB activation +26/+22 bytes on this row's head (sqlite and postgres identical). The root is carried at the TC-2072 ceilings with zero delta. */
+export const approvedTc2096LazyContentRatchet: Tc2096LazyContentRatchet = {
+  label: "lazy content fetch (TC-2096, #761): kv-storage worker +71 B, replica worker +51 B, replica first import +104/+111 B, activation +26/+22 B gzip; root unchanged",
+  ruling: "Worker bytes measured at canonical CI run 40366506455; replica first-import and activation bytes measured at canonical CI run 40370497109 (sqlite and postgres identical); exact-byte approval by Naomi",
+  base: "7ed3546aa5211798aef89bdc0414131f2d7af6fb",
+  sourceCommits: ["10470576f0f2b2abbec3fb760a199e046929c5af"],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40370497109",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40370497109/job/121739610898",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40370497109/job/121739611355",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 0, "index.cjs": 0 },
+    ceiling: { "index.mjs": 1467358, "index.cjs": 1409281 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 104, "replica.cjs": 111 },
+    ceiling: { "replica.mjs": 52757, "replica.cjs": 67957 },
+  },
+  activation: {
+    delta: { "activation.mjs": 26, "activation.cjs": 22 },
+    ceiling: { "activation.mjs": 23412, "activation.cjs": 24981 },
+  },
+  worker: { delta: 71, ceiling: 776539 },
+  replicaWorker: { delta: 51, ceiling: 770467 },
+  reason: "lazy content fetch syncs entry names without downloading values; reads of values the replica does not hold go to the network (TC-2096)",
+};
+
 export type GatedOnlyRatchet = {
   label: string;
   sourceCommit: string;
@@ -2031,6 +2066,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2005RevokeWindowRatchet: approvedTc2005RevokeWindowRatchet,
   tc2096RepairBackoffRatchet: approvedTc2096RepairBackoffRatchet,
   tc2072LocationGuardRatchet: approvedTc2072LocationGuardRatchet,
+  tc2096LazyContentRatchet: approvedTc2096LazyContentRatchet,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -2256,6 +2292,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc2096RepairBackoffRatchet || JSON.stringify(value.tc2072LocationGuardRatchet) !== JSON.stringify(approvedTc2072LocationGuardRatchet))) {
     throw new Error("Only Naomi's exact canonical location-guard ratchet is approved.");
   }
+  if (value.tc2096LazyContentRatchet !== undefined &&
+      (!value.tc2072LocationGuardRatchet || JSON.stringify(value.tc2096LazyContentRatchet) !== JSON.stringify(approvedTc2096LazyContentRatchet))) {
+    throw new Error("Only the exact canonical lazy-content ratchet is approved.");
+  }
 }
 
 /** The #606 worker ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
@@ -2479,6 +2519,14 @@ export function validateTc2072LocationGuardRatchetTransition(base?: Tc2072Locati
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2072LocationGuardRatchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact TC-2072 location-guard ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-2096 lazy-content ratchet is introduced once and immutable afterwards. */
+export function validateTc2096LazyContentRatchetTransition(base?: Tc2096LazyContentRatchet, current?: Tc2096LazyContentRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2096LazyContentRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-2096 lazy-content ratchet may be introduced once and cannot change later.");
   }
 }
 

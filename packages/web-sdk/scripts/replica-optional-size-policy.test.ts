@@ -3,10 +3,10 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   compactFixOptionalAllowance, correctedOptionalAllowance, hardeningOptionalAllowance, tc1413OptionalAllowance, tc1432OptionalAllowance, tc1475OptionalAllowance, masterDriftOptionalAllowance, tc1789OptionalAllowance, tc2043OptionalAllowance, tc1888OptionalAllowance, validateIntroducedOptionalSources,
-  tc2096OptionalAllowance,
+  tc2096OptionalAllowance, tc2096LazyOptionalAllowance,
   validateOptionalEntryTransition, validateOptionalLedger, type OptionalLedger,
 } from "./replica-optional-size-policy";
-import { approvedMasterDriftRatchet, approvedTc1432Ratchet, approvedTc1475Ratchet, approvedTc1789Ratchet, approvedTc2043SyncScopeRatchet, approvedTc1888PurgeLocalCopyRatchet, approvedTc2096RepairBackoffRatchet } from "./replica-size-policy";
+import { approvedMasterDriftRatchet, approvedTc1432Ratchet, approvedTc1475Ratchet, approvedTc1789Ratchet, approvedTc2043SyncScopeRatchet, approvedTc1888PurgeLocalCopyRatchet, approvedTc2096RepairBackoffRatchet, approvedTc2096LazyContentRatchet } from "./replica-size-policy";
 
 const shipped = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-optional-size-ledger.json"), "utf8")) as OptionalLedger;
 // The tests below cover the #565 hardening-era ledger; TC-1413's own allowance is tested at the end.
@@ -455,18 +455,40 @@ describe("TC-1888 sign-out local copy optional allowance", () => {
   });
 });
 
+const tc2096Ledger: OptionalLedger = {
+  ...structuredClone(shipped),
+  allowance: { ...tc2096OptionalAllowance },
+  entries: structuredClone(shipped.entries.slice(0, shipped.entries.findIndex((entry) => entry.pr === "#761"))),
+};
+
 describe("TC-2096 repair backoff optional allowance", () => {
   it("pins the approved caps and measured #759 entry", () => {
-    expect(() => validateOptionalLedger(shipped, true, true, true, true, true, true, true, true, true, true, true)).not.toThrow();
+    expect(() => validateOptionalLedger(tc2096Ledger, true, true, true, true, true, true, true, true, true, true, true)).not.toThrow();
     const deltas = { ...approvedTc2096RepairBackoffRatchet.firstImport.delta, ...approvedTc2096RepairBackoffRatchet.activation.delta };
-    expect(shipped.allowance).toEqual(tc2096OptionalAllowance);
+    expect(tc2096Ledger.allowance).toEqual(tc2096OptionalAllowance);
     for (const format of ["replica.mjs", "replica.cjs", "activation.mjs", "activation.cjs"] as const) {
-      expect(shipped.entries.reduce((sum, entry) => sum + entry[format], 0)).toBe(tc1888OptionalAllowance[format] + deltas[format]);
+      expect(tc2096Ledger.entries.reduce((sum, entry) => sum + entry[format], 0)).toBe(tc1888OptionalAllowance[format] + deltas[format]);
     }
-    expect(shipped.entries.find((entry) => entry.pr === "#759")).toMatchObject({ pr: "#759", ticket: "TC-2096", ...deltas });
+    expect(tc2096Ledger.entries.find((entry) => entry.pr === "#759")).toMatchObject({ pr: "#759", ticket: "TC-2096", ...deltas });
   });
 
   it("refuses the new allowance without its ratchet", () => {
-    expect(() => validateOptionalLedger(shipped, true, true, true, true, true, true, true, true, true, true)).toThrow();
+    expect(() => validateOptionalLedger(tc2096Ledger, true, true, true, true, true, true, true, true, true, true)).toThrow();
+  });
+});
+
+describe("TC-2096 lazy content fetch optional allowance", () => {
+  it("pins the approved caps and measured #761 entry", () => {
+    expect(() => validateOptionalLedger(shipped, true, true, true, true, true, true, true, true, true, true, true, true)).not.toThrow();
+    const deltas = { ...approvedTc2096LazyContentRatchet.firstImport.delta, ...approvedTc2096LazyContentRatchet.activation.delta };
+    expect(shipped.allowance).toEqual(tc2096LazyOptionalAllowance);
+    for (const format of ["replica.mjs", "replica.cjs", "activation.mjs", "activation.cjs"] as const) {
+      expect(shipped.entries.reduce((sum, entry) => sum + entry[format], 0)).toBe(tc2096Ledger.entries.reduce((sum, entry) => sum + entry[format], 0) + deltas[format]);
+    }
+    expect(shipped.entries.find((entry) => entry.pr === "#761")).toMatchObject({ pr: "#761", ticket: "TC-2096", ...deltas });
+  });
+
+  it("refuses the lazy allowance without its ratchet", () => {
+    expect(() => validateOptionalLedger(shipped, true, true, true, true, true, true, true, true, true, true, true)).toThrow();
   });
 });
