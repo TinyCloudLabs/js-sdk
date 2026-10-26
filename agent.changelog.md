@@ -3,6 +3,12 @@
 Track changes to agent-facing development guidance for the TinyCloud JavaScript SDK. Add a concise
 entry when `agent.dev.md` or related agent workflow expectations change.
 
+## 2026-10-26
+
+- MCP personal-app examples and edit/move instructions now omit server-owned
+  `by`. Generated write schemas expose the same restriction as runtime
+  validation; CLI attribution, nested data fields and read-back values stay unchanged.
+
 ## 2026-10-21
 
 - Added the separate five-tool public ChatGPT candidate with distinct OAuth,

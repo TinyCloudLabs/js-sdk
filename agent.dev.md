@@ -178,6 +178,10 @@ version metadata and make the immutable release checkout fail the clean-tree pub
   `src/tc-apps/`. The published skill is pinned under `src/tc-apps/vendor/`;
   update it with `bun scripts/sync-tc-apps-rules.ts`, then
   `bun run generate:operations-mcp`. Generation/checking is offline thereafter.
+- The rules generator adapts the CLI examples to MCP write inputs: keep the
+  vendored CLI attribution intact. MCP put/move values omit top-level `by`,
+  including edits of read-back records and catalogs. Keep this restriction
+  expressible in the generated JSON Schema; stored/read-back records retain `by`.
 - Never add a response `deadlineMs` to personal-record writes: deadlines abandon
   work rather than cancel it. Preserve per-op outcomes after any committed write,
   including a partial move or failed derived-copy upkeep.
