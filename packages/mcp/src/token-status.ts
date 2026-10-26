@@ -119,6 +119,8 @@ export function createTokenStatusChecker(config: TokenStatusConfig): TokenStatus
       confirmedActive.delete(key);
     } else {
       active.set(key, now + ACTIVE_CACHE_MS);
+      // Delete first so a re-confirmed token moves to the newest slot of the map.
+      confirmedActive.delete(key);
       confirmedActive.set(key, { at: now, expiresAt: tokenExpiryMs(token, now) });
     }
     return outcome;

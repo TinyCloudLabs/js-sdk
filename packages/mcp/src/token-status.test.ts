@@ -4,7 +4,7 @@ import { createServer, type Server } from "node:http";
 import { join } from "node:path";
 
 import { OAuthError, OAuthErrorCode } from "@modelcontextprotocol/server";
-import { decodeJwt, exportJWK, generateKeyPair, SignJWT, type CryptoKey } from "jose";
+import { decodeJwt, exportJWK, generateKeyPair, SignJWT, type CryptoKey, type JWTPayload } from "jose";
 
 import { createHostedMcpApp, type HostedMcpApp } from "./http.js";
 import { createOpenKeyTokenVerifier } from "./oauth.js";
@@ -40,6 +40,15 @@ interface StubOpenKey {
   fetch: typeof fetch;
 }
 
+/** The claims of a JWT, or none for a token that is not one. */
+function claimsOf(token: string): JWTPayload {
+  try {
+    return decodeJwt(token);
+  } catch {
+    return {};
+  }
+}
+
 /** A stub OpenKey introspection endpoint that records every request. */
 function stubOpenKey(initial: Answer = "active"): StubOpenKey {
   const stub: StubOpenKey = {
@@ -58,7 +67,7 @@ function stubOpenKey(initial: Answer = "active"): StubOpenKey {
         case "malformed": return Response.json({ status: "ok" });
         case "inactive": return Response.json({ active: false });
         default: {
-          const jwt = decodeJwt(body.get("token") ?? "");
+          const jwt = claimsOf(body.get("token") ?? "");
           return Response.json({
             active: true,
             scope: jwt.scope,
@@ -327,6 +336,39 @@ test("an unknown answer is tolerated only for a token OpenKey answered active, w
   clock.now += 1_000; // 60 s: the token's lifetime
   await expect(verify(token)).rejects.toMatchObject({ code: OAuthErrorCode.ServerError });
 });
+
+test("a mismatching answer clears the token's confirmation", async () => {
+  const stub = stubOpenKey("active");
+  const clock = { now: Date.now() };
+  const { sign } = await jwksServer();
+  const checker = checkerWith(stub, clock);
+  const token = await sign();
+  expect(await checker.tokenStatus(token)).toBe("active");
+  expect(checker.toleratesUnknown(token)).toBe(true);
+
+  clock.now += 31_000; // the active answer is no longer reused
+  stub.tamper = { sub: "someone-else" };
+  expect(await checker.tokenStatus(token)).toBe("inactive");
+  // Were the inactive entry evicted, an unknown answer would meet no confirmation.
+  expect(checker.toleratesUnknown(token)).toBe(false);
+});
+
+test("a re-confirmed token is the last to be evicted from the confirmations", async () => {
+  const stub = stubOpenKey("active");
+  const clock = { now: Date.now() };
+  const checker = checkerWith(stub, clock);
+  await checker.tokenStatus("token-a");
+  for (let index = 0; index < 6_000; index += 1) await checker.tokenStatus(`token-first-${index}`);
+  clock.now += 31_000; // asked again, not served from the active window
+  await checker.tokenStatus("token-a");
+  for (let index = 0; index < 6_000; index += 1) await checker.tokenStatus(`token-second-${index}`);
+
+  stub.answer = "rate-limited";
+  clock.now += 31_000;
+  expect(await checker.tokenStatus("token-a")).toBe("unknown");
+  expect(checker.toleratesUnknown("token-a")).toBe(true);
+  expect(checker.toleratesUnknown("token-first-0")).toBe(false);
+}, 60_000);
 
 test("while OpenKey answers 429, a token it never answered active is refused even after other tokens were answered", async () => {
   const stub = stubOpenKey("active");
