@@ -1,9 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import type { IWasmBindings } from "@tinycloud/sdk-core";
+import {
+  BOOTSTRAP_ALLOWLIST,
+  SERVICE_SHORT_TO_LONG,
+  bootstrapSpaceId,
+  type IWasmBindings,
+} from "@tinycloud/sdk-core";
 import { BOOTSTRAP_SESSION_EXPIRY_MS } from "./authorization/bootstrapSessionScope";
 import { NodeUserAuthorization } from "./authorization/NodeUserAuthorization";
 import { MemorySessionStorage } from "./storage/MemorySessionStorage";
-import { TinyCloudNode } from "./TinyCloudNode";
+import { BOOTSTRAP_COMPLETION_MARKER_KEY, TinyCloudNode } from "./TinyCloudNode";
 
 // TC-2038: account bootstrap signs one session per space whose data a step
 // writes (account, secrets), scopes each to that step, keeps it for minutes,
@@ -19,7 +24,8 @@ interface PreparedParams {
   spaceId: string;
   issuedAt: string;
   expirationTime: string;
-  spaceAbilities: Record<string, unknown>;
+  notBefore?: string;
+  spaceAbilities: Record<string, Record<string, Record<string, string[]>>>;
   rawAbilities?: Record<string, string[]>;
   jwk: object;
 }
@@ -27,6 +33,8 @@ interface PreparedParams {
 interface RuntimeGrantView {
   provenance: string;
   expiresAt: Date;
+  delegation: { cid: string };
+  operations?: RuntimeOperation[];
 }
 
 interface RuntimeOperation {
@@ -100,6 +108,14 @@ function makeWasm(captured: PreparedParams[]): IWasmBindings {
   } as unknown as IWasmBindings;
 }
 
+interface HarnessOptions {
+  /** Whether the sign-in session's recap already covers a marker write. Default true. */
+  markerCovered?: boolean;
+  siweConfig?: { expirationTime?: string; notBefore?: string };
+  /** Runs inside the account index step, after this run's grants are installed. */
+  duringIndex?: (node: TinyCloudNode) => void;
+}
+
 interface Harness {
   node: TinyCloudNode;
   captured: PreparedParams[];
@@ -120,7 +136,7 @@ function selectGrant(node: TinyCloudNode, operation: RuntimeOperation): RuntimeG
   return find.call(node, [operation]);
 }
 
-function makeHarness(): Harness {
+function makeHarness(options: HarnessOptions = {}): Harness {
   const captured: PreparedParams[] = [];
   const wasm = makeWasm(captured);
   const storage = new MemorySessionStorage();
@@ -142,6 +158,7 @@ function makeHarness(): Harness {
     domain: "example.com",
     tinycloudHosts: [HOST],
     sessionStorage: storage,
+    ...(options.siweConfig ? { siweConfig: options.siweConfig } : {}),
   });
   Reflect.set(auth, "_address", ADDRESS);
   Reflect.set(auth, "_chainId", CHAIN_ID);
@@ -155,6 +172,7 @@ function makeHarness(): Harness {
   Reflect.set(node, "_chainId", CHAIN_ID);
   Reflect.set(node, "auth", auth);
   Reflect.set(node, "assertMayCreateSpace", async () => {});
+  Reflect.set(node, "currentSessionCoversBootstrapMarker", () => options.markerCovered ?? true);
 
   const probe = (stage: string, operation: RuntimeOperation) => {
     harness.probes.push({
@@ -176,6 +194,7 @@ function makeHarness(): Harness {
     index: {
       async ensure() {
         probe("index", accountOp("sql", "account", "tinycloud.sql/schema"));
+        options.duringIndex?.(node);
         return { ok: true, data: undefined };
       },
     },
@@ -219,7 +238,7 @@ function makeHarness(): Harness {
     }),
   }));
   Reflect.set(node, "writeBootstrapCompletionMarker", async () => {
-    probe("marker", accountOp("kv", "system/bootstrap/complete", "tinycloud.kv/put"));
+    probe("marker", accountOp("kv", BOOTSTRAP_COMPLETION_MARKER_KEY, "tinycloud.kv/put"));
   });
   return harness;
 }
@@ -236,9 +255,75 @@ async function runBootstrap(h: Harness): Promise<boolean> {
   return run.call(h.node);
 }
 
+interface RecapEntry {
+  service: string;
+  space: string;
+  path: string;
+  actions: string[];
+}
+
+/** The recap of a prepared session as the entries OpenKey's auto-sign rule sees. */
+function recapEntries(params: PreparedParams): RecapEntry[] {
+  const entries: RecapEntry[] = [];
+  for (const [spaceId, services] of Object.entries(params.spaceAbilities)) {
+    for (const [service, paths] of Object.entries(services)) {
+      for (const [path, actions] of Object.entries(paths)) {
+        entries.push({
+          service: SERVICE_SHORT_TO_LONG[service] ?? service,
+          space: spaceId,
+          path,
+          actions,
+        });
+      }
+    }
+  }
+  for (const [resource, actions] of Object.entries(params.rawAbilities ?? {})) {
+    entries.push({ service: "tinycloud.encryption", space: "encryption", path: resource, actions });
+  }
+  return entries;
+}
+
+/**
+ * OpenKey's `evaluateBootstrapSessionCandidates`: exactly one session
+ * candidate of `BOOTSTRAP_ALLOWLIST` must explain every entry of the recap,
+ * and at least one entry must sit in that candidate's own space.
+ */
+function explainingCandidates(entries: RecapEntry[]): string[] {
+  const subset = (requested: string[], allowed: readonly string[]) =>
+    requested.every((action) => allowed.includes(action));
+  const candidates = BOOTSTRAP_ALLOWLIST.filter((entry) => entry.kind === "session");
+  return candidates
+    .filter((candidate) => {
+      let anchored = false;
+      for (const entry of entries) {
+        if (entry.service === "tinycloud.encryption") {
+          const raw = candidate.rawAbilities?.find(
+            (ability) =>
+              ability.service === entry.service &&
+              ability.resource.replace("{ownerDid}", `did:pkh:eip155:${CHAIN_ID}:${ADDRESS}`) === entry.path &&
+              subset(entry.actions, ability.actions),
+          );
+          if (!raw || entry.space !== "encryption") return false;
+          continue;
+        }
+        const resource = candidate.resources?.find(
+          (allowed) =>
+            allowed.service === entry.service &&
+            allowed.path === entry.path &&
+            subset(entry.actions, allowed.actions) &&
+            entry.space === bootstrapSpaceId(ADDRESS, CHAIN_ID, allowed.space as never),
+        );
+        if (!resource) return false;
+        if (entry.space === bootstrapSpaceId(ADDRESS, CHAIN_ID, candidate.space)) anchored = true;
+      }
+      return anchored;
+    })
+    .map((candidate) => candidate.space);
+}
+
 describe("TC-2038 bootstrap session scope", () => {
   test("bootstrap completes and every step runs under a bootstrap grant", async () => {
-    const h = makeHarness();
+    const h = makeHarness({ markerCovered: false });
     expect(await runBootstrap(h)).toBe(true);
     expect(h.node.bootstrapStatus).toEqual({ skipped: false });
     expect(h.probes.map(({ stage, selected }) => [stage, selected])).toEqual([
@@ -248,6 +333,20 @@ describe("TC-2038 bootstrap session scope", () => {
       ["network", "bootstrap"],
       ["secrets-schema", "bootstrap"],
       ["marker", "bootstrap"],
+    ]);
+  });
+
+  test("when the sign-in session covers the marker, the marker is written under it", async () => {
+    const h = makeHarness({ markerCovered: true });
+    expect(await runBootstrap(h)).toBe(true);
+    expect(h.probes.map(({ stage, selected }) => [stage, selected])).toEqual([
+      ["index", "bootstrap"],
+      ["spaces", "bootstrap"],
+      ["applications", "bootstrap"],
+      ["network", "bootstrap"],
+      ["secrets-schema", "bootstrap"],
+      // No bootstrap grant covers the marker; the sign-in session signs it.
+      ["marker", undefined],
     ]);
   });
 
@@ -272,7 +371,6 @@ describe("TC-2038 bootstrap session scope", () => {
       kv: {
         "applications/": ["tinycloud.kv/get", "tinycloud.kv/put", "tinycloud.kv/list"],
         "spaces/": ["tinycloud.kv/get", "tinycloud.kv/put", "tinycloud.kv/list"],
-        "system/bootstrap/complete": ["tinycloud.kv/get", "tinycloud.kv/put"],
       },
       sql: { account: ["tinycloud.sql/read", "tinycloud.sql/write", "tinycloud.sql/schema"] },
       capabilities: { "": ["tinycloud.capabilities/read"] },
@@ -287,6 +385,51 @@ describe("TC-2038 bootstrap session scope", () => {
     expect(secrets?.rawAbilities).toBeUndefined();
   });
 
+  test("the account session adds the marker only when the sign-in session does not cover it", async () => {
+    const h = makeHarness({ markerCovered: false });
+    await runBootstrap(h);
+    const account = h.captured.find((params) => params.spaceId === space("account"));
+    expect(account?.spaceAbilities[space("account")].kv[BOOTSTRAP_COMPLETION_MARKER_KEY]).toEqual([
+      "tinycloud.kv/get",
+      "tinycloud.kv/put",
+    ]);
+  });
+
+  test("every bootstrap recap is explained by exactly one allowlist candidate, anchored in its own space", async () => {
+    const h = makeHarness({ markerCovered: true });
+    await runBootstrap(h);
+    expect(h.captured).toHaveLength(2);
+    for (const params of h.captured) {
+      const spaceName = params.spaceId.split(":").at(-1);
+      expect(explainingCandidates(recapEntries(params))).toEqual([spaceName]);
+    }
+  });
+
+  test("the sign-in session's marker coverage is read from its recap", () => {
+    const h = makeHarness();
+    // Use the real method, not the harness stub.
+    const covers = (operations: RuntimeOperation[]) => {
+      Reflect.deleteProperty(h.node, "currentSessionCoversBootstrapMarker");
+      Reflect.set(h.node, "currentTinyCloudSession", () => ({ siwe: "recap" }));
+      Reflect.set(h.node, "recapOperationsFromSession", () => operations);
+      const real = Reflect.get(h.node, "currentSessionCoversBootstrapMarker") as () => boolean;
+      return real.call(h.node);
+    };
+    const marker = (extra: Partial<RuntimeOperation>): RuntimeOperation => ({
+      spaceId: space("account"),
+      service: "kv",
+      path: BOOTSTRAP_COMPLETION_MARKER_KEY,
+      action: "tinycloud.kv/put",
+      ...extra,
+    });
+    expect(covers([marker({})])).toBe(true);
+    expect(covers([marker({ path: "system/" })])).toBe(true);
+    expect(covers([marker({ action: "tinycloud.kv/get" })])).toBe(false);
+    expect(covers([marker({ path: "applications/" })])).toBe(false);
+    expect(covers([marker({ spaceId: space("applications") })])).toBe(false);
+    expect(covers([])).toBe(false);
+  });
+
   test("the installed bootstrap grants expire within the bootstrap lifetime", async () => {
     const h = makeHarness();
     const before = Date.now();
@@ -295,6 +438,34 @@ describe("TC-2038 bootstrap session scope", () => {
     expect(expiries.length).toBeGreaterThan(0);
     for (const expiresAt of expiries) {
       expect(expiresAt.getTime() - before).toBeLessThanOrEqual(BOOTSTRAP_SESSION_EXPIRY_MS + 5_000);
+    }
+  });
+
+  test("a siweConfig cannot lengthen a bootstrap session or move its start", async () => {
+    const h = makeHarness({
+      siweConfig: {
+        expirationTime: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+        notBefore: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+      },
+    });
+    await runBootstrap(h);
+    expect(h.captured).toHaveLength(2);
+    for (const params of h.captured) {
+      expect(Date.parse(params.expirationTime)).toBeLessThanOrEqual(
+        Date.parse(params.issuedAt) + 600_000,
+      );
+      expect(params.notBefore).toBeUndefined();
+    }
+  });
+
+  test("a siweConfig expiry earlier than the bootstrap lifetime still applies", async () => {
+    const h = makeHarness({
+      siweConfig: { expirationTime: new Date(Date.now() + 60_000).toISOString() },
+    });
+    await runBootstrap(h);
+    for (const params of h.captured) {
+      const lifetime = Date.parse(params.expirationTime) - Date.parse(params.issuedAt);
+      expect(lifetime).toBeLessThanOrEqual(60_000);
     }
   });
 
@@ -348,6 +519,23 @@ describe("TC-2038 bootstrap session scope", () => {
       expect(h.node.bootstrapStatus.skipped).toBe(true);
       expect(grants(h.node).filter((grant) => grant.provenance === "bootstrap")).toEqual([]);
     }
+  });
+
+  test("cleanup removes only the grants this sign-in installed", async () => {
+    const newer: RuntimeGrantView = {
+      provenance: "bootstrap",
+      expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+      delegation: { cid: "bafy-newer-signin" },
+      operations: [],
+    };
+    const h = makeHarness({
+      // A newer sign-in installs its own bootstrap grant while this run is in flight.
+      duringIndex: (node) => {
+        Reflect.set(node, "runtimePermissionGrants", [...grants(node), newer]);
+      },
+    });
+    expect(await runBootstrap(h)).toBe(true);
+    expect(grants(h.node)).toEqual([newer]);
   });
 
   test("nothing bootstrap-related is persisted", async () => {

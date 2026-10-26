@@ -2958,6 +2958,7 @@ export class TinyCloudNode {
     const graph = this._serviceGraph;
     const sessions = new Map<BootstrapSpaceName, TinyCloudSession>();
     const rawAbilitiesBySpace = new Map<BootstrapSpaceName, Record<string, string[]>>();
+    const requestsBySpace = new Map<BootstrapSpaceName, ComposedManifestRequest>();
     const warnings: BootstrapWarning[] = [];
 
     // Refuse before any bootstrap signature is requested.
@@ -2971,8 +2972,15 @@ export class TinyCloudNode {
     for (const step of steps) {
       if (step.kind !== "session") continue;
       graph.assertActive();
-      const request = bootstrapSessionRequest(step.space);
+      // The account session carries the completion marker only when the
+      // sign-in session does not already cover writing it.
+      const request = bootstrapSessionRequest(step.space, {
+        markerKey: this.currentSessionCoversBootstrapMarker()
+          ? undefined
+          : BOOTSTRAP_COMPLETION_MARKER_KEY,
+      });
       if (!request) continue;
+      requestsBySpace.set(step.space, request);
       const rawAbilities = step.rawAbilities;
       if (rawAbilities) {
         rawAbilitiesBySpace.set(step.space, rawAbilities);
@@ -3017,7 +3025,7 @@ export class TinyCloudNode {
       if (step.kind !== "activate") continue;
       graph.assertActive();
       // Spaces without a bootstrap session have nothing to activate.
-      const request = bootstrapSessionRequest(step.space);
+      const request = requestsBySpace.get(step.space);
       if (!request) continue;
       const session = sessions.get(step.space);
       if (!session) {
@@ -3587,6 +3595,23 @@ export class TinyCloudNode {
       action: "tinycloud.sql/read",
     };
     return operations.some((granted) => this.operationCovers(granted, indexRead));
+  }
+
+  /**
+   * Whether the sign-in session's own recap already covers a completion
+   * marker write. Read from the recap itself, so it holds for an account
+   * whose space is not hosted yet at sign-in.
+   */
+  private currentSessionCoversBootstrapMarker(): boolean {
+    const session = this.currentTinyCloudSession();
+    const operations = session ? this.recapOperationsFromSession(session) : [];
+    const markerWrite: RuntimePermissionOperation = {
+      spaceId: this.ownedSpaceId(ACCOUNT_REGISTRY_SPACE),
+      service: "kv",
+      path: BOOTSTRAP_COMPLETION_MARKER_KEY,
+      action: "tinycloud.kv/put",
+    };
+    return operations.some((granted) => this.operationCovers(granted, markerWrite));
   }
 
   private async withAccountRegistryRetry(
