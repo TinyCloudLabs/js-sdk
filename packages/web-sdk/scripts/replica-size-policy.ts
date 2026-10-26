@@ -1890,10 +1890,10 @@ export const approvedTc2005RevokeWindowRatchet: Tc2005RevokeWindowRatchet = {
   reason: "the owner revocation window extends; one constant in node-sdk (TC-2005)",
 };
 
-/** Canonical CI run 40343675308 (TC-2096, #759): the kv-storage worker rises by 340 bytes and replica.worker.js by 323; root, first import and activation are unchanged. */
+/** Canonical CI run 40343675308 (TC-2096, #759): the kv-storage worker rises by 340 bytes and replica.worker.js by 323; root is unchanged. Replica first import +279/+275 and activation -2/-2 were measured at run 40348732196 (Node 22 sqlite+postgres identical). */
 export const approvedTc2096RepairBackoffRatchet: Tc2096RepairBackoffRatchet = {
-  label: "capped replica repair backoff (TC-2096, #759): kv-storage worker +340 B, replica worker +323 B gzip",
-  ruling: "Approved by Naomi (exact canonical CI bytes at run 40343675308; no headroom)",
+  label: "capped replica repair backoff (TC-2096, #759): kv-storage worker +340 B, replica worker +323 B gzip, replica first import +279/+275 B, activation -2/-2 B",
+  ruling: "Approved by Naomi (exact canonical CI bytes at runs 40343675308 and 40348732196; no headroom)",
   base: "dc74efaad0363281b19dc389e3a6a5467cfde2cb",
   sourceCommits: ["c6b4703d15cb8b711f16629d8ee0fe2da1b3c675"],
   canonicalCI: {
@@ -1908,11 +1908,11 @@ export const approvedTc2096RepairBackoffRatchet: Tc2096RepairBackoffRatchet = {
     ceiling: { "index.mjs": 1467358, "index.cjs": 1409273 },
   },
   firstImport: {
-    delta: { "replica.mjs": 0, "replica.cjs": 0 },
-    ceiling: { "replica.mjs": 52374, "replica.cjs": 67571 },
+    delta: { "replica.mjs": 279, "replica.cjs": 275 },
+    ceiling: { "replica.mjs": 52653, "replica.cjs": 67846 },
   },
   activation: {
-    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    delta: { "activation.mjs": -2, "activation.cjs": -2 },
     ceiling: { "activation.mjs": 23386, "activation.cjs": 24959 },
   },
   worker: { delta: 340, ceiling: 776468 },

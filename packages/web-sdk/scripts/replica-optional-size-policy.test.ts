@@ -3,9 +3,10 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   compactFixOptionalAllowance, correctedOptionalAllowance, hardeningOptionalAllowance, tc1413OptionalAllowance, tc1432OptionalAllowance, tc1475OptionalAllowance, masterDriftOptionalAllowance, tc1789OptionalAllowance, tc2043OptionalAllowance, tc1888OptionalAllowance, validateIntroducedOptionalSources,
+  tc2096OptionalAllowance,
   validateOptionalEntryTransition, validateOptionalLedger, type OptionalLedger,
 } from "./replica-optional-size-policy";
-import { approvedMasterDriftRatchet, approvedTc1432Ratchet, approvedTc1475Ratchet, approvedTc1789Ratchet, approvedTc2043SyncScopeRatchet, approvedTc1888PurgeLocalCopyRatchet } from "./replica-size-policy";
+import { approvedMasterDriftRatchet, approvedTc1432Ratchet, approvedTc1475Ratchet, approvedTc1789Ratchet, approvedTc2043SyncScopeRatchet, approvedTc1888PurgeLocalCopyRatchet, approvedTc2096RepairBackoffRatchet } from "./replica-size-policy";
 
 const shipped = JSON.parse(readFileSync(resolve(import.meta.dir, "replica-optional-size-ledger.json"), "utf8")) as OptionalLedger;
 // The tests below cover the #565 hardening-era ledger; TC-1413's own allowance is tested at the end.
@@ -428,22 +429,33 @@ describe("TC-2043 replication syncScope optional allowance", () => {
 
 describe("TC-1888 sign-out local copy optional allowance", () => {
   it("pins the approved caps and measured #728 entry", () => {
-    expect(() => validateOptionalLedger(shipped, true, true, true, true, true, true, true, true, true, true)).not.toThrow();
+    expect(() => validateOptionalLedger(shipped, true, true, true, true, true, true, true, true, true, true, true)).not.toThrow();
     const deltas = { ...approvedTc1888PurgeLocalCopyRatchet.firstImport.delta, ...approvedTc1888PurgeLocalCopyRatchet.activation.delta };
-    expect(shipped.allowance).toEqual(tc1888OptionalAllowance);
-    for (const format of ["replica.mjs", "replica.cjs", "activation.mjs", "activation.cjs"] as const) {
-      expect(shipped.allowance[format]).toBe(tc2043Ledger.entries.reduce((sum, entry) => sum + entry[format], 0) + deltas[format]);
-      expect(shipped.entries.reduce((sum, entry) => sum + entry[format], 0)).toBe(shipped.allowance[format]);
-    }
-    expect(shipped.entries.at(-1)).toMatchObject({ pr: "#728", ticket: "TC-1888", ...deltas });
+    expect(shipped.entries.find((entry) => entry.pr === "#728")).toMatchObject({ pr: "#728", ticket: "TC-1888", ...deltas });
   });
 
   it("refuses extra allowance bytes or the new allowance without its ratchet", () => {
     for (const format of ["replica.mjs", "replica.cjs", "activation.mjs", "activation.cjs"] as const) {
       const changed = structuredClone(shipped);
       changed.allowance[format]++;
-      expect(() => validateOptionalLedger(changed, true, true, true, true, true, true, true, true, true, true)).toThrow();
+      expect(() => validateOptionalLedger(changed, true, true, true, true, true, true, true, true, true, true, true)).toThrow();
     }
-    expect(() => validateOptionalLedger(shipped, true, true, true, true, true, true, true, true, true)).toThrow();
+    expect(() => validateOptionalLedger(shipped, true, true, true, true, true, true, true, true, true, true)).toThrow();
+  });
+});
+
+describe("TC-2096 repair backoff optional allowance", () => {
+  it("pins the approved caps and measured #759 entry", () => {
+    expect(() => validateOptionalLedger(shipped, true, true, true, true, true, true, true, true, true, true, true)).not.toThrow();
+    const deltas = { ...approvedTc2096RepairBackoffRatchet.firstImport.delta, ...approvedTc2096RepairBackoffRatchet.activation.delta };
+    expect(shipped.allowance).toEqual(tc2096OptionalAllowance);
+    for (const format of ["replica.mjs", "replica.cjs", "activation.mjs", "activation.cjs"] as const) {
+      expect(shipped.entries.reduce((sum, entry) => sum + entry[format], 0)).toBe(tc1888OptionalAllowance[format] + deltas[format]);
+    }
+    expect(shipped.entries.find((entry) => entry.pr === "#759")).toMatchObject({ pr: "#759", ticket: "TC-2096", ...deltas });
+  });
+
+  it("refuses the new allowance without its ratchet", () => {
+    expect(() => validateOptionalLedger(shipped, true, true, true, true, true, true, true, true, true, true)).toThrow();
   });
 });

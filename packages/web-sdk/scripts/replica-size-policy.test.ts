@@ -2968,7 +2968,7 @@ describe("sign-out local copy erase (#728, TC-1888) size ratchet", () => {
     expect(row().canonicalCI.jobs).toHaveLength(2);
     expect(ancestryPins(current, false)).toContainEqual({ row: "tc1888PurgeLocalCopyRatchet", pin: row().sourceCommits[0] });
     expect(rootCeilings(current).find((row) => row.row === "tc1888PurgeLocalCopyRatchet")).toEqual({ row: "tc1888PurgeLocalCopyRatchet", ceiling: row().root.ceiling });
-    expect(current.entries.at(-1)).toMatchObject({ pr: "#728", ticket: "TC-1888", "index.mjs": 0, "index.cjs": 0 });
+    expect(current.entries.find((entry) => entry.pr === "#728")).toMatchObject({ pr: "#728", ticket: "TC-1888", "index.mjs": 0, "index.cjs": 0 });
   });
 
   it("refuses changed bytes, provenance or a missing TC-2043 prerequisite", () => {
@@ -3158,12 +3158,12 @@ describe("owner revocation window (TC-2005, #745) size ratchet", () => {
 describe("capped replica repair backoff (TC-2096, #759) size ratchet", () => {
   const row = () => structuredClone(approvedTc2096RepairBackoffRatchet);
 
-  it("pins exact CI bytes over the revocation-window row, keeps root, first import and activation, and carries both worker deltas", () => {
+  it("pins exact CI bytes over the revocation-window row, keeps root, and carries first import, activation and both worker deltas", () => {
     expect(() => validateLedger(current)).not.toThrow();
     expect(current.tc2096RepairBackoffRatchet).toEqual(approvedTc2096RepairBackoffRatchet);
     expect(row().root).toEqual({ delta: { "index.mjs": 0, "index.cjs": 0 }, ceiling: approvedTc2005RevokeWindowRatchet.root.ceiling });
-    expect(row().firstImport).toEqual({ delta: { "replica.mjs": 0, "replica.cjs": 0 }, ceiling: approvedTc2005RevokeWindowRatchet.firstImport.ceiling });
-    expect(row().activation).toEqual({ delta: { "activation.mjs": 0, "activation.cjs": 0 }, ceiling: approvedTc2005RevokeWindowRatchet.activation.ceiling });
+    expect(row().firstImport).toEqual({ delta: { "replica.mjs": 279, "replica.cjs": 275 }, ceiling: { "replica.mjs": approvedTc2005RevokeWindowRatchet.firstImport.ceiling["replica.mjs"] + 279, "replica.cjs": approvedTc2005RevokeWindowRatchet.firstImport.ceiling["replica.cjs"] + 275 } });
+    expect(row().activation).toEqual({ delta: { "activation.mjs": -2, "activation.cjs": -2 }, ceiling: approvedTc2005RevokeWindowRatchet.activation.ceiling });
     expect(row().worker.delta).toBe(340);
     expect(row().worker.ceiling).toBe(approvedTc2005RevokeWindowRatchet.worker.ceiling + row().worker.delta);
     expect(row().replicaWorker.delta).toBe(323);
