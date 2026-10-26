@@ -18,29 +18,10 @@ name: Replica e2e
 
 on:
   pull_request:
-    paths:
-      - "packages/replica/**"
-      - "packages/cli/**"
-      - "packages/node-sdk/**"
-      - "packages/sdk-core/**"
-      - "packages/sdk-services/src/**"
-      - "packages/sdk-services/package.json"
-      - "packages/sdk-services/tsconfig*.json"
-      - "packages/operations/**"
-      - "packages/web-sdk/**"
-      # web-sdk bundles share-sdk (and share-envelope through it), so their
-      # changes can move the web-sdk dist sizes this workflow checks.
-      - "packages/share-sdk/**"
-      - "packages/share-envelope/**"
-      - "tests/cli/**"
-      - ".github/scripts/**"
-      - ".github/workflows/replica-e2e.yml"
-      - "tests/replication-harness/**"
-      - ".github/workflows/replication-harness.yml"
-      # A lockfile-only change can move the bundled worker (#606: +86 B), so
-      # root dependency manifests must trigger the size checks too.
-      - "bun.lock"
-      - "package.json"
+    # Every pull request runs these jobs. The "Decide whether the change touches
+    # a replica path" step in each job skips the real work for pull requests that
+    # touch no replica path, so the jobs still report success. The path list is
+    # duplicated in both jobs; keep them identical.
   schedule:
     - cron: "17 4 * * 1"
   push:
@@ -65,24 +46,67 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Decide whether the change touches a replica path
+        id: relevance
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # Fails open: only a clean diff with no matching path skips the work.
+          # web-sdk bundles share-sdk (and share-envelope through it), so those
+          # paths count. A lockfile-only change can move the bundled worker
+          # (#606: +86 B), so root bun.lock and package.json count too.
+          relevant=true
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "relevant=true: $EVENT_NAME always runs the replica jobs"
+          elif ! changed="$(git diff --no-renames --name-only "$BASE_SHA" "$HEAD_SHA")"; then
+            echo "relevant=true: git diff failed, running the replica jobs"
+          else
+            relevant=false
+            while IFS= read -r file; do
+              case "$file" in
+                packages/replica/* | packages/cli/* | packages/node-sdk/* | packages/sdk-core/* \
+                | packages/sdk-services/src/* | packages/sdk-services/package.json \
+                | packages/sdk-services/tsconfig*.json | packages/operations/* | packages/web-sdk/* \
+                | packages/share-sdk/* | packages/share-envelope/* | tests/cli/* | .github/scripts/* \
+                | .github/workflows/replica-e2e.yml | tests/replication-harness/* \
+                | .github/workflows/replication-harness.yml | bun.lock | package.json)
+                  relevant=true
+                  echo "relevant=true: $file matches a replica path"
+                  break
+                  ;;
+              esac
+            done <<< "$changed"
+            if [ "$relevant" = false ]; then
+              echo "relevant=false: no changed file matches a replica path"
+            fi
+          fi
+          echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
+
       - uses: actions/setup-node@v4
+        if: ${{ steps.relevance.outputs.relevant == 'true' }}
         with:
           node-version: 22.23.2
 
       - uses: oven-sh/setup-bun@v2
+        if: ${{ steps.relevance.outputs.relevant == 'true' }}
         with:
           bun-version: 1.3.14
       - name: Cache Bun packages
+        if: ${{ steps.relevance.outputs.relevant == 'true' }}
         uses: actions/cache@v4
         with:
           path: ~/.bun/install/cache
           key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
 
       - uses: dtolnay/rust-toolchain@stable
+        if: ${{ steps.relevance.outputs.relevant == 'true' }}
         with:
           toolchain: 1.99.0
           targets: wasm32-unknown-unknown
       - name: Restore Rust/Cargo cache
+        if: ${{ steps.relevance.outputs.relevant == 'true' }}
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
@@ -94,12 +118,15 @@ jobs:
             cargo-${{ runner.os }}-1.99.0-${{ github.workflow }}-${{ github.job }}-
 
       - name: Install wasm-pack
+        if: ${{ steps.relevance.outputs.relevant == 'true' }}
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
       - name: Install locked dependencies
+        if: ${{ steps.relevance.outputs.relevant == 'true' }}
         run: bun install --frozen-lockfile
 
       - name: Build the CLI and its packages
+        if: ${{ steps.relevance.outputs.relevant == 'true' }}
         run: |
           bun run --cwd packages/sdk-rs build:wasm:node
           bun run --cwd packages/sdk-rs/packages/node build
@@ -120,24 +147,29 @@ jobs:
           bun run --cwd packages/cli build
 
       - name: Enforce hashed kv-storage worker gzip ratchet (TC-858)
-        if: success() || failure()
+        if: ${{ steps.relevance.outputs.relevant == 'true' && (success() || failure()) }}
         run: bun packages/replica/scripts/check-worker-size.ts
 
       - name: Check every replica exports target is packed (TC-858)
+        if: ${{ steps.relevance.outputs.relevant == 'true' }}
         run: bun packages/replica/scripts/check-pack-exports.ts
 
       - name: Build web-sdk for the Phase 1 dist acceptance
+        if: ${{ steps.relevance.outputs.relevant == 'true' }}
         run: bun run --cwd packages/web-sdk build
 
       - name: Prove built web core and opt-in replica share signed-session authority
+        if: ${{ steps.relevance.outputs.relevant == 'true' }}
         run: |
           bun packages/web-sdk/scripts/check-replica-built-entry.ts mjs
           bun packages/web-sdk/scripts/check-replica-built-entry.ts cjs
 
       - name: Build CoordinationOS vendor bundle for the web-sdk test baseline
+        if: ${{ steps.relevance.outputs.relevant == 'true' }}
         run: bun run --cwd packages/web-sdk build:coordinationos-vendor
 
       - name: Check Phase 1 web-sdk dist and test baseline
+        if: ${{ steps.relevance.outputs.relevant == 'true' }}
         env:
           REPLICA_BUDGET_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           REPLICA_BUDGET_PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -147,17 +179,18 @@ jobs:
         run: bun packages/web-sdk/scripts/check-phase1-replica-dist.ts
 
       - name: Size-policy unit tests
-        if: ${{ (success() || failure()) && matrix.database == 'sqlite' }}
+        if: ${{ steps.relevance.outputs.relevant == 'true' && (success() || failure()) && matrix.database == 'sqlite' }}
         run: bun test packages/web-sdk/scripts/
 
       - name: Run replication model
+        if: ${{ steps.relevance.outputs.relevant == 'true' }}
         run: bun test packages/sdk-services/src/kv/replication/pendingWrites.model.test.ts
 
 
       # The real-node steps below run even when the size checks fail, so their setup must too;
       # otherwise a size failure cascades into misleading ENOENT failures for the node binary.
       - name: Log in to GHCR
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.relevance.outputs.relevant == 'true' }}
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -165,7 +198,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract the pinned node binary
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.relevance.outputs.relevant == 'true' }}
         run: |
           docker pull "$TINYCLOUD_NODE_IMAGE"
           container="$(docker create "$TINYCLOUD_NODE_IMAGE")"
@@ -173,11 +206,11 @@ jobs:
           docker rm "$container"
           chmod +x "$RUNNER_TEMP/tinycloud"
       - name: Prepare JUnit reports
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.relevance.outputs.relevant == 'true' }}
         run: mkdir -p "$RUNNER_TEMP/replica-junit"
 
       - name: Start Postgres 16
-        if: ${{ !cancelled() && matrix.database == 'postgres' }}
+        if: ${{ !cancelled() && steps.relevance.outputs.relevant == 'true' && matrix.database == 'postgres' }}
         run: |
           docker run -d --name replica-e2e-pg -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=replica_e2e -p 127.0.0.1:5432:5432 postgres:16
           for attempt in $(seq 1 30); do
@@ -188,14 +221,14 @@ jobs:
           exit 1
 
       - name: node-sdk replication against the SQLite node
-        if: ${{ !cancelled() && matrix.database == 'sqlite' }}
+        if: ${{ !cancelled() && steps.relevance.outputs.relevant == 'true' && matrix.database == 'sqlite' }}
         env:
           TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
           TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
         run: bun test packages/node-sdk/src/replication/replication.e2e.test.ts --reporter=junit --reporter-outfile="$RUNNER_TEMP/replica-junit/node-sdk.xml"
 
       - name: node-sdk replication against the Postgres node
-        if: ${{ !cancelled() && matrix.database == 'postgres' }}
+        if: ${{ !cancelled() && steps.relevance.outputs.relevant == 'true' && matrix.database == 'postgres' }}
         env:
           TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
           TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
@@ -203,33 +236,33 @@ jobs:
         run: bun test packages/node-sdk/src/replication/replication.e2e.test.ts --reporter=junit --reporter-outfile="$RUNNER_TEMP/replica-junit/node-sdk.xml"
 
       - name: Replica engine and store conformance
-        if: matrix.database == 'sqlite'
+        if: ${{ steps.relevance.outputs.relevant == 'true' && matrix.database == 'sqlite' }}
         run: bun run --cwd packages/replica test
       - name: CLI profile-deletion safety
-        if: ${{ !cancelled() && matrix.database == 'sqlite' }}
+        if: ${{ !cancelled() && steps.relevance.outputs.relevant == 'true' && matrix.database == 'sqlite' }}
         run: |
           mkdir -p "$RUNNER_TEMP/replica-junit"
           bun test packages/cli/src/commands/replica.test.ts --reporter=junit --reporter-outfile="$RUNNER_TEMP/replica-junit/cli-replica-command.xml"
 
       - name: tc replica against the node
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.relevance.outputs.relevant == 'true' }}
         env:
           TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
           TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
           TC_REPLICA_E2E_DATABASE_URL: ${{ matrix.database == 'postgres' && 'postgres://postgres:postgres@127.0.0.1:5432/replica_e2e' || '' }}
         run: bun test packages/cli/test/replica.e2e.test.ts --reporter=junit --reporter-outfile="$RUNNER_TEMP/replica-junit/cli-replica-e2e.xml"
       - name: CLI replication flag against the node
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.relevance.outputs.relevant == 'true' }}
         env:
           TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
           TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
           TC_REPLICA_E2E_DATABASE_URL: ${{ matrix.database == 'postgres' && 'postgres://postgres:postgres@127.0.0.1:5432/replica_e2e' || '' }}
         run: bun test packages/cli/test/replication-flag.e2e.test.ts --reporter=junit --reporter-outfile="$RUNNER_TEMP/replica-junit/cli-flag.xml"
       - name: Enforce real-node JUnit counts and zero skips
-        if: always()
+        if: ${{ always() && steps.relevance.outputs.relevant == 'true' }}
         run: bun .github/scripts/check-replica-junit.mjs ${{ matrix.database == 'sqlite' && '--cli-replica-command' || '' }}
       - name: Upload backend JUnit reports
-        if: always()
+        if: ${{ always() && steps.relevance.outputs.relevant == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: tc858-junit-${{ matrix.database == 'postgres' && 'pg16' || 'sqlite' }}
@@ -237,7 +270,7 @@ jobs:
           if-no-files-found: error
 
       - name: tc secrets request/wait against the node (TC-834)
-        if: matrix.database == 'sqlite'
+        if: ${{ steps.relevance.outputs.relevant == 'true' && matrix.database == 'sqlite' }}
         env:
           TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
         run: bun test packages/cli/test/secrets-wait.e2e.test.ts
@@ -247,7 +280,7 @@ jobs:
       # The step runs packages/cli/test/replica-secrets.e2e.test.ts and fails
       # unless at least one test passed and none were skipped.
       - name: tc replica Secrets against the node
-        if: matrix.database == 'sqlite'
+        if: ${{ steps.relevance.outputs.relevant == 'true' && matrix.database == 'sqlite' }}
         timeout-minutes: 10
         env:
           TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
@@ -260,13 +293,13 @@ jobs:
           fi
 
       - name: tc delegation revoke from a profile with no grant record, against the node
-        if: matrix.database == 'sqlite'
+        if: ${{ steps.relevance.outputs.relevant == 'true' && matrix.database == 'sqlite' }}
         env:
           TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
         run: bun test --max-concurrency=1 packages/cli/src/commands/delegation-revoke-lookup.e2e.test.ts
 
       - name: tc share revoke by ID across re-login and logout, against the node (TC-1669)
-        if: matrix.database == 'sqlite'
+        if: ${{ steps.relevance.outputs.relevant == 'true' && matrix.database == 'sqlite' }}
         env:
           TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
         run: bun test --max-concurrency=1 packages/cli/src/commands/share-history-revoke.e2e.test.ts
@@ -276,22 +309,22 @@ jobs:
       # /version, runs one file and stops the node (.github/scripts/run-cli-node-suite.sh).
       # tests/cli/duckdb is not run here: the pinned node is built without DuckDB (TC-1965).
       - name: tests/cli kv against the node (TC-1902)
-        if: ${{ !cancelled() && matrix.database == 'sqlite' }}
+        if: ${{ !cancelled() && steps.relevance.outputs.relevant == 'true' && matrix.database == 'sqlite' }}
         timeout-minutes: 10
         run: .github/scripts/run-cli-node-suite.sh "$RUNNER_TEMP/tinycloud" tests/cli/kv/kv.test.ts
 
       - name: tests/cli sql against the node (TC-1902)
-        if: ${{ !cancelled() && matrix.database == 'sqlite' }}
+        if: ${{ !cancelled() && steps.relevance.outputs.relevant == 'true' && matrix.database == 'sqlite' }}
         timeout-minutes: 10
         run: .github/scripts/run-cli-node-suite.sh "$RUNNER_TEMP/tinycloud" tests/cli/sql/sql.test.ts
 
       - name: tests/cli secrets e2e against the node (TC-1902)
-        if: ${{ !cancelled() && matrix.database == 'sqlite' }}
+        if: ${{ !cancelled() && steps.relevance.outputs.relevant == 'true' && matrix.database == 'sqlite' }}
         timeout-minutes: 10
         run: .github/scripts/run-cli-node-suite.sh "$RUNNER_TEMP/tinycloud" tests/cli/secrets/secrets-e2e.test.ts
 
       - name: Stop any tests/cli node still running
-        if: ${{ always() && matrix.database == 'sqlite' }}
+        if: ${{ always() && steps.relevance.outputs.relevant == 'true' && matrix.database == 'sqlite' }}
         run: |
           for pidfile in "$RUNNER_TEMP"/cli-node-suites/*.pid; do
             [ -f "$pidfile" ] || continue
@@ -299,7 +332,7 @@ jobs:
           done
 
       - name: Save Rust/Cargo cache
-        if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/')
+        if: ${{ steps.relevance.outputs.relevant == 'true' && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/')) }}
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
@@ -314,24 +347,69 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Decide whether the change touches a replica path
+        id: relevance
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # Fails open: only a clean diff with no matching path skips the work.
+          # web-sdk bundles share-sdk (and share-envelope through it), so those
+          # paths count. A lockfile-only change can move the bundled worker
+          # (#606: +86 B), so root bun.lock and package.json count too.
+          relevant=true
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "relevant=true: $EVENT_NAME always runs the replica jobs"
+          elif ! changed="$(git diff --no-renames --name-only "$BASE_SHA" "$HEAD_SHA")"; then
+            echo "relevant=true: git diff failed, running the replica jobs"
+          else
+            relevant=false
+            while IFS= read -r file; do
+              case "$file" in
+                packages/replica/* | packages/cli/* | packages/node-sdk/* | packages/sdk-core/* \
+                | packages/sdk-services/src/* | packages/sdk-services/package.json \
+                | packages/sdk-services/tsconfig*.json | packages/operations/* | packages/web-sdk/* \
+                | packages/share-sdk/* | packages/share-envelope/* | tests/cli/* | .github/scripts/* \
+                | .github/workflows/replica-e2e.yml | tests/replication-harness/* \
+                | .github/workflows/replication-harness.yml | bun.lock | package.json)
+                  relevant=true
+                  echo "relevant=true: $file matches a replica path"
+                  break
+                  ;;
+              esac
+            done <<< "$changed"
+            if [ "$relevant" = false ]; then
+              echo "relevant=false: no changed file matches a replica path"
+            fi
+          fi
+          echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-node@v4
+        if: ${{ steps.relevance.outputs.relevant == 'true' }}
         with:
           node-version: 22.x
 
       - uses: oven-sh/setup-bun@v2
+        if: ${{ steps.relevance.outputs.relevant == 'true' }}
         with:
           bun-version: 1.3.14
       - name: Cache Bun packages
+        if: ${{ steps.relevance.outputs.relevant == 'true' }}
         uses: actions/cache@v4
         with:
           path: ~/.bun/install/cache
           key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
 
       - uses: dtolnay/rust-toolchain@stable
+        if: ${{ steps.relevance.outputs.relevant == 'true' }}
         with:
           targets: wasm32-unknown-unknown
       - name: Restore Rust/Cargo cache
+        if: ${{ steps.relevance.outputs.relevant == 'true' }}
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
@@ -343,21 +421,26 @@ jobs:
             cargo-${{ runner.os }}-stable-${{ github.workflow }}-${{ github.job }}-
 
       - name: Install wasm-pack
+        if: ${{ steps.relevance.outputs.relevant == 'true' }}
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
       - name: Install locked dependencies
+        if: ${{ steps.relevance.outputs.relevant == 'true' }}
         run: bun install --frozen-lockfile
       - name: Read Playwright version
+        if: ${{ steps.relevance.outputs.relevant == 'true' }}
         id: playwright-version
         run: echo "version=$(bunx playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
 
       - name: Cache Playwright browsers
+        if: ${{ steps.relevance.outputs.relevant == 'true' }}
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
 
       - name: Build the packages the browser bundle needs
+        if: ${{ steps.relevance.outputs.relevant == 'true' }}
         run: |
           bun run --cwd packages/sdk-rs build:wasm:node
           bun run --cwd packages/sdk-rs/packages/node build
@@ -374,9 +457,11 @@ jobs:
           bun run --cwd packages/web-sdk build
 
       - name: Install Chromium
+        if: ${{ steps.relevance.outputs.relevant == 'true' }}
         run: bunx playwright install chromium
 
       - name: Extract the pinned node binary
+        if: ${{ steps.relevance.outputs.relevant == 'true' }}
         run: |
           docker pull "$TINYCLOUD_NODE_IMAGE"
           container="$(docker create "$TINYCLOUD_NODE_IMAGE")"
@@ -385,19 +470,23 @@ jobs:
           chmod +x "$RUNNER_TEMP/tinycloud"
 
       - name: Build the browser fixture page
+        if: ${{ steps.relevance.outputs.relevant == 'true' }}
         run: bunx vite build
         working-directory: packages/replica/test/browser/fixture
 
       - name: Browser replica against the node
+        if: ${{ steps.relevance.outputs.relevant == 'true' }}
         env:
           TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
         run: bun test packages/replica/test/browser.e2e.test.ts
 
       - name: Build the acceptance fixture page
+        if: ${{ steps.relevance.outputs.relevant == 'true' }}
         run: bunx vite build
         working-directory: packages/replica/test/browser/acceptance
 
       - name: Browser acceptance (TC-858, Chromium)
+        if: ${{ steps.relevance.outputs.relevant == 'true' }}
         env:
           TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
           TC858_ACCEPTANCE_STRICT: "1"
@@ -412,12 +501,12 @@ jobs:
           grep -qE '^ *[1-9][0-9]* pass$' "$RUNNER_TEMP/acceptance.log"
 
       - name: Build the purge fixture page
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.relevance.outputs.relevant == 'true' }}
         run: bunx vite build
         working-directory: packages/replica/test/browser/purge
 
       - name: Browser local-copy purge (TC-1888, Chromium)
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.relevance.outputs.relevant == 'true' }}
         env:
           TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
           TC1888_ACCEPTANCE_STRICT: "1"
@@ -432,14 +521,14 @@ jobs:
           grep -qE '^ *[1-9][0-9]* pass$' "$RUNNER_TEMP/purge-acceptance.log"
 
       - name: kv-storage adapter in Chromium (fake feed and the node)
-        if: always()
+        if: ${{ always() && steps.relevance.outputs.relevant == 'true' }}
         env:
           TC_REPLICA_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
           TC_KV_STORAGE_E2E: "1"
         run: bun test packages/replica/test/kv-storage.e2e.test.ts
 
       - name: Save Rust/Cargo cache
-        if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/')
+        if: ${{ steps.relevance.outputs.relevant == 'true' && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/')) }}
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
