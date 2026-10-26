@@ -3158,12 +3158,12 @@ describe("owner revocation window (TC-2005, #745) size ratchet", () => {
 describe("capped replica repair backoff (TC-2096, #759) size ratchet", () => {
   const row = () => structuredClone(approvedTc2096RepairBackoffRatchet);
 
-  it("pins exact CI bytes over the revocation-window row, keeps root, and carries first import, activation and both worker deltas", () => {
+  it("pins exact CI bytes over the revocation-window row, keeps root, first import and activation, and carries both worker deltas", () => {
     expect(() => validateLedger(current)).not.toThrow();
     expect(current.tc2096RepairBackoffRatchet).toEqual(approvedTc2096RepairBackoffRatchet);
     expect(row().root).toEqual({ delta: { "index.mjs": 0, "index.cjs": 0 }, ceiling: approvedTc2005RevokeWindowRatchet.root.ceiling });
-    expect(row().firstImport).toEqual({ delta: { "replica.mjs": 279, "replica.cjs": 275 }, ceiling: { "replica.mjs": approvedTc2005RevokeWindowRatchet.firstImport.ceiling["replica.mjs"] + 279, "replica.cjs": approvedTc2005RevokeWindowRatchet.firstImport.ceiling["replica.cjs"] + 275 } });
-    expect(row().activation).toEqual({ delta: { "activation.mjs": -2, "activation.cjs": -2 }, ceiling: approvedTc2005RevokeWindowRatchet.activation.ceiling });
+    expect(structuredClone(approvedTc2005RevokeWindowRatchet).firstImport).toEqual({ delta: { "replica.mjs": 0, "replica.cjs": 0 }, ceiling: approvedTc2005RevokeWindowRatchet.firstImport.ceiling });
+    expect(structuredClone(approvedTc2005RevokeWindowRatchet).activation).toEqual({ delta: { "activation.mjs": 0, "activation.cjs": 0 }, ceiling: approvedTc2005RevokeWindowRatchet.activation.ceiling });
     expect(row().worker.delta).toBe(340);
     expect(row().worker.ceiling).toBe(approvedTc2005RevokeWindowRatchet.worker.ceiling + row().worker.delta);
     expect(row().replicaWorker.delta).toBe(323);
@@ -3173,6 +3173,11 @@ describe("capped replica repair backoff (TC-2096, #759) size ratchet", () => {
     expect(rootCeilings(current).at(-1)).toEqual({ row: "tc2096RepairBackoffRatchet", ceiling: row().root.ceiling });
     expect(MAX_WORKER_GZIP_BYTES).toBe(row().worker.ceiling);
     expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(row().replicaWorker.ceiling);
+  });
+
+  it("pins the TC-2096 first-import +279/+275 and activation -2/-2 deltas with their measured ceilings", () => {
+    expect(row().firstImport).toEqual({ delta: { "replica.mjs": 279, "replica.cjs": 275 }, ceiling: { "replica.mjs": 52653, "replica.cjs": 67846 } });
+    expect(row().activation).toEqual({ delta: { "activation.mjs": -2, "activation.cjs": -2 }, ceiling: { "activation.mjs": 23386, "activation.cjs": 24959 } });
   });
 
   it("refuses changed bytes, provenance or a missing revocation-window prerequisite", () => {

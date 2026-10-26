@@ -427,20 +427,31 @@ describe("TC-2043 replication syncScope optional allowance", () => {
 });
 
 
+const tc1888Ledger: OptionalLedger = {
+  ...structuredClone(shipped),
+  allowance: { ...tc1888OptionalAllowance },
+  entries: structuredClone(shipped.entries.slice(0, shipped.entries.findIndex((entry) => entry.pr === "#759"))),
+};
+
 describe("TC-1888 sign-out local copy optional allowance", () => {
   it("pins the approved caps and measured #728 entry", () => {
-    expect(() => validateOptionalLedger(shipped, true, true, true, true, true, true, true, true, true, true, true)).not.toThrow();
+    expect(() => validateOptionalLedger(tc1888Ledger, true, true, true, true, true, true, true, true, true, true)).not.toThrow();
     const deltas = { ...approvedTc1888PurgeLocalCopyRatchet.firstImport.delta, ...approvedTc1888PurgeLocalCopyRatchet.activation.delta };
-    expect(shipped.entries.find((entry) => entry.pr === "#728")).toMatchObject({ pr: "#728", ticket: "TC-1888", ...deltas });
+    expect(tc1888Ledger.allowance).toEqual(tc1888OptionalAllowance);
+    for (const format of ["replica.mjs", "replica.cjs", "activation.mjs", "activation.cjs"] as const) {
+      expect(tc1888Ledger.allowance[format]).toBe(tc2043Ledger.entries.reduce((sum, entry) => sum + entry[format], 0) + deltas[format]);
+      expect(tc1888Ledger.entries.reduce((sum, entry) => sum + entry[format], 0)).toBe(tc1888Ledger.allowance[format]);
+    }
+    expect(tc1888Ledger.entries.at(-1)).toMatchObject({ pr: "#728", ticket: "TC-1888", ...deltas });
   });
 
   it("refuses extra allowance bytes or the new allowance without its ratchet", () => {
     for (const format of ["replica.mjs", "replica.cjs", "activation.mjs", "activation.cjs"] as const) {
-      const changed = structuredClone(shipped);
+      const changed = structuredClone(tc1888Ledger);
       changed.allowance[format]++;
-      expect(() => validateOptionalLedger(changed, true, true, true, true, true, true, true, true, true, true, true)).toThrow();
+      expect(() => validateOptionalLedger(changed, true, true, true, true, true, true, true, true, true, true)).toThrow();
     }
-    expect(() => validateOptionalLedger(shipped, true, true, true, true, true, true, true, true, true, true)).toThrow();
+    expect(() => validateOptionalLedger(tc1888Ledger, true, true, true, true, true, true, true, true, true)).toThrow();
   });
 });
 
