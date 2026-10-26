@@ -1,5 +1,13 @@
 # @tinycloud/replica
 
+## 0.4.0-beta.2
+
+### Patch Changes
+
+- c6b4703: The replica retries a value it could not verify with growing gaps and gives up after five tries until the next session.
+
+  Details: TC-2096
+
 ## 0.4.0-beta.1
 
 ### Minor Changes
