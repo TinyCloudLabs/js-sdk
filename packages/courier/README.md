@@ -114,6 +114,118 @@ Precedence for the node host and OpenKey host is flag > stored > env > default.
 For the OpenKey API host it is flag > env > derived. `TC_HOME`, `TC_PROFILE`,
 `TC_OPENKEY_HOST` and `TC_OPENKEY_API_HOST` are ignored.
 
+### Invites
+
+An invite is a one-time bearer string that starts a pairing without an
+artifact exchange. The owner creates it for a handle and an email address; the
+invitee joins with it.
+
+```bash
+tc courier invite alice --email alice@example.com --tier strict --ttl 24h
+tc courier invite list
+tc courier invite revoke <invite-id>
+tc courier join --file invite.txt --credential-file proof.txt
+tc courier join --resume
+```
+
+- `invite <handle>` prints the string once. `--call-me` sets the name the
+  invitee uses for the owner; it defaults to the owner's handle.
+- Send the link by a different channel than the invited email address. If it
+  goes by email, add `--also-ask` (you approve each hello) or `--expect-owner`
+  (the invitee's account must match), so one mailbox alone cannot pair.
+  Anyone who holds the link can read the invitee address and your owner
+  address, space and handles until it expires.
+- `invite approve <invite-id> --owner <did>` first prints the owner and courier
+  of the hello that is held and why it is held; `--owner` (a `did:pkh` DID or
+  its `0x` address) must name that owner, otherwise it stops with
+  `owner-mismatch` and pairs nothing. The public record of a held invite carries
+  `heldReason` and `helloOwner` for the gate.
+- A held invite keeps the hello that was held: recovery after a crash re-holds
+  that hello and never swaps in a later one. `invite approve` and `invite deny`
+  take a per-invite lock (so does `invite revoke`: while a pairing is finishing it
+  fails with `invite-busy`), so a second one at the same time fails with
+  `invite-busy`. Every `invite-busy` message says to try again in a few minutes:
+  a lock whose holder died is taken over after two minutes without a refresh. A holder whose lock was taken
+  over, or whose invite was changed under it, stops with `invite-lock-lost`
+  before it writes anything more. Node calls made while deciding an invite give
+  up after 60 seconds (`node-timeout`) and leave the invite held again; the
+  pairing step that gave up starts no new write afterwards. A write already on the
+  wire cannot be recalled: after a deny, the peer record `me/peers/<handle>.json`
+  on the node may still say `paired`; Courier never reads it as authority (the
+  local profile is). If it may already have
+  asked the node for a read grant, `invite list` shows it under `possibleGrants`
+  (cid or `unknown`, the courier, and the latest date it can be valid), and
+  `invite approve` shows it before pairing. It is not revoked automatically yet.
+  A record is written only if `invite list` can read it back. If a grant may exist
+  but cannot be recorded (for example the hello's courier DID is not an ed25519
+  did:key), the held text, the notice and `invite list` (`unrecordedGrantUntil`)
+  give only the latest date it can be valid, without a courier. That date lives on
+  the private invite record, only ever moves later, and only the sweep removes it
+  once it has passed. Owner-facing texts
+  print a hello's courier DID only if it is a real ed25519 did:key, and say
+  "a courier in an unrecognised format" otherwise.
+- `pair start`, `pair accept` and `join` also refuse a handle that a peers file
+  lists (`peers-entry-exists`, or `peers-unreadable`), before creating a peer or
+  a grant; the same `--peers-file` / `COURIER_PEERS_FILE` / defaults apply.
+- `--tier` is the requested tier. `--tier trusted` asks for trusted status; the
+  paired peer starts strict until you confirm trusted by hand. Self-service
+  invites never create a trusted peer.
+- `invite list` shows invite id, handle, status and expiry. It never prints
+  the revoke token or the invite key.
+- `invite revoke` deletes the sealed invite and any pending hello or welcome.
+  Delegations granted to the one-time key remain until their TTL ends.
+- With `--invites-public-dir <dir>` (or `COURIER_INVITES_PUBLIC_DIR`), `invite`
+  also writes `<invite-id>.json` there with mode 0640: the handle, expected
+  email, requested tier, timestamps and status, with no keys, tokens or blob ids.
+  `invite revoke` updates the status in that file.
+- `join` sends a hello and waits for the owner's reply. If none arrives in
+  about 10 minutes it prints the resume command and exits. `join --resume`
+  continues a pending join without sending a second hello.
+- If a hello is already stored for the invite and it is not the one this
+  machine wrote, or cannot be read back, `join` does not write over it. It
+  keeps polling `out/welcome.json` and pairs only if the Welcome is addressed to
+  this courier and comes from the inviter pinned when the invite was accepted.
+  A Welcome that fails those checks is ignored; the first one prints a line
+  with a stable failure code. If none arrives before the invite expires, or only
+  such Welcomes did, `join` stops with `hello-exists` and says which of the two
+  it was, to ask the inviter for a new invite, and to run
+  `courier revoke <handle>` first if that is refused with "already exists".
+  `join --resume` re-enters the wait and never writes again; after the invite
+  expired it prints the same `hello-exists` advice.
+- A new invite from the same inviter replaces the unfinished pairing an earlier
+  failed `join` left behind (and drops that join's state); a paired peer under
+  the handle still blocks. `invite revoke` frees a handle whose pairing never
+  started.
+- A hello's credential and possession proof must belong to the courier named in
+  its pairing artifact; otherwise `watch` holds it (`holder-mismatch`).
+- `join --stdin` and `join --file` read the invite string without putting it
+  on the command line. The positional form works, but the string is visible
+  in `ps` to other users on the machine.
+- Handles may not begin with `_`. The words `list` and `revoke` cannot be
+  invitee handles, because they select the `invite` subcommands.
+- The box's `peers.json` is keyed by handle and carries the trust tier. `invite`
+  refuses a handle that has an entry there (`peers-entry-exists`), and `watch`
+  holds a hello for such a handle instead of pairing it, so a new peer never
+  inherits an old entry's trust. `invite approve` refuses it too. Remove the entry
+  to continue. Courier checks `<COURIER_HOME>/peers.json`,
+  `<COURIER_HOME>/intake/peers.json` and the file named by `--peers-file <path>`
+  (on `invite`, `invite approve` or `watch`) or, without the flag, by
+  `COURIER_PEERS_FILE`; the flag replaces the variable for that command (the two
+  are not combined). The named path must be absolute, free of control
+  characters, and the
+  file must exist, otherwise the command stops with an error (`watch
+  --install-systemd` checks it too and writes `COURIER_PEERS_FILE` into the
+  unit; every value written into the unit is escaped, and its path directives
+  must be absolute, free of control characters and not end in a backslash or whitespace). A default location that is
+  absent counts as no entry. A peers file
+  that exists but cannot be read as a JSON object, or a named file that has
+  gone missing, refuses with `peers-unreadable`. Courier has no stored setting
+  for this path.
+- `watch` also looks for a hello on every poll, so a hello written while the
+  watcher was not subscribed is still picked up.
+
+Details: TC-712
+
 ## Watcher
 
 `courier watch` runs once per person per machine and never calls a model.

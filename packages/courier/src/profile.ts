@@ -111,7 +111,16 @@ export function writeSecure(file: string, obj: unknown): void {
   }
 }
 
-function readSecure<T>(name: string, required: boolean, home = profileDir()): T | undefined {
+/** Owner-only subdirectory of the profile dir (created 0700 if missing). Returns its absolute path. */
+export function secureSubdir(name: string): string {
+  ensureSecureDir();
+  const dir = path.join(profileDir(), name);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  fs.chmodSync(dir, 0o700);
+  return dir;
+}
+
+export function readSecure<T>(name: string, required: boolean, home = profileDir()): T | undefined {
   const file = profilePath(name, home);
   if (!fs.existsSync(file)) {
     if (required) throw new CourierError('no-profile', `Missing ${name} in ${profileDir()}. Run \`${cmd('init')}\` first.`);

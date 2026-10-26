@@ -2,13 +2,26 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { ULID, HANDLE } from './request.js';
+import { courierPhrase } from './did-key.js';
 import { startsAgentCli } from './guard/policy.js';
 import { courierOnlyEnv } from './guard/install.js';
 import { deadlineRunner, type Runner, type WakeConfig } from './wake.js';
 
+/** Invite facts for the owner. `label` is the peer's claimed label, shown verbatim; nothing else from the hello is included. `tier` is the requested tier, never a grant. */
+export interface InviteNotice {
+  id: string;
+  handle: string;
+  label: string;
+  owner: string;
+  courierDid: string;
+  reason: string;
+  tier: string;
+  /** Latest time a read grant from an earlier abandoned attempt can still be valid. Fixed wording only. */
+  possibleGrantUntil?: string;
+}
 /** Fixed status for the human. No notification path starts or messages an agent. */
 export interface Notice {
-  kind: 'paused' | 'peer-paused' | 'new-message' | 'new-approval';
+  kind: 'paused' | 'peer-paused' | 'new-message' | 'new-approval' | 'invite-held' | 'invite-completed' | 'invite-failed';
   /** Machine event id, used only for deduplication, never notification prose. */
   eventId?: string;
   /** Fixed-width local count of coalesced pause transitions. */
@@ -19,6 +32,8 @@ export interface Notice {
   threadId: string;
   /** Internal fixed wording; never forwarded as notification prose. */
   detail: string;
+  /** Set for invite-held and invite-completed only. */
+  invite?: InviteNotice;
 }
 export type Notifier = (notice: Notice) => Promise<void>;
 export interface NotifyConfig {
@@ -41,6 +56,14 @@ export function noticeText(notice: Notice, _owner: string): { title: string; bod
   const total = `${pending}${pending === 999999 ? '+' : ''}`;
   if (notice.kind === 'new-message') return { title: 'Courier: needs you', body: `${total} new message(s) from ${peer}; latest thread ${thread}. Start a session, run courier inbox, then courier read and courier orders for this peer.` };
   if (notice.kind === 'new-approval') return { title: 'Courier: decision ready', body: `${total} owner decision(s) with ${peer}; latest thread ${thread}. Start a session and run courier approval with --peek; an approved PR merge uses courier run-approved. No agent was woken.` };
+  if (notice.kind === 'invite-held' || notice.kind === 'invite-completed') {
+    const invite = notice.invite;
+    if (!invite) throw new Error('invite notice without invite facts');
+    return notice.kind === 'invite-held'
+      ? { title: 'Courier: invite needs you', body: `Invite ${invite.id} for ${invite.handle} is held (${invite.reason}). Claimed label "${invite.label}", owner ${invite.owner}, ${courierPhrase(invite.courierDid)}, requested tier ${invite.tier}. Run courier invite approve ${invite.id} --owner ${invite.owner} (only if that owner is the one you mean to pair) or courier invite deny ${invite.id}.${invite.possibleGrantUntil ? ` A read grant from an earlier attempt may exist until ${invite.possibleGrantUntil}.` : ''} No agent was woken.` }
+      : { title: 'Courier: invite paired', body: `Invite ${invite.id} paired with ${invite.handle}: owner ${invite.owner}, ${courierPhrase(invite.courierDid)}, requested tier ${invite.tier}. The peer starts as strict until you confirm trusted status. Claimed label "${invite.label}". No agent was woken.` };
+  }
+  if (notice.kind === 'invite-failed') return { title: 'Courier: invite failed', body: `An invite for ${peer} could not be recovered (${notice.detail}). No pairing happened, and the invite closes at its expiry. No approve or deny applies. No agent was woken.` };
   const count = /^[0-9]{6}$/.test(notice.repeats ?? '') ? Number(notice.repeats) : 0;
   const repeated = count ? ` Additional pauses on this thread: ${count}${count === 999999 ? '+' : ''}.` : '';
   return notice.kind === 'paused'
