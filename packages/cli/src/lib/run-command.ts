@@ -1,17 +1,40 @@
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 /** Signals this process passes on to the running command. */
 const FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"] as const;
 /** Signals a terminal sends to its whole foreground process group: Ctrl-C, Ctrl-\ and hangup. */
 const TERMINAL_SIGNALS: Partial<Record<NodeJS.Signals, true>> = { SIGINT: true, SIGQUIT: true, SIGHUP: true };
 
+/** A process's group and its terminal's foreground group (`-1` or `0` without a terminal). */
+export interface ProcessGroups {
+  readonly group: number;
+  readonly foreground: number;
+}
+
 /**
- * This process's group and its terminal's foreground group, read when a
- * signal arrives: from `/proc/self/stat` (Linux), else from `ps` (macOS, BSD)
- * with this process's own environment; none when both fail.
+ * `ps` arguments for `pid`'s group and foreground group: one `-o` per column,
+ * since BSD `ps` reads everything after the first `=` as the header.
  */
-function processGroups(): { group: number; foreground: number } | undefined {
+export function psGroupArgs(pid: number): string[] {
+  return ["-o", "pgid=", "-o", "tpgid=", "-p", String(pid)];
+}
+
+/** The groups in `ps` output; none unless it is exactly two integer columns. */
+export function parsePsGroups(output: string): ProcessGroups | undefined {
+  const columns = output.trim().split(/\s+/);
+  if (columns.length !== 2) return undefined;
+  const group = Number(columns[0]);
+  const foreground = Number(columns[1]);
+  return Number.isSafeInteger(group) && Number.isSafeInteger(foreground) ? { group, foreground } : undefined;
+}
+
+/**
+ * This process's groups, read when a signal arrives: from `/proc/self/stat`
+ * (Linux), else from `ps` at a fixed path with an empty environment; none
+ * when both fail.
+ */
+function processGroups(): ProcessGroups | undefined {
   try {
     const stat = readFileSync("/proc/self/stat", "utf8");
     // After the parenthesised name: state, ppid, pgrp, session, tty_nr, tpgid, ...
@@ -21,13 +44,13 @@ function processGroups(): { group: number; foreground: number } | undefined {
     // No /proc: ask ps.
   }
   try {
-    const columns = execFileSync("ps", ["-o", "pgid=,tpgid=", "-p", String(process.pid)], {
-      env: process.env,
+    const ps = existsSync("/bin/ps") ? "/bin/ps" : "/usr/bin/ps";
+    return parsePsGroups(execFileSync(ps, psGroupArgs(process.pid), {
+      env: {},
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 2_000,
-    }).trim().split(/\s+/);
-    return { group: Number(columns[0]), foreground: Number(columns[1]) };
+    }));
   } catch {
     return undefined;
   }
