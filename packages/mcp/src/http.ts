@@ -37,7 +37,7 @@ export interface HostedMcpConfig extends RemoteStoreConfig {
    * credentials). The hosted server always sets this; without it only the
    * signed token claims are checked.
    */
-  readonly introspection?: TokenStatusConfig;
+  readonly introspection?: Omit<TokenStatusConfig, "resourceUrl">;
 }
 
 export interface HostedMcpApp {
@@ -48,15 +48,16 @@ export interface HostedMcpApp {
 export function createHostedMcpApp(config: HostedMcpConfig): HostedMcpApp {
   const resourceUrl = canonicalResourceUrl(config.publicUrl);
   const pluginUrl = new URL("./chatgpt/mcp", resourceUrl);
-  const tokenStatus = config.introspection === undefined
-    ? undefined
-    : createTokenStatusChecker(config.introspection);
-  const hosted = createHostedSurface(config, resourceUrl, "hosted", tokenStatus);
+  const statusFor = (resource: URL): TokenStatusChecker | undefined =>
+    config.introspection === undefined
+      ? undefined
+      : createTokenStatusChecker({ ...config.introspection, resourceUrl: resource.toString() });
+  const hosted = createHostedSurface(config, resourceUrl, "hosted", statusFor(resourceUrl));
   const plugin = createHostedSurface({
     ...config,
     stateDir: join(config.stateDir, "chatgpt"),
     approvalPath: new URL("./connect", pluginUrl).pathname,
-  }, pluginUrl, "public", tokenStatus);
+  }, pluginUrl, "public", statusFor(pluginUrl));
   const pluginPaths: Record<string, true> = {
     [pluginUrl.pathname]: true,
     [new URL("./connect", pluginUrl).pathname]: true,

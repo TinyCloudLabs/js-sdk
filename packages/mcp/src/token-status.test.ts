@@ -17,6 +17,7 @@ if (!process.env.HOME?.startsWith("/var/tmp/tc1627.")) throw new Error("HOME is 
 const OWNER = "did:pkh:eip155:1:0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf";
 const ISSUER = "https://openkey.test/api/auth";
 const AUDIENCE = "https://mcp.test/mcp";
+const USERINFO = `${ISSUER}/oauth2/userinfo`;
 const INTROSPECTION = "https://openkey.test/api/oauth/resource/introspect";
 const servers: Server[] = [];
 const apps: HostedMcpApp[] = [];
@@ -28,7 +29,7 @@ afterEach(async () => {
   await Promise.all(directories.splice(1).map((path) => rm(path, { recursive: true, force: true })));
 });
 
-type Answer = "active" | "inactive" | "down" | "server-error" | "unauthorized" | "malformed";
+type Answer = "active" | "inactive" | "down" | "server-error" | "rate-limited" | "unauthorized" | "malformed";
 
 interface StubOpenKey {
   answer: Answer;
@@ -52,6 +53,7 @@ function stubOpenKey(initial: Answer = "active"): StubOpenKey {
       switch (stub.answer) {
         case "down": throw new TypeError("connection refused");
         case "server-error": return new Response("oops", { status: 500 });
+        case "rate-limited": return new Response("slow down", { status: 429 });
         case "unauthorized": return Response.json({ error: "invalid_client" }, { status: 401 });
         case "malformed": return Response.json({ status: "ok" });
         case "inactive": return Response.json({ active: false });
@@ -62,7 +64,7 @@ function stubOpenKey(initial: Answer = "active"): StubOpenKey {
             scope: jwt.scope,
             client_id: jwt.azp,
             sub: jwt.sub,
-            aud: jwt.aud,
+            aud: AUDIENCE,
             exp: jwt.exp,
             iat: jwt.iat,
             iss: jwt.iss,
@@ -81,6 +83,7 @@ function checkerWith(stub: StubOpenKey, clock: { now: number }, authMethod: "bas
     endpoint: INTROSPECTION,
     clientId: "mcp-client",
     clientSecret: "s3cret/+ value",
+    resourceUrl: AUDIENCE,
     authMethod,
     fetch: stub.fetch,
     now: () => clock.now,
@@ -88,7 +91,7 @@ function checkerWith(stub: StubOpenKey, clock: { now: number }, authMethod: "bas
   });
 }
 
-async function jwksServer(): Promise<{ jwksUri: string; sign: () => Promise<string> }> {
+async function jwksServer(): Promise<{ jwksUri: string; sign: (lifetime?: string) => Promise<string> }> {
   const { privateKey, publicKey } = await generateKeyPair("EdDSA");
   const jwk = { ...await exportJWK(publicKey), kid: "test-key", alg: "EdDSA" };
   const server = createServer((_request, response) => {
@@ -101,12 +104,12 @@ async function jwksServer(): Promise<{ jwksUri: string; sign: () => Promise<stri
   if (address === null || typeof address === "string") throw new Error("JWKS server did not start.");
   return {
     jwksUri: `http://127.0.0.1:${address.port}/jwks`,
-    sign: () => signToken(privateKey),
+    sign: (lifetime = "5m") => signToken(privateKey, lifetime),
   };
 }
 
 let tokenCounter = 0;
-function signToken(privateKey: CryptoKey): Promise<string> {
+function signToken(privateKey: CryptoKey, lifetime: string): Promise<string> {
   tokenCounter += 1;
   return new SignJWT({
     scope: "tinycloud:mcp",
@@ -116,9 +119,9 @@ function signToken(privateKey: CryptoKey): Promise<string> {
     .setProtectedHeader({ alg: "EdDSA", kid: "test-key" })
     .setIssuer(ISSUER)
     .setSubject(`openkey-user-${tokenCounter}`)
-    .setAudience(AUDIENCE)
+    .setAudience([AUDIENCE, USERINFO])
     .setIssuedAt()
-    .setExpirationTime("5m")
+    .setExpirationTime(lifetime)
     .sign(privateKey);
 }
 
@@ -278,22 +281,72 @@ test("a 401 from OpenKey is logged once and refused even inside the outage allow
   expect(stub.logs).toHaveLength(2);
 });
 
-test("an active answer for a different sub, client_id or audience is refused", async () => {
+test("an active answer must name this resource and only audiences the token carries", async () => {
+  // The token carries the resource and its userinfo endpoint; OpenKey answers with the resource only.
+  const routeShaped = stubOpenKey("active");
+  const accepted = await verifierWith(routeShaped, { now: Date.now() });
+  await expect(accepted.verify(await accepted.sign())).resolves.toMatchObject({ clientId: "claude-client" });
+  for (const aud of [AUDIENCE, [AUDIENCE], [AUDIENCE, USERINFO]]) {
+    const stub = stubOpenKey("active");
+    stub.tamper = { aud };
+    const { verify, sign } = await verifierWith(stub, { now: Date.now() });
+    await expect(verify(await sign())).resolves.toMatchObject({ clientId: "claude-client" });
+  }
+
   for (const tamper of [
     { sub: "someone-else" },
     { client_id: "other-client" },
     { aud: "https://other.test/mcp" },
+    { aud: [USERINFO] },
+    { aud: [AUDIENCE, "https://other.test/mcp"] },
+    { aud: [] },
     { aud: undefined },
   ]) {
     const stub = stubOpenKey("active");
     stub.tamper = tamper;
     const { verify, sign } = await verifierWith(stub, { now: Date.now() });
-    await expect(verify(await sign())).rejects.toMatchObject({ code: OAuthErrorCode.InvalidToken });
+    const token = await sign();
+    await expect(verify(token)).rejects.toMatchObject({ code: OAuthErrorCode.InvalidToken });
+    // The refusal is kept for the token like an inactive answer.
+    stub.tamper = {};
+    await expect(verify(token)).rejects.toMatchObject({ code: OAuthErrorCode.InvalidToken });
+    expect(stub.calls).toHaveLength(1);
   }
-  const matching = stubOpenKey("active");
-  matching.tamper = { aud: [AUDIENCE] };
-  const { verify, sign } = await verifierWith(matching, { now: Date.now() });
-  await expect(verify(await sign())).resolves.toMatchObject({ clientId: "claude-client" });
+});
+
+test("an unknown answer is tolerated only for a token OpenKey answered active, within its lifetime", async () => {
+  const stub = stubOpenKey("active");
+  const clock = { now: Date.now() };
+  const { verify, sign } = await verifierWith(stub, clock);
+  const token = await sign("60s");
+  await verify(token);
+
+  stub.answer = "down";
+  clock.now += 59_000;
+  await expect(verify(token)).resolves.toMatchObject({ clientId: "claude-client" });
+  clock.now += 1_000; // 60 s: the token's lifetime
+  await expect(verify(token)).rejects.toMatchObject({ code: OAuthErrorCode.ServerError });
+});
+
+test("while OpenKey answers 429, a token it never answered active is refused even after other tokens were answered", async () => {
+  const stub = stubOpenKey("active");
+  const clock = { now: Date.now() };
+  const { verify, sign } = await verifierWith(stub, clock);
+  const seen = await sign();
+  const refusedBefore = await sign();
+  const never = await sign();
+  await verify(seen);
+  stub.answer = "inactive";
+  await expect(verify(refusedBefore)).rejects.toMatchObject({ code: OAuthErrorCode.InvalidToken });
+  stub.answer = "active";
+  await verify(await sign()); // another token keeps OpenKey's last answer fresh
+
+  stub.answer = "rate-limited";
+  clock.now += 40_000; // active windows are over
+  await expect(verify(seen)).resolves.toMatchObject({ clientId: "claude-client" });
+  await expect(verify(never)).rejects.toMatchObject({ code: OAuthErrorCode.ServerError });
+  // An answer that was inactive stays refused from the cache.
+  await expect(verify(refusedBefore)).rejects.toMatchObject({ code: OAuthErrorCode.InvalidToken });
 });
 
 test("the confidential client authenticates with basic or post credentials", async () => {

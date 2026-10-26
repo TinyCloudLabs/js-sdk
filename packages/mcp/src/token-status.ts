@@ -8,6 +8,8 @@ export type TokenStatus = "active" | "inactive" | "unknown";
 export interface TokenStatusConfig {
   /** OpenKey's resource-server introspection endpoint (`TC_MCP_INTROSPECTION_URL`). */
   readonly endpoint: string;
+  /** The resource URL (JWT audience) this checker serves; an active answer must name it. */
+  readonly resourceUrl: string;
   readonly clientId: string;
   readonly clientSecret: string;
   /** How the confidential client authenticates: `client_secret_basic` or `client_secret_post`. */
@@ -23,10 +25,12 @@ export interface TokenStatusChecker {
   /** Ask OpenKey whether `token` is still active. Never throws. */
   readonly tokenStatus: (token: string) => Promise<TokenStatus>;
   /**
-   * Whether an `unknown` status may still be accepted for this token: only
-   * while the time since OpenKey last answered is shorter than the token's own
-   * lifetime (`exp - iat`, 300 s when the token does not carry both), and
-   * never while OpenKey is refusing the client credentials.
+   * Whether an `unknown` status may still be accepted for this token: only a
+   * token that OpenKey itself answered active to this process, and only while
+   * the time since that answer is shorter than the token's own lifetime
+   * (`exp - iat`, 300 s when the token does not carry both). A token never
+   * confirmed active, or one answered inactive, is refused, and nothing is
+   * tolerated while OpenKey is refusing the client credentials.
    */
   readonly toleratesUnknown: (token: string) => boolean;
 }
@@ -49,7 +53,8 @@ export function createTokenStatusChecker(config: TokenStatusConfig): TokenStatus
   /** token hash -> end (ms) of the active window. */
   const active = new Map<string, number>();
   const inFlight = new Map<string, Promise<TokenStatus>>();
-  let lastAnswerAt: number | undefined;
+  /** token hash -> when OpenKey last answered this token active, and the token's expiry (ms). */
+  const confirmedActive = new Map<string, { at: number; expiresAt: number }>();
   /** Set while OpenKey refuses the client credentials; cleared by the next answer about a token. */
   let credentialsRefused = false;
 
@@ -81,7 +86,9 @@ export function createTokenStatusChecker(config: TokenStatusConfig): TokenStatus
       if (typeof result !== "object" || result === null || !("active" in result)) return "unknown";
       if (result.active === false) return "inactive";
       if (result.active !== true) return "unknown";
-      return answerMatchesToken(Object.fromEntries(Object.entries(result)), token) ? "active" : "mismatch";
+      return answerMatchesToken(Object.fromEntries(Object.entries(result)), token, config.resourceUrl)
+        ? "active"
+        : "mismatch";
     } catch {
       return "unknown";
     }
@@ -96,16 +103,23 @@ export function createTokenStatusChecker(config: TokenStatusConfig): TokenStatus
       credentialsRefused = true;
       return "unknown";
     }
-    if (outcome === "mismatch") return "inactive";
     if (outcome === "unknown") return outcome;
     const now = clock();
-    lastAnswerAt = now;
-    credentialsRefused = false;
     prune(now);
+    if (outcome === "mismatch") {
+      // The answer describes some other token: refused like an inactive one, but it
+      // is not an answer about this token and confirms nothing.
+      inactive.set(key, tokenExpiryMs(token, now));
+      confirmedActive.delete(key);
+      return "inactive";
+    }
+    credentialsRefused = false;
     if (outcome === "inactive") {
       inactive.set(key, tokenExpiryMs(token, now));
+      confirmedActive.delete(key);
     } else {
       active.set(key, now + ACTIVE_CACHE_MS);
+      confirmedActive.set(key, { at: now, expiresAt: tokenExpiryMs(token, now) });
     }
     return outcome;
   }
@@ -113,8 +127,10 @@ export function createTokenStatusChecker(config: TokenStatusConfig): TokenStatus
   function prune(now: number): void {
     for (const [key, until] of active) if (until <= now) active.delete(key);
     for (const [key, until] of inactive) if (until <= now) inactive.delete(key);
-    // An evicted entry only costs one more introspection for that token.
-    for (const cache of [active, inactive]) {
+    for (const [key, entry] of confirmedActive) if (entry.expiresAt <= now) confirmedActive.delete(key);
+    // An evicted entry costs one more introspection for that token; an evicted
+    // confirmation means that token is refused while OpenKey cannot answer.
+    for (const cache of [active, inactive, confirmedActive]) {
       while (cache.size >= MAX_CACHED_TOKENS) {
         const oldest = cache.keys().next().value;
         if (oldest === undefined) break;
@@ -138,30 +154,37 @@ export function createTokenStatusChecker(config: TokenStatusConfig): TokenStatus
       return asking;
     },
     toleratesUnknown(token) {
-      if (credentialsRefused || lastAnswerAt === undefined) return false;
-      return clock() - lastAnswerAt < tokenLifetimeSeconds(token) * 1000;
+      if (credentialsRefused) return false;
+      const confirmed = confirmedActive.get(createHash("sha256").update(token).digest("hex"));
+      if (confirmed === undefined) return false;
+      const now = clock();
+      return confirmed.expiresAt > now && now - confirmed.at < tokenLifetimeSeconds(token) * 1000;
     },
   };
 }
 
 /**
- * An `active` answer must describe the token that was asked about: `sub`,
- * `client_id` and `aud` equal the claims of the already verified JWT.
+ * An `active` answer must describe the token that was asked about: `sub` and
+ * `client_id` equal the claims of the already verified JWT, and `aud` is a
+ * non-empty subset of the JWT's audiences that includes `resourceUrl` (OpenKey
+ * answers only with the audiences the resource server may know, while the JWT
+ * can carry more, e.g. its userinfo endpoint).
  */
-function answerMatchesToken(answer: Record<string, unknown>, token: string): boolean {
+function answerMatchesToken(answer: Record<string, unknown>, token: string, resourceUrl: string): boolean {
   const jwt = claims(token);
   if (typeof jwt.sub === "string" && answer.sub !== jwt.sub) return false;
   const jwtClient = [jwt.azp, jwt.client_id].find((value) => typeof value === "string" && value.length > 0);
   if (jwtClient !== undefined && answer.client_id !== jwtClient) return false;
-  if (jwt.aud !== undefined && audiences(answer.aud) !== audiences(jwt.aud)) return false;
-  return true;
+  if (jwt.aud === undefined) return true;
+  const answered = audienceList(answer.aud);
+  const signed = audienceList(jwt.aud);
+  return answered.length > 0 && answered.includes(resourceUrl) && answered.every((entry) => signed.includes(entry));
 }
 
-/** Order-independent form of an `aud` value (string or array); never equal for a missing or malformed one. */
-function audiences(value: unknown): string {
+/** An `aud` value (string or array) as a list; a missing or malformed one is empty. */
+function audienceList(value: unknown): string[] {
   const list = typeof value === "string" ? [value] : value;
-  if (!Array.isArray(list) || !list.every((entry) => typeof entry === "string")) return "\0invalid";
-  return JSON.stringify([...new Set<string>(list)].sort());
+  return Array.isArray(list) && list.every((entry) => typeof entry === "string") ? list : [];
 }
 
 function tokenExpiryMs(token: string, now: number): number {
