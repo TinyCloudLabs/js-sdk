@@ -33,6 +33,7 @@
     "cli-keys-replication",
     "cli-kv-create-only",
     "cli-named-keys",
+    "cli-secrets-run",
     "cli-share-json-short-link",
     "mcp-token-status",
     "owner-revocation-window",
