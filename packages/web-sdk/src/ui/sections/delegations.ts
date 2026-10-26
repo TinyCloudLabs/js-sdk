@@ -536,6 +536,9 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
   let lastSource: PanelDataSource | undefined;
   let lastResult: ViewResult<DelegationPage> | undefined;
   let declined = false;
+  // A permission request is open (its button shows busy and does nothing) / the last one failed.
+  let asking = false;
+  let askFailed = false;
   // The first page is the cache's. Pages after it are read here, kept apart, and dropped when the list goes.
   let firstPage: DelegationPage | undefined;
   let extra: DelegationRow[] = [];
@@ -1088,36 +1091,58 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
   function askNotice(ability: PermissionAbility): HTMLElement {
     const client = ctx.client();
     const request = client?.requestAuthority;
-    const canAsk = ability === "delegation/list" && typeof request === "function";
+    const listAsk = ability === "delegation/list";
+    const canAsk = listAsk && typeof request === "function";
     const message = node(
       "p",
       undefined,
       text("delegations.ask.body") + (canAsk ? text("delegations.ask.openkey") : ""),
     );
     const parts: Node[] = [message];
+    if (listAsk) parts.push(node("p", "dl-fine", text("delegations.ask.scope")));
     if (declined) parts.push(node("p", "dl-fine", text("delegations.ask.declined")));
+    if (askFailed) {
+      const failure = node("p", "dl-fine", text("delegations.ask.error"));
+      failure.setAttribute("role", "status");
+      parts.push(failure);
+    }
     if (canAsk && request !== undefined) {
-      const allow = actionButton(text("delegations.ask.button"));
+      const allow = actionButton(text(asking ? "delegations.ask.busy" : "delegations.ask.button"));
+      allow.disabled = asking;
       allow.addEventListener("click", () => {
+        if (asking) return;
+        asking = true;
+        askFailed = false;
+        declined = false;
+        // In place, so the focused button stays.
         allow.disabled = true;
+        allow.textContent = text("delegations.ask.busy");
         const mine = epoch;
         void (async () => {
-          let approved = false;
+          let answer: { approved: boolean; code?: string };
           try {
-            approved = (await request(ability)).approved === true;
+            answer = await request(ability);
           } catch {
-            approved = false;
+            answer = { approved: false, code: "failed" };
           }
           // The ask was for the list that was on screen; if that list is gone, so is the answer.
           if (disposed || mine !== epoch) return;
-          declined = !approved;
-          if (approved) await settleList();
+          asking = false;
+          askFailed = answer.code === "failed";
+          declined = !answer.approved && !askFailed;
+          if (answer.approved) await settleList();
           if (disposed || mine !== epoch) return;
-          if (approved) title.focus({ preventScroll: true });
+          if (answer.approved) title.focus({ preventScroll: true });
           update();
         })();
       });
       parts.push(allow);
+    } else if (listAsk && client?.platform === "native") {
+      const allow = actionButton(text("delegations.ask.button"));
+      allow.disabled = true;
+      parts.push(allow, node("p", "dl-fine", text("delegations.ask.native")));
+    } else if (listAsk) {
+      parts.push(node("p", "dl-fine", text("delegations.ask.signin")));
     }
     return iconNotice("dl-notice dl-notice-ask", text("delegations.ask.title", { app: appName() }), ...parts);
   }
@@ -1279,6 +1304,8 @@ function mountDelegations(el: HTMLElement, ctx: SectionContext): () => void {
       retryId += 1;
       reloading = false;
       declined = false;
+      asking = false;
+      askFailed = false;
       // The cards belong to the list that was dropped, a card whose revoke is still out included; a list that comes back
       // builds its own, and shows a grant with a request in flight as busy from the module's lock.
       for (const old of [...cards.values()]) destroy(old);

@@ -3,9 +3,29 @@ import {
   PersistedSessionData,
   validatePersistedSessionData,
 } from "@tinycloud/sdk-core";
+import type { PortableDelegation } from "@tinycloud/node-sdk/core";
 
 const STORAGE_PREFIX = "tinycloud:session:";
 const ACTIVE_ADDRESS_SUFFIX = "active-address";
+const GRANTS_SEGMENT = "runtime-grants:";
+
+/** A stored entry as a PortableDelegation, or undefined when it lacks the fields a restore needs. */
+function toRuntimeGrant(entry: unknown): PortableDelegation | undefined {
+  if (entry === null || typeof entry !== "object") return undefined;
+  const record = entry as Record<string, unknown>;
+  const header = record.delegationHeader as { Authorization?: unknown } | null | undefined;
+  const expiry = typeof record.expiry === "string" ? new Date(record.expiry) : undefined;
+  if (
+    typeof record.cid !== "string" ||
+    typeof record.delegateDID !== "string" ||
+    typeof header?.Authorization !== "string" ||
+    expiry === undefined ||
+    !Number.isFinite(expiry.getTime())
+  ) {
+    return undefined;
+  }
+  return { ...record, expiry } as unknown as PortableDelegation;
+}
 
 export type BrowserSessionLoadStatus =
   | "loaded"
@@ -80,6 +100,8 @@ export class BrowserSessionStorage implements ISessionStorage {
     this.assertPersistable(data);
     const normalizedAddress = address.toLowerCase();
     this.storage.setItem(this.key(normalizedAddress), JSON.stringify(data));
+    // A new session record has a new key; grants made to the previous key do not carry over.
+    this.storage.removeItem(this.grantsKey(normalizedAddress));
     this.storage.setItem(this.activeAddressKey(), normalizedAddress);
     return Promise.resolve();
   }
@@ -163,8 +185,78 @@ export class BrowserSessionStorage implements ISessionStorage {
 
   clear(address: string): Promise<void> {
     this.storage?.removeItem(this.key(address));
+    this.storage?.removeItem(this.grantsKey(address));
     this.clearActiveAddress(address);
     return Promise.resolve();
+  }
+
+  private grantsKey(address: string): string {
+    return `${this.keyPrefix}${GRANTS_SEGMENT}${address.toLowerCase()}`;
+  }
+
+  /**
+   * Stores `grants` (runtime delegations to the stored session's key) beside the session record, in the same storage.
+   * They are bearer proofs for that key, so they live and die with the session record: `save` of a new session,
+   * `clear` and sign-out remove them, and `loadRuntimeGrants` returns none once the session is missing or expired.
+   * An empty list removes the entry. A storage that refuses the write (quota, blocked) leaves the grants unsaved:
+   * the grant then lasts until the page reloads. Never rejects.
+   */
+  saveRuntimeGrants(address: string, grants: readonly PortableDelegation[]): Promise<void> {
+    try {
+      this.writeRuntimeGrants(address, grants);
+    } catch {
+      // Grants that cannot be stored are lost on reload; the session is unaffected.
+    }
+    return Promise.resolve();
+  }
+
+  private writeRuntimeGrants(address: string, grants: readonly PortableDelegation[]): void {
+    if (!this.storage) return;
+    if (grants.length === 0) {
+      this.storage.removeItem(this.grantsKey(address));
+      return;
+    }
+    const stored = grants.map((grant) => ({ ...grant, expiry: grant.expiry.toISOString() }));
+    this.storage.setItem(this.grantsKey(address), JSON.stringify(stored));
+  }
+
+  /**
+   * The unexpired, well-formed grants saved for `address` while its session record is valid. Expired or malformed ones
+   * are removed. Never rejects: an unreadable storage answers none.
+   */
+  loadRuntimeGrants(address: string): Promise<PortableDelegation[]> {
+    try {
+      return Promise.resolve(this.readRuntimeGrants(address));
+    } catch {
+      return Promise.resolve([]);
+    }
+  }
+
+  private readRuntimeGrants(address: string): PortableDelegation[] {
+    if (!this.storage) return [];
+    const key = this.grantsKey(address);
+    const raw = this.storage.getItem(key);
+    if (raw === null) return [];
+    if (!this.exists(address)) {
+      this.storage.removeItem(key);
+      return [];
+    }
+    const kept: PortableDelegation[] = [];
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      parsed = undefined;
+    }
+    const entries = Array.isArray(parsed) ? parsed : [];
+    for (const entry of entries) {
+      const grant = toRuntimeGrant(entry);
+      if (grant !== undefined && grant.expiry.getTime() > Date.now()) kept.push(grant);
+    }
+    if (kept.length !== entries.length || !Array.isArray(parsed)) {
+      void this.saveRuntimeGrants(address, kept);
+    }
+    return kept;
   }
 
   exists(address: string): boolean {

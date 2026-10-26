@@ -39,6 +39,12 @@ export const DELEGATIONS_STRINGS = {
   "delegations.ask.openkey": " You'll approve it in OpenKey.",
   "delegations.ask.button": "Allow delegation list",
   "delegations.ask.declined": "That wasn't allowed, so nothing changed.",
+  "delegations.ask.scope":
+    "This shows every app and link that can reach your data across your whole account, and the names of what each can reach. It doesn't show keys or contents.",
+  "delegations.ask.busy": "Waiting for your answer…",
+  "delegations.ask.error": "The request didn't go through. Try again.",
+  "delegations.ask.signin": "Sign in again to allow it.",
+  "delegations.ask.native": "This app can't ask for this permission from here.",
 
   "delegations.kind.app": "This app",
   "delegations.kind.others": "Granted by you",

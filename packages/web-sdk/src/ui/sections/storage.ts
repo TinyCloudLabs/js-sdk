@@ -476,7 +476,9 @@ function mountPage(el: HTMLElement, ctx: SectionContext): () => void {
     if (permission) addCss(ASK_CSS);
     askCard.hidden = !permission;
     if (result.state === "needs-permission") {
-      const canAsk = ctx.client()?.requestAuthority !== undefined && result.ability === "space/info";
+      const client = ctx.client();
+      const canAsk =
+        client?.requestAuthority !== undefined && client.canRequest?.("space/info") !== false && result.ability === "space/info";
       askTitle.textContent = ctx.text("storage.page.permission_title", {
         app: ctx.appLabel() ?? ctx.text("storage.page.permission_app"),
       });
