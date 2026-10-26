@@ -2074,23 +2074,53 @@
     "replicaWorker": { "delta": 0, "ceiling": 770467 },
     "reason": "the panel button asks for the missing delegation-list permission (TC-2113)"
   },
+  "tc2127WindowLocationRatchet": {
+    "label": "TinyCloudWeb reads the SIWE domain without a window location (TC-2127, #764): +1 B mjs / +3 B cjs gzip",
+    "ruling": "Approved by Naomi (root +1 mjs / +3 cjs gz; measured at run 40398188413 at bad61a5c)",
+    "base": "533992691700b413fe64e1a9e9bfbca0f1f576b9",
+    "sourceCommits": [
+      "134bc7b152166a617997a85851ebad98e62c93c0"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40398188413",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40398188413/job/121836727416",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40398188413/job/121836727922"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 1, "index.cjs": 3 },
+      "ceiling": { "index.mjs": 1469000, "index.cjs": 1410525 }
+    },
+    "firstImport": {
+      "delta": { "replica.mjs": 0, "replica.cjs": 0 },
+      "ceiling": { "replica.mjs": 52757, "replica.cjs": 67957 }
+    },
+    "activation": {
+      "delta": { "activation.mjs": 0, "activation.cjs": 0 },
+      "ceiling": { "activation.mjs": 23412, "activation.cjs": 24981 }
+    },
+    "worker": { "delta": 0, "ceiling": 776539 },
+    "replicaWorker": { "delta": 0, "ceiling": 770467 },
+    "reason": "TinyCloudWeb._init reads the SIWE domain defensively when window.location is absent (TC-2127)"
+  },
   "tc1977OpenKeySigninRatchet": {
-    "label": "signInWithOpenKey for the node SDK and web SDK (TC-1977, #747): +940 B mjs / +866 B cjs gzip",
-    "ruling": "Approved by Naomi (root +940 mjs / +866 cjs gz; measured at run 40394725836 at 5e30ac3e)",
+    "label": "signInWithOpenKey for the node SDK and web SDK (TC-1977, #747): +955 B mjs / +1027 B cjs gzip",
+    "ruling": "Approved by Naomi (root +955 mjs / +1,027 cjs gz; measured at run 40398554596 at 6e09b322; re-stacked on #764)",
     "base": "f926276e5c97c36e3dbff5c18accbcddbb11e56b",
     "sourceCommits": [
       "a21c5edce78ff53dcd3e075ef1658a092f931052"
     ],
     "canonicalCI": {
-      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40394725836",
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40398554596",
       "jobs": [
-        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40394725836/job/121824610898",
-        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40394725836/job/121824611296"
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40398554596/job/121837975795",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40398554596/job/121837975928"
       ]
     },
     "root": {
-      "delta": { "index.mjs": 940, "index.cjs": 866 },
-      "ceiling": { "index.mjs": 1469939, "index.cjs": 1411388 }
+      "delta": { "index.mjs": 955, "index.cjs": 1027 },
+      "ceiling": { "index.mjs": 1469955, "index.cjs": 1411552 }
     },
     "firstImport": {
       "delta": { "replica.mjs": 0, "replica.cjs": 0 },

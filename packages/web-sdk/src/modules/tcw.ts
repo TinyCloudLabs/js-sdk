@@ -533,6 +533,7 @@ export class TinyCloudWeb {
    */
   private async _init(): Promise<void> {
     await this.wasmBindings.ensureInitialized();
+    const loc = typeof window !== 'undefined' ? window.location : undefined;
 
     const nodeConfig: TinyCloudNodeConfig = {
       host: this.config.tinycloudHosts?.[0],
@@ -552,8 +553,8 @@ export class TinyCloudWeb {
       localNodeIdentityStore:
         this.config.localNodeIdentityStore ??
         createLocalStorageLocalNodeIdentityStore(),
-      domain: this.config.domain ?? (typeof window !== 'undefined' ? window.location.host : 'app.tinycloud.xyz'),
-      uri: this.config.domain === undefined && typeof window !== 'undefined' ? window.location.origin : undefined,
+      domain: this.config.domain ?? loc?.host ?? 'app.tinycloud.xyz',
+      uri: this.config.domain === undefined ? loc?.origin : undefined,
       prefix: this.config.spacePrefix,
       autoCreateSpace: this.config.autoCreateSpace ?? true,
       sessionExpirationMs: this.config.sessionExpirationMs,
