@@ -99,6 +99,7 @@ export function registerUiClient(options: UiClientOptions): UiClientHandle {
     openPage: (section) => runtime.openPage(section),
     close: () => runtime.close(),
     isOpen: () => runtime.isOpen(),
+    setButtonVisible: (visible) => runtime.setButtonVisible(visible),
   };
 
   return {

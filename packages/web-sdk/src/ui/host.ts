@@ -43,6 +43,7 @@ export interface HostRuntime {
   unregister(id: number): void;
   reset(id: number): void;
   open(section?: SectionId): void;
+  setButtonVisible(visible: boolean): void;
   openPage(section?: SectionId): void;
   close(): void;
   isOpen(): boolean;
@@ -63,7 +64,7 @@ interface Mounted {
   readonly pending: PendingPanel;
   /** Set once the lazy panel chunk has attached to this mount. */
   panel?: PanelEntry.ShellPanel;
-  readonly button: ButtonView | undefined;
+  button: ButtonView | undefined;
   readonly stopParts: Array<() => void>;
 }
 
@@ -101,6 +102,8 @@ export function createHostRuntime(): HostRuntime {
   let stopPhone: (() => void) | undefined;
   let pendingSection: SectionId | undefined;
   let buttonHidden = false;
+  /** The host's `setButtonVisible` choice for this page session; undefined until it is called. */
+  let buttonOverride: boolean | undefined;
   let mounted: Mounted | undefined;
   let rejectionListening = false;
   /** Cached per page: the panel chunk loads once, then attaches to each mount. */
@@ -253,12 +256,40 @@ export function createHostRuntime(): HostRuntime {
     closeShell(false);
   }
 
+  /** Whether the button is part of the page: the host's `setButtonVisible` choice, else `ui.button`. */
+  function buttonOn(): boolean {
+    return buttonOverride ?? primaryConfig()?.button === true;
+  }
+
+  /** Creates the floating button as the layer's first child, ahead of the panel stand-in. */
+  function makeButton(layer: HTMLElement): ButtonView {
+    const button = createButton(() => (isPanelOpen ? closeShell(true) : openAt("drawer")), requestPanel);
+    button.setStatus(board.top());
+    layer.prepend(button.el);
+    return button;
+  }
+
+  /** `true` shows the button (even under `ui.button: false`) and clears the stored hidden flag; `false` hides it and leaves the stored flag alone. */
+  function setButtonVisible(visible: boolean): void {
+    buttonOverride = visible;
+    if (!mounted) return;
+    if (visible) {
+      hideStore.write(hideScope(), false);
+      buttonHidden = false;
+      if (mounted.button === undefined) mounted.button = makeButton(mounted.layer);
+    } else {
+      buttonHidden = true;
+    }
+    syncDom();
+  }
+
   /** `open()` and `openPage()`: clear the hidden flag, restore the button, then open. */
   function reveal(requested: ShellLayout, section?: SectionId): void {
     if (!mounted) return;
-    if (primaryConfig()?.button) {
+    if (buttonOn()) {
       hideStore.write(hideScope(), false);
       buttonHidden = false;
+      if (mounted.button === undefined) mounted.button = makeButton(mounted.layer);
     }
     openAt(requested, section);
   }
@@ -321,10 +352,7 @@ export function createHostRuntime(): HostRuntime {
     layer.setAttribute("data-position", config.position);
 
     const pending = createPendingPanel(() => closeShell(true));
-    const button = config.button
-      ? createButton(() => (isPanelOpen ? closeShell(true) : openAt("drawer")), requestPanel)
-      : undefined;
-    if (button) layer.append(button.el);
+    const button = (buttonOverride ?? config.button) ? makeButton(layer) : undefined;
     layer.append(pending.el);
 
     root.append(style, layer);
@@ -343,7 +371,7 @@ export function createHostRuntime(): HostRuntime {
     phone = watch.phone;
     stopPhone = watch.stop;
     mounted.button?.setStatus(board.top());
-    buttonHidden = config.button && hideStore.read(hideScope());
+    buttonHidden = buttonOverride === false || (buttonOn() && hideStore.read(hideScope()));
     syncDom();
   }
 
@@ -410,6 +438,7 @@ export function createHostRuntime(): HostRuntime {
     },
 
     open: (section) => reveal("drawer", section),
+    setButtonVisible,
     openPage: (section) => reveal("page", section),
 
     close() {

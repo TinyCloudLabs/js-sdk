@@ -973,3 +973,70 @@ describe("the app name the panel shows", () => {
     }
   });
 });
+
+describe("setButtonVisible", () => {
+  test("true shows a button that ui.button:false left out and clears the stored hidden flag", () => {
+    page.localStorage.setItem(hideKey(), "1");
+    const ui = mountClient({ button: false });
+    expect(buttonEl()).toBeNull();
+    ui.api.setButtonVisible(true);
+    expect(buttonEl()).not.toBeNull();
+    expect(buttonEl()?.hidden).toBe(false);
+    expect(hostState()).toBe("closed");
+    expect(page.localStorage.getItem(hideKey())).toBeNull();
+    buttonEl()?.click();
+    expect(ui.api.isOpen).toBe(true);
+  });
+
+  test("true shows a button the user hid from the panel", () => {
+    page.localStorage.setItem(hideKey(), "1");
+    const ui = mountClient();
+    expect(buttonEl()?.hidden).toBe(true);
+    ui.api.setButtonVisible(true);
+    expect(buttonEl()?.hidden).toBe(false);
+    expect(page.localStorage.getItem(hideKey())).toBeNull();
+  });
+
+  test("false hides the button and leaves localStorage untouched", () => {
+    const ui = mountClient();
+    const before = page.localStorage.length;
+    ui.api.setButtonVisible(false);
+    expect(buttonEl()?.hidden).toBe(true);
+    expect(hostState()).toBe("hidden");
+    expect(page.localStorage.getItem(hideKey())).toBeNull();
+    expect(page.localStorage.length).toBe(before);
+  });
+
+  test("false keeps an existing stored hidden flag as it is", () => {
+    page.localStorage.setItem(hideKey(), "1");
+    const ui = mountClient();
+    ui.api.setButtonVisible(false);
+    expect(page.localStorage.getItem(hideKey())).toBe("1");
+  });
+
+  test("open() and openPage() work while the button is hidden or left out, and do not bring a hidden button back", () => {
+    const left = mountClient({ button: false });
+    left.api.open();
+    expect(left.api.isOpen).toBe(true);
+    left.api.close();
+    left.api.openPage();
+    expect(left.api.isOpen).toBe(true);
+    expect(buttonEl()).toBeNull();
+    left.unregister();
+
+    const hidden = mountClient();
+    hidden.api.setButtonVisible(false);
+    hidden.api.open();
+    expect(hidden.api.isOpen).toBe(true);
+    expect(buttonEl()?.hidden).toBe(true);
+  });
+
+  test("a later call wins", () => {
+    const ui = mountClient({ button: false });
+    ui.api.setButtonVisible(true);
+    ui.api.setButtonVisible(false);
+    expect(buttonEl()?.hidden).toBe(true);
+    ui.api.setButtonVisible(true);
+    expect(buttonEl()?.hidden).toBe(false);
+  });
+});
