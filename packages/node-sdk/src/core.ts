@@ -120,7 +120,9 @@ export { FileSessionStorage } from "./storage/FileSessionStorage";
 export {
   NodeUserAuthorization,
   type NodeUserAuthorizationConfig,
+  type PreparedOpenKeyAuthorization,
 } from "./authorization/NodeUserAuthorization";
+export { wireOpenKeyAuthorize, type OpenKeyAuthorizeTinyCloud } from "./authorization/openKeyBridge";
 export { refuseCaveated } from "./authorization/caveatRefusal";
 
 // Sign strategies — value exports

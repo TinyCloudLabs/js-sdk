@@ -36,6 +36,7 @@
     "cli-secrets-run",
     "cli-share-json-short-link",
     "mcp-token-status",
+    "node-sdk-core-validated-activation",
     "owner-revocation-window",
     "replica-repair-backoff",
     "replication-content-fetch-lazy",
@@ -45,6 +46,8 @@
     "tc1888-purge-local-copy",
     "tc2038-panel-prefetch",
     "tc2043-sync-scope",
-    "tc2072-web-location-guard"
+    "tc2072-web-location-guard",
+    "tc2127-window-without-location",
+    "web-panel-ask-permission"
   ]
 }

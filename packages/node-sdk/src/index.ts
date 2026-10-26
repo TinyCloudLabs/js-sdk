@@ -165,6 +165,7 @@ export {
   type NodeUserAuthorizationConfig,
   type OpenKeyAuthorizeInput,
   type OpenKeyAuthorizationResultV1,
+  type PreparedOpenKeyAuthorization,
 } from "./authorization/NodeUserAuthorization";
 
 // OpenKey integration adapter — Sol continuation contract requires a

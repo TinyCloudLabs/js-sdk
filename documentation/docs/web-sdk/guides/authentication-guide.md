@@ -68,6 +68,27 @@ If you pass `nonce` to `signIn()`, that value overrides `siweConfig.nonce` for t
 
 The nonce must come from your server or relying party backend. It should be stored server-side, verified on sign-in, and invalidated after use. Do not generate the SIWE nonce in the browser for production authentication flows.
 
+## Signing in with OpenKey
+
+Use `@openkey/sdk` 0.12.2 or later (`0.12.2-beta.0` on the beta channel). Pass the connected OpenKey client and its provider to TinyCloudWeb:
+
+```typescript
+import { OpenKey, OpenKeyProvider } from '@openkey/sdk';
+import { TinyCloudWeb } from '@tinycloud/web-sdk';
+
+const openkey = new OpenKey({ appName: 'Example App' });
+const account = await openkey.connect();
+const tc = await TinyCloudWeb.create({
+  provider: new OpenKeyProvider(openkey, account),
+  openkey: { client: openkey },
+});
+
+await tc.prepareSignIn(); // Complete SIWE and host preparation before showing approval.
+approveButton.addEventListener('click', () => { void tc.signIn(); });
+```
+
+OpenKey approval uses a popup by default. You can set `openkey: { client: openkey, mode: 'redirect' }` or `mode: 'iframe'` when your app needs another display mode. `prepareSignIn()` makes the popup start in the click handler, which Safari requires. In Chrome and Firefox, `signIn()` also works without preparation within their user activation window. A prepared request is used once and expires after five minutes. Call `prepareSignIn()` again after every sign-in attempt, including a canceled approval or a failed sign-in, and before the next click. Preparation also needs to be repeated if the button remains visible for more than five minutes.
+
 ## Working with Sessions
 
 The SDK manages user sessions automatically, but you can access session information if needed:
