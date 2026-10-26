@@ -3051,16 +3051,16 @@ describe("panel prefetch ability gating (TC-2038) size ratchet", () => {
   it("pins exact CI bytes and carries unchanged first-import, activation and worker ceilings", () => {
     expect(() => validateLedger(current)).not.toThrow();
     expect(current.tc2038PanelPrefetchRatchet).toEqual(approvedTc2038PanelPrefetchRatchet);
-    expect(row().root.delta).toEqual({ "index.mjs": 15, "index.cjs": 4 });
-    expect(row().root.ceiling).toEqual({ "index.mjs": 1467309, "index.cjs": 1409268 });
-    expect(row().root.ceiling["index.mjs"]).toBe(approvedTc1977ManifestKeysRatchet.root.ceiling["index.mjs"] + 15);
-    expect(row().root.ceiling["index.cjs"]).toBe(approvedTc1977ManifestKeysRatchet.root.ceiling["index.cjs"] + 4);
+    expect(row().root.delta).toEqual({ "index.mjs": 12, "index.cjs": 9 });
+    expect(row().root.ceiling).toEqual({ "index.mjs": 1467306, "index.cjs": 1409273 });
+    expect(row().root.ceiling["index.mjs"]).toBe(approvedTc1977ManifestKeysRatchet.root.ceiling["index.mjs"] + 12);
+    expect(row().root.ceiling["index.cjs"]).toBe(approvedTc1977ManifestKeysRatchet.root.ceiling["index.cjs"] + 9);
     expect(row().firstImport).toEqual({ ...approvedTc1977ManifestKeysRatchet.firstImport, delta: { "replica.mjs": 0, "replica.cjs": 0 } });
     expect(row().activation).toEqual({ ...approvedTc1977ManifestKeysRatchet.activation, delta: { "activation.mjs": 0, "activation.cjs": 0 } });
     expect(row().worker).toEqual({ delta: 0, ceiling: approvedTc1977ManifestKeysRatchet.worker.ceiling });
     expect(row().base).toBe("c59bcd3ac04c18583025d402283aa687545ab9f3");
-    expect(row().sourceCommits).toEqual(["97908f96321acf89ee463f5a71d25798b9ace648"]);
-    expect(row().canonicalCI.run).toBe("https://github.com/TinyCloudLabs/js-sdk/actions/runs/40326896148");
+    expect(row().sourceCommits).toEqual(["1381ddff663cb62f63c4dee95293fcbc12d673d5"]);
+    expect(row().canonicalCI.run).toBe("https://github.com/TinyCloudLabs/js-sdk/actions/runs/40331788730");
     expect(row().canonicalCI.jobs).toHaveLength(2);
     expect(rootCeilings(current).find(({ row: name }) => name === "tc2038PanelPrefetchRatchet")).toEqual({ row: "tc2038PanelPrefetchRatchet", ceiling: row().root.ceiling });
   });

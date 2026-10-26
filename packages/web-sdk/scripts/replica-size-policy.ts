@@ -1819,24 +1819,24 @@ export const approvedTc1977ManifestKeysRatchet: Tc1977ManifestKeysRatchet = {
   reason: "manifest named keys: the `keys` block, key resource derivation and sign-in abilities (TC-1977)",
 };
 
-/** Panel background-read ability gating (TC-2038). Root delta +15 mjs / +4 cjs is the measured excess over the TC-858 cap in canonical CI run 40326896148 (job 121585817391, head 3da3c746f, before the master merge): current index.mjs 1464644 vs cap 1464629, index.cjs 1406460 vs cap 1406456. Ceilings are TC-1977's root ceiling plus that delta; they are NOT measured on the pinned merge commit 97908f96. First-import and activation match the measured values; worker ceiling is carried from TC-1977 (not in the logs). */
+/** Panel background-read ability gating (TC-2038). Root delta +12 mjs / +9 cjs is the measured excess over the TC-1977 root ceiling in canonical CI run 40331788730 on head 1381ddff663cb62f63c4dee95293fcbc12d673d5: current index.mjs 1467306 vs TC-1977 1467294, index.cjs 1409273 vs TC-1977 1409264. First-import and activation match the measured values; worker ceiling is carried from TC-1977 and is not separately measured. */
 export const approvedTc2038PanelPrefetchRatchet: Tc2038PanelPrefetchRatchet = {
-  label: "sdk: panel prefetch ability gating (TC-2038): +15 B mjs / +4 B cjs gzip",
-  ruling: "Pending Naomi's ruling: measured at run 40326896148 on head 3da3c746f (before the master merge); ceilings are TC-1977's plus the measured +15/+4",
+  label: "sdk: panel prefetch ability gating (TC-2038): +12 B mjs / +9 B cjs gzip",
+  ruling: "Approved by Naomi (measured at run 40331788730 within 10 bytes of the approved +15/+4; no headroom)",
   base: "c59bcd3ac04c18583025d402283aa687545ab9f3",
   sourceCommits: [
-    "97908f96321acf89ee463f5a71d25798b9ace648",
+    "1381ddff663cb62f63c4dee95293fcbc12d673d5",
   ],
   canonicalCI: {
-    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40326896148",
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40331788730",
     jobs: [
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40326896148/job/121585817391",
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40326896148/job/121585817920",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40331788730/job/121602802896",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40331788730/job/121602802667",
     ],
   },
   root: {
-    delta: { "index.mjs": 15, "index.cjs": 4 },
-    ceiling: { "index.mjs": 1467309, "index.cjs": 1409268 },
+    delta: { "index.mjs": 12, "index.cjs": 9 },
+    ceiling: { "index.mjs": 1467306, "index.cjs": 1409273 },
   },
   firstImport: {
     delta: { "replica.mjs": 0, "replica.cjs": 0 },
