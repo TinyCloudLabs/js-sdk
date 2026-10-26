@@ -33002,7 +33002,8 @@ async function revokeDelegationOnNode(params) {
         throw new CLIError(
           "RAW_RECAP_RESOURCE_UNSUPPORTED",
           `Cannot revoke "${cid}": this CLI profile has no record of this grant and the node's record does not match the signed-in owner.`,
-          ExitCode.PERMISSION_DENIED
+          ExitCode.PERMISSION_DENIED,
+          profile.authMethod === "openkey" ? { hint: "This permission can't be revoked from the CLI yet. Revoke it at https://account.tinycloud.xyz/delegations." } : void 0
         );
       }
       fallbackSpaceId = fallback.space;
@@ -33827,7 +33828,7 @@ async function prepareProfileRemoteLogout(ctx, expectedSessionCid, discardLocalC
       "REVOCATION_AUTHORITY_UNAVAILABLE",
       "OpenKey owner CID revocation requires a verified signed revoke-control grant or wallet proof. No CID was revoked; session, key and replica files remain for retry, while local replica reads stay denied.",
       ExitCode.AUTH_REQUIRED,
-      { hint: "Obtain verified owner revoke authority before retrying `auth logout --revoke`, or use plain `auth logout` to end this local session without node revocation." }
+      { hint: `This sign-in can't be revoked from the CLI yet. Revoke it at https://account.tinycloud.xyz/delegations. To sign out on this computer only, run \`${CLI_NAME18} auth logout\`.` }
     );
   }
   const signerDid = addressToDID(

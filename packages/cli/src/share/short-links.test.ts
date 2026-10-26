@@ -20,6 +20,7 @@ import { SharePublishAuthorityError } from "./errors.js";
 import { ShareDeliveryRefusedError } from "@tinycloud/sdk-core";
 import vectors from "../../../share-envelope/test/links-api-vectors.json";
 import { configureShareCommandServices, registerShareCommand, type ShareCommandServices } from "../commands/share.js";
+import { runShareCaptured } from "../commands/share.integration-harness.js";
 import { LINK_EXPIRY_WARNING, LINK_EXPIRY_WARNING_URL, createShareLinks, linkFormForLifetime, shortLinkId } from "./short-links.js";
 import { buildShortLink } from "@tinycloud/share-envelope/links";
 
@@ -78,7 +79,7 @@ interface Share extends PublishedShare {
 /** A published addressed share whose life is `lifetimeSeconds` from now, with real sealed delivery material and its full link. */
 async function publishedShare(shareId = "share-1", lifetimeSeconds = 7 * 86_400): Promise<Share> {
   const key = generateKey();
-  const sealed = await seal(new TextEncoder().encode(JSON.stringify({ shareId, filler: "x".repeat(1500) })), key);
+  const sealed = await seal(new TextEncoder().encode(JSON.stringify({ shareId, filler: "x".repeat(1500), signature: { signerDid: signer.did } })), key);
   const expiresAt = new Date(Math.floor(Date.now() / 1000) * 1000 + lifetimeSeconds * 1000);
   const { record } = await prepareLinkRecord({ type: "share", sealed: { blob: sealed.blob, key }, issuerKey: signer, apiOrigin: API, expiresAt, enforceServiceLife: false });
   const url = buildFullLink({ origin: ORIGIN, key, record });
@@ -262,20 +263,31 @@ describe("tc share with links", () => {
     };
   }
 
-  async function publish(args: readonly string[], input: { readonly fetchFn: typeof fetch; readonly lifetimeSeconds?: number; readonly timeoutMs?: number; readonly invitations?: boolean }) {
+  async function publish(args: readonly string[], input: { readonly fetchFn: typeof fetch; readonly lifetimeSeconds?: number; readonly timeoutMs?: number; readonly invitations?: boolean; readonly productionShape?: boolean; readonly rootJson?: boolean; readonly omitMaterial?: boolean }) {
     const directory = await mkdtemp(join(tmpdir(), "tc-share-links-"));
     const file = join(directory, "note.md");
     await writeFile(file, "# note\n");
     const published = await publishedShare("share-cmd", input.lifetimeSeconds);
+    if (input.omitMaterial === true) delete (published as { deliveryMaterial?: PublishedShare["deliveryMaterial"] }).deliveryMaterial;
+    if (input.productionShape === true) {
+      Object.defineProperty(published, "deliveryMaterial", { value: published.deliveryMaterial, enumerable: false });
+      Object.defineProperty(published, "url", { value: published.url, enumerable: false });
+    }
     const { records, storage } = memoryRecords();
     let publishCalls = 0;
-    const result = await run(["publish", file, "--to", "alice@example.com", ...args], {
+    let linkShowCalls = 0;
+    const links = createShareLinks({ signer: async () => signer, fetchFn: input.fetchFn, ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }) });
+    const services: ShareCommandServices = {
       targetAdapter: { publish: async () => { publishCalls += 1; return published; } },
       records: storage,
-      links: createShareLinks({ signer: async () => signer, fetchFn: input.fetchFn, ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }) }),
+      links: { ...links, show: (...args) => { linkShowCalls += 1; return links.show(...args); } },
       ...(input.invitations === undefined ? {} : { shortLinkInvitations: input.invitations }),
-    });
-    return { ...result, published, records, publishCalls };
+    };
+    const command = ["publish", file, "--to", "alice@example.com", ...args];
+    const result = input.rootJson === true
+      ? (configureShareCommandServices(services), await runShareCaptured(["--json", "share", ...command]))
+      : await run(command, services);
+    return { ...result, published, records, publishCalls, linkShowCalls };
   }
 
   test("prints the short link and keeps that same link in history", async () => {
@@ -286,6 +298,64 @@ describe("tc share with links", () => {
     expect(result.records.get("share-cmd")?.link).toBe(printed);
     expect(result.stderr).toBe("");
     expect(printed).not.toContain("/s/full");
+  });
+
+  test("JSON publish creates one short link, records it, and keeps the URL out of JSON", async () => {
+    const api = stubApi();
+    const result = await publish(["--expires", "1d", "--json"], { fetchFn: api.fetchFn, productionShape: true });
+    const recordedLink = result.records.get("share-cmd")?.link;
+    const output = JSON.parse(result.stdout) as Record<string, unknown>;
+
+    expect(result.exitCode ?? 0).toBe(0);
+    expect(result.linkShowCalls).toBe(1);
+    expect(api.requests).toHaveLength(1);
+    expect(result.publishCalls).toBe(1);
+    expect(shortLinkId(recordedLink)).toBeDefined();
+    expect(result.stderr).toBe("");
+    expect(output.history).toEqual({ recorded: true });
+    expect(result.stdout).not.toContain(recordedLink!);
+    expect(result.stdout).not.toContain(result.published.url);
+    expect(result.stdout).not.toContain(result.published.deliveryMaterial!.envelopeKey);
+  });
+
+  test("global JSON publish creates one short link from a production-shaped result", async () => {
+    const api = stubApi();
+    const result = await publish(["--expires", "1d"], { fetchFn: api.fetchFn, productionShape: true, rootJson: true });
+
+    expect(result.exitCode ?? 0).toBe(0);
+    expect(result.linkShowCalls).toBe(1);
+    expect(api.requests).toHaveLength(1);
+    expect(result.publishCalls).toBe(1);
+    expect(shortLinkId(result.records.get("share-cmd")?.link)).toBeDefined();
+    expect(result.stderr).toBe("");
+    expect(result.stdout).not.toContain(result.published.url);
+    expect(result.stdout).not.toContain(result.published.deliveryMaterial!.envelopeKey);
+  });
+
+  test("a policy result with a mismatched full link makes no links request", async () => {
+    const api = stubApi();
+    const published = await publishedShare("share-a");
+    const other = await publishedShare("share-b");
+    const withoutMaterial = { ...published, url: other.url, deliveryMaterial: undefined };
+
+    const shown = await createShareLinks({ signer: async () => signer, fetchFn: api.fetchFn }).show(withoutMaterial, { fullLink: false });
+
+    expect(shown.short).toBe(false);
+    expect(shown.notice).toBeDefined();
+    expect(api.requests).toHaveLength(0);
+  });
+
+  test("JSON publish recovers a short link when the publisher omits delivery material", async () => {
+    const api = stubApi();
+    const result = await publish(["--expires", "1d", "--json"], { fetchFn: api.fetchFn, omitMaterial: true });
+
+    expect(result.exitCode ?? 0).toBe(0);
+    expect(result.linkShowCalls).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(api.requests).toHaveLength(1);
+    expect(shortLinkId(result.records.get("share-cmd")?.link)).toBeDefined();
+    expect(result.stdout).not.toContain(result.published.url);
+    expect(result.stdout).not.toContain(result.published.key);
   });
 
   test("--full-link prints the full link and creates nothing", async () => {
