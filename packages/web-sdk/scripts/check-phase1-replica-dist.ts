@@ -21,6 +21,9 @@ import { validateTc848SettingsPanelRatchetTransition } from "./replica-size-poli
 import { validateTc2034NamedKeysCliRatchetTransition } from "./replica-size-policy";
 import { validateTc2043SyncScopeRatchetTransition } from "./replica-size-policy";
 import { validateTc1888PurgeLocalCopyRatchetTransition } from "./replica-size-policy";
+import { validateTc1977ManifestKeysRatchetTransition } from "./replica-size-policy";
+import { validateTc2038PanelPrefetchRatchetTransition } from "./replica-size-policy";
+import { validateTc2005RevokeWindowRatchetTransition } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 import { replicaOwnedPath } from "./replica-owned-path";
 import { webSdkTestExitFailure } from "./web-sdk-test-exit";
@@ -437,6 +440,27 @@ if (prBaseSha) {
     console.error("The sign-out local copy ratchet requires the merged replication syncScope ratchet and its measured source commit.");
     failed = true;
   }
+  validateTc1977ManifestKeysRatchetTransition(baseLedger.tc1977ManifestKeysRatchet, ledger.tc1977ManifestKeysRatchet);
+  const tc1977ManifestKeys = ledger.tc1977ManifestKeysRatchet;
+  if (tc1977ManifestKeys !== undefined && baseLedger.tc1977ManifestKeysRatchet === undefined &&
+      (baseLedger.tc1888PurgeLocalCopyRatchet === undefined || !hasAncestor(repoRoot, tc1977ManifestKeys.sourceCommits.at(-1)!))) {
+    console.error("The manifest-keys ratchet requires the merged sign-out local copy ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc2038PanelPrefetchRatchetTransition(baseLedger.tc2038PanelPrefetchRatchet, ledger.tc2038PanelPrefetchRatchet);
+  const tc2038PanelPrefetch = ledger.tc2038PanelPrefetchRatchet;
+  if (tc2038PanelPrefetch !== undefined && baseLedger.tc2038PanelPrefetchRatchet === undefined &&
+      (baseLedger.tc1977ManifestKeysRatchet === undefined || !hasAncestor(repoRoot, tc2038PanelPrefetch.sourceCommits.at(-1)!))) {
+    console.error("The panel-prefetch ratchet requires the merged manifest-keys ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc2005RevokeWindowRatchetTransition(baseLedger.tc2005RevokeWindowRatchet, ledger.tc2005RevokeWindowRatchet);
+  const tc2005RevokeWindow = ledger.tc2005RevokeWindowRatchet;
+  if (tc2005RevokeWindow !== undefined && baseLedger.tc2005RevokeWindowRatchet === undefined &&
+      (baseLedger.tc2038PanelPrefetchRatchet === undefined || !hasAncestor(repoRoot, tc2005RevokeWindow.sourceCommits.at(-1)!))) {
+    console.error("The revocation-window ratchet requires the merged panel-prefetch ratchet and its measured source commit.");
+    failed = true;
+  }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
   const optionalResult = spawnSync("git", ["show", `${mergeBase}:${baseOptionalPath}`], {
     cwd: repoRoot, encoding: "utf8",
@@ -452,7 +476,7 @@ if (prBaseSha) {
   }
   validateOptionalLedger(baseOptional, baseLedger.fixRequiredRatchet !== undefined,
     baseLedger.canonicalToolchainCorrection !== undefined, baseLedger.hardeningRatchet !== undefined,
-    baseLedger.tc1413Ratchet !== undefined, baseLedger.tc1432Ratchet !== undefined, baseLedger.tc1475Ratchet !== undefined, baseLedger.masterDriftRatchet !== undefined, baseLedger.tc1789Ratchet !== undefined, baseLedger.tc2043SyncScopeRatchet !== undefined);
+    baseLedger.tc1413Ratchet !== undefined, baseLedger.tc1432Ratchet !== undefined, baseLedger.tc1475Ratchet !== undefined, baseLedger.masterDriftRatchet !== undefined, baseLedger.tc1789Ratchet !== undefined, baseLedger.tc2043SyncScopeRatchet !== undefined, baseLedger.tc1888PurgeLocalCopyRatchet !== undefined);
   validateIntroducedOptionalSources(baseOptional, optionalLedger);
   // Consistency check: each merged row's pin is on the base or was landed by it (see pinLandedOn).
   for (const { row, pin } of mergedPinsNotLandedOn(repoRoot, baseLedger, baseOptional, prBaseSha)) {

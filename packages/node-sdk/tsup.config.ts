@@ -1,4 +1,6 @@
 import { defineConfig } from 'tsup';
+import { readFile, writeFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 
 export default defineConfig({
   entry: {
@@ -23,6 +25,7 @@ export default defineConfig({
     '@tinycloud/sdk-services',
     '@tinycloud/sdk-services/kv/replication',
     '@tinycloud/sdk-services/encryption/named-keys',
+    './encryption-keys.js',
     '@tinycloud/node-sdk-wasm',
     '@tinycloud/replica',
     '@tinycloud/replica/sqlite',
@@ -34,4 +37,15 @@ export default defineConfig({
     './replication/authority',
     './replication/gated-network',
   ],
+  async onSuccess() {
+    // tsup preserves this external dynamic import in both formats. Point CJS
+    // entrypoints at the CJS subpath so they share its exported error class.
+    for (const entry of ['index.cjs', 'core.cjs']) {
+      const path = fileURLToPath(new URL(`./dist/${entry}`, import.meta.url));
+      const source = await readFile(path, 'utf8');
+      const esmImport = 'import("./encryption-keys.js")';
+      if (!source.includes(esmImport)) throw new Error(`${entry} has no named-key import`);
+      await writeFile(path, source.replaceAll(esmImport, 'import("./encryption-keys.cjs")'));
+    }
+  },
 });

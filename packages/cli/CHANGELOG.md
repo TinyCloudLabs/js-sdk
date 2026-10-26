@@ -1,5 +1,41 @@
 # @tinycloud/cli
 
+## 1.5.0-beta.10
+
+### Patch Changes
+
+- Updated dependencies [44c439a]
+  - @tinycloud/sdk-core@3.8.0-beta.5
+  - @tinycloud/node-sdk@3.8.0-beta.5
+  - @tinycloud/operations@0.7.7-beta.6
+
+## 1.5.0-beta.9
+
+### Patch Changes
+
+- Updated dependencies [c541786]
+  - @tinycloud/sdk-core@3.8.0-beta.4
+  - @tinycloud/node-sdk@3.8.0-beta.4
+  - @tinycloud/operations@0.7.7-beta.5
+
+## 1.5.0-beta.8
+
+### Patch Changes
+
+- Updated dependencies [1fc87b6]
+  - @tinycloud/operations@0.7.7-beta.4
+
+## 1.5.0-beta.7
+
+### Patch Changes
+
+- Updated dependencies [7b22f61]
+  - @tinycloud/share-envelope@1.3.1-beta.0
+  - @tinycloud/sdk-core@3.8.0-beta.3
+  - @tinycloud/share-sdk@1.4.1-beta.0
+  - @tinycloud/node-sdk@3.8.0-beta.3
+  - @tinycloud/operations@0.7.7-beta.3
+
 ## 1.5.0-beta.6
 
 ### Patch Changes
