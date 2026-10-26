@@ -2882,13 +2882,16 @@ describe("named-keys CLI sign-in report (#739, TC-2034) root ceiling ratchet", (
   });
 });
 
-const tc2043Ledger: Ledger = { ...structuredClone(current), tc1888PurgeLocalCopyRatchet: undefined };
+const tc2043Ledger: Ledger = copy(current);
+delete tc2043Ledger.tc1888PurgeLocalCopyRatchet;
+tc2043Ledger.entries = structuredClone(current.entries.slice(0, current.entries.findIndex((entry) => entry.pr === "#728")));
 describe("replication syncScope opt-in (#742, TC-2043) size ratchet", () => {
   const row = () => structuredClone(approvedTc2043SyncScopeRatchet);
 
   it("pins exact CI bytes and carries unchanged activation and worker ceilings", () => {
     expect(() => validateLedger(tc2043Ledger)).not.toThrow();
     expect(tc2043Ledger.tc2043SyncScopeRatchet).toEqual(approvedTc2043SyncScopeRatchet);
+    expect(tc2043Ledger.entries.at(-1)).toMatchObject({ pr: "#742", ticket: "TC-2043" });
     expect(row().root).toEqual({ delta: { "index.mjs": 41, "index.cjs": 30 }, ceiling: { "index.mjs": 1464358, "index.cjs": 1406182 } });
     expect(row().firstImport).toEqual({ delta: { "replica.mjs": 40, "replica.cjs": 39 }, ceiling: { "replica.mjs": 51965, "replica.cjs": 67178 } });
     expect(row().activation).toEqual({ ...approvedTc2034NamedKeysCliRatchet.activation, delta: { "activation.mjs": 0, "activation.cjs": 0 } });
