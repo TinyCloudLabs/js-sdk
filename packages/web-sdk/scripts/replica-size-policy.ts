@@ -1783,24 +1783,24 @@ export const approvedTc1888PurgeLocalCopyRatchet: Tc1888PurgeLocalCopyRatchet = 
   reason: "sign-out and account switch erase the local copy with an SDK retry and a failure event; the minimum reviewed shape; optional code in the replica chunk.",
 };
 
-/** Manifest named keys (js-sdk #748, TC-1977), approved by Naomi: root index.mjs 1,464,629 -> 1,467,295 (+2,666) and index.cjs 1,406,456 -> 1,409,270 (+2,814), the exact deltas canonical CI printed on head 545e2700 (run 40312328298). Worker is unchanged; first-import and activation deltas are 0, so their ceilings are the tc1888 caps. */
+/** Manifest named keys (js-sdk #748, TC-1977), approved by Naomi: root index.mjs 1,464,629 -> 1,467,294 (+2,665) and index.cjs 1,406,456 -> 1,409,264 (+2,808), the exact deltas canonical CI printed on head 796fdd2a (run 40318285314). Worker is unchanged; first-import and activation deltas are 0, so their ceilings are the tc1888 caps. */
 export const approvedTc1977ManifestKeysRatchet: Tc1977ManifestKeysRatchet = {
-  label: "sdk: manifest named keys (TC-1977, #748): +2,666 B mjs / +2,814 B cjs gzip",
+  label: "sdk: manifest named keys (TC-1977, #748): +2,665 B mjs / +2,808 B cjs gzip",
   ruling: "Approved by Naomi (exact canonical CI bytes at run 40312328298; no headroom)",
-  base: "fb44626f80951444bf666df003209a2739a7953a",
+  base: "5467d1248b20e59d3b7eca508da417c2b35316b3",
   sourceCommits: [
-    "545e270032f8f8b593ac9e55fee504a58943534d",
+    "796fdd2a13c0f6b0e6f767e0347151c0cbaf84fe",
   ],
   canonicalCI: {
-    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40312328298",
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40318285314",
     jobs: [
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40312328298/job/121536315917",
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40312328298/job/121536315559",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40318285314/job/121556330989",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40318285314/job/121556331284",
     ],
   },
   root: {
-    delta: { "index.mjs": 2666, "index.cjs": 2814 },
-    ceiling: { "index.mjs": 1467295, "index.cjs": 1409270 },
+    delta: { "index.mjs": 2665, "index.cjs": 2808 },
+    ceiling: { "index.mjs": 1467294, "index.cjs": 1409264 },
   },
   firstImport: {
     delta: { "replica.mjs": 0, "replica.cjs": 0 },

@@ -2999,14 +2999,14 @@ describe("manifest named keys (#748, TC-1977) size ratchet", () => {
   it("pins exact CI bytes and carries unchanged first-import, activation and worker ceilings", () => {
     expect(() => validateLedger(current)).not.toThrow();
     expect(current.tc1977ManifestKeysRatchet).toEqual(approvedTc1977ManifestKeysRatchet);
-    expect(row().root.delta).toEqual({ "index.mjs": 2666, "index.cjs": 2814 });
-    expect(row().root.ceiling).toEqual({ "index.mjs": 1467295, "index.cjs": 1409270 });
+    expect(row().root.delta).toEqual({ "index.mjs": 2665, "index.cjs": 2808 });
+    expect(row().root.ceiling).toEqual({ "index.mjs": 1467294, "index.cjs": 1409264 });
     expect(row().firstImport).toEqual({ ...approvedTc1888PurgeLocalCopyRatchet.firstImport, delta: { "replica.mjs": 0, "replica.cjs": 0 } });
     expect(row().activation).toEqual({ ...approvedTc1888PurgeLocalCopyRatchet.activation, delta: { "activation.mjs": 0, "activation.cjs": 0 } });
     expect(row().worker).toEqual({ delta: 0, ceiling: approvedTc1888PurgeLocalCopyRatchet.worker.ceiling });
-    expect(row().base).toBe("fb44626f80951444bf666df003209a2739a7953a");
-    expect(row().sourceCommits).toEqual(["545e270032f8f8b593ac9e55fee504a58943534d"]);
-    expect(row().canonicalCI.run).toBe("https://github.com/TinyCloudLabs/js-sdk/actions/runs/40312328298");
+    expect(row().base).toBe("5467d1248b20e59d3b7eca508da417c2b35316b3");
+    expect(row().sourceCommits).toEqual(["796fdd2a13c0f6b0e6f767e0347151c0cbaf84fe"]);
+    expect(row().canonicalCI.run).toBe("https://github.com/TinyCloudLabs/js-sdk/actions/runs/40318285314");
     expect(row().canonicalCI.jobs).toHaveLength(2);
     expect(rootCeilings(current).find(({ row: name }) => name === "tc1977ManifestKeysRatchet")).toEqual({ row: "tc1977ManifestKeysRatchet", ceiling: row().root.ceiling });
   });
