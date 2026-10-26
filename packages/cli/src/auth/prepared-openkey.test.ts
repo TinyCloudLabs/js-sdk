@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ownerIdentitySigner, startPreparedOpenKeyHandoff } from "./prepared-openkey.js";
+import { ownerIdentitySigner, startOwnerRevocationHandoff, startPreparedOpenKeyHandoff } from "./prepared-openkey.js";
 
 const servers: Array<{ stop(closeActiveConnections?: boolean): void }> = [];
 afterEach(() => { for (const server of servers.splice(0)) server.stop(true); });
@@ -15,6 +15,26 @@ const result = {
   selectedActionKeys: ["kv:get"],
   permissions: [],
 };
+
+test("owner revocation tv2 carries the proposed request and returns only signed SIWE and signature", async () => {
+  const request = { kind: "owner-revocation" as const, ownerDid: "did:pkh:eip155:1:0x0000000000000000000000000000000000000001",
+    cid: "bafytest", nonce: "1234567890abcdef", expiresAt: "2026-10-26T12:10:00.000Z" };
+  const flow = await startOwnerRevocationHandoff({ request, openKeyHost: "http://openkey.local", noPopup: true });
+  const encoded = new URL(flow.url).hash.slice("#tv2=".length);
+  const payload = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+  expect(payload.transportVersion).toBe(2);
+  expect(payload.request).toEqual(request);
+  const signed = { siwe: "OpenKey-built plain SIWE", signature: "0xsigned" };
+  const send = (state: string, result: object) => fetch(payload.delivery.callback, {
+    method: "POST", headers: { Origin: "http://openkey.local", "Content-Type": "application/json" },
+    body: JSON.stringify({ transportVersion: 2, state, result }),
+  });
+  expect((await send("B".repeat(43), signed)).status).toBe(403);
+  const callback = send(payload.delivery.state, signed);
+  expect(await flow.result).toEqual(signed);
+  await flow.complete(true);
+  expect((await callback).status).toBe(200);
+});
 
 test("the callback rejects wrong origin or state and ACKs only after SDK/session commit", async () => {
   const flow = await startPreparedOpenKeyHandoff({

@@ -50,7 +50,7 @@ import {
  * edit `~/.tinycloud/profiles/<profile>/profile.json` and add an
  * "openkeyHost": "https://openkey.localhost" field.
  */
-function resolveOpenKeyHost(profile: ProfileConfig): string {
+export function resolveOpenKeyHost(profile: ProfileConfig): string {
   return process.env.TC_OPENKEY_HOST ?? profile.openkeyHost ?? DEFAULT_OPENKEY_HOST;
 }
 import { startAuthFlow } from "../auth/browser-auth.js";
@@ -144,6 +144,7 @@ import {
 import { permissionConsentLine, signExtrasQuestion } from "../lib/consent-text.js";
 import { assertNodeSupportsNamedKeys, keyAbilitiesFor, namedKeysGrantIn, parseKeysPrefix, partialKeysGrantError, withVerifiedNamedKeys, type ProfileNamedKeys } from "../lib/named-keys.js";
 import { buildReplicationLoginRequest, type ReplicationLoginOptions } from "../auth/replication-login.js";
+import { revokeOwnerCid, type OwnerSignatureTransport } from "../lib/owner-revocation.js";
 
 /** The one function dependency used by owner OpenKey permission acquisition. */
 export type OpenKeyAcquisition = typeof startAuthFlow;
@@ -330,19 +331,21 @@ export async function prepareProfileRemoteLogout(
       ...(marker === null ? { gateSnapshot: await logoutGateSnapshot(ctx.profile) } : {}),
     };
   });
-  if (selected.profile.authMethod !== "local" || !selected.profile.privateKey) {
+  if (selected.profile.authMethod !== "openkey" && (selected.profile.authMethod !== "local" || !selected.profile.privateKey)) {
     throw new CLIError("REVOCATION_AUTHORITY_UNAVAILABLE",
       "OpenKey owner CID revocation requires a verified signed revoke-control grant or wallet proof. No CID was revoked; session, key and replica files remain for retry, while local replica reads stay denied.",
       ExitCode.AUTH_REQUIRED, { hint: `This sign-in can't be revoked from the CLI yet. Revoke it at https://account.tinycloud.xyz/delegations. To sign out on this computer only, run \`${CLI_NAME} auth logout\`.` });
   }
-  const signerDid = addressToDID(
-    await deriveAddress(selected.profile.privateKey),
-    selected.profile.chainId ?? DEFAULT_CHAIN_ID,
-  );
-  if (!principalDidEquals(signerDid, selected.ownerDid)) {
-    throw new CLIError("REVOCATION_AUTHORITY_UNAVAILABLE",
-      "The local owner key does not match the signed session owner. No CID was revoked; session, key and replica files remain for retry, while local replica reads stay denied.",
-      ExitCode.AUTH_REQUIRED);
+  if (selected.profile.authMethod === "local") {
+    const signerDid = addressToDID(
+      await deriveAddress(selected.profile.privateKey!),
+      selected.profile.chainId ?? DEFAULT_CHAIN_ID,
+    );
+    if (!principalDidEquals(signerDid, selected.ownerDid)) {
+      throw new CLIError("REVOCATION_AUTHORITY_UNAVAILABLE",
+        "The local owner key does not match the signed session owner. No CID was revoked; session, key and replica files remain for retry, while local replica reads stay denied.",
+        ExitCode.AUTH_REQUIRED);
+    }
   }
   const node = await ensureAuthenticated(
     { ...ctx, replication: false },
@@ -350,10 +353,19 @@ export async function prepareProfileRemoteLogout(
       ? { pendingRemoteLogout: { marker: selected.marker, ownerDid: selected.ownerDid, sessionCid: selected.sessionCid } }
       : undefined,
   );
+  if (selected.profile.authMethod === "openkey") {
+    const session = JSON.parse(selected.sessionSnapshot) as Record<string, unknown>;
+    const key = await ProfileManager.getKey(ctx.profile);
+    if (!key || typeof session.verificationMethod !== "string" ||
+        !principalDidEquals(verifySignedSession(session, key, session.verificationMethod,
+          { expectedOwner: selected.ownerDid }).ownerDid, selected.ownerDid)) {
+      throw new CLIError("REVOCATION_AUTHORITY_UNAVAILABLE", "The active session does not verify this OpenKey owner.", ExitCode.AUTH_REQUIRED);
+    }
+  }
   return { ...selected, node };
 }
 
-async function revokeForLogout(ctx: CLIContext, discardLocalChanges: boolean): Promise<CompletedOnlineLogout> {
+async function revokeForLogout(ctx: CLIContext, discardLocalChanges: boolean, ownerSignatureTransport?: OwnerSignatureTransport): Promise<CompletedOnlineLogout> {
   const selected = await prepareProfileRemoteLogout(ctx, undefined, discardLocalChanges);
   try {
     // No profile lock spans node requests; the durable marker denies local
@@ -369,6 +381,11 @@ async function revokeForLogout(ctx: CLIContext, discardLocalChanges: boolean): P
           marker: selected.marker, ownerDid: selected.ownerDid, sessionCid: selected.sessionCid,
         });
       }
+      if (selected.profile.authMethod === "openkey") {
+        await revokeOwnerCid({ ownerDid: selected.ownerDid, cid, host: ctx.host,
+          openKeyHost: resolveOpenKeyHost(selected.profile), transport: ownerSignatureTransport });
+        continue;
+      }
       const result = await selected.node.revokeDelegation(cid);
       if (!result.ok) {
         throw new CLIError("REVOCATION_FAILED",
@@ -383,7 +400,9 @@ async function revokeForLogout(ctx: CLIContext, discardLocalChanges: boolean): P
     }
     return { ...selected, plan };
   } catch (error) {
-    if (error instanceof CLIError && (error.code === "REVOCATION_FAILED" || error.code === "REVOKE_INVENTORY_UNVERIFIED")) throw error;
+    if (error instanceof CLIError && (error.code === "REVOCATION_FAILED" || error.code === "REVOKE_INVENTORY_UNVERIFIED" ||
+      error.code === "REVOKE_UNAUTHORIZED" || error.code === "OWNER_REVOCATION_SIGNATURE_INVALID" ||
+      error.code === "REVOCATION_AUTHORITY_UNAVAILABLE")) throw error;
     throw new CLIError("REVOCATION_FAILED",
       `Revocation failed before local logout: ${error instanceof Error ? error.message : String(error)}. Session, key, and replica files are retained for retry; local reads stay denied.`,
       ExitCode.ERROR, { hint: `Retry \`${CLI_NAME} auth logout --revoke\` when online authority is available.` });
@@ -616,9 +635,9 @@ export async function finishProfileLogout(
   return replicasRemoved;
 }
 
-export function registerAuthCommand(program: Command, options?: { openKeyAcquisition?: OpenKeyAcquisition }): void {
+export function registerAuthCommand(program: Command, configuration?: { openKeyAcquisition?: OpenKeyAcquisition; ownerSignatureTransport?: OwnerSignatureTransport }): void {
   const auth = program.command("auth").description("Authentication management");
-  registerAuthGrantsCommand(auth, { openKeyAcquisition: options?.openKeyAcquisition });
+  registerAuthGrantsCommand(auth, { openKeyAcquisition: configuration?.openKeyAcquisition });
 
   auth
     .command("login")
@@ -795,7 +814,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             ExitCode.USAGE_ERROR);
         }
         if (!options.revoke && !options.force) await assertShareHistoryAllowsKeyDrop(ctx.profile, "logout");
-        const online = options.revoke ? await revokeForLogout(ctx, options.discardLocalChanges === true) : undefined;
+        const online = options.revoke ? await revokeForLogout(ctx, options.discardLocalChanges === true, configuration?.ownerSignatureTransport) : undefined;
         const replicasRemoved = await finishProfileLogout(ctx, {
           keepReplicas: options.keepReplicas,
           discardLocalChanges: options.discardLocalChanges,

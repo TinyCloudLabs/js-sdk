@@ -13,12 +13,21 @@ type Authorize = Parameters<TinyCloudNode["signInWithOpenKey"]>[0];
 type SignedResult = Awaited<ReturnType<Authorize>>;
 type Prepared = Parameters<Authorize>[0] & { verificationMethod: string };
 
-export interface PreparedOpenKeyHandoff {
-  readonly result: Promise<SignedResult>;
+export interface OpenKeyHandoff<T> {
+  readonly result: Promise<T>;
   readonly url: string;
   /** Called only after the SDK verifies the result and CLI commits its session. */
   complete(accepted: boolean): Promise<void>;
 }
+export type PreparedOpenKeyHandoff = OpenKeyHandoff<SignedResult>;
+export type OwnerRevocationRequest = {
+  kind: "owner-revocation";
+  ownerDid: string;
+  cid: string;
+  nonce: string;
+  expiresAt: string;
+};
+export type OwnerRevocationResponse = { siwe: string; signature: string };
 
 const MAX_BODY_BYTES = 1024 * 1024;
 const RESULT_FIELDS = ["address", "permissions", "protocolVersion", "selectedActionKeys", "signature", "signedMessage"];
@@ -46,7 +55,7 @@ export function ownerIdentitySigner(ownerDid: string): ISigner {
   };
 }
 
-function signedEnvelope(value: unknown, state: Buffer, requestedKeyId?: string): SignedResult | null {
+function envelopeResult(value: unknown, state: Buffer): { result: Record<string, unknown>; selectedKeyId?: string } | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const envelope = value as Record<string, unknown>;
   if (envelope.transportVersion !== 2 || typeof envelope.state !== "string" ||
@@ -55,10 +64,17 @@ function signedEnvelope(value: unknown, state: Buffer, requestedKeyId?: string):
   const supplied = Buffer.from(envelope.state, "base64url");
   if (supplied.length !== state.length || !timingSafeEqual(supplied, state)) return null;
   if (envelope.selectedKeyId !== undefined && typeof envelope.selectedKeyId !== "string") return null;
-  // The server binds the requested key to prepare/finalize; this echo is only a consistency check.
-  if (requestedKeyId && envelope.selectedKeyId !== undefined && envelope.selectedKeyId !== requestedKeyId) return null;
   const result = envelope.result;
   if (!result || typeof result !== "object" || Array.isArray(result)) return null;
+  return { result: result as Record<string, unknown>, selectedKeyId: envelope.selectedKeyId as string | undefined };
+}
+
+function signedEnvelope(value: unknown, state: Buffer, requestedKeyId?: string): SignedResult | null {
+  const parsed = envelopeResult(value, state);
+  if (!parsed) return null;
+  // The server binds the requested key to prepare/finalize; this echo is only a consistency check.
+  if (requestedKeyId && parsed.selectedKeyId !== undefined && parsed.selectedKeyId !== requestedKeyId) return null;
+  const result = parsed.result;
   const fields = Object.keys(result).sort();
   if (fields.length !== RESULT_FIELDS.length || fields.some((field, index) => field !== RESULT_FIELDS[index])) return null;
   const signed = result as Record<string, unknown>;
@@ -69,29 +85,39 @@ function signedEnvelope(value: unknown, state: Buffer, requestedKeyId?: string):
   return signed as SignedResult;
 }
 
+function ownerRevocationEnvelope(value: unknown, state: Buffer): OwnerRevocationResponse | null {
+  const parsed = envelopeResult(value, state);
+  if (!parsed || parsed.selectedKeyId !== undefined) return null;
+  const { result } = parsed;
+  if (Object.keys(result).length !== 2 || typeof result.siwe !== "string" || typeof result.signature !== "string") return null;
+  return { siwe: result.siwe, signature: result.signature };
+}
+
 function apiOrigin(openKeyHost: string): string {
   return process.env.TC_OPENKEY_API_HOST ??
     (openKeyHost === DEFAULT_OPENKEY_HOST ? DEFAULT_OPENKEY_DEVICE_API_HOST : openKeyHost);
 }
 
-export async function startPreparedOpenKeyHandoff(options: {
-  prepared: Prepared;
+async function startHandoff<T>(options: {
+  request: Record<string, unknown>;
+  parseResult: (value: unknown, state: Buffer) => T | null;
+  ownerRevocation?: boolean;
   openKeyHost: string;
   apiHost?: string;
   noPopup?: boolean;
   paste?: boolean;
   /** How long the approval stays open; tests shorten the five-minute default. */
   expiryMs?: number;
-}): Promise<PreparedOpenKeyHandoff> {
+}): Promise<OpenKeyHandoff<T>> {
   const origin = new URL(options.openKeyHost).origin;
   const state = randomBytes(32);
   const cancelSecret = randomBytes(32).toString("base64url");
   const handoffId = randomBytes(32).toString("base64url");
   const path = `/callback/${randomBytes(16).toString("base64url")}`;
   let acceptResponse: ServerResponse | undefined;
-  let resolveResult!: (result: SignedResult) => void;
+  let resolveResult!: (result: T) => void;
   let rejectResult!: (reason: Error) => void;
-  const result = new Promise<SignedResult>((resolve, reject) => {
+  const result = new Promise<T>((resolve, reject) => {
     resolveResult = resolve;
     rejectResult = reject;
   });
@@ -164,7 +190,7 @@ export async function startPreparedOpenKeyHandoff(options: {
       let envelope: unknown;
       try { envelope = JSON.parse(Buffer.concat(chunks).toString("utf8")); }
       catch { reply(response, 400, { accepted: false }); return; }
-      const signed = signedEnvelope(envelope, state, options.prepared.keyId);
+      const signed = options.parseResult(envelope, state);
       if (!signed) { reply(response, 403, { accepted: false }); return; }
       delivered = true;
       stopSignals();
@@ -209,16 +235,9 @@ export async function startPreparedOpenKeyHandoff(options: {
     state.fill(0);
   };
   try {
-    const publicJwk = publicJwkForDelegation(options.prepared.jwk) as Record<string, unknown>;
     const payload = {
       transportVersion: 2,
-      request: {
-        protocolVersion: 1, siwe: options.prepared.siwe, jwk: publicJwk,
-        host: options.prepared.host,
-        sessionDid: options.prepared.verificationMethod,
-        ...(options.prepared.keyId ? { keyId: options.prepared.keyId } : {}),
-        ...(options.prepared.presentation ? { presentation: options.prepared.presentation } : {}),
-      },
+      request: options.request,
       delivery: { handoffId, ...(callback ? { callback } : {}), state: state.toString("base64url"), cancelSecret },
     };
     const url = `${origin}/delegate#tv2=${Buffer.from(JSON.stringify(payload), "utf8").toString("base64url")}`;
@@ -228,13 +247,13 @@ export async function startPreparedOpenKeyHandoff(options: {
     // Before the URL is shown, so an interrupt at any point after it cancels.
     process.on("SIGINT", cancelled);
     process.on("SIGTERM", cancelled);
-    console.error(`Open this URL in a browser to authenticate: ${url}`);
+    console.error(`${options.ownerRevocation ? "Open this URL in a browser to approve revocation" : "Open this URL in a browser to authenticate"}: ${url}`);
     if (!options.noPopup && !options.paste) {
       try { await open(url); }
       catch { console.error("Could not open browser. Use the printed URL or paste the signed code."); }
     }
     if (options.paste || process.stdin.isTTY) {
-      console.error("Waiting up to 5 minutes for OpenKey. Paste its one-line signed code here and press Enter if the callback is blocked (Safari may require this).");
+      console.error(`Waiting up to 5 minutes for OpenKey. Paste its one-line ${options.ownerRevocation ? "revocation" : "signed"} code here and press Enter if the callback is blocked (Safari may require this).`);
       rl = createInterface({ input: process.stdin, output: process.stderr });
       rl.on("line", (input) => {
         if (delivered || completed || !input.trim()) return;
@@ -245,7 +264,7 @@ export async function startPreparedOpenKeyHandoff(options: {
               Buffer.from(code, "base64url").toString("base64url") !== code) throw new Error("Invalid code");
           envelope = JSON.parse(Buffer.from(code, "base64url").toString("utf8"));
         } catch { console.error("Invalid prepared OpenKey paste code. Try again."); return; }
-        const signed = signedEnvelope(envelope, state, options.prepared.keyId);
+        const signed = options.parseResult(envelope, state);
         if (!signed) { console.error("Prepared OpenKey code does not match this sign-in. Try again."); return; }
         delivered = true;
         stopSignals();
@@ -285,4 +304,37 @@ export async function startPreparedOpenKeyHandoff(options: {
     close();
     throw error;
   }
+}
+
+export function startPreparedOpenKeyHandoff(options: {
+  prepared: Prepared;
+  openKeyHost: string;
+  apiHost?: string;
+  noPopup?: boolean;
+  paste?: boolean;
+  expiryMs?: number;
+}): Promise<PreparedOpenKeyHandoff> {
+  const prepared = options.prepared;
+  const publicJwk = publicJwkForDelegation(prepared.jwk) as Record<string, unknown>;
+  return startHandoff({
+    ...options,
+    request: {
+      protocolVersion: 1, siwe: prepared.siwe, jwk: publicJwk,
+      host: prepared.host, sessionDid: prepared.verificationMethod,
+      ...(prepared.keyId ? { keyId: prepared.keyId } : {}),
+      ...(prepared.presentation ? { presentation: prepared.presentation } : {}),
+    },
+    parseResult: (value, state) => signedEnvelope(value, state, prepared.keyId),
+  });
+}
+
+export function startOwnerRevocationHandoff(options: {
+  request: OwnerRevocationRequest;
+  openKeyHost: string;
+  apiHost?: string;
+  noPopup?: boolean;
+  paste?: boolean;
+  expiryMs?: number;
+}): Promise<OpenKeyHandoff<OwnerRevocationResponse>> {
+  return startHandoff({ ...options, request: { ...options.request }, parseResult: ownerRevocationEnvelope, ownerRevocation: true });
 }

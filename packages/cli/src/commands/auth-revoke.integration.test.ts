@@ -18,6 +18,10 @@ import {
   writeJsonAtomic,
 } from "@tinycloud/operations/state";
 import { registerReplicaCommand } from "./replica.js";
+import { registerAuthCommand } from "./auth.js";
+import { setJsonOutputRequested } from "../output/formatter.js";
+import type { OwnerSignatureTransport } from "../lib/owner-revocation.js";
+import type { OwnerRevocationRequest } from "../auth/prepared-openkey.js";
 import { createUcanIssuer, signUcan } from "../test-support/signed-ucan.js";
 
 const PROFILE = "owner";
@@ -29,6 +33,116 @@ const servers: Array<{ stop(closeActiveConnections?: boolean): void }> = [];
 afterEach(async () => {
   for (const server of servers.splice(0)) server.stop(true);
   await Promise.all(homes.splice(0).map((home) => rm(home, { recursive: true, force: true })));
+});
+
+function ownerRevocationSiwe(request: OwnerRevocationRequest, address: string): string {
+  return [
+    "openkey.so wants you to sign in with your Ethereum account:",
+    address, "", "", `URI: ucan:${request.cid}`, "Version: 1", "Chain ID: 1",
+    `Nonce: ${request.nonce}`,
+    `Issued At: ${new Date(Date.parse(request.expiresAt) - 570_000).toISOString()}`,
+    `Expiration Time: ${request.expiresAt}`,
+  ].join("\n");
+}
+
+async function runLogoutWithOwnerTransport(home: string, host: string, transport: OwnerSignatureTransport) {
+  const messages: string[] = [];
+  const errors: string[] = [];
+  const originalExitCode = process.exitCode;
+  const stdout = spyOn(process.stdout, "write").mockImplementation((chunk) => { messages.push(String(chunk)); return true; });
+  const stderr = spyOn(process.stderr, "write").mockImplementation((chunk) => {
+    messages.push(String(chunk));
+    errors.push(String(chunk));
+    return true;
+  });
+  const exit = spyOn(process, "exit").mockImplementation((code) => {
+    throw Object.assign(new Error("CLI exited"), { cliExitCode: code });
+  });
+  const program = new Command();
+  program.option("--profile <profile>").option("--host <url>").option("--json");
+  registerAuthCommand(program, { ownerSignatureTransport: transport });
+  setJsonOutputRequested(true);
+  let exitCode = 0;
+  try {
+    await withTinyCloudStateRoot(home, () => program.parseAsync(
+      ["node", "tc", "--profile", PROFILE, "--host", host, "--json", "auth", "logout", "--revoke"],
+      { from: "node" },
+    ));
+    exitCode = Number(process.exitCode ?? 0);
+  } catch (error) {
+    if (!(error instanceof Error && "cliExitCode" in error)) throw error;
+    exitCode = Number(error.cliExitCode);
+  } finally {
+    stdout.mockRestore();
+    stderr.mockRestore();
+    exit.mockRestore();
+    process.exitCode = originalExitCode;
+    setJsonOutputRequested(false);
+  }
+  const json = messages.map((message) => { try { return JSON.parse(message); } catch { return null; } })
+    .find((value) => value && typeof value === "object");
+  return { exitCode, json, messages: messages.join(""), stderr: errors.join("") };
+}
+
+test("OpenKey logout requests one owner signature, posts one verified revoke, then removes local session", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tc2005-openkey-success-"));
+  homes.push(home);
+  const node = await server("success", () => "unused");
+  const paths = await seed(home, node.host, "openkey");
+  node.setQueryRecords([]);
+  node.setPaths(paths);
+  const signer = new PrivateKeySigner(OWNER_KEY);
+  const requests: OwnerRevocationRequest[] = [];
+  const transport: OwnerSignatureTransport = async ({ request }) => {
+    requests.push(request);
+    const siwe = ownerRevocationSiwe(request, await signer.getAddress());
+    return { url: "", result: Promise.resolve({ siwe, signature: await signer.signMessage(siwe) }),
+      async complete() {} };
+  };
+  const result = await runLogoutWithOwnerTransport(home, node.host, transport);
+  expect(result.exitCode).toBe(0);
+  expect(requests).toHaveLength(1);
+  expect(requests[0]).toMatchObject({ kind: "owner-revocation", ownerDid: paths.ownerDid, cid: paths.delegationCid });
+  expect(node.requests).toHaveLength(1);
+  expect(node.authorizationKinds).toMatchObject([{ prefix: "cacao-cbor", dots: 0 }]);
+  expect(node.snapshots).toMatchObject([{ session: true }]);
+  expect(await exists(paths.session)).toBe(false);
+});
+
+test("unavailable or cancelled OpenKey hand-off keeps local session and sends no revoke", async () => {
+  for (const code of ["unavailable", "cancelled"] as const) {
+    const home = await mkdtemp(join(tmpdir(), `tc2005-openkey-${code}-`));
+    homes.push(home);
+    const node = await server("success", () => "unused");
+    const paths = await seed(home, node.host, "openkey");
+    node.setQueryRecords([]);
+    const transport: OwnerSignatureTransport = async () => { throw new Error(code); };
+    const result = await runLogoutWithOwnerTransport(home, node.host, transport);
+    expect(result.exitCode).toBeGreaterThan(0);
+    expect(result.messages).toContain("REVOCATION_AUTHORITY_UNAVAILABLE");
+    expect(result.messages).toContain("https://account.tinycloud.xyz/delegations");
+    expect(node.requests).toHaveLength(0);
+    expect(await exists(paths.session)).toBe(true);
+  }
+});
+
+test("a node 403 keeps the OpenKey session after one owner-signed request", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tc2005-openkey-denied-"));
+  homes.push(home);
+  const node = await server("forbidden", () => "unused");
+  const paths = await seed(home, node.host, "openkey");
+  node.setQueryRecords([]);
+  const signer = new PrivateKeySigner(OWNER_KEY);
+  const transport: OwnerSignatureTransport = async ({ request }) => {
+    const siwe = ownerRevocationSiwe(request, await signer.getAddress());
+    return { url: "", result: Promise.resolve({ siwe, signature: await signer.signMessage(siwe) }),
+      async complete() {} };
+  };
+  const result = await runLogoutWithOwnerTransport(home, node.host, transport);
+  expect(result.exitCode).toBeGreaterThan(0);
+  expect(result.messages).toContain("REVOKE_UNAUTHORIZED");
+  expect(node.requests).toHaveLength(1);
+  expect(await exists(paths.session)).toBe(true);
 });
 
 function spawnCli(home: string, args: string[]) {
@@ -180,7 +294,7 @@ async function seedWithPublicLogin(home: string, host: string): ReturnType<typeo
   };
 }
 
-async function server(mode: "fail" | "fail-after-first" | "hold" | "success", cid: () => string) {
+async function server(mode: "fail" | "fail-after-first" | "hold" | "success" | "forbidden", cid: () => string) {
   const requests: string[] = [];
   const snapshots: Array<{ session: boolean; db: boolean; unknown?: boolean }> = [];
   const deniedAtRevoke: boolean[] = [];
@@ -240,6 +354,7 @@ async function server(mode: "fail" | "fail-after-first" | "hold" | "success", ci
               })();
           if (target.length === 0) return new Response("CID-bound signed revoke proof required", { status: 403 });
           revokedCids.push(target);
+          if (state === "forbidden") return new Response("Unauthorized Revoker", { status: 403 });
           if (state === "fail") return new Response("node unavailable", { status: 503 });
           if (state === "fail-after-first" && requests.length === 2) {
             return new Response("node unavailable after first revoke", { status: 503 });
@@ -269,7 +384,7 @@ async function server(mode: "fail" | "fail-after-first" | "hold" | "success", ci
     snapshots,
     deniedAtRevoke,
     started: started.promise,
-    setMode(value: "fail" | "fail-after-first" | "hold" | "success") { state = value; },
+    setMode(value: "fail" | "fail-after-first" | "hold" | "success" | "forbidden") { state = value; },
     setPaths(paths: { session: string; db: string }) { localPaths = paths; },
     setUnknownPath(path: string) { unknownPath = path; },
     stop() { node.stop(true); servers.splice(servers.indexOf(node), 1); },
@@ -552,15 +667,12 @@ describe("tc auth logout --revoke with durable replica denial", () => {
     }
     const sessionBefore = await readFile(paths.session);
     const keyBefore = await readFile(paths.key);
-    const historyCid = new NodeWasmBindings().computeCid(new TextEncoder().encode("tc841-openkey-owned-history"), 0x55n);
-    await withTinyCloudStateRoot(home, () =>
-      writeFile(join(profilePath(PROFILE), "auth-grants.jsonl"), JSON.stringify({
-        ts: new Date().toISOString(), profile: PROFILE, source: "cli",
-        delegationCid: historyCid, expiry: new Date(Date.now() + 3_600_000).toISOString(), addedCaps: [],
-      }) + "\n", { mode: 0o600 }));
     expect(node.networkPaths).toEqual([]);
 
-    const refused = await run(home, ["auth", "logout", "--revoke"]);
+    const unavailable: OwnerSignatureTransport = async () => {
+      throw new Error("OpenKey owner-revocation hand-off unavailable");
+    };
+    const refused = await runLogoutWithOwnerTransport(home, node.host, unavailable);
     expect(refused.exitCode).toBeGreaterThan(0);
     const error = JSON.parse(refused.stderr) as { error?: { code?: string; message?: string } };
     expect(error.error?.code).toBe("REVOCATION_AUTHORITY_UNAVAILABLE");
