@@ -43,6 +43,8 @@ interface Registry {
 
 const VERSION_MISMATCH_WARNING = "[tinycloud] ui-host-version-mismatch";
 let warnedVersionMismatch = false;
+const BUTTON_UNSUPPORTED_WARNING = "[tinycloud] ui-host-set-button-visible-unsupported";
+let warnedButtonUnsupported = false;
 
 function acquireRuntime(): HostRuntime | undefined {
   const globalRecord = globalThis as unknown as Record<symbol, unknown>;
@@ -99,6 +101,15 @@ export function registerUiClient(options: UiClientOptions): UiClientHandle {
     openPage: (section) => runtime.openPage(section),
     close: () => runtime.close(),
     isOpen: () => runtime.isOpen(),
+    setButtonVisible(visible) {
+      // A runtime from an older bundle on the same page has no such method: do nothing and say so once.
+      if (typeof runtime.setButtonVisible === "function") {
+        runtime.setButtonVisible(visible);
+      } else if (!warnedButtonUnsupported) {
+        warnedButtonUnsupported = true;
+        console.warn(BUTTON_UNSUPPORTED_WARNING);
+      }
+    },
   };
 
   return {

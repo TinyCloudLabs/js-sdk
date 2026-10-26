@@ -290,6 +290,7 @@ const tc = new TinyCloudWeb({
 });
 
 tc.ui.open();
+tc.ui.setButtonVisible(true); // show or hide the floating button at runtime
 tc.ui.close();
 tc.ui.toggle();
 tc.ui.isOpen;    // boolean
@@ -297,6 +298,8 @@ tc.ui.available; // false in iframes, opaque origins, SSR, or when ui is false
 ```
 
 `open()` also clears the user's hidden flag for the button. The hidden flag is stored per origin and app id under `tinycloud:ui:button-hidden:v1:`. The panel shows sections only for capabilities the client exposes.
+
+`ui.button` sets the initial state of the floating button, and `tc.ui.setButtonVisible(visible)` changes it at runtime: `true` shows the button now (even under `ui.button: false`) and clears the stored hidden flag, `false` hides it without writing that flag. The SDK does not store this choice; call it on load from your own setting. `open()`, `openPage()` and `toggle()` work whether the button is shown or not. On a phone the panel keeps its header inside the device safe areas, and a downward swipe on the header closes it.
 
 ### Storage section and storage-full toast
 

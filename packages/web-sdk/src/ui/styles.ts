@@ -18,10 +18,12 @@ export const HOST_CSS = `
 .layer[data-position="bottom-right"] .button{right:var(--tinycloud-ui-offset-inline,12px)}
 .layer[data-position="bottom-left"] .button{left:var(--tinycloud-ui-offset-inline,12px)}
 .layer[data-position="bottom-center"] .button{left:50%;transform:translateX(-50%)}
-.pending{position:fixed;top:0;bottom:0;right:0;box-sizing:border-box;width:min(420px,100%);padding:20px;overflow:auto;border-left:1px solid #e4e4e7;background:#fff;color:#111827;box-shadow:-18px 0 48px -18px rgba(0,0,0,.35);pointer-events:auto}
+.pending{position:fixed;top:0;bottom:0;right:0;box-sizing:border-box;width:min(420px,100%);padding:max(20px,env(safe-area-inset-top,0px)) max(20px,env(safe-area-inset-right,0px)) max(20px,env(safe-area-inset-bottom,0px)) max(20px,env(safe-area-inset-left,0px));overflow:auto;border-left:1px solid #e4e4e7;background:#fff;color:#111827;box-shadow:-18px 0 48px -18px rgba(0,0,0,.35);pointer-events:auto}
 .layer[data-position="bottom-left"] .pending{right:auto;left:0;border-left:0;border-right:1px solid #e4e4e7}
 .pending p{margin:0 0 12px;color:#71717a}
 .pending button{min-height:44px;padding:0 16px;border:1px solid #71717a;border-radius:12px;background:transparent;color:inherit;font:inherit;cursor:pointer}
+.pending .pclose{display:flex;align-items:center;justify-content:center;width:44px;padding:0;margin:0 0 8px auto;border-radius:50%}
+.pending .pclose svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
 .pending button:focus-visible{outline:2px solid #111827;outline-offset:2px;box-shadow:0 0 0 6px #fafafa}
 @media (prefers-color-scheme: dark){
 .layer{color:#fafafa}
