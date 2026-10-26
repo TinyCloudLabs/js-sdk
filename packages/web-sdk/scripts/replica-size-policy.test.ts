@@ -32,6 +32,7 @@ import { approvedTc2038PanelPrefetchRatchet, validateTc2038PanelPrefetchRatchetT
 import { approvedTc2005RevokeWindowRatchet, validateTc2005RevokeWindowRatchetTransition, type Tc2005RevokeWindowRatchet } from "./replica-size-policy";
 import { approvedTc2096RepairBackoffRatchet, validateTc2096RepairBackoffRatchetTransition, type Tc2096RepairBackoffRatchet } from "./replica-size-policy";
 import { approvedTc2072LocationGuardRatchet, validateTc2072LocationGuardRatchetTransition, type Tc2072LocationGuardRatchet } from "./replica-size-policy";
+import { approvedTc2113PanelGrantRatchet, validateTc2113PanelGrantRatchetTransition, type Tc2113PanelGrantRatchet } from "./replica-size-policy";
 import { activeRootCeiling, approvedLedgerRows, rootCeilingFor, rootCeilings } from "./replica-size-policy";
 import { approvedTc1443Ratchet, approvedTc1443bRatchet, approvedTc1448Ratchet, approvedTc1466Ratchet, validateTc1443RatchetTransition, validateTc1443bRatchetTransition, validateTc1448RatchetTransition, validateTc1466RatchetTransition, type Tc1443Ratchet, type Tc1443bRatchet, type Tc1448Ratchet, type Tc1466Ratchet } from "./replica-size-policy";
 import { ancestryPins, assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedHardeningRatchet, approvedLogoutRatchet, approvedTc1413Ratchet, approvedTc1424Ratchet, approvedTc1432Ratchet, approvedTc1436Ratchet, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, landingCommit, pinLandedOn, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateLogoutRatchetTransition, validateMasterMergeResolutionTransition, validateTc1413RatchetTransition, validateTc1424RatchetTransition, validateTc1432RatchetTransition, validateTc1436RatchetTransition, type HardeningRatchet, type Ledger, type LogoutRatchet, type MasterMergeResolution, type Tc1413Ratchet, type Tc1424Ratchet, type Tc1432Ratchet, type Tc1436Ratchet } from "./replica-size-policy";
@@ -2899,6 +2900,7 @@ delete tc2043Ledger.tc2038PanelPrefetchRatchet;
 delete tc2043Ledger.tc2005RevokeWindowRatchet;
 delete tc2043Ledger.tc2096RepairBackoffRatchet;
 delete tc2043Ledger.tc2072LocationGuardRatchet;
+delete tc2043Ledger.tc2113PanelGrantRatchet;
 tc2043Ledger.entries = structuredClone(current.entries.slice(0, current.entries.findIndex((entry) => entry.pr === "#728")));
 describe("replication syncScope opt-in (#742, TC-2043) size ratchet", () => {
   const row = () => structuredClone(approvedTc2043SyncScopeRatchet);
@@ -3222,7 +3224,6 @@ describe("TinyCloudWeb location guard (TC-2072, #754) size ratchet", () => {
     expect(row().replicaWorker).toEqual({ delta: 0, ceiling: 770416 });
     expect(row().canonicalCI.jobs).toHaveLength(2);
     expect(ancestryPins(current, false)).toContainEqual({ row: "tc2072LocationGuardRatchet", pin: row().sourceCommits[0] });
-    expect(newestRootRow()).toBe("tc2072LocationGuardRatchet");
     expect(rootCeilings(current).find(({ row: name }) => name === "tc2072LocationGuardRatchet")).toEqual({ row: "tc2072LocationGuardRatchet", ceiling: row().root.ceiling });
     expect(MAX_WORKER_GZIP_BYTES).toBe(row().worker.ceiling);
     expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(row().replicaWorker.ceiling);
@@ -3258,6 +3259,60 @@ describe("TinyCloudWeb location guard (TC-2072, #754) size ratchet", () => {
     changed.root.ceiling["index.cjs"]++;
     expect(() => validateTc2072LocationGuardRatchetTransition(undefined, changed)).toThrow();
     expect(() => validateTc2072LocationGuardRatchetTransition(row(), undefined)).toThrow();
+  });
+});
+
+describe("TC-2113 panel delegation-list permission ask (#763) size ratchet", () => {
+  const row = () => structuredClone(approvedTc2113PanelGrantRatchet);
+
+  it("pins exact CI bytes over the location-guard row and carries its first-import, activation, worker and replica-worker ceilings", () => {
+    expect(() => validateLedger(current)).not.toThrow();
+    expect(current.tc2113PanelGrantRatchet).toEqual(approvedTc2113PanelGrantRatchet);
+    expect(row().root).toEqual({ delta: { "index.mjs": 1636, "index.cjs": 1244 }, ceiling: { "index.mjs": 1468994, "index.cjs": 1410525 } });
+    expect(row().root.ceiling["index.mjs"]).toBe(approvedTc2072LocationGuardRatchet.root.ceiling["index.mjs"] + 1636);
+    expect(row().root.ceiling["index.cjs"]).toBe(approvedTc2072LocationGuardRatchet.root.ceiling["index.cjs"] + 1244);
+    expect(row().firstImport).toEqual({ delta: { "replica.mjs": 0, "replica.cjs": 0 }, ceiling: { "replica.mjs": 52653, "replica.cjs": 67846 } });
+    expect(row().activation).toEqual({ delta: { "activation.mjs": 0, "activation.cjs": 0 }, ceiling: { "activation.mjs": 23386, "activation.cjs": 24959 } });
+    expect(row().worker).toEqual({ delta: 0, ceiling: 776468 });
+    expect(row().replicaWorker).toEqual({ delta: 0, ceiling: 770416 });
+    expect(row().canonicalCI.jobs).toHaveLength(2);
+    expect(ancestryPins(current, false)).toContainEqual({ row: "tc2113PanelGrantRatchet", pin: row().sourceCommits[0] });
+    expect(newestRootRow()).toBe("tc2113PanelGrantRatchet");
+    expect(rootCeilings(current).find(({ row: name }) => name === "tc2113PanelGrantRatchet")).toEqual({ row: "tc2113PanelGrantRatchet", ceiling: row().root.ceiling });
+    expect(MAX_WORKER_GZIP_BYTES).toBe(row().worker.ceiling);
+    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(row().replicaWorker.ceiling);
+  });
+
+  it("refuses changed bytes, provenance or a missing location-guard prerequisite", () => {
+    const mutations: Array<(changed: Tc2113PanelGrantRatchet) => void> = [
+      (changed) => { changed.root.ceiling["index.mjs"]++; },
+      (changed) => { changed.root.delta["index.cjs"]++; },
+      (changed) => { changed.firstImport.ceiling["replica.cjs"]++; },
+      (changed) => { changed.activation.ceiling["activation.mjs"]++; },
+      (changed) => { changed.worker.ceiling++; },
+      (changed) => { changed.replicaWorker.ceiling++; },
+      (changed) => { changed.canonicalCI.run = "https://github.com/TinyCloudLabs/js-sdk/actions/runs/1"; },
+      (changed) => { changed.sourceCommits = ["0".repeat(40)]; },
+    ];
+    for (const mutate of mutations) {
+      const ledger = copy(current);
+      const changed = row();
+      mutate(changed);
+      ledger.tc2113PanelGrantRatchet = changed;
+      expect(() => validateLedger(ledger)).toThrow("panel grant");
+    }
+    const withoutPrerequisite = copy(current);
+    delete withoutPrerequisite.tc2072LocationGuardRatchet;
+    expect(() => validateLedger(withoutPrerequisite)).toThrow("panel grant");
+  });
+
+  it("may be introduced once and never changed or removed", () => {
+    expect(() => validateTc2113PanelGrantRatchetTransition(undefined, row())).not.toThrow();
+    expect(() => validateTc2113PanelGrantRatchetTransition(row(), row())).not.toThrow();
+    const changed = row();
+    changed.root.ceiling["index.cjs"]++;
+    expect(() => validateTc2113PanelGrantRatchetTransition(undefined, changed)).toThrow();
+    expect(() => validateTc2113PanelGrantRatchetTransition(row(), undefined)).toThrow();
   });
 });
 

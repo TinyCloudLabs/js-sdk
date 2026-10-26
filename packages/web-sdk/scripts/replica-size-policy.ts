@@ -312,6 +312,8 @@ export type Tc2005RevokeWindowRatchet = HardeningRatchet;
 export type Tc2096RepairBackoffRatchet = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
 /** One reviewed exact-byte row for the TinyCloudWeb location guard (TC-2072, #754); replicaWorker is carried at TC-2096's replica.worker.js ceiling. */
 export type Tc2072LocationGuardRatchet = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
+/** One reviewed exact-byte row for the panel delegation-list permission ask (TC-2113, #763); replicaWorker is carried at TC-2072's replica.worker.js ceiling. */
+export type Tc2113PanelGrantRatchet = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -360,6 +362,7 @@ export type Ledger = {
   tc2005RevokeWindowRatchet?: Tc2005RevokeWindowRatchet;
   tc2096RepairBackoffRatchet?: Tc2096RepairBackoffRatchet;
   tc2072LocationGuardRatchet?: Tc2072LocationGuardRatchet;
+  tc2113PanelGrantRatchet?: Tc2113PanelGrantRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -938,6 +941,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2005RevokeWindowRatchet !== undefined) pins.push({ row: "tc2005RevokeWindowRatchet", pin: root.tc2005RevokeWindowRatchet.sourceCommits.at(-1)! });
   if (root.tc2096RepairBackoffRatchet !== undefined) pins.push({ row: "tc2096RepairBackoffRatchet", pin: root.tc2096RepairBackoffRatchet.sourceCommits.at(-1)! });
   if (root.tc2072LocationGuardRatchet !== undefined) pins.push({ row: "tc2072LocationGuardRatchet", pin: root.tc2072LocationGuardRatchet.sourceCommits.at(-1)! });
+  if (root.tc2113PanelGrantRatchet !== undefined) pins.push({ row: "tc2113PanelGrantRatchet", pin: root.tc2113PanelGrantRatchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -992,6 +996,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2005RevokeWindowRatchet", root.tc2005RevokeWindowRatchet?.root.ceiling],
     ["tc2096RepairBackoffRatchet", root.tc2096RepairBackoffRatchet?.root.ceiling],
     ["tc2072LocationGuardRatchet", root.tc2072LocationGuardRatchet?.root.ceiling],
+    ["tc2113PanelGrantRatchet", root.tc2113PanelGrantRatchet?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -1955,6 +1960,36 @@ export const approvedTc2072LocationGuardRatchet: Tc2072LocationGuardRatchet = {
   reason: "constructing TinyCloudWeb without a location skips UI client registration (TC-2072)",
 };
 
+/** Canonical CI run 40380002126 (TC-2113, #763): root index.mjs rises 1636 B and index.cjs 1244 B over TC-2072's ceilings; first import, activation and worker carry TC-2072's ceilings. */
+export const approvedTc2113PanelGrantRatchet: Tc2113PanelGrantRatchet = {
+  label: "panel button asks for the missing delegation-list permission (TC-2113, #763): +1636 B mjs / +1244 B cjs gzip",
+  ruling: "Approved by Naomi (root approved at ~+1,638 mjs / +1,397 cjs gzip; measured at run 40380002126 as +1,636 mjs / +1,244 cjs over TC-2096's ceilings; TC-2072's +8 cjs is carried in the cjs ceiling)",
+  base: "3b372a100fa7841d9a359d8f5d2f5995588e93e4",
+  sourceCommits: ["20a872e061bf2818a7234b9dbe1b6dc29e497e3d"],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40380002126",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40380002126/job/121773352312",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40380002126/job/121773352761",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 1636, "index.cjs": 1244 },
+    ceiling: { "index.mjs": 1468994, "index.cjs": 1410525 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 52653, "replica.cjs": 67846 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23386, "activation.cjs": 24959 },
+  },
+  worker: { delta: 0, ceiling: 776468 },
+  replicaWorker: { delta: 0, ceiling: 770416 },
+  reason: "the panel button asks for the missing delegation-list permission (TC-2113)",
+};
+
 export type GatedOnlyRatchet = {
   label: string;
   sourceCommit: string;
@@ -2031,6 +2066,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2005RevokeWindowRatchet: approvedTc2005RevokeWindowRatchet,
   tc2096RepairBackoffRatchet: approvedTc2096RepairBackoffRatchet,
   tc2072LocationGuardRatchet: approvedTc2072LocationGuardRatchet,
+  tc2113PanelGrantRatchet: approvedTc2113PanelGrantRatchet,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -2256,6 +2292,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc2096RepairBackoffRatchet || JSON.stringify(value.tc2072LocationGuardRatchet) !== JSON.stringify(approvedTc2072LocationGuardRatchet))) {
     throw new Error("Only Naomi's exact canonical location-guard ratchet is approved.");
   }
+  if (value.tc2113PanelGrantRatchet !== undefined &&
+      (!value.tc2072LocationGuardRatchet || JSON.stringify(value.tc2113PanelGrantRatchet) !== JSON.stringify(approvedTc2113PanelGrantRatchet))) {
+    throw new Error("Only Naomi's exact canonical panel grant ratchet is approved.");
+  }
 }
 
 /** The #606 worker ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
@@ -2479,6 +2519,14 @@ export function validateTc2072LocationGuardRatchetTransition(base?: Tc2072Locati
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2072LocationGuardRatchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact TC-2072 location-guard ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-2113 panel grant ratchet is introduced once and immutable afterwards. */
+export function validateTc2113PanelGrantRatchetTransition(base?: Tc2113PanelGrantRatchet, current?: Tc2113PanelGrantRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2113PanelGrantRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-2113 panel grant ratchet may be introduced once and cannot change later.");
   }
 }
 
