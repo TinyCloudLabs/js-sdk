@@ -3,7 +3,7 @@ import { TC_APPS_ROOT } from "../tc-apps.js";
 
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 export type JsonObject = { [key: string]: Json };
-export const JsonSchema: z.ZodType<Json> = z.lazy(() => z.union([
+export const JsonSchema: z.ZodLazy<z.ZodType<Json>> = z.lazy(() => z.union([
   z.null(), z.boolean(), z.number().finite(), z.string(), z.array(JsonSchema), z.record(JsonSchema),
 ]));
 export const ObjectSchema = z.record(JsonSchema);
@@ -65,8 +65,11 @@ export function valueSyntax(key: string, value: JsonObject): string | undefined 
   return "kind requires log/day, log/time or item/states";
 }
 
-const PutSchema = z.object({ op: z.literal("put"), key: KeySchema, value: ObjectSchema, etag: EtagSchema.optional() }).strict();
-const MoveSchema = z.object({ op: z.literal("move"), from: RecordKeySchema, to: RecordKeySchema, value: ObjectSchema, etag: EtagSchema }).strict();
+const WriteValueSchema = z.object({
+  by: z.never({ invalid_type_error: "by is set by the server; omit it from the write value." }).optional(),
+}).catchall(JsonSchema).describe("Record or catalog value without top-level by. Remove by from read-back values before edits or moves; the server supplies it.");
+const PutSchema = z.object({ op: z.literal("put"), key: KeySchema, value: WriteValueSchema, etag: EtagSchema.optional() }).strict();
+const MoveSchema = z.object({ op: z.literal("move"), from: RecordKeySchema, to: RecordKeySchema, value: WriteValueSchema, etag: EtagSchema }).strict();
 const DeleteSchema = z.object({ op: z.literal("delete"), key: RecordKeySchema, etag: EtagSchema.optional() }).strict();
 export const WriteInputSchema = z.object({ ops: z.array(z.discriminatedUnion("op", [PutSchema, MoveSchema, DeleteSchema])).min(1).max(10) }).strict().superRefine((input, context) => {
   input.ops.forEach((op, index) => {

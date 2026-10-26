@@ -13419,7 +13419,7 @@ async function refusal(response) {
 async function prepareLinkRecord(input) {
   const apiOrigin = checkApiOrigin(input.apiOrigin);
   const nowMs = toEpochMs(input.now);
-  const expiresMs = input.expiresAt.getTime();
+  const expiresMs = Math.floor(input.expiresAt.getTime() / 1e3) * 1e3;
   if (!Number.isFinite(nowMs) || !Number.isFinite(expiresMs)) throw new LinkError("invalid_argument", "now and expiresAt must be valid dates");
   let blob;
   let key;

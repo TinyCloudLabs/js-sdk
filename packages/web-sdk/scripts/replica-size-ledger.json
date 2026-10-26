@@ -1853,54 +1853,62 @@
     },
     "reason": "sign-out and account switch erase the local copy with an SDK retry and a failure event; the minimum reviewed shape; optional code in the replica chunk."
   },
-  "tc2005RevokeWindowRatchet": {
-    "label": "node-sdk owner revocation window (TC-2005, #745): +52 B mjs / +0 B cjs gzip",
-    "ruling": "Approved by Naomi (exact canonical CI bytes at run 40316432428; no headroom)",
-    "base": "b7c43e45a687ddff74190d9713bb9e317ad0274e",
+  "tc1977ManifestKeysRatchet": {
+    "label": "sdk: manifest named keys (TC-1977, #748): +2,665 B mjs / +2,808 B cjs gzip",
+    "ruling": "Approved by Naomi (measured at run 40318285314 within 10 bytes of the approved +2,666/+2,814; no headroom)",
+    "base": "5467d1248b20e59d3b7eca508da417c2b35316b3",
     "sourceCommits": [
-      "411069ff7116553ad69cdc2d5a4c2ed09f3c5449"
+      "796fdd2a13c0f6b0e6f767e0347151c0cbaf84fe"
     ],
     "canonicalCI": {
-      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40316432428",
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40318285314",
       "jobs": [
-        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40316432428/job/121550076548",
-        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40316432428/job/121550076779"
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40318285314/job/121556330989",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40318285314/job/121556331284"
       ]
     },
     "root": {
-      "delta": {
-        "index.mjs": 52,
-        "index.cjs": 0
-      },
-      "ceiling": {
-        "index.mjs": 1464681,
-        "index.cjs": 1406456
-      }
+      "delta": { "index.mjs": 2665, "index.cjs": 2808 },
+      "ceiling": { "index.mjs": 1467294, "index.cjs": 1409264 }
     },
     "firstImport": {
-      "delta": {
-        "replica.mjs": 0,
-        "replica.cjs": 0
-      },
-      "ceiling": {
-        "replica.mjs": 52374,
-        "replica.cjs": 67571
-      }
+      "delta": { "replica.mjs": 0, "replica.cjs": 0 },
+      "ceiling": { "replica.mjs": 52374, "replica.cjs": 67571 }
     },
     "activation": {
-      "delta": {
-        "activation.mjs": 0,
-        "activation.cjs": 0
-      },
-      "ceiling": {
-        "activation.mjs": 23386,
-        "activation.cjs": 24959
-      }
+      "delta": { "activation.mjs": 0, "activation.cjs": 0 },
+      "ceiling": { "activation.mjs": 23386, "activation.cjs": 24959 }
     },
-    "worker": {
-      "delta": 0,
-      "ceiling": 776128
+    "worker": { "delta": 0, "ceiling": 776128 },
+    "reason": "manifest named keys: the `keys` block, key resource derivation and sign-in abilities (TC-1977)"
+  },
+  "tc2038PanelPrefetchRatchet": {
+    "label": "sdk: panel prefetch ability gating (TC-2038): +12 B mjs / +9 B cjs gzip",
+    "ruling": "Approved by Naomi (measured at run 40331788730 within 10 bytes of the approved +15/+4; no headroom)",
+    "base": "c59bcd3ac04c18583025d402283aa687545ab9f3",
+    "sourceCommits": [
+      "1381ddff663cb62f63c4dee95293fcbc12d673d5"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40331788730",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40331788730/job/121602802896",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40331788730/job/121602802667"
+      ]
     },
-    "reason": "the owner revocation window extends; one constant in node-sdk (TC-2005)"
+    "root": {
+      "delta": { "index.mjs": 12, "index.cjs": 9 },
+      "ceiling": { "index.mjs": 1467306, "index.cjs": 1409273 }
+    },
+    "firstImport": {
+      "delta": { "replica.mjs": 0, "replica.cjs": 0 },
+      "ceiling": { "replica.mjs": 52374, "replica.cjs": 67571 }
+    },
+    "activation": {
+      "delta": { "activation.mjs": 0, "activation.cjs": 0 },
+      "ceiling": { "activation.mjs": 23386, "activation.cjs": 24959 }
+    },
+    "worker": { "delta": 0, "ceiling": 776128 },
+    "reason": "panel background reads (account index, delegation query, storage status) go out only when the session holds the matching ReCap ability (TC-2038)"
   }
 }

@@ -302,8 +302,10 @@ export type Tc2034NamedKeysCliRatchet = HardeningRatchet;
 export type Tc2043SyncScopeRatchet = HardeningRatchet;
 /** One reviewed exact-byte row for sign-out local-copy erase (TC-1888, #728). */
 export type Tc1888PurgeLocalCopyRatchet = HardeningRatchet;
-/** One reviewed exact-byte row for the owner revocation window (TC-2005, #745). */
-export type Tc2005RevokeWindowRatchet = HardeningRatchet;
+/** One reviewed exact-byte row for manifest named keys (js-sdk #748, TC-1977). */
+export type Tc1977ManifestKeysRatchet = HardeningRatchet;
+/** One reviewed exact-byte row for panel background-read ability gating (js-sdk TC-2038). */
+export type Tc2038PanelPrefetchRatchet = HardeningRatchet;
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -347,7 +349,8 @@ export type Ledger = {
   tc2034NamedKeysCliRatchet?: Tc2034NamedKeysCliRatchet;
   tc2043SyncScopeRatchet?: Tc2043SyncScopeRatchet;
   tc1888PurgeLocalCopyRatchet?: Tc1888PurgeLocalCopyRatchet;
-  tc2005RevokeWindowRatchet?: Tc2005RevokeWindowRatchet;
+  tc1977ManifestKeysRatchet?: Tc1977ManifestKeysRatchet;
+  tc2038PanelPrefetchRatchet?: Tc2038PanelPrefetchRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -921,7 +924,8 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2034NamedKeysCliRatchet !== undefined) pins.push({ row: "tc2034NamedKeysCliRatchet", pin: root.tc2034NamedKeysCliRatchet.sourceCommits.at(-1)! });
   if (root.tc2043SyncScopeRatchet !== undefined) pins.push({ row: "tc2043SyncScopeRatchet", pin: root.tc2043SyncScopeRatchet.sourceCommits.at(-1)! });
   if (root.tc1888PurgeLocalCopyRatchet !== undefined) pins.push({ row: "tc1888PurgeLocalCopyRatchet", pin: root.tc1888PurgeLocalCopyRatchet.sourceCommits.at(-1)! });
-  if (root.tc2005RevokeWindowRatchet !== undefined) pins.push({ row: "tc2005RevokeWindowRatchet", pin: root.tc2005RevokeWindowRatchet.sourceCommits.at(-1)! });
+  if (root.tc1977ManifestKeysRatchet !== undefined) pins.push({ row: "tc1977ManifestKeysRatchet", pin: root.tc1977ManifestKeysRatchet.sourceCommits.at(-1)! });
+  if (root.tc2038PanelPrefetchRatchet !== undefined) pins.push({ row: "tc2038PanelPrefetchRatchet", pin: root.tc2038PanelPrefetchRatchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -971,7 +975,8 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2034NamedKeysCliRatchet", root.tc2034NamedKeysCliRatchet?.root.ceiling],
     ["tc2043SyncScopeRatchet", root.tc2043SyncScopeRatchet?.root.ceiling],
     ["tc1888PurgeLocalCopyRatchet", root.tc1888PurgeLocalCopyRatchet?.root.ceiling],
-    ["tc2005RevokeWindowRatchet", root.tc2005RevokeWindowRatchet?.root.ceiling],
+    ["tc1977ManifestKeysRatchet", root.tc1977ManifestKeysRatchet?.root.ceiling],
+    ["tc2038PanelPrefetchRatchet", root.tc2038PanelPrefetchRatchet?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -1783,22 +1788,24 @@ export const approvedTc1888PurgeLocalCopyRatchet: Tc1888PurgeLocalCopyRatchet = 
   reason: "sign-out and account switch erase the local copy with an SDK retry and a failure event; the minimum reviewed shape; optional code in the replica chunk.",
 };
 
-/** Canonical CI run 40316432428 (TC-2005, #745): root index.mjs rises by 52 bytes; index.cjs, first import, activation and worker are unchanged. */
-export const approvedTc2005RevokeWindowRatchet: Tc2005RevokeWindowRatchet = {
-  label: "node-sdk owner revocation window (TC-2005, #745): +52 B mjs / +0 B cjs gzip",
-  ruling: "Approved by Naomi (exact canonical CI bytes at run 40316432428; no headroom)",
-  base: "b7c43e45a687ddff74190d9713bb9e317ad0274e",
-  sourceCommits: ["411069ff7116553ad69cdc2d5a4c2ed09f3c5449"],
+/** Manifest named keys (js-sdk #748, TC-1977), approved by Naomi: root index.mjs 1,464,629 -> 1,467,294 (+2,665) and index.cjs 1,406,456 -> 1,409,264 (+2,808), the exact deltas canonical CI printed on head 796fdd2a (run 40318285314). Worker is unchanged; first-import and activation deltas are 0, so their ceilings are the tc1888 caps. */
+export const approvedTc1977ManifestKeysRatchet: Tc1977ManifestKeysRatchet = {
+  label: "sdk: manifest named keys (TC-1977, #748): +2,665 B mjs / +2,808 B cjs gzip",
+  ruling: "Approved by Naomi (measured at run 40318285314 within 10 bytes of the approved +2,666/+2,814; no headroom)",
+  base: "5467d1248b20e59d3b7eca508da417c2b35316b3",
+  sourceCommits: [
+    "796fdd2a13c0f6b0e6f767e0347151c0cbaf84fe",
+  ],
   canonicalCI: {
-    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40316432428",
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40318285314",
     jobs: [
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40316432428/job/121550076548",
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40316432428/job/121550076779",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40318285314/job/121556330989",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40318285314/job/121556331284",
     ],
   },
   root: {
-    delta: { "index.mjs": 52, "index.cjs": 0 },
-    ceiling: { "index.mjs": 1464681, "index.cjs": 1406456 },
+    delta: { "index.mjs": 2665, "index.cjs": 2808 },
+    ceiling: { "index.mjs": 1467294, "index.cjs": 1409264 },
   },
   firstImport: {
     delta: { "replica.mjs": 0, "replica.cjs": 0 },
@@ -1809,8 +1816,40 @@ export const approvedTc2005RevokeWindowRatchet: Tc2005RevokeWindowRatchet = {
     ceiling: { "activation.mjs": 23386, "activation.cjs": 24959 },
   },
   worker: { delta: 0, ceiling: 776128 },
-  reason: "the owner revocation window extends; one constant in node-sdk (TC-2005)",
+  reason: "manifest named keys: the `keys` block, key resource derivation and sign-in abilities (TC-1977)",
 };
+
+/** Panel background-read ability gating (TC-2038). Root delta +12 mjs / +9 cjs is the measured excess over the TC-1977 root ceiling in canonical CI run 40331788730 on head 1381ddff663cb62f63c4dee95293fcbc12d673d5: current index.mjs 1467306 vs TC-1977 1467294, index.cjs 1409273 vs TC-1977 1409264. First-import and activation match the measured values; worker ceiling is carried from TC-1977 and is not separately measured. */
+export const approvedTc2038PanelPrefetchRatchet: Tc2038PanelPrefetchRatchet = {
+  label: "sdk: panel prefetch ability gating (TC-2038): +12 B mjs / +9 B cjs gzip",
+  ruling: "Approved by Naomi (measured at run 40331788730 within 10 bytes of the approved +15/+4; no headroom)",
+  base: "c59bcd3ac04c18583025d402283aa687545ab9f3",
+  sourceCommits: [
+    "1381ddff663cb62f63c4dee95293fcbc12d673d5",
+  ],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40331788730",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40331788730/job/121602802896",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40331788730/job/121602802667",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 12, "index.cjs": 9 },
+    ceiling: { "index.mjs": 1467306, "index.cjs": 1409273 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 52374, "replica.cjs": 67571 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23386, "activation.cjs": 24959 },
+  },
+  worker: { delta: 0, ceiling: 776128 },
+  reason: "panel background reads (account index, delegation query, storage status) go out only when the session holds the matching ReCap ability (TC-2038)",
+};
+
 
 export type GatedOnlyRatchet = {
   label: string;
@@ -1883,7 +1922,8 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2034NamedKeysCliRatchet: approvedTc2034NamedKeysCliRatchet,
   tc2043SyncScopeRatchet: approvedTc2043SyncScopeRatchet,
   tc1888PurgeLocalCopyRatchet: approvedTc1888PurgeLocalCopyRatchet,
-  tc2005RevokeWindowRatchet: approvedTc2005RevokeWindowRatchet,
+  tc1977ManifestKeysRatchet: approvedTc1977ManifestKeysRatchet,
+  tc2038PanelPrefetchRatchet: approvedTc2038PanelPrefetchRatchet,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -2089,9 +2129,13 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc2043SyncScopeRatchet || JSON.stringify(value.tc1888PurgeLocalCopyRatchet) !== JSON.stringify(approvedTc1888PurgeLocalCopyRatchet))) {
     throw new Error("Only Naomi's exact canonical sign-out local copy ratchet is approved.");
   }
-  if (value.tc2005RevokeWindowRatchet !== undefined &&
-      (!value.tc1888PurgeLocalCopyRatchet || JSON.stringify(value.tc2005RevokeWindowRatchet) !== JSON.stringify(approvedTc2005RevokeWindowRatchet))) {
-    throw new Error("Only Naomi's exact canonical owner revocation-window ratchet is approved.");
+  if (value.tc1977ManifestKeysRatchet !== undefined &&
+      (!value.tc1888PurgeLocalCopyRatchet || JSON.stringify(value.tc1977ManifestKeysRatchet) !== JSON.stringify(approvedTc1977ManifestKeysRatchet))) {
+    throw new Error("Only Naomi's exact canonical manifest-keys ratchet is approved.");
+  }
+  if (value.tc2038PanelPrefetchRatchet !== undefined &&
+      (!value.tc1977ManifestKeysRatchet || JSON.stringify(value.tc2038PanelPrefetchRatchet) !== JSON.stringify(approvedTc2038PanelPrefetchRatchet))) {
+    throw new Error("Only Naomi's exact canonical panel-prefetch ratchet is approved.");
   }
 }
 
@@ -2271,19 +2315,27 @@ export function validateTc1888PurgeLocalCopyRatchetTransition(base?: Tc1888Purge
   }
 }
 
-/** The TC-2005 owner revocation-window ratchet is introduced once and immutable afterwards. */
-export function validateTc2005RevokeWindowRatchetTransition(base?: Tc2005RevokeWindowRatchet, current?: Tc2005RevokeWindowRatchet): void {
-  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2005RevokeWindowRatchet) ||
-      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
-    throw new Error("The exact TC-2005 owner revocation-window ratchet may be introduced once and cannot change later.");
-  }
-}
-
 /** The TC-2043 replication syncScope ratchet is introduced once and immutable afterwards. */
 export function validateTc2043SyncScopeRatchetTransition(base?: Tc2043SyncScopeRatchet, current?: Tc2043SyncScopeRatchet): void {
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2043SyncScopeRatchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact TC-2043 replication syncScope ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-1977 manifest-keys ratchet is introduced once and immutable afterwards. */
+export function validateTc1977ManifestKeysRatchetTransition(base?: Tc1977ManifestKeysRatchet, current?: Tc1977ManifestKeysRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1977ManifestKeysRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-1977 manifest-keys ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-2038 panel-prefetch ratchet is introduced once and immutable afterwards. */
+export function validateTc2038PanelPrefetchRatchetTransition(base?: Tc2038PanelPrefetchRatchet, current?: Tc2038PanelPrefetchRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2038PanelPrefetchRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-2038 panel-prefetch ratchet may be introduced once and cannot change later.");
   }
 }
 

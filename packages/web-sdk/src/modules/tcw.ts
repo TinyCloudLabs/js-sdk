@@ -702,6 +702,8 @@ export class TinyCloudWeb {
   get duckdb(): IDuckDbService { return this.node.duckdb; }
   get hooks(): IHooksService { return this.node.hooks; }
   get encryption(): IEncryptionService { return this.node.encryption; }
+  /** Named keys bound to the signed-in session. */
+  get keys() { return this.node.keys; }
   get vault(): IDataVaultService { return this.node.vault; }
   get secrets(): ISecretsService {
     return this.secretsForSpace("secrets");

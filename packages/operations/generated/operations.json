@@ -6177,7 +6177,7 @@
       "id": "tinycloud.apps.write",
       "version": 1,
       "title": "Write personal records",
-      "description": "Run 1–10 personal-record puts, moves or requested deletes in order. Omit an ETag to create; supply the read ETag to replace. Catalog writes may precede their records in the same call. Inspect every outcome and any completed move steps before retrying.",
+      "description": "Run 1–10 personal-record puts, moves or requested deletes in order. Every value must omit top-level by, including when editing or moving a read-back record; the server supplies it. Omit an ETag to create; supply the read ETag to replace. Catalog writes may precede their records in the same call. Inspect every outcome and any completed move steps before retrying.",
       "input": {
         "type": "object",
         "properties": {
@@ -6197,6 +6197,11 @@
                     },
                     "value": {
                       "type": "object",
+                      "properties": {
+                        "by": {
+                          "not": {}
+                        }
+                      },
                       "additionalProperties": {
                         "anyOf": [
                           {
@@ -6224,7 +6229,8 @@
                             }
                           }
                         ]
-                      }
+                      },
+                      "description": "Record or catalog value without top-level by. Remove by from read-back values before edits or moves; the server supplies it."
                     },
                     "etag": {
                       "type": "string",
