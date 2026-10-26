@@ -13,21 +13,21 @@ const cid = "bafkreifgtjvoio4u4m3r5giyg267oe6t2i5rr3qvbny3tb7325dmw7ask4";
 
 // Billing's exact plain SIWE text layout, with OpenKey's host as domain.
 function billingSiwe(request: OwnerRevocationRequest, overrides: {
-  address?: string; uri?: string; nonce?: string; issuedAt?: string; expiration?: string; extra?: string;
+  address?: string; domain?: string; uri?: string; nonce?: string; issuedAt?: string; expiration?: string; extra?: string;
 } = {}): string {
   return [
-    "openkey.tinycloud.xyz wants you to sign in with your Ethereum account:",
+    `${overrides.domain ?? "openkey.so"} wants you to sign in with your Ethereum account:`,
     overrides.address ?? address, "", "",
     `URI: ${overrides.uri ?? `ucan:${request.cid}`}`,
     "Version: 1", "Chain ID: 1", `Nonce: ${overrides.nonce ?? request.nonce}`,
-    `Issued At: ${overrides.issuedAt ?? new Date(Date.parse(request.expiresAt) - 600_000).toISOString()}`,
+    `Issued At: ${overrides.issuedAt ?? new Date(Date.parse(request.expiresAt) - 570_000).toISOString()}`,
     `Expiration Time: ${overrides.expiration ?? request.expiresAt}`,
     ...(overrides.extra ? [overrides.extra] : []),
   ].join("\n");
 }
 
 function request(): OwnerRevocationRequest {
-  return { kind: "owner-revocation", ownerDid, cid, nonce: "1234567890abcdef", expiresAt: new Date(Date.now() + 600_000).toISOString() };
+  return { kind: "owner-revocation", ownerDid, cid, nonce: "1234567890abcdef", expiresAt: new Date(Date.now() + 570_000).toISOString() };
 }
 
 test("accepts billing's exact plain owner SIWE layout and its signature", async () => {
@@ -37,6 +37,15 @@ test("accepts billing's exact plain owner SIWE layout and its signature", async 
   expect(authorization).toMatch(/^[A-Za-z0-9_-]+={0,2}$/);
 });
 
+test("accepts an owner signature from any SIWE domain with no statement", async () => {
+  const input = request();
+  for (const domain of ["openkey.so", "approval.example.org"]) {
+    const siwe = billingSiwe(input, { domain });
+    await expect(verifyOwnerRevocationResponse(input, { siwe, signature: await signer.signMessage(siwe) }))
+      .resolves.toMatch(/^[A-Za-z0-9_-]+={0,2}$/);
+  }
+});
+
 test("refuses changed signer, URI, nonce, time window, statement, Not Before and Resources", async () => {
   const input = request();
   const issuedAt = new Date(Date.now() - 2_000).toISOString();
@@ -44,6 +53,7 @@ test("refuses changed signer, URI, nonce, time window, statement, Not Before and
     billingSiwe(input, { address: "0x0000000000000000000000000000000000000001" }),
     billingSiwe(input, { uri: "ucan:another" }),
     billingSiwe(input, { nonce: "another12345678" }),
+    billingSiwe(input, { issuedAt: input.expiresAt }),
     billingSiwe(input, { issuedAt: new Date(Date.now() - 601_000).toISOString() }),
     billingSiwe(input, { expiration: new Date(Date.parse(input.expiresAt) + 1_000).toISOString() }),
     billingSiwe(input, { extra: "Not Before: 2026-10-26T00:00:00.000Z" }),
@@ -74,7 +84,8 @@ test("one owner signature posts Authorization only; a 403 preserves refusal and 
   }) as typeof fetch;
   await revokeOwnerCid({ ownerDid, cid, host: "https://node.example", openKeyHost: "https://openkey.tinycloud.xyz", transport, fetchFn });
   expect(requested).toHaveLength(1);
-  expect(Date.parse(requested[0]!.expiresAt) - Date.now()).toBeLessThanOrEqual(600_000);
+  expect(Date.parse(requested[0]!.expiresAt) - Date.now()).toBeLessThanOrEqual(570_000);
+  expect(Date.parse(requested[0]!.expiresAt) - Date.now()).toBeGreaterThan(560_000);
   expect(calls).toHaveLength(1);
   expect(calls[0]!.url).toBe("https://node.example/revoke");
   expect(calls[0]!.init.method).toBe("POST");

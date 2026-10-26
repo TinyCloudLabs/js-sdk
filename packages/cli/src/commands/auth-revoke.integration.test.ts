@@ -37,10 +37,10 @@ afterEach(async () => {
 
 function ownerRevocationSiwe(request: OwnerRevocationRequest, address: string): string {
   return [
-    "openkey.tinycloud.xyz wants you to sign in with your Ethereum account:",
+    "openkey.so wants you to sign in with your Ethereum account:",
     address, "", "", `URI: ucan:${request.cid}`, "Version: 1", "Chain ID: 1",
     `Nonce: ${request.nonce}`,
-    `Issued At: ${new Date(Date.parse(request.expiresAt) - 600_000).toISOString()}`,
+    `Issued At: ${new Date(Date.parse(request.expiresAt) - 570_000).toISOString()}`,
     `Expiration Time: ${request.expiresAt}`,
   ].join("\n");
 }

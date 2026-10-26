@@ -64,7 +64,7 @@ export async function requestOwnerSignature(options: {
   const now = options.now ?? new Date();
   const request: OwnerRevocationRequest = {
     kind: "owner-revocation", ownerDid: canonicalOwnerDid(options.ownerDid), cid: options.cid,
-    nonce: randomBytes(16).toString("hex"), expiresAt: new Date(now.getTime() + 600_000).toISOString(),
+    nonce: randomBytes(16).toString("hex"), expiresAt: new Date(now.getTime() + 570_000).toISOString(),
   };
   const handoff = await (options.transport ?? startOwnerRevocationHandoff)({ request, openKeyHost: options.openKeyHost });
   try {
