@@ -196,7 +196,7 @@
     },
     "packages/cli": {
       "name": "@tinycloud/cli",
-      "version": "1.5.0-beta.7",
+      "version": "1.5.0-beta.8",
       "bin": {
         "tc": "./bin/tc",
         "tinycloud": "./bin/tinycloud",
@@ -204,7 +204,7 @@
       "dependencies": {
         "@tinycloud/node-sdk": "3.8.0-beta.3",
         "@tinycloud/node-sdk-wasm": "1.7.8",
-        "@tinycloud/operations": "0.7.7-beta.3",
+        "@tinycloud/operations": "0.7.7-beta.4",
         "@tinycloud/sdk-core": "3.8.0-beta.3",
         "@tinycloud/sdk-services": "3.8.0-beta.2",
         "@tinycloud/share-envelope": "1.3.1-beta.0",
@@ -242,7 +242,7 @@
     },
     "packages/mcp": {
       "name": "@tinycloud/mcp",
-      "version": "0.8.3-beta.3",
+      "version": "0.8.3-beta.4",
       "bin": {
         "tinycloud-mcp": "./bin/tinycloud-mcp",
         "tinycloud-mcp-http": "./bin/tinycloud-mcp-http",
@@ -252,7 +252,7 @@
         "@modelcontextprotocol/server": "2.0.0-beta.5",
         "@tinycloud/node-sdk": "3.8.0-beta.3",
         "@tinycloud/node-sdk-wasm": "1.7.8",
-        "@tinycloud/operations": "0.7.7-beta.3",
+        "@tinycloud/operations": "0.7.7-beta.4",
         "jose": "6.2.4",
       },
       "devDependencies": {
@@ -281,7 +281,7 @@
     },
     "packages/operations": {
       "name": "@tinycloud/operations",
-      "version": "0.7.7-beta.3",
+      "version": "0.7.7-beta.4",
       "dependencies": {
         "@tinycloud/node-sdk": "3.8.0-beta.3",
         "@tinycloud/sdk-core": "3.8.0-beta.3",

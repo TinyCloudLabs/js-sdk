@@ -1,5 +1,13 @@
 # @tinycloud/mcp
 
+## 0.8.3-beta.4
+
+### Patch Changes
+
+- 1fc87b6: Fix personal-app MCP guidance and generated write schemas for server-owned `by` metadata. Write examples omit `by`, and edit/move instructions tell clients to remove it from read-back values before submitting them. Advertised put/move schemas now reject top-level `by` before invocation, matching the existing runtime restriction. CLI records, nested data fields and stored/read-back attribution remain unchanged.
+- Updated dependencies [1fc87b6]
+  - @tinycloud/operations@0.7.7-beta.4
+
 ## 0.8.3-beta.3
 
 ### Patch Changes
