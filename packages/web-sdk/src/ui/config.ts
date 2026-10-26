@@ -16,6 +16,13 @@ type BottomPosition = "bottom-right" | "bottom-left" | "bottom-center";
  */
 export type UiMode = "sidebar" | "page" | "both";
 
+/**
+ * Where the app runs. `"web"` (default) is a browser page with its own wallet signer. `"native"` is a
+ * desktop or mobile shell that cannot show the permission prompt in the page: the panel then explains
+ * that and offers no working "allow" button.
+ */
+export type UiPlatform = "web" | "native";
+
 /** Config passed as `ui` on TinyCloudWeb. `ui: false` disables the UI entirely (see index.ts). */
 export interface UiConfig {
   /** Default true. false hides the button only; the panel, prompts, and open() still work. */
@@ -30,6 +37,8 @@ export interface UiConfig {
   appId?: string;
   /** Default "both". Which layouts the panel offers. */
   mode?: UiMode;
+  /** Default "web". Set "native" in a desktop or mobile shell, where the panel cannot ask for a permission itself. */
+  platform?: UiPlatform;
 }
 
 export interface ResolvedUiConfig {
@@ -39,6 +48,7 @@ export interface ResolvedUiConfig {
   readonly position: BottomPosition;
   readonly appId: string | undefined;
   readonly mode: UiMode;
+  readonly platform: UiPlatform;
 }
 
 const PLACEMENT: Record<UiPosition, BottomPosition> = {
@@ -63,5 +73,6 @@ export function resolveUiConfig(ui: UiConfig | undefined): ResolvedUiConfig {
     position,
     appId: ui?.appId,
     mode: ui?.mode === "sidebar" || ui?.mode === "page" ? ui.mode : "both",
+    platform: ui?.platform === "native" ? "native" : "web",
   };
 }

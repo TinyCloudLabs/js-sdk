@@ -83,12 +83,13 @@ export function registerUiClient(options: UiClientOptions): UiClientHandle {
 
   const id = runtime.nextClientId();
   const promptScope = createPromptScope(true);
-  const panel = createPanelClient(id, options.source, options.data);
+  const config = resolveUiConfig(options.ui);
+  const panel = createPanelClient(id, options.source, options.data, config.platform);
   // An empty display name is no name: the panel then shows the app id.
   const displayName = () => options.manifestName?.()?.trim() || undefined;
   runtime.register(id, {
     handle: panel,
-    config: resolveUiConfig(options.ui),
+    config,
     manifestAppId: options.manifestAppId,
     manifestName: displayName,
   });

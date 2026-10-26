@@ -112,6 +112,7 @@ import {
   BrowserSessionStorage,
   type BrowserSessionLoadResult,
 } from "../adapters/BrowserSessionStorage";
+import { rememberRuntimeGrants, reuseRuntimeGrants, type RuntimeGrantStore } from "./runtimeGrantPersistence";
 import { RPCProviders, ClientConfig, Extension as ExtensionType } from "../providers";
 import { resolveSpaceCreationHandler } from "../authorization/WebSpaceCreationHandler";
 import type { NotificationConfig } from "../notifications/types";
@@ -461,6 +462,8 @@ export class TinyCloudWeb {
         waitForAccountRegistrySync: () => this._node?.waitForAccountRegistrySync() ?? Promise.resolve(),
         storage: { status: () => this.storage.status() },
         storageEpisode: this.uiStorageEpisode,
+        canRequestPermissions: () => this.canRequestPanelPermissions(),
+        requestPermissions: (entries, options) => this.requestPanelPermissions(entries, options),
         signOut: this.signOut,
       },
       manifestAppId: () => {
@@ -906,6 +909,12 @@ export class TinyCloudWeb {
       } finally {
         // Also when a later step throws after the node committed the new account. A sign-out resets itself.
         if (was && was !== node.spaceId && this.signOutCount === signOuts && !this.signOutInFlight) this.uiClient.reset();
+      }
+      assertNotSignedOut();
+      // Grants the panel requested earlier come back with the session: the same key, no signer.
+      const grantStore = this.runtimeGrantStore();
+      if (grantStore !== undefined) {
+        await reuseRuntimeGrants(grantStore, restoreAddress, (grant) => node.useRuntimeDelegation(grant));
       }
       assertNotSignedOut();
       this.resetSessionScopedCaches();
@@ -1367,6 +1376,44 @@ export class TinyCloudWeb {
             : {}),
         }
       : result;
+  }
+
+  /** True when the panel may ask for a permission: a manifest, a page signer and a live session exist. */
+  private canRequestPanelPermissions(): boolean {
+    const manifest = Array.isArray(this._manifest) ? this._manifest[0] : this._manifest;
+    return manifest !== undefined && this._node !== undefined && !this._node.isSessionOnly && this.session() !== undefined;
+  }
+
+  /**
+   * The panel's request for one tab's entry. A grant is kept with the stored session record so it survives a reload;
+   * the entry is not stored when the user signed out while the prompt was open.
+   */
+  private async requestPanelPermissions(
+    entries: PermissionEntry[],
+    options: RequestPermissionsOptions,
+  ): Promise<{ approved: boolean }> {
+    const signOuts = this.signOutCount;
+    const result = await this.requestPermissions(entries, options);
+    const address = this._node?.address;
+    const store = this.runtimeGrantStore();
+    if (
+      result.approved &&
+      result.delegations !== undefined &&
+      store !== undefined &&
+      address !== undefined &&
+      this.signOutCount === signOuts &&
+      this.signOutInFlight === 0
+    ) {
+      await rememberRuntimeGrants(store, address, result.delegations);
+    }
+    return { approved: result.approved };
+  }
+
+  private runtimeGrantStore(): RuntimeGrantStore | undefined {
+    const store = this.sessionStorage as Partial<BrowserSessionStorage> | undefined;
+    return store?.loadRuntimeGrants !== undefined && store.saveRuntimeGrants !== undefined
+      ? (store as BrowserSessionStorage)
+      : undefined;
   }
 
   getRuntimePermissionDelegations(

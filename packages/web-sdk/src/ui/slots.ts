@@ -18,6 +18,7 @@ import type { ShellLayout } from "./panel";
 import type { ReceiptRequest } from "./panel-toasts";
 import type { IconName } from "./sections/ui";
 import type { StringKey } from "./strings";
+import type { UiPlatform } from "./config";
 import type { ToastRequest } from "./toast-store";
 
 /** Panel sections, in nav order. Ids match the full-page and sidebar mockup. */
@@ -235,10 +236,19 @@ export interface PanelClient {
         subscribeDelegated(cb: () => void): () => void;
       }
     | undefined;
-  /** Authority request for storage and sync prompts. Undefined when the client does not expose it. */
+  /**
+   * Asks for the read-only permission a tab is missing. Defined only when the page can show the SDK's permission prompt
+   * (a page signer and a manifest exist); undefined otherwise. Resolves `{ approved: false, code: "declined" }` when
+   * the user declines or closes the prompt and `code: "failed"` when the request errors. One request at a time:
+   * a second call while one is open returns the open one.
+   */
   readonly requestAuthority?:
     | ((kind: AuthorityKind) => Promise<{ approved: boolean; code?: FacadeErrorCode }>)
     | undefined;
+  /** False when `requestAuthority` has no entry for `kind`, so a tab has no button for it. Absent: unknown. */
+  readonly canRequest?: ((kind: AuthorityKind) => boolean) | undefined;
+  /** Where the app runs (`ui.platform`). Absent: web. */
+  readonly platform?: UiPlatform | undefined;
   /** E: request log, present only in developer mode. */
   readonly requests?: RequestLogReader | undefined;
   /** Panel data for the views. Undefined unless the host supplied a data factory (harness or preview); production panels show placeholders. */
