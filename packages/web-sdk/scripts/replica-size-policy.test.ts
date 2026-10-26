@@ -3173,8 +3173,8 @@ describe("capped replica repair backoff (TC-2096, #759) size ratchet", () => {
     expect(row().canonicalCI.jobs).toHaveLength(2);
     expect(ancestryPins(current, false)).toContainEqual({ row: "tc2096RepairBackoffRatchet", pin: row().sourceCommits[0] });
     expect(rootCeilings(current).find((entry) => entry.row === "tc2096RepairBackoffRatchet")).toEqual({ row: "tc2096RepairBackoffRatchet", ceiling: row().root.ceiling });
-    expect(MAX_WORKER_GZIP_BYTES).toBe(row().worker.ceiling);
-    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(row().replicaWorker.ceiling);
+    expect(MAX_WORKER_GZIP_BYTES).toBe(newestKvWorkerCeiling());
+    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(newestReplicaWorkerCeiling());
   });
 
   it("pins the TC-2096 first-import +279/+275 and activation -2/-2 deltas with their measured ceilings", () => {
@@ -3223,6 +3223,8 @@ describe("lazy replica content fetch (TC-2096, #761) size ratchet", () => {
     expect(row().replicaWorker.ceiling).toBe(prerequisite().replicaWorker.ceiling + row().replicaWorker.delta);
     expect(rootCeilings(current).at(-1)).toEqual({ row: "tc2096LazyContentRatchet", ceiling: row().root.ceiling });
     expect(ancestryPins(current, false)).toContainEqual({ row: "tc2096LazyContentRatchet", pin: row().sourceCommits[0] });
+    expect(MAX_WORKER_GZIP_BYTES).toBe(newestKvWorkerCeiling());
+    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(newestReplicaWorkerCeiling());
   });
 
   it("refuses changed bytes or a missing repair-backoff prerequisite", () => {
