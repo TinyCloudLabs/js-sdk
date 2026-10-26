@@ -1,5 +1,13 @@
 # @tinycloudlabs/node-sdk
 
+## 3.8.0-beta.6
+
+### Patch Changes
+
+- 479205d: Owner revocation signatures remain valid for 10 minutes from signing.
+
+  Details: TC-2005
+
 ## 3.8.0-beta.5
 
 ### Patch Changes
