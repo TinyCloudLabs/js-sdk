@@ -1795,5 +1795,34 @@
       "ceiling": 776128
     },
     "reason": "opt-in `replication.syncScope: 'prefixes'` keeps sign-in kv/sync on declared prefixes when the manifest grants root KV (TinyCloud Home)."
+  },
+  "tc1977ManifestKeysRatchet": {
+    "label": "sdk: manifest named keys (TC-1977, #748): +2,666 B mjs / +2,814 B cjs gzip",
+    "ruling": "Approved by Naomi (exact canonical CI bytes at run 40312328298; no headroom)",
+    "base": "fb44626f80951444bf666df003209a2739a7953a",
+    "sourceCommits": [
+      "545e270032f8f8b593ac9e55fee504a58943534d"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40312328298",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40312328298/job/121536315917",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40312328298/job/121536315559"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 2666, "index.cjs": 2814 },
+      "ceiling": { "index.mjs": 1467024, "index.cjs": 1408996 }
+    },
+    "firstImport": {
+      "delta": { "replica.mjs": 0, "replica.cjs": 0 },
+      "ceiling": { "replica.mjs": 51965, "replica.cjs": 67178 }
+    },
+    "activation": {
+      "delta": { "activation.mjs": 0, "activation.cjs": 0 },
+      "ceiling": { "activation.mjs": 23117, "activation.cjs": 24700 }
+    },
+    "worker": { "delta": 0, "ceiling": 776128 },
+    "reason": "manifest named keys: the `keys` block, key resource derivation and sign-in abilities (TC-1977)"
   }
 }

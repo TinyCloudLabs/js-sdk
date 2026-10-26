@@ -20,6 +20,7 @@ import { validateTc1910SigningConsistencyRatchetTransition } from "./replica-siz
 import { validateTc848SettingsPanelRatchetTransition } from "./replica-size-policy";
 import { validateTc2034NamedKeysCliRatchetTransition } from "./replica-size-policy";
 import { validateTc2043SyncScopeRatchetTransition } from "./replica-size-policy";
+import { validateTc1977ManifestKeysRatchetTransition } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 import { replicaOwnedPath } from "./replica-owned-path";
 import { webSdkTestExitFailure } from "./web-sdk-test-exit";
@@ -427,6 +428,13 @@ if (prBaseSha) {
   if (tc2043SyncScope !== undefined && baseLedger.tc2043SyncScopeRatchet === undefined &&
       (baseLedger.tc2034NamedKeysCliRatchet === undefined || !hasAncestor(repoRoot, tc2043SyncScope.sourceCommits.at(-1)!))) {
     console.error("The replication syncScope ratchet requires the merged named-keys ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc1977ManifestKeysRatchetTransition(baseLedger.tc1977ManifestKeysRatchet, ledger.tc1977ManifestKeysRatchet);
+  const tc1977ManifestKeys = ledger.tc1977ManifestKeysRatchet;
+  if (tc1977ManifestKeys !== undefined && baseLedger.tc1977ManifestKeysRatchet === undefined &&
+      (baseLedger.tc2043SyncScopeRatchet === undefined || !hasAncestor(repoRoot, tc1977ManifestKeys.sourceCommits.at(-1)!))) {
+    console.error("The manifest-keys ratchet requires the merged syncScope ratchet and its measured source commit.");
     failed = true;
   }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
