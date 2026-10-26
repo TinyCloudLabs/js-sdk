@@ -199,6 +199,13 @@
       "index.mjs": 41,
       "index.cjs": 30,
       "note": "Replica gzip growth measured against this PR's merge base"
+    },
+    {
+      "pr": "#728",
+      "ticket": "TC-1888",
+      "index.mjs": 0,
+      "index.cjs": 0,
+      "note": "Replica gzip growth measured against this PR's merge base"
     }
   ],
   "phase2Ratchet": {
@@ -1795,5 +1802,55 @@
       "ceiling": 776128
     },
     "reason": "opt-in `replication.syncScope: 'prefixes'` keeps sign-in kv/sync on declared prefixes when the manifest grants root KV (TinyCloud Home)."
+  },
+  "tc1888PurgeLocalCopyRatchet": {
+    "label": "sign-out erases the local copy and purgeLocalCopy (TC-1888, #728)",
+    "ruling": "Approved by Naomi (exact canonical CI bytes at run 40303939643; no headroom)",
+    "base": "bd41ce30df6cad86ce501a2230ecd2afebef2e66",
+    "sourceCommits": [
+      "36dd6e5061735907e200222fc5cac362076d024d"
+    ],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40303939643",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40303939643/job/121508294847",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40303939643/job/121508294935"
+      ]
+    },
+    "root": {
+      "delta": {
+        "index.mjs": 271,
+        "index.cjs": 274
+      },
+      "ceiling": {
+        "index.mjs": 1464629,
+        "index.cjs": 1406456
+      }
+    },
+    "firstImport": {
+      "delta": {
+        "replica.mjs": 409,
+        "replica.cjs": 393
+      },
+      "ceiling": {
+        "replica.mjs": 52374,
+        "replica.cjs": 67571
+      }
+    },
+    "activation": {
+      "delta": {
+        "activation.mjs": 270,
+        "activation.cjs": 261
+      },
+      "ceiling": {
+        "activation.mjs": 23386,
+        "activation.cjs": 24959
+      }
+    },
+    "worker": {
+      "delta": 0,
+      "ceiling": 776128
+    },
+    "reason": "sign-out and account switch erase the local copy with an SDK retry and a failure event; the minimum reviewed shape; optional code in the replica chunk."
   }
 }

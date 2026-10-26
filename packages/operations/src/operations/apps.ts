@@ -59,7 +59,7 @@ export const appsOperationDefinitions: readonly (
     sensitivity: { input: ["/prefixes", "/keys"], output: ["/lists", "/records"] }, authority: appsAuthority, execute: executeRead,
   },
   {
-    id: "tinycloud.apps.write", version: 1, title: "Write personal records", description: "Run 1–10 personal-record puts, moves or requested deletes in order. Omit an ETag to create; supply the read ETag to replace. Catalog writes may precede their records in the same call. Inspect every outcome and any completed move steps before retrying.",
+    id: "tinycloud.apps.write", version: 1, title: "Write personal records", description: "Run 1–10 personal-record puts, moves or requested deletes in order. Every value must omit top-level by, including when editing or moving a read-back record; the server supplies it. Omit an ETag to create; supply the read ETag to replace. Catalog writes may precede their records in the same call. Inspect every outcome and any completed move steps before retrying.",
     input: WriteInputSchema, output: WriteOutputSchema, effects: ["destructive"], runtime: "authenticated", postures: POSTURES, exposure: EXPOSURE,
     sensitivity: { input: ["/ops"], output: ["/ops"] }, authority: appsAuthority, execute: executeWrite,
   },
