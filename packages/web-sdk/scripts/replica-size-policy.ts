@@ -308,6 +308,8 @@ export type Tc1977ManifestKeysRatchet = HardeningRatchet;
 export type Tc2038PanelPrefetchRatchet = HardeningRatchet;
 /** One reviewed exact-byte row for the owner revocation window (TC-2005, #745). */
 export type Tc2005RevokeWindowRatchet = HardeningRatchet;
+/** One reviewed exact-byte row for the capped replica repair backoff (TC-2096, #759); replicaWorker is the replica.worker.js ceiling. */
+export type Tc2096RepairBackoffRatchet = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -354,6 +356,7 @@ export type Ledger = {
   tc1977ManifestKeysRatchet?: Tc1977ManifestKeysRatchet;
   tc2038PanelPrefetchRatchet?: Tc2038PanelPrefetchRatchet;
   tc2005RevokeWindowRatchet?: Tc2005RevokeWindowRatchet;
+  tc2096RepairBackoffRatchet?: Tc2096RepairBackoffRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -930,6 +933,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc1977ManifestKeysRatchet !== undefined) pins.push({ row: "tc1977ManifestKeysRatchet", pin: root.tc1977ManifestKeysRatchet.sourceCommits.at(-1)! });
   if (root.tc2038PanelPrefetchRatchet !== undefined) pins.push({ row: "tc2038PanelPrefetchRatchet", pin: root.tc2038PanelPrefetchRatchet.sourceCommits.at(-1)! });
   if (root.tc2005RevokeWindowRatchet !== undefined) pins.push({ row: "tc2005RevokeWindowRatchet", pin: root.tc2005RevokeWindowRatchet.sourceCommits.at(-1)! });
+  if (root.tc2096RepairBackoffRatchet !== undefined) pins.push({ row: "tc2096RepairBackoffRatchet", pin: root.tc2096RepairBackoffRatchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -982,6 +986,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc1977ManifestKeysRatchet", root.tc1977ManifestKeysRatchet?.root.ceiling],
     ["tc2038PanelPrefetchRatchet", root.tc2038PanelPrefetchRatchet?.root.ceiling],
     ["tc2005RevokeWindowRatchet", root.tc2005RevokeWindowRatchet?.root.ceiling],
+    ["tc2096RepairBackoffRatchet", root.tc2096RepairBackoffRatchet?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -1885,6 +1890,36 @@ export const approvedTc2005RevokeWindowRatchet: Tc2005RevokeWindowRatchet = {
   reason: "the owner revocation window extends; one constant in node-sdk (TC-2005)",
 };
 
+/** Canonical CI run 40343675308 (TC-2096, #759): the kv-storage worker rises by 340 bytes and replica.worker.js by 323; root, first import and activation are unchanged. */
+export const approvedTc2096RepairBackoffRatchet: Tc2096RepairBackoffRatchet = {
+  label: "capped replica repair backoff (TC-2096, #759): kv-storage worker +340 B, replica worker +323 B gzip",
+  ruling: "Approved by Naomi (exact canonical CI bytes at run 40343675308; no headroom)",
+  base: "dc74efaad0363281b19dc389e3a6a5467cfde2cb",
+  sourceCommits: ["c6b4703d15cb8b711f16629d8ee0fe2da1b3c675"],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40343675308",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40343675308/job/121644785274",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40343675308/job/121644785810",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 0, "index.cjs": 0 },
+    ceiling: { "index.mjs": 1467358, "index.cjs": 1409273 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 52374, "replica.cjs": 67571 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23386, "activation.cjs": 24959 },
+  },
+  worker: { delta: 340, ceiling: 776468 },
+  replicaWorker: { delta: 323, ceiling: 770416 },
+  reason: "the replica retries a value it could not verify with growing gaps and gives up after five tries (TC-2096)",
+};
+
 export type GatedOnlyRatchet = {
   label: string;
   sourceCommit: string;
@@ -1959,6 +1994,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc1977ManifestKeysRatchet: approvedTc1977ManifestKeysRatchet,
   tc2038PanelPrefetchRatchet: approvedTc2038PanelPrefetchRatchet,
   tc2005RevokeWindowRatchet: approvedTc2005RevokeWindowRatchet,
+  tc2096RepairBackoffRatchet: approvedTc2096RepairBackoffRatchet,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -2176,6 +2212,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
       (!value.tc2038PanelPrefetchRatchet || JSON.stringify(value.tc2005RevokeWindowRatchet) !== JSON.stringify(approvedTc2005RevokeWindowRatchet))) {
     throw new Error("Only Naomi's exact canonical owner revocation-window ratchet is approved.");
   }
+  if (value.tc2096RepairBackoffRatchet !== undefined &&
+      (!value.tc2005RevokeWindowRatchet || JSON.stringify(value.tc2096RepairBackoffRatchet) !== JSON.stringify(approvedTc2096RepairBackoffRatchet))) {
+    throw new Error("Only Naomi's exact canonical repair-backoff ratchet is approved.");
+  }
 }
 
 /** The #606 worker ratchet is introduced once at its exact canonical bytes and immutable afterwards. */
@@ -2383,6 +2423,14 @@ export function validateTc2005RevokeWindowRatchetTransition(base?: Tc2005RevokeW
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2005RevokeWindowRatchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact TC-2005 owner revocation-window ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-2096 repair-backoff ratchet is introduced once and immutable afterwards. */
+export function validateTc2096RepairBackoffRatchetTransition(base?: Tc2096RepairBackoffRatchet, current?: Tc2096RepairBackoffRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2096RepairBackoffRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-2096 repair-backoff ratchet may be introduced once and cannot change later.");
   }
 }
 

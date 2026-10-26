@@ -30,6 +30,7 @@ import { approvedTc2043SyncScopeRatchet, validateTc2043SyncScopeRatchetTransitio
 import { approvedTc1977ManifestKeysRatchet, validateTc1977ManifestKeysRatchetTransition, type Tc1977ManifestKeysRatchet } from "./replica-size-policy";
 import { approvedTc2038PanelPrefetchRatchet, validateTc2038PanelPrefetchRatchetTransition, type Tc2038PanelPrefetchRatchet } from "./replica-size-policy";
 import { approvedTc2005RevokeWindowRatchet, validateTc2005RevokeWindowRatchetTransition, type Tc2005RevokeWindowRatchet } from "./replica-size-policy";
+import { approvedTc2096RepairBackoffRatchet, validateTc2096RepairBackoffRatchetTransition, type Tc2096RepairBackoffRatchet } from "./replica-size-policy";
 import { activeRootCeiling, approvedLedgerRows, rootCeilingFor, rootCeilings } from "./replica-size-policy";
 import { approvedTc1443Ratchet, approvedTc1443bRatchet, approvedTc1448Ratchet, approvedTc1466Ratchet, validateTc1443RatchetTransition, validateTc1443bRatchetTransition, validateTc1448RatchetTransition, validateTc1466RatchetTransition, type Tc1443Ratchet, type Tc1443bRatchet, type Tc1448Ratchet, type Tc1466Ratchet } from "./replica-size-policy";
 import { ancestryPins, assertCiSizeToolchain, approvedCiToolchainCorrection, approvedFixRequiredRatchet, approvedGatedOnlyRatchet, approvedHardeningRatchet, approvedLogoutRatchet, approvedTc1413Ratchet, approvedTc1424Ratchet, approvedTc1432Ratchet, approvedTc1436Ratchet, ciCorrectionPolicyOnlyPaths, hasAncestor, isPolicyOnlySinceApprovedSource, landingCommit, pinLandedOn, validateCiToolchainTransition, validateGatedOnlyRatchet, validateHardeningRatchetTransition, validateLedger, validateLogoutRatchetTransition, validateMasterMergeResolutionTransition, validateTc1413RatchetTransition, validateTc1424RatchetTransition, validateTc1432RatchetTransition, validateTc1436RatchetTransition, type HardeningRatchet, type Ledger, type LogoutRatchet, type MasterMergeResolution, type Tc1413Ratchet, type Tc1424Ratchet, type Tc1432Ratchet, type Tc1436Ratchet } from "./replica-size-policy";
@@ -48,6 +49,11 @@ const newestKvWorkerCeiling = () => {
   const rows = current as unknown as Record<string, { worker?: { ceiling: number } } | undefined>;
   const newest = Object.keys(rows).filter((key) => key !== "tc1827ReplicaWorkerRatchet" && rows[key]?.worker !== undefined).at(-1)!;
   return rows[newest]!.worker!.ceiling;
+};
+const newestReplicaWorkerCeiling = () => {
+  const rows = current as unknown as Record<string, { replicaWorker?: { ceiling: number } } | undefined>;
+  const newest = Object.keys(rows).filter((key) => rows[key]?.replicaWorker !== undefined).at(-1)!;
+  return rows[newest]!.replicaWorker!.ceiling;
 };
 
 // Ceiling fields only: phase2Ratchet's ledger row carries rationale and safeCuts metadata its approved constant does not.
@@ -2318,7 +2324,7 @@ describe("replica worker (TC-1827 follow-up) first ceiling ratchet", () => {
     expect(() => validateLedger(current)).not.toThrow();
     expect(JSON.stringify(current.tc1827ReplicaWorkerRatchet)).toBe(JSON.stringify(approvedTc1827ReplicaWorkerRatchet));
     expect(row().worker).toEqual({ delta: 0, ceiling: 770093 });
-    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(row().worker.ceiling);
+    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(newestReplicaWorkerCeiling());
     expect(MAX_WORKER_GZIP_BYTES).toBe(newestKvWorkerCeiling());
     expect(row().canonicalCI.run).toBe("https://github.com/TinyCloudLabs/js-sdk/actions/runs/39949887460");
     expect(row().canonicalCI.jobs).toHaveLength(2);
@@ -2890,6 +2896,7 @@ delete tc2043Ledger.tc1888PurgeLocalCopyRatchet;
 delete tc2043Ledger.tc1977ManifestKeysRatchet;
 delete tc2043Ledger.tc2038PanelPrefetchRatchet;
 delete tc2043Ledger.tc2005RevokeWindowRatchet;
+delete tc2043Ledger.tc2096RepairBackoffRatchet;
 tc2043Ledger.entries = structuredClone(current.entries.slice(0, current.entries.findIndex((entry) => entry.pr === "#728")));
 describe("replication syncScope opt-in (#742, TC-2043) size ratchet", () => {
   const row = () => structuredClone(approvedTc2043SyncScopeRatchet);
@@ -3113,7 +3120,7 @@ describe("owner revocation window (TC-2005, #745) size ratchet", () => {
     expect(row().worker).toEqual({ delta: 0, ceiling: 776128 });
     expect(row().canonicalCI.jobs).toHaveLength(2);
     expect(ancestryPins(current, false)).toContainEqual({ row: "tc2005RevokeWindowRatchet", pin: row().sourceCommits[0] });
-    expect(rootCeilings(current).at(-1)).toEqual({ row: "tc2005RevokeWindowRatchet", ceiling: row().root.ceiling });
+    expect(rootCeilings(current).find(({ row: name }) => name === "tc2005RevokeWindowRatchet")).toEqual({ row: "tc2005RevokeWindowRatchet", ceiling: row().root.ceiling });
   });
 
   it("refuses changed bytes, provenance or a missing panel-prefetch prerequisite", () => {
@@ -3145,6 +3152,51 @@ describe("owner revocation window (TC-2005, #745) size ratchet", () => {
     changed.root.ceiling["index.cjs"]++;
     expect(() => validateTc2005RevokeWindowRatchetTransition(undefined, changed)).toThrow();
     expect(() => validateTc2005RevokeWindowRatchetTransition(row(), undefined)).toThrow();
+  });
+});
+
+describe("capped replica repair backoff (TC-2096, #759) size ratchet", () => {
+  const row = () => structuredClone(approvedTc2096RepairBackoffRatchet);
+
+  it("pins exact CI bytes over the revocation-window row, keeps root, first import and activation, and carries both worker deltas", () => {
+    expect(() => validateLedger(current)).not.toThrow();
+    expect(current.tc2096RepairBackoffRatchet).toEqual(approvedTc2096RepairBackoffRatchet);
+    expect(row().root).toEqual({ delta: { "index.mjs": 0, "index.cjs": 0 }, ceiling: approvedTc2005RevokeWindowRatchet.root.ceiling });
+    expect(row().firstImport).toEqual({ delta: { "replica.mjs": 0, "replica.cjs": 0 }, ceiling: approvedTc2005RevokeWindowRatchet.firstImport.ceiling });
+    expect(row().activation).toEqual({ delta: { "activation.mjs": 0, "activation.cjs": 0 }, ceiling: approvedTc2005RevokeWindowRatchet.activation.ceiling });
+    expect(row().worker.delta).toBe(340);
+    expect(row().worker.ceiling).toBe(approvedTc2005RevokeWindowRatchet.worker.ceiling + row().worker.delta);
+    expect(row().replicaWorker.delta).toBe(323);
+    expect(row().replicaWorker.ceiling).toBe(approvedTc1827ReplicaWorkerRatchet.worker.ceiling + row().replicaWorker.delta);
+    expect(row().canonicalCI.jobs).toHaveLength(2);
+    expect(ancestryPins(current, false)).toContainEqual({ row: "tc2096RepairBackoffRatchet", pin: row().sourceCommits[0] });
+    expect(rootCeilings(current).at(-1)).toEqual({ row: "tc2096RepairBackoffRatchet", ceiling: row().root.ceiling });
+    expect(MAX_WORKER_GZIP_BYTES).toBe(row().worker.ceiling);
+    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(row().replicaWorker.ceiling);
+  });
+
+  it("refuses changed bytes, provenance or a missing revocation-window prerequisite", () => {
+    const changedWorker = copy(current);
+    changedWorker.tc2096RepairBackoffRatchet!.worker.ceiling++;
+    expect(() => validateLedger(changedWorker)).toThrow("repair-backoff");
+    const changedReplica = copy(current);
+    changedReplica.tc2096RepairBackoffRatchet!.replicaWorker!.ceiling++;
+    expect(() => validateLedger(changedReplica)).toThrow("repair-backoff");
+    const changedRoot = copy(current);
+    changedRoot.tc2096RepairBackoffRatchet!.root.ceiling["index.cjs"]++;
+    expect(() => validateLedger(changedRoot)).toThrow("repair-backoff");
+    const withoutPrerequisite = copy(current);
+    delete withoutPrerequisite.tc2005RevokeWindowRatchet;
+    expect(() => validateLedger(withoutPrerequisite)).toThrow("repair-backoff");
+  });
+
+  it("may be introduced once and never changed or removed", () => {
+    expect(() => validateTc2096RepairBackoffRatchetTransition(undefined, row())).not.toThrow();
+    expect(() => validateTc2096RepairBackoffRatchetTransition(row(), row())).not.toThrow();
+    const changed = row();
+    changed.worker.ceiling++;
+    expect(() => validateTc2096RepairBackoffRatchetTransition(undefined, changed)).toThrow();
+    expect(() => validateTc2096RepairBackoffRatchetTransition(row(), undefined)).toThrow();
   });
 });
 
