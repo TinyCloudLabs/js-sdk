@@ -5733,6 +5733,7 @@ var init_dist = __esm({
       #now;
       #leaseTtlMs;
       #onCommit;
+      #contentFetch;
       /** Failed repair fetches of this session, by key and ETag hash. Never persisted: a new `Replica` retries afresh. */
       #repairTries = /* @__PURE__ */ new Map();
       constructor(options) {
@@ -5742,6 +5743,7 @@ var init_dist = __esm({
         this.#now = options.now ?? Date.now;
         this.#leaseTtlMs = options.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS;
         this.#onCommit = options.onCommit;
+        this.#contentFetch = options.contentFetch ?? "eager";
       }
       async #state() {
         const state2 = await this.#store.open();
@@ -6070,6 +6072,7 @@ var init_dist = __esm({
           changes[candidate.index].content = true;
           return false;
         });
+        if (this.#contentFetch === "lazy") return { changes, blobs, fetched: 0 };
         let fetched2 = 0;
         for (let start = 0; start < needed.length; start += FETCH_CHUNK) {
           const chunk = needed.slice(start, start + FETCH_CHUNK);
@@ -6089,6 +6092,7 @@ var init_dist = __esm({
         return { changes, blobs, fetched: fetched2 };
       }
       async #repair(attempt, cursor, nodeDid, coverage, retentionGrantCid) {
+        if (this.#contentFetch === "lazy") return 0;
         const all = await this.#store.pendingRepairs(Number.MAX_SAFE_INTEGER);
         const now = this.#now();
         const pendingIds = new Set(all.map((entry) => repairId(entry)));

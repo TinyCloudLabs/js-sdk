@@ -38,6 +38,7 @@
     "mcp-token-status",
     "owner-revocation-window",
     "replica-repair-backoff",
+    "replication-content-fetch-lazy",
     "sdk-manifest-app-keys",
     "tc-apps-mcp-write-attribution",
     "tc1737-createlink-floor",
