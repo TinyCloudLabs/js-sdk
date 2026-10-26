@@ -44,6 +44,7 @@
     "tc-apps-mcp-write-attribution",
     "tc1737-createlink-floor",
     "tc1888-purge-local-copy",
+    "tc1977-openkey-signin",
     "tc2038-panel-prefetch",
     "tc2043-sync-scope",
     "tc2072-web-location-guard",
