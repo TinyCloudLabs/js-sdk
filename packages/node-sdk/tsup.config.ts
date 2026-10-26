@@ -23,6 +23,7 @@ export default defineConfig({
     '@tinycloud/sdk-services',
     '@tinycloud/sdk-services/kv/replication',
     '@tinycloud/sdk-services/encryption/named-keys',
+    './encryption-keys.js',
     '@tinycloud/node-sdk-wasm',
     '@tinycloud/replica',
     '@tinycloud/replica/sqlite',

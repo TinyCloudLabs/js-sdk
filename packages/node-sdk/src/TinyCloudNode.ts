@@ -203,7 +203,7 @@ import {
 } from "@tinycloud/sdk-services";
 import { RequestLog, observeReplicaReads, readOnlyRequestLog } from "@tinycloud/sdk-services/telemetry/requestLog";
 import { parseEncryptionResource } from "@tinycloud/sdk-services/encryption/resource";
-import { createNamedKeyClient, type NamedKeyClient } from "./encryption-keys";
+import type { NamedKeyClient } from "./encryption-keys";
 import { NodeUserAuthorization } from "./authorization/NodeUserAuthorization";
 import { refuseCaveated } from "./authorization/caveatRefusal";
 import type { SignStrategy } from "./authorization/strategies";
@@ -1363,6 +1363,8 @@ export class TinyCloudNode {
   private _hooks?: HooksService;
   private _vault?: DataVaultService;
   private _encryption?: EncryptionService;
+  private _namedKeyClient?: Promise<NamedKeyClient>;
+  private _keysUnavailable: string[] = [];
   private _baseVaults = new Map<string, DataVaultService>();
   private _baseSecrets = new Map<string, ISecretsService>();
   private _secrets = new Map<string, ISecretsService>();
@@ -2394,6 +2396,8 @@ export class TinyCloudNode {
     this._hooks = undefined;
     this._vault = undefined;
     this._encryption = undefined;
+    this._namedKeyClient = undefined;
+    this._keysUnavailable = [];
     this._baseVaults.clear();
     this._baseSecrets.clear();
     this._secrets.clear();
@@ -2541,6 +2545,8 @@ export class TinyCloudNode {
     this._hooks = undefined;
     this._vault = undefined;
     this._encryption = undefined;
+    this._namedKeyClient = undefined;
+    this._keysUnavailable = [];
     this._baseVaults.clear();
     this._baseSecrets.clear();
     this._secrets.clear();
@@ -2618,11 +2624,21 @@ export class TinyCloudNode {
     await this.ensureRequestedEncryptionNetworks();
     this.assertSessionEpoch(epoch, "Sign-in");
 
+    this._keysUnavailable = this.auth?.unavailableKeyPaths ?? [];
+    if (this._keysUnavailable.length > 0) {
+      this.notificationHandler.warning(`Named keys unavailable: ${this._keysUnavailable.join(", ")}`);
+    }
     if (this.nodeFeatures.includes("encryption-named-keys-v1")) {
       for (const manifest of this.auth?.capabilityRequest?.manifests ?? []) {
         for (const declaration of manifest.keys ?? []) {
-          if ("path" in declaration && declaration.abilities.includes("key.create")) {
-            await this.keys.ensureKey(declaration.path);
+          if ("path" in declaration && declaration.abilities.includes("key.create") &&
+              !this._keysUnavailable.includes(declaration.path)) {
+            try {
+              await this.keys.ensureKey(declaration.path);
+            } catch (error) {
+              this._keysUnavailable.push(declaration.path);
+              this.notificationHandler.warning(`Named key unavailable: ${declaration.path}`);
+            }
             this.assertSessionEpoch(epoch, "Sign-in");
           }
         }
@@ -3602,7 +3618,9 @@ export class TinyCloudNode {
         resource.path.startsWith("urn:tinycloud:encryption:") &&
         resource.actions.includes(DECRYPT_ACTION)
       ) {
-        const parsed = parseEncryptionResource(resource.path);
+        const parsed = resource.path.includes("/")
+          ? parseEncryptionResource(resource.path)
+          : { ...parseNetworkId(resource.path), kind: "network" as const };
         if (parsed.kind === "network") networkIds.add(resource.path);
       }
     }
@@ -6191,7 +6209,26 @@ export class TinyCloudNode {
 
   /** Named keys bound to the current session. */
   get keys(): NamedKeyClient {
-    return createNamedKeyClient(this);
+    return new Proxy({} as NamedKeyClient, {
+      get: (_target, property) => {
+        if (property === "refreshNodeInfo") {
+          return () => { void this._namedKeyClient?.then((client) => client.refreshNodeInfo()); };
+        }
+        if (typeof property !== "string") return undefined;
+        return (...args: unknown[]) => {
+          this._namedKeyClient ??= import("./encryption-keys.js").then(({ createNamedKeyClient }) => createNamedKeyClient(this));
+          return this._namedKeyClient.then((client) => {
+            const method = (client as unknown as Record<string, (...args: unknown[]) => unknown>)[property];
+            return method.apply(client, args);
+          });
+        };
+      },
+    });
+  }
+
+  /** Manifest key paths unavailable during the active sign-in. */
+  get keysUnavailable(): readonly string[] {
+    return this._keysUnavailable;
   }
 
   async getEncryptionNetwork(

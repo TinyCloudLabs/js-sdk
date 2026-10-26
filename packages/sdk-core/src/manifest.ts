@@ -17,7 +17,7 @@
 
 import ms from "ms";
 import { ACCOUNT_MANIFEST_PERMISSIONS } from "@tinycloud/bootstrap";
-import { resolveSecretPath, SECRET_NAME_RE } from "@tinycloud/sdk-services";
+import { resolveSecretPath, SECRET_NAME_RE, parseNetworkId } from "@tinycloud/sdk-services";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -514,6 +514,14 @@ function expandEncryptionPermissionEntry(
       `tinycloud.encryption entries require path to be a networkId URN ` +
         `(got ${JSON.stringify(entry.path)})`,
     );
+  }
+  if (entry.path.includes("/")) {
+    throw new ManifestValidationError("named keys go in manifest.keys");
+  }
+  try {
+    parseNetworkId(entry.path);
+  } catch {
+    throw new ManifestValidationError("tinycloud.encryption entries require a valid networkId URN");
   }
   const normalizedActions: string[] = [];
   for (const action of entry.actions) {
