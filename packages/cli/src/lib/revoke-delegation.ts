@@ -189,6 +189,7 @@ export async function revokeDelegationOnNode(params: {
           "RAW_RECAP_RESOURCE_UNSUPPORTED",
           `Cannot revoke "${cid}": this CLI profile has no record of this grant and the node's record does not match the signed-in owner.`,
           ExitCode.PERMISSION_DENIED,
+          profile.authMethod === "openkey" ? { hint: "This permission can't be revoked from the CLI yet. Revoke it at https://account.tinycloud.xyz/delegations." } : undefined,
         );
       }
       fallbackSpaceId = fallback.space;
