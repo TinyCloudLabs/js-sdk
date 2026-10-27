@@ -63,8 +63,8 @@ describe("tc share command contract", () => {
   test("refuses email-addressed shares from a sign-in without decrypt with a clear message and exit 5 (TC-1753)", () => {
     const refusal = shareCliError(new SharePublishAuthorityError({ kind: "decrypt-not-held" }));
     expect([refusal.code, refusal.exitCode]).toEqual(["PERMISSION_DENIED", 5]);
-    expect(refusal.message).toBe("this sign-in can't create email-addressed shares: it has no permission to decrypt with the account's key. Nothing was shared.");
-    expect(refusal.metadata?.hint).toBe("Share it from https://share.tinycloud.xyz while signed in as the account owner, or ask the owner to share it. A link anyone can open works from this sign-in: --to anyone.");
+    expect(refusal.message).toBe("Email shares need a paste sign-in: run tc auth login --paste --manifest builtin:share-publishing");
+    expect(refusal.metadata?.hint).toBeUndefined();
   });
   test("an untrusted-origin inline link exits 5 ORIGIN_MISMATCH and a malformed link exits 2 INVALID_LINK (TC-1737)", () => {
     const mismatch = shareCliError(new ShareReceiveError("origin-mismatch", "share link origin does not match the trusted viewer origin"));

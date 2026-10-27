@@ -239,12 +239,7 @@ export function shareCliError(error: unknown, operation: "publish" | "notify" = 
       return new CLIError("UPLOAD_FAILED", "share source upload failed; nothing was shared", 4);
     }
     if (failure.kind === "decrypt-not-held") {
-      return new CLIError(
-        "PERMISSION_DENIED",
-        "this sign-in can't create email-addressed shares: it has no permission to decrypt with the account's key. Nothing was shared.",
-        5,
-        { hint: "Share it from https://share.tinycloud.xyz while signed in as the account owner, or ask the owner to share it. A link anyone can open works from this sign-in: --to anyone." },
-      );
+      return new CLIError("PERMISSION_DENIED", `Email shares need a paste sign-in: run ${CLI_NAME} auth login --paste --manifest builtin:share-publishing`, 5);
     }
     if (failure.kind === "over-limit") {
       return new CLIError("MAX_BYTES_EXCEEDED", ADDRESSED_SHARE_TOO_LARGE_MESSAGE, 7, { hint: `What stays behind: ${failure.remaining.join("; ")}.` });

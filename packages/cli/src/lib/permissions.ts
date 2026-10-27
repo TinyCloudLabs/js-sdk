@@ -479,29 +479,23 @@ export async function loadManifestPermissions(
 ): Promise<PermissionEntry[]> {
   const raw = await loadManifestText(source);
   const manifest = JSON.parse(raw) as Record<string, unknown>;
+  // OpenKey's device sign-in refuses encryption grants, so the built-in Share publishing manifest goes through it
+  // without its default-key decrypt entry. A paste sign-in keeps the entry.
+  if (options.device && source === SHARE_PUBLISHING_MANIFEST_REF && Array.isArray(manifest.permissions)) {
+    manifest.permissions = manifest.permissions.filter((entry: unknown) =>
+      !(entry !== null && typeof entry === "object" &&
+        normalizeService(String((entry as Record<string, unknown>).service ?? "")) === "tinycloud.encryption"));
+  }
   // Checked on the manifest as written, before resolution rewrites its entries.
   if (Array.isArray(manifest.permissions)) assertNoCaveatLimits(manifest.permissions);
-  // The owner's default-key decrypt (service, space `default`, empty path, decrypt only) is the one encryption entry a device sign-in carries.
-  const deviceEncryptionOk = (entry: unknown): boolean => {
-    if (entry === null || typeof entry !== "object") return false;
-    const record = entry as Record<string, unknown>;
-    return normalizeService(String(record.service ?? "")) === "tinycloud.encryption" && manifest.space === "default" &&
-      String(record.path ?? "") === "" && record.skipPrefix === true && !Array.isArray(record.caveats) &&
-      Array.isArray(record.actions) && record.actions.length === 1 && record.actions[0] === "tinycloud.encryption/decrypt";
-  };
   if (options.device && typeof manifest.app_id === "string" &&
     (manifest.secrets !== undefined ||
       manifest.space === "secrets" ||
       (typeof manifest.space === "string" && manifest.space.endsWith(":secrets")) ||
-      (Array.isArray(manifest.permissions) && (
-        manifest.permissions.filter((entry: unknown) =>
-          entry !== null && typeof entry === "object" &&
-          normalizeService(String((entry as Record<string, unknown>).service ?? "")) === "tinycloud.encryption").length > 1 ||
-        manifest.permissions.some((entry: unknown) =>
-          entry !== null && typeof entry === "object" &&
-          normalizeService(String((entry as Record<string, unknown>).service ?? "")) === "tinycloud.encryption" &&
-          !deviceEncryptionOk(entry)))))) {
-    throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", "--device cannot authorize tinycloud.encryption (beyond the account's own default key decrypt) or the secrets space. Use browser or --paste login.", ExitCode.USAGE_ERROR);
+      (Array.isArray(manifest.permissions) && manifest.permissions.some((entry: unknown) =>
+        entry !== null && typeof entry === "object" &&
+        normalizeService(String((entry as Record<string, unknown>).service ?? "")) === "tinycloud.encryption")))) {
+    throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", "--device cannot authorize tinycloud.encryption or the secrets space. Use browser or --paste login.", ExitCode.USAGE_ERROR);
   }
 
   if (typeof manifest.id === "string") {
@@ -687,10 +681,10 @@ export async function resolvePermissionSpaces(
       resolved.push({ ...raw, service, space: ENCRYPTION_MANIFEST_SPACE, actions });
       continue;
     }
-    // The device default-key decrypt keeps its literal `default` space: OpenKey resolves it to the owner's own network.
+    // The default-key decrypt keeps its literal `default` space: OpenKey resolves it to the owner's own network.
     if (isDeviceDefaultDecrypt({ ...entry, service, actions })) {
-      const { skipPrefix: _skipPrefix, ...device } = entry;
-      resolved.push({ ...device, service, actions });
+      const { skipPrefix: _skipPrefix, ...decrypt } = entry;
+      resolved.push({ ...decrypt, service, actions });
       continue;
     }
     let space: string;
