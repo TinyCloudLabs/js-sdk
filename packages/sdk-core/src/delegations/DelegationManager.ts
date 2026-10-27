@@ -18,7 +18,6 @@ import type {
 } from "@tinycloud/sdk-services";
 import {
   Result,
-  DelegationError,
   DelegationErrorCodes,
   Delegation,
   DelegationStatus,
@@ -29,38 +28,13 @@ import {
   AccountDelegationPageSchema,
   AccountDelegationQueryOptionsSchema,
   AccountDelegationQueryOptions,
+  AccountDelegationRecord,
+  SessionInvocationSigner,
   DelegationChain,
   DelegationManagerConfig,
 } from "./types";
-
-/**
- * Delegation action constants.
- */
-const DelegationAction = {
-  REVOKE: "tinycloud.delegation/revoke",
-  STATUS: "tinycloud.delegation/status",
-  LIST: "tinycloud.delegation/list",
-  GET: "tinycloud.delegation/get",
-  CHECK: "tinycloud.delegation/check",
-} as const;
-
-/**
- * Creates a DelegationError with the given parameters.
- */
-function createError(
-  code: string,
-  message: string,
-  cause?: Error,
-  meta?: Record<string, unknown>
-): DelegationError {
-  return {
-    code,
-    message,
-    service: "delegation",
-    cause,
-    meta,
-  };
-}
+import { DelegationAction, createError } from "./shared";
+import type { IssuedContext } from "./issued";
 
 /**
  * Parses the JSON body of an `/invoke` response. The node answers an
@@ -112,6 +86,8 @@ export class DelegationManager {
   private signOwnerRevocation?: (cid: string) => Promise<string>;
   private fetchFn: FetchFunction;
   private accountSpaceId?: string;
+  private sessionInvocationSigner?: SessionInvocationSigner;
+  private issuedState = { issuedQuerySupported: false };
 
   /**
    * Creates a new DelegationManager instance.
@@ -124,6 +100,7 @@ export class DelegationManager {
     this.invoke = config.invoke;
     this.invokeAny = config.invokeAny;
     this.signOwnerRevocation = config.signOwnerRevocation;
+    this.sessionInvocationSigner = config.sessionInvocationSigner;
     this.fetchFn = config.fetch ?? globalThis.fetch.bind(globalThis);
     this.accountSpaceId = config.accountSpaceId;
   }
@@ -400,6 +377,7 @@ export class DelegationManager {
         ),
       };
     }
+    if (validated.data.direction === "issued") return this.queryIssued(validated.data);
     if (!this.invokeAny) {
       return {
         ok: false,
@@ -484,6 +462,60 @@ export class DelegationManager {
         ),
       };
     }
+  }
+
+  /** The state the lazily loaded issued-delegation module reads and updates. */
+  private issuedContext(): IssuedContext {
+    return {
+      host: this.host,
+      fetchFn: this.fetchFn,
+      sessionInvocationSigner: this.sessionInvocationSigner,
+      state: this.issuedState,
+    };
+  }
+
+  /**
+   * Lists the delegations this session's own key issued (`direction: "issued"`).
+   * The implementation loads on first use.
+   */
+  private async queryIssued(
+    options: AccountDelegationQueryOptions,
+  ): Promise<Result<AccountDelegationPage>> {
+    // Deferred so bundles that never list issued delegations do not carry ./issued.
+    const issued = await import("./issued");
+    return issued.queryIssued(this.issuedContext(), options);
+  }
+
+  /**
+   * Every delegation this session's key issued, following `nextCursor` until
+   * it is absent. `maxItems` stops early once that many are collected;
+   * `untilCid` stops after the page that contains that delegation. Items come
+   * in CID order (each carries `issuedAt`). The implementation loads on first use.
+   */
+  async queryAllIssued(
+    options: Pick<AccountDelegationQueryOptions, "status" | "space"> & {
+      pageSize?: number;
+      maxItems?: number;
+      untilCid?: string;
+    } = {},
+  ): Promise<Result<AccountDelegationRecord[]>> {
+    // Deferred so bundles that never list issued delegations do not carry ./issued.
+    const issued = await import("./issued");
+    return issued.queryAllIssued((page) => this.query(page), options);
+  }
+
+  /**
+   * Revokes a delegation this session's key issued, with no proof: a UCAN
+   * signed by the session's own did:key carrying `urn:cid:<cid>` and
+   * `tinycloud.delegation/revoke`. Revoking a delegation that is already revoked
+   * succeeds. A refusal (the key is not the delegator) carries the node's
+   * message; 503 means the chain is too deep right now, retry later.
+   * The implementation loads on first use.
+   */
+  async revokeIssued(cid: string): Promise<Result<DelegationRevocationReceipt>> {
+    // Deferred so bundles that never revoke issued delegations do not carry ./issued.
+    const issued = await import("./issued");
+    return issued.revokeIssued(this.issuedContext(), cid);
   }
 
   /**

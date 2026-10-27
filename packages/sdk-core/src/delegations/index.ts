@@ -54,6 +54,7 @@ export {
 
   // Configuration types
   DelegationManagerConfig,
+  SessionInvocationSigner,
   KeyProvider,
 
   // v2 types for CapabilityKeyRegistry

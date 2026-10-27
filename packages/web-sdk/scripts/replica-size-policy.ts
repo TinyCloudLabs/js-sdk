@@ -324,6 +324,8 @@ export type Tc1977OpenKeySigninRatchet = HardeningRatchet & { replicaWorker: { d
 export type Tc2130PanelIphoneRatchet = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
 /** One reviewed exact-byte row for the isAppKeyHostBound export (TC-1977, #767); replicaWorker is carried at TC-2130's replica.worker.js ceiling. */
 export type Tc1977HostBindingRatchet = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
+/** One reviewed exact-byte row for the delegations the delegate key issued (TC-2132, #766); replicaWorker is carried at TC-1977's replica.worker.js ceiling. */
+export type Tc2132IssuedDelegationsRatchet = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -378,6 +380,7 @@ export type Ledger = {
   tc1977OpenKeySigninRatchet?: Tc1977OpenKeySigninRatchet;
   tc2130PanelIphoneRatchet?: Tc2130PanelIphoneRatchet;
   tc1977HostBindingRatchet?: Tc1977HostBindingRatchet;
+  tc2132IssuedDelegationsRatchet?: Tc2132IssuedDelegationsRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -962,6 +965,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc1977OpenKeySigninRatchet !== undefined) pins.push({ row: "tc1977OpenKeySigninRatchet", pin: root.tc1977OpenKeySigninRatchet.sourceCommits.at(-1)! });
   if (root.tc2130PanelIphoneRatchet !== undefined) pins.push({ row: "tc2130PanelIphoneRatchet", pin: root.tc2130PanelIphoneRatchet.sourceCommits.at(-1)! });
   if (root.tc1977HostBindingRatchet !== undefined) pins.push({ row: "tc1977HostBindingRatchet", pin: root.tc1977HostBindingRatchet.sourceCommits.at(-1)! });
+  if (root.tc2132IssuedDelegationsRatchet !== undefined) pins.push({ row: "tc2132IssuedDelegationsRatchet", pin: root.tc2132IssuedDelegationsRatchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1022,6 +1026,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc1977OpenKeySigninRatchet", root.tc1977OpenKeySigninRatchet?.root.ceiling],
     ["tc2130PanelIphoneRatchet", root.tc2130PanelIphoneRatchet?.root.ceiling],
     ["tc1977HostBindingRatchet", root.tc1977HostBindingRatchet?.root.ceiling],
+    ["tc2132IssuedDelegationsRatchet", root.tc2132IssuedDelegationsRatchet?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -2165,6 +2170,35 @@ export const approvedTc1977HostBindingRatchet: Tc1977HostBindingRatchet = {
   reason: "isAppKeyHostBound export for the node SDK and web SDK (TC-1977)",
 };
 
+export const approvedTc2132IssuedDelegationsRatchet: Tc2132IssuedDelegationsRatchet = {
+  label: "delegations the delegate key issued: list and revoke, lazy-loaded (TC-2132, #766): +335 B mjs / +489 B cjs gzip",
+  ruling: "Approved by Naomi (root ~+339 mjs / +360 cjs gz; measured +335 / +489 at run 40423860053 at 49f3665a, re-stacked on #767; stack-drift rule)",
+  base: "9072053988179864d89ef9fb04e707ba66398a42",
+  sourceCommits: ["49f3665ac1d66fe5f77cd28e9311329ba4970074"],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40423860053",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40423860053/job/121924641880",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40423860053/job/121924641891",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 335, "index.cjs": 489 },
+    ceiling: { "index.mjs": 1470650, "index.cjs": 1412492 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 52757, "replica.cjs": 67957 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23412, "activation.cjs": 24981 },
+  },
+  worker: { delta: 0, ceiling: 776539 },
+  replicaWorker: { delta: 0, ceiling: 770467 },
+  reason: "delegations the delegate key issued: list and revoke, lazy-loaded (TC-2132)",
+};
+
 export type GatedOnlyRatchet = {
   label: string;
   sourceCommit: string;
@@ -2247,6 +2281,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc1977OpenKeySigninRatchet: approvedTc1977OpenKeySigninRatchet,
   tc2130PanelIphoneRatchet: approvedTc2130PanelIphoneRatchet,
   tc1977HostBindingRatchet: approvedTc1977HostBindingRatchet,
+  tc2132IssuedDelegationsRatchet: approvedTc2132IssuedDelegationsRatchet,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -2495,6 +2530,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
   if (value.tc1977HostBindingRatchet !== undefined &&
       (!value.tc2130PanelIphoneRatchet || JSON.stringify(value.tc1977HostBindingRatchet) !== JSON.stringify(approvedTc1977HostBindingRatchet))) {
     throw new Error("Only Naomi's exact canonical host-binding ratchet is approved.");
+  }
+  if (value.tc2132IssuedDelegationsRatchet !== undefined &&
+      (!value.tc1977HostBindingRatchet || JSON.stringify(value.tc2132IssuedDelegationsRatchet) !== JSON.stringify(approvedTc2132IssuedDelegationsRatchet))) {
+    throw new Error("Only Naomi's exact canonical issued-delegations ratchet is approved.");
   }
 }
 
@@ -2767,6 +2806,14 @@ export function validateTc1977HostBindingRatchetTransition(base?: Tc1977HostBind
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc1977HostBindingRatchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact TC-1977 host-binding ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-2132 issued-delegations ratchet is introduced once and immutable afterwards. */
+export function validateTc2132IssuedDelegationsRatchetTransition(base?: Tc2132IssuedDelegationsRatchet, current?: Tc2132IssuedDelegationsRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2132IssuedDelegationsRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-2132 issued-delegations ratchet may be introduced once and cannot change later.");
   }
 }
 

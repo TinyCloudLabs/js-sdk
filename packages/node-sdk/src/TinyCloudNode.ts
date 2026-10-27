@@ -187,6 +187,8 @@ import {
   withoutShareLink,
   verifyEip191MessageSignature,
   signCompactUcanRootAuthorization,
+  signCompactUcanAuthorization,
+  type SessionInvocationSigner,
   markDelegationTerminal,
   type UnifiedPolicyCapability,
   isStorageFullError,
@@ -4648,6 +4650,7 @@ export class TinyCloudNode {
       invoke: graph.invoke,
       invokeAny: graph.invokeAny,
       signOwnerRevocation: this.signer ? (cid) => this.signOwnerRevocation(cid) : undefined,
+      sessionInvocationSigner: this.sessionInvocationSignerFor(input.serviceSession),
       fetch: graph.fetch,
     });
     const keyProvider = new WasmKeyProvider({ sessionManager: input.manager });
@@ -4873,6 +4876,32 @@ export class TinyCloudNode {
     const session = this.currentTinyCloudSession() ?? this._activeServiceSession;
     if (session === undefined) throw new Error("Not signed in. Call signIn() first.");
     return signBytesWithJwk(bytes, session.jwk);
+  }
+
+  /**
+   * Signs proofless invocations with `session`'s own did:key, for the node's
+   * issued-delegation list and revocation by the delegator. The audience is
+   * this Node's DID; each invocation lives 60 seconds.
+   */
+  private sessionInvocationSignerFor(session: ServiceSession): SessionInvocationSigner {
+    return {
+      did: () => session.verificationMethod.split("#", 1)[0]!,
+      sign: async (attenuation) => {
+        const now = Math.floor(Date.now() / 1000);
+        const invocation = await signCompactUcanAuthorization({
+          issuerDid: session.verificationMethod.split("#", 1)[0]!,
+          audienceDid: await this.fetchNodeId(),
+          attenuation,
+          facts: [{}],
+          proofs: [],
+          notBefore: now,
+          expiresAt: now + 60,
+          nonce: `urn:uuid:${crypto.randomUUID()}`,
+          sign: (bytes) => signBytesWithJwk(bytes, session.jwk),
+        });
+        return invocation.authorization;
+      },
+    };
   }
 
   /** Author a proofless Policy/v3 owner root with the authenticated holder key. */
@@ -5739,6 +5768,7 @@ export class TinyCloudNode {
       invoke: graph.invoke,
       invokeAny: graph.invokeAny,
       signOwnerRevocation: this.signer ? (cid) => this.signOwnerRevocation(cid) : undefined,
+      sessionInvocationSigner: this.sessionInvocationSignerFor(serviceSession),
       fetch: graph.fetch,
     });
 

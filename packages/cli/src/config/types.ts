@@ -119,5 +119,7 @@ export interface CLIContext {
   replicationDebug: boolean;
   /** Set when local-node discovery waited for a stored session that did not verify; `host` is then `deferredFrom`. */
   localDiscovery?: { readonly deferredFrom: string };
+  /** The resolved profile's posture; absent when the profile does not exist yet. */
+  posture?: CLIProfilePosture;
 }
 
