@@ -145,7 +145,7 @@ function createHostedSurface(
       }
       if (url.pathname === "/.well-known/oauth-protected-resource" && surface === "hosted") {
         const metadataUrl = new URL(getOAuthProtectedResourceMetadataUrl(resourceUrl));
-        const metadataRequest = new Request(metadataUrl, {
+        const metadataRequest = new Request(metadataUrl.toString(), {
           method: request.method,
           headers: request.headers,
         });
@@ -170,9 +170,39 @@ function createHostedSurface(
           remotes: [{ type: "streamable-http", url: resourceUrl.toString() }],
         }, { headers: { "cache-control": "public, max-age=300" } }), request);
       }
+      if (url.pathname === "/.well-known/ai-catalog.json" && surface === "hosted") {
+        if (request.method === "OPTIONS") {
+          return publicMetadataCors(new Response(null, { status: 204 }), request);
+        }
+        if (request.method !== "GET") return methodNotAllowed("GET");
+        return publicMetadataCors(Response.json({
+          specVersion: "1.0",
+          host: {
+            displayName: "TinyCloud, Inc.",
+            documentationUrl: "https://docs.tinycloud.xyz/cli/mcp",
+          },
+          entries: [{
+            identifier: "urn:air:tinycloud.xyz:mcp:tinycloud-mcp",
+            displayName: "TinyCloud MCP",
+            type: "application/mcp-server-card+json",
+            description: "Hosted Streamable HTTP MCP server for delegated TinyCloud operations.",
+            url: new URL("/.well-known/mcp/server-card.json", resourceUrl).toString(),
+            representativeQueries: [
+              "How do I connect to TinyCloud's hosted MCP server?",
+              "Which endpoint provides TinyCloud's delegated MCP operations?",
+              "How can I connect to TinyCloud MCP using local stdio?",
+            ],
+          }],
+        }, {
+          headers: {
+            "cache-control": "public, max-age=300",
+            "content-type": "application/ai-catalog+json; charset=utf-8",
+          },
+        }), request);
+      }
       if (url.pathname === "/llms.txt" && surface === "hosted") {
         return request.method === "GET"
-          ? publicText("# TinyCloud MCP\n\nHosted Streamable HTTP endpoint: https://mcp.tinycloud.xyz/mcp (OpenKey OAuth).\n\nConnection documentation: https://docs.tinycloud.xyz/cli/mcp\n\nLocal alternative: install @tinycloud/cli and @tinycloud/mcp, then run tinycloud-mcp over stdio.\n", "text/markdown; charset=utf-8")
+          ? publicText("# TinyCloud MCP\n\nHosted Streamable HTTP endpoint: https://mcp.tinycloud.xyz/mcp (OpenKey OAuth).\n\nConnection documentation: https://docs.tinycloud.xyz/cli/mcp\n\nLocal alternative: install @tinycloud/cli and @tinycloud/mcp, then set up tinycloud-mcp as a stdio server in your MCP client.\n", "text/plain; charset=utf-8")
           : methodNotAllowed("GET");
       }
       if (url.pathname === "/robots.txt" && surface === "hosted") {
@@ -414,7 +444,7 @@ function json(value: unknown, status = 200): Response {
 function publicMetadataCors(response: Response, request: Request): Response {
   const headers = new Headers(response.headers);
   headers.set("access-control-allow-origin", "*");
-  headers.set("access-control-allow-methods", "GET, HEAD, OPTIONS");
+  headers.set("access-control-allow-methods", "GET, OPTIONS");
   const requestedHeaders = request.method === "OPTIONS"
     ? request.headers.get("access-control-request-headers")
     : null;

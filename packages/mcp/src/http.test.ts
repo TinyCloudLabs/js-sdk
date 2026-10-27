@@ -35,6 +35,9 @@ test("serves landing, discovery aliases and public readiness metadata without we
   const wellKnownCard = await app.fetch(request("/.well-known/mcp/server-card.json", {
     headers: { origin: "https://scanner.example" },
   }));
+  const ardCatalog = await app.fetch(request("/.well-known/ai-catalog.json", {
+    headers: { origin: "https://isitagentready.com" },
+  }));
   const llms = await app.fetch(request("/llms.txt"));
   const metadataPreflight = await app.fetch(request("/.well-known/oauth-protected-resource", {
     method: "OPTIONS",
@@ -45,6 +48,14 @@ test("serves landing, discovery aliases and public readiness metadata without we
     },
   }));
   const cardPreflight = await app.fetch(request("/.well-known/mcp/server-card.json", {
+    method: "OPTIONS",
+    headers: {
+      origin: "https://isitagentready.com",
+      "access-control-request-method": "GET",
+      "access-control-request-headers": "accept",
+    },
+  }));
+  const ardPreflight = await app.fetch(request("/.well-known/ai-catalog.json", {
     method: "OPTIONS",
     headers: {
       origin: "https://isitagentready.com",
@@ -72,17 +83,47 @@ test("serves landing, discovery aliases and public readiness metadata without we
   expect(metadataPreflight.headers.get("access-control-allow-headers")).toContain("content-type");
   expect(cardPreflight.status).toBe(204);
   expect(cardPreflight.headers.get("access-control-allow-origin")).toBe("*");
+  expect(cardPreflight.headers.get("access-control-allow-methods")).toBe("GET, OPTIONS");
   expect(cardPreflight.headers.get("access-control-allow-headers")).toBe("accept");
   expect(card.headers.get("access-control-allow-origin")).toBe("*");
   expect(wellKnownCard.headers.get("access-control-allow-origin")).toBe("*");
   expect(await wellKnownCard.json()).toEqual(await card.clone().json());
+  expect(ardCatalog.status).toBe(200);
+  expect(ardCatalog.headers.get("content-type")).toContain("application/ai-catalog+json");
+  expect(ardCatalog.headers.get("access-control-allow-origin")).toBe("*");
+  expect(ardPreflight.status).toBe(204);
+  expect(ardPreflight.headers.get("access-control-allow-origin")).toBe("*");
+  expect(ardPreflight.headers.get("access-control-allow-methods")).toBe("GET, OPTIONS");
+  expect(await ardCatalog.json()).toEqual({
+    specVersion: "1.0",
+    host: {
+      displayName: "TinyCloud, Inc.",
+      documentationUrl: "https://docs.tinycloud.xyz/cli/mcp",
+    },
+    entries: [{
+      identifier: "urn:air:tinycloud.xyz:mcp:tinycloud-mcp",
+      displayName: "TinyCloud MCP",
+      type: "application/mcp-server-card+json",
+      description: "Hosted Streamable HTTP MCP server for delegated TinyCloud operations.",
+      url: "https://mcp.test/.well-known/mcp/server-card.json",
+      representativeQueries: [
+        "How do I connect to TinyCloud's hosted MCP server?",
+        "Which endpoint provides TinyCloud's delegated MCP operations?",
+        "How can I connect to TinyCloud MCP using local stdio?",
+      ],
+    }],
+  });
   expect(await card.json()).toMatchObject({
     name: `xyz.tinycloud/${MCP_SERVER_NAME}`,
     version: MCP_VERSION,
     remotes: [{ type: "streamable-http", url: "https://mcp.test/mcp" }],
   });
-  expect(await llms.text()).toContain("https://mcp.tinycloud.xyz/mcp");
-  expect(await llms.text()).toContain("Local alternative:");
+  const llmsText = await llms.text();
+  expect(llms.headers.get("content-type")).toContain("text/plain");
+  expect(llmsText).toContain("https://mcp.tinycloud.xyz/mcp");
+  expect(llmsText).toContain("Local alternative: install @tinycloud/cli and @tinycloud/mcp, then set up tinycloud-mcp as a stdio server in your MCP client.");
+  expect(llmsText).not.toContain("/chatgpt/mcp");
+  expect(llmsText).not.toContain("Details: TC-1362");
   expect(await sitemap.text()).toContain("<loc>https://mcp.test/</loc>");
   expect(await robots.text()).toContain("Allow: /");
   expect(unauthenticated.status).toBe(401);

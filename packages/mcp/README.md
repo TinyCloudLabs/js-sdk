@@ -5,23 +5,22 @@ is the hosted Streamable HTTP endpoint `https://mcp.tinycloud.xyz/mcp`, using
 OpenKey OAuth. Local stdio is the alternative when the client and TinyCloud
 runtime are on the same machine.
 
-For Claude, add the hosted URL as a remote MCP connector and complete OpenKey
-OAuth. ChatGPT users can add `https://mcp.tinycloud.xyz/mcp` directly as a
-custom MCP server; Developer Mode is not required first. Availability depends
-on the ChatGPT plan and workspace settings. Follow
+ChatGPT users can add https://mcp.tinycloud.xyz/mcp on the web under Plugins → + → Add custom MCP server; Developer Mode isn't required first.
+Availability depends on the ChatGPT plan and workspace settings. Follow
 [OpenAI's custom MCP connection guide](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt).
 
 ## Hosted Streamable HTTP
 
-Use `https://mcp.tinycloud.xyz/mcp` in Claude's remote MCP connector and
-complete OpenKey OAuth. Other remote MCP clients may use the endpoint when they
-support Streamable HTTP and OAuth.
+In Claude, add the hosted URL as a remote MCP connector and complete OpenKey
+OAuth. Other remote clients can connect when they support Streamable HTTP and
+OAuth.
 
 ## Local stdio requirements
 
 - Node.js 20 or newer
 - `@tinycloud/cli`
 - A delegated TinyCloud profile
+- A TinyCloud node running 1.6.0 or newer
 
 ## Hosted personal-record behavior
 
