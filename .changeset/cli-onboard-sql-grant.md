@@ -2,6 +2,6 @@
 "@tinycloud/cli": patch
 ---
 
-`tinycloud onboard` now grants SQL read and write on your applications space alongside files, so one approval is enough for apps such as Health Log to read and write their databases.
+`tinycloud onboard` now also grants SQL read and write of apps' database rows on the applications space, under the same approval as files, so apps such as Health Log can read and write rows without a second approval.
 
 Details: TC-2178
