@@ -6,42 +6,24 @@ OpenKey OAuth. Local stdio is the alternative when the client and TinyCloud
 runtime are on the same machine.
 
 For Claude, add the hosted URL as a remote MCP connector and complete OpenKey
-OAuth. This package does not claim a currently published ChatGPT app: the
-separate public ChatGPT app candidate at `/chatgpt/mcp` is not published.
-Although the server implements that separate source surface, this repository
-does not verify or promise a generic ChatGPT Developer Mode connection path.
-Use only a ChatGPT connection method enabled and documented by OpenAI; do not
-interpret the unpublished app candidate as available.
+OAuth. ChatGPT users can add `https://mcp.tinycloud.xyz/mcp` directly as a
+custom MCP server; Developer Mode is not required first. Availability depends
+on the ChatGPT plan and workspace settings. Follow
+[OpenAI's custom MCP connection guide](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt).
 
 ## Hosted Streamable HTTP
 
 Use `https://mcp.tinycloud.xyz/mcp` in Claude's remote MCP connector and
-complete OpenKey OAuth. The server also supports remote MCP clients that
-independently support Streamable HTTP and OAuth. The public ChatGPT app
-candidate is not published; this package does not verify a generic ChatGPT
-Developer Mode setup.
+complete OpenKey OAuth. Other remote MCP clients may use the endpoint when they
+support Streamable HTTP and OAuth.
 
 ## Local stdio requirements
 
 - Node.js 20 or newer
 - `@tinycloud/cli`
 - A delegated TinyCloud profile
-- A TinyCloud node running 1.6.0 or newer
-## Public ChatGPT release candidate
 
-The candidate is **not published**. Its separate endpoint is
-`https://mcp.tinycloud.xyz/chatgpt/mcp`, with exactly `tinycloud_connect`,
-`tinycloud_apps_context`, `tinycloud_apps_read`, `tinycloud_apps_write` and
-`tinycloud_apps_query`. It is distinct from the canonical hosted `/mcp`
-endpoint. The candidate has not passed publication or product acceptance; do
-not describe it as a launched public ChatGPT app.
-
-The public resource has its own OAuth audience, tenant state under
-`<TC_MCP_STATE_DIR>/chatgpt`, and `/chatgpt/connect` approval/callback paths.
-Deploy the corresponding OpenKey API audience and web callback registrations
-before testing the candidate. Existing broad-service approvals do not migrate
-into the public tenant store. Account connection, personal-record access and
-the optional derived SQL copy require their respective approvals.
+## Hosted personal-record behavior
 
 Context can persist an IANA timezone; query can overwrite or rebuild derived
 data. Both therefore advertise `readOnlyHint: false` and
@@ -52,30 +34,6 @@ credentials, payment-card data, government identifiers or protected health
 information. Respect declined approval and the client's destructive-action
 confirmation flow. Ask for an IANA timezone, not a city or precise location.
 
-Package sources are in `plugin/package/`. From the repository root:
-
-```bash
-python3 -m venv /tmp/tinycloud-plugin-validator
-/tmp/tinycloud-plugin-validator/bin/pip install 'jsonschema>=4,<5'
-/tmp/tinycloud-plugin-validator/bin/python packages/mcp/scripts/package-plugin.py \
-  --output /tmp/tinycloud-plugin-release
-```
-
-The packager validates the canonical Agent Plugins schemas, produces a
-deterministic ZIP containing only the two manifests and logo, and reports its
-SHA-256. `plugin/review-evidence.json` is deliberately excluded: test definitions
-are not passing ChatGPT evidence, and reviewer credentials never belong in the
-ZIP. The schema-valid MCP manifest relies on OAuth discovery; verify imported
-authentication and scopes in the portal rather than adding schema-invalid
-per-server extensions.
-
-Release gates remain: explicit owner approval for default-branch merges and
-deployment; actual ChatGPT web/mobile acceptance; an independently usable
-reviewer account and synthetic fixtures; approved privacy, terms, support and
-country availability; the real walkthrough recording; publisher/domain
-verification; review approval and explicit publication. A successful local
-smoke or package validation does not satisfy those gates. Do not enable
-auto-merge or deploy around the approval requirement.
 
 ## Install and configure
 
@@ -400,4 +358,3 @@ files, delegation files, and generated artifacts. MCP hosts may retain
 structured tool results in their own transcripts, so use a client and retention
 policy appropriate for secrets.
 
-Details: TC-1362

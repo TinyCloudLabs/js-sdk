@@ -110,8 +110,10 @@ apply their own sensitive-result retention and access controls.
 The canonical remote service is hosted MCP at
 `https://mcp.tinycloud.xyz/mcp` using Streamable HTTP and OpenKey OAuth.
 Connect Claude through its remote MCP connector and complete OpenKey OAuth.
-The public ChatGPT app candidate at `/chatgpt/mcp` is not published; this
-skill does not claim a generic ChatGPT Developer Mode connection path.
+ChatGPT users can add the hosted URL directly as a custom MCP server; Developer
+Mode is not required first. Availability depends on the ChatGPT plan and
+workspace settings. Follow
+[OpenAI's custom MCP connection guide](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt).
 
 Local stdio is the alternative: install `@tinycloud/cli` and `@tinycloud/mcp`,
 then configure `tinycloud-mcp` in the client's stdio MCP settings.
@@ -124,4 +126,3 @@ This is a beta surface. Delegated posture is the default; owner-profile data
 access requires explicit opt-in. The user must enter secrets only in Secret
 Manager, never in chat.
 
-Details: TC-1362

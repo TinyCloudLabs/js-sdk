@@ -32,8 +32,28 @@ test("serves landing, discovery aliases and public readiness metadata without we
     headers: { origin: "https://scanner.example" },
   }));
   const card = await app.fetch(request("/mcp/server-card", { headers: { origin: "https://scanner.example" } }));
+  const wellKnownCard = await app.fetch(request("/.well-known/mcp/server-card.json", {
+    headers: { origin: "https://scanner.example" },
+  }));
   const llms = await app.fetch(request("/llms.txt"));
+  const metadataPreflight = await app.fetch(request("/.well-known/oauth-protected-resource", {
+    method: "OPTIONS",
+    headers: {
+      origin: "https://isitagentready.com",
+      "access-control-request-method": "GET",
+      "access-control-request-headers": "content-type",
+    },
+  }));
+  const cardPreflight = await app.fetch(request("/.well-known/mcp/server-card.json", {
+    method: "OPTIONS",
+    headers: {
+      origin: "https://isitagentready.com",
+      "access-control-request-method": "GET",
+      "access-control-request-headers": "accept",
+    },
+  }));
   const robots = await app.fetch(request("/robots.txt"));
+  const sitemap = await app.fetch(request("/sitemap.xml"));
   const unauthenticated = await app.fetch(request("/mcp", { method: "POST" }));
 
   expect(health.status).toBe(200);
@@ -41,16 +61,29 @@ test("serves landing, discovery aliases and public readiness metadata without we
   expect(landing.status).toBe(200);
   expect(landing.headers.get("content-type")).toContain("text/html");
   expect(await landing.text()).toContain("https://mcp.tinycloud.xyz/mcp");
-  expect(await markdown.text()).toContain("Details: TC-1362");
+  expect(landing.headers.get("link")).toContain('rel="describedby"');
+  expect(landing.headers.get("link")).toContain('rel="service-doc"');
+  expect(await markdown.text()).toContain("Local alternative:");
   expect(await alias.json()).toEqual(await protectedResource.json());
   expect(alias.headers.get("access-control-allow-origin")).toBe("*");
+  expect(protectedResource.headers.get("access-control-allow-origin")).toBe("*");
+  expect(metadataPreflight.status).toBe(204);
+  expect(metadataPreflight.headers.get("access-control-allow-origin")).toBe("*");
+  expect(metadataPreflight.headers.get("access-control-allow-headers")).toContain("content-type");
+  expect(cardPreflight.status).toBe(204);
+  expect(cardPreflight.headers.get("access-control-allow-origin")).toBe("*");
+  expect(cardPreflight.headers.get("access-control-allow-headers")).toBe("accept");
   expect(card.headers.get("access-control-allow-origin")).toBe("*");
+  expect(wellKnownCard.headers.get("access-control-allow-origin")).toBe("*");
+  expect(await wellKnownCard.json()).toEqual(await card.clone().json());
   expect(await card.json()).toMatchObject({
     name: `xyz.tinycloud/${MCP_SERVER_NAME}`,
     version: MCP_VERSION,
     remotes: [{ type: "streamable-http", url: "https://mcp.test/mcp" }],
   });
-  expect(await llms.text()).toContain("public ChatGPT app candidate is not published");
+  expect(await llms.text()).toContain("https://mcp.tinycloud.xyz/mcp");
+  expect(await llms.text()).toContain("Local alternative:");
+  expect(await sitemap.text()).toContain("<loc>https://mcp.test/</loc>");
   expect(await robots.text()).toContain("Allow: /");
   expect(unauthenticated.status).toBe(401);
   expect(unauthenticated.headers.get("access-control-allow-origin")).toBeNull();
