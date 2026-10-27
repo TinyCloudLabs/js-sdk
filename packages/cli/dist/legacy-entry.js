@@ -174,6 +174,35 @@ var init_storage = __esm({
   }
 });
 
+// src/config/types.ts
+function isCLIProfilePosture(value) {
+  return typeof value === "string" && CLI_PROFILE_POSTURES.includes(value);
+}
+function isCLIOperatorType(value) {
+  return typeof value === "string" && CLI_OPERATOR_TYPES.includes(value);
+}
+function resolveProfilePosture(profile) {
+  if (isCLIProfilePosture(profile.posture)) return profile.posture;
+  if (profile.authMethod === "local") return "local-owner-key";
+  return "owner-openkey";
+}
+function resolveProfileOperatorType(profile) {
+  if (isCLIOperatorType(profile.operatorType)) return profile.operatorType;
+  return "human";
+}
+var CLI_PROFILE_POSTURES, CLI_OPERATOR_TYPES;
+var init_types = __esm({
+  "src/config/types.ts"() {
+    "use strict";
+    CLI_PROFILE_POSTURES = [
+      "owner-openkey",
+      "delegate-session",
+      "local-owner-key"
+    ];
+    CLI_OPERATOR_TYPES = ["human", "agent"];
+  }
+});
+
 // src/lib/replication-registry.ts
 function stopForSignal(signal) {
   void closeReplication().finally(() => {
@@ -900,35 +929,6 @@ var init_errors = __esm({
       status;
     };
     SETUP_KEYS = { url: true, names: true, scope: true, owner: true, action: true };
-  }
-});
-
-// src/config/types.ts
-function isCLIProfilePosture(value) {
-  return typeof value === "string" && CLI_PROFILE_POSTURES.includes(value);
-}
-function isCLIOperatorType(value) {
-  return typeof value === "string" && CLI_OPERATOR_TYPES.includes(value);
-}
-function resolveProfilePosture(profile) {
-  if (isCLIProfilePosture(profile.posture)) return profile.posture;
-  if (profile.authMethod === "local") return "local-owner-key";
-  return "owner-openkey";
-}
-function resolveProfileOperatorType(profile) {
-  if (isCLIOperatorType(profile.operatorType)) return profile.operatorType;
-  return "human";
-}
-var CLI_PROFILE_POSTURES, CLI_OPERATOR_TYPES;
-var init_types = __esm({
-  "src/config/types.ts"() {
-    "use strict";
-    CLI_PROFILE_POSTURES = [
-      "owner-openkey",
-      "delegate-session",
-      "local-owner-key"
-    ];
-    CLI_OPERATOR_TYPES = ["human", "agent"];
   }
 });
 
@@ -9841,6 +9841,7 @@ var init_profiles = __esm({
     "use strict";
     init_constants();
     init_storage();
+    init_types();
     init_errors();
     ProfileManager = class _ProfileManager {
       // ── Initialization ──────────────────────────────────────────────────
@@ -10122,6 +10123,7 @@ var init_profiles = __esm({
           quiet: options.quiet ?? false,
           replication,
           replicationDebug: options.replicationDebug === true || process.env.TC_REPLICATION_DEBUG === "1",
+          ...profileConfig === void 0 ? {} : { posture: resolveProfilePosture(profileConfig) },
           ...localDiscovery === void 0 ? {} : { localDiscovery }
         };
       }
@@ -36336,6 +36338,52 @@ function listedDelegation(d) {
     resources
   };
 }
+var ISSUED_ORDER_NOTE = "Sorted by delegation ID, not by date.";
+function issuedFailure(error, host) {
+  if (error.code === "UNSUPPORTED_OPERATION") {
+    return new CLIError(
+      "ISSUED_DELEGATIONS_UNAVAILABLE",
+      `${host} can't list the delegations you issued yet.`,
+      ExitCode.NODE_ERROR
+    );
+  }
+  if (error.code === "CHAIN_TOO_DEEP") {
+    return new CLIError(
+      "CHAIN_TOO_DEEP",
+      "The node can't check this delegation chain right now because it's too long. Try again later.",
+      ExitCode.NODE_ERROR,
+      { status: 503 }
+    );
+  }
+  if (error.code === "INVALID_CURSOR") {
+    return new CLIError(
+      "INVALID_CURSOR",
+      "The node couldn't continue the list. Run the command again.",
+      ExitCode.NODE_ERROR,
+      { status: 400 }
+    );
+  }
+  return cliErrorFromService(error);
+}
+async function revokeIssuedDelegation(node, ctx, cid) {
+  const result = await node.delegationManager.revokeIssued(cid);
+  if (result.ok) return { cid: result.data.cid, revoked: true };
+  if (result.error.code === "PERMISSION_DENIED") {
+    throw new CLIError(
+      "REVOKE_UNAUTHORIZED",
+      `The node refused this revocation: ${result.error.message}.`,
+      ExitCode.PERMISSION_DENIED,
+      {
+        status: result.error.meta?.status,
+        hint: `A profile can revoke only the delegations its own key issued. See them with \`${CLI_NAME21} --profile ${ctx.profile} delegation list --granted\`.`
+      }
+    );
+  }
+  if (result.error.code === "NOT_FOUND") {
+    throw new CLIError("TARGET_NOT_FOUND", `The node has no delegation "${cid}".`, ExitCode.NOT_FOUND);
+  }
+  throw issuedFailure(result.error, ctx.host);
+}
 async function confirmCurrentSessionRevoke(yes) {
   if (yes) return;
   const warning = "This is your current sign-in session; revoking it signs you out";
@@ -36424,6 +36472,16 @@ function registerDelegationCommand(program, configuration = {}) {
       if (options.granted && options.received) {
         throw new CLIError("USAGE_ERROR", "Use only one of --granted or --received.", ExitCode.USAGE_ERROR);
       }
+      if (options.granted && ctx.posture === "delegate-session" && node.address === void 0) {
+        const issued = await node.delegationManager.queryAllIssued({ space: options.space });
+        if (!issued.ok) throw issuedFailure(issued.error, ctx.host);
+        outputJson({
+          delegations: issued.data.map(listedDelegation),
+          count: issued.data.length,
+          note: ISSUED_ORDER_NOTE
+        });
+        return;
+      }
       const delegations = await queryDelegations(node, {
         direction: options.granted ? "granted" : options.received ? "received" : "all",
         space: options.space
@@ -36454,11 +36512,16 @@ function registerDelegationCommand(program, configuration = {}) {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
+      const delegateCandidate = ctx.posture === "delegate-session" ? await ensureAuthenticated(ctx) : void 0;
+      if (delegateCandidate !== void 0 && delegateCandidate.address === void 0) {
+        outputJson(await revokeIssuedDelegation(delegateCandidate, ctx, cid));
+        return;
+      }
       const session = await ProfileManager.getSession(ctx.profile);
       const currentSession = session && "delegationCid" in session && session.delegationCid === cid;
       if (currentSession) await confirmCurrentSessionRevoke(options.yes === true);
       const prepared = currentSession ? await prepareProfileRemoteLogout(ctx, cid) : void 0;
-      const node = prepared?.node ?? await ensureAuthenticated(ctx);
+      const node = prepared?.node ?? delegateCandidate ?? await ensureAuthenticated(ctx);
       const profile = prepared?.profile ?? await ProfileManager.getProfile(ctx.profile);
       const revoked = await revokeDelegationOnNode({
         ctx,

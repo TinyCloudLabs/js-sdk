@@ -7385,6 +7385,7 @@ var init_profiles = __esm({
     "use strict";
     init_constants();
     init_storage2();
+    init_types();
     init_errors();
     ProfileManager = class _ProfileManager {
       // ── Initialization ──────────────────────────────────────────────────
@@ -7666,6 +7667,7 @@ var init_profiles = __esm({
           quiet: options.quiet ?? false,
           replication,
           replicationDebug: options.replicationDebug === true || process.env.TC_REPLICATION_DEBUG === "1",
+          ...profileConfig === void 0 ? {} : { posture: resolveProfilePosture(profileConfig) },
           ...localDiscovery === void 0 ? {} : { localDiscovery }
         };
       }
