@@ -2,8 +2,8 @@
 
 TinyCloud MCP server for delegated operations. The canonical remote connection
 is the hosted Streamable HTTP endpoint `https://mcp.tinycloud.xyz/mcp`, using
-OpenKey OAuth. Local stdio is the alternative when the client and TinyCloud
-runtime are on the same machine.
+OpenKey OAuth. Local stdio is the alternative when you want your MCP client to
+launch the server as a local process.
 Both transports use exact, revocable TinyCloud capabilities and never silently fall back to owner authority.
 
 ChatGPT users can add https://mcp.tinycloud.xyz/mcp on the web under Plugins → + → Add custom MCP server; Developer Mode isn't required first.
