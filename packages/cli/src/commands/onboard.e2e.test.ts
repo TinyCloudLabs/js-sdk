@@ -165,6 +165,17 @@ describe.skipIf(!NODE_BIN)("tinycloud onboard, against a real node", () => {
     expect((await cli("agent", ["kv", "put", "--space", "applications", "onboard/note", "hello"])).exitCode).toBe(0);
     expect((await cli("agent", ["kv", "get", "--space", "applications", "onboard/note"])).stdout).toContain("hello");
     expect((await cli("agent", ["kv", "get", "--space", "account", "spaces/applications"])).stdout).toContain("hosted");
+    // One approval covers a Health Log SQL write and read on the applications space, and `auth caps --diff` sees it.
+    const healthDb = "xyz.tinycloud.sample.healthlog/healthlog";
+    const caps = await cli("agent", ["auth", "caps", "--diff", `tinycloud.sql:applications:${healthDb}:read,write`]);
+    expect(JSON.parse(caps.stdout)).toMatchObject({ covered: true });
+    // Health Log's table is made by its install, which holds the schema grant onboarding doesn't give; the owner wallet stands in for it.
+    expect((await cli("wallet", ["auth", "request", "--cap", `tinycloud.sql:applications:${healthDb}:schema,write`, "--grant", "--yes"])).exitCode).toBe(0);
+    const create = await cli("wallet", ["sql", "execute", "CREATE TABLE IF NOT EXISTS meal (id INTEGER PRIMARY KEY, name TEXT)", "--db", healthDb, "--space", "applications"]);
+    expect(create.exitCode, create.stderr + create.stdout).toBe(0);
+    expect((await cli("agent", ["sql", "execute", "INSERT INTO meal(name) VALUES ('salmon')", "--db", healthDb, "--space", "applications"])).exitCode).toBe(0);
+    expect(JSON.parse((await cli("agent", ["sql", "query", "SELECT name FROM meal", "--db", healthDb, "--space", "applications"])).stdout).rows).toEqual([["salmon"]]);
+    expect((await cli("agent", ["sql", "execute", "INSERT INTO meal(name) VALUES ('x')", "--db", "other/db", "--space", "account"])).stderr).toContain("Unauthorized Action");
     // Read-only where the grant says read-only, and nothing outside what it names.
     expect((await cli("agent", ["kv", "put", "--space", "account", "spaces/x", "y"])).stderr).toContain("Unauthorized Action");
     expect((await cli("agent", ["kv", "get", "--space", "default", "anything"])).stderr).toContain("Unauthorized Action");

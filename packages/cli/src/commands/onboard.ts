@@ -18,6 +18,7 @@ import { createKeyOnlyProfile } from "./init.js";
 const ONBOARD_EXPIRY = "30d";
 
 const kv = (actions: string[]) => actions.map((action) => `tinycloud.kv/${action}`);
+const sql = (actions: string[]) => actions.map((action) => `tinycloud.sql/${action}`);
 
 /**
  * The starting grant, one OpenKey approval per space: OpenKey signs one space
@@ -33,7 +34,10 @@ export const ONBOARD_STEPS: ReadonlyArray<{
   {
     space: "applications",
     asks: "Read and change your apps' data for 30 days.",
-    permissions: [{ service: "tinycloud.kv", space: "applications", path: "", actions: kv(["get", "list", "put", "del", "metadata"]) }],
+    permissions: [
+      { service: "tinycloud.kv", space: "applications", path: "", actions: kv(["get", "list", "put", "del", "metadata"]) },
+      { service: "tinycloud.sql", space: "applications", path: "", actions: sql(["read", "write"]) },
+    ],
   },
   {
     space: "account",
