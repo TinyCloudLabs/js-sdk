@@ -11,6 +11,7 @@ const home = await mkdtemp(join(tmpdir(), "tc-device-decrypt-"));
 process.env.TC_HOME = home;
 const { ProfileManager } = await import("../config/profiles.js");
 const { acquireDeviceDelegation } = await import("./device-auth.js");
+const { verifyScopedLogin } = await import("./scoped-login.js");
 const { keyToDID } = await import("./local-key.js");
 const { sharePublishingPermissions } = await import("../share/publishing-manifest.js");
 const { loadManifestPermissions } = await import("../lib/permissions.js");
@@ -41,10 +42,18 @@ async function setUpProfile() {
 }
 
 describe("share publishing and the default-key decrypt", () => {
-  test("a paste sign-in requests the decrypt entry as space default with an empty path", async () => {
+  test("a paste sign-in requests the decrypt entry as the owner's default network", async () => {
+    await setUpProfile();
+    const loaded = await loadManifestPermissions("builtin:share-publishing", "default", { allowLogicalSpaces: true, ownerDid });
+    expect(loaded.filter((permission) => permission.service === "tinycloud.encryption")).toEqual([
+      { service: "tinycloud.encryption", space: "encryption", path: network, actions: [DECRYPT] },
+    ]);
+  });
+
+  test("a paste sign-in whose owner is not known yet leaves the decrypt entry out", async () => {
     await setUpProfile();
     const loaded = await loadManifestPermissions("builtin:share-publishing", "default", { allowLogicalSpaces: true });
-    expect(loaded.filter((permission) => permission.service === "tinycloud.encryption")).toEqual([wire]);
+    expect(loaded.some((permission) => permission.service === "tinycloud.encryption")).toBe(false);
   });
 
   test("a device sign-in requests builtin:share-publishing without decrypt, and so does enable share", async () => {
@@ -65,6 +74,29 @@ describe("share publishing and the default-key decrypt", () => {
       })).rejects.toMatchObject({ exitCode: 2 });
     }
     expect(contacted).toBe(0);
+  });
+
+  test("a session signed as OpenKey signs it verifies against the paste request", async () => {
+    await setUpProfile();
+    const requested = await loadManifestPermissions("builtin:share-publishing", "default", { allowLogicalSpaces: true, ownerDid });
+    const abilities: Record<string, Record<string, string[]>> = {};
+    for (const permission of requested) {
+      if (permission.service !== "tinycloud.encryption") (abilities[permission.service.slice("tinycloud.".length)] ??= {})[permission.path] = permission.actions;
+    }
+    const expiresAt = new Date(Math.floor(Date.now() / 1000) * 1000 + 3600_000).toISOString();
+    const prepared = wasm.prepareSession({
+      abilities, rawAbilities: { [network]: [DECRYPT] }, address, chainId: 1, domain: "openkey.so", spaceId, jwk: key,
+      issuedAt: new Date(Date.now() - 60_000).toISOString(), expirationTime: expiresAt,
+    });
+    const signature = await signer.signMessage(prepared.siwe);
+    const delegation = {
+      ...wasm.completeSessionSetup({ ...prepared, signature }),
+      jwk: key, verificationMethod: sessionDid, address, chainId: 1, spaceId, ownerDid, siwe: prepared.siwe, signature, expiresAt, hostActivated: true,
+    };
+    const { session } = verifyScopedLogin(delegation, key, sessionDid, requested, { expectedOwner: ownerDid });
+    expect(session.permissions.filter((permission) => permission.service === "tinycloud.encryption")).toEqual([
+      { service: "tinycloud.encryption", space: "encryption", path: network, actions: [DECRYPT] },
+    ]);
   });
 
   test("an email share from a sign-in without decrypt is one plain line pointing at the paste sign-in", () => {

@@ -662,7 +662,7 @@ export function compactPermission(permission: PermissionEntry): string {
 export async function resolvePermissionSpaces(
   entries: PermissionEntry[],
   profile: string,
-  options: { allowLogicalSpaces?: boolean } = {},
+  options: { allowLogicalSpaces?: boolean; ownerDid?: string } = {},
 ): Promise<PermissionEntry[]> {
   const profileConfig = await ProfileManager.getProfile(profile);
   // First login (and delegates) may not know the owner's address yet. Keep
@@ -681,10 +681,17 @@ export async function resolvePermissionSpaces(
       resolved.push({ ...raw, service, space: ENCRYPTION_MANIFEST_SPACE, actions });
       continue;
     }
-    // The default-key decrypt keeps its literal `default` space: OpenKey resolves it to the owner's own network.
+    // The manifest's default-key decrypt (space `default`, empty path) is named as the owner's default network,
+    // the shape every raw encryption entry has. A first login that cannot name its owner yet leaves it out.
     if (isDeviceDefaultDecrypt({ ...entry, service, actions })) {
-      const { skipPrefix: _skipPrefix, ...decrypt } = entry;
-      resolved.push({ ...decrypt, service, actions });
+      let path: string;
+      try {
+        path = await defaultSecretsNetworkId(profile, options.ownerDid);
+      } catch (error) {
+        if (error instanceof CLIError && error.code === "OWNER_DID_UNKNOWN") continue;
+        throw error;
+      }
+      resolved.push({ service, space: ENCRYPTION_MANIFEST_SPACE, path, actions });
       continue;
     }
     let space: string;
