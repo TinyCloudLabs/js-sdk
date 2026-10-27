@@ -34,6 +34,7 @@ import { validateTc1977OpenKeySigninRatchetTransition } from "./replica-size-pol
 import { validateTc2130PanelIphoneRatchetTransition } from "./replica-size-policy";
 import { validateTc1977HostBindingRatchetTransition } from "./replica-size-policy";
 import { validateTc2132IssuedDelegationsRatchetTransition } from "./replica-size-policy";
+import { validateTc2113AllowAbilityRatchetTransition } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 import { replicaOwnedPath } from "./replica-owned-path";
 import { webSdkTestExitFailure } from "./web-sdk-test-exit";
@@ -532,6 +533,13 @@ if (prBaseSha) {
   if (tc2132IssuedDelegations !== undefined && baseLedger.tc2132IssuedDelegationsRatchet === undefined &&
       (baseLedger.tc1977HostBindingRatchet === undefined || !hasAncestor(repoRoot, tc2132IssuedDelegations.sourceCommits.at(-1)!))) {
     console.error("The issued-delegations ratchet requires the merged host-binding export ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc2113AllowAbilityRatchetTransition(baseLedger.tc2113AllowAbilityRatchet, ledger.tc2113AllowAbilityRatchet);
+  const tc2113AllowAbility = ledger.tc2113AllowAbilityRatchet;
+  if (tc2113AllowAbility !== undefined && baseLedger.tc2113AllowAbilityRatchet === undefined &&
+      (baseLedger.tc2132IssuedDelegationsRatchet === undefined || !hasAncestor(repoRoot, tc2113AllowAbility.sourceCommits.at(-1)!))) {
+    console.error("The allow-ability ratchet requires the merged issued-delegations ratchet and its measured source commit.");
     failed = true;
   }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
