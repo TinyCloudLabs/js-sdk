@@ -1,8 +1,20 @@
 # @tinycloud/mcp
 
-TinyCloud MCP server for delegated operations. It supports local stdio and a
-hosted Streamable HTTP resource server. Both transports use exact, revocable
-TinyCloud capabilities and never silently fall back to owner authority.
+TinyCloud MCP server for delegated operations. The canonical remote connection
+is the hosted Streamable HTTP endpoint `https://mcp.tinycloud.xyz/mcp`, using
+OpenKey OAuth. Local stdio is the alternative when you want your MCP client to
+launch the server as a local process.
+Both transports use exact, revocable TinyCloud capabilities and never silently fall back to owner authority.
+
+ChatGPT users can add `https://mcp.tinycloud.xyz/mcp` on the web under Plugins → + → Add custom MCP server; Developer Mode isn't required first.
+Availability depends on the ChatGPT plan and workspace settings. Follow
+[OpenAI's custom MCP connection guide](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt).
+
+## Hosted Streamable HTTP
+
+In Claude, add the hosted URL as a remote MCP connector and complete OpenKey
+OAuth. Other remote clients can connect when they support Streamable HTTP and
+OAuth.
 
 ## Local stdio requirements
 
@@ -11,21 +23,7 @@ TinyCloud capabilities and never silently fall back to owner authority.
 - A delegated TinyCloud profile
 - A TinyCloud node running 1.6.0 or newer
 
-## Public ChatGPT release candidate
-
-The candidate is **not published**. Its separate endpoint is
-`https://mcp.tinycloud.xyz/chatgpt/mcp`, with exactly `tinycloud_connect`,
-`tinycloud_apps_context`, `tinycloud_apps_read`, `tinycloud_apps_write` and
-`tinycloud_apps_query`. Excluded tools are not callable by name. The existing
-broad `/mcp` endpoint and local stdio remain available for private integrations.
-ChatGPT users need no CLI, local profile or bundled skill.
-
-The public resource has its own OAuth audience, tenant state under
-`<TC_MCP_STATE_DIR>/chatgpt`, and `/chatgpt/connect` approval/callback paths.
-Deploy the corresponding OpenKey API audience and web callback registrations
-before testing the candidate. Existing broad-service approvals do not migrate
-into the public tenant store. Account connection, personal-record access and
-the optional derived SQL copy require their respective approvals.
+## Hosted personal-record behavior
 
 Context can persist an IANA timezone; query can overwrite or rebuild derived
 data. Both therefore advertise `readOnlyHint: false` and
@@ -36,30 +34,6 @@ credentials, payment-card data, government identifiers or protected health
 information. Respect declined approval and the client's destructive-action
 confirmation flow. Ask for an IANA timezone, not a city or precise location.
 
-Package sources are in `plugin/package/`. From the repository root:
-
-```bash
-python3 -m venv /tmp/tinycloud-plugin-validator
-/tmp/tinycloud-plugin-validator/bin/pip install 'jsonschema>=4,<5'
-/tmp/tinycloud-plugin-validator/bin/python packages/mcp/scripts/package-plugin.py \
-  --output /tmp/tinycloud-plugin-release
-```
-
-The packager validates the canonical Agent Plugins schemas, produces a
-deterministic ZIP containing only the two manifests and logo, and reports its
-SHA-256. `plugin/review-evidence.json` is deliberately excluded: test definitions
-are not passing ChatGPT evidence, and reviewer credentials never belong in the
-ZIP. The schema-valid MCP manifest relies on OAuth discovery; verify imported
-authentication and scopes in the portal rather than adding schema-invalid
-per-server extensions.
-
-Release gates remain: explicit owner approval for default-branch merges and
-deployment; actual ChatGPT web/mobile acceptance; an independently usable
-reviewer account and synthetic fixtures; approved privacy, terms, support and
-country availability; the real walkthrough recording; publisher/domain
-verification; review approval and explicit publication. A successful local
-smoke or package validation does not satisfy those gates. Do not enable
-auto-merge or deploy around the approval requirement.
 
 ## Install and configure
 
@@ -383,3 +357,4 @@ Secret values are excluded from TinyCloud text output, logs, errors, request
 files, delegation files, and generated artifacts. MCP hosts may retain
 structured tool results in their own transcripts, so use a client and retention
 policy appropriate for secrets.
+

@@ -47,6 +47,10 @@ Coverage is generated from the Commander registration ledger; legacy commands ar
 
 ## Account and KV exploration
 
+With hosted Streamable HTTP, call `tinycloud_connect`, give the owner the returned `approvalUrl` to approve in OpenKey, then call `tinycloud_connect` again. When a tool returns `authority_required` with `approval.url`, give the owner that link, wait for their approval, then retry the same call unchanged. If the result has no `approval.url`, stop and report it; don't try another route. The `tc auth request` / `tc auth import` and `tinycloud_auth_import` instructions below are for local stdio only. See the [hosted MCP guide](https://docs.tinycloud.xyz/cli/mcp).
+
+The `tc auth grant --stdin --yes` artifact, import, restart, and retry steps below apply to local stdio only; hosted operations use a returned `approval.url` as described above.
+
 1. A fresh `delegate-session` profile must first bootstrap its session through
    the CLI: emit one exact `tc auth request --cap ...` artifact, have the owner
    grant that artifact, and import the result with `tc auth import`. Start MCP
@@ -107,9 +111,19 @@ transcripts, caches, or evaluation records. TinyCloud controls only its own
 logs and local profile state, not host-side transcript retention. Hosts should
 apply their own sensitive-result retention and access controls.
 
-This surface uses local stdio only. It has no continuation tool, resources,
-prompts, elicitation, remote transport, generic permission grant, or secret
-mutation tool.
+The canonical remote service is hosted MCP at
+`https://mcp.tinycloud.xyz/mcp` using Streamable HTTP and OpenKey OAuth.
+Connect Claude through its remote MCP connector and complete OpenKey OAuth.
+ChatGPT users can add `https://mcp.tinycloud.xyz/mcp` on the web under Plugins → + → Add custom MCP server; Developer Mode isn't required first.
+Availability depends on the ChatGPT plan and workspace settings. Follow
+[OpenAI's custom MCP connection guide](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt).
+
+Local stdio is the alternative: install `@tinycloud/cli` and `@tinycloud/mcp`,
+then configure `tinycloud-mcp` in the client's stdio MCP settings.
+Connection documentation: https://docs.tinycloud.xyz/cli/mcp
+
+The MCP server has no resources, prompts, elicitation, generic permission grant,
+or secret mutation tool.
 
 This is a beta surface. Delegated posture is the default; owner-profile data
 access requires explicit opt-in. The user must enter secrets only in Secret
