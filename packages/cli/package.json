@@ -4,6 +4,11 @@
   "description": "TinyCloud CLI - manage data, delegations, and nodes from the terminal",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TinyCloudLabs/js-sdk.git",
+    "directory": "packages/cli"
+  },
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -16,6 +21,9 @@
     "bin",
     "skills"
   ],
+  "publishConfig": {
+    "provenance": true
+  },
   "engines": {
     "node": ">=20"
   },
