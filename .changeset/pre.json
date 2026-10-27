@@ -36,6 +36,7 @@
     "cli-named-keys",
     "cli-onboard",
     "cli-secrets-run",
+    "cli-share-invitations-on",
     "cli-share-json-short-link",
     "host-binding-export-node",
     "host-binding-export-web",

@@ -31661,7 +31661,8 @@ configureShareCommandServices({
   revocation: shareAuthority.revocation,
   nativeReader: shareAuthority.nativeReader,
   artifactStore: shareAuthority.artifactStore,
-  links: shareAuthority.links
+  links: shareAuthority.links,
+  shortLinkInvitations: true
 });
 var argv = process.argv.slice(2);
 var globalLongOptionsWithValues = { "--profile": true, "--host": true };

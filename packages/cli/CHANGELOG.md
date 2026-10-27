@@ -1,5 +1,13 @@
 # @tinycloud/cli
 
+## 1.5.0-beta.21
+
+### Patch Changes
+
+- 5a7cf08: `tinycloud share notify` and `tinycloud share publish --notify` send invitation emails again.
+
+  Details: TC-2177
+
 ## 1.5.0-beta.20
 
 ### Minor Changes
