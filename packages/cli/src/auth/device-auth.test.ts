@@ -26,7 +26,8 @@ const ownerDid = `did:pkh:eip155:1:${address}`;
 const spaceId = wasm.makeSpaceId(address, 1, "default");
 const key = JSON.parse(wasm.createSessionManager().jwk("default")!) as Record<string, string>;
 const sessionDid = keyToDID(key);
-const requested = sharePublishingPermissions();
+// The generic device flow is exercised with the manifest's space entries; the default-key decrypt entry has its own suite (device-default-decrypt.test.ts).
+const requested = sharePublishingPermissions().filter((permission) => permission.service !== "tinycloud.encryption");
 const [capabilityRead, bearerPrefix, addressedPrefix, artifactsPrefix] = requested as [PermissionEntry, PermissionEntry, PermissionEntry, PermissionEntry];
 // OpenKey's required capability read is always signed; the owner unchecked addressed shares.
 const bearerOnly = [capabilityRead, bearerPrefix];
