@@ -107,9 +107,12 @@ transcripts, caches, or evaluation records. TinyCloud controls only its own
 logs and local profile state, not host-side transcript retention. Hosts should
 apply their own sensitive-result retention and access controls.
 
-This surface uses local stdio only. It has no continuation tool, resources,
-prompts, elicitation, remote transport, generic permission grant, or secret
-mutation tool.
+TinyCloud MCP has two transports. Chat apps and other remote MCP clients
+connect to the hosted endpoint `https://mcp.tinycloud.xyz/mcp` with OAuth
+through OpenKey; local clients run the `tinycloud-mcp` stdio server from
+`@tinycloud/mcp`. Each tool above lists the surfaces it runs on. Neither
+transport has a continuation tool, resources, prompts, elicitation, a generic
+permission grant, or a secret mutation tool.
 
 This is a beta surface. Delegated posture is the default; owner-profile data
 access requires explicit opt-in. The user must enter secrets only in Secret
