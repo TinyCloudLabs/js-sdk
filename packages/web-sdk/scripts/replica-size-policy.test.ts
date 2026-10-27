@@ -3412,8 +3412,8 @@ describe("signInWithOpenKey (TC-1977, #747) size ratchet", () => {
     expect(row().replicaWorker).toEqual({ delta: 0, ceiling: prerequisite().replicaWorker.ceiling });
     expect(rootCeilings(current).find(({ row: name }) => name === "tc1977OpenKeySigninRatchet")).toEqual({ row: "tc1977OpenKeySigninRatchet", ceiling: row().root.ceiling });
     expect(ancestryPins(current, false)).toContainEqual({ row: "tc1977OpenKeySigninRatchet", pin: row().sourceCommits[0] });
-    expect(MAX_WORKER_GZIP_BYTES).toBe(newestKvWorkerCeiling());
-    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(newestReplicaWorkerCeiling());
+    expect(MAX_WORKER_GZIP_BYTES).toBe(row().worker.ceiling);
+    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(row().replicaWorker.ceiling);
   });
 
   it("refuses changed bytes or a missing window location prerequisite", () => {
@@ -3451,8 +3451,8 @@ describe("iPhone panel safe-area and ui.setButtonVisible (TC-2130, #765) size ra
     expect(row().replicaWorker).toEqual({ delta: 0, ceiling: prerequisite().replicaWorker.ceiling });
     expect(rootCeilings(current).find(({ row: name }) => name === "tc2130PanelIphoneRatchet")).toEqual({ row: "tc2130PanelIphoneRatchet", ceiling: row().root.ceiling });
     expect(ancestryPins(current, false)).toContainEqual({ row: "tc2130PanelIphoneRatchet", pin: row().sourceCommits[0] });
-    expect(MAX_WORKER_GZIP_BYTES).toBe(newestKvWorkerCeiling());
-    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(newestReplicaWorkerCeiling());
+    expect(MAX_WORKER_GZIP_BYTES).toBe(row().worker.ceiling);
+    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(row().replicaWorker.ceiling);
   });
 
   it("refuses changed bytes or a missing OpenKey sign-in prerequisite", () => {
@@ -3490,8 +3490,8 @@ describe("isAppKeyHostBound export (TC-1977, #767) size ratchet", () => {
     expect(row().replicaWorker).toEqual({ delta: 0, ceiling: prerequisite().replicaWorker.ceiling });
     expect(rootCeilings(current).find(({ row: name }) => name === "tc1977HostBindingRatchet")).toEqual({ row: "tc1977HostBindingRatchet", ceiling: row().root.ceiling });
     expect(ancestryPins(current, false)).toContainEqual({ row: "tc1977HostBindingRatchet", pin: row().sourceCommits[0] });
-    expect(MAX_WORKER_GZIP_BYTES).toBe(newestKvWorkerCeiling());
-    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(newestReplicaWorkerCeiling());
+    expect(MAX_WORKER_GZIP_BYTES).toBe(row().worker.ceiling);
+    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(row().replicaWorker.ceiling);
   });
 
   it("refuses changed bytes or a missing panel safe-area prerequisite", () => {
