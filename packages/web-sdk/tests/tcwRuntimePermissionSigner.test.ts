@@ -2,9 +2,13 @@
  * TinyCloudWeb.setRuntimePermissionSigner: the signer signs runtime permission grants only. It is bound to the session
  * it was set for: sign-out, a new sign-in, a restore, or a session for another account clear it. The node is a stub
  * that signs a grant the way the real one does (the caller's `signMessage`, else the wallet's `personal_sign`).
+ *
+ * One real TinyCloudWeb is built (its constructor starts the WASM init) and shared by the tests that exercise the
+ * constructor-bound `signOut` / `signIn` and `restoreSession`. The other tests use an instance made from the prototype
+ * with assigned state, which starts nothing: many real instances in one test process are avoided on purpose.
  */
 import "./support/browserGlobalsShim";
-import { describe, expect, mock, test } from "bun:test";
+import { beforeAll, describe, expect, mock, test } from "bun:test";
 import type { PermissionEntry } from "@tinycloud/sdk-core";
 import type { RuntimePermissionGrantOptions } from "@tinycloud/node-sdk/core";
 
@@ -45,7 +49,8 @@ function recordingSigner(signature: string) {
   return { signMessage: mock(async (_message: string) => signature) };
 }
 
-async function web(options: { covered?: boolean } = {}) {
+/** A node stub plus the wallet it falls back to, and the signatures its grants collected. */
+function stubNode(options: { covered?: boolean } = {}) {
   const walletSign = mock(async (_message: string) => "0xwallet");
   const signatures: string[] = [];
   const node = {
@@ -60,18 +65,31 @@ async function web(options: { covered?: boolean } = {}) {
     }),
     signOut: mock(async () => undefined),
   };
-  const tcw = new TinyCloudWeb({ sessionStorage: new BrowserSessionStorage({ storage: new MemoryStorage() }), ui: false, manifest: MANIFEST });
-  const state = tcw as unknown as Record<string, unknown>;
-  await (state._initPromise as Promise<unknown>);
-  state._node = node;
-  state._initPromise = Promise.resolve();
-  state._testHooks = { showModal: async () => ({ approved: true }) };
-  return { tcw, node, walletSign, signatures };
+  return { node, walletSign, signatures };
+}
+
+const HOOKS = { showModal: async () => ({ approved: true }) };
+
+/** An instance made from the prototype: no constructor, so no WASM init and no constructor-bound methods. */
+function lite(options: { covered?: boolean } = {}) {
+  const stub = stubNode(options);
+  const tcw = Object.create(TinyCloudWeb.prototype) as TinyCloudWebType;
+  const config: Record<string, unknown> = {};
+  Object.assign(tcw, {
+    session: () => undefined,
+    config,
+    signOutCount: 0,
+    signOutInFlight: 0,
+    _manifest: MANIFEST,
+    _node: stub.node,
+    _testHooks: HOOKS,
+  });
+  return { tcw, config, ...stub };
 }
 
 describe("setRuntimePermissionSigner", () => {
   test("a set signer signs the grant and the wallet is never asked", async () => {
-    const { tcw, walletSign, signatures } = await web();
+    const { tcw, walletSign, signatures } = lite();
     const signer = recordingSigner("0xapp");
     tcw.setRuntimePermissionSigner(signer);
 
@@ -83,9 +101,9 @@ describe("setRuntimePermissionSigner", () => {
   });
 
   test("it takes precedence over an OpenKey client", async () => {
-    const { tcw, signatures } = await web();
+    const { tcw, config, signatures } = lite();
     const openkeySign = mock(async () => ({ signature: "0xopenkey" }));
-    (tcw as unknown as { config: Record<string, unknown> }).config.openkey = { client: { authorizeTinyCloud: mock(), signMessage: openkeySign } };
+    config.openkey = { client: { authorizeTinyCloud: mock(), signMessage: openkeySign } };
     tcw.setRuntimePermissionSigner(recordingSigner("0xapp"));
 
     await tcw.requestPermissions([ENTRY]);
@@ -95,7 +113,7 @@ describe("setRuntimePermissionSigner", () => {
   });
 
   test("a permission the session already holds does not use the signer", async () => {
-    const { tcw } = await web({ covered: true });
+    const { tcw } = lite({ covered: true });
     const signer = recordingSigner("0xapp");
     tcw.setRuntimePermissionSigner(signer);
 
@@ -105,7 +123,7 @@ describe("setRuntimePermissionSigner", () => {
   });
 
   test("clearing it returns signing to the wallet", async () => {
-    const { tcw, signatures } = await web();
+    const { tcw, signatures } = lite();
     const signer = recordingSigner("0xapp");
     tcw.setRuntimePermissionSigner(signer);
     tcw.setRuntimePermissionSigner(undefined);
@@ -116,27 +134,50 @@ describe("setRuntimePermissionSigner", () => {
     expect(signatures).toEqual(["0xwallet"]);
   });
 
-  test("it needs a session", async () => {
-    const { tcw, node } = await web();
+  test("it needs a session", () => {
+    const { tcw, node } = lite();
     node.address = undefined;
 
     expect(() => tcw.setRuntimePermissionSigner(recordingSigner("0xapp"))).toThrow("signed-in session");
   });
 
-  test("sign-out clears it", async () => {
-    const { tcw, signatures } = await web();
-    const signer = recordingSigner("0xapp");
+  test("a session for another account does not use it, and it is cleared", async () => {
+    const { tcw, node, signatures } = lite();
+    const signer = recordingSigner("0xalice");
     tcw.setRuntimePermissionSigner(signer);
+    node.address = BOB;
 
-    await tcw.signOut();
+    await tcw.requestPermissions([ENTRY]);
+    node.address = ALICE;
     await tcw.requestPermissions([ENTRY]);
 
     expect(signer.signMessage).not.toHaveBeenCalled();
-    expect(signatures).toEqual(["0xwallet"]);
+    expect(signatures).toEqual(["0xwallet", "0xwallet"]);
+  });
+});
+
+describe("setRuntimePermissionSigner with the real constructor-bound methods", () => {
+  let tcw: TinyCloudWebType;
+
+  beforeAll(async () => {
+    tcw = new TinyCloudWeb({ sessionStorage: new BrowserSessionStorage({ storage: new MemoryStorage() }), ui: false, manifest: MANIFEST });
+    // The instance's private state is reached through a record view, as the other tests of this class do.
+    const state = tcw as unknown as Record<string, unknown>;
+    await (state._initPromise as Promise<unknown>);
   });
 
+  /** Installs a fresh node stub on the shared instance. */
+  function useNode() {
+    const stub = stubNode();
+    const state = tcw as unknown as Record<string, unknown>;
+    state._node = stub.node;
+    state._initPromise = Promise.resolve();
+    state._testHooks = HOOKS;
+    return stub;
+  }
+
   test("a restore clears it", async () => {
-    const { tcw, signatures } = await web();
+    const { signatures } = useNode();
     const signer = recordingSigner("0xapp");
     tcw.setRuntimePermissionSigner(signer);
 
@@ -148,7 +189,7 @@ describe("setRuntimePermissionSigner", () => {
   });
 
   test("a new sign-in clears it and never calls it", async () => {
-    const { tcw, signatures } = await web();
+    const { signatures } = useNode();
     const signer = recordingSigner("0xapp");
     tcw.setRuntimePermissionSigner(signer);
 
@@ -159,17 +200,16 @@ describe("setRuntimePermissionSigner", () => {
     expect(signatures).toEqual(["0xwallet"]);
   });
 
-  test("a session for another account does not use it, and it is cleared", async () => {
-    const { tcw, node, signatures } = await web();
-    const signer = recordingSigner("0xalice");
+  // Last: sign-out leaves the shared instance signed out.
+  test("sign-out clears it", async () => {
+    const { signatures } = useNode();
+    const signer = recordingSigner("0xapp");
     tcw.setRuntimePermissionSigner(signer);
-    node.address = BOB;
 
-    await tcw.requestPermissions([ENTRY]);
-    node.address = ALICE;
+    await tcw.signOut();
     await tcw.requestPermissions([ENTRY]);
 
     expect(signer.signMessage).not.toHaveBeenCalled();
-    expect(signatures).toEqual(["0xwallet", "0xwallet"]);
+    expect(signatures).toEqual(["0xwallet"]);
   });
 });
