@@ -63,13 +63,15 @@ async function encryptRelay(relayPublicJwk: object, transactionId: string, value
 /** What OpenKey's /delegate/complete returns for an owner-signed SIWE over `signed`; `caveat` is signed onto every action. */
 async function signedDelegation(signed: PermissionEntry[], publicJwk: object, claimed: PermissionEntry[] = signed, lifetimeMs = 3600_000, caveat?: Record<string, unknown>) {
   const abilities: Record<string, Record<string, string[]>> = {};
+  const rawAbilities: Record<string, string[]> = {};
   for (const permission of signed) {
-    const service = permission.service.slice("tinycloud.".length);
-    (abilities[service] ??= {})[permission.path] = permission.actions;
+    // OpenKey signs the default-key decrypt entry as the owner's own network, a raw ReCap resource.
+    if (permission.service === "tinycloud.encryption") rawAbilities[`urn:tinycloud:encryption:${ownerDid}:default`] = ["tinycloud.encryption/decrypt"];
+    else (abilities[permission.service.slice("tinycloud.".length)] ??= {})[permission.path] = permission.actions;
   }
   const expiresAt = new Date(Math.floor(Date.now() / 1000) * 1000 + lifetimeMs).toISOString();
   const prepared = wasm.prepareSession({
-    abilities, address, chainId: 1, domain: "openkey.so", spaceId, jwk: key,
+    abilities, ...(Object.keys(rawAbilities).length ? { rawAbilities } : {}), address, chainId: 1, domain: "openkey.so", spaceId, jwk: key,
     issuedAt: new Date(Date.now() - 60_000).toISOString(), expirationTime: expiresAt,
   });
   if (caveat) prepared.siwe = withRecapCaveat(prepared.siwe, caveat);
