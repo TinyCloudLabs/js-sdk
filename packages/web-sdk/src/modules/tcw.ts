@@ -135,6 +135,14 @@ declare global {
 
 // Config
 
+/** The byte-exact message signing the OpenKey SDK's `OpenKey` class offers beside `authorizeTinyCloud`. */
+interface OpenKeyMessageSigner {
+  signMessage?: (
+    request: { message: string; keyId?: string },
+    opts?: { mode?: "iframe" | "popup" | "redirect" },
+  ) => Promise<{ signature: string }>;
+}
+
 /**
  * Configuration for TinyCloudWeb.
  *
@@ -1475,13 +1483,14 @@ export class TinyCloudWeb {
       suppressPromptFor30Days: () =>
         suppressPermissionPromptFor30Days(manifest),
       grantPermissions: this._testHooks?.grantPermissions ??
-        ((approved, grantOptions) =>
-          node.grantRuntimePermissions(
-            approved,
-            grantOptions?.expiryMs !== undefined
-              ? { expiry: grantOptions.expiryMs }
-              : undefined,
-          )),
+        ((approved, grantOptions) => {
+          const signMessage = this.openKeyMessageSigner();
+          const grant = {
+            ...(grantOptions?.expiryMs !== undefined ? { expiry: grantOptions.expiryMs } : {}),
+            ...(signMessage !== undefined ? { signMessage } : {}),
+          };
+          return node.grantRuntimePermissions(approved, Object.keys(grant).length > 0 ? grant : undefined);
+        }),
     }, options);
     return result.approved
       ? {
@@ -1492,6 +1501,18 @@ export class TinyCloudWeb {
             : {}),
         }
       : result;
+  }
+
+  /**
+   * Signs a prepared SIWE through the OpenKey client the session was established with. An OpenKey session's wallet
+   * provider does not implement `personal_sign`, so a runtime grant signs here. Undefined without an OpenKey client
+   * that can sign a message: the connected wallet signs instead.
+   */
+  private openKeyMessageSigner(): ((siwe: string) => Promise<string>) | undefined {
+    const openkey = this.config.openkey;
+    const client = openkey?.client as (OpenKeyAuthorizeTinyCloud & OpenKeyMessageSigner) | undefined;
+    if (openkey === undefined || typeof client?.signMessage !== "function") return undefined;
+    return async (siwe) => (await client.signMessage!({ message: siwe }, { mode: openkey.mode ?? "popup" })).signature;
   }
 
   /** True when the panel may ask for a permission: a manifest, a page signer and a live session exist. */

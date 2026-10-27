@@ -1046,6 +1046,12 @@ export interface DelegateToResult {
 export interface RuntimePermissionGrantOptions {
   /** Override expiry. ms-format string ("7d", "1h") or raw milliseconds. */
   expiry?: string | number;
+  /**
+   * Signs the prepared SIWE and returns the EIP-191 signature, in place of the connected signer's `signMessage`.
+   * For a session whose wallet provider does not sign (an OpenKey session). The signature must recover to the
+   * session's address.
+   */
+  signMessage?: (siwe: string) => Promise<string>;
 }
 
 export interface EnsureEncryptionNetworkOptions {
@@ -6894,7 +6900,7 @@ export class TinyCloudNode {
     if (existingGrants.length > 0) {
       return existingGrants.map((grant) => grant.delegation);
     }
-    if (!this.signer) {
+    if (!this.signer && options?.signMessage === undefined) {
       throw new Error(
         "grantRuntimePermissions requires wallet mode with a signer or privateKey.",
       );
@@ -6964,7 +6970,15 @@ export class TinyCloudNode {
         }
       })();
 
-      const signature = await this.signer.signMessage(prepared.siwe);
+      const signature = options?.signMessage !== undefined
+        ? await options.signMessage(prepared.siwe)
+        : await this.signer!.signMessage(prepared.siwe);
+      if (options?.signMessage !== undefined) {
+        const verified = await new SiweMessage(prepared.siwe).verify({ signature }, { suppressExceptions: true });
+        if (!verified.success) {
+          throw new Error("The signature does not match the account that owns this session.");
+        }
+      }
       // Nothing is activated for a session that ended while the wallet signed.
       graph.assertActive();
       const delegatedSession = this.wasmBindings.completeSessionSetup({
