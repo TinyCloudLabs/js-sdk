@@ -28,6 +28,47 @@ pinned, cross-agent installation with OpenCode, Codex and Claude Code, and
 [authentication](skills/tc-cli/AUTH.md) for device login and relaying the
 approval code to the owner.
 
+It also ships `skills/tc-apps`, the personal-records skill that
+[agents.tinycloud.xyz/apps](https://agents.tinycloud.xyz/apps) installs: a copy
+of [TinyCloudLabs/prompts `skills/tc-apps`](https://github.com/TinyCloudLabs/prompts/tree/main/skills/tc-apps)
+with the same `SHA256SUMS` the site serves (refresh it with
+`bun run sync:tc-apps-skill <prompts checkout>`). One command installs it with
+the CLI, with an exact version and no global install:
+
+```bash
+npx -y @tinycloud/cli@<exact version> setup apps --agent claude-code --app todos
+```
+
+It installs this CLI version into `~/.local/share/tc-apps/cli`, checks the
+bundled skill against its `SHA256SUMS`, puts it in the client's skills folder
+(`${CLAUDE_CONFIG_DIR:-~/.claude}/skills` for Claude Code,
+`~/.agents/skills` for Codex and OpenCode; `--agent none` skips that copy) and
+in `~/.local/share/tc-apps/skill`, and writes the helper
+`~/.local/share/tc-apps/tinycloud`. With `--app`, it also starts that app's
+browser sign-in in the background and prints the OpenKey link
+(`auth login --detach`, below).
+
+### Signing in from an agent's shell
+
+An agent's shell commands are one-shot and time out, so a foreground browser
+login (which waits for OpenKey's callback) can die before the owner approves.
+`--detach` starts the same callback login in a detached listener and returns at
+once:
+
+```bash
+tc --profile tinyapp-todos auth login --method openkey --manifest m.json --expiry 30d --detach
+# {"authenticated": false, "login": {"state": "waiting", "approvalUrl": "https://openkey.so/delegate?…", …}}
+tc --profile tinyapp-todos auth status --wait 60   # 0 signed in, 8 still waiting, 3 nothing pending
+```
+
+The listener binds `127.0.0.1` on a random port for up to 10 minutes and
+accepts one POST, from OpenKey's origin, on an unguessable path; the delegation
+is saved only if it verifies against this profile's own key, as in a
+foreground login. It never opens a browser: show the owner the link. When the
+browser runs on another machine (a remote agent), OpenKey can't reach the
+listener and shows a code instead; finish with `auth login --paste` and the same
+`--manifest` and `--expiry`.
+
 ## Courier
 
 `tc courier …` runs [Courier](https://github.com/TinyCloudLabs/js-sdk/tree/master/packages/courier#readme), agent-to-agent threads
@@ -113,7 +154,10 @@ tc delegation create --to did:pkh:eip155:1:0x...
 | `tc auth login --manifest <file>` | Browser OpenKey login scoped to a manifest |
 | `tc enable share` | Device login with the built-in Share publishing manifest (use a dedicated profile) |
 | `tc context` | Show the selected profile, owner, host, space and session state |
-| `tc auth status` | Show authentication status |
+| `tc auth login --manifest <file> --detach` | Browser OpenKey login for agents: prints the OpenKey link and returns; a detached 127.0.0.1 listener waits up to 10 minutes for the approval |
+| `tc auth status` | Show authentication status; `--wait <seconds>` waits for a pending `--detach` approval (exit 0 signed in, 8 still waiting, 3 nothing pending) |
+| `tc setup apps --agent <claude-code\|codex\|opencode\|auto\|none> [--app <name>]` | Install this exact CLI version into tc-apps' private folder and the bundled `tc-apps` skill for an agent; with `--app`, start that app's detached sign-in |
+| `tc apps init <app> --by <client> [--starter <text>]` | Start a tiny app (`todos`) in the tc-apps layout: its catalog records, discovery entry and an optional starter item, all create-only, under the app's own folder (profile `tinyapp-<app>`) |
 | `tc auth whoami` | Show current identity |
 | `tc auth request --preset apps-agent [--app <id>]... [--write]` | Request access for an agent to the user's installed apps: read-only by default, for one app, several, or all. `--write --app <id>` also lets the agent change that app's data: write its `knowledge/` and `prefs/` files and add, change or delete its table rows. For the Health Log app's catalog database, it can also create, change and drop tables (nodes before 1.21.6 do not enforce that split). It cannot change the app's code, manifest or install record |
 | `tc knowledge list` | List the installed apps that have a knowledge bundle |

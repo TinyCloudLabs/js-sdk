@@ -408,6 +408,32 @@ describe("browser callback wait", () => {
     }
   });
 
+  test("hands the approval URL (with its loopback callback) to onApprovalUrl before waiting", async () => {
+    const terminal = captureTerminal(false);
+    try {
+      const urls: string[] = [];
+      const { flow, callback } = await startWait({ deadlineMs: 60_000, interactive: false, onApprovalUrl: (url) => urls.push(url) });
+      expect(urls).toHaveLength(1);
+      const approval = new URL(urls[0]!);
+      expect(approval.origin).toBe(OPENKEY);
+      expect(approval.searchParams.get("callback")).toBe(callback.href);
+      expect((await deliver(callback)).status).toBe(200);
+      expect(await flow).toEqual(code);
+    } finally {
+      terminal.restore();
+    }
+  });
+
+  test("with a timeout message, the deadline is a coded AUTH_TIMEOUT", async () => {
+    const terminal = captureTerminal(false);
+    try {
+      const { flow } = await startWait({ deadlineMs: 200, interactive: false, timeoutMessage: "No approval arrived within 10 minutes." });
+      await expect(flow).rejects.toMatchObject({ code: "AUTH_TIMEOUT", message: "No approval arrived within 10 minutes." });
+    } finally {
+      terminal.restore();
+    }
+  });
+
   test("prints the how-to once after the hint delay while interactive, and not again", async () => {
     const terminal = captureTerminal(true);
     try {

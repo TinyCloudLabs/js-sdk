@@ -65,7 +65,7 @@ program.hook("preAction", async (thisCommand) => {
   const isRootCommand = thisCommand === program;
   const fullCommand = parentName && thisCommand.parent !== program ? `${parentName} ${commandName}` : commandName;
   const skipGuard = isRootCommand || ["init", "doctor", "completion", "help", "upgrade", "status"].includes(commandName) ||
-                    fullCommand === "profile create";
+                    fullCommand === "profile create" || fullCommand === "setup apps";
   if (!skipGuard && !opts.quiet && !shouldOutputJson()) {
     try {
       const config = await ProfileManager.getConfig();

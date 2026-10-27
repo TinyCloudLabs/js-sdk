@@ -38,7 +38,8 @@
     "check:node-release": "bun scripts/generate-node-release.ts --check",
     "smoke:delegated-secrets": "bun scripts/live-delegated-secrets-smoke.ts",
     "check:skill-pack": "node scripts/check-skill-pack.mjs",
-    "sync:courier-skill": "rm -rf skills/courier && cp -R ../courier/skills/courier skills/courier"
+    "sync:courier-skill": "rm -rf skills/courier && cp -R ../courier/skills/courier skills/courier",
+    "sync:tc-apps-skill": "node scripts/sync-tc-apps-skill.mjs"
   },
   "dependencies": {
     "@tinycloud/share-sdk": "1.4.1-beta.0",

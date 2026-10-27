@@ -188,6 +188,21 @@
       "command": "apps install <app_id>",
       "status": "excluded",
       "reason": "Local installer: verifies pinned Share bytes, runs pinned DDL, writes knowledge files via SDK KV/SQL; not a shared operation."
+    },
+    {
+      "command": "apps init <app>",
+      "status": "excluded",
+      "reason": "Local composition of create-only SDK KV writes in the tc-apps layout (catalog records, discovery entry, starter record); not a shared operation."
+    },
+    {
+      "command": "setup",
+      "status": "excluded",
+      "reason": "Command group; its subcommands install local files."
+    },
+    {
+      "command": "setup apps",
+      "status": "excluded",
+      "reason": "Local installer: npm install of this CLI version into a private prefix and the bundled tc-apps skill into the client's skills folder; performs no storage operation (--app starts the local browser sign-in)."
     }
   ]
 }
