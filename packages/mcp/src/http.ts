@@ -138,17 +138,66 @@ function createHostedSurface(
 
   return {
     async fetch(request: Request): Promise<Response> {
-      const metadata = oauthMetadataResponse(request, metadataOptions);
-      if (metadata !== undefined) return metadata;
       const url = new URL(request.url);
+      if (url.pathname !== "/healthz") {
+        const hostFailure = hostHeaderValidationResponse(request, allowedHosts);
+        if (hostFailure !== undefined) return hostFailure;
+      }
+      if (url.pathname === "/.well-known/oauth-protected-resource" && surface === "hosted") {
+        const metadataUrl = new URL(getOAuthProtectedResourceMetadataUrl(resourceUrl));
+        const metadataRequest = new Request(metadataUrl, {
+          method: request.method,
+          headers: request.headers,
+        });
+        const response = oauthMetadataResponse(metadataRequest, metadataOptions);
+        if (response !== undefined) return publicMetadataCors(response);
+      }
+      const metadata = oauthMetadataResponse(request, metadataOptions);
+      if (metadata !== undefined) return publicMetadataCors(metadata);
+      if (url.pathname === "/mcp/server-card" && surface === "hosted") {
+        return request.method === "GET"
+          ? publicMetadataCors(Response.json({
+            $schema: "https://static.modelcontextprotocol.io/schemas/v1/server-card.schema.json",
+            name: `xyz.tinycloud/${MCP_SERVER_NAME}`,
+            title: "TinyCloud MCP",
+            version: MCP_VERSION,
+            description: "MCP server for delegated TinyCloud operations.",
+            websiteUrl: "https://docs.tinycloud.xyz/cli/mcp",
+            repository: { source: "github", url: "https://github.com/TinyCloudLabs/js-sdk", subfolder: "packages/mcp" },
+            remotes: [{ type: "streamable-http", url: resourceUrl.toString() }],
+          }, { headers: { "cache-control": "public, max-age=300" } }))
+          : methodNotAllowed("GET");
+      }
+      if (url.pathname === "/llms.txt" && surface === "hosted") {
+        return request.method === "GET"
+          ? publicText("# TinyCloud MCP\n\nTinyCloud's hosted MCP server uses Streamable HTTP at https://mcp.tinycloud.xyz/mcp and OpenKey OAuth. Connection documentation: https://docs.tinycloud.xyz/cli/mcp\n\nLocal alternative: install @tinycloud/cli and @tinycloud/mcp, then run tinycloud-mcp over stdio.\n\nThe public ChatGPT app candidate is not published.\n\nDetails: TC-1362\n", "text/markdown; charset=utf-8")
+          : methodNotAllowed("GET");
+      }
+      if (url.pathname === "/robots.txt" && surface === "hosted") {
+        return request.method === "GET"
+          ? publicText("User-agent: *\nAllow: /\n", "text/plain; charset=utf-8")
+          : methodNotAllowed("GET");
+      }
+      if (url.pathname === "/" && surface === "hosted") {
+        if (request.method !== "GET" && request.method !== "HEAD") return methodNotAllowed("GET, HEAD");
+        const markdown = request.headers.get("accept")?.includes("text/markdown") ?? false;
+        const content = markdown
+          ? "# TinyCloud MCP\n\nHosted endpoint: <https://mcp.tinycloud.xyz/mcp> (Streamable HTTP, OpenKey OAuth).\n\n[Connection documentation](https://docs.tinycloud.xyz/cli/mcp).\n\nLocal alternative: install `@tinycloud/cli` and `@tinycloud/mcp` and connect the `tinycloud-mcp` stdio server.\n\nThe public ChatGPT app candidate is not published.\n\nDetails: TC-1362\n"
+          : "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>TinyCloud MCP</title><main><h1>TinyCloud MCP</h1><p>Hosted MCP endpoint: <code>https://mcp.tinycloud.xyz/mcp</code> (Streamable HTTP, OpenKey OAuth).</p><p><a href=\"https://docs.tinycloud.xyz/cli/mcp\">Connection documentation</a></p><p>Local alternative: install <code>@tinycloud/cli</code> and <code>@tinycloud/mcp</code> and connect the <code>tinycloud-mcp</code> stdio server.</p><p>The public ChatGPT app candidate is not published.</p><p>Details: TC-1362</p></main></html>";
+        const headers = new Headers({
+          "content-type": markdown ? "text/markdown; charset=utf-8" : "text/html; charset=utf-8",
+          "cache-control": "public, max-age=300",
+          "content-security-policy": "default-src 'none'; base-uri 'none'; style-src 'unsafe-inline'",
+          "x-content-type-options": "nosniff",
+          vary: "Accept",
+        });
+        return new Response(request.method === "HEAD" ? null : content, { headers });
+      }
       if (url.pathname === "/healthz") {
         return request.method === "GET"
           ? json({ ok: true })
           : methodNotAllowed("GET");
       }
-      const hostFailure = hostHeaderValidationResponse(request, allowedHosts);
-      if (hostFailure !== undefined) return hostFailure;
-
       if (url.pathname === connectPath) {
         if (request.method !== "GET") return methodNotAllowed("GET");
         try {
@@ -347,6 +396,27 @@ function callbackCors(response: Response, openkeyHost: string): Response {
 
 function json(value: unknown, status = 200): Response {
   return Response.json(value, { status, headers: { "cache-control": "no-store" } });
+}
+
+
+function publicMetadataCors(response: Response): Response {
+  const headers = new Headers(response.headers);
+  headers.set("access-control-allow-origin", "*");
+  headers.set("access-control-allow-methods", "GET, HEAD, OPTIONS");
+  const vary = headers.get("vary");
+  headers.set("vary", vary === null ? "Origin" : `${vary}, Origin`);
+  return new Response(response.body, { status: response.status, headers });
+}
+
+function publicText(text: string, contentType: string): Response {
+  return new Response(text, {
+    headers: {
+      "content-type": contentType,
+      "cache-control": "public, max-age=300",
+      "access-control-allow-origin": "*",
+      "x-content-type-options": "nosniff",
+    },
+  });
 }
 
 function methodNotAllowed(allow: string): Response {

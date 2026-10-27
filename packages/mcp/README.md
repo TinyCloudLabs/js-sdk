@@ -1,8 +1,25 @@
 # @tinycloud/mcp
 
-TinyCloud MCP server for delegated operations. It supports local stdio and a
-hosted Streamable HTTP resource server. Both transports use exact, revocable
-TinyCloud capabilities and never silently fall back to owner authority.
+TinyCloud MCP server for delegated operations. The canonical remote connection
+is the hosted Streamable HTTP endpoint `https://mcp.tinycloud.xyz/mcp`, using
+OpenKey OAuth. Local stdio is the alternative when the client and TinyCloud
+runtime are on the same machine.
+
+For Claude, add the hosted URL as a remote MCP connector and complete OpenKey
+OAuth. This package does not claim a currently published ChatGPT app: the
+separate public ChatGPT app candidate at `/chatgpt/mcp` is not published.
+Although the server implements that separate source surface, this repository
+does not verify or promise a generic ChatGPT Developer Mode connection path.
+Use only a ChatGPT connection method enabled and documented by OpenAI; do not
+interpret the unpublished app candidate as available.
+
+## Hosted Streamable HTTP
+
+Use `https://mcp.tinycloud.xyz/mcp` in Claude's remote MCP connector and
+complete OpenKey OAuth. The server also supports remote MCP clients that
+independently support Streamable HTTP and OAuth. The public ChatGPT app
+candidate is not published; this package does not verify a generic ChatGPT
+Developer Mode setup.
 
 ## Local stdio requirements
 
@@ -10,15 +27,14 @@ TinyCloud capabilities and never silently fall back to owner authority.
 - `@tinycloud/cli`
 - A delegated TinyCloud profile
 - A TinyCloud node running 1.6.0 or newer
-
 ## Public ChatGPT release candidate
 
 The candidate is **not published**. Its separate endpoint is
 `https://mcp.tinycloud.xyz/chatgpt/mcp`, with exactly `tinycloud_connect`,
 `tinycloud_apps_context`, `tinycloud_apps_read`, `tinycloud_apps_write` and
-`tinycloud_apps_query`. Excluded tools are not callable by name. The existing
-broad `/mcp` endpoint and local stdio remain available for private integrations.
-ChatGPT users need no CLI, local profile or bundled skill.
+`tinycloud_apps_query`. It is distinct from the canonical hosted `/mcp`
+endpoint. The candidate has not passed publication or product acceptance; do
+not describe it as a launched public ChatGPT app.
 
 The public resource has its own OAuth audience, tenant state under
 `<TC_MCP_STATE_DIR>/chatgpt`, and `/chatgpt/connect` approval/callback paths.
@@ -383,3 +399,5 @@ Secret values are excluded from TinyCloud text output, logs, errors, request
 files, delegation files, and generated artifacts. MCP hosts may retain
 structured tool results in their own transcripts, so use a client and retention
 policy appropriate for secrets.
+
+Details: TC-1362

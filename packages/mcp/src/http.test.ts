@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { createHostedMcpApp, type HostedMcpApp } from "./http.js";
 import { ApprovalStageError, RemoteTenantStore } from "./remote-store.js";
 import { REQUESTER_KEY, openKeyCallbackBody, ownerDid } from "./test-support/openkey-callback.js";
+import { MCP_VERSION } from "./version.js";
+import { MCP_SERVER_NAME } from "./server.js";
 
 const CANARY = "callback-secret-canary";
 const MESSAGE = "TinyCloud could not accept this delegation.";
@@ -18,21 +20,40 @@ afterEach(async () => {
   await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
-test("serves health and RFC 9728 discovery without authentication", async () => {
+test("serves landing, discovery aliases and public readiness metadata without weakening MCP auth", async () => {
   const app = await testApp();
   const health = await app.fetch(new Request("http://127.0.0.1:3000/healthz", {
     headers: { host: "127.0.0.1:3000" },
   }));
-  const metadata = await app.fetch(request("/.well-known/oauth-protected-resource/mcp"));
+  const landing = await app.fetch(request("/"));
+  const markdown = await app.fetch(request("/", { headers: { accept: "text/markdown" } }));
+  const protectedResource = await app.fetch(request("/.well-known/oauth-protected-resource/mcp"));
+  const alias = await app.fetch(request("/.well-known/oauth-protected-resource", {
+    headers: { origin: "https://scanner.example" },
+  }));
+  const card = await app.fetch(request("/mcp/server-card", { headers: { origin: "https://scanner.example" } }));
+  const llms = await app.fetch(request("/llms.txt"));
+  const robots = await app.fetch(request("/robots.txt"));
+  const unauthenticated = await app.fetch(request("/mcp", { method: "POST" }));
 
   expect(health.status).toBe(200);
   expect(await health.json()).toEqual({ ok: true });
-  expect(metadata.status).toBe(200);
-  expect(await metadata.json()).toMatchObject({
-    resource: "https://mcp.test/mcp",
-    authorization_servers: ["https://openkey.test/api/auth"],
-    scopes_supported: ["tinycloud:mcp"],
+  expect(landing.status).toBe(200);
+  expect(landing.headers.get("content-type")).toContain("text/html");
+  expect(await landing.text()).toContain("https://mcp.tinycloud.xyz/mcp");
+  expect(await markdown.text()).toContain("Details: TC-1362");
+  expect(await alias.json()).toEqual(await protectedResource.json());
+  expect(alias.headers.get("access-control-allow-origin")).toBe("*");
+  expect(card.headers.get("access-control-allow-origin")).toBe("*");
+  expect(await card.json()).toMatchObject({
+    name: `xyz.tinycloud/${MCP_SERVER_NAME}`,
+    version: MCP_VERSION,
+    remotes: [{ type: "streamable-http", url: "https://mcp.test/mcp" }],
   });
+  expect(await llms.text()).toContain("public ChatGPT app candidate is not published");
+  expect(await robots.text()).toContain("Allow: /");
+  expect(unauthenticated.status).toBe(401);
+  expect(unauthenticated.headers.get("access-control-allow-origin")).toBeNull();
 });
 
 test("accepts callbacks only from the configured OpenKey origin", async () => {
