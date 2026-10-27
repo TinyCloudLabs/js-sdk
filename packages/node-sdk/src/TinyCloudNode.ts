@@ -131,10 +131,12 @@ import {
   ENCRYPTION_PERMISSION_SERVICE,
   CaveatedDelegationUnsupportedError,
   PermissionNotInManifestError,
+  ManifestValidationError,
   SessionExpiredError,
   canonicalizeRecapCaveats,
   recapCaveatsEqual,
   expandPermissionEntries as expandPermissionEntriesCore,
+  expandDelegationPermissionEntries,
   isCapabilitySubset,
   isExplicitOnlyAction,
   parseRecapCapabilities,
@@ -7446,7 +7448,21 @@ export class TinyCloudNode {
     //    for every entry so the subset check and downstream WASM call
     //    both see canonical form. This also deep-copies the entries so
     //    we don't mutate caller-owned data.
-    const expandedEntries = this.expandPermissionEntries(permissions);
+    const expandedEntries = expandDelegationPermissionEntries(permissions);
+    const namedKeyEntries = expandedEntries.filter((entry) =>
+      entry.service === ENCRYPTION_PERMISSION_SERVICE && entry.path.includes("/"));
+    if (namedKeyEntries.length > 0) {
+      if (expandedEntries.some((entry) =>
+        entry.service === ENCRYPTION_PERMISSION_SERVICE && !entry.path.includes("/"))) {
+        throw new ManifestValidationError("named-key delegation cannot include bare-network permissions");
+      }
+      if (options?.forceWalletSign) {
+        throw new ManifestValidationError("named-key delegation requires a signed session grant");
+      }
+      const granted = this.projectSignedRecapCapabilities(session.siwe);
+      const { subset, missing } = this.signedCapabilitySubset(namedKeyEntries, granted);
+      if (!subset) throw new PermissionNotInManifestError(missing, granted);
+    }
 
     // 4. Compute expiration. `options.expiry` overrides the default
     //    (DEFAULT_DELEGATION_EXPIRY_MS); ms-format ("7d") or a raw

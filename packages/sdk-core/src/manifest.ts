@@ -18,6 +18,7 @@
 import ms from "ms";
 import { ACCOUNT_MANIFEST_PERMISSIONS } from "@tinycloud/bootstrap";
 import { resolveSecretPath, SECRET_NAME_RE, parseNetworkId } from "@tinycloud/sdk-services";
+import { parseEncryptionResource } from "@tinycloud/sdk-services/encryption/resource";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -587,6 +588,35 @@ export function expandPermissionEntries(
   entries: readonly PermissionEntry[],
 ): PermissionEntry[] {
   return entries.flatMap(expandPermissionEntry);
+}
+
+/** Expand exact named-key decrypt entries for child delegations only. */
+export function expandDelegationPermissionEntries(
+  entries: readonly PermissionEntry[],
+): PermissionEntry[] {
+  return entries.flatMap((entry) => {
+    if (entry.service !== ENCRYPTION_PERMISSION_SERVICE ||
+      typeof entry.path !== "string" || !entry.path.includes("/")) {
+      return expandPermissionEntry(entry);
+    }
+    let resource;
+    try {
+      resource = parseEncryptionResource(entry.path);
+    } catch {
+      throw new ManifestValidationError("delegation requires a canonical exact named-key resource");
+    }
+    if (resource.kind !== "key" || !Array.isArray(entry.actions) || entry.actions.length === 0 ||
+      entry.actions.some((action) => action !== "decrypt" && action !== "tinycloud.encryption/decrypt")) {
+      throw new ManifestValidationError("named-key delegation requires an exact key and decrypt only");
+    }
+    return [{
+      ...entry,
+      space: ENCRYPTION_MANIFEST_SPACE,
+      path: `${resource.networkId}/${resource.path}`,
+      actions: ["tinycloud.encryption/decrypt"],
+      skipPrefix: true,
+    }];
+  });
 }
 
 /**

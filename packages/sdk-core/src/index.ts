@@ -931,6 +931,7 @@ export {
   composeManifestRequest,
   expandActionShortNames,
   expandPermissionEntries,
+  expandDelegationPermissionEntries,
   expandPermissionEntry,
   loadManifest,
   manifestAbilitiesUnion,
