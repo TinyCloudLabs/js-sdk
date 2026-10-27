@@ -2217,5 +2217,33 @@
     "worker": { "delta": 0, "ceiling": 776539 },
     "replicaWorker": { "delta": 0, "ceiling": 770467 },
     "reason": "delegations the delegate key issued: list and revoke, lazy-loaded (TC-2132)"
+  },
+  "tc2140ExactKeyDelegationRatchet": {
+    "label": "delegateTo exact named-key decrypt child (TC-2140, #769): +1204 B mjs / +142 B cjs gzip",
+    "ruling": "Approved by Naomi (up to +1,300 mjs / +350 cjs gz at CI bytes; measured +1,204 / +142 at run 40435549067 at f1678054, stand-alone on master 98b27a873; stack-drift rule)",
+    "base": "98b27a8731798bc3af3a56df1a54a1212f1ab74a",
+    "sourceCommits": ["f167805418040cbead1b4c850af0f6fa751d1474"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40435549067",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40435549067/job/121963239730",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40435549067/job/121963239909"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 1204, "index.cjs": 142 },
+      "ceiling": { "index.mjs": 1471854, "index.cjs": 1412634 }
+    },
+    "firstImport": {
+      "delta": { "replica.mjs": 0, "replica.cjs": 0 },
+      "ceiling": { "replica.mjs": 52757, "replica.cjs": 67957 }
+    },
+    "activation": {
+      "delta": { "activation.mjs": 0, "activation.cjs": 0 },
+      "ceiling": { "activation.mjs": 23412, "activation.cjs": 24981 }
+    },
+    "worker": { "delta": 0, "ceiling": 776539 },
+    "replicaWorker": { "delta": 0, "ceiling": 770467 },
+    "reason": "delegateTo exact named-key decrypt child (TC-2140)"
   }
 }

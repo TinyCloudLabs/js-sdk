@@ -34,6 +34,7 @@ import { validateTc1977OpenKeySigninRatchetTransition } from "./replica-size-pol
 import { validateTc2130PanelIphoneRatchetTransition } from "./replica-size-policy";
 import { validateTc1977HostBindingRatchetTransition } from "./replica-size-policy";
 import { validateTc2132IssuedDelegationsRatchetTransition } from "./replica-size-policy";
+import { validateTc2140ExactKeyDelegationRatchetTransition } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 import { replicaOwnedPath } from "./replica-owned-path";
 import { webSdkTestExitFailure } from "./web-sdk-test-exit";
@@ -532,6 +533,13 @@ if (prBaseSha) {
   if (tc2132IssuedDelegations !== undefined && baseLedger.tc2132IssuedDelegationsRatchet === undefined &&
       (baseLedger.tc1977HostBindingRatchet === undefined || !hasAncestor(repoRoot, tc2132IssuedDelegations.sourceCommits.at(-1)!))) {
     console.error("The issued-delegations ratchet requires the merged host-binding export ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc2140ExactKeyDelegationRatchetTransition(baseLedger.tc2140ExactKeyDelegationRatchet, ledger.tc2140ExactKeyDelegationRatchet);
+  const tc2140ExactKeyDelegation = ledger.tc2140ExactKeyDelegationRatchet;
+  if (tc2140ExactKeyDelegation !== undefined && baseLedger.tc2140ExactKeyDelegationRatchet === undefined &&
+      (baseLedger.tc2132IssuedDelegationsRatchet === undefined || !hasAncestor(repoRoot, tc2140ExactKeyDelegation.sourceCommits.at(-1)!))) {
+    console.error("The exact-key delegation ratchet requires the merged issued-delegations ratchet and its measured source commit.");
     failed = true;
   }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
