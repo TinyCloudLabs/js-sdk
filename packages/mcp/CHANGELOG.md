@@ -1,5 +1,13 @@
 # @tinycloud/mcp
 
+## 0.8.3-beta.16
+
+### Patch Changes
+
+- 7e692f6: Add the hosted MCP landing, truthful authentication and readiness metadata, and protected-resource discovery alias without changing authentication on `/mcp`.
+
+  Details: TC-1362
+
 ## 0.8.3-beta.15
 
 ### Patch Changes
