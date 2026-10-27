@@ -25,14 +25,21 @@ function ownerOfSpace(space: string): string | undefined {
   return match === null ? undefined : `did:pkh:eip155:${match[1]}:${match[2]!.toLowerCase()}`;
 }
 
-const ACCOUNT_DID = /^did:pkh:eip155:[1-9]\d{0,17}:(0x[0-9a-fA-F]{40})$/;
+const ACCOUNT_DID = /^did:pkh:eip155:[1-9]\d{0,17}:0x[0-9a-fA-F]{40}$/;
+
+/** The full account identity (eip155 chain id and lowercased address), or `undefined` when `did` is not an account DID. */
+function accountIdentity(did: string): string | undefined {
+  const normalized = normalizeDid(did);
+  return ACCOUNT_DID.test(normalized) ? normalized : undefined;
+}
 
 /**
- * True when the node's record of `cid` names another account (a well-formed `did:pkh:eip155` DID with a
- * different address) as its issuer, and none of the spaces it covers belongs to `ownerDid`. Such a
- * grant is only held by this account, so the revoke is refused locally. Any other shape (no record,
- * rows that disagree, a key issuer, an unparsable issuer, a space the owner holds) is `false` and
- * the flow carries on unchanged.
+ * True when EVERY node record of `cid` names the same other account (a well-formed `did:pkh:eip155`
+ * DID with a different chain id or address) as its issuer, and none of them covers a space `ownerDid`
+ * owns. Such a grant is only held by this account, so the revoke is refused locally. Any other shape
+ * (no record, rows that disagree about the issuer, a key issuer, an unparsable issuer, a row that
+ * covers a space the owner holds) is `false` and the flow carries on unchanged. `records` must be the
+ * complete query result: a partial list cannot show that the rows agree.
  */
 export function issuedByAnotherAccount(
   records: readonly AccountDelegationRecord[],
@@ -40,15 +47,16 @@ export function issuedByAnotherAccount(
   ownerDid: string,
 ): boolean {
   const matches = records.filter((record) => record.cid === cid);
-  const target = matches[0];
-  if (!target || matches.some((record) => record.delegatorDid !== target.delegatorDid)) return false;
-  const issuer = ACCOUNT_DID.exec(normalizeDid(target.delegatorDid))?.[1];
-  const owner = ACCOUNT_DID.exec(normalizeDid(ownerDid))?.[1];
+  if (matches.length === 0) return false;
+  const owner = accountIdentity(ownerDid);
+  const issuer = accountIdentity(matches[0]!.delegatorDid);
   if (issuer === undefined || owner === undefined || issuer === owner) return false;
-  return !target.resources.some(({ resource }) => {
-    const space = /^(tinycloud:[^/]+)\//.exec(resource)?.[1];
-    return space !== undefined && ownerOfSpace(space)?.endsWith(`:${owner}`) === true;
-  });
+  return matches.every((record) =>
+    accountIdentity(record.delegatorDid) === issuer &&
+    !record.resources.some(({ resource }) => {
+      const space = /^(tinycloud:[^/]+)\//.exec(resource)?.[1];
+      return space !== undefined && ownerOfSpace(space) === owner;
+    }));
 }
 
 /**
