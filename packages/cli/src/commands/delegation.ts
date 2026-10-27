@@ -55,6 +55,63 @@ function listedDelegation(d: AccountDelegationRecord) {
   };
 }
 
+const ISSUED_ORDER_NOTE = "Sorted by delegation ID, not by date.";
+
+/** Maps the SDK's issued-delegation errors to CLI errors; everything else takes the common mapping. */
+function issuedFailure(
+  error: { code: string; message: string; meta?: Record<string, unknown> },
+  host: string,
+): CLIError {
+  if (error.code === "UNSUPPORTED_OPERATION") {
+    return new CLIError(
+      "ISSUED_DELEGATIONS_UNAVAILABLE",
+      `${host} can't list the delegations you issued yet.`,
+      ExitCode.NODE_ERROR,
+    );
+  }
+  if (error.code === "CHAIN_TOO_DEEP") {
+    return new CLIError(
+      "CHAIN_TOO_DEEP",
+      "The node can't check this delegation chain right now because it's too long. Try again later.",
+      ExitCode.NODE_ERROR,
+      { status: 503 },
+    );
+  }
+  if (error.code === "INVALID_CURSOR") {
+    return new CLIError(
+      "INVALID_CURSOR",
+      "The node couldn't continue the list. Run the command again.",
+      ExitCode.NODE_ERROR,
+      { status: 400 },
+    );
+  }
+  return cliErrorFromService(error);
+}
+
+/**
+ * Revokes a delegation this profile's own key issued, with a revocation signed by that key and no
+ * proof. Revoking a delegation that is already revoked succeeds like a first revocation (the node answers 200).
+ */
+async function revokeIssuedDelegation(node: TinyCloudNode, ctx: { profile: string; host: string }, cid: string) {
+  const result = await node.delegationManager.revokeIssued(cid);
+  if (result.ok) return { cid: result.data.cid, revoked: true as const };
+  if (result.error.code === "PERMISSION_DENIED") {
+    throw new CLIError(
+      "REVOKE_UNAUTHORIZED",
+      `The node refused this revocation: ${result.error.message}.`,
+      ExitCode.PERMISSION_DENIED,
+      {
+        status: result.error.meta?.status,
+        hint: `A profile can revoke only the delegations its own key issued. See them with \`${CLI_NAME} --profile ${ctx.profile} delegation list --granted\`.`,
+      },
+    );
+  }
+  if (result.error.code === "NOT_FOUND") {
+    throw new CLIError("TARGET_NOT_FOUND", `The node has no delegation "${cid}".`, ExitCode.NOT_FOUND);
+  }
+  throw issuedFailure(result.error, ctx.host);
+}
+
 async function confirmCurrentSessionRevoke(yes: boolean): Promise<void> {
   if (yes) return;
   const warning = "This is your current sign-in session; revoking it signs you out";
@@ -177,6 +234,20 @@ export function registerDelegationCommand(
         if (options.granted && options.received) {
           throw new CLIError("USAGE_ERROR", "Use only one of --granted or --received.", ExitCode.USAGE_ERROR);
         }
+        // The delegate path needs both the profile's posture and a restored session with no owner
+        // (wallet or OpenKey) authority: the posture is unsigned metadata and a verified owner sign-in
+        // overrides it.
+        if (options.granted && ctx.posture === "delegate-session" && node.address === undefined) {
+          // A delegate's `--granted` is what its own key issued: the node answers it for that key alone.
+          const issued = await node.delegationManager.queryAllIssued({ space: options.space });
+          if (!issued.ok) throw issuedFailure(issued.error, ctx.host);
+          outputJson({
+            delegations: issued.data.map(listedDelegation),
+            count: issued.data.length,
+            note: ISSUED_ORDER_NOTE,
+          });
+          return;
+        }
         // The node's account delegation query (POST /delegation/query). Unlike
         // `account delegations list`, it includes delegations signed by a session key.
         const delegations = await queryDelegations(node, {
@@ -223,13 +294,21 @@ export function registerDelegationCommand(
       try {
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
+        // As for `list`: a delegate-posture profile takes the session-key path only while its restored
+        // session carries no owner authority; an owner sign-in under that posture takes the owner path.
+        const delegateCandidate = ctx.posture === "delegate-session" ? await ensureAuthenticated(ctx) : undefined;
+        if (delegateCandidate !== undefined && delegateCandidate.address === undefined) {
+          // A delegate revokes what its own key issued; it never asks its owner for revoke authority.
+          outputJson(await revokeIssuedDelegation(delegateCandidate, ctx, cid));
+          return;
+        }
         const session = await ProfileManager.getSession(ctx.profile);
         const currentSession = session && "delegationCid" in session && session.delegationCid === cid;
         if (currentSession) await confirmCurrentSessionRevoke(options.yes === true);
         const prepared = currentSession ? await prepareProfileRemoteLogout(ctx, cid) : undefined;
         // The prepared node restored the exact retained session without a
         // replica runtime; ordinary SDK creation must not bypass the marker.
-        const node = prepared?.node ?? await ensureAuthenticated(ctx);
+        const node = prepared?.node ?? delegateCandidate ?? await ensureAuthenticated(ctx);
         const profile = prepared?.profile ?? await ProfileManager.getProfile(ctx.profile);
         const revoked = await revokeDelegationOnNode({
           ctx, node, profile, cid, yes: options.yes === true || Boolean(currentSession),

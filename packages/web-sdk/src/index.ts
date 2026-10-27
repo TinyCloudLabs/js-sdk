@@ -21,6 +21,7 @@ export {
 } from "./manage-key-session";
 export * from "./credentials";
 export * from "./share";
+export { isAppKeyHostBound } from "@tinycloud/node-sdk/core";
 export type {
   SecretReadInput,
   SecretReadResult,

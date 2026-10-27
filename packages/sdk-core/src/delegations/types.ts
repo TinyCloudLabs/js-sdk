@@ -69,6 +69,7 @@ export {
   type GenerateShareParams,
   DelegationManagerConfigSchema,
   type DelegationManagerConfig,
+  type SessionInvocationSigner,
   KeyProviderSchema,
   type KeyProvider,
   DelegationApiResponseSchema,

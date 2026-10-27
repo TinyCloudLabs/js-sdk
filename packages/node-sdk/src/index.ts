@@ -167,6 +167,7 @@ export {
   type OpenKeyAuthorizationResultV1,
   type PreparedOpenKeyAuthorization,
 } from "./authorization/NodeUserAuthorization";
+export { isAppKeyHostBound } from "./authorization/appKeyHostBinding";
 
 // OpenKey integration adapter — Sol continuation contract requires a
 // production entry point that wires OpenKey's authorizeTinyCloud into

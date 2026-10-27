@@ -1,4 +1,20 @@
 import { defineConfig } from "tsup";
+import type { Plugin } from "esbuild";
+
+// DelegationManager loads ./issued with a dynamic import. In the build that import names the package's own
+// `./delegations/issued` export, so every entry that carries the manager loads the same separate file and a
+// bundler downstream can keep it out of its root chunk. Source and tests keep the relative path.
+const ISSUED_SPECIFIER = "@tinycloud/sdk-core/delegations/issued";
+const lazyIssued: Plugin = {
+  name: "lazy-issued-delegations",
+  setup(build) {
+    build.onResolve({ filter: /^\.\/issued$/ }, (args) =>
+      args.kind === "dynamic-import" && /[\\/]DelegationManager\.ts$/.test(args.importer)
+        ? { path: ISSUED_SPECIFIER, external: true }
+        : undefined,
+    );
+  },
+};
 
 export default defineConfig({
   entry: [
@@ -7,6 +23,7 @@ export default defineConfig({
     "src/policy/index.ts",
     "src/requester/index.ts",
     "src/delegations/index.ts",
+    "src/delegations/issued.ts",
     "src/held-credentials/index.ts",
     "src/kv-list-matching/index.ts",
   ],
@@ -15,6 +32,7 @@ export default defineConfig({
   clean: true,
   sourcemap: true,
   splitting: false,
+  esbuildPlugins: [lazyIssued],
   // Resolve bundled deps' package.json "exports"/"browser" conditions as a
   // browser platform would. Node 20+ ships a global WebCrypto (globalThis.crypto),
   // so the browser-conditioned code these packages ship also runs correctly under

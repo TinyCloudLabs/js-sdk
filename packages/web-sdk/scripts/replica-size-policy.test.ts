@@ -33,6 +33,8 @@ import { approvedTc2113PanelGrantRatchet, validateTc2113PanelGrantRatchetTransit
 import { approvedTc2127WindowLocationRatchet, validateTc2127WindowLocationRatchetTransition } from "./replica-size-policy";
 import { approvedTc1977OpenKeySigninRatchet, validateTc1977OpenKeySigninRatchetTransition } from "./replica-size-policy";
 import { approvedTc2130PanelIphoneRatchet, validateTc2130PanelIphoneRatchetTransition } from "./replica-size-policy";
+import { approvedTc1977HostBindingRatchet, validateTc1977HostBindingRatchetTransition } from "./replica-size-policy";
+import { approvedTc2132IssuedDelegationsRatchet, validateTc2132IssuedDelegationsRatchetTransition } from "./replica-size-policy";
 import { approvedTc2038PanelPrefetchRatchet, validateTc2038PanelPrefetchRatchetTransition, type Tc2038PanelPrefetchRatchet } from "./replica-size-policy";
 import { approvedTc2005RevokeWindowRatchet, validateTc2005RevokeWindowRatchetTransition, type Tc2005RevokeWindowRatchet } from "./replica-size-policy";
 import { approvedTc2096RepairBackoffRatchet, validateTc2096RepairBackoffRatchetTransition, type Tc2096RepairBackoffRatchet } from "./replica-size-policy";
@@ -2909,6 +2911,8 @@ delete tc2043Ledger.tc2113PanelGrantRatchet;
 delete tc2043Ledger.tc2127WindowLocationRatchet;
 delete tc2043Ledger.tc1977OpenKeySigninRatchet;
 delete tc2043Ledger.tc2130PanelIphoneRatchet;
+delete tc2043Ledger.tc1977HostBindingRatchet;
+delete tc2043Ledger.tc2132IssuedDelegationsRatchet;
 tc2043Ledger.entries = structuredClone(current.entries.slice(0, current.entries.findIndex((entry) => entry.pr === "#728")));
 describe("replication syncScope opt-in (#742, TC-2043) size ratchet", () => {
   const row = () => structuredClone(approvedTc2043SyncScopeRatchet);
@@ -3467,6 +3471,84 @@ describe("iPhone panel safe-area and ui.setButtonVisible (TC-2130, #765) size ra
     changed.root.ceiling["index.cjs"]++;
     expect(() => validateTc2130PanelIphoneRatchetTransition(undefined, changed)).toThrow("TC-2130");
     expect(() => validateTc2130PanelIphoneRatchetTransition(row(), undefined)).toThrow("TC-2130");
+  });
+});
+
+describe("isAppKeyHostBound export (TC-1977, #767) size ratchet", () => {
+  const row = () => structuredClone(approvedTc1977HostBindingRatchet);
+  const prerequisite = () => approvedTc2130PanelIphoneRatchet;
+
+  it("pins the host-binding root delta over the panel safe-area row and keeps the worker ceilings unchanged", () => {
+    expect(() => validateLedger(current)).not.toThrow();
+    expect(current.tc1977HostBindingRatchet).toEqual(approvedTc1977HostBindingRatchet);
+    expect(row().root).toEqual({ delta: { "index.mjs": 55, "index.cjs": 171 }, ceiling: { "index.mjs": 1470315, "index.cjs": 1412003 } });
+    expect(row().root.ceiling["index.mjs"]).toBe(prerequisite().root.ceiling["index.mjs"] + row().root.delta["index.mjs"]);
+    expect(row().root.ceiling["index.cjs"]).toBe(prerequisite().root.ceiling["index.cjs"] + row().root.delta["index.cjs"]);
+    expect(row().firstImport.ceiling).toEqual(prerequisite().firstImport.ceiling);
+    expect(row().activation.ceiling).toEqual(prerequisite().activation.ceiling);
+    expect(row().worker).toEqual({ delta: 0, ceiling: prerequisite().worker.ceiling });
+    expect(row().replicaWorker).toEqual({ delta: 0, ceiling: prerequisite().replicaWorker.ceiling });
+    expect(rootCeilings(current).find(({ row: name }) => name === "tc1977HostBindingRatchet")).toEqual({ row: "tc1977HostBindingRatchet", ceiling: row().root.ceiling });
+    expect(ancestryPins(current, false)).toContainEqual({ row: "tc1977HostBindingRatchet", pin: row().sourceCommits[0] });
+    expect(MAX_WORKER_GZIP_BYTES).toBe(row().worker.ceiling);
+    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(row().replicaWorker.ceiling);
+  });
+
+  it("refuses changed bytes or a missing panel safe-area prerequisite", () => {
+    const changedRoot = copy(current);
+    changedRoot.tc1977HostBindingRatchet!.root.ceiling["index.mjs"]++;
+    expect(() => validateLedger(changedRoot)).toThrow("host-binding");
+    const withoutPrerequisite = copy(current);
+    delete withoutPrerequisite.tc2130PanelIphoneRatchet;
+    expect(() => validateLedger(withoutPrerequisite)).toThrow("host-binding");
+  });
+
+  it("may be introduced once and never changed or removed", () => {
+    expect(() => validateTc1977HostBindingRatchetTransition(undefined, row())).not.toThrow();
+    expect(() => validateTc1977HostBindingRatchetTransition(row(), row())).not.toThrow();
+    const changed = row();
+    changed.root.ceiling["index.cjs"]++;
+    expect(() => validateTc1977HostBindingRatchetTransition(undefined, changed)).toThrow("TC-1977");
+    expect(() => validateTc1977HostBindingRatchetTransition(row(), undefined)).toThrow("TC-1977");
+  });
+});
+
+describe("issued delegations (TC-2132, #766) size ratchet", () => {
+  const row = () => structuredClone(approvedTc2132IssuedDelegationsRatchet);
+  const prerequisite = () => approvedTc1977HostBindingRatchet;
+
+  it("pins the issued-delegations root delta over the host-binding row and keeps the worker ceilings unchanged", () => {
+    expect(() => validateLedger(current)).not.toThrow();
+    expect(current.tc2132IssuedDelegationsRatchet).toEqual(approvedTc2132IssuedDelegationsRatchet);
+    expect(row().root).toEqual({ delta: { "index.mjs": 335, "index.cjs": 489 }, ceiling: { "index.mjs": 1470650, "index.cjs": 1412492 } });
+    expect(row().root.ceiling["index.mjs"]).toBe(prerequisite().root.ceiling["index.mjs"] + row().root.delta["index.mjs"]);
+    expect(row().root.ceiling["index.cjs"]).toBe(prerequisite().root.ceiling["index.cjs"] + row().root.delta["index.cjs"]);
+    expect(row().firstImport.ceiling).toEqual(prerequisite().firstImport.ceiling);
+    expect(row().activation.ceiling).toEqual(prerequisite().activation.ceiling);
+    expect(row().worker).toEqual({ delta: 0, ceiling: prerequisite().worker.ceiling });
+    expect(row().replicaWorker).toEqual({ delta: 0, ceiling: prerequisite().replicaWorker.ceiling });
+    expect(rootCeilings(current).find(({ row: name }) => name === "tc2132IssuedDelegationsRatchet")).toEqual({ row: "tc2132IssuedDelegationsRatchet", ceiling: row().root.ceiling });
+    expect(ancestryPins(current, false)).toContainEqual({ row: "tc2132IssuedDelegationsRatchet", pin: row().sourceCommits[0] });
+    expect(MAX_WORKER_GZIP_BYTES).toBe(newestKvWorkerCeiling());
+    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(newestReplicaWorkerCeiling());
+  });
+
+  it("refuses changed bytes or a missing host-binding prerequisite", () => {
+    const changedRoot = copy(current);
+    changedRoot.tc2132IssuedDelegationsRatchet!.root.ceiling["index.mjs"]++;
+    expect(() => validateLedger(changedRoot)).toThrow("issued-delegations");
+    const withoutPrerequisite = copy(current);
+    delete withoutPrerequisite.tc1977HostBindingRatchet;
+    expect(() => validateLedger(withoutPrerequisite)).toThrow("issued-delegations");
+  });
+
+  it("may be introduced once and never changed or removed", () => {
+    expect(() => validateTc2132IssuedDelegationsRatchetTransition(undefined, row())).not.toThrow();
+    expect(() => validateTc2132IssuedDelegationsRatchetTransition(row(), row())).not.toThrow();
+    const changed = row();
+    changed.root.ceiling["index.cjs"]++;
+    expect(() => validateTc2132IssuedDelegationsRatchetTransition(undefined, changed)).toThrow("TC-2132");
+    expect(() => validateTc2132IssuedDelegationsRatchetTransition(row(), undefined)).toThrow("TC-2132");
   });
 });
 
