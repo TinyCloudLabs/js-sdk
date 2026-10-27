@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
 import {
   CaveatedDelegationUnsupportedError,
+  ManifestValidationError,
   PermissionNotInManifestError,
   SessionExpiredError,
   type PermissionEntry,
@@ -21,6 +22,8 @@ import {
 
 import { ed25519 } from "@noble/curves/ed25519";
 import { base58btc } from "multiformats/bases/base58";
+import { pkhDid } from "@tinycloud/bootstrap";
+import { formatKeyResource, formatPrefixResource } from "@tinycloud/sdk-services/encryption/resource";
 
 import { TinyCloudNode } from "./TinyCloudNode";
 
@@ -818,7 +821,11 @@ describe("TinyCloudNode.delegateTo terminal grants and recipient kind", () => {
   });
 
   /** A session whose recap covers `permission`; the WASM builder signs with the session's real key. */
-  function makeNode(recipient: string) {
+  function makeNode(
+    recipient: string,
+    grants?: Array<{ service: string; space: string; path: string; actions: string[] }>,
+    resources?: Array<{ service: string; space: string; path: string; actions: string[] }>,
+  ) {
     const privateKey = ed25519.utils.randomPrivateKey();
     const publicKey = ed25519.getPublicKey(privateKey);
     const sessionDid = `did:key:${base58btc.encode(Uint8Array.of(0xed, 0x01, ...publicKey))}`;
@@ -827,7 +834,7 @@ describe("TinyCloudNode.delegateTo terminal grants and recipient kind", () => {
       { iss: `${sessionDid}#${sessionDid.slice(8)}`, aud: recipient, exp: 1_900_000_000, prf: ["bafyparent"], att: {} },
     ].map((part) => b64u(Buffer.from(JSON.stringify(part)))).join(".");
     const wasm = makeFakeWasmBindings({
-      parseRecapFromSiwe: mock(() => [
+      parseRecapFromSiwe: mock(() => grants ?? [
         { service: "kv", space: "default", path: "/", actions: ["tinycloud.kv/get"] },
       ]),
       createDelegation: mock(() => ({
@@ -835,7 +842,7 @@ describe("TinyCloudNode.delegateTo terminal grants and recipient kind", () => {
         cid: "bafywasm",
         delegateDid: recipient,
         expiry: Math.floor(Date.now() / 1000) + 3600,
-        resources: [
+        resources: resources ?? [
           { service: "kv", space: "space://test", path: "items/", actions: ["tinycloud.kv/get"] },
         ],
       })),
@@ -900,5 +907,60 @@ describe("TinyCloudNode.delegateTo terminal grants and recipient kind", () => {
     expect(JSON.parse(Buffer.from(payload, "base64url").toString()).fct).toEqual([
       { "xyz.tinycloud.policy/delegationMode": "terminal" },
     ]);
+  });
+
+  test("issues one terminal child with exact Fireflies KV get and named-key decrypt", async () => {
+    const recipient = "did:key:z6MkRecipientSessionKey";
+    const owner = pkhDid("0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed", 1);
+    const network = `urn:tinycloud:encryption:${owner}:default`;
+    const key = formatKeyResource(network, "apps/chat.tinycloud.tinychat/connectors/fireflies");
+    const prefix = formatPrefixResource(network, "apps/chat.tinycloud.tinychat/connectors");
+    const kvPath = "xyz.tinycloud.tinychat/connectors/credentials/fireflies";
+    const grants = [
+      { service: "kv", space: "default", path: kvPath, actions: ["tinycloud.kv/get"] },
+      { service: "encryption", space: "encryption", path: prefix, actions: ["tinycloud.encryption/decrypt"] },
+    ];
+    const resources = [
+      { service: "kv", space: "space://test", path: kvPath, actions: ["tinycloud.kv/get"] },
+      { service: "encryption", space: "encryption", path: key, actions: ["tinycloud.encryption/decrypt"] },
+    ];
+    const { node, wasm } = makeNode(recipient, grants, resources);
+    const entries: PermissionEntry[] = [
+      { service: "tinycloud.kv", space: "default", path: kvPath, actions: ["get"] },
+      { service: "tinycloud.encryption", path: key, actions: ["decrypt"] },
+    ];
+    const result = await node.delegateTo(recipient, entries, { disableSubDelegation: true, expiry: "30d" });
+    expect(result.delegation.resources).toEqual(resources);
+    expect(result.delegation.disableSubDelegation).toBe(true);
+    expect(result.delegation.expiry.getTime()).toBeLessThanOrEqual(new Date((node as any).auth.tinyCloudSession.siwe.match(/Expiration Time: (.+)/)![1]).getTime());
+    expect((wasm.createDelegation as any).mock.calls[0][3]).toEqual({
+      kv: { [kvPath]: ["tinycloud.kv/get"] },
+      encryption: { [key]: ["tinycloud.encryption/decrypt"] },
+    });
+    const payload = result.delegation.delegationHeader.Authorization.split(".")[1]!;
+    expect(JSON.parse(Buffer.from(payload, "base64url").toString()).fct).toEqual([
+      { "xyz.tinycloud.policy/delegationMode": "terminal" },
+    ]);
+  });
+
+  test("refuses named-key child requests outside the signed exact or prefix grant", async () => {
+    const recipient = "did:key:z6MkRecipientSessionKey";
+    const owner = pkhDid("0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed", 1);
+    const network = `urn:tinycloud:encryption:${owner}:default`;
+    const key = formatKeyResource(network, "apps/chat.tinycloud.tinychat/connectors/fireflies");
+    const prefix = formatPrefixResource(network, "apps/chat.tinycloud.tinychat/connectors");
+    const named = (path: string, actions = ["decrypt"]): PermissionEntry => ({ service: "tinycloud.encryption", path, actions });
+    for (const grantedPath of [network, formatPrefixResource(network, "apps/another-app"), formatKeyResource(network, "apps/chat.tinycloud.tinychat/connectors/google-meet")]) {
+      const { node, wasm } = makeNode(recipient, [{ service: "encryption", space: "encryption", path: grantedPath, actions: ["tinycloud.encryption/decrypt"] }]);
+      await expect(node.delegateTo(recipient, [named(key)])).rejects.toBeInstanceOf(PermissionNotInManifestError);
+      expect(wasm.createDelegation).not.toHaveBeenCalled();
+    }
+    const { node, wasm } = makeNode(recipient, [{ service: "encryption", space: "encryption", path: prefix, actions: ["tinycloud.encryption/decrypt"] }]);
+    for (const invalid of [named(prefix), named(key, ["key.create"]), named(key.replace(owner, owner.toLowerCase()))]) {
+      await expect(node.delegateTo(recipient, [invalid])).rejects.toBeInstanceOf(ManifestValidationError);
+    }
+    await expect(node.delegateTo(recipient, [named(key), named(network)])).rejects.toBeInstanceOf(ManifestValidationError);
+    await expect(node.delegateTo(recipient, [named(key)], { forceWalletSign: true })).rejects.toBeInstanceOf(ManifestValidationError);
+    expect(wasm.createDelegation).not.toHaveBeenCalled();
   });
 });

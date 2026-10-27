@@ -35,6 +35,7 @@ import { approvedTc1977OpenKeySigninRatchet, validateTc1977OpenKeySigninRatchetT
 import { approvedTc2130PanelIphoneRatchet, validateTc2130PanelIphoneRatchetTransition } from "./replica-size-policy";
 import { approvedTc1977HostBindingRatchet, validateTc1977HostBindingRatchetTransition } from "./replica-size-policy";
 import { approvedTc2132IssuedDelegationsRatchet, validateTc2132IssuedDelegationsRatchetTransition } from "./replica-size-policy";
+import { approvedTc2140ExactKeyDelegationRatchet, validateTc2140ExactKeyDelegationRatchetTransition } from "./replica-size-policy";
 import { approvedTc2038PanelPrefetchRatchet, validateTc2038PanelPrefetchRatchetTransition, type Tc2038PanelPrefetchRatchet } from "./replica-size-policy";
 import { approvedTc2005RevokeWindowRatchet, validateTc2005RevokeWindowRatchetTransition, type Tc2005RevokeWindowRatchet } from "./replica-size-policy";
 import { approvedTc2096RepairBackoffRatchet, validateTc2096RepairBackoffRatchetTransition, type Tc2096RepairBackoffRatchet } from "./replica-size-policy";
@@ -2913,6 +2914,7 @@ delete tc2043Ledger.tc1977OpenKeySigninRatchet;
 delete tc2043Ledger.tc2130PanelIphoneRatchet;
 delete tc2043Ledger.tc1977HostBindingRatchet;
 delete tc2043Ledger.tc2132IssuedDelegationsRatchet;
+delete tc2043Ledger.tc2140ExactKeyDelegationRatchet;
 tc2043Ledger.entries = structuredClone(current.entries.slice(0, current.entries.findIndex((entry) => entry.pr === "#728")));
 describe("replication syncScope opt-in (#742, TC-2043) size ratchet", () => {
   const row = () => structuredClone(approvedTc2043SyncScopeRatchet);
@@ -3549,6 +3551,45 @@ describe("issued delegations (TC-2132, #766) size ratchet", () => {
     changed.root.ceiling["index.cjs"]++;
     expect(() => validateTc2132IssuedDelegationsRatchetTransition(undefined, changed)).toThrow("TC-2132");
     expect(() => validateTc2132IssuedDelegationsRatchetTransition(row(), undefined)).toThrow("TC-2132");
+  });
+});
+
+describe("exact-key delegation (TC-2140, #769) size ratchet", () => {
+  const row = () => structuredClone(approvedTc2140ExactKeyDelegationRatchet);
+  const prerequisite = () => approvedTc2132IssuedDelegationsRatchet;
+
+  it("pins the exact-key root delta over the issued-delegations row and keeps the worker ceilings unchanged", () => {
+    expect(() => validateLedger(current)).not.toThrow();
+    expect(current.tc2140ExactKeyDelegationRatchet).toEqual(approvedTc2140ExactKeyDelegationRatchet);
+    expect(row().root).toEqual({ delta: { "index.mjs": 1204, "index.cjs": 142 }, ceiling: { "index.mjs": 1471854, "index.cjs": 1412634 } });
+    expect(row().root.ceiling["index.mjs"]).toBe(prerequisite().root.ceiling["index.mjs"] + row().root.delta["index.mjs"]);
+    expect(row().root.ceiling["index.cjs"]).toBe(prerequisite().root.ceiling["index.cjs"] + row().root.delta["index.cjs"]);
+    expect(row().firstImport.ceiling).toEqual(prerequisite().firstImport.ceiling);
+    expect(row().activation.ceiling).toEqual(prerequisite().activation.ceiling);
+    expect(row().worker).toEqual({ delta: 0, ceiling: prerequisite().worker.ceiling });
+    expect(row().replicaWorker).toEqual({ delta: 0, ceiling: prerequisite().replicaWorker.ceiling });
+    expect(rootCeilings(current).find(({ row: name }) => name === "tc2140ExactKeyDelegationRatchet")).toEqual({ row: "tc2140ExactKeyDelegationRatchet", ceiling: row().root.ceiling });
+    expect(ancestryPins(current, false)).toContainEqual({ row: "tc2140ExactKeyDelegationRatchet", pin: row().sourceCommits[0] });
+    expect(MAX_WORKER_GZIP_BYTES).toBe(newestKvWorkerCeiling());
+    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(newestReplicaWorkerCeiling());
+  });
+
+  it("refuses changed bytes or a missing issued-delegations prerequisite", () => {
+    const changedRoot = copy(current);
+    changedRoot.tc2140ExactKeyDelegationRatchet!.root.ceiling["index.mjs"]++;
+    expect(() => validateLedger(changedRoot)).toThrow("exact-key");
+    const withoutPrerequisite = copy(current);
+    delete withoutPrerequisite.tc2132IssuedDelegationsRatchet;
+    expect(() => validateLedger(withoutPrerequisite)).toThrow("exact-key");
+  });
+
+  it("may be introduced once and never changed or removed", () => {
+    expect(() => validateTc2140ExactKeyDelegationRatchetTransition(undefined, row())).not.toThrow();
+    expect(() => validateTc2140ExactKeyDelegationRatchetTransition(row(), row())).not.toThrow();
+    const changed = row();
+    changed.root.ceiling["index.cjs"]++;
+    expect(() => validateTc2140ExactKeyDelegationRatchetTransition(undefined, changed)).toThrow("TC-2140");
+    expect(() => validateTc2140ExactKeyDelegationRatchetTransition(row(), undefined)).toThrow("TC-2140");
   });
 });
 
