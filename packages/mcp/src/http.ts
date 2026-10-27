@@ -150,10 +150,83 @@ function createHostedSurface(
           headers: request.headers,
         });
         const response = oauthMetadataResponse(metadataRequest, metadataOptions);
-        if (response !== undefined) return response;
+        if (response !== undefined) return withBearerMethodsSupported(response);
       }
       const metadata = oauthMetadataResponse(request, metadataOptions);
-      if (metadata !== undefined) return metadata;
+      if (metadata !== undefined) return withBearerMethodsSupported(metadata);
+      if (url.pathname === "/.well-known/ai-catalog.json" && surface === "hosted") {
+        if (request.method === "OPTIONS") {
+          return publicMetadataCors(new Response(null, { status: 204 }), request);
+        }
+        if (request.method !== "GET") return methodNotAllowed("GET");
+        return publicMetadataCors(Response.json({
+          specVersion: "1.0",
+          host: {
+            displayName: "TinyCloud, Inc.",
+            identifier: "https://mcp.tinycloud.xyz",
+            documentationUrl: "https://docs.tinycloud.xyz/cli/mcp",
+          },
+          entries: [{
+            identifier: "urn:air:tinycloud.xyz:mcp:tinycloud-mcp",
+            displayName: "TinyCloud MCP",
+            type: "application/json",
+            description: "Hosted Streamable HTTP MCP server for delegated TinyCloud operations.",
+            url: new URL("/.well-known/mcp/server-card.json", resourceUrl).toString(),
+            representativeQueries: [
+              "How do I connect to TinyCloud's hosted MCP server?",
+              "Which endpoint provides TinyCloud's delegated MCP operations?",
+              "How can I connect to TinyCloud MCP using local stdio?",
+            ],
+          }],
+        }, {
+          headers: {
+            "cache-control": "public, max-age=300",
+            "content-type": "application/json; charset=utf-8",
+          },
+        }), request);
+      }
+      if (url.pathname === "/auth.md" && surface === "hosted") {
+        if (request.method === "OPTIONS") {
+          return publicMetadataCors(new Response(null, { status: 204 }), request);
+        }
+        if (request.method !== "GET") return methodNotAllowed("GET");
+        const issuerUrl = new URL(issuer);
+        const authorizationServerMetadataUrl = new URL(
+          `/.well-known/oauth-authorization-server${issuerUrl.pathname}`,
+          issuerUrl.origin,
+        );
+        const registrationEndpoint = config.oauthMetadata.registration_endpoint;
+        const registrationNote = typeof registrationEndpoint === "string"
+          ? `OpenKey's OAuth \`registration_endpoint\` is ${registrationEndpoint}; it registers OAuth clients, not TinyCloud users or agents.`
+          : "The authorization server does not advertise an OAuth client registration endpoint.";
+        const authDoc = [
+          "# TinyCloud MCP auth.md",
+          "",
+          `Protected resource: ${resourceUrl}.`,
+          "",
+          "Send an OAuth access token in the `Authorization: Bearer` header.",
+          "",
+          `Protected Resource Metadata: ${new URL("/.well-known/oauth-protected-resource", resourceUrl)}.`,
+          `Authorization server issuer: ${issuer}.`,
+          `Authorization server metadata: ${authorizationServerMetadataUrl}.`,
+          `Scope: \`${REQUIRED_SCOPE}\`.`,
+          "",
+          "Hosted access uses OpenKey OAuth.",
+          registrationNote,
+          "TinyCloud does not host an Auth.md agent-enrollment or user-registration endpoint for this service.",
+          "No `agent_auth` registration block is published because no agent-registration endpoint is available.",
+          "",
+          "Local stdio is a separate option configured with `@tinycloud/cli` and `@tinycloud/mcp`.",
+          "",
+          "Connection steps: https://docs.tinycloud.xyz/cli/mcp",
+        ].join("\n") + "\n";
+        return publicMetadataCors(publicText(authDoc, "text/markdown; charset=utf-8"), request);
+      }
+      if (url.pathname === "/robots.txt" && surface === "hosted") {
+        return request.method === "GET"
+          ? publicText(`User-agent: *\nAllow: /\nSitemap: ${new URL("/sitemap.xml", resourceUrl)}\nAgentmap: ${new URL("/.well-known/ai-catalog.json", resourceUrl)}\n`, "text/plain; charset=utf-8")
+          : methodNotAllowed("GET");
+      }
       if ((url.pathname === "/mcp/server-card" || url.pathname === "/.well-known/mcp/server-card.json") && surface === "hosted") {
         if (request.method === "OPTIONS") {
           return publicMetadataCors(new Response(null, { status: 204 }), request);
@@ -170,44 +243,9 @@ function createHostedSurface(
           remotes: [{ type: "streamable-http", url: resourceUrl.toString() }],
         }, { headers: { "cache-control": "public, max-age=300" } }), request);
       }
-      if (url.pathname === "/.well-known/ai-catalog.json" && surface === "hosted") {
-        if (request.method === "OPTIONS") {
-          return publicMetadataCors(new Response(null, { status: 204 }), request);
-        }
-        if (request.method !== "GET") return methodNotAllowed("GET");
-        return publicMetadataCors(Response.json({
-          specVersion: "1.0",
-          host: {
-            displayName: "TinyCloud, Inc.",
-            documentationUrl: "https://docs.tinycloud.xyz/cli/mcp",
-          },
-          entries: [{
-            identifier: "urn:air:tinycloud.xyz:mcp:tinycloud-mcp",
-            displayName: "TinyCloud MCP",
-            type: "application/mcp-server-card+json",
-            description: "Hosted Streamable HTTP MCP server for delegated TinyCloud operations.",
-            url: new URL("/.well-known/mcp/server-card.json", resourceUrl).toString(),
-            representativeQueries: [
-              "How do I connect to TinyCloud's hosted MCP server?",
-              "Which endpoint provides TinyCloud's delegated MCP operations?",
-              "How can I connect to TinyCloud MCP using local stdio?",
-            ],
-          }],
-        }, {
-          headers: {
-            "cache-control": "public, max-age=300",
-            "content-type": "application/ai-catalog+json; charset=utf-8",
-          },
-        }), request);
-      }
       if (url.pathname === "/llms.txt" && surface === "hosted") {
         return request.method === "GET"
           ? publicText("# TinyCloud MCP\n\nHosted Streamable HTTP endpoint: https://mcp.tinycloud.xyz/mcp (OpenKey OAuth).\n\nConnection documentation: https://docs.tinycloud.xyz/cli/mcp\n\nLocal alternative: install @tinycloud/cli and @tinycloud/mcp, then set up tinycloud-mcp as a stdio server in your MCP client.\n", "text/plain; charset=utf-8")
-          : methodNotAllowed("GET");
-      }
-      if (url.pathname === "/robots.txt" && surface === "hosted") {
-        return request.method === "GET"
-          ? publicText(`User-agent: *\nAllow: /\nSitemap: ${new URL("/sitemap.xml", resourceUrl)}\n`, "text/plain; charset=utf-8")
           : methodNotAllowed("GET");
       }
       if (url.pathname === "/sitemap.xml" && surface === "hosted") {
@@ -221,7 +259,7 @@ function createHostedSurface(
         const markdown = request.headers.get("accept")?.includes("text/markdown") ?? false;
         const content = markdown
           ? "# TinyCloud MCP\n\nHosted endpoint: <https://mcp.tinycloud.xyz/mcp> (Streamable HTTP, OpenKey OAuth).\n\n[Connection documentation](https://docs.tinycloud.xyz/cli/mcp).\n\nLocal alternative: install `@tinycloud/cli` and `@tinycloud/mcp` and connect the `tinycloud-mcp` stdio server.\n"
-          : "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>TinyCloud MCP</title><main><h1>TinyCloud MCP</h1><p>Hosted MCP endpoint: <code>https://mcp.tinycloud.xyz/mcp</code> (Streamable HTTP, OpenKey OAuth).</p><p><a href=\"https://docs.tinycloud.xyz/cli/mcp\">Connection documentation</a></p><p>Local alternative: install <code>@tinycloud/cli</code> and <code>@tinycloud/mcp</code> and connect the <code>tinycloud-mcp</code> stdio server.</p></main></html>";
+          : "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><link rel=\"ai-catalog\" href=\"/.well-known/ai-catalog.json\"><title>TinyCloud MCP</title></head><main><h1>TinyCloud MCP</h1><p>Hosted MCP endpoint: <code>https://mcp.tinycloud.xyz/mcp</code> (Streamable HTTP, OpenKey OAuth).</p><p><a href=\"https://docs.tinycloud.xyz/cli/mcp\">Connection documentation</a></p><p>Local alternative: install <code>@tinycloud/cli</code> and <code>@tinycloud/mcp</code> and connect the <code>tinycloud-mcp</code> stdio server.</p></main></html>";
         const headers = new Headers({
           "content-type": markdown ? "text/markdown; charset=utf-8" : "text/html; charset=utf-8",
           "cache-control": "public, max-age=300",
@@ -440,6 +478,19 @@ function json(value: unknown, status = 200): Response {
   return Response.json(value, { status, headers: { "cache-control": "no-store" } });
 }
 
+
+async function withBearerMethodsSupported(response: Response): Promise<Response> {
+  if (response.status === 204 || response.body === null) return response;
+  const metadata = await response.json() as Record<string, unknown>;
+  const headers = new Headers(response.headers);
+  headers.delete("content-length");
+  headers.delete("content-encoding");
+  return new Response(JSON.stringify({ ...metadata, bearer_methods_supported: ["header"] }), {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
 
 function publicMetadataCors(response: Response, request: Request): Response {
   const headers = new Headers(response.headers);

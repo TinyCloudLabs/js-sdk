@@ -47,6 +47,10 @@ Coverage is generated from the Commander registration ledger; legacy commands ar
 
 ## Account and KV exploration
 
+With hosted Streamable HTTP, call `tinycloud_connect`, give the owner the returned `approvalUrl` to approve in OpenKey, then call `tinycloud_connect` again. When a tool returns `authority_required` with `approval.url`, give the owner that link, wait for their approval, then retry the same call unchanged. If the result has no `approval.url`, stop and report it; don't try another route. The `tc auth request` / `tc auth import` and `tinycloud_auth_import` instructions below are for local stdio only. See the [hosted MCP guide](https://docs.tinycloud.xyz/cli/mcp).
+
+The `tc auth grant --stdin --yes` artifact, import, restart, and retry steps below apply to local stdio only; hosted operations use a returned `approval.url` as described above.
+
 1. A fresh `delegate-session` profile must first bootstrap its session through
    the CLI: emit one exact `tc auth request --cap ...` artifact, have the owner
    grant that artifact, and import the result with `tc auth import`. Start MCP
