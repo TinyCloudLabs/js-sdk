@@ -84,20 +84,14 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4, 5, 6]
-        exp: [e5-head-alone, e8-master-pair, e1-master-full, e2-head-full, e3-head-pair, e4a-head-no-runtimesigner, e4b-head-no-openkeysigning, e4c-head-no-askLog, e4d-head-no-modallist, e4e-head-no-new-tests, e6-head-full-bun144, e7-head-split-decrypt]
+        exp: [e1-master-full, e6-head-full-bun144, e7-head-split-decrypt, e9-head-drop-real-instance, e10-master-bun144, e12-head-split-runtimesigner]
         include:
-          - { exp: e5-head-alone, variant: head, bun: 1.3.14, mode: alone, remove: "" }
-          - { exp: e8-master-pair, variant: master, bun: 1.3.14, mode: pair, remove: "" }
-          - { exp: e1-master-full, variant: master, bun: 1.3.14, mode: full, remove: "" }
-          - { exp: e2-head-full, variant: head, bun: 1.3.14, mode: full, remove: "" }
-          - { exp: e3-head-pair, variant: head, bun: 1.3.14, mode: pair, remove: "" }
-          - { exp: e4a-head-no-runtimesigner, variant: head, bun: 1.3.14, mode: full, remove: "packages/web-sdk/tests/tcwRuntimePermissionSigner.test.ts" }
-          - { exp: e4b-head-no-openkeysigning, variant: head, bun: 1.3.14, mode: full, remove: "packages/web-sdk/tests/tcwRequestPermissionsOpenKeySigning.test.ts" }
-          - { exp: e4c-head-no-askLog, variant: head, bun: 1.3.14, mode: full, remove: "packages/web-sdk/tests/ui/panel-permission-ask-log.test.ts" }
-          - { exp: e4d-head-no-modallist, variant: head, bun: 1.3.14, mode: full, remove: "packages/web-sdk/tests/PermissionRequestModalDelegationList.test.ts" }
-          - { exp: e4e-head-no-new-tests, variant: head, bun: 1.3.14, mode: full, remove: "packages/web-sdk/tests/tcwRuntimePermissionSigner.test.ts packages/web-sdk/tests/tcwRequestPermissionsOpenKeySigning.test.ts packages/web-sdk/tests/ui/panel-permission-ask-log.test.ts packages/web-sdk/tests/PermissionRequestModalDelegationList.test.ts" }
-          - { exp: e6-head-full-bun144, variant: head, bun: 1.4.4, mode: full, remove: "" }
-          - { exp: e7-head-split-decrypt, variant: head, bun: 1.3.14, mode: split, remove: "" }
+          - { exp: e1-master-full, variant: master, bun: 1.3.14, mode: full, remove: "", split: "", patch: "" }
+          - { exp: e6-head-full-bun144, variant: head, bun: 1.4.4, mode: full, remove: "", split: "", patch: "" }
+          - { exp: e7-head-split-decrypt, variant: head, bun: 1.3.14, mode: split, remove: "", split: "packages/web-sdk/tests/tcwRequestPermissionsDecryptExpiry.test.ts", patch: "" }
+          - { exp: e9-head-drop-real-instance, variant: head, bun: 1.3.14, mode: full, remove: "", split: "", patch: "drop-real" }
+          - { exp: e10-master-bun144, variant: master, bun: 1.4.4, mode: full, remove: "", split: "", patch: "" }
+          - { exp: e12-head-split-runtimesigner, variant: head, bun: 1.3.14, mode: split, remove: "", split: "packages/web-sdk/tests/tcwRuntimePermissionSigner.test.ts", patch: "" }
     steps:
       - uses: oven-sh/setup-bun@v2
         with:
@@ -120,6 +114,8 @@ jobs:
           EXP: ${{ matrix.exp }}
           MODE: ${{ matrix.mode }}
           REMOVE: ${{ matrix.remove }}
+          SPLIT: ${{ matrix.split }}
+          PATCH: ${{ matrix.patch }}
           SHARD: ${{ matrix.shard }}
         run: |
           set +e
@@ -127,23 +123,30 @@ jobs:
           echo "bun $(bun --version) revision $(bun --revision)"
           echo "cpu: $(grep -m1 'model name' /proc/cpuinfo) avx512f_lines=$(grep -c avx512f /proc/cpuinfo)"
           for f in $REMOVE; do rm -f "$f"; done
+          if [ "$PATCH" = drop-real ]; then
+            f=packages/web-sdk/tests/tcwRuntimePermissionSigner.test.ts
+            n=$(grep -n 'describe("setRuntimePermissionSigner with the real constructor-bound methods"' "$f" | cut -d: -f1)
+            head -n $((n-1)) "$f" > "$f.new" && mv "$f.new" "$f"
+            echo "patched $f: dropped the real-instance describe (kept $((n-1)) lines)"
+          fi
           mkdir -p "$RUNNER_TEMP/logs"
-          DEC=packages/web-sdk/tests/tcwRequestPermissionsDecryptExpiry.test.ts
+          DEC="$SPLIT"
           crashes=0
           fails=0
           run_once() { # label, args...
             local label="$1"; shift
             local log="$RUNNER_TEMP/logs/$EXP-$SHARD-$label.log"
-            bun test --parallel=1 "$@" --reporter=junit --reporter-outfile="$RUNNER_TEMP/$label.xml" > "$log" 2>&1
+            timeout 300 bun test --parallel=1 "$@" --reporter=junit --reporter-outfile="$RUNNER_TEMP/$label.xml" > "$log" 2>&1
             local rc=$?
             local class=ok
-            if [ "$rc" -ge 128 ] || grep -Eq 'panic\(|Segmentation fault|oh no: Bun has crashed' "$log"; then class=CRASH; elif [ "$rc" -ne 0 ]; then class=testfail; fi
+            if [ "$rc" -eq 124 ]; then class=HANG; elif [ "$rc" -ge 128 ] || grep -Eq 'panic\(|Segmentation fault|oh no: Bun has crashed' "$log"; then class=CRASH; elif [ "$rc" -ne 0 ]; then class=testfail; fi
             echo "RESULT exp=$EXP shard=$SHARD run=$label rc=$rc class=$class bun=$(bun --version)"
             if [ "$class" = CRASH ]; then
               grep -E 'bun\.report|panic\(|Segmentation|##\[group\]' "$log" | tail -6
             fi
             [ "$class" = CRASH ] && return 2
             [ "$class" = testfail ] && return 1
+            [ "$class" = HANG ] && return 3
             return 0
           }
           for i in $(seq 1 "$ITER"); do
