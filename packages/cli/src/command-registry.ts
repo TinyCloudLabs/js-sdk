@@ -16,6 +16,7 @@ import { registerKvCommand } from "./commands/kv.js";
 import { registerKeysCommand } from "./commands/keys.js";
 import { registerManifestCommand } from "./commands/manifest.js";
 import { registerNodeCommand } from "./commands/node.js";
+import { registerOnboardCommand } from "./commands/onboard.js";
 import { registerProfileCommand } from "./commands/profile.js";
 import { registerReplicaCommand } from "./commands/replica.js";
 import { registerSecretsCommand } from "./commands/secrets.js";
@@ -30,6 +31,7 @@ import { registerVarsCommand } from "./commands/vars.js";
 /** Register the complete Commander projection without parsing argv. */
 export function registerTinyCloudCommands(program: Command): void {
   registerInitCommand(program);
+  registerOnboardCommand(program);
   registerContextCommand(program);
   registerAuthCommand(program);
   registerEnableCommand(program);

@@ -204,7 +204,8 @@ export function validateDelegationCallbackPayload(value: unknown): string | null
   return null;
 }
 
-async function delegationFromInput(input: string, did: string, options: AuthFlowOptions): Promise<DelegationData> {
+/** A pasted OpenKey result: a short code (looked up and bound to this key) or the full delegation code. */
+export async function delegationFromInput(input: string, did: string, options: AuthFlowOptions): Promise<DelegationData> {
   const trimmed = input.trim();
   let parsed: unknown;
   if (/^[a-z2-7]{4}-[a-z2-7]{4}$/i.test(trimmed)) {
