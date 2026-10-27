@@ -37,7 +37,12 @@ test("serves hosted landing in HTML and Markdown with discovery links", async ()
   expect(landing.headers.get("link")).toContain('rel="service-doc"');
   expect(markdown.status).toBe(200);
   expect(markdown.headers.get("content-type")).toContain("text/markdown");
-  expect(await markdown.text()).toContain("Local alternative:");
+  const markdownText = await markdown.text();
+  expect(markdownText).toContain("Local alternative:");
+  expect(markdownText).toContain("`@tinycloud/cli`");
+  expect(markdownText).toContain("`@tinycloud/mcp`");
+  expect(html).toContain("<code>@tinycloud/cli</code>");
+  expect(html).toContain("<code>@tinycloud/mcp</code>");
   expect(health.status).toBe(200);
   expect(await health.json()).toEqual({ ok: true });
 });

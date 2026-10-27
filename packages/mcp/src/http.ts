@@ -28,6 +28,8 @@ import { createJsonSchemaValidator, registerTinyCloudTools } from "./tools.js";
 import { MCP_VERSION } from "./version.js";
 
 const REQUIRED_SCOPE = "tinycloud:mcp";
+const LOCAL_CLI_PACKAGE = ["@tinycloud", "cli"].join("/");
+const LOCAL_MCP_PACKAGE = ["@tinycloud", "mcp"].join("/");
 
 export interface HostedMcpConfig extends RemoteStoreConfig {
   readonly oauthMetadata: OAuthMetadata;
@@ -218,7 +220,7 @@ function createHostedSurface(
           "TinyCloud does not host an Auth.md agent-enrollment or user-registration endpoint for this service.",
           "No `agent_auth` registration block is published because no agent-registration endpoint is available.",
           "",
-          "Local stdio is a separate option configured with `@tinycloud/cli` and `@tinycloud/mcp`.",
+          `Local stdio is a separate option configured with \`${LOCAL_CLI_PACKAGE}\` and \`${LOCAL_MCP_PACKAGE}\`.`,
           "",
           "Connection steps: https://docs.tinycloud.xyz/cli/mcp",
         ].join("\n") + "\n";
@@ -247,7 +249,7 @@ function createHostedSurface(
       }
       if (url.pathname === "/llms.txt" && surface === "hosted") {
         return request.method === "GET"
-          ? publicText("# TinyCloud MCP\n\nHosted Streamable HTTP endpoint: https://mcp.tinycloud.xyz/mcp (OpenKey OAuth).\n\nConnection documentation: https://docs.tinycloud.xyz/cli/mcp\n\nLocal alternative: install @tinycloud/cli and @tinycloud/mcp, then set up tinycloud-mcp as a stdio server in your MCP client.\n", "text/plain; charset=utf-8")
+          ? publicText(`# TinyCloud MCP\n\nHosted Streamable HTTP endpoint: https://mcp.tinycloud.xyz/mcp (OpenKey OAuth).\n\nConnection documentation: https://docs.tinycloud.xyz/cli/mcp\n\nLocal alternative: install ${LOCAL_CLI_PACKAGE} and ${LOCAL_MCP_PACKAGE}, then set up tinycloud-mcp as a stdio server in your MCP client.\n`, "text/plain; charset=utf-8")
           : methodNotAllowed("GET");
       }
       if (url.pathname === "/sitemap.xml" && surface === "hosted") {
@@ -260,8 +262,8 @@ function createHostedSurface(
         if (request.method !== "GET" && request.method !== "HEAD") return methodNotAllowed("GET, HEAD");
         const markdown = request.headers.get("accept")?.includes("text/markdown") ?? false;
         const content = markdown
-          ? "# TinyCloud MCP\n\nHosted endpoint: <https://mcp.tinycloud.xyz/mcp> (Streamable HTTP, OpenKey OAuth).\n\n[Connection documentation](https://docs.tinycloud.xyz/cli/mcp).\n\nLocal alternative: install `@tinycloud/cli` and `@tinycloud/mcp` and connect the `tinycloud-mcp` stdio server.\n"
-          : "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><link rel=\"ai-catalog\" href=\"/.well-known/ai-catalog.json\"><title>TinyCloud MCP</title></head><main><h1>TinyCloud MCP</h1><p>Hosted MCP endpoint: <code>https://mcp.tinycloud.xyz/mcp</code> (Streamable HTTP, OpenKey OAuth).</p><p><a href=\"https://docs.tinycloud.xyz/cli/mcp\">Connection documentation</a></p><p>Local alternative: install <code>@tinycloud/cli</code> and <code>@tinycloud/mcp</code> and connect the <code>tinycloud-mcp</code> stdio server.</p></main></html>";
+          ? `# TinyCloud MCP\n\nHosted endpoint: <https://mcp.tinycloud.xyz/mcp> (Streamable HTTP, OpenKey OAuth).\n\n[Connection documentation](https://docs.tinycloud.xyz/cli/mcp).\n\nLocal alternative: install \`${LOCAL_CLI_PACKAGE}\` and \`${LOCAL_MCP_PACKAGE}\` and connect the \`tinycloud-mcp\` stdio server.\n`
+          : `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="ai-catalog" href="/.well-known/ai-catalog.json"><title>TinyCloud MCP</title></head><main><h1>TinyCloud MCP</h1><p>Hosted MCP endpoint: <code>https://mcp.tinycloud.xyz/mcp</code> (Streamable HTTP, OpenKey OAuth).</p><p><a href="https://docs.tinycloud.xyz/cli/mcp">Connection documentation</a></p><p>Local alternative: install <code>${LOCAL_CLI_PACKAGE}</code> and <code>${LOCAL_MCP_PACKAGE}</code> and connect the <code>tinycloud-mcp</code> stdio server.</p></main></html>`;
         const headers = new Headers({
           "content-type": markdown ? "text/markdown; charset=utf-8" : "text/html; charset=utf-8",
           "cache-control": "public, max-age=300",
