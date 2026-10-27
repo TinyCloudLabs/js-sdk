@@ -38,6 +38,11 @@
       "import": "./dist/delegations/index.js",
       "require": "./dist/delegations/index.cjs"
     },
+    "./delegations/issued": {
+      "types": "./dist/delegations/issued.d.ts",
+      "import": "./dist/delegations/issued.js",
+      "require": "./dist/delegations/issued.cjs"
+    },
     "./held-credentials": {
       "types": "./dist/held-credentials/index.d.ts",
       "import": "./dist/held-credentials/index.js",

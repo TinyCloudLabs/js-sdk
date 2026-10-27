@@ -246,9 +246,24 @@ const LAZY_ENTRIES = [
   { request: "./panel-data-entry", dir: "src/ui", file: "panel-data" },
   { request: "./modals-entry", dir: "src/notifications", file: "modals" },
 ];
+// sdk-core's DelegationManager loads its issued-delegation code by the package's own subpath. That code is the
+// `delegations-issued` lazy entry, so any bundle that carries the manager loads it by relative sibling path.
+const isIssuedDelegationsRequest = ({ context, request }) =>
+  request === "@tinycloud/sdk-core/delegations/issued" && context === path.resolve(__dirname, "../sdk-core/dist");
+const issuedDelegationsExternal = (type, ext) => (data, callback) => {
+  if (isIssuedDelegationsRequest(data)) {
+    callback(null, `${type} ./delegations-issued.${ext}`);
+    return;
+  }
+  callback();
+};
 const lazyLoaderExternals = (type, ext) => ({ context, request }, callback) => {
   if (request === "./encryption-keys.js" && context === path.resolve(__dirname, "../node-sdk/dist")) {
     callback(null, `${type} ./encryption-keys.${ext}`);
+    return;
+  }
+  if (isIssuedDelegationsRequest({ context, request })) {
+    callback(null, `${type} ./delegations-issued.${ext}`);
     return;
   }
   const entry = LAZY_ENTRIES.find((e) => e.request === request && context === path.resolve(__dirname, e.dir));
@@ -290,6 +305,7 @@ const lazyEntries = {
   "panel-data": "./src/ui/panel-data-entry.ts",
   modals: "./src/notifications/modals-entry.ts",
   "encryption-keys": "./src/encryption-keys-entry.ts",
+  "delegations-issued": "./src/delegations-issued-entry.ts",
 };
 const notChunkLimit = (plugin) => !(plugin instanceof webpack.optimize.LimitChunkCountPlugin);
 
@@ -314,11 +330,13 @@ const lazyCjsConfig = {
 const credentialsEsmConfig = {
   ...esmConfig,
   entry: "./src/credentials-subpath.ts",
+  externals: [linksExternal, issuedDelegationsExternal("import", "mjs")],
   output: { ...esmConfig.output, filename: "credentials.mjs" },
 };
 const credentialsCjsConfig = {
   ...cjsConfig,
   entry: "./src/credentials-subpath.ts",
+  externals: [linksExternal, issuedDelegationsExternal("commonjs", "cjs")],
   output: { ...cjsConfig.output, filename: "credentials.cjs" },
 };
 
