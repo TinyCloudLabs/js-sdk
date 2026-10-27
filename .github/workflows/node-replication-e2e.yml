@@ -12,6 +12,7 @@ on:
       - "packages/cli/src/commands/knowledge*"
       - "packages/cli/src/lib/apps-agent-preset*"
       - "packages/cli/src/commands/agent-grant-openkey*"
+      - "packages/cli/src/commands/onboard*"
       - "packages/cli/src/commands/auth.ts"
       - "packages/cli/src/auth/scoped-login.ts"
       - ".github/workflows/node-replication-e2e.yml"
@@ -117,6 +118,11 @@ jobs:
         env:
           TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
         run: bun test --max-concurrency=1 packages/cli/src/commands/agent-grant-openkey.e2e.test.ts
+
+      - name: Run onboard e2e (profile, two OpenKey approvals, real node)
+        env:
+          TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
+        run: bun test --max-concurrency=1 packages/cli/src/commands/onboard.e2e.test.ts
 
       - name: Save Rust/Cargo cache
         if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/')
