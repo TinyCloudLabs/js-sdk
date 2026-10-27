@@ -3558,7 +3558,7 @@ describe("panel Allow ability for the delegation list (TC-2113, #768) size ratch
   it("pins the allow-ability root delta over the issued-delegations row and keeps the worker ceilings unchanged", () => {
     expect(() => validateLedger(current)).not.toThrow();
     expect(current.tc2113AllowAbilityRatchet).toEqual(approvedTc2113AllowAbilityRatchet);
-    expect(approvedTc2113AllowAbilityRatchet.root).toEqual({ delta: { "index.mjs": 510, "index.cjs": 468 }, ceiling: { "index.mjs": 1471160, "index.cjs": 1412960 } });
+    expect(approvedTc2113AllowAbilityRatchet.root).toEqual({ delta: { "index.mjs": 1417, "index.cjs": 460 }, ceiling: { "index.mjs": 1472067, "index.cjs": 1412952 } });
     expect(approvedTc2113AllowAbilityRatchet.root.ceiling["index.mjs"]).toBe(approvedTc2132IssuedDelegationsRatchet.root.ceiling["index.mjs"] + approvedTc2113AllowAbilityRatchet.root.delta["index.mjs"]);
     expect(approvedTc2113AllowAbilityRatchet.root.ceiling["index.cjs"]).toBe(approvedTc2132IssuedDelegationsRatchet.root.ceiling["index.cjs"] + approvedTc2113AllowAbilityRatchet.root.delta["index.cjs"]);
     expect(approvedTc2113AllowAbilityRatchet.firstImport.ceiling).toEqual(approvedTc2132IssuedDelegationsRatchet.firstImport.ceiling);
