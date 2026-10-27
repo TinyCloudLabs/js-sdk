@@ -1,5 +1,13 @@
 # @tinycloudlabs/sdk-core
 
+## 3.8.0-beta.15
+
+### Patch Changes
+
+- f167805: Allow `delegateTo` to issue an exact named-key decrypt resource when the signed session grants that key. The manifest permission rules remain the same.
+
+  Details: TC-2140
+
 ## 3.8.0-beta.14
 
 ### Minor Changes

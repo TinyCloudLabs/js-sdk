@@ -1858,6 +1858,7 @@ var init_sha256 = __esm({
 
 // ../sdk-core/src/manifest.ts
 import { resolveSecretPath, SECRET_NAME_RE, parseNetworkId } from "@tinycloud/sdk-services";
+import { parseEncryptionResource } from "@tinycloud/sdk-services/encryption/resource";
 function parseExpiry(duration) {
   if (typeof duration !== "string" || duration.length === 0) {
     throw new ManifestValidationError(
