@@ -1,4 +1,4 @@
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { get as httpGet } from "node:http";
 import { get as httpsGet } from "node:https";
@@ -54,6 +54,18 @@ function resolveOpenKeyHost(profile: ProfileConfig): string {
   return process.env.TC_OPENKEY_HOST ?? profile.openkeyHost ?? DEFAULT_OPENKEY_HOST;
 }
 import { startAuthFlow } from "../auth/browser-auth.js";
+import {
+  detachedChildArgv,
+  launchDetachedLogin,
+  parseWaitSeconds,
+  readDetachedLogin,
+  reportDetachedChildFailure,
+  requestFingerprint,
+  runDetachedLoginChild,
+  sessionFingerprint,
+  summarizeDetachedLogin,
+  waitForLogin,
+} from "../auth/detached-login.js";
 import {
   acquireDeviceDelegation,
   loginWithDeviceAuthorization,
@@ -625,6 +637,8 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .description("Authenticate with TinyCloud")
     .option("--device", "Approve on another device (e.g. a phone) through OpenKey device authorization; requires a KV-scoped --manifest (SQL and secret decrypt need browser or --paste login)")
     .option("--paste", "Wait up to 5 minutes for a signed code from OpenKey on stdin instead of a browser callback (Safari may require paste)")
+    .option("--detach", "Browser callback for agents: print the OpenKey link as JSON and return at once, while a detached listener on 127.0.0.1 waits up to 10 minutes for the approval; check it with `auth status --wait <seconds>`. Never opens a browser")
+    .addOption(new Option("--detached-child", "Internal: the listener process that --detach starts").hideHelp())
     .option("--no-popup", "Print the OpenKey URL without opening a browser")
     .option("--method <method>", "Authentication method: local or openkey")
     .option("--manifest <fileOrBase64>", `Request only this manifest's permissions (one space, plus raw encryption network entries such as a secrets decrypt grant); ${SHARE_PUBLISHING_MANIFEST_REF} covers \`${CLI_NAME} share publish\``)
@@ -639,6 +653,24 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
       try {
         if (options.device && options.paste) {
           throw new CLIError("INVALID_ARGUMENT", "--device and --paste are mutually exclusive.", ExitCode.USAGE_ERROR);
+        }
+        const detached = options.detach === true || options.detachedChild === true;
+        if (detached && (options.device || options.paste || options.method === "local")) {
+          throw new CLIError("INVALID_ARGUMENT", "--detach is the browser callback sign-in: it can't be combined with --device, --paste or --method local.", ExitCode.USAGE_ERROR);
+        }
+        if (detached && (options.keys !== undefined || options.replicationPrefix !== undefined)) {
+          throw new CLIError("INVALID_ARGUMENT", "--detach can't be combined with --keys or --replication-prefix; sign in in the foreground for those.", ExitCode.USAGE_ERROR);
+        }
+        if (options.detach === true && options.detachedChild !== true) {
+          // The listener runs in a detached child that repeats this command; this process only relays its link.
+          const { profile: detachedProfile } = await ProfileManager.resolveContext(cmd.optsWithGlobals(), { storedSession: "unused" });
+          const launched = await launchDetachedLogin({
+            profile: detachedProfile,
+            entry: process.argv[1]!,
+            argv: detachedChildArgv(process.argv.slice(2)),
+          });
+          outputJson(detachedLoginOutput(launched));
+          return;
         }
         const scoped = options.device || options.manifest || options.expiry || options.owner;
         if (scoped && options.method === "local") {
@@ -729,9 +761,10 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         } else if (options.keys !== undefined) {
           method = (profileConfig?.authMethod === "openkey" || options.paste || options.owner) ? "openkey" : "local";
         } else {
-          method = scoped ? "openkey" : await promptAuthMethod();
+          // --detach is the OpenKey browser callback; its child has no terminal to prompt on.
+          method = scoped || detached ? "openkey" : await promptAuthMethod();
         }
-        if (method === "openkey" && !options.paste && options.popup !== false &&
+        if (method === "openkey" && !options.paste && options.popup !== false && !detached &&
           !process.stdin.isTTY && !process.stderr.isTTY) {
           throw new CLIError(
             "INTERACTIVE_LOGIN_REQUIRED",
@@ -746,7 +779,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           await persistReplicationLogin(ctx.profile, replicationOptions);
           if (replicationOptions.allowSecrets) writeReplicationSecretsWarning();
         } else {
-          const preparedCommitted = await handleOpenKeyAuth(ctx.profile, ctx.host, {
+          const openKeyOptions: OpenKeyLoginOptions = {
             paste: options.paste,
             noPopup: options.popup === false,
             permissions: loginPermissions,
@@ -757,11 +790,30 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             persistHost,
             force: options.force === true,
             keys: options.keys,
-          });
+          };
+          if (options.detachedChild === true) {
+            if (replicationOptions.prefixes.length > 0) {
+              throw new CLIError("INVALID_ARGUMENT", "This profile signs in with replication, which --detach doesn't support; sign in in the foreground.", ExitCode.USAGE_ERROR);
+            }
+            process.exitCode = await runDetachedLoginChild({
+              profile: ctx.profile,
+              fingerprint: requestFingerprint({ profile: ctx.profile, host: ctx.host, permissions: loginPermissions ?? null, expiry: options.expiry ?? null, owner: owner ?? null }),
+              sessionBefore: sessionFingerprint(await ProfileManager.getSession(ctx.profile) as Record<string, unknown> | null),
+              readSessionFingerprint: async () => sessionFingerprint(await ProfileManager.getSession(ctx.profile) as Record<string, unknown> | null),
+              run: async (acquisition) => {
+                const { result } = await handleOpenKeyAuth(ctx.profile, ctx.host, { ...openKeyOptions, noPopup: true, openKeyAcquisition: acquisition });
+                await persistReplicationLogin(ctx.profile, replicationOptions);
+                return result;
+              },
+            });
+            return;
+          }
+          const { preparedCommitted } = await handleOpenKeyAuth(ctx.profile, ctx.host, openKeyOptions);
           if (!preparedCommitted) await persistReplicationLogin(ctx.profile, replicationOptions);
           if (replicationOptions.allowSecrets) writeReplicationSecretsWarning();
         }
       } catch (error) {
+        if (options.detachedChild === true) await reportDetachedChildFailure(error);
         return handleError(error);
       }
     });
@@ -845,11 +897,27 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
   auth
     .command("status")
     .description("Show current authentication state")
-    .action(async (_options, cmd) => {
+    .option("--wait <seconds>", "Wait up to this many seconds (at most 600) for a pending `auth login --detach` approval. Exits 0 once signed in, 8 if still waiting, 3 if no sign-in is pending, or with the sign-in's error")
+    .action(async (options: { wait?: string }, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
+        const waitSeconds = options.wait === undefined ? undefined : parseWaitSeconds(options.wait);
         const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
         await recoverPendingLogout(ctx.profile);
+
+        const waited = waitSeconds === undefined ? undefined : await waitForLogin({
+          profile: ctx.profile,
+          waitMs: waitSeconds * 1000,
+          readSession: async () => {
+            const session = await ProfileManager.getSession(ctx.profile) as Record<string, unknown> | null;
+            const current = await ProfileManager.getProfile(ctx.profile).catch(() => null);
+            return { session, usable: sessionStateIsUsable(storedSessionState(session, current).state) };
+          },
+        });
+        if (waited?.outcome === "failed") {
+          throw new CLIError(waited.error.code, waited.error.message, waited.error.exitCode);
+        }
+        const pendingLogin = waited?.record ?? await readDetachedLogin(ctx.profile);
 
         const hasKey = await ProfileManager.getKey(ctx.profile);
         const session = await ProfileManager.getSession(ctx.profile) as Record<string, unknown> | null;
@@ -881,6 +949,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             posture,
             operatorType,
             address: profile?.address ?? null,
+            ...(pendingLogin === null ? {} : { login: summarizeDetachedLogin(pendingLogin) }),
           });
         } else {
           process.stdout.write(theme.heading("Authentication Status") + "\n");
@@ -898,9 +967,15 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           process.stdout.write(formatField("Address", profile?.address ?? null) + "\n");
           process.stdout.write(formatField("Space ID", profile?.spaceId ?? null) + "\n");
           process.stdout.write(formatField("Has Key", hasKey !== null) + "\n");
+          if (pendingLogin !== null) {
+            process.stdout.write(formatField("Sign-in", `${pendingLogin.state}${pendingLogin.state === "waiting" ? ` until ${pendingLogin.expiresAt}` : ""}`) + "\n");
+          }
           if (sessionState === "expired" || sessionState === "unverified") {
             process.stdout.write(`\n${signInAgainHint(ctx.profile, posture ?? undefined)}\n`);
           }
+        }
+        if (waited !== undefined && waited.outcome !== "authenticated") {
+          process.exitCode = waited.outcome === "waiting" ? ExitCode.PENDING : ExitCode.AUTH_REQUIRED;
         }
       } catch (error) {
         return handleError(error);
@@ -2645,12 +2720,12 @@ async function handleOpenKeyAuth(
   profileName: string,
   host: string,
   options: OpenKeyLoginOptions = {},
-): Promise<boolean> {
+): Promise<{ preparedCommitted: boolean; result: Record<string, unknown> }> {
   const { profile, delegationData, declined, legacyNested } = await refreshOpenKeySession(profileName, host, options);
 
   reportDeclined(declined, legacyNested);
   await ensureSpaceSetup({ profile: profileName, host }, delegationData, delegationData.permissions as PermissionEntry[] | undefined);
-  outputJson({
+  const result: Record<string, unknown> = {
     authenticated: true,
     profile: profileName,
     did: profile.did,
@@ -2667,8 +2742,20 @@ async function handleOpenKeyAuth(
           activation: delegationData.hostActivated === true ? "confirmed-by-openkey" : "unverified",
         }
       : {}),
-  });
-  return (options.replication?.prefixes.length ?? 0) > 0;
+  };
+  outputJson(result);
+  return { preparedCommitted: (options.replication?.prefixes.length ?? 0) > 0, result };
+}
+
+/** What `auth login --detach` prints: the link to show the owner, and how to wait for the approval. */
+function detachedLoginOutput(launched: Awaited<ReturnType<typeof launchDetachedLogin>>): Record<string, unknown> {
+  return {
+    authenticated: false,
+    profile: launched.profile,
+    login: launched.login,
+    reused: launched.reused,
+    wait: `${CLI_NAME} --profile ${launched.profile} auth status --wait 60`,
+  };
 }
 
 /** Tell the operator which requested capabilities the owner unchecked or OpenKey signed incorrectly. */

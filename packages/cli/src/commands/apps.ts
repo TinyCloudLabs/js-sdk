@@ -7,7 +7,17 @@ import { operationSpaceResolver } from "@tinycloud/operations/delegation-binding
 import { assertKnowledgeAppId } from "../lib/knowledge-input.js";
 import { pinnedApp } from "../lib/apps-install-pin.js";
 import { AppsInstallError, installApp, type InstallIo, type InstallResult } from "../lib/apps-install.js";
-import { CLIError, handleError } from "../output/errors.js";
+import { resolveSpaceUri } from "../lib/space.js";
+import { unhostedSpaceError } from "../lib/host.js";
+import {
+  initTinyApp,
+  planTinyAppInit,
+  TINY_APPS_SPACE,
+  TinyAppInputError,
+  tinyAppProfile,
+  type TinyAppKvPort,
+} from "../lib/tiny-apps.js";
+import { CLIError, cliErrorFromService, handleError } from "../output/errors.js";
 import { formatTable, outputJson, shouldOutputJson, withSpinner } from "../output/formatter.js";
 import { theme } from "../output/theme.js";
 
@@ -50,6 +60,72 @@ Examples:
         return handleError(error);
       }
     });
+
+  apps
+    .command("init <app>")
+    .description("Start a tiny app (tc-apps layout): its catalog records, its discovery entry and an optional starter record, all create-only")
+    .requiredOption("--by <client>", "The client the records name in `by`: claude-code, codex or opencode")
+    .option("--starter <text>", "Also save one starter item with this text, unless it (or its done twin) already exists")
+    .addHelpText(
+      "after",
+      `
+Writes in the owner's \`${TINY_APPS_SPACE}\` space, under the app's own folder and its discovery entry only, with the
+profile \`tinyapp-<app>\` unless --profile names another. Every write is create-only: a record that exists is
+left as it is. Prints the keys and the records as read back.
+
+Examples:
+  $ ${CLI_NAME} apps init todos --starter "Try my personal apps" --by claude-code
+`,
+    )
+    .action(async (app: string, options: { by: string; starter?: string }, cmd: Command) => {
+      try {
+        let plan;
+        try {
+          plan = planTinyAppInit({ app, by: options.by, starter: options.starter, now: new Date() });
+        } catch (error) {
+          if (error instanceof TinyAppInputError) throw new CLIError(error.code, error.message, ExitCode.USAGE_ERROR);
+          throw error;
+        }
+        const globalOpts = cmd.optsWithGlobals();
+        // Each tiny app has its own profile; the default profile is never the right one here.
+        const ctx = await ProfileManager.resolveContext({ ...globalOpts, profile: globalOpts.profile ?? tinyAppProfile(app) });
+        const node = await ensureAuthenticated(ctx);
+        const spaceUri = await resolveSpaceUri(TINY_APPS_SPACE, ctx.profile);
+        const kv = tinyAppKvPort(node.kvForSpace(spaceUri!), spaceUri, ctx.profile);
+        const result = await withSpinner(`Starting ${plan.id}...`, () => initTinyApp(plan, kv));
+        outputJson({ ...result, profile: ctx.profile, space: TINY_APPS_SPACE });
+      } catch (error) {
+        return handleError(error);
+      }
+    });
+}
+
+/** The KV calls `apps init` makes; structural, so the SDK client and a test fake both satisfy it. */
+export interface InitKvClient {
+  get(key: string): Promise<PortResult<{ data: unknown }>>;
+  put(key: string, value: Uint8Array, options: { ifNoneMatch: "*" }): Promise<PortResult<unknown>>;
+}
+
+/** Bind `apps init` to one KV client, with the `kv` command's error mapping. */
+export function tinyAppKvPort(kv: InitKvClient, spaceUri: string | undefined, profileName: string): TinyAppKvPort {
+  const fail = async (error: ServiceError): Promise<never> => {
+    const hosted = await unhostedSpaceError({ code: error.code ?? "KV_FAILED", message: error.message ?? "", meta: error.meta }, spaceUri, profileName);
+    throw hosted ?? cliErrorFromService({ code: error.code ?? "KV_FAILED", message: error.message ?? "KV request failed", meta: error.meta });
+  };
+  return {
+    async get(key) {
+      const result = await kv.get(key);
+      if (result.ok) return result.data.data;
+      if (result.error.code === "KV_NOT_FOUND" || result.error.code === "NOT_FOUND") return undefined;
+      return fail(result.error);
+    },
+    async create(key, bytes) {
+      const result = await kv.put(key, bytes, { ifNoneMatch: "*" });
+      if (result.ok) return "created";
+      if (result.error.code === "KV_PRECONDITION_FAILED") return "exists";
+      return fail(result.error);
+    },
+  };
 }
 
 /** The KV calls the installer makes; structural, so the SDK client and a test fake both satisfy it. */
@@ -62,7 +138,8 @@ export interface InstallDbPort {
   execute(statement: string): Promise<PortResult<unknown>>;
   query(statement: string): Promise<PortResult<{ rows: unknown[] }>>;
 }
-type PortResult<T> = { ok: true; data: T } | { ok: false; error: { code?: string } };
+type ServiceError = { code?: string; message?: string; meta?: Record<string, unknown> };
+type PortResult<T> = { ok: true; data: T } | { ok: false; error: ServiceError };
 
 /** Bind installer I/O to one applications-space KV and one app database. */
 export function appsInstallIo(kv: InstallKvPort, db: InstallDbPort): InstallIo {

@@ -4,6 +4,11 @@
   "description": "TinyCloud CLI - manage data, delegations, and nodes from the terminal",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TinyCloudLabs/js-sdk.git",
+    "directory": "packages/cli"
+  },
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -16,6 +21,9 @@
     "bin",
     "skills"
   ],
+  "publishConfig": {
+    "provenance": true
+  },
   "engines": {
     "node": ">=20"
   },
@@ -30,7 +38,8 @@
     "check:node-release": "bun scripts/generate-node-release.ts --check",
     "smoke:delegated-secrets": "bun scripts/live-delegated-secrets-smoke.ts",
     "check:skill-pack": "node scripts/check-skill-pack.mjs",
-    "sync:courier-skill": "rm -rf skills/courier && cp -R ../courier/skills/courier skills/courier"
+    "sync:courier-skill": "rm -rf skills/courier && cp -R ../courier/skills/courier skills/courier",
+    "sync:tc-apps-skill": "node scripts/sync-tc-apps-skill.mjs"
   },
   "dependencies": {
     "@tinycloud/share-sdk": "1.4.1-beta.0",

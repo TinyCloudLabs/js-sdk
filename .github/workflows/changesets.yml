@@ -27,9 +27,13 @@ jobs:
     # actions: read lets pre-publish read earlier Release runs' logs (TC-1457).
     # contents: read is all this job needs. beta-github-releases holds
     # contents: write and creates the GitHub Releases (O25).
+    # id-token: write lets npm sign provenance for packages that ask for it
+    # (`publishConfig.provenance`, e.g. @tinycloud/cli): the GitHub OIDC token
+    # proves which workflow and commit built the tarball.
     permissions:
       actions: read
       contents: read
+      id-token: write
     outputs:
       published: ${{ steps.published.outputs.published }}
       release-sha: ${{ steps.release.outputs.sha }}
@@ -318,9 +322,11 @@ jobs:
     name: Stable Release
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.confirm == 'release'
     runs-on: ubuntu-latest
+    # id-token: write: npm provenance, as in the beta job.
     permissions:
       actions: read
       contents: write
+      id-token: write
     steps:
       # The deploy key is not left in git config or ~/.ssh for install and
       # build steps; only the push step below uses it.

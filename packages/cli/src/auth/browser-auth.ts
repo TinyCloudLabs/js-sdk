@@ -266,6 +266,15 @@ export interface CallbackFlowEnv {
   /** Defaults to shouldOutputJson(). */
   jsonOutput?: boolean;
   onListening?: (callbackUrl: string) => void;
+  /**
+   * Called once with the OpenKey approval URL, before any browser opens. The
+   * detached login (`auth login --detach`) hands it to the agent from here.
+   */
+  onApprovalUrl?: (approvalUrl: string) => void;
+  /** With a custom deadline: the timeout becomes `AUTH_TIMEOUT` with this message. */
+  timeoutMessage?: string;
+  /** Stops waiting and closes the listener; the flow rejects with the signal's reason. */
+  signal?: AbortSignal;
 }
 
 export async function callbackFlow(
@@ -375,6 +384,12 @@ export async function callbackFlow(
     // outlive the default 5 s too. settle() closes them all at the deadline.
     server.keepAliveTimeout = deadlineMs;
 
+    if (env.signal) {
+      const stop = () => settle({ error: env.signal!.reason instanceof Error ? env.signal!.reason : new Error("Sign-in stopped") });
+      if (env.signal.aborted) stop();
+      else env.signal.addEventListener("abort", stop, { once: true });
+    }
+
     server.listen(0, "127.0.0.1", async () => {
       const addr = server.address();
       if (!addr || typeof addr === "string") {
@@ -385,6 +400,7 @@ export async function callbackFlow(
       const callbackUrl = `http://127.0.0.1:${port}${callbackPath}`;
       env.onListening?.(callbackUrl);
       const authUrl = buildAuthUrl(did, { ...options, callback: callbackUrl });
+      env.onApprovalUrl?.(authUrl);
       const openBrowser = shouldOpenBrowser(options);
       const hasTerminal = Boolean(process.stdin.isTTY || process.stderr.isTTY);
 
@@ -431,7 +447,11 @@ export async function callbackFlow(
 
     // Timeout at the sign-in deadline
     timeout = setTimeout(() => {
-      settle({ error: new Error("Authentication timed out after 5 minutes") });
+      settle({
+        error: env.timeoutMessage === undefined
+          ? new Error("Authentication timed out after 5 minutes")
+          : new CLIError("AUTH_TIMEOUT", env.timeoutMessage, ExitCode.AUTH_REQUIRED),
+      });
     }, deadlineMs);
     // One-time how-to line; only interactive, never in JSON output. stderr only.
     if (interactive && !jsonOutput) {
