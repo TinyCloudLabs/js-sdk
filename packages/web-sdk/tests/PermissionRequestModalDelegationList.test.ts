@@ -50,14 +50,14 @@ describe("delegation list permission prompt", () => {
     });
   }
 
-  test("another delegation action uses the service's name in the fallback row", async () => {
+  test("another delegation action is titled with its plain action name", async () => {
     const { TinyCloudPermissionRequestModal } = await import("../src/notifications/PermissionRequestModal");
     const modal: any = new TinyCloudPermissionRequestModal({
       appName: "Example App",
-      additional: [{ service: "tinycloud.delegation", space: "applications", path: "", actions: ["tinycloud.delegation/status"] }],
+      additional: [{ service: "tinycloud.delegation", space: "applications", path: "", actions: ["tinycloud.delegation/revoke"] }],
     });
 
-    expect(modal.shadowRoot.innerHTML).toContain("Use Delegation");
+    expect(modal.shadowRoot.innerHTML).toContain("Manage your delegations (revoke)");
     expect(modal.shadowRoot.innerHTML).not.toContain("Use tinycloud.delegation");
   });
 });

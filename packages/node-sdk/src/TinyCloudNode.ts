@@ -6970,14 +6970,17 @@ export class TinyCloudNode {
         }
       })();
 
+      if (options?.signMessage !== undefined) {
+        this.assertRuntimeGrantMessage(prepared.siwe, session);
+      }
       const signature = options?.signMessage !== undefined
         ? await options.signMessage(prepared.siwe)
         : await this.signer!.signMessage(prepared.siwe);
-      if (options?.signMessage !== undefined) {
-        const verified = await new SiweMessage(prepared.siwe).verify({ signature }, { suppressExceptions: true });
-        if (!verified.success) {
-          throw new Error("The signature does not match the account that owns this session.");
-        }
+      if (
+        options?.signMessage !== undefined &&
+        !(await verifyEip191MessageSignature(prepared.siwe, signature, session.address))
+      ) {
+        throw new Error("The signature does not match the account that owns this session.");
       }
       // Nothing is activated for a session that ended while the wallet signed.
       graph.assertActive();
@@ -8022,6 +8025,29 @@ export class TinyCloudNode {
     permissions: PermissionEntry[],
   ): PermissionEntry[] {
     return expandPermissionEntriesCore(permissions);
+  }
+
+  /**
+   * Checks the SIWE text a caller-supplied signer is asked to sign: it must be in canonical form (parsing and
+   * re-serializing it gives the same bytes) and name the session's account and chain. The caller then checks the
+   * signature against these exact bytes.
+   */
+  private assertRuntimeGrantMessage(siwe: string, session: TinyCloudSession): void {
+    let parsed: SiweMessage;
+    try {
+      parsed = new SiweMessage(siwe);
+    } catch {
+      throw new Error("The prepared sign-in message is not a valid SIWE message.");
+    }
+    if (parsed.prepareMessage() !== siwe) {
+      throw new Error("The prepared sign-in message is not in canonical form.");
+    }
+    if (
+      parsed.chainId !== session.chainId ||
+      canonicalizeAddress(parsed.address) !== canonicalizeAddress(session.address)
+    ) {
+      throw new Error("The prepared sign-in message is for a different account or chain than this session.");
+    }
   }
 
   /**

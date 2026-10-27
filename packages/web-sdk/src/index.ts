@@ -2,6 +2,7 @@
 export {
   TinyCloudWeb,
   type Config,
+  type RuntimePermissionSigner,
   type ShareReceiveResult,
   type SessionRestoreResult,
   type SessionRestoreStatus,

@@ -17,21 +17,26 @@ function unsupported(): Error {
   return Object.assign(new Error("Unsupported wallet method: personal_sign"), { name: "UnsupportedMethodError" });
 }
 
-async function setup() {
-  const owner = new PrivateKeySigner(OWNER_KEY);
-  const address = await owner.getAddress();
-  const spaceId = `tinycloud:pkh:eip155:1:${address}:applications`;
-  const prepared = new SiweMessage({
+function siweFor(address: string, chainId = 1): string {
+  return new SiweMessage({
     domain: "tinycloud.test",
     address,
     statement: "Runtime grant.",
     uri: "did:key:z6MkRuntime",
     version: "1",
-    chainId: 1,
+    chainId,
     nonce: "32891756",
     issuedAt: "2026-05-05T00:00:00.000Z",
     expirationTime: "2999-01-01T00:00:00.000Z",
   }).prepareMessage();
+}
+
+/** `rawSiwe` replaces the text the bindings return from `prepareSession`; default: the canonical text for the owner. */
+async function setup(rawSiwe?: (address: string) => string) {
+  const owner = new PrivateKeySigner(OWNER_KEY);
+  const address = await owner.getAddress();
+  const spaceId = `tinycloud:pkh:eip155:1:${address}:applications`;
+  const prepared = rawSiwe?.(address) ?? siweFor(address);
   const providerSign = mock(async (): Promise<string> => {
     throw unsupported();
   });
@@ -68,7 +73,7 @@ async function setup() {
       delegationCid: "base-cid",
       jwk: { kty: "OKP", crv: "Ed25519", x: "test" },
       sessionKey: "default",
-      siwe: prepared.replace("Runtime grant.", "Sign in."),
+      siwe: siweFor(address).replace("Runtime grant.", "Sign in."),
       spaceId,
       verificationMethod: "did:key:default",
     },
@@ -122,5 +127,43 @@ describe("grantRuntimePermissions with a caller-supplied message signer", () => 
     expect(wasm.completeSessionSetup).not.toHaveBeenCalled();
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(node.hasRuntimePermissions(LIST)).toBe(false);
+  });
+
+  test("a prepared message that is not in canonical form is refused before the signer is asked, even if its canonical text would verify", async () => {
+    const { node, owner, wasm } = await setup((address) => siweFor(address).replace("Chain ID: 1", "Chain ID: 01"));
+    const signMessage = mock((siwe: string) => owner.signMessage(siwe.replace("Chain ID: 01", "Chain ID: 1")));
+
+    await expect(withActivation(() => node.grantRuntimePermissions(LIST, { signMessage }))).rejects.toThrow("not in canonical form");
+
+    expect(signMessage).not.toHaveBeenCalled();
+    expect(wasm.completeSessionSetup).not.toHaveBeenCalled();
+  });
+
+  test("a signature over a different text than the one prepared is refused", async () => {
+    const { node, owner, wasm } = await setup();
+    const signMessage = mock((siwe: string) => owner.signMessage(siwe.replace("Runtime grant.", "Another statement.")));
+
+    await expect(withActivation(() => node.grantRuntimePermissions(LIST, { signMessage }))).rejects.toThrow("does not match the account");
+
+    expect(wasm.completeSessionSetup).not.toHaveBeenCalled();
+  });
+
+  test("a prepared message for another chain is refused before the signer is asked", async () => {
+    const { node, owner } = await setup((address) => siweFor(address, 137));
+    const signMessage = mock((siwe: string) => owner.signMessage(siwe));
+
+    await expect(withActivation(() => node.grantRuntimePermissions(LIST, { signMessage }))).rejects.toThrow("different account or chain");
+
+    expect(signMessage).not.toHaveBeenCalled();
+  });
+
+  test("a prepared message for another account is refused before the signer is asked", async () => {
+    const other = await new PrivateKeySigner(OTHER_KEY).getAddress();
+    const { node, owner } = await setup(() => siweFor(other));
+    const signMessage = mock((siwe: string) => owner.signMessage(siwe));
+
+    await expect(withActivation(() => node.grantRuntimePermissions(LIST, { signMessage }))).rejects.toThrow("different account or chain");
+
+    expect(signMessage).not.toHaveBeenCalled();
   });
 });

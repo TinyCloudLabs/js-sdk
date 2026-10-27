@@ -487,7 +487,6 @@ const SERVICE_LABELS: Record<string, string> = {
   "tinycloud.duckdb": "DuckDB storage permission",
   "tinycloud.capabilities": "Capability registry permission",
   "tinycloud.hooks": "Hook permission",
-  "tinycloud.delegation": "Delegation permission",
 };
 
 const CAPABILITY_DESCRIPTIONS: Record<string, CapabilityDescription> = {
@@ -785,7 +784,10 @@ function fallbackCapabilityDescription(
   action: string,
 ): CapabilityDescription {
   return {
-    title: `Use ${serviceDisplayName(service).replace(/ permission$/, "")}`,
+    title:
+      service === "tinycloud.delegation"
+        ? `Manage your delegations${action === "" ? "" : ` (${action})`}`
+        : `Use ${serviceDisplayName(service).replace(/ permission$/, "")}`,
     description: `Allows this app to perform ${action} on the resource shown below.`,
   };
 }
