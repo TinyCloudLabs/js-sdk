@@ -1,5 +1,16 @@
 # @tinycloudlabs/web-sdk
 
+## 3.8.0-beta.13
+
+### Patch Changes
+
+- 32ed899: Re-export `isAppKeyHostBound(keysAppId, origin)` from the web SDK entry point.
+
+  Details: TC-1977
+
+- Updated dependencies [32ed899]
+  - @tinycloud/node-sdk@3.8.0-beta.13
+
 ## 3.8.0-beta.12
 
 ### Patch Changes
