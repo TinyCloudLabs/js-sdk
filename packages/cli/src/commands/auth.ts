@@ -2716,6 +2716,8 @@ interface OpenKeyLoginOptions {
   /** Record `host` as the profile host (an explicit `--host`). */
   persistHost?: boolean;
   openKeyAcquisition?: OpenKeyAcquisition;
+  /** Scoped login: the reason OpenKey shows the owner. */
+  reason?: string;
   /** Bypass the share-history check that guards replacing the stored session key. */
   force?: boolean;
   /** `--keys` folder: also ask OpenKey to approve named-key create and decrypt there. */
@@ -3042,7 +3044,7 @@ export async function refreshOpenKeySession(
     // owner is verified below.
     permissions: permissions ?? ownerLoginPermissions(expectedOwner),
     expiry: openKeyExpiry,
-    ...(permissions ? { reason: "Allow this TinyCloud CLI profile to use the permissions in the requested manifest." } : {}),
+    ...(permissions ? { reason: options.reason ?? "Allow this TinyCloud CLI profile to use the permissions in the requested manifest." } : {}),
   });
 
   // Login persists only signed, verified authority: the owner, permissions,

@@ -30,6 +30,8 @@ Keep the selected profile, host and space explicit across reads and follow-ups:
 
 ## Sign in
 
+To set up a new owner (no profile, or no TinyCloud account yet), run `"$TC" onboard`. It creates the profile and asks for two OpenKey approvals, one per run: the owner's sign-in (or new account) with read and write on the `applications` space, then read-only `spaces/` and `applications/` in the `account` space, each for 30 days. Each run prints JSON; exit 8 means `approvalUrl` is waiting for the owner: send it, then run `"$TC" onboard --code '<code OpenKey shows>'`. Exit 0 means `"onboarded": true`. The step-by-step guide for agents is https://agents.tinycloud.xyz/onboarding.
+
 Agents usually run where no browser can reach them. Use device login: the owner approves an explicit permission manifest on their phone. Read [AUTH.md](AUTH.md) before the first login, including how to relay the approval code to the owner.
 
 Use a new profile name if it already exists. Keep the user's existing profiles: another app's session may live there, and a login for a different purpose would drop it (the CLI refuses with `SESSION_IN_USE`). Publish from a dedicated profile:

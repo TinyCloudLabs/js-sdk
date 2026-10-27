@@ -3,6 +3,7 @@
   "source": "packages/cli/src/command-registry.ts",
   "commands": [
     { "command": "init", "status": "legacy" },
+    { "command": "onboard", "status": "excluded", "reason": "Local composition of the existing OpenKey scoped login and grant flows (key-only profile, then one approval per space); adds no storage operation." },
     { "command": "context", "status": "excluded", "reason": "Read-only local CLI context diagnostics; performs no storage operation." },
     { "command": "enable", "status": "legacy" },
     { "command": "enable share", "status": "legacy" },
