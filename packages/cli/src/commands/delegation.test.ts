@@ -486,4 +486,70 @@ describe("tc delegation revoke authority", () => {
       server.stop(true);
     }
   });
+
+  test("refuses a grant another account issued, before any signing or authority request", async () => {
+    delegationQueryResult = {
+      ok: true,
+      data: {
+        items: [{
+          cid: "bafy-device-grant",
+          delegatorDid: "did:pkh:eip155:1:0x3333333333333333333333333333333333333333",
+          delegateDid: "did:pkh:eip155:1:0x1111111111111111111111111111111111111111",
+          resources: [{ resource: `${fallbackSpaceId}/kv/target/` }],
+        }],
+        nextCursor: undefined,
+      },
+    };
+    await runRevoke();
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatchObject({
+      code: "REVOKE_UNAUTHORIZED",
+      exitCode: 5,
+      message: `Delegation "bafy-device-grant" wasn't issued by this account, so it can't revoke it. Ask its issuer to revoke it.`,
+    });
+    expect(authorityRequests).toEqual([]);
+    expect(revokeCalls).toEqual([]);
+    expect(outputs).toEqual([]);
+  });
+
+  test("revokes a grant its own account issued as before", async () => {
+    delegationQueryResult = {
+      ok: true,
+      data: {
+        items: [{
+          cid: "bafy-device-grant",
+          delegatorDid: "did:pkh:eip155:1:0x1111111111111111111111111111111111111111",
+          delegateDid: "did:key:device",
+          resources: [{ resource: `${targetSpaceId}/kv/target/` }],
+        }],
+        nextCursor: undefined,
+      },
+    };
+    await runRevoke();
+
+    expect(errors).toEqual([]);
+    expect(authorityRequests).toHaveLength(1);
+    expect(revokeCalls).toEqual([["bafy-device-grant", { authorityCid: "bafy-command-authority" }]]);
+  });
+
+  test("keeps the flow when another account's grant covers a space this account owns", async () => {
+    delegationQueryResult = {
+      ok: true,
+      data: {
+        items: [{
+          cid: "bafy-device-grant",
+          delegatorDid: "did:pkh:eip155:1:0x3333333333333333333333333333333333333333",
+          delegateDid: "did:key:device",
+          resources: [{ resource: `${targetSpaceId}/kv/target/` }],
+        }],
+        nextCursor: undefined,
+      },
+    };
+    await runRevoke();
+
+    expect(errors).toEqual([]);
+    expect(authorityRequests).toHaveLength(1);
+  });
+
 });
