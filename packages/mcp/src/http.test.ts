@@ -172,6 +172,35 @@ test("serves the checker-required AI Catalog manifest and discovery links", asyn
   });
 });
 
+test("serves a truthful website-only Personal Agent Protocol document", async () => {
+  const app = await testApp();
+  const response = await app.fetch(request("/.well-known/poppy.json", {
+    headers: { origin: "https://isitagentready.com" },
+  }));
+  const preflight = await app.fetch(request("/.well-known/poppy.json", {
+    method: "OPTIONS",
+    headers: {
+      origin: "https://isitagentready.com",
+      "access-control-request-method": "GET",
+    },
+  }));
+
+  expect(response.status).toBe(200);
+  expect(response.headers.get("content-type")).toContain("application/json");
+  expect(response.headers.get("access-control-allow-origin")).toBe("*");
+  expect(await response.json()).toEqual({
+    protocol_version: "0.1",
+    organization: {
+      name: "TinyCloud, Inc.",
+      domain: "mcp.test",
+    },
+    web: {},
+  });
+  expect(preflight.status).toBe(204);
+  expect(preflight.headers.get("access-control-allow-origin")).toBe("*");
+  expect(preflight.headers.get("access-control-allow-methods")).toBe("GET, OPTIONS");
+});
+
 test("publishes truthful OAuth discovery in auth.md without an agent enrollment endpoint", async () => {
   const app = await testApp();
   const response = await app.fetch(request("/auth.md", {

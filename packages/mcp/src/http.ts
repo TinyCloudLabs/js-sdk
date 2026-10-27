@@ -189,6 +189,26 @@ function createHostedSurface(
           },
         }), request);
       }
+
+      if (url.pathname === "/.well-known/poppy.json" && surface === "hosted") {
+        if (request.method === "OPTIONS") {
+          return publicMetadataCors(new Response(null, { status: 204 }), request);
+        }
+        if (request.method !== "GET") return methodNotAllowed("GET");
+        return publicMetadataCors(Response.json({
+          protocol_version: "0.1",
+          organization: {
+            name: "TinyCloud, Inc.",
+            domain: resourceUrl.hostname,
+          },
+          web: {},
+        }, {
+          headers: {
+            "cache-control": "public, max-age=300",
+            "content-type": "application/json; charset=utf-8",
+          },
+        }), request);
+      }
       if (url.pathname === "/auth.md" && surface === "hosted") {
         if (request.method === "OPTIONS") {
           return publicMetadataCors(new Response(null, { status: 204 }), request);
