@@ -114,7 +114,7 @@ apply their own sensitive-result retention and access controls.
 The canonical remote service is hosted MCP at
 `https://mcp.tinycloud.xyz/mcp` using Streamable HTTP and OpenKey OAuth.
 Connect Claude through its remote MCP connector and complete OpenKey OAuth.
-ChatGPT users can add https://mcp.tinycloud.xyz/mcp on the web under Plugins → + → Add custom MCP server; Developer Mode isn't required first.
+ChatGPT users can add `https://mcp.tinycloud.xyz/mcp` on the web under Plugins → + → Add custom MCP server; Developer Mode isn't required first.
 Availability depends on the ChatGPT plan and workspace settings. Follow
 [OpenAI's custom MCP connection guide](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt).
 
