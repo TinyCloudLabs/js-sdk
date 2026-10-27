@@ -34,6 +34,7 @@
     "cli-keys-replication",
     "cli-kv-create-only",
     "cli-named-keys",
+    "cli-onboard",
     "cli-secrets-run",
     "cli-share-json-short-link",
     "host-binding-export-node",
