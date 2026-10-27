@@ -153,7 +153,9 @@ function createHostedSurface(
         if (response !== undefined) return withBearerMethodsSupported(response);
       }
       const metadata = oauthMetadataResponse(request, metadataOptions);
-      if (metadata !== undefined) return withBearerMethodsSupported(metadata);
+      if (metadata !== undefined) {
+        return surface === "hosted" ? withBearerMethodsSupported(metadata) : metadata;
+      }
       if (url.pathname === "/.well-known/ai-catalog.json" && surface === "hosted") {
         if (request.method === "OPTIONS") {
           return publicMetadataCors(new Response(null, { status: 204 }), request);

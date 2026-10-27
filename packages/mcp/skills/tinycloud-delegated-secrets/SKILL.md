@@ -128,4 +128,3 @@ or secret mutation tool.
 This is a beta surface. Delegated posture is the default; owner-profile data
 access requires explicit opt-in. The user must enter secrets only in Secret
 Manager, never in chat.
-

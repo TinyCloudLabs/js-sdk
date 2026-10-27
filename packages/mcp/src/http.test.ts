@@ -223,11 +223,13 @@ test("public plugin discovery and challenges bind the distinct resource audience
   const app = await testApp();
   const metadata = await app.fetch(request("/.well-known/oauth-protected-resource/chatgpt/mcp"));
   expect(metadata.status).toBe(200);
-  expect(await metadata.json()).toMatchObject({
+  const metadataDocument = await metadata.json() as Record<string, unknown>;
+  expect(metadataDocument).toMatchObject({
     resource: "https://mcp.test/chatgpt/mcp",
     authorization_servers: ["https://openkey.test/api/auth"],
     scopes_supported: ["tinycloud:mcp"],
   });
+  expect(metadataDocument.bearer_methods_supported).toBeUndefined();
   const unauthenticated = await app.fetch(request("/chatgpt/mcp", { method: "POST" }));
   expect(unauthenticated.status).toBe(401);
   expect(unauthenticated.headers.get("www-authenticate")).toContain(
