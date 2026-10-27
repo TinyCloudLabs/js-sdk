@@ -124,6 +124,7 @@ export {
 } from "./authorization/NodeUserAuthorization";
 export { wireOpenKeyAuthorize, type OpenKeyAuthorizeTinyCloud } from "./authorization/openKeyBridge";
 export { refuseCaveated } from "./authorization/caveatRefusal";
+export { isAppKeyHostBound } from "./authorization/appKeyHostBinding";
 
 // Sign strategies — value exports
 export {
