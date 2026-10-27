@@ -28,6 +28,11 @@ export const SHARE_PUBLISHING_MANIFEST_REF = "builtin:share-publishing";
  *   - `list` finds the next version number and backs `share versions`.
  *   Profiles signed in before this entry need `auth login --device --manifest builtin:share-publishing` again.
  *
+ * - `tinycloud.encryption/decrypt` on the account's own `default` key (space `default`, path `""`):
+ *   an email-addressed share's policy ceiling includes decrypt on that network, and without it
+ *   `tc share publish --to email:...` is refused (`decrypt-not-held`). A paste sign-in requests it;
+ *   OpenKey's device sign-in refuses encryption grants, so `--device` and `enable share` leave it out.
+ *
  * Not requested:
  * - `del`: no `tc share` command deletes stored sources.
  * - `list` on the bearer prefix: bearer links are single files.
@@ -65,12 +70,18 @@ export const SHARE_PUBLISHING_MANIFEST = {
       skipPrefix: true,
       actions: ["tinycloud.kv/get", "tinycloud.kv/metadata", "tinycloud.kv/put", "tinycloud.kv/list"],
     },
+    {
+      service: "tinycloud.encryption",
+      path: "",
+      skipPrefix: true,
+      actions: ["tinycloud.encryption/decrypt"],
+    },
   ],
 } as const;
 
-/** The manifest as logical-space permission entries (no profile lookup required). */
+/** The manifest as logical-space permission entries (no profile lookup required), without the decrypt entry: the scope an OpenKey device sign-in can carry. */
 export function sharePublishingPermissions(): PermissionEntry[] {
-  return SHARE_PUBLISHING_MANIFEST.permissions.map((permission) => ({
+  return SHARE_PUBLISHING_MANIFEST.permissions.filter((permission) => permission.service !== "tinycloud.encryption").map((permission) => ({
     service: permission.service,
     space: SHARE_PUBLISHING_MANIFEST.space,
     path: permission.path,
