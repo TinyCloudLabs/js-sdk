@@ -26,8 +26,7 @@ const ownerDid = `did:pkh:eip155:1:${address}`;
 const spaceId = wasm.makeSpaceId(address, 1, "default");
 const key = JSON.parse(wasm.createSessionManager().jwk("default")!) as Record<string, string>;
 const sessionDid = keyToDID(key);
-// The generic device flow is exercised with the manifest's space entries; the default-key decrypt entry has its own suite (device-default-decrypt.test.ts).
-const requested = sharePublishingPermissions().filter((permission) => permission.service !== "tinycloud.encryption");
+const requested = sharePublishingPermissions();
 const [capabilityRead, bearerPrefix, addressedPrefix, artifactsPrefix] = requested as [PermissionEntry, PermissionEntry, PermissionEntry, PermissionEntry];
 // OpenKey's required capability read is always signed; the owner unchecked addressed shares.
 const bearerOnly = [capabilityRead, bearerPrefix];
@@ -63,15 +62,13 @@ async function encryptRelay(relayPublicJwk: object, transactionId: string, value
 /** What OpenKey's /delegate/complete returns for an owner-signed SIWE over `signed`; `caveat` is signed onto every action. */
 async function signedDelegation(signed: PermissionEntry[], publicJwk: object, claimed: PermissionEntry[] = signed, lifetimeMs = 3600_000, caveat?: Record<string, unknown>) {
   const abilities: Record<string, Record<string, string[]>> = {};
-  const rawAbilities: Record<string, string[]> = {};
   for (const permission of signed) {
-    // OpenKey signs the default-key decrypt entry as the owner's own network, a raw ReCap resource.
-    if (permission.service === "tinycloud.encryption") rawAbilities[`urn:tinycloud:encryption:${ownerDid}:default`] = ["tinycloud.encryption/decrypt"];
-    else (abilities[permission.service.slice("tinycloud.".length)] ??= {})[permission.path] = permission.actions;
+    const service = permission.service.slice("tinycloud.".length);
+    (abilities[service] ??= {})[permission.path] = permission.actions;
   }
   const expiresAt = new Date(Math.floor(Date.now() / 1000) * 1000 + lifetimeMs).toISOString();
   const prepared = wasm.prepareSession({
-    abilities, ...(Object.keys(rawAbilities).length ? { rawAbilities } : {}), address, chainId: 1, domain: "openkey.so", spaceId, jwk: key,
+    abilities, address, chainId: 1, domain: "openkey.so", spaceId, jwk: key,
     issuedAt: new Date(Date.now() - 60_000).toISOString(), expirationTime: expiresAt,
   });
   if (caveat) prepared.siwe = withRecapCaveat(prepared.siwe, caveat);
