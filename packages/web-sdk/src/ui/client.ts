@@ -1,6 +1,7 @@
 import type { IStorageService, PermissionEntry } from "@tinycloud/sdk-core";
 
 import { TAB_PERMISSION, TAB_PERMISSION_EXPIRY_MS } from "./data/authority";
+import { debug } from "../utils/debug";
 import type { PanelDataFactory, PanelDataSource, PermissionAbility } from "./data";
 import type { UiPlatform } from "./config";
 import type { AuthorityKind, PanelClient, PurgeLocalCopyResult, RequestLogReader, SyncFacade } from "./slots";
@@ -38,6 +39,16 @@ export interface PanelClientHandle {
   reset(): void;
 }
 
+/**
+ * The class of a thrown value for the debug log: its name and, when it carries one, its code. Messages, causes and
+ * stacks are left out; they can hold signatures, SIWE text or delegation bodies.
+ */
+function errorClass(error: unknown): { name: string; code?: string | number } {
+  const name = error instanceof Error ? error.name : typeof error;
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === "string" || typeof code === "number" ? { name, code } : { name };
+}
+
 export function createPanelClient(
   id: number,
   source: ClientSource,
@@ -53,7 +64,11 @@ export function createPanelClient(
     try {
       const result = await source.requestPermissions([entry], { expiryMs: TAB_PERMISSION_EXPIRY_MS });
       return result.approved ? { approved: true } : { approved: false, code: "declined" };
-    } catch {
+    } catch (error) {
+      const failure = errorClass(error);
+      debug.error("panel permission request failed", failure);
+      // Named separately from the debug log, which is not emitted in production builds.
+      console.error("[TinyCloud] panel permission request failed:", failure.name, failure.code ?? "");
       return { approved: false, code: "failed" };
     }
   }
