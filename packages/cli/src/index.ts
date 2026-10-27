@@ -98,6 +98,7 @@ configureShareCommandServices({
   nativeReader: shareAuthority.nativeReader,
   artifactStore: shareAuthority.artifactStore,
   links: shareAuthority.links,
+  shortLinkInvitations: true,
 });
 
 const argv = process.argv.slice(2);
