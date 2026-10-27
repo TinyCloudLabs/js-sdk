@@ -16,3 +16,14 @@ export function isVerifiedRawEncryptionPermission(permission: Pick<PermissionEnt
   return isRawEncryptionPermission(permission) &&
     (permission.space === undefined || permission.space === "encryption");
 }
+
+/**
+ * The one encryption entry OpenKey's device sign-in accepts: the approving
+ * account's own `default` network, named as space `default`, empty path and
+ * only decrypt. OpenKey resolves it to the owner's network when it signs.
+ */
+export function isDeviceDefaultDecrypt(permission: Pick<PermissionEntry, "service" | "space" | "path" | "actions" | "caveats">): boolean {
+  return permission.service === ENCRYPTION_PERMISSION_SERVICE && permission.space === "default" && permission.path === "" &&
+    permission.actions.length === 1 && permission.actions[0] === "tinycloud.encryption/decrypt" &&
+    !permission.caveats?.length;
+}

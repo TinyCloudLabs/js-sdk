@@ -28,6 +28,11 @@ export const SHARE_PUBLISHING_MANIFEST_REF = "builtin:share-publishing";
  *   - `list` finds the next version number and backs `share versions`.
  *   Profiles signed in before this entry need `auth login --device --manifest builtin:share-publishing` again.
  *
+ * - `tinycloud.encryption/decrypt` on the account's own `default` key (space `default`, path `""`):
+ *   an email-addressed share's policy ceiling includes decrypt on that network, and without it
+ *   `tc share publish --to email:...` is refused (`decrypt-not-held`). OpenKey resolves this
+ *   entry to the approving account's network when it signs.
+ *
  * Not requested:
  * - `del`: no `tc share` command deletes stored sources.
  * - `list` on the bearer prefix: bearer links are single files.
@@ -64,6 +69,12 @@ export const SHARE_PUBLISHING_MANIFEST = {
       path: "artifacts/",
       skipPrefix: true,
       actions: ["tinycloud.kv/get", "tinycloud.kv/metadata", "tinycloud.kv/put", "tinycloud.kv/list"],
+    },
+    {
+      service: "tinycloud.encryption",
+      path: "",
+      skipPrefix: true,
+      actions: ["tinycloud.encryption/decrypt"],
     },
   ],
 } as const;

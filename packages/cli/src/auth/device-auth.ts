@@ -11,6 +11,8 @@ import { DEFAULT_CHAIN_ID, DEFAULT_OPENKEY_DEVICE_API_HOST, ExitCode } from "../
 import type { ProfileConfig } from "../config/types.js";
 import { CLIError } from "../output/errors.js";
 import { assertNoCaveatLimits } from "../lib/caveat-refusal.js";
+import { canonicalNetworkUrn } from "../lib/owner-did.js";
+import { isDeviceDefaultDecrypt } from "../lib/raw-encryption.js";
 import { generateKey, keyToDID } from "./local-key.js";
 import { publicJwkForDelegation, validateDelegationCallbackPayload } from "./browser-auth.js";
 import {
@@ -22,6 +24,7 @@ import {
   scopedLoginPermissions,
   validateLoginPermissions,
   verifyScopedLogin,
+  verifySignedSession,
   type RequestedExpiry,
   type SignedSession,
 } from "./scoped-login.js";
@@ -329,6 +332,17 @@ function permissionList(value: unknown, label: string): PermissionEntry[] {
   return value as PermissionEntry[];
 }
 
+/**
+ * OpenKey signs the device decrypt entry as the owner's own default network.
+ * Name that network, once the signed owner is known, so the request, OpenKey's
+ * reports and the signed ReCap compare in one shape.
+ */
+function withOwnerDefaultNetwork(permissions: PermissionEntry[], ownerDid: string): PermissionEntry[] {
+  return permissions.map((permission) => isDeviceDefaultDecrypt(permission)
+    ? { ...permission, space: "encryption", path: canonicalNetworkUrn(`urn:tinycloud:encryption:${ownerDid}:default`) }
+    : permission);
+}
+
 function sameTuples(left: Set<string>, right: Set<string>): boolean {
   return left.size === right.size && [...left].every((tuple) => right.has(tuple));
 }
@@ -380,7 +394,11 @@ async function verifyApproval(input: {
 
   // Signed authority: owner, space, session key, lifetime, and a recap that
   // stays inside the request.
-  const { session } = verifyScopedLogin(delegation, input.key, input.sessionDid, input.requested, {
+  const requested = withOwnerDefaultNetwork(
+    input.requested,
+    verifySignedSession(delegation, input.key, input.sessionDid, { expectedOwner: input.expectedOwner, expiry: input.expiry }).ownerDid,
+  );
+  const { session } = verifyScopedLogin(delegation, input.key, input.sessionDid, requested, {
     expectedOwner: input.expectedOwner,
     expiry: input.expiry,
   });
@@ -394,8 +412,8 @@ async function verifyApproval(input: {
   // neither can over- or under-report what was granted.
   const signed = permissionTuples(session.permissions, ownerDid);
   if (
-    !sameTuples(signed, permissionTuples(permissionList(binding.permissions, "approved"), ownerDid)) ||
-    !sameTuples(signed, permissionTuples(permissionList(delegation.permissions, "delegated"), ownerDid))
+    !sameTuples(signed, permissionTuples(withOwnerDefaultNetwork(permissionList(binding.permissions, "approved"), ownerDid), ownerDid)) ||
+    !sameTuples(signed, permissionTuples(withOwnerDefaultNetwork(permissionList(delegation.permissions, "delegated"), ownerDid), ownerDid))
   ) {
     throw new CLIError("DEVICE_AUTH_BINDING_MISMATCH", "OpenKey's approved permissions differ from the signed grant. No session was saved.", ExitCode.PERMISSION_DENIED);
   }
@@ -405,7 +423,7 @@ async function verifyApproval(input: {
     spaceId: delegation.spaceId as string,
     expiresAt: session.expiresAt,
     approved: permissionsFromTuples(signed),
-    declined: declinedPermissions(input.requested, session.permissions, ownerDid),
+    declined: declinedPermissions(requested, session.permissions, ownerDid),
     ...(openKeyPrimaryFlag(delegation) === undefined ? {} : { primary: openKeyPrimaryFlag(delegation) }),
   };
 }
@@ -427,13 +445,15 @@ function writeApprovalPrompt(prompt: DeviceApprovalPrompt): void {
 export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): Promise<DeviceAuthorizationResult> {
   assertNoCaveatLimits(input.permissions);
   validateLoginPermissions(input.permissions);
-  if (input.permissions.some((permission) =>
-    permission.service === "tinycloud.encryption" ||
-    permission.space === "secrets" ||
-    (permission.space?.startsWith("tinycloud:") && permission.space.endsWith(":secrets")))) {
+  // The owner's default-network decrypt is the one encryption entry a device sign-in carries.
+  const encryption = input.permissions.filter((permission) => permission.service === "tinycloud.encryption");
+  if (encryption.length > 1 || encryption.some((permission) => !isDeviceDefaultDecrypt(permission)) ||
+    input.permissions.some((permission) =>
+      permission.space === "secrets" ||
+      (permission.space?.startsWith("tinycloud:") && permission.space.endsWith(":secrets")))) {
     throw new CLIError(
       "DEVICE_AUTH_UNSUPPORTED_SCOPE",
-      "--device cannot authorize tinycloud.encryption or the secrets space. Use another OpenKey approval method for this manifest.",
+      "--device cannot authorize tinycloud.encryption (beyond the account's own default key decrypt) or the secrets space. Use another OpenKey approval method for this manifest.",
       ExitCode.USAGE_ERROR,
     );
   }
