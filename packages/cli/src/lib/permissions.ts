@@ -682,16 +682,10 @@ export async function resolvePermissionSpaces(
       continue;
     }
     // The manifest's default-key decrypt (space `default`, empty path) is named as the owner's default network,
-    // the shape every raw encryption entry has. A first login that cannot name its owner yet leaves it out.
+    // the shape every raw encryption entry has. Without a known owner the login is refused: a profile without
+    // this entry cannot publish email shares.
     if (isDeviceDefaultDecrypt({ ...entry, service, actions })) {
-      let path: string;
-      try {
-        path = await defaultSecretsNetworkId(profile, options.ownerDid);
-      } catch (error) {
-        if (error instanceof CLIError && error.code === "OWNER_DID_UNKNOWN") continue;
-        throw error;
-      }
-      resolved.push({ service, space: ENCRYPTION_MANIFEST_SPACE, path, actions });
+      resolved.push({ service, space: ENCRYPTION_MANIFEST_SPACE, path: await defaultSecretsNetworkId(profile, options.ownerDid), actions });
       continue;
     }
     let space: string;

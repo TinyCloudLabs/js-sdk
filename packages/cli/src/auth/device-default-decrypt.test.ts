@@ -50,10 +50,10 @@ describe("share publishing and the default-key decrypt", () => {
     ]);
   });
 
-  test("a paste sign-in whose owner is not known yet leaves the decrypt entry out", async () => {
+  test("a paste sign-in that cannot name its owner fails with OWNER_DID_UNKNOWN and says to pass --owner", async () => {
     await setUpProfile();
-    const loaded = await loadManifestPermissions("builtin:share-publishing", "default", { allowLogicalSpaces: true });
-    expect(loaded.some((permission) => permission.service === "tinycloud.encryption")).toBe(false);
+    await expect(loadManifestPermissions("builtin:share-publishing", "default", { allowLogicalSpaces: true }))
+      .rejects.toMatchObject({ code: "OWNER_DID_UNKNOWN", message: expect.stringContaining("--owner") });
   });
 
   test("a device sign-in requests builtin:share-publishing without decrypt, and so does enable share", async () => {
