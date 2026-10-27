@@ -1,5 +1,13 @@
 # @tinycloudlabs/node-sdk
 
+## 3.8.0-beta.13
+
+### Patch Changes
+
+- 32ed899: Export `isAppKeyHostBound(keysAppId, origin)`: the same host-binding check sign-in uses to decide whether a manifest's `keys` rows are granted for an origin.
+
+  Details: TC-1977
+
 ## 3.8.0-beta.11
 
 ### Minor Changes

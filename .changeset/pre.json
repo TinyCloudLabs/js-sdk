@@ -35,6 +35,8 @@
     "cli-named-keys",
     "cli-secrets-run",
     "cli-share-json-short-link",
+    "host-binding-export-node",
+    "host-binding-export-web",
     "mcp-token-status",
     "node-sdk-core-validated-activation",
     "owner-revocation-window",

@@ -32,6 +32,7 @@ import { validateTc2113PanelGrantRatchetTransition } from "./replica-size-policy
 import { validateTc2127WindowLocationRatchetTransition } from "./replica-size-policy";
 import { validateTc1977OpenKeySigninRatchetTransition } from "./replica-size-policy";
 import { validateTc2130PanelIphoneRatchetTransition } from "./replica-size-policy";
+import { validateTc1977HostBindingRatchetTransition } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 import { replicaOwnedPath } from "./replica-owned-path";
 import { webSdkTestExitFailure } from "./web-sdk-test-exit";
@@ -516,6 +517,13 @@ if (prBaseSha) {
   if (tc2130PanelIphone !== undefined && baseLedger.tc2130PanelIphoneRatchet === undefined &&
       (baseLedger.tc1977OpenKeySigninRatchet === undefined || !hasAncestor(repoRoot, tc2130PanelIphone.sourceCommits.at(-1)!))) {
     console.error("The panel safe-area ratchet requires the merged OpenKey sign-in ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc1977HostBindingRatchetTransition(baseLedger.tc1977HostBindingRatchet, ledger.tc1977HostBindingRatchet);
+  const tc1977HostBinding = ledger.tc1977HostBindingRatchet;
+  if (tc1977HostBinding !== undefined && baseLedger.tc1977HostBindingRatchet === undefined &&
+      (baseLedger.tc2130PanelIphoneRatchet === undefined || !hasAncestor(repoRoot, tc1977HostBinding.sourceCommits.at(-1)!))) {
+    console.error("The host-binding export ratchet requires the merged panel safe-area ratchet and its measured source commit.");
     failed = true;
   }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";

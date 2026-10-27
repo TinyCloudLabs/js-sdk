@@ -17,6 +17,7 @@ import {
   NodeUserAuthorization,
 } from "./NodeUserAuthorization";
 import { MemorySessionStorage } from "../storage/MemorySessionStorage";
+import { isAppKeyHostBound } from "./appKeyHostBinding";
 
 test("OpenKey manifest digest is stable across JSON formatting and key order", () => {
   const inMemory = {
@@ -999,4 +1000,34 @@ test("NodeUserAuthorization default session abilities never include kv/sync or k
   expect(actions).toContain("tinycloud.kv/get");
   expect(actions).not.toContain("tinycloud.kv/sync");
   expect(actions).not.toContain("tinycloud.kv/retain");
+});
+
+test("isAppKeyHostBound agrees with the sign-in key grant for every SIWE domain", async () => {
+  const appId = "chat.tinycloud.tinychat";
+  const path = `apps/${appId}/token`;
+  const table: Array<[string, boolean]> = [
+    ["tinycloud.chat", true],
+    ["localhost", false],
+    ["tauri.localhost", false],
+    ["x.pages.dev", false],
+    ["evil-tinycloud.chat", false],
+    ["tinycloud.chat.evil.com", false],
+    ["tinycloud.chat:8443", false],
+  ];
+  for (const [domain, bound] of table) {
+    const captured: Array<Record<string, unknown>> = [];
+    const auth = new NodeUserAuthorization({
+      signer: createSigner([]), wasmBindings: createWasmBindings(captured),
+      signStrategy: { type: "auto-sign" }, domain,
+      tinycloudHosts: ["https://tinycloud.test"], sessionStorage: new MemorySessionStorage(),
+      manifest: { app_id: appId, name: "Chat", defaults: false, keys: [{ path, abilities: ["decrypt"] }] },
+      includeAccountRegistryPermissions: false,
+    });
+    await withSignInHost(() => auth.signIn(), ["encryption-named-keys-v1"]);
+    const granted = Object.keys((captured[0]?.rawAbilities ?? {}) as object).some((resource) => resource.endsWith(`/${path}`));
+    expect(granted).toBe(bound);
+    expect(auth.unavailableKeyPaths).toEqual(bound ? [] : [path]);
+    expect(isAppKeyHostBound(appId, domain)).toBe(bound);
+    expect(isAppKeyHostBound(appId, `https://${domain}`)).toBe(bound);
+  }
 });
