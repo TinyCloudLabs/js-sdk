@@ -1,5 +1,17 @@
 # @tinycloud/cli
 
+## 1.5.0-beta.22
+
+### Patch Changes
+
+- 1d21328: `tinycloud onboard` now also grants SQL read and write of apps' database rows on the applications space, under the same approval as files, so apps such as Health Log can read and write rows without a second approval.
+
+  Details: TC-2178
+
+- 177856d: `builtin:share-publishing` now also asks for decrypt on the account's own default key when signing in with `--paste`, so that profile can create email-addressed shares. `--device` sign-in and `enable share` still request it without that entry; an email share from a device sign-in says to run `tc auth login --paste --manifest builtin:share-publishing`.
+
+  Details: TC-2177
+
 ## 1.5.0-beta.21
 
 ### Patch Changes

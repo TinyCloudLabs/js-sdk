@@ -2555,6 +2555,9 @@ function isRawEncryptionPermission(permission) {
 function isVerifiedRawEncryptionPermission(permission) {
   return isRawEncryptionPermission(permission) && (permission.space === void 0 || permission.space === "encryption");
 }
+function isDeviceDefaultDecrypt(permission) {
+  return permission.service === ENCRYPTION_PERMISSION_SERVICE && permission.space === "default" && permission.path === "" && permission.actions.length === 1 && permission.actions[0] === "tinycloud.encryption/decrypt" && !permission.caveats?.length;
+}
 var init_raw_encryption = __esm({
   "src/lib/raw-encryption.ts"() {
     "use strict";
@@ -2625,7 +2628,7 @@ var init_caveat_refusal = __esm({
 
 // src/share/publishing-manifest.ts
 function sharePublishingPermissions() {
-  return SHARE_PUBLISHING_MANIFEST.permissions.map((permission) => ({
+  return SHARE_PUBLISHING_MANIFEST.permissions.filter((permission) => permission.service !== "tinycloud.encryption").map((permission) => ({
     service: permission.service,
     space: SHARE_PUBLISHING_MANIFEST.space,
     path: permission.path,
@@ -2665,6 +2668,12 @@ var init_publishing_manifest = __esm({
           path: "artifacts/",
           skipPrefix: true,
           actions: ["tinycloud.kv/get", "tinycloud.kv/metadata", "tinycloud.kv/put", "tinycloud.kv/list"]
+        },
+        {
+          service: "tinycloud.encryption",
+          path: "",
+          skipPrefix: true,
+          actions: ["tinycloud.encryption/decrypt"]
         }
       ]
     };
@@ -2915,6 +2924,9 @@ async function loadPermissionRequest(source, profile) {
 async function loadManifestPermissions(source, profile, options = {}) {
   const raw = await loadManifestText(source);
   const manifest = JSON.parse(raw);
+  if (options.device && source === SHARE_PUBLISHING_MANIFEST_REF && Array.isArray(manifest.permissions)) {
+    manifest.permissions = manifest.permissions.filter((entry) => !(entry !== null && typeof entry === "object" && normalizeService(String(entry.service ?? "")) === "tinycloud.encryption"));
+  }
   if (Array.isArray(manifest.permissions)) assertNoCaveatLimits(manifest.permissions);
   if (options.device && typeof manifest.app_id === "string" && (manifest.secrets !== void 0 || manifest.space === "secrets" || typeof manifest.space === "string" && manifest.space.endsWith(":secrets") || Array.isArray(manifest.permissions) && manifest.permissions.some((entry) => entry !== null && typeof entry === "object" && normalizeService(String(entry.service ?? "")) === "tinycloud.encryption"))) {
     throw new CLIError("DEVICE_AUTH_UNSUPPORTED_SCOPE", "--device cannot authorize tinycloud.encryption or the secrets space. Use browser or --paste login.", ExitCode.USAGE_ERROR);
@@ -3039,6 +3051,10 @@ async function resolvePermissionSpaces(entries, profile, options = {}) {
     if (isRawEncryptionPermission({ service, path: entry.path })) {
       const { skipPrefix: _skipPrefix, ...raw } = entry;
       resolved.push({ ...raw, service, space: ENCRYPTION_MANIFEST_SPACE, actions });
+      continue;
+    }
+    if (isDeviceDefaultDecrypt({ ...entry, service, actions })) {
+      resolved.push({ service, space: ENCRYPTION_MANIFEST_SPACE, path: await defaultSecretsNetworkId(profile, options.ownerDid), actions });
       continue;
     }
     let space;
@@ -6568,20 +6584,20 @@ function effectiveAuthority2(input) {
 }
 function wrap(native) {
   const statements = /* @__PURE__ */ new Map();
-  const prepared = (sql) => {
-    let statement = statements.get(sql);
+  const prepared = (sql2) => {
+    let statement = statements.get(sql2);
     if (statement === void 0) {
-      statement = native.prepare(sql);
-      statements.set(sql, statement);
+      statement = native.prepare(sql2);
+      statements.set(sql2, statement);
     }
     return statement;
   };
   return {
-    exec: (sql) => native.exec(sql),
-    run: (sql, ...params) => void prepared(sql).run(...params),
+    exec: (sql2) => native.exec(sql2),
+    run: (sql2, ...params) => void prepared(sql2).run(...params),
     // bun:sqlite answers a missing row with null, node:sqlite with undefined.
-    get: (sql, ...params) => prepared(sql).get(...params) ?? void 0,
-    all: (sql, ...params) => prepared(sql).all(...params),
+    get: (sql2, ...params) => prepared(sql2).get(...params) ?? void 0,
+    all: (sql2, ...params) => prepared(sql2).all(...params),
     close: () => {
       let failure;
       try {
@@ -7274,11 +7290,11 @@ CREATE TABLE IF NOT EXISTS grant_install (
       "pending_grant_consent_anchor_at REAL",
       "pending_grant_consent_anchor_source TEXT"
     ];
-    normalizeSchema = (sql) => sql.replace(" IF NOT EXISTS", "").replace(/\s+/g, " ").trim();
-    SOURCE_SCHEMA = SCHEMA.trim().split(";").map((sql) => sql.trim()).filter(Boolean).map((sql) => {
-      const match = /^CREATE (TABLE|INDEX) IF NOT EXISTS ([a-z_]+)/.exec(sql);
+    normalizeSchema = (sql2) => sql2.replace(" IF NOT EXISTS", "").replace(/\s+/g, " ").trim();
+    SOURCE_SCHEMA = SCHEMA.trim().split(";").map((sql2) => sql2.trim()).filter(Boolean).map((sql2) => {
+      const match = /^CREATE (TABLE|INDEX) IF NOT EXISTS ([a-z_]+)/.exec(sql2);
       if (match === null) throw new Error("Invalid source replica schema.");
-      return { type: match[1].toLowerCase(), name: match[2], sql: normalizeSchema(sql) };
+      return { type: match[1].toLowerCase(), name: match[2], sql: normalizeSchema(sql2) };
     });
     V1_SCHEMA = SOURCE_SCHEMA.filter((entry) => entry.name !== "grant_install");
     POLICY_REPLICA = V1_SCHEMA.find((entry) => entry.name === "replica").sql.replace(/\) STRICT$/, `, ${POLICY_COLUMNS.join(", ")}) STRICT`);
@@ -16453,11 +16469,11 @@ function registerAccountCommand(program) {
       return handleError(error);
     }
   });
-  index.command("query <sql>").description("Query the materialized account SQLite index").option("--params <json>", "Bind parameters as a JSON array for ? placeholders").action(async (sql, options, cmd) => {
+  index.command("query <sql>").description("Query the materialized account SQLite index").option("--params <json>", "Bind parameters as a JSON array for ? placeholders").action(async (sql2, options, cmd) => {
     try {
       const node = await authenticatedNode(cmd);
       const params = parseParams(options.params);
-      const result = await node.account.index.query(sql, params);
+      const result = await node.account.index.query(sql2, params);
       assertOk(result);
       outputJson(result.data);
     } catch (error) {
@@ -36959,14 +36975,14 @@ function verifyBytes(file, bytes) {
     throw new AppsInstallError("INTEGRITY_FAILED", `${file.path} does not match the pinned sha256 and size`);
   }
 }
-function splitStatements(sql) {
+function splitStatements(sql2) {
   let stripped = "";
   let inQuote = false;
-  for (let i = 0; i < sql.length; i++) {
-    const ch = sql[i];
+  for (let i = 0; i < sql2.length; i++) {
+    const ch = sql2[i];
     if (ch === "'") inQuote = !inQuote;
-    if (!inQuote && ch === "-" && sql[i + 1] === "-") {
-      while (i < sql.length && sql[i] !== "\n") i++;
+    if (!inQuote && ch === "-" && sql2[i + 1] === "-") {
+      while (i < sql2.length && sql2[i] !== "\n") i++;
       stripped += "\n";
       continue;
     }
@@ -38146,11 +38162,15 @@ init_errors();
 init_formatter();
 var ONBOARD_EXPIRY = "30d";
 var kv = (actions) => actions.map((action) => `tinycloud.kv/${action}`);
+var sql = (actions) => actions.map((action) => `tinycloud.sql/${action}`);
 var ONBOARD_STEPS = [
   {
     space: "applications",
     asks: "Read and change your apps' data for 30 days.",
-    permissions: [{ service: "tinycloud.kv", space: "applications", path: "", actions: kv(["get", "list", "put", "del", "metadata"]) }]
+    permissions: [
+      { service: "tinycloud.kv", space: "applications", path: "", actions: kv(["get", "list", "put", "del", "metadata"]) },
+      { service: "tinycloud.sql", space: "applications", path: "", actions: sql(["read", "write"]) }
+    ]
   },
   {
     space: "account",
@@ -42753,12 +42773,7 @@ function shareCliError(error, operation = "publish") {
       return new CLIError("UPLOAD_FAILED", "share source upload failed; nothing was shared", 4);
     }
     if (failure.kind === "decrypt-not-held") {
-      return new CLIError(
-        "PERMISSION_DENIED",
-        "this sign-in can't create email-addressed shares: it has no permission to decrypt with the account's key. Nothing was shared.",
-        5,
-        { hint: "Share it from https://share.tinycloud.xyz while signed in as the account owner, or ask the owner to share it. A link anyone can open works from this sign-in: --to anyone." }
-      );
+      return new CLIError("PERMISSION_DENIED", `Email shares need a paste sign-in: run ${CLI_NAME34} auth login --paste --manifest builtin:share-publishing`, 5);
     }
     if (failure.kind === "over-limit") {
       return new CLIError("MAX_BYTES_EXCEEDED", ADDRESSED_SHARE_TOO_LARGE_MESSAGE, 7, { hint: `What stays behind: ${failure.remaining.join("; ")}.` });
@@ -43393,8 +43408,8 @@ import { writeFile as writeFile5 } from "fs/promises";
 import { resolve as resolve8 } from "path";
 async function dbHandle(node, dbName, spaceInput, profileName2) {
   const spaceUri = await resolveSpaceUri(spaceInput, profileName2);
-  const sql = spaceUri ? node.sqlForSpace(spaceUri) : node.sql;
-  return { handle: sql.db(dbName), spaceUri };
+  const sql2 = spaceUri ? node.sqlForSpace(spaceUri) : node.sql;
+  return { handle: sql2.db(dbName), spaceUri };
 }
 async function throwSqlError(error, spaceUri, profileName2, prefix) {
   const storageFull = storageFullError(error, prefix);
@@ -43405,7 +43420,7 @@ async function throwSqlError(error, spaceUri, profileName2, prefix) {
   throw cliErrorFromService(error, message);
 }
 function registerSqlCommand(program) {
-  const sql = program.command("sql").description("SQLite database operations for your TinyCloud space").addHelpText("after", `
+  const sql2 = program.command("sql").description("SQLite database operations for your TinyCloud space").addHelpText("after", `
 
 TinyCloud SQL gives each space isolated SQLite databases. Use the default
 database for simple apps, or pass --db to target a named database. Pass
@@ -43431,7 +43446,7 @@ Tips:
   - --space accepts a short name ("applications") or full URI ("tinycloud:pkh:eip155:1:0x...:applications").
   - Add --json for scripting-friendly output.
 `);
-  sql.command("query <sql>").description("Run a read-only SELECT query").option("--db <name>", "SQLite database name within the current space", "default").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").option("--params <json>", "Bind parameters as a JSON array for ? placeholders").addHelpText("after", `
+  sql2.command("query <sql>").description("Run a read-only SELECT query").option("--db <name>", "SQLite database name within the current space", "default").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").option("--params <json>", "Bind parameters as a JSON array for ? placeholders").addHelpText("after", `
 
 Examples:
   $ ${CLI_NAME36} sql query "SELECT * FROM notes ORDER BY id"
@@ -43475,7 +43490,7 @@ ${rowCount} row${rowCount === 1 ? "" : "s"} returned`) + "\n");
       return handleError(error);
     }
   });
-  sql.command("execute <sql>").description("Run a write or schema statement").option("--db <name>", "SQLite database name within the current space", "default").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").option("--params <json>", "Bind parameters as a JSON array for ? placeholders").addHelpText("after", `
+  sql2.command("execute <sql>").description("Run a write or schema statement").option("--db <name>", "SQLite database name within the current space", "default").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").option("--params <json>", "Bind parameters as a JSON array for ? placeholders").addHelpText("after", `
 
 Examples:
   $ ${CLI_NAME36} sql execute "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, body TEXT)"
@@ -43508,7 +43523,7 @@ Output:
       return handleError(error);
     }
   });
-  sql.command("export").description("Export a SQLite database as a binary .db file").option("--db <name>", "SQLite database name within the current space", "default").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").option("-o, --output <file>", "Output file path", "export.db").addHelpText("after", `
+  sql2.command("export").description("Export a SQLite database as a binary .db file").option("--db <name>", "SQLite database name within the current space", "default").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").option("-o, --output <file>", "Output file path", "export.db").addHelpText("after", `
 
 Examples:
   $ ${CLI_NAME36} sql export
@@ -43543,7 +43558,7 @@ Output:
       return handleError(error);
     }
   });
-  sql.command("copy").description("Copy rows between SQL databases (optionally across spaces)").requiredOption("--from-db <name>", "Source database name").requiredOption("--to-db <name>", "Destination database name").option("--from-space <name|uri>", "Source space (defaults to primary)").option("--to-space <name|uri>", "Destination space (defaults to primary)").option("--table <name...>", "Restrict copy to specific tables (repeat or comma-separated)").option("--dry-run", "Print the plan without writing", false).addHelpText("after", `
+  sql2.command("copy").description("Copy rows between SQL databases (optionally across spaces)").requiredOption("--from-db <name>", "Source database name").requiredOption("--to-db <name>", "Destination database name").option("--from-space <name|uri>", "Source space (defaults to primary)").option("--to-space <name|uri>", "Destination space (defaults to primary)").option("--table <name...>", "Restrict copy to specific tables (repeat or comma-separated)").option("--dry-run", "Print the plan without writing", false).addHelpText("after", `
 
 Examples:
   $ ${CLI_NAME36} sql copy --from-db com.tinycloud.conversation-sync/conversations \\
