@@ -29,6 +29,13 @@ import { nativeOwnerForConnectorGrant, canonicalOwnerDid, NATIVE_GRANT_MAX_LIFET
 import type { McpOperationInvocation } from "./tools.js";
 const PROFILE = "agent";
 const MAX_CALLBACK_BYTES = 256 * 1024;
+const NATIVE_GRANT_IMPORT_REJECTION_CODES = new Set([
+  "DELEGATION_ARTIFACT_INVALID",
+  "DELEGATION_EXPIRED",
+  "DELEGATION_AUDIENCE_MISMATCH",
+  "DELEGATION_HOST_MISMATCH",
+  "DELEGATION_REJECTED",
+]);
 /**
  * The node host hosted MCP tenants were created with until TC_HOST moved to
  * `https://tee.node.tinycloud.xyz` (js-sdk 48eca361). Profiles keep the host
@@ -259,13 +266,22 @@ export class RemoteTenantStore {
     const { ownerDid, spaceId, permissions, expiresAt } = activated;
     return this.#withNativeGrantLock(ownerDid, async () => {
       const stateRoot = this.nativeTenantStateRoot(ownerDid);
-      const previous = await readJson<StoredNativeGrant>(this.#nativeGrantPath(stateRoot));
-      if (previous !== null) {
-        if (!isRecord(previous) || previous.ownerDid !== ownerDid ||
-          typeof previous.delegationCid !== "string" ||
-          typeof previous.expiresAt !== "string" || !Number.isFinite(Date.parse(previous.expiresAt))) {
-          throw new NativeGrantValidationError("rejected");
+      let previous: StoredNativeGrant | null = null;
+      try {
+        const stored = await readJson<unknown>(this.#nativeGrantPath(stateRoot));
+        if (isRecord(stored) && stored.version === 1 && stored.ownerDid === ownerDid &&
+          typeof stored.serviceDid === "string" && samePrincipal(stored.serviceDid, identity.did) &&
+          typeof stored.serializedDelegation === "string" && typeof stored.delegationCid === "string" &&
+          typeof stored.spaceId === "string" && Array.isArray(stored.permissions) &&
+          stored.permissions.every(isPermissionEntry) &&
+          nativeOwnerForConnectorGrant(stored.permissions) === ownerDid &&
+          typeof stored.expiresAt === "string" && Number.isFinite(Date.parse(stored.expiresAt))) {
+          previous = stored as unknown as StoredNativeGrant;
         }
+      } catch (error) {
+        if (!(error instanceof SyntaxError)) throw error;
+      }
+      if (previous !== null) {
         const previousExpiry = Date.parse(previous.expiresAt);
         const nextExpiry = expiresAt.getTime();
         if (previousExpiry > nextExpiry ||
@@ -299,55 +315,74 @@ export class RemoteTenantStore {
         permissions,
         expiresAt: expiresAt.toISOString(),
       };
-      await secureWrite(this.#profilePath(stateRoot), {
-        name: PROFILE,
-        host: this.#config.nodeHost,
-        chainId: activated.delegation.chainId,
-        spaceName: "applications",
-        did: identity.did,
-        createdAt: new Date().toISOString(),
-        profile: PROFILE,
-        operatorType: "agent",
-        posture: "delegate-session",
-        ownerDid,
-        sessionDid: identity.did,
-        spaceId,
-        tinycloudHost: this.#config.nodeHost,
-      });
-      await secureWrite(this.#keyPath(stateRoot), identity.jwk);
-      await secureWrite(this.#sessionPath(stateRoot), session);
-      const request = await withTinyCloudStateRoot(stateRoot, () => createOrReusePermissionRequest({
-        profile: PROFILE,
-        posture: "delegate-session",
-        operatorType: "agent",
-        host: this.#config.nodeHost,
-        sessionDid: identity.did,
-        ownerDid,
-        spaceId,
-        missing: permissions,
-        granted: [],
-        replace: true,
-      }));
-      if (request.status !== "created") {
-        throw new NativeGrantValidationError("native_grant_validation_unavailable");
+      const sessionPath = this.#sessionPath(stateRoot);
+      const previousSession = await readOptionalText(sessionPath);
+      try {
+        await secureWrite(this.#profilePath(stateRoot), {
+          name: PROFILE,
+          host: this.#config.nodeHost,
+          chainId: activated.delegation.chainId,
+          spaceName: "applications",
+          did: identity.did,
+          createdAt: new Date().toISOString(),
+          profile: PROFILE,
+          operatorType: "agent",
+          posture: "delegate-session",
+          ownerDid,
+          sessionDid: identity.did,
+          spaceId,
+          tinycloudHost: this.#config.nodeHost,
+        });
+        await secureWrite(this.#keyPath(stateRoot), identity.jwk);
+        await secureWrite(sessionPath, session);
+        const request = await withTinyCloudStateRoot(stateRoot, () => createOrReusePermissionRequest({
+          profile: PROFILE,
+          posture: "delegate-session",
+          operatorType: "agent",
+          host: this.#config.nodeHost,
+          sessionDid: identity.did,
+          ownerDid,
+          spaceId,
+          missing: permissions,
+          granted: [],
+          replace: true,
+        }));
+        if (request.status !== "created") {
+          throw new NativeGrantValidationError("native_grant_validation_unavailable");
+        }
+        const imported = await invokeOperation(
+          "tinycloud.auth.import",
+          1,
+          { profile: PROFILE, stateRoot },
+          {
+            kind: "tinycloud.auth.delegation",
+            version: 1,
+            requestId: request.request.requestId,
+            delegationCid: activated.cid,
+            delegation: activated.delegation,
+          },
+        );
+        if (imported.status === "error") {
+          throw new NativeGrantValidationError(
+            NATIVE_GRANT_IMPORT_REJECTION_CODES.has(imported.error.code)
+              ? "native_grant_rejected"
+              : "native_grant_validation_unavailable",
+          );
+        }
+        if (imported.status !== "ok" || !isRecord(imported.output) ||
+          imported.output.activated !== true || imported.output.cid !== activated.cid) {
+          throw new NativeGrantValidationError("native_grant_validation_unavailable");
+        }
+        await secureWrite(this.#nativeGrantPath(stateRoot), grant);
+      } catch (error) {
+        try {
+          await restoreOptionalText(sessionPath, previousSession);
+        } catch {
+          await rm(this.#nativeGrantPath(stateRoot), { force: true }).catch(() => undefined);
+          throw new NativeGrantValidationError("native_grant_validation_unavailable");
+        }
+        throw error;
       }
-      const imported = await invokeOperation(
-        "tinycloud.auth.import",
-        1,
-        { profile: PROFILE, stateRoot },
-        {
-          kind: "tinycloud.auth.delegation",
-          version: 1,
-          requestId: request.request.requestId,
-          delegationCid: activated.cid,
-          delegation: activated.delegation,
-        },
-      );
-      if (imported.status !== "ok" || !isRecord(imported.output) ||
-        imported.output.activated !== true || imported.output.cid !== activated.cid) {
-        throw new NativeGrantValidationError("native_grant_rejected");
-      }
-      await secureWrite(this.#nativeGrantPath(stateRoot), grant);
       return { ownerDid, serviceDid: normalizeDid(identity.did), expiresAt: grant.expiresAt, stateRoot };
     });
   }
@@ -1158,7 +1193,13 @@ export class RemoteTenantStore {
     }
   }
   async #loadNativeServiceKey(): Promise<{ did: string; jwk: Record<string, unknown> }> {
-    this.#nativeIdentity ??= this.#readOrCreateNativeServiceKey();
+    if (this.#nativeIdentity === undefined) {
+      const loading = this.#readOrCreateNativeServiceKey();
+      this.#nativeIdentity = loading;
+      void loading.catch(() => {
+        if (this.#nativeIdentity === loading) this.#nativeIdentity = undefined;
+      });
+    }
     return this.#nativeIdentity;
   }
 
@@ -1455,6 +1496,25 @@ async function readJson<T>(path: string): Promise<T | null> {
     if (isRecord(error) && error.code === "ENOENT") return null;
     throw error;
   }
+}
+
+async function readOptionalText(path: string): Promise<string | null> {
+  try {
+    return await readFile(path, "utf8");
+  } catch (error) {
+    if (isRecord(error) && error.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+async function restoreOptionalText(path: string, contents: string | null): Promise<void> {
+  if (contents === null) {
+    await rm(path, { force: true });
+    return;
+  }
+  await secureDirectory(dirname(path));
+  await writeFile(path, contents, { mode: 0o600 });
+  await chmod(path, 0o600);
 }
 
 async function reusablePending(

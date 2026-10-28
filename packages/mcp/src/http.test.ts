@@ -162,6 +162,7 @@ test("omits native discovery and reports service unavailable when the identity k
   expect(await intake.json()).toEqual({ error: "native_service_unavailable" });
 });
 test("publishes native service identity and keeps native tools on the grant-gated /mcp path", async () => {
+
   const serviceCredential = "native-test-service-credential-with-enough-entropy";
   const app = await testApp(undefined, { nativeServiceCredential: serviceCredential });
   const cardResponse = await app.fetch(request("/.well-known/mcp/server-card.json"));
@@ -240,6 +241,24 @@ test("publishes native service identity and keeps native tools on the grant-gate
   expect(invalidGrant.status).toBe(401);
   expect(await invalidGrant.json()).toEqual({ error: "native_grant_rejected" });
 });
+test("retries native service identity after a transient state-directory failure", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "tinycloud-native-retry-"));
+  directories.push(parent);
+  const stateDir = join(parent, "state");
+  await writeFile(stateDir, "temporary blocker");
+  const app = await testApp(stateDir, {
+    nativeServiceCredential: "native-retry-test-credential-with-enough-entropy",
+  });
+
+  const unavailable = await app.fetch(request("/.well-known/mcp/server-card.json"));
+  expect((await unavailable.json() as Record<string, unknown>)["x-tinycloud-native-auth"]).toBeUndefined();
+
+  await rm(stateDir, { force: true });
+  await mkdir(stateDir);
+  const recovered = await app.fetch(request("/.well-known/mcp/server-card.json"));
+  expect((await recovered.json() as Record<string, unknown>)["x-tinycloud-native-auth"])
+    .toMatchObject({ serviceDidField: "x-tinycloud-native-auth.serviceDid" });
+});
 
 
 test("binds native tool calls to the owner in the activated grant", async () => {
@@ -306,6 +325,29 @@ test("binds native tool calls to the owner in the activated grant", async () => 
       ownerDid: fixture.ownerDid.toLowerCase(),
       serviceDid: serviceIdentity.serviceDid,
     });
+    const nativeGrantPath = join(store.nativeTenantStateRoot(fixture.ownerDid), ".tinycloud", "native-grant.json");
+    await writeFile(nativeGrantPath, JSON.stringify({ version: 1, ownerDid: "invalid" }));
+    const repairedGrant = await app.fetch(request("/native/grant", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-tinycloud-service-credential": serviceCredential,
+      },
+      body: JSON.stringify({ delegation: serializeDelegation(delegation) }),
+    }));
+    expect(repairedGrant.status).toBe(201);
+    await writeFile(nativeGrantPath, "{malformed");
+    const repairedCorruptJson = await app.fetch(request("/native/grant", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-tinycloud-service-credential": serviceCredential,
+      },
+      body: JSON.stringify({ delegation: serializeDelegation(delegation) }),
+    }));
+    expect(repairedCorruptJson.status).toBe(201);
+
+
     const staleGrant = await app.fetch(request("/native/grant", {
       method: "POST",
       headers: {

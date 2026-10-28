@@ -118,9 +118,8 @@ function createHostedSurface(
     resourceMetadataUrl,
   });
   const store = new RemoteTenantStore({ ...config, publicUrl: resourceUrl });
-  const nativeServiceIdentity = surface === "hosted" && config.nativeServiceCredential !== undefined
-    ? store.nativeServiceIdentity().catch(() => undefined)
-    : Promise.resolve(undefined);
+  const nativeServiceIdentityEnabled = surface === "hosted" && config.nativeServiceCredential !== undefined;
+  if (nativeServiceIdentityEnabled) void store.nativeServiceIdentity().catch(() => undefined);
   const handler = createMcpHandler(async ({ authInfo }) => {
     const nativeOwner = typeof authInfo?.extra?.nativeOwnerDid === "string"
       ? authInfo.extra.nativeOwnerDid
@@ -295,7 +294,9 @@ function createHostedSurface(
           return publicMetadataCors(new Response(null, { status: 204 }), request);
         }
         if (request.method !== "GET") return methodNotAllowed("GET");
-        const identity = await nativeServiceIdentity;
+        const identity = nativeServiceIdentityEnabled
+          ? await store.nativeServiceIdentity().catch(() => undefined)
+          : undefined;
         const card: Record<string, unknown> = {
           $schema: "https://static.modelcontextprotocol.io/schemas/v1/server-card.schema.json",
           name: `xyz.tinycloud/${MCP_SERVER_NAME}`,
