@@ -1,5 +1,13 @@
 # @tinycloud/mcp
 
+## 0.8.3-beta.17
+
+### Patch Changes
+
+- 5476661: Add service-authenticated native grant intake and owner-isolated hosted MCP calls using verified connector delegations.
+
+  Details: TC-2196
+
 ## 0.8.3-beta.16
 
 ### Patch Changes

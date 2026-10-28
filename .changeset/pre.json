@@ -61,6 +61,7 @@
     "tc2072-web-location-guard",
     "tc2127-window-without-location",
     "tc2140-exact-key-delegation",
+    "tc2196-native-mcp-auth",
     "web-panel-ask-permission",
     "web-sdk-panel-safe-area"
   ]
