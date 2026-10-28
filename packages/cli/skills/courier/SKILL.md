@@ -23,9 +23,9 @@ TC="${TC_BIN:-$HOME/.local/share/tinycloud/cli/node_modules/.bin/tinycloud}"   #
 ```
 
 If the watcher woke you, the wake prompt gives plain commands such as
-`courier read <thread>` or `tinycloud courier read <thread>`. Skip this discovery block
+`courier read <thread>` or `tc courier read <thread>`. Skip this discovery block
 (it uses variables and `npm`, which the Courier guard refuses) and, in every
-example below, write `courier …` (or `tinycloud courier …`, as the wake prompt does)
+example below, write `courier …` (or `tc courier …`, as the wake prompt does)
 instead of `"$TC" courier …`: a `$` next to `--verb merge` is refused too.
 
 The standalone `courier` bin from `@tinycloud/courier` takes identical
