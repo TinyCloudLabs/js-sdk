@@ -36,6 +36,7 @@ import { approvedTc2130PanelIphoneRatchet, validateTc2130PanelIphoneRatchetTrans
 import { approvedTc1977HostBindingRatchet, validateTc1977HostBindingRatchetTransition } from "./replica-size-policy";
 import { approvedTc2132IssuedDelegationsRatchet, validateTc2132IssuedDelegationsRatchetTransition } from "./replica-size-policy";
 import { approvedTc2140ExactKeyDelegationRatchet, validateTc2140ExactKeyDelegationRatchetTransition } from "./replica-size-policy";
+import { approvedTc2202AgentShareReceiveRatchet, validateTc2202AgentShareReceiveRatchetTransition } from "./replica-size-policy";
 import { approvedTc2038PanelPrefetchRatchet, validateTc2038PanelPrefetchRatchetTransition, type Tc2038PanelPrefetchRatchet } from "./replica-size-policy";
 import { approvedTc2005RevokeWindowRatchet, validateTc2005RevokeWindowRatchetTransition, type Tc2005RevokeWindowRatchet } from "./replica-size-policy";
 import { approvedTc2096RepairBackoffRatchet, validateTc2096RepairBackoffRatchetTransition, type Tc2096RepairBackoffRatchet } from "./replica-size-policy";
@@ -2915,6 +2916,7 @@ delete tc2043Ledger.tc2130PanelIphoneRatchet;
 delete tc2043Ledger.tc1977HostBindingRatchet;
 delete tc2043Ledger.tc2132IssuedDelegationsRatchet;
 delete tc2043Ledger.tc2140ExactKeyDelegationRatchet;
+delete tc2043Ledger.tc2202AgentShareReceiveRatchet;
 tc2043Ledger.entries = structuredClone(current.entries.slice(0, current.entries.findIndex((entry) => entry.pr === "#728")));
 describe("replication syncScope opt-in (#742, TC-2043) size ratchet", () => {
   const row = () => structuredClone(approvedTc2043SyncScopeRatchet);
@@ -3590,6 +3592,60 @@ describe("exact-key delegation (TC-2140, #769) size ratchet", () => {
     changed.root.ceiling["index.cjs"]++;
     expect(() => validateTc2140ExactKeyDelegationRatchetTransition(undefined, changed)).toThrow("TC-2140");
     expect(() => validateTc2140ExactKeyDelegationRatchetTransition(row(), undefined)).toThrow("TC-2140");
+  });
+});
+describe("recipient-agent share receive (TC-2202, #781) size ratchet", () => {
+  const row = () => structuredClone(approvedTc2202AgentShareReceiveRatchet);
+  const prerequisite = () => approvedTc2140ExactKeyDelegationRatchet;
+
+  it("pins the exact approved root ceilings and carries every other size bucket", () => {
+    expect(() => validateLedger(current)).not.toThrow();
+    expect(current.tc2202AgentShareReceiveRatchet).toEqual(approvedTc2202AgentShareReceiveRatchet);
+    expect(row().root).toEqual({
+      delta: { "index.mjs": 2929, "index.cjs": 2547 },
+      ceiling: { "index.mjs": 1474783, "index.cjs": 1415181 },
+    });
+    expect(row().root.ceiling["index.mjs"]).toBe(prerequisite().root.ceiling["index.mjs"] + row().root.delta["index.mjs"]);
+    expect(row().root.ceiling["index.cjs"]).toBe(prerequisite().root.ceiling["index.cjs"] + row().root.delta["index.cjs"]);
+    expect(row().base).toBe("24ffc3398bab34662a3b3b282deb888fd8378f35");
+    expect(row().sourceCommits).toEqual(["4eeed123ce9ee679c75fe879a17feb626c5d2e9a"]);
+    expect(row().canonicalCI).toEqual({
+      run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40639085082",
+      jobs: [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40639085082/job/122652758353",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40639085082/job/122652758379",
+      ],
+    });
+    expect(row().firstImport).toEqual(prerequisite().firstImport);
+    expect(row().activation).toEqual(prerequisite().activation);
+    expect(row().worker).toEqual({ delta: 0, ceiling: prerequisite().worker.ceiling });
+    expect(row().replicaWorker).toEqual({ delta: 0, ceiling: prerequisite().replicaWorker.ceiling });
+    expect(rootCeilings(current).find(({ row: name }) => name === "tc2202AgentShareReceiveRatchet")).toEqual({
+      row: "tc2202AgentShareReceiveRatchet",
+      ceiling: row().root.ceiling,
+    });
+    expect(ancestryPins(current, false)).toContainEqual({
+      row: "tc2202AgentShareReceiveRatchet",
+      pin: row().sourceCommits.at(-1)!,
+    });
+  });
+
+  it("refuses changed bytes or a missing exact-key prerequisite", () => {
+    const changedRoot = copy(current);
+    changedRoot.tc2202AgentShareReceiveRatchet!.root.ceiling["index.mjs"]++;
+    expect(() => validateLedger(changedRoot)).toThrow("TC-2202");
+    const withoutPrerequisite = copy(current);
+    delete withoutPrerequisite.tc2140ExactKeyDelegationRatchet;
+    expect(() => validateLedger(withoutPrerequisite)).toThrow("TC-2202");
+  });
+
+  it("may be introduced once and never changed or removed", () => {
+    expect(() => validateTc2202AgentShareReceiveRatchetTransition(undefined, row())).not.toThrow();
+    expect(() => validateTc2202AgentShareReceiveRatchetTransition(row(), row())).not.toThrow();
+    const changed = row();
+    changed.root.ceiling["index.cjs"]++;
+    expect(() => validateTc2202AgentShareReceiveRatchetTransition(undefined, changed)).toThrow("TC-2202");
+    expect(() => validateTc2202AgentShareReceiveRatchetTransition(row(), undefined)).toThrow("TC-2202");
   });
 });
 
