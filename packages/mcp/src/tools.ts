@@ -46,8 +46,10 @@ export interface McpStartupSelection {
   readonly profile: string;
   readonly explicitProfile: boolean;
   readonly allowOwnerProfile: boolean;
-  /** Absolute TinyCloud home used to isolate one hosted OAuth principal. */
+  /** Absolute TinyCloud home used to isolate one hosted principal. */
   readonly stateRoot?: string;
+  /** Optional allowlist for surfaces whose grant is narrower than hosted OAuth. */
+  readonly allowedTools?: readonly ToolName[];
   /** Check node authority only when an operation needs the account. */
   readonly beforeOperation?: () => Promise<void>;
   /** Hosted transports may attach a browser approval URL to canonical results. */
@@ -365,7 +367,9 @@ export function registerTinyCloudTools(
   selection: McpStartupSelection,
   validator: AjvJsonSchemaValidator,
 ): void {
-  const bindings = TOOL_BINDINGS.filter((binding) => bindingSurfaces(binding).includes(selection.surface));
+  const bindings = TOOL_BINDINGS.filter((binding) =>
+    bindingSurfaces(binding).includes(selection.surface) &&
+    (selection.allowedTools === undefined || selection.allowedTools.includes(binding.name)));
   for (const binding of bindings) {
     const operation = definitions.get(`${binding.operationId}@${binding.operationVersion}`);
     if (operation === undefined) {

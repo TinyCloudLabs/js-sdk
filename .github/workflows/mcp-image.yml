@@ -92,6 +92,13 @@ jobs:
           persist-credentials: false
       - name: Install Phala CLI
         run: npm install --global phala@1.1.22
+      - name: Validate optional native service credential
+        env:
+          TC_MCP_NATIVE_SERVICE_CREDENTIAL: ${{ secrets.TC_MCP_NATIVE_SERVICE_CREDENTIAL }}
+        shell: bash
+        run: |
+          source .github/scripts/mcp-native-credential-env.sh
+          validate_mcp_native_service_credential
       - name: Phala can read CVM tinycloud-mcp
         env:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
@@ -109,7 +116,9 @@ jobs:
       # in .github/scripts/phala-dev-os-allowlist.txt after a fresh integrity check (.github/scripts/phala-os-guard.sh).
       # To fix it, set the OS by hand: `phala api -X PATCH /cvms/<id>/os-image -F os_image_name=dstack-0.5.12`.
       - name: Test the OS image guard
-        run: bash .github/scripts/test-phala-os-guard.sh
+        run: |
+          bash .github/scripts/test-phala-os-guard.sh
+          node .github/scripts/test-mcp-native-credential-env.mjs
       - name: CVM tinycloud-mcp runs a permitted OS image
         env:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
@@ -192,6 +201,7 @@ jobs:
           TC_MCP_INTROSPECTION_CLIENT_ID: ${{ secrets.TC_MCP_INTROSPECTION_CLIENT_ID }}
           TC_MCP_INTROSPECTION_CLIENT_SECRET: ${{ secrets.TC_MCP_INTROSPECTION_CLIENT_SECRET }}
           TINYCLOUD_MCP_IMAGE: ${{ needs.resolve.outputs.image }}
+          TC_MCP_NATIVE_SERVICE_CREDENTIAL: ${{ secrets.TC_MCP_NATIVE_SERVICE_CREDENTIAL }}
           CERTBOT_EMAIL: ops@tinycloud.xyz
         run: |
           test -n "$PHALA_CLOUD_API_KEY"
@@ -199,6 +209,13 @@ jobs:
           test -n "$TC_MCP_STATE_SECRET"
           test -n "$TC_MCP_INTROSPECTION_CLIENT_ID"
           test -n "$TC_MCP_INTROSPECTION_CLIENT_SECRET"
+          source .github/scripts/mcp-native-credential-env.sh
+          native_credential_env_file_args=()
+          write_mcp_native_service_credential_env_file
+          if [ -n "$MCP_NATIVE_SERVICE_CREDENTIAL_ENV_FILE" ]; then
+            native_credential_env_file_args=(--env "$MCP_NATIVE_SERVICE_CREDENTIAL_ENV_FILE")
+          fi
+          unset TC_MCP_NATIVE_SERVICE_CREDENTIAL
           # Always update the existing CVM, which holds the mcp-state volume. A failed
           # lookup must not fall through to creating an empty replacement; creating the
           # CVM for the first time is a manual step.
@@ -211,6 +228,7 @@ jobs:
             --env "TC_MCP_STATE_SECRET=$TC_MCP_STATE_SECRET" \
             --env "TC_MCP_INTROSPECTION_CLIENT_ID=$TC_MCP_INTROSPECTION_CLIENT_ID" \
             --env "TC_MCP_INTROSPECTION_CLIENT_SECRET=$TC_MCP_INTROSPECTION_CLIENT_SECRET" \
+            "${native_credential_env_file_args[@]}" \
             --env "CERTBOT_EMAIL=$CERTBOT_EMAIL" \
             --no-public-logs \
             --no-public-sysinfo \
