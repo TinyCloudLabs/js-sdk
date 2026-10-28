@@ -20,11 +20,26 @@ import {
   ApprovalOwnerMismatchError,
   ApprovalRequestError,
   ApprovalStageError,
+  NativeGrantValidationError,
   RemoteTenantStore,
   type RemoteStoreConfig,
 } from "./remote-store.js";
+import {
+  MAX_NATIVE_GRANT_BODY_BYTES,
+  NATIVE_GRANT_EXPIRED,
+  NATIVE_GRANT_MAX_LIFETIME_SECONDS,
+  NATIVE_GRANT_REJECTED,
+  NATIVE_GRANT_REQUIRED,
+  NATIVE_GRANT_VALIDATION_UNAVAILABLE,
+  NATIVE_OWNER_DID_HEADER,
+  NATIVE_SERVICE_UNAUTHORIZED,
+  NATIVE_SERVICE_UNAVAILABLE,
+  NATIVE_SERVICE_CREDENTIAL_HEADER,
+  serviceCredentialMatches,
+} from "./native-auth.js";
 import { MCP_SERVER_NAME } from "./server.js";
 import { createJsonSchemaValidator, registerTinyCloudTools } from "./tools.js";
+import type { McpOperationInvocation } from "./tools.js";
 import { MCP_VERSION } from "./version.js";
 
 const REQUIRED_SCOPE = "tinycloud:mcp";
@@ -48,6 +63,10 @@ export interface HostedMcpApp {
 }
 
 export function createHostedMcpApp(config: HostedMcpConfig): HostedMcpApp {
+  if (config.nativeServiceCredential !== undefined &&
+    Buffer.byteLength(config.nativeServiceCredential, "utf8") < 32) {
+    throw new Error("TC_MCP_NATIVE_SERVICE_CREDENTIAL must contain at least 32 bytes.");
+  }
   const resourceUrl = canonicalResourceUrl(config.publicUrl);
   const pluginUrl = new URL("./chatgpt/mcp", resourceUrl);
   const statusFor = (resource: URL): TokenStatusChecker | undefined =>
@@ -57,6 +76,7 @@ export function createHostedMcpApp(config: HostedMcpConfig): HostedMcpApp {
   const hosted = createHostedSurface(config, resourceUrl, "hosted", statusFor(resourceUrl));
   const plugin = createHostedSurface({
     ...config,
+    nativeServiceCredential: undefined,
     stateDir: join(config.stateDir, "chatgpt"),
     approvalPath: new URL("./connect", pluginUrl).pathname,
   }, pluginUrl, "public", statusFor(pluginUrl));
@@ -99,17 +119,26 @@ function createHostedSurface(
   });
   const store = new RemoteTenantStore({ ...config, publicUrl: resourceUrl });
   const handler = createMcpHandler(async ({ authInfo }) => {
-    const identity = oauthIdentity(authInfo);
+    const nativeOwner = typeof authInfo?.extra?.nativeOwnerDid === "string"
+      ? authInfo.extra.nativeOwnerDid
+      : undefined;
+    const identity = nativeOwner === undefined
+      ? oauthIdentity(authInfo)
+      : { subject: `native:${nativeOwner}`, ownerDids: [nativeOwner] };
     const { subject, ownerDids } = identity;
-    const stateRoot = await store.initializeTenant(subject);
+    const stateRoot = nativeOwner === undefined
+      ? await store.initializeTenant(subject)
+      : store.nativeTenantStateRoot(nativeOwner);
     const validator = createJsonSchemaValidator();
     const server = new McpServer(
       { name: MCP_SERVER_NAME, version: MCP_VERSION },
       {
         jsonSchemaValidator: validator,
-        instructions: surface === "public"
-          ? "Use TinyCloud only for the user's requested task. Call tinycloud_connect first. If an operation returns authority_required, present approval.url and wait for the user's approval before retrying. If approval is declined, stop that operation. For personal records, call tinycloud_apps_context first. Never request or store passwords, API keys, authentication codes, government identifiers, payment-card data, or protected health information."
-          : "Call tinycloud_connect first. If an operation returns authority_required, open approval.url, then retry that operation unchanged. For personal records such as weight, workouts, goals or todos, call tinycloud_apps_context first.",
+        instructions: nativeOwner === undefined
+          ? surface === "public"
+            ? "Use TinyCloud only for the user's requested task. Call tinycloud_connect first. If an operation returns authority_required, present approval.url and wait for the user's approval before retrying. If approval is declined, stop that operation. For personal records, call tinycloud_apps_context first. Never request or store passwords, API keys, authentication codes, government identifiers, payment-card data, or protected health information."
+            : "Call tinycloud_connect first. If an operation returns authority_required, open approval.url, then retry that operation unchanged. For personal records such as weight, workouts, goals or todos, call tinycloud_apps_context first."
+          : "Use only the user's requested connector-transcript data. The signed TinyCloud grant authorizes read-only SQL and transcript KV reads.",
       },
     );
     registerTinyCloudTools(server, {
@@ -118,11 +147,18 @@ function createHostedSurface(
       explicitProfile: true,
       allowOwnerProfile: false,
       stateRoot,
-      beforeOperation: () => store.validateTenant(subject, ownerDids),
-      transformOperationResult: (result, invocation) =>
-        store.decorateAuthorityResult(subject, ownerDids, result, invocation),
+      ...(nativeOwner === undefined ? {} : {
+        allowedTools: ["tinycloud_sql_query", "tinycloud_kv_get"] as const,
+      }),
+      beforeOperation: nativeOwner === undefined
+        ? () => store.validateTenant(subject, ownerDids)
+        : () => store.assertNativeGrantActive(nativeOwner),
+      ...(nativeOwner === undefined ? {
+        transformOperationResult: (result: unknown, invocation: McpOperationInvocation) =>
+          store.decorateAuthorityResult(subject, ownerDids, result, invocation),
+      } : {}),
     }, validator);
-    registerConnectTool(server, validator, store, identity, surface);
+    if (nativeOwner === undefined) registerConnectTool(server, validator, store, identity, surface);
     return server;
   }, {
     legacy: "stateless",
@@ -256,6 +292,7 @@ function createHostedSurface(
           return publicMetadataCors(new Response(null, { status: 204 }), request);
         }
         if (request.method !== "GET") return methodNotAllowed("GET");
+        const identity = await store.nativeServiceIdentity();
         return publicMetadataCors(Response.json({
           $schema: "https://static.modelcontextprotocol.io/schemas/v1/server-card.schema.json",
           name: `xyz.tinycloud/${MCP_SERVER_NAME}`,
@@ -265,6 +302,33 @@ function createHostedSurface(
           websiteUrl: "https://docs.tinycloud.xyz/cli/mcp",
           repository: { source: "github", url: "https://github.com/TinyCloudLabs/js-sdk", subfolder: "packages/mcp" },
           remotes: [{ type: "streamable-http", url: resourceUrl.toString() }],
+          "x-tinycloud-native-auth": {
+            serviceDid: identity.serviceDid,
+            serviceDidField: "x-tinycloud-native-auth.serviceDid",
+            serviceIdentityStorage: "TC_MCP_STATE_DIR/.tinycloud/native-service-key.json",
+            grantEndpoint: {
+              method: "POST",
+              path: "/native/grant",
+              body: { delegation: "serialized PortableDelegation JSON string" },
+            },
+            serviceCredentialHeader: NATIVE_SERVICE_CREDENTIAL_HEADER,
+            serviceCredentialEnv: "TC_MCP_NATIVE_SERVICE_CREDENTIAL",
+            ownerDidHeader: NATIVE_OWNER_DID_HEADER,
+            maxGrantLifetimeSeconds: NATIVE_GRANT_MAX_LIFETIME_SECONDS,
+            acceptedCapabilities: [
+              { service: "tinycloud.sql", space: "applications", path: "xyz.tinycloud.tinychat/connectors", actions: ["tinycloud.sql/read"] },
+              { service: "tinycloud.kv", space: "applications", path: "xyz.tinycloud.tinychat/connectors/", actions: ["tinycloud.kv/get", "tinycloud.kv/list"] },
+            ],
+            tools: ["tinycloud_sql_query", "tinycloud_kv_get"],
+            errors: {
+              required: NATIVE_GRANT_REQUIRED,
+              expired: NATIVE_GRANT_EXPIRED,
+              rejected: NATIVE_GRANT_REJECTED,
+              serviceUnauthorized: NATIVE_SERVICE_UNAUTHORIZED,
+              serviceUnavailable: NATIVE_SERVICE_UNAVAILABLE,
+              validationUnavailable: NATIVE_GRANT_VALIDATION_UNAVAILABLE,
+            },
+          },
         }, { headers: { "cache-control": "public, max-age=300" } }), request);
       }
       if (url.pathname === "/llms.txt" && surface === "hosted") {
@@ -364,6 +428,80 @@ function createHostedSurface(
             config.openkeyHost,
           );
         }
+      }
+      if (url.pathname === "/native/grant" && surface === "hosted") {
+        if (request.method !== "POST") return methodNotAllowed("POST");
+        if (request.headers.has("origin")) return json({ error: NATIVE_SERVICE_UNAUTHORIZED }, 403);
+        if (config.nativeServiceCredential === undefined) {
+          return json({ error: NATIVE_SERVICE_UNAVAILABLE }, 503);
+        }
+        if (!serviceCredentialMatches(
+          request.headers.get(NATIVE_SERVICE_CREDENTIAL_HEADER),
+          config.nativeServiceCredential,
+        )) return json({ error: NATIVE_SERVICE_UNAUTHORIZED }, 403);
+        if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) {
+          return json({ error: NATIVE_GRANT_REJECTED }, 401);
+        }
+        const bodyText = await readBoundedBodyText(request, MAX_NATIVE_GRANT_BODY_BYTES);
+        if (bodyText === undefined) return json({ error: NATIVE_GRANT_REJECTED }, 401);
+        let body: unknown;
+        try {
+          body = JSON.parse(bodyText);
+        } catch {
+          return json({ error: NATIVE_GRANT_REJECTED }, 401);
+        }
+        if (typeof body !== "object" || body === null || Array.isArray(body) || !("delegation" in body)) {
+          return json({ error: NATIVE_GRANT_REJECTED }, 401);
+        }
+        const grantBody = body as { delegation?: unknown };
+        if (Object.keys(body).length !== 1 || typeof grantBody.delegation !== "string") {
+          return json({ error: NATIVE_GRANT_REJECTED }, 401);
+        }
+        try {
+          const accepted = await store.acceptNativeGrant(grantBody.delegation);
+          return json({
+            ownerDid: accepted.ownerDid,
+            serviceDid: accepted.serviceDid,
+            expiresAt: accepted.expiresAt,
+          }, 201);
+        } catch (error) {
+          return nativeGrantErrorResponse(error);
+        }
+      }
+      if (url.pathname === resourceUrl.pathname && surface === "hosted" &&
+        (request.headers.has(NATIVE_SERVICE_CREDENTIAL_HEADER) || request.headers.has(NATIVE_OWNER_DID_HEADER))) {
+        if (config.nativeServiceCredential === undefined) {
+          return json({ error: NATIVE_SERVICE_UNAVAILABLE }, 503);
+        }
+        if (!serviceCredentialMatches(
+          request.headers.get(NATIVE_SERVICE_CREDENTIAL_HEADER),
+          config.nativeServiceCredential,
+        )) return json({ error: NATIVE_SERVICE_UNAUTHORIZED }, 403);
+        if (request.headers.has("origin")) return json({ error: NATIVE_SERVICE_UNAUTHORIZED }, 403);
+        const ownerHeader = request.headers.get(NATIVE_OWNER_DID_HEADER);
+        if (ownerHeader === null || ownerHeader.length === 0) {
+          return json({ error: NATIVE_GRANT_REQUIRED }, 401);
+        }
+        const grant = await store.nativeGrantForOwner(ownerHeader);
+        if (grant.status !== "ok") {
+          const status = grant.status === "unavailable" ? 503 : 401;
+          const code = grant.status === "required"
+            ? NATIVE_GRANT_REQUIRED
+            : grant.status === "expired"
+              ? NATIVE_GRANT_EXPIRED
+              : grant.status === "unavailable"
+                ? NATIVE_GRANT_VALIDATION_UNAVAILABLE
+                : NATIVE_GRANT_REJECTED;
+          return json({ error: code }, status);
+        }
+        return handler.fetch(request, {
+          authInfo: {
+            token: "native-service",
+            clientId: "tinycloud-native",
+            scopes: [],
+            extra: { nativeOwnerDid: grant.ownerDid },
+          } as AuthInfo,
+        });
       }
       if (url.pathname !== resourceUrl.pathname) return json({ error: "Not found" }, 404);
       const originFailure = validateOrigin(request, config.allowedOrigins);
@@ -498,6 +636,43 @@ function callbackCors(response: Response, openkeyHost: string): Response {
   return new Response(response.body, { status: response.status, headers });
 }
 
+async function readBoundedBodyText(request: Request, maxBytes: number): Promise<string | undefined> {
+  const contentLength = request.headers.get("content-length");
+  if (contentLength !== null) {
+    const parsedLength = Number(contentLength);
+    if (Number.isFinite(parsedLength) && parsedLength > maxBytes) return undefined;
+  }
+  if (request.body === null) return "";
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        return undefined;
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString("utf8");
+}
+
+function nativeGrantErrorResponse(error: unknown): Response {
+  if (!(error instanceof NativeGrantValidationError)) {
+    return json({ error: NATIVE_GRANT_REJECTED }, 401);
+  }
+  return json(
+    { error: error.code },
+    error.code === NATIVE_GRANT_VALIDATION_UNAVAILABLE ? 503 : 401,
+  );
+}
+
 function json(value: unknown, status = 200): Response {
   return Response.json(value, { status, headers: { "cache-control": "no-store" } });
 }
@@ -546,6 +721,7 @@ function publicText(text: string, contentType: string): Response {
 function methodNotAllowed(allow: string): Response {
   return new Response("Method not allowed", { status: 405, headers: { allow } });
 }
+
 
 function writeDiagnostic(message: string): void {
   process.stderr.write(`[tinycloud-mcp-http] ${message}\n`);

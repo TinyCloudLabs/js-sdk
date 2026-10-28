@@ -3,8 +3,11 @@ import { chmod, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/
 import { dirname, join } from "node:path";
 
 import {
+  activateValidatedRuntimeDelegation,
+  deserializeDelegation,
   InvalidRestoredSessionError,
   RuntimeDelegationRejectedError,
+  serializeDelegation,
   TinyCloudNode,
   UnsupportedSessionRestoreError,
   isCapabilitySubset,
@@ -16,9 +19,12 @@ import {
   type TinyCloudSession,
 } from "@tinycloud/node-sdk";
 import { TCWSessionManager, importKey, initPanicHook } from "@tinycloud/node-sdk-wasm";
+import { createOrReusePermissionRequest } from "@tinycloud/operations/artifacts";
+import { withTinyCloudStateRoot } from "@tinycloud/operations/state";
 import { invokeOperation } from "@tinycloud/operations";
 import { nodeRevocationOf, operationRetryDescriptor, type NodeRevocation } from "@tinycloud/operations/mcp-authority";
 import { tcAppsApprovalMessage, tcAppsApprovalReason } from "@tinycloud/operations/tc-apps";
+import { nativeOwnerForConnectorGrant, canonicalOwnerDid, NATIVE_GRANT_MAX_LIFETIME_SECONDS } from "./native-auth.js";
 
 import type { McpOperationInvocation } from "./tools.js";
 const PROFILE = "agent";
@@ -54,6 +60,8 @@ export interface RemoteStoreConfig {
   readonly openkeyHost: string;
   readonly approvalTtlSeconds: number;
   readonly delegationExpiry: string;
+  /** Shared secret used only by the Exo native client, never logged. */
+  readonly nativeServiceCredential?: string;
 }
 
 interface TenantProfile {
@@ -61,6 +69,29 @@ interface TenantProfile {
   readonly sessionDid: string;
   readonly jwk: Record<string, unknown>;
   readonly approvalEpoch: number;
+}
+interface NativeServiceKey {
+  readonly version: 1;
+  readonly jwk: Record<string, unknown>;
+}
+
+interface StoredNativeGrant {
+  readonly version: 1;
+  readonly ownerDid: string;
+  readonly serviceDid: string;
+  readonly serializedDelegation: string;
+  readonly delegationCid: string;
+  readonly spaceId: string;
+  readonly permissions: PermissionEntry[];
+  readonly expiresAt: string;
+}
+
+export type NativeGrantLookup =
+  | { readonly status: "ok"; readonly ownerDid: string; readonly stateRoot: string; readonly expiresAt: string }
+  | { readonly status: "required" | "expired" | "rejected" | "unavailable" };
+
+export interface NativeServiceIdentity {
+  readonly serviceDid: string;
 }
 
 interface PendingApproval {
@@ -153,6 +184,30 @@ export class ApprovalRequestError extends Error {
     this.detail = detail;
   }
 }
+export class NativeGrantValidationError extends Error {
+  readonly code:
+    | "native_grant_required"
+    | "native_grant_expired"
+    | "native_grant_rejected"
+    | "native_grant_validation_unavailable";
+
+  constructor(
+    status: "required" | "expired" | "rejected" | "unavailable" | NativeGrantValidationError["code"],
+  ) {
+    const code = status.startsWith("native_")
+      ? status as NativeGrantValidationError["code"]
+      : status === "required"
+        ? "native_grant_required"
+        : status === "expired"
+          ? "native_grant_expired"
+          : status === "unavailable"
+            ? "native_grant_validation_unavailable"
+            : "native_grant_rejected";
+    super(code);
+    this.name = "NativeGrantValidationError";
+    this.code = code;
+  }
+}
 
 export class RemoteTenantStore {
   readonly #config: RemoteStoreConfig;
@@ -166,9 +221,165 @@ export class RemoteTenantStore {
   readonly #scopedClearing = new Map<string, Promise<void>>();
   readonly #clearedScoped = new Map<string, Set<string>>();
   readonly #approvalProcessing = new Map<string, Promise<void>>();
+  #nativeIdentity?: Promise<{ did: string; jwk: Record<string, unknown> }>;
 
   constructor(config: RemoteStoreConfig) {
     this.#config = config;
+  }
+
+  async nativeServiceIdentity(): Promise<NativeServiceIdentity> {
+    const identity = await this.#loadNativeServiceKey();
+    return { serviceDid: normalizeDid(identity.did) };
+  }
+
+  nativeTenantStateRoot(ownerDid: string): string {
+    const canonical = canonicalOwnerDid(ownerDid);
+    if (canonical === undefined) throw new NativeGrantValidationError("rejected");
+    const tenant = createHmac("sha256", this.#config.stateSecret)
+      .update(`native-tenant:${canonical}`)
+      .digest("hex");
+    return join(this.#config.stateDir, "native-tenants", tenant);
+  }
+
+  async acceptNativeGrant(serializedDelegation: string): Promise<{
+    ownerDid: string;
+    serviceDid: string;
+    expiresAt: string;
+    stateRoot: string;
+  }> {
+    if (Buffer.byteLength(serializedDelegation) > MAX_CALLBACK_BYTES) {
+      throw new NativeGrantValidationError("rejected");
+    }
+    const identity = await this.#loadNativeServiceKey();
+    const activated = await this.#activateNativeDelegation(serializedDelegation, identity);
+    const { ownerDid, spaceId, permissions, expiresAt } = activated;
+    const stateRoot = this.nativeTenantStateRoot(ownerDid);
+    const session = {
+      delegationHeader: activated.delegation.delegationHeader,
+      delegationCid: activated.cid,
+      spaceId,
+      jwk: identity.jwk,
+      verificationMethod: identity.did,
+      tinycloudHosts: [this.#config.nodeHost],
+    };
+    const grant: StoredNativeGrant = {
+      version: 1,
+      ownerDid,
+      serviceDid: normalizeDid(identity.did),
+      serializedDelegation: serializeDelegation(activated.delegation),
+      delegationCid: activated.cid,
+      spaceId,
+      permissions,
+      expiresAt: expiresAt.toISOString(),
+    };
+    await secureWrite(this.#profilePath(stateRoot), {
+      name: PROFILE,
+      host: this.#config.nodeHost,
+      chainId: activated.delegation.chainId,
+      spaceName: "applications",
+      did: identity.did,
+      createdAt: new Date().toISOString(),
+      profile: PROFILE,
+      operatorType: "agent",
+      posture: "delegate-session",
+      ownerDid,
+      sessionDid: identity.did,
+      spaceId,
+      tinycloudHost: this.#config.nodeHost,
+    });
+    await secureWrite(this.#keyPath(stateRoot), identity.jwk);
+    await secureWrite(this.#sessionPath(stateRoot), session);
+    const request = await withTinyCloudStateRoot(stateRoot, () => createOrReusePermissionRequest({
+      profile: PROFILE,
+      posture: "delegate-session",
+      operatorType: "agent",
+      host: this.#config.nodeHost,
+      sessionDid: identity.did,
+      ownerDid,
+      spaceId,
+      missing: permissions,
+      granted: [],
+      replace: true,
+    }));
+    if (request.status !== "created") {
+      throw new NativeGrantValidationError("native_grant_validation_unavailable");
+    }
+    const imported = await invokeOperation(
+      "tinycloud.auth.import",
+      1,
+      { profile: PROFILE, stateRoot },
+      {
+        kind: "tinycloud.auth.delegation",
+        version: 1,
+        requestId: request.request.requestId,
+        delegationCid: activated.cid,
+        delegation: activated.delegation,
+      },
+    );
+    if (imported.status !== "ok" || !isRecord(imported.output) ||
+      imported.output.activated !== true || imported.output.cid !== activated.cid) {
+      throw new NativeGrantValidationError("native_grant_rejected");
+    }
+    await secureWrite(this.#nativeGrantPath(stateRoot), grant);
+    return { ownerDid, serviceDid: normalizeDid(identity.did), expiresAt: grant.expiresAt, stateRoot };
+  }
+
+  async nativeGrantForOwner(ownerDid: string): Promise<NativeGrantLookup> {
+    const canonical = canonicalOwnerDid(ownerDid);
+    if (canonical === undefined) return { status: "rejected" };
+    const stateRoot = this.nativeTenantStateRoot(canonical);
+    let stored: StoredNativeGrant | null;
+    try {
+      stored = await readJson<StoredNativeGrant>(this.#nativeGrantPath(stateRoot));
+    } catch {
+      return { status: "rejected" };
+    }
+    if (stored === null) return { status: "required" };
+    if (!isRecord(stored) || stored.version !== 1 || stored.ownerDid !== canonical ||
+      typeof stored.serviceDid !== "string" || typeof stored.serializedDelegation !== "string" ||
+      typeof stored.delegationCid !== "string" || typeof stored.spaceId !== "string" ||
+      typeof stored.expiresAt !== "string" || !Array.isArray(stored.permissions) ||
+      !stored.permissions.every(isPermissionEntry) ||
+      nativeOwnerForConnectorGrant(stored.permissions) !== canonical) {
+      return { status: "rejected" };
+    }
+    const expires = Date.parse(stored.expiresAt);
+    if (!Number.isFinite(expires)) return { status: "rejected" };
+    if (expires <= Date.now()) return { status: "expired" };
+    try {
+      const identity = await this.#loadNativeServiceKey();
+      if (!samePrincipal(stored.serviceDid, identity.did)) return { status: "rejected" };
+      const activated = await this.#activateNativeDelegation(stored.serializedDelegation, identity);
+      if (activated.ownerDid !== canonical || activated.cid !== stored.delegationCid ||
+        activated.spaceId !== stored.spaceId ||
+        JSON.stringify(activated.permissions) !== JSON.stringify(stored.permissions) ||
+        activated.expiresAt.toISOString() !== stored.expiresAt) return { status: "rejected" };
+      return { status: "ok", ownerDid: canonical, stateRoot, expiresAt: stored.expiresAt };
+    } catch (error) {
+      if (error instanceof NativeGrantValidationError) {
+        return { status: error.code === "native_grant_expired" ? "expired" :
+          error.code === "native_grant_validation_unavailable" ? "unavailable" : "rejected" };
+      }
+      return { status: "unavailable" };
+    }
+  }
+
+  async assertNativeGrantActive(ownerDid: string): Promise<void> {
+    const canonical = canonicalOwnerDid(ownerDid);
+    if (canonical === undefined) throw new NativeGrantValidationError("rejected");
+    const stateRoot = this.nativeTenantStateRoot(canonical);
+    let stored: StoredNativeGrant | null;
+    try {
+      stored = await readJson<StoredNativeGrant>(this.#nativeGrantPath(stateRoot));
+    } catch {
+      throw new NativeGrantValidationError("rejected");
+    }
+    if (stored === null) throw new NativeGrantValidationError("required");
+    if (!isRecord(stored) || stored.version !== 1 || stored.ownerDid !== canonical ||
+      typeof stored.expiresAt !== "string" || !Number.isFinite(Date.parse(stored.expiresAt))) {
+      throw new NativeGrantValidationError("rejected");
+    }
+    if (Date.parse(stored.expiresAt) <= Date.now()) throw new NativeGrantValidationError("expired");
   }
 
   tenantStateRoot(subject: string): string {
@@ -903,6 +1114,135 @@ export class RemoteTenantStore {
     return url.toString();
   }
 
+  async #loadNativeServiceKey(): Promise<{ did: string; jwk: Record<string, unknown> }> {
+    this.#nativeIdentity ??= this.#readOrCreateNativeServiceKey();
+    return this.#nativeIdentity;
+  }
+
+  async #readOrCreateNativeServiceKey(): Promise<{ did: string; jwk: Record<string, unknown> }> {
+    const path = join(this.#config.stateDir, ".tinycloud", "native-service-key.json");
+    await secureDirectory(dirname(path));
+    let stored = await readJson<NativeServiceKey>(path);
+    if (stored === null) {
+      const generated = generateSessionKey();
+      try {
+        await writeFile(path, `${JSON.stringify({ version: 1, jwk: generated.jwk })}\n`, {
+          mode: 0o600,
+          flag: "wx",
+        });
+      } catch (error) {
+        if (!isRecord(error) || error.code !== "EEXIST") throw error;
+      }
+      await chmod(path, 0o600);
+      stored = await readJson<NativeServiceKey>(path);
+    }
+    if (stored === null || !isRecord(stored) || stored.version !== 1 || !isRecord(stored.jwk)) {
+      throw new Error("The native MCP service identity is unavailable.");
+    }
+    return { did: didFromJwk(stored.jwk), jwk: stored.jwk };
+  }
+
+  async #activateNativeDelegation(
+    serialized: string,
+    identity: { did: string; jwk: Record<string, unknown> },
+  ): Promise<{
+    ownerDid: string;
+    spaceId: string;
+    permissions: PermissionEntry[];
+    cid: string;
+    expiresAt: Date;
+    delegation: PortableDelegation;
+  }> {
+    let delegation: PortableDelegation;
+    try {
+      const parsed: unknown = JSON.parse(serialized);
+      if (!isRecord(parsed)) throw new Error("invalid delegation");
+      delegation = deserializeDelegation(serialized);
+    } catch {
+      throw new NativeGrantValidationError("native_grant_rejected");
+    }
+    if (!isRecord(delegation.delegationHeader) ||
+      typeof delegation.delegationHeader.Authorization !== "string" ||
+      delegation.delegationHeader.Authorization.length === 0 ||
+      typeof delegation.cid !== "string" || delegation.cid.length === 0 ||
+      typeof delegation.delegateDID !== "string" ||
+      !samePrincipal(delegation.delegateDID, normalizeDid(identity.did)) ||
+      typeof delegation.spaceId !== "string" ||
+      typeof delegation.ownerAddress !== "string" ||
+      !Number.isSafeInteger(delegation.chainId) ||
+      typeof delegation.host !== "string" || !sameNodeHost(delegation.host, this.#config.nodeHost) ||
+      !(delegation.expiry instanceof Date) || !Number.isFinite(delegation.expiry.getTime())) {
+      throw new NativeGrantValidationError("native_grant_rejected");
+    }
+    const now = Date.now();
+    const claimedExpiry = delegation.expiry.getTime();
+    if (claimedExpiry <= now) throw new NativeGrantValidationError("native_grant_expired");
+    if (claimedExpiry > now + NATIVE_GRANT_MAX_LIFETIME_SECONDS * 1_000) {
+      throw new NativeGrantValidationError("native_grant_rejected");
+    }
+
+    let ownerDid: string | undefined;
+    let spaceId: string | undefined;
+    const node = new TinyCloudNode({ host: this.#config.nodeHost });
+    try {
+      await node.restoreSession({
+        delegationHeader: delegation.delegationHeader,
+        delegationCid: delegation.cid,
+        spaceId: delegation.spaceId,
+        jwk: identity.jwk,
+        verificationMethod: identity.did,
+        tinycloudHosts: [this.#config.nodeHost],
+      });
+      const activated = await activateValidatedRuntimeDelegation(node, delegation, {
+        host: this.#config.nodeHost,
+        authorize: (permissions) => {
+          const derivedOwner = nativeOwnerForConnectorGrant(permissions);
+          const signedSpace = permissions[0]?.space;
+          if (derivedOwner === undefined || signedSpace === undefined) return false;
+          const metadataOwner = canonicalOwnerDid(
+            `did:pkh:eip155:${delegation.chainId}:${delegation.ownerAddress}`,
+          );
+          if (metadataOwner !== derivedOwner ||
+            delegation.spaceId.toLowerCase() !== signedSpace.toLowerCase()) return false;
+          ownerDid = derivedOwner;
+          spaceId = signedSpace;
+          return true;
+        },
+      });
+      if (ownerDid === undefined || spaceId === undefined ||
+        !samePrincipal(activated.audience, normalizeDid(identity.did)) ||
+        activated.expiry.getTime() > now + NATIVE_GRANT_MAX_LIFETIME_SECONDS * 1_000) {
+        throw new NativeGrantValidationError("native_grant_rejected");
+      }
+      return {
+        ownerDid,
+        spaceId,
+        permissions: [...activated.effectivePermissions],
+        cid: activated.cid,
+        expiresAt: activated.expiry,
+        delegation: activated.delegation,
+      };
+    } catch (error) {
+      if (error instanceof NativeGrantValidationError) throw error;
+      if (error instanceof RuntimeDelegationRejectedError) {
+        throw new NativeGrantValidationError(
+          error.reason === "expired"
+            ? "native_grant_expired"
+            : error.reason === "activation_unavailable"
+              ? "native_grant_validation_unavailable"
+              : "native_grant_rejected",
+        );
+      }
+      if (error instanceof TypeError) {
+        throw new NativeGrantValidationError("native_grant_validation_unavailable");
+      }
+      throw new NativeGrantValidationError("native_grant_rejected");
+    }
+  }
+
+  #nativeGrantPath(stateRoot: string): string {
+    return join(stateRoot, ".tinycloud", "native-grant.json");
+  }
   #tenantId(subject: string): string {
     return createHmac("sha256", this.#config.stateSecret).update(`tenant:${subject}`).digest("hex");
   }
@@ -1022,6 +1362,22 @@ function samePrincipal(left: string | undefined, right: string): boolean {
 
 function normalizeDid(value: string): string {
   return value.split("#", 1)[0]!;
+}
+
+function sameNodeHost(left: string, right: string): boolean {
+  try {
+    const normalize = (value: string): string => {
+      const url = new URL(value);
+      if (url.username !== "" || url.password !== "") return "";
+      url.hash = "";
+      url.search = "";
+      url.pathname = url.pathname.replace(/\/+$/, "");
+      return url.toString().replace(/\/+$/, "");
+    };
+    return normalize(left) !== "" && normalize(left) === normalize(right);
+  } catch {
+    return false;
+  }
 }
 
 function isPermissionEntry(value: unknown): value is PermissionEntry {

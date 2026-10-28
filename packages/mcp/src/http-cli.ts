@@ -27,6 +27,9 @@ export async function main(): Promise<void> {
     approvalTtlSeconds: positiveInteger(process.env.TC_MCP_APPROVAL_TTL_SECONDS, 300),
     delegationExpiry: process.env.TC_MCP_DELEGATION_EXPIRY ?? "1h",
     allowedOrigins: commaList(process.env.TC_MCP_ALLOWED_ORIGINS),
+    ...(process.env.TC_MCP_NATIVE_SERVICE_CREDENTIAL === undefined
+      ? {}
+      : { nativeServiceCredential: process.env.TC_MCP_NATIVE_SERVICE_CREDENTIAL }),
     oauthMetadata,
     introspection: {
       endpoint: requiredUrl("TC_MCP_INTROSPECTION_URL").toString(),
