@@ -92,6 +92,18 @@ jobs:
           persist-credentials: false
       - name: Install Phala CLI
         run: npm install --global phala@1.1.22
+      - name: Validate optional native service credential
+        env:
+          TC_MCP_NATIVE_SERVICE_CREDENTIAL: ${{ secrets.TC_MCP_NATIVE_SERVICE_CREDENTIAL }}
+        shell: bash
+        run: |
+          if [ -n "$TC_MCP_NATIVE_SERVICE_CREDENTIAL" ]; then
+            credential_bytes=$(LC_ALL=C printf '%s' "$TC_MCP_NATIVE_SERVICE_CREDENTIAL" | wc -c | tr -d '[:space:]')
+            [ "$credential_bytes" -ge 32 ] || {
+              echo "::error::TC_MCP_NATIVE_SERVICE_CREDENTIAL must contain at least 32 bytes"
+              exit 1
+            }
+          fi
       - name: Phala can read CVM tinycloud-mcp
         env:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
@@ -192,6 +204,7 @@ jobs:
           TC_MCP_INTROSPECTION_CLIENT_ID: ${{ secrets.TC_MCP_INTROSPECTION_CLIENT_ID }}
           TC_MCP_INTROSPECTION_CLIENT_SECRET: ${{ secrets.TC_MCP_INTROSPECTION_CLIENT_SECRET }}
           TINYCLOUD_MCP_IMAGE: ${{ needs.resolve.outputs.image }}
+          TC_MCP_NATIVE_SERVICE_CREDENTIAL: ${{ secrets.TC_MCP_NATIVE_SERVICE_CREDENTIAL }}
           CERTBOT_EMAIL: ops@tinycloud.xyz
         run: |
           test -n "$PHALA_CLOUD_API_KEY"
@@ -199,6 +212,15 @@ jobs:
           test -n "$TC_MCP_STATE_SECRET"
           test -n "$TC_MCP_INTROSPECTION_CLIENT_ID"
           test -n "$TC_MCP_INTROSPECTION_CLIENT_SECRET"
+          native_credential_env_file_args=()
+          if [ -n "$TC_MCP_NATIVE_SERVICE_CREDENTIAL" ]; then
+            umask 077
+            native_credential_env_file=$(mktemp "${RUNNER_TEMP}/mcp-native-credential.XXXXXX")
+            trap 'rm -f "$native_credential_env_file"' EXIT
+            printf 'TC_MCP_NATIVE_SERVICE_CREDENTIAL=%s\n' "$TC_MCP_NATIVE_SERVICE_CREDENTIAL" > "$native_credential_env_file"
+            native_credential_env_file_args=(--env "$native_credential_env_file")
+          fi
+          unset TC_MCP_NATIVE_SERVICE_CREDENTIAL
           # Always update the existing CVM, which holds the mcp-state volume. A failed
           # lookup must not fall through to creating an empty replacement; creating the
           # CVM for the first time is a manual step.
@@ -211,6 +233,7 @@ jobs:
             --env "TC_MCP_STATE_SECRET=$TC_MCP_STATE_SECRET" \
             --env "TC_MCP_INTROSPECTION_CLIENT_ID=$TC_MCP_INTROSPECTION_CLIENT_ID" \
             --env "TC_MCP_INTROSPECTION_CLIENT_SECRET=$TC_MCP_INTROSPECTION_CLIENT_SECRET" \
+            "${native_credential_env_file_args[@]}" \
             --env "CERTBOT_EMAIL=$CERTBOT_EMAIL" \
             --no-public-logs \
             --no-public-sysinfo \
