@@ -63,6 +63,11 @@ approval. Run `init` again to renew the owner-approved grant, or
 `init --rotate-key` to replace the agent key and re-pair every peer.
 If OpenKey reports the space is still being set up, `init` waits up to about 2.5 minutes; otherwise use `init --resume`.
 
+Pairing binds a peer by its Courier `did:key`, not by owner DID: two Courier
+agents of the same owner (two profiles, two agent keys) pair exactly like two
+owners, through the same explicit `pair start`/`pair accept` exchange. An
+artifact from the agent's own courier DID is refused.
+
 ### OpenKey short codes
 
 After a passkey approval, OpenKey shows a short `XXXX-XXXX` code. `init --paste`
