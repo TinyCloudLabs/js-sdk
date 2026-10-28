@@ -1092,6 +1092,7 @@ export interface HermeticEncryptedNode {
   mintDelegationForAudienceWithPermissions(
     audience: string,
     permissions: PermissionEntry[],
+    options?: { expiry?: string | number },
   ): Promise<Awaited<ReturnType<TinyCloudNode["delegateTo"]>>["delegation"]>;
   mintUntrustedDelegation(): Promise<Awaited<ReturnType<TinyCloudNode["delegateTo"]>>["delegation"]>;
   readAndDecrypt(node: TinyCloudNode, delegation: ValidatedRuntimeDelegation): Promise<void>;
@@ -1362,8 +1363,8 @@ export async function createHermeticEncryptedNode(
         return delegation;
       }),
     mintDelegationForAudience: mint,
-    mintDelegationForAudienceWithPermissions: (audience, requestedPermissions) =>
-      ownerRuntime.node.delegateTo(audience, requestedPermissions).then(({ delegation }) => {
+    mintDelegationForAudienceWithPermissions: (audience, requestedPermissions, options) =>
+      ownerRuntime.node.delegateTo(audience, requestedPermissions, options).then(({ delegation }) => {
         transport.configure({
           spaceId,
           networkId,

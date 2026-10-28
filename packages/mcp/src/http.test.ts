@@ -1,5 +1,5 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -99,7 +99,8 @@ test("root OAuth Protected Resource Metadata alias matches the path-specific doc
 });
 
 test("serves the current MCP Server Card with only supported CORS methods", async () => {
-  const app = await testApp();
+  const stateDir = await mkdtemp(join(tmpdir(), "tinycloud-hosted-card-"));
+  const app = await testApp(stateDir);
   const card = await app.fetch(request("/mcp/server-card", { headers: { origin: "https://scanner.example" } }));
   const wellKnownCard = await app.fetch(request("/.well-known/mcp/server-card.json", {
     headers: { origin: "https://scanner.example" },
@@ -126,10 +127,39 @@ test("serves the current MCP Server Card with only supported CORS methods", asyn
   expect(cardDocument).not.toHaveProperty("serverInfo");
   expect(cardDocument).not.toHaveProperty("endpoint");
   expect(cardDocument).not.toHaveProperty("capabilities");
+  expect(cardDocument).not.toHaveProperty("x-tinycloud-native-auth");
+  await expect(readFile(join(stateDir, ".tinycloud", "native-service-key.json"), "utf8"))
+    .rejects.toThrow();
   expect(cardPreflight.status).toBe(204);
   expect(cardPreflight.headers.get("access-control-allow-origin")).toBe("*");
   expect(cardPreflight.headers.get("access-control-allow-methods")).toBe("GET, OPTIONS");
   expect(cardPreflight.headers.get("access-control-allow-headers")).toBe("accept");
+});
+
+test("omits native discovery and reports service unavailable when the identity key is corrupt", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "tinycloud-native-corrupt-key-"));
+  directories.push(stateDir);
+  const keyPath = join(stateDir, ".tinycloud", "native-service-key.json");
+  await mkdir(join(stateDir, ".tinycloud"), { recursive: true });
+  await writeFile(keyPath, "{}\n", { mode: 0o600 });
+  const serviceCredential = "native-corrupt-key-test-credential-with-entropy";
+  const app = await testApp(stateDir, { nativeServiceCredential: serviceCredential });
+
+  const cardResponse = await app.fetch(request("/.well-known/mcp/server-card.json"));
+  const card = await cardResponse.json() as Record<string, unknown>;
+  expect(cardResponse.status).toBe(200);
+  expect(card).not.toHaveProperty("x-tinycloud-native-auth");
+
+  const intake = await app.fetch(request("/native/grant", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-tinycloud-service-credential": serviceCredential,
+    },
+    body: JSON.stringify({ delegation: "serialized portable delegation" }),
+  }));
+  expect(intake.status).toBe(503);
+  expect(await intake.json()).toEqual({ error: "native_service_unavailable" });
 });
 test("publishes native service identity and keeps native tools on the grant-gated /mcp path", async () => {
   const serviceCredential = "native-test-service-credential-with-enough-entropy";
@@ -245,7 +275,16 @@ test("binds native tool calls to the owner in the activated grant", async () => 
         actions: ["tinycloud.kv/get", "tinycloud.kv/list"],
       },
     ];
-    const delegation = await fixture.mintDelegationForAudienceWithPermissions(serviceIdentity.serviceDid, permissions);
+    const olderDelegation = await fixture.mintDelegationForAudienceWithPermissions(
+      serviceIdentity.serviceDid,
+      permissions,
+      { expiry: "1h" },
+    );
+    const delegation = await fixture.mintDelegationForAudienceWithPermissions(
+      serviceIdentity.serviceDid,
+      permissions,
+      { expiry: "2h" },
+    );
     const app = await testApp(stateDir, {
       nativeServiceCredential: serviceCredential,
       nodeHost: fixture.host,
@@ -267,6 +306,16 @@ test("binds native tool calls to the owner in the activated grant", async () => 
       ownerDid: fixture.ownerDid.toLowerCase(),
       serviceDid: serviceIdentity.serviceDid,
     });
+    const staleGrant = await app.fetch(request("/native/grant", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-tinycloud-service-credential": serviceCredential,
+      },
+      body: JSON.stringify({ delegation: serializeDelegation(olderDelegation) }),
+    }));
+    expect(staleGrant.status).toBe(401);
+    expect(await staleGrant.json()).toEqual({ error: "native_grant_rejected" });
 
     const nativeHeaders = {
       "content-type": "application/json",

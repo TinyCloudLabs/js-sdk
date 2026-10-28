@@ -118,6 +118,9 @@ function createHostedSurface(
     resourceMetadataUrl,
   });
   const store = new RemoteTenantStore({ ...config, publicUrl: resourceUrl });
+  const nativeServiceIdentity = surface === "hosted" && config.nativeServiceCredential !== undefined
+    ? store.nativeServiceIdentity().catch(() => undefined)
+    : Promise.resolve(undefined);
   const handler = createMcpHandler(async ({ authInfo }) => {
     const nativeOwner = typeof authInfo?.extra?.nativeOwnerDid === "string"
       ? authInfo.extra.nativeOwnerDid
@@ -292,8 +295,8 @@ function createHostedSurface(
           return publicMetadataCors(new Response(null, { status: 204 }), request);
         }
         if (request.method !== "GET") return methodNotAllowed("GET");
-        const identity = await store.nativeServiceIdentity();
-        return publicMetadataCors(Response.json({
+        const identity = await nativeServiceIdentity;
+        const card: Record<string, unknown> = {
           $schema: "https://static.modelcontextprotocol.io/schemas/v1/server-card.schema.json",
           name: `xyz.tinycloud/${MCP_SERVER_NAME}`,
           title: "TinyCloud MCP",
@@ -302,10 +305,11 @@ function createHostedSurface(
           websiteUrl: "https://docs.tinycloud.xyz/cli/mcp",
           repository: { source: "github", url: "https://github.com/TinyCloudLabs/js-sdk", subfolder: "packages/mcp" },
           remotes: [{ type: "streamable-http", url: resourceUrl.toString() }],
-          "x-tinycloud-native-auth": {
+        };
+        if (identity !== undefined) {
+          card["x-tinycloud-native-auth"] = {
             serviceDid: identity.serviceDid,
             serviceDidField: "x-tinycloud-native-auth.serviceDid",
-            serviceIdentityStorage: "TC_MCP_STATE_DIR/.tinycloud/native-service-key.json",
             grantEndpoint: {
               method: "POST",
               path: "/native/grant",
@@ -328,8 +332,11 @@ function createHostedSurface(
               serviceUnavailable: NATIVE_SERVICE_UNAVAILABLE,
               validationUnavailable: NATIVE_GRANT_VALIDATION_UNAVAILABLE,
             },
-          },
-        }, { headers: { "cache-control": "public, max-age=300" } }), request);
+          };
+        }
+        return publicMetadataCors(Response.json(card, {
+          headers: { "cache-control": "public, max-age=300" },
+        }), request);
       }
       if (url.pathname === "/llms.txt" && surface === "hosted") {
         return request.method === "GET"
@@ -665,12 +672,11 @@ async function readBoundedBodyText(request: Request, maxBytes: number): Promise<
 
 function nativeGrantErrorResponse(error: unknown): Response {
   if (!(error instanceof NativeGrantValidationError)) {
-    return json({ error: NATIVE_GRANT_REJECTED }, 401);
+    return json({ error: NATIVE_SERVICE_UNAVAILABLE }, 503);
   }
-  return json(
-    { error: error.code },
-    error.code === NATIVE_GRANT_VALIDATION_UNAVAILABLE ? 503 : 401,
-  );
+  const unavailable = error.code === NATIVE_GRANT_VALIDATION_UNAVAILABLE ||
+    error.code === NATIVE_SERVICE_UNAVAILABLE;
+  return json({ error: error.code }, unavailable ? 503 : 401);
 }
 
 function json(value: unknown, status = 200): Response {
