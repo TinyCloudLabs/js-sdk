@@ -48,7 +48,7 @@
     "siwe": "^3.0.0"
   },
   "devDependencies": {
-    "@tinycloud/courier": "0.3.3-beta.14",
+    "@tinycloud/courier": "0.4.0-beta.15",
     "@tinycloud/replica": "0.4.0-beta.4",
     "@types/node": "^20",
     "tsup": "^8.0.0",

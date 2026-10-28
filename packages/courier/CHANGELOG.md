@@ -1,5 +1,13 @@
 # @tinycloud/courier
 
+## 0.4.0-beta.15
+
+### Minor Changes
+
+- c6b78b2: Courier pairing now accepts artifacts from a different Courier agent key of the same owner, so two agents sharing one `did:pkh` pair like any two agents. Pairing still refuses the agent's own courier DID, and the peer delegation binding is unchanged. Tested with an isolated same-owner A→B→C exchange plus self-pair, key-substitution and different-owner regression checks.
+
+  Details: TC-1248
+
 ## 0.3.3-beta.14
 
 ### Patch Changes

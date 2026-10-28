@@ -41,6 +41,7 @@
     "cli-share-invitations-on",
     "cli-share-json-short-link",
     "cli-share-publishing-decrypt",
+    "courier-same-owner-pairing",
     "host-binding-export-node",
     "host-binding-export-web",
     "lazy-issued-delegations",
