@@ -19,6 +19,8 @@ import type {
 } from "./types";
 
 export interface EncryptToNetworkOptions {
+  /** Exact named-key path to bind into the returned envelope. */
+  keyPath?: string;
   /** Optional associated authenticated data (bytes). */
   aad?: Uint8Array;
   /** Ciphersuite override. Defaults to the network's alg. */

@@ -18,10 +18,16 @@ export function isVerifiedRawEncryptionPermission(permission: Pick<PermissionEnt
 }
 
 /**
- * The one encryption entry OpenKey's device sign-in accepts: the approving
- * account's own `default` network, named as space `default`, empty path and
- * only decrypt. OpenKey resolves it to the owner's network when it signs.
+ * The built-in Share publishing decrypt entry names the approving account's
+ * `default/share/` encryption prefix before owner resolution.
  */
+export function isSharePublishingPrefixDecrypt(permission: Pick<PermissionEntry, "service" | "space" | "path" | "actions" | "caveats">): boolean {
+  return permission.service === ENCRYPTION_PERMISSION_SERVICE && permission.space === "default" && permission.path === "share/" &&
+    permission.actions.length === 1 && permission.actions[0] === "tinycloud.encryption/decrypt" &&
+    !permission.caveats?.length;
+}
+
+/** Legacy manifest spelling for an owner's default network root. */
 export function isDeviceDefaultDecrypt(permission: Pick<PermissionEntry, "service" | "space" | "path" | "actions" | "caveats">): boolean {
   return permission.service === ENCRYPTION_PERMISSION_SERVICE && permission.space === "default" && permission.path === "" &&
     permission.actions.length === 1 && permission.actions[0] === "tinycloud.encryption/decrypt" &&

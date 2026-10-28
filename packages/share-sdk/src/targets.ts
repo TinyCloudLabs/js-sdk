@@ -20,6 +20,9 @@ export interface TargetPublishInput {
   readonly resourceKind?: "exact" | "prefix";
   readonly actions?: readonly ("read" | "list" | "edit")[];
   readonly notify?: boolean;
+  readonly credentialDescriptor?: unknown;
+  readonly issuerDid?: string;
+  readonly issuerKid?: string;
   /** Publish as the next write-once version of this artifact and pin the share to it (TC-1428). */
   readonly artifact?: { readonly id: string; readonly note?: string };
 }
@@ -95,6 +98,9 @@ export async function publishTargetShare(input: SharePublishOptions & {
   readonly files?: readonly { readonly bytes: Uint8Array; readonly filename: string; readonly mediaType?: string }[];
   readonly resourceKind?: "exact" | "prefix";
   readonly actions?: readonly ("read" | "list" | "edit")[];
+  readonly credentialDescriptor?: unknown;
+  readonly issuerDid?: string;
+  readonly issuerKid?: string;
 }): Promise<TargetPublishOutcome> {
   const target = normalizeShareTarget(input.target);
   const filename = publishFilename(input.filename);
@@ -151,5 +157,8 @@ export async function publishTargetShare(input: SharePublishOptions & {
     expiryWasExplicit: input.expiryWasExplicit ?? input.expiresAt !== undefined,
     origin: input.origin,
     ...(input.notify === undefined ? {} : { notify: input.notify }),
+    ...(input.credentialDescriptor === undefined ? {} : { credentialDescriptor: input.credentialDescriptor }),
+    ...(input.issuerDid === undefined ? {} : { issuerDid: input.issuerDid }),
+    ...(input.issuerKid === undefined ? {} : { issuerKid: input.issuerKid }),
   });
 }

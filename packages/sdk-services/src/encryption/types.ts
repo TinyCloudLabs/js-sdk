@@ -47,10 +47,11 @@ export const DECRYPT_ACTION = "tinycloud.encryption/decrypt" as const;
  *   them.
  */
 export interface InlineEncryptedEnvelope {
-  /** Schema version. */
   v: typeof ENVELOPE_VERSION;
   /** Network id URN. */
   networkId: string;
+  /** Exact named-key path; absent on network-root v1 envelopes. */
+  keyPath?: string;
   /** Ciphersuite identifier. */
   alg: string;
   /** Network key version that was used to wrap the symmetric key. */
@@ -97,6 +98,8 @@ export interface DecryptRequestBody {
   type: typeof DECRYPT_FACT_TYPE;
   targetNode: string;
   networkId: string;
+  /** Exact named-key path for path-scoped decrypt, absent for root keys. */
+  keyPath?: string;
   alg: string;
   keyVersion: number;
   /** Base64-encoded wrapped symmetric key from the envelope. */
@@ -140,6 +143,8 @@ export interface DecryptInvocationFact {
   type: typeof DECRYPT_FACT_TYPE;
   targetNode: string;
   networkId: string;
+  /** Exact named-key path for path-scoped decrypt, absent for root keys. */
+  keyPath?: string;
   bodyHash: string;
   encryptedSymmetricKeyHash: string;
   receiverPublicKeyHash: string;

@@ -56,6 +56,53 @@ describe("expandPermissionEntries (encryption)", () => {
     ]);
   });
 
+  it("preserves a default-network key-prefix grant as an encryption resource", () => {
+    const prefix = `${NETWORK_ID}/share/`;
+    expect(
+      expandPermissionEntries([
+        {
+          service: ENCRYPTION_PERMISSION_SERVICE,
+          path: prefix,
+          actions: ["decrypt"],
+        },
+      ]),
+    ).toEqual([
+      {
+        service: ENCRYPTION_PERMISSION_SERVICE,
+        space: ENCRYPTION_MANIFEST_SPACE,
+        path: prefix,
+        actions: ["tinycloud.encryption/decrypt"],
+        skipPrefix: true,
+      },
+    ]);
+  });
+
+  it("limits the share prefix to default-network decrypt", () => {
+    for (const path of [`${NETWORK_ID.replace(":default", ":other")}/share/`, `${NETWORK_ID}/other/share/`]) {
+      expect(() => expandPermissionEntries([{ service: ENCRYPTION_PERMISSION_SERVICE, path, actions: ["decrypt"] }]))
+        .toThrow(ManifestValidationError);
+    }
+    expect(() => expandPermissionEntries([{
+      service: ENCRYPTION_PERMISSION_SERVICE,
+      path: `${NETWORK_ID}/share/`,
+      actions: ["network.create"],
+    }])).toThrow(ManifestValidationError);
+  });
+
+  it("rejects empty or traversal segments in scoped encryption resources", () => {
+    for (const path of [`${NETWORK_ID}/share//`, `${NETWORK_ID}/../share`]) {
+      expect(() =>
+        expandPermissionEntries([
+          {
+            service: ENCRYPTION_PERMISSION_SERVICE,
+            path,
+            actions: ["decrypt"],
+          },
+        ]),
+      ).toThrow(ManifestValidationError);
+    }
+  });
+
   it("rejects non-networkId paths", () => {
     expect(() =>
       expandPermissionEntries([

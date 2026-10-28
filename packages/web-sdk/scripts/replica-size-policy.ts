@@ -328,6 +328,8 @@ export type Tc1977HostBindingRatchet = HardeningRatchet & { replicaWorker: { del
 export type Tc2132IssuedDelegationsRatchet = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
 /** One reviewed exact-byte row for the exact named-key decrypt child (TC-2140, #769); replicaWorker is carried at TC-2132's replica.worker.js ceiling. */
 export type Tc2140ExactKeyDelegationRatchet = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
+/** One reviewed exact-byte row for TC-2202 recipient-agent share receive; replicaWorker is carried at TC-2140's ceiling. */
+export type Tc2202AgentShareReceiveRatchet = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -384,6 +386,7 @@ export type Ledger = {
   tc1977HostBindingRatchet?: Tc1977HostBindingRatchet;
   tc2132IssuedDelegationsRatchet?: Tc2132IssuedDelegationsRatchet;
   tc2140ExactKeyDelegationRatchet?: Tc2140ExactKeyDelegationRatchet;
+  tc2202AgentShareReceiveRatchet?: Tc2202AgentShareReceiveRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -970,6 +973,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc1977HostBindingRatchet !== undefined) pins.push({ row: "tc1977HostBindingRatchet", pin: root.tc1977HostBindingRatchet.sourceCommits.at(-1)! });
   if (root.tc2132IssuedDelegationsRatchet !== undefined) pins.push({ row: "tc2132IssuedDelegationsRatchet", pin: root.tc2132IssuedDelegationsRatchet.sourceCommits.at(-1)! });
   if (root.tc2140ExactKeyDelegationRatchet !== undefined) pins.push({ row: "tc2140ExactKeyDelegationRatchet", pin: root.tc2140ExactKeyDelegationRatchet.sourceCommits.at(-1)! });
+  if (root.tc2202AgentShareReceiveRatchet !== undefined) pins.push({ row: "tc2202AgentShareReceiveRatchet", pin: root.tc2202AgentShareReceiveRatchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1032,6 +1036,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc1977HostBindingRatchet", root.tc1977HostBindingRatchet?.root.ceiling],
     ["tc2132IssuedDelegationsRatchet", root.tc2132IssuedDelegationsRatchet?.root.ceiling],
     ["tc2140ExactKeyDelegationRatchet", root.tc2140ExactKeyDelegationRatchet?.root.ceiling],
+    ["tc2202AgentShareReceiveRatchet", root.tc2202AgentShareReceiveRatchet?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -2232,6 +2237,34 @@ export const approvedTc2140ExactKeyDelegationRatchet: Tc2140ExactKeyDelegationRa
   replicaWorker: { delta: 0, ceiling: 770467 },
   reason: "delegateTo exact named-key decrypt child (TC-2140)",
 };
+export const approvedTc2202AgentShareReceiveRatchet: Tc2202AgentShareReceiveRatchet = {
+  label: "recipient-agent share receive, exact V3 email leaf decrypt (TC-2202, #781)",
+  ruling: "Approved by Naomi (TC-858 comment 4fb35c92): exact root ceilings 1,474,783/1,415,181 B; attributable +3,075/+2,525 B over exact base 24ffc3398bab34662a3b3b282deb888fd8378f35; additive ceiling increase +2,929/+2,547 B over TC-2140; no headroom",
+  base: "24ffc3398bab34662a3b3b282deb888fd8378f35",
+  sourceCommits: ["4eeed123ce9ee679c75fe879a17feb626c5d2e9a"],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40639085082",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40639085082/job/122652758353",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40639085082/job/122652758379",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 2929, "index.cjs": 2547 },
+    ceiling: { "index.mjs": 1474783, "index.cjs": 1415181 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 52757, "replica.cjs": 67957 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23412, "activation.cjs": 24981 },
+  },
+  worker: { delta: 0, ceiling: 776539 },
+  replicaWorker: { delta: 0, ceiling: 770467 },
+  reason: "TC-2202 recipient-agent share receive with exact V3 email leaf decryption; candidate measured +3,075 B index.mjs / +2,525 B index.cjs over the exact base.",
+};
 
 export type GatedOnlyRatchet = {
   label: string;
@@ -2317,6 +2350,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc1977HostBindingRatchet: approvedTc1977HostBindingRatchet,
   tc2132IssuedDelegationsRatchet: approvedTc2132IssuedDelegationsRatchet,
   tc2140ExactKeyDelegationRatchet: approvedTc2140ExactKeyDelegationRatchet,
+  tc2202AgentShareReceiveRatchet: approvedTc2202AgentShareReceiveRatchet,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -2573,6 +2607,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
   if (value.tc2140ExactKeyDelegationRatchet !== undefined &&
       (!value.tc2132IssuedDelegationsRatchet || JSON.stringify(value.tc2140ExactKeyDelegationRatchet) !== JSON.stringify(approvedTc2140ExactKeyDelegationRatchet))) {
     throw new Error("Only Naomi's exact canonical exact-key delegation ratchet is approved.");
+  }
+  if (value.tc2202AgentShareReceiveRatchet !== undefined &&
+      (!value.tc2140ExactKeyDelegationRatchet || JSON.stringify(value.tc2202AgentShareReceiveRatchet) !== JSON.stringify(approvedTc2202AgentShareReceiveRatchet))) {
+    throw new Error("Only Naomi's exact canonical TC-2202 recipient-agent share receive ratchet is approved.");
   }
 }
 
@@ -2861,6 +2899,13 @@ export function validateTc2140ExactKeyDelegationRatchetTransition(base?: Tc2140E
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2140ExactKeyDelegationRatchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact TC-2140 exact-key delegation ratchet may be introduced once and cannot change later.");
+  }
+}
+/** The TC-2202 recipient-agent share receive ratchet is introduced once and immutable afterwards. */
+export function validateTc2202AgentShareReceiveRatchetTransition(base?: Tc2202AgentShareReceiveRatchet, current?: Tc2202AgentShareReceiveRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2202AgentShareReceiveRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2202 recipient-agent share receive ratchet may be introduced once and cannot change later.");
   }
 }
 

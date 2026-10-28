@@ -1039,6 +1039,52 @@ describe("TinyCloudNode.signIn — manifest-driven recap", () => {
     });
   });
 
+  test("paste sign-in preserves share key-prefix decrypt without requesting network creation", async () => {
+    const networkId =
+      "urn:tinycloud:encryption:did:pkh:eip155:1:0x0000000000000000000000000000000000000001:default";
+    const keyPrefix = `${networkId}/share/`;
+    const wasm = makeFakeWasmBindings();
+    const node = makeNodeWithSigner(wasm, {
+      includeAccountRegistryPermissions: false,
+      manifest: {
+        app_id: "com.tinycloud.share-publishing",
+        name: "Share publishing",
+        defaults: false,
+        permissions: [
+          { service: "tinycloud.encryption", path: keyPrefix, actions: ["decrypt"] },
+        ],
+      },
+    });
+    const ensureEncryptionNetwork = mock(async () => {
+      throw new Error("path-scoped grant must not create a network");
+    });
+    (node as any).ensureEncryptionNetwork = ensureEncryptionNetwork;
+
+    await withFetchResponses(
+      [
+        new Response(JSON.stringify({
+          protocol: 1,
+          version: "test",
+          features: ["encryption"],
+          nodeId: "did:key:z6MkNode",
+        }), { status: 200, headers: { "Content-Type": "application/json" } }),
+        new Response(JSON.stringify({ activated: ["space://test"], skipped: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ],
+      async () => {
+        await node.signIn();
+      },
+      expectedActivationAuthorizationFor(wasm),
+    );
+
+    expect(ensureEncryptionNetwork).not.toHaveBeenCalled();
+    expect((wasm.prepareSession as any).mock.calls[0][0].rawAbilities).toEqual({
+      [keyPrefix]: ["tinycloud.encryption/decrypt"],
+    });
+  });
+
   test("manifest registry write does not re-host existing account space", async () => {
     const node = makeNodeWithSigner(makeFakeWasmBindings());
     const auth = (node as any).auth;

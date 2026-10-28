@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeWasmBindings, PrivateKeySigner, type PermissionEntry } from "@tinycloud/node-sdk";
 
-// builtin:share-publishing asks a paste sign-in for the owner's default-key decrypt (email-addressed shares need it).
+// builtin:share-publishing asks a paste sign-in for the owner's default/share/ decrypt prefix.
 // OpenKey's device sign-in refuses encryption grants, so --device and `enable share` request the same manifest without it.
 const originalTcHome = process.env.TC_HOME;
 const home = await mkdtemp(join(tmpdir(), "tc-device-decrypt-"));
@@ -24,6 +24,7 @@ const signer = new PrivateKeySigner("4f3edf983ac636a65a842ce7c78d9aa706d3b113bce
 const address = await signer.getAddress();
 const ownerDid = `did:pkh:eip155:1:${address}`;
 const network = `urn:tinycloud:encryption:${ownerDid}:default`;
+const sharePrefix = `${network}/share/`;
 const spaceId = wasm.makeSpaceId(address, 1, "default");
 const key = JSON.parse(wasm.createSessionManager().jwk("default")!) as Record<string, string>;
 const sessionDid = keyToDID(key);
@@ -42,11 +43,11 @@ async function setUpProfile() {
 }
 
 describe("share publishing and the default-key decrypt", () => {
-  test("a paste sign-in requests the decrypt entry as the owner's default network", async () => {
+  test("a paste sign-in requests the share prefix without root decrypt", async () => {
     await setUpProfile();
     const loaded = await loadManifestPermissions("builtin:share-publishing", "default", { allowLogicalSpaces: true, ownerDid });
     expect(loaded.filter((permission) => permission.service === "tinycloud.encryption")).toEqual([
-      { service: "tinycloud.encryption", space: "encryption", path: network, actions: [DECRYPT] },
+      { service: "tinycloud.encryption", space: "encryption", path: sharePrefix, actions: [DECRYPT] },
     ]);
   });
 
@@ -67,7 +68,8 @@ describe("share publishing and the default-key decrypt", () => {
   test("device sign-in still refuses every encryption entry before contacting OpenKey", async () => {
     let contacted = 0;
     const fetchFn = (async () => { contacted += 1; return new Response(null, { status: 500 }); }) as unknown as typeof globalThis.fetch;
-    for (const entry of [wire, { service: "tinycloud.encryption", space: "encryption", path: network, actions: [DECRYPT] }] as PermissionEntry[]) {
+    for (const entry of [wire, { service: "tinycloud.encryption", space: "encryption", path: network, actions: [DECRYPT] },
+      { service: "tinycloud.encryption", space: "encryption", path: sharePrefix, actions: [DECRYPT] }] as PermissionEntry[]) {
       await expect(acquireDeviceDelegation({
         sessionDid, jwk: key, nodeOrigin: NODE, shareOrigin: "https://share.tinycloud.xyz",
         permissions: [...sharePublishingPermissions(), entry], fetchFn, emitInstructions: () => undefined, wait: async () => undefined,
@@ -85,7 +87,7 @@ describe("share publishing and the default-key decrypt", () => {
     }
     const expiresAt = new Date(Math.floor(Date.now() / 1000) * 1000 + 3600_000).toISOString();
     const prepared = wasm.prepareSession({
-      abilities, rawAbilities: { [network]: [DECRYPT] }, address, chainId: 1, domain: "openkey.so", spaceId, jwk: key,
+      abilities, rawAbilities: { [sharePrefix]: [DECRYPT] }, address, chainId: 1, domain: "openkey.so", spaceId, jwk: key,
       issuedAt: new Date(Date.now() - 60_000).toISOString(), expirationTime: expiresAt,
     });
     const signature = await signer.signMessage(prepared.siwe);
@@ -95,7 +97,7 @@ describe("share publishing and the default-key decrypt", () => {
     };
     const { session } = verifyScopedLogin(delegation, key, sessionDid, requested, { expectedOwner: ownerDid });
     expect(session.permissions.filter((permission) => permission.service === "tinycloud.encryption")).toEqual([
-      { service: "tinycloud.encryption", space: "encryption", path: network, actions: [DECRYPT] },
+      { service: "tinycloud.encryption", space: "encryption", path: sharePrefix, actions: [DECRYPT] },
     ]);
   });
 

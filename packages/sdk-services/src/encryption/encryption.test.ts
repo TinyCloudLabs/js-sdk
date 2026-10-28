@@ -48,6 +48,7 @@ import {
   networkDiscoveryKey,
   openWrappedKey,
   parseNetworkId,
+  parseEncryptionResource,
   utf8Encode,
   validateEnvelope,
   verifyDecryptResponse,
@@ -74,6 +75,7 @@ const PKH_OWNER_DID =
   "did:pkh:eip155:1:0x7bEF1A1238Bf1e2C0615602DDD589aD7F385fE8B";
 const LOWERCASE_PKH_OWNER_DID = PKH_OWNER_DID.toLowerCase();
 const PKH_NETWORK_ID = `${ENCRYPTION_NETWORK_URN_PREFIX}${PKH_OWNER_DID}:${NETWORK_NAME}`;
+const SHARE_KEY_PATH = "share/abcdef1234567890";
 
 // ---------------------------------------------------------------------------
 // In-memory crypto used across all tests.
@@ -162,6 +164,29 @@ describe("networkId", () => {
     expect(parsed.networkId).toBe(NETWORK_ID);
     expect(parsed.ownerDid).toBe(OWNER_DID);
     expect(parsed.name).toBe(NETWORK_NAME);
+  });
+
+  it("parses prefix and exact named-key resources", () => {
+    expect(parseEncryptionResource(`${NETWORK_ID}/share/`)).toMatchObject({
+      networkId: NETWORK_ID,
+      ownerDid: OWNER_DID,
+      name: NETWORK_NAME,
+      keyPath: "share/",
+    });
+    expect(
+      parseEncryptionResource(`${NETWORK_ID}/${SHARE_KEY_PATH}`).keyPath,
+    ).toBe(SHARE_KEY_PATH);
+  });
+
+  it("parses named-key resources with slash-bearing owner DIDs", () => {
+    const ownerDid = "did:web:example.com/team";
+    const networkId = `${ENCRYPTION_NETWORK_URN_PREFIX}${ownerDid}:default`;
+    expect(parseEncryptionResource(`${networkId}/share/`)).toMatchObject({
+      networkId,
+      ownerDid,
+      name: "default",
+      keyPath: "share/",
+    });
   });
 
   it("rejects non-URN inputs", () => {
@@ -263,6 +288,29 @@ describe("envelope binding", () => {
     expect(envelope.alg).toBe(DEFAULT_ENCRYPTION_ALG);
     expect(envelope.keyVersion).toBe(DEFAULT_KEY_VERSION);
     expect(envelope.networkId).toBe(NETWORK_ID);
+  });
+
+  it("records the exact named key path on a newly encrypted envelope", () => {
+    const crypto = makeCrypto();
+    resetRng();
+    const { envelope } = encryptToNetwork(crypto, {
+      networkId: NETWORK_ID,
+      keyPath: SHARE_KEY_PATH,
+      networkPublicKey: new Uint8Array(32).fill(7),
+      plaintext: utf8Encode("payload"),
+    });
+    const validated = validateEnvelope(crypto, envelope);
+    expect(envelope).toMatchObject({
+      networkId: NETWORK_ID,
+      keyPath: SHARE_KEY_PATH,
+      keyVersion: DEFAULT_KEY_VERSION,
+      encryptedSymmetricKey: expect.any(String),
+      encryptedSymmetricKeyHash: expect.any(String),
+    });
+    expect(validated).toMatchObject({
+      ok: true,
+      data: { networkId: NETWORK_ID, keyPath: SHARE_KEY_PATH },
+    });
   });
 
   it("validateEnvelope rejects a tampered hash", () => {
@@ -395,6 +443,49 @@ describe("decrypt invocation builder", () => {
     expect(NETWORK_ID.startsWith("urn:tinycloud:encryption:")).toBe(true);
   });
 
+
+  it("binds named-key path in the body, facts, and exact-leaf attenuation", () => {
+    const crypto = makeCrypto();
+    const base = buildBaseBody(crypto);
+    const body = { ...base, keyPath: SHARE_KEY_PATH };
+    const receiverPublicKey = new Uint8Array([4, 5, 6]);
+    const canonical = buildCanonicalDecryptRequest({ crypto, body, receiverPublicKey });
+    const facts = buildDecryptFacts({
+      crypto,
+      body,
+      encryptedSymmetricKeyHash: body.encryptedSymmetricKeyHash,
+      receiverPublicKey,
+      canonicalBody: canonical.canonicalBody,
+    });
+    expect(canonical.canonicalBody).toContain(`"keyPath":"${SHARE_KEY_PATH}"`);
+    expect(facts).toMatchObject({ networkId: NETWORK_ID, keyPath: SHARE_KEY_PATH, bodyHash: canonical.bodyHash });
+    expect(buildDecryptAttenuation(NETWORK_ID, SHARE_KEY_PATH)).toEqual({
+      [`${NETWORK_ID}/${SHARE_KEY_PATH}`]: { [DECRYPT_ACTION]: {} },
+    });
+  });
+
+  it("rejects a mismatch between body and signed key paths", () => {
+    const crypto = makeCrypto();
+    const body = { ...buildBaseBody(crypto), keyPath: SHARE_KEY_PATH };
+    const receiverPublicKey = new Uint8Array([4, 5, 6]);
+    const canonical = buildCanonicalDecryptRequest({ crypto, body, receiverPublicKey });
+    const facts = buildDecryptFacts({
+      crypto,
+      body,
+      encryptedSymmetricKeyHash: body.encryptedSymmetricKeyHash,
+      receiverPublicKey,
+      canonicalBody: canonical.canonicalBody,
+    });
+    const result = checkDecryptInvocationInput(crypto, {
+      targetNode: TARGET_NODE,
+      networkId: NETWORK_ID,
+      body,
+      facts: { ...facts, keyPath: "share/other" },
+      proof: { proofs: [] },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("INVALID_INPUT");
+  });
   it("rejects attenuation for a non-network resource", () => {
     expect(() => buildDecryptAttenuation("tinycloud:pkh:eip155:1:0xabc:default"))
       .toThrow();

@@ -80,6 +80,54 @@ export function parseNetworkId(networkId: string): ParsedNetworkId {
   return { networkId, ownerDid, name };
 }
 
+export interface ParsedEncryptionResource extends ParsedNetworkId {
+  /** Named-key path, if the resource is scoped below a network. */
+  keyPath?: string;
+}
+
+/**
+ * Parse a network-root or named-key encryption resource.
+ *
+ * A trailing slash on keyPath denotes a prefix grant; empty and traversal
+ * segments are rejected so resource matching cannot escape the named path.
+ */
+export function parseEncryptionResource(
+  resource: string,
+): ParsedEncryptionResource {
+  const networkSeparator = resource.lastIndexOf(":");
+  const nameAndPath = resource.slice(networkSeparator + 1);
+  const pathSeparator = nameAndPath.indexOf("/");
+  const name =
+    pathSeparator === -1
+      ? nameAndPath
+      : nameAndPath.slice(0, pathSeparator);
+  const networkId =
+    pathSeparator === -1
+      ? resource
+      : `${resource.slice(0, networkSeparator + 1)}${name}`;
+  const parsed = parseNetworkId(networkId);
+  if (pathSeparator === -1) return parsed;
+
+  const keyPath = nameAndPath.slice(pathSeparator + 1);
+  const segments = keyPath.split("/");
+  const prefix = keyPath.endsWith("/");
+  if (
+    keyPath.length === 0 ||
+    /[\u0000-\u001f\u007f\\]/.test(keyPath) ||
+    segments.some(
+      (segment, index) =>
+        segment === "." ||
+        segment === ".." ||
+        (segment.length === 0 && !(prefix && index === segments.length - 1)),
+    )
+  ) {
+    throw new NetworkIdError(
+      `encryption resource has an invalid keyPath (got ${JSON.stringify(resource)})`,
+    );
+  }
+  return { ...parsed, keyPath };
+}
+
 /**
  * Construct a network id URN from an owner DID and a network name.
  * Validates inputs and throws {@link NetworkIdError} on bad shape.
