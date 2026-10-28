@@ -8,8 +8,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "tinycloud": "./bin/tinycloud",
-    "tc": "./bin/tc"
+    "tinycloud": "./bin/tinycloud"
   },
   "files": [
     "dist",

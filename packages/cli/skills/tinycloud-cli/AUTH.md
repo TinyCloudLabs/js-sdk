@@ -9,13 +9,10 @@ Use a new profile name if it already exists. Keep the user's existing profiles: 
 Use device login when the owner cannot open a browser on the machine running `tinycloud`. The owner approves on their phone.
 
 ```bash
-TC="${TC_BIN:-$HOME/.local/share/tinycloud/cli/node_modules/.bin/tinycloud}"   # TC_BIN, else where agents.tinycloud.xyz/cli installs it
-[ -n "${TC_BIN:-}" ] || [ -x "$TC" ] || ! command -v npm >/dev/null || TC="$(npm prefix --global)/bin/tinycloud"   # else a global npm install
-[ -x "$TC" ] || { echo "TC_NOT_FOUND: $TC is not executable; install the CLI from https://agents.tinycloud.xyz/cli or set TC_BIN" >&2; exit 1; }
-"$TC" profile list                         # pick a name that is not taken
-"$TC" init --name publisher --key-only
-"$TC" --profile publisher auth login --device --manifest builtin:share-publishing --expiry 7d
-"$TC" --profile publisher context --json
+tinycloud profile list                         # pick a name that is not taken
+tinycloud init --name publisher --key-only
+tinycloud --profile publisher auth login --device --manifest builtin:share-publishing --expiry 7d
+tinycloud --profile publisher context --json
 ```
 
 - `--manifest FILE` (required with `--device`) is an app manifest (`app_id`, `space`, `permissions`) given as a file path or `base64:<json>`. `builtin:share-publishing` is the built-in manifest for `tinycloud share publish`; [REFERENCE.md](REFERENCE.md#context-and-login) lists exactly what it requests, and the owner's consent page shows every capability. One space per login.
@@ -41,7 +38,7 @@ Approve on your phone: https://openkey.so/device?user_code=ABCD-EFGH (code ABCD-
 The command blocks until the owner approves, so a tool call that waits for exit never shows the code in time. Start it in the background with stderr captured, relay the approval line, then wait:
 
 ```bash
-"$TC" --profile publisher auth login --device --manifest builtin:share-publishing > login.json 2> login.err &
+tinycloud --profile publisher auth login --device --manifest builtin:share-publishing > login.json 2> login.err &
 LOGIN_PID=$!
 sleep 3; grep 'Approve on your phone' login.err   # send this line to the owner
 wait "$LOGIN_PID"; cat login.json
@@ -62,7 +59,7 @@ Errors: `SCOPE_REJECTED` means OpenKey refuses that capability over device login
 On a machine with a browser, request the same manifest through the OpenKey browser flow:
 
 ```bash
-"$TC" --profile PROFILE auth login --method openkey --manifest /absolute/path/to/manifest.json --expiry 7d
+tinycloud --profile PROFILE auth login --method openkey --manifest /absolute/path/to/manifest.json --expiry 7d
 ```
 
 `--paste` prints the approval URL on stderr and reads the owner's return code from stdin: a terminal paste, or piped text. End the code with a newline; a final line without one is also accepted. If stdin ends with no code, the command fails with `PASTE_CODE_MISSING` (exit 3), names the approval URL, and saves nothing. `--no-popup` prints the callback URL without opening a browser. The same signed-proof, owner, live-session, local-owner and commit-time checks apply, and the JSON result lists `permissions` (approved) and `declined` (unchecked). Older OpenKey responses without a signed proof are rejected for scoped login; do not drop the manifest to bypass that failure. `--expiry` reaches OpenKey as `<seconds>s`; dates and lifetimes under a minute are refused before the browser opens.
@@ -77,13 +74,13 @@ An agent reads named secrets through its own profile. The owner approves a scope
 cat > agent-secrets.json <<'EOF'
 { "app_id": "my.agent", "name": "My agent", "space": "secrets", "secrets": { "OPENAI_API_KEY": true } }
 EOF
-"$TC" init --name agent-secrets --key-only
-LOGIN=("$TC" --profile agent-secrets auth login --method openkey --paste --manifest agent-secrets.json
+tinycloud init --name agent-secrets --key-only
+LOGIN=(tinycloud --profile agent-secrets auth login --method openkey --paste --manifest agent-secrets.json
   --owner did:pkh:eip155:1:0xOWNER_ADDRESS --expiry 7d)
 "${LOGIN[@]}" < /dev/null   # exits 3 with PASTE_CODE_MISSING; its stderr names the approval URL
 # Send the owner that URL. After they approve and send back the code:
 printf '%s\n' "$CODE" | "${LOGIN[@]}"
-"$TC" --profile agent-secrets secrets get OPENAI_API_KEY --raw
+tinycloud --profile agent-secrets secrets get OPENAI_API_KEY --raw
 ```
 
 - The approval URL depends only on the profile's session key and the request, so the same command run again accepts the owner's code from stdin. Write the code followed by a newline; a final line without one is also accepted. Nothing is saved until a code verifies.
@@ -100,19 +97,16 @@ printf '%s\n' "$CODE" | "${LOGIN[@]}"
 When the secret does not exist yet, the agent sends the owner one message with a request link, redeems the consent short code if the owner approved a scoped login, then waits. Call the CLI by absolute path: run `tinycloud`, never the older `tc` name, which can be iproute2's `/usr/sbin/tc` (traffic control).
 
 ```bash
-TC="${TC_BIN:-$HOME/.local/share/tinycloud/cli/node_modules/.bin/tinycloud}"   # TC_BIN, else where agents.tinycloud.xyz/cli installs it
-[ -n "${TC_BIN:-}" ] || [ -x "$TC" ] || ! command -v npm >/dev/null || TC="$(npm prefix --global)/bin/tinycloud"   # else a global npm install
-[ -x "$TC" ] || { echo "TC_NOT_FOUND: $TC is not executable; install the CLI from https://agents.tinycloud.xyz/cli or set TC_BIN" >&2; exit 1; }
-"$TC" --profile agent-secrets secrets request OPENAI_API_KEY --requester "my-agent@$(hostname -s)" --json   # offline; prints {url, names, owner}
+tinycloud --profile agent-secrets secrets request OPENAI_API_KEY --requester "my-agent@$(hostname -s)" --json   # offline; prints {url, names, owner}
 # One message to the owner: the url (plus the scoped-login approval URL above if the profile has no grant yet).
 # If the owner sends back a consent short code, redeem it first:
 printf '%s\n' "$CODE" | "${LOGIN[@]}"
-"$TC" --profile agent-secrets secrets wait OPENAI_API_KEY --timeout 9m --json   # 0 ready, 8 still pending
-"$TC" --profile agent-secrets secrets get OPENAI_API_KEY --raw
+tinycloud --profile agent-secrets secrets wait OPENAI_API_KEY --timeout 9m --json   # 0 ready, 8 still pending
+tinycloud --profile agent-secrets secrets get OPENAI_API_KEY --raw
 ```
 
 - `wait` never signs in: it needs a stored session and doesn't accept `TC_PRIVATE_KEY` (exit 3). Exit 3 carries `error.recovery.command`, the persistent login to run once.
-- After a CLI upgrade, run one normal command per profile first (for example `"$TC" --profile agent-secrets auth caps`). Otherwise the first `wait` returns `PROFILE_MIGRATION_REQUIRED` (exit 1) once, with that command in `error.recovery.command`.
+- After a CLI upgrade, run one normal command per profile first (for example `tinycloud --profile agent-secrets auth caps`). Otherwise the first `wait` returns `PROFILE_MIGRATION_REQUIRED` (exit 1) once, with that command in `error.recovery.command`.
 - Exit 8 means the owner has not added it yet: rerun `wait` without sending the link again. Exit 5 means the grant does not cover a name: `error.recovery.names` lists them. [REFERENCE.md](REFERENCE.md#asking-the-owner-for-a-secret-request-wait-manage) has the full exit table.
 - A local identity (local-owner profile, a profile with a stored `privateKey`, `--private-key`, `TC_PRIVATE_KEY`) owns its secrets and gets `LOCAL_OWNER_PROFILE` from `request`: store them with `secrets put NAME --stdin`.
 
@@ -121,12 +115,12 @@ printf '%s\n' "$CODE" | "${LOGIN[@]}"
 Login covers one space. Request further spaces on the logged-in profile:
 
 ```bash
-"$TC" --profile PROFILE auth request --manifest FILE --grant --device
+tinycloud --profile PROFILE auth request --manifest FILE --grant --device
 ```
 
 `auth request --device` defaults to a 7-day lifetime (`--expiry` to change it, at most `30d`). Without `--device`, `--grant` opens the OpenKey browser flow. Each space's request adds `tinycloud.capabilities/read` on that space's root, which OpenKey requires; a request of only raw decrypt is placed in the profile's primary space. Browser grants require a signed proof for the profile's session key and owner. Only the permissions and expiry in that proof can be activated and stored; an older space-nested decrypt proof, missing or foreign-owner proof, broader grant, wrong space, or too-long expiry is refused without storing a delegation.
 
-`auth request --preset apps-agent [--app APP_ID]...` is a named request for an agent that picks up the user's tiny apps. By default it is read-only: `tinycloud.kv` get, list and `tinycloud.sql` read on the `applications` space, up to 7 days. `--app` (repeatable, at most 5) narrows every entry to `APP_ID/`. `--write` (needs `--app`, never for the whole space) adds `tinycloud.kv` put on each app's `knowledge/` and `prefs/` folders only, and `tinycloud.sql` write for those apps, which adds, changes and deletes rows. Creating, changing and dropping tables also needs `tinycloud.sql/schema`, which the preset adds only for an app's catalog database: `xyz.tinycloud.sample.healthlog` gets `healthlog`, at the exact path `APP_ID/healthlog` (no trailing slash). Other apps get no schema grant, and the scope notice says so. Every other file under `APP_ID/` stays read-only, including the code and the stored `APP_ID/app/manifest.json` and `APP_ID/app/install.json` (the root-level `APP_ID/manifest.json` and `APP_ID/install.json` are refused too). CREATE, ALTER and DROP need `tinycloud.sql/schema`, which SQL write alone does not carry; nodes before 1.21.6 do not enforce that split, so there SQL write can run them too. Neither variant carries KV delete, SQL admin, schema on any database other than the catalog one, any other service or space, or secrets. The scope is printed in plain words to stderr before any approval link or artifact. `auth grant` prints a scope for every request it signs, built from the request file as it will be signed: the preset wording only when the permissions, the owner's own `applications` space and the 7-day lifetime all match; otherwise one line per entry (service, space, path, actions in words; an unknown service or action is printed raw and marked "unrecognised"; delegation abilities in plain words such as "can give other people or agents access on your behalf") and the requested lifetime. The request file is resolved once, the way the signer reads it (an entry with no `space` is in your `applications` space and is described as that; an empty space is refused; entries with the same service, space and path are merged), and that one list is printed, gated and signed. Each entry is printed once. A request that carries the `tinycloud.vault` shorthand (the signer turns it into KV access on `vault/` for the vault actions you listed, which the printed list would not show), a service the signer cannot sign, or more than one space is refused with exit 2 before anything is printed or signed. The request's `sessionDid` and `requestedExpiry` are checked first. Text from the request is escaped, in error messages too (on a terminal every error message and hint is escaped, and JSON output writes control, bidi, zero-width and separator characters as `\uXXXX` escapes, which parse to the same text, so a redirected stdout with a terminal stderr is safe too), and refusal messages show at most 5 items of 80 characters each. When the request touches an `applications` space and holds any entry the preset could never grant, those entries are marked `!` and listed first under "MORE than the apps-agent preset" and signing needs `--yes` or an interactive confirmation. The question is written to stderr and answered on stdin, so it is still asked when stdout is redirected to a file; when stdin or stderr is not a terminal it exits 2 (`CONFIRMATION_REQUIRED`) and signs nothing, and an answer piped into stdin is not accepted. The preset replaces `--cap`, `--permission`, `--manifest` and `--expiry` (combining them is a usage error), and `--device` is refused because device approval cannot grant SQL. An empty path in `--cap` (`tinycloud.kv:applications::get,list`) covers the whole service in that space; a path ending in `/` covers the prefix. The agent's key can pass on access inside its own grant, so a grant is as private as the agent's profile. The owner revokes a grant made through the request, grant, import flow with `tinycloud delegation revoke CID`. A profile whose first grant was revoked or expired has a dead session; import the new grant into a new profile. See the `tc-cli` skill, "Pick up a user's apps".
+`auth request --preset apps-agent [--app APP_ID]...` is a named request for an agent that picks up the user's tiny apps. By default it is read-only: `tinycloud.kv` get, list and `tinycloud.sql` read on the `applications` space, up to 7 days. `--app` (repeatable, at most 5) narrows every entry to `APP_ID/`. `--write` (needs `--app`, never for the whole space) adds `tinycloud.kv` put on each app's `knowledge/` and `prefs/` folders only, and `tinycloud.sql` write for those apps, which adds, changes and deletes rows. Creating, changing and dropping tables also needs `tinycloud.sql/schema`, which the preset adds only for an app's catalog database: `xyz.tinycloud.sample.healthlog` gets `healthlog`, at the exact path `APP_ID/healthlog` (no trailing slash). Other apps get no schema grant, and the scope notice says so. Every other file under `APP_ID/` stays read-only, including the code and the stored `APP_ID/app/manifest.json` and `APP_ID/app/install.json` (the root-level `APP_ID/manifest.json` and `APP_ID/install.json` are refused too). CREATE, ALTER and DROP need `tinycloud.sql/schema`, which SQL write alone does not carry; nodes before 1.21.6 do not enforce that split, so there SQL write can run them too. Neither variant carries KV delete, SQL admin, schema on any database other than the catalog one, any other service or space, or secrets. The scope is printed in plain words to stderr before any approval link or artifact. `auth grant` prints a scope for every request it signs, built from the request file as it will be signed: the preset wording only when the permissions, the owner's own `applications` space and the 7-day lifetime all match; otherwise one line per entry (service, space, path, actions in words; an unknown service or action is printed raw and marked "unrecognised"; delegation abilities in plain words such as "can give other people or agents access on your behalf") and the requested lifetime. The request file is resolved once, the way the signer reads it (an entry with no `space` is in your `applications` space and is described as that; an empty space is refused; entries with the same service, space and path are merged), and that one list is printed, gated and signed. Each entry is printed once. A request that carries the `tinycloud.vault` shorthand (the signer turns it into KV access on `vault/` for the vault actions you listed, which the printed list would not show), a service the signer cannot sign, or more than one space is refused with exit 2 before anything is printed or signed. The request's `sessionDid` and `requestedExpiry` are checked first. Text from the request is escaped, in error messages too (on a terminal every error message and hint is escaped, and JSON output writes control, bidi, zero-width and separator characters as `\uXXXX` escapes, which parse to the same text, so a redirected stdout with a terminal stderr is safe too), and refusal messages show at most 5 items of 80 characters each. When the request touches an `applications` space and holds any entry the preset could never grant, those entries are marked `!` and listed first under "MORE than the apps-agent preset" and signing needs `--yes` or an interactive confirmation. The question is written to stderr and answered on stdin, so it is still asked when stdout is redirected to a file; when stdin or stderr is not a terminal it exits 2 (`CONFIRMATION_REQUIRED`) and signs nothing, and an answer piped into stdin is not accepted. The preset replaces `--cap`, `--permission`, `--manifest` and `--expiry` (combining them is a usage error), and `--device` is refused because device approval cannot grant SQL. An empty path in `--cap` (`tinycloud.kv:applications::get,list`) covers the whole service in that space; a path ending in `/` covers the prefix. The agent's key can pass on access inside its own grant, so a grant is as private as the agent's profile. The owner revokes a grant made through the request, grant, import flow with `tinycloud delegation revoke CID`. A profile whose first grant was revoked or expired has a dead session; import the new grant into a new profile. See the `tinycloud-cli` skill, "Pick up a user's apps".
 
 The owner approves each agent grant in OpenKey. `--yes` does not skip that screen. Before writing the grant file, the owner CLI checks the approval's owner, space and scope, and the grant lasts as long as the approval allows. An approval that unchecks any requested ability is refused with `OPENKEY_APPROVAL_NARROWER`, and nothing is stored. Without a browser, the CLI prints the approval link and waits for the browser flow to finish. The grant JSON reports `"prompted": true`, because the owner approved it on that screen.
 

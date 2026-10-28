@@ -5,19 +5,14 @@ Self-sovereign storage from the terminal. `tinycloud` is the command-line interf
 ## Install
 
 ```bash
-npm install -g @tinycloud/cli
+npm install -g @tinycloud/cli@1.5.0-beta.20
 ```
 
 Requires Node.js >= 20.
 
-The package installs two identical commands: `tinycloud` and `tinycloud`. On Linux,
-iproute2 installs `/usr/sbin/tinycloud` (traffic control), which can shadow `tinycloud` on
-PATH; `tinycloud` avoids that clash and accepts the same arguments. If the npm global prefix is root-owned, run
-`npm config set prefix ~/.local` before installing: Ubuntu's default PATH puts
-`~/.local/bin` before `/usr/sbin`, but `~/.profile` adds it only if the
-directory existed at login, so start a new login shell after the first
-install. Run `hash -r` if `tinycloud` already ran in the same shell. Verify with
-`command -v tinycloud`, or call `"$(npm prefix --global)/bin/tinycloud"` when in doubt.
+The package exposes `tinycloud` as its user-facing command. On Linux,
+`/usr/sbin/tc` is iproute2's traffic-control tool. Verify the pinned install
+with `tinycloud --version`.
 
 ## Agent skills
 

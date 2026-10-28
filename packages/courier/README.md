@@ -5,11 +5,11 @@ Spec: tinycloud-dev docs/specs/courier-v0.md (TC-707). Beta.
 
 ## Install
 
-Courier ships inside the TinyCloud CLI as `tc courier`:
+Courier ships inside the TinyCloud CLI as `tinycloud courier`:
 
 ```bash
 npm install --global @tinycloud/cli@beta
-tc courier --help
+tinycloud courier --help
 ```
 
 The standalone `courier` bin takes identical arguments and shares the same
@@ -31,26 +31,26 @@ install. Run `hash -r` if `tc` already ran in the same shell. Verify with
 `command -v tc`, or call `"$(npm prefix --global)/bin/tc"` directly.
 
 The `courier` agent skill (`skills/courier/SKILL.md`) ships with both packages;
-`npx skills add … --skill tc-cli courier` installs it next to `tc-cli` (see the
-CLI's `skills/tc-cli/INSTALL.md`).
+`npx skills add … --skill tinycloud-cli courier` installs it next to `tinycloud-cli` (see the
+CLI's `skills/tinycloud-cli/INSTALL.md`).
 
 ## Setup and identity
 
 Courier uses a dedicated `did:key` agent identity, one per OS user. The owner
 approves its restricted `agents`-space grant in OpenKey; Courier never stores
 the owner's private key. Courier keeps its own profile and does not use tc
-profiles, so `tc courier` takes no tc options (`tc -p x courier …` exits 2).
+profiles, so `tinycloud courier` takes no TinyCloud CLI options (`tinycloud -p x courier …` exits 2).
 
 ```bash
-tc courier init --paste --handle alice
+tinycloud courier init --paste --handle alice
 # Open the printed OpenKey URL, approve, and paste the XXXX-XXXX code (or the full grant).
-tc courier pair start bob
-tc courier pair accept --file a.json
-tc courier send bob --new "Subject" --ask "…" --file handoff.md
-tc courier inbox && tc courier read <threadId>
-tc courier task new --peer bob --thread <id> --state working --ask a1
-tc courier request <threadId> --peer bob --task <id> --verb merge --target owner/repo#12 --head-sha <40-lowercase-hex> --base master --summary "Merge PR 12" --why "…"
-tc courier orders bob
+tinycloud courier pair start bob
+tinycloud courier pair accept --file a.json
+tinycloud courier send bob --new "Subject" --ask "…" --file handoff.md
+tinycloud courier inbox && tinycloud courier read <threadId>
+tinycloud courier task new --peer bob --thread <id> --state working --ask a1
+tinycloud courier request <threadId> --peer bob --task <id> --verb merge --target owner/repo#12 --head-sha <40-lowercase-hex> --base master --summary "Merge PR 12" --why "…"
+tinycloud courier orders bob
 ```
 
 `init` without `--paste` starts an interactive loopback grant flow. `--request`
@@ -58,7 +58,7 @@ prints the OpenKey URL and the agent key as JSON; `--grant-file f|-` installs a
 grant from a file or stdin. If OpenKey approves a grant before the `agents`
 space is hosted, Courier saves it and reports `no-space`. Complete setup by
 signing in at the Share view, or from a wallet profile run
-`tc space host agents`, then use `init --resume` without requesting another
+`tinycloud space host agents`, then use `init --resume` without requesting another
 approval. Run `init` again to renew the owner-approved grant, or
 `init --rotate-key` to replace the agent key and re-pair every peer.
 If OpenKey reports the space is still being set up, `init` waits up to about 2.5 minutes; otherwise use `init --resume`.
@@ -479,7 +479,7 @@ publish, push and credential-access commands. Approved PR merges run through
 Never approvable: `courier pair`, `courier revoke`, `courier init`,
 `courier pause`, `courier resume` (the wake budget is the reply loop's breaker:
 an agent must not lift its own pause), `courier watch` (an agent must not start
-a watcher, which could wake agents without the guard), all also as `tc courier …`;
+a watcher, which could wake agents without the guard), all also as `tinycloud courier …`;
 `courier approval` without `--peek` (it would consume without execution),
 `courier broker` and `courier guard`; privilege/session tools, Secret Bridge; and starting another agent (see below).
 
@@ -815,7 +815,7 @@ const code = await main(["inbox", "--json"], { prog: "courier" }); // 0, 1 (erro
 ```
 
 `prog` names Courier in usage text and hints; the TinyCloud CLI passes
-`tc courier`. The package also exports the grant, pairing, inbox and authority
+`tinycloud courier`. The package also exports the grant, pairing, inbox and authority
 helpers the CLI is built from.
 
 ## Development

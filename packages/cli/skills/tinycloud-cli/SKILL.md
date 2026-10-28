@@ -1,45 +1,42 @@
 ---
-name: tc-cli
+name: tinycloud-cli
 description: Read, store, and share authorized TinyCloud data with the tinycloud CLI. Use for TinyCloud account/profile and space selection, permissions, device login from a phone, SQL/KV operations, publishing Share links, and installing official application guidance.
 ---
 
 # TinyCloud CLI
 
-Use the installed `@tinycloud/cli` executable, `tinycloud`. Its older name `tc` clashes with `/usr/sbin/tc` (iproute2 traffic control) on many Linux hosts. Call the CLI by path and check it first; set `TC_BIN` to use a specific one:
+Use the installed `@tinycloud/cli` executable, `tinycloud`. Install the pinned version from https://agents.tinycloud.xyz/cli if it is not available on PATH. Do not invoke the older `tc` name, which clashes with `/usr/sbin/tc` (iproute2 traffic control) on many Linux hosts.
 
 ```bash
-TC="${TC_BIN:-$HOME/.local/share/tinycloud/cli/node_modules/.bin/tinycloud}"   # TC_BIN, else where agents.tinycloud.xyz/cli installs it
-[ -n "${TC_BIN:-}" ] || [ -x "$TC" ] || ! command -v npm >/dev/null || TC="$(npm prefix --global)/bin/tinycloud"   # else a global npm install
-[ -x "$TC" ] || { echo "TC_NOT_FOUND: $TC is not executable; install the CLI from https://agents.tinycloud.xyz/cli or set TC_BIN" >&2; exit 1; }
-"$TC" --version
+tinycloud --version
 ```
 
-Commands below run the CLI as `"$TC"`, set by the block above; prose calls it `tinycloud`. Node.js 20 or later runs the CLI. Check [release.json](release.json) for the CLI range this skill describes.
+Run the command examples below with `tinycloud`. Node.js 20 or later runs the CLI. Check [release.json](release.json) for the CLI range this skill describes.
 
 ## Establish the context
 
 Keep the selected profile, host and space explicit across reads and follow-ups:
 
 ```bash
-"$TC" profile list
-"$TC" --profile PROFILE context --json
-"$TC" --profile PROFILE auth caps
+tinycloud profile list
+tinycloud --profile PROFILE context --json
+tinycloud --profile PROFILE auth caps
 ```
 
 `context` reports the selected profile, owner DID, host, space and local session expiry without returning keys, tokens or signed proof. `access: "not-tested"` is intentional: neither a saved session nor a listed capability proves a storage read succeeds. Verify a known authorized resource next. `auth whoami` shows both the primary owner and the local session identity; a `did:key` session is not a new owner account.
 
 ## Sign in
 
-To set up a new owner (no profile, or no TinyCloud account yet), run `"$TC" onboard`. It creates the profile and asks for two OpenKey approvals, one per run: the owner's sign-in (or new account) with read and write on the `applications` space, then read-only `spaces/` and `applications/` in the `account` space, each for 30 days. Each run prints JSON; exit 8 means `approvalUrl` is waiting for the owner: send it, then run `"$TC" onboard --code '<code OpenKey shows>'`. Exit 0 means `"onboarded": true`. The step-by-step guide for agents is https://agents.tinycloud.xyz/onboarding.
+To set up a new owner (no profile, or no TinyCloud account yet), run `tinycloud onboard`. It creates the profile and asks for two OpenKey approvals, one per run: the owner's sign-in (or new account) with read and write on the `applications` space, then read-only `spaces/` and `applications/` in the `account` space, each for 30 days. Each run prints JSON; exit 8 means `approvalUrl` is waiting for the owner: send it, then run `tinycloud onboard --code '<code OpenKey shows>'`. Exit 0 means `"onboarded": true`. The step-by-step guide for agents is https://agents.tinycloud.xyz/onboarding.
 
 Agents usually run where no browser can reach them. Use device login: the owner approves an explicit permission manifest on their phone. Read [AUTH.md](AUTH.md) before the first login, including how to relay the approval code to the owner.
 
 Use a new profile name if it already exists. Keep the user's existing profiles: another app's session may live there, and a login for a different purpose would drop it (the CLI refuses with `SESSION_IN_USE`). Publish from a dedicated profile:
 
 ```bash
-"$TC" profile list                     # pick an unused name
-"$TC" init --name publisher --key-only
-"$TC" --profile publisher auth login --device --manifest builtin:share-publishing
+tinycloud profile list                     # pick an unused name
+tinycloud init --name publisher --key-only
+tinycloud --profile publisher auth login --device --manifest builtin:share-publishing
 ```
 
 `builtin:share-publishing` covers `tinycloud share publish`. Device login carries KV-scoped manifests plus the `tinycloud.capabilities/read` entry on path `""` that OpenKey requires to sign (the built-in manifest includes it; an app manifest without it is refused with `SCOPE_REJECTED`). OpenKey also refuses `tinycloud.sql` (and other abilities its device policy excludes) with `SCOPE_REJECTED`. For app data that needs SQL, the owner signs in through the browser with the app's manifest instead (see [AUTH.md](AUTH.md)). For an existing app account, the owner approves with their existing OpenKey identity; do not create another account.
@@ -51,10 +48,10 @@ SQL commands need a profile whose session the owner granted through browser logi
 To read a KV prefix while the host is unreachable, keep a local replica: `tinycloud replica sync --prefix PREFIX` under a device grant with `sync`, then `tinycloud replica get|list` read only local storage. See [REFERENCE.md](REFERENCE.md#local-replicas) for the grant flow, expiry and exit codes.
 
 ```bash
-"$TC" --profile PROFILE kv get KEY --space SPACE --json
-"$TC" --profile PROFILE kv get KEY --space SPACE --raw -o ./resource.txt
-"$TC" --profile PROFILE kv list --space SPACE --prefix PREFIX --all --json
-"$TC" --profile PROFILE sql query 'SELECT id, body FROM records WHERE id = ?' --space SPACE --db DATABASE --params '["record-id"]' --json
+tinycloud --profile PROFILE kv get KEY --space SPACE --json
+tinycloud --profile PROFILE kv get KEY --space SPACE --raw -o ./resource.txt
+tinycloud --profile PROFILE kv list --space SPACE --prefix PREFIX --all --json
+tinycloud --profile PROFILE sql query 'SELECT id, body FROM records WHERE id = ?' --space SPACE --db DATABASE --params '["record-id"]' --json
 ```
 
 Use literal subprocess arguments and SQL parameters for values. `tinycloud` has no generic content-search index. `kv list` returns one page unless you pass `--all`. Its JSON reports `truncated` and `nextCursor` (`null` when the node doesn't say), and `--limit N --cursor C` reads page by page. Claim a complete listing only when `truncated` is `false`. If output is large, read to a local file and account for every returned portion before claiming full coverage. A metadata row or summary is not the original body.
@@ -68,15 +65,15 @@ Tiny apps keep their code and data in the user's `applications` space, one `<app
 Ask for the narrowest grant that does the job. The default is read-only, and one app is safer than all of them. The agent makes the request, the owner approves it, the agent imports the result:
 
 ```bash
-"$TC" --profile agent profile create agent --posture delegate-session --operator agent   # once
-"$TC" --profile agent auth request --preset apps-agent --app APP_ID --emit req.json      # read-only; prints the scope in plain words
-"$TC" --profile owner auth grant req.json > grant.json                                   # the owner approves
-"$TC" --profile agent auth import grant.json
+tinycloud --profile agent profile create agent --posture delegate-session --operator agent   # once
+tinycloud --profile agent auth request --preset apps-agent --app APP_ID --emit req.json      # read-only; prints the scope in plain words
+tinycloud --profile owner auth grant req.json > grant.json                                   # the owner approves
+tinycloud --profile agent auth import grant.json
 ```
 
 - `--preset apps-agent` is **read-only**: KV get and list, SQL read, on the `applications` space, up to 7 days. That is enough to pick up where the user left off by reading `knowledge/*` and querying the data. The node refuses a KV put or a SQL write under it.
 - `--app APP_ID` limits it to `APP_ID/` and is the recommended default. Repeat `--app` (up to 5) for a task that spans apps. Leave it off only to read every installed app; the command says so before the owner approves.
-- **Write access only when the owner asks to change an installed app's data** (for example, log a meal). The agent requests it from its own profile with one command: `"$TC" --profile agent auth request --preset apps-agent --app APP_ID --write --emit req.json`. The owner approves it in OpenKey, then the agent imports the grant as above. `--write` needs `--app`. The grant lasts as long as the owner's approval allows, up to 7 days.
+- **Write access only when the owner asks to change an installed app's data** (for example, log a meal). The agent requests it from its own profile with one command: `tinycloud --profile agent auth request --preset apps-agent --app APP_ID --write --emit req.json`. The owner approves it in OpenKey, then the agent imports the grant as above. `--write` needs `--app`. The grant lasts as long as the owner's approval allows, up to 7 days.
 - With `--write`, the agent can add and change that app's data: it writes files under `APP_ID/knowledge/` and `APP_ID/prefs/` and adds, changes and deletes its table rows. It can create, change or drop tables only in the catalog database of a catalog app (for example `xyz.tinycloud.sample.healthlog/healthlog`), and the grant names no other database for that; nodes before 1.21.6 do not enforce this limit, so an ad-hoc CREATE, ALTER or DROP needs the owner's confirmation first. It cannot change the app's code, its manifest or its install record, and every other file under `APP_ID/` stays read-only. It cannot touch other apps, other spaces or secrets.
 - For a catalog app's write access, go straight to `auth request`: the owner's one OpenKey approval is the consent, so do not ask the owner again before requesting. The grant covers one named app: never ask for the whole space, and never a write without `--app`.
 - The preset cannot be combined with `--cap`, `--permission`, `--manifest` or `--expiry`, and device approval cannot grant it (SQL needs browser or `--paste`). The owner ends the grant with `tinycloud delegation revoke GRANT_CID`; the CID is in the `auth grant` output. Within its own grant the agent's key could pass the same access on to someone else, so keep the key and the grant file private.
@@ -86,8 +83,8 @@ Ask for the narrowest grant that does the job. The default is read-only, and one
 
 Then:
 
-1. `"$TC" --profile agent knowledge list` (add `--app APP_ID` under a one-app grant) lists the apps that have a bundle: `app_id`, `name` when the account registry is readable, `root`, `concepts`. MCP: `tinycloud_knowledge_list`.
-2. `"$TC" --profile agent knowledge read APP_ID` reads the index: its links name the concepts. Then `knowledge read APP_ID app` (what the app is and its write rules), and only the concepts the task needs, such as `knowledge read APP_ID tables/meal`. Frontmatter comes back parsed. MCP: `tinycloud_knowledge_read`.
+1. `tinycloud --profile agent knowledge list` (add `--app APP_ID` under a one-app grant) lists the apps that have a bundle: `app_id`, `name` when the account registry is readable, `root`, `concepts`. MCP: `tinycloud_knowledge_list`.
+2. `tinycloud --profile agent knowledge read APP_ID` reads the index: its links name the concepts. Then `knowledge read APP_ID app` (what the app is and its write rules), and only the concepts the task needs, such as `knowledge read APP_ID tables/meal`. Frontmatter comes back parsed. MCP: `tinycloud_knowledge_read`.
 3. A concept's `resource:` is a space-relative cap without actions, such as `tinycloud.sql:applications:APP_ID/health_log` with `table: meal`, or `tinycloud.kv:applications:APP_ID/photos/`. Use it as the target of `sql query` (`--db` is the path after the space) and `kv get` (the path is the key prefix), with `--space` set to the `space` URI that `knowledge list` printed: a bare `applications` fails on an agent profile. Pass the cap to `--cap` unchanged to ask for more.
 4. Only with a write grant: `app.md` holds the app's write rules (required columns, allowed values, ids). Follow them exactly, write only under `APP_ID/`, and run an ad-hoc CREATE, ALTER or DROP only after the owner confirms the structural change. The grant covers those statements only in the app's catalog database. Nodes before 1.21.6 do not enforce that, so the agent keeps its own statements inside that database.
 5. Record what you did in `APP_ID/knowledge/log.md` when `app.md` says to (needs the write grant).
@@ -98,21 +95,21 @@ Exit code 5 from `knowledge list|read` means the grant does not cover that app; 
 
 An agent installs a catalog app into its own profile. The owner approves the agent's write grant for that one app; the install then runs under that grant without a second approval:
 
-1. `"$TC" --profile agent auth request --preset apps-agent --write --app xyz.tinycloud.sample.healthlog --emit req.json`. The owner approves it in OpenKey, then the agent imports the grant as above (`auth import`).
-2. `"$TC" --profile agent apps install xyz.tinycloud.sample.healthlog` installs the pinned version into the owner's applications space, through the grant. Then read the notes with `knowledge read`.
+1. `tinycloud --profile agent auth request --preset apps-agent --write --app xyz.tinycloud.sample.healthlog --emit req.json`. The owner approves it in OpenKey, then the agent imports the grant as above (`auth import`).
+2. `tinycloud --profile agent apps install xyz.tinycloud.sample.healthlog` installs the pinned version into the owner's applications space, through the grant. Then read the notes with `knowledge read`.
 
 The install fetches each file from Share by its pinned digest and checks size and sha256 before any write. The pinned DDL runs only if every statement is one of the installer's own (`CREATE TABLE/INDEX/VIEW IF NOT EXISTS`, and `DROP VIEW IF EXISTS` for the pinned views); any other statement, including `DROP TABLE`, aborts before a write. The knowledge files under `APP_ID/knowledge/` are created create-only with `index.md` last, then the schema is applied and the pinned views are re-created on every run (`viewsRecreated`).
 
-The allowlist covers only the installer's own statements. On nodes before 1.21.6 the grant does not limit the agent's SQL to data statements, so an ad-hoc CREATE, ALTER or DROP outside the install still needs the owner's confirmation first (see the write-access bullets under "Pick up a user's apps"). The owner can run the same command on the owner profile (`"$TC" --profile owner apps install xyz.tinycloud.sample.healthlog`); that needs no grant.
+The allowlist covers only the installer's own statements. On nodes before 1.21.6 the grant does not limit the agent's SQL to data statements, so an ad-hoc CREATE, ALTER or DROP outside the install still needs the owner's confirmation first (see the write-access bullets under "Pick up a user's apps"). The owner can run the same command on the owner profile (`tinycloud --profile owner apps install xyz.tinycloud.sample.healthlog`); that needs no grant.
 
 Knowledge files whose bytes differ from the pinned version are left as the owner edited them and listed (`conflicts` in `--json`). That is not an error: the command exits 0 and installs everything else. If the schema fails after notes were written, the command says "notes saved; tables not set up: run again" and exits non-zero; running it again is safe.
 
 ## Publish and share
 
 ```bash
-"$TC" --profile publisher share publish ./note.md --json
-"$TC" --profile publisher share publish ./note.md --to email:alice@example.com --notify --json
-"$TC" --profile publisher share publish ./site/ --json   # a folder with a top-level index.html -> one self-contained page
+tinycloud --profile publisher share publish ./note.md --json
+tinycloud --profile publisher share publish ./note.md --to email:alice@example.com --notify --json
+tinycloud --profile publisher share publish ./site/ --json   # a folder with a top-level index.html -> one self-contained page
 ```
 
 A folder (a top-level `index.html` plus the CSS, scripts, images and fonts it uses) is inlined into one self-contained `.html` and published as an anyone-with-the-link share named `<folder>.html` (or `--name`). Use only files in the folder: external URLs, frames, forms, `<base>`, module scripts and links to other pages are refused, with an error that names the file and the reference (`UNSUPPORTED_HTML`, `HTML_RESOURCE_MISSING`, `UNSAFE_PATH`, `UNSUPPORTED_FOLDER_ENTRY`, `MAX_BYTES_EXCEEDED`), and nothing is published. Symbolic links are refused, entries starting with `.` are skipped, and `manifest.json` and `knowledge/` are not inlined or published. Folders cannot be shared to an address or with `--prefix`; publish a single file for those.
