@@ -117,17 +117,18 @@ describe("TC-500 accountless v4 recipient", () => {
     const policyCid = "bafy-policy-500";
     const resource = "tinycloud://owner-space/kv/shares/tc-500/document.txt";
     const encryptionNetwork = "urn:tinycloud:encryption:owner:default";
+    const encryptionKeyPath = "share/tc-500";
     const capability = { kind: "kv", resource, selector: "exact", actions: ["tinycloud.kv/get"] };
-    const decryptCapability = { kind: "encryption", resource: encryptionNetwork, action: "tinycloud.encryption/decrypt" };
+    const decryptCapability = { kind: "encryption", resource: `${encryptionNetwork}/${encryptionKeyPath}`, action: "tinycloud.encryption/decrypt" };
     const now = Math.floor(Date.now() / 1000);
     const session = await signCompactUcanAuthorization({
       issuerDid: nodeDid,
       audienceDid: receiverDid,
       attenuation: {
         [resource]: { "tinycloud.kv/get": [{ type: "xyz.tinycloud.resource/selector", kind: "exact", value: resource }] },
-        [encryptionNetwork]: { "tinycloud.encryption/decrypt": [{}] },
+        [`${encryptionNetwork}/${encryptionKeyPath}`]: { "tinycloud.encryption/decrypt": [{}] },
       },
-      facts: [policySessionFacts({ policyCid, policyRoot, enforcementRoot, enforcerDid, nodeAudience: nodeDid, recipientDid: receiverDid })],
+      facts: [policySessionFacts({ policyCid, policyRoot, enforcementRoot, enforcerDid, nodeAudience: nodeDid, recipientDid: receiverDid, overrides: { remainingRedelegationDepth: 0 } })],
       proofs: [policyRoot, enforcementRoot],
       notBefore: now,
       expiresAt: now + 60,
@@ -166,6 +167,7 @@ describe("TC-500 accountless v4 recipient", () => {
     };
     const envelope = {
       version: 3,
+      shareId: "tc-500",
       actions: ["read"],
       resource: { kind: "exact", path: "shares/tc-500/document.txt" },
       target: { origin: "https://node.example", nodeAudience: enforcerDid, spaceId: "space" },
@@ -176,7 +178,7 @@ describe("TC-500 accountless v4 recipient", () => {
       enforcementRoot: { cid: enforcementRoot },
       contentSourceDigestHex: "1".repeat(64),
       encryptionNetwork,
-      contentSource: { kvResource: "space/kv/shares/tc-500/document.txt", keyVersion: 1, encryptedSymmetricKeyDigestHex: "unused" },
+      contentSource: { kvResource: "space/kv/shares/tc-500/document.txt", encryptionNetwork, encryptionKeyPath, keyVersion: 1, encryptedSymmetricKeyDigestHex: "unused" },
       metadata: { mediaType: "text/plain" },
       expiry: wholeSeconds(now + 3600),
     } as any;
@@ -208,18 +210,22 @@ describe("TC-500 accountless v4 recipient", () => {
     expect(invocation.payload.aud).toBe(nodeDid);
     expect(invocation.payload.prf).toEqual([session.cid]);
 
-    const encryptedSymmetricKey = "wrapped-key";
+    const wrappedBytes = new TextEncoder().encode("wrapped-key");
+    const encryptedSymmetricKey = Buffer.from(wrappedBytes).toString("base64");
     const encryptedSymmetricKeyHash = [...sha256(new TextEncoder().encode(canonicalize(encryptedSymmetricKey)))]
       .map((byte) => byte.toString(16).padStart(2, "0")).join("");
-    envelope.contentSource.encryptedSymmetricKeyDigestHex = encryptedSymmetricKeyHash;
+    envelope.contentSource.encryptedSymmetricKeyDigestHex = [...sha256(wrappedBytes)]
+      .map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    expect(envelope.contentSource.encryptedSymmetricKeyDigestHex).not.toBe(encryptedSymmetricKeyHash);
     const encryptedEnvelope = new TextEncoder().encode(JSON.stringify({
-      v: 1,
+      v: 2,
       networkId: encryptionNetwork,
+      keyPath: encryptionKeyPath,
       alg: "x25519-aes256gcm/v1",
       keyVersion: 1,
       encryptedSymmetricKey,
       encryptedSymmetricKeyHash,
-      ciphertext: "AA",
+      ciphertext: "AA==",
     }));
     envelope.contentSource.initialCiphertextDigestHex = [...sha256(encryptedEnvelope)]
       .map((byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -227,6 +233,8 @@ describe("TC-500 accountless v4 recipient", () => {
       status: 403, message: "v3 decrypt invocation rejected (403): decrypt permission denied",
     });
     expect(decryptBody?.targetNode).toBe(nodeDid);
+    expect(decryptBody?.keyPath).toBe(encryptionKeyPath);
+    expect(decryptBody?.encryptedSymmetricKeyHash).toBe(encryptedSymmetricKeyHash);
     expect(verifyCompactUcanAuthorization(decryptAuthorization).payload.aud).toBe(nodeDid);
     expect(signerCalls).toBeGreaterThan(0);
 
@@ -461,10 +469,11 @@ describe("TC-500 accountless v4 recipient", () => {
         decryptAuthorization = new Headers(init?.headers).get("Authorization") ?? "";
         return new Response(null, { status: 400 });
       });
-      const encryptedSymmetricKey = "wrapped-key";
+      const wrappedBytes = new TextEncoder().encode("wrapped-key");
+      const encryptedSymmetricKey = Buffer.from(wrappedBytes).toString("base64");
       const encryptedSymmetricKeyHash = [...sha256(new TextEncoder().encode(canonicalize(encryptedSymmetricKey)))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-      const encrypted = new TextEncoder().encode(JSON.stringify({ v: 1, networkId: network, alg: "x25519-aes256gcm/v1", keyVersion: 1, encryptedSymmetricKey, encryptedSymmetricKeyHash, ciphertext: "AA" }));
-      envelope.contentSource = { kvResource: "space/kv/shares/tc-531/document.txt", keyVersion: 1, encryptedSymmetricKeyDigestHex: encryptedSymmetricKeyHash, initialCiphertextDigestHex: [...sha256(encrypted)].map((byte) => byte.toString(16).padStart(2, "0")).join("") };
+      const encrypted = new TextEncoder().encode(JSON.stringify({ v: 1, networkId: network, alg: "x25519-aes256gcm/v1", keyVersion: 1, encryptedSymmetricKey, encryptedSymmetricKeyHash, ciphertext: "AA==" }));
+      envelope.contentSource = { kvResource: "space/kv/shares/tc-531/document.txt", encryptionNetwork: network, keyVersion: 1, encryptedSymmetricKeyDigestHex: [...sha256(wrappedBytes)].map((byte) => byte.toString(16).padStart(2, "0")).join(""), initialCiphertextDigestHex: [...sha256(encrypted)].map((byte) => byte.toString(16).padStart(2, "0")).join("") };
       await expect(delegated.decryptV3Content(encrypted)).rejects.toThrow("decrypt invocation rejected");
       const invocation = verifyCompactUcanAuthorization(decryptAuthorization);
       expect(invocation.payload.iss.split("#", 1)[0]).toBe(delegateDid);

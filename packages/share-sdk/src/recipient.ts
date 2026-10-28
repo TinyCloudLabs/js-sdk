@@ -336,10 +336,12 @@ function canonicalHashHex(value: string): string {
   return hex(sha256(new TextEncoder().encode(canonicalize(value))));
 }
 
-async function aesGcmDecrypt(key: Uint8Array, blob: Uint8Array): Promise<Uint8Array> {
+async function aesGcmDecrypt(key: Uint8Array, blob: Uint8Array, aad?: Uint8Array): Promise<Uint8Array> {
   if (key.length !== 32 || blob.length < 28) throw new Error("encrypted content is malformed");
   const cryptoKey = await crypto.subtle.importKey("raw", key as unknown as BufferSource, "AES-GCM", false, ["decrypt"]);
-  return new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: blob.slice(0, 12) as unknown as BufferSource }, cryptoKey, blob.slice(12) as unknown as BufferSource));
+  // These owned bytes are valid WebCrypto inputs; its buffer type is narrower.
+  const additionalData = aad as unknown as BufferSource | undefined;
+  return new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: blob.slice(0, 12) as unknown as BufferSource, ...(additionalData === undefined ? {} : { additionalData }) }, cryptoKey, blob.slice(12) as unknown as BufferSource));
 }
 
 async function aesGcmEncrypt(key: Uint8Array, plaintext: Uint8Array): Promise<Uint8Array> {
@@ -354,7 +356,7 @@ async function aesGcmEncrypt(key: Uint8Array, plaintext: Uint8Array): Promise<Ui
 }
 
 interface V3InlineEncryptedEnvelope {
-  readonly v: 1;
+  readonly v: 1 | 2;
   readonly networkId: string;
   readonly keyPath?: string;
   readonly alg: "x25519-aes256gcm/v1";
@@ -362,6 +364,7 @@ interface V3InlineEncryptedEnvelope {
   readonly encryptedSymmetricKey: string;
   readonly encryptedSymmetricKeyHash: string;
   readonly ciphertext: string;
+  readonly aad?: string;
   readonly metadata?: Readonly<Record<string, string>>;
 }
 
@@ -370,16 +373,19 @@ function parseV3InlineEncryptedEnvelope(bytes: Uint8Array, expected: ShareEnvelo
   try { value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); } catch { throw new Error("encrypted content envelope is malformed"); }
   if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("encrypted content envelope is malformed");
   const record = value as Record<string, unknown>;
-  const allowed = ["v", "networkId", "keyPath", "alg", "keyVersion", "encryptedSymmetricKey", "encryptedSymmetricKeyHash", "ciphertext", "metadata"];
+  const allowed = ["v", "networkId", "keyPath", "alg", "keyVersion", "encryptedSymmetricKey", "encryptedSymmetricKeyHash", "ciphertext", "aad", "metadata"];
+  const version = expected.contentSource.encryptionKeyPath === undefined ? 1 : 2;
   if (Object.keys(record).some((key) => !allowed.includes(key))
-    || record.v !== 1 || record.networkId !== expected.encryptionNetwork
+    || record.v !== version || record.networkId !== expected.contentSource.encryptionNetwork
+    || record.networkId !== expected.encryptionNetwork
     || record.keyPath !== expected.contentSource.encryptionKeyPath
     || record.keyPath !== undefined && (record.keyPath !== `share/${expected.shareId}`)
     || record.alg !== "x25519-aes256gcm/v1" || record.keyVersion !== expected.contentSource.keyVersion
     || typeof record.encryptedSymmetricKey !== "string" || typeof record.encryptedSymmetricKeyHash !== "string"
-    || record.encryptedSymmetricKeyHash !== expected.contentSource.encryptedSymmetricKeyDigestHex
+    || hex(sha256(fromBase64(record.encryptedSymmetricKey, "v3 encrypted symmetric key"))) !== expected.contentSource.encryptedSymmetricKeyDigestHex
     || record.encryptedSymmetricKeyHash !== canonicalHashHex(record.encryptedSymmetricKey)
     || typeof record.ciphertext !== "string"
+    || record.aad !== undefined && typeof record.aad !== "string"
     || record.metadata !== undefined && (record.metadata === null || typeof record.metadata !== "object" || Array.isArray(record.metadata) || Object.values(record.metadata).some((entry) => typeof entry !== "string"))) {
     throw new Error("encrypted content envelope binding is invalid");
   }
@@ -549,7 +555,7 @@ export class ShareRecipientClient {
     return this.session;
   }
 
-  /** Decrypt a v3 KV value through a fresh recipient-signed decrypt invocation. */
+  /** Decrypt unscoped v1 or path-bound v2 content, independently checking canonical and registered raw-key digests. */
   async decryptV3Content(bytes: Uint8Array): Promise<{ readonly bytes: Uint8Array; readonly mediaType: string }> {
     const envelope = this.options.envelope;
     const signer = this.nativeSigner ?? this.signer;
@@ -559,6 +565,7 @@ export class ShareRecipientClient {
     assertArtifactBinding(artifactBindingView(envelope));
     if (!matchesInitialCiphertextDigest(bytes, envelope.contentSource.initialCiphertextDigestHex)) throw new Error("v3 owner KV ciphertext digest mismatch");
     const encrypted = parseV3InlineEncryptedEnvelope(bytes, envelope);
+    const aad = encrypted.aad === undefined ? undefined : fromBase64(encrypted.aad, "v3 encrypted content AAD");
     const receiverPrivateKey = crypto.getRandomValues(new Uint8Array(32));
     const receiverPublicKey = toBase64(x25519.getPublicKey(receiverPrivateKey));
     const receiverPublicKeyHash = canonicalHashHex(receiverPublicKey);
@@ -601,7 +608,7 @@ export class ShareRecipientClient {
       const symmetricKey = await aesGcmDecrypt(shared, wrapped.slice(33));
       shared.fill(0);
       if (symmetricKey.length !== 32) throw new Error("v3 content key is malformed");
-      const plaintext = await aesGcmDecrypt(symmetricKey, fromBase64(encrypted.ciphertext, "v3 encrypted content"));
+      const plaintext = await aesGcmDecrypt(symmetricKey, fromBase64(encrypted.ciphertext, "v3 encrypted content"), aad);
       this.v3ContentKey?.fill(0);
       this.v3ContentKey = symmetricKey;
       this.v3ContentEnvelope = encrypted;
