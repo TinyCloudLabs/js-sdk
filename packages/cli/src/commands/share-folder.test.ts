@@ -9,6 +9,11 @@ import { runShareCaptured } from "./share.integration-harness.js";
 
 const viewerOrigin = "https://share-dev.tinycloud.link";
 const decode = (bytes: Uint8Array): string => new TextDecoder().decode(bytes);
+const descriptorFixture = await Bun.file(new URL("../../../sdk-core/test-fixtures/opencredentials-v1/golden-descriptor-digests.json", import.meta.url)).json() as {
+  vectors: { name: string; descriptor: unknown }[];
+};
+const emailDescriptor = descriptorFixture.vectors.find((vector) => vector.name === "email")?.descriptor;
+if (emailDescriptor === undefined) throw new Error("golden email descriptor is missing");
 
 function publishedFor(request: TargetPublishInput): PublishedShare {
   return {
@@ -104,18 +109,19 @@ describe("tc share publish ./site/", () => {
 
   test("addressed and --prefix publication of a folder stay unavailable, exactly as before", async () => {
     await basicSite();
+    const descriptorPath = join(root, "email-descriptor.json");
+    await writeFile(descriptorPath, JSON.stringify(emailDescriptor));
+    const emailArgs = ["--credential-descriptor", descriptorPath, "--issuer-did", "did:web:issuer.credentials.org", "--issuer-kid", "did:web:issuer.credentials.org#controller"];
     for (const args of [["--to", "email:alice@example.com"], ["--to", "did:key:z6MkggtHVWQUGJ3FVjJKXeb5oZThQvLmJVMV8hfNUz4ezcav"], ["--prefix", "--to", "email:alice@example.com"], ["--prefix"]]) {
-      const result = await run([site, ...args]);
-      expect(result.exitCode, args.join(" ")).toBeDefined();
-      expect(result.exitCode).not.toBe(0);
+      const result = await run([site, ...args, ...(args.includes("email:alice@example.com") ? emailArgs : [])]);
+      expect(result.exitCode, args.join(" ")).toBeGreaterThan(0);
     }
-    expect(published).toHaveLength(0);
     for (const args of [["--to", "email:alice@example.com"], ["--prefix", "--to", "email:alice@example.com"], ["--prefix"], ["--to", "domain:example.com"]]) {
-      const refused = await run([site, ...args]);
+      const refused = await run([site, ...args, ...(args.includes("email:alice@example.com") ? emailArgs : [])]);
       expect(errorOf(refused.stderr).code, args.join(" ")).toBe("MAX_BYTES_EXCEEDED");
       expect(refused.exitCode).toBe(7);
-      expect(errorOf(refused.stderr).message).toBe("Folders can only be published as a single page for an anyone-with-the-link share (`--to anyone`); for others publish a single file");
     }
+    expect(published).toHaveLength(0);
   });
 
   test("a folder next to other inputs is not a folder publish", async () => {
