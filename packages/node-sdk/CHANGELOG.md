@@ -1,5 +1,26 @@
 # @tinycloudlabs/node-sdk
 
+## 3.8.0-beta.16
+
+### Minor Changes
+
+- 812a818: Adds a Node SDK entry for receiving email-addressed shares with an agent session key and the existing OpenCredentials email proof flow.
+
+  Details: TC-2202
+
+### Patch Changes
+
+- 812a818: Publish new CLI email shares as signed V3 Policy/v2 envelopes inside current v4 Share link records, with a unique exact `default/share/<shareId>` encryption key, a path-bound policy, and a committed email credential requirement. The `builtin:share-publishing` paste approval requests decrypt only for the owner's default-network `share/` prefix; device authorization and `enable share` omit decrypt. Existing V2 envelopes retain their read path.
+
+  Details: TC-2177
+
+- Updated dependencies [812a818]
+  - @tinycloud/sdk-core@3.8.0-beta.16
+  - @tinycloud/sdk-services@3.8.0-beta.16
+  - @tinycloud/share-envelope@1.3.1-beta.1
+  - @tinycloud/share-sdk@1.4.1-beta.1
+  - @tinycloud/replica@0.4.0-beta.4
+
 ## 3.8.0-beta.15
 
 ### Patch Changes

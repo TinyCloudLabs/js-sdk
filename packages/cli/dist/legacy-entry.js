@@ -1901,11 +1901,13 @@ function expandEncryptionPermissionEntry(entry) {
       `tinycloud.encryption entries require path to be a networkId URN (got ${JSON.stringify(entry.path)})`
     );
   }
-  if (entry.path.includes("/")) {
+  const sharePrefix = entry.path.endsWith("/share/");
+  if (entry.path.includes("/") && !sharePrefix) {
     throw new ManifestValidationError("named keys go in manifest.keys");
   }
   try {
-    parseNetworkId(entry.path);
+    const network = parseNetworkId(sharePrefix ? entry.path.slice(0, -"/share/".length) : entry.path);
+    if (sharePrefix && network.name !== "default") throw new Error("share prefix requires default network");
   } catch {
     throw new ManifestValidationError("tinycloud.encryption entries require a valid networkId URN");
   }
@@ -1939,6 +1941,9 @@ function expandEncryptionPermissionEntry(entry) {
       dedupedActions.push(a);
       seen.add(a);
     }
+  }
+  if (sharePrefix && dedupedActions.some((action) => action !== "tinycloud.encryption/decrypt")) {
+    throw new ManifestValidationError("share prefix only supports decrypt");
   }
   return [
     {
@@ -2555,6 +2560,9 @@ function isRawEncryptionPermission(permission) {
 function isVerifiedRawEncryptionPermission(permission) {
   return isRawEncryptionPermission(permission) && (permission.space === void 0 || permission.space === "encryption");
 }
+function isSharePublishingPrefixDecrypt(permission) {
+  return permission.service === ENCRYPTION_PERMISSION_SERVICE && permission.space === "default" && permission.path === "share/" && permission.actions.length === 1 && permission.actions[0] === "tinycloud.encryption/decrypt" && !permission.caveats?.length;
+}
 function isDeviceDefaultDecrypt(permission) {
   return permission.service === ENCRYPTION_PERMISSION_SERVICE && permission.space === "default" && permission.path === "" && permission.actions.length === 1 && permission.actions[0] === "tinycloud.encryption/decrypt" && !permission.caveats?.length;
 }
@@ -2579,7 +2587,7 @@ function canonicalNetworkUrn(path) {
   return match ? `urn:tinycloud:encryption:${canonicalOwnerDid(match[1])}:${match[2]}` : path;
 }
 function rawEncryptionOwnerMatches(path, ownerDid) {
-  const match = /^urn:tinycloud:encryption:(did:pkh:eip155:.+):([a-z0-9][a-z0-9-]*)$/.exec(path);
+  const match = /^urn:tinycloud:encryption:(did:pkh:eip155:[1-9]\d*:0x[0-9a-fA-F]{40}):([a-z0-9][a-z0-9-]*)(?:\/share\/(?:[0-9a-f]{32})?)?$/.exec(path);
   if (!match) return false;
   try {
     return canonicalOwnerDid(match[1]) === canonicalOwnerDid(ownerDid);
@@ -2671,7 +2679,7 @@ var init_publishing_manifest = __esm({
         },
         {
           service: "tinycloud.encryption",
-          path: "",
+          path: "share/",
           skipPrefix: true,
           actions: ["tinycloud.encryption/decrypt"]
         }
@@ -3051,6 +3059,10 @@ async function resolvePermissionSpaces(entries, profile, options = {}) {
     if (isRawEncryptionPermission({ service, path: entry.path })) {
       const { skipPrefix: _skipPrefix, ...raw } = entry;
       resolved.push({ ...raw, service, space: ENCRYPTION_MANIFEST_SPACE, actions });
+      continue;
+    }
+    if (isSharePublishingPrefixDecrypt({ ...entry, service, actions })) {
+      resolved.push({ service, space: ENCRYPTION_MANIFEST_SPACE, path: `${await defaultSecretsNetworkId(profile, options.ownerDid)}/share/`, actions });
       continue;
     }
     if (isDeviceDefaultDecrypt({ ...entry, service, actions })) {
@@ -21938,6 +21950,23 @@ var unifiedEncryptionNetworkSchema = external_exports.string().refine((value) =>
   const network = separator < 0 ? "" : rest.slice(separator + 1);
   return owner.startsWith("did:") && owner.length > 4 && network.length > 0 && !/[:/%?#\s]/.test(network);
 }, { message: "expected canonical TinyCloud encryption network" });
+var unifiedEncryptionResourceSchema = external_exports.string().refine((value) => {
+  const prefix = "urn:tinycloud:encryption:";
+  if (!value.startsWith(prefix)) return false;
+  const match = /^(did:.+):([^/:?#\s]+)(?:\/(.+))?$/.exec(value.slice(prefix.length));
+  if (match === null) return false;
+  const path = match[3];
+  return path === void 0 || path.split("/").every(
+    (segment) => segment.length > 0 && segment !== "." && segment !== ".." && !/[\\:%?#\s]/.test(segment)
+  );
+}, { message: "expected a canonical TinyCloud encryption resource" });
+var unifiedEncryptionKeyPathSchema = external_exports.string().regex(/^share\/[^/]+$/).refine(
+  (value) => {
+    const segment = value.slice("share/".length);
+    return segment !== "." && segment !== ".." && !/[\\:%?#\s]/.test(segment);
+  },
+  { message: "expected an exact share key path" }
+);
 var unifiedKvCapabilitySchema = external_exports.object({
   kind: external_exports.literal("kv"),
   resource: unifiedResourceSchema,
@@ -21951,7 +21980,7 @@ var unifiedKvCapabilitySchema = external_exports.object({
 }).strict();
 var unifiedEncryptionCapabilitySchema = external_exports.object({
   kind: external_exports.literal("encryption"),
-  resource: unifiedEncryptionNetworkSchema,
+  resource: unifiedEncryptionResourceSchema,
   action: external_exports.literal("tinycloud.encryption/decrypt")
 }).strict();
 var unifiedCapabilitySchema = external_exports.union([unifiedKvCapabilitySchema, unifiedEncryptionCapabilitySchema]);
@@ -21960,6 +21989,7 @@ var unifiedContentSourceSchema = external_exports.object({
   kvResource: unifiedResourceSchema,
   selector: external_exports.union([external_exports.literal("exact"), external_exports.literal("prefix")]),
   encryptionNetwork: unifiedEncryptionNetworkSchema,
+  encryptionKeyPath: unifiedEncryptionKeyPathSchema.optional(),
   encryptedSymmetricKeyDigestHex: external_exports.string().regex(/^[0-9a-f]{64}$/),
   keyVersion: external_exports.number().int().positive(),
   mode: external_exports.union([external_exports.literal("mutable"), external_exports.literal("immutable")]),
@@ -22077,16 +22107,21 @@ function validateV3Invariants(value, ctx) {
   if (value.attestedEnforcerBinding.nodeAudience !== value.target.nodeAudience || value.attestedEnforcerBinding.signature.signerDid !== value.attestedEnforcerBinding.nodeAudience || Date.parse(value.attestedEnforcerBinding.expiresAt) < Date.parse(value.expiry)) {
     ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["attestedEnforcerBinding"], message: "enforcer binding does not cover the target and share lifetime" });
   }
-  if (value.policy.contentSource.shareId !== value.contentSource.shareId || value.policy.contentSource.kvResource !== value.contentSource.kvResource || value.policy.contentSource.selector !== value.contentSource.selector || value.policy.contentSource.encryptionNetwork !== value.encryptionNetwork || value.policy.contentSource.encryptedSymmetricKeyDigestHex !== value.contentSource.encryptedSymmetricKeyDigestHex || value.policy.contentSource.keyVersion !== value.contentSource.keyVersion || value.policy.contentSource.mode !== value.contentSource.mode || value.policy.contentSource.initialCiphertextDigestHex !== value.contentSource.initialCiphertextDigestHex) {
+  const encryptionKeyPath = value.contentSource.encryptionKeyPath;
+  if (encryptionKeyPath !== void 0 && encryptionKeyPath !== `share/${value.contentSource.shareId}`) {
+    ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["contentSource", "encryptionKeyPath"], message: "share key path must name this share" });
+  }
+  if (value.policy.contentSource.shareId !== value.contentSource.shareId || value.policy.contentSource.kvResource !== value.contentSource.kvResource || value.policy.contentSource.selector !== value.contentSource.selector || value.policy.contentSource.encryptionNetwork !== value.encryptionNetwork || value.policy.contentSource.encryptionKeyPath !== encryptionKeyPath || value.policy.contentSource.encryptedSymmetricKeyDigestHex !== value.contentSource.encryptedSymmetricKeyDigestHex || value.policy.contentSource.keyVersion !== value.contentSource.keyVersion || value.policy.contentSource.mode !== value.contentSource.mode || value.policy.contentSource.initialCiphertextDigestHex !== value.contentSource.initialCiphertextDigestHex) {
     ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["contentSource"], message: "content source is not bound to policy" });
   }
   if (value.policy.signature.suite !== "Ed25519" || value.policy.signature.signerDid !== value.policy.ownerDid) {
     ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["policy", "signature"], message: "policy must be signed by its owner" });
   }
   const kvCapabilities = value.policy.capabilityCeiling.filter((capability) => capability.kind === "kv");
-  const decryptCapabilities = value.policy.capabilityCeiling.filter((capability) => capability.kind === "encryption" && capability.resource === value.encryptionNetwork && capability.action === "tinycloud.encryption/decrypt");
+  const expectedEncryptionResource = encryptionKeyPath === void 0 ? value.encryptionNetwork : `${value.encryptionNetwork}/${encryptionKeyPath}`;
+  const decryptCapabilities = value.policy.capabilityCeiling.filter((capability) => capability.kind === "encryption" && capability.resource === expectedEncryptionResource && capability.action === "tinycloud.encryption/decrypt");
   if (value.policy.capabilityCeiling.length !== 2 || kvCapabilities.length !== 1 || decryptCapabilities.length !== 1 || kvCapabilities[0]?.resource !== value.contentSource.kvResource || kvCapabilities[0]?.selector !== value.contentSource.selector) {
-    ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["policy", "capabilityCeiling"], message: "policy ceiling must contain exact decrypt network" });
+    ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["policy", "capabilityCeiling"], message: "policy ceiling must contain the exact decrypt resource" });
   }
 }
 var unsignedShareEnvelopeV3Schema = unsignedShareEnvelopeV3BaseSchema.superRefine(validateV3Invariants);
@@ -23377,6 +23412,23 @@ var unifiedEncryptionNetworkSchema2 = external_exports2.string().refine((value) 
   const network = separator < 0 ? "" : rest.slice(separator + 1);
   return owner.startsWith("did:") && owner.length > 4 && network.length > 0 && !/[:/%?#\s]/.test(network);
 }, { message: "expected canonical TinyCloud encryption network" });
+var unifiedEncryptionResourceSchema2 = external_exports2.string().refine((value) => {
+  const prefix = "urn:tinycloud:encryption:";
+  if (!value.startsWith(prefix)) return false;
+  const match = /^(did:.+):([^/:?#\s]+)(?:\/(.+))?$/.exec(value.slice(prefix.length));
+  if (match === null) return false;
+  const path = match[3];
+  return path === void 0 || path.split("/").every(
+    (segment) => segment.length > 0 && segment !== "." && segment !== ".." && !/[\\:%?#\s]/.test(segment)
+  );
+}, { message: "expected a canonical TinyCloud encryption resource" });
+var unifiedEncryptionKeyPathSchema2 = external_exports2.string().regex(/^share\/[^/]+$/).refine(
+  (value) => {
+    const segment = value.slice("share/".length);
+    return segment !== "." && segment !== ".." && !/[\\:%?#\s]/.test(segment);
+  },
+  { message: "expected an exact share key path" }
+);
 var unifiedKvCapabilitySchema2 = external_exports2.object({
   kind: external_exports2.literal("kv"),
   resource: unifiedResourceSchema2,
@@ -23390,7 +23442,7 @@ var unifiedKvCapabilitySchema2 = external_exports2.object({
 }).strict();
 var unifiedEncryptionCapabilitySchema2 = external_exports2.object({
   kind: external_exports2.literal("encryption"),
-  resource: unifiedEncryptionNetworkSchema2,
+  resource: unifiedEncryptionResourceSchema2,
   action: external_exports2.literal("tinycloud.encryption/decrypt")
 }).strict();
 var unifiedCapabilitySchema2 = external_exports2.union([unifiedKvCapabilitySchema2, unifiedEncryptionCapabilitySchema2]);
@@ -23399,6 +23451,7 @@ var unifiedContentSourceSchema2 = external_exports2.object({
   kvResource: unifiedResourceSchema2,
   selector: external_exports2.union([external_exports2.literal("exact"), external_exports2.literal("prefix")]),
   encryptionNetwork: unifiedEncryptionNetworkSchema2,
+  encryptionKeyPath: unifiedEncryptionKeyPathSchema2.optional(),
   encryptedSymmetricKeyDigestHex: external_exports2.string().regex(/^[0-9a-f]{64}$/),
   keyVersion: external_exports2.number().int().positive(),
   mode: external_exports2.union([external_exports2.literal("mutable"), external_exports2.literal("immutable")]),
@@ -23516,16 +23569,21 @@ function validateV3Invariants2(value, ctx) {
   if (value.attestedEnforcerBinding.nodeAudience !== value.target.nodeAudience || value.attestedEnforcerBinding.signature.signerDid !== value.attestedEnforcerBinding.nodeAudience || Date.parse(value.attestedEnforcerBinding.expiresAt) < Date.parse(value.expiry)) {
     ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["attestedEnforcerBinding"], message: "enforcer binding does not cover the target and share lifetime" });
   }
-  if (value.policy.contentSource.shareId !== value.contentSource.shareId || value.policy.contentSource.kvResource !== value.contentSource.kvResource || value.policy.contentSource.selector !== value.contentSource.selector || value.policy.contentSource.encryptionNetwork !== value.encryptionNetwork || value.policy.contentSource.encryptedSymmetricKeyDigestHex !== value.contentSource.encryptedSymmetricKeyDigestHex || value.policy.contentSource.keyVersion !== value.contentSource.keyVersion || value.policy.contentSource.mode !== value.contentSource.mode || value.policy.contentSource.initialCiphertextDigestHex !== value.contentSource.initialCiphertextDigestHex) {
+  const encryptionKeyPath = value.contentSource.encryptionKeyPath;
+  if (encryptionKeyPath !== void 0 && encryptionKeyPath !== `share/${value.contentSource.shareId}`) {
+    ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["contentSource", "encryptionKeyPath"], message: "share key path must name this share" });
+  }
+  if (value.policy.contentSource.shareId !== value.contentSource.shareId || value.policy.contentSource.kvResource !== value.contentSource.kvResource || value.policy.contentSource.selector !== value.contentSource.selector || value.policy.contentSource.encryptionNetwork !== value.encryptionNetwork || value.policy.contentSource.encryptionKeyPath !== encryptionKeyPath || value.policy.contentSource.encryptedSymmetricKeyDigestHex !== value.contentSource.encryptedSymmetricKeyDigestHex || value.policy.contentSource.keyVersion !== value.contentSource.keyVersion || value.policy.contentSource.mode !== value.contentSource.mode || value.policy.contentSource.initialCiphertextDigestHex !== value.contentSource.initialCiphertextDigestHex) {
     ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["contentSource"], message: "content source is not bound to policy" });
   }
   if (value.policy.signature.suite !== "Ed25519" || value.policy.signature.signerDid !== value.policy.ownerDid) {
     ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["policy", "signature"], message: "policy must be signed by its owner" });
   }
   const kvCapabilities = value.policy.capabilityCeiling.filter((capability) => capability.kind === "kv");
-  const decryptCapabilities = value.policy.capabilityCeiling.filter((capability) => capability.kind === "encryption" && capability.resource === value.encryptionNetwork && capability.action === "tinycloud.encryption/decrypt");
+  const expectedEncryptionResource = encryptionKeyPath === void 0 ? value.encryptionNetwork : `${value.encryptionNetwork}/${encryptionKeyPath}`;
+  const decryptCapabilities = value.policy.capabilityCeiling.filter((capability) => capability.kind === "encryption" && capability.resource === expectedEncryptionResource && capability.action === "tinycloud.encryption/decrypt");
   if (value.policy.capabilityCeiling.length !== 2 || kvCapabilities.length !== 1 || decryptCapabilities.length !== 1 || kvCapabilities[0]?.resource !== value.contentSource.kvResource || kvCapabilities[0]?.selector !== value.contentSource.selector) {
-    ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["policy", "capabilityCeiling"], message: "policy ceiling must contain exact decrypt network" });
+    ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["policy", "capabilityCeiling"], message: "policy ceiling must contain the exact decrypt resource" });
   }
 }
 var unsignedShareEnvelopeV3Schema2 = unsignedShareEnvelopeV3BaseSchema2.superRefine(validateV3Invariants2);
@@ -23574,53 +23632,13 @@ function shortLinkId(link4) {
   }
 }
 
-// src/share/errors.ts
-var SharePublishAuthorityError = class extends Error {
-  constructor(failure, options) {
-    super(failure.kind, options);
-    this.failure = failure;
-    this.name = "SharePublishAuthorityError";
-  }
-};
-var ShareHistoryRetryError = class extends Error {
-  constructor(profile) {
-    super("sender history changed during the operation");
-    this.profile = profile;
-    this.name = "ShareHistoryRetryError";
-  }
-  code = "SHARE_HISTORY_RETRY";
-};
-var ShareHistoryUnreadableError = class extends Error {
-  constructor() {
-    super("share history is unavailable");
-    this.name = "ShareHistoryUnreadableError";
-  }
-};
-var ShareHistoryReadError = class extends Error {
-  constructor() {
-    super("share history could not be read");
-    this.name = "ShareHistoryReadError";
-  }
-};
-var HISTORY_WRITE_ERROR_CODES = { EACCES: true, EPERM: true, EROFS: true, ENOSPC: true, EDQUOT: true, EIO: true };
-function shareHistoryReason(error) {
-  if (error instanceof ShareHistoryUnreadableError) return "HISTORY_UNREADABLE";
-  if (error instanceof ShareHistoryReadError) return "HISTORY_READ_FAILED";
-  const code5 = typeof error === "object" && error !== null && "code" in error ? error.code : void 0;
-  return typeof code5 === "string" && HISTORY_WRITE_ERROR_CODES[code5] === true ? "HISTORY_WRITE_FAILED" : "HISTORY_UNAVAILABLE";
-}
-
-// src/share/adapters.ts
-init_storage2();
-init_profiles();
-init_constants();
-init_errors();
-init_session_expired();
-import { chmod as chmod4, link as link2, open as open8, readFile as readFile8, stat as stat4, unlink as unlink4 } from "fs/promises";
-import { dirname as dirname5, join as join12 } from "path";
-import { createHash } from "crypto";
-import { writeJsonAtomic as writeJsonAtomic2 } from "@tinycloud/operations/state";
-import { withoutBearer as withoutBearer2 } from "@tinycloud/operations/delegation-binding";
+// src/share/email-publish-v3.ts
+import {
+  canonicalDigest,
+  createEmailCredentialRequirement,
+  credentialRequirementDigest,
+  validateCredentialFlowDescriptor
+} from "@tinycloud/sdk-core";
 
 // ../share-sdk/dist/index.js
 init_sha2();
@@ -28840,6 +28858,23 @@ var unifiedEncryptionNetworkSchema3 = external_exports3.string().refine((value) 
   const network = separator < 0 ? "" : rest.slice(separator + 1);
   return owner.startsWith("did:") && owner.length > 4 && network.length > 0 && !/[:/%?#\s]/.test(network);
 }, { message: "expected canonical TinyCloud encryption network" });
+var unifiedEncryptionResourceSchema3 = external_exports3.string().refine((value) => {
+  const prefix = "urn:tinycloud:encryption:";
+  if (!value.startsWith(prefix)) return false;
+  const match = /^(did:.+):([^/:?#\s]+)(?:\/(.+))?$/.exec(value.slice(prefix.length));
+  if (match === null) return false;
+  const path = match[3];
+  return path === void 0 || path.split("/").every(
+    (segment) => segment.length > 0 && segment !== "." && segment !== ".." && !/[\\:%?#\s]/.test(segment)
+  );
+}, { message: "expected a canonical TinyCloud encryption resource" });
+var unifiedEncryptionKeyPathSchema3 = external_exports3.string().regex(/^share\/[^/]+$/).refine(
+  (value) => {
+    const segment = value.slice("share/".length);
+    return segment !== "." && segment !== ".." && !/[\\:%?#\s]/.test(segment);
+  },
+  { message: "expected an exact share key path" }
+);
 var unifiedKvCapabilitySchema3 = external_exports3.object({
   kind: external_exports3.literal("kv"),
   resource: unifiedResourceSchema3,
@@ -28853,7 +28888,7 @@ var unifiedKvCapabilitySchema3 = external_exports3.object({
 }).strict();
 var unifiedEncryptionCapabilitySchema3 = external_exports3.object({
   kind: external_exports3.literal("encryption"),
-  resource: unifiedEncryptionNetworkSchema3,
+  resource: unifiedEncryptionResourceSchema3,
   action: external_exports3.literal("tinycloud.encryption/decrypt")
 }).strict();
 var unifiedCapabilitySchema3 = external_exports3.union([unifiedKvCapabilitySchema3, unifiedEncryptionCapabilitySchema3]);
@@ -28862,6 +28897,7 @@ var unifiedContentSourceSchema3 = external_exports3.object({
   kvResource: unifiedResourceSchema3,
   selector: external_exports3.union([external_exports3.literal("exact"), external_exports3.literal("prefix")]),
   encryptionNetwork: unifiedEncryptionNetworkSchema3,
+  encryptionKeyPath: unifiedEncryptionKeyPathSchema3.optional(),
   encryptedSymmetricKeyDigestHex: external_exports3.string().regex(/^[0-9a-f]{64}$/),
   keyVersion: external_exports3.number().int().positive(),
   mode: external_exports3.union([external_exports3.literal("mutable"), external_exports3.literal("immutable")]),
@@ -28979,22 +29015,71 @@ function validateV3Invariants3(value, ctx) {
   if (value.attestedEnforcerBinding.nodeAudience !== value.target.nodeAudience || value.attestedEnforcerBinding.signature.signerDid !== value.attestedEnforcerBinding.nodeAudience || Date.parse(value.attestedEnforcerBinding.expiresAt) < Date.parse(value.expiry)) {
     ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["attestedEnforcerBinding"], message: "enforcer binding does not cover the target and share lifetime" });
   }
-  if (value.policy.contentSource.shareId !== value.contentSource.shareId || value.policy.contentSource.kvResource !== value.contentSource.kvResource || value.policy.contentSource.selector !== value.contentSource.selector || value.policy.contentSource.encryptionNetwork !== value.encryptionNetwork || value.policy.contentSource.encryptedSymmetricKeyDigestHex !== value.contentSource.encryptedSymmetricKeyDigestHex || value.policy.contentSource.keyVersion !== value.contentSource.keyVersion || value.policy.contentSource.mode !== value.contentSource.mode || value.policy.contentSource.initialCiphertextDigestHex !== value.contentSource.initialCiphertextDigestHex) {
+  const encryptionKeyPath = value.contentSource.encryptionKeyPath;
+  if (encryptionKeyPath !== void 0 && encryptionKeyPath !== `share/${value.contentSource.shareId}`) {
+    ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["contentSource", "encryptionKeyPath"], message: "share key path must name this share" });
+  }
+  if (value.policy.contentSource.shareId !== value.contentSource.shareId || value.policy.contentSource.kvResource !== value.contentSource.kvResource || value.policy.contentSource.selector !== value.contentSource.selector || value.policy.contentSource.encryptionNetwork !== value.encryptionNetwork || value.policy.contentSource.encryptionKeyPath !== encryptionKeyPath || value.policy.contentSource.encryptedSymmetricKeyDigestHex !== value.contentSource.encryptedSymmetricKeyDigestHex || value.policy.contentSource.keyVersion !== value.contentSource.keyVersion || value.policy.contentSource.mode !== value.contentSource.mode || value.policy.contentSource.initialCiphertextDigestHex !== value.contentSource.initialCiphertextDigestHex) {
     ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["contentSource"], message: "content source is not bound to policy" });
   }
   if (value.policy.signature.suite !== "Ed25519" || value.policy.signature.signerDid !== value.policy.ownerDid) {
     ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["policy", "signature"], message: "policy must be signed by its owner" });
   }
   const kvCapabilities = value.policy.capabilityCeiling.filter((capability) => capability.kind === "kv");
-  const decryptCapabilities = value.policy.capabilityCeiling.filter((capability) => capability.kind === "encryption" && capability.resource === value.encryptionNetwork && capability.action === "tinycloud.encryption/decrypt");
+  const expectedEncryptionResource = encryptionKeyPath === void 0 ? value.encryptionNetwork : `${value.encryptionNetwork}/${encryptionKeyPath}`;
+  const decryptCapabilities = value.policy.capabilityCeiling.filter((capability) => capability.kind === "encryption" && capability.resource === expectedEncryptionResource && capability.action === "tinycloud.encryption/decrypt");
   if (value.policy.capabilityCeiling.length !== 2 || kvCapabilities.length !== 1 || decryptCapabilities.length !== 1 || kvCapabilities[0]?.resource !== value.contentSource.kvResource || kvCapabilities[0]?.selector !== value.contentSource.selector) {
-    ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["policy", "capabilityCeiling"], message: "policy ceiling must contain exact decrypt network" });
+    ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["policy", "capabilityCeiling"], message: "policy ceiling must contain the exact decrypt resource" });
   }
 }
 var unsignedShareEnvelopeV3Schema3 = unsignedShareEnvelopeV3BaseSchema3.superRefine(validateV3Invariants3);
 var shareEnvelopeV3Schema3 = unsignedShareEnvelopeV3BaseSchema3.extend({ signature: signatureSchema3 }).strict().superRefine(validateV3Invariants3);
 var ENVELOPE_AAD_LABEL4 = "tinycloud-share-envelope-v1";
+var SEALED_BLOB_VERSION2 = 1;
 var AAD4 = utf8Bytes4(ENVELOPE_AAD_LABEL4);
+var KEY_LENGTH2 = 32;
+var NONCE_LENGTH2 = 12;
+var TAG_LENGTH2 = 16;
+var HEADER_LENGTH2 = 1;
+function assertKey3(key32) {
+  if (key32.length !== KEY_LENGTH2) {
+    throw new TypeError(`key must be ${KEY_LENGTH2} bytes, got ${key32.length}`);
+  }
+}
+async function importAesKey2(key32, usage3) {
+  assertKey3(key32);
+  return globalThis.crypto.subtle.importKey(
+    "raw",
+    key32,
+    "AES-GCM",
+    false,
+    [usage3]
+  );
+}
+async function open8(blob, key32) {
+  if (blob.length < HEADER_LENGTH2 + NONCE_LENGTH2 + TAG_LENGTH2) {
+    throw new TypeError(`sealed blob too short: ${blob.length} bytes`);
+  }
+  if (blob[0] !== SEALED_BLOB_VERSION2) {
+    throw new TypeError(`unknown sealed blob version: ${blob[0]}`);
+  }
+  const nonce = blob.subarray(HEADER_LENGTH2, HEADER_LENGTH2 + NONCE_LENGTH2);
+  const ciphertext = blob.subarray(HEADER_LENGTH2 + NONCE_LENGTH2);
+  return decryptEnvelope2(nonce, ciphertext, key32);
+}
+async function decryptEnvelope2(nonce, ciphertext, key32) {
+  if (nonce.length !== NONCE_LENGTH2) {
+    throw new TypeError(`nonce must be ${NONCE_LENGTH2} bytes, got ${nonce.length}`);
+  }
+  const key = await importAesKey2(key32, "decrypt");
+  return new Uint8Array(
+    await globalThis.crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: nonce, additionalData: AAD4 },
+      key,
+      ciphertext
+    )
+  );
+}
 function isPlainRecord2(value) {
   const proto = Object.getPrototypeOf(value);
   return proto === Object.prototype || proto === null;
@@ -29109,6 +29194,7 @@ function equal(left, right) {
   return left.length === right.length && left.every((byte, index) => byte === right[index]);
 }
 var ED25519_VERIFY_OPTS2 = { zip215: false };
+var ENVELOPE_V2_SIGNATURE_DOMAIN = "xyz.tinycloud.share/envelope/v2\0";
 var ENVELOPE_V3_SIGNATURE_DOMAIN = "xyz.tinycloud.share/envelope/v3\0";
 var POLICY_V1_SIGNATURE_DOMAIN = "xyz.tinycloud.policy/policy/v1\0";
 var POLICY_V2_SIGNATURE_DOMAIN = "xyz.tinycloud.policy/policy/v2\0";
@@ -29116,6 +29202,14 @@ var CONTENT_SOURCE_V1_DOMAIN = "xyz.tinycloud.policy/ContentSource/v1\0";
 var POLICY_CAPABILITY_V1_DOMAIN = "xyz.tinycloud.policy/PolicyCapability/v1\0";
 var NATIVE_PROJECTION_V1_DOMAIN = "xyz.tinycloud.policy/NativeProjection/v1\0";
 var ATTESTED_ENFORCER_V2_DOMAIN = "xyz.tinycloud.policy/AttestedEnforcerBinding/v2\0";
+function signingBytesV2(unsigned) {
+  const domain = utf8Bytes4(ENVELOPE_V2_SIGNATURE_DOMAIN);
+  const body = utf8Bytes4(canonicalize2(unsigned));
+  const bytes3 = new Uint8Array(domain.length + body.length);
+  bytes3.set(domain);
+  bytes3.set(body, domain.length);
+  return bytes3;
+}
 function signingBytesV3(unsigned) {
   const domain = utf8Bytes4(ENVELOPE_V3_SIGNATURE_DOMAIN);
   const body = utf8Bytes4(canonicalize2(unsigned));
@@ -29123,6 +29217,17 @@ function signingBytesV3(unsigned) {
   bytes3.set(domain);
   bytes3.set(body, domain.length);
   return bytes3;
+}
+function verifyEnvelopeV2SignatureOnly(envelope) {
+  const parsed = shareEnvelopeV2Schema3.parse(envelope);
+  const { signature, ...unsigned } = parsed;
+  return ed25519.verify(fromBase64Url4(signature.value), signingBytesV2(unsigned), ed25519PublicKeyFromDidKey2(signature.signerDid), ED25519_VERIFY_OPTS2);
+}
+async function verifyEnvelopeV2(envelope, options) {
+  const parsed = shareEnvelopeV2Schema3.parse(envelope);
+  if (parsed.signature.signerDid !== options.expectedSignerDid || !verifyEnvelopeV2SignatureOnly(parsed)) return false;
+  if (parsed.authorizationTarget.kind === "policy") return await computeCid2(fromBase64Url4(parsed.authorizationTarget.policyBytes)) === parsed.authorizationTarget.policyCid;
+  return true;
 }
 function verifyEnvelopeV3SignatureOnly(envelope) {
   const parsed = shareEnvelopeV3Schema3.parse(envelope);
@@ -29210,6 +29315,52 @@ function base32Lower(bytes3) {
   if (bits > 0) output2 += alphabet[buffer << 5 - bits & 31];
   return output2;
 }
+var KEY_LENGTH22 = 32;
+function assertCanonicalCid(cidString) {
+  const cid2 = CID4.parse(cidString);
+  if (cid2.version !== 1 || cid2.code !== code4 || cid2.multihash.code !== 18 || // sha2-256 (0x12) only, at the link layer too
+  cid2.toString() !== cidString) {
+    throw new TypeError(`not a canonical CIDv1 raw sha2-256 base32 CID: ${cidString}`);
+  }
+}
+function parseShareUrl(url, options = {}) {
+  const parsed = new URL(url);
+  if (parsed.protocol !== "https:") {
+    throw new TypeError(`share URL must be https, got ${parsed.protocol}`);
+  }
+  if (parsed.username !== "" || parsed.password !== "") {
+    throw new TypeError("share URL must not carry userinfo");
+  }
+  if (parsed.search !== "") {
+    throw new TypeError("share URL must not have a query string");
+  }
+  if (options.expectedOrigin !== void 0) {
+    if (!isCanonicalHttpsOrigin3(options.expectedOrigin)) {
+      throw new TypeError(
+        `expectedOrigin must be a canonical https origin, got ${options.expectedOrigin}`
+      );
+    }
+    if (parsed.origin !== options.expectedOrigin) {
+      throw new TypeError(
+        `share URL origin ${parsed.origin} does not match expected ${options.expectedOrigin}`
+      );
+    }
+  }
+  const match = /^\/s\/([a-z2-7]+)$/.exec(parsed.pathname);
+  if (!match || match[1] === void 0) {
+    throw new TypeError(`not a share URL path: ${parsed.pathname}`);
+  }
+  const ciphertextCid = match[1];
+  assertCanonicalCid(ciphertextCid);
+  if (!parsed.hash.startsWith("#k=")) {
+    throw new TypeError("share URL is missing the #k= key fragment");
+  }
+  const key32 = fromBase64Url4(parsed.hash.slice("#k=".length));
+  if (key32.length !== KEY_LENGTH22) {
+    throw new TypeError(`fragment key must be ${KEY_LENGTH22} bytes, got ${key32.length}`);
+  }
+  return { ciphertextCid, key32 };
+}
 var ARTIFACT_ROOT2 = "artifacts";
 function parseArtifactVersionPath2(path) {
   const match = /^artifacts\/([a-z0-9][a-z0-9_-]{2,62})\/versions\/([1-9][0-9]{0,14})\/([^/]+)$/.exec(path);
@@ -29286,6 +29437,7 @@ function verifyArtifactShare(envelope, options) {
 }
 var SHARE_RESULT_VERSION = 1;
 var DEFAULT_MAX_SEALED_BLOB_BYTES = 100 * 1024 * 1024 + 29;
+var DEFAULT_MAX_CONTENT_BLOB_BYTES = DEFAULT_MAX_SEALED_BLOB_BYTES;
 var ShareReceiveError = class extends Error {
   code;
   details;
@@ -29300,7 +29452,7 @@ var ShareReceiveError = class extends Error {
   }
 };
 function metadataFor(envelope, origin) {
-  const kind = envelope.recipientMatcher.kind === "recipientDid" ? "recipientDid" : envelope.recipientMatcher.kind === "exactEmail" ? "email" : "emailDomain";
+  const kind = envelope.recipientMatcher.kind === "recipientDid" ? "recipientDid" : envelope.recipientMatcher.kind === "exactEmail" ? "email" : envelope.recipientMatcher.kind === "emailDomain" ? "emailDomain" : "bearer";
   return {
     protocol: "tinycloud-share",
     version: 1,
@@ -29315,7 +29467,7 @@ function metadataFor(envelope, origin) {
       ...envelope.display.filename === void 0 ? {} : { filename: envelope.display.filename },
       ...envelope.display.mode === void 0 ? {} : { mode: envelope.display.mode }
     },
-    ...envelope.artifactPin === void 0 ? {} : { artifact: { id: envelope.artifactPin.artifactId, version: envelope.artifactPin.version } }
+    ...envelope.version === 3 && envelope.artifactPin !== void 0 ? { artifact: { id: envelope.artifactPin.artifactId, version: envelope.artifactPin.version } } : {}
   };
 }
 function receiveErrorFor(error) {
@@ -29413,13 +29565,164 @@ async function resolvePolicyShare(link4, options) {
   options.onResolvedAddressedEnvelope?.(envelope, cid2);
   return { envelope, origin: url.origin, cid: cid2 };
 }
+async function resolveLegacyV2(link4, options) {
+  let parsed;
+  try {
+    parsed = parseShareUrl(link4, { ...options.expectedOrigin === void 0 ? {} : { expectedOrigin: options.expectedOrigin } });
+  } catch {
+    throw new ShareReceiveError("invalid-link", "legacy share link format is invalid");
+  }
+  try {
+    options.signal?.throwIfAborted();
+    const origin = new URL(link4).origin;
+    const limit = options.maxSealedBlobBytes ?? DEFAULT_MAX_SEALED_BLOB_BYTES;
+    if (!Number.isSafeInteger(limit) || limit <= 0) throw new ShareReceiveError("max-bytes-exceeded", "sealed envelope limit is invalid");
+    let sealed;
+    if (options.fetchBlob !== void 0) {
+      try {
+        sealed = await options.fetchBlob({ origin, cid: parsed.ciphertextCid, ...options.signal === void 0 ? {} : { signal: options.signal } });
+      } catch {
+        throw new ShareReceiveError("fetch-failed", "legacy registry unavailable");
+      }
+    } else {
+      if (options.registryBaseUrl === void 0) throw new ShareReceiveError("fetch-failed", "legacy registry is required");
+      const response = await (options.fetch ?? globalThis.fetch)(`${options.registryBaseUrl.replace(/\/+$/, "")}/ipfs/${parsed.ciphertextCid}?format=raw`, {
+        headers: { accept: "application/vnd.ipld.raw" },
+        redirect: "error",
+        ...options.signal === void 0 ? {} : { signal: options.signal }
+      });
+      if (!response.ok) throw new ShareReceiveError("fetch-failed", "legacy registry unavailable");
+      if (Number(response.headers.get("content-length")) > limit) throw new ShareReceiveError("max-bytes-exceeded", "sealed envelope exceeds the size limit");
+      const reader = response.body?.getReader();
+      if (reader === void 0) throw new ShareReceiveError("fetch-failed", "legacy registry returned no body");
+      const chunks = [];
+      let length32 = 0;
+      for (; ; ) {
+        const part = await reader.read();
+        if (part.done) break;
+        length32 += part.value.length;
+        if (length32 > limit) {
+          await reader.cancel();
+          throw new ShareReceiveError("max-bytes-exceeded", "sealed envelope exceeds the size limit");
+        }
+        chunks.push(part.value);
+      }
+      sealed = new Uint8Array(length32);
+      let offset = 0;
+      for (const chunk of chunks) {
+        sealed.set(chunk, offset);
+        offset += chunk.length;
+      }
+    }
+    options.signal?.throwIfAborted();
+    if (!(sealed instanceof Uint8Array) || sealed.length > limit) throw new ShareReceiveError("max-bytes-exceeded", "sealed envelope exceeds the size limit");
+    if (await computeCid2(sealed) !== parsed.ciphertextCid) throw new ShareReceiveError("cid-mismatch", "legacy envelope CID does not match");
+    let plaintext;
+    try {
+      plaintext = await open8(sealed, parsed.key32);
+    } catch {
+      throw new ShareReceiveError("decrypt-failed", "legacy envelope could not be opened");
+    }
+    let envelope;
+    try {
+      const encoded = new TextDecoder("utf-8", { fatal: true }).decode(plaintext);
+      const value = JSON.parse(encoded);
+      if (canonicalize2(value) !== encoded) throw new Error("non-canonical envelope");
+      envelope = shareEnvelopeV2Schema3.parse(value);
+    } catch {
+      throw new ShareReceiveError("envelope-invalid", "legacy envelope is invalid");
+    }
+    return { envelope, origin, cid: parsed.ciphertextCid };
+  } finally {
+    parsed.key32.fill(0);
+  }
+}
+function evidenceMatchesV2(envelope, evidence) {
+  const actions = new Set(evidence.actions.map((action) => action === "read" ? "tinycloud.kv/get" : action === "list" ? "tinycloud.kv/list" : action === "edit" ? "tinycloud.kv/put" : action));
+  const resourceCovers = evidence.resource.kind === "exact" ? envelope.resource.kind === "exact" && evidence.resource.path === envelope.resource.path : envelope.resource.path === evidence.resource.path || envelope.resource.path.startsWith(evidence.resource.path.endsWith("/") ? evidence.resource.path : `${evidence.resource.path}/`);
+  return envelope.authorizationTarget.kind === "policy" && evidence.policyCid === envelope.authorizationTarget.policyCid && evidence.signerDid === envelope.signature.signerDid && evidence.registrationCid.length > 0 && evidence.shareId === envelope.shareId && canonicalize2(evidence.recipientMatcher) === canonicalize2(envelope.recipientMatcher) && canonicalize2(evidence.target) === canonicalize2(envelope.target) && resourceCovers && envelope.actions.every((action) => actions.has(action === "read" ? "tinycloud.kv/get" : action === "list" ? "tinycloud.kv/list" : "tinycloud.kv/put")) && canonicalize2(evidence.contentSource) === canonicalize2(envelope.contentSource) && evidence.contentSourceDigest === envelope.contentSourceDigest && evidence.delegationCid === envelope.delegationCid && evidence.authorityMaterialHandle === envelope.authorityMaterialHandle && evidence.authorityMaterialDigest === envelope.authorityMaterialDigest && evidence.expiresAt === envelope.expiry && Number.isFinite(Date.parse(evidence.expiresAt)) && Date.parse(evidence.expiresAt) === Date.parse(envelope.expiry);
+}
+async function verifyLegacyV2(envelope, options) {
+  try {
+    if (!await verifyEnvelopeV2(envelope, { expectedSignerDid: envelope.signature.signerDid })) throw new Error("signature");
+  } catch {
+    throw new ShareReceiveError("signature-invalid", "legacy envelope signature is invalid");
+  }
+  const expiry = Date.parse(envelope.expiry);
+  if (!Number.isFinite(expiry)) throw new ShareReceiveError("envelope-invalid", "legacy share expiry is invalid");
+  if (expiry <= (options.now?.() ?? Date.now())) throw new ShareReceiveError("expired", "legacy share has expired", { expiresAt: envelope.expiry });
+  if (envelope.authorizationTarget.kind === "policy") {
+    if (options.trustedPolicyAuthority === void 0) throw new ShareReceiveError("envelope-invalid", "a legacy policy authority is required");
+    let evidence;
+    try {
+      evidence = await options.trustedPolicyAuthority.resolve({ policyCid: envelope.authorizationTarget.policyCid, envelope });
+    } catch {
+    }
+    if (evidence === void 0 || !evidenceMatchesV2(envelope, evidence)) throw new ShareReceiveError("capability-invalid", "legacy policy evidence does not match");
+    if (options.trustedSignerDid !== void 0 && options.trustedSignerDid !== evidence.signerDid) throw new ShareReceiveError("signature-invalid", "legacy signer is not trusted");
+  } else if (options.trustedSignerDid === void 0 || options.trustedSignerDid !== envelope.signature.signerDid || envelope.authorizationTarget.kind === "recipientDid" && envelope.recipientMatcher.kind === "recipientDid" && envelope.authorizationTarget.did !== envelope.recipientMatcher.value) {
+    throw new ShareReceiveError("capability-invalid", "legacy recipient authority does not match");
+  }
+}
 async function inspectShare(link4, options = {}) {
+  if (isLegacyV2Link(link4)) {
+    const legacy = await resolveLegacyV2(link4, options);
+    await verifyLegacyV2(legacy.envelope, options);
+    options.onResolvedAddressedEnvelope?.(legacy.envelope, legacy.cid);
+    return { metadata: metadataFor(legacy.envelope, legacy.origin), link: { origin: legacy.origin, cid: legacy.cid, kind: "compact" } };
+  }
   const resolved = await resolvePolicyShare(link4, options);
   return { metadata: metadataFor(resolved.envelope, resolved.origin), link: { origin: resolved.origin, cid: resolved.cid, kind: "policy" } };
 }
 async function receiveShare(link4, options = {}) {
+  if (isLegacyV2Link(link4)) return receiveLegacyV2(link4, options);
   const resolved = await resolvePolicyShare(link4, options);
   return { state: "authorization-required", method: resolved.envelope.recipientMatcher.kind === "recipientDid" ? "openkey-device" : "email-claim" };
+}
+function isLegacyV2Link(link4) {
+  try {
+    const url = new URL(link4);
+    return /^\/s\/bafkrei[a-z2-7]{52}$/.test(url.pathname) && url.hash.startsWith("#k=");
+  } catch {
+    return false;
+  }
+}
+async function receiveLegacyV2(link4, options) {
+  const resolved = await resolveLegacyV2(link4, options);
+  const { envelope } = resolved;
+  await verifyLegacyV2(envelope, options);
+  options.onResolvedAddressedEnvelope?.(envelope, resolved.cid);
+  const method = envelope.recipientMatcher.kind === "recipientDid" ? "openkey-device" : "email-claim";
+  if (options.authorization === void 0) return { state: "authorization-required", method };
+  const result = options.authorizationResumeToken === void 0 ? await options.authorization.begin({ envelope, method }) : await options.authorization.resume({
+    envelope,
+    method,
+    resumeToken: options.authorizationResumeToken,
+    ...options.authorizationProof === void 0 ? {} : { proof: options.authorizationProof }
+  });
+  if (result.state === "authorization-required") return result;
+  if (result.state === "denied") throw new ShareReceiveError("authorization-denied", "legacy share authorization was denied");
+  if (result.value === null || typeof result.value !== "object" || !(result.value.bytes instanceof Uint8Array) || result.value.proof === void 0 || options.authorization.verifyResult === void 0) {
+    throw new ShareReceiveError("content-integrity-failed", "legacy content lacks a verifiable proof");
+  }
+  const authorized = result.value;
+  try {
+    if (!await options.authorization.verifyResult({ envelope, value: authorized, proof: authorized.proof })) throw new Error("proof");
+  } catch {
+    throw new ShareReceiveError("content-integrity-failed", "legacy content proof is invalid");
+  }
+  const bytes3 = authorized.bytes.slice();
+  if (bytes3.length > (options.maxContentBlobBytes ?? DEFAULT_MAX_CONTENT_BLOB_BYTES)) throw new ShareReceiveError("max-bytes-exceeded", "legacy content exceeds the size limit");
+  const bodyDigest = toBase64Url2(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes3)));
+  if (authorized.bodyDigest !== bodyDigest || authorized.contentSourceDigest !== envelope.contentSourceDigest || authorized.binding.shareId !== envelope.shareId || authorized.binding.delegationCid !== envelope.delegationCid || authorized.binding.authorityMaterialHandle !== envelope.authorityMaterialHandle || authorized.binding.authorityMaterialDigest !== envelope.authorityMaterialDigest || authorized.binding.resource.kind !== envelope.resource.kind || authorized.binding.resource.path !== envelope.resource.path || authorized.binding.action !== void 0 && !envelope.actions.some((action) => action === authorized.binding.action || `tinycloud.kv/${action}` === authorized.binding.action) || envelope.metadata.byteLength !== void 0 && envelope.metadata.byteLength !== bytes3.length) {
+    throw new ShareReceiveError("content-integrity-failed", "legacy content binding does not match");
+  }
+  let text;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes3);
+  } catch {
+  }
+  return { metadata: metadataFor(envelope, resolved.origin), link: { origin: resolved.origin, cid: resolved.cid, kind: "compact" }, bytes: bytes3, ...text === void 0 ? {} : { text } };
 }
 var SHARE_CONTENT_LIMIT = 100 * 1024 * 1024;
 var SHARE_PUBLISH_RESULT_VERSION = 1;
@@ -29908,7 +30211,10 @@ async function publishTargetShare(input) {
     expiresAt,
     expiryWasExplicit: input.expiryWasExplicit ?? input.expiresAt !== void 0,
     origin: input.origin,
-    ...input.notify === void 0 ? {} : { notify: input.notify }
+    ...input.notify === void 0 ? {} : { notify: input.notify },
+    ...input.credentialDescriptor === void 0 ? {} : { credentialDescriptor: input.credentialDescriptor },
+    ...input.issuerDid === void 0 ? {} : { issuerDid: input.issuerDid },
+    ...input.issuerKid === void 0 ? {} : { issuerKid: input.issuerKid }
   });
 }
 var textEncoder = new TextEncoder();
@@ -30642,7 +30948,53 @@ function parseNativeShareUrl(value) {
   return token;
 }
 
+// src/share/errors.ts
+var SharePublishAuthorityError = class extends Error {
+  constructor(failure, options) {
+    super(failure.kind, options);
+    this.failure = failure;
+    this.name = "SharePublishAuthorityError";
+  }
+};
+var ShareHistoryRetryError = class extends Error {
+  constructor(profile) {
+    super("sender history changed during the operation");
+    this.profile = profile;
+    this.name = "ShareHistoryRetryError";
+  }
+  code = "SHARE_HISTORY_RETRY";
+};
+var ShareHistoryUnreadableError = class extends Error {
+  constructor() {
+    super("share history is unavailable");
+    this.name = "ShareHistoryUnreadableError";
+  }
+};
+var ShareHistoryReadError = class extends Error {
+  constructor() {
+    super("share history could not be read");
+    this.name = "ShareHistoryReadError";
+  }
+};
+var HISTORY_WRITE_ERROR_CODES = { EACCES: true, EPERM: true, EROFS: true, ENOSPC: true, EDQUOT: true, EIO: true };
+function shareHistoryReason(error) {
+  if (error instanceof ShareHistoryUnreadableError) return "HISTORY_UNREADABLE";
+  if (error instanceof ShareHistoryReadError) return "HISTORY_READ_FAILED";
+  const code5 = typeof error === "object" && error !== null && "code" in error ? error.code : void 0;
+  return typeof code5 === "string" && HISTORY_WRITE_ERROR_CODES[code5] === true ? "HISTORY_WRITE_FAILED" : "HISTORY_UNAVAILABLE";
+}
+
 // src/share/adapters.ts
+init_storage2();
+init_profiles();
+init_constants();
+init_errors();
+init_session_expired();
+import { chmod as chmod4, link as link2, open as open9, readFile as readFile8, stat as stat4, unlink as unlink4 } from "fs/promises";
+import { dirname as dirname5, join as join12 } from "path";
+import { createHash } from "crypto";
+import { writeJsonAtomic as writeJsonAtomic2 } from "@tinycloud/operations/state";
+import { withoutBearer as withoutBearer2 } from "@tinycloud/operations/delegation-binding";
 import {
   LocationRecordValidationError,
   LocationRegistryHttpError,
@@ -30855,7 +31207,7 @@ function createEncryptedProfileHistory(profileName2, sessionSigner) {
       await link2(found.file, target);
       await chmod4(target, PRIVATE_HISTORY_MODE);
       await unlink4(found.file);
-      const directory = await open8(dirname5(found.file), "r");
+      const directory = await open9(dirname5(found.file), "r");
       try {
         await directory.sync();
       } finally {
@@ -31228,8 +31580,8 @@ async function callbackFlow(did, options = {}, env = {}) {
       }
       if (openBrowser) {
         try {
-          const open15 = (await import("open")).default;
-          await open15(authUrl);
+          const open16 = (await import("open")).default;
+          await open16(authUrl);
         } catch {
           settle({ error: new Error("Failed to open browser") });
           return;
@@ -32582,7 +32934,7 @@ init_errors();
 import { randomBytes as randomBytes6, timingSafeEqual } from "crypto";
 import { createServer as createServer2 } from "http";
 import { createInterface as createInterface2 } from "readline";
-import open9 from "open";
+import open10 from "open";
 init_owner_did();
 var MAX_BODY_BYTES = 1024 * 1024;
 var RESULT_FIELDS = ["address", "permissions", "protocolVersion", "selectedActionKeys", "signature", "signedMessage"];
@@ -32787,7 +33139,7 @@ async function startPreparedOpenKeyHandoff(options) {
     console.error(`Open this URL in a browser to authenticate: ${url}`);
     if (!options.noPopup && !options.paste) {
       try {
-        await open9(url);
+        await open10(url);
       } catch {
         console.error("Could not open browser. Use the printed URL or paste the signed code.");
       }
@@ -37473,7 +37825,7 @@ init_storage();
 init_errors();
 init_constants();
 import { randomUUID as randomUUID2 } from "crypto";
-import { lstat as lstat8, open as open10, rename as rename3, rm as rm5 } from "fs/promises";
+import { lstat as lstat8, open as open11, rename as rename3, rm as rm5 } from "fs/promises";
 import { basename as basename2, dirname as dirname7, join as join15 } from "path";
 async function validatePrivateOutput(path, label = "output") {
   try {
@@ -37500,7 +37852,7 @@ async function writePrivateOutput(path, value, label = "output") {
   const temp = join15(parentPath, `.${basename2(path)}.${randomUUID2()}.tmp`);
   let created = false;
   try {
-    const handle = await open10(temp, "wx", PRIVATE_FILE_MODE);
+    const handle = await open11(temp, "wx", PRIVATE_FILE_MODE);
     created = true;
     try {
       await handle.writeFile(value);
@@ -37515,7 +37867,7 @@ async function writePrivateOutput(path, value, label = "output") {
     throw new CLIError("ERROR", `Could not write ${label.toLowerCase()} "${path}"${code5}.`, ExitCode.ERROR);
   }
   try {
-    const parent = await open10(parentPath, "r");
+    const parent = await open11(parentPath, "r");
     try {
       await parent.sync();
     } finally {
@@ -38499,7 +38851,7 @@ init_profile_replicas();
 import { CLI_NAME as CLI_NAME31 } from "@tinycloud/operations/cli-name";
 import { randomBytes as randomBytes7 } from "crypto";
 import { constants as fsConstants5 } from "fs";
-import { mkdir as mkdir5, open as open11, readdir as readdir6, rename as rename4, unlink as unlink5, lstat as lstat9 } from "fs/promises";
+import { mkdir as mkdir5, open as open12, readdir as readdir6, rename as rename4, unlink as unlink5, lstat as lstat9 } from "fs/promises";
 import { basename as basename3, dirname as dirname8, join as join16, resolve as resolve5 } from "path";
 
 // src/lib/replication-report.ts
@@ -38966,7 +39318,7 @@ function describeStatus(status) {
 async function writeFileAtomic(path, bytes) {
   const target = resolve5(path);
   const temp = join16(dirname8(target), `.${basename3(target)}.${randomBytes7(6).toString("hex")}.tmp`);
-  const handle = await open11(temp, fsConstants5.O_CREAT | fsConstants5.O_EXCL | fsConstants5.O_WRONLY, 384);
+  const handle = await open12(temp, fsConstants5.O_CREAT | fsConstants5.O_EXCL | fsConstants5.O_WRONLY, 384);
   try {
     await handle.writeFile(bytes);
     await handle.sync();
@@ -39015,7 +39367,7 @@ async function withPinnedLocalDirectory(profile, parent, name, action) {
   });
   if (!before) return null;
   if (before.isSymbolicLink() || !before.isDirectory()) throw localPathChanged(profile);
-  const handle = await open11(path, fsConstants5.O_RDONLY | fsConstants5.O_DIRECTORY | fsConstants5.O_NOFOLLOW).catch((error) => {
+  const handle = await open12(path, fsConstants5.O_RDONLY | fsConstants5.O_DIRECTORY | fsConstants5.O_NOFOLLOW).catch((error) => {
     if (error.code === "ELOOP" || error.code === "ENOTDIR" || error.code === "ENOENT") throw localPathChanged(profile);
     throw error;
   });
@@ -39044,7 +39396,7 @@ async function readReportFile(profile, parent, name) {
   });
   if (!before) return null;
   if (before.isSymbolicLink() || !before.isFile()) throw localPathChanged(profile);
-  const handle = await open11(path, fsConstants5.O_RDONLY | fsConstants5.O_NOFOLLOW).catch((error) => {
+  const handle = await open12(path, fsConstants5.O_RDONLY | fsConstants5.O_NOFOLLOW).catch((error) => {
     if (error.code === "ELOOP" || error.code === "ENOTDIR" || error.code === "ENOENT") throw localPathChanged(profile);
     throw error;
   });
@@ -39422,12 +39774,12 @@ init_space();
 // src/lib/browser.ts
 init_formatter();
 init_theme();
-import open12 from "open";
+import open13 from "open";
 var LAUNCH_CHECK_MS = 1e3;
 async function tryOpenBrowser(url) {
   let launcher;
   try {
-    launcher = await open12(url);
+    launcher = await open13(url);
   } catch {
     return false;
   }
@@ -41239,6 +41591,7 @@ function registerSecretsCommand(program, openKeyAcquisition) {
 
 // src/commands/share.ts
 import { Option } from "commander";
+import { readFile as readFile16 } from "fs/promises";
 import { CLI_NAME as CLI_NAME34 } from "@tinycloud/operations/cli-name";
 import { ProfileLockTimeoutError as ProfileLockTimeoutError3 } from "@tinycloud/operations/state";
 init_errors();
@@ -41334,7 +41687,7 @@ function receiveJson(result, path) {
 
 // src/share/io.ts
 import { constants } from "fs";
-import { lstat as lstat10, mkdir as mkdir6, mkdtemp, open as open13, readFile as readFile15, realpath as realpath2, stat as stat6, link as link3, rename as rename5, rm as rm6, unlink as unlink6 } from "fs/promises";
+import { lstat as lstat10, mkdir as mkdir6, mkdtemp, open as open14, readFile as readFile15, realpath as realpath2, stat as stat6, link as link3, rename as rename5, rm as rm6, unlink as unlink6 } from "fs/promises";
 import { randomBytes as randomBytes8 } from "crypto";
 import { basename as basename4, join as join18, resolve as resolve6, sep as sep3 } from "path";
 init_errors();
@@ -41410,7 +41763,7 @@ async function writeShareOutput(directory, filename, bytes, force) {
   const outputDirectory = resolve6(directory);
   await assertDirectory(outputDirectory);
   const safeName = safeFilename(filename);
-  const directoryHandle = await open13(outputDirectory, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
+  const directoryHandle = await open14(outputDirectory, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
   const stableDirectory = await realpath2(outputDirectory);
   const outputPath = join18(stableDirectory, safeName);
   const directoryIdentity = await directoryHandle.stat();
@@ -41434,7 +41787,7 @@ async function writeShareOutput(directory, filename, bytes, force) {
       if (error.code !== "ENOENT") throw error;
     }
     temporaryPath = stagingPath;
-    handle = await open13(temporaryPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 384);
+    handle = await open14(temporaryPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 384);
     await handle.writeFile(bytes);
     await handle.close();
     handle = void 0;
@@ -41467,7 +41820,7 @@ init_profiles();
 
 // src/share/html-folder.ts
 import { constants as constants2, existsSync as existsSync2 } from "fs";
-import { lstat as lstat11, open as open14, readdir as readdir7, realpath as realpath3, stat as stat7 } from "fs/promises";
+import { lstat as lstat11, open as open15, readdir as readdir7, realpath as realpath3, stat as stat7 } from "fs/promises";
 import { basename as basename5, dirname as dirname9, isAbsolute, join as join19, relative as relativePath, resolve as resolve7, sep as sep4 } from "path";
 
 // ../share-sdk/dist/html-bundle.js
@@ -41822,9 +42175,9 @@ function scanMarkup(html, options) {
     if (comments > MAX_ARTIFACT_COMMENTS) fail("limit", "artifact page has too many comments");
   };
   while (index < length5) {
-    const open15 = html.indexOf("<", index);
-    if (open15 === -1) return;
-    index = open15 + 1;
+    const open16 = html.indexOf("<", index);
+    if (open16 === -1) return;
+    index = open16 + 1;
     const next = html[index] ?? "";
     if (html.startsWith("!--", index)) {
       countComment();
@@ -42425,7 +42778,7 @@ async function readRegularFile(root, path, relative, remaining, limit, hooks = {
     await hooks.beforeOpen?.();
     before = await lstat11(path);
     await hooks.afterLstat?.();
-    handle = await open14(path, constants2.O_RDONLY | (constants2.O_NOFOLLOW ?? 0) | (constants2.O_NONBLOCK ?? 0));
+    handle = await open15(path, constants2.O_RDONLY | (constants2.O_NOFOLLOW ?? 0) | (constants2.O_NONBLOCK ?? 0));
   } catch (error) {
     if (error.code === "ELOOP") return problem("symbolic link");
     if (isRaceError(error)) return problem(CHANGED);
@@ -42484,7 +42837,7 @@ async function listFolderDirectory(root, absolute, relative, hooks = {}) {
     if (before.isSymbolicLink()) return problem("symbolic link");
     if (!before.isDirectory()) return problem(CHANGED);
     await hooks.afterLstat?.();
-    const handle = await open14(absolute, constants2.O_RDONLY | (constants2.O_DIRECTORY ?? 0) | (constants2.O_NOFOLLOW ?? 0));
+    const handle = await open15(absolute, constants2.O_RDONLY | (constants2.O_DIRECTORY ?? 0) | (constants2.O_NOFOLLOW ?? 0));
     try {
       await hooks.afterOpen?.();
       const info = await handle.stat();
@@ -42908,7 +43261,7 @@ function assertAggregateInputLimit(inputs, maxBytes) {
 }
 function registerShareCommand(program) {
   const share = program.command("share").description("Publish and consume TinyCloud Share links");
-  share.command("publish <files...>").description("Publish one or more bounded files as a Share, or a folder with an index.html as one self-contained page (anyone links only)").option("--name <filename>", "Filename for stdin input, or the published .html name of a folder").option("--to <target>", "Share target", "anyone").option("--notify", "Email an exact-email recipient, or a domain mailbox on node 1.17.3+").option("--notify-to <address>", "Mailbox to invite for --to domain:<name> --notify (node 1.17.3+)").option("--expires <duration>", "Share lifetime").option("--max-bytes <bytes>", "Bound input bytes").option("--media-type <type>", "Media type for a single input").option("--action <actions...>", "Addressed permission: read, list, or edit").option("--prefix", "Publish multiple inputs beneath one addressed prefix").option("--binary", "Allow non-UTF-8 bearer content").option("--artifact <id>", 'Publish as the next write-once version of an artifact ("new" starts one); the share is pinned to that version').addOption(new Option("--ongoing").hideHelp()).option("--note <text>", "Note stored with the artifact version").option("--json", "Print versioned redacted JSON").option("--full-link", "Print the full self-contained link instead of a short link (addressed shares)").option("--viewer-origin <origin>", "Canonical HTTPS viewer origin", SHARE_ORIGIN2).action(async (files, options, command) => {
+  share.command("publish <files...>").description("Publish one or more bounded files as a Share, or a folder with an index.html as one self-contained page (anyone links only)").option("--name <filename>", "Filename for stdin input, or the published .html name of a folder").option("--to <target>", "Share target", "anyone").option("--credential-descriptor <path>", "Email credential flow descriptor JSON").option("--issuer-did <did>", "Trusted email credential issuer DID").option("--issuer-kid <kid>", "Trusted email credential issuer key ID").option("--notify", "Email an exact-email recipient, or a domain mailbox on node 1.17.3+").option("--notify-to <address>", "Mailbox to invite for --to domain:<name> --notify (node 1.17.3+)").option("--expires <duration>", "Share lifetime").option("--max-bytes <bytes>", "Bound input bytes").option("--media-type <type>", "Media type for a single input").option("--action <actions...>", "Addressed permission: read, list, or edit").option("--prefix", "Publish multiple inputs beneath one addressed prefix").option("--binary", "Allow non-UTF-8 bearer content").option("--artifact <id>", 'Publish as the next write-once version of an artifact ("new" starts one); the share is pinned to that version').addOption(new Option("--ongoing").hideHelp()).option("--note <text>", "Note stored with the artifact version").option("--json", "Print versioned redacted JSON").option("--full-link", "Print the full self-contained link instead of a short link (addressed shares)").option("--viewer-origin <origin>", "Canonical HTTPS viewer origin", SHARE_ORIGIN2).action(async (files, options, command) => {
     try {
       const json = jsonOutput(options, command);
       if (options.ongoing === true) throw new CLIError("UNSUPPORTED_TARGET", ONGOING_UNAVAILABLE, 2);
@@ -42916,6 +43269,15 @@ function registerShareCommand(program) {
       if (files.length === 0 || files.includes("-") && files.length > 1) throw new CLIError("INVALID_ARGUMENT", "stdin must be the only publish input", 2);
       const name = files.length === 1 ? options.name : void 0;
       const target = parseShareTarget(options.to);
+      const actions = requestedActions(options.action);
+      if (options.notify === true && !actions.includes("read")) throw new CLIError("INVALID_ARGUMENT", "--notify requires the read action; nothing was shared", 2);
+      if (target.kind === "email" && (!options.credentialDescriptor || !options.issuerDid || !options.issuerKid)) {
+        throw new CLIError("INVALID_ARGUMENT", "email publication requires --credential-descriptor, --issuer-did, and --issuer-kid", 2);
+      }
+      if (target.kind !== "email" && (options.credentialDescriptor || options.issuerDid || options.issuerKid)) {
+        throw new CLIError("INVALID_ARGUMENT", "credential options require an exact email target", 2);
+      }
+      const credentialDescriptor = target.kind === "email" ? JSON.parse(await readFile16(options.credentialDescriptor, "utf8")) : void 0;
       const folder = files.length === 1 && target.kind === "bearer" && options.prefix !== true && await isDirectoryInput(files[0]);
       let inputs;
       if (folder) {
@@ -42932,13 +43294,11 @@ function registerShareCommand(program) {
         inputs = await Promise.all(files.map((file) => readShareInput(file, name, maxBytes)));
       }
       assertAggregateInputLimit(inputs, maxBytes);
-      const actions = requestedActions(options.action);
       if (options.prefix && target.kind === "bearer") throw new CLIError("INVALID_ARGUMENT", "--prefix requires an addressed target", 2);
       if (target.kind === "bearer" && actions.includes("edit")) throw new CLIError("INVALID_ARGUMENT", `--action edit is not available with --to ${options.to}: a link can only be read; address a recipient to allow edits`, 2);
       if (inputs.length > 1 && target.kind === "bearer") throw new CLIError("UNSUPPORTED_LINK", "multiple files require an addressed target", 2);
       const artifact = artifactRequest(options, actions, inputs.length);
       if (inputs.length > 1 && !options.prefix) throw new CLIError("INVALID_ARGUMENT", "multiple files require --prefix", 2);
-      if (options.notify === true && !actions.includes("read")) throw new CLIError("INVALID_ARGUMENT", "--notify requires the read action; nothing was shared", 2);
       if (options.notifyTo !== void 0 && (options.notify !== true || target.kind !== "emailDomain")) {
         throw new CLIError("INVALID_ARGUMENT", "--notify-to requires --to domain:<name> --notify", 2);
       }
@@ -42968,6 +43328,7 @@ function registerShareCommand(program) {
         origin: options.viewerOrigin,
         ...maxBytes === void 0 ? {} : { maxBytes },
         notify: options.notify === true,
+        ...credentialDescriptor === void 0 ? {} : { credentialDescriptor, issuerDid: options.issuerDid, issuerKid: options.issuerKid },
         // The artifact request rides on the adapter call rather than through `publishTargetShare`, whose code is part of
         // the browser bundles (the web-sdk size ceiling counts every byte it carries).
         targetAdapter: artifact === void 0 || shareServices.targetAdapter === void 0 ? shareServices.targetAdapter : { publish: (request) => shareServices.targetAdapter.publish({ ...request, artifact }) }
@@ -44103,7 +44464,7 @@ function registerUpgradeCommand(program) {
 }
 
 // src/commands/vault.ts
-import { readFile as readFile16 } from "fs/promises";
+import { readFile as readFile17 } from "fs/promises";
 init_profiles();
 init_formatter();
 init_errors();
@@ -44165,7 +44526,7 @@ function registerVaultCommand(program) {
         throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
       }
       if (options.file) {
-        putValue = new Uint8Array(await readFile16(options.file));
+        putValue = new Uint8Array(await readFile17(options.file));
       } else if (options.stdin) {
         putValue = new Uint8Array(await readStdin5());
       } else {
@@ -44280,7 +44641,7 @@ function registerVaultCommand(program) {
 }
 
 // src/commands/vars.ts
-import { readFile as readFile17 } from "fs/promises";
+import { readFile as readFile18 } from "fs/promises";
 init_profiles();
 init_formatter();
 init_errors();
@@ -44385,7 +44746,7 @@ function registerVarsCommand(program) {
         throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
       }
       if (options.file) {
-        varValue = await readFile17(options.file, "utf-8");
+        varValue = await readFile18(options.file, "utf-8");
       } else if (options.stdin) {
         varValue = (await readStdin6()).toString("utf-8");
       } else {

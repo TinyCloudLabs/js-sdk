@@ -51,6 +51,7 @@
     "replication-content-fetch-lazy",
     "sdk-issued-delegations",
     "sdk-manifest-app-keys",
+    "tc-2177-v3-email-share-publisher",
     "tc-apps-mcp-write-attribution",
     "tc1362-hosted-mcp-host",
     "tc1737-createlink-floor",
@@ -62,6 +63,7 @@
     "tc2127-window-without-location",
     "tc2140-exact-key-delegation",
     "tc2196-native-mcp-auth",
+    "tc2202-agent-receive",
     "web-panel-ask-permission",
     "web-sdk-panel-safe-area"
   ]
