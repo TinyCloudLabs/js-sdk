@@ -1,5 +1,13 @@
 # @tinycloud/cli
 
+## 1.5.0-beta.23
+
+### Patch Changes
+
+- 3cb038a: `tinycloud onboard` says its first grant lets the agent read, change and delete apps' data. The grant already included delete; the text now names it.
+
+  Details: TC-2168
+
 ## 1.5.0-beta.22
 
 ### Patch Changes

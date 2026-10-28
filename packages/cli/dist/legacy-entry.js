@@ -38166,7 +38166,7 @@ var sql = (actions) => actions.map((action) => `tinycloud.sql/${action}`);
 var ONBOARD_STEPS = [
   {
     space: "applications",
-    asks: "Read and change your apps' data for 30 days.",
+    asks: "Read, change and delete your apps' data for 30 days.",
     permissions: [
       { service: "tinycloud.kv", space: "applications", path: "", actions: kv(["get", "list", "put", "del", "metadata"]) },
       { service: "tinycloud.sql", space: "applications", path: "", actions: sql(["read", "write"]) }
@@ -38188,7 +38188,7 @@ var ApprovalNeeded = class extends Error {
   }
 };
 function registerOnboardCommand(program) {
-  program.command("onboard").description(`Set up this computer to act for its owner: a profile, the owner's OpenKey sign-in (or new account), and a starting grant for 30 days (read and change the applications space; read which spaces and apps exist). Each run does the next approval: it prints the approval link and exits ${ExitCode.PENDING}; run it again with the code OpenKey shows. Exits 0 when onboarding is complete.`).option("--code <code>", "The code OpenKey showed after the owner approved the last link").action(async (options, cmd) => {
+  program.command("onboard").description(`Set up this computer to act for its owner: a profile, the owner's OpenKey sign-in (or new account), and a starting grant for 30 days (read, change and delete in the applications space; read which spaces and apps exist). Each run does the next approval: it prints the approval link and exits ${ExitCode.PENDING}; run it again with the code OpenKey shows. Exits 0 when onboarding is complete.`).option("--code <code>", "The code OpenKey showed after the owner approved the last link").action(async (options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });

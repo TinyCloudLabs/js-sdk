@@ -34,6 +34,7 @@
     "cli-keys-replication",
     "cli-kv-create-only",
     "cli-named-keys",
+    "cli-onboard-asks-delete",
     "cli-onboard-sql-grant",
     "cli-onboard",
     "cli-secrets-run",
