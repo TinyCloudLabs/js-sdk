@@ -13,15 +13,13 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { publishTargetShare } from "@tinycloud/share-sdk";
 import {
-  open,
-  parseShareUrl,
   shareEnvelopeV3Schema,
-  verifyCid,
   verifyEnvelopeV3SignatureOnly,
 } from "@tinycloud/share-envelope";
+import { DEFAULT_LINKS_API_ORIGIN, resolveLink } from "@tinycloud/share-envelope/links";
 import { ProfileManager } from "../src/config/profiles.js";
 import { ensureAuthenticated } from "../src/lib/sdk.js";
-import { createProductionUploadAuthorizer, createShareAuthorityAdapters } from "../src/share/adapters.js";
+import { createShareAuthorityAdapters } from "../src/share/adapters.js";
 
 const [profile, inputFile, email, descriptorFile, issuerDid, issuerKid, outputDirectory] = process.argv.slice(2);
 if (!profile || !inputFile || !email || !descriptorFile || !issuerDid || !issuerKid || !outputDirectory) {
@@ -29,7 +27,6 @@ if (!profile || !inputFile || !email || !descriptorFile || !issuerDid || !issuer
 }
 
 const shareOrigin = "https://share.tinycloud.xyz";
-const registryBaseUrl = `${shareOrigin}/api/share/link-only/registry`;
 const configResponse = await fetch(`${shareOrigin}/.well-known/tinycloud-share/config.json`, {
   headers: { accept: "application/json" }, credentials: "omit", redirect: "error", referrerPolicy: "no-referrer",
 });
@@ -49,26 +46,21 @@ const result = await publishTargetShare({
   source, filename, files: [{ bytes: source, filename, mediaType: "text/plain" }],
   mediaType: "text/plain", target: { kind: "email", address: email }, resourceKind: "exact",
   actions: ["read"], expiresAt: new Date(Date.now() + 60 * 60 * 1000), origin: shareOrigin,
-  registryBaseUrl, targetAdapter: authority.targetAdapter,
-  authorizeUpload: createProductionUploadAuthorizer({
-    profileName: async () => profile, nodeOrigin: async () => config.nodeOrigin!, fetchFn: globalThis.fetch,
-  }),
-  authorizationOrigin: shareOrigin, fetchFn: globalThis.fetch,
+  targetAdapter: authority.targetAdapter,
   credentialDescriptor: descriptor, issuerDid, issuerKid,
 });
-if ("state" in result || result.metadata.envelopeVersion !== 3 || result.link.kind !== "compact") {
-  throw new Error("publisher did not produce a compact V3 email share");
+if ("state" in result || result.metadata.envelopeVersion !== 3 || result.link.kind !== "policy") {
+  throw new Error("publisher did not produce a V3 email policy share");
 }
 
-const { ciphertextCid, key32 } = parseShareUrl(result.url, { expectedOrigin: shareOrigin });
-const blobResponse = await fetch(`${registryBaseUrl}/ipfs/${ciphertextCid}?format=raw`, {
-  headers: { accept: "application/vnd.ipld.raw" }, redirect: "error",
+const resolved = await resolveLink(result.url, {
+  trustedOrigins: [shareOrigin], apiOrigin: DEFAULT_LINKS_API_ORIGIN,
 });
-if (!blobResponse.ok) throw new Error("sealed envelope could not be read from the registry");
-const sealedBlob = new Uint8Array(await blobResponse.arrayBuffer());
-if (!await verifyCid(sealedBlob, ciphertextCid)) throw new Error("sealed envelope CID mismatch");
-const envelope = shareEnvelopeV3Schema.parse(JSON.parse(new TextDecoder().decode(await open(sealedBlob, key32))));
-key32.fill(0);
+if (resolved.form !== "full" || resolved.type !== "share" || resolved.header.bodyCid !== result.link.cid) {
+  throw new Error("publisher did not produce a signed V4 Share link record");
+}
+const sealedBlob = resolved.body;
+const envelope = shareEnvelopeV3Schema.parse(resolved.value);
 if (!verifyEnvelopeV3SignatureOnly(envelope)) throw new Error("V3 envelope signature is invalid");
 const networkId = node.getDefaultEncryptionNetworkId();
 const keyPath = `share/${envelope.shareId}`;

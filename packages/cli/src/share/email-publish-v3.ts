@@ -15,15 +15,14 @@ import {
 } from "@tinycloud/sdk-core";
 import {
   canonicalize,
-  encodeInlineShareUrl,
-  encodeShareUrl,
   generateKey,
   seal,
   shareEnvelopeV3Schema,
   toBase64Url,
   unsignedShareEnvelopeV3Schema,
 } from "@tinycloud/share-envelope";
-import { SHARE_PUBLISH_RESULT_VERSION, uploadShareBlob, type PublishedShare, type SharePublishOptions } from "@tinycloud/share-sdk";
+import { buildFullLink, DEFAULT_LINKS_API_ORIGIN, prepareLinkRecord } from "@tinycloud/share-envelope/links";
+import { SHARE_PUBLISH_RESULT_VERSION, type PublishedShare } from "@tinycloud/share-sdk";
 
 const sha256 = (bytes: Uint8Array) => new Uint8Array(createHash("sha256").update(bytes).digest());
 const text = (value: unknown) => new TextEncoder().encode(canonicalize(value));
@@ -48,7 +47,6 @@ export interface EmailPublishV3Input {
   readonly byteLength: number;
   readonly actions: readonly ("read" | "list" | "edit")[];
   readonly expiresAt: Date;
-  readonly inline?: boolean;
   readonly credentialDescriptor: unknown;
   readonly issuerDid: string;
   readonly issuerKid: string;
@@ -67,7 +65,7 @@ export interface EmailPublishV3Input {
   readonly registerPolicy: (input: Record<string, unknown>) => Promise<unknown>;
   readonly sign: (bytes: Uint8Array) => Promise<Uint8Array>;
   readonly onDeliveryMaterial?: (material: { readonly envelope: Record<string, unknown>; readonly sealedEnvelope: string; readonly envelopeKey: string; readonly shareCid: string }) => void;
-  readonly upload: Pick<SharePublishOptions, "registryBaseUrl" | "fetchFn" | "authorizeUpload" | "authorizationOrigin" | "credentials" | "allowInsecureRegistry" | "uploadBlob">;
+  readonly apiOrigin?: string;
 }
 
 /** Publish an exact email share with a dedicated encrypted leaf and Policy/v2. */
@@ -137,14 +135,17 @@ export async function publishEmailShareV3(input: EmailPublishV3Input): Promise<P
   const envelopeKey = generateKey();
   try {
     const sealed = await seal(text(envelope), envelopeKey);
-    const uploaded = input.inline === true ? undefined : await uploadShareBlob({ source: new Uint8Array([1]), filename: input.filename, origin: input.shareOrigin, ...input.upload }, { blob: sealed.blob, cid: sealed.cid, deleteAfter: expiresAt, contentLength: sealed.blob.byteLength });
-    const url = input.inline === true
-      ? await encodeInlineShareUrl({ origin: input.shareOrigin, ciphertext: sealed.blob, key32: envelopeKey })
-      : encodeShareUrl({ origin: input.shareOrigin, ciphertextCid: uploaded!.cid, key32: envelopeKey });
+    const { record } = await prepareLinkRecord({
+      type: "share", sealed: { blob: sealed.blob, key: envelopeKey },
+      issuerKey: { did: input.ownerDid, sign: input.sign },
+      apiOrigin: input.apiOrigin ?? DEFAULT_LINKS_API_ORIGIN,
+      expiresAt: new Date(expiresAt), enforceServiceLife: false,
+    });
+    const url = buildFullLink({ origin: input.shareOrigin, key: envelopeKey, record });
     input.onDeliveryMaterial?.({ envelope, sealedEnvelope: toBase64Url(sealed.blob), envelopeKey: toBase64Url(envelopeKey), shareCid: sealed.cid });
     const result: PublishedShare = {
       protocol: "tinycloud-share", version: SHARE_PUBLISH_RESULT_VERSION, url,
-      link: { kind: input.inline === true ? "inline" : "compact", cid: sealed.cid },
+      link: { kind: "policy", cid: sealed.cid },
       metadata: {
         protocol: "tinycloud-share", version: 1, shareId: input.shareId, origin: input.shareOrigin,
         target: { kind: "email", origin: input.nodeOrigin, nodeAudience: input.enforcerDid, spaceId: input.spaceId },
@@ -153,7 +154,7 @@ export async function publishEmailShareV3(input: EmailPublishV3Input): Promise<P
         policyCid, ownerDelegationCid: policyRoot.cid, enforcementDelegationCid: enforcementRoot.cid,
         ownerDid: input.ownerDid, enforcerDid: input.enforcerDid, envelopeCid: sealed.cid, shareCid: sealed.cid, envelopeVersion: 3,
       },
-      registryDeleteAfter: uploaded?.deleteAfter ?? expiresAt,
+      registryDeleteAfter: expiresAt,
     };
     Object.defineProperty(result, "url", { enumerable: false, value: url });
     return result;

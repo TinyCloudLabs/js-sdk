@@ -6,6 +6,7 @@ import {
   credentialRequirementDigest,
 } from "@tinycloud/sdk-core";
 import { didKeyFromEd25519PublicKey, verifyEnvelopeV3SignatureOnly, type ShareEnvelopeV3 } from "@tinycloud/share-envelope";
+import { DEFAULT_LINKS_API_ORIGIN, resolveLink } from "@tinycloud/share-envelope/links";
 import { publishEmailShareV3, type EmailPublishV3Input } from "./email-publish-v3.js";
 
 const fixtures = new URL("../../../sdk-core/test-fixtures/opencredentials-v1/golden-descriptor-digests.json", import.meta.url);
@@ -36,7 +37,6 @@ function harness(shareId: string) {
     }),
     registerPolicy: async (request) => { registered = request; return { policyCid: request.policyCid, policyRootCid: "root-policy-authority", enforcementRootCid: "root-policy-enforcement" }; },
     onDeliveryMaterial: (material) => { envelope = material.envelope as ShareEnvelopeV3; },
-    upload: { uploadBlob: async ({ cid, deleteAfter }) => ({ cid, deleteAfter }) },
   };
   return { input, roots, get registered() { return registered; }, get envelope() { return envelope; } };
 }
@@ -47,6 +47,15 @@ describe("CLI V3 email publisher", () => {
     const second = harness("sharetwo1234567890");
     const firstResult = await publishEmailShareV3(first.input);
     const secondResult = await publishEmailShareV3(second.input);
+    expect(firstResult.url).toMatch(/^https:\/\/share\.example\/s\/full#v=4&k=/);
+    expect(firstResult.link.kind).toBe("policy");
+    const opened = await resolveLink(firstResult.url, {
+      trustedOrigins: [first.input.shareOrigin], apiOrigin: DEFAULT_LINKS_API_ORIGIN,
+    });
+    expect(opened.type).toBe("share");
+    expect(opened.header.issuer).toBe(ownerDid);
+    expect(opened.header.bodyCid).toBe(firstResult.link.cid);
+    expect(opened.value).toEqual(first.envelope);
     expect(firstResult.metadata.envelopeVersion).toBe(3);
     expect(secondResult.metadata.envelopeVersion).toBe(3);
     for (const { input, roots, registered, envelope } of [first, second]) {
