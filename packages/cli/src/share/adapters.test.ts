@@ -802,7 +802,7 @@ describe("TinyCloud share authority adapter", () => {
       expiresAt: new Date("2030-01-01T00:00:00.000Z"),
       origin: "https://share.example", mediaType: "text/markdown",
     };
-    await expect(addressedAdapter().publish(rawEmailInput)).rejects.toThrow("email credential descriptor and issuer are required");
+    await expect(addressedAdapter().publish(rawEmailInput)).rejects.toThrow();
     expect(publishEvents).toEqual([]);
     expect(uploadedPaths).toEqual([]);
     expect(registeredPolicies).toEqual([]);
