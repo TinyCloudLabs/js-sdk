@@ -340,15 +340,14 @@ async function aesGcmDecrypt(key: Uint8Array, blob: Uint8Array, aad?: Uint8Array
   if (key.length !== 32 || blob.length < 28) throw new Error("encrypted content is malformed");
   const cryptoKey = await crypto.subtle.importKey("raw", key as unknown as BufferSource, "AES-GCM", false, ["decrypt"]);
   // These owned bytes are valid WebCrypto inputs; its buffer type is narrower.
-  const additionalData = aad as unknown as BufferSource | undefined;
-  return new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: blob.slice(0, 12) as unknown as BufferSource, ...(additionalData === undefined ? {} : { additionalData }) }, cryptoKey, blob.slice(12) as unknown as BufferSource));
+  return new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: blob.slice(0, 12) as unknown as BufferSource, ...(aad && { additionalData: aad as unknown as BufferSource }) }, cryptoKey, blob.slice(12) as unknown as BufferSource));
 }
 
-async function aesGcmEncrypt(key: Uint8Array, plaintext: Uint8Array): Promise<Uint8Array> {
+async function aesGcmEncrypt(key: Uint8Array, plaintext: Uint8Array, aad?: Uint8Array): Promise<Uint8Array> {
   if (key.length !== 32) throw new Error("encrypted content key is malformed");
   const nonce = crypto.getRandomValues(new Uint8Array(12));
   const cryptoKey = await crypto.subtle.importKey("raw", key as unknown as BufferSource, "AES-GCM", false, ["encrypt"]);
-  const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce as unknown as BufferSource }, cryptoKey, plaintext as unknown as BufferSource));
+  const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce as unknown as BufferSource, ...(aad && { additionalData: aad as unknown as BufferSource }) }, cryptoKey, plaintext as unknown as BufferSource));
   const output = new Uint8Array(nonce.length + ciphertext.length);
   output.set(nonce);
   output.set(ciphertext, nonce.length);
@@ -374,15 +373,15 @@ function parseV3InlineEncryptedEnvelope(bytes: Uint8Array, expected: ShareEnvelo
   if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("encrypted content envelope is malformed");
   const record = value as Record<string, unknown>;
   const allowed = ["v", "networkId", "keyPath", "alg", "keyVersion", "encryptedSymmetricKey", "encryptedSymmetricKeyHash", "ciphertext", "aad", "metadata"];
-  const version = expected.contentSource.encryptionKeyPath === undefined ? 1 : 2;
+  const source = expected.contentSource;
   if (Object.keys(record).some((key) => !allowed.includes(key))
-    || record.v !== version || record.networkId !== expected.contentSource.encryptionNetwork
+    || record.v !== (source.encryptionKeyPath === undefined ? 1 : 2) || record.networkId !== source.encryptionNetwork
     || record.networkId !== expected.encryptionNetwork
-    || record.keyPath !== expected.contentSource.encryptionKeyPath
+    || record.keyPath !== source.encryptionKeyPath
     || record.keyPath !== undefined && (record.keyPath !== `share/${expected.shareId}`)
-    || record.alg !== "x25519-aes256gcm/v1" || record.keyVersion !== expected.contentSource.keyVersion
+    || record.alg !== "x25519-aes256gcm/v1" || record.keyVersion !== source.keyVersion
     || typeof record.encryptedSymmetricKey !== "string" || typeof record.encryptedSymmetricKeyHash !== "string"
-    || hex(sha256(fromBase64(record.encryptedSymmetricKey, "v3 encrypted symmetric key"))) !== expected.contentSource.encryptedSymmetricKeyDigestHex
+    || hex(sha256(fromBase64(record.encryptedSymmetricKey, "v3 encrypted symmetric key"))) !== source.encryptedSymmetricKeyDigestHex
     || record.encryptedSymmetricKeyHash !== canonicalHashHex(record.encryptedSymmetricKey)
     || typeof record.ciphertext !== "string"
     || record.aad !== undefined && typeof record.aad !== "string"
@@ -565,6 +564,8 @@ export class ShareRecipientClient {
     assertArtifactBinding(artifactBindingView(envelope));
     if (!matchesInitialCiphertextDigest(bytes, envelope.contentSource.initialCiphertextDigestHex)) throw new Error("v3 owner KV ciphertext digest mismatch");
     const encrypted = parseV3InlineEncryptedEnvelope(bytes, envelope);
+    const ciphertext = fromBase64(encrypted.ciphertext, "v3 encrypted content");
+    if (ciphertext.length < 28) throw new Error("encrypted content is malformed");
     const aad = encrypted.aad === undefined ? undefined : fromBase64(encrypted.aad, "v3 encrypted content AAD");
     const receiverPrivateKey = crypto.getRandomValues(new Uint8Array(32));
     const receiverPublicKey = toBase64(x25519.getPublicKey(receiverPrivateKey));
@@ -608,7 +609,7 @@ export class ShareRecipientClient {
       const symmetricKey = await aesGcmDecrypt(shared, wrapped.slice(33));
       shared.fill(0);
       if (symmetricKey.length !== 32) throw new Error("v3 content key is malformed");
-      const plaintext = await aesGcmDecrypt(symmetricKey, fromBase64(encrypted.ciphertext, "v3 encrypted content"), aad);
+      const plaintext = await aesGcmDecrypt(symmetricKey, ciphertext, aad);
       this.v3ContentKey?.fill(0);
       this.v3ContentKey = symmetricKey;
       this.v3ContentEnvelope = encrypted;
@@ -621,7 +622,9 @@ export class ShareRecipientClient {
   /** Re-encrypt edited v3 content with the admitted content key. */
   async encryptV3Content(bytes: Uint8Array, mediaType: string): Promise<Uint8Array> {
     if (this.options.envelope.version !== 3 || this.v3ContentKey === undefined || this.v3ContentEnvelope === undefined) throw new Error("v3 content must be decrypted before it can be saved");
-    return new TextEncoder().encode(canonicalize({ ...this.v3ContentEnvelope, ciphertext: toBase64Url(await aesGcmEncrypt(this.v3ContentKey, bytes)), metadata: { ...(this.v3ContentEnvelope.metadata ?? {}), contentType: mediaType } }));
+    const envelope = this.v3ContentEnvelope;
+    const aad = envelope.aad === undefined ? undefined : fromBase64(envelope.aad, "v3 encrypted content AAD");
+    return new TextEncoder().encode(canonicalize({ ...envelope, ciphertext: toBase64(await aesGcmEncrypt(this.v3ContentKey, bytes, aad)), metadata: { ...(envelope.metadata ?? {}), contentType: mediaType } }));
   }
 
   async resumeWithProof(envelope: ShareEnvelopeV2, resumeToken: string, proof: unknown): Promise<ShareAuthorizedContent> {

@@ -74,7 +74,7 @@ async function recipientFixture(version: 1 | 2, aad?: Uint8Array) {
   const recipientEnvelope = envelope as unknown as ShareEnvelopeV3;
   const client = new ShareRecipientClient({ nodeOrigin: "http://127.0.0.1:1", envelope: recipientEnvelope, holderDid: recipientDid, fetchFn });
   Object.assign(client, { session: { sessionId: session.cid }, v3Authorization: session.authorization, v3NodeAudience: nodeDid, nativeSigner: async (bytes: Uint8Array) => ed25519.sign(bytes, recipientKey) });
-  return { client, envelope, content, stored, encryptedSymmetricKeyHash, registeredDigest, decryptInvocations: () => decryptInvocations };
+  return { client, envelope, content, stored, symmetricKey, encryptedSymmetricKeyHash, registeredDigest, decryptInvocations: () => decryptInvocations };
 }
 
 describe("v3 recipient content", () => {
@@ -95,6 +95,42 @@ describe("v3 recipient content", () => {
       expect(new TextDecoder().decode(opened.bytes)).toBe("hello");
       expect(opened.mediaType).toBe("text/plain");
       expect(fixture.decryptInvocations()).toBe(1);
+    });
+  }
+
+  for (const [version, aad] of [
+    [1, undefined],
+    [2, undefined],
+    [2, new Uint8Array()],
+    [2, new TextEncoder().encode("share recipient AAD")],
+  ] as const) {
+    it(`reencrypts admitted v${version} content with ${aad === undefined ? "no" : aad.length === 0 ? "empty" : "nonempty"} AAD`, async () => {
+      const fixture = await recipientFixture(version, aad);
+      await fixture.client.decryptV3Content(fixture.stored);
+      const edited = new TextEncoder().encode("edited");
+      const saved = JSON.parse(new TextDecoder().decode(await fixture.client.encryptV3Content(edited, "text/markdown"))) as { ciphertext: string; aad?: string; metadata: { contentType: string } };
+      const sealed = Uint8Array.from(Buffer.from(saved.ciphertext, "base64"));
+      const cryptoKey = await crypto.subtle.importKey("raw", fixture.symmetricKey as BufferSource, "AES-GCM", false, ["decrypt"]);
+      const opened = new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: sealed.slice(0, 12), ...(aad === undefined ? {} : { additionalData: aad as BufferSource }) }, cryptoKey, sealed.slice(12)));
+      expect(opened).toEqual(edited);
+      expect(saved.aad).toBe(fixture.content.aad);
+      expect(saved.ciphertext).toBe(base64(sealed));
+      expect(saved.metadata.contentType).toBe("text/markdown");
+    });
+  }
+
+  for (const [label, ciphertext] of [
+    ["invalid base64", "not base64!"],
+    ["empty payload", ""],
+    ["truncated AES-GCM payload", base64(new Uint8Array(27))],
+  ]) {
+    it(`rejects malformed ciphertext (${label}) before decrypting the key`, async () => {
+      const fixture = await recipientFixture(2);
+      fixture.content.ciphertext = ciphertext;
+      const stored = encode(fixture.content);
+      fixture.envelope.contentSource.initialCiphertextDigestHex = hex(sha256(stored));
+      await expect(fixture.client.decryptV3Content(stored)).rejects.toThrow();
+      expect(fixture.decryptInvocations()).toBe(0);
     });
   }
 

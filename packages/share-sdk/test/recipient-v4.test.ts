@@ -225,7 +225,7 @@ describe("TC-500 accountless v4 recipient", () => {
       keyVersion: 1,
       encryptedSymmetricKey,
       encryptedSymmetricKeyHash,
-      ciphertext: "AA==",
+      ciphertext: Buffer.from(new Uint8Array(28)).toString("base64"),
     }));
     envelope.contentSource.initialCiphertextDigestHex = [...sha256(encryptedEnvelope)]
       .map((byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -472,7 +472,7 @@ describe("TC-500 accountless v4 recipient", () => {
       const wrappedBytes = new TextEncoder().encode("wrapped-key");
       const encryptedSymmetricKey = Buffer.from(wrappedBytes).toString("base64");
       const encryptedSymmetricKeyHash = [...sha256(new TextEncoder().encode(canonicalize(encryptedSymmetricKey)))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-      const encrypted = new TextEncoder().encode(JSON.stringify({ v: 1, networkId: network, alg: "x25519-aes256gcm/v1", keyVersion: 1, encryptedSymmetricKey, encryptedSymmetricKeyHash, ciphertext: "AA==" }));
+      const encrypted = new TextEncoder().encode(JSON.stringify({ v: 1, networkId: network, alg: "x25519-aes256gcm/v1", keyVersion: 1, encryptedSymmetricKey, encryptedSymmetricKeyHash, ciphertext: Buffer.from(new Uint8Array(28)).toString("base64") }));
       envelope.contentSource = { kvResource: "space/kv/shares/tc-531/document.txt", encryptionNetwork: network, keyVersion: 1, encryptedSymmetricKeyDigestHex: [...sha256(wrappedBytes)].map((byte) => byte.toString(16).padStart(2, "0")).join(""), initialCiphertextDigestHex: [...sha256(encrypted)].map((byte) => byte.toString(16).padStart(2, "0")).join("") };
       await expect(delegated.decryptV3Content(encrypted)).rejects.toThrow("decrypt invocation rejected");
       const invocation = verifyCompactUcanAuthorization(decryptAuthorization);
