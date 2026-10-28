@@ -1,4 +1,4 @@
-import type { PermissionEntry, PortableDelegation, TinyCloudNode } from "@tinycloud/node-sdk";
+import type { AccountDelegationRecord, PermissionEntry, PortableDelegation, TinyCloudNode } from "@tinycloud/node-sdk";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import { parseSignedCompactUcanAttenuation } from "@tinycloud/sdk-core";
 import { inspectStoredDelegation, withoutBearer } from "@tinycloud/operations/delegation-binding";
@@ -7,13 +7,19 @@ import { ExitCode } from "../config/constants.js";
 import { CLIError, cliErrorFromService } from "../output/errors.js";
 import { ensureDelegationAuthority, requirePermissionConsent, type OpenKeyAcquisition } from "../commands/auth.js";
 import { loadLocalGrantArtifacts, readGrantHistory, type StoredAdditionalDelegation } from "./permissions.js";
-import { lookupOwnerSpaceOnNode } from "./revoke-node-record.js";
+import { issuedByAnotherAccount, lookupOwnerSpaceOnNode } from "./revoke-node-record.js";
 
 /**
  * Lifetime of the one-use authority a revoke requests. It only has to outlast
  * the revoke call; OpenKey's minimum is 60 seconds and its default is 7 days.
  */
 export const REVOKE_AUTHORITY_EXPIRY = "5m";
+
+/** Pages read while collecting every record of the target; past this the issuer check is skipped. */
+const MAX_LOOKUP_PAGES = 50;
+
+export const NOT_ISSUED_BY_ANOTHER_ACCOUNT = (cid: string): string =>
+  `Delegation "${cid}" was issued by another account, so this account can't revoke it. Ask whoever issued it to revoke it.`;
 
 type ScopeSource = "local-signed-grant-artifact" | "local-stored-grant" | "node-delegation-record";
 type TargetSource = "node" | "local-grant-history" | ScopeSource;
@@ -110,7 +116,6 @@ export async function revokeDelegationOnNode(params: {
     service: "tinycloud.delegation", space: `urn:cid:${cid}`, path: "", actions: ["tinycloud.delegation/revoke"],
   };
   const rawAuthorityCovered = node.hasRuntimePermissions([revokePermission]);
-  if (!rawAuthorityCovered) await requirePermissionConsent([revokePermission], params.yes);
 
   let targetFound = params.localTarget?.delegation?.cid === cid;
   let targetSpaceSource: TargetSource = targetFound ? "local-stored-grant" : "node";
@@ -122,20 +127,46 @@ export async function revokeDelegationOnNode(params: {
     }
     let queryDenied = false;
     let cursor: string | undefined;
+    // Every record of the target across the whole query: the issuer check needs all of them to agree.
+    const targetRecords: AccountDelegationRecord[] = [];
+    let recordsComplete = true;
+    let pages = 0;
     do {
       const query = await node.delegationManager.query({
         direction: "all", limit: 100, ...(cursor === undefined ? {} : { cursor }),
       });
       if (!query.ok) {
+        // After the target was seen, a failed later page only leaves the record list incomplete.
+        if (targetFound) {
+          recordsComplete = false;
+          break;
+        }
         if (query.error.meta?.status === 403) {
           queryDenied = true;
           break;
         }
         throw cliErrorFromService(query.error);
       }
-      targetFound = query.data.items.some((delegation) => delegation.cid === cid);
-      cursor = targetFound ? undefined : query.data.nextCursor;
+      for (const delegation of query.data.items) {
+        if (delegation.cid === cid) {
+          targetFound = true;
+          targetRecords.push(delegation);
+        }
+      }
+      cursor = query.data.nextCursor;
+      pages += 1;
+      if (targetFound && cursor !== undefined && pages >= MAX_LOOKUP_PAGES) {
+        recordsComplete = false;
+        break;
+      }
     } while (cursor !== undefined);
+    if (targetFound && recordsComplete) {
+      // Another account issued it: this one only holds it. Refuse before any revoke signature, authority request or prompt.
+      const selfDid = profile.ownerDid ?? ownerDidFromSpace(node.accountSpaceId) ?? ownerDidFromSpace(profile.spaceId);
+      if (selfDid !== undefined && issuedByAnotherAccount(targetRecords, cid, selfDid)) {
+        throw new CLIError("REVOKE_UNAUTHORIZED", NOT_ISSUED_BY_ANOTHER_ACCOUNT(cid), ExitCode.PERMISSION_DENIED);
+      }
+    }
     if (!targetFound) {
       const recordedGrant = [...await readGrantHistory(ctx.profile)].reverse().find((entry) => entry.delegationCid === cid);
       if (recordedGrant) {
@@ -158,6 +189,7 @@ export async function revokeDelegationOnNode(params: {
       }
     }
   }
+  if (!rawAuthorityCovered) await requirePermissionConsent([revokePermission], params.yes);
 
   let authorityScopeSource: RevocationResult["authorityScopeSource"] = "cid-resource";
   let authorityScopeReason = "The revoke authority is scoped to the exact delegation CID.";

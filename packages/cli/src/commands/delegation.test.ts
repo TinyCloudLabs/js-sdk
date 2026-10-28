@@ -6,6 +6,7 @@ import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 let hasRevokeAuthority = false;
+let authorityEvents: string[] | undefined;
 const authorityRequests: unknown[] = [];
 const revokeCalls: unknown[][] = [];
 const outputs: unknown[] = [];
@@ -98,13 +99,16 @@ mock.module("../lib/sdk.js", () => ({
 mock.module("./auth.js", () => ({
   ensureDelegationAuthority: async (params: { requested: unknown[] }) => {
     authorityRequests.push(params);
+    authorityEvents?.push("authority");
     if (authorityError && (params.requested[0] as { space?: string }).space?.startsWith("urn:cid:")) {
       throw authorityError;
     }
     hasRevokeAuthority = true;
     return { cid: "bafy-command-authority" };
   },
-  requirePermissionConsent: async () => {},
+  requirePermissionConsent: async () => {
+    authorityEvents?.push("consent");
+  },
   prepareProfileRemoteLogout: async () => {
     throw new Error("Unrelated-CID tests must not prepare the current-session logout gate");
   },
@@ -486,4 +490,219 @@ describe("tc delegation revoke authority", () => {
       server.stop(true);
     }
   });
+
+  test("refuses a grant another account issued, before any signing or authority request", async () => {
+    delegationQueryResult = {
+      ok: true,
+      data: {
+        items: [{
+          cid: "bafy-device-grant",
+          delegatorDid: "did:pkh:eip155:1:0x3333333333333333333333333333333333333333",
+          delegateDid: "did:pkh:eip155:1:0x1111111111111111111111111111111111111111",
+          resources: [{ resource: `${fallbackSpaceId}/kv/target/` }],
+        }],
+        nextCursor: undefined,
+      },
+    };
+    await runRevoke();
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatchObject({
+      code: "REVOKE_UNAUTHORIZED",
+      exitCode: 5,
+      message: `Delegation "bafy-device-grant" was issued by another account, so this account can't revoke it. Ask whoever issued it to revoke it.`,
+    });
+    expect(authorityRequests).toEqual([]);
+    expect(revokeCalls).toEqual([]);
+    expect(outputs).toEqual([]);
+  });
+
+  test("revokes a grant its own account issued as before", async () => {
+    delegationQueryResult = {
+      ok: true,
+      data: {
+        items: [{
+          cid: "bafy-device-grant",
+          delegatorDid: "did:pkh:eip155:1:0x1111111111111111111111111111111111111111",
+          delegateDid: "did:key:device",
+          resources: [{ resource: `${targetSpaceId}/kv/target/` }],
+        }],
+        nextCursor: undefined,
+      },
+    };
+    await runRevoke();
+
+    expect(errors).toEqual([]);
+    expect(authorityRequests).toHaveLength(1);
+    expect(revokeCalls).toEqual([["bafy-device-grant", { authorityCid: "bafy-command-authority" }]]);
+  });
+
+  test("keeps the flow when another account's grant covers a space this account owns", async () => {
+    delegationQueryResult = {
+      ok: true,
+      data: {
+        items: [{
+          cid: "bafy-device-grant",
+          delegatorDid: "did:pkh:eip155:1:0x3333333333333333333333333333333333333333",
+          delegateDid: "did:key:device",
+          resources: [{ resource: `${targetSpaceId}/kv/target/` }],
+        }],
+        nextCursor: undefined,
+      },
+    };
+    await runRevoke();
+
+    expect(errors).toEqual([]);
+    expect(authorityRequests).toHaveLength(1);
+  });
+
+  const rows = (...issuers: Array<[string, string]>) => ({
+    ok: true,
+    data: {
+      items: issuers.map(([delegatorDid, space]) => ({
+        cid: "bafy-device-grant",
+        delegatorDid,
+        delegateDid: "did:pkh:eip155:1:0x1111111111111111111111111111111111111111",
+        resources: [{ resource: `${space}/kv/target/` }],
+      })),
+      nextCursor: undefined,
+    },
+  });
+  const foreign = "did:pkh:eip155:1:0x3333333333333333333333333333333333333333";
+
+  test("does not refuse when one row of the same CID covers a space this account owns", async () => {
+    delegationQueryResult = rows([foreign, fallbackSpaceId], [foreign, targetSpaceId]);
+    await runRevoke();
+
+    expect(errors).toEqual([]);
+    expect(authorityRequests).toHaveLength(1);
+  });
+
+  test("does not refuse when rows of the same CID name different issuers", async () => {
+    delegationQueryResult = rows([foreign, fallbackSpaceId], [
+      "did:pkh:eip155:1:0x4444444444444444444444444444444444444444", fallbackSpaceId,
+    ]);
+    await runRevoke();
+
+    expect(errors).toEqual([]);
+    expect(authorityRequests).toHaveLength(1);
+  });
+
+  test("does not refuse when a later page holds a row over a space this account owns", async () => {
+    const pages = [
+      { ok: true, data: { items: rows([foreign, fallbackSpaceId]).data.items, nextCursor: "page-2" } },
+      { ok: true, data: { items: rows([foreign, targetSpaceId]).data.items, nextCursor: undefined } },
+    ];
+    const cursors: Array<string | undefined> = [];
+    delegationManagerOverride = {
+      query: async (options: { cursor?: string }) => {
+        cursors.push(options.cursor);
+        return pages[cursors.length - 1];
+      },
+      revoke: async (...args: unknown[]) => {
+        revokeCalls.push(args);
+        return { ok: true, data: undefined };
+      },
+    };
+    await runRevoke();
+
+    expect(cursors).toEqual([undefined, "page-2"]);
+    expect(errors).toEqual([]);
+    expect(authorityRequests).toHaveLength(1);
+  });
+
+  test("treats the same address on another chain as another account", async () => {
+    delegationQueryResult = rows(["did:pkh:eip155:2:0x1111111111111111111111111111111111111111", fallbackSpaceId]);
+    await runRevoke();
+
+    expect(errors[0]).toMatchObject({ code: "REVOKE_UNAUTHORIZED", exitCode: 5 });
+    expect(authorityRequests).toEqual([]);
+    expect(revokeCalls).toEqual([]);
+  });
+
+  test("a space owned by the same address on another chain does not count as this account's", async () => {
+    delegationQueryResult = rows([foreign, "tinycloud:pkh:eip155:2:0x1111111111111111111111111111111111111111:archive"]);
+    await runRevoke();
+
+    expect(errors[0]).toMatchObject({ code: "REVOKE_UNAUTHORIZED", exitCode: 5 });
+    expect(authorityRequests).toEqual([]);
+  });
+
+  describe("signed operations", () => {
+    // The real DelegationManager over a local server; every signature the flow asks for is recorded in order.
+    async function runWithRecordedSigning(delegatorDid: string, space: string) {
+      const events: string[] = [];
+      const requests: string[] = [];
+      const server = Bun.serve({
+        hostname: "127.0.0.1",
+        port: 0,
+        fetch: async (request) => {
+          requests.push(`${request.method} ${new URL(request.url).pathname}`);
+          if (new URL(request.url).pathname === "/delegation/query") {
+            return Response.json({
+              schemaVersion: 2,
+              items: [{
+                cid: "bafy-device-grant", direction: "granted", delegatorDid,
+                delegateDid: "did:pkh:eip155:1:0x1111111111111111111111111111111111111111",
+                resources: [{ resource: `${space}/kv/target/`, actions: ["tinycloud.kv/get"], caveats: [{}] }],
+                parents: [], issuedAt: null, notBefore: null, expiresAt: null, status: "active",
+              }],
+            });
+          }
+          return new Response("not found", { status: 404 });
+        },
+      });
+      const manager = new DelegationManager({
+        hosts: [`http://127.0.0.1:${server.port}`],
+        accountSpaceId: targetSpaceId,
+        session: { spaceId: "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:default" } as ServiceSession,
+        invoke: () => ({ Authorization: "query" }),
+        invokeAny: (_session, entries) => {
+          for (const entry of entries) events.push(`sign:${entry.action}`);
+          return { Authorization: "signed" };
+        },
+      });
+      delegationManagerOverride = {
+        query: (...args: Parameters<typeof manager.query>) => manager.query(...args),
+        revoke: async (...args: unknown[]) => {
+          events.push("sign:tinycloud.delegation/revoke");
+          revokeCalls.push(args);
+          return { ok: true, data: undefined };
+        },
+      };
+      authorityEvents = events;
+      try {
+        await runRevoke();
+        return { events, requests };
+      } finally {
+        authorityEvents = undefined;
+        server.stop(true);
+      }
+    }
+
+    test("another account's grant: only the read-only list is signed, with no consent, authority or revoke", async () => {
+      const { events, requests } = await runWithRecordedSigning(foreign, fallbackSpaceId);
+
+      expect(events).toEqual(["sign:tinycloud.delegation/list"]);
+      expect(requests).toEqual(["POST /delegation/query"]);
+      expect(errors[0]).toMatchObject({ code: "REVOKE_UNAUTHORIZED", exitCode: 5 });
+      expect(authorityRequests).toEqual([]);
+      expect(revokeCalls).toEqual([]);
+    });
+
+    test("an allowed revoke still asks for consent and authority before any revoke signature", async () => {
+      const { events } = await runWithRecordedSigning(
+        "did:pkh:eip155:1:0x1111111111111111111111111111111111111111", targetSpaceId,
+      );
+
+      expect(events).toEqual([
+        "sign:tinycloud.delegation/list",
+        "consent",
+        "authority",
+        "sign:tinycloud.delegation/revoke",
+      ]);
+      expect(errors).toEqual([]);
+    });
+  });
+
 });
