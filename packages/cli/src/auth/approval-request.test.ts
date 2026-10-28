@@ -47,16 +47,23 @@ let savedBeforeAck = false;
 
 const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
   const body = await request.json() as { requestId: string; bodyCid: string; ackId: string };
-  const pending = await readJson<Array<{ committed?: boolean; ackId: string; bodyCid: string }>>(join(profilePath("approval"), "approval-pending.json"));
+  const pending = await readJson<Array<{ committed?: boolean; ackId: string; bodyCid: string; resultEnvelope: unknown; resultExpiresAt: string }>>(join(profilePath("approval"), "approval-pending.json"));
   const session = await ProfileManager.getSession("approval") as Record<string, unknown> | null;
   savedBeforeAck = pending?.[0]?.committed === true && pending[0].ackId === body.ackId && session?.signature !== undefined;
   const [header, payload, signature] = (request.headers.get("OpenKey-Session-Proof") ?? "").split(".");
   if (!header || !payload || !signature || !verify(null, Buffer.from(`${header}.${payload}`),
     createPublicKey({ key: { kty: key.kty, crv: key.crv, x: key.x }, format: "jwk" }), Buffer.from(signature, "base64url"))) return new Response(null, { status: 401 });
   const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as Record<string, unknown>;
-  const credential = JSON.stringify(["ack", requestId, body.bodyCid, resultRef, body.ackId]);
+  const action = new URL(request.url).pathname.endsWith("/result") ? "discover"
+    : new URL(request.url).pathname.endsWith("/fetch") ? "fetch" : "ack";
+  const credential = JSON.stringify([action, requestId, body.bodyCid, action === "discover" ? "" : resultRef, action === "ack" ? body.ackId : ""]);
   if (claims.htu !== request.url || claims.htm !== "POST" || claims.client_id !== "openkey-approval-result-v1" ||
     claims.cred_hash !== createHash("sha256").update(credential).digest("base64url")) return new Response(null, { status: 401 });
+  if (action === "discover") return Response.json({ resultRef, expiresAt: pending![0]!.resultExpiresAt });
+  if (action === "fetch") return Response.json({
+    requestId, bodyCid: body.bodyCid, resultRef, expiresAt: pending![0]!.resultExpiresAt,
+    relay: await readJson(join(profilePath("approval"), "retained-result.json")) ?? pending![0]!.resultEnvelope,
+  });
   const prior = acknowledgements.get(resultRef);
   if (prior && prior !== body.ackId) return new Response(null, { status: 409 });
   acknowledgements.set(resultRef, body.ackId);
@@ -176,6 +183,38 @@ test.each([ownerDid, undefined])("a saved result resumes with owner-qualified sp
     expect(await readJson(join(profilePath("approval"), "approval-pending.json"))).toEqual([]);
   } finally {
     localOnly.mockRestore();
+  }
+});
+
+test("an interrupted fetch rediscovers and refetches its original encrypted result before saving", async () => {
+  const delegation = await signedDelegation();
+  const pending = await stage(delegation);
+  const { resultEnvelope: _, ...unfetched } = pending;
+  await writeJsonDurable(join(profilePath("approval"), "approval-pending.json"), [unfetched]);
+  // The actual signed HTTP fixture retains ciphertext after the client's fetch was lost.
+  const encryptedPath = join(profilePath("approval"), "retained-result.json");
+  await writeJsonDurable(encryptedPath, pending.resultEnvelope);
+  const send = globalThis.fetch;
+  const localOnly = spyOn(globalThis, "fetch").mockImplementation(Object.assign((input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    if (new URL(input instanceof Request ? input.url : String(input)).origin !== server.url.origin) throw new Error("Unexpected new approval request");
+    return send(input, init);
+  }, { preconnect: send.preconnect }));
+  try {
+    const recovered = await acquireApprovalRequest(did, {
+      profileName: "approval", jwk: key, host, permissions: requested,
+      expectedOwner: ownerDid, expiry: "1h", openkeyHost: "https://openkey.example", openkeyApiHost: server.url.origin,
+      noPopup: true, onApprovalRequest: () => { throw new Error("Approval was already granted"); },
+    });
+    expect(recovered.delegationCid).toBe(delegation.delegationCid);
+    expect(acknowledgements.has(resultRef)).toBe(false);
+    const snapshot = await readProfileSnapshot("approval");
+    const verified = verifyScopedLogin(recovered, key, did, requested, { expectedOwner: ownerDid, exactApproval: true });
+    await commitLogin("approval", snapshot, { key, session: verified.session, profile: { ...snapshot.profile!, spaceId }, durable: true });
+    await completeApprovalResult("approval", recovered);
+    expect(acknowledgements.get(resultRef)).toBe(pending.ackId);
+  } finally {
+    localOnly.mockRestore();
+    await rm(encryptedPath, { force: true });
   }
 });
 

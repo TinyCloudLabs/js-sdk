@@ -107,7 +107,7 @@ export function approvalSessionProof(entry: Pick<PendingApproval, "requestId" | 
 }
 
 async function post(entry: PendingApproval, action: "discover" | "fetch" | "ack"): Promise<Response> {
-  const ref = entry.resultRef ?? "";
+  const ref = action === "discover" ? "" : entry.resultRef ?? "";
   const path = action === "discover" ? `/api/approval-requests/${entry.requestId}/result` : `/api/approval-results/${ref}/${action}`;
   const body = action === "discover" ? { bodyCid: entry.bodyCid, header: entry.record.header, signature: entry.record.signature }
     : { requestId: entry.requestId, bodyCid: entry.bodyCid, ...(action === "ack" ? { ackId: entry.ackId } : {}) };
