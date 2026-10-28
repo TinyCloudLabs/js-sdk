@@ -18,6 +18,7 @@ const transportDid = "did:key:z6Mkon3Necd6NkkyfoGoHxid2znGc59LU3K7mubaRcFbLfLX";
 /** The session key signs the envelope and every link header, so its DID is the credential holder. */
 const holderSeed = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
 const credentialHolderDid = `did:key:${base58btc.encode(Uint8Array.from([0xed, 0x01, ...ed25519.getPublicKey(holderSeed)]))}`;
+const canonicalOwnerDid = "did:pkh:eip155:1:0x1111111111111111111111111111111111111111";
 const nodeDid = "did:key:z6MkvRXNYcE7MMduynWTgeKbDaT1iijDSC8pZqXZc8rHPrf2";
 const ownerRootInputs: Array<{ readonly ownerDid: string; readonly role: string }> = [];
 const sessionSignatures: Uint8Array[] = [];
@@ -68,6 +69,12 @@ let sharingPreflight: "ok" | "caveated" | "not-covered" = "ok";
 let nodeContract: "1.17.2" | "1.17.3" = "1.17.2";
 let advertisedNodeVersion: string | undefined;
 const preflightRequests: Array<{ readonly path: string; readonly actions?: string[]; readonly expiry?: Date }> = [];
+const emailDescriptor = ((await Bun.file(new URL("../../../sdk-core/test-fixtures/opencredentials-v1/golden-descriptor-digests.json", import.meta.url)).json()) as { vectors: { name: string; descriptor: unknown }[] }).vectors.find((vector) => vector.name === "email")!.descriptor;
+const emailCredentialInputs = {
+  credentialDescriptor: emailDescriptor,
+  issuerDid: "did:web:issuer.credentials.org",
+  issuerKid: "did:web:issuer.credentials.org#controller",
+};
 
 /** Digest of the descriptor the issuer serves for `name`, from sdk-core's golden vectors. */
 async function goldenDescriptorDigest(name: string): Promise<string> {
@@ -152,18 +159,20 @@ const node = {
     encryptionSpaces.push(spaceId);
     return `urn:tinycloud:encryption:${credentialHolderDid}:default`;
   },
+  getDefaultEncryptionNetworkId: () => `urn:tinycloud:encryption:${canonicalOwnerDid}:default`,
   hasRuntimePermissions: (entries: unknown) => {
     decryptChecks.push(entries);
     return holdsDecrypt;
   },
   encryption: {
-    encryptToNetwork: async (networkId: string) => {
+    encryptToNetwork: async (networkId: string, _bytes: Uint8Array, options?: { readonly keyPath?: string }) => {
       encryptions += 1;
       return {
         ok: true as const,
         data: {
           v: 1,
           networkId,
+          ...(options?.keyPath === undefined ? {} : { keyPath: options.keyPath }),
           alg: "x25519-aes256gcm/v1",
           keyVersion: 1,
           encryptedSymmetricKey: "network-wrapped-key",
@@ -454,6 +463,7 @@ describe("TinyCloud share authority adapter", () => {
           source: new TextEncoder().encode("filename round trip"),
           filename,
           target,
+          ...(target.kind === "email" ? emailCredentialInputs : {}),
           expiresAt: new Date("2030-01-01T00:00:00.000Z"),
           origin: "https://share.example",
         });
@@ -470,6 +480,7 @@ describe("TinyCloud share authority adapter", () => {
     // The viewer refuses format characters, so publication refuses them too (TC-580).
     await expect(targetAdapter.publish({
       source: new TextEncoder().encode("filename round trip"), filename: "x.html\u200b", target: { kind: "email", address: "alice@example.com" },
+      ...emailCredentialInputs,
       expiresAt: new Date("2030-01-01T00:00:00.000Z"), origin: "https://share.example",
     })).rejects.toMatchObject({ failure: { kind: "invalid-request", reason: "addressed filename is invalid" } });
   });
@@ -581,6 +592,7 @@ describe("TinyCloud share authority adapter", () => {
           source: new TextEncoder().encode("failed source"),
           filename: "report.md",
           target,
+          ...(target.kind === "email" ? emailCredentialInputs : {}),
           expiresAt: new Date("2030-01-01T00:00:00.000Z"),
           origin: "https://share.example",
         }).then(() => undefined, (caught: unknown) => caught);
@@ -691,6 +703,7 @@ describe("TinyCloud share authority adapter", () => {
         source: new TextEncoder().encode("holder-bound share"),
         filename: "readme.txt",
         target: { kind: "email", address: "alice@example.com" },
+        ...emailCredentialInputs,
         expiresAt: new Date("2100-01-01T00:00:00.000Z"),
         expiryWasExplicit: false,
         origin: "https://share.example",
@@ -702,7 +715,12 @@ describe("TinyCloud share authority adapter", () => {
       expect(new Date(addressed.metadata.expiresAt).getTime()).toBe(new Date("2099-01-01T00:00:00.000Z").getTime());
       expect(addressed.metadata.target.spaceId).toBe(restoredSpaceId);
       expect(uploadedSpaces).toEqual([restoredSpaceId]);
-      expect(encryptionSpaces).toEqual([restoredSpaceId]);
+      expect(encryptionSpaces).toEqual([]);
+      expect(decryptChecks).toEqual([[{
+        service: "tinycloud.encryption",
+        path: expect.stringMatching(new RegExp(`^urn:tinycloud:encryption:${canonicalOwnerDid}:default/share/[0-9a-f]{32}$`)),
+        actions: ["tinycloud.encryption/decrypt"],
+      }]]);
 
       expect(addressed.metadata.ownerDid).toBe(credentialHolderDid);
       expect(ownerRootInputs.map(({ role }) => role)).toEqual(["policy-authority", "policy-enforcement"]);
@@ -747,6 +765,7 @@ describe("TinyCloud share authority adapter", () => {
       const outcome = await targetAdapter.publish({
         source: new TextEncoder().encode("x"), filename: "readme.txt",
         target: { kind: "email", address: "alice@example.com" },
+        ...emailCredentialInputs,
         expiresAt: new Date("2100-01-01T00:00:00.000Z"), expiryWasExplicit: false,
         origin: "https://share.example", mediaType: "text/plain",
       }).then(() => undefined, (error: unknown) => error);
@@ -769,10 +788,24 @@ describe("TinyCloud share authority adapter", () => {
     source: new TextEncoder().encode("only me"),
     filename: "note.md",
     target,
+    ...(target.kind === "email" ? emailCredentialInputs : {}),
     ...(actions === undefined ? {} : { actions }),
     expiresAt: new Date("2030-01-01T00:00:00.000Z"),
     origin: "https://share.example",
     mediaType: "text/markdown",
+  });
+
+  it("refuses exact-email publication without a descriptor and issuer before side effects", async () => {
+    const rawEmailInput: TargetPublishInput = {
+      source: new TextEncoder().encode("only me"), filename: "note.md",
+      target: { kind: "email", address: "owner@example.com" },
+      expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+      origin: "https://share.example", mediaType: "text/markdown",
+    };
+    await expect(addressedAdapter().publish(rawEmailInput)).rejects.toThrow("email credential descriptor and issuer are required");
+    expect(publishEvents).toEqual([]);
+    expect(uploadedPaths).toEqual([]);
+    expect(registeredPolicies).toEqual([]);
   });
 
   /** The history record of a share whose printed link is its short link: the only link an invitation carries. */
@@ -941,6 +974,7 @@ describe("TinyCloud share authority adapter", () => {
       source: new TextEncoder().encode("report"),
       filename: "report.md",
       target,
+      ...(target.kind === "email" ? emailCredentialInputs : {}),
       expiresAt: new Date("2030-01-01T00:00:00.000Z"),
       origin: "https://share.example",
       ...(artifact === undefined ? {} : { artifact }),
@@ -1148,7 +1182,7 @@ describe("TinyCloud share authority adapter", () => {
     expect((error as InstanceType<typeof SharePublishAuthorityError>).failure).toEqual({ kind: "decrypt-not-held" });
     expect(decryptChecks).toEqual([[{
       service: "tinycloud.encryption",
-      path: `urn:tinycloud:encryption:${credentialHolderDid}:default`,
+      path: expect.stringMatching(new RegExp(`^urn:tinycloud:encryption:${canonicalOwnerDid}:default/share/[0-9a-f]{32}$`)),
       actions: ["tinycloud.encryption/decrypt"],
     }]]);
     // No Share config fetch, registry write, upload, encryption, signing, policy registration or node probe.
