@@ -54,6 +54,7 @@ function resolveOpenKeyHost(profile: ProfileConfig): string {
   return process.env.TC_OPENKEY_HOST ?? profile.openkeyHost ?? DEFAULT_OPENKEY_HOST;
 }
 import { startAuthFlow } from "../auth/browser-auth.js";
+import { approvalResultNeedsAck, completeApprovalResult, pendingApprovalKey, trackApprovalResult } from "../auth/approval-request.js";
 import {
   acquireDeviceDelegation,
   loginWithDeviceAuthorization,
@@ -1034,6 +1035,8 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
               delegationData = approval.session;
             } else {
               delegationData = await startAuthFlow(profile.did, {
+                profileName: ctx.profile,
+                expectedOwner: pinnedOwner(profile),
                 jwk: key,
                 host: ctx.host,
                 permissions: request,
@@ -1908,6 +1911,7 @@ async function activateAndStoreOpenKeyGrants(
     // A stored record for the same CID that carries a request binding is kept.
     await appendAdditionalDelegations(profileName, records);
   });
+  for (const { delegation } of grants) await completeApprovalResult(profileName, delegation);
 }
 
 /**
@@ -1949,6 +1953,8 @@ export async function acquireOpenKeyApproval(params: {
   const request = grantRequestPermissions(params.requested, anchorSpace);
   const acquireOpenKey = params.openKeyAcquisition ?? startAuthFlow;
   const delegationData = await acquireOpenKey(params.profile.did, {
+    profileName: params.ctx.profile,
+    expectedOwner: pinnedOwner(params.profile),
     jwk: key,
     host: params.ctx.host,
     permissions: request,
@@ -2069,6 +2075,8 @@ export async function ensureDelegationAuthority(params: {
       // carry it without broadening the grant.
       const request = grantRequestPermissions(group, anchorSpace);
       const delegationData = await acquireOpenKey(params.profile.did, {
+        profileName: params.ctx.profile,
+        expectedOwner: pinnedOwner(params.profile),
         jwk: key,
         host: params.ctx.host,
         permissions: request,
@@ -2366,6 +2374,7 @@ export function verifyOpenKeyApproval(
     // Verified above; replay rebuilds the CACAO from it before trusting the grant.
     siweProof: { siwe: data.siwe as string, signature: data.signature as string },
   };
+  trackApprovalResult(data, delegation);
   return { delegation, session };
 }
 
@@ -2983,6 +2992,7 @@ export async function refreshOpenKeySession(
   options: OpenKeyLoginOptions = {},
 ): Promise<{ profile: ProfileConfig; delegationData: Record<string, unknown>; declined: PermissionEntry[]; legacyNested: PermissionEntry[] }> {
   await recoverPendingLogout(profileName);
+  await completeApprovalResult(profileName);
   const snapshot = await readProfileSnapshot(profileName);
   // A missing profile is PROFILE_NOT_FOUND, not a missing key: `tc init` alone
   // would create the default profile instead of this one.
@@ -3026,14 +3036,17 @@ export async function refreshOpenKeySession(
   // A logged-out nonreplica profile has no restorable signer. Keep the
   // candidate private key in memory until the signed OpenKey result verifies
   // and commitLogin atomically writes the key, session and matching DID.
-  const fresh = snapshot.key === null ? generateKey() : null;
-  const key = snapshot.key ?? fresh!.jwk;
-  const sessionDid = fresh?.did ?? profile.sessionDid ?? profile.did;
-  const requestDid = fresh && profile.did.startsWith("did:key:") ? fresh.did : profile.did;
+  const pendingKey = snapshot.key === null ? await pendingApprovalKey(profileName) : undefined;
+  const fresh = snapshot.key === null && pendingKey === undefined ? generateKey() : null;
+  const key = snapshot.key ?? pendingKey ?? fresh!.jwk;
+  const sessionDid = fresh?.did ?? (pendingKey ? keyToDID(pendingKey) : profile.sessionDid ?? profile.did);
+  const requestDid = (fresh || pendingKey) && profile.did.startsWith("did:key:") ? sessionDid : profile.did;
 
   // Start browser auth flow
   const acquireOpenKey = options.openKeyAcquisition ?? startAuthFlow;
   const delegationData = await acquireOpenKey(requestDid, {
+    profileName,
+    expectedOwner,
     paste: options.paste,
     noPopup: options.noPopup,
     jwk: key,
@@ -3093,10 +3106,12 @@ export async function refreshOpenKeySession(
     key,
     session: sanitizedSession,
     profile: updatedProfile,
+    durable: approvalResultNeedsAck(delegationData),
     ...(permissions && verifiedOwner
       ? { approved: { scope: sanitizedSession.permissions as PermissionEntry[], ownerDid: verifiedOwner, replaceSession: options.replaceSession === true } }
       : {}),
   });
+  await completeApprovalResult(profileName, delegationData);
   warnIfNotPrimaryKey(verifiedOwner, ownerKeyPrimary);
   announceFirstOwner(profileName, expectedOwner, verifiedOwner);
 

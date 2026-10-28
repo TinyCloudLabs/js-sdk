@@ -695,7 +695,7 @@ function nodeRetryError(error) {
   if (code5 !== "NODE_BUSY" && code5 !== "REQUEST_TIMEOUT" && code5 !== "OUTCOME_UNKNOWN") return void 0;
   const details = typeof meta === "object" && meta !== null ? meta : typeof metadata === "object" && metadata !== null ? metadata : {};
   const retryAfterMs = details.retryAfterMs;
-  const wait = typeof retryAfterMs === "number" && Number.isFinite(retryAfterMs) && retryAfterMs >= 0 ? `in ${Math.max(1, Math.ceil(retryAfterMs / 1e3))} s` : "shortly";
+  const wait2 = typeof retryAfterMs === "number" && Number.isFinite(retryAfterMs) && retryAfterMs >= 0 ? `in ${Math.max(1, Math.ceil(retryAfterMs / 1e3))} s` : "shortly";
   if (code5 === "OUTCOME_UNKNOWN") {
     return new CLIError(
       code5,
@@ -706,7 +706,7 @@ function nodeRetryError(error) {
   }
   return new CLIError(
     code5,
-    code5 === "NODE_BUSY" ? `The node is busy, try again ${wait}.` : `The node timed out before applying anything, try again ${wait}.`,
+    code5 === "NODE_BUSY" ? `The node is busy, try again ${wait2}.` : `The node timed out before applying anything, try again ${wait2}.`,
     ExitCode.NODE_ERROR,
     details
   );
@@ -1205,6 +1205,12 @@ function abytes(b, ...lengths) {
   if (lengths.length > 0 && !lengths.includes(b.length))
     throw new Error("Uint8Array expected of length " + lengths + ", got length=" + b.length);
 }
+function ahash(h) {
+  if (typeof h !== "function" || typeof h.create !== "function")
+    throw new Error("Hash should be wrapped by utils.createHasher");
+  anumber(h.outputLen);
+  anumber(h.blockLen);
+}
 function aexists(instance, checkFinished = true) {
   if (instance.destroyed)
     throw new Error("Hash instance has been destroyed");
@@ -1373,7 +1379,7 @@ function Chi(a, b, c) {
 function Maj(a, b, c) {
   return a & b ^ a & c ^ b & c;
 }
-var HashMD, SHA256_IV, SHA512_IV;
+var HashMD, SHA256_IV, SHA384_IV, SHA512_IV;
 var init_md = __esm({
   "../../node_modules/@noble/hashes/esm/_md.js"() {
     "use strict";
@@ -1478,6 +1484,24 @@ var init_md = __esm({
       528734635,
       1541459225
     ]);
+    SHA384_IV = /* @__PURE__ */ Uint32Array.from([
+      3418070365,
+      3238371032,
+      1654270250,
+      914150663,
+      2438529370,
+      812702999,
+      355462360,
+      4144912697,
+      1731405415,
+      4290775857,
+      2394180231,
+      1750603025,
+      3675008525,
+      1694076839,
+      1203062813,
+      3204075428
+    ]);
     SHA512_IV = /* @__PURE__ */ Uint32Array.from([
       1779033703,
       4089235720,
@@ -1500,7 +1524,7 @@ var init_md = __esm({
 });
 
 // ../../node_modules/@noble/hashes/esm/sha2.js
-var SHA256_K, SHA256_W, SHA256, K512, SHA512_Kh, SHA512_Kl, SHA512_W_H, SHA512_W_L, SHA512, sha256, sha512;
+var SHA256_K, SHA256_W, SHA256, K512, SHA512_Kh, SHA512_Kl, SHA512_W_H, SHA512_W_L, SHA512, SHA384, sha256, sha512, sha384;
 var init_sha2 = __esm({
   "../../node_modules/@noble/hashes/esm/sha2.js"() {
     "use strict";
@@ -1841,8 +1865,30 @@ var init_sha2 = __esm({
         this.set(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
       }
     };
+    SHA384 = class extends SHA512 {
+      constructor() {
+        super(48);
+        this.Ah = SHA384_IV[0] | 0;
+        this.Al = SHA384_IV[1] | 0;
+        this.Bh = SHA384_IV[2] | 0;
+        this.Bl = SHA384_IV[3] | 0;
+        this.Ch = SHA384_IV[4] | 0;
+        this.Cl = SHA384_IV[5] | 0;
+        this.Dh = SHA384_IV[6] | 0;
+        this.Dl = SHA384_IV[7] | 0;
+        this.Eh = SHA384_IV[8] | 0;
+        this.El = SHA384_IV[9] | 0;
+        this.Fh = SHA384_IV[10] | 0;
+        this.Fl = SHA384_IV[11] | 0;
+        this.Gh = SHA384_IV[12] | 0;
+        this.Gl = SHA384_IV[13] | 0;
+        this.Hh = SHA384_IV[14] | 0;
+        this.Hl = SHA384_IV[15] | 0;
+      }
+    };
     sha256 = /* @__PURE__ */ createHasher(() => new SHA256());
     sha512 = /* @__PURE__ */ createHasher(() => new SHA512());
+    sha384 = /* @__PURE__ */ createHasher(() => new SHA384());
   }
 });
 
@@ -1853,6 +1899,81 @@ var init_sha256 = __esm({
     "use strict";
     init_sha2();
     sha2562 = sha256;
+  }
+});
+
+// ../../node_modules/@noble/hashes/esm/hmac.js
+var HMAC, hmac;
+var init_hmac = __esm({
+  "../../node_modules/@noble/hashes/esm/hmac.js"() {
+    "use strict";
+    init_utils();
+    HMAC = class extends Hash {
+      constructor(hash, _key) {
+        super();
+        this.finished = false;
+        this.destroyed = false;
+        ahash(hash);
+        const key = toBytes(_key);
+        this.iHash = hash.create();
+        if (typeof this.iHash.update !== "function")
+          throw new Error("Expected instance of class which extends utils.Hash");
+        this.blockLen = this.iHash.blockLen;
+        this.outputLen = this.iHash.outputLen;
+        const blockLen = this.blockLen;
+        const pad = new Uint8Array(blockLen);
+        pad.set(key.length > blockLen ? hash.create().update(key).digest() : key);
+        for (let i = 0; i < pad.length; i++)
+          pad[i] ^= 54;
+        this.iHash.update(pad);
+        this.oHash = hash.create();
+        for (let i = 0; i < pad.length; i++)
+          pad[i] ^= 54 ^ 92;
+        this.oHash.update(pad);
+        clean(pad);
+      }
+      update(buf) {
+        aexists(this);
+        this.iHash.update(buf);
+        return this;
+      }
+      digestInto(out) {
+        aexists(this);
+        abytes(out, this.outputLen);
+        this.finished = true;
+        this.iHash.digestInto(out);
+        this.oHash.update(out);
+        this.oHash.digestInto(out);
+        this.destroy();
+      }
+      digest() {
+        const out = new Uint8Array(this.oHash.outputLen);
+        this.digestInto(out);
+        return out;
+      }
+      _cloneInto(to) {
+        to || (to = Object.create(Object.getPrototypeOf(this), {}));
+        const { oHash, iHash, finished, destroyed, blockLen, outputLen } = this;
+        to = to;
+        to.finished = finished;
+        to.destroyed = destroyed;
+        to.blockLen = blockLen;
+        to.outputLen = outputLen;
+        to.oHash = oHash._cloneInto(to.oHash);
+        to.iHash = iHash._cloneInto(to.iHash);
+        return to;
+      }
+      clone() {
+        return this._cloneInto();
+      }
+      destroy() {
+        this.destroyed = true;
+        this.oHash.destroy();
+        this.iHash.destroy();
+      }
+    };
+    hmac = (hash, key, message) => new HMAC(hash, key).update(message).digest();
+    hmac.create = (hash, key) => new HMAC(hash, key);
   }
 });
 
@@ -2554,17 +2675,17 @@ var init_manifest = __esm({
 });
 
 // src/lib/raw-encryption.ts
-function isRawEncryptionPermission(permission) {
-  return (permission.service === ENCRYPTION_PERMISSION_SERVICE || permission.service === "encryption") && typeof permission.path === "string" && permission.path.startsWith("urn:tinycloud:encryption:");
+function isRawEncryptionPermission(permission2) {
+  return (permission2.service === ENCRYPTION_PERMISSION_SERVICE || permission2.service === "encryption") && typeof permission2.path === "string" && permission2.path.startsWith("urn:tinycloud:encryption:");
 }
-function isVerifiedRawEncryptionPermission(permission) {
-  return isRawEncryptionPermission(permission) && (permission.space === void 0 || permission.space === "encryption");
+function isVerifiedRawEncryptionPermission(permission2) {
+  return isRawEncryptionPermission(permission2) && (permission2.space === void 0 || permission2.space === "encryption");
 }
-function isSharePublishingPrefixDecrypt(permission) {
-  return permission.service === ENCRYPTION_PERMISSION_SERVICE && permission.space === "default" && permission.path === "share/" && permission.actions.length === 1 && permission.actions[0] === "tinycloud.encryption/decrypt" && !permission.caveats?.length;
+function isSharePublishingPrefixDecrypt(permission2) {
+  return permission2.service === ENCRYPTION_PERMISSION_SERVICE && permission2.space === "default" && permission2.path === "share/" && permission2.actions.length === 1 && permission2.actions[0] === "tinycloud.encryption/decrypt" && !permission2.caveats?.length;
 }
-function isDeviceDefaultDecrypt(permission) {
-  return permission.service === ENCRYPTION_PERMISSION_SERVICE && permission.space === "default" && permission.path === "" && permission.actions.length === 1 && permission.actions[0] === "tinycloud.encryption/decrypt" && !permission.caveats?.length;
+function isDeviceDefaultDecrypt(permission2) {
+  return permission2.service === ENCRYPTION_PERMISSION_SERVICE && permission2.space === "default" && permission2.path === "" && permission2.actions.length === 1 && permission2.actions[0] === "tinycloud.encryption/decrypt" && !permission2.caveats?.length;
 }
 var init_raw_encryption = __esm({
   "src/lib/raw-encryption.ts"() {
@@ -2616,9 +2737,9 @@ function hasCaveatLimit(caveats) {
 }
 function assertNoCaveatLimits(permissions) {
   if (permissions === void 0) return;
-  for (const permission of permissions) {
-    if (permission === null || typeof permission !== "object" || !("caveats" in permission)) continue;
-    if (hasCaveatLimit(permission.caveats)) {
+  for (const permission2 of permissions) {
+    if (permission2 === null || typeof permission2 !== "object" || !("caveats" in permission2)) continue;
+    if (hasCaveatLimit(permission2.caveats)) {
       throw new CLIError(CAVEATS_UNSUPPORTED_CODE, CAVEATS_UNSUPPORTED_MESSAGE, ExitCode.USAGE_ERROR);
     }
   }
@@ -2636,11 +2757,11 @@ var init_caveat_refusal = __esm({
 
 // src/share/publishing-manifest.ts
 function sharePublishingPermissions() {
-  return SHARE_PUBLISHING_MANIFEST.permissions.filter((permission) => permission.service !== "tinycloud.encryption").map((permission) => ({
-    service: permission.service,
+  return SHARE_PUBLISHING_MANIFEST.permissions.filter((permission2) => permission2.service !== "tinycloud.encryption").map((permission2) => ({
+    service: permission2.service,
     space: SHARE_PUBLISHING_MANIFEST.space,
-    path: permission.path,
-    actions: [...permission.actions]
+    path: permission2.path,
+    actions: [...permission2.actions]
   }));
 }
 var SHARE_PUBLISHING_MANIFEST_REF, SHARE_PUBLISHING_MANIFEST;
@@ -2990,7 +3111,7 @@ async function secretPermissionsFromAppManifest(manifest, profile, requestedOwne
     (resource) => resource.service === "tinycloud.kv" && resource.space === "secrets" && resource.path.startsWith("vault/secrets/")
   );
   const needsDecrypt = permissions.some(
-    (permission) => permission.actions.includes("tinycloud.kv/get")
+    (permission2) => permission2.actions.includes("tinycloud.kv/get")
   );
   if (needsDecrypt) {
     permissions.push({
@@ -3042,12 +3163,12 @@ function permissionsFromDelegation(delegation) {
     actions: [...delegation.actions]
   }];
 }
-function compactPermission(permission) {
-  const service = permission.service;
-  const fullSpace = permission.space ?? (isRawEncryptionPermission(permission) ? ENCRYPTION_MANIFEST_SPACE : "");
+function compactPermission(permission2) {
+  const service = permission2.service;
+  const fullSpace = permission2.space ?? (isRawEncryptionPermission(permission2) ? ENCRYPTION_MANIFEST_SPACE : "");
   const space = fullSpace.startsWith("tinycloud:") ? fullSpace.slice(fullSpace.lastIndexOf(":") + 1) : fullSpace;
-  const actions = permission.actions.map((action) => action.startsWith(`${service}/`) ? action.slice(service.length + 1) : action).join(",");
-  return `${service}:${space}:${permission.path}:${actions}`;
+  const actions = permission2.actions.map((action) => action.startsWith(`${service}/`) ? action.slice(service.length + 1) : action).join(",");
+  return `${service}:${space}:${permission2.path}:${actions}`;
 }
 async function resolvePermissionSpaces(entries, profile, options = {}) {
   const profileConfig = await ProfileManager.getProfile(profile);
@@ -3287,8 +3408,8 @@ function createReplicationEventSink(profileRoot, options) {
 `);
       } else if (event.type === "replication.sync") {
         const pending = event.pendingCleared === void 0 ? "" : ` pendingCleared:${event.pendingCleared}`;
-        const origin = event.origin === void 0 ? "" : ` origin:${event.origin}`;
-        process.stderr.write(`[replication] sync ${event.replica} ${event.outcome}${event.code ? ` ${event.code}` : ""}${pending}${origin}
+        const origin2 = event.origin === void 0 ? "" : ` origin:${event.origin}`;
+        process.stderr.write(`[replication] sync ${event.replica} ${event.outcome}${event.code ? ` ${event.code}` : ""}${pending}${origin2}
 `);
       } else if (event.type === "replication.grant") {
         process.stderr.write(`[replication] grant ${event.replicaId} ${event.action}${event.code ? ` ${event.code}` : ""}${event.effectiveExpiresAt ? ` effectiveExpiresAt:${event.effectiveExpiresAt}` : ""}
@@ -3693,6 +3814,10 @@ function _abytes2(value, length5, title = "") {
   }
   return value;
 }
+function numberToHexUnpadded(num) {
+  const hex2 = num.toString(16);
+  return hex2.length & 1 ? "0" + hex2 : hex2;
+}
 function hexToNumber(hex2) {
   if (typeof hex2 !== "string")
     throw new Error("hex string expected, got " + typeof hex2);
@@ -3752,6 +3877,56 @@ function bitLen(n) {
   for (len = 0; n > _0n; n >>= _1n, len += 1)
     ;
   return len;
+}
+function createHmacDrbg(hashLen, qByteLen, hmacFn) {
+  if (typeof hashLen !== "number" || hashLen < 2)
+    throw new Error("hashLen must be a number");
+  if (typeof qByteLen !== "number" || qByteLen < 2)
+    throw new Error("qByteLen must be a number");
+  if (typeof hmacFn !== "function")
+    throw new Error("hmacFn must be a function");
+  const u8n = (len) => new Uint8Array(len);
+  const u8of = (byte) => Uint8Array.of(byte);
+  let v = u8n(hashLen);
+  let k = u8n(hashLen);
+  let i = 0;
+  const reset = () => {
+    v.fill(1);
+    k.fill(0);
+    i = 0;
+  };
+  const h = (...b) => hmacFn(k, v, ...b);
+  const reseed = (seed = u8n(0)) => {
+    k = h(u8of(0), seed);
+    v = h();
+    if (seed.length === 0)
+      return;
+    k = h(u8of(1), seed);
+    v = h();
+  };
+  const gen = () => {
+    if (i++ >= 1e3)
+      throw new Error("drbg: tried 1000 values");
+    let len = 0;
+    const out = [];
+    while (len < qByteLen) {
+      v = h();
+      const sl = v.slice();
+      out.push(sl);
+      len += v.length;
+    }
+    return concatBytes(...out);
+  };
+  const genUntil = (seed, pred) => {
+    reset();
+    reseed(seed);
+    let res = void 0;
+    while (!(res = pred(gen())))
+      reseed();
+    reset();
+    return res;
+  };
+  return genUntil;
 }
 function _validateObject(object2, fields, optFields = {}) {
   if (!object2 || typeof object2 !== "object")
@@ -4089,6 +4264,26 @@ function Field(ORDER, bitLenOrOpts, isLE2 = false, opts = {}) {
   });
   return Object.freeze(f);
 }
+function getFieldBytesLength(fieldOrder) {
+  if (typeof fieldOrder !== "bigint")
+    throw new Error("field order must be bigint");
+  const bitLength = fieldOrder.toString(2).length;
+  return Math.ceil(bitLength / 8);
+}
+function getMinHashLength(fieldOrder) {
+  const length5 = getFieldBytesLength(fieldOrder);
+  return length5 + Math.ceil(length5 / 2);
+}
+function mapHashToField(key, fieldOrder, isLE2 = false) {
+  const len = key.length;
+  const fieldLen = getFieldBytesLength(fieldOrder);
+  const minLen = getMinHashLength(fieldOrder);
+  if (len < 16 || len < minLen || len > 1024)
+    throw new Error("expected " + minLen + "-1024 bytes of input, got " + len);
+  const num = isLE2 ? bytesToNumberLE(key) : bytesToNumberBE(key);
+  const reduced = mod(num, fieldOrder - _1n2) + _1n2;
+  return isLE2 ? numberToBytesLE(reduced, fieldLen) : numberToBytesBE(reduced, fieldLen);
+}
 var _0n2, _1n2, _2n, _3n, _4n, _5n, _7n, _8n, _9n, _16n, isNegativeLE, FIELD_FIELDS;
 var init_modular = __esm({
   "../../node_modules/@noble/curves/esm/abstract/modular.js"() {
@@ -4187,6 +4382,21 @@ function getW(P) {
 function assert0(n) {
   if (n !== _0n3)
     throw new Error("invalid wNAF");
+}
+function mulEndoUnsafe(Point, point, k1, k2) {
+  let acc = point;
+  let p1 = Point.ZERO;
+  let p2 = Point.ZERO;
+  while (k1 > _0n3 || k2 > _0n3) {
+    if (k1 & _1n3)
+      p1 = p1.add(acc);
+    if (k2 & _1n3)
+      p2 = p2.add(acc);
+    acc = acc.double();
+    k1 >>= _1n3;
+    k2 >>= _1n3;
+  }
+  return { p1, p2 };
 }
 function pippenger(c, fieldN, points, scalars) {
   validateMSMPoints(points, c);
@@ -4727,7 +4937,7 @@ function eddsa(Point, cHash, eddsaOpts = {}) {
     const msg = concatBytes(...msgs);
     return modN_LE(cHash(domain(msg, ensureBytes("context", context), !!prehash)));
   }
-  function sign(msg, secretKey, options = {}) {
+  function sign2(msg, secretKey, options = {}) {
     msg = ensureBytes("message", msg);
     if (prehash)
       msg = prehash(msg);
@@ -4832,7 +5042,7 @@ function eddsa(Point, cHash, eddsaOpts = {}) {
   return Object.freeze({
     keygen,
     getPublicKey,
-    sign,
+    sign: sign2,
     verify,
     utils,
     Point,
@@ -6144,8 +6354,8 @@ var init_dist = __esm({
             const id = repairId(entry);
             if (bytes === void 0) {
               const tries = (this.#repairTries.get(id)?.tries ?? 0) + 1;
-              const wait = tries === 1 ? 0 : REPAIR_BACKOFF_BASE_MS * 2 ** (tries - 2);
-              this.#repairTries.set(id, { tries, nextAttemptAt: this.#now() + wait });
+              const wait2 = tries === 1 ? 0 : REPAIR_BACKOFF_BASE_MS * 2 ** (tries - 2);
+              this.#repairTries.set(id, { tries, nextAttemptAt: this.#now() + wait2 });
               continue;
             }
             this.#repairTries.delete(id);
@@ -15274,6 +15484,1097 @@ var init_raw = __esm({
   }
 });
 
+// ../../node_modules/@noble/curves/esm/abstract/weierstrass.js
+function _splitEndoScalar(k, basis, n) {
+  const [[a1, b1], [a2, b2]] = basis;
+  const c1 = divNearest(b2 * k, n);
+  const c2 = divNearest(-b1 * k, n);
+  let k1 = k - c1 * a1 - c2 * a2;
+  let k2 = -c1 * b1 - c2 * b2;
+  const k1neg = k1 < _0n6;
+  const k2neg = k2 < _0n6;
+  if (k1neg)
+    k1 = -k1;
+  if (k2neg)
+    k2 = -k2;
+  const MAX_NUM = bitMask(Math.ceil(bitLen(n) / 2)) + _1n6;
+  if (k1 < _0n6 || k1 >= MAX_NUM || k2 < _0n6 || k2 >= MAX_NUM) {
+    throw new Error("splitScalar (endomorphism): failed, k=" + k);
+  }
+  return { k1neg, k1, k2neg, k2 };
+}
+function validateSigFormat(format5) {
+  if (!["compact", "recovered", "der"].includes(format5))
+    throw new Error('Signature format must be "compact", "recovered", or "der"');
+  return format5;
+}
+function validateSigOpts(opts, def) {
+  const optsn = {};
+  for (let optName of Object.keys(def)) {
+    optsn[optName] = opts[optName] === void 0 ? def[optName] : opts[optName];
+  }
+  _abool2(optsn.lowS, "lowS");
+  _abool2(optsn.prehash, "prehash");
+  if (optsn.format !== void 0)
+    validateSigFormat(optsn.format);
+  return optsn;
+}
+function _normFnElement(Fn2, key) {
+  const { BYTES: expected } = Fn2;
+  let num;
+  if (typeof key === "bigint") {
+    num = key;
+  } else {
+    let bytes = ensureBytes("private key", key);
+    try {
+      num = Fn2.fromBytes(bytes);
+    } catch (error) {
+      throw new Error(`invalid private key: expected ui8a of size ${expected}, got ${typeof key}`);
+    }
+  }
+  if (!Fn2.isValidNot0(num))
+    throw new Error("invalid private key: out of range [1..N-1]");
+  return num;
+}
+function weierstrassN(params, extraOpts = {}) {
+  const validated = _createCurveFields("weierstrass", params, extraOpts);
+  const { Fp: Fp2, Fn: Fn2 } = validated;
+  let CURVE = validated.CURVE;
+  const { h: cofactor, n: CURVE_ORDER } = CURVE;
+  _validateObject(extraOpts, {}, {
+    allowInfinityPoint: "boolean",
+    clearCofactor: "function",
+    isTorsionFree: "function",
+    fromBytes: "function",
+    toBytes: "function",
+    endo: "object",
+    wrapPrivateKey: "boolean"
+  });
+  const { endo } = extraOpts;
+  if (endo) {
+    if (!Fp2.is0(CURVE.a) || typeof endo.beta !== "bigint" || !Array.isArray(endo.basises)) {
+      throw new Error('invalid endo: expected "beta": bigint and "basises": array');
+    }
+  }
+  const lengths = getWLengths(Fp2, Fn2);
+  function assertCompressionIsSupported() {
+    if (!Fp2.isOdd)
+      throw new Error("compression is not supported: Field does not have .isOdd()");
+  }
+  function pointToBytes(_c, point, isCompressed) {
+    const { x, y } = point.toAffine();
+    const bx = Fp2.toBytes(x);
+    _abool2(isCompressed, "isCompressed");
+    if (isCompressed) {
+      assertCompressionIsSupported();
+      const hasEvenY = !Fp2.isOdd(y);
+      return concatBytes(pprefix(hasEvenY), bx);
+    } else {
+      return concatBytes(Uint8Array.of(4), bx, Fp2.toBytes(y));
+    }
+  }
+  function pointFromBytes(bytes) {
+    _abytes2(bytes, void 0, "Point");
+    const { publicKey: comp, publicKeyUncompressed: uncomp } = lengths;
+    const length5 = bytes.length;
+    const head = bytes[0];
+    const tail = bytes.subarray(1);
+    if (length5 === comp && (head === 2 || head === 3)) {
+      const x = Fp2.fromBytes(tail);
+      if (!Fp2.isValid(x))
+        throw new Error("bad point: is not on curve, wrong x");
+      const y2 = weierstrassEquation(x);
+      let y;
+      try {
+        y = Fp2.sqrt(y2);
+      } catch (sqrtError) {
+        const err = sqrtError instanceof Error ? ": " + sqrtError.message : "";
+        throw new Error("bad point: is not on curve, sqrt error" + err);
+      }
+      assertCompressionIsSupported();
+      const isYOdd = Fp2.isOdd(y);
+      const isHeadOdd = (head & 1) === 1;
+      if (isHeadOdd !== isYOdd)
+        y = Fp2.neg(y);
+      return { x, y };
+    } else if (length5 === uncomp && head === 4) {
+      const L = Fp2.BYTES;
+      const x = Fp2.fromBytes(tail.subarray(0, L));
+      const y = Fp2.fromBytes(tail.subarray(L, L * 2));
+      if (!isValidXY(x, y))
+        throw new Error("bad point: is not on curve");
+      return { x, y };
+    } else {
+      throw new Error(`bad point: got length ${length5}, expected compressed=${comp} or uncompressed=${uncomp}`);
+    }
+  }
+  const encodePoint = extraOpts.toBytes || pointToBytes;
+  const decodePoint2 = extraOpts.fromBytes || pointFromBytes;
+  function weierstrassEquation(x) {
+    const x2 = Fp2.sqr(x);
+    const x3 = Fp2.mul(x2, x);
+    return Fp2.add(Fp2.add(x3, Fp2.mul(x, CURVE.a)), CURVE.b);
+  }
+  function isValidXY(x, y) {
+    const left = Fp2.sqr(y);
+    const right = weierstrassEquation(x);
+    return Fp2.eql(left, right);
+  }
+  if (!isValidXY(CURVE.Gx, CURVE.Gy))
+    throw new Error("bad curve params: generator point");
+  const _4a3 = Fp2.mul(Fp2.pow(CURVE.a, _3n3), _4n2);
+  const _27b2 = Fp2.mul(Fp2.sqr(CURVE.b), BigInt(27));
+  if (Fp2.is0(Fp2.add(_4a3, _27b2)))
+    throw new Error("bad curve params: a or b");
+  function acoord(title, n, banZero = false) {
+    if (!Fp2.isValid(n) || banZero && Fp2.is0(n))
+      throw new Error(`bad point coordinate ${title}`);
+    return n;
+  }
+  function aprjpoint(other) {
+    if (!(other instanceof Point))
+      throw new Error("ProjectivePoint expected");
+  }
+  function splitEndoScalarN(k) {
+    if (!endo || !endo.basises)
+      throw new Error("no endo");
+    return _splitEndoScalar(k, endo.basises, Fn2.ORDER);
+  }
+  const toAffineMemo = memoized((p, iz) => {
+    const { X, Y, Z } = p;
+    if (Fp2.eql(Z, Fp2.ONE))
+      return { x: X, y: Y };
+    const is0 = p.is0();
+    if (iz == null)
+      iz = is0 ? Fp2.ONE : Fp2.inv(Z);
+    const x = Fp2.mul(X, iz);
+    const y = Fp2.mul(Y, iz);
+    const zz = Fp2.mul(Z, iz);
+    if (is0)
+      return { x: Fp2.ZERO, y: Fp2.ZERO };
+    if (!Fp2.eql(zz, Fp2.ONE))
+      throw new Error("invZ was invalid");
+    return { x, y };
+  });
+  const assertValidMemo = memoized((p) => {
+    if (p.is0()) {
+      if (extraOpts.allowInfinityPoint && !Fp2.is0(p.Y))
+        return;
+      throw new Error("bad point: ZERO");
+    }
+    const { x, y } = p.toAffine();
+    if (!Fp2.isValid(x) || !Fp2.isValid(y))
+      throw new Error("bad point: x or y not field elements");
+    if (!isValidXY(x, y))
+      throw new Error("bad point: equation left != right");
+    if (!p.isTorsionFree())
+      throw new Error("bad point: not in prime-order subgroup");
+    return true;
+  });
+  function finishEndo(endoBeta, k1p, k2p, k1neg, k2neg) {
+    k2p = new Point(Fp2.mul(k2p.X, endoBeta), k2p.Y, k2p.Z);
+    k1p = negateCt(k1neg, k1p);
+    k2p = negateCt(k2neg, k2p);
+    return k1p.add(k2p);
+  }
+  class Point {
+    /** Does NOT validate if the point is valid. Use `.assertValidity()`. */
+    constructor(X, Y, Z) {
+      this.X = acoord("x", X);
+      this.Y = acoord("y", Y, true);
+      this.Z = acoord("z", Z);
+      Object.freeze(this);
+    }
+    static CURVE() {
+      return CURVE;
+    }
+    /** Does NOT validate if the point is valid. Use `.assertValidity()`. */
+    static fromAffine(p) {
+      const { x, y } = p || {};
+      if (!p || !Fp2.isValid(x) || !Fp2.isValid(y))
+        throw new Error("invalid affine point");
+      if (p instanceof Point)
+        throw new Error("projective point not allowed");
+      if (Fp2.is0(x) && Fp2.is0(y))
+        return Point.ZERO;
+      return new Point(x, y, Fp2.ONE);
+    }
+    static fromBytes(bytes) {
+      const P = Point.fromAffine(decodePoint2(_abytes2(bytes, void 0, "point")));
+      P.assertValidity();
+      return P;
+    }
+    static fromHex(hex2) {
+      return Point.fromBytes(ensureBytes("pointHex", hex2));
+    }
+    get x() {
+      return this.toAffine().x;
+    }
+    get y() {
+      return this.toAffine().y;
+    }
+    /**
+     *
+     * @param windowSize
+     * @param isLazy true will defer table computation until the first multiplication
+     * @returns
+     */
+    precompute(windowSize = 8, isLazy = true) {
+      wnaf.createCache(this, windowSize);
+      if (!isLazy)
+        this.multiply(_3n3);
+      return this;
+    }
+    // TODO: return `this`
+    /** A point on curve is valid if it conforms to equation. */
+    assertValidity() {
+      assertValidMemo(this);
+    }
+    hasEvenY() {
+      const { y } = this.toAffine();
+      if (!Fp2.isOdd)
+        throw new Error("Field doesn't support isOdd");
+      return !Fp2.isOdd(y);
+    }
+    /** Compare one point to another. */
+    equals(other) {
+      aprjpoint(other);
+      const { X: X1, Y: Y1, Z: Z1 } = this;
+      const { X: X2, Y: Y2, Z: Z2 } = other;
+      const U1 = Fp2.eql(Fp2.mul(X1, Z2), Fp2.mul(X2, Z1));
+      const U2 = Fp2.eql(Fp2.mul(Y1, Z2), Fp2.mul(Y2, Z1));
+      return U1 && U2;
+    }
+    /** Flips point to one corresponding to (x, -y) in Affine coordinates. */
+    negate() {
+      return new Point(this.X, Fp2.neg(this.Y), this.Z);
+    }
+    // Renes-Costello-Batina exception-free doubling formula.
+    // There is 30% faster Jacobian formula, but it is not complete.
+    // https://eprint.iacr.org/2015/1060, algorithm 3
+    // Cost: 8M + 3S + 3*a + 2*b3 + 15add.
+    double() {
+      const { a, b } = CURVE;
+      const b3 = Fp2.mul(b, _3n3);
+      const { X: X1, Y: Y1, Z: Z1 } = this;
+      let X3 = Fp2.ZERO, Y3 = Fp2.ZERO, Z3 = Fp2.ZERO;
+      let t0 = Fp2.mul(X1, X1);
+      let t1 = Fp2.mul(Y1, Y1);
+      let t2 = Fp2.mul(Z1, Z1);
+      let t3 = Fp2.mul(X1, Y1);
+      t3 = Fp2.add(t3, t3);
+      Z3 = Fp2.mul(X1, Z1);
+      Z3 = Fp2.add(Z3, Z3);
+      X3 = Fp2.mul(a, Z3);
+      Y3 = Fp2.mul(b3, t2);
+      Y3 = Fp2.add(X3, Y3);
+      X3 = Fp2.sub(t1, Y3);
+      Y3 = Fp2.add(t1, Y3);
+      Y3 = Fp2.mul(X3, Y3);
+      X3 = Fp2.mul(t3, X3);
+      Z3 = Fp2.mul(b3, Z3);
+      t2 = Fp2.mul(a, t2);
+      t3 = Fp2.sub(t0, t2);
+      t3 = Fp2.mul(a, t3);
+      t3 = Fp2.add(t3, Z3);
+      Z3 = Fp2.add(t0, t0);
+      t0 = Fp2.add(Z3, t0);
+      t0 = Fp2.add(t0, t2);
+      t0 = Fp2.mul(t0, t3);
+      Y3 = Fp2.add(Y3, t0);
+      t2 = Fp2.mul(Y1, Z1);
+      t2 = Fp2.add(t2, t2);
+      t0 = Fp2.mul(t2, t3);
+      X3 = Fp2.sub(X3, t0);
+      Z3 = Fp2.mul(t2, t1);
+      Z3 = Fp2.add(Z3, Z3);
+      Z3 = Fp2.add(Z3, Z3);
+      return new Point(X3, Y3, Z3);
+    }
+    // Renes-Costello-Batina exception-free addition formula.
+    // There is 30% faster Jacobian formula, but it is not complete.
+    // https://eprint.iacr.org/2015/1060, algorithm 1
+    // Cost: 12M + 0S + 3*a + 3*b3 + 23add.
+    add(other) {
+      aprjpoint(other);
+      const { X: X1, Y: Y1, Z: Z1 } = this;
+      const { X: X2, Y: Y2, Z: Z2 } = other;
+      let X3 = Fp2.ZERO, Y3 = Fp2.ZERO, Z3 = Fp2.ZERO;
+      const a = CURVE.a;
+      const b3 = Fp2.mul(CURVE.b, _3n3);
+      let t0 = Fp2.mul(X1, X2);
+      let t1 = Fp2.mul(Y1, Y2);
+      let t2 = Fp2.mul(Z1, Z2);
+      let t3 = Fp2.add(X1, Y1);
+      let t4 = Fp2.add(X2, Y2);
+      t3 = Fp2.mul(t3, t4);
+      t4 = Fp2.add(t0, t1);
+      t3 = Fp2.sub(t3, t4);
+      t4 = Fp2.add(X1, Z1);
+      let t5 = Fp2.add(X2, Z2);
+      t4 = Fp2.mul(t4, t5);
+      t5 = Fp2.add(t0, t2);
+      t4 = Fp2.sub(t4, t5);
+      t5 = Fp2.add(Y1, Z1);
+      X3 = Fp2.add(Y2, Z2);
+      t5 = Fp2.mul(t5, X3);
+      X3 = Fp2.add(t1, t2);
+      t5 = Fp2.sub(t5, X3);
+      Z3 = Fp2.mul(a, t4);
+      X3 = Fp2.mul(b3, t2);
+      Z3 = Fp2.add(X3, Z3);
+      X3 = Fp2.sub(t1, Z3);
+      Z3 = Fp2.add(t1, Z3);
+      Y3 = Fp2.mul(X3, Z3);
+      t1 = Fp2.add(t0, t0);
+      t1 = Fp2.add(t1, t0);
+      t2 = Fp2.mul(a, t2);
+      t4 = Fp2.mul(b3, t4);
+      t1 = Fp2.add(t1, t2);
+      t2 = Fp2.sub(t0, t2);
+      t2 = Fp2.mul(a, t2);
+      t4 = Fp2.add(t4, t2);
+      t0 = Fp2.mul(t1, t4);
+      Y3 = Fp2.add(Y3, t0);
+      t0 = Fp2.mul(t5, t4);
+      X3 = Fp2.mul(t3, X3);
+      X3 = Fp2.sub(X3, t0);
+      t0 = Fp2.mul(t3, t1);
+      Z3 = Fp2.mul(t5, Z3);
+      Z3 = Fp2.add(Z3, t0);
+      return new Point(X3, Y3, Z3);
+    }
+    subtract(other) {
+      return this.add(other.negate());
+    }
+    is0() {
+      return this.equals(Point.ZERO);
+    }
+    /**
+     * Constant time multiplication.
+     * Uses wNAF method. Windowed method may be 10% faster,
+     * but takes 2x longer to generate and consumes 2x memory.
+     * Uses precomputes when available.
+     * Uses endomorphism for Koblitz curves.
+     * @param scalar by which the point would be multiplied
+     * @returns New point
+     */
+    multiply(scalar) {
+      const { endo: endo2 } = extraOpts;
+      if (!Fn2.isValidNot0(scalar))
+        throw new Error("invalid scalar: out of range");
+      let point, fake;
+      const mul = (n) => wnaf.cached(this, n, (p) => normalizeZ(Point, p));
+      if (endo2) {
+        const { k1neg, k1, k2neg, k2 } = splitEndoScalarN(scalar);
+        const { p: k1p, f: k1f } = mul(k1);
+        const { p: k2p, f: k2f } = mul(k2);
+        fake = k1f.add(k2f);
+        point = finishEndo(endo2.beta, k1p, k2p, k1neg, k2neg);
+      } else {
+        const { p, f } = mul(scalar);
+        point = p;
+        fake = f;
+      }
+      return normalizeZ(Point, [point, fake])[0];
+    }
+    /**
+     * Non-constant-time multiplication. Uses double-and-add algorithm.
+     * It's faster, but should only be used when you don't care about
+     * an exposed secret key e.g. sig verification, which works over *public* keys.
+     */
+    multiplyUnsafe(sc) {
+      const { endo: endo2 } = extraOpts;
+      const p = this;
+      if (!Fn2.isValid(sc))
+        throw new Error("invalid scalar: out of range");
+      if (sc === _0n6 || p.is0())
+        return Point.ZERO;
+      if (sc === _1n6)
+        return p;
+      if (wnaf.hasCache(this))
+        return this.multiply(sc);
+      if (endo2) {
+        const { k1neg, k1, k2neg, k2 } = splitEndoScalarN(sc);
+        const { p1, p2 } = mulEndoUnsafe(Point, p, k1, k2);
+        return finishEndo(endo2.beta, p1, p2, k1neg, k2neg);
+      } else {
+        return wnaf.unsafe(p, sc);
+      }
+    }
+    multiplyAndAddUnsafe(Q, a, b) {
+      const sum = this.multiplyUnsafe(a).add(Q.multiplyUnsafe(b));
+      return sum.is0() ? void 0 : sum;
+    }
+    /**
+     * Converts Projective point to affine (x, y) coordinates.
+     * @param invertedZ Z^-1 (inverted zero) - optional, precomputation is useful for invertBatch
+     */
+    toAffine(invertedZ) {
+      return toAffineMemo(this, invertedZ);
+    }
+    /**
+     * Checks whether Point is free of torsion elements (is in prime subgroup).
+     * Always torsion-free for cofactor=1 curves.
+     */
+    isTorsionFree() {
+      const { isTorsionFree } = extraOpts;
+      if (cofactor === _1n6)
+        return true;
+      if (isTorsionFree)
+        return isTorsionFree(Point, this);
+      return wnaf.unsafe(this, CURVE_ORDER).is0();
+    }
+    clearCofactor() {
+      const { clearCofactor } = extraOpts;
+      if (cofactor === _1n6)
+        return this;
+      if (clearCofactor)
+        return clearCofactor(Point, this);
+      return this.multiplyUnsafe(cofactor);
+    }
+    isSmallOrder() {
+      return this.multiplyUnsafe(cofactor).is0();
+    }
+    toBytes(isCompressed = true) {
+      _abool2(isCompressed, "isCompressed");
+      this.assertValidity();
+      return encodePoint(Point, this, isCompressed);
+    }
+    toHex(isCompressed = true) {
+      return bytesToHex(this.toBytes(isCompressed));
+    }
+    toString() {
+      return `<Point ${this.is0() ? "ZERO" : this.toHex()}>`;
+    }
+    // TODO: remove
+    get px() {
+      return this.X;
+    }
+    get py() {
+      return this.X;
+    }
+    get pz() {
+      return this.Z;
+    }
+    toRawBytes(isCompressed = true) {
+      return this.toBytes(isCompressed);
+    }
+    _setWindowSize(windowSize) {
+      this.precompute(windowSize);
+    }
+    static normalizeZ(points) {
+      return normalizeZ(Point, points);
+    }
+    static msm(points, scalars) {
+      return pippenger(Point, Fn2, points, scalars);
+    }
+    static fromPrivateKey(privateKey) {
+      return Point.BASE.multiply(_normFnElement(Fn2, privateKey));
+    }
+  }
+  Point.BASE = new Point(CURVE.Gx, CURVE.Gy, Fp2.ONE);
+  Point.ZERO = new Point(Fp2.ZERO, Fp2.ONE, Fp2.ZERO);
+  Point.Fp = Fp2;
+  Point.Fn = Fn2;
+  const bits = Fn2.BITS;
+  const wnaf = new wNAF(Point, extraOpts.endo ? Math.ceil(bits / 2) : bits);
+  Point.BASE.precompute(8);
+  return Point;
+}
+function pprefix(hasEvenY) {
+  return Uint8Array.of(hasEvenY ? 2 : 3);
+}
+function getWLengths(Fp2, Fn2) {
+  return {
+    secretKey: Fn2.BYTES,
+    publicKey: 1 + Fp2.BYTES,
+    publicKeyUncompressed: 1 + 2 * Fp2.BYTES,
+    publicKeyHasPrefix: true,
+    signature: 2 * Fn2.BYTES
+  };
+}
+function ecdh(Point, ecdhOpts = {}) {
+  const { Fn: Fn2 } = Point;
+  const randomBytes_ = ecdhOpts.randomBytes || randomBytes;
+  const lengths = Object.assign(getWLengths(Point.Fp, Fn2), { seed: getMinHashLength(Fn2.ORDER) });
+  function isValidSecretKey(secretKey) {
+    try {
+      return !!_normFnElement(Fn2, secretKey);
+    } catch (error) {
+      return false;
+    }
+  }
+  function isValidPublicKey(publicKey, isCompressed) {
+    const { publicKey: comp, publicKeyUncompressed } = lengths;
+    try {
+      const l = publicKey.length;
+      if (isCompressed === true && l !== comp)
+        return false;
+      if (isCompressed === false && l !== publicKeyUncompressed)
+        return false;
+      return !!Point.fromBytes(publicKey);
+    } catch (error) {
+      return false;
+    }
+  }
+  function randomSecretKey(seed = randomBytes_(lengths.seed)) {
+    return mapHashToField(_abytes2(seed, lengths.seed, "seed"), Fn2.ORDER);
+  }
+  function getPublicKey(secretKey, isCompressed = true) {
+    return Point.BASE.multiply(_normFnElement(Fn2, secretKey)).toBytes(isCompressed);
+  }
+  function keygen(seed) {
+    const secretKey = randomSecretKey(seed);
+    return { secretKey, publicKey: getPublicKey(secretKey) };
+  }
+  function isProbPub(item) {
+    if (typeof item === "bigint")
+      return false;
+    if (item instanceof Point)
+      return true;
+    const { secretKey, publicKey, publicKeyUncompressed } = lengths;
+    if (Fn2.allowedLengths || secretKey === publicKey)
+      return void 0;
+    const l = ensureBytes("key", item).length;
+    return l === publicKey || l === publicKeyUncompressed;
+  }
+  function getSharedSecret(secretKeyA, publicKeyB, isCompressed = true) {
+    if (isProbPub(secretKeyA) === true)
+      throw new Error("first arg must be private key");
+    if (isProbPub(publicKeyB) === false)
+      throw new Error("second arg must be public key");
+    const s = _normFnElement(Fn2, secretKeyA);
+    const b = Point.fromHex(publicKeyB);
+    return b.multiply(s).toBytes(isCompressed);
+  }
+  const utils = {
+    isValidSecretKey,
+    isValidPublicKey,
+    randomSecretKey,
+    // TODO: remove
+    isValidPrivateKey: isValidSecretKey,
+    randomPrivateKey: randomSecretKey,
+    normPrivateKeyToScalar: (key) => _normFnElement(Fn2, key),
+    precompute(windowSize = 8, point = Point.BASE) {
+      return point.precompute(windowSize, false);
+    }
+  };
+  return Object.freeze({ getPublicKey, getSharedSecret, keygen, Point, utils, lengths });
+}
+function ecdsa(Point, hash, ecdsaOpts = {}) {
+  ahash(hash);
+  _validateObject(ecdsaOpts, {}, {
+    hmac: "function",
+    lowS: "boolean",
+    randomBytes: "function",
+    bits2int: "function",
+    bits2int_modN: "function"
+  });
+  const randomBytes10 = ecdsaOpts.randomBytes || randomBytes;
+  const hmac2 = ecdsaOpts.hmac || ((key, ...msgs) => hmac(hash, key, concatBytes(...msgs)));
+  const { Fp: Fp2, Fn: Fn2 } = Point;
+  const { ORDER: CURVE_ORDER, BITS: fnBits } = Fn2;
+  const { keygen, getPublicKey, getSharedSecret, utils, lengths } = ecdh(Point, ecdsaOpts);
+  const defaultSigOpts = {
+    prehash: false,
+    lowS: typeof ecdsaOpts.lowS === "boolean" ? ecdsaOpts.lowS : false,
+    format: void 0,
+    //'compact' as ECDSASigFormat,
+    extraEntropy: false
+  };
+  const defaultSigOpts_format = "compact";
+  function isBiggerThanHalfOrder(number) {
+    const HALF = CURVE_ORDER >> _1n6;
+    return number > HALF;
+  }
+  function validateRS(title, num) {
+    if (!Fn2.isValidNot0(num))
+      throw new Error(`invalid signature ${title}: out of range 1..Point.Fn.ORDER`);
+    return num;
+  }
+  function validateSigLength(bytes, format5) {
+    validateSigFormat(format5);
+    const size = lengths.signature;
+    const sizer = format5 === "compact" ? size : format5 === "recovered" ? size + 1 : void 0;
+    return _abytes2(bytes, sizer, `${format5} signature`);
+  }
+  class Signature {
+    constructor(r, s, recovery) {
+      this.r = validateRS("r", r);
+      this.s = validateRS("s", s);
+      if (recovery != null)
+        this.recovery = recovery;
+      Object.freeze(this);
+    }
+    static fromBytes(bytes, format5 = defaultSigOpts_format) {
+      validateSigLength(bytes, format5);
+      let recid;
+      if (format5 === "der") {
+        const { r: r2, s: s2 } = DER.toSig(_abytes2(bytes));
+        return new Signature(r2, s2);
+      }
+      if (format5 === "recovered") {
+        recid = bytes[0];
+        format5 = "compact";
+        bytes = bytes.subarray(1);
+      }
+      const L = Fn2.BYTES;
+      const r = bytes.subarray(0, L);
+      const s = bytes.subarray(L, L * 2);
+      return new Signature(Fn2.fromBytes(r), Fn2.fromBytes(s), recid);
+    }
+    static fromHex(hex2, format5) {
+      return this.fromBytes(hexToBytes(hex2), format5);
+    }
+    addRecoveryBit(recovery) {
+      return new Signature(this.r, this.s, recovery);
+    }
+    recoverPublicKey(messageHash) {
+      const FIELD_ORDER = Fp2.ORDER;
+      const { r, s, recovery: rec } = this;
+      if (rec == null || ![0, 1, 2, 3].includes(rec))
+        throw new Error("recovery id invalid");
+      const hasCofactor = CURVE_ORDER * _2n4 < FIELD_ORDER;
+      if (hasCofactor && rec > 1)
+        throw new Error("recovery id is ambiguous for h>1 curve");
+      const radj = rec === 2 || rec === 3 ? r + CURVE_ORDER : r;
+      if (!Fp2.isValid(radj))
+        throw new Error("recovery id 2 or 3 invalid");
+      const x = Fp2.toBytes(radj);
+      const R = Point.fromBytes(concatBytes(pprefix((rec & 1) === 0), x));
+      const ir = Fn2.inv(radj);
+      const h = bits2int_modN(ensureBytes("msgHash", messageHash));
+      const u1 = Fn2.create(-h * ir);
+      const u2 = Fn2.create(s * ir);
+      const Q = Point.BASE.multiplyUnsafe(u1).add(R.multiplyUnsafe(u2));
+      if (Q.is0())
+        throw new Error("point at infinify");
+      Q.assertValidity();
+      return Q;
+    }
+    // Signatures should be low-s, to prevent malleability.
+    hasHighS() {
+      return isBiggerThanHalfOrder(this.s);
+    }
+    toBytes(format5 = defaultSigOpts_format) {
+      validateSigFormat(format5);
+      if (format5 === "der")
+        return hexToBytes(DER.hexFromSig(this));
+      const r = Fn2.toBytes(this.r);
+      const s = Fn2.toBytes(this.s);
+      if (format5 === "recovered") {
+        if (this.recovery == null)
+          throw new Error("recovery bit must be present");
+        return concatBytes(Uint8Array.of(this.recovery), r, s);
+      }
+      return concatBytes(r, s);
+    }
+    toHex(format5) {
+      return bytesToHex(this.toBytes(format5));
+    }
+    // TODO: remove
+    assertValidity() {
+    }
+    static fromCompact(hex2) {
+      return Signature.fromBytes(ensureBytes("sig", hex2), "compact");
+    }
+    static fromDER(hex2) {
+      return Signature.fromBytes(ensureBytes("sig", hex2), "der");
+    }
+    normalizeS() {
+      return this.hasHighS() ? new Signature(this.r, Fn2.neg(this.s), this.recovery) : this;
+    }
+    toDERRawBytes() {
+      return this.toBytes("der");
+    }
+    toDERHex() {
+      return bytesToHex(this.toBytes("der"));
+    }
+    toCompactRawBytes() {
+      return this.toBytes("compact");
+    }
+    toCompactHex() {
+      return bytesToHex(this.toBytes("compact"));
+    }
+  }
+  const bits2int = ecdsaOpts.bits2int || function bits2int_def(bytes) {
+    if (bytes.length > 8192)
+      throw new Error("input is too large");
+    const num = bytesToNumberBE(bytes);
+    const delta = bytes.length * 8 - fnBits;
+    return delta > 0 ? num >> BigInt(delta) : num;
+  };
+  const bits2int_modN = ecdsaOpts.bits2int_modN || function bits2int_modN_def(bytes) {
+    return Fn2.create(bits2int(bytes));
+  };
+  const ORDER_MASK = bitMask(fnBits);
+  function int2octets(num) {
+    aInRange("num < 2^" + fnBits, num, _0n6, ORDER_MASK);
+    return Fn2.toBytes(num);
+  }
+  function validateMsgAndHash(message, prehash) {
+    _abytes2(message, void 0, "message");
+    return prehash ? _abytes2(hash(message), void 0, "prehashed message") : message;
+  }
+  function prepSig(message, privateKey, opts) {
+    if (["recovered", "canonical"].some((k) => k in opts))
+      throw new Error("sign() legacy options not supported");
+    const { lowS, prehash, extraEntropy } = validateSigOpts(opts, defaultSigOpts);
+    message = validateMsgAndHash(message, prehash);
+    const h1int = bits2int_modN(message);
+    const d = _normFnElement(Fn2, privateKey);
+    const seedArgs = [int2octets(d), int2octets(h1int)];
+    if (extraEntropy != null && extraEntropy !== false) {
+      const e = extraEntropy === true ? randomBytes10(lengths.secretKey) : extraEntropy;
+      seedArgs.push(ensureBytes("extraEntropy", e));
+    }
+    const seed = concatBytes(...seedArgs);
+    const m = h1int;
+    function k2sig(kBytes) {
+      const k = bits2int(kBytes);
+      if (!Fn2.isValidNot0(k))
+        return;
+      const ik = Fn2.inv(k);
+      const q = Point.BASE.multiply(k).toAffine();
+      const r = Fn2.create(q.x);
+      if (r === _0n6)
+        return;
+      const s = Fn2.create(ik * Fn2.create(m + r * d));
+      if (s === _0n6)
+        return;
+      let recovery = (q.x === r ? 0 : 2) | Number(q.y & _1n6);
+      let normS = s;
+      if (lowS && isBiggerThanHalfOrder(s)) {
+        normS = Fn2.neg(s);
+        recovery ^= 1;
+      }
+      return new Signature(r, normS, recovery);
+    }
+    return { seed, k2sig };
+  }
+  function sign2(message, secretKey, opts = {}) {
+    message = ensureBytes("message", message);
+    const { seed, k2sig } = prepSig(message, secretKey, opts);
+    const drbg = createHmacDrbg(hash.outputLen, Fn2.BYTES, hmac2);
+    const sig = drbg(seed, k2sig);
+    return sig;
+  }
+  function tryParsingSig(sg) {
+    let sig = void 0;
+    const isHex = typeof sg === "string" || isBytes(sg);
+    const isObj = !isHex && sg !== null && typeof sg === "object" && typeof sg.r === "bigint" && typeof sg.s === "bigint";
+    if (!isHex && !isObj)
+      throw new Error("invalid signature, expected Uint8Array, hex string or Signature instance");
+    if (isObj) {
+      sig = new Signature(sg.r, sg.s);
+    } else if (isHex) {
+      try {
+        sig = Signature.fromBytes(ensureBytes("sig", sg), "der");
+      } catch (derError) {
+        if (!(derError instanceof DER.Err))
+          throw derError;
+      }
+      if (!sig) {
+        try {
+          sig = Signature.fromBytes(ensureBytes("sig", sg), "compact");
+        } catch (error) {
+          return false;
+        }
+      }
+    }
+    if (!sig)
+      return false;
+    return sig;
+  }
+  function verify(signature, message, publicKey, opts = {}) {
+    const { lowS, prehash, format: format5 } = validateSigOpts(opts, defaultSigOpts);
+    publicKey = ensureBytes("publicKey", publicKey);
+    message = validateMsgAndHash(ensureBytes("message", message), prehash);
+    if ("strict" in opts)
+      throw new Error("options.strict was renamed to lowS");
+    const sig = format5 === void 0 ? tryParsingSig(signature) : Signature.fromBytes(ensureBytes("sig", signature), format5);
+    if (sig === false)
+      return false;
+    try {
+      const P = Point.fromBytes(publicKey);
+      if (lowS && sig.hasHighS())
+        return false;
+      const { r, s } = sig;
+      const h = bits2int_modN(message);
+      const is = Fn2.inv(s);
+      const u1 = Fn2.create(h * is);
+      const u2 = Fn2.create(r * is);
+      const R = Point.BASE.multiplyUnsafe(u1).add(P.multiplyUnsafe(u2));
+      if (R.is0())
+        return false;
+      const v = Fn2.create(R.x);
+      return v === r;
+    } catch (e) {
+      return false;
+    }
+  }
+  function recoverPublicKey(signature, message, opts = {}) {
+    const { prehash } = validateSigOpts(opts, defaultSigOpts);
+    message = validateMsgAndHash(message, prehash);
+    return Signature.fromBytes(signature, "recovered").recoverPublicKey(message).toBytes();
+  }
+  return Object.freeze({
+    keygen,
+    getPublicKey,
+    getSharedSecret,
+    utils,
+    lengths,
+    Point,
+    sign: sign2,
+    verify,
+    recoverPublicKey,
+    Signature,
+    hash
+  });
+}
+function _weierstrass_legacy_opts_to_new(c) {
+  const CURVE = {
+    a: c.a,
+    b: c.b,
+    p: c.Fp.ORDER,
+    n: c.n,
+    h: c.h,
+    Gx: c.Gx,
+    Gy: c.Gy
+  };
+  const Fp2 = c.Fp;
+  let allowedLengths = c.allowedPrivateKeyLengths ? Array.from(new Set(c.allowedPrivateKeyLengths.map((l) => Math.ceil(l / 2)))) : void 0;
+  const Fn2 = Field(CURVE.n, {
+    BITS: c.nBitLength,
+    allowedLengths,
+    modFromBytes: c.wrapPrivateKey
+  });
+  const curveOpts = {
+    Fp: Fp2,
+    Fn: Fn2,
+    allowInfinityPoint: c.allowInfinityPoint,
+    endo: c.endo,
+    isTorsionFree: c.isTorsionFree,
+    clearCofactor: c.clearCofactor,
+    fromBytes: c.fromBytes,
+    toBytes: c.toBytes
+  };
+  return { CURVE, curveOpts };
+}
+function _ecdsa_legacy_opts_to_new(c) {
+  const { CURVE, curveOpts } = _weierstrass_legacy_opts_to_new(c);
+  const ecdsaOpts = {
+    hmac: c.hmac,
+    randomBytes: c.randomBytes,
+    lowS: c.lowS,
+    bits2int: c.bits2int,
+    bits2int_modN: c.bits2int_modN
+  };
+  return { CURVE, curveOpts, hash: c.hash, ecdsaOpts };
+}
+function _ecdsa_new_output_to_legacy(c, _ecdsa) {
+  const Point = _ecdsa.Point;
+  return Object.assign({}, _ecdsa, {
+    ProjectivePoint: Point,
+    CURVE: Object.assign({}, c, nLength(Point.Fn.ORDER, Point.Fn.BITS))
+  });
+}
+function weierstrass(c) {
+  const { CURVE, curveOpts, hash, ecdsaOpts } = _ecdsa_legacy_opts_to_new(c);
+  const Point = weierstrassN(CURVE, curveOpts);
+  const signs = ecdsa(Point, hash, ecdsaOpts);
+  return _ecdsa_new_output_to_legacy(c, signs);
+}
+var divNearest, DERErr, DER, _0n6, _1n6, _2n4, _3n3, _4n2;
+var init_weierstrass = __esm({
+  "../../node_modules/@noble/curves/esm/abstract/weierstrass.js"() {
+    "use strict";
+    init_hmac();
+    init_utils();
+    init_utils2();
+    init_curve();
+    init_modular();
+    divNearest = (num, den) => (num + (num >= 0 ? den : -den) / _2n4) / den;
+    DERErr = class extends Error {
+      constructor(m = "") {
+        super(m);
+      }
+    };
+    DER = {
+      // asn.1 DER encoding utils
+      Err: DERErr,
+      // Basic building block is TLV (Tag-Length-Value)
+      _tlv: {
+        encode: (tag, data) => {
+          const { Err: E } = DER;
+          if (tag < 0 || tag > 256)
+            throw new E("tlv.encode: wrong tag");
+          if (data.length & 1)
+            throw new E("tlv.encode: unpadded data");
+          const dataLen = data.length / 2;
+          const len = numberToHexUnpadded(dataLen);
+          if (len.length / 2 & 128)
+            throw new E("tlv.encode: long form length too big");
+          const lenLen = dataLen > 127 ? numberToHexUnpadded(len.length / 2 | 128) : "";
+          const t = numberToHexUnpadded(tag);
+          return t + lenLen + len + data;
+        },
+        // v - value, l - left bytes (unparsed)
+        decode(tag, data) {
+          const { Err: E } = DER;
+          let pos = 0;
+          if (tag < 0 || tag > 256)
+            throw new E("tlv.encode: wrong tag");
+          if (data.length < 2 || data[pos++] !== tag)
+            throw new E("tlv.decode: wrong tlv");
+          const first = data[pos++];
+          const isLong = !!(first & 128);
+          let length5 = 0;
+          if (!isLong)
+            length5 = first;
+          else {
+            const lenLen = first & 127;
+            if (!lenLen)
+              throw new E("tlv.decode(long): indefinite length not supported");
+            if (lenLen > 4)
+              throw new E("tlv.decode(long): byte length is too big");
+            const lengthBytes = data.subarray(pos, pos + lenLen);
+            if (lengthBytes.length !== lenLen)
+              throw new E("tlv.decode: length bytes not complete");
+            if (lengthBytes[0] === 0)
+              throw new E("tlv.decode(long): zero leftmost byte");
+            for (const b of lengthBytes)
+              length5 = length5 << 8 | b;
+            pos += lenLen;
+            if (length5 < 128)
+              throw new E("tlv.decode(long): not minimal encoding");
+          }
+          const v = data.subarray(pos, pos + length5);
+          if (v.length !== length5)
+            throw new E("tlv.decode: wrong value length");
+          return { v, l: data.subarray(pos + length5) };
+        }
+      },
+      // https://crypto.stackexchange.com/a/57734 Leftmost bit of first byte is 'negative' flag,
+      // since we always use positive integers here. It must always be empty:
+      // - add zero byte if exists
+      // - if next byte doesn't have a flag, leading zero is not allowed (minimal encoding)
+      _int: {
+        encode(num) {
+          const { Err: E } = DER;
+          if (num < _0n6)
+            throw new E("integer: negative integers are not allowed");
+          let hex2 = numberToHexUnpadded(num);
+          if (Number.parseInt(hex2[0], 16) & 8)
+            hex2 = "00" + hex2;
+          if (hex2.length & 1)
+            throw new E("unexpected DER parsing assertion: unpadded hex");
+          return hex2;
+        },
+        decode(data) {
+          const { Err: E } = DER;
+          if (data[0] & 128)
+            throw new E("invalid signature integer: negative");
+          if (data[0] === 0 && !(data[1] & 128))
+            throw new E("invalid signature integer: unnecessary leading zero");
+          return bytesToNumberBE(data);
+        }
+      },
+      toSig(hex2) {
+        const { Err: E, _int: int, _tlv: tlv } = DER;
+        const data = ensureBytes("signature", hex2);
+        const { v: seqBytes, l: seqLeftBytes } = tlv.decode(48, data);
+        if (seqLeftBytes.length)
+          throw new E("invalid signature: left bytes after parsing");
+        const { v: rBytes, l: rLeftBytes } = tlv.decode(2, seqBytes);
+        const { v: sBytes, l: sLeftBytes } = tlv.decode(2, rLeftBytes);
+        if (sLeftBytes.length)
+          throw new E("invalid signature: left bytes after parsing");
+        return { r: int.decode(rBytes), s: int.decode(sBytes) };
+      },
+      hexFromSig(sig) {
+        const { _tlv: tlv, _int: int } = DER;
+        const rs = tlv.encode(2, int.encode(sig.r));
+        const ss = tlv.encode(2, int.encode(sig.s));
+        const seq = rs + ss;
+        return tlv.encode(48, seq);
+      }
+    };
+    _0n6 = BigInt(0);
+    _1n6 = BigInt(1);
+    _2n4 = BigInt(2);
+    _3n3 = BigInt(3);
+    _4n2 = BigInt(4);
+  }
+});
+
+// ../../node_modules/@noble/curves/esm/_shortw_utils.js
+function createCurve(curveDef, defHash) {
+  const create5 = (hash) => weierstrass({ ...curveDef, hash });
+  return { ...create5(defHash), create: create5 };
+}
+var init_shortw_utils = __esm({
+  "../../node_modules/@noble/curves/esm/_shortw_utils.js"() {
+    "use strict";
+    init_weierstrass();
+  }
+});
+
+// ../../node_modules/@noble/curves/esm/nist.js
+var p256_CURVE, p384_CURVE, p521_CURVE, Fp256, Fp384, Fp521, p256, p384, p521;
+var init_nist = __esm({
+  "../../node_modules/@noble/curves/esm/nist.js"() {
+    "use strict";
+    init_sha2();
+    init_shortw_utils();
+    init_modular();
+    p256_CURVE = {
+      p: BigInt("0xffffffff00000001000000000000000000000000ffffffffffffffffffffffff"),
+      n: BigInt("0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551"),
+      h: BigInt(1),
+      a: BigInt("0xffffffff00000001000000000000000000000000fffffffffffffffffffffffc"),
+      b: BigInt("0x5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b"),
+      Gx: BigInt("0x6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296"),
+      Gy: BigInt("0x4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5")
+    };
+    p384_CURVE = {
+      p: BigInt("0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffeffffffff0000000000000000ffffffff"),
+      n: BigInt("0xffffffffffffffffffffffffffffffffffffffffffffffffc7634d81f4372ddf581a0db248b0a77aecec196accc52973"),
+      h: BigInt(1),
+      a: BigInt("0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffeffffffff0000000000000000fffffffc"),
+      b: BigInt("0xb3312fa7e23ee7e4988e056be3f82d19181d9c6efe8141120314088f5013875ac656398d8a2ed19d2a85c8edd3ec2aef"),
+      Gx: BigInt("0xaa87ca22be8b05378eb1c71ef320ad746e1d3b628ba79b9859f741e082542a385502f25dbf55296c3a545e3872760ab7"),
+      Gy: BigInt("0x3617de4a96262c6f5d9e98bf9292dc29f8f41dbd289a147ce9da3113b5f0b8c00a60b1ce1d7e819d7a431d7c90ea0e5f")
+    };
+    p521_CURVE = {
+      p: BigInt("0x1ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"),
+      n: BigInt("0x01fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffa51868783bf2f966b7fcc0148f709a5d03bb5c9b8899c47aebb6fb71e91386409"),
+      h: BigInt(1),
+      a: BigInt("0x1fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc"),
+      b: BigInt("0x0051953eb9618e1c9a1f929a21a0b68540eea2da725b99b315f3b8b489918ef109e156193951ec7e937b1652c0bd3bb1bf073573df883d2c34f1ef451fd46b503f00"),
+      Gx: BigInt("0x00c6858e06b70404e9cd9e3ecb662395b4429c648139053fb521f828af606b4d3dbaa14b5e77efe75928fe1dc127a2ffa8de3348b3c1856a429bf97e7e31c2e5bd66"),
+      Gy: BigInt("0x011839296a789a3bc0045c8a5fb42c7d1bd998f54449579b446817afbd17273e662c97ee72995ef42640c550b9013fad0761353c7086a272c24088be94769fd16650")
+    };
+    Fp256 = Field(p256_CURVE.p);
+    Fp384 = Field(p384_CURVE.p);
+    Fp521 = Field(p521_CURVE.p);
+    p256 = createCurve({ ...p256_CURVE, Fp: Fp256, lowS: false }, sha256);
+    p384 = createCurve({ ...p384_CURVE, Fp: Fp384, lowS: false }, sha384);
+    p521 = createCurve({ ...p521_CURVE, Fp: Fp521, lowS: false, allowedPrivateKeyLengths: [130, 131, 132] }, sha512);
+  }
+});
+
+// ../../node_modules/@noble/curves/esm/p256.js
+var p2562;
+var init_p256 = __esm({
+  "../../node_modules/@noble/curves/esm/p256.js"() {
+    "use strict";
+    init_nist();
+    p2562 = p256;
+  }
+});
+
 // ../share-envelope/dist/links.js
 var links_exports = {};
 __export(links_exports, {
@@ -15300,6 +16601,7 @@ __export(links_exports, {
   checkLinkBody: () => checkLinkBody,
   checkLinkHeaderLife: () => checkLinkHeaderLife,
   checkLinkRecord: () => checkLinkRecord,
+  createApprovalRequest: () => createApprovalRequest,
   createLink: () => createLink,
   deleteLink: () => deleteLink,
   ed25519KeyProblem: () => ed25519KeyProblem,
@@ -15313,11 +16615,13 @@ __export(links_exports, {
   linkTypeSchema: () => linkTypeSchema,
   normalizeLinkId: () => normalizeLinkId,
   openLinkRecord: () => openLinkRecord,
+  parseApprovalRequest: () => parseApprovalRequest,
   parseLink: () => parseLink,
   parseLinkTimestamp: () => parseLinkTimestamp,
   prepareLinkRecord: () => prepareLinkRecord,
   randomLinkNonce: () => randomLinkNonce,
   redactLink: () => redactLink,
+  resolveApprovalRequest: () => resolveApprovalRequest,
   resolveLink: () => resolveLink,
   shortShareLinkCid: () => shortShareLinkCid,
   signDelete: () => signDelete,
@@ -15692,14 +16996,14 @@ function linkTypeForPathLetter(letter) {
 function normalizeLinkId(id) {
   return /^[A-Za-z2-7]{26}$/.test(id) ? id.toLowerCase() : null;
 }
-function canonicalHttpsOrigin(origin) {
+function canonicalHttpsOrigin(origin2) {
   let url;
   try {
-    url = new URL(origin);
+    url = new URL(origin2);
   } catch {
     return false;
   }
-  return url.protocol === "https:" && url.username === "" && url.password === "" && url.origin === origin;
+  return url.protocol === "https:" && url.username === "" && url.password === "" && url.origin === origin2;
 }
 function assertKey2(key) {
   if (key.length !== 32) throw new LinkError("invalid_argument", "a link key is 32 bytes");
@@ -15832,9 +17136,19 @@ async function openLinkRecord(record3, key, options = {}) {
   await runBodyValidator(opened, options.validateBody);
   return opened;
 }
-function checkApiOrigin(origin) {
-  if (!AUDIENCE_ORIGIN.test(origin)) throw new LinkError("invalid_argument", "the API origin is not a canonical https origin");
-  return origin;
+function parseApprovalRequest(value, options = {}) {
+  const parsed = requestSchema.safeParse(value);
+  if (!parsed.success) throw new LinkError("body_validation_failed", "invalid approval request");
+  const request = parsed.data;
+  const publicKey = decodeStrictBase64Url(request.targetPublicJwk.x);
+  if (ed25519KeyProblem(publicKey) !== null || didKeyFromEd25519PublicKey(publicKey) !== request.targetDid || request.issuer !== request.targetDid || options.issuer !== void 0 && request.issuer !== options.issuer) {
+    throw new LinkError("issuer_binding_mismatch");
+  }
+  return request;
+}
+function checkApiOrigin(origin2) {
+  if (!AUDIENCE_ORIGIN.test(origin2)) throw new LinkError("invalid_argument", "the API origin is not a canonical https origin");
+  return origin2;
 }
 function requestSignal(options) {
   const timeout = AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
@@ -15947,6 +17261,34 @@ async function createLink(input) {
   const { id } = created.data;
   return { link: buildShortLink({ origin: input.linkOrigin, type: input.type, id, key, bodyCid }), id, expiresAt: record3.header.expiresAt, bodyCid };
 }
+async function createApprovalRequest(input) {
+  const request = parseApprovalRequest(input.request, { issuer: input.issuerKey.did });
+  const now = toEpochMs(input.now);
+  const prepared = await prepareLinkRecord({
+    type: "openkey-approval-request",
+    issuerKey: input.issuerKey,
+    apiOrigin: input.apiOrigin,
+    now,
+    expiresAt: input.expiresAt ?? new Date(now + LINK_TYPE_SPECS["openkey-approval-request"].defaultLifeSeconds * 1e3),
+    plaintext: new TextEncoder().encode(canonicalize(request))
+  });
+  const response = await send(
+    `${checkApiOrigin(input.apiOrigin)}/v1/links`,
+    { method: "POST", body: JSON.stringify(prepared.record) },
+    input,
+    "application/json"
+  );
+  if (response.status !== 201) throw await refusal(response);
+  const created = createdSchema.safeParse(await readJson2(response));
+  if (!created.success || !LINK_ID_PATTERN.test(created.data.id) || created.data.expiresAt !== prepared.record.header.expiresAt) throw new LinkError("invalid_response");
+  return {
+    id: created.data.id,
+    expiresAt: prepared.record.header.expiresAt,
+    bodyCid: prepared.bodyCid,
+    record: prepared.record,
+    link: buildShortLink({ origin: input.openkeyOrigin, type: "openkey-approval-request", id: created.data.id, key: prepared.key, bodyCid: prepared.bodyCid })
+  };
+}
 async function deleteLink(input) {
   const apiOrigin2 = checkApiOrigin(input.apiOrigin);
   const id = normalizeLinkId(input.id);
@@ -16011,8 +17353,19 @@ async function resolveLink(link4, input) {
   } else if (opened.type !== "share") {
     throw new LinkError("full_non_share");
   }
+  if (opened.type === "openkey-approval-request") {
+    if (opened.header.audience !== input.apiOrigin) throw new LinkError("audience_mismatch");
+    parseApprovalRequest(opened.value, { issuer: opened.header.issuer });
+  }
   await runBodyValidator(opened, input.validateBody);
   return { ...opened, form: parsed.form, id: parsed.form === "short" ? parsed.id : void 0 };
+}
+async function resolveApprovalRequest(link4, input) {
+  const opened = await resolveLink(link4, input);
+  if (opened.type !== "openkey-approval-request") throw new LinkError("type_path_mismatch");
+  if (opened.header.audience !== input.apiOrigin) throw new LinkError("audience_mismatch");
+  const request = parseApprovalRequest(opened.value, { issuer: opened.header.issuer });
+  return { ...opened, request };
 }
 function shortShareLinkCid(href, options) {
   try {
@@ -16056,7 +17409,7 @@ function signerFromJwk(jwk) {
   if (signer.did !== didKeyFromEd25519PublicKey(publicKey)) throw new LinkError("invalid_argument", "the JWK public key does not match its private key");
   return signer;
 }
-var SHA256_CODE2, ENVELOPE_AAD_LABEL2, SEALED_BLOB_VERSION, AAD2, KEY_LENGTH, NONCE_LENGTH, TAG_LENGTH, HEADER_LENGTH, LINK_TYPES, MAX_LINK_BODY_BYTES, MAX_LINK_REQUEST_BYTES, LINK_TYPE_SPECS, LINK_HEADER_DOMAIN, LINK_DELETE_DOMAIN, LINK_WINDOW_SECONDS, LINK_MIN_LIFE_SECONDS, LINK_MIN_BODY_BYTES, LINK_SEAL_OVERHEAD_BYTES, LINK_MAX_RECORD_HEADER_BYTES, DEFAULT_LINKS_API_ORIGIN, FULL_LINK_PATH, LINK_ID_PATTERN, LinkError, ED25519_MULTICODEC_PREFIX2, PUBLIC_KEY_LENGTH, ExtendedPoint, GROUP_ORDER, FIELD_PRIME, DID_KEY_PATTERN, SERVICE_ISSUER_PATTERN, AUDIENCE_PATTERN, TIMESTAMP_PATTERN, NONCE_PATTERN, CID_PATTERN, HEADER_KEYS, DELETE_KEYS, ed25519DidKey, linkTypeSchema, linkHeaderV1Schema, linkSignatureV1Schema, linkDeleteRequestV1Schema, LINK_FRAGMENT_VERSION, SHORT_PATH, SHORT_FRAGMENT, FULL_FRAGMENT, REMOVED_FRAGMENT, MAX_FULL_RECORD_JSON_BYTES, jsonObject, DEFAULT_TIMEOUT_MS, MAX_JSON_RESPONSE_BYTES, AUDIENCE_ORIGIN, createdSchema, errorBodySchema, KEY_PARAMETER, DEFAULT_SHARE_ORIGINS;
+var SHA256_CODE2, ENVELOPE_AAD_LABEL2, SEALED_BLOB_VERSION, AAD2, KEY_LENGTH, NONCE_LENGTH, TAG_LENGTH, HEADER_LENGTH, LINK_TYPES, MAX_LINK_BODY_BYTES, MAX_LINK_REQUEST_BYTES, LINK_TYPE_SPECS, LINK_HEADER_DOMAIN, LINK_DELETE_DOMAIN, LINK_WINDOW_SECONDS, LINK_MIN_LIFE_SECONDS, LINK_MIN_BODY_BYTES, LINK_SEAL_OVERHEAD_BYTES, LINK_MAX_RECORD_HEADER_BYTES, DEFAULT_LINKS_API_ORIGIN, FULL_LINK_PATH, LINK_ID_PATTERN, LinkError, ED25519_MULTICODEC_PREFIX2, PUBLIC_KEY_LENGTH, ExtendedPoint, GROUP_ORDER, FIELD_PRIME, DID_KEY_PATTERN, SERVICE_ISSUER_PATTERN, AUDIENCE_PATTERN, TIMESTAMP_PATTERN, NONCE_PATTERN, CID_PATTERN, HEADER_KEYS, DELETE_KEYS, ed25519DidKey, linkTypeSchema, linkHeaderV1Schema, linkSignatureV1Schema, linkDeleteRequestV1Schema, LINK_FRAGMENT_VERSION, SHORT_PATH, SHORT_FRAGMENT, FULL_FRAGMENT, REMOVED_FRAGMENT, MAX_FULL_RECORD_JSON_BYTES, jsonObject, bytes32, ed25519Jwk, p256Jwk, origin, permission, requestSchema, DEFAULT_TIMEOUT_MS, MAX_JSON_RESPONSE_BYTES, AUDIENCE_ORIGIN, createdSchema, errorBodySchema, KEY_PARAMETER, DEFAULT_SHARE_ORIGINS;
 var init_links = __esm({
   "../share-envelope/dist/links.js"() {
     "use strict";
@@ -16071,6 +17424,8 @@ var init_links = __esm({
     init_base58();
     init_ed25519();
     init_zod();
+    init_p256();
+    init_zod();
     init_ed25519();
     SHA256_CODE2 = 18;
     ENVELOPE_AAD_LABEL2 = "tinycloud-share-envelope-v1";
@@ -16080,11 +17435,12 @@ var init_links = __esm({
     NONCE_LENGTH = 12;
     TAG_LENGTH = 16;
     HEADER_LENGTH = 1;
-    LINK_TYPES = ["openkey-login", "courier", "share"];
+    LINK_TYPES = ["openkey-login", "openkey-approval-request", "courier", "share"];
     MAX_LINK_BODY_BYTES = 65536;
     MAX_LINK_REQUEST_BYTES = Math.ceil(MAX_LINK_BODY_BYTES * 4 / 3) + 3072;
     LINK_TYPE_SPECS = {
       "openkey-login": { maxLifeSeconds: 600, defaultLifeSeconds: 600, pathLetter: "l", readOnce: true },
+      "openkey-approval-request": { maxLifeSeconds: 86400, defaultLifeSeconds: 3600, pathLetter: "a", readOnce: false },
       courier: { maxLifeSeconds: 604800, defaultLifeSeconds: 86400, pathLetter: "c", readOnce: false },
       share: { maxLifeSeconds: 2592e3, defaultLifeSeconds: 2592e3, pathLetter: "s", readOnce: false }
     };
@@ -16155,12 +17511,52 @@ var init_links = __esm({
       nonce: external_exports2.string()
     }).strict();
     LINK_FRAGMENT_VERSION = 4;
-    SHORT_PATH = /^\/(s|c|l)\/([A-Za-z2-7]{26})$/;
+    SHORT_PATH = /^\/(s|c|l|a)\/([A-Za-z2-7]{26})$/;
     SHORT_FRAGMENT = /^#v=4&k=([A-Za-z0-9_-]{43})&c=(bafkrei[a-z2-7]{52})$/;
     FULL_FRAGMENT = /^#v=4&k=([A-Za-z0-9_-]{43})&r=([A-Za-z0-9_-]+)$/;
     REMOVED_FRAGMENT = /^#v=[23](&|$)/;
     MAX_FULL_RECORD_JSON_BYTES = MAX_LINK_REQUEST_BYTES;
     jsonObject = external_exports2.record(external_exports2.unknown());
+    bytes32 = external_exports2.string().refine((value) => decodeStrictBase64Url(value)?.length === 32);
+    ed25519Jwk = external_exports2.object({ kty: external_exports2.literal("OKP"), crv: external_exports2.literal("Ed25519"), x: bytes32 }).strict();
+    p256Jwk = external_exports2.object({ kty: external_exports2.literal("EC"), crv: external_exports2.literal("P-256"), x: bytes32, y: bytes32 }).strict().refine((key) => {
+      try {
+        const point = new Uint8Array(65);
+        point[0] = 4;
+        point.set(decodeStrictBase64Url(key.x), 1);
+        point.set(decodeStrictBase64Url(key.y), 33);
+        p2562.ProjectivePoint.fromHex(point).assertValidity();
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    origin = external_exports2.string().refine((value) => {
+      try {
+        const url = new URL(value);
+        return url.origin === value && (url.protocol === "https:" || url.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname));
+      } catch {
+        return false;
+      }
+    });
+    permission = external_exports2.object({
+      service: external_exports2.string().min(1),
+      space: external_exports2.string().min(1),
+      path: external_exports2.string(),
+      actions: external_exports2.array(external_exports2.string().min(1)).min(1),
+      caveats: external_exports2.array(external_exports2.unknown()).optional()
+    }).strict();
+    requestSchema = external_exports2.object({
+      issuer: external_exports2.string(),
+      requestVersion: external_exports2.literal(1),
+      targetDid: external_exports2.string(),
+      targetPublicJwk: ed25519Jwk,
+      nodeOrigin: origin,
+      permissions: external_exports2.array(permission).min(1),
+      reason: external_exports2.string().optional(),
+      grantLifetimeSeconds: external_exports2.number().int().positive(),
+      resultEncryptionPublicJwk: p256Jwk
+    }).strict();
     DEFAULT_TIMEOUT_MS = 1e4;
     MAX_JSON_RESPONSE_BYTES = 4096;
     AUDIENCE_ORIGIN = /^https:\/\/[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]{1,5})?$/;
@@ -16573,12 +17969,12 @@ import { get as httpGet } from "http";
 import { get as httpsGet } from "https";
 import { spawn } from "child_process";
 import { lstat as lstat7, mkdir as mkdir4, readFile as readFile9, writeFile as writeFile2 } from "fs/promises";
-import { dirname as dirname6, join as join14 } from "path";
+import { dirname as dirname6, join as join15 } from "path";
 import { createInterface as createInterface3 } from "readline";
 import { TinyCloudNode as TinyCloudNode3, grantAuthRequest, principalDidEquals as principalDidEquals2, REPLICA_LOGOUT_PENDING_FILE as REPLICA_LOGOUT_PENDING_FILE4, signedCompactUcanExpiry as signedCompactUcanExpiry3 } from "@tinycloud/node-sdk";
 import { composeManifestRequest } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
-import { namedProfilePath as namedProfilePath3, profilePath as profilePath8 } from "@tinycloud/operations/state";
+import { namedProfilePath as namedProfilePath3, profilePath as profilePath9 } from "@tinycloud/operations/state";
 import { REPLICA_GATE_FILE as REPLICA_GATE_FILE3 } from "@tinycloud/sdk-services/kv/replication/contractConstants";
 
 // src/lib/logout-revocation.ts
@@ -29451,13 +30847,13 @@ var ShareReceiveError = class extends Error {
     return { protocol: "tinycloud-share", version: SHARE_RESULT_VERSION, error: { code: this.code } };
   }
 };
-function metadataFor(envelope, origin) {
+function metadataFor(envelope, origin2) {
   const kind = envelope.recipientMatcher.kind === "recipientDid" ? "recipientDid" : envelope.recipientMatcher.kind === "exactEmail" ? "email" : envelope.recipientMatcher.kind === "emailDomain" ? "emailDomain" : "bearer";
   return {
     protocol: "tinycloud-share",
     version: 1,
     shareId: envelope.shareId,
-    origin,
+    origin: origin2,
     target: { ...envelope.target, kind },
     resource: { ...envelope.resource },
     actions: [...envelope.actions],
@@ -29574,13 +30970,13 @@ async function resolveLegacyV2(link4, options) {
   }
   try {
     options.signal?.throwIfAborted();
-    const origin = new URL(link4).origin;
+    const origin2 = new URL(link4).origin;
     const limit = options.maxSealedBlobBytes ?? DEFAULT_MAX_SEALED_BLOB_BYTES;
     if (!Number.isSafeInteger(limit) || limit <= 0) throw new ShareReceiveError("max-bytes-exceeded", "sealed envelope limit is invalid");
     let sealed;
     if (options.fetchBlob !== void 0) {
       try {
-        sealed = await options.fetchBlob({ origin, cid: parsed.ciphertextCid, ...options.signal === void 0 ? {} : { signal: options.signal } });
+        sealed = await options.fetchBlob({ origin: origin2, cid: parsed.ciphertextCid, ...options.signal === void 0 ? {} : { signal: options.signal } });
       } catch {
         throw new ShareReceiveError("fetch-failed", "legacy registry unavailable");
       }
@@ -29632,7 +31028,7 @@ async function resolveLegacyV2(link4, options) {
     } catch {
       throw new ShareReceiveError("envelope-invalid", "legacy envelope is invalid");
     }
-    return { envelope, origin, cid: parsed.ciphertextCid };
+    return { envelope, origin: origin2, cid: parsed.ciphertextCid };
   } finally {
     parsed.key32.fill(0);
   }
@@ -31317,353 +32713,53 @@ init_types();
 init_constants();
 init_errors();
 init_caveat_refusal();
-init_formatter();
-import { createServer } from "http";
-import { randomBytes as randomBytes3 } from "crypto";
 import { createInterface } from "readline";
-var PRIVATE_JWK_FIELDS = /* @__PURE__ */ new Set([
-  "d",
-  "p",
-  "q",
-  "dp",
-  "dq",
-  "qi",
-  "oth",
-  "k"
-]);
-var MAX_CALLBACK_BODY_BYTES = 1024 * 1024;
-var CALLBACK_DEADLINE_MS = 5 * 60 * 1e3;
-var CALLBACK_HINT_DELAY_MS = 15 * 1e3;
-var CALLBACK_HINT = "Still waiting. If your browser asked to connect to devices on your network, choose Allow. Or press Ctrl+C and run `tinycloud auth login --paste` to enter a code instead.";
-function publicJwkForDelegation(jwk) {
-  const publicJwk = {};
-  for (const [key, value] of Object.entries(jwk)) {
-    if (!PRIVATE_JWK_FIELDS.has(key)) {
-      publicJwk[key] = value;
-    }
-  }
-  return publicJwk;
-}
-async function startAuthFlow(did, options = {}) {
-  assertNoCaveatLimits(options.permissions);
-  if (options.paste) {
-    return pasteFlow(did, options);
-  }
+
+// src/auth/approval-request.ts
+import { createECDH as createECDH2, createHash as createHash3, createPrivateKey, randomBytes as randomBytes5, randomUUID as randomUUID2, sign } from "crypto";
+import { open as open11 } from "fs/promises";
+import { join as join14 } from "path";
+import { setTimeout as wait } from "timers/promises";
+
+// src/lib/browser.ts
+init_formatter();
+init_theme();
+import open10 from "open";
+var LAUNCH_CHECK_MS = 1e3;
+async function tryOpenBrowser(url) {
+  let launcher;
   try {
-    return await callbackFlow(did, options);
-  } catch (error) {
-    if (error instanceof CLIError && error.code === "CANCELLED") throw error;
-    if (process.stdin.isTTY) {
-      console.error("Could not open browser. Falling back to manual paste mode.");
-      return pasteFlow(did, options);
-    }
-    throw new Error("Cannot open browser in non-interactive mode. Use --paste flag.");
+    launcher = await open10(url);
+  } catch {
+    return false;
   }
-}
-function buildAuthUrl(did, options = {}) {
-  assertNoCaveatLimits(options.permissions);
-  const params = new URLSearchParams();
-  params.set("did", did);
-  if (options.callback) {
-    params.set("callback", options.callback);
-  }
-  if (options.jwk) {
-    const jwkB64 = Buffer.from(
-      JSON.stringify(publicJwkForDelegation(options.jwk))
-    ).toString("base64url");
-    params.set("jwk", jwkB64);
-  }
-  if (options.host) {
-    params.set("host", options.host);
-  }
-  const reason = typeof options.reason === "string" ? options.reason.trim() : "";
-  if (options.permissions?.length) {
-    params.set(
-      "permissions",
-      Buffer.from(JSON.stringify({
-        permissions: options.permissions,
-        ...reason ? { reason } : {}
-      })).toString("base64url")
-    );
-  }
-  if (reason) {
-    params.set("reason", reason);
-  }
-  if (options.expiry !== void 0) {
-    params.set("expiry", String(options.expiry));
-  }
-  params.set("protocolVersion", "1");
-  const base5 = options.openkeyHost ?? DEFAULT_OPENKEY_HOST;
-  return `${base5}/delegate?${params.toString()}`;
-}
-function validateDelegationCallbackPayload(value) {
-  if (!value || typeof value !== "object") return "expected an object";
-  const v = value;
-  if (!v.delegationHeader || typeof v.delegationHeader !== "object") {
-    return "delegationHeader must be an object";
-  }
-  const auth = v.delegationHeader.Authorization;
-  if (typeof auth !== "string" || !auth) {
-    return "delegationHeader.Authorization must be a non-empty string";
-  }
-  if (typeof v.delegationCid !== "string" || !v.delegationCid) {
-    return "delegationCid must be a non-empty string";
-  }
-  if (typeof v.spaceId !== "string" || !v.spaceId) {
-    return "spaceId must be a non-empty string";
-  }
-  if (v.permissions !== void 0) {
-    if (!Array.isArray(v.permissions)) {
-      return "permissions, when present, must be an array";
-    }
-    for (let i = 0; i < v.permissions.length; i++) {
-      const entry = v.permissions[i];
-      if (!entry || typeof entry !== "object") {
-        return `permissions[${i}] must be an object`;
-      }
-      const e = entry;
-      if (typeof e.service !== "string" || !e.service) {
-        return `permissions[${i}].service must be a non-empty string`;
-      }
-      if (typeof e.space !== "string") {
-        return `permissions[${i}].space must be a string`;
-      }
-      if (typeof e.path !== "string") {
-        return `permissions[${i}].path must be a string`;
-      }
-      if (!Array.isArray(e.actions) || e.actions.some((a) => typeof a !== "string" || !a)) {
-        return `permissions[${i}].actions must be a non-empty string[]`;
-      }
-    }
-  }
-  return null;
-}
-async function delegationFromInput(input, did, options) {
-  const trimmed = input.trim();
-  let parsed;
-  if (/^[a-z2-7]{4}-[a-z2-7]{4}$/i.test(trimmed)) {
-    if (!options.jwk) throw new Error("A CLI session key is required to retrieve a delegation.");
-    const apiHost = process.env.TC_OPENKEY_API_HOST ?? options.openkeyApiHost ?? (options.openkeyHost && options.openkeyHost !== DEFAULT_OPENKEY_HOST ? options.openkeyHost : DEFAULT_OPENKEY_DEVICE_API_HOST);
-    const response = await fetch(`${apiHost.replace(/\/$/, "")}/api/delegation-codes/${trimmed.toLowerCase()}`, {
-      redirect: "error"
+  return new Promise((resolve9) => {
+    const timer = setTimeout(() => resolve9(true), LAUNCH_CHECK_MS);
+    launcher.once("error", () => {
+      clearTimeout(timer);
+      resolve9(false);
     });
-    if (!response.ok) {
-      throw Object.assign(new Error(response.status === 404 ? "Delegation code not found or expired. Use the full code shown in OpenKey instead." : `Could not retrieve delegation code (HTTP ${response.status}).`), { status: response.status });
-    }
-    const result = await response.json();
-    parsed = result.delegation;
-    const delegation = parsed;
-    const jwk = delegation?.jwk;
-    const localJwk = publicJwkForDelegation(options.jwk);
-    if (typeof delegation?.verificationMethod !== "string" || delegation.verificationMethod.split("#")[0] !== did.split("#")[0] || !jwk || typeof jwk !== "object" || Array.isArray(jwk) || jwk.kty !== "OKP" || jwk.crv !== "Ed25519" || typeof jwk.x !== "string" || jwk.x !== localJwk.x || [...PRIVATE_JWK_FIELDS].some((field) => field in jwk)) {
-      throw new Error("Delegation is bound to a different CLI key.");
-    }
-  } else {
-    try {
-      parsed = JSON.parse(trimmed);
-    } catch {
-      try {
-        parsed = JSON.parse(Buffer.from(trimmed, "base64").toString("utf-8"));
-      } catch {
-        throw new Error("Invalid delegation code. Expected JSON, base64-encoded JSON, or XXXX-XXXX.");
-      }
-    }
-  }
-  const invalid3 = validateDelegationCallbackPayload(parsed);
-  if (invalid3) throw new Error(`Invalid delegation code: ${invalid3}`);
-  return parsed;
-}
-function shouldOpenBrowser(options) {
-  if (options.noPopup) return false;
-  const env = process.env.TC_AUTH_NO_POPUP ?? process.env.TC_NO_POPUP;
-  return env !== "1" && env !== "true";
-}
-async function callbackFlow(did, options = {}, env = {}) {
-  return new Promise((resolve9, reject) => {
-    let timeout;
-    let hintTimer;
-    const deadlineMs = env.deadlineMs ?? CALLBACK_DEADLINE_MS;
-    const hintDelayMs = env.hintDelayMs ?? CALLBACK_HINT_DELAY_MS;
-    const interactive = env.interactive ?? Boolean(process.stdin.isTTY);
-    const jsonOutput2 = env.jsonOutput ?? shouldOutputJson();
-    let settled = false;
-    let rl;
-    function settle(result) {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      clearTimeout(hintTimer);
-      server.close();
-      server.closeAllConnections();
-      if (rl) {
-        rl.close();
-      }
-      if (result.data) {
-        resolve9(result.data);
-      } else {
-        reject(result.error);
-      }
-    }
-    const callbackPath = `/callback/${randomBytes3(16).toString("base64url")}`;
-    const openKeyOrigin = new URL(options.openkeyHost ?? DEFAULT_OPENKEY_HOST).origin;
-    const cors = { "Access-Control-Allow-Origin": openKeyOrigin, "Vary": "Origin" };
-    const server = createServer({ connectionsCheckingInterval: 1e3 }, (req, res) => {
-      if (req.headers.origin !== openKeyOrigin) {
-        res.writeHead(403);
-        res.end();
-        return;
-      }
-      if (req.method === "POST" && req.url === callbackPath) {
-        const chunks = [];
-        let size = 0;
-        req.on("data", (chunk) => {
-          size += chunk.length;
-          if (size > MAX_CALLBACK_BODY_BYTES) {
-            res.writeHead(413, cors);
-            res.end();
-            req.destroy();
-            return;
-          }
-          chunks.push(chunk);
-        });
-        req.on("end", () => {
-          let data;
-          try {
-            data = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-          } catch {
-            res.writeHead(400, { ...cors, "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: "Invalid JSON" }));
-            return;
-          }
-          const invalid3 = validateDelegationCallbackPayload(data);
-          if (invalid3) {
-            res.writeHead(400, { ...cors, "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: invalid3 }));
-            return;
-          }
-          res.writeHead(200, { ...cors, "Content-Type": "application/json" });
-          res.end(JSON.stringify({ success: true }));
-          settle({ data });
-        });
-      } else if (req.method === "OPTIONS" && req.url === callbackPath) {
-        res.writeHead(204, {
-          ...cors,
-          "Access-Control-Allow-Methods": "POST, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type"
-        });
-        res.end();
-      } else {
-        res.writeHead(404);
-        res.end();
-      }
+    launcher.once("exit", (code5) => {
+      clearTimeout(timer);
+      resolve9(code5 === 0);
     });
-    server.headersTimeout = deadlineMs;
-    server.requestTimeout = deadlineMs;
-    server.keepAliveTimeout = deadlineMs;
-    server.listen(0, "127.0.0.1", async () => {
-      const addr = server.address();
-      if (!addr || typeof addr === "string") {
-        settle({ error: new Error("Failed to start callback server") });
-        return;
-      }
-      const port = addr.port;
-      const callbackUrl = `http://127.0.0.1:${port}${callbackPath}`;
-      env.onListening?.(callbackUrl);
-      const authUrl = buildAuthUrl(did, { ...options, callback: callbackUrl });
-      const openBrowser = shouldOpenBrowser(options);
-      const hasTerminal = Boolean(process.stdin.isTTY || process.stderr.isTTY);
-      if (openBrowser && hasTerminal) {
-        console.error(`Opening browser for authentication...`);
-        console.error(`If the browser doesn't open, visit: ${authUrl}`);
-      } else if (!openBrowser || hasTerminal) {
-        console.error(`Open this URL in a browser to authenticate: ${authUrl}`);
-      }
-      if (openBrowser) {
-        try {
-          const open16 = (await import("open")).default;
-          await open16(authUrl);
-        } catch {
-          settle({ error: new Error("Failed to open browser") });
-          return;
-        }
-      }
-      if (interactive) {
-        console.error(`
-If the browser can't connect back, enter the short code or paste the full delegation code here:`);
-        rl = createInterface({
-          input: process.stdin,
-          output: process.stderr
-        });
-        let resolving = false;
-        rl.on("line", async (input) => {
-          if (settled || resolving) return;
-          resolving = true;
-          try {
-            settle({ data: await delegationFromInput(input, did, options) });
-          } catch (error) {
-            console.error(error instanceof Error ? error.message : "Invalid delegation code. Try again:");
-          } finally {
-            resolving = false;
-          }
-        });
-        rl.on("SIGINT", () => settle({ error: loginCancelled() }));
-      }
-    });
-    timeout = setTimeout(() => {
-      settle({ error: new Error("Authentication timed out after 5 minutes") });
-    }, deadlineMs);
-    if (interactive && !jsonOutput2) {
-      hintTimer = setTimeout(() => {
-        console.error(CALLBACK_HINT);
-      }, hintDelayMs);
-    }
   });
 }
-async function pasteFlow(did, options = {}) {
-  const authUrl = buildAuthUrl(did, options);
-  console.error(`
-Open this URL in a browser to authenticate:
+function warnBrowserNotOpened() {
+  process.stderr.write(shouldOutputJson() ? `${JSON.stringify({ warnings: [{ code: "BROWSER_OPEN_FAILED", reason: "open_failed" }] })}
+` : `${theme.warn("!")} Could not open a browser. Open the URL above yourself.
 `);
-  console.error(`  ${authUrl}
-`);
-  const rl = createInterface({
-    input: process.stdin,
-    output: process.stderr
-  });
-  return new Promise((resolve9, reject) => {
-    let answered = false;
-    rl.on("line", (input) => {
-      if (answered || input.trim() === "") return;
-      answered = true;
-      rl.close();
-      void delegationFromInput(input, did, options).then(resolve9, reject);
-    });
-    rl.on("close", () => {
-      if (answered) return;
-      answered = true;
-      reject(new CLIError(
-        "PASTE_CODE_MISSING",
-        `Stdin ended before a delegation code was pasted; no session was saved. Approve at ${authUrl} and pass the returned code on stdin.`,
-        ExitCode.AUTH_REQUIRED,
-        {
-          approvalUrl: authUrl,
-          hint: `Open ${authUrl}, approve, then pass the code on stdin followed by a newline.`
-        }
-      ));
-    });
-    rl.on("SIGINT", () => {
-      if (answered) return;
-      answered = true;
-      rl.close();
-      reject(loginCancelled());
-    });
-    rl.setPrompt("Enter short code or paste full delegation code: ");
-    rl.prompt();
-  });
 }
-function loginCancelled() {
-  return new CLIError("CANCELLED", "Interrupted: tc auth login stopped before approval. No session was saved.", ExitCode.CANCELLED);
-}
+
+// src/auth/approval-request.ts
+init_links();
+init_profiles();
+init_storage();
+init_constants();
+init_errors();
+init_permissions();
+import { profilePath as profilePath8 } from "@tinycloud/operations/state";
+import { EXPIRY } from "@tinycloud/sdk-core";
 
 // src/auth/device-auth.ts
 init_constants();
@@ -31674,14 +32770,14 @@ import {
   createECDH,
   createHash as createHash2,
   createHmac,
-  randomBytes as randomBytes5
+  randomBytes as randomBytes4
 } from "crypto";
 
 // src/auth/local-key.ts
 init_replication_config();
 import { TCWSessionManager, importKey, initPanicHook } from "@tinycloud/node-sdk-wasm";
 import { PrivateKeySigner } from "@tinycloud/node-sdk";
-import { randomBytes as randomBytes4 } from "crypto";
+import { randomBytes as randomBytes3 } from "crypto";
 var wasmInitialized = false;
 function ensureWasm() {
   if (!wasmInitialized) {
@@ -31706,7 +32802,7 @@ function keyToDID(jwk) {
   return mgr.getDID(keyId);
 }
 function generateEthereumPrivateKey() {
-  const keyBytes = randomBytes4(32);
+  const keyBytes = randomBytes3(32);
   return "0x" + keyBytes.toString("hex");
 }
 async function deriveAddress(privateKey) {
@@ -31824,15 +32920,15 @@ function namedKeysNetworkId(ownerDid) {
 }
 function parseKeysPrefix(input, ownerDid) {
   const prefix = input.endsWith("/") ? input.slice(0, -1) : input;
-  const invalid3 = (reason) => new CLIError("INVALID_KEY_PREFIX", `Invalid \`--keys\` folder "${input}": ${reason}`, ExitCode.USAGE_ERROR);
-  if (prefix.length === 0) throw invalid3("the folder can't be empty.");
+  const invalid4 = (reason) => new CLIError("INVALID_KEY_PREFIX", `Invalid \`--keys\` folder "${input}": ${reason}`, ExitCode.USAGE_ERROR);
+  if (prefix.length === 0) throw invalid4("the folder can't be empty.");
   if (prefix === "apps" || prefix.startsWith("apps/")) {
-    throw invalid3("folders under `apps/` belong to apps and can't be used from the CLI.");
+    throw invalid4("folders under `apps/` belong to apps and can't be used from the CLI.");
   }
   try {
     return { prefix, resource: formatPrefixResource(namedKeysNetworkId(ownerDid), prefix) };
   } catch (error) {
-    if (error instanceof EncryptionResourceError) throw invalid3(error.message);
+    if (error instanceof EncryptionResourceError) throw invalid4(error.message);
     throw error;
   }
 }
@@ -31978,21 +33074,21 @@ function sameLoginSpace(left, right, ownerDid) {
   return false;
 }
 function permissionTuples(permissions, ownerDid) {
-  return new Set(permissions.flatMap((permission) => actionTuples(permission, ownerDid)));
+  return new Set(permissions.flatMap((permission2) => actionTuples(permission2, ownerDid)));
 }
-function isRawCidRevocationPermission(permission) {
-  return permission.service === "tinycloud.delegation" && permission.space?.startsWith("urn:cid:") === true && permission.path === "" && permission.actions.includes("tinycloud.delegation/revoke");
+function isRawCidRevocationPermission(permission2) {
+  return permission2.service === "tinycloud.delegation" && permission2.space?.startsWith("urn:cid:") === true && permission2.path === "" && permission2.actions.includes("tinycloud.delegation/revoke");
 }
-function actionTuples(permission, ownerDid) {
-  const service = permission.service.startsWith("tinycloud.") ? permission.service : `tinycloud.${permission.service}`;
-  const rawEncryption = isVerifiedRawEncryptionPermission(permission);
-  const rawCidRevocation = isRawCidRevocationPermission(permission);
-  const space = rawEncryption ? ENCRYPTION_MANIFEST_SPACE : rawCidRevocation ? permission.space : normalizePkhIdentifier(ownerSpaceId(permission.space ?? "", ownerDid));
-  const path = rawEncryption ? normalizePkhIdentifier(permission.path) : permission.path;
-  return permission.actions.map((action) => JSON.stringify([service, space, path, action.includes("/") ? action : `${service}/${action}`]));
+function actionTuples(permission2, ownerDid) {
+  const service = permission2.service.startsWith("tinycloud.") ? permission2.service : `tinycloud.${permission2.service}`;
+  const rawEncryption = isVerifiedRawEncryptionPermission(permission2);
+  const rawCidRevocation = isRawCidRevocationPermission(permission2);
+  const space = rawEncryption ? ENCRYPTION_MANIFEST_SPACE : rawCidRevocation ? permission2.space : normalizePkhIdentifier(ownerSpaceId(permission2.space ?? "", ownerDid));
+  const path = rawEncryption ? normalizePkhIdentifier(permission2.path) : permission2.path;
+  return permission2.actions.map((action) => JSON.stringify([service, space, path, action.includes("/") ? action : `${service}/${action}`]));
 }
-function isLegacyNestedDecrypt(permission, requested, ownerDid, spaceId) {
-  return isRawEncryptionPermission(permission) && !isVerifiedRawEncryptionPermission(permission) && normalizePkhIdentifier(ownerSpaceId(permission.space ?? "", ownerDid)) === normalizePkhIdentifier(spaceId) && rawEncryptionOwnerMatches(permission.path, ownerDid) && permission.actions.every((action) => action === "tinycloud.encryption/decrypt") && requested.some((entry) => isRawEncryptionPermission(entry) && normalizePkhIdentifier(entry.path) === normalizePkhIdentifier(permission.path) && permission.actions.every((action) => entry.actions.includes(action)));
+function isLegacyNestedDecrypt(permission2, requested, ownerDid, spaceId) {
+  return isRawEncryptionPermission(permission2) && !isVerifiedRawEncryptionPermission(permission2) && normalizePkhIdentifier(ownerSpaceId(permission2.space ?? "", ownerDid)) === normalizePkhIdentifier(spaceId) && rawEncryptionOwnerMatches(permission2.path, ownerDid) && permission2.actions.every((action) => action === "tinycloud.encryption/decrypt") && requested.some((entry) => isRawEncryptionPermission(entry) && normalizePkhIdentifier(entry.path) === normalizePkhIdentifier(permission2.path) && permission2.actions.every((action) => entry.actions.includes(action)));
 }
 function canonicalJson(value) {
   const canonical = (entry) => Array.isArray(entry) ? entry.map(canonical) : entry && typeof entry === "object" ? Object.fromEntries(Object.entries(entry).sort(([a], [b]) => a.localeCompare(b)).map(([name, inner]) => [name, canonical(inner)])) : entry;
@@ -32004,17 +33100,17 @@ function caveatRestriction(caveats) {
 }
 function scopeCovers(granted, held, ownerDid) {
   const grants = /* @__PURE__ */ new Map();
-  for (const permission of granted) {
-    const restriction = caveatRestriction(permission.caveats);
-    for (const tuple of actionTuples(permission, ownerDid)) {
+  for (const permission2 of granted) {
+    const restriction = caveatRestriction(permission2.caveats);
+    for (const tuple of actionTuples(permission2, ownerDid)) {
       const restrictions = grants.get(tuple) ?? /* @__PURE__ */ new Set();
       restrictions.add(restriction);
       grants.set(tuple, restrictions);
     }
   }
-  return held.every((permission) => {
-    const restriction = caveatRestriction(permission.caveats);
-    return actionTuples(permission, ownerDid).every((tuple) => {
+  return held.every((permission2) => {
+    const restriction = caveatRestriction(permission2.caveats);
+    return actionTuples(permission2, ownerDid).every((tuple) => {
       const restrictions = grants.get(tuple);
       return restrictions !== void 0 && (restrictions.has("") || restrictions.has(restriction));
     });
@@ -32085,7 +33181,7 @@ function grantRequestPermissions(group, anchorSpace) {
   assertNoCaveatLimits(group);
   const request = group.map((p) => isRawEncryptionPermission(p) ? { ...p, space: ENCRYPTION_MANIFEST_SPACE, path: canonicalNetworkUrn(p.path) } : p);
   const capabilitySpace = request.find(
-    (permission) => !isRawEncryptionPermission(permission) && !isRawCidRevocationPermission(permission)
+    (permission2) => !isRawEncryptionPermission(permission2) && !isRawCidRevocationPermission(permission2)
   )?.space ?? anchorSpace;
   return withCapabilitiesRead(request, capabilitySpace);
 }
@@ -32154,13 +33250,13 @@ function withoutRequestedKeyRow(signed, keys, signerDid) {
   if (keys.resource !== expectedResource) throw mismatch();
   const rest = [];
   const actions = /* @__PURE__ */ new Set();
-  for (const permission of signed) {
-    if (!isVerifiedRawEncryptionPermission(permission) || permission.path !== expectedResource) {
-      rest.push(permission);
+  for (const permission2 of signed) {
+    if (!isVerifiedRawEncryptionPermission(permission2) || permission2.path !== expectedResource) {
+      rest.push(permission2);
       continue;
     }
-    if (permission.caveats?.some((caveat) => Object.keys(caveat).length > 0)) throw mismatch();
-    for (const action of permission.actions) actions.add(action);
+    if (permission2.caveats?.some((caveat) => Object.keys(caveat).length > 0)) throw mismatch();
+    for (const action of permission2.actions) actions.add(action);
   }
   if (actions.size === 0) return rest;
   const wanted = keyAbilitiesFor(keys)[expectedResource];
@@ -32185,20 +33281,20 @@ function verifyScopedLogin(data, key, sessionDid, requested, expected = {}) {
     throw error;
   }
   const spaceId = data.spaceId;
-  for (const permission of requested) {
-    if (isRawEncryptionPermission(permission) || isRawCidRevocationPermission(permission)) continue;
-    if (normalizePkhIdentifier(ownerSpaceId(permission.space ?? "", signed.ownerDid)) !== normalizePkhIdentifier(spaceId)) {
+  for (const permission2 of requested) {
+    if (isRawEncryptionPermission(permission2) || isRawCidRevocationPermission(permission2)) continue;
+    if (normalizePkhIdentifier(ownerSpaceId(permission2.space ?? "", signed.ownerDid)) !== normalizePkhIdentifier(spaceId)) {
       throw new CLIError("OPENKEY_SCOPE_MISMATCH", `The approved space differs from the requested space. ${notStored}`, ExitCode.PERMISSION_DENIED);
     }
   }
   const legacyNested = [];
   const approved = [];
   const keyRowRest = expected.namedKeyRow === void 0 ? signed.permissions : withoutRequestedKeyRow(signed.permissions, expected.namedKeyRow, signed.ownerDid);
-  for (const permission of keyRowRest) {
-    (isLegacyNestedDecrypt(permission, requested, signed.ownerDid, spaceId) ? legacyNested : approved).push(permission);
+  for (const permission2 of keyRowRest) {
+    (isLegacyNestedDecrypt(permission2, requested, signed.ownerDid, spaceId) ? legacyNested : approved).push(permission2);
   }
-  for (const permission of keyRowRest) {
-    if (isVerifiedRawEncryptionPermission(permission) && !rawEncryptionOwnerMatches(permission.path, signed.ownerDid)) {
+  for (const permission2 of keyRowRest) {
+    if (isVerifiedRawEncryptionPermission(permission2) && !rawEncryptionOwnerMatches(permission2.path, signed.ownerDid)) {
       throw new CLIError("OPENKEY_SCOPE_MISMATCH", `OpenKey signed decrypt for a network not owned by the approving identity. ${notStored}`, ExitCode.PERMISSION_DENIED);
     }
   }
@@ -32272,7 +33368,7 @@ function assertSessionReplaceable(profileName2, snapshot, ownerDid, scope, newEx
   if (ownerSessionLacksProof3(session, snapshot.profile)) return;
   const expiresAt = sessionExpiresAt(session);
   if (expiresAt !== null && Date.parse(expiresAt) <= Date.now()) return;
-  const held = Array.isArray(session.permissions) ? session.permissions.filter((permission) => ownerDid === void 0 || typeof session.spaceId !== "string" || !isLegacyNestedDecrypt(permission, scope, ownerDid, session.spaceId)) : void 0;
+  const held = Array.isArray(session.permissions) ? session.permissions.filter((permission2) => ownerDid === void 0 || typeof session.spaceId !== "string" || !isLegacyNestedDecrypt(permission2, scope, ownerDid, session.spaceId)) : void 0;
   const keepsScope = ownerDid !== void 0 && session.permissionsSource === SIGNED_RECAP && held !== void 0 && scopeCovers(scope, held, ownerDid);
   const shortens = newExpiresAt !== void 0 && expiresAt !== null && Date.parse(newExpiresAt) < Date.parse(expiresAt) - CLOCK_SKEW_MS;
   if (keepsScope && !shortens) return;
@@ -32579,8 +33675,8 @@ async function verifyApproval(input) {
   if (!delegation.jwk || typeof delegation.jwk !== "object" || !jsonEqual(publicSessionJwk(delegation.jwk), input.publicJwk)) {
     throw new CLIError("DEVICE_AUTH_BINDING_MISMATCH", "OpenKey returned a delegation for a different CLI session key. No session was saved.", ExitCode.PERMISSION_DENIED);
   }
-  const invalid3 = validateDelegationCallbackPayload(delegation);
-  if (invalid3) throw invalidResponse(`OpenKey returned an invalid delegation: ${invalid3}`);
+  const invalid4 = validateDelegationCallbackPayload(delegation);
+  if (invalid4) throw invalidResponse(`OpenKey returned an invalid delegation: ${invalid4}`);
   const { session } = verifyScopedLogin(delegation, input.key, input.sessionDid, input.requested, {
     expectedOwner: input.expectedOwner,
     expiry: input.expiry
@@ -32615,7 +33711,7 @@ function writeApprovalPrompt(prompt) {
 async function acquireDeviceDelegation(input) {
   assertNoCaveatLimits(input.permissions);
   validateLoginPermissions(input.permissions);
-  if (input.permissions.some((permission) => permission.service === "tinycloud.encryption" || permission.space === "secrets" || permission.space?.startsWith("tinycloud:") && permission.space.endsWith(":secrets"))) {
+  if (input.permissions.some((permission2) => permission2.service === "tinycloud.encryption" || permission2.space === "secrets" || permission2.space?.startsWith("tinycloud:") && permission2.space.endsWith(":secrets"))) {
     throw new CLIError(
       "DEVICE_AUTH_UNSUPPORTED_SCOPE",
       "--device cannot authorize tinycloud.encryption or the secrets space. Use another OpenKey approval method for this manifest.",
@@ -32632,8 +33728,8 @@ async function acquireDeviceDelegation(input) {
   const nodeOrigin = canonicalOrigin(input.nodeOrigin, "TinyCloud node origin");
   const shareOrigin = canonicalOrigin(input.shareOrigin, "Share origin");
   const fetchFn = input.fetchFn ?? globalThis.fetch;
-  const deviceSecret = randomBytes5(32).toString("base64url");
-  const codeVerifier = randomBytes5(32).toString("base64url");
+  const deviceSecret = randomBytes4(32).toString("base64url");
+  const codeVerifier = randomBytes4(32).toString("base64url");
   const relayKey = createECDH("prime256v1");
   relayKey.generateKeys();
   const relayPublicJwk = relayPublicJwkOf(relayKey);
@@ -32692,9 +33788,9 @@ async function acquireDeviceDelegation(input) {
     expiresAt: new Date(deadline).toISOString().replace(/\.\d{3}Z$/, "Z")
   });
   let interval = started.interval;
-  const wait = input.wait ?? ((milliseconds) => new Promise((resolve9) => setTimeout(resolve9, milliseconds)));
+  const wait2 = input.wait ?? ((milliseconds) => new Promise((resolve9) => setTimeout(resolve9, milliseconds)));
   while (Date.now() < deadline) {
-    await wait(interval * 1e3);
+    await wait2(interval * 1e3);
     let response;
     try {
       response = await fetchFn(`${openkeyHost}/api/device-authorizations/token`, {
@@ -32797,6 +33893,479 @@ async function loginWithDeviceAuthorization(input) {
   return { profile, result };
 }
 
+// src/auth/approval-request.ts
+function trackApprovalResult(source, verified) {
+  const entry = acquisitions.get(source);
+  if (entry) acquisitions.set(verified, entry);
+}
+var acquisitions = /* @__PURE__ */ new WeakMap();
+function approvalResultNeedsAck(delegation) {
+  return acquisitions.has(delegation);
+}
+var STATE_FILE = "approval-pending.json";
+function invalid2(message) {
+  return new CLIError("APPROVAL_RESULT_INVALID", message, ExitCode.PERMISSION_DENIED);
+}
+function configuredOrigin(value, label) {
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw invalid2(`${label} must be an origin.`);
+  }
+  const loopback = ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
+  if (url.pathname !== "/" || url.search || url.hash || url.username || url.password || url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
+    throw invalid2(`${label} must be an HTTPS origin or a loopback HTTP origin.`);
+  }
+  return url.origin;
+}
+function grantLifetimeSeconds(expiry) {
+  const durationMs = expiry === void 0 ? EXPIRY.SESSION_MS : typeof expiry === "string" && /^\d+s$/.test(expiry) ? Number(expiry.slice(0, -1)) * 1e3 : parseRequestedExpiry(expiry).durationMs;
+  const seconds = Math.floor(durationMs / 1e3);
+  if (!Number.isSafeInteger(seconds) || seconds < 60) throw invalid2("Invalid requested grant lifetime.");
+  return seconds;
+}
+async function updatePending(profile, update) {
+  await ProfileManager.withLock(profile, async () => {
+    const directory = await ProfileManager.ensureProfileDir(profile);
+    const path = join14(directory, STATE_FILE);
+    await writeJsonDurable(path, update(await readJson(path) ?? []));
+  }, { requireProfile: true });
+}
+async function pendingApprovalKey(profile) {
+  const entries = await readJson(join14(profilePath8(profile), STATE_FILE)) ?? [];
+  return entries.find((entry) => !entry.committed)?.signingKey;
+}
+function approvalSessionProof(entry, action, resultRef = "", ackId = "") {
+  const jwk = entry.signingKey;
+  const jkt = createHash3("sha256").update(JSON.stringify({ crv: "Ed25519", kty: "OKP", x: jwk.x })).digest("base64url");
+  const path = action === "discover" ? `/api/approval-requests/${entry.requestId}/result` : `/api/approval-results/${resultRef}/${action}`;
+  const header = Buffer.from(JSON.stringify({ alg: "EdDSA", kid: jkt, typ: "openkey-session-proof+jwt" })).toString("base64url");
+  const payload = Buffer.from(JSON.stringify({
+    client_id: "openkey-approval-result-v1",
+    cred_hash: createHash3("sha256").update(JSON.stringify([action, entry.requestId, entry.bodyCid, resultRef, ackId])).digest("base64url"),
+    htm: "POST",
+    htu: entry.apiOrigin + path,
+    iat: Math.floor(Date.now() / 1e3),
+    jti: randomBytes5(24).toString("base64url")
+  })).toString("base64url");
+  const input = `${header}.${payload}`;
+  return `${input}.${sign(null, Buffer.from(input), createPrivateKey({
+    key: { kty: jwk.kty, crv: jwk.crv, x: jwk.x, d: jwk.d },
+    format: "jwk"
+  })).toString("base64url")}`;
+}
+async function post(entry, action) {
+  const ref = entry.resultRef ?? "";
+  const path = action === "discover" ? `/api/approval-requests/${entry.requestId}/result` : `/api/approval-results/${ref}/${action}`;
+  const body = action === "discover" ? { bodyCid: entry.bodyCid, header: entry.record.header, signature: entry.record.signature } : { requestId: entry.requestId, bodyCid: entry.bodyCid, ...action === "ack" ? { ackId: entry.ackId } : {} };
+  return fetch(entry.apiOrigin + path, {
+    method: "POST",
+    credentials: "omit",
+    redirect: "error",
+    cache: "no-store",
+    referrerPolicy: "no-referrer",
+    headers: { "content-type": "application/json", "OpenKey-Session-Proof": approvalSessionProof(entry, action, ref, action === "ack" ? entry.ackId : "") },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(1e4)
+  });
+}
+async function throwRemoteError(profile, entry, response, action) {
+  const body = await response.clone().json().catch(() => null);
+  const code5 = typeof body?.code === "string" ? body.code : "";
+  if (code5 === "expired_request") {
+    await updatePending(profile, (items) => items.filter((item) => item.requestId !== entry.requestId));
+    throw new CLIError("APPROVAL_REQUEST_EXPIRED", "This approval request expired before it was approved. Start a new request.", ExitCode.AUTH_REQUIRED);
+  }
+  if (code5 === "expired_result") {
+    await updatePending(profile, (items) => items.filter((item) => item.requestId !== entry.requestId));
+    throw new CLIError("APPROVAL_RESULT_EXPIRED", "The approved result expired before it was saved. Start a new request.", ExitCode.AUTH_REQUIRED);
+  }
+  if (code5 === "acknowledged") {
+    throw new CLIError("APPROVAL_RESULT_ACKNOWLEDGED", "OpenKey has acknowledged this result; its local commit may already be complete.", ExitCode.PENDING);
+  }
+  if (code5 === "not_found") {
+    await updatePending(profile, (items) => items.filter((item) => item.requestId !== entry.requestId));
+    throw new CLIError(
+      action === "discover" ? "APPROVAL_REQUEST_NOT_FOUND" : "APPROVAL_RESULT_NOT_FOUND",
+      action === "discover" ? "OpenKey cannot find this approval request." : "OpenKey cannot find this approval result.",
+      ExitCode.AUTH_REQUIRED
+    );
+  }
+  if (code5 === "ack_conflict") throw invalid2("OpenKey rejected a conflicting approval ACK intent.");
+  if (code5 === "request_binding" || code5 === "invalid_proof") throw invalid2("OpenKey rejected the request or requester binding.");
+  throw new CLIError(
+    action === "discover" ? "APPROVAL_REQUEST_UNAVAILABLE" : "APPROVAL_RESULT_UNAVAILABLE",
+    `OpenKey could not ${action === "discover" ? "discover this request" : "fetch this result"} (HTTP ${response.status}). Retry the command to resume.`,
+    ExitCode.PENDING
+  );
+}
+function verifyPendingResult(entry, key = entry.signingKey) {
+  if (!entry.resultRef || !entry.resultEnvelope) throw invalid2("No encrypted approval result is available.");
+  const signer = signerFromJwk(key);
+  const relay = createECDH2("prime256v1");
+  relay.setPrivateKey(Buffer.from(entry.relayPrivateKey, "base64url"));
+  const opened = decryptRelayResult(entry.resultEnvelope, entry.requestId, relay);
+  if (opened.resultVersion !== 1 || opened.requestId !== entry.requestId || opened.requestDigest !== entry.bodyCid || opened.requesterDid !== entry.request.issuer || opened.targetDid !== entry.request.targetDid || signer.did !== entry.request.issuer || typeof opened.ownerDid !== "string" || typeof opened.delegationExpiresAt !== "string" || !Number.isFinite(Date.parse(opened.delegationExpiresAt)) || new Date(opened.delegationExpiresAt).toISOString() !== opened.delegationExpiresAt || !opened.delegation || typeof opened.delegation !== "object") throw invalid2("Encrypted result binding does not match this request.");
+  const delegation = opened.delegation;
+  const verified = verifyScopedLogin(
+    delegation,
+    key,
+    entry.request.targetDid,
+    entry.request.permissions,
+    {
+      expectedOwner: entry.expectedOwner ?? opened.ownerDid,
+      expiry: { durationMs: entry.request.grantLifetimeSeconds * 1e3 },
+      exactApproval: true
+    }
+  );
+  if (verified.session.ownerDid.toLowerCase() !== opened.ownerDid.toLowerCase() || verified.session.expiresAt !== opened.delegationExpiresAt) throw invalid2("Result owner or expiry differs from its signed delegation.");
+  return { delegation, session: verified.session };
+}
+async function acquireApprovalRequest(_did, options) {
+  const profile = options.profileName;
+  if (!profile || !options.jwk || !options.host || !options.permissions?.length) {
+    throw new CLIError("APPROVAL_REQUEST_CONTEXT_REQUIRED", "Approval requires a profile, session key, host and permissions.", ExitCode.USAGE_ERROR);
+  }
+  const signingKey = options.jwk;
+  const signer = signerFromJwk(signingKey);
+  const openkeyOrigin = configuredOrigin(options.openkeyHost ?? DEFAULT_OPENKEY_HOST, "OpenKey");
+  const apiOrigin2 = configuredOrigin(options.openkeyApiHost ?? process.env.TC_OPENKEY_API_HOST ?? (openkeyOrigin === DEFAULT_OPENKEY_HOST ? DEFAULT_OPENKEY_DEVICE_API_HOST : openkeyOrigin), "OpenKey API");
+  const linkApiOrigin = configuredOrigin(process.env.TC_LINKS_API_ORIGIN ?? DEFAULT_LINKS_API_ORIGIN, "Links API");
+  const lifetime = grantLifetimeSeconds(options.expiry);
+  const targetPublicJwk = {
+    kty: signingKey.kty,
+    crv: signingKey.crv,
+    x: signingKey.x
+  };
+  const spec = {
+    issuer: signer.did,
+    requestVersion: 1,
+    targetDid: signer.did,
+    targetPublicJwk,
+    nodeOrigin: options.host,
+    permissions: options.permissions,
+    ...options.reason ? { reason: options.reason } : {},
+    grantLifetimeSeconds: lifetime
+  };
+  let entry = (await readJson(join14(profilePath8(profile), STATE_FILE)) ?? []).find((item) => {
+    const { resultEncryptionPublicJwk: _, ...prior } = item.request;
+    return canonicalJson(prior) === canonicalJson(spec) && item.apiOrigin === apiOrigin2 && item.linkApiOrigin === linkApiOrigin && item.openkeyOrigin === openkeyOrigin && item.expectedOwner === options.expectedOwner;
+  });
+  if (!entry) {
+    const relay = createECDH2("prime256v1");
+    relay.generateKeys();
+    const request = { ...spec, resultEncryptionPublicJwk: relayPublicJwkOf(relay) };
+    const created = await createApprovalRequest({ request, issuerKey: signer, apiOrigin: linkApiOrigin, openkeyOrigin });
+    entry = {
+      version: 1,
+      request,
+      requestId: created.id,
+      bodyCid: created.bodyCid,
+      approvalUrl: created.link,
+      requestExpiresAt: created.expiresAt,
+      record: created.record,
+      apiOrigin: apiOrigin2,
+      linkApiOrigin,
+      openkeyOrigin,
+      signingKey,
+      relayPrivateKey: relay.getPrivateKey().toString("base64url"),
+      expectedOwner: options.expectedOwner,
+      ackId: randomUUID2()
+    };
+    await updatePending(profile, (items) => [...items, entry]);
+  }
+  if (!entry.resultRef && !entry.resultEnvelope) {
+    options.onApprovalRequest?.({ approvalUrl: entry.approvalUrl, requestId: entry.requestId, expiresAt: entry.requestExpiresAt });
+    if (!options.onApprovalRequest) console.error(`Approve this request in OpenKey: ${entry.approvalUrl}`);
+    if (!options.noPopup && !options.onApprovalRequest && process.env.TC_AUTH_NO_POPUP !== "1" && process.env.TC_NO_POPUP !== "1") {
+      await tryOpenBrowser(entry.approvalUrl);
+    }
+  }
+  if (!entry.resultEnvelope) {
+    for (; ; ) {
+      let response;
+      try {
+        response = await post(entry, "discover");
+      } catch {
+        await wait(2e3);
+        continue;
+      }
+      if (response.status === 202) {
+        await wait(2e3);
+        continue;
+      }
+      if (!response.ok) await throwRemoteError(profile, entry, response, "discover");
+      const discovered = await response.json();
+      if (typeof discovered.resultRef !== "string" || !/^[A-Za-z0-9_-]{20,128}$/.test(discovered.resultRef) || typeof discovered.expiresAt !== "string" || !Number.isFinite(Date.parse(discovered.expiresAt))) {
+        throw invalid2("Invalid approval result reference.");
+      }
+      entry.resultRef = discovered.resultRef;
+      entry.resultExpiresAt = discovered.expiresAt;
+      await updatePending(profile, (items) => items.map((item) => item.requestId === entry.requestId ? entry : item));
+      let fetched2;
+      try {
+        fetched2 = await post(entry, "fetch");
+      } catch {
+        continue;
+      }
+      if (!fetched2.ok) await throwRemoteError(profile, entry, fetched2, "fetch");
+      const result = await fetched2.json();
+      if (result.requestId !== entry.requestId || result.bodyCid !== entry.bodyCid || result.resultRef !== entry.resultRef || result.expiresAt !== entry.resultExpiresAt || !result.relay || typeof result.relay !== "object") throw invalid2("Result reference does not match this request.");
+      entry.resultEnvelope = result.relay;
+      break;
+    }
+  }
+  const verified = verifyPendingResult(entry, signingKey);
+  await updatePending(profile, (items) => items.map((item) => item.requestId === entry.requestId ? entry : item));
+  acquisitions.set(verified.delegation, entry);
+  return verified.delegation;
+}
+async function completeApprovalResult(profile, delegation) {
+  const acquired = delegation ? acquisitions.get(delegation) : void 0;
+  const entries = acquired ? [acquired] : await readJson(join14(profilePath8(profile), STATE_FILE)) ?? [];
+  for (const entry of entries) {
+    if (!entry.resultRef || !entry.resultEnvelope) continue;
+    let saved = false;
+    await ProfileManager.withLock(profile, async () => {
+      const key = await ProfileManager.getKey(profile);
+      if (!key || signerFromJwk(key).did !== entry.request.targetDid) return;
+      const { delegation: verifiedDelegation, session: verifiedSession } = verifyPendingResult(entry, key);
+      const current = await ProfileManager.getProfile(profile);
+      if (current.ownerDid?.toLowerCase() !== verifiedSession.ownerDid.toLowerCase()) return;
+      const session = await ProfileManager.getSession(profile);
+      if (session && session.delegationCid === verifiedDelegation.delegationCid && session.signature === verifiedDelegation.signature && session.siwe === verifiedDelegation.siwe) {
+        await syncAuthCredentialFiles(profilePath8(profile));
+        await ProfileManager.setProfileDurable(profile, current);
+        saved = true;
+      } else {
+        const grants = await loadAdditionalDelegations(profile);
+        const stored = grants.find((item) => item.delegation.cid === verifiedDelegation.delegationCid && item.delegation.siweProof?.siwe === verifiedDelegation.siwe && item.delegation.siweProof?.signature === verifiedDelegation.signature);
+        if (stored) {
+          const file = await open11(additionalDelegationsPath(profile), "r");
+          try {
+            await file.sync();
+          } finally {
+            await file.close();
+          }
+          const directory = await open11(profilePath8(profile), "r");
+          try {
+            await directory.sync();
+          } finally {
+            await directory.close();
+          }
+          saved = true;
+        }
+      }
+      if (saved) {
+        entry.committed = true;
+        await updatePending(profile, (items) => items.map((item) => item.requestId === entry.requestId ? entry : item));
+      }
+    }, { requireProfile: true });
+    if (!saved) {
+      if (acquired) throw invalid2("Approval has not been durably saved; no ACK was sent.");
+      continue;
+    }
+    let response;
+    try {
+      response = await post(entry, "ack");
+    } catch {
+      throw new CLIError("APPROVAL_ACK_PENDING", "Approval is saved; ACK outcome is unknown. Retry this command to acknowledge the same result.", ExitCode.PENDING);
+    }
+    const result = await response.json();
+    if (!response.ok || result.ackId !== entry.ackId || result.status !== "acknowledged") {
+      throw new CLIError("APPROVAL_ACK_PENDING", `Approval is saved; ACK is pending (HTTP ${response.status}). Retry this command.`, ExitCode.PENDING);
+    }
+    await updatePending(profile, (items) => items.filter((item) => item.requestId !== entry.requestId));
+  }
+}
+
+// src/auth/browser-auth.ts
+var PRIVATE_JWK_FIELDS = /* @__PURE__ */ new Set([
+  "d",
+  "p",
+  "q",
+  "dp",
+  "dq",
+  "qi",
+  "oth",
+  "k"
+]);
+function publicJwkForDelegation(jwk) {
+  const publicJwk = {};
+  for (const [key, value] of Object.entries(jwk)) {
+    if (!PRIVATE_JWK_FIELDS.has(key)) {
+      publicJwk[key] = value;
+    }
+  }
+  return publicJwk;
+}
+async function startAuthFlow(did, options = {}) {
+  assertNoCaveatLimits(options.permissions);
+  if (options.paste) {
+    return pasteFlow(did, options);
+  }
+  return acquireApprovalRequest(did, options);
+}
+function buildAuthUrl(did, options = {}) {
+  assertNoCaveatLimits(options.permissions);
+  const params = new URLSearchParams();
+  params.set("did", did);
+  if (options.callback) {
+    params.set("callback", options.callback);
+  }
+  if (options.jwk) {
+    const jwkB64 = Buffer.from(
+      JSON.stringify(publicJwkForDelegation(options.jwk))
+    ).toString("base64url");
+    params.set("jwk", jwkB64);
+  }
+  if (options.host) {
+    params.set("host", options.host);
+  }
+  const reason = typeof options.reason === "string" ? options.reason.trim() : "";
+  if (options.permissions?.length) {
+    params.set(
+      "permissions",
+      Buffer.from(JSON.stringify({
+        permissions: options.permissions,
+        ...reason ? { reason } : {}
+      })).toString("base64url")
+    );
+  }
+  if (reason) {
+    params.set("reason", reason);
+  }
+  if (options.expiry !== void 0) {
+    params.set("expiry", String(options.expiry));
+  }
+  params.set("protocolVersion", "1");
+  const base5 = options.openkeyHost ?? DEFAULT_OPENKEY_HOST;
+  return `${base5}/delegate?${params.toString()}`;
+}
+function validateDelegationCallbackPayload(value) {
+  if (!value || typeof value !== "object") return "expected an object";
+  const v = value;
+  if (!v.delegationHeader || typeof v.delegationHeader !== "object") {
+    return "delegationHeader must be an object";
+  }
+  const auth = v.delegationHeader.Authorization;
+  if (typeof auth !== "string" || !auth) {
+    return "delegationHeader.Authorization must be a non-empty string";
+  }
+  if (typeof v.delegationCid !== "string" || !v.delegationCid) {
+    return "delegationCid must be a non-empty string";
+  }
+  if (typeof v.spaceId !== "string" || !v.spaceId) {
+    return "spaceId must be a non-empty string";
+  }
+  if (v.permissions !== void 0) {
+    if (!Array.isArray(v.permissions)) {
+      return "permissions, when present, must be an array";
+    }
+    for (let i = 0; i < v.permissions.length; i++) {
+      const entry = v.permissions[i];
+      if (!entry || typeof entry !== "object") {
+        return `permissions[${i}] must be an object`;
+      }
+      const e = entry;
+      if (typeof e.service !== "string" || !e.service) {
+        return `permissions[${i}].service must be a non-empty string`;
+      }
+      if (typeof e.space !== "string") {
+        return `permissions[${i}].space must be a string`;
+      }
+      if (typeof e.path !== "string") {
+        return `permissions[${i}].path must be a string`;
+      }
+      if (!Array.isArray(e.actions) || e.actions.some((a) => typeof a !== "string" || !a)) {
+        return `permissions[${i}].actions must be a non-empty string[]`;
+      }
+    }
+  }
+  return null;
+}
+async function delegationFromInput(input, did, options) {
+  const trimmed = input.trim();
+  let parsed;
+  if (/^[a-z2-7]{4}-[a-z2-7]{4}$/i.test(trimmed)) {
+    if (!options.jwk) throw new Error("A CLI session key is required to retrieve a delegation.");
+    const apiHost = process.env.TC_OPENKEY_API_HOST ?? options.openkeyApiHost ?? (options.openkeyHost && options.openkeyHost !== DEFAULT_OPENKEY_HOST ? options.openkeyHost : DEFAULT_OPENKEY_DEVICE_API_HOST);
+    const response = await fetch(`${apiHost.replace(/\/$/, "")}/api/delegation-codes/${trimmed.toLowerCase()}`, {
+      redirect: "error"
+    });
+    if (!response.ok) {
+      throw Object.assign(new Error(response.status === 404 ? "Delegation code not found or expired. Use the full code shown in OpenKey instead." : `Could not retrieve delegation code (HTTP ${response.status}).`), { status: response.status });
+    }
+    const result = await response.json();
+    parsed = result.delegation;
+    const delegation = parsed;
+    const jwk = delegation?.jwk;
+    const localJwk = publicJwkForDelegation(options.jwk);
+    if (typeof delegation?.verificationMethod !== "string" || delegation.verificationMethod.split("#")[0] !== did.split("#")[0] || !jwk || typeof jwk !== "object" || Array.isArray(jwk) || jwk.kty !== "OKP" || jwk.crv !== "Ed25519" || typeof jwk.x !== "string" || jwk.x !== localJwk.x || [...PRIVATE_JWK_FIELDS].some((field) => field in jwk)) {
+      throw new Error("Delegation is bound to a different CLI key.");
+    }
+  } else {
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      try {
+        parsed = JSON.parse(Buffer.from(trimmed, "base64").toString("utf-8"));
+      } catch {
+        throw new Error("Invalid delegation code. Expected JSON, base64-encoded JSON, or XXXX-XXXX.");
+      }
+    }
+  }
+  const invalid4 = validateDelegationCallbackPayload(parsed);
+  if (invalid4) throw new Error(`Invalid delegation code: ${invalid4}`);
+  return parsed;
+}
+async function pasteFlow(did, options = {}) {
+  const authUrl = buildAuthUrl(did, options);
+  console.error(`
+Open this URL in a browser to authenticate:
+`);
+  console.error(`  ${authUrl}
+`);
+  const rl = createInterface({
+    input: process.stdin,
+    output: process.stderr
+  });
+  return new Promise((resolve9, reject) => {
+    let answered = false;
+    rl.on("line", (input) => {
+      if (answered || input.trim() === "") return;
+      answered = true;
+      rl.close();
+      void delegationFromInput(input, did, options).then(resolve9, reject);
+    });
+    rl.on("close", () => {
+      if (answered) return;
+      answered = true;
+      reject(new CLIError(
+        "PASTE_CODE_MISSING",
+        `Stdin ended before a delegation code was pasted; no session was saved. Approve at ${authUrl} and pass the returned code on stdin.`,
+        ExitCode.AUTH_REQUIRED,
+        {
+          approvalUrl: authUrl,
+          hint: `Open ${authUrl}, approve, then pass the code on stdin followed by a newline.`
+        }
+      ));
+    });
+    rl.on("SIGINT", () => {
+      if (answered) return;
+      answered = true;
+      rl.close();
+      reject(loginCancelled());
+    });
+    rl.setPrompt("Enter short code or paste full delegation code: ");
+    rl.prompt();
+  });
+}
+function loginCancelled() {
+  return new CLIError("CANCELLED", "Interrupted: tc auth login stopped before approval. No session was saved.", ExitCode.CANCELLED);
+}
+
 // src/auth/space-setup.ts
 init_constants();
 init_sdk();
@@ -32889,14 +34458,14 @@ async function awaitSpaceSetup(report, deps) {
     { hint: OPENKEY_SPACE_SETUP_RETRY_HINT }
   );
 }
-function hasKvAction(permission, action) {
-  return permission.actions.some((entry) => entry === action || entry === `tinycloud.kv/${action}`);
+function hasKvAction(permission2, action) {
+  return permission2.actions.some((entry) => entry === action || entry === `tinycloud.kv/${action}`);
 }
 function readTarget(permissions) {
-  const kv2 = (permissions ?? []).filter((permission) => permission.service === "tinycloud.kv" || permission.service === "kv");
-  const list = kv2.find((permission) => hasKvAction(permission, "list"));
+  const kv2 = (permissions ?? []).filter((permission2) => permission2.service === "tinycloud.kv" || permission2.service === "kv");
+  const list = kv2.find((permission2) => hasKvAction(permission2, "list"));
   if (list) return { op: "list", prefix: list.path };
-  const get = kv2.find((permission) => hasKvAction(permission, "get"));
+  const get = kv2.find((permission2) => hasKvAction(permission2, "get"));
   if (!get) return void 0;
   return { op: "get", key: get.path === "" || get.path.endsWith("/") ? `${get.path}.tinycloud-space-probe` : get.path };
 }
@@ -32932,13 +34501,13 @@ init_owner_did();
 init_constants();
 init_errors();
 import { randomBytes as randomBytes6, timingSafeEqual } from "crypto";
-import { createServer as createServer2 } from "http";
+import { createServer } from "http";
 import { createInterface as createInterface2 } from "readline";
-import open10 from "open";
+import open12 from "open";
 init_owner_did();
 var MAX_BODY_BYTES = 1024 * 1024;
 var RESULT_FIELDS = ["address", "permissions", "protocolVersion", "selectedActionKeys", "signature", "signedMessage"];
-function invalid2(code5, message) {
+function invalid3(code5, message) {
   return new CLIError(code5, message, ExitCode.AUTH_REQUIRED);
 }
 function ownerIdentitySigner(ownerDid) {
@@ -32946,7 +34515,7 @@ function ownerIdentitySigner(ownerDid) {
   const parts = canonical.split(":");
   const chainId = Number(parts[3]);
   if (!Number.isSafeInteger(chainId) || chainId < 1) {
-    throw invalid2("INVALID_ARGUMENT", "The OpenKey owner chain ID must be a positive safe integer.");
+    throw invalid3("INVALID_ARGUMENT", "The OpenKey owner chain ID must be a positive safe integer.");
   }
   const address = parts[4];
   return {
@@ -32957,7 +34526,7 @@ function ownerIdentitySigner(ownerDid) {
       return chainId;
     },
     async signMessage() {
-      throw invalid2(
+      throw invalid3(
         "REVOCATION_AUTHORITY_UNAVAILABLE",
         "OpenKey owner identity cannot sign wallet revocations; obtain verified signed authority from OpenKey instead."
       );
@@ -32984,7 +34553,7 @@ function apiOrigin(openKeyHost) {
   return process.env.TC_OPENKEY_API_HOST ?? (openKeyHost === DEFAULT_OPENKEY_HOST ? DEFAULT_OPENKEY_DEVICE_API_HOST : openKeyHost);
 }
 async function startPreparedOpenKeyHandoff(options) {
-  const origin = new URL(options.openKeyHost).origin;
+  const origin2 = new URL(options.openKeyHost).origin;
   const state2 = randomBytes6(32);
   const cancelSecret = randomBytes6(32).toString("base64url");
   const handoffId = randomBytes6(32).toString("base64url");
@@ -33000,7 +34569,7 @@ async function startPreparedOpenKeyHandoff(options) {
   let completed = false;
   let timeout;
   let rl;
-  const cors = { "Access-Control-Allow-Origin": origin, Vary: "Origin" };
+  const cors = { "Access-Control-Allow-Origin": origin2, Vary: "Origin" };
   const reply = (response, status, data, close2 = false) => {
     response.writeHead(status, { ...cors, "Content-Type": "application/json", ...close2 ? { Connection: "close" } : {} });
     response.end(JSON.stringify(data));
@@ -33015,8 +34584,8 @@ async function startPreparedOpenKeyHandoff(options) {
     process.off("SIGTERM", cancelled);
   };
   const sockets = /* @__PURE__ */ new Set();
-  const server = options.paste ? void 0 : createServer2({ connectionsCheckingInterval: 1e3 }, (request, response) => {
-    if (request.headers.origin !== origin) {
+  const server = options.paste ? void 0 : createServer({ connectionsCheckingInterval: 1e3 }, (request, response) => {
+    if (request.headers.origin !== origin2) {
       response.writeHead(403);
       response.end();
       return;
@@ -33130,16 +34699,16 @@ async function startPreparedOpenKeyHandoff(options) {
       },
       delivery: { handoffId, ...callback ? { callback } : {}, state: state2.toString("base64url"), cancelSecret }
     };
-    const url = `${origin}/delegate#tv2=${Buffer.from(JSON.stringify(payload), "utf8").toString("base64url")}`;
+    const url = `${origin2}/delegate#tv2=${Buffer.from(JSON.stringify(payload), "utf8").toString("base64url")}`;
     if (Buffer.byteLength(url, "utf8") > 8192) {
-      throw invalid2("V2_URL_TOO_LONG", "The prepared OpenKey URL exceeds 8 KiB; reduce the requested scope and retry with a fresh session. Legacy approval cannot grant replica authority.");
+      throw invalid3("V2_URL_TOO_LONG", "The prepared OpenKey URL exceeds 8 KiB; reduce the requested scope and retry with a fresh session. Legacy approval cannot grant replica authority.");
     }
     process.on("SIGINT", cancelled);
     process.on("SIGTERM", cancelled);
     console.error(`Open this URL in a browser to authenticate: ${url}`);
     if (!options.noPopup && !options.paste) {
       try {
-        await open10(url);
+        await open12(url);
       } catch {
         console.error("Could not open browser. Use the printed URL or paste the signed code.");
       }
@@ -33168,7 +34737,7 @@ async function startPreparedOpenKeyHandoff(options) {
         resolveResult(signed);
       });
       rl.on("close", () => {
-        if (options.paste && !delivered && !completed) rejectResult(invalid2("PASTE_CODE_MISSING", "Stdin ended before a prepared OpenKey code was pasted; no session was saved."));
+        if (options.paste && !delivered && !completed) rejectResult(invalid3("PASTE_CODE_MISSING", "Stdin ended before a prepared OpenKey code was pasted; no session was saved."));
       });
       rl.on("SIGINT", cancelled);
     }
@@ -33177,7 +34746,7 @@ async function startPreparedOpenKeyHandoff(options) {
     }
     timeout = setTimeout(() => {
       if (!delivered && !completed) {
-        rejectResult(invalid2(
+        rejectResult(invalid3(
           "V2_EXPIRED",
           !options.paste && !process.stdin.isTTY ? "The browser could not reach the CLI. Re-run with --paste (Safari may require it). No session or key was saved." : "Prepared OpenKey handoff expired; restart login for a fresh SIWE. No session or key was saved."
         ));
@@ -33332,8 +34901,8 @@ async function cidBoundOwnerSpace(record3, ownerDid, node, host) {
   if (!node || !delegation.siweProof) return void 0;
   const inspected = await inspectStoredDelegation(record3, { node, host: host ?? delegation.host });
   if (inspected.local !== "verified" || inspected.cid !== delegation.cid) return void 0;
-  for (const permission of inspected.effectivePermissions) {
-    const space = permission.space;
+  for (const permission2 of inspected.effectivePermissions) {
+    const space = permission2.space;
     if (space && ownerDidFromSpace(space) && normalizeDid2(ownerDidFromSpace(space)) === normalizeDid2(ownerDid)) {
       return space;
     }
@@ -33588,7 +35157,7 @@ function renderList(result) {
       grant.expiry ?? "\u2014",
       grant.source,
       grant.bound ? "yes" : "no",
-      grant.scope.map((permission) => `${permission.service}:${permission.space ?? "default"}:${permission.path}:${permission.actions.join(",")}`).join("; ") || "\u2014"
+      grant.scope.map((permission2) => `${permission2.service}:${permission2.space ?? "default"}:${permission2.path}:${permission2.actions.join(",")}`).join("; ") || "\u2014"
     ])
   ) + "\n");
 }
@@ -34024,8 +35593,8 @@ function describeGrantScope(requested, requestedExpiry, applicationsSpace, maxLi
 // src/lib/consent-text.ts
 init_safe_text();
 init_permissions();
-function permissionConsentLine(permission) {
-  return safeInline(compactPermission(permission));
+function permissionConsentLine(permission2) {
+  return safeInline(compactPermission(permission2));
 }
 function signExtrasQuestion(count) {
   return `Sign the ${count} ${count === 1 ? "entry" : "entries"} marked ! above, and the rest of the request? [y/N] `;
@@ -34146,8 +35715,8 @@ async function promptAuthMethod() {
 }
 async function hasGatedReplicaState(profile, name, replicationEnabled) {
   if (replicationEnabled || profile.replication !== void 0) return true;
-  const root = profilePath8(name);
-  for (const path of [join14(root, REPLICA_GATE_FILE3), join14(root, REPLICA_LOGOUT_PENDING_FILE4), join14(root, "replication")]) {
+  const root = profilePath9(name);
+  for (const path of [join15(root, REPLICA_GATE_FILE3), join15(root, REPLICA_LOGOUT_PENDING_FILE4), join15(root, "replication")]) {
     try {
       await lstat7(path);
       return true;
@@ -34166,7 +35735,7 @@ async function existingReplicaRoots(profile) {
   const roots = [];
   for (const name of ["replicas", "replication"]) {
     try {
-      await lstat7(join14(profilePath8(profile), name));
+      await lstat7(join15(profilePath9(profile), name));
       roots.push(name);
     } catch (error) {
       if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") continue;
@@ -34194,7 +35763,7 @@ async function preflightLogout(purge, principal, discardLocalChanges) {
 }
 async function logoutGateSnapshot(profile) {
   const files = await Promise.all([REPLICA_GATE_FILE3, REPLICA_DENY_FLOOR_FILE].map(async (name) => {
-    const path = join14(profilePath8(profile), name);
+    const path = join15(profilePath9(profile), name);
     try {
       const file = await lstat7(path, { bigint: true });
       return { bytes: await readFile9(path, "utf8"), dev: String(file.dev), ino: String(file.ino) };
@@ -34409,7 +35978,7 @@ async function finishProfileLogout(ctx, options = {}) {
           let remotePending = false;
           try {
             const pending = JSON.parse(await readFile9(
-              join14(profilePath8(ctx.profile), REPLICA_LOGOUT_PENDING_FILE4),
+              join15(profilePath9(ctx.profile), REPLICA_LOGOUT_PENDING_FILE4),
               "utf8"
             ));
             pendingMarker = pending;
@@ -34481,7 +36050,7 @@ async function finishProfileLogout(ctx, options = {}) {
                 });
               } catch (error) {
                 if (pendingMarker?.v === 2 && typeof error === "object" && error !== null && "code" in error && error.code === "REPLICA_GATED" && "gate" in error && error.gate === "gate_unavailable") {
-                  const gatePath = join14(namedProfilePath3(ctx.profile), REPLICA_GATE_FILE3);
+                  const gatePath = join15(namedProfilePath3(ctx.profile), REPLICA_GATE_FILE3);
                   throw new CLIError(
                     "REPLICA_GATED",
                     `A damaged lock file from an interrupted logout; move it aside and re-run \`tc auth logout\`: ${gatePath}. Inspect it first to ensure it is not a valid replacement. ` + (profile.authSignedOut === true ? "The profile is already signed out; credentials remain removed, while replica data and the marker stay intact." : "Credentials and data stay intact; the marker remains and cleanup did not proceed."),
@@ -34521,7 +36090,7 @@ async function finishProfileLogout(ctx, options = {}) {
             options.discardLocalChanges === true
           );
         } else {
-          const gate = await readGateSnapshot(profilePath8(ctx.profile));
+          const gate = await readGateSnapshot(profilePath9(ctx.profile));
           if (roots.length || gate && (gate.principalHash !== null || gate.intents.length)) {
             throw new CLIError(
               "REPLICA_GATED",
@@ -34886,6 +36455,8 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
             delegationData = approval.session;
           } else {
             delegationData = await startAuthFlow(profile.did, {
+              profileName: ctx.profile,
+              expectedOwner: pinnedOwner(profile),
               jwk: key,
               host: ctx.host,
               permissions: request,
@@ -35570,6 +37141,7 @@ async function activateAndStoreOpenKeyGrants(profileName2, host, node, grants, s
     }
     await appendAdditionalDelegations(profileName2, records);
   });
+  for (const { delegation } of grants) await completeApprovalResult(profileName2, delegation);
 }
 async function acquireOpenKeyApproval(params) {
   assertNoCaveatLimits(params.requested);
@@ -35593,6 +37165,8 @@ async function acquireOpenKeyApproval(params) {
   const request = grantRequestPermissions(params.requested, anchorSpace);
   const acquireOpenKey = params.openKeyAcquisition ?? startAuthFlow;
   const delegationData = await acquireOpenKey(params.profile.did, {
+    profileName: params.ctx.profile,
+    expectedOwner: pinnedOwner(params.profile),
     jwk: key,
     host: params.ctx.host,
     permissions: request,
@@ -35676,6 +37250,8 @@ async function ensureDelegationAuthority(params) {
     for (const group of groupPermissionsBySpace(params.requested)) {
       const request = grantRequestPermissions(group, anchorSpace);
       const delegationData = await acquireOpenKey(params.profile.did, {
+        profileName: params.ctx.profile,
+        expectedOwner: pinnedOwner(params.profile),
         jwk: key,
         host: params.ctx.host,
         permissions: request,
@@ -35711,7 +37287,7 @@ async function ensureDelegationAuthority(params) {
 }
 var OPENKEY_AGENT_MAX_LIFETIME_MS = parseRequestedExpiry(APPS_AGENT_EXPIRY).durationMs;
 function assertOpenKeyAgentRequest(requested) {
-  if (requested.some((permission) => isRawEncryptionPermission(permission) || isRawCidRevocationPermission(permission))) {
+  if (requested.some((permission2) => isRawEncryptionPermission(permission2) || isRawCidRevocationPermission(permission2))) {
     throw new CLIError(
       "RAW_RECAP_RESOURCE_UNSUPPORTED",
       "OpenKey cannot approve raw urn:cid or raw encryption authority for an agent request.",
@@ -35784,9 +37360,9 @@ async function askYesNo(question, cancelMessage) {
 }
 async function confirmPermissionRequest(permissions) {
   process.stderr.write("\n" + theme.heading("Additional Permissions") + "\n");
-  for (const permission of permissions) {
-    const dangerous = isDangerousPermission(permission);
-    const line = `  ${permissionConsentLine(permission)}`;
+  for (const permission2 of permissions) {
+    const dangerous = isDangerousPermission(permission2);
+    const line = `  ${permissionConsentLine(permission2)}`;
     process.stderr.write((dangerous ? theme.warn(line) : theme.value(line)) + "\n");
   }
   process.stderr.write("\n");
@@ -35803,9 +37379,9 @@ async function requirePermissionConsent(permissions, yes) {
     );
   }
 }
-function isDangerousPermission(permission) {
-  if (permission.path === "" || permission.path === "/") return true;
-  return permission.actions.some(
+function isDangerousPermission(permission2) {
+  if (permission2.path === "" || permission2.path === "/") return true;
+  return permission2.actions.some(
     (action) => action.includes("*") || action.endsWith("/write") || action.endsWith("/admin") || action.endsWith("/schema") || action.endsWith("/del")
   );
 }
@@ -35830,14 +37406,14 @@ function parseExpiryOption(raw) {
 function groupPermissionsBySpace(permissions) {
   const groups = /* @__PURE__ */ new Map();
   const rawEntries = [];
-  for (const permission of permissions) {
-    if (isRawEncryptionPermission(permission) || isRawCidRevocationPermission(permission)) {
-      rawEntries.push(permission);
+  for (const permission2 of permissions) {
+    if (isRawEncryptionPermission(permission2) || isRawCidRevocationPermission(permission2)) {
+      rawEntries.push(permission2);
       continue;
     }
-    const key = normalizePkhIdentifier(permission.space ?? "");
+    const key = normalizePkhIdentifier(permission2.space ?? "");
     const group = groups.get(key) ?? [];
-    group.push(permission);
+    group.push(permission2);
     groups.set(key, group);
   }
   const grouped = Array.from(groups.values());
@@ -35867,15 +37443,15 @@ function verifyOpenKeyApproval(data, requested, host, proof) {
   const returnedSpace = data.spaceId;
   const effective = session.permissions;
   const spaced = effective.filter(
-    (permission) => !isRawEncryptionPermission(permission) && !isRawCidRevocationPermission(permission)
+    (permission2) => !isRawEncryptionPermission(permission2) && !isRawCidRevocationPermission(permission2)
   );
-  const primary = spaced.find((permission) => permission.service !== "tinycloud.capabilities") ?? spaced[0] ?? effective[0];
-  const resources = effective.map((permission) => ({
-    service: permission.service.slice("tinycloud.".length),
-    space: isRawCidRevocationPermission(permission) ? permission.space : isVerifiedRawEncryptionPermission(permission) ? "encryption" : returnedSpace,
-    path: permission.path,
-    actions: [...permission.actions],
-    ...permission.caveats === void 0 ? {} : { caveats: structuredClone(permission.caveats) }
+  const primary = spaced.find((permission2) => permission2.service !== "tinycloud.capabilities") ?? spaced[0] ?? effective[0];
+  const resources = effective.map((permission2) => ({
+    service: permission2.service.slice("tinycloud.".length),
+    space: isRawCidRevocationPermission(permission2) ? permission2.space : isVerifiedRawEncryptionPermission(permission2) ? "encryption" : returnedSpace,
+    path: permission2.path,
+    actions: [...permission2.actions],
+    ...permission2.caveats === void 0 ? {} : { caveats: structuredClone(permission2.caveats) }
   }));
   const ownerParts = session.ownerDid.split(":");
   const delegation = {
@@ -35893,6 +37469,7 @@ function verifyOpenKeyApproval(data, requested, host, proof) {
     // Verified above; replay rebuilds the CACAO from it before trusting the grant.
     siweProof: { siwe: data.siwe, signature: data.signature }
   };
+  trackApprovalResult(data, delegation);
   return { delegation, session };
 }
 async function rotateAuthKey(profileName2, host, options = {}) {
@@ -35983,7 +37560,7 @@ async function persistCurrentLocalSession(profileName2, profile, session, replic
       );
     }
     try {
-      await lstat7(join14(profilePath8(profileName2), REPLICA_LOGOUT_PENDING_FILE4));
+      await lstat7(join15(profilePath9(profileName2), REPLICA_LOGOUT_PENDING_FILE4));
       throw new CLIError(
         "PROFILE_CHANGED_DURING_LOGIN",
         "A durable logout started while the local grant was in flight; its session and key were not restored.",
@@ -36130,10 +37707,10 @@ function reportDeclined(declined, signed) {
   if (declined.length === 0) return;
   process.stderr.write(
     `${theme.warn("Not granted in this session:")}
-${declined.map((permission) => `  ${compactPermission(permission)}`).join("\n")}
+${declined.map((permission2) => `  ${compactPermission(permission2)}`).join("\n")}
 `
   );
-  if (declined.some((permission) => isRawEncryptionPermission(permission) && signed?.some((entry) => isRawEncryptionPermission(entry) && !isVerifiedRawEncryptionPermission(entry) && normalizePkhIdentifier(entry.path) === normalizePkhIdentifier(permission.path)))) {
+  if (declined.some((permission2) => isRawEncryptionPermission(permission2) && signed?.some((entry) => isRawEncryptionPermission(entry) && !isVerifiedRawEncryptionPermission(entry) && normalizePkhIdentifier(entry.path) === normalizePkhIdentifier(permission2.path)))) {
     process.stderr.write(`${theme.warn("OpenKey signed decrypt inside the space; the TinyCloud node refuses that. The OpenKey deployment is too old for agent secret reads.")}
 `);
   }
@@ -36174,7 +37751,7 @@ async function refreshPreparedOpenKeySession(params) {
   if (options.force !== true) await assertShareHistoryAllowsKeyDrop(profileName2, "login");
   const replicationConfig = createCliReplicationConfig(profileName2, replication, { debug: false, quiet: true }, true);
   if (!replicationConfig) throw new CLIError("V2_REQUIRED", "Replica configuration is unavailable; no approval was started.", ExitCode.AUTH_REQUIRED);
-  const space = permissions.find((permission) => permission.service === "tinycloud.kv")?.space ?? ownerSpaceId("default", owner);
+  const space = permissions.find((permission2) => permission2.service === "tinycloud.kv")?.space ?? ownerSpaceId("default", owner);
   const capabilityRequest = composeManifestRequest([{
     app_id: "tc-cli",
     name: "TinyCloud CLI",
@@ -36197,7 +37774,7 @@ async function refreshPreparedOpenKeySession(params) {
   let handoff;
   let preparedDid;
   let handedBackSiwe;
-  const gateWasActive = await readGateSnapshot(profilePath8(profileName2)).then((gate) => gate !== void 0 && gate.principalHash !== null, () => true);
+  const gateWasActive = await readGateSnapshot(profilePath9(profileName2)).then((gate) => gate !== void 0 && gate.principalHash !== null, () => true);
   try {
     if (namedKeys !== void 0) process.stderr.write(KEYS_APPROVAL_NOTE(namedKeys.prefix));
     await node.signInWithOpenKey(async (prepared) => {
@@ -36372,7 +37949,7 @@ async function refreshPreparedKeysSession(params) {
 async function undoPreparedAttempt(profileName2, node, owner, gateWasActive) {
   if (!gateWasActive) {
     const undone = await ProfileManager.withLock(profileName2, async () => {
-      const gate = await readGateSnapshot(profilePath8(profileName2));
+      const gate = await readGateSnapshot(profilePath9(profileName2));
       if (gate === void 0 || gate.principalHash !== await principalHashOf(gate.salt, owner)) return false;
       if (await ProfileManager.getSession(profileName2) !== null) return false;
       await node.signOut();
@@ -36384,6 +37961,7 @@ async function undoPreparedAttempt(profileName2, node, owner, gateWasActive) {
 }
 async function refreshOpenKeySession(profileName2, host, options = {}) {
   await recoverPendingLogout(profileName2);
+  await completeApprovalResult(profileName2);
   const snapshot = await readProfileSnapshot(profileName2);
   const profile = snapshot.profile ?? await ProfileManager.getProfile(profileName2);
   const expiry = options.expiry === void 0 ? void 0 : parseRequestedExpiry(options.expiry);
@@ -36423,12 +38001,15 @@ async function refreshOpenKeySession(profileName2, host, options = {}) {
       expiry
     });
   }
-  const fresh = snapshot.key === null ? generateKey2() : null;
-  const key = snapshot.key ?? fresh.jwk;
-  const sessionDid = fresh?.did ?? profile.sessionDid ?? profile.did;
-  const requestDid = fresh && profile.did.startsWith("did:key:") ? fresh.did : profile.did;
+  const pendingKey = snapshot.key === null ? await pendingApprovalKey(profileName2) : void 0;
+  const fresh = snapshot.key === null && pendingKey === void 0 ? generateKey2() : null;
+  const key = snapshot.key ?? pendingKey ?? fresh.jwk;
+  const sessionDid = fresh?.did ?? (pendingKey ? keyToDID(pendingKey) : profile.sessionDid ?? profile.did);
+  const requestDid = (fresh || pendingKey) && profile.did.startsWith("did:key:") ? sessionDid : profile.did;
   const acquireOpenKey = options.openKeyAcquisition ?? startAuthFlow;
   const delegationData = await acquireOpenKey(requestDid, {
+    profileName: profileName2,
+    expectedOwner,
     paste: options.paste,
     noPopup: options.noPopup,
     jwk: key,
@@ -36477,8 +38058,10 @@ async function refreshOpenKeySession(profileName2, host, options = {}) {
     key,
     session: sanitizedSession,
     profile: updatedProfile,
+    durable: approvalResultNeedsAck(delegationData),
     ...permissions && verifiedOwner ? { approved: { scope: sanitizedSession.permissions, ownerDid: verifiedOwner, replaceSession: options.replaceSession === true } } : {}
   });
+  await completeApprovalResult(profileName2, delegationData);
   warnIfNotPrimaryKey(verifiedOwner, ownerKeyPrimary);
   announceFirstOwner(profileName2, expectedOwner, verifiedOwner);
   return { profile: updatedProfile, delegationData: sanitizedSession, declined, legacyNested };
@@ -37286,7 +38869,7 @@ function pinnedApp(appId) {
 }
 
 // src/lib/apps-install.ts
-import { createHash as createHash3 } from "crypto";
+import { createHash as createHash4 } from "crypto";
 function errorMessage2(error) {
   return error instanceof Error ? error.message : String(error);
 }
@@ -37299,7 +38882,7 @@ var AppsInstallError = class extends Error {
   }
 };
 function sha256Hex2(bytes) {
-  return createHash3("sha256").update(bytes).digest("hex");
+  return createHash4("sha256").update(bytes).digest("hex");
 }
 function bytesEqual(a, b) {
   return a.length === b.length && Buffer.from(a).equals(Buffer.from(b));
@@ -37824,9 +39407,9 @@ import { readFile as readFile11 } from "fs/promises";
 init_storage();
 init_errors();
 init_constants();
-import { randomUUID as randomUUID2 } from "crypto";
-import { lstat as lstat8, open as open11, rename as rename3, rm as rm5 } from "fs/promises";
-import { basename as basename2, dirname as dirname7, join as join15 } from "path";
+import { randomUUID as randomUUID3 } from "crypto";
+import { lstat as lstat8, open as open13, rename as rename3, rm as rm5 } from "fs/promises";
+import { basename as basename2, dirname as dirname7, join as join16 } from "path";
 async function validatePrivateOutput(path, label = "output") {
   try {
     const destination = await lstat8(path);
@@ -37849,10 +39432,10 @@ async function validatePrivateOutput(path, label = "output") {
 async function writePrivateOutput(path, value, label = "output") {
   await validatePrivateOutput(path, label);
   const parentPath = dirname7(path);
-  const temp = join15(parentPath, `.${basename2(path)}.${randomUUID2()}.tmp`);
+  const temp = join16(parentPath, `.${basename2(path)}.${randomUUID3()}.tmp`);
   let created = false;
   try {
-    const handle = await open11(temp, "wx", PRIVATE_FILE_MODE);
+    const handle = await open13(temp, "wx", PRIVATE_FILE_MODE);
     created = true;
     try {
       await handle.writeFile(value);
@@ -37867,7 +39450,7 @@ async function writePrivateOutput(path, value, label = "output") {
     throw new CLIError("ERROR", `Could not write ${label.toLowerCase()} "${path}"${code5}.`, ExitCode.ERROR);
   }
   try {
-    const parent = await open11(parentPath, "r");
+    const parent = await open13(parentPath, "r");
     try {
       await parent.sync();
     } finally {
@@ -38533,14 +40116,8 @@ var ONBOARD_STEPS = [
     ]
   }
 ];
-var ApprovalNeeded = class extends Error {
-  constructor(approvalUrl) {
-    super("approval needed");
-    this.approvalUrl = approvalUrl;
-  }
-};
 function registerOnboardCommand(program) {
-  program.command("onboard").description(`Set up this computer to act for its owner: a profile, the owner's OpenKey sign-in (or new account), and a starting grant for 30 days (read, change and delete in the applications space; read which spaces and apps exist). Each run does the next approval: it prints the approval link and exits ${ExitCode.PENDING}; run it again with the code OpenKey shows. Exits 0 when onboarding is complete.`).option("--code <code>", "The code OpenKey showed after the owner approved the last link").action(async (options, cmd) => {
+  program.command("onboard").description("Set up this computer with its owner's OpenKey approvals and a starting grant for 30 days. Prints a short approval link, automatically retrieves and verifies the result, saves it durably, then acknowledges delivery. Re-run an interrupted command to resume.").option("--code <code>", "The code OpenKey showed after the owner approved the last link").action(async (options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
@@ -38553,59 +40130,51 @@ function registerOnboardCommand(program) {
           ExitCode.USAGE_ERROR
         );
       }
+      await completeApprovalResult(ctx.profile);
       let code5 = typeof options.code === "string" && options.code.trim() !== "" ? options.code.trim() : void 0;
       const acquire = async (did, flow = {}) => {
-        if (code5 === void 0) throw new ApprovalNeeded(buildAuthUrl(did, flow));
-        const pasted = code5;
-        code5 = void 0;
-        return delegationFromInput(pasted, did, flow);
+        if (code5 !== void 0) {
+          const pasted = code5;
+          code5 = void 0;
+          return delegationFromInput(pasted, did, flow);
+        }
+        return startAuthFlow(did, {
+          ...flow,
+          profileName: ctx.profile,
+          noPopup: true,
+          onApprovalRequest: ({ approvalUrl }) => {
+            console.error(`${flow.reason}
+Approve in OpenKey: ${approvalUrl}
+Waiting for approval. Re-run this command after an interruption; no code is needed.`);
+          }
+        });
       };
       for (const [index, step] of ONBOARD_STEPS.entries()) {
         const reason = `TinyCloud onboarding, step ${index + 1} of ${ONBOARD_STEPS.length}: ${step.asks}`;
-        try {
-          const session2 = await ProfileManager.getSession(ctx.profile);
-          if (!sessionStateIsUsable(storedSessionState(session2, profile).state)) {
-            const { delegationData } = await refreshOpenKeySession(ctx.profile, ctx.host, {
-              permissions: step.permissions,
-              expiry: ONBOARD_EXPIRY,
-              reason,
-              persistHost: globalOpts.host !== void 0,
-              openKeyAcquisition: acquire
-            });
-            await ensureSpaceSetup({ profile: ctx.profile, host: ctx.host }, delegationData, delegationData.permissions);
-            profile = await ProfileManager.getProfile(ctx.profile);
-            continue;
-          }
-          await ensureDelegationAuthority({
-            ctx,
-            profile,
-            node: await ensureAuthenticated(ctx),
-            requested: await resolvePermissionSpaces(step.permissions, ctx.profile),
-            expiryOption: ONBOARD_EXPIRY,
+        const session2 = await ProfileManager.getSession(ctx.profile);
+        if (!sessionStateIsUsable(storedSessionState(session2, profile).state)) {
+          const { delegationData } = await refreshOpenKeySession(ctx.profile, ctx.host, {
+            permissions: step.permissions,
+            expiry: ONBOARD_EXPIRY,
             reason,
-            yes: true,
+            persistHost: globalOpts.host !== void 0,
             openKeyAcquisition: acquire
           });
-        } catch (error) {
-          if (!(error instanceof ApprovalNeeded)) throw error;
-          const next = `${CLI_NAME29} --profile ${ctx.profile} onboard --code <code>`;
-          output({
-            onboarded: false,
-            profile: ctx.profile,
-            step: index + 1,
-            steps: ONBOARD_STEPS.length,
-            asks: step.asks,
-            approvalUrl: error.approvalUrl,
-            next
-          }, () => [
-            `Step ${index + 1} of ${ONBOARD_STEPS.length}: ${step.asks}`,
-            `Open this link, sign in or create an account, and approve:`,
-            `  ${error.approvalUrl}`,
-            `Then run: ${next}`
-          ].join("\n"));
-          process.exitCode = ExitCode.PENDING;
-          return;
+          await ensureSpaceSetup({ profile: ctx.profile, host: ctx.host }, delegationData, delegationData.permissions);
+          profile = await ProfileManager.getProfile(ctx.profile);
+          continue;
         }
+        await ensureDelegationAuthority({
+          ctx,
+          profile,
+          node: await ensureAuthenticated(ctx),
+          requested: await resolvePermissionSpaces(step.permissions, ctx.profile),
+          expiryOption: ONBOARD_EXPIRY,
+          reason,
+          yes: true,
+          exactApproval: true,
+          openKeyAcquisition: acquire
+        });
       }
       profile = await ProfileManager.getProfile(ctx.profile);
       const session = await ProfileManager.getSession(ctx.profile);
@@ -38851,8 +40420,8 @@ init_profile_replicas();
 import { CLI_NAME as CLI_NAME31 } from "@tinycloud/operations/cli-name";
 import { randomBytes as randomBytes7 } from "crypto";
 import { constants as fsConstants5 } from "fs";
-import { mkdir as mkdir5, open as open12, readdir as readdir6, rename as rename4, unlink as unlink5, lstat as lstat9 } from "fs/promises";
-import { basename as basename3, dirname as dirname8, join as join16, resolve as resolve5 } from "path";
+import { mkdir as mkdir5, open as open14, readdir as readdir6, rename as rename4, unlink as unlink5, lstat as lstat9 } from "fs/promises";
+import { basename as basename3, dirname as dirname8, join as join17, resolve as resolve5 } from "path";
 
 // src/lib/replication-report.ts
 function percentile(values, fraction) {
@@ -38944,7 +40513,7 @@ init_theme();
 import {
   ProfileSymlinkError as ProfileSymlinkError3,
   ProfileDeletedError as ProfileDeletedError3,
-  profilePath as profilePath9,
+  profilePath as profilePath10,
   readAdditionalDelegations as readAdditionalDelegations2,
   readSession as readSession2,
   withProfileLock as withProfileLock5,
@@ -39026,7 +40595,7 @@ async function replicaNames(profile) {
       if (entry.isSymbolicLink()) throw localPathChanged(profile);
       if (!NAME.test(entry.name) || !entry.isDirectory()) continue;
       const present = await withPinnedLocalDirectory(profile, root, entry.name, async (directory) => {
-        const database = await lstat9(join16(directory, "replica.db"), { bigint: true }).catch((error) => {
+        const database = await lstat9(join17(directory, "replica.db"), { bigint: true }).catch((error) => {
           if (error.code === "ENOENT") return null;
           throw error;
         });
@@ -39046,11 +40615,11 @@ function assertName(name) {
   return name;
 }
 async function withReplicaRoot(profile, action, create5 = false) {
-  const profileDirectory = profilePath9(profile);
+  const profileDirectory = profilePath10(profile);
   const readRoot = async (directory, recheckProfile) => {
     if (create5) {
       if (recheckProfile) await recheckProfile();
-      await mkdir5(join16(directory, "replicas"), { mode: 448 }).catch((error) => {
+      await mkdir5(join17(directory, "replicas"), { mode: 448 }).catch((error) => {
         if (error.code !== "EEXIST") throw error;
       });
     }
@@ -39076,7 +40645,7 @@ async function withReplicaDirectory(profile, name, action, create5 = false) {
   const result = await withReplicaRoot(profile, async (root, recheckRoot, recheckProfile) => {
     if (create5) {
       await recheckRoot();
-      await mkdir5(join16(root, name), { mode: 448 }).catch((error) => {
+      await mkdir5(join17(root, name), { mode: 448 }).catch((error) => {
         if (error.code !== "EEXIST") throw error;
       });
     }
@@ -39087,7 +40656,7 @@ async function withReplicaDirectory(profile, name, action, create5 = false) {
       async (_directory, path, expectedDirectory, recheckChild) => {
         await recheckRoot();
         await recheckChild();
-        const database = await lstat9(join16(_directory, "replica.db"), { bigint: true }).catch((error) => {
+        const database = await lstat9(join17(_directory, "replica.db"), { bigint: true }).catch((error) => {
           if (error.code === "ENOENT") return null;
           throw error;
         });
@@ -39150,7 +40719,7 @@ function assertLegacyLogoutClear(dir) {
 }
 async function withLegacyReplicaRead(profile, action) {
   await withProfileLock5(profile, async () => {
-    const dir = profilePath9(profile);
+    const dir = profilePath10(profile);
     assertLegacyLogoutClear(dir);
     const session = await readSession2(profile);
     let checkDelivery;
@@ -39317,8 +40886,8 @@ function describeStatus(status) {
 }
 async function writeFileAtomic(path, bytes) {
   const target = resolve5(path);
-  const temp = join16(dirname8(target), `.${basename3(target)}.${randomBytes7(6).toString("hex")}.tmp`);
-  const handle = await open12(temp, fsConstants5.O_CREAT | fsConstants5.O_EXCL | fsConstants5.O_WRONLY, 384);
+  const temp = join17(dirname8(target), `.${basename3(target)}.${randomBytes7(6).toString("hex")}.tmp`);
+  const handle = await open14(temp, fsConstants5.O_CREAT | fsConstants5.O_EXCL | fsConstants5.O_WRONLY, 384);
   try {
     await handle.writeFile(bytes);
     await handle.sync();
@@ -39360,14 +40929,14 @@ async function assertNamedLocalEntry(profile, path, expected, kind) {
   if (!current || current.isSymbolicLink() || (kind === "directory" ? !current.isDirectory() : !current.isFile()) || !sameLocalEntry(expected, current)) throw localPathChanged(profile);
 }
 async function withPinnedLocalDirectory(profile, parent, name, action) {
-  const path = join16(parent, name);
+  const path = join17(parent, name);
   const before = await lstat9(path, { bigint: true }).catch((error) => {
     if (error.code === "ENOENT") return null;
     throw error;
   });
   if (!before) return null;
   if (before.isSymbolicLink() || !before.isDirectory()) throw localPathChanged(profile);
-  const handle = await open12(path, fsConstants5.O_RDONLY | fsConstants5.O_DIRECTORY | fsConstants5.O_NOFOLLOW).catch((error) => {
+  const handle = await open14(path, fsConstants5.O_RDONLY | fsConstants5.O_DIRECTORY | fsConstants5.O_NOFOLLOW).catch((error) => {
     if (error.code === "ELOOP" || error.code === "ENOTDIR" || error.code === "ENOENT") throw localPathChanged(profile);
     throw error;
   });
@@ -39389,14 +40958,14 @@ async function withPinnedLocalDirectory(profile, parent, name, action) {
   }
 }
 async function readReportFile(profile, parent, name) {
-  const path = join16(parent, name);
+  const path = join17(parent, name);
   const before = await lstat9(path, { bigint: true }).catch((error) => {
     if (error.code === "ENOENT") return null;
     throw error;
   });
   if (!before) return null;
   if (before.isSymbolicLink() || !before.isFile()) throw localPathChanged(profile);
-  const handle = await open12(path, fsConstants5.O_RDONLY | fsConstants5.O_NOFOLLOW).catch((error) => {
+  const handle = await open14(path, fsConstants5.O_RDONLY | fsConstants5.O_NOFOLLOW).catch((error) => {
     if (error.code === "ELOOP" || error.code === "ENOTDIR" || error.code === "ENOENT") throw localPathChanged(profile);
     throw error;
   });
@@ -39745,7 +41314,7 @@ init_warnings();
 init_constants();
 import { CLI_NAME as CLI_NAME33 } from "@tinycloud/operations/cli-name";
 import { readFile as readFile14 } from "fs/promises";
-import { join as join17 } from "path";
+import { join as join18 } from "path";
 import { constants as osConstants, homedir, hostname, userInfo } from "os";
 import { appSecretScope } from "@tinycloud/sdk-core";
 import { invokeOperation as invokeOperation3 } from "@tinycloud/operations";
@@ -39770,36 +41339,6 @@ init_sdk();
 init_replication_registry();
 init_session_expired();
 init_space();
-
-// src/lib/browser.ts
-init_formatter();
-init_theme();
-import open13 from "open";
-var LAUNCH_CHECK_MS = 1e3;
-async function tryOpenBrowser(url) {
-  let launcher;
-  try {
-    launcher = await open13(url);
-  } catch {
-    return false;
-  }
-  return new Promise((resolve9) => {
-    const timer = setTimeout(() => resolve9(true), LAUNCH_CHECK_MS);
-    launcher.once("error", () => {
-      clearTimeout(timer);
-      resolve9(false);
-    });
-    launcher.once("exit", (code5) => {
-      clearTimeout(timer);
-      resolve9(code5 === 0);
-    });
-  });
-}
-function warnBrowserNotOpened() {
-  process.stderr.write(shouldOutputJson() ? `${JSON.stringify({ warnings: [{ code: "BROWSER_OPEN_FAILED", reason: "open_failed" }] })}
-` : `${theme.warn("!")} Could not open a browser. Open the URL above yourself.
-`);
-}
 
 // src/lib/probe-child.ts
 import { spawn as nodeSpawn } from "child_process";
@@ -40345,7 +41884,7 @@ function resolveSecretListPrefix(options = {}) {
 }
 function resolveProfilesDir() {
   const home = process.env.TC_HOME ?? process.env.HOME ?? process.env.USERPROFILE ?? homedir();
-  return join17(home, ".tinycloud", "profiles");
+  return join18(home, ".tinycloud", "profiles");
 }
 async function ensureSecretsNode(ctx, options, openKeyAcquisition, selectedProfile) {
   const auth = authOptions(options);
@@ -40417,7 +41956,7 @@ function assertOwnerApprovalPossible(profileName2, profile, action, name, missin
   const command = `${CLI_NAME33} secrets ${action === "del" ? "delete" : action}${name ? ` ${name}` : ""}`;
   throw new CLIError(
     "PERMISSION_DENIED",
-    action === "get" ? missing.length > 0 && missing.every((permission) => permission.service === "tinycloud.encryption" && Array.isArray(permission.actions) && permission.actions.length > 0 && permission.actions.every((capability) => capability === SECRET_DECRYPT_CAPABILITY)) ? `Profile "${profileName2}" lacks the scoped decrypt authority (${SECRET_DECRYPT_CAPABILITY}) needed to read secret "${name}", and requesting it needs an interactive browser approval.` : `Profile "${profileName2}" lacks a scoped read or decrypt grant needed to read secret "${name}", and requesting it needs an interactive browser approval.` : `Profile "${profileName2}" holds no grant for \`${command}\`, and requesting one needs an interactive browser approval.`,
+    action === "get" ? missing.length > 0 && missing.every((permission2) => permission2.service === "tinycloud.encryption" && Array.isArray(permission2.actions) && permission2.actions.length > 0 && permission2.actions.every((capability) => capability === SECRET_DECRYPT_CAPABILITY)) ? `Profile "${profileName2}" lacks the scoped decrypt authority (${SECRET_DECRYPT_CAPABILITY}) needed to read secret "${name}", and requesting it needs an interactive browser approval.` : `Profile "${profileName2}" lacks a scoped read or decrypt grant needed to read secret "${name}", and requesting it needs an interactive browser approval.` : `Profile "${profileName2}" holds no grant for \`${command}\`, and requesting one needs an interactive browser approval.`,
     ExitCode.PERMISSION_DENIED,
     {
       hint: scopedSecretLoginHint(profileName2)
@@ -40605,28 +42144,28 @@ function hasPermissionAction(actions, action) {
   );
 }
 function delegationCoversPath(permissions, path, space = SECRETS_SPACE2) {
-  return permissions.some((permission) => {
-    if (permission.service !== "tinycloud.kv") return false;
-    if (!permissionTargetsSpace(permission, space)) return false;
-    if (!hasPermissionAction(permission.actions, secretCapabilityAction("get"))) return false;
-    return permission.path === path || permission.path.endsWith("/") && path.startsWith(permission.path);
+  return permissions.some((permission2) => {
+    if (permission2.service !== "tinycloud.kv") return false;
+    if (!permissionTargetsSpace(permission2, space)) return false;
+    if (!hasPermissionAction(permission2.actions, secretCapabilityAction("get"))) return false;
+    return permission2.path === path || permission2.path.endsWith("/") && path.startsWith(permission2.path);
   });
 }
 function spaceMatches(granted, requested) {
   return granted === requested;
 }
-function permissionTargetsSpace(permission, expectedSpace) {
-  if (permission.service !== "tinycloud.kv") return false;
-  if (typeof permission.space !== "string") return false;
-  const space = permission.space.trim();
+function permissionTargetsSpace(permission2, expectedSpace) {
+  if (permission2.service !== "tinycloud.kv") return false;
+  if (typeof permission2.space !== "string") return false;
+  const space = permission2.space.trim();
   if (space === "") return false;
   return spaceMatches(space, expectedSpace);
 }
 function delegationCoversDecrypt(permissions, networkId) {
-  return permissions.some((permission) => {
-    if (permission.service !== "tinycloud.encryption") return false;
-    if (!hasPermissionAction(permission.actions, SECRET_DECRYPT_CAPABILITY)) return false;
-    return permission.path === networkId;
+  return permissions.some((permission2) => {
+    if (permission2.service !== "tinycloud.encryption") return false;
+    if (!hasPermissionAction(permission2.actions, SECRET_DECRYPT_CAPABILITY)) return false;
+    return permission2.path === networkId;
   });
 }
 function parseDelegationExpiry(expiry) {
@@ -40727,7 +42266,7 @@ async function loadDelegationCandidates(source) {
     }
   }
   try {
-    const importedPath = join17(resolveProfilesDir(), source, "additional-delegations.json");
+    const importedPath = join18(resolveProfilesDir(), source, "additional-delegations.json");
     const raw = JSON.parse(await readFile14(importedPath, "utf8"));
     return normalizeDelegationCandidates(raw, source);
   } catch (error) {
@@ -40758,7 +42297,7 @@ function selectDelegationCandidate(candidates, source, secretPath, space = SECRE
     );
   }
   const secretsSpaceCandidates = liveCandidates.filter(
-    (candidate) => candidate.permissions.some((permission) => permissionTargetsSpace(permission, space))
+    (candidate) => candidate.permissions.some((permission2) => permissionTargetsSpace(permission2, space))
   );
   if (secretsSpaceCandidates.length === 0) {
     throw new CLIError(
@@ -41438,14 +42977,14 @@ function registerSecretsCommand(program, openKeyAcquisition) {
         "Ensuring encryption network...",
         () => node.ensureEncryptionNetwork(networkName)
       );
-      const permission = {
+      const permission2 = {
         service: "tinycloud.encryption",
         path: descriptor.networkId,
         actions: ["decrypt"]
       };
       const result = await withSpinner(
         `Granting decrypt permission to ${recipientDid}...`,
-        () => node.delegateTo(recipientDid, [permission])
+        () => node.delegateTo(recipientDid, [permission2])
       );
       outputJson({
         networkId: descriptor.networkId,
@@ -41687,9 +43226,9 @@ function receiveJson(result, path) {
 
 // src/share/io.ts
 import { constants } from "fs";
-import { lstat as lstat10, mkdir as mkdir6, mkdtemp, open as open14, readFile as readFile15, realpath as realpath2, stat as stat6, link as link3, rename as rename5, rm as rm6, unlink as unlink6 } from "fs/promises";
+import { lstat as lstat10, mkdir as mkdir6, mkdtemp, open as open15, readFile as readFile15, realpath as realpath2, stat as stat6, link as link3, rename as rename5, rm as rm6, unlink as unlink6 } from "fs/promises";
 import { randomBytes as randomBytes8 } from "crypto";
-import { basename as basename4, join as join18, resolve as resolve6, sep as sep3 } from "path";
+import { basename as basename4, join as join19, resolve as resolve6, sep as sep3 } from "path";
 init_errors();
 var MAX_SHARE_STDIN_BYTES = 100 * 1024 * 1024;
 var MAX_SHARE_URL_BYTES = 64 * 1024;
@@ -41743,7 +43282,7 @@ async function assertDirectory(path) {
   const segments = absolute.split(sep3).filter(Boolean);
   let current = absolute.startsWith(sep3) ? sep3 : "";
   for (const segment of segments) {
-    current = current === sep3 ? join18(current, segment) : join18(current, segment);
+    current = current === sep3 ? join19(current, segment) : join19(current, segment);
     try {
       const info = await lstat10(current);
       if (info.isSymbolicLink()) {
@@ -41763,19 +43302,19 @@ async function writeShareOutput(directory, filename, bytes, force) {
   const outputDirectory = resolve6(directory);
   await assertDirectory(outputDirectory);
   const safeName = safeFilename(filename);
-  const directoryHandle = await open14(outputDirectory, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
+  const directoryHandle = await open15(outputDirectory, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
   const stableDirectory = await realpath2(outputDirectory);
-  const outputPath = join18(stableDirectory, safeName);
+  const outputPath = join19(stableDirectory, safeName);
   const directoryIdentity = await directoryHandle.stat();
   const assertStableDirectory = async () => {
     const current = await stat6(stableDirectory);
     if (current.dev !== directoryIdentity.dev || current.ino !== directoryIdentity.ino) throw new Error("OUTPUT_EXISTS");
   };
   await assertStableDirectory();
-  const stagingDirectory = await mkdtemp(join18(stableDirectory, ".tinycloud-share-stage-"));
+  const stagingDirectory = await mkdtemp(join19(stableDirectory, ".tinycloud-share-stage-"));
   const stagingInfo = await lstat10(stagingDirectory);
   if (!stagingInfo.isDirectory() || (stagingInfo.mode & 511) !== 448) throw new Error("OUTPUT_EXISTS");
-  const stagingPath = join18(stagingDirectory, `.tinycloud-share-${randomBytes8(16).toString("hex")}.tmp`);
+  const stagingPath = join19(stagingDirectory, `.tinycloud-share-${randomBytes8(16).toString("hex")}.tmp`);
   let temporaryPath;
   let handle;
   try {
@@ -41787,7 +43326,7 @@ async function writeShareOutput(directory, filename, bytes, force) {
       if (error.code !== "ENOENT") throw error;
     }
     temporaryPath = stagingPath;
-    handle = await open14(temporaryPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 384);
+    handle = await open15(temporaryPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 384);
     await handle.writeFile(bytes);
     await handle.close();
     handle = void 0;
@@ -41812,7 +43351,7 @@ async function writeShareOutput(directory, filename, bytes, force) {
     await rm6(stagingDirectory, { recursive: true, force: true });
     await directoryHandle.close();
   }
-  return join18(outputDirectory, safeName);
+  return join19(outputDirectory, safeName);
 }
 
 // src/commands/share.ts
@@ -41820,8 +43359,8 @@ init_profiles();
 
 // src/share/html-folder.ts
 import { constants as constants2, existsSync as existsSync2 } from "fs";
-import { lstat as lstat11, open as open15, readdir as readdir7, realpath as realpath3, stat as stat7 } from "fs/promises";
-import { basename as basename5, dirname as dirname9, isAbsolute, join as join19, relative as relativePath, resolve as resolve7, sep as sep4 } from "path";
+import { lstat as lstat11, open as open16, readdir as readdir7, realpath as realpath3, stat as stat7 } from "fs/promises";
+import { basename as basename5, dirname as dirname9, isAbsolute, join as join20, relative as relativePath, resolve as resolve7, sep as sep4 } from "path";
 
 // ../share-sdk/dist/html-bundle.js
 var UNSAFE_FILENAME_CODE_POINT3 = /[\p{Cc}\p{Cf}\p{Cs}\u2028\u2029]/u;
@@ -42175,9 +43714,9 @@ function scanMarkup(html, options) {
     if (comments > MAX_ARTIFACT_COMMENTS) fail("limit", "artifact page has too many comments");
   };
   while (index < length5) {
-    const open16 = html.indexOf("<", index);
-    if (open16 === -1) return;
-    index = open16 + 1;
+    const open17 = html.indexOf("<", index);
+    if (open17 === -1) return;
+    index = open17 + 1;
     const next = html[index] ?? "";
     if (html.startsWith("!--", index)) {
       countComment();
@@ -42778,7 +44317,7 @@ async function readRegularFile(root, path, relative, remaining, limit, hooks = {
     await hooks.beforeOpen?.();
     before = await lstat11(path);
     await hooks.afterLstat?.();
-    handle = await open15(path, constants2.O_RDONLY | (constants2.O_NOFOLLOW ?? 0) | (constants2.O_NONBLOCK ?? 0));
+    handle = await open16(path, constants2.O_RDONLY | (constants2.O_NOFOLLOW ?? 0) | (constants2.O_NONBLOCK ?? 0));
   } catch (error) {
     if (error.code === "ELOOP") return problem("symbolic link");
     if (isRaceError(error)) return problem(CHANGED);
@@ -42837,7 +44376,7 @@ async function listFolderDirectory(root, absolute, relative, hooks = {}) {
     if (before.isSymbolicLink()) return problem("symbolic link");
     if (!before.isDirectory()) return problem(CHANGED);
     await hooks.afterLstat?.();
-    const handle = await open15(absolute, constants2.O_RDONLY | (constants2.O_DIRECTORY ?? 0) | (constants2.O_NOFOLLOW ?? 0));
+    const handle = await open16(absolute, constants2.O_RDONLY | (constants2.O_DIRECTORY ?? 0) | (constants2.O_NOFOLLOW ?? 0));
     try {
       await hooks.afterOpen?.();
       const info = await handle.stat();
@@ -42894,7 +44433,7 @@ async function readHtmlFolder(directory, limit) {
         continue;
       }
       const path = relative === "" ? entry.name : `${relative}/${entry.name}`;
-      const child = join19(absolute, entry.name);
+      const child = join20(absolute, entry.name);
       if (entry.isSymbolicLink()) {
         problems.push({ code: "UNSUPPORTED_FOLDER_ENTRY", path, reason: "symbolic link" });
       } else if (entry.isDirectory()) {
@@ -44229,8 +45768,8 @@ function permissionFromRawRecap(value) {
 function normalizePermissions(entries) {
   const permissions = [];
   for (const entry of entries) {
-    const permission = permissionFromUnknown(entry);
-    if (permission) permissions.push(permission);
+    const permission2 = permissionFromUnknown(entry);
+    if (permission2) permissions.push(permission2);
   }
   return uniquePermissions(permissions);
 }
@@ -44335,8 +45874,8 @@ function formatProfile(profile) {
   lines.push(`  session: ${formatSession(profile.session)}`);
   if (profile.permissionsCompact.length > 0) {
     lines.push("  permissions:");
-    for (const permission of profile.permissionsCompact) {
-      lines.push(`    ${permission}`);
+    for (const permission2 of profile.permissionsCompact) {
+      lines.push(`    ${permission2}`);
     }
   }
   if (profile.delegations.length > 0) {
@@ -44827,6 +46366,10 @@ export {
 @noble/curves/esm/abstract/curve.js:
 @noble/curves/esm/abstract/edwards.js:
 @noble/curves/esm/ed25519.js:
+@noble/curves/esm/abstract/weierstrass.js:
+@noble/curves/esm/_shortw_utils.js:
+@noble/curves/esm/nist.js:
+@noble/curves/esm/p256.js:
   (*! noble-curves - MIT License (c) 2022 Paul Miller (paulmillr.com) *)
 */
 //# sourceMappingURL=legacy-entry.js.map
