@@ -47,14 +47,6 @@ const written = run("bash", ["-c", writerScript], env);
 if (written.status !== 0) fail("The complete MCP deploy environment file writer is not implemented.");
 const envFile = written.stdout.trim().split("\n").at(-1);
 if (!envFile || !envFile.startsWith(envDir)) fail("The complete deploy environment file was not created under RUNNER_TEMP.");
-const toolsRoot = process.env.MCP_DEPLOY_TOOLS ?? join(root, ".github/deploy-tools");
-const toolsRequire = createRequire(resolve(toolsRoot, "package.json"));
-const { parseEnvVars } = toolsRequire("@phala/cloud");
-const deployEnv = parseEnvVars(await readFile(envFile, "utf8"));
-const sdkValues = Object.fromEntries(deployEnv.map(({ key, value }) => [key, value]));
-for (const [key, value] of Object.entries(fixture)) {
-  if (sdkValues[key] !== value) fail(`Phala SDK parser did not preserve deploy value for ${key}.`);
-}
 let mergeAllowedEnvKeys;
 try {
   ({ mergeAllowedEnvKeys } = await import("./mcp-sync-allowed-envs.mjs"));
@@ -62,8 +54,9 @@ try {
   fail("The MCP allowed_envs synchronization helper is not implemented.");
 }
 const currentAllowed = ["LEGACY_CONFIG", "TC_MCP_STATE_SECRET", "CLOUDFLARE_API_TOKEN", "LEGACY_CONFIG"];
-const nextAllowed = mergeAllowedEnvKeys(currentAllowed, deployEnv.map(({ key }) => key));
-const expectedAllowed = [...new Set([...currentAllowed, ...Object.keys(fixture)])];
+const deployKeys = Object.keys(fixture);
+const nextAllowed = mergeAllowedEnvKeys(currentAllowed, deployKeys);
+const expectedAllowed = [...new Set([...currentAllowed, ...deployKeys])];
 if (JSON.stringify(nextAllowed) !== JSON.stringify(expectedAllowed)) {
   fail("Allowed-env merge did not preserve existing names and add each deploy key once.");
 }
@@ -121,11 +114,15 @@ globalThis.fetch = async (input) => {
 
 async function encryptWithPhala(file) {
   const nodeOptions = [process.env.NODE_OPTIONS, `--import=${pathToFileURL(shimPath).href}`].filter(Boolean).join(" ");
-  const result = run(bin, ["envs", "encrypt", "test-cvm", "--api-token", "test-only", "--env", file, "--no-newline"], {
+  const result = run(bin, ["envs", "encrypt", "test-cvm", "--env", file, "--no-newline"], {
+    PHALA_CLOUD_API_KEY: "test-only",
     PHALA_CLOUD_API_PREFIX: apiPrefix,
     PHALA_CLOUD_DIR: homeDir,
     NODE_OPTIONS: nodeOptions,
   });
+  if ([...Object.values(fixture), "test-only"].some((value) => result.stdout.includes(value) || result.stderr.includes(value))) {
+    fail("Pinned Phala CLI logged a deploy environment value.");
+  }
   if (result.status !== 0 || !/^[0-9a-f]+\n?$/.test(result.stdout)) {
     fail(`Pinned Phala env encryption failed locally (${result.status}): ${result.stderr.trim().slice(0, 400)}`);
   }
@@ -144,10 +141,22 @@ async function encryptWithPhala(file) {
   const parsed = await encryptWithPhala(envFile);
   const actual = Object.fromEntries((parsed.env ?? []).map(({ key, value }) => [key, value]));
   for (const [key, value] of Object.entries(fixture)) {
-    if (actual[key] !== value) fail(`Phala 1.1.22 did not preserve deploy value for ${key}.`);
+    if (!Buffer.from(actual[key] ?? "", "utf8").equals(Buffer.from(value, "utf8"))) {
+      fail(`Pinned Phala 1.1.22 CLI env-file round-trip did not preserve ${key} byte-for-byte.`);
+    }
   }
   if (Object.hasOwn(actual, "PHALA_CLOUD_API_KEY")) fail("Phala API token was included in the container environment.");
   if (Object.keys(actual).length !== Object.keys(fixture).length) fail("Deploy environment file contains an unexpected or missing key.");
+  const optionalEnvFile = join(envDir, "optional-native-credential.env");
+  const optionalState = "o".repeat(32);
+  await writeFile(optionalEnvFile, `TC_MCP_STATE_SECRET='${optionalState}'\n`, { mode: 0o600 });
+  const optionalParsed = await encryptWithPhala(optionalEnvFile);
+  const optionalValues = Object.fromEntries((optionalParsed.env ?? []).map(({ key, value }) => [key, value]));
+  if (optionalValues.TC_MCP_STATE_SECRET !== optionalState) fail("Phala CLI changed the state secret in the optional-env case.");
+  if (Object.hasOwn(optionalValues, "TC_MCP_NATIVE_SERVICE_CREDENTIAL")) {
+    fail("Phala CLI injected the optional native credential when it was unset.");
+  }
+  await rm(optionalEnvFile, { force: true });
 
   const contents = await readFile(envFile, "utf8");
   if (contents.includes(env.PHALA_CLOUD_API_KEY)) fail("Phala API token was written to the deploy environment file.");
@@ -165,11 +174,18 @@ async function encryptWithPhala(file) {
   if (injectedNewline.status === 0 || (await readdir(envDir)).length !== 0) {
     fail("Line-injected state secret was accepted or left a partial env file.");
   }
+  const injectedNativeCredential = run("bash", ["-c", writerScript], {
+    ...env,
+    TC_MCP_NATIVE_SERVICE_CREDENTIAL: `${"d".repeat(32)}\r\nINJECTED=yes`,
+  });
+  if (injectedNativeCredential.status === 0 || (await readdir(envDir)).length !== 0) {
+    fail("CRLF-injected native service credential was accepted or left a partial env file.");
+  }
 
   const cleanup = run("bash", ["-c", `set -euo pipefail; source "${helper}"; write_mcp_deploy_env_file; printf '%s\\n' "$MCP_DEPLOY_ENV_FILE"`], env);
   if (cleanup.status !== 0 || (await readdir(envDir)).length !== 0) fail("Deploy env file cleanup did not run on shell exit.");
 
-  process.stdout.write("MCP deploy env regression passed: Phala 1.1.22 round-trip, full env/unchanged state secret, allowlist preservation, missing-config refusal, 0600 file, credential validation, and cleanup.\n");
+  process.stdout.write("MCP deploy env regression passed: pinned Phala 1.1.22 CLI exact round-trip, state/native bytes, optional-unset omission, no logged values, CRLF injection refusal, allowlist preservation, missing-config refusal, 0600 file, and cleanup.\n");
 } finally {
   await rm(testRoot, { recursive: true, force: true });
 }

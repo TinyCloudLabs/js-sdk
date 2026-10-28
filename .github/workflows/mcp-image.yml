@@ -127,7 +127,6 @@ jobs:
       - name: Test the OS guard and complete Phala deploy environment
         env:
           PHALA_BIN: ${{ runner.temp }}/mcp-deploy-tools/node_modules/.bin/phala
-          MCP_DEPLOY_TOOLS: ${{ runner.temp }}/mcp-deploy-tools
         run: |
           bash .github/scripts/test-phala-os-guard.sh
           node .github/scripts/test-mcp-deploy-env.mjs
