@@ -124,6 +124,7 @@ test("a proved recipient session reads and decrypts the signed share from the V3
   testIssuerKeys = witness.issuerKeys;
   const record = await signLocationRecord({ version: 1, subject: ownerDid, multiaddrs: [httpUrlToMultiaddr("https://node.example")], updated_at: new Date().toISOString(), sequence: 1 }, { type: "did:key", signBytes: async (bytes) => ed25519.sign(bytes, ownerKey) });
   const root = verifyCompactUcanAuthorization(envelope.policyRoot.authorization);
+  expect(root.payload.att).toHaveProperty(leaf);
   const rootFact = root.payload.fct[0];
   const now = Math.floor(Date.now() / 1000);
   const session = await signCompactUcanAuthorization({
@@ -153,17 +154,29 @@ test("a proved recipient session reads and decrypts the signed share from the V3
     if (url.hostname === "witness.credentials.org") return witness.fetch(input, init);
     if (url.hostname === "registry.example") return Response.json({ record });
     if (url.pathname === "/info") return Response.json({ nodeId: nodeDid });
-    if (url.pathname === "/policy/v3/challenges") return Response.json({ challengeId: "challenge-1", nonce: "nonce-1", policyCid: envelope.policyCid, recipientDid: holder.did, nodeAudience: nodeDid, expiresAt: new Date(Date.now() + 45_000).toISOString() });
-    if (url.pathname === "/policy/v3/delegations") return Response.json({ admitted: true, sessionCid: session.cid, authorization: session.authorization });
+    if (url.pathname === "/policy/v3/challenges") {
+      const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      expect(request.policyCid).toBe(envelope.policyCid);
+      expect(request.requestedCapabilities).toEqual(envelope.policy.capabilityCeiling);
+      return Response.json({ challengeId: "challenge-1", nonce: "nonce-1", policyCid: envelope.policyCid, recipientDid: holder.did, nodeAudience: nodeDid, expiresAt: new Date(Date.now() + 45_000).toISOString() });
+    }
+    if (url.pathname === "/policy/v3/delegations") {
+      const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      expect(request.policyCid).toBe(envelope.policyCid);
+      return Response.json({ admitted: true, sessionCid: session.cid, authorization: session.authorization });
+    }
     if (url.pathname === "/delegate") return new Response(null, { status: 204 });
     if (url.pathname === "/invoke" && init?.body === undefined) return new Response(ownerRow);
     if (url.pathname === "/invoke") {
       const body = JSON.parse(String(init!.body)) as Record<string, unknown>;
+      expect(body.networkId).toBe(networkId);
+      expect(body.keyPath).toBe(envelope.contentSource.encryptionKeyPath);
       const receiverPublic = Uint8Array.from(Buffer.from(String(body.receiverPublicKey), "base64"));
       const ephemeral = key(42);
       const wrapped = await aesEncrypt(x25519.getSharedSecret(ephemeral, receiverPublic), symmetricKey);
       const invocation = verifyCompactUcanAuthorization(new Headers(init?.headers).get("Authorization")!);
-      expect(invocation.payload.att).toHaveProperty(leaf);
+      expect(invocation.payload.att).toEqual({ [leaf]: { "tinycloud.encryption/decrypt": [{}] } });
+      expect(invocation.payload.iss).toBe(`${holder.did}#${holder.did.slice("did:key:".length)}`);
       const bodyHash = hex(sha256(new TextEncoder().encode(canonicalize(body))));
       const unsigned = {
         type: "tinycloud.encryption.decrypt-result/v1", targetNode: nodeDid, networkId,

@@ -15,6 +15,17 @@ const SHORT_LINK = buildShortLink({
   origin: "https://share.example", type: "share", id: "a".repeat(26), key: new Uint8Array(32).fill(7),
   bodyCid: "bafkreibm6jg3ux5qucnwb24kinphs4b5fbc7n5t3lti2skm4du5qjn4fli",
 });
+const emailDescriptorFixture = await Bun.file(new URL("../../../sdk-core/test-fixtures/opencredentials-v1/golden-descriptor-digests.json", import.meta.url)).json() as {
+  vectors: { name: string; descriptor: unknown }[];
+};
+const emailDescriptor = emailDescriptorFixture.vectors.find((vector) => vector.name === "email")?.descriptor;
+if (emailDescriptor === undefined) throw new Error("golden email descriptor is missing");
+
+async function emailPublishArgs(directory: string): Promise<string[]> {
+  const path = join(directory, "email-descriptor.json");
+  await writeFile(path, JSON.stringify(emailDescriptor));
+  return ["--credential-descriptor", path, "--issuer-did", "did:web:issuer.credentials.org", "--issuer-kid", "did:web:issuer.credentials.org#controller"];
+}
 
 /** These tests exercise the commands with short links available and invitations enabled; the gate has its own tests. */
 function configureShareCommandServices(services: ShareCommandServices): void {
@@ -347,7 +358,7 @@ describe("tc share command contract", () => {
     try {
       const program = new Command();
       registerShareCommand(program);
-      await program.parseAsync(["node", "tc", "share", "publish", file, "--to", "email:Foo@X.com", "--notify"]);
+      await program.parseAsync(["node", "tc", "share", "publish", file, "--to", "email:Foo@X.com", "--notify", ...await emailPublishArgs(directory)]);
       await program.parseAsync(["node", "tc", "share", "notify", "share-notify", "--to", "FOO@X.COM"]);
     } finally {
       process.stdout.write = write;
@@ -429,7 +440,7 @@ describe("tc share command contract", () => {
     const originalExit = process.exit;
     process.exit = (() => {}) as typeof process.exit;
     try {
-      const output = await runShareCaptured(["share", "publish", file, "--to", "email:alice@example.com", "--notify"]);
+      const output = await runShareCaptured(["share", "publish", file, "--to", "email:alice@example.com", "--notify", ...await emailPublishArgs(directory)]);
       expect(output.exitCode).toBe(0);
       expect(output.stdout).toBe(`${reviewPublished.url}\n`);
       expect(output.stderr).toContain("published but not recorded");
@@ -458,7 +469,7 @@ describe("tc share command contract", () => {
     const originalExit = process.exit;
     process.exit = (() => {}) as typeof process.exit;
     try {
-      return await runShareCaptured(["share", "publish", file, "--to", "email:alice@example.com", "--json"]);
+      return await runShareCaptured(["share", "publish", file, "--to", "email:alice@example.com", "--json", ...await emailPublishArgs(directory)]);
     } finally {
       process.exit = originalExit;
       configureShareCommandServices({});
@@ -522,7 +533,7 @@ describe("tc share command contract", () => {
     const originalExit = process.exit;
     process.exit = (() => {}) as typeof process.exit;
     try {
-      const output = await runShareCaptured(["share", "publish", file, "--to", "email:alice@example.com", "--json"]);
+      const output = await runShareCaptured(["share", "publish", file, "--to", "email:alice@example.com", "--json", ...await emailPublishArgs(directory)]);
       expect(output.exitCode).toBe(0);
       expect(JSON.parse(output.stdout)).toMatchObject({ history: { recorded: false, reason: "HISTORY_UNAVAILABLE" } });
       expectHistoryWarningWithoutSecrets(output.stderr, "HISTORY_UNAVAILABLE");
@@ -611,7 +622,7 @@ describe("tc share command contract", () => {
     const originalExit = process.exit;
     process.exit = (() => {}) as typeof process.exit;
     try {
-      const published = await runShareCaptured(["share", "publish", file, "--to", "email:alice@example.com", "--notify"]);
+      const published = await runShareCaptured(["share", "publish", file, "--to", "email:alice@example.com", "--notify", ...await emailPublishArgs(directory)]);
       expect(published).toMatchObject({ exitCode: 0, stdout: `${reviewPublished.url}\n` });
       expect(published.stderr).toContain("(HISTORY_UNAVAILABLE)");
       expect(persisted?.deliveredRecipients).toBeUndefined();
@@ -644,7 +655,7 @@ describe("tc share command contract", () => {
     const originalExit = process.exit;
     process.exit = (() => {}) as typeof process.exit;
     try {
-      const output = await runShareCaptured(["share", "publish", file, "--to", "email:alice@example.com", "--notify", "--json"]);
+      const output = await runShareCaptured(["share", "publish", file, "--to", "email:alice@example.com", "--notify", "--json", ...await emailPublishArgs(directory)]);
       expect(output.exitCode).toBe(0);
       expect(JSON.parse(output.stdout)).toMatchObject({ history: { recorded: true }, notification: { state: "delivered" } });
       expectHistoryWarningWithoutSecrets(output.stderr, "HISTORY_UNAVAILABLE");
@@ -664,7 +675,7 @@ describe("tc share command contract", () => {
       delivery: { async deliver() { throw new ShareNotifyError("window expired", "delivery-window-expired"); } },
     });
     try {
-      const output = await runShareCaptured(["share", "publish", file, "--to", "email:alice@example.com", "--notify", "--json"]);
+      const output = await runShareCaptured(["share", "publish", file, "--to", "email:alice@example.com", "--notify", "--json", ...await emailPublishArgs(directory)]);
       expect(output.exitCode).toBe(9);
       expect(JSON.parse(output.stdout)).toMatchObject({
         protocol: "tinycloud-share", version: 1, link: reviewPublished.link,
@@ -981,7 +992,7 @@ describe("tc share with the default services", () => {
     const exits: (number | undefined)[] = [];
     process.exit = ((code?: number) => { exits.push(code); }) as typeof process.exit;
     try {
-      const notifyPublish = await runShareCaptured(["share", "publish", file, "--to", "email:alice@example.com", "--notify"]);
+      const notifyPublish = await runShareCaptured(["share", "publish", file, "--to", "email:alice@example.com", "--notify", ...await emailPublishArgs(directory)]);
       expect(exits).toEqual([4]);
       expect(notifyPublish.stderr).toContain("Invitation emails are not available yet. Nothing was shared and no invitation was sent.");
       expect(publishes).toBe(0);
@@ -994,7 +1005,7 @@ describe("tc share with the default services", () => {
 
       stored.delete("share-default");
       exits.length = 0;
-      const plain = await runShareCaptured(["share", "publish", file, "--to", "email:alice@example.com"]);
+      const plain = await runShareCaptured(["share", "publish", file, "--to", "email:alice@example.com", ...await emailPublishArgs(directory)]);
       expect(exits).toEqual([]);
       expect(plain.exitCode).toBe(0);
       expect(plain.stdout).toBe(`${SHORT_LINK}\n`);
@@ -1040,7 +1051,7 @@ describe("tc share from a sign-in without the default-key decrypt", () => {
     const exits: (number | undefined)[] = [];
     process.exit = ((code?: number) => { exits.push(code); }) as typeof process.exit;
     try {
-      const result = await runShareCaptured(["share", "publish", file, "--to", "email:alice@example.com", "--notify", "--json"]);
+      const result = await runShareCaptured(["share", "publish", file, "--to", "email:alice@example.com", "--notify", "--json", ...await emailPublishArgs(directory)]);
       expect(exits).toEqual([5]);
       expect(result.stderr).toContain("PERMISSION_DENIED");
       expect(result.stderr).toContain("--paste");
