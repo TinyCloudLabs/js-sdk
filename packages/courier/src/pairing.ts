@@ -6,7 +6,9 @@ import type { Profile, StoredPeer } from './profile.js';
 
 /**
  * Pairing artifacts, spec §5.
- * Three artifacts cross the chat channel between the two humans:
+ * Three artifacts cross the chat channel between the two sides (two humans,
+ * or two Courier agents of one owner — the pair is the courier did:key,
+ * never the owner DID alone):
  *   A: issuer → acceptor. Carries issuer DIDs + space + the handles.
  *   B: acceptor → issuer. Carries acceptor DIDs + space + delegation to the
  *      acceptor's `to/<peer-of-issuer>/` mailbox.

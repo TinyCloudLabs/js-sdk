@@ -235,7 +235,9 @@ async function pairAccept(args: ParsedArgs) {
   const { profile, node } = await ctx();
   const art = parseArtifact(readArtifactArg(args));
   validateArtifactIdentity(art);
-  if (art.from.owner === profile.ownerDid || art.from.courier === profile.courierDid) fail('bad-artifact', 'Refusing to pair with this agent identity.');
+  // A peer is a distinct AGENT key, not a distinct owner DID: two Courier agents of one owner
+  // (a self-pairing like Sam↔Sam) pair normally. Only the exact same courier DID is self.
+  if (art.from.courier === profile.courierDid) fail('bad-artifact', 'Refusing to pair with this agent identity.');
 
   if (art.step === 'A') {
     const handle = art.callMe;
@@ -255,7 +257,6 @@ async function pairAccept(args: ParsedArgs) {
   if (art.step === 'B') {
     const handle = args.get('as') ?? art.callMe;
     const peer = findPendingPeer(profile, handle);
-    if (art.from.owner === profile.ownerDid) fail('bad-artifact', 'Refusing to pair with our own owner identity.');
     const candidate: StoredPeer = {
       ...peer,
       ownerDid: art.from.owner,
