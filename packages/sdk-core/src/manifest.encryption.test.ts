@@ -77,6 +77,18 @@ describe("expandPermissionEntries (encryption)", () => {
     ]);
   });
 
+  it("limits the share prefix to default-network decrypt", () => {
+    for (const path of [`${NETWORK_ID.replace(":default", ":other")}/share/`, `${NETWORK_ID}/other/share/`]) {
+      expect(() => expandPermissionEntries([{ service: ENCRYPTION_PERMISSION_SERVICE, path, actions: ["decrypt"] }]))
+        .toThrow(ManifestValidationError);
+    }
+    expect(() => expandPermissionEntries([{
+      service: ENCRYPTION_PERMISSION_SERVICE,
+      path: `${NETWORK_ID}/share/`,
+      actions: ["network.create"],
+    }])).toThrow(ManifestValidationError);
+  });
+
   it("rejects empty or traversal segments in scoped encryption resources", () => {
     for (const path of [`${NETWORK_ID}/share//`, `${NETWORK_ID}/../share`]) {
       expect(() =>

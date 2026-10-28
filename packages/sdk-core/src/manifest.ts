@@ -493,7 +493,8 @@ export function expandPermissionEntry(entry: PermissionEntry): PermissionEntry[]
 /**
  * Expand a `tinycloud.encryption` manifest entry.
  *
- * - `path` MUST be a networkId URN (`urn:tinycloud:encryption:...`).
+ * - `path` MUST be a networkId URN (`urn:tinycloud:encryption:...`),
+ *   except the default network's `share/` decrypt prefix.
  *   The manifest prefix is always skipped — network ids are top-level
  *   owner-scoped resources, not space-scoped paths.
  * - `actions` must be `decrypt`, `network.create`, or `network.revoke`
@@ -516,11 +517,13 @@ function expandEncryptionPermissionEntry(
         `(got ${JSON.stringify(entry.path)})`,
     );
   }
-  if (entry.path.includes("/")) {
+  const sharePrefix = entry.path.endsWith("/share/");
+  if (entry.path.includes("/") && !sharePrefix) {
     throw new ManifestValidationError("named keys go in manifest.keys");
   }
   try {
-    parseNetworkId(entry.path);
+    const network = parseNetworkId(sharePrefix ? entry.path.slice(0, -"/share/".length) : entry.path);
+    if (sharePrefix && network.name !== "default") throw new Error("share prefix requires default network");
   } catch {
     throw new ManifestValidationError("tinycloud.encryption entries require a valid networkId URN");
   }
@@ -561,6 +564,9 @@ function expandEncryptionPermissionEntry(
       dedupedActions.push(a);
       seen.add(a);
     }
+  }
+  if (sharePrefix && dedupedActions.some((action) => action !== "tinycloud.encryption/decrypt")) {
+    throw new ManifestValidationError("share prefix only supports decrypt");
   }
   // Encryption resources are network-scoped, not space-scoped. We
   // always emit the synthetic "encryption" space label so manifest
