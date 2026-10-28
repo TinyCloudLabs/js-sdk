@@ -2266,9 +2266,10 @@ test("mixed kv and decrypt runtime grants honour an explicit one-hour expiry for
     (node as any).createEncryptionCrypto = () => crypto;
 
     const signRawNetworkAuthorization = mock(
-      async ({ targetNode, networkId: signedNetworkId, keyPath, action, facts }: any) => {
+      async ({ targetNode, networkId: signedNetworkId, action, facts }: any) => {
+        const keyPath = facts.keyPath;
         expect(targetNode).toBe(node.did);
-        expect(signedNetworkId).toBe(networkId);
+        expect(signedNetworkId).toBe(keyPath === undefined ? networkId : `${networkId}/${keyPath}`);
         expect(action).toBe("tinycloud.encryption/decrypt");
         expect(facts.targetNode).toBe(node.did);
         expect(facts.networkId).toBe(networkId);
