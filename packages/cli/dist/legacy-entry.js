@@ -32759,7 +32759,7 @@ init_storage();
 init_constants();
 init_errors();
 init_permissions();
-import { profilePath as profilePath8 } from "@tinycloud/operations/state";
+import { additionalDelegationsPath as additionalDelegationsPath3, profilePath as profilePath8 } from "@tinycloud/operations/state";
 import { EXPIRY } from "@tinycloud/sdk-core";
 
 // src/auth/device-auth.ts
@@ -34150,7 +34150,7 @@ async function completeApprovalResult(profile, delegation) {
         const grants = await loadAdditionalDelegations(profile);
         const stored = grants.find((item) => item.delegation.cid === verifiedDelegation.delegationCid && item.delegation.siweProof?.siwe === verifiedDelegation.siwe && item.delegation.siweProof?.signature === verifiedDelegation.signature);
         if (stored) {
-          const file = await open11(additionalDelegationsPath(profile), "r");
+          const file = await open11(additionalDelegationsPath3(profile), "r");
           try {
             await file.sync();
           } finally {

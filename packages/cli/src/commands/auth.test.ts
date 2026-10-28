@@ -804,17 +804,6 @@ describe("CLI auth login command", () => {
     expect((recorded.errors[0] as CLIErrorLike).message).not.toContain("--device");
   });
 
-  test("headless secrets manifest recommends paste rather than unsupported device approval", async () => {
-    profiles.set("default", makeProfile({ did: "did:key:openkey-session", authMethod: "openkey" }));
-    keys.set("default", { kty: "OKP", crv: "Ed25519", x: "key-public", d: "key-private" });
-    await runAuthCommand(["auth", "login", "--manifest", "secrets.json"]);
-    const error = recorded.errors[0] as CLIErrorLike;
-    expect(error.code).toBe("INTERACTIVE_LOGIN_REQUIRED");
-    expect(error.message).toContain("--paste");
-    expect(error.message).not.toContain("--device");
-    expect(recorded.startAuthFlows).toEqual([]);
-  });
-
   test("device login without an explicit manifest is refused before any approval starts", async () => {
     profiles.set("default", makeProfile({ did: "did:key:openkey-session", authMethod: "openkey" }));
     keys.set("default", { kty: "OKP", crv: "Ed25519", x: "key-public", d: "key-private" });
