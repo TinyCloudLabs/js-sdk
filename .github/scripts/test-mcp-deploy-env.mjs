@@ -82,7 +82,7 @@ const phalaEntry = realpathSync(phalaPath.stdout.trim());
 const nobleRequire = createRequire(phalaEntry);
 const noblePath = nobleRequire.resolve("@noble/curves/ed25519");
 const { x25519 } = await import(pathToFileURL(noblePath).href);
-const receiverSecret = x25519.utils.randomSecretKey();
+const receiverSecret = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
 const receiverPublic = x25519.getPublicKey(receiverSecret);
 const apiPrefix = "http://phala-test.invalid/api/v1";
 const shimPath = join(testRoot, "phala-fetch-shim.mjs");
