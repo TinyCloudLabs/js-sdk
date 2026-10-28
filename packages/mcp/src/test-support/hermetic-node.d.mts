@@ -8,6 +8,7 @@ export interface HermeticEncryptedNode {
   mintDelegationForAudienceWithPermissions(
     audience: string,
     permissions: PermissionEntry[],
+    options?: { expiry?: string | number },
   ): Promise<PortableDelegation>;
   invocations(): readonly { service: string; action: string; path: string }[];
   stop(): void;
