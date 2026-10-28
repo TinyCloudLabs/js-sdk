@@ -14,7 +14,7 @@ import { basename, join } from "node:path";
 import { publishTargetShare } from "@tinycloud/share-sdk";
 import {
   shareEnvelopeV3Schema,
-  verifyEnvelopeV3SignatureOnly,
+  verifyEnvelopeV3,
 } from "@tinycloud/share-envelope";
 import { DEFAULT_LINKS_API_ORIGIN, resolveLink } from "@tinycloud/share-envelope/links";
 import { ProfileManager } from "../src/config/profiles.js";
@@ -49,7 +49,7 @@ const result = await publishTargetShare({
   targetAdapter: authority.targetAdapter,
   credentialDescriptor: descriptor, issuerDid, issuerKid,
 });
-if ("state" in result || result.metadata.envelopeVersion !== 3 || result.link.kind !== "policy") {
+if ("state" in result || result.link.kind !== "policy") {
   throw new Error("publisher did not produce a V3 email policy share");
 }
 
@@ -61,7 +61,7 @@ if (resolved.form !== "full" || resolved.type !== "share" || resolved.header.bod
 }
 const sealedBlob = resolved.body;
 const envelope = shareEnvelopeV3Schema.parse(resolved.value);
-if (!verifyEnvelopeV3SignatureOnly(envelope)) throw new Error("V3 envelope signature is invalid");
+if (!await verifyEnvelopeV3(envelope, { expectedSignerDid: envelope.policy.ownerDid })) throw new Error("V3 envelope binding is invalid");
 const networkId = node.getDefaultEncryptionNetworkId();
 const keyPath = `share/${envelope.shareId}`;
 const leaf = `${networkId}/${keyPath}`;

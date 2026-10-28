@@ -5569,7 +5569,9 @@ export class TinyCloudNode {
           graph.assertActive();
           const signed = await this.signRawNetworkAuthorization({
             targetNode: input.targetNode,
-            networkId: input.networkId,
+            networkId: input.body.keyPath === undefined
+              ? input.networkId
+              : `${input.networkId}/${input.body.keyPath}`,
             action: DECRYPT_ACTION,
             facts: input.facts,
           }, { graph, session });

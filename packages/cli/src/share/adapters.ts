@@ -1,6 +1,7 @@
 import type { IKVService } from "@tinycloud/node-sdk";
 import { kvArtifactStore } from "./artifact-store.js";
 import { createShareLinks, type ShareLinks } from "./short-links.js";
+import { publishEmailShareV3 } from "./email-publish-v3.js";
 import { artifactSpaceNotReady, failIfSpaceNotReady } from "./space-not-ready.js";
 import { ShareHistoryReadError, ShareHistoryRetryError, ShareHistoryUnreadableError, SharePublishAuthorityError } from "./errors.js";
 import { storageRejection } from "../output/storage.js";
@@ -709,8 +710,15 @@ export function createShareAuthorityAdapters(input: {
     // An addressed share's policy ceiling includes decrypt on the owner's encryption network, which a
     // session-only sign-in (e.g. builtin:share-publishing) deliberately lacks. Refuse before any Share
     // or node request, registry write or upload. A signer-backed (local-key) owner has full authority.
-    const addressedEncryptionNetwork = targetInput.target.kind === "bearer" ? undefined : node.getEncryptionNetworkIdForSpace(ownerSpaceId);
-    if (addressedEncryptionNetwork !== undefined && node.isSessionOnly && !sessionHoldsEncryptionDecrypt(node, addressedEncryptionNetwork)) {
+    if (targetInput.target.kind === "email" &&
+        (targetInput.credentialDescriptor === undefined || targetInput.issuerDid === undefined || targetInput.issuerKid === undefined)) {
+      throw new TypeError("email credential descriptor and issuer are required");
+    }
+    const addressedEncryptionNetwork = targetInput.target.kind === "bearer" ? undefined : targetInput.target.kind === "email"
+      ? node.getDefaultEncryptionNetworkId() : node.getEncryptionNetworkIdForSpace(ownerSpaceId);
+    const emailKeyPath = targetInput.target.kind === "email" ? `share/${crypto.randomUUID().replaceAll("-", "")}` : undefined;
+    if (addressedEncryptionNetwork !== undefined && node.isSessionOnly && !sessionHoldsEncryptionDecrypt(node,
+      emailKeyPath === undefined ? addressedEncryptionNetwork : `${addressedEncryptionNetwork}/${emailKeyPath}`)) {
       throw new SharePublishAuthorityError({ kind: "decrypt-not-held" });
     }
     const config = await publicConfig();
@@ -719,7 +727,7 @@ export function createShareAuthorityAdapters(input: {
     if (targetInput.notify === true && targetInput.target.kind === "emailDomain") {
       await assertDomainDeliveryForOrigin(activeNode.origin, "publish");
     }
-    const shareId = crypto.randomUUID().replaceAll("-", "");
+    const shareId = emailKeyPath?.slice("share/".length) ?? crypto.randomUUID().replaceAll("-", "");
     const files = targetInput.files === undefined || targetInput.files.length === 0
       ? [{ bytes: targetInput.source, filename: targetInput.filename, mediaType: targetInput.mediaType }]
       : targetInput.files;
@@ -862,6 +870,7 @@ export function createShareAuthorityAdapters(input: {
       resource: { kind: resourceKind },
       storage: artifact === undefined ? { path: resourcePath } : { artifactId: artifact.id, storageName },
       encryptionNetwork: addressedEncryptionNetwork!,
+      ...(emailKeyPath === undefined ? {} : { encryptionKeyPath: emailKeyPath }),
       actions,
       policyActions,
       ...(deliveryEmail === undefined ? {} : { deliveryEmail }),
@@ -883,8 +892,14 @@ export function createShareAuthorityAdapters(input: {
       throw new SharePublishAuthorityError({ kind: rejected ? "registry-rejected" : "registry-unavailable" });
     }
     const encryptionNetwork = addressedEncryptionNetwork!;
-    const encrypted = await node.encryption.encryptToNetwork(encryptionNetwork, file.bytes, { metadata: { contentType: mediaType } });
+    const encrypted = await node.encryption.encryptToNetwork(encryptionNetwork, file.bytes, {
+      ...(emailKeyPath === undefined ? {} : { keyPath: emailKeyPath }),
+      metadata: { contentType: mediaType },
+    });
     if (!encrypted.ok) throw new Error("addressed source encryption was rejected");
+    if (emailKeyPath !== undefined && (encrypted.data.networkId !== encryptionNetwork || encrypted.data.keyPath !== emailKeyPath)) {
+      throw new Error("email share encryption was rejected");
+    }
     const storedBytes = new TextEncoder().encode(canonicalize(encrypted.data as unknown as Record<string, unknown>));
     let artifactVersion: ArtifactVersionResult | undefined;
     if (artifact !== undefined) {
@@ -920,6 +935,7 @@ export function createShareAuthorityAdapters(input: {
       kvResource: `${ownerSpaceId}/kv/${resourcePath}`,
       selector: resourceKind,
       encryptionNetwork: encrypted.data.networkId,
+      ...(emailKeyPath === undefined ? {} : { encryptionKeyPath: emailKeyPath }),
       encryptedSymmetricKeyDigestHex: encrypted.data.encryptedSymmetricKeyHash,
       keyVersion: encrypted.data.keyVersion,
       mode: "immutable" as const,
@@ -961,7 +977,11 @@ export function createShareAuthorityAdapters(input: {
     };
     let published: PublishedShare;
     try {
-      published = await publishAddressedShare(addressedOptions);
+      published = prepared.target.kind === "email"
+        ? await publishEmailShareV3({ ...addressedOptions, target: prepared.target,
+          credentialDescriptor: targetInput.credentialDescriptor,
+          issuerDid: targetInput.issuerDid!, issuerKid: targetInput.issuerKid! })
+        : await publishAddressedShare(addressedOptions);
     } catch (error) {
       if (!(error instanceof AddressedShareOverLimitError)) throw error;
       // The sealed envelope was over the limit although the bound said it fit: nothing was linked. Remove what was written.

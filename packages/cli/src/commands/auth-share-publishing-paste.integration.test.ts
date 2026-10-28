@@ -6,7 +6,7 @@ import { NodeWasmBindings, PrivateKeySigner } from "@tinycloud/node-sdk";
 import { profileConfigPath, profilePath, withTinyCloudStateRoot, writeJsonAtomic } from "@tinycloud/operations/state";
 
 // A real CLI process, a local node stub and an OpenKey paste handoff signed by a throwaway key:
-// `auth login --paste --manifest builtin:share-publishing` must end with the owner's default-key decrypt in the stored session.
+// `auth login --paste --manifest builtin:share-publishing` requests only the owner's default/share/ decrypt prefix.
 const PROFILE = "publisher";
 const OWNER_KEY = "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d4b2c197a7e5e7b7";
 const cliEntry = join(import.meta.dir, "../index.ts");
@@ -17,7 +17,7 @@ afterEach(async () => {
   await Promise.all(homes.splice(0).map((home) => rm(home, { recursive: true, force: true })));
 });
 
-test("paste sign-in for builtin:share-publishing receives the owner's default-key decrypt", async () => {
+test("paste sign-in for builtin:share-publishing requests the default/share/ prefix and no root decrypt", async () => {
   const home = await mkdtemp(join(tmpdir(), "tc2177-paste-"));
   homes.push(home);
   const node = Bun.serve({ port: 0, fetch(request) {
@@ -97,13 +97,12 @@ test("paste sign-in for builtin:share-publishing receives the owner's default-ke
   await reader.cancel().catch(() => undefined);
   expect({ exitCode, rest: exitCode === 0 ? "" : stderr, requestedDecrypt }).toEqual({
     exitCode: 0, rest: "",
-    requestedDecrypt: [{ service: "tinycloud.encryption", space: "encryption", path: `urn:tinycloud:encryption:${ownerDid}:default`, actions: ["tinycloud.encryption/decrypt"] }],
+    requestedDecrypt: [{ service: "tinycloud.encryption", space: "encryption", path: `urn:tinycloud:encryption:${ownerDid}:default/share/`, actions: ["tinycloud.encryption/decrypt"] }],
   });
   expect(JSON.parse(stdout).authenticated).toBe(true);
   const stored = JSON.parse(await readFile(join(directory, "session.json"), "utf8")) as { permissions?: Array<{ service: string; path: string; actions: string[] }> };
   const storedDecrypt = (stored.permissions ?? []).filter((permission) => permission.service === "tinycloud.encryption");
-  console.log(JSON.stringify({ requestedDecrypt, storedDecrypt }));
   expect(storedDecrypt).toHaveLength(1);
   expect(storedDecrypt[0]!.actions).toEqual(["tinycloud.encryption/decrypt"]);
-  expect(storedDecrypt[0]!.path.toLowerCase()).toBe(`urn:tinycloud:encryption:${ownerDid}:default`.toLowerCase());
+  expect(storedDecrypt[0]!.path.toLowerCase()).toBe(`urn:tinycloud:encryption:${ownerDid}:default/share/`.toLowerCase());
 }, 60_000);
