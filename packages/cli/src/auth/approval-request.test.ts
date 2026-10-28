@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { chmodSync, mkdtempSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { createCipheriv, createHash, createHmac, createPublicKey, randomBytes, verify } from "node:crypto";
@@ -23,7 +23,7 @@ const { ProfileManager } = await import("../config/profiles.js");
 const { profilePath } = await import("@tinycloud/operations/state");
 const { readJson, writeJsonDurable } = await import("../config/storage.js");
 const { readProfileSnapshot, commitLogin } = await import("./login-commit.js");
-const { completeApprovalResult } = await import("./approval-request.js");
+const { acquireApprovalRequest, completeApprovalResult } = await import("./approval-request.js");
 const { verifyScopedLogin } = await import("./scoped-login.js");
 const { relayPublicJwkOf } = await import("./device-auth.js");
 const { createECDH } = await import("node:crypto");
@@ -73,7 +73,7 @@ async function signedDelegation(actions = ["tinycloud.kv/list"]) {
     address, chainId: 1, spaceId, ownerDid, siwe: prepared.siwe, signature };
 }
 
-async function stage(delegation: Record<string, unknown>) {
+async function stage(delegation: Record<string, unknown>, options: { expectedOwner?: string } = { expectedOwner: ownerDid }) {
   const relay = createECDH("prime256v1"); relay.generateKeys();
   const recipientJwk = relayPublicJwkOf(relay);
   const request = { issuer: did, requestVersion: 1 as const, targetDid: did,
@@ -100,8 +100,9 @@ async function stage(delegation: Record<string, unknown>) {
     nonce: nonce.toString("base64url"), ciphertext: ciphertext.toString("base64url") };
   const entry = { version: 1, request, requestId, bodyCid: prepared.bodyCid,
     approvalUrl: buildShortLink({ origin: "https://openkey.example", type: "openkey-approval-request", id: requestId, key: prepared.key, bodyCid: prepared.bodyCid }),
-    requestExpiresAt: prepared.record.header.expiresAt, record: prepared.record, apiOrigin: server.url.origin, signingKey: key,
-    relayPrivateKey: relay.getPrivateKey().toString("base64url"), expectedOwner: ownerDid, resultRef,
+    requestExpiresAt: prepared.record.header.expiresAt, record: prepared.record, apiOrigin: server.url.origin,
+    linkApiOrigin: "https://api.tinycloud.xyz", openkeyOrigin: "https://openkey.example", signingKey: key,
+    relayPrivateKey: relay.getPrivateKey().toString("base64url"), expectedOwner: options.expectedOwner, resultRef,
     resultExpiresAt: new Date(Date.now() + 600_000).toISOString(), resultEnvelope, ackId: "synthetic-durable-ack-123456789" };
   await writeJsonDurable(join(profilePath("approval"), "approval-pending.json"), [entry]);
   return entry;
@@ -145,6 +146,37 @@ test("a fetched approval is not acknowledged before durable login persistence", 
   await completeApprovalResult("approval");
   expect(acknowledgements.get(resultRef)).toBe(pending.ackId);
   expect(await readJson(join(profilePath("approval"), "approval-pending.json"))).toEqual([]);
+});
+
+test.each([ownerDid, undefined])("a saved result resumes with owner-qualified spaces without another approval (%s)", async (expectedOwner) => {
+  const delegation = await signedDelegation();
+  const pending = await stage(delegation, { expectedOwner });
+  const snapshot = await readProfileSnapshot("approval");
+  const verified = verifyScopedLogin(delegation, key, did, requested, { expectedOwner: ownerDid, exactApproval: true });
+  await commitLogin("approval", snapshot, { key, session: verified.session, profile: { ...snapshot.profile!, spaceId }, durable: true });
+  dropAck = true;
+  await expect(completeApprovalResult("approval")).rejects.toBeDefined();
+  let approvalRequests = 0;
+  const send = globalThis.fetch;
+  const localOnly = spyOn(globalThis, "fetch").mockImplementation(Object.assign((input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.origin !== server.url.origin) throw new Error("A resumed result must not create a new request");
+    return send(input, init);
+  }, { preconnect: send.preconnect }));
+  try {
+    const recovered = await acquireApprovalRequest(did, {
+      profileName: "approval", jwk: key, host, permissions: requested.map((permission) => ({ ...permission, space: spaceId })),
+      expectedOwner: ownerDid, expiry: "1h", openkeyHost: "https://openkey.example", openkeyApiHost: server.url.origin,
+      noPopup: true, onApprovalRequest: () => { approvalRequests++; },
+    });
+    expect(recovered.delegationCid).toBe(delegation.delegationCid);
+    await completeApprovalResult("approval", recovered);
+    expect(approvalRequests).toBe(0);
+    expect(acknowledgements.get(resultRef)).toBe(pending.ackId);
+    expect(await readJson(join(profilePath("approval"), "approval-pending.json"))).toEqual([]);
+  } finally {
+    localOnly.mockRestore();
+  }
 });
 
 test.each(["signature", "owner", "key", "permission"])("ACK recovery revalidates %s before accepting persisted evidence", async (mutation) => {

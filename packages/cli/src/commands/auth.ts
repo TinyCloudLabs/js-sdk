@@ -2992,7 +2992,7 @@ export async function refreshOpenKeySession(
   options: OpenKeyLoginOptions = {},
 ): Promise<{ profile: ProfileConfig; delegationData: Record<string, unknown>; declined: PermissionEntry[]; legacyNested: PermissionEntry[] }> {
   await recoverPendingLogout(profileName);
-  await completeApprovalResult(profileName);
+  // Acquisition must reuse a matching pending result before save-then-ACK retires it.
   const snapshot = await readProfileSnapshot(profileName);
   // A missing profile is PROFILE_NOT_FOUND, not a missing key: `tc init` alone
   // would create the default profile instead of this one.

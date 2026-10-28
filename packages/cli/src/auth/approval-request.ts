@@ -3,6 +3,7 @@ import { open } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as wait } from "node:timers/promises";
 import { tryOpenBrowser } from "../lib/browser.js";
+import { normalizePkhIdentifier } from "../lib/space.js";
 import { profilePath } from "@tinycloud/operations/state";
 import { createApprovalRequest, DEFAULT_LINKS_API_ORIGIN, signerFromJwk, type Ed25519PrivateJwk, type LinkRecord, type OpenKeyApprovalRequestV1 } from "@tinycloud/share-envelope/links";
 import type { PermissionEntry } from "@tinycloud/node-sdk";
@@ -14,7 +15,7 @@ import { CLIError } from "../output/errors.js";
 import { additionalDelegationsPath, loadAdditionalDelegations } from "../lib/permissions.js";
 import type { AuthFlowOptions, DelegationData } from "./browser-auth.js";
 import { decryptRelayResult, relayPublicJwkOf } from "./device-auth.js";
-import { canonicalJson, parseRequestedExpiry, verifyScopedLogin } from "./scoped-login.js";
+import { canonicalJson, parseRequestedExpiry, sameLoginSpace, verifyScopedLogin } from "./scoped-login.js";
 
 interface PendingApproval {
   version: 1;
@@ -188,9 +189,21 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
     targetPublicJwk, nodeOrigin: options.host, permissions: options.permissions as OpenKeyApprovalRequestV1["permissions"],
     ...(options.reason ? { reason: options.reason } : {}), grantLifetimeSeconds: lifetime };
   let entry = (await readJson<PendingApproval[]>(join(profilePath(profile), STATE_FILE)) ?? []).find((item) => {
-    const { resultEncryptionPublicJwk: _, ...prior } = item.request;
-    return canonicalJson(prior) === canonicalJson(spec) && item.apiOrigin === apiOrigin &&
-      item.linkApiOrigin === linkApiOrigin && item.openkeyOrigin === openkeyOrigin && item.expectedOwner === options.expectedOwner;
+    const { resultEncryptionPublicJwk: _, permissions: priorPermissions, ...prior } = item.request;
+    const { permissions: nextPermissions, ...next } = spec;
+    if (canonicalJson(prior) !== canonicalJson(next) || item.apiOrigin !== apiOrigin ||
+      item.linkApiOrigin !== linkApiOrigin || item.openkeyOrigin !== openkeyOrigin ||
+      priorPermissions.length !== nextPermissions.length) return false;
+    // Saving the first signed result resolves logical space names to its owner.
+    // Compare that spelling only after re-verifying the original encrypted result.
+    const owner = item.resultEnvelope ? verifyPendingResult(item).session.ownerDid : item.expectedOwner;
+    if ((item.expectedOwner !== undefined || options.expectedOwner !== undefined) &&
+      (!owner || !options.expectedOwner || normalizePkhIdentifier(owner) !== normalizePkhIdentifier(options.expectedOwner))) return false;
+    return priorPermissions.every(({ space, ...permission }, index) => {
+      const { space: nextSpace, ...nextPermission } = nextPermissions[index]!;
+      return canonicalJson(permission) === canonicalJson(nextPermission) &&
+        (owner ? sameLoginSpace(space, nextSpace, owner) : space === nextSpace);
+    });
   });
   if (!entry) {
     const relay = createECDH("prime256v1");

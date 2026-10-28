@@ -32752,6 +32752,7 @@ function warnBrowserNotOpened() {
 }
 
 // src/auth/approval-request.ts
+init_space();
 init_links();
 init_profiles();
 init_storage();
@@ -34049,8 +34050,15 @@ async function acquireApprovalRequest(_did, options) {
     grantLifetimeSeconds: lifetime
   };
   let entry = (await readJson(join14(profilePath8(profile), STATE_FILE)) ?? []).find((item) => {
-    const { resultEncryptionPublicJwk: _, ...prior } = item.request;
-    return canonicalJson(prior) === canonicalJson(spec) && item.apiOrigin === apiOrigin2 && item.linkApiOrigin === linkApiOrigin && item.openkeyOrigin === openkeyOrigin && item.expectedOwner === options.expectedOwner;
+    const { resultEncryptionPublicJwk: _, permissions: priorPermissions, ...prior } = item.request;
+    const { permissions: nextPermissions, ...next } = spec;
+    if (canonicalJson(prior) !== canonicalJson(next) || item.apiOrigin !== apiOrigin2 || item.linkApiOrigin !== linkApiOrigin || item.openkeyOrigin !== openkeyOrigin || priorPermissions.length !== nextPermissions.length) return false;
+    const owner = item.resultEnvelope ? verifyPendingResult(item).session.ownerDid : item.expectedOwner;
+    if ((item.expectedOwner !== void 0 || options.expectedOwner !== void 0) && (!owner || !options.expectedOwner || normalizePkhIdentifier(owner) !== normalizePkhIdentifier(options.expectedOwner))) return false;
+    return priorPermissions.every(({ space, ...permission2 }, index) => {
+      const { space: nextSpace, ...nextPermission } = nextPermissions[index];
+      return canonicalJson(permission2) === canonicalJson(nextPermission) && (owner ? sameLoginSpace(space, nextSpace, owner) : space === nextSpace);
+    });
   });
   if (!entry) {
     const relay = createECDH2("prime256v1");
@@ -37961,7 +37969,6 @@ async function undoPreparedAttempt(profileName2, node, owner, gateWasActive) {
 }
 async function refreshOpenKeySession(profileName2, host, options = {}) {
   await recoverPendingLogout(profileName2);
-  await completeApprovalResult(profileName2);
   const snapshot = await readProfileSnapshot(profileName2);
   const profile = snapshot.profile ?? await ProfileManager.getProfile(profileName2);
   const expiry = options.expiry === void 0 ? void 0 : parseRequestedExpiry(options.expiry);
