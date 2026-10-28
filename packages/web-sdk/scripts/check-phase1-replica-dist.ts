@@ -38,6 +38,7 @@ import { validateTc2140ExactKeyDelegationRatchetTransition } from "./replica-siz
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 import { replicaOwnedPath } from "./replica-owned-path";
 import { webSdkTestExitFailure } from "./web-sdk-test-exit";
+import { isolatedRunFailure, mergeWebSdkRuns, parseWebSdkRun } from "./web-sdk-test-report";
 type Baseline = {
   webSdkTestBaseline: { ref: string; unhandledErrors: number; failingNames: string[]; unhandledSignatures: string[] };
 };
@@ -973,47 +974,48 @@ if (prBaseSha) {
 // Keep structural/size inspection independent of the web test suite.
 if (process.argv.includes("--dist-only")) process.exit(failed ? 1 : 0);
 const reportDir = await mkdtemp(join(tmpdir(), "tc-web-sdk-junit-"));
-const report = join(reportDir, "web-sdk.xml");
 try {
-  // Bun's file workers share global test shims; keep the suite in one worker.
-  const test = spawnSync("bun", ["test", "--parallel=1", "packages/web-sdk/tests", "--reporter=junit", `--reporter-outfile=${report}`], {
-    cwd: resolve(import.meta.dir, "../../.."),
-    encoding: "utf8",
-    maxBuffer: 20 * 1024 * 1024,
-  });
-  if (test.error) throw test.error;
-  process.stdout.write(test.stdout);
-  process.stderr.write(test.stderr);
-  const exitFailure = webSdkTestExitFailure(test.status, test.signal);
-  if (exitFailure) {
-    console.error(`${exitFailure}; the step fails on any non-zero exit even when the junit report is clean`);
+  // One `bun test` process per call. A crash, signal or non-zero exit fails the step even when the
+  // junit report is clean; a missing report (a crash before it was written) fails too.
+  const runWebSdkTests = async (label: string, target: string, reportName: string) => {
+    const report = join(reportDir, reportName);
+    const test = spawnSync("bun", ["test", "--parallel=1", target, "--reporter=junit", `--reporter-outfile=${report}`], {
+      cwd: resolve(import.meta.dir, "../../.."),
+      encoding: "utf8",
+      maxBuffer: 20 * 1024 * 1024,
+    });
+    if (test.error) throw test.error;
+    process.stdout.write(test.stdout);
+    process.stderr.write(test.stderr);
+    const exitFailure = webSdkTestExitFailure(test.status, test.signal);
+    if (exitFailure) {
+      console.error(`web-sdk tests (${label}): ${exitFailure}; the step fails on any non-zero exit even when the junit report is clean`);
+      failed = true;
+    }
+    const xml = await readFile(report, "utf8").catch(() => {
+      console.error(`web-sdk tests (${label}): no junit report was written`);
+      failed = true;
+      return "";
+    });
+    return parseWebSdkRun(xml, `${test.stdout}\n${test.stderr}`);
+  };
+  // TC-2113: Bun 1.3.14 can segfault in WebAssembly.instantiate at the start of this file, so it
+  // runs in its own process (it is `.isolated.ts`, which the directory run does not pick up).
+  // Both runs always happen so one crash does not hide the other's result.
+  const mainRun = await runWebSdkTests("main", "packages/web-sdk/tests", "web-sdk.xml");
+  const isolatedRun = await runWebSdkTests("isolated DecryptExpiry", "./packages/web-sdk/tests/tcwRequestPermissionsDecryptExpiry.isolated.ts", "web-sdk-decrypt-expiry.xml");
+  console.log(`web-sdk tests (main): ${mainRun.caseCount} cases`);
+  console.log(`web-sdk tests (isolated DecryptExpiry): ${isolatedRun.caseCount} cases`);
+  const isolatedFailure = isolatedRunFailure("web-sdk tests (isolated DecryptExpiry)", isolatedRun.caseCount);
+  if (isolatedFailure) {
+    console.error(isolatedFailure);
     failed = true;
   }
-  const xml = await readFile(report, "utf8");
-  const cases = [...xml.matchAll(/<testcase\b([^>]*?)(?:\/>|>([\s\S]*?)<\/testcase>)/g)];
-  const decode = (value: string) => value.replaceAll("&quot;", '"').replaceAll("&apos;", "'").replaceAll("&lt;", "<").replaceAll("&gt;", ">").replaceAll("&amp;", "&");
-  const failedNames = cases.flatMap(([, attributes, body]) => {
-    if (!/<(?:failure|error)\b/.test(body ?? "")) return [];
-    const name = attributes.match(/\bname="([^"]*)"/)?.[1];
-    const file = attributes.match(/\bfile="([^"]*)"/)?.[1];
-    return [decode(`${file ?? "unknown test file"}::${name ?? "unnamed test"}`)];
-  });
-  const output = `${test.stdout}\n${test.stderr}`;
-  const unhandledSignatures = [...output.matchAll(/# Unhandled error between tests\n-{20,}\n([\s\S]*?)(?=\n-{20,}\n)/g)].map(([, block]) => {
-    if (block.includes("ReferenceError: HTMLElement is not defined")) return "ReferenceError: HTMLElement is not defined";
-    const message = block.match(/error:\s*(.+)/)?.[1] ?? "unidentified unhandled test error";
-    if (message.includes("Cannot find package 'eth-testing'")) return "Cannot find package 'eth-testing'";
-    if (message.includes("paired OpenCredentials worktree not found")) return "paired OpenCredentials worktree not found";
-    return `unrecognized: ${message}`;
-  });
-  const unhandledErrors = Math.max(
-    Number(output.match(/\b(\d+) errors?\b/i)?.[1] ?? 0),
-    unhandledSignatures.length,
-  );
+  const { caseCount, failedNames, unhandledSignatures, unhandledErrors } = mergeWebSdkRuns([mainRun, isolatedRun]);
   const baselineNames = new Set(baseline.webSdkTestBaseline.failingNames);
   const newFailures = failedNames.filter((name) => !baselineNames.has(name));
   const newUnhandled = unhandledSignatures.filter((signature) => !baseline.webSdkTestBaseline.unhandledSignatures.includes(signature));
-  console.log(`web-sdk tests: ${cases.length} cases; failures=${failedNames.length}; unhandled=${unhandledErrors}`);
+  console.log(`web-sdk tests: ${caseCount} cases; failures=${failedNames.length}; unhandled=${unhandledErrors}`);
   console.log(`web-sdk failing names: ${failedNames.length === 0 ? "(none)" : failedNames.join(" | ")}`);
   console.log(`web-sdk unhandled signatures: ${unhandledSignatures.length === 0 ? "(none)" : unhandledSignatures.join(" | ")}`);
   if (typeof baseline.webSdkTestBaseline.ref !== "string" || baseline.webSdkTestBaseline.ref.length === 0) {
