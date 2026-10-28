@@ -625,7 +625,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .command("login")
     .description("Authenticate with TinyCloud")
     .option("--device", "Approve on another device (e.g. a phone) through OpenKey device authorization; requires a KV-scoped --manifest (SQL and secret decrypt need browser or --paste login)")
-    .option("--paste", "Wait up to 5 minutes for a signed code from OpenKey on stdin instead of a browser callback (Safari may require paste)")
+    .option("--paste", "Use manual paste mode; OpenKey return codes expire after 5 minutes")
     .option("--no-popup", "Print the OpenKey URL without opening a browser")
     .option("--method <method>", "Authentication method: local or openkey")
     .option("--manifest <fileOrBase64>", `Request only this manifest's permissions (one space, plus raw encryption network entries such as a secrets decrypt grant); ${SHARE_PUBLISHING_MANIFEST_REF} covers \`${CLI_NAME} share publish\``)
@@ -732,8 +732,8 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         } else {
           method = scoped ? "openkey" : await promptAuthMethod();
         }
-        if (method === "openkey" && !options.paste && options.popup !== false &&
-          !process.stdin.isTTY && !process.stderr.isTTY) {
+        if (method === "openkey" && (options.keys !== undefined || replicationOptions.prefixes.length > 0) &&
+          !options.paste && options.popup !== false && !process.stdin.isTTY && !process.stderr.isTTY) {
           throw new CLIError(
             "INTERACTIVE_LOGIN_REQUIRED",
             "Browser login needs a visible approval URL and would wait silently here. Use `--paste` to print the URL and provide the owner's code on stdin.",
@@ -826,7 +826,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
   auth
     .command("rotate")
     .description("Rotate the active profile session key")
-    .option("--paste", "Use manual paste mode instead of browser callback")
+    .option("--paste", "Use manual paste mode; OpenKey return codes expire after 5 minutes")
     .option("--no-popup", "Print the OpenKey URL without opening a browser")
     .option("--force", "Rotate even when recorded shares could not be checked or hold unexpired shares that need the current session key")
     .action(async (options, cmd) => {
@@ -939,7 +939,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
       [],
     )
     .option("--write", `With --preset ${APPS_AGENT_PRESET}: also let the agent add and change the named --app apps' data: write their knowledge/ and prefs/ files (kv put) and add, change or delete their table rows (sql write). Their code, manifest and install record stay read-only. Creating, changing or dropping tables is granted only for an app's catalog database (today Health Log's healthlog)`)
-    .option("--paste", "With --grant on an OpenKey profile: wait up to 5 minutes for a signed code from OpenKey on stdin instead of a browser callback (use when the browser cannot reach this CLI)")
+    .option("--paste", "With --grant on an OpenKey profile: use manual paste mode (return codes expire after 5 minutes)")
     .action(async (options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
