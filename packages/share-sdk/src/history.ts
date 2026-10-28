@@ -41,6 +41,7 @@ export interface SenderShareRecord {
   readonly revokedAt?: string;
   readonly envelopeCid?: string;
   readonly shareCid?: string;
+  readonly envelopeVersion?: 3;
   /** Complete bearer links are encrypted at rest and only revealed explicitly. */
   readonly link?: string;
   readonly filename?: string;
@@ -109,6 +110,7 @@ export function historyRecordForPublishedShare(result: PublishedShare, now: Date
     ...(result.metadata.enforcerDid === undefined ? {} : { enforcerDid: result.metadata.enforcerDid }),
     ...(result.metadata.envelopeCid === undefined ? {} : { envelopeCid: result.metadata.envelopeCid }),
     ...(result.metadata.shareCid === undefined ? {} : { shareCid: result.metadata.shareCid }),
+    ...(result.metadata.envelopeVersion === undefined ? {} : { envelopeVersion: result.metadata.envelopeVersion }),
     registeredAt: now.toISOString(),
     expiresAt: result.metadata.expiresAt,
     link: result.url,

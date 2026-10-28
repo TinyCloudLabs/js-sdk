@@ -356,6 +356,7 @@ async function aesGcmEncrypt(key: Uint8Array, plaintext: Uint8Array): Promise<Ui
 interface V3InlineEncryptedEnvelope {
   readonly v: 1;
   readonly networkId: string;
+  readonly keyPath?: string;
   readonly alg: "x25519-aes256gcm/v1";
   readonly keyVersion: number;
   readonly encryptedSymmetricKey: string;
@@ -369,9 +370,11 @@ function parseV3InlineEncryptedEnvelope(bytes: Uint8Array, expected: ShareEnvelo
   try { value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); } catch { throw new Error("encrypted content envelope is malformed"); }
   if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("encrypted content envelope is malformed");
   const record = value as Record<string, unknown>;
-  const allowed = ["v", "networkId", "alg", "keyVersion", "encryptedSymmetricKey", "encryptedSymmetricKeyHash", "ciphertext", "metadata"];
+  const allowed = ["v", "networkId", "keyPath", "alg", "keyVersion", "encryptedSymmetricKey", "encryptedSymmetricKeyHash", "ciphertext", "metadata"];
   if (Object.keys(record).some((key) => !allowed.includes(key))
     || record.v !== 1 || record.networkId !== expected.encryptionNetwork
+    || record.keyPath !== expected.contentSource.encryptionKeyPath
+    || record.keyPath !== undefined && (record.keyPath !== `share/${expected.shareId}`)
     || record.alg !== "x25519-aes256gcm/v1" || record.keyVersion !== expected.contentSource.keyVersion
     || typeof record.encryptedSymmetricKey !== "string" || typeof record.encryptedSymmetricKeyHash !== "string"
     || record.encryptedSymmetricKeyHash !== expected.contentSource.encryptedSymmetricKeyDigestHex
@@ -382,7 +385,6 @@ function parseV3InlineEncryptedEnvelope(bytes: Uint8Array, expected: ShareEnvelo
   }
   return record as unknown as V3InlineEncryptedEnvelope;
 }
-
 async function verifyDetachedResponse(response: Response, trust: ShareNodeTrust): Promise<void> {
   let value: unknown;
   try { value = await response.clone().json(); } catch { throw new Error("share read response is invalid"); }
@@ -560,15 +562,16 @@ export class ShareRecipientClient {
     const receiverPrivateKey = crypto.getRandomValues(new Uint8Array(32));
     const receiverPublicKey = toBase64(x25519.getPublicKey(receiverPrivateKey));
     const receiverPublicKeyHash = canonicalHashHex(receiverPublicKey);
-    const body = { type: "tinycloud.encryption.decrypt/v1", targetNode: this.v3NodeAudience, networkId: encrypted.networkId, alg: encrypted.alg, keyVersion: encrypted.keyVersion, encryptedSymmetricKey: encrypted.encryptedSymmetricKey, encryptedSymmetricKeyHash: encrypted.encryptedSymmetricKeyHash, receiverPublicKey, receiverPublicKeyHash };
+    const body = { type: "tinycloud.encryption.decrypt/v1", targetNode: this.v3NodeAudience, networkId: encrypted.networkId, ...(encrypted.keyPath === undefined ? {} : { keyPath: encrypted.keyPath }), alg: encrypted.alg, keyVersion: encrypted.keyVersion, encryptedSymmetricKey: encrypted.encryptedSymmetricKey, encryptedSymmetricKeyHash: encrypted.encryptedSymmetricKeyHash, receiverPublicKey, receiverPublicKeyHash };
     const bodyHash = hex(sha256(new TextEncoder().encode(canonicalize(body))));
     const session = verifyCompactUcanAuthorization(this.v3Authorization, this.session.sessionId);
     const now = Math.floor(Date.now() / 1000);
+    const decryptResource = encrypted.keyPath === undefined ? encrypted.networkId : `${encrypted.networkId}/${encrypted.keyPath}`;
     const invocation = await signCompactUcanAuthorization({
       issuerDid: this.options.holderDid,
       audienceDid: this.v3NodeAudience,
-      attenuation: { [encrypted.networkId]: { "tinycloud.encryption/decrypt": [{}] } },
-      facts: [{ type: body.type, targetNode: body.targetNode, networkId: body.networkId, bodyHash, encryptedSymmetricKeyHash: body.encryptedSymmetricKeyHash, receiverPublicKeyHash, alg: body.alg, keyVersion: body.keyVersion }],
+      attenuation: { [decryptResource]: { "tinycloud.encryption/decrypt": [{}] } },
+      facts: [{ type: body.type, targetNode: body.targetNode, networkId: body.networkId, ...(encrypted.keyPath === undefined ? {} : { keyPath: encrypted.keyPath }), bodyHash, encryptedSymmetricKeyHash: body.encryptedSymmetricKeyHash, receiverPublicKeyHash, alg: body.alg, keyVersion: body.keyVersion }],
       proofs: [session.cid],
       notBefore: now,
       expiresAt: Math.min(now + 60, session.payload.exp),
