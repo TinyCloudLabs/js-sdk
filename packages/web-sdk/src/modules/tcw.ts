@@ -90,6 +90,7 @@ import { showPermissionRequestModal } from "../notifications/lazy-prompts";
 import { applyLegacyNotificationKeys } from "../notifications/legacy-config";
 import {
   requestPermissionsCore,
+  normalizeRuntimeKeyCreatePermissions,
   validateAdditionalPermissions,
   type RequestPermissionsOptions,
 } from "./requestPermissionsCore";
@@ -1430,6 +1431,8 @@ export class TinyCloudWeb {
    * On approve, this does not mutate the manifest or force a new sign-in.
    * The underlying node creates a secondary delegation to the current
    * session key and records it in the invocation permission map.
+   * Exact current-owner `default/share/<id>` key creation is bound to this
+   * live signed session across consent. Native shells cannot request it.
    *
    * `options.expiryMs` sets the requested lifetime of the issued step-up
    * delegation, in milliseconds. Omitted, the node's default applies. The
@@ -1457,32 +1460,76 @@ export class TinyCloudWeb {
       );
     }
 
+    const signOuts = this.signOutCount;
     const node = await this.ensureNode();
+    const ownerDid = node.did;
+    const requested = normalizeRuntimeKeyCreatePermissions(additional, ownerDid);
+    const hasKeyCreate = requested.some((entry) =>
+      entry.service === "tinycloud.encryption" &&
+      entry.actions.includes("tinycloud.encryption/key.create"));
+    let assertCurrentSession: (() => void) | undefined;
+    if (hasKeyCreate) {
+      if (this.config.ui !== false && this.config.ui?.platform === "native") {
+        throw new Error("Exact Share-key creation is unsupported on the native platform.");
+      }
+      const signedSession = node.restorableSession;
+      if (!signedSession || node.isSessionOnly ||
+        !signedSession.delegationCid || !signedSession.verificationMethod || !signedSession.spaceId) {
+        throw new Error("Exact Share-key creation requires a live signed owner session.");
+      }
+      // Capture only public identity fields; never serialize the session JWK.
+      const cid = signedSession.delegationCid;
+      const key = signedSession.verificationMethod;
+      const space = signedSession.spaceId;
+      const address = signedSession.address;
+      const chainId = signedSession.chainId;
+      const sessionDid = node.sessionDid;
+      assertCurrentSession = () => {
+        const current = node.restorableSession;
+        if (this._node !== node || this.signOutCount !== signOuts || this.signOutInFlight > 0 ||
+          current !== signedSession || node.did !== ownerDid || node.sessionDid !== sessionDid ||
+          current.delegationCid !== cid || current.verificationMethod !== key ||
+          current.spaceId !== space || current.address !== address || current.chainId !== chainId) {
+          throw new Error("Permission request cancelled because the signed session changed or signed out.");
+        }
+      };
+      assertCurrentSession();
+    }
     const hasRuntimePermissions =
       this._testHooks?.hasRuntimePermissions ?? ((requested) =>
         node.hasRuntimePermissions(requested));
-    if (hasRuntimePermissions(additional)) {
-      const delegations = node.getRuntimePermissionDelegations(additional);
+    if (hasRuntimePermissions(requested)) {
+      const delegations = node.getRuntimePermissionDelegations(requested);
       return delegations.length > 0
         ? { approved: true, session: this.session(), delegations }
         : { approved: true, session: this.session() };
     }
 
-    const result = await requestPermissionsCore(additional, {
+    const grantPermissions = this._testHooks?.grantPermissions ??
+      ((approved: PermissionEntry[], grantOptions?: RequestPermissionsOptions) =>
+        node.grantRuntimePermissions(
+          approved,
+          grantOptions?.expiryMs !== undefined
+            ? { expiry: grantOptions.expiryMs }
+            : undefined,
+        ));
+    const result = await requestPermissionsCore(requested, {
       manifest,
+      ownerDid,
       showModal: this._testHooks?.showModal ?? ((options) => showPermissionRequestModal(options, this.uiClient.promptScope)),
       isPromptSuppressed: () => isPermissionPromptSuppressed(manifest),
       suppressPromptFor30Days: () =>
         suppressPermissionPromptFor30Days(manifest),
-      grantPermissions: this._testHooks?.grantPermissions ??
-        ((approved, grantOptions) =>
-          node.grantRuntimePermissions(
-            approved,
-            grantOptions?.expiryMs !== undefined
-              ? { expiry: grantOptions.expiryMs }
-              : undefined,
-          )),
+      grantPermissions: assertCurrentSession === undefined
+        ? grantPermissions
+        : (approved, grantOptions) => {
+            assertCurrentSession();
+            return grantOptions === undefined
+              ? grantPermissions(approved)
+              : grantPermissions(approved, grantOptions);
+          },
     }, options);
+    if (result.approved) assertCurrentSession?.();
     return result.approved
       ? {
           approved: true,

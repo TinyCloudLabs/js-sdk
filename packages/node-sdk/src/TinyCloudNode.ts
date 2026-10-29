@@ -136,6 +136,7 @@ import {
   canonicalizeRecapCaveats,
   recapCaveatsEqual,
   expandPermissionEntries as expandPermissionEntriesCore,
+  expandRuntimePermissionEntries,
   expandDelegationPermissionEntries,
   isCapabilitySubset,
   isExplicitOnlyAction,
@@ -6683,7 +6684,7 @@ export class TinyCloudNode {
       return false;
     }
 
-    const expanded = this.expandPermissionEntries(permissions);
+    const expanded = expandRuntimePermissionEntries(permissions, pkhDid(session.address, session.chainId));
     if (this.sessionCoversPermissionEntries(session, expanded)) {
       return true;
     }
@@ -6713,7 +6714,7 @@ export class TinyCloudNode {
     if (!session || !Array.isArray(permissions) || permissions.length === 0) {
       return [];
     }
-    const expanded = this.expandPermissionEntries(permissions);
+    const expanded = expandRuntimePermissionEntries(permissions, pkhDid(session.address, session.chainId));
     return this.findRuntimeGrantsForPermissionEntries(expanded, session).map(
       (grant) => grant.delegation,
     );
@@ -6919,7 +6920,7 @@ export class TinyCloudNode {
       }
     }
 
-    const expanded = this.expandPermissionEntries(permissions);
+    const expanded = expandRuntimePermissionEntries(permissions, pkhDid(session.address, session.chainId));
     if (this.sessionCoversPermissionEntries(session, expanded)) {
       return [];
     }

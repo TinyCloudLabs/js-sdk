@@ -3,6 +3,11 @@
 Track changes to agent-facing development guidance for the TinyCloud JavaScript SDK. Add a concise
 entry when `agent.dev.md` or related agent workflow expectations change.
 
+## 2026-10-29
+
+- TC-2192: documented the exact-owner Share-key runtime consent boundary and
+  session-binding/native refusal rules. Static manifests remain unchanged.
+
 ## 2026-10-26
 
 - MCP personal-app examples and edit/move instructions now omit server-owned
