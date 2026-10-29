@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { FeedCard, FeedHandling, FeedResponsePayload, JSONValue, NewFeedResponse } from "./types";
+import type { FeedCard, FeedHandling, FeedResponsePayload, JSONValue, NewFeedMessage, NewFeedResponse } from "./types";
 
 function isJSONValue(value: unknown, active = new Set<object>()): value is JSONValue {
   if (value === null || typeof value === "boolean" || typeof value === "string") return true;
@@ -35,6 +35,11 @@ export const newFeedResponseSchema: z.ZodType<NewFeedResponse> = z.object({
   choiceId: z.string().min(1).optional(), text: z.string().optional(),
   supersedesResponseId: z.string().min(1).optional(), createdAt: z.string().min(1),
 });
+export const newFeedMessageSchema: z.ZodType<NewFeedMessage> = z.object({
+  ...identity, responseId: z.string().min(1), kind: z.literal("message"),
+  text: z.string(), createdAt: z.string().min(1),
+}).strict();
+export const feedResponseHeaderSchema = z.union([newFeedResponseSchema, newFeedMessageSchema]);
 export const feedHandlingSchema: z.ZodType<FeedHandling> = z.object({
   ...identity, handlingId: z.string().min(1), responseId: z.string().min(1),
   phase: z.enum(["acknowledged", "succeeded", "failed"]), createdAt: z.string().min(1),

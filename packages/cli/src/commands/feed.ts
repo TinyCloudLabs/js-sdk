@@ -2,12 +2,12 @@ import { Command } from "commander";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
-  appendFeedResponse, feedCardSchema, feedHandlingSchema, feedResourceNames, feedResponsePayloadSchema,
+  appendFeedMessage, appendFeedResponse, feedCardSchema, feedHandlingSchema, feedResourceNames, feedResponsePayloadSchema,
   getFeedCardState, initializeFeedDatabases, listFeedCards, listFeedResponses,
-  listenFeedResponses, newFeedResponseSchema, publishFeedCard, readFeedResponsePayload, recordFeedHandling, resolveFeedCard,
+  listenFeedResponses, newFeedMessageSchema, newFeedResponseSchema, publishFeedCard, readFeedResponsePayload, recordFeedHandling, resolveFeedCard,
 } from "@tinycloud/sdk-services/feed";
 import type { Result } from "@tinycloud/sdk-services";
-import type { FeedResponsePayload, FeedSource, NewFeedResponse } from "@tinycloud/sdk-services/feed";
+import type { FeedResponsePayload, FeedSource, NewFeedMessage, NewFeedResponse } from "@tinycloud/sdk-services/feed";
 import { ProfileManager } from "../config/profiles.js";
 import { ensureAuthenticated } from "../lib/sdk.js";
 import { resolveFeedSpace } from "../feed/space.js";
@@ -46,6 +46,18 @@ function agentOptions(command: Command): Command {
     .option("--space <name|uri>", "Owner space containing the feed resources", "applications");
 }
 
+async function readPrivatePayload(file: string | undefined): Promise<FeedResponsePayload | undefined> {
+  if (file === undefined) return undefined;
+  try {
+    const parsed = feedResponsePayloadSchema.safeParse(JSON.parse(await readFile(file, "utf8")));
+    if (!parsed.success) throw new Error("Invalid payload envelope");
+    return parsed.data;
+  } catch {
+    // JSON parser snippets and nested validation/IO causes can contain private data.
+    throw new Error("Could not read a valid private feed response payload file");
+  }
+}
+
 export function registerFeedCommand(program: Command): void {
   const feed = program.command("feed").description("SQLite agent cards, owner responses and durable runtime handoff")
     .addHelpText("after", `
@@ -54,16 +66,16 @@ bundled delegation. Agent labels and tokens select resources, never confer autho
 Home's owner grant uses ${FEED_PREFIX}/ (trailing slash namespace); agent grants
 name exact output, response and response-hook resources. No agent schema or response write.
 
-publish/respond/handling read JSON files carrying full card/revision/issuance and
-response IDs. Retain the same response ID when retrying a saved answer. Follow-ups
-are new append-only records; saving an answer is not acknowledgement or completion.
+publish/respond/message/handling read JSON files carrying full card/revision/issuance
+and response IDs. Retain the same response ID when retrying a saved answer or message.
+Messages never answer cards; saving an answer is not acknowledgement or completion.
 
 watch requires Bun or Node.js 22.13+ (built-in SQLite). --runner is a JSON argv array,
 never a shell command. The runner receives allowlisted response-header JSON and must
 exit zero only after durable acceptance. Uncertain delivery remains unconfirmed and
 is never automatically repeated. Renewal reconciles durable rows at most every five
 minutes while connected; hook notifications are wakeups, not replay or execution proof.
-Private typed payloads are saved atomically with respond --payload-file and read
+Private typed payloads are saved atomically with respond/message --payload-file and read
 explicitly with feed payload. Default notifications include metadata, never payload data.
 `);
 
@@ -118,18 +130,27 @@ explicitly with feed payload. Default notifications include metadata, never payl
         } catch {
           throw new Error("Could not read a valid feed response header file");
         }
-        let payload: FeedResponsePayload | undefined;
-        if (options.payloadFile !== undefined) {
-          try {
-            const parsed = feedResponsePayloadSchema.safeParse(JSON.parse(await readFile(options.payloadFile, "utf8")));
-            if (!parsed.success) throw new Error("Invalid payload envelope");
-            payload = parsed.data;
-          } catch {
-            // JSON parser snippets and nested validation/IO causes can contain private data.
-            throw new Error("Could not read a valid private feed response payload file");
-          }
-        }
+        const payload = await readPrivatePayload(options.payloadFile);
         outputJson(value(await appendFeedResponse(output, responses, response, payload)));
+      } catch (error) { return handleError(error); }
+    });
+
+  agentOptions(feed.command("message").description("Owner: send a note without answering or superseding a card"))
+    .requiredOption("--file <path>", "Message JSON with kind=message, text and full response/card/revision/issuance IDs")
+    .option("--payload-file <path>", "Private typed JSON payload envelope, stored separately from the message header")
+    .action(async (options, command) => {
+      try {
+        const { output, responses } = await context(command);
+        let message: NewFeedMessage;
+        try {
+          const parsed = newFeedMessageSchema.safeParse(JSON.parse(await readFile(options.file, "utf8")));
+          if (!parsed.success) throw new Error("Invalid message header");
+          message = parsed.data;
+        } catch {
+          throw new Error("Could not read a valid feed message header file");
+        }
+        const payload = await readPrivatePayload(options.payloadFile);
+        outputJson(value(await appendFeedMessage(output, responses, message, payload)));
       } catch (error) { return handleError(error); }
     });
 
@@ -149,7 +170,7 @@ explicitly with feed payload. Default notifications include metadata, never payl
       catch (error) { return handleError(error); }
     });
 
-  agentOptions(feed.command("show <reference>").description("Read saved response, acknowledgement and outcome separately"))
+  agentOptions(feed.command("show <reference>").description("Read the current answer, acknowledgement and outcome separately; messages are excluded"))
     .action(async (reference: string, _options, command) => {
       try {
         const { output, responses } = await context(command);

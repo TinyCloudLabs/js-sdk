@@ -2,9 +2,10 @@ import { ErrorCodes, err, ok } from "../types";
 import type { Result } from "../types";
 import type { QueryOptions, SqlStatement, SqlValue } from "../sql/types";
 import type {
-  FeedApi, FeedCard, FeedCardIdentity, FeedHandling, FeedReadDatabase, FeedResponse, FeedResponsePayload, NewFeedResponse,
+  FeedApi, FeedCard, FeedCardIdentity, FeedDatabase, FeedHandling, FeedReadDatabase, FeedResponse,
+  FeedResponseHandling, FeedResponseIdentity, FeedResponsePayload, NewFeedMessage, NewFeedResponse,
 } from "./types";
-import { feedResponsePayloadSchema, newFeedResponseSchema } from "./schemas";
+import { feedResponseHeaderSchema, feedResponsePayloadSchema, newFeedMessageSchema, newFeedResponseSchema } from "./schemas";
 import { projectFeedResponseNotification } from "./notification";
 
 const PRIVATE_RESPONSE_OPTIONS: QueryOptions & { redactErrors: true } = { redactErrors: true };
@@ -61,7 +62,10 @@ function responseDataFailure(message: string, error?: unknown): Result<never> {
 }
 
 function responseFromRow(row: unknown[]): FeedResponse {
-  const header = newFeedResponseSchema.parse(JSON.parse(String(row[1])));
+  return responseFromHeader(row, feedResponseHeaderSchema.parse(JSON.parse(String(row[1]))));
+}
+
+function responseFromHeader(row: unknown[], header: NewFeedResponse | NewFeedMessage): FeedResponse {
   const response: FeedResponse = { ...header, sequence: Number(row[0]) };
   if (row[2] !== null && row[2] !== undefined) {
     response.payloadType = String(row[2]);
@@ -78,10 +82,11 @@ async function storedResponse(db: FeedReadDatabase, responseId: string) {
     if (!result.ok) return responseDataFailure("Could not read the saved feed response", result.error);
     const row = result.data.rows[0];
     if (!row) return ok(undefined);
-    const response = responseFromRow(row);
+    const header = feedResponseHeaderSchema.parse(JSON.parse(String(row[1])));
+    const response = responseFromHeader(row, header);
     const payload: FeedResponsePayload | undefined = row[2] === null || row[2] === undefined ? undefined
       : feedResponsePayloadSchema.parse({ type: row[2], version: Number(row[3]), data: JSON.parse(String(row[4])) });
-    return ok({ response, headerJson: feedJson(newFeedResponseSchema.parse(response)), payload });
+    return ok({ response, headerJson: feedJson(header), payload });
   } catch (error) {
     return responseDataFailure("Could not read the saved feed response", error);
   }
@@ -141,13 +146,34 @@ export const listFeedCards: FeedApi["listFeedCards"] = async (output) => {
     WHERE sequence IN (SELECT MAX(sequence) FROM feed_cards GROUP BY card_id) ORDER BY sequence DESC`);
 };
 
-export const appendFeedResponse: FeedApi["appendFeedResponse"] = async (output, responses, input, inputPayload) => {
-  let payload: FeedResponsePayload | undefined;
-  let response: NewFeedResponse;
+export const appendFeedResponse: FeedApi["appendFeedResponse"] = async (output, responses, input, payload) => {
   try {
     const header = newFeedResponseSchema.safeParse(input);
     if (!header.success) return feedError("INVALID_INPUT", "Invalid feed response header");
-    response = header.data;
+    return appendResponse(output, responses, header.data, payload);
+  } catch {
+    return feedError("INVALID_INPUT", "Invalid feed response header");
+  }
+};
+
+export const appendFeedMessage: FeedApi["appendFeedMessage"] = async (output, responses, input, payload) => {
+  try {
+    const header = newFeedMessageSchema.safeParse(input);
+    if (!header.success) return feedError("INVALID_INPUT", "Invalid feed message header");
+    return appendResponse(output, responses, header.data, payload);
+  } catch {
+    return feedError("INVALID_INPUT", "Invalid feed message header");
+  }
+};
+
+async function appendResponse(
+  output: FeedReadDatabase,
+  responses: FeedDatabase,
+  response: NewFeedResponse | NewFeedMessage,
+  inputPayload?: FeedResponsePayload,
+): Promise<Result<FeedResponse>> {
+  let payload: FeedResponsePayload | undefined;
+  try {
     if (inputPayload !== undefined) {
       const parsed = feedResponsePayloadSchema.safeParse(inputPayload);
       if (!parsed.success) return feedError("INVALID_INPUT", "Invalid private feed response payload");
@@ -162,18 +188,23 @@ export const appendFeedResponse: FeedApi["appendFeedResponse"] = async (output, 
       [response.cardId, response.revision, response.issuanceId], PRIVATE_RESPONSE_OPTIONS);
     if (!cards.ok) return responseDataFailure("Could not verify the response card issuance", cards.error);
     const card = cards.data[0];
-    if (!card || !sameFeedIdentity(card, response) || !card.needsResponse) {
-      return feedError("INVALID_INPUT", "The response does not identify a published actionable card issuance");
+    if (!card || !sameFeedIdentity(card, response)) {
+      return feedError("INVALID_INPUT", "The response does not identify a published card issuance");
     }
-    if (response.choiceId !== undefined && !card.choices?.some((choice) => choice.id === response.choiceId)) {
-      return feedError("INVALID_INPUT", "The response choice is not part of this card issuance");
-    }
-    if (response.supersedesResponseId) {
-      const previous = await jsonRows<FeedResponse>(responses,
-        "SELECT response_json FROM feed_responses WHERE response_id = ?", [response.supersedesResponseId], PRIVATE_RESPONSE_OPTIONS);
-      if (!previous.ok) return responseDataFailure("Could not verify the corrected response", previous.error);
-      if (!previous.data[0] || !sameFeedIdentity(previous.data[0], response)) {
-        return feedError("INVALID_INPUT", "A correction must reference a response to the same card issuance");
+    if (response.kind !== "message") {
+      if (!card.needsResponse) {
+        return feedError("INVALID_INPUT", "The response does not identify a published actionable card issuance");
+      }
+      if (response.choiceId !== undefined && !card.choices?.some((choice) => choice.id === response.choiceId)) {
+        return feedError("INVALID_INPUT", "The response choice is not part of this card issuance");
+      }
+      if (response.supersedesResponseId) {
+        const previous = await jsonRows<FeedResponse>(responses,
+          "SELECT response_json FROM feed_responses WHERE response_id = ?", [response.supersedesResponseId], PRIVATE_RESPONSE_OPTIONS);
+        if (!previous.ok) return responseDataFailure("Could not verify the corrected response", previous.error);
+        if (!previous.data[0] || !sameFeedIdentity(previous.data[0], response)) {
+          return feedError("INVALID_INPUT", "A correction must reference a response to the same card issuance");
+        }
       }
     }
     const encoded = feedJson(response);
@@ -210,7 +241,7 @@ export const appendFeedResponse: FeedApi["appendFeedResponse"] = async (output, 
   } catch (error) {
     return responseDataFailure("Could not save the feed response and private payload", error);
   }
-};
+}
 
 export const readFeedResponsePayload: FeedApi["readFeedResponsePayload"] = async (responses, identity) => {
   if (!validIdentity(identity) || typeof identity.responseId !== "string" || !identity.responseId) {
@@ -289,6 +320,36 @@ export const recordFeedHandling: FeedApi["recordFeedHandling"] = async (output, 
     ? ok(stored.data[0]) : feedError("INVALID_INPUT", "A handling ID cannot change content");
 };
 
+async function selectResponseHandling(
+  output: FeedReadDatabase,
+  identity: FeedResponseIdentity,
+): Promise<Result<FeedResponseHandling | undefined>> {
+  const records = await jsonRows<FeedHandling>(output,
+    `SELECT handling_json FROM feed_handling WHERE response_id = ? AND card_id = ? AND revision = ? AND issuance_id = ?
+     ORDER BY sequence`, [identity.responseId, identity.cardId, identity.revision, identity.issuanceId]);
+  if (!records.ok) return records;
+  if (records.data.length === 0) return ok(undefined);
+  const handling: FeedResponseHandling = { acknowledgement: null, outcome: null };
+  for (const item of records.data) {
+    if (item.responseId !== identity.responseId || !sameFeedIdentity(item, identity)) {
+      return feedError("INVALID_INPUT", "Stored handling does not match the response identity");
+    }
+    if (item.phase === "acknowledged") handling.acknowledgement = item;
+    else if (item.phase === "succeeded" || item.phase === "failed") handling.outcome = item;
+    else return feedError("INVALID_INPUT", "Stored handling has an unknown phase");
+  }
+  return ok(handling);
+}
+
+export const readFeedResponseHandling: FeedApi["readFeedResponseHandling"] = async (output, identity) => {
+  if (!validIdentity(identity) || typeof identity.responseId !== "string" || !identity.responseId) {
+    return feedError("INVALID_INPUT", "Handling reads require full response and card identities");
+  }
+  const handling = await selectResponseHandling(output, identity);
+  if (!handling.ok) return handling;
+  return handling.data ? ok(handling.data) : feedError("NOT_FOUND", "Matching response handling not found");
+};
+
 export const getFeedCardState: FeedApi["getFeedCardState"] = async (output, responses, identity) => {
   const params = [identity.cardId, identity.revision, identity.issuanceId];
   const cards = await jsonRows<FeedCard>(output,
@@ -297,25 +358,20 @@ export const getFeedCardState: FeedApi["getFeedCardState"] = async (output, resp
   if (!cards.data[0]) return feedError("NOT_FOUND", "Card issuance not found");
   const saved = await responses.query<unknown>(
     `${RESPONSE_HEADER_SELECT} WHERE r.card_id = ? AND r.revision = ? AND r.issuance_id = ?
+       AND json_extract(r.response_json, '$.kind') IN ('answer', 'followup')
      ORDER BY r.sequence DESC LIMIT 1`, params, PRIVATE_RESPONSE_OPTIONS);
   if (!saved.ok) return responseDataFailure("Could not read the card's saved response", saved.error);
   const row = saved.data.rows[0];
   let response: FeedResponse | null;
   try { response = row ? responseFromRow(row) : null; }
   catch (error) { return responseDataFailure("Could not read the card's saved response", error); }
-  let acknowledgement: FeedHandling | null = null;
-  let outcome: FeedHandling | null = null;
-  if (response) {
-    const handling = await jsonRows<FeedHandling>(output,
-      `SELECT handling_json FROM feed_handling WHERE response_id = ? AND card_id = ? AND revision = ? AND issuance_id = ?
-       ORDER BY sequence`, [response.responseId, ...params]);
-    if (!handling.ok) return handling;
-    for (const item of handling.data) {
-      if (item.phase === "acknowledged") acknowledgement = item;
-      else outcome = item;
-    }
-  }
-  return ok({ card: cards.data[0], response, acknowledgement, outcome });
+  const handling = response ? await selectResponseHandling(output, response) : ok(undefined);
+  if (!handling.ok) return handling;
+  return ok({
+    card: cards.data[0], response,
+    acknowledgement: handling.data?.acknowledgement ?? null,
+    outcome: handling.data?.outcome ?? null,
+  });
 };
 
 export const resolveFeedCard: FeedApi["resolveFeedCard"] = async (output, reference) => {

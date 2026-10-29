@@ -9,4 +9,6 @@ Support versioned private response payloads saved atomically with their headers 
 
 Add opt-in `redactErrors` to SQL query, execute, and batch calls so private response operations receive static errors with known codes and HTTP status before ordinary service-error delivery. Calls without the option retain their existing error details.
 
+Add explicit outbound feed messages without changing card decisions or owner-private state. Messages share immutable response identities, atomic private payloads, and notification-safe handoff. Exact-identity handling reads retain historical acknowledgement and outcome receipts after later answers or messages.
+
 Details: TC-2205

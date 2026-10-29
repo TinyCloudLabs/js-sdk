@@ -48,7 +48,14 @@ export interface NewFeedResponse extends FeedResponseIdentity {
   createdAt: string;
 }
 
-export interface FeedResponse extends NewFeedResponse {
+export interface NewFeedMessage extends FeedResponseIdentity {
+  kind: "message";
+  text: string;
+  createdAt: string;
+}
+
+export interface FeedResponse extends Omit<NewFeedResponse, "kind"> {
+  kind: NewFeedResponse["kind"] | "message";
   sequence: number;
   payloadType?: string;
   payloadVersion?: number;
@@ -62,11 +69,14 @@ export interface FeedHandling extends FeedCardIdentity {
   detail?: Record<string, unknown>;
 }
 
-export interface FeedCardState {
-  card: FeedCard;
-  response: FeedResponse | null;
+export interface FeedResponseHandling {
   acknowledgement: FeedHandling | null;
   outcome: FeedHandling | null;
+}
+
+export interface FeedCardState extends FeedResponseHandling {
+  card: FeedCard;
+  response: FeedResponse | null;
 }
 
 export interface FeedDatabases {
@@ -136,6 +146,12 @@ export interface FeedApi {
     response: NewFeedResponse,
     payload?: FeedResponsePayload,
   ): Promise<Result<FeedResponse>>;
+  appendFeedMessage(
+    output: FeedReadDatabase,
+    responses: FeedDatabase,
+    input: NewFeedMessage,
+    payload?: FeedResponsePayload,
+  ): Promise<Result<FeedResponse>>;
   readFeedResponsePayload(
     responses: FeedReadDatabase,
     identity: FeedResponseIdentity,
@@ -147,6 +163,7 @@ export interface FeedApi {
     options?: { afterSequence?: number; limit?: number },
   ): Promise<Result<FeedResponse[]>>;
   recordFeedHandling(output: FeedDatabase, handling: FeedHandling): Promise<Result<FeedHandling>>;
+  readFeedResponseHandling(output: FeedReadDatabase, identity: FeedResponseIdentity): Promise<Result<FeedResponseHandling>>;
   getFeedCardState(
     output: FeedReadDatabase,
     responses: FeedReadDatabase,

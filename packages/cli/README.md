@@ -163,6 +163,23 @@ tc --profile feed-agent feed handling --agent writer --file handling.json
 tc --profile owner feed show card-draft-01 --agent writer
 ```
 
+For an explicit outbound note to that agent, save a separate `message.json`:
+
+```json
+{"responseId":"message-draft-01","cardId":"card-draft-01","revision":1,"issuanceId":"issuance-draft-01","kind":"message","text":"Please explain the draft before I answer.","createdAt":"2026-10-29T00:02:00Z"}
+```
+
+```bash
+tc --profile owner feed message --agent writer --file message.json
+```
+
+Messages also work on information cards with `needsResponse: false`. They do not
+answer a card, clear Needs action, or replace its current answer or handling.
+`choiceId` and `supersedesResponseId` are refused on messages. Agent response pages
+and watch include messages, with acknowledgements/outcomes tied to their own full
+response IDs. Private owner notes, task ticks, and seen state remain owner-only
+registry data; they are not outbound messages.
+
 For a new response with private structured data, `payload.json` is a versioned
 JSON envelope, for example:
 
@@ -187,11 +204,20 @@ Keep approval codes in `payload.data`, never the normal response text.
 
 Default `list`, `show`, `responses`, and `watch` output contains only response
 headers and optional `payloadType`/`payloadVersion` metadata, not payload data.
-The SDK equivalents are the optional fourth `appendFeedResponse` argument and
-the explicit `readFeedResponsePayload` method. Owner schema initialization adds
-`feed_response_payloads`; existing response-read authority also authorizes an
-explicit payload read. “Private” here means excluded from notification copies,
-not a new authorization boundary against an agent already granted database read.
+The SDK equivalents are the optional fourth `appendFeedResponse` or
+`appendFeedMessage` argument and the explicit `readFeedResponsePayload` method.
+`feed message` accepts the same `--payload-file` option on its first save.
+Owner schema initialization adds `feed_response_payloads`; existing response-read
+authority also authorizes an explicit payload read. “Private” here means excluded
+from notification copies, not a new authorization boundary against an agent already
+granted database read.
+
+`readFeedResponseHandling(output, identity)` reads acknowledgement and outcome for
+one full response/card/revision/issuance identity, including historical answers or
+messages after later arrivals. Unknown or mismatched handling returns `NOT_FOUND`,
+not a synthetic empty receipt. Known acknowledgement-only or outcome-only history
+retains the other slot as `null`. `getFeedCardState` selects only the current
+answer/follow-up; a saved answer without handling still has `null` receipt slots.
 
 Retain the full response ID on a retry. Reusing it with different content is
 refused. Responses bind the full card ID, revision, and issuance; corrections

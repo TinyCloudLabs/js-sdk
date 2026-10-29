@@ -11,9 +11,9 @@ export const projectFeedResponseNotification: FeedApi["projectFeedResponseNotifi
     createdAt: response.createdAt,
     sequence: response.sequence,
   };
-  if (response.choiceId !== undefined) notification.choiceId = response.choiceId;
+  if (response.kind !== "message" && response.choiceId !== undefined) notification.choiceId = response.choiceId;
   if (response.text !== undefined) notification.text = response.text;
-  if (response.supersedesResponseId !== undefined) notification.supersedesResponseId = response.supersedesResponseId;
+  if (response.kind !== "message" && response.supersedesResponseId !== undefined) notification.supersedesResponseId = response.supersedesResponseId;
   if (response.payloadType !== undefined) notification.payloadType = response.payloadType;
   if (response.payloadVersion !== undefined) notification.payloadVersion = response.payloadVersion;
   return notification;

@@ -136,6 +136,7 @@
     { "command": "feed connect", "status": "legacy" },
     { "command": "feed publish", "status": "legacy" },
     { "command": "feed respond", "status": "legacy" },
+    { "command": "feed message", "status": "legacy" },
     { "command": "feed handling", "status": "legacy" },
     { "command": "feed list", "status": "legacy" },
     { "command": "feed show <reference>", "status": "legacy" },
