@@ -48,6 +48,7 @@
     "mcp-token-status",
     "node-sdk-core-validated-activation",
     "owner-revocation-window",
+    "quiet-approval-links",
     "replica-repair-backoff",
     "replication-content-fetch-lazy",
     "sdk-issued-delegations",

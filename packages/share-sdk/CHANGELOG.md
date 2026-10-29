@@ -1,5 +1,12 @@
 # @tinycloud/share-sdk
 
+## 1.4.1-beta.3
+
+### Patch Changes
+
+- Updated dependencies [19048ec]
+  - @tinycloud/share-envelope@1.4.0-beta.2
+
 ## 1.4.1-beta.2
 
 ### Patch Changes
