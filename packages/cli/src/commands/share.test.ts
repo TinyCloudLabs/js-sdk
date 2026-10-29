@@ -10,6 +10,7 @@ import { configureShareCommandServices as configureServices, inspectShareInputOn
 import { ShareHistoryReadError, ShareHistoryRetryError, ShareHistoryUnreadableError, SharePublishAuthorityError } from "../share/errors.js";
 import { safeFilename, writeShareOutput } from "../share/io.js";
 import { runShareCaptured } from "./share.integration-harness.js";
+import { setJsonOutputRequested } from "../output/formatter.js";
 
 const SHORT_LINK = buildShortLink({
   origin: "https://share.example", type: "share", id: "a".repeat(26), key: new Uint8Array(32).fill(7),
@@ -71,6 +72,86 @@ describe("tc share command contract", () => {
     expect(() => parseShareTarget("domain:example.123")).toThrow("recipient email domain is invalid");
     expect(() => parseShareTarget("unknown-target")).toThrow();
   });
+  test("unknown local errors retain their class and diagnostic without credential material", () => {
+    class ManifestValidationError extends Error {
+      override name = "ManifestValidationError";
+    }
+    const diagnostic = shareCliError(new ManifestValidationError("Manifest validation failed: named keys go in manifest.keys"));
+    expect(diagnostic.message).toContain("ManifestValidationError");
+    expect(diagnostic.message).toContain("named keys go in manifest.keys");
+    class LocalPublishError extends Error {}
+    expect(shareCliError(new LocalPublishError("cannot prepare share")).message).toContain("LocalPublishError");
+    const canaries = [
+      "https://user:URLSECRET@share.example/s/full?token=QUERYSECRET#v=4&k=FRAGMENTSECRET",
+      "Bearer BEARERSECRET",
+      "tc1-TOKENSECRET",
+      'privateKey=KEYSECRET token=TOKENVALUE password=PASSWORDSECRET',
+      '{"kty":"OKP","d":"JWKSECRET","x":"PUBLIC"}',
+      "-----BEGIN PRIVATE KEY-----\nPEMSECRET\n-----END PRIVATE KEY-----",
+      "eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiJTRUNSRVQifQ.SIGNATURESECRET",
+      "bafyPRIVATEMATERIALCID",
+    ];
+    for (const canary of canaries) {
+      const failure = shareCliError(new ManifestValidationError(`named keys go in manifest.keys; ${canary}`));
+      expect(failure.message).not.toMatch(/SECRET|TOKENVALUE|PRIVATEMATERIAL/);
+    }
+    const control = shareCliError(new ManifestValidationError(`bad\u001b[31m\n${"x".repeat(5000)}`));
+    expect(control.message).not.toMatch(/[\u0000-\u001f\u007f]/);
+    expect(control.message.length).toBeLessThanOrEqual(600);
+  });
+
+  for (const [label, message, forbidden] of [
+    ["sensitive values", "preparation failed; seed=alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima", ["alpha", "bravo", "lima"]],
+    ["bounded diagnostics", `${"x".repeat(8175)} ${"0123456789ABCDEF".repeat(4)}`, ["0123456789ABCDEF"]],
+    ["composed diagnostics", "Couldn't prepare; seed='alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima'", ["alpha", "bravo", "lima"]],
+    ["structured diagnostics", 'preparation failed; {"seed": "alpha\nbravo\nlima', ["alpha", "bravo", "lima"]],
+    ["unreviewed diagnostics", "unreviewed upstream prose alpha bravo lima", ["alpha", "bravo", "lima"]],
+    ["reviewed diagnostics", "Manifest validation failed: named keys go in manifest.keys", []],
+  ] as const) {
+    for (const mode of ["human", "json"] as const) {
+      test(`unknown publication errors preserve confidentiality for ${label} (${mode})`, async () => {
+        const directory = await mkdtemp(join(tmpdir(), "tc-share-diagnostic-"));
+        const file = join(directory, "note.txt");
+        await writeFile(file, "synthetic diagnostic boundary input");
+        class LocalPublishError extends Error {}
+        configureShareCommandServices({ targetAdapter: { async publish() { throw new LocalPublishError(message); } } });
+        const originalExit = process.exit;
+        const originalTty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+        const jsonFlag = Symbol.for("tinycloud.cli.jsonOutputRequested");
+        const originalJson = Object.getOwnPropertyDescriptor(globalThis, jsonFlag);
+        const exits: (number | undefined)[] = [];
+        process.exit = ((code?: number) => { exits.push(code); }) as typeof process.exit;
+        Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+        setJsonOutputRequested(mode === "json");
+        try {
+          const result = await runShareCaptured(["share", "publish", file, "--to", "person@example.com", ...(mode === "json" ? ["--json"] : [])]);
+          expect(exits).toEqual([2]);
+          expect(result.stdout).toBe("");
+          expect(result.stderr).toContain("LocalPublishError");
+          if (mode === "json") expect(JSON.parse(result.stderr).error.code).toBe("INVALID_ARGUMENT");
+          else expect(result.stderr.trimStart().startsWith("{")).toBe(false);
+          for (const value of forbidden) expect(result.stderr).not.toContain(value);
+          if (label === "reviewed diagnostics") expect(result.stderr).toContain(message);
+        } finally {
+          process.exit = originalExit;
+          if (originalTty) Object.defineProperty(process.stdout, "isTTY", originalTty);
+          else Reflect.deleteProperty(process.stdout, "isTTY");
+          if (originalJson) Object.defineProperty(globalThis, jsonFlag, originalJson);
+          else Reflect.deleteProperty(globalThis, jsonFlag);
+          configureShareCommandServices({});
+          await rm(directory, { recursive: true, force: true });
+        }
+      });
+    }
+  }
+  test("missing decrypt points to a single standard approval request, not relogin", () => {
+    const failure = shareCliError(new SharePublishAuthorityError({ kind: "decrypt-not-held" }));
+    expect(failure.message).toContain("auth request --grant --cap tinycloud.encryption:default:share/:decrypt");
+    expect(failure.message).toContain("retry");
+    expect(failure.message).not.toContain("auth login");
+    expect(failure.message).not.toContain("--paste");
+  });
+
   test("an untrusted-origin inline link exits 5 ORIGIN_MISMATCH and a malformed link exits 2 INVALID_LINK (TC-1737)", () => {
     const mismatch = shareCliError(new ShareReceiveError("origin-mismatch", "share link origin does not match the trusted viewer origin"));
     expect([mismatch.code, mismatch.exitCode]).toEqual(["ORIGIN_MISMATCH", 5]);
@@ -197,9 +278,6 @@ describe("tc share command contract", () => {
     }
     // An upstream code that is not a plain identifier is dropped, not echoed.
     expect(shareCliError(withStatus(500, { code: `bad ${secret}` })).message).not.toMatch(/SECRET|PRIVATEMATERIAL/);
-    // No status, verdict or network signal: unchanged.
-    expect(shareCliError(new Error(secret))).toMatchObject({ code: "INVALID_ARGUMENT", exitCode: 2, message: "share operation failed" });
-    expect(shareCliError(new TypeError("recipient is invalid"))).toMatchObject({ code: "INVALID_ARGUMENT", message: "share input is invalid" });
 
     const upload = shareCliError(new SharePublishAuthorityError({ kind: "upload-failed" }));
     expect(upload).toMatchObject({ code: "UPLOAD_FAILED", exitCode: 4 });
@@ -952,8 +1030,6 @@ describe("share history recover failures", () => {
   });
 
   test("leaves other failures to the generic share mapping", () => {
-    const unknown = shareHistoryRecoverError(new Error("Not signed in. Call signIn() first."));
-    expect(unknown).toMatchObject({ code: "INVALID_ARGUMENT", exitCode: 2, message: "share operation failed" });
     expect(shareHistoryRecoverError(Object.assign(new Error("missing"), { code: "ENOENT" }))).toMatchObject({ code: "INVALID_ARGUMENT", exitCode: 2 });
   });
 });
@@ -1031,14 +1107,14 @@ function reviewRecordForDefaults(): SenderShareRecord {
 }
 
 describe("tc share from a sign-in without the default-key decrypt", () => {
-  test("an email share is refused with PERMISSION_DENIED pointing at the paste sign-in, and nothing is stored or sent", async () => {
+  test("missing decrypt offers a same-profile approval request and stores or sends nothing", async () => {
     const directory = await mkdtemp(join(tmpdir(), "tc-share-decrypt-"));
     const file = join(directory, "note.md");
     await writeFile(file, "# note\n");
     const stored = new Map<string, SenderShareRecord>();
     let deliveries = 0;
     configureShareCommandServices({
-      targetAdapter: { async publish() { throw new SharePublishAuthorityError({ kind: "decrypt-not-held" }); } },
+      targetAdapter: { async publish() { throw new SharePublishAuthorityError({ kind: "decrypt-not-held", profileName: "publisher" }); } },
       records: {
         async put(record) { stored.set(record.shareId, record); },
         async get(shareId) { return stored.get(shareId); },
@@ -1054,7 +1130,7 @@ describe("tc share from a sign-in without the default-key decrypt", () => {
       const result = await runShareCaptured(["share", "publish", file, "--to", "email:alice@example.com", "--notify", "--json", ...await emailPublishArgs(directory)]);
       expect(exits).toEqual([5]);
       expect(result.stderr).toContain("PERMISSION_DENIED");
-      expect(result.stderr).toContain("--paste");
+      expect(result.stderr).toContain("--profile 'publisher' auth request --grant --cap tinycloud.encryption:default:share/:decrypt");
       expect(result.stdout).toBe("");
       expect(stored.size).toBe(0);
       expect(deliveries).toBe(0);

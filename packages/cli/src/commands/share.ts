@@ -41,7 +41,8 @@ import { canonicalMailbox } from "@tinycloud/share-envelope";
 import { ProfileLockTimeoutError } from "@tinycloud/operations/state";
 import { parseDuration } from "../lib/duration.js";
 import { CLIError, handleError, storageFullError, wrapError } from "../output/errors.js";
-import { classifyShareFailure } from "../share/failure-class.js";
+import { classifyShareFailure, unknownShareDiagnostic } from "../share/failure-class.js";
+import productionEmailDescriptor from "../share/email-descriptor.json";
 import { authorizationRequiredJson, inspectHuman, publishHuman, receiveHuman, receiveJson, writeJson } from "../share/output.js";
 import { MAX_SHARE_STDIN_BYTES, readBoundedUrlStdin, readShareInput, shareInputFilename, writeShareOutput } from "../share/io.js";
 import { quarantineUnreadableProfileHistory } from "../share/adapters.js";
@@ -138,7 +139,7 @@ export function shareHistoryRecoverError(error: unknown): CLIError {
   return shareCliError(error);
 }
 
-/** @internal Map share failures without echoing remote error text. */
+/** @internal Map known failures to fixed diagnostics; redact unknown error names and messages. */
 export function shareCliError(error: unknown, operation: "publish" | "notify" = "publish"): CLIError {
   if (error instanceof CLIError) return error;
   if (error instanceof ArtifactError) {
@@ -240,7 +241,8 @@ export function shareCliError(error: unknown, operation: "publish" | "notify" = 
       return new CLIError("UPLOAD_FAILED", "share source upload failed; nothing was shared", 4);
     }
     if (failure.kind === "decrypt-not-held") {
-      return new CLIError("PERMISSION_DENIED", `Email shares need a paste sign-in: run ${CLI_NAME} auth login --paste --manifest builtin:share-publishing`, 5);
+      const profile = failure.profileName === undefined ? "" : `--profile '${failure.profileName.replaceAll("'", "'\\''")}' `;
+      return new CLIError("PERMISSION_DENIED", `This session lacks decrypt authority for email shares. Nothing was shared. Run \`${CLI_NAME} ${profile}auth request --grant --cap tinycloud.encryption:default:share/:decrypt\`, approve the single OpenKey request for the owner's default-network share/ keys, then retry this publish. No new login is needed.`, 5);
     }
     if (failure.kind === "over-limit") {
       return new CLIError("MAX_BYTES_EXCEEDED", ADDRESSED_SHARE_TOO_LARGE_MESSAGE, 7, { hint: `What stays behind: ${failure.remaining.join("; ")}.` });
@@ -285,11 +287,7 @@ export function shareCliError(error: unknown, operation: "publish" | "notify" = 
   // by class and status instead of collapsing into an invalid-argument error.
   const classified = mapped === undefined ? classifyShareFailure(error, `\`${CLI_NAME} auth login\``) : undefined;
   if (classified !== undefined) return Object.assign(new CLIError(classified.code, classified.reason, classified.exitCode), { cause: error });
-  if (error instanceof TypeError) return new CLIError("INVALID_ARGUMENT", "share input is invalid", 2);
-  // Share adapters are external authority seams. Never echo an adapter's
-  // arbitrary exception text to contract stdout/stderr; it may contain a
-  // bearer URL, claim, session identifier, or provider response.
-  return new CLIError(mapped?.code ?? "INVALID_ARGUMENT", mapped ? mapped.code : "share operation failed", mapped?.exit ?? 2);
+  return new CLIError(mapped?.code ?? "INVALID_ARGUMENT", mapped ? mapped.code : unknownShareDiagnostic(error), mapped?.exit ?? 2);
 }
 
 function inputUrl(value: string | undefined, stdin: boolean): Promise<string> {
@@ -426,9 +424,9 @@ export function registerShareCommand(program: Command): void {
     .description("Publish one or more bounded files as a Share, or a folder with an index.html as one self-contained page (anyone links only)")
     .option("--name <filename>", "Filename for stdin input, or the published .html name of a folder")
     .option("--to <target>", "Share target", "anyone")
-    .option("--credential-descriptor <path>", "Email credential flow descriptor JSON")
-    .option("--issuer-did <did>", "Trusted email credential issuer DID")
-    .option("--issuer-kid <kid>", "Trusted email credential issuer key ID")
+    .option("--credential-descriptor <path>", "Override the production tinycloud.email-proof/v1 descriptor with a JSON file")
+    .option("--issuer-did <did>", "Override the trusted production email issuer (did:web:issuer.credentials.org)")
+    .option("--issuer-kid <kid>", "Override the trusted production email key (did:web:issuer.credentials.org#controller)")
     .option("--notify", "Email an exact-email recipient, or a domain mailbox on node 1.17.3+")
     .option("--notify-to <address>", "Mailbox to invite for --to domain:<name> --notify (node 1.17.3+)")
     .option("--expires <duration>", "Share lifetime")
@@ -458,14 +456,12 @@ export function registerShareCommand(program: Command): void {
         const target = parseShareTarget(options.to);
         const actions = requestedActions(options.action);
         if (options.notify === true && !actions.includes("read")) throw new CLIError("INVALID_ARGUMENT", "--notify requires the read action; nothing was shared", 2);
-        if (target.kind === "email" && (!options.credentialDescriptor || !options.issuerDid || !options.issuerKid)) {
-          throw new CLIError("INVALID_ARGUMENT", "email publication requires --credential-descriptor, --issuer-did, and --issuer-kid", 2);
-        }
         if (target.kind !== "email" && (options.credentialDescriptor || options.issuerDid || options.issuerKid)) {
           throw new CLIError("INVALID_ARGUMENT", "credential options require an exact email target", 2);
         }
+        // Pinned from the live issuer DID and catalog; explicit flags remain independent overrides.
         const credentialDescriptor = target.kind === "email"
-          ? JSON.parse(await readFile(options.credentialDescriptor, "utf8")) as unknown
+          ? options.credentialDescriptor === undefined ? productionEmailDescriptor : JSON.parse(await readFile(options.credentialDescriptor, "utf8")) as unknown
           : undefined;
         // A folder with an index.html becomes one self-contained page for an anyone-with-the-link share. Addressed and
         // --prefix publication of a folder is not offered: a directory falls through to the file reader and is refused.
@@ -523,7 +519,11 @@ export function registerShareCommand(program: Command): void {
           origin: options.viewerOrigin,
           ...(maxBytes === undefined ? {} : { maxBytes }),
           notify: options.notify === true,
-          ...(credentialDescriptor === undefined ? {} : { credentialDescriptor, issuerDid: options.issuerDid, issuerKid: options.issuerKid }),
+          ...(credentialDescriptor === undefined ? {} : {
+            credentialDescriptor,
+            issuerDid: options.issuerDid ?? productionEmailDescriptor.issuer.did,
+            issuerKid: options.issuerKid ?? productionEmailDescriptor.issuer.kid,
+          }),
           // The artifact request rides on the adapter call rather than through `publishTargetShare`, whose code is part of
           // the browser bundles (the web-sdk size ceiling counts every byte it carries).
           targetAdapter: artifact === undefined || shareServices.targetAdapter === undefined

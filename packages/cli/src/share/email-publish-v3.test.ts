@@ -6,6 +6,12 @@ import { canonicalDigest, createEmailCredentialRequirement, credentialRequiremen
 import { canonicalize, toBase64Url, verifyEnvelopeV3, type ShareEnvelopeV3 } from "@tinycloud/share-envelope";
 import { resolveLink } from "@tinycloud/share-envelope/links";
 import { publishEmailShareV3, type EmailPublishV3Input } from "./email-publish-v3.js";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { MemorySenderShareRecordStorage, type PublishedShare } from "@tinycloud/share-sdk";
+import { configureShareCommandServices } from "../commands/share.js";
+import { runShareCaptured } from "../commands/share.integration-harness.js";
 
 const vectors = new URL("../../../sdk-core/test-fixtures/opencredentials-v1/golden-descriptor-digests.json", import.meta.url);
 const descriptor = ((await Bun.file(vectors).json()) as { vectors: { name: string; descriptor: unknown }[] }).vectors.find((vector) => vector.name === "email")!.descriptor;
@@ -88,6 +94,72 @@ function harness(shareId: string) {
 }
 
 describe("CLI V3 email publisher", () => {
+  test("plain email publish signs the production commitment and honors each credential override", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "tc-email-defaults-"));
+    const file = join(directory, "note.txt");
+    await writeFile(file, "note");
+    const override = structuredClone(descriptor) as { issuer: { did: string; kid: string } };
+    override.issuer.did = "did:web:custom.example";
+    override.issuer.kid = "did:web:custom.example#email";
+    const descriptorPath = join(directory, "descriptor.json");
+    await writeFile(descriptorPath, JSON.stringify(override));
+    const originalExit = process.exit;
+    const exits: (number | undefined)[] = [];
+    process.exit = ((code?: number) => { exits.push(code); }) as typeof process.exit;
+    const fixture = harness("defaultshare1234567");
+    let published: PublishedShare | undefined;
+    const recipients: string[] = [];
+    configureShareCommandServices({
+      shortLinkInvitations: true,
+      records: new MemorySenderShareRecordStorage(),
+      links: { show: async (share) => ({ url: share.url, short: true }), unlink: async () => "deleted" },
+      targetAdapter: { async publish(request) {
+        published = await publishEmailShareV3({
+          ...fixture.input,
+          credentialDescriptor: request.credentialDescriptor,
+          issuerDid: request.issuerDid!,
+          issuerKid: request.issuerKid!,
+        });
+        return published;
+      } },
+      delivery: { async deliver(request) { recipients.push(request.recipient); return "delivered"; } },
+    });
+    try {
+      const output = await runShareCaptured(["share", "publish", file, "--to", "person@example.com", "--notify", "--json"]);
+      expect(exits).toEqual([]);
+      expect(output.stderr).toBe("");
+      expect(JSON.parse(output.stdout).notification.state).toBe("delivered");
+      const opened = await resolveLink(published!.url, { trustedOrigins: [fixture.input.shareOrigin], apiOrigin: "https://api.tinycloud.xyz" });
+      const envelope = opened.value as unknown as ShareEnvelopeV3;
+      expect(await verifyEnvelopeV3(envelope, { expectedSignerDid: ownerDid })).toBe(true);
+      expect(envelope.policy).toMatchObject({
+        credentialRequirement: {
+          descriptorDigest: "1tg-qphmKBVtNwzVg9xyz-xxqt_xtMXAsQyXw46m8S0",
+          issuerDid: "did:web:issuer.credentials.org",
+          issuerKid: "did:web:issuer.credentials.org#controller",
+        },
+      });
+      // Distinct overrides must not be silently ignored. Existing trust checks still refuse mismatches.
+      for (const flags of [
+        ["--credential-descriptor", descriptorPath],
+        ["--issuer-did", override.issuer.did],
+        ["--issuer-kid", override.issuer.kid],
+      ]) {
+        exits.length = 0;
+        const refused = await runShareCaptured(["share", "publish", file, "--to", "person@example.com", "--notify", "--json", ...flags]);
+        expect(exits).toEqual([2]);
+        expect(refused.stdout).toBe("");
+        expect(JSON.parse(refused.stderr).error.code).toBe("INVALID_ARGUMENT");
+      }
+      expect(recipients).toEqual(["person@example.com"]);
+      expect(fixture.roots).toEqual(["policy-authority", "policy-enforcement"]);
+    } finally {
+      process.exit = originalExit;
+      configureShareCommandServices({});
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   test("publishes a signed v4 link containing the exact leaf policy and six-field credential commitment", async () => {
     const first = harness("shareone1234567890");
     const second = harness("sharetwo1234567890");

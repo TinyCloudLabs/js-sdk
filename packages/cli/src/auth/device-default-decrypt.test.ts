@@ -15,8 +15,6 @@ const { verifyScopedLogin } = await import("./scoped-login.js");
 const { keyToDID } = await import("./local-key.js");
 const { sharePublishingPermissions } = await import("../share/publishing-manifest.js");
 const { loadManifestPermissions } = await import("../lib/permissions.js");
-const { shareCliError } = await import("../commands/share.js");
-const { SharePublishAuthorityError } = await import("../share/errors.js");
 
 const NODE = "https://tee.node.tinycloud.xyz";
 const wasm = new NodeWasmBindings();
@@ -101,9 +99,4 @@ describe("share publishing and the default-key decrypt", () => {
     ]);
   });
 
-  test("an email share from a sign-in without decrypt is one plain line pointing at the paste sign-in", () => {
-    const refusal = shareCliError(new SharePublishAuthorityError({ kind: "decrypt-not-held" }));
-    expect(refusal.message).toBe("Email shares need a paste sign-in: run tc auth login --paste --manifest builtin:share-publishing");
-    expect(refusal.message).not.toContain("\n");
-  });
 });

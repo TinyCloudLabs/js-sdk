@@ -72,3 +72,23 @@ export function classifyShareFailure(error: unknown, loginHint: string): ShareFa
   }
   return undefined;
 }
+
+/** Reviewed fixed local diagnostics only; never add input-derived templates here. */
+const SAFE_SHARE_DIAGNOSTICS: Readonly<Record<string, true>> = {
+  "Manifest validation failed: named keys go in manifest.keys": true,
+  "email credential descriptor and issuer are required": true,
+  "email credential issuer or claim is invalid": true,
+  "email share binding is invalid": true,
+  "email shares require the email credential profile": true,
+  "Unexpected end of JSON input": true,
+};
+
+/** Last-resort class and safe diagnostic only; arbitrary exception text is confidential. */
+export function unknownShareDiagnostic(error: unknown): string {
+  if (!(error instanceof Error)) return "UnknownError: share operation failed (details redacted)";
+  // The constructor identifies the actual class; `name` can be arbitrary upstream text.
+  const className = Object.getPrototypeOf(error)?.constructor?.name;
+  const name = typeof className === "string" && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(className) ? className : "Error";
+  const message = Object.hasOwn(SAFE_SHARE_DIAGNOSTICS, error.message) ? error.message : "share operation failed (details redacted)";
+  return `${name}: ${message}`;
+}
