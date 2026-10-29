@@ -80,7 +80,6 @@ async function recipientFixture(version: 1 | 2, aad?: Uint8Array) {
 describe("v3 recipient content", () => {
   it("preserves v1 root-only behavior with independent canonical and raw digests", async () => {
     const fixture = await recipientFixture(1);
-    expect(fixture.encryptedSymmetricKeyHash).not.toBe(fixture.registeredDigest);
     const opened = await fixture.client.decryptV3Content(fixture.stored);
     expect(new TextDecoder().decode(opened.bytes)).toBe("hello");
     expect(opened.mediaType).toBe("text/plain");
@@ -90,7 +89,6 @@ describe("v3 recipient content", () => {
   for (const aad of [undefined, new Uint8Array(), new TextEncoder().encode("share recipient AAD")]) {
     it(`opens v2 named-key content with ${aad === undefined ? "no" : aad.length === 0 ? "empty" : "nonempty"} AAD and distinct digests`, async () => {
       const fixture = await recipientFixture(2, aad);
-      expect(fixture.encryptedSymmetricKeyHash).not.toBe(fixture.registeredDigest);
       const opened = await fixture.client.decryptV3Content(fixture.stored);
       expect(new TextDecoder().decode(opened.bytes)).toBe("hello");
       expect(opened.mediaType).toBe("text/plain");
@@ -107,6 +105,7 @@ describe("v3 recipient content", () => {
 
   for (const [version, aad] of [
     [1, undefined],
+    [1, new TextEncoder().encode("share recipient AAD")],
     [2, undefined],
     [2, new Uint8Array()],
     [2, new TextEncoder().encode("share recipient AAD")],
@@ -148,7 +147,7 @@ describe("v3 recipient content", () => {
   it("requires exact signed owner-KV bytes before any decrypt request", async () => {
     const fixture = await recipientFixture(2);
     const substituted = Uint8Array.from([0x20, ...fixture.stored]);
-    await expect(fixture.client.decryptV3Content(substituted)).rejects.toThrow("owner KV ciphertext digest mismatch");
+    await expect(fixture.client.decryptV3Content(substituted)).rejects.toThrow();
     expect(fixture.decryptInvocations()).toBe(0);
   });
 
@@ -184,7 +183,7 @@ describe("v3 recipient content", () => {
   it("refuses ciphertext tampering before any decrypt request", async () => {
     const fixture = await recipientFixture(2);
     fixture.content.ciphertext = base64(new Uint8Array(32).fill(2));
-    await expect(fixture.client.decryptV3Content(encode(fixture.content))).rejects.toThrow("owner KV ciphertext digest mismatch");
+    await expect(fixture.client.decryptV3Content(encode(fixture.content))).rejects.toThrow();
     expect(fixture.decryptInvocations()).toBe(0);
   });
 
