@@ -1,4 +1,4 @@
-import { lstat, open, readFile } from "node:fs/promises";
+import { lstat, open, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { createProfileReplicaPurge, logoutPrincipalDigest, REPLICA_LOGOUT_PENDING_FILE, RESTORED_GATE_MESSAGE } from "@tinycloud/node-sdk";
 import type {
@@ -130,21 +130,24 @@ export async function assertPendingRemoteLogoutSession(
 }
 
 
-/** Attempt both unlinks independently; the durable marker remains until both are absent and fsynced. */
+/** Remove request keys before the durable signed-out fence, then attempt both credential unlinks. */
 export async function clearProfileCredentials(name: string, syncDirectory = false, legacyCleanup = false): Promise<void> {
-  const profile = await ProfileManager.getProfile(name);
-  const { namedKeys: _namedKeys, ...signedOutProfile } = profile;
-  // Another account's logout records, in the same durable write, that the legacy mirror still has to go.
-  await ProfileManager.setProfileDurable(name, { ...signedOutProfile, authSignedOut: true, ...(legacyCleanup ? { legacyReplicaCleanup: true } : {}) });
-  let failed = false;
-  let error: unknown;
-  try { await ProfileManager.removeKey(name); } catch (cause) { failed = true; error = cause; }
-  try { await ProfileManager.clearSession(name); } catch (cause) { if (!failed) error = cause; failed = true; }
-  if (failed) throw error;
-  if (syncDirectory) {
-    const directory = await open(profilePath(name), "r");
-    try { await directory.sync(); } finally { await directory.close(); }
-  }
+  await ProfileManager.withLock(name, async () => {
+    const profile = await ProfileManager.getProfile(name);
+    const { namedKeys: _namedKeys, ...signedOutProfile } = profile;
+    await rm(join(profilePath(name), "approval-pending.json"), { force: true });
+    // This durable profile write syncs the pending-key removal before logout can be observed.
+    await ProfileManager.setProfileDurable(name, { ...signedOutProfile, authSignedOut: true, ...(legacyCleanup ? { legacyReplicaCleanup: true } : {}) });
+    let failed = false;
+    let error: unknown;
+    try { await ProfileManager.removeKey(name); } catch (cause) { failed = true; error = cause; }
+    try { await ProfileManager.clearSession(name); } catch (cause) { if (!failed) error = cause; failed = true; }
+    if (failed) throw error;
+    if (syncDirectory) {
+      const directory = await open(profilePath(name), "r");
+      try { await directory.sync(); } finally { await directory.close(); }
+    }
+  }, { requireProfile: true });
 }
 
 /** A crash after the durable signed-out flag but before unlink must not strand private keys. */

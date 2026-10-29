@@ -393,21 +393,20 @@ it, network sign-in and KV reads still work, but local replica reads stay gated
 until a new verified sign-in. A gated root prefix does not imply `kv-sync-root`
 support.
 
-Replica-enabled OpenKey login uses the SDK-prepared SIWE approval URL, not the
-older browser-created session. Specify `--owner did:pkh:eip155:CHAIN:ADDRESS`
-unless this profile already has a verified owner session. The CLI verifies the
-signed result before saving its new key, session and replica stamp. Safari, and
-Chromium browsers that enforce Local Network Access without granting it (headless
-Chromium cannot show the prompt), may block the HTTPS page's plain-HTTP loopback
-callback: use an interactive CLI terminal and paste the same one-line code shown
-by OpenKey, or start with
-`tc auth login --method openkey --replication-prefix notes/ --owner DID --paste`
-for a headless terminal. Non-TTY `--no-popup` cannot accept a paste; if that
-callback fails, it exits nonzero at the five-minute expiry with a `--paste`
-retry hint and discards the candidate key. Restarting requires a new approval
-and cannot reuse the old signed code. Ctrl-C, SIGINT or SIGTERM before approval
-arrives cancels the OpenKey handoff (best effort) and exits 130 `CANCELLED`
-without saving a key or session.
+Replica-enabled OpenKey login uses the SDK-prepared SIWE approval request.
+Specify `--owner did:pkh:eip155:CHAIN:ADDRESS` unless this profile already has a
+verified owner session. The CLI verifies the signed result before saving its new
+key, session and replica stamp.
+
+Normal OpenKey login prints a short approval link on stderr and waits. Relay it
+to the owner from a headless or remote CLI; no localhost callback or pasted code
+is needed. `--no-popup` skips opening a local browser, not automatic result
+retrieval. The CLI verifies the encrypted result, durably saves it, then
+acknowledges delivery. Re-run the same command after an interruption to resume.
+The one-hour request expiry is independent of the requested grant lifetime and
+result retention. Normal login keeps its seven-day default; onboarding requests
+30 days explicitly. `--paste` remains an explicit manual fallback with a
+five-minute, single-use return code, not the automatic short-link transport.
 
 Use `tc replica report` for read-only aggregates of persisted replication events
 and identity partitions. Live replica status is unavailable there. Report
