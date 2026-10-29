@@ -6948,7 +6948,7 @@ export class TinyCloudNode {
       if (key.kty !== "OKP" || key.crv !== "Ed25519" || typeof key.x !== "string") {
         throw new Error("Runtime permission session key does not match its signed identity.");
       }
-      const keyDid = didKeyFromEd25519PublicKey(Uint8Array.from(Buffer.from(key.x, "base64url")));
+      const keyDid = didKeyFromEd25519PublicKey(base64UrlDecode(key.x));
       if (!didPrincipalMatches(keyDid, sessionKeyDid!) ||
         !didPrincipalMatches(keyDid, captured.verificationMethod) ||
         !didPrincipalMatches(keyDid, new SiweMessage(session.siwe).uri)) {

@@ -172,6 +172,31 @@ describe("TinyCloudWeb exact Share-key consumer transition", () => {
     });
   }
 
+  test("exact Share-key consent signs and activates with the browser buffer@6 polyfill as Buffer", async () => {
+    // The web bundle ships buffer@6, which throws "Unknown encoding: base64url".
+    const { Buffer: BrowserBuffer } = require("buffer/") as { Buffer: typeof Buffer };
+    expect(() => BrowserBuffer.from("AAAA", "base64url")).toThrow(/Unknown encoding/);
+    const fixture = await createHermeticEncryptedNode();
+    const nativeBuffer = globalThis.Buffer;
+    try {
+      const c = consumer(fixture);
+      const baseline = c.activationCount();
+      globalThis.Buffer = BrowserBuffer;
+      const pending = c.tcw.requestPermissions([c.entry]);
+      await awaitModal(c.opened.promise, pending);
+      c.consent.resolve({ approved: true });
+      const result = await pending;
+      globalThis.Buffer = nativeBuffer;
+      expect(result.approved).toBe(true);
+      expect(c.signing).toHaveBeenCalledTimes(1);
+      expect(c.activationCount()).toBe(baseline + 1);
+      expect(result.delegations).toHaveLength(1);
+    } finally {
+      globalThis.Buffer = nativeBuffer;
+      fixture.stop();
+    }
+  }, 15_000);
+
   test("JWK and verificationMethod replaced together before the request refuse with no signature, activation or grant", async () => {
     const fixture = await createHermeticEncryptedNode();
     const session = fixture.owner.restorableSession!;

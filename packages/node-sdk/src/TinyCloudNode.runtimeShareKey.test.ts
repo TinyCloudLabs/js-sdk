@@ -83,3 +83,30 @@ test("exact Share-key grant refuses a JWK and verificationMethod replaced togeth
     fixture.stop();
   }
 });
+
+test("exact Share-key grant works with the browser buffer@6 polyfill as Buffer (no base64url encoding)", async () => {
+  // The web-sdk bundle ships buffer@6, which throws "Unknown encoding: base64url".
+  const { Buffer: BrowserBuffer } = require("buffer/") as { Buffer: typeof Buffer };
+  expect(() => BrowserBuffer.from("AAAA", "base64url")).toThrow(/Unknown encoding/);
+  const fixture = await createHermeticEncryptedNode();
+  const signer = Reflect.get(fixture.owner, "signer") as { signMessage(message: string): Promise<string> };
+  const signing = spyOn(signer, "signMessage");
+  const nativeBuffer = globalThis.Buffer;
+  try {
+    const before = fixture.requests().filter((r) => r.path === "/delegate").length;
+    globalThis.Buffer = BrowserBuffer;
+    const delegations = await fixture.owner.grantRuntimePermissions([{
+      service: "tinycloud.encryption",
+      path: `urn:tinycloud:encryption:${fixture.ownerDid}:default/share/browser-buffer`,
+      actions: ["tinycloud.encryption/key.create"],
+    }]);
+    globalThis.Buffer = nativeBuffer;
+    expect(delegations).toHaveLength(1);
+    expect(signing).toHaveBeenCalledTimes(1);
+    expect(fixture.requests().filter((r) => r.path === "/delegate").length).toBe(before + 1);
+  } finally {
+    globalThis.Buffer = nativeBuffer;
+    signing.mockRestore();
+    fixture.stop();
+  }
+}, 15_000);
