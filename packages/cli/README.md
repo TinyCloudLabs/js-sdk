@@ -250,7 +250,7 @@ execution is not promised.
 written by `feed export`. Supply the full target space explicitly:
 
 ```bash
-tc --profile owner feed import \
+tinycloud --profile owner feed import \
   --space tinycloud:pkh:eip155:1:0x2222222222222222222222222222222222222222:applications \
   --file ./prepared-owner-bundle.json
 ```
@@ -360,7 +360,7 @@ Supply the full approved source space, a space-relative namespace ending in `/`,
 and an unused output path. There is no installed-legacy or production default:
 
 ```bash
-tc --profile owner feed export \
+tinycloud --profile owner feed export \
   --source-space tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:applications \
   --prefix example/legacy/ --out ./raw-owner-snapshot.json \
   --sidecars ./raw-sidecars.json
