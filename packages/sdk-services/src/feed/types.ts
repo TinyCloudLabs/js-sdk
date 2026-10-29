@@ -2,6 +2,7 @@ import type { IDatabaseHandle } from "../sql/ISQLService";
 import type { HookSubscription } from "../hooks/types";
 import type { IHooksService } from "../hooks/IHooksService";
 import type { Result } from "../types";
+import type { FeedRestoreRecords, FeedResponseDeliveryPage } from "./restore-types";
 
 export type FeedDatabase = Pick<IDatabaseHandle, "query" | "execute" | "batch">;
 export type FeedReadDatabase = Pick<IDatabaseHandle, "query">;
@@ -59,6 +60,8 @@ export interface FeedResponse extends Omit<NewFeedResponse, "kind"> {
   sequence: number;
   payloadType?: string;
   payloadVersion?: number;
+  /** Added only by verified imported delivery policy; undefined retains ordinary live behavior. */
+  dispatchBefore?: string | null;
 }
 
 export interface FeedHandling extends FeedCardIdentity {
@@ -162,6 +165,15 @@ export interface FeedApi {
     responses: FeedReadDatabase,
     options?: { afterSequence?: number; limit?: number; signal?: AbortSignal },
   ): Promise<Result<FeedResponse[]>>;
+  restoreFeedRecords(
+    ownerPair: FeedDatabases,
+    records: FeedRestoreRecords,
+    options?: { signal?: AbortSignal },
+  ): Promise<Result<void>>;
+  listFeedResponseDeliveries(
+    responses: FeedReadDatabase,
+    options: { recipient: string; afterSequence?: number; limit?: number; signal?: AbortSignal },
+  ): Promise<Result<FeedResponseDeliveryPage>>;
   recordFeedHandling(output: FeedDatabase, handling: FeedHandling): Promise<Result<FeedHandling>>;
   readFeedResponseHandling(output: FeedReadDatabase, identity: FeedResponseIdentity): Promise<Result<FeedResponseHandling>>;
   getFeedCardState(

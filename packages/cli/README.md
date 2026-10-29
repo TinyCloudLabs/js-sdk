@@ -247,6 +247,47 @@ current runner; an already-started action may still have happened. Keep response
 IDs as downstream idempotency keys where supported. Exactly-once external
 execution is not promised.
 
+### Owner SDK restore and delivery policy
+
+The generic restore API is exported from `@tinycloud/sdk-services/feed`; it is
+not a CLI importer command. Call `initializeFeedDatabases({ output, responses })`
+with owner-authorized SQL handles to initialize the current pair's tables before
+restoring or listening. Agents retain read-only access to responses and cannot
+initialize or restore that database. Missing import/policy tables fail closed.
+
+`restoreFeedRecords({ output, responses }, preparedRecords, { signal })` accepts
+complete `FeedCard` records and response headers with optional private payloads,
+source references, and minimal delivery evidence. It does not interpret legacy
+records, choose current answers, or resolve recipients. Historical responses
+bypass live-submission eligibility only; they still require the full published
+card/revision/issuance identity. Existing live response IDs cannot be reclassified
+as imported. Replays must preserve header/payload content and source bindings.
+
+Cards are stored first. Each imported response atomically stores its content-bound
+claim, header, optional private payload, origins, and delivery policies in the
+response database. There is no transaction across the two databases; a repeated
+prepared restore can complete partial progress without replacing existing content.
+
+Every import origin has a default `*` deny policy. Dispatch requires each origin
+to have consistent evidence for the exact recipient: `state: "pending"`,
+`dispatch: "resolved-pending"`, `resolvedOwnerMapping: true`, and a required
+`dispatchBefore` containing a valid future timestamp or explicit `null` for no
+absolute cutoff. Held, delivered, unconfirmed, refused, unknown, or conflicting
+evidence does not dispatch. Missing or malformed metadata fails the page rather
+than treating it as live data. Policy fields record owner decisions, not grants.
+Keep raw receipts and complete legacy ledgers in owner-only storage; remote policy
+rows contain only source references, state, mapping evidence, and the cutoff.
+
+`listFeedResponseDeliveries(responses, { recipient, afterSequence, limit, signal })`
+reads dispatch-eligible headers; `listFeedResponses` alone is history access, not
+dispatch authority. `listenFeedResponses` applies the policy before local handoff.
+Safe notification JSON carries the validated cutoff but no private payload data.
+The SDK checks the cutoff before handoff and again before invoking the runner.
+A queued runtime must check it immediately before acting. Expiry after a durable
+claim leaves the handoff unconfirmed, without automatic resend. Runtime durable
+acceptance and deduplication are still required; exactly-once external execution
+is not guaranteed.
+
 ### Raw owner-only source export
 
 `feed export` captures raw KV source bytes, not resolved Home cards or a restore plan.

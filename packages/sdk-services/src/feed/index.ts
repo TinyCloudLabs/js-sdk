@@ -13,3 +13,6 @@ export { listenFeedResponses } from "./listener";
 export { feedResourceNames } from "./resources";
 export { feedCardSchema, newFeedResponseSchema, newFeedMessageSchema, feedHandlingSchema, feedResponsePayloadSchema } from "./schemas";
 export { projectFeedResponseNotification } from "./notification";
+export type { FeedRestoreOrigin, FeedRestoreDeliveryPolicy, FeedRestoreResponse, FeedRestoreRecords, FeedResponseDeliveryPage } from "./restore-types";
+export { restoreFeedRecords } from "./restore";
+export { listFeedResponseDeliveries } from "./delivery-policy";
