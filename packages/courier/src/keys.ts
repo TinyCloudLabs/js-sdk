@@ -43,7 +43,7 @@ export const k = {
   task: (peer: string, threadId: string, taskId: string) => `${k.threadRoot(peer, threadId)}/task/${taskId}.json`,
   file: (peer: string, threadId: string, name: string) => `${k.threadRoot(peer, threadId)}/files/${name}`,
   receipts: (peer: string) => `${k.toPeer(peer)}receipts.json`,
-  peerDelegation: (peer: string) => `${k.toPeer(peer)}pairing/delegation.json`,
+  peerDelegation: (peer: string, sessionId?: string) => `${sessionId ? `${k.threadRoot(peer, sessionId)}/` : k.toPeer(peer)}pairing/delegation.json`,
   peerRecord: (peer: string) => `${PREFIX}/me/peers/${peer}.json`,
   orders: (peer: string) => `${PREFIX}/me/orders/${peer}.md`,
   request: (id: string) => `${PREFIX}/me/requests/${id}.json`,
@@ -71,9 +71,10 @@ export const k = {
 };
 
 /** Peer-read capability entries for `delegateTo`, spec §3/§5 and TC-708. */
-export function peerReadPermissions(peer: string, space: string): PermissionEntry[] {
+export function peerReadPermissions(peer: string, space: string, sessionId?: string): PermissionEntry[] {
+  const root = sessionId ? `${k.threadRoot(peer, sessionId)}/` : k.toPeer(peer);
   return [
-    { space, service: 'tinycloud.kv', path: k.toPeer(peer), actions: ['tinycloud.kv/get', 'tinycloud.kv/list'] },
-    { space, service: 'tinycloud.hooks', path: `kv/${PREFIX}/to/${peer}`, actions: ['tinycloud.hooks/subscribe'] },
+    { space, service: 'tinycloud.kv', path: root, actions: ['tinycloud.kv/get', 'tinycloud.kv/list'] },
+    { space, service: 'tinycloud.hooks', path: `kv/${root.replace(/\/$/, '')}`, actions: ['tinycloud.hooks/subscribe'] },
   ];
 }
