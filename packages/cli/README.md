@@ -393,10 +393,17 @@ it, network sign-in and KV reads still work, but local replica reads stay gated
 until a new verified sign-in. A gated root prefix does not imply `kv-sync-root`
 support.
 
-Replica-enabled OpenKey login uses the SDK-prepared SIWE approval request.
+OpenKey login with `--keys` or `--replication-prefix` uses the SDK-prepared SIWE
+approval request.
 Specify `--owner did:pkh:eip155:CHAIN:ADDRESS` unless this profile already has a
 verified owner session. The CLI verifies the signed result before saving its new
-key, session and replica stamp.
+key and session, plus a replica stamp when replication is enabled.
+
+These prepared logins use an interactive localhost callback, including when
+replication prefixes came from the saved profile. Allow Local Network Access if
+the browser asks. For a headless or remote terminal, use `--paste`. The default
+browser mode returns `INTERACTIVE_LOGIN_REQUIRED` when neither stdin nor stderr
+is a TTY. `--no-popup` skips opening the browser but still waits for the callback.
 
 Normal OpenKey login prints a short approval link on stderr and waits. Relay it
 to the owner from a headless or remote CLI; no localhost callback or pasted code

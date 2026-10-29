@@ -3,6 +3,12 @@
 Track changes to agent-facing development guidance for the TinyCloud JavaScript SDK. Add a concise
 entry when `agent.dev.md` or related agent workflow expectations change.
 
+## 2026-10-29
+
+- TC-2212: clarified that prepared OpenKey logins (`--keys` or replication
+  prefixes) retain the localhost callback/manual `--paste` flow and
+  `INTERACTIVE_LOGIN_REQUIRED` guard. Normal short-link login is unchanged.
+
 ## 2026-10-26
 
 - MCP personal-app examples and edit/move instructions now omit server-owned

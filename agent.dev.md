@@ -162,6 +162,9 @@ version metadata and make the immutable release checkout fail the clean-tree pub
 - API/interface changes should have a corresponding TinyCloud Node PR when the server contract must
   change.
 - OpenKey-facing auth or identity changes should be checked against the OpenKey repo and examples.
+- Keep prepared CLI OpenKey login (`--keys` or replica prefixes) distinct from normal short-link
+  login in agent instructions. Its localhost callback/manual `--paste` flow and non-TTY guard
+  are unchanged; see `packages/cli/README.md` and `packages/cli/skills/tc-cli/REFERENCE.md`.
 - When agent-facing context changes, update this document's additional notes and append a concise
   entry to `agent.changelog.md` so future agents can see what changed and why.
 - PR descriptions should list cross-repo dependencies, node/API implications, tests run, and any
