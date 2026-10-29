@@ -247,6 +247,52 @@ current runner; an already-started action may still have happened. Keep response
 IDs as downstream idempotency keys where supported. Exactly-once external
 execution is not promised.
 
+### Raw owner-only source export
+
+`feed export` captures raw KV source bytes, not resolved Home cards or a restore plan.
+Supply the full approved source space, a space-relative namespace ending in `/`,
+and an unused output path. There is no installed-legacy or production default:
+
+```bash
+tc --profile owner feed export \
+  --source-space tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:applications \
+  --prefix example/legacy/ --out ./raw-owner-snapshot.json \
+  --sidecars ./raw-sidecars.json
+```
+
+The selected profile must already hold source `tinycloud.kv/get` and explicit
+`tinycloud.kv/sync` authority on that namespace. Normal per-agent SQL feed grants
+do not authorize this export. The command does not broaden grants or fall back
+to LIST when sync is denied.
+
+`--sidecars` is optional. Its JSON array explicitly names every local file to
+include; relative paths resolve beside that configuration file:
+
+```json
+[
+  {"sourceKey":"owner/watch/hold-actions","sourceArea":"watch-state","path":"hold-actions.json"},
+  {"sourceKey":"owner/watch/thread","sourceArea":"thread-watch-state","path":"thread-state.json"},
+  {"sourceKey":"owner/expiry","sourceArea":"expiry-state","path":"expiry-state.json"}
+]
+```
+
+Sidecar files are read as exact bytes, including malformed JSON or binary data.
+No watcher is discovered or executed. Duplicate or conflicting full source keys
+are refused rather than overwritten.
+
+The owner-only versioned snapshot retains full KV keys, base64 bytes, SHA-256,
+strong ETags, change metadata, tombstones, opaque cursors, and node source/authority
+attestations. It bootstraps every change-feed page and verifies each binary network
+read against its ETag. One empty final tail at the end cursor is required before
+`completePrefixSnapshot: true` can be published. Source changes, cursor gaps,
+scope drift, or mismatches fail the capture; there is no retry loop or write fence.
+
+The complete file is fsynced and published exclusively with mode `0600`; an existing
+path is never silently replaced. Keep this archive private: it can contain answers
+or codes. Normal command output is only the snapshot ID, output path, and counts.
+Export does not classify records, choose current answers, resolve recipients,
+evaluate legacy expiry, restore state, or dispatch pending responses.
+
 ## Commands
 
 | Command | Description |

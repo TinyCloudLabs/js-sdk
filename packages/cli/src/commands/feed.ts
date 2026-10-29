@@ -18,6 +18,7 @@ import { openFeedHandoff } from "../feed/local.js";
 import type { LocalFeedHandoff } from "../feed/local.js";
 import { runFeedRunner } from "../feed/runner.js";
 import { connectFeedAgent } from "../feed/connection.js";
+import { exportFeedRawSnapshot } from "../feed/export.js";
 
 const FEED_PREFIX = "xyz.tinycloud.tinychat/feed";
 const REGISTRY = "xyz.tinycloud.tinychat/home_feed";
@@ -77,7 +78,27 @@ is never automatically repeated. Renewal reconciles durable rows at most every f
 minutes while connected; hook notifications are wakeups, not replay or execution proof.
 Private typed payloads are saved atomically with respond/message --payload-file and read
 explicitly with feed payload. Default notifications include metadata, never payload data.
+
+export captures an owner-only raw KV snapshot to an unused private file. Source space,
+slash prefix and output are explicit; source get/sync grants are separate from feed SQL.
 `);
+
+  feed.command("export").description("Owner: export lossless raw source bytes without classification or restore")
+    .requiredOption("--source-space <uri>", "Explicit full tinycloud:... source-space URI")
+    .requiredOption("--prefix <prefix/>", "Explicit full space-relative source namespace ending in /")
+    .requiredOption("--out <file>", "Unused owner-only raw snapshot output file; never stdout or an implicit overwrite")
+    .option("--sidecars <file>", "Explicit JSON array of sourceKey/sourceArea/path sidecar records")
+    .action(async (options, command) => {
+      try {
+        const profile = await ProfileManager.resolveContext(command.optsWithGlobals());
+        const node = await ensureAuthenticated(profile);
+        const receipt = await exportFeedRawSnapshot({
+          kv: node.kvForSpace(options.sourceSpace), sourceSpace: options.sourceSpace,
+          prefix: options.prefix, outFile: options.out, sidecarsFile: options.sidecars,
+        });
+        outputJson(receipt);
+      } catch (error) { return handleError(error); }
+    });
 
   agentOptions(feed.command("connect").description("Owner: provision an agent feed and activate its exact bundled grant"))
     .requiredOption("--to <did>", "Authenticated agent DID receiving the grant")
