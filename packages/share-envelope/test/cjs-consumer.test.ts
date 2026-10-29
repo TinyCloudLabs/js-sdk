@@ -12,12 +12,18 @@ const manifest = JSON.parse(readFileSync(join(import.meta.dir, "..", "package.js
   exports: Record<string, { require?: string }>;
 };
 
-function requireInNode(specifier: string, check: string): { status: number | null; stdout: string; stderr: string } {
-  const run = spawnSync(process.platform === "win32" ? "node.exe" : "node", [
-    "-e",
-    `const m = require(${JSON.stringify(specifier)}); process.stdout.write(String(${check}));`,
-  ], { cwd: REPO_ROOT, encoding: "utf8", timeout: 30_000, killSignal: "SIGKILL" });
+function runInNode(script: string): { status: number | null; stdout: string; stderr: string } {
+  const run = spawnSync(process.platform === "win32" ? "node.exe" : "node", ["-e", script], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+    timeout: 30_000,
+    killSignal: "SIGKILL",
+  });
   return { status: run.status, stdout: run.stdout, stderr: run.stderr };
+}
+
+function requireInNode(specifier: string, check: string): { status: number | null; stdout: string; stderr: string } {
+  return runInNode(`const m = require(${JSON.stringify(specifier)}); process.stdout.write(String(${check}));`);
 }
 
 describe("CommonJS consumer of @tinycloud/share-envelope", () => {
@@ -40,5 +46,24 @@ describe("CommonJS consumer of @tinycloud/share-envelope", () => {
     const run = requireInNode(`${PACKAGE}/links`, "[typeof m.buildFullLink, typeof m.parseLink, typeof m.createLink].join()");
     expect(run.status).toBe(0);
     expect(run.stdout).toBe("function,function,function");
+  }, 40_000);
+
+  // `index.cjs` and `links.cjs` each bundle their own multiformats. A CID made by one is read and checked by the other
+  // as a string, never as an object.
+  it("a CID made by index.cjs is carried through a short link built and parsed by links.cjs and verified by index.cjs", () => {
+    const run = runInNode(`
+      (async () => {
+        const E = require(${JSON.stringify(PACKAGE)});
+        const L = require(${JSON.stringify(`${PACKAGE}/links`)});
+        const origin = "https://share.tinycloud.xyz";
+        const bytes = new TextEncoder().encode("cross-bundle CID");
+        const cid = await E.computeCid(bytes);
+        const url = L.buildShortLink({ origin, type: "share", id: "a".repeat(26), key: new Uint8Array(32).fill(7), bodyCid: cid });
+        const parsed = L.parseLink(url, { trustedOrigins: [origin] });
+        process.stdout.write([parsed.c === cid, await E.verifyCid(bytes, parsed.c)].join());
+      })().catch((error) => { console.error(String(error && error.message || error).split("\\n")[0]); process.exit(1); });
+    `);
+    expect({ status: run.status, stderr: run.stderr.split("\n")[0] }).toEqual({ status: 0, stderr: "" });
+    expect(run.stdout).toBe("true,true");
   }, 40_000);
 });
