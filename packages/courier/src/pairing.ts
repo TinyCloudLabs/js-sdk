@@ -121,6 +121,7 @@ export function peerRecordBody(peer: StoredPeer) {
     label: peer.label,
     spaceId: peer.spaceId,
     theirHandleForMe: peer.theirHandleForMe,
+    ...(peer.sessionId ? { sessionId: peer.sessionId } : {}),
     inbound: peer.inbound ? { cid: peer.inbound.cid, expiresAt: peer.inbound.expiresAt } : undefined,
     outbound: peer.outbound,
     pairedAt: peer.pairedAt,

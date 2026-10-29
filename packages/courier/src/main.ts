@@ -13,6 +13,8 @@ import { cmdGuard } from './guard/command.js';
 import { cmdBroker, cmdRunApproved } from './broker.js';
 import { cmdCredential } from './credential.js';
 import { courierVersion } from './version.js';
+import { cmdStart } from './guided.js';
+import { cmdInvite, cmdJoin } from './invitation.js';
 
 function usage(): string {
   const name = programName();
@@ -21,6 +23,14 @@ function usage(): string {
 Usage: ${name} <command> [args]
 
 Setup & pairing (humans run these):
+  start [--new <subject> | --session <id> [--peer p] | --link <invitation> --consent]
+                                   Discover accessible chats; choose new/existing only when chats exist.
+  invite --session <id> --mode same-owner|anyone|named [--recipient <did:key|peer>] --consent
+                                   Print one handoff link and serve its signed pairing (default --wait 300).
+  invite serve <invitationId> [--wait 300]
+                                   Resume the same invitation and durable winning claim.
+  join <invitation-link> --consent [--wait 300]
+                                   Join and activate the link's intended session; never create a substitute.
   init [--request | --grant-file f|- | --paste | --resume] [--host url] [--openkey-host url]
        [--openkey-api-host url] [--label s] [--handle h] [--expiry 30d] [--rotate-key]
                                    Create/renew the agent key's restricted grant in OpenKey.
@@ -150,6 +160,9 @@ export async function run(argv: string[]): Promise<void> {
 
   switch (command) {
     case 'init': return cmdInit(sub);
+    case 'start': return cmdStart(sub);
+    case 'invite': return cmdInvite(sub);
+    case 'join': return cmdJoin(sub);
     case 'manifest': return cmdManifest();
     case 'pair': return cmdPair(sub);
     case 'revoke': return cmdRevoke(sub);
