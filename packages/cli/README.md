@@ -10,7 +10,10 @@ npm install -g @tinycloud/cli@1.5.0-beta.20
 
 Requires Node.js >= 20.
 
-The package exposes `tinycloud` as its user-facing command. On Linux,
+The package exposes `tinycloud` as its preferred command and keeps `tc` as a
+deprecated compatibility alias at the same entry. Both names accept the same
+commands and flags, with identical exit codes and stdout. A POSIX `tc` executable
+link emits one deprecation notice on stderr, never stdout. On Linux,
 `/usr/sbin/tc` is iproute2's traffic-control tool. Verify the pinned install
 with `tinycloud --version`.
 
@@ -85,7 +88,7 @@ tinycloud secrets get ANTHROPIC_API_KEY
 tinycloud secrets run ANTHROPIC_API_KEY -- python train.py   # the value only in the command's environment
 
 # Ask the owner for a secret an agent needs, then wait for it
-# (call TinyCloud's CLI by absolute path: a bare `tinycloud` can be iproute2's /usr/sbin/tinycloud)
+# (call TinyCloud's CLI by absolute path when using tc: a bare tc can be iproute2's /usr/sbin/tc)
 tinycloud --profile agent secrets request OPENAI_API_KEY --json   # offline; prints the owner's link
 tinycloud --profile agent secrets wait OPENAI_API_KEY --timeout 9m --json   # 0 ready, 8 pending
 
