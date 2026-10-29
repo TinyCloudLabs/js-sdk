@@ -297,6 +297,8 @@ require sticky-bit protection of the next trusted-owned child. Unverifiable path
 are refused. Mode `0600` protects contents, not the staging pathname's identity:
 the directory precondition prevents another UID from replacing that entry.
 The same UID and root remain trusted OS principals, not isolated adversaries.
+Validation includes every intermediate directory-alias target, not only the spelled
+path and its final resolved destination.
 Export does not classify records, choose current answers, resolve recipients,
 evaluate legacy expiry, restore state, or dispatch pending responses.
 

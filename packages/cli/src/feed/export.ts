@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
+import { isUtf8 } from "node:buffer";
 import { constants } from "node:fs";
-import { link, lstat, open, readFile, realpath, rm, unlink } from "node:fs/promises";
+import { link, lstat, open, readFile, readlink, realpath, rm, unlink } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import type { KVChangesResponse } from "@tinycloud/sdk-services";
 import { ExitCode } from "../config/constants.js";
@@ -51,18 +52,32 @@ async function assertUnusedOutput(path: string): Promise<void> {
   refuse("Raw export output already exists; choose an unused output path.");
 }
 
-async function assertTrustedDirectoryChain(directory: string, uid: number): Promise<void> {
+async function assertTrustedDirectoryChain(
+  directory: string,
+  uid: number,
+  leaf = true,
+  childUid?: number,
+  linkDepth = 0,
+): Promise<void> {
   let path = directory;
-  let childUid: number | undefined;
-  let leaf = true;
+  while (path.length > 1 && path.endsWith("/")) path = path.slice(0, -1);
   for (;;) {
     const entry = await lstat(path);
     if (!Number.isSafeInteger(entry.uid) || !Number.isSafeInteger(entry.mode) ||
       (entry.uid !== uid && entry.uid !== 0)) {
       refuse("Raw export requires directories owned by the effective user or root.");
     }
-    // Link replacement is protected by its parent; the resolved directory chain is checked separately.
-    if (!entry.isSymbolicLink()) {
+    if (entry.isSymbolicLink()) {
+      if (linkDepth >= 40) refuse("Raw export cannot verify cyclic or excessively nested directory aliases.");
+      const targetBytes = await readlink(path, { encoding: "buffer" });
+      if (!isUtf8(targetBytes)) refuse("Raw export cannot verify a directory alias with an invalid UTF-8 target.");
+      const target = targetBytes.toString("utf8");
+      // Preserve relative components: normalization could erase a replaceable intermediate hop.
+      await assertTrustedDirectoryChain(
+        target.startsWith("/") ? target : `${dirname(path)}/${target}`,
+        uid, leaf, childUid, linkDepth + 1,
+      );
+    } else {
       if (!entry.isDirectory() || (leaf && entry.uid !== uid)) {
         refuse("Raw export requires an output directory owned by the effective user.");
       }

@@ -139,3 +139,35 @@ test("an owned alias cannot conceal an unsafe physical ancestor from the output 
   expect(f.calls).toEqual([]);
   expect(await exists(options.outFile)).toBe(false);
 });
+
+test("a replaceable intermediate alias is refused even when the spelled and final paths are trusted", async () => {
+  const f = await fixture();
+  await chmod(f.directory, 0o755);
+  const physical = join(f.directory, "private");
+  await mkdir(physical, { mode: 0o700 });
+  await mkdir(join(physical, "owned-leaf"), { mode: 0o700 });
+  const shared = join(f.directory, "shared-open");
+  await mkdir(shared);
+  await chmod(shared, 0o777);
+  const bridge = join(shared, "bridge");
+  await symlink(physical, bridge, "dir");
+  const alias = join(f.directory, "protected-alias");
+  await symlink(bridge, alias, "dir");
+  const options = f.options(join(alias, "owned-leaf"));
+  await expect(exportFeedRawSnapshot(options)).rejects.toThrow();
+  expect(f.calls).toEqual([]);
+  expect(await exists(options.outFile)).toBe(false);
+});
+
+test("trusted intermediate relative aliases preserve their private owned destination", async () => {
+  const f = await fixture();
+  const physical = join(f.directory, "private");
+  await mkdir(physical, { mode: 0o700 });
+  await mkdir(join(physical, "owned-leaf"), { mode: 0o700 });
+  const bridgeDirectory = join(f.directory, "trusted-bridge");
+  await mkdir(bridgeDirectory, { mode: 0o700 });
+  await symlink("../private", join(bridgeDirectory, "bridge"), "dir");
+  const alias = join(f.directory, "protected-alias");
+  await symlink("trusted-bridge/bridge", alias, "dir");
+  await expectTrustedCapture(f.options(join(alias, "owned-leaf")));
+});
