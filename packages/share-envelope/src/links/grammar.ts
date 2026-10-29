@@ -7,7 +7,7 @@ import { decodeStrictBase64Url, linkTypeForPathLetter, type LinkRecord } from ".
 
 export const LINK_FRAGMENT_VERSION = 4;
 
-const SHORT_PATH = /^\/(s|c|l)\/([A-Za-z2-7]{26})$/;
+const SHORT_PATH = /^\/(s|c|l|a)\/([A-Za-z2-7]{26})$/;
 const SHORT_FRAGMENT = /^#v=4&k=([A-Za-z0-9_-]{43})&c=(bafkrei[a-z2-7]{52})$/;
 const FULL_FRAGMENT = /^#v=4&k=([A-Za-z0-9_-]{43})&r=([A-Za-z0-9_-]+)$/;
 const REMOVED_FRAGMENT = /^#v=[23](&|$)/;

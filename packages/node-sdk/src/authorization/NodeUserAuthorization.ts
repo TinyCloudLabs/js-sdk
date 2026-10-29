@@ -1191,8 +1191,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   /**
    * Build SIWE overrides from the top-level nonce and siweConfig.
    * - Top-level `nonce` is seeded first so `siweConfig.nonce` wins if both are set.
-   * - statement is prepended to the default statement
-   * - resources are appended to the default resources
+   * - resources are inserted after WASM preparation, before the final ReCap
    * - uri triggers a warning (overwriting delegation target)
    * - all other fields override directly
    * - per-call nonce overrides siweConfig.nonce when provided
@@ -1216,9 +1215,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
         : statement;
     }
 
-    if (resources && resources.length > 0) {
-      overrides.resources = resources;
-    }
+    // Resources are metadata inserted into the prepared SIWE, not WASM overrides.
 
     if (uri) {
       console.warn(
@@ -1233,6 +1230,38 @@ export class NodeUserAuthorization implements IUserAuthorization {
     }
 
     return overrides;
+  }
+
+  private prepareSessionWithResources(
+    params: Record<string, unknown>,
+  ) {
+    const resources = this.siweConfig?.resources;
+    if (resources?.some(resource => typeof resource !== "string" ||
+      !/^urn:tinycloud:recipients:[A-Za-z0-9_-]+$/.test(resource))) {
+      throw new Error("SIWE metadata resources must be base64url recipients URIs");
+    }
+    const prepared = this.wasm.prepareSession(params);
+    if (!resources?.length) return prepared;
+
+    const recapLines = /^- urn:recap:[^\r\n]+$/gim;
+    const recaps = prepared.siwe.match(recapLines);
+    const recap = recaps?.[0];
+    if (recaps?.length !== 1 || !prepared.siwe.endsWith(recap)) {
+      throw new Error("Prepared SIWE must end with exactly one ReCap");
+    }
+    const insertedLines = resources.map(resource => `- ${resource}`);
+    // Splice only resource lines; every original byte remains in place.
+    const siwe = prepared.siwe.slice(0, -recap.length) +
+      insertedLines.join("\n") + "\n" + recap;
+    const expectedFields = extractImmutableSiweFields(prepared.siwe);
+    expectedFields.nonRecapResources = [expectedFields.nonRecapResources, ...insertedLines]
+      .filter(Boolean).join("\n");
+    const actualRecaps = siwe.match(recapLines);
+    if (actualRecaps?.length !== 1 || actualRecaps[0] !== recap ||
+      diffImmutableSiweFields(expectedFields, extractImmutableSiweFields(siwe)).length) {
+      throw new Error("SIWE metadata insertion changed the prepared message");
+    }
+    return { ...prepared, siwe };
   }
 
   /**
@@ -1572,7 +1601,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     }
     const abilities =
       spaceAbilities[options.spaceId] ?? resourceCapabilitiesToAbilitiesMap([]);
-    const prepared = this.wasm.prepareSession({
+    const prepared = this.prepareSessionWithResources({
       abilities,
       spaceAbilities,
       ...(options.rawAbilities !== undefined
@@ -1690,7 +1719,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     // the union of app permissions + every manifest-declared
     // delegation's permissions in the shape `prepareSession` accepts.
     // Otherwise it returns `defaultActions` unchanged (legacy path).
-    const prepared = this.wasm.prepareSession({
+    const prepared = this.prepareSessionWithResources({
       abilities: capabilityPlan.abilities,
       ...(capabilityPlan.spaceAbilities !== undefined
         ? { spaceAbilities: capabilityPlan.spaceAbilities }
@@ -1903,7 +1932,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     // the union of app permissions + every manifest-declared
     // delegation's permissions in the shape `prepareSession` accepts.
     // Otherwise it returns `defaultActions` unchanged (legacy path).
-    const prepared = this.wasm.prepareSession({
+    const prepared = this.prepareSessionWithResources({
       abilities: capabilityPlan.abilities,
       ...(capabilityPlan.spaceAbilities !== undefined
         ? { spaceAbilities: capabilityPlan.spaceAbilities }

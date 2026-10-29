@@ -1,4 +1,4 @@
-// Validates that the npm tarball ships the complete tc-cli and courier skills:
+// Validates that the npm tarball ships the complete tinycloud-cli and courier skills:
 // every required file, every relative link resolvable inside the tarball, and
 // frontmatter/release metadata that the cross-agent installer can read. The
 // courier skill is a committed mirror of packages/courier/skills/courier
@@ -9,7 +9,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, normalize } from "node:path";
 
 const SKILLS = [
-  { name: "tc-cli", required: ["SKILL.md", "AUTH.md", "INSTALL.md", "REFERENCE.md", "SDK.md", "release.json"] },
+  { name: "tinycloud-cli", required: ["SKILL.md", "AUTH.md", "INSTALL.md", "REFERENCE.md", "SDK.md", "release.json"] },
   { name: "courier", required: ["SKILL.md", "release.json"], mirrorOf: "../courier/skills/courier" },
 ];
 

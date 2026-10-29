@@ -38,6 +38,7 @@ import { approvedTc2132IssuedDelegationsRatchet, validateTc2132IssuedDelegations
 import { approvedTc2140ExactKeyDelegationRatchet, validateTc2140ExactKeyDelegationRatchetTransition } from "./replica-size-policy";
 import { approvedTc2202AgentShareReceiveRatchet, validateTc2202AgentShareReceiveRatchetTransition } from "./replica-size-policy";
 import { approvedTc2205HomeFeedRatchet, validateTc2205HomeFeedRatchetTransition, type Tc2205HomeFeedRatchet } from "./replica-size-policy";
+import { approvedTc2230SiweRecipientsRatchet, validateTc2230SiweRecipientsRatchetTransition, type Tc2230SiweRecipientsRatchet } from "./replica-size-policy";
 import { approvedTc2038PanelPrefetchRatchet, validateTc2038PanelPrefetchRatchetTransition, type Tc2038PanelPrefetchRatchet } from "./replica-size-policy";
 import { approvedTc2005RevokeWindowRatchet, validateTc2005RevokeWindowRatchetTransition, type Tc2005RevokeWindowRatchet } from "./replica-size-policy";
 import { approvedTc2096RepairBackoffRatchet, validateTc2096RepairBackoffRatchetTransition, type Tc2096RepairBackoffRatchet } from "./replica-size-policy";
@@ -2919,6 +2920,7 @@ delete tc2043Ledger.tc2132IssuedDelegationsRatchet;
 delete tc2043Ledger.tc2140ExactKeyDelegationRatchet;
 delete tc2043Ledger.tc2202AgentShareReceiveRatchet;
 delete tc2043Ledger.tc2205HomeFeedRatchet;
+delete tc2043Ledger.tc2230SiweRecipientsRatchet;
 tc2043Ledger.entries = structuredClone(current.entries.slice(0, current.entries.findIndex((entry) => entry.pr === "#728")));
 describe("replication syncScope opt-in (#742, TC-2043) size ratchet", () => {
   const row = () => structuredClone(approvedTc2043SyncScopeRatchet);
@@ -3654,15 +3656,16 @@ describe("recipient-agent share receive (TC-2202, #781) size ratchet", () => {
 describe("Home feed current-base root admission (TC-2205, #789)", () => {
   const row = () => structuredClone(approvedTc2205HomeFeedRatchet);
 
-  it("selects the actual current canonical caps without changing the historical TC-2202 limit", () => {
+  it("remains present with its exact cap and preserves the historical TC-2202 limit", () => {
     validateLedger(current);
-    expect(rootCeilingFor(current, "index.mjs")).toEqual({ row: "tc2205HomeFeedRatchet", ceiling: 1474948 });
-    expect(rootCeilingFor(current, "index.cjs")).toEqual({ row: "tc2205HomeFeedRatchet", ceiling: 1415447 });
-    const previous = copy(current);
-    delete previous.tc2205HomeFeedRatchet;
-    validateLedger(previous);
-    expect(rootCeilingFor(previous, "index.mjs")).toEqual({ row: "tc2202AgentShareReceiveRatchet", ceiling: 1474783 });
-    expect(rootCeilingFor(previous, "index.cjs")).toEqual({ row: "tc2202AgentShareReceiveRatchet", ceiling: 1415181 });
+    expect(rootCeilings(current).find(({ row: name }) => name === "tc2205HomeFeedRatchet")).toEqual({
+      row: "tc2205HomeFeedRatchet",
+      ceiling: row().root.ceiling,
+    });
+    expect(rootCeilings(current).find(({ row: name }) => name === "tc2202AgentShareReceiveRatchet")).toEqual({
+      row: "tc2202AgentShareReceiveRatchet",
+      ceiling: { "index.mjs": 1474783, "index.cjs": 1415181 },
+    });
   });
 
   it("rejects extra bytes, altered evidence, and changes to unrelated size buckets", () => {
@@ -3703,6 +3706,61 @@ describe("Home feed current-base root admission (TC-2205, #789)", () => {
     changed.root.ceiling["index.cjs"]++;
     expect(() => validateTc2205HomeFeedRatchetTransition(undefined, changed)).toThrow("TC-2205");
     expect(() => validateTc2205HomeFeedRatchetTransition(row(), undefined)).toThrow("TC-2205");
+  });
+});
+
+describe("signed recipients SIWE resource insertion (TC-2230, #794) size ratchet", () => {
+  const row = () => structuredClone(approvedTc2230SiweRecipientsRatchet);
+  const prerequisite = () => approvedTc2205HomeFeedRatchet;
+
+  it("pins exact canonical CI root bytes over TC-2205 and carries every other size bucket", () => {
+    expect(() => validateLedger(current)).not.toThrow();
+    expect(current.tc2230SiweRecipientsRatchet).toEqual(approvedTc2230SiweRecipientsRatchet);
+    expect(row().root).toEqual({
+      delta: { "index.mjs": 270, "index.cjs": 191 },
+      ceiling: { "index.mjs": 1475218, "index.cjs": 1415638 },
+    });
+    expect(row().root.ceiling["index.mjs"]).toBe(prerequisite().root.ceiling["index.mjs"] + row().root.delta["index.mjs"]);
+    expect(row().root.ceiling["index.cjs"]).toBe(prerequisite().root.ceiling["index.cjs"] + row().root.delta["index.cjs"]);
+    expect(row().base).toBe("9838d6d9bd1a096c0d7316f448f4b5cb11b01c0f");
+    expect(row().sourceCommits).toEqual(["b61e4869967e4a73ad7b0b567205dffb5692df9a"]);
+    expect(row().canonicalCI).toEqual({
+      run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40907518282",
+      jobs: [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40907518282/job/123566224035",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40907518282/job/123566224446",
+      ],
+    });
+    expect(row().firstImport).toEqual(prerequisite().firstImport);
+    expect(row().activation).toEqual(prerequisite().activation);
+    expect(row().worker).toEqual({ delta: 0, ceiling: prerequisite().worker.ceiling });
+    expect(row().replicaWorker).toEqual({ delta: 0, ceiling: prerequisite().replicaWorker.ceiling });
+    expect(rootCeilingFor(current, "index.mjs")).toEqual({ row: "tc2230SiweRecipientsRatchet", ceiling: 1475218 });
+    expect(rootCeilingFor(current, "index.cjs")).toEqual({ row: "tc2230SiweRecipientsRatchet", ceiling: 1415638 });
+    expect(ancestryPins(current, false)).toContainEqual({
+      row: "tc2230SiweRecipientsRatchet",
+      pin: "b61e4869967e4a73ad7b0b567205dffb5692df9a",
+    });
+    expect(MAX_WORKER_GZIP_BYTES).toBe(newestKvWorkerCeiling());
+    expect(MAX_REPLICA_WORKER_GZIP_BYTES).toBe(newestReplicaWorkerCeiling());
+  });
+
+  it("refuses changed bytes or a missing TC-2205 prerequisite", () => {
+    const changed = copy(current);
+    changed.tc2230SiweRecipientsRatchet!.root.ceiling["index.mjs"]++;
+    expect(() => validateLedger(changed)).toThrow("TC-2230");
+    const withoutPrerequisite = copy(current);
+    delete withoutPrerequisite.tc2205HomeFeedRatchet;
+    expect(() => validateLedger(withoutPrerequisite)).toThrow("TC-2230");
+  });
+
+  it("may be introduced once and never changed or removed", () => {
+    expect(() => validateTc2230SiweRecipientsRatchetTransition(undefined, row())).not.toThrow();
+    expect(() => validateTc2230SiweRecipientsRatchetTransition(row(), row())).not.toThrow();
+    const changed = row();
+    changed.root.ceiling["index.cjs"]++;
+    expect(() => validateTc2230SiweRecipientsRatchetTransition(undefined, changed)).toThrow("TC-2230");
+    expect(() => validateTc2230SiweRecipientsRatchetTransition(row(), undefined)).toThrow("TC-2230");
   });
 });
 

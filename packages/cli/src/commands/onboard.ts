@@ -1,8 +1,9 @@
 import { Command } from "commander";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import type { PermissionEntry } from "@tinycloud/node-sdk";
-import { buildAuthUrl, delegationFromInput } from "../auth/browser-auth.js";
+import { startAuthFlow, delegationFromInput } from "../auth/browser-auth.js";
 import { sessionStateIsUsable, storedSessionState } from "../auth/scoped-login.js";
+import { completeApprovalResult } from "../auth/approval-request.js";
 import { ensureSpaceSetup } from "../auth/space-setup.js";
 import { ExitCode } from "../config/constants.js";
 import { ProfileManager } from "../config/profiles.js";
@@ -49,18 +50,12 @@ export const ONBOARD_STEPS: ReadonlyArray<{
   },
 ];
 
-/** The next approval is the owner's: here is its link. */
-class ApprovalNeeded extends Error {
-  constructor(readonly approvalUrl: string) {
-    super("approval needed");
-  }
-}
 
 export function registerOnboardCommand(program: Command): void {
   program
     .command("onboard")
-    .description(`Set up this computer to act for its owner: a profile, the owner's OpenKey sign-in (or new account), and a starting grant for 30 days (read, change and delete in the applications space; read which spaces and apps exist). Each run does the next approval: it prints the approval link and exits ${ExitCode.PENDING}; run it again with the code OpenKey shows. Exits 0 when onboarding is complete.`)
-    .option("--code <code>", "The code OpenKey showed after the owner approved the last link")
+    .description("Set up this computer with its owner's OpenKey approvals and a starting grant for 30 days. Prints a short approval link, automatically retrieves and verifies the result, saves it durably, then acknowledges delivery. Re-run an interrupted command to resume.")
+    .option("--code <code>", "Manual fallback return code only; automatic short-link approvals do not produce a code")
     .action(async (options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
@@ -74,64 +69,48 @@ export function registerOnboardCommand(program: Command): void {
             ExitCode.USAGE_ERROR,
           );
         }
-        // Never waits: the first approval this run meets uses the code, and
-        // the next one ends the run with that approval's link.
+        await completeApprovalResult(ctx.profile);
         let code = typeof options.code === "string" && options.code.trim() !== "" ? options.code.trim() : undefined;
         const acquire: OpenKeyAcquisition = async (did, flow = {}) => {
-          if (code === undefined) throw new ApprovalNeeded(buildAuthUrl(did, flow));
-          const pasted = code;
-          code = undefined;
-          return delegationFromInput(pasted, did, flow);
+          if (code !== undefined) {
+            const pasted = code;
+            code = undefined;
+            return delegationFromInput(pasted, did, flow);
+          }
+          return startAuthFlow(did, {
+            ...flow, profileName: ctx.profile, noPopup: true,
+            onApprovalRequest: ({ approvalUrl }) => {
+              console.error(`${flow.reason}\nApprove in OpenKey: ${approvalUrl}\nWaiting for approval. Re-run this command after an interruption; no code is needed.`);
+            },
+          });
         };
 
         for (const [index, step] of ONBOARD_STEPS.entries()) {
           const reason = `TinyCloud onboarding, step ${index + 1} of ${ONBOARD_STEPS.length}: ${step.asks}`;
-          try {
-            const session = await ProfileManager.getSession(ctx.profile) as Record<string, unknown> | null;
-            if (!sessionStateIsUsable(storedSessionState(session, profile).state)) {
-              // No usable session: this approval signs the owner in and grants the step.
-              const { delegationData } = await refreshOpenKeySession(ctx.profile, ctx.host, {
-                permissions: step.permissions,
-                expiry: ONBOARD_EXPIRY,
-                reason,
-                persistHost: globalOpts.host !== undefined,
-                openKeyAcquisition: acquire,
-              });
-              await ensureSpaceSetup({ profile: ctx.profile, host: ctx.host }, delegationData, delegationData.permissions as PermissionEntry[] | undefined);
-              profile = await ProfileManager.getProfile(ctx.profile);
-              continue;
-            }
-            // Signed in: add the step's grant unless the session or an earlier grant covers it.
-            await ensureDelegationAuthority({
-              ctx,
-              profile,
-              node: await ensureAuthenticated(ctx),
-              requested: await resolvePermissionSpaces(step.permissions, ctx.profile),
-              expiryOption: ONBOARD_EXPIRY,
+          const session = await ProfileManager.getSession(ctx.profile) as Record<string, unknown> | null;
+          if (!sessionStateIsUsable(storedSessionState(session, profile).state)) {
+            const { delegationData } = await refreshOpenKeySession(ctx.profile, ctx.host, {
+              permissions: step.permissions,
+              expiry: ONBOARD_EXPIRY,
               reason,
-              yes: true,
+              persistHost: globalOpts.host !== undefined,
               openKeyAcquisition: acquire,
             });
-          } catch (error) {
-            if (!(error instanceof ApprovalNeeded)) throw error;
-            const next = `${CLI_NAME} --profile ${ctx.profile} onboard --code <code>`;
-            output({
-              onboarded: false,
-              profile: ctx.profile,
-              step: index + 1,
-              steps: ONBOARD_STEPS.length,
-              asks: step.asks,
-              approvalUrl: error.approvalUrl,
-              next,
-            }, () => [
-              `Step ${index + 1} of ${ONBOARD_STEPS.length}: ${step.asks}`,
-              `Open this link, sign in or create an account, and approve:`,
-              `  ${error.approvalUrl}`,
-              `Then run: ${next}`,
-            ].join("\n"));
-            process.exitCode = ExitCode.PENDING;
-            return;
+            await ensureSpaceSetup({ profile: ctx.profile, host: ctx.host }, delegationData, delegationData.permissions as PermissionEntry[] | undefined);
+            profile = await ProfileManager.getProfile(ctx.profile);
+            continue;
           }
+          await ensureDelegationAuthority({
+            ctx,
+            profile,
+            node: await ensureAuthenticated(ctx),
+            requested: await resolvePermissionSpaces(step.permissions, ctx.profile),
+            expiryOption: ONBOARD_EXPIRY,
+            reason,
+            yes: true,
+            exactApproval: true,
+            openKeyAcquisition: acquire,
+          });
         }
 
         profile = await ProfileManager.getProfile(ctx.profile);

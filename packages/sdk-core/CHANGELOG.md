@@ -1,5 +1,23 @@
 # @tinycloudlabs/sdk-core
 
+## 3.8.0-beta.20
+
+### Patch Changes
+
+- e424ba9: Include `siweConfig.resources` recipients-declaration URIs in ordinary, external/OpenKey and bootstrap SIWE preparation. This option accepts `urn:tinycloud:recipients:<base64url>` with an unpadded base64url payload. The original ReCap stays last and unchanged, and completion retains the exact signed message. An absent or empty resource list leaves preparation unchanged.
+
+  Align shared ReCap extraction with complete resource values in the SIWE resources section.
+
+  Details: TC-2230
+
+## 3.8.0-beta.19
+
+### Patch Changes
+
+- Updated dependencies [19048ec]
+  - @tinycloud/share-envelope@1.4.0-beta.2
+  - @tinycloud/share-sdk@1.4.1-beta.3
+
 ## 3.8.0-beta.18
 
 ### Patch Changes

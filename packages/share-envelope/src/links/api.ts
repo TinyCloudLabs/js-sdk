@@ -21,6 +21,7 @@ import {
 } from "./header.js";
 import { openRecordChecked, runBodyValidator, toEpochMs, type LinkBodyValidator, type OpenedLink } from "./record.js";
 import type { LinkSigner } from "./signer.js";
+import { parseApprovalRequest, type OpenKeyApprovalRequestV1 } from "./approval-request.js";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_JSON_RESPONSE_BYTES = 4096;
@@ -219,6 +220,33 @@ export async function createLink(input: CreateLinkInput): Promise<CreatedLink> {
   return { link: buildShortLink({ origin: input.linkOrigin, type: input.type, id, key, bodyCid }), id, expiresAt: record.header.expiresAt, bodyCid };
 }
 
+/** Store one immutable request. The Worker sees only its signed header and sealed bytes. */
+export async function createApprovalRequest(input: LinkTransportOptions & {
+  readonly request: OpenKeyApprovalRequestV1;
+  readonly issuerKey: LinkSigner;
+  readonly apiOrigin: string;
+  readonly openkeyOrigin: string;
+  readonly expiresAt?: Date;
+  readonly now?: Date | number;
+}): Promise<CreatedLink & { readonly record: LinkRecord }> {
+  const request = parseApprovalRequest(input.request, { issuer: input.issuerKey.did });
+  const now = toEpochMs(input.now);
+  const prepared = await prepareLinkRecord({
+    type: "openkey-approval-request", issuerKey: input.issuerKey, apiOrigin: input.apiOrigin,
+    now, expiresAt: input.expiresAt ?? new Date(now + LINK_TYPE_SPECS["openkey-approval-request"].defaultLifeSeconds * 1000),
+    plaintext: new TextEncoder().encode(canonicalize(request)),
+  });
+  const response = await send(`${checkApiOrigin(input.apiOrigin)}/v1/links`,
+    { method: "POST", body: JSON.stringify(prepared.record) }, input, "application/json");
+  if (response.status !== 201) throw await refusal(response);
+  const created = createdSchema.safeParse(await readJson(response));
+  if (!created.success || !LINK_ID_PATTERN.test(created.data.id) || created.data.expiresAt !== prepared.record.header.expiresAt) throw new LinkError("invalid_response");
+  return {
+    id: created.data.id, expiresAt: prepared.record.header.expiresAt, bodyCid: prepared.bodyCid, record: prepared.record,
+    link: buildShortLink({ origin: input.openkeyOrigin, type: "openkey-approval-request", id: created.data.id, key: prepared.key, bodyCid: prepared.bodyCid }),
+  };
+}
+
 /**
  * Delete a link with an issuer-signed request. `deleted` when the service
  * removed it; `absent` when it answered `404` (unknown, expired, already
@@ -328,6 +356,19 @@ export async function resolveLink(link: string, input: ResolveLinkInput): Promis
   } else if (opened.type !== "share") {
     throw new LinkError("full_non_share");
   }
+  if (opened.type === "openkey-approval-request") {
+    if (opened.header.audience !== input.apiOrigin) throw new LinkError("audience_mismatch");
+    parseApprovalRequest(opened.value, { issuer: opened.header.issuer });
+  }
   await runBodyValidator(opened, input.validateBody);
   return { ...opened, form: parsed.form, id: parsed.form === "short" ? parsed.id : undefined };
+}
+
+/** Repeatable GET plus the same strict signature/CID/AEAD/issuer pipeline as every typed link. */
+export async function resolveApprovalRequest(link: string, input: ResolveLinkInput): Promise<ResolvedLink & { readonly request: OpenKeyApprovalRequestV1 }> {
+  const opened = await resolveLink(link, input);
+  if (opened.type !== "openkey-approval-request") throw new LinkError("type_path_mismatch");
+  if (opened.header.audience !== input.apiOrigin) throw new LinkError("audience_mismatch");
+  const request = parseApprovalRequest(opened.value, { issuer: opened.header.issuer });
+  return { ...opened, request };
 }

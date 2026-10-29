@@ -1,4 +1,4 @@
-export const LINK_TYPES = ["openkey-login", "courier", "share"] as const;
+export const LINK_TYPES = ["openkey-login", "openkey-approval-request", "courier", "share"] as const;
 export type LinkType = (typeof LINK_TYPES)[number];
 
 /**
@@ -18,13 +18,14 @@ export interface LinkTypeSpec {
   readonly maxLifeSeconds: number;
   readonly defaultLifeSeconds: number;
   /** Path letter of the short link. */
-  readonly pathLetter: "l" | "c" | "s";
+  readonly pathLetter: "l" | "a" | "c" | "s";
   /** Read once, by an explicit `take`. */
   readonly readOnce: boolean;
 }
 
 export const LINK_TYPE_SPECS: Readonly<Record<LinkType, LinkTypeSpec>> = {
   "openkey-login": { maxLifeSeconds: 600, defaultLifeSeconds: 600, pathLetter: "l", readOnce: true },
+  "openkey-approval-request": { maxLifeSeconds: 86_400, defaultLifeSeconds: 3600, pathLetter: "a", readOnce: false },
   courier: { maxLifeSeconds: 604_800, defaultLifeSeconds: 86_400, pathLetter: "c", readOnce: false },
   share: { maxLifeSeconds: 2_592_000, defaultLifeSeconds: 2_592_000, pathLetter: "s", readOnce: false },
 };
