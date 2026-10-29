@@ -541,7 +541,11 @@ export class ShareRecipientClient {
     return this.session;
   }
 
-  /** Decrypt unscoped v1 or path-bound v2 content, independently checking canonical and registered raw-key digests. */
+  /**
+   * Decrypt unscoped v1 or path-bound v2 content. The wrapped-key digest is compared by source kind: the raw-byte digest
+   * when the source has `encryptionKeyPath`, the canonical hash for a no-path source. The envelope's own canonical hash
+   * is checked independently either way.
+   */
   async decryptV3Content(bytes: Uint8Array): Promise<{ readonly bytes: Uint8Array; readonly mediaType: string }> {
     const envelope = this.options.envelope;
     const signer = this.nativeSigner ?? this.signer;
