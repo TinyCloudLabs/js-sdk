@@ -39,6 +39,7 @@ import { approvedTc2140ExactKeyDelegationRatchet, validateTc2140ExactKeyDelegati
 import { approvedTc2202AgentShareReceiveRatchet, validateTc2202AgentShareReceiveRatchetTransition } from "./replica-size-policy";
 import { approvedTc2205HomeFeedRatchet, validateTc2205HomeFeedRatchetTransition, type Tc2205HomeFeedRatchet } from "./replica-size-policy";
 import { approvedTc2230SiweRecipientsRatchet, validateTc2230SiweRecipientsRatchetTransition, type Tc2230SiweRecipientsRatchet } from "./replica-size-policy";
+import { approvedTc2192ExactKeyRuntimeConsentRatchet, validateTc2192ExactKeyRuntimeConsentRatchetTransition } from "./replica-size-policy";
 import { approvedTc2038PanelPrefetchRatchet, validateTc2038PanelPrefetchRatchetTransition, type Tc2038PanelPrefetchRatchet } from "./replica-size-policy";
 import { approvedTc2005RevokeWindowRatchet, validateTc2005RevokeWindowRatchetTransition, type Tc2005RevokeWindowRatchet } from "./replica-size-policy";
 import { approvedTc2096RepairBackoffRatchet, validateTc2096RepairBackoffRatchetTransition, type Tc2096RepairBackoffRatchet } from "./replica-size-policy";
@@ -2921,6 +2922,7 @@ delete tc2043Ledger.tc2140ExactKeyDelegationRatchet;
 delete tc2043Ledger.tc2202AgentShareReceiveRatchet;
 delete tc2043Ledger.tc2205HomeFeedRatchet;
 delete tc2043Ledger.tc2230SiweRecipientsRatchet;
+delete tc2043Ledger.tc2192ExactKeyRuntimeConsentRatchet;
 tc2043Ledger.entries = structuredClone(current.entries.slice(0, current.entries.findIndex((entry) => entry.pr === "#728")));
 describe("replication syncScope opt-in (#742, TC-2043) size ratchet", () => {
   const row = () => structuredClone(approvedTc2043SyncScopeRatchet);
@@ -3735,8 +3737,10 @@ describe("signed recipients SIWE resource insertion (TC-2230, #794) size ratchet
     expect(row().activation).toEqual(prerequisite().activation);
     expect(row().worker).toEqual({ delta: 0, ceiling: prerequisite().worker.ceiling });
     expect(row().replicaWorker).toEqual({ delta: 0, ceiling: prerequisite().replicaWorker.ceiling });
-    expect(rootCeilingFor(current, "index.mjs")).toEqual({ row: "tc2230SiweRecipientsRatchet", ceiling: 1475218 });
-    expect(rootCeilingFor(current, "index.cjs")).toEqual({ row: "tc2230SiweRecipientsRatchet", ceiling: 1415638 });
+    expect(rootCeilings(current)).toContainEqual({
+      row: "tc2230SiweRecipientsRatchet",
+      ceiling: { "index.mjs": 1475218, "index.cjs": 1415638 },
+    });
     expect(ancestryPins(current, false)).toContainEqual({
       row: "tc2230SiweRecipientsRatchet",
       pin: "b61e4869967e4a73ad7b0b567205dffb5692df9a",
@@ -3761,6 +3765,58 @@ describe("signed recipients SIWE resource insertion (TC-2230, #794) size ratchet
     changed.root.ceiling["index.cjs"]++;
     expect(() => validateTc2230SiweRecipientsRatchetTransition(undefined, changed)).toThrow("TC-2230");
     expect(() => validateTc2230SiweRecipientsRatchetTransition(row(), undefined)).toThrow("TC-2230");
+  });
+});
+describe("exact Share-key runtime consent (TC-2192, #796) size ratchet", () => {
+  const row = () => structuredClone(approvedTc2192ExactKeyRuntimeConsentRatchet);
+  const prerequisite = () => approvedTc2230SiweRecipientsRatchet;
+
+  it("pins exact canonical CI root bytes over TC-2230 and carries every other size bucket", () => {
+    expect(() => validateLedger(current)).not.toThrow();
+    expect(current.tc2192ExactKeyRuntimeConsentRatchet).toEqual(approvedTc2192ExactKeyRuntimeConsentRatchet);
+    expect(row().root).toEqual({
+      delta: { "index.mjs": 59, "index.cjs": 1152 },
+      ceiling: { "index.mjs": 1475277, "index.cjs": 1416790 },
+    });
+    expect(row().root.ceiling["index.mjs"]).toBe(prerequisite().root.ceiling["index.mjs"] + row().root.delta["index.mjs"]);
+    expect(row().root.ceiling["index.cjs"]).toBe(prerequisite().root.ceiling["index.cjs"] + row().root.delta["index.cjs"]);
+    expect(row().base).toBe("fd3d297c0688a6af14dc8606c7112d6bc900289c");
+    expect(row().sourceCommits).toEqual(["9f1ef80962458e2137039bbcee3c1adefff03f44"]);
+    expect(row().canonicalCI).toEqual({
+      run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40923764869",
+      jobs: [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40923764869/job/123623682905",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40923764869/job/123623683110",
+      ],
+    });
+    expect(row().firstImport).toEqual(prerequisite().firstImport);
+    expect(row().activation).toEqual(prerequisite().activation);
+    expect(row().worker).toEqual({ delta: 0, ceiling: prerequisite().worker.ceiling });
+    expect(row().replicaWorker).toEqual({ delta: 0, ceiling: prerequisite().replicaWorker.ceiling });
+    expect(rootCeilingFor(current, "index.mjs")).toEqual({ row: "tc2192ExactKeyRuntimeConsentRatchet", ceiling: 1475277 });
+    expect(rootCeilingFor(current, "index.cjs")).toEqual({ row: "tc2192ExactKeyRuntimeConsentRatchet", ceiling: 1416790 });
+    expect(ancestryPins(current, false)).toContainEqual({
+      row: "tc2192ExactKeyRuntimeConsentRatchet",
+      pin: "9f1ef80962458e2137039bbcee3c1adefff03f44",
+    });
+  });
+
+  it("refuses changed bytes or a missing TC-2230 prerequisite", () => {
+    const changed = copy(current);
+    changed.tc2192ExactKeyRuntimeConsentRatchet!.root.ceiling["index.mjs"]++;
+    expect(() => validateLedger(changed)).toThrow("TC-2192");
+    const withoutPrerequisite = copy(current);
+    delete withoutPrerequisite.tc2230SiweRecipientsRatchet;
+    expect(() => validateLedger(withoutPrerequisite)).toThrow("TC-2192");
+  });
+
+  it("may be introduced once and never changed or removed", () => {
+    expect(() => validateTc2192ExactKeyRuntimeConsentRatchetTransition(undefined, row())).not.toThrow();
+    expect(() => validateTc2192ExactKeyRuntimeConsentRatchetTransition(row(), row())).not.toThrow();
+    const changed = row();
+    changed.root.ceiling["index.cjs"]++;
+    expect(() => validateTc2192ExactKeyRuntimeConsentRatchetTransition(undefined, changed)).toThrow("TC-2192");
+    expect(() => validateTc2192ExactKeyRuntimeConsentRatchetTransition(row(), undefined)).toThrow("TC-2192");
   });
 });
 
