@@ -1,5 +1,12 @@
 # @tinycloud/operations
 
+## 0.7.7-beta.16
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.8.0-beta.17
+- @tinycloud/sdk-core@3.8.0-beta.17
+
 ## 0.7.7-beta.15
 
 ### Patch Changes
