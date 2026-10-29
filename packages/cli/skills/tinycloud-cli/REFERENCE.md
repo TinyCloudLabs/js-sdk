@@ -38,10 +38,9 @@ tinycloud --version
 ## Context and Login
 
 ```bash
-tinycloud profile list                    # use a new profile name; keep existing profiles
-tinycloud init --name publisher --key-only
-tinycloud --profile publisher auth login --device --manifest builtin:share-publishing --expiry 7d
-tinycloud --profile publisher context --json
+tinycloud onboard                         # once; every later task reuses this profile
+tinycloud auth request --cap SPEC --grant --paste --expiry 30d   # more access: ask once
+tinycloud context --json
 ```
 
 `context` always emits JSON: profile, `ownerDid`, `sessionDid`, host, `spaceId` and local session expiry, with `access: "not-tested"`. It never prints keys or signed material.
@@ -58,7 +57,7 @@ tinycloud --profile publisher context --json
 | `--method openkey\|local` | Browser OpenKey flow or local Ethereum key |
 | `--paste`, `--no-popup` | Normal OpenKey login prints a short approval link on stderr, waits for approval, then automatically verifies, durably saves and acknowledges the result. It works in a non-interactive terminal without a localhost callback or return code. `--no-popup` skips opening a local browser, not waiting. Re-run the same command after interruption to resume. `--paste` instead selects the explicit manual fallback with a five-minute, single-use return code on stdin; EOF without a code returns `PASTE_CODE_MISSING` without saving a key or session. Automatic links do not produce a manual code. |
 
-Device login JSON lists the signed, approved `permissions`, owner-unchecked `declined` capabilities, `ownerDid`, `spaceId` and `expiresAt`. `tinycloud auth request --manifest FILE --grant --device` adds another space to a logged-in profile the same way (default lifetime 7d). `tinycloud enable share [--replace-session]` is shorthand for device login with `builtin:share-publishing`. OpenKey refuses `tinycloud.sql` and other abilities outside its device policy; use normal OpenKey login (`--method openkey --manifest`) for those. Explicit `auth login` can wait for approval non-interactively; data commands never initiate consent to repair missing authority. Only an explicit `--host` is stored on the profile. Errors: `MANIFEST_REQUIRED`, `SCOPE_REJECTED` (OpenKey refused a capability; the message names it), `SESSION_IN_USE` (the request or the approved scope would narrow a live session; use a new profile or `--replace-session`), `PROFILE_CHANGED_DURING_LOGIN` (another login, key rotation or logout changed the profile while approval was pending; nothing saved), `PROFILE_STATE_INCONSISTENT` (profile, key and session disagree after an interrupted write; `--replace-session` or a new profile), `PROFILE_LOCK_TIMEOUT` (another process held the profile lock past 45 s), `LOCAL_OWNER_PROFILE` (scoped or device login on a local-owner-key profile; use a separate profile), `OPENKEY_UNREACHABLE`, `DEVICE_AUTH_DENIED`, `DEVICE_AUTH_EXPIRED`, `DEVICE_AUTH_BINDING_MISMATCH` (OpenKey's approval metadata disagrees with the signed grant), `OPENKEY_OWNER_MISMATCH`, `OPENKEY_GRANT_BROADENED`, `OPENKEY_EXPIRY_EXCEEDED` (the signed session outlives `--expiry`). Owner addresses compare case-insensitively (EIP-55 or lowercase); chain id and space name compare exactly. See [AUTH.md](AUTH.md).
+Device login JSON lists the signed, approved `permissions`, owner-unchecked `declined` capabilities, `ownerDid`, `spaceId` and `expiresAt`. `tinycloud auth request --manifest FILE --grant --paste` adds another space to the onboarding profile: send the owner the link and pass their code to the CLI exactly as sent (default lifetime 7d; `--grant --device` also works for KV-scoped manifests). `tinycloud enable share [--replace-session]` is shorthand for device login with `builtin:share-publishing`. OpenKey refuses `tinycloud.sql` and other abilities outside its device policy; use normal OpenKey login (`--method openkey --manifest`) for those. Explicit `auth login` can wait for approval non-interactively; data commands never initiate consent to repair missing authority. Only an explicit `--host` is stored on the profile. Errors: `MANIFEST_REQUIRED`, `SCOPE_REJECTED` (OpenKey refused a capability; the message names it), `SESSION_IN_USE` (the request or the approved scope would narrow a live session; use a new profile or `--replace-session`), `PROFILE_CHANGED_DURING_LOGIN` (another login, key rotation or logout changed the profile while approval was pending; nothing saved), `PROFILE_STATE_INCONSISTENT` (profile, key and session disagree after an interrupted write; `--replace-session` or a new profile), `PROFILE_LOCK_TIMEOUT` (another process held the profile lock past 45 s), `LOCAL_OWNER_PROFILE` (scoped or device login on a local-owner-key profile; use a separate profile), `OPENKEY_UNREACHABLE`, `DEVICE_AUTH_DENIED`, `DEVICE_AUTH_EXPIRED`, `DEVICE_AUTH_BINDING_MISMATCH` (OpenKey's approval metadata disagrees with the signed grant), `OPENKEY_OWNER_MISMATCH`, `OPENKEY_GRANT_BROADENED`, `OPENKEY_EXPIRY_EXCEEDED` (the signed session outlives `--expiry`). Owner addresses compare case-insensitively (EIP-55 or lowercase); chain id and space name compare exactly. See [AUTH.md](AUTH.md).
 
 `builtin:share-publishing` requests, in the owner's `default` space, exactly:
 
@@ -262,7 +261,7 @@ When neither stdin nor stderr is a terminal, `secrets get|list|put|delete` on an
 
 ## Local Replicas
 
-`tinycloud replica` keeps a durable, read-only copy of one KV prefix on this device. `sync` pulls the node's `tinycloud.kv/sync` change feed (node feature `kv-sync-v1`) and fetches each changed value, accepting bytes only if they hash to the ETag the node attested. `get`, `list`, `status` and `reset` never touch the network, so they work with the host offline. Reads report observed state from one source host, not global finality. Needs Node.js 22.13+ or Bun (built-in SQLite); on older Node every `tinycloud replica` command fails with `RUNTIME_UNSUPPORTED` (exit 1) and other commands are unaffected.
+`tinycloud replica` keeps a durable, read-only copy of one KV prefix on this device. `sync` pulls the node's `tinycloud.kv/sync` change feed (node feature `kv-sync-v1`) and fetches each changed value, accepting bytes only if they hash to the ETag the node attested. `get`, `list`, `status` and `reset` never touch the network, so they work with the host offline. Reads report observed state from one source host, not global finality. Needs Node.js 22.20 or later, or Bun (built-in SQLite); on older Node every `tinycloud replica` command fails with `RUNTIME_UNSUPPORTED` (exit 1) and other commands are unaffected.
 
 A replica needs a device grant carrying `get` and `sync` on the prefix. Neither `*` nor `tinycloud.kv/*` implies `sync`, and the owner's default session does not hold it; `tinycloud auth grant` acquires it for that grant only:
 
@@ -373,7 +372,7 @@ tinycloud completion fish | source
 
 ## Share Publish, Inspect, Receive, List, Revoke
 
-Publishing needs the publishing scope on a dedicated profile (`tinycloud --profile publisher auth login --device --manifest builtin:share-publishing`, or `tinycloud --profile publisher enable share`). Publish with `tinycloud --profile publisher share publish ...`.
+Publishing needs the publishing scope in the owner's `default` space, on a dedicated profile: `tinycloud init --name publisher --key-only`, then `tinycloud --profile publisher auth login --method openkey --paste --manifest builtin:share-publishing --expiry 30d`. Publish with `tinycloud --profile publisher share publish ...`.
 
 ```bash
 tinycloud share publish ./note.md --json                                  # bearer link; JSON has no URL: use share show <id> --reveal-link

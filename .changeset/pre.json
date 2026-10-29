@@ -29,6 +29,7 @@
     "@tinycloud/sdk-services-test": "21.0.1"
   },
   "changesets": [
+    "agent-docs-one-setup-path",
     "cli-account-revoke-fallback",
     "cli-issued-delegations",
     "cli-keys-replication",
