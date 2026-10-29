@@ -34,7 +34,9 @@ export const listFeedCardHistory: FeedApi["listFeedCardHistory"] = async (output
     for (let index = 0; index < count; index += 1) {
       const row = result.data.rows[index];
       if (typeof row[3] !== "string") throw new Error("Stored card envelope is invalid");
-      const card = feedCardSchema.parse(JSON.parse(row[3]));
+      const card: FeedCard = JSON.parse(row[3]);
+      // Validate without replacing the stored envelope: Zod drops literal "__proto__" record keys.
+      feedCardSchema.parse(card);
       if (!validIdentity(card) || row[0] !== card.cardId || row[1] !== card.revision || row[2] !== card.issuanceId) {
         throw new Error("Stored card identity does not match its key");
       }

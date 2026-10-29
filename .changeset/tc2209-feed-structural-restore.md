@@ -8,4 +8,6 @@ Require each origin's consistent exact-recipient pending/mapped evidence and a v
 
 Add read-only full card-issuance history with BINARY full-tuple keyset pages, default limit 100 and maximum 1000; reconciliation starts cursorless because this is not a durable tail, and latest-card listing remains unchanged.
 
+Preserve literal own JSON payload keys when validating stored card-history and restored-card envelopes. Preserve completed restore failures during caller-abort races without removing identical-replay readback recovery.
+
 Details: TC-2209

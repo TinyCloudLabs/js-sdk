@@ -262,6 +262,10 @@ records, choose current answers, or resolve recipients. Historical responses
 bypass live-submission eligibility only; they still require the full published
 card/revision/issuance identity. Existing live response IDs cannot be reclassified
 as imported. Replays must preserve header/payload content and source bindings.
+Valid literal JSON payload keys are preserved; unknown card-envelope fields are
+still refused. Completed query or batch failures retain their classification if
+caller cancellation races completion. Without cancellation, an identical concurrent
+restore can still recover through complete content and policy readback.
 
 Cards are stored first. Each imported response atomically stores its content-bound
 claim, header, optional private payload, origins, and delivery policies in the
@@ -293,6 +297,8 @@ is not guaranteed.
 `listFeedCardHistory(output, { afterIdentity, limit, signal })` from
 `@tinycloud/sdk-services/feed` reads full stored card issuances and their payloads,
 including earlier revisions and distinct issuances of the same revision.
+Validation preserves literal JSON payload keys, including an own `"__proto__"` key;
+it does not substitute a reconstructed payload or change its prototype.
 Pages use the full `(cardId, revision, issuanceId)` cursor in SQLite BINARY order
 for IDs and numeric order for revision, with default limit 100 and maximum 1000.
 The result is `{ cards, nextIdentity, hasMore }`; `nextIdentity` is the last

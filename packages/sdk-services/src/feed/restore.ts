@@ -109,9 +109,9 @@ async function restoreGroup(output: FeedDatabase, responses: FeedDatabase, group
   const response = content.response;
   const card = await output.query<string>("SELECT card_json FROM feed_cards WHERE card_id = ? AND revision = ? AND issuance_id = ?",
     [response.cardId, response.revision, response.issuanceId], options);
+  if (!card.ok) return responseDataFailure("Could not verify a restored response card issuance", card.error);
   const cardReadCancelled = restoreCancelled(options.signal);
   if (cardReadCancelled) return cardReadCancelled;
-  if (!card.ok) return responseDataFailure("Could not verify a restored response card issuance", card.error);
   if (!card.data.rows[0] || !sameFeedIdentity(feedCardSchema.parse(JSON.parse(card.data.rows[0][0])), response)) {
     return feedError("INVALID_INPUT", "Restored response requires a published full card issuance");
   }
@@ -144,7 +144,8 @@ async function restoreGroup(output: FeedDatabase, responses: FeedDatabase, group
     if (!saved.ok) { failed = true; failure = saved.error; }
   } catch (error) { failed = true; failure = error; }
   const stopped = restoreCancelled(options.signal);
-  if (stopped) return stopped;
+  // Cancellation prevents verification; retain a completed failure, including its ABORTED code.
+  if (stopped) return failed ? responseDataFailure("Could not restore response and atomic import policy", failure) : stopped;
   const stored = await storedResponse(responses, response.responseId, options);
   if (!stored.ok) return stored;
   const metadata = await readRestoreMetadata(responses, [response.responseId], options);
@@ -175,6 +176,8 @@ export const restoreFeedRecords: FeedApi["restoreFeedRecords"] = async (ownerPai
     const parsed = recordsSchema.parse(input);
     const cards: FeedCard[] = parsed.cards.map((card) => {
       const valid = feedCardSchema.parse(card);
+      // Validate the envelope, but retain literal keys in its opaque payload.
+      if (valid.payload !== undefined) valid.payload = (card as FeedCard).payload;
       if (feedJson(valid) !== feedJson(card)) throw new Error("Invalid restored card fields");
       return valid;
     });
