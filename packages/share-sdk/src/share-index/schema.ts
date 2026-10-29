@@ -1,6 +1,7 @@
 import type { SenderShareRecord } from "../history.js";
 import { canonicalAddressSpelling } from "./agent-record.js";
-import { STORED_DELIVERY_MATERIAL_KEYS, type StoredShareRecord } from "./delivery.js";
+import { checkStoredFullShareLink, STORED_DELIVERY_MATERIAL_KEYS, type StoredShareRecord } from "./delivery.js";
+import { parseArtifactVersionPath } from "../artifact-core.js";
 
 /**
  * Index document schema v1, rows, `project()`, and the versioned agent-record
@@ -249,10 +250,10 @@ const FIELDS_BY_RECORD_V: Readonly<Record<number, { readonly required: readonly 
   1: { required: REQUIRED_V1, optional: OPTIONAL_V1 },
 };
 
-/** Whether `path` is a canonical KV path under a share prefix. */
+/** Canonical share paths and exact artifact version files use the existing path checks. Details: TC-1739 */
 export function isShareResourcePath(path: unknown): path is string {
   if (typeof path !== "string" || path.length === 0 || path.length > 1024 || /[\\%\u0000-\u001f]/.test(path)) return false;
-  if (!SHARE_RESOURCE_PREFIXES.some((prefix) => path.startsWith(prefix) && path.length > prefix.length)) return false;
+  if (!SHARE_RESOURCE_PREFIXES.some((prefix) => path.startsWith(prefix) && path.length > prefix.length) && parseArtifactVersionPath(path) === undefined) return false;
   return path.split("/").every((segment, index, all) => (segment !== "" || index === all.length - 1) && segment !== "." && segment !== "..");
 }
 
@@ -338,6 +339,7 @@ export function checkAgentRecordSchema(value: unknown, context: AgentRecordSchem
   const resource = record.resource;
   if (!isObject(resource) || Object.keys(resource).length !== 2 || (resource.kind !== "exact" && resource.kind !== "prefix") || !isShareResourcePath(resource.path)) return fail();
   if (!Array.isArray(record.actions) || record.actions.length === 0 || new Set(record.actions).size !== record.actions.length || !record.actions.every((action) => typeof action === "string" && SHARE_ACTIONS.includes(action))) return fail();
+  if (parseArtifactVersionPath(resource.path) !== undefined && (resource.kind !== "exact" || record.actions.some(action => action !== "tinycloud.kv/get" && action !== "tinycloud.kv/metadata"))) return fail();
   const matcher = record.recipientMatcher;
   if (!isObject(matcher) || !(matcher.kind === "bearer" ? Object.keys(matcher).length === 1 : ["exactEmail", "emailDomain", "recipientDid"].includes(matcher.kind as string) && Object.keys(matcher).length === 2 && typeof matcher.value === "string")) return fail();
   if (!isIsoTime(record.registeredAt) || !isIsoTime(record.expiresAt) || Date.parse(record.registeredAt) >= Date.parse(record.expiresAt)) return fail();
@@ -362,7 +364,11 @@ export function checkAgentRecordSchema(value: unknown, context: AgentRecordSchem
   // record that stores one beside its delivery material is refused.
   if (record.deliveryMaterial !== undefined) {
     const material = record.deliveryMaterial;
-    if (!isObject(material) || Object.keys(material).length !== STORED_DELIVERY_MATERIAL_KEYS.length || !STORED_DELIVERY_MATERIAL_KEYS.every((key) => typeof material[key] === "string")) return fail();
+    if (!isObject(material) || !STORED_DELIVERY_MATERIAL_KEYS.every((key) => typeof material[key] === "string")
+      || Object.keys(material).some(key => !STORED_DELIVERY_MATERIAL_KEYS.includes(key) && key !== "fullLink")) return fail();
+    if (Object.hasOwn(material, "fullLink")) {
+      try { checkStoredFullShareLink(material.fullLink); } catch { return fail(); }
+    }
     if (typeof record.link === "string" && carriesSealedRecord(record.link)) return fail();
   }
   if (record.deliveredRecipients !== undefined && (!Array.isArray(record.deliveredRecipients) || !record.deliveredRecipients.every((item) => typeof item === "string"))) return fail();
