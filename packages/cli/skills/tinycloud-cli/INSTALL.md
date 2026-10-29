@@ -4,7 +4,7 @@ agents.tinycloud.xyz serves every TinyCloud skill and pins the CLI version they'
 
 ## Install
 
-Follow https://agents.tinycloud.xyz/cli. It installs the pinned TinyCloud CLI and this skill. Run the CLI as `tinycloud`; on Linux, `tc` is iproute2 traffic control at `/usr/sbin/tc`.
+Follow https://agents.tinycloud.xyz/onboarding. It installs the pinned TinyCloud CLI and this skill. Run the CLI as `tinycloud`; on Linux, `tc` is iproute2 traffic control at `/usr/sbin/tc`.
 
 `tc` remains a deprecated compatibility alias for the same executable. Existing commands, flags, exit codes, and stdout are unchanged; a POSIX alias invocation prints one notice to stderr, leaving piped JSON intact. Prefer `tinycloud` for new commands.
 
@@ -15,7 +15,7 @@ curl -fsSL https://agents.tinycloud.xyz/skills/install.js | node - cli --agent c
 curl -fsSL https://agents.tinycloud.xyz/skills/install.js | node - courier --agent claude-code
 ```
 
-Use `--agent codex` or `--agent opencode` for those clients. Skills go into `${CLAUDE_CONFIG_DIR:-~/.claude}/skills/<name>` for Claude Code and `~/.agents/skills/<name>` for Codex and OpenCode, which share that folder. The installer checks every file against https://agents.tinycloud.xyz/skills/index.json before it writes anything, and prints `SKILL_INSTALLED <name> <version> <folder>`. Start a new session for the client to discover the skill.
+`--agent` takes, for example, `claude-code`, `codex` or `opencode`; for other agents, copy the folder into that agent's skills directory. Skills go into `${CLAUDE_CONFIG_DIR:-~/.claude}/skills/<name>` for Claude Code and `~/.agents/skills/<name>` for Codex and OpenCode, which share that folder. The installer checks every file against https://agents.tinycloud.xyz/skills/index.json before it writes anything, and prints `SKILL_INSTALLED <name> <version> <folder>`. Start a new session for the client to discover the skill.
 
 The core skill was renamed from `tc-cli` to `tinycloud-cli`. If an existing installer selects `--skill tc-cli`, change that selector to `--skill tinycloud-cli` when adopting this release. Remove the old `tc-cli` skill folder after installing the renamed skill so clients do not load both; the executable compatibility alias does not restore the old skill selector.
 

@@ -1,5 +1,13 @@
 # @tinycloud/cli
 
+## 1.5.0-beta.30
+
+### Patch Changes
+
+- 73b4604: The `tinycloud-cli` skill, the MCP skill and both READMEs now describe one agent setup path: start at https://agents.tinycloud.xyz/onboarding, sign in with `tinycloud onboard`, and ask for more access with `tinycloud auth request ... --grant --paste`. Agent guides use Node.js 22.20 or later.
+
+  Details: TC-2239
+
 ## 1.5.0-beta.29
 
 ### Minor Changes

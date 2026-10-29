@@ -8,7 +8,8 @@ Self-sovereign storage from the terminal. `tinycloud` is the command-line interf
 npm install -g @tinycloud/cli@1.5.0-beta.20
 ```
 
-Requires Node.js >= 20.
+Requires Node.js >= 20; TinyCloud's agent guides use Node.js 22.20 or later.
+Agents: start at https://agents.tinycloud.xyz/onboarding.
 
 The package exposes `tinycloud` as its preferred command and keeps `tc` as a
 deprecated compatibility alias at the same entry. Both names accept the same
@@ -22,7 +23,7 @@ with `tinycloud --version`.
 The package ships the general `tinycloud-cli` skill and its references in
 `skills/tinycloud-cli`, and the `courier` skill for `tinycloud courier` in `skills/courier`.
 See [skill installation](skills/tinycloud-cli/INSTALL.md) for a
-pinned, cross-agent installation with OpenCode, Codex and Claude Code, and
+pinned, cross-agent installation for any agent, and
 [authentication](skills/tinycloud-cli/AUTH.md) for device login and relaying the
 approval code to the owner.
 
