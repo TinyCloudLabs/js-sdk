@@ -1,5 +1,20 @@
 # @tinycloudlabs/web-sdk
 
+## 3.8.0-beta.21
+
+### Patch Changes
+
+- 9fb359a: Allow explicit runtime permission requests to create one exact `share/<id>` named key on the current owner's default encryption network. Validate the owner, resource and action before consent, bind approval to the same signed session, and activate only the requested key-create authority. Native shells without a supported permission-request path refuse rather than falling back to a web signer. Static manifests and native authority ceilings are unchanged.
+
+  Keep runtime permission approval bound to the captured session key through signing and activation.
+
+  Details: TC-2192
+
+- Updated dependencies [9fb359a]
+- Updated dependencies [9fb359a]
+  - @tinycloud/sdk-core@3.8.0-beta.21
+  - @tinycloud/node-sdk@3.8.0-beta.21
+
 ## 3.8.0-beta.20
 
 ### Patch Changes
