@@ -8,9 +8,9 @@ import { base58btc } from "multiformats/bases/base58";
 import { profilePath, withProfileLock, withTinyCloudStateRoot } from "@tinycloud/operations/state";
 import { fromBase64Url, unifiedPolicyV2Schema } from "@tinycloud/share-envelope";
 import { buildShortLink } from "@tinycloud/share-envelope/links";
-import { ADDRESSED_SHARE_TOO_LARGE_MESSAGE, historyRecordForPublishedShare, notifyShare, revokeShare, type PublishedShare, type SenderShareRecord, type ShareNotifyResult, type SharePolicyRootRevocation, type TargetPublishInput } from "@tinycloud/share-sdk";
+import { ADDRESSED_SHARE_TOO_LARGE_MESSAGE, MemorySenderShareRecordStorage, historyRecordForPublishedShare, notifyShare, revokeShare, type PublishedShare, type SenderShareRecord, type ShareNotifyResult, type SharePolicyRootRevocation, type TargetPublishInput } from "@tinycloud/share-sdk";
 import { shortLinkId } from "./short-links.js";
-import { createEmailCredentialRequirement, createEmailDomainCredentialRequirement, credentialRequirementDigest, LocationRecordValidationError, LocationRegistryHttpError, ShareDeliveryRefusedError } from "@tinycloud/sdk-core";
+import { canonicalDigest, validateCredentialFlowDescriptor, createEmailCredentialRequirement, createEmailDomainCredentialRequirement, credentialRequirementDigest, LocationRecordValidationError, LocationRegistryHttpError, ShareDeliveryRefusedError } from "@tinycloud/sdk-core";
 import { CLIError } from "../output/errors.js";
 import { ShareHistoryReadError, ShareHistoryRetryError, ShareHistoryUnreadableError, SharePublishAuthorityError, shareHistoryReason } from "./errors.js";
 
@@ -307,6 +307,9 @@ mock.module("../lib/sdk.js", () => ({
 
 const { createEncryptedProfileHistory, createShareAuthorityAdapters, profileHistoryFileExists, quarantineUnreadableProfileHistory, signShareHistoryBytes } = await import("./adapters.js");
 const { assertShareHistoryAllowsKeyDrop, checkShareHistoryForKeyDrop } = await import("./history-guard.js");
+// Load the command graph only after the profile and SDK module mocks are installed.
+const { configureShareCommandServices } = await import("../commands/share.js");
+const { runShareCaptured } = await import("../commands/share.integration-harness.js");
 
 afterEach(() => {
   ownerKv.clear();
@@ -347,6 +350,7 @@ afterEach(() => {
   deliveryAuthorizationConflicts = 0;
   publishEvents.length = 0;
   registeredPolicies.length = 0;
+  configureShareCommandServices({});
   sessionExpiresAt = "2099-01-01T00:00:00.000Z";
   authenticationError = undefined;
   registryError = undefined;
@@ -795,17 +799,152 @@ describe("TinyCloud share authority adapter", () => {
     mediaType: "text/markdown",
   });
 
-  it("refuses exact-email publication without a descriptor and issuer before side effects", async () => {
-    const rawEmailInput: TargetPublishInput = {
-      source: new TextEncoder().encode("only me"), filename: "note.md",
-      target: { kind: "email", address: "owner@example.com" },
-      expiresAt: new Date("2030-01-01T00:00:00.000Z"),
-      origin: "https://share.example", mediaType: "text/markdown",
-    };
-    await expect(addressedAdapter().publish(rawEmailInput)).rejects.toThrow();
+  const emailWithoutOverrides = (): TargetPublishInput => ({
+    source: new TextEncoder().encode("only me"), filename: "note.md",
+    target: { kind: "email", address: "owner@example.com" },
+    expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+    origin: "https://share.example", mediaType: "text/markdown",
+  });
+
+  const commandResult = async (args: readonly string[]) => {
+    const originalExit = process.exit;
+    let exitCode: number | undefined;
+    process.exit = ((code?: number) => { exitCode = code; }) as typeof process.exit;
+    try {
+      const result = await runShareCaptured(args);
+      return { ...result, exitCode: exitCode ?? result.exitCode };
+    } finally { process.exit = originalExit; }
+  };
+
+  function assertEmailLeaf(published: PublishedShare, index: number): void {
+    const network = `urn:tinycloud:encryption:${canonicalOwnerDid}:default`;
+    const keyPath = `share/${published.metadata.shareId}`;
+    const policy = unifiedPolicyV2Schema.parse(registeredPolicies[index]);
+    expect(policy.contentSource).toMatchObject({
+      shareId: published.metadata.shareId, encryptionNetwork: network, encryptionKeyPath: keyPath,
+    });
+    expect(policy.capabilityCeiling.filter((entry) => entry.kind === "encryption")).toEqual([{
+      kind: "encryption", resource: `${network}/${keyPath}`, action: "tinycloud.encryption/decrypt",
+    }]);
+  }
+
+  it("publishes local-key exact email without flags using the production commitment and only that share's decrypt leaf", async () => {
+    sessionOnly = false;
+    holdsDecrypt = false;
+    const published = await addressedAdapter().publish(emailWithoutOverrides());
+    if ("state" in published) throw new Error("expected publication");
+    expect(published.metadata.recipientMatcher).toEqual({ kind: "exactEmail", value: "owner@example.com" });
+    expect(unifiedPolicyV2Schema.parse(registeredPolicies[0]).credentialRequirement).toMatchObject({
+      descriptorDigest: "1tg-qphmKBVtNwzVg9xyz-xxqt_xtMXAsQyXw46m8S0",
+      issuerDid: "did:web:issuer.credentials.org",
+      issuerKid: "did:web:issuer.credentials.org#controller",
+    });
+    assertEmailLeaf(published, 0);
+    expect(decryptChecks).toEqual([]);
+  });
+
+  it("publishes actual CLI no-flags and production descriptor overrides without pathless registrations", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tc-email-defaults-cli-"));
+    historyCacheDir = root;
+    sessionOnly = false;
+    holdsDecrypt = false;
+    const input = join(root, "note.md");
+    const descriptorPath = join(root, "descriptor.json");
+    const descriptor = validateCredentialFlowDescriptor(emailDescriptor);
+    const variants = [
+      { flags: [] as string[], descriptor },
+      { flags: ["--credential-descriptor", descriptorPath], descriptor },
+    ];
+    const published: PublishedShare[] = [];
+    const adapter = addressedAdapter();
+    configureShareCommandServices({
+      records: new MemorySenderShareRecordStorage(),
+      targetAdapter: { publish: async (request) => {
+        const result = await adapter.publish(request);
+        if (!("state" in result)) published.push(result);
+        return result;
+      } },
+    });
+    try {
+      await writeFile(input, "only me");
+      for (const [index, variant] of variants.entries()) {
+        await writeFile(descriptorPath, JSON.stringify(variant.descriptor));
+        const result = await commandResult(["share", "publish", input, "--to", "owner@example.com", "--viewer-origin", "https://share.example", ...variant.flags]);
+        expect(result.exitCode, `variant ${index}: ${result.stderr}`).toBe(0);
+        expect(result.stdout).toMatch(/^https:\/\/share\.example\/s\/full#v=4&k=/);
+        expect(published[index]).toBeDefined();
+        assertEmailLeaf(published[index]!, index);
+        expect(unifiedPolicyV2Schema.parse(registeredPolicies[index]).credentialRequirement).toMatchObject({
+          descriptorDigest: await canonicalDigest(variant.descriptor),
+          issuerDid: variant.descriptor.issuer.did, issuerKid: variant.descriptor.issuer.kid,
+        });
+      }
+      expect(registeredPolicies).toHaveLength(variants.length);
+      expect(decryptChecks).toEqual([]);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it("honors issuer-only and kid-only overrides without silently replacing the descriptor trust binding", async () => {
+    sessionOnly = false;
+    for (const override of [{ issuerDid: "did:web:issuer.example" }, { issuerKid: "did:web:issuer.credentials.org#other" }]) {
+      await expect(addressedAdapter().publish({ ...emailWithoutOverrides(), ...override })).rejects.toThrow();
+    }
     expect(publishEvents).toEqual([]);
-    expect(uploadedPaths).toEqual([]);
     expect(registeredPolicies).toEqual([]);
+    expect(encryptions).toBe(0);
+  });
+
+  it("refuses malformed descriptor, issuer and kid overrides before any request", async () => {
+    sessionOnly = false;
+    const requests: string[] = [];
+    const adapter = createShareAuthorityAdapters({
+      origin: "https://share.example", profileName: async () => "test",
+      fetchFn: (async (request: string | URL | Request) => {
+        requests.push(String(request));
+        return Response.json({ version: "tinycloud.share/config-v2", shareOrigin: "https://share.example", registryOrigin: "https://registry.example", credentialsOrigin: "https://credentials.example" });
+      }) as typeof globalThis.fetch,
+    }).targetAdapter;
+    for (const override of [{ credentialDescriptor: {} }, { credentialDescriptor: null }, { issuerDid: "not a DID" }, { issuerKid: "not a key id" }]) {
+      await expect(adapter.publish({ ...emailWithoutOverrides(), ...emailCredentialInputs, ...override })).rejects.toThrow();
+    }
+    expect(requests).toEqual([]);
+    expect(publishEvents).toEqual([]);
+    expect(registeredPolicies).toEqual([]);
+    expect(encryptions).toBe(0);
+  });
+
+  it("refuses malformed descriptor JSON at the CLI boundary before publication", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tc-email-bad-json-"));
+    const input = join(root, "note.md");
+    const descriptor = join(root, "invalid.json");
+    configureShareCommandServices({ targetAdapter: addressedAdapter() });
+    try {
+      await writeFile(input, "only me");
+      await writeFile(descriptor, "{");
+      const result = await commandResult(["share", "publish", input, "--to", "owner@example.com", "--credential-descriptor", descriptor,
+        "--viewer-origin", "https://share.example", "--issuer-did", emailCredentialInputs.issuerDid, "--issuer-kid", emailCredentialInputs.issuerKid]);
+      expect(result.exitCode).not.toBe(0);
+      expect(publishEvents).toEqual([]);
+      expect(registeredPolicies).toEqual([]);
+      expect(encryptions).toBe(0);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it("keeps the mock-backed OpenKey no-decrypt refusal typed and side-effect free without credential flags", async () => {
+    holdsDecrypt = false;
+    const root = await mkdtemp(join(tmpdir(), "tc-email-openkey-refusal-"));
+    const input = join(root, "note.md");
+    configureShareCommandServices({ targetAdapter: addressedAdapter() });
+    try {
+      await writeFile(input, "only me");
+      const result = await commandResult(["share", "publish", input, "--to", "owner@example.com", "--json"]);
+      expect(JSON.parse(result.stderr).error.code).toBe("PERMISSION_DENIED");
+      expect(result.exitCode).not.toBe(0);
+      expect(publishEvents).toEqual([]);
+      expect(registeredPolicies).toEqual([]);
+      expect(encryptions).toBe(0);
+      expect(decryptChecks).toHaveLength(1);
+    } finally { await rm(root, { recursive: true, force: true }); }
   });
 
   /** The history record of a share whose printed link is its short link: the only link an invitation carries. */

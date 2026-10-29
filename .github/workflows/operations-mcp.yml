@@ -117,6 +117,7 @@ jobs:
           bun test packages/cli/src/commands/share-artifact.test.ts
           bun test packages/cli/src/commands/share.integration.test.ts
           bun test packages/cli/src/share/adapters.test.ts
+          bun test packages/cli/src/share/email-publish-v3.test.ts
           bun test packages/cli/src/share/short-links.test.ts
           bun test packages/cli/src/share/bearer-revoke.test.ts
           bun test packages/cli/src/share/native-receive.test.ts

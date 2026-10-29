@@ -1,7 +1,7 @@
 import type { IKVService } from "@tinycloud/node-sdk";
 import { kvArtifactStore } from "./artifact-store.js";
 import { createShareLinks, type ShareLinks } from "./short-links.js";
-import { publishEmailShareV3 } from "./email-publish-v3.js";
+import { publishEmailShareV3, resolveEmailCredentialInputs } from "./email-publish-v3.js";
 import { artifactSpaceNotReady, failIfSpaceNotReady } from "./space-not-ready.js";
 import { ShareHistoryReadError, ShareHistoryRetryError, ShareHistoryUnreadableError, SharePublishAuthorityError } from "./errors.js";
 import { storageRejection } from "../output/storage.js";
@@ -710,10 +710,7 @@ export function createShareAuthorityAdapters(input: {
     // An addressed share's policy ceiling includes decrypt on the owner's encryption network, which a
     // session-only sign-in (e.g. builtin:share-publishing) deliberately lacks. Refuse before any Share
     // or node request, registry write or upload. A signer-backed (local-key) owner has full authority.
-    if (targetInput.target.kind === "email" &&
-        (targetInput.credentialDescriptor === undefined || targetInput.issuerDid === undefined || targetInput.issuerKid === undefined)) {
-      throw new TypeError("email credential descriptor and issuer are required");
-    }
+    const emailCredentials = targetInput.target.kind === "email" ? resolveEmailCredentialInputs(targetInput) : undefined;
     const addressedEncryptionNetwork = targetInput.target.kind === "bearer" ? undefined : targetInput.target.kind === "email"
       ? node.getDefaultEncryptionNetworkId() : node.getEncryptionNetworkIdForSpace(ownerSpaceId);
     const emailKeyPath = targetInput.target.kind === "email" ? `share/${crypto.randomUUID().replaceAll("-", "")}` : undefined;
@@ -979,8 +976,7 @@ export function createShareAuthorityAdapters(input: {
     try {
       published = prepared.target.kind === "email"
         ? await publishEmailShareV3({ ...addressedOptions, target: prepared.target,
-          credentialDescriptor: targetInput.credentialDescriptor,
-          issuerDid: targetInput.issuerDid!, issuerKid: targetInput.issuerKid! })
+          ...emailCredentials! })
         : await publishAddressedShare(addressedOptions);
     } catch (error) {
       if (!(error instanceof AddressedShareOverLimitError)) throw error;

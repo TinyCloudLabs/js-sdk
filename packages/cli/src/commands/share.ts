@@ -42,6 +42,7 @@ import { ProfileLockTimeoutError } from "@tinycloud/operations/state";
 import { parseDuration } from "../lib/duration.js";
 import { CLIError, handleError, storageFullError, wrapError } from "../output/errors.js";
 import { classifyShareFailure } from "../share/failure-class.js";
+import { resolveEmailCredentialInputs } from "../share/email-publish-v3.js";
 import { authorizationRequiredJson, inspectHuman, publishHuman, receiveHuman, receiveJson, writeJson } from "../share/output.js";
 import { MAX_SHARE_STDIN_BYTES, readBoundedUrlStdin, readShareInput, shareInputFilename, writeShareOutput } from "../share/io.js";
 import { quarantineUnreadableProfileHistory } from "../share/adapters.js";
@@ -426,9 +427,9 @@ export function registerShareCommand(program: Command): void {
     .description("Publish one or more bounded files as a Share, or a folder with an index.html as one self-contained page (anyone links only)")
     .option("--name <filename>", "Filename for stdin input, or the published .html name of a folder")
     .option("--to <target>", "Share target", "anyone")
-    .option("--credential-descriptor <path>", "Email credential flow descriptor JSON")
-    .option("--issuer-did <did>", "Trusted email credential issuer DID")
-    .option("--issuer-kid <kid>", "Trusted email credential issuer key ID")
+    .option("--credential-descriptor <path>", "Email credential flow descriptor JSON (default: production email proof)")
+    .option("--issuer-did <did>", "Trusted email credential issuer DID (default: did:web:issuer.credentials.org)")
+    .option("--issuer-kid <kid>", "Trusted email credential issuer key ID (default: did:web:issuer.credentials.org#controller)")
     .option("--notify", "Email an exact-email recipient, or a domain mailbox on node 1.17.3+")
     .option("--notify-to <address>", "Mailbox to invite for --to domain:<name> --notify (node 1.17.3+)")
     .option("--expires <duration>", "Share lifetime")
@@ -458,15 +459,15 @@ export function registerShareCommand(program: Command): void {
         const target = parseShareTarget(options.to);
         const actions = requestedActions(options.action);
         if (options.notify === true && !actions.includes("read")) throw new CLIError("INVALID_ARGUMENT", "--notify requires the read action; nothing was shared", 2);
-        if (target.kind === "email" && (!options.credentialDescriptor || !options.issuerDid || !options.issuerKid)) {
-          throw new CLIError("INVALID_ARGUMENT", "email publication requires --credential-descriptor, --issuer-did, and --issuer-kid", 2);
-        }
         if (target.kind !== "email" && (options.credentialDescriptor || options.issuerDid || options.issuerKid)) {
           throw new CLIError("INVALID_ARGUMENT", "credential options require an exact email target", 2);
         }
-        const credentialDescriptor = target.kind === "email"
-          ? JSON.parse(await readFile(options.credentialDescriptor, "utf8")) as unknown
-          : undefined;
+        const emailCredentials = target.kind === "email" ? resolveEmailCredentialInputs({
+          credentialDescriptor: options.credentialDescriptor === undefined
+            ? undefined : JSON.parse(await readFile(options.credentialDescriptor, "utf8")) as unknown,
+          issuerDid: options.issuerDid,
+          issuerKid: options.issuerKid,
+        }) : undefined;
         // A folder with an index.html becomes one self-contained page for an anyone-with-the-link share. Addressed and
         // --prefix publication of a folder is not offered: a directory falls through to the file reader and is refused.
         const folder = files.length === 1 && target.kind === "bearer" && options.prefix !== true && await isDirectoryInput(files[0]!);
@@ -523,7 +524,7 @@ export function registerShareCommand(program: Command): void {
           origin: options.viewerOrigin,
           ...(maxBytes === undefined ? {} : { maxBytes }),
           notify: options.notify === true,
-          ...(credentialDescriptor === undefined ? {} : { credentialDescriptor, issuerDid: options.issuerDid, issuerKid: options.issuerKid }),
+          ...emailCredentials,
           // The artifact request rides on the adapter call rather than through `publishTargetShare`, whose code is part of
           // the browser bundles (the web-sdk size ceiling counts every byte it carries).
           targetAdapter: artifact === undefined || shareServices.targetAdapter === undefined
