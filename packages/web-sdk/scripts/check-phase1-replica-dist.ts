@@ -35,6 +35,7 @@ import { validateTc2130PanelIphoneRatchetTransition } from "./replica-size-polic
 import { validateTc1977HostBindingRatchetTransition } from "./replica-size-policy";
 import { validateTc2132IssuedDelegationsRatchetTransition } from "./replica-size-policy";
 import { validateTc2140ExactKeyDelegationRatchetTransition } from "./replica-size-policy";
+import { validateTc2205HomeFeedRatchetTransition } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 import { replicaOwnedPath } from "./replica-owned-path";
 import { webSdkTestExitFailure } from "./web-sdk-test-exit";
@@ -540,6 +541,13 @@ if (prBaseSha) {
   if (tc2140ExactKeyDelegation !== undefined && baseLedger.tc2140ExactKeyDelegationRatchet === undefined &&
       (baseLedger.tc2132IssuedDelegationsRatchet === undefined || !hasAncestor(repoRoot, tc2140ExactKeyDelegation.sourceCommits.at(-1)!))) {
     console.error("The exact-key delegation ratchet requires the merged issued-delegations ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc2205HomeFeedRatchetTransition(baseLedger.tc2205HomeFeedRatchet, ledger.tc2205HomeFeedRatchet);
+  const homeFeed = ledger.tc2205HomeFeedRatchet;
+  if (homeFeed !== undefined && baseLedger.tc2205HomeFeedRatchet === undefined &&
+      (baseLedger.tc2202AgentShareReceiveRatchet === undefined || !hasAncestor(repoRoot, homeFeed.sourceCommits.at(-1)!))) {
+    console.error("The Home feed ratchet requires the merged TC-2202 row and its measured source commit.");
     failed = true;
   }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";
