@@ -285,11 +285,18 @@ strong ETags, change metadata, tombstones, opaque cursors, and node source/autho
 attestations. It bootstraps every change-feed page and verifies each binary network
 read against its ETag. One empty final tail at the end cursor is required before
 `completePrefixSnapshot: true` can be published. Source changes, cursor gaps,
-scope drift, or mismatches fail the capture; there is no retry loop or write fence.
+scope drift, or mismatches fail the capture. The exporter does not restart a changed
+capture or create a write fence; SDK requests retain their own transport behavior.
 
 The complete file is fsynced and published exclusively with mode `0600`; an existing
 path is never silently replaced. Keep this archive private: it can contain answers
 or codes. Normal command output is only the snapshot ID, output path, and counts.
+The output directory must belong to the effective user and forbid group/world
+writes. Ancestors must belong to that user or root; writable shared ancestors
+require sticky-bit protection of the next trusted-owned child. Unverifiable paths
+are refused. Mode `0600` protects contents, not the staging pathname's identity:
+the directory precondition prevents another UID from replacing that entry.
+The same UID and root remain trusted OS principals, not isolated adversaries.
 Export does not classify records, choose current answers, resolve recipients,
 evaluate legacy expiry, restore state, or dispatch pending responses.
 

@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { link, lstat, open, readFile, rm, unlink } from "node:fs/promises";
+import { link, lstat, open, readFile, realpath, rm, unlink } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import type { KVChangesResponse } from "@tinycloud/sdk-services";
 import { ExitCode } from "../config/constants.js";
@@ -50,6 +50,43 @@ async function assertUnusedOutput(path: string): Promise<void> {
   }
   refuse("Raw export output already exists; choose an unused output path.");
 }
+
+async function assertTrustedDirectoryChain(directory: string, uid: number): Promise<void> {
+  let path = directory;
+  let childUid: number | undefined;
+  let leaf = true;
+  for (;;) {
+    const entry = await lstat(path);
+    if (!Number.isSafeInteger(entry.uid) || !Number.isSafeInteger(entry.mode) ||
+      (entry.uid !== uid && entry.uid !== 0)) {
+      refuse("Raw export requires directories owned by the effective user or root.");
+    }
+    // Link replacement is protected by its parent; the resolved directory chain is checked separately.
+    if (!entry.isSymbolicLink()) {
+      if (!entry.isDirectory() || (leaf && entry.uid !== uid)) {
+        refuse("Raw export requires an output directory owned by the effective user.");
+      }
+      if ((entry.mode & 0o022) !== 0 &&
+        (leaf || (entry.mode & 0o1000) === 0 || (childUid !== uid && childUid !== 0))) {
+        refuse("Raw export refuses an output path writable or replaceable by other users.");
+      }
+    }
+    const parent = dirname(path);
+    if (parent === path) return;
+    childUid = entry.uid;
+    path = parent;
+    leaf = false;
+  }
+}
+
+async function assertTrustedOutputDirectory(directory: string): Promise<void> {
+  if (typeof process.geteuid !== "function") refuse("Raw export requires verifiable POSIX ownership.");
+  const uid = process.geteuid();
+  if (!Number.isSafeInteger(uid) || uid < 0) refuse("Raw export cannot verify the effective filesystem owner.");
+  await assertTrustedDirectoryChain(directory, uid);
+  const physical = await realpath(directory);
+  if (physical !== directory) await assertTrustedDirectoryChain(physical, uid);
+}
 async function sidecarRows(options: FeedRawExportOptions, keys: Set<string>): Promise<FeedRawSourceRow[]> {
   if (options.sidecarsFile === undefined) return [];
   const config: unknown = JSON.parse(await readFile(options.sidecarsFile, { encoding: "utf8", signal: options.signal }));
@@ -74,6 +111,8 @@ async function sidecarRows(options: FeedRawExportOptions, keys: Set<string>): Pr
 
 async function publishSnapshot(outFile: string, snapshot: FeedRawSnapshot, signal?: AbortSignal): Promise<void> {
   const parentPath = dirname(outFile);
+  // Other UIDs must not be able to replace the stage entry; same-UID/root actors are trusted.
+  await assertTrustedOutputDirectory(parentPath);
   const parent = await open(parentPath, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
   const temporary = join(parentPath, `.${basename(outFile)}.${randomUUID()}.tmp`);
   let created = false;
@@ -115,9 +154,8 @@ export async function exportFeedRawSnapshot(options: FeedRawExportOptions): Prom
     }
     checkAbort(options.signal);
     const outFile = resolve(options.outFile);
+    await assertTrustedOutputDirectory(dirname(outFile));
     await assertUnusedOutput(outFile);
-    const parent = await lstat(dirname(outFile));
-    if (!parent.isDirectory()) refuse("Raw export requires an existing output directory.");
     const rows: FeedRawSourceRow[] = [];
     const deletions: FeedRawSnapshot["deletions"] = [];
     const pages: FeedRawChangePage[] = [];
