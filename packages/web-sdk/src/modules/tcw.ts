@@ -1468,6 +1468,7 @@ export class TinyCloudWeb {
       entry.service === "tinycloud.encryption" &&
       entry.actions.includes("tinycloud.encryption/key.create"));
     let assertCurrentSession: (() => void) | undefined;
+    let expectedSessionKey: Readonly<NonNullable<TinyCloudNode["restorableSession"]>["jwk"]> | undefined;
     if (hasKeyCreate) {
       if (this.config.ui !== false && this.config.ui?.platform === "native") {
         throw new Error("Exact Share-key creation is unsupported on the native platform.");
@@ -1477,7 +1478,9 @@ export class TinyCloudWeb {
         !signedSession.delegationCid || !signedSession.verificationMethod || !signedSession.spaceId) {
         throw new Error("Exact Share-key creation requires a live signed owner session.");
       }
-      // Capture only public identity fields; never serialize the session JWK.
+      // Keep a private, immutable key snapshot in memory only; never serialize or log it.
+      const consentKey = Object.freeze({ ...signedSession.jwk });
+      expectedSessionKey = consentKey;
       const cid = signedSession.delegationCid;
       const key = signedSession.verificationMethod;
       const space = signedSession.spaceId;
@@ -1489,7 +1492,11 @@ export class TinyCloudWeb {
         if (this._node !== node || this.signOutCount !== signOuts || this.signOutInFlight > 0 ||
           current !== signedSession || node.did !== ownerDid || node.sessionDid !== sessionDid ||
           current.delegationCid !== cid || current.verificationMethod !== key ||
-          current.spaceId !== space || current.address !== address || current.chainId !== chainId) {
+          current.spaceId !== space || current.address !== address || current.chainId !== chainId ||
+          current.jwk.kty !== consentKey.kty || current.jwk.crv !== consentKey.crv ||
+          current.jwk.x !== consentKey.x || current.jwk.y !== consentKey.y ||
+          current.jwk.n !== consentKey.n || current.jwk.e !== consentKey.e ||
+          current.jwk.d !== consentKey.d) {
           throw new Error("Permission request cancelled because the signed session changed or signed out.");
         }
       };
@@ -1506,13 +1513,17 @@ export class TinyCloudWeb {
     }
 
     const grantPermissions = this._testHooks?.grantPermissions ??
-      ((approved: PermissionEntry[], grantOptions?: RequestPermissionsOptions) =>
-        node.grantRuntimePermissions(
+      ((approved: PermissionEntry[], grantOptions?: RequestPermissionsOptions) => {
+        const expiryOptions = grantOptions?.expiryMs !== undefined
+          ? { expiry: grantOptions.expiryMs }
+          : undefined;
+        return node.grantRuntimePermissions(
           approved,
-          grantOptions?.expiryMs !== undefined
-            ? { expiry: grantOptions.expiryMs }
-            : undefined,
-        ));
+          expectedSessionKey === undefined
+            ? expiryOptions
+            : { ...expiryOptions, expectedSessionKey },
+        );
+      });
     const result = await requestPermissionsCore(requested, {
       manifest,
       ownerDid,

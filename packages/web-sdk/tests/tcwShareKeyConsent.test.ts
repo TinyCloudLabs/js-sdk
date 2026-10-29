@@ -148,6 +148,30 @@ describe("TinyCloudWeb exact Share-key consumer transition", () => {
     });
   }
 
+  for (const change of ["JWK replacement", "JWK.x mutation", "JWK.d mutation"] as const) {
+    test(`${change} during consent refuses before signing or activation`, async () => {
+      const fixture = await createHermeticEncryptedNode();
+      try {
+        const c = consumer(fixture);
+        const baseline = c.activationCount();
+        const pending = c.tcw.requestPermissions([c.entry]);
+        await awaitModal(c.opened.promise, pending);
+        const session = fixture.owner.restorableSession!;
+        const replacement = fixture.delegate.restorableSession!.jwk;
+        if (change === "JWK replacement") session.jwk = replacement;
+        if (change === "JWK.x mutation") session.jwk.x = replacement.x;
+        if (change === "JWK.d mutation") session.jwk.d = replacement.d;
+        expect(fixture.owner.restorableSession).toBe(session);
+        c.consent.resolve({ approved: true });
+        await expect(pending).rejects.toThrow(/session|key|cancel/i);
+        expect(c.signing).not.toHaveBeenCalled();
+        expect(c.activationCount()).toBe(baseline);
+        expect(fixture.owner.getRuntimePermissionDelegations()).toEqual([]);
+        expect(fixture.delegate.getRuntimePermissionDelegations()).toEqual([]);
+      } finally { fixture.stop(); }
+    });
+  }
+
   test("native platform refuses the bounded path without falling back to a web signer", async () => {
     const fixture = await createHermeticEncryptedNode();
     try {
