@@ -73,6 +73,7 @@
     "tc2192-node-session-key-compat",
     "tc2196-native-mcp-auth",
     "tc2202-agent-receive",
+    "tc2202-email-unavailable",
     "tc2205-home-feed-loop",
     "tc2209-feed-raw-export",
     "tc2209-feed-structural-restore",

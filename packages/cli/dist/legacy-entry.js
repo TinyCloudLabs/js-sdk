@@ -44322,7 +44322,6 @@ function registerSecretsCommand(program, openKeyAcquisition) {
 
 // src/commands/share.ts
 import { Option } from "commander";
-import { readFile as readFile18 } from "fs/promises";
 import { CLI_NAME as CLI_NAME34 } from "@tinycloud/operations/cli-name";
 import { ProfileLockTimeoutError as ProfileLockTimeoutError3 } from "@tinycloud/operations/state";
 init_errors();
@@ -45996,19 +45995,16 @@ function registerShareCommand(program) {
     try {
       const json = jsonOutput(options, command);
       if (options.ongoing === true) throw new CLIError("UNSUPPORTED_TARGET", ONGOING_UNAVAILABLE, 2);
+      const target = parseShareTarget(options.to);
+      if (target.kind === "email") throw new CLIError("UNAVAILABLE", "email-addressed shares are not available in this release; nothing was shared", 4);
       const maxBytes = byteLimit(options.maxBytes);
       if (files.length === 0 || files.includes("-") && files.length > 1) throw new CLIError("INVALID_ARGUMENT", "stdin must be the only publish input", 2);
       const name = files.length === 1 ? options.name : void 0;
-      const target = parseShareTarget(options.to);
       const actions = requestedActions(options.action);
       if (options.notify === true && !actions.includes("read")) throw new CLIError("INVALID_ARGUMENT", "--notify requires the read action; nothing was shared", 2);
-      if (target.kind === "email" && (!options.credentialDescriptor || !options.issuerDid || !options.issuerKid)) {
-        throw new CLIError("INVALID_ARGUMENT", "email publication requires --credential-descriptor, --issuer-did, and --issuer-kid", 2);
-      }
-      if (target.kind !== "email" && (options.credentialDescriptor || options.issuerDid || options.issuerKid)) {
+      if (options.credentialDescriptor || options.issuerDid || options.issuerKid) {
         throw new CLIError("INVALID_ARGUMENT", "credential options require an exact email target", 2);
       }
-      const credentialDescriptor = target.kind === "email" ? JSON.parse(await readFile18(options.credentialDescriptor, "utf8")) : void 0;
       const folder = files.length === 1 && target.kind === "bearer" && options.prefix !== true && await isDirectoryInput(files[0]);
       let inputs;
       if (folder) {
@@ -46034,8 +46030,7 @@ function registerShareCommand(program) {
         throw new CLIError("INVALID_ARGUMENT", "--notify-to requires --to domain:<name> --notify", 2);
       }
       let notifyRecipient;
-      if (options.notify === true && target.kind === "email") notifyRecipient = target.address;
-      else if (options.notify === true && target.kind === "emailDomain") {
+      if (options.notify === true && target.kind === "emailDomain") {
         const mailbox = options.notifyTo === void 0 ? void 0 : canonicalMailbox(options.notifyTo);
         if (mailbox === void 0 || mailbox.domain !== target.domain) {
           throw new CLIError("INVALID_ARGUMENT", "--to domain:<name> --notify requires --notify-to <email> at that exact domain (node 1.17.3+)", 2);
@@ -46059,7 +46054,6 @@ function registerShareCommand(program) {
         origin: options.viewerOrigin,
         ...maxBytes === void 0 ? {} : { maxBytes },
         notify: options.notify === true,
-        ...credentialDescriptor === void 0 ? {} : { credentialDescriptor, issuerDid: options.issuerDid, issuerKid: options.issuerKid },
         // The artifact request rides on the adapter call rather than through `publishTargetShare`, whose code is part of
         // the browser bundles (the web-sdk size ceiling counts every byte it carries).
         targetAdapter: artifact === void 0 || shareServices.targetAdapter === void 0 ? shareServices.targetAdapter : { publish: (request) => shareServices.targetAdapter.publish({ ...request, artifact }) }
@@ -47195,7 +47189,7 @@ function registerUpgradeCommand(program) {
 }
 
 // src/commands/vault.ts
-import { readFile as readFile19 } from "fs/promises";
+import { readFile as readFile18 } from "fs/promises";
 init_profiles();
 init_formatter();
 init_errors();
@@ -47257,7 +47251,7 @@ function registerVaultCommand(program) {
         throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
       }
       if (options.file) {
-        putValue = new Uint8Array(await readFile19(options.file));
+        putValue = new Uint8Array(await readFile18(options.file));
       } else if (options.stdin) {
         putValue = new Uint8Array(await readStdin5());
       } else {
@@ -47372,7 +47366,7 @@ function registerVaultCommand(program) {
 }
 
 // src/commands/vars.ts
-import { readFile as readFile20 } from "fs/promises";
+import { readFile as readFile19 } from "fs/promises";
 init_profiles();
 init_formatter();
 init_errors();
@@ -47477,7 +47471,7 @@ function registerVarsCommand(program) {
         throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
       }
       if (options.file) {
-        varValue = await readFile20(options.file, "utf-8");
+        varValue = await readFile19(options.file, "utf-8");
       } else if (options.stdin) {
         varValue = (await readStdin6()).toString("utf-8");
       } else {
