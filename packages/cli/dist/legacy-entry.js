@@ -175,11 +175,11 @@ var init_storage = __esm({
 });
 
 // src/config/types.ts
-function isCLIProfilePosture(value) {
-  return typeof value === "string" && CLI_PROFILE_POSTURES.includes(value);
+function isCLIProfilePosture(value3) {
+  return typeof value3 === "string" && CLI_PROFILE_POSTURES.includes(value3);
 }
-function isCLIOperatorType(value) {
-  return typeof value === "string" && CLI_OPERATOR_TYPES.includes(value);
+function isCLIOperatorType(value3) {
+  return typeof value3 === "string" && CLI_OPERATOR_TYPES.includes(value3);
 }
 function resolveProfilePosture(profile) {
   if (isCLIProfilePosture(profile.posture)) return profile.posture;
@@ -329,8 +329,8 @@ function safeClippedList(items) {
   const shown = items.slice(0, ECHO_LIST_MAX).map((item) => `"${safeClipped(item)}"`).join(", ");
   return items.length > ECHO_LIST_MAX ? `${shown} \u2026 and ${items.length - ECHO_LIST_MAX} more` : shown;
 }
-function safeJsonStringify(value, space) {
-  const text = JSON.stringify(value, null, space);
+function safeJsonStringify(value3, space) {
+  const text = JSON.stringify(value3, null, space);
   return text === void 0 ? text : text.replace(JSON_UNSAFE, (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`);
 }
 var UNSAFE_BLOCK, UNSAFE_INLINE, ECHO_FIELD_MAX, ECHO_LIST_MAX, JSON_UNSAFE;
@@ -469,9 +469,9 @@ function outputWarnings(warnings) {
 ` : `${theme.warn("!")} ${warningLine(combined)}
 `);
 }
-function operationWarnings(value) {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((warning) => {
+function operationWarnings(value3) {
+  if (!Array.isArray(value3)) return [];
+  return value3.flatMap((warning) => {
     if (warning === null || typeof warning !== "object") return [];
     const { code: code5, reason, grantCid } = warning;
     if (typeof code5 !== "string" || !WARNING_CODE.test(code5) || typeof reason !== "string" || !WARNING_REASON.test(reason)) {
@@ -512,12 +512,12 @@ async function withSpinner(label, fn) {
 function shouldOutputJson() {
   return !isInteractive() || (globalThis[JSON_REQUESTED] ?? process.argv.includes("--json"));
 }
-function formatField(label, value) {
-  if (value === null || value === void 0) return `  ${theme.label(label + ":")} ${theme.muted("\u2014")}`;
-  if (typeof value === "boolean") {
-    return `  ${theme.label(label + ":")} ${value ? theme.success("yes") : theme.muted("no")}`;
+function formatField(label, value3) {
+  if (value3 === null || value3 === void 0) return `  ${theme.label(label + ":")} ${theme.muted("\u2014")}`;
+  if (typeof value3 === "boolean") {
+    return `  ${theme.label(label + ":")} ${value3 ? theme.success("yes") : theme.muted("no")}`;
   }
-  return `  ${theme.label(label + ":")} ${theme.value(String(value))}`;
+  return `  ${theme.label(label + ":")} ${theme.value(String(value3))}`;
 }
 function formatTable(headers, rows) {
   const widths = headers.map(
@@ -600,13 +600,13 @@ Free up space or upgrade: ${MANAGE_STORAGE_URL}`
 function formatStorageBytes(bytes) {
   const units = ["KiB", "MiB", "GiB", "TiB"];
   if (bytes < 1024) return `${bytes} B`;
-  let value = bytes / 1024;
+  let value3 = bytes / 1024;
   let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
+  while (value3 >= 1024 && unit < units.length - 1) {
+    value3 /= 1024;
     unit += 1;
   }
-  return `${value.toFixed(1).replace(/\.0$/, "")} ${units[unit]}`;
+  return `${value3.toFixed(1).replace(/\.0$/, "")} ${units[unit]}`;
 }
 function storageCodeFromText(message) {
   if (typeof message !== "string") return void 0;
@@ -623,7 +623,7 @@ function isStorageStatus(record3) {
     "statusCode" in record3 ? record3.statusCode : void 0,
     "status" in meta ? meta.status : void 0
   ];
-  return statuses.some((value) => value === 402 || value === 413);
+  return statuses.some((value3) => value3 === 402 || value3 === 413);
 }
 function accountTotals(meta) {
   if (typeof meta !== "object" || meta === null) return void 0;
@@ -633,8 +633,8 @@ function accountTotals(meta) {
   if (!isByteCount(usedBytes) || !isByteCount(limitBytes) || limitBytes === 0) return void 0;
   return typeof plan === "string" && /^[A-Za-z0-9][A-Za-z0-9 _.-]{0,31}$/.test(plan) ? { usedBytes, limitBytes, plan } : { usedBytes, limitBytes };
 }
-function isByteCount(value) {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+function isByteCount(value3) {
+  return typeof value3 === "number" && Number.isSafeInteger(value3) && value3 >= 0;
 }
 var MANAGE_STORAGE_URL, MAX_CAUSE_DEPTH;
 var init_storage2 = __esm({
@@ -803,22 +803,22 @@ function handleError(error) {
   if (registeredReplications().size === 0) return process.exit(cliError.exitCode);
   return closeReplication().then(() => process.exit(cliError.exitCode));
 }
-function safeCliRecovery(value, context) {
-  if (typeof value !== "object" || value === null || Array.isArray(value) || !("action" in value)) return void 0;
-  const action = value.action;
+function safeCliRecovery(value3, context2) {
+  if (typeof value3 !== "object" || value3 === null || Array.isArray(value3) || !("action" in value3)) return void 0;
+  const action = value3.action;
   switch (action) {
     case "sign_in":
     case "complete_migration":
-      return isSafeRecovery(value, action) ? { ...value } : void 0;
+      return isSafeRecovery(value3, action) ? { ...value3 } : void 0;
     case "request_access":
-      return isSafeRequestAccessRecovery(value, context.deniedNames) ? { ...value, names: [...value.names] } : void 0;
+      return isSafeRequestAccessRecovery(value3, context2.deniedNames) ? { ...value3, names: [...value3.names] } : void 0;
     default:
       return void 0;
   }
 }
-function safeCliSetup(value) {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return void 0;
-  const setup = { ...value };
+function safeCliSetup(value3) {
+  if (typeof value3 !== "object" || value3 === null || Array.isArray(value3)) return void 0;
+  const setup = { ...value3 };
   if (!Object.keys(setup).every((key) => SETUP_KEYS[key] === true)) return void 0;
   const { url, names, scope, owner, action } = setup;
   if (action !== "add_secret" || typeof url !== "string" || typeof owner !== "string") return void 0;
@@ -832,17 +832,17 @@ function safeCliSetup(value) {
   }
   return { url, names: [...names], ...scope !== void 0 ? { scope } : {}, owner, action };
 }
-function safeNameList(value) {
-  if (!Array.isArray(value) || value.length > SECRET_REQUEST_MAX_NAMES) return void 0;
-  if (!value.every((name) => typeof name === "string" && isValidSecretName(name))) return void 0;
-  if (new Set(value).size !== value.length) return void 0;
-  return [...value];
+function safeNameList(value3) {
+  if (!Array.isArray(value3) || value3.length > SECRET_REQUEST_MAX_NAMES) return void 0;
+  if (!value3.every((name) => typeof name === "string" && isValidSecretName(name))) return void 0;
+  if (new Set(value3).size !== value3.length) return void 0;
+  return [...value3];
 }
-function safeCliProgress(value) {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return void 0;
-  if (!("present" in value) || !("pending" in value) || Object.keys(value).length !== 2) return void 0;
-  const present = safeNameList(value.present);
-  const pending = safeNameList(value.pending);
+function safeCliProgress(value3) {
+  if (typeof value3 !== "object" || value3 === null || Array.isArray(value3)) return void 0;
+  if (!("present" in value3) || !("pending" in value3) || Object.keys(value3).length !== 2) return void 0;
+  const present = safeNameList(value3.present);
+  const pending = safeNameList(value3.pending);
   if (!present || !pending || present.some((name) => pending.includes(name))) return void 0;
   return { present, pending };
 }
@@ -1355,13 +1355,13 @@ var init_utils = __esm({
 });
 
 // ../../node_modules/@noble/hashes/esm/_md.js
-function setBigUint64(view, byteOffset, value, isLE2) {
+function setBigUint64(view, byteOffset, value3, isLE2) {
   if (typeof view.setBigUint64 === "function")
-    return view.setBigUint64(byteOffset, value, isLE2);
+    return view.setBigUint64(byteOffset, value3, isLE2);
   const _32n2 = BigInt(32);
   const _u32_max = BigInt(4294967295);
-  const wh = Number(value >> _32n2 & _u32_max);
-  const wl = Number(value & _u32_max);
+  const wh = Number(value3 >> _32n2 & _u32_max);
+  const wl = Number(value3 & _u32_max);
   const h = isLE2 ? 4 : 0;
   const l = isLE2 ? 0 : 4;
   view.setUint32(byteOffset + h, wh, isLE2);
@@ -2035,12 +2035,12 @@ function validateManifestKeys(appId, keys) {
   }
   const paths = /* @__PURE__ */ new Set();
   let prefixSeen = false;
-  for (const [index, value] of keys.entries()) {
+  for (const [index, value3] of keys.entries()) {
     const label = `manifest.keys[${index}]`;
-    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    if (value3 === null || typeof value3 !== "object" || Array.isArray(value3)) {
       throw new ManifestValidationError(`${label} must be an object`);
     }
-    const entry = value;
+    const entry = value3;
     const fields = Object.keys(entry);
     const hasPath = Object.prototype.hasOwnProperty.call(entry, "path");
     const hasPrefix = Object.prototype.hasOwnProperty.call(entry, "prefix");
@@ -2163,17 +2163,17 @@ function validatePermissionEntry(p, path) {
     parseExpiry(entry.expiry);
   }
 }
-function normalizeDefaults(value) {
-  if (value === void 0) {
+function normalizeDefaults(value3) {
+  if (value3 === void 0) {
     return DEFAULT_DEFAULTS;
   }
-  if (typeof value === "boolean") {
-    return value;
+  if (typeof value3 === "boolean") {
+    return value3;
   }
-  if (typeof value !== "string") {
+  if (typeof value3 !== "string") {
     return true;
   }
-  const normalized = value.trim().toLowerCase();
+  const normalized = value3.trim().toLowerCase();
   if (normalized === "admin" || normalized === "all") {
     return normalized;
   }
@@ -2710,12 +2710,12 @@ import {
   withPinnedProfileDirectory,
   writeJsonAtomic
 } from "@tinycloud/operations/state";
-function isCompatiblePermissionRequestArtifact(value) {
-  return isPermissionRequestArtifact(value) || isNodeSdkAuthRequestArtifact(value);
+function isCompatiblePermissionRequestArtifact(value3) {
+  return isPermissionRequestArtifact(value3) || isNodeSdkAuthRequestArtifact(value3);
 }
-function isNodeSdkAuthRequestArtifact(value) {
-  if (value === null || typeof value !== "object") return false;
-  const candidate = value;
+function isNodeSdkAuthRequestArtifact(value3) {
+  if (value3 === null || typeof value3 !== "object") return false;
+  const candidate = value3;
   return candidate.kind === "tinycloud.auth.request" && candidate.version === 1 && typeof candidate.requestId === "string" && Array.isArray(candidate.requested);
 }
 function additionalDelegationsPath(profile) {
@@ -2767,10 +2767,10 @@ async function loadLocalGrantArtifacts(profile) {
     }
     if (!Array.isArray(parsed)) return [];
     const records = parsed;
-    return records.filter((value) => {
-      if (value === null || typeof value !== "object" || !("delegationCid" in value) || typeof value.delegationCid !== "string" || !("delegation" in value) || value.delegation === null || typeof value.delegation !== "object") return false;
-      const delegation = value.delegation;
-      if (!("cid" in delegation) || delegation.cid !== value.delegationCid || !("delegationHeader" in delegation) || delegation.delegationHeader === null || typeof delegation.delegationHeader !== "object") return false;
+    return records.filter((value3) => {
+      if (value3 === null || typeof value3 !== "object" || !("delegationCid" in value3) || typeof value3.delegationCid !== "string" || !("delegation" in value3) || value3.delegation === null || typeof value3.delegation !== "object") return false;
+      const delegation = value3.delegation;
+      if (!("cid" in delegation) || delegation.cid !== value3.delegationCid || !("delegationHeader" in delegation) || delegation.delegationHeader === null || typeof delegation.delegationHeader !== "object") return false;
       const header = delegation.delegationHeader;
       return "Authorization" in header && typeof header.Authorization === "string";
     });
@@ -3496,8 +3496,8 @@ var init_blake3 = __esm({
         this.bufferOut32 = new Uint32Array(16);
         this.chunkOut = 0;
         this.enableXOF = true;
-        const { key, context } = opts;
-        const hasContext = context !== void 0;
+        const { key, context: context2 } = opts;
+        const hasContext = context2 !== void 0;
         if (key !== void 0) {
           if (hasContext)
             throw new Error('Only "key" or "context" can be specified at same time');
@@ -3507,7 +3507,7 @@ var init_blake3 = __esm({
           swap32IfBE(this.IV);
           this.flags = flags | B3_Flags.KEYED_HASH;
         } else if (hasContext) {
-          const ctx = toBytes(context);
+          const ctx = toBytes(context2);
           const contextKey = new _BLAKE3({ dkLen: 32 }, B3_Flags.DERIVE_KEY_CONTEXT).update(ctx).digest();
           this.IV = u32(contextKey);
           swap32IfBE(this.IV);
@@ -3674,24 +3674,24 @@ var init_blake3 = __esm({
 });
 
 // ../../node_modules/@noble/curves/esm/utils.js
-function _abool2(value, title = "") {
-  if (typeof value !== "boolean") {
+function _abool2(value3, title = "") {
+  if (typeof value3 !== "boolean") {
     const prefix = title && `"${title}"`;
-    throw new Error(prefix + "expected boolean, got type=" + typeof value);
+    throw new Error(prefix + "expected boolean, got type=" + typeof value3);
   }
-  return value;
+  return value3;
 }
-function _abytes2(value, length5, title = "") {
-  const bytes = isBytes(value);
-  const len = value?.length;
+function _abytes2(value3, length5, title = "") {
+  const bytes = isBytes(value3);
+  const len = value3?.length;
   const needsLen = length5 !== void 0;
   if (!bytes || needsLen && len !== length5) {
     const prefix = title && `"${title}" `;
     const ofLen = needsLen ? ` of length ${length5}` : "";
-    const got = bytes ? `length=${len}` : `type=${typeof value}`;
+    const got = bytes ? `length=${len}` : `type=${typeof value3}`;
     throw new Error(prefix + "expected Uint8Array" + ofLen + ", got " + got);
   }
-  return value;
+  return value3;
 }
 function hexToNumber(hex2) {
   if (typeof hex2 !== "string")
@@ -4723,9 +4723,9 @@ function eddsa(Point, cHash, eddsaOpts = {}) {
   function getPublicKey(secretKey) {
     return getExtendedPublicKey(secretKey).pointBytes;
   }
-  function hashDomainToScalar(context = Uint8Array.of(), ...msgs) {
+  function hashDomainToScalar(context2 = Uint8Array.of(), ...msgs) {
     const msg = concatBytes(...msgs);
-    return modN_LE(cHash(domain(msg, ensureBytes("context", context), !!prehash)));
+    return modN_LE(cHash(domain(msg, ensureBytes("context", context2), !!prehash)));
   }
   function sign(msg, secretKey, options = {}) {
     msg = ensureBytes("message", msg);
@@ -4743,7 +4743,7 @@ function eddsa(Point, cHash, eddsaOpts = {}) {
   }
   const verifyOpts = { zip215: true };
   function verify(sig, msg, publicKey, options = verifyOpts) {
-    const { context, zip215 } = options;
+    const { context: context2, zip215 } = options;
     const len = lengths.signature;
     sig = ensureBytes("signature", sig, len);
     msg = ensureBytes("message", msg);
@@ -4765,7 +4765,7 @@ function eddsa(Point, cHash, eddsaOpts = {}) {
     }
     if (!zip215 && A.isSmallOrder())
       return false;
-    const k = hashDomainToScalar(context, R.toBytes(), A.toBytes(), msg);
+    const k = hashDomainToScalar(context2, R.toBytes(), A.toBytes(), msg);
     const RkA = R.add(A.multiplyUnsafe(k));
     return RkA.subtract(SB).clearCofactor().is0();
   }
@@ -5235,8 +5235,8 @@ function hashFromEtag(etag) {
   const match = /^"?blake3-([0-9a-f]{64})"?$/.exec(etag);
   return match?.[1];
 }
-function isInstant(value) {
-  return RFC3339.test(value) && Number.isFinite(Date.parse(value));
+function isInstant(value3) {
+  return RFC3339.test(value3) && Number.isFinite(Date.parse(value3));
 }
 function minIso(a, bSeconds) {
   if (bSeconds === null) return a;
@@ -5314,16 +5314,16 @@ function acceptContent(expected, fetched2) {
   return void 0;
 }
 function base58Decode(text) {
-  let value = 0n;
+  let value3 = 0n;
   for (const char of text) {
     const digit = BASE58.indexOf(char);
     if (digit < 0) throw new Error("invalid base58");
-    value = value * 58n + BigInt(digit);
+    value3 = value3 * 58n + BigInt(digit);
   }
   const bytes = [];
-  while (value > 0n) {
-    bytes.unshift(Number(value & 0xffn));
-    value >>= 8n;
+  while (value3 > 0n) {
+    bytes.unshift(Number(value3 & 0xffn));
+    value3 >>= 8n;
   }
   for (const char of text) {
     if (char !== "1") break;
@@ -5430,10 +5430,10 @@ function parseUcanGrant(input) {
   const prf = payload.prf ?? [];
   if (!Array.isArray(prf) || prf.some((proof) => typeof proof !== "string")) throw invalid("The grant has malformed signed proofs.");
   const window = (name) => {
-    const value = payload[name];
-    if (value === void 0 || value === null) return null;
-    if (typeof value !== "number" || !Number.isFinite(value)) throw invalid(`The grant's signed ${name} is not a number.`);
-    return value;
+    const value3 = payload[name];
+    if (value3 === void 0 || value3 === null) return null;
+    if (typeof value3 !== "number" || !Number.isFinite(value3)) throw invalid(`The grant's signed ${name} is not a number.`);
+    return value3;
   };
   return {
     cid: ucanCid(jwt),
@@ -5526,7 +5526,7 @@ function isRevocation(error, status, request) {
   const lead = `${request}: 401 - `;
   return error.message.startsWith(lead) && REVOKED_BODY.test(error.message.slice(lead.length));
 }
-function replicaErrorFromService(error, context, request) {
+function replicaErrorFromService(error, context2, request) {
   const meta = error.meta ?? {};
   const status = typeof meta.status === "number" ? meta.status : void 0;
   const detail = { serviceCode: error.code, ...status === void 0 ? {} : { status } };
@@ -5534,32 +5534,32 @@ function replicaErrorFromService(error, context, request) {
   if (error.code === "KV_SYNC_RESET_REQUIRED" || status === 410) {
     return new ReplicaError(
       ReplicaErrorCode.RESET_REQUIRED,
-      `${context}: the node requires a fresh bootstrap (${reason ?? "reason not given"}).`,
+      `${context2}: the node requires a fresh bootstrap (${reason ?? "reason not given"}).`,
       { ...detail, reason: reason ?? "reset-required" }
     );
   }
   if (isRevocation(error, status, request)) {
-    return new ReplicaError(ReplicaErrorCode.GRANT_REVOKED, `${context}: ${error.message}`, detail);
+    return new ReplicaError(ReplicaErrorCode.GRANT_REVOKED, `${context2}: ${error.message}`, detail);
   }
   if (error.code === "KV_RETENTION_GRANT_REFUSED") {
-    return new ReplicaError(ReplicaErrorCode.RETENTION_GRANT_REFUSED, `${context}: ${error.message}`, {
+    return new ReplicaError(ReplicaErrorCode.RETENTION_GRANT_REFUSED, `${context2}: ${error.message}`, {
       ...detail,
       ...reason === void 0 ? {} : { reason }
     });
   }
   if (status === 401 || status === 403 || /^AUTH_/.test(error.code)) {
     if (/expired/i.test(error.message)) {
-      return new ReplicaError(ReplicaErrorCode.GRANT_EXPIRED, `${context}: ${error.message}`, detail);
+      return new ReplicaError(ReplicaErrorCode.GRANT_EXPIRED, `${context2}: ${error.message}`, detail);
     }
-    return new ReplicaError(ReplicaErrorCode.GRANT_UNAUTHORIZED, `${context}: ${error.message}`, detail);
+    return new ReplicaError(ReplicaErrorCode.GRANT_UNAUTHORIZED, `${context2}: ${error.message}`, detail);
   }
   if (status !== void 0) {
-    return new ReplicaError(ReplicaErrorCode.NODE_ERROR, `${context}: ${error.message}`, detail);
+    return new ReplicaError(ReplicaErrorCode.NODE_ERROR, `${context2}: ${error.message}`, detail);
   }
   if (error.code === "NETWORK_ERROR" || /TIMEOUT|ABORT/.test(error.code)) {
-    return new ReplicaError(ReplicaErrorCode.NETWORK_ERROR, `${context}: ${error.message}`, detail);
+    return new ReplicaError(ReplicaErrorCode.NETWORK_ERROR, `${context2}: ${error.message}`, detail);
   }
-  return new ReplicaError(ReplicaErrorCode.NODE_ERROR, `${context}: ${error.message}`, detail);
+  return new ReplicaError(ReplicaErrorCode.NODE_ERROR, `${context2}: ${error.message}`, detail);
 }
 function compareKeyBytes(a, b) {
   const x = encoder.encode(a);
@@ -5572,14 +5572,14 @@ function compareKeyBytes(a, b) {
 function isNotFound(error) {
   return error.code === "KV_NOT_FOUND" || error.code === "NOT_FOUND";
 }
-function instant(value) {
-  if (value === null) return null;
-  if (typeof value === "string" && isInstant(value)) return value;
-  throw new ReplicaError(ReplicaErrorCode.PROTOCOL_ERROR, `The kv/sync authority holds a bound that is not a timestamp: ${JSON.stringify(value)}.`);
+function instant(value3) {
+  if (value3 === null) return null;
+  if (typeof value3 === "string" && isInstant(value3)) return value3;
+  throw new ReplicaError(ReplicaErrorCode.PROTOCOL_ERROR, `The kv/sync authority holds a bound that is not a timestamp: ${JSON.stringify(value3)}.`);
 }
 function checkPage(data) {
   const ok = data !== null && typeof data === "object" && Array.isArray(data.changes) && typeof data.more === "boolean" && typeof data.cursor === "string" && typeof data.source?.nodeDid === "string" && typeof data.source?.space === "string" && typeof data.source?.prefix === "string" && data.authority !== null && typeof data.authority === "object" && data.changes.every(
-    (change) => typeof change?.key === "string" && (change.deleted === true || change.deleted === false && typeof change.etag === "string" && change.metadata !== null && typeof change.metadata === "object" && Object.values(change.metadata).every((value) => typeof value === "string"))
+    (change) => typeof change?.key === "string" && (change.deleted === true || change.deleted === false && typeof change.etag === "string" && change.metadata !== null && typeof change.metadata === "object" && Object.values(change.metadata).every((value3) => typeof value3 === "string"))
   );
   if (!ok) throw new ReplicaError(ReplicaErrorCode.PROTOCOL_ERROR, "The kv/sync response does not match the wire contract.");
   return {
@@ -5823,16 +5823,16 @@ var init_dist = __esm({
           if (!entry.content) {
             return { status: "content_missing", key, etag: entry.etag, metadata: entry.metadata, meta: await this.#confirmedMeta() };
           }
-          const value = await this.#store.readContent(entry.hash);
-          const intact = value !== void 0 && (options.verify === false || contentHash(value) === entry.hash);
+          const value3 = await this.#store.readContent(entry.hash);
+          const intact = value3 !== void 0 && (options.verify === false || contentHash(value3) === entry.hash);
           if (intact) {
-            return { status: "present", key, value, etag: entry.etag, metadata: entry.metadata, meta: await this.#confirmedMeta() };
+            return { status: "present", key, value: value3, etag: entry.etag, metadata: entry.metadata, meta: await this.#confirmedMeta() };
           }
           if (attempt === 0) continue;
           await this.#confirmedMeta();
           throw new ReplicaError(
             ReplicaErrorCode.INTEGRITY_ERROR,
-            value === void 0 ? `The stored content for ${JSON.stringify(key)} is missing.` : `The stored content for ${JSON.stringify(key)} does not match its hash.`,
+            value3 === void 0 ? `The stored content for ${JSON.stringify(key)} is missing.` : `The stored content for ${JSON.stringify(key)} does not match its hash.`,
             { key }
           );
         }
@@ -6050,11 +6050,11 @@ var init_dist = __esm({
             `The node answered for ${page.source.space}/${page.source.prefix}, not ${space}/${prefix}.`
           );
         }
-        for (const [name, value] of Object.entries(page.authority)) {
-          if (value !== null && (typeof value !== "string" || !isInstant(value))) {
+        for (const [name, value3] of Object.entries(page.authority)) {
+          if (value3 !== null && (typeof value3 !== "string" || !isInstant(value3))) {
             throw new ReplicaError(
               ReplicaErrorCode.PROTOCOL_ERROR,
-              `The node attested authority.${name} = ${JSON.stringify(value)}, which is not a timestamp; nothing was committed.`
+              `The node attested authority.${name} = ${JSON.stringify(value3)}, which is not a timestamp; nothing was committed.`
             );
           }
         }
@@ -6193,15 +6193,15 @@ import { DEFAULT_GRANT_TTL_MS, MAX_GRANT_TTL_MS } from "@tinycloud/sdk-services/
 function readPositiveIntegerEnv(name, max) {
   const raw = process.env[name];
   if (raw === void 0) return void 0;
-  const value = /^[1-9][0-9]*$/.test(raw) ? Number(raw) : Number.NaN;
-  if (!Number.isSafeInteger(value) || value > max) {
+  const value3 = /^[1-9][0-9]*$/.test(raw) ? Number(raw) : Number.NaN;
+  if (!Number.isSafeInteger(value3) || value3 > max) {
     throw new CLIError(
       "INVALID_REPLICATION_ENV",
       `${name} must be a positive integer no greater than ${max}, got ${JSON.stringify(raw)}`,
       ExitCode.USAGE_ERROR
     );
   }
-  return value;
+  return value3;
 }
 function createCliReplicationConfig(profile, settings, output2, enabled) {
   if (!enabled || !settings || settings.prefixes.length === 0) return void 0;
@@ -6301,8 +6301,8 @@ function parseState(text) {
   if (typeof firstInstall !== "object" || firstInstall === null || Array.isArray(firstInstall)) {
     throw gateRefusal("gate_unavailable", "The replica gate file has no valid firstInstall map.");
   }
-  for (const [hash, value] of Object.entries(firstInstall)) {
-    if (!/^[0-9a-f]{64}$/.test(hash) || typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+  for (const [hash, value3] of Object.entries(firstInstall)) {
+    if (!/^[0-9a-f]{64}$/.test(hash) || typeof value3 !== "number" || !Number.isSafeInteger(value3) || value3 < 0) {
       throw gateRefusal("gate_unavailable", "The replica gate file has an invalid firstInstall entry.");
     }
   }
@@ -7710,16 +7710,16 @@ CREATE TABLE IF NOT EXISTS grant_install (
             throw new ReplicaError3(ReplicaErrorCode3.RESET_REQUIRED, "The replica generation changed; reopen it to continue.");
           }
           let result;
-          const context = { controller: this, active: true };
+          const context2 = { controller: this, active: true };
           try {
             try {
-              result = await activeReadSection.run(context, () => section(snapshot));
+              result = await activeReadSection.run(context2, () => section(snapshot));
             } catch (error) {
               callbackFailed = true;
               throw error;
             }
           } finally {
-            context.active = false;
+            context2.active = false;
           }
           try {
             await checkGate();
@@ -10216,11 +10216,11 @@ var init_util = __esm({
         return array.map((val) => typeof val === "string" ? `'${val}'` : val).join(separator);
       }
       util4.joinValues = joinValues;
-      util4.jsonStringifyReplacer = (_, value) => {
-        if (typeof value === "bigint") {
-          return value.toString();
+      util4.jsonStringifyReplacer = (_, value3) => {
+        if (typeof value3 === "bigint") {
+          return value3.toString();
         }
-        return value;
+        return value3;
       };
     })(util2 || (util2 = {}));
     (function(objectUtil4) {
@@ -10384,9 +10384,9 @@ var init_ZodError = __esm({
         processError(this);
         return fieldErrors;
       }
-      static assert(value) {
-        if (!(value instanceof _ZodError3)) {
-          throw new Error(`Not a ZodError: ${value}`);
+      static assert(value3) {
+        if (!(value3 instanceof _ZodError3)) {
+          throw new Error(`Not a ZodError: ${value3}`);
         }
       }
       toString() {
@@ -10629,10 +10629,10 @@ var init_parseUtil = __esm({
         const syncPairs = [];
         for (const pair of pairs) {
           const key = await pair.key;
-          const value = await pair.value;
+          const value3 = await pair.value;
           syncPairs.push({
             key,
-            value
+            value: value3
           });
         }
         return _ParseStatus3.mergeObjectSync(status, syncPairs);
@@ -10640,17 +10640,17 @@ var init_parseUtil = __esm({
       static mergeObjectSync(status, pairs) {
         const finalObject = {};
         for (const pair of pairs) {
-          const { key, value } = pair;
+          const { key, value: value3 } = pair;
           if (key.status === "aborted")
             return INVALID2;
-          if (value.status === "aborted")
+          if (value3.status === "aborted")
             return INVALID2;
           if (key.status === "dirty")
             status.dirty();
-          if (value.status === "dirty")
+          if (value3.status === "dirty")
             status.dirty();
-          if (key.value !== "__proto__" && (typeof value.value !== "undefined" || pair.alwaysSet)) {
-            finalObject[key.value] = value.value;
+          if (key.value !== "__proto__" && (typeof value3.value !== "undefined" || pair.alwaysSet)) {
+            finalObject[key.value] = value3.value;
           }
         }
         return { status: status.value, value: finalObject };
@@ -10659,8 +10659,8 @@ var init_parseUtil = __esm({
     INVALID2 = Object.freeze({
       status: "aborted"
     });
-    DIRTY2 = (value) => ({ status: "dirty", value });
-    OK2 = (value) => ({ status: "valid", value });
+    DIRTY2 = (value3) => ({ status: "dirty", value: value3 });
+    OK2 = (value3) => ({ status: "valid", value: value3 });
     isAborted2 = (x) => x.status === "aborted";
     isDirty2 = (x) => x.status === "dirty";
     isValid2 = (x) => x.status === "valid";
@@ -10889,10 +10889,10 @@ var init_types2 = __esm({
     init_parseUtil();
     init_util();
     ParseInputLazyPath2 = class {
-      constructor(parent, value, path, key) {
+      constructor(parent, value3, path, key) {
         this._cachedPath = [];
         this.parent = parent;
-        this.data = value;
+        this.data = value3;
         this._path = path;
         this._key = key;
       }
@@ -11628,25 +11628,25 @@ var init_types2 = __esm({
           ...errorUtil2.errToObj(message)
         });
       }
-      includes(value, options) {
+      includes(value3, options) {
         return this._addCheck({
           kind: "includes",
-          value,
+          value: value3,
           position: options?.position,
           ...errorUtil2.errToObj(options?.message)
         });
       }
-      startsWith(value, message) {
+      startsWith(value3, message) {
         return this._addCheck({
           kind: "startsWith",
-          value,
+          value: value3,
           ...errorUtil2.errToObj(message)
         });
       }
-      endsWith(value, message) {
+      endsWith(value3, message) {
         return this._addCheck({
           kind: "endsWith",
-          value,
+          value: value3,
           ...errorUtil2.errToObj(message)
         });
       }
@@ -11860,26 +11860,26 @@ var init_types2 = __esm({
         }
         return { status: status.value, value: input.data };
       }
-      gte(value, message) {
-        return this.setLimit("min", value, true, errorUtil2.toString(message));
+      gte(value3, message) {
+        return this.setLimit("min", value3, true, errorUtil2.toString(message));
       }
-      gt(value, message) {
-        return this.setLimit("min", value, false, errorUtil2.toString(message));
+      gt(value3, message) {
+        return this.setLimit("min", value3, false, errorUtil2.toString(message));
       }
-      lte(value, message) {
-        return this.setLimit("max", value, true, errorUtil2.toString(message));
+      lte(value3, message) {
+        return this.setLimit("max", value3, true, errorUtil2.toString(message));
       }
-      lt(value, message) {
-        return this.setLimit("max", value, false, errorUtil2.toString(message));
+      lt(value3, message) {
+        return this.setLimit("max", value3, false, errorUtil2.toString(message));
       }
-      setLimit(kind, value, inclusive, message) {
+      setLimit(kind, value3, inclusive, message) {
         return new _ZodNumber3({
           ...this._def,
           checks: [
             ...this._def.checks,
             {
               kind,
-              value,
+              value: value3,
               inclusive,
               message: errorUtil2.toString(message)
             }
@@ -11930,10 +11930,10 @@ var init_types2 = __esm({
           message: errorUtil2.toString(message)
         });
       }
-      multipleOf(value, message) {
+      multipleOf(value3, message) {
         return this._addCheck({
           kind: "multipleOf",
-          value,
+          value: value3,
           message: errorUtil2.toString(message)
         });
       }
@@ -12076,26 +12076,26 @@ var init_types2 = __esm({
         });
         return INVALID2;
       }
-      gte(value, message) {
-        return this.setLimit("min", value, true, errorUtil2.toString(message));
+      gte(value3, message) {
+        return this.setLimit("min", value3, true, errorUtil2.toString(message));
       }
-      gt(value, message) {
-        return this.setLimit("min", value, false, errorUtil2.toString(message));
+      gt(value3, message) {
+        return this.setLimit("min", value3, false, errorUtil2.toString(message));
       }
-      lte(value, message) {
-        return this.setLimit("max", value, true, errorUtil2.toString(message));
+      lte(value3, message) {
+        return this.setLimit("max", value3, true, errorUtil2.toString(message));
       }
-      lt(value, message) {
-        return this.setLimit("max", value, false, errorUtil2.toString(message));
+      lt(value3, message) {
+        return this.setLimit("max", value3, false, errorUtil2.toString(message));
       }
-      setLimit(kind, value, inclusive, message) {
+      setLimit(kind, value3, inclusive, message) {
         return new _ZodBigInt3({
           ...this._def,
           checks: [
             ...this._def.checks,
             {
               kind,
-              value,
+              value: value3,
               inclusive,
               message: errorUtil2.toString(message)
             }
@@ -12140,10 +12140,10 @@ var init_types2 = __esm({
           message: errorUtil2.toString(message)
         });
       }
-      multipleOf(value, message) {
+      multipleOf(value3, message) {
         return this._addCheck({
           kind: "multipleOf",
-          value,
+          value: value3,
           message: errorUtil2.toString(message)
         });
       }
@@ -12581,10 +12581,10 @@ var init_types2 = __esm({
         const pairs = [];
         for (const key of shapeKeys) {
           const keyValidator = shape[key];
-          const value = ctx.data[key];
+          const value3 = ctx.data[key];
           pairs.push({
             key: { status: "valid", value: key },
-            value: keyValidator._parse(new ParseInputLazyPath2(ctx, value, ctx.path, key)),
+            value: keyValidator._parse(new ParseInputLazyPath2(ctx, value3, ctx.path, key)),
             alwaysSet: key in ctx.data
           });
         }
@@ -12612,11 +12612,11 @@ var init_types2 = __esm({
         } else {
           const catchall = this._def.catchall;
           for (const key of extraKeys) {
-            const value = ctx.data[key];
+            const value3 = ctx.data[key];
             pairs.push({
               key: { status: "valid", value: key },
               value: catchall._parse(
-                new ParseInputLazyPath2(ctx, value, ctx.path, key)
+                new ParseInputLazyPath2(ctx, value3, ctx.path, key)
                 //, ctx.child(key), value, getParsedType(value)
               ),
               alwaysSet: key in ctx.data
@@ -12628,10 +12628,10 @@ var init_types2 = __esm({
             const syncPairs = [];
             for (const pair of pairs) {
               const key = await pair.key;
-              const value = await pair.value;
+              const value3 = await pair.value;
               syncPairs.push({
                 key,
-                value,
+                value: value3,
                 alwaysSet: pair.alwaysSet
               });
             }
@@ -13062,11 +13062,11 @@ var init_types2 = __esm({
           if (!discriminatorValues.length) {
             throw new Error(`A discriminator value for key \`${discriminator}\` could not be extracted from all schema options`);
           }
-          for (const value of discriminatorValues) {
-            if (optionsMap.has(value)) {
-              throw new Error(`Discriminator property ${String(discriminator)} has duplicate value ${String(value)}`);
+          for (const value3 of discriminatorValues) {
+            if (optionsMap.has(value3)) {
+              throw new Error(`Discriminator property ${String(discriminator)} has duplicate value ${String(value3)}`);
             }
-            optionsMap.set(value, type);
+            optionsMap.set(value3, type);
           }
         }
         return new _ZodDiscriminatedUnion3({
@@ -13270,10 +13270,10 @@ var init_types2 = __esm({
         }
         const keyType = this._def.keyType;
         const valueType = this._def.valueType;
-        const pairs = [...ctx.data.entries()].map(([key, value], index) => {
+        const pairs = [...ctx.data.entries()].map(([key, value3], index) => {
           return {
             key: keyType._parse(new ParseInputLazyPath2(ctx, key, ctx.path, [index, "key"])),
-            value: valueType._parse(new ParseInputLazyPath2(ctx, value, ctx.path, [index, "value"]))
+            value: valueType._parse(new ParseInputLazyPath2(ctx, value3, ctx.path, [index, "value"]))
           };
         });
         if (ctx.common.async) {
@@ -13281,14 +13281,14 @@ var init_types2 = __esm({
           return Promise.resolve().then(async () => {
             for (const pair of pairs) {
               const key = await pair.key;
-              const value = await pair.value;
-              if (key.status === "aborted" || value.status === "aborted") {
+              const value3 = await pair.value;
+              if (key.status === "aborted" || value3.status === "aborted") {
                 return INVALID2;
               }
-              if (key.status === "dirty" || value.status === "dirty") {
+              if (key.status === "dirty" || value3.status === "dirty") {
                 status.dirty();
               }
-              finalMap.set(key.value, value.value);
+              finalMap.set(key.value, value3.value);
             }
             return { status: status.value, value: finalMap };
           });
@@ -13296,14 +13296,14 @@ var init_types2 = __esm({
           const finalMap = /* @__PURE__ */ new Map();
           for (const pair of pairs) {
             const key = pair.key;
-            const value = pair.value;
-            if (key.status === "aborted" || value.status === "aborted") {
+            const value3 = pair.value;
+            if (key.status === "aborted" || value3.status === "aborted") {
               return INVALID2;
             }
-            if (key.status === "dirty" || value.status === "dirty") {
+            if (key.status === "dirty" || value3.status === "dirty") {
               status.dirty();
             }
-            finalMap.set(key.value, value.value);
+            finalMap.set(key.value, value3.value);
           }
           return { status: status.value, value: finalMap };
         }
@@ -13541,9 +13541,9 @@ var init_types2 = __esm({
         return this._def.value;
       }
     };
-    ZodLiteral2.create = (value, params) => {
+    ZodLiteral2.create = (value3, params) => {
       return new ZodLiteral2({
-        value,
+        value: value3,
         typeName: ZodFirstPartyTypeKind2.ZodLiteral,
         ...processCreateParams2(params)
       });
@@ -14482,11 +14482,11 @@ function decode5(string, alphabetIdx, bitsPerChar, name) {
   let buffer = 0;
   let written = 0;
   for (let i = 0; i < end; ++i) {
-    const value = alphabetIdx[string[i]];
-    if (value === void 0) {
+    const value3 = alphabetIdx[string[i]];
+    if (value3 === void 0) {
       throw new SyntaxError(`Non-${name} character`);
     }
-    buffer = buffer << bitsPerChar | value;
+    buffer = buffer << bitsPerChar | value3;
     bits += bitsPerChar;
     if (bits >= 8) {
       bits -= 8;
@@ -14823,8 +14823,8 @@ var init_varint = __esm({
     N72 = Math.pow(2, 49);
     N82 = Math.pow(2, 56);
     N92 = Math.pow(2, 63);
-    length2 = function(value) {
-      return value < N12 ? 1 : value < N22 ? 2 : value < N32 ? 3 : value < N42 ? 4 : value < N52 ? 5 : value < N62 ? 6 : value < N72 ? 7 : value < N82 ? 8 : value < N92 ? 9 : 10;
+    length2 = function(value3) {
+      return value3 < N12 ? 1 : value3 < N22 ? 2 : value3 < N32 ? 3 : value3 < N42 ? 4 : value3 < N52 ? 5 : value3 < N62 ? 6 : value3 < N72 ? 7 : value3 < N82 ? 8 : value3 < N92 ? 9 : 10;
     };
     varint2 = {
       encode: encode_12,
@@ -15115,14 +15115,14 @@ var init_cid = __esm({
         if (input == null) {
           return null;
         }
-        const value = input;
-        if (value instanceof _CID4) {
-          return value;
-        } else if (value["/"] != null && value["/"] === value.bytes || value.asCID === value) {
-          const { version, code: code5, multihash, bytes } = value;
+        const value3 = input;
+        if (value3 instanceof _CID4) {
+          return value3;
+        } else if (value3["/"] != null && value3["/"] === value3.bytes || value3.asCID === value3) {
+          const { version, code: code5, multihash, bytes } = value3;
           return new _CID4(version, code5, multihash, bytes ?? encodeCID2(version, code5, multihash.bytes));
-        } else if (value[cidSymbol2] === true) {
-          const { version, multihash, code: code5 } = value;
+        } else if (value3[cidSymbol2] === true) {
+          const { version, multihash, code: code5 } = value3;
           const digest2 = decode8(multihash);
           return _CID4.create(version, code5, digest2);
         } else {
@@ -15419,8 +15419,8 @@ async function decryptEnvelope(nonce, ciphertext, key32) {
     )
   );
 }
-function isPlainRecord(value) {
-  const proto = Object.getPrototypeOf(value);
+function isPlainRecord(value3) {
+  const proto = Object.getPrototypeOf(value3);
   return proto === Object.prototype || proto === null;
 }
 function assertNoLoneSurrogates(text) {
@@ -15446,43 +15446,43 @@ function serializeString(text) {
   assertNoLoneSurrogates(text);
   return JSON.stringify(text);
 }
-function serialize(value) {
-  if (value === null) return "null";
-  switch (typeof value) {
+function serialize(value3) {
+  if (value3 === null) return "null";
+  switch (typeof value3) {
     case "boolean":
-      return JSON.stringify(value);
+      return JSON.stringify(value3);
     case "string":
-      return serializeString(value);
+      return serializeString(value3);
     case "number":
-      if (!Number.isFinite(value)) {
-        throw new TypeError(`cannot canonicalize non-finite number: ${value}`);
+      if (!Number.isFinite(value3)) {
+        throw new TypeError(`cannot canonicalize non-finite number: ${value3}`);
       }
-      return JSON.stringify(value);
+      return JSON.stringify(value3);
     case "object":
       break;
     default:
-      throw new TypeError(`cannot canonicalize value of type ${typeof value}`);
+      throw new TypeError(`cannot canonicalize value of type ${typeof value3}`);
   }
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => serialize(item)).join(",")}]`;
+  if (Array.isArray(value3)) {
+    return `[${value3.map((item) => serialize(item)).join(",")}]`;
   }
-  if (!isPlainRecord(value)) {
+  if (!isPlainRecord(value3)) {
     throw new TypeError("cannot canonicalize non-plain object");
   }
-  const keys = Object.keys(value).sort();
+  const keys = Object.keys(value3).sort();
   const members = [];
   for (const key of keys) {
-    const member = value[key];
+    const member = value3[key];
     if (member === void 0) continue;
     members.push(`${serializeString(key)}:${serialize(member)}`);
   }
   return `{${members.join(",")}}`;
 }
-function canonicalize(value) {
-  return serialize(value);
+function canonicalize(value3) {
+  return serialize(value3);
 }
-function isLinkError(value) {
-  return value instanceof LinkError;
+function isLinkError(value3) {
+  return value3 instanceof LinkError;
 }
 function didKeyFromEd25519PublicKey(publicKey) {
   if (publicKey.length !== PUBLIC_KEY_LENGTH) {
@@ -15568,11 +15568,11 @@ function linkIssuerPublicKey(did) {
     return null;
   }
 }
-function isPlainObject(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+function isPlainObject(value3) {
+  return typeof value3 === "object" && value3 !== null && !Array.isArray(value3);
 }
-function hasExactKeys(value, keys) {
-  const own = Object.keys(value).sort();
+function hasExactKeys(value3, keys) {
+  const own = Object.keys(value3).sort();
   return own.length === keys.length && own.every((key, index) => key === keys[index]);
 }
 function checkIssuer(issuer, mode) {
@@ -15590,19 +15590,19 @@ function checkIssuer(issuer, mode) {
   if (problem === "invalid") throw new LinkError("issuer_key_invalid");
   if (problem === "weak") throw new LinkError("issuer_weak_key");
 }
-function validateLinkHeader(value, options) {
-  if (!isPlainObject(value)) throw new LinkError("header_shape");
-  if (!hasExactKeys(value, HEADER_KEYS)) throw new LinkError("header_fields");
-  if (value.version !== 1) throw new LinkError("header_version");
-  if (typeof value.type !== "string" || !LINK_TYPES.includes(value.type)) throw new LinkError("unknown_type");
-  checkIssuer(value.issuer, options.mode);
-  if (typeof value.audience !== "string" || !AUDIENCE_PATTERN.test(value.audience)) throw new LinkError("audience_format");
-  if (options.audience !== void 0 && value.audience !== options.audience) throw new LinkError("audience_mismatch");
-  if (parseLinkTimestamp(value.issuedAt) === null || parseLinkTimestamp(value.expiresAt) === null) throw new LinkError("timestamp_format");
-  if (typeof value.nonce !== "string" || !NONCE_PATTERN.test(value.nonce) || strictBytes(value.nonce, 16) === null) throw new LinkError("nonce_format");
-  if (typeof value.size !== "number" || !Number.isSafeInteger(value.size) || value.size < 1) throw new LinkError("size_format");
-  if (typeof value.bodyCid !== "string" || !CID_PATTERN.test(value.bodyCid) || !isCanonicalRawCid2(value.bodyCid)) throw new LinkError("body_cid_format");
-  const parsed = linkHeaderV1Schema.safeParse(value);
+function validateLinkHeader(value3, options) {
+  if (!isPlainObject(value3)) throw new LinkError("header_shape");
+  if (!hasExactKeys(value3, HEADER_KEYS)) throw new LinkError("header_fields");
+  if (value3.version !== 1) throw new LinkError("header_version");
+  if (typeof value3.type !== "string" || !LINK_TYPES.includes(value3.type)) throw new LinkError("unknown_type");
+  checkIssuer(value3.issuer, options.mode);
+  if (typeof value3.audience !== "string" || !AUDIENCE_PATTERN.test(value3.audience)) throw new LinkError("audience_format");
+  if (options.audience !== void 0 && value3.audience !== options.audience) throw new LinkError("audience_mismatch");
+  if (parseLinkTimestamp(value3.issuedAt) === null || parseLinkTimestamp(value3.expiresAt) === null) throw new LinkError("timestamp_format");
+  if (typeof value3.nonce !== "string" || !NONCE_PATTERN.test(value3.nonce) || strictBytes(value3.nonce, 16) === null) throw new LinkError("nonce_format");
+  if (typeof value3.size !== "number" || !Number.isSafeInteger(value3.size) || value3.size < 1) throw new LinkError("size_format");
+  if (typeof value3.bodyCid !== "string" || !CID_PATTERN.test(value3.bodyCid) || !isCanonicalRawCid2(value3.bodyCid)) throw new LinkError("body_cid_format");
+  const parsed = linkHeaderV1Schema.safeParse(value3);
   if (!parsed.success) throw new LinkError("header_fields");
   return parsed.data;
 }
@@ -15661,17 +15661,17 @@ async function signHeader(header, signer) {
 function verifyHeader(header, signature) {
   return verifySignature(header.issuer, LINK_HEADER_DOMAIN, header, signature);
 }
-function validateLinkDeleteRequest(value, options = {}) {
-  if (!isPlainObject(value)) throw new LinkError("request_shape");
-  if (!hasExactKeys(value, DELETE_KEYS)) throw new LinkError("request_fields");
-  if (value.version !== 1 || value.op !== "delete") throw new LinkError("request_version");
-  if (typeof value.id !== "string" || !LINK_ID_PATTERN.test(value.id)) throw new LinkError("id_grammar");
-  checkIssuer(value.issuer, "signed");
-  if (typeof value.audience !== "string" || !AUDIENCE_PATTERN.test(value.audience)) throw new LinkError("audience_format");
-  if (options.audience !== void 0 && value.audience !== options.audience) throw new LinkError("audience_mismatch");
-  if (parseLinkTimestamp(value.issuedAt) === null) throw new LinkError("timestamp_format");
-  if (typeof value.nonce !== "string" || !NONCE_PATTERN.test(value.nonce) || strictBytes(value.nonce, 16) === null) throw new LinkError("nonce_format");
-  return linkDeleteRequestV1Schema.parse(value);
+function validateLinkDeleteRequest(value3, options = {}) {
+  if (!isPlainObject(value3)) throw new LinkError("request_shape");
+  if (!hasExactKeys(value3, DELETE_KEYS)) throw new LinkError("request_fields");
+  if (value3.version !== 1 || value3.op !== "delete") throw new LinkError("request_version");
+  if (typeof value3.id !== "string" || !LINK_ID_PATTERN.test(value3.id)) throw new LinkError("id_grammar");
+  checkIssuer(value3.issuer, "signed");
+  if (typeof value3.audience !== "string" || !AUDIENCE_PATTERN.test(value3.audience)) throw new LinkError("audience_format");
+  if (options.audience !== void 0 && value3.audience !== options.audience) throw new LinkError("audience_mismatch");
+  if (parseLinkTimestamp(value3.issuedAt) === null) throw new LinkError("timestamp_format");
+  if (typeof value3.nonce !== "string" || !NONCE_PATTERN.test(value3.nonce) || strictBytes(value3.nonce, 16) === null) throw new LinkError("nonce_format");
+  return linkDeleteRequestV1Schema.parse(value3);
 }
 async function signDelete(request, signer) {
   const valid = validateLinkDeleteRequest(request);
@@ -15812,11 +15812,11 @@ async function openRecordChecked(record3, key, nowMs) {
   }
   const parsedValue = jsonObject.safeParse(json);
   if (!parsedValue.success) throw new LinkError("plaintext_schema");
-  const value = parsedValue.data;
-  const envelopeSignature = jsonObject.safeParse(value.signature);
-  const claimed = header.type === "share" ? envelopeSignature.success ? envelopeSignature.data.signerDid : void 0 : value.issuer;
+  const value3 = parsedValue.data;
+  const envelopeSignature = jsonObject.safeParse(value3.signature);
+  const claimed = header.type === "share" ? envelopeSignature.success ? envelopeSignature.data.signerDid : void 0 : value3.issuer;
   if (typeof claimed !== "string" || claimed !== header.issuer) throw new LinkError("issuer_binding_mismatch");
-  return { type: header.type, header, signature, body, plaintext, value };
+  return { type: header.type, header, signature, body, plaintext, value: value3 };
 }
 async function runBodyValidator(opened, validateBody) {
   if (validateBody === void 0) return;
@@ -15866,14 +15866,14 @@ async function readCapped(response, cap) {
   let total = 0;
   try {
     for (; ; ) {
-      const { done, value } = await reader.read();
+      const { done, value: value3 } = await reader.read();
       if (done) break;
-      total += value.length;
+      total += value3.length;
       if (total > cap) {
         await reader.cancel();
         throw new LinkError("response_too_large");
       }
-      chunks.push(value);
+      chunks.push(value3);
     }
   } catch (cause) {
     if (cause instanceof LinkError) throw cause;
@@ -15970,24 +15970,24 @@ function parseRecordHeader(text) {
   if (text === null || text.length === 0 || text.length > LINK_MAX_RECORD_HEADER_BYTES) throw new LinkError("invalid_response");
   const bytes = decodeStrictBase64Url(text);
   let decoded;
-  let value;
+  let value3;
   try {
     if (bytes === null) throw new Error("encoding");
     decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-    value = JSON.parse(decoded);
+    value3 = JSON.parse(decoded);
   } catch {
     throw new LinkError("invalid_response");
   }
-  if (!isPlainObject(value) || Object.keys(value).some((name) => name !== "header" && name !== "signature")) throw new LinkError("invalid_response");
-  if (!isPlainObject(value.header) || "signature" in value && !isPlainObject(value.signature)) throw new LinkError("invalid_response");
+  if (!isPlainObject(value3) || Object.keys(value3).some((name) => name !== "header" && name !== "signature")) throw new LinkError("invalid_response");
+  if (!isPlainObject(value3.header) || "signature" in value3 && !isPlainObject(value3.signature)) throw new LinkError("invalid_response");
   let canonical;
   try {
-    canonical = canonicalize(value);
+    canonical = canonicalize(value3);
   } catch {
     throw new LinkError("record_not_canonical");
   }
   if (canonical !== decoded) throw new LinkError("record_not_canonical");
-  return { header: value.header, ..."signature" in value ? { signature: value.signature } : {} };
+  return { header: value3.header, ..."signature" in value3 ? { signature: value3.signature } : {} };
 }
 async function fetchShortRecord(parsed, input) {
   const apiOrigin2 = checkApiOrigin(input.apiOrigin);
@@ -16214,8 +16214,8 @@ function capSpecs(entries) {
     return `${entry.service}:${entry.space}:${entry.path}:${actions.join(",")}`;
   });
 }
-function shellWord(value) {
-  return /^[A-Za-z0-9._@:+-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
+function shellWord(value3) {
+  return /^[A-Za-z0-9._@:+-]+$/.test(value3) ? value3 : `'${value3.replace(/'/g, `'\\''`)}'`;
 }
 function accessRequired(profile, entries, what) {
   const grant = `${CLI_NAME10} --profile ${shellWord(profile)} auth request --grant ` + capSpecs(entries).map((spec) => `--cap '${spec}'`).join(" ");
@@ -16935,11 +16935,11 @@ var util;
     return array.map((val) => typeof val === "string" ? `'${val}'` : val).join(separator);
   }
   util22.joinValues = joinValues;
-  util22.jsonStringifyReplacer = (_, value) => {
-    if (typeof value === "bigint") {
-      return value.toString();
+  util22.jsonStringifyReplacer = (_, value3) => {
+    if (typeof value3 === "bigint") {
+      return value3.toString();
     }
-    return value;
+    return value3;
   };
 })(util || (util = {}));
 var objectUtil;
@@ -17095,9 +17095,9 @@ var ZodError = class _ZodError extends Error {
     processError(this);
     return fieldErrors;
   }
-  static assert(value) {
-    if (!(value instanceof _ZodError)) {
-      throw new Error(`Not a ZodError: ${value}`);
+  static assert(value3) {
+    if (!(value3 instanceof _ZodError)) {
+      throw new Error(`Not a ZodError: ${value3}`);
     }
   }
   toString() {
@@ -17311,10 +17311,10 @@ var ParseStatus = class _ParseStatus {
     const syncPairs = [];
     for (const pair of pairs) {
       const key = await pair.key;
-      const value = await pair.value;
+      const value3 = await pair.value;
       syncPairs.push({
         key,
-        value
+        value: value3
       });
     }
     return _ParseStatus.mergeObjectSync(status, syncPairs);
@@ -17322,17 +17322,17 @@ var ParseStatus = class _ParseStatus {
   static mergeObjectSync(status, pairs) {
     const finalObject = {};
     for (const pair of pairs) {
-      const { key, value } = pair;
+      const { key, value: value3 } = pair;
       if (key.status === "aborted")
         return INVALID;
-      if (value.status === "aborted")
+      if (value3.status === "aborted")
         return INVALID;
       if (key.status === "dirty")
         status.dirty();
-      if (value.status === "dirty")
+      if (value3.status === "dirty")
         status.dirty();
-      if (key.value !== "__proto__" && (typeof value.value !== "undefined" || pair.alwaysSet)) {
-        finalObject[key.value] = value.value;
+      if (key.value !== "__proto__" && (typeof value3.value !== "undefined" || pair.alwaysSet)) {
+        finalObject[key.value] = value3.value;
       }
     }
     return { status: status.value, value: finalObject };
@@ -17341,8 +17341,8 @@ var ParseStatus = class _ParseStatus {
 var INVALID = Object.freeze({
   status: "aborted"
 });
-var DIRTY = (value) => ({ status: "dirty", value });
-var OK = (value) => ({ status: "valid", value });
+var DIRTY = (value3) => ({ status: "dirty", value: value3 });
+var OK = (value3) => ({ status: "valid", value: value3 });
 var isAborted = (x) => x.status === "aborted";
 var isDirty = (x) => x.status === "dirty";
 var isValid = (x) => x.status === "valid";
@@ -17353,10 +17353,10 @@ var errorUtil;
   errorUtil22.toString = (message) => typeof message === "string" ? message : message?.message;
 })(errorUtil || (errorUtil = {}));
 var ParseInputLazyPath = class {
-  constructor(parent, value, path, key) {
+  constructor(parent, value3, path, key) {
     this._cachedPath = [];
     this.parent = parent;
-    this.data = value;
+    this.data = value3;
     this._path = path;
     this._key = key;
   }
@@ -18178,25 +18178,25 @@ var ZodString = class _ZodString extends ZodType {
       ...errorUtil.errToObj(message)
     });
   }
-  includes(value, options) {
+  includes(value3, options) {
     return this._addCheck({
       kind: "includes",
-      value,
+      value: value3,
       position: options?.position,
       ...errorUtil.errToObj(options?.message)
     });
   }
-  startsWith(value, message) {
+  startsWith(value3, message) {
     return this._addCheck({
       kind: "startsWith",
-      value,
+      value: value3,
       ...errorUtil.errToObj(message)
     });
   }
-  endsWith(value, message) {
+  endsWith(value3, message) {
     return this._addCheck({
       kind: "endsWith",
-      value,
+      value: value3,
       ...errorUtil.errToObj(message)
     });
   }
@@ -18418,26 +18418,26 @@ var ZodNumber = class _ZodNumber extends ZodType {
     }
     return { status: status.value, value: input.data };
   }
-  gte(value, message) {
-    return this.setLimit("min", value, true, errorUtil.toString(message));
+  gte(value3, message) {
+    return this.setLimit("min", value3, true, errorUtil.toString(message));
   }
-  gt(value, message) {
-    return this.setLimit("min", value, false, errorUtil.toString(message));
+  gt(value3, message) {
+    return this.setLimit("min", value3, false, errorUtil.toString(message));
   }
-  lte(value, message) {
-    return this.setLimit("max", value, true, errorUtil.toString(message));
+  lte(value3, message) {
+    return this.setLimit("max", value3, true, errorUtil.toString(message));
   }
-  lt(value, message) {
-    return this.setLimit("max", value, false, errorUtil.toString(message));
+  lt(value3, message) {
+    return this.setLimit("max", value3, false, errorUtil.toString(message));
   }
-  setLimit(kind, value, inclusive, message) {
+  setLimit(kind, value3, inclusive, message) {
     return new _ZodNumber({
       ...this._def,
       checks: [
         ...this._def.checks,
         {
           kind,
-          value,
+          value: value3,
           inclusive,
           message: errorUtil.toString(message)
         }
@@ -18488,10 +18488,10 @@ var ZodNumber = class _ZodNumber extends ZodType {
       message: errorUtil.toString(message)
     });
   }
-  multipleOf(value, message) {
+  multipleOf(value3, message) {
     return this._addCheck({
       kind: "multipleOf",
-      value,
+      value: value3,
       message: errorUtil.toString(message)
     });
   }
@@ -18634,26 +18634,26 @@ var ZodBigInt = class _ZodBigInt extends ZodType {
     });
     return INVALID;
   }
-  gte(value, message) {
-    return this.setLimit("min", value, true, errorUtil.toString(message));
+  gte(value3, message) {
+    return this.setLimit("min", value3, true, errorUtil.toString(message));
   }
-  gt(value, message) {
-    return this.setLimit("min", value, false, errorUtil.toString(message));
+  gt(value3, message) {
+    return this.setLimit("min", value3, false, errorUtil.toString(message));
   }
-  lte(value, message) {
-    return this.setLimit("max", value, true, errorUtil.toString(message));
+  lte(value3, message) {
+    return this.setLimit("max", value3, true, errorUtil.toString(message));
   }
-  lt(value, message) {
-    return this.setLimit("max", value, false, errorUtil.toString(message));
+  lt(value3, message) {
+    return this.setLimit("max", value3, false, errorUtil.toString(message));
   }
-  setLimit(kind, value, inclusive, message) {
+  setLimit(kind, value3, inclusive, message) {
     return new _ZodBigInt({
       ...this._def,
       checks: [
         ...this._def.checks,
         {
           kind,
-          value,
+          value: value3,
           inclusive,
           message: errorUtil.toString(message)
         }
@@ -18698,10 +18698,10 @@ var ZodBigInt = class _ZodBigInt extends ZodType {
       message: errorUtil.toString(message)
     });
   }
-  multipleOf(value, message) {
+  multipleOf(value3, message) {
     return this._addCheck({
       kind: "multipleOf",
-      value,
+      value: value3,
       message: errorUtil.toString(message)
     });
   }
@@ -19165,10 +19165,10 @@ var ZodObject = class _ZodObject extends ZodType {
     const pairs = [];
     for (const key of shapeKeys) {
       const keyValidator = shape[key];
-      const value = ctx.data[key];
+      const value3 = ctx.data[key];
       pairs.push({
         key: { status: "valid", value: key },
-        value: keyValidator._parse(new ParseInputLazyPath(ctx, value, ctx.path, key)),
+        value: keyValidator._parse(new ParseInputLazyPath(ctx, value3, ctx.path, key)),
         alwaysSet: key in ctx.data
       });
     }
@@ -19196,11 +19196,11 @@ var ZodObject = class _ZodObject extends ZodType {
     } else {
       const catchall = this._def.catchall;
       for (const key of extraKeys) {
-        const value = ctx.data[key];
+        const value3 = ctx.data[key];
         pairs.push({
           key: { status: "valid", value: key },
           value: catchall._parse(
-            new ParseInputLazyPath(ctx, value, ctx.path, key)
+            new ParseInputLazyPath(ctx, value3, ctx.path, key)
             //, ctx.child(key), value, getParsedType(value)
           ),
           alwaysSet: key in ctx.data
@@ -19212,10 +19212,10 @@ var ZodObject = class _ZodObject extends ZodType {
         const syncPairs = [];
         for (const pair of pairs) {
           const key = await pair.key;
-          const value = await pair.value;
+          const value3 = await pair.value;
           syncPairs.push({
             key,
-            value,
+            value: value3,
             alwaysSet: pair.alwaysSet
           });
         }
@@ -19646,11 +19646,11 @@ var ZodDiscriminatedUnion = class _ZodDiscriminatedUnion extends ZodType {
       if (!discriminatorValues.length) {
         throw new Error(`A discriminator value for key \`${discriminator}\` could not be extracted from all schema options`);
       }
-      for (const value of discriminatorValues) {
-        if (optionsMap.has(value)) {
-          throw new Error(`Discriminator property ${String(discriminator)} has duplicate value ${String(value)}`);
+      for (const value3 of discriminatorValues) {
+        if (optionsMap.has(value3)) {
+          throw new Error(`Discriminator property ${String(discriminator)} has duplicate value ${String(value3)}`);
         }
-        optionsMap.set(value, type);
+        optionsMap.set(value3, type);
       }
     }
     return new _ZodDiscriminatedUnion({
@@ -19892,10 +19892,10 @@ var ZodMap = class extends ZodType {
     }
     const keyType = this._def.keyType;
     const valueType = this._def.valueType;
-    const pairs = [...ctx.data.entries()].map(([key, value], index) => {
+    const pairs = [...ctx.data.entries()].map(([key, value3], index) => {
       return {
         key: keyType._parse(new ParseInputLazyPath(ctx, key, ctx.path, [index, "key"])),
-        value: valueType._parse(new ParseInputLazyPath(ctx, value, ctx.path, [index, "value"]))
+        value: valueType._parse(new ParseInputLazyPath(ctx, value3, ctx.path, [index, "value"]))
       };
     });
     if (ctx.common.async) {
@@ -19903,14 +19903,14 @@ var ZodMap = class extends ZodType {
       return Promise.resolve().then(async () => {
         for (const pair of pairs) {
           const key = await pair.key;
-          const value = await pair.value;
-          if (key.status === "aborted" || value.status === "aborted") {
+          const value3 = await pair.value;
+          if (key.status === "aborted" || value3.status === "aborted") {
             return INVALID;
           }
-          if (key.status === "dirty" || value.status === "dirty") {
+          if (key.status === "dirty" || value3.status === "dirty") {
             status.dirty();
           }
-          finalMap.set(key.value, value.value);
+          finalMap.set(key.value, value3.value);
         }
         return { status: status.value, value: finalMap };
       });
@@ -19918,14 +19918,14 @@ var ZodMap = class extends ZodType {
       const finalMap = /* @__PURE__ */ new Map();
       for (const pair of pairs) {
         const key = pair.key;
-        const value = pair.value;
-        if (key.status === "aborted" || value.status === "aborted") {
+        const value3 = pair.value;
+        if (key.status === "aborted" || value3.status === "aborted") {
           return INVALID;
         }
-        if (key.status === "dirty" || value.status === "dirty") {
+        if (key.status === "dirty" || value3.status === "dirty") {
           status.dirty();
         }
-        finalMap.set(key.value, value.value);
+        finalMap.set(key.value, value3.value);
       }
       return { status: status.value, value: finalMap };
     }
@@ -20163,9 +20163,9 @@ var ZodLiteral = class extends ZodType {
     return this._def.value;
   }
 };
-ZodLiteral.create = (value, params) => {
+ZodLiteral.create = (value3, params) => {
   return new ZodLiteral({
-    value,
+    value: value3,
     typeName: ZodFirstPartyTypeKind.ZodLiteral,
     ...processCreateParams(params)
   });
@@ -21073,11 +21073,11 @@ function decode(string, alphabetIdx, bitsPerChar, name) {
   let buffer = 0;
   let written = 0;
   for (let i = 0; i < end; ++i) {
-    const value = alphabetIdx[string[i]];
-    if (value === void 0) {
+    const value3 = alphabetIdx[string[i]];
+    if (value3 === void 0) {
       throw new SyntaxError(`Non-${name} character`);
     }
-    buffer = buffer << bitsPerChar | value;
+    buffer = buffer << bitsPerChar | value3;
     bits += bitsPerChar;
     if (bits >= 8) {
       bits -= 8;
@@ -21254,8 +21254,8 @@ var N6 = Math.pow(2, 42);
 var N7 = Math.pow(2, 49);
 var N8 = Math.pow(2, 56);
 var N9 = Math.pow(2, 63);
-var length = function(value) {
-  return value < N1 ? 1 : value < N2 ? 2 : value < N3 ? 3 : value < N4 ? 4 : value < N5 ? 5 : value < N6 ? 6 : value < N7 ? 7 : value < N8 ? 8 : value < N9 ? 9 : 10;
+var length = function(value3) {
+  return value3 < N1 ? 1 : value3 < N2 ? 2 : value3 < N3 ? 3 : value3 < N4 ? 4 : value3 < N5 ? 5 : value3 < N6 ? 6 : value3 < N7 ? 7 : value3 < N8 ? 8 : value3 < N9 ? 9 : 10;
 };
 var varint = {
   encode: encode_1,
@@ -21442,14 +21442,14 @@ var CID = class _CID {
     if (input == null) {
       return null;
     }
-    const value = input;
-    if (value instanceof _CID) {
-      return value;
-    } else if (value["/"] != null && value["/"] === value.bytes || value.asCID === value) {
-      const { version, code: code22, multihash, bytes } = value;
+    const value3 = input;
+    if (value3 instanceof _CID) {
+      return value3;
+    } else if (value3["/"] != null && value3["/"] === value3.bytes || value3.asCID === value3) {
+      const { version, code: code22, multihash, bytes } = value3;
       return new _CID(version, code22, multihash, bytes ?? encodeCID(version, code22, multihash.bytes));
-    } else if (value[cidSymbol] === true) {
-      const { version, multihash, code: code22 } = value;
+    } else if (value3[cidSymbol] === true) {
+      const { version, multihash, code: code22 } = value3;
       const digest2 = decode4(multihash);
       return _CID.create(version, code22, digest2);
     } else {
@@ -21699,24 +21699,24 @@ function utf8Bytes(text) {
   return new TextEncoder().encode(text);
 }
 var ED25519_MULTICODEC_PREFIX = Uint8Array.of(237, 1);
-function decodeBase64UrlOrNull(value) {
+function decodeBase64UrlOrNull(value3) {
   try {
-    return fromBase64Url(value);
+    return fromBase64Url(value3);
   } catch {
     return null;
   }
 }
-var base64UrlString = () => external_exports.string().refine((value) => decodeBase64UrlOrNull(value) !== null, {
+var base64UrlString = () => external_exports.string().refine((value3) => decodeBase64UrlOrNull(value3) !== null, {
   message: "expected strictly-decodable unpadded base64url"
 });
-function isCanonicalHttpsOrigin(value) {
+function isCanonicalHttpsOrigin(value3) {
   let url;
   try {
-    url = new URL(value);
+    url = new URL(value3);
   } catch {
     return false;
   }
-  return url.protocol === "https:" && url.origin === value;
+  return url.protocol === "https:" && url.origin === value3;
 }
 var sessionJwkCommonFields = {
   alg: external_exports.string().min(1).optional(),
@@ -21763,14 +21763,14 @@ var authorizationTargetSchema = external_exports.discriminatedUnion("kind", [
   bearerKeyTargetSchema,
   recipientDidTargetSchema
 ]);
-function isCanonicalResourcePath(value) {
-  if (value.length === 0) return false;
-  if (/[\u0000-\u001f\u007f\\]/.test(value)) return false;
-  if (/%2f|%5c|%2e/i.test(value)) return false;
-  return value.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
+function isCanonicalResourcePath(value3) {
+  if (value3.length === 0) return false;
+  if (/[\u0000-\u001f\u007f\\]/.test(value3)) return false;
+  if (/%2f|%5c|%2e/i.test(value3)) return false;
+  return value3.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
 }
-function isCanonicalPathSegment(value) {
-  return isCanonicalResourcePath(value) && !value.includes("/");
+function isCanonicalPathSegment(value3) {
+  return isCanonicalResourcePath(value3) && !value3.includes("/");
 }
 var resourceSelectorSchema = external_exports.object({
   kind: external_exports.union([external_exports.literal("exact"), external_exports.literal("prefix")]),
@@ -21809,7 +21809,7 @@ var contentPointerSchema = external_exports.object({
   cid: external_exports.string().refine(isCanonicalRawCid, {
     message: "expected a canonical CIDv1 raw sha2-256 base32 CID"
   }),
-  key: external_exports.string().refine((value) => decodeBase64UrlOrNull(value)?.length === 32, {
+  key: external_exports.string().refine((value3) => decodeBase64UrlOrNull(value3)?.length === 32, {
     message: "expected base64url decoding to exactly 32 bytes"
   })
 }).strict();
@@ -21818,7 +21818,7 @@ var signatureSchema = external_exports.object({
   signerDid: external_exports.string().regex(/^did:key:z[1-9A-HJ-NP-Za-km-z]+$/, "expected a did:key"),
   algorithm: external_exports.literal("Ed25519"),
   /** base64url-encoded ed25519 signature over the JCS bytes of all other fields. */
-  value: external_exports.string().refine((value) => decodeBase64UrlOrNull(value)?.length === 64, {
+  value: external_exports.string().refine((value3) => decodeBase64UrlOrNull(value3)?.length === 64, {
     message: "expected base64url decoding to exactly 64 bytes"
   })
 }).strict();
@@ -21913,47 +21913,47 @@ var unsignedShareEnvelopeV2BaseSchema = external_exports.object({
   metadata: contentMetadataSchema,
   ownerAuthority: ownerAuthoritySchema.optional()
 }).strict();
-function validateV2Invariants(value, ctx) {
-  const actions = [...value.actions];
+function validateV2Invariants(value3, ctx) {
+  const actions = [...value3.actions];
   if (new Set(actions).size !== actions.length) ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["actions"], message: "actions must be unique" });
   if (actions.some((action, index) => action !== ["read", "list", "edit"].filter((candidate) => actions.includes(candidate))[index])) ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["actions"], message: "actions must be canonically ordered" });
-  if (!value.encrypted && value.recipientMatcher.kind !== "policyDigest") ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["recipientMatcher"], message: "safe plaintext must carry only a matcher digest" });
-  if (!value.encrypted && value.authorizationTarget.kind !== "policy") ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["encrypted"], message: "unencrypted content requires a policy target" });
-  if (!value.encrypted && value.content !== void 0) ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["content"], message: "policy-only plaintext cannot carry content" });
-  if (value.encrypted && (value.metadata.mediaType === void 0 || value.metadata.filename === void 0 || value.metadata.byteLength === void 0)) ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["metadata"], message: "encrypted shares must describe their content" });
-  if (!value.encrypted && Object.keys(value.metadata).length !== 0) ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["metadata"], message: "policy-only plaintext cannot describe content" });
-  if (!value.encrypted && value.metadata.encoding !== void 0) ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["metadata", "encoding"], message: "policy-only plaintext cannot carry content encoding" });
-  if (value.metadata.artifact === "html" && (!value.encrypted || value.resource.kind !== "prefix" || !value.actions.includes("read") || !value.actions.includes("list"))) ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["metadata", "artifact"], message: "html artifacts require an encrypted readable prefix" });
-  if (!value.encrypted && (value.display.senderName !== void 0 || value.display.filename !== void 0 || value.display.recipientHint !== void 0)) ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["display"], message: "policy-only plaintext cannot carry display metadata" });
-  if (!value.encrypted && value.deliveryEmail !== void 0) ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["deliveryEmail"], message: "policy-only plaintext cannot carry delivery metadata" });
-  if (value.recipientMatcher.kind === "exactEmail" && value.deliveryEmail !== void 0 && value.deliveryEmail !== value.recipientMatcher.value) ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["deliveryEmail"], message: "delivery email must match the exact matcher" });
-  if (value.recipientMatcher.kind === "emailDomain" && value.deliveryEmail !== void 0 && value.deliveryEmail.toLowerCase().endsWith(`@${value.recipientMatcher.value}`) === false) ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["deliveryEmail"], message: "delivery email must belong to the matcher domain" });
-  if (value.contentSource.kind === "kv" && value.contentSource.action !== "tinycloud.kv/get") ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["contentSource"], message: "source action mismatch" });
-  if (value.contentSource.kind === "sql" && value.contentSource.action !== "tinycloud.sql/read") ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["contentSource"], message: "source action mismatch" });
+  if (!value3.encrypted && value3.recipientMatcher.kind !== "policyDigest") ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["recipientMatcher"], message: "safe plaintext must carry only a matcher digest" });
+  if (!value3.encrypted && value3.authorizationTarget.kind !== "policy") ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["encrypted"], message: "unencrypted content requires a policy target" });
+  if (!value3.encrypted && value3.content !== void 0) ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["content"], message: "policy-only plaintext cannot carry content" });
+  if (value3.encrypted && (value3.metadata.mediaType === void 0 || value3.metadata.filename === void 0 || value3.metadata.byteLength === void 0)) ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["metadata"], message: "encrypted shares must describe their content" });
+  if (!value3.encrypted && Object.keys(value3.metadata).length !== 0) ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["metadata"], message: "policy-only plaintext cannot describe content" });
+  if (!value3.encrypted && value3.metadata.encoding !== void 0) ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["metadata", "encoding"], message: "policy-only plaintext cannot carry content encoding" });
+  if (value3.metadata.artifact === "html" && (!value3.encrypted || value3.resource.kind !== "prefix" || !value3.actions.includes("read") || !value3.actions.includes("list"))) ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["metadata", "artifact"], message: "html artifacts require an encrypted readable prefix" });
+  if (!value3.encrypted && (value3.display.senderName !== void 0 || value3.display.filename !== void 0 || value3.display.recipientHint !== void 0)) ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["display"], message: "policy-only plaintext cannot carry display metadata" });
+  if (!value3.encrypted && value3.deliveryEmail !== void 0) ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["deliveryEmail"], message: "policy-only plaintext cannot carry delivery metadata" });
+  if (value3.recipientMatcher.kind === "exactEmail" && value3.deliveryEmail !== void 0 && value3.deliveryEmail !== value3.recipientMatcher.value) ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["deliveryEmail"], message: "delivery email must match the exact matcher" });
+  if (value3.recipientMatcher.kind === "emailDomain" && value3.deliveryEmail !== void 0 && value3.deliveryEmail.toLowerCase().endsWith(`@${value3.recipientMatcher.value}`) === false) ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["deliveryEmail"], message: "delivery email must belong to the matcher domain" });
+  if (value3.contentSource.kind === "kv" && value3.contentSource.action !== "tinycloud.kv/get") ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["contentSource"], message: "source action mismatch" });
+  if (value3.contentSource.kind === "sql" && value3.contentSource.action !== "tinycloud.sql/read") ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["contentSource"], message: "source action mismatch" });
 }
 var unsignedShareEnvelopeV2Schema = unsignedShareEnvelopeV2BaseSchema.superRefine(validateV2Invariants);
 var shareEnvelopeV2Schema = unsignedShareEnvelopeV2BaseSchema.extend({ signature: signatureSchema }).strict().superRefine(validateV2Invariants);
-var unifiedResourceSchema = external_exports.string().refine((value) => {
-  const marker = value.indexOf("/kv/");
+var unifiedResourceSchema = external_exports.string().refine((value3) => {
+  const marker = value3.indexOf("/kv/");
   if (marker < 1) return false;
-  const space = value.slice(0, marker);
+  const space = value3.slice(0, marker);
   const legacy = space.startsWith("tinycloud://");
   if (legacy ? /[:/?#%]/.test(space.slice("tinycloud://".length)) : !space.startsWith("tinycloud:") || /[/?#%]/.test(space)) return false;
-  const path = value.slice(marker + 4);
+  const path = value3.slice(marker + 4);
   return !path.startsWith("/") && !path.endsWith("/") && !path.includes("//") && path.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
 }, { message: "expected canonical TinyCloud KV resource" });
-var unifiedEncryptionNetworkSchema = external_exports.string().refine((value) => {
-  if (!value.startsWith("urn:tinycloud:encryption:")) return false;
-  const rest = value.slice("urn:tinycloud:encryption:".length);
+var unifiedEncryptionNetworkSchema = external_exports.string().refine((value3) => {
+  if (!value3.startsWith("urn:tinycloud:encryption:")) return false;
+  const rest = value3.slice("urn:tinycloud:encryption:".length);
   const separator = rest.lastIndexOf(":");
   const owner = separator < 0 ? "" : rest.slice(0, separator);
   const network = separator < 0 ? "" : rest.slice(separator + 1);
   return owner.startsWith("did:") && owner.length > 4 && network.length > 0 && !/[:/%?#\s]/.test(network);
 }, { message: "expected canonical TinyCloud encryption network" });
-var unifiedEncryptionResourceSchema = external_exports.string().refine((value) => {
+var unifiedEncryptionResourceSchema = external_exports.string().refine((value3) => {
   const prefix = "urn:tinycloud:encryption:";
-  if (!value.startsWith(prefix)) return false;
-  const match = /^(did:.+):([^/:?#\s]+)(?:\/(.+))?$/.exec(value.slice(prefix.length));
+  if (!value3.startsWith(prefix)) return false;
+  const match = /^(did:.+):([^/:?#\s]+)(?:\/(.+))?$/.exec(value3.slice(prefix.length));
   if (match === null) return false;
   const path = match[3];
   return path === void 0 || path.split("/").every(
@@ -21961,8 +21961,8 @@ var unifiedEncryptionResourceSchema = external_exports.string().refine((value) =
   );
 }, { message: "expected a canonical TinyCloud encryption resource" });
 var unifiedEncryptionKeyPathSchema = external_exports.string().regex(/^share\/[^/]+$/).refine(
-  (value) => {
-    const segment = value.slice("share/".length);
+  (value3) => {
+    const segment = value3.slice("share/".length);
     return segment !== "." && segment !== ".." && !/[\\:%?#\s]/.test(segment);
   },
   { message: "expected an exact share key path" }
@@ -22090,37 +22090,37 @@ var unsignedShareEnvelopeV3BaseSchema = external_exports.object({
    */
   artifactPin: artifactPinSchema.optional()
 }).strict();
-function validateV3Invariants(value, ctx) {
-  const actions = [...value.actions];
+function validateV3Invariants(value3, ctx) {
+  const actions = [...value3.actions];
   if (new Set(actions).size !== actions.length || actions.some((action, index) => action !== ["read", "list", "edit"].filter((candidate) => actions.includes(candidate))[index])) {
     ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["actions"], message: "actions must be unique and canonically ordered" });
   }
-  if (value.policyRoot.role !== "policy-authority" || value.enforcementRoot.role !== "policy-enforcement") {
+  if (value3.policyRoot.role !== "policy-authority" || value3.enforcementRoot.role !== "policy-enforcement") {
     ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["policyRoot", "role"], message: "root roles are fixed" });
   }
-  if (value.policyCid.length === 0 || value.policyCid === value.policyRoot.cid || value.policyCid === value.enforcementRoot.cid) {
+  if (value3.policyCid.length === 0 || value3.policyCid === value3.policyRoot.cid || value3.policyCid === value3.enforcementRoot.cid) {
     ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["policyCid"], message: "policy CID must be distinct from both roots" });
   }
-  if (value.contentSource.encryptionNetwork !== value.encryptionNetwork) {
+  if (value3.contentSource.encryptionNetwork !== value3.encryptionNetwork) {
     ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["encryptionNetwork"], message: "encryption network is not bound to the source" });
   }
-  if (value.attestedEnforcerBinding.nodeAudience !== value.target.nodeAudience || value.attestedEnforcerBinding.signature.signerDid !== value.attestedEnforcerBinding.nodeAudience || Date.parse(value.attestedEnforcerBinding.expiresAt) < Date.parse(value.expiry)) {
+  if (value3.attestedEnforcerBinding.nodeAudience !== value3.target.nodeAudience || value3.attestedEnforcerBinding.signature.signerDid !== value3.attestedEnforcerBinding.nodeAudience || Date.parse(value3.attestedEnforcerBinding.expiresAt) < Date.parse(value3.expiry)) {
     ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["attestedEnforcerBinding"], message: "enforcer binding does not cover the target and share lifetime" });
   }
-  const encryptionKeyPath = value.contentSource.encryptionKeyPath;
-  if (encryptionKeyPath !== void 0 && encryptionKeyPath !== `share/${value.contentSource.shareId}`) {
+  const encryptionKeyPath = value3.contentSource.encryptionKeyPath;
+  if (encryptionKeyPath !== void 0 && encryptionKeyPath !== `share/${value3.contentSource.shareId}`) {
     ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["contentSource", "encryptionKeyPath"], message: "share key path must name this share" });
   }
-  if (value.policy.contentSource.shareId !== value.contentSource.shareId || value.policy.contentSource.kvResource !== value.contentSource.kvResource || value.policy.contentSource.selector !== value.contentSource.selector || value.policy.contentSource.encryptionNetwork !== value.encryptionNetwork || value.policy.contentSource.encryptionKeyPath !== encryptionKeyPath || value.policy.contentSource.encryptedSymmetricKeyDigestHex !== value.contentSource.encryptedSymmetricKeyDigestHex || value.policy.contentSource.keyVersion !== value.contentSource.keyVersion || value.policy.contentSource.mode !== value.contentSource.mode || value.policy.contentSource.initialCiphertextDigestHex !== value.contentSource.initialCiphertextDigestHex) {
+  if (value3.policy.contentSource.shareId !== value3.contentSource.shareId || value3.policy.contentSource.kvResource !== value3.contentSource.kvResource || value3.policy.contentSource.selector !== value3.contentSource.selector || value3.policy.contentSource.encryptionNetwork !== value3.encryptionNetwork || value3.policy.contentSource.encryptionKeyPath !== encryptionKeyPath || value3.policy.contentSource.encryptedSymmetricKeyDigestHex !== value3.contentSource.encryptedSymmetricKeyDigestHex || value3.policy.contentSource.keyVersion !== value3.contentSource.keyVersion || value3.policy.contentSource.mode !== value3.contentSource.mode || value3.policy.contentSource.initialCiphertextDigestHex !== value3.contentSource.initialCiphertextDigestHex) {
     ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["contentSource"], message: "content source is not bound to policy" });
   }
-  if (value.policy.signature.suite !== "Ed25519" || value.policy.signature.signerDid !== value.policy.ownerDid) {
+  if (value3.policy.signature.suite !== "Ed25519" || value3.policy.signature.signerDid !== value3.policy.ownerDid) {
     ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["policy", "signature"], message: "policy must be signed by its owner" });
   }
-  const kvCapabilities = value.policy.capabilityCeiling.filter((capability) => capability.kind === "kv");
-  const expectedEncryptionResource = encryptionKeyPath === void 0 ? value.encryptionNetwork : `${value.encryptionNetwork}/${encryptionKeyPath}`;
-  const decryptCapabilities = value.policy.capabilityCeiling.filter((capability) => capability.kind === "encryption" && capability.resource === expectedEncryptionResource && capability.action === "tinycloud.encryption/decrypt");
-  if (value.policy.capabilityCeiling.length !== 2 || kvCapabilities.length !== 1 || decryptCapabilities.length !== 1 || kvCapabilities[0]?.resource !== value.contentSource.kvResource || kvCapabilities[0]?.selector !== value.contentSource.selector) {
+  const kvCapabilities = value3.policy.capabilityCeiling.filter((capability) => capability.kind === "kv");
+  const expectedEncryptionResource = encryptionKeyPath === void 0 ? value3.encryptionNetwork : `${value3.encryptionNetwork}/${encryptionKeyPath}`;
+  const decryptCapabilities = value3.policy.capabilityCeiling.filter((capability) => capability.kind === "encryption" && capability.resource === expectedEncryptionResource && capability.action === "tinycloud.encryption/decrypt");
+  if (value3.policy.capabilityCeiling.length !== 2 || kvCapabilities.length !== 1 || decryptCapabilities.length !== 1 || kvCapabilities[0]?.resource !== value3.contentSource.kvResource || kvCapabilities[0]?.selector !== value3.contentSource.selector) {
     ctx.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["policy", "capabilityCeiling"], message: "policy ceiling must contain the exact decrypt resource" });
   }
 }
@@ -22135,11 +22135,11 @@ function parseArtifactVersionPath(path) {
   return { artifactId: match[1], version: Number(match[2]), file: match[3] };
 }
 var UNSAFE_FILENAME_CODE_POINT = /[\p{Cc}\p{Cf}\p{Cs}\u2028\u2029]/u;
-function hasUnsafeFilenameCodePoint(value) {
-  return UNSAFE_FILENAME_CODE_POINT.test(value);
+function hasUnsafeFilenameCodePoint(value3) {
+  return UNSAFE_FILENAME_CODE_POINT.test(value3);
 }
-function canonicalShareFilename(value) {
-  const canonical = value.normalize("NFC");
+function canonicalShareFilename(value3) {
+  const canonical = value3.normalize("NFC");
   if (canonical.length === 0 || canonical === "." || canonical === ".." || canonical.includes("/") || canonical.includes("\\") || hasUnsafeFilenameCodePoint(canonical)) {
     throw new TypeError("share filename is unsafe");
   }
@@ -22163,15 +22163,15 @@ var ArtifactError = class extends Error {
 function newArtifactId(random = (length23) => crypto.getRandomValues(new Uint8Array(length23))) {
   return `art_${Array.from(random(8), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
-function assertArtifactId(value) {
-  if (!ARTIFACT_ID.test(value)) {
+function assertArtifactId(value3) {
+  if (!ARTIFACT_ID.test(value3)) {
     throw new ArtifactError("invalid-argument", "artifact id must be 3-63 characters of a-z, 0-9, '_' or '-', starting with a letter or digit");
   }
-  return value;
+  return value3;
 }
-function assertVersion(value) {
-  if (!Number.isSafeInteger(value) || value < 1) throw new ArtifactError("invalid-argument", "artifact version must be a positive integer");
-  return value;
+function assertVersion(value3) {
+  if (!Number.isSafeInteger(value3) || value3 < 1) throw new ArtifactError("invalid-argument", "artifact version must be a positive integer");
+  return value3;
 }
 function artifactVersionsPrefix(artifactId) {
   return `${ARTIFACT_ROOT}/${assertArtifactId(artifactId)}/versions/`;
@@ -22183,17 +22183,17 @@ function artifactVersionFilePath(artifactId, version, filename) {
   return `${artifactVersionResource(artifactId, version)}/${filename}`;
 }
 function parseArtifactManifest(bytes) {
-  let value;
+  let value3;
   try {
-    value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+    value3 = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
   } catch {
     throw new ArtifactError("corrupt", "artifact manifest is not valid JSON");
   }
   const fail2 = () => {
     throw new ArtifactError("corrupt", "artifact manifest is malformed");
   };
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return fail2();
-  const record3 = value;
+  if (value3 === null || typeof value3 !== "object" || Array.isArray(value3)) return fail2();
+  const record3 = value3;
   const allowed = ["v", "files", "createdAt", "parent", "note"];
   if (Object.keys(record3).some((key) => !allowed.includes(key)) || record3.v !== ARTIFACT_MANIFEST_VERSION) return fail2();
   if (!Array.isArray(record3.files) || record3.files.length === 0) return fail2();
@@ -22535,11 +22535,11 @@ function decode9(string, alphabetIdx, bitsPerChar, name) {
   let buffer = 0;
   let written = 0;
   for (let i = 0; i < end; ++i) {
-    const value = alphabetIdx[string[i]];
-    if (value === void 0) {
+    const value3 = alphabetIdx[string[i]];
+    if (value3 === void 0) {
       throw new SyntaxError(`Non-${name} character`);
     }
-    buffer = buffer << bitsPerChar | value;
+    buffer = buffer << bitsPerChar | value3;
     bits += bitsPerChar;
     if (bits >= 8) {
       bits -= 8;
@@ -22716,8 +22716,8 @@ var N63 = Math.pow(2, 42);
 var N73 = Math.pow(2, 49);
 var N83 = Math.pow(2, 56);
 var N93 = Math.pow(2, 63);
-var length3 = function(value) {
-  return value < N13 ? 1 : value < N23 ? 2 : value < N33 ? 3 : value < N43 ? 4 : value < N53 ? 5 : value < N63 ? 6 : value < N73 ? 7 : value < N83 ? 8 : value < N93 ? 9 : 10;
+var length3 = function(value3) {
+  return value3 < N13 ? 1 : value3 < N23 ? 2 : value3 < N33 ? 3 : value3 < N43 ? 4 : value3 < N53 ? 5 : value3 < N63 ? 6 : value3 < N73 ? 7 : value3 < N83 ? 8 : value3 < N93 ? 9 : 10;
 };
 var varint3 = {
   encode: encode_13,
@@ -22904,14 +22904,14 @@ var CID3 = class _CID2 {
     if (input == null) {
       return null;
     }
-    const value = input;
-    if (value instanceof _CID2) {
-      return value;
-    } else if (value["/"] != null && value["/"] === value.bytes || value.asCID === value) {
-      const { version, code: code22, multihash, bytes } = value;
+    const value3 = input;
+    if (value3 instanceof _CID2) {
+      return value3;
+    } else if (value3["/"] != null && value3["/"] === value3.bytes || value3.asCID === value3) {
+      const { version, code: code22, multihash, bytes } = value3;
       return new _CID2(version, code22, multihash, bytes ?? encodeCID3(version, code22, multihash.bytes));
-    } else if (value[cidSymbol3] === true) {
-      const { version, multihash, code: code22 } = value;
+    } else if (value3[cidSymbol3] === true) {
+      const { version, multihash, code: code22 } = value3;
       const digest2 = decode42(multihash);
       return _CID2.create(version, code22, digest2);
     } else {
@@ -23161,24 +23161,24 @@ function utf8Bytes3(text) {
   return new TextEncoder().encode(text);
 }
 var ED25519_MULTICODEC_PREFIX3 = Uint8Array.of(237, 1);
-function decodeBase64UrlOrNull2(value) {
+function decodeBase64UrlOrNull2(value3) {
   try {
-    return fromBase64Url3(value);
+    return fromBase64Url3(value3);
   } catch {
     return null;
   }
 }
-var base64UrlString2 = () => external_exports2.string().refine((value) => decodeBase64UrlOrNull2(value) !== null, {
+var base64UrlString2 = () => external_exports2.string().refine((value3) => decodeBase64UrlOrNull2(value3) !== null, {
   message: "expected strictly-decodable unpadded base64url"
 });
-function isCanonicalHttpsOrigin2(value) {
+function isCanonicalHttpsOrigin2(value3) {
   let url;
   try {
-    url = new URL(value);
+    url = new URL(value3);
   } catch {
     return false;
   }
-  return url.protocol === "https:" && url.origin === value;
+  return url.protocol === "https:" && url.origin === value3;
 }
 var sessionJwkCommonFields2 = {
   alg: external_exports2.string().min(1).optional(),
@@ -23225,14 +23225,14 @@ var authorizationTargetSchema2 = external_exports2.discriminatedUnion("kind", [
   bearerKeyTargetSchema2,
   recipientDidTargetSchema2
 ]);
-function isCanonicalResourcePath2(value) {
-  if (value.length === 0) return false;
-  if (/[\u0000-\u001f\u007f\\]/.test(value)) return false;
-  if (/%2f|%5c|%2e/i.test(value)) return false;
-  return value.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
+function isCanonicalResourcePath2(value3) {
+  if (value3.length === 0) return false;
+  if (/[\u0000-\u001f\u007f\\]/.test(value3)) return false;
+  if (/%2f|%5c|%2e/i.test(value3)) return false;
+  return value3.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
 }
-function isCanonicalPathSegment2(value) {
-  return isCanonicalResourcePath2(value) && !value.includes("/");
+function isCanonicalPathSegment2(value3) {
+  return isCanonicalResourcePath2(value3) && !value3.includes("/");
 }
 var resourceSelectorSchema2 = external_exports2.object({
   kind: external_exports2.union([external_exports2.literal("exact"), external_exports2.literal("prefix")]),
@@ -23271,7 +23271,7 @@ var contentPointerSchema2 = external_exports2.object({
   cid: external_exports2.string().refine(isCanonicalRawCid3, {
     message: "expected a canonical CIDv1 raw sha2-256 base32 CID"
   }),
-  key: external_exports2.string().refine((value) => decodeBase64UrlOrNull2(value)?.length === 32, {
+  key: external_exports2.string().refine((value3) => decodeBase64UrlOrNull2(value3)?.length === 32, {
     message: "expected base64url decoding to exactly 32 bytes"
   })
 }).strict();
@@ -23280,7 +23280,7 @@ var signatureSchema2 = external_exports2.object({
   signerDid: external_exports2.string().regex(/^did:key:z[1-9A-HJ-NP-Za-km-z]+$/, "expected a did:key"),
   algorithm: external_exports2.literal("Ed25519"),
   /** base64url-encoded ed25519 signature over the JCS bytes of all other fields. */
-  value: external_exports2.string().refine((value) => decodeBase64UrlOrNull2(value)?.length === 64, {
+  value: external_exports2.string().refine((value3) => decodeBase64UrlOrNull2(value3)?.length === 64, {
     message: "expected base64url decoding to exactly 64 bytes"
   })
 }).strict();
@@ -23375,47 +23375,47 @@ var unsignedShareEnvelopeV2BaseSchema2 = external_exports2.object({
   metadata: contentMetadataSchema2,
   ownerAuthority: ownerAuthoritySchema2.optional()
 }).strict();
-function validateV2Invariants2(value, ctx) {
-  const actions = [...value.actions];
+function validateV2Invariants2(value3, ctx) {
+  const actions = [...value3.actions];
   if (new Set(actions).size !== actions.length) ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["actions"], message: "actions must be unique" });
   if (actions.some((action, index) => action !== ["read", "list", "edit"].filter((candidate) => actions.includes(candidate))[index])) ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["actions"], message: "actions must be canonically ordered" });
-  if (!value.encrypted && value.recipientMatcher.kind !== "policyDigest") ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["recipientMatcher"], message: "safe plaintext must carry only a matcher digest" });
-  if (!value.encrypted && value.authorizationTarget.kind !== "policy") ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["encrypted"], message: "unencrypted content requires a policy target" });
-  if (!value.encrypted && value.content !== void 0) ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["content"], message: "policy-only plaintext cannot carry content" });
-  if (value.encrypted && (value.metadata.mediaType === void 0 || value.metadata.filename === void 0 || value.metadata.byteLength === void 0)) ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["metadata"], message: "encrypted shares must describe their content" });
-  if (!value.encrypted && Object.keys(value.metadata).length !== 0) ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["metadata"], message: "policy-only plaintext cannot describe content" });
-  if (!value.encrypted && value.metadata.encoding !== void 0) ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["metadata", "encoding"], message: "policy-only plaintext cannot carry content encoding" });
-  if (value.metadata.artifact === "html" && (!value.encrypted || value.resource.kind !== "prefix" || !value.actions.includes("read") || !value.actions.includes("list"))) ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["metadata", "artifact"], message: "html artifacts require an encrypted readable prefix" });
-  if (!value.encrypted && (value.display.senderName !== void 0 || value.display.filename !== void 0 || value.display.recipientHint !== void 0)) ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["display"], message: "policy-only plaintext cannot carry display metadata" });
-  if (!value.encrypted && value.deliveryEmail !== void 0) ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["deliveryEmail"], message: "policy-only plaintext cannot carry delivery metadata" });
-  if (value.recipientMatcher.kind === "exactEmail" && value.deliveryEmail !== void 0 && value.deliveryEmail !== value.recipientMatcher.value) ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["deliveryEmail"], message: "delivery email must match the exact matcher" });
-  if (value.recipientMatcher.kind === "emailDomain" && value.deliveryEmail !== void 0 && value.deliveryEmail.toLowerCase().endsWith(`@${value.recipientMatcher.value}`) === false) ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["deliveryEmail"], message: "delivery email must belong to the matcher domain" });
-  if (value.contentSource.kind === "kv" && value.contentSource.action !== "tinycloud.kv/get") ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["contentSource"], message: "source action mismatch" });
-  if (value.contentSource.kind === "sql" && value.contentSource.action !== "tinycloud.sql/read") ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["contentSource"], message: "source action mismatch" });
+  if (!value3.encrypted && value3.recipientMatcher.kind !== "policyDigest") ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["recipientMatcher"], message: "safe plaintext must carry only a matcher digest" });
+  if (!value3.encrypted && value3.authorizationTarget.kind !== "policy") ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["encrypted"], message: "unencrypted content requires a policy target" });
+  if (!value3.encrypted && value3.content !== void 0) ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["content"], message: "policy-only plaintext cannot carry content" });
+  if (value3.encrypted && (value3.metadata.mediaType === void 0 || value3.metadata.filename === void 0 || value3.metadata.byteLength === void 0)) ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["metadata"], message: "encrypted shares must describe their content" });
+  if (!value3.encrypted && Object.keys(value3.metadata).length !== 0) ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["metadata"], message: "policy-only plaintext cannot describe content" });
+  if (!value3.encrypted && value3.metadata.encoding !== void 0) ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["metadata", "encoding"], message: "policy-only plaintext cannot carry content encoding" });
+  if (value3.metadata.artifact === "html" && (!value3.encrypted || value3.resource.kind !== "prefix" || !value3.actions.includes("read") || !value3.actions.includes("list"))) ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["metadata", "artifact"], message: "html artifacts require an encrypted readable prefix" });
+  if (!value3.encrypted && (value3.display.senderName !== void 0 || value3.display.filename !== void 0 || value3.display.recipientHint !== void 0)) ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["display"], message: "policy-only plaintext cannot carry display metadata" });
+  if (!value3.encrypted && value3.deliveryEmail !== void 0) ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["deliveryEmail"], message: "policy-only plaintext cannot carry delivery metadata" });
+  if (value3.recipientMatcher.kind === "exactEmail" && value3.deliveryEmail !== void 0 && value3.deliveryEmail !== value3.recipientMatcher.value) ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["deliveryEmail"], message: "delivery email must match the exact matcher" });
+  if (value3.recipientMatcher.kind === "emailDomain" && value3.deliveryEmail !== void 0 && value3.deliveryEmail.toLowerCase().endsWith(`@${value3.recipientMatcher.value}`) === false) ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["deliveryEmail"], message: "delivery email must belong to the matcher domain" });
+  if (value3.contentSource.kind === "kv" && value3.contentSource.action !== "tinycloud.kv/get") ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["contentSource"], message: "source action mismatch" });
+  if (value3.contentSource.kind === "sql" && value3.contentSource.action !== "tinycloud.sql/read") ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["contentSource"], message: "source action mismatch" });
 }
 var unsignedShareEnvelopeV2Schema2 = unsignedShareEnvelopeV2BaseSchema2.superRefine(validateV2Invariants2);
 var shareEnvelopeV2Schema2 = unsignedShareEnvelopeV2BaseSchema2.extend({ signature: signatureSchema2 }).strict().superRefine(validateV2Invariants2);
-var unifiedResourceSchema2 = external_exports2.string().refine((value) => {
-  const marker = value.indexOf("/kv/");
+var unifiedResourceSchema2 = external_exports2.string().refine((value3) => {
+  const marker = value3.indexOf("/kv/");
   if (marker < 1) return false;
-  const space = value.slice(0, marker);
+  const space = value3.slice(0, marker);
   const legacy = space.startsWith("tinycloud://");
   if (legacy ? /[:/?#%]/.test(space.slice("tinycloud://".length)) : !space.startsWith("tinycloud:") || /[/?#%]/.test(space)) return false;
-  const path = value.slice(marker + 4);
+  const path = value3.slice(marker + 4);
   return !path.startsWith("/") && !path.endsWith("/") && !path.includes("//") && path.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
 }, { message: "expected canonical TinyCloud KV resource" });
-var unifiedEncryptionNetworkSchema2 = external_exports2.string().refine((value) => {
-  if (!value.startsWith("urn:tinycloud:encryption:")) return false;
-  const rest = value.slice("urn:tinycloud:encryption:".length);
+var unifiedEncryptionNetworkSchema2 = external_exports2.string().refine((value3) => {
+  if (!value3.startsWith("urn:tinycloud:encryption:")) return false;
+  const rest = value3.slice("urn:tinycloud:encryption:".length);
   const separator = rest.lastIndexOf(":");
   const owner = separator < 0 ? "" : rest.slice(0, separator);
   const network = separator < 0 ? "" : rest.slice(separator + 1);
   return owner.startsWith("did:") && owner.length > 4 && network.length > 0 && !/[:/%?#\s]/.test(network);
 }, { message: "expected canonical TinyCloud encryption network" });
-var unifiedEncryptionResourceSchema2 = external_exports2.string().refine((value) => {
+var unifiedEncryptionResourceSchema2 = external_exports2.string().refine((value3) => {
   const prefix = "urn:tinycloud:encryption:";
-  if (!value.startsWith(prefix)) return false;
-  const match = /^(did:.+):([^/:?#\s]+)(?:\/(.+))?$/.exec(value.slice(prefix.length));
+  if (!value3.startsWith(prefix)) return false;
+  const match = /^(did:.+):([^/:?#\s]+)(?:\/(.+))?$/.exec(value3.slice(prefix.length));
   if (match === null) return false;
   const path = match[3];
   return path === void 0 || path.split("/").every(
@@ -23423,8 +23423,8 @@ var unifiedEncryptionResourceSchema2 = external_exports2.string().refine((value)
   );
 }, { message: "expected a canonical TinyCloud encryption resource" });
 var unifiedEncryptionKeyPathSchema2 = external_exports2.string().regex(/^share\/[^/]+$/).refine(
-  (value) => {
-    const segment = value.slice("share/".length);
+  (value3) => {
+    const segment = value3.slice("share/".length);
     return segment !== "." && segment !== ".." && !/[\\:%?#\s]/.test(segment);
   },
   { message: "expected an exact share key path" }
@@ -23552,37 +23552,37 @@ var unsignedShareEnvelopeV3BaseSchema2 = external_exports2.object({
    */
   artifactPin: artifactPinSchema2.optional()
 }).strict();
-function validateV3Invariants2(value, ctx) {
-  const actions = [...value.actions];
+function validateV3Invariants2(value3, ctx) {
+  const actions = [...value3.actions];
   if (new Set(actions).size !== actions.length || actions.some((action, index) => action !== ["read", "list", "edit"].filter((candidate) => actions.includes(candidate))[index])) {
     ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["actions"], message: "actions must be unique and canonically ordered" });
   }
-  if (value.policyRoot.role !== "policy-authority" || value.enforcementRoot.role !== "policy-enforcement") {
+  if (value3.policyRoot.role !== "policy-authority" || value3.enforcementRoot.role !== "policy-enforcement") {
     ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["policyRoot", "role"], message: "root roles are fixed" });
   }
-  if (value.policyCid.length === 0 || value.policyCid === value.policyRoot.cid || value.policyCid === value.enforcementRoot.cid) {
+  if (value3.policyCid.length === 0 || value3.policyCid === value3.policyRoot.cid || value3.policyCid === value3.enforcementRoot.cid) {
     ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["policyCid"], message: "policy CID must be distinct from both roots" });
   }
-  if (value.contentSource.encryptionNetwork !== value.encryptionNetwork) {
+  if (value3.contentSource.encryptionNetwork !== value3.encryptionNetwork) {
     ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["encryptionNetwork"], message: "encryption network is not bound to the source" });
   }
-  if (value.attestedEnforcerBinding.nodeAudience !== value.target.nodeAudience || value.attestedEnforcerBinding.signature.signerDid !== value.attestedEnforcerBinding.nodeAudience || Date.parse(value.attestedEnforcerBinding.expiresAt) < Date.parse(value.expiry)) {
+  if (value3.attestedEnforcerBinding.nodeAudience !== value3.target.nodeAudience || value3.attestedEnforcerBinding.signature.signerDid !== value3.attestedEnforcerBinding.nodeAudience || Date.parse(value3.attestedEnforcerBinding.expiresAt) < Date.parse(value3.expiry)) {
     ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["attestedEnforcerBinding"], message: "enforcer binding does not cover the target and share lifetime" });
   }
-  const encryptionKeyPath = value.contentSource.encryptionKeyPath;
-  if (encryptionKeyPath !== void 0 && encryptionKeyPath !== `share/${value.contentSource.shareId}`) {
+  const encryptionKeyPath = value3.contentSource.encryptionKeyPath;
+  if (encryptionKeyPath !== void 0 && encryptionKeyPath !== `share/${value3.contentSource.shareId}`) {
     ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["contentSource", "encryptionKeyPath"], message: "share key path must name this share" });
   }
-  if (value.policy.contentSource.shareId !== value.contentSource.shareId || value.policy.contentSource.kvResource !== value.contentSource.kvResource || value.policy.contentSource.selector !== value.contentSource.selector || value.policy.contentSource.encryptionNetwork !== value.encryptionNetwork || value.policy.contentSource.encryptionKeyPath !== encryptionKeyPath || value.policy.contentSource.encryptedSymmetricKeyDigestHex !== value.contentSource.encryptedSymmetricKeyDigestHex || value.policy.contentSource.keyVersion !== value.contentSource.keyVersion || value.policy.contentSource.mode !== value.contentSource.mode || value.policy.contentSource.initialCiphertextDigestHex !== value.contentSource.initialCiphertextDigestHex) {
+  if (value3.policy.contentSource.shareId !== value3.contentSource.shareId || value3.policy.contentSource.kvResource !== value3.contentSource.kvResource || value3.policy.contentSource.selector !== value3.contentSource.selector || value3.policy.contentSource.encryptionNetwork !== value3.encryptionNetwork || value3.policy.contentSource.encryptionKeyPath !== encryptionKeyPath || value3.policy.contentSource.encryptedSymmetricKeyDigestHex !== value3.contentSource.encryptedSymmetricKeyDigestHex || value3.policy.contentSource.keyVersion !== value3.contentSource.keyVersion || value3.policy.contentSource.mode !== value3.contentSource.mode || value3.policy.contentSource.initialCiphertextDigestHex !== value3.contentSource.initialCiphertextDigestHex) {
     ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["contentSource"], message: "content source is not bound to policy" });
   }
-  if (value.policy.signature.suite !== "Ed25519" || value.policy.signature.signerDid !== value.policy.ownerDid) {
+  if (value3.policy.signature.suite !== "Ed25519" || value3.policy.signature.signerDid !== value3.policy.ownerDid) {
     ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["policy", "signature"], message: "policy must be signed by its owner" });
   }
-  const kvCapabilities = value.policy.capabilityCeiling.filter((capability) => capability.kind === "kv");
-  const expectedEncryptionResource = encryptionKeyPath === void 0 ? value.encryptionNetwork : `${value.encryptionNetwork}/${encryptionKeyPath}`;
-  const decryptCapabilities = value.policy.capabilityCeiling.filter((capability) => capability.kind === "encryption" && capability.resource === expectedEncryptionResource && capability.action === "tinycloud.encryption/decrypt");
-  if (value.policy.capabilityCeiling.length !== 2 || kvCapabilities.length !== 1 || decryptCapabilities.length !== 1 || kvCapabilities[0]?.resource !== value.contentSource.kvResource || kvCapabilities[0]?.selector !== value.contentSource.selector) {
+  const kvCapabilities = value3.policy.capabilityCeiling.filter((capability) => capability.kind === "kv");
+  const expectedEncryptionResource = encryptionKeyPath === void 0 ? value3.encryptionNetwork : `${value3.encryptionNetwork}/${encryptionKeyPath}`;
+  const decryptCapabilities = value3.policy.capabilityCeiling.filter((capability) => capability.kind === "encryption" && capability.resource === expectedEncryptionResource && capability.action === "tinycloud.encryption/decrypt");
+  if (value3.policy.capabilityCeiling.length !== 2 || kvCapabilities.length !== 1 || decryptCapabilities.length !== 1 || kvCapabilities[0]?.resource !== value3.contentSource.kvResource || kvCapabilities[0]?.selector !== value3.contentSource.selector) {
     ctx.addIssue({ code: external_exports2.ZodIssueCode.custom, path: ["policy", "capabilityCeiling"], message: "policy ceiling must contain the exact decrypt resource" });
   }
 }
@@ -23591,13 +23591,13 @@ var shareEnvelopeV3Schema2 = unsignedShareEnvelopeV3BaseSchema2.extend({ signatu
 var ENVELOPE_AAD_LABEL3 = "tinycloud-share-envelope-v1";
 var AAD3 = utf8Bytes3(ENVELOPE_AAD_LABEL3);
 var LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
-function isCanonicalEmailDomain(value) {
-  if (value.length === 0 || value.length > 253) return false;
-  const labels = value.split(".");
+function isCanonicalEmailDomain(value3) {
+  if (value3.length === 0 || value3.length > 253) return false;
+  const labels = value3.split(".");
   return labels.length >= 2 && labels.every((label) => LABEL.test(label)) && !/^[0-9]+$/.test(labels.at(-1));
 }
-function canonicalMailbox(value) {
-  const email = value.trim().toLowerCase();
+function canonicalMailbox(value3) {
+  const email = value3.trim().toLowerCase();
   const at = email.indexOf("@");
   if (at <= 0 || at !== email.lastIndexOf("@")) return void 0;
   const local = email.slice(0, at);
@@ -23652,11 +23652,11 @@ var __export3 = (target, all) => {
     __defProp3(target, name, { get: all[name], enumerable: true });
 };
 var UNSAFE_FILENAME_CODE_POINT2 = /[\p{Cc}\p{Cf}\p{Cs}\u2028\u2029]/u;
-function hasUnsafeFilenameCodePoint2(value) {
-  return UNSAFE_FILENAME_CODE_POINT2.test(value);
+function hasUnsafeFilenameCodePoint2(value3) {
+  return UNSAFE_FILENAME_CODE_POINT2.test(value3);
 }
-function canonicalShareFilename2(value) {
-  const canonical = value.normalize("NFC");
+function canonicalShareFilename2(value3) {
+  const canonical = value3.normalize("NFC");
   if (canonical.length === 0 || canonical === "." || canonical === ".." || canonical.includes("/") || canonical.includes("\\") || hasUnsafeFilenameCodePoint2(canonical)) {
     throw new TypeError("share filename is unsafe");
   }
@@ -23824,11 +23824,11 @@ var util3;
     return array.map((val) => typeof val === "string" ? `'${val}'` : val).join(separator);
   }
   util22.joinValues = joinValues;
-  util22.jsonStringifyReplacer = (_, value) => {
-    if (typeof value === "bigint") {
-      return value.toString();
+  util22.jsonStringifyReplacer = (_, value3) => {
+    if (typeof value3 === "bigint") {
+      return value3.toString();
     }
-    return value;
+    return value3;
   };
 })(util3 || (util3 = {}));
 var objectUtil3;
@@ -23984,9 +23984,9 @@ var ZodError3 = class _ZodError2 extends Error {
     processError(this);
     return fieldErrors;
   }
-  static assert(value) {
-    if (!(value instanceof _ZodError2)) {
-      throw new Error(`Not a ZodError: ${value}`);
+  static assert(value3) {
+    if (!(value3 instanceof _ZodError2)) {
+      throw new Error(`Not a ZodError: ${value3}`);
     }
   }
   toString() {
@@ -24200,10 +24200,10 @@ var ParseStatus3 = class _ParseStatus2 {
     const syncPairs = [];
     for (const pair of pairs) {
       const key = await pair.key;
-      const value = await pair.value;
+      const value3 = await pair.value;
       syncPairs.push({
         key,
-        value
+        value: value3
       });
     }
     return _ParseStatus2.mergeObjectSync(status, syncPairs);
@@ -24211,17 +24211,17 @@ var ParseStatus3 = class _ParseStatus2 {
   static mergeObjectSync(status, pairs) {
     const finalObject = {};
     for (const pair of pairs) {
-      const { key, value } = pair;
+      const { key, value: value3 } = pair;
       if (key.status === "aborted")
         return INVALID3;
-      if (value.status === "aborted")
+      if (value3.status === "aborted")
         return INVALID3;
       if (key.status === "dirty")
         status.dirty();
-      if (value.status === "dirty")
+      if (value3.status === "dirty")
         status.dirty();
-      if (key.value !== "__proto__" && (typeof value.value !== "undefined" || pair.alwaysSet)) {
-        finalObject[key.value] = value.value;
+      if (key.value !== "__proto__" && (typeof value3.value !== "undefined" || pair.alwaysSet)) {
+        finalObject[key.value] = value3.value;
       }
     }
     return { status: status.value, value: finalObject };
@@ -24230,8 +24230,8 @@ var ParseStatus3 = class _ParseStatus2 {
 var INVALID3 = Object.freeze({
   status: "aborted"
 });
-var DIRTY3 = (value) => ({ status: "dirty", value });
-var OK3 = (value) => ({ status: "valid", value });
+var DIRTY3 = (value3) => ({ status: "dirty", value: value3 });
+var OK3 = (value3) => ({ status: "valid", value: value3 });
 var isAborted3 = (x) => x.status === "aborted";
 var isDirty3 = (x) => x.status === "dirty";
 var isValid3 = (x) => x.status === "valid";
@@ -24242,10 +24242,10 @@ var errorUtil3;
   errorUtil22.toString = (message) => typeof message === "string" ? message : message?.message;
 })(errorUtil3 || (errorUtil3 = {}));
 var ParseInputLazyPath3 = class {
-  constructor(parent, value, path, key) {
+  constructor(parent, value3, path, key) {
     this._cachedPath = [];
     this.parent = parent;
-    this.data = value;
+    this.data = value3;
     this._path = path;
     this._key = key;
   }
@@ -25067,25 +25067,25 @@ var ZodString3 = class _ZodString2 extends ZodType3 {
       ...errorUtil3.errToObj(message)
     });
   }
-  includes(value, options) {
+  includes(value3, options) {
     return this._addCheck({
       kind: "includes",
-      value,
+      value: value3,
       position: options?.position,
       ...errorUtil3.errToObj(options?.message)
     });
   }
-  startsWith(value, message) {
+  startsWith(value3, message) {
     return this._addCheck({
       kind: "startsWith",
-      value,
+      value: value3,
       ...errorUtil3.errToObj(message)
     });
   }
-  endsWith(value, message) {
+  endsWith(value3, message) {
     return this._addCheck({
       kind: "endsWith",
-      value,
+      value: value3,
       ...errorUtil3.errToObj(message)
     });
   }
@@ -25307,26 +25307,26 @@ var ZodNumber3 = class _ZodNumber2 extends ZodType3 {
     }
     return { status: status.value, value: input.data };
   }
-  gte(value, message) {
-    return this.setLimit("min", value, true, errorUtil3.toString(message));
+  gte(value3, message) {
+    return this.setLimit("min", value3, true, errorUtil3.toString(message));
   }
-  gt(value, message) {
-    return this.setLimit("min", value, false, errorUtil3.toString(message));
+  gt(value3, message) {
+    return this.setLimit("min", value3, false, errorUtil3.toString(message));
   }
-  lte(value, message) {
-    return this.setLimit("max", value, true, errorUtil3.toString(message));
+  lte(value3, message) {
+    return this.setLimit("max", value3, true, errorUtil3.toString(message));
   }
-  lt(value, message) {
-    return this.setLimit("max", value, false, errorUtil3.toString(message));
+  lt(value3, message) {
+    return this.setLimit("max", value3, false, errorUtil3.toString(message));
   }
-  setLimit(kind, value, inclusive, message) {
+  setLimit(kind, value3, inclusive, message) {
     return new _ZodNumber2({
       ...this._def,
       checks: [
         ...this._def.checks,
         {
           kind,
-          value,
+          value: value3,
           inclusive,
           message: errorUtil3.toString(message)
         }
@@ -25377,10 +25377,10 @@ var ZodNumber3 = class _ZodNumber2 extends ZodType3 {
       message: errorUtil3.toString(message)
     });
   }
-  multipleOf(value, message) {
+  multipleOf(value3, message) {
     return this._addCheck({
       kind: "multipleOf",
-      value,
+      value: value3,
       message: errorUtil3.toString(message)
     });
   }
@@ -25523,26 +25523,26 @@ var ZodBigInt3 = class _ZodBigInt2 extends ZodType3 {
     });
     return INVALID3;
   }
-  gte(value, message) {
-    return this.setLimit("min", value, true, errorUtil3.toString(message));
+  gte(value3, message) {
+    return this.setLimit("min", value3, true, errorUtil3.toString(message));
   }
-  gt(value, message) {
-    return this.setLimit("min", value, false, errorUtil3.toString(message));
+  gt(value3, message) {
+    return this.setLimit("min", value3, false, errorUtil3.toString(message));
   }
-  lte(value, message) {
-    return this.setLimit("max", value, true, errorUtil3.toString(message));
+  lte(value3, message) {
+    return this.setLimit("max", value3, true, errorUtil3.toString(message));
   }
-  lt(value, message) {
-    return this.setLimit("max", value, false, errorUtil3.toString(message));
+  lt(value3, message) {
+    return this.setLimit("max", value3, false, errorUtil3.toString(message));
   }
-  setLimit(kind, value, inclusive, message) {
+  setLimit(kind, value3, inclusive, message) {
     return new _ZodBigInt2({
       ...this._def,
       checks: [
         ...this._def.checks,
         {
           kind,
-          value,
+          value: value3,
           inclusive,
           message: errorUtil3.toString(message)
         }
@@ -25587,10 +25587,10 @@ var ZodBigInt3 = class _ZodBigInt2 extends ZodType3 {
       message: errorUtil3.toString(message)
     });
   }
-  multipleOf(value, message) {
+  multipleOf(value3, message) {
     return this._addCheck({
       kind: "multipleOf",
-      value,
+      value: value3,
       message: errorUtil3.toString(message)
     });
   }
@@ -26054,10 +26054,10 @@ var ZodObject3 = class _ZodObject2 extends ZodType3 {
     const pairs = [];
     for (const key of shapeKeys) {
       const keyValidator = shape[key];
-      const value = ctx.data[key];
+      const value3 = ctx.data[key];
       pairs.push({
         key: { status: "valid", value: key },
-        value: keyValidator._parse(new ParseInputLazyPath3(ctx, value, ctx.path, key)),
+        value: keyValidator._parse(new ParseInputLazyPath3(ctx, value3, ctx.path, key)),
         alwaysSet: key in ctx.data
       });
     }
@@ -26085,11 +26085,11 @@ var ZodObject3 = class _ZodObject2 extends ZodType3 {
     } else {
       const catchall = this._def.catchall;
       for (const key of extraKeys) {
-        const value = ctx.data[key];
+        const value3 = ctx.data[key];
         pairs.push({
           key: { status: "valid", value: key },
           value: catchall._parse(
-            new ParseInputLazyPath3(ctx, value, ctx.path, key)
+            new ParseInputLazyPath3(ctx, value3, ctx.path, key)
             //, ctx.child(key), value, getParsedType(value)
           ),
           alwaysSet: key in ctx.data
@@ -26101,10 +26101,10 @@ var ZodObject3 = class _ZodObject2 extends ZodType3 {
         const syncPairs = [];
         for (const pair of pairs) {
           const key = await pair.key;
-          const value = await pair.value;
+          const value3 = await pair.value;
           syncPairs.push({
             key,
-            value,
+            value: value3,
             alwaysSet: pair.alwaysSet
           });
         }
@@ -26535,11 +26535,11 @@ var ZodDiscriminatedUnion3 = class _ZodDiscriminatedUnion2 extends ZodType3 {
       if (!discriminatorValues.length) {
         throw new Error(`A discriminator value for key \`${discriminator}\` could not be extracted from all schema options`);
       }
-      for (const value of discriminatorValues) {
-        if (optionsMap.has(value)) {
-          throw new Error(`Discriminator property ${String(discriminator)} has duplicate value ${String(value)}`);
+      for (const value3 of discriminatorValues) {
+        if (optionsMap.has(value3)) {
+          throw new Error(`Discriminator property ${String(discriminator)} has duplicate value ${String(value3)}`);
         }
-        optionsMap.set(value, type);
+        optionsMap.set(value3, type);
       }
     }
     return new _ZodDiscriminatedUnion2({
@@ -26781,10 +26781,10 @@ var ZodMap3 = class extends ZodType3 {
     }
     const keyType = this._def.keyType;
     const valueType = this._def.valueType;
-    const pairs = [...ctx.data.entries()].map(([key, value], index) => {
+    const pairs = [...ctx.data.entries()].map(([key, value3], index) => {
       return {
         key: keyType._parse(new ParseInputLazyPath3(ctx, key, ctx.path, [index, "key"])),
-        value: valueType._parse(new ParseInputLazyPath3(ctx, value, ctx.path, [index, "value"]))
+        value: valueType._parse(new ParseInputLazyPath3(ctx, value3, ctx.path, [index, "value"]))
       };
     });
     if (ctx.common.async) {
@@ -26792,14 +26792,14 @@ var ZodMap3 = class extends ZodType3 {
       return Promise.resolve().then(async () => {
         for (const pair of pairs) {
           const key = await pair.key;
-          const value = await pair.value;
-          if (key.status === "aborted" || value.status === "aborted") {
+          const value3 = await pair.value;
+          if (key.status === "aborted" || value3.status === "aborted") {
             return INVALID3;
           }
-          if (key.status === "dirty" || value.status === "dirty") {
+          if (key.status === "dirty" || value3.status === "dirty") {
             status.dirty();
           }
-          finalMap.set(key.value, value.value);
+          finalMap.set(key.value, value3.value);
         }
         return { status: status.value, value: finalMap };
       });
@@ -26807,14 +26807,14 @@ var ZodMap3 = class extends ZodType3 {
       const finalMap = /* @__PURE__ */ new Map();
       for (const pair of pairs) {
         const key = pair.key;
-        const value = pair.value;
-        if (key.status === "aborted" || value.status === "aborted") {
+        const value3 = pair.value;
+        if (key.status === "aborted" || value3.status === "aborted") {
           return INVALID3;
         }
-        if (key.status === "dirty" || value.status === "dirty") {
+        if (key.status === "dirty" || value3.status === "dirty") {
           status.dirty();
         }
-        finalMap.set(key.value, value.value);
+        finalMap.set(key.value, value3.value);
       }
       return { status: status.value, value: finalMap };
     }
@@ -27052,9 +27052,9 @@ var ZodLiteral3 = class extends ZodType3 {
     return this._def.value;
   }
 };
-ZodLiteral3.create = (value, params) => {
+ZodLiteral3.create = (value3, params) => {
   return new ZodLiteral3({
-    value,
+    value: value3,
     typeName: ZodFirstPartyTypeKind3.ZodLiteral,
     ...processCreateParams3(params)
   });
@@ -27962,11 +27962,11 @@ function decode10(string, alphabetIdx, bitsPerChar, name) {
   let buffer = 0;
   let written = 0;
   for (let i = 0; i < end; ++i) {
-    const value = alphabetIdx[string[i]];
-    if (value === void 0) {
+    const value3 = alphabetIdx[string[i]];
+    if (value3 === void 0) {
       throw new SyntaxError(`Non-${name} character`);
     }
-    buffer = buffer << bitsPerChar | value;
+    buffer = buffer << bitsPerChar | value3;
     bits += bitsPerChar;
     if (bits >= 8) {
       bits -= 8;
@@ -28143,8 +28143,8 @@ var N64 = Math.pow(2, 42);
 var N74 = Math.pow(2, 49);
 var N84 = Math.pow(2, 56);
 var N94 = Math.pow(2, 63);
-var length4 = function(value) {
-  return value < N14 ? 1 : value < N24 ? 2 : value < N34 ? 3 : value < N44 ? 4 : value < N54 ? 5 : value < N64 ? 6 : value < N74 ? 7 : value < N84 ? 8 : value < N94 ? 9 : 10;
+var length4 = function(value3) {
+  return value3 < N14 ? 1 : value3 < N24 ? 2 : value3 < N34 ? 3 : value3 < N44 ? 4 : value3 < N54 ? 5 : value3 < N64 ? 6 : value3 < N74 ? 7 : value3 < N84 ? 8 : value3 < N94 ? 9 : 10;
 };
 var varint4 = {
   encode: encode_14,
@@ -28331,14 +28331,14 @@ var CID4 = class _CID3 {
     if (input == null) {
       return null;
     }
-    const value = input;
-    if (value instanceof _CID3) {
-      return value;
-    } else if (value["/"] != null && value["/"] === value.bytes || value.asCID === value) {
-      const { version, code: code22, multihash, bytes: bytes3 } = value;
+    const value3 = input;
+    if (value3 instanceof _CID3) {
+      return value3;
+    } else if (value3["/"] != null && value3["/"] === value3.bytes || value3.asCID === value3) {
+      const { version, code: code22, multihash, bytes: bytes3 } = value3;
       return new _CID3(version, code22, multihash, bytes3 ?? encodeCID4(version, code22, multihash.bytes));
-    } else if (value[cidSymbol4] === true) {
-      const { version, multihash, code: code22 } = value;
+    } else if (value3[cidSymbol4] === true) {
+      const { version, multihash, code: code22 } = value3;
       const digest3 = decode43(multihash);
       return _CID3.create(version, code22, digest3);
     } else {
@@ -28607,24 +28607,24 @@ function ed25519PublicKeyFromDidKey2(did) {
   }
   return prefixed.slice(ED25519_MULTICODEC_PREFIX4.length);
 }
-function decodeBase64UrlOrNull3(value) {
+function decodeBase64UrlOrNull3(value3) {
   try {
-    return fromBase64Url4(value);
+    return fromBase64Url4(value3);
   } catch {
     return null;
   }
 }
-var base64UrlString3 = () => external_exports3.string().refine((value) => decodeBase64UrlOrNull3(value) !== null, {
+var base64UrlString3 = () => external_exports3.string().refine((value3) => decodeBase64UrlOrNull3(value3) !== null, {
   message: "expected strictly-decodable unpadded base64url"
 });
-function isCanonicalHttpsOrigin3(value) {
+function isCanonicalHttpsOrigin3(value3) {
   let url;
   try {
-    url = new URL(value);
+    url = new URL(value3);
   } catch {
     return false;
   }
-  return url.protocol === "https:" && url.origin === value;
+  return url.protocol === "https:" && url.origin === value3;
 }
 var sessionJwkCommonFields3 = {
   alg: external_exports3.string().min(1).optional(),
@@ -28671,14 +28671,14 @@ var authorizationTargetSchema3 = external_exports3.discriminatedUnion("kind", [
   bearerKeyTargetSchema3,
   recipientDidTargetSchema3
 ]);
-function isCanonicalResourcePath3(value) {
-  if (value.length === 0) return false;
-  if (/[\u0000-\u001f\u007f\\]/.test(value)) return false;
-  if (/%2f|%5c|%2e/i.test(value)) return false;
-  return value.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
+function isCanonicalResourcePath3(value3) {
+  if (value3.length === 0) return false;
+  if (/[\u0000-\u001f\u007f\\]/.test(value3)) return false;
+  if (/%2f|%5c|%2e/i.test(value3)) return false;
+  return value3.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
 }
-function isCanonicalPathSegment3(value) {
-  return isCanonicalResourcePath3(value) && !value.includes("/");
+function isCanonicalPathSegment3(value3) {
+  return isCanonicalResourcePath3(value3) && !value3.includes("/");
 }
 var resourceSelectorSchema3 = external_exports3.object({
   kind: external_exports3.union([external_exports3.literal("exact"), external_exports3.literal("prefix")]),
@@ -28717,7 +28717,7 @@ var contentPointerSchema3 = external_exports3.object({
   cid: external_exports3.string().refine(isCanonicalRawCid4, {
     message: "expected a canonical CIDv1 raw sha2-256 base32 CID"
   }),
-  key: external_exports3.string().refine((value) => decodeBase64UrlOrNull3(value)?.length === 32, {
+  key: external_exports3.string().refine((value3) => decodeBase64UrlOrNull3(value3)?.length === 32, {
     message: "expected base64url decoding to exactly 32 bytes"
   })
 }).strict();
@@ -28726,7 +28726,7 @@ var signatureSchema3 = external_exports3.object({
   signerDid: external_exports3.string().regex(/^did:key:z[1-9A-HJ-NP-Za-km-z]+$/, "expected a did:key"),
   algorithm: external_exports3.literal("Ed25519"),
   /** base64url-encoded ed25519 signature over the JCS bytes of all other fields. */
-  value: external_exports3.string().refine((value) => decodeBase64UrlOrNull3(value)?.length === 64, {
+  value: external_exports3.string().refine((value3) => decodeBase64UrlOrNull3(value3)?.length === 64, {
     message: "expected base64url decoding to exactly 64 bytes"
   })
 }).strict();
@@ -28821,47 +28821,47 @@ var unsignedShareEnvelopeV2BaseSchema3 = external_exports3.object({
   metadata: contentMetadataSchema3,
   ownerAuthority: ownerAuthoritySchema3.optional()
 }).strict();
-function validateV2Invariants3(value, ctx) {
-  const actions = [...value.actions];
+function validateV2Invariants3(value3, ctx) {
+  const actions = [...value3.actions];
   if (new Set(actions).size !== actions.length) ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["actions"], message: "actions must be unique" });
   if (actions.some((action, index) => action !== ["read", "list", "edit"].filter((candidate) => actions.includes(candidate))[index])) ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["actions"], message: "actions must be canonically ordered" });
-  if (!value.encrypted && value.recipientMatcher.kind !== "policyDigest") ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["recipientMatcher"], message: "safe plaintext must carry only a matcher digest" });
-  if (!value.encrypted && value.authorizationTarget.kind !== "policy") ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["encrypted"], message: "unencrypted content requires a policy target" });
-  if (!value.encrypted && value.content !== void 0) ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["content"], message: "policy-only plaintext cannot carry content" });
-  if (value.encrypted && (value.metadata.mediaType === void 0 || value.metadata.filename === void 0 || value.metadata.byteLength === void 0)) ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["metadata"], message: "encrypted shares must describe their content" });
-  if (!value.encrypted && Object.keys(value.metadata).length !== 0) ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["metadata"], message: "policy-only plaintext cannot describe content" });
-  if (!value.encrypted && value.metadata.encoding !== void 0) ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["metadata", "encoding"], message: "policy-only plaintext cannot carry content encoding" });
-  if (value.metadata.artifact === "html" && (!value.encrypted || value.resource.kind !== "prefix" || !value.actions.includes("read") || !value.actions.includes("list"))) ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["metadata", "artifact"], message: "html artifacts require an encrypted readable prefix" });
-  if (!value.encrypted && (value.display.senderName !== void 0 || value.display.filename !== void 0 || value.display.recipientHint !== void 0)) ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["display"], message: "policy-only plaintext cannot carry display metadata" });
-  if (!value.encrypted && value.deliveryEmail !== void 0) ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["deliveryEmail"], message: "policy-only plaintext cannot carry delivery metadata" });
-  if (value.recipientMatcher.kind === "exactEmail" && value.deliveryEmail !== void 0 && value.deliveryEmail !== value.recipientMatcher.value) ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["deliveryEmail"], message: "delivery email must match the exact matcher" });
-  if (value.recipientMatcher.kind === "emailDomain" && value.deliveryEmail !== void 0 && value.deliveryEmail.toLowerCase().endsWith(`@${value.recipientMatcher.value}`) === false) ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["deliveryEmail"], message: "delivery email must belong to the matcher domain" });
-  if (value.contentSource.kind === "kv" && value.contentSource.action !== "tinycloud.kv/get") ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["contentSource"], message: "source action mismatch" });
-  if (value.contentSource.kind === "sql" && value.contentSource.action !== "tinycloud.sql/read") ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["contentSource"], message: "source action mismatch" });
+  if (!value3.encrypted && value3.recipientMatcher.kind !== "policyDigest") ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["recipientMatcher"], message: "safe plaintext must carry only a matcher digest" });
+  if (!value3.encrypted && value3.authorizationTarget.kind !== "policy") ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["encrypted"], message: "unencrypted content requires a policy target" });
+  if (!value3.encrypted && value3.content !== void 0) ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["content"], message: "policy-only plaintext cannot carry content" });
+  if (value3.encrypted && (value3.metadata.mediaType === void 0 || value3.metadata.filename === void 0 || value3.metadata.byteLength === void 0)) ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["metadata"], message: "encrypted shares must describe their content" });
+  if (!value3.encrypted && Object.keys(value3.metadata).length !== 0) ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["metadata"], message: "policy-only plaintext cannot describe content" });
+  if (!value3.encrypted && value3.metadata.encoding !== void 0) ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["metadata", "encoding"], message: "policy-only plaintext cannot carry content encoding" });
+  if (value3.metadata.artifact === "html" && (!value3.encrypted || value3.resource.kind !== "prefix" || !value3.actions.includes("read") || !value3.actions.includes("list"))) ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["metadata", "artifact"], message: "html artifacts require an encrypted readable prefix" });
+  if (!value3.encrypted && (value3.display.senderName !== void 0 || value3.display.filename !== void 0 || value3.display.recipientHint !== void 0)) ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["display"], message: "policy-only plaintext cannot carry display metadata" });
+  if (!value3.encrypted && value3.deliveryEmail !== void 0) ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["deliveryEmail"], message: "policy-only plaintext cannot carry delivery metadata" });
+  if (value3.recipientMatcher.kind === "exactEmail" && value3.deliveryEmail !== void 0 && value3.deliveryEmail !== value3.recipientMatcher.value) ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["deliveryEmail"], message: "delivery email must match the exact matcher" });
+  if (value3.recipientMatcher.kind === "emailDomain" && value3.deliveryEmail !== void 0 && value3.deliveryEmail.toLowerCase().endsWith(`@${value3.recipientMatcher.value}`) === false) ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["deliveryEmail"], message: "delivery email must belong to the matcher domain" });
+  if (value3.contentSource.kind === "kv" && value3.contentSource.action !== "tinycloud.kv/get") ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["contentSource"], message: "source action mismatch" });
+  if (value3.contentSource.kind === "sql" && value3.contentSource.action !== "tinycloud.sql/read") ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["contentSource"], message: "source action mismatch" });
 }
 var unsignedShareEnvelopeV2Schema3 = unsignedShareEnvelopeV2BaseSchema3.superRefine(validateV2Invariants3);
 var shareEnvelopeV2Schema3 = unsignedShareEnvelopeV2BaseSchema3.extend({ signature: signatureSchema3 }).strict().superRefine(validateV2Invariants3);
-var unifiedResourceSchema3 = external_exports3.string().refine((value) => {
-  const marker = value.indexOf("/kv/");
+var unifiedResourceSchema3 = external_exports3.string().refine((value3) => {
+  const marker = value3.indexOf("/kv/");
   if (marker < 1) return false;
-  const space = value.slice(0, marker);
+  const space = value3.slice(0, marker);
   const legacy = space.startsWith("tinycloud://");
   if (legacy ? /[:/?#%]/.test(space.slice("tinycloud://".length)) : !space.startsWith("tinycloud:") || /[/?#%]/.test(space)) return false;
-  const path = value.slice(marker + 4);
+  const path = value3.slice(marker + 4);
   return !path.startsWith("/") && !path.endsWith("/") && !path.includes("//") && path.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
 }, { message: "expected canonical TinyCloud KV resource" });
-var unifiedEncryptionNetworkSchema3 = external_exports3.string().refine((value) => {
-  if (!value.startsWith("urn:tinycloud:encryption:")) return false;
-  const rest = value.slice("urn:tinycloud:encryption:".length);
+var unifiedEncryptionNetworkSchema3 = external_exports3.string().refine((value3) => {
+  if (!value3.startsWith("urn:tinycloud:encryption:")) return false;
+  const rest = value3.slice("urn:tinycloud:encryption:".length);
   const separator = rest.lastIndexOf(":");
   const owner = separator < 0 ? "" : rest.slice(0, separator);
   const network = separator < 0 ? "" : rest.slice(separator + 1);
   return owner.startsWith("did:") && owner.length > 4 && network.length > 0 && !/[:/%?#\s]/.test(network);
 }, { message: "expected canonical TinyCloud encryption network" });
-var unifiedEncryptionResourceSchema3 = external_exports3.string().refine((value) => {
+var unifiedEncryptionResourceSchema3 = external_exports3.string().refine((value3) => {
   const prefix = "urn:tinycloud:encryption:";
-  if (!value.startsWith(prefix)) return false;
-  const match = /^(did:.+):([^/:?#\s]+)(?:\/(.+))?$/.exec(value.slice(prefix.length));
+  if (!value3.startsWith(prefix)) return false;
+  const match = /^(did:.+):([^/:?#\s]+)(?:\/(.+))?$/.exec(value3.slice(prefix.length));
   if (match === null) return false;
   const path = match[3];
   return path === void 0 || path.split("/").every(
@@ -28869,8 +28869,8 @@ var unifiedEncryptionResourceSchema3 = external_exports3.string().refine((value)
   );
 }, { message: "expected a canonical TinyCloud encryption resource" });
 var unifiedEncryptionKeyPathSchema3 = external_exports3.string().regex(/^share\/[^/]+$/).refine(
-  (value) => {
-    const segment = value.slice("share/".length);
+  (value3) => {
+    const segment = value3.slice("share/".length);
     return segment !== "." && segment !== ".." && !/[\\:%?#\s]/.test(segment);
   },
   { message: "expected an exact share key path" }
@@ -28998,37 +28998,37 @@ var unsignedShareEnvelopeV3BaseSchema3 = external_exports3.object({
    */
   artifactPin: artifactPinSchema3.optional()
 }).strict();
-function validateV3Invariants3(value, ctx) {
-  const actions = [...value.actions];
+function validateV3Invariants3(value3, ctx) {
+  const actions = [...value3.actions];
   if (new Set(actions).size !== actions.length || actions.some((action, index) => action !== ["read", "list", "edit"].filter((candidate) => actions.includes(candidate))[index])) {
     ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["actions"], message: "actions must be unique and canonically ordered" });
   }
-  if (value.policyRoot.role !== "policy-authority" || value.enforcementRoot.role !== "policy-enforcement") {
+  if (value3.policyRoot.role !== "policy-authority" || value3.enforcementRoot.role !== "policy-enforcement") {
     ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["policyRoot", "role"], message: "root roles are fixed" });
   }
-  if (value.policyCid.length === 0 || value.policyCid === value.policyRoot.cid || value.policyCid === value.enforcementRoot.cid) {
+  if (value3.policyCid.length === 0 || value3.policyCid === value3.policyRoot.cid || value3.policyCid === value3.enforcementRoot.cid) {
     ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["policyCid"], message: "policy CID must be distinct from both roots" });
   }
-  if (value.contentSource.encryptionNetwork !== value.encryptionNetwork) {
+  if (value3.contentSource.encryptionNetwork !== value3.encryptionNetwork) {
     ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["encryptionNetwork"], message: "encryption network is not bound to the source" });
   }
-  if (value.attestedEnforcerBinding.nodeAudience !== value.target.nodeAudience || value.attestedEnforcerBinding.signature.signerDid !== value.attestedEnforcerBinding.nodeAudience || Date.parse(value.attestedEnforcerBinding.expiresAt) < Date.parse(value.expiry)) {
+  if (value3.attestedEnforcerBinding.nodeAudience !== value3.target.nodeAudience || value3.attestedEnforcerBinding.signature.signerDid !== value3.attestedEnforcerBinding.nodeAudience || Date.parse(value3.attestedEnforcerBinding.expiresAt) < Date.parse(value3.expiry)) {
     ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["attestedEnforcerBinding"], message: "enforcer binding does not cover the target and share lifetime" });
   }
-  const encryptionKeyPath = value.contentSource.encryptionKeyPath;
-  if (encryptionKeyPath !== void 0 && encryptionKeyPath !== `share/${value.contentSource.shareId}`) {
+  const encryptionKeyPath = value3.contentSource.encryptionKeyPath;
+  if (encryptionKeyPath !== void 0 && encryptionKeyPath !== `share/${value3.contentSource.shareId}`) {
     ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["contentSource", "encryptionKeyPath"], message: "share key path must name this share" });
   }
-  if (value.policy.contentSource.shareId !== value.contentSource.shareId || value.policy.contentSource.kvResource !== value.contentSource.kvResource || value.policy.contentSource.selector !== value.contentSource.selector || value.policy.contentSource.encryptionNetwork !== value.encryptionNetwork || value.policy.contentSource.encryptionKeyPath !== encryptionKeyPath || value.policy.contentSource.encryptedSymmetricKeyDigestHex !== value.contentSource.encryptedSymmetricKeyDigestHex || value.policy.contentSource.keyVersion !== value.contentSource.keyVersion || value.policy.contentSource.mode !== value.contentSource.mode || value.policy.contentSource.initialCiphertextDigestHex !== value.contentSource.initialCiphertextDigestHex) {
+  if (value3.policy.contentSource.shareId !== value3.contentSource.shareId || value3.policy.contentSource.kvResource !== value3.contentSource.kvResource || value3.policy.contentSource.selector !== value3.contentSource.selector || value3.policy.contentSource.encryptionNetwork !== value3.encryptionNetwork || value3.policy.contentSource.encryptionKeyPath !== encryptionKeyPath || value3.policy.contentSource.encryptedSymmetricKeyDigestHex !== value3.contentSource.encryptedSymmetricKeyDigestHex || value3.policy.contentSource.keyVersion !== value3.contentSource.keyVersion || value3.policy.contentSource.mode !== value3.contentSource.mode || value3.policy.contentSource.initialCiphertextDigestHex !== value3.contentSource.initialCiphertextDigestHex) {
     ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["contentSource"], message: "content source is not bound to policy" });
   }
-  if (value.policy.signature.suite !== "Ed25519" || value.policy.signature.signerDid !== value.policy.ownerDid) {
+  if (value3.policy.signature.suite !== "Ed25519" || value3.policy.signature.signerDid !== value3.policy.ownerDid) {
     ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["policy", "signature"], message: "policy must be signed by its owner" });
   }
-  const kvCapabilities = value.policy.capabilityCeiling.filter((capability) => capability.kind === "kv");
-  const expectedEncryptionResource = encryptionKeyPath === void 0 ? value.encryptionNetwork : `${value.encryptionNetwork}/${encryptionKeyPath}`;
-  const decryptCapabilities = value.policy.capabilityCeiling.filter((capability) => capability.kind === "encryption" && capability.resource === expectedEncryptionResource && capability.action === "tinycloud.encryption/decrypt");
-  if (value.policy.capabilityCeiling.length !== 2 || kvCapabilities.length !== 1 || decryptCapabilities.length !== 1 || kvCapabilities[0]?.resource !== value.contentSource.kvResource || kvCapabilities[0]?.selector !== value.contentSource.selector) {
+  const kvCapabilities = value3.policy.capabilityCeiling.filter((capability) => capability.kind === "kv");
+  const expectedEncryptionResource = encryptionKeyPath === void 0 ? value3.encryptionNetwork : `${value3.encryptionNetwork}/${encryptionKeyPath}`;
+  const decryptCapabilities = value3.policy.capabilityCeiling.filter((capability) => capability.kind === "encryption" && capability.resource === expectedEncryptionResource && capability.action === "tinycloud.encryption/decrypt");
+  if (value3.policy.capabilityCeiling.length !== 2 || kvCapabilities.length !== 1 || decryptCapabilities.length !== 1 || kvCapabilities[0]?.resource !== value3.contentSource.kvResource || kvCapabilities[0]?.selector !== value3.contentSource.selector) {
     ctx.addIssue({ code: external_exports3.ZodIssueCode.custom, path: ["policy", "capabilityCeiling"], message: "policy ceiling must contain the exact decrypt resource" });
   }
 }
@@ -29080,8 +29080,8 @@ async function decryptEnvelope2(nonce, ciphertext, key32) {
     )
   );
 }
-function isPlainRecord2(value) {
-  const proto = Object.getPrototypeOf(value);
+function isPlainRecord2(value3) {
+  const proto = Object.getPrototypeOf(value3);
   return proto === Object.prototype || proto === null;
 }
 function assertNoLoneSurrogates2(text) {
@@ -29107,49 +29107,49 @@ function serializeString2(text) {
   assertNoLoneSurrogates2(text);
   return JSON.stringify(text);
 }
-function serialize2(value) {
-  if (value === null) return "null";
-  switch (typeof value) {
+function serialize2(value3) {
+  if (value3 === null) return "null";
+  switch (typeof value3) {
     case "boolean":
-      return JSON.stringify(value);
+      return JSON.stringify(value3);
     case "string":
-      return serializeString2(value);
+      return serializeString2(value3);
     case "number":
-      if (!Number.isFinite(value)) {
-        throw new TypeError(`cannot canonicalize non-finite number: ${value}`);
+      if (!Number.isFinite(value3)) {
+        throw new TypeError(`cannot canonicalize non-finite number: ${value3}`);
       }
-      return JSON.stringify(value);
+      return JSON.stringify(value3);
     case "object":
       break;
     default:
-      throw new TypeError(`cannot canonicalize value of type ${typeof value}`);
+      throw new TypeError(`cannot canonicalize value of type ${typeof value3}`);
   }
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => serialize2(item)).join(",")}]`;
+  if (Array.isArray(value3)) {
+    return `[${value3.map((item) => serialize2(item)).join(",")}]`;
   }
-  if (!isPlainRecord2(value)) {
+  if (!isPlainRecord2(value3)) {
     throw new TypeError("cannot canonicalize non-plain object");
   }
-  const keys = Object.keys(value).sort();
+  const keys = Object.keys(value3).sort();
   const members = [];
   for (const key of keys) {
-    const member = value[key];
+    const member = value3[key];
     if (member === void 0) continue;
     members.push(`${serializeString2(key)}:${serialize2(member)}`);
   }
   return `{${members.join(",")}}`;
 }
-function canonicalize2(value) {
-  return serialize2(value);
+function canonicalize2(value3) {
+  return serialize2(value3);
 }
 var LABEL2 = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
-function isCanonicalEmailDomain2(value) {
-  if (value.length === 0 || value.length > 253) return false;
-  const labels = value.split(".");
+function isCanonicalEmailDomain2(value3) {
+  if (value3.length === 0 || value3.length > 253) return false;
+  const labels = value3.split(".");
   return labels.length >= 2 && labels.every((label) => LABEL2.test(label)) && !/^[0-9]+$/.test(labels.at(-1));
 }
-function canonicalMailbox2(value) {
-  const email = value.trim().toLowerCase();
+function canonicalMailbox2(value3) {
+  const email = value3.trim().toLowerCase();
   const at = email.indexOf("@");
   if (at <= 0 || at !== email.lastIndexOf("@")) return void 0;
   const local = email.slice(0, at);
@@ -29183,12 +29183,12 @@ function verifyCompactUcanAuthorization(authorization, expectedCid) {
   if (expectedCid !== void 0 && cid2 !== expectedCid) throw new TypeError("compact Authorization CID mismatch");
   return { authorization, cid: cid2, header, payload };
 }
-function object(value, label) {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) throw new TypeError(`${label} must be an object`);
-  return value;
+function object(value3, label) {
+  if (value3 === null || typeof value3 !== "object" || Array.isArray(value3)) throw new TypeError(`${label} must be an object`);
+  return value3;
 }
-function assertExactKeys(value, keys, label) {
-  if (Object.keys(value).length !== keys.length || Object.keys(value).some((key) => !keys.includes(key))) throw new TypeError(`${label} has unknown or missing fields`);
+function assertExactKeys(value3, keys, label) {
+  if (Object.keys(value3).length !== keys.length || Object.keys(value3).some((key) => !keys.includes(key))) throw new TypeError(`${label} has unknown or missing fields`);
 }
 function equal(left, right) {
   return left.length === right.length && left.every((byte, index) => byte === right[index]);
@@ -29626,9 +29626,9 @@ async function resolveLegacyV2(link4, options) {
     let envelope;
     try {
       const encoded = new TextDecoder("utf-8", { fatal: true }).decode(plaintext);
-      const value = JSON.parse(encoded);
-      if (canonicalize2(value) !== encoded) throw new Error("non-canonical envelope");
-      envelope = shareEnvelopeV2Schema3.parse(value);
+      const value3 = JSON.parse(encoded);
+      if (canonicalize2(value3) !== encoded) throw new Error("non-canonical envelope");
+      envelope = shareEnvelopeV2Schema3.parse(value3);
     } catch {
       throw new ShareReceiveError("envelope-invalid", "legacy envelope is invalid");
     }
@@ -30035,11 +30035,11 @@ function decode52(string, alphabetIdx, bitsPerChar, name) {
   let buffer = 0;
   let written = 0;
   for (let i = 0; i < end; ++i) {
-    const value = alphabetIdx[string[i]];
-    if (value === void 0) {
+    const value3 = alphabetIdx[string[i]];
+    if (value3 === void 0) {
       throw new SyntaxError(`Non-${name} character`);
     }
-    buffer = buffer << bitsPerChar | value;
+    buffer = buffer << bitsPerChar | value3;
     bits += bitsPerChar;
     if (bits >= 8) {
       bits -= 8;
@@ -30105,9 +30105,9 @@ var base58flickr22 = baseX22({
   prefix: "Z",
   alphabet: "123456789abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ"
 });
-function validRecipientDid(value) {
-  if (value.length === 0 || value.length > 2048 || /[\u0000-\u0020\u007f]/.test(value)) return false;
-  const parts = value.split(":");
+function validRecipientDid(value3) {
+  if (value3.length === 0 || value3.length > 2048 || /[\u0000-\u0020\u007f]/.test(value3)) return false;
+  const parts = value3.split(":");
   if (parts.length < 3 || parts[0] !== "did" || !/^[a-z0-9]+$/.test(parts[1] ?? "")) return false;
   const identifier = parts.slice(2);
   if (identifier.some((part) => part.length === 0)) return false;
@@ -30145,11 +30145,11 @@ function normalizeShareTarget(target) {
 function targetAuthorizationMethod(target) {
   return authorizationMethodForTarget(target);
 }
-function publishFilename(value) {
+function publishFilename(value3) {
   try {
-    return canonicalShareFilename2(value);
+    return canonicalShareFilename2(value3);
   } catch {
-    throw new SharePublishError("invalid-argument", hasUnsafeFilenameCodePoint2(value) ? "filename contains control or invisible characters" : "filename must be one safe path segment");
+    throw new SharePublishError("invalid-argument", hasUnsafeFilenameCodePoint2(value3) ? "filename contains control or invisible characters" : "filename must be one safe path segment");
   }
 }
 async function publishTargetShare(input) {
@@ -30332,8 +30332,8 @@ var N622 = Math.pow(2, 42);
 var N722 = Math.pow(2, 49);
 var N822 = Math.pow(2, 56);
 var N922 = Math.pow(2, 63);
-var length22 = function(value) {
-  return value < N122 ? 1 : value < N222 ? 2 : value < N322 ? 3 : value < N422 ? 4 : value < N522 ? 5 : value < N622 ? 6 : value < N722 ? 7 : value < N822 ? 8 : value < N922 ? 9 : 10;
+var length22 = function(value3) {
+  return value3 < N122 ? 1 : value3 < N222 ? 2 : value3 < N322 ? 3 : value3 < N422 ? 4 : value3 < N522 ? 5 : value3 < N622 ? 6 : value3 < N722 ? 7 : value3 < N822 ? 8 : value3 < N922 ? 9 : 10;
 };
 var varint22 = {
   encode: encode_122,
@@ -30520,14 +30520,14 @@ var CID22 = class _CID22 {
     if (input == null) {
       return null;
     }
-    const value = input;
-    if (value instanceof _CID22) {
-      return value;
-    } else if (value["/"] != null && value["/"] === value.bytes || value.asCID === value) {
-      const { version, code: code32, multihash, bytes: bytes3 } = value;
+    const value3 = input;
+    if (value3 instanceof _CID22) {
+      return value3;
+    } else if (value3["/"] != null && value3["/"] === value3.bytes || value3.asCID === value3) {
+      const { version, code: code32, multihash, bytes: bytes3 } = value3;
       return new _CID22(version, code32, multihash, bytes3 ?? encodeCID22(version, code32, multihash.bytes));
-    } else if (value[cidSymbol22] === true) {
-      const { version, multihash, code: code32 } = value;
+    } else if (value3[cidSymbol22] === true) {
+      const { version, multihash, code: code32 } = value3;
       const digest3 = decode82(multihash);
       return _CID22.create(version, code32, digest3);
     } else {
@@ -30939,8 +30939,8 @@ var PRESENTATION_DOMAIN = SHARE_V2_PROTOCOL.sessionDomain;
 var SESSION_DOMAIN = SHARE_V2_PROTOCOL.sessionDomain;
 var INVOCATION_DOMAIN = SHARE_V2_PROTOCOL.invocationDomain;
 var NATIVE_SHARE_FRAGMENT_PARAMETER = "tc1";
-function parseNativeShareUrl(value) {
-  const url = new URL(value);
+function parseNativeShareUrl(value3) {
+  const url = new URL(value3);
   if (url.search || url.pathname !== "/viewer") throw new TypeError("native shares must carry tc1 only in the /viewer URL fragment");
   const fragment = new URLSearchParams(url.hash.slice(1));
   const token = fragment.get(NATIVE_SHARE_FRAGMENT_PARAMETER);
@@ -31008,10 +31008,10 @@ var SHARE_HISTORY_FILE = "share-history-v2.json";
 var SHARE_HISTORY_LEGACY_FILE = "share-history-v1.bin";
 var PRIVATE_HISTORY_MODE = 384;
 async function signShareHistoryBytes(bytes, profile) {
-  const context = await ProfileManager.resolveContext({ profile });
-  if (context.profile !== profile) throw new ShareHistoryRetryError(profile);
+  const context2 = await ProfileManager.resolveContext({ profile });
+  if (context2.profile !== profile) throw new ShareHistoryRetryError(profile);
   const { ensureAuthenticated: ensureAuthenticated2 } = await Promise.resolve().then(() => (init_sdk(), sdk_exports));
-  const signer = await ensureAuthenticated2(context);
+  const signer = await ensureAuthenticated2(context2);
   return signer.signSessionBytes(bytes);
 }
 function createEncryptedProfileHistory(profileName2, sessionSigner) {
@@ -31024,14 +31024,14 @@ function createEncryptedProfileHistory(profileName2, sessionSigner) {
   let preparedKey;
   const path = async (profile) => join12(await ProfileManager.getCacheDir(profile), SHARE_HISTORY_FILE);
   const legacyPath = async (profile) => join12(await ProfileManager.getCacheDir(profile), SHARE_HISTORY_LEGACY_FILE);
-  const b64 = (value) => Buffer.from(value).toString("base64url");
-  const unb64 = (value) => {
-    if (typeof value !== "string" || !/^[A-Za-z0-9_-]+$/.test(value)) throw new ShareHistoryUnreadableError();
-    const bytes = new Uint8Array(Buffer.from(value, "base64url"));
-    if (b64(bytes) !== value) throw new ShareHistoryUnreadableError();
+  const b64 = (value3) => Buffer.from(value3).toString("base64url");
+  const unb64 = (value3) => {
+    if (typeof value3 !== "string" || !/^[A-Za-z0-9_-]+$/.test(value3)) throw new ShareHistoryUnreadableError();
+    const bytes = new Uint8Array(Buffer.from(value3, "base64url"));
+    if (b64(bytes) !== value3) throw new ShareHistoryUnreadableError();
     return bytes;
   };
-  const isStoredRecord = (value) => typeof value === "object" && value !== null && "shareId" in value && typeof value.shareId === "string";
+  const isStoredRecord = (value3) => typeof value3 === "object" && value3 !== null && "shareId" in value3 && typeof value3.shareId === "string";
   const identity = async (profile) => {
     const config = await ProfileManager.getProfile(profile);
     const localKey = typeof config.privateKey === "string" && config.privateKey.length > 0;
@@ -31220,7 +31220,7 @@ function createEncryptedProfileHistory(profileName2, sessionSigner) {
     async put(record3) {
       return locked(async (profile, ready) => {
         const values = await read5(profile, ready);
-        const index = values.findIndex((value) => value.shareId === record3.shareId);
+        const index = values.findIndex((value3) => value3.shareId === record3.shareId);
         if (index >= 0) values[index] = record3;
         else values.push(record3);
         await write(profile, values, ready);
@@ -31337,9 +31337,9 @@ var CALLBACK_HINT_DELAY_MS = 15 * 1e3;
 var CALLBACK_HINT = "Still waiting. If your browser asked to connect to devices on your network, choose Allow. Or press Ctrl+C and run `tinycloud auth login --paste` to enter a code instead.";
 function publicJwkForDelegation(jwk) {
   const publicJwk = {};
-  for (const [key, value] of Object.entries(jwk)) {
+  for (const [key, value3] of Object.entries(jwk)) {
     if (!PRIVATE_JWK_FIELDS.has(key)) {
-      publicJwk[key] = value;
+      publicJwk[key] = value3;
     }
   }
   return publicJwk;
@@ -31396,9 +31396,9 @@ function buildAuthUrl(did, options = {}) {
   const base5 = options.openkeyHost ?? DEFAULT_OPENKEY_HOST;
   return `${base5}/delegate?${params.toString()}`;
 }
-function validateDelegationCallbackPayload(value) {
-  if (!value || typeof value !== "object") return "expected an object";
-  const v = value;
+function validateDelegationCallbackPayload(value3) {
+  if (!value3 || typeof value3 !== "object") return "expected an object";
+  const v = value3;
   if (!v.delegationHeader || typeof v.delegationHeader !== "object") {
     return "delegationHeader must be an object";
   }
@@ -31776,7 +31776,7 @@ import { CLI_NAME as CLI_NAME12 } from "@tinycloud/operations/cli-name";
 function parseDuration(input) {
   const match = input.match(/^(\d+)(m|h|d|w)$/);
   if (match) {
-    const value = parseInt(match[1], 10);
+    const value3 = parseInt(match[1], 10);
     const unit = match[2];
     const multipliers = {
       m: 60 * 1e3,
@@ -31784,7 +31784,7 @@ function parseDuration(input) {
       d: 24 * 60 * 60 * 1e3,
       w: 7 * 24 * 60 * 60 * 1e3
     };
-    return value * multipliers[unit];
+    return value3 * multipliers[unit];
   }
   const date = new Date(input);
   if (!isNaN(date.getTime())) {
@@ -31890,12 +31890,12 @@ function withVerifiedNamedKeys(profile, session) {
 var CAPABILITIES_READ = "tinycloud.capabilities/read";
 var CLOCK_SKEW_MS = 3e4;
 var SIGNED_RECAP = "signed-recap";
-function parseRequestedExpiry(value) {
-  if (typeof value === "number") return { durationMs: value };
-  if (/^\d+(m|h|d|w)$/.test(value)) return { durationMs: parseDuration(value) };
+function parseRequestedExpiry(value3) {
+  if (typeof value3 === "number") return { durationMs: value3 };
+  if (/^\d+(m|h|d|w)$/.test(value3)) return { durationMs: parseDuration(value3) };
   throw new CLIError(
     "INVALID_EXPIRY",
-    Number.isFinite(Date.parse(value)) ? `--expiry "${value}" is a date. OpenKey signs approval time plus a lifetime, so use a duration such as 2h or 7d.` : `Invalid --expiry "${value}". Use a duration such as 1h or 7d, or milliseconds.`,
+    Number.isFinite(Date.parse(value3)) ? `--expiry "${value3}" is a date. OpenKey signs approval time plus a lifetime, so use a duration such as 2h or 7d.` : `Invalid --expiry "${value3}". Use a duration such as 1h or 7d, or milliseconds.`,
     ExitCode.USAGE_ERROR
   );
 }
@@ -31950,8 +31950,8 @@ function sessionExpiresAt(session) {
     session.expirationTime,
     typeof session.siwe === "string" ? session.siwe.match(/^Expiration Time:\s*(.+)$/m)?.[1] : void 0
   ];
-  const value = candidates.find((candidate) => typeof candidate === "string" && Number.isFinite(Date.parse(candidate)));
-  if (typeof value === "string") return new Date(value).toISOString();
+  const value3 = candidates.find((candidate) => typeof candidate === "string" && Number.isFinite(Date.parse(candidate)));
+  if (typeof value3 === "string") return new Date(value3).toISOString();
   return null;
 }
 function storedSessionState(session, profile) {
@@ -31994,9 +31994,9 @@ function actionTuples(permission, ownerDid) {
 function isLegacyNestedDecrypt(permission, requested, ownerDid, spaceId) {
   return isRawEncryptionPermission(permission) && !isVerifiedRawEncryptionPermission(permission) && normalizePkhIdentifier(ownerSpaceId(permission.space ?? "", ownerDid)) === normalizePkhIdentifier(spaceId) && rawEncryptionOwnerMatches(permission.path, ownerDid) && permission.actions.every((action) => action === "tinycloud.encryption/decrypt") && requested.some((entry) => isRawEncryptionPermission(entry) && normalizePkhIdentifier(entry.path) === normalizePkhIdentifier(permission.path) && permission.actions.every((action) => entry.actions.includes(action)));
 }
-function canonicalJson(value) {
+function canonicalJson(value3) {
   const canonical = (entry) => Array.isArray(entry) ? entry.map(canonical) : entry && typeof entry === "object" ? Object.fromEntries(Object.entries(entry).sort(([a], [b]) => a.localeCompare(b)).map(([name, inner]) => [name, canonical(inner)])) : entry;
-  return JSON.stringify(canonical(value) ?? null);
+  return JSON.stringify(canonical(value3) ?? null);
 }
 function caveatRestriction(caveats) {
   const restrictions = (caveats ?? []).filter((caveat) => Object.keys(caveat).length > 0).map(canonicalJson).sort();
@@ -32020,19 +32020,19 @@ function scopeCovers(granted, held, ownerDid) {
     });
   });
 }
-function plainCaveat(value) {
-  if (value === void 0 || value === null) return null;
-  if (typeof value === "boolean" || typeof value === "string") return value;
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (Array.isArray(value)) return value.map(plainCaveat);
-  if (value instanceof Map) {
-    return Object.fromEntries([...value].map(([name, inner]) => {
+function plainCaveat(value3) {
+  if (value3 === void 0 || value3 === null) return null;
+  if (typeof value3 === "boolean" || typeof value3 === "string") return value3;
+  if (typeof value3 === "number" && Number.isFinite(value3)) return value3;
+  if (Array.isArray(value3)) return value3.map(plainCaveat);
+  if (value3 instanceof Map) {
+    return Object.fromEntries([...value3].map(([name, inner]) => {
       if (typeof name !== "string") throw new Error("ReCap caveat keys must be strings");
       return [name, plainCaveat(inner)];
     }));
   }
-  if (typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype) {
-    return Object.fromEntries(Object.entries(value).map(([name, inner]) => [name, plainCaveat(inner)]));
+  if (typeof value3 === "object" && Object.getPrototypeOf(value3) === Object.prototype) {
+    return Object.fromEntries(Object.entries(value3).map(([name, inner]) => [name, plainCaveat(inner)]));
   }
   throw new Error("ReCap caveats must contain only JSON values");
 }
@@ -32402,19 +32402,19 @@ var DEVICE_REASON_MAX_LENGTH = 200;
 function resolveDeviceApiHost(profile) {
   return process.env.TC_OPENKEY_HOST ?? profile?.openkeyHost;
 }
-function digest(value) {
-  return createHash2("sha256").update(value).digest("base64url");
+function digest(value3) {
+  return createHash2("sha256").update(value3).digest("base64url");
 }
-function canonicalOrigin(value, label) {
-  const url = new URL(value);
+function canonicalOrigin(value3, label) {
+  const url = new URL(value3);
   const loopback = url.hostname === "127.0.0.1" || url.hostname === "localhost";
-  if (url.origin !== value || url.protocol !== "https:" && !(loopback && url.protocol === "http:")) {
+  if (url.origin !== value3 || url.protocol !== "https:" && !(loopback && url.protocol === "http:")) {
     throw new Error(`${label} must be a canonical HTTPS origin`);
   }
-  return value;
+  return value3;
 }
 function jsonEqual(left, right) {
-  const canonical = (value) => Array.isArray(value) ? value.map(canonical) : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, entry]) => [key, canonical(entry)])) : value;
+  const canonical = (value3) => Array.isArray(value3) ? value3.map(canonical) : value3 && typeof value3 === "object" ? Object.fromEntries(Object.entries(value3).sort(([a], [b]) => a.localeCompare(b)).map(([key, entry]) => [key, canonical(entry)])) : value3;
   return JSON.stringify(canonical(left)) === JSON.stringify(canonical(right));
 }
 function invalidResponse(message) {
@@ -32426,9 +32426,9 @@ function verificationOrigins(openkeyHost) {
   if (site.hostname.startsWith("api.")) site.hostname = site.hostname.slice("api.".length);
   return /* @__PURE__ */ new Set([api.origin, site.origin]);
 }
-function validateStart(value, openkeyHost) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw invalidResponse("OpenKey returned an invalid device authorization response");
-  const result = value;
+function validateStart(value3, openkeyHost) {
+  if (!value3 || typeof value3 !== "object" || Array.isArray(value3)) throw invalidResponse("OpenKey returned an invalid device authorization response");
+  const result = value3;
   if (typeof result.transactionId !== "string" || !/^[A-Za-z0-9_-]{20,}$/.test(result.transactionId) || typeof result.userCode !== "string" || !/^[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(result.userCode) || typeof result.verificationUri !== "string" || result.verificationUriComplete !== void 0 && typeof result.verificationUriComplete !== "string" || !Number.isSafeInteger(result.expiresIn) || Number(result.expiresIn) < 60 || Number(result.expiresIn) > DEVICE_APPROVAL_WINDOW_MAX_SECONDS || !Number.isSafeInteger(result.interval) || Number(result.interval) < 1) throw invalidResponse("OpenKey returned an invalid device authorization response");
   canonicalOrigin(new URL(result.verificationUri).origin, "verification URI");
   if (!verificationOrigins(openkeyHost).has(new URL(result.verificationUri).origin)) {
@@ -32441,32 +32441,32 @@ function validateStart(value, openkeyHost) {
 }
 async function responseJson(response) {
   try {
-    const value = await response.json();
-    return value && typeof value === "object" && !Array.isArray(value) ? value : void 0;
+    const value3 = await response.json();
+    return value3 && typeof value3 === "object" && !Array.isArray(value3) ? value3 : void 0;
   } catch {
     return void 0;
   }
 }
-function errorCode(value) {
-  return typeof value?.error === "string" ? value.error : void 0;
+function errorCode(value3) {
+  return typeof value3?.error === "string" ? value3.error : void 0;
 }
-function errorDescription(value) {
-  const description = value?.errorDescription ?? value?.error_description;
+function errorDescription(value3) {
+  const description = value3?.errorDescription ?? value3?.error_description;
   return typeof description === "string" && description.length > 0 ? description : void 0;
 }
 function retryAfterSeconds(response) {
-  const value = response.headers.get("retry-after");
-  if (!value) return void 0;
+  const value3 = response.headers.get("retry-after");
+  if (!value3) return void 0;
   let seconds;
-  if (/^\d+$/.test(value)) {
-    seconds = Number(value);
+  if (/^\d+$/.test(value3)) {
+    seconds = Number(value3);
     if (!Number.isSafeInteger(seconds)) return void 0;
   } else {
-    if (!/^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), (?:0[1-9]|[12]\d|3[01]) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} (?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d GMT$/.test(value)) {
+    if (!/^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), (?:0[1-9]|[12]\d|3[01]) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} (?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d GMT$/.test(value3)) {
       return void 0;
     }
-    const retryAt = Date.parse(value);
-    if (!Number.isFinite(retryAt) || new Date(retryAt).toUTCString() !== value) return void 0;
+    const retryAt = Date.parse(value3);
+    if (!Number.isFinite(retryAt) || new Date(retryAt).toUTCString() !== value3) return void 0;
     seconds = Math.ceil((retryAt - Date.now()) / 1e3);
   }
   return seconds > 0 && seconds <= 600 ? seconds : void 0;
@@ -32482,24 +32482,24 @@ function deviceAuthRateLimit(response) {
     }
   );
 }
-function publicSessionJwk(value) {
-  const publicJwk = publicJwkForDelegation(value);
+function publicSessionJwk(value3) {
+  const publicJwk = publicJwkForDelegation(value3);
   const record3 = publicJwk;
   if (record3.kty !== "OKP" || record3.crv !== "Ed25519" || typeof record3.x !== "string") {
     throw new Error("CLI session key is not a public Ed25519 JWK");
   }
   return publicJwk;
 }
-function publicRelayJwk(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw invalidResponse("OpenKey returned an invalid relay key");
-  const jwk = value;
+function publicRelayJwk(value3) {
+  if (!value3 || typeof value3 !== "object" || Array.isArray(value3)) throw invalidResponse("OpenKey returned an invalid relay key");
+  const jwk = value3;
   if (jwk.kty !== "EC" || jwk.crv !== "P-256" || typeof jwk.x !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(jwk.x) || typeof jwk.y !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(jwk.y) || "d" in jwk) throw invalidResponse("OpenKey returned an invalid relay key");
   return { kty: "EC", crv: "P-256", x: jwk.x, y: jwk.y };
 }
-function decodeCanonicalBase64Url(value, label) {
-  if (typeof value !== "string" || !/^[A-Za-z0-9_-]+$/.test(value)) throw invalidResponse(`OpenKey returned an invalid ${label}`);
-  const decoded = Buffer.from(value, "base64url");
-  if (decoded.toString("base64url") !== value) throw invalidResponse(`OpenKey returned an invalid ${label}`);
+function decodeCanonicalBase64Url(value3, label) {
+  if (typeof value3 !== "string" || !/^[A-Za-z0-9_-]+$/.test(value3)) throw invalidResponse(`OpenKey returned an invalid ${label}`);
+  const decoded = Buffer.from(value3, "base64url");
+  if (decoded.toString("base64url") !== value3) throw invalidResponse(`OpenKey returned an invalid ${label}`);
   return decoded;
 }
 function deriveRelayKey(sharedSecret, transactionId) {
@@ -32512,7 +32512,7 @@ function onP256(x, y) {
   const px = BigInt(`0x${x.toString("hex")}`);
   const py = BigInt(`0x${y.toString("hex")}`);
   if (px >= P256_P || py >= P256_P) return false;
-  const mod2 = (value) => (value % P256_P + P256_P) % P256_P;
+  const mod2 = (value3) => (value3 % P256_P + P256_P) % P256_P;
   return mod2(py * py) === mod2(px * px * px - 3n * px + P256_B);
 }
 function relayPublicJwkOf(relayKey) {
@@ -32540,28 +32540,28 @@ function decryptRelayResult(envelope, transactionId, relayKey) {
   const decipher = createDecipheriv("aes-256-gcm", key, nonce);
   decipher.setAAD(Buffer.from(transactionId));
   decipher.setAuthTag(ciphertext.subarray(ciphertext.length - 16));
-  let value;
+  let value3;
   try {
-    value = JSON.parse(Buffer.concat([decipher.update(ciphertext.subarray(0, -16)), decipher.final()]).toString("utf8"));
+    value3 = JSON.parse(Buffer.concat([decipher.update(ciphertext.subarray(0, -16)), decipher.final()]).toString("utf8"));
   } catch {
     throw invalidResponse("OpenKey returned an unreadable encrypted relay result");
   }
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw invalidResponse("OpenKey returned an invalid encrypted relay result");
-  return value;
+  if (!value3 || typeof value3 !== "object" || Array.isArray(value3)) throw invalidResponse("OpenKey returned an invalid encrypted relay result");
+  return value3;
 }
-function permissionList(value, label) {
-  const valid = Array.isArray(value) && value.length > 0 && value.every((entry) => entry !== null && typeof entry === "object" && typeof entry.service === "string" && typeof entry.space === "string" && typeof entry.path === "string" && Array.isArray(entry.actions) && entry.actions.length > 0 && entry.actions.every((action) => typeof action === "string" && action.length > 0));
+function permissionList(value3, label) {
+  const valid = Array.isArray(value3) && value3.length > 0 && value3.every((entry) => entry !== null && typeof entry === "object" && typeof entry.service === "string" && typeof entry.space === "string" && typeof entry.path === "string" && Array.isArray(entry.actions) && entry.actions.length > 0 && entry.actions.every((action) => typeof action === "string" && action.length > 0));
   if (!valid) {
     throw new CLIError("DEVICE_AUTH_BINDING_MISMATCH", `OpenKey returned no valid ${label} permissions. No session was saved.`, ExitCode.PERMISSION_DENIED);
   }
-  return value;
+  return value3;
 }
 function sameTuples(left, right) {
   return left.size === right.size && [...left].every((tuple) => right.has(tuple));
 }
 function delegationExpiry(delegation) {
-  const value = delegation.expiresAt ?? delegation.expirationTime ?? delegation.expiry;
-  return typeof value === "string" ? Date.parse(value) : Number.NaN;
+  const value3 = delegation.expiresAt ?? delegation.expirationTime ?? delegation.expiry;
+  return typeof value3 === "string" ? Date.parse(value3) : Number.NaN;
 }
 async function verifyApproval(input) {
   const { binding, delegation } = input;
@@ -32708,8 +32708,8 @@ async function acquireDeviceDelegation(input) {
     } catch {
       continue;
     }
-    const value = await responseJson(response);
-    const code5 = errorCode(value);
+    const value3 = await responseJson(response);
+    const code5 = errorCode(value3);
     if (response.status >= 500 || response.status === 429 && code5 !== "slow_down") continue;
     if (code5 === "slow_down") {
       interval += 5;
@@ -32723,7 +32723,7 @@ async function acquireDeviceDelegation(input) {
       throw new CLIError("DEVICE_AUTH_EXPIRED", "OpenKey device authorization expired_token: the approval window closed. Run the command again.", ExitCode.AUTH_REQUIRED);
     }
     if (!response.ok) throw new CLIError("DEVICE_AUTH_FAILED", `OpenKey device authorization failed: ${code5 ?? `HTTP ${response.status}`}`, ExitCode.ERROR);
-    const result = value;
+    const result = value3;
     if (result?.status === "pending") {
       interval = Math.max(interval, Number.isSafeInteger(result.interval) ? result.interval : interval);
       continue;
@@ -32964,9 +32964,9 @@ function ownerIdentitySigner(ownerDid) {
     }
   };
 }
-function signedEnvelope(value, state2, requestedKeyId) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const envelope = value;
+function signedEnvelope(value3, state2, requestedKeyId) {
+  if (!value3 || typeof value3 !== "object" || Array.isArray(value3)) return null;
+  const envelope = value3;
   if (envelope.transportVersion !== 2 || typeof envelope.state !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(envelope.state) || Buffer.from(envelope.state, "base64url").toString("base64url") !== envelope.state) return null;
   const supplied = Buffer.from(envelope.state, "base64url");
   if (supplied.length !== state2.length || !timingSafeEqual(supplied, state2)) return null;
@@ -33506,12 +33506,12 @@ init_warnings();
 init_errors();
 init_formatter();
 var CID5 = /^bafkr4i[a-z2-7]{52}$/;
-function record(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value) ? value : void 0;
+function record(value3) {
+  return value3 !== null && typeof value3 === "object" && !Array.isArray(value3) ? value3 : void 0;
 }
-function isoDate(value) {
-  if (typeof value !== "string" && !(value instanceof Date)) return null;
-  const date = value instanceof Date ? value : new Date(value);
+function isoDate(value3) {
+  if (typeof value3 !== "string" && !(value3 instanceof Date)) return null;
+  const date = value3 instanceof Date ? value3 : new Date(value3);
   return Number.isFinite(date.getTime()) ? date.toISOString() : null;
 }
 async function localContext(options) {
@@ -33524,26 +33524,26 @@ async function localContext(options) {
   });
   return { ctx, profile };
 }
-function storedScope(value) {
-  const parsed = PermissionEntrySchema.array().safeParse(record(value)?.permissions);
+function storedScope(value3) {
+  const parsed = PermissionEntrySchema.array().safeParse(record(value3)?.permissions);
   return parsed.success ? parsed.data : [];
 }
-function storedProof(value) {
-  const kind = storedDelegationKind(value);
+function storedProof(value3) {
+  const kind = storedDelegationKind(value3);
   if (kind === "signed-login") return "siwe";
   if (kind === "compact") return "compact";
   if (kind === "other") return "missing";
-  const header = record(record(record(value)?.delegation)?.delegationHeader)?.Authorization;
+  const header = record(record(record(value3)?.delegation)?.delegationHeader)?.Authorization;
   if (typeof header !== "string") return null;
   return withoutBearer4(header).includes(".") ? "compact" : "missing";
 }
-async function listedGrant(value, index, options) {
-  const delegation = record(record(value)?.delegation);
+async function listedGrant(value3, index, options) {
+  const delegation = record(record(value3)?.delegation);
   const rawCid = delegation?.cid;
   const expiry = isoDate(delegation?.expiry);
-  const forAnotherKey = options.node !== void 0 && storedDelegationForAnotherKey(value, options.node);
-  const inspection = forAnotherKey ? void 0 : await inspectStoredDelegation2(value, options);
-  const source = storedDelegationSource(value);
+  const forAnotherKey = options.node !== void 0 && storedDelegationForAnotherKey(value3, options.node);
+  const inspection = forAnotherKey ? void 0 : await inspectStoredDelegation2(value3, options);
+  const source = storedDelegationSource(value3);
   return {
     index,
     cid: typeof rawCid === "string" && CID5.test(rawCid) ? rawCid : null,
@@ -33552,10 +33552,10 @@ async function listedGrant(value, index, options) {
     local: inspection?.local ?? "for_another_key",
     reason: inspection?.local === "refused" ? inspection.reason : null,
     node: "not_checked",
-    bound: DelegationRequestBindingSchema.safeParse(record(value)?.authorityRequest).success,
-    proof: storedProof(value),
+    bound: DelegationRequestBindingSchema.safeParse(record(value3)?.authorityRequest).success,
+    proof: storedProof(value3),
     source,
-    scope: inspection?.local === "verified" ? inspection.effectivePermissions : storedScope(value),
+    scope: inspection?.local === "verified" ? inspection.effectivePermissions : storedScope(value3),
     scopeSource: inspection?.local === "verified" ? "signed" : "stored"
   };
 }
@@ -33794,8 +33794,8 @@ var STRUCTURE_ACTIONS = {
 };
 var APP_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 var APP_ID_RULE = "an app id looks like xyz.example.app: letters, digits, dots, hyphens and underscores, no slashes or spaces";
-function isAppId(value) {
-  return value.length <= 200 && APP_ID.test(value);
+function isAppId(value3) {
+  return value3.length <= 200 && APP_ID.test(value3);
 }
 function appsAgentPermissions(mode, appIds = []) {
   const bases = appIds.length === 0 ? [""] : appIds.map((appId) => `${appId}/`);
@@ -33881,11 +33881,11 @@ function resolveAppsAgentRequest(options) {
   }
   return { mode, appIds };
 }
-function lifetimeMs(value) {
+function lifetimeMs(value3) {
   try {
-    if (value === void 0) return parseExpiry3(DEFAULT_EXPIRY2);
-    if (typeof value === "number") return Number.isFinite(value) && value > 0 ? value : void 0;
-    return /^\d+$/.test(value.trim()) ? Number(value.trim()) : parseExpiry3(value);
+    if (value3 === void 0) return parseExpiry3(DEFAULT_EXPIRY2);
+    if (typeof value3 === "number") return Number.isFinite(value3) && value3 > 0 ? value3 : void 0;
+    return /^\d+$/.test(value3.trim()) ? Number(value3.trim()) : parseExpiry3(value3);
   } catch {
     return void 0;
   }
@@ -34786,7 +34786,7 @@ ${signInAgainHint(ctx.profile, posture ?? void 0)}
   auth.command("request").description("Create a TinyCloud permission request artifact").option(
     "--cap <spec>",
     "Capability spec: tinycloud.<service>:<space>:<path>:<actions-csv> (repeatable)",
-    (value, previous) => [...previous, value],
+    (value3, previous) => [...previous, value3],
     []
   ).option("--permission <file>", 'JSON permission request: { "permissions": PermissionEntry[] }').option("--manifest <fileOrBase64>", "Manifest file, base64:<json>, or raw base64 JSON").option(
     "--expiry <duration>",
@@ -34797,7 +34797,7 @@ ${signInAgainHint(ctx.profile, posture ?? void 0)}
   ).option(
     "--app <app_id>",
     `With --preset ${APPS_AGENT_PRESET}: limit the grant to this app's <app_id>/ prefix (recommended); repeat for up to ${APPS_AGENT_MAX_APPS} apps`,
-    (value, previous) => [...previous, value],
+    (value3, previous) => [...previous, value3],
     []
   ).option("--write", `With --preset ${APPS_AGENT_PRESET}: also let the agent add and change the named --app apps' data: write their knowledge/ and prefs/ files (kv put) and add, change or delete their table rows (sql write). Their code, manifest and install record stay read-only. Creating, changing or dropping tables is granted only for an app's catalog database (today Health Log's healthlog)`).option("--paste", "With --grant on an OpenKey profile: wait up to 5 minutes for a signed code from OpenKey on stdin instead of a browser callback (use when the browser cannot reach this CLI)").action(async (options2, cmd) => {
     try {
@@ -35429,24 +35429,24 @@ function readUrl(source) {
     request.on("error", reject);
   });
 }
-function normalizeDelegationImport(value) {
-  if (isLegacyDelegationImportArtifact(value)) {
-    const delegation = normalizePortableDelegation(value.delegation);
+function normalizeDelegationImport(value3) {
+  if (isLegacyDelegationImportArtifact(value3)) {
+    const delegation = normalizePortableDelegation(value3.delegation);
     return {
-      requestId: value.requestId,
+      requestId: value3.requestId,
       delegation,
-      permissions: Array.isArray(value.permissions) && value.permissions.length > 0 ? value.permissions : permissionsFromDelegation(delegation)
+      permissions: Array.isArray(value3.permissions) && value3.permissions.length > 0 ? value3.permissions : permissionsFromDelegation(delegation)
     };
   }
-  if (isStoredDelegationLike(value)) {
-    const delegation = normalizePortableDelegation(value.delegation);
+  if (isStoredDelegationLike(value3)) {
+    const delegation = normalizePortableDelegation(value3.delegation);
     return {
       delegation,
-      permissions: Array.isArray(value.permissions) && value.permissions.length > 0 ? value.permissions : permissionsFromDelegation(delegation)
+      permissions: Array.isArray(value3.permissions) && value3.permissions.length > 0 ? value3.permissions : permissionsFromDelegation(delegation)
     };
   }
-  if (isPortableDelegationLike(value)) {
-    const delegation = normalizePortableDelegation(value);
+  if (isPortableDelegationLike(value3)) {
+    const delegation = normalizePortableDelegation(value3);
     return {
       delegation,
       permissions: permissionsFromDelegation(delegation)
@@ -35458,14 +35458,14 @@ function normalizeDelegationImport(value) {
     ExitCode.USAGE_ERROR
   );
 }
-function isLegacyDelegationImportArtifact(value) {
-  if (value === null || typeof value !== "object") return false;
-  const candidate = value;
+function isLegacyDelegationImportArtifact(value3) {
+  if (value3 === null || typeof value3 !== "object") return false;
+  const candidate = value3;
   return candidate.kind === "tinycloud.auth.delegation" && candidate.version === 1 && !Object.hasOwn(candidate, "requestId") && candidate.delegation !== null && typeof candidate.delegation === "object";
 }
-function isRequestBoundDelegationEnvelope(value) {
-  if (value === null || typeof value !== "object") return false;
-  const candidate = value;
+function isRequestBoundDelegationEnvelope(value3) {
+  if (value3 === null || typeof value3 !== "object") return false;
+  const candidate = value3;
   return candidate.kind === "tinycloud.auth.delegation" && candidate.version === 1 && Object.hasOwn(candidate, "requestId");
 }
 async function importRequestBoundDelegationWithBootstrap(ctx, artifact) {
@@ -35533,14 +35533,14 @@ async function importRequestBoundDelegation(ctx, artifact) {
       throw withSignInHint(cliErrorFromService({ ...result.error, meta: metadata }), ctx.profile, result.context.posture);
   }
 }
-function isStoredDelegationLike(value) {
-  if (value === null || typeof value !== "object") return false;
-  const candidate = value;
+function isStoredDelegationLike(value3) {
+  if (value3 === null || typeof value3 !== "object") return false;
+  const candidate = value3;
   return isPortableDelegationLike(candidate.delegation);
 }
-function isPortableDelegationLike(value) {
-  if (value === null || typeof value !== "object") return false;
-  const candidate = value;
+function isPortableDelegationLike(value3) {
+  if (value3 === null || typeof value3 !== "object") return false;
+  const candidate = value3;
   return typeof candidate.cid === "string" && typeof candidate.spaceId === "string" && typeof candidate.path === "string" && Array.isArray(candidate.actions) && candidate.delegationHeader !== void 0 && typeof candidate.delegationHeader === "object";
 }
 function normalizePortableDelegation(delegation) {
@@ -35726,11 +35726,11 @@ function assertOpenKeyAgentRequest(requested) {
     );
   }
 }
-function permissionGrantReason(context, permissions) {
+function permissionGrantReason(context2, permissions) {
   const first = permissions[0];
   const summary = first ? compactPermission(first) : "no permissions";
   const more = permissions.length > 1 ? ` and ${permissions.length - 1} more permission${permissions.length === 2 ? "" : "s"}` : "";
-  return `${context} Requested: ${summary}${more}.`;
+  return `${context2} Requested: ${summary}${more}.`;
 }
 function execCapturedCommand(command) {
   return new Promise((resolve9, reject) => {
@@ -37202,20 +37202,20 @@ function registerEnableCommand(program) {
   enable.command("share").description(`Approve Share publishing scope through OpenKey device authorization (same as \`${CLI_NAME23} auth login --device --manifest builtin:share-publishing\`). Use a dedicated profile, e.g. \`${CLI_NAME23} init --name publisher --key-only && ${CLI_NAME23} --profile publisher enable share\`; keep existing profiles for their apps.`).option("--replace-session", "Replace this profile's live session even though the new scope would narrow, change or shorten it (prefer a new profile)").action(async (options, command) => {
     try {
       const globalOptions = command.optsWithGlobals();
-      const context = await ProfileManager.resolveContext(globalOptions, { storedSession: "unused" });
+      const context2 = await ProfileManager.resolveContext(globalOptions, { storedSession: "unused" });
       const { profile, result } = await loginWithDeviceAuthorization({
-        profileName: context.profile,
-        nodeOrigin: context.host,
+        profileName: context2.profile,
+        nodeOrigin: context2.host,
         shareOrigin: DEFAULT_SHARE_ORIGIN,
         permissions: sharePublishingPermissions(),
         reason: "Allow this TinyCloud CLI profile to publish Share links.",
         replaceSession: options.replaceSession === true,
         persistHost: globalOptions.host !== void 0
       });
-      const value = {
+      const value3 = {
         enabled: true,
         service: "share",
-        profile: context.profile,
+        profile: context2.profile,
         sessionDid: profile.sessionDid ?? profile.did,
         ownerDid: result.ownerDid,
         spaceId: result.spaceId,
@@ -37223,7 +37223,7 @@ function registerEnableCommand(program) {
         declined: result.declined,
         expiresAt: result.expiresAt
       };
-      output(value, () => result.declined.length === 0 ? `Share enabled for profile ${context.profile}.` : `Share enabled for profile ${context.profile} with ${result.declined.length} capability group(s) declined; publishing may fail.`);
+      output(value3, () => result.declined.length === 0 ? `Share enabled for profile ${context2.profile}.` : `Share enabled for profile ${context2.profile} with ${result.declined.length} capability group(s) declined; publishing may fail.`);
     } catch (error) {
       return handleError(error);
     }
@@ -37244,18 +37244,18 @@ init_safe_text();
 function usage2(message) {
   return new CLIError("INVALID_ARGUMENT", message, ExitCode.USAGE_ERROR);
 }
-function assertKnowledgeAppId(value) {
-  if (!isAppId(value)) throw usage2(`Invalid app id "${safeClipped(value)}": ${APP_ID_RULE}.`);
-  return value;
+function assertKnowledgeAppId(value3) {
+  if (!isAppId(value3)) throw usage2(`Invalid app id "${safeClipped(value3)}": ${APP_ID_RULE}.`);
+  return value3;
 }
-function assertKnowledgeConcept(value) {
-  const reason = value.length > 300 ? "it is longer than 300 characters" : value.startsWith("/") ? "it starts with a slash" : /[*\\]/.test(value) ? "it contains a wildcard or backslash" : /%(?:2e|2f|5c)/i.test(value) ? "it contains an encoded dot, slash or backslash" : value.split("/").some((segment) => segment === "" || segment === "." || segment === "..") ? "it has an empty, `.` or `..` segment" : void 0;
+function assertKnowledgeConcept(value3) {
+  const reason = value3.length > 300 ? "it is longer than 300 characters" : value3.startsWith("/") ? "it starts with a slash" : /[*\\]/.test(value3) ? "it contains a wildcard or backslash" : /%(?:2e|2f|5c)/i.test(value3) ? "it contains an encoded dot, slash or backslash" : value3.split("/").some((segment) => segment === "" || segment === "." || segment === "..") ? "it has an empty, `.` or `..` segment" : void 0;
   if (reason !== void 0) {
     throw usage2(
-      `Invalid concept "${safeClipped(value)}": ${reason}. Use a path inside the app's knowledge folder, such as app or tables/meal.md.`
+      `Invalid concept "${safeClipped(value3)}": ${reason}. Use a path inside the app's knowledge folder, such as app or tables/meal.md.`
     );
   }
-  return value;
+  return value3;
 }
 
 // src/lib/apps-install-pin.ts
@@ -37587,6 +37587,410 @@ function printResult(result) {
   }
 }
 
+// src/commands/feed.ts
+init_profiles();
+init_sdk();
+import { readFile as readFile11 } from "fs/promises";
+import { join as join15 } from "path";
+import {
+  appendFeedMessage,
+  appendFeedResponse,
+  feedCardSchema,
+  feedHandlingSchema,
+  feedResourceNames,
+  feedResponsePayloadSchema,
+  getFeedCardState,
+  initializeFeedDatabases,
+  listFeedCards,
+  listFeedResponses,
+  listenFeedResponses,
+  newFeedMessageSchema,
+  newFeedResponseSchema,
+  publishFeedCard,
+  readFeedResponsePayload,
+  recordFeedHandling,
+  resolveFeedCard
+} from "@tinycloud/sdk-services/feed";
+
+// src/feed/space.ts
+init_space();
+async function resolveFeedSpace(primarySpaceId, requested, profileName2) {
+  if (/^[A-Za-z0-9_-]+$/.test(requested) && primarySpaceId?.startsWith("tinycloud:") && primarySpaceId.endsWith(`:${requested}`)) return primarySpaceId;
+  return resolveSpaceUri(requested, profileName2);
+}
+
+// src/commands/feed.ts
+init_formatter();
+init_errors();
+
+// src/feed/local.ts
+import { chmod as chmod5, mkdir as mkdir5 } from "fs/promises";
+import { dirname as dirname7 } from "path";
+async function openFeedHandoff(path) {
+  const bun = "Bun" in globalThis;
+  const [major, minor] = process.versions.node.split(".").map(Number);
+  if (!bun && !(major > 22 || major === 22 && minor >= 13)) {
+    throw new Error("Feed watch requires Bun or Node.js 22.13+ for its durable SQLite handoff");
+  }
+  await mkdir5(dirname7(path), { recursive: true, mode: 448 });
+  const specifier = [bun ? "bun" : "node", "sqlite"].join(":");
+  const module = await import(specifier);
+  const Database = bun ? module.Database : module.DatabaseSync;
+  const database = new Database(path);
+  await chmod5(path, 384);
+  database.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA busy_timeout = 5000");
+  const failure = (error) => ({
+    ok: false,
+    error: { code: "SQL_ERROR", message: error instanceof Error ? error.message : "Local handoff SQLite operation failed", service: "sql" }
+  });
+  const run2 = (sql2, params = []) => {
+    const result = database.prepare(sql2).run(...params);
+    return { changes: Number(result.changes), lastInsertRowId: Number(result.lastInsertRowid) };
+  };
+  return {
+    close: () => database.close(),
+    handle: {
+      query: async (sql2, params = []) => {
+        try {
+          const records = database.prepare(sql2).all(...params);
+          const columns = records[0] ? Object.keys(records[0]) : [];
+          return { ok: true, data: { columns, rows: records.map((row) => columns.map((column) => row[column])), rowCount: records.length } };
+        } catch (error) {
+          return failure(error);
+        }
+      },
+      execute: async (sql2, params) => {
+        try {
+          return { ok: true, data: run2(sql2, params) };
+        } catch (error) {
+          return failure(error);
+        }
+      },
+      batch: async (statements) => {
+        try {
+          database.exec("BEGIN IMMEDIATE");
+          const results = statements.map((statement) => run2(statement.sql, statement.params));
+          database.exec("COMMIT");
+          return { ok: true, data: { results } };
+        } catch (error) {
+          if (database) {
+            try {
+              database.exec("ROLLBACK");
+            } catch {
+            }
+          }
+          return failure(error);
+        }
+      }
+    }
+  };
+}
+
+// src/feed/runner.ts
+import { spawn as spawn2 } from "child_process";
+function runFeedRunner(argv, response, signal) {
+  if (signal?.aborted) return Promise.resolve("unconfirmed");
+  return new Promise((resolve9) => {
+    let settled = false;
+    let interrupted = false;
+    let failed = false;
+    let stop;
+    const finish = (state2) => {
+      if (settled) return;
+      settled = true;
+      if (stop) signal?.removeEventListener("abort", stop);
+      resolve9(state2);
+    };
+    try {
+      const child = spawn2(argv[0], argv.slice(1), { shell: false, stdio: ["pipe", "inherit", "inherit"] });
+      child.once("error", () => {
+        failed = true;
+        finish("unconfirmed");
+      });
+      child.stdin.on("error", () => {
+        failed = true;
+      });
+      child.once("close", (code5, exitSignal) => finish(!interrupted && !failed && code5 === 0 && exitSignal === null ? "delivered" : "unconfirmed"));
+      stop = () => {
+        interrupted = true;
+        child.kill("SIGKILL");
+      };
+      signal?.addEventListener("abort", stop, { once: true });
+      if (signal?.aborted) stop();
+      else child.stdin.end(`${JSON.stringify(response)}
+`);
+    } catch {
+      finish("unconfirmed");
+    }
+  });
+}
+
+// src/feed/connection.ts
+init_errors();
+function value(result) {
+  if (!result.ok) throw cliErrorFromService(result.error);
+  return result.data;
+}
+async function connectFeedAgent(registry, source, activate) {
+  value(await registry.execute(`CREATE TABLE IF NOT EXISTS feed_agents (
+    agent_id TEXT PRIMARY KEY, agent_did TEXT NOT NULL, label TEXT NOT NULL,
+    output_resource TEXT NOT NULL UNIQUE, response_resource TEXT NOT NULL UNIQUE,
+    authorization_json TEXT NOT NULL
+  )`));
+  value(await registry.execute(`CREATE TABLE IF NOT EXISTS feed_agent_bindings (
+    agent_id TEXT PRIMARY KEY, agent_did TEXT NOT NULL,
+    output_resource TEXT NOT NULL UNIQUE, response_resource TEXT NOT NULL UNIQUE
+  )`));
+  value(await registry.execute(`INSERT INTO feed_agent_bindings
+    (agent_id, agent_did, output_resource, response_resource)
+    SELECT agent_id, agent_did, output_resource, response_resource FROM feed_agents WHERE agent_id = ?
+    ON CONFLICT DO NOTHING`, [source.sourceId]));
+  value(await registry.execute(`INSERT INTO feed_agent_bindings
+    (agent_id, agent_did, output_resource, response_resource) VALUES (?, ?, ?, ?)
+    ON CONFLICT DO NOTHING`, [source.sourceId, source.agentDid, source.output.database, source.responses.database]));
+  const binding = value(await registry.query(
+    "SELECT agent_did, output_resource, response_resource FROM feed_agent_bindings WHERE agent_id = ?",
+    [source.sourceId]
+  )).rows[0];
+  if (!binding || binding[0] !== source.agentDid || binding[1] !== source.output.database || binding[2] !== source.responses.database) {
+    throw new Error("The owner feed token or resources are already bound to another agent identity");
+  }
+  const existing = value(await registry.query(
+    "SELECT agent_did, output_resource, response_resource FROM feed_agents WHERE agent_id = ?",
+    [source.sourceId]
+  )).rows[0];
+  if (existing && (existing[0] !== source.agentDid || existing[1] !== source.output.database || existing[2] !== source.responses.database)) {
+    throw new Error("The owner feed registry does not match the reserved binding");
+  }
+  const grant = await activate();
+  const provenance = JSON.stringify(grant);
+  const saved = value(await registry.execute(
+    `INSERT INTO feed_agents
+    (agent_id, agent_did, label, output_resource, response_resource, authorization_json)
+    VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (agent_id) DO UPDATE SET
+    label = excluded.label, authorization_json = excluded.authorization_json
+    WHERE feed_agents.agent_did = excluded.agent_did AND feed_agents.output_resource = excluded.output_resource
+    AND feed_agents.response_resource = excluded.response_resource`,
+    [source.sourceId, source.agentDid, source.label, source.output.database, source.responses.database, provenance]
+  ));
+  if (saved.changes !== 1) throw new Error("The activated grant was not registered under its reserved feed binding");
+  const confirmed = value(await registry.query(
+    "SELECT agent_did, output_resource, response_resource, authorization_json FROM feed_agents WHERE agent_id = ?",
+    [source.sourceId]
+  )).rows[0];
+  if (!confirmed || confirmed[0] !== source.agentDid || confirmed[1] !== source.output.database || confirmed[2] !== source.responses.database || confirmed[3] !== provenance) {
+    throw new Error("The owner feed registry did not confirm the activated grant provenance");
+  }
+  return grant;
+}
+
+// src/commands/feed.ts
+var FEED_PREFIX = "xyz.tinycloud.tinychat/feed";
+var REGISTRY = "xyz.tinycloud.tinychat/home_feed";
+function value2(result) {
+  if (!result.ok) throw cliErrorFromService(result.error);
+  return result.data;
+}
+async function context(command) {
+  const opts = command.optsWithGlobals();
+  const profile = await ProfileManager.resolveContext(opts);
+  const node = await ensureAuthenticated(profile);
+  const space = await resolveFeedSpace(node.spaceId, opts.space ?? "applications", profile.profile);
+  if (!space) throw new Error("Feed requires an explicit owner space");
+  const resources = value2(feedResourceNames(FEED_PREFIX, opts.agent));
+  const sql2 = node.sqlForSpace(space);
+  return {
+    profile,
+    node,
+    space,
+    resources,
+    sql: sql2,
+    output: sql2.db(resources.outputResource),
+    responses: sql2.db(resources.responseResource)
+  };
+}
+function agentOptions(command) {
+  return command.requiredOption("--agent <token>", "Stable owner-scoped agent token").option("--space <name|uri>", "Owner space containing the feed resources", "applications");
+}
+async function readPrivatePayload(file) {
+  if (file === void 0) return void 0;
+  try {
+    const parsed = feedResponsePayloadSchema.safeParse(JSON.parse(await readFile11(file, "utf8")));
+    if (!parsed.success) throw new Error("Invalid payload envelope");
+    return parsed.data;
+  } catch {
+    throw new Error("Could not read a valid private feed response payload file");
+  }
+}
+function registerFeedCommand(program) {
+  const feed = program.command("feed").description("SQLite agent cards, owner responses and durable runtime handoff").addHelpText("after", `
+Owner connection provisions separate output and response databases and activates one
+bundled delegation. Agent labels and tokens select resources, never confer authority.
+Home's owner grant uses ${FEED_PREFIX}/ (trailing slash namespace); agent grants
+name exact output, response and response-hook resources. No agent schema or response write.
+
+publish/respond/message/handling read JSON files carrying full card/revision/issuance
+and response IDs. Retain the same response ID when retrying a saved answer or message.
+Messages never answer cards; saving an answer is not acknowledgement or completion.
+
+watch requires Bun or Node.js 22.13+ (built-in SQLite). --runner is a JSON argv array,
+never a shell command. The runner receives allowlisted response-header JSON and must
+exit zero only after durable acceptance. Uncertain delivery remains unconfirmed and
+is never automatically repeated. Renewal reconciles durable rows at most every five
+minutes while connected; hook notifications are wakeups, not replay or execution proof.
+Private typed payloads are saved atomically with respond/message --payload-file and read
+explicitly with feed payload. Default notifications include metadata, never payload data.
+`);
+  agentOptions(feed.command("connect").description("Owner: provision an agent feed and activate its exact bundled grant")).requiredOption("--to <did>", "Authenticated agent DID receiving the grant").requiredOption("--label <label>", "Owner registry display label").option("--expiry <duration>", "Delegation expiry duration", "24h").action(async (options, command) => {
+    try {
+      const { node, space, sql: sql2, resources, output: output2, responses } = await context(command);
+      const did = options.to.split("#")[0];
+      const source = {
+        sourceId: options.agent,
+        agentDid: did,
+        label: options.label,
+        output: { spaceId: space, database: resources.outputResource },
+        responses: { spaceId: space, database: resources.responseResource }
+      };
+      const delegation = await connectFeedAgent(sql2.db(REGISTRY), source, async () => {
+        value2(await initializeFeedDatabases({ output: output2, responses }));
+        const expiry = parseExpiry2(options.expiry).getTime() - Date.now();
+        const { delegation: delegation2 } = await node.delegateTo(did, [
+          { service: "tinycloud.sql", space, path: resources.outputResource, actions: ["tinycloud.sql/read", "tinycloud.sql/write"] },
+          { service: "tinycloud.sql", space, path: resources.responseResource, actions: ["tinycloud.sql/read"] },
+          { service: "tinycloud.hooks", space, path: `sql/${resources.responseResource}`, actions: ["tinycloud.hooks/subscribe"] }
+        ], { expiry, requireActivation: true });
+        return delegation2;
+      });
+      outputJson({ source, delegation });
+    } catch (error) {
+      return handleError(error);
+    }
+  });
+  agentOptions(feed.command("publish").description("Agent: publish an immutable card issuance")).requiredOption("--file <path>", "Card JSON file").action(async (options, command) => {
+    try {
+      const { output: output2 } = await context(command);
+      const card = feedCardSchema.parse(JSON.parse(await readFile11(options.file, "utf8")));
+      outputJson(value2(await publishFeedCard(output2, card)));
+    } catch (error) {
+      return handleError(error);
+    }
+  });
+  agentOptions(feed.command("respond").description("Owner: append a response bound to an exact card revision and issuance")).requiredOption("--file <path>", "Response JSON file including its durable full responseId").option("--payload-file <path>", "Private typed JSON payload envelope, stored separately from the response header").action(async (options, command) => {
+    try {
+      const { output: output2, responses } = await context(command);
+      let response;
+      try {
+        const parsed = newFeedResponseSchema.safeParse(JSON.parse(await readFile11(options.file, "utf8")));
+        if (!parsed.success) throw new Error("Invalid response header");
+        response = parsed.data;
+      } catch {
+        throw new Error("Could not read a valid feed response header file");
+      }
+      const payload = await readPrivatePayload(options.payloadFile);
+      outputJson(value2(await appendFeedResponse(output2, responses, response, payload)));
+    } catch (error) {
+      return handleError(error);
+    }
+  });
+  agentOptions(feed.command("message").description("Owner: send a note without answering or superseding a card")).requiredOption("--file <path>", "Message JSON with kind=message, text and full response/card/revision/issuance IDs").option("--payload-file <path>", "Private typed JSON payload envelope, stored separately from the message header").action(async (options, command) => {
+    try {
+      const { output: output2, responses } = await context(command);
+      let message;
+      try {
+        const parsed = newFeedMessageSchema.safeParse(JSON.parse(await readFile11(options.file, "utf8")));
+        if (!parsed.success) throw new Error("Invalid message header");
+        message = parsed.data;
+      } catch {
+        throw new Error("Could not read a valid feed message header file");
+      }
+      const payload = await readPrivatePayload(options.payloadFile);
+      outputJson(value2(await appendFeedMessage(output2, responses, message, payload)));
+    } catch (error) {
+      return handleError(error);
+    }
+  });
+  agentOptions(feed.command("handling").description("Agent: append response acknowledgement or outcome without changing owner responses")).requiredOption("--file <path>", "Handling JSON including full response and card identities").action(async (options, command) => {
+    try {
+      const { output: output2 } = await context(command);
+      const handling = feedHandlingSchema.parse(JSON.parse(await readFile11(options.file, "utf8")));
+      outputJson(value2(await recordFeedHandling(output2, handling)));
+    } catch (error) {
+      return handleError(error);
+    }
+  });
+  agentOptions(feed.command("list").description("List current card issuances")).action(async (_options, command) => {
+    try {
+      outputJson(value2(await listFeedCards((await context(command)).output)));
+    } catch (error) {
+      return handleError(error);
+    }
+  });
+  agentOptions(feed.command("show <reference>").description("Read the current answer, acknowledgement and outcome separately; messages are excluded")).action(async (reference, _options, command) => {
+    try {
+      const { output: output2, responses } = await context(command);
+      const identity = value2(await resolveFeedCard(output2, reference));
+      outputJson(value2(await getFeedCardState(output2, responses, identity)));
+    } catch (error) {
+      return handleError(error);
+    }
+  });
+  agentOptions(feed.command("responses").description("Read a durable ordered response page")).option("--after <sequence>", "Exclusive sequence cursor", "0").option("--limit <count>", "Maximum rows (1-1000)", "100").action(async (options, command) => {
+    try {
+      const { responses } = await context(command);
+      outputJson(value2(await listFeedResponses(responses, { afterSequence: Number(options.after), limit: Number(options.limit) })));
+    } catch (error) {
+      return handleError(error);
+    }
+  });
+  agentOptions(feed.command("payload").description("Explicitly read a private response payload using its full identity")).requiredOption("--response <id>", "Full durable response ID").requiredOption("--card <id>", "Full card ID").requiredOption("--revision <number>", "Exact card revision").requiredOption("--issuance <id>", "Exact card issuance ID").action(async (options, command) => {
+    try {
+      const { responses } = await context(command);
+      const payload = value2(await readFeedResponsePayload(responses, {
+        responseId: options.response,
+        cardId: options.card,
+        revision: Number(options.revision),
+        issuanceId: options.issuance
+      }));
+      outputJson(payload ?? null);
+    } catch (error) {
+      return handleError(error);
+    }
+  });
+  agentOptions(feed.command("watch").description("Agent: deliver durable owner responses to an external argv runner")).requiredOption("--recipient <id>", "Stable runtime recipient identity used by the handoff ledger").requiredOption("--runner <json>", `JSON argv array, e.g. '["node","agent-handler.js"]'`).option("--handoff <path>", "Durable local SQLite handoff path (default: profile feed ledger)").action(async (options, command) => {
+    let local;
+    const abort = new AbortController();
+    const stop = () => abort.abort();
+    try {
+      const argv = JSON.parse(options.runner);
+      if (!Array.isArray(argv) || argv.length === 0 || argv.some((item) => typeof item !== "string") || !argv[0]) {
+        throw new Error("--runner must be a nonempty JSON string argv array");
+      }
+      const { profile, node, space, responses, resources } = await context(command);
+      const directory = await ProfileManager.ensureProfileDir(profile.profile);
+      local = await openFeedHandoff(options.handoff ?? join15(directory, `feed-${options.agent}.sqlite`));
+      process.on("SIGINT", stop);
+      process.on("SIGTERM", stop);
+      const runner = [argv[0], ...argv.slice(1)];
+      await listenFeedResponses({
+        responses,
+        handoff: local.handle,
+        recipient: options.recipient,
+        hooks: node.hooks,
+        subscription: { space, service: "sql", pathPrefix: resources.responseResource },
+        signal: abort.signal,
+        deliver: (response) => runFeedRunner(runner, response, abort.signal)
+      });
+    } catch (error) {
+      return handleError(error);
+    } finally {
+      process.off("SIGINT", stop);
+      process.off("SIGTERM", stop);
+      local?.close();
+    }
+  });
+}
+
 // src/commands/init.ts
 init_profiles();
 init_formatter();
@@ -37818,7 +38222,7 @@ function missingGrantHint(profile, appId) {
 }
 
 // src/commands/kv.ts
-import { readFile as readFile11 } from "fs/promises";
+import { readFile as readFile12 } from "fs/promises";
 
 // src/lib/private-output.ts
 init_storage();
@@ -37826,7 +38230,7 @@ init_errors();
 init_constants();
 import { randomUUID as randomUUID2 } from "crypto";
 import { lstat as lstat8, open as open11, rename as rename3, rm as rm5 } from "fs/promises";
-import { basename as basename2, dirname as dirname7, join as join15 } from "path";
+import { basename as basename2, dirname as dirname8, join as join16 } from "path";
 async function validatePrivateOutput(path, label = "output") {
   try {
     const destination = await lstat8(path);
@@ -37837,7 +38241,7 @@ async function validatePrivateOutput(path, label = "output") {
     if (error?.code !== "ENOENT") throw error;
   }
   try {
-    const parent = await lstat8(dirname7(path));
+    const parent = await lstat8(dirname8(path));
     if (!parent.isDirectory()) {
       throw new CLIError("INVALID_ARGUMENT", `${label} "${path}" requires an existing directory parent.`, ExitCode.USAGE_ERROR);
     }
@@ -37846,16 +38250,16 @@ async function validatePrivateOutput(path, label = "output") {
     throw new CLIError("INVALID_ARGUMENT", `${label} "${path}" requires an existing directory parent.`, ExitCode.USAGE_ERROR);
   }
 }
-async function writePrivateOutput(path, value, label = "output") {
+async function writePrivateOutput(path, value3, label = "output") {
   await validatePrivateOutput(path, label);
-  const parentPath = dirname7(path);
-  const temp = join15(parentPath, `.${basename2(path)}.${randomUUID2()}.tmp`);
+  const parentPath = dirname8(path);
+  const temp = join16(parentPath, `.${basename2(path)}.${randomUUID2()}.tmp`);
   let created = false;
   try {
     const handle = await open11(temp, "wx", PRIVATE_FILE_MODE);
     created = true;
     try {
-      await handle.writeFile(value);
+      await handle.writeFile(value3);
       await handle.sync();
     } finally {
       await handle.close();
@@ -37962,7 +38366,7 @@ function registerKvCommand(program) {
       return handleError(error);
     }
   });
-  kv2.command("put <key> [value]").description("Set a value").option("--file <path>", "Read value from file").option("--stdin", "Read value from stdin").option("--if-none-match <value>", "`--if-none-match '*'`: Write only if the key doesn't exist yet; never overwrite").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").action(async (key, value, options, cmd) => {
+  kv2.command("put <key> [value]").description("Set a value").option("--file <path>", "Read value from file").option("--stdin", "Read value from stdin").option("--if-none-match <value>", "`--if-none-match '*'`: Write only if the key doesn't exist yet; never overwrite").option("--space <name|uri>", "Target a non-primary space (short name or full URI)").action(async (key, value3, options, cmd) => {
     try {
       assertAddressableKey(key);
       if (options.ifNoneMatch !== void 0 && options.ifNoneMatch !== "*") {
@@ -37972,7 +38376,7 @@ function registerKvCommand(program) {
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const node = await ensureAuthenticated(ctx);
       let putValue;
-      const sources = [value !== void 0, !!options.file, !!options.stdin].filter(Boolean);
+      const sources = [value3 !== void 0, !!options.file, !!options.stdin].filter(Boolean);
       if (sources.length === 0) {
         throw new CLIError("USAGE_ERROR", "Must provide a value, --file, or --stdin", ExitCode.USAGE_ERROR);
       }
@@ -37980,14 +38384,14 @@ function registerKvCommand(program) {
         throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
       }
       if (options.file) {
-        putValue = await readFile11(options.file);
+        putValue = await readFile12(options.file);
       } else if (options.stdin) {
         putValue = await readStdin2();
       } else {
         try {
-          putValue = JSON.parse(value);
+          putValue = JSON.parse(value3);
         } catch {
-          putValue = value;
+          putValue = value3;
         }
       }
       const { kv: kv3, spaceUri } = await kvHandle(node, options.space, ctx.profile);
@@ -38128,7 +38532,7 @@ init_constants();
 init_formatter();
 init_errors();
 init_sdk();
-import { readFile as readFile12 } from "fs/promises";
+import { readFile as readFile13 } from "fs/promises";
 import { NamedKeyError, createNamedKeyClient } from "@tinycloud/node-sdk/encryption-keys";
 import { CLI_NAME as CLI_NAME27 } from "@tinycloud/operations/cli-name";
 async function readStdin3() {
@@ -38139,7 +38543,7 @@ async function readStdin3() {
   return Buffer.concat(chunks);
 }
 async function readInput(file) {
-  return file === void 0 ? readStdin3() : readFile12(file);
+  return file === void 0 ? readStdin3() : readFile13(file);
 }
 function cliErrorFromNamedKey(error, command, path) {
   if (!(error instanceof NamedKeyError)) return error;
@@ -38301,7 +38705,7 @@ init_constants();
 init_theme();
 import { resolveManifestKnowledgeRoot as resolveManifestKnowledgeRoot2 } from "@tinycloud/sdk-core";
 import { CLI_NAME as CLI_NAME28 } from "@tinycloud/operations/cli-name";
-import { readFile as readFile13 } from "fs/promises";
+import { readFile as readFile14 } from "fs/promises";
 var DEFAULT_APP_SPACE = "applications";
 function registerManifestCommand(program) {
   const manifest = program.command("manifest").description("Inspect TinyCloud app manifests");
@@ -38415,7 +38819,7 @@ async function loadManifestSource2(source) {
     }
     return response.text();
   }
-  return readFile13(source, "utf8");
+  return readFile14(source, "utf8");
 }
 function prefixWithAppId(path, appId) {
   const slash = path.indexOf("/");
@@ -38851,8 +39255,8 @@ init_profile_replicas();
 import { CLI_NAME as CLI_NAME31 } from "@tinycloud/operations/cli-name";
 import { randomBytes as randomBytes7 } from "crypto";
 import { constants as fsConstants5 } from "fs";
-import { mkdir as mkdir5, open as open12, readdir as readdir6, rename as rename4, unlink as unlink5, lstat as lstat9 } from "fs/promises";
-import { basename as basename3, dirname as dirname8, join as join16, resolve as resolve5 } from "path";
+import { mkdir as mkdir6, open as open12, readdir as readdir6, rename as rename4, unlink as unlink5, lstat as lstat9 } from "fs/promises";
+import { basename as basename3, dirname as dirname9, join as join17, resolve as resolve5 } from "path";
 
 // src/lib/replication-report.ts
 function percentile(values, fraction) {
@@ -38912,7 +39316,7 @@ function renderReplicationReport(report) {
   const lines = [
     `Replication report (since ${report.since})`,
     `Reads: ${report.totals.reads}; replica: ${report.totals.replicaReads}; hit ratio: ${(report.totals.hitRatio * 100).toFixed(1)}%`,
-    `Latency ms: ${Object.entries(report.latencyMs).map(([source, value]) => `${source} p50=${value.p50 ?? "\u2014"} p95=${value.p95 ?? "\u2014"}`).join("; ") || "none"}`,
+    `Latency ms: ${Object.entries(report.latencyMs).map(([source, value3]) => `${source} p50=${value3.p50 ?? "\u2014"} p95=${value3.p95 ?? "\u2014"}`).join("; ") || "none"}`,
     `Staleness ms: p50=${report.stalenessMs.p50 ?? "\u2014"} p95=${report.stalenessMs.p95 ?? "\u2014"} max=${report.stalenessMs.max ?? "\u2014"}`,
     `Syncs: ${Object.entries(report.syncs).map(([key, count]) => `${key}=${count}`).join(", ") || "none"}`,
     `Writes: ${Object.entries(report.writes).map(([key, count]) => `${key}=${count}`).join(", ") || "none"}`,
@@ -39026,7 +39430,7 @@ async function replicaNames(profile) {
       if (entry.isSymbolicLink()) throw localPathChanged(profile);
       if (!NAME.test(entry.name) || !entry.isDirectory()) continue;
       const present = await withPinnedLocalDirectory(profile, root, entry.name, async (directory) => {
-        const database = await lstat9(join16(directory, "replica.db"), { bigint: true }).catch((error) => {
+        const database = await lstat9(join17(directory, "replica.db"), { bigint: true }).catch((error) => {
           if (error.code === "ENOENT") return null;
           throw error;
         });
@@ -39050,7 +39454,7 @@ async function withReplicaRoot(profile, action, create5 = false) {
   const readRoot = async (directory, recheckProfile) => {
     if (create5) {
       if (recheckProfile) await recheckProfile();
-      await mkdir5(join16(directory, "replicas"), { mode: 448 }).catch((error) => {
+      await mkdir6(join17(directory, "replicas"), { mode: 448 }).catch((error) => {
         if (error.code !== "EEXIST") throw error;
       });
     }
@@ -39064,7 +39468,7 @@ async function withReplicaRoot(profile, action, create5 = false) {
   if (process.platform === "linux") return readRoot(profileDirectory);
   const checked = await withPinnedLocalDirectory(
     profile,
-    dirname8(profileDirectory),
+    dirname9(profileDirectory),
     basename3(profileDirectory),
     (directory, _named, _identity, recheckProfile) => readRoot(directory, recheckProfile)
   );
@@ -39076,7 +39480,7 @@ async function withReplicaDirectory(profile, name, action, create5 = false) {
   const result = await withReplicaRoot(profile, async (root, recheckRoot, recheckProfile) => {
     if (create5) {
       await recheckRoot();
-      await mkdir5(join16(root, name), { mode: 448 }).catch((error) => {
+      await mkdir6(join17(root, name), { mode: 448 }).catch((error) => {
         if (error.code !== "EEXIST") throw error;
       });
     }
@@ -39087,7 +39491,7 @@ async function withReplicaDirectory(profile, name, action, create5 = false) {
       async (_directory, path, expectedDirectory, recheckChild) => {
         await recheckRoot();
         await recheckChild();
-        const database = await lstat9(join16(_directory, "replica.db"), { bigint: true }).catch((error) => {
+        const database = await lstat9(join17(_directory, "replica.db"), { bigint: true }).catch((error) => {
           if (error.code === "ENOENT") return null;
           throw error;
         });
@@ -39271,16 +39675,16 @@ function chooseGrant(grants, deviceDid, space, prefix) {
 async function grantTransports(input) {
   const [{ KVService, ServiceContext }, wasm] = await Promise.all([import("@tinycloud/sdk-core"), import("@tinycloud/node-sdk-wasm")]);
   return (grant) => {
-    const context = new ServiceContext({
+    const context2 = new ServiceContext({
       invoke: wasm.invoke,
       invokeAny: wasm.invokeAny,
       fetch: globalThis.fetch.bind(globalThis),
       hosts: [input.host]
     });
     const kv2 = new KVService({});
-    kv2.initialize(context);
-    context.registerService("kv", kv2);
-    context.setSession({
+    kv2.initialize(context2);
+    context2.registerService("kv", kv2);
+    context2.setSession({
       delegationHeader: { Authorization: new TextDecoder().decode(grant.bytes) },
       delegationCid: grant.cid,
       spaceId: input.space,
@@ -39317,7 +39721,7 @@ function describeStatus(status) {
 }
 async function writeFileAtomic(path, bytes) {
   const target = resolve5(path);
-  const temp = join16(dirname8(target), `.${basename3(target)}.${randomBytes7(6).toString("hex")}.tmp`);
+  const temp = join17(dirname9(target), `.${basename3(target)}.${randomBytes7(6).toString("hex")}.tmp`);
   const handle = await open12(temp, fsConstants5.O_CREAT | fsConstants5.O_EXCL | fsConstants5.O_WRONLY, 384);
   try {
     await handle.writeFile(bytes);
@@ -39343,9 +39747,9 @@ function replicaSecretsWarning(space, prefix, secretsAllowed) {
   if (!secretsAllowed || !requiresSecretsOptIn(space, prefix)) return void 0;
   return `This replica stores the ciphertext of every secret under "${prefix}". A tinycloud.encryption/decrypt grant covers the whole encryption network, not one secret (TC-755), so whoever holds decrypt can open every replicated secret.`;
 }
-function localFileId(value) {
-  if (typeof value === "bigint") return value >= 0n ? value : null;
-  return Number.isSafeInteger(value) && value >= 0 ? BigInt(value) : null;
+function localFileId(value3) {
+  if (typeof value3 === "bigint") return value3 >= 0n ? value3 : null;
+  return Number.isSafeInteger(value3) && value3 >= 0 ? BigInt(value3) : null;
 }
 function sameLocalEntry(left, right) {
   const dev = localFileId(left.dev);
@@ -39360,7 +39764,7 @@ async function assertNamedLocalEntry(profile, path, expected, kind) {
   if (!current || current.isSymbolicLink() || (kind === "directory" ? !current.isDirectory() : !current.isFile()) || !sameLocalEntry(expected, current)) throw localPathChanged(profile);
 }
 async function withPinnedLocalDirectory(profile, parent, name, action) {
-  const path = join16(parent, name);
+  const path = join17(parent, name);
   const before = await lstat9(path, { bigint: true }).catch((error) => {
     if (error.code === "ENOENT") return null;
     throw error;
@@ -39389,7 +39793,7 @@ async function withPinnedLocalDirectory(profile, parent, name, action) {
   }
 }
 async function readReportFile(profile, parent, name) {
-  const path = join16(parent, name);
+  const path = join17(parent, name);
   const before = await lstat9(path, { bigint: true }).catch((error) => {
     if (error.code === "ENOENT") return null;
     throw error;
@@ -39499,7 +39903,7 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
           return createReplicationReport(options.since, persisted?.events ?? [], persisted?.partitions ?? []);
         };
         if (process.platform === "linux") return readPersistedReport(directory);
-        const checked = await withPinnedLocalDirectory(profile, dirname8(directory), basename3(directory), readPersistedReport);
+        const checked = await withPinnedLocalDirectory(profile, dirname9(directory), basename3(directory), readPersistedReport);
         if (checked === null) throw localPathChanged(profile);
         return checked;
       });
@@ -39508,7 +39912,7 @@ or coverage incomplete; 5 grant expired, revoked or not yet valid; 6 network;
 `);
     }, false)
   );
-  replica.command("sync").description("Create or update a replica from its source host").option("--replica <name>", "Replica name (default: the profile's only replica, or one named after the prefix)").option("--space <id|name>", "Space to replicate (first sync; default: the space of the sync grant)").option("--prefix <prefix>", "KV prefix to replicate, e.g. notes/ (first sync)").option("--retention-grant <cid>", "CID of a tinycloud.kv/retain grant: keep local reads after the sync grant expires").option("--limit <n>", "Feed page size (1-1000)", (value) => Number.parseInt(value, 10)).option("--allow-secrets", "Opt in to copying ciphertext from a secrets space, vault prefix, or whole space").action(
+  replica.command("sync").description("Create or update a replica from its source host").option("--replica <name>", "Replica name (default: the profile's only replica, or one named after the prefix)").option("--space <id|name>", "Space to replicate (first sync; default: the space of the sync grant)").option("--prefix <prefix>", "KV prefix to replicate, e.g. notes/ (first sync)").option("--retention-grant <cid>", "CID of a tinycloud.kv/retain grant: keep local reads after the sync grant expires").option("--limit <n>", "Feed page size (1-1000)", (value3) => Number.parseInt(value3, 10)).option("--allow-secrets", "Opt in to copying ciphertext from a secrets space, vault prefix, or whole space").action(
     (options, cmd) => run(async () => {
       const profile = await profileName(cmd);
       if (options.prefix !== void 0) {
@@ -39652,7 +40056,7 @@ ${describeStatus(status)}
       });
     })
   );
-  replica.command("list [prefix]").description("List live keys in the local replica (never touches the network)").option("--replica <name>", "Replica name").option("--after <key>", "Start after this key").option("--limit <n>", "Maximum keys", (value) => Number.parseInt(value, 10)).action(
+  replica.command("list [prefix]").description("List live keys in the local replica (never touches the network)").option("--replica <name>", "Replica name").option("--after <key>", "Start after this key").option("--limit <n>", "Maximum keys", (value3) => Number.parseInt(value3, 10)).action(
     (prefix, options, cmd) => run(async () => {
       if (options.limit !== void 0 && (!Number.isInteger(options.limit) || options.limit < 1)) {
         throw new CLIError("USAGE_ERROR", "--limit must be a positive integer.", ExitCode.USAGE_ERROR);
@@ -39744,8 +40148,8 @@ init_errors();
 init_warnings();
 init_constants();
 import { CLI_NAME as CLI_NAME33 } from "@tinycloud/operations/cli-name";
-import { readFile as readFile14 } from "fs/promises";
-import { join as join17 } from "path";
+import { readFile as readFile15 } from "fs/promises";
+import { join as join18 } from "path";
 import { constants as osConstants, homedir, hostname, userInfo } from "os";
 import { appSecretScope } from "@tinycloud/sdk-core";
 import { invokeOperation as invokeOperation3 } from "@tinycloud/operations";
@@ -39833,14 +40237,14 @@ function runProbeChild(request, options = {}) {
   const args = options.argv ?? probeChildArgv(request);
   const budgetMs = options.budgetMs ?? ATTEMPT_BUDGET_MS;
   const killGraceMs = options.killGraceMs ?? KILL_GRACE_MS;
-  const spawn3 = options.spawn ?? nodeSpawn;
+  const spawn4 = options.spawn ?? nodeSpawn;
   const signal = options.signal;
   return new Promise((resolve9) => {
     if (signal?.aborted) {
       resolve9({ kind: "cancelled" });
       return;
     }
-    const child = spawn3(command, args, { env: process.env, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn4(command, args, { env: process.env, stdio: ["ignore", "pipe", "pipe"] });
     let outcome;
     let stdout = Buffer.alloc(0);
     let stderr = Buffer.alloc(0);
@@ -39855,9 +40259,9 @@ function runProbeChild(request, options = {}) {
         if (!exited) child.kill("SIGKILL");
       }, killGraceMs);
     };
-    const settle = (value) => {
+    const settle = (value3) => {
       if (outcome !== void 0) return;
-      outcome = value;
+      outcome = value3;
       stop();
     };
     const onAbort = () => settle({ kind: "cancelled" });
@@ -39917,8 +40321,8 @@ function childErrorCode(stderr) {
   }
   return void 0;
 }
-function plainObject(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+function plainObject(value3) {
+  return typeof value3 === "object" && value3 !== null && !Array.isArray(value3);
 }
 function parseStatusEnvelope(line) {
   let parsed;
@@ -39928,15 +40332,15 @@ function parseStatusEnvelope(line) {
     return void 0;
   }
   if (!plainObject(parsed)) return void 0;
-  const value = parsed;
-  if (!plainObject(value.operation) || value.operation?.operationId !== STATUS_OPERATION_ID) return void 0;
-  const warnings = Array.isArray(value.warnings) ? { warnings: value.warnings } : {};
+  const value3 = parsed;
+  if (!plainObject(value3.operation) || value3.operation?.operationId !== STATUS_OPERATION_ID) return void 0;
+  const warnings = Array.isArray(value3.warnings) ? { warnings: value3.warnings } : {};
   const operation = { operationId: STATUS_OPERATION_ID };
-  if (value.status === "ok" && plainObject(value.output)) {
-    return { status: "ok", operation, output: value.output, ...warnings };
+  if (value3.status === "ok" && plainObject(value3.output)) {
+    return { status: "ok", operation, output: value3.output, ...warnings };
   }
-  const error = value.error;
-  if (value.status === "error" && plainObject(error) && typeof error?.code === "string" && typeof error.message === "string") {
+  const error = value3.error;
+  if (value3.status === "error" && plainObject(error) && typeof error?.code === "string" && typeof error.message === "string") {
     return {
       status: "error",
       operation,
@@ -39953,7 +40357,7 @@ function parseStatusEnvelope(line) {
 }
 
 // src/lib/run-command.ts
-import { execFileSync, spawn as spawn2 } from "child_process";
+import { execFileSync, spawn as spawn3 } from "child_process";
 import { existsSync, readFileSync as readFileSync2 } from "fs";
 var FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"];
 var TERMINAL_SIGNALS = { SIGINT: true, SIGQUIT: true, SIGHUP: true };
@@ -39994,7 +40398,7 @@ function runCommand(argv, env) {
   return new Promise((resolve9) => {
     let child;
     try {
-      child = spawn2(argv[0], argv.slice(1), { stdio: "inherit", env, shell: false });
+      child = spawn3(argv[0], argv.slice(1), { stdio: "inherit", env, shell: false });
     } catch (error) {
       const code5 = error instanceof Error && "code" in error && typeof error.code === "string" ? error.code : void 0;
       resolve9({ kind: "not_started", ...code5 === void 0 ? {} : { errno: code5 } });
@@ -40048,12 +40452,12 @@ function abortableSleep(ms2, signal) {
     signal.addEventListener("abort", done, { once: true });
   });
 }
-function parseWaitTimeout(value) {
-  if (!TIMEOUT_RE.test(value)) {
-    throw new CLIError("INVALID_TIMEOUT", `Invalid --timeout ${JSON.stringify(value)}: use 0, Ns or Nm (for example 90s or 5m).`, ExitCode.USAGE_ERROR);
+function parseWaitTimeout(value3) {
+  if (!TIMEOUT_RE.test(value3)) {
+    throw new CLIError("INVALID_TIMEOUT", `Invalid --timeout ${JSON.stringify(value3)}: use 0, Ns or Nm (for example 90s or 5m).`, ExitCode.USAGE_ERROR);
   }
-  const amount = value === "0" ? 0 : Number(value.slice(0, -1));
-  const ms2 = value.endsWith("m") ? amount * 6e4 : amount * 1e3;
+  const amount = value3 === "0" ? 0 : Number(value3.slice(0, -1));
+  const ms2 = value3.endsWith("m") ? amount * 6e4 : amount * 1e3;
   if (ms2 > MAX_WAIT_TIMEOUT_MS) {
     throw new CLIError("INVALID_TIMEOUT", "--timeout may be at most 9m.", ExitCode.USAGE_ERROR);
   }
@@ -40151,8 +40555,8 @@ async function runSecretsWait(request, deps) {
     await deps.sleep(Math.min(interval, deadline - end), deps.signal);
   }
 }
-function stringList(value) {
-  return Array.isArray(value) && value.every((item) => typeof item === "string") ? value : void 0;
+function stringList(value3) {
+  return Array.isArray(value3) && value3.every((item) => typeof item === "string") ? value3 : void 0;
 }
 function statusOutput(output2) {
   const { status, owner, scope, setup, hint } = output2;
@@ -40345,7 +40749,7 @@ function resolveSecretListPrefix(options = {}) {
 }
 function resolveProfilesDir() {
   const home = process.env.TC_HOME ?? process.env.HOME ?? process.env.USERPROFILE ?? homedir();
-  return join17(home, ".tinycloud", "profiles");
+  return join18(home, ".tinycloud", "profiles");
 }
 async function ensureSecretsNode(ctx, options, openKeyAcquisition, selectedProfile) {
   const auth = authOptions(options);
@@ -40640,15 +41044,15 @@ function parseDelegationExpiry(expiry) {
   }
   return parsed;
 }
-function normalizePortableDelegation2(value) {
-  if (value === null || typeof value !== "object") {
+function normalizePortableDelegation2(value3) {
+  if (value3 === null || typeof value3 !== "object") {
     throw new CLIError(
       "INVALID_DELEGATION_SOURCE",
       "Delegation source must contain a PortableDelegation object.",
       ExitCode.USAGE_ERROR
     );
   }
-  const candidate = value;
+  const candidate = value3;
   const authorization = candidate.delegationHeader;
   if (typeof candidate.cid !== "string" || typeof candidate.spaceId !== "string" || typeof candidate.path !== "string" || !Array.isArray(candidate.actions) || typeof candidate.delegateDID !== "string" || typeof candidate.ownerAddress !== "string" || typeof candidate.chainId !== "number" || typeof authorization !== "object" || authorization === null || typeof authorization.Authorization !== "string") {
     throw new CLIError(
@@ -40664,18 +41068,18 @@ function normalizePortableDelegation2(value) {
     delegationHeader: { Authorization: authorization.Authorization }
   };
 }
-function normalizeDelegationCandidates(value, source) {
-  if (Array.isArray(value)) {
-    return value.flatMap((entry) => normalizeDelegationCandidates(entry, source));
+function normalizeDelegationCandidates(value3, source) {
+  if (Array.isArray(value3)) {
+    return value3.flatMap((entry) => normalizeDelegationCandidates(entry, source));
   }
-  if (value === null || typeof value !== "object") {
+  if (value3 === null || typeof value3 !== "object") {
     throw new CLIError(
       "INVALID_DELEGATION_SOURCE",
       `Delegation source "${source}" must be a delegation file or imported profile reference.`,
       ExitCode.USAGE_ERROR
     );
   }
-  const candidate = value;
+  const candidate = value3;
   if (candidate.delegation !== void 0) {
     const delegation2 = normalizePortableDelegation2(candidate.delegation);
     return [{
@@ -40708,7 +41112,7 @@ function permissionsFromDelegation2(delegation) {
 }
 async function loadDelegationCandidates(source) {
   try {
-    const raw = JSON.parse(await readFile14(source, "utf8"));
+    const raw = JSON.parse(await readFile15(source, "utf8"));
     return normalizeDelegationCandidates(raw, source);
   } catch (error) {
     if (error?.code !== "ENOENT") {
@@ -40727,8 +41131,8 @@ async function loadDelegationCandidates(source) {
     }
   }
   try {
-    const importedPath = join17(resolveProfilesDir(), source, "additional-delegations.json");
-    const raw = JSON.parse(await readFile14(importedPath, "utf8"));
+    const importedPath = join18(resolveProfilesDir(), source, "additional-delegations.json");
+    const raw = JSON.parse(await readFile15(importedPath, "utf8"));
     return normalizeDelegationCandidates(raw, source);
   } catch (error) {
     if (error?.code === "ENOENT") {
@@ -40916,16 +41320,16 @@ function isStoredSessionExpired(session) {
   const signedOrSiweExpiry = sessionExpiresAt(record3);
   return signedOrSiweExpiry !== null && Date.parse(signedOrSiweExpiry) <= Date.now();
 }
-function parseDate(value) {
-  if (value instanceof Date) {
-    return Number.isNaN(value.getTime()) ? null : value;
+function parseDate(value3) {
+  if (value3 instanceof Date) {
+    return Number.isNaN(value3.getTime()) ? null : value3;
   }
-  if (typeof value === "number") {
-    const date2 = new Date(value < 1e10 ? value * 1e3 : value);
+  if (typeof value3 === "number") {
+    const date2 = new Date(value3 < 1e10 ? value3 * 1e3 : value3);
     return Number.isNaN(date2.getTime()) ? null : date2;
   }
-  if (typeof value !== "string" || value.trim() === "") return null;
-  const date = new Date(value);
+  if (typeof value3 !== "string" || value3.trim() === "") return null;
+  const date = new Date(value3);
   return Number.isNaN(date.getTime()) ? null : date;
 }
 function secretKvAbility(action) {
@@ -40994,7 +41398,7 @@ async function readSecret(params) {
     const delegatedCtx = { ...ctx, host: effectiveHost };
     const local = effectiveLocal(await ProfileManager.getProfile(ctx.profile).catch(() => null), options);
     const node = await ensureSecretsNode(delegatedCtx, options);
-    const value = await withSpinner(
+    const value3 = await withSpinner(
       `Getting secret ${name}...`,
       () => readDelegatedSecretValue({
         node,
@@ -41008,7 +41412,7 @@ async function readSecret(params) {
         local
       })
     );
-    return { value };
+    return { value: value3 };
   }
   const privateKey = authOptions(options)?.privateKey;
   const spaceUri = privateKey !== void 0 && options.space !== void 0 && !options.space.startsWith("tinycloud:") ? options.space : target.legacySpaceUri;
@@ -41292,28 +41696,28 @@ function registerSecretsCommand(program, openKeyAcquisition) {
       const target = await resolveSecretReadTarget(ctx, name, options);
       if (options.output) await validatePrivateOutput(options.output, "Secret output");
       const secret = await readSecret({ ctx, host: globalOpts.host, target, options, openKeyAcquisition });
-      const value = secret.value;
+      const value3 = secret.value;
       if (options.delegation) {
         if (options.output) {
-          await writePrivateOutput(options.output, value, "Secret output");
+          await writePrivateOutput(options.output, value3, "Secret output");
           outputJson({ name, written: options.output });
           return;
         }
         if (options.raw) {
-          process.stdout.write(value);
+          process.stdout.write(value3);
           return;
         }
-        outputJson({ name, value });
+        outputJson({ name, value: value3 });
         return;
       }
       try {
         if (options.output) {
-          await writePrivateOutput(options.output, value, "Secret output");
+          await writePrivateOutput(options.output, value3, "Secret output");
           outputJson({ name, written: options.output });
         } else if (options.raw || options.valueOnly) {
-          process.stdout.write(value);
+          process.stdout.write(value3);
         } else {
-          outputJson({ name, value });
+          outputJson({ name, value: value3 });
         }
       } catch (error) {
         throw withOperationWarnings(error, secret.warnings);
@@ -41326,7 +41730,7 @@ function registerSecretsCommand(program, openKeyAcquisition) {
   secrets.command("run [names...]").description("Run a command with secrets in its environment").usage("[options] [names...] -- <command> [args...]").option(
     "--map <NAME=ENV_VAR>",
     "Give secret NAME to the command as environment variable ENV_VAR (repeatable)",
-    (value, previous) => [...previous ?? [], value]
+    (value3, previous) => [...previous ?? [], value3]
   ).option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--delegation <source>", "Delegation file path or imported profile name").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (operands, options, cmd) => {
     try {
       const plan = secretRunPlan(cmd, operands, options.map ?? []);
@@ -41361,7 +41765,7 @@ function registerSecretsCommand(program, openKeyAcquisition) {
       return handleError(error);
     }
   });
-  secrets.command("put <name> [value]").description("Store a secret").option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--file <path>", "Read value from file").option("--stdin", "Read value from stdin").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name, value, options, cmd) => {
+  secrets.command("put <name> [value]").description("Store a secret").option("--scope <scope>", "Logical secret scope").option("--space <name|uri>", "Target a non-default secrets space (short name or full URI)").option("--file <path>", "Read value from file").option("--stdin", "Read value from stdin").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name, value3, options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
@@ -41369,7 +41773,7 @@ function registerSecretsCommand(program, openKeyAcquisition) {
       const spaceUri = await resolveSecretSpace(options.space, ctx.profile);
       const secrets2 = secretsServiceForSpace(node, spaceUri);
       let secretValue;
-      const sources = [value !== void 0, !!options.file, !!options.stdin].filter(Boolean);
+      const sources = [value3 !== void 0, !!options.file, !!options.stdin].filter(Boolean);
       if (sources.length === 0) {
         throw new CLIError("USAGE_ERROR", "Must provide a value, --file, or --stdin", ExitCode.USAGE_ERROR);
       }
@@ -41377,11 +41781,11 @@ function registerSecretsCommand(program, openKeyAcquisition) {
         throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
       }
       if (options.file) {
-        secretValue = await readFile14(options.file, "utf-8");
+        secretValue = await readFile15(options.file, "utf-8");
       } else if (options.stdin) {
         secretValue = (await readStdin4()).toString("utf-8");
       } else {
-        secretValue = value;
+        secretValue = value3;
       }
       const scopeOptions = resolveSecretScope(options);
       const result = await runSecretOperation({
@@ -41591,7 +41995,7 @@ function registerSecretsCommand(program, openKeyAcquisition) {
 
 // src/commands/share.ts
 import { Option } from "commander";
-import { readFile as readFile16 } from "fs/promises";
+import { readFile as readFile17 } from "fs/promises";
 import { CLI_NAME as CLI_NAME34 } from "@tinycloud/operations/cli-name";
 import { ProfileLockTimeoutError as ProfileLockTimeoutError3 } from "@tinycloud/operations/state";
 init_errors();
@@ -41600,11 +42004,11 @@ init_errors();
 init_constants();
 import { authorizationVerdictOf as authorizationVerdictOf2 } from "@tinycloud/sdk-core";
 var NETWORK_FAILURE = /\b(?:fetch failed|ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|UND_ERR_[A-Z_]+)\b|network ?error|failed to fetch/i;
-function record2(value) {
-  return typeof value === "object" && value !== null ? value : void 0;
+function record2(value3) {
+  return typeof value3 === "object" && value3 !== null ? value3 : void 0;
 }
-function httpStatus(value) {
-  const status = typeof value === "number" && Number.isInteger(value) && value >= 400 && value <= 599 ? value : void 0;
+function httpStatus(value3) {
+  const status = typeof value3 === "number" && Number.isInteger(value3) && value3 >= 400 && value3 <= 599 ? value3 : void 0;
   return status;
 }
 function statusOf(error, depth = 0) {
@@ -41651,8 +42055,8 @@ function classifyShareFailure(error, loginHint) {
 }
 
 // src/share/output.ts
-function writeJson2(value) {
-  process.stdout.write(`${JSON.stringify(value, null, 2)}
+function writeJson2(value3) {
+  process.stdout.write(`${JSON.stringify(value3, null, 2)}
 `);
 }
 function authorizationRequiredJson(result) {
@@ -41687,9 +42091,9 @@ function receiveJson(result, path) {
 
 // src/share/io.ts
 import { constants } from "fs";
-import { lstat as lstat10, mkdir as mkdir6, mkdtemp, open as open14, readFile as readFile15, realpath as realpath2, stat as stat6, link as link3, rename as rename5, rm as rm6, unlink as unlink6 } from "fs/promises";
+import { lstat as lstat10, mkdir as mkdir7, mkdtemp, open as open14, readFile as readFile16, realpath as realpath2, stat as stat6, link as link3, rename as rename5, rm as rm6, unlink as unlink6 } from "fs/promises";
 import { randomBytes as randomBytes8 } from "crypto";
-import { basename as basename4, join as join18, resolve as resolve6, sep as sep3 } from "path";
+import { basename as basename4, join as join19, resolve as resolve6, sep as sep3 } from "path";
 init_errors();
 var MAX_SHARE_STDIN_BYTES = 100 * 1024 * 1024;
 var MAX_SHARE_URL_BYTES = 64 * 1024;
@@ -41707,20 +42111,20 @@ async function readBoundedStdin(limit = MAX_SHARE_STDIN_BYTES) {
 }
 async function readBoundedUrlStdin() {
   const bytes = await readBoundedStdin(MAX_SHARE_URL_BYTES);
-  const value = new TextDecoder("utf-8", { fatal: true }).decode(bytes).trim();
-  if (value.length === 0 || /\s/.test(value)) throw new Error("INVALID_ARGUMENT");
-  return value;
+  const value3 = new TextDecoder("utf-8", { fatal: true }).decode(bytes).trim();
+  if (value3.length === 0 || /\s/.test(value3)) throw new Error("INVALID_ARGUMENT");
+  return value3;
 }
-function safeFilename(value) {
-  return shareFilename(value);
+function safeFilename(value3) {
+  return shareFilename(value3);
 }
-function shareFilename(value) {
+function shareFilename(value3) {
   try {
-    return canonicalShareFilename2(value);
+    return canonicalShareFilename2(value3);
   } catch {
     throw new CLIError(
       "UNSAFE_FILENAME",
-      hasUnsafeFilenameCodePoint2(value) ? "filename contains control or invisible characters" : "filename must be one safe path segment",
+      hasUnsafeFilenameCodePoint2(value3) ? "filename contains control or invisible characters" : "filename must be one safe path segment",
       8
     );
   }
@@ -41734,7 +42138,7 @@ async function readShareInput(input, name, limit = MAX_SHARE_STDIN_BYTES) {
   const path = resolve6(input);
   const info = await stat6(path);
   if (!info.isFile() || info.size > limit) throw new Error("MAX_BYTES_EXCEEDED");
-  const bytes = new Uint8Array(await readFile15(path));
+  const bytes = new Uint8Array(await readFile16(path));
   if (bytes.byteLength > limit) throw new Error("MAX_BYTES_EXCEEDED");
   return { bytes, filename };
 }
@@ -41743,7 +42147,7 @@ async function assertDirectory(path) {
   const segments = absolute.split(sep3).filter(Boolean);
   let current = absolute.startsWith(sep3) ? sep3 : "";
   for (const segment of segments) {
-    current = current === sep3 ? join18(current, segment) : join18(current, segment);
+    current = current === sep3 ? join19(current, segment) : join19(current, segment);
     try {
       const info = await lstat10(current);
       if (info.isSymbolicLink()) {
@@ -41753,7 +42157,7 @@ async function assertDirectory(path) {
       } else if (!info.isDirectory()) throw new Error("OUTPUT_EXISTS");
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
-      await mkdir6(current, { mode: 448 });
+      await mkdir7(current, { mode: 448 });
       const created = await lstat10(current);
       if (created.isSymbolicLink() || !created.isDirectory()) throw new Error("OUTPUT_EXISTS");
     }
@@ -41765,17 +42169,17 @@ async function writeShareOutput(directory, filename, bytes, force) {
   const safeName = safeFilename(filename);
   const directoryHandle = await open14(outputDirectory, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
   const stableDirectory = await realpath2(outputDirectory);
-  const outputPath = join18(stableDirectory, safeName);
+  const outputPath = join19(stableDirectory, safeName);
   const directoryIdentity = await directoryHandle.stat();
   const assertStableDirectory = async () => {
     const current = await stat6(stableDirectory);
     if (current.dev !== directoryIdentity.dev || current.ino !== directoryIdentity.ino) throw new Error("OUTPUT_EXISTS");
   };
   await assertStableDirectory();
-  const stagingDirectory = await mkdtemp(join18(stableDirectory, ".tinycloud-share-stage-"));
+  const stagingDirectory = await mkdtemp(join19(stableDirectory, ".tinycloud-share-stage-"));
   const stagingInfo = await lstat10(stagingDirectory);
   if (!stagingInfo.isDirectory() || (stagingInfo.mode & 511) !== 448) throw new Error("OUTPUT_EXISTS");
-  const stagingPath = join18(stagingDirectory, `.tinycloud-share-${randomBytes8(16).toString("hex")}.tmp`);
+  const stagingPath = join19(stagingDirectory, `.tinycloud-share-${randomBytes8(16).toString("hex")}.tmp`);
   let temporaryPath;
   let handle;
   try {
@@ -41812,7 +42216,7 @@ async function writeShareOutput(directory, filename, bytes, force) {
     await rm6(stagingDirectory, { recursive: true, force: true });
     await directoryHandle.close();
   }
-  return join18(outputDirectory, safeName);
+  return join19(outputDirectory, safeName);
 }
 
 // src/commands/share.ts
@@ -41821,12 +42225,12 @@ init_profiles();
 // src/share/html-folder.ts
 import { constants as constants2, existsSync as existsSync2 } from "fs";
 import { lstat as lstat11, open as open15, readdir as readdir7, realpath as realpath3, stat as stat7 } from "fs/promises";
-import { basename as basename5, dirname as dirname9, isAbsolute, join as join19, relative as relativePath, resolve as resolve7, sep as sep4 } from "path";
+import { basename as basename5, dirname as dirname10, isAbsolute, join as join20, relative as relativePath, resolve as resolve7, sep as sep4 } from "path";
 
 // ../share-sdk/dist/html-bundle.js
 var UNSAFE_FILENAME_CODE_POINT3 = /[\p{Cc}\p{Cf}\p{Cs}\u2028\u2029]/u;
-function hasUnsafeFilenameCodePoint3(value) {
-  return UNSAFE_FILENAME_CODE_POINT3.test(value);
+function hasUnsafeFilenameCodePoint3(value3) {
+  return UNSAFE_FILENAME_CODE_POINT3.test(value3);
 }
 var ARTIFACT_ENTRY = "index.html";
 var MAX_ARTIFACT_FILES = 1e3;
@@ -41890,12 +42294,12 @@ function defaultParseHtml(html) {
   return new DOMParser().parseFromString(html, "text/html");
 }
 function canonicalArtifactPath(input) {
-  const value = input.normalize("NFC");
-  const encodedLength = new TextEncoder().encode(value).byteLength;
-  if (value.length === 0 || encodedLength > 4096 || value.startsWith("/") || value.endsWith("/") || value.includes("\\") || hasUnsafeFilenameCodePoint3(value) || ENCODED_PATH_ALIAS.test(value)) {
+  const value3 = input.normalize("NFC");
+  const encodedLength = new TextEncoder().encode(value3).byteLength;
+  if (value3.length === 0 || encodedLength > 4096 || value3.startsWith("/") || value3.endsWith("/") || value3.includes("\\") || hasUnsafeFilenameCodePoint3(value3) || ENCODED_PATH_ALIAS.test(value3)) {
     fail("malformed", "artifact path is not canonical");
   }
-  const segments = value.split("/");
+  const segments = value3.split("/");
   if (segments.some((segment) => segment.length === 0 || segment === "." || segment === ".." || new TextEncoder().encode(segment).byteLength > 255)) {
     fail("malformed", "artifact path is not canonical");
   }
@@ -41920,7 +42324,7 @@ function resolveArtifactReference(basePath, reference) {
   }
   const hashAt = raw.indexOf("#");
   const queryAt = raw.indexOf("?");
-  const end = [hashAt, queryAt].filter((value) => value >= 0).reduce((min, value) => Math.min(min, value), raw.length);
+  const end = [hashAt, queryAt].filter((value3) => value3 >= 0).reduce((min, value3) => Math.min(min, value3), raw.length);
   const pathname = raw.slice(0, end);
   const fragment = hashAt >= 0 ? raw.slice(hashAt) : "";
   if (pathname.length === 0) return { path: canonicalArtifactPath(basePath), fragment, fragmentOnly: true };
@@ -41960,19 +42364,19 @@ function toBase64(bytes) {
   }
   return btoa(binary);
 }
-function chargeInlinedBytes(context, bytes) {
-  context.counter.inlinedBytes += bytes;
-  if (context.counter.inlinedBytes > MAX_ARTIFACT_RENDER_BYTES) fail("limit", "artifact inlined resources exceed the render limit");
+function chargeInlinedBytes(context2, bytes) {
+  context2.counter.inlinedBytes += bytes;
+  if (context2.counter.inlinedBytes > MAX_ARTIFACT_RENDER_BYTES) fail("limit", "artifact inlined resources exceed the render limit");
 }
-function asDataUrl(file, context) {
+function asDataUrl(file, context2) {
   if (file.bytes.byteLength > MAX_ARTIFACT_RENDER_BYTES) fail("limit", "artifact resource exceeds render limit");
   const prefix = `data:${artifactMediaType(file.path, file.mediaType)};base64,`;
-  chargeInlinedBytes(context, prefix.length + 4 * Math.ceil(file.bytes.byteLength / 3));
+  chargeInlinedBytes(context2, prefix.length + 4 * Math.ceil(file.bytes.byteLength / 3));
   return `${prefix}${toBase64(file.bytes)}`;
 }
-function decodeText(file, context) {
+function decodeText(file, context2) {
   if (file.bytes.byteLength > MAX_ARTIFACT_TEXT_BYTES) fail("limit", "artifact text file exceeds render limit");
-  if (context !== void 0) chargeInlinedBytes(context, file.bytes.byteLength);
+  if (context2 !== void 0) chargeInlinedBytes(context2, file.bytes.byteLength);
   try {
     return new TextDecoder("utf-8", { fatal: true }).decode(file.bytes);
   } catch {
@@ -41983,15 +42387,15 @@ function assertClassicScript(source) {
   if (UNSAFE_CLASSIC_SCRIPT.test(source)) fail("unsupported", "artifact script uses a blocked browser capability");
 }
 function normalizeMediaQuery(media, detail = "artifact uses an unsupported stylesheet media query") {
-  const value = media?.trim() ?? "";
-  if (value.length === 0 || value.toLowerCase() === "all") return null;
-  if (/[\u0000-\u001f\u007f<>{};"'`\\]/.test(value) || !SAFE_MEDIA_QUERY.test(value)) fail("unsupported", detail);
-  return value;
+  const value3 = media?.trim() ?? "";
+  if (value3.length === 0 || value3.toLowerCase() === "all") return null;
+  if (/[\u0000-\u001f\u007f<>{};"'`\\]/.test(value3) || !SAFE_MEDIA_QUERY.test(value3)) fail("unsupported", detail);
+  return value3;
 }
 function wrapMediaCss(source, media, detail) {
-  const value = normalizeMediaQuery(media, detail);
-  if (value === null) return source;
-  return `@media ${value} {
+  const value3 = normalizeMediaQuery(media, detail);
+  if (value3 === null) return source;
+  return `@media ${value3} {
 ${source}
 }`;
 }
@@ -42040,22 +42444,22 @@ var URL_ATTRIBUTES = /* @__PURE__ */ new Set([
   "itemtype",
   "itemid"
 ]);
-function trimUrl(value) {
-  return value.replace(/^[\u0000-\u0020]+|[\u0000-\u0020]+$/g, "");
+function trimUrl(value3) {
+  return value3.replace(/^[\u0000-\u0020]+|[\u0000-\u0020]+$/g, "");
 }
-function urlText(value) {
-  return trimUrl(value).replace(/[\t\n\r]/g, "");
+function urlText(value3) {
+  return trimUrl(value3).replace(/[\t\n\r]/g, "");
 }
 function isFragmentOnly(trimmed) {
   return /^#[^\u0000-\u0020\u007f-\u009f\\]*$/.test(trimmed);
 }
 var INLINE_DATA_URL = /^data:;base64(?:,[A-Za-z0-9+/=]*)?(?:#[^\u0000-\u0020\\]*)?$/;
-function isInlineReference(value) {
-  const text = urlText(value);
+function isInlineReference(value3) {
+  const text = urlText(value3);
   return isFragmentOnly(text) || INLINE_DATA_URL.test(text);
 }
-function assertInlineSrcset(value) {
-  for (const raw of value.split(/[\t\n\f\r ]+/)) {
+function assertInlineSrcset(value3) {
+  for (const raw of value3.split(/[\t\n\f\r ]+/)) {
     const token = raw.replace(/,+$/, "");
     if (token === "" || /^\d+(?:\.\d+)?[wx]$/i.test(token)) continue;
     if (!isInlineReference(token)) throw new ArtifactBundleError("unsupported", "artifact page still references a resource", void 0, token);
@@ -42079,8 +42483,8 @@ var JAVASCRIPT_TYPES = /* @__PURE__ */ new Set([
   "text/x-ecmascript",
   "text/x-javascript"
 ]);
-function isJavaScriptType(value) {
-  const type = (value ?? "").replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, "").toLowerCase();
+function isJavaScriptType(value3) {
+  const type = (value3 ?? "").replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, "").toLowerCase();
   if (type === "") return true;
   return JAVASCRIPT_TYPES.has(type.split(";")[0].replace(/[\t\n\f\r ]+$/g, ""));
 }
@@ -42091,8 +42495,8 @@ function withoutDataUris(html) {
 }
 var TEXT_ATTRIBUTES = /^(?:alt|title|placeholder|value|label|content|name|id|class|lang|summary|abbr|datetime|pattern|xmlns(?::[\w.-]+)?|aria-[\w.:-]*|data-[\w.:-]*)$/;
 function looksLikeUrl(raw) {
-  const value = raw.replace(/\\/g, "/");
-  return /(?:^|[^a-z0-9+.-])(?:https?|ftps?|wss?|file|javascript|vbscript|blob|about|view-source|filesystem):/i.test(value) || /(?:^|[\s,;(="'])\/\/\S/.test(value) || /:\/\//.test(value) || /^\s*\.{0,2}\/[^\s]/.test(value);
+  const value3 = raw.replace(/\\/g, "/");
+  return /(?:^|[^a-z0-9+.-])(?:https?|ftps?|wss?|file|javascript|vbscript|blob|about|view-source|filesystem):/i.test(value3) || /(?:^|[\s,;(="'])\/\/\S/.test(value3) || /:\/\//.test(value3) || /^\s*\.{0,2}\/[^\s]/.test(value3);
 }
 var NAMED_CHARACTERS = {
   amp: "&",
@@ -42115,8 +42519,8 @@ var NAMED_CHARACTERS = {
   tab: "	",
   newline: "\n"
 };
-function decodeAttributeValue(value) {
-  return value.replace(/&(?:#[xX]([0-9a-fA-F]{1,6})|#([0-9]{1,7})|([A-Za-z]{2,8}));?/g, (whole, hex2, decimal, name) => {
+function decodeAttributeValue(value3) {
+  return value3.replace(/&(?:#[xX]([0-9a-fA-F]{1,6})|#([0-9]{1,7})|([A-Za-z]{2,8}));?/g, (whole, hex2, decimal, name) => {
     if (name !== void 0) return NAMED_CHARACTERS[name.toLowerCase()] ?? whole;
     const point = Number.parseInt(hex2 ?? decimal ?? "", hex2 === void 0 ? 10 : 16);
     return point > 0 && point <= 1114111 && !(point >= 55296 && point <= 57343) ? String.fromCodePoint(point) : "\uFFFD";
@@ -42126,8 +42530,8 @@ var MARKUP_BLOCKED_NAMES = /* @__PURE__ */ new Set(["base", "form", "iframe", "f
 function unsupportedOutput(detail, reference) {
   throw new ArtifactBundleError("unsupported", detail, void 0, reference);
 }
-function isHrefAnimation(tag, attributeName, value) {
-  return /^(?:animate|set|animatetransform|animatemotion)$/i.test(tag) && attributeName.toLowerCase() === "attributename" && /^(?:xlink:)?href$/i.test(trimUrl(value));
+function isHrefAnimation(tag, attributeName, value3) {
+  return /^(?:animate|set|animatetransform|animatemotion)$/i.test(tag) && attributeName.toLowerCase() === "attributename" && /^(?:xlink:)?href$/i.test(trimUrl(value3));
 }
 function checkAttribute(name, decoded) {
   const local = name.slice(name.lastIndexOf(":") + 1);
@@ -42307,21 +42711,21 @@ function assertSelfContainedPage(output2, options = {}) {
     for (const name of element.getAttributeNames()) {
       const lower = name.toLowerCase();
       const local = lower.slice(lower.lastIndexOf(":") + 1);
-      const value = element.getAttribute(name) ?? "";
+      const value3 = element.getAttribute(name) ?? "";
       if (/^on/.test(lower)) fail("unsupported", "artifact output contains a blocked html feature");
       if (URL_ATTRIBUTES.has(local)) {
-        if (local === "srcset" || local === "imagesrcset") assertInlineSrcset(value);
-        else if (!isInlineReference(value)) throw new ArtifactBundleError("unsupported", "artifact page still references a resource", void 0, value);
-      } else if (lower !== "style" && !TEXT_ATTRIBUTES.test(lower) && looksLikeUrl(urlText(value))) {
-        throw new ArtifactBundleError("unsupported", "artifact page still references a resource", void 0, value);
+        if (local === "srcset" || local === "imagesrcset") assertInlineSrcset(value3);
+        else if (!isInlineReference(value3)) throw new ArtifactBundleError("unsupported", "artifact page still references a resource", void 0, value3);
+      } else if (lower !== "style" && !TEXT_ATTRIBUTES.test(lower) && looksLikeUrl(urlText(value3))) {
+        throw new ArtifactBundleError("unsupported", "artifact page still references a resource", void 0, value3);
       }
-      if (lower === "style" || inSvg) assertOnlyInlineCssReferences(value);
-      if (isHrefAnimation(element.localName, lower, value)) fail("unsupported", "artifact svg animates a resource reference");
+      if (lower === "style" || inSvg) assertOnlyInlineCssReferences(value3);
+      if (isHrefAnimation(element.localName, lower, value3)) fail("unsupported", "artifact svg animates a resource reference");
     }
   }
 }
-function verifySelfContained(output2, context) {
-  assertSelfContainedPage(output2, { parseHtml: context.parseHtml });
+function verifySelfContained(output2, context2) {
+  assertSelfContainedPage(output2, { parseHtml: context2.parseHtml });
 }
 function rejectSvgResourceReferences(roots) {
   for (const element of queryAll(roots, "*")) {
@@ -42347,9 +42751,9 @@ function replaceAsync(input, expression, replacer) {
   const matches = [...input.matchAll(expression)];
   return matches.reduceRight(
     async (next, match) => {
-      const value = await next;
+      const value3 = await next;
       const replacement = await replacer(...match.map((entry) => entry ?? ""));
-      return `${value.slice(0, match.index)}${replacement}${value.slice((match.index ?? 0) + match[0].length)}`;
+      return `${value3.slice(0, match.index)}${replacement}${value3.slice((match.index ?? 0) + match[0].length)}`;
     },
     Promise.resolve(input)
   );
@@ -42377,11 +42781,11 @@ function resolveReferenceFrom(basePath, reference) {
     throw error;
   }
 }
-function requiredFile(context, basePath, reference) {
-  context.counter.references += 1;
-  if (context.counter.references > MAX_ARTIFACT_REFERENCES) fail("limit", "artifact has too many resource references");
+function requiredFile(context2, basePath, reference) {
+  context2.counter.references += 1;
+  if (context2.counter.references > MAX_ARTIFACT_REFERENCES) fail("limit", "artifact has too many resource references");
   const resolved = resolveReferenceFrom(basePath, reference);
-  const file = context.files.get(resolved.path);
+  const file = context2.files.get(resolved.path);
   if (file === void 0) throw new ArtifactBundleError("missing", "artifact resource is missing", basePath, reference);
   return { file, resolved };
 }
@@ -42461,15 +42865,15 @@ function assertOnlyInlineCssReferences(css) {
   let read5 = 0;
   for (const match of text.matchAll(/url\([ \t\n\r\f]*(?:"([^"]*)"|'([^']*)'|([^)"' \t\n\r\f]*))[ \t\n\r\f]*\)/gi)) {
     read5 += 1;
-    const value = match[1] ?? match[2] ?? match[3] ?? "";
-    if (!isInlineReference(value) || value.includes("\\")) {
-      throw new ArtifactBundleError("unsupported", "artifact css references a resource", void 0, value);
+    const value3 = match[1] ?? match[2] ?? match[3] ?? "";
+    if (!isInlineReference(value3) || value3.includes("\\")) {
+      throw new ArtifactBundleError("unsupported", "artifact css references a resource", void 0, value3);
     }
   }
   if (read5 !== opened) fail("unsupported", "artifact css has a url() that cannot be read");
 }
-async function transformCss(sourceText, basePath, context) {
-  if (context.cssStack.length > MAX_ARTIFACT_CSS_IMPORT_DEPTH) fail("limit", "artifact stylesheet import depth exceeded");
+async function transformCss(sourceText, basePath, context2) {
+  if (context2.cssStack.length > MAX_ARTIFACT_CSS_IMPORT_DEPTH) fail("limit", "artifact stylesheet import depth exceeded");
   const source = normalizeCssEscapes(sourceText);
   const imported = await replaceAsync(
     source,
@@ -42477,9 +42881,9 @@ async function transformCss(sourceText, basePath, context) {
     async (_whole, _urlQuote, quotedUrl, unquotedUrl, _quote, quotedReference, media) => {
       const reference = quotedUrl || unquotedUrl || quotedReference;
       if (/^(?:layer|supports)\b/i.test(media.trim()) || /\b(?:layer|supports)\b/i.test(media)) fail("unsupported", "artifact uses an unsupported stylesheet import condition");
-      const { file, resolved } = requiredFile(context, basePath, reference);
-      if (context.cssStack.includes(resolved.path)) fail("unsupported", "artifact stylesheet import cycle");
-      const css = await transformCss(decodeText(file, context), resolved.path, { ...context, cssStack: [...context.cssStack, resolved.path] });
+      const { file, resolved } = requiredFile(context2, basePath, reference);
+      if (context2.cssStack.includes(resolved.path)) fail("unsupported", "artifact stylesheet import cycle");
+      const css = await transformCss(decodeText(file, context2), resolved.path, { ...context2, cssStack: [...context2.cssStack, resolved.path] });
       return wrapMediaCss(css, media, "artifact uses an unsupported stylesheet import condition");
     }
   );
@@ -42488,20 +42892,20 @@ async function transformCss(sourceText, basePath, context) {
     /url\(\s*(["']?)([^"')]+)\1\s*\)/gi,
     async (_whole, _quote, reference) => {
       if (trimUrl(reference).startsWith("#")) return `url("${trimUrl(reference)}")`;
-      const { file, resolved } = requiredFile(context, basePath, reference);
-      const dataUrl = asDataUrl(file, context);
-      return `url("${context.deferred === void 0 ? dataUrl : parkUrl(context.deferred, dataUrl)}${resolved.fragment}")`;
+      const { file, resolved } = requiredFile(context2, basePath, reference);
+      const dataUrl = asDataUrl(file, context2);
+      return `url("${context2.deferred === void 0 ? dataUrl : parkUrl(context2.deferred, dataUrl)}${resolved.fragment}")`;
     }
   );
 }
-function serializeSrcset(value, basePath, context) {
-  return value.split(",").map((candidate) => {
+function serializeSrcset(value3, basePath, context2) {
+  return value3.split(",").map((candidate) => {
     const trimmed = candidate.trim();
     const separator = trimmed.search(/\s/);
     const reference = separator === -1 ? trimmed : trimmed.slice(0, separator);
     const descriptor = separator === -1 ? "" : trimmed.slice(separator).trim();
-    const { file, resolved } = requiredFile(context, basePath, reference);
-    return `${asDataUrl(file, context)}${resolved.fragment}${descriptor.length === 0 ? "" : ` ${descriptor}`}`;
+    const { file, resolved } = requiredFile(context2, basePath, reference);
+    return `${asDataUrl(file, context2)}${resolved.fragment}${descriptor.length === 0 ? "" : ` ${descriptor}`}`;
   }).join(", ");
 }
 var CHILD_BOOTSTRAP = `(function(){
@@ -42534,10 +42938,10 @@ var INNER_CSP = [
   "base-uri 'none'",
   "form-action 'none'"
 ].join("; ");
-async function transformHtml(path, file, context) {
+async function transformHtml(path, file, context2) {
   const text = decodeText(file);
   scanMarkup(text, { references: false });
-  const doc = context.parseHtml(text);
+  const doc = context2.parseHtml(text);
   const roots = documentRoots(doc);
   const deferred = newDeferred();
   if (doc.querySelector("parsererror") !== null) fail("malformed", "artifact html is malformed");
@@ -42551,25 +42955,25 @@ async function transformHtml(path, file, context) {
   for (const link4 of queryAll(roots, "link[href]")) {
     const relation = classifyLinkRelation(link4.getAttribute("rel"));
     if (relation === "stylesheet") {
-      const { file: stylesheet, resolved } = requiredFile(context, path, link4.getAttribute("href") ?? "");
+      const { file: stylesheet, resolved } = requiredFile(context2, path, link4.getAttribute("href") ?? "");
       const style = doc.createElement("style");
-      style.textContent = wrapMediaCss(await transformCss(decodeText(stylesheet, context), resolved.path, { ...context, cssStack: [resolved.path] }), link4.getAttribute("media"));
+      style.textContent = wrapMediaCss(await transformCss(decodeText(stylesheet, context2), resolved.path, { ...context2, cssStack: [resolved.path] }), link4.getAttribute("media"));
       link4.replaceWith(style);
       continue;
     }
     if (relation === "icon") {
-      const { file: icon, resolved } = requiredFile(context, path, link4.getAttribute("href") ?? "");
-      link4.href = `${asDataUrl(icon, context)}${resolved.fragment}`;
+      const { file: icon, resolved } = requiredFile(context2, path, link4.getAttribute("href") ?? "");
+      link4.href = `${asDataUrl(icon, context2)}${resolved.fragment}`;
       continue;
     }
     fail("unsupported", "artifact contains an unsupported link relation");
   }
   for (const style of inlineStyles) {
-    style.textContent = wrapMediaCss(await transformCss(style.textContent ?? "", path, { ...context, cssStack: [] }), style.getAttribute("media"));
+    style.textContent = wrapMediaCss(await transformCss(style.textContent ?? "", path, { ...context2, cssStack: [] }), style.getAttribute("media"));
   }
   for (const element of queryAll(roots, "[style]")) {
-    const value = element.getAttribute("style");
-    if (value !== null) element.setAttribute("style", await transformCss(value, path, { ...context, cssStack: [], deferred }));
+    const value3 = element.getAttribute("style");
+    if (value3 !== null) element.setAttribute("style", await transformCss(value3, path, { ...context2, cssStack: [], deferred }));
   }
   for (const script of queryAll(roots, "script")) {
     if ((script.getAttribute("type") ?? "").trim().toLowerCase() === "module" || script.hasAttribute("async") || script.hasAttribute("defer")) {
@@ -42579,8 +42983,8 @@ async function transformHtml(path, file, context) {
     let source = script.textContent ?? "";
     const reference = script.getAttribute("src");
     if (reference !== null) {
-      const { file: scriptFile } = requiredFile(context, path, reference);
-      source = decodeText(scriptFile, context);
+      const { file: scriptFile } = requiredFile(context2, path, reference);
+      source = decodeText(scriptFile, context2);
       script.removeAttribute("src");
     }
     assertClassicScript(source);
@@ -42599,13 +43003,13 @@ async function transformHtml(path, file, context) {
     for (const element of queryAll(roots, selector)) {
       const reference = element.getAttribute(attribute);
       if (reference === null) continue;
-      const { file: resource, resolved } = requiredFile(context, path, reference);
-      element.setAttribute(attribute, `${asDataUrl(resource, context)}${resolved.fragment}`);
+      const { file: resource, resolved } = requiredFile(context2, path, reference);
+      element.setAttribute(attribute, `${asDataUrl(resource, context2)}${resolved.fragment}`);
     }
   }
   for (const element of queryAll(roots, "[srcset]")) {
-    const value = element.getAttribute("srcset");
-    if (value !== null) element.setAttribute("srcset", serializeSrcset(value, path, context));
+    const value3 = element.getAttribute("srcset");
+    if (value3 !== null) element.setAttribute("srcset", serializeSrcset(value3, path, context2));
   }
   for (const anchor of queryAll(roots, "a[href]")) {
     anchor.removeAttribute("target");
@@ -42613,8 +43017,8 @@ async function transformHtml(path, file, context) {
     const reference = anchor.getAttribute("href") ?? "";
     if (reference.startsWith("#")) continue;
     const resolved = resolveReferenceFrom(path, reference);
-    if (context.singlePage) throw new ArtifactBundleError("unsupported", "artifact links to another page", path, reference);
-    if (!context.files.has(resolved.path) || !/\.html?$/i.test(resolved.path)) fail("unsupported", "artifact link leaves its html bundle");
+    if (context2.singlePage) throw new ArtifactBundleError("unsupported", "artifact links to another page", path, reference);
+    if (!context2.files.has(resolved.path) || !/\.html?$/i.test(resolved.path)) fail("unsupported", "artifact link leaves its html bundle");
     anchor.href = "#";
     anchor.dataset.tcArtifactPath = resolved.path;
     if (resolved.fragment.length > 0) anchor.dataset.tcArtifactFragment = resolved.fragment;
@@ -42629,7 +43033,7 @@ async function transformHtml(path, file, context) {
   head.prepend(csp);
   const output2 = restoreParkedUrls(`<!DOCTYPE html>
 ${doc.documentElement.outerHTML}`, deferred);
-  verifySelfContained(output2, context);
+  verifySelfContained(output2, context2);
   return output2;
 }
 async function prepareHtmlArtifact(input, options = {}) {
@@ -42657,7 +43061,7 @@ async function prepareHtmlArtifact(input, options = {}) {
   if (detection.kind !== "html") fail("malformed", "artifact root index is missing");
   const renderBytes = [...files.values()].filter((file) => /^(?:text\/|application\/(?:javascript|json)|image\/svg\+xml)/i.test(artifactMediaType(file.path, file.mediaType))).reduce((total, file) => total + file.bytes.byteLength, 0);
   if (renderBytes > MAX_ARTIFACT_RENDER_BYTES) fail("limit", "artifact render aggregate exceeds limit");
-  const context = {
+  const context2 = {
     files,
     cssStack: [],
     counter: { references: 0, inlinedBytes: 0 },
@@ -42668,10 +43072,10 @@ async function prepareHtmlArtifact(input, options = {}) {
   let renderedBytes = 0;
   for (const [path, file] of files) {
     if (!/\.html?$/i.test(path)) continue;
-    if (context.singlePage && path !== ARTIFACT_ENTRY) continue;
+    if (context2.singlePage && path !== ARTIFACT_ENTRY) continue;
     let page;
     try {
-      page = await transformHtml(path, file, context);
+      page = await transformHtml(path, file, context2);
     } catch (error) {
       if (error instanceof ArtifactBundleError && error.path === void 0) throw new ArtifactBundleError(error.kind, error.message, path, error.reference);
       throw error;
@@ -42761,11 +43165,11 @@ async function linuxDescriptorPath(fd) {
   return realpath3(`${PROC_FD}/${fd}`);
 }
 async function parentChainIsRealDirectories(root, path) {
-  let current = dirname9(path);
+  let current = dirname10(path);
   while (current !== root && isWithinFolder(root, current)) {
     const info = await lstat11(current);
     if (info.isSymbolicLink() || !info.isDirectory()) return false;
-    current = dirname9(current);
+    current = dirname10(current);
   }
   return current === root;
 }
@@ -42894,7 +43298,7 @@ async function readHtmlFolder(directory, limit) {
         continue;
       }
       const path = relative === "" ? entry.name : `${relative}/${entry.name}`;
-      const child = join19(absolute, entry.name);
+      const child = join20(absolute, entry.name);
       if (entry.isSymbolicLink()) {
         problems.push({ code: "UNSUPPORTED_FOLDER_ENTRY", path, reason: "symbolic link" });
       } else if (entry.isDirectory()) {
@@ -43006,12 +43410,12 @@ function artifactRequest(options, actions, inputCount) {
   return { id: options.artifact === "new" ? newArtifactId() : assertArtifactId(options.artifact), ...note === void 0 ? {} : { note } };
 }
 var shareServices = {};
-function parseShareTarget(value) {
-  if (value === "anyone" || value === "bearer") return { kind: "bearer" };
-  if (value.startsWith("did:")) return { kind: "recipientDid", did: value };
-  if (value.startsWith("domain:")) return canonicalMailboxTarget({ kind: "emailDomain", domain: value.slice("domain:".length) });
-  if (value.startsWith("email:")) return canonicalMailboxTarget({ kind: "email", address: value.slice("email:".length) });
-  if (value.includes("@")) return canonicalMailboxTarget({ kind: "email", address: value });
+function parseShareTarget(value3) {
+  if (value3 === "anyone" || value3 === "bearer") return { kind: "bearer" };
+  if (value3.startsWith("did:")) return { kind: "recipientDid", did: value3 };
+  if (value3.startsWith("domain:")) return canonicalMailboxTarget({ kind: "emailDomain", domain: value3.slice("domain:".length) });
+  if (value3.startsWith("email:")) return canonicalMailboxTarget({ kind: "email", address: value3.slice("email:".length) });
+  if (value3.includes("@")) return canonicalMailboxTarget({ kind: "email", address: value3 });
   throw new CLIError("INVALID_ARGUMENT", "--to must be anyone, a did:, an email address, or domain:example.com", 2);
 }
 function canonicalMailboxTarget(target) {
@@ -43167,18 +43571,18 @@ function shareCliError(error, operation = "publish") {
   if (error instanceof TypeError) return new CLIError("INVALID_ARGUMENT", "share input is invalid", 2);
   return new CLIError(mapped?.code ?? "INVALID_ARGUMENT", mapped ? mapped.code : "share operation failed", mapped?.exit ?? 2);
 }
-function inputUrl(value, stdin) {
-  if (stdin || value === "-") return readBoundedUrlStdin();
-  if (value === void 0 || value.length === 0) throw new CLIError("INVALID_ARGUMENT", "a share URL or - is required", 2);
-  return Promise.resolve(value);
+function inputUrl(value3, stdin) {
+  if (stdin || value3 === "-") return readBoundedUrlStdin();
+  if (value3 === void 0 || value3.length === 0) throw new CLIError("INVALID_ARGUMENT", "a share URL or - is required", 2);
+  return Promise.resolve(value3);
 }
 function assertTrustedShareOrigin(link4, expectedOrigin) {
   if (URL.canParse(link4) && new URL(link4).origin !== expectedOrigin) {
     throw new ShareReceiveError("origin-mismatch", "share link origin is not the trusted Share origin");
   }
 }
-async function inspectShareInputOnce(value, stdin, expectedOrigin, dependencies = {}) {
-  const link4 = stdin || value === "-" ? await (dependencies.read ?? readBoundedUrlStdin)() : await inputUrl(value, false);
+async function inspectShareInputOnce(value3, stdin, expectedOrigin, dependencies = {}) {
+  const link4 = stdin || value3 === "-" ? await (dependencies.read ?? readBoundedUrlStdin)() : await inputUrl(value3, false);
   try {
     parseNativeShareUrl(link4);
   } catch {
@@ -43191,9 +43595,9 @@ async function inspectShareInputOnce(value, stdin, expectedOrigin, dependencies 
 function jsonOutput(options, command) {
   return options.json === true || command.optsWithGlobals().json === true;
 }
-function expires(value) {
+function expires(value3) {
   try {
-    return new Date(Date.now() + parseDuration(value));
+    return new Date(Date.now() + parseDuration(value3));
   } catch {
     throw new CLIError("INVALID_ARGUMENT", "invalid expiry duration", 2);
   }
@@ -43236,9 +43640,9 @@ async function notifyRecordedShare(record3, recipient, adapter, storage, publish
   }
   return result;
 }
-function byteLimit(value) {
-  if (value === void 0) return void 0;
-  const parsed = Number(value);
+function byteLimit(value3) {
+  if (value3 === void 0) return void 0;
+  const parsed = Number(value3);
   if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed > MAX_SHARE_STDIN_BYTES) throw new CLIError("MAX_BYTES_EXCEEDED", "max-bytes must be between 1 and 100 MiB", 7);
   return parsed;
 }
@@ -43248,7 +43652,7 @@ function mediaTypeFor(filename) {
 }
 function requestedActions(values) {
   const actions = values === void 0 || values.length === 0 ? ["read"] : values;
-  if (actions.some((value) => value !== "read" && value !== "list" && value !== "edit")) throw new CLIError("INVALID_ARGUMENT", "--action must be read, list, or edit", 2);
+  if (actions.some((value3) => value3 !== "read" && value3 !== "list" && value3 !== "edit")) throw new CLIError("INVALID_ARGUMENT", "--action must be read, list, or edit", 2);
   return [...new Set(actions)];
 }
 function assertAggregateInputLimit(inputs, maxBytes) {
@@ -43277,7 +43681,7 @@ function registerShareCommand(program) {
       if (target.kind !== "email" && (options.credentialDescriptor || options.issuerDid || options.issuerKid)) {
         throw new CLIError("INVALID_ARGUMENT", "credential options require an exact email target", 2);
       }
-      const credentialDescriptor = target.kind === "email" ? JSON.parse(await readFile16(options.credentialDescriptor, "utf8")) : void 0;
+      const credentialDescriptor = target.kind === "email" ? JSON.parse(await readFile17(options.credentialDescriptor, "utf8")) : void 0;
       const folder = files.length === 1 && target.kind === "bearer" && options.prefix !== true && await isDirectoryInput(files[0]);
       let inputs;
       if (folder) {
@@ -43583,8 +43987,8 @@ init_theme();
 import { CLI_NAME as CLI_NAME35 } from "@tinycloud/operations/cli-name";
 import { ACCOUNT_REGISTRY_SPACE } from "@tinycloud/node-sdk";
 import { randomBytes as randomBytes9 } from "crypto";
-import { mkdir as mkdir7, writeFile as writeFile4 } from "fs/promises";
-import { dirname as dirname10 } from "path";
+import { mkdir as mkdir8, writeFile as writeFile4 } from "fs/promises";
+import { dirname as dirname11 } from "path";
 function didWithoutFragment2(did) {
   const fragment = did.indexOf("#");
   return fragment === -1 ? did : did.slice(0, fragment);
@@ -43740,7 +44144,7 @@ it directly with \`${CLI_NAME35} space host <name>\` (no request needed).
 }
 async function emitHostRequestArtifact(artifact, emitOption) {
   if (typeof emitOption === "string" && emitOption.length > 0) {
-    await mkdir7(dirname10(emitOption), { recursive: true });
+    await mkdir8(dirname11(emitOption), { recursive: true });
     await writeFile4(emitOption, JSON.stringify(artifact, null, 2) + "\n", "utf8");
     outputJson({
       emitted: true,
@@ -44211,8 +44615,8 @@ function sessionPermissionsFromRecap(session) {
     return [];
   }
 }
-function permissionFromRawRecap(value) {
-  const record3 = asRecord(value);
+function permissionFromRawRecap(value3) {
+  const record3 = asRecord(value3);
   if (!record3) return null;
   const service = stringValue(record3.service);
   const space = stringValue(record3.space);
@@ -44234,8 +44638,8 @@ function normalizePermissions(entries) {
   }
   return uniquePermissions(permissions);
 }
-function permissionFromUnknown(value) {
-  const record3 = asRecord(value);
+function permissionFromUnknown(value3) {
+  const record3 = asRecord(value3);
   if (!record3) return null;
   const service = stringValue(record3.service);
   const space = stringValue(record3.space);
@@ -44272,17 +44676,17 @@ function extractSessionExpiry(session) {
   const match = session.siwe.match(/^Expiration Time:\s*(.+)$/im);
   return match ? parseDate2(match[1].trim()) : null;
 }
-function parseDate2(value) {
-  if (value instanceof Date) {
-    return Number.isNaN(value.getTime()) ? null : value;
+function parseDate2(value3) {
+  if (value3 instanceof Date) {
+    return Number.isNaN(value3.getTime()) ? null : value3;
   }
-  if (typeof value === "number" && Number.isFinite(value)) {
-    const millis = value > 0 && value < 1e12 ? value * 1e3 : value;
+  if (typeof value3 === "number" && Number.isFinite(value3)) {
+    const millis = value3 > 0 && value3 < 1e12 ? value3 * 1e3 : value3;
     const date2 = new Date(millis);
     return Number.isNaN(date2.getTime()) ? null : date2;
   }
-  if (typeof value !== "string" || value.trim() === "") return null;
-  const date = new Date(value);
+  if (typeof value3 !== "string" || value3.trim() === "") return null;
+  const date = new Date(value3);
   return Number.isNaN(date.getTime()) ? null : date;
 }
 function getWasmBindings() {
@@ -44292,11 +44696,11 @@ function getWasmBindings() {
 function normalizeService2(service) {
   return service.startsWith("tinycloud.") ? service : `tinycloud.${service}`;
 }
-function asRecord(value) {
-  return value !== null && typeof value === "object" ? value : null;
+function asRecord(value3) {
+  return value3 !== null && typeof value3 === "object" ? value3 : null;
 }
-function stringValue(value) {
-  return typeof value === "string" ? value : null;
+function stringValue(value3) {
+  return typeof value3 === "string" ? value3 : null;
 }
 function messageFromError(error) {
   return error instanceof Error ? error.message : String(error);
@@ -44464,7 +44868,7 @@ function registerUpgradeCommand(program) {
 }
 
 // src/commands/vault.ts
-import { readFile as readFile17 } from "fs/promises";
+import { readFile as readFile18 } from "fs/promises";
 init_profiles();
 init_formatter();
 init_errors();
@@ -44510,7 +44914,7 @@ function registerVaultCommand(program) {
       return handleError(error);
     }
   });
-  vault.command("put <key> [value]").description("Encrypt and store a value").option("--file <path>", "Read value from file").option("--stdin", "Read value from stdin").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (key, value, options, cmd) => {
+  vault.command("put <key> [value]").description("Encrypt and store a value").option("--file <path>", "Read value from file").option("--stdin", "Read value from stdin").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (key, value3, options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
@@ -44518,7 +44922,7 @@ function registerVaultCommand(program) {
       const node = await ensureAuthenticated(ctx, { privateKey });
       await withSpinner("Unlocking vault...", () => unlockVault(node, privateKey));
       let putValue;
-      const sources = [value !== void 0, !!options.file, !!options.stdin].filter(Boolean);
+      const sources = [value3 !== void 0, !!options.file, !!options.stdin].filter(Boolean);
       if (sources.length === 0) {
         throw new CLIError("USAGE_ERROR", "Must provide a value, --file, or --stdin", ExitCode.USAGE_ERROR);
       }
@@ -44526,11 +44930,11 @@ function registerVaultCommand(program) {
         throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
       }
       if (options.file) {
-        putValue = new Uint8Array(await readFile17(options.file));
+        putValue = new Uint8Array(await readFile18(options.file));
       } else if (options.stdin) {
         putValue = new Uint8Array(await readStdin5());
       } else {
-        putValue = value;
+        putValue = value3;
       }
       const result = await withSpinner(`Writing ${key}...`, () => node.vault.put(key, putValue));
       if (!result.ok) {
@@ -44641,7 +45045,7 @@ function registerVaultCommand(program) {
 }
 
 // src/commands/vars.ts
-import { readFile as readFile18 } from "fs/promises";
+import { readFile as readFile19 } from "fs/promises";
 init_profiles();
 init_formatter();
 init_errors();
@@ -44704,41 +45108,41 @@ function registerVarsCommand(program) {
         throw cliErrorFromService(result.error);
       }
       const data = result.data.data;
-      let value;
+      let value3;
       if (typeof data === "string") {
         try {
           const parsed = JSON.parse(data);
-          value = parsed.value;
+          value3 = parsed.value;
         } catch {
-          value = data;
+          value3 = data;
         }
       } else if (data && typeof data === "object" && "value" in data) {
-        value = data.value;
+        value3 = data.value;
       } else {
-        value = typeof data === "string" ? data : JSON.stringify(data);
+        value3 = typeof data === "string" ? data : JSON.stringify(data);
       }
       if (options.output) {
-        await writePrivateOutput(options.output, value);
+        await writePrivateOutput(options.output, value3);
         outputJson({ name, written: options.output });
         return;
       }
       if (options.raw) {
-        process.stdout.write(value);
+        process.stdout.write(value3);
         return;
       }
-      outputJson({ name, value });
+      outputJson({ name, value: value3 });
     } catch (error) {
       return handleError(error);
     }
   });
-  vars.command("put <name> [value]").description("Set a variable").option("--file <path>", "Read value from file").option("--stdin", "Read value from stdin").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name, value, options, cmd) => {
+  vars.command("put <name> [value]").description("Set a variable").option("--file <path>", "Read value from file").option("--stdin", "Read value from stdin").option("--private-key <hex>", "Ethereum private key (or set TC_PRIVATE_KEY)").action(async (name, value3, options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const privateKey = resolvePrivateKey2(options);
       const node = await ensureAuthenticated(ctx, { privateKey });
       let varValue;
-      const sources = [value !== void 0, !!options.file, !!options.stdin].filter(Boolean);
+      const sources = [value3 !== void 0, !!options.file, !!options.stdin].filter(Boolean);
       if (sources.length === 0) {
         throw new CLIError("USAGE_ERROR", "Must provide a value, --file, or --stdin", ExitCode.USAGE_ERROR);
       }
@@ -44746,11 +45150,11 @@ function registerVarsCommand(program) {
         throw new CLIError("USAGE_ERROR", "Provide only one of: value argument, --file, or --stdin", ExitCode.USAGE_ERROR);
       }
       if (options.file) {
-        varValue = await readFile18(options.file, "utf-8");
+        varValue = await readFile19(options.file, "utf-8");
       } else if (options.stdin) {
         varValue = (await readStdin6()).toString("utf-8");
       } else {
-        varValue = value;
+        varValue = value3;
       }
       const payload = {
         value: varValue,
@@ -44806,6 +45210,7 @@ function registerTinyCloudCommands(program) {
   registerVarsCommand(program);
   registerDoctorCommand(program);
   registerSqlCommand(program);
+  registerFeedCommand(program);
   registerDuckdbCommand(program);
   registerManifestCommand(program);
   registerKnowledgeCommand(program);
