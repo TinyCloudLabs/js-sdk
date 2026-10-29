@@ -53,6 +53,7 @@
     "replication-content-fetch-lazy",
     "sdk-issued-delegations",
     "sdk-manifest-app-keys",
+    "siwe-metadata-resources",
     "tc-2177-v3-email-share-publisher",
     "tc-2192-named-key-recipient",
     "tc-apps-mcp-write-attribution",
@@ -69,6 +70,7 @@
     "tc2196-native-mcp-auth",
     "tc2202-agent-receive",
     "tc2205-home-feed-loop",
+    "tinycloud-bin-name",
     "web-panel-ask-permission",
     "web-sdk-panel-safe-area"
   ]

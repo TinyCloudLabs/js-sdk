@@ -1,5 +1,20 @@
 # @tinycloud/cli
 
+## 1.5.0-beta.29
+
+### Minor Changes
+
+- 8c24574: Make `tinycloud` the preferred CLI command and rename the core skill to `tinycloud-cli`. Keep `tc` as a deprecated compatibility alias at the same entry, with identical commands, flags, exit codes, and stdout. Invoking the alias through a POSIX executable link emits one deprecation notice on stderr; existing scripts and piped JSON keep working.
+
+  Details: TC-2202
+
+### Patch Changes
+
+- Updated dependencies [e424ba9]
+  - @tinycloud/node-sdk@3.8.0-beta.20
+  - @tinycloud/sdk-core@3.8.0-beta.20
+  - @tinycloud/operations@0.7.7-beta.19
+
 ## 1.5.0-beta.28
 
 ### Minor Changes
