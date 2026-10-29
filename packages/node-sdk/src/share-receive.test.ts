@@ -210,7 +210,6 @@ test("a proved recipient session reads and decrypts the signed share; a refused 
   const wrappedBytes = new Uint8Array(93).fill(17);
   const encryptedSymmetricKey = Buffer.from(wrappedBytes).toString("base64");
   const networkId = `urn:tinycloud:encryption:${ownerDid}:default`;
-  const encryptedSymmetricKeyDigestHex = hex(sha256(wrappedBytes));
   const encryptedSymmetricKeyHash = hex(sha256(new TextEncoder().encode(canonicalize(encryptedSymmetricKey))));
   const stored = new TextEncoder().encode(canonicalize({
     v: 1, networkId, alg: "x25519-aes256gcm/v1", keyVersion: 1, encryptedSymmetricKey,
@@ -218,7 +217,8 @@ test("a proved recipient session reads and decrypts the signed share; a refused 
     ciphertext: Buffer.from(await aesEncrypt(symmetricKey, new TextEncoder().encode("hello recipient agent"))).toString("base64"),
     metadata: { contentType: "text/plain" },
   }));
-  const share = await published(new Date(Date.now() + 50_000), { encryptedSymmetricKeyDigestHex, initialCiphertextDigestHex: hex(sha256(stored)) });
+  // A no-path (v1) source registers the canonical hash of the base64 key, not the raw-byte digest.
+  const share = await published(new Date(Date.now() + 50_000), { encryptedSymmetricKeyDigestHex: encryptedSymmetricKeyHash, initialCiphertextDigestHex: hex(sha256(stored)) });
   const envelope = share.deliveryMaterial!.envelope;
   const witness = makeWitness({ code: "12345678" });
   const record = await signLocationRecord({ version: 1, subject: ownerDid, multiaddrs: [httpUrlToMultiaddr("https://node.example")], updated_at: new Date().toISOString(), sequence: 1 }, { type: "did:key", signBytes: async (bytes) => ed25519.sign(bytes, ownerKey) });
