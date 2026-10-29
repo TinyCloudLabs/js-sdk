@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setSystemTime, test } from "bun:test";
 import { ed25519 } from "@noble/curves/ed25519";
 import { canonicalize, fromBase64Url, seal, shareEnvelopeV3Schema, signEnvelopeV3, toBase64Url } from "@tinycloud/share-envelope";
 import { buildFullLink, openLinkRecord, parseLink, prepareLinkRecord, signerFromSeed } from "@tinycloud/share-envelope/links";
@@ -69,16 +69,45 @@ describe("TC-1739 canonical artifact and original full-link admission", () => {
     expect(await index(backend).reconcile()).toMatchObject({ admitted: 1, rejected: {} });
   });
 
-  test("admits genuine expired full-link history as expired rather than dropping its original wrapper", async () => {
-    const full = await published();
-    const backend = new MemoryBackend();
-    await new AgentShareRecordStore({ backend, agentDid: ownerDid }).put(full);
-    const reader = index(backend, new Date(Date.parse(full.expiresAt) + 1));
-    expect(await reader.reconcile()).toMatchObject({ admitted: 1, rejected: {} });
-    const loaded = await reader.load();
-    if (loaded.status !== "ok") throw new Error("expected owner index");
-    expect(loaded.doc.rows[agentRecordKey(agentIdFromDid(ownerDid), full.shareId)]).toMatchObject({ ps: "proven", pe: true });
-    expect((await expandShareRecord(await compactShareRecord(full))).link).toBe(full.link);
+  for (const source of [
+    { name: "addressed artifact", artifact: true, targetKind: "bearer" },
+    { name: "non-artifact addressed", artifact: false, targetKind: undefined },
+  ] as const) {
+    test(`native artifact admission keeps ${source.name} material separate`, async () => {
+      const path = "artifacts/art_native/versions/3/note.txt";
+      const native = bearerFixture({ contentSpace: CONTENT_SPACE_ID, link: { att: { [`${CONTENT_SPACE_ID}/kv/${path}`]: { "tinycloud.kv/get": [{}] } } }, record: { resource: { kind: "exact", path } } });
+      const full = await published(source.artifact);
+      const stored = await compactShareRecord(full);
+      const { link: _nativeLink, ...record } = native.record;
+      const backend = new MemoryBackend();
+      const key = await writePayload(backend, record.shareId, native.session.did, {
+        ...record, targetKind: source.targetKind, expiresAt: full.expiresAt, deliveryMaterial: stored.deliveryMaterial,
+      });
+      const reader = index(backend);
+      expect((await reader.reconcile()).admitted).toBe(0);
+      const loaded = await reader.load();
+      expect(loaded.status === "ok" ? loaded.doc.rows[key] : undefined).toBeUndefined();
+    });
+  }
+
+  test("admits genuinely expired full-link history while recipient opening observes the actual clock", async () => {
+    setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    try {
+      const full = await published();
+      const parsed = parseLink(full.link!, { trustedOrigins: [SHARE_ORIGIN] });
+      if (parsed.form !== "full") throw new Error("expected publisher full link");
+      expect((await openLinkRecord(parsed.record, parsed.key)).value).toMatchObject({ shareId: full.shareId });
+      const backend = new MemoryBackend();
+      await new AgentShareRecordStore({ backend, agentDid: ownerDid }).put(full);
+      setSystemTime(new Date(Date.parse(full.expiresAt) + 1));
+      await expect(openLinkRecord(parsed.record, parsed.key)).rejects.toThrow();
+      const reader = index(backend);
+      expect(await reader.reconcile()).toMatchObject({ admitted: 1, rejected: {} });
+      const loaded = await reader.load();
+      if (loaded.status !== "ok") throw new Error("expected owner index");
+      expect(loaded.doc.rows[agentRecordKey(agentIdFromDid(ownerDid), full.shareId)]).toMatchObject({ ps: "proven", pe: true });
+      expect((await expandShareRecord(await compactShareRecord(full))).link).toBe(full.link);
+    } finally { setSystemTime(); }
   });
 
   test("checks reconstructed origin and original signature before canonical admission", async () => {

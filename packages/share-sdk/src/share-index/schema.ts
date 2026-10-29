@@ -339,7 +339,8 @@ export function checkAgentRecordSchema(value: unknown, context: AgentRecordSchem
   const resource = record.resource;
   if (!isObject(resource) || Object.keys(resource).length !== 2 || (resource.kind !== "exact" && resource.kind !== "prefix") || !isShareResourcePath(resource.path)) return fail();
   if (!Array.isArray(record.actions) || record.actions.length === 0 || new Set(record.actions).size !== record.actions.length || !record.actions.every((action) => typeof action === "string" && SHARE_ACTIONS.includes(action))) return fail();
-  if (parseArtifactVersionPath(resource.path) !== undefined && (resource.kind !== "exact" || record.actions.some(action => action !== "tinycloud.kv/get" && action !== "tinycloud.kv/metadata"))) return fail();
+  const artifact = parseArtifactVersionPath(resource.path) !== undefined;
+  if (artifact && (resource.kind !== "exact" || record.actions.some(action => action !== "tinycloud.kv/get" && action !== "tinycloud.kv/metadata"))) return fail();
   const matcher = record.recipientMatcher;
   if (!isObject(matcher) || !(matcher.kind === "bearer" ? Object.keys(matcher).length === 1 : ["exactEmail", "emailDomain", "recipientDid"].includes(matcher.kind as string) && Object.keys(matcher).length === 2 && typeof matcher.value === "string")) return fail();
   if (!isIsoTime(record.registeredAt) || !isIsoTime(record.expiresAt) || Date.parse(record.registeredAt) >= Date.parse(record.expiresAt)) return fail();
@@ -375,6 +376,13 @@ export function checkAgentRecordSchema(value: unknown, context: AgentRecordSchem
   if (record.proofs !== undefined) {
     const proofs = record.proofs;
     if (!isObject(proofs) || !Object.keys(proofs).every((key) => PROOF_STRING_FIELDS.includes(key) ? typeof proofs[key] === "string" : PROOF_OBJECT_FIELDS.includes(key) && isObject(proofs[key]))) return fail();
+  }
+  if (artifact) {
+    const proofs = record.proofs;
+    if (isObject(proofs) && proofs.ownerPolicy !== undefined) return fail();
+    if (record.deliveryMaterial !== undefined) {
+      if (record.targetKind === undefined || record.targetKind === "bearer" || (isObject(proofs) && proofs.link !== undefined)) return fail();
+    } else if (record.targetKind !== undefined && record.targetKind !== "bearer") return fail();
   }
   return record as unknown as StoredShareRecord;
 }
