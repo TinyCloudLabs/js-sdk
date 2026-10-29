@@ -25,14 +25,22 @@ function npm(args) {
 }
 
 export function rollback(input, confirm, runNpm = npm) {
-  requireConfirmation(confirm);
-  const packages = parsePackages(input);
-  for (const { spec, version } of packages) {
-    if (runNpm(["view", spec, "version"]) !== version) throw new Error(`npm does not report ${spec} as an existing version.`);
-  }
-  for (const { spec, name } of packages) {
-    runNpm(["dist-tag", "add", spec, "latest"]);
-    console.log(runNpm(["view", name, "dist-tags"]));
+  const moved = [];
+  try {
+    requireConfirmation(confirm);
+    const packages = parsePackages(input);
+    for (const { spec, version } of packages) {
+      if (runNpm(["view", spec, "version"]) !== version) throw new Error(`npm does not report ${spec} as an existing version.`);
+    }
+    for (const { spec, name } of packages) {
+      runNpm(["dist-tag", "add", spec, "latest"]);
+      moved.push(spec);
+      console.log(`Moved ${spec} to latest.`);
+      console.log(`Dist-tags for ${name}: ${runNpm(["view", name, "dist-tags"])}`);
+    }
+  } catch (error) {
+    console.error(`Completed moves: ${moved.length ? moved.join(", ") : "none"}`);
+    throw error;
   }
 }
 
