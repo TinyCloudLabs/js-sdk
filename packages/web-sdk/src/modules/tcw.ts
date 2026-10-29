@@ -31,7 +31,9 @@ import {
   type RegisterPolicyV3Input,
   type RegisterPolicyV3Receipt,
   refuseCaveated,
+  principalDidEquals,
 } from "@tinycloud/node-sdk/core";
+import { didKeyFromEd25519PublicKey } from "@tinycloud/share-envelope";
 import {
   resolveReplicationConfig,
   validateReplicationConfig,
@@ -300,6 +302,27 @@ export interface SessionRestoreResult {
   error?: Error;
 }
 
+
+function didsMatch(a: string | undefined, b: string | undefined): boolean {
+  if (!a || !b) return false;
+  try {
+    return principalDidEquals(a, b);
+  } catch {
+    return false;
+  }
+}
+
+/** did:key for an Ed25519 public JWK; undefined for any other key shape. */
+function ed25519JwkDid(jwk: { kty?: string; crv?: string; x?: string }): string | undefined {
+  if (jwk.kty !== "OKP" || jwk.crv !== "Ed25519" || typeof jwk.x !== "string") return undefined;
+  try {
+    let base64 = jwk.x.replace(/-/g, "+").replace(/_/g, "/");
+    while (base64.length % 4) base64 += "=";
+    return didKeyFromEd25519PublicKey(Uint8Array.from(atob(base64), (c) => c.charCodeAt(0)));
+  } catch {
+    return undefined;
+  }
+}
 
 // Share Link Utilities (static, no auth required)
 
@@ -1487,6 +1510,10 @@ export class TinyCloudWeb {
       const address = signedSession.address;
       const chainId = signedSession.chainId;
       const sessionDid = node.sessionDid;
+      // The label and JWK live on the same mutable object; the node's own session key is the anchor.
+      if (!didsMatch(sessionDid, key) || !didsMatch(sessionDid, ed25519JwkDid(consentKey))) {
+        throw new Error("Exact Share-key creation refused because the session key does not match the signed session.");
+      }
       assertCurrentSession = () => {
         const current = node.restorableSession;
         if (this._node !== node || this.signOutCount !== signOuts || this.signOutInFlight > 0 ||

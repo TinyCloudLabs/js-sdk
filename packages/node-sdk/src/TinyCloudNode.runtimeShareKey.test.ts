@@ -56,3 +56,30 @@ test("a key change while the wallet signs cannot retarget or activate the captur
     expect(fixture.owner.getRuntimePermissionDelegations()).toEqual([]);
   } finally { finish.resolve(); signing.mockRestore(); fixture.stop(); }
 });
+
+test("exact Share-key grant refuses a JWK and verificationMethod replaced together on the session object", async () => {
+  const fixture = await createHermeticEncryptedNode();
+  const signer = Reflect.get(fixture.owner, "signer") as { signMessage(message: string): Promise<string> };
+  const signing = spyOn(signer, "signMessage");
+  const session = fixture.owner.restorableSession!;
+  const original = { jwk: session.jwk, verificationMethod: session.verificationMethod };
+  try {
+    const before = fixture.requests().filter((r) => r.path === "/delegate").length;
+    const foreign = fixture.delegate.restorableSession!;
+    session.jwk = foreign.jwk;
+    session.verificationMethod = foreign.verificationMethod;
+    await expect(fixture.owner.grantRuntimePermissions([{
+      service: "tinycloud.encryption",
+      path: `urn:tinycloud:encryption:${fixture.ownerDid}:default/share/jwk-and-label-swap`,
+      actions: ["tinycloud.encryption/key.create"],
+    }])).rejects.toThrow(/session key/i);
+    expect(signing).not.toHaveBeenCalled();
+    expect(fixture.requests().filter((r) => r.path === "/delegate").length).toBe(before);
+    expect(fixture.owner.getRuntimePermissionDelegations()).toEqual([]);
+  } finally {
+    session.jwk = original.jwk;
+    session.verificationMethod = original.verificationMethod;
+    signing.mockRestore();
+    fixture.stop();
+  }
+});

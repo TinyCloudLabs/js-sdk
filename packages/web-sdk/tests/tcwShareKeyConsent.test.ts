@@ -172,6 +172,29 @@ describe("TinyCloudWeb exact Share-key consumer transition", () => {
     });
   }
 
+  test("JWK and verificationMethod replaced together before the request refuse with no signature, activation or grant", async () => {
+    const fixture = await createHermeticEncryptedNode();
+    const session = fixture.owner.restorableSession!;
+    const original = { jwk: session.jwk, verificationMethod: session.verificationMethod };
+    try {
+      const c = consumer(fixture);
+      const baseline = c.activationCount();
+      // Pre-resolve consent so a missing fence fails the assertions below instead of hanging.
+      c.consent.resolve({ approved: true });
+      const foreign = fixture.delegate.restorableSession!;
+      session.jwk = foreign.jwk;
+      session.verificationMethod = foreign.verificationMethod;
+      await expect(c.tcw.requestPermissions([c.entry])).rejects.toThrow(/session key|signed session/i);
+      expect(c.signing).not.toHaveBeenCalled();
+      expect(c.activationCount()).toBe(baseline);
+      expect(fixture.owner.getRuntimePermissionDelegations()).toEqual([]);
+    } finally {
+      session.jwk = original.jwk;
+      session.verificationMethod = original.verificationMethod;
+      fixture.stop();
+    }
+  });
+
   test("native platform refuses the bounded path without falling back to a web signer", async () => {
     const fixture = await createHermeticEncryptedNode();
     try {

@@ -6941,13 +6941,17 @@ export class TinyCloudNode {
         throw new Error("Runtime permission request cancelled because the session key changed.");
       }
     } : undefined;
+    // The node's own session key, not the mutable label on `restorableSession`, anchors the consent key.
+    const sessionKeyDid = bindsShareKey ? this.sessionDid : undefined;
     if (bindsShareKey) {
       const key = captured.jwk as JWK;
-      if (key.kty !== "OKP" || key.crv !== "Ed25519" || typeof key.x !== "string" ||
-        !didPrincipalMatches(
-          didKeyFromEd25519PublicKey(Uint8Array.from(Buffer.from(key.x, "base64url"))),
-          captured.verificationMethod,
-        )) {
+      if (key.kty !== "OKP" || key.crv !== "Ed25519" || typeof key.x !== "string") {
+        throw new Error("Runtime permission session key does not match its signed identity.");
+      }
+      const keyDid = didKeyFromEd25519PublicKey(Uint8Array.from(Buffer.from(key.x, "base64url")));
+      if (!didPrincipalMatches(keyDid, sessionKeyDid!) ||
+        !didPrincipalMatches(keyDid, captured.verificationMethod) ||
+        !didPrincipalMatches(keyDid, new SiweMessage(session.siwe).uri)) {
         throw new Error("Runtime permission session key does not match its signed identity.");
       }
       assertCapturedKey!();
@@ -7030,7 +7034,7 @@ export class TinyCloudNode {
         }
       })();
       if (bindsShareKey &&
-        !didPrincipalMatches(new SiweMessage(prepared.siwe).uri, captured.verificationMethod)) {
+        !didPrincipalMatches(new SiweMessage(prepared.siwe).uri, sessionKeyDid!)) {
         throw new Error("Prepared runtime permission targets a different session key.");
       }
       assertCapturedKey?.();
