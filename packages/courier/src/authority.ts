@@ -113,6 +113,7 @@ export interface ExpectedPeerDelegation {
   audience: string;
   spaceId: string;
   mailbox: string;
+  sessionId?: string;
 }
 
 export function assertPeerDelegation(active: SignedPeerDelegation, expected: ExpectedPeerDelegation, now = Date.now()): void {
@@ -123,6 +124,6 @@ export function assertPeerDelegation(active: SignedPeerDelegation, expected: Exp
   if (bareDid(active.audience) !== expected.audience) {
     throw new CourierError('bad-delegation', `Peer delegation audience ${active.audience} does not match ${expected.audience}.`);
   }
-  assertExactAuthority(active.effectivePermissions, peerReadPermissions(expected.mailbox, expected.spaceId), 'Peer delegation');
+  assertExactAuthority(active.effectivePermissions, peerReadPermissions(expected.mailbox, expected.spaceId, expected.sessionId), 'Peer delegation');
   assertLifetime('Peer delegation', active.expiry, PEER_DELEGATION_MAX_MS, now);
 }

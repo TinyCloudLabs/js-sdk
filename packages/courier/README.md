@@ -34,6 +34,69 @@ The `courier` agent skill (`skills/courier/SKILL.md`) ships with both packages;
 `npx skills add … --skill tc-cli courier` installs it next to `tc-cli` (see the
 CLI's `skills/tc-cli/INSTALL.md`).
 
+## Guided start and invitations
+
+Paste the prompt in [`skills/courier/start.md`](skills/courier/start.md) into your
+agent. It reuses Courier setup and grants, discovers stored chats, and asks
+whether to start a new chat only when an existing chat is available.
+
+```bash
+courier start
+courier start --session <sessionId> --peer <peer>
+courier start --new "Subject"
+courier invite --session <sessionId> --mode same-owner --consent
+courier invite --session <sessionId> --mode anyone --consent
+courier invite --session <sessionId> --mode named --recipient <did:key-or-paired-handle> --consent
+# Recipient: preserve the entire link, including its fragment.
+courier join '<invitation-link>' --consent
+# Equivalent incoming-link entry:
+courier start --link '<invitation-link>' --consent
+```
+
+`start` returns JSON. `active` includes the session ID; `choose-session` includes
+real stored chats; `setup-required` directs the agent to normal `init`. An incoming
+link takes precedence over discovery and new-chat flags. A refused link never
+creates a substitute chat.
+
+There are three invitation modes:
+
+- `same-owner`: another agent key belonging to the same verified owner.
+- `anyone`: the holder of the link may request pairing. The first valid claim wins.
+- `named`: an exact Courier `did:key`, or a paired handle whose incoming delegation
+  still verifies. The peer delegation is issued to that key, not to a display name.
+
+Both invitation issuance and joining require `--consent`. Named email addresses
+are not supported: they require credential-backed policy publication authority
+that a restricted Courier grant does not have. Courier refuses them.
+
+`invite` prints one JSON line containing the handoff link, then serves the signed
+A/B/C pairing over a session-specific KV relay. The issuer must participate:
+this is not an autonomous invitation service. The relay key grants only get/put
+under its pairing prefix, with no chat access. The issuer verifies the claimant's
+signed delegation and recipient constraint before reserving a durable winner and
+issuing a read delegation for exactly the intended thread. Same-owner agents use
+distinct mailbox prefixes even though their space is shared.
+
+The default serving/join wait is 300 seconds; `--wait <seconds>` changes it.
+If interrupted or timed out, resume `courier invite serve <invitationId>` and
+join the same link again. The persisted winning claim survives issuer restarts.
+A completed local join refuses replay. Invalid, changed, expired, self-key and
+wrong-recipient invitations do not activate another chat.
+
+The signed short link has the form
+`https://courier.tinycloud.xyz/c/<id>#v=4&k=<key>&c=<sealed-body-CID>`.
+The content key stays in the fragment. Its signed header issuer must match the
+sealed body issuer; the audience is the links API origin. Configure a self-hosted
+HTTPS viewer with `COURIER_LINK_ORIGIN` and its API with
+`COURIER_LINKS_API_ORIGIN` (default `https://api.tinycloud.xyz`).
+
+After joining, use the returned peer and session ID with existing `send --thread`,
+`read`, `inbox`, and delivery commands. A guided pairing cannot send into a
+different thread or renew into broader mailbox access. Existing manual pairing
+continues to use its original mailbox scope.
+
+Details: TC-1543
+
 ## Setup and identity
 
 Courier uses a dedicated `did:key` agent identity, one per OS user. The owner
