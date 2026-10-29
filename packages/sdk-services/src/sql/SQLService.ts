@@ -558,7 +558,7 @@ export class SQLService extends BaseService implements ISQLService {
   private redactFailure<T>(result: Result<T>, redactErrors?: boolean, status?: number): Result<T> {
     if (!redactErrors || result.ok) return result;
     const candidate = result.error.code;
-    const code = Object.values(ErrorCodes).some((known) => known === candidate)
+    const code = typeof candidate === "string" && Object.prototype.hasOwnProperty.call(ErrorCodes, candidate)
       ? candidate : ErrorCodes.SQL_ERROR;
     const safeStatus = typeof status === "number" && Number.isInteger(status) && status >= 400 && status <= 599
       ? status : undefined;
