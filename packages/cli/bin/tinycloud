@@ -1,3 +1,12 @@
 #!/usr/bin/env node
 
+import { basename } from "node:path";
+import { fileURLToPath } from "node:url";
+
+if (basename(process.argv[1] ?? "") === "tc") {
+  process.stderr.write("tc is now tinycloud; tc will keep working for now.\n");
+}
+// Both installed names share one entry and canonical command/error guidance.
+process.argv[1] = fileURLToPath(import.meta.url);
+
 import("../dist/index.js");

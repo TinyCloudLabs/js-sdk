@@ -441,8 +441,11 @@ export interface RecapAttenuation {
 export function extractRecapAttenuations(siwe: string): RecapAttenuation {
   const merged: RecapAttenuation = {};
   const lines = siwe.split(/\r?\n/);
+  let resources = false;
   for (const line of lines) {
-    const match = line.match(/urn:recap:([A-Za-z0-9_-]+=*)/);
+    if (line === "Resources:") { resources = true; continue; }
+    if (!resources) continue;
+    const match = line.match(/^- urn:recap:([A-Za-z0-9_-]+=*)$/);
     if (!match) continue;
     const encoded = match[1];
     let decodedJson: string;

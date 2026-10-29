@@ -12,7 +12,7 @@ type CoverageEntry = {
 
 const packageDirectory = resolve(process.cwd());
 const coveragePath = resolve(packageDirectory, "../operations/coverage.json");
-const referencePath = resolve(packageDirectory, "skills/tc-cli/REFERENCE.md");
+const referencePath = resolve(packageDirectory, "skills/tinycloud-cli/REFERENCE.md");
 const coverage = JSON.parse(await readFile(coveragePath, "utf8")) as { commands: CoverageEntry[] };
 const counts = new Map<string, number>();
 for (const entry of coverage.commands) counts.set(entry.status, (counts.get(entry.status) ?? 0) + 1);
