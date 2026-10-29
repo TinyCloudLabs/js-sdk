@@ -808,6 +808,54 @@ describe("TinyCloud share authority adapter", () => {
     expect(registeredPolicies).toEqual([]);
   });
 
+  it("refuses exact-email CLI publication before every adapter side effect, even with valid credential flags", async () => {
+    // Load the command graph after this file's profile/SDK module mocks.
+    const { configureShareCommandServices } = await import("../commands/share.js");
+    const { runShareCaptured } = await import("../commands/share.integration-harness.js");
+    const root = await mkdtemp(join(tmpdir(), "tc-email-unavailable-adapter-"));
+    const input = join(root, "note.md");
+    const descriptor = join(root, "descriptor.json");
+    let creates = 0;
+    let configs = 0;
+    const adapter = createShareAuthorityAdapters({
+      origin: "https://share.example", profileName: async () => "test",
+      fetchFn: (async () => {
+        configs++;
+        return Response.json({ version: "tinycloud.share/config-v2", shareOrigin: "https://share.example", registryOrigin: "https://registry.example", credentialsOrigin: "https://credentials.example" });
+      }) as unknown as typeof globalThis.fetch,
+    }).targetAdapter;
+    configureShareCommandServices({ targetAdapter: { publish: async (request) => {
+      creates++;
+      return adapter.publish(request);
+    } } });
+    const originalExit = process.exit;
+    let exitCode: number | undefined;
+    process.exit = ((code?: number) => { exitCode = code; }) as typeof process.exit;
+    try {
+      await writeFile(input, "synthetic refusal input");
+      await writeFile(descriptor, JSON.stringify(emailDescriptor));
+      const result = await runShareCaptured(["share", "publish", input, "--to", "email:owner@example.com", "--json",
+        "--viewer-origin", "https://share.example", "--credential-descriptor", descriptor,
+        "--issuer-did", emailCredentialInputs.issuerDid, "--issuer-kid", emailCredentialInputs.issuerKid]);
+      expect(exitCode ?? result.exitCode).toBe(4);
+      const error = JSON.parse(result.stderr).error as { code: string; message: string };
+      expect(error.code).toBe("UNAVAILABLE");
+      expect(error.message).toMatch(/unavailable|not available/i);
+      expect(creates).toBe(0);
+      expect(configs).toBe(0);
+      expect(publishEvents).toEqual([]);
+      expect(encryptions).toBe(0);
+      expect(uploadedPaths).toEqual([]);
+      expect(registeredPolicies).toEqual([]);
+      expect(ownerRootInputs).toEqual([]);
+      expect(sessionSignatures).toEqual([]);
+    } finally {
+      process.exit = originalExit;
+      configureShareCommandServices({});
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   /** The history record of a share whose printed link is its short link: the only link an invitation carries. */
   const recordWithShortLink = (published: PublishedShare): SenderShareRecord => ({
     ...historyRecordForPublishedShare(published),
