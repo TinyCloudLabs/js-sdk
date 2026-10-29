@@ -1,8 +1,8 @@
 # TinyCloud delegated exploration and secrets
 
-Use the TinyCloud MCP tools as a resumable authority workflow. Never ask the
-user to paste a secret value, private key, token, or delegation credential into
-chat.
+Use the TinyCloud MCP tools as a resumable authority workflow. Never ask for
+secret values, private or session keys, recovery phrases or API keys. Approval
+codes and delegations are fine to send in chat.
 
 <!-- BEGIN GENERATED TINYCloud operation facts -->
 The following facts are generated from `@tinycloud/operations/operations.json`:
@@ -47,23 +47,19 @@ Coverage is generated from the Commander registration ledger; legacy commands ar
 
 ## Account and KV exploration
 
-With hosted Streamable HTTP, call `tinycloud_connect`, give the owner the returned `approvalUrl` to approve in OpenKey, then call `tinycloud_connect` again. When a tool returns `authority_required` with `approval.url`, give the owner that link, wait for their approval, then retry the same call unchanged. If the result has no `approval.url`, stop and report it; don't try another route. The `tc auth request` / `tc auth import` and `tinycloud_auth_import` instructions below are for local stdio only. See the [hosted MCP guide](https://docs.tinycloud.xyz/cli/mcp).
+With hosted Streamable HTTP, call `tinycloud_connect`, give the owner the returned `approvalUrl` to approve in OpenKey, then call `tinycloud_connect` again. When a tool returns `authority_required` with `approval.url`, give the owner that link, wait for their approval, then retry the same call unchanged. If the result has no `approval.url`, stop and report it; don't try another route. The `tinycloud_auth_import` instructions below are for local stdio only. See the [hosted MCP guide](https://docs.tinycloud.xyz/cli/mcp).
 
-The `tc auth grant --stdin --yes` artifact, import, restart, and retry steps below apply to local stdio only; hosted operations use a returned `approval.url` as described above.
-
-1. A fresh `delegate-session` profile must first bootstrap its session through
-   the CLI: emit one exact `tc auth request --cap ...` artifact, have the owner
-   grant that artifact, and import the result with `tc auth import`. Start MCP
-   only after the import succeeds.
+1. For local stdio, sign in once with `tinycloud onboard` and start MCP with
+   that profile: `tinycloud-mcp --profile default --allow-owner-profile`.
 2. Inspect posture with `tinycloud_status` or `tinycloud_auth_status`.
 3. Call `tinycloud_account_spaces_list` and
    `tinycloud_account_applications_list`. If either returns
-   `authority_required`, give the exact structured request to the account
-   owner for `tc auth grant --stdin --yes`, then import the returned artifact
-   with `tinycloud_auth_import`.
+   `authority_required`, send the owner `approval.url` and one line on what it
+   allows; pass back the code or delegation they send, exactly as sent, to
+   `tinycloud_auth_import`.
 4. Choose a non-secrets space from those results. Use `tinycloud_kv_list` with
-   an exact space and prefix. Follow the same request, owner grant, import,
-   restart, and retry sequence when authority is required.
+   an exact space and prefix. Follow the same link-and-retry steps when
+   authority is required.
 5. Use `tinycloud_kv_get` for one exact returned key. The default base64
    representation is byte-exact; request `text` or `json` only when the stored
    bytes have that encoding. A list grant does not imply get authority.
@@ -81,18 +77,18 @@ The `tc auth grant --stdin --yes` artifact, import, restart, and retry steps bel
 ## Secret workflow
 
 1. Inspect posture first with `tinycloud_status` or `tinycloud_auth_status`.
-   Treat `delegate-session` as delegated authority even when its owner DID is
+   Treat the profile as delegated authority even when its owner DID is
    the target space owner. Do not infer owner authority from metadata.
 2. Call `tinycloud_secrets_get` with the validated secret reference (`name`,
    and optional `scope` or `space`). If the result is `authority_required`,
    do not retry blindly and do not infer whether the secret exists.
-3. Present the exact structured `request` and its exact `approval` OpenKey
-   action to the user for out-of-band approval. Preserve the request ID and
-   do not edit, broaden, or replace its requested entries.
+3. Send the owner the approval link and one line on what it allows. Preserve
+   the request ID and do not edit, broaden, or replace its requested entries.
 4. In a later call, use `tinycloud_auth_import` with the returned request ID
-   and the approved delegation artifact. A process restart is expected to be
-   safe. If the session rotated, the old artifact must be rejected with an
-   audience mismatch; rerun the original secret call for a new request.
+   and the code or delegation the owner sends back in chat, passed on exactly
+   as sent. A process restart is expected to be safe. If the session rotated,
+   the old artifact must be rejected with an audience mismatch; rerun the
+   original secret call for a new request.
 5. Retry the original `tinycloud_secrets_get` call after a successful import.
    The successful structured result is authoritative. Do not copy its value
    into text, a follow-up message, diagnostics, or a transcript summary.
@@ -111,15 +107,10 @@ transcripts, caches, or evaluation records. TinyCloud controls only its own
 logs and local profile state, not host-side transcript retention. Hosts should
 apply their own sensitive-result retention and access controls.
 
-The canonical remote service is hosted MCP at
-`https://mcp.tinycloud.xyz/mcp` using Streamable HTTP and OpenKey OAuth.
-Connect Claude through its remote MCP connector and complete OpenKey OAuth.
-ChatGPT users can add `https://mcp.tinycloud.xyz/mcp` on the web under Plugins → + → Add custom MCP server; Developer Mode isn't required first.
-Availability depends on the ChatGPT plan and workspace settings. Follow
-[OpenAI's custom MCP connection guide](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt).
-
-Local stdio is the alternative: install `@tinycloud/cli` and `@tinycloud/mcp`,
-then configure `tinycloud-mcp` in the client's stdio MCP settings.
+Agents that can run the CLI use https://agents.tinycloud.xyz/onboarding.
+Others connect any remote-MCP client (for example Claude or ChatGPT) to
+hosted MCP at `https://mcp.tinycloud.xyz/mcp` using Streamable HTTP and
+OpenKey OAuth. Meetings are available through the CLI.
 Connection documentation: https://docs.tinycloud.xyz/cli/mcp
 
 The MCP server has no resources, prompts, elicitation, generic permission grant,

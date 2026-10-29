@@ -8,7 +8,8 @@ Self-sovereign storage from the terminal. `tc` is the command-line interface for
 npm install -g @tinycloud/cli
 ```
 
-Requires Node.js >= 20.
+Requires Node.js >= 20; TinyCloud's agent guides use Node.js 22.20 or later.
+Agents: start at https://agents.tinycloud.xyz/onboarding.
 
 The package installs two identical commands: `tc` and `tinycloud`. On Linux,
 iproute2 installs `/usr/sbin/tc` (traffic control), which can shadow `tc` on
@@ -24,7 +25,7 @@ install. Run `hash -r` if `tc` already ran in the same shell. Verify with
 The package ships the general `tc-cli` skill and its references in
 `skills/tc-cli`, and the `courier` skill for `tc courier` in `skills/courier`.
 See [skill installation](skills/tc-cli/INSTALL.md) for a
-pinned, cross-agent installation with OpenCode, Codex and Claude Code, and
+pinned, cross-agent installation for any agent, and
 [authentication](skills/tc-cli/AUTH.md) for device login and relaying the
 approval code to the owner.
 

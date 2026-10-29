@@ -4,7 +4,7 @@ agents.tinycloud.xyz serves every TinyCloud skill and pins the CLI version they'
 
 ## Install
 
-Follow https://agents.tinycloud.xyz/cli. It installs the pinned TinyCloud CLI into `~/.local/share/tinycloud/cli` and installs this skill. Run the CLI as `tinycloud`, which needs CLI 1.2.3 or later; `tc` is its older name, and on many Linux hosts `tc` on `PATH` is iproute2's `/usr/sbin/tc` instead. The skill's first block finds the CLI there; set `TC_BIN` to use another one.
+Follow https://agents.tinycloud.xyz/onboarding. It installs the pinned TinyCloud CLI into `~/.local/share/tinycloud/cli` and installs this skill. Run the CLI as `tinycloud`, which needs CLI 1.2.3 or later; `tc` is its older name, and on many Linux hosts `tc` on `PATH` is iproute2's `/usr/sbin/tc` instead. The skill's first block finds the CLI there; set `TC_BIN` to use another one.
 
 To install this skill, or `courier` for `tinycloud courier`, without the guide:
 
@@ -13,7 +13,7 @@ curl -fsSL https://agents.tinycloud.xyz/skills/install.js | node - cli --agent c
 curl -fsSL https://agents.tinycloud.xyz/skills/install.js | node - courier --agent claude-code
 ```
 
-Use `--agent codex` or `--agent opencode` for those clients. Skills go into `${CLAUDE_CONFIG_DIR:-~/.claude}/skills/<name>` for Claude Code and `~/.agents/skills/<name>` for Codex and OpenCode, which share that folder. The installer checks every file against https://agents.tinycloud.xyz/skills/index.json before it writes anything, and prints `SKILL_INSTALLED <name> <version> <folder>`. Start a new session for the client to discover the skill.
+`--agent` takes, for example, `claude-code`, `codex` or `opencode`; for other agents, copy the folder into that agent's skills directory. Skills go into `${CLAUDE_CONFIG_DIR:-~/.claude}/skills/<name>` for Claude Code and `~/.agents/skills/<name>` for Codex and OpenCode, which share that folder. The installer checks every file against https://agents.tinycloud.xyz/skills/index.json before it writes anything, and prints `SKILL_INSTALLED <name> <version> <folder>`. Start a new session for the client to discover the skill.
 
 ## Check
 
