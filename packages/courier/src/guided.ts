@@ -69,7 +69,7 @@ export async function selectedSession(node: TinyCloudNode, profile: Profile, id:
 export async function cmdStart(args: ParsedArgs): Promise<void> {
   // Incoming intent is handled before discovery or creation, including invalid links.
   const incoming = args.get('link') ?? args.positional[0];
-  if (incoming) {
+  if (incoming !== undefined) {
     return joinInvitation(incoming, args);
   }
   if (!profileExists()) {
