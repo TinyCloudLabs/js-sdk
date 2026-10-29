@@ -1,5 +1,11 @@
 # @tinycloud/node-sdk
 
+## Signed SIWE metadata
+
+Set `siweConfig.resources` to absolute URI strings to include application metadata in the signed SIWE. Node-sdk inserts them immediately before the original ReCap resource, which remains last. Ordinary sign-in, external/OpenKey preparation, and bootstrap sessions use the same insertion path; completion and session storage retain the signed message unchanged.
+
+Metadata resources do not add permissions. ReCap URIs and literal control characters are not accepted in this option. The generated statement and ReCap remain unchanged; `siweConfig.statement` does not replace the generated statement. Omitting resources or passing an empty array leaves the prepared message unchanged.
+
 ## `@tinycloud/node-sdk/credential-pending-store`
 
 File-backed pending store for the email-proof flow. It keeps one file per request under `<home>/credentials/`, named by a hash of the request id. The directory is created with mode 0700 and each file with mode 0600. Permissions and ownership are re-checked on every read. Only a `home` that is itself a symlink is refused; ancestors of `home` may be symlinks, but `realpath(home)` must be owned by the current user. Unsafe files are left in place and reported as an error.
