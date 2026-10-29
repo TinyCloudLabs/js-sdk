@@ -16,13 +16,10 @@ This release has **Commander coverage tracked, not complete parity**:
 
 ## Calling the CLI
 
-`/usr/sbin/tc` (iproute2 traffic control) shadows the older `tc` name on many Linux hosts, so the CLI is called `tinycloud`. Call the CLI by path, preferring the private install from https://agents.tinycloud.xyz/cli (set `TC_BIN` to use another one):
+Run the installed CLI as `tinycloud`. On Linux, `tc` is iproute2 traffic control at `/usr/sbin/tc`.
 
 ```bash
-TC="${TC_BIN:-$HOME/.local/share/tinycloud/cli/node_modules/.bin/tinycloud}"   # TC_BIN, else where agents.tinycloud.xyz/cli installs it
-[ -n "${TC_BIN:-}" ] || [ -x "$TC" ] || ! command -v npm >/dev/null || TC="$(npm prefix --global)/bin/tinycloud"   # else a global npm install
-[ -x "$TC" ] || { echo "TC_NOT_FOUND: $TC is not executable; install the CLI from https://agents.tinycloud.xyz/cli or set TC_BIN" >&2; exit 1; }
-"$TC" --version
+tinycloud --version
 ```
 
 ## Global Options
@@ -41,9 +38,9 @@ TC="${TC_BIN:-$HOME/.local/share/tinycloud/cli/node_modules/.bin/tinycloud}"   #
 ## Context and Login
 
 ```bash
-"$TC" onboard                         # once; every later task reuses this profile
-"$TC" auth request --cap SPEC --grant --paste --expiry 30d   # more access: ask once
-"$TC" context --json
+tinycloud onboard                         # once; every later task reuses this profile
+tinycloud auth request --cap SPEC --grant --paste --expiry 30d   # more access: ask once
+tinycloud context --json
 ```
 
 `context` always emits JSON: profile, `ownerDid`, `sessionDid`, host, `spaceId` and local session expiry, with `access: "not-tested"`. It never prints keys or signed material.
@@ -82,17 +79,17 @@ No `del` anywhere and no `list` on the bearer prefix: no `tinycloud share` comma
 ## Delegations
 
 ```bash
-"$TC" delegation create \
+tinycloud delegation create \
   --to did:pkh:eip155:1:0xRecipient... \
   --path kv/shared \
   --actions kv/get,kv/put \
   --expiry 24h
 
-"$TC" delegation list              # All
-"$TC" delegation list --granted    # Granted by me
-"$TC" delegation list --received   # Received by me
-"$TC" delegation info <cid>
-"$TC" delegation revoke <cid>
+tinycloud delegation list              # All
+tinycloud delegation list --granted    # Granted by me
+tinycloud delegation list --received   # Received by me
+tinycloud delegation info <cid>
+tinycloud delegation revoke <cid>
 ```
 
 Actions are auto-prefixed with `tinycloud.` if not already.
@@ -105,16 +102,16 @@ and blocks implicit reauthentication. Unrelated CIDs do not sign you out.
 
 From a delegate (agent) profile, `delegation list --granted` lists the delegations that profile's own key issued: every page of the node's issued-delegations listing, each with its `status`, sorted by delegation ID rather than by date (the output's `note` says so). A node that does not offer the listing yet answers `ISSUED_DELEGATIONS_UNAVAILABLE` (exit 7). `delegation revoke <cid>` from a delegate profile revokes a delegation its own key issued with a revocation signed by that key, so it needs no revoke grant from the owner. Revoking one that's already revoked also succeeds. A delegation the key did not issue is refused with the node's message (`REVOKE_UNAUTHORIZED`, exit 5). A chain too long for the node to check right now answers `CHAIN_TOO_DEEP` (exit 7); retry later. Owner profiles behave as described above.
 
-A grant the owner signed through `auth grant` can be revoked from any of the owner's profiles, including one that never recorded it (another CLI profile or machine). When this profile has no local record of the CID, the CLI reads the owner's delegation records on the node and uses that record's space only if the grant was issued by the signed-in owner (the issuer is the owner or the signed-in session key, or a key that holds a delegation recorded on the node whose own issuer is, in turn, one of those: any holder along such an owner-rooted chain counts, up to 8 hops) and every space it covers is one plain space id (`tinycloud:pkh:eip155:<chain>:<address>:<name>`) that belongs to that owner. The lookup reads at most 5,000 records (pages of 100; a larger page is refused) and refuses rather than decides on a partial list. A CID the node does not list, one issued by someone else, a space the owner does not hold, or an ambiguous record is refused (`RAW_RECAP_RESOURCE_UNSUPPORTED`, "this CLI profile has no record of this grant and the node's record does not match the signed-in owner"). An OpenKey owner uses the same space-scoped request as for a locally recorded grant; OpenKey profiles hold no wallet signer, so there is no wallet-signed revoke for them. After the revoke, the agent's next call is refused (`GRANT_REVOKED`, exit 5, the same as `tc replica`: "This grant was revoked. Ask the owner for a new grant") as soon as the node has recorded it.
+A grant the owner signed through `auth grant` can be revoked from any of the owner's profiles, including one that never recorded it (another CLI profile or machine). When this profile has no local record of the CID, the CLI reads the owner's delegation records on the node and uses that record's space only if the grant was issued by the signed-in owner (the issuer is the owner or the signed-in session key, or a key that holds a delegation recorded on the node whose own issuer is, in turn, one of those: any holder along such an owner-rooted chain counts, up to 8 hops) and every space it covers is one plain space id (`tinycloud:pkh:eip155:<chain>:<address>:<name>`) that belongs to that owner. The lookup reads at most 5,000 records (pages of 100; a larger page is refused) and refuses rather than decides on a partial list. A CID the node does not list, one issued by someone else, a space the owner does not hold, or an ambiguous record is refused (`RAW_RECAP_RESOURCE_UNSUPPORTED`, "this CLI profile has no record of this grant and the node's record does not match the signed-in owner"). An OpenKey owner uses the same space-scoped request as for a locally recorded grant; OpenKey profiles hold no wallet signer, so there is no wallet-signed revoke for them. After the revoke, the agent's next call is refused (`GRANT_REVOKED`, exit 5, the same as `tinycloud replica`: "This grant was revoked. Ask the owner for a new grant") as soon as the node has recorded it.
 
 `tinycloud auth import` stores delegations in `additional-delegations.json`. Every replay path installs only a grant with a locally verified proof and a binding containing its signed authority; unbound and proof-less grants never install, including while migration is deferred. [AUTH.md](AUTH.md#imported-delegations-and-their-request-bindings) covers migration and recovery.
 
 ### Stored grants
 
 ```bash
-"$TC" --profile PROFILE auth grants list --json
-"$TC" --profile PROFILE auth grants remove <cid>
-"$TC" --profile PROFILE auth grants remove <cid> --revoke --yes
+tinycloud --profile PROFILE auth grants list --json
+tinycloud --profile PROFILE auth grants remove <cid>
+tinycloud --profile PROFILE auth grants remove <cid> --revoke --yes
 ```
 
 `list` is local and does not contact the node. Its JSON contains `profile`, `session` (`cid` recomputed from stored header and `expiresAt`, or `null`), `localVerification` (`available`, `session_missing`, `session_expired`, `session_invalid`), and `grants`. Each indexed grant row contains `cid` (CID-shaped or `null`), `expiry`, `expired`, `local` (`verified`, `refused`, `not_checked`, `for_another_key`), `reason` (fixed skip code or `null`), `node: "not_checked"`, `bound`, `proof` (`siwe`, `compact`, `missing`, or `null`), `source`, `scope`, and `scopeSource` (`signed` or `stored`). `for_another_key` means the stored audience names another key; its scope is unverified stored metadata and it cannot install in this session. Local verification checks signed scope and binding, not the node's delegation chain or revocation status. Human output shows `CID | LOCAL | EXPIRES | SOURCE | BOUND | SCOPE` and the session CID.
@@ -134,25 +131,25 @@ A concurrent local removal after revocation reports `removed: 0` as success. Oth
 ## Spaces
 
 ```bash
-"$TC" space list
-"$TC" space create myspace
-"$TC" space info                   # Current space
-"$TC" space info <space-id>        # Specific space
-"$TC" space switch myspace
+tinycloud space list
+tinycloud space create myspace
+tinycloud space info                   # Current space
+tinycloud space info <space-id>        # Specific space
+tinycloud space switch myspace
 ```
 
-`space list` reads the owner's account registry (`account/spaces/`) when the session holds `tinycloud.kv/get` and `tinycloud.kv/list` on the account space's `spaces/` prefix, and falls back to `tinycloud.space/list` only when the session holds that. A session with neither (including the default OpenKey owner sign-in, which covers only the `default` space) fails with `PERMISSION_DENIED` (exit 5) naming both; an owner grants the registry read with `"$TC" auth request --grant --cap tinycloud.kv:account:spaces/:get,list`.
+`space list` reads the owner's account registry (`account/spaces/`) when the session holds `tinycloud.kv/get` and `tinycloud.kv/list` on the account space's `spaces/` prefix, and falls back to `tinycloud.space/list` only when the session holds that. A session with neither (including the default OpenKey owner sign-in, which covers only the `default` space) fails with `PERMISSION_DENIED` (exit 5) naming both; an owner grants the registry read with `tinycloud auth request --grant --cap tinycloud.kv:account:spaces/:get,list`.
 
 ## Profiles
 
 Multiple identities/environments with isolated keys and sessions.
 
 ```bash
-"$TC" profile list
-"$TC" profile create staging --host https://staging.tinycloud.xyz
-"$TC" profile show                 # Current profile
-"$TC" profile switch staging       # Change default
-"$TC" profile delete old-profile
+tinycloud profile list
+tinycloud profile create staging --host https://staging.tinycloud.xyz
+tinycloud profile show                 # Current profile
+tinycloud profile switch staging       # Change default
+tinycloud profile delete old-profile
 ```
 
 Per-command override: `tinycloud kv get mykey --profile staging`
@@ -169,15 +166,15 @@ network grant` takes the short name, resolves the network, and issues
 separately from any KV or SQL reads the app also needs.
 
 ```bash
-"$TC" secrets network init
-"$TC" secrets network show
-"$TC" secrets network grant did:pkh:eip155:1:0xRecipient...
+tinycloud secrets network init
+tinycloud secrets network show
+tinycloud secrets network grant did:pkh:eip155:1:0xRecipient...
 
-printf '%s' "$ANTHROPIC_API_KEY" | "$TC" secrets put ANTHROPIC_API_KEY --stdin   # keeps the value out of argv and shell history
-"$TC" secrets get ANTHROPIC_API_KEY
-"$TC" secrets get ANTHROPIC_API_KEY -o key.txt   # atomic owner-only (0600) replacement
-"$TC" secrets list
-"$TC" secrets delete ANTHROPIC_API_KEY
+printf '%s' "$ANTHROPIC_API_KEY" | tinycloud secrets put ANTHROPIC_API_KEY --stdin   # keeps the value out of argv and shell history
+tinycloud secrets get ANTHROPIC_API_KEY
+tinycloud secrets get ANTHROPIC_API_KEY -o key.txt   # atomic owner-only (0600) replacement
+tinycloud secrets list
+tinycloud secrets delete ANTHROPIC_API_KEY
 ```
 
 A missing secret makes `tinycloud secrets get` exit 4 (`NOT_FOUND`). For an identity that is not local, `error.setup` carries the owner's request link; a local identity (or a name/scope no link can express) gets only a hint naming `tinycloud secrets put NAME --stdin`. `tinycloud secrets doctor NAME` hints `tinycloud secrets request NAME` for a missing secret, or `tinycloud secrets put NAME --stdin` for a local identity. `tinycloud secrets get --delegation` follows the same rule, and a delegated read the node refuses (403, a capability 401, `AUTH_UNAUTHORIZED`) exits 5.
@@ -185,9 +182,9 @@ A missing secret makes `tinycloud secrets get` exit 4 (`NOT_FOUND`). For an iden
 ### Running a command with secrets: `run`
 
 ```bash
-"$TC" secrets run NAME... [--map NAME=ENV_VAR]... [--scope S] [--space S] [--delegation SOURCE] [--private-key HEX] -- <command> [args...]
-"$TC" --profile agent secrets run OPENAI_API_KEY -- python train.py
-"$TC" --profile agent secrets run --map ANTHROPIC_KEY=ANTHROPIC_API_KEY -- node server.js
+tinycloud secrets run NAME... [--map NAME=ENV_VAR]... [--scope S] [--space S] [--delegation SOURCE] [--private-key HEX] -- <command> [args...]
+tinycloud --profile agent secrets run OPENAI_API_KEY -- python train.py
+tinycloud --profile agent secrets run --map ANTHROPIC_KEY=ANTHROPIC_API_KEY -- node server.js
 ```
 
 `tinycloud secrets run` reads every named secret as `tinycloud secrets get` does, then starts `<command>` directly, without a shell, with each value in its environment: under the secret's name, or under `ENV_VAR` for `--map NAME=ENV_VAR`. A value replaces an inherited variable of the same name. The CLI doesn't pass its own `TC_PRIVATE_KEY` to the command. To give the command a key from a secret, use `--map NAME=TC_PRIVATE_KEY`. Everything after the first `--`, including any further `--`, goes to the command unchanged. The command uses the CLI's stdin, stdout and stderr; the CLI itself writes nothing to stdout, and its own messages go to stderr.
@@ -206,15 +203,12 @@ Limits: `tinycloud secrets run` keeps values out of the command line, your shell
 `/usr/sbin/tc` (iproute2 traffic control) can shadow the older `tc` name on `PATH`, so scripts call the CLI by absolute path:
 
 ```bash
-TC="${TC_BIN:-$HOME/.local/share/tinycloud/cli/node_modules/.bin/tinycloud}"   # TC_BIN, else where agents.tinycloud.xyz/cli installs it
-[ -n "${TC_BIN:-}" ] || [ -x "$TC" ] || ! command -v npm >/dev/null || TC="$(npm prefix --global)/bin/tinycloud"   # else a global npm install
-[ -x "$TC" ] || { echo "TC_NOT_FOUND: $TC is not executable; install the CLI from https://agents.tinycloud.xyz/cli or set TC_BIN" >&2; exit 1; }
-"$TC" --profile agent secrets request OPENAI_API_KEY --requester "agent@host" --json
+tinycloud --profile agent secrets request OPENAI_API_KEY --requester "agent@host" --json
 # {"url":"https://secrets.tinycloud.xyz/request?owner=…&name=OPENAI_API_KEY&requester=…&v=1","names":["OPENAI_API_KEY"],"owner":"did:pkh:eip155:1:0x…"}
 # send the url to the owner once, then:
-"$TC" --profile agent secrets wait OPENAI_API_KEY --timeout 9m --json
-"$TC" --profile agent secrets get OPENAI_API_KEY --raw
-"$TC" secrets manage OPENAI_API_KEY --no-open --json   # {"url":"…","opened":false}: the replace/manage page
+tinycloud --profile agent secrets wait OPENAI_API_KEY --timeout 9m --json
+tinycloud --profile agent secrets get OPENAI_API_KEY --raw
+tinycloud secrets manage OPENAI_API_KEY --no-open --json   # {"url":"…","opened":false}: the replace/manage page
 ```
 
 - **`secrets request <NAME...> [--scope S | --app ID] [--owner DID] [--requester LABEL] [--open]`** prints `{url, names, scope?, owner}` and exits 0. It is offline: no session, no node request. 1–10 names (`^[A-Z][A-Z0-9_]*$`, ≤ 64, duplicates dropped). `--app ID` derives the scope from an app id (`xyz.tinycloud.feed` → `xyz-tinycloud-feed`); `--app` with `--scope` exits 2. `--requester` defaults to `user@host`. `--open` also opens the link; a failure to open only adds a `BROWSER_OPEN_FAILED` warning on stderr. Errors: 2 for `INVALID_SECRET_NAME`, `TOO_MANY_SECRET_NAMES`, `INVALID_SECRET_SCOPE`, `INVALID_REQUESTER`, `INVALID_OWNER`, `OWNER_MISMATCH`, `LOCAL_OWNER_PROFILE`; 3 for `OWNER_DID_UNKNOWN` (pass `--owner`).
@@ -254,11 +248,11 @@ An agent profile gets read access to named secrets through a scoped OpenKey past
 
 ```bash
 echo '{ "app_id": "my.agent", "space": "secrets", "secrets": { "OPENAI_API_KEY": true } }' > agent.json
-"$TC" init --name agent --key-only
-"$TC" --profile agent auth login --method openkey --paste --manifest agent.json --owner did:pkh:eip155:1:0xOWNER < /dev/null
+tinycloud init --name agent --key-only
+tinycloud --profile agent auth login --method openkey --paste --manifest agent.json --owner did:pkh:eip155:1:0xOWNER < /dev/null
 # exits 3 (PASTE_CODE_MISSING) and names the approval URL; the owner approves and returns a code
-printf '%s\n' "$CODE" | "$TC" --profile agent auth login --method openkey --paste --manifest agent.json --owner did:pkh:eip155:1:0xOWNER
-"$TC" --profile agent secrets get OPENAI_API_KEY --raw
+printf '%s\n' "$CODE" | tinycloud --profile agent auth login --method openkey --paste --manifest agent.json --owner did:pkh:eip155:1:0xOWNER
+tinycloud --profile agent secrets get OPENAI_API_KEY --raw
 ```
 
 `secrets: { NAME: true }` requests, in the owner's `secrets` space, `kv/get` on `vault/secrets/NAME` and `capabilities/read` on `""`, plus the raw network entry `{ "service": "tinycloud.encryption", "space": "encryption", "path": "urn:tinycloud:encryption:<ownerDid>:default", "actions": ["tinycloud.encryption/decrypt"] }`. The owner DID comes from the profile's recorded owner, else `--owner`, and its address is EIP-55 checksummed in the URN; with neither the login fails with `OWNER_DID_UNKNOWN`. The JSON result lists approved `permissions` and `declined` entries. A decrypt signed inside the owner's space by an older OpenKey deployment is not a raw grant: scoped login reports it in `declined` and omits it from saved permissions. Browser `auth request --grant` or secret-read escalation refuses that old nested proof before activating or storing a grant (`OPENKEY_GRANT_BROADENED`); a renewed approval must sign the raw network grant.
@@ -273,17 +267,17 @@ A replica needs a device grant carrying `get` and `sync` on the prefix. Neither 
 
 ```bash
 # device
-"$TC" --profile device auth request --cap tinycloud.kv:SPACE:notes/:get,list,metadata,sync --expiry 30d --emit req.json
+tinycloud --profile device auth request --cap tinycloud.kv:SPACE:notes/:get,list,metadata,sync --expiry 30d --emit req.json
 # owner
-"$TC" --profile owner auth grant req.json > grant.json
+tinycloud --profile owner auth grant req.json > grant.json
 # device
-"$TC" --profile device auth import grant.json
-"$TC" --profile device replica sync --prefix notes/       # first sync creates the replica "notes"
-"$TC" --profile device replica get notes/todo.md --raw     # offline
-"$TC" --profile device replica list notes/ --json
-"$TC" --profile device replica status
-"$TC" --profile device replica sync                       # catch up: updates and deletes
-"$TC" --profile device replica reset [--purge]
+tinycloud --profile device auth import grant.json
+tinycloud --profile device replica sync --prefix notes/       # first sync creates the replica "notes"
+tinycloud --profile device replica get notes/todo.md --raw     # offline
+tinycloud --profile device replica list notes/ --json
+tinycloud --profile device replica status
+tinycloud --profile device replica sync                       # catch up: updates and deletes
+tinycloud --profile device replica reset [--purge]
 ```
 
 - The first `sync` needs `--prefix` (and `--space` when grants cover several spaces); it pins the source host (`--host` or the profile host, never a discovered local node). Later runs use the stored configuration; a different `--prefix`, `--space` or `--host` is `REPLICA_CONFIG_MISMATCH` (exit 2). `--replica <name>` selects or names a replica (default: named after the prefix, or the profile's only replica).
@@ -347,8 +341,8 @@ session, logout signs that session out and removes only the profile's legacy
 `replicas/` tree; the other account's gate and flag-owned replicas stay. An
 interrupted earlier sign-out is reported, and a second `auth logout` completes
 it. A gate that no longer matches its logout record (for example, restored
-from an older copy) refuses logout; run `tc profile delete <name>` (after
-`tc profile switch <other>` if it is the default) and sign in again.
+from an older copy) refuses logout; run `tinycloud profile delete <name>` (after
+`tinycloud profile switch <other>` if it is the default) and sign in again.
 
 `--keep-replicas` retains legacy files only when no replica gate, flag-owned
 partition or pending purge exists; gated profiles refuse before mutation and
@@ -363,17 +357,17 @@ replayed and the covered read is served locally. If explicit `kv/get` plus
 ## Node Health
 
 ```bash
-"$TC" node health                  # Ping + latency
-"$TC" node version                 # Server version
-"$TC" node status                  # Combined
+tinycloud node health                  # Ping + latency
+tinycloud node version                 # Server version
+tinycloud node status                  # Combined
 ```
 
 ## Shell Completions
 
 ```bash
-eval "$("$TC" completion bash)"
-eval "$("$TC" completion zsh)"
-"$TC" completion fish | source
+eval "$(tinycloud completion bash)"
+eval "$(tinycloud completion zsh)"
+tinycloud completion fish | source
 ```
 
 ## Share Publish, Inspect, Receive, List, Revoke
@@ -381,31 +375,31 @@ eval "$("$TC" completion zsh)"
 Publishing needs the publishing scope in the owner's `default` space, on a dedicated profile: `tinycloud init --name publisher --key-only`, then `tinycloud --profile publisher auth login --method openkey --paste --manifest builtin:share-publishing --expiry 30d`. Publish with `tinycloud --profile publisher share publish ...`.
 
 ```bash
-"$TC" share publish ./note.md --json                                  # bearer link; JSON has no URL: use share show <id> --reveal-link
-"$TC" share publish ./note.md --to email:alice@example.com --notify   # addressed: exact email, emailed invitation (read required)
-"$TC" share publish ./note.md --to did:pkh:eip155:1:0xRecipient...    # addressed: one DID
-"$TC" share publish ./note.md --to domain:example.com                 # addressed: any verified address at the domain
-"$TC" share publish ./note.md --to domain:example.com --notify --notify-to alice@example.com  # invite one matching mailbox; node 1.17.3+
-cat note.md | "$TC" share publish - --name note.md
-"$TC" share publish ./site/ --json                                    # folder with index.html -> one self-contained page, bearer link
+tinycloud share publish ./note.md --json                                  # bearer link; JSON has no URL: use share show <id> --reveal-link
+tinycloud share publish ./note.md --to email:alice@example.com --notify   # addressed: exact email, emailed invitation (read required)
+tinycloud share publish ./note.md --to did:pkh:eip155:1:0xRecipient...    # addressed: one DID
+tinycloud share publish ./note.md --to domain:example.com                 # addressed: any verified address at the domain
+tinycloud share publish ./note.md --to domain:example.com --notify --notify-to alice@example.com  # invite one matching mailbox; node 1.17.3+
+cat note.md | tinycloud share publish - --name note.md
+tinycloud share publish ./site/ --json                                    # folder with index.html -> one self-contained page, bearer link
 
-printf '%s' "$SHARE_URL" | "$TC" share inspect - --json               # verify, print safe metadata
-printf '%s' "$SHARE_URL" | "$TC" share receive - --stdout             # bearer link: verified bytes
-printf '%s' "$SHARE_URL" | "$TC" share receive - --output .
+printf '%s' "$SHARE_URL" | tinycloud share inspect - --json               # verify, print safe metadata
+printf '%s' "$SHARE_URL" | tinycloud share receive - --stdout             # bearer link: verified bytes
+printf '%s' "$SHARE_URL" | tinycloud share receive - --output .
 
-"$TC" share list --json                                               # sender history, no complete URLs; human rows are shareId, target, expiresAt, status (active, revoked or expired), tab-separated
-"$TC" share show <id> [--reveal-link]
-"$TC" share notify <id> --to alice@example.com                        # retry email delivery within 5 minutes of publication
-"$TC" share revoke <id>                                               # bearer or addressed share this profile created
-"$TC" share history recover [--json]                                  # move an unreadable sender history aside (renamed, never deleted)
+tinycloud share list --json                                               # sender history, no complete URLs; human rows are shareId, target, expiresAt, status (active, revoked or expired), tab-separated
+tinycloud share show <id> [--reveal-link]
+tinycloud share notify <id> --to alice@example.com                        # retry email delivery within 5 minutes of publication
+tinycloud share revoke <id>                                               # bearer or addressed share this profile created
+tinycloud share history recover [--json]                                  # move an unreadable sender history aside (renamed, never deleted)
 ```
 
 **Artifact versions (pinned shares).** `--artifact <id|new>` stores the file as the next write-once version, `artifacts/<id>/versions/<n>/<file>` plus a `manifest.json` written last (file sha256 and size, parent, `--note`), in the owner's space. The share is pinned to that version: its delegation covers only that file and never carries `put`. Publishing the same bytes again to a bearer link returns the same version; changed content makes the next one. Publishing never overwrites an earlier version, but the node has no write-once ACL for the owner, so the owner (or anyone holding the owner's session) can overwrite a version file afterwards; the CLI will not, and the writes it makes use `If-None-Match: *`. Only addressed artifact shares detect such an overwrite (see Pin below); a bearer artifact share carries no digest and would deliver the new bytes. An addressed share stores ciphertext under a fresh random key each time, so every addressed publish is a new version, and `manifest.json` records only the sha256 of the stored ciphertext, never of the plaintext (an unsalted plaintext hash next to the ciphertext would let a reader of the space confirm a guess). `--artifact new` mints an id. JSON output adds `artifactId`, `version` and `mode` (`pinned`). `--action edit` on an artifact share is refused (a pinned version is read-only). An artifact share takes one file. Every artifact share pins one version; shares that follow later versions are not available yet. Profiles signed in before this feature need `auth login --device --manifest builtin:share-publishing` again, because the manifest now includes `artifacts/`.
 
 ```bash
-"$TC" share publish ./report.md --artifact new --to email:alice@example.com --json   # v1, pinned
-cat report-v2.md | "$TC" share publish - --name report.md --artifact art_0123456789abcdef --to email:alice@example.com --note "second draft"
-"$TC" share versions art_0123456789abcdef --json                     # versions and the shares (from local history) pinned to each
+tinycloud share publish ./report.md --artifact new --to email:alice@example.com --json   # v1, pinned
+cat report-v2.md | tinycloud share publish - --name report.md --artifact art_0123456789abcdef --to email:alice@example.com --note "second draft"
+tinycloud share versions art_0123456789abcdef --json                     # versions and the shares (from local history) pinned to each
 ```
 
 Versions are kept by default and count against the owner's storage. The node does not reclaim overwritten or deleted values; byte reclamation depends on history GC (TC-1277).
@@ -467,17 +461,17 @@ Style with the TinyCloud tokens so the artifact follows the viewer's light and d
 
 ```bash
 # 1. Publish; the JSON carries the share id and the artifact id, never the link
-"$TC" --profile publisher share publish ./report.md --to anyone --artifact new --json
+tinycloud --profile publisher share publish ./report.md --to anyone --artifact new --json
 #    {"metadata":{"shareId":"…"},"artifactId":"art_…","version":1,"mode":"pinned", …}
 
 # 2. Get the link: a second call. Write it straight to a private file
-"$TC" --profile publisher share show <shareId> --reveal-link
+tinycloud --profile publisher share show <shareId> --reveal-link
 
 # 3. Revise: publish the next pinned version; it gets its own link, and earlier links keep showing the version they pinned
-"$TC" --profile publisher share publish ./report-v2.md --to anyone --artifact art_0123456789abcdef --json
+tinycloud --profile publisher share publish ./report-v2.md --to anyone --artifact art_0123456789abcdef --json
 
 # 4. Take a link down; the node confirms before it reports revoked
-"$TC" --profile publisher share revoke <shareId>
+tinycloud --profile publisher share revoke <shareId>
 ```
 
 - Default to `--to anyone` for artifacts unless the person you are working for named a narrower audience. Choose `--expires` deliberately (the default is `7d`). Anyone holding the complete URL can open it until it expires or is revoked, and revoking does not recall copies already received. For content that only named people may read, use `--to email:` and tell the recipient it will download rather than render.

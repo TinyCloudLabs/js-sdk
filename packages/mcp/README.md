@@ -289,7 +289,7 @@ profile's stored session and reports, without reading any value, whether each
 named secret is `ready`, `pending` (with a Secret Manager `/request` setup
 link), or `consent_required` (no permission request is saved). When it cannot
 proceed, `error.details.recovery` names the next step: `sign_in` carries the
-persistent `tc --profile <P> auth login ...` command to run in a terminal, and
+persistent `tinycloud --profile <P> auth login ...` command to run in a terminal, and
 `complete_migration` carries `tool: "tinycloud_auth_capabilities"`, which you
 call once before retrying status.
 
@@ -340,7 +340,7 @@ separate processes.
 Each imported delegation is stored with the request it was checked against.
 Every tool call reinstalls a stored compact-UCAN delegation only when its
 signed capabilities fit inside that request, so a delegation broader than its
-binding is refused before it is activated. `tc auth import` of an artifact
+binding is refused before it is activated. `tinycloud auth import` of an artifact
 with no request binds the delegation to exactly its own signed capabilities.
 Delegations stored by earlier releases are bound once, the same way, by the
 first command that restores the profile's session; after that, a record
