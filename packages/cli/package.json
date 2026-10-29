@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/cli",
-  "version": "1.5.0-beta.25",
+  "version": "1.5.0-beta.26",
   "description": "TinyCloud CLI - manage data, delegations, and nodes from the terminal",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
@@ -33,13 +33,13 @@
     "sync:courier-skill": "rm -rf skills/courier && cp -R ../courier/skills/courier skills/courier"
   },
   "dependencies": {
-    "@tinycloud/share-sdk": "1.4.1-beta.1",
+    "@tinycloud/share-sdk": "1.4.1-beta.2",
     "@tinycloud/share-envelope": "1.3.1-beta.1",
-    "@tinycloud/node-sdk": "3.8.0-beta.16",
+    "@tinycloud/node-sdk": "3.8.0-beta.17",
     "@tinycloud/node-sdk-wasm": "1.7.8",
-    "@tinycloud/sdk-core": "3.8.0-beta.16",
+    "@tinycloud/sdk-core": "3.8.0-beta.17",
     "@tinycloud/sdk-services": "3.8.0-beta.16",
-    "@tinycloud/operations": "0.7.7-beta.15",
+    "@tinycloud/operations": "0.7.7-beta.16",
     "chalk": "^5.3.0",
     "commander": "^14.0.0",
     "jsdom": "26.1.0",
@@ -48,7 +48,7 @@
     "siwe": "^3.0.0"
   },
   "devDependencies": {
-    "@tinycloud/courier": "0.4.0-beta.16",
+    "@tinycloud/courier": "0.4.0-beta.17",
     "@tinycloud/replica": "0.4.0-beta.4",
     "@types/node": "^20",
     "tsup": "^8.0.0",
