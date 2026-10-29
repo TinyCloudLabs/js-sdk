@@ -273,6 +273,21 @@ test("an explicit full target space is required rather than guessing a primary n
   }
 });
 
+test("a reserved wildcard runtime recipient refuses before any database write", async () => {
+  const f = await fixture();
+  const bundle = structuredClone(base);
+  const recipient = bundle.recipients.find((entry) => entry.runtimeTarget?.agentId === "runtime-alpha");
+  if (!recipient?.runtimeTarget) throw new Error("Expected the mapped runtime fixture");
+  recipient.runtimeTarget.agentId = "*";
+  const snapshotDigest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+  const before = snapshotDigest(await f.snapshot());
+  await failure(importFeedPreparedBundle({ sql: f.sql, targetSpace, bundle }));
+  expect(snapshotDigest(await f.snapshot())).toBe(before);
+  noPrivate(f.ordinary);
+  await importFeedPreparedBundle({ sql: f.sql, targetSpace, bundle: base });
+  expect((await archive(f)).length).toBe(1);
+});
+
 test("private owner state, unresolved responses, raw bytes and original receipts never enter agent databases", async () => {
   const f = await fixture(); await importFeedPreparedBundle({ sql: f.sql, targetSpace, bundle: base });
   const remote: unknown[] = [];

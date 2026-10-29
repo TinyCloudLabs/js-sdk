@@ -67,7 +67,7 @@ const bundleSchema = z.object({
   origins: z.array(z.object({ path: text, sha256: digest }).strict()),
   sourceRows: z.array(z.object({ sourceKey: text, sourceArea: z.enum(["kv", "watch-state", "thread-watch-state", "expiry-state"]), encoding: z.literal("base64"), rawBase64: z.string(), sha256: digest, classification }).strict()),
   publishers: z.array(publisherSchema),
-  recipients: z.array(z.object({ recipientKey: text, legacyName: text, runtimeTarget: z.object({ agentId: text, provider: text.optional() }).strict().optional() }).strict()),
+  recipients: z.array(z.object({ recipientKey: text, legacyName: text, runtimeTarget: z.object({ agentId: text.refine((id) => id !== "*"), provider: text.optional() }).strict().optional() }).strict()),
   routes: z.array(z.object({ sourceKey: text, card: legacyRef, recipientKeys: z.array(text), fallbackRecipientKeys: z.array(text), unresolvedRecipients: z.array(text) }).strict()),
   cards: z.array(z.object({ sourceKey: text, publisherId: text, identity: identitySchema, record: opaqueObject, canonicalCard: cardSchema, needsAction: z.boolean(), currentAnswerSourceKey: text.optional(), foldedInto: legacyRef.optional(), attention: z.enum(["needs-action", "information", "handled", "expired", "snoozed", "closed", "not-needed", "waiting-on-owner"]) }).strict()),
   ownerResponses: z.array(z.object({ sourceKey: text, eventKey: text, publisherId: text, card: legacyRef, response: headerSchema, payload: feedResponsePayloadSchema.optional(), ownerEventKind: z.enum(["answer", "state", "claim", "thread", "note", "hold-notice"]), legacyAnswer: opaqueObject.optional(), restoreTarget: z.enum(["agent-response", "owner-only"]), recipientKeys: z.array(text), unresolvedRecipients: z.array(text) }).strict()),

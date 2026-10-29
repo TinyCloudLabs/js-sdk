@@ -14,4 +14,6 @@ Preserve literal own JSON payload keys when validating stored card-history and r
 
 Add `tc feed import --space <full-uri> --file <prepared.json>` for structurally validated FORMAT1 data and immutable scoped owner-only archives, using canonical SDK restore without legacy projection. Regenerate the CLI reference and MCP coverage metadata.
 
+Reject the reserved wildcard runtime recipient during import preflight, before publishing an immutable archive or creating agent schemas.
+
 Details: TC-2209
