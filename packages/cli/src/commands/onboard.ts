@@ -55,7 +55,7 @@ export function registerOnboardCommand(program: Command): void {
   program
     .command("onboard")
     .description("Set up this computer with its owner's OpenKey approvals and a starting grant for 30 days. Prints a short approval link, automatically retrieves and verifies the result, saves it durably, then acknowledges delivery. Re-run an interrupted command to resume.")
-    .option("--code <code>", "The code OpenKey showed after the owner approved the last link")
+    .option("--code <code>", "Manual fallback return code only; automatic short-link approvals do not produce a code")
     .action(async (options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();

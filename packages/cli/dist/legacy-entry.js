@@ -9280,7 +9280,7 @@ var init_profile_replicas = __esm({
 });
 
 // src/lib/logout-pending.ts
-import { lstat as lstat4, open as open5, readFile as readFile5 } from "fs/promises";
+import { lstat as lstat4, open as open5, readFile as readFile5, rm as rm4 } from "fs/promises";
 import { join as join9 } from "path";
 import { createProfileReplicaPurge, logoutPrincipalDigest, REPLICA_LOGOUT_PENDING_FILE as REPLICA_LOGOUT_PENDING_FILE2, RESTORED_GATE_MESSAGE } from "@tinycloud/node-sdk";
 import { namedProfilePath, profilePath as profilePath4 } from "@tinycloud/operations/state";
@@ -9368,32 +9368,35 @@ async function assertPendingRemoteLogoutSession(name, expected) {
   }, { requireProfile: true });
 }
 async function clearProfileCredentials(name, syncDirectory = false, legacyCleanup = false) {
-  const profile = await ProfileManager.getProfile(name);
-  const { namedKeys: _namedKeys, ...signedOutProfile } = profile;
-  await ProfileManager.setProfileDurable(name, { ...signedOutProfile, authSignedOut: true, ...legacyCleanup ? { legacyReplicaCleanup: true } : {} });
-  let failed = false;
-  let error;
-  try {
-    await ProfileManager.removeKey(name);
-  } catch (cause) {
-    failed = true;
-    error = cause;
-  }
-  try {
-    await ProfileManager.clearSession(name);
-  } catch (cause) {
-    if (!failed) error = cause;
-    failed = true;
-  }
-  if (failed) throw error;
-  if (syncDirectory) {
-    const directory = await open5(profilePath4(name), "r");
+  await ProfileManager.withLock(name, async () => {
+    const profile = await ProfileManager.getProfile(name);
+    const { namedKeys: _namedKeys, ...signedOutProfile } = profile;
+    await rm4(join9(profilePath4(name), "approval-pending.json"), { force: true });
+    await ProfileManager.setProfileDurable(name, { ...signedOutProfile, authSignedOut: true, ...legacyCleanup ? { legacyReplicaCleanup: true } : {} });
+    let failed = false;
+    let error;
     try {
-      await directory.sync();
-    } finally {
-      await directory.close();
+      await ProfileManager.removeKey(name);
+    } catch (cause) {
+      failed = true;
+      error = cause;
     }
-  }
+    try {
+      await ProfileManager.clearSession(name);
+    } catch (cause) {
+      if (!failed) error = cause;
+      failed = true;
+    }
+    if (failed) throw error;
+    if (syncDirectory) {
+      const directory = await open5(profilePath4(name), "r");
+      try {
+        await directory.sync();
+      } finally {
+        await directory.close();
+      }
+    }
+  }, { requireProfile: true });
 }
 async function finishSignedOutCredentialRemoval(name) {
   const profile = await ProfileManager.getProfile(name).catch((error) => {
@@ -10058,7 +10061,7 @@ var init_host = __esm({
 });
 
 // src/config/profiles.ts
-import { chmod as chmod3, lstat as lstat5, readdir as readdir5, rm as rm4 } from "fs/promises";
+import { chmod as chmod3, lstat as lstat5, readdir as readdir5, rm as rm5 } from "fs/promises";
 import { CLI_NAME as CLI_NAME9 } from "@tinycloud/operations/cli-name";
 import { join as join10 } from "path";
 import {
@@ -10177,7 +10180,7 @@ var init_profiles = __esm({
       }
       /** Removes profile.json under the profile lock (rollback of a profile a failed login created). */
       static async removeProfileConfig(name) {
-        await _ProfileManager.withLock(name, () => rm4(join10(profilePath5(name), "profile.json"), { force: true }));
+        await _ProfileManager.withLock(name, () => rm5(join10(profilePath5(name), "profile.json"), { force: true }));
       }
       /**
        * Returns true if a profile directory exists.
@@ -10228,16 +10231,16 @@ var init_profiles = __esm({
         });
         if (kind === "missing") return;
         if (kind === "link") {
-          await rm4(profileDir, { force: true });
+          await rm5(profileDir, { force: true });
           return;
         }
         await _ProfileManager.withLock(name, async () => {
           const directory = profilePath5(name);
-          for (const file of ["session.json", "key.json"]) await rm4(join10(directory, file), { force: true });
+          for (const file of ["session.json", "key.json"]) await rm5(join10(directory, file), { force: true });
           for (const entry of await readdir5(directory)) {
-            if (entry !== ".lock" && entry !== "profile.json") await rm4(join10(directory, entry), { recursive: true, force: true });
+            if (entry !== ".lock" && entry !== "profile.json") await rm5(join10(directory, entry), { recursive: true, force: true });
           }
-          await rm4(join10(directory, "profile.json"), { force: true });
+          await rm5(join10(directory, "profile.json"), { force: true });
           await recordProfileDeletion(name);
         });
       }
@@ -10267,7 +10270,7 @@ var init_profiles = __esm({
       }
       /** Removes key.json under the profile lock (rollback of a key a failed login created). */
       static async removeKey(name) {
-        await _ProfileManager.withLock(name, () => rm4(join10(profilePath5(name), "key.json"), { force: true }));
+        await _ProfileManager.withLock(name, () => rm5(join10(profilePath5(name), "key.json"), { force: true }));
       }
       // ── Session management ──────────────────────────────────────────────
       /**
@@ -32762,7 +32765,7 @@ init_permissions();
 init_permissions();
 import { additionalDelegationsPath as additionalDelegationsPath3, profilePath as profilePath8 } from "@tinycloud/operations/state";
 import { principalDidEquals as principalDidEquals2 } from "@tinycloud/node-sdk";
-import { EXPIRY, canonicalizeRecapCaveats, parseSignedCompactUcanAttenuation as parseSignedCompactUcanAttenuation3 } from "@tinycloud/sdk-core";
+import { canonicalizeRecapCaveats, parseSignedCompactUcanAttenuation as parseSignedCompactUcanAttenuation3 } from "@tinycloud/sdk-core";
 
 // src/lib/apps-agent-preset.ts
 init_constants();
@@ -34313,7 +34316,7 @@ function configuredOrigin(value3, label) {
   return url.origin;
 }
 function grantLifetimeSeconds(expiry) {
-  const durationMs = expiry === void 0 ? EXPIRY.SESSION_MS : typeof expiry === "string" && /^\d+s$/.test(expiry) ? Number(expiry.slice(0, -1)) * 1e3 : parseRequestedExpiry(expiry).durationMs;
+  const durationMs = typeof expiry === "string" && /^\d+s$/.test(expiry) ? Number(expiry.slice(0, -1)) * 1e3 : parseRequestedExpiry(expiry ?? "7d").durationMs;
   const seconds = Math.floor(durationMs / 1e3);
   if (!Number.isSafeInteger(seconds) || seconds < 60) throw invalid2("Invalid requested grant lifetime.");
   return seconds;
@@ -34325,8 +34328,22 @@ async function updatePending(profile, update) {
     await writeJsonDurable(path, update(await readJson(path) ?? []));
   }, { requireProfile: true });
 }
+async function activePending(profile) {
+  const path = join14(profilePath8(profile), STATE_FILE);
+  if (!(await readJson(path))?.length) return [];
+  return ProfileManager.withLock(profile, async () => {
+    const entries = await readJson(path) ?? [];
+    const now = Date.now();
+    const active = entries.filter((entry) => {
+      const expiry = entry.command ? entry.command.result.expiry : entry.resultExpiresAt;
+      return expiry === void 0 || !(Date.parse(expiry) <= now);
+    });
+    if (active.length !== entries.length) await writeJsonDurable(path, active);
+    return active;
+  }, { requireProfile: true });
+}
 async function pendingApprovalKey(profile) {
-  const entries = await readJson(join14(profilePath8(profile), STATE_FILE)) ?? [];
+  const entries = await activePending(profile);
   return entries.find((entry) => entry.commandIntent === void 0 && !entry.committed)?.signingKey;
 }
 function approvalSessionProof(entry, action, resultRef = "", ackId = "") {
@@ -34348,7 +34365,7 @@ function approvalSessionProof(entry, action, resultRef = "", ackId = "") {
     format: "jwk"
   })).toString("base64url")}`;
 }
-async function post(entry, action) {
+async function post(entry, action, signingKey) {
   const ref = action === "discover" ? "" : entry.resultRef ?? "";
   const path = action === "discover" ? `/api/approval-requests/${entry.requestId}/result` : `/api/approval-results/${ref}/${action}`;
   const body = action === "discover" ? { bodyCid: entry.bodyCid, header: entry.record.header, signature: entry.record.signature } : { requestId: entry.requestId, bodyCid: entry.bodyCid, ...action === "ack" ? { ackId: entry.ackId } : {} };
@@ -34358,7 +34375,7 @@ async function post(entry, action) {
     redirect: "error",
     cache: "no-store",
     referrerPolicy: "no-referrer",
-    headers: { "content-type": "application/json", "OpenKey-Session-Proof": approvalSessionProof(entry, action, ref, action === "ack" ? entry.ackId : "") },
+    headers: { "content-type": "application/json", "OpenKey-Session-Proof": approvalSessionProof({ requestId: entry.requestId, bodyCid: entry.bodyCid, apiOrigin: entry.apiOrigin, signingKey }, action, ref, action === "ack" ? entry.ackId : "") },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(1e4)
   });
@@ -34393,7 +34410,7 @@ async function throwRemoteError(profile, entry, response, action) {
     ExitCode.PENDING
   );
 }
-function verifyPendingResult(entry, key = entry.signingKey) {
+function verifyPendingResult(entry, key) {
   if (!entry.resultRef || !entry.resultEnvelope) throw invalid2("No encrypted approval result is available.");
   const signer = signerFromJwk(key);
   const relay = createECDH2("prime256v1");
@@ -34444,12 +34461,18 @@ async function acquireApprovalRequest(_did, options) {
   if (options.commandIntent !== void 0 && !/^auth-grant:[0-9a-f]{64}$/.test(options.commandIntent)) {
     throw invalid2("Invalid approval command intent.");
   }
-  const matching = (await readJson(join14(profilePath8(profile), STATE_FILE)) ?? []).filter((item) => {
+  const matching = (await activePending(profile)).filter((item) => {
     if (item.commandIntent !== options.commandIntent) return false;
     const { resultEncryptionPublicJwk: _, permissions: priorPermissions, ...prior } = item.request;
     const { permissions: nextPermissions, ...next } = spec;
     if (canonicalJson(prior) !== canonicalJson(next) || item.apiOrigin !== apiOrigin2 || item.linkApiOrigin !== linkApiOrigin || item.openkeyOrigin !== openkeyOrigin || priorPermissions.length !== nextPermissions.length) return false;
-    const owner = item.resultEnvelope ? verifyPendingResult(item).session.ownerDid : item.expectedOwner;
+    let owner;
+    try {
+      owner = item.resultEnvelope ? verifyPendingResult(item, signingKey).session.ownerDid : item.expectedOwner;
+    } catch (error) {
+      if (error instanceof CLIError && error.code === "AUTH_EXPIRED") return false;
+      throw error;
+    }
     if ((item.expectedOwner !== void 0 || options.expectedOwner !== void 0) && (!owner || !options.expectedOwner || normalizePkhIdentifier(owner) !== normalizePkhIdentifier(options.expectedOwner))) return false;
     return priorPermissions.every(({ space, ...permission2 }, index) => {
       const { space: nextSpace, ...nextPermission } = nextPermissions[index];
@@ -34463,6 +34486,7 @@ async function acquireApprovalRequest(_did, options) {
     relay.generateKeys();
     const request = { ...spec, resultEncryptionPublicJwk: relayPublicJwkOf(relay) };
     const created = await createApprovalRequest({ request, issuerKey: signer, apiOrigin: linkApiOrigin, openkeyOrigin });
+    const profileKey = await ProfileManager.getKey(profile);
     entry = {
       version: 1,
       request,
@@ -34474,7 +34498,7 @@ async function acquireApprovalRequest(_did, options) {
       apiOrigin: apiOrigin2,
       linkApiOrigin,
       openkeyOrigin,
-      signingKey,
+      ...profileKey && signerFromJwk(profileKey).did === signer.did ? {} : { signingKey },
       relayPrivateKey: relay.getPrivateKey().toString("base64url"),
       expectedOwner: options.expectedOwner,
       ackId: randomUUID2(),
@@ -34493,7 +34517,7 @@ async function acquireApprovalRequest(_did, options) {
     for (; ; ) {
       let response;
       try {
-        response = await post(entry, "discover");
+        response = await post(entry, "discover", signingKey);
       } catch {
         await wait(2e3);
         continue;
@@ -34512,7 +34536,7 @@ async function acquireApprovalRequest(_did, options) {
       await updatePending(profile, (items) => items.map((item) => item.requestId === entry.requestId ? entry : item));
       let fetched2;
       try {
-        fetched2 = await post(entry, "fetch");
+        fetched2 = await post(entry, "fetch", signingKey);
       } catch {
         continue;
       }
@@ -34530,15 +34554,26 @@ async function acquireApprovalRequest(_did, options) {
 }
 async function completeApprovalResult(profile, delegation) {
   const acquired = delegation ? acquisitions.get(delegation) : void 0;
-  const entries = acquired ? [acquired] : await readJson(join14(profilePath8(profile), STATE_FILE)) ?? [];
+  const entries = acquired ? [acquired] : await activePending(profile);
   for (const entry of entries) {
     if (!acquired && entry.commandIntent !== void 0) continue;
     if (!entry.resultRef || !entry.resultEnvelope) continue;
     let saved = false;
+    let expired = false;
+    let ackKey;
     await ProfileManager.withLock(profile, async () => {
       const key = await ProfileManager.getKey(profile);
       if (!key || signerFromJwk(key).did !== entry.request.targetDid) return;
-      const { delegation: verifiedDelegation, session: verifiedSession } = verifyPendingResult(entry, key);
+      let verified;
+      try {
+        verified = verifyPendingResult(entry, key);
+      } catch (error) {
+        if (!(error instanceof CLIError) || error.code !== "AUTH_EXPIRED") throw error;
+        await updatePending(profile, (items) => items.filter((item) => item.requestId !== entry.requestId));
+        expired = true;
+        return;
+      }
+      const { delegation: verifiedDelegation, session: verifiedSession } = verified;
       const current = await ProfileManager.getProfile(profile);
       if (current.ownerDid?.toLowerCase() !== verifiedSession.ownerDid.toLowerCase()) return;
       const session = await ProfileManager.getSession(profile);
@@ -34579,22 +34614,26 @@ async function completeApprovalResult(profile, delegation) {
       }
       if (saved) {
         entry.committed = true;
+        ackKey = key;
+        delete entry.signingKey;
         await updatePending(profile, (items) => items.map((item) => item.requestId === entry.requestId ? entry : item));
       }
     }, { requireProfile: true });
-    if (!saved) {
+    if (expired) continue;
+    if (!saved || !ackKey) {
       if (acquired) throw invalid2("Approval has not been durably saved; no ACK was sent.");
       continue;
     }
     if (entry.acknowledged) continue;
     let response;
     try {
-      response = await post(entry, "ack");
+      response = await post(entry, "ack", ackKey);
     } catch {
       throw new CLIError("APPROVAL_ACK_PENDING", "Approval is saved; ACK outcome is unknown. Retry this command to acknowledge the same result.", ExitCode.PENDING);
     }
-    const result = await response.json();
-    if (!response.ok || result.ackId !== entry.ackId || result.status !== "acknowledged") {
+    const result = await response.json().catch(() => null);
+    const terminal = !response.ok && ["expired_result", "not_found", "acknowledged"].includes(result?.code ?? "");
+    if (!terminal && (!response.ok || result?.ackId !== entry.ackId || result?.status !== "acknowledged")) {
       throw new CLIError("APPROVAL_ACK_PENDING", `Approval is saved; ACK is pending (HTTP ${response.status}). Retry this command.`, ExitCode.PENDING);
     }
     await updatePending(profile, (items) => entry.command ? items.map((item) => item.requestId === entry.requestId ? { ...entry, acknowledged: true } : item) : items.filter((item) => item.requestId !== entry.requestId));
@@ -39955,7 +39994,7 @@ init_storage();
 init_errors();
 init_constants();
 import { randomUUID as randomUUID3 } from "crypto";
-import { lstat as lstat8, open as open13, rename as rename3, rm as rm5 } from "fs/promises";
+import { lstat as lstat8, open as open13, rename as rename3, rm as rm6 } from "fs/promises";
 import { basename as basename2, dirname as dirname8, join as join17 } from "path";
 async function validatePrivateOutput(path, label = "output") {
   try {
@@ -39992,7 +40031,7 @@ async function writePrivateOutput(path, value3, label = "output") {
     }
     await rename3(temp, path);
   } catch (error) {
-    if (created) await rm5(temp, { force: true }).catch(() => void 0);
+    if (created) await rm6(temp, { force: true }).catch(() => void 0);
     const code5 = error instanceof Error && "code" in error && typeof error.code === "string" ? ` (${error.code})` : "";
     throw new CLIError("ERROR", `Could not write ${label.toLowerCase()} "${path}"${code5}.`, ExitCode.ERROR);
   }
@@ -40664,7 +40703,7 @@ var ONBOARD_STEPS = [
   }
 ];
 function registerOnboardCommand(program) {
-  program.command("onboard").description("Set up this computer with its owner's OpenKey approvals and a starting grant for 30 days. Prints a short approval link, automatically retrieves and verifies the result, saves it durably, then acknowledges delivery. Re-run an interrupted command to resume.").option("--code <code>", "The code OpenKey showed after the owner approved the last link").action(async (options, cmd) => {
+  program.command("onboard").description("Set up this computer with its owner's OpenKey approvals and a starting grant for 30 days. Prints a short approval link, automatically retrieves and verifies the result, saves it durably, then acknowledges delivery. Re-run an interrupted command to resume.").option("--code <code>", "Manual fallback return code only; automatic short-link approvals do not produce a code").action(async (options, cmd) => {
     try {
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
@@ -43773,7 +43812,7 @@ function receiveJson(result, path) {
 
 // src/share/io.ts
 import { constants } from "fs";
-import { lstat as lstat10, mkdir as mkdir7, mkdtemp, open as open15, readFile as readFile16, realpath as realpath2, stat as stat6, link as link3, rename as rename5, rm as rm6, unlink as unlink6 } from "fs/promises";
+import { lstat as lstat10, mkdir as mkdir7, mkdtemp, open as open15, readFile as readFile16, realpath as realpath2, stat as stat6, link as link3, rename as rename5, rm as rm7, unlink as unlink6 } from "fs/promises";
 import { randomBytes as randomBytes8 } from "crypto";
 import { basename as basename4, join as join20, resolve as resolve6, sep as sep3 } from "path";
 init_errors();
@@ -43895,7 +43934,7 @@ async function writeShareOutput(directory, filename, bytes, force) {
       if (temporaryPath !== void 0) await unlink6(temporaryPath);
     } catch {
     }
-    await rm6(stagingDirectory, { recursive: true, force: true });
+    await rm7(stagingDirectory, { recursive: true, force: true });
     await directoryHandle.close();
   }
   return join20(outputDirectory, safeName);

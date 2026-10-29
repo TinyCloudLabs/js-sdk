@@ -7,7 +7,7 @@ import { normalizePkhIdentifier } from "../lib/space.js";
 import { additionalDelegationsPath, profilePath } from "@tinycloud/operations/state";
 import { createApprovalRequest, DEFAULT_LINKS_API_ORIGIN, signerFromJwk, type Ed25519PrivateJwk, type LinkRecord, type OpenKeyApprovalRequestV1 } from "@tinycloud/share-envelope/links";
 import { principalDidEquals, type AuthDelegationArtifact, type AuthRequestArtifact, type PermissionEntry } from "@tinycloud/node-sdk";
-import { EXPIRY, canonicalizeRecapCaveats, parseSignedCompactUcanAttenuation } from "@tinycloud/sdk-core";
+import { canonicalizeRecapCaveats, parseSignedCompactUcanAttenuation } from "@tinycloud/sdk-core";
 import { ProfileManager } from "../config/profiles.js";
 import { readJson, writeJsonDurable, syncAuthCredentialFiles } from "../config/storage.js";
 import { DEFAULT_OPENKEY_HOST, DEFAULT_OPENKEY_DEVICE_API_HOST, ExitCode } from "../config/constants.js";
@@ -30,7 +30,7 @@ interface PendingApproval {
   apiOrigin: string;
   linkApiOrigin: string;
   openkeyOrigin: string;
-  signingKey: Ed25519PrivateJwk;
+  signingKey?: Ed25519PrivateJwk;
   relayPrivateKey: string;
   expectedOwner?: string;
   resultRef?: string;
@@ -189,11 +189,9 @@ function configuredOrigin(value: string, label: string): string {
   return url.origin;
 }
 function grantLifetimeSeconds(expiry: AuthFlowOptions["expiry"]): number {
-  const durationMs = expiry === undefined
-    ? EXPIRY.SESSION_MS
-    : typeof expiry === "string" && /^\d+s$/.test(expiry)
-      ? Number(expiry.slice(0, -1)) * 1000
-      : parseRequestedExpiry(expiry).durationMs;
+  const durationMs = typeof expiry === "string" && /^\d+s$/.test(expiry)
+    ? Number(expiry.slice(0, -1)) * 1000
+    : parseRequestedExpiry(expiry ?? "7d").durationMs;
   const seconds = Math.floor(durationMs / 1000);
   if (!Number.isSafeInteger(seconds) || seconds < 60) throw invalid("Invalid requested grant lifetime.");
   return seconds;
@@ -207,13 +205,29 @@ async function updatePending(profile: string, update: (pending: PendingApproval[
   }, { requireProfile: true });
 }
 
+async function activePending(profile: string): Promise<PendingApproval[]> {
+  const path = join(profilePath(profile), STATE_FILE);
+  if (!(await readJson<PendingApproval[]>(path))?.length) return [];
+  return ProfileManager.withLock(profile, async () => {
+    const entries = await readJson<PendingApproval[]>(path) ?? [];
+    const now = Date.now();
+    const active = entries.filter((entry) => {
+      // A saved command remains recoverable until its child expires, independently of transport retention.
+      const expiry = entry.command ? entry.command.result.expiry : entry.resultExpiresAt;
+      return expiry === undefined || !(Date.parse(expiry) <= now);
+    });
+    if (active.length !== entries.length) await writeJsonDurable(path, active);
+    return active;
+  }, { requireProfile: true });
+}
+
 export async function pendingApprovalKey(profile: string): Promise<Ed25519PrivateJwk | undefined> {
-  const entries = await readJson<PendingApproval[]>(join(profilePath(profile), STATE_FILE)) ?? [];
+  const entries = await activePending(profile);
   return entries.find((entry) => entry.commandIntent === undefined && !entry.committed)?.signingKey;
 }
 
 /** Existing OpenKey session proof, purpose- and exact-resource-bound by its credential hash. */
-export function approvalSessionProof(entry: Pick<PendingApproval, "requestId" | "bodyCid" | "signingKey" | "apiOrigin">,
+export function approvalSessionProof(entry: Pick<PendingApproval, "requestId" | "bodyCid" | "apiOrigin"> & { signingKey: Ed25519PrivateJwk },
   action: "discover" | "fetch" | "ack", resultRef = "", ackId = ""): string {
   const jwk = entry.signingKey;
   const jkt = createHash("sha256").update(JSON.stringify({ crv: "Ed25519", kty: "OKP", x: jwk.x })).digest("base64url");
@@ -230,14 +244,14 @@ export function approvalSessionProof(entry: Pick<PendingApproval, "requestId" | 
   })).toString("base64url")}`;
 }
 
-async function post(entry: PendingApproval, action: "discover" | "fetch" | "ack"): Promise<Response> {
+async function post(entry: PendingApproval, action: "discover" | "fetch" | "ack", signingKey: Ed25519PrivateJwk): Promise<Response> {
   const ref = action === "discover" ? "" : entry.resultRef ?? "";
   const path = action === "discover" ? `/api/approval-requests/${entry.requestId}/result` : `/api/approval-results/${ref}/${action}`;
   const body = action === "discover" ? { bodyCid: entry.bodyCid, header: entry.record.header, signature: entry.record.signature }
     : { requestId: entry.requestId, bodyCid: entry.bodyCid, ...(action === "ack" ? { ackId: entry.ackId } : {}) };
   return fetch(entry.apiOrigin + path, {
     method: "POST", credentials: "omit", redirect: "error", cache: "no-store", referrerPolicy: "no-referrer",
-    headers: { "content-type": "application/json", "OpenKey-Session-Proof": approvalSessionProof(entry, action, ref, action === "ack" ? entry.ackId : "") },
+    headers: { "content-type": "application/json", "OpenKey-Session-Proof": approvalSessionProof({ requestId: entry.requestId, bodyCid: entry.bodyCid, apiOrigin: entry.apiOrigin, signingKey }, action, ref, action === "ack" ? entry.ackId : "") },
     body: JSON.stringify(body), signal: AbortSignal.timeout(10_000),
   });
 }
@@ -266,7 +280,7 @@ async function throwRemoteError(profile: string, entry: PendingApproval, respons
     `OpenKey could not ${action === "discover" ? "discover this request" : "fetch this result"} (HTTP ${response.status}). Retry the command to resume.`, ExitCode.PENDING);
 }
 
-function verifyPendingResult(entry: PendingApproval, key: Ed25519PrivateJwk = entry.signingKey): {
+function verifyPendingResult(entry: PendingApproval, key: Ed25519PrivateJwk): {
   delegation: Record<string, unknown>;
   session: ReturnType<typeof verifyScopedLogin>["session"];
 } {
@@ -315,7 +329,7 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
   if (options.commandIntent !== undefined && !/^auth-grant:[0-9a-f]{64}$/.test(options.commandIntent)) {
     throw invalid("Invalid approval command intent.");
   }
-  const matching = (await readJson<PendingApproval[]>(join(profilePath(profile), STATE_FILE)) ?? []).filter((item) => {
+  const matching = (await activePending(profile)).filter((item) => {
     if (item.commandIntent !== options.commandIntent) return false;
     const { resultEncryptionPublicJwk: _, permissions: priorPermissions, ...prior } = item.request;
     const { permissions: nextPermissions, ...next } = spec;
@@ -324,7 +338,12 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
       priorPermissions.length !== nextPermissions.length) return false;
     // Saving the first signed result resolves logical space names to its owner.
     // Compare that spelling only after re-verifying the original encrypted result.
-    const owner = item.resultEnvelope ? verifyPendingResult(item).session.ownerDid : item.expectedOwner;
+    let owner: string | undefined;
+    try { owner = item.resultEnvelope ? verifyPendingResult(item, signingKey).session.ownerDid : item.expectedOwner; }
+    catch (error) {
+      if (error instanceof CLIError && error.code === "AUTH_EXPIRED") return false;
+      throw error;
+    }
     if ((item.expectedOwner !== undefined || options.expectedOwner !== undefined) &&
       (!owner || !options.expectedOwner || normalizePkhIdentifier(owner) !== normalizePkhIdentifier(options.expectedOwner))) return false;
     return priorPermissions.every(({ space, ...permission }, index) => {
@@ -340,8 +359,10 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
     relay.generateKeys();
     const request = { ...spec, resultEncryptionPublicJwk: relayPublicJwkOf(relay) };
     const created = await createApprovalRequest({ request, issuerKey: signer, apiOrigin: linkApiOrigin, openkeyOrigin });
+    const profileKey = await ProfileManager.getKey(profile) as Ed25519PrivateJwk | null;
     entry = { version: 1, request, requestId: created.id, bodyCid: created.bodyCid, approvalUrl: created.link,
-      requestExpiresAt: created.expiresAt, record: created.record, apiOrigin, linkApiOrigin, openkeyOrigin, signingKey,
+      requestExpiresAt: created.expiresAt, record: created.record, apiOrigin, linkApiOrigin, openkeyOrigin,
+      ...(profileKey && signerFromJwk(profileKey).did === signer.did ? {} : { signingKey }),
       relayPrivateKey: relay.getPrivateKey().toString("base64url"), expectedOwner: options.expectedOwner, ackId: randomUUID(),
       ...(options.commandIntent === undefined ? {} : { commandIntent: options.commandIntent }) };
     await updatePending(profile, (items) => [...items, entry!]);
@@ -356,7 +377,7 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
   if (!entry.resultEnvelope) {
     for (;;) {
       let response: Response;
-      try { response = await post(entry, "discover"); }
+      try { response = await post(entry, "discover", signingKey); }
       catch {
         await wait(2000);
         continue;
@@ -375,7 +396,7 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
       entry.resultExpiresAt = discovered.expiresAt;
       await updatePending(profile, (items) => items.map((item) => item.requestId === entry!.requestId ? entry! : item));
       let fetched: Response;
-      try { fetched = await post(entry, "fetch"); } catch { continue; }
+      try { fetched = await post(entry, "fetch", signingKey); } catch { continue; }
       if (!fetched.ok) await throwRemoteError(profile, entry, fetched, "fetch");
       const result = await fetched.json() as Record<string, unknown>;
       if (result.requestId !== entry.requestId || result.bodyCid !== entry.bodyCid ||
@@ -394,15 +415,25 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
 /** Call only after committing authority. Re-check stored evidence under the profile lock and sync it before ACK intent. */
 export async function completeApprovalResult(profile: string, delegation?: object): Promise<void> {
   const acquired = delegation ? acquisitions.get(delegation) : undefined;
-  const entries = acquired ? [acquired] : await readJson<PendingApproval[]>(join(profilePath(profile), STATE_FILE)) ?? [];
+  const entries = acquired ? [acquired] : await activePending(profile);
   for (const entry of entries) {
     if (!acquired && entry.commandIntent !== undefined) continue;
     if (!entry.resultRef || !entry.resultEnvelope) continue;
     let saved = false;
+    let expired = false;
+    let ackKey: Ed25519PrivateJwk | undefined;
     await ProfileManager.withLock(profile, async () => {
       const key = await ProfileManager.getKey(profile) as Ed25519PrivateJwk | null;
       if (!key || signerFromJwk(key).did !== entry.request.targetDid) return;
-      const { delegation: verifiedDelegation, session: verifiedSession } = verifyPendingResult(entry, key);
+      let verified: ReturnType<typeof verifyPendingResult>;
+      try { verified = verifyPendingResult(entry, key); }
+      catch (error) {
+        if (!(error instanceof CLIError) || error.code !== "AUTH_EXPIRED") throw error;
+        await updatePending(profile, (items) => items.filter((item) => item.requestId !== entry.requestId));
+        expired = true;
+        return;
+      }
+      const { delegation: verifiedDelegation, session: verifiedSession } = verified;
       const current = await ProfileManager.getProfile(profile);
       if (current.ownerDid?.toLowerCase() !== verifiedSession.ownerDid.toLowerCase()) return;
       const session = await ProfileManager.getSession(profile) as Record<string, unknown> | null;
@@ -433,19 +464,23 @@ export async function completeApprovalResult(profile: string, delegation?: objec
       }
       if (saved) {
         entry.committed = true;
+        ackKey = key;
+        delete entry.signingKey;
         await updatePending(profile, (items) => items.map((item) => item.requestId === entry.requestId ? entry : item));
       }
     }, { requireProfile: true });
-    if (!saved) {
+    if (expired) continue;
+    if (!saved || !ackKey) {
       if (acquired) throw invalid("Approval has not been durably saved; no ACK was sent.");
       continue;
     }
     if (entry.acknowledged) continue;
     let response: Response;
-    try { response = await post(entry, "ack"); }
+    try { response = await post(entry, "ack", ackKey); }
     catch { throw new CLIError("APPROVAL_ACK_PENDING", "Approval is saved; ACK outcome is unknown. Retry this command to acknowledge the same result.", ExitCode.PENDING); }
-    const result = await response.json() as { ackId?: string; status?: string };
-    if (!response.ok || result.ackId !== entry.ackId || result.status !== "acknowledged") {
+    const result = await response.json().catch(() => null) as { ackId?: string; status?: string; code?: string } | null;
+    const terminal = !response.ok && ["expired_result", "not_found", "acknowledged"].includes(result?.code ?? "");
+    if (!terminal && (!response.ok || result?.ackId !== entry.ackId || result?.status !== "acknowledged")) {
       throw new CLIError("APPROVAL_ACK_PENDING", `Approval is saved; ACK is pending (HTTP ${response.status}). Retry this command.`, ExitCode.PENDING);
     }
     await updatePending(profile, (items) => entry.command

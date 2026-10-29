@@ -6802,7 +6802,7 @@ var init_profile_replicas = __esm({
 });
 
 // src/lib/logout-pending.ts
-import { lstat as lstat4, open as open5, readFile as readFile5 } from "fs/promises";
+import { lstat as lstat4, open as open5, readFile as readFile5, rm as rm4 } from "fs/promises";
 import { join as join9 } from "path";
 import { createProfileReplicaPurge, logoutPrincipalDigest, REPLICA_LOGOUT_PENDING_FILE as REPLICA_LOGOUT_PENDING_FILE2, RESTORED_GATE_MESSAGE } from "@tinycloud/node-sdk";
 import { namedProfilePath, profilePath as profilePath4 } from "@tinycloud/operations/state";
@@ -6883,32 +6883,35 @@ async function assertPendingRemoteLogoutSession(name, expected) {
   }, { requireProfile: true });
 }
 async function clearProfileCredentials(name, syncDirectory = false, legacyCleanup = false) {
-  const profile = await ProfileManager.getProfile(name);
-  const { namedKeys: _namedKeys, ...signedOutProfile } = profile;
-  await ProfileManager.setProfileDurable(name, { ...signedOutProfile, authSignedOut: true, ...legacyCleanup ? { legacyReplicaCleanup: true } : {} });
-  let failed = false;
-  let error;
-  try {
-    await ProfileManager.removeKey(name);
-  } catch (cause) {
-    failed = true;
-    error = cause;
-  }
-  try {
-    await ProfileManager.clearSession(name);
-  } catch (cause) {
-    if (!failed) error = cause;
-    failed = true;
-  }
-  if (failed) throw error;
-  if (syncDirectory) {
-    const directory = await open5(profilePath4(name), "r");
+  await ProfileManager.withLock(name, async () => {
+    const profile = await ProfileManager.getProfile(name);
+    const { namedKeys: _namedKeys, ...signedOutProfile } = profile;
+    await rm4(join9(profilePath4(name), "approval-pending.json"), { force: true });
+    await ProfileManager.setProfileDurable(name, { ...signedOutProfile, authSignedOut: true, ...legacyCleanup ? { legacyReplicaCleanup: true } : {} });
+    let failed = false;
+    let error;
     try {
-      await directory.sync();
-    } finally {
-      await directory.close();
+      await ProfileManager.removeKey(name);
+    } catch (cause) {
+      failed = true;
+      error = cause;
     }
-  }
+    try {
+      await ProfileManager.clearSession(name);
+    } catch (cause) {
+      if (!failed) error = cause;
+      failed = true;
+    }
+    if (failed) throw error;
+    if (syncDirectory) {
+      const directory = await open5(profilePath4(name), "r");
+      try {
+        await directory.sync();
+      } finally {
+        await directory.close();
+      }
+    }
+  }, { requireProfile: true });
 }
 async function finishSignedOutCredentialRemoval(name) {
   const profile = await ProfileManager.getProfile(name).catch((error) => {
@@ -7573,7 +7576,7 @@ var init_host = __esm({
 });
 
 // src/config/profiles.ts
-import { chmod as chmod3, lstat as lstat5, readdir as readdir5, rm as rm4 } from "fs/promises";
+import { chmod as chmod3, lstat as lstat5, readdir as readdir5, rm as rm5 } from "fs/promises";
 import { CLI_NAME as CLI_NAME11 } from "@tinycloud/operations/cli-name";
 import { join as join10 } from "path";
 import {
@@ -7692,7 +7695,7 @@ var init_profiles = __esm({
       }
       /** Removes profile.json under the profile lock (rollback of a profile a failed login created). */
       static async removeProfileConfig(name) {
-        await _ProfileManager.withLock(name, () => rm4(join10(profilePath5(name), "profile.json"), { force: true }));
+        await _ProfileManager.withLock(name, () => rm5(join10(profilePath5(name), "profile.json"), { force: true }));
       }
       /**
        * Returns true if a profile directory exists.
@@ -7743,16 +7746,16 @@ var init_profiles = __esm({
         });
         if (kind === "missing") return;
         if (kind === "link") {
-          await rm4(profileDir, { force: true });
+          await rm5(profileDir, { force: true });
           return;
         }
         await _ProfileManager.withLock(name, async () => {
           const directory = profilePath5(name);
-          for (const file of ["session.json", "key.json"]) await rm4(join10(directory, file), { force: true });
+          for (const file of ["session.json", "key.json"]) await rm5(join10(directory, file), { force: true });
           for (const entry of await readdir5(directory)) {
-            if (entry !== ".lock" && entry !== "profile.json") await rm4(join10(directory, entry), { recursive: true, force: true });
+            if (entry !== ".lock" && entry !== "profile.json") await rm5(join10(directory, entry), { recursive: true, force: true });
           }
-          await rm4(join10(directory, "profile.json"), { force: true });
+          await rm5(join10(directory, "profile.json"), { force: true });
           await recordProfileDeletion(name);
         });
       }
@@ -7782,7 +7785,7 @@ var init_profiles = __esm({
       }
       /** Removes key.json under the profile lock (rollback of a key a failed login created). */
       static async removeKey(name) {
-        await _ProfileManager.withLock(name, () => rm4(join10(profilePath5(name), "key.json"), { force: true }));
+        await _ProfileManager.withLock(name, () => rm5(join10(profilePath5(name), "key.json"), { force: true }));
       }
       // ── Session management ──────────────────────────────────────────────
       /**
@@ -30270,7 +30273,7 @@ function receiveJson(result, path) {
 
 // src/share/io.ts
 import { constants } from "fs";
-import { lstat as lstat6, mkdir as mkdir4, mkdtemp, open as open8, readFile as readFile6, realpath as realpath2, stat as stat4, link as link2, rename as rename3, rm as rm5, unlink as unlink4 } from "fs/promises";
+import { lstat as lstat6, mkdir as mkdir4, mkdtemp, open as open8, readFile as readFile6, realpath as realpath2, stat as stat4, link as link2, rename as rename3, rm as rm6, unlink as unlink4 } from "fs/promises";
 import { randomBytes as randomBytes3 } from "crypto";
 import { basename as basename2, join as join11, resolve as resolve4, sep as sep3 } from "path";
 init_errors();
@@ -30392,7 +30395,7 @@ async function writeShareOutput(directory, filename, bytes, force) {
       if (temporaryPath !== void 0) await unlink4(temporaryPath);
     } catch {
     }
-    await rm5(stagingDirectory, { recursive: true, force: true });
+    await rm6(stagingDirectory, { recursive: true, force: true });
     await directoryHandle.close();
   }
   return join11(outputDirectory, safeName);

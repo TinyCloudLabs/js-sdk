@@ -9,4 +9,6 @@ Use these short requests for browser approval in the CLI and onboarding. Recover
 
 Bind agent-grant approvals to the exact prepared request. Durably retain the verified child grant, command output, history, and signed-parent/ACK binding before acknowledgement, so retries recover the saved result rather than issuing another grant.
 
+Keep the existing seven-day default for normal OpenKey requests and explicit 30-day onboarding. Complete saved approvals after delivery retention ends, clear pending request credentials on logout, and document the automatic wait-and-resume flow.
+
 Details: TC-2212
