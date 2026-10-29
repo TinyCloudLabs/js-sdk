@@ -332,6 +332,8 @@ export type Tc2140ExactKeyDelegationRatchet = HardeningRatchet & { replicaWorker
 export type Tc2202AgentShareReceiveRatchet = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
 /** Exact current-base Home root admission; additive caps are not controlled feature attribution. */
 export type Tc2205HomeFeedRatchet = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
+/** Exact TC-2230 root admission for signed recipients SIWE resource insertion; all other buckets are carried unchanged. */
+export type Tc2230SiweRecipientsRatchet = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -390,6 +392,7 @@ export type Ledger = {
   tc2140ExactKeyDelegationRatchet?: Tc2140ExactKeyDelegationRatchet;
   tc2202AgentShareReceiveRatchet?: Tc2202AgentShareReceiveRatchet;
   tc2205HomeFeedRatchet?: Tc2205HomeFeedRatchet;
+  tc2230SiweRecipientsRatchet?: Tc2230SiweRecipientsRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -978,6 +981,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2140ExactKeyDelegationRatchet !== undefined) pins.push({ row: "tc2140ExactKeyDelegationRatchet", pin: root.tc2140ExactKeyDelegationRatchet.sourceCommits.at(-1)! });
   if (root.tc2202AgentShareReceiveRatchet !== undefined) pins.push({ row: "tc2202AgentShareReceiveRatchet", pin: root.tc2202AgentShareReceiveRatchet.sourceCommits.at(-1)! });
   if (root.tc2205HomeFeedRatchet !== undefined) pins.push({ row: "tc2205HomeFeedRatchet", pin: root.tc2205HomeFeedRatchet.sourceCommits.at(-1)! });
+  if (root.tc2230SiweRecipientsRatchet !== undefined) pins.push({ row: "tc2230SiweRecipientsRatchet", pin: root.tc2230SiweRecipientsRatchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1042,6 +1046,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2140ExactKeyDelegationRatchet", root.tc2140ExactKeyDelegationRatchet?.root.ceiling],
     ["tc2202AgentShareReceiveRatchet", root.tc2202AgentShareReceiveRatchet?.root.ceiling],
     ["tc2205HomeFeedRatchet", root.tc2205HomeFeedRatchet?.root.ceiling],
+    ["tc2230SiweRecipientsRatchet", root.tc2230SiweRecipientsRatchet?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -2300,6 +2305,35 @@ export const approvedTc2205HomeFeedRatchet: Tc2205HomeFeedRatchet = {
   reason: "Both canonical backends agree after the private-error allocation cut and actual upstream merge. This row admits only the measured absolute root sizes; it does not add a controlled-attribution charge or change another size bucket.",
 };
 
+export const approvedTc2230SiweRecipientsRatchet: Tc2230SiweRecipientsRatchet = {
+  label: "signed recipients SIWE resource insertion (TC-2230, #794)",
+  ruling: "Naomi approved up to +350 B per root format. Exact canonical CI at #794 source head b61e4869967e4a73ad7b0b567205dffb5692df9a measures 1,475,218/1,415,638 B, +270/+191 B over the TC-2205 ceilings and within the approved maximum; unused allowance is not retained. Local pre-sign estimate was +160/+314 B; CI differs by +110/-123 B. Bun 1.3.14; rustc 1.99.0 (b940084d7 2026-09-28).",
+  base: "9838d6d9bd1a096c0d7316f448f4b5cb11b01c0f",
+  sourceCommits: ["b61e4869967e4a73ad7b0b567205dffb5692df9a"],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40907518282",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40907518282/job/123566224035",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40907518282/job/123566224446",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 270, "index.cjs": 191 },
+    ceiling: { "index.mjs": 1475218, "index.cjs": 1415638 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 52757, "replica.cjs": 67957 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23412, "activation.cjs": 24981 },
+  },
+  worker: { delta: 0, ceiling: 776539 },
+  replicaWorker: { delta: 0, ceiling: 770467 },
+  reason: "TC-2230 inserts the signed recipients SIWE resource; exact SQLite and PostgreSQL CI root gzip measurements agree. Only the root ceilings change; all other size buckets remain unchanged.",
+};
+
 export type GatedOnlyRatchet = {
   label: string;
   sourceCommit: string;
@@ -2386,6 +2420,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2140ExactKeyDelegationRatchet: approvedTc2140ExactKeyDelegationRatchet,
   tc2202AgentShareReceiveRatchet: approvedTc2202AgentShareReceiveRatchet,
   tc2205HomeFeedRatchet: approvedTc2205HomeFeedRatchet,
+  tc2230SiweRecipientsRatchet: approvedTc2230SiweRecipientsRatchet,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -2650,6 +2685,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
   if (value.tc2205HomeFeedRatchet !== undefined &&
       (!value.tc2202AgentShareReceiveRatchet || JSON.stringify(value.tc2205HomeFeedRatchet) !== JSON.stringify(approvedTc2205HomeFeedRatchet))) {
     throw new Error("Only the exact canonical TC-2205 Home feed root admission is approved.");
+  }
+  if (value.tc2230SiweRecipientsRatchet !== undefined &&
+      (!value.tc2205HomeFeedRatchet || JSON.stringify(value.tc2230SiweRecipientsRatchet) !== JSON.stringify(approvedTc2230SiweRecipientsRatchet))) {
+    throw new Error("Only Naomi's exact canonical TC-2230 signed-recipients SIWE resource ratchet is approved.");
   }
 }
 
@@ -2953,6 +2992,14 @@ export function validateTc2205HomeFeedRatchetTransition(base?: Tc2205HomeFeedRat
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2205HomeFeedRatchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The exact TC-2205 Home feed root admission may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact TC-2230 signed-recipients SIWE resource ratchet is introduced once and immutable afterwards. */
+export function validateTc2230SiweRecipientsRatchetTransition(base?: Tc2230SiweRecipientsRatchet, current?: Tc2230SiweRecipientsRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2230SiweRecipientsRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2230 signed-recipients SIWE resource ratchet may be introduced once and cannot change later.");
   }
 }
 
