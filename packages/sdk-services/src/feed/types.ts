@@ -160,7 +160,7 @@ export interface FeedApi {
   listFeedCards(output: FeedReadDatabase): Promise<Result<FeedCard[]>>;
   listFeedResponses(
     responses: FeedReadDatabase,
-    options?: { afterSequence?: number; limit?: number },
+    options?: { afterSequence?: number; limit?: number; signal?: AbortSignal },
   ): Promise<Result<FeedResponse[]>>;
   recordFeedHandling(output: FeedDatabase, handling: FeedHandling): Promise<Result<FeedHandling>>;
   readFeedResponseHandling(output: FeedReadDatabase, identity: FeedResponseIdentity): Promise<Result<FeedResponseHandling>>;

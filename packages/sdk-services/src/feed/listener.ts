@@ -1,3 +1,4 @@
+import { ErrorCodes } from "../types";
 import { initializeFeedHandoff, deliverFeedResponse } from "./handoff";
 import { listFeedResponses } from "./store";
 import type { FeedApi } from "./types";
@@ -26,8 +27,11 @@ export const listenFeedResponses: FeedApi["listenFeedResponses"] = async (option
       dirty = false;
       let afterSequence = 0;
       while (!signal.aborted) {
-        const page = await listFeedResponses(options.responses, { afterSequence, limit: 100 });
-        if (!page.ok) throw page.error;
+        const page = await listFeedResponses(options.responses, { afterSequence, limit: 100, signal });
+        if (!page.ok) {
+          if (signal.aborted && page.error.code === ErrorCodes.ABORTED) return;
+          throw page.error;
+        }
         for (const response of page.data) {
           if (signal.aborted) return;
           const handoff = await deliverFeedResponse({

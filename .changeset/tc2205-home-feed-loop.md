@@ -11,4 +11,6 @@ Add opt-in `redactErrors` to SQL query, execute, and batch calls so private resp
 
 Add explicit outbound feed messages without changing card decisions or owner-private state. Messages share immutable response identities, atomic private payloads, and notification-safe handoff. Exact-identity handling reads retain historical acknowledgement and outcome receipts after later answers or messages.
 
+Feed listeners cancel pending response queries on caller abort and stop cleanly for expected cancellation while preserving unrelated query failures.
+
 Details: TC-2205

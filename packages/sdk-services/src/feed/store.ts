@@ -271,7 +271,8 @@ export const listFeedResponses: FeedApi["listFeedResponses"] = async (responses,
   }
   try {
     const result = await responses.query<unknown>(
-      `${RESPONSE_HEADER_SELECT} WHERE r.sequence > ? ORDER BY r.sequence LIMIT ?`, [after, limit], PRIVATE_RESPONSE_OPTIONS);
+      `${RESPONSE_HEADER_SELECT} WHERE r.sequence > ? ORDER BY r.sequence LIMIT ?`, [after, limit],
+      { ...PRIVATE_RESPONSE_OPTIONS, signal: options.signal });
     if (!result.ok) return responseDataFailure("Could not list feed responses", result.error);
     return ok(result.data.rows.map(responseFromRow));
   } catch (error) {
