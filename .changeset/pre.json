@@ -67,6 +67,7 @@
     "tc2140-exact-key-delegation",
     "tc2196-native-mcp-auth",
     "tc2202-agent-receive",
+    "tc2205-home-feed-loop",
     "web-panel-ask-permission",
     "web-sdk-panel-safe-area"
   ]
