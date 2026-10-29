@@ -4,7 +4,7 @@ import { buildFullLink, buildShortLink, prepareLinkRecord, signerFromSeed } from
 import type { SenderShareRecord } from "../../src/history.js";
 import { createTinyCloudShareIndexBackend, type TinyCloudShareIndexClient } from "../../src/share-index/backend.js";
 import { sealAgentRecord } from "../../src/share-index/agent-record.js";
-import { compactShareRecord, expandShareRecord, openDeliveryEnvelope, type StoredShareRecord } from "../../src/share-index/delivery.js";
+import { DeliveryMaterialError, compactShareRecord, expandShareRecord, openDeliveryEnvelope, type StoredShareRecord } from "../../src/share-index/delivery.js";
 import { MAX_AGENT_RECORD_BYTES } from "../../src/share-index/agent-record.js";
 import { openAgentRecordAsOwner, parseStoredAgentRecord } from "../../src/share-index/agent-record.js";
 import { agentIdFromDid, agentRecordKey, SHARE_RECORDS_VAULT_PREFIX } from "../../src/share-index/ids.js";
@@ -79,7 +79,7 @@ describe("stored form: each blob once", () => {
     const otherEnvelope = { ...structuredClone(v3.envelope), shareId: "other" };
     await expect(compactShareRecord({ ...full, deliveryMaterial: { ...full.deliveryMaterial!, envelope: otherEnvelope } })).rejects.toThrow("envelope is not the sealed envelope");
     const other = await fullRecord();
-    await expect(compactShareRecord({ ...full, deliveryMaterial: { ...full.deliveryMaterial!, shareCid: other.deliveryMaterial!.shareCid } })).rejects.toThrow();
+    await expect(compactShareRecord({ ...full, deliveryMaterial: { ...full.deliveryMaterial!, shareCid: other.deliveryMaterial!.shareCid } })).rejects.toBeInstanceOf(DeliveryMaterialError);
     await expect(compactShareRecord({ ...full, link: other.link! })).rejects.toThrow("link");
     await expect(compactShareRecord({ ...full, link: (await fullRecord("full")).link! })).rejects.toThrow("link");
     await expect(compactShareRecord({ ...full, link: `${SHARE_ORIGIN}/viewer#tc1=opaque-token` })).rejects.toThrow("link");

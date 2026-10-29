@@ -6,7 +6,7 @@ import { historyRecordForPublishedShare, publishAddressedShare } from "../../src
 import type { SenderShareRecord } from "../../src/history.js";
 import { compactShareRecord, expandShareRecord } from "../../src/share-index/delivery.js";
 import { checkAgentRecordSchema } from "../../src/share-index/schema.js";
-import { AgentShareRecordStore } from "../../src/share-index/record-store.js";
+import { AgentShareRecordStore, deriveAgentKeyMaterial } from "../../src/share-index/index.js";
 import { agentIdFromDid, agentRecordKey, SHARE_RECORDS_VAULT_PREFIX } from "../../src/share-index/ids.js";
 import { sealAgentRecord } from "../../src/share-index/agent-record.js";
 import { MemoryShareIndexOutbox, SenderShareIndex } from "../../src/share-index/sender-share-index.js";
@@ -67,6 +67,16 @@ describe("TC-1739 canonical artifact and original full-link admission", () => {
     const backend = new MemoryBackend();
     await new AgentShareRecordStore({ backend, agentDid: ownerDid }).put(full);
     expect(await index(backend).reconcile()).toMatchObject({ admitted: 1, rejected: {} });
+  });
+
+  test("an agent reads back the exact original full URL through its record store", async () => {
+    const full = await published();
+    if (full.link === undefined) throw new Error("expected publisher full link");
+    const backend = new MemoryBackend();
+    const agentKey = await deriveAgentKeyMaterial(ownerSeed, ownerDid);
+    const store = new AgentShareRecordStore({ backend, agentDid: ownerDid, agentKey });
+    await store.put(full);
+    expect((await store.get(full.shareId))?.link).toBe(full.link);
   });
 
   for (const source of [
