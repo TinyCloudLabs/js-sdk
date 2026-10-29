@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { profilePath, withTinyCloudStateRoot } from "@tinycloud/operations/state";
+import { DEFAULT_HOST } from "../config/constants.js";
 
 const testHome = await mkdtemp(join(tmpdir(), "tc858-auth-mocks-"));
 afterAll(async () => { await rm(testHome, { recursive: true, force: true }); });
@@ -125,6 +126,8 @@ let sessions = new Map<string, object>();
 let generatedKeys: GeneratedKey[] = [];
 let manifestPermissions: unknown[] = [];
 let openKeyDelegation: Record<string, unknown>;
+// When set, the OpenKey approval is abandoned: the flow rejects before any grant exists.
+let startAuthFlowFailure: Error | null = null;
 let localSignInResult: LocalSignInResult;
 let authNodeHasRuntimePermissions: boolean;
 let authNodeRestorableSession: Record<string, unknown> | undefined;
@@ -158,6 +161,7 @@ function resetState(): void {
   keys = new Map();
   sessions = new Map();
   generatedKeys = [];
+  startAuthFlowFailure = null;
   manifestPermissions = [];
   openKeyDelegation = {
     delegationHeader: { Authorization: "Bearer openkey-new" },
@@ -221,6 +225,10 @@ mock.module("../config/profiles.js", () => ({
     },
     withLock: async <T>(_name: string, action: () => Promise<T>) => action(),
     getCacheDir: async (name: string) => join(testHome, "cache", name),
+    profileExists: async (name: string) => profiles.has(name),
+    ensureConfigDir: async () => {},
+    getConfig: async () => ({ defaultProfile: "default" }),
+    setConfig: async () => {},
     resolveContext: async () => ({
       profile: activeProfile,
       host: activeHost,
@@ -230,7 +238,7 @@ mock.module("../config/profiles.js", () => ({
       if (!profile) {
         // Same code as the real ProfileManager, so callers can tell a missing profile apart.
         const { CLIError } = await import("../output/errors.js");
-        throw new CLIError("PROFILE_NOT_FOUND", `Profile "${name}" does not exist. Create it with \`tc init --name ${name}\`.`, 1);
+        throw new CLIError("PROFILE_NOT_FOUND", `Profile "${name}" does not exist. Create it with \`tc init --key-only --name ${name}\`.`, 1);
       }
       return profile;
     },
@@ -286,6 +294,7 @@ mock.module("../auth/browser-auth.js", () => ({
     },
   ) => {
     recorded.startAuthFlows.push({ did, options });
+    if (startAuthFlowFailure) throw startAuthFlowFailure;
     return openKeyDelegation;
   },
 }));
@@ -549,7 +558,7 @@ const {
 async function runAuthCommand(args: string[]): Promise<void> {
   await withTinyCloudStateRoot(testHome, async () => {
     await mkdir(profilePath(activeProfile), { recursive: true });
-    const program = new Command();
+    const program = new Command().option("--host <url>");
     registerAuthCommand(program);
     await program.parseAsync(["node", "tc", ...args], { from: "node" });
   });
@@ -875,7 +884,6 @@ describe("CLI auth commands on a missing profile (TC-682)", () => {
     expect(recorded.clearSessions).toEqual([]);
     expect(recorded.errors).toEqual([expect.objectContaining({
       code: "PROFILE_NOT_FOUND",
-      message: expect.stringContaining("tc init --name owner"),
     })]);
   });
 
@@ -911,16 +919,62 @@ describe("CLI auth commands on a missing profile (TC-682)", () => {
       replicasKept: true,
     })]);
   });
-  test("OpenKey login reports PROFILE_NOT_FOUND, not NO_KEY, before any approval starts", async () => {
+  test("OpenKey login on a profile that does not exist creates a key-only profile, then runs the normal login", async () => {
+    const key = { kty: "OKP", crv: "Ed25519", x: "bootstrap-public", d: "bootstrap-private" };
+    generatedKeys.push({ jwk: key, did: "did:key:new-openkey" });
+
     await runAuthCommand(["auth", "login", "--method", "openkey", "--paste"]);
 
-    expect(recorded.errors).toEqual([expect.objectContaining({
-      code: "PROFILE_NOT_FOUND",
-      message: expect.stringContaining("tc init --name owner"),
+    expect(recorded.errors).toEqual([]);
+    // The first write is the key-only profile: a key and DID, no sign-in state.
+    expect(recorded.setKeys[0]).toEqual({ profile: "owner", jwk: key });
+    expect(recorded.setProfiles[0]?.data).toEqual({
+      name: "owner",
+      host: DEFAULT_HOST,
+      chainId: 1,
+      spaceName: "default",
+      did: "did:key:new-openkey",
+      createdAt: expect.any(String),
+    });
+    // The approval then starts for that key, and the verified result completes the login.
+    expect(recorded.startAuthFlows).toEqual([expect.objectContaining({
+      did: "did:key:new-openkey",
+      options: expect.objectContaining({ jwk: key }),
     })]);
-    expect(recorded.startAuthFlows).toEqual([]);
+    expect(recorded.generateKeyCalls).toBe(1);
+    expect(profiles.get("owner")).toEqual(expect.objectContaining({
+      authMethod: "openkey",
+      ownerDid: "did:pkh:eip155:1:0xowner",
+    }));
+    expect(sessions.get("owner")).toMatchObject({ delegationCid: "bafy-openkey-new" });
+    expect(recorded.outputs).toContainEqual(expect.objectContaining({ authenticated: true, profile: "owner" }));
+  });
+  test("OpenKey login on a new profile saves an explicit --host on the key-only profile", async () => {
+    generatedKeys.push({ jwk: { kty: "OKP", crv: "Ed25519", x: "p", d: "d" }, did: "did:key:new-openkey" });
+
+    await runAuthCommand(["--host", "https://explicit.node.test", "auth", "login", "--method", "openkey", "--paste"]);
+
+    expect(recorded.errors).toEqual([]);
+    expect(recorded.setProfiles[0]?.data).toMatchObject({ name: "owner", host: "https://explicit.node.test" });
+  });
+  test("abandoning OpenKey login on a new profile leaves a key-only profile and grants nothing", async () => {
+    const key = { kty: "OKP", crv: "Ed25519", x: "bootstrap-public", d: "bootstrap-private" };
+    generatedKeys.push({ jwk: key, did: "did:key:new-openkey" });
+    startAuthFlowFailure = new Error("approval abandoned");
+
+    await runAuthCommand(["auth", "login", "--method", "openkey", "--paste"]);
+
+    expect(recorded.errors).toEqual([startAuthFlowFailure]);
+    expect(recorded.startAuthFlows).toHaveLength(1);
+    expect(recorded.setSessions).toEqual([]);
+    expect(sessions.has("owner")).toBe(false);
     expect(recorded.outputs).toEqual([]);
-    expect(profiles.has("owner")).toBe(false);
+    expect(keys.get("owner")).toBe(key);
+    const profile = profiles.get("owner")!;
+    expect(profile).toEqual(expect.objectContaining({ name: "owner", did: "did:key:new-openkey" }));
+    for (const field of ["authMethod", "posture", "ownerDid", "sessionDid", "spaceId"]) {
+      expect(profile).not.toHaveProperty(field);
+    }
   });
   test("local login bootstraps a profile that does not yet exist", async () => {
     await runAuthCommand(["auth", "login", "--method", "local"]);

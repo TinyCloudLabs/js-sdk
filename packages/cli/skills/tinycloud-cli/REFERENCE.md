@@ -45,6 +45,8 @@ tinycloud context --json
 
 `context` always emits JSON: profile, `ownerDid`, `sessionDid`, host, `spaceId` and local session expiry, with `access: "not-tested"`. It never prints keys or signed material.
 
+`auth login --method openkey` on a profile that does not exist creates a key-only profile first (as `init --key-only` does), then continues into the login; nothing is granted until the owner approves. `auth logout` on a missing profile still fails with `PROFILE_NOT_FOUND` and creates nothing.
+
 | `auth login` flag | Description |
 |------|-------------|
 | `--device` | Approve on another device (phone) through OpenKey device authorization. Requires a KV-scoped `--manifest` (no `tinycloud.sql`, no secret decrypt). Prints `Approve on your phone: URL (code XXXX-XXXX)` to stderr and waits for the whole approval window |
