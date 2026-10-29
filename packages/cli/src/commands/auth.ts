@@ -54,6 +54,7 @@ function resolveOpenKeyHost(profile: ProfileConfig): string {
   return process.env.TC_OPENKEY_HOST ?? profile.openkeyHost ?? DEFAULT_OPENKEY_HOST;
 }
 import { startAuthFlow } from "../auth/browser-auth.js";
+import { approvalCommandIntent, approvalResultNeedsAck, commitApprovalCommand, completeApprovalResult, pendingApprovalKey, recoverApprovalCommand, trackApprovalResult } from "../auth/approval-request.js";
 import {
   acquireDeviceDelegation,
   loginWithDeviceAuthorization,
@@ -624,7 +625,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .command("login")
     .description("Authenticate with TinyCloud")
     .option("--device", "Approve on another device (e.g. a phone) through OpenKey device authorization; requires a KV-scoped --manifest (SQL and secret decrypt need browser or --paste login)")
-    .option("--paste", "Wait up to 5 minutes for a signed code from OpenKey on stdin instead of a browser callback (Safari may require paste)")
+    .option("--paste", "Use manual paste mode; OpenKey return codes expire after 5 minutes")
     .option("--no-popup", "Print the OpenKey URL without opening a browser")
     .option("--method <method>", "Authentication method: local or openkey")
     .option("--manifest <fileOrBase64>", `Request only this manifest's permissions (one space, plus raw encryption network entries such as a secrets decrypt grant); ${SHARE_PUBLISHING_MANIFEST_REF} covers \`${CLI_NAME} share publish\``)
@@ -731,8 +732,8 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
         } else {
           method = scoped ? "openkey" : await promptAuthMethod();
         }
-        if (method === "openkey" && !options.paste && options.popup !== false &&
-          !process.stdin.isTTY && !process.stderr.isTTY) {
+        if (method === "openkey" && (options.keys !== undefined || replicationOptions.prefixes.length > 0) &&
+          !options.paste && options.popup !== false && !process.stdin.isTTY && !process.stderr.isTTY) {
           throw new CLIError(
             "INTERACTIVE_LOGIN_REQUIRED",
             "Browser login needs a visible approval URL and would wait silently here. Use `--paste` to print the URL and provide the owner's code on stdin.",
@@ -825,7 +826,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
   auth
     .command("rotate")
     .description("Rotate the active profile session key")
-    .option("--paste", "Use manual paste mode instead of browser callback")
+    .option("--paste", "Use manual paste mode; OpenKey return codes expire after 5 minutes")
     .option("--no-popup", "Print the OpenKey URL without opening a browser")
     .option("--force", "Rotate even when recorded shares could not be checked or hold unexpired shares that need the current session key")
     .action(async (options, cmd) => {
@@ -938,7 +939,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
       [],
     )
     .option("--write", `With --preset ${APPS_AGENT_PRESET}: also let the agent add and change the named --app apps' data: write their knowledge/ and prefs/ files (kv put) and add, change or delete their table rows (sql write). Their code, manifest and install record stay read-only. Creating, changing or dropping tables is granted only for an app's catalog database (today Health Log's healthlog)`)
-    .option("--paste", "With --grant on an OpenKey profile: wait up to 5 minutes for a signed code from OpenKey on stdin instead of a browser callback (use when the browser cannot reach this CLI)")
+    .option("--paste", "With --grant on an OpenKey profile: use manual paste mode (return codes expire after 5 minutes)")
     .action(async (options, cmd) => {
       try {
         const globalOpts = cmd.optsWithGlobals();
@@ -1034,6 +1035,8 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
               delegationData = approval.session;
             } else {
               delegationData = await startAuthFlow(profile.did, {
+                profileName: ctx.profile,
+                expectedOwner: pinnedOwner(profile),
                 jwk: key,
                 host: ctx.host,
                 permissions: request,
@@ -1378,18 +1381,29 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             reason: "Grant permissions requested by a TinyCloud auth request artifact.",
             exactApproval: true,
             noPopup: !(process.stdin.isTTY || process.stderr.isTTY),
+            commandIntent: approvalCommandIntent(parsed),
           });
           // Sign from the approval's own session, so the grant is bounded by that approval
           // and never takes the owner's stored authority.
-          const approvalNode = await nodeFromOpenKeyApproval(ctx.host, approval.session);
-          grant = {
-            ...(await grantAuthRequest(approvalNode, resolvedRequest, {
-              expiry: approval.delegation.expiry.getTime() - Date.now(),
-            })),
-            // The owner approved this grant on the OpenKey approval screen, so it was prompted.
-            prompted: true,
-          };
+          const recovered = await recoverApprovalCommand(ctx.profile, approval.delegation, parsed);
+          if (recovered) {
+            grant = recovered;
+          } else {
+            const approvalNode = await nodeFromOpenKeyApproval(ctx.host, approval.session);
+            grant = {
+              ...(await grantAuthRequest(approvalNode, resolvedRequest, {
+                expiry: approval.delegation.expiry.getTime() - Date.now(),
+              })),
+              prompted: true,
+            };
+          }
           process.stderr.write(`Grant lasts until ${grant.expiry}, the lifetime of the OpenKey approval.\n`);
+          if (approvalResultNeedsAck(approval.delegation)) {
+            await commitApprovalCommand(ctx.profile, approval.delegation, parsed, grant);
+            await completeApprovalResult(ctx.profile, approval.delegation);
+            outputJson(grant);
+            return;
+          }
         } else {
           await ensureDelegationAuthority({
             ctx,
@@ -1908,6 +1922,7 @@ async function activateAndStoreOpenKeyGrants(
     // A stored record for the same CID that carries a request binding is kept.
     await appendAdditionalDelegations(profileName, records);
   });
+  for (const { delegation } of grants) await completeApprovalResult(profileName, delegation);
 }
 
 /**
@@ -1925,6 +1940,8 @@ export async function acquireOpenKeyApproval(params: {
   exactApproval?: boolean;
   /** Print the OpenKey approval URL and wait for the callback instead of opening a browser. */
   noPopup?: boolean;
+  /** Local prepared-request identity, not an OpenKey or delegation claim. */
+  commandIntent?: string;
   /** Test seam for the browser acquisition boundary; production uses startAuthFlow. */
   openKeyAcquisition?: OpenKeyAcquisition;
 }): Promise<OpenKeyApproval> {
@@ -1949,6 +1966,8 @@ export async function acquireOpenKeyApproval(params: {
   const request = grantRequestPermissions(params.requested, anchorSpace);
   const acquireOpenKey = params.openKeyAcquisition ?? startAuthFlow;
   const delegationData = await acquireOpenKey(params.profile.did, {
+    profileName: params.ctx.profile,
+    expectedOwner: pinnedOwner(params.profile),
     jwk: key,
     host: params.ctx.host,
     permissions: request,
@@ -1956,6 +1975,7 @@ export async function acquireOpenKeyApproval(params: {
     openkeyHost: resolveOpenKeyHost(params.profile),
     expiry: expiryCap === undefined ? undefined : openKeyExpiryParam(expiryCap),
     noPopup: params.noPopup,
+    commandIntent: params.commandIntent,
   });
   return verifyOpenKeyApproval(delegationData, request, params.ctx.host, {
     key,
@@ -2069,6 +2089,8 @@ export async function ensureDelegationAuthority(params: {
       // carry it without broadening the grant.
       const request = grantRequestPermissions(group, anchorSpace);
       const delegationData = await acquireOpenKey(params.profile.did, {
+        profileName: params.ctx.profile,
+        expectedOwner: pinnedOwner(params.profile),
         jwk: key,
         host: params.ctx.host,
         permissions: request,
@@ -2366,6 +2388,7 @@ export function verifyOpenKeyApproval(
     // Verified above; replay rebuilds the CACAO from it before trusting the grant.
     siweProof: { siwe: data.siwe as string, signature: data.signature as string },
   };
+  trackApprovalResult(data, delegation);
   return { delegation, session };
 }
 
@@ -2716,6 +2739,8 @@ interface OpenKeyLoginOptions {
   /** Record `host` as the profile host (an explicit `--host`). */
   persistHost?: boolean;
   openKeyAcquisition?: OpenKeyAcquisition;
+  /** Scoped login: the reason OpenKey shows the owner. */
+  reason?: string;
   /** Bypass the share-history check that guards replacing the stored session key. */
   force?: boolean;
   /** `--keys` folder: also ask OpenKey to approve named-key create and decrypt there. */
@@ -2981,6 +3006,7 @@ export async function refreshOpenKeySession(
   options: OpenKeyLoginOptions = {},
 ): Promise<{ profile: ProfileConfig; delegationData: Record<string, unknown>; declined: PermissionEntry[]; legacyNested: PermissionEntry[] }> {
   await recoverPendingLogout(profileName);
+  // Acquisition must reuse a matching pending result before save-then-ACK retires it.
   const snapshot = await readProfileSnapshot(profileName);
   // A missing profile is PROFILE_NOT_FOUND, not a missing key: `tc init` alone
   // would create the default profile instead of this one.
@@ -3024,14 +3050,17 @@ export async function refreshOpenKeySession(
   // A logged-out nonreplica profile has no restorable signer. Keep the
   // candidate private key in memory until the signed OpenKey result verifies
   // and commitLogin atomically writes the key, session and matching DID.
-  const fresh = snapshot.key === null ? generateKey() : null;
-  const key = snapshot.key ?? fresh!.jwk;
-  const sessionDid = fresh?.did ?? profile.sessionDid ?? profile.did;
-  const requestDid = fresh && profile.did.startsWith("did:key:") ? fresh.did : profile.did;
+  const pendingKey = snapshot.key === null ? await pendingApprovalKey(profileName) : undefined;
+  const fresh = snapshot.key === null && pendingKey === undefined ? generateKey() : null;
+  const key = snapshot.key ?? pendingKey ?? fresh!.jwk;
+  const sessionDid = fresh?.did ?? (pendingKey ? keyToDID(pendingKey) : profile.sessionDid ?? profile.did);
+  const requestDid = (fresh || pendingKey) && profile.did.startsWith("did:key:") ? sessionDid : profile.did;
 
   // Start browser auth flow
   const acquireOpenKey = options.openKeyAcquisition ?? startAuthFlow;
   const delegationData = await acquireOpenKey(requestDid, {
+    profileName,
+    expectedOwner,
     paste: options.paste,
     noPopup: options.noPopup,
     jwk: key,
@@ -3042,7 +3071,7 @@ export async function refreshOpenKeySession(
     // owner is verified below.
     permissions: permissions ?? ownerLoginPermissions(expectedOwner),
     expiry: openKeyExpiry,
-    ...(permissions ? { reason: "Allow this TinyCloud CLI profile to use the permissions in the requested manifest." } : {}),
+    ...(permissions ? { reason: options.reason ?? "Allow this TinyCloud CLI profile to use the permissions in the requested manifest." } : {}),
   });
 
   // Login persists only signed, verified authority: the owner, permissions,
@@ -3091,10 +3120,12 @@ export async function refreshOpenKeySession(
     key,
     session: sanitizedSession,
     profile: updatedProfile,
+    durable: approvalResultNeedsAck(delegationData),
     ...(permissions && verifiedOwner
       ? { approved: { scope: sanitizedSession.permissions as PermissionEntry[], ownerDid: verifiedOwner, replaceSession: options.replaceSession === true } }
       : {}),
   });
+  await completeApprovalResult(profileName, delegationData);
   warnIfNotPrimaryKey(verifiedOwner, ownerKeyPrimary);
   announceFirstOwner(profileName, expectedOwner, verifiedOwner);
 

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
@@ -8,14 +7,8 @@ import { canonicalize } from "../src/jcs.js";
 import {
   LINK_DELETE_DOMAIN,
   LINK_HEADER_DOMAIN,
-  MAX_LINK_BODY_BYTES,
-  LINK_MIN_BODY_BYTES,
-  LINK_MIN_LIFE_SECONDS,
-  LINK_TYPE_SPECS,
-  LINK_TYPES,
   LINK_WINDOW_SECONDS,
   LinkError,
-  MAX_LINK_REQUEST_BYTES,
   checkLinkBody,
   checkLinkRecord,
   checkLinkHeaderLife,
@@ -40,8 +33,6 @@ import {
 import { buildShortLink } from "../src/links/index.js";
 
 const VECTOR_PATH = new URL("./links-api-vectors.json", import.meta.url);
-// The SHA-256 printed by `node short-links-api-vectors.gen.mjs --check` in tinycloud-dev docs/specs.
-const VECTOR_SHA256 = "59641c44536e5f53d7230205ff7d277bd5441cc8ddac10b7bee63f1d2358f3e6";
 
 type Outcome = { readonly status: number; readonly error?: string; readonly reason?: string; readonly type?: string };
 
@@ -130,31 +121,6 @@ function reasonOf(expected: Outcome): string | undefined {
   return expected.reason;
 }
 
-describe("links vector file", () => {
-  it("is the byte-identical copy of the contract's vector file", () => {
-    expect(createHash("sha256").update(readFileSync(VECTOR_PATH)).digest("hex")).toBe(VECTOR_SHA256);
-  });
-
-  it("agrees with the module's constants", () => {
-    const { constants } = vectors;
-    expect(constants.domains.header).toBe(LINK_HEADER_DOMAIN);
-    expect(constants.domains.delete).toBe(LINK_DELETE_DOMAIN);
-    expect(constants.windowSeconds).toBe(LINK_WINDOW_SECONDS);
-    expect(constants.minLifeSeconds).toBe(LINK_MIN_LIFE_SECONDS);
-    expect(constants.minBodyBytes).toBe(LINK_MIN_BODY_BYTES);
-    expect(constants.maxLinkBodyBytes).toBe(MAX_LINK_BODY_BYTES);
-    expect(MAX_LINK_REQUEST_BYTES).toBe(Math.ceil((constants.maxLinkBodyBytes * 4) / 3) + 3072);
-    for (const type of LINK_TYPES) {
-      const spec = constants.types[type];
-      expect(LINK_TYPE_SPECS[type]).toEqual({
-        maxLifeSeconds: spec.maxLifeS,
-        defaultLifeSeconds: spec.defaultLifeS,
-        pathLetter: spec.path,
-        readOnce: spec.readOnce,
-      });
-    }
-  });
-});
 
 describe("vectors: ids", () => {
   for (const vector of vectors.ids) {

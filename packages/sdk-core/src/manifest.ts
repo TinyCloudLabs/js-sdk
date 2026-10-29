@@ -18,6 +18,7 @@
 import ms from "ms";
 import { ACCOUNT_MANIFEST_PERMISSIONS } from "@tinycloud/bootstrap";
 import { resolveSecretPath, SECRET_NAME_RE, parseNetworkId } from "@tinycloud/sdk-services";
+import { parseEncryptionResource } from "@tinycloud/sdk-services/encryption/resource";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -492,7 +493,8 @@ export function expandPermissionEntry(entry: PermissionEntry): PermissionEntry[]
 /**
  * Expand a `tinycloud.encryption` manifest entry.
  *
- * - `path` MUST be a networkId URN (`urn:tinycloud:encryption:...`).
+ * - `path` MUST be a networkId URN (`urn:tinycloud:encryption:...`),
+ *   except the default network's `share/` decrypt prefix.
  *   The manifest prefix is always skipped — network ids are top-level
  *   owner-scoped resources, not space-scoped paths.
  * - `actions` must be `decrypt`, `network.create`, or `network.revoke`
@@ -515,11 +517,13 @@ function expandEncryptionPermissionEntry(
         `(got ${JSON.stringify(entry.path)})`,
     );
   }
-  if (entry.path.includes("/")) {
+  const sharePrefix = entry.path.endsWith("/share/");
+  if (entry.path.includes("/") && !sharePrefix) {
     throw new ManifestValidationError("named keys go in manifest.keys");
   }
   try {
-    parseNetworkId(entry.path);
+    const network = parseNetworkId(sharePrefix ? entry.path.slice(0, -"/share/".length) : entry.path);
+    if (sharePrefix && network.name !== "default") throw new Error("share prefix requires default network");
   } catch {
     throw new ManifestValidationError("tinycloud.encryption entries require a valid networkId URN");
   }
@@ -561,6 +565,9 @@ function expandEncryptionPermissionEntry(
       seen.add(a);
     }
   }
+  if (sharePrefix && dedupedActions.some((action) => action !== "tinycloud.encryption/decrypt")) {
+    throw new ManifestValidationError("share prefix only supports decrypt");
+  }
   // Encryption resources are network-scoped, not space-scoped. We
   // always emit the synthetic "encryption" space label so manifest
   // grouping can deal with it uniformly without collapsing the
@@ -587,6 +594,76 @@ export function expandPermissionEntries(
   entries: readonly PermissionEntry[],
 ): PermissionEntry[] {
   return entries.flatMap(expandPermissionEntry);
+}
+
+/**
+ * Expand runtime permission requests without admitting named keys into static
+ * manifests. A Share key may be created only on the authenticated owner's
+ * default network, at one exact share/<id> path.
+ */
+export function expandRuntimePermissionEntries(
+  entries: readonly PermissionEntry[],
+  ownerDid?: string,
+): PermissionEntry[] {
+  return entries.flatMap((entry) => {
+    if (entry.service !== ENCRYPTION_PERMISSION_SERVICE ||
+      typeof entry.path !== "string" || !entry.path.includes("/") ||
+      entry.path.endsWith("/share/")) {
+      return expandPermissionEntry(entry);
+    }
+    let resource;
+    let ownerNetwork;
+    try {
+      resource = parseEncryptionResource(entry.path);
+      if (typeof ownerDid !== "string" || ownerDid.length === 0) throw new Error("missing owner");
+      ownerNetwork = parseEncryptionResource(`urn:tinycloud:encryption:${ownerDid}:default`);
+    } catch {
+      throw new ManifestValidationError("runtime Share key creation requires a canonical current-owner key resource");
+    }
+    if (resource.kind !== "key" || resource.networkId !== ownerNetwork.networkId ||
+      !/^share\/[^/]+$/.test(resource.path) ||
+      (entry.space !== undefined && entry.space !== ENCRYPTION_MANIFEST_SPACE) ||
+      !Array.isArray(entry.actions) || entry.actions.length === 0 ||
+      entry.actions.some((action) => action !== "key.create" && action !== "tinycloud.encryption/key.create")) {
+      throw new ManifestValidationError("runtime Share key creation requires the current owner's exact default/share/<id> key and key.create only");
+    }
+    return [{
+      ...entry,
+      space: ENCRYPTION_MANIFEST_SPACE,
+      path: `${resource.networkId}/${resource.path}`,
+      actions: ["tinycloud.encryption/key.create"],
+      skipPrefix: true,
+    }];
+  });
+}
+
+/** Expand exact named-key decrypt entries for child delegations only. */
+export function expandDelegationPermissionEntries(
+  entries: readonly PermissionEntry[],
+): PermissionEntry[] {
+  return entries.flatMap((entry) => {
+    if (entry.service !== ENCRYPTION_PERMISSION_SERVICE ||
+      typeof entry.path !== "string" || !entry.path.includes("/")) {
+      return expandPermissionEntry(entry);
+    }
+    let resource;
+    try {
+      resource = parseEncryptionResource(entry.path);
+    } catch {
+      throw new ManifestValidationError("delegation requires a canonical exact named-key resource");
+    }
+    if (resource.kind !== "key" || !Array.isArray(entry.actions) || entry.actions.length === 0 ||
+      entry.actions.some((action) => action !== "decrypt" && action !== "tinycloud.encryption/decrypt")) {
+      throw new ManifestValidationError("named-key delegation requires an exact key and decrypt only");
+    }
+    return [{
+      ...entry,
+      space: ENCRYPTION_MANIFEST_SPACE,
+      path: `${resource.networkId}/${resource.path}`,
+      actions: ["tinycloud.encryption/decrypt"],
+      skipPrefix: true,
+    }];
+  });
 }
 
 /**

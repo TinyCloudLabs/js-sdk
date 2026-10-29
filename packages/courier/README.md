@@ -5,11 +5,11 @@ Spec: tinycloud-dev docs/specs/courier-v0.md (TC-707). Beta.
 
 ## Install
 
-Courier ships inside the TinyCloud CLI as `tc courier`:
+Courier ships inside the TinyCloud CLI as `tinycloud courier`:
 
 ```bash
 npm install --global @tinycloud/cli@beta
-tc courier --help
+tinycloud courier --help
 ```
 
 The standalone `courier` bin takes identical arguments and shares the same
@@ -31,26 +31,92 @@ install. Run `hash -r` if `tc` already ran in the same shell. Verify with
 `command -v tc`, or call `"$(npm prefix --global)/bin/tc"` directly.
 
 The `courier` agent skill (`skills/courier/SKILL.md`) ships with both packages;
-`npx skills add … --skill tc-cli courier` installs it next to `tc-cli` (see the
-CLI's `skills/tc-cli/INSTALL.md`).
+`npx skills add … --skill tinycloud-cli courier` installs it next to `tinycloud-cli` (see the
+CLI's `skills/tinycloud-cli/INSTALL.md`).
+
+## Guided start and invitations
+
+Paste the prompt in [`skills/courier/start.md`](skills/courier/start.md) into your
+agent. It reuses Courier setup and grants, discovers stored chats, and asks
+whether to start a new chat only when an existing chat is available.
+
+```bash
+courier start
+courier start --session <sessionId> --peer <peer>
+courier start --new "Subject"
+courier invite --session <sessionId> --mode same-owner --consent
+courier invite --session <sessionId> --mode anyone --consent
+courier invite --session <sessionId> --mode named --recipient <did:key-or-paired-handle> --consent
+# Recipient: preserve the entire link, including its fragment.
+courier join '<invitation-link>' --consent
+# Equivalent incoming-link entry:
+courier start --link '<invitation-link>' --consent
+```
+
+`start` returns JSON. `active` includes the session ID; `choose-session` includes
+real stored chats; `setup-required` directs the agent to normal `init`. An incoming
+link takes precedence over discovery and new-chat flags. A refused link never
+creates a substitute chat.
+
+There are three invitation modes:
+
+- `same-owner`: another agent key belonging to the same verified owner.
+- `anyone`: the holder of the link may request pairing. The first valid claim wins.
+- `named`: an exact Courier `did:key`, or a paired handle whose incoming delegation
+  still verifies. The peer delegation is issued to that key, not to a display name.
+
+Both invitation issuance and joining require `--consent`. Named email addresses
+are not supported: they require credential-backed policy publication authority
+that a restricted Courier grant does not have. Courier refuses them.
+
+`invite` prints one JSON line containing the handoff link, then serves the signed
+A/B/C pairing over a session-specific KV relay. The issuer must participate:
+this is not an autonomous invitation service. The relay key grants only get/put
+under its pairing prefix, with no chat access. The issuer verifies the claimant's
+signed delegation and recipient constraint before reserving a durable winner and
+issuing a read delegation for exactly the intended thread. Same-owner agents use
+distinct mailbox prefixes even though their space is shared.
+The recipient also verifies the inviter's signed relay delegation and owner chain
+with the node before issuing its own session read delegation. A valid link-header
+signature alone is not proof that its key belongs to the advertised owner.
+
+The default serving/join wait is 300 seconds; `--wait <seconds>` changes it.
+If interrupted or timed out, resume `courier invite serve <invitationId>` and
+join the same link again. The persisted winning claim survives issuer restarts.
+A completed local join refuses replay. Invalid, changed, expired, self-key and
+wrong-recipient invitations do not activate another chat.
+
+The signed short link has the form
+`https://courier.tinycloud.xyz/c/<id>#v=4&k=<key>&c=<sealed-body-CID>`.
+The content key stays in the fragment. Its signed header issuer must match the
+sealed body issuer; the audience is the links API origin. Configure a self-hosted
+HTTPS viewer with `COURIER_LINK_ORIGIN` and its API with
+`COURIER_LINKS_API_ORIGIN` (default `https://api.tinycloud.xyz`).
+
+After joining, use the returned peer and session ID with existing `send --thread`,
+`read`, `inbox`, and delivery commands. A guided pairing cannot send into a
+different thread or renew into broader mailbox access. Existing manual pairing
+continues to use its original mailbox scope.
+
+Details: TC-1543
 
 ## Setup and identity
 
 Courier uses a dedicated `did:key` agent identity, one per OS user. The owner
 approves its restricted `agents`-space grant in OpenKey; Courier never stores
 the owner's private key. Courier keeps its own profile and does not use tc
-profiles, so `tc courier` takes no tc options (`tc -p x courier …` exits 2).
+profiles, so `tinycloud courier` takes no TinyCloud CLI options (`tinycloud -p x courier …` exits 2).
 
 ```bash
-tc courier init --paste --handle alice
+tinycloud courier init --paste --handle alice
 # Open the printed OpenKey URL, approve, and paste the XXXX-XXXX code (or the full grant).
-tc courier pair start bob
-tc courier pair accept --file a.json
-tc courier send bob --new "Subject" --ask "…" --file handoff.md
-tc courier inbox && tc courier read <threadId>
-tc courier task new --peer bob --thread <id> --state working --ask a1
-tc courier request <threadId> --peer bob --task <id> --verb merge --target owner/repo#12 --head-sha <40-lowercase-hex> --base master --summary "Merge PR 12" --why "…"
-tc courier orders bob
+tinycloud courier pair start bob
+tinycloud courier pair accept --file a.json
+tinycloud courier send bob --new "Subject" --ask "…" --file handoff.md
+tinycloud courier inbox && tinycloud courier read <threadId>
+tinycloud courier task new --peer bob --thread <id> --state working --ask a1
+tinycloud courier request <threadId> --peer bob --task <id> --verb merge --target owner/repo#12 --head-sha <40-lowercase-hex> --base master --summary "Merge PR 12" --why "…"
+tinycloud courier orders bob
 ```
 
 `init` without `--paste` starts an interactive loopback grant flow. `--request`
@@ -58,10 +124,15 @@ prints the OpenKey URL and the agent key as JSON; `--grant-file f|-` installs a
 grant from a file or stdin. If OpenKey approves a grant before the `agents`
 space is hosted, Courier saves it and reports `no-space`. Complete setup by
 signing in at the Share view, or from a wallet profile run
-`tc space host agents`, then use `init --resume` without requesting another
+`tinycloud space host agents`, then use `init --resume` without requesting another
 approval. Run `init` again to renew the owner-approved grant, or
 `init --rotate-key` to replace the agent key and re-pair every peer.
 If OpenKey reports the space is still being set up, `init` waits up to about 2.5 minutes; otherwise use `init --resume`.
+
+Pairing binds a peer by its Courier `did:key`, not by owner DID: two Courier
+agents of the same owner (two profiles, two agent keys) pair exactly like two
+owners, through the same explicit `pair start`/`pair accept` exchange. An
+artifact from the agent's own courier DID is refused.
 
 ### OpenKey short codes
 
@@ -479,7 +550,7 @@ publish, push and credential-access commands. Approved PR merges run through
 Never approvable: `courier pair`, `courier revoke`, `courier init`,
 `courier pause`, `courier resume` (the wake budget is the reply loop's breaker:
 an agent must not lift its own pause), `courier watch` (an agent must not start
-a watcher, which could wake agents without the guard), all also as `tc courier …`;
+a watcher, which could wake agents without the guard), all also as `tinycloud courier …`;
 `courier approval` without `--peek` (it would consume without execution),
 `courier broker` and `courier guard`; privilege/session tools, Secret Bridge; and starting another agent (see below).
 
@@ -815,7 +886,7 @@ const code = await main(["inbox", "--json"], { prog: "courier" }); // 0, 1 (erro
 ```
 
 `prog` names Courier in usage text and hints; the TinyCloud CLI passes
-`tc courier`. The package also exports the grant, pairing, inbox and authority
+`tinycloud courier`. The package also exports the grant, pairing, inbox and authority
 helpers the CLI is built from.
 
 ## Development

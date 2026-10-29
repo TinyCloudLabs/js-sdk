@@ -1,5 +1,82 @@
 # @tinycloudlabs/sdk-core
 
+## 3.8.0-beta.21
+
+### Patch Changes
+
+- 9fb359a: Allow explicit runtime permission requests to create one exact `share/<id>` named key on the current owner's default encryption network. Validate the owner, resource and action before consent, bind approval to the same signed session, and activate only the requested key-create authority. Native shells without a supported permission-request path refuse rather than falling back to a web signer. Static manifests and native authority ceilings are unchanged.
+
+  Keep runtime permission approval bound to the captured session key through signing and activation.
+
+  Details: TC-2192
+
+## 3.8.0-beta.20
+
+### Patch Changes
+
+- e424ba9: Include `siweConfig.resources` recipients-declaration URIs in ordinary, external/OpenKey and bootstrap SIWE preparation. This option accepts `urn:tinycloud:recipients:<base64url>` with an unpadded base64url payload. The original ReCap stays last and unchanged, and completion retains the exact signed message. An absent or empty resource list leaves preparation unchanged.
+
+  Align shared ReCap extraction with complete resource values in the SIWE resources section.
+
+  Details: TC-2230
+
+## 3.8.0-beta.19
+
+### Patch Changes
+
+- Updated dependencies [19048ec]
+  - @tinycloud/share-envelope@1.4.0-beta.2
+  - @tinycloud/share-sdk@1.4.1-beta.3
+
+## 3.8.0-beta.18
+
+### Patch Changes
+
+- Updated dependencies [3daddbb]
+  - @tinycloud/sdk-services@3.8.0-beta.18
+
+## 3.8.0-beta.17
+
+### Patch Changes
+
+- Updated dependencies [0b024c2]
+  - @tinycloud/share-sdk@1.4.1-beta.2
+
+## 3.8.0-beta.16
+
+### Patch Changes
+
+- 812a818: Publish new CLI email shares as signed V3 Policy/v2 envelopes inside current v4 Share link records, with a unique exact `default/share/<shareId>` encryption key, a path-bound policy, and a committed email credential requirement. The `builtin:share-publishing` paste approval requests decrypt only for the owner's default-network `share/` prefix; device authorization and `enable share` omit decrypt. Existing V2 envelopes retain their read path.
+
+  Details: TC-2177
+
+- Updated dependencies [812a818]
+  - @tinycloud/sdk-services@3.8.0-beta.16
+  - @tinycloud/share-envelope@1.3.1-beta.1
+  - @tinycloud/share-sdk@1.4.1-beta.1
+
+## 3.8.0-beta.15
+
+### Patch Changes
+
+- f167805: Allow `delegateTo` to issue an exact named-key decrypt resource when the signed session grants that key. The manifest permission rules remain the same.
+
+  Details: TC-2140
+
+## 3.8.0-beta.14
+
+### Minor Changes
+
+- e740a6d: A session key can list and revoke the delegations it issued. `DelegationManager.query({ direction: "issued" })` sends one invocation signed by the session's own did:key (capability `tinycloud.delegation/list` on `<did>/delegation`, no proof) and returns the schema-2 page; it needs `delegation-issued-query-v1` in the node's `/info` features and otherwise answers `UNSUPPORTED_OPERATION` ("This node doesn't support listing issued delegations yet"). `queryAllIssued()` follows `nextCursor` until it is absent (pages are ordered by delegation id and may be short). `revokeIssued(cid)` revokes a delegation the key issued with a revocation signed by that key and no proof; revoking an already revoked delegation succeeds, a plain-text 403 is `PERMISSION_DENIED` with the node's message, a 400 invalid cursor is `INVALID_CURSOR`, and a 503 is `CHAIN_TOO_DEEP` (retryable). `TinyCloudNode` wires the session-key signer (`DelegationManagerConfig.sessionInvocationSigner`).
+
+  Details: TC-2132
+
+### Patch Changes
+
+- 49f3665: The issued-delegation code (the `direction: "issued"` query and its paging, `queryAllIssued`, `revokeIssued`, the 401/403/400/503 mapping) is its own module, exported as `@tinycloud/sdk-core/delegations/issued`. `DelegationManager.query({ direction: "issued" })`, `queryAllIssued` and `revokeIssued` keep their signatures and results and load that module with a dynamic `import()` on first use. `@tinycloud/web-sdk` builds it as the lazy chunk `delegations-issued.mjs` / `delegations-issued.cjs` next to `index.*` and `credentials.*`, so those bundles carry only the loader.
+
+  Details: TC-2132
+
 ## 3.8.0-beta.9
 
 ### Patch Changes

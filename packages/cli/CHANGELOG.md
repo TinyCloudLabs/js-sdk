@@ -1,5 +1,185 @@
 # @tinycloud/cli
 
+## 1.5.0-beta.31
+
+### Patch Changes
+
+- Updated dependencies [9fb359a]
+- Updated dependencies [9fb359a]
+  - @tinycloud/sdk-core@3.8.0-beta.21
+  - @tinycloud/node-sdk@3.8.0-beta.21
+  - @tinycloud/operations@0.7.7-beta.20
+
+## 1.5.0-beta.30
+
+### Patch Changes
+
+- 73b4604: The `tinycloud-cli` skill, the MCP skill and both READMEs now describe one agent setup path: start at https://agents.tinycloud.xyz/onboarding, sign in with `tinycloud onboard`, and ask for more access with `tinycloud auth request ... --grant --paste`. Agent guides use Node.js 22.20 or later.
+
+  Details: TC-2239
+
+## 1.5.0-beta.29
+
+### Minor Changes
+
+- 8c24574: Make `tinycloud` the preferred CLI command and rename the core skill to `tinycloud-cli`. Keep `tc` as a deprecated compatibility alias at the same entry, with identical commands, flags, exit codes, and stdout. Invoking the alias through a POSIX executable link emits one deprecation notice on stderr; existing scripts and piped JSON keep working.
+
+  Details: TC-2202
+
+### Patch Changes
+
+- Updated dependencies [e424ba9]
+  - @tinycloud/node-sdk@3.8.0-beta.20
+  - @tinycloud/sdk-core@3.8.0-beta.20
+  - @tinycloud/operations@0.7.7-beta.19
+
+## 1.5.0-beta.28
+
+### Minor Changes
+
+- 19048ec: Add immutable, signed OpenKey approval-request links using the shared `/a/<id>#v=4&k=<key>&c=<sealedBodyCid>` grammar. Requests default to one hour, are capped at 24 hours, and use repeatable non-consuming reads. Validate the sealed issuer, target Ed25519 key, and P-256 result encryption key without changing existing login, share, or courier links.
+
+  Use these short requests for browser approval in the CLI and onboarding. Recover the encrypted result through repeatable requester-authenticated fetches, verify the signed authority, and durably save the profile and stable ACK intent before acknowledgement. Explicit manual paste remains available with the existing return-code contract.
+
+  Bind agent-grant approvals to the exact prepared request. Durably retain the verified child grant, command output, history, and signed-parent/ACK binding before acknowledgement, so retries recover the saved result rather than issuing another grant.
+
+  Keep the existing seven-day default for normal OpenKey requests and explicit 30-day onboarding. Complete saved approvals after delivery retention ends, clear pending request credentials on logout, and document the automatic wait-and-resume flow.
+
+  Details: TC-2212
+
+### Patch Changes
+
+- Updated dependencies [19048ec]
+  - @tinycloud/share-envelope@1.4.0-beta.2
+  - @tinycloud/node-sdk@3.8.0-beta.19
+  - @tinycloud/sdk-core@3.8.0-beta.19
+  - @tinycloud/share-sdk@1.4.1-beta.3
+  - @tinycloud/operations@0.7.7-beta.18
+
+## 1.5.0-beta.27
+
+### Minor Changes
+
+- 3daddbb: Add the shared SQLite Home feed protocol and CLI commands for owner-provisioned agent connections, card publishing, durable responses, acknowledgements, outcomes, and external runtime handoff. Hook readiness and logical database notifications drive response reconciliation. Feed watch uses a durable local SQLite handoff ledger with explicit saved, delivered, and handling states, and supports Bun or Node.js 22.13+.
+
+  Support versioned private response payloads saved atomically with their headers and read explicitly through the existing response database authority. Default response notifications and durable handoff copies include only allowlisted headers and payload metadata.
+
+  Add opt-in `redactErrors` to SQL query, execute, and batch calls so private response operations receive static errors with known codes and HTTP status before ordinary service-error delivery. Calls without the option retain their existing error details.
+
+  Add explicit outbound feed messages without changing card decisions or owner-private state. Messages share immutable response identities, atomic private payloads, and notification-safe handoff. Exact-identity handling reads retain historical acknowledgement and outcome receipts after later answers or messages.
+
+  Feed listeners cancel pending response queries on caller abort and stop cleanly for expected cancellation while preserving unrelated query failures.
+
+  Refresh the generated MCP skill coverage for the Commander-owned feed commands; no MCP tools are added.
+
+  Details: TC-2205
+
+### Patch Changes
+
+- Updated dependencies [3daddbb]
+  - @tinycloud/sdk-services@3.8.0-beta.18
+  - @tinycloud/node-sdk@3.8.0-beta.18
+  - @tinycloud/operations@0.7.7-beta.17
+  - @tinycloud/sdk-core@3.8.0-beta.18
+
+## 1.5.0-beta.26
+
+### Patch Changes
+
+- Updated dependencies [0b024c2]
+  - @tinycloud/share-sdk@1.4.1-beta.2
+  - @tinycloud/node-sdk@3.8.0-beta.17
+  - @tinycloud/sdk-core@3.8.0-beta.17
+  - @tinycloud/operations@0.7.7-beta.16
+
+## 1.5.0-beta.25
+
+### Patch Changes
+
+- 406ec01: Add a one-prompt guided start with persisted chat discovery, explicit selection, and signed invitation links. Support same-owner agents, anyone holding the link, and named Courier keys or verified paired handles through a participating issuer's scoped KV pairing relay. Bind joins and durable winning claims to the intended session; keep existing manual pairing guards and restrict guided peer grants to one thread. Email recipient identifiers are refused rather than treated as verified names.
+
+  Explicitly supplied empty invitation links, including positional links, are refused before chat discovery or creation; they cannot create or activate a fallback session.
+
+  Details: TC-1543
+
+## 1.5.0-beta.24
+
+### Patch Changes
+
+- 812a818: Publish new CLI email shares as signed V3 Policy/v2 envelopes inside current v4 Share link records, with a unique exact `default/share/<shareId>` encryption key, a path-bound policy, and a committed email credential requirement. The `builtin:share-publishing` paste approval requests decrypt only for the owner's default-network `share/` prefix; device authorization and `enable share` omit decrypt. Existing V2 envelopes retain their read path.
+
+  Details: TC-2177
+
+- Updated dependencies [812a818]
+- Updated dependencies [812a818]
+  - @tinycloud/node-sdk@3.8.0-beta.16
+  - @tinycloud/sdk-core@3.8.0-beta.16
+  - @tinycloud/sdk-services@3.8.0-beta.16
+  - @tinycloud/share-envelope@1.3.1-beta.1
+  - @tinycloud/share-sdk@1.4.1-beta.1
+  - @tinycloud/operations@0.7.7-beta.15
+
+## 1.5.0-beta.23
+
+### Patch Changes
+
+- 3cb038a: `tinycloud onboard` says its first grant lets the agent read, change and delete apps' data. The grant already included delete; the text now names it.
+
+  Details: TC-2168
+
+## 1.5.0-beta.22
+
+### Patch Changes
+
+- 1d21328: `tinycloud onboard` now also grants SQL read and write of apps' database rows on the applications space, under the same approval as files, so apps such as Health Log can read and write rows without a second approval.
+
+  Details: TC-2178
+
+- 177856d: `builtin:share-publishing` now also asks for decrypt on the account's own default key when signing in with `--paste`, so that profile can create email-addressed shares. `--device` sign-in and `enable share` still request it without that entry; an email share from a device sign-in says to run `tc auth login --paste --manifest builtin:share-publishing`.
+
+  Details: TC-2177
+
+## 1.5.0-beta.21
+
+### Patch Changes
+
+- 5a7cf08: `tinycloud share notify` and `tinycloud share publish --notify` send invitation emails again.
+
+  Details: TC-2177
+
+## 1.5.0-beta.20
+
+### Minor Changes
+
+- 68f276f: `tinycloud onboard` sets up a computer to act for its owner: it creates the profile (the default one unless `--profile` or `TC_PROFILE` names another), then asks for two OpenKey approvals, each for 30 days. The first signs the owner in, or lets them create an account, and grants read and write on their `applications` space. The second grants read-only `spaces/` and `applications/` in their `account` space. Each run does the next approval and never waits: it prints JSON with the approval link and exits 8, and the next run takes the code OpenKey shows with `--code`. It exits 0 with `"onboarded": true` once both are granted, and again on every later run until they expire. The `tc-cli` skill describes it under "Sign in".
+
+  Details: TC-2168
+
+## 1.5.0-beta.19
+
+### Patch Changes
+
+- Updated dependencies [f167805]
+  - @tinycloud/sdk-core@3.8.0-beta.15
+  - @tinycloud/node-sdk@3.8.0-beta.15
+  - @tinycloud/operations@0.7.7-beta.14
+
+## 1.5.0-beta.18
+
+### Minor Changes
+
+- e740a6d: From a delegate (agent) profile, `tc delegation list --granted` lists the delegations that profile's own key issued (every page, each with its `status`, sorted by delegation ID rather than by date), and `tc delegation revoke <cid>` revokes one of them with a revocation signed by that key, so the profile doesn't need a revoke grant from its owner. Revoking one that's already revoked also succeeds. A delegation the key didn't issue is refused with the node's message (exit 5). A node that can't list issued delegations yet answers `ISSUED_DELEGATIONS_UNAVAILABLE` (exit 7). Owner profiles are unchanged.
+
+  Details: TC-2132
+
+### Patch Changes
+
+- Updated dependencies [49f3665]
+- Updated dependencies [e740a6d]
+  - @tinycloud/sdk-core@3.8.0-beta.14
+  - @tinycloud/node-sdk@3.8.0-beta.14
+  - @tinycloud/operations@0.7.7-beta.13
+
 ## 1.5.0-beta.17
 
 ### Patch Changes

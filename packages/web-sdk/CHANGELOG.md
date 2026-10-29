@@ -1,5 +1,88 @@
 # @tinycloudlabs/web-sdk
 
+## 3.8.0-beta.21
+
+### Patch Changes
+
+- 9fb359a: Allow explicit runtime permission requests to create one exact `share/<id>` named key on the current owner's default encryption network. Validate the owner, resource and action before consent, bind approval to the same signed session, and activate only the requested key-create authority. Native shells without a supported permission-request path refuse rather than falling back to a web signer. Static manifests and native authority ceilings are unchanged.
+
+  Keep runtime permission approval bound to the captured session key through signing and activation.
+
+  Details: TC-2192
+
+- Updated dependencies [9fb359a]
+- Updated dependencies [9fb359a]
+  - @tinycloud/sdk-core@3.8.0-beta.21
+  - @tinycloud/node-sdk@3.8.0-beta.21
+
+## 3.8.0-beta.20
+
+### Patch Changes
+
+- Updated dependencies [e424ba9]
+  - @tinycloud/node-sdk@3.8.0-beta.20
+  - @tinycloud/sdk-core@3.8.0-beta.20
+
+## 3.8.0-beta.19
+
+### Patch Changes
+
+- Updated dependencies [19048ec]
+  - @tinycloud/share-envelope@1.4.0-beta.2
+  - @tinycloud/node-sdk@3.8.0-beta.19
+  - @tinycloud/sdk-core@3.8.0-beta.19
+  - @tinycloud/share-sdk@1.4.1-beta.3
+
+## 3.8.0-beta.18
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.8.0-beta.18
+- @tinycloud/replica@0.4.0-beta.5
+- @tinycloud/sdk-core@3.8.0-beta.18
+
+## 3.8.0-beta.17
+
+### Patch Changes
+
+- Updated dependencies [0b024c2]
+  - @tinycloud/share-sdk@1.4.1-beta.2
+  - @tinycloud/node-sdk@3.8.0-beta.17
+  - @tinycloud/sdk-core@3.8.0-beta.17
+
+## 3.8.0-beta.16
+
+### Patch Changes
+
+- Updated dependencies [812a818]
+- Updated dependencies [812a818]
+  - @tinycloud/node-sdk@3.8.0-beta.16
+  - @tinycloud/sdk-core@3.8.0-beta.16
+  - @tinycloud/share-envelope@1.3.1-beta.1
+  - @tinycloud/share-sdk@1.4.1-beta.1
+  - @tinycloud/replica@0.4.0-beta.4
+
+## 3.8.0-beta.15
+
+### Patch Changes
+
+- Updated dependencies [f167805]
+  - @tinycloud/sdk-core@3.8.0-beta.15
+  - @tinycloud/node-sdk@3.8.0-beta.15
+
+## 3.8.0-beta.14
+
+### Patch Changes
+
+- 49f3665: The issued-delegation code (the `direction: "issued"` query and its paging, `queryAllIssued`, `revokeIssued`, the 401/403/400/503 mapping) is its own module, exported as `@tinycloud/sdk-core/delegations/issued`. `DelegationManager.query({ direction: "issued" })`, `queryAllIssued` and `revokeIssued` keep their signatures and results and load that module with a dynamic `import()` on first use. `@tinycloud/web-sdk` builds it as the lazy chunk `delegations-issued.mjs` / `delegations-issued.cjs` next to `index.*` and `credentials.*`, so those bundles carry only the loader.
+
+  Details: TC-2132
+
+- Updated dependencies [49f3665]
+- Updated dependencies [e740a6d]
+  - @tinycloud/sdk-core@3.8.0-beta.14
+  - @tinycloud/node-sdk@3.8.0-beta.14
+
 ## 3.8.0-beta.13
 
 ### Patch Changes

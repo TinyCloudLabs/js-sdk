@@ -9,6 +9,31 @@ import { generateKey } from "../auth/local-key.js";
 import { refreshOpenKeySession } from "./auth.js";
 import { ensureSpaceSetup } from "../auth/space-setup.js";
 
+/**
+ * A new profile with a fresh session key and no sign-in, as `init --key-only`
+ * makes it. It becomes the default profile when it is named `default` or no
+ * default profile exists yet.
+ */
+export async function createKeyOnlyProfile(profileName: string, host: string, defaultSpace?: string): Promise<{ did: string }> {
+  await ProfileManager.ensureConfigDir();
+  const { jwk, did } = await generateKey();
+  await ProfileManager.setKey(profileName, jwk);
+  await ProfileManager.setProfile(profileName, {
+    name: profileName,
+    host,
+    chainId: DEFAULT_CHAIN_ID,
+    spaceName: "default",
+    did,
+    createdAt: new Date().toISOString(),
+    ...(defaultSpace ? { defaultSpace } : {}),
+  });
+  const config = await ProfileManager.getConfig();
+  if (profileName === "default" || !await ProfileManager.profileExists(config.defaultProfile)) {
+    await ProfileManager.setConfig({ ...config, defaultProfile: profileName });
+  }
+  return { did };
+}
+
 export function registerInitCommand(program: Command): void {
   program
     .command("init")
@@ -42,33 +67,7 @@ export function registerInitCommand(program: Command): void {
           );
         }
 
-        await ProfileManager.ensureConfigDir();
-
-        // Generate key
-        const { jwk, did } = await withSpinner("Generating key...", async () => {
-          return generateKey();
-        });
-
-        await ProfileManager.setKey(profileName, jwk);
-
-        // Create initial profile
-        const profileConfig = {
-          name: profileName,
-          host,
-          chainId: DEFAULT_CHAIN_ID,
-          spaceName: "default",
-          did,
-          createdAt: new Date().toISOString(),
-          ...(defaultSpace ? { defaultSpace } : {}),
-        };
-
-        await ProfileManager.setProfile(profileName, profileConfig);
-
-        // Set as default if this is "default" or no default exists
-        const config = await ProfileManager.getConfig();
-        if (profileName === "default" || !await ProfileManager.profileExists(config.defaultProfile)) {
-          await ProfileManager.setConfig({ ...config, defaultProfile: profileName });
-        }
+        const { did } = await withSpinner("Generating key...", () => createKeyOnlyProfile(profileName, host, defaultSpace));
 
         if (options.keyOnly) {
           outputJson({

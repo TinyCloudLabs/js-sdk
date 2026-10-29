@@ -16,3 +16,20 @@ export function isVerifiedRawEncryptionPermission(permission: Pick<PermissionEnt
   return isRawEncryptionPermission(permission) &&
     (permission.space === undefined || permission.space === "encryption");
 }
+
+/**
+ * The built-in Share publishing decrypt entry names the approving account's
+ * `default/share/` encryption prefix before owner resolution.
+ */
+export function isSharePublishingPrefixDecrypt(permission: Pick<PermissionEntry, "service" | "space" | "path" | "actions" | "caveats">): boolean {
+  return permission.service === ENCRYPTION_PERMISSION_SERVICE && permission.space === "default" && permission.path === "share/" &&
+    permission.actions.length === 1 && permission.actions[0] === "tinycloud.encryption/decrypt" &&
+    !permission.caveats?.length;
+}
+
+/** Legacy manifest spelling for an owner's default network root. */
+export function isDeviceDefaultDecrypt(permission: Pick<PermissionEntry, "service" | "space" | "path" | "actions" | "caveats">): boolean {
+  return permission.service === ENCRYPTION_PERMISSION_SERVICE && permission.space === "default" && permission.path === "" &&
+    permission.actions.length === 1 && permission.actions[0] === "tinycloud.encryption/decrypt" &&
+    !permission.caveats?.length;
+}

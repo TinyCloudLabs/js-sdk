@@ -50,7 +50,7 @@ const { delegation } = await tc.delegateTo("did:pkh:eip155:1:0x...", [
   { service: "tinycloud.kv", space: "default", path: "kv/shared", actions: ["tinycloud.kv/get"] },
 ], { expiry: "1h" });
 
-// Account delegation query, POST /delegation/query (what `tc delegation list` uses). It includes
+// Account delegation query, POST /delegation/query (what `tinycloud delegation list` uses). It includes
 // delegations signed by the session key; account.delegations.list() reads the SQL index and does not.
 await tc.account.delegations.query({ direction: "all" });
 await tc.delegationManager.revoke(cid);

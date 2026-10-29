@@ -17,7 +17,7 @@
  */
 
 import { canonicalize, canonicalHashHex, hexEncode, utf8Encode } from "./canonical";
-import { parseNetworkId } from "./networkId";
+import { NetworkIdError, parseEncryptionResource } from "./networkId";
 import {
   DECRYPT_ACTION,
   DECRYPT_FACT_TYPE,
@@ -106,6 +106,9 @@ export function buildDecryptFacts(
     type: DECRYPT_FACT_TYPE,
     targetNode: input.body.targetNode,
     networkId: input.body.networkId,
+    ...(input.body.keyPath !== undefined
+      ? { keyPath: input.body.keyPath }
+      : {}),
     bodyHash,
     encryptedSymmetricKeyHash: input.encryptedSymmetricKeyHash,
     receiverPublicKeyHash,
@@ -115,18 +118,25 @@ export function buildDecryptFacts(
 }
 
 /**
- * Recap-shaped attenuation for the decrypt invocation. The resource
- * key is the networkId URN; the ability is the long-form
- * `tinycloud.encryption/decrypt`. This is intentionally distinct from
- * the existing space-shaped invocation map so callers cannot
- * accidentally fake a space prefix.
+ * Attenuate decrypt to the network root for legacy envelopes or to the
+ * exact named-key leaf for path-scoped envelopes.
  */
 export function buildDecryptAttenuation(
   networkId: string,
+  keyPath?: string,
 ): Record<string, Record<string, Record<string, never>>> {
-  parseNetworkId(networkId);
+  const resource =
+    keyPath === undefined ? networkId : `${networkId}/${keyPath}`;
+  const parsed = parseEncryptionResource(resource);
+  if (
+    parsed.networkId !== networkId ||
+    parsed.keyPath !== keyPath ||
+    keyPath?.endsWith("/")
+  ) {
+    throw new NetworkIdError("keyPath must name an exact encryption key");
+  }
   return {
-    [networkId]: {
+    [resource]: {
       [DECRYPT_ACTION]: {},
     },
   };
@@ -199,6 +209,15 @@ export function checkDecryptInvocationInput(
       }),
     };
   }
+  if (input.facts.keyPath !== input.body.keyPath) {
+    return {
+      ok: false,
+      error: encryptionError({
+        code: "INVALID_INPUT",
+        message: "facts.keyPath must equal body.keyPath",
+      }),
+    };
+  }
   if (input.facts.alg !== input.body.alg) {
     return {
       ok: false,
@@ -243,12 +262,35 @@ export function checkDecryptInvocationInput(
     };
   }
   try {
-    parseNetworkId(input.networkId);
+    if (parseEncryptionResource(input.networkId).keyPath !== undefined) {
+      throw new NetworkIdError("networkId must identify the network root");
+    }
   } catch (err) {
     return {
       ok: false,
       error: encryptionError({
         code: "INVALID_NETWORK_ID",
+        message: err instanceof Error ? err.message : String(err),
+      }),
+    };
+  }
+  try {
+    const resource = parseEncryptionResource(
+      input.body.keyPath === undefined
+        ? input.body.networkId
+        : `${input.body.networkId}/${input.body.keyPath}`,
+    );
+    if (
+      resource.keyPath !== input.body.keyPath ||
+      input.body.keyPath?.endsWith("/")
+    ) {
+      throw new NetworkIdError("keyPath must name an exact encryption key");
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      error: encryptionError({
+        code: "INVALID_INPUT",
         message: err instanceof Error ? err.message : String(err),
       }),
     };

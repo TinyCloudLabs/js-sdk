@@ -34,7 +34,8 @@ import { validateTc1977OpenKeySigninRatchetTransition } from "./replica-size-pol
 import { validateTc2130PanelIphoneRatchetTransition } from "./replica-size-policy";
 import { validateTc1977HostBindingRatchetTransition } from "./replica-size-policy";
 import { validateTc2132IssuedDelegationsRatchetTransition } from "./replica-size-policy";
-import { validateTc2113AllowAbilityRatchetTransition } from "./replica-size-policy";
+import { validateTc2140ExactKeyDelegationRatchetTransition } from "./replica-size-policy";
+import { validateTc2205HomeFeedRatchetTransition } from "./replica-size-policy";
 import { collectMeasuredArtifactInputs } from "./replica-size-inputs";
 import { replicaOwnedPath } from "./replica-owned-path";
 import { webSdkTestExitFailure } from "./web-sdk-test-exit";
@@ -535,11 +536,18 @@ if (prBaseSha) {
     console.error("The issued-delegations ratchet requires the merged host-binding export ratchet and its measured source commit.");
     failed = true;
   }
-  validateTc2113AllowAbilityRatchetTransition(baseLedger.tc2113AllowAbilityRatchet, ledger.tc2113AllowAbilityRatchet);
-  const tc2113AllowAbility = ledger.tc2113AllowAbilityRatchet;
-  if (tc2113AllowAbility !== undefined && baseLedger.tc2113AllowAbilityRatchet === undefined &&
-      (baseLedger.tc2132IssuedDelegationsRatchet === undefined || !hasAncestor(repoRoot, tc2113AllowAbility.sourceCommits.at(-1)!))) {
-    console.error("The allow-ability ratchet requires the merged issued-delegations ratchet and its measured source commit.");
+  validateTc2140ExactKeyDelegationRatchetTransition(baseLedger.tc2140ExactKeyDelegationRatchet, ledger.tc2140ExactKeyDelegationRatchet);
+  const tc2140ExactKeyDelegation = ledger.tc2140ExactKeyDelegationRatchet;
+  if (tc2140ExactKeyDelegation !== undefined && baseLedger.tc2140ExactKeyDelegationRatchet === undefined &&
+      (baseLedger.tc2132IssuedDelegationsRatchet === undefined || !hasAncestor(repoRoot, tc2140ExactKeyDelegation.sourceCommits.at(-1)!))) {
+    console.error("The exact-key delegation ratchet requires the merged issued-delegations ratchet and its measured source commit.");
+    failed = true;
+  }
+  validateTc2205HomeFeedRatchetTransition(baseLedger.tc2205HomeFeedRatchet, ledger.tc2205HomeFeedRatchet);
+  const homeFeed = ledger.tc2205HomeFeedRatchet;
+  if (homeFeed !== undefined && baseLedger.tc2205HomeFeedRatchet === undefined &&
+      (baseLedger.tc2202AgentShareReceiveRatchet === undefined || !hasAncestor(repoRoot, homeFeed.sourceCommits.at(-1)!))) {
+    console.error("The Home feed ratchet requires the merged TC-2202 row and its measured source commit.");
     failed = true;
   }
   const baseOptionalPath = "packages/web-sdk/scripts/replica-optional-size-ledger.json";

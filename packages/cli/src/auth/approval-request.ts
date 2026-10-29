@@ -1,0 +1,490 @@
+import { createECDH, createHash, createPrivateKey, randomBytes, randomUUID, sign } from "node:crypto";
+import { open } from "node:fs/promises";
+import { join } from "node:path";
+import { setTimeout as wait } from "node:timers/promises";
+import { tryOpenBrowser } from "../lib/browser.js";
+import { normalizePkhIdentifier } from "../lib/space.js";
+import { additionalDelegationsPath, profilePath } from "@tinycloud/operations/state";
+import { createApprovalRequest, DEFAULT_LINKS_API_ORIGIN, signerFromJwk, type Ed25519PrivateJwk, type LinkRecord, type OpenKeyApprovalRequestV1 } from "@tinycloud/share-envelope/links";
+import { principalDidEquals, type AuthDelegationArtifact, type AuthRequestArtifact, type PermissionEntry } from "@tinycloud/node-sdk";
+import { canonicalizeRecapCaveats, parseSignedCompactUcanAttenuation } from "@tinycloud/sdk-core";
+import { ProfileManager } from "../config/profiles.js";
+import { readJson, writeJsonDurable, syncAuthCredentialFiles } from "../config/storage.js";
+import { DEFAULT_OPENKEY_HOST, DEFAULT_OPENKEY_DEVICE_API_HOST, ExitCode } from "../config/constants.js";
+import { CLIError } from "../output/errors.js";
+import { loadAdditionalDelegations } from "../lib/permissions.js";
+import * as commandGrants from "../lib/permissions.js";
+import { entriesForSigning, finalizeSigningEntries } from "../lib/apps-agent-preset.js";
+import type { AuthFlowOptions, DelegationData } from "./browser-auth.js";
+import { decryptRelayResult, relayPublicJwkOf } from "./device-auth.js";
+import { canonicalJson, parseRequestedExpiry, sameLoginSpace, verifyScopedLogin } from "./scoped-login.js";
+
+interface PendingApproval {
+  version: 1;
+  request: OpenKeyApprovalRequestV1;
+  requestId: string;
+  bodyCid: string;
+  approvalUrl: string;
+  requestExpiresAt: string;
+  record: LinkRecord;
+  apiOrigin: string;
+  linkApiOrigin: string;
+  openkeyOrigin: string;
+  signingKey?: Ed25519PrivateJwk;
+  relayPrivateKey: string;
+  expectedOwner?: string;
+  resultRef?: string;
+  resultExpiresAt?: string;
+  resultEnvelope?: unknown;
+  ackId: string;
+  committed?: boolean;
+  commandIntent?: string;
+  command?: { request: AuthRequestArtifact; result: AuthDelegationArtifact };
+  acknowledged?: boolean;
+}
+/** Carry transport completion alongside a verified portable grant, never inside its signed claims. */
+export function trackApprovalResult(source: object, verified: object): void {
+  const entry = acquisitions.get(source);
+  if (entry) acquisitions.set(verified, entry);
+}
+
+const acquisitions = new WeakMap<object, PendingApproval>();
+
+/** Remote results require the durable login commit before their delivery can be acknowledged. */
+export function approvalResultNeedsAck(delegation: object): boolean {
+  return acquisitions.has(delegation);
+}
+const STATE_FILE = "approval-pending.json";
+
+/** Local identity of the complete prepared request, independent of file spelling. */
+export function approvalCommandIntent(request: AuthRequestArtifact): string {
+  return "auth-grant:" + createHash("sha256").update(canonicalJson(request)).digest("hex");
+}
+
+async function commandParent(profile: string, entry: PendingApproval) {
+  const key = await ProfileManager.getKey(profile) as Ed25519PrivateJwk | null;
+  const current = await ProfileManager.getProfile(profile);
+  if (!key || current.authSignedOut === true || signerFromJwk(key).did !== entry.request.targetDid ||
+    !principalDidEquals(current.sessionDid ?? current.did, entry.request.targetDid)) {
+    throw invalid("The command's profile or signing key changed.");
+  }
+  const verified = verifyPendingResult(entry, key);
+  if (current.ownerDid?.toLowerCase() !== verified.session.ownerDid.toLowerCase()) throw invalid("The command's owner changed.");
+  return verified;
+}
+
+async function verifyApprovalCommand(profile: string, entry: PendingApproval, request: AuthRequestArtifact,
+  result: AuthDelegationArtifact, checkedParent?: ReturnType<typeof verifyPendingResult>): Promise<void> {
+  const parent = checkedParent ?? await commandParent(profile, entry);
+  if (entry.commandIntent !== approvalCommandIntent(request) || result.kind !== "tinycloud.auth.delegation" ||
+    result.version !== 1 || result.requestId !== request.requestId || result.delegationCid !== result.delegation.cid ||
+    result.prompted !== true) throw invalid("Saved grant does not match this prepared command.");
+  const requested = finalizeSigningEntries(await commandGrants.resolvePermissionSpaces(entriesForSigning(request.requested), profile));
+  if (canonicalJson(result.permissions) !== canonicalJson(requested)) throw invalid("Saved grant permissions changed.");
+  const authorization = result.delegation.delegationHeader.Authorization.replace(/^Bearer /i, "");
+  const signed = parseSignedCompactUcanAttenuation(authorization, result.delegationCid);
+  const payload = JSON.parse(Buffer.from(authorization.split(".")[1]!, "base64url").toString("utf8")) as { prf?: unknown; exp?: unknown };
+  if (!principalDidEquals(signed.payload.iss, entry.request.targetDid) ||
+    !principalDidEquals(signed.payload.aud, request.sessionDid) ||
+    !principalDidEquals(result.delegation.delegateDID, request.sessionDid) ||
+    !Array.isArray(payload.prf) || payload.prf.length !== 1 || payload.prf[0] !== parent.delegation.delegationCid ||
+    typeof payload.exp !== "number" || payload.exp * 1000 <= Date.now() ||
+    payload.exp * 1000 > Date.parse(parent.session.expiresAt) ||
+    new Date(payload.exp * 1000).toISOString() !== result.expiry ||
+    new Date(String(result.delegation.expiry)).toISOString() !== result.expiry ||
+    result.delegation.host !== entry.request.nodeOrigin) throw invalid("Saved child grant does not bind the signed parent and requester.");
+  // Read tuples only after the existing compact verifier checks signature and CID.
+  const tuples = Object.entries(signed.payload.att).flatMap(([resource, abilities]) => {
+    const match = /^(?:tinycloud:\/\/([^/]+)|(tinycloud:[^/]+))\/([^/]+)(?:\/|$)(.*)$/.exec(resource);
+    if (!match) throw invalid("Saved child has an unsupported signed resource.");
+    return Object.entries(abilities).map(([action, caveats]) => ({
+      space: match[1] ?? match[2], service: "tinycloud." + match[3], path: match[4], action,
+      caveats: canonicalizeRecapCaveats(caveats as Record<string, unknown>[]),
+    }));
+  });
+  for (const permission of requested) for (const action of permission.actions) {
+    const index = tuples.findIndex((tuple) => tuple.service === permission.service && tuple.path === permission.path &&
+      tuple.action === action && sameLoginSpace(tuple.space, permission.space, parent.session.ownerDid) &&
+      tuple.caveats === canonicalizeRecapCaveats(permission.caveats));
+    if (index < 0) throw invalid("Saved child does not contain the exact requested authority.");
+    tuples.splice(index, 1);
+  }
+  if (tuples.length) throw invalid("Saved child contains authority outside the prepared request.");
+}
+
+async function syncCommandFiles(profile: string, result: AuthDelegationArtifact): Promise<void> {
+  const stored = (await commandGrants.loadLocalGrantArtifacts(profile)).find((item) => item.delegationCid === result.delegationCid);
+  const history = (await commandGrants.readGrantHistory(profile)).find((item) => item.delegationCid === result.delegationCid &&
+    item.source === "cli" && item.expiry === result.expiry && canonicalJson(item.addedCaps) === canonicalJson(result.permissions));
+  if (!stored || canonicalJson(JSON.parse(JSON.stringify(stored.delegation))) !==
+    canonicalJson(JSON.parse(JSON.stringify(result.delegation))) || !history) {
+    throw invalid("The verified command result and history have not both been saved.");
+  }
+  for (const path of [commandGrants.localGrantArtifactsPath(profile), commandGrants.grantHistoryPath(profile), profilePath(profile)]) {
+    const handle = await open(path, "r");
+    try { await handle.sync(); } finally { await handle.close(); }
+  }
+}
+
+async function persistCommandFiles(profile: string, result: AuthDelegationArtifact): Promise<void> {
+  await commandGrants.appendLocalGrantArtifact(profile, result.delegation);
+  if (!(await commandGrants.readGrantHistory(profile)).some((item) => item.delegationCid === result.delegationCid)) {
+    await commandGrants.appendGrantHistory(profile, { addedCaps: result.permissions, source: "cli",
+      delegationCid: result.delegationCid, expiry: result.expiry });
+  }
+  await syncCommandFiles(profile, result);
+}
+
+/** A retry returns the saved child, not a newly minted delegation. */
+export async function recoverApprovalCommand(profile: string, approval: object,
+  request: AuthRequestArtifact): Promise<AuthDelegationArtifact | undefined> {
+  const acquired = acquisitions.get(approval);
+  if (!acquired) return undefined;
+  return ProfileManager.withLock(profile, async () => {
+    const entries = await readJson<PendingApproval[]>(join(profilePath(profile), STATE_FILE)) ?? [];
+    const matching = entries.filter((item) => item.commandIntent === approvalCommandIntent(request));
+    if (matching.length !== 1 || matching[0]!.requestId !== acquired.requestId) throw invalid("Ambiguous command approval.");
+    const entry = matching[0]!;
+    if (!entry.command) return undefined;
+    if (canonicalJson(entry.command.request) !== canonicalJson(request)) throw invalid("Prepared command changed.");
+    await verifyApprovalCommand(profile, entry, request, entry.command.result);
+    await persistCommandFiles(profile, entry.command.result);
+    acquisitions.set(approval, entry);
+    return entry.command.result;
+  }, { requireProfile: true });
+}
+
+/** Save result, history, signed parent binding and stable ACK intent before any ACK. */
+export async function commitApprovalCommand(profile: string, approval: object,
+  request: AuthRequestArtifact, result: AuthDelegationArtifact): Promise<void> {
+  const acquired = acquisitions.get(approval);
+  if (!acquired) throw invalid("Command approval is not tracked.");
+  await ProfileManager.withLock(profile, async () => {
+    const entries = await readJson<PendingApproval[]>(join(profilePath(profile), STATE_FILE)) ?? [];
+    const matching = entries.filter((item) => item.commandIntent === approvalCommandIntent(request));
+    if (matching.length !== 1 || matching[0]!.requestId !== acquired.requestId) throw invalid("Ambiguous command approval.");
+    const entry = matching[0]!;
+    await verifyApprovalCommand(profile, entry, request, result);
+    if (entry.command && canonicalJson(entry.command.result) !== canonicalJson(JSON.parse(JSON.stringify(result)))) {
+      throw invalid("A different result is already saved for this command.");
+    }
+    entry.command = { request, result };
+    await writeJsonDurable(join(profilePath(profile), STATE_FILE), entries);
+    await persistCommandFiles(profile, result);
+    acquisitions.set(approval, entry);
+  }, { requireProfile: true });
+}
+
+function invalid(message: string): CLIError {
+  return new CLIError("APPROVAL_RESULT_INVALID", message, ExitCode.PERMISSION_DENIED);
+}
+function configuredOrigin(value: string, label: string): string {
+  let url: URL;
+  try { url = new URL(value); } catch { throw invalid(`${label} must be an origin.`); }
+  const loopback = ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
+  if (url.pathname !== "/" || url.search || url.hash || url.username || url.password ||
+    (url.protocol !== "https:" && !(url.protocol === "http:" && loopback))) {
+    throw invalid(`${label} must be an HTTPS origin or a loopback HTTP origin.`);
+  }
+  return url.origin;
+}
+function grantLifetimeSeconds(expiry: AuthFlowOptions["expiry"]): number {
+  const durationMs = typeof expiry === "string" && /^\d+s$/.test(expiry)
+    ? Number(expiry.slice(0, -1)) * 1000
+    : parseRequestedExpiry(expiry ?? "7d").durationMs;
+  const seconds = Math.floor(durationMs / 1000);
+  if (!Number.isSafeInteger(seconds) || seconds < 60) throw invalid("Invalid requested grant lifetime.");
+  return seconds;
+}
+
+async function updatePending(profile: string, update: (pending: PendingApproval[]) => PendingApproval[]): Promise<void> {
+  await ProfileManager.withLock(profile, async () => {
+    const directory = await ProfileManager.ensureProfileDir(profile);
+    const path = join(directory, STATE_FILE);
+    await writeJsonDurable(path, update(await readJson<PendingApproval[]>(path) ?? []));
+  }, { requireProfile: true });
+}
+
+async function activePending(profile: string): Promise<PendingApproval[]> {
+  const path = join(profilePath(profile), STATE_FILE);
+  if (!(await readJson<PendingApproval[]>(path))?.length) return [];
+  return ProfileManager.withLock(profile, async () => {
+    const entries = await readJson<PendingApproval[]>(path) ?? [];
+    const now = Date.now();
+    const active = entries.filter((entry) => {
+      // A saved command remains recoverable until its child expires, independently of transport retention.
+      const expiry = entry.command ? entry.command.result.expiry : entry.resultExpiresAt;
+      return expiry === undefined || !(Date.parse(expiry) <= now);
+    });
+    if (active.length !== entries.length) await writeJsonDurable(path, active);
+    return active;
+  }, { requireProfile: true });
+}
+
+export async function pendingApprovalKey(profile: string): Promise<Ed25519PrivateJwk | undefined> {
+  const entries = await activePending(profile);
+  return entries.find((entry) => entry.commandIntent === undefined && !entry.committed)?.signingKey;
+}
+
+/** Existing OpenKey session proof, purpose- and exact-resource-bound by its credential hash. */
+export function approvalSessionProof(entry: Pick<PendingApproval, "requestId" | "bodyCid" | "apiOrigin"> & { signingKey: Ed25519PrivateJwk },
+  action: "discover" | "fetch" | "ack", resultRef = "", ackId = ""): string {
+  const jwk = entry.signingKey;
+  const jkt = createHash("sha256").update(JSON.stringify({ crv: "Ed25519", kty: "OKP", x: jwk.x })).digest("base64url");
+  const path = action === "discover" ? `/api/approval-requests/${entry.requestId}/result` : `/api/approval-results/${resultRef}/${action}`;
+  const header = Buffer.from(JSON.stringify({ alg: "EdDSA", kid: jkt, typ: "openkey-session-proof+jwt" })).toString("base64url");
+  const payload = Buffer.from(JSON.stringify({
+    client_id: "openkey-approval-result-v1",
+    cred_hash: createHash("sha256").update(JSON.stringify([action, entry.requestId, entry.bodyCid, resultRef, ackId])).digest("base64url"),
+    htm: "POST", htu: entry.apiOrigin + path, iat: Math.floor(Date.now() / 1000), jti: randomBytes(24).toString("base64url"),
+  })).toString("base64url");
+  const input = `${header}.${payload}`;
+  return `${input}.${sign(null, Buffer.from(input), createPrivateKey({
+    key: { kty: jwk.kty, crv: jwk.crv, x: jwk.x, d: jwk.d }, format: "jwk",
+  })).toString("base64url")}`;
+}
+
+async function post(entry: PendingApproval, action: "discover" | "fetch" | "ack", signingKey: Ed25519PrivateJwk): Promise<Response> {
+  const ref = action === "discover" ? "" : entry.resultRef ?? "";
+  const path = action === "discover" ? `/api/approval-requests/${entry.requestId}/result` : `/api/approval-results/${ref}/${action}`;
+  const body = action === "discover" ? { bodyCid: entry.bodyCid, header: entry.record.header, signature: entry.record.signature }
+    : { requestId: entry.requestId, bodyCid: entry.bodyCid, ...(action === "ack" ? { ackId: entry.ackId } : {}) };
+  return fetch(entry.apiOrigin + path, {
+    method: "POST", credentials: "omit", redirect: "error", cache: "no-store", referrerPolicy: "no-referrer",
+    headers: { "content-type": "application/json", "OpenKey-Session-Proof": approvalSessionProof({ requestId: entry.requestId, bodyCid: entry.bodyCid, apiOrigin: entry.apiOrigin, signingKey }, action, ref, action === "ack" ? entry.ackId : "") },
+    body: JSON.stringify(body), signal: AbortSignal.timeout(10_000),
+  });
+}
+async function throwRemoteError(profile: string, entry: PendingApproval, response: Response, action: "discover" | "fetch"): Promise<never> {
+  const body = await response.clone().json().catch(() => null) as { code?: unknown } | null;
+  const code = typeof body?.code === "string" ? body.code : "";
+  if (code === "expired_request") {
+    await updatePending(profile, (items) => items.filter((item) => item.requestId !== entry.requestId));
+    throw new CLIError("APPROVAL_REQUEST_EXPIRED", "This approval request expired before it was approved. Start a new request.", ExitCode.AUTH_REQUIRED);
+  }
+  if (code === "expired_result") {
+    await updatePending(profile, (items) => items.filter((item) => item.requestId !== entry.requestId));
+    throw new CLIError("APPROVAL_RESULT_EXPIRED", "The approved result expired before it was saved. Start a new request.", ExitCode.AUTH_REQUIRED);
+  }
+  if (code === "acknowledged") {
+    throw new CLIError("APPROVAL_RESULT_ACKNOWLEDGED", "OpenKey has acknowledged this result; its local commit may already be complete.", ExitCode.PENDING);
+  }
+  if (code === "not_found") {
+    await updatePending(profile, (items) => items.filter((item) => item.requestId !== entry.requestId));
+    throw new CLIError(action === "discover" ? "APPROVAL_REQUEST_NOT_FOUND" : "APPROVAL_RESULT_NOT_FOUND",
+      action === "discover" ? "OpenKey cannot find this approval request." : "OpenKey cannot find this approval result.", ExitCode.AUTH_REQUIRED);
+  }
+  if (code === "ack_conflict") throw invalid("OpenKey rejected a conflicting approval ACK intent.");
+  if (code === "request_binding" || code === "invalid_proof") throw invalid("OpenKey rejected the request or requester binding.");
+  throw new CLIError(action === "discover" ? "APPROVAL_REQUEST_UNAVAILABLE" : "APPROVAL_RESULT_UNAVAILABLE",
+    `OpenKey could not ${action === "discover" ? "discover this request" : "fetch this result"} (HTTP ${response.status}). Retry the command to resume.`, ExitCode.PENDING);
+}
+
+function verifyPendingResult(entry: PendingApproval, key: Ed25519PrivateJwk): {
+  delegation: Record<string, unknown>;
+  session: ReturnType<typeof verifyScopedLogin>["session"];
+} {
+  if (!entry.resultRef || !entry.resultEnvelope) throw invalid("No encrypted approval result is available.");
+  const signer = signerFromJwk(key);
+  const relay = createECDH("prime256v1");
+  relay.setPrivateKey(Buffer.from(entry.relayPrivateKey, "base64url"));
+  const opened = decryptRelayResult(entry.resultEnvelope, entry.requestId, relay);
+  if (opened.resultVersion !== 1 || opened.requestId !== entry.requestId || opened.requestDigest !== entry.bodyCid ||
+    opened.requesterDid !== entry.request.issuer || opened.targetDid !== entry.request.targetDid ||
+    signer.did !== entry.request.issuer || typeof opened.ownerDid !== "string" ||
+    typeof opened.delegationExpiresAt !== "string" || !Number.isFinite(Date.parse(opened.delegationExpiresAt)) ||
+    new Date(opened.delegationExpiresAt).toISOString() !== opened.delegationExpiresAt ||
+    !opened.delegation || typeof opened.delegation !== "object") throw invalid("Encrypted result binding does not match this request.");
+  const delegation = opened.delegation as Record<string, unknown>;
+  const verified = verifyScopedLogin(delegation, key, entry.request.targetDid,
+    entry.request.permissions as PermissionEntry[], {
+      expectedOwner: entry.expectedOwner ?? opened.ownerDid,
+      expiry: { durationMs: entry.request.grantLifetimeSeconds * 1000 },
+      exactApproval: true,
+    });
+  if (verified.session.ownerDid.toLowerCase() !== opened.ownerDid.toLowerCase() ||
+    verified.session.expiresAt !== opened.delegationExpiresAt) throw invalid("Result owner or expiry differs from its signed delegation.");
+  return { delegation, session: verified.session };
+}
+
+/** Retryable reads never acknowledge or consume. The private result key is synced before the URL is exposed. */
+export async function acquireApprovalRequest(_did: string, options: AuthFlowOptions): Promise<DelegationData> {
+  const profile = options.profileName;
+  if (!profile || !options.jwk || !options.host || !options.permissions?.length) {
+    throw new CLIError("APPROVAL_REQUEST_CONTEXT_REQUIRED", "Approval requires a profile, session key, host and permissions.", ExitCode.USAGE_ERROR);
+  }
+  const signingKey = options.jwk as Ed25519PrivateJwk;
+  const signer = signerFromJwk(signingKey);
+  const openkeyOrigin = configuredOrigin(options.openkeyHost ?? DEFAULT_OPENKEY_HOST, "OpenKey");
+  const apiOrigin = configuredOrigin(options.openkeyApiHost ?? process.env.TC_OPENKEY_API_HOST ??
+    (openkeyOrigin === DEFAULT_OPENKEY_HOST ? DEFAULT_OPENKEY_DEVICE_API_HOST : openkeyOrigin), "OpenKey API");
+  const linkApiOrigin = configuredOrigin(process.env.TC_LINKS_API_ORIGIN ?? DEFAULT_LINKS_API_ORIGIN, "Links API");
+  const lifetime = grantLifetimeSeconds(options.expiry);
+  const targetPublicJwk: OpenKeyApprovalRequestV1["targetPublicJwk"] = {
+    kty: signingKey.kty, crv: signingKey.crv, x: signingKey.x,
+  };
+  const spec = { issuer: signer.did, requestVersion: 1 as const, targetDid: signer.did,
+    targetPublicJwk, nodeOrigin: options.host, permissions: options.permissions as OpenKeyApprovalRequestV1["permissions"],
+    ...(options.reason ? { reason: options.reason } : {}), grantLifetimeSeconds: lifetime };
+  if (options.commandIntent !== undefined && !/^auth-grant:[0-9a-f]{64}$/.test(options.commandIntent)) {
+    throw invalid("Invalid approval command intent.");
+  }
+  const matching = (await activePending(profile)).filter((item) => {
+    if (item.commandIntent !== options.commandIntent) return false;
+    const { resultEncryptionPublicJwk: _, permissions: priorPermissions, ...prior } = item.request;
+    const { permissions: nextPermissions, ...next } = spec;
+    if (canonicalJson(prior) !== canonicalJson(next) || item.apiOrigin !== apiOrigin ||
+      item.linkApiOrigin !== linkApiOrigin || item.openkeyOrigin !== openkeyOrigin ||
+      priorPermissions.length !== nextPermissions.length) return false;
+    // Saving the first signed result resolves logical space names to its owner.
+    // Compare that spelling only after re-verifying the original encrypted result.
+    let owner: string | undefined;
+    try { owner = item.resultEnvelope ? verifyPendingResult(item, signingKey).session.ownerDid : item.expectedOwner; }
+    catch (error) {
+      if (error instanceof CLIError && error.code === "AUTH_EXPIRED") return false;
+      throw error;
+    }
+    if ((item.expectedOwner !== undefined || options.expectedOwner !== undefined) &&
+      (!owner || !options.expectedOwner || normalizePkhIdentifier(owner) !== normalizePkhIdentifier(options.expectedOwner))) return false;
+    return priorPermissions.every(({ space, ...permission }, index) => {
+      const { space: nextSpace, ...nextPermission } = nextPermissions[index]!;
+      return canonicalJson(permission) === canonicalJson(nextPermission) &&
+        (owner ? sameLoginSpace(space, nextSpace, owner) : space === nextSpace);
+    });
+  });
+  if (matching.length > 1) throw invalid("Multiple approvals match this command; no result was selected.");
+  let entry = matching[0];
+  if (!entry) {
+    const relay = createECDH("prime256v1");
+    relay.generateKeys();
+    const request = { ...spec, resultEncryptionPublicJwk: relayPublicJwkOf(relay) };
+    const created = await createApprovalRequest({ request, issuerKey: signer, apiOrigin: linkApiOrigin, openkeyOrigin });
+    const profileKey = await ProfileManager.getKey(profile) as Ed25519PrivateJwk | null;
+    entry = { version: 1, request, requestId: created.id, bodyCid: created.bodyCid, approvalUrl: created.link,
+      requestExpiresAt: created.expiresAt, record: created.record, apiOrigin, linkApiOrigin, openkeyOrigin,
+      ...(profileKey && signerFromJwk(profileKey).did === signer.did ? {} : { signingKey }),
+      relayPrivateKey: relay.getPrivateKey().toString("base64url"), expectedOwner: options.expectedOwner, ackId: randomUUID(),
+      ...(options.commandIntent === undefined ? {} : { commandIntent: options.commandIntent }) };
+    await updatePending(profile, (items) => [...items, entry!]);
+  }
+  if (!entry.resultRef && !entry.resultEnvelope) {
+    options.onApprovalRequest?.({ approvalUrl: entry.approvalUrl, requestId: entry.requestId, expiresAt: entry.requestExpiresAt });
+    if (!options.onApprovalRequest) console.error(`Approve this request in OpenKey: ${entry.approvalUrl}`);
+    if (!options.noPopup && !options.onApprovalRequest && process.env.TC_AUTH_NO_POPUP !== "1" && process.env.TC_NO_POPUP !== "1") {
+      await tryOpenBrowser(entry.approvalUrl);
+    }
+  }
+  if (!entry.resultEnvelope) {
+    for (;;) {
+      let response: Response;
+      try { response = await post(entry, "discover", signingKey); }
+      catch {
+        await wait(2000);
+        continue;
+      }
+      if (response.status === 202) {
+        await wait(2000);
+        continue;
+      }
+      if (!response.ok) await throwRemoteError(profile, entry, response, "discover");
+      const discovered = await response.json() as { resultRef?: unknown; expiresAt?: unknown };
+      if (typeof discovered.resultRef !== "string" || !/^[A-Za-z0-9_-]{20,128}$/.test(discovered.resultRef) ||
+        typeof discovered.expiresAt !== "string" || !Number.isFinite(Date.parse(discovered.expiresAt))) {
+        throw invalid("Invalid approval result reference.");
+      }
+      entry.resultRef = discovered.resultRef;
+      entry.resultExpiresAt = discovered.expiresAt;
+      await updatePending(profile, (items) => items.map((item) => item.requestId === entry!.requestId ? entry! : item));
+      let fetched: Response;
+      try { fetched = await post(entry, "fetch", signingKey); } catch { continue; }
+      if (!fetched.ok) await throwRemoteError(profile, entry, fetched, "fetch");
+      const result = await fetched.json() as Record<string, unknown>;
+      if (result.requestId !== entry.requestId || result.bodyCid !== entry.bodyCid ||
+        result.resultRef !== entry.resultRef || result.expiresAt !== entry.resultExpiresAt ||
+        !result.relay || typeof result.relay !== "object") throw invalid("Result reference does not match this request.");
+      entry.resultEnvelope = result.relay;
+      break;
+    }
+  }
+  const verified = verifyPendingResult(entry, signingKey);
+  await updatePending(profile, (items) => items.map((item) => item.requestId === entry!.requestId ? entry! : item));
+  acquisitions.set(verified.delegation, entry);
+  return verified.delegation as DelegationData;
+}
+
+/** Call only after committing authority. Re-check stored evidence under the profile lock and sync it before ACK intent. */
+export async function completeApprovalResult(profile: string, delegation?: object): Promise<void> {
+  const acquired = delegation ? acquisitions.get(delegation) : undefined;
+  const entries = acquired ? [acquired] : await activePending(profile);
+  for (const entry of entries) {
+    if (!acquired && entry.commandIntent !== undefined) continue;
+    if (!entry.resultRef || !entry.resultEnvelope) continue;
+    let saved = false;
+    let expired = false;
+    let ackKey: Ed25519PrivateJwk | undefined;
+    await ProfileManager.withLock(profile, async () => {
+      const key = await ProfileManager.getKey(profile) as Ed25519PrivateJwk | null;
+      if (!key || signerFromJwk(key).did !== entry.request.targetDid) return;
+      let verified: ReturnType<typeof verifyPendingResult>;
+      try { verified = verifyPendingResult(entry, key); }
+      catch (error) {
+        if (!(error instanceof CLIError) || error.code !== "AUTH_EXPIRED") throw error;
+        await updatePending(profile, (items) => items.filter((item) => item.requestId !== entry.requestId));
+        expired = true;
+        return;
+      }
+      const { delegation: verifiedDelegation, session: verifiedSession } = verified;
+      const current = await ProfileManager.getProfile(profile);
+      if (current.ownerDid?.toLowerCase() !== verifiedSession.ownerDid.toLowerCase()) return;
+      const session = await ProfileManager.getSession(profile) as Record<string, unknown> | null;
+      if (session && session.delegationCid === verifiedDelegation.delegationCid &&
+        session.signature === verifiedDelegation.signature && session.siwe === verifiedDelegation.siwe) {
+        await syncAuthCredentialFiles(profilePath(profile));
+        await ProfileManager.setProfileDurable(profile, current);
+        saved = true;
+      } else {
+        const grants = await loadAdditionalDelegations(profile);
+        const stored = grants.find((item) => item.delegation.cid === verifiedDelegation.delegationCid &&
+          item.delegation.siweProof?.siwe === verifiedDelegation.siwe &&
+          item.delegation.siweProof?.signature === verifiedDelegation.signature);
+        if (stored) {
+          const file = await open(additionalDelegationsPath(profile), "r");
+          try { await file.sync(); } finally { await file.close(); }
+          const directory = await open(profilePath(profile), "r");
+          try { await directory.sync(); } finally { await directory.close(); }
+          saved = true;
+        }
+      }
+      if (entry.commandIntent !== undefined) {
+        if (!entry.command) throw invalid("The command result has not been durably saved; no ACK was sent.");
+        await verifyApprovalCommand(profile, entry, entry.command.request, entry.command.result,
+          { delegation: verifiedDelegation, session: verifiedSession });
+        await syncCommandFiles(profile, entry.command.result);
+        saved = true;
+      }
+      if (saved) {
+        entry.committed = true;
+        ackKey = key;
+        delete entry.signingKey;
+        await updatePending(profile, (items) => items.map((item) => item.requestId === entry.requestId ? entry : item));
+      }
+    }, { requireProfile: true });
+    if (expired) continue;
+    if (!saved || !ackKey) {
+      if (acquired) throw invalid("Approval has not been durably saved; no ACK was sent.");
+      continue;
+    }
+    if (entry.acknowledged) continue;
+    let response: Response;
+    try { response = await post(entry, "ack", ackKey); }
+    catch { throw new CLIError("APPROVAL_ACK_PENDING", "Approval is saved; ACK outcome is unknown. Retry this command to acknowledge the same result.", ExitCode.PENDING); }
+    const result = await response.json().catch(() => null) as { ackId?: string; status?: string; code?: string } | null;
+    const terminal = !response.ok && ["expired_result", "not_found", "acknowledged"].includes(result?.code ?? "");
+    if (!terminal && (!response.ok || result?.ackId !== entry.ackId || result?.status !== "acknowledged")) {
+      throw new CLIError("APPROVAL_ACK_PENDING", `Approval is saved; ACK is pending (HTTP ${response.status}). Retry this command.`, ExitCode.PENDING);
+    }
+    await updatePending(profile, (items) => entry.command
+      ? items.map((item) => item.requestId === entry.requestId ? { ...entry, acknowledged: true } : item)
+      : items.filter((item) => item.requestId !== entry.requestId));
+  }
+}

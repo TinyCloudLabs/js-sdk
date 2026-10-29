@@ -7,6 +7,7 @@ services:
       - TC_MCP_PUBLIC_URL=https://mcp.tinycloud.xyz/mcp
       - TC_MCP_STATE_DIR=/var/lib/tinycloud-mcp
       - TC_MCP_STATE_SECRET=${TC_MCP_STATE_SECRET}
+      - TC_MCP_NATIVE_SERVICE_CREDENTIAL
       - TC_MCP_INTROSPECTION_URL=https://api.openkey.so/api/oauth/resource/introspect
       - TC_MCP_INTROSPECTION_CLIENT_ID=${TC_MCP_INTROSPECTION_CLIENT_ID}
       - TC_MCP_INTROSPECTION_CLIENT_SECRET=${TC_MCP_INTROSPECTION_CLIENT_SECRET}

@@ -5,6 +5,7 @@ import { CID } from "multiformats/cid";
 import { base58btc } from "multiformats/bases/base58";
 import { create as createDigest } from "multiformats/hashes/digest";
 import { z } from "zod";
+import { parseEncryptionResource as parseNamedEncryptionResource } from "@tinycloud/sdk-services";
 import { jcsCanonicalize } from "./jcs";
 import { httpResponseError } from "../http-error";
 
@@ -76,6 +77,7 @@ export interface UnifiedContentSource {
   readonly kvResource: string;
   readonly selector: UnifiedResourceSelector;
   readonly encryptionNetwork: string;
+  readonly encryptionKeyPath?: string;
   readonly encryptedSymmetricKeyDigestHex: string;
   readonly keyVersion: number;
   readonly mode: "mutable" | "immutable";
@@ -562,12 +564,9 @@ function parseKvResource(resource: string): { space: string; path: string } {
 }
 
 function parseEncryptionResource(resource: string): void {
-  if (!resource.startsWith("urn:tinycloud:encryption:")) throw new Error("encryption capability is invalid");
-  const rest = resource.slice("urn:tinycloud:encryption:".length);
-  const separator = rest.lastIndexOf(":");
-  const ownerDid = separator < 0 ? "" : rest.slice(0, separator);
-  const network = separator < 0 ? "" : rest.slice(separator + 1);
-  if (!ownerDid.startsWith("did:") || network.length === 0 || network.includes(":") || network.includes("/") || network.includes("%") || network.includes("?") || network.includes("#")) {
+  try {
+    if (parseNamedEncryptionResource(resource).keyPath?.endsWith("/")) throw new Error("prefix");
+  } catch {
     throw new Error("encryption capability is invalid");
   }
 }

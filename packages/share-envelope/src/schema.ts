@@ -422,6 +422,23 @@ const unifiedEncryptionNetworkSchema = z.string().refine((value) => {
   const network = separator < 0 ? "" : rest.slice(separator + 1);
   return owner.startsWith("did:") && owner.length > 4 && network.length > 0 && !/[:/%?#\s]/.test(network);
 }, { message: "expected canonical TinyCloud encryption network" });
+const unifiedEncryptionResourceSchema = z.string().refine((value) => {
+  const prefix = "urn:tinycloud:encryption:";
+  if (!value.startsWith(prefix)) return false;
+  const match = /^(did:.+):([^/:?#\s]+)(?:\/(.+))?$/.exec(value.slice(prefix.length));
+  if (match === null) return false;
+  const path = match[3];
+  return path === undefined || path.split("/").every((segment) =>
+    segment.length > 0 && segment !== "." && segment !== ".." && !/[\\:%?#\s]/.test(segment)
+  );
+}, { message: "expected a canonical TinyCloud encryption resource" });
+const unifiedEncryptionKeyPathSchema = z.string().regex(/^share\/[^/]+$/).refine(
+  (value) => {
+    const segment = value.slice("share/".length);
+    return segment !== "." && segment !== ".." && !/[\\:%?#\s]/.test(segment);
+  },
+  { message: "expected an exact share key path" },
+);
 const unifiedKvCapabilitySchema = z.object({
   kind: z.literal("kv"),
   resource: unifiedResourceSchema,
@@ -435,7 +452,7 @@ const unifiedKvCapabilitySchema = z.object({
 }).strict();
 const unifiedEncryptionCapabilitySchema = z.object({
   kind: z.literal("encryption"),
-  resource: unifiedEncryptionNetworkSchema,
+  resource: unifiedEncryptionResourceSchema,
   action: z.literal("tinycloud.encryption/decrypt"),
 }).strict();
 const unifiedCapabilitySchema = z.union([unifiedKvCapabilitySchema, unifiedEncryptionCapabilitySchema]);
@@ -444,6 +461,7 @@ const unifiedContentSourceSchema = z.object({
   kvResource: unifiedResourceSchema,
   selector: z.union([z.literal("exact"), z.literal("prefix")]),
   encryptionNetwork: unifiedEncryptionNetworkSchema,
+  encryptionKeyPath: unifiedEncryptionKeyPathSchema.optional(),
   encryptedSymmetricKeyDigestHex: z.string().regex(/^[0-9a-f]{64}$/),
   keyVersion: z.number().int().positive(),
   mode: z.union([z.literal("mutable"), z.literal("immutable")]),
@@ -564,16 +582,23 @@ function validateV3Invariants(value: z.infer<typeof unsignedShareEnvelopeV3BaseS
   if (value.attestedEnforcerBinding.nodeAudience !== value.target.nodeAudience || value.attestedEnforcerBinding.signature.signerDid !== value.attestedEnforcerBinding.nodeAudience || Date.parse(value.attestedEnforcerBinding.expiresAt) < Date.parse(value.expiry)) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["attestedEnforcerBinding"], message: "enforcer binding does not cover the target and share lifetime" });
   }
-  if (value.policy.contentSource.shareId !== value.contentSource.shareId || value.policy.contentSource.kvResource !== value.contentSource.kvResource || value.policy.contentSource.selector !== value.contentSource.selector || value.policy.contentSource.encryptionNetwork !== value.encryptionNetwork || value.policy.contentSource.encryptedSymmetricKeyDigestHex !== value.contentSource.encryptedSymmetricKeyDigestHex || value.policy.contentSource.keyVersion !== value.contentSource.keyVersion || value.policy.contentSource.mode !== value.contentSource.mode || value.policy.contentSource.initialCiphertextDigestHex !== value.contentSource.initialCiphertextDigestHex) {
+  const encryptionKeyPath = value.contentSource.encryptionKeyPath;
+  if (encryptionKeyPath !== undefined && encryptionKeyPath !== `share/${value.contentSource.shareId}`) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["contentSource", "encryptionKeyPath"], message: "share key path must name this share" });
+  }
+  if (value.policy.contentSource.shareId !== value.contentSource.shareId || value.policy.contentSource.kvResource !== value.contentSource.kvResource || value.policy.contentSource.selector !== value.contentSource.selector || value.policy.contentSource.encryptionNetwork !== value.encryptionNetwork || value.policy.contentSource.encryptionKeyPath !== encryptionKeyPath || value.policy.contentSource.encryptedSymmetricKeyDigestHex !== value.contentSource.encryptedSymmetricKeyDigestHex || value.policy.contentSource.keyVersion !== value.contentSource.keyVersion || value.policy.contentSource.mode !== value.contentSource.mode || value.policy.contentSource.initialCiphertextDigestHex !== value.contentSource.initialCiphertextDigestHex) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["contentSource"], message: "content source is not bound to policy" });
   }
   if (value.policy.signature.suite !== "Ed25519" || value.policy.signature.signerDid !== value.policy.ownerDid) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["policy", "signature"], message: "policy must be signed by its owner" });
   }
   const kvCapabilities = value.policy.capabilityCeiling.filter((capability) => capability.kind === "kv");
-  const decryptCapabilities = value.policy.capabilityCeiling.filter((capability) => capability.kind === "encryption" && capability.resource === value.encryptionNetwork && capability.action === "tinycloud.encryption/decrypt");
+  const expectedEncryptionResource = encryptionKeyPath === undefined
+    ? value.encryptionNetwork
+    : `${value.encryptionNetwork}/${encryptionKeyPath}`;
+  const decryptCapabilities = value.policy.capabilityCeiling.filter((capability) => capability.kind === "encryption" && capability.resource === expectedEncryptionResource && capability.action === "tinycloud.encryption/decrypt");
   if (value.policy.capabilityCeiling.length !== 2 || kvCapabilities.length !== 1 || decryptCapabilities.length !== 1 || kvCapabilities[0]?.resource !== value.contentSource.kvResource || kvCapabilities[0]?.selector !== value.contentSource.selector) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["policy", "capabilityCeiling"], message: "policy ceiling must contain exact decrypt network" });
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["policy", "capabilityCeiling"], message: "policy ceiling must contain the exact decrypt resource" });
   }
 }
 

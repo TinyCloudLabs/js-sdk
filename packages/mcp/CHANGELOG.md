@@ -1,5 +1,105 @@
 # @tinycloud/mcp
 
+## 0.8.3-beta.24
+
+### Patch Changes
+
+- Updated dependencies [9fb359a]
+- Updated dependencies [9fb359a]
+  - @tinycloud/node-sdk@3.8.0-beta.21
+  - @tinycloud/operations@0.7.7-beta.20
+
+## 0.8.3-beta.23
+
+### Patch Changes
+
+- 73b4604: The `tinycloud-cli` skill, the MCP skill and both READMEs now describe one agent setup path: start at https://agents.tinycloud.xyz/onboarding, sign in with `tinycloud onboard`, and ask for more access with `tinycloud auth request ... --grant --paste`. Agent guides use Node.js 22.20 or later.
+
+  Details: TC-2239
+
+## 0.8.3-beta.22
+
+### Patch Changes
+
+- Updated dependencies [e424ba9]
+  - @tinycloud/node-sdk@3.8.0-beta.20
+  - @tinycloud/operations@0.7.7-beta.19
+
+## 0.8.3-beta.21
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.8.0-beta.19
+- @tinycloud/operations@0.7.7-beta.18
+
+## 0.8.3-beta.20
+
+### Patch Changes
+
+- 3daddbb: Add the shared SQLite Home feed protocol and CLI commands for owner-provisioned agent connections, card publishing, durable responses, acknowledgements, outcomes, and external runtime handoff. Hook readiness and logical database notifications drive response reconciliation. Feed watch uses a durable local SQLite handoff ledger with explicit saved, delivered, and handling states, and supports Bun or Node.js 22.13+.
+
+  Support versioned private response payloads saved atomically with their headers and read explicitly through the existing response database authority. Default response notifications and durable handoff copies include only allowlisted headers and payload metadata.
+
+  Add opt-in `redactErrors` to SQL query, execute, and batch calls so private response operations receive static errors with known codes and HTTP status before ordinary service-error delivery. Calls without the option retain their existing error details.
+
+  Add explicit outbound feed messages without changing card decisions or owner-private state. Messages share immutable response identities, atomic private payloads, and notification-safe handoff. Exact-identity handling reads retain historical acknowledgement and outcome receipts after later answers or messages.
+
+  Feed listeners cancel pending response queries on caller abort and stop cleanly for expected cancellation while preserving unrelated query failures.
+
+  Refresh the generated MCP skill coverage for the Commander-owned feed commands; no MCP tools are added.
+
+  Details: TC-2205
+  - @tinycloud/node-sdk@3.8.0-beta.18
+  - @tinycloud/operations@0.7.7-beta.17
+
+## 0.8.3-beta.19
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.8.0-beta.17
+- @tinycloud/operations@0.7.7-beta.16
+
+## 0.8.3-beta.18
+
+### Patch Changes
+
+- Updated dependencies [812a818]
+- Updated dependencies [812a818]
+  - @tinycloud/node-sdk@3.8.0-beta.16
+  - @tinycloud/operations@0.7.7-beta.15
+
+## 0.8.3-beta.17
+
+### Patch Changes
+
+- 5476661: Add service-authenticated native grant intake and owner-isolated hosted MCP calls using verified connector delegations.
+
+  Details: TC-2196
+
+## 0.8.3-beta.16
+
+### Patch Changes
+
+- 7e692f6: Add the hosted MCP landing, truthful authentication and readiness metadata, and protected-resource discovery alias without changing authentication on `/mcp`.
+
+  Details: TC-1362
+
+## 0.8.3-beta.15
+
+### Patch Changes
+
+- Updated dependencies [f167805]
+  - @tinycloud/node-sdk@3.8.0-beta.15
+  - @tinycloud/operations@0.7.7-beta.14
+
+## 0.8.3-beta.14
+
+### Patch Changes
+
+- Updated dependencies [e740a6d]
+  - @tinycloud/node-sdk@3.8.0-beta.14
+  - @tinycloud/operations@0.7.7-beta.13
+
 ## 0.8.3-beta.13
 
 ### Patch Changes

@@ -1,31 +1,31 @@
 # @tinycloud/mcp
 
-TinyCloud MCP server for delegated operations. It supports local stdio and a
-hosted Streamable HTTP resource server. Both transports use exact, revocable
-TinyCloud capabilities and never silently fall back to owner authority.
+TinyCloud MCP server for delegated operations. Agents that can run the CLI
+should use https://agents.tinycloud.xyz/onboarding instead. Any agent that
+supports remote MCP connects to the hosted Streamable HTTP endpoint
+`https://mcp.tinycloud.xyz/mcp`, using OpenKey OAuth; Claude and ChatGPT are
+examples. Local stdio is the alternative when you want your MCP client to
+launch the server as a local process.
+Both transports use exact, revocable TinyCloud capabilities and never silently fall back to owner authority.
+
+ChatGPT users can add `https://mcp.tinycloud.xyz/mcp` on the web under Plugins → + → Add custom MCP server; Developer Mode isn't required first.
+Availability depends on the ChatGPT plan and workspace settings. Follow
+[OpenAI's custom MCP connection guide](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt).
+
+## Hosted Streamable HTTP
+
+Any agent that supports remote MCP can add the hosted URL and complete OpenKey
+OAuth when it supports Streamable HTTP and OAuth; in Claude, add it as a remote
+MCP connector. Meetings are available through the CLI.
 
 ## Local stdio requirements
 
-- Node.js 20 or newer
+- Node.js 22.20 or later
 - `@tinycloud/cli`
-- A delegated TinyCloud profile
+- A profile signed in with `tinycloud onboard`
 - A TinyCloud node running 1.6.0 or newer
 
-## Public ChatGPT release candidate
-
-The candidate is **not published**. Its separate endpoint is
-`https://mcp.tinycloud.xyz/chatgpt/mcp`, with exactly `tinycloud_connect`,
-`tinycloud_apps_context`, `tinycloud_apps_read`, `tinycloud_apps_write` and
-`tinycloud_apps_query`. Excluded tools are not callable by name. The existing
-broad `/mcp` endpoint and local stdio remain available for private integrations.
-ChatGPT users need no CLI, local profile or bundled skill.
-
-The public resource has its own OAuth audience, tenant state under
-`<TC_MCP_STATE_DIR>/chatgpt`, and `/chatgpt/connect` approval/callback paths.
-Deploy the corresponding OpenKey API audience and web callback registrations
-before testing the candidate. Existing broad-service approvals do not migrate
-into the public tenant store. Account connection, personal-record access and
-the optional derived SQL copy require their respective approvals.
+## Hosted personal-record behavior
 
 Context can persist an IANA timezone; query can overwrite or rebuild derived
 data. Both therefore advertise `readOnlyHint: false` and
@@ -36,30 +36,6 @@ credentials, payment-card data, government identifiers or protected health
 information. Respect declined approval and the client's destructive-action
 confirmation flow. Ask for an IANA timezone, not a city or precise location.
 
-Package sources are in `plugin/package/`. From the repository root:
-
-```bash
-python3 -m venv /tmp/tinycloud-plugin-validator
-/tmp/tinycloud-plugin-validator/bin/pip install 'jsonschema>=4,<5'
-/tmp/tinycloud-plugin-validator/bin/python packages/mcp/scripts/package-plugin.py \
-  --output /tmp/tinycloud-plugin-release
-```
-
-The packager validates the canonical Agent Plugins schemas, produces a
-deterministic ZIP containing only the two manifests and logo, and reports its
-SHA-256. `plugin/review-evidence.json` is deliberately excluded: test definitions
-are not passing ChatGPT evidence, and reviewer credentials never belong in the
-ZIP. The schema-valid MCP manifest relies on OAuth discovery; verify imported
-authentication and scopes in the portal rather than adding schema-invalid
-per-server extensions.
-
-Release gates remain: explicit owner approval for default-branch merges and
-deployment; actual ChatGPT web/mobile acceptance; an independently usable
-reviewer account and synthetic fixtures; approved privacy, terms, support and
-country availability; the real walkthrough recording; publisher/domain
-verification; review approval and explicit publication. A successful local
-smoke or package validation does not satisfy those gates. Do not enable
-auto-merge or deploy around the approval requirement.
 
 ## Install and configure
 
@@ -185,8 +161,16 @@ include.
 TinyCloud production uses `docker-compose.phala.yml`. The manual
 `Publish hosted MCP image` workflow publishes an exact package-version image
 and deploys that image to the `tinycloud-mcp` Phala CVM. Its `production`
-environment requires `PHALA_CLOUD_API_KEY`, `CLOUDFLARE_API_TOKEN`, and a stable
-32-byte-or-longer `TC_MCP_STATE_SECRET`.
+environment requires `PHALA_CLOUD_API_KEY`, `CLOUDFLARE_API_TOKEN`, a stable
+32-byte-or-longer `TC_MCP_STATE_SECRET`, `TC_MCP_INTROSPECTION_CLIENT_ID`,
+`TC_MCP_INTROSPECTION_CLIENT_SECRET`, and `TC_MCP_NATIVE_SERVICE_CREDENTIAL`.
+
+The workflow writes a mode-`0600` complete application environment file from
+the production values and uses that same file for Phala's encrypted environment
+update and image deploy. The update preserves existing `allowed_envs` names and
+adds the deploy keys; it does not send a name-only patch. The Phala control-plane
+credential is not included in the application file or logged, and the existing
+state secret is reused unchanged.
 
 The workflow fails, before building or deploying, unless the `tinycloud-mcp` CVM
 runs the production OS image pinned in `PHALA_OS_IMAGE` / `PHALA_OS_IMAGE_HASH`
@@ -266,7 +250,7 @@ Configure a local stdio server in your MCP client:
   "mcpServers": {
     "tinycloud": {
       "command": "tinycloud-mcp",
-      "args": ["--profile", "agent"]
+      "args": ["--profile", "default", "--allow-owner-profile"]
     }
   }
 }
@@ -305,7 +289,7 @@ profile's stored session and reports, without reading any value, whether each
 named secret is `ready`, `pending` (with a Secret Manager `/request` setup
 link), or `consent_required` (no permission request is saved). When it cannot
 proceed, `error.details.recovery` names the next step: `sign_in` carries the
-persistent `tc --profile <P> auth login ...` command to run in a terminal, and
+persistent `tinycloud --profile <P> auth login ...` command to run in a terminal, and
 `complete_migration` carries `tool: "tinycloud_auth_capabilities"`, which you
 call once before retrying status.
 
@@ -345,23 +329,18 @@ are read-only and bounded; SQL execution accepts one parameterized `INSERT`,
 `UPDATE`, or `DELETE` and requires explicit acknowledgement that the delegated
 SQL write capability is database-wide.
 
-## Delegate bootstrap
+## Sign in
 
-A new `delegate-session` profile has a key but no TinyCloud authority. Complete
-the one-time bootstrap flow before starting MCP:
-
-1. Create an exact request with `tc auth request --cap ...`.
-2. Have the owner grant that request.
-3. Import the returned delegation with `tc auth import`.
-
-After bootstrap, MCP tools can create exact permission requests and import the
-request-bound delegations. Requests and imports persist, so approval and retry
-can happen in separate processes.
+Run `tinycloud onboard` once, then start
+`tinycloud-mcp --profile <that profile> --allow-owner-profile`. MCP tools can
+then create exact permission requests and import the request-bound
+delegations. Requests and imports persist, so approval and retry can happen in
+separate processes.
 
 Each imported delegation is stored with the request it was checked against.
 Every tool call reinstalls a stored compact-UCAN delegation only when its
 signed capabilities fit inside that request, so a delegation broader than its
-binding is refused before it is activated. `tc auth import` of an artifact
+binding is refused before it is activated. `tinycloud auth import` of an artifact
 with no request binds the delegation to exactly its own signed capabilities.
 Delegations stored by earlier releases are bound once, the same way, by the
 first command that restores the profile's session; after that, a record
@@ -383,3 +362,4 @@ Secret values are excluded from TinyCloud text output, logs, errors, request
 files, delegation files, and generated artifacts. MCP hosts may retain
 structured tool results in their own transcripts, so use a client and retention
 policy appropriate for secrets.
+

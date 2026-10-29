@@ -2,6 +2,7 @@ import { createServiceContext } from "./recordingServiceContext";
 import { unrecordedFetchOf } from "./recordingRegistry";
 import { signedCompactUcanExpiry } from "./delegation";
 import { generateNonce, SiweMessage } from "siwe";
+import { didKeyFromEd25519PublicKey } from "@tinycloud/share-envelope";
 /**
  * TinyCloudNode - High-level API for Node.js users.
  *
@@ -131,10 +132,13 @@ import {
   ENCRYPTION_PERMISSION_SERVICE,
   CaveatedDelegationUnsupportedError,
   PermissionNotInManifestError,
+  ManifestValidationError,
   SessionExpiredError,
   canonicalizeRecapCaveats,
   recapCaveatsEqual,
   expandPermissionEntries as expandPermissionEntriesCore,
+  expandRuntimePermissionEntries,
+  expandDelegationPermissionEntries,
   isCapabilitySubset,
   isExplicitOnlyAction,
   parseRecapCapabilities,
@@ -1054,6 +1058,8 @@ export interface RuntimePermissionGrantOptions {
    * session's address.
    */
   signMessage?: (siwe: string) => Promise<string>;
+  /** In-memory key snapshot captured when exact Share-key consent opened. */
+  expectedSessionKey?: Readonly<TinyCloudSession["jwk"]>;
 }
 
 export interface EnsureEncryptionNetworkOptions {
@@ -5573,7 +5579,9 @@ export class TinyCloudNode {
           graph.assertActive();
           const signed = await this.signRawNetworkAuthorization({
             targetNode: input.targetNode,
-            networkId: input.networkId,
+            networkId: input.body.keyPath === undefined
+              ? input.networkId
+              : `${input.networkId}/${input.body.keyPath}`,
             action: DECRYPT_ACTION,
             facts: input.facts,
           }, { graph, session });
@@ -6685,7 +6693,7 @@ export class TinyCloudNode {
       return false;
     }
 
-    const expanded = this.expandPermissionEntries(permissions);
+    const expanded = expandRuntimePermissionEntries(permissions, pkhDid(session.address, session.chainId));
     if (this.sessionCoversPermissionEntries(session, expanded)) {
       return true;
     }
@@ -6715,7 +6723,7 @@ export class TinyCloudNode {
     if (!session || !Array.isArray(permissions) || permissions.length === 0) {
       return [];
     }
-    const expanded = this.expandPermissionEntries(permissions);
+    const expanded = expandRuntimePermissionEntries(permissions, pkhDid(session.address, session.chainId));
     return this.findRuntimeGrantsForPermissionEntries(expanded, session).map(
       (grant) => grant.delegation,
     );
@@ -6921,7 +6929,39 @@ export class TinyCloudNode {
       }
     }
 
-    const expanded = this.expandPermissionEntries(permissions);
+    const expanded = expandRuntimePermissionEntries(permissions, pkhDid(session.address, session.chainId));
+    const bindsShareKey = expanded.some((entry) => entry.service === ENCRYPTION_PERMISSION_SERVICE &&
+      entry.actions.includes("tinycloud.encryption/key.create"));
+    const captured = bindsShareKey
+      ? { ...session, jwk: { ...(options?.expectedSessionKey ?? session.jwk) } }
+      : session;
+    const assertCapturedKey = bindsShareKey ? () => {
+      const live = session.jwk as JWK;
+      const key = captured.jwk as JWK;
+      if (this.currentTinyCloudSession() !== session ||
+        session.verificationMethod !== captured.verificationMethod ||
+        session.delegationCid !== captured.delegationCid || session.spaceId !== captured.spaceId ||
+        session.address !== captured.address || session.chainId !== captured.chainId ||
+        live?.kty !== key.kty || live?.crv !== key.crv || live?.x !== key.x ||
+        live?.y !== key.y || live?.d !== key.d) {
+        throw new Error("Runtime permission request cancelled because the session key changed.");
+      }
+    } : undefined;
+    // The node's own session key, not the mutable label on `restorableSession`, anchors the consent key.
+    const sessionKeyDid = bindsShareKey ? this.sessionDid : undefined;
+    if (bindsShareKey) {
+      const key = captured.jwk as JWK;
+      if (key.kty !== "OKP" || key.crv !== "Ed25519" || typeof key.x !== "string") {
+        throw new Error("Runtime permission session key does not match its signed identity.");
+      }
+      const keyDid = didKeyFromEd25519PublicKey(base64UrlDecode(key.x));
+      if (!didPrincipalMatches(keyDid, sessionKeyDid!) ||
+        !didPrincipalMatches(keyDid, captured.verificationMethod) ||
+        !didPrincipalMatches(keyDid, new SiweMessage(session.siwe).uri)) {
+        throw new Error("Runtime permission session key does not match its signed identity.");
+      }
+      assertCapturedKey!();
+    }
     if (this.sessionCoversPermissionEntries(session, expanded)) {
       return [];
     }
@@ -6978,13 +7018,13 @@ export class TinyCloudNode {
             ...(rawForDelegation.length > 0
               ? { rawAbilities: this.permissionsToRawAbilities(rawForDelegation) }
               : {}),
-            address: this.wasmBindings.ensureEip55(session.address),
-            chainId: session.chainId,
+            address: this.wasmBindings.ensureEip55(captured.address),
+            chainId: captured.chainId,
             domain: this.siweDomain,
             issuedAt: now.toISOString(),
             expirationTime: expiresAt.toISOString(),
             spaceId,
-            jwk: session.jwk,
+            jwk: captured.jwk,
           });
         } catch (error) {
           if (
@@ -6999,6 +7039,11 @@ export class TinyCloudNode {
           throw error;
         }
       })();
+      if (bindsShareKey &&
+        !didPrincipalMatches(new SiweMessage(prepared.siwe).uri, sessionKeyDid!)) {
+        throw new Error("Prepared runtime permission targets a different session key.");
+      }
+      assertCapturedKey?.();
 
       if (options?.signMessage !== undefined) {
         this.assertRuntimeGrantMessage(prepared.siwe, session);
@@ -7014,6 +7059,7 @@ export class TinyCloudNode {
       }
       // Nothing is activated for a session that ended while the wallet signed.
       graph.assertActive();
+      assertCapturedKey?.();
       const delegatedSession = this.wasmBindings.completeSessionSetup({
         ...prepared,
         signature,
@@ -7048,19 +7094,20 @@ export class TinyCloudNode {
         delegatedSession,
         delegatedEntries,
         spaceId,
-        session,
+        captured,
         expiresAt,
         { siwe: prepared.siwe, signature },
       );
       // The session may have been replaced or signed out while signing.
       graph.assertActive();
+      assertCapturedKey?.();
       this.runtimePermissionGrants.push({
         session: {
           delegationHeader: delegatedSession.delegationHeader,
           delegationCid: delegatedSession.delegationCid,
           spaceId,
-          verificationMethod: session.verificationMethod,
-          jwk: session.jwk,
+          verificationMethod: captured.verificationMethod,
+          jwk: captured.jwk,
         },
         delegation,
         operations: this.permissionOperations(delegatedEntries, spaceId),
@@ -7463,7 +7510,21 @@ export class TinyCloudNode {
     //    for every entry so the subset check and downstream WASM call
     //    both see canonical form. This also deep-copies the entries so
     //    we don't mutate caller-owned data.
-    const expandedEntries = this.expandPermissionEntries(permissions);
+    const expandedEntries = expandDelegationPermissionEntries(permissions);
+    const namedKeyEntries = expandedEntries.filter((entry) =>
+      entry.service === ENCRYPTION_PERMISSION_SERVICE && entry.path.includes("/"));
+    if (namedKeyEntries.length > 0) {
+      if (expandedEntries.some((entry) =>
+        entry.service === ENCRYPTION_PERMISSION_SERVICE && !entry.path.includes("/"))) {
+        throw new ManifestValidationError("named-key delegation cannot include bare-network permissions");
+      }
+      if (options?.forceWalletSign) {
+        throw new ManifestValidationError("named-key delegation requires a signed session grant");
+      }
+      const granted = this.projectSignedRecapCapabilities(session.siwe);
+      const { subset, missing } = this.signedCapabilitySubset(namedKeyEntries, granted);
+      if (!subset) throw new PermissionNotInManifestError(missing, granted);
+    }
 
     // 4. Compute expiration. `options.expiry` overrides the default
     //    (DEFAULT_DELEGATION_EXPIRY_MS); ms-format ("7d") or a raw

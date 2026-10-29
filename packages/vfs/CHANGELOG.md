@@ -1,5 +1,60 @@
 # @tinycloud/vfs
 
+## 0.2.14-beta.19
+
+### Patch Changes
+
+- Updated dependencies [9fb359a]
+- Updated dependencies [9fb359a]
+  - @tinycloud/node-sdk@3.8.0-beta.21
+
+## 0.2.14-beta.18
+
+### Patch Changes
+
+- Updated dependencies [e424ba9]
+  - @tinycloud/node-sdk@3.8.0-beta.20
+
+## 0.2.14-beta.17
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.8.0-beta.19
+
+## 0.2.14-beta.16
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.8.0-beta.18
+
+## 0.2.14-beta.15
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.8.0-beta.17
+
+## 0.2.14-beta.14
+
+### Patch Changes
+
+- Updated dependencies [812a818]
+- Updated dependencies [812a818]
+  - @tinycloud/node-sdk@3.8.0-beta.16
+
+## 0.2.14-beta.13
+
+### Patch Changes
+
+- Updated dependencies [f167805]
+  - @tinycloud/node-sdk@3.8.0-beta.15
+
+## 0.2.14-beta.12
+
+### Patch Changes
+
+- Updated dependencies [e740a6d]
+  - @tinycloud/node-sdk@3.8.0-beta.14
+
 ## 0.2.14-beta.11
 
 ### Patch Changes

@@ -40,7 +40,7 @@ import { ProfileManager } from "../config/profiles.js";
 import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { resolveSpaceUri } from "./space.js";
-import { isRawEncryptionPermission } from "./raw-encryption.js";
+import { isDeviceDefaultDecrypt, isRawEncryptionPermission, isSharePublishingPrefixDecrypt } from "./raw-encryption.js";
 import { canonicalOwnerDid } from "./owner-did.js";
 import { assertNoCaveatLimits } from "./caveat-refusal.js";
 import { SHARE_PUBLISHING_MANIFEST, SHARE_PUBLISHING_MANIFEST_REF } from "../share/publishing-manifest.js";
@@ -479,6 +479,13 @@ export async function loadManifestPermissions(
 ): Promise<PermissionEntry[]> {
   const raw = await loadManifestText(source);
   const manifest = JSON.parse(raw) as Record<string, unknown>;
+  // OpenKey's device sign-in refuses encryption grants, so the built-in Share publishing manifest goes through it
+  // without its default-key decrypt entry. A paste sign-in keeps the entry.
+  if (options.device && source === SHARE_PUBLISHING_MANIFEST_REF && Array.isArray(manifest.permissions)) {
+    manifest.permissions = manifest.permissions.filter((entry: unknown) =>
+      !(entry !== null && typeof entry === "object" &&
+        normalizeService(String((entry as Record<string, unknown>).service ?? "")) === "tinycloud.encryption"));
+  }
   // Checked on the manifest as written, before resolution rewrites its entries.
   if (Array.isArray(manifest.permissions)) assertNoCaveatLimits(manifest.permissions);
   if (options.device && typeof manifest.app_id === "string" &&
@@ -655,7 +662,7 @@ export function compactPermission(permission: PermissionEntry): string {
 export async function resolvePermissionSpaces(
   entries: PermissionEntry[],
   profile: string,
-  options: { allowLogicalSpaces?: boolean } = {},
+  options: { allowLogicalSpaces?: boolean; ownerDid?: string } = {},
 ): Promise<PermissionEntry[]> {
   const profileConfig = await ProfileManager.getProfile(profile);
   // First login (and delegates) may not know the owner's address yet. Keep
@@ -672,6 +679,17 @@ export async function resolvePermissionSpaces(
       // A network URN is never prefixed; send OpenKey the contract shape.
       const { skipPrefix: _skipPrefix, ...raw } = entry;
       resolved.push({ ...raw, service, space: ENCRYPTION_MANIFEST_SPACE, actions });
+      continue;
+    }
+    // The built-in Share manifest's default/share/ decrypt is a raw encryption prefix,
+    // the shape every raw encryption entry has. Without a known owner the login is refused: a profile without
+    // this entry cannot publish email shares.
+    if (isSharePublishingPrefixDecrypt({ ...entry, service, actions })) {
+      resolved.push({ service, space: ENCRYPTION_MANIFEST_SPACE, path: `${await defaultSecretsNetworkId(profile, options.ownerDid)}/share/`, actions });
+      continue;
+    }
+    if (isDeviceDefaultDecrypt({ ...entry, service, actions })) {
+      resolved.push({ service, space: ENCRYPTION_MANIFEST_SPACE, path: await defaultSecretsNetworkId(profile, options.ownerDid), actions });
       continue;
     }
     let space: string;

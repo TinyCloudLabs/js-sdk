@@ -60,7 +60,7 @@ export type DeviceApprovalPrompt = {
   expiresAt: string;
 };
 
-type DeviceRelayEnvelope = {
+export type DeviceRelayEnvelope = {
   version: 1;
   algorithm: "ECDH-P256-A256GCM";
   ephemeralPublicJwk: { kty: "EC"; crv: "P-256"; x: string; y: string };
@@ -281,12 +281,12 @@ function onP256(x: Buffer, y: Buffer): boolean {
  * Bun 1.2.0 (the CI test runtime) corrupts memory in `diffieHellman()` once a
  * garbage collection separates two calls.
  */
-function relayPublicJwkOf(relayKey: ECDH): DeviceRelayEnvelope["ephemeralPublicJwk"] {
+export function relayPublicJwkOf(relayKey: ECDH): DeviceRelayEnvelope["ephemeralPublicJwk"] {
   const point = relayKey.getPublicKey();
   return publicRelayJwk({ kty: "EC", crv: "P-256", x: point.subarray(1, 33).toString("base64url"), y: point.subarray(33).toString("base64url") });
 }
 
-function decryptRelayResult(envelope: unknown, transactionId: string, relayKey: ECDH): Record<string, unknown> {
+export function decryptRelayResult(envelope: unknown, transactionId: string, relayKey: ECDH): Record<string, unknown> {
   if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) throw invalidResponse("OpenKey returned an invalid encrypted relay result");
   const relay = envelope as Partial<DeviceRelayEnvelope>;
   if (relay.version !== 1 || relay.algorithm !== "ECDH-P256-A256GCM") throw invalidResponse("OpenKey returned an unsupported encrypted relay result");
