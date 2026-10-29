@@ -1,8 +1,10 @@
 # @tinycloud/mcp
 
-TinyCloud MCP server for delegated operations. The canonical remote connection
-is the hosted Streamable HTTP endpoint `https://mcp.tinycloud.xyz/mcp`, using
-OpenKey OAuth. Local stdio is the alternative when you want your MCP client to
+TinyCloud MCP server for delegated operations. Agents that can run the CLI
+should use https://agents.tinycloud.xyz/onboarding instead. Any agent that
+supports remote MCP connects to the hosted Streamable HTTP endpoint
+`https://mcp.tinycloud.xyz/mcp`, using OpenKey OAuth; Claude and ChatGPT are
+examples. Local stdio is the alternative when you want your MCP client to
 launch the server as a local process.
 Both transports use exact, revocable TinyCloud capabilities and never silently fall back to owner authority.
 
@@ -12,15 +14,15 @@ Availability depends on the ChatGPT plan and workspace settings. Follow
 
 ## Hosted Streamable HTTP
 
-In Claude, add the hosted URL as a remote MCP connector and complete OpenKey
-OAuth. Other remote clients can connect when they support Streamable HTTP and
-OAuth.
+Any agent that supports remote MCP can add the hosted URL and complete OpenKey
+OAuth when it supports Streamable HTTP and OAuth; in Claude, add it as a remote
+MCP connector. Meetings are available through the CLI.
 
 ## Local stdio requirements
 
-- Node.js 20 or newer
+- Node.js 22.20 or later
 - `@tinycloud/cli`
-- A delegated TinyCloud profile
+- A profile signed in with `tinycloud onboard`
 - A TinyCloud node running 1.6.0 or newer
 
 ## Hosted personal-record behavior
@@ -248,7 +250,7 @@ Configure a local stdio server in your MCP client:
   "mcpServers": {
     "tinycloud": {
       "command": "tinycloud-mcp",
-      "args": ["--profile", "agent"]
+      "args": ["--profile", "default", "--allow-owner-profile"]
     }
   }
 }
@@ -287,7 +289,7 @@ profile's stored session and reports, without reading any value, whether each
 named secret is `ready`, `pending` (with a Secret Manager `/request` setup
 link), or `consent_required` (no permission request is saved). When it cannot
 proceed, `error.details.recovery` names the next step: `sign_in` carries the
-persistent `tc --profile <P> auth login ...` command to run in a terminal, and
+persistent `tinycloud --profile <P> auth login ...` command to run in a terminal, and
 `complete_migration` carries `tool: "tinycloud_auth_capabilities"`, which you
 call once before retrying status.
 
@@ -327,23 +329,18 @@ are read-only and bounded; SQL execution accepts one parameterized `INSERT`,
 `UPDATE`, or `DELETE` and requires explicit acknowledgement that the delegated
 SQL write capability is database-wide.
 
-## Delegate bootstrap
+## Sign in
 
-A new `delegate-session` profile has a key but no TinyCloud authority. Complete
-the one-time bootstrap flow before starting MCP:
-
-1. Create an exact request with `tc auth request --cap ...`.
-2. Have the owner grant that request.
-3. Import the returned delegation with `tc auth import`.
-
-After bootstrap, MCP tools can create exact permission requests and import the
-request-bound delegations. Requests and imports persist, so approval and retry
-can happen in separate processes.
+Run `tinycloud onboard` once, then start
+`tinycloud-mcp --profile <that profile> --allow-owner-profile`. MCP tools can
+then create exact permission requests and import the request-bound
+delegations. Requests and imports persist, so approval and retry can happen in
+separate processes.
 
 Each imported delegation is stored with the request it was checked against.
 Every tool call reinstalls a stored compact-UCAN delegation only when its
 signed capabilities fit inside that request, so a delegation broader than its
-binding is refused before it is activated. `tc auth import` of an artifact
+binding is refused before it is activated. `tinycloud auth import` of an artifact
 with no request binds the delegation to exactly its own signed capabilities.
 Delegations stored by earlier releases are bound once, the same way, by the
 first command that restores the profile's session; after that, a record
