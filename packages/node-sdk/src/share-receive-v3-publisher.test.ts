@@ -106,12 +106,14 @@ test("a V3 publisher link rejects another share's key and a substituted key befo
 
 test("a proved recipient session reads and decrypts the signed share from the V3 publisher", async () => {
   const symmetricKey = key(41);
-  const encryptedSymmetricKey = "network-wrapped-key";
+  const wrappedBytes = new Uint8Array(93).fill(17);
+  const encryptedSymmetricKey = Buffer.from(wrappedBytes).toString("base64");
   const networkId = "urn:tinycloud:encryption:did:pkh:eip155:1:0x1111111111111111111111111111111111111111:default";
-  const encryptedSymmetricKeyDigestHex = hex(sha256(new TextEncoder().encode(canonicalize(encryptedSymmetricKey))));
+  const encryptedSymmetricKeyDigestHex = hex(sha256(wrappedBytes));
+  const encryptedSymmetricKeyHash = hex(sha256(new TextEncoder().encode(canonicalize(encryptedSymmetricKey))));
   const stored = new TextEncoder().encode(canonicalize({
-    v: 1, networkId, keyPath: "share/agentreceivetest0001", alg: "x25519-aes256gcm/v1", keyVersion: 1, encryptedSymmetricKey,
-    encryptedSymmetricKeyHash: encryptedSymmetricKeyDigestHex,
+    v: 2, networkId, keyPath: "share/agentreceivetest0001", alg: "x25519-aes256gcm/v1", keyVersion: 1, encryptedSymmetricKey,
+    encryptedSymmetricKeyHash,
     ciphertext: Buffer.from(await aesEncrypt(symmetricKey, new TextEncoder().encode("hello recipient agent"))).toString("base64"),
     metadata: { contentType: "text/plain" },
   }));
@@ -140,7 +142,7 @@ test("a proved recipient session reads and decrypts the signed share from the V3
       challengeId: "challenge-1", claimDigestHex: "4".repeat(64), claimJti: "claim-1",
       vpDigestHex: "5".repeat(64), credentialEvidenceDigestHex: "6".repeat(64),
       decisionContextDigestHex: "7".repeat(64), issuanceAuditDigestHex: "8".repeat(64),
-      remainingRedelegationDepth: 8, credentialIdAuditDigestHex: "9".repeat(64), presentationJtiAuditDigestHex: "a".repeat(64),
+      remainingRedelegationDepth: 0, credentialIdAuditDigestHex: "9".repeat(64), presentationJtiAuditDigestHex: "a".repeat(64),
     }],
     proofs: [envelope.policyRoot.cid, envelope.enforcementRoot.cid],
     notBefore: now, expiresAt: now + 45, nonce: "session-1",
@@ -180,7 +182,7 @@ test("a proved recipient session reads and decrypts the signed share from the V3
       const bodyHash = hex(sha256(new TextEncoder().encode(canonicalize(body))));
       const unsigned = {
         type: "tinycloud.encryption.decrypt-result/v1", targetNode: nodeDid, networkId,
-        invocationCid: invocation.cid, encryptedSymmetricKeyHash: encryptedSymmetricKeyDigestHex, receiverPublicKeyHash: body.receiverPublicKeyHash,
+        invocationCid: invocation.cid, encryptedSymmetricKeyHash, receiverPublicKeyHash: body.receiverPublicKeyHash,
         wrappedKey: Buffer.from(Uint8Array.from([...x25519.getPublicKey(ephemeral), 1, ...wrapped])).toString("base64"),
         alg: "x25519-aes256gcm/v1", keyVersion: 1,
         requestHash: hex(sha256(new TextEncoder().encode(`${invocation.cid}${bodyHash}`))), nodeId: nodeDid,
