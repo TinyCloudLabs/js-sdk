@@ -5,6 +5,7 @@ import type { JsonWebKey } from 'node:crypto';
 import { ulid } from 'ulid';
 import { DelegatedAccess, NodeWasmBindings, activateValidatedRuntimeDelegation, deserializeDelegation, serializeDelegation } from '@tinycloud/node-sdk';
 import type { IKVService, PortableDelegation, TinyCloudNode, TinyCloudSession } from '@tinycloud/node-sdk';
+import { activateSessionWithHost } from '@tinycloud/sdk-core';
 import { createLink, resolveLink, signerFromJwk, linkIssuerPublicKey } from '@tinycloud/share-envelope/links';
 import type { Ed25519PrivateJwk } from '@tinycloud/share-envelope/links';
 import { CourierError } from './errors.js';
@@ -107,12 +108,30 @@ function relayPermissions(body: CourierInvitation) {
   return [{ service: 'tinycloud.kv', space: body.artifact.spaceId, path: relayRoot(body.id), actions: ['tinycloud.kv/get', 'tinycloud.kv/put'] }];
 }
 
-/** The relay key has no thread access; all requests still carry the issued signed delegation. */
-function relayKv(body: CourierInvitation): IKVService {
+/** Verify the inviter's owner→agent chain before granting the inviter any read access. */
+async function relayKv(body: CourierInvitation, node: TinyCloudNode): Promise<IKVService> {
   const delegation = deserializeDelegation(body.relay.delegation);
   const key = body.relay.key;
   const signer = signerFromJwk(key.jwk as unknown as Ed25519PrivateJwk);
-  if (signer.did !== bareDid(key.did) || delegation.delegateDID.split('#')[0] !== signer.did || delegation.spaceId !== body.artifact.spaceId) refuse('Relay key or space changed.');
+  if (signer.did !== bareDid(key.did) || bareDid(delegation.delegateDID) !== signer.did || delegation.spaceId !== body.artifact.spaceId
+    || !sameIdentity(delegation.ownerAddress, body.artifact.from.owner.split(':').at(-1)!)) refuse('Relay key, owner or space changed.');
+  // This embedded key is only a pairing transport. The ordinary activation endpoint
+  // verifies its signed parent chain; it is never installed as the recipient's identity.
+  const installed: PortableDelegation[] = [];
+  const active = await activateValidatedRuntimeDelegation({
+    sessionDid: key.did,
+    computeDelegationCid: (authorization) => node.computeDelegationCid(authorization),
+    async useRuntimeDelegation(candidate) {
+      const receipt = await activateSessionWithHost(body.host, candidate.delegationHeader);
+      if (!receipt.success) refuse('The node refused the inviter owner proof.');
+      installed.push(candidate);
+    },
+    getRuntimePermissionDelegations: () => installed,
+  }, delegation, {
+    host: body.host,
+    authorize: (permissions) => { assertExactAuthority(permissions, relayPermissions(body), 'Pairing relay'); return true; },
+  });
+  if (bareDid(active.delegation.delegatorDID ?? '') !== body.issuer || active.delegation.spaceId !== body.artifact.spaceId) refuse('Relay signer does not match the inviter.');
   const wasm = new NodeWasmBindings();
   const session: TinyCloudSession = {
     address: delegation.ownerAddress, chainId: delegation.chainId, sessionKey: JSON.stringify(key.jwk), jwk: key.jwk as never,
@@ -244,7 +263,7 @@ export async function cmdInvite(args: ParsedArgs): Promise<void> {
   }
   const mode = requireFlag(args, 'mode', 'courier invite --session <id> --mode same-owner|anyone|named --consent');
   if (!INVITATION_MODES.includes(mode as InvitationMode)) throw new CourierError('usage', 'Choose exactly one invitation mode: same-owner, anyone, named.');
-  if (!args.has('consent')) throw new CourierError('consent-required', 'Owner consent is required: pass --consent to invite a participant to this session.');
+  if (args.get('consent') !== 'true') throw new CourierError('consent-required', 'Owner consent is required: pass --consent to invite a participant to this session.');
   let recipient: string | undefined;
   if (mode === 'named') {
     const target = requireFlag(args, 'recipient', 'Named invitations require --recipient <did:key|verified-peer-handle>.');
@@ -284,7 +303,7 @@ async function validateHandle(node: TinyCloudNode, profile: Profile, peer: Store
 }
 
 export async function joinInvitation(link: string, args: ParsedArgs): Promise<void> {
-  if (!args.has('consent')) throw new CourierError('consent-required', 'Joining delegates read access to your side of this session. Pass --consent after owner approval.');
+  if (args.get('consent') !== 'true') throw new CourierError('consent-required', 'Joining delegates read access to your side of this session. Pass --consent after owner approval.');
   const wait = waitSeconds(args);
   const opened = await resolveLink(link, { apiOrigin: process.env.COURIER_LINKS_API_ORIGIN ?? DEFAULT_API,
     trustedOrigins: [process.env.COURIER_LINK_ORIGIN ?? DEFAULT_VIEWER], validateBody: (type, value) => { if (type !== 'courier') refuse('Not a Courier invitation.'); parseInvitation(value); } });
@@ -303,13 +322,13 @@ export async function joinInvitation(link: string, args: ParsedArgs): Promise<vo
   let state: JoinState | undefined;
   try { state = JSON.parse(fs.readFileSync(localFile, 'utf8')) as JoinState; } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
   if (state && (state.invitationHash !== hash || state.joined)) throw new CourierError('invite-used', 'Invitation already joined or changed. No other session was activated.');
+  const relay = await relayKv(body, node);
   if (!state) {
     const outbound = await node.delegateTo(body.issuer, peerReadPermissions(body.artifact.callMe, profile.spaceId!, body.session.sessionId), { expiry: Date.parse(body.expiresAt) - Date.now(), requireActivation: true });
     const artB = artifactWithDelegation('B', profile, outbound.delegation, body.artifact.callMe, body.artifact.peer);
     state = { invitationHash: hash, claim: signed<Claim>({ invitationId: body.id, invitationHash: hash, sessionId: body.session.sessionId, artifact: artB }, loadKey()) };
     writeSecure(localFile, state);
   }
-  const relay = relayKv(body);
   try { await putCreate(relay, `${relayRoot(body.id)}claim.json`, state.claim); } catch (error) {
     if (!(error instanceof CourierError && error.code === 'conflict')) throw error;
     const existing = await getJson<Signed<Claim>>(relay, `${relayRoot(body.id)}claim.json`);

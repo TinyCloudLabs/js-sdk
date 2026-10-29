@@ -23,6 +23,7 @@ export async function createGuidedFixture(root, cli = new URL('../../dist/cli.js
   const links = new Map();
   const requests = [];
   const children = new Set();
+  const controls = { pausePutKey: undefined, onPaused: undefined };
   let version = 0;
   const send = (res, status, body, headers = {}) => { res.writeHead(status, { 'content-type': 'application/json', ...headers }); res.end(typeof body === 'string' || body instanceof Uint8Array ? body : JSON.stringify(body)); };
   const publicKey = (did) => createPublicKey({ key: { kty: 'OKP', crv: 'Ed25519', x: Buffer.from(linkIssuerPublicKey(bare(did))).toString('base64url') }, format: 'jwk' });
@@ -35,6 +36,17 @@ export async function createGuidedFixture(root, cli = new URL('../../dist/cli.js
     if (data.exp * 1000 <= Date.now()) throw new Error('expired UCAN');
     return data;
   }
+  function authorize(data) {
+    const parents = data.prf?.map((id) => delegations.get(id));
+    if (!parents?.length || parents.some((parent) => !parent || bare(parent.aud) !== bare(data.iss))) throw new Error('unverified delegation parent');
+    for (const [resource, actions] of Object.entries(data.att ?? {})) {
+      for (const action of Object.keys(actions)) {
+        if (!parents.some((parent) => data.exp <= parent.exp && Object.entries(parent.att).some(([scope, allowed]) => resource.startsWith(scope) && Object.hasOwn(allowed, action)))) {
+          throw new Error('invocation exceeds signed parent authority');
+        }
+      }
+    }
+  }
   const server = https.createServer({ key: fs.readFileSync(key), cert: fs.readFileSync(cert) }, async (req, res) => {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
@@ -46,9 +58,7 @@ export async function createGuidedFixture(root, cli = new URL('../../dist/cli.js
         const cid = rootAuthorizations.get(authorization) ?? wasm.computeCid(new TextEncoder().encode(authorization.replace(/^Bearer /, '')), 0x55n);
         if (!delegations.has(cid)) {
           const data = compact(authorization);
-          const parents = data.prf?.map((id) => delegations.get(id));
-          if (!parents?.length || parents.some((parent) => !parent || bare(parent.aud) !== bare(data.iss))) throw new Error('unverified delegation parent');
-          // Real signature, audience and parent provenance are checked here; the SDK validates attenuation before import.
+          authorize(data);
           delegations.set(cid, data);
         }
         requests.push({ route: 'delegate', cid });
@@ -68,6 +78,7 @@ export async function createGuidedFixture(root, cli = new URL('../../dist/cli.js
       }
       if (url.pathname !== '/invoke') return send(res, 404, { error: 'not_found' });
       const invocation = compact(authorization);
+      authorize(invocation);
       requests.push({ route: 'invoke', payload: invocation, headers: req.headers });
       const entries = Object.entries(invocation.att ?? {});
       if (entries.length !== 1) throw new Error(`unsupported invocation payload ${JSON.stringify(invocation)}`);
@@ -85,6 +96,11 @@ export async function createGuidedFixture(root, cli = new URL('../../dist/cli.js
         if ((req.headers['if-none-match'] === '*' && current) || (req.headers['if-match'] && req.headers['if-match'] !== current?.etag)) return send(res, 412, 'precondition failed');
         const etag = `"${++version}"`;
         values.set(mapKey, { bytes, etag });
+        if (controls.pausePutKey === item) {
+          controls.pausePutKey = undefined;
+          controls.onPaused?.();
+          return; // A real lost response after persistence, before issuer can issue C.
+        }
         return send(res, 200, '', { etag });
       }
       if (action === 'tinycloud.kv/del') { values.delete(mapKey); return send(res, 200, ''); }
@@ -115,7 +131,11 @@ export async function createGuidedFixture(root, cli = new URL('../../dist/cli.js
     const session = wasm.completeSessionSetup({ ...prepared, signature });
     const grant = { v: 1, delegationHeader: session.delegationHeader, delegationCid: session.delegationCid, spaceId, ownerDid: `did:pkh:eip155:1:${address}`, address, chainId: 1, verificationMethod: agent.did, siwe: prepared.siwe, signature, expiresAt, receivedAt: issuedAt };
     // Only this fixture's actual owner-signed root can start a delegation chain.
-    delegations.set(session.delegationCid, { aud: bare(agent.did), att: {} });
+    const rootAtt = Object.fromEntries(AGENT_GRANT.map((permission) => [
+      `${spaceId}/${permission.service.replace('tinycloud.', '')}/${permission.path}`,
+      Object.fromEntries(permission.actions.map((action) => [action, []])),
+    ]));
+    delegations.set(session.delegationCid, { aud: bare(agent.did), att: rootAtt, exp: Math.floor(Date.parse(expiresAt) / 1000) });
     rootAuthorizations.set(session.delegationHeader.Authorization, session.delegationCid);
     const profile = { version: 3, host, openkeyHost: 'https://openkey.so', label: name, courierDid: bare(agent.did), ownerDid: grant.ownerDid, spaceId, grantExpiresAt: expiresAt, status: 'ready', peers: {} };
     for (const [file, value] of [['key.json', agent], ['grant.json', grant], ['profile.json', profile]]) fs.writeFileSync(path.join(dir, file), JSON.stringify(value), { mode: 0o600 });
@@ -154,7 +174,7 @@ export async function createGuidedFixture(root, cli = new URL('../../dist/cli.js
     if (result.code !== 0) throw Object.assign(new Error(result.stderr), { result });
     return JSON.parse(result.stdout);
   }
-  return { root, host, cert, values, links, requests, delegations, home, launch, run, envFor, cli,
+  return { root, host, cert, values, links, requests, delegations, controls, home, launch, run, envFor, cli,
     async close() { for (const child of children) child.kill(); await new Promise((resolve) => server.close(resolve)); },
   };
 }

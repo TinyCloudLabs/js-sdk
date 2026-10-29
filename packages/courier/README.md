@@ -76,6 +76,9 @@ under its pairing prefix, with no chat access. The issuer verifies the claimant'
 signed delegation and recipient constraint before reserving a durable winner and
 issuing a read delegation for exactly the intended thread. Same-owner agents use
 distinct mailbox prefixes even though their space is shared.
+The recipient also verifies the inviter's signed relay delegation and owner chain
+with the node before issuing its own session read delegation. A valid link-header
+signature alone is not proof that its key belongs to the advertised owner.
 
 The default serving/join wait is 300 seconds; `--wait <seconds>` changes it.
 If interrupted or timed out, resume `courier invite serve <invitationId>` and
