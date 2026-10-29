@@ -247,6 +247,170 @@ current runner; an already-started action may still have happened. Keep response
 IDs as downstream idempotency keys where supported. Exactly-once external
 execution is not promised.
 
+### Prepared FORMAT1 owner import
+
+`feed import` accepts an already-resolved FORMAT1 JSON bundle, not the raw snapshot
+written by `feed export`. Supply the full target space explicitly:
+
+```bash
+tc --profile owner feed import \
+  --space tinycloud:pkh:eip155:1:0x2222222222222222222222222222222222222222:applications \
+  --file ./prepared-owner-bundle.json
+```
+
+The authenticated owner needs SQL read/write/schema authority for
+`xyz.tinycloud.tinychat/home_feed` and the registered per-agent database pairs.
+The command initializes the owner archive and uses the canonical SDK to initialize
+the current pair schemas. Agent response-read grants are insufficient. Import neither
+registers agents nor broadens their grants.
+
+Before writing, the importer validates versions, raw base64/SHA-256 proofs, full
+source references and card/response identities. Publisher agent IDs, DIDs, and
+resource pairs must match actual `feed_agents` rows and the canonical feed resource
+convention, with distinct database basenames. Labels and stored provenance do not
+replace signed node authority. The importer does not classify legacy data, choose
+current answers, resolve recipient names, or recalculate expiry.
+
+The complete prepared JSON value stays in owner-only
+`home_feed.feed_owner_imports`, immutable under
+`(source_space_id, namespace, snapshot_id)`. A declared `previousSnapshotId` must
+already exist in that same scope. Reusing a snapshot ID with changed content is
+refused. Raw source rows, original receipts, owner-only state and other archival
+metadata are not copied to agent databases; deletion records are data, not SQL
+deletes. Only envelopes declared `restoreTarget: "agent-response"` are restored
+remotely, using their supplied complete canonical cards and optional private
+response payloads.
+
+Remote delivery recipients come only from explicit `runtimeTarget.agentId`
+mappings. Configure `feed watch --recipient` with that same runtime ID, not a
+logical recipient key, legacy name, or label. Partial mappings retain unresolved
+names in the owner archive. Multiple logical keys for one runtime retain all
+evidence, including conflicts; the default-deny delivery policy below still applies.
+Private payloads retain the response-read boundary described above.
+
+The archive and per-agent databases do not share a transaction. An identical
+snapshot replay can finish partial progress without replacing existing content.
+Replay is not exactly-once external delivery; runtime durable acceptance,
+deduplication, and deadline checks remain necessary. Import does not pause source
+writers, install a write fence, or establish a live-source cutover.
+
+### Owner SDK restore and delivery policy
+
+The generic restore API is exported from `@tinycloud/sdk-services/feed`; the
+prepared importer above uses it. Call `initializeFeedDatabases({ output, responses })`
+with owner-authorized SQL handles to initialize the current pair's tables before
+restoring or listening. Agents retain read-only access to responses and cannot
+initialize or restore that database. Missing import/policy tables fail closed.
+
+`restoreFeedRecords({ output, responses }, preparedRecords, { signal })` accepts
+complete `FeedCard` records and response headers with optional private payloads,
+source references, and minimal delivery evidence. It does not interpret legacy
+records, choose current answers, or resolve recipients. Historical responses
+bypass live-submission eligibility only; they still require the full published
+card/revision/issuance identity. Existing live response IDs cannot be reclassified
+as imported. Replays must preserve header/payload content and source bindings.
+Valid literal JSON payload keys are preserved; unknown card-envelope fields are
+still refused. Completed query or batch failures retain their classification if
+caller cancellation races completion or later readback. Without cancellation, an
+identical concurrent restore can still recover through complete content and policy readback.
+
+Cards are stored first. Each imported response atomically stores its content-bound
+claim, header, optional private payload, origins, and delivery policies in the
+response database. There is no transaction across the two databases; a repeated
+prepared restore can complete partial progress without replacing existing content.
+
+Every import origin has a default `*` deny policy. Dispatch requires each origin
+to have consistent evidence for the exact recipient: `state: "pending"`,
+`dispatch: "resolved-pending"`, `resolvedOwnerMapping: true`, and a required
+`dispatchBefore` containing a valid future timestamp or explicit `null` for no
+absolute cutoff. Held, delivered, unconfirmed, refused, unknown, or conflicting
+evidence does not dispatch. Missing or malformed metadata fails the page rather
+than treating it as live data. Policy fields record owner decisions, not grants.
+Keep raw receipts and complete legacy ledgers in owner-only storage; remote policy
+rows contain only source references, state, mapping evidence, and the cutoff.
+
+`listFeedResponseDeliveries(responses, { recipient, afterSequence, limit, signal })`
+reads dispatch-eligible headers; `listFeedResponses` alone is history access, not
+dispatch authority. `listenFeedResponses` applies the policy before local handoff.
+Safe notification JSON carries the validated cutoff but no private payload data.
+The SDK checks the cutoff before handoff and again before invoking the runner.
+A queued runtime must check it immediately before acting. Expiry after a durable
+claim leaves the handoff unconfirmed, without automatic resend. Runtime durable
+acceptance and deduplication are still required; exactly-once external execution
+is not guaranteed.
+
+### Card issuance history
+
+`listFeedCardHistory(output, { afterIdentity, limit, signal })` from
+`@tinycloud/sdk-services/feed` reads full stored card issuances and their payloads,
+including earlier revisions and distinct issuances of the same revision.
+Validation preserves literal JSON payload keys, including an own `"__proto__"` key;
+it does not substitute a reconstructed payload or change its prototype.
+Pages use the full `(cardId, revision, issuanceId)` cursor in SQLite BINARY order
+for IDs and numeric order for revision, with default limit 100 and maximum 1000.
+The result is `{ cards, nextIdentity, hasMore }`; `nextIdentity` is the last
+returned full tuple, or `null` for an empty page.
+
+This snapshot cursor is not a durable publication tail: new IDs can sort before
+an existing cursor. Start each full reconciliation without `afterIdentity`.
+`listFeedCards` still returns only the latest published issuance per card.
+History reads use the existing output read capability and perform no DDL or writes.
+
+### Raw owner-only source export
+
+`feed export` captures raw KV source bytes, not resolved Home cards or a restore plan.
+Supply the full approved source space, a space-relative namespace ending in `/`,
+and an unused output path. There is no installed-legacy or production default:
+
+```bash
+tc --profile owner feed export \
+  --source-space tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:applications \
+  --prefix example/legacy/ --out ./raw-owner-snapshot.json \
+  --sidecars ./raw-sidecars.json
+```
+
+The selected profile must already hold source `tinycloud.kv/get` and explicit
+`tinycloud.kv/sync` authority on that namespace. Normal per-agent SQL feed grants
+do not authorize this export. The command does not broaden grants or fall back
+to LIST when sync is denied.
+
+`--sidecars` is optional. Its JSON array explicitly names every local file to
+include; relative paths resolve beside that configuration file:
+
+```json
+[
+  {"sourceKey":"owner/watch/hold-actions","sourceArea":"watch-state","path":"hold-actions.json"},
+  {"sourceKey":"owner/watch/thread","sourceArea":"thread-watch-state","path":"thread-state.json"},
+  {"sourceKey":"owner/expiry","sourceArea":"expiry-state","path":"expiry-state.json"}
+]
+```
+
+Sidecar files are read as exact bytes, including malformed JSON or binary data.
+No watcher is discovered or executed. Duplicate or conflicting full source keys
+are refused rather than overwritten.
+
+The owner-only versioned snapshot retains full KV keys, base64 bytes, SHA-256,
+strong ETags, change metadata, tombstones, opaque cursors, and node source/authority
+attestations. It bootstraps every change-feed page and verifies each binary network
+read against its ETag. One empty final tail at the end cursor is required before
+`completePrefixSnapshot: true` can be published. Source changes, cursor gaps,
+scope drift, or mismatches fail the capture. The exporter does not restart a changed
+capture or create a write fence; SDK requests retain their own transport behavior.
+
+The complete file is fsynced and published exclusively with mode `0600`; an existing
+path is never silently replaced. Keep this archive private: it can contain answers
+or codes. Normal command output is only the snapshot ID, output path, and counts.
+The output directory must belong to the effective user and forbid group/world
+writes. Ancestors must belong to that user or root; writable shared ancestors
+require sticky-bit protection of the next trusted-owned child. Unverifiable paths
+are refused. Mode `0600` protects contents, not the staging pathname's identity:
+the directory precondition prevents another UID from replacing that entry.
+The same UID and root remain trusted OS principals, not isolated adversaries.
+Validation includes every intermediate directory-alias target, not only the spelled
+path and its final resolved destination.
+Export does not classify records, choose current answers, resolve recipients,
+evaluate legacy expiry, restore state, or dispatch pending responses.
+
 ## Commands
 
 | Command | Description |

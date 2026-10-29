@@ -1,6 +1,7 @@
 import { ok } from "../types";
 import { feedError, feedJson } from "./store";
 import { projectFeedResponseNotification } from "./notification";
+import { dispatchDeadlineDenied, dispatchDeadlineFailure, validDispatchBefore } from "./dispatch";
 import type { FeedApi, FeedHandoff } from "./types";
 
 export const initializeFeedHandoff: FeedApi["initializeFeedHandoff"] = async (handoff) => {
@@ -19,15 +20,22 @@ export const getFeedHandoff: FeedApi["getFeedHandoff"] = async (handoff, respons
   const row = result.data.rows[0];
   if (!row) return ok(null);
   try {
-    return ok({ responseId, recipient, response: projectFeedResponseNotification(JSON.parse(row[0])), state: row[1] as FeedHandoff["state"] });
+    const parsed = JSON.parse(row[0]);
+    if (parsed.dispatchBefore !== undefined && !validDispatchBefore(parsed.dispatchBefore)) {
+      return feedError("INVALID_INPUT", "Handoff contains invalid dispatch metadata");
+    }
+    return ok({ responseId, recipient, response: projectFeedResponseNotification(parsed), state: row[1] as FeedHandoff["state"] });
   } catch {
     return feedError("INVALID_INPUT", "Handoff contains invalid response JSON");
   }
 };
 
 export const deliverFeedResponse: FeedApi["deliverFeedResponse"] = async ({ handoff, recipient, response: input, deliver }) => {
+  // Validate before projection: an invalid supplied cutoff must not disappear into ordinary live behavior.
+  if (dispatchDeadlineDenied(input)) return dispatchDeadlineFailure();
   const response = projectFeedResponseNotification(input);
   if (!recipient || !response.responseId) return feedError("INVALID_INPUT", "Handoff requires a recipient and full response ID");
+  if (dispatchDeadlineDenied(response)) return dispatchDeadlineFailure();
   const inserted = await handoff.execute(
     `INSERT INTO feed_handoffs (response_id, recipient, response_json, state) VALUES (?, ?, ?, 'prepared')
      ON CONFLICT (response_id, recipient) DO NOTHING`, [response.responseId, recipient, feedJson(response)]);
@@ -38,6 +46,7 @@ export const deliverFeedResponse: FeedApi["deliverFeedResponse"] = async ({ hand
     return feedError("INVALID_INPUT", "A response handoff identity cannot change its payload");
   }
   if (existing.data.state !== "prepared") return ok(existing.data);
+  if (dispatchDeadlineDenied(response)) return dispatchDeadlineFailure();
 
   // This durable compare-and-set is the only permission to attempt the send.
   // Crash after this point is ambiguous, even if the callback never started.
@@ -50,6 +59,7 @@ export const deliverFeedResponse: FeedApi["deliverFeedResponse"] = async ({ hand
     return current.ok && current.data ? ok(current.data) : current.ok
       ? feedError("NOT_FOUND", "Handoff disappeared before delivery") : current;
   }
+  if (dispatchDeadlineDenied(response)) return dispatchDeadlineFailure();
   let state: FeedHandoff["state"] = "unconfirmed";
   try {
     const delivered = await deliver(response);
