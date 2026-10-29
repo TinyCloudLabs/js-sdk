@@ -923,7 +923,13 @@ describe("CLI auth commands on a missing profile (TC-682)", () => {
     const key = { kty: "OKP", crv: "Ed25519", x: "bootstrap-public", d: "bootstrap-private" };
     generatedKeys.push({ jwk: key, did: "did:key:new-openkey" });
 
-    await runAuthCommand(["auth", "login", "--method", "openkey", "--paste"]);
+    const stderr = spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      await runAuthCommand(["auth", "login", "--method", "openkey", "--paste"]);
+      expect(stderr.mock.calls.map(([text]) => String(text)).join("")).toContain('Created profile "owner"\n');
+    } finally {
+      stderr.mockRestore();
+    }
 
     expect(recorded.errors).toEqual([]);
     // The first write is the key-only profile: a key and DID, no sign-in state.

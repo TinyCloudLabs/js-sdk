@@ -751,9 +751,13 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           // A missing profile gets a key-only profile first, as `onboard` does:
           // only a local key is generated, and nothing is granted until the
           // owner approves. Only an explicit --host is saved on it.
-          if (!await ProfileManager.profileExists(ctx.profile)) {
+          // The check and the create share one lock, so two logins cannot both create it.
+          const created = await ProfileManager.withLock(ctx.profile, async () => {
+            if (await ProfileManager.profileExists(ctx.profile)) return false;
             await createKeyOnlyProfile(ctx.profile, globalOpts.host ?? DEFAULT_HOST);
-          }
+            return true;
+          });
+          if (created) process.stderr.write(`Created profile "${ctx.profile}"\n`);
           const preparedCommitted = await handleOpenKeyAuth(ctx.profile, ctx.host, {
             paste: options.paste,
             noPopup: options.popup === false,
