@@ -207,12 +207,14 @@ async function aesEncrypt(keyBytes: Uint8Array, plain: Uint8Array): Promise<Uint
 
 test("a proved recipient session reads and decrypts the signed share; a refused read returns the stable error", async () => {
   const symmetricKey = key(41);
-  const encryptedSymmetricKey = "network-wrapped-key";
+  const wrappedBytes = new Uint8Array(93).fill(17);
+  const encryptedSymmetricKey = Buffer.from(wrappedBytes).toString("base64");
   const networkId = `urn:tinycloud:encryption:${ownerDid}:default`;
-  const encryptedSymmetricKeyDigestHex = hex(sha256(new TextEncoder().encode(canonicalize(encryptedSymmetricKey))));
+  const encryptedSymmetricKeyDigestHex = hex(sha256(wrappedBytes));
+  const encryptedSymmetricKeyHash = hex(sha256(new TextEncoder().encode(canonicalize(encryptedSymmetricKey))));
   const stored = new TextEncoder().encode(canonicalize({
     v: 1, networkId, alg: "x25519-aes256gcm/v1", keyVersion: 1, encryptedSymmetricKey,
-    encryptedSymmetricKeyHash: encryptedSymmetricKeyDigestHex,
+    encryptedSymmetricKeyHash,
     ciphertext: Buffer.from(await aesEncrypt(symmetricKey, new TextEncoder().encode("hello recipient agent"))).toString("base64"),
     metadata: { contentType: "text/plain" },
   }));
@@ -263,7 +265,7 @@ test("a proved recipient session reads and decrypts the signed share; a refused 
       const bodyHash = hex(sha256(new TextEncoder().encode(canonicalize(body))));
       const unsigned = {
         type: "tinycloud.encryption.decrypt-result/v1", targetNode: nodeDid, networkId,
-        invocationCid: invocation.cid, encryptedSymmetricKeyHash: encryptedSymmetricKeyDigestHex, receiverPublicKeyHash: body.receiverPublicKeyHash,
+        invocationCid: invocation.cid, encryptedSymmetricKeyHash, receiverPublicKeyHash: body.receiverPublicKeyHash,
         wrappedKey: Buffer.from(Uint8Array.from([...x25519.getPublicKey(ephemeral), 1, ...wrapped])).toString("base64"),
         alg: "x25519-aes256gcm/v1", keyVersion: 1,
         requestHash: hex(sha256(new TextEncoder().encode(`${invocation.cid}${bodyHash}`))), nodeId: nodeDid,

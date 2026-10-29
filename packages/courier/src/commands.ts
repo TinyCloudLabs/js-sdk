@@ -226,6 +226,7 @@ async function validatePeerDelegation(node: TinyCloudNode, profile: Profile, pee
     audience: profile.courierDid,
     spaceId: peer.spaceId,
     mailbox: peer.theirHandleForMe,
+    sessionId: peer.sessionId,
   });
   const expiry = delegation.expiry instanceof Date ? delegation.expiry : new Date(delegation.expiry);
   return { delegation, cid: delegationCid(delegation), expiresAt: expiry.toISOString() };
@@ -235,7 +236,9 @@ async function pairAccept(args: ParsedArgs) {
   const { profile, node } = await ctx();
   const art = parseArtifact(readArtifactArg(args));
   validateArtifactIdentity(art);
-  if (art.from.owner === profile.ownerDid || art.from.courier === profile.courierDid) fail('bad-artifact', 'Refusing to pair with this agent identity.');
+  // A peer is a distinct AGENT key, not a distinct owner DID: two Courier agents of one owner
+  // (a self-pairing like Sam↔Sam) pair normally. Only the exact same courier DID is self.
+  if (art.from.courier === profile.courierDid) fail('bad-artifact', 'Refusing to pair with this agent identity.');
 
   if (art.step === 'A') {
     const handle = art.callMe;
@@ -255,7 +258,6 @@ async function pairAccept(args: ParsedArgs) {
   if (art.step === 'B') {
     const handle = args.get('as') ?? art.callMe;
     const peer = findPendingPeer(profile, handle);
-    if (art.from.owner === profile.ownerDid) fail('bad-artifact', 'Refusing to pair with our own owner identity.');
     const candidate: StoredPeer = {
       ...peer,
       ownerDid: art.from.owner,
@@ -312,13 +314,13 @@ async function renewOutbound(active: Ctx, peer: StoredPeer, force: boolean): Pro
   const last = peer.outbound.at(-1);
   if (!force && last && Date.now() - Date.parse(last.issuedAt) < 20 * 3600 * 1000) return;
   const { profile, node } = active;
-  const result = await node.delegateTo(peer.courierDid, peerReadPermissions(peer.handle, profile.spaceId!), { expiry: PEER_DELEGATION_EXPIRY });
+  const result = await node.delegateTo(peer.courierDid, peerReadPermissions(peer.handle, profile.spaceId!, peer.sessionId), { expiry: PEER_DELEGATION_EXPIRY });
   const issuedAt = new Date().toISOString();
   const serialized = serializeDelegation(result.delegation);
-  const existing = await getJson(node.kv, k.peerDelegation(peer.handle));
+  const existing = await getJson(node.kv, k.peerDelegation(peer.handle, peer.sessionId));
   const body = { v: 0, delegation: serialized, issuedAt };
-  if (existing?.etag) await putMatch(node.kv, k.peerDelegation(peer.handle), body, existing.etag);
-  else await putCreate(node.kv, k.peerDelegation(peer.handle), body);
+  if (existing?.etag) await putMatch(node.kv, k.peerDelegation(peer.handle, peer.sessionId), body, existing.etag);
+  else await putCreate(node.kv, k.peerDelegation(peer.handle, peer.sessionId), body);
   peer.outbound.push({
     cid: delegationCid(result.delegation),
     issuedAt,
@@ -330,7 +332,7 @@ async function renewOutbound(active: Ctx, peer: StoredPeer, force: boolean): Pro
 async function installInbound(active: Ctx, peer: StoredPeer): Promise<void> {
   if (!peer.inbound || !peer.theirHandleForMe) return;
   const kv = await peerKv(active.node, active.profile, peer);
-  const update = await getJson<{ v: number; delegation: string }>(kv, k.peerDelegation(peer.theirHandleForMe));
+  const update = await getJson<{ v: number; delegation: string }>(kv, k.peerDelegation(peer.theirHandleForMe, peer.sessionId));
   if (!update?.value.delegation) return;
   const incoming = await validatePeerDelegation(active.node, active.profile, peer, update.value.delegation);
   if (Date.parse(incoming.expiresAt) <= Date.parse(peer.inbound.expiresAt)) return;
@@ -407,6 +409,9 @@ export type SendInput = {
 export async function sendMessage(node: TinyCloudNode, profile: Profile, peerHandle: string, peer: StoredPeer, input: SendInput): Promise<CourierMessage> {
   const { which, threadId, subject, text, intent, asks, constraints, inReplyTo, referenceTaskIds } = input;
   const from = { owner: profile.ownerDid!, agent: profile.courierDid, label: profile.label };
+  if (peer.sessionId && (input.which === 'new' || threadId !== peer.sessionId)) {
+    fail('session-mismatch', 'This pairing permits only its invited session. Start or select another session explicitly.');
+  }
   const startedByMe = which === 'new' || Boolean(await getJson(node.kv, k.threadMeta(peerHandle, threadId)));
   let refsOwnTask = false;
   let refsAnyTask = false;

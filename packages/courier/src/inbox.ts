@@ -67,7 +67,7 @@ export async function collectInbound(input: {
     if (peer.status !== 'paired' || !peer.inbound || !peer.theirHandleForMe) continue;
     try {
       const peerKv = await input.kvFor(peer);
-      const keys = await listAll(peerKv, `${PREFIX}/to/${peer.theirHandleForMe}/threads/`);
+      const keys = await listAll(peerKv, peer.sessionId ? `${k.threadRoot(peer.theirHandleForMe, peer.sessionId)}/` : `${PREFIX}/to/${peer.theirHandleForMe}/threads/`);
       const receipts = (await getJson<Receipts>(input.selfKv, k.receipts(peer.handle)))?.value ?? { v: 1, threads: {} };
       receipts.threads ??= {};
       const deliveries: PendingDelivery[] = [];

@@ -38,6 +38,8 @@ export interface StoredPeer {
   inbound?: { delegation: string; cid: string; expiresAt: string };
   outbound: { cid: string; issuedAt: string; expiresAt: string }[];
   status: 'pending-A' | 'awaiting-C' | 'paired';
+  /** Guided pairing is restricted to this one thread, never the peer's other chats. */
+  sessionId?: string;
   pairedAt: string;
 }
 
