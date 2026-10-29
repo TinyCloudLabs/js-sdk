@@ -133,6 +133,8 @@
     { "command": "sql export", "status": "legacy" },
     { "command": "sql copy", "status": "legacy" },
     { "command": "feed", "status": "legacy" },
+    { "command": "feed export", "status": "legacy" },
+    { "command": "feed import", "status": "legacy" },
     { "command": "feed connect", "status": "legacy" },
     { "command": "feed publish", "status": "legacy" },
     { "command": "feed respond", "status": "legacy" },

@@ -48,10 +48,10 @@ async function jsonRows<T>(
   }
 }
 
-const RESPONSE_HEADER_SELECT = `SELECT r.sequence, r.response_json, p.payload_type, p.payload_version
+export const RESPONSE_HEADER_SELECT = `SELECT r.sequence, r.response_json, p.payload_type, p.payload_version
   FROM feed_responses r LEFT JOIN feed_response_payloads p ON p.response_id = r.response_id`;
 
-function responseDataFailure(message: string, error?: unknown): Result<never> {
+export function responseDataFailure(message: string, error?: unknown): Result<never> {
   let code: string = ErrorCodes.SQL_ERROR;
   if (error !== null && typeof error === "object" && "code" in error) {
     const candidate = error.code;
@@ -61,7 +61,7 @@ function responseDataFailure(message: string, error?: unknown): Result<never> {
   return feedError(code, message);
 }
 
-function responseFromRow(row: unknown[]): FeedResponse {
+export function responseFromRow(row: unknown[]): FeedResponse {
   return responseFromHeader(row, feedResponseHeaderSchema.parse(JSON.parse(String(row[1]))));
 }
 
@@ -74,11 +74,11 @@ function responseFromHeader(row: unknown[], header: NewFeedResponse | NewFeedMes
   return projectFeedResponseNotification(response);
 }
 
-async function storedResponse(db: FeedReadDatabase, responseId: string) {
+export async function storedResponse(db: FeedReadDatabase, responseId: string, options: QueryOptions = PRIVATE_RESPONSE_OPTIONS) {
   try {
     const result = await db.query<unknown>(`SELECT r.sequence, r.response_json, p.payload_type, p.payload_version, p.payload_json
       FROM feed_responses r LEFT JOIN feed_response_payloads p ON p.response_id = r.response_id
-      WHERE r.response_id = ?`, [responseId], PRIVATE_RESPONSE_OPTIONS);
+      WHERE r.response_id = ?`, [responseId], options);
     if (!result.ok) return responseDataFailure("Could not read the saved feed response", result.error);
     const row = result.data.rows[0];
     if (!row) return ok(undefined);
@@ -86,7 +86,7 @@ async function storedResponse(db: FeedReadDatabase, responseId: string) {
     const response = responseFromHeader(row, header);
     const payload: FeedResponsePayload | undefined = row[2] === null || row[2] === undefined ? undefined
       : feedResponsePayloadSchema.parse({ type: row[2], version: Number(row[3]), data: JSON.parse(String(row[4])) });
-    return ok({ response, headerJson: feedJson(header), payload });
+    return ok({ response, rawHeaderJson: String(row[1]), headerJson: feedJson(header), payload });
   } catch (error) {
     return responseDataFailure("Could not read the saved feed response", error);
   }
@@ -118,28 +118,41 @@ export const initializeFeedDatabases: FeedApi["initializeFeedDatabases"] = async
     { sql: `CREATE TABLE IF NOT EXISTS feed_response_payloads (
       response_id TEXT PRIMARY KEY, payload_type TEXT NOT NULL, payload_version INTEGER NOT NULL, payload_json TEXT NOT NULL
     )` },
+    { sql: `CREATE TABLE IF NOT EXISTS feed_response_imports (
+      response_id TEXT PRIMARY KEY, card_id TEXT NOT NULL, revision INTEGER NOT NULL, issuance_id TEXT NOT NULL,
+      content_sha256 TEXT NOT NULL
+    )` },
+    { sql: `CREATE TABLE IF NOT EXISTS feed_response_origins (
+      response_id TEXT NOT NULL, source_json TEXT NOT NULL, PRIMARY KEY (response_id, source_json)
+    )` },
+    { sql: `CREATE TABLE IF NOT EXISTS feed_response_delivery_policies (
+      response_id TEXT NOT NULL, recipient TEXT NOT NULL, policy_json TEXT NOT NULL,
+      PRIMARY KEY (response_id, recipient, policy_json)
+    )` },
   ]);
   return responseSchema.ok ? ok(undefined) : responseSchema;
 };
 
-export const publishFeedCard: FeedApi["publishFeedCard"] = async (output, card) => {
+export const publishFeedCard: FeedApi["publishFeedCard"] = (output, card) => storeFeedCard(output, card);
+
+export async function storeFeedCard(output: FeedDatabase, card: FeedCard, options?: QueryOptions): Promise<Result<FeedCard>> {
   if (!validIdentity(card)) return feedError("INVALID_INPUT", "A card requires its full ID, positive revision and issuance ID");
   const encoded = feedJson(card);
   const inserted = await output.execute(
     `INSERT INTO feed_cards (card_id, revision, issuance_id, card_json) VALUES (?, ?, ?, ?)
      ON CONFLICT (card_id, revision, issuance_id) DO NOTHING`,
-    [card.cardId, card.revision, card.issuanceId, encoded],
+    [card.cardId, card.revision, card.issuanceId, encoded], options,
   );
   if (!inserted.ok) return inserted;
   const stored = await jsonRows<FeedCard>(output,
     "SELECT card_json FROM feed_cards WHERE card_id = ? AND revision = ? AND issuance_id = ?",
-    [card.cardId, card.revision, card.issuanceId]);
+    [card.cardId, card.revision, card.issuanceId], options);
   if (!stored.ok) return stored;
   if (!stored.data[0] || feedJson(stored.data[0]) !== encoded) {
     return feedError("INVALID_INPUT", "A published card identity cannot be silently changed");
   }
   return ok(stored.data[0]);
-};
+}
 
 export const listFeedCards: FeedApi["listFeedCards"] = async (output) => {
   return jsonRows<FeedCard>(output, `SELECT card_json FROM feed_cards
