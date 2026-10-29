@@ -10,7 +10,7 @@ export { AGENT_RECORD_VERSION, MAX_AGENT_RECORD_BYTES, SUPPORTED_AGENT_RECORD_V,
 export { INVALID_ETAG_MESSAGE, createTinyCloudShareIndexBackend, type ShareDocumentRead, type ShareIndexBackend, type ShareListResult, type ShareRawRead, type ShareWriteCondition, type ShareWriteResult, type TinyCloudShareIndexBackendOptions, type TinyCloudShareIndexClient, type VaultNetworkRead } from "./backend.js";
 export { DEFAULT_CAS_POLICY, ShareIndexCasError, type CasPolicy, type ShareIndexCasErrorCode } from "./cas.js";
 export { AgentShareRecordStore, WebShareRecordStore, type AgentShareRecordStoreOptions } from "./record-store.js";
-export { INDEX_SCHEMA_VERSION, ShareRecordSchemaError, displayName, isSpaceOwnedBy, parseIndexDocument, project, type ShareIndexAgentEntry, type ShareIndexArchiveDocument, type ShareIndexDocument, type ShareIndexRow, type ShareProofState } from "./schema.js";
+export { INDEX_SCHEMA_VERSION, ShareRecordSchemaError, checkAgentRecordSchema, displayName, isSpaceOwnedBy, parseIndexDocument, project, registeredAtFits, type AgentRecordSchemaContext, type ShareIndexAgentEntry, type ShareIndexArchiveDocument, type ShareIndexDocument, type ShareIndexRow, type ShareProofState } from "./schema.js";
 export { claimRank, decideClaim, type ClaimDecision } from "./precedence.js";
 export { verifyAgentRecordChain, type ChainContext, type ChainVerdict, type ShareRegistrationKey } from "./verify/chain.js";
 export { parseSignedUcan, type SignedUcanDelegation } from "./verify/ucan.js";
