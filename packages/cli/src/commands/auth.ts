@@ -33,7 +33,7 @@ import {
   withSpinner,
 } from "../output/formatter.js";
 import { handleError, CLIError, cliErrorFromService } from "../output/errors.js";
-import { ExitCode, DEFAULT_CHAIN_ID, DEFAULT_OPENKEY_HOST, DEFAULT_SHARE_ORIGIN } from "../config/constants.js";
+import { ExitCode, DEFAULT_CHAIN_ID, DEFAULT_HOST, DEFAULT_OPENKEY_HOST, DEFAULT_SHARE_ORIGIN } from "../config/constants.js";
 import {
   resolveProfileOperatorType,
   resolveProfilePosture,
@@ -99,6 +99,7 @@ import {
 import { createCliReplicationConfig } from "../lib/replication-config.js";
 import { theme } from "../output/theme.js";
 import { registerAuthGrantsCommand } from "./auth-grants.js";
+import { createKeyOnlyProfile } from "./init.js";
 import { bootstrapDelegatedSession, ensureAuthenticated, type DelegatedSessionBootstrap } from "../lib/sdk.js";
 import { signInAgainHint, withSignInHint } from "../auth/session-expired.js";
 import { delegationExpiredError, isActivationExpiry } from "../auth/delegation-expiry.js";
@@ -747,6 +748,16 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           await persistReplicationLogin(ctx.profile, replicationOptions);
           if (replicationOptions.allowSecrets) writeReplicationSecretsWarning();
         } else {
+          // A missing profile gets a key-only profile first, as `onboard` does:
+          // only a local key is generated, and nothing is granted until the
+          // owner approves. Only an explicit --host is saved on it.
+          // The check and the create share one lock, so two logins cannot both create it.
+          const created = await ProfileManager.withLock(ctx.profile, async () => {
+            if (await ProfileManager.profileExists(ctx.profile)) return false;
+            await createKeyOnlyProfile(ctx.profile, globalOpts.host ?? DEFAULT_HOST);
+            return true;
+          });
+          if (created) process.stderr.write(`Created profile "${ctx.profile}"\n`);
           const preparedCommitted = await handleOpenKeyAuth(ctx.profile, ctx.host, {
             paste: options.paste,
             noPopup: options.popup === false,

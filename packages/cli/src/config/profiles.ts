@@ -117,7 +117,7 @@ export class ProfileManager {
     if (!profile) {
       throw new CLIError(
         "PROFILE_NOT_FOUND",
-        `Profile "${name}" does not exist. Create it with \`${CLI_NAME} init --name ${name}\`.`,
+        `Profile "${name}" does not exist. Create it with \`${CLI_NAME} init --key-only --name ${name}\`.`,
       );
     }
     return profile;

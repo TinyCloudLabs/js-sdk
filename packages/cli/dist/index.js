@@ -7672,7 +7672,7 @@ var init_profiles = __esm({
         if (!profile) {
           throw new CLIError(
             "PROFILE_NOT_FOUND",
-            `Profile "${name}" does not exist. Create it with \`${CLI_NAME11} init --name ${name}\`.`
+            `Profile "${name}" does not exist. Create it with \`${CLI_NAME11} init --key-only --name ${name}\`.`
           );
         }
         return profile;
