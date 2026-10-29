@@ -101,6 +101,11 @@
         "default": "./dist/kv/replication/index.cjs"
       }
     },
+    "./feed": {
+      "types": "./dist/feed/index.d.ts",
+      "import": "./dist/feed/index.js",
+      "require": "./dist/feed/index.cjs"
+    },
     "./sql": {
       "types": "./dist/sql/index.d.ts",
       "import": "./dist/sql/index.js",

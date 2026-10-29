@@ -330,6 +330,8 @@ export type Tc2132IssuedDelegationsRatchet = HardeningRatchet & { replicaWorker:
 export type Tc2140ExactKeyDelegationRatchet = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
 /** One reviewed exact-byte row for TC-2202 recipient-agent share receive; replicaWorker is carried at TC-2140's ceiling. */
 export type Tc2202AgentShareReceiveRatchet = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
+/** Exact current-base Home root admission; additive caps are not controlled feature attribution. */
+export type Tc2205HomeFeedRatchet = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -387,6 +389,7 @@ export type Ledger = {
   tc2132IssuedDelegationsRatchet?: Tc2132IssuedDelegationsRatchet;
   tc2140ExactKeyDelegationRatchet?: Tc2140ExactKeyDelegationRatchet;
   tc2202AgentShareReceiveRatchet?: Tc2202AgentShareReceiveRatchet;
+  tc2205HomeFeedRatchet?: Tc2205HomeFeedRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -974,6 +977,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2132IssuedDelegationsRatchet !== undefined) pins.push({ row: "tc2132IssuedDelegationsRatchet", pin: root.tc2132IssuedDelegationsRatchet.sourceCommits.at(-1)! });
   if (root.tc2140ExactKeyDelegationRatchet !== undefined) pins.push({ row: "tc2140ExactKeyDelegationRatchet", pin: root.tc2140ExactKeyDelegationRatchet.sourceCommits.at(-1)! });
   if (root.tc2202AgentShareReceiveRatchet !== undefined) pins.push({ row: "tc2202AgentShareReceiveRatchet", pin: root.tc2202AgentShareReceiveRatchet.sourceCommits.at(-1)! });
+  if (root.tc2205HomeFeedRatchet !== undefined) pins.push({ row: "tc2205HomeFeedRatchet", pin: root.tc2205HomeFeedRatchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1037,6 +1041,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2132IssuedDelegationsRatchet", root.tc2132IssuedDelegationsRatchet?.root.ceiling],
     ["tc2140ExactKeyDelegationRatchet", root.tc2140ExactKeyDelegationRatchet?.root.ceiling],
     ["tc2202AgentShareReceiveRatchet", root.tc2202AgentShareReceiveRatchet?.root.ceiling],
+    ["tc2205HomeFeedRatchet", root.tc2205HomeFeedRatchet?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -2266,6 +2271,35 @@ export const approvedTc2202AgentShareReceiveRatchet: Tc2202AgentShareReceiveRatc
   reason: "TC-2202 recipient-agent share receive with exact V3 email leaf decryption; candidate measured +3,075 B index.mjs / +2,525 B index.cjs over the exact base.",
 };
 
+export const approvedTc2205HomeFeedRatchet: Tc2205HomeFeedRatchet = {
+  label: "Home hook readiness, logical SQL scopes and private SQL failures (TC-2205, #789)",
+  ruling: "Latest conditional TC-858 ruling (comment dbed46da): exact current-base root ceilings 1,474,948/1,415,447 B; additive cap increments +165/+266 B above unchanged TC-2202; no headroom or controlled feature attribution. Canonical Bun 1.3.14; rustc 1.99.0 (b940084d7 2026-09-28).",
+  base: "9006c2da03848610295f5d91828aa960fd08715d",
+  sourceCommits: ["f5e2851258cdfbcd38ef177913d2d9a13aaaaf82"],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40820714206",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40820714206/job/123272293890",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/40820714206/job/123272293953",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 165, "index.cjs": 266 },
+    ceiling: { "index.mjs": 1474948, "index.cjs": 1415447 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 52757, "replica.cjs": 67957 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23412, "activation.cjs": 24981 },
+  },
+  worker: { delta: 0, ceiling: 776539 },
+  replicaWorker: { delta: 0, ceiling: 770467 },
+  reason: "Both canonical backends agree after the private-error allocation cut and actual upstream merge. This row admits only the measured absolute root sizes; it does not add a controlled-attribution charge or change another size bucket.",
+};
+
 export type GatedOnlyRatchet = {
   label: string;
   sourceCommit: string;
@@ -2351,6 +2385,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2132IssuedDelegationsRatchet: approvedTc2132IssuedDelegationsRatchet,
   tc2140ExactKeyDelegationRatchet: approvedTc2140ExactKeyDelegationRatchet,
   tc2202AgentShareReceiveRatchet: approvedTc2202AgentShareReceiveRatchet,
+  tc2205HomeFeedRatchet: approvedTc2205HomeFeedRatchet,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -2611,6 +2646,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
   if (value.tc2202AgentShareReceiveRatchet !== undefined &&
       (!value.tc2140ExactKeyDelegationRatchet || JSON.stringify(value.tc2202AgentShareReceiveRatchet) !== JSON.stringify(approvedTc2202AgentShareReceiveRatchet))) {
     throw new Error("Only Naomi's exact canonical TC-2202 recipient-agent share receive ratchet is approved.");
+  }
+  if (value.tc2205HomeFeedRatchet !== undefined &&
+      (!value.tc2202AgentShareReceiveRatchet || JSON.stringify(value.tc2205HomeFeedRatchet) !== JSON.stringify(approvedTc2205HomeFeedRatchet))) {
+    throw new Error("Only the exact canonical TC-2205 Home feed root admission is approved.");
   }
 }
 
@@ -2906,6 +2945,14 @@ export function validateTc2202AgentShareReceiveRatchetTransition(base?: Tc2202Ag
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2202AgentShareReceiveRatchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-2202 recipient-agent share receive ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The exact current-base Home admission may be introduced once and cannot later change or disappear. */
+export function validateTc2205HomeFeedRatchetTransition(base?: Tc2205HomeFeedRatchet, current?: Tc2205HomeFeedRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2205HomeFeedRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The exact TC-2205 Home feed root admission may be introduced once and cannot change later.");
   }
 }
 
