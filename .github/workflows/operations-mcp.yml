@@ -115,6 +115,7 @@ jobs:
           bun test packages/mcp/src/results.test.ts packages/mcp/src/tools.test.ts packages/mcp/src/stdio.test.ts packages/mcp/src/http.test.ts packages/mcp/src/remote-store.test.ts packages/mcp/src/http.e2e.test.ts
           bun test packages/cli/src/commands/share.test.ts
           bun test packages/cli/src/commands/share-email-unavailable.test.ts
+          bun test packages/cli/src/commands/share-addressed-unavailable.test.ts
           bun test packages/cli/src/commands/share-artifact.test.ts
           bun test packages/cli/src/commands/share.integration.test.ts
           bun test packages/cli/src/share/adapters.test.ts

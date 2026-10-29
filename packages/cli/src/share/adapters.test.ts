@@ -856,6 +856,35 @@ describe("TinyCloud share authority adapter", () => {
     }
   });
 
+  for (const [kind, target] of [
+    ["domain", { kind: "emailDomain", domain: "example.com" }],
+    ["did", { kind: "recipientDid", did: "did:key:z6MkggtHVWQUGJ3FVjJKXeb5oZThQvLmJVMV8hfNUz4ezcav" }],
+    ["did", { kind: "recipientDid", did: "did:pkh:eip155:1:0xabcdef0123456789abcdef0123456789abcdef01" }],
+  ] as const) {
+    it(`refuses a ${kind} target (${target.kind === "emailDomain" ? target.domain : target.did}) first in the real adapter: no request, profile lookup or side effect`, async () => {
+      let requests = 0;
+      let profileLookups = 0;
+      const adapter = createShareAuthorityAdapters({
+        origin: "https://share.example",
+        profileName: async () => { profileLookups++; return "test"; },
+        fetchFn: (async () => { requests++; throw new Error("network must not be reached"); }) as unknown as typeof globalThis.fetch,
+      }).targetAdapter;
+      await expect(adapter.publish(addressedInput(target))).rejects.toMatchObject({
+        code: "UNAVAILABLE",
+        exitCode: 4,
+        message: `${kind}-addressed shares are not available in this release; nothing was shared`,
+      });
+      expect(requests).toBe(0);
+      expect(profileLookups).toBe(0);
+      expect(publishEvents).toEqual([]);
+      expect(encryptions).toBe(0);
+      expect(uploadedPaths).toEqual([]);
+      expect(registeredPolicies).toEqual([]);
+      expect(ownerRootInputs).toEqual([]);
+      expect(sessionSignatures).toEqual([]);
+    });
+  }
+
   /** The history record of a share whose printed link is its short link: the only link an invitation carries. */
   const recordWithShortLink = (published: PublishedShare): SenderShareRecord => ({
     ...historyRecordForPublishedShare(published),
@@ -998,7 +1027,8 @@ describe("TinyCloud share authority adapter", () => {
     });
   });
 
-  it("publishes view-only email-domain shares with the domain credential commitment", async () => {
+  // TC-2242: domain publishing refused in this release; un-skip with the path-bound comeback (#795, TC-1424)
+  it.skip("publishes view-only email-domain shares with the domain credential commitment", async () => {
     const published = await addressedAdapter().publish(addressedInput({ kind: "emailDomain", domain: "Example.com" }));
     if ("state" in published) throw new Error("expected addressed publication");
     expect(published.metadata.recipientMatcher).toEqual({ kind: "emailDomain", value: "example.com" });
@@ -1157,7 +1187,8 @@ describe("TinyCloud share authority adapter", () => {
     });
   });
 
-  it("refuses invalid addressed recipients before publishing a location or uploading", async () => {
+  // TC-2242: domain publishing refused in this release; un-skip with the path-bound comeback (#795, TC-1424)
+  it.skip("refuses invalid addressed recipients before publishing a location or uploading", async () => {
     const adapter = addressedAdapter();
     await expect(adapter.publish(addressedInput({ kind: "emailDomain", domain: "example.123" })))
       .rejects.toMatchObject({ failure: { kind: "invalid-request", reason: "recipient email domain is invalid" } });
@@ -1386,7 +1417,8 @@ describe("TinyCloud share authority adapter", () => {
     return { invitations, ...createShareAuthorityAdapters({ origin: "https://share.example", profileName: async () => "test", fetchFn }) };
   };
 
-  it("gates domain invitations by version but admits a session-only publisher's own policy", async () => {
+  // TC-2242: domain publishing refused in this release; un-skip with the path-bound comeback (#795, TC-1424)
+  it.skip("gates domain invitations by version but admits a session-only publisher's own policy", async () => {
     nodeContract = "1.17.2";
     const adapters = deliveringAdapters();
     const domain = { ...addressedInput({ kind: "emailDomain", domain: "example.com" }, ["read", "edit"]), notify: true };
@@ -1412,7 +1444,8 @@ describe("TinyCloud share authority adapter", () => {
     expect(adapters.invitations).toHaveLength(1);
   });
 
-  it("compares node semver and follows the SDK's /info redirects", async () => {
+  // TC-2242: domain publishing refused in this release; un-skip with the path-bound comeback (#795, TC-1424)
+  it.skip("compares node semver and follows the SDK's /info redirects", async () => {
     nodeContract = "1.17.3";
     const adapters = deliveringAdapters();
     const domain = { ...addressedInput({ kind: "emailDomain", domain: "example.com" }), notify: true };

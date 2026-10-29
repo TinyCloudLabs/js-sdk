@@ -376,6 +376,8 @@ tinycloud completion fish | source
 
 Publishing needs the publishing scope in the owner's `default` space, on a dedicated profile: `tinycloud init --name publisher --key-only`, then `tinycloud --profile publisher auth login --method openkey --paste --manifest builtin:share-publishing --expiry 30d`. Publish with `tinycloud --profile publisher share publish ...`.
 
+Sharing to an email address, domain or DID isn't available in this release; link shares are.
+
 ```bash
 tinycloud share publish ./note.md --json                                  # bearer link; JSON has no URL: use share show <id> --reveal-link
 tinycloud share publish ./note.md --to email:alice@example.com --notify   # addressed: exact email, emailed invitation (read required)
