@@ -81,12 +81,13 @@ export function unknownShareDiagnostic(error: unknown): string {
   if (!(error instanceof Error)) return "UnknownError: share operation failed";
   const className = error.name === "Error" ? error.constructor.name : error.name;
   const name = /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(className) ? className : "Error";
-  const message = error.message.slice(0, 8192)
+  const message = error.message
     .replace(/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*(?:-----END [^-]*PRIVATE KEY-----|$)/g, "[redacted]")
     .replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s<>"']*/gi, "[redacted-url]")
     .replace(/["'][^"'\r\n]*["']/g, "[redacted]")
     .replace(/\b(?:Bearer|Invocation|Basic)\s+\S+/gi, "[redacted]")
-    .replace(/\b(?:private[-_]?key|secret|token|password|authorization|session[-_]?id|credential|seed)\s*[:=]\s*\S+/gi, "[redacted]")
+    // A sensitive value can contain spaces or line breaks; suppress the entire remaining value.
+    .replace(/\b(?:private[-_ ]?key|api[-_]?key|(?:access|refresh)[-_]?token|secret|token|password|authorization|session[-_ ]?(?:id|key)|credential|seed(?: phrase)?|mnemonic|recovery phrase)\s*[:=]\s*[\s\S]*/gi, "[redacted]")
     .replace(/\b[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_~.-]+/g, "[redacted]")
     .replace(/\b(?:tc1[-=][^\s]+|bafy[a-z0-9]+|bafk[a-z0-9]+)\b/gi, "[redacted]")
     .replace(/[#?][^\s]+/g, "[redacted]")

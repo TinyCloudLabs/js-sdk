@@ -94,56 +94,65 @@ function harness(shareId: string) {
 }
 
 describe("CLI V3 email publisher", () => {
-  test("plain email publish notifies with the production credential commitment; explicit flags override it", async () => {
+  test("plain email publish signs the production commitment and honors each credential override", async () => {
     const directory = await mkdtemp(join(tmpdir(), "tc-email-defaults-"));
     const file = join(directory, "note.txt");
     await writeFile(file, "note");
     const override = structuredClone(descriptor) as { issuer: { did: string; kid: string } };
+    override.issuer.did = "did:web:custom.example";
+    override.issuer.kid = "did:web:custom.example#email";
     const descriptorPath = join(directory, "descriptor.json");
     await writeFile(descriptorPath, JSON.stringify(override));
     const originalExit = process.exit;
-    process.exit = (() => {}) as typeof process.exit;
+    const exits: (number | undefined)[] = [];
+    process.exit = ((code?: number) => { exits.push(code); }) as typeof process.exit;
+    const fixture = harness("defaultshare1234567");
+    let published: PublishedShare | undefined;
+    const recipients: string[] = [];
+    configureShareCommandServices({
+      shortLinkInvitations: true,
+      records: new MemorySenderShareRecordStorage(),
+      links: { show: async (share) => ({ url: share.url, short: true }), unlink: async () => "deleted" },
+      targetAdapter: { async publish(request) {
+        published = await publishEmailShareV3({
+          ...fixture.input,
+          credentialDescriptor: request.credentialDescriptor,
+          issuerDid: request.issuerDid!,
+          issuerKid: request.issuerKid!,
+        });
+        return published;
+      } },
+      delivery: { async deliver(request) { recipients.push(request.recipient); return "delivered"; } },
+    });
     try {
-      for (const custom of [false, true]) {
-        const fixture = harness(custom ? "customshare12345678" : "defaultshare1234567");
-        let published: PublishedShare | undefined;
-        const recipients: string[] = [];
-        configureShareCommandServices({
-          shortLinkInvitations: true,
-          records: new MemorySenderShareRecordStorage(),
-          links: { show: async (share) => ({ url: share.url, short: true }), unlink: async () => "deleted" },
-          targetAdapter: { async publish(request) {
-            published = await publishEmailShareV3({
-              ...fixture.input,
-              credentialDescriptor: request.credentialDescriptor,
-              issuerDid: request.issuerDid!,
-              issuerKid: request.issuerKid!,
-            });
-            return published;
-          } },
-          delivery: { async deliver(request) { recipients.push(request.recipient); return "delivered"; } },
-        });
-        const flags = custom ? ["--credential-descriptor", descriptorPath, "--issuer-did", override.issuer.did, "--issuer-kid", override.issuer.kid] : [];
-        const output = await runShareCaptured(["share", "publish", file, "--to", "person@example.com", "--notify", "--json", ...flags]);
-        expect(output.exitCode).toBe(0);
-        expect(output.stderr).toBe("");
-        expect(recipients).toEqual(["person@example.com"]);
-        expect(JSON.parse(output.stdout).notification.state).toBe("delivered");
-        const opened = await resolveLink(published!.url, { trustedOrigins: [fixture.input.shareOrigin], apiOrigin: "https://api.tinycloud.xyz" });
-        const envelope = opened.value as unknown as ShareEnvelopeV3;
-        expect(await verifyEnvelopeV3(envelope, { expectedSignerDid: ownerDid })).toBe(true);
-        expect(envelope.policy).toMatchObject({
-          credentialRequirement: {
-            descriptorDigest: custom ? await canonicalDigest(override) : "1tg-qphmKBVtNwzVg9xyz-xxqt_xtMXAsQyXw46m8S0",
-            issuerDid: custom ? override.issuer.did : "did:web:issuer.credentials.org",
-            issuerKid: custom ? override.issuer.kid : "did:web:issuer.credentials.org#controller",
-          },
-        });
-        // Overrides are honored, not silently replaced by defaults; existing trust checks still refuse mismatches.
-        const refused = await runShareCaptured(["share", "publish", file, "--to", "person@example.com", "--issuer-kid", "did:web:issuer.credentials.org#wrong", "--json"]);
+      const output = await runShareCaptured(["share", "publish", file, "--to", "person@example.com", "--notify", "--json"]);
+      expect(exits).toEqual([]);
+      expect(output.stderr).toBe("");
+      expect(JSON.parse(output.stdout).notification.state).toBe("delivered");
+      const opened = await resolveLink(published!.url, { trustedOrigins: [fixture.input.shareOrigin], apiOrigin: "https://api.tinycloud.xyz" });
+      const envelope = opened.value as unknown as ShareEnvelopeV3;
+      expect(await verifyEnvelopeV3(envelope, { expectedSignerDid: ownerDid })).toBe(true);
+      expect(envelope.policy).toMatchObject({
+        credentialRequirement: {
+          descriptorDigest: "1tg-qphmKBVtNwzVg9xyz-xxqt_xtMXAsQyXw46m8S0",
+          issuerDid: "did:web:issuer.credentials.org",
+          issuerKid: "did:web:issuer.credentials.org#controller",
+        },
+      });
+      // Distinct overrides must not be silently ignored. Existing trust checks still refuse mismatches.
+      for (const flags of [
+        ["--credential-descriptor", descriptorPath],
+        ["--issuer-did", override.issuer.did],
+        ["--issuer-kid", override.issuer.kid],
+      ]) {
+        exits.length = 0;
+        const refused = await runShareCaptured(["share", "publish", file, "--to", "person@example.com", "--notify", "--json", ...flags]);
+        expect(exits).toEqual([2]);
         expect(refused.stdout).toBe("");
-        expect(refused.stderr).toContain("email credential issuer or claim is invalid");
+        expect(JSON.parse(refused.stderr).error.code).toBe("INVALID_ARGUMENT");
       }
+      expect(recipients).toEqual(["person@example.com"]);
+      expect(fixture.roots).toEqual(["policy-authority", "policy-enforcement"]);
     } finally {
       process.exit = originalExit;
       configureShareCommandServices({});

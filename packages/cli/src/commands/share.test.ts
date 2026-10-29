@@ -100,6 +100,33 @@ describe("tc share command contract", () => {
     expect(control.message).not.toMatch(/[\u0000-\u001f\u007f]/);
     expect(control.message.length).toBeLessThanOrEqual(600);
   });
+
+  for (const [label, message, forbidden] of [
+    ["sensitive values", "preparation failed; seed=alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima", ["alpha", "bravo", "lima"]],
+    ["bounded diagnostics", `${"x".repeat(8175)} ${"0123456789ABCDEF".repeat(4)}`, ["0123456789ABCDEF"]],
+  ] as const) {
+    test(`unknown publication errors preserve confidentiality for ${label}`, async () => {
+      const directory = await mkdtemp(join(tmpdir(), "tc-share-diagnostic-"));
+      const file = join(directory, "note.txt");
+      await writeFile(file, "synthetic diagnostic boundary input");
+      class LocalPublishError extends Error {}
+      configureShareCommandServices({ targetAdapter: { async publish() { throw new LocalPublishError(message); } } });
+      const originalExit = process.exit;
+      const exits: (number | undefined)[] = [];
+      process.exit = ((code?: number) => { exits.push(code); }) as typeof process.exit;
+      try {
+        const result = await runShareCaptured(["share", "publish", file, "--to", "person@example.com", "--json"]);
+        expect(exits).toEqual([2]);
+        expect(result.stdout).toBe("");
+        expect(JSON.parse(result.stderr).error.message).toContain("LocalPublishError");
+        for (const value of forbidden) expect(result.stderr).not.toContain(value);
+      } finally {
+        process.exit = originalExit;
+        configureShareCommandServices({});
+        await rm(directory, { recursive: true, force: true });
+      }
+    });
+  }
   test("missing decrypt points to a single standard approval request, not relogin", () => {
     const failure = shareCliError(new SharePublishAuthorityError({ kind: "decrypt-not-held" }));
     expect(failure.message).toContain("auth request --grant --cap tinycloud.encryption:default:share/:decrypt");
