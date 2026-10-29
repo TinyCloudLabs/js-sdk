@@ -10,6 +10,7 @@ import { configureShareCommandServices as configureServices, inspectShareInputOn
 import { ShareHistoryReadError, ShareHistoryRetryError, ShareHistoryUnreadableError, SharePublishAuthorityError } from "../share/errors.js";
 import { safeFilename, writeShareOutput } from "../share/io.js";
 import { runShareCaptured } from "./share.integration-harness.js";
+import { setJsonOutputRequested } from "../output/formatter.js";
 
 const SHORT_LINK = buildShortLink({
   origin: "https://share.example", type: "share", id: "a".repeat(26), key: new Uint8Array(32).fill(7),
@@ -79,7 +80,7 @@ describe("tc share command contract", () => {
     expect(diagnostic.message).toContain("ManifestValidationError");
     expect(diagnostic.message).toContain("named keys go in manifest.keys");
     class LocalPublishError extends Error {}
-    expect(shareCliError(new LocalPublishError("cannot prepare share")).message).toContain("LocalPublishError: cannot prepare share");
+    expect(shareCliError(new LocalPublishError("cannot prepare share")).message).toContain("LocalPublishError");
     const canaries = [
       "https://user:URLSECRET@share.example/s/full?token=QUERYSECRET#v=4&k=FRAGMENTSECRET",
       "Bearer BEARERSECRET",
@@ -92,8 +93,6 @@ describe("tc share command contract", () => {
     ];
     for (const canary of canaries) {
       const failure = shareCliError(new ManifestValidationError(`named keys go in manifest.keys; ${canary}`));
-      expect(failure.message).toContain("ManifestValidationError");
-      expect(failure.message).toContain("named keys go in manifest.keys");
       expect(failure.message).not.toMatch(/SECRET|TOKENVALUE|PRIVATEMATERIAL/);
     }
     const control = shareCliError(new ManifestValidationError(`bad\u001b[31m\n${"x".repeat(5000)}`));
@@ -104,28 +103,46 @@ describe("tc share command contract", () => {
   for (const [label, message, forbidden] of [
     ["sensitive values", "preparation failed; seed=alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima", ["alpha", "bravo", "lima"]],
     ["bounded diagnostics", `${"x".repeat(8175)} ${"0123456789ABCDEF".repeat(4)}`, ["0123456789ABCDEF"]],
+    ["composed diagnostics", "Couldn't prepare; seed='alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima'", ["alpha", "bravo", "lima"]],
+    ["structured diagnostics", 'preparation failed; {"seed": "alpha\nbravo\nlima', ["alpha", "bravo", "lima"]],
+    ["unreviewed diagnostics", "unreviewed upstream prose alpha bravo lima", ["alpha", "bravo", "lima"]],
+    ["reviewed diagnostics", "Manifest validation failed: named keys go in manifest.keys", []],
   ] as const) {
-    test(`unknown publication errors preserve confidentiality for ${label}`, async () => {
-      const directory = await mkdtemp(join(tmpdir(), "tc-share-diagnostic-"));
-      const file = join(directory, "note.txt");
-      await writeFile(file, "synthetic diagnostic boundary input");
-      class LocalPublishError extends Error {}
-      configureShareCommandServices({ targetAdapter: { async publish() { throw new LocalPublishError(message); } } });
-      const originalExit = process.exit;
-      const exits: (number | undefined)[] = [];
-      process.exit = ((code?: number) => { exits.push(code); }) as typeof process.exit;
-      try {
-        const result = await runShareCaptured(["share", "publish", file, "--to", "person@example.com", "--json"]);
-        expect(exits).toEqual([2]);
-        expect(result.stdout).toBe("");
-        expect(JSON.parse(result.stderr).error.message).toContain("LocalPublishError");
-        for (const value of forbidden) expect(result.stderr).not.toContain(value);
-      } finally {
-        process.exit = originalExit;
-        configureShareCommandServices({});
-        await rm(directory, { recursive: true, force: true });
-      }
-    });
+    for (const mode of ["human", "json"] as const) {
+      test(`unknown publication errors preserve confidentiality for ${label} (${mode})`, async () => {
+        const directory = await mkdtemp(join(tmpdir(), "tc-share-diagnostic-"));
+        const file = join(directory, "note.txt");
+        await writeFile(file, "synthetic diagnostic boundary input");
+        class LocalPublishError extends Error {}
+        configureShareCommandServices({ targetAdapter: { async publish() { throw new LocalPublishError(message); } } });
+        const originalExit = process.exit;
+        const originalTty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+        const jsonFlag = Symbol.for("tinycloud.cli.jsonOutputRequested");
+        const originalJson = Object.getOwnPropertyDescriptor(globalThis, jsonFlag);
+        const exits: (number | undefined)[] = [];
+        process.exit = ((code?: number) => { exits.push(code); }) as typeof process.exit;
+        Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+        setJsonOutputRequested(mode === "json");
+        try {
+          const result = await runShareCaptured(["share", "publish", file, "--to", "person@example.com", ...(mode === "json" ? ["--json"] : [])]);
+          expect(exits).toEqual([2]);
+          expect(result.stdout).toBe("");
+          expect(result.stderr).toContain("LocalPublishError");
+          if (mode === "json") expect(JSON.parse(result.stderr).error.code).toBe("INVALID_ARGUMENT");
+          else expect(result.stderr.trimStart().startsWith("{")).toBe(false);
+          for (const value of forbidden) expect(result.stderr).not.toContain(value);
+          if (label === "reviewed diagnostics") expect(result.stderr).toContain(message);
+        } finally {
+          process.exit = originalExit;
+          if (originalTty) Object.defineProperty(process.stdout, "isTTY", originalTty);
+          else Reflect.deleteProperty(process.stdout, "isTTY");
+          if (originalJson) Object.defineProperty(globalThis, jsonFlag, originalJson);
+          else Reflect.deleteProperty(globalThis, jsonFlag);
+          configureShareCommandServices({});
+          await rm(directory, { recursive: true, force: true });
+        }
+      });
+    }
   }
   test("missing decrypt points to a single standard approval request, not relogin", () => {
     const failure = shareCliError(new SharePublishAuthorityError({ kind: "decrypt-not-held" }));

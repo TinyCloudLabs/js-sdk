@@ -73,26 +73,22 @@ export function classifyShareFailure(error: unknown, loginHint: string): ShareFa
   return undefined;
 }
 
-/**
- * Last-resort diagnostic only. Never serialize the error, its cause, stack or response body.
- * Strip credential-bearing strings before bounding output so a truncated token cannot escape.
- */
+/** Reviewed fixed local diagnostics only; never add input-derived templates here. */
+const SAFE_SHARE_DIAGNOSTICS: Readonly<Record<string, true>> = {
+  "Manifest validation failed: named keys go in manifest.keys": true,
+  "email credential descriptor and issuer are required": true,
+  "email credential issuer or claim is invalid": true,
+  "email share binding is invalid": true,
+  "email shares require the email credential profile": true,
+  "Unexpected end of JSON input": true,
+};
+
+/** Last-resort class and safe diagnostic only; arbitrary exception text is confidential. */
 export function unknownShareDiagnostic(error: unknown): string {
-  if (!(error instanceof Error)) return "UnknownError: share operation failed";
-  const className = error.name === "Error" ? error.constructor.name : error.name;
-  const name = /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(className) ? className : "Error";
-  const message = error.message
-    .replace(/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*(?:-----END [^-]*PRIVATE KEY-----|$)/g, "[redacted]")
-    .replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s<>"']*/gi, "[redacted-url]")
-    .replace(/["'][^"'\r\n]*["']/g, "[redacted]")
-    .replace(/\b(?:Bearer|Invocation|Basic)\s+\S+/gi, "[redacted]")
-    // A sensitive value can contain spaces or line breaks; suppress the entire remaining value.
-    .replace(/\b(?:private[-_ ]?key|api[-_]?key|(?:access|refresh)[-_]?token|secret|token|password|authorization|session[-_ ]?(?:id|key)|credential|seed(?: phrase)?|mnemonic|recovery phrase)\s*[:=]\s*[\s\S]*/gi, "[redacted]")
-    .replace(/\b[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_~.-]+/g, "[redacted]")
-    .replace(/\b(?:tc1[-=][^\s]+|bafy[a-z0-9]+|bafk[a-z0-9]+)\b/gi, "[redacted]")
-    .replace(/[#?][^\s]+/g, "[redacted]")
-    .replace(/[A-Za-z0-9_+/-]{24,}={0,2}/g, "[redacted]")
-    .replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2066-\u2069]/g, " ")
-    .trim();
-  return `${name}: ${message || "share operation failed"}`.slice(0, 600);
+  if (!(error instanceof Error)) return "UnknownError: share operation failed (details redacted)";
+  // The constructor identifies the actual class; `name` can be arbitrary upstream text.
+  const className = Object.getPrototypeOf(error)?.constructor?.name;
+  const name = typeof className === "string" && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(className) ? className : "Error";
+  const message = Object.hasOwn(SAFE_SHARE_DIAGNOSTICS, error.message) ? error.message : "share operation failed (details redacted)";
+  return `${name}: ${message}`;
 }
