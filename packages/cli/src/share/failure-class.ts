@@ -72,3 +72,26 @@ export function classifyShareFailure(error: unknown, loginHint: string): ShareFa
   }
   return undefined;
 }
+
+/**
+ * Last-resort diagnostic only. Never serialize the error, its cause, stack or response body.
+ * Strip credential-bearing strings before bounding output so a truncated token cannot escape.
+ */
+export function unknownShareDiagnostic(error: unknown): string {
+  if (!(error instanceof Error)) return "UnknownError: share operation failed";
+  const className = error.name === "Error" ? error.constructor.name : error.name;
+  const name = /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(className) ? className : "Error";
+  const message = error.message.slice(0, 8192)
+    .replace(/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*(?:-----END [^-]*PRIVATE KEY-----|$)/g, "[redacted]")
+    .replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s<>"']*/gi, "[redacted-url]")
+    .replace(/["'][^"'\r\n]*["']/g, "[redacted]")
+    .replace(/\b(?:Bearer|Invocation|Basic)\s+\S+/gi, "[redacted]")
+    .replace(/\b(?:private[-_]?key|secret|token|password|authorization|session[-_]?id|credential|seed)\s*[:=]\s*\S+/gi, "[redacted]")
+    .replace(/\b[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_~.-]+/g, "[redacted]")
+    .replace(/\b(?:tc1[-=][^\s]+|bafy[a-z0-9]+|bafk[a-z0-9]+)\b/gi, "[redacted]")
+    .replace(/[#?][^\s]+/g, "[redacted]")
+    .replace(/[A-Za-z0-9_+/-]{24,}={0,2}/g, "[redacted]")
+    .replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2066-\u2069]/g, " ")
+    .trim();
+  return `${name}: ${message || "share operation failed"}`.slice(0, 600);
+}

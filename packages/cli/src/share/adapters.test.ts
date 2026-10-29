@@ -41,7 +41,6 @@ const uploadedPaths: string[] = [];
 const encryptionSpaces: string[] = [];
 let sessionOnly = true;
 let holdsDecrypt = true;
-const decryptChecks: unknown[] = [];
 let invokerDid = credentialHolderDid;
 let nodeInfoStatus = 200;
 const nodeInfoRequests: RequestInit[] = [];
@@ -160,10 +159,11 @@ const node = {
     return `urn:tinycloud:encryption:${credentialHolderDid}:default`;
   },
   getDefaultEncryptionNetworkId: () => `urn:tinycloud:encryption:${canonicalOwnerDid}:default`,
-  hasRuntimePermissions: (entries: unknown) => {
-    decryptChecks.push(entries);
-    return holdsDecrypt;
-  },
+  getVerifiedSessionCapabilities: () => holdsDecrypt ? [
+    { service: "tinycloud.encryption", path: `urn:tinycloud:encryption:${canonicalOwnerDid}:default/share/`, actions: ["tinycloud.encryption/decrypt"] },
+    { service: "tinycloud.encryption", path: `urn:tinycloud:encryption:${credentialHolderDid}:default`, actions: ["tinycloud.encryption/decrypt"] },
+  ] : [],
+  getEffectiveRuntimePermissionEntries: () => [],
   encryption: {
     encryptToNetwork: async (networkId: string, _bytes: Uint8Array, options?: { readonly keyPath?: string }) => {
       encryptions += 1;
@@ -318,7 +318,6 @@ afterEach(() => {
   uploadedPaths.length = 0;
   sessionOnly = true;
   holdsDecrypt = true;
-  decryptChecks.length = 0;
   invokerDid = credentialHolderDid;
   nodeInfoStatus = 200;
   nodeInfoRequests.length = 0;
@@ -716,11 +715,6 @@ describe("TinyCloud share authority adapter", () => {
       expect(addressed.metadata.target.spaceId).toBe(restoredSpaceId);
       expect(uploadedSpaces).toEqual([restoredSpaceId]);
       expect(encryptionSpaces).toEqual([]);
-      expect(decryptChecks).toEqual([[{
-        service: "tinycloud.encryption",
-        path: expect.stringMatching(new RegExp(`^urn:tinycloud:encryption:${canonicalOwnerDid}:default/share/[0-9a-f]{32}$`)),
-        actions: ["tinycloud.encryption/decrypt"],
-      }]]);
 
       expect(addressed.metadata.ownerDid).toBe(credentialHolderDid);
       expect(ownerRootInputs.map(({ role }) => role)).toEqual(["policy-authority", "policy-enforcement"]);
@@ -1179,12 +1173,7 @@ describe("TinyCloud share authority adapter", () => {
     }).targetAdapter;
     const error = await adapter.publish(addressedInput({ kind: "email", address: "owner@example.com" })).then(() => undefined, (caught: unknown) => caught);
     expect(error).toBeInstanceOf(SharePublishAuthorityError);
-    expect((error as InstanceType<typeof SharePublishAuthorityError>).failure).toEqual({ kind: "decrypt-not-held" });
-    expect(decryptChecks).toEqual([[{
-      service: "tinycloud.encryption",
-      path: expect.stringMatching(new RegExp(`^urn:tinycloud:encryption:${canonicalOwnerDid}:default/share/[0-9a-f]{32}$`)),
-      actions: ["tinycloud.encryption/decrypt"],
-    }]]);
+    expect((error as InstanceType<typeof SharePublishAuthorityError>).failure).toMatchObject({ kind: "decrypt-not-held", profileName: "test" });
     // No Share config fetch, registry write, upload, encryption, signing, policy registration or node probe.
     expect(requests).toEqual([]);
     expect(publishEvents).toEqual([]);
@@ -1210,7 +1199,6 @@ describe("TinyCloud share authority adapter", () => {
     holdsDecrypt = false;
     const bearer = await addressedAdapter().publish(addressedInput({ kind: "bearer" }));
     expect("state" in bearer).toBe(false);
-    expect(decryptChecks).toEqual([]);
   });
 
   it("keeps a lost-response retry identical after the clock advances and the adapter is recreated", async () => {

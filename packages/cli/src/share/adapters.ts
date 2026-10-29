@@ -12,6 +12,7 @@ import { ProfileManager } from "../config/profiles.js";
 import { ExitCode, PROFILE_COMMIT_LOCK_TIMEOUT_MS } from "../config/constants.js";
 import { CLIError } from "../output/errors.js";
 import { isSessionExpiredError } from "../auth/session-expired.js";
+import { isVerifiedRawEncryptionPermission } from "../lib/raw-encryption.js";
 import { writeJsonAtomic } from "@tinycloud/operations/state";
 import { withoutBearer } from "@tinycloud/operations/delegation-binding";
 import {
@@ -52,6 +53,8 @@ import {
   parseSignedSiweCacao,
   revokePolicyRootV3,
   signCompactUcanAuthorization,
+  isCapabilitySubset,
+  type PermissionEntry,
 } from "@tinycloud/sdk-core";
 import { extractSiweExpiration, InvalidRestoredSessionError, type TinyCloudNode } from "@tinycloud/node-sdk";
 import {
@@ -112,9 +115,15 @@ async function removeOverLimitShare(input: {
   return remaining;
 }
 
-/** Whether the node's session (or an installed runtime grant) holds decrypt on the encryption network. */
-export function sessionHoldsEncryptionDecrypt(node: Pick<TinyCloudNode, "hasRuntimePermissions">, networkId: string): boolean {
-  return node.hasRuntimePermissions([{ service: "tinycloud.encryption", path: networkId, actions: ["tinycloud.encryption/decrypt"] }]);
+/** Check the exact decrypt resource against signed, active authority, not static manifest input. */
+export function sessionHoldsEncryptionDecrypt(
+  node: Pick<TinyCloudNode, "getVerifiedSessionCapabilities" | "getEffectiveRuntimePermissionEntries">,
+  resource: string,
+): boolean {
+  const requested = [{ service: "tinycloud.encryption", space: "encryption", path: resource, actions: ["tinycloud.encryption/decrypt"] }];
+  const covers = (entries: PermissionEntry[]): boolean =>
+    isCapabilitySubset(requested, entries.filter(isVerifiedRawEncryptionPermission).map((entry) => ({ ...entry, space: "encryption" }))).subset;
+  return covers(node.getVerifiedSessionCapabilities()) || covers(node.getEffectiveRuntimePermissionEntries());
 }
 const DEFAULT_SHARE_ORIGIN = "https://share.tinycloud.xyz";
 const MIN_DOMAIN_DELIVERY_VERSION = "1.17.3";
@@ -719,7 +728,7 @@ export function createShareAuthorityAdapters(input: {
     const emailKeyPath = targetInput.target.kind === "email" ? `share/${crypto.randomUUID().replaceAll("-", "")}` : undefined;
     if (addressedEncryptionNetwork !== undefined && node.isSessionOnly && !sessionHoldsEncryptionDecrypt(node,
       emailKeyPath === undefined ? addressedEncryptionNetwork : `${addressedEncryptionNetwork}/${emailKeyPath}`)) {
-      throw new SharePublishAuthorityError({ kind: "decrypt-not-held" });
+      throw new SharePublishAuthorityError({ kind: "decrypt-not-held", profileName: activeProfileName });
     }
     const config = await publicConfig();
     if (targetInput.origin !== config.shareOrigin) throw new SharePublishAuthorityError({ kind: "origin-mismatch" });
