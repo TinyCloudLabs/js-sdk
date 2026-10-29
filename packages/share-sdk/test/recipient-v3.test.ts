@@ -98,6 +98,13 @@ describe("v3 recipient content", () => {
     });
   }
 
+  it("opens standard-base64 binary AAD containing both non-URL alphabet characters", async () => {
+    const fixture = await recipientFixture(2, new Uint8Array([251, 255]));
+    const opened = await fixture.client.decryptV3Content(fixture.stored);
+    expect(new TextDecoder().decode(opened.bytes)).toBe("hello");
+    expect(fixture.decryptInvocations()).toBe(1);
+  });
+
   for (const [version, aad] of [
     [1, undefined],
     [2, undefined],
@@ -123,6 +130,10 @@ describe("v3 recipient content", () => {
     ["invalid base64", "not base64!"],
     ["empty payload", ""],
     ["truncated AES-GCM payload", base64(new Uint8Array(27))],
+    ["noncanonical two-pad trailing bits", base64(new Uint8Array(28)).replace(/AA==$/, "AB==")],
+    ["noncanonical one-pad trailing bits", base64(new Uint8Array(29)).replace(/AAA=$/, "AAB=")],
+    ["base64url alphabet", base64(new Uint8Array(28).fill(255)).replace(/\//g, "_")],
+    ["missing standard padding", base64(new Uint8Array(28)).replace(/=+$/, "")],
   ]) {
     it(`rejects malformed ciphertext (${label}) before decrypting the key`, async () => {
       const fixture = await recipientFixture(2);

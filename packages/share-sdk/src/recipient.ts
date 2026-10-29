@@ -99,43 +99,20 @@ function bytes(value: unknown, label: string): Uint8Array {
   return decoded;
 }
 
-const BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
 function toBase64(bytes: Uint8Array): string {
-  let out = "";
-  for (let i = 0; i < bytes.length; i += 3) {
-    const b0 = bytes[i]!;
-    const b1 = i + 1 < bytes.length ? bytes[i + 1]! : 0;
-    const b2 = i + 2 < bytes.length ? bytes[i + 2]! : 0;
-    out += BASE64_ALPHABET[(b0 >> 2) & 0x3f];
-    out += BASE64_ALPHABET[((b0 << 4) | (b1 >> 4)) & 0x3f];
-    out += i + 1 < bytes.length ? BASE64_ALPHABET[((b1 << 2) | (b2 >> 6)) & 0x3f] : "=";
-    out += i + 2 < bytes.length ? BASE64_ALPHABET[b2 & 0x3f] : "=";
-  }
-  return out;
+  return toBase64Url(bytes).replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(bytes.length / 3) * 4, "=");
 }
 
 function fromBase64(value: string, label: string): Uint8Array {
   if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
     throw new Error(`${label} is invalid`);
   }
-  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
-  const out = new Uint8Array((value.length / 4) * 3 - padding);
-  let outIdx = 0;
-  for (let i = 0; i < value.length; i += 4) {
-    const v0 = BASE64_ALPHABET.indexOf(value[i]!);
-    const v1 = BASE64_ALPHABET.indexOf(value[i + 1]!);
-    const v2 = value[i + 2] === "=" ? 0 : BASE64_ALPHABET.indexOf(value[i + 2]!);
-    const v3 = value[i + 3] === "=" ? 0 : BASE64_ALPHABET.indexOf(value[i + 3]!);
-    const b0 = (v0 << 2) | (v1 >> 4);
-    const b1 = ((v1 & 0x0f) << 4) | (v2 >> 2);
-    const b2 = ((v2 & 0x03) << 6) | v3;
-    if (outIdx < out.length) out[outIdx++] = b0;
-    if (outIdx < out.length) out[outIdx++] = b1;
-    if (outIdx < out.length) out[outIdx++] = b2;
+  try {
+    // The shared strict decoder also rejects nonzero trailing pad bits.
+    return fromBase64Url(value.replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_"));
+  } catch {
+    throw new Error(`${label} is invalid`);
   }
-  if (toBase64(out) !== value) throw new Error(`${label} is invalid`);
-  return out;
 }
 
 async function digest(value: unknown): Promise<string> {
