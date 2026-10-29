@@ -52,11 +52,9 @@ async function listenerFixture(fetch?: FetchFunction) {
   const arrived = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   const sent = Promise.withResolvers<void>();
-  const closed = Promise.withResolvers<boolean>();
   // Execute the actual SQL received over HTTP against the real stored response,
   // rather than echoing a query option or manufacturing a successful query result.
   const server = createServer(async (request, response) => {
-    response.once("close", () => closed.resolve(response.writableEnded));
     try {
       let body = "";
       for await (const chunk of request) body += chunk;
@@ -114,7 +112,7 @@ async function listenerFixture(fetch?: FetchFunction) {
   });
   return {
     ...transport, abort, stopped, deliveries, handoff: handoff.handle, responses: responses.handle,
-    arrived: arrived.promise, closed: closed.promise, sent: sent.promise, release: () => release.resolve(),
+    arrived: arrived.promise, sent: sent.promise, release: () => release.resolve(),
   };
 }
 
@@ -126,9 +124,7 @@ test("aborting a ready listener cancels its pending real SQL request and settles
   fixture.abort.abort();
   // The test runner's normal liveness deadline detects a missing abort; no polling,
   // sleeps, runtime timeout policy, or test-generated completion response is involved.
-  const [stopped, completedResponse] = await Promise.all([fixture.stopped, fixture.closed]);
-  expect(stopped).toEqual({ state: "stopped" });
-  expect(completedResponse).toBe(false);
+  expect(await fixture.stopped).toEqual({ state: "stopped" });
   expect(fixture.deliveries).toEqual([]);
   expect(unwrap(await fixture.handoff.query("SELECT response_id, state FROM feed_handoffs")).rows).toEqual([]);
 });

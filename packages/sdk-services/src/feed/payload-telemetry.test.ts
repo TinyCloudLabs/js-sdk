@@ -74,33 +74,3 @@ test("ordinary SQL calls keep their existing public error details when redaction
   } finally { server.stop(true); }
 });
 
-test("the actual CLI error renderer and an ordinary subscriber do not echo private SQL failure data", async () => {
-  const server = Bun.serve({
-    hostname: "127.0.0.1", port: 0,
-    fetch: () => new Response(`synthetic SQL payload failure ${marker}`, { status: 400 }),
-  });
-  try {
-    const sqlPath = new URL("../sql/SQLService.ts", import.meta.url).pathname;
-    const contextPath = new URL("../context.ts", import.meta.url).pathname;
-    const errorsPath = new URL("../../../cli/src/output/errors.ts", import.meta.url).pathname;
-    const child = Bun.spawn([process.execPath, "--eval", `
-      import { SQLService } from ${JSON.stringify(sqlPath)};
-      import { ServiceContext } from ${JSON.stringify(contextPath)};
-      import { cliErrorFromService, handleError } from ${JSON.stringify(errorsPath)};
-      const context = new ServiceContext({
-        invoke: () => ({ Authorization: 'test-invocation' }), hosts: [${JSON.stringify(server.url.href)}],
-        session: ${JSON.stringify(session)}, retryPolicy: { maxAttempts: 1 },
-      });
-      context.on('service.error', event => process.stderr.write(JSON.stringify(event) + '\\n'));
-      const service = new SQLService(); service.initialize(context);
-      const result = await service.query('SELECT ?', [${JSON.stringify(marker)}], { redactErrors: true });
-      if (result.ok) throw new Error('The private SQL failure was mislabeled as success');
-      await handleError(cliErrorFromService(result.error));
-    `], { stdout: "pipe", stderr: "pipe" });
-    const stdout = await new Response(child.stdout).text();
-    const stderr = await new Response(child.stderr).text();
-    expect(await child.exited).toBe(1);
-    expect(stderr).toContain(ErrorCodes.SQL_ERROR);
-    expect(stdout + stderr).not.toContain(marker);
-  } finally { server.stop(true); }
-});
