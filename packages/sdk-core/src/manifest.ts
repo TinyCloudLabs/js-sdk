@@ -596,6 +596,47 @@ export function expandPermissionEntries(
   return entries.flatMap(expandPermissionEntry);
 }
 
+/**
+ * Expand runtime permission requests without admitting named keys into static
+ * manifests. A Share key may be created only on the authenticated owner's
+ * default network, at one exact share/<id> path.
+ */
+export function expandRuntimePermissionEntries(
+  entries: readonly PermissionEntry[],
+  ownerDid?: string,
+): PermissionEntry[] {
+  return entries.flatMap((entry) => {
+    if (entry.service !== ENCRYPTION_PERMISSION_SERVICE ||
+      typeof entry.path !== "string" || !entry.path.includes("/") ||
+      entry.path.endsWith("/share/")) {
+      return expandPermissionEntry(entry);
+    }
+    let resource;
+    let ownerNetwork;
+    try {
+      resource = parseEncryptionResource(entry.path);
+      if (typeof ownerDid !== "string" || ownerDid.length === 0) throw new Error("missing owner");
+      ownerNetwork = parseEncryptionResource(`urn:tinycloud:encryption:${ownerDid}:default`);
+    } catch {
+      throw new ManifestValidationError("runtime Share key creation requires a canonical current-owner key resource");
+    }
+    if (resource.kind !== "key" || resource.networkId !== ownerNetwork.networkId ||
+      !/^share\/[^/]+$/.test(resource.path) ||
+      (entry.space !== undefined && entry.space !== ENCRYPTION_MANIFEST_SPACE) ||
+      !Array.isArray(entry.actions) || entry.actions.length === 0 ||
+      entry.actions.some((action) => action !== "key.create" && action !== "tinycloud.encryption/key.create")) {
+      throw new ManifestValidationError("runtime Share key creation requires the current owner's exact default/share/<id> key and key.create only");
+    }
+    return [{
+      ...entry,
+      space: ENCRYPTION_MANIFEST_SPACE,
+      path: `${resource.networkId}/${resource.path}`,
+      actions: ["tinycloud.encryption/key.create"],
+      skipPrefix: true,
+    }];
+  });
+}
+
 /** Expand exact named-key decrypt entries for child delegations only. */
 export function expandDelegationPermissionEntries(
   entries: readonly PermissionEntry[],

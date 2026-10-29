@@ -166,6 +166,13 @@ version metadata and make the immutable release checkout fail the clean-tree pub
   entry to `agent.changelog.md` so future agents can see what changed and why.
 - PR descriptions should list cross-repo dependencies, node/API implications, tests run, and any
   required changesets.
+- Exact Share-key creation is runtime consent, not a static manifest entry.
+  `TinyCloudWeb.requestPermissions(entries, { expiryMs })` accepts only
+  `tinycloud.encryption/key.create` on the authenticated owner's canonical
+  `urn:tinycloud:encryption:<ownerDid>:default/share/<id>` key. Approval stays
+  bound to the same signed session; decline, session replacement and unsupported
+  native shells cannot install a grant. Keep the static manifest and native
+  ceiling restrictions intact.
 - The public ChatGPT candidate is `/chatgpt/mcp`, not the broad `/mcp` service.
   Tool bindings are public opt-in; keep recovery-tool mapping restricted to the
   selected surface. Public approvals/state are separate and require matching
