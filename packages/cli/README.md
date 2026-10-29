@@ -247,10 +247,57 @@ current runner; an already-started action may still have happened. Keep response
 IDs as downstream idempotency keys where supported. Exactly-once external
 execution is not promised.
 
+### Prepared FORMAT1 owner import
+
+`feed import` accepts an already-resolved FORMAT1 JSON bundle, not the raw snapshot
+written by `feed export`. Supply the full target space explicitly:
+
+```bash
+tc --profile owner feed import \
+  --space tinycloud:pkh:eip155:1:0x2222222222222222222222222222222222222222:applications \
+  --file ./prepared-owner-bundle.json
+```
+
+The authenticated owner needs SQL read/write/schema authority for
+`xyz.tinycloud.tinychat/home_feed` and the registered per-agent database pairs.
+The command initializes the owner archive and uses the canonical SDK to initialize
+the current pair schemas. Agent response-read grants are insufficient. Import neither
+registers agents nor broadens their grants.
+
+Before writing, the importer validates versions, raw base64/SHA-256 proofs, full
+source references and card/response identities. Publisher agent IDs, DIDs, and
+resource pairs must match actual `feed_agents` rows and the canonical feed resource
+convention, with distinct database basenames. Labels and stored provenance do not
+replace signed node authority. The importer does not classify legacy data, choose
+current answers, resolve recipient names, or recalculate expiry.
+
+The complete prepared JSON value stays in owner-only
+`home_feed.feed_owner_imports`, immutable under
+`(source_space_id, namespace, snapshot_id)`. A declared `previousSnapshotId` must
+already exist in that same scope. Reusing a snapshot ID with changed content is
+refused. Raw source rows, original receipts, owner-only state and other archival
+metadata are not copied to agent databases; deletion records are data, not SQL
+deletes. Only envelopes declared `restoreTarget: "agent-response"` are restored
+remotely, using their supplied complete canonical cards and optional private
+response payloads.
+
+Remote delivery recipients come only from explicit `runtimeTarget.agentId`
+mappings. Configure `feed watch --recipient` with that same runtime ID, not a
+logical recipient key, legacy name, or label. Partial mappings retain unresolved
+names in the owner archive. Multiple logical keys for one runtime retain all
+evidence, including conflicts; the default-deny delivery policy below still applies.
+Private payloads retain the response-read boundary described above.
+
+The archive and per-agent databases do not share a transaction. An identical
+snapshot replay can finish partial progress without replacing existing content.
+Replay is not exactly-once external delivery; runtime durable acceptance,
+deduplication, and deadline checks remain necessary. Import does not pause source
+writers, install a write fence, or establish a live-source cutover.
+
 ### Owner SDK restore and delivery policy
 
-The generic restore API is exported from `@tinycloud/sdk-services/feed`; it is
-not a CLI importer command. Call `initializeFeedDatabases({ output, responses })`
+The generic restore API is exported from `@tinycloud/sdk-services/feed`; the
+prepared importer above uses it. Call `initializeFeedDatabases({ output, responses })`
 with owner-authorized SQL handles to initialize the current pair's tables before
 restoring or listening. Agents retain read-only access to responses and cannot
 initialize or restore that database. Missing import/policy tables fail closed.

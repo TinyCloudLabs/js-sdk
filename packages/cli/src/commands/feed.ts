@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { parseSpaceUri } from "@tinycloud/sdk-core";
 import {
   appendFeedMessage, appendFeedResponse, feedCardSchema, feedHandlingSchema, feedResourceNames, feedResponsePayloadSchema,
   getFeedCardState, initializeFeedDatabases, listFeedCards, listFeedResponses,
@@ -19,6 +20,7 @@ import type { LocalFeedHandoff } from "../feed/local.js";
 import { runFeedRunner } from "../feed/runner.js";
 import { connectFeedAgent } from "../feed/connection.js";
 import { exportFeedRawSnapshot } from "../feed/export.js";
+import { importFeedPreparedBundle } from "../feed/import.js";
 
 const FEED_PREFIX = "xyz.tinycloud.tinychat/feed";
 const REGISTRY = "xyz.tinycloud.tinychat/home_feed";
@@ -97,6 +99,26 @@ slash prefix and output are explicit; source get/sync grants are separate from f
           prefix: options.prefix, outFile: options.out, sidecarsFile: options.sidecars,
         });
         outputJson(receipt);
+      } catch (error) { return handleError(error); }
+    });
+
+  feed.command("import").description("Owner: restore a prepared FORMAT1 bundle and retain its private source archive")
+    .requiredOption("--space <uri>", "Explicit full tinycloud:... target-space URI; no primary-space inference")
+    .requiredOption("--file <file>", "Owner-only prepared FORMAT1 JSON bundle")
+    .action(async (options: { space: string; file: string }, command: Command) => {
+      try {
+        if (!options.space.startsWith("tinycloud:") || !parseSpaceUri(options.space)?.owner) {
+          throw cliErrorFromService({ code: "INVALID_INPUT", message: "Feed import requires an explicit full target-space URI" });
+        }
+        let bundle: unknown;
+        try {
+          bundle = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(await readFile(options.file)));
+        } catch {
+          throw cliErrorFromService({ code: "INVALID_INPUT", message: "Could not read a valid prepared feed bundle file" });
+        }
+        const profile = await ProfileManager.resolveContext(command.optsWithGlobals());
+        const node = await ensureAuthenticated(profile);
+        outputJson(await importFeedPreparedBundle({ sql: node.sqlForSpace(options.space), targetSpace: options.space, bundle }));
       } catch (error) { return handleError(error); }
     });
 
