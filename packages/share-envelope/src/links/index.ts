@@ -6,6 +6,8 @@
  * unchanged in browsers and in Node.
  */
 export {
+  createApprovalRequest,
+  resolveApprovalRequest,
   createLink,
   deleteLink,
   prepareLinkRecord,
@@ -76,3 +78,4 @@ export {
 } from "./header.js";
 export { checkLinkRecord, openLinkRecord, type CheckedLinkRecord, type LinkBodyValidator, type OpenedLink } from "./record.js";
 export { signerFromJwk, signerFromSeed, type Ed25519PrivateJwk, type LinkSigner } from "./signer.js";
+export { parseApprovalRequest, type OpenKeyApprovalRequestV1 } from "./approval-request.js";

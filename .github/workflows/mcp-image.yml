@@ -88,17 +88,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          sparse-checkout: .github/scripts
+          sparse-checkout: |
+            .github/deploy-tools
+            .github/scripts
           persist-credentials: false
-      - name: Install Phala CLI
-        run: npm install --global phala@1.1.22
+      - name: Install pinned Phala deploy tools
+        shell: bash
+        run: |
+          tools="$RUNNER_TEMP/mcp-deploy-tools"
+          mkdir -p "$tools"
+          cp .github/deploy-tools/package.json .github/deploy-tools/package-lock.json "$tools/"
+          npm ci --prefix "$tools" --ignore-scripts --no-audit --no-fund
+          echo "MCP_DEPLOY_TOOLS=$tools" >> "$GITHUB_ENV"
+          echo "$tools/node_modules/.bin" >> "$GITHUB_PATH"
+      - name: Validate required native service credential
+        env:
+          TC_MCP_NATIVE_SERVICE_CREDENTIAL: ${{ secrets.TC_MCP_NATIVE_SERVICE_CREDENTIAL }}
+        shell: bash
+        run: |
+          source .github/scripts/mcp-deploy-env.sh
+          validate_mcp_native_service_credential
       - name: Phala can read CVM tinycloud-mcp
         env:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
         shell: bash
         run: |
           test -n "$PHALA_CLOUD_API_KEY" || { echo "::error::PHALA_CLOUD_API_KEY is not set"; exit 1; }
-          if ! cvm=$(phala cvms get tinycloud-mcp --api-token "$PHALA_CLOUD_API_KEY" --json); then
+          if ! cvm=$(phala cvms get tinycloud-mcp --json); then
             # With --json the CLI writes its error object to stdout.
             reason=$(jq -r '"\(.error // .message // "unknown error") (HTTP \(.http_status // .status // "n/a"))"' <<<"$cvm" 2>/dev/null || echo "unparsed CLI error")
             echo "::error::Phala could not read CVM tinycloud-mcp with PHALA_CLOUD_API_KEY: $reason"
@@ -108,14 +124,18 @@ jobs:
       # Fail closed before any build or deploy unless the CVM runs the pinned production OS, or the one pinned dev OS
       # in .github/scripts/phala-dev-os-allowlist.txt after a fresh integrity check (.github/scripts/phala-os-guard.sh).
       # To fix it, set the OS by hand: `phala api -X PATCH /cvms/<id>/os-image -F os_image_name=dstack-0.5.12`.
-      - name: Test the OS image guard
-        run: bash .github/scripts/test-phala-os-guard.sh
+      - name: Test the OS guard and complete Phala deploy environment
+        env:
+          PHALA_BIN: ${{ runner.temp }}/mcp-deploy-tools/node_modules/.bin/phala
+        run: |
+          bash .github/scripts/test-phala-os-guard.sh
+          node .github/scripts/test-mcp-deploy-env.mjs
       - name: CVM tinycloud-mcp runs a permitted OS image
         env:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
         shell: bash
         run: |
-          if ! cvm=$(phala cvms get tinycloud-mcp --api-token "$PHALA_CLOUD_API_KEY" --json); then
+          if ! cvm=$(phala cvms get tinycloud-mcp --json); then
             echo "::error::Phala could not read the OS image of CVM tinycloud-mcp"
             exit 1
           fi
@@ -126,7 +146,7 @@ jobs:
         shell: bash
         run: |
           test -n "$CLOUDFLARE_API_TOKEN" || { echo "::error::CLOUDFLARE_API_TOKEN is not set"; exit 1; }
-          cf() { curl -sS --max-time 20 -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4$1"; }
+          cf() { printf 'Authorization: Bearer %s\n' "$CLOUDFLARE_API_TOKEN" | curl -sS --max-time 20 --header @- "https://api.cloudflare.com/client/v4$1"; }
           zone=$(cf "/zones?name=tinycloud.xyz")
           zone_id=$(jq -r 'if .success then (.result[0].id // empty) else empty end' <<<"$zone")
           account_id=$(jq -r 'if .success then (.result[0].account.id // empty) else empty end' <<<"$zone")
@@ -182,8 +202,16 @@ jobs:
         run: |
           docker manifest inspect "$TINYCLOUD_MCP_IMAGE" \
             | jq -e 'any(.manifests[]?; .platform.os == "linux" and .platform.architecture == "amd64")' >/dev/null
-      - name: Install Phala CLI
-        run: npm install --global phala@1.1.22
+      - name: Install pinned Phala deploy tools
+        shell: bash
+        run: |
+          tools="$RUNNER_TEMP/mcp-deploy-tools"
+          mkdir -p "$tools"
+          cp .github/deploy-tools/package.json .github/deploy-tools/package-lock.json "$tools/"
+          cp .github/scripts/mcp-sync-allowed-envs.mjs "$tools/"
+          npm ci --prefix "$tools" --ignore-scripts --no-audit --no-fund
+          echo "MCP_DEPLOY_TOOLS=$tools" >> "$GITHUB_ENV"
+          echo "$tools/node_modules/.bin" >> "$GITHUB_PATH"
       - name: Deploy hosted MCP
         env:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
@@ -192,38 +220,37 @@ jobs:
           TC_MCP_INTROSPECTION_CLIENT_ID: ${{ secrets.TC_MCP_INTROSPECTION_CLIENT_ID }}
           TC_MCP_INTROSPECTION_CLIENT_SECRET: ${{ secrets.TC_MCP_INTROSPECTION_CLIENT_SECRET }}
           TINYCLOUD_MCP_IMAGE: ${{ needs.resolve.outputs.image }}
+          TC_MCP_NATIVE_SERVICE_CREDENTIAL: ${{ secrets.TC_MCP_NATIVE_SERVICE_CREDENTIAL }}
           CERTBOT_EMAIL: ops@tinycloud.xyz
+        shell: bash
         run: |
-          test -n "$PHALA_CLOUD_API_KEY"
-          test -n "$CLOUDFLARE_API_TOKEN"
-          test -n "$TC_MCP_STATE_SECRET"
-          test -n "$TC_MCP_INTROSPECTION_CLIENT_ID"
-          test -n "$TC_MCP_INTROSPECTION_CLIENT_SECRET"
-          # Always update the existing CVM, which holds the mcp-state volume. A failed
-          # lookup must not fall through to creating an empty replacement; creating the
-          # CVM for the first time is a manual step.
+          set -euo pipefail
+          source .github/scripts/mcp-deploy-env.sh
+          write_mcp_deploy_env_file
+          export ENV_FILE="$MCP_DEPLOY_ENV_FILE"
+          export PHALA_CVM_ID=tinycloud-mcp
+          unset CLOUDFLARE_API_TOKEN TC_MCP_STATE_SECRET
+          unset TC_MCP_INTROSPECTION_CLIENT_ID TC_MCP_INTROSPECTION_CLIENT_SECRET
+          unset TINYCLOUD_MCP_IMAGE TC_MCP_NATIVE_SERVICE_CREDENTIAL CERTBOT_EMAIL
+          node "$MCP_DEPLOY_TOOLS/mcp-sync-allowed-envs.mjs"
+          # The exact encrypted environment file used for allowlist sync is also used for deploy.
           phala deploy \
-            --api-token "$PHALA_CLOUD_API_KEY" \
             --cvm-id tinycloud-mcp \
             --compose packages/mcp/docker-compose.phala.yml \
-            --env "TINYCLOUD_MCP_IMAGE=$TINYCLOUD_MCP_IMAGE" \
-            --env "CLOUDFLARE_API_TOKEN=$CLOUDFLARE_API_TOKEN" \
-            --env "TC_MCP_STATE_SECRET=$TC_MCP_STATE_SECRET" \
-            --env "TC_MCP_INTROSPECTION_CLIENT_ID=$TC_MCP_INTROSPECTION_CLIENT_ID" \
-            --env "TC_MCP_INTROSPECTION_CLIENT_SECRET=$TC_MCP_INTROSPECTION_CLIENT_SECRET" \
-            --env "CERTBOT_EMAIL=$CERTBOT_EMAIL" \
+            --env "$MCP_DEPLOY_ENV_FILE" \
             --no-public-logs \
             --no-public-sysinfo \
             --no-dev-os \
             --image "$PHALA_OS_IMAGE" \
             --wait
+          unset PHALA_CLOUD_API_KEY
       # Fail closed if the deploy left the CVM on a different OS image (same rule as the check before the deploy).
       - name: Verify the OS image after deploy
         env:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
         shell: bash
         run: |
-          if ! cvm=$(phala cvms get tinycloud-mcp --api-token "$PHALA_CLOUD_API_KEY" --json); then
+          if ! cvm=$(phala cvms get tinycloud-mcp --json); then
             echo "::error::Phala could not read the OS image of CVM tinycloud-mcp after deploy"
             exit 1
           fi

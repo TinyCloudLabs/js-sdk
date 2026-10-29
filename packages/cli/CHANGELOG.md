@@ -1,5 +1,99 @@
 # @tinycloud/cli
 
+## 1.5.0-beta.28
+
+### Minor Changes
+
+- 19048ec: Add immutable, signed OpenKey approval-request links using the shared `/a/<id>#v=4&k=<key>&c=<sealedBodyCid>` grammar. Requests default to one hour, are capped at 24 hours, and use repeatable non-consuming reads. Validate the sealed issuer, target Ed25519 key, and P-256 result encryption key without changing existing login, share, or courier links.
+
+  Use these short requests for browser approval in the CLI and onboarding. Recover the encrypted result through repeatable requester-authenticated fetches, verify the signed authority, and durably save the profile and stable ACK intent before acknowledgement. Explicit manual paste remains available with the existing return-code contract.
+
+  Bind agent-grant approvals to the exact prepared request. Durably retain the verified child grant, command output, history, and signed-parent/ACK binding before acknowledgement, so retries recover the saved result rather than issuing another grant.
+
+  Keep the existing seven-day default for normal OpenKey requests and explicit 30-day onboarding. Complete saved approvals after delivery retention ends, clear pending request credentials on logout, and document the automatic wait-and-resume flow.
+
+  Details: TC-2212
+
+### Patch Changes
+
+- Updated dependencies [19048ec]
+  - @tinycloud/share-envelope@1.4.0-beta.2
+  - @tinycloud/node-sdk@3.8.0-beta.19
+  - @tinycloud/sdk-core@3.8.0-beta.19
+  - @tinycloud/share-sdk@1.4.1-beta.3
+  - @tinycloud/operations@0.7.7-beta.18
+
+## 1.5.0-beta.27
+
+### Minor Changes
+
+- 3daddbb: Add the shared SQLite Home feed protocol and CLI commands for owner-provisioned agent connections, card publishing, durable responses, acknowledgements, outcomes, and external runtime handoff. Hook readiness and logical database notifications drive response reconciliation. Feed watch uses a durable local SQLite handoff ledger with explicit saved, delivered, and handling states, and supports Bun or Node.js 22.13+.
+
+  Support versioned private response payloads saved atomically with their headers and read explicitly through the existing response database authority. Default response notifications and durable handoff copies include only allowlisted headers and payload metadata.
+
+  Add opt-in `redactErrors` to SQL query, execute, and batch calls so private response operations receive static errors with known codes and HTTP status before ordinary service-error delivery. Calls without the option retain their existing error details.
+
+  Add explicit outbound feed messages without changing card decisions or owner-private state. Messages share immutable response identities, atomic private payloads, and notification-safe handoff. Exact-identity handling reads retain historical acknowledgement and outcome receipts after later answers or messages.
+
+  Feed listeners cancel pending response queries on caller abort and stop cleanly for expected cancellation while preserving unrelated query failures.
+
+  Refresh the generated MCP skill coverage for the Commander-owned feed commands; no MCP tools are added.
+
+  Details: TC-2205
+
+### Patch Changes
+
+- Updated dependencies [3daddbb]
+  - @tinycloud/sdk-services@3.8.0-beta.18
+  - @tinycloud/node-sdk@3.8.0-beta.18
+  - @tinycloud/operations@0.7.7-beta.17
+  - @tinycloud/sdk-core@3.8.0-beta.18
+
+## 1.5.0-beta.26
+
+### Patch Changes
+
+- Updated dependencies [0b024c2]
+  - @tinycloud/share-sdk@1.4.1-beta.2
+  - @tinycloud/node-sdk@3.8.0-beta.17
+  - @tinycloud/sdk-core@3.8.0-beta.17
+  - @tinycloud/operations@0.7.7-beta.16
+
+## 1.5.0-beta.25
+
+### Patch Changes
+
+- 406ec01: Add a one-prompt guided start with persisted chat discovery, explicit selection, and signed invitation links. Support same-owner agents, anyone holding the link, and named Courier keys or verified paired handles through a participating issuer's scoped KV pairing relay. Bind joins and durable winning claims to the intended session; keep existing manual pairing guards and restrict guided peer grants to one thread. Email recipient identifiers are refused rather than treated as verified names.
+
+  Explicitly supplied empty invitation links, including positional links, are refused before chat discovery or creation; they cannot create or activate a fallback session.
+
+  Details: TC-1543
+
+## 1.5.0-beta.24
+
+### Patch Changes
+
+- 812a818: Publish new CLI email shares as signed V3 Policy/v2 envelopes inside current v4 Share link records, with a unique exact `default/share/<shareId>` encryption key, a path-bound policy, and a committed email credential requirement. The `builtin:share-publishing` paste approval requests decrypt only for the owner's default-network `share/` prefix; device authorization and `enable share` omit decrypt. Existing V2 envelopes retain their read path.
+
+  Details: TC-2177
+
+- Updated dependencies [812a818]
+- Updated dependencies [812a818]
+  - @tinycloud/node-sdk@3.8.0-beta.16
+  - @tinycloud/sdk-core@3.8.0-beta.16
+  - @tinycloud/sdk-services@3.8.0-beta.16
+  - @tinycloud/share-envelope@1.3.1-beta.1
+  - @tinycloud/share-sdk@1.4.1-beta.1
+  - @tinycloud/operations@0.7.7-beta.15
+
+## 1.5.0-beta.23
+
+### Patch Changes
+
+- 3cb038a: `tinycloud onboard` says its first grant lets the agent read, change and delete apps' data. The grant already included delete; the text now names it.
+
+  Details: TC-2168
+
 ## 1.5.0-beta.22
 
 ### Patch Changes

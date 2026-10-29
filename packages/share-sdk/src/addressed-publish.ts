@@ -204,7 +204,9 @@ async function createPolicy(options: PolicyOptions, capabilities: readonly Unifi
 function addressedPlan(options: Pick<AddressedSharePublishOptions, "resource" | "contentSource" | "policyActions" | "expiresAt">) {
   const capabilities = sortCanonical<UnifiedPolicyCapability>([
     { kind: "kv", resource: options.contentSource.kvResource, selector: options.resource.kind, actions: [...options.policyActions] },
-    { kind: "encryption", resource: options.contentSource.encryptionNetwork, action: "tinycloud.encryption/decrypt" },
+    { kind: "encryption", resource: options.contentSource.encryptionKeyPath === undefined
+      ? options.contentSource.encryptionNetwork
+      : `${options.contentSource.encryptionNetwork}/${options.contentSource.encryptionKeyPath}`, action: "tinycloud.encryption/decrypt" },
   ]);
   return {
     expiry: rfc3339Seconds(options.expiresAt),
@@ -618,6 +620,7 @@ export interface AddressedShareBoundInput extends AddressedShareRequest {
   readonly storage: { readonly path: string } | { readonly artifactId: string; readonly storageName: string };
   /** The owner's encryption network for the space. */
   readonly encryptionNetwork: string;
+  readonly encryptionKeyPath?: string;
   readonly mediaType: string;
   readonly byteLength: number;
   readonly artifact?: "html";
@@ -643,6 +646,7 @@ export async function addressedShareBodyUpperBound(input: AddressedShareBoundInp
     : `${ARTIFACT_ROOT}/${input.storage.artifactId}/versions/${Number.MAX_SAFE_INTEGER}/${input.storage.storageName}`;
   const contentSource: UnifiedContentSource = {
     shareId: input.shareId, kvResource: `${input.spaceId}/kv/${path}`, selector: input.resource.kind, encryptionNetwork: input.encryptionNetwork,
+    ...(input.encryptionKeyPath === undefined ? {} : { encryptionKeyPath: input.encryptionKeyPath }),
     encryptedSymmetricKeyDigestHex: "f".repeat(64), keyVersion: Number.MAX_SAFE_INTEGER, mode: "immutable", initialCiphertextDigestHex: "f".repeat(64),
   };
   const artifactPin: ArtifactPin | undefined = artifactStorage === undefined ? undefined : {

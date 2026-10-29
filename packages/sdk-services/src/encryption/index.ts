@@ -28,6 +28,7 @@ export type {
 
 export {
   parseNetworkId,
+  parseEncryptionResource,
   buildNetworkId,
   isNetworkId,
   networkDiscoveryKey,
@@ -35,6 +36,7 @@ export {
   ENCRYPTION_NETWORK_URN_PREFIX,
   NETWORK_NAME_PATTERN,
   type ParsedNetworkId,
+  type ParsedEncryptionResource,
 } from "./networkId";
 
 export {

@@ -1,4 +1,5 @@
 import { Command, Option } from "commander";
+import { readFile } from "node:fs/promises";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import {
   ArtifactError,
@@ -425,6 +426,9 @@ export function registerShareCommand(program: Command): void {
     .description("Publish one or more bounded files as a Share, or a folder with an index.html as one self-contained page (anyone links only)")
     .option("--name <filename>", "Filename for stdin input, or the published .html name of a folder")
     .option("--to <target>", "Share target", "anyone")
+    .option("--credential-descriptor <path>", "Email credential flow descriptor JSON")
+    .option("--issuer-did <did>", "Trusted email credential issuer DID")
+    .option("--issuer-kid <kid>", "Trusted email credential issuer key ID")
     .option("--notify", "Email an exact-email recipient, or a domain mailbox on node 1.17.3+")
     .option("--notify-to <address>", "Mailbox to invite for --to domain:<name> --notify (node 1.17.3+)")
     .option("--expires <duration>", "Share lifetime")
@@ -452,6 +456,17 @@ export function registerShareCommand(program: Command): void {
         if (files.length === 0 || (files.includes("-") && files.length > 1)) throw new CLIError("INVALID_ARGUMENT", "stdin must be the only publish input", 2);
         const name = files.length === 1 ? options.name : undefined;
         const target = parseShareTarget(options.to);
+        const actions = requestedActions(options.action);
+        if (options.notify === true && !actions.includes("read")) throw new CLIError("INVALID_ARGUMENT", "--notify requires the read action; nothing was shared", 2);
+        if (target.kind === "email" && (!options.credentialDescriptor || !options.issuerDid || !options.issuerKid)) {
+          throw new CLIError("INVALID_ARGUMENT", "email publication requires --credential-descriptor, --issuer-did, and --issuer-kid", 2);
+        }
+        if (target.kind !== "email" && (options.credentialDescriptor || options.issuerDid || options.issuerKid)) {
+          throw new CLIError("INVALID_ARGUMENT", "credential options require an exact email target", 2);
+        }
+        const credentialDescriptor = target.kind === "email"
+          ? JSON.parse(await readFile(options.credentialDescriptor, "utf8")) as unknown
+          : undefined;
         // A folder with an index.html becomes one self-contained page for an anyone-with-the-link share. Addressed and
         // --prefix publication of a folder is not offered: a directory falls through to the file reader and is refused.
         const folder = files.length === 1 && target.kind === "bearer" && options.prefix !== true && await isDirectoryInput(files[0]!);
@@ -472,14 +487,12 @@ export function registerShareCommand(program: Command): void {
           inputs = await Promise.all(files.map((file) => readShareInput(file, name, maxBytes)));
         }
         assertAggregateInputLimit(inputs, maxBytes);
-        const actions = requestedActions(options.action);
         if (options.prefix && target.kind === "bearer") throw new CLIError("INVALID_ARGUMENT", "--prefix requires an addressed target", 2);
         // A link is read-only: the bearer delegation never carries put, so an edit request would be dropped silently.
         if (target.kind === "bearer" && actions.includes("edit")) throw new CLIError("INVALID_ARGUMENT", `--action edit is not available with --to ${options.to}: a link can only be read; address a recipient to allow edits`, 2);
         if (inputs.length > 1 && target.kind === "bearer") throw new CLIError("UNSUPPORTED_LINK", "multiple files require an addressed target", 2);
         const artifact = artifactRequest(options, actions, inputs.length);
         if (inputs.length > 1 && !options.prefix) throw new CLIError("INVALID_ARGUMENT", "multiple files require --prefix", 2);
-        if (options.notify === true && !actions.includes("read")) throw new CLIError("INVALID_ARGUMENT", "--notify requires the read action; nothing was shared", 2);
         if (options.notifyTo !== undefined && (options.notify !== true || target.kind !== "emailDomain")) {
           throw new CLIError("INVALID_ARGUMENT", "--notify-to requires --to domain:<name> --notify", 2);
         }
@@ -510,6 +523,7 @@ export function registerShareCommand(program: Command): void {
           origin: options.viewerOrigin,
           ...(maxBytes === undefined ? {} : { maxBytes }),
           notify: options.notify === true,
+          ...(credentialDescriptor === undefined ? {} : { credentialDescriptor, issuerDid: options.issuerDid, issuerKid: options.issuerKid }),
           // The artifact request rides on the adapter call rather than through `publishTargetShare`, whose code is part of
           // the browser bundles (the web-sdk size ceiling counts every byte it carries).
           targetAdapter: artifact === undefined || shareServices.targetAdapter === undefined

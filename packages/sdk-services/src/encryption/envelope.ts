@@ -27,11 +27,13 @@ import {
   type EncryptionError,
   type InlineEncryptedEnvelope,
 } from "./types";
-import { parseNetworkId } from "./networkId";
+import { NetworkIdError, parseEncryptionResource } from "./networkId";
 
 export interface EncryptToNetworkInput {
   /** Target network id URN. */
   networkId: string;
+  /** Exact named-key path; omitted for a network-root key. */
+  keyPath?: string;
   /** Network public key bytes (already discovered). */
   networkPublicKey: Uint8Array;
   /** Payload bytes to encrypt. Callers serialize objects to bytes themselves. */
@@ -61,7 +63,17 @@ export function encryptToNetwork(
   crypto: EncryptionCrypto,
   input: EncryptToNetworkInput,
 ): EncryptToNetworkResult {
-  parseNetworkId(input.networkId);
+  const parsedResource = parseEncryptionResource(
+    input.keyPath === undefined
+      ? input.networkId
+      : `${input.networkId}/${input.keyPath}`,
+  );
+  if (
+    parsedResource.keyPath !== input.keyPath ||
+    input.keyPath?.endsWith("/")
+  ) {
+    throw new NetworkIdError("keyPath must name an exact encryption key");
+  }
   const alg = input.alg ?? DEFAULT_ENCRYPTION_ALG;
   const keyVersion = input.keyVersion ?? DEFAULT_KEY_VERSION;
 
@@ -77,6 +89,7 @@ export function encryptToNetwork(
   const envelope: InlineEncryptedEnvelope = {
     v: ENVELOPE_VERSION,
     networkId: input.networkId,
+    ...(input.keyPath !== undefined ? { keyPath: input.keyPath } : {}),
     alg,
     keyVersion,
     encryptedSymmetricKey,
@@ -117,13 +130,24 @@ export function validateEnvelope(
     };
   }
   try {
-    parseNetworkId(e.networkId);
+    if (parseEncryptionResource(e.networkId).keyPath !== undefined) {
+      throw new Error("networkId must identify the network root");
+    }
+    if (e.keyPath !== undefined) {
+      if (typeof e.keyPath !== "string") {
+        throw new Error("keyPath must be a string");
+      }
+      const parsed = parseEncryptionResource(`${e.networkId}/${e.keyPath}`);
+      if (parsed.keyPath !== e.keyPath || e.keyPath.endsWith("/")) {
+        throw new Error("keyPath must name an exact encryption key");
+      }
+    }
   } catch (err) {
     return {
       ok: false,
       error: encryptionError({
         code: "INVALID_ENVELOPE",
-        message: `envelope.networkId is malformed: ${
+        message: `envelope encryption resource is malformed: ${
           err instanceof Error ? err.message : String(err)
         }`,
       }),

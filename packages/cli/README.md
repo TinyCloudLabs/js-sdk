@@ -97,6 +97,150 @@ tinycloud space create
 tinycloud delegation create --to did:pkh:eip155:1:0x...
 ```
 
+## Home feed
+
+`tinycloud feed` uses separate owner-provisioned SQLite databases for each agent's
+cards/handling and the owner's append-only responses. Owner registry and view
+state live separately. SDK consumers use the same contract from
+`@tinycloud/sdk-services/feed` with existing SQL database handles; see the
+[canonical types](../sdk-services/src/feed/types.ts).
+
+Use an authenticated **owner-openkey or local-owner-key** profile for `connect`.
+That owner needs SQL read/write/schema authority for
+`xyz.tinycloud.tinychat/home_feed` and the `xyz.tinycloud.tinychat/feed/`
+namespace, plus authority to delegate the exact agent grants below. The trailing
+slash denotes a database namespace, not an individual database.
+
+Create a separate agent profile and set `AGENT_DID` to its printed DID. Use the
+same node as the owner:
+
+```bash
+tinycloud profile create feed-agent --posture delegate-session --operator agent
+tinycloud --profile owner feed connect --agent writer --to "$AGENT_DID" --label Writer \
+  --space applications > feed-grant.json
+tinycloud --profile feed-agent auth import feed-grant.json
+```
+
+`connect` reserves a stable token/DID/resource binding, provisions both schemas,
+and activates one bundled delegation through the existing SDK. It registers
+actual grant provenance only after activation; a failed activation may be
+retried with the same DID and resources. The agent receives read/write on
+`xyz.tinycloud.tinychat/feed/feed_output_writer`, read on
+`xyz.tinycloud.tinychat/feed/feed_responses_writer`, and hook subscription on
+`sql/xyz.tinycloud.tinychat/feed/feed_responses_writer`. Agents do not receive
+response-write or schema authority. Display labels and tokens select resources;
+the signed grants determine access.
+
+Publish `card.json` from the agent profile:
+
+```json
+{"cardId":"card-draft-01","revision":1,"issuanceId":"issuance-draft-01","kind":"decision","needsResponse":true,"title":"Create draft?","body":"Create a reversible draft only.","choices":[{"id":"create","label":"Create draft"}],"urgency":1,"createdAt":"2026-10-29T00:00:00Z"}
+```
+
+```bash
+tinycloud --profile feed-agent feed publish --agent writer --file card.json
+tinycloud --profile feed-agent feed watch --agent writer --recipient agent-runtime \
+  --runner '["node","agent-handler.js"]'
+```
+
+Run `watch` in the agent terminal, then save `response.json` from the owner
+profile in another terminal, or answer the card through Home:
+
+```json
+{"responseId":"response-draft-01","cardId":"card-draft-01","revision":1,"issuanceId":"issuance-draft-01","kind":"answer","choiceId":"create","createdAt":"2026-10-29T00:01:00Z"}
+```
+
+```bash
+tinycloud --profile owner feed respond --agent writer --file response.json
+tinycloud --profile feed-agent feed responses --agent writer --after 0
+tinycloud --profile feed-agent feed handling --agent writer --file handling.json
+tinycloud --profile owner feed show card-draft-01 --agent writer
+```
+
+For an explicit outbound note to that agent, save a separate `message.json`:
+
+```json
+{"responseId":"message-draft-01","cardId":"card-draft-01","revision":1,"issuanceId":"issuance-draft-01","kind":"message","text":"Please explain the draft before I answer.","createdAt":"2026-10-29T00:02:00Z"}
+```
+
+```bash
+tinycloud --profile owner feed message --agent writer --file message.json
+```
+
+Messages also work on information cards with `needsResponse: false`. They do not
+answer a card, clear Needs action, or replace its current answer or handling.
+`choiceId` and `supersedesResponseId` are refused on messages. Agent response pages
+and watch include messages, with acknowledgements/outcomes tied to their own full
+response IDs. Private owner notes, task ticks, and seen state remain owner-only
+registry data; they are not outbound messages.
+
+For a new response with private structured data, `payload.json` is a versioned
+JSON envelope, for example:
+
+```json
+{"type":"example.private-action","version":1,"data":{"code":"SYNTHETIC-ONLY"}}
+```
+
+Include it on the **first** save, instead of the plain `respond` command above:
+
+```bash
+tinycloud --profile owner feed respond --agent writer --file response.json --payload-file payload.json
+tinycloud --profile feed-agent feed payload --agent writer --response response-draft-01 \
+  --card card-draft-01 --revision 1 --issuance issuance-draft-01
+```
+
+The header and payload commit atomically in the same owner-response database.
+Retries of the same response ID must include the same header and payload; a
+changed, omitted, or later-added payload is refused. `feed payload` verifies the
+full response/card/revision/issuance identity, returning its envelope, or `null`
+for a known response without a payload. Unknown or mismatched identities fail.
+Keep approval codes in `payload.data`, never the normal response text.
+
+Default `list`, `show`, `responses`, and `watch` output contains only response
+headers and optional `payloadType`/`payloadVersion` metadata, not payload data.
+The SDK equivalents are the optional fourth `appendFeedResponse` or
+`appendFeedMessage` argument and the explicit `readFeedResponsePayload` method.
+`feed message` accepts the same `--payload-file` option on its first save.
+Owner schema initialization adds `feed_response_payloads`; existing response-read
+authority also authorizes an explicit payload read. “Private” here means excluded
+from notification copies, not a new authorization boundary against an agent already
+granted database read.
+
+`readFeedResponseHandling(output, identity)` reads acknowledgement and outcome for
+one full response/card/revision/issuance identity, including historical answers or
+messages after later arrivals. Unknown or mismatched handling returns `NOT_FOUND`,
+not a synthetic empty receipt. Known acknowledgement-only or outcome-only history
+retains the other slot as `null`. `getFeedCardState` selects only the current
+answer/follow-up; a saved answer without handling still has `null` receipt slots.
+
+Retain the full response ID on a retry. Reusing it with different content is
+refused. Responses bind the full card ID, revision, and issuance; corrections
+are new follow-up records, optionally naming `supersedesResponseId`. Short card
+references work only when unambiguous. Handling records carry their own
+`handlingId`, the response/card identities, `createdAt`, and `phase`:
+`acknowledged`, `succeeded`, or `failed`, with optional structured `detail`.
+Acknowledgement history and the terminal outcome are retained independently.
+
+**Saved, delivered, acknowledged, and completed are different states.**
+The runner receives allowlisted response-header JSON and optional payload
+type/version metadata on stdin through an argv array, never shell interpolation.
+Exit zero must mean durable acceptance of that response ID, not completion of
+its action. The agent publishes acknowledgement and outcome through `handling`.
+
+`watch` requires **Bun or Node.js 22.13+** for its durable local SQLite ledger;
+other commands keep the CLI's Node.js 20 requirement. By default the ledger is
+stored under the selected profile; `--handoff` selects another durable file.
+The listener subscribes before draining and reconciles on readiness, writes,
+reconnects, and five-minute renewal, without a rapid idle query loop.
+
+Before attempting a send, the ledger records `unconfirmed`. A crash, uncertain
+runtime result, or interruption leaves that identity unconfirmed rather than
+automatically sending again. A `prepared` record can resume only before an
+attempt began. Ctrl-C/SIGTERM stops the watcher and forcibly terminates its
+current runner; an already-started action may still have happened. Keep response
+IDs as downstream idempotency keys where supported. Exactly-once external
+execution is not promised.
+
 ## Commands
 
 | Command | Description |
@@ -119,6 +263,7 @@ tinycloud delegation create --to did:pkh:eip155:1:0x...
 | `tinycloud sql query <sql>` | Run a SQLite SELECT query |
 | `tinycloud sql execute <sql>` | Run a SQLite write or schema statement |
 | `tinycloud sql export` | Export a SQLite database file |
+| `tinycloud feed` | Connect an agent, publish cards, save responses, record handling, and watch for runtime handoff; see [Home feed](#home-feed) |
 | `tinycloud space list` | List your spaces |
 | `tinycloud space create` | Create a new space |
 | `tinycloud delegation create` | Grant access to another user |
@@ -257,6 +402,16 @@ retry hint and discards the candidate key. Restarting requires a new approval
 and cannot reuse the old signed code. Ctrl-C, SIGINT or SIGTERM before approval
 arrives cancels the OpenKey handoff (best effort) and exits 130 `CANCELLED`
 without saving a key or session.
+
+Normal OpenKey login prints a short approval link on stderr and waits. Relay it
+to the owner from a headless or remote CLI; no localhost callback or pasted code
+is needed. `--no-popup` skips opening a local browser, not automatic result
+retrieval. The CLI verifies the encrypted result, durably saves it, then
+acknowledges delivery. Re-run the same command after an interruption to resume.
+The one-hour request expiry is independent of the requested grant lifetime and
+result retention. Normal login keeps its seven-day default; onboarding requests
+30 days explicitly. `--paste` remains an explicit manual fallback with a
+five-minute, single-use return code, not the automatic short-link transport.
 
 Use `tinycloud replica report` for read-only aggregates of persisted replication events
 and identity partitions. Live replica status is unavailable there. Report

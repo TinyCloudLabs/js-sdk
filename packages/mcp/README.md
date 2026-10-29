@@ -159,8 +159,16 @@ include.
 TinyCloud production uses `docker-compose.phala.yml`. The manual
 `Publish hosted MCP image` workflow publishes an exact package-version image
 and deploys that image to the `tinycloud-mcp` Phala CVM. Its `production`
-environment requires `PHALA_CLOUD_API_KEY`, `CLOUDFLARE_API_TOKEN`, and a stable
-32-byte-or-longer `TC_MCP_STATE_SECRET`.
+environment requires `PHALA_CLOUD_API_KEY`, `CLOUDFLARE_API_TOKEN`, a stable
+32-byte-or-longer `TC_MCP_STATE_SECRET`, `TC_MCP_INTROSPECTION_CLIENT_ID`,
+`TC_MCP_INTROSPECTION_CLIENT_SECRET`, and `TC_MCP_NATIVE_SERVICE_CREDENTIAL`.
+
+The workflow writes a mode-`0600` complete application environment file from
+the production values and uses that same file for Phala's encrypted environment
+update and image deploy. The update preserves existing `allowed_envs` names and
+adds the deploy keys; it does not send a name-only patch. The Phala control-plane
+credential is not included in the application file or logged, and the existing
+state secret is reused unchanged.
 
 The workflow fails, before building or deploying, unless the `tinycloud-mcp` CVM
 runs the production OS image pinned in `PHALA_OS_IMAGE` / `PHALA_OS_IMAGE_HASH`

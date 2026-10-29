@@ -60,6 +60,11 @@ export async function courierNode(profile: Profile, home?: string): Promise<Tiny
     throw new CourierError('bad-grant', `Grant holder ${node.credentialHolderDid} does not match courier key ${profile.courierDid}.`);
   }
   assertAgentGrant(node.getVerifiedSessionCapabilities(), siweTimes(grant.siwe));
+  const restored = node.restorableSession;
+  const owner = restored ? `did:pkh:eip155:${restored.chainId}:${restored.address}` : '';
+  if (profile.ownerDid?.toLowerCase() !== owner.toLowerCase() || profile.spaceId?.toLowerCase() !== restored?.spaceId.toLowerCase()) {
+    throw new CourierError('bad-grant', 'Profile owner or space does not match the verified Courier grant.');
+  }
   return node;
 }
 
@@ -83,6 +88,7 @@ export async function peerKv(node: TinyCloudNode, profile: Profile, peer: Stored
       audience: profile.courierDid,
       spaceId: peer.spaceId,
       mailbox: peer.theirHandleForMe,
+      sessionId: peer.sessionId,
     });
     if (activated.cid !== peer.inbound.cid) {
       throw new CourierError('bad-delegation', `Peer delegation CID does not match the stored CID for ${peer.handle}.`);

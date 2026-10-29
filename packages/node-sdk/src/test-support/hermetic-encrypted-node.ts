@@ -1070,6 +1070,7 @@ export interface HermeticEncryptedNode {
   decryptRequests(): number;
   /** Whether the canary secret exists (as another client writing it would make it). */
   setSecretPresent(value: boolean): void;
+  configureKv(spaceId: string, entries: Readonly<Record<string, unknown>>): void;
   provisionKvSpace(spaceId: string): void;
   /**
    * Accept a session delegation as an invocation proof, as a node accepts an
@@ -1087,6 +1088,11 @@ export interface HermeticEncryptedNode {
   ): Promise<Awaited<ReturnType<TinyCloudNode["delegateTo"]>>["delegation"]>;
   mintDelegationForAudience(
     audience: string,
+  ): Promise<Awaited<ReturnType<TinyCloudNode["delegateTo"]>>["delegation"]>;
+  mintDelegationForAudienceWithPermissions(
+    audience: string,
+    permissions: PermissionEntry[],
+    options?: { expiry?: string | number },
   ): Promise<Awaited<ReturnType<TinyCloudNode["delegateTo"]>>["delegation"]>;
   mintUntrustedDelegation(): Promise<Awaited<ReturnType<TinyCloudNode["delegateTo"]>>["delegation"]>;
   readAndDecrypt(node: TinyCloudNode, delegation: ValidatedRuntimeDelegation): Promise<void>;
@@ -1114,8 +1120,7 @@ export async function createHermeticEncryptedNode(
     delegateSignStrategy?: SignStrategy;
     secretPayloadValue?: string;
     secretPresent?: boolean;
-    /** Configure the authenticated owner for a single native KV bearer path. */
-    nativeBearerPath?: string;
+    ownerConnectorCapabilities?: boolean;
   }> = {},
 ): Promise<HermeticEncryptedNode> {
   const transport = new LoopbackEncryptedNode();
@@ -1185,6 +1190,12 @@ export async function createHermeticEncryptedNode(
       [networkId]: ["tinycloud.encryption/decrypt"],
       [`${accountSpaceId}/kv/spaces/`]: ["tinycloud.kv/get", "tinycloud.kv/list"],
       [`${applicationsSpaceId}/kv/agents/demo/profile`]: ["tinycloud.kv/get"],
+      ...(options.ownerConnectorCapabilities
+        ? {
+          [`${applicationsSpaceId}/sql/xyz.tinycloud.tinychat/connectors`]: ["tinycloud.sql/read"],
+          [`${applicationsSpaceId}/kv/xyz.tinycloud.tinychat/connectors/`]: ["tinycloud.kv/get", "tinycloud.kv/list"],
+        }
+        : {}),
     },
   });
   installSession(ownerRuntime.node, ownerSession);
@@ -1304,7 +1315,8 @@ export async function createHermeticEncryptedNode(
     stallInvocations: (match) => transport.stallInvocations(match),
     decryptRequests: () => transport.requestLog.filter((request) => request.path.endsWith("/decrypt")).length,
     setSecretPresent: (value) => transport.setSecretPresent(value),
-    provisionKvSpace: (spaceId) => transport.provisionKv(spaceId),
+    configureKv: (requestedSpaceId, entries) => transport.configureKv(requestedSpaceId, entries),
+    provisionKvSpace: (requestedSpaceId) => transport.provisionKv(requestedSpaceId),
     allowInvocationProof: (cid, proofOptions) => transport.allowInvocationProof(cid, proofOptions),
     provisionSecret: () => transport.configure({
       spaceId,
@@ -1351,6 +1363,16 @@ export async function createHermeticEncryptedNode(
         return delegation;
       }),
     mintDelegationForAudience: mint,
+    mintDelegationForAudienceWithPermissions: (audience, requestedPermissions, options) =>
+      ownerRuntime.node.delegateTo(audience, requestedPermissions, options).then(({ delegation }) => {
+        transport.configure({
+          spaceId,
+          networkId,
+          delegationCid: delegation.cid,
+          envelope: encrypted.data,
+        });
+        return delegation;
+      }),
     async mintUntrustedDelegation() {
       const delegation = await mint(delegateAudience);
       transport.rejectActivation(delegation.cid);

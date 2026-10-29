@@ -496,7 +496,8 @@ export class Watcher {
     // Pause markers are read with every listing, so a `courier resume` or `courier pause` takes effect on the very
     // next message instead of at the next poll (a message delivered while the watcher still thought the thread was
     // paused would never wake anyone).
-    const [keys] = await Promise.all([listAll(peerKv, `${PREFIX}/to/${mailbox}/threads/`), this.syncPaused(), this.syncKnownThreads(peer)]);
+    const prefix = peer.sessionId ? `${k.threadRoot(mailbox, peer.sessionId)}/` : `${PREFIX}/to/${mailbox}/threads/`;
+    const [keys] = await Promise.all([listAll(peerKv, prefix), this.syncPaused(), this.syncKnownThreads(peer)]);
     const receipts = (await getJson<Receipts>(selfKv, k.receipts(peer.handle)))?.value ?? { v: 1, threads: {} };
     receipts.threads ??= {};
 
@@ -1296,7 +1297,7 @@ export class Watcher {
           if (peer.status !== 'paired' || !peer.inbound || !peer.theirHandleForMe) continue;
           // The id carries the delegation CID: a renewed delegation restarts the subscription.
           desired.set(`peer:${peer.handle}:${peer.inbound.cid}`, {
-            sub: { space: peer.spaceId, service: 'kv', pathPrefix: `${PREFIX}/to/${peer.theirHandleForMe}` },
+            sub: { space: peer.spaceId, service: 'kv', pathPrefix: peer.sessionId ? k.threadRoot(peer.theirHandleForMe, peer.sessionId) : `${PREFIX}/to/${peer.theirHandleForMe}` },
             hooks: () => this.deps.peerHooks(peer),
             onEvent: () => void this.sync(peer, 'hook'),
           });

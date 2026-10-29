@@ -22,7 +22,7 @@ export function canonicalNetworkUrn(path: string): string {
 
 /** Only a network owned by the signer may appear as a raw decrypt grant. */
 export function rawEncryptionOwnerMatches(path: string, ownerDid: string): boolean {
-  const match = /^urn:tinycloud:encryption:(did:pkh:eip155:.+):([a-z0-9][a-z0-9-]*)$/.exec(path);
+  const match = /^urn:tinycloud:encryption:(did:pkh:eip155:[1-9]\d*:0x[0-9a-fA-F]{40}):([a-z0-9][a-z0-9-]*)(?:\/share\/(?:[0-9a-f]{32})?)?$/.exec(path);
   if (!match) return false;
   try {
     return canonicalOwnerDid(match[1]!) === canonicalOwnerDid(ownerDid);

@@ -99,43 +99,20 @@ function bytes(value: unknown, label: string): Uint8Array {
   return decoded;
 }
 
-const BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
 function toBase64(bytes: Uint8Array): string {
-  let out = "";
-  for (let i = 0; i < bytes.length; i += 3) {
-    const b0 = bytes[i]!;
-    const b1 = i + 1 < bytes.length ? bytes[i + 1]! : 0;
-    const b2 = i + 2 < bytes.length ? bytes[i + 2]! : 0;
-    out += BASE64_ALPHABET[(b0 >> 2) & 0x3f];
-    out += BASE64_ALPHABET[((b0 << 4) | (b1 >> 4)) & 0x3f];
-    out += i + 1 < bytes.length ? BASE64_ALPHABET[((b1 << 2) | (b2 >> 6)) & 0x3f] : "=";
-    out += i + 2 < bytes.length ? BASE64_ALPHABET[b2 & 0x3f] : "=";
-  }
-  return out;
+  return toBase64Url(bytes).replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(bytes.length / 3) * 4, "=");
 }
 
 function fromBase64(value: string, label: string): Uint8Array {
   if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
     throw new Error(`${label} is invalid`);
   }
-  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
-  const out = new Uint8Array((value.length / 4) * 3 - padding);
-  let outIdx = 0;
-  for (let i = 0; i < value.length; i += 4) {
-    const v0 = BASE64_ALPHABET.indexOf(value[i]!);
-    const v1 = BASE64_ALPHABET.indexOf(value[i + 1]!);
-    const v2 = value[i + 2] === "=" ? 0 : BASE64_ALPHABET.indexOf(value[i + 2]!);
-    const v3 = value[i + 3] === "=" ? 0 : BASE64_ALPHABET.indexOf(value[i + 3]!);
-    const b0 = (v0 << 2) | (v1 >> 4);
-    const b1 = ((v1 & 0x0f) << 4) | (v2 >> 2);
-    const b2 = ((v2 & 0x03) << 6) | v3;
-    if (outIdx < out.length) out[outIdx++] = b0;
-    if (outIdx < out.length) out[outIdx++] = b1;
-    if (outIdx < out.length) out[outIdx++] = b2;
+  try {
+    // The shared strict decoder also rejects nonzero trailing pad bits.
+    return fromBase64Url(value.replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_"));
+  } catch {
+    throw new Error(`${label} is invalid`);
   }
-  if (toBase64(out) !== value) throw new Error(`${label} is invalid`);
-  return out;
 }
 
 async function digest(value: unknown): Promise<string> {
@@ -336,17 +313,18 @@ function canonicalHashHex(value: string): string {
   return hex(sha256(new TextEncoder().encode(canonicalize(value))));
 }
 
-async function aesGcmDecrypt(key: Uint8Array, blob: Uint8Array): Promise<Uint8Array> {
+async function aesGcmDecrypt(key: Uint8Array, blob: Uint8Array, aad?: Uint8Array): Promise<Uint8Array> {
   if (key.length !== 32 || blob.length < 28) throw new Error("encrypted content is malformed");
   const cryptoKey = await crypto.subtle.importKey("raw", key as unknown as BufferSource, "AES-GCM", false, ["decrypt"]);
-  return new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: blob.slice(0, 12) as unknown as BufferSource }, cryptoKey, blob.slice(12) as unknown as BufferSource));
+  // These owned bytes are valid WebCrypto inputs; its buffer type is narrower.
+  return new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: blob.slice(0, 12) as unknown as BufferSource, ...(aad && { additionalData: aad as unknown as BufferSource }) }, cryptoKey, blob.slice(12) as unknown as BufferSource));
 }
 
-async function aesGcmEncrypt(key: Uint8Array, plaintext: Uint8Array): Promise<Uint8Array> {
+async function aesGcmEncrypt(key: Uint8Array, plaintext: Uint8Array, aad?: Uint8Array): Promise<Uint8Array> {
   if (key.length !== 32) throw new Error("encrypted content key is malformed");
   const nonce = crypto.getRandomValues(new Uint8Array(12));
   const cryptoKey = await crypto.subtle.importKey("raw", key as unknown as BufferSource, "AES-GCM", false, ["encrypt"]);
-  const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce as unknown as BufferSource }, cryptoKey, plaintext as unknown as BufferSource));
+  const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce as unknown as BufferSource, ...(aad && { additionalData: aad as unknown as BufferSource }) }, cryptoKey, plaintext as unknown as BufferSource));
   const output = new Uint8Array(nonce.length + ciphertext.length);
   output.set(nonce);
   output.set(ciphertext, nonce.length);
@@ -354,13 +332,15 @@ async function aesGcmEncrypt(key: Uint8Array, plaintext: Uint8Array): Promise<Ui
 }
 
 interface V3InlineEncryptedEnvelope {
-  readonly v: 1;
+  readonly v: 1 | 2;
   readonly networkId: string;
+  readonly keyPath?: string;
   readonly alg: "x25519-aes256gcm/v1";
   readonly keyVersion: number;
   readonly encryptedSymmetricKey: string;
   readonly encryptedSymmetricKeyHash: string;
   readonly ciphertext: string;
+  readonly aad?: string;
   readonly metadata?: Readonly<Record<string, string>>;
 }
 
@@ -369,20 +349,24 @@ function parseV3InlineEncryptedEnvelope(bytes: Uint8Array, expected: ShareEnvelo
   try { value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); } catch { throw new Error("encrypted content envelope is malformed"); }
   if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("encrypted content envelope is malformed");
   const record = value as Record<string, unknown>;
-  const allowed = ["v", "networkId", "alg", "keyVersion", "encryptedSymmetricKey", "encryptedSymmetricKeyHash", "ciphertext", "metadata"];
+  const allowed = ["v", "networkId", "keyPath", "alg", "keyVersion", "encryptedSymmetricKey", "encryptedSymmetricKeyHash", "ciphertext", "aad", "metadata"];
+  const source = expected.contentSource;
   if (Object.keys(record).some((key) => !allowed.includes(key))
-    || record.v !== 1 || record.networkId !== expected.encryptionNetwork
-    || record.alg !== "x25519-aes256gcm/v1" || record.keyVersion !== expected.contentSource.keyVersion
+    || record.v !== (source.encryptionKeyPath === undefined ? 1 : 2) || record.networkId !== source.encryptionNetwork
+    || record.networkId !== expected.encryptionNetwork
+    || record.keyPath !== source.encryptionKeyPath
+    || record.keyPath !== undefined && (record.keyPath !== `share/${expected.shareId}`)
+    || record.alg !== "x25519-aes256gcm/v1" || record.keyVersion !== source.keyVersion
     || typeof record.encryptedSymmetricKey !== "string" || typeof record.encryptedSymmetricKeyHash !== "string"
-    || record.encryptedSymmetricKeyHash !== expected.contentSource.encryptedSymmetricKeyDigestHex
+    || hex(sha256(fromBase64(record.encryptedSymmetricKey, "v3 encrypted symmetric key"))) !== source.encryptedSymmetricKeyDigestHex
     || record.encryptedSymmetricKeyHash !== canonicalHashHex(record.encryptedSymmetricKey)
     || typeof record.ciphertext !== "string"
+    || record.aad !== undefined && typeof record.aad !== "string"
     || record.metadata !== undefined && (record.metadata === null || typeof record.metadata !== "object" || Array.isArray(record.metadata) || Object.values(record.metadata).some((entry) => typeof entry !== "string"))) {
     throw new Error("encrypted content envelope binding is invalid");
   }
   return record as unknown as V3InlineEncryptedEnvelope;
 }
-
 async function verifyDetachedResponse(response: Response, trust: ShareNodeTrust): Promise<void> {
   let value: unknown;
   try { value = await response.clone().json(); } catch { throw new Error("share read response is invalid"); }
@@ -547,7 +531,7 @@ export class ShareRecipientClient {
     return this.session;
   }
 
-  /** Decrypt a v3 KV value through a fresh recipient-signed decrypt invocation. */
+  /** Decrypt unscoped v1 or path-bound v2 content, independently checking canonical and registered raw-key digests. */
   async decryptV3Content(bytes: Uint8Array): Promise<{ readonly bytes: Uint8Array; readonly mediaType: string }> {
     const envelope = this.options.envelope;
     const signer = this.nativeSigner ?? this.signer;
@@ -557,18 +541,22 @@ export class ShareRecipientClient {
     assertArtifactBinding(artifactBindingView(envelope));
     if (!matchesInitialCiphertextDigest(bytes, envelope.contentSource.initialCiphertextDigestHex)) throw new Error("v3 owner KV ciphertext digest mismatch");
     const encrypted = parseV3InlineEncryptedEnvelope(bytes, envelope);
+    const ciphertext = fromBase64(encrypted.ciphertext, "v3 encrypted content");
+    if (ciphertext.length < 28) throw new Error("encrypted content is malformed");
+    const aad = encrypted.aad === undefined ? undefined : fromBase64(encrypted.aad, "v3 encrypted content AAD");
     const receiverPrivateKey = crypto.getRandomValues(new Uint8Array(32));
     const receiverPublicKey = toBase64(x25519.getPublicKey(receiverPrivateKey));
     const receiverPublicKeyHash = canonicalHashHex(receiverPublicKey);
-    const body = { type: "tinycloud.encryption.decrypt/v1", targetNode: this.v3NodeAudience, networkId: encrypted.networkId, alg: encrypted.alg, keyVersion: encrypted.keyVersion, encryptedSymmetricKey: encrypted.encryptedSymmetricKey, encryptedSymmetricKeyHash: encrypted.encryptedSymmetricKeyHash, receiverPublicKey, receiverPublicKeyHash };
+    const body = { type: "tinycloud.encryption.decrypt/v1", targetNode: this.v3NodeAudience, networkId: encrypted.networkId, ...(encrypted.keyPath === undefined ? {} : { keyPath: encrypted.keyPath }), alg: encrypted.alg, keyVersion: encrypted.keyVersion, encryptedSymmetricKey: encrypted.encryptedSymmetricKey, encryptedSymmetricKeyHash: encrypted.encryptedSymmetricKeyHash, receiverPublicKey, receiverPublicKeyHash };
     const bodyHash = hex(sha256(new TextEncoder().encode(canonicalize(body))));
     const session = verifyCompactUcanAuthorization(this.v3Authorization, this.session.sessionId);
     const now = Math.floor(Date.now() / 1000);
+    const decryptResource = encrypted.keyPath === undefined ? encrypted.networkId : `${encrypted.networkId}/${encrypted.keyPath}`;
     const invocation = await signCompactUcanAuthorization({
       issuerDid: this.options.holderDid,
       audienceDid: this.v3NodeAudience,
-      attenuation: { [encrypted.networkId]: { "tinycloud.encryption/decrypt": [{}] } },
-      facts: [{ type: body.type, targetNode: body.targetNode, networkId: body.networkId, bodyHash, encryptedSymmetricKeyHash: body.encryptedSymmetricKeyHash, receiverPublicKeyHash, alg: body.alg, keyVersion: body.keyVersion }],
+      attenuation: { [decryptResource]: { "tinycloud.encryption/decrypt": [{}] } },
+      facts: [{ type: body.type, targetNode: body.targetNode, networkId: body.networkId, ...(encrypted.keyPath === undefined ? {} : { keyPath: encrypted.keyPath }), bodyHash, encryptedSymmetricKeyHash: body.encryptedSymmetricKeyHash, receiverPublicKeyHash, alg: body.alg, keyVersion: body.keyVersion }],
       proofs: [session.cid],
       notBefore: now,
       expiresAt: Math.min(now + 60, session.payload.exp),
@@ -598,7 +586,7 @@ export class ShareRecipientClient {
       const symmetricKey = await aesGcmDecrypt(shared, wrapped.slice(33));
       shared.fill(0);
       if (symmetricKey.length !== 32) throw new Error("v3 content key is malformed");
-      const plaintext = await aesGcmDecrypt(symmetricKey, fromBase64(encrypted.ciphertext, "v3 encrypted content"));
+      const plaintext = await aesGcmDecrypt(symmetricKey, ciphertext, aad);
       this.v3ContentKey?.fill(0);
       this.v3ContentKey = symmetricKey;
       this.v3ContentEnvelope = encrypted;
@@ -611,7 +599,9 @@ export class ShareRecipientClient {
   /** Re-encrypt edited v3 content with the admitted content key. */
   async encryptV3Content(bytes: Uint8Array, mediaType: string): Promise<Uint8Array> {
     if (this.options.envelope.version !== 3 || this.v3ContentKey === undefined || this.v3ContentEnvelope === undefined) throw new Error("v3 content must be decrypted before it can be saved");
-    return new TextEncoder().encode(canonicalize({ ...this.v3ContentEnvelope, ciphertext: toBase64Url(await aesGcmEncrypt(this.v3ContentKey, bytes)), metadata: { ...(this.v3ContentEnvelope.metadata ?? {}), contentType: mediaType } }));
+    const envelope = this.v3ContentEnvelope;
+    const aad = envelope.aad === undefined ? undefined : fromBase64(envelope.aad, "v3 encrypted content AAD");
+    return new TextEncoder().encode(canonicalize({ ...envelope, ciphertext: toBase64(await aesGcmEncrypt(this.v3ContentKey, bytes, aad)), metadata: { ...(envelope.metadata ?? {}), contentType: mediaType } }));
   }
 
   async resumeWithProof(envelope: ShareEnvelopeV2, resumeToken: string, proof: unknown): Promise<ShareAuthorizedContent> {

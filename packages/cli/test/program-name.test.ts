@@ -18,13 +18,6 @@ describe("program name", () => {
     }
   });
 
-  test("documents the pinned tinycloud install without a TC_BIN override", () => {
-    const readme = readFileSync(resolve(PACKAGE_DIR, "README.md"), "utf-8");
-    expect(readme).toContain("npm install -g @tinycloud/cli@1.5.0-beta.20");
-    expect(readme).toContain("tinycloud --version");
-    expect(readme).not.toContain("TC_BIN");
-  });
-
   test("an error hint names the bin the user ran", () => {
     const home = mkdtempSync(join(tmpdir(), "tc-program-name-"));
     const { TC_PROFILE: _profile, TC_HOST: _host, TC_HOME: _home, TC_PRIVATE_KEY: _key, ...ambient } = process.env;

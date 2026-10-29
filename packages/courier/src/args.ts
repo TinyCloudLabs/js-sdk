@@ -11,7 +11,7 @@ export interface ParsedArgs {
 /** Minimal parser: `--flag value`, `--flag=value`, `--flag` (boolean), `-h`. */
 export function parseArgs(argv: string[]): ParsedArgs {
   const positional: string[] = [];
-  const BOOLS: Record<string, true> = { json: true, help: true, force: true, stdin: true, 'code-stdin': true, quiet: true, 'rotate-key': true, paste: true, request: true, peek: true, resume: true, once: true, unguarded: true, 'install-launchd': true, 'install-systemd': true, 'dry-run': true };
+  const BOOLS: Record<string, true> = { json: true, help: true, force: true, consent: true, stdin: true, 'code-stdin': true, quiet: true, 'rotate-key': true, paste: true, request: true, peek: true, resume: true, once: true, unguarded: true, 'install-launchd': true, 'install-systemd': true, 'dry-run': true };
   const flags = new Map<string, string[]>();
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];

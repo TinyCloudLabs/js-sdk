@@ -40,7 +40,7 @@ import { ProfileManager } from "../config/profiles.js";
 import { CLIError } from "../output/errors.js";
 import { ExitCode } from "../config/constants.js";
 import { resolveSpaceUri } from "./space.js";
-import { isDeviceDefaultDecrypt, isRawEncryptionPermission } from "./raw-encryption.js";
+import { isDeviceDefaultDecrypt, isRawEncryptionPermission, isSharePublishingPrefixDecrypt } from "./raw-encryption.js";
 import { canonicalOwnerDid } from "./owner-did.js";
 import { assertNoCaveatLimits } from "./caveat-refusal.js";
 import { SHARE_PUBLISHING_MANIFEST, SHARE_PUBLISHING_MANIFEST_REF } from "../share/publishing-manifest.js";
@@ -681,9 +681,13 @@ export async function resolvePermissionSpaces(
       resolved.push({ ...raw, service, space: ENCRYPTION_MANIFEST_SPACE, actions });
       continue;
     }
-    // The manifest's default-key decrypt (space `default`, empty path) is named as the owner's default network,
+    // The built-in Share manifest's default/share/ decrypt is a raw encryption prefix,
     // the shape every raw encryption entry has. Without a known owner the login is refused: a profile without
     // this entry cannot publish email shares.
+    if (isSharePublishingPrefixDecrypt({ ...entry, service, actions })) {
+      resolved.push({ service, space: ENCRYPTION_MANIFEST_SPACE, path: `${await defaultSecretsNetworkId(profile, options.ownerDid)}/share/`, actions });
+      continue;
+    }
     if (isDeviceDefaultDecrypt({ ...entry, service, actions })) {
       resolved.push({ service, space: ENCRYPTION_MANIFEST_SPACE, path: await defaultSecretsNetworkId(profile, options.ownerDid), actions });
       continue;

@@ -161,6 +161,7 @@ export class EncryptionService
         // that spelling in the envelope so a later response can be compared
         // byte-for-byte (notably for checksummed did:pkh principals).
         networkId: descriptor.networkId,
+        ...(options?.keyPath !== undefined ? { keyPath: options.keyPath } : {}),
         networkPublicKey,
         plaintext,
         ...(options?.aad !== undefined ? { aad: options.aad } : {}),
@@ -236,6 +237,9 @@ export class EncryptionService
         type: DECRYPT_FACT_TYPE,
         targetNode,
         networkId: envelope.networkId,
+        ...(envelope.keyPath !== undefined
+          ? { keyPath: envelope.keyPath }
+          : {}),
         alg: envelope.alg,
         keyVersion: envelope.keyVersion,
         encryptedSymmetricKey: envelope.encryptedSymmetricKey,

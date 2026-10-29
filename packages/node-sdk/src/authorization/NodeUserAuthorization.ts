@@ -1136,7 +1136,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
       const parsed = entry.path.includes("/")
         ? parseEncryptionResource(entry.path)
         : { ...parseNetworkId(entry.path), kind: "network" as const };
-      if (parsed.kind !== "network") {
+      const sharePrefix = parsed.kind === "prefix" && parsed.network === "default" &&
+        parsed.prefix === "share" && entry.actions.length === 1 &&
+        entry.actions[0] === DECRYPT_ACTION && didPrincipalMatches(parsed.ownerDid, currentDid);
+      if (parsed.kind !== "network" && !sharePrefix) {
         throw new ManifestValidationError("named keys go in manifest.keys");
       }
       for (const action of entry.actions) {

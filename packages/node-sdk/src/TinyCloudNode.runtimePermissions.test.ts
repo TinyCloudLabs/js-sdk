@@ -2267,14 +2267,18 @@ test("mixed kv and decrypt runtime grants honour an explicit one-hour expiry for
 
     const signRawNetworkAuthorization = mock(
       async ({ targetNode, networkId: signedNetworkId, action, facts }: any) => {
+        const keyPath = facts.keyPath;
         expect(targetNode).toBe(node.did);
-        expect(signedNetworkId).toBe(networkId);
+        expect(signedNetworkId).toBe(keyPath === undefined ? networkId : `${networkId}/${keyPath}`);
         expect(action).toBe("tinycloud.encryption/decrypt");
         expect(facts.targetNode).toBe(node.did);
         expect(facts.networkId).toBe(networkId);
+        expect(facts.keyPath).toBe(keyPath);
         return {
           authorization: "Invocation node-encryption",
-          invocationCid: "bafy-node-encryption",
+          invocationCid: keyPath === undefined
+            ? "bafy-node-encryption"
+            : "bafy-node-encryption-scoped",
         };
       },
     );
@@ -2320,7 +2324,9 @@ test("mixed kv and decrypt runtime grants honour an explicit one-hour expiry for
           request.receiverPublicKey,
         );
         const wrappedKey = xor(receiverPublicKey, symmetricKey);
-        const invocationCid = "bafy-node-encryption";
+        const invocationCid = request.keyPath === undefined
+          ? "bafy-node-encryption"
+          : "bafy-node-encryption-scoped";
         const requestBodyHash = canonicalHashHex(crypto.sha256, request as any);
         const response: DecryptResponseBody = {
           type: "tinycloud.encryption.decrypt-result/v1",
@@ -2363,12 +2369,30 @@ test("mixed kv and decrypt runtime grants honour an explicit one-hour expiry for
       });
       expect(decryptResult.ok).toBe(true);
       if (!decryptResult.ok) return;
-
       expect(new TextDecoder().decode(decryptResult.data)).toBe(
         "hello tinycloud encryption",
       );
-      expect(fetchCalls.map((call) => call.method)).toEqual(["GET", "POST"]);
-      expect(signRawNetworkAuthorization).toHaveBeenCalledTimes(1);
+
+      const keyPath = "share/abcdef1234567890";
+      const scopedEncryptResult = await encryption.encryptToNetwork(
+        networkId,
+        plaintext,
+        { keyPath },
+      );
+      expect(scopedEncryptResult.ok).toBe(true);
+      if (!scopedEncryptResult.ok) return;
+      const scopedDecryptResult = await encryption.decryptEnvelope(
+        scopedEncryptResult.data,
+        { proofs: ["bafyDelegationFromPrincipal"] },
+      );
+      expect(scopedDecryptResult.ok).toBe(true);
+      if (!scopedDecryptResult.ok) return;
+      expect(new TextDecoder().decode(scopedDecryptResult.data)).toBe(
+        "hello tinycloud encryption",
+      );
+
+      expect(fetchCalls.map((call) => call.method)).toEqual(["GET", "POST", "POST"]);
+      expect(signRawNetworkAuthorization).toHaveBeenCalledTimes(2);
 
       const postCall = fetchCalls[1];
       expect(postCall.url).toBe(
@@ -2385,6 +2409,17 @@ test("mixed kv and decrypt runtime grants honour an explicit one-hour expiry for
       expect(request.receiverPublicKeyHash).toBe(
         canonicalHashHex(crypto.sha256, request.receiverPublicKey),
       );
+      const scopedPostCall = fetchCalls[2];
+      expect(scopedPostCall.url).toBe(postCall.url);
+      const scopedRequest = JSON.parse(
+        scopedPostCall.body ?? "{}",
+      ) as DecryptRequestBody;
+      expect(scopedRequest).toMatchObject({
+        networkId,
+        keyPath,
+        encryptedSymmetricKeyHash:
+          scopedEncryptResult.data.encryptedSymmetricKeyHash,
+      });
     } finally {
       globalThis.fetch = originalFetch;
     }
