@@ -7,4 +7,6 @@ Add immutable, signed OpenKey approval-request links using the shared `/a/<id>#v
 
 Use these short requests for browser approval in the CLI and onboarding. Recover the encrypted result through repeatable requester-authenticated fetches, verify the signed authority, and durably save the profile and stable ACK intent before acknowledgement. Explicit manual paste remains available with the existing return-code contract.
 
+Bind agent-grant approvals to the exact prepared request. Durably retain the verified child grant, command output, history, and signed-parent/ACK binding before acknowledgement, so retries recover the saved result rather than issuing another grant.
+
 Details: TC-2212

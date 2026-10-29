@@ -17,6 +17,8 @@ export interface AuthFlowOptions {
   /** Profile-owned, durable request/result recovery state. */
   profileName?: string;
   expectedOwner?: string;
+  /** Local command identity only; never sent in the signed request or delegation. */
+  commandIntent?: string;
   onApprovalRequest?: (request: { approvalUrl: string; requestId: string; expiresAt: string }) => void;
   noPopup?: boolean;
   jwk?: object;

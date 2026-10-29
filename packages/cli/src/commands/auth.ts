@@ -54,7 +54,7 @@ function resolveOpenKeyHost(profile: ProfileConfig): string {
   return process.env.TC_OPENKEY_HOST ?? profile.openkeyHost ?? DEFAULT_OPENKEY_HOST;
 }
 import { startAuthFlow } from "../auth/browser-auth.js";
-import { approvalResultNeedsAck, completeApprovalResult, pendingApprovalKey, trackApprovalResult } from "../auth/approval-request.js";
+import { approvalCommandIntent, approvalResultNeedsAck, commitApprovalCommand, completeApprovalResult, pendingApprovalKey, recoverApprovalCommand, trackApprovalResult } from "../auth/approval-request.js";
 import {
   acquireDeviceDelegation,
   loginWithDeviceAuthorization,
@@ -1381,18 +1381,29 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             reason: "Grant permissions requested by a TinyCloud auth request artifact.",
             exactApproval: true,
             noPopup: !(process.stdin.isTTY || process.stderr.isTTY),
+            commandIntent: approvalCommandIntent(parsed),
           });
           // Sign from the approval's own session, so the grant is bounded by that approval
           // and never takes the owner's stored authority.
-          const approvalNode = await nodeFromOpenKeyApproval(ctx.host, approval.session);
-          grant = {
-            ...(await grantAuthRequest(approvalNode, resolvedRequest, {
-              expiry: approval.delegation.expiry.getTime() - Date.now(),
-            })),
-            // The owner approved this grant on the OpenKey approval screen, so it was prompted.
-            prompted: true,
-          };
+          const recovered = await recoverApprovalCommand(ctx.profile, approval.delegation, parsed);
+          if (recovered) {
+            grant = recovered;
+          } else {
+            const approvalNode = await nodeFromOpenKeyApproval(ctx.host, approval.session);
+            grant = {
+              ...(await grantAuthRequest(approvalNode, resolvedRequest, {
+                expiry: approval.delegation.expiry.getTime() - Date.now(),
+              })),
+              prompted: true,
+            };
+          }
           process.stderr.write(`Grant lasts until ${grant.expiry}, the lifetime of the OpenKey approval.\n`);
+          if (approvalResultNeedsAck(approval.delegation)) {
+            await commitApprovalCommand(ctx.profile, approval.delegation, parsed, grant);
+            await completeApprovalResult(ctx.profile, approval.delegation);
+            outputJson(grant);
+            return;
+          }
         } else {
           await ensureDelegationAuthority({
             ctx,
@@ -1929,6 +1940,8 @@ export async function acquireOpenKeyApproval(params: {
   exactApproval?: boolean;
   /** Print the OpenKey approval URL and wait for the callback instead of opening a browser. */
   noPopup?: boolean;
+  /** Local prepared-request identity, not an OpenKey or delegation claim. */
+  commandIntent?: string;
   /** Test seam for the browser acquisition boundary; production uses startAuthFlow. */
   openKeyAcquisition?: OpenKeyAcquisition;
 }): Promise<OpenKeyApproval> {
@@ -1962,6 +1975,7 @@ export async function acquireOpenKeyApproval(params: {
     openkeyHost: resolveOpenKeyHost(params.profile),
     expiry: expiryCap === undefined ? undefined : openKeyExpiryParam(expiryCap),
     noPopup: params.noPopup,
+    commandIntent: params.commandIntent,
   });
   return verifyOpenKeyApproval(delegationData, request, params.ctx.host, {
     key,

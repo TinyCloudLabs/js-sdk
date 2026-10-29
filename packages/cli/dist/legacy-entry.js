@@ -17971,7 +17971,7 @@ import { spawn } from "child_process";
 import { lstat as lstat7, mkdir as mkdir4, readFile as readFile9, writeFile as writeFile2 } from "fs/promises";
 import { dirname as dirname6, join as join15 } from "path";
 import { createInterface as createInterface3 } from "readline";
-import { TinyCloudNode as TinyCloudNode3, grantAuthRequest, principalDidEquals as principalDidEquals2, REPLICA_LOGOUT_PENDING_FILE as REPLICA_LOGOUT_PENDING_FILE4, signedCompactUcanExpiry as signedCompactUcanExpiry3 } from "@tinycloud/node-sdk";
+import { TinyCloudNode as TinyCloudNode3, grantAuthRequest, principalDidEquals as principalDidEquals3, REPLICA_LOGOUT_PENDING_FILE as REPLICA_LOGOUT_PENDING_FILE4, signedCompactUcanExpiry as signedCompactUcanExpiry3 } from "@tinycloud/node-sdk";
 import { composeManifestRequest } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
 import { namedProfilePath as namedProfilePath3, profilePath as profilePath9 } from "@tinycloud/operations/state";
@@ -32759,8 +32759,299 @@ init_storage();
 init_constants();
 init_errors();
 init_permissions();
+init_permissions();
 import { additionalDelegationsPath as additionalDelegationsPath3, profilePath as profilePath8 } from "@tinycloud/operations/state";
-import { EXPIRY } from "@tinycloud/sdk-core";
+import { principalDidEquals as principalDidEquals2 } from "@tinycloud/node-sdk";
+import { EXPIRY, canonicalizeRecapCaveats, parseSignedCompactUcanAttenuation as parseSignedCompactUcanAttenuation3 } from "@tinycloud/sdk-core";
+
+// src/lib/apps-agent-preset.ts
+init_constants();
+init_errors();
+init_safe_text();
+init_raw_encryption();
+init_space();
+import { DEFAULT_EXPIRY as DEFAULT_EXPIRY2, parseExpiry as parseExpiry2, SERVICE_LONG_TO_SHORT as SERVICE_LONG_TO_SHORT3, VAULT_PERMISSION_SERVICE as VAULT_PERMISSION_SERVICE2 } from "@tinycloud/sdk-core";
+import { CLI_NAME as CLI_NAME12 } from "@tinycloud/operations/cli-name";
+var APPS_AGENT_PRESET = "apps-agent";
+var APPS_AGENT_SPACE = "applications";
+var APPS_AGENT_EXPIRY_DAYS = 7;
+var APPS_AGENT_EXPIRY = `${APPS_AGENT_EXPIRY_DAYS}d`;
+var APPS_AGENT_MAX_APPS = 5;
+var DAY_MS2 = 864e5;
+var APPS_AGENT_WRITE_FOLDERS = ["knowledge/", "prefs/"];
+var APPS_AGENT_VARIANTS = {
+  read: {
+    grants: [
+      { service: "tinycloud.kv", actions: ["tinycloud.kv/get", "tinycloud.kv/list"], within: [""] },
+      { service: "tinycloud.sql", actions: ["tinycloud.sql/read"], within: [""] }
+    ],
+    perAppOnly: false,
+    schemaForCatalogApps: false
+  },
+  write: {
+    grants: [
+      { service: "tinycloud.kv", actions: ["tinycloud.kv/get", "tinycloud.kv/list"], within: [""] },
+      { service: "tinycloud.kv", actions: ["tinycloud.kv/put"], within: APPS_AGENT_WRITE_FOLDERS },
+      { service: "tinycloud.sql", actions: ["tinycloud.sql/read", "tinycloud.sql/write"], within: [""] }
+    ],
+    perAppOnly: true,
+    schemaForCatalogApps: true
+  }
+};
+var APPS_AGENT_SCHEMA_DATABASES = {
+  "xyz.tinycloud.sample.healthlog": "healthlog"
+};
+var SCHEMA_ACTION = "tinycloud.sql/schema";
+var ACTION_WORDS = {
+  "tinycloud.kv/get": "read files",
+  "tinycloud.kv/list": "list files",
+  "tinycloud.kv/put": "create and overwrite files",
+  "tinycloud.kv/del": "delete files",
+  "tinycloud.kv/metadata": "read file metadata",
+  "tinycloud.sql/read": "read table rows",
+  "tinycloud.sql/write": "add, change and delete table rows",
+  "tinycloud.sql/schema": "create, change and drop tables",
+  "tinycloud.sql/admin": "do anything in the database",
+  "tinycloud.delegation/create": "can give other people or agents access on your behalf",
+  "tinycloud.delegation/revoke": "can cancel access you gave",
+  "tinycloud.delegation/*": "can do everything the delegation permissions allow, including giving access on to others",
+  "tinycloud.kv/*": "do anything with files (read, write, delete)",
+  "tinycloud.sql/*": "do anything in the database",
+  "tinycloud.capabilities/read": "see which permissions this key holds"
+};
+var STRUCTURE_ACTIONS = {
+  "tinycloud.sql/schema": true,
+  "tinycloud.sql/admin": true,
+  "tinycloud.sql/*": true
+};
+var APP_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+var APP_ID_RULE = "an app id looks like xyz.example.app: letters, digits, dots, hyphens and underscores, no slashes or spaces";
+function isAppId(value) {
+  return value.length <= 200 && APP_ID.test(value);
+}
+function appsAgentPermissions(mode, appIds = []) {
+  const bases = appIds.length === 0 ? [""] : appIds.map((appId) => `${appId}/`);
+  const grants = APPS_AGENT_VARIANTS[mode].grants.flatMap(({ service, actions, within }) => within.flatMap((folder) => bases.map((base5) => ({ service, space: APPS_AGENT_SPACE, path: `${base5}${folder}`, actions: [...actions] }))));
+  const schema = APPS_AGENT_VARIANTS[mode].schemaForCatalogApps ? schemaPathsFor(appIds).map((path) => ({ service: "tinycloud.sql", space: APPS_AGENT_SPACE, path, actions: [SCHEMA_ACTION] })) : [];
+  return [...grants, ...schema];
+}
+function schemaPathsFor(appIds) {
+  return appIds.flatMap((appId) => {
+    if (!Object.hasOwn(APPS_AGENT_SCHEMA_DATABASES, appId)) return [];
+    return [`${appId}/${APPS_AGENT_SCHEMA_DATABASES[appId]}`];
+  });
+}
+function quoteApps(appIds) {
+  return appIds.map((appId) => `\`${appId}\``).join(", ");
+}
+function lifetimePhrase(ms2) {
+  if (ms2 >= DAY_MS2) {
+    const days = Math.ceil(ms2 / DAY_MS2);
+    return `${days} day${days === 1 ? "" : "s"}`;
+  }
+  const hours = Math.max(1, Math.ceil(ms2 / 36e5));
+  return `${hours} hour${hours === 1 ? "" : "s"}`;
+}
+function revokeSentence(lifetimeMs2) {
+  return `It lasts up to ${lifetimePhrase(lifetimeMs2)}; revoke it any time with \`${CLI_NAME12} delegation revoke <id>\`.`;
+}
+function appsAgentScopeNotice(mode, appIds = []) {
+  const variant = APPS_AGENT_VARIANTS[mode];
+  const writes = variant.grants.some(({ actions }) => actions.includes("tinycloud.kv/put"));
+  const writableFolders = appIds.flatMap((appId) => APPS_AGENT_WRITE_FOLDERS.map((folder) => `\`${appId}/${folder}\``)).join(", ");
+  const reads = writes ? `read everything there, write knowledge and data files (${writableFolders}), and add, change and delete table rows` : "list and read its files and read its table rows";
+  const scope = appIds.length === 0 ? `ALL your installed apps' data in the \`${APPS_AGENT_SPACE}\` space` : `the data of ${quoteApps(appIds)} (everything under ${appIds.map((appId) => `\`${appId}/\``).join(", ")}) in the \`${APPS_AGENT_SPACE}\` space`;
+  const lines = [
+    writes ? `This gives the agent access to ${scope}: it can ${reads}.` : `This gives the agent READ-ONLY access to ${scope}: it can ${reads}.`
+  ];
+  if (writes) {
+    const schemaPaths = schemaPathsFor(appIds).map((path) => `\`${path}\``);
+    lines.push(
+      `It cannot change ${appIds.length === 1 ? "the app's" : "the apps'"} code, manifest or install record: files outside those folders are read-only for it.`,
+      `SQL write is separate from that: it can add, change and delete ${appIds.length === 1 ? "this app's" : "these apps'"} table rows.`,
+      variant.schemaForCatalogApps && schemaPaths.length > 0 ? `It can also create, change and drop the tables in ${schemaPaths.join(", ")}, which the app needs to set itself up. That grant names no other database for table changes. Nodes before 1.21.6 do not enforce that database limit, so the write grant may still let it change tables elsewhere there.` : "This grant does not include permission to create, change or drop tables (tinycloud.sql/schema). Nodes before 1.21.6 do not enforce that split, so the write grant may still let it do so there.",
+      "It cannot touch other apps, other spaces or secrets."
+    );
+  } else {
+    lines.push("It cannot create, change or delete anything, and it cannot touch other spaces or secrets.");
+  }
+  lines.push(revokeSentence(APPS_AGENT_EXPIRY_DAYS * DAY_MS2));
+  return lines.join("\n");
+}
+function usage(message) {
+  return new CLIError("INVALID_ARGUMENT", message, ExitCode.USAGE_ERROR);
+}
+function resolveAppsAgentRequest(options) {
+  const apps = options.app ?? [];
+  if (options.preset === void 0) {
+    if (apps.length > 0 || options.write === true) {
+      throw usage(`--app and --write require --preset ${APPS_AGENT_PRESET}.`);
+    }
+    return void 0;
+  }
+  if (options.preset !== APPS_AGENT_PRESET) {
+    throw usage(`Unknown --preset "${safeClipped(options.preset)}". Available: ${APPS_AGENT_PRESET}.`);
+  }
+  if ((options.cap?.length ?? 0) > 0 || options.permission !== void 0 || options.manifest !== void 0 || options.expiry !== void 0) {
+    throw usage(
+      `--preset ${APPS_AGENT_PRESET} is the whole request (${APPS_AGENT_EXPIRY}); it cannot be combined with --cap, --permission, --manifest or --expiry.`
+    );
+  }
+  if (options.device === true) {
+    throw usage(`--preset ${APPS_AGENT_PRESET} includes SQL, which device approval cannot grant. Use browser or --paste approval.`);
+  }
+  const mode = options.write === true ? "write" : "read";
+  const appIds = [...new Set(apps)];
+  for (const appId of appIds) {
+    if (!isAppId(appId)) throw usage(`Invalid --app "${safeClipped(appId)}": ${APP_ID_RULE}.`);
+  }
+  if (appIds.length > APPS_AGENT_MAX_APPS) {
+    throw usage(`--app can be repeated at most ${APPS_AGENT_MAX_APPS} times; for more apps, ask for read-only access to the whole space (leave --app off).`);
+  }
+  if (APPS_AGENT_VARIANTS[mode].perAppOnly && appIds.length === 0) {
+    throw usage("--write needs --app <app_id>: write access is only given for named apps, never for the whole space.");
+  }
+  return { mode, appIds };
+}
+function lifetimeMs(value) {
+  try {
+    if (value === void 0) return parseExpiry2(DEFAULT_EXPIRY2);
+    if (typeof value === "number") return Number.isFinite(value) && value > 0 ? value : void 0;
+    return /^\d+$/.test(value.trim()) ? Number(value.trim()) : parseExpiry2(value);
+  } catch {
+    return void 0;
+  }
+}
+function inApplicationsSpace(entry, applicationsSpace) {
+  return normalizePkhIdentifier(entry.space ?? "") === normalizePkhIdentifier(applicationsSpace);
+}
+function sameActions(have, want) {
+  return have.length === want.length && want.every((action) => have.includes(action));
+}
+function matchAppsAgentRequest(requested, requestedExpiry, applicationsSpace) {
+  if (lifetimeMs(requestedExpiry) !== APPS_AGENT_EXPIRY_DAYS * DAY_MS2) return void 0;
+  if (requested.some((entry) => entry.expiry !== void 0 || entry.caveats !== void 0)) return void 0;
+  const kvPaths = requested.filter((entry) => entry.service === "tinycloud.kv").map((entry) => entry.path);
+  const appIds = [];
+  for (const path of kvPaths) {
+    if (path === "") continue;
+    const slash = path.indexOf("/");
+    const appId = path.slice(0, slash);
+    if (slash < 1 || !isAppId(appId)) return void 0;
+    if (!appIds.includes(appId)) appIds.push(appId);
+  }
+  if (appIds.length > APPS_AGENT_MAX_APPS || appIds.length > 0 && kvPaths.includes("")) return void 0;
+  for (const mode of ["read", "write"]) {
+    if (APPS_AGENT_VARIANTS[mode].perAppOnly && appIds.length === 0) continue;
+    const expected = appsAgentPermissions(mode, appIds);
+    const exact = requested.length === expected.length && expected.every((want) => requested.some((have) => have.service === want.service && inApplicationsSpace(have, applicationsSpace) && have.path === want.path && sameActions(have.actions, want.actions)));
+    if (exact) return { mode, appIds };
+  }
+  return void 0;
+}
+var RAW_ENCRYPTION_SPACE = "encryption";
+function badRequest(message) {
+  return new CLIError("INVALID_AUTH_REQUEST", `${message} Nothing was signed.`, ExitCode.USAGE_ERROR);
+}
+var DID_SHAPE = /^did:[a-z0-9]+:[A-Za-z0-9._:%#-]+$/;
+function assertRequestFields(request) {
+  if (typeof request.sessionDid !== "string" || request.sessionDid.length > 300 || !DID_SHAPE.test(request.sessionDid)) {
+    throw badRequest("The request's sessionDid is not a valid DID.");
+  }
+  if (request.requestedExpiry !== void 0 && (typeof request.requestedExpiry !== "string" && typeof request.requestedExpiry !== "number" || lifetimeMs(request.requestedExpiry) === void 0)) {
+    throw badRequest("The request's requestedExpiry is not a duration such as 7d or 12h.");
+  }
+}
+function entriesForSigning(requested) {
+  return requested.map((entry, index) => {
+    const label = `Entry ${index + 1} of the request`;
+    if (typeof entry !== "object" || entry === null || typeof entry.service !== "string" || entry.service === "" || typeof entry.path !== "string" || !Array.isArray(entry.actions) || entry.actions.length === 0 || entry.actions.some((action) => typeof action !== "string" || action === "")) {
+      throw badRequest(`${label} is malformed: it needs a service, a path and at least one action.`);
+    }
+    if (entry.service === VAULT_PERMISSION_SERVICE2 || entry.service === "vault") {
+      throw badRequest(`${label} asks for the vault (\`tinycloud.vault\`). This command does not sign vault access from a request file: the signer turns it into KV access on \`vault/\` for the vault actions you listed, so the printed list would not show what is signed.`);
+    }
+    if (entry.space !== void 0 && (typeof entry.space !== "string" || entry.space === "")) {
+      throw badRequest(`${label} has an empty space: name the space, or leave it out to mean your \`${APPS_AGENT_SPACE}\` space.`);
+    }
+    return entry.space === void 0 && !isRawEncryptionPermission(entry) ? { ...entry, space: APPS_AGENT_SPACE } : entry;
+  });
+}
+function finalizeSigningEntries(resolved) {
+  const merged = /* @__PURE__ */ new Map();
+  const spaces = /* @__PURE__ */ new Set();
+  const spellings = /* @__PURE__ */ new Map();
+  resolved.forEach((entry, index) => {
+    const label = `Entry ${index + 1} of the request`;
+    if (SERVICE_LONG_TO_SHORT3[entry.service] === void 0) {
+      throw badRequest(`${label} names the service "${safeClipped(entry.service)}", which the signer cannot sign.`);
+    }
+    const space = entry.space;
+    const raw = isRawEncryptionPermission(entry);
+    const concrete = typeof space === "string" && (space.startsWith("tinycloud:") || space === RAW_ENCRYPTION_SPACE && raw);
+    if (!concrete) {
+      throw badRequest(`${label} does not resolve to a concrete space (got "${safeClipped(String(space))}").`);
+    }
+    const normalized = normalizePkhIdentifier(space);
+    if (!raw) spaces.add(normalized);
+    const spelled = spellings.get(normalized) ?? space;
+    spellings.set(normalized, spelled);
+    const unified = { ...entry, space: spelled };
+    const key = JSON.stringify([entry.service, normalized, entry.path, entry.expiry ?? null, entry.caveats ?? null]);
+    const existing = merged.get(key);
+    merged.set(key, existing === void 0 ? unified : { ...existing, actions: [...existing.actions, ...entry.actions] });
+  });
+  if (spaces.size > 1) {
+    throw badRequest(`The request names ${spaces.size} different spaces (${safeClippedList([...spaces])}); a grant covers one space, so make one request per space.`);
+  }
+  return [...merged.values()].map((entry) => ({ ...entry, actions: [...new Set(entry.actions)].sort() }));
+}
+function describeAction(action) {
+  if (Object.prototype.hasOwnProperty.call(ACTION_WORDS, action)) return ACTION_WORDS[action];
+  return action.endsWith("/*") ? `ALL abilities of ${safeInline(action.slice(0, -2))} (unrecognised: grants ${safeInline(action)})` : `unrecognised: grants ${safeInline(action)}`;
+}
+function describeEntry(entry, applicationsSpace) {
+  const inApplications = inApplicationsSpace(entry, applicationsSpace);
+  const space = inApplications ? "your `applications` space" : `space \`${safeInline(entry.space ?? "")}\``;
+  const wholeSpace = entry.path === "" || entry.path === "/";
+  const where = wholeSpace ? inApplications ? `ALL apps in ${space}` : `everything in ${space}` : `\`${safeInline(entry.path)}\` in ${space}`;
+  const known = entry.service === "tinycloud.kv" || entry.service === "tinycloud.sql" || entry.service === "tinycloud.delegation" || entry.service === "tinycloud.capabilities";
+  const service = known ? safeInline(entry.service) : `unrecognised service ${safeInline(entry.service)}`;
+  return `${entry.actions.map(describeAction).join(", ")} on ${where} (${service})`;
+}
+function withinPresetSet(entry, applicationsSpace) {
+  if (!inApplicationsSpace(entry, applicationsSpace) || entry.caveats !== void 0) return false;
+  if (entry.path.split("/").some((segment) => segment === "." || segment === "..")) return false;
+  if (entry.actions.includes(SCHEMA_ACTION)) return false;
+  const slash = entry.path.indexOf("/");
+  const folder = slash > 0 && isAppId(entry.path.slice(0, slash)) ? entry.path.slice(slash + 1) : void 0;
+  const grants = Object.values(APPS_AGENT_VARIANTS).flatMap(({ grants: variantGrants }) => variantGrants.filter((grant) => grant.service === entry.service));
+  return entry.actions.length > 0 && entry.actions.every((action) => grants.some((grant) => grant.actions.includes(action) && (!(action.endsWith("/put") || action.endsWith("/write")) || folder !== void 0 && grant.within.some((within) => folder.startsWith(within)))));
+}
+function describeGrantScope(requested, requestedExpiry, applicationsSpace, maxLifetimeMs) {
+  const preset = matchAppsAgentRequest(requested, requestedExpiry, applicationsSpace);
+  if (preset !== void 0) {
+    return { text: appsAgentScopeNotice(preset.mode, preset.appIds), entries: requested, extras: [] };
+  }
+  const touchesApplications = requested.some((entry) => (entry.space ?? "").split(":").at(-1) === APPS_AGENT_SPACE);
+  const extras = touchesApplications ? requested.filter((entry) => !withinPresetSet(entry, applicationsSpace)) : [];
+  const others = requested.filter((entry) => !extras.includes(entry));
+  const lines = [
+    extras.length > 0 ? "This request asks for MORE than the apps-agent preset. Entries marked ! go beyond it:" : touchesApplications ? "This request is not the standard apps-agent grant (other paths or lifetime). It asks for:" : "This request asks for:",
+    ...extras.map((entry) => `! ${describeEntry(entry, applicationsSpace)}`),
+    ...others.map((entry) => `- ${describeEntry(entry, applicationsSpace)}`)
+  ];
+  if (requested.some((entry) => entry.service === "tinycloud.sql" && entry.actions.some((action) => Object.hasOwn(STRUCTURE_ACTIONS, action)))) {
+    lines.push("This request can create, change and drop tables (an SQL schema, admin or wildcard entry).");
+  }
+  const entryLifetimes = requested.filter((entry) => entry.expiry !== void 0).map((entry) => lifetimeMs(entry.expiry));
+  const durations = [lifetimeMs(requestedExpiry), ...entryLifetimes].filter((ms2) => ms2 !== void 0).map((ms2) => Math.min(ms2, maxLifetimeMs ?? Number.POSITIVE_INFINITY));
+  const longest = Math.max(...durations);
+  lines.push(
+    durations.length === 0 || !Number.isFinite(longest) ? "Its lifetime could not be read from the request." : `It lasts up to ${lifetimePhrase(longest)}${requestedExpiry === void 0 ? " (no lifetime was requested; this is the default)" : ""}; revoke it any time with \`${CLI_NAME12} delegation revoke <id>\`.`
+  );
+  return { text: lines.join("\n"), entries: requested, extras };
+}
 
 // src/auth/device-auth.ts
 init_constants();
@@ -32867,7 +33158,7 @@ init_errors();
 init_constants();
 import { NodeWasmBindings, signedCompactUcanExpiry as signedCompactUcanExpiry2 } from "@tinycloud/node-sdk";
 import { isLocalOwnerProfile as isLocalOwnerProfile2, ownerSessionLacksProof as ownerSessionLacksProof2 } from "@tinycloud/operations/profile";
-import { CLI_NAME as CLI_NAME12 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME13 } from "@tinycloud/operations/cli-name";
 
 // src/lib/duration.ts
 function parseDuration(input) {
@@ -32893,7 +33184,7 @@ function parseDuration(input) {
   }
   throw new Error(`Invalid duration: "${input}". Use format like "1h", "7d", or an ISO date.`);
 }
-function parseExpiry2(input) {
+function parseExpiry3(input) {
   return new Date(Date.now() + parseDuration(input));
 }
 
@@ -33239,7 +33530,7 @@ function verifySignedSession(data, key, sessionDid, expected = {}) {
 function withoutRequestedKeyRow(signed, keys, signerDid) {
   const mismatch = () => new CLIError(
     "OPENKEY_SCOPE_MISMATCH",
-    `The key permission in the approval didn't match what was asked for "<folder>/", so this sign-in wasn't saved. Sign in again with \`${CLI_NAME12} auth login --keys <folder>\`.`,
+    `The key permission in the approval didn't match what was asked for "<folder>/", so this sign-in wasn't saved. Sign in again with \`${CLI_NAME13} auth login --keys <folder>\`.`,
     ExitCode.PERMISSION_DENIED
   );
   let expectedResource;
@@ -33318,14 +33609,14 @@ init_errors();
 init_space();
 import { join as join13 } from "path";
 import { REPLICA_LOGOUT_PENDING_FILE as REPLICA_LOGOUT_PENDING_FILE3 } from "@tinycloud/node-sdk";
-import { CLI_NAME as CLI_NAME13 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME14 } from "@tinycloud/operations/cli-name";
 import { isLocalOwnerProfile as isLocalOwnerProfile3, ownerSessionLacksProof as ownerSessionLacksProof3 } from "@tinycloud/operations/profile";
 import { ProfileLockTimeoutError as ProfileLockTimeoutError2, profilePath as profilePath7 } from "@tinycloud/operations/state";
 function assertNotLocalOwner(profileName2, profile, flow) {
   if (profile === null || !isLocalOwnerProfile3(profile)) return;
   throw new CLIError(
     "LOCAL_OWNER_PROFILE",
-    `Profile "${profileName2}" holds a local owner key. ${flow} would turn it into an OpenKey profile while keeping that key. Use a separate profile: \`${CLI_NAME13} init --name publisher --key-only\`, then \`${CLI_NAME13} --profile publisher auth login --device --manifest ...\`.`,
+    `Profile "${profileName2}" holds a local owner key. ${flow} would turn it into an OpenKey profile while keeping that key. Use a separate profile: \`${CLI_NAME14} init --name publisher --key-only\`, then \`${CLI_NAME14} --profile publisher auth login --device --manifest ...\`.`,
     ExitCode.USAGE_ERROR
   );
 }
@@ -33360,7 +33651,7 @@ function assertSessionReplaceable(profileName2, snapshot, ownerDid, scope, newEx
   if (problem !== void 0) {
     throw new CLIError(
       "PROFILE_STATE_INCONSISTENT",
-      `Profile "${profileName2}" is inconsistent (${problem}), possibly from an interrupted write. Nothing was saved. Check \`${CLI_NAME13} --profile ${profileName2} context\`, then pass --replace-session to replace this state, or use a new profile.`,
+      `Profile "${profileName2}" is inconsistent (${problem}), possibly from an interrupted write. Nothing was saved. Check \`${CLI_NAME14} --profile ${profileName2} context\`, then pass --replace-session to replace this state, or use a new profile.`,
       ExitCode.ERROR
     );
   }
@@ -33376,7 +33667,7 @@ function assertSessionReplaceable(profileName2, snapshot, ownerDid, scope, newEx
   const space = typeof session.spaceId === "string" ? session.spaceId : "an unknown space";
   throw new CLIError(
     "SESSION_IN_USE",
-    `Profile "${profileName2}" has a live session for ${space}${expiresAt ? ` until ${expiresAt}` : ""} that this login would ${keepsScope ? "shorten" : "narrow or replace"}, dropping that authority. Nothing was saved. Keep the user's existing profiles: use a new profile name (\`${CLI_NAME13} init --name publisher --key-only\`, then \`${CLI_NAME13} --profile publisher auth login --device --manifest ...\`), or pass --replace-session to replace this session.`,
+    `Profile "${profileName2}" has a live session for ${space}${expiresAt ? ` until ${expiresAt}` : ""} that this login would ${keepsScope ? "shorten" : "narrow or replace"}, dropping that authority. Nothing was saved. Keep the user's existing profiles: use a new profile name (\`${CLI_NAME14} init --name publisher --key-only\`, then \`${CLI_NAME14} --profile publisher auth login --device --manifest ...\`), or pass --replace-session to replace this session.`,
     ExitCode.USAGE_ERROR
   );
 }
@@ -33410,7 +33701,7 @@ async function commitLogin(profileName2, snapshot, commit) {
     if (canonicalJson(current.profile) !== canonicalJson(snapshot.profile) || canonicalJson(current.key) !== canonicalJson(snapshot.key) || canonicalJson(current.session) !== canonicalJson(snapshot.session)) {
       throw new CLIError(
         "PROFILE_CHANGED_DURING_LOGIN",
-        `Profile "${profileName2}" changed while this login was in progress (another login, key rotation or logout). Nothing was saved; check \`${CLI_NAME13} --profile ${profileName2} context\` and run the login again if it is still needed.`,
+        `Profile "${profileName2}" changed while this login was in progress (another login, key rotation or logout). Nothing was saved; check \`${CLI_NAME14} --profile ${profileName2} context\` and run the login again if it is still needed.`,
         ExitCode.ERROR
       );
     }
@@ -33443,7 +33734,7 @@ async function commitLogin(profileName2, snapshot, commit) {
       if (failures.length === 0) throw error;
       throw new CLIError(
         "PROFILE_STATE_INCONSISTENT",
-        `Saving the login for profile "${profileName2}" failed (${errorMessage(error)}), and restoring its previous state failed too (${failures.map(errorMessage).join("; ")}). The profile's key, session and settings may not match. Check \`${CLI_NAME13} --profile ${profileName2} context\`, then run the login again with --replace-session, or use a new profile.`,
+        `Saving the login for profile "${profileName2}" failed (${errorMessage(error)}), and restoring its previous state failed too (${failures.map(errorMessage).join("; ")}). The profile's key, session and settings may not match. Check \`${CLI_NAME14} --profile ${profileName2} context\`, then run the login again with --replace-session, or use a new profile.`,
         ExitCode.ERROR
       );
     }
@@ -33459,7 +33750,7 @@ async function commitLogin(profileName2, snapshot, commit) {
 
 // src/auth/owner-key.ts
 init_theme();
-import { CLI_NAME as CLI_NAME14 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME15 } from "@tinycloud/operations/cli-name";
 function openKeyPrimaryFlag(delegation) {
   return typeof delegation.primary === "boolean" ? delegation.primary : void 0;
 }
@@ -33470,7 +33761,7 @@ function withOwnerKeyPrimary(profile, primary) {
 function nonPrimaryKeyWarning(ownerDid) {
   const address = ownerDid.split(":")[4] ?? ownerDid;
   return `${theme.warn("Warning:")} you signed in with OpenKey key ${address} (${ownerDid}), which is not your account's primary OpenKey key. This key is a separate owner with its own spaces and data, so this profile does not see the data stored under your primary key.
-To use your primary key, log in again and choose the primary key in OpenKey, for example into a new profile: ${CLI_NAME14} init --name <profile>
+To use your primary key, log in again and choose the primary key in OpenKey, for example into a new profile: ${CLI_NAME15} init --name <profile>
 `;
 }
 function warnIfNotPrimaryKey(ownerDid, primary) {
@@ -33479,7 +33770,7 @@ function warnIfNotPrimaryKey(ownerDid, primary) {
 }
 function announceFirstOwner(profileName2, expectedOwner, ownerDid) {
   if (expectedOwner !== void 0 || ownerDid === void 0) return;
-  process.stderr.write(`Profile "${profileName2}" now belongs to ${ownerDid}. If that isn't your OpenKey account, stop using this profile and create a new one with ${CLI_NAME14} init.
+  process.stderr.write(`Profile "${profileName2}" now belongs to ${ownerDid}. If that isn't your OpenKey account, stop using this profile and create a new one with ${CLI_NAME15} init.
 `);
 }
 function ownerLoginPermissions(owner) {
@@ -33904,6 +34195,107 @@ function approvalResultNeedsAck(delegation) {
   return acquisitions.has(delegation);
 }
 var STATE_FILE = "approval-pending.json";
+function approvalCommandIntent(request) {
+  return "auth-grant:" + createHash3("sha256").update(canonicalJson(request)).digest("hex");
+}
+async function commandParent(profile, entry) {
+  const key = await ProfileManager.getKey(profile);
+  const current = await ProfileManager.getProfile(profile);
+  if (!key || current.authSignedOut === true || signerFromJwk(key).did !== entry.request.targetDid || !principalDidEquals2(current.sessionDid ?? current.did, entry.request.targetDid)) {
+    throw invalid2("The command's profile or signing key changed.");
+  }
+  const verified = verifyPendingResult(entry, key);
+  if (current.ownerDid?.toLowerCase() !== verified.session.ownerDid.toLowerCase()) throw invalid2("The command's owner changed.");
+  return verified;
+}
+async function verifyApprovalCommand(profile, entry, request, result, checkedParent) {
+  const parent = checkedParent ?? await commandParent(profile, entry);
+  if (entry.commandIntent !== approvalCommandIntent(request) || result.kind !== "tinycloud.auth.delegation" || result.version !== 1 || result.requestId !== request.requestId || result.delegationCid !== result.delegation.cid || result.prompted !== true) throw invalid2("Saved grant does not match this prepared command.");
+  const requested = finalizeSigningEntries(await resolvePermissionSpaces(entriesForSigning(request.requested), profile));
+  if (canonicalJson(result.permissions) !== canonicalJson(requested)) throw invalid2("Saved grant permissions changed.");
+  const authorization = result.delegation.delegationHeader.Authorization.replace(/^Bearer /i, "");
+  const signed = parseSignedCompactUcanAttenuation3(authorization, result.delegationCid);
+  const payload = JSON.parse(Buffer.from(authorization.split(".")[1], "base64url").toString("utf8"));
+  if (!principalDidEquals2(signed.payload.iss, entry.request.targetDid) || !principalDidEquals2(signed.payload.aud, request.sessionDid) || !principalDidEquals2(result.delegation.delegateDID, request.sessionDid) || !Array.isArray(payload.prf) || payload.prf.length !== 1 || payload.prf[0] !== parent.delegation.delegationCid || typeof payload.exp !== "number" || payload.exp * 1e3 <= Date.now() || payload.exp * 1e3 > Date.parse(parent.session.expiresAt) || new Date(payload.exp * 1e3).toISOString() !== result.expiry || new Date(String(result.delegation.expiry)).toISOString() !== result.expiry || result.delegation.host !== entry.request.nodeOrigin) throw invalid2("Saved child grant does not bind the signed parent and requester.");
+  const tuples = Object.entries(signed.payload.att).flatMap(([resource, abilities]) => {
+    const match = /^(?:tinycloud:\/\/([^/]+)|(tinycloud:[^/]+))\/([^/]+)(?:\/|$)(.*)$/.exec(resource);
+    if (!match) throw invalid2("Saved child has an unsupported signed resource.");
+    return Object.entries(abilities).map(([action, caveats]) => ({
+      space: match[1] ?? match[2],
+      service: "tinycloud." + match[3],
+      path: match[4],
+      action,
+      caveats: canonicalizeRecapCaveats(caveats)
+    }));
+  });
+  for (const permission2 of requested) for (const action of permission2.actions) {
+    const index = tuples.findIndex((tuple) => tuple.service === permission2.service && tuple.path === permission2.path && tuple.action === action && sameLoginSpace(tuple.space, permission2.space, parent.session.ownerDid) && tuple.caveats === canonicalizeRecapCaveats(permission2.caveats));
+    if (index < 0) throw invalid2("Saved child does not contain the exact requested authority.");
+    tuples.splice(index, 1);
+  }
+  if (tuples.length) throw invalid2("Saved child contains authority outside the prepared request.");
+}
+async function syncCommandFiles(profile, result) {
+  const stored = (await loadLocalGrantArtifacts(profile)).find((item) => item.delegationCid === result.delegationCid);
+  const history = (await readGrantHistory(profile)).find((item) => item.delegationCid === result.delegationCid && item.source === "cli" && item.expiry === result.expiry && canonicalJson(item.addedCaps) === canonicalJson(result.permissions));
+  if (!stored || canonicalJson(JSON.parse(JSON.stringify(stored.delegation))) !== canonicalJson(JSON.parse(JSON.stringify(result.delegation))) || !history) {
+    throw invalid2("The verified command result and history have not both been saved.");
+  }
+  for (const path of [localGrantArtifactsPath(profile), grantHistoryPath(profile), profilePath8(profile)]) {
+    const handle = await open11(path, "r");
+    try {
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+  }
+}
+async function persistCommandFiles(profile, result) {
+  await appendLocalGrantArtifact(profile, result.delegation);
+  if (!(await readGrantHistory(profile)).some((item) => item.delegationCid === result.delegationCid)) {
+    await appendGrantHistory(profile, {
+      addedCaps: result.permissions,
+      source: "cli",
+      delegationCid: result.delegationCid,
+      expiry: result.expiry
+    });
+  }
+  await syncCommandFiles(profile, result);
+}
+async function recoverApprovalCommand(profile, approval, request) {
+  const acquired = acquisitions.get(approval);
+  if (!acquired) return void 0;
+  return ProfileManager.withLock(profile, async () => {
+    const entries = await readJson(join14(profilePath8(profile), STATE_FILE)) ?? [];
+    const matching = entries.filter((item) => item.commandIntent === approvalCommandIntent(request));
+    if (matching.length !== 1 || matching[0].requestId !== acquired.requestId) throw invalid2("Ambiguous command approval.");
+    const entry = matching[0];
+    if (!entry.command) return void 0;
+    if (canonicalJson(entry.command.request) !== canonicalJson(request)) throw invalid2("Prepared command changed.");
+    await verifyApprovalCommand(profile, entry, request, entry.command.result);
+    await persistCommandFiles(profile, entry.command.result);
+    acquisitions.set(approval, entry);
+    return entry.command.result;
+  }, { requireProfile: true });
+}
+async function commitApprovalCommand(profile, approval, request, result) {
+  const acquired = acquisitions.get(approval);
+  if (!acquired) throw invalid2("Command approval is not tracked.");
+  await ProfileManager.withLock(profile, async () => {
+    const entries = await readJson(join14(profilePath8(profile), STATE_FILE)) ?? [];
+    const matching = entries.filter((item) => item.commandIntent === approvalCommandIntent(request));
+    if (matching.length !== 1 || matching[0].requestId !== acquired.requestId) throw invalid2("Ambiguous command approval.");
+    const entry = matching[0];
+    await verifyApprovalCommand(profile, entry, request, result);
+    if (entry.command && canonicalJson(entry.command.result) !== canonicalJson(JSON.parse(JSON.stringify(result)))) {
+      throw invalid2("A different result is already saved for this command.");
+    }
+    entry.command = { request, result };
+    await writeJsonDurable(join14(profilePath8(profile), STATE_FILE), entries);
+    await persistCommandFiles(profile, result);
+    acquisitions.set(approval, entry);
+  }, { requireProfile: true });
+}
 function invalid2(message) {
   return new CLIError("APPROVAL_RESULT_INVALID", message, ExitCode.PERMISSION_DENIED);
 }
@@ -33935,7 +34327,7 @@ async function updatePending(profile, update) {
 }
 async function pendingApprovalKey(profile) {
   const entries = await readJson(join14(profilePath8(profile), STATE_FILE)) ?? [];
-  return entries.find((entry) => !entry.committed)?.signingKey;
+  return entries.find((entry) => entry.commandIntent === void 0 && !entry.committed)?.signingKey;
 }
 function approvalSessionProof(entry, action, resultRef = "", ackId = "") {
   const jwk = entry.signingKey;
@@ -34049,7 +34441,11 @@ async function acquireApprovalRequest(_did, options) {
     ...options.reason ? { reason: options.reason } : {},
     grantLifetimeSeconds: lifetime
   };
-  let entry = (await readJson(join14(profilePath8(profile), STATE_FILE)) ?? []).find((item) => {
+  if (options.commandIntent !== void 0 && !/^auth-grant:[0-9a-f]{64}$/.test(options.commandIntent)) {
+    throw invalid2("Invalid approval command intent.");
+  }
+  const matching = (await readJson(join14(profilePath8(profile), STATE_FILE)) ?? []).filter((item) => {
+    if (item.commandIntent !== options.commandIntent) return false;
     const { resultEncryptionPublicJwk: _, permissions: priorPermissions, ...prior } = item.request;
     const { permissions: nextPermissions, ...next } = spec;
     if (canonicalJson(prior) !== canonicalJson(next) || item.apiOrigin !== apiOrigin2 || item.linkApiOrigin !== linkApiOrigin || item.openkeyOrigin !== openkeyOrigin || priorPermissions.length !== nextPermissions.length) return false;
@@ -34060,6 +34456,8 @@ async function acquireApprovalRequest(_did, options) {
       return canonicalJson(permission2) === canonicalJson(nextPermission) && (owner ? sameLoginSpace(space, nextSpace, owner) : space === nextSpace);
     });
   });
+  if (matching.length > 1) throw invalid2("Multiple approvals match this command; no result was selected.");
+  let entry = matching[0];
   if (!entry) {
     const relay = createECDH2("prime256v1");
     relay.generateKeys();
@@ -34079,7 +34477,8 @@ async function acquireApprovalRequest(_did, options) {
       signingKey,
       relayPrivateKey: relay.getPrivateKey().toString("base64url"),
       expectedOwner: options.expectedOwner,
-      ackId: randomUUID2()
+      ackId: randomUUID2(),
+      ...options.commandIntent === void 0 ? {} : { commandIntent: options.commandIntent }
     };
     await updatePending(profile, (items) => [...items, entry]);
   }
@@ -34133,6 +34532,7 @@ async function completeApprovalResult(profile, delegation) {
   const acquired = delegation ? acquisitions.get(delegation) : void 0;
   const entries = acquired ? [acquired] : await readJson(join14(profilePath8(profile), STATE_FILE)) ?? [];
   for (const entry of entries) {
+    if (!acquired && entry.commandIntent !== void 0) continue;
     if (!entry.resultRef || !entry.resultEnvelope) continue;
     let saved = false;
     await ProfileManager.withLock(profile, async () => {
@@ -34165,6 +34565,18 @@ async function completeApprovalResult(profile, delegation) {
           saved = true;
         }
       }
+      if (entry.commandIntent !== void 0) {
+        if (!entry.command) throw invalid2("The command result has not been durably saved; no ACK was sent.");
+        await verifyApprovalCommand(
+          profile,
+          entry,
+          entry.command.request,
+          entry.command.result,
+          { delegation: verifiedDelegation, session: verifiedSession }
+        );
+        await syncCommandFiles(profile, entry.command.result);
+        saved = true;
+      }
       if (saved) {
         entry.committed = true;
         await updatePending(profile, (items) => items.map((item) => item.requestId === entry.requestId ? entry : item));
@@ -34174,6 +34586,7 @@ async function completeApprovalResult(profile, delegation) {
       if (acquired) throw invalid2("Approval has not been durably saved; no ACK was sent.");
       continue;
     }
+    if (entry.acknowledged) continue;
     let response;
     try {
       response = await post(entry, "ack");
@@ -34184,7 +34597,7 @@ async function completeApprovalResult(profile, delegation) {
     if (!response.ok || result.ackId !== entry.ackId || result.status !== "acknowledged") {
       throw new CLIError("APPROVAL_ACK_PENDING", `Approval is saved; ACK is pending (HTTP ${response.status}). Retry this command.`, ExitCode.PENDING);
     }
-    await updatePending(profile, (items) => items.filter((item) => item.requestId !== entry.requestId));
+    await updatePending(profile, (items) => entry.command ? items.map((item) => item.requestId === entry.requestId ? { ...entry, acknowledged: true } : item) : items.filter((item) => item.requestId !== entry.requestId));
   }
 }
 
@@ -34790,7 +35203,7 @@ init_types();
 init_constants();
 init_permissions();
 init_sdk();
-import { CLI_NAME as CLI_NAME16 } from "@tinycloud/operations/cli-name";
+import { CLI_NAME as CLI_NAME17 } from "@tinycloud/operations/cli-name";
 import { TinyCloudNode as TinyCloudNode2 } from "@tinycloud/node-sdk";
 import { DelegationRequestBindingSchema, PermissionEntrySchema } from "@tinycloud/operations/artifacts";
 import {
@@ -34805,8 +35218,8 @@ import {
 // src/lib/revoke-delegation.ts
 init_constants();
 init_errors();
-import { CLI_NAME as CLI_NAME15 } from "@tinycloud/operations/cli-name";
-import { parseSignedCompactUcanAttenuation as parseSignedCompactUcanAttenuation3 } from "@tinycloud/sdk-core";
+import { CLI_NAME as CLI_NAME16 } from "@tinycloud/operations/cli-name";
+import { parseSignedCompactUcanAttenuation as parseSignedCompactUcanAttenuation4 } from "@tinycloud/sdk-core";
 import { inspectStoredDelegation, withoutBearer as withoutBearer3 } from "@tinycloud/operations/delegation-binding";
 init_permissions();
 
@@ -34894,7 +35307,7 @@ async function cidBoundOwnerSpace(record3, ownerDid, node, host) {
   if (typeof authorization !== "string" || typeof delegation.cid !== "string") return void 0;
   if (!delegation.siweProof && withoutBearer3(authorization).split(".").length === 3) {
     try {
-      const signed = parseSignedCompactUcanAttenuation3(withoutBearer3(authorization), delegation.cid);
+      const signed = parseSignedCompactUcanAttenuation4(withoutBearer3(authorization), delegation.cid);
       for (const resource of Object.keys(signed.payload.att)) {
         const space = /^(tinycloud:[^/]+)\/[^/]+(?:\/.*)?$/.exec(resource)?.[1];
         if (space && ownerDidFromSpace(space) && normalizeDid2(ownerDidFromSpace(space)) === normalizeDid2(ownerDid)) {
@@ -35070,7 +35483,7 @@ async function revokeDelegationOnNode(params) {
         "REVOKE_UNAUTHORIZED",
         "The node rejected this revocation: Unauthorized Revoker.",
         ExitCode.PERMISSION_DENIED,
-        { status: 403, hint: `Use a different profile belonging to the delegation's grantor, its recipient, or the owner of a space it covers; the rejected profile was "${ctx.profile}" (DID ${profileDid}). Retry with \`${CLI_NAME15} --profile <profile-name> delegation revoke ${cid}\`.` }
+        { status: 403, hint: `Use a different profile belonging to the delegation's grantor, its recipient, or the owner of a space it covers; the rejected profile was "${ctx.profile}" (DID ${profileDid}). Retry with \`${CLI_NAME16} --profile <profile-name> delegation revoke ${cid}\`.` }
       );
     }
     throw cliErrorFromService(result.error);
@@ -35153,7 +35566,7 @@ function renderList(result) {
   }
   process.stdout.write(`Profile: ${result.profile}
 `);
-  process.stdout.write(`Session CID: ${result.session?.cid ?? "unavailable"}` + (result.session?.cid ? ` (current session; revoke with ${CLI_NAME16} delegation revoke ${result.session.cid})
+  process.stdout.write(`Session CID: ${result.session?.cid ?? "unavailable"}` + (result.session?.cid ? ` (current session; revoke with ${CLI_NAME17} delegation revoke ${result.session.cid})
 ` : "\n"));
   process.stdout.write(`Local verification: ${result.localVerification}; node validation and revocation are not checked.
 `);
@@ -35251,7 +35664,7 @@ function registerAuthGrantsCommand(auth, options = {}) {
               ExitCode.ERROR,
               {
                 causeCode: cause.code,
-                hint: `Do not use --revoke again. After fixing local profile storage, run: ${CLI_NAME16} --profile ${ctx.profile} auth grants remove ${cid}`
+                hint: `Do not use --revoke again. After fixing local profile storage, run: ${CLI_NAME17} --profile ${ctx.profile} auth grants remove ${cid}`
               }
             );
           }
@@ -35307,295 +35720,6 @@ function approvalNotices(groups) {
     intro: `This needs ${groups.length} approvals in OpenKey (${groups.map(spaceLabel).join(", then ")}).`,
     prompts: groups.map((group, index) => `Approval ${index + 1} of ${groups.length}: ${spaceLabel(group)}...`)
   };
-}
-
-// src/lib/apps-agent-preset.ts
-init_constants();
-init_errors();
-init_safe_text();
-init_raw_encryption();
-init_space();
-import { DEFAULT_EXPIRY as DEFAULT_EXPIRY2, parseExpiry as parseExpiry3, SERVICE_LONG_TO_SHORT as SERVICE_LONG_TO_SHORT3, VAULT_PERMISSION_SERVICE as VAULT_PERMISSION_SERVICE2 } from "@tinycloud/sdk-core";
-import { CLI_NAME as CLI_NAME17 } from "@tinycloud/operations/cli-name";
-var APPS_AGENT_PRESET = "apps-agent";
-var APPS_AGENT_SPACE = "applications";
-var APPS_AGENT_EXPIRY_DAYS = 7;
-var APPS_AGENT_EXPIRY = `${APPS_AGENT_EXPIRY_DAYS}d`;
-var APPS_AGENT_MAX_APPS = 5;
-var DAY_MS2 = 864e5;
-var APPS_AGENT_WRITE_FOLDERS = ["knowledge/", "prefs/"];
-var APPS_AGENT_VARIANTS = {
-  read: {
-    grants: [
-      { service: "tinycloud.kv", actions: ["tinycloud.kv/get", "tinycloud.kv/list"], within: [""] },
-      { service: "tinycloud.sql", actions: ["tinycloud.sql/read"], within: [""] }
-    ],
-    perAppOnly: false,
-    schemaForCatalogApps: false
-  },
-  write: {
-    grants: [
-      { service: "tinycloud.kv", actions: ["tinycloud.kv/get", "tinycloud.kv/list"], within: [""] },
-      { service: "tinycloud.kv", actions: ["tinycloud.kv/put"], within: APPS_AGENT_WRITE_FOLDERS },
-      { service: "tinycloud.sql", actions: ["tinycloud.sql/read", "tinycloud.sql/write"], within: [""] }
-    ],
-    perAppOnly: true,
-    schemaForCatalogApps: true
-  }
-};
-var APPS_AGENT_SCHEMA_DATABASES = {
-  "xyz.tinycloud.sample.healthlog": "healthlog"
-};
-var SCHEMA_ACTION = "tinycloud.sql/schema";
-var ACTION_WORDS = {
-  "tinycloud.kv/get": "read files",
-  "tinycloud.kv/list": "list files",
-  "tinycloud.kv/put": "create and overwrite files",
-  "tinycloud.kv/del": "delete files",
-  "tinycloud.kv/metadata": "read file metadata",
-  "tinycloud.sql/read": "read table rows",
-  "tinycloud.sql/write": "add, change and delete table rows",
-  "tinycloud.sql/schema": "create, change and drop tables",
-  "tinycloud.sql/admin": "do anything in the database",
-  "tinycloud.delegation/create": "can give other people or agents access on your behalf",
-  "tinycloud.delegation/revoke": "can cancel access you gave",
-  "tinycloud.delegation/*": "can do everything the delegation permissions allow, including giving access on to others",
-  "tinycloud.kv/*": "do anything with files (read, write, delete)",
-  "tinycloud.sql/*": "do anything in the database",
-  "tinycloud.capabilities/read": "see which permissions this key holds"
-};
-var STRUCTURE_ACTIONS = {
-  "tinycloud.sql/schema": true,
-  "tinycloud.sql/admin": true,
-  "tinycloud.sql/*": true
-};
-var APP_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-var APP_ID_RULE = "an app id looks like xyz.example.app: letters, digits, dots, hyphens and underscores, no slashes or spaces";
-function isAppId(value) {
-  return value.length <= 200 && APP_ID.test(value);
-}
-function appsAgentPermissions(mode, appIds = []) {
-  const bases = appIds.length === 0 ? [""] : appIds.map((appId) => `${appId}/`);
-  const grants = APPS_AGENT_VARIANTS[mode].grants.flatMap(({ service, actions, within }) => within.flatMap((folder) => bases.map((base5) => ({ service, space: APPS_AGENT_SPACE, path: `${base5}${folder}`, actions: [...actions] }))));
-  const schema = APPS_AGENT_VARIANTS[mode].schemaForCatalogApps ? schemaPathsFor(appIds).map((path) => ({ service: "tinycloud.sql", space: APPS_AGENT_SPACE, path, actions: [SCHEMA_ACTION] })) : [];
-  return [...grants, ...schema];
-}
-function schemaPathsFor(appIds) {
-  return appIds.flatMap((appId) => {
-    if (!Object.hasOwn(APPS_AGENT_SCHEMA_DATABASES, appId)) return [];
-    return [`${appId}/${APPS_AGENT_SCHEMA_DATABASES[appId]}`];
-  });
-}
-function quoteApps(appIds) {
-  return appIds.map((appId) => `\`${appId}\``).join(", ");
-}
-function lifetimePhrase(ms2) {
-  if (ms2 >= DAY_MS2) {
-    const days = Math.ceil(ms2 / DAY_MS2);
-    return `${days} day${days === 1 ? "" : "s"}`;
-  }
-  const hours = Math.max(1, Math.ceil(ms2 / 36e5));
-  return `${hours} hour${hours === 1 ? "" : "s"}`;
-}
-function revokeSentence(lifetimeMs2) {
-  return `It lasts up to ${lifetimePhrase(lifetimeMs2)}; revoke it any time with \`${CLI_NAME17} delegation revoke <id>\`.`;
-}
-function appsAgentScopeNotice(mode, appIds = []) {
-  const variant = APPS_AGENT_VARIANTS[mode];
-  const writes = variant.grants.some(({ actions }) => actions.includes("tinycloud.kv/put"));
-  const writableFolders = appIds.flatMap((appId) => APPS_AGENT_WRITE_FOLDERS.map((folder) => `\`${appId}/${folder}\``)).join(", ");
-  const reads = writes ? `read everything there, write knowledge and data files (${writableFolders}), and add, change and delete table rows` : "list and read its files and read its table rows";
-  const scope = appIds.length === 0 ? `ALL your installed apps' data in the \`${APPS_AGENT_SPACE}\` space` : `the data of ${quoteApps(appIds)} (everything under ${appIds.map((appId) => `\`${appId}/\``).join(", ")}) in the \`${APPS_AGENT_SPACE}\` space`;
-  const lines = [
-    writes ? `This gives the agent access to ${scope}: it can ${reads}.` : `This gives the agent READ-ONLY access to ${scope}: it can ${reads}.`
-  ];
-  if (writes) {
-    const schemaPaths = schemaPathsFor(appIds).map((path) => `\`${path}\``);
-    lines.push(
-      `It cannot change ${appIds.length === 1 ? "the app's" : "the apps'"} code, manifest or install record: files outside those folders are read-only for it.`,
-      `SQL write is separate from that: it can add, change and delete ${appIds.length === 1 ? "this app's" : "these apps'"} table rows.`,
-      variant.schemaForCatalogApps && schemaPaths.length > 0 ? `It can also create, change and drop the tables in ${schemaPaths.join(", ")}, which the app needs to set itself up. That grant names no other database for table changes. Nodes before 1.21.6 do not enforce that database limit, so the write grant may still let it change tables elsewhere there.` : "This grant does not include permission to create, change or drop tables (tinycloud.sql/schema). Nodes before 1.21.6 do not enforce that split, so the write grant may still let it do so there.",
-      "It cannot touch other apps, other spaces or secrets."
-    );
-  } else {
-    lines.push("It cannot create, change or delete anything, and it cannot touch other spaces or secrets.");
-  }
-  lines.push(revokeSentence(APPS_AGENT_EXPIRY_DAYS * DAY_MS2));
-  return lines.join("\n");
-}
-function usage(message) {
-  return new CLIError("INVALID_ARGUMENT", message, ExitCode.USAGE_ERROR);
-}
-function resolveAppsAgentRequest(options) {
-  const apps = options.app ?? [];
-  if (options.preset === void 0) {
-    if (apps.length > 0 || options.write === true) {
-      throw usage(`--app and --write require --preset ${APPS_AGENT_PRESET}.`);
-    }
-    return void 0;
-  }
-  if (options.preset !== APPS_AGENT_PRESET) {
-    throw usage(`Unknown --preset "${safeClipped(options.preset)}". Available: ${APPS_AGENT_PRESET}.`);
-  }
-  if ((options.cap?.length ?? 0) > 0 || options.permission !== void 0 || options.manifest !== void 0 || options.expiry !== void 0) {
-    throw usage(
-      `--preset ${APPS_AGENT_PRESET} is the whole request (${APPS_AGENT_EXPIRY}); it cannot be combined with --cap, --permission, --manifest or --expiry.`
-    );
-  }
-  if (options.device === true) {
-    throw usage(`--preset ${APPS_AGENT_PRESET} includes SQL, which device approval cannot grant. Use browser or --paste approval.`);
-  }
-  const mode = options.write === true ? "write" : "read";
-  const appIds = [...new Set(apps)];
-  for (const appId of appIds) {
-    if (!isAppId(appId)) throw usage(`Invalid --app "${safeClipped(appId)}": ${APP_ID_RULE}.`);
-  }
-  if (appIds.length > APPS_AGENT_MAX_APPS) {
-    throw usage(`--app can be repeated at most ${APPS_AGENT_MAX_APPS} times; for more apps, ask for read-only access to the whole space (leave --app off).`);
-  }
-  if (APPS_AGENT_VARIANTS[mode].perAppOnly && appIds.length === 0) {
-    throw usage("--write needs --app <app_id>: write access is only given for named apps, never for the whole space.");
-  }
-  return { mode, appIds };
-}
-function lifetimeMs(value) {
-  try {
-    if (value === void 0) return parseExpiry3(DEFAULT_EXPIRY2);
-    if (typeof value === "number") return Number.isFinite(value) && value > 0 ? value : void 0;
-    return /^\d+$/.test(value.trim()) ? Number(value.trim()) : parseExpiry3(value);
-  } catch {
-    return void 0;
-  }
-}
-function inApplicationsSpace(entry, applicationsSpace) {
-  return normalizePkhIdentifier(entry.space ?? "") === normalizePkhIdentifier(applicationsSpace);
-}
-function sameActions(have, want) {
-  return have.length === want.length && want.every((action) => have.includes(action));
-}
-function matchAppsAgentRequest(requested, requestedExpiry, applicationsSpace) {
-  if (lifetimeMs(requestedExpiry) !== APPS_AGENT_EXPIRY_DAYS * DAY_MS2) return void 0;
-  if (requested.some((entry) => entry.expiry !== void 0 || entry.caveats !== void 0)) return void 0;
-  const kvPaths = requested.filter((entry) => entry.service === "tinycloud.kv").map((entry) => entry.path);
-  const appIds = [];
-  for (const path of kvPaths) {
-    if (path === "") continue;
-    const slash = path.indexOf("/");
-    const appId = path.slice(0, slash);
-    if (slash < 1 || !isAppId(appId)) return void 0;
-    if (!appIds.includes(appId)) appIds.push(appId);
-  }
-  if (appIds.length > APPS_AGENT_MAX_APPS || appIds.length > 0 && kvPaths.includes("")) return void 0;
-  for (const mode of ["read", "write"]) {
-    if (APPS_AGENT_VARIANTS[mode].perAppOnly && appIds.length === 0) continue;
-    const expected = appsAgentPermissions(mode, appIds);
-    const exact = requested.length === expected.length && expected.every((want) => requested.some((have) => have.service === want.service && inApplicationsSpace(have, applicationsSpace) && have.path === want.path && sameActions(have.actions, want.actions)));
-    if (exact) return { mode, appIds };
-  }
-  return void 0;
-}
-var RAW_ENCRYPTION_SPACE = "encryption";
-function badRequest(message) {
-  return new CLIError("INVALID_AUTH_REQUEST", `${message} Nothing was signed.`, ExitCode.USAGE_ERROR);
-}
-var DID_SHAPE = /^did:[a-z0-9]+:[A-Za-z0-9._:%#-]+$/;
-function assertRequestFields(request) {
-  if (typeof request.sessionDid !== "string" || request.sessionDid.length > 300 || !DID_SHAPE.test(request.sessionDid)) {
-    throw badRequest("The request's sessionDid is not a valid DID.");
-  }
-  if (request.requestedExpiry !== void 0 && (typeof request.requestedExpiry !== "string" && typeof request.requestedExpiry !== "number" || lifetimeMs(request.requestedExpiry) === void 0)) {
-    throw badRequest("The request's requestedExpiry is not a duration such as 7d or 12h.");
-  }
-}
-function entriesForSigning(requested) {
-  return requested.map((entry, index) => {
-    const label = `Entry ${index + 1} of the request`;
-    if (typeof entry !== "object" || entry === null || typeof entry.service !== "string" || entry.service === "" || typeof entry.path !== "string" || !Array.isArray(entry.actions) || entry.actions.length === 0 || entry.actions.some((action) => typeof action !== "string" || action === "")) {
-      throw badRequest(`${label} is malformed: it needs a service, a path and at least one action.`);
-    }
-    if (entry.service === VAULT_PERMISSION_SERVICE2 || entry.service === "vault") {
-      throw badRequest(`${label} asks for the vault (\`tinycloud.vault\`). This command does not sign vault access from a request file: the signer turns it into KV access on \`vault/\` for the vault actions you listed, so the printed list would not show what is signed.`);
-    }
-    if (entry.space !== void 0 && (typeof entry.space !== "string" || entry.space === "")) {
-      throw badRequest(`${label} has an empty space: name the space, or leave it out to mean your \`${APPS_AGENT_SPACE}\` space.`);
-    }
-    return entry.space === void 0 && !isRawEncryptionPermission(entry) ? { ...entry, space: APPS_AGENT_SPACE } : entry;
-  });
-}
-function finalizeSigningEntries(resolved) {
-  const merged = /* @__PURE__ */ new Map();
-  const spaces = /* @__PURE__ */ new Set();
-  const spellings = /* @__PURE__ */ new Map();
-  resolved.forEach((entry, index) => {
-    const label = `Entry ${index + 1} of the request`;
-    if (SERVICE_LONG_TO_SHORT3[entry.service] === void 0) {
-      throw badRequest(`${label} names the service "${safeClipped(entry.service)}", which the signer cannot sign.`);
-    }
-    const space = entry.space;
-    const raw = isRawEncryptionPermission(entry);
-    const concrete = typeof space === "string" && (space.startsWith("tinycloud:") || space === RAW_ENCRYPTION_SPACE && raw);
-    if (!concrete) {
-      throw badRequest(`${label} does not resolve to a concrete space (got "${safeClipped(String(space))}").`);
-    }
-    const normalized = normalizePkhIdentifier(space);
-    if (!raw) spaces.add(normalized);
-    const spelled = spellings.get(normalized) ?? space;
-    spellings.set(normalized, spelled);
-    const unified = { ...entry, space: spelled };
-    const key = JSON.stringify([entry.service, normalized, entry.path, entry.expiry ?? null, entry.caveats ?? null]);
-    const existing = merged.get(key);
-    merged.set(key, existing === void 0 ? unified : { ...existing, actions: [...existing.actions, ...entry.actions] });
-  });
-  if (spaces.size > 1) {
-    throw badRequest(`The request names ${spaces.size} different spaces (${safeClippedList([...spaces])}); a grant covers one space, so make one request per space.`);
-  }
-  return [...merged.values()].map((entry) => ({ ...entry, actions: [...new Set(entry.actions)].sort() }));
-}
-function describeAction(action) {
-  if (Object.prototype.hasOwnProperty.call(ACTION_WORDS, action)) return ACTION_WORDS[action];
-  return action.endsWith("/*") ? `ALL abilities of ${safeInline(action.slice(0, -2))} (unrecognised: grants ${safeInline(action)})` : `unrecognised: grants ${safeInline(action)}`;
-}
-function describeEntry(entry, applicationsSpace) {
-  const inApplications = inApplicationsSpace(entry, applicationsSpace);
-  const space = inApplications ? "your `applications` space" : `space \`${safeInline(entry.space ?? "")}\``;
-  const wholeSpace = entry.path === "" || entry.path === "/";
-  const where = wholeSpace ? inApplications ? `ALL apps in ${space}` : `everything in ${space}` : `\`${safeInline(entry.path)}\` in ${space}`;
-  const known = entry.service === "tinycloud.kv" || entry.service === "tinycloud.sql" || entry.service === "tinycloud.delegation" || entry.service === "tinycloud.capabilities";
-  const service = known ? safeInline(entry.service) : `unrecognised service ${safeInline(entry.service)}`;
-  return `${entry.actions.map(describeAction).join(", ")} on ${where} (${service})`;
-}
-function withinPresetSet(entry, applicationsSpace) {
-  if (!inApplicationsSpace(entry, applicationsSpace) || entry.caveats !== void 0) return false;
-  if (entry.path.split("/").some((segment) => segment === "." || segment === "..")) return false;
-  if (entry.actions.includes(SCHEMA_ACTION)) return false;
-  const slash = entry.path.indexOf("/");
-  const folder = slash > 0 && isAppId(entry.path.slice(0, slash)) ? entry.path.slice(slash + 1) : void 0;
-  const grants = Object.values(APPS_AGENT_VARIANTS).flatMap(({ grants: variantGrants }) => variantGrants.filter((grant) => grant.service === entry.service));
-  return entry.actions.length > 0 && entry.actions.every((action) => grants.some((grant) => grant.actions.includes(action) && (!(action.endsWith("/put") || action.endsWith("/write")) || folder !== void 0 && grant.within.some((within) => folder.startsWith(within)))));
-}
-function describeGrantScope(requested, requestedExpiry, applicationsSpace, maxLifetimeMs) {
-  const preset = matchAppsAgentRequest(requested, requestedExpiry, applicationsSpace);
-  if (preset !== void 0) {
-    return { text: appsAgentScopeNotice(preset.mode, preset.appIds), entries: requested, extras: [] };
-  }
-  const touchesApplications = requested.some((entry) => (entry.space ?? "").split(":").at(-1) === APPS_AGENT_SPACE);
-  const extras = touchesApplications ? requested.filter((entry) => !withinPresetSet(entry, applicationsSpace)) : [];
-  const others = requested.filter((entry) => !extras.includes(entry));
-  const lines = [
-    extras.length > 0 ? "This request asks for MORE than the apps-agent preset. Entries marked ! go beyond it:" : touchesApplications ? "This request is not the standard apps-agent grant (other paths or lifetime). It asks for:" : "This request asks for:",
-    ...extras.map((entry) => `! ${describeEntry(entry, applicationsSpace)}`),
-    ...others.map((entry) => `- ${describeEntry(entry, applicationsSpace)}`)
-  ];
-  if (requested.some((entry) => entry.service === "tinycloud.sql" && entry.actions.some((action) => Object.hasOwn(STRUCTURE_ACTIONS, action)))) {
-    lines.push("This request can create, change and drop tables (an SQL schema, admin or wildcard entry).");
-  }
-  const entryLifetimes = requested.filter((entry) => entry.expiry !== void 0).map((entry) => lifetimeMs(entry.expiry));
-  const durations = [lifetimeMs(requestedExpiry), ...entryLifetimes].filter((ms2) => ms2 !== void 0).map((ms2) => Math.min(ms2, maxLifetimeMs ?? Number.POSITIVE_INFINITY));
-  const longest = Math.max(...durations);
-  lines.push(
-    durations.length === 0 || !Number.isFinite(longest) ? "Its lifetime could not be read from the request." : `It lasts up to ${lifetimePhrase(longest)}${requestedExpiry === void 0 ? " (no lifetime was requested; this is the default)" : ""}; revoke it any time with \`${CLI_NAME17} delegation revoke <id>\`.`
-  );
-  return { text: lines.join("\n"), entries: requested, extras };
 }
 
 // src/lib/consent-text.ts
@@ -35864,7 +35988,7 @@ async function prepareProfileRemoteLogout(ctx, expectedSessionCid, discardLocalC
     await deriveAddress(selected.profile.privateKey),
     selected.profile.chainId ?? DEFAULT_CHAIN_ID
   );
-  if (!principalDidEquals2(signerDid, selected.ownerDid)) {
+  if (!principalDidEquals3(signerDid, selected.ownerDid)) {
     throw new CLIError(
       "REVOCATION_AUTHORITY_UNAVAILABLE",
       "The local owner key does not match the signed session owner. No CID was revoked; session, key and replica files remain for retry, while local replica reads stay denied.",
@@ -36594,7 +36718,7 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
       let transportMatchesAudience = false;
       if (signedAudience !== void 0) {
         try {
-          transportMatchesAudience = principalDidEquals2(imported.delegation.delegateDID, signedAudience);
+          transportMatchesAudience = principalDidEquals3(imported.delegation.delegateDID, signedAudience);
         } catch {
         }
       }
@@ -36608,7 +36732,7 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
         if (bootstrap) await bootstrap.abandon(refusal2);
         throw refusal2;
       }
-      const targetsSessionKey = kind === "signed-login" || signedAudience !== void 0 && principalDidEquals2(signedAudience, node.sessionDid);
+      const targetsSessionKey = kind === "signed-login" || signedAudience !== void 0 && principalDidEquals3(signedAudience, node.sessionDid);
       let importExpiry = imported.delegation.expiry;
       let signedExpiry;
       if (!targetsSessionKey && kind === "compact") {
@@ -36747,18 +36871,29 @@ ${scope.text}
           ),
           reason: "Grant permissions requested by a TinyCloud auth request artifact.",
           exactApproval: true,
-          noPopup: !(process.stdin.isTTY || process.stderr.isTTY)
+          noPopup: !(process.stdin.isTTY || process.stderr.isTTY),
+          commandIntent: approvalCommandIntent(parsed)
         });
-        const approvalNode = await nodeFromOpenKeyApproval(ctx.host, approval.session);
-        grant = {
-          ...await grantAuthRequest(approvalNode, resolvedRequest, {
-            expiry: approval.delegation.expiry.getTime() - Date.now()
-          }),
-          // The owner approved this grant on the OpenKey approval screen, so it was prompted.
-          prompted: true
-        };
+        const recovered = await recoverApprovalCommand(ctx.profile, approval.delegation, parsed);
+        if (recovered) {
+          grant = recovered;
+        } else {
+          const approvalNode = await nodeFromOpenKeyApproval(ctx.host, approval.session);
+          grant = {
+            ...await grantAuthRequest(approvalNode, resolvedRequest, {
+              expiry: approval.delegation.expiry.getTime() - Date.now()
+            }),
+            prompted: true
+          };
+        }
         process.stderr.write(`Grant lasts until ${grant.expiry}, the lifetime of the OpenKey approval.
 `);
+        if (approvalResultNeedsAck(approval.delegation)) {
+          await commitApprovalCommand(ctx.profile, approval.delegation, parsed, grant);
+          await completeApprovalResult(ctx.profile, approval.delegation);
+          outputJson(grant);
+          return;
+        }
       } else {
         await ensureDelegationAuthority({
           ctx,
@@ -37181,7 +37316,8 @@ async function acquireOpenKeyApproval(params) {
     reason: permissionGrantReason(params.reason, request),
     openkeyHost: resolveOpenKeyHost(params.profile),
     expiry: expiryCap === void 0 ? void 0 : openKeyExpiryParam(expiryCap),
-    noPopup: params.noPopup
+    noPopup: params.noPopup,
+    commandIntent: params.commandIntent
   });
   return verifyOpenKeyApproval(delegationData, request, params.ctx.host, {
     key,
@@ -38380,7 +38516,7 @@ function registerDelegationCommand(program, configuration = {}) {
         }
         (byService[action.slice(0, slash)] ??= []).push(action);
       }
-      const expiry = parseExpiry2(options.expiry);
+      const expiry = parseExpiry3(options.expiry);
       const recipient = options.to.split("#")[0];
       const { delegation: created } = await node.delegateTo(
         recipient,
