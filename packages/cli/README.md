@@ -264,8 +264,8 @@ card/revision/issuance identity. Existing live response IDs cannot be reclassifi
 as imported. Replays must preserve header/payload content and source bindings.
 Valid literal JSON payload keys are preserved; unknown card-envelope fields are
 still refused. Completed query or batch failures retain their classification if
-caller cancellation races completion. Without cancellation, an identical concurrent
-restore can still recover through complete content and policy readback.
+caller cancellation races completion or later readback. Without cancellation, an
+identical concurrent restore can still recover through complete content and policy readback.
 
 Cards are stored first. Each imported response atomically stores its content-bound
 claim, header, optional private payload, origins, and delivery policies in the

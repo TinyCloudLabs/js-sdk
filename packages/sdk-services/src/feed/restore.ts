@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ok } from "../types";
+import { ErrorCodes, ok } from "../types";
 import type { Result } from "../types";
 import type { QueryOptions, SqlStatement, SqlValue } from "../sql/types";
 import { feedCardSchema } from "./schemas";
@@ -147,9 +147,11 @@ async function restoreGroup(output: FeedDatabase, responses: FeedDatabase, group
   // Cancellation prevents verification; retain a completed failure, including its ABORTED code.
   if (stopped) return failed ? responseDataFailure("Could not restore response and atomic import policy", failure) : stopped;
   const stored = await storedResponse(responses, response.responseId, options);
-  if (!stored.ok) return stored;
+  if (!stored.ok) return failed && options.signal?.aborted && stored.error.code === ErrorCodes.ABORTED
+    ? responseDataFailure("Could not restore response and atomic import policy", failure) : stored;
   const metadata = await readRestoreMetadata(responses, [response.responseId], options);
-  if (!metadata.ok) return metadata;
+  if (!metadata.ok) return failed && options.signal?.aborted && metadata.error.code === ErrorCodes.ABORTED
+    ? responseDataFailure("Could not restore response and atomic import policy", failure) : metadata;
   const actual = metadata.data.get(response.responseId)!;
   if (!stored.data) return responseDataFailure("Could not restore response and atomic import policy", failure);
   if (!verifyRestoreMetadata(actual, response, hash) || restoreContent(JSON.parse(stored.data.rawHeaderJson), stored.data.payload).canonical !== content.canonical) {
@@ -165,7 +167,9 @@ async function restoreGroup(output: FeedDatabase, responses: FeedDatabase, group
       return responseDataFailure("Could not retain requested immutable delivery evidence", failure);
     }
   }
-  return restoreCancelled(options.signal) ?? ok(undefined);
+  const readbackCancelled = restoreCancelled(options.signal);
+  if (readbackCancelled) return failed ? responseDataFailure("Could not restore response and atomic import policy", failure) : readbackCancelled;
+  return ok(undefined);
 }
 
 export const restoreFeedRecords: FeedApi["restoreFeedRecords"] = async (ownerPair, input, options = {}) => {
