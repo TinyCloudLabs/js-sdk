@@ -79,6 +79,7 @@ describe("stored form: each blob once", () => {
     const otherEnvelope = { ...structuredClone(v3.envelope), shareId: "other" };
     await expect(compactShareRecord({ ...full, deliveryMaterial: { ...full.deliveryMaterial!, envelope: otherEnvelope } })).rejects.toThrow("envelope is not the sealed envelope");
     const other = await fullRecord();
+    await expect(compactShareRecord({ ...full, deliveryMaterial: { ...full.deliveryMaterial!, shareCid: other.deliveryMaterial!.shareCid } })).rejects.toThrow();
     await expect(compactShareRecord({ ...full, link: other.link! })).rejects.toThrow("link");
     await expect(compactShareRecord({ ...full, link: (await fullRecord("full")).link! })).rejects.toThrow("link");
     await expect(compactShareRecord({ ...full, link: `${SHARE_ORIGIN}/viewer#tc1=opaque-token` })).rejects.toThrow("link");
