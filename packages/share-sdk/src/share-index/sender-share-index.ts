@@ -482,12 +482,14 @@ export class SenderShareIndex {
       ...(this.options.registrationKey === undefined ? {} : { registrationKey: this.options.registrationKey }),
     });
     if (!verdict.ok) return { kind: "reject", reason: "proof" };
-    if (parseArtifactVersionPath(record.resource.path) !== undefined && record.recipientMatcher.kind !== "bearer") {
-      try {
-        if (record.deliveryMaterial === undefined) return { kind: "reject", reason: "proof" };
-        const envelope = shareEnvelopeV3Schema.parse(await openDeliveryEnvelope(record.deliveryMaterial));
-        verifyArtifactShare(envelope, { expectedOwnerDid: envelope.policy.ownerDid });
-      } catch { return { kind: "reject", reason: "proof" }; }
+    if (parseArtifactVersionPath(record.resource.path) !== undefined) {
+      if (record.proofs?.ownerPolicy !== undefined) return { kind: "reject", reason: "proof" };
+      if (record.deliveryMaterial !== undefined) {
+        try {
+          const envelope = shareEnvelopeV3Schema.parse(await openDeliveryEnvelope(record.deliveryMaterial));
+          verifyArtifactShare(envelope, { expectedOwnerDid: envelope.policy.ownerDid });
+        } catch { return { kind: "reject", reason: "proof" }; }
+      } else if (record.proofs?.link === undefined) return { kind: "reject", reason: "proof" };
     }
     // registeredAt against signed times in the chain, never against when the owner happens to look. A one-time
     // owner import keeps the ruled exemption from the ±1-day anchor; it still may not postdate the chain or the clock.

@@ -160,14 +160,14 @@ describe("TC-1739 canonical artifact and original full-link admission", () => {
     await expect(compactShareRecord({ ...full, link: buildFullLink({ origin: SHARE_ORIGIN, key, record: prepared.record }) })).rejects.toThrow("expiry");
   });
 
-  test("an originally signed artifact pin still has to name the exact source version", async () => {
+  test("artifact pin admission uses the signed version independently of recipient metadata", async () => {
     const full = await published(true);
     const { signature: _signature, ...unsigned } = shareEnvelopeV3Schema.parse(full.deliveryMaterial!.envelope);
     const wrong = signEnvelopeV3({ ...unsigned, artifactPin: { ...unsigned.artifactPin!, version: 8 } }, ownerSeed);
     const key = crypto.getRandomValues(new Uint8Array(32));
     const sealed = await seal(new TextEncoder().encode(canonicalize(wrong)), key);
     const prepared = await prepareLinkRecord({ type: "share", sealed: { blob: sealed.blob, key }, issuerKey: signerFromSeed(ownerSeed), apiOrigin: "https://api.tinycloud.xyz", expiresAt: new Date(full.expiresAt), enforceServiceLife: false });
-    const changed: SenderShareRecord = { ...full, shareCid: sealed.cid, envelopeCid: sealed.cid, link: buildFullLink({ origin: SHARE_ORIGIN, key, record: prepared.record }), deliveryMaterial: { envelope: wrong, shareCid: sealed.cid, sealedEnvelope: toBase64Url(sealed.blob), envelopeKey: toBase64Url(key) } };
+    const changed: SenderShareRecord = { ...full, recipientMatcher: { kind: "bearer" }, shareCid: sealed.cid, envelopeCid: sealed.cid, link: buildFullLink({ origin: SHARE_ORIGIN, key, record: prepared.record }), deliveryMaterial: { envelope: wrong, shareCid: sealed.cid, sealedEnvelope: toBase64Url(sealed.blob), envelopeKey: toBase64Url(key) } };
     const backend = new MemoryBackend();
     await new AgentShareRecordStore({ backend, agentDid: ownerDid }).put(changed);
     expect(await index(backend).reconcile()).toMatchObject({ admitted: 0, rejected: { proof: 1 } });
