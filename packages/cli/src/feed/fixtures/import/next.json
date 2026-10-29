@@ -1,0 +1,2877 @@
+{
+  "formatVersion": 1,
+  "modelVersion": 1,
+  "frozenAt": "2026-10-29T12:00:00.000Z",
+  "source": {
+    "spaceId": "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:legacy",
+    "namespace": "xyz.tinycloud.rocinante/",
+    "snapshotId": "prepared-next-224",
+    "completePrefixSnapshot": true,
+    "cursor": {
+      "opaque": "frozen-cursor"
+    },
+    "previousSnapshotId": "prepared-base-224"
+  },
+  "origins": [
+    {
+      "path": "shared/schema.ts",
+      "sha256": "c465cba94181b311f7dc66bc18b1cf3213577d34695670dca19e2f59a8ffe126"
+    },
+    {
+      "path": "shared/board.ts",
+      "sha256": "c70c0092a2722e8a5ef882786aee216cb44a739273cc589f01e0e26b9a54fd49"
+    },
+    {
+      "path": "shared/expiry.ts",
+      "sha256": "c77a1535a101c131caaa4cedec468eb9e89d8738b7d10debe292eb9a241ed4e4"
+    },
+    {
+      "path": "shared/holds.ts",
+      "sha256": "00907a3497d9a075ce194d2c82cd85a42a6287495b2017c3b880d4258152812b"
+    },
+    {
+      "path": "shared/card-thread.ts",
+      "sha256": "7fbbe2e924e57a6e166128cf129415c02ae473543470ec58d9ac50b1fa94f037"
+    },
+    {
+      "path": "shared/recipients.ts",
+      "sha256": "9e30cac4523ffb41b80cc4abbf8724a9f2a6a233b6e610e75af4b88e94d464ad"
+    },
+    {
+      "path": "shared/deps.ts",
+      "sha256": "805ad47eecf0459f322b25398dfc61d112200c954829bee28cf972ebec3c534c"
+    },
+    {
+      "path": "shared/priority.ts",
+      "sha256": "92e42341ee900d4d3dd75f67e9ca67f8bab28dc8a99f772de637a3727a8a22e3"
+    },
+    {
+      "path": "shared/rank.ts",
+      "sha256": "085f4b88b77749fea0746c9349246bd750bf2a23200da75e40f019b461f654e1"
+    },
+    {
+      "path": "shared/priority-flag.ts",
+      "sha256": "94058d70d6cd11bbfef276f6c5d2bb2f4342dc7d411dec5e1284e47c7440d1e4"
+    },
+    {
+      "path": "shared/guard.ts",
+      "sha256": "3a0b12219d7c0cdbc91ddec416920fdcc93e1ddcb2c7fb490d7990288c665653"
+    },
+    {
+      "path": "shared/links.ts",
+      "sha256": "82f1044dddc790089b56cd159f2c6d641ad1a8ded83d54b5bfce9df1967527fb"
+    },
+    {
+      "path": "shared/known-repos.ts",
+      "sha256": "22258e1ae84008fb9138cba51fd493335dda298dd1e84a1752eb01299aa643c9"
+    },
+    {
+      "path": "shared/repos.ts",
+      "sha256": "e784adbef841c3b4b60cbb5de07a7232edde6c3b0c8b5aaf3bec14e755bb2dc2"
+    },
+    {
+      "path": "shared/groups.ts",
+      "sha256": "49131587e890c4c9529ac8c42f4735d5516c6de824cbdc79b2a442d1efbac407"
+    },
+    {
+      "path": "shared/upsert.ts",
+      "sha256": "6f64c6ee6504cdbbb58cbd5c83d78f6da5bf7cfaacd81526cf39c29b72898a44"
+    },
+    {
+      "path": "shared/agent-text.ts",
+      "sha256": "f16a1acf22bd12775fa50e867d45281ebd0bdf31f30531c098d87d88e516005f"
+    },
+    {
+      "path": "shared/metrics.ts",
+      "sha256": "05de4fd27bcaa01f30b9a0005e8e215a298a7723e238f2bbc8bf398751d81e6a"
+    },
+    {
+      "path": "cli/watch.ts",
+      "sha256": "d6f819a83200fd0ae2aae3d8aa280a13f7beb53c112354223405c385456fb70b"
+    },
+    {
+      "path": "cli/card-thread-watch.ts",
+      "sha256": "233ff729a9dc4641d518a63331db0d8c4c097277b5c023c245fe28bb3b6156f8"
+    },
+    {
+      "path": "cli/roci-board.ts",
+      "sha256": "5f696ff08220c8cfe8b9d245560f14bdcdd73e5038a7ef16a1ba6311df128dcf"
+    },
+    {
+      "path": "cli/holdactions.ts",
+      "sha256": "6c926273e87494e46fb421a2ef61f313a44a044043d5c55c6ae7056f07470532"
+    },
+    {
+      "path": "src/lib/store.ts",
+      "sha256": "2e931e8c16cee014f59dc480a336c9e2a38c9c3945ca19154e5ea890e416730c"
+    },
+    {
+      "path": "src/components/Claims.tsx",
+      "sha256": "40637e115784f83d1c0aac08dd4890258ca238f5957b799d814f4d22e7794d17"
+    },
+    {
+      "path": "src/Board.tsx",
+      "sha256": "4664d346c14d4f12b1bb57b62a9f980fc11dcdd46a1b44b1741824c7f5cf1bc4"
+    }
+  ],
+  "sourceRows": [
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/ask/ask-synthetic.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJmcm9tIjoiU3ludGhldGljT2ZmaWNlciIsIm93bmVyIjoiU3ludGhldGljT3duZXIiLCJib2R5IjoiU3ludGhldGljIGNhcmQgYm9keS4iLCJjcmVhdGVkQXQiOiIyMDI2LTEwLTI4VDEyOjAwOjAwLjAwMFoiLCJ1cGRhdGVkQXQiOiIyMDI2LTEwLTI4VDEyOjAwOjAwLjAwMFoiLCJ1cmdlbmN5IjoyLCJpbXBvcnRhbmNlIjoyLCJsaW5rcyI6W3sibGFiZWwiOiJQcml2YXRlIHJlcG9ydCIsInVybCI6Imh0dHBzOi8vcmVwb3J0cy5zeW50aGV0aWMtZXhhbXBsZS50cy5uZXQvcmVoZWFyc2FsLm1kIn1dLCJraW5kIjoiYXNrIiwiaWQiOiJhc2stc3ludGhldGljIiwidGl0bGUiOiJDaG9vc2UgdGhlIHN5bnRoZXRpYyBhcHByb2FjaCIsImFza2VkQXQiOiIyMDI2LTEwLTI4VDEyOjAwOjAwLjAwMFoiLCJzdGF0dXMiOiJvcGVuIiwiY29udGV4dCI6eyJiYWNrZ3JvdW5kIjoiQSBzeW50aGV0aWMgcmVoZWFyc2FsIGNoZWNrcyB0aGUgZXhpc3RpbmcgY2FyZCBzZW1hbnRpY3Mgd2l0aG91dCByZWFkaW5nIG9yIGNoYW5naW5nIGFueSBsaXZlIHJlY29yZHMuIiwid2h5Tm93IjoiVGhlIGlzb2xhdGVkIG93bmVyIG5lZWRzIHRvIGNob29zZSB0aGUgbmV4dCByZXZlcnNpYmxlIHN0ZXAuIiwiaWZOb0Fuc3dlciI6Ik5vdGhpbmcgaXMgYXBwcm92ZWQgb3IgZXhlY3V0ZWQgdW50aWwgYSB2YWxpZCBvd25lciByZXNwb25zZSBhcnJpdmVzLiIsImtub3duIjpbXSwicmVsYXRlZCI6W119LCJvcHRpb25zIjpbeyJpZCI6InF1aWNrIiwibGFiZWwiOiJRdWljayBvcHRpb24iLCJkZXRhaWwiOiJGYXN0IGJ1dCBsaW1pdGVkLiJ9LHsiaWQiOiJjYXJlZnVsIiwibGFiZWwiOiJDYXJlZnVsIG9wdGlvbiIsImRldGFpbCI6IlNsb3dlciBhbmQgcmV2ZXJzaWJsZS4ifV0sInJlY29tbWVuZCI6ImNhcmVmdWwifQ==",
+      "sha256": "006794754c6ad4884fa54c9f52d0a7117d4c2db4a8521704c8f25efc2d12fc48",
+      "classification": "card"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/task/task-synthetic.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJmcm9tIjoiU3ludGhldGljT2ZmaWNlciIsIm93bmVyIjoiU3ludGhldGljT3duZXIiLCJib2R5IjoiU3ludGhldGljIGNhcmQgYm9keS4iLCJjcmVhdGVkQXQiOiIyMDI2LTEwLTI4VDEyOjAwOjAwLjAwMFoiLCJ1cGRhdGVkQXQiOiIyMDI2LTEwLTI4VDEyOjAwOjAwLjAwMFoiLCJ1cmdlbmN5IjoyLCJpbXBvcnRhbmNlIjoyLCJsaW5rcyI6W3sibGFiZWwiOiJQcml2YXRlIHJlcG9ydCIsInVybCI6Imh0dHBzOi8vcmVwb3J0cy5zeW50aGV0aWMtZXhhbXBsZS50cy5uZXQvcmVoZWFyc2FsLm1kIn1dLCJraW5kIjoidGFzayIsImlkIjoidGFzay1zeW50aGV0aWMiLCJ0aXRsZSI6IkNvbXBsZXRlIHRoZSBzeW50aGV0aWMgY2hlY2tzIiwic3RhdHVzIjoidG9kbyIsImNvbnRleHQiOnsiYmFja2dyb3VuZCI6IkEgc3ludGhldGljIHJlaGVhcnNhbCBjaGVja3MgdGhlIGV4aXN0aW5nIGNhcmQgc2VtYW50aWNzIHdpdGhvdXQgcmVhZGluZyBvciBjaGFuZ2luZyBhbnkgbGl2ZSByZWNvcmRzLiIsIndoeU5vdyI6IlRoZSBpc29sYXRlZCBvd25lciBuZWVkcyB0byBjaG9vc2UgdGhlIG5leHQgcmV2ZXJzaWJsZSBzdGVwLiIsImlmTm9BbnN3ZXIiOiJOb3RoaW5nIGlzIGFwcHJvdmVkIG9yIGV4ZWN1dGVkIHVudGlsIGEgdmFsaWQgb3duZXIgcmVzcG9uc2UgYXJyaXZlcy4iLCJrbm93biI6W10sInJlbGF0ZWQiOltdfSwic3RlcHMiOlt7ImlkIjoidmVyaWZ5IiwidGV4dCI6IlZlcmlmeSB0aGUgaXNvbGF0ZWQgcmVzdWx0In0seyJpZCI6InVuZG8iLCJ0ZXh0IjoiQ29uZmlybSB0aGUgYWN0aW9uIGlzIHJldmVyc2libGUifV19",
+      "sha256": "aa88fafecac7a6ed502d0f553004a967f016c535a0f4134c434d00e7fae24011",
+      "classification": "card"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/approval/approval-synthetic.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJmcm9tIjoiU3ludGhldGljT2ZmaWNlciIsIm93bmVyIjoiU3ludGhldGljT3duZXIiLCJib2R5IjoiU3ludGhldGljIGNhcmQgYm9keS4iLCJjcmVhdGVkQXQiOiIyMDI2LTEwLTI4VDEyOjAwOjAwLjAwMFoiLCJ1cGRhdGVkQXQiOiIyMDI2LTEwLTI4VDEyOjAwOjAwLjAwMFoiLCJ1cmdlbmN5IjoyLCJpbXBvcnRhbmNlIjoyLCJsaW5rcyI6W3sibGFiZWwiOiJQcml2YXRlIHJlcG9ydCIsInVybCI6Imh0dHBzOi8vcmVwb3J0cy5zeW50aGV0aWMtZXhhbXBsZS50cy5uZXQvcmVoZWFyc2FsLm1kIn1dLCJraW5kIjoiYXBwcm92YWwiLCJpZCI6ImFwcHJvdmFsLXN5bnRoZXRpYyIsInRpdGxlIjoiQXBwcm92ZSB0aGUgc3ludGhldGljIGRlcGxveSB3aW5kb3ciLCJhcHByb3ZhbFR5cGUiOiJnbyIsImFwcHJvdmFsS2luZCI6ImRlcGxveSIsImNvZGVFeHBlY3RlZCI6ZmFsc2UsImlzc3VlZEF0IjoiMjAyNi0xMC0yOVQxMDowMDowMC4wMDBaIiwiZXhwaXJlc0F0IjoiMjA5OS0wMS0wMVQwMDowMDowMC4wMDBaIiwic3RhdHVzIjoib3BlbiIsImNvbnRleHQiOnsiYmFja2dyb3VuZCI6IkEgc3ludGhldGljIHJlaGVhcnNhbCBjaGVja3MgdGhlIGV4aXN0aW5nIGNhcmQgc2VtYW50aWNzIHdpdGhvdXQgcmVhZGluZyBvciBjaGFuZ2luZyBhbnkgbGl2ZSByZWNvcmRzLiIsIndoeU5vdyI6IlRoZSBpc29sYXRlZCBvd25lciBuZWVkcyB0byBjaG9vc2UgdGhlIG5leHQgcmV2ZXJzaWJsZSBzdGVwLiIsImlmTm9BbnN3ZXIiOiJOb3RoaW5nIGlzIGFwcHJvdmVkIG9yIGV4ZWN1dGVkIHVudGlsIGEgdmFsaWQgb3duZXIgcmVzcG9uc2UgYXJyaXZlcy4iLCJrbm93biI6W10sInJlbGF0ZWQiOltdfX0=",
+      "sha256": "4182451e6b3e314aa2f5bd5125ec2997761a001971597bb41d2fc2ada1a4e827",
+      "classification": "card"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/incident/incident-synthetic.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJmcm9tIjoiU3ludGhldGljT2ZmaWNlciIsIm93bmVyIjoiU3ludGhldGljT3duZXIiLCJib2R5IjoiU3ludGhldGljIGNhcmQgYm9keS4iLCJjcmVhdGVkQXQiOiIyMDI2LTEwLTI4VDEyOjAwOjAwLjAwMFoiLCJ1cGRhdGVkQXQiOiIyMDI2LTEwLTI4VDEyOjAwOjAwLjAwMFoiLCJ1cmdlbmN5IjoyLCJpbXBvcnRhbmNlIjoyLCJsaW5rcyI6W3sibGFiZWwiOiJQcml2YXRlIHJlcG9ydCIsInVybCI6Imh0dHBzOi8vcmVwb3J0cy5zeW50aGV0aWMtZXhhbXBsZS50cy5uZXQvcmVoZWFyc2FsLm1kIn1dLCJraW5kIjoiaW5jaWRlbnQiLCJpZCI6ImluY2lkZW50LXN5bnRoZXRpYyIsInRpdGxlIjoiU3ludGhldGljIGluY2lkZW50Iiwic3RhdHVzIjoiZGVncmFkZWQiLCJzZXZlcml0eSI6InNldjIiLCJpbXBhY3QiOiJPbmx5IHRoZSBkaXNwb3NhYmxlIHJlaGVhcnNhbCBpcyBhZmZlY3RlZC4iLCJzdGFydGVkQXQiOiIyMDI2LTEwLTI4VDEyOjAwOjAwLjAwMFoifQ==",
+      "sha256": "9fbecdaa3a727e35e79eaa7fb140c76d5da5f758e0f3f215cbe1ed81a30cb0d3",
+      "classification": "card"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/work/work-synthetic.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJmcm9tIjoiU3ludGhldGljT2ZmaWNlciIsIm93bmVyIjoiU3ludGhldGljT3duZXIiLCJib2R5IjoiU3ludGhldGljIGNhcmQgYm9keS4iLCJjcmVhdGVkQXQiOiIyMDI2LTEwLTI4VDEyOjAwOjAwLjAwMFoiLCJ1cGRhdGVkQXQiOiIyMDI2LTEwLTI4VDEyOjAwOjAwLjAwMFoiLCJ1cmdlbmN5IjoyLCJpbXBvcnRhbmNlIjoyLCJsaW5rcyI6W3sibGFiZWwiOiJQcml2YXRlIHJlcG9ydCIsInVybCI6Imh0dHBzOi8vcmVwb3J0cy5zeW50aGV0aWMtZXhhbXBsZS50cy5uZXQvcmVoZWFyc2FsLm1kIn1dLCJraW5kIjoid29yayIsImlkIjoid29yay1zeW50aGV0aWMiLCJ0aXRsZSI6IlN5bnRoZXRpYyB3b3JrIiwic3RhdHVzIjoid2FpdGluZy1zYW0iLCJ3YWl0c09uIjoiVGhlIGlzb2xhdGVkIG93bmVyIGRlY2lzaW9uIiwibmV4dCI6IlJlc3VtZSBvbmx5IGFmdGVyIGEgdmFsaWQgZGVjaXNpb24iLCJhc2tJZHMiOlsiYXNrLXN5bnRoZXRpYyJdLCJzdGFuZGluZyI6ZmFsc2V9",
+      "sha256": "5ab69d6e0f19669e4315a63170d03f2e995e59babd88dab13f241003b71b1e8a",
+      "classification": "card"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/ship/ship-synthetic.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJmcm9tIjoiU3ludGhldGljT2ZmaWNlckIiLCJvd25lciI6IlN5bnRoZXRpY093bmVyQiIsImJvZHkiOiJTeW50aGV0aWMgY2FyZCBib2R5LiIsImNyZWF0ZWRBdCI6IjIwMjYtMTAtMjhUMTI6MDA6MDAuMDAwWiIsInVwZGF0ZWRBdCI6IjIwMjYtMTAtMjhUMTI6MDA6MDAuMDAwWiIsInVyZ2VuY3kiOjIsImltcG9ydGFuY2UiOjIsImxpbmtzIjpbeyJsYWJlbCI6IlByaXZhdGUgcmVwb3J0IiwidXJsIjoiaHR0cHM6Ly9yZXBvcnRzLnN5bnRoZXRpYy1leGFtcGxlLnRzLm5ldC9yZWhlYXJzYWwubWQifV0sImtpbmQiOiJzaGlwIiwiaWQiOiJzaGlwLXN5bnRoZXRpYyIsInRpdGxlIjoiU3ludGhldGljIHJlbGVhc2UiLCJjb21wb25lbnQiOiJSZWhlYXJzYWwgY29tcG9uZW50IiwidmVyc2lvbiI6IjAuMC4yLXRlc3QiLCJwcmV2VmVyc2lvbiI6IjAuMC4xLXRlc3QiLCJhdCI6IjIwMjYtMTAtMjhUMTI6MDA6MDAuMDAwWiIsInN0YXR1cyI6ImxpdmUifQ==",
+      "sha256": "975000634dda5f55476fc51d375649b8170fef23131dc6fc78fcd8a819017c65",
+      "classification": "card"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/order/order-synthetic.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJmcm9tIjoiU3ludGhldGljT2ZmaWNlckIiLCJvd25lciI6IlN5bnRoZXRpY093bmVyQiIsImJvZHkiOiJTeW50aGV0aWMgY2FyZCBib2R5LiIsImNyZWF0ZWRBdCI6IjIwMjYtMTAtMjhUMTI6MDA6MDAuMDAwWiIsInVwZGF0ZWRBdCI6IjIwMjYtMTAtMjhUMTI6MDA6MDAuMDAwWiIsInVyZ2VuY3kiOjIsImltcG9ydGFuY2UiOjIsImxpbmtzIjpbeyJsYWJlbCI6IlByaXZhdGUgcmVwb3J0IiwidXJsIjoiaHR0cHM6Ly9yZXBvcnRzLnN5bnRoZXRpYy1leGFtcGxlLnRzLm5ldC9yZWhlYXJzYWwubWQifV0sImtpbmQiOiJvcmRlciIsImlkIjoib3JkZXItc3ludGhldGljIiwidGl0bGUiOiJTeW50aGV0aWMgc3RhbmRpbmcgb3JkZXIiLCJhdCI6IjIwMjYtMTAtMjhUMTI6MDA6MDAuMDAwWiIsInNvdXJjZSI6ImNoYXQiLCJ2ZXJiYXRpbSI6IktlZXAgZXZlcnkgcmVoZWFyc2FsIGFjdGlvbiBpbnNpZGUgaXRzIGRpc3Bvc2FibGUgZGlyZWN0b3J5LiIsImFwcGxpZXNUbyI6IlN5bnRoZXRpYyByZWhlYXJzYWwgb25seSIsInN0YXR1cyI6ImFjdGl2ZSJ9",
+      "sha256": "cf2efed5d8f4e5a84277a21d808414fe88b27c29de79671058ff46d6573d0143",
+      "classification": "card"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/claim/T-001.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJmcm9tIjoiU3ludGhldGljT2ZmaWNlckIiLCJvd25lciI6IlN5bnRoZXRpY093bmVyQiIsImJvZHkiOiJTeW50aGV0aWMgY2FyZCBib2R5LiIsImNyZWF0ZWRBdCI6IjIwMjYtMTAtMjhUMTI6MDA6MDAuMDAwWiIsInVwZGF0ZWRBdCI6IjIwMjYtMTAtMjhUMTI6MDA6MDAuMDAwWiIsInVyZ2VuY3kiOjIsImltcG9ydGFuY2UiOjIsImxpbmtzIjpbeyJsYWJlbCI6IlByaXZhdGUgcmVwb3J0IiwidXJsIjoiaHR0cHM6Ly9yZXBvcnRzLnN5bnRoZXRpYy1leGFtcGxlLnRzLm5ldC9yZWhlYXJzYWwubWQifV0sImtpbmQiOiJjbGFpbSIsImlkIjoiVC0wMDEiLCJ0aXRsZSI6IlN5bnRoZXRpYyBjbGFpbSIsInN0YXR1cyI6Im9wZW4iLCJzaXRlIjoiU3ludGhldGljIHNpdGUiLCJ1cmwiOiJodHRwczovL2V4YW1wbGUudGVzdC9jbGFpbSIsInF1b3RlIjoiRXZlcnkgcmVoZWFyc2FsIGlzIHJldmVyc2libGUuIiwibG9jYXRpb24iOiJTeW50aGV0aWMgcGFnZSwgZmlyc3QgcGFyYWdyYXBoIiwidHJ1ZVRvZGF5IjoiT25seSB0aGUgaXNvbGF0ZWQgbWFya2VyIGFjdGlvbiBoYXMgYmVlbiBkZW1vbnN0cmF0ZWQuIiwiZXZpZGVuY2UiOlt7ImxhYmVsIjoiU3ludGhldGljIGV2aWRlbmNlIiwicmVmIjoiaHR0cHM6Ly9leGFtcGxlLnRlc3QvZXZpZGVuY2UifV0sIm1ha2VUcnVlIjp7InRjIjpbIlRDLTEiXSwiZWZmb3J0IjoiVmVyaWZ5IGFsbCBzeW50aGV0aWMgb3BlcmF0aW9ucyJ9LCJzZXZlcml0eSI6Im1lZCJ9",
+      "sha256": "ddbaf4299da7315623a7bd14292292f741512da0549adbd3d4ed201f5fced766",
+      "classification": "card"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/hold/hold-synthetic.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJmcm9tIjoiU3ludGhldGljT2ZmaWNlckIiLCJvd25lciI6IlN5bnRoZXRpY09mZmljZXIgLyBTeW50aGV0aWNBbGlhcyIsImJvZHkiOiJTeW50aGV0aWMgY2FyZCBib2R5LiIsImNyZWF0ZWRBdCI6IjIwMjYtMTAtMjhUMTI6MDA6MDAuMDAwWiIsInVwZGF0ZWRBdCI6IjIwMjYtMTAtMjhUMTI6MDA6MDAuMDAwWiIsInVyZ2VuY3kiOjIsImltcG9ydGFuY2UiOjIsImxpbmtzIjpbeyJsYWJlbCI6IlByaXZhdGUgcmVwb3J0IiwidXJsIjoiaHR0cHM6Ly9yZXBvcnRzLnN5bnRoZXRpYy1leGFtcGxlLnRzLm5ldC9yZWhlYXJzYWwubWQifV0sImtpbmQiOiJob2xkIiwiaWQiOiJob2xkLXN5bnRoZXRpYyIsInRpdGxlIjoiSG9sZCB0aGUgc3ludGhldGljIHJlbGVhc2UiLCJzdGF0dXMiOiJhY3RpdmUiLCJ3aGF0IjoiSG9sZCB0aGUgc3ludGhldGljIHJlbGVhc2UiLCJjYXVzZSI6IkEgcmV2ZXJzaWJsZSBjaGVjayBpcyBpbmNvbXBsZXRlLiIsImV4aXQiOiJCb3RoIHN5bnRoZXRpYyB0YXNrIGNoZWNrcyBhcmUgY29tcGxldGUuIiwicmVsZWFzZWRCeSI6InNhbSIsInVuYmxvY2tlZEJ5IjpbInRhc2s6dGFzay1zeW50aGV0aWMiXX0=",
+      "sha256": "ce7347b97d7255aefd7d62b996c9d54fe1c4ffd62adffe2af6d28b5478485636",
+      "classification": "card"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/progress/progress-synthetic.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJmcm9tIjoiU3ludGhldGljT2ZmaWNlckIiLCJvd25lciI6IlVubWFwcGVkT3duZXIiLCJib2R5IjoiU3ludGhldGljIGNhcmQgYm9keS4iLCJjcmVhdGVkQXQiOiIyMDI2LTEwLTI4VDEyOjAwOjAwLjAwMFoiLCJ1cGRhdGVkQXQiOiIyMDI2LTEwLTI4VDEyOjAwOjAwLjAwMFoiLCJ1cmdlbmN5IjoyLCJpbXBvcnRhbmNlIjoyLCJsaW5rcyI6W3sibGFiZWwiOiJQcml2YXRlIHJlcG9ydCIsInVybCI6Imh0dHBzOi8vcmVwb3J0cy5zeW50aGV0aWMtZXhhbXBsZS50cy5uZXQvcmVoZWFyc2FsLm1kIn1dLCJraW5kIjoicHJvZ3Jlc3MiLCJpZCI6InByb2dyZXNzLXN5bnRoZXRpYyIsInRpdGxlIjoiU3ludGhldGljIG93bmVyIHByb2dyZXNzIiwidGlja2V0IjoiVEMtMSIsInN0ZXBzIjpbeyJuYW1lIjoiQnVpbGQiLCJzdGF0ZSI6ImxpdmUifSx7Im5hbWUiOiJSZXZpZXciLCJzdGF0ZSI6ImluLXByb2dyZXNzIn1dLCJjdXJyZW50U3RlcCI6MSwiaW1wb3J0YW50Ijp0cnVlLCJzdGF0dXMiOiJvcGVuIiwibm90ZSI6IlJldmlldyBiZWxvbmdzIHRvIHRoZSBhc3NpZ25lZCBvd25lci4iLCJ1cGRhdGVycyI6WyIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiXX0=",
+      "sha256": "13ee774f95186f873098d03d7ce86a6d8cc2af7715cbbef2a723f0291bdf6a73",
+      "classification": "card"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/approval/approval-code.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJmcm9tIjoiU3ludGhldGljT2ZmaWNlciIsIm93bmVyIjoiU3ludGhldGljT3duZXIiLCJib2R5IjoiU3ludGhldGljIGNhcmQgYm9keS4iLCJjcmVhdGVkQXQiOiIyMDI2LTEwLTI4VDEyOjAwOjAwLjAwMFoiLCJ1cGRhdGVkQXQiOiIyMDI2LTEwLTI4VDEyOjAwOjAwLjAwMFoiLCJ1cmdlbmN5IjoyLCJpbXBvcnRhbmNlIjoyLCJsaW5rcyI6W3sibGFiZWwiOiJQcml2YXRlIHJlcG9ydCIsInVybCI6Imh0dHBzOi8vcmVwb3J0cy5zeW50aGV0aWMtZXhhbXBsZS50cy5uZXQvcmVoZWFyc2FsLm1kIn1dLCJraW5kIjoiYXBwcm92YWwiLCJpZCI6ImFwcHJvdmFsLWNvZGUiLCJ0aXRsZSI6IkFwcHJvdmUgdGhlIHN5bnRoZXRpYyBkZXBsb3kgd2luZG93IiwiYXBwcm92YWxUeXBlIjoib3BlbmtleSIsImNvZGVFeHBlY3RlZCI6dHJ1ZSwiaXNzdWVkQXQiOiIyMDI2LTEwLTI5VDEwOjAwOjAwLjAwMFoiLCJleHBpcmVzQXQiOiIyMDk5LTAxLTAxVDAwOjAwOjAwLjAwMFoiLCJzdGF0dXMiOiJvcGVuIiwiY29udGV4dCI6eyJiYWNrZ3JvdW5kIjoiQSBzeW50aGV0aWMgcmVoZWFyc2FsIGNoZWNrcyB0aGUgZXhpc3RpbmcgY2FyZCBzZW1hbnRpY3Mgd2l0aG91dCByZWFkaW5nIG9yIGNoYW5naW5nIGFueSBsaXZlIHJlY29yZHMuIiwid2h5Tm93IjoiVGhlIGlzb2xhdGVkIG93bmVyIG5lZWRzIHRvIGNob29zZSB0aGUgbmV4dCByZXZlcnNpYmxlIHN0ZXAuIiwiaWZOb0Fuc3dlciI6Ik5vdGhpbmcgaXMgYXBwcm92ZWQgb3IgZXhlY3V0ZWQgdW50aWwgYSB2YWxpZCBvd25lciByZXNwb25zZSBhcnJpdmVzLiIsImtub3duIjpbXSwicmVsYXRlZCI6W119LCJ1cmwiOiJodHRwczovL29wZW5rZXkuc28vZGVsZWdhdGU/Zml4dHVyZT10YzIyMDkifQ==",
+      "sha256": "da7a176b8c7334c211c50e3fcb37746378e36522b99c55d7904c90053aa045ad",
+      "classification": "card"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/approval/approval-expired.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJmcm9tIjoiU3ludGhldGljT2ZmaWNlciIsIm93bmVyIjoiU3ludGhldGljT3duZXIiLCJib2R5IjoiU3ludGhldGljIGNhcmQgYm9keS4iLCJjcmVhdGVkQXQiOiIyMDI2LTEwLTI4VDEyOjAwOjAwLjAwMFoiLCJ1cGRhdGVkQXQiOiIyMDI2LTEwLTI4VDEyOjAwOjAwLjAwMFoiLCJ1cmdlbmN5IjoyLCJpbXBvcnRhbmNlIjoyLCJsaW5rcyI6W3sibGFiZWwiOiJQcml2YXRlIHJlcG9ydCIsInVybCI6Imh0dHBzOi8vcmVwb3J0cy5zeW50aGV0aWMtZXhhbXBsZS50cy5uZXQvcmVoZWFyc2FsLm1kIn1dLCJraW5kIjoiYXBwcm92YWwiLCJpZCI6ImFwcHJvdmFsLWV4cGlyZWQiLCJ0aXRsZSI6IkFwcHJvdmUgdGhlIHN5bnRoZXRpYyBkZXBsb3kgd2luZG93IiwiYXBwcm92YWxUeXBlIjoiZ28iLCJhcHByb3ZhbEtpbmQiOiJkZXBsb3kiLCJjb2RlRXhwZWN0ZWQiOmZhbHNlLCJpc3N1ZWRBdCI6IjIwMjYtMTAtMjlUMTA6MDA6MDAuMDAwWiIsImV4cGlyZXNBdCI6IjIwMjYtMTAtMjlUMTE6MzA6MDAuMDAwWiIsInN0YXR1cyI6Im9wZW4iLCJjb250ZXh0Ijp7ImJhY2tncm91bmQiOiJBIHN5bnRoZXRpYyByZWhlYXJzYWwgY2hlY2tzIHRoZSBleGlzdGluZyBjYXJkIHNlbWFudGljcyB3aXRob3V0IHJlYWRpbmcgb3IgY2hhbmdpbmcgYW55IGxpdmUgcmVjb3Jkcy4iLCJ3aHlOb3ciOiJUaGUgaXNvbGF0ZWQgb3duZXIgbmVlZHMgdG8gY2hvb3NlIHRoZSBuZXh0IHJldmVyc2libGUgc3RlcC4iLCJpZk5vQW5zd2VyIjoiTm90aGluZyBpcyBhcHByb3ZlZCBvciBleGVjdXRlZCB1bnRpbCBhIHZhbGlkIG93bmVyIHJlc3BvbnNlIGFycml2ZXMuIiwia25vd24iOltdLCJyZWxhdGVkIjpbXX19",
+      "sha256": "d2fa08df65fe561d6b306c339f0578c3806e97ae74c23c4906ea0d189c97a97f",
+      "classification": "card"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/answers/ask-synthetic/20261029T110000000Z.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJhc2tJZCI6ImFzay1zeW50aGV0aWMiLCJhY3Rpb24iOiJhbnN3ZXIiLCJjaG9pY2UiOiJjYXJlZnVsIiwidGV4dCI6IkEgcHJlcGFyZWQgb3duZXIgYW5zd2VyLiIsImF0IjoiMjAyNi0xMC0yOVQxMTowMDowMC4wMDBaIn0=",
+      "sha256": "0efd15d654f68fcfada355387554095eb683c7fa3038cc8286368f34cc590f14",
+      "classification": "answer"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/answers/approval-code/20261029T110100000Z.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJhc2tJZCI6ImFwcHJvdmFsLWNvZGUiLCJhY3Rpb24iOiJjb2RlIiwidGV4dCI6IlNZTlRIRVRJQzIyNENPREXOsSIsImlzc3VlZEF0IjoiMjAyNi0xMC0yOVQxMDowMDowMC4wMDBaIiwiYXQiOiIyMDI2LTEwLTI5VDExOjAxOjAwLjAwMFoifQ==",
+      "sha256": "36bf3680ec566819e42e591bd338095bd661daca210cb8fba5c1cf65a2af277c",
+      "classification": "answer"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/answers/approval-expired/20261029T110200000Z.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJhc2tJZCI6ImFwcHJvdmFsLWV4cGlyZWQiLCJhY3Rpb24iOiJkb25lIiwidGV4dCI6IiIsImlzc3VlZEF0IjoiMjAyNi0xMC0yOVQxMDowMDowMC4wMDBaIiwiYXQiOiIyMDI2LTEwLTI5VDExOjAyOjAwLjAwMFoifQ==",
+      "sha256": "d00c2cd744c636970172da43c7a692f1632bb5f9f05dc9de85a7841464c81a9e",
+      "classification": "answer"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/state/task/task-synthetic.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJraW5kIjoidGFzayIsImlkIjoidGFzay1zeW50aGV0aWMiLCJzdGVwcyI6eyJ2ZXJpZnkiOiIyMDI2LTEwLTI5VDEyOjAwOjAwLjAwMFoifSwic2VlbkF0IjoiMjAyNi0xMC0yOVQxMjowMDowMC4wMDBaIiwic25vb3plZFVudGlsIjoiMjA5OS0wMS0wMVQwMDowMDowMC4wMDBaIiwidXBkYXRlZEF0IjoiMjAyNi0xMC0yOVQxMjowMDowMC4wMDBaIn0=",
+      "sha256": "0e913bcf6a13b2da3da12584609a0d5956974dcdb77e1ea86050210b3e3bcd76",
+      "classification": "owner-state"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/state/progress/progress-synthetic.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJraW5kIjoicHJvZ3Jlc3MiLCJpZCI6InByb2dyZXNzLXN5bnRoZXRpYyIsInN0ZXBzIjp7fSwibm90ZXMiOlt7ImlkIjoicHJpdmF0ZW5vdGUyMjQiLCJhdCI6IjIwMjYtMTAtMjlUMTI6MDA6MDAuMDAwWiIsInRleHQiOiJPV05FUi1PTkxZLURJQVJZLTIyNCJ9XSwidXBkYXRlZEF0IjoiMjAyNi0xMC0yOVQxMjowMDowMC4wMDBaIn0=",
+      "sha256": "22b0bc68204b244f6e7995406616a614256e721482fccc014713383f50b1e814",
+      "classification": "owner-state"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/state/hold/hold-synthetic.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJraW5kIjoiaG9sZCIsImlkIjoiaG9sZC1zeW50aGV0aWMiLCJzdGVwcyI6e30sIm5vdGVzIjpbeyJpZCI6ImFsaWFzbm90ZTIyNCIsImF0IjoiMjAyNi0xMC0yOVQxMjowMDowMC4wMDBaIiwidGV4dCI6IkV4cGxpY2l0bHkgc2VuZCB0aGlzIHN5bnRoZXRpYyBvd25lciBub3RlLiJ9XSwidXBkYXRlZEF0IjoiMjAyNi0xMC0yOVQxMjowMDowMC4wMDBaIn0=",
+      "sha256": "fbcd9fce277ed4b4a9f53950de1e3656c3613abdc995038a831ce9c04e800fa7",
+      "classification": "owner-state"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/thread/ask/ask-synthetic/20261029T111000000Z-00000000000000000000000000000001.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJraW5kIjoiYXNrIiwiaWQiOiJhc2stc3ludGhldGljIiwiYXQiOiIyMDI2LTEwLTI5VDExOjEwOjAwLjAwMFoiLCJ0ZXh0IjoiU3ludGhldGljIHRocmVhZCByZWNlaXB0IHdhaXRpbmcgMC4ifQ==",
+      "sha256": "5ed5ef7e74905a4f51c71d908c9281c8975347e2f9fc13aff7ea2637d6f99a2e",
+      "classification": "thread"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/thread/ask/ask-synthetic/20261029T111100000Z-00000000000000000000000000000002.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJraW5kIjoiYXNrIiwiaWQiOiJhc2stc3ludGhldGljIiwiYXQiOiIyMDI2LTEwLTI5VDExOjExOjAwLjAwMFoiLCJ0ZXh0IjoiU3ludGhldGljIHRocmVhZCByZWNlaXB0IGRlbGl2ZXJlZCAxLiJ9",
+      "sha256": "05b490b8938862ddb6276935bca519e36a7961699ba1fa55a9b8cee7d9fce1de",
+      "classification": "thread"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/thread/ask/ask-synthetic/20261029T111200000Z-00000000000000000000000000000003.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJraW5kIjoiYXNrIiwiaWQiOiJhc2stc3ludGhldGljIiwiYXQiOiIyMDI2LTEwLTI5VDExOjEyOjAwLjAwMFoiLCJ0ZXh0IjoiU3ludGhldGljIHRocmVhZCByZWNlaXB0IGNsYWltZWQgMi4ifQ==",
+      "sha256": "0833ea3d879b03e88978ba48f1ec33a17d0f51d3eaf8c58f28d36f2abd93de8b",
+      "classification": "thread"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/thread/ask/ask-synthetic/20261029T111300000Z-00000000000000000000000000000004.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJraW5kIjoiYXNrIiwiaWQiOiJhc2stc3ludGhldGljIiwiYXQiOiIyMDI2LTEwLTI5VDExOjEzOjAwLjAwMFoiLCJ0ZXh0IjoiU3ludGhldGljIHRocmVhZCByZWNlaXB0IHdhaXRpbmcgMy4ifQ==",
+      "sha256": "3ff27cd10afc332ac4ef9c34f657765015ba100f33774ac618ed36f41984b8b7",
+      "classification": "thread"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/thread/ask/ask-synthetic/20261029T111400000Z-00000000000000000000000000000005.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJraW5kIjoiYXNrIiwiaWQiOiJhc2stc3ludGhldGljIiwiYXQiOiIyMDI2LTEwLTI5VDExOjE0OjAwLjAwMFoiLCJ0ZXh0IjoiU3ludGhldGljIHRocmVhZCByZWNlaXB0IHJlZnVzZWQgNC4ifQ==",
+      "sha256": "30e0f3b36bf26664d6f433f8c3a12a678deeb26b86539a8b86719c3d4b0ea2d5",
+      "classification": "thread"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/thread/progress/progress-synthetic/20261029T112000000Z-00000000000000000000000000000009.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJraW5kIjoicHJvZ3Jlc3MiLCJpZCI6InByb2dyZXNzLXN5bnRoZXRpYyIsImF0IjoiMjAyNi0xMC0yOVQxMToyMDowMC4wMDBaIiwidGV4dCI6Ik93bmVyLW9ubHkgdW5yZXNvbHZlZCBkZXN0aW5hdGlvbiBtZXNzYWdlLiJ9",
+      "sha256": "96cb4f8d343f890fb511e90342ff2559966f65813abfe893820880747f3028e8",
+      "classification": "thread"
+    },
+    {
+      "sourceKey": "watch.synthetic.json",
+      "sourceArea": "watch-state",
+      "encoding": "base64",
+      "rawBase64": "eyJ2ZXJzaW9uIjoyLCJjdXJzb3IiOiIyMDI2LTEwLTI4VDAwOjAwOjAwLjAwMFoiLCJkZWxpdmVyZWQiOnsieHl6LnRpbnljbG91ZC5yb2NpbmFudGUvc2FtL2Fuc3dlcnMvYXNrLXN5bnRoZXRpYy8yMDI2MTAyOVQxMTAwMDAwMDBaLmpzb24iOnsiZG9uZSI6WyJTeW50aGV0aWNPZmZpY2VyIl0sImNvbXBsZXRlIjpmYWxzZSwib3JpZ2luYWxEaWFnbm9zdGljIjoiT1dORVItT05MWS1SRUNFSVBULTIyNCJ9LCJub3RlOmhvbGQvaG9sZC1zeW50aGV0aWMvYWxpYXNub3RlMjI0Ijp7ImRvbmUiOlsiU3ludGhldGljT2ZmaWNlciJdLCJjb21wbGV0ZSI6ZmFsc2UsIm9yaWdpbmFsRGlhZ25vc3RpYyI6Ik9XTkVSLU9OTFktUkVDRUlQVC0yMjQifX0sImNsYWltRGVsaXZlcmVkIjp7fSwidGFza3MiOnsidGFzay1zeW50aGV0aWMiOnsidmVyaWZ5IjoiMjAyNi0xMC0yOVQxMjowMDowMC4wMDBaIiwidW5kbyI6bnVsbH19LCJ0YXNrQ2xvc2VkIjp7fSwiY2hhdFJlY2VpcHQiOiIyMDI2LTEwLTI4VDAwOjAwOjAwLjAwMFoifQ==",
+      "sha256": "ffaa48607bc108d2a5bf618dbebfe06172b2a6fc3c3ed3d0607e35e564436a77",
+      "classification": "checkpoint"
+    },
+    {
+      "sourceKey": "watch.threads.synthetic.json",
+      "sourceArea": "thread-watch-state",
+      "encoding": "base64",
+      "rawBase64": "eyJhdHRlbXB0cyI6eyJ4eXoudGlueWNsb3VkLnJvY2luYW50ZS9zYW0vdGhyZWFkL2Fzay9hc2stc3ludGhldGljLzIwMjYxMDI5VDExMTAwMDAwMFotMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDEuanNvbiI6eyJzdGF0ZSI6IndhaXRpbmciLCJyZWNpcGllbnQiOiJTeW50aGV0aWNPZmZpY2VyIiwicm91dGVkVG8iOiJvd25lciIsImF0IjoiMjAyNi0xMC0yOVQxMToxMDowMC4wMDBaIn0sInh5ei50aW55Y2xvdWQucm9jaW5hbnRlL3NhbS90aHJlYWQvYXNrL2Fzay1zeW50aGV0aWMvMjAyNjEwMjlUMTExMTAwMDAwWi0wMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMi5qc29uIjp7InN0YXRlIjoiZGVsaXZlcmVkIiwicmVjaXBpZW50IjoiU3ludGhldGljT2ZmaWNlciIsInJvdXRlZFRvIjoib3duZXIiLCJhdCI6IjIwMjYtMTAtMjlUMTE6MTE6MDAuMDAwWiJ9LCJ4eXoudGlueWNsb3VkLnJvY2luYW50ZS9zYW0vdGhyZWFkL2Fzay9hc2stc3ludGhldGljLzIwMjYxMDI5VDExMTIwMDAwMFotMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDMuanNvbiI6eyJzdGF0ZSI6ImNsYWltZWQiLCJyZWNpcGllbnQiOiJTeW50aGV0aWNPZmZpY2VyIiwicm91dGVkVG8iOiJvd25lciIsImF0IjoiMjAyNi0xMC0yOVQxMToxMjowMC4wMDBaIn0sInh5ei50aW55Y2xvdWQucm9jaW5hbnRlL3NhbS90aHJlYWQvYXNrL2Fzay1zeW50aGV0aWMvMjAyNjEwMjlUMTExMzAwMDAwWi0wMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwNC5qc29uIjp7InN0YXRlIjoid2FpdGluZyIsInJlY2lwaWVudCI6IlN5bnRoZXRpY09mZmljZXIiLCJyb3V0ZWRUbyI6Im93bmVyIiwiYXQiOiIyMDI2LTEwLTI5VDExOjEzOjAwLjAwMFoiLCJyZWFzb24iOiJFeHBsaWNpdGx5IGhlbGQgYnkgY2FwdHVyZWQgcnVudGltZSJ9LCJ4eXoudGlueWNsb3VkLnJvY2luYW50ZS9zYW0vdGhyZWFkL2Fzay9hc2stc3ludGhldGljLzIwMjYxMDI5VDExMTQwMDAwMFotMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDUuanNvbiI6eyJzdGF0ZSI6InJlZnVzZWQiLCJyZWNpcGllbnQiOiJTeW50aGV0aWNPZmZpY2VyIiwicm91dGVkVG8iOiJvd25lciIsImF0IjoiMjAyNi0xMC0yOVQxMToxNDowMC4wMDBaIn19LCJjdXJzb3IiOiJjYXB0dXJlZC10aHJlYWQtY3Vyc29yIn0=",
+      "sha256": "9b92dd480497afc6544c3bb0fda93d0a66dc1233f13f12eb8006ce6c82641e3c",
+      "classification": "checkpoint"
+    },
+    {
+      "sourceKey": "watch.expiry.synthetic.json",
+      "sourceArea": "expiry-state",
+      "encoding": "base64",
+      "rawBase64": "eyJ2ZXJzaW9uIjoxLCJzaW5jZSI6IjIwMjYtMTAtMjhUMTI6MDA6MDAuMDAwWiIsImZpcnN0UnVuIjp7IlN5bnRoZXRpY09mZmljZXIiOlsiYXNrL2Fzay1zeW50aGV0aWMiXX0sIm93ZWQiOnsiYXNrL2Fzay1zeW50aGV0aWNAb3JpZ2luYWwiOiJTeW50aGV0aWNPZmZpY2VyIn19",
+      "sha256": "5e526be6f0de767359d59091ea333f8540628a6bdbbcb531d473d69079374316",
+      "classification": "checkpoint"
+    },
+    {
+      "sourceKey": "watch.hold-actions.synthetic.json",
+      "sourceArea": "watch-state",
+      "encoding": "base64",
+      "rawBase64": "eyJ2ZXJzaW9uIjoxLCJhY3RlZCI6e30sIm93ZWQiOnt9fQ==",
+      "sha256": "33a0849a9403e89ce2da631e82a44b0e7d3a8d99a437e6178cc1bf3ec4b9fce5",
+      "classification": "checkpoint"
+    },
+    {
+      "sourceKey": "watch.unknown.synthetic.json",
+      "sourceArea": "watch-state",
+      "encoding": "base64",
+      "rawBase64": "eyJvd25lck9ubHkiOiJPV05FUi1PTkxZLURJQVJZLTIyNCJ9",
+      "sha256": "3bc1817dc238cc9cbb439f8952dac932544c4e2f811c8eeaf71960d7baa2e508",
+      "classification": "quarantine"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/future/unknown.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJmdXR1cmUiOnRydWUsInVudG91Y2hlZCI6Is6xXG7OsiJ9",
+      "sha256": "54c635995537c3ac73d7ad0164c81b57e1a768e11aa5ed05d7c6aa696c1c59b0",
+      "classification": "quarantine"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/future/invalid.bin",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "/8CAAH8=",
+      "sha256": "193901e0608c8335da051be971163719164f2f809ca0e3bbdb12e67c48a56650",
+      "classification": "quarantine"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/work/work-partial.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJmcm9tIjoiU3ludGhldGljT2ZmaWNlciIsIm93bmVyIjoiU3ludGhldGljT3duZXIgLyBNaXNzaW5nT2ZmaWNlciIsImJvZHkiOiJTeW50aGV0aWMgY2FyZCBib2R5LiIsImNyZWF0ZWRBdCI6IjIwMjYtMTAtMjhUMTI6MDA6MDAuMDAwWiIsInVwZGF0ZWRBdCI6IjIwMjYtMTAtMjhUMTI6MDA6MDAuMDAwWiIsInVyZ2VuY3kiOjIsImltcG9ydGFuY2UiOjIsImxpbmtzIjpbeyJsYWJlbCI6IlByaXZhdGUgcmVwb3J0IiwidXJsIjoiaHR0cHM6Ly9yZXBvcnRzLnN5bnRoZXRpYy1leGFtcGxlLnRzLm5ldC9yZWhlYXJzYWwubWQifV0sImtpbmQiOiJ3b3JrIiwiaWQiOiJ3b3JrLXBhcnRpYWwiLCJ0aXRsZSI6IlN5bnRoZXRpYyB3b3JrIiwic3RhdHVzIjoid2FpdGluZy1zYW0iLCJ3YWl0c09uIjoiVGhlIGlzb2xhdGVkIG93bmVyIGRlY2lzaW9uIiwibmV4dCI6IlJlc3VtZSBvbmx5IGFmdGVyIGEgdmFsaWQgZGVjaXNpb24iLCJhc2tJZHMiOlsiYXNrLXN5bnRoZXRpYyJdLCJzdGFuZGluZyI6ZmFsc2V9",
+      "sha256": "6eeb691941a798fb188720006f3bfd5623bdff5847a4d6224d99ea1f5f9c5ffa",
+      "classification": "card"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/state/work/work-partial.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJraW5kIjoid29yayIsImlkIjoid29yay1wYXJ0aWFsIiwic3RlcHMiOnt9LCJub3RlcyI6W3siaWQiOiJwYXJ0aWFsbm90ZTIyNCIsImF0IjoiMjAyNi0xMC0yOVQxMjowMDowMC4wMDBaIiwidGV4dCI6IkV4cGxpY2l0IHBhcnRpYWwtcmVjaXBpZW50IHN5bnRoZXRpYyBub3RlLiJ9XSwidXBkYXRlZEF0IjoiMjAyNi0xMC0yOVQxMjowMDowMC4wMDBaIn0=",
+      "sha256": "34b61ac254a51b38f958ea815e0b12ba91c0f9cef2b00cad9d4e57afe2c661c4",
+      "classification": "owner-state"
+    }
+  ],
+  "publishers": [
+    {
+      "publisherId": "legacy-alpha",
+      "agentId": "alpha",
+      "agentDid": "did:key:synthetic-alpha",
+      "outputResource": "xyz.tinycloud.tinychat/feed/feed_output_alpha",
+      "responseResource": "xyz.tinycloud.tinychat/feed/feed_responses_alpha"
+    },
+    {
+      "publisherId": "legacy-beta",
+      "agentId": "beta",
+      "agentDid": "did:key:synthetic-beta",
+      "outputResource": "xyz.tinycloud.tinychat/feed/feed_output_beta",
+      "responseResource": "xyz.tinycloud.tinychat/feed/feed_responses_beta"
+    }
+  ],
+  "recipients": [
+    {
+      "recipientKey": "logical-alpha",
+      "legacyName": "SyntheticOfficer",
+      "runtimeTarget": {
+        "agentId": "runtime-alpha",
+        "provider": "omp"
+      }
+    },
+    {
+      "recipientKey": "logical-alpha-alias",
+      "legacyName": "SyntheticAlias",
+      "runtimeTarget": {
+        "agentId": "runtime-alpha",
+        "provider": "omp"
+      }
+    },
+    {
+      "recipientKey": "logical-owner",
+      "legacyName": "SyntheticOwner",
+      "runtimeTarget": {
+        "agentId": "runtime-alpha",
+        "provider": "omp"
+      }
+    },
+    {
+      "recipientKey": "logical-beta",
+      "legacyName": "SyntheticOfficerB",
+      "runtimeTarget": {
+        "agentId": "runtime-beta",
+        "provider": "omp"
+      }
+    },
+    {
+      "recipientKey": "logical-beta-owner",
+      "legacyName": "SyntheticOwnerB",
+      "runtimeTarget": {
+        "agentId": "runtime-beta",
+        "provider": "omp"
+      }
+    },
+    {
+      "recipientKey": "logical-monica",
+      "legacyName": "Monica",
+      "runtimeTarget": {
+        "agentId": "runtime-beta",
+        "provider": "omp"
+      }
+    },
+    {
+      "recipientKey": "logical-unmapped",
+      "legacyName": "UnmappedOwner"
+    },
+    {
+      "recipientKey": "logical-xo",
+      "legacyName": "xo"
+    }
+  ],
+  "routes": [
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/ask/ask-synthetic.json",
+      "card": {
+        "kind": "ask",
+        "id": "ask-synthetic"
+      },
+      "recipientKeys": [
+        "logical-owner"
+      ],
+      "fallbackRecipientKeys": [
+        "logical-xo"
+      ],
+      "unresolvedRecipients": []
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/task/task-synthetic.json",
+      "card": {
+        "kind": "task",
+        "id": "task-synthetic"
+      },
+      "recipientKeys": [
+        "logical-owner"
+      ],
+      "fallbackRecipientKeys": [
+        "logical-xo"
+      ],
+      "unresolvedRecipients": []
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/approval/approval-synthetic.json",
+      "card": {
+        "kind": "approval",
+        "id": "approval-synthetic"
+      },
+      "recipientKeys": [
+        "logical-owner"
+      ],
+      "fallbackRecipientKeys": [
+        "logical-xo"
+      ],
+      "unresolvedRecipients": []
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/incident/incident-synthetic.json",
+      "card": {
+        "kind": "incident",
+        "id": "incident-synthetic"
+      },
+      "recipientKeys": [
+        "logical-owner"
+      ],
+      "fallbackRecipientKeys": [
+        "logical-xo"
+      ],
+      "unresolvedRecipients": []
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/work/work-synthetic.json",
+      "card": {
+        "kind": "work",
+        "id": "work-synthetic"
+      },
+      "recipientKeys": [
+        "logical-owner"
+      ],
+      "fallbackRecipientKeys": [
+        "logical-xo"
+      ],
+      "unresolvedRecipients": []
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/ship/ship-synthetic.json",
+      "card": {
+        "kind": "ship",
+        "id": "ship-synthetic"
+      },
+      "recipientKeys": [
+        "logical-beta-owner"
+      ],
+      "fallbackRecipientKeys": [
+        "logical-xo"
+      ],
+      "unresolvedRecipients": []
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/claim/T-001.json",
+      "card": {
+        "kind": "claim",
+        "id": "T-001"
+      },
+      "recipientKeys": [
+        "logical-beta-owner"
+      ],
+      "fallbackRecipientKeys": [
+        "logical-xo"
+      ],
+      "unresolvedRecipients": []
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/hold/hold-synthetic.json",
+      "card": {
+        "kind": "hold",
+        "id": "hold-synthetic"
+      },
+      "recipientKeys": [
+        "logical-alpha",
+        "logical-alpha-alias"
+      ],
+      "fallbackRecipientKeys": [
+        "logical-xo"
+      ],
+      "unresolvedRecipients": []
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/progress/progress-synthetic.json",
+      "card": {
+        "kind": "progress",
+        "id": "progress-synthetic"
+      },
+      "recipientKeys": [
+        "logical-unmapped"
+      ],
+      "fallbackRecipientKeys": [
+        "logical-xo"
+      ],
+      "unresolvedRecipients": []
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/approval/approval-code.json",
+      "card": {
+        "kind": "approval",
+        "id": "approval-code"
+      },
+      "recipientKeys": [
+        "logical-owner"
+      ],
+      "fallbackRecipientKeys": [
+        "logical-xo"
+      ],
+      "unresolvedRecipients": []
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/approval/approval-expired.json",
+      "card": {
+        "kind": "approval",
+        "id": "approval-expired"
+      },
+      "recipientKeys": [
+        "logical-owner"
+      ],
+      "fallbackRecipientKeys": [
+        "logical-xo"
+      ],
+      "unresolvedRecipients": []
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/work/work-partial.json",
+      "card": {
+        "kind": "work",
+        "id": "work-partial"
+      },
+      "recipientKeys": [
+        "logical-owner"
+      ],
+      "fallbackRecipientKeys": [
+        "logical-xo"
+      ],
+      "unresolvedRecipients": [
+        "MissingOfficer"
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/ask/ask-synthetic.json",
+      "publisherId": "legacy-alpha",
+      "identity": {
+        "cardId": "card-ask-ask-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-ask-ask-synthetic"
+      },
+      "record": {
+        "id": "ask-synthetic",
+        "title": "Choose the synthetic approach",
+        "body": "Synthetic card body.",
+        "owner": "SyntheticOwner",
+        "from": "SyntheticOfficer",
+        "urgency": 2,
+        "importance": 2,
+        "links": [
+          {
+            "label": "Private report",
+            "url": "https://reports.synthetic-example.ts.net/rehearsal.md"
+          }
+        ],
+        "createdAt": "2026-10-28T12:00:00.000Z",
+        "updatedAt": "2026-10-28T12:00:00.000Z",
+        "kind": "ask",
+        "options": [
+          {
+            "id": "quick",
+            "label": "Quick option",
+            "detail": "Fast but limited."
+          },
+          {
+            "id": "careful",
+            "label": "Careful option",
+            "detail": "Slower and reversible."
+          }
+        ],
+        "recommend": "careful",
+        "askedAt": "2026-10-28T12:00:00.000Z",
+        "status": "open",
+        "context": {
+          "background": "A synthetic rehearsal checks the existing card semantics without reading or changing any live records.",
+          "whyNow": "The isolated owner needs to choose the next reversible step.",
+          "ifNoAnswer": "Nothing is approved or executed until a valid owner response arrives.",
+          "known": [],
+          "related": []
+        }
+      },
+      "canonicalCard": {
+        "cardId": "card-ask-ask-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-ask-ask-synthetic",
+        "kind": "ask",
+        "needsResponse": true,
+        "title": "Choose the synthetic approach",
+        "body": "Synthetic card body.",
+        "choices": [
+          {
+            "id": "quick",
+            "label": "Quick option"
+          },
+          {
+            "id": "careful",
+            "label": "Careful option"
+          }
+        ],
+        "urgency": 2,
+        "createdAt": "2026-10-28T12:00:00.000Z",
+        "payload": {
+          "sitrep": {
+            "version": 1,
+            "record": {
+              "id": "ask-synthetic",
+              "title": "Choose the synthetic approach",
+              "body": "Synthetic card body.",
+              "owner": "SyntheticOwner",
+              "from": "SyntheticOfficer",
+              "urgency": 2,
+              "importance": 2,
+              "links": [
+                {
+                  "label": "Private report",
+                  "url": "https://reports.synthetic-example.ts.net/rehearsal.md"
+                }
+              ],
+              "createdAt": "2026-10-28T12:00:00.000Z",
+              "updatedAt": "2026-10-28T12:00:00.000Z",
+              "kind": "ask",
+              "options": [
+                {
+                  "id": "quick",
+                  "label": "Quick option",
+                  "detail": "Fast but limited."
+                },
+                {
+                  "id": "careful",
+                  "label": "Careful option",
+                  "detail": "Slower and reversible."
+                }
+              ],
+              "recommend": "careful",
+              "askedAt": "2026-10-28T12:00:00.000Z",
+              "status": "open",
+              "context": {
+                "background": "A synthetic rehearsal checks the existing card semantics without reading or changing any live records.",
+                "whyNow": "The isolated owner needs to choose the next reversible step.",
+                "ifNoAnswer": "Nothing is approved or executed until a valid owner response arrives.",
+                "known": [],
+                "related": []
+              }
+            }
+          },
+          "source": {
+            "label": "Legacy source",
+            "ref": "xyz.tinycloud.rocinante/board/ask/ask-synthetic.json"
+          }
+        }
+      },
+      "needsAction": false,
+      "attention": "handled",
+      "currentAnswerSourceKey": "xyz.tinycloud.rocinante/sam/answers/ask-synthetic/20261029T110000000Z.json"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/task/task-synthetic.json",
+      "publisherId": "legacy-alpha",
+      "identity": {
+        "cardId": "card-task-task-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-task-task-synthetic"
+      },
+      "record": {
+        "id": "task-synthetic",
+        "title": "Complete the synthetic checks",
+        "body": "Synthetic card body.",
+        "owner": "SyntheticOwner",
+        "from": "SyntheticOfficer",
+        "urgency": 2,
+        "importance": 2,
+        "links": [
+          {
+            "label": "Private report",
+            "url": "https://reports.synthetic-example.ts.net/rehearsal.md"
+          }
+        ],
+        "createdAt": "2026-10-28T12:00:00.000Z",
+        "updatedAt": "2026-10-28T12:00:00.000Z",
+        "kind": "task",
+        "steps": [
+          {
+            "id": "verify",
+            "text": "Verify the isolated result"
+          },
+          {
+            "id": "undo",
+            "text": "Confirm the action is reversible"
+          }
+        ],
+        "status": "todo",
+        "context": {
+          "background": "A synthetic rehearsal checks the existing card semantics without reading or changing any live records.",
+          "whyNow": "The isolated owner needs to choose the next reversible step.",
+          "ifNoAnswer": "Nothing is approved or executed until a valid owner response arrives.",
+          "known": [],
+          "related": []
+        }
+      },
+      "canonicalCard": {
+        "cardId": "card-task-task-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-task-task-synthetic",
+        "kind": "task",
+        "needsResponse": true,
+        "title": "Complete the synthetic checks",
+        "body": "Synthetic card body.",
+        "urgency": 2,
+        "createdAt": "2026-10-28T12:00:00.000Z",
+        "payload": {
+          "sitrep": {
+            "version": 1,
+            "record": {
+              "id": "task-synthetic",
+              "title": "Complete the synthetic checks",
+              "body": "Synthetic card body.",
+              "owner": "SyntheticOwner",
+              "from": "SyntheticOfficer",
+              "urgency": 2,
+              "importance": 2,
+              "links": [
+                {
+                  "label": "Private report",
+                  "url": "https://reports.synthetic-example.ts.net/rehearsal.md"
+                }
+              ],
+              "createdAt": "2026-10-28T12:00:00.000Z",
+              "updatedAt": "2026-10-28T12:00:00.000Z",
+              "kind": "task",
+              "steps": [
+                {
+                  "id": "verify",
+                  "text": "Verify the isolated result"
+                },
+                {
+                  "id": "undo",
+                  "text": "Confirm the action is reversible"
+                }
+              ],
+              "status": "todo",
+              "context": {
+                "background": "A synthetic rehearsal checks the existing card semantics without reading or changing any live records.",
+                "whyNow": "The isolated owner needs to choose the next reversible step.",
+                "ifNoAnswer": "Nothing is approved or executed until a valid owner response arrives.",
+                "known": [],
+                "related": []
+              }
+            }
+          },
+          "source": {
+            "label": "Legacy source",
+            "ref": "xyz.tinycloud.rocinante/board/task/task-synthetic.json"
+          }
+        }
+      },
+      "needsAction": false,
+      "attention": "snoozed"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/approval/approval-synthetic.json",
+      "publisherId": "legacy-alpha",
+      "identity": {
+        "cardId": "card-approval-approval-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-approval-approval-synthetic"
+      },
+      "record": {
+        "id": "approval-synthetic",
+        "title": "Approve the synthetic deploy window",
+        "body": "Synthetic card body.",
+        "owner": "SyntheticOwner",
+        "from": "SyntheticOfficer",
+        "urgency": 2,
+        "importance": 2,
+        "links": [
+          {
+            "label": "Private report",
+            "url": "https://reports.synthetic-example.ts.net/rehearsal.md"
+          }
+        ],
+        "createdAt": "2026-10-28T12:00:00.000Z",
+        "updatedAt": "2026-10-28T12:00:00.000Z",
+        "kind": "approval",
+        "approvalType": "go",
+        "approvalKind": "deploy",
+        "issuedAt": "2026-10-29T10:00:00.000Z",
+        "expiresAt": "2099-01-01T00:00:00.000Z",
+        "codeExpected": false,
+        "status": "open",
+        "context": {
+          "background": "A synthetic rehearsal checks the existing card semantics without reading or changing any live records.",
+          "whyNow": "The isolated owner needs to choose the next reversible step.",
+          "ifNoAnswer": "Nothing is approved or executed until a valid owner response arrives.",
+          "known": [],
+          "related": []
+        }
+      },
+      "canonicalCard": {
+        "cardId": "card-approval-approval-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-approval-approval-synthetic",
+        "kind": "approval",
+        "needsResponse": true,
+        "title": "Approve the synthetic deploy window",
+        "body": "Synthetic card body.",
+        "urgency": 2,
+        "createdAt": "2026-10-28T12:00:00.000Z",
+        "payload": {
+          "sitrep": {
+            "version": 1,
+            "record": {
+              "id": "approval-synthetic",
+              "title": "Approve the synthetic deploy window",
+              "body": "Synthetic card body.",
+              "owner": "SyntheticOwner",
+              "from": "SyntheticOfficer",
+              "urgency": 2,
+              "importance": 2,
+              "links": [
+                {
+                  "label": "Private report",
+                  "url": "https://reports.synthetic-example.ts.net/rehearsal.md"
+                }
+              ],
+              "createdAt": "2026-10-28T12:00:00.000Z",
+              "updatedAt": "2026-10-28T12:00:00.000Z",
+              "kind": "approval",
+              "approvalType": "go",
+              "approvalKind": "deploy",
+              "issuedAt": "2026-10-29T10:00:00.000Z",
+              "expiresAt": "2099-01-01T00:00:00.000Z",
+              "codeExpected": false,
+              "status": "open",
+              "context": {
+                "background": "A synthetic rehearsal checks the existing card semantics without reading or changing any live records.",
+                "whyNow": "The isolated owner needs to choose the next reversible step.",
+                "ifNoAnswer": "Nothing is approved or executed until a valid owner response arrives.",
+                "known": [],
+                "related": []
+              }
+            }
+          },
+          "source": {
+            "label": "Legacy source",
+            "ref": "xyz.tinycloud.rocinante/board/approval/approval-synthetic.json"
+          }
+        }
+      },
+      "needsAction": true,
+      "attention": "needs-action"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/incident/incident-synthetic.json",
+      "publisherId": "legacy-alpha",
+      "identity": {
+        "cardId": "card-incident-incident-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-incident-incident-synthetic"
+      },
+      "record": {
+        "id": "incident-synthetic",
+        "title": "Synthetic incident",
+        "body": "Synthetic card body.",
+        "owner": "SyntheticOwner",
+        "from": "SyntheticOfficer",
+        "urgency": 2,
+        "importance": 2,
+        "links": [
+          {
+            "label": "Private report",
+            "url": "https://reports.synthetic-example.ts.net/rehearsal.md"
+          }
+        ],
+        "createdAt": "2026-10-28T12:00:00.000Z",
+        "updatedAt": "2026-10-28T12:00:00.000Z",
+        "kind": "incident",
+        "status": "degraded",
+        "severity": "sev2",
+        "impact": "Only the disposable rehearsal is affected.",
+        "startedAt": "2026-10-28T12:00:00.000Z"
+      },
+      "canonicalCard": {
+        "cardId": "card-incident-incident-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-incident-incident-synthetic",
+        "kind": "incident",
+        "needsResponse": false,
+        "title": "Synthetic incident",
+        "body": "Synthetic card body.",
+        "urgency": 2,
+        "createdAt": "2026-10-28T12:00:00.000Z",
+        "payload": {
+          "sitrep": {
+            "version": 1,
+            "record": {
+              "id": "incident-synthetic",
+              "title": "Synthetic incident",
+              "body": "Synthetic card body.",
+              "owner": "SyntheticOwner",
+              "from": "SyntheticOfficer",
+              "urgency": 2,
+              "importance": 2,
+              "links": [
+                {
+                  "label": "Private report",
+                  "url": "https://reports.synthetic-example.ts.net/rehearsal.md"
+                }
+              ],
+              "createdAt": "2026-10-28T12:00:00.000Z",
+              "updatedAt": "2026-10-28T12:00:00.000Z",
+              "kind": "incident",
+              "status": "degraded",
+              "severity": "sev2",
+              "impact": "Only the disposable rehearsal is affected.",
+              "startedAt": "2026-10-28T12:00:00.000Z"
+            }
+          },
+          "source": {
+            "label": "Legacy source",
+            "ref": "xyz.tinycloud.rocinante/board/incident/incident-synthetic.json"
+          }
+        }
+      },
+      "needsAction": false,
+      "attention": "information"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/work/work-synthetic.json",
+      "publisherId": "legacy-alpha",
+      "identity": {
+        "cardId": "card-work-work-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-work-work-synthetic"
+      },
+      "record": {
+        "id": "work-synthetic",
+        "title": "Synthetic work",
+        "body": "Synthetic card body.",
+        "owner": "SyntheticOwner",
+        "from": "SyntheticOfficer",
+        "urgency": 2,
+        "importance": 2,
+        "links": [
+          {
+            "label": "Private report",
+            "url": "https://reports.synthetic-example.ts.net/rehearsal.md"
+          }
+        ],
+        "createdAt": "2026-10-28T12:00:00.000Z",
+        "updatedAt": "2026-10-28T12:00:00.000Z",
+        "kind": "work",
+        "status": "waiting-sam",
+        "next": "Resume only after a valid decision",
+        "waitsOn": "The isolated owner decision",
+        "askIds": [
+          "ask-synthetic"
+        ],
+        "standing": false
+      },
+      "canonicalCard": {
+        "cardId": "card-work-work-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-work-work-synthetic",
+        "kind": "work",
+        "needsResponse": true,
+        "title": "Synthetic work",
+        "body": "Synthetic card body.",
+        "urgency": 2,
+        "createdAt": "2026-10-28T12:00:00.000Z",
+        "payload": {
+          "sitrep": {
+            "version": 1,
+            "record": {
+              "id": "work-synthetic",
+              "title": "Synthetic work",
+              "body": "Synthetic card body.",
+              "owner": "SyntheticOwner",
+              "from": "SyntheticOfficer",
+              "urgency": 2,
+              "importance": 2,
+              "links": [
+                {
+                  "label": "Private report",
+                  "url": "https://reports.synthetic-example.ts.net/rehearsal.md"
+                }
+              ],
+              "createdAt": "2026-10-28T12:00:00.000Z",
+              "updatedAt": "2026-10-28T12:00:00.000Z",
+              "kind": "work",
+              "status": "waiting-sam",
+              "next": "Resume only after a valid decision",
+              "waitsOn": "The isolated owner decision",
+              "askIds": [
+                "ask-synthetic"
+              ],
+              "standing": false
+            }
+          },
+          "source": {
+            "label": "Legacy source",
+            "ref": "xyz.tinycloud.rocinante/board/work/work-synthetic.json"
+          }
+        }
+      },
+      "needsAction": true,
+      "attention": "needs-action"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/ship/ship-synthetic.json",
+      "publisherId": "legacy-beta",
+      "identity": {
+        "cardId": "card-ship-ship-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-ship-ship-synthetic"
+      },
+      "record": {
+        "id": "ship-synthetic",
+        "title": "Synthetic release",
+        "body": "Synthetic card body.",
+        "owner": "SyntheticOwnerB",
+        "from": "SyntheticOfficerB",
+        "urgency": 2,
+        "importance": 2,
+        "links": [
+          {
+            "label": "Private report",
+            "url": "https://reports.synthetic-example.ts.net/rehearsal.md"
+          }
+        ],
+        "createdAt": "2026-10-28T12:00:00.000Z",
+        "updatedAt": "2026-10-28T12:00:00.000Z",
+        "kind": "ship",
+        "at": "2026-10-28T12:00:00.000Z",
+        "component": "Rehearsal component",
+        "version": "0.0.2-test",
+        "prevVersion": "0.0.1-test",
+        "status": "live"
+      },
+      "canonicalCard": {
+        "cardId": "card-ship-ship-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-ship-ship-synthetic",
+        "kind": "ship",
+        "needsResponse": false,
+        "title": "Synthetic release",
+        "body": "Synthetic card body.",
+        "urgency": 2,
+        "createdAt": "2026-10-28T12:00:00.000Z",
+        "payload": {
+          "sitrep": {
+            "version": 1,
+            "record": {
+              "id": "ship-synthetic",
+              "title": "Synthetic release",
+              "body": "Synthetic card body.",
+              "owner": "SyntheticOwnerB",
+              "from": "SyntheticOfficerB",
+              "urgency": 2,
+              "importance": 2,
+              "links": [
+                {
+                  "label": "Private report",
+                  "url": "https://reports.synthetic-example.ts.net/rehearsal.md"
+                }
+              ],
+              "createdAt": "2026-10-28T12:00:00.000Z",
+              "updatedAt": "2026-10-28T12:00:00.000Z",
+              "kind": "ship",
+              "at": "2026-10-28T12:00:00.000Z",
+              "component": "Rehearsal component",
+              "version": "0.0.2-test",
+              "prevVersion": "0.0.1-test",
+              "status": "live"
+            }
+          },
+          "source": {
+            "label": "Legacy source",
+            "ref": "xyz.tinycloud.rocinante/board/ship/ship-synthetic.json"
+          }
+        }
+      },
+      "needsAction": false,
+      "attention": "information"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/claim/T-001.json",
+      "publisherId": "legacy-beta",
+      "identity": {
+        "cardId": "card-claim-T-001",
+        "revision": 1,
+        "issuanceId": "issuance-claim-T-001"
+      },
+      "record": {
+        "id": "T-001",
+        "title": "Synthetic claim",
+        "body": "Synthetic card body.",
+        "owner": "SyntheticOwnerB",
+        "from": "SyntheticOfficerB",
+        "urgency": 2,
+        "importance": 2,
+        "links": [
+          {
+            "label": "Private report",
+            "url": "https://reports.synthetic-example.ts.net/rehearsal.md"
+          }
+        ],
+        "createdAt": "2026-10-28T12:00:00.000Z",
+        "updatedAt": "2026-10-28T12:00:00.000Z",
+        "kind": "claim",
+        "status": "open",
+        "site": "Synthetic site",
+        "url": "https://example.test/claim",
+        "quote": "Every rehearsal is reversible.",
+        "location": "Synthetic page, first paragraph",
+        "trueToday": "Only the isolated marker action has been demonstrated.",
+        "evidence": [
+          {
+            "label": "Synthetic evidence",
+            "ref": "https://example.test/evidence"
+          }
+        ],
+        "makeTrue": {
+          "tc": [
+            "TC-1"
+          ],
+          "effort": "Verify all synthetic operations"
+        },
+        "severity": "med"
+      },
+      "canonicalCard": {
+        "cardId": "card-claim-T-001",
+        "revision": 1,
+        "issuanceId": "issuance-claim-T-001",
+        "kind": "claim",
+        "needsResponse": true,
+        "title": "Synthetic claim",
+        "body": "Synthetic card body.",
+        "urgency": 2,
+        "createdAt": "2026-10-28T12:00:00.000Z",
+        "payload": {
+          "sitrep": {
+            "version": 1,
+            "record": {
+              "id": "T-001",
+              "title": "Synthetic claim",
+              "body": "Synthetic card body.",
+              "owner": "SyntheticOwnerB",
+              "from": "SyntheticOfficerB",
+              "urgency": 2,
+              "importance": 2,
+              "links": [
+                {
+                  "label": "Private report",
+                  "url": "https://reports.synthetic-example.ts.net/rehearsal.md"
+                }
+              ],
+              "createdAt": "2026-10-28T12:00:00.000Z",
+              "updatedAt": "2026-10-28T12:00:00.000Z",
+              "kind": "claim",
+              "status": "open",
+              "site": "Synthetic site",
+              "url": "https://example.test/claim",
+              "quote": "Every rehearsal is reversible.",
+              "location": "Synthetic page, first paragraph",
+              "trueToday": "Only the isolated marker action has been demonstrated.",
+              "evidence": [
+                {
+                  "label": "Synthetic evidence",
+                  "ref": "https://example.test/evidence"
+                }
+              ],
+              "makeTrue": {
+                "tc": [
+                  "TC-1"
+                ],
+                "effort": "Verify all synthetic operations"
+              },
+              "severity": "med"
+            }
+          },
+          "source": {
+            "label": "Legacy source",
+            "ref": "xyz.tinycloud.rocinante/board/claim/T-001.json"
+          }
+        }
+      },
+      "needsAction": true,
+      "attention": "needs-action"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/hold/hold-synthetic.json",
+      "publisherId": "legacy-beta",
+      "identity": {
+        "cardId": "card-hold-hold-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-hold-hold-synthetic"
+      },
+      "record": {
+        "id": "hold-synthetic",
+        "title": "Hold the synthetic release",
+        "body": "Synthetic card body.",
+        "owner": "SyntheticOfficer / SyntheticAlias",
+        "from": "SyntheticOfficerB",
+        "urgency": 2,
+        "importance": 2,
+        "links": [
+          {
+            "label": "Private report",
+            "url": "https://reports.synthetic-example.ts.net/rehearsal.md"
+          }
+        ],
+        "createdAt": "2026-10-28T12:00:00.000Z",
+        "updatedAt": "2026-10-28T12:00:00.000Z",
+        "kind": "hold",
+        "status": "active",
+        "what": "Hold the synthetic release",
+        "cause": "A reversible check is incomplete.",
+        "exit": "Both synthetic task checks are complete.",
+        "releasedBy": "sam",
+        "unblockedBy": [
+          "task:task-synthetic"
+        ]
+      },
+      "canonicalCard": {
+        "cardId": "card-hold-hold-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-hold-hold-synthetic",
+        "kind": "hold",
+        "needsResponse": true,
+        "title": "Hold the synthetic release",
+        "body": "Synthetic card body.",
+        "urgency": 2,
+        "createdAt": "2026-10-28T12:00:00.000Z",
+        "payload": {
+          "sitrep": {
+            "version": 1,
+            "record": {
+              "id": "hold-synthetic",
+              "title": "Hold the synthetic release",
+              "body": "Synthetic card body.",
+              "owner": "SyntheticOfficer / SyntheticAlias",
+              "from": "SyntheticOfficerB",
+              "urgency": 2,
+              "importance": 2,
+              "links": [
+                {
+                  "label": "Private report",
+                  "url": "https://reports.synthetic-example.ts.net/rehearsal.md"
+                }
+              ],
+              "createdAt": "2026-10-28T12:00:00.000Z",
+              "updatedAt": "2026-10-28T12:00:00.000Z",
+              "kind": "hold",
+              "status": "active",
+              "what": "Hold the synthetic release",
+              "cause": "A reversible check is incomplete.",
+              "exit": "Both synthetic task checks are complete.",
+              "releasedBy": "sam",
+              "unblockedBy": [
+                "task:task-synthetic"
+              ]
+            }
+          },
+          "source": {
+            "label": "Legacy source",
+            "ref": "xyz.tinycloud.rocinante/board/hold/hold-synthetic.json"
+          }
+        }
+      },
+      "needsAction": true,
+      "attention": "needs-action"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/progress/progress-synthetic.json",
+      "publisherId": "legacy-beta",
+      "identity": {
+        "cardId": "card-progress-progress-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-progress-progress-synthetic"
+      },
+      "record": {
+        "id": "progress-synthetic",
+        "title": "Synthetic owner progress",
+        "body": "Synthetic card body.",
+        "owner": "UnmappedOwner",
+        "from": "SyntheticOfficerB",
+        "urgency": 2,
+        "importance": 2,
+        "links": [
+          {
+            "label": "Private report",
+            "url": "https://reports.synthetic-example.ts.net/rehearsal.md"
+          }
+        ],
+        "createdAt": "2026-10-28T12:00:00.000Z",
+        "updatedAt": "2026-10-28T12:00:00.000Z",
+        "kind": "progress",
+        "updaters": [
+          "00000000-0000-4000-8000-000000000001"
+        ],
+        "ticket": "TC-1",
+        "steps": [
+          {
+            "name": "Build",
+            "state": "live"
+          },
+          {
+            "name": "Review",
+            "state": "in-progress"
+          }
+        ],
+        "currentStep": 1,
+        "note": "Review belongs to the assigned owner.",
+        "important": true,
+        "status": "open"
+      },
+      "canonicalCard": {
+        "cardId": "card-progress-progress-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-progress-progress-synthetic",
+        "kind": "progress",
+        "needsResponse": false,
+        "title": "Synthetic owner progress",
+        "body": "Synthetic card body.",
+        "urgency": 2,
+        "createdAt": "2026-10-28T12:00:00.000Z",
+        "payload": {
+          "sitrep": {
+            "version": 1,
+            "record": {
+              "id": "progress-synthetic",
+              "title": "Synthetic owner progress",
+              "body": "Synthetic card body.",
+              "owner": "UnmappedOwner",
+              "from": "SyntheticOfficerB",
+              "urgency": 2,
+              "importance": 2,
+              "links": [
+                {
+                  "label": "Private report",
+                  "url": "https://reports.synthetic-example.ts.net/rehearsal.md"
+                }
+              ],
+              "createdAt": "2026-10-28T12:00:00.000Z",
+              "updatedAt": "2026-10-28T12:00:00.000Z",
+              "kind": "progress",
+              "updaters": [
+                "00000000-0000-4000-8000-000000000001"
+              ],
+              "ticket": "TC-1",
+              "steps": [
+                {
+                  "name": "Build",
+                  "state": "live"
+                },
+                {
+                  "name": "Review",
+                  "state": "in-progress"
+                }
+              ],
+              "currentStep": 1,
+              "note": "Review belongs to the assigned owner.",
+              "important": true,
+              "status": "open"
+            }
+          },
+          "source": {
+            "label": "Legacy source",
+            "ref": "xyz.tinycloud.rocinante/board/progress/progress-synthetic.json"
+          }
+        }
+      },
+      "needsAction": false,
+      "attention": "information"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/approval/approval-code.json",
+      "publisherId": "legacy-alpha",
+      "identity": {
+        "cardId": "card-approval-approval-code",
+        "revision": 1,
+        "issuanceId": "issuance-approval-approval-code"
+      },
+      "record": {
+        "id": "approval-code",
+        "title": "Approve the synthetic deploy window",
+        "body": "Synthetic card body.",
+        "owner": "SyntheticOwner",
+        "from": "SyntheticOfficer",
+        "urgency": 2,
+        "importance": 2,
+        "links": [
+          {
+            "label": "Private report",
+            "url": "https://reports.synthetic-example.ts.net/rehearsal.md"
+          }
+        ],
+        "createdAt": "2026-10-28T12:00:00.000Z",
+        "updatedAt": "2026-10-28T12:00:00.000Z",
+        "kind": "approval",
+        "approvalType": "openkey",
+        "url": "https://openkey.so/delegate?fixture=tc2209",
+        "issuedAt": "2026-10-29T10:00:00.000Z",
+        "expiresAt": "2099-01-01T00:00:00.000Z",
+        "codeExpected": true,
+        "status": "open",
+        "context": {
+          "background": "A synthetic rehearsal checks the existing card semantics without reading or changing any live records.",
+          "whyNow": "The isolated owner needs to choose the next reversible step.",
+          "ifNoAnswer": "Nothing is approved or executed until a valid owner response arrives.",
+          "known": [],
+          "related": []
+        }
+      },
+      "canonicalCard": {
+        "cardId": "card-approval-approval-code",
+        "revision": 1,
+        "issuanceId": "issuance-approval-approval-code",
+        "kind": "approval",
+        "needsResponse": true,
+        "title": "Approve the synthetic deploy window",
+        "body": "Synthetic card body.",
+        "urgency": 2,
+        "createdAt": "2026-10-28T12:00:00.000Z",
+        "payload": {
+          "sitrep": {
+            "version": 1,
+            "record": {
+              "id": "approval-code",
+              "title": "Approve the synthetic deploy window",
+              "body": "Synthetic card body.",
+              "owner": "SyntheticOwner",
+              "from": "SyntheticOfficer",
+              "urgency": 2,
+              "importance": 2,
+              "links": [
+                {
+                  "label": "Private report",
+                  "url": "https://reports.synthetic-example.ts.net/rehearsal.md"
+                }
+              ],
+              "createdAt": "2026-10-28T12:00:00.000Z",
+              "updatedAt": "2026-10-28T12:00:00.000Z",
+              "kind": "approval",
+              "approvalType": "openkey",
+              "url": "https://openkey.so/delegate?fixture=tc2209",
+              "issuedAt": "2026-10-29T10:00:00.000Z",
+              "expiresAt": "2099-01-01T00:00:00.000Z",
+              "codeExpected": true,
+              "status": "open",
+              "context": {
+                "background": "A synthetic rehearsal checks the existing card semantics without reading or changing any live records.",
+                "whyNow": "The isolated owner needs to choose the next reversible step.",
+                "ifNoAnswer": "Nothing is approved or executed until a valid owner response arrives.",
+                "known": [],
+                "related": []
+              }
+            }
+          },
+          "source": {
+            "label": "Legacy source",
+            "ref": "xyz.tinycloud.rocinante/board/approval/approval-code.json"
+          }
+        }
+      },
+      "needsAction": false,
+      "attention": "handled",
+      "currentAnswerSourceKey": "xyz.tinycloud.rocinante/sam/answers/approval-code/20261029T110100000Z.json"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/approval/approval-expired.json",
+      "publisherId": "legacy-alpha",
+      "identity": {
+        "cardId": "card-approval-approval-expired",
+        "revision": 1,
+        "issuanceId": "issuance-approval-approval-expired"
+      },
+      "record": {
+        "id": "approval-expired",
+        "title": "Approve the synthetic deploy window",
+        "body": "Synthetic card body.",
+        "owner": "SyntheticOwner",
+        "from": "SyntheticOfficer",
+        "urgency": 2,
+        "importance": 2,
+        "links": [
+          {
+            "label": "Private report",
+            "url": "https://reports.synthetic-example.ts.net/rehearsal.md"
+          }
+        ],
+        "createdAt": "2026-10-28T12:00:00.000Z",
+        "updatedAt": "2026-10-28T12:00:00.000Z",
+        "kind": "approval",
+        "approvalType": "go",
+        "approvalKind": "deploy",
+        "issuedAt": "2026-10-29T10:00:00.000Z",
+        "expiresAt": "2026-10-29T11:30:00.000Z",
+        "codeExpected": false,
+        "status": "open",
+        "context": {
+          "background": "A synthetic rehearsal checks the existing card semantics without reading or changing any live records.",
+          "whyNow": "The isolated owner needs to choose the next reversible step.",
+          "ifNoAnswer": "Nothing is approved or executed until a valid owner response arrives.",
+          "known": [],
+          "related": []
+        }
+      },
+      "canonicalCard": {
+        "cardId": "card-approval-approval-expired",
+        "revision": 1,
+        "issuanceId": "issuance-approval-approval-expired",
+        "kind": "approval",
+        "needsResponse": true,
+        "title": "Approve the synthetic deploy window",
+        "body": "Synthetic card body.",
+        "urgency": 2,
+        "createdAt": "2026-10-28T12:00:00.000Z",
+        "payload": {
+          "sitrep": {
+            "version": 1,
+            "record": {
+              "id": "approval-expired",
+              "title": "Approve the synthetic deploy window",
+              "body": "Synthetic card body.",
+              "owner": "SyntheticOwner",
+              "from": "SyntheticOfficer",
+              "urgency": 2,
+              "importance": 2,
+              "links": [
+                {
+                  "label": "Private report",
+                  "url": "https://reports.synthetic-example.ts.net/rehearsal.md"
+                }
+              ],
+              "createdAt": "2026-10-28T12:00:00.000Z",
+              "updatedAt": "2026-10-28T12:00:00.000Z",
+              "kind": "approval",
+              "approvalType": "go",
+              "approvalKind": "deploy",
+              "issuedAt": "2026-10-29T10:00:00.000Z",
+              "expiresAt": "2026-10-29T11:30:00.000Z",
+              "codeExpected": false,
+              "status": "open",
+              "context": {
+                "background": "A synthetic rehearsal checks the existing card semantics without reading or changing any live records.",
+                "whyNow": "The isolated owner needs to choose the next reversible step.",
+                "ifNoAnswer": "Nothing is approved or executed until a valid owner response arrives.",
+                "known": [],
+                "related": []
+              }
+            }
+          },
+          "source": {
+            "label": "Legacy source",
+            "ref": "xyz.tinycloud.rocinante/board/approval/approval-expired.json"
+          }
+        }
+      },
+      "needsAction": false,
+      "attention": "handled",
+      "currentAnswerSourceKey": "xyz.tinycloud.rocinante/sam/answers/approval-expired/20261029T110200000Z.json"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/work/work-partial.json",
+      "publisherId": "legacy-alpha",
+      "identity": {
+        "cardId": "card-work-partial",
+        "revision": 1,
+        "issuanceId": "issuance-work-partial"
+      },
+      "record": {
+        "id": "work-partial",
+        "title": "Synthetic work",
+        "body": "Synthetic card body.",
+        "owner": "SyntheticOwner / MissingOfficer",
+        "from": "SyntheticOfficer",
+        "urgency": 2,
+        "importance": 2,
+        "links": [
+          {
+            "label": "Private report",
+            "url": "https://reports.synthetic-example.ts.net/rehearsal.md"
+          }
+        ],
+        "createdAt": "2026-10-28T12:00:00.000Z",
+        "updatedAt": "2026-10-28T12:00:00.000Z",
+        "kind": "work",
+        "status": "waiting-sam",
+        "next": "Resume only after a valid decision",
+        "waitsOn": "The isolated owner decision",
+        "askIds": [
+          "ask-synthetic"
+        ],
+        "standing": false
+      },
+      "canonicalCard": {
+        "cardId": "card-work-partial",
+        "revision": 1,
+        "issuanceId": "issuance-work-partial",
+        "kind": "work",
+        "needsResponse": true,
+        "title": "Synthetic work",
+        "body": "Synthetic card body.",
+        "urgency": 2,
+        "createdAt": "2026-10-28T12:00:00.000Z",
+        "payload": {
+          "sitrep": {
+            "version": 1,
+            "record": {
+              "id": "work-partial",
+              "title": "Synthetic work",
+              "body": "Synthetic card body.",
+              "owner": "SyntheticOwner / MissingOfficer",
+              "from": "SyntheticOfficer",
+              "urgency": 2,
+              "importance": 2,
+              "links": [
+                {
+                  "label": "Private report",
+                  "url": "https://reports.synthetic-example.ts.net/rehearsal.md"
+                }
+              ],
+              "createdAt": "2026-10-28T12:00:00.000Z",
+              "updatedAt": "2026-10-28T12:00:00.000Z",
+              "kind": "work",
+              "status": "waiting-sam",
+              "next": "Resume only after a valid decision",
+              "waitsOn": "The isolated owner decision",
+              "askIds": [
+                "ask-synthetic"
+              ],
+              "standing": false
+            }
+          },
+          "source": {
+            "label": "Legacy source",
+            "ref": "xyz.tinycloud.rocinante/board/work/work-partial.json"
+          }
+        }
+      },
+      "needsAction": true,
+      "attention": "needs-action"
+    }
+  ],
+  "ownerResponses": [
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/answers/ask-synthetic/20261029T110000000Z.json",
+      "eventKey": "xyz.tinycloud.rocinante/sam/answers/ask-synthetic/20261029T110000000Z.json",
+      "publisherId": "legacy-alpha",
+      "card": {
+        "kind": "ask",
+        "id": "ask-synthetic"
+      },
+      "response": {
+        "cardId": "card-ask-ask-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-ask-ask-synthetic",
+        "responseId": "sitrep-8e36e01369031012741936ed8437380e995edf24bac167afe3b2db237552351b",
+        "kind": "answer",
+        "text": "A prepared owner answer.",
+        "createdAt": "2026-10-29T11:00:00.000Z"
+      },
+      "ownerEventKind": "answer",
+      "payload": {
+        "type": "sitrep.answer",
+        "version": 1,
+        "data": {
+          "askId": "ask-synthetic",
+          "action": "answer",
+          "choice": "careful",
+          "text": "A prepared owner answer.",
+          "at": "2026-10-29T11:00:00.000Z"
+        }
+      },
+      "restoreTarget": "agent-response",
+      "recipientKeys": [
+        "logical-alpha",
+        "logical-xo"
+      ],
+      "unresolvedRecipients": [],
+      "legacyAnswer": {
+        "askId": "ask-synthetic",
+        "action": "answer",
+        "choice": "careful",
+        "text": "A prepared owner answer.",
+        "at": "2026-10-29T11:00:00.000Z"
+      }
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/answers/approval-code/20261029T110100000Z.json",
+      "eventKey": "xyz.tinycloud.rocinante/sam/answers/approval-code/20261029T110100000Z.json",
+      "publisherId": "legacy-alpha",
+      "card": {
+        "kind": "approval",
+        "id": "approval-code"
+      },
+      "response": {
+        "cardId": "card-approval-approval-code",
+        "revision": 1,
+        "issuanceId": "issuance-approval-approval-code",
+        "responseId": "sitrep-852d135f7f81a9843ac1b2ef3983cb12fd612251907aefcb08e2db1493851986",
+        "kind": "answer",
+        "text": "Approval code saved privately",
+        "createdAt": "2026-10-29T11:01:00.000Z"
+      },
+      "ownerEventKind": "answer",
+      "payload": {
+        "type": "sitrep.answer",
+        "version": 1,
+        "data": {
+          "askId": "approval-code",
+          "action": "code",
+          "text": "SYNTHETIC224CODEα",
+          "at": "2026-10-29T11:01:00.000Z",
+          "issuedAt": "2026-10-29T10:00:00.000Z"
+        }
+      },
+      "restoreTarget": "agent-response",
+      "recipientKeys": [
+        "logical-alpha"
+      ],
+      "unresolvedRecipients": [],
+      "legacyAnswer": {
+        "askId": "approval-code",
+        "action": "code",
+        "text": "SYNTHETIC224CODEα",
+        "at": "2026-10-29T11:01:00.000Z",
+        "issuedAt": "2026-10-29T10:00:00.000Z"
+      }
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/answers/approval-expired/20261029T110200000Z.json",
+      "eventKey": "xyz.tinycloud.rocinante/sam/answers/approval-expired/20261029T110200000Z.json",
+      "publisherId": "legacy-alpha",
+      "card": {
+        "kind": "approval",
+        "id": "approval-expired"
+      },
+      "response": {
+        "cardId": "card-approval-approval-expired",
+        "revision": 1,
+        "issuanceId": "issuance-approval-approval-expired",
+        "responseId": "sitrep-09858f91ce9286089b788ae7bc9d25a91f97a55387266b3044beb1dc9ee1d080",
+        "kind": "answer",
+        "text": "Approval confirmed for this issuance",
+        "createdAt": "2026-10-29T11:02:00.000Z"
+      },
+      "ownerEventKind": "answer",
+      "payload": {
+        "type": "sitrep.answer",
+        "version": 1,
+        "data": {
+          "askId": "approval-expired",
+          "action": "done",
+          "text": "",
+          "at": "2026-10-29T11:02:00.000Z",
+          "issuedAt": "2026-10-29T10:00:00.000Z"
+        }
+      },
+      "restoreTarget": "agent-response",
+      "recipientKeys": [
+        "logical-alpha",
+        "logical-xo"
+      ],
+      "unresolvedRecipients": [],
+      "legacyAnswer": {
+        "askId": "approval-expired",
+        "action": "done",
+        "text": "",
+        "at": "2026-10-29T11:02:00.000Z",
+        "issuedAt": "2026-10-29T10:00:00.000Z"
+      }
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/state/hold/hold-synthetic.json",
+      "eventKey": "note:hold/hold-synthetic/aliasnote224",
+      "publisherId": "legacy-beta",
+      "card": {
+        "kind": "hold",
+        "id": "hold-synthetic"
+      },
+      "response": {
+        "cardId": "card-hold-hold-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-hold-hold-synthetic",
+        "responseId": "sitrep-c14f87b721bf03a10960444ee59d98c1824fb8111c1331c09a8ccaaa71c3cfb9",
+        "kind": "message",
+        "text": "Historical explicit owner note",
+        "createdAt": "2026-10-29T12:00:00.000Z"
+      },
+      "ownerEventKind": "note",
+      "payload": {
+        "type": "sitrep.note",
+        "version": 1,
+        "data": {
+          "kind": "hold",
+          "id": "hold-synthetic",
+          "noteId": "aliasnote224",
+          "at": "2026-10-29T12:00:00.000Z",
+          "text": "Explicitly send this synthetic owner note.",
+          "sourceKey": "xyz.tinycloud.rocinante/sam/state/hold/hold-synthetic.json",
+          "eventKey": "note:hold/hold-synthetic/aliasnote224"
+        }
+      },
+      "restoreTarget": "agent-response",
+      "recipientKeys": [
+        "logical-alpha",
+        "logical-alpha-alias",
+        "logical-xo"
+      ],
+      "unresolvedRecipients": []
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/thread/ask/ask-synthetic/20261029T111000000Z-00000000000000000000000000000001.json",
+      "eventKey": "xyz.tinycloud.rocinante/sam/thread/ask/ask-synthetic/20261029T111000000Z-00000000000000000000000000000001.json",
+      "publisherId": "legacy-alpha",
+      "card": {
+        "kind": "ask",
+        "id": "ask-synthetic"
+      },
+      "response": {
+        "cardId": "card-ask-ask-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-ask-ask-synthetic",
+        "responseId": "sitrep-3fffac0df2a2cab011a7fda28d9a2fadc5c0acd7447d5b5c02e5b7c9446c58a5",
+        "kind": "message",
+        "text": "Historical card message",
+        "createdAt": "2026-10-29T11:10:00.000Z"
+      },
+      "ownerEventKind": "thread",
+      "payload": {
+        "type": "sitrep.thread",
+        "version": 1,
+        "data": {
+          "kind": "ask",
+          "id": "ask-synthetic",
+          "at": "2026-10-29T11:10:00.000Z",
+          "text": "Synthetic thread receipt waiting 0.",
+          "side": "sam",
+          "messageId": "20261029T111000000Z-00000000000000000000000000000001"
+        }
+      },
+      "restoreTarget": "agent-response",
+      "recipientKeys": [
+        "logical-alpha"
+      ],
+      "unresolvedRecipients": []
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/thread/ask/ask-synthetic/20261029T111100000Z-00000000000000000000000000000002.json",
+      "eventKey": "xyz.tinycloud.rocinante/sam/thread/ask/ask-synthetic/20261029T111100000Z-00000000000000000000000000000002.json",
+      "publisherId": "legacy-alpha",
+      "card": {
+        "kind": "ask",
+        "id": "ask-synthetic"
+      },
+      "response": {
+        "cardId": "card-ask-ask-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-ask-ask-synthetic",
+        "responseId": "sitrep-88143eddbe4ae88bb57fc0be20c35cd6b8e294cbaddb8b6dced607558a38ef1a",
+        "kind": "message",
+        "text": "Historical card message",
+        "createdAt": "2026-10-29T11:11:00.000Z"
+      },
+      "ownerEventKind": "thread",
+      "payload": {
+        "type": "sitrep.thread",
+        "version": 1,
+        "data": {
+          "kind": "ask",
+          "id": "ask-synthetic",
+          "at": "2026-10-29T11:11:00.000Z",
+          "text": "Synthetic thread receipt delivered 1.",
+          "side": "sam",
+          "messageId": "20261029T111100000Z-00000000000000000000000000000002"
+        }
+      },
+      "restoreTarget": "agent-response",
+      "recipientKeys": [
+        "logical-alpha"
+      ],
+      "unresolvedRecipients": []
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/thread/ask/ask-synthetic/20261029T111200000Z-00000000000000000000000000000003.json",
+      "eventKey": "xyz.tinycloud.rocinante/sam/thread/ask/ask-synthetic/20261029T111200000Z-00000000000000000000000000000003.json",
+      "publisherId": "legacy-alpha",
+      "card": {
+        "kind": "ask",
+        "id": "ask-synthetic"
+      },
+      "response": {
+        "cardId": "card-ask-ask-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-ask-ask-synthetic",
+        "responseId": "sitrep-fa02bfb87d34b8160215c31ddfc9172ff8d44a1c9389c26836ce95ba5b8376db",
+        "kind": "message",
+        "text": "Historical card message",
+        "createdAt": "2026-10-29T11:12:00.000Z"
+      },
+      "ownerEventKind": "thread",
+      "payload": {
+        "type": "sitrep.thread",
+        "version": 1,
+        "data": {
+          "kind": "ask",
+          "id": "ask-synthetic",
+          "at": "2026-10-29T11:12:00.000Z",
+          "text": "Synthetic thread receipt claimed 2.",
+          "side": "sam",
+          "messageId": "20261029T111200000Z-00000000000000000000000000000003"
+        }
+      },
+      "restoreTarget": "agent-response",
+      "recipientKeys": [
+        "logical-alpha"
+      ],
+      "unresolvedRecipients": []
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/thread/ask/ask-synthetic/20261029T111300000Z-00000000000000000000000000000004.json",
+      "eventKey": "xyz.tinycloud.rocinante/sam/thread/ask/ask-synthetic/20261029T111300000Z-00000000000000000000000000000004.json",
+      "publisherId": "legacy-alpha",
+      "card": {
+        "kind": "ask",
+        "id": "ask-synthetic"
+      },
+      "response": {
+        "cardId": "card-ask-ask-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-ask-ask-synthetic",
+        "responseId": "sitrep-2fb766c5def1540de0237961fac4b2f039a65fe6ff20f0e17f1c864145689ffd",
+        "kind": "message",
+        "text": "Historical card message",
+        "createdAt": "2026-10-29T11:13:00.000Z"
+      },
+      "ownerEventKind": "thread",
+      "payload": {
+        "type": "sitrep.thread",
+        "version": 1,
+        "data": {
+          "kind": "ask",
+          "id": "ask-synthetic",
+          "at": "2026-10-29T11:13:00.000Z",
+          "text": "Synthetic thread receipt waiting 3.",
+          "side": "sam",
+          "messageId": "20261029T111300000Z-00000000000000000000000000000004"
+        }
+      },
+      "restoreTarget": "agent-response",
+      "recipientKeys": [
+        "logical-alpha"
+      ],
+      "unresolvedRecipients": []
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/thread/ask/ask-synthetic/20261029T111400000Z-00000000000000000000000000000005.json",
+      "eventKey": "xyz.tinycloud.rocinante/sam/thread/ask/ask-synthetic/20261029T111400000Z-00000000000000000000000000000005.json",
+      "publisherId": "legacy-alpha",
+      "card": {
+        "kind": "ask",
+        "id": "ask-synthetic"
+      },
+      "response": {
+        "cardId": "card-ask-ask-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-ask-ask-synthetic",
+        "responseId": "sitrep-99de62d02103c34e378b0c49755f6fb1107d194e5ad41754eaafbd930824c75a",
+        "kind": "message",
+        "text": "Historical card message",
+        "createdAt": "2026-10-29T11:14:00.000Z"
+      },
+      "ownerEventKind": "thread",
+      "payload": {
+        "type": "sitrep.thread",
+        "version": 1,
+        "data": {
+          "kind": "ask",
+          "id": "ask-synthetic",
+          "at": "2026-10-29T11:14:00.000Z",
+          "text": "Synthetic thread receipt refused 4.",
+          "side": "sam",
+          "messageId": "20261029T111400000Z-00000000000000000000000000000005"
+        }
+      },
+      "restoreTarget": "agent-response",
+      "recipientKeys": [
+        "logical-alpha"
+      ],
+      "unresolvedRecipients": []
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/thread/progress/progress-synthetic/20261029T112000000Z-00000000000000000000000000000009.json",
+      "eventKey": "xyz.tinycloud.rocinante/sam/thread/progress/progress-synthetic/20261029T112000000Z-00000000000000000000000000000009.json",
+      "publisherId": "legacy-beta",
+      "card": {
+        "kind": "progress",
+        "id": "progress-synthetic"
+      },
+      "response": {
+        "cardId": "card-progress-progress-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-progress-progress-synthetic",
+        "responseId": "sitrep-1a591b8404b5c20ea8e181208d7805cb1e5927a713f60a64dbe1d8a9aa2f5653",
+        "kind": "message",
+        "text": "Historical card message",
+        "createdAt": "2026-10-29T11:20:00.000Z"
+      },
+      "ownerEventKind": "thread",
+      "payload": {
+        "type": "sitrep.thread",
+        "version": 1,
+        "data": {
+          "kind": "progress",
+          "id": "progress-synthetic",
+          "at": "2026-10-29T11:20:00.000Z",
+          "text": "Owner-only unresolved destination message.",
+          "side": "sam",
+          "messageId": "20261029T112000000Z-00000000000000000000000000000009"
+        }
+      },
+      "restoreTarget": "owner-only",
+      "recipientKeys": [
+        "logical-unmapped"
+      ],
+      "unresolvedRecipients": []
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/state/work/work-partial.json",
+      "eventKey": "note:work/work-partial/partialnote224",
+      "publisherId": "legacy-alpha",
+      "card": {
+        "kind": "work",
+        "id": "work-partial"
+      },
+      "response": {
+        "cardId": "card-work-partial",
+        "revision": 1,
+        "issuanceId": "issuance-work-partial",
+        "responseId": "sitrep-efea78ca90862aed564d346bff085d325e24b16798ca0bb0395b8d6b8c2fcccb",
+        "kind": "message",
+        "text": "Historical explicit owner note",
+        "createdAt": "2026-10-29T12:00:00.000Z"
+      },
+      "ownerEventKind": "note",
+      "payload": {
+        "type": "sitrep.note",
+        "version": 1,
+        "data": {
+          "kind": "work",
+          "id": "work-partial",
+          "noteId": "partialnote224",
+          "at": "2026-10-29T12:00:00.000Z",
+          "text": "Explicit partial-recipient synthetic note.",
+          "sourceKey": "xyz.tinycloud.rocinante/sam/state/work/work-partial.json",
+          "eventKey": "note:work/work-partial/partialnote224"
+        }
+      },
+      "restoreTarget": "agent-response",
+      "recipientKeys": [
+        "logical-owner",
+        "logical-xo"
+      ],
+      "unresolvedRecipients": [
+        "MissingOfficer"
+      ]
+    }
+  ],
+  "ownerState": [
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/state/task/task-synthetic.json",
+      "type": "state",
+      "value": {
+        "kind": "task",
+        "id": "task-synthetic",
+        "seenAt": "2026-10-29T12:00:00.000Z",
+        "steps": {
+          "verify": "2026-10-29T12:00:00.000Z"
+        },
+        "snoozedUntil": "2099-01-01T00:00:00.000Z",
+        "updatedAt": "2026-10-29T12:00:00.000Z"
+      }
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/state/progress/progress-synthetic.json",
+      "type": "state",
+      "value": {
+        "kind": "progress",
+        "id": "progress-synthetic",
+        "steps": {},
+        "notes": [
+          {
+            "id": "privatenote224",
+            "at": "2026-10-29T12:00:00.000Z",
+            "text": "OWNER-ONLY-DIARY-224"
+          }
+        ],
+        "updatedAt": "2026-10-29T12:00:00.000Z"
+      }
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/state/hold/hold-synthetic.json",
+      "type": "state",
+      "value": {
+        "kind": "hold",
+        "id": "hold-synthetic",
+        "steps": {},
+        "notes": [
+          {
+            "id": "aliasnote224",
+            "at": "2026-10-29T12:00:00.000Z",
+            "text": "Explicitly send this synthetic owner note."
+          }
+        ],
+        "updatedAt": "2026-10-29T12:00:00.000Z"
+      }
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/state/work/work-partial.json",
+      "type": "state",
+      "value": {
+        "kind": "work",
+        "id": "work-partial",
+        "steps": {},
+        "notes": [
+          {
+            "id": "partialnote224",
+            "at": "2026-10-29T12:00:00.000Z",
+            "text": "Explicit partial-recipient synthetic note."
+          }
+        ],
+        "updatedAt": "2026-10-29T12:00:00.000Z"
+      }
+    }
+  ],
+  "threads": [
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/thread/ask/ask-synthetic/20261029T111000000Z-00000000000000000000000000000001.json",
+      "publisherId": "legacy-alpha",
+      "identity": {
+        "cardId": "card-ask-ask-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-ask-ask-synthetic"
+      },
+      "message": {
+        "kind": "ask",
+        "id": "ask-synthetic",
+        "at": "2026-10-29T11:10:00.000Z",
+        "text": "Synthetic thread receipt waiting 0.",
+        "side": "sam",
+        "messageId": "20261029T111000000Z-00000000000000000000000000000001"
+      }
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/thread/ask/ask-synthetic/20261029T111100000Z-00000000000000000000000000000002.json",
+      "publisherId": "legacy-alpha",
+      "identity": {
+        "cardId": "card-ask-ask-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-ask-ask-synthetic"
+      },
+      "message": {
+        "kind": "ask",
+        "id": "ask-synthetic",
+        "at": "2026-10-29T11:11:00.000Z",
+        "text": "Synthetic thread receipt delivered 1.",
+        "side": "sam",
+        "messageId": "20261029T111100000Z-00000000000000000000000000000002"
+      }
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/thread/ask/ask-synthetic/20261029T111200000Z-00000000000000000000000000000003.json",
+      "publisherId": "legacy-alpha",
+      "identity": {
+        "cardId": "card-ask-ask-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-ask-ask-synthetic"
+      },
+      "message": {
+        "kind": "ask",
+        "id": "ask-synthetic",
+        "at": "2026-10-29T11:12:00.000Z",
+        "text": "Synthetic thread receipt claimed 2.",
+        "side": "sam",
+        "messageId": "20261029T111200000Z-00000000000000000000000000000003"
+      }
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/thread/ask/ask-synthetic/20261029T111300000Z-00000000000000000000000000000004.json",
+      "publisherId": "legacy-alpha",
+      "identity": {
+        "cardId": "card-ask-ask-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-ask-ask-synthetic"
+      },
+      "message": {
+        "kind": "ask",
+        "id": "ask-synthetic",
+        "at": "2026-10-29T11:13:00.000Z",
+        "text": "Synthetic thread receipt waiting 3.",
+        "side": "sam",
+        "messageId": "20261029T111300000Z-00000000000000000000000000000004"
+      }
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/thread/ask/ask-synthetic/20261029T111400000Z-00000000000000000000000000000005.json",
+      "publisherId": "legacy-alpha",
+      "identity": {
+        "cardId": "card-ask-ask-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-ask-ask-synthetic"
+      },
+      "message": {
+        "kind": "ask",
+        "id": "ask-synthetic",
+        "at": "2026-10-29T11:14:00.000Z",
+        "text": "Synthetic thread receipt refused 4.",
+        "side": "sam",
+        "messageId": "20261029T111400000Z-00000000000000000000000000000005"
+      }
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/thread/progress/progress-synthetic/20261029T112000000Z-00000000000000000000000000000009.json",
+      "publisherId": "legacy-beta",
+      "identity": {
+        "cardId": "card-progress-progress-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-progress-progress-synthetic"
+      },
+      "message": {
+        "kind": "progress",
+        "id": "progress-synthetic",
+        "at": "2026-10-29T11:20:00.000Z",
+        "text": "Owner-only unresolved destination message.",
+        "side": "sam",
+        "messageId": "20261029T112000000Z-00000000000000000000000000000009"
+      }
+    }
+  ],
+  "deliveries": [
+    {
+      "sourceKey": "watch.synthetic.json",
+      "eventSourceKey": "xyz.tinycloud.rocinante/sam/answers/ask-synthetic/20261029T110000000Z.json",
+      "eventKey": "xyz.tinycloud.rocinante/sam/answers/ask-synthetic/20261029T110000000Z.json",
+      "publisherId": "legacy-alpha",
+      "identity": {
+        "cardId": "card-ask-ask-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-ask-ask-synthetic"
+      },
+      "responseId": "sitrep-8e36e01369031012741936ed8437380e995edf24bac167afe3b2db237552351b",
+      "recipientKey": "logical-alpha",
+      "recipient": "SyntheticOfficer",
+      "state": "unconfirmed",
+      "routedTo": "owner",
+      "evidence": "sent-without-confirmation",
+      "dispatch": "never",
+      "dispatchBefore": null,
+      "originalReceipt": {
+        "done": [
+          "SyntheticOfficer"
+        ],
+        "complete": false,
+        "originalDiagnostic": "OWNER-ONLY-RECEIPT-224"
+      }
+    },
+    {
+      "sourceKey": "watch.synthetic.json",
+      "eventSourceKey": "xyz.tinycloud.rocinante/sam/answers/ask-synthetic/20261029T110000000Z.json",
+      "eventKey": "xyz.tinycloud.rocinante/sam/answers/ask-synthetic/20261029T110000000Z.json",
+      "publisherId": "legacy-alpha",
+      "identity": {
+        "cardId": "card-ask-ask-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-ask-ask-synthetic"
+      },
+      "responseId": "sitrep-8e36e01369031012741936ed8437380e995edf24bac167afe3b2db237552351b",
+      "recipientKey": "logical-xo",
+      "recipient": "xo",
+      "state": "held",
+      "routedTo": "xo",
+      "evidence": "explicit",
+      "dispatch": "held",
+      "dispatchBefore": null,
+      "originalReceipt": {
+        "done": [
+          "SyntheticOfficer"
+        ],
+        "complete": false,
+        "originalDiagnostic": "OWNER-ONLY-RECEIPT-224"
+      }
+    },
+    {
+      "sourceKey": "watch.synthetic.json",
+      "eventSourceKey": "xyz.tinycloud.rocinante/sam/answers/approval-code/20261029T110100000Z.json",
+      "eventKey": "xyz.tinycloud.rocinante/sam/answers/approval-code/20261029T110100000Z.json",
+      "publisherId": "legacy-alpha",
+      "identity": {
+        "cardId": "card-approval-approval-code",
+        "revision": 1,
+        "issuanceId": "issuance-approval-approval-code"
+      },
+      "responseId": "sitrep-852d135f7f81a9843ac1b2ef3983cb12fd612251907aefcb08e2db1493851986",
+      "recipientKey": "logical-alpha",
+      "recipient": "SyntheticOfficer",
+      "state": "pending",
+      "routedTo": "owner",
+      "evidence": "explicit",
+      "dispatch": "resolved-pending",
+      "dispatchBefore": null,
+      "originalReceipt": {
+        "cursor": "2026-10-28T00:00:00.000Z"
+      }
+    },
+    {
+      "sourceKey": "watch.synthetic.json",
+      "eventSourceKey": "xyz.tinycloud.rocinante/sam/answers/approval-expired/20261029T110200000Z.json",
+      "eventKey": "xyz.tinycloud.rocinante/sam/answers/approval-expired/20261029T110200000Z.json",
+      "publisherId": "legacy-alpha",
+      "identity": {
+        "cardId": "card-approval-approval-expired",
+        "revision": 1,
+        "issuanceId": "issuance-approval-approval-expired"
+      },
+      "responseId": "sitrep-09858f91ce9286089b788ae7bc9d25a91f97a55387266b3044beb1dc9ee1d080",
+      "recipientKey": "logical-alpha",
+      "recipient": "SyntheticOfficer",
+      "state": "refused",
+      "routedTo": "owner",
+      "reason": "Legacy go is no longer executable",
+      "evidence": "explicit",
+      "dispatch": "never",
+      "dispatchBefore": "2026-10-29T11:30:00.000Z",
+      "originalReceipt": {
+        "cursor": "2026-10-28T00:00:00.000Z"
+      }
+    },
+    {
+      "sourceKey": "watch.synthetic.json",
+      "eventSourceKey": "xyz.tinycloud.rocinante/sam/answers/approval-expired/20261029T110200000Z.json",
+      "eventKey": "xyz.tinycloud.rocinante/sam/answers/approval-expired/20261029T110200000Z.json",
+      "publisherId": "legacy-alpha",
+      "identity": {
+        "cardId": "card-approval-approval-expired",
+        "revision": 1,
+        "issuanceId": "issuance-approval-approval-expired"
+      },
+      "responseId": "sitrep-09858f91ce9286089b788ae7bc9d25a91f97a55387266b3044beb1dc9ee1d080",
+      "recipientKey": "logical-xo",
+      "recipient": "xo",
+      "state": "refused",
+      "routedTo": "xo",
+      "reason": "Legacy go is no longer executable",
+      "evidence": "explicit",
+      "dispatch": "never",
+      "dispatchBefore": "2026-10-29T11:30:00.000Z",
+      "originalReceipt": {
+        "cursor": "2026-10-28T00:00:00.000Z"
+      }
+    },
+    {
+      "sourceKey": "watch.synthetic.json",
+      "eventSourceKey": "xyz.tinycloud.rocinante/sam/state/hold/hold-synthetic.json",
+      "eventKey": "note:hold/hold-synthetic/aliasnote224",
+      "publisherId": "legacy-beta",
+      "identity": {
+        "cardId": "card-hold-hold-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-hold-hold-synthetic"
+      },
+      "responseId": "sitrep-c14f87b721bf03a10960444ee59d98c1824fb8111c1331c09a8ccaaa71c3cfb9",
+      "recipientKey": "logical-alpha",
+      "recipient": "SyntheticOfficer",
+      "state": "unconfirmed",
+      "routedTo": "owner",
+      "evidence": "sent-without-confirmation",
+      "dispatch": "never",
+      "dispatchBefore": null,
+      "originalReceipt": {
+        "done": [
+          "SyntheticOfficer"
+        ],
+        "complete": false,
+        "originalDiagnostic": "OWNER-ONLY-RECEIPT-224"
+      }
+    },
+    {
+      "sourceKey": "watch.synthetic.json",
+      "eventSourceKey": "xyz.tinycloud.rocinante/sam/state/hold/hold-synthetic.json",
+      "eventKey": "note:hold/hold-synthetic/aliasnote224",
+      "publisherId": "legacy-beta",
+      "identity": {
+        "cardId": "card-hold-hold-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-hold-hold-synthetic"
+      },
+      "responseId": "sitrep-c14f87b721bf03a10960444ee59d98c1824fb8111c1331c09a8ccaaa71c3cfb9",
+      "recipientKey": "logical-alpha-alias",
+      "recipient": "SyntheticAlias",
+      "state": "pending",
+      "routedTo": "owner",
+      "evidence": "explicit",
+      "dispatch": "resolved-pending",
+      "dispatchBefore": null,
+      "originalReceipt": {
+        "done": [
+          "SyntheticOfficer"
+        ],
+        "complete": false,
+        "originalDiagnostic": "OWNER-ONLY-RECEIPT-224"
+      }
+    },
+    {
+      "sourceKey": "watch.synthetic.json",
+      "eventSourceKey": "xyz.tinycloud.rocinante/sam/state/hold/hold-synthetic.json",
+      "eventKey": "note:hold/hold-synthetic/aliasnote224",
+      "publisherId": "legacy-beta",
+      "identity": {
+        "cardId": "card-hold-hold-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-hold-hold-synthetic"
+      },
+      "responseId": "sitrep-c14f87b721bf03a10960444ee59d98c1824fb8111c1331c09a8ccaaa71c3cfb9",
+      "recipientKey": "logical-xo",
+      "recipient": "xo",
+      "state": "held",
+      "routedTo": "xo",
+      "evidence": "explicit",
+      "dispatch": "held",
+      "dispatchBefore": null,
+      "originalReceipt": {
+        "done": [
+          "SyntheticOfficer"
+        ],
+        "complete": false,
+        "originalDiagnostic": "OWNER-ONLY-RECEIPT-224"
+      }
+    },
+    {
+      "sourceKey": "watch.synthetic.json",
+      "eventSourceKey": "xyz.tinycloud.rocinante/sam/state/work/work-partial.json",
+      "eventKey": "note:work/work-partial/partialnote224",
+      "publisherId": "legacy-alpha",
+      "identity": {
+        "cardId": "card-work-partial",
+        "revision": 1,
+        "issuanceId": "issuance-work-partial"
+      },
+      "responseId": "sitrep-efea78ca90862aed564d346bff085d325e24b16798ca0bb0395b8d6b8c2fcccb",
+      "recipientKey": "logical-owner",
+      "recipient": "SyntheticOwner",
+      "state": "pending",
+      "routedTo": "owner",
+      "evidence": "explicit",
+      "dispatch": "resolved-pending",
+      "dispatchBefore": null,
+      "originalReceipt": {
+        "done": [],
+        "complete": false
+      }
+    },
+    {
+      "sourceKey": "watch.synthetic.json",
+      "eventSourceKey": "xyz.tinycloud.rocinante/sam/state/work/work-partial.json",
+      "eventKey": "note:work/work-partial/partialnote224",
+      "publisherId": "legacy-alpha",
+      "identity": {
+        "cardId": "card-work-partial",
+        "revision": 1,
+        "issuanceId": "issuance-work-partial"
+      },
+      "responseId": "sitrep-efea78ca90862aed564d346bff085d325e24b16798ca0bb0395b8d6b8c2fcccb",
+      "recipientKey": "logical-xo",
+      "recipient": "xo",
+      "state": "held",
+      "routedTo": "xo",
+      "evidence": "explicit",
+      "dispatch": "held",
+      "dispatchBefore": null,
+      "originalReceipt": {
+        "done": [],
+        "complete": false
+      }
+    },
+    {
+      "sourceKey": "watch.threads.synthetic.json",
+      "eventSourceKey": "xyz.tinycloud.rocinante/sam/thread/ask/ask-synthetic/20261029T111000000Z-00000000000000000000000000000001.json",
+      "eventKey": "xyz.tinycloud.rocinante/sam/thread/ask/ask-synthetic/20261029T111000000Z-00000000000000000000000000000001.json",
+      "publisherId": "legacy-alpha",
+      "identity": {
+        "cardId": "card-ask-ask-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-ask-ask-synthetic"
+      },
+      "responseId": "sitrep-3fffac0df2a2cab011a7fda28d9a2fadc5c0acd7447d5b5c02e5b7c9446c58a5",
+      "recipientKey": "logical-alpha",
+      "recipient": "SyntheticOfficer",
+      "state": "pending",
+      "routedTo": "owner",
+      "at": "2026-10-29T11:10:00.000Z",
+      "evidence": "explicit",
+      "dispatch": "resolved-pending",
+      "dispatchBefore": null,
+      "originalReceipt": {
+        "state": "waiting",
+        "recipient": "SyntheticOfficer",
+        "routedTo": "owner",
+        "at": "2026-10-29T11:10:00.000Z"
+      }
+    },
+    {
+      "sourceKey": "watch.threads.synthetic.json",
+      "eventSourceKey": "xyz.tinycloud.rocinante/sam/thread/ask/ask-synthetic/20261029T111100000Z-00000000000000000000000000000002.json",
+      "eventKey": "xyz.tinycloud.rocinante/sam/thread/ask/ask-synthetic/20261029T111100000Z-00000000000000000000000000000002.json",
+      "publisherId": "legacy-alpha",
+      "identity": {
+        "cardId": "card-ask-ask-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-ask-ask-synthetic"
+      },
+      "responseId": "sitrep-88143eddbe4ae88bb57fc0be20c35cd6b8e294cbaddb8b6dced607558a38ef1a",
+      "recipientKey": "logical-alpha",
+      "recipient": "SyntheticOfficer",
+      "state": "delivered",
+      "routedTo": "owner",
+      "at": "2026-10-29T11:11:00.000Z",
+      "evidence": "explicit",
+      "dispatch": "never",
+      "dispatchBefore": null,
+      "originalReceipt": {
+        "state": "delivered",
+        "recipient": "SyntheticOfficer",
+        "routedTo": "owner",
+        "at": "2026-10-29T11:11:00.000Z"
+      }
+    },
+    {
+      "sourceKey": "watch.threads.synthetic.json",
+      "eventSourceKey": "xyz.tinycloud.rocinante/sam/thread/ask/ask-synthetic/20261029T111200000Z-00000000000000000000000000000003.json",
+      "eventKey": "xyz.tinycloud.rocinante/sam/thread/ask/ask-synthetic/20261029T111200000Z-00000000000000000000000000000003.json",
+      "publisherId": "legacy-alpha",
+      "identity": {
+        "cardId": "card-ask-ask-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-ask-ask-synthetic"
+      },
+      "responseId": "sitrep-fa02bfb87d34b8160215c31ddfc9172ff8d44a1c9389c26836ce95ba5b8376db",
+      "recipientKey": "logical-alpha",
+      "recipient": "SyntheticOfficer",
+      "state": "unconfirmed",
+      "routedTo": "owner",
+      "at": "2026-10-29T11:12:00.000Z",
+      "evidence": "explicit",
+      "dispatch": "never",
+      "dispatchBefore": null,
+      "originalReceipt": {
+        "state": "claimed",
+        "recipient": "SyntheticOfficer",
+        "routedTo": "owner",
+        "at": "2026-10-29T11:12:00.000Z"
+      }
+    },
+    {
+      "sourceKey": "watch.threads.synthetic.json",
+      "eventSourceKey": "xyz.tinycloud.rocinante/sam/thread/ask/ask-synthetic/20261029T111300000Z-00000000000000000000000000000004.json",
+      "eventKey": "xyz.tinycloud.rocinante/sam/thread/ask/ask-synthetic/20261029T111300000Z-00000000000000000000000000000004.json",
+      "publisherId": "legacy-alpha",
+      "identity": {
+        "cardId": "card-ask-ask-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-ask-ask-synthetic"
+      },
+      "responseId": "sitrep-2fb766c5def1540de0237961fac4b2f039a65fe6ff20f0e17f1c864145689ffd",
+      "recipientKey": "logical-alpha",
+      "recipient": "SyntheticOfficer",
+      "state": "held",
+      "routedTo": "owner",
+      "at": "2026-10-29T11:13:00.000Z",
+      "evidence": "explicit",
+      "dispatch": "held",
+      "dispatchBefore": null,
+      "originalReceipt": {
+        "state": "waiting",
+        "recipient": "SyntheticOfficer",
+        "routedTo": "owner",
+        "at": "2026-10-29T11:13:00.000Z",
+        "reason": "Explicitly held by captured runtime"
+      }
+    },
+    {
+      "sourceKey": "watch.threads.synthetic.json",
+      "eventSourceKey": "xyz.tinycloud.rocinante/sam/thread/ask/ask-synthetic/20261029T111400000Z-00000000000000000000000000000005.json",
+      "eventKey": "xyz.tinycloud.rocinante/sam/thread/ask/ask-synthetic/20261029T111400000Z-00000000000000000000000000000005.json",
+      "publisherId": "legacy-alpha",
+      "identity": {
+        "cardId": "card-ask-ask-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-ask-ask-synthetic"
+      },
+      "responseId": "sitrep-99de62d02103c34e378b0c49755f6fb1107d194e5ad41754eaafbd930824c75a",
+      "recipientKey": "logical-alpha",
+      "recipient": "SyntheticOfficer",
+      "state": "refused",
+      "routedTo": "owner",
+      "at": "2026-10-29T11:14:00.000Z",
+      "evidence": "explicit",
+      "dispatch": "never",
+      "dispatchBefore": null,
+      "originalReceipt": {
+        "state": "refused",
+        "recipient": "SyntheticOfficer",
+        "routedTo": "owner",
+        "at": "2026-10-29T11:14:00.000Z"
+      }
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/thread/progress/progress-synthetic/20261029T112000000Z-00000000000000000000000000000009.json",
+      "eventSourceKey": "xyz.tinycloud.rocinante/sam/thread/progress/progress-synthetic/20261029T112000000Z-00000000000000000000000000000009.json",
+      "eventKey": "xyz.tinycloud.rocinante/sam/thread/progress/progress-synthetic/20261029T112000000Z-00000000000000000000000000000009.json",
+      "publisherId": "legacy-beta",
+      "identity": {
+        "cardId": "card-progress-progress-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-progress-progress-synthetic"
+      },
+      "responseId": "sitrep-1a591b8404b5c20ea8e181208d7805cb1e5927a713f60a64dbe1d8a9aa2f5653",
+      "recipientKey": "logical-unmapped",
+      "recipient": "UnmappedOwner",
+      "state": "held",
+      "routedTo": "owner",
+      "evidence": "historical-cursor",
+      "dispatch": "held",
+      "dispatchBefore": null,
+      "originalReceipt": {
+        "reason": "No trustworthy historical delivery checkpoint"
+      }
+    }
+  ],
+  "checkpoints": [
+    {
+      "sourceKey": "watch.hold-actions.synthetic.json",
+      "type": "hold-actions",
+      "value": {
+        "version": 1,
+        "acted": {},
+        "owed": {}
+      }
+    },
+    {
+      "sourceKey": "watch.synthetic.json",
+      "type": "answer-cursor",
+      "value": {
+        "cursor": "2026-10-28T00:00:00.000Z"
+      }
+    },
+    {
+      "sourceKey": "watch.synthetic.json",
+      "type": "claim-cursor",
+      "value": {
+        "claimsSince": "2026-10-28T00:00:00.000Z",
+        "delivered": {}
+      }
+    },
+    {
+      "sourceKey": "watch.synthetic.json",
+      "type": "task-steps",
+      "value": {
+        "task-synthetic": {
+          "verify": "2026-10-29T12:00:00.000Z",
+          "undo": null
+        }
+      }
+    },
+    {
+      "sourceKey": "watch.synthetic.json",
+      "type": "task-closed",
+      "value": {}
+    },
+    {
+      "sourceKey": "watch.synthetic.json",
+      "type": "chat-receipt",
+      "value": "2026-10-28T00:00:00.000Z"
+    },
+    {
+      "sourceKey": "watch.threads.synthetic.json",
+      "type": "thread-cursor",
+      "value": {
+        "attempts": {
+          "xyz.tinycloud.rocinante/sam/thread/ask/ask-synthetic/20261029T111000000Z-00000000000000000000000000000001.json": {
+            "state": "waiting",
+            "recipient": "SyntheticOfficer",
+            "routedTo": "owner",
+            "at": "2026-10-29T11:10:00.000Z"
+          },
+          "xyz.tinycloud.rocinante/sam/thread/ask/ask-synthetic/20261029T111100000Z-00000000000000000000000000000002.json": {
+            "state": "delivered",
+            "recipient": "SyntheticOfficer",
+            "routedTo": "owner",
+            "at": "2026-10-29T11:11:00.000Z"
+          },
+          "xyz.tinycloud.rocinante/sam/thread/ask/ask-synthetic/20261029T111200000Z-00000000000000000000000000000003.json": {
+            "state": "claimed",
+            "recipient": "SyntheticOfficer",
+            "routedTo": "owner",
+            "at": "2026-10-29T11:12:00.000Z"
+          },
+          "xyz.tinycloud.rocinante/sam/thread/ask/ask-synthetic/20261029T111300000Z-00000000000000000000000000000004.json": {
+            "state": "waiting",
+            "recipient": "SyntheticOfficer",
+            "routedTo": "owner",
+            "at": "2026-10-29T11:13:00.000Z",
+            "reason": "Explicitly held by captured runtime"
+          },
+          "xyz.tinycloud.rocinante/sam/thread/ask/ask-synthetic/20261029T111400000Z-00000000000000000000000000000005.json": {
+            "state": "refused",
+            "recipient": "SyntheticOfficer",
+            "routedTo": "owner",
+            "at": "2026-10-29T11:14:00.000Z"
+          }
+        },
+        "cursor": "captured-thread-cursor"
+      }
+    },
+    {
+      "sourceKey": "watch.expiry.synthetic.json",
+      "type": "expiry-grace",
+      "value": {
+        "version": 1,
+        "since": "2026-10-28T12:00:00.000Z",
+        "firstRun": {
+          "SyntheticOfficer": [
+            "ask/ask-synthetic"
+          ]
+        },
+        "owed": {
+          "ask/ask-synthetic@original": "SyntheticOfficer"
+        }
+      }
+    },
+    {
+      "sourceKey": "watch.expiry.synthetic.json",
+      "type": "expiry-notice",
+      "value": {
+        "ask/ask-synthetic@original": "SyntheticOfficer"
+      }
+    }
+  ],
+  "deletions": [
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/order/order-synthetic.json",
+      "classification": "card",
+      "previousSha256": "cf2efed5d8f4e5a84277a21d808414fe88b27c29de79671058ff46d6573d0143",
+      "deletedAt": "2026-10-29T12:00:00.000Z"
+    }
+  ],
+  "quarantine": [
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/future/invalid.bin",
+      "reason": "invalid",
+      "detail": "Source bytes are not UTF-8 JSON; original bytes retained"
+    },
+    {
+      "sourceKey": "watch.synthetic.json",
+      "reason": "unsupported-receipt",
+      "detail": "Unmapped logical recipient MissingOfficer; original receipt retained"
+    },
+    {
+      "sourceKey": "watch.unknown.synthetic.json",
+      "reason": "unknown",
+      "detail": "Unknown source bytes preserved owner-only, not claimed as supported"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/future/unknown.json",
+      "reason": "unknown",
+      "detail": "Unknown source bytes preserved owner-only, not claimed as supported"
+    }
+  ]
+}

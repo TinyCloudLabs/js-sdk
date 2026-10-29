@@ -1,6 +1,7 @@
 import { ErrorCodes } from "../types";
 import { initializeFeedHandoff, deliverFeedResponse } from "./handoff";
-import { listFeedResponses } from "./store";
+import { listFeedResponseDeliveries } from "./delivery-policy";
+import { isDispatchDeadlineFailure } from "./dispatch";
 import type { FeedApi } from "./types";
 
 export const listenFeedResponses: FeedApi["listenFeedResponses"] = async (options) => {
@@ -27,20 +28,21 @@ export const listenFeedResponses: FeedApi["listenFeedResponses"] = async (option
       dirty = false;
       let afterSequence = 0;
       while (!signal.aborted) {
-        const page = await listFeedResponses(options.responses, { afterSequence, limit: 100, signal });
+        const page = await listFeedResponseDeliveries(options.responses, { recipient: options.recipient, afterSequence, limit: 100, signal });
         if (!page.ok) {
           if (signal.aborted && page.error.code === ErrorCodes.ABORTED) return;
           throw page.error;
         }
-        for (const response of page.data) {
+        for (const response of page.data.responses) {
           if (signal.aborted) return;
           const handoff = await deliverFeedResponse({
             handoff: options.handoff, recipient: options.recipient, response, deliver: options.deliver,
           });
-          if (!handoff.ok) throw handoff.error;
-          afterSequence = response.sequence;
+          if (!handoff.ok && !isDispatchDeadlineFailure(handoff.error)) throw handoff.error;
         }
-        if (page.data.length < 100) break;
+        if (page.data.hasMore && page.data.nextSequence <= afterSequence) throw new Error("Delivery page did not advance a verified cursor");
+        afterSequence = page.data.nextSequence;
+        if (!page.data.hasMore) break;
       }
     } while (dirty && !signal.aborted);
   };

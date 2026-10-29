@@ -1696,8 +1696,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this.assertSignInCurrent(generation);
 
     // Create a session key
-    const keyId = `session-${Date.now()}`;
-    this.sessionManager.renameSessionKeyId(this.activeSessionKeyId, keyId);
+    const keyId = `session-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    this.sessionManager.createSessionKey(keyId);
     this.activeSessionKeyId = keyId;
 
     // Get JWK for session key
