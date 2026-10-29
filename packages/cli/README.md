@@ -288,6 +288,21 @@ claim leaves the handoff unconfirmed, without automatic resend. Runtime durable
 acceptance and deduplication are still required; exactly-once external execution
 is not guaranteed.
 
+### Card issuance history
+
+`listFeedCardHistory(output, { afterIdentity, limit, signal })` from
+`@tinycloud/sdk-services/feed` reads full stored card issuances and their payloads,
+including earlier revisions and distinct issuances of the same revision.
+Pages use the full `(cardId, revision, issuanceId)` cursor in SQLite BINARY order
+for IDs and numeric order for revision, with default limit 100 and maximum 1000.
+The result is `{ cards, nextIdentity, hasMore }`; `nextIdentity` is the last
+returned full tuple, or `null` for an empty page.
+
+This snapshot cursor is not a durable publication tail: new IDs can sort before
+an existing cursor. Start each full reconciliation without `afterIdentity`.
+`listFeedCards` still returns only the latest published issuance per card.
+History reads use the existing output read capability and perform no DDL or writes.
+
 ### Raw owner-only source export
 
 `feed export` captures raw KV source bytes, not resolved Home cards or a restore plan.

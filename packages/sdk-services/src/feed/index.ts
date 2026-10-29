@@ -16,3 +16,5 @@ export { projectFeedResponseNotification } from "./notification";
 export type { FeedRestoreOrigin, FeedRestoreDeliveryPolicy, FeedRestoreResponse, FeedRestoreRecords, FeedResponseDeliveryPage } from "./restore-types";
 export { restoreFeedRecords } from "./restore";
 export { listFeedResponseDeliveries } from "./delivery-policy";
+export type { FeedCardHistoryPage } from "./history-types";
+export { listFeedCardHistory } from "./history";

@@ -6,4 +6,6 @@ Add generic owner-authorized structural feed restore and recipient-filtered deli
 
 Require each origin's consistent exact-recipient pending/mapped evidence and a valid deadline or explicit null before dispatch. Keep raw receipts out of agent-readable policy rows. Fail closed on missing or malformed metadata, preserve unrelated SQL failures during coincident cancellation, and retain safe deadlines in notification headers without private payload data. Uncertain handoffs are not automatically resent; external runtime acceptance, deadline checks, and deduplication remain necessary. No exactly-once external execution guarantee or domain-specific CLI importer is added.
 
+Add read-only full card-issuance history with BINARY full-tuple keyset pages, default limit 100 and maximum 1000; reconciliation starts cursorless because this is not a durable tail, and latest-card listing remains unchanged.
+
 Details: TC-2209
