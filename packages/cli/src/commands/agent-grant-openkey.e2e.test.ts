@@ -424,13 +424,16 @@ describe.skipIf(!NODE_BIN)("agent OpenKey grant, against a real node", () => {
   });
 
   afterAll(async () => {
-    if (process.env.TC_AGENT_GRANT_FIXTURE_RECEIPT) {
-      await writeFile(process.env.TC_AGENT_GRANT_FIXTURE_RECEIPT, JSON.stringify({ observations, ackEvidence }, null, 2), { mode: 0o600 });
+    try {
+      if (process.env.TC_AGENT_GRANT_FIXTURE_RECEIPT) {
+        await writeFile(process.env.TC_AGENT_GRANT_FIXTURE_RECEIPT, JSON.stringify({ observations, ackEvidence }, null, 2), { mode: 0o600 });
+      }
+    } finally {
+      approvalServer?.stop(true);
+      if (priorTcHome === undefined) delete process.env.TC_HOME; else process.env.TC_HOME = priorTcHome;
+      node?.kill("SIGTERM");
+      await rm(root, { recursive: true, force: true });
     }
-    approvalServer?.stop(true);
-    if (priorTcHome === undefined) delete process.env.TC_HOME; else process.env.TC_HOME = priorTcHome;
-    node?.kill("SIGTERM");
-    await rm(root, { recursive: true, force: true });
   });
 
   test("apps-agent preset: grant lasts the 7 d approval, not the 3 h owner session; agent reads its app only", async () => {
@@ -529,20 +532,33 @@ describe.skipIf(!NODE_BIN)("agent OpenKey grant, against a real node", () => {
     });
   }
 
-  test("different prepared requests retain distinct approval and result bindings", () => {
-    const bindings = new Map<string, { approval: string; result: string; target: string }>();
-    for (const item of observations) {
-      const request = item.preparedRequestId as string;
-      const binding = { approval: item.approvalRequestId as string, result: item.resultRef as string, target: item.agentTargetDid as string };
-      expect(binding.approval).toBeDefined();
-      expect(binding.result).toBeDefined();
-      if (bindings.has(request)) expect(binding).toEqual(bindings.get(request)!);
-      else {
-        expect([...bindings.values()].some((other) => other.approval === binding.approval || other.result === binding.result)).toBe(false);
-        bindings.set(request, binding);
-      }
-      expect(item.approvalTargetDid).toBe(requesterDid);
-    }
-    expect(bindings.size).toBeGreaterThan(1);
+  test("different prepared requests retain distinct approval and result bindings", async () => {
+    const firstPath = await agentRequest("distinct-first", ["--preset", "apps-agent", "--app", "demo"]);
+    const secondPath = await agentRequest("distinct-second", ["--preset", "apps-agent", "--app", "demo"]);
+    const firstPrepared = JSON.parse(await readFile(firstPath, "utf8"));
+    const secondPrepared = JSON.parse(await readFile(secondPath, "utf8"));
+    const scopes: PermissionEntry[][] = [];
+    const approve = (permissions: PermissionEntry[]) => {
+      scopes.push(permissions);
+      return { permissions, signer: ownerSigner };
+    };
+    const first = await grantWithOpenKey(firstPath, approve);
+    const second = await grantWithOpenKey(secondPath, approve);
+    expect(scopes[1]).toEqual(scopes[0]);
+    expect(first.exitCode).toBe(0);
+    expect(second.exitCode).toBe(0);
+    expect(first.approvalCallbacks).toBe(1);
+    expect(second.approvalCallbacks).toBe(1);
+    expect(first.approvalRequestId).toBeDefined();
+    expect(second.approvalRequestId).not.toBe(first.approvalRequestId);
+    expect(first.resultRef).toBeDefined();
+    expect(second.resultRef).not.toBe(first.resultRef);
+    const firstGrant = JSON.parse(first.stdout);
+    const secondGrant = JSON.parse(second.stdout);
+    expect(firstGrant.requestId).toBe(firstPrepared.requestId);
+    expect(secondGrant.requestId).toBe(secondPrepared.requestId);
+    expect(firstGrant.delegation.delegateDID).toBe(firstPrepared.sessionDid);
+    expect(secondGrant.delegation.delegateDID).toBe(secondPrepared.sessionDid);
+    expect(secondGrant.delegationCid).not.toBe(firstGrant.delegationCid);
   });
 });
