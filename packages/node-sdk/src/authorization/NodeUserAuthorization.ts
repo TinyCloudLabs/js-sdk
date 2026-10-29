@@ -1236,38 +1236,28 @@ export class NodeUserAuthorization implements IUserAuthorization {
     params: Record<string, unknown>,
   ) {
     const resources = this.siweConfig?.resources;
-    if (resources?.length) {
-      for (const resource of resources) {
-        if (typeof resource !== "string" ||
-          /[\u0000-\u0020\u007f-\u009f]/.test(resource) ||
-          /^urn:recap:/i.test(resource)) {
-          throw new Error("SIWE metadata resources must be URIs other than ReCaps");
-        }
-        // Reject relative references and invalid URI syntax before formatting.
-        new URL(resource);
-      }
+    if (resources?.some(resource => typeof resource !== "string" ||
+      !/^urn:tinycloud:recipients:[A-Za-z0-9_-]+$/.test(resource))) {
+      throw new Error("SIWE metadata resources must be base64url recipients URIs");
     }
     const prepared = this.wasm.prepareSession(params);
     if (!resources?.length) return prepared;
 
-    const original = new SiweMessage(prepared.siwe);
-    const originalResources = original.resources ?? [];
-    const recaps = originalResources.filter((resource) => /^urn:recap:/i.test(resource));
-    if (recaps.length !== 1 || originalResources.at(-1) !== recaps[0]) {
+    const recapLines = /^- urn:recap:[^\r\n]+$/gim;
+    const recaps = prepared.siwe.match(recapLines);
+    const recap = recaps?.[0];
+    if (recaps?.length !== 1 || !prepared.siwe.endsWith(recap)) {
       throw new Error("Prepared SIWE must end with exactly one ReCap");
     }
-    const recapLine = `- ${recaps[0]}`;
-    const offset = prepared.siwe.lastIndexOf(`\n${recapLine}`);
-    if (offset < 0) throw new Error("Prepared SIWE has no final ReCap resource line");
-    const siwe = prepared.siwe.slice(0, offset + 1) +
-      resources.map((resource) => `- ${resource}\n`).join("") +
-      prepared.siwe.slice(offset + 1);
-    const candidate = new SiweMessage(siwe);
-    const expectedResources = [...originalResources.slice(0, -1), ...resources, recaps[0]];
+    const insertedLines = resources.map(resource => `- ${resource}`);
+    // Splice only resource lines; every original byte remains in place.
+    const siwe = prepared.siwe.slice(0, -recap.length) +
+      insertedLines.join("\n") + "\n" + recap;
     const expectedFields = extractImmutableSiweFields(prepared.siwe);
-    expectedFields.nonRecapResources = expectedResources.slice(0, -1)
-      .map((resource) => `- ${resource}`).join("\n");
-    if (JSON.stringify(candidate.resources) !== JSON.stringify(expectedResources) ||
+    expectedFields.nonRecapResources = [expectedFields.nonRecapResources, ...insertedLines]
+      .filter(Boolean).join("\n");
+    const actualRecaps = siwe.match(recapLines);
+    if (actualRecaps?.length !== 1 || actualRecaps[0] !== recap ||
       diffImmutableSiweFields(expectedFields, extractImmutableSiweFields(siwe)).length) {
       throw new Error("SIWE metadata insertion changed the prepared message");
     }

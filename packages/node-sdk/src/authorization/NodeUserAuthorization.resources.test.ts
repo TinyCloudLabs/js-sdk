@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { SiweMessage } from "siwe";
-import { BOOTSTRAP_SESSION_REQUESTS, type SiweConfig } from "@tinycloud/sdk-core";
+import { BOOTSTRAP_SESSION_REQUESTS, extractRecapAttenuations, type SiweConfig } from "@tinycloud/sdk-core";
 import { NodeUserAuthorization } from "./NodeUserAuthorization";
 import { NodeWasmBindings } from "../NodeWasmBindings";
 import { PrivateKeySigner } from "../signers/PrivateKeySigner";
 import { MemorySessionStorage } from "../storage/MemorySessionStorage";
 
-const metadata = ["https://example.com/policy?version=1", "urn:tinycloud:recipients:eyJ2IjoxfQ"];
+const metadata = ["urn:tinycloud:recipients:eyJ2IjoxfQ"];
 let originalFetch: typeof fetch;
 beforeEach(() => {
   originalFetch = globalThis.fetch;
@@ -106,6 +106,7 @@ for (const resource of [
   "urn:test:\n\nA different statement\n\nURI: did:key:other",
   "urn:test:\0", "urn:test:\t", "urn:test:\u007f", "urn:test:\u0085",
   "not a URI", "/relative", "https://", "urn:recap:replacement", "URN:RECAP:duplicate",
+  ...["\n", "\r", "\u2028", "\u2029"].map(end => `${metadata[0]}${end}`),
 ]) {
   test(`invalid metadata ${JSON.stringify(resource)} fails before signing`, async () => {
     const f = fixture({ resources: [resource] });
@@ -114,6 +115,7 @@ for (const resource of [
     await expect(f.auth.prepareOpenKeySignIn()).rejects.toThrow();
     expect(f.signed).toEqual([]);
     expect(f.completed).toEqual([]);
+    expect(f.originals).toEqual([]);
   });
 }
 
@@ -151,4 +153,48 @@ test("insertion preserves original metadata, statement, caveats and proofs byte-
   const recapLine = original.split("\n").find((line) => line.startsWith("- urn:recap:"))!;
   expect(p.prepared.siwe).toBe(original.replace(recapLine, [...metadata.map((uri) => `- ${uri}`), recapLine].join("\n")));
   expect(new SiweMessage(p.prepared.siwe).resources).toEqual(["urn:existing:metadata", ...metadata, recapLine.slice(2)]);
+});
+
+const phantomRecap = `urn:recap:${Buffer.from(JSON.stringify({
+  att: { "tinycloud:pkh:eip155:1:0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf:default/kv/unrequested": {
+    "tinycloud.kv/put": [{}],
+  } },
+})).toString("base64url")}`;
+
+for (const path of ["ordinary", "external", "versioned", "bootstrap"] as const) {
+  test(`${path} refuses embedded, encoded and escaped ReCaps before approval`, async () => {
+    for (const resource of [
+      `https://metadata.example/#${phantomRecap}`,
+      `https://metadata.example/#${phantomRecap.replace("urn:recap:", "URN:RECAP:")}`,
+      `https://metadata.example/#${encodeURIComponent(phantomRecap)}`,
+      `https://metadata.example/#${encodeURIComponent(encodeURIComponent(phantomRecap))}`,
+      `https://metadata.example/#%75%72%6e%3a%72%65%63%61%70%3a${phantomRecap.slice(10)}`,
+      `https://metadata.example/#%5Cu0075rn%3Arecap%3A${phantomRecap.slice(10)}`,
+    ]) {
+      const resources = [...metadata];
+      const f = fixture({ resources });
+      if (path === "bootstrap") await f.auth.signIn();
+      f.signed.length = 0; f.completed.length = 0;
+      resources.splice(0, resources.length, resource);
+      const pending = path === "ordinary" ? f.auth.signIn()
+        : path === "external" ? f.auth.prepareSessionForSigning()
+        : path === "versioned" ? f.auth.prepareOpenKeySignIn()
+        : f.auth.createBootstrapSession({
+          spaceId: "tinycloud:pkh:eip155:1:0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf:account",
+          capabilityRequest: BOOTSTRAP_SESSION_REQUESTS.account,
+        });
+      await expect(pending).rejects.toThrow();
+      expect(f.signed).toEqual([]);
+      expect(f.completed).toEqual([]);
+    }
+  });
+}
+
+test("SDK and WASM extract only actual ReCap resource values", async () => {
+  const { prepared } = await fixture().auth.prepareSessionForSigning();
+  const original = prepared.siwe;
+  const actual = original.replace("Resources:\n", `Resources:\n- https://metadata.example/#${phantomRecap}\n`);
+  const wasm = new NodeWasmBindings();
+  expect(wasm.parseRecapFromSiwe(actual)).toEqual(wasm.parseRecapFromSiwe(original));
+  expect(extractRecapAttenuations(actual)).toEqual(extractRecapAttenuations(original));
 });
