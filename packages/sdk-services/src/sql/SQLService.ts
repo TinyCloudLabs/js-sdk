@@ -179,13 +179,14 @@ export class SQLService extends BaseService implements ISQLService {
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "query", dbName, [action]);
+          const failure = await this.handleErrorResponse(response, "query", dbName, [action]);
+          return this.redactFailure(failure, options?.redactErrors, response.status);
         }
 
         const data = (await response.json()) as QueryResponse<T>;
         return ok(data);
       } catch (error) {
-        return err(wrapError("sql", error));
+        return this.redactFailure(err(wrapError("sql", error)), options?.redactErrors);
       } finally {
         request.dispose();
       }
@@ -229,13 +230,14 @@ export class SQLService extends BaseService implements ISQLService {
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "execute", dbName, requestedActions);
+          const failure = await this.handleErrorResponse(response, "execute", dbName, requestedActions);
+          return this.redactFailure(failure, options?.redactErrors, response.status);
         }
 
         const data = (await response.json()) as ExecuteResponse;
         return ok(data);
       } catch (error) {
-        return err(wrapError("sql", error));
+        return this.redactFailure(err(wrapError("sql", error)), options?.redactErrors);
       } finally {
         request.dispose();
       }
@@ -263,13 +265,14 @@ export class SQLService extends BaseService implements ISQLService {
         );
 
         if (!response.ok) {
-          return await this.handleErrorResponse(response, "batch", dbName, requestedActions);
+          const failure = await this.handleErrorResponse(response, "batch", dbName, requestedActions);
+          return this.redactFailure(failure, options?.redactErrors, response.status);
         }
 
         const data = (await response.json()) as BatchResponse;
         return ok(data);
       } catch (error) {
-        return err(wrapError("sql", error));
+        return this.redactFailure(err(wrapError("sql", error)), options?.redactErrors);
       } finally {
         request.dispose();
       }
@@ -550,6 +553,17 @@ export class SQLService extends BaseService implements ISQLService {
         action,
       })),
     );
+  }
+
+  private redactFailure<T>(result: Result<T>, redactErrors?: boolean, status?: number): Result<T> {
+    if (!redactErrors || result.ok) return result;
+    const candidate = result.error.code;
+    const code = Object.values(ErrorCodes).some((known) => known === candidate)
+      ? candidate : ErrorCodes.SQL_ERROR;
+    const safeStatus = typeof status === "number" && Number.isInteger(status) && status >= 400 && status <= 599
+      ? status : undefined;
+    return err(serviceError(code, "SQL operation failed", "sql",
+      safeStatus === undefined ? undefined : { meta: { status: safeStatus } }));
   }
 
   private async handleErrorResponse(
