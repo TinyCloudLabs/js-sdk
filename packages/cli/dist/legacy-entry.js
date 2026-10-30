@@ -46177,6 +46177,7 @@ function registerShareCommand(program) {
           process.exitCode = 6;
           return;
         }
+        if (result.method === "email-claim") throw new CLIError("CLAIM_REQUIRED", "email-addressed shares cannot be opened with this version of the CLI yet; open the link in a web browser", 6);
         throw new CLIError(result.method === "openkey-device" ? "DEVICE_AUTH_REQUIRED" : "CLAIM_REQUIRED", "recipient authorization is required; resume through the configured authority adapter", 6);
       }
       if (options.stdout) {

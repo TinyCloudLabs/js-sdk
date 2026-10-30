@@ -650,6 +650,8 @@ export function registerShareCommand(program: Command): void {
             process.exitCode = 6;
             return;
           }
+          // The CLI has no email-proof flow: say so instead of pointing at an adapter nobody can run.
+          if (result.method === "email-claim") throw new CLIError("CLAIM_REQUIRED", "email-addressed shares cannot be opened with this version of the CLI yet; open the link in a web browser", 6);
           throw new CLIError(result.method === "openkey-device" ? "DEVICE_AUTH_REQUIRED" : "CLAIM_REQUIRED", "recipient authorization is required; resume through the configured authority adapter", 6);
         }
         if (options.stdout) {

@@ -31129,6 +31129,8 @@ function createShareAuthorityAdapters(input = {}) {
   });
   const targetAdapter = { async publish(targetInput) {
     if (input.publishTarget !== void 0) return input.publishTarget(targetInput);
+    const refusedKind = { emailDomain: "domain", recipientDid: "did" }[targetInput.target.kind];
+    if (refusedKind !== void 0) throw new CLIError("UNAVAILABLE", `${refusedKind}-addressed shares are not available in this release; nothing was shared`, 4);
     const node = await authenticatedNode();
     const session = node.restorableSession;
     const ownerSpaceId = session?.spaceId;
@@ -33241,6 +33243,7 @@ function registerShareCommand(program2) {
           process.exitCode = 6;
           return;
         }
+        if (result.method === "email-claim") throw new CLIError("CLAIM_REQUIRED", "email-addressed shares cannot be opened with this version of the CLI yet; open the link in a web browser", 6);
         throw new CLIError(result.method === "openkey-device" ? "DEVICE_AUTH_REQUIRED" : "CLAIM_REQUIRED", "recipient authorization is required; resume through the configured authority adapter", 6);
       }
       if (options.stdout) {

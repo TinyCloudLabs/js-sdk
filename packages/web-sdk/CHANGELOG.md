@@ -1,5 +1,132 @@
 # @tinycloudlabs/web-sdk
 
+## 3.8.1-beta.2
+
+### Patch Changes
+
+- Updated dependencies [853774e]
+  - @tinycloud/share-sdk@1.4.2-beta.1
+  - @tinycloud/node-sdk@3.8.1-beta.2
+  - @tinycloud/sdk-core@3.8.1-beta.2
+
+## 3.8.1-beta.1
+
+### Patch Changes
+
+- Updated dependencies [5e47629]
+  - @tinycloud/share-envelope@1.4.1-beta.0
+  - @tinycloud/node-sdk@3.8.1-beta.1
+  - @tinycloud/sdk-core@3.8.1-beta.1
+  - @tinycloud/share-sdk@1.4.2-beta.0
+
+## 3.8.1-beta.0
+
+### Patch Changes
+
+- f1744fb: `requestPermissions` on an OpenKey session signs the runtime grant through the OpenKey client the session was established with, so the Delegations tab's "Allow delegation list" completes. New `TinyCloudWeb.setRuntimePermissionSigner(signer?)` sets a signer for runtime permission grants only, for apps whose sign-in is not the SDK's OpenKey flow; sign-out, a new sign-in, a restore or a session for another account clear it. `grantRuntimePermissions` accepts `signMessage` to sign the prepared SIWE in place of the connected signer, and refuses a message that is not in canonical form, or a signature that does not recover to the session's account from the exact message bytes.
+
+  The permission prompt for `tinycloud.delegation/list` shows OpenKey's label and sentence for reading the delegation list; other delegation actions read "Manage your delegations (action)". When the panel's permission request throws, the error's name and code are written to the console and the SDK debug log; the panel text is unchanged.
+
+  Details: TC-2113
+
+- Updated dependencies [f1744fb]
+  - @tinycloud/node-sdk@3.8.1-beta.0
+
+## 3.8.0
+
+### Minor Changes
+
+- c541786: Manifests can declare named keys in the app's key namespace, with an optional `keys_app_id`. Sign-in includes the declared key permissions when the node supports named keys, prepares creatable key paths, and exposes the signed-in named-key client through `keys`.
+
+  Details: TC-1977
+
+- 4a19c47: Signing out erases the local copy before `signOut()` resolves: the browser replica database is deleted under the origin gate lock after the deny commit, and the same erase runs when a different account signs in on a live session. The deny floor and logout marker in `localStorage` are kept.
+
+  If the delete is blocked or the deny kept the keys (`marker`, `unguarded`), the erase is retried three times in total (150 ms, then 450 ms apart), the logout marker makes the next load finish it, and `signOut()` still resolves for `marker`. `unguarded` still rejects, now with `code: "REPLICA_PURGE_FAILED"` unless the erase completed. After the retries `replica.purge.failed` fires (`TinyCloudWeb.on` / `TinyCloudNode.on`) with `trigger`, a typed `reason` and `retryNow`.
+
+  `tcw.replication.purgeLocalCopy()` runs the erase on demand and returns `{ ok: true }` or `{ ok: false, retryNow }`; it never touches a live session. New exported types: `ReplicaPurgeFailedEvent`, `ReplicaPurgeLocalCopyResult`, `ReplicaPurgeTrigger`, `ReplicaLocalEraseOutcome`, `ReplicaPurgeError`. `ReplicaLifecycleGate` gains the optional browser method `eraseLocalCopy`.
+
+  A restore with replication configured and no wallet provider stays gated, now with the gate reason `wallet_provider_required` instead of `gate_unavailable`. A read-only provider (silent `eth_accounts`, signing methods that throw) still restores.
+
+  Details: TC-1888
+
+- 5d9d314: TinyCloudWeb supports OpenKey authorize-sign with popup approval and an optional prepared SIWE for click-triggered sign-in.
+
+  Details: TC-1977
+
+- 2789240: Replication accepts `syncScope: "prefixes"`, which keeps kv/sync on the declared prefixes at sign-in instead of widening to a root entry that covers them.
+
+  Details: TC-2043
+
+- 7ad13f9: The Delegations tab of the TinyCloud panel has an "Allow delegation list" button when the session cannot list delegations and the page can show the SDK's permission prompt (a page signer and a manifest). It asks for `tinycloud.delegation/list` on the app's own space only, for up to 7 days (the SDK shortens it to the session's expiry), and reloads the tab when approved. The node answers a `delegation/list` proof for any of the owner's spaces with the whole account's delegation list, so the tab says the list covers every app and link across the account and shows no keys or contents. A decline leaves the tab as it was; an error shows a short error line. Without a page signer or manifest the tab keeps its text and tells the user to sign in again.
+
+  The permission the panel requests is kept with the stored session record and activated again when the session is restored after a reload. Only the panel's own grant is kept: a grant that is anything more than that one entry (for example an app's larger grant that already covered the request) is not stored. On restore each grant is verified from its signed bytes (CID, expiry, audience and abilities come from the signature, not from stored fields) and must be exactly the panel's entry. A grant the node refuses for good is removed (expired, issued to another session key, rejected by the node); a grant that failed because the node could not be reached or answered 408, 429 or 5xx is kept for the next reload. A sign-out, a new sign-in or the session's expiry removes them. A storage or node failure at this step never fails the restore, and the restore waits at most 4 seconds for the node. `BrowserSessionStorage` has `saveRuntimeGrants` and `loadRuntimeGrants` for this; neither rejects.
+
+  New `ui.platform` option: `"web"` (default) or `"native"`. With `"native"` the Delegations tab shows the button disabled with an explanation, because a desktop or mobile shell cannot show the permission prompt from the page.
+
+  Details: TC-2113
+
+### Patch Changes
+
+- 32ed899: Re-export `isAppKeyHostBound(keysAppId, origin)` from the web SDK entry point.
+
+  Details: TC-1977
+
+- 49f3665: The issued-delegation code (the `direction: "issued"` query and its paging, `queryAllIssued`, `revokeIssued`, the 401/403/400/503 mapping) is its own module, exported as `@tinycloud/sdk-core/delegations/issued`. `DelegationManager.query({ direction: "issued" })`, `queryAllIssued` and `revokeIssued` keep their signatures and results and load that module with a dynamic `import()` on first use. `@tinycloud/web-sdk` builds it as the lazy chunk `delegations-issued.mjs` / `delegations-issued.cjs` next to `index.*` and `credentials.*`, so those bundles carry only the loader.
+
+  Details: TC-2132
+
+- 44c439a: The settings panel's background reads only go out when the session holds the ability they need. The account index read, the delegation query (account space, then the session's own space) and the storage status read are each checked against the session's ReCap first; a read the session cannot make is not sent and shows as unavailable or needing permission. An account read refused with 401 or 403 is not retried; other failures keep their single retry. `DelegationManager.query` takes an optional second argument `{ spaces }` that sets which spaces the query is signed for. Sessions that hold the abilities make the same requests as before.
+
+  Details: TC-2038
+
+- ced1bbf: Constructing TinyCloudWeb without a location no longer throws; the UI client registers only when a location is present.
+
+  Details: TC-2072
+
+- 134bc7b: TinyCloudWeb reads the SIWE domain without throwing when window has no location.
+
+  Details: TC-2127
+
+- 9fb359a: Allow explicit runtime permission requests to create one exact `share/<id>` named key on the current owner's default encryption network. Validate the owner, resource and action before consent, bind approval to the same signed session, and activate only the requested key-create authority. Native shells without a supported permission-request path refuse rather than falling back to a web signer. Static manifests and native authority ceilings are unchanged.
+
+  Keep runtime permission approval bound to the captured session key through signing and activation.
+
+  Details: TC-2192
+
+- 89241fb: The panel keeps its header, close control and content inside the device safe areas (iOS notch, status bar, home indicator, landscape side insets). The header stays at the top inside the safe area while the content scrolls, and a downward swipe of at least 60 px on the header closes the panel on touch devices. `tc.ui.setButtonVisible(visible: boolean)` shows or hides the floating button at runtime: `true` shows it even under `ui.button: false` and clears the stored hidden flag, `false` hides it without writing that flag.
+
+  Details: TC-2130
+
+- Updated dependencies [15080ed]
+- Updated dependencies [32ed899]
+- Updated dependencies [49f3665]
+- Updated dependencies [20a872e]
+- Updated dependencies [479205d]
+- Updated dependencies [19048ec]
+- Updated dependencies [c6b4703]
+- Updated dependencies [92e4bd0]
+- Updated dependencies [e740a6d]
+- Updated dependencies [c541786]
+- Updated dependencies [e839be0]
+- Updated dependencies [e424ba9]
+- Updated dependencies [812a818]
+- Updated dependencies [0b024c2]
+- Updated dependencies [7b22f61]
+- Updated dependencies [4a19c47]
+- Updated dependencies [5d9d314]
+- Updated dependencies [44c439a]
+- Updated dependencies [2789240]
+- Updated dependencies [f167805]
+- Updated dependencies [9fb359a]
+- Updated dependencies [9fb359a]
+- Updated dependencies [812a818]
+  - @tinycloud/node-sdk@3.8.0
+  - @tinycloud/sdk-core@3.8.0
+  - @tinycloud/share-envelope@1.4.0
+  - @tinycloud/replica@0.4.0
+  - @tinycloud/share-sdk@1.4.1
+
 ## 3.8.0-beta.23
 
 ### Patch Changes

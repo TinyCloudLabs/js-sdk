@@ -1052,6 +1052,12 @@ export interface DelegateToResult {
 export interface RuntimePermissionGrantOptions {
   /** Override expiry. ms-format string ("7d", "1h") or raw milliseconds. */
   expiry?: string | number;
+  /**
+   * Signs the prepared SIWE and returns the EIP-191 signature, in place of the connected signer's `signMessage`.
+   * For a session whose wallet provider does not sign (an OpenKey session). The signature must recover to the
+   * session's address.
+   */
+  signMessage?: (siwe: string) => Promise<string>;
   /** In-memory key snapshot captured when exact Share-key consent opened. */
   expectedSessionKey?: Readonly<TinyCloudSession["jwk"]>;
 }
@@ -6964,7 +6970,7 @@ export class TinyCloudNode {
     if (existingGrants.length > 0) {
       return existingGrants.map((grant) => grant.delegation);
     }
-    if (!this.signer) {
+    if (!this.signer && options?.signMessage === undefined) {
       throw new Error(
         "grantRuntimePermissions requires wallet mode with a signer or privateKey.",
       );
@@ -7039,7 +7045,18 @@ export class TinyCloudNode {
       }
       assertCapturedKey?.();
 
-      const signature = await this.signer.signMessage(prepared.siwe);
+      if (options?.signMessage !== undefined) {
+        this.assertRuntimeGrantMessage(prepared.siwe, session);
+      }
+      const signature = options?.signMessage !== undefined
+        ? await options.signMessage(prepared.siwe)
+        : await this.signer!.signMessage(prepared.siwe);
+      if (
+        options?.signMessage !== undefined &&
+        !(await verifyEip191MessageSignature(prepared.siwe, signature, session.address))
+      ) {
+        throw new Error("The signature does not match the account that owns this session.");
+      }
       // Nothing is activated for a session that ended while the wallet signed.
       graph.assertActive();
       assertCapturedKey?.();
@@ -8099,6 +8116,29 @@ export class TinyCloudNode {
     permissions: PermissionEntry[],
   ): PermissionEntry[] {
     return expandPermissionEntriesCore(permissions);
+  }
+
+  /**
+   * Checks the SIWE text a caller-supplied signer is asked to sign: it must be in canonical form (parsing and
+   * re-serializing it gives the same bytes) and name the session's account and chain. The caller then checks the
+   * signature against these exact bytes.
+   */
+  private assertRuntimeGrantMessage(siwe: string, session: TinyCloudSession): void {
+    let parsed: SiweMessage;
+    try {
+      parsed = new SiweMessage(siwe);
+    } catch {
+      throw new Error("The prepared sign-in message is not a valid SIWE message.");
+    }
+    if (parsed.prepareMessage() !== siwe) {
+      throw new Error("The prepared sign-in message is not in canonical form.");
+    }
+    if (
+      parsed.chainId !== session.chainId ||
+      canonicalizeAddress(parsed.address) !== canonicalizeAddress(session.address)
+    ) {
+      throw new Error("The prepared sign-in message is for a different account or chain than this session.");
+    }
   }
 
   /**
