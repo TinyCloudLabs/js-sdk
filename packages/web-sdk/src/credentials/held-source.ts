@@ -58,9 +58,9 @@ function assertPolicyAcceptsPinnedIssuer(policy: HeldIssuerPolicy, now: Date): v
 }
 
 /**
- * Strict read of the owner's held records: a store that cannot be read is OFFLINE, never "nothing stored". `listHeldEmailCredentials` throws
- * OFFLINE for a failed list or a failed get (not KV_NOT_FOUND); a throwing `kv` is wrapped here. Every other refusal (truncated or too long a
- * listing, a refused owner, a configuration error) passes through unchanged.
+ * Strict read of the owner's held records: a store that cannot be read is OFFLINE (or PERMISSION_DENIED when the app session may not read it), never
+ * "nothing stored". `listHeldEmailCredentials` throws those for a failed list or a failed get (not KV_NOT_FOUND); a throwing `kv` is wrapped here. Every
+ * other refusal (truncated or too long a listing, a refused owner, a configuration error) passes through unchanged.
  */
 async function readHeldStrictly(kv: IKVService, policy: HeldIssuerPolicy, owner: string, now: Date): Promise<readonly HeldMatch[]> {
   try {
@@ -169,13 +169,13 @@ export async function acquireHeldCredentialWith(input: HeldAcquireInput, acquire
   }
 
   // The strict read comes first. Without the per-call opt-in a cache miss is PROFILE_UNAVAILABLE whatever the storage or the policy says: only an
-  // unreadable store (OFFLINE) is allowed to fall through to the acquisition, which refuses before any request. A stored record is reused either way.
+  // unreadable store (OFFLINE, or PERMISSION_DENIED: no grant to read it) is allowed to fall through to the acquisition, which refuses before any request. A stored record is reused either way.
   const optedIn = allowHeldProfile === true;
   let cached: HeldMatch | undefined;
   try {
     cached = await findWithListingRecovery(kv, policy, holderDid, address, now);
   } catch (error) {
-    if (optedIn || !(error instanceof CredentialError && error.code === "OFFLINE")) throw error;
+    if (optedIn || !(error instanceof CredentialError && (error.code === "OFFLINE" || error.code === "PERMISSION_DENIED"))) throw error;
   }
   if (cached !== undefined) {
     return { credential: cached.record.credential, holderDid, expiresAt: cached.verified.expiresAt };
