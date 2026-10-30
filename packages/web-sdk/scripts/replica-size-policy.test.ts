@@ -42,6 +42,7 @@ import { approvedTc2230SiweRecipientsRatchet, validateTc2230SiweRecipientsRatche
 import { approvedTc2192ExactKeyRuntimeConsentRatchet, validateTc2192ExactKeyRuntimeConsentRatchetTransition } from "./replica-size-policy";
 import { approvedTc2242WrappedKeyDigestRatchet, validateTc2242WrappedKeyDigestRatchetTransition } from "./replica-size-policy";
 import { approvedTc2113AllowAbilityRatchet, validateTc2113AllowAbilityRatchetTransition } from "./replica-size-policy";
+import { approvedTc2254HeldWireRatchet, validateTc2254HeldWireRatchetTransition } from "./replica-size-policy";
 import { approvedTc2038PanelPrefetchRatchet, validateTc2038PanelPrefetchRatchetTransition, type Tc2038PanelPrefetchRatchet } from "./replica-size-policy";
 import { approvedTc2005RevokeWindowRatchet, validateTc2005RevokeWindowRatchetTransition, type Tc2005RevokeWindowRatchet } from "./replica-size-policy";
 import { approvedTc2096RepairBackoffRatchet, validateTc2096RepairBackoffRatchetTransition, type Tc2096RepairBackoffRatchet } from "./replica-size-policy";
@@ -2927,6 +2928,7 @@ delete tc2043Ledger.tc2230SiweRecipientsRatchet;
 delete tc2043Ledger.tc2192ExactKeyRuntimeConsentRatchet;
 delete tc2043Ledger.tc2242WrappedKeyDigestRatchet;
 delete tc2043Ledger.tc2113AllowAbilityRatchet;
+delete tc2043Ledger.tc2254HeldWireRatchet;
 tc2043Ledger.entries = structuredClone(current.entries.slice(0, current.entries.findIndex((entry) => entry.pr === "#728")));
 describe("replication syncScope opt-in (#742, TC-2043) size ratchet", () => {
   const row = () => structuredClone(approvedTc2043SyncScopeRatchet);
@@ -3907,8 +3909,10 @@ describe("panel Allow ability for the delegation list (TC-2113, #768) size ratch
     expect(row().activation).toEqual(prerequisite().activation);
     expect(row().worker).toEqual({ delta: 0, ceiling: prerequisite().worker.ceiling });
     expect(row().replicaWorker).toEqual({ delta: 0, ceiling: prerequisite().replicaWorker.ceiling });
-    expect(rootCeilingFor(current, "index.mjs")).toEqual({ row: "tc2113AllowAbilityRatchet", ceiling: 1475824 });
-    expect(rootCeilingFor(current, "index.cjs")).toEqual({ row: "tc2113AllowAbilityRatchet", ceiling: 1417412 });
+    expect(rootCeilings(current)).toContainEqual({
+      row: "tc2113AllowAbilityRatchet",
+      ceiling: { "index.mjs": 1475824, "index.cjs": 1417412 },
+    });
     expect(ancestryPins(current, false)).toContainEqual({
       row: "tc2113AllowAbilityRatchet",
       pin: "f5c97c846265d62ae026bf30b4db7442926d78ca",
@@ -3931,6 +3935,59 @@ describe("panel Allow ability for the delegation list (TC-2113, #768) size ratch
     changed.root.ceiling["index.cjs"]++;
     expect(() => validateTc2113AllowAbilityRatchetTransition(undefined, changed)).toThrow("TC-2113");
     expect(() => validateTc2113AllowAbilityRatchetTransition(row(), undefined)).toThrow("TC-2113");
+  });
+});
+
+describe("held email credential wire path, account as holder (TC-2254, #806) size ratchet", () => {
+  const row = () => structuredClone(approvedTc2254HeldWireRatchet);
+  const prerequisite = () => approvedTc2113AllowAbilityRatchet;
+
+  it("pins exact canonical CI root bytes and carries every other size bucket", () => {
+    expect(() => validateLedger(current)).not.toThrow();
+    expect(current.tc2254HeldWireRatchet).toEqual(approvedTc2254HeldWireRatchet);
+    expect(row().root).toEqual({
+      delta: { "index.mjs": 1264, "index.cjs": 1227 },
+      ceiling: { "index.mjs": 1477088, "index.cjs": 1418639 },
+    });
+    expect(row().root.ceiling["index.mjs"]).toBe(prerequisite().root.ceiling["index.mjs"] + row().root.delta["index.mjs"]);
+    expect(row().root.ceiling["index.cjs"]).toBe(prerequisite().root.ceiling["index.cjs"] + row().root.delta["index.cjs"]);
+    expect(row().base).toBe("f264e8a96c41e5c810f72b1f53d8e8f1178ae827");
+    expect(row().sourceCommits).toEqual(["e29ce49bb6550e5332b70822e4989547d5dcd962"]);
+    expect(row().canonicalCI).toEqual({
+      run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41073290152",
+      jobs: [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41073290152/job/124122700707",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41073290152/job/124122699897",
+      ],
+    });
+    expect(row().firstImport).toEqual(prerequisite().firstImport);
+    expect(row().activation).toEqual(prerequisite().activation);
+    expect(row().worker).toEqual({ delta: 0, ceiling: prerequisite().worker.ceiling });
+    expect(row().replicaWorker).toEqual({ delta: 0, ceiling: prerequisite().replicaWorker.ceiling });
+    expect(rootCeilingFor(current, "index.mjs")).toEqual({ row: "tc2254HeldWireRatchet", ceiling: 1477088 });
+    expect(rootCeilingFor(current, "index.cjs")).toEqual({ row: "tc2254HeldWireRatchet", ceiling: 1418639 });
+    expect(ancestryPins(current, false)).toContainEqual({
+      row: "tc2254HeldWireRatchet",
+      pin: "e29ce49bb6550e5332b70822e4989547d5dcd962",
+    });
+  });
+
+  it("refuses changed bytes or a missing TC-2113 prerequisite", () => {
+    const changed = copy(current);
+    changed.tc2254HeldWireRatchet!.root.ceiling["index.mjs"]++;
+    expect(() => validateLedger(changed)).toThrow("TC-2254");
+    const withoutPrerequisite = copy(current);
+    delete withoutPrerequisite.tc2113AllowAbilityRatchet;
+    expect(() => validateLedger(withoutPrerequisite)).toThrow("TC-2254");
+  });
+
+  it("may be introduced once and never changed or removed", () => {
+    expect(() => validateTc2254HeldWireRatchetTransition(undefined, row())).not.toThrow();
+    expect(() => validateTc2254HeldWireRatchetTransition(row(), row())).not.toThrow();
+    const changed = row();
+    changed.root.ceiling["index.cjs"]++;
+    expect(() => validateTc2254HeldWireRatchetTransition(undefined, changed)).toThrow("TC-2254");
+    expect(() => validateTc2254HeldWireRatchetTransition(row(), undefined)).toThrow("TC-2254");
   });
 });
 
