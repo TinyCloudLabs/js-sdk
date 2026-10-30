@@ -19,7 +19,10 @@ function text(value: unknown, label: string, pattern?: RegExp): string { if (typ
 function integer(value: unknown, label: string, max = 31_536_000): number { if (!Number.isSafeInteger(value) || (value as number) < 1 || (value as number) > max) fail(`${label} is invalid`); return value as number; }
 function origin(value: unknown, label: string): string { const candidate = text(value, label); let url: URL; try { url = new URL(candidate); } catch { fail(`${label} is invalid`); } if (url!.protocol !== "https:" || url!.origin !== candidate || url!.username || url!.password) fail(`${label} is invalid`); return candidate; }
 
-/** Strictly validates and preserves the Rust-owned canonical descriptor bytes. */
+/**
+ * Strictly validates and preserves the Rust-owned canonical descriptor bytes. Shape only: it accepts the account-bound (held) descriptor next
+ * to the ticket one and makes no network call. The acquisition entry points enforce the held opt-in (TC-2254 A2.5).
+ */
 export function validateCredentialFlowDescriptor(value: unknown): CredentialFlowDescriptor {
   const raw = object(value, "descriptor");
   exact(raw, ["type", "contractVersion", "protocol", "profile", "profileVersion", "display", "accessibility", "theme", "issuer", "interaction", "format", "claims", "subjectRelationship", "inputs", "steps", "holderBinding", "endpoints", "lifecycle", "status", "revocation", "presentation"], "descriptor");

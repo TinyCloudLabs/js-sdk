@@ -28,6 +28,11 @@ import type { CredentialClient, CredentialInputRequest, CredentialsAcquireOption
 
 function randomVerifier(): string { return encodeBase64Url(crypto.getRandomValues(new Uint8Array(32))); }
 
+/** A2.5: the held (account-bound) profile is not for this service. A held requirement or an `account_is_subject` descriptor is refused here. */
+function refuseHeld(requirement: CredentialRequirement, descriptor?: CredentialFlowDescriptor): void {
+  if (requirement.profile.id === "tinycloud.email-held/v1" || descriptor?.subjectRelationship === "account_is_subject") throw new CredentialError("UNSUPPORTED_PROFILE", "The held credential profile is acquired with acquireHeldCredential only");
+}
+
 function active(client: CredentialClient): string {
   if (typeof client.credentialHolderDid !== "string" || !/^did:key:z6Mk[^#]+$/.test(client.credentialHolderDid)) throw new CredentialError("ACTIVE_SESSION_REQUIRED", "credentials requires a canonical holder session");
   if (client.receiverCredentialCustody === undefined && client.session() === undefined) throw new CredentialError("ACTIVE_SESSION_REQUIRED", "credentials requires an active TinyCloud/OpenKey session");
@@ -91,14 +96,16 @@ async function acquisitionInputs(
 export class CredentialsService {
   constructor(private readonly client: CredentialClient) {}
 
-  /** The held (account-bound) profile is for `acquireHeldCredential`: this service refuses it without the explicit per-call opt-in, before any request (TC-2254 C8.3). */
-  private heldOptIn(options: { readonly allowHeldProfile?: true }): { readonly allowHeldProfile: true } | Record<string, never> { return options.allowHeldProfile === true ? { allowHeldProfile: true } : {}; }
+  /**
+   * The held (account-bound) profile is acquired through `acquireHeldCredential` only. This service refuses a held requirement or an
+   * `account_is_subject` descriptor with UNSUPPORTED_PROFILE before any witness call (TC-2254 A2.5). `validateCredentialFlowDescriptor`
+   * is shape-only, so the refusal is made here, in the consumer.
+   */
   private async descriptor(requirement: CredentialRequirement, options: CredentialsOperationOptions): Promise<CredentialFlowDescriptor> {
-    const refuseHeld = (): never => { throw new CredentialError("UNSUPPORTED_PROFILE", "The held credential profile requires an explicit opt-in"); };
-    if (requirement.profile.id === "tinycloud.email-held/v1" && options.allowHeldProfile !== true) refuseHeld();
+    refuseHeld(requirement);
     if (options.descriptor !== undefined) {
       const descriptor = validateCredentialFlowDescriptor(options.descriptor);
-      if (descriptor.holderBinding.alg === "EIP191" && options.allowHeldProfile !== true) refuseHeld();
+      refuseHeld(requirement, descriptor);
       if (!descriptorSatisfiesRequirement(descriptor, requirement)) throw new CredentialError("UNSUPPORTED_PROFILE", "Pinned descriptor does not satisfy the policy requirement");
       return descriptor;
     }
@@ -115,7 +122,7 @@ export class CredentialsService {
       if (typeof entryValue !== "object" || entryValue === null || Array.isArray(entryValue)) continue;
       const entry = entryValue as Record<string, unknown>;
       if (entry.supported !== true || entry.enabled !== true || (entry.readiness !== "ready" && entry.readiness !== "degraded")) continue;
-      try { const candidate = validateCredentialFlowDescriptor(entry.descriptor); if (descriptorSatisfiesRequirement(candidate, requirement) && entry.descriptorDigest === await canonicalDigest(candidate)) return candidate; } catch { /* fail closed and inspect no other metadata on malformed entry */ }
+      try { const candidate = validateCredentialFlowDescriptor(entry.descriptor); if (candidate.subjectRelationship === "account_is_subject") continue; if (descriptorSatisfiesRequirement(candidate, requirement) && entry.descriptorDigest === await canonicalDigest(candidate)) return candidate; } catch { /* fail closed and inspect no other metadata on malformed entry */ }
     }
     throw new CredentialError("UNSUPPORTED_PROFILE", "No available credential profile satisfies the requirement");
   }
@@ -129,9 +136,10 @@ export class CredentialsService {
     return findStoredCredential({ kv: this.client.kvForSpace(space.spaceId), requirement, holderDid, ownerDid: space.ownerDid, now: options.now?.() });
   }
 
-  async verify(envelope: IssuedCredentialEnvelope, input: { readonly descriptor: CredentialFlowDescriptor; readonly requirement: CredentialRequirement; readonly transport?: OpenCredentialsHttpTransport; readonly issuerMetadata?: CredentialIssuerMetadata; readonly fetch?: typeof fetch; readonly signal?: AbortSignal; readonly now?: Date; readonly allowHeldProfile?: true }): Promise<VerifiedCredential> {
+  async verify(envelope: IssuedCredentialEnvelope, input: { readonly descriptor: CredentialFlowDescriptor; readonly requirement: CredentialRequirement; readonly transport?: OpenCredentialsHttpTransport; readonly issuerMetadata?: CredentialIssuerMetadata; readonly fetch?: typeof fetch; readonly signal?: AbortSignal; readonly now?: Date }): Promise<VerifiedCredential> {
     const holderDid = active(this.client); const descriptor = validateCredentialFlowDescriptor(input.descriptor); const requirement = validateCredentialRequirement(input.requirement);
-    const transport = input.transport ?? new OpenCredentialsHttpTransport(descriptor, input.fetch, this.heldOptIn(input));
+    refuseHeld(requirement, descriptor);
+    const transport = input.transport ?? new OpenCredentialsHttpTransport(descriptor, input.fetch);
     return verifyIssuedCredential({ envelope, descriptor, descriptorDigest: await canonicalDigest(descriptor), requirement, holderDid, issuerMetadata: input.issuerMetadata ?? await transport.issuerMetadata(input.signal), now: input.now, checkStatus: (status, signal) => transport.checkStatus(status, signal), signal: input.signal });
   }
 
@@ -148,7 +156,7 @@ export class CredentialsService {
   async acquire(requirementValue: CredentialRequirement, options: CredentialsAcquireOptions): Promise<VerifiedCredential> {
     const holderDid = active(this.client); const requirement = validateCredentialRequirement(requirementValue); const descriptor = await this.descriptor(requirement, options);
     const descriptorDigest = await canonicalDigest(descriptor); const requirementDigest = await credentialRequirementDigest(requirement);
-    const transport = options.transport ?? new OpenCredentialsHttpTransport(descriptor, options.fetch, this.heldOptIn(options));
+    const transport = options.transport ?? new OpenCredentialsHttpTransport(descriptor, options.fetch);
     const openerOrigin = options.openerOrigin ?? (typeof window === "undefined" ? "https://localhost" : window.location.origin);
     const redirectStore = options.redirectStore ?? (options.interaction === "redirect" && typeof window !== "undefined" ? new BrowserCredentialRedirectStore() : undefined);
     const timed = withTimeout(options.signal, options.timeoutMs ?? 120_000);
@@ -190,7 +198,7 @@ export class CredentialsService {
           return this.client.approveCredentialBytes(bytes);
         },
       };
-      await interpretCredentialFlow({ descriptor, ...this.heldOptIn(options), requirement, requestId: created.requestId, verifier, holderDid, descriptorDigest, requirementDigest, openerOrigin, transport, signing, handlers: options.stepHandlers, proofHandler: surface?.requestProof, signal: timed.signal, onProgress: (event) => { if (event.state === "signing") controller?.progress("signing"); options.onProgress?.(event); }, onWait: surface ? async () => { if (surface!.closed()) throw new CredentialError("CANCELED", "Credential interaction was closed"); await surface!.wake(); } : undefined });
+      await interpretCredentialFlow({ descriptor, requirement, requestId: created.requestId, verifier, holderDid, descriptorDigest, requirementDigest, openerOrigin, transport, signing, handlers: options.stepHandlers, proofHandler: surface?.requestProof, signal: timed.signal, onProgress: (event) => { if (event.state === "signing") controller?.progress("signing"); options.onProgress?.(event); }, onWait: surface ? async () => { if (surface!.closed()) throw new CredentialError("CANCELED", "Credential interaction was closed"); await surface!.wake(); } : undefined });
       controller?.progress("verifying"); options.onProgress?.({ state: "verifying", correlationId: created.correlationId });
       const envelope = await transport.result(created.requestId, verifier, timed.signal);
       const verified = await verifyIssuedCredential({ envelope, descriptor, descriptorDigest, requirement, holderDid, issuerMetadata: await transport.issuerMetadata(timed.signal), now: options.now?.(), checkStatus: (status, signal) => transport.checkStatus(status, signal), signal: timed.signal });
@@ -207,7 +215,7 @@ export class CredentialsService {
     const existing = await this.find(requirement, options);
     if (existing) {
       const envelope: IssuedCredentialEnvelope = { type: "OpenCredentialsIssuedCredential", version: 1, protocol: "tinycloud.credentials/acquisition/v1", profile: existing.profile, credentialType: existing.credentialType, schema: descriptor.format.vct, format: "vc+sd-jwt", issuerDid: existing.issuerDid, issuerKid: existing.issuerKid, subjectDid: existing.holderDid, holderDid: existing.holderDid, claims: existing.claims, claimsDigest: existing.claimsDigest, descriptorDigest: existing.descriptorDigest, credentialId: existing.credentialId, issuedAt: existing.issuedAt, notBefore: existing.notBefore, expiresAt: existing.expiresAt, status: existing.status, credential: existing.credential };
-      const transport = options.transport ?? new OpenCredentialsHttpTransport(descriptor, options.fetch, this.heldOptIn(options));
+      const transport = options.transport ?? new OpenCredentialsHttpTransport(descriptor, options.fetch);
       const verified = await verifyIssuedCredential({ envelope, descriptor, descriptorDigest: await canonicalDigest(descriptor), requirement, holderDid, issuerMetadata: await transport.issuerMetadata(options.signal), now: options.now?.(), checkStatus: (status, signal) => transport.checkStatus(status, signal), signal: options.signal });
       return { status: "reused", credential: verified, record: existing };
     }
