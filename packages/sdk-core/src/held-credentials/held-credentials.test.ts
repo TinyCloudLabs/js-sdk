@@ -24,11 +24,12 @@ import {
   type ProfileRow,
   type VerifyHeldPresentationOptions,
 } from "./index";
-import { MAX_JSON_DEPTH, decodeUtf8, asciiBytes, bytesToHex, encodeBase64Url, parseStrictJson } from "./encoding";
+import { MAX_JSON_DEPTH, decodeBase64Url, decodeUtf8, asciiBytes, bytesToHex, encodeBase64Url, parseStrictJson } from "./encoding";
 import { HELD_LIMITS } from "./verify";
 import { verifyEd25519Strict } from "./crypto";
 import { parseRfc3339 } from "./siwe";
 import { DEFAULT_ROWS, EMAIL_HELD_ROW, ORG_MEMBERSHIP_FREE_ROW, ORG_MEMBERSHIP_ROW, SHIPPED_ROWS, rowPermitsIssuer } from "./rows";
+import { selectDisclosures, sdHash, verifyHeldEmailCredential, type HeldEmailCredentialOptions } from "./credential";
 
 const enc = (value: unknown) => encodeBase64Url(new TextEncoder().encode(typeof value === "string" ? value : JSON.stringify(value)));
 const seed = (n: number) => Uint8Array.from({ length: 32 }, (_, i) => (i + n) & 0xff);
@@ -520,7 +521,7 @@ function stripComments(source: string): string {
 }
 
 test("the module has no Node-only imports (Worker-safe)", async () => {
-  for (const file of ["crypto", "did", "email", "encoding", "errors", "issuer-set", "nonce-store", "rows", "siwe", "verify", "index"]) {
+  for (const file of ["credential", "crypto", "did", "email", "encoding", "errors", "issuer-set", "nonce-store", "rows", "siwe", "verify", "index"]) {
     const text = await Bun.file(new URL(`./${file}.ts`, import.meta.url)).text();
     expect(stripComments(text)).not.toMatch(FORBIDDEN_NODE_ACCESS);
   }
@@ -1186,5 +1187,184 @@ describe("TC-1553: audience validator", () => {
     for (const bad of ["billing.tinycloud.xyz:443", "billing.tinycloud.xyz:0443", "billing.tinycloud.xyz:0", "billing.tinycloud.xyz:65536", "https://billing.tinycloud.xyz", "billing.tinycloud.xyz/path", "billing.tinycloud.xyz:8443/", "Billing.tinycloud.xyz", ""]) {
       expect(audienceCode(bad)).toBe("bad-config");
     }
+  });
+});
+
+// Credential-only verifier (S3.1). Synchronous; no nonce and no SIWE.
+const VECTOR_DIR = new URL("./fixtures/held-email-v1/", import.meta.url);
+
+/** Sync counterpart of `code()`: the credential-only verifier returns a value, not a promise. */
+function credentialCode(sdJwt: unknown, overrides: Partial<HeldEmailCredentialOptions> = {}): string {
+  try {
+    verifyHeldEmailCredential(sdJwt, {
+      now: NOW, issuerSet: parseIssuerSet(setOf(entryA()), { didMethods: METHODS }),
+      acceptedIssuers: [{ issuerDid: ISSUER_A }], didMethods: METHODS, owner: SUB, ...overrides,
+    });
+    return "ok";
+  } catch (error) {
+    if (error instanceof HeldCredentialError) return error.code;
+    throw error;
+  }
+}
+
+/** Sync counterpart for `sdHash`, which refuses with a HeldCredentialError. */
+function hashCode(value: unknown): string {
+  try {
+    sdHash(value as string);
+    return "ok";
+  } catch (error) {
+    if (error instanceof HeldCredentialError) return error.code;
+    throw error;
+  }
+}
+
+/** Sync counterpart for `selectDisclosures`. */
+function selectCode(sdJwt: string, names: string[]): string {
+  try {
+    selectDisclosures(sdJwt, names);
+    return "ok";
+  } catch (error) {
+    if (error instanceof HeldCredentialError) return error.code;
+    throw error;
+  }
+}
+
+describe("verifyHeldEmailCredential and selectDisclosures (credential only)", () => {
+  test("P1: the shipped Node vector verifies", async () => {
+    const vector = await Bun.file(new URL("vector.json", VECTOR_DIR)).json();
+    const verified = verifyHeldEmailCredential(vector.sdJwt, {
+      now: new Date(vector.now),
+      issuerSet: parseIssuerSet(vector.issuerSet, { didMethods: METHODS }),
+      acceptedIssuers: [{ issuerDid: "did:web:issuer.credentials.org" }],
+      didMethods: METHODS,
+      owner: vector.account,
+    });
+    expect(verified.subject).toBe(vector.account);
+    expect(verified.claims.email).toBe(vector.email);
+    expect(verified.profile).toBe(PROFILE);
+  });
+
+  test("P2: selectDisclosures keeps only the email disclosure; sdHash matches the shipped reference", async () => {
+    const vector = await Bun.file(new URL("vector.json", VECTOR_DIR)).json();
+    const reference = await Bun.file(new URL("sd-hash.json", VECTOR_DIR)).json();
+    const parts = selectDisclosures(vector.sdJwt, ["email"]).split("~");
+    expect(parts).toHaveLength(3);
+    expect(parts[0]).toBe(vector.sdJwt.split("~")[0]);
+    expect(parts[2]).toBe("");
+    expect(JSON.parse(decodeUtf8(decodeBase64Url(parts[1], "bad-disclosure"), "bad-disclosure"))[1]).toBe("email");
+    expect(sdHash(reference.sdJwt)).toBe(reference.sdHash);
+  });
+
+  test("N1 owner mismatch is refused with nonce-account-mismatch", () => {
+    expect(credentialCode(makeCredential().sdJwt, { owner: `did:pkh:eip155:1:${toChecksumAddress(addressOf(otherKey))}` })).toBe("nonce-account-mismatch");
+  });
+
+  test("N2 chain other than 1 is refused with bad-subject", () => {
+    const sdJwt = makeCredential({ payload: (p) => ({ ...p, sub: `did:pkh:eip155:137:${HOLDER}`, holderBinding: { did: `did:pkh:eip155:137:${HOLDER}`, signingDomain: BINDING } }) }).sdJwt;
+    expect(credentialCode(sdJwt)).toBe("bad-subject");
+  });
+
+  test("N3 wrong binding domain is refused with bad-holder-binding", () => {
+    const sdJwt = makeCredential({ payload: (p) => ({ ...p, holderBinding: { did: SUB, signingDomain: "tinycloud.credentials/other/v1" } }) }).sdJwt;
+    expect(credentialCode(sdJwt)).toBe("bad-holder-binding");
+  });
+
+  test("N4 status other than none is refused with bad-status", () => {
+    const sdJwt = makeCredential({ payload: (p) => ({ ...p, status: { method: "revoked" } }) }).sdJwt;
+    expect(credentialCode(sdJwt)).toBe("bad-status");
+  });
+
+  test("N5 typ other than vc+sd-jwt is refused with bad-header", () => {
+    const sdJwt = makeCredential({ header: (h) => ({ ...h, typ: "jwt" }) }).sdJwt;
+    expect(credentialCode(sdJwt)).toBe("bad-header");
+  });
+
+  test("N6 alg other than EdDSA is refused with bad-header", () => {
+    const sdJwt = makeCredential({ header: (h) => ({ ...h, alg: "ES256" }) }).sdJwt;
+    expect(credentialCode(sdJwt)).toBe("bad-header");
+  });
+
+  test("N7 a kid that is not accepted by the caller is refused with issuer-not-accepted", () => {
+    expect(credentialCode(makeCredential().sdJwt, { acceptedIssuers: [{ issuerDid: ISSUER_A, kid: `${ISSUER_A}#other` }] })).toBe("issuer-not-accepted");
+  });
+
+  test("N8 a credential issued after the issuer key was retired is refused with issuer-retired", () => {
+    const issuerSet = parseIssuerSet(setOf(entryA({ retiredAt: "2026-10-19T23:00:00Z" })), { didMethods: METHODS });
+    expect(credentialCode(makeCredential().sdJwt, { issuerSet })).toBe("issuer-retired");
+  });
+
+  test("N9 a missing iat is refused with bad-payload", () => {
+    const sdJwt = makeCredential({ payload: (p) => Object.fromEntries(Object.entries(p).filter(([k]) => k !== "iat")) }).sdJwt;
+    expect(credentialCode(sdJwt)).toBe("bad-payload");
+  });
+
+  test("N10 exp - iat above 31,536,000 seconds is refused with bad-lifetime", () => {
+    const sdJwt = makeCredential({ payload: (p) => ({ ...p, exp: (p.iat as number) + 365 * DAY + 1 }) }).sdJwt;
+    expect(credentialCode(sdJwt)).toBe("bad-lifetime");
+  });
+
+  test("N11 nbf later than now is refused with not-yet-valid", () => {
+    const sdJwt = makeCredential({ payload: (p) => ({ ...p, iat: NOW_S + 60, nbf: NOW_S + 60, exp: NOW_S + 60 + 365 * DAY }) }).sdJwt;
+    expect(credentialCode(sdJwt)).toBe("not-yet-valid");
+  });
+
+  test("N12 exp at or before now is refused with expired", () => {
+    const sdJwt = makeCredential({ payload: (p) => ({ ...p, exp: NOW_S - 1 }) }).sdJwt;
+    expect(credentialCode(sdJwt)).toBe("expired");
+  });
+
+  test("N13 a repeated _sd digest is refused with bad-payload", () => {
+    const sdJwt = makeCredential({ payload: (p) => ({ ...p, _sd: [(p._sd as string[])[0], (p._sd as string[])[0]] }) }).sdJwt;
+    expect(credentialCode(sdJwt)).toBe("bad-payload");
+  });
+
+  test("N14 an unexpected signed claim is refused with bad-payload", () => {
+    const sdJwt = makeCredential({ payload: (p) => ({ ...p, extra: "x" }) }).sdJwt;
+    expect(credentialCode(sdJwt)).toBe("bad-payload");
+  });
+
+  test("N15 a key-binding suffix is refused with bad-presentation", () => {
+    expect(credentialCode(`${makeCredential().sdJwt}a.b.c`)).toBe("bad-presentation");
+  });
+
+  test("N16 a non-ASCII email disclosure is refused with bad-disclosure", () => {
+    const sdJwt = makeCredential({ disclosures: [["email", "alicé@example.com"], ["emailDomain", "example.com"]] }).sdJwt;
+    expect(credentialCode(sdJwt)).toBe("bad-disclosure");
+  });
+
+  test("N17 a flipped signature byte is refused with bad-signature", () => {
+    const sdJwt = makeCredential({ signature: (sig) => { const flipped = sig.slice(); flipped[0] ^= 1; return flipped; } }).sdJwt;
+    expect(credentialCode(sdJwt)).toBe("bad-signature");
+  });
+
+  test("M2 owner in lowercase form for the EIP-55 subject is accepted", () => {
+    expect(credentialCode(makeCredential().sdJwt, { owner: `did:pkh:eip155:1:${HOLDER_LOWER}` })).toBe("ok");
+  });
+
+  test("M2b the same address on chain 137 is refused with nonce-account-mismatch", () => {
+    expect(credentialCode(makeCredential().sdJwt, { owner: `did:pkh:eip155:137:${HOLDER}` })).toBe("nonce-account-mismatch");
+  });
+
+  test("S1 sdHash refuses non-ASCII and non-string input with bad-presentation", () => {
+    expect(hashCode("\u0169")).toBe("bad-presentation");
+    expect(hashCode(42)).toBe("bad-presentation");
+    expect(hashCode(undefined)).toBe("bad-presentation");
+  });
+
+  test("S2 selectDisclosures refuses a repeated disclosure for a requested name with bad-disclosure", () => {
+    const sdJwt = makeCredential({ rawDisclosures: [disclosure("email", "alice@example.com").text] }).sdJwt;
+    expect(selectCode(sdJwt, ["email"])).toBe("bad-disclosure");
+  });
+
+  test("S3 selectDisclosures refuses empty or duplicate names with bad-config", () => {
+    const sdJwt = makeCredential().sdJwt;
+    expect(selectCode(sdJwt, [])).toBe("bad-config");
+    expect(selectCode(sdJwt, ["email", "email"])).toBe("bad-config");
+  });
+
+  test("S4 selectDisclosures refuses an absent name with bad-disclosure and a key-binding suffix with bad-presentation", () => {
+    const sdJwt = makeCredential().sdJwt;
+    expect(selectCode(sdJwt, ["phone"])).toBe("bad-disclosure");
+    expect(selectCode(`${sdJwt}a.b.c`, ["email"])).toBe("bad-presentation");
   });
 });

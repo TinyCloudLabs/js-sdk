@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { format, inspect } from "node:util";
@@ -750,4 +750,91 @@ test("the transport keeps the witness's recoverable:false on SIGNATURE_REJECTED 
 
 test("an explicit recoverable flag on CredentialError overrides the per-code default", () => {
   expect(new CredentialError("ISSUER_UNREADY", "Credential issuer is not ready", { recoverable: false }).recoverable).toBe(false);
+});
+
+/** A live pending of the held profile for `address`: a real v1 record with only the profile and request id changed. */
+async function heldPendingFor(address: string): Promise<EmailProofPending> {
+  const witness = makeWitness({ code: CODE });
+  const seeded = await requestEmailProofCode({ address, holder: HOLDER, fetch: asFetch(witness.fetch) });
+  const createdAt = new Date();
+  // Spreading a pending drops the non-enumerable verifier, so rebuild it from named fields.
+  return restoreEmailProofPending({
+    type: seeded.type,
+    version: seeded.version,
+    profile: "tinycloud.email-held/v1",
+    address: seeded.address,
+    requestId: "H".repeat(32),
+    verifier: seeded.verifier,
+    holderDid: seeded.holderDid,
+    descriptorDigest: seeded.descriptorDigest,
+    requirementDigest: seeded.requirementDigest,
+    openerOrigin: seeded.openerOrigin,
+    createdAt: createdAt.toISOString(),
+    expiresAt: new Date(createdAt.getTime() + 5 * 60_000).toISOString(),
+  });
+}
+
+/** The one pending file under `<home>/credentials` whose content names `requestId`. */
+function pendingFileHolding(home: string, requestId: string): string {
+  const dir = join(home, "credentials");
+  const matches = readdirSync(dir).filter((name) => readFileSync(join(dir, name), "utf8").includes(requestId));
+  if (matches.length !== 1) throw new Error(`expected one pending file for ${requestId}, found ${matches.length}`);
+  return join(dir, matches[0]!);
+}
+
+test("v1 acquire never resumes or deletes a live held pending for the same address (memory store)", async () => {
+  const store = createMemoryEmailProofPendingStore();
+  const held = await heldPendingFor(ADDRESS);
+  await store.put(held);
+  const witness = makeWitness({ code: CODE });
+  const codedFor: string[] = [];
+  const acquisition = await acquireEmailProofWithIssuerKeys({
+    address: ADDRESS,
+    holder: HOLDER,
+    fetch: asFetch(witness.fetch),
+    pendingStore: store,
+    getCode: async ({ pending }) => { codedFor.push(pending.requestId); return CODE; },
+  }, witness.issuerKeys);
+  expect(acquisition.status).toBe("issued");
+  expect(codedFor).toHaveLength(1);
+  expect(codedFor).not.toContain(held.requestId);
+  expect(await store.get(held.requestId, new Date())).toEqual(held);
+});
+
+test("v1 acquire never resumes or deletes a live held pending for the same address (file store)", async () => {
+  const home = mkdtempSync(join(tmpdir(), "email-proof-held-"));
+  try {
+    const store = createFileEmailProofPendingStore({ home });
+    const held = await heldPendingFor(ADDRESS);
+    await store.put(held);
+    const heldFile = pendingFileHolding(home, held.requestId);
+    const heldBytes = readFileSync(heldFile);
+    const witness = makeWitness({ code: CODE });
+    const codedFor: string[] = [];
+    const acquisition = await acquireEmailProofWithIssuerKeys({
+      address: ADDRESS,
+      holder: HOLDER,
+      fetch: asFetch(witness.fetch),
+      pendingStore: createFileEmailProofPendingStore({ home }),
+      getCode: async ({ pending }) => { codedFor.push(pending.requestId); return CODE; },
+    }, witness.issuerKeys);
+    expect(acquisition.status).toBe("issued");
+    expect(codedFor).toHaveLength(1);
+    expect(codedFor).not.toContain(held.requestId);
+    expect(readFileSync(heldFile).equals(heldBytes)).toBe(true);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("a refused v1 proof with a live held pending for the same address leaves the held pending in place", async () => {
+  const store = createMemoryEmailProofPendingStore();
+  const held = await heldPendingFor(ADDRESS);
+  await store.put(held);
+  const witness = makeWitness({ code: CODE });
+  const refused = asFetch(async (url, init) => (String(url).endsWith("/proof") ? unknownCode(false) : witness.fetch(url, init)));
+  const error: unknown = await acquireEmailProofWithIssuerKeys({ address: ADDRESS, holder: HOLDER, getCode: async () => CODE, fetch: refused, pendingStore: store }, witness.issuerKeys)
+    .catch((caught: unknown) => caught);
+  expect(error).toBeInstanceOf(EmailProofError);
+  expect(await store.get(held.requestId, new Date())).toEqual(held);
 });
