@@ -1,5 +1,13 @@
 # @tinycloud/share-envelope
 
+## 1.4.1-beta.0
+
+### Patch Changes
+
+- 5e47629: `require("@tinycloud/share-envelope/links")` now loads from CommonJS. `dist/links.cjs` bundles `multiformats`, whose subpath exports have no `require` condition, as `dist/index.cjs` already does; the ESM build is unchanged. This also fixes `require("@tinycloud/share-sdk/share-index")`, which requires it.
+
+  Details: TC-1739
+
 ## 1.4.0
 
 ### Minor Changes

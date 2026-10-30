@@ -29,6 +29,7 @@
     "@tinycloud/sdk-services-test": "21.0.1"
   },
   "changesets": [
+    "share-envelope-cjs-links",
     "web-sdk-panel-allow-diagnostics"
   ]
 }
