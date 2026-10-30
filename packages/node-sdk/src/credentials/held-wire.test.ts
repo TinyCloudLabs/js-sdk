@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { acquireEmailProofWithIssuerKeys, completeEmailProofWithIssuerKeys, createMemoryEmailProofPendingStore, EmailProofError, requestEmailProofCode, restoreEmailProofPending, createEd25519HolderSigner, type EmailProofPending, type HolderSigner } from "./email-proof";
 import { canonicalDigest } from "@tinycloud/sdk-core";
+import { validateCredentialFlowDescriptor, validateCredentialHolderBinding, type CredentialRequirement } from "@tinycloud/sdk-core";
+import { interpretCredentialFlow } from "./interpreter";
+import type { CredentialAcquisitionTransport } from "./types";
 import { createHeldWitness, testAccountHolder, vectors, HELD_DESCRIPTOR_DIGEST, type HeldWitnessOptions } from "./test-support/held-witness";
 
 // TC-2254 (contract v2.4): acquiring `tinycloud.email-held/v1` from the witness, against a fake witness built from the
@@ -372,4 +375,30 @@ describe("an unavailable or unpinned held profile is PROFILE_UNAVAILABLE, with t
       expect(w.holder.calls.count).toBe(0);
     });
   }
+});
+
+describe("no caller can sign a held binding by accident: the interpreter fails closed", () => {
+  const descriptor = validateCredentialFlowDescriptor(vectors.descriptor.held);
+  const requirement = { type: "TinyCloudCredentialRequirement", version: 1, profile: { id: HELD, version: 1 }, credentialType: { id: "opencredentials.email/v1", version: 1 }, claims: { email: ALICE }, maxAgeSeconds: 31536000 } as CredentialRequirement;
+  const binding = validateCredentialHolderBinding(vectors.happyPath.holder_binding.response.body.binding);
+  const transport = (): CredentialAcquisitionTransport => ({
+    state: async () => ({ type: "OpenCredentialsAcquisitionState", version: 1, requestId: binding.requestId, transitionId: "t", state: "pending", correlationId: "c", nextStep: { id: "holder_signature", type: "holder_signature", version: 1, constraints: {} } }),
+    holderBinding: async () => binding,
+    submitHolderSignature: async () => { throw new Error("must not be reached"); },
+  } as unknown as CredentialAcquisitionTransport);
+  const base = { descriptor, requirement, requestId: binding.requestId, verifier: "v", holderDid: binding.holderDid, descriptorDigest: binding.descriptorDigest, requirementDigest: binding.requirementDigest, openerOrigin: "https://localhost" };
+
+  test("a held descriptor with a signing adapter that names no EIP191 key (the web root path) is refused before any signature", async () => {
+    let signed = 0;
+    const signing = { autoSign: async () => { signed += 1; return new Uint8Array([1]); } };
+    await expect(interpretCredentialFlow({ ...base, transport: transport(), signing })).rejects.toMatchObject({ code: "REQUEST_SUBSTITUTED" });
+    expect(signed).toBe(0);
+  });
+
+  test("a held descriptor with an EdDSA key is refused before any signature", async () => {
+    let signed = 0;
+    const autoSign = async () => { signed += 1; return new Uint8Array([1]); };
+    await expect(interpretCredentialFlow({ ...base, transport: transport(), signing: { autoSign, holderKey: { alg: "EdDSA", kid: "k" } } })).rejects.toMatchObject({ code: "REQUEST_SUBSTITUTED" });
+    expect(signed).toBe(0);
+  });
 });
