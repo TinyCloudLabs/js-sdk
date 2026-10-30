@@ -4,6 +4,7 @@ import {
   type CredentialFlowDescriptor, type CredentialHolderBinding, type CredentialIssuerMetadata,
   type CredentialRequirement, type IssuedCredentialEnvelope,
 } from "@tinycloud/sdk-core";
+import { HELD_ACCOUNT_BINDING_PINS } from "./pins";
 import type { CredentialAcquisitionTransport, CredentialRequestState, HolderSignatureKey, PrimitiveStepResult } from "./types";
 
 function object(value: unknown, label: string): Record<string, unknown> { if (typeof value !== "object" || value === null || Array.isArray(value)) throw new CredentialError("VERIFICATION_FAILED", `${label} is invalid`); return value as Record<string, unknown>; }
@@ -38,9 +39,12 @@ function serverError(value: unknown, response: Response, honorServerRecoverable:
 export class OpenCredentialsHttpTransport implements CredentialAcquisitionTransport {
   private readonly nonces = new Map<string, string>();
   private readonly bindings = new Map<string, CredentialHolderBinding>();
-  /** `allowHeldProfile`: the explicit per-call opt-in for the held (account-bound) profile; without it a held descriptor is refused here, before any request (TC-2254 C8.3). */
-  constructor(private readonly descriptor: CredentialFlowDescriptor, private readonly fetchFn: typeof fetch = globalThis.fetch.bind(globalThis), private readonly options: { readonly honorServerRecoverable?: boolean; readonly allowHeldProfile?: true } = {}) {
-    if (descriptor.holderBinding.alg === "EIP191" && options.allowHeldProfile !== true) throw new CredentialError("UNSUPPORTED_PROFILE", "The held credential profile requires an explicit opt-in");
+  /**
+   * `allowAccountSubject` is passed only by the email-proof functions, after the per-call held opt-in was accepted. Without it an account-bound
+   * (held) descriptor is refused here, before any request (TC-2254 A2.5).
+   */
+  constructor(private readonly descriptor: CredentialFlowDescriptor, private readonly fetchFn: typeof fetch = globalThis.fetch.bind(globalThis), private readonly options: { readonly honorServerRecoverable?: boolean; readonly allowAccountSubject?: true } = {}) {
+    if (descriptor.subjectRelationship === "account_is_subject" && options.allowAccountSubject !== true) throw new CredentialError("UNSUPPORTED_PROFILE", "The held credential profile requires an explicit opt-in");
   }
   private url(endpoint: Parameters<typeof credentialEndpointPath>[0], id?: string): string { return new URL(credentialEndpointPath(endpoint, id), this.descriptor.issuer.origin).href; }
   private async request(endpoint: Parameters<typeof credentialEndpointPath>[0], input: { readonly id?: string; readonly method?: "GET" | "POST"; readonly verifier?: string; readonly body?: unknown; readonly signal?: AbortSignal }): Promise<unknown> {
@@ -60,7 +64,7 @@ export class OpenCredentialsHttpTransport implements CredentialAcquisitionTransp
     if (response.status === 204) return undefined; try { return await response.json(); } catch (cause) { throw new CredentialError("VERIFICATION_FAILED", "OpenCredentials response is invalid", { cause }); }
   }
   async create(input: { descriptor: CredentialFlowDescriptor; descriptorDigest: string; requirement: CredentialRequirement; requirementDigest: string; holderDid: string; openerOrigin: string; completionVerifierChallenge: string; inputs?: Readonly<Record<string, string>>; signal?: AbortSignal }) {
-    const body = object(await this.request("request", { method: "POST", body: { protocol: input.descriptor.protocol, profile: input.descriptor.profile, profileVersion: input.descriptor.profileVersion, descriptorDigest: input.descriptorDigest, requirementDigest: input.requirementDigest, holderDid: input.holderDid, inputs: input.inputs ?? input.requirement.claims, audience: "tinycloud://credentials", openerOrigin: input.openerOrigin, completionOrigin: input.openerOrigin, completionContext: "sdk-acquisition", completionVerifierChallenge: input.completionVerifierChallenge }, signal: input.signal }), "create response");
+    const body = object(await this.request("request", { method: "POST", body: { protocol: input.descriptor.protocol, profile: input.descriptor.profile, profileVersion: input.descriptor.profileVersion, descriptorDigest: input.descriptorDigest, requirementDigest: input.requirementDigest, holderDid: input.holderDid, inputs: input.inputs ?? input.requirement.claims, audience: HELD_ACCOUNT_BINDING_PINS.audience, openerOrigin: input.openerOrigin, completionOrigin: input.openerOrigin, completionContext: HELD_ACCOUNT_BINDING_PINS.completionContext, completionVerifierChallenge: input.completionVerifierChallenge }, signal: input.signal }), "create response");
     if (body.type !== "tinycloud.credentials/acquisition-request/v1" || body.protocol !== input.descriptor.protocol || body.next !== "challenge" || body.endpoint !== "challenge") throw new CredentialError("VERIFICATION_FAILED", "create response is invalid");
     const requestId = opaque(body.requestId, "requestId"); return { requestId, locator: requestId, expiresAt: timestamp(body.expiresAt, "expiresAt"), correlationId: requestId };
   }
@@ -74,12 +78,16 @@ export class OpenCredentialsHttpTransport implements CredentialAcquisitionTransp
     if (raw.type !== "tinycloud.credentials/acquisition-state/v1" || raw.requestId !== id || raw.profile !== this.descriptor.profile || raw.profileVersion !== 1) throw new CredentialError("REQUEST_SUBSTITUTED", "Credential state response is substituted");
     const base = { type: "OpenCredentialsAcquisitionState" as const, version: 1 as const, requestId: id, transitionId: `${String(raw.state)}:${String(raw.resultPreviouslyRead ?? false)}`, correlationId: id };
     if (raw.state === "challenge_required") { const type = this.proofStep(); return { ...base, state: "pending", nextStep: { id: type, type, version: 1, constraints: { challengeRequired: true } } }; }
-    if (raw.state === "proof_required") { const type = this.proofStep(); this.nonces.set(id, opaque(raw.challengeNonce, "challengeNonce")); return { ...base, state: "pending", nextStep: { id: type, type, version: 1, constraints: {} } }; }
-    if (raw.state === "holder_binding_required" || raw.state === "holder_signature_required") {
-      // A held request resumed in a new call learns its challenge nonce here (R5 is only served once the proof is accepted).
-      if (raw.challengeNonce !== null && raw.challengeNonce !== undefined) this.nonces.set(id, opaque(raw.challengeNonce, "challengeNonce"));
-      return { ...base, state: "pending", nextStep: { id: "holder_signature", type: "holder_signature", version: 1, constraints: {} } };
+    // Held: the challenge nonce is read from R2 in every state after `challenge_required`, so a call that resumes the request (a retry after
+    // a failed wallet prompt or a failed notice) has it. A missing nonce, or one that differs from the one this transport already holds, is a substitution.
+    if (this.descriptor.subjectRelationship === "account_is_subject" && (raw.state === "proof_required" || raw.state === "holder_binding_required" || raw.state === "holder_signature_required" || raw.state === "ready_to_issue" || raw.state === "issued")) {
+      const nonce = raw.challengeNonce;
+      const prior = this.nonces.get(id);
+      if (typeof nonce !== "string" || nonce === "" || (prior !== undefined && prior !== nonce)) throw new CredentialError("REQUEST_SUBSTITUTED", "Credential challenge nonce is missing or changed");
+      this.nonces.set(id, opaque(nonce, "challengeNonce"));
     }
+    if (raw.state === "proof_required") { const type = this.proofStep(); if (this.descriptor.subjectRelationship !== "account_is_subject") this.nonces.set(id, opaque(raw.challengeNonce, "challengeNonce")); return { ...base, state: "pending", nextStep: { id: type, type, version: 1, constraints: {} } }; }
+    if (raw.state === "holder_binding_required" || raw.state === "holder_signature_required") return { ...base, state: "pending", nextStep: { id: "holder_signature", type: "holder_signature", version: 1, constraints: {} } };
     if (raw.state === "ready_to_issue") return { ...base, state: "ready_to_issue" };
     if (raw.state === "issued") return { ...base, state: "complete" };
     throw new CredentialError("REQUEST_SUBSTITUTED", "Credential state is unsupported");

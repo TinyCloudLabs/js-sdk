@@ -218,8 +218,6 @@ export interface CredentialsOperationOptions {
   readonly timeoutMs?: number;
   readonly onProgress?: (event: CredentialProgressEvent) => void;
   readonly now?: () => Date;
-  /** The explicit per-call opt-in for the held (account-bound) profile. Without it a held requirement or descriptor is refused before any request. */
-  readonly allowHeldProfile?: true;
 }
 
 export interface CredentialsAcquireOptions extends CredentialsOperationOptions {

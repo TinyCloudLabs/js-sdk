@@ -119,6 +119,10 @@ export interface HeldWitnessOptions {
   readonly issueEmail?: string;
   /** The mailbox only the signed credential discloses; the result envelope still names the requested mailbox. */
   readonly credentialEmail?: string;
+  /** The first N issue (R7) calls fail with 503 DELIVERY_FAILED: the notice mail is not sent and the record stays ready_to_issue (OC mod.rs:2453-2458). */
+  readonly failNotice?: number;
+  /** Mutates the binding the witness serves from the SECOND R5 on only (a witness that changes its binding on a retry). R6 is not affected. */
+  readonly retryBinding?: (binding: Record<string, unknown>) => Record<string, unknown>;
   /** Mutates the credential payload before signing. */
   readonly mutatePayload?: (payload: Record<string, unknown>) => Record<string, unknown>;
   /** Called after each route, e.g. to advance the clocks to model a slow user. */
@@ -141,6 +145,8 @@ interface Record_ {
   attempts: number;
   proved: boolean;
   bindingServed: boolean;
+  bindingServes: number;
+  noticeFailures: number;
   signed: boolean;
   jti: string;
   result?: Record<string, unknown>;
@@ -274,7 +280,7 @@ export function createHeldWitness(options: HeldWitnessOptions = {}) {
       const record: Record_ = {
         id, verifierChallenge: String(body.completionVerifierChallenge), holderDid, email: String(body.inputs.email), requirementDigest: String(body.requirementDigest),
         openerOrigin: String(body.openerOrigin), completionContext: String(body.completionContext), audience: String(body.audience),
-        createdMs: nowMs, expiresSec: Math.floor(nowMs / 1000) + 600, attempts: 0, proved: false, bindingServed: false, signed: false, jti: uuidV4(),
+        createdMs: nowMs, expiresSec: Math.floor(nowMs / 1000) + 600, attempts: 0, proved: false, bindingServed: false, bindingServes: 0, noticeFailures: 0, signed: false, jti: uuidV4(),
       };
       records.set(id, record);
       return finish("create", { status: 201, body: { endpoint: "challenge", expiresAt: rfc3339(record.expiresSec * 1000), next: "challenge", protocol: PROTOCOL, requestId: id, type: "tinycloud.credentials/acquisition-request/v1" } }, id);
@@ -319,7 +325,8 @@ export function createHeldWitness(options: HeldWitnessOptions = {}) {
       case "holder-binding": {
         if (!record.proved) return finish(route, failure(400, "INVALID_STATE", "proof_required", false), id);
         record.bindingServed = true;
-        const binding = bindingFor(record);
+        record.bindingServes += 1;
+        const binding = record.bindingServes > 1 && options.retryBinding ? options.retryBinding(bindingFor(record)) : bindingFor(record);
         return finish(route, { status: 200, body: { alg: "EIP191", binding, canonical: b64u(text(jcsCanonicalize(binding))), signingDomain: ACCOUNT_DOMAIN, type: "tinycloud.credentials/holder-binding-request/v1" } }, id);
       }
       case "holder-signature": {
@@ -336,6 +343,10 @@ export function createHeldWitness(options: HeldWitnessOptions = {}) {
       }
       case "issue": {
         if (!record.signed) return finish(route, failure(400, "INVALID_STATE", "holder_signature_required", false), id);
+        if (!record.result && record.noticeFailures < (options.failNotice ?? 0)) {
+          record.noticeFailures += 1;
+          return finish(route, failure(503, "DELIVERY_FAILED", "delivery_failed", true), id);
+        }
         if (!record.result) {
           record.result = issue(record, nowMs);
           mails.push({ kind: "notice", to: record.email, requestId: id });

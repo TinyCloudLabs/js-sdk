@@ -1,4 +1,5 @@
 import { canonicalDigest, CredentialError, type CredentialFlowDescriptor, type CredentialHolderBinding, type CredentialRequirement } from "@tinycloud/sdk-core";
+import { HELD_ACCOUNT_BINDING_PINS as PINS } from "./pins";
 
 /** The witness's request window: the signed binding runs from request creation to creation + 600 s. */
 const REQUEST_TTL_MS = 600_000;
@@ -40,8 +41,12 @@ export async function assertHeldBinding(binding: CredentialHolderBinding, expect
     binding.profile !== descriptor.profile ||
     binding.openerOrigin !== expected.openerOrigin ||
     binding.completionOrigin !== expected.openerOrigin ||
-    binding.audience !== "tinycloud://credentials" ||
-    binding.completionContext !== "sdk-acquisition"
+    binding.audience !== PINS.audience ||
+    binding.completionContext !== PINS.completionContext ||
+    // The static fields, against the one frozen object the request body and the account signer also use (A2.4).
+    binding.type !== PINS.type || binding.protocol !== PINS.protocol || binding.profile !== PINS.profile || binding.profileVersion !== PINS.profileVersion ||
+    binding.descriptorDigest !== PINS.descriptorDigest || binding.issuer !== PINS.issuer || binding.issuerKid !== PINS.issuerKid ||
+    binding.openerOrigin !== PINS.openerOrigin || binding.completionOrigin !== PINS.completionOrigin || binding.credentialLifetimeSeconds !== PINS.credentialLifetimeSeconds
   ) throw substituted();
   if (expected.challengeNonce === undefined || binding.challengeNonce !== expected.challengeNonce) throw substituted();
   if (binding.normalizedClaimsDigest !== await canonicalDigest(expected.requirement.claims)) throw substituted();

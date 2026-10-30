@@ -531,7 +531,7 @@ describe("the interpreter fails closed: descriptor, holder key and nonce must ag
     } as unknown as CredentialAcquisitionTransport;
     return { transport, submitted };
   }
-  const heldInput = (transport: CredentialAcquisitionTransport, signing: Record<string, unknown>) => ({ descriptor: held, requirement: heldRequirement, requestId: heldBinding.requestId, verifier: "v", holderDid: heldBinding.holderDid, descriptorDigest: heldBinding.descriptorDigest, requirementDigest: heldBinding.requirementDigest, openerOrigin: "https://localhost", expiresAt: heldBinding.expiresAt, allowHeldProfile: true as const, transport, signing });
+  const heldInput = (transport: CredentialAcquisitionTransport, signing: Record<string, unknown>) => ({ descriptor: held, requirement: heldRequirement, requestId: heldBinding.requestId, verifier: "v", holderDid: heldBinding.holderDid, descriptorDigest: heldBinding.descriptorDigest, requirementDigest: heldBinding.requirementDigest, openerOrigin: "https://localhost", expiresAt: heldBinding.expiresAt, allowAccountSubject: true as const, transport, signing });
   const ticketInput = (transport: CredentialAcquisitionTransport, signing: Record<string, unknown>) => ({ descriptor: ticket, requirement: { claims: { email: ALICE } } as unknown as CredentialRequirement, requestId: ticketBinding.requestId, verifier: "v", holderDid: ticketBinding.holderDid, descriptorDigest: "D".repeat(43), requirementDigest: "Q".repeat(43), openerOrigin: "https://localhost", transport, signing });
   const counting = (extra: Record<string, unknown> = {}) => { const seen = { signed: 0 }; return { seen, signing: { autoSign: async () => { seen.signed += 1; return new Uint8Array(65).fill(1); }, ...extra } }; };
 
@@ -569,7 +569,7 @@ describe("the transport: an account holder must name its key (S10)", () => {
   test("submitHolderSignature for a held descriptor without a key is refused before any request; with the key it is sent", async () => {
     const w = world();
     const pending = await requestEmailProofCode(w.input());
-    const transport = new OpenCredentialsHttpTransport(validateCredentialFlowDescriptor(vectors.descriptor.held), w.witness.fetch, { honorServerRecoverable: true, allowHeldProfile: true } as never);
+    const transport = new OpenCredentialsHttpTransport(validateCredentialFlowDescriptor(vectors.descriptor.held), w.witness.fetch, { honorServerRecoverable: true, allowAccountSubject: true } as never);
     const verifier = (pending as unknown as { verifier: string }).verifier;
     await transport.state(pending.requestId, verifier);
     await transport.submitStep(pending.requestId, verifier, "mailbox_otp", { otp: "12345678" });

@@ -22,15 +22,9 @@ import { parseIssuerSet, parsePkhDid, toChecksumAddress, verifyHeldEmailCredenti
 import { interpretCredentialFlow } from "./interpreter";
 import { OpenCredentialsHttpTransport } from "./transport";
 import type { CredentialSigningAdapter, PrimitiveStepHandler } from "./types";
+import { EMAIL_PROOF_PINS, HELD_ACCOUNT_BINDING_PINS } from "./pins";
 
-/** Production pins. Credentials verify only against these values. Tests pin them literally. */
-export const EMAIL_PROOF_PINS = Object.freeze({
-  witnessOrigin: "https://witness.credentials.org",
-  issuerDid: "did:web:issuer.credentials.org",
-  issuerKid: "did:web:issuer.credentials.org#controller",
-  issuerX: "eEJI4xEobto4HtQ7Pg9R1vBOwcpfGRTlXDG5QfqLnGQ",
-  descriptorDigest: "1tg-qphmKBVtNwzVg9xyz-xxqt_xtMXAsQyXw46m8S0",
-} as const);
+export { EMAIL_PROOF_PINS, HELD_ACCOUNT_BINDING_PINS };
 
 export const EMAIL_PROOF_CREDENTIAL_TYPE = { id: "opencredentials.email/v1", version: 1 } as const;
 /** A pending request is never trusted beyond this window, measured from creation. */
@@ -54,10 +48,10 @@ const PROFILE_PINS: Readonly<Record<EmailProofProfileId, { readonly descriptorDi
   "tinycloud.email-proof/v1": { descriptorDigest: EMAIL_PROOF_PINS.descriptorDigest, requiredStep: "mailbox_otp", enabled: true },
   // Held profile: disabled by default. A call enables it only with the per-call opt-in `allowHeldProfile: true` (see `profilePin`).
   // Without it, requests refuse with PROFILE_UNAVAILABLE before any network call.
-  "tinycloud.email-held/v1": { descriptorDigest: "dc3_DuvzipXwYkTfjKqTaK1c3VS0YSPnaBsYSQriC0w", requiredStep: "mailbox_otp", enabled: false },
+  "tinycloud.email-held/v1": { descriptorDigest: HELD_ACCOUNT_BINDING_PINS.descriptorDigest, requiredStep: "mailbox_otp", enabled: false },
 };
 
-const OPENER_ORIGIN = "https://localhost";
+const OPENER_ORIGIN = HELD_ACCOUNT_BINDING_PINS.openerOrigin;
 const HELD_PROFILE = "tinycloud.email-held/v1" as const;
 const HELD_KID_FRAGMENT = "blockchainAccountId";
 /** The held requirement's freshness (SPEC): 365 days. */
@@ -367,7 +361,7 @@ export async function requestEmailProofCode(input: EmailProofRequestInput): Prom
   const descriptor = await witnessDescriptor(profile, requirement, { fetch: input.fetch, signal }, "request", input.allowHeldProfile);
   const descriptorDigest = await canonicalDigest(descriptor);
   const verifier = randomVerifier();
-  const transport = new OpenCredentialsHttpTransport(descriptor, input.fetch, { honorServerRecoverable: true, ...(input.allowHeldProfile === true ? { allowHeldProfile: true as const } : {}) });
+  const transport = new OpenCredentialsHttpTransport(descriptor, input.fetch, { honorServerRecoverable: true, ...(held ? { allowAccountSubject: true as const } : {}) });
 
   const createdAtMs = now().getTime();
   let created: Awaited<ReturnType<OpenCredentialsHttpTransport["create"]>>;
@@ -411,7 +405,7 @@ export async function requestEmailProofCode(input: EmailProofRequestInput): Prom
   try {
     await interpretCredentialFlow({
       descriptor,
-      ...(input.allowHeldProfile === true ? { allowHeldProfile: true as const } : {}),
+      ...(held ? { allowAccountSubject: true as const } : {}),
       requirement,
       requestId: created.requestId,
       verifier,
@@ -421,7 +415,7 @@ export async function requestEmailProofCode(input: EmailProofRequestInput): Prom
       openerOrigin: OPENER_ORIGIN,
       ...(held ? { expiresAt: created.expiresAt } : {}),
       transport,
-      signing: holderSigning(input.holder),
+      signing: holderSigning(input.holder, held),
       handlers: { mailbox_otp: pauseForCode },
       signal,
     });
@@ -473,7 +467,7 @@ async function completeWithIssuerKeys(
   const descriptor = await witnessDescriptor(pending.profile, requirement, { fetch: input.fetch, signal }, "session", input.allowHeldProfile);
   const descriptorDigest = await canonicalDigest(descriptor);
   if (descriptorDigest !== pending.descriptorDigest) throw new EmailProofError("session", "SESSION_INVALID");
-  const transport = new OpenCredentialsHttpTransport(descriptor, input.fetch, { honorServerRecoverable: true, ...(input.allowHeldProfile === true ? { allowHeldProfile: true as const } : {}) });
+  const transport = new OpenCredentialsHttpTransport(descriptor, input.fetch, { honorServerRecoverable: true, ...(held ? { allowAccountSubject: true as const } : {}) });
 
   try {
     // The code email was sent in step 1. A challenge-required state here would make
@@ -482,7 +476,7 @@ async function completeWithIssuerKeys(
     if (state.nextStep?.constraints.challengeRequired === true) throw new EmailProofError("session", "SESSION_INVALID");
     await interpretCredentialFlow({
       descriptor,
-      ...(input.allowHeldProfile === true ? { allowHeldProfile: true as const } : {}),
+      ...(held ? { allowAccountSubject: true as const } : {}),
       requirement,
       requestId: pending.requestId,
       verifier: pending.verifier,
@@ -492,7 +486,7 @@ async function completeWithIssuerKeys(
       openerOrigin: pending.openerOrigin,
       ...(held ? { expiresAt: pending.serverExpiresAt } : {}),
       transport,
-      signing: holderSigning(input.holder),
+      signing: holderSigning(input.holder, held),
       handlers: { mailbox_otp: async () => ({ otp: input.code }) },
       signal,
     });
@@ -827,8 +821,21 @@ async function verifyHeldResult(input: {
 }
 
 /** Holder signing: the signer receives the raw binding bytes and returns a raw Ed25519 signature. The kid goes on the wire. */
-function holderSigning(holder: HolderSigner): CredentialSigningAdapter {
-  return { autoSign: async (_binding, bytes) => holder.sign(bytes), holderKey: { alg: holder.alg, kid: holder.kid } };
+function holderSigning(holder: HolderSigner, held: boolean): CredentialSigningAdapter {
+  return {
+    autoSign: async (_binding, bytes) => {
+      try {
+        return await holder.sign(bytes);
+      } catch (error) {
+        // A2.3 (S14): in the held flow an error from the caller's wallet is a recoverable rejection of the signature, not a wrong code. The
+        // signer guard's own refusal (an EmailProofError) and an abort or timeout keep their code.
+        const aborted = error instanceof DOMException && (error.name === "TimeoutError" || error.name === "AbortError");
+        if (!held || error instanceof EmailProofError || aborted) throw error;
+        throw new EmailProofError("credential", "SIGNATURE_REJECTED");
+      }
+    },
+    holderKey: { alg: holder.alg, kid: holder.kid },
+  };
 }
 
 function randomVerifier(): string {
