@@ -192,9 +192,9 @@ describe('a held record never loads as a ticket record, nor the reverse (fail cl
 
   test('put refuses a held pending that lacks serverExpiresAt, and a ticket pending that has one, before writing', async () => {
     const withoutField = restoreEmailProofPending({ ...held(), serverExpiresAt: undefined } as unknown as EmailProofPending);
-    await expect(freshStore().put(withoutField)).rejects.toBeInstanceOf(PendingStoreError);
+    await expect(freshStore().put(withoutField)).rejects.toMatchObject({ name: 'PendingStoreError', code: 'credential-store-invalid' });
     const ticketWithField = restoreEmailProofPending({ ...held(), profile: TICKET } as unknown as EmailProofPending);
-    await expect(freshStore().put(ticketWithField)).rejects.toBeInstanceOf(PendingStoreError);
+    await expect(freshStore().put(ticketWithField)).rejects.toMatchObject({ name: 'PendingStoreError', code: 'credential-store-invalid' });
     expect(fs.existsSync(path.join(home, 'credentials')) ? fs.readdirSync(path.join(home, 'credentials')).filter((n) => n.startsWith('pending-')) : []).toEqual([]);
   });
 });
