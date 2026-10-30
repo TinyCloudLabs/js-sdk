@@ -284,7 +284,7 @@ async function judgeHeld(
   try {
     verified = verifyHeldEmailCredential(value.credential, policyOptions(policy, now, owner));
   } catch (error) {
-    if (!(error instanceof HeldCredentialError)) throw error;
+    if (!(error instanceof HeldCredentialError) || error.code === "bad-config") throw error;
     return { kind: error.code === "expired" ? "expired" : "invalid" };
   }
   const email = verified.claims.email;
@@ -366,9 +366,9 @@ export type ListHeldEmailCredentialsInput = Omit<FindHeldCredentialInput, "email
  * Returns every valid record, not one per email: no email filter and no "latest" pick. Expired records and
  * records the verifier refuses (status other than none, issuer retired or not accepted, bad signature) are
  * EXCLUDED. Validity is what `findHeldCredential` applies: re-verification plus the reuse margin. A record is
- * listed only if it is valid for at least 10 more minutes, meaning its expiry is more than `HELD_REUSE_MARGIN_MS`
- * after `now`. A record exactly at the margin is excluded, as in `findHeldCredential`, so the screen never offers
- * a record that `findHeldCredential` or a presentation would refuse.
+ * listed only if it is valid for more than 10 more minutes, meaning its expiry is more than `HELD_REUSE_MARGIN_MS`
+ * after `now`. A record with exactly 10 minutes left is excluded, as in `findHeldCredential`, so the screen never
+ * offers a record that `findHeldCredential` or a presentation would refuse.
  *
  * Order: newest `issuedAt` first; equal `issuedAt` by ascending `recordId`. Returns `[]` when there are none.
  *
@@ -396,7 +396,9 @@ export async function listHeldEmailCredentials(input: ListHeldEmailCredentialsIn
     let reading: HeldReading;
     try {
       reading = await judgeHeld(got.data.data, key, owner, input, now);
-    } catch {
+    } catch (error) {
+      // A config error (bad-config) is the caller's bug, not a bad record: it must not read as "no credentials".
+      if (error instanceof HeldCredentialError && error.code === "bad-config") throw error;
       continue;
     }
     if (reading.kind === "verified" && clearsReuseMargin(reading.match.verified.expiresAt, now)) matches.push(reading.match);

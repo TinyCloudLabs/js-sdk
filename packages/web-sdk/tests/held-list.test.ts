@@ -530,6 +530,40 @@ describe("findHeldCredential is unchanged", () => {
   });
 });
 
+describe("a caller or config error is thrown, never read as 'no credentials'", () => {
+  const find = (fake: Fake, extra: Record<string, unknown> = {}) =>
+    findHeldCredential({ kv: fake.kv, ownerDid: OWNER_A, email: "alice@example.com", now: NOW, ...POLICY, ...extra });
+  const seeded = async () => {
+    const fake = fakeKv();
+    await place(fake, OWNER_A, makeSdJwt());
+    return fake;
+  };
+  const plainObjectSet = { issuerSet: {} as unknown as typeof POLICY.issuerSet };
+
+  test("list: an issuer set that did not come from parseIssuerSet throws bad-config", async () => {
+    await expect(list(await seeded(), OWNER_A, plainObjectSet)).rejects.toMatchObject({ code: "bad-config" });
+  });
+
+  test("find: an issuer set that did not come from parseIssuerSet throws bad-config", async () => {
+    await expect(find(await seeded(), plainObjectSet)).rejects.toMatchObject({ code: "bad-config" });
+  });
+
+  test("list: an invalid now throws bad-config", async () => {
+    await expect(list(await seeded(), OWNER_A, { now: new Date("not a date") })).rejects.toMatchObject({ code: "bad-config" });
+  });
+
+  test("find: an invalid now throws bad-config", async () => {
+    await expect(find(await seeded(), { now: new Date("not a date") })).rejects.toMatchObject({ code: "bad-config" });
+  });
+
+  test("a record that merely fails verification is still skipped, not thrown", async () => {
+    const fake = fakeKv();
+    await place(fake, OWNER_A, makeSdJwt({ tamperSignature: true }));
+    expect(await list(fake)).toEqual([]);
+    expect(await find(fake)).toBeUndefined();
+  });
+});
+
 describe("@tinycloud/web-sdk/credentials entry exposes the held surface", () => {
   test("exports the signer, store and source functions the claim screen needs", () => {
     for (const name of ["createAccountHolderSigner", "storeHeldCredential", "findHeldCredential", "acquireHeldCredential", "listHeldEmailCredentials"] as const) {
