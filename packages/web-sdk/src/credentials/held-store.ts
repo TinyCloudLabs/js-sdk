@@ -7,7 +7,7 @@ import {
   toChecksumAddress,
   verifyHeldEmailCredential,
   type HeldEmailCredentialOptions,
-  type VerifiedHeldCredential,
+  type VerifiedHeldEmailCredential,
 } from "@tinycloud/sdk-core/held-credentials";
 
 /** A held record whose verified expiry is within this many milliseconds is not offered; the caller re-acquires. */
@@ -48,10 +48,24 @@ export interface HeldStorageReceipt {
   readonly storedAt: string;
 }
 
-/** A stored record that re-verified under the caller's policy, with the verifier's output. */
+/**
+ * A stored record that re-verified under the caller's policy, with the verifier's output.
+ * `recordId`, `email`, `issuedAt`, `expiresAt` and `issuer` are a summary for display. They come from the
+ * re-verified credential and from the record key, never from any stored field other than `credential`.
+ */
 export interface HeldMatch {
   readonly record: HeldCredentialRecord;
-  readonly verified: VerifiedHeldCredential;
+  readonly verified: VerifiedHeldEmailCredential;
+  /** The record key's id: the digest the store derives from the credential and the owner. */
+  readonly recordId: string;
+  /** The disclosed email as the credential carries it. */
+  readonly email: string;
+  /** The signed `iat`. */
+  readonly issuedAt: Date;
+  /** The signed `exp`. */
+  readonly expiresAt: Date;
+  /** The issuer DID that signed the credential. */
+  readonly issuer: string;
 }
 
 /**
@@ -162,7 +176,7 @@ export async function storeHeldCredential(
 ): Promise<{ readonly record: HeldCredentialRecord; readonly receipt: HeldStorageReceipt }> {
   const now = input.now ?? new Date();
   const owner = heldAccountOwner(input.ownerDid);
-  let verified: VerifiedHeldCredential;
+  let verified: VerifiedHeldEmailCredential;
   try {
     verified = verifyHeldEmailCredential(input.sdJwt, policyOptions(input, now, owner));
   } catch (error) {
@@ -244,7 +258,7 @@ async function readHeld(
   if (value.credentialDigest !== credentialDigest || value.recordId !== recordId || key !== heldRecordKey(owner, recordId)) {
     return { kind: "invalid" };
   }
-  let verified: VerifiedHeldCredential;
+  let verified: VerifiedHeldEmailCredential;
   try {
     verified = verifyHeldEmailCredential(value.credential, policyOptions(policy, now, owner));
   } catch (error) {
@@ -253,7 +267,16 @@ async function readHeld(
   }
   const email = verified.claims.email;
   if (typeof email !== "string") return { kind: "invalid" };
-  return { kind: "verified", email, match: { record: value, verified } };
+  const match: HeldMatch = {
+    record: value,
+    verified,
+    recordId,
+    email,
+    issuedAt: verified.issuedAt,
+    expiresAt: verified.expiresAt,
+    issuer: verified.issuer,
+  };
+  return { kind: "verified", email, match };
 }
 
 /** Listing refused beyond the page limit. Keeps the VERIFICATION_FAILED wire code; recovery callers test for this subclass. */
@@ -306,6 +329,46 @@ export async function findHeldCredential(input: FindHeldCredentialInput): Promis
     if (best === undefined || expiresAt > best.verified.expiresAt.getTime()) best = reading.match;
   }
   return best;
+}
+
+export type ListHeldEmailCredentialsInput = Omit<FindHeldCredentialInput, "email"> & {
+  /** Accepted so a `FindHeldCredentialInput` can be passed as is. Ignored: the listing is never filtered by email. */
+  readonly email?: string;
+};
+
+/**
+ * Lists the account's own VALID held email credentials. Owner-only: it reads `v1/held/<registryKey>/` for the
+ * canonical `ownerDid` and nothing else, and refuses any owner that is not an Ethereum mainnet did:pkh.
+ *
+ * Returns every valid record, not one per email: no email filter and no "latest" pick. Expired records and
+ * records the verifier refuses (status other than none, issuer retired or not accepted, bad signature) are
+ * EXCLUDED. Validity is exactly what `findHeldCredential` applies through its re-verification, except the
+ * reuse margin: a record that is valid but near expiry is still listed, because the margin only gates reuse.
+ *
+ * Order: newest `issuedAt` first; equal `issuedAt` by ascending `recordId`. Returns `[]` when there are none.
+ * A corrupt or unverifiable record is skipped silently; it never throws. A refused owner, or a listing that
+ * is truncated or beyond the page limit, still throws, as for `findHeldCredential`.
+ * Every returned summary field comes from the re-verified credential, never from other stored fields.
+ */
+export async function listHeldEmailCredentials(input: ListHeldEmailCredentialsInput): Promise<readonly HeldMatch[]> {
+  const now = input.now ?? new Date();
+  const owner = heldAccountOwner(input.ownerDid);
+  const keys = await listHeldKeys(input.kv, heldPrefix(owner));
+  if (keys === undefined) return [];
+  const matches: HeldMatch[] = [];
+  for (const key of keys) {
+    try {
+      const reading = await readHeld(input.kv, key, owner, input, now);
+      if (reading.kind === "verified") matches.push(reading.match);
+    } catch {
+      // A record that cannot even be read is skipped like any other unverifiable record.
+    }
+  }
+  return matches.sort((a, b) => {
+    const newestFirst = b.issuedAt.getTime() - a.issuedAt.getTime();
+    if (newestFirst !== 0) return newestFirst;
+    return a.recordId < b.recordId ? -1 : a.recordId > b.recordId ? 1 : 0;
+  });
 }
 
 /**

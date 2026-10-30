@@ -34,3 +34,21 @@ export type {
   StoredEmailProofInput,
   StoredEmailProofRecord,
 } from "@tinycloud/node-sdk/credentials";
+// Held credentials: the account-holder signer, the owner-scoped held store, and the held credential source.
+export { createAccountHolderSigner } from "./credentials/account-holder";
+export {
+  findHeldCredential,
+  listHeldEmailCredentials,
+  storeHeldCredential,
+} from "./credentials/held-store";
+export type {
+  FindHeldCredentialInput,
+  HeldCredentialRecord,
+  HeldIssuerPolicy,
+  HeldMatch,
+  HeldStorageReceipt,
+  ListHeldEmailCredentialsInput,
+  StoreHeldCredentialInput,
+} from "./credentials/held-store";
+export { acquireHeldCredential } from "./credentials/held-source";
+export type { HeldAcquireInput, HeldCredentialResult } from "./credentials/held-source";
