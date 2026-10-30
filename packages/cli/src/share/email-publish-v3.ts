@@ -26,6 +26,8 @@ export async function publishEmailShareV3(input: EmailPublishV3Input): Promise<P
     throw new TypeError("email share binding is invalid");
   }
   const descriptor = validateCredentialFlowDescriptor(input.credentialDescriptor);
+  // A share is addressed to the ticket (did:key) credential only. The validator also accepts the account-bound (held) shape.
+  if (descriptor.subjectRelationship !== "holder_is_subject") throw new TypeError("email credential descriptor is not a ticket (did:key) descriptor");
   if (descriptor.issuer.did !== input.issuerDid || descriptor.issuer.kid !== input.issuerKid ||
       !descriptor.claims.some((claim) => claim.name === "email" && claim.matching === "normalized_exact")) {
     throw new TypeError("email credential issuer or claim is invalid");
