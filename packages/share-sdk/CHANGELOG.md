@@ -1,5 +1,26 @@
 # @tinycloud/share-sdk
 
+## 1.4.1
+
+### Patch Changes
+
+- e839be0: The share recipient checks a V3 source's wrapped-key digest by source kind. A path-bound source (`encryptionKeyPath`) must register the digest of the raw wrapped-key bytes, as before; a legacy no-path source must register the canonical hash of the base64 key, which the node accepts for that case. Shares made by stable CLI 1.4.0 and the old share composer open again. The invoke body, facts and response checks are unchanged.
+
+  Details: TC-2242
+
+- 812a818: Publish new CLI email shares as signed V3 Policy/v2 envelopes inside current v4 Share link records, with a unique exact `default/share/<shareId>` encryption key, a path-bound policy, and a committed email credential requirement. The `builtin:share-publishing` paste approval requests decrypt only for the owner's default-network `share/` prefix; device authorization and `enable share` omit decrypt. Existing V2 envelopes retain their read path.
+
+  Details: TC-2177
+
+- 0b024c2: Support named-key v2 recipient content with optional AAD, checking canonical wrapped-key hashes independently from registered decoded-byte digests and enforcing source bindings before decrypt requests. Validate ciphertext framing before requesting decryption and retain AAD when re-encrypting content.
+
+  Details: TC-2192
+
+- Updated dependencies [19048ec]
+- Updated dependencies [812a818]
+- Updated dependencies [7b22f61]
+  - @tinycloud/share-envelope@1.4.0
+
 ## 1.4.1-beta.4
 
 ### Patch Changes
