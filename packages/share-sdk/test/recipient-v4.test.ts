@@ -481,7 +481,7 @@ describe("TC-500 accountless v4 recipient", () => {
       const encryptedSymmetricKeyHash = [...sha256(new TextEncoder().encode(canonicalize(encryptedSymmetricKey)))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
       const ciphertext = await aesEncrypt(new Uint8Array(32).fill(41), new TextEncoder().encode("hello"));
       const encrypted = new TextEncoder().encode(JSON.stringify({ v: 1, networkId: network, alg: "x25519-aes256gcm/v1", keyVersion: 1, encryptedSymmetricKey, encryptedSymmetricKeyHash, ciphertext: Buffer.from(ciphertext).toString("base64") }));
-      envelope.contentSource = { kvResource: "space/kv/shares/tc-531/document.txt", encryptionNetwork: network, keyVersion: 1, encryptedSymmetricKeyDigestHex: [...sha256(wrappedBytes)].map((byte) => byte.toString(16).padStart(2, "0")).join(""), initialCiphertextDigestHex: [...sha256(encrypted)].map((byte) => byte.toString(16).padStart(2, "0")).join("") };
+      envelope.contentSource = { kvResource: "space/kv/shares/tc-531/document.txt", encryptionNetwork: network, keyVersion: 1, encryptedSymmetricKeyDigestHex: encryptedSymmetricKeyHash, initialCiphertextDigestHex: [...sha256(encrypted)].map((byte) => byte.toString(16).padStart(2, "0")).join("") };
       await expect(delegated.decryptV3Content(encrypted)).rejects.toMatchObject({ status: 400 });
       const invocation = verifyCompactUcanAuthorization(decryptAuthorization);
       expect(invocation.payload.iss.split("#", 1)[0]).toBe(delegateDid);
