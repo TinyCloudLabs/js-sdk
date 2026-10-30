@@ -5,7 +5,7 @@ This release has **Commander coverage tracked, not complete parity**:
 
 - 4 migrated registration(s).
 - 1 partially migrated registration(s).
-- 148 legacy registration(s) remain Commander-owned.
+- 150 legacy registration(s) remain Commander-owned.
 
 - `auth import [source]` → `tinycloud.auth.import@1` (partial; legacy inputs: v1 delegation artifact, v1 permission artifact without command, bare portable delegation, stored delegation wrapper, cross-user delegation persisted with activated=false).
 - `secrets get <name>` → `tinycloud.secrets.get@1` (migrated).
@@ -56,6 +56,8 @@ tinycloud context --json
 | `--replication-allow-secrets` | Explicitly allow prefixes in the `secrets` space or `vault` tree; replication stores ciphertext only |
 | `--method openkey\|local` | Browser OpenKey flow or local Ethereum key |
 | `--paste`, `--no-popup` | Normal OpenKey login prints a short approval link on stderr, waits for approval, then automatically verifies, durably saves and acknowledges the result. It works in a non-interactive terminal without a localhost callback or return code. `--no-popup` skips opening a local browser, not waiting. Re-run the same command after interruption to resume. `--paste` instead selects the explicit manual fallback with a five-minute, single-use return code on stdin; EOF without a code returns `PASTE_CODE_MISSING` without saving a key or session. Automatic links do not produce a manual code. |
+
+`auth login --method openkey` on a profile that does not exist creates a key-only profile first (as `init --key-only` does), then continues into the login; nothing is granted until the owner approves. A `--manifest` or `--device` login still needs the profile to exist (use `tinycloud init --key-only --name X` first). `auth logout` on a missing profile still fails with `PROFILE_NOT_FOUND` and creates nothing.
 
 Device login JSON lists the signed, approved `permissions`, owner-unchecked `declined` capabilities, `ownerDid`, `spaceId` and `expiresAt`. `tinycloud auth request --manifest FILE --grant --paste` adds another space to the onboarding profile: send the owner the link and pass their code to the CLI exactly as sent (default lifetime 7d; `--grant --device` also works for KV-scoped manifests). `tinycloud enable share [--replace-session]` is shorthand for device login with `builtin:share-publishing`. OpenKey refuses `tinycloud.sql` and other abilities outside its device policy; use normal OpenKey login (`--method openkey --manifest`) for those. Explicit `auth login` can wait for approval non-interactively; data commands never initiate consent to repair missing authority. Only an explicit `--host` is stored on the profile. Errors: `MANIFEST_REQUIRED`, `SCOPE_REJECTED` (OpenKey refused a capability; the message names it), `SESSION_IN_USE` (the request or the approved scope would narrow a live session; use a new profile or `--replace-session`), `PROFILE_CHANGED_DURING_LOGIN` (another login, key rotation or logout changed the profile while approval was pending; nothing saved), `PROFILE_STATE_INCONSISTENT` (profile, key and session disagree after an interrupted write; `--replace-session` or a new profile), `PROFILE_LOCK_TIMEOUT` (another process held the profile lock past 45 s), `LOCAL_OWNER_PROFILE` (scoped or device login on a local-owner-key profile; use a separate profile), `OPENKEY_UNREACHABLE`, `DEVICE_AUTH_DENIED`, `DEVICE_AUTH_EXPIRED`, `DEVICE_AUTH_BINDING_MISMATCH` (OpenKey's approval metadata disagrees with the signed grant), `OPENKEY_OWNER_MISMATCH`, `OPENKEY_GRANT_BROADENED`, `OPENKEY_EXPIRY_EXCEEDED` (the signed session outlives `--expiry`). Owner addresses compare case-insensitively (EIP-55 or lowercase); chain id and space name compare exactly. See [AUTH.md](AUTH.md).
 
@@ -373,6 +375,8 @@ tinycloud completion fish | source
 ## Share Publish, Inspect, Receive, List, Revoke
 
 Publishing needs the publishing scope in the owner's `default` space, on a dedicated profile: `tinycloud init --name publisher --key-only`, then `tinycloud --profile publisher auth login --method openkey --paste --manifest builtin:share-publishing --expiry 30d`. Publish with `tinycloud --profile publisher share publish ...`.
+
+Sharing to an email address, domain or DID isn't available in this release; link shares are.
 
 ```bash
 tinycloud share publish ./note.md --json                                  # bearer link; JSON has no URL: use share show <id> --reveal-link

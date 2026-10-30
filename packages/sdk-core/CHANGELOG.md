@@ -1,5 +1,97 @@
 # @tinycloudlabs/sdk-core
 
+## 3.8.1-beta.1
+
+### Patch Changes
+
+- Updated dependencies [5e47629]
+  - @tinycloud/share-envelope@1.4.1-beta.0
+  - @tinycloud/share-sdk@1.4.2-beta.0
+
+## 3.8.0
+
+### Minor Changes
+
+- e740a6d: A session key can list and revoke the delegations it issued. `DelegationManager.query({ direction: "issued" })` sends one invocation signed by the session's own did:key (capability `tinycloud.delegation/list` on `<did>/delegation`, no proof) and returns the schema-2 page; it needs `delegation-issued-query-v1` in the node's `/info` features and otherwise answers `UNSUPPORTED_OPERATION` ("This node doesn't support listing issued delegations yet"). `queryAllIssued()` follows `nextCursor` until it is absent (pages are ordered by delegation id and may be short). `revokeIssued(cid)` revokes a delegation the key issued with a revocation signed by that key and no proof; revoking an already revoked delegation succeeds, a plain-text 403 is `PERMISSION_DENIED` with the node's message, a 400 invalid cursor is `INVALID_CURSOR`, and a 503 is `CHAIN_TOO_DEEP` (retryable). `TinyCloudNode` wires the session-key signer (`DelegationManagerConfig.sessionInvocationSigner`).
+
+  Details: TC-2132
+
+- c541786: Manifests can declare named keys in the app's key namespace, with an optional `keys_app_id`. Sign-in includes the declared key permissions when the node supports named keys, prepares creatable key paths, and exposes the signed-in named-key client through `keys`.
+
+  Details: TC-1977
+
+- 4a19c47: Signing out erases the local copy before `signOut()` resolves: the browser replica database is deleted under the origin gate lock after the deny commit, and the same erase runs when a different account signs in on a live session. The deny floor and logout marker in `localStorage` are kept.
+
+  If the delete is blocked or the deny kept the keys (`marker`, `unguarded`), the erase is retried three times in total (150 ms, then 450 ms apart), the logout marker makes the next load finish it, and `signOut()` still resolves for `marker`. `unguarded` still rejects, now with `code: "REPLICA_PURGE_FAILED"` unless the erase completed. After the retries `replica.purge.failed` fires (`TinyCloudWeb.on` / `TinyCloudNode.on`) with `trigger`, a typed `reason` and `retryNow`.
+
+  `tcw.replication.purgeLocalCopy()` runs the erase on demand and returns `{ ok: true }` or `{ ok: false, retryNow }`; it never touches a live session. New exported types: `ReplicaPurgeFailedEvent`, `ReplicaPurgeLocalCopyResult`, `ReplicaPurgeTrigger`, `ReplicaLocalEraseOutcome`, `ReplicaPurgeError`. `ReplicaLifecycleGate` gains the optional browser method `eraseLocalCopy`.
+
+  A restore with replication configured and no wallet provider stays gated, now with the gate reason `wallet_provider_required` instead of `gate_unavailable`. A read-only provider (silent `eth_accounts`, signing methods that throw) still restores.
+
+  Details: TC-1888
+
+- 2789240: Replication accepts `syncScope: "prefixes"`, which keeps kv/sync on the declared prefixes at sign-in instead of widening to a root entry that covers them.
+
+  Details: TC-2043
+
+### Patch Changes
+
+- 49f3665: The issued-delegation code (the `direction: "issued"` query and its paging, `queryAllIssued`, `revokeIssued`, the 401/403/400/503 mapping) is its own module, exported as `@tinycloud/sdk-core/delegations/issued`. `DelegationManager.query({ direction: "issued" })`, `queryAllIssued` and `revokeIssued` keep their signatures and results and load that module with a dynamic `import()` on first use. `@tinycloud/web-sdk` builds it as the lazy chunk `delegations-issued.mjs` / `delegations-issued.cjs` next to `index.*` and `credentials.*`, so those bundles carry only the loader.
+
+  Details: TC-2132
+
+- e424ba9: Include `siweConfig.resources` recipients-declaration URIs in ordinary, external/OpenKey and bootstrap SIWE preparation. This option accepts `urn:tinycloud:recipients:<base64url>` with an unpadded base64url payload. The original ReCap stays last and unchanged, and completion retains the exact signed message. An absent or empty resource list leaves preparation unchanged.
+
+  Align shared ReCap extraction with complete resource values in the SIWE resources section.
+
+  Details: TC-2230
+
+- 812a818: Publish new CLI email shares as signed V3 Policy/v2 envelopes inside current v4 Share link records, with a unique exact `default/share/<shareId>` encryption key, a path-bound policy, and a committed email credential requirement. The `builtin:share-publishing` paste approval requests decrypt only for the owner's default-network `share/` prefix; device authorization and `enable share` omit decrypt. Existing V2 envelopes retain their read path.
+
+  Details: TC-2177
+
+- 44c439a: The settings panel's background reads only go out when the session holds the ability they need. The account index read, the delegation query (account space, then the session's own space) and the storage status read are each checked against the session's ReCap first; a read the session cannot make is not sent and shows as unavailable or needing permission. An account read refused with 401 or 403 is not retried; other failures keep their single retry. `DelegationManager.query` takes an optional second argument `{ spaces }` that sets which spaces the query is signed for. Sessions that hold the abilities make the same requests as before.
+
+  Details: TC-2038
+
+- f167805: Allow `delegateTo` to issue an exact named-key decrypt resource when the signed session grants that key. The manifest permission rules remain the same.
+
+  Details: TC-2140
+
+- 9fb359a: Allow explicit runtime permission requests to create one exact `share/<id>` named key on the current owner's default encryption network. Validate the owner, resource and action before consent, bind approval to the same signed session, and activate only the requested key-create authority. Native shells without a supported permission-request path refuse rather than falling back to a web signer. Static manifests and native authority ceilings are unchanged.
+
+  Keep runtime permission approval bound to the captured session key through signing and activation.
+
+  Details: TC-2192
+
+- Updated dependencies [19048ec]
+- Updated dependencies [92e4bd0]
+- Updated dependencies [e839be0]
+- Updated dependencies [812a818]
+- Updated dependencies [0b024c2]
+- Updated dependencies [7b22f61]
+- Updated dependencies [4a19c47]
+- Updated dependencies [2789240]
+- Updated dependencies [3daddbb]
+- Updated dependencies [a83e55c]
+  - @tinycloud/share-envelope@1.4.0
+  - @tinycloud/sdk-services@3.8.0
+  - @tinycloud/share-sdk@1.4.1
+
+## 3.8.0-beta.23
+
+### Patch Changes
+
+- Updated dependencies [e839be0]
+  - @tinycloud/share-sdk@1.4.1-beta.4
+
+## 3.8.0-beta.22
+
+### Patch Changes
+
+- Updated dependencies [a83e55c]
+  - @tinycloud/sdk-services@3.8.0-beta.22
+
 ## 3.8.0-beta.21
 
 ### Patch Changes

@@ -1,5 +1,136 @@
 # @tinycloud/mcp
 
+## 0.8.4-beta.1
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.8.1-beta.1
+- @tinycloud/operations@0.7.8-beta.1
+
+## 0.8.4-beta.0
+
+### Patch Changes
+
+- Updated dependencies [f1744fb]
+  - @tinycloud/node-sdk@3.8.1-beta.0
+  - @tinycloud/operations@0.7.8-beta.0
+
+## 0.8.3
+
+### Patch Changes
+
+- 73b4604: The `tinycloud-cli` skill, the MCP skill and both READMEs now describe one agent setup path: start at https://agents.tinycloud.xyz/onboarding, sign in with `tinycloud onboard`, and ask for more access with `tinycloud auth request ... --grant --paste`. Agent guides use Node.js 22.20 or later.
+
+  Details: TC-2239
+
+- 255772f: The hosted MCP server checks each access token's status with OpenKey's resource-server token introspection endpoint before serving a call. Only a 200 answer with `active: true` is active, and only when its `sub` and `client_id` equal the verified token's and its `aud` is a non-empty subset of the token's audiences that includes the server's resource URL; an active answer is reused for 30 seconds. An inactive token is answered with 401 `invalid_token`, and that answer is kept for the token. When OpenKey cannot be reached or answers otherwise, a call is served only when OpenKey itself answered that same token active to this server, and only until the token expires; every other call is answered with 500 `server_error`. A 401 from the endpoint is logged once and refused. The server needs `TC_MCP_INTROSPECTION_URL`, `TC_MCP_INTROSPECTION_CLIENT_ID` and `TC_MCP_INTROSPECTION_CLIENT_SECRET` (and optionally `TC_MCP_INTROSPECTION_AUTH_METHOD=basic|post`) and does not start without them. The README lists where an owner manages the hosted MCP's delegation.
+
+  Details: TC-1627
+
+- 1fc87b6: Fix personal-app MCP guidance and generated write schemas for server-owned `by` metadata. Write examples omit `by`, and edit/move instructions tell clients to remove it from read-back values before submitting them. Advertised put/move schemas now reject top-level `by` before invocation, matching the existing runtime restriction. CLI records, nested data fields and stored/read-back attribution remain unchanged.
+- 7e692f6: Add the hosted MCP landing, truthful authentication and readiness metadata, and protected-resource discovery alias without changing authentication on `/mcp`.
+
+  Details: TC-1362
+
+- 5476661: Add service-authenticated native grant intake and owner-isolated hosted MCP calls using verified connector delegations.
+
+  Details: TC-2196
+
+- 3daddbb: Add the shared SQLite Home feed protocol and CLI commands for owner-provisioned agent connections, card publishing, durable responses, acknowledgements, outcomes, and external runtime handoff. Hook readiness and logical database notifications drive response reconciliation. Feed watch uses a durable local SQLite handoff ledger with explicit saved, delivered, and handling states, and supports Bun or Node.js 22.13+.
+
+  Support versioned private response payloads saved atomically with their headers and read explicitly through the existing response database authority. Default response notifications and durable handoff copies include only allowlisted headers and payload metadata.
+
+  Add opt-in `redactErrors` to SQL query, execute, and batch calls so private response operations receive static errors with known codes and HTTP status before ordinary service-error delivery. Calls without the option retain their existing error details.
+
+  Add explicit outbound feed messages without changing card decisions or owner-private state. Messages share immutable response identities, atomic private payloads, and notification-safe handoff. Exact-identity handling reads retain historical acknowledgement and outcome receipts after later answers or messages.
+
+  Feed listeners cancel pending response queries on caller abort and stop cleanly for expected cancellation while preserving unrelated query failures.
+
+  Refresh the generated MCP skill coverage for the Commander-owned feed commands; no MCP tools are added.
+
+  Details: TC-2205
+
+- de9e0ff: Add explicit owner-only `feed export` for lossless KV and operator-supplied sidecar bytes. Preserve full source keys, base64 bytes, SHA-256, matching strong ETags, tombstones, and opaque change-feed cursor/source/authority metadata. Publish a complete snapshot only after an empty same-scope final tail, using durable exclusive `0600` output. Normal command output contains only a safe receipt, not raw snapshot contents. Export does not classify or restore records.
+
+  Require an output directory owned by the effective user and a trusted ancestor chain, including every intermediate symbolic-link target, that prevents other-UID replacement of staging entries. Mode `0600` alone does not establish staging-file identity; same-UID and root actors remain trusted.
+
+  Regenerate the MCP skill coverage block for the new legacy CLI registration; no MCP operation is added.
+
+  Details: TC-2209
+
+- a83e55c: Add generic owner-authorized structural feed restore and recipient-filtered delivery pages over the current initialized SQL database pair. Bind immutable response content and full card identities to import origins; atomically store each response header, optional private payload, provenance, and default-deny policies in the response database. Existing live response IDs cannot be reclassified as imports. Output cards and responses are not one cross-database transaction.
+
+  Before upgrading live watch consumers, the owner must run the current `initializeFeedDatabases` for each existing registered pair; owner connection and import paths also initialize the schema. This creates the three import-metadata tables required by delivery reads. Agents and listeners never create those tables, and missing tables fail closed.
+
+  Require each origin's consistent exact-recipient pending/mapped evidence and a valid deadline or explicit null before dispatch. Keep raw receipts out of agent-readable policy rows. Fail closed on missing or malformed metadata, preserve unrelated SQL failures during coincident cancellation, and retain safe deadlines in notification headers without private payload data. Uncertain handoffs are not automatically resent; external runtime acceptance, deadline checks, and deduplication remain necessary. No exactly-once external execution guarantee is added.
+
+  Add read-only full card-issuance history with BINARY full-tuple keyset pages, default limit 100 and maximum 1000; reconciliation starts cursorless because this is not a durable tail, and latest-card listing remains unchanged.
+
+  Preserve literal own JSON payload keys when validating stored card-history and restored-card envelopes. Preserve completed restore failures during caller-abort races without removing identical-replay readback recovery.
+
+  Add `tinycloud feed import --space <full-uri> --file <prepared.json>` for structurally validated FORMAT1 data and immutable scoped owner-only archives, using canonical SDK restore without legacy projection. Regenerate the CLI reference and MCP coverage metadata.
+
+  Reject the reserved wildcard runtime recipient during import preflight, before publishing an immutable archive or creating agent schemas.
+
+  Details: TC-2209
+
+- Updated dependencies [15080ed]
+- Updated dependencies [32ed899]
+- Updated dependencies [20a872e]
+- Updated dependencies [479205d]
+- Updated dependencies [92e4bd0]
+- Updated dependencies [e740a6d]
+- Updated dependencies [c541786]
+- Updated dependencies [e424ba9]
+- Updated dependencies [812a818]
+- Updated dependencies [1fc87b6]
+- Updated dependencies [4a19c47]
+- Updated dependencies [5d9d314]
+- Updated dependencies [2789240]
+- Updated dependencies [f167805]
+- Updated dependencies [9fb359a]
+- Updated dependencies [9fb359a]
+- Updated dependencies [812a818]
+  - @tinycloud/node-sdk@3.8.0
+  - @tinycloud/operations@0.7.7
+
+## 0.8.3-beta.26
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.8.0-beta.23
+- @tinycloud/operations@0.7.7-beta.22
+
+## 0.8.3-beta.25
+
+### Patch Changes
+
+- de9e0ff: Add explicit owner-only `feed export` for lossless KV and operator-supplied sidecar bytes. Preserve full source keys, base64 bytes, SHA-256, matching strong ETags, tombstones, and opaque change-feed cursor/source/authority metadata. Publish a complete snapshot only after an empty same-scope final tail, using durable exclusive `0600` output. Normal command output contains only a safe receipt, not raw snapshot contents. Export does not classify or restore records.
+
+  Require an output directory owned by the effective user and a trusted ancestor chain, including every intermediate symbolic-link target, that prevents other-UID replacement of staging entries. Mode `0600` alone does not establish staging-file identity; same-UID and root actors remain trusted.
+
+  Regenerate the MCP skill coverage block for the new legacy CLI registration; no MCP operation is added.
+
+  Details: TC-2209
+
+- a83e55c: Add generic owner-authorized structural feed restore and recipient-filtered delivery pages over the current initialized SQL database pair. Bind immutable response content and full card identities to import origins; atomically store each response header, optional private payload, provenance, and default-deny policies in the response database. Existing live response IDs cannot be reclassified as imports. Output cards and responses are not one cross-database transaction.
+
+  Before upgrading live watch consumers, the owner must run the current `initializeFeedDatabases` for each existing registered pair; owner connection and import paths also initialize the schema. This creates the three import-metadata tables required by delivery reads. Agents and listeners never create those tables, and missing tables fail closed.
+
+  Require each origin's consistent exact-recipient pending/mapped evidence and a valid deadline or explicit null before dispatch. Keep raw receipts out of agent-readable policy rows. Fail closed on missing or malformed metadata, preserve unrelated SQL failures during coincident cancellation, and retain safe deadlines in notification headers without private payload data. Uncertain handoffs are not automatically resent; external runtime acceptance, deadline checks, and deduplication remain necessary. No exactly-once external execution guarantee is added.
+
+  Add read-only full card-issuance history with BINARY full-tuple keyset pages, default limit 100 and maximum 1000; reconciliation starts cursorless because this is not a durable tail, and latest-card listing remains unchanged.
+
+  Preserve literal own JSON payload keys when validating stored card-history and restored-card envelopes. Preserve completed restore failures during caller-abort races without removing identical-replay readback recovery.
+
+  Add `tinycloud feed import --space <full-uri> --file <prepared.json>` for structurally validated FORMAT1 data and immutable scoped owner-only archives, using canonical SDK restore without legacy projection. Regenerate the CLI reference and MCP coverage metadata.
+
+  Reject the reserved wildcard runtime recipient during import preflight, before publishing an immutable archive or creating agent schemas.
+
+  Details: TC-2209
+  - @tinycloud/node-sdk@3.8.0-beta.22
+  - @tinycloud/operations@0.7.7-beta.21
+
 ## 0.8.3-beta.24
 
 ### Patch Changes

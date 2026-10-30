@@ -26,7 +26,8 @@ async function recipientFixture(version: 1 | 2, aad?: Uint8Array) {
   const wrappedBytes = new Uint8Array(93).fill(17);
   const encryptedSymmetricKey = base64(wrappedBytes);
   const encryptedSymmetricKeyHash = canonicalHash(encryptedSymmetricKey);
-  const registeredDigest = hex(sha256(wrappedBytes));
+  // A no-path (v1) source registers the canonical hash of the base64 key; a path-bound (v2) source registers the raw-byte digest.
+  const registeredDigest = keyPath === undefined ? encryptedSymmetricKeyHash : hex(sha256(wrappedBytes));
   const now = Math.floor(Date.now() / 1000);
   const resource = keyPath === undefined ? networkId : `${networkId}/${keyPath}`;
   const session = await signCompactUcanAuthorization({ issuerDid: nodeDid, audienceDid: recipientDid, attenuation: { [resource]: { "tinycloud.encryption/decrypt": [{}] } }, facts: [{ profile: "policy-session-ucan/v1", policyCid: "policy", recipientDid }], proofs: ["policy-root", "enforcement-root"], notBefore: now - 1, expiresAt: now + 59, nonce: "session", sign: async (bytes) => ed25519.sign(bytes, nodeKey) });
@@ -78,7 +79,7 @@ async function recipientFixture(version: 1 | 2, aad?: Uint8Array) {
 }
 
 describe("v3 recipient content", () => {
-  it("preserves v1 root-only behavior with independent canonical and raw digests", async () => {
+  it("preserves v1 root-only behavior with the canonical registered digest", async () => {
     const fixture = await recipientFixture(1);
     const opened = await fixture.client.decryptV3Content(fixture.stored);
     expect(new TextDecoder().decode(opened.bytes)).toBe("hello");

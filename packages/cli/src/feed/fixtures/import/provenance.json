@@ -1,0 +1,21 @@
+{
+  "producerHead": "1f151b041730b4f713178bff929093b1446c4948",
+  "producer": "prepareSitrepImport",
+  "validator": "validatePreparedOwnerArchive",
+  "sourcePaths": [
+    "packages/core/src/feed/sitrep/prepare-import.ts",
+    "packages/core/src/feed/sitrep/archive.ts",
+    "frontend/src/feed/sitrep.fixtures.ts"
+  ],
+  "fixtureSha256": {
+    "base.json": "704deae7d015058f45f8544c3f668261a01e72847a4fd0f4153f3cfb885f5c30",
+    "next.json": "4ce2a71c4218d7bbae3cef2328fce9382e0bc23fa670809bf79f4cbaab1bb90d",
+    "conflict.json": "69f43702ea50d8de574a75d2e9262a67dc5b9736bd933f9d7da77b24065bf697",
+    "runtime-expired.json": "3022860a3f5c1555c4dc6f1dfca0101f938aaacbcbda499bf1199667b4fe9c60"
+  },
+  "markers": {
+    "code": "SYNTHETIC224CODEα",
+    "privateNote": "OWNER-ONLY-DIARY-224",
+    "originalReceipt": "OWNER-ONLY-RECEIPT-224"
+  }
+}

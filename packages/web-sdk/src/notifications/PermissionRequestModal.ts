@@ -615,6 +615,13 @@ const CAPABILITY_DESCRIPTIONS: Record<string, CapabilityDescription> = {
     description:
       "Allows this app to read capability and delegation records for the selected scope.",
   },
+  // OpenKey's label and statement for a read of the delegation list on the signer's own applications space
+  // (openkey ba974d39: packages/capability-review/registry-inventory.md:37; statement text at src/copy.ts:60).
+  "tinycloud.delegation/list": {
+    title: "See which apps and links can reach your data, and the names of what each can reach",
+    description:
+      "See who has access to your data, what it reaches (by name) and when it ends. Keys and contents aren't shown.",
+  },
   [HOOKS.SUBSCRIBE]: {
     title: "Subscribe to hooks",
     description:
@@ -777,7 +784,10 @@ function fallbackCapabilityDescription(
   action: string,
 ): CapabilityDescription {
   return {
-    title: `Use ${serviceDisplayName(service).replace(/ permission$/, "")}`,
+    title:
+      service === "tinycloud.delegation"
+        ? `Manage your delegations${action === "" ? "" : ` (${action})`}`
+        : `Use ${serviceDisplayName(service).replace(/ permission$/, "")}`,
     description: `Allows this app to perform ${action} on the resource shown below.`,
   };
 }
