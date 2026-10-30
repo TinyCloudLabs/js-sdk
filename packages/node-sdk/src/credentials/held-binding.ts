@@ -24,8 +24,8 @@ const substituted = (): CredentialError => new CredentialError("REQUEST_SUBSTITU
 /**
  * Refuses (REQUEST_SUBSTITUTED) unless the held account binding is exactly what this client asked for: the domain comes from the
  * pinned descriptor, never from the response. The field shape, `protocol`, `profileVersion`, the 365-day lifetime and the `urn:uuid`
- * `jti` were already checked by `validateCredentialHolderBinding`. The `jti` itself cannot be known in advance; it is kept by the
- * caller and compared with the credential's after issuance.
+ * `jti` were already checked by `validateCredentialHolderBinding`. The `jti` itself cannot be known in advance (on the retry path: format only;
+ * see the residual risk above `ensureHeldBinding` in the interpreter); it is kept by the caller and compared with the credential's after issuance.
  */
 export async function assertHeldBinding(binding: CredentialHolderBinding, expected: HeldBindingExpectation): Promise<void> {
   const { descriptor } = expected;

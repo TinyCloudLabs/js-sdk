@@ -66,6 +66,21 @@ export async function interpretCredentialFlow(input: {
   /**
    * S11 (e): a held request found past the signature (a retry after a failed notice, or after a lost issue response) has no binding read in
    * this call. Read it and check it in full before R7 or R8, so (vi) and (viii) are judged against the binding of THIS call. No R6, no wallet.
+   *
+   * Residual risk, accepted (contract addendum A3(1), appended to A2.2): on the retry path the SDK cannot tell that the `jti` in the re-fetched
+   * R5 binding is the `jti` the account signed at R6. A2.1(a) keeps no record of that `jti`, and the witness keeps no copy of the signature
+   * (`OC/mod.rs:500,2416`). S11(a) therefore checks the re-fetched `jti` for format only (lowercase v4 `urn:uuid`). Checks (vi) and (viii)
+   * compare the credential with the binding fetched in the same call.
+   *
+   * A witness that serves a different `jti` on the retry is detected only at (vi), after R7 has sent the notice, and only if it issues a `jti`
+   * different from the one it served. If it issues the `jti` it served, the credential is accepted.
+   *
+   * This gives a compromised witness nothing it lacks as the pinned issuer. It can already issue a held credential for any account and mailbox
+   * without an account signature. The held credential carries no account signature (`held_email.rs:303-317`), and no verifier relies on the
+   * `jti` being account-signed (`held_presentation.rs:315-320,367`; `sdk-core/src/held-credentials/credential.ts:159,194`). Possession is proven
+   * at presentation by the account's SIWE (`held_presentation.rs:351-359`).
+   *
+   * An honest witness serves the same binding on every R5 call (`binding_for` is deterministic, `OC/mod.rs:2657-2676`).
    */
   const ensureHeldBinding = async () => {
     if (!held || input.transport.signedBinding?.(input.requestId) !== undefined) return;

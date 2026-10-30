@@ -53,9 +53,8 @@ describe("retry after a failed notice at R7", () => {
     expect(result.envelope.profile.id).toBe(HELD);
   });
 
+  // A3(2): only what the retry can check BEFORE R7. A changed `jti` is case 3a below.
   const changed: [string, (b: Record<string, unknown>) => Record<string, unknown>][] = [
-    // A changed `jti` is not listed: the retry holds no earlier jti to compare with (A2.2 adds no pending field), so S11 (a) cannot see it before R7.
-    // Awaiting the lead's ruling; (vi) still refuses a credential whose jti is not the R5 binding's.
     ["challengeNonce", (b) => ({ ...b, challengeNonce: "X".repeat(32) })],
     ["normalizedClaimsDigest", (b) => ({ ...b, normalizedClaimsDigest: "N".repeat(43) })],
     ["expiresAt", (b) => ({ ...b, expiresAt: new Date(Date.parse(String(b.expiresAt)) + 60_000).toISOString().replace(".000Z", "Z") })],
@@ -73,6 +72,17 @@ describe("retry after a failed notice at R7", () => {
       expect(count(w.witness, "notice")).toBe(0);
     });
   }
+
+  test("3a. a retry whose R5 binding has another valid v4 jti while the ORIGINAL jti is issued: CREDENTIAL_INVALID (check (vi)), after the issue call was made (A3(1): the documented order)", async () => {
+    const w = world({ failNotice: 1, retryBinding: (b) => ({ ...b, jti: "urn:uuid:11111111-1111-4111-8111-111111111111" }) });
+    const pending = await w.request();
+    await failure(() => w.complete(pending));
+    const before = w.witness.calls.length;
+    const error = await failure(() => w.complete(pending));
+    expect([error?.code, error?.recoverable]).toEqual(["CREDENTIAL_INVALID", false]);
+    expect(routesAfter(w.witness, before)).toContain("issue");
+    // No test asserts the accept case (a witness that issues the jti it served): a documented residual (A3(1)), not a behaviour to pin.
+  });
 
   test("4. R5 failing with 503 on the retry is ISSUER_UNAVAILABLE and never a success without (vi)/(viii): no issue, no result", async () => {
     const w = world({ failNotice: 1 });
