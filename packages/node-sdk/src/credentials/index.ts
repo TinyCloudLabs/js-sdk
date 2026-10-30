@@ -10,6 +10,7 @@ export {
   createMemoryEmailProofPendingStore,
   DEFAULT_EMAIL_PROOF_PROFILE,
   EMAIL_PROOF_CREDENTIAL_TYPE,
+  EMAIL_PROOF_PINS,
   EMAIL_PROOF_PENDING_MAX_MS,
   EmailProofError,
   emailProofRequirement,
