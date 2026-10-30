@@ -1,6 +1,6 @@
 import { admitPolicyCredentialV4, credentialMatchesRequirement, verifyOwnerNodeBinding, type CredentialRequirement, type UnifiedPolicyV2 } from "@tinycloud/sdk-core";
 import { ShareReceiveError, ShareRecipientClient } from "@tinycloud/share-sdk";
-import type { EmailProofResult } from "./credentials/email-proof.js";
+import { isTicketEmailProofResult, type EmailProofResult } from "./credentials/email-proof.js";
 import type { AgentShareContent, AgentShareReceiveOptions, PendingAgentShareReceive } from "./share-receive.js";
 
 /** Internal access step. Tests supply a credential verified against a local issuer key. */
@@ -11,6 +11,8 @@ export async function openVerifiedAgentShare(
   options: AgentShareReceiveOptions,
 ): Promise<AgentShareContent> {
   const { envelope } = pending;
+  // Share receive runs on the ticket (did:key) credential only; a held (account) result is not one.
+  if (!isTicketEmailProofResult(result)) throw new ShareReceiveError("authorization-denied", "email credential does not match this share");
   if (!credentialMatchesRequirement(requirement, result.verified, options.holder.did, new Date(options.now?.() ?? Date.now()))) {
     throw new ShareReceiveError("authorization-denied", "email credential does not match this share");
   }

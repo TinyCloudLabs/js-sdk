@@ -44,7 +44,8 @@ describe("happy path", () => {
     expect(verified.credentialId).toMatch(/^urn:uuid:/);
     expect(w.witness.mails.map((m) => m.kind)).toEqual(["code", "notice"]);
     expect(w.holder.calls.count).toBe(1);
-    expect(routes(w.witness)).toEqual(["catalog", "create", "state", "challenge", "state", "state", "proof", "state", "holder-binding", "state", "holder-signature", "state", "issue", "state", "result"].filter(() => true).slice(0, routes(w.witness).length));
+    // Request step: catalog, create, state, challenge (the one mail). Complete step: catalog again, state, proof, binding, signature, issue, result.
+    expect(routes(w.witness)).toEqual(["catalog", "create", "state", "challenge", "catalog", "state", "state", "proof", "state", "holder-binding", "holder-signature", "state", "issue", "state", "result"]);
     expect(await store.findLive(ALICE, w.now())).toBeUndefined();
   });
 
@@ -77,7 +78,7 @@ describe("happy path", () => {
     const w = world();
     const pending = await requestEmailProofCode(w.input());
     expect(pending.profile).toBe(HELD);
-    expect(pending.serverExpiresAt).toBe(new Date(T0 + 600_000).toISOString().replace(".000Z", "Z"));
+    expect(pending.serverExpiresAt).toBe(new Date(T0 + 600_000).toISOString());
     expect(JSON.stringify(pending)).not.toContain("allowHeld");
     const result = await completeEmailProofWithIssuerKeys({ pending, code: "12345678", holder: w.holder, fetch: w.witness.fetch, now: w.now, allowHeldProfile: true }, w.issuerKeys);
     expect(result.envelope.profile.id).toBe(HELD);

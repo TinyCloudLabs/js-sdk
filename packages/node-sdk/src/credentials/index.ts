@@ -13,6 +13,7 @@ export {
   EMAIL_PROOF_PINS,
   EMAIL_PROOF_PENDING_MAX_MS,
   EmailProofError,
+  isTicketEmailProofResult,
   emailProofRequirement,
   verifyStoredEmailProof,
   requestEmailProofCode,

@@ -8,6 +8,7 @@ import {
   encodeBase64Url,
   sha256Base64Url,
   validateCredentialFlowDescriptor,
+  validateCredentialRequirement,
   verifyIssuedCredential,
   type CredentialFlowDescriptor,
   type CredentialIssuerMetadata,
@@ -17,6 +18,7 @@ import {
   type StoredCredentialRecord,
   type VerifiedCredential,
 } from "@tinycloud/sdk-core";
+import { parseIssuerSet, parsePkhDid, toChecksumAddress, verifyHeldEmailCredential, type VerifiedHeldEmailCredential } from "@tinycloud/sdk-core/held-credentials";
 import { interpretCredentialFlow } from "./interpreter";
 import { OpenCredentialsHttpTransport } from "./transport";
 import type { CredentialSigningAdapter, PrimitiveStepHandler } from "./types";
@@ -50,11 +52,20 @@ export const DEFAULT_EMAIL_PROOF_PROFILE: EmailProofProfileId = "tinycloud.email
 /** Each profile is pinned to its descriptor digest and to the mailbox step the witness must offer. */
 const PROFILE_PINS: Readonly<Record<EmailProofProfileId, { readonly descriptorDigest: string; readonly requiredStep: "mailbox_otp"; readonly enabled: boolean }>> = {
   "tinycloud.email-proof/v1": { descriptorDigest: EMAIL_PROOF_PINS.descriptorDigest, requiredStep: "mailbox_otp", enabled: true },
-  // Held profile: disabled until the held wire path ships. Requests refuse with PROFILE_UNAVAILABLE before any network call.
+  // Held profile: disabled by default. A call enables it only with the per-call opt-in `allowHeldProfile: true` (see `profilePin`).
+  // Without it, requests refuse with PROFILE_UNAVAILABLE before any network call.
   "tinycloud.email-held/v1": { descriptorDigest: "dc3_DuvzipXwYkTfjKqTaK1c3VS0YSPnaBsYSQriC0w", requiredStep: "mailbox_otp", enabled: false },
 };
 
 const OPENER_ORIGIN = "https://localhost";
+const HELD_PROFILE = "tinycloud.email-held/v1" as const;
+const HELD_KID_FRAGMENT = "blockchainAccountId";
+/** The held requirement's freshness (SPEC): 365 days. */
+const HELD_MAX_AGE_SECONDS = 31_536_000;
+/** The witness's request window. */
+const HELD_REQUEST_TTL_MS = 600_000;
+/** How far the client clock may be behind the witness's: in the pre-flight, the post-issue check and the reuse read. */
+const CLOCK_SKEW_BOUND_MS = 300_000;
 const STEP_TIMEOUT_MS = 60_000;
 const HOLDER_DID_PREFIX = "did:key:";
 const HOLDER_DID_PATTERN = /^did:key:z6Mk[^#]+$/;
@@ -83,6 +94,7 @@ export type EmailProofStep = "request" | "code" | "credential" | "session";
  * | CREDENTIAL_INVALID      | false       | issued credential failed local verification |
  * | SESSION_EXPIRED         | false       | pending window or server expiry has passed |
  * | SESSION_INVALID         | false       | pending does not match holder, descriptor, or requirement |
+ * | CLIENT_CLOCK_SKEW       | false       | device clock more than 5 min behind the witness; no mail sent; fix the clock and start again |
  * | CANCELED                | false       | caller aborted; pending is deleted |
  * | FAILED                  | false       | unclassified failure; pending is deleted |
  */
@@ -100,6 +112,7 @@ export type EmailProofErrorCode =
   | "CREDENTIAL_INVALID"
   | "SESSION_EXPIRED"
   | "SESSION_INVALID"
+  | "CLIENT_CLOCK_SKEW"
   | "CANCELED"
   | "FAILED";
 
@@ -117,6 +130,7 @@ const RECOVERABILITY: Readonly<Record<EmailProofErrorCode, boolean>> = {
   CREDENTIAL_INVALID: false,
   SESSION_EXPIRED: false,
   SESSION_INVALID: false,
+  CLIENT_CLOCK_SKEW: false,
   CANCELED: false,
   FAILED: false,
 };
@@ -134,6 +148,7 @@ const MESSAGES: Record<Exclude<EmailProofErrorCode, "RATE_LIMITED">, string> = {
   CREDENTIAL_INVALID: "Issued credential failed verification.",
   SESSION_EXPIRED: "Email verification request expired. Request a new code.",
   SESSION_INVALID: "Email verification request is no longer valid. Request a new code.",
+  CLIENT_CLOCK_SKEW: "Your device clock is more than 5 minutes behind. Correct it and try again.",
   CANCELED: "Email verification was canceled.",
   FAILED: "Email verification failed.",
 };
@@ -192,6 +207,14 @@ export function createEd25519HolderSigner(did: string, sign: (bytes: Uint8Array)
 
 /** Options shared by the public steps. Issuer keys are never caller-supplied. */
 export interface EmailProofOptions {
+  /**
+   * Per-call opt-in for the held profile `tinycloud.email-held/v1`. Only the literal `true` counts, it enables the held
+   * profile for this call alone (never stored in a pending, never read from the environment), and it is ignored for any other
+   * profile. Without it a held request is refused PROFILE_UNAVAILABLE before any network call. Nothing else can be supplied with
+   * it: the origin, issuer key and descriptor digest are compiled pins. The default 60 s step signal spans the wallet prompt in
+   * `completeEmailProof` for an account holder: pass a `signal` bounded by the request `expiresAt` if the user may take longer.
+   */
+  readonly allowHeldProfile?: true;
   readonly fetch?: typeof fetch;
   readonly signal?: AbortSignal;
   readonly now?: () => Date;
@@ -221,6 +244,8 @@ export interface EmailProofPending {
   readonly openerOrigin: string;
   readonly createdAt: string;
   readonly expiresAt: string;
+  /** Held only: `expiresAt` of the create response (the witness's own deadline). The signed binding must carry it. */
+  readonly serverExpiresAt?: string;
 }
 
 /** Holds pending requests keyed by requestId. Implementations must never return an expired request from `findLive`. */
@@ -250,6 +275,7 @@ export function restoreEmailProofPending(fields: EmailProofPending): EmailProofP
     openerOrigin: fields.openerOrigin,
     createdAt: fields.createdAt,
     expiresAt: fields.expiresAt,
+    ...(fields.serverExpiresAt === undefined ? {} : { serverExpiresAt: fields.serverExpiresAt }),
   };
   const pending = { ...shown } as EmailProofPending;
   hide(pending, "verifier", fields.verifier);
@@ -290,12 +316,18 @@ export function createMemoryEmailProofPendingStore(): EmailProofPendingStore {
 
 export interface EmailProofResult {
   readonly envelope: IssuedCredentialEnvelope;
-  readonly verified: VerifiedCredential;
+  /** The ticket verifier's result, or for the held profile (`envelope.profile.id`) the held verifier's. */
+  readonly verified: VerifiedCredential | VerifiedHeldEmailCredential;
   readonly credentialId: string;
   readonly issuedAt: string;
   readonly expiresAt: string;
   /** The descriptor the verifier checked against. Stored alongside the credential for offline re-verification. */
   readonly descriptor: CredentialFlowDescriptor;
+}
+
+/** True for a ticket (did:key) result, whose `verified` is the ticket verifier's output. The held profile's result carries the held verifier's. */
+export function isTicketEmailProofResult(result: EmailProofResult): result is EmailProofResult & { readonly verified: VerifiedCredential } {
+  return result.envelope.profile.id !== HELD_PROFILE;
 }
 
 export interface EmailProofAcquireInput extends EmailProofRequestInput {
@@ -322,14 +354,17 @@ const pauseForCode: PrimitiveStepHandler = async () => {
  */
 export async function requestEmailProofCode(input: EmailProofRequestInput): Promise<EmailProofPending> {
   const profile = input.profile ?? DEFAULT_EMAIL_PROOF_PROFILE;
-  profilePin(profile, "request");
-  const address = normalizeAddress(input.address);
-  assertHolder(input.holder, "request");
+  profilePin(profile, "request", input.allowHeldProfile);
+  const held = profile === HELD_PROFILE;
+  // Before any network call: the holder, then the address (held order, C6.4); the ticket keeps its address-then-holder order.
+  if (held) assertHolder(input.holder, "request", profile);
+  const address = normalizeAddress(input.address, profile);
+  if (!held) assertHolder(input.holder, "request", profile);
   const now = input.now ?? (() => new Date());
   const signal = input.signal ?? AbortSignal.timeout(STEP_TIMEOUT_MS);
   const requirement = emailRequirement(address, profile);
   const requirementDigest = await credentialRequirementDigest(requirement);
-  const descriptor = await witnessDescriptor(profile, requirement, { fetch: input.fetch, signal }, "request");
+  const descriptor = await witnessDescriptor(profile, requirement, { fetch: input.fetch, signal }, "request", input.allowHeldProfile);
   const descriptorDigest = await canonicalDigest(descriptor);
   const verifier = randomVerifier();
   const transport = new OpenCredentialsHttpTransport(descriptor, input.fetch, { honorServerRecoverable: true });
@@ -352,6 +387,10 @@ export async function requestEmailProofCode(input: EmailProofRequestInput): Prom
   }
   const serverExpiry = Date.parse(created.expiresAt);
   if (!Number.isFinite(serverExpiry)) throw new EmailProofError("request", "FAILED");
+  // Held: the create response carries the witness's clock (`expiresAt` is creation + 600 s). A client more than 5 minutes behind it is
+  // refused here, after R1 (no mail, no send counted) and before R3, so no code is mailed, no pending is stored and no wallet is asked.
+  const serverNowMs = serverExpiry - HELD_REQUEST_TTL_MS;
+  if (held && serverNowMs - now().getTime() > CLOCK_SKEW_BOUND_MS) throw new EmailProofError("request", "CLIENT_CLOCK_SKEW");
   const pending = restoreEmailProofPending({
     type: "TinyCloudEmailProofPending",
     version: 1,
@@ -364,7 +403,9 @@ export async function requestEmailProofCode(input: EmailProofRequestInput): Prom
     requirementDigest,
     openerOrigin: OPENER_ORIGIN,
     createdAt: new Date(createdAtMs).toISOString(),
-    expiresAt: new Date(Math.min(serverExpiry, createdAtMs + EMAIL_PROOF_PENDING_MAX_MS)).toISOString(),
+    // Held: the deadline is measured on the client clock (a fast client must not lose window), the witness enforces its own 600 s.
+    expiresAt: new Date(held ? createdAtMs + Math.min(serverExpiry - serverNowMs, EMAIL_PROOF_PENDING_MAX_MS) : Math.min(serverExpiry, createdAtMs + EMAIL_PROOF_PENDING_MAX_MS)).toISOString(),
+    ...(held ? { serverExpiresAt: created.expiresAt } : {}),
   });
 
   try {
@@ -377,6 +418,7 @@ export async function requestEmailProofCode(input: EmailProofRequestInput): Prom
       descriptorDigest,
       requirementDigest,
       openerOrigin: OPENER_ORIGIN,
+      ...(held ? { expiresAt: created.expiresAt } : {}),
       transport,
       signing: holderSigning(input.holder),
       handlers: { mailbox_otp: pauseForCode },
@@ -415,15 +457,19 @@ async function completeWithIssuerKeys(
   const { pending } = input;
   const now = input.now ?? (() => new Date());
   if (!isPending(pending)) throw new EmailProofError("session", "SESSION_INVALID");
+  // The opt-in is per call and never stored: a held pending is completed only by a caller that opts in again.
+  profilePin(pending.profile, "session", input.allowHeldProfile);
+  const held = pending.profile === HELD_PROFILE;
+  if (held && !Number.isFinite(Date.parse(pending.serverExpiresAt ?? ""))) throw new EmailProofError("session", "SESSION_INVALID");
   if (pendingDeadlineMs(pending) <= now().getTime()) throw new EmailProofError("session", "SESSION_EXPIRED");
   if (!/^\d{8}$/.test(input.code)) throw new EmailProofError("code", "CODE_INVALID");
-  assertHolder(input.holder, "code");
+  assertHolder(input.holder, "code", pending.profile);
   if (input.holder.did !== pending.holderDid) throw new EmailProofError("session", "SESSION_INVALID");
   const signal = input.signal ?? AbortSignal.timeout(STEP_TIMEOUT_MS);
 
   const requirement = emailRequirement(pending.address, pending.profile);
   if (await credentialRequirementDigest(requirement) !== pending.requirementDigest) throw new EmailProofError("session", "SESSION_INVALID");
-  const descriptor = await witnessDescriptor(pending.profile, requirement, { fetch: input.fetch, signal }, "session");
+  const descriptor = await witnessDescriptor(pending.profile, requirement, { fetch: input.fetch, signal }, "session", input.allowHeldProfile);
   const descriptorDigest = await canonicalDigest(descriptor);
   if (descriptorDigest !== pending.descriptorDigest) throw new EmailProofError("session", "SESSION_INVALID");
   const transport = new OpenCredentialsHttpTransport(descriptor, input.fetch, { honorServerRecoverable: true });
@@ -442,6 +488,7 @@ async function completeWithIssuerKeys(
       descriptorDigest,
       requirementDigest: pending.requirementDigest,
       openerOrigin: pending.openerOrigin,
+      ...(held ? { expiresAt: pending.serverExpiresAt } : {}),
       transport,
       signing: holderSigning(input.holder),
       handlers: { mailbox_otp: async () => ({ otp: input.code }) },
@@ -453,6 +500,10 @@ async function completeWithIssuerKeys(
 
   try {
     const envelope = await transport.result(pending.requestId, pending.verifier, signal);
+    if (held) {
+      const verified = await verifyHeldResult({ envelope, pending, descriptor, descriptorDigest, transport, issuerKeys, now });
+      return { envelope, verified, credentialId: verified.credentialId, issuedAt: verified.issuedAt.toISOString(), expiresAt: verified.expiresAt.toISOString(), descriptor };
+    }
     const verified = await verifyIssuedCredential({
       envelope,
       descriptor,
@@ -490,10 +541,11 @@ export async function acquireEmailProofWithIssuerKeys(input: EmailProofAcquireIn
 }
 
 async function acquireWithIssuerKeys(input: EmailProofAcquireInput, issuerKeys: readonly IssuerVerificationKey[]): Promise<EmailProofAcquisition> {
-  const address = normalizeAddress(input.address);
+  const profile = input.profile ?? DEFAULT_EMAIL_PROOF_PROFILE;
+  profilePin(profile, "request", input.allowHeldProfile);
+  const address = normalizeAddress(input.address, profile);
   const now = input.now ?? (() => new Date());
   const store = input.pendingStore;
-  const profile = input.profile ?? DEFAULT_EMAIL_PROOF_PROFILE;
   const live = store ? await store.findLive(address, now()) : undefined;
   // The store returns the newest live record per address across profiles. Resume only one of this profile.
   let pending = live?.profile === profile ? live : undefined;
@@ -518,9 +570,30 @@ async function acquireWithIssuerKeys(input: EmailProofAcquireInput, issuerKeys: 
   }
 }
 
-function normalizeAddress(address: string): string {
+function normalizeAddress(address: string, profile: EmailProofProfileId): string {
+  if (profile === HELD_PROFILE) return normalizeHeldAddress(address);
   const value = address.trim();
   if (value.length > 254 || !EMAIL_PATTERN.test(value)) throw new EmailProofError("request", "ADDRESS_INVALID");
+  return value;
+}
+
+const HELD_LOCAL_ATOM = /^[a-z0-9!#$%&'*+\-/=?^_`{|}~]+(\.[a-z0-9!#$%&'*+\-/=?^_`{|}~]+)*$/;
+const HELD_DOMAIN_LABEL = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
+
+/**
+ * Held address, in the witness's own order: refuse any non-ASCII character first (so an uppercase non-ASCII form is never lowercased into
+ * something else), trim, ASCII-lowercase, then the witness's rules (C2.5.3). The OTP proves the lowercased mailbox, which is what the
+ * credential then discloses. Every refusal is ADDRESS_INVALID, before any network call.
+ */
+function normalizeHeldAddress(address: string): string {
+  const invalid = () => new EmailProofError("request", "ADDRESS_INVALID");
+  if (/[^\x00-\x7f]/.test(address)) throw invalid();
+  const value = address.trim().toLowerCase();
+  const parts = value.split("@");
+  if (value.length < 3 || value.length > 254 || parts.length !== 2 || /[^\x21-\x7e]/.test(value)) throw invalid();
+  const [local, domain] = parts as [string, string];
+  if (local.length > 64 || !HELD_LOCAL_ATOM.test(local) || local.startsWith("+")) throw invalid();
+  if (domain.length > 253 || !domain.includes(".") || !domain.split(".").every((label) => label.length <= 63 && HELD_DOMAIN_LABEL.test(label))) throw invalid();
   return value;
 }
 
@@ -528,23 +601,34 @@ function holderKid(did: string): string {
   return `${did}#${did.slice(HOLDER_DID_PREFIX.length)}`;
 }
 
-function assertHolder(holder: HolderSigner, step: EmailProofStep): void {
+/** Held holder: exactly the canonical `did:pkh:eip155:1:<EIP-55>`, alg EIP191, kid `<did>#blockchainAccountId`. Every valid account is accepted. */
+function assertHeldHolder(holder: HolderSigner, step: EmailProofStep): void {
+  const parsed = parsePkhDid(holder.did);
+  const canonical = parsed !== null && parsed.chainId === "1" ? `did:pkh:eip155:1:${toChecksumAddress(parsed.address)}` : undefined;
+  if (canonical === undefined || holder.did !== canonical || holder.alg !== "EIP191" || holder.kid !== `${canonical}#${HELD_KID_FRAGMENT}`) throw new EmailProofError(step, "HOLDER_INVALID");
+}
+
+function assertHolder(holder: HolderSigner, step: EmailProofStep, profile: EmailProofProfileId): void {
+  if (profile === HELD_PROFILE) return assertHeldHolder(holder, step);
   if (!HOLDER_DID_PATTERN.test(holder.did) || holder.alg !== "EdDSA" || holder.kid !== holderKid(holder.did)) throw new EmailProofError(step, "HOLDER_INVALID");
 }
 
-function profilePin(profile: string, step: EmailProofStep): (typeof PROFILE_PINS)[EmailProofProfileId] {
+/** The only reader of the held opt-in. Held is enabled for this call only by the literal `true`; any other value, and any other profile, is unaffected. */
+function profilePin(profile: string, step: EmailProofStep, allowHeld?: unknown): (typeof PROFILE_PINS)[EmailProofProfileId] {
   const entry = Object.prototype.hasOwnProperty.call(PROFILE_PINS, profile) ? PROFILE_PINS[profile as EmailProofProfileId] : undefined;
-  if (!entry || !entry.enabled) throw new EmailProofError(step, "PROFILE_UNAVAILABLE");
+  if (!entry || (!entry.enabled && !(allowHeld === true && profile === HELD_PROFILE))) throw new EmailProofError(step, "PROFILE_UNAVAILABLE");
   return entry;
 }
 
 function emailRequirement(address: string, profile: EmailProofProfileId): CredentialRequirement {
+  // Held: the row's freshness is 365 days (digest Q_dnVOBsX_7fRjuzLPtCmDe_SKPiXW0Sxv0zSPb_Jd4 for alice@example.com). The ticket stays 3600.
+  if (profile === HELD_PROFILE) return validateCredentialRequirement({ type: "TinyCloudCredentialRequirement", version: 1, profile: { id: profile, version: 1 }, credentialType: EMAIL_PROOF_CREDENTIAL_TYPE, claims: { email: address }, maxAgeSeconds: HELD_MAX_AGE_SECONDS });
   return createEmailCredentialRequirement({ email: address, profile: { id: profile, version: 1 }, credentialType: EMAIL_PROOF_CREDENTIAL_TYPE });
 }
 
 /** Requirement for an email credential issued to `address` under the default profile. Storage and `show` key on its digest. */
 export function emailProofRequirement(address: string): CredentialRequirement {
-  return emailRequirement(normalizeAddress(address), DEFAULT_EMAIL_PROOF_PROFILE);
+  return emailRequirement(normalizeAddress(address, DEFAULT_EMAIL_PROOF_PROFILE), DEFAULT_EMAIL_PROOF_PROFILE);
 }
 
 /** Discovers the catalog and returns the descriptor only if it matches the pinned issuer, origin, step, and digest. */
@@ -553,8 +637,9 @@ async function witnessDescriptor(
   requirement: CredentialRequirement,
   options: { readonly fetch?: typeof fetch; readonly signal: AbortSignal },
   step: EmailProofStep,
+  allowHeld?: unknown,
 ): Promise<CredentialFlowDescriptor> {
-  const pin = profilePin(profile, step);
+  const pin = profilePin(profile, step, allowHeld);
   let descriptor: CredentialFlowDescriptor;
   try {
     descriptor = await discoverCatalogDescriptor(requirement, DISCOVERY_URL, { fetch: options.fetch, signal: options.signal });
@@ -679,9 +764,62 @@ export async function verifyStoredWithIssuerKeys(input: StoredEmailProofInput, i
   return verified;
 }
 
+/**
+ * Held result (S13): verify the SD-JWT with the held verifier against the PINNED issuer, then cross-check the envelope against the
+ * credential and the request. The held verifier does not compare the credential `jti` with the signed binding or the disclosed address
+ * with the request, so those checks are here. Any failure is VERIFICATION_FAILED (CREDENTIAL_INVALID at step credential).
+ */
+async function verifyHeldResult(input: {
+  readonly envelope: IssuedCredentialEnvelope;
+  readonly pending: EmailProofPending;
+  readonly descriptor: CredentialFlowDescriptor;
+  readonly descriptorDigest: string;
+  readonly transport: OpenCredentialsHttpTransport;
+  readonly issuerKeys: readonly IssuerVerificationKey[];
+  readonly now: () => Date;
+}): Promise<VerifiedHeldEmailCredential> {
+  const { envelope, pending, descriptor } = input;
+  const refuse = (message: string) => new CredentialError("VERIFICATION_FAILED", message);
+  // A client more than 5 minutes behind the issuer is refused; otherwise verify at max(client, iat): the held verifier refuses now < nbf = iat.
+  const iatMs = Date.parse(envelope.issuedAt);
+  const clientMs = input.now().getTime();
+  if (!Number.isFinite(iatMs) || iatMs - clientMs > CLOCK_SKEW_BOUND_MS) throw refuse("client clock is more than 5 minutes behind the issuer");
+  const key = input.issuerKeys.find((candidate) => candidate.kid === EMAIL_PROOF_PINS.issuerKid);
+  if (!key) throw refuse("no pinned issuer key");
+  const issuerSet = parseIssuerSet(
+    { format: "tinycloud.credentials-issuers/v1", version: 1, issuers: [{ issuerDid: EMAIL_PROOF_PINS.issuerDid, kid: EMAIL_PROOF_PINS.issuerKid, alg: "EdDSA", publicKey: key.jwk.x, vcts: [EMAIL_PROOF_CREDENTIAL_TYPE.id], profiles: [HELD_PROFILE], notBefore: "2020-01-01T00:00:00Z", retiredAt: null, notAfter: null }] },
+    { didMethods: { issuer: ["web"] } },
+  );
+  const verified = verifyHeldEmailCredential(envelope.credential, {
+    now: new Date(Math.max(clientMs, iatMs)),
+    owner: pending.holderDid,
+    didMethods: { issuer: ["web"] },
+    acceptedIssuers: [{ issuerDid: EMAIL_PROOF_PINS.issuerDid, kid: EMAIL_PROOF_PINS.issuerKid }],
+    issuerSet,
+  });
+  const signed = input.transport.signedBinding(pending.requestId);
+  const claims = Object.keys(envelope.claims).sort().join();
+  const toSecond = (ms: number) => Math.floor(ms / 1000);
+  if (
+    // (i) the holder, as the one EIP-55 string
+    envelope.subjectDid !== pending.holderDid || envelope.holderDid !== pending.holderDid ||
+    // (ii) exactly {email, emailDomain}, equal to the credential's, and the requested mailbox
+    claims !== "email,emailDomain" || envelope.claims.email !== verified.claims.email || envelope.claims.emailDomain !== verified.claims.emailDomain || envelope.claims.email !== pending.address ||
+    // (iii) validity to the second
+    toSecond(Date.parse(envelope.issuedAt)) !== toSecond(verified.issuedAt.getTime()) || toSecond(Date.parse(envelope.expiresAt)) !== toSecond(verified.expiresAt.getTime()) ||
+    // (v) the pins
+    envelope.descriptorDigest !== input.descriptorDigest || envelope.profile.id !== HELD_PROFILE || envelope.profile.version !== 1 || envelope.issuerDid !== EMAIL_PROOF_PINS.issuerDid ||
+    envelope.issuerKid !== EMAIL_PROOF_PINS.issuerKid || envelope.format !== "vc+sd-jwt" || envelope.status.method !== "none" || envelope.status.freshnessSeconds !== descriptor.status.freshnessSeconds
+  ) throw refuse("issued credential does not match the request");
+  // (vi) the credential's jti is the jti the account signed; (viii) its lifetime is the signed lifetime. (iv) and (vii) are checked by the transport.
+  if (signed?.type !== descriptor.holderBinding.domain || !("credentialLifetimeSeconds" in signed)) throw refuse("signed binding is missing");
+  if (verified.credentialId !== signed.jti || (verified.expiresAt.getTime() - verified.issuedAt.getTime()) / 1000 !== signed.credentialLifetimeSeconds) throw refuse("credential does not match the binding the account signed");
+  return verified;
+}
+
 /** Holder signing: the signer receives the raw binding bytes and returns a raw Ed25519 signature. The kid goes on the wire. */
 function holderSigning(holder: HolderSigner): CredentialSigningAdapter {
-  return { autoSign: async (_binding, bytes) => holder.sign(bytes), holderKey: { alg: "EdDSA", kid: holder.kid } };
+  return { autoSign: async (_binding, bytes) => holder.sign(bytes), holderKey: { alg: holder.alg, kid: holder.kid } };
 }
 
 function randomVerifier(): string {
@@ -714,6 +852,7 @@ function mapError(value: unknown, step: EmailProofStep, signal?: AbortSignal): E
       if (signal?.aborted && (signal.reason as { name?: string } | undefined)?.name !== "TimeoutError") return new EmailProofError(step, "CANCELED");
       return new EmailProofError(step, "NETWORK");
     case "UNSUPPORTED_PROFILE":
+    case "UNSUPPORTED_VERSION":
     case "DESCRIPTOR_INVALID":
       return new EmailProofError(step, "PROFILE_UNAVAILABLE");
     case "PROOF_REJECTED":

@@ -7,6 +7,7 @@ import {
   type CredentialProgressEvent,
   type CredentialRequirement,
 } from "@tinycloud/sdk-core";
+import { assertHeldBinding } from "./held-binding";
 import type { CredentialAcquisitionTransport, CredentialProofSubject, CredentialSigningAdapter, InlineCredentialProofHandler, InlineCredentialProofRequest, PrimitiveStepHandler } from "./types";
 
 const delay = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve, reject) => {
@@ -30,6 +31,8 @@ export async function interpretCredentialFlow(input: {
   readonly descriptorDigest: string;
   readonly requirementDigest: string;
   readonly openerOrigin: string;
+  /** `expiresAt` of the create response. Required for a held (account) descriptor: the signed binding must carry it. */
+  readonly expiresAt?: string;
   readonly transport: CredentialAcquisitionTransport;
   readonly signing: CredentialSigningAdapter;
   /**
@@ -67,6 +70,10 @@ export async function interpretCredentialFlow(input: {
       input.onProgress?.({ state: "signing", stepId: next.id, correlationId: state.correlationId });
       const binding = validateCredentialHolderBinding(await input.transport.holderBinding(input.requestId, input.verifier, input.signal));
       if (binding.requestId !== input.requestId || binding.descriptorDigest !== input.descriptorDigest || binding.requirementDigest !== input.requirementDigest || binding.holderDid !== input.holderDid || binding.issuer !== input.descriptor.issuer.did || binding.issuerKid !== input.descriptor.issuer.kid || binding.profile !== input.descriptor.profile || binding.openerOrigin !== input.openerOrigin || binding.completionOrigin !== input.openerOrigin || binding.audience !== "tinycloud://credentials") throw new CredentialError("REQUEST_SUBSTITUTED", "Holder binding was substituted");
+      // Held (account, EIP-191) and ticket (did:key, EdDSA) never mix: the descriptor, the binding type and the holder key agree, or nothing is signed.
+      const alg = input.descriptor.holderBinding.alg;
+      if (binding.type !== input.descriptor.holderBinding.domain || (alg === "EIP191") !== (input.signing.holderKey?.alg === "EIP191") || (alg === "EIP191" && !input.transport.challengeNonce)) throw new CredentialError("REQUEST_SUBSTITUTED", "Holder binding was substituted");
+      if (alg === "EIP191") await assertHeldBinding(binding, { descriptor: input.descriptor, requirement: input.requirement, requestId: input.requestId, descriptorDigest: input.descriptorDigest, requirementDigest: input.requirementDigest, holderDid: input.holderDid, openerOrigin: input.openerOrigin, challengeNonce: input.transport.challengeNonce!(input.requestId), serverExpiresAt: input.expiresAt });
       const bytes = holderBindingSigningBytes(binding);
       let signature = await input.signing.autoSign?.(binding, bytes, input.signal);
       if (signature === undefined) {
@@ -74,7 +81,7 @@ export async function interpretCredentialFlow(input: {
         try { signature = await input.signing.requestApproval(binding, bytes, input.signal); } catch (cause) { if (cause instanceof CredentialError) throw cause; throw new CredentialError("SIGNATURE_REJECTED", "OpenKey approval was rejected", { cause }); }
       }
       if (!(signature instanceof Uint8Array) || signature.length === 0) throw new CredentialError("SIGNATURE_REJECTED", "OpenKey signature is invalid");
-      await input.transport.submitHolderSignature(input.requestId, input.verifier, encodeBase64Url(signature), input.signal, input.signing.holderKey);
+      await input.transport.submitHolderSignature(input.requestId, input.verifier, alg === "EIP191" ? `0x${Array.from(signature, (byte) => byte.toString(16).padStart(2, "0")).join("")}` : encodeBase64Url(signature), input.signal, input.signing.holderKey);
     } else {
       input.onProgress?.({ state: next.type === "collect_input" ? "collecting" : "proving", stepId: next.id, correlationId: state.correlationId });
       const handler = input.handlers?.[next.type];
