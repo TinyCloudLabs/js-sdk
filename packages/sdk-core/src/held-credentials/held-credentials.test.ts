@@ -522,7 +522,7 @@ function stripComments(source: string): string {
 }
 
 test("the module has no Node-only imports (Worker-safe)", async () => {
-  for (const file of ["credential", "crypto", "did", "email", "encoding", "errors", "issuer-set", "nonce-store", "rows", "siwe", "verify", "index"]) {
+  for (const file of ["credential", "crypto", "did", "email", "encoding", "errors", "issuer-set", "nonce-store", "presentation", "rows", "siwe", "verify", "index"]) {
     const text = await Bun.file(new URL(`./${file}.ts`, import.meta.url)).text();
     expect(stripComments(text)).not.toMatch(FORBIDDEN_NODE_ACCESS);
   }

@@ -115,6 +115,8 @@ export async function buildHeldPresentationSiwe(input: BuildHeldPresentationSiwe
 /**
  * Client-side check of a presentation before it is sent on. It is not a verifier: it does not look
  * up issuers, spend a nonce, or check the credential signature. `verifyHeldPresentation` decides acceptance.
+ * It refuses a high-S signature, as `buildHeldPresentationSiwe` does. That is stricter than the Rust verifier,
+ * which accepts high-S signatures: a presentation this check refuses can still be one the verifier would accept.
  */
 export function checkReturnedPresentation(presentation: unknown, options: CheckReturnedPresentationOptions): HeldPresentation {
   const { now, audience, account } = options;
