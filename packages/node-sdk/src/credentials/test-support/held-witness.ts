@@ -115,6 +115,10 @@ export interface HeldWitnessOptions {
   readonly mutateBinding?: (binding: Record<string, unknown>) => Record<string, unknown>;
   /** Mutates the result body (a malicious or buggy witness). */
   readonly mutateResult?: (result: Record<string, unknown>) => Record<string, unknown>;
+  /** The mailbox the credential (and the result) discloses, instead of the one the request proved: a witness that issues for another address. */
+  readonly issueEmail?: string;
+  /** The mailbox only the signed credential discloses; the result envelope still names the requested mailbox. */
+  readonly credentialEmail?: string;
   /** Mutates the credential payload before signing. */
   readonly mutatePayload?: (payload: Record<string, unknown>) => Record<string, unknown>;
   /** Called after each route, e.g. to advance the clocks to model a slow user. */
@@ -189,7 +193,9 @@ export function createHeldWitness(options: HeldWitnessOptions = {}) {
   const issue = (record: Record_, nowMs: number): Record<string, unknown> => {
     const iat = Math.floor(nowMs / 1000);
     const salt = () => randomId(16);
-    const parts = [[salt(), "email", record.email], [salt(), "emailDomain", record.email.split("@")[1]]];
+    const email = options.issueEmail ?? record.email;
+    const disclosed = options.credentialEmail ?? email;
+    const parts = [[salt(), "email", disclosed], [salt(), "emailDomain", disclosed.split("@")[1]]];
     const disclosures = parts.map((part) => b64u(text(JSON.stringify(part))));
     const holderBinding = { did: record.holderDid, signingDomain: ACCOUNT_DOMAIN };
     let payload: Record<string, unknown> = {
@@ -211,7 +217,7 @@ export function createHeldWitness(options: HeldWitnessOptions = {}) {
     const signingInput = `${b64u(text(JSON.stringify({ alg: "EdDSA", typ: "vc+sd-jwt", kid: ISSUER_KID })))}.${b64u(text(JSON.stringify(payload)))}`;
     const credential = `${signingInput}.${b64u(ed25519.sign(text(signingInput), seed))}~${disclosures.join("~")}~`;
     const result = {
-      claims: { email: record.email, emailDomain: record.email.split("@")[1] },
+      claims: { email, emailDomain: email.split("@")[1] },
       credential,
       credentialDigest: b64u(sha256(text(credential))),
       descriptorDigest: HELD_DESCRIPTOR_DIGEST,
