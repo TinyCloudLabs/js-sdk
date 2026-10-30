@@ -52,9 +52,9 @@ function wallet(account: typeof OWNER, shape: (signature: Uint8Array) => Uint8Ar
   return { sign: walletSign, calls };
 }
 
-/** Account-binding bytes: the domain, one zero byte, then a non-empty body. */
 /** A valid account binding for ACCOUNT: `holderProof.fixed.canonicalJcs` of the TC-2254 contract vectors (938 bytes, JCS). */
 const BINDING_BODY = "{\"audience\":\"tinycloud://credentials\",\"challengeNonce\":\"CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC\",\"completionContext\":\"sdk-acquisition\",\"completionOrigin\":\"https://localhost\",\"credentialLifetimeSeconds\":31536000,\"descriptorDigest\":\"dc3_DuvzipXwYkTfjKqTaK1c3VS0YSPnaBsYSQriC0w\",\"expiresAt\":\"2026-08-03T01:10:00Z\",\"holderDid\":\"did:pkh:eip155:1:0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266\",\"issuedAt\":\"2026-08-03T01:00:00Z\",\"issuer\":\"did:web:issuer.credentials.org\",\"issuerKid\":\"did:web:issuer.credentials.org#controller\",\"jti\":\"urn:uuid:5f1c9a2e-7b3d-4e8a-9c61-2d4b8e7f0a13\",\"normalizedClaimsDigest\":\"kyc5jDA7koLzgm-dOmWhfGPXIOTOBmUdrSs-36KJJpc\",\"openerOrigin\":\"https://localhost\",\"profile\":\"tinycloud.email-held/v1\",\"profileVersion\":1,\"protocol\":\"tinycloud.credentials/acquisition/v1\",\"requestId\":\"RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR\",\"requirementDigest\":\"Q_dnVOBsX_7fRjuzLPtCmDe_SKPiXW0Sxv0zSPb_Jd4\",\"type\":\"tinycloud.credentials/account-binding/v1\"}";
+/** Account-binding bytes: the domain, one zero byte, then a non-empty body. */
 function bindingBytes(body: string = BINDING_BODY): Uint8Array {
   return new TextEncoder().encode(`${DOMAIN}\u0000${body}`);
 }
@@ -81,7 +81,7 @@ test("signer accepts domain-prefixed bytes, calls the wallet once with the exact
   expect(signature).toEqual(await personalSign(OWNER, bindingBytes()));
 });
 
-test("signer hands the wallet the very bytes it was given and returns the wallet's own signature object", async () => {
+test("signer hands the wallet the exact bytes it was given and returns the wallet's own signature object", async () => {
   const message = bindingBytes();
   const signature = await personalSign(OWNER, message);
   const seen: Uint8Array[] = [];
@@ -90,7 +90,8 @@ test("signer hands the wallet the very bytes it was given and returns the wallet
     return signature;
   });
   expect(await signer.sign(message)).toBe(signature);
-  expect(seen[0]).toBe(message);
+  expect(seen[0]).toEqual(message);
+  expect(seen[0]).not.toBe(message);
 });
 
 test("the wallet receives UTF8(domain), one 0x00 byte, then the JCS binding, byte for byte", async () => {

@@ -72,7 +72,8 @@ function requireAccountBinding(body: Uint8Array, account: string): void {
 /** Decodes the signed bytes exactly. Invalid UTF-8 is refused: the wallet message would not round-trip. */
 function messageText(bytes: Uint8Array): string {
   try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    // ignoreBOM: a U+FEFF anywhere (including at the start of the body) is kept in the text, so it fails the strict-JCS check instead of being dropped.
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
   } catch {
     throw refuse();
   }
@@ -96,7 +97,10 @@ export function createAccountHolderSigner(did: string, sign: (bytes: Uint8Array)
   if (parsed === null || parsed.chainId !== ACCOUNT_CHAIN_ID) throw refuse();
   const address = toChecksumAddress(parsed.address);
   const canonical = `did:pkh:eip155:${ACCOUNT_CHAIN_ID}:${address}`;
-  const guardedSign = async (bytes: Uint8Array): Promise<Uint8Array> => {
+  const guardedSign = async (input: Uint8Array): Promise<Uint8Array> => {
+    // One private copy, taken first: the check, the decode and the wallet all see these exact bytes, whatever the caller's object does later
+    // (a mutated buffer, or a subclass whose `subarray` or accessors answer differently).
+    const bytes = new Uint8Array(input);
     requireAccountBinding(requireAccountBindingBytes(bytes), canonical);
     const message = messageText(bytes);
     const signature = await sign(bytes);
