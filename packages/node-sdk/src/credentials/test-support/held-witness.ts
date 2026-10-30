@@ -8,6 +8,7 @@ import { keccak_256 } from "@noble/hashes/sha3";
 import { sha256 } from "@noble/hashes/sha256";
 import { canonicalDigest, jcsCanonicalize, type IssuerVerificationKey } from "@tinycloud/sdk-core";
 import { toChecksumAddress } from "@tinycloud/sdk-core/held-credentials";
+import { readFileSync } from "node:fs";
 import type { HolderSigner } from "../email-proof";
 
 export const WITNESS_ORIGIN = "https://witness.credentials.org";
@@ -18,7 +19,9 @@ const HELD = "tinycloud.email-held/v1";
 const PROTOCOL = "tinycloud.credentials/acquisition/v1";
 export const HELD_DESCRIPTOR_DIGEST = "dc3_DuvzipXwYkTfjKqTaK1c3VS0YSPnaBsYSQriC0w";
 
-export const vectors = await Bun.file(new URL("../fixtures/held-wire-v2.4/vectors.json", import.meta.url)).json();
+// Read synchronously: this module is imported by many test files, and a top-level `await` in a shared module is evaluated late under Bun 1.3.14's
+// single-worker `bun test packages/web-sdk/tests` (the Replica baseline job), so a test file could see `vectors` before it was initialised.
+export const vectors = JSON.parse(readFileSync(new URL("../fixtures/held-wire-v2.4/vectors.json", import.meta.url), "utf8"));
 
 const b64u = (bytes: Uint8Array): string => Buffer.from(bytes).toString("base64url");
 const text = (value: string): Uint8Array => new TextEncoder().encode(value);
