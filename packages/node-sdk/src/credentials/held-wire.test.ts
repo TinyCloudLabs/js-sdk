@@ -397,6 +397,17 @@ describe("the credential is bound to the signing ACCOUNT and the requested MAILB
     expect([error?.code, error?.step]).toEqual(["CREDENTIAL_INVALID", "credential"]);
   });
 
+  test("an envelope that names another account while the credential is this account's is refused, whichever of its two account fields differs", async () => {
+    for (const mutateResult of [
+      (r: Record<string, unknown>) => ({ ...r, subject: A1 }),
+      (r: Record<string, unknown>) => ({ ...r, holderBinding: { ...(r.holderBinding as object), did: A1 } }),
+    ]) {
+      const w = world({ mutateResult });
+      const error = await failure(() => acquireEmailProofWithIssuerKeys(w.input({ getCode: async () => "12345678" }), w.issuerKeys));
+      expect([error?.code, error?.step]).toEqual(["CREDENTIAL_INVALID", "credential"]);
+    }
+  });
+
   test("a credential that discloses another mailbox, with the envelope equal to the request, is refused (only the credential differs)", async () => {
     const w = world({ credentialEmail: "mallory@example.com" });
     const error = await failure(() => acquireEmailProofWithIssuerKeys(w.input({ getCode: async () => "12345678" }), w.issuerKeys));
@@ -568,5 +579,18 @@ describe("the transport: an account holder must name its key (S10)", () => {
     expect(w.witness.calls).toHaveLength(before);
     await expect(transport.submitHolderSignature(pending.requestId, verifier, `0x${"00".repeat(65)}`, undefined, { alg: "EIP191", kid: w.holder.kid })).rejects.toMatchObject({ code: "SIGNATURE_REJECTED" });
     expect(w.witness.calls.length).toBe(before + 1);
+  });
+});
+
+describe("assertHeldBinding is closed on its own: it needs the nonce it is given (B14)", () => {
+  test("an expectation without a challenge nonce refuses even a binding that is otherwise exact", async () => {
+    const { assertHeldBinding } = await import("./held-binding");
+    const descriptor = validateCredentialFlowDescriptor(vectors.descriptor.held);
+    const binding = validateCredentialHolderBinding(vectors.happyPath.holder_binding.response.body.binding);
+    const requirement = { type: "TinyCloudCredentialRequirement", version: 1, profile: { id: HELD, version: 1 }, credentialType: { id: "opencredentials.email/v1", version: 1 }, claims: { email: ALICE }, maxAgeSeconds: 31536000 } as CredentialRequirement;
+    const expected = { descriptor, requirement, requestId: binding.requestId, descriptorDigest: binding.descriptorDigest, requirementDigest: binding.requirementDigest, holderDid: binding.holderDid, openerOrigin: "https://localhost", serverExpiresAt: binding.expiresAt };
+    await expect(assertHeldBinding(binding, { ...expected, challengeNonce: undefined })).rejects.toMatchObject({ code: "REQUEST_SUBSTITUTED" });
+    await expect(assertHeldBinding(binding, { ...expected, challengeNonce: "not-the-nonce" })).rejects.toMatchObject({ code: "REQUEST_SUBSTITUTED" });
+    await expect(assertHeldBinding(binding, { ...expected, challengeNonce: binding.challengeNonce })).resolves.toBeUndefined();
   });
 });
