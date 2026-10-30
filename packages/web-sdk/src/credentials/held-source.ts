@@ -168,12 +168,20 @@ export async function acquireHeldCredentialWith(input: HeldAcquireInput, acquire
     throw new CredentialError("HOLDER_MISMATCH", "Held acquisition holder must be the session account");
   }
 
-  // Before any request, so before any mail: the caller's policy accepts the pinned issuer, and the member's storage can be read.
-  assertPolicyAcceptsPinnedIssuer(policy, now());
-  const cached = await findWithListingRecovery(kv, policy, holderDid, address, now);
+  // The strict read comes first. Without the per-call opt-in a cache miss is PROFILE_UNAVAILABLE whatever the storage or the policy says: only an
+  // unreadable store (OFFLINE) is allowed to fall through to the acquisition, which refuses before any request. A stored record is reused either way.
+  const optedIn = allowHeldProfile === true;
+  let cached: HeldMatch | undefined;
+  try {
+    cached = await findWithListingRecovery(kv, policy, holderDid, address, now);
+  } catch (error) {
+    if (optedIn || !(error instanceof CredentialError && error.code === "OFFLINE")) throw error;
+  }
   if (cached !== undefined) {
     return { credential: cached.record.credential, holderDid, expiresAt: cached.verified.expiresAt };
   }
+  // About to acquire, opted in: the caller's policy must accept the pinned issuer, before any request and so before any mail.
+  if (optedIn) assertPolicyAcceptsPinnedIssuer(policy, now());
 
   const acquisition = await acquire({
     address,
