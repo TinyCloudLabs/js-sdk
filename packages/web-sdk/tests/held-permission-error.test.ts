@@ -19,8 +19,8 @@ const OWNER_DID = `did:pkh:eip155:1:${OWNER.address}`;
 const T0 = Date.parse("2026-10-30T06:53:00Z");
 const ISSUER_DID = "did:web:issuer.credentials.org";
 const HELD = "tinycloud.email-held/v1";
-const READ_MESSAGE = "This app has no permission to read held credentials: request kv get and list on v1/held/ (skipPrefix).";
-const DELETE_MESSAGE = "This app has no permission to delete held credentials: request kv del on v1/held/ (skipPrefix).";
+const READ_MESSAGE = "This app can't read held credentials: the session may lack kv get and list on v1/held/ (skipPrefix), or may need to sign in again.";
+const DELETE_MESSAGE = "This app can't delete held credentials: the session may lack kv del on v1/held/ (skipPrefix), or may need to sign in again.";
 const RECORD_ID = "R".repeat(43);
 
 const witness0 = createHeldWitness({ serverClock: () => T0 });
@@ -202,10 +202,34 @@ describe("acquireHeldCredential: the strict read comes first, so a missing grant
     }
   });
 
-  test("a write the app may not make is still VERIFIED_NOT_SAVED (the documented invariant: issued, then not confirmed in storage)", async () => {
+  test("a write the app may not make is still VERIFIED_NOT_SAVED, with the fixed marker and nothing from the kv error", async () => {
     const { kv } = fakeKv({ keys: [], batchPut: denied(401) });
     const w = world(kv);
     const error = await failure(() => acquireHeldCredentialWith({ ...w.base, allowHeldProfile: true }, w.acquire));
-    expect(error?.code).toBe("VERIFIED_NOT_SAVED");
+    expect([error?.code, error?.recoverable, error?.details]).toEqual(["VERIFIED_NOT_SAVED", true, { state: "permission_denied" }]);
+    expect(JSON.stringify({ message: error?.message, details: error?.details })).not.toMatch(/space|0x|Unauthorized Action|401|kv\//);
+  });
+
+  test("a 403 write, and a write that succeeds but whose read-back is denied, carry the marker as well", async () => {
+    for (const responses of [{ keys: [], batchPut: denied(403) }, { keys: [], get: denied(401) }] as Responses[]) {
+      const w = world(fakeKv(responses).kv);
+      const error = await failure(() => acquireHeldCredentialWith({ ...w.base, allowHeldProfile: true }, w.acquire));
+      expect([error?.code, error?.details]).toEqual(["VERIFIED_NOT_SAVED", { state: "permission_denied" }]);
+    }
+  });
+
+  test("a write that fails for any other reason is VERIFIED_NOT_SAVED with no marker: network, 5xx, an unconfirmed read-back, a throwing kv", async () => {
+    const throwing = { async list() { return { ok: true, data: { keys: [], truncated: false } }; }, async get() { return kvError({ code: "KV_NOT_FOUND" }); }, async batchPut() { throw new Error("socket closed"); }, async delete() { return { ok: true }; } } as unknown as IKVService;
+    const cases: IKVService[] = [
+      fakeKv({ keys: [], batchPut: kvError({ code: "NETWORK_ERROR" }) }).kv,
+      fakeKv({ keys: [], batchPut: kvError({ code: "KV_ERROR", meta: { status: 503 } }) }).kv,
+      fakeKv({ keys: [] }).kv,
+      throwing,
+    ];
+    for (const kv of cases) {
+      const w = world(kv);
+      const error = await failure(() => acquireHeldCredentialWith({ ...w.base, allowHeldProfile: true }, w.acquire));
+      expect([error?.code, error?.details]).toEqual(["VERIFIED_NOT_SAVED", {}]);
+    }
   });
 });

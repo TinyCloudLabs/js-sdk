@@ -12,6 +12,7 @@ import {
 } from "@tinycloud/node-sdk/credentials";
 import {
   heldAccountOwner,
+  HELD_STORE_PERMISSION_DENIED_STATE,
   HeldListingLimitError,
   listHeldEmailCredentials,
   pruneHeldCredentials,
@@ -205,8 +206,10 @@ export async function acquireHeldCredentialWith(input: HeldAcquireInput, acquire
   let stored: StoreHeldCredentialResult;
   try {
     stored = await storeHeldCredential({ ...policy, kv, ownerDid: holderDid, sdJwt: credential, now: new Date(Math.max(clientMs, iatMs)) });
-  } catch {
-    throw new CredentialError("VERIFIED_NOT_SAVED", "Verified held credential could not be stored");
+  } catch (error) {
+    // A write the app may not make keeps VERIFIED_NOT_SAVED (a credential exists and is unsaved) and carries the fixed marker, nothing else.
+    const permission = error instanceof CredentialError && error.details.state === HELD_STORE_PERMISSION_DENIED_STATE;
+    throw new CredentialError("VERIFIED_NOT_SAVED", "Verified held credential could not be stored", permission ? { state: HELD_STORE_PERMISSION_DENIED_STATE } : {});
   }
   // The signed `exp` of the verified credential, never the witness response's own `expiresAt`.
   return { credential, holderDid, expiresAt: stored.verified.expiresAt };

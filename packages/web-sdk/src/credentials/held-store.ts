@@ -30,8 +30,16 @@ const RECORD_ID_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 /** The KV service's error code for a missing key (`ErrorCodes.KV_NOT_FOUND` in sdk-services). */
 const KV_NOT_FOUND = "KV_NOT_FOUND";
 
-const READ_DENIED = "This app has no permission to read held credentials: request kv get and list on v1/held/ (skipPrefix).";
-const DELETE_DENIED = "This app has no permission to delete held credentials: request kv del on v1/held/ (skipPrefix).";
+// The node answers 401 both for a missing capability and for a stale session, and the SDK cannot tell them apart, so the text names both.
+const READ_DENIED = "This app can't read held credentials: the session may lack kv get and list on v1/held/ (skipPrefix), or may need to sign in again.";
+const DELETE_DENIED = "This app can't delete held credentials: the session may lack kv del on v1/held/ (skipPrefix), or may need to sign in again.";
+
+/**
+ * Fixed, non-secret marker (`details.state`) on a `VERIFIED_NOT_SAVED` error whose write or read-back was refused by a typed kv 401 or 403: the
+ * credential was issued and verified but the app session may not store it. The error keeps its code; nothing from the kv error (message, address,
+ * space, token) is attached.
+ */
+export const HELD_STORE_PERMISSION_DENIED_STATE = "permission_denied";
 
 /**
  * True when a failed kv result says the app session may not make the call: a typed HTTP 401 or 403 (`status`, `statusCode` or `meta.status`, 4xx/5xx
@@ -253,10 +261,12 @@ export async function storeHeldCredential(
  * timestamp, and that record is equally valid.
  */
 async function writeAndReadBack(kv: IKVService, key: string, attempt: HeldCredentialRecord): Promise<HeldCredentialRecord> {
-  const unsaved = () => new CredentialError("VERIFIED_NOT_SAVED", "Held credential could not be confirmed in storage");
+  const unsaved = (permission = false) =>
+    new CredentialError("VERIFIED_NOT_SAVED", "Held credential could not be confirmed in storage", permission ? { state: HELD_STORE_PERMISSION_DENIED_STATE } : {});
   const written = await kv.batchPut([{ key, value: attempt }]).catch(() => undefined);
-  if (written?.ok !== true) throw unsaved();
+  if (written?.ok !== true) throw unsaved(written !== undefined && isPermissionDenied(written));
   const readback = await kv.get(key).catch(() => undefined);
+  if (readback !== undefined && !readback.ok && isPermissionDenied(readback)) throw unsaved(true);
   const value: unknown = readback?.ok === true ? readback.data.data : undefined;
   if (
     !isHeldRecord(value) ||
