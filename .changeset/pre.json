@@ -78,6 +78,7 @@
     "tc2205-home-feed-loop",
     "tc2209-feed-raw-export",
     "tc2209-feed-structural-restore",
+    "tc2242-domain-did-unavailable",
     "tinycloud-bin-name",
     "web-panel-ask-permission",
     "web-sdk-panel-safe-area"
