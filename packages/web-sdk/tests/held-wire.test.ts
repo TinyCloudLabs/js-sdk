@@ -271,3 +271,44 @@ describe("W1: an EIP-55 account with hex letters and no lowercase letter acquire
     });
   }
 });
+
+describe("reuse is scoped to the requested mailbox (H07)", () => {
+  test("with alice and bob both stored, each request gets its own credential and no acquisition; an unknown mailbox acquires", async () => {
+    const w = world();
+    const alice = await w.run();
+    const bob = await w.run({ address: "bob@example.com" });
+    expect(bob.credential).not.toBe(alice.credential);
+    expect(w.acquireCalls.count).toBe(2);
+    expect((await w.run()).credential).toBe(alice.credential);
+    expect((await w.run({ address: "BOB@Example.com" })).credential).toBe(bob.credential);
+    expect((await w.run({ address: " bob@example.com " })).credential).toBe(bob.credential);
+    expect(w.acquireCalls.count).toBe(2);
+    await w.run({ address: "carol@example.com" });
+    expect(w.acquireCalls.count).toBe(3);
+    expect(w.store.data.size).toBe(3);
+  });
+});
+
+describe("without the opt-in a cache miss is PROFILE_UNAVAILABLE whatever the storage or the policy says; a stored record is still reused (C8.3)", () => {
+  const unavailable = (error: unknown) => (error as { code?: string }).code;
+  test("an unreadable store (list not ok, list throws) with no opt-in: PROFILE_UNAVAILABLE, zero requests", async () => {
+    for (const kvOptions of [{ listFails: true }, { listThrows: true }] as KvOptions[]) {
+      const w = world({}, 0, kvOptions);
+      expect(unavailable(await failure(() => w.run({ allowHeldProfile: undefined })))).toBe("PROFILE_UNAVAILABLE");
+      expect(w.witness.calls).toHaveLength(0);
+    }
+  });
+  test("a policy that does not accept the pinned issuer, with no opt-in and a miss: PROFILE_UNAVAILABLE, zero requests", async () => {
+    const w = world({}, 0, {}, { retiredAt: "2026-10-30T06:00:00Z" });
+    expect(unavailable(await failure(() => w.run({ allowHeldProfile: undefined })))).toBe("PROFILE_UNAVAILABLE");
+    expect(w.witness.calls).toHaveLength(0);
+  });
+  test("a stored record is reused without the opt-in, and the strict read still refuses a broken listing", async () => {
+    const seed = world();
+    const issued = await seed.run();
+    const w = world();
+    for (const [key, value] of seed.store.data) w.store.data.set(key, value);
+    expect((await w.run({ allowHeldProfile: undefined })).credential).toBe(issued.credential);
+    expect(w.witness.calls).toHaveLength(0);
+  });
+});
