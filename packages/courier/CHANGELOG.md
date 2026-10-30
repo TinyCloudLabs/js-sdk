@@ -1,5 +1,15 @@
 # @tinycloud/courier
 
+## 0.4.1-beta.3
+
+### Patch Changes
+
+- Updated dependencies [614c1c2]
+- Updated dependencies [614c1c2]
+- Updated dependencies [614c1c2]
+  - @tinycloud/node-sdk@3.9.0-beta.3
+  - @tinycloud/sdk-core@3.9.0-beta.3
+
 ## 0.4.1-beta.2
 
 ### Patch Changes

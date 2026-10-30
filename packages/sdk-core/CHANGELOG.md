@@ -1,5 +1,19 @@
 # @tinycloudlabs/sdk-core
 
+## 3.9.0-beta.3
+
+### Minor Changes
+
+- 614c1c2: `@tinycloud/sdk-core/held-credentials` now exports `verifyHeldEmailCredential`, `selectDisclosures`, `sdHash`, and the `HeldEmailCredentialOptions` type. `verifyHeldEmailCredential` verifies a held email SD-JWT on its own, without a presentation proof or nonce, and checks that the credential subject is the authenticated owner. `sdHash` returns the base64url SHA-256 of the SD-JWT text, and `selectDisclosures` keeps only the named disclosures.
+
+  Details: TC-1454
+
+### Patch Changes
+
+- 614c1c2: Held credentials for the claim screen. `@tinycloud/sdk-core/held-credentials` adds `buildHeldPresentationSiwe` and `checkReturnedPresentation`, and `verifyHeldEmailCredential` now also returns the signed `issuedAt`. `@tinycloud/web-sdk/credentials` now exports `createAccountHolderSigner`, `storeHeldCredential`, `findHeldCredential`, `acquireHeldCredential` and a new `listHeldEmailCredentials`, which returns all of one account's valid held email credentials: owner only; expired, revoked, unverifiable and within-10-minutes-of-expiry records are left out (the same margin as `findHeldCredential`); newest `issuedAt` first. That entry now imports `@tinycloud/sdk-core` instead of bundling a copy, so parse the issuer set with `parseIssuerSet` from `@tinycloud/sdk-core/held-credentials` and `CredentialError` is sdk-core's own class. `HeldMatch` gains `recordId`, `email`, `issuedAt`, `expiresAt` and `issuer`, all read from the re-verified credential. `@tinycloud/node-sdk` keeps the held profile disabled and no longer resumes a pending code request of another profile for the same address.
+
+  Details: TC-1454
+
 ## 3.8.1-beta.2
 
 ### Patch Changes

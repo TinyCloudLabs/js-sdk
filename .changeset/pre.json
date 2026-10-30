@@ -29,6 +29,9 @@
     "@tinycloud/sdk-services-test": "21.0.1"
   },
   "changesets": [
+    "held-account-profile-pin",
+    "held-credential-codec",
+    "held-presentation-claim-surface",
     "share-envelope-cjs-links",
     "tc1739-share-index-owner-validation",
     "web-sdk-panel-allow-diagnostics"
