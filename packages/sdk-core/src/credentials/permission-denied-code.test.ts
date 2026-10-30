@@ -10,7 +10,7 @@ describe("CredentialError PERMISSION_DENIED", () => {
   });
 
   test("is not recoverable by default, and a caller may still say otherwise", () => {
-    const error = new CredentialError("PERMISSION_DENIED", "This app has no permission");
+    const error = new CredentialError("PERMISSION_DENIED", "This app can't read held credentials: the session may lack kv get and list on v1/held/ (skipPrefix), or may need to sign in again.");
     expect([error.code, error.recoverable, error.name]).toEqual(["PERMISSION_DENIED", false, "CredentialError"]);
     expect(new CredentialError("PERMISSION_DENIED", "x", { recoverable: true }).recoverable).toBe(true);
   });

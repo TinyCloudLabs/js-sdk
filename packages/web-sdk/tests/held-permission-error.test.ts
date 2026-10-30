@@ -182,6 +182,38 @@ describe("the signal is the typed result, never the message text; real failures 
   });
 });
 
+describe("the typed status is read wherever the error carries it: status, statusCode, meta.status and the cause chain; only 4xx/5xx count", () => {
+  const cyclic: Record<string, unknown> = { code: "KV_ERROR" };
+  cyclic.cause = cyclic;
+  const deniedShapes: [string, Record<string, unknown>][] = [
+    ["status on the error itself (403)", { code: "KV_ERROR", status: 403 }],
+    ["statusCode on the error itself (401)", { code: "KV_ERROR", statusCode: 401 }],
+    ["meta.status behind one cause", { code: "WRAPPED", cause: { meta: { status: 401 } } }],
+    ["statusCode behind two causes", { code: "WRAPPED", cause: { code: "WRAPPED", cause: { statusCode: 403 } } }],
+    ["the AUTH_UNAUTHORIZED code with a status outside 4xx/5xx (200): the status is ignored, the code decides", { code: "AUTH_UNAUTHORIZED", meta: { status: 200 } }],
+    ["the AUTH_UNAUTHORIZED code with a status outside 4xx/5xx (302 in statusCode)", { code: "AUTH_UNAUTHORIZED", statusCode: 302 }],
+    ["the AUTH_UNAUTHORIZED code carried by a cause", { code: "WRAPPED", cause: { code: "AUTH_UNAUTHORIZED" } }],
+  ];
+  for (const [name, error] of deniedShapes) {
+    test(`listHeldEmailCredentials: ${name} is PERMISSION_DENIED`, async () => {
+      const { kv } = fakeKv({ list: kvError(error) });
+      expect((await failure(() => listHeldEmailCredentials(input(kv))))?.code).toBe("PERMISSION_DENIED");
+    });
+  }
+  const offlineShapes: [string, Record<string, unknown>][] = [
+    ["an outer 503 over an inner 401 (the outermost status decides)", { code: "KV_ERROR", meta: { status: 503 }, cause: { meta: { status: 401 } } }],
+    ["a status outside 4xx/5xx without the AUTH code (200)", { code: "KV_ERROR", meta: { status: 200 } }],
+    ["a status that is a string, not a number", { code: "KV_ERROR", meta: { status: "401" } }],
+    ["a cyclic cause chain with no signal (terminates)", cyclic],
+  ];
+  for (const [name, error] of offlineShapes) {
+    test(`listHeldEmailCredentials: ${name} is OFFLINE`, async () => {
+      const { kv } = fakeKv({ list: { ok: false, error } });
+      expect((await failure(() => listHeldEmailCredentials(input(kv))))?.code).toBe("OFFLINE");
+    });
+  }
+});
+
 describe("acquireHeldCredential: the strict read comes first, so a missing grant is reported before any request or mail", () => {
   test("with the opt-in: PERMISSION_DENIED, zero witness calls, zero mails", async () => {
     const { kv } = fakeKv({ list: denied(401) });

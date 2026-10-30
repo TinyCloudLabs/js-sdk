@@ -50,8 +50,8 @@ Failures are `CredentialError` values with stable `code` and `recoverable` field
 }
 ```
 
-- `get` and `list` read the credentials (`listHeldEmailCredentials`, `findHeldCredential`, and the read that `acquireHeldCredential` does before it contacts anything).
-- `put` (with `get`, to confirm the write) stores a newly issued credential. `del` is for `deleteHeldCredential` and `pruneHeldCredentials`.
+- `get` and `list` read the credentials: `listHeldEmailCredentials`, `findHeldCredential`, `pruneHeldCredentials` (it lists and reads every record before it deletes any), and the read that `acquireHeldCredential` does before it contacts anything. All of them need BOTH `get` and `list`.
+- `put` (with `get`, to confirm the write) stores a newly issued credential. `del` is for `deleteHeldCredential` and for the deletes `pruneHeldCredentials` makes (so `pruneHeldCredentials` needs `get`, `list` and `del`).
 - `skipPrefix: true` is required: without it the path is placed under the app's own prefix and the grant does not cover `v1/held/`.
 - The space is the manifest's primary space. In the OpenCredentials screens that is the `credentials` space; other apps use their own (a test app might use `applications`). Pass the matching kv to the held functions: `tcw.kv` is the primary manifest space's kv, and `tcw.kvForSpace(spaceUri)` is the kv of another space.
 
