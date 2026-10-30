@@ -30,6 +30,7 @@
   },
   "changesets": [
     "share-envelope-cjs-links",
+    "tc1739-share-index-owner-validation",
     "web-sdk-panel-allow-diagnostics"
   ]
 }
