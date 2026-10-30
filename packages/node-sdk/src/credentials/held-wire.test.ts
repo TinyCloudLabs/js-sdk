@@ -469,8 +469,13 @@ describe("a held completion retried in a NEW call after the proof prompts the wa
   test("a recoverable SIGNATURE_REJECTED at R6, then a second completeEmailProof with the same pending, issues with a second wallet call", async () => {
     const w = world();
     const pending = await requestEmailProofCode(w.input());
-    (w.witness.force as Record<string, unknown>)["holder-signature"] = { status: 400, body: { code: "SIGNATURE_REJECTED", correlationId: "c", recoverable: true, state: "signature_rejected", type: "tinycloud.credentials/error/v1" } };
-    const complete = () => completeEmailProofWithIssuerKeys({ pending, code: "12345678", holder: w.holder, fetch: w.witness.fetch, now: w.now, allowHeldProfile: true }, w.issuerKeys);
+    // The witness rejects the first holder signature WITHOUT changing state (it never reached the witness handler): a plain refusal.
+    let rejected = 0;
+    const rejecting = Object.assign(async (input: string | URL | Request, init?: RequestInit) => {
+      if (rejected === 0 && String(input).endsWith("/holder-signature")) { rejected += 1; return new Response(JSON.stringify({ code: "SIGNATURE_REJECTED", correlationId: "c", recoverable: true, state: "holder_signature_required", type: "tinycloud.credentials/error/v1" }), { status: 400, headers: { "content-type": "application/json" } }); }
+      return w.witness.fetch(input, init);
+    }, { preconnect: () => {} }) as typeof globalThis.fetch;
+    const complete = () => completeEmailProofWithIssuerKeys({ pending, code: "12345678", holder: w.holder, fetch: rejecting, now: w.now, allowHeldProfile: true }, w.issuerKeys);
     const first = await failure(complete);
     expect([first?.code, first?.recoverable]).toEqual(["SIGNATURE_REJECTED", true]);
     expect(w.holder.calls.count).toBe(1);
