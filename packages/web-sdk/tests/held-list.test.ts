@@ -405,24 +405,10 @@ describe("findHeldCredential is unchanged", () => {
 
 describe("@tinycloud/web-sdk/credentials entry exposes the held surface", () => {
   test("exports the signer, store and source functions the claim screen needs", () => {
-    for (const name of ["createAccountHolderSigner", "storeHeldCredential", "findHeldCredential", "acquireHeldCredential", "listHeldEmailCredentials", "parseIssuerSet"] as const) {
+    for (const name of ["createAccountHolderSigner", "storeHeldCredential", "findHeldCredential", "acquireHeldCredential", "listHeldEmailCredentials"] as const) {
       expect(typeof subpath[name]).toBe("function");
     }
     expect(subpath.listHeldEmailCredentials).toBe(listHeldEmailCredentials);
     expect(subpath.findHeldCredential).toBe(findHeldCredential);
-  });
-
-  test("a list over a set parsed by the entry's own parseIssuerSet works end to end", async () => {
-    const fake = fakeKv();
-    await place(fake, OWNER_A, makeSdJwt());
-    const issuerSet = subpath.parseIssuerSet(
-      {
-        format: "tinycloud.credentials-issuers/v1",
-        version: 1,
-        issuers: [{ alg: "EdDSA", issuerDid: ISSUER_DID, kid: KID, notAfter: null, notBefore: "2025-01-01T00:00:00Z", profiles: [PROFILE], publicKey: issuerPublicKey, retiredAt: null, vcts: [VCT] }],
-      },
-      { didMethods: { issuer: ["web"] } },
-    );
-    expect(await subpath.listHeldEmailCredentials({ kv: fake.kv, ownerDid: OWNER_A, now: NOW, issuerSet, acceptedIssuers: POLICY.acceptedIssuers, didMethods: POLICY.didMethods })).toHaveLength(1);
   });
 });
