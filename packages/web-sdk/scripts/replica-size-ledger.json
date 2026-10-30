@@ -2385,5 +2385,33 @@
     "worker": { "delta": 0, "ceiling": 776539 },
     "replicaWorker": { "delta": 0, "ceiling": 770467 },
     "reason": "TC-2242 registered wrapped-key digest helper; exact SQLite and PostgreSQL CI root gzip measurements agree. All non-root size buckets are carried unchanged from TC-2192."
+  },
+  "tc2113AllowAbilityRatchet": {
+    "label": "panel Allow ability for the delegation list (TC-2113, #768)",
+    "ruling": "Exact canonical SQLite and PostgreSQL CI at source head f5c97c846265d62ae026bf30b4db7442926d78ca measures 1,475,824/1,417,412 B, +515/+602 B over TC-2242. Bun 1.3.14; rustc 1.99.0 (b940084d7 2026-09-28).",
+    "base": "d896e93edee5b2cdf14161c1f3f411dc7fc6c5bb",
+    "sourceCommits": ["f5c97c846265d62ae026bf30b4db7442926d78ca"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41041601835",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41041601835/job/124015490543",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41041601835/job/124015490874"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 515, "index.cjs": 602 },
+      "ceiling": { "index.mjs": 1475824, "index.cjs": 1417412 }
+    },
+    "firstImport": {
+      "delta": { "replica.mjs": 0, "replica.cjs": 0 },
+      "ceiling": { "replica.mjs": 52757, "replica.cjs": 67957 }
+    },
+    "activation": {
+      "delta": { "activation.mjs": 0, "activation.cjs": 0 },
+      "ceiling": { "activation.mjs": 23412, "activation.cjs": 24981 }
+    },
+    "worker": { "delta": 0, "ceiling": 776539 },
+    "replicaWorker": { "delta": 0, "ceiling": 770467 },
+    "reason": "TC-2113 panel Allow ability row; exact SQLite and PostgreSQL CI root gzip measurements agree. All non-root size buckets are carried unchanged from TC-2242."
   }
 }
