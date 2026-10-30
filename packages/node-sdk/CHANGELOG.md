@@ -1,5 +1,16 @@
 # @tinycloudlabs/node-sdk
 
+## 3.9.0-beta.5
+
+### Patch Changes
+
+- 9758dfd: A held-credential storage call the app session may not make is now `CredentialError` code `PERMISSION_DENIED`, not `OFFLINE`: `listHeldEmailCredentials`, `findHeldCredential`, `deleteHeldCredential`, `pruneHeldCredentials` and `acquireHeldCredential`'s read of the store throw it when kv answers 401 or 403 (`This app can't read held credentials: the session may lack kv get and list on v1/held/ (skipPrefix), or may need to sign in again.`, or the same shape for delete with kv del; the node answers 401 both for a missing capability and for a stale session, so the text names both). The decision reads the typed kv error status, never its message text; a real network failure stays `OFFLINE`, and a failed write after a successful issue stays `VERIFIED_NOT_SAVED` (a write or read-back refused by kv 401/403 adds the fixed marker `details.state === "permission_denied"`, nothing else from the kv error). `PERMISSION_DENIED` is an additive code in `@tinycloud/sdk-core`'s `CredentialErrorCode` and is not recoverable by retrying. `findHeldCredential` still reads a failed list that is not a permission failure as "not found". `@tinycloud/web-sdk` `CREDENTIALS.md` now lists the manifest grant the held functions need (`tinycloud.kv` get, list, put, del on `v1/held/`, `skipPrefix: true`). `@tinycloud/node-sdk`: the local refusal of the disabled held profile (`PROFILE_UNAVAILABLE`, no witness contacted) now says "This SDK build doesn't enable the email verification profile."; the code is unchanged, and the witness-side `PROFILE_UNAVAILABLE` keeps "The witness does not offer the email verification profile.". `@tinycloud/web-sdk`: the account signer's refusals of its input (`HOLDER_INVALID`, 0 sign calls, behaviour unchanged) now say "The wallet signer signs only the exact account binding for this request." instead of the generic "Holder must be a did:key Ed25519 identifier."; the refusal of a non-mainnet-account did and of a bad signature returned by the wallet keep the shared text, and so does the did:key holder refusal in `@tinycloud/node-sdk`.
+
+  Details: TC-1454
+
+- Updated dependencies [9758dfd]
+  - @tinycloud/sdk-core@3.9.0-beta.5
+
 ## 3.9.0-beta.4
 
 ### Minor Changes

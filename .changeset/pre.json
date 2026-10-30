@@ -32,6 +32,7 @@
     "held-account-profile-pin",
     "held-credential-codec",
     "held-presentation-claim-surface",
+    "held-store-permission-denied",
     "held-wire-acquisition",
     "share-envelope-cjs-links",
     "tc1739-share-index-owner-validation",
