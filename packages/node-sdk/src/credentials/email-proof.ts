@@ -367,7 +367,7 @@ export async function requestEmailProofCode(input: EmailProofRequestInput): Prom
   const descriptor = await witnessDescriptor(profile, requirement, { fetch: input.fetch, signal }, "request", input.allowHeldProfile);
   const descriptorDigest = await canonicalDigest(descriptor);
   const verifier = randomVerifier();
-  const transport = new OpenCredentialsHttpTransport(descriptor, input.fetch, { honorServerRecoverable: true });
+  const transport = new OpenCredentialsHttpTransport(descriptor, input.fetch, { honorServerRecoverable: true, ...(input.allowHeldProfile === true ? { allowHeldProfile: true as const } : {}) });
 
   const createdAtMs = now().getTime();
   let created: Awaited<ReturnType<OpenCredentialsHttpTransport["create"]>>;
@@ -411,6 +411,7 @@ export async function requestEmailProofCode(input: EmailProofRequestInput): Prom
   try {
     await interpretCredentialFlow({
       descriptor,
+      ...(input.allowHeldProfile === true ? { allowHeldProfile: true as const } : {}),
       requirement,
       requestId: created.requestId,
       verifier,
@@ -472,7 +473,7 @@ async function completeWithIssuerKeys(
   const descriptor = await witnessDescriptor(pending.profile, requirement, { fetch: input.fetch, signal }, "session", input.allowHeldProfile);
   const descriptorDigest = await canonicalDigest(descriptor);
   if (descriptorDigest !== pending.descriptorDigest) throw new EmailProofError("session", "SESSION_INVALID");
-  const transport = new OpenCredentialsHttpTransport(descriptor, input.fetch, { honorServerRecoverable: true });
+  const transport = new OpenCredentialsHttpTransport(descriptor, input.fetch, { honorServerRecoverable: true, ...(input.allowHeldProfile === true ? { allowHeldProfile: true as const } : {}) });
 
   try {
     // The code email was sent in step 1. A challenge-required state here would make
@@ -481,6 +482,7 @@ async function completeWithIssuerKeys(
     if (state.nextStep?.constraints.challengeRequired === true) throw new EmailProofError("session", "SESSION_INVALID");
     await interpretCredentialFlow({
       descriptor,
+      ...(input.allowHeldProfile === true ? { allowHeldProfile: true as const } : {}),
       requirement,
       requestId: pending.requestId,
       verifier: pending.verifier,
@@ -549,6 +551,12 @@ async function acquireWithIssuerKeys(input: EmailProofAcquireInput, issuerKeys: 
   const live = store ? await store.findLive(address, now()) : undefined;
   // The store returns the newest live record per address across profiles. Resume only one of this profile.
   let pending = live?.profile === profile ? live : undefined;
+  // A resumed held pending without a valid create-response deadline cannot be completed (the signed binding must carry it): refuse it now,
+  // before the user is asked for a code, and drop it.
+  if (pending && profile === HELD_PROFILE && !Number.isFinite(Date.parse(pending.serverExpiresAt ?? ""))) {
+    await store?.delete(pending.requestId).catch(() => undefined);
+    throw new EmailProofError("session", "SESSION_INVALID");
+  }
   if (!pending) {
     pending = await requestEmailProofCode({ ...input, address });
     await store?.put(pending);
@@ -581,14 +589,15 @@ const HELD_LOCAL_ATOM = /^[a-z0-9!#$%&'*+\-/=?^_`{|}~]+(\.[a-z0-9!#$%&'*+\-/=?^_
 const HELD_DOMAIN_LABEL = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
 
 /**
- * Held address, in the witness's own order: refuse any non-ASCII character first (so an uppercase non-ASCII form is never lowercased into
- * something else), trim, ASCII-lowercase, then the witness's rules (C2.5.3). The OTP proves the lowercased mailbox, which is what the
+ * Held address, in the witness's own order: trim, refuse any non-ASCII character (so an uppercase non-ASCII form is never lowercased into
+ * something else), ASCII-lowercase, then the witness's rules (C2.5.3). The OTP proves the lowercased mailbox, which is what the
  * credential then discloses. Every refusal is ADDRESS_INVALID, before any network call.
  */
 function normalizeHeldAddress(address: string): string {
   const invalid = () => new EmailProofError("request", "ADDRESS_INVALID");
-  if (/[^\x00-\x7f]/.test(address)) throw invalid();
-  const value = address.trim().toLowerCase();
+  const trimmed = address.trim();
+  if (/[^\x00-\x7f]/.test(trimmed)) throw invalid();
+  const value = trimmed.toLowerCase();
   const parts = value.split("@");
   if (value.length < 3 || value.length > 254 || parts.length !== 2 || /[^\x21-\x7e]/.test(value)) throw invalid();
   const [local, domain] = parts as [string, string];
