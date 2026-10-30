@@ -8,3 +8,4 @@ export { PRESENTATION_STATEMENT, SD_HASH_RESOURCE_PREFIX, assertValidAudience } 
 export { parsePkhDid, pkhPrincipalsEqual, registryKey, toChecksumAddress } from "./did";
 export { normaliseEmail } from "./email";
 export { verifyHeldEmailCredential, selectDisclosures, sdHash, type HeldEmailCredentialOptions } from "./credential";
+export { buildHeldPresentationSiwe, checkReturnedPresentation, type BuildHeldPresentationSiweInput, type CheckReturnedPresentationOptions, type HeldPresentationSiwe, type HeldPresentationSigner } from "./presentation";
