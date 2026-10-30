@@ -81,7 +81,7 @@ export type EmailProofStep = "request" | "code" | "credential" | "session";
  * | RATE_LIMITED            | witness     | witness `recoverable` flag decides (defaults to true); retryAfterMs set |
  * | ISSUER_UNAVAILABLE      | true        | transient issuer outage (503); witness flag is honoured |
  * | NETWORK                 | true        | transport failure or step timeout; pending kept |
- * | PROFILE_UNAVAILABLE     | false       | catalog or descriptor does not match the pinned profile |
+ * | PROFILE_UNAVAILABLE     | false       | catalog or descriptor does not match the pinned profile, or (local, no witness contacted) the profile is not enabled |
  * | CODE_REJECTED           | true        | wrong code; witness flag decides whether another attempt is allowed |
  * | CODE_ATTEMPTS_EXHAUSTED | false       | witness proof-attempt budget spent; pending is dead |
  * | SIGNATURE_REJECTED      | true        | holder binding rejected; same pending may be retried |
@@ -147,6 +147,9 @@ const MESSAGES: Record<Exclude<EmailProofErrorCode, "RATE_LIMITED">, string> = {
   FAILED: "Email verification failed.",
 };
 
+/** The local refusal of a profile this SDK build does not enable (the held profile without the per-call opt-in). No witness is contacted. */
+const LOCAL_PROFILE_UNAVAILABLE = "This SDK build doesn't enable the email verification profile.";
+
 function rateLimitMessage(retryAfterMs: number | undefined): string {
   const head = "Too many codes were requested for this address.";
   if (retryAfterMs === undefined || !Number.isFinite(retryAfterMs) || retryAfterMs <= 0) return `${head} Try again in about an hour.`;
@@ -162,8 +165,9 @@ export class EmailProofError extends Error {
   readonly retryAfterMs: number | undefined;
   readonly recoverable: boolean;
 
-  constructor(step: EmailProofStep, code: EmailProofErrorCode, retryAfterMs?: number, recoverable: boolean = RECOVERABILITY[code]) {
-    super(code === "RATE_LIMITED" ? rateLimitMessage(retryAfterMs) : MESSAGES[code]);
+  /** `message` overrides the code's text for one refusal whose cause the shared text would misdescribe. It never carries request data. */
+  constructor(step: EmailProofStep, code: EmailProofErrorCode, retryAfterMs?: number, recoverable: boolean = RECOVERABILITY[code], message?: string) {
+    super(message ?? (code === "RATE_LIMITED" ? rateLimitMessage(retryAfterMs) : MESSAGES[code]));
     this.step = step;
     this.code = code;
     this.retryAfterMs = retryAfterMs;
@@ -619,7 +623,10 @@ function assertHolder(holder: HolderSigner, step: EmailProofStep, profile: Email
 /** The only reader of the held opt-in. Held is enabled for this call only by the literal `true`; any other value, and any other profile, is unaffected. */
 function profilePin(profile: string, step: EmailProofStep, allowHeld?: unknown): (typeof PROFILE_PINS)[EmailProofProfileId] {
   const entry = Object.prototype.hasOwnProperty.call(PROFILE_PINS, profile) ? PROFILE_PINS[profile as EmailProofProfileId] : undefined;
-  if (!entry || (!entry.enabled && !(allowHeld === true && profile === HELD_PROFILE))) throw new EmailProofError(step, "PROFILE_UNAVAILABLE");
+  if (!entry || (!entry.enabled && !(allowHeld === true && profile === HELD_PROFILE))) {
+    // Local refusal: no witness has been contacted, so the shared PROFILE_UNAVAILABLE text ("The witness does not offer ...") would be untrue here.
+    throw new EmailProofError(step, "PROFILE_UNAVAILABLE", undefined, undefined, LOCAL_PROFILE_UNAVAILABLE);
+  }
   return entry;
 }
 
