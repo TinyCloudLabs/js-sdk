@@ -44,7 +44,10 @@ export async function interpretCredentialFlow(input: {
   readonly signal?: AbortSignal;
   readonly onProgress?: (event: CredentialProgressEvent) => void;
   readonly onWait?: () => Promise<void>;
+  /** The explicit per-call opt-in for the held (account-bound) profile. Without it a held descriptor is refused before the first transport call. */
+  readonly allowHeldProfile?: true;
 }): Promise<void> {
+  if (input.descriptor.holderBinding.alg === "EIP191" && input.allowHeldProfile !== true) throw new CredentialError("UNSUPPORTED_PROFILE", "The held credential profile requires an explicit opt-in");
   const steps = new Map(input.descriptor.steps.map((step) => [step.type, step]));
   const completed = new Set<string>(); let lastTransition = "";
   for (;;) {

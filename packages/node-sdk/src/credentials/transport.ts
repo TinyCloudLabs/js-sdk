@@ -38,7 +38,10 @@ function serverError(value: unknown, response: Response, honorServerRecoverable:
 export class OpenCredentialsHttpTransport implements CredentialAcquisitionTransport {
   private readonly nonces = new Map<string, string>();
   private readonly bindings = new Map<string, CredentialHolderBinding>();
-  constructor(private readonly descriptor: CredentialFlowDescriptor, private readonly fetchFn: typeof fetch = globalThis.fetch.bind(globalThis), private readonly options: { readonly honorServerRecoverable?: boolean } = {}) {}
+  /** `allowHeldProfile`: the explicit per-call opt-in for the held (account-bound) profile; without it a held descriptor is refused here, before any request (TC-2254 C8.3). */
+  constructor(private readonly descriptor: CredentialFlowDescriptor, private readonly fetchFn: typeof fetch = globalThis.fetch.bind(globalThis), private readonly options: { readonly honorServerRecoverable?: boolean; readonly allowHeldProfile?: true } = {}) {
+    if (descriptor.holderBinding.alg === "EIP191" && options.allowHeldProfile !== true) throw new CredentialError("UNSUPPORTED_PROFILE", "The held credential profile requires an explicit opt-in");
+  }
   private url(endpoint: Parameters<typeof credentialEndpointPath>[0], id?: string): string { return new URL(credentialEndpointPath(endpoint, id), this.descriptor.issuer.origin).href; }
   private async request(endpoint: Parameters<typeof credentialEndpointPath>[0], input: { readonly id?: string; readonly method?: "GET" | "POST"; readonly verifier?: string; readonly body?: unknown; readonly signal?: AbortSignal }): Promise<unknown> {
     let response: Response;
@@ -72,7 +75,11 @@ export class OpenCredentialsHttpTransport implements CredentialAcquisitionTransp
     const base = { type: "OpenCredentialsAcquisitionState" as const, version: 1 as const, requestId: id, transitionId: `${String(raw.state)}:${String(raw.resultPreviouslyRead ?? false)}`, correlationId: id };
     if (raw.state === "challenge_required") { const type = this.proofStep(); return { ...base, state: "pending", nextStep: { id: type, type, version: 1, constraints: { challengeRequired: true } } }; }
     if (raw.state === "proof_required") { const type = this.proofStep(); this.nonces.set(id, opaque(raw.challengeNonce, "challengeNonce")); return { ...base, state: "pending", nextStep: { id: type, type, version: 1, constraints: {} } }; }
-    if (raw.state === "holder_binding_required" || raw.state === "holder_signature_required") return { ...base, state: "pending", nextStep: { id: "holder_signature", type: "holder_signature", version: 1, constraints: {} } };
+    if (raw.state === "holder_binding_required" || raw.state === "holder_signature_required") {
+      // A held request resumed in a new call learns its challenge nonce here (R5 is only served once the proof is accepted).
+      if (raw.challengeNonce !== null && raw.challengeNonce !== undefined) this.nonces.set(id, opaque(raw.challengeNonce, "challengeNonce"));
+      return { ...base, state: "pending", nextStep: { id: "holder_signature", type: "holder_signature", version: 1, constraints: {} } };
+    }
     if (raw.state === "ready_to_issue") return { ...base, state: "ready_to_issue" };
     if (raw.state === "issued") return { ...base, state: "complete" };
     throw new CredentialError("REQUEST_SUBSTITUTED", "Credential state is unsupported");
