@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { acquireEmailProofWithIssuerKeys, completeEmailProofWithIssuerKeys, createMemoryEmailProofPendingStore, EmailProofError, requestEmailProofCode, restoreEmailProofPending, createEd25519HolderSigner, type EmailProofPending, type HolderSigner } from "./email-proof";
+import { canonicalDigest } from "@tinycloud/sdk-core";
 import { createHeldWitness, testAccountHolder, vectors, HELD_DESCRIPTOR_DIGEST, type HeldWitnessOptions } from "./test-support/held-witness";
 
 // TC-2254 (contract v2.4): acquiring `tinycloud.email-held/v1` from the witness, against a fake witness built from the
@@ -350,4 +351,25 @@ describe("a pending that lacks the server expiry cannot be completed for held", 
     expect(error?.code).toBe("SESSION_INVALID");
     expect(w.witness.calls).toHaveLength(before);
   });
+});
+
+describe("an unavailable or unpinned held profile is PROFILE_UNAVAILABLE, with the catalog read as the only request (C6.4, C6.5, C7.2)", () => {
+  const altered = (patch: (d: Record<string, any>) => void): Record<string, unknown> => { const d = structuredClone(vectors.descriptor.held) as Record<string, any>; patch(d); return d; };
+  const cases: [string, (() => Promise<HeldWitnessOptions>)][] = [
+    ["capability off (the held entry is listed with enabled false)", async () => ({ capability: false })],
+    ["a descriptor changed by one byte under its old digest", async () => ({ catalogDescriptor: altered((d) => { d.lifecycle.requestTtlSeconds = 601; }) })],
+    ["a descriptor changed by one byte with a recomputed digest (the pin refuses it)", async () => { const d = altered((d) => { d.lifecycle.requestTtlSeconds = 601; }); return { catalogDescriptor: d, catalogDigest: await canonicalDigest(d) }; }],
+    ["another issuer origin with a recomputed digest", async () => { const d = altered((d) => { d.issuer.origin = "https://evil.example"; }); return { catalogDescriptor: d, catalogDigest: await canonicalDigest(d) }; }],
+    ["another issuer did with a recomputed digest", async () => { const d = altered((d) => { d.issuer.did = "did:web:evil.example"; d.issuer.kid = "did:web:evil.example#controller"; }); return { catalogDescriptor: d, catalogDigest: await canonicalDigest(d) }; }],
+    ["a mixed subject relationship and holder binding", async () => { const d = altered((d) => { d.subjectRelationship = "holder_is_subject"; }); return { catalogDescriptor: d, catalogDigest: await canonicalDigest(d) }; }],
+  ];
+  for (const [name, options] of cases) {
+    test(name, async () => {
+      const w = world(await options());
+      const error = await failure(() => requestEmailProofCode(w.input()));
+      expect([name, error?.code]).toEqual([name, "PROFILE_UNAVAILABLE"]);
+      expect(routes(w.witness)).toEqual(["catalog"]);
+      expect(w.holder.calls.count).toBe(0);
+    });
+  }
 });

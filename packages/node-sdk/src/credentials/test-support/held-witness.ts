@@ -107,6 +107,8 @@ export interface HeldWitnessOptions {
   readonly issuerSeed?: Uint8Array;
   /** Replaces the held descriptor in the catalog (digest recomputed by the caller if needed). */
   readonly catalogDescriptor?: Record<string, unknown>;
+  /** The `descriptorDigest` the catalog entry advertises (default: the pinned held digest). */
+  readonly catalogDigest?: string;
   /** The first call on `route` answers with this recorded response instead (the handler is not run). */
   readonly force?: Partial<Record<WitnessRoute, RecordedResponse>>;
   /** Mutates the binding the witness serves AND recomputes for R6 (a malicious or buggy witness). */
@@ -244,7 +246,7 @@ export function createHeldWitness(options: HeldWitnessOptions = {}) {
 
     if (url.pathname === "/.well-known/opencredentials") {
       const enabled = options.capability !== false;
-      const entry = { descriptor, descriptorDigest: HELD_DESCRIPTOR_DIGEST, enabled, profile: HELD, profileVersion: 1, readiness: enabled ? "ready" : "disabled", supported: true };
+      const entry = { descriptor, descriptorDigest: options.catalogDigest ?? HELD_DESCRIPTOR_DIGEST, enabled, profile: HELD, profileVersion: 1, readiness: enabled ? "ready" : "disabled", supported: true };
       return finish("catalog", { status: 200, body: { type: "tinycloud.credentials/catalog/v1", protocol: PROTOCOL, catalogVersion: 1, canonicalization: "RFC8785", digest: "sha-256-base64url-nopad", profiles: [entry] } });
     }
 
