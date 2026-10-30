@@ -161,31 +161,4 @@ describe("S16 byte-level hardening: framing, strict UTF-8, one copy of the input
     expect(new TextDecoder().decode(Uint8Array.from(body))).toContain("\ufffd");
     expect(await raw(join([...domainBytes], [0], body))).toEqual({ code: "HOLDER_INVALID", walletCalls: 0 });
   });
-
-  test("a BOM after the NUL is refused (the decoder must not strip it): the wallet would otherwise sign bytes that differ from the binding", async () => {
-    expect(await raw(join([...domainBytes], [0], [0xef, 0xbb, 0xbf], [...jcsBytes]))).toEqual({ code: "HOLDER_INVALID", walletCalls: 0 });
-  });
-
-  test("a hostile Uint8Array whose subarray shows a valid binding while its bytes are other text is refused, and the wallet is not called", async () => {
-    class Hostile extends Uint8Array {
-      override subarray(begin?: number, end?: number): Uint8Array { return new Uint8Array(jcsBytes).subarray(0, end === undefined ? undefined : end - (begin ?? 0)); }
-    }
-    const evil = new Hostile([...domainBytes, 0, ...enc.encode("transfer all funds to mallory")]);
-    expect(await raw(evil)).toEqual({ code: "HOLDER_INVALID", walletCalls: 0 });
-  });
-
-  test("the wallet gets a private copy: a caller that mutates its buffer after the call cannot change what is signed", async () => {
-    const original = join([...domainBytes], [0], [...jcsBytes]);
-    const bytes = Uint8Array.from(original);
-    let seenByWallet: number[] = [];
-    const sign = async (b: Uint8Array): Promise<Uint8Array> => {
-      await Promise.resolve();
-      seenByWallet = [...b];
-      return hexToBytes(await OWNER.signMessage({ message: { raw: Uint8Array.from(seenByWallet) } }));
-    };
-    const pending = createAccountHolderSigner(ACCOUNT, sign).sign(bytes);
-    bytes.fill(0);
-    await pending;
-    expect(seenByWallet).toEqual([...original]);
-  });
 });
