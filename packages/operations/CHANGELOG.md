@@ -1,5 +1,65 @@
 # @tinycloud/operations
 
+## 0.7.8-beta.3
+
+### Patch Changes
+
+- Updated dependencies [614c1c2]
+- Updated dependencies [614c1c2]
+- Updated dependencies [614c1c2]
+  - @tinycloud/node-sdk@3.9.0-beta.3
+  - @tinycloud/sdk-core@3.9.0-beta.3
+
+## 0.7.8-beta.2
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.8.1-beta.2
+- @tinycloud/sdk-core@3.8.1-beta.2
+
+## 0.7.8-beta.1
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.8.1-beta.1
+- @tinycloud/sdk-core@3.8.1-beta.1
+
+## 0.7.8-beta.0
+
+### Patch Changes
+
+- Updated dependencies [f1744fb]
+  - @tinycloud/node-sdk@3.8.1-beta.0
+
+## 0.7.7
+
+### Patch Changes
+
+- 1fc87b6: Fix personal-app MCP guidance and generated write schemas for server-owned `by` metadata. Write examples omit `by`, and edit/move instructions tell clients to remove it from read-back values before submitting them. Advertised put/move schemas now reject top-level `by` before invocation, matching the existing runtime restriction. CLI records, nested data fields and stored/read-back attribution remain unchanged.
+- Updated dependencies [15080ed]
+- Updated dependencies [32ed899]
+- Updated dependencies [49f3665]
+- Updated dependencies [20a872e]
+- Updated dependencies [479205d]
+- Updated dependencies [92e4bd0]
+- Updated dependencies [e740a6d]
+- Updated dependencies [c541786]
+- Updated dependencies [e424ba9]
+- Updated dependencies [812a818]
+- Updated dependencies [4a19c47]
+- Updated dependencies [5d9d314]
+- Updated dependencies [44c439a]
+- Updated dependencies [2789240]
+- Updated dependencies [f167805]
+- Updated dependencies [9fb359a]
+- Updated dependencies [9fb359a]
+- Updated dependencies [812a818]
+- Updated dependencies [3daddbb]
+- Updated dependencies [a83e55c]
+  - @tinycloud/node-sdk@3.8.0
+  - @tinycloud/sdk-core@3.8.0
+  - @tinycloud/sdk-services@3.8.0
+
 ## 0.7.7-beta.22
 
 ### Patch Changes
