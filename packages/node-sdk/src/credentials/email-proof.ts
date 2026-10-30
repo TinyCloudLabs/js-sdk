@@ -45,11 +45,13 @@ export const EMAIL_PROOF_ISSUER_KEYS: readonly IssuerVerificationKey[] = [
   },
 ];
 
-export type EmailProofProfileId = "tinycloud.email-proof/v1";
+export type EmailProofProfileId = "tinycloud.email-proof/v1" | "tinycloud.email-held/v1";
 export const DEFAULT_EMAIL_PROOF_PROFILE: EmailProofProfileId = "tinycloud.email-proof/v1";
 /** Each profile is pinned to its descriptor digest and to the mailbox step the witness must offer. */
 const PROFILE_PINS: Readonly<Record<EmailProofProfileId, { readonly descriptorDigest: string; readonly requiredStep: "mailbox_otp"; readonly enabled: boolean }>> = {
   "tinycloud.email-proof/v1": { descriptorDigest: EMAIL_PROOF_PINS.descriptorDigest, requiredStep: "mailbox_otp", enabled: true },
+  // Held profile: disabled until the held wire path ships. Requests refuse with PROFILE_UNAVAILABLE before any network call.
+  "tinycloud.email-held/v1": { descriptorDigest: "dc3_DuvzipXwYkTfjKqTaK1c3VS0YSPnaBsYSQriC0w", requiredStep: "mailbox_otp", enabled: false },
 };
 
 const OPENER_ORIGIN = "https://localhost";
@@ -163,10 +165,11 @@ export class EmailProofError extends Error {
 export type HolderAlgorithm = "EdDSA" | "EIP191";
 
 /**
- * Holder key adapter. `sign` MUST return a raw signature over exactly the bytes it
- * is given: the signer does no hashing, prefixing, or domain separation. `kid` names
- * the key the witness verifies against. `completeEmailProof` rejects with
+ * Holder key adapter. `kid` names the key the witness verifies against. `completeEmailProof` rejects with
  * SESSION_INVALID unless `did === pending.holderDid`.
+ * `sign` MUST return a raw signature over exactly the bytes it is given. For `EdDSA` the signer applies no
+ * prefix. For `EIP191` the adapter performs `personal_sign` over those bytes, and the wallet applies the
+ * `\x19Ethereum Signed Message:\n<len>` prefix. The prefix is applied in that one place and nowhere else.
  */
 export interface HolderSigner {
   readonly did: string;
@@ -490,7 +493,10 @@ async function acquireWithIssuerKeys(input: EmailProofAcquireInput, issuerKeys: 
   const address = normalizeAddress(input.address);
   const now = input.now ?? (() => new Date());
   const store = input.pendingStore;
-  let pending = store ? await store.findLive(address, now()) : undefined;
+  const profile = input.profile ?? DEFAULT_EMAIL_PROOF_PROFILE;
+  const live = store ? await store.findLive(address, now()) : undefined;
+  // The store returns the newest live record per address across profiles. Resume only one of this profile.
+  let pending = live?.profile === profile ? live : undefined;
   if (!pending) {
     pending = await requestEmailProofCode({ ...input, address });
     await store?.put(pending);
