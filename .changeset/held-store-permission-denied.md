@@ -1,0 +1,9 @@
+---
+"@tinycloud/sdk-core": patch
+"@tinycloud/node-sdk": patch
+"@tinycloud/web-sdk": patch
+---
+
+A held-credential storage call the app session may not make is now `CredentialError` code `PERMISSION_DENIED`, not `OFFLINE`: `listHeldEmailCredentials`, `findHeldCredential`, `deleteHeldCredential`, `pruneHeldCredentials` and `acquireHeldCredential`'s read of the store throw it when kv answers 401 or 403 (`This app has no permission to read held credentials: request kv get and list on v1/held/ (skipPrefix).`, or `... to delete ... request kv del ...`). The decision reads the typed kv error status, never its message text; a real network failure stays `OFFLINE`, and a failed write after a successful issue stays `VERIFIED_NOT_SAVED`. `PERMISSION_DENIED` is an additive code in `@tinycloud/sdk-core`'s `CredentialErrorCode` and is not recoverable by retrying. `findHeldCredential` still reads a failed list that is not a permission failure as "not found". `@tinycloud/web-sdk` `CREDENTIALS.md` now lists the manifest grant the held functions need (`tinycloud.kv` get, list, put, del on `v1/held/`, `skipPrefix: true`). `@tinycloud/node-sdk`: the local refusal of the disabled held profile (`PROFILE_UNAVAILABLE`, no witness contacted) now says "This SDK build doesn't enable the email verification profile."; the code is unchanged, and the witness-side `PROFILE_UNAVAILABLE` keeps "The witness does not offer the email verification profile.".
+
+Details: TC-1454
