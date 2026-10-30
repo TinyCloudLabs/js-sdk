@@ -338,6 +338,8 @@ export type Tc2230SiweRecipientsRatchet = HardeningRatchet & { replicaWorker: { 
 export type Tc2192ExactKeyRuntimeConsentRatchet = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
 /** Exact TC-2242 root admission for the wrapped-key digest helper; non-root buckets carry TC-2192. */
 export type Tc2242WrappedKeyDigestRatchet = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
+/** Exact TC-2113 Allow ability root admission; non-root buckets carry TC-2242. */
+export type Tc2113AllowAbilityRatchet = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -399,6 +401,7 @@ export type Ledger = {
   tc2230SiweRecipientsRatchet?: Tc2230SiweRecipientsRatchet;
   tc2192ExactKeyRuntimeConsentRatchet?: Tc2192ExactKeyRuntimeConsentRatchet;
   tc2242WrappedKeyDigestRatchet?: Tc2242WrappedKeyDigestRatchet;
+  tc2113AllowAbilityRatchet?: Tc2113AllowAbilityRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -990,6 +993,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2230SiweRecipientsRatchet !== undefined) pins.push({ row: "tc2230SiweRecipientsRatchet", pin: root.tc2230SiweRecipientsRatchet.sourceCommits.at(-1)! });
   if (root.tc2192ExactKeyRuntimeConsentRatchet !== undefined) pins.push({ row: "tc2192ExactKeyRuntimeConsentRatchet", pin: root.tc2192ExactKeyRuntimeConsentRatchet.sourceCommits.at(-1)! });
   if (root.tc2242WrappedKeyDigestRatchet !== undefined) pins.push({ row: "tc2242WrappedKeyDigestRatchet", pin: root.tc2242WrappedKeyDigestRatchet.sourceCommits.at(-1)! });
+  if (root.tc2113AllowAbilityRatchet !== undefined) pins.push({ row: "tc2113AllowAbilityRatchet", pin: root.tc2113AllowAbilityRatchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1057,6 +1061,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2230SiweRecipientsRatchet", root.tc2230SiweRecipientsRatchet?.root.ceiling],
     ["tc2192ExactKeyRuntimeConsentRatchet", root.tc2192ExactKeyRuntimeConsentRatchet?.root.ceiling],
     ["tc2242WrappedKeyDigestRatchet", root.tc2242WrappedKeyDigestRatchet?.root.ceiling],
+    ["tc2113AllowAbilityRatchet", root.tc2113AllowAbilityRatchet?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -2401,6 +2406,34 @@ export const approvedTc2242WrappedKeyDigestRatchet: Tc2242WrappedKeyDigestRatche
   replicaWorker: { delta: 0, ceiling: 770467 },
   reason: "TC-2242 registered wrapped-key digest helper; exact SQLite and PostgreSQL CI root gzip measurements agree. All non-root size buckets are carried unchanged from TC-2192.",
 };
+export const approvedTc2113AllowAbilityRatchet: Tc2113AllowAbilityRatchet = {
+  label: "panel Allow ability for the delegation list (TC-2113, #768)",
+  ruling: "Exact canonical SQLite and PostgreSQL CI at source head f5c97c846265d62ae026bf30b4db7442926d78ca measures 1,475,824/1,417,412 B, +515/+602 B over TC-2242. Bun 1.3.14; rustc 1.99.0 (b940084d7 2026-09-28).",
+  base: "d896e93edee5b2cdf14161c1f3f411dc7fc6c5bb",
+  sourceCommits: ["f5c97c846265d62ae026bf30b4db7442926d78ca"],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41041601835",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41041601835/job/124015490543",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41041601835/job/124015490874",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 515, "index.cjs": 602 },
+    ceiling: { "index.mjs": 1475824, "index.cjs": 1417412 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 52757, "replica.cjs": 67957 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23412, "activation.cjs": 24981 },
+  },
+  worker: { delta: 0, ceiling: 776539 },
+  replicaWorker: { delta: 0, ceiling: 770467 },
+  reason: "TC-2113 panel Allow ability row; exact SQLite and PostgreSQL CI root gzip measurements agree. All non-root size buckets are carried unchanged from TC-2242.",
+};
 
 export type GatedOnlyRatchet = {
   label: string;
@@ -2491,6 +2524,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2230SiweRecipientsRatchet: approvedTc2230SiweRecipientsRatchet,
   tc2192ExactKeyRuntimeConsentRatchet: approvedTc2192ExactKeyRuntimeConsentRatchet,
   tc2242WrappedKeyDigestRatchet: approvedTc2242WrappedKeyDigestRatchet,
+  tc2113AllowAbilityRatchet: approvedTc2113AllowAbilityRatchet,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -2767,6 +2801,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
   if (value.tc2242WrappedKeyDigestRatchet !== undefined &&
       (!value.tc2192ExactKeyRuntimeConsentRatchet || JSON.stringify(value.tc2242WrappedKeyDigestRatchet) !== JSON.stringify(approvedTc2242WrappedKeyDigestRatchet))) {
     throw new Error("Only the exact canonical TC-2242 wrapped-key digest size row is approved.");
+  }
+  if (value.tc2113AllowAbilityRatchet !== undefined &&
+      (!value.tc2242WrappedKeyDigestRatchet || JSON.stringify(value.tc2113AllowAbilityRatchet) !== JSON.stringify(approvedTc2113AllowAbilityRatchet))) {
+    throw new Error("Only Naomi's exact canonical TC-2113 Allow ability ratchet is approved.");
   }
 }
 
@@ -3094,6 +3132,13 @@ export function validateTc2242WrappedKeyDigestRatchetTransition(base?: Tc2242Wra
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2242WrappedKeyDigestRatchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-2242 wrapped-key digest ratchet may be introduced once and cannot change later.");
+  }
+}
+/** The TC-2113 Allow ability ratchet is introduced once and immutable afterwards. */
+export function validateTc2113AllowAbilityRatchetTransition(base?: Tc2113AllowAbilityRatchet, current?: Tc2113AllowAbilityRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2113AllowAbilityRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2113 Allow ability ratchet may be introduced once and cannot change later.");
   }
 }
 

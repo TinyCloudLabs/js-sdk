@@ -41,6 +41,7 @@ import { approvedTc2205HomeFeedRatchet, validateTc2205HomeFeedRatchetTransition,
 import { approvedTc2230SiweRecipientsRatchet, validateTc2230SiweRecipientsRatchetTransition, type Tc2230SiweRecipientsRatchet } from "./replica-size-policy";
 import { approvedTc2192ExactKeyRuntimeConsentRatchet, validateTc2192ExactKeyRuntimeConsentRatchetTransition } from "./replica-size-policy";
 import { approvedTc2242WrappedKeyDigestRatchet, validateTc2242WrappedKeyDigestRatchetTransition } from "./replica-size-policy";
+import { approvedTc2113AllowAbilityRatchet, validateTc2113AllowAbilityRatchetTransition } from "./replica-size-policy";
 import { approvedTc2038PanelPrefetchRatchet, validateTc2038PanelPrefetchRatchetTransition, type Tc2038PanelPrefetchRatchet } from "./replica-size-policy";
 import { approvedTc2005RevokeWindowRatchet, validateTc2005RevokeWindowRatchetTransition, type Tc2005RevokeWindowRatchet } from "./replica-size-policy";
 import { approvedTc2096RepairBackoffRatchet, validateTc2096RepairBackoffRatchetTransition, type Tc2096RepairBackoffRatchet } from "./replica-size-policy";
@@ -2925,6 +2926,7 @@ delete tc2043Ledger.tc2205HomeFeedRatchet;
 delete tc2043Ledger.tc2230SiweRecipientsRatchet;
 delete tc2043Ledger.tc2192ExactKeyRuntimeConsentRatchet;
 delete tc2043Ledger.tc2242WrappedKeyDigestRatchet;
+delete tc2043Ledger.tc2113AllowAbilityRatchet;
 tc2043Ledger.entries = structuredClone(current.entries.slice(0, current.entries.findIndex((entry) => entry.pr === "#728")));
 describe("replication syncScope opt-in (#742, TC-2043) size ratchet", () => {
   const row = () => structuredClone(approvedTc2043SyncScopeRatchet);
@@ -3850,8 +3852,10 @@ describe("registered wrapped-key digest (TC-2242, #802) size ratchet", () => {
     expect(row().activation).toEqual(prerequisite().activation);
     expect(row().worker).toEqual({ delta: 0, ceiling: prerequisite().worker.ceiling });
     expect(row().replicaWorker).toEqual({ delta: 0, ceiling: prerequisite().replicaWorker.ceiling });
-    expect(rootCeilingFor(current, "index.mjs")).toEqual({ row: "tc2242WrappedKeyDigestRatchet", ceiling: 1475309 });
-    expect(rootCeilingFor(current, "index.cjs")).toEqual({ row: "tc2242WrappedKeyDigestRatchet", ceiling: 1416810 });
+    expect(rootCeilings(current)).toContainEqual({
+      row: "tc2242WrappedKeyDigestRatchet",
+      ceiling: { "index.mjs": 1475309, "index.cjs": 1416810 },
+    });
     expect(ancestryPins(current, false)).toContainEqual({
       row: "tc2242WrappedKeyDigestRatchet",
       pin: "aba2c4e37540cfb330b14be4fad7e078231047bb",
@@ -3877,16 +3881,68 @@ describe("registered wrapped-key digest (TC-2242, #802) size ratchet", () => {
   });
 });
 
+describe("panel Allow ability for the delegation list (TC-2113, #768) size ratchet", () => {
+  const row = () => structuredClone(approvedTc2113AllowAbilityRatchet);
+  const prerequisite = () => approvedTc2242WrappedKeyDigestRatchet;
+
+  it("pins exact canonical CI root bytes and carries every other size bucket", () => {
+    expect(() => validateLedger(current)).not.toThrow();
+    expect(current.tc2113AllowAbilityRatchet).toEqual(approvedTc2113AllowAbilityRatchet);
+    expect(row().root).toEqual({
+      delta: { "index.mjs": 515, "index.cjs": 602 },
+      ceiling: { "index.mjs": 1475824, "index.cjs": 1417412 },
+    });
+    expect(row().root.ceiling["index.mjs"]).toBe(prerequisite().root.ceiling["index.mjs"] + row().root.delta["index.mjs"]);
+    expect(row().root.ceiling["index.cjs"]).toBe(prerequisite().root.ceiling["index.cjs"] + row().root.delta["index.cjs"]);
+    expect(row().base).toBe("d896e93edee5b2cdf14161c1f3f411dc7fc6c5bb");
+    expect(row().sourceCommits).toEqual(["f5c97c846265d62ae026bf30b4db7442926d78ca"]);
+    expect(row().canonicalCI).toEqual({
+      run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41041601835",
+      jobs: [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41041601835/job/124015490543",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41041601835/job/124015490874",
+      ],
+    });
+    expect(row().firstImport).toEqual(prerequisite().firstImport);
+    expect(row().activation).toEqual(prerequisite().activation);
+    expect(row().worker).toEqual({ delta: 0, ceiling: prerequisite().worker.ceiling });
+    expect(row().replicaWorker).toEqual({ delta: 0, ceiling: prerequisite().replicaWorker.ceiling });
+    expect(rootCeilingFor(current, "index.mjs")).toEqual({ row: "tc2113AllowAbilityRatchet", ceiling: 1475824 });
+    expect(rootCeilingFor(current, "index.cjs")).toEqual({ row: "tc2113AllowAbilityRatchet", ceiling: 1417412 });
+    expect(ancestryPins(current, false)).toContainEqual({
+      row: "tc2113AllowAbilityRatchet",
+      pin: "f5c97c846265d62ae026bf30b4db7442926d78ca",
+    });
+  });
+
+  it("refuses changed bytes or a missing TC-2242 prerequisite", () => {
+    const changed = copy(current);
+    changed.tc2113AllowAbilityRatchet!.root.ceiling["index.mjs"]++;
+    expect(() => validateLedger(changed)).toThrow("TC-2113");
+    const withoutPrerequisite = copy(current);
+    delete withoutPrerequisite.tc2242WrappedKeyDigestRatchet;
+    expect(() => validateLedger(withoutPrerequisite)).toThrow("TC-2113");
+  });
+
+  it("may be introduced once and never changed or removed", () => {
+    expect(() => validateTc2113AllowAbilityRatchetTransition(undefined, row())).not.toThrow();
+    expect(() => validateTc2113AllowAbilityRatchetTransition(row(), row())).not.toThrow();
+    const changed = row();
+    changed.root.ceiling["index.cjs"]++;
+    expect(() => validateTc2113AllowAbilityRatchetTransition(undefined, changed)).toThrow("TC-2113");
+    expect(() => validateTc2113AllowAbilityRatchetTransition(row(), undefined)).toThrow("TC-2113");
+  });
+});
+
 describe("the newest root ceiling is the only active one", () => {
   const rowOrder = (ledger: Ledger) => rootCeilings(ledger).map(({ row }) => row);
 
-  it("is the newest ledger root row, below the older index.mjs rows it would otherwise be shadowed by", () => {
+  it("is the newest ledger root row, whatever the older rows' ceilings are", () => {
     expect(() => validateLedger(current)).not.toThrow();
     const active = activeRootCeiling(current)!;
     expect(active).toEqual({ row: newestRootRow(), ceiling: ceilingOfRootRow(newestRootRow()) });
     const older = rootCeilings(current).slice(0, -1);
     expect(older.length).toBeGreaterThan(0);
-    expect(older.some((entry) => entry.ceiling["index.mjs"] > active.ceiling["index.mjs"])).toBe(true);
   });
 
   it("is never beaten by an older, higher row: the newest ceiling holds and newest+1 fails", () => {
