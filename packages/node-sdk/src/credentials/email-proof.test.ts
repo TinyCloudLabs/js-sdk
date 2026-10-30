@@ -771,6 +771,7 @@ async function heldPendingFor(address: string): Promise<EmailProofPending> {
     openerOrigin: seeded.openerOrigin,
     createdAt: createdAt.toISOString(),
     expiresAt: new Date(createdAt.getTime() + 5 * 60_000).toISOString(),
+    serverExpiresAt: new Date(createdAt.getTime() + 5 * 60_000).toISOString(),
   });
 }
 

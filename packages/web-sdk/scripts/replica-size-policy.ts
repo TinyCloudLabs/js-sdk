@@ -340,6 +340,8 @@ export type Tc2192ExactKeyRuntimeConsentRatchet = HardeningRatchet & { replicaWo
 export type Tc2242WrappedKeyDigestRatchet = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
 /** Exact TC-2113 Allow ability root admission; non-root buckets carry TC-2242. */
 export type Tc2113AllowAbilityRatchet = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
+/** Exact TC-2254 held wire path root admission; non-root buckets carry TC-2113. */
+export type Tc2254HeldWireRatchet = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -402,6 +404,7 @@ export type Ledger = {
   tc2192ExactKeyRuntimeConsentRatchet?: Tc2192ExactKeyRuntimeConsentRatchet;
   tc2242WrappedKeyDigestRatchet?: Tc2242WrappedKeyDigestRatchet;
   tc2113AllowAbilityRatchet?: Tc2113AllowAbilityRatchet;
+  tc2254HeldWireRatchet?: Tc2254HeldWireRatchet;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -994,6 +997,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2192ExactKeyRuntimeConsentRatchet !== undefined) pins.push({ row: "tc2192ExactKeyRuntimeConsentRatchet", pin: root.tc2192ExactKeyRuntimeConsentRatchet.sourceCommits.at(-1)! });
   if (root.tc2242WrappedKeyDigestRatchet !== undefined) pins.push({ row: "tc2242WrappedKeyDigestRatchet", pin: root.tc2242WrappedKeyDigestRatchet.sourceCommits.at(-1)! });
   if (root.tc2113AllowAbilityRatchet !== undefined) pins.push({ row: "tc2113AllowAbilityRatchet", pin: root.tc2113AllowAbilityRatchet.sourceCommits.at(-1)! });
+  if (root.tc2254HeldWireRatchet !== undefined) pins.push({ row: "tc2254HeldWireRatchet", pin: root.tc2254HeldWireRatchet.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1062,6 +1066,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2192ExactKeyRuntimeConsentRatchet", root.tc2192ExactKeyRuntimeConsentRatchet?.root.ceiling],
     ["tc2242WrappedKeyDigestRatchet", root.tc2242WrappedKeyDigestRatchet?.root.ceiling],
     ["tc2113AllowAbilityRatchet", root.tc2113AllowAbilityRatchet?.root.ceiling],
+    ["tc2254HeldWireRatchet", root.tc2254HeldWireRatchet?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -2434,6 +2439,34 @@ export const approvedTc2113AllowAbilityRatchet: Tc2113AllowAbilityRatchet = {
   replicaWorker: { delta: 0, ceiling: 770467 },
   reason: "TC-2113 panel Allow ability row; exact SQLite and PostgreSQL CI root gzip measurements agree. All non-root size buckets are carried unchanged from TC-2242.",
 };
+export const approvedTc2254HeldWireRatchet: Tc2254HeldWireRatchet = {
+  label: "held email credential wire path, account as holder (TC-2254, #806)",
+  ruling: "Exact canonical SQLite and PostgreSQL CI at source head e29ce49bb6550e5332b70822e4989547d5dcd962 measures 1,477,088/1,418,639 B, +1,264/+1,227 B over TC-2113. Bun 1.3.14; rustc 1.99.0 (b940084d7 2026-09-28).",
+  base: "f264e8a96c41e5c810f72b1f53d8e8f1178ae827",
+  sourceCommits: ["e29ce49bb6550e5332b70822e4989547d5dcd962"],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41073290152",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41073290152/job/124122700707",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41073290152/job/124122699897",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 1264, "index.cjs": 1227 },
+    ceiling: { "index.mjs": 1477088, "index.cjs": 1418639 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 52757, "replica.cjs": 67957 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23412, "activation.cjs": 24981 },
+  },
+  worker: { delta: 0, ceiling: 776539 },
+  replicaWorker: { delta: 0, ceiling: 770467 },
+  reason: "TC-2254 held wire path row; exact SQLite and PostgreSQL CI root gzip measurements agree. All non-root size buckets are carried unchanged from TC-2113.",
+};
 
 export type GatedOnlyRatchet = {
   label: string;
@@ -2525,6 +2558,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2192ExactKeyRuntimeConsentRatchet: approvedTc2192ExactKeyRuntimeConsentRatchet,
   tc2242WrappedKeyDigestRatchet: approvedTc2242WrappedKeyDigestRatchet,
   tc2113AllowAbilityRatchet: approvedTc2113AllowAbilityRatchet,
+  tc2254HeldWireRatchet: approvedTc2254HeldWireRatchet,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -2805,6 +2839,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
   if (value.tc2113AllowAbilityRatchet !== undefined &&
       (!value.tc2242WrappedKeyDigestRatchet || JSON.stringify(value.tc2113AllowAbilityRatchet) !== JSON.stringify(approvedTc2113AllowAbilityRatchet))) {
     throw new Error("Only Naomi's exact canonical TC-2113 Allow ability ratchet is approved.");
+  }
+  if (value.tc2254HeldWireRatchet !== undefined &&
+      (!value.tc2113AllowAbilityRatchet || JSON.stringify(value.tc2254HeldWireRatchet) !== JSON.stringify(approvedTc2254HeldWireRatchet))) {
+    throw new Error("Only Naomi's exact canonical TC-2254 held wire path ratchet is approved.");
   }
 }
 
@@ -3139,6 +3177,13 @@ export function validateTc2113AllowAbilityRatchetTransition(base?: Tc2113AllowAb
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2113AllowAbilityRatchet) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-2113 Allow ability ratchet may be introduced once and cannot change later.");
+  }
+}
+/** The TC-2254 held wire path ratchet is introduced once and immutable afterwards. */
+export function validateTc2254HeldWireRatchetTransition(base?: Tc2254HeldWireRatchet, current?: Tc2254HeldWireRatchet): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2254HeldWireRatchet) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2254 held wire path ratchet may be introduced once and cannot change later.");
   }
 }
 

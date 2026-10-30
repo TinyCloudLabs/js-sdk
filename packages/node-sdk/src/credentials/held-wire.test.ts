@@ -1,0 +1,596 @@
+import { describe, expect, test } from "bun:test";
+import { acquireEmailProofWithIssuerKeys, completeEmailProofWithIssuerKeys, createMemoryEmailProofPendingStore, EmailProofError, requestEmailProofCode, restoreEmailProofPending, createEd25519HolderSigner, type EmailProofPending, type HolderSigner } from "./email-proof";
+import { canonicalDigest, createHolderBinding, validateCredentialFlowDescriptor, validateCredentialHolderBinding, type CredentialFlowDescriptor, type CredentialRequirement } from "@tinycloud/sdk-core";
+import { OpenCredentialsHttpTransport } from "./transport";
+import { interpretCredentialFlow } from "./interpreter";
+import type { CredentialAcquisitionTransport } from "./types";
+import { createHeldWitness, testAccountHolder, vectors, HELD_DESCRIPTOR_DIGEST, type HeldWitnessOptions } from "./test-support/held-witness";
+
+// TC-2254 (contract v2.4): acquiring `tinycloud.email-held/v1` from the witness, against a fake witness built from the
+// contract and its recorded vectors. Opt-in is per call. Every refusal asserts its network, mail and wallet cost.
+const HELD = "tinycloud.email-held/v1" as const;
+const ANVIL_0 = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+const ALICE = "alice@example.com";
+const T0 = Date.parse("2026-10-30T06:53:00Z");
+const DID_KEY = "did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH";
+
+/** Server and client clocks. `slowBy` is how many ms the CLIENT is behind the server (negative: ahead). */
+function world(witnessOptions: Omit<HeldWitnessOptions, "serverClock"> = {}, slowBy = 0, privateKey = ANVIL_0) {
+  const time = { server: T0, slow: slowBy };
+  const client = () => time.server - time.slow;
+  const witness = createHeldWitness({ ...witnessOptions, serverClock: () => time.server });
+  const holder = testAccountHolder(privateKey);
+  const now = () => new Date(client());
+  const advance = (ms: number) => { time.server += ms; };
+  const input = (extra: Record<string, unknown> = {}) => ({ address: ALICE, holder, profile: HELD, allowHeldProfile: true as const, fetch: witness.fetch, now, ...extra });
+  const issuerKeys = witness.issuerKeys;
+  return { time, witness, holder, now, advance, input, issuerKeys, client };
+}
+
+async function failure(run: () => Promise<unknown>): Promise<EmailProofError | undefined> {
+  try { await run(); } catch (error) { if (error instanceof EmailProofError) return error; throw error; }
+  return undefined;
+}
+const routes = (w: ReturnType<typeof createHeldWitness>) => w.calls.map((c) => c.route);
+
+describe("happy path", () => {
+  test("acquire with the per-call opt-in issues, verifies and returns the held credential", async () => {
+    const w = world();
+    const store = createMemoryEmailProofPendingStore();
+    const result = await acquireEmailProofWithIssuerKeys(w.input({ getCode: async () => "12345678", pendingStore: store }), w.issuerKeys);
+    if (result.status !== "issued") throw new Error("expected issued");
+    expect(result.warnings).toEqual([]);
+    const { envelope, verified } = result.result;
+    expect(envelope.profile.id).toBe(HELD);
+    expect(envelope.holderDid).toBe(w.holder.did);
+    expect(envelope.claims).toEqual({ email: ALICE, emailDomain: "example.com" });
+    expect(result.result.credentialId).toBe(verified.credentialId);
+    expect(verified.credentialId).toMatch(/^urn:uuid:/);
+    expect(w.witness.mails.map((m) => m.kind)).toEqual(["code", "notice"]);
+    expect(w.holder.calls.count).toBe(1);
+    // Request step: catalog, create, state, challenge (the one mail). Complete step: catalog again, state, proof, binding, signature, issue, result.
+    expect(routes(w.witness)).toEqual(["catalog", "create", "state", "challenge", "catalog", "state", "state", "proof", "state", "holder-binding", "holder-signature", "state", "issue", "state", "result"]);
+    expect(await store.findLive(ALICE, w.now())).toBeUndefined();
+  });
+
+  test("the create request pins the descriptor and the held requirement digest, with the lowercased address", async () => {
+    const w = world();
+    const seen: Record<string, unknown>[] = [];
+    const spy = Object.assign(async (input: string | URL | Request, init?: RequestInit) => {
+      if (init?.method === "POST" && String(input).endsWith("/v1/acquisitions")) seen.push(JSON.parse(String(init.body)));
+      return w.witness.fetch(input, init);
+    }, { preconnect: () => {} }) as typeof globalThis.fetch;
+    await acquireEmailProofWithIssuerKeys(w.input({ address: "  Alice@Example.COM ", getCode: async () => "12345678", fetch: spy }), w.issuerKeys);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ descriptorDigest: HELD_DESCRIPTOR_DIGEST, requirementDigest: "Q_dnVOBsX_7fRjuzLPtCmDe_SKPiXW0Sxv0zSPb_Jd4", holderDid: w.holder.did, inputs: { email: ALICE }, profile: HELD, profileVersion: 1 });
+    expect(Object.keys(seen[0]!)).toHaveLength(12);
+  });
+
+  test("the wallet receives UTF8(account domain), a NUL, then the JCS bytes of the binding the witness served", async () => {
+    const w = world();
+    await acquireEmailProofWithIssuerKeys(w.input({ getCode: async () => "12345678" }), w.issuerKeys);
+    const bytes = w.holder.calls.seen[0]!;
+    const text = new TextDecoder().decode(bytes);
+    expect(text.startsWith("tinycloud.credentials/account-binding/v1\u0000{")).toBe(true);
+    const binding = JSON.parse(text.slice(text.indexOf("\u0000") + 1));
+    expect(Object.keys(binding)).toHaveLength(20);
+    expect(binding.holderDid).toBe(w.holder.did);
+    expect(binding.normalizedClaimsDigest).toBe(vectors.happyPath.holder_binding.response.body.binding.normalizedClaimsDigest);
+  });
+
+  test("request then complete in two calls: the pending carries the server expiry and no opt-in", async () => {
+    const w = world();
+    const pending = await requestEmailProofCode(w.input());
+    expect(pending.profile).toBe(HELD);
+    expect(pending.serverExpiresAt).toBe(new Date(T0 + 600_000).toISOString());
+    expect(JSON.stringify(pending)).not.toContain("allowHeld");
+    const result = await completeEmailProofWithIssuerKeys({ pending, code: "12345678", holder: w.holder, fetch: w.witness.fetch, now: w.now, allowHeldProfile: true }, w.issuerKeys);
+    expect(result.envelope.profile.id).toBe(HELD);
+  });
+});
+
+describe("the opt-in is per call (C8.3)", () => {
+  const cases: [string, (w: ReturnType<typeof world>) => Record<string, unknown>][] = [
+    ["no opt-in", () => ({ allowHeldProfile: undefined })],
+    ["opt-in false", () => ({ allowHeldProfile: false })],
+    ["opt-in the string true", () => ({ allowHeldProfile: "true" })],
+    ["opt-in 1", () => ({ allowHeldProfile: 1 })],
+    ["a did:key holder", () => ({ allowHeldProfile: undefined, holder: createEd25519HolderSigner(DID_KEY, async (b) => b) })],
+    ["a mixed-case address", () => ({ allowHeldProfile: undefined, address: "Alice@Example.COM" })],
+  ];
+  for (const [name, patch] of cases) {
+    test(`${name}: PROFILE_UNAVAILABLE with zero network calls`, async () => {
+      const w = world();
+      const error = await failure(() => requestEmailProofCode(w.input(patch(w))));
+      expect(error?.code).toBe("PROFILE_UNAVAILABLE");
+      expect(w.witness.calls).toHaveLength(0);
+    });
+  }
+
+  test("acquire without the opt-in is refused before any network call and no pending is stored", async () => {
+    const w = world();
+    const store = createMemoryEmailProofPendingStore();
+    const error = await failure(() => acquireEmailProofWithIssuerKeys(w.input({ allowHeldProfile: undefined, pendingStore: store, getCode: async () => "12345678" }), w.issuerKeys));
+    expect(error?.code).toBe("PROFILE_UNAVAILABLE");
+    expect(w.witness.calls).toHaveLength(0);
+  });
+
+  test("a held pending cannot be completed by a caller that did not opt in", async () => {
+    const w = world();
+    const pending = await requestEmailProofCode(w.input());
+    const callsBefore = w.witness.calls.length;
+    const error = await failure(() => completeEmailProofWithIssuerKeys({ pending, code: "12345678", holder: w.holder, fetch: w.witness.fetch, now: w.now }, w.issuerKeys));
+    expect(error?.code).toBe("PROFILE_UNAVAILABLE");
+    expect(w.witness.calls).toHaveLength(callsBefore);
+    expect(w.holder.calls.count).toBe(0);
+  });
+
+  test("with the opt-in, the holder must be a canonical EIP-55 account with alg EIP191: anything else is HOLDER_INVALID before network", async () => {
+    const w = world();
+    const bad: HolderSigner[] = [
+      createEd25519HolderSigner(DID_KEY, async (b) => b),
+      { ...w.holder, did: w.holder.did.toLowerCase(), kid: `${w.holder.did.toLowerCase()}#blockchainAccountId` },
+      { ...w.holder, kid: `${w.holder.did}#other` },
+      // The kid clause does not refuse these two: only the exact-canonical-DID clause does.
+      { ...w.holder, did: w.holder.did.toLowerCase() },
+      { ...w.holder, did: `${w.holder.did}#blockchainAccountId` },
+      { ...w.holder, alg: "EdDSA" },
+      { ...w.holder, did: "did:pkh:eip155:137:0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266", kid: "did:pkh:eip155:137:0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266#blockchainAccountId" },
+      { ...w.holder, did: "did:pkh:eip155:1:0xF39FD6E51AAD88F6F4CE6AB8827279CFFFB92266", kid: "did:pkh:eip155:1:0xF39FD6E51AAD88F6F4CE6AB8827279CFFFB92266#blockchainAccountId" },
+    ];
+    for (const holder of bad) {
+      const error = await failure(() => requestEmailProofCode(w.input({ holder })));
+      expect(error?.code).toBe("HOLDER_INVALID");
+    }
+    expect(w.witness.calls).toHaveLength(0);
+  });
+
+  test("the ticket profile never runs for an account holder, with or without the opt-in", async () => {
+    const w = world();
+    for (const allowHeldProfile of [true, undefined]) {
+      const error = await failure(() => requestEmailProofCode(w.input({ profile: "tinycloud.email-proof/v1", allowHeldProfile })));
+      expect(error?.code).toBe("HOLDER_INVALID");
+    }
+    expect(w.witness.calls).toHaveLength(0);
+  });
+});
+
+describe("address handling (S4, U5): trim, refuse non-ASCII, lowercase, then the witness's rules", () => {
+  const recorded = (vectors.refusals as { name: string; request: { body: { inputs: { email: string } } } }[]).filter((r) => r.name.startsWith("create_malformed_input_"));
+  test("the recorded malformed inputs: uppercase and a leading space are normalised and accepted; every other one is ADDRESS_INVALID with zero network calls", async () => {
+    expect(recorded.length).toBeGreaterThanOrEqual(9);
+    for (const r of recorded) {
+      const email = r.request.body.inputs.email;
+      const w = world();
+      const normalised = r.name.endsWith("uppercase") || r.name.endsWith("leading_space");
+      const error = await failure(() => requestEmailProofCode(w.input({ address: email })));
+      if (normalised) {
+        expect(error).toBeUndefined();
+        expect(w.witness.mails[0]?.to).toBe(email.trim().toLowerCase());
+      } else {
+        expect([r.name, error?.code]).toEqual([r.name, "ADDRESS_INVALID"]);
+        expect(w.witness.calls).toHaveLength(0);
+      }
+    }
+  });
+
+  test("an uppercase non-ASCII address is refused as non-ASCII before any lowercasing; so are the other listed forms", async () => {
+    for (const address of ["a@éxample.com", "A@ÉXAMPLE.COM", "Alice <alice@example.com>", "+tag@example.com", "a@localhost", "a@b@example.com", `${"a".repeat(246)}@example.com`, `${"a".repeat(65)}@example.com`, "a@b..com", "a b@example.com"]) {
+      const w = world();
+      expect((await failure(() => requestEmailProofCode(w.input({ address }))))?.code).toBe("ADDRESS_INVALID");
+      expect(w.witness.calls).toHaveLength(0);
+    }
+  });
+
+  test("a mailed code goes to the lowercased mailbox and the requirement compares with that string", async () => {
+    const w = world();
+    const pending = await requestEmailProofCode(w.input({ address: "ALICE@EXAMPLE.COM" }));
+    expect(pending.address).toBe(ALICE);
+    expect(w.witness.mails[0]?.to).toBe(ALICE);
+  });
+});
+
+describe("the binding is cross-checked against the SDK's own values before the wallet is called (S11 a)", () => {
+  const mutations: [string, (b: Record<string, unknown>) => Record<string, unknown>][] = [
+    ["type", (b) => ({ ...b, type: "tinycloud.credentials/holder-binding/v1" })],
+    ["protocol", (b) => ({ ...b, protocol: "tinycloud.credentials/acquisition/v2" })],
+    ["profileVersion", (b) => ({ ...b, profileVersion: 2 })],
+    ["requestId", (b) => ({ ...b, requestId: "R".repeat(32) })],
+    ["descriptorDigest", (b) => ({ ...b, descriptorDigest: "D".repeat(43) })],
+    ["requirementDigest", (b) => ({ ...b, requirementDigest: "Q".repeat(43) })],
+    ["holderDid", (b) => ({ ...b, holderDid: "did:pkh:eip155:1:0x70997970C51812dc3A010C7d01b50e0d17dc79C8" })],
+    ["issuer", (b) => ({ ...b, issuer: "did:web:evil.example" })],
+    ["issuerKid", (b) => ({ ...b, issuerKid: "did:web:issuer.credentials.org#other" })],
+    ["profile", (b) => ({ ...b, profile: "tinycloud.email-proof/v1" })],
+    ["openerOrigin", (b) => ({ ...b, openerOrigin: "https://evil.example" })],
+    ["completionOrigin", (b) => ({ ...b, completionOrigin: "https://evil.example" })],
+    ["audience", (b) => ({ ...b, audience: "tinycloud://other" })],
+    ["completionContext", (b) => ({ ...b, completionContext: "other-context" })],
+    ["challengeNonce", (b) => ({ ...b, challengeNonce: "N".repeat(32) })],
+    ["normalizedClaimsDigest (another mailbox)", (b) => ({ ...b, normalizedClaimsDigest: "kyc5jDA7koLzgm-dOmWhfGPXIOTOBmUdrSs-36KJJpd" })],
+    ["issuedAt", (b) => ({ ...b, issuedAt: "2026-10-30T06:00:00Z" })],
+    ["expiresAt", (b) => ({ ...b, expiresAt: "2026-10-30T09:00:00Z" })],
+    ["credentialLifetimeSeconds", (b) => ({ ...b, credentialLifetimeSeconds: 3600 })],
+    ["jti not a uuid", (b) => ({ ...b, jti: "J".repeat(32) })],
+    ["an extra field", (b) => ({ ...b, extra: "x" })],
+    ["a missing field", (b) => Object.fromEntries(Object.entries(b).filter(([key]) => key !== "completionContext"))],
+  ];
+  for (const [name, mutateBinding] of mutations) {
+    test(`a substituted ${name} is refused SESSION_INVALID with zero wallet calls`, async () => {
+      const w = world({ mutateBinding });
+      const error = await failure(() => acquireEmailProofWithIssuerKeys(w.input({ getCode: async () => "12345678" }), w.issuerKeys));
+      expect([name, error?.code]).toEqual([name, "SESSION_INVALID"]);
+      expect(w.holder.calls.count).toBe(0);
+      expect(routes(w.witness)).not.toContain("holder-signature");
+    });
+  }
+});
+
+describe("the result is verified and cross-checked against the credential and the request (S13, C5.5 item 4)", () => {
+  const bad: [string, HeldWitnessOptions][] = [
+    ["claims.email differs from the credential", { mutateResult: (r) => ({ ...r, claims: { ...(r.claims as object), email: "bob@example.com" } }) }],
+    ["an extra claim", { mutateResult: (r) => ({ ...r, claims: { ...(r.claims as object), name: "x" } }) }],
+    ["validity.expiresAt differs", { mutateResult: (r) => ({ ...r, validity: { ...(r.validity as object), expiresAt: "2030-01-01T00:00:00Z" } }) }],
+    ["validity.issuedAt differs", { mutateResult: (r) => ({ ...r, validity: { ...(r.validity as object), issuedAt: "2026-10-30T06:00:00Z" } }) }],
+    ["credentialDigest is wrong", { mutateResult: (r) => ({ ...r, credentialDigest: "x".repeat(43) }) }],
+    ["subject is another account", { mutateResult: (r) => ({ ...r, subject: "did:pkh:eip155:1:0x70997970C51812dc3A010C7d01b50e0d17dc79C8" }) }],
+    ["holderBinding.signingDomain is the ticket domain", { mutateResult: (r) => ({ ...r, holderBinding: { ...(r.holderBinding as object), signingDomain: "tinycloud.credentials/holder-binding/v1" } }) }],
+    ["descriptorDigest is another", { mutateResult: (r) => ({ ...r, descriptorDigest: "D".repeat(43) }) }],
+    ["status freshness differs", { mutateResult: (r) => ({ ...r, status: { type: "none", freshnessSeconds: 1 } }) }],
+    ["the credential jti differs from the signed binding's (valid form)", { mutatePayload: (p) => ({ ...p, jti: "urn:uuid:11111111-1111-4111-8111-111111111111" }) }],
+    ["the credential lifetime differs from the signed lifetime", { mutatePayload: (p) => ({ ...p, exp: (p.iat as number) + 86_400 }) }],
+    ["the credential subject is another account", { mutatePayload: (p) => ({ ...p, sub: "did:pkh:eip155:1:0x70997970C51812dc3A010C7d01b50e0d17dc79C8", holderBinding: { did: "did:pkh:eip155:1:0x70997970C51812dc3A010C7d01b50e0d17dc79C8", signingDomain: "tinycloud.credentials/account-binding/v1" } }) }],
+  ];
+  for (const [name, opts] of bad) {
+    test(`${name}: refused CREDENTIAL_INVALID`, async () => {
+      const w = world(opts);
+      const error = await failure(() => acquireEmailProofWithIssuerKeys(w.input({ getCode: async () => "12345678" }), w.issuerKeys));
+      expect([name, error?.code, error?.step]).toEqual([name, "CREDENTIAL_INVALID", "credential"]);
+    });
+  }
+
+  test("a credential signed by another issuer key is refused; a flipped signature byte is refused", async () => {
+    const other = createHeldWitness({ issuerSeed: new Uint8Array(32).fill(9) });
+    const w = world();
+    const error = await failure(() => acquireEmailProofWithIssuerKeys(w.input({ getCode: async () => "12345678" }), other.issuerKeys));
+    expect(error?.code).toBe("CREDENTIAL_INVALID");
+    const tampered = world({ mutateResult: (r) => { const c = String(r.credential); return { ...r, credential: `${c.slice(0, c.indexOf("~") - 3)}AAA${c.slice(c.indexOf("~"))}` }; } });
+    expect((await failure(() => acquireEmailProofWithIssuerKeys(tampered.input({ getCode: async () => "12345678" }), tampered.issuerKeys)))?.code).toBe("CREDENTIAL_INVALID");
+  });
+});
+
+describe("clock skew (C5.5 item 4, C5.6, S11 a and d)", () => {
+  const SLOW_OK = [1, 2, 60, 240, 299, 300].map((s) => s * 1000);
+  for (const slow of SLOW_OK) {
+    test(`a client ${slow / 1000} s slow is accepted`, async () => {
+      const w = world({}, slow);
+      const result = await acquireEmailProofWithIssuerKeys(w.input({ getCode: async () => "12345678" }), w.issuerKeys);
+      expect(result.status).toBe("issued");
+      expect(w.witness.mails.map((m) => m.kind)).toEqual(["code", "notice"]);
+    });
+  }
+
+  for (const slow of [301_000, 360_000]) {
+    test(`pre-flight: a client ${slow / 1000} s slow is refused CLIENT_CLOCK_SKEW at step request with 0 challenge calls, 0 mails, 0 wallet calls and no pending`, async () => {
+      const w = world({}, slow);
+      const store = createMemoryEmailProofPendingStore();
+      const error = await failure(() => acquireEmailProofWithIssuerKeys(w.input({ getCode: async () => "12345678", pendingStore: store }), w.issuerKeys));
+      expect([error?.code, error?.step, error?.recoverable]).toEqual(["CLIENT_CLOCK_SKEW", "request", false]);
+      expect(error?.message).toBe("Your device clock is more than 5 minutes behind. Correct it and try again.");
+      expect(routes(w.witness)).not.toContain("challenge");
+      expect(w.witness.mails).toHaveLength(0);
+      expect(w.holder.calls.count).toBe(0);
+      expect(await store.findLive(ALICE, w.now())).toBeUndefined();
+    });
+  }
+
+  for (const [label, fast, userMs] of [["6 min fast", 360_000, 0], ["6 min fast, the user takes 5 min", 360_000, 300_000], ["11 min fast", 660_000, 0], ["4 min fast, the user takes 5 min", 240_000, 300_000]] as const) {
+    test(`fast clock (client-clock pending deadline): ${label} is accepted`, async () => {
+      const w = world({}, -fast);
+      const result = await acquireEmailProofWithIssuerKeys(w.input({ getCode: async () => { w.advance(userMs); return "12345678"; } }), w.issuerKeys);
+      expect(result.status).toBe("issued");
+      expect(w.witness.mails.map((m) => m.kind)).toEqual(["code", "notice"]);
+    });
+  }
+
+  test("the held pending deadline is createdAt + 600 s on the client clock; the ticket rule is unchanged", async () => {
+    const w = world({}, -660_000);
+    const pending = await requestEmailProofCode(w.input());
+    expect(Date.parse(pending.expiresAt)).toBe(w.client() + 600_000);
+  });
+
+  test("post-issue: a clock that jumps back 4 minutes before issue is accepted, 6 minutes is CREDENTIAL_INVALID", async () => {
+    for (const [back, expected] of [[240_000, "issued"], [360_000, "CREDENTIAL_INVALID"]] as const) {
+      const w = world({ onRoute: (route) => { if (route === "holder-signature") w.time.slow += back; } });
+      const error = await failure(() => acquireEmailProofWithIssuerKeys(w.input({ getCode: async () => "12345678" }), w.issuerKeys));
+      expect(error?.code ?? "issued").toBe(expected);
+      if (error) expect(error.step).toBe("credential");
+    }
+  });
+});
+
+describe("W1 acceptance: an EIP-55 address with hex letters and no lowercase letter is accepted (acceptanceW1)", () => {
+  const W1 = vectors.acceptanceW1.account;
+  test("the SDK accepts the account, sends the EIP-55 form, signs with the EIP-55 kid and its held verifier accepts the result", async () => {
+    expect(W1.address).toBe(W1.address.slice(0, 2) + W1.address.slice(2).toUpperCase());
+    const w = world({}, 0, W1.privateKeyHex);
+    expect(w.holder.did).toBe(W1.did);
+    const result = await acquireEmailProofWithIssuerKeys(w.input({ getCode: async () => "12345678" }), w.issuerKeys);
+    expect(result.status).toBe("issued");
+    expect(w.holder.calls.count).toBe(1);
+    expect(w.holder.kid).toBe(`${W1.did}#blockchainAccountId`);
+  });
+
+  test("the recorded signature of the W1 flow's EIP-55 signing input is the SDK signer's", async () => {
+    const holder = testAccountHolder(W1.privateKeyHex);
+    const signature = await holder.sign(Uint8Array.from(Buffer.from(vectors.acceptanceW1.fromEip55SigningInputHex.replace(/^0x/, ""), "hex")));
+    expect(`0x${Buffer.from(signature).toString("hex")}`).toBe(vectors.acceptanceW1.fromEip55Signature);
+  });
+
+  test("the refusals that stay refused: a mixed-case wrong checksum and an all-uppercase non-checksum address are HOLDER_INVALID before network", async () => {
+    const w = world();
+    for (const did of ["did:pkh:eip155:1:0xF39fd6e51aad88F6F4ce6aB8827279cffFb92266", "did:pkh:eip155:1:0xF39FD6E51AAD88F6F4CE6AB8827279CFFFB92266"]) {
+      const holder = { ...w.holder, did, kid: `${did}#blockchainAccountId` };
+      expect((await failure(() => requestEmailProofCode(w.input({ holder }))))?.code).toBe("HOLDER_INVALID");
+    }
+    expect(w.witness.calls).toHaveLength(0);
+  });
+});
+
+describe("new public error code and recoverability", () => {
+  test("CLIENT_CLOCK_SKEW is a public non-recoverable EmailProofError code with its default message", () => {
+    const error = new EmailProofError("request", "CLIENT_CLOCK_SKEW");
+    expect(error.recoverable).toBe(false);
+    expect(error.message).toBe("Your device clock is more than 5 minutes behind. Correct it and try again.");
+    // The recorded decision (v24): the exact default text and non-recoverability.
+    expect(error.message).toBe(vectors.v24.errorCodePlacement.defaultMessage);
+    expect(error.recoverable).toBe(vectors.v24.errorCodePlacement.recoverable);
+    expect([error.code, error.step]).toEqual(["CLIENT_CLOCK_SKEW", "request"]);
+  });
+});
+
+describe("a pending that lacks the server expiry cannot be completed for held", () => {
+  test("SESSION_INVALID before any network call", async () => {
+    const w = world();
+    const pending = await requestEmailProofCode(w.input());
+    const { serverExpiresAt: _dropped, ...fields } = JSON.parse(JSON.stringify(pending)) as EmailProofPending & { serverExpiresAt?: string };
+    const stripped = restoreEmailProofPending({ ...(fields as EmailProofPending), verifier: (pending as { verifier: string }).verifier });
+    const before = w.witness.calls.length;
+    const error = await failure(() => completeEmailProofWithIssuerKeys({ pending: stripped, code: "12345678", holder: w.holder, fetch: w.witness.fetch, now: w.now, allowHeldProfile: true }, w.issuerKeys));
+    expect(error?.code).toBe("SESSION_INVALID");
+    expect(w.witness.calls).toHaveLength(before);
+  });
+});
+
+describe("an unavailable or unpinned held profile is PROFILE_UNAVAILABLE, with the catalog read as the only request (C6.4, C6.5, C7.2)", () => {
+  const altered = (patch: (d: Record<string, any>) => void): Record<string, unknown> => { const d = structuredClone(vectors.descriptor.held) as Record<string, any>; patch(d); return d; };
+  const cases: [string, (() => Promise<HeldWitnessOptions>)][] = [
+    ["capability off (the held entry is listed with enabled false)", async () => ({ capability: false })],
+    ["a descriptor changed by one byte under its old digest", async () => ({ catalogDescriptor: altered((d) => { d.lifecycle.requestTtlSeconds = 601; }) })],
+    ["a descriptor changed by one byte with a recomputed digest (the pin refuses it)", async () => { const d = altered((d) => { d.lifecycle.requestTtlSeconds = 601; }); return { catalogDescriptor: d, catalogDigest: await canonicalDigest(d) }; }],
+    ["another issuer origin with a recomputed digest", async () => { const d = altered((d) => { d.issuer.origin = "https://evil.example"; }); return { catalogDescriptor: d, catalogDigest: await canonicalDigest(d) }; }],
+    ["another issuer did with a recomputed digest", async () => { const d = altered((d) => { d.issuer.did = "did:web:evil.example"; d.issuer.kid = "did:web:evil.example#controller"; }); return { catalogDescriptor: d, catalogDigest: await canonicalDigest(d) }; }],
+    ["a mixed subject relationship and holder binding", async () => { const d = altered((d) => { d.subjectRelationship = "holder_is_subject"; }); return { catalogDescriptor: d, catalogDigest: await canonicalDigest(d) }; }],
+  ];
+  for (const [name, options] of cases) {
+    test(name, async () => {
+      const w = world(await options());
+      const error = await failure(() => requestEmailProofCode(w.input()));
+      expect([name, error?.code]).toEqual([name, "PROFILE_UNAVAILABLE"]);
+      expect(routes(w.witness)).toEqual(["catalog"]);
+      expect(w.holder.calls.count).toBe(0);
+    });
+  }
+});
+
+
+const A1 = "did:pkh:eip155:1:0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
+const rfc3339 = (ms: number): string => new Date(Math.floor(ms / 1000) * 1000).toISOString().replace(".000Z", "Z");
+
+describe("the credential is bound to the signing ACCOUNT and the requested MAILBOX (C5.5 (i), (ii))", () => {
+  test("a credential bound to another account, with a consistent envelope, is refused for this account", async () => {
+    const w = world({
+      mutatePayload: (p) => ({ ...p, sub: A1, holderBinding: { did: A1, signingDomain: "tinycloud.credentials/account-binding/v1" } }),
+      mutateResult: (r) => ({ ...r, subject: A1, holderBinding: { ...(r.holderBinding as object), did: A1 } }),
+    });
+    const error = await failure(() => acquireEmailProofWithIssuerKeys(w.input({ getCode: async () => "12345678" }), w.issuerKeys));
+    expect([error?.code, error?.step]).toEqual(["CREDENTIAL_INVALID", "credential"]);
+  });
+
+  test("an envelope that names another account while the credential is this account's is refused, whichever of its two account fields differs", async () => {
+    for (const mutateResult of [
+      (r: Record<string, unknown>) => ({ ...r, subject: A1 }),
+      (r: Record<string, unknown>) => ({ ...r, holderBinding: { ...(r.holderBinding as object), did: A1 } }),
+    ]) {
+      const w = world({ mutateResult });
+      const error = await failure(() => acquireEmailProofWithIssuerKeys(w.input({ getCode: async () => "12345678" }), w.issuerKeys));
+      expect([error?.code, error?.step]).toEqual(["CREDENTIAL_INVALID", "credential"]);
+    }
+  });
+
+  test("a credential that discloses another mailbox, with the envelope equal to the request, is refused (only the credential differs)", async () => {
+    const w = world({ credentialEmail: "mallory@example.com" });
+    const error = await failure(() => acquireEmailProofWithIssuerKeys(w.input({ getCode: async () => "12345678" }), w.issuerKeys));
+    expect([error?.code, error?.step]).toEqual(["CREDENTIAL_INVALID", "credential"]);
+  });
+
+  test("a witness that issues for another mailbox in both the credential and the envelope is refused (only the request differs)", async () => {
+    const w = world({ issueEmail: "mallory@example.com" });
+    const error = await failure(() => acquireEmailProofWithIssuerKeys(w.input({ getCode: async () => "12345678" }), w.issuerKeys));
+    expect([error?.code, error?.step]).toEqual(["CREDENTIAL_INVALID", "credential"]);
+  });
+
+  test("the exact signed lifetime is enforced: a shorter credential whose envelope agrees with it is refused", async () => {
+    const w = world({
+      mutatePayload: (p) => ({ ...p, exp: (p.iat as number) + 86_400 }),
+      mutateResult: (r) => ({ ...r, validity: { ...(r.validity as { issuedAt: string }), expiresAt: rfc3339(Date.parse((r.validity as { issuedAt: string }).issuedAt) + 86_400_000) } }),
+    });
+    const error = await failure(() => acquireEmailProofWithIssuerKeys(w.input({ getCode: async () => "12345678" }), w.issuerKeys));
+    expect([error?.code, error?.step]).toEqual(["CREDENTIAL_INVALID", "credential"]);
+  });
+
+  test("verification time is max(client, iat): a credential already expired at the client clock is refused, one day short of expiry is accepted", async () => {
+    const day = 86_400_000;
+    const expired = world({}, -366 * day);
+    expect((await failure(() => acquireEmailProofWithIssuerKeys(expired.input({ getCode: async () => "12345678" }), expired.issuerKeys)))?.code).toBe("CREDENTIAL_INVALID");
+    const valid = world({}, -364 * day);
+    expect((await acquireEmailProofWithIssuerKeys(valid.input({ getCode: async () => "12345678" }), valid.issuerKeys)).status).toBe("issued");
+  });
+});
+
+describe("the binding times are tied to the create response, each independently and together (S11 a)", () => {
+  const shift = (issuedByMs: number, expiresByMs: number) => (b: Record<string, unknown>) => ({ ...b, issuedAt: rfc3339(Date.parse(String(b.issuedAt)) + issuedByMs), expiresAt: rfc3339(Date.parse(String(b.expiresAt)) + expiresByMs) });
+  for (const [name, i, e] of [["issuedAt alone, +1 s", 1000, 0], ["expiresAt alone, +1 s", 0, 1000], ["both together, +1 s", 1000, 1000], ["both together, +60 s", 60_000, 60_000], ["both together, -300 s", -300_000, -300_000]] as const) {
+    test(`${name}: SESSION_INVALID with zero wallet calls`, async () => {
+      const w = world({ mutateBinding: shift(i, e) });
+      const error = await failure(() => acquireEmailProofWithIssuerKeys(w.input({ getCode: async () => "12345678" }), w.issuerKeys));
+      expect([name, error?.code]).toEqual([name, "SESSION_INVALID"]);
+      expect(w.holder.calls.count).toBe(0);
+    });
+  }
+});
+
+describe("address edge cases (C9.5 (10), C2.5.3)", () => {
+  test("the 254-character total rule on its own: a 260-character address with a 64-character local part and short labels is refused", async () => {
+    const address = `${"a".repeat(64)}@${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(63)}.com`;
+    expect(address.length).toBe(260);
+    const w = world();
+    expect((await failure(() => requestEmailProofCode(w.input({ address }))))?.code).toBe("ADDRESS_INVALID");
+    expect(w.witness.calls).toHaveLength(0);
+  });
+
+  test("U+212A KELVIN SIGN inside the address is refused although it lowercases to ASCII k", async () => {
+    expect("\u212Aelly@example.com".toLowerCase()).toBe("kelly@example.com");
+    const w = world();
+    expect((await failure(() => requestEmailProofCode(w.input({ address: "\u212Aelly@example.com" }))))?.code).toBe("ADDRESS_INVALID");
+    expect(w.witness.calls).toHaveLength(0);
+  });
+
+  test("Unicode whitespace around the address is trimmed first (U5: trim, then refuse non-ASCII): it is accepted as the trimmed ASCII address", async () => {
+    for (const padded of ["alice@example.com\u00a0", "\ufeffalice@example.com", "alice@example.com\u3000", "\u2028alice@example.com\u2028"]) {
+      const w = world();
+      const pending = await requestEmailProofCode(w.input({ address: padded }));
+      expect([padded, pending.address]).toEqual([padded, ALICE]);
+      expect(w.witness.mails[0]?.to).toBe(ALICE);
+    }
+  });
+});
+
+describe("a held completion retried in a NEW call after the proof prompts the wallet again (C8.6 (5), F2a)", () => {
+  test("a recoverable SIGNATURE_REJECTED at R6, then a second completeEmailProof with the same pending, issues with a second wallet call", async () => {
+    const w = world();
+    const pending = await requestEmailProofCode(w.input());
+    // The witness rejects the first holder signature WITHOUT changing state (it never reached the witness handler): a plain refusal.
+    let rejected = 0;
+    const rejecting = Object.assign(async (input: string | URL | Request, init?: RequestInit) => {
+      if (rejected === 0 && String(input).endsWith("/holder-signature")) { rejected += 1; return new Response(JSON.stringify({ code: "SIGNATURE_REJECTED", correlationId: "c", recoverable: true, state: "holder_signature_required", type: "tinycloud.credentials/error/v1" }), { status: 400, headers: { "content-type": "application/json" } }); }
+      return w.witness.fetch(input, init);
+    }, { preconnect: () => {} }) as typeof globalThis.fetch;
+    const complete = () => completeEmailProofWithIssuerKeys({ pending, code: "12345678", holder: w.holder, fetch: rejecting, now: w.now, allowHeldProfile: true }, w.issuerKeys);
+    const first = await failure(complete);
+    expect([first?.code, first?.recoverable]).toEqual(["SIGNATURE_REJECTED", true]);
+    expect(w.holder.calls.count).toBe(1);
+    const result = await complete();
+    expect(result.envelope.profile.id).toBe(HELD);
+    expect(w.holder.calls.count).toBe(2);
+    expect(w.witness.mails.filter((m) => m.kind === "code")).toHaveLength(1);
+  });
+
+  test("a wallet wait that outlives the step signal (abort honoured by fetch), then a retry with the same pending, issues with a second wallet prompt", async () => {
+    const w = world();
+    const pending = await requestEmailProofCode(w.input());
+    const controller = new AbortController();
+    const slowHolder: HolderSigner = { ...w.holder, sign: async (bytes) => { const signature = await w.holder.sign(bytes); controller.abort(new DOMException("timeout", "TimeoutError")); return signature; } };
+    const abortAware = Object.assign(async (input: string | URL | Request, init?: RequestInit) => { if (init?.signal?.aborted) throw init.signal.reason; return w.witness.fetch(input, init); }, { preconnect: () => {} }) as typeof globalThis.fetch;
+    const first = await failure(() => completeEmailProofWithIssuerKeys({ pending, code: "12345678", holder: slowHolder, fetch: abortAware, now: w.now, signal: controller.signal, allowHeldProfile: true }, w.issuerKeys));
+    expect([first?.code, first?.recoverable]).toEqual(["NETWORK", true]);
+    const result = await completeEmailProofWithIssuerKeys({ pending, code: "12345678", holder: w.holder, fetch: w.witness.fetch, now: w.now, allowHeldProfile: true }, w.issuerKeys);
+    expect(result.envelope.profile.id).toBe(HELD);
+    expect(w.holder.calls.count).toBe(2);
+  });
+});
+
+const goldens = (await Bun.file(new URL("../../../sdk-core/test-fixtures/opencredentials-v1/golden-descriptor-digests.json", import.meta.url)).json()) as { vectors: { descriptor: unknown }[] };
+describe("the interpreter fails closed: descriptor, holder key and nonce must agree before anything is signed (C8.3 (7))", () => {
+  const held = validateCredentialFlowDescriptor(vectors.descriptor.held);
+  const heldBinding = validateCredentialHolderBinding(vectors.happyPath.holder_binding.response.body.binding);
+  const heldRequirement = { type: "TinyCloudCredentialRequirement", version: 1, profile: { id: HELD, version: 1 }, credentialType: { id: "opencredentials.email/v1", version: 1 }, claims: { email: ALICE }, maxAgeSeconds: 31536000 } as CredentialRequirement;
+  const ticket = validateCredentialFlowDescriptor(goldens.vectors[0]!.descriptor) as CredentialFlowDescriptor;
+  const ticketBinding = createHolderBinding({ profileVersion: 1, requestId: "request-id-0123456789abcdef", profile: ticket.profile, descriptorDigest: "D".repeat(43), requirementDigest: "Q".repeat(43), issuer: ticket.issuer.did, issuerKid: ticket.issuer.kid, holderDid: DID_KEY, normalizedClaimsDigest: "N".repeat(43), challengeNonce: "nonce-0123456789abcdef", audience: "tinycloud://credentials", openerOrigin: "https://localhost", completionOrigin: "https://localhost", completionContext: "sdk-acquisition", jti: "jti-0123456789abcdefgh", issuedAt: "2030-01-01T00:00:00Z", expiresAt: "2030-01-01T00:10:00Z" });
+
+  function mock(binding: typeof heldBinding | typeof ticketBinding, nonce: string | undefined) {
+    const submitted: unknown[][] = [];
+    let step = 0;
+    const transport = {
+      state: async () => (step++ === 0
+        ? { type: "OpenCredentialsAcquisitionState", version: 1, requestId: binding.requestId, transitionId: "t1", state: "pending", correlationId: "c", nextStep: { id: "holder_signature", type: "holder_signature", version: 1, constraints: {} } }
+        : { type: "OpenCredentialsAcquisitionState", version: 1, requestId: binding.requestId, transitionId: "t2", state: "complete", correlationId: "c" }),
+      holderBinding: async () => binding,
+      challengeNonce: () => nonce,
+      submitHolderSignature: async (...args: unknown[]) => { submitted.push(args); },
+    } as unknown as CredentialAcquisitionTransport;
+    return { transport, submitted };
+  }
+  const heldInput = (transport: CredentialAcquisitionTransport, signing: Record<string, unknown>) => ({ descriptor: held, requirement: heldRequirement, requestId: heldBinding.requestId, verifier: "v", holderDid: heldBinding.holderDid, descriptorDigest: heldBinding.descriptorDigest, requirementDigest: heldBinding.requirementDigest, openerOrigin: "https://localhost", expiresAt: heldBinding.expiresAt, allowAccountSubject: true as const, transport, signing });
+  const ticketInput = (transport: CredentialAcquisitionTransport, signing: Record<string, unknown>) => ({ descriptor: ticket, requirement: { claims: { email: ALICE } } as unknown as CredentialRequirement, requestId: ticketBinding.requestId, verifier: "v", holderDid: ticketBinding.holderDid, descriptorDigest: "D".repeat(43), requirementDigest: "Q".repeat(43), openerOrigin: "https://localhost", transport, signing });
+  const counting = (extra: Record<string, unknown> = {}) => { const seen = { signed: 0 }; return { seen, signing: { autoSign: async () => { seen.signed += 1; return new Uint8Array(65).fill(1); }, ...extra } }; };
+
+  test("control: a held descriptor, an EIP191 key and a matching nonce sign, and the signature goes out as 0x hex", async () => {
+    const m = mock(heldBinding, heldBinding.challengeNonce);
+    const c = counting({ holderKey: { alg: "EIP191", kid: "k" } });
+    await interpretCredentialFlow(heldInput(m.transport, c.signing as never));
+    expect(c.seen.signed).toBe(1);
+    expect(String(m.submitted[0]?.[2])).toMatch(/^0x[0-9a-f]{130}$/);
+  });
+
+  test("control: a ticket descriptor with an EdDSA key still signs", async () => {
+    const m = mock(ticketBinding, undefined);
+    const c = counting({ holderKey: { alg: "EdDSA", kid: "k" } });
+    await interpretCredentialFlow(ticketInput(m.transport, c.signing as never));
+    expect(c.seen.signed).toBe(1);
+  });
+
+  const refused: [string, () => Promise<{ run: () => Promise<unknown>; seen: { signed: number } }>][] = [
+    ["a held descriptor with an EdDSA key", async () => { const c = counting({ holderKey: { alg: "EdDSA", kid: "k" } }); return { seen: c.seen, run: () => interpretCredentialFlow(heldInput(mock(heldBinding, heldBinding.challengeNonce).transport, c.signing as never)) }; }],
+    ["a held descriptor with no key", async () => { const c = counting(); return { seen: c.seen, run: () => interpretCredentialFlow(heldInput(mock(heldBinding, heldBinding.challengeNonce).transport, c.signing as never)) }; }],
+    ["a ticket descriptor with an EIP191 key", async () => { const c = counting({ holderKey: { alg: "EIP191", kid: "k" } }); return { seen: c.seen, run: () => interpretCredentialFlow(ticketInput(mock(ticketBinding, undefined).transport, c.signing as never)) }; }],
+    ["a held binding when the transport kept no challenge nonce", async () => { const c = counting({ holderKey: { alg: "EIP191", kid: "k" } }); return { seen: c.seen, run: () => interpretCredentialFlow(heldInput(mock(heldBinding, undefined).transport, c.signing as never)) }; }],
+  ];
+  for (const [name, setup] of refused) {
+    test(`${name}: REQUEST_SUBSTITUTED before any signature`, async () => {
+      const { run, seen } = await setup();
+      await expect(run()).rejects.toMatchObject({ code: "REQUEST_SUBSTITUTED" });
+      expect(seen.signed).toBe(0);
+    });
+  }
+});
+
+describe("the transport: an account holder must name its key (S10)", () => {
+  test("submitHolderSignature for a held descriptor without a key is refused before any request; with the key it is sent", async () => {
+    const w = world();
+    const pending = await requestEmailProofCode(w.input());
+    const transport = new OpenCredentialsHttpTransport(validateCredentialFlowDescriptor(vectors.descriptor.held), w.witness.fetch, { honorServerRecoverable: true, allowAccountSubject: true } as never);
+    const verifier = (pending as unknown as { verifier: string }).verifier;
+    await transport.state(pending.requestId, verifier);
+    await transport.submitStep(pending.requestId, verifier, "mailbox_otp", { otp: "12345678" });
+    await transport.holderBinding(pending.requestId, verifier);
+    const before = w.witness.calls.length;
+    await expect(transport.submitHolderSignature(pending.requestId, verifier, `0x${"00".repeat(65)}`, undefined, undefined)).rejects.toMatchObject({ code: "REQUEST_SUBSTITUTED" });
+    expect(w.witness.calls).toHaveLength(before);
+    await expect(transport.submitHolderSignature(pending.requestId, verifier, `0x${"00".repeat(65)}`, undefined, { alg: "EIP191", kid: w.holder.kid })).rejects.toMatchObject({ code: "SIGNATURE_REJECTED" });
+    expect(w.witness.calls.length).toBe(before + 1);
+  });
+});
+
+describe("assertHeldBinding is closed on its own: it needs the nonce it is given (B14)", () => {
+  test("an expectation without a challenge nonce refuses even a binding that is otherwise exact", async () => {
+    const { assertHeldBinding } = await import("./held-binding");
+    const descriptor = validateCredentialFlowDescriptor(vectors.descriptor.held);
+    const binding = validateCredentialHolderBinding(vectors.happyPath.holder_binding.response.body.binding);
+    const requirement = { type: "TinyCloudCredentialRequirement", version: 1, profile: { id: HELD, version: 1 }, credentialType: { id: "opencredentials.email/v1", version: 1 }, claims: { email: ALICE }, maxAgeSeconds: 31536000 } as CredentialRequirement;
+    const expected = { descriptor, requirement, requestId: binding.requestId, descriptorDigest: binding.descriptorDigest, requirementDigest: binding.requirementDigest, holderDid: binding.holderDid, openerOrigin: "https://localhost", serverExpiresAt: binding.expiresAt };
+    await expect(assertHeldBinding(binding, { ...expected, challengeNonce: undefined })).rejects.toMatchObject({ code: "REQUEST_SUBSTITUTED" });
+    await expect(assertHeldBinding(binding, { ...expected, challengeNonce: "not-the-nonce" })).rejects.toMatchObject({ code: "REQUEST_SUBSTITUTED" });
+    await expect(assertHeldBinding(binding, { ...expected, challengeNonce: binding.challengeNonce })).resolves.toBeUndefined();
+  });
+});

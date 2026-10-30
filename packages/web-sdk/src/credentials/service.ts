@@ -28,6 +28,11 @@ import type { CredentialClient, CredentialInputRequest, CredentialsAcquireOption
 
 function randomVerifier(): string { return encodeBase64Url(crypto.getRandomValues(new Uint8Array(32))); }
 
+/** A2.5: the held (account-bound) profile is not for this service. A held requirement or an `account_is_subject` descriptor is refused here. */
+function refuseHeld(requirement: CredentialRequirement, descriptor?: CredentialFlowDescriptor): void {
+  if (requirement.profile.id === "tinycloud.email-held/v1" || descriptor?.subjectRelationship === "account_is_subject") throw new CredentialError("UNSUPPORTED_PROFILE", "The held credential profile is acquired with acquireHeldCredential only");
+}
+
 function active(client: CredentialClient): string {
   if (typeof client.credentialHolderDid !== "string" || !/^did:key:z6Mk[^#]+$/.test(client.credentialHolderDid)) throw new CredentialError("ACTIVE_SESSION_REQUIRED", "credentials requires a canonical holder session");
   if (client.receiverCredentialCustody === undefined && client.session() === undefined) throw new CredentialError("ACTIVE_SESSION_REQUIRED", "credentials requires an active TinyCloud/OpenKey session");
@@ -91,9 +96,16 @@ async function acquisitionInputs(
 export class CredentialsService {
   constructor(private readonly client: CredentialClient) {}
 
+  /**
+   * The held (account-bound) profile is acquired through `acquireHeldCredential` only. This service refuses a held requirement or an
+   * `account_is_subject` descriptor with UNSUPPORTED_PROFILE before any witness call (TC-2254 A2.5). `validateCredentialFlowDescriptor`
+   * is shape-only, so the refusal is made here, in the consumer.
+   */
   private async descriptor(requirement: CredentialRequirement, options: CredentialsOperationOptions): Promise<CredentialFlowDescriptor> {
+    refuseHeld(requirement);
     if (options.descriptor !== undefined) {
       const descriptor = validateCredentialFlowDescriptor(options.descriptor);
+      refuseHeld(requirement, descriptor);
       if (!descriptorSatisfiesRequirement(descriptor, requirement)) throw new CredentialError("UNSUPPORTED_PROFILE", "Pinned descriptor does not satisfy the policy requirement");
       return descriptor;
     }
@@ -110,7 +122,7 @@ export class CredentialsService {
       if (typeof entryValue !== "object" || entryValue === null || Array.isArray(entryValue)) continue;
       const entry = entryValue as Record<string, unknown>;
       if (entry.supported !== true || entry.enabled !== true || (entry.readiness !== "ready" && entry.readiness !== "degraded")) continue;
-      try { const candidate = validateCredentialFlowDescriptor(entry.descriptor); if (descriptorSatisfiesRequirement(candidate, requirement) && entry.descriptorDigest === await canonicalDigest(candidate)) return candidate; } catch { /* fail closed and inspect no other metadata on malformed entry */ }
+      try { const candidate = validateCredentialFlowDescriptor(entry.descriptor); if (candidate.subjectRelationship === "account_is_subject") continue; if (descriptorSatisfiesRequirement(candidate, requirement) && entry.descriptorDigest === await canonicalDigest(candidate)) return candidate; } catch { /* fail closed and inspect no other metadata on malformed entry */ }
     }
     throw new CredentialError("UNSUPPORTED_PROFILE", "No available credential profile satisfies the requirement");
   }
@@ -126,6 +138,7 @@ export class CredentialsService {
 
   async verify(envelope: IssuedCredentialEnvelope, input: { readonly descriptor: CredentialFlowDescriptor; readonly requirement: CredentialRequirement; readonly transport?: OpenCredentialsHttpTransport; readonly issuerMetadata?: CredentialIssuerMetadata; readonly fetch?: typeof fetch; readonly signal?: AbortSignal; readonly now?: Date }): Promise<VerifiedCredential> {
     const holderDid = active(this.client); const descriptor = validateCredentialFlowDescriptor(input.descriptor); const requirement = validateCredentialRequirement(input.requirement);
+    refuseHeld(requirement, descriptor);
     const transport = input.transport ?? new OpenCredentialsHttpTransport(descriptor, input.fetch);
     return verifyIssuedCredential({ envelope, descriptor, descriptorDigest: await canonicalDigest(descriptor), requirement, holderDid, issuerMetadata: input.issuerMetadata ?? await transport.issuerMetadata(input.signal), now: input.now, checkStatus: (status, signal) => transport.checkStatus(status, signal), signal: input.signal });
   }
