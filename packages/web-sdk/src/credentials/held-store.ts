@@ -13,6 +13,11 @@ import {
 /** A held record whose verified expiry is within this many milliseconds is not offered; the caller re-acquires. */
 export const HELD_REUSE_MARGIN_MS = 600_000;
 
+/** True when `expiresAt` is more than `HELD_REUSE_MARGIN_MS` after `now`. Store, find and list share this one boundary. */
+function clearsReuseMargin(expiresAt: Date, now: Date): boolean {
+  return expiresAt.getTime() - now.getTime() > HELD_REUSE_MARGIN_MS;
+}
+
 /** Upper bound on KV list pages under one owner prefix. Beyond it the listing is refused, not partially read. */
 const HELD_LIST_MAX_PAGES = 50;
 
@@ -189,7 +194,7 @@ export async function storeHeldCredential(
   if (typeof verified.claims.email !== "string") {
     throw new CredentialError("VERIFICATION_FAILED", "Held credential must disclose an email claim");
   }
-  if (verified.expiresAt.getTime() <= now.getTime() + HELD_REUSE_MARGIN_MS) {
+  if (!clearsReuseMargin(verified.expiresAt, now)) {
     throw new CredentialError("VERIFICATION_FAILED", "Held credential expires within the reuse margin");
   }
 
@@ -325,7 +330,7 @@ export async function findHeldCredential(input: FindHeldCredentialInput): Promis
     const reading = await readHeld(input.kv, key, owner, input, now);
     if (reading.kind !== "verified" || reading.email !== wanted) continue;
     const expiresAt = reading.match.verified.expiresAt.getTime();
-    if (expiresAt - now.getTime() <= HELD_REUSE_MARGIN_MS) continue;
+    if (!clearsReuseMargin(reading.match.verified.expiresAt, now)) continue;
     if (best === undefined || expiresAt > best.verified.expiresAt.getTime()) best = reading.match;
   }
   return best;
@@ -342,8 +347,10 @@ export type ListHeldEmailCredentialsInput = Omit<FindHeldCredentialInput, "email
  *
  * Returns every valid record, not one per email: no email filter and no "latest" pick. Expired records and
  * records the verifier refuses (status other than none, issuer retired or not accepted, bad signature) are
- * EXCLUDED. Validity is exactly what `findHeldCredential` applies through its re-verification, except the
- * reuse margin: a record that is valid but near expiry is still listed, because the margin only gates reuse.
+ * EXCLUDED. Validity is what `findHeldCredential` applies: re-verification plus the reuse margin. A record is
+ * listed only if it is valid for at least 10 more minutes, meaning its expiry is more than `HELD_REUSE_MARGIN_MS`
+ * after `now`. A record exactly at the margin is excluded, as in `findHeldCredential`, so the screen never offers
+ * a record that `findHeldCredential` or a presentation would refuse.
  *
  * Order: newest `issuedAt` first; equal `issuedAt` by ascending `recordId`. Returns `[]` when there are none.
  * A corrupt or unverifiable record is skipped silently; it never throws. A refused owner, or a listing that
@@ -359,7 +366,7 @@ export async function listHeldEmailCredentials(input: ListHeldEmailCredentialsIn
   for (const key of keys) {
     try {
       const reading = await readHeld(input.kv, key, owner, input, now);
-      if (reading.kind === "verified") matches.push(reading.match);
+      if (reading.kind === "verified" && clearsReuseMargin(reading.match.verified.expiresAt, now)) matches.push(reading.match);
     } catch {
       // A record that cannot even be read is skipped like any other unverifiable record.
     }

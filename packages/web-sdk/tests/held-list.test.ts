@@ -218,19 +218,29 @@ describe("listHeldEmailCredentials returns every valid record", () => {
     expect((await list(fake)).map((m) => m.email)).toEqual(["live@example.com"]);
   });
 
-  test("a record that expires exactly now is expired; one second later is valid", async () => {
+  test("a record that expires exactly now is excluded; one that outlasts the reuse margin is listed", async () => {
     const fake = fakeKv();
     await place(fake, OWNER_A, makeSdJwt({ email: "edge@example.com", iat: NOW_S - DAY, exp: NOW_S }));
     expect(await list(fake)).toEqual([]);
-    await place(fake, OWNER_A, makeSdJwt({ email: "edge@example.com", iat: NOW_S - DAY, exp: NOW_S + 1 }));
+    await place(fake, OWNER_A, makeSdJwt({ email: "edge@example.com", iat: NOW_S - DAY, exp: NOW_S + HELD_REUSE_MARGIN_MS / 1000 + 1 }));
     expect(await list(fake)).toHaveLength(1);
   });
 
-  test("a record inside the reuse margin is still listed (the margin gates reuse, not what the account holds)", async () => {
-    const fake = fakeKv();
-    await place(fake, OWNER_A, makeSdJwt({ exp: NOW_S + HELD_REUSE_MARGIN_MS / 1000 - 60 }));
-    expect(await list(fake)).toHaveLength(1);
-    expect(await findHeldCredential({ kv: fake.kv, ownerDid: OWNER_A, email: "alice@example.com", now: NOW, ...POLICY })).toBeUndefined();
+  test("the reuse margin boundary is findHeldCredential's: exactly at the margin is excluded, one second later is listed", async () => {
+    const marginS = HELD_REUSE_MARGIN_MS / 1000;
+    const find = (fake: Fake) => findHeldCredential({ kv: fake.kv, ownerDid: OWNER_A, email: "alice@example.com", now: NOW, ...POLICY });
+    const atMargin = fakeKv();
+    await place(atMargin, OWNER_A, makeSdJwt({ exp: NOW_S + marginS }));
+    expect(await list(atMargin)).toEqual([]);
+    expect(await find(atMargin)).toBeUndefined();
+    const justInside = fakeKv();
+    await place(justInside, OWNER_A, makeSdJwt({ exp: NOW_S + marginS - 60 }));
+    expect(await list(justInside)).toEqual([]);
+    expect(await find(justInside)).toBeUndefined();
+    const justOutside = fakeKv();
+    await place(justOutside, OWNER_A, makeSdJwt({ exp: NOW_S + marginS + 1 }));
+    expect(await list(justOutside)).toHaveLength(1);
+    expect((await find(justOutside))?.recordId).toBe((await list(justOutside))[0]!.recordId);
   });
 
   test("a record whose status is not none (revoked) is excluded", async () => {
