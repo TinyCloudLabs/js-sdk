@@ -10,7 +10,16 @@ const ACCOUNT_CHAIN_ID = "1";
 
 const SEPARATOR = 0x00;
 
+/** Text of every refusal of the bytes the signer is asked to sign. The code stays HOLDER_INVALID; the shared text ("Holder must be a did:key ...") describes a different cause. */
+const INPUT_REFUSED = "The wallet signer signs only the exact account binding for this request.";
+
+/** A refusal of the INPUT bytes, before the wallet is called. */
 function refuse(): EmailProofError {
+  return new EmailProofError("request", "HOLDER_INVALID", undefined, undefined, INPUT_REFUSED);
+}
+
+/** A refusal that is not about the input: the account did, or the signature the wallet returned. Keeps the shared HOLDER_INVALID text. */
+function refuseAccount(): EmailProofError {
   return new EmailProofError("request", "HOLDER_INVALID");
 }
 
@@ -98,7 +107,7 @@ function hexOf(bytes: Uint8Array): string {
  */
 export function createAccountHolderSigner(did: string, sign: (bytes: Uint8Array) => Promise<Uint8Array>): HolderSigner {
   const parsed = parsePkhDid(did);
-  if (parsed === null || parsed.chainId !== ACCOUNT_CHAIN_ID) throw refuse();
+  if (parsed === null || parsed.chainId !== ACCOUNT_CHAIN_ID) throw refuseAccount();
   const address = toChecksumAddress(parsed.address);
   const canonical = `did:pkh:eip155:${ACCOUNT_CHAIN_ID}:${address}`;
   const guardedSign = async (input: Uint8Array): Promise<Uint8Array> => {
@@ -110,8 +119,8 @@ export function createAccountHolderSigner(did: string, sign: (bytes: Uint8Array)
     const signature = await sign(bytes);
     // Canonical personal_sign form: 65 bytes with v (the last byte) 27 or 28. Anything else is refused.
     const v = signature[64];
-    if (signature.length !== 65 || (v !== 27 && v !== 28)) throw refuse();
-    if (!(await verifyEip191MessageSignature(message, hexOf(signature), address))) throw refuse();
+    if (signature.length !== 65 || (v !== 27 && v !== 28)) throw refuseAccount();
+    if (!(await verifyEip191MessageSignature(message, hexOf(signature), address))) throw refuseAccount();
     return signature;
   };
   return { did: canonical, alg: "EIP191", kid: `${canonical}#${ACCOUNT_KID_FRAGMENT}`, sign: guardedSign };
