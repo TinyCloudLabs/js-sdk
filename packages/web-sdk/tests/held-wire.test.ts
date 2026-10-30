@@ -151,7 +151,8 @@ describe("the strict storage read and the issuer-policy check come before the fi
   test("a listed key whose kv.get is KV_NOT_FOUND is skipped, and the acquisition goes on", async () => {
     const seed = world();
     await seed.run();
-    const w = world({}, 0, { getFailsFor: () => ({ code: "KV_NOT_FOUND" }) });
+    const seeded = new Set(seed.store.data.keys());
+    const w = world({}, 0, { getFailsFor: (key) => (seeded.has(key) ? { code: "KV_NOT_FOUND" } : undefined) });
     for (const [key, value] of seed.store.data) w.store.data.set(key, value);
     const result = await w.run();
     expect(result.credential).toMatch(/~$/);
@@ -233,14 +234,23 @@ describe("clocks: the store step verifies at max(client, iat) and the reuse read
   });
 
   test("a credential whose iat is more than 300 s ahead of the client is refused before the store step", async () => {
-    // A witness that issues 400 s in the client's future, behind a pre-flight that saw nothing wrong.
-    let jump = false;
-    const w = world({ onRoute: (route) => { if (route === "holder-signature") jump = true; } });
-    const real = w.witness.fetch;
-    const shifted = Object.assign(async (input: string | URL | Request, init?: RequestInit) => { if (jump) w.time.server += 400_000; return real(input, init); }, { preconnect: () => {} }) as typeof globalThis.fetch;
-    const error = await failure(() => w.run({ fetch: shifted }));
-    expect(["CREDENTIAL_INVALID", "VERIFICATION_FAILED"]).toContain((error as { code?: string }).code ?? "");
+    // The acquisition seam returns a credential the witness issued 400 s after this client's clock (the node-sdk post-issue check is bypassed).
+    const ahead = world({}, 0);
+    ahead.time.server = T0 + 400_000;
+    const issued = await acquireEmailProofWithIssuerKeys({ address: ADDRESS, holder: ahead.holder, profile: HELD, allowHeldProfile: true, getCode: async () => "12345678", fetch: ahead.witness.fetch, now: () => new Date(T0 + 400_000) }, ahead.witness.issuerKeys);
+    if (issued.status !== "issued") throw new Error("expected issued");
+    const w = world();
+    const error = await failure(() => acquireHeldCredentialWith(w.input(), async () => issued));
+    expect((error as { code?: string }).code).toBe("VERIFICATION_FAILED");
     expect(w.store.calls.put).toBe(0);
+    // 300 s ahead is within the bound and is stored (verified at its own iat).
+    const within = world();
+    within.time.server = T0 + 300_000;
+    const inBound = await acquireEmailProofWithIssuerKeys({ address: ADDRESS, holder: within.holder, profile: HELD, allowHeldProfile: true, getCode: async () => "12345678", fetch: within.witness.fetch, now: () => new Date(T0 + 300_000) }, within.witness.issuerKeys);
+    if (inBound.status !== "issued") throw new Error("expected issued");
+    const w2 = world();
+    await acquireHeldCredentialWith(w2.input(), async () => inBound);
+    expect(w2.store.calls.put).toBe(1);
   });
 });
 

@@ -1,7 +1,8 @@
-import { CredentialError, type IKVService } from "@tinycloud/sdk-core";
-import { pkhPrincipalsEqual } from "@tinycloud/sdk-core/held-credentials";
+import { CredentialError, decodeBase64Url, type IKVService } from "@tinycloud/sdk-core";
+import { HeldCredentialError, IssuerSet, pkhPrincipalsEqual } from "@tinycloud/sdk-core/held-credentials";
 import {
   acquireEmailProof,
+  EMAIL_PROOF_PINS,
   type EmailProofAcquireInput,
   type EmailProofAcquisition,
   type EmailProofOptions,
@@ -10,9 +11,9 @@ import {
   type HolderSigner,
 } from "@tinycloud/node-sdk/credentials";
 import {
-  findHeldCredential,
   heldAccountOwner,
   HeldListingLimitError,
+  listHeldEmailCredentials,
   pruneHeldCredentials,
   storeHeldCredential,
   type HeldIssuerPolicy,
@@ -20,8 +21,11 @@ import {
   type StoreHeldCredentialResult,
 } from "./held-store";
 
-/** Held profile id. Its pin is disabled, so every acquisition is refused before network until the wire path ships. */
+/** Held profile id. Its pin is disabled by default: an acquisition needs the caller's per-call `allowHeldProfile: true`. */
 const HELD_PROFILE = "tinycloud.email-held/v1" as const;
+const HELD_VCT = "opencredentials.email/v1";
+/** How far the client clock may be behind the issuer's: the post-issue bound, and how far ahead the reuse read looks. */
+const CLOCK_SKEW_BOUND_MS = 300_000;
 
 export type HeldSourceErrorCode = "held-store-listing-limit";
 
@@ -40,11 +44,46 @@ export class HeldSourceError extends Error {
 const LISTING_LIMIT_MESSAGE = "Saved held credentials list is too long to read; clear old ones";
 
 /**
- * Owner-scoped find. On the listing-limit refusal it prunes the owner's records once and retries the find
- * once. Prune deletes expired records AND, for each email, every verified record but the newest, so a valid
- * older record for the same email is removed too. A refusal that survives either step is a HeldSourceError.
- * Any other error passes through unchanged. Never re-acquires: that would spend the mailbox limit and add
- * records to a full store.
+ * The caller's policy must accept the pinned issuer for the held profile now, or nothing is requested. No network: the witness mails
+ * a code on the first challenge, and `storeHeldCredential` would refuse an unaccepted issuer only after that mail and the issuance.
+ */
+function assertPolicyAcceptsPinnedIssuer(policy: HeldIssuerPolicy, now: Date): void {
+  const refuse = () => new CredentialError("VERIFICATION_FAILED", "The issuer policy does not accept the held credential issuer");
+  const { issuerDid, issuerKid } = EMAIL_PROOF_PINS;
+  if (!Array.isArray(policy.acceptedIssuers) || !policy.acceptedIssuers.some((a) => a.issuerDid === issuerDid && (a.kid === undefined || a.kid === issuerKid))) throw refuse();
+  if (!IssuerSet.is(policy.issuerSet)) throw refuse();
+  const entry = policy.issuerSet.resolveIssuer(issuerDid, issuerKid);
+  const at = now.getTime();
+  if (!entry || !entry.vcts.includes(HELD_VCT) || !entry.profiles.includes(HELD_PROFILE) || at < entry.notBefore || (entry.retiredAt !== null && at >= entry.retiredAt) || (entry.notAfter !== null && at >= entry.notAfter)) throw refuse();
+}
+
+/**
+ * Strict read of the owner's held records: a store that cannot be read is OFFLINE, never "nothing stored". `listHeldEmailCredentials` throws
+ * OFFLINE for a failed list or a failed get (not KV_NOT_FOUND); a throwing `kv` is wrapped here. Every other refusal (truncated or too long a
+ * listing, a refused owner, a configuration error) passes through unchanged.
+ */
+async function readHeldStrictly(kv: IKVService, policy: HeldIssuerPolicy, owner: string, now: Date): Promise<readonly HeldMatch[]> {
+  try {
+    return await listHeldEmailCredentials({ ...policy, kv, ownerDid: owner, now });
+  } catch (error) {
+    if (error instanceof CredentialError || error instanceof HeldCredentialError) throw error;
+    throw new CredentialError("OFFLINE", "Held credentials could not be read", { cause: error });
+  }
+}
+
+/** The newest-expiring record among `matches`; the listing order (newest issued first) breaks ties. */
+function latestExpiry(matches: readonly HeldMatch[]): HeldMatch | undefined {
+  let best: HeldMatch | undefined;
+  for (const match of matches) if (best === undefined || match.expiresAt.getTime() > best.expiresAt.getTime()) best = match;
+  return best;
+}
+
+/**
+ * Owner-scoped reuse lookup over the strict read. The read uses `now + 300 s`, so a record issued up to 300 s in a slow client's future is
+ * found instead of re-acquired (conservative for expiry: a record is offered only if it expires more than 15 minutes after the real time).
+ * On the listing-limit refusal it prunes the owner's records once and retries once. Prune deletes expired records AND, for each email, every
+ * verified record but the newest, so a valid older record for the same email is removed too. A refusal that survives either step is a
+ * HeldSourceError. Any other error passes through unchanged. Never re-acquires: that would spend the mailbox limit and add records to a full store.
  */
 async function findWithListingRecovery(
   kv: IKVService,
@@ -53,18 +92,30 @@ async function findWithListingRecovery(
   address: string,
   now: () => Date,
 ): Promise<HeldMatch | undefined> {
+  const wanted = address.trim().replace(/[A-Z]+/g, (run) => run.toLowerCase());
+  const reuse = async () => latestExpiry((await readHeldStrictly(kv, policy, owner, new Date(now().getTime() + CLOCK_SKEW_BOUND_MS))).filter((match) => match.email === wanted));
   try {
-    return await findHeldCredential({ ...policy, kv, ownerDid: owner, email: address, now: now() });
+    return await reuse();
   } catch (error) {
     if (!(error instanceof HeldListingLimitError)) throw error;
   }
   try {
     await pruneHeldCredentials({ ...policy, kv, ownerDid: owner, now: now() });
-    return await findHeldCredential({ ...policy, kv, ownerDid: owner, email: address, now: now() });
+    return await reuse();
   } catch (error) {
     if (error instanceof HeldListingLimitError) throw new HeldSourceError("held-store-listing-limit", LISTING_LIMIT_MESSAGE);
     throw error;
   }
+}
+
+/** The `iat` of an SD-JWT, read WITHOUT verifying it: only to choose the verification time. `storeHeldCredential` then verifies the signature. */
+function credentialIssuedAtMs(credential: string): number {
+  try {
+    const payload: unknown = JSON.parse(new TextDecoder().decode(decodeBase64Url(credential.split("~")[0]!.split(".")[1]!)));
+    const iat = typeof payload === "object" && payload !== null && "iat" in payload ? payload.iat : undefined;
+    if (typeof iat === "number" && Number.isSafeInteger(iat)) return iat * 1000;
+  } catch { /* fall through */ }
+  throw new CredentialError("VERIFICATION_FAILED", "Issued credential is not readable");
 }
 
 export interface HeldAcquireInput extends HeldIssuerPolicy {
@@ -81,6 +132,8 @@ export interface HeldAcquireInput extends HeldIssuerPolicy {
   readonly fetch?: EmailProofOptions["fetch"];
   readonly signal?: EmailProofOptions["signal"];
   readonly now?: () => Date;
+  /** Per-call opt-in for the held profile (the pin stays disabled by default). Forwarded to the acquisition; without it a miss is refused PROFILE_UNAVAILABLE before any request. */
+  readonly allowHeldProfile?: true;
 }
 
 export interface HeldCredentialResult {
@@ -108,13 +161,15 @@ export async function acquireHeldCredential(input: HeldAcquireInput): Promise<He
  * This seam exists so the issued branch can be exercised while the held profile pin stays disabled.
  */
 export async function acquireHeldCredentialWith(input: HeldAcquireInput, acquire: HeldAcquireStep): Promise<HeldCredentialResult> {
-  const { kv, address, holder, sessionDid, getCode, pendingStore, fetch, signal, now: clock, ...policy } = input;
+  const { kv, address, holder, sessionDid, getCode, pendingStore, fetch, signal, now: clock, allowHeldProfile, ...policy } = input;
   const now = clock ?? (() => new Date());
   const holderDid = heldAccountOwner(holder.did);
   if (sessionDid !== undefined && !pkhPrincipalsEqual(sessionDid, holderDid)) {
     throw new CredentialError("HOLDER_MISMATCH", "Held acquisition holder must be the session account");
   }
 
+  // Before any request, so before any mail: the caller's policy accepts the pinned issuer, and the member's storage can be read.
+  assertPolicyAcceptsPinnedIssuer(policy, now());
   const cached = await findWithListingRecovery(kv, policy, holderDid, address, now);
   if (cached !== undefined) {
     return { credential: cached.record.credential, holderDid, expiresAt: cached.verified.expiresAt };
@@ -129,14 +184,19 @@ export async function acquireHeldCredentialWith(input: HeldAcquireInput, acquire
     fetch,
     signal,
     now,
+    allowHeldProfile,
   });
   if (acquisition.status !== "issued") {
     throw new CredentialError("PROOF_REJECTED", "Held acquisition did not issue a credential");
   }
   const credential = acquisition.result.envelope.credential;
+  // Verify at max(client, iat): the held verifier refuses now < nbf = iat, and a client up to 5 minutes slow must still store what was issued.
+  const clientMs = now().getTime();
+  const iatMs = credentialIssuedAtMs(credential);
+  if (iatMs - clientMs > CLOCK_SKEW_BOUND_MS) throw new CredentialError("VERIFICATION_FAILED", "client clock is more than 5 minutes behind the issuer");
   let stored: StoreHeldCredentialResult;
   try {
-    stored = await storeHeldCredential({ ...policy, kv, ownerDid: holderDid, sdJwt: credential, now: now() });
+    stored = await storeHeldCredential({ ...policy, kv, ownerDid: holderDid, sdJwt: credential, now: new Date(Math.max(clientMs, iatMs)) });
   } catch {
     throw new CredentialError("VERIFIED_NOT_SAVED", "Verified held credential could not be stored");
   }
