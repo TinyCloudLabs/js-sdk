@@ -8,6 +8,7 @@ import {
   heldAccountOwner,
   heldPrefix,
   heldRecordKey,
+  pruneHeldCredentials,
   listHeldEmailCredentials,
   type HeldCredentialRecord,
   type HeldMatch,
@@ -105,28 +106,49 @@ interface Fake {
   readonly kv: IKVService;
   readonly data: Map<string, unknown>;
   readonly listPrefixes: string[];
+  readonly deleted: string[];
 }
 
-function fakeKv(options: { readonly getThrowsFor?: (key: string) => boolean } = {}): Fake {
+interface FakeOptions {
+  /** `kv.get` rejects for this key (a transport failure that throws). */
+  readonly getThrowsFor?: (key: string) => boolean;
+  /** `kv.get` resolves `{ ok: false }` with a non-not-found error for this key. */
+  readonly getFailsFor?: (key: string) => boolean;
+  readonly listThrows?: boolean;
+  readonly listFails?: boolean;
+  /** Every listed key comes back twice. */
+  readonly repeatKeys?: boolean;
+  /** The listing claims to be truncated and gives no cursor. */
+  readonly truncatedNoCursor?: boolean;
+}
+
+/** Keys come back in REVERSE sorted order, so a comparator that ignores recordId cannot pass by luck. */
+function fakeKv(options: FakeOptions = {}): Fake {
   const data = new Map<string, unknown>();
   const listPrefixes: string[] = [];
+  const deleted: string[] = [];
   const kv = {
     async list(opts: { prefix?: string } = {}) {
       listPrefixes.push(opts.prefix ?? "");
-      const keys = [...data.keys()].filter((k) => k.startsWith(opts.prefix ?? "")).sort();
-      return { ok: true, data: { keys, truncated: false } };
+      if (options.listThrows) throw new Error("kv list failed");
+      if (options.listFails) return { ok: false, error: { code: "NETWORK_ERROR" } };
+      const sorted = [...data.keys()].filter((k) => k.startsWith(opts.prefix ?? "")).sort().reverse();
+      const keys = options.repeatKeys ? sorted.flatMap((k) => [k, k]) : sorted;
+      return { ok: true, data: { keys, truncated: options.truncatedNoCursor === true } };
     },
     async get(key: string) {
       if (options.getThrowsFor?.(key)) throw new Error("kv get failed");
-      if (!data.has(key)) return { ok: false, error: { code: "NOT_FOUND" } };
+      if (options.getFailsFor?.(key)) return { ok: false, error: { code: "NETWORK_ERROR" } };
+      if (!data.has(key)) return { ok: false, error: { code: "KV_NOT_FOUND" } };
       return { ok: true, data: { data: structuredClone(data.get(key)) } };
     },
     async delete(key: string) {
+      deleted.push(key);
       data.delete(key);
       return { ok: true };
     },
   };
-  return { kv: kv as unknown as IKVService, data, listPrefixes };
+  return { kv: kv as unknown as IKVService, data, listPrefixes, deleted };
 }
 
 /** Places a record directly, as a stale writer or an attacker could. Derives a consistent recordId. */
@@ -206,6 +228,111 @@ describe("listHeldEmailCredentials is owner-only", () => {
   });
 });
 
+describe("the signed subject must be the account being read", () => {
+  // The attack shape: the record sits under A's key, says ownerDid A, carries an A-derived recordId, and
+  // holds a credential issued for B. Only the subject-to-owner check in verification refuses it.
+  test("list: a record under A whose credential was issued for B is not returned; the same shape for A is", async () => {
+    const fake = fakeKv();
+    await place(fake, OWNER_A, makeSdJwt({ subject: OWNER_B, email: "b@example.com" }));
+    expect(await list(fake, OWNER_A)).toEqual([]);
+    const control = fakeKv();
+    await place(control, OWNER_A, makeSdJwt({ subject: OWNER_A, email: "a@example.com" }));
+    expect(await list(control, OWNER_A)).toHaveLength(1);
+  });
+
+  test("find: a record under A whose credential was issued for B is not returned; the same shape for A is", async () => {
+    const find = (fake: Fake, email: string) => findHeldCredential({ kv: fake.kv, ownerDid: OWNER_A, email, now: NOW, ...POLICY });
+    const fake = fakeKv();
+    await place(fake, OWNER_A, makeSdJwt({ subject: OWNER_B, email: "b@example.com" }));
+    expect(await find(fake, "b@example.com")).toBeUndefined();
+    const control = fakeKv();
+    await place(control, OWNER_A, makeSdJwt({ subject: OWNER_A, email: "a@example.com" }));
+    expect((await find(control, "a@example.com"))?.email).toBe("a@example.com");
+  });
+});
+
+describe("listHeldEmailCredentials: bad records are skipped, an unreadable store is an error", () => {
+  test("a record that fails verification is skipped while its valid neighbour is listed", async () => {
+    const fake = fakeKv();
+    await place(fake, OWNER_A, makeSdJwt({ email: "forged@example.com", tamperSignature: true }));
+    await place(fake, OWNER_A, makeSdJwt({ email: "ok@example.com" }));
+    expect((await list(fake)).map((m) => m.email)).toEqual(["ok@example.com"]);
+  });
+
+  test("a kv.get that throws for one record propagates; it is not an empty or partial list", async () => {
+    let failKey = "";
+    const fake = fakeKv({ getThrowsFor: (key) => key === failKey });
+    await place(fake, OWNER_A, makeSdJwt({ email: "ok@example.com" }));
+    failKey = (await place(fake, OWNER_A, makeSdJwt({ email: "unreadable@example.com" }))).key;
+    await expect(list(fake)).rejects.toThrow("kv get failed");
+  });
+
+  test("a kv.get that resolves not-ok with a non-not-found error is OFFLINE", async () => {
+    let failKey = "";
+    const fake = fakeKv({ getFailsFor: (key) => key === failKey });
+    await place(fake, OWNER_A, makeSdJwt({ email: "ok@example.com" }));
+    failKey = (await place(fake, OWNER_A, makeSdJwt({ email: "unreadable@example.com" }))).key;
+    const error = await refusalOf(() => list(fake));
+    expect(error.code).toBe("OFFLINE");
+  });
+
+  test("a listed key that is gone by the time it is read (not found) is skipped", async () => {
+    const fake = fakeKv();
+    await place(fake, OWNER_A, makeSdJwt({ email: "ok@example.com" }));
+    const gone = await place(fake, OWNER_A, makeSdJwt({ email: "gone@example.com" }));
+    const realGet = fake.kv.get.bind(fake.kv);
+    // The key stays in the listing but is deleted before the read.
+    (fake.kv as unknown as { get: unknown }).get = async (key: string) => {
+      if (key === gone.key) fake.data.delete(key);
+      return realGet(key);
+    };
+    expect((await list(fake)).map((m) => m.email)).toEqual(["ok@example.com"]);
+  });
+
+  test("a kv.list that throws propagates", async () => {
+    await expect(list(fakeKv({ listThrows: true }))).rejects.toThrow("kv list failed");
+  });
+
+  test("a kv.list that resolves not-ok is OFFLINE, not an empty list", async () => {
+    const error = await refusalOf(() => list(fakeKv({ listFails: true })));
+    expect(error.code).toBe("OFFLINE");
+  });
+
+  test("a truncated listing with no cursor is still refused", async () => {
+    const fake = fakeKv({ truncatedNoCursor: true });
+    await place(fake, OWNER_A, makeSdJwt());
+    const error = await refusalOf(() => list(fake));
+    expect(error.code).toBe("VERIFICATION_FAILED");
+  });
+});
+
+describe("a listing that repeats a key", () => {
+  test("list returns each record once", async () => {
+    const fake = fakeKv({ repeatKeys: true });
+    await place(fake, OWNER_A, makeSdJwt({ email: "one@example.com" }));
+    await place(fake, OWNER_A, makeSdJwt({ email: "two@example.com" }));
+    expect(await list(fake)).toHaveLength(2);
+  });
+
+  test("prune does not compare a record with itself and delete the only valid copy", async () => {
+    const fake = fakeKv({ repeatKeys: true });
+    const { key } = await place(fake, OWNER_A, makeSdJwt({ email: "only@example.com" }));
+    expect(await pruneHeldCredentials({ kv: fake.kv, ownerDid: OWNER_A, now: NOW, ...POLICY })).toEqual([]);
+    expect(fake.deleted).toEqual([]);
+    expect(fake.data.has(key)).toBe(true);
+  });
+
+  test("prune still removes a superseded record once, and an expired one once", async () => {
+    const fake = fakeKv({ repeatKeys: true });
+    const older = await place(fake, OWNER_A, makeSdJwt({ email: "same@example.com", exp: NOW_S + 30 * DAY }));
+    const newer = await place(fake, OWNER_A, makeSdJwt({ email: "same@example.com", exp: NOW_S + 60 * DAY }));
+    const expired = await place(fake, OWNER_A, makeSdJwt({ email: "old@example.com", iat: NOW_S - 300 * DAY, exp: NOW_S - 1 }));
+    const removed = await pruneHeldCredentials({ kv: fake.kv, ownerDid: OWNER_A, now: NOW, ...POLICY });
+    expect([...removed].sort()).toEqual([older.key, expired.key].sort());
+    expect(fake.data.has(newer.key)).toBe(true);
+  });
+});
+
 describe("listHeldEmailCredentials returns every valid record", () => {
   test("no records is an empty list", async () => {
     expect(await list(fakeKv())).toEqual([]);
@@ -213,7 +340,7 @@ describe("listHeldEmailCredentials returns every valid record", () => {
 
   test("an expired record is excluded and an unexpired one is kept", async () => {
     const fake = fakeKv();
-    await place(fake, OWNER_A, makeSdJwt({ email: "old@example.com", iat: NOW_S - 2 * 365 * DAY, exp: NOW_S - 1 }));
+    await place(fake, OWNER_A, makeSdJwt({ email: "old@example.com", iat: NOW_S - 300 * DAY, exp: NOW_S - 1 }));
     await place(fake, OWNER_A, makeSdJwt({ email: "live@example.com" }));
     expect((await list(fake)).map((m) => m.email)).toEqual(["live@example.com"]);
   });
@@ -376,7 +503,7 @@ describe("listHeldEmailCredentials reads only the verified credential", () => {
 
   test("a stored expiry far in the future does not revive an expired credential", async () => {
     const fake = fakeKv();
-    await place(fake, OWNER_A, makeSdJwt({ iat: NOW_S - 2 * 365 * DAY, exp: NOW_S - 1 }), { expiresAt: "2099-01-01T00:00:00Z" });
+    await place(fake, OWNER_A, makeSdJwt({ iat: NOW_S - 300 * DAY, exp: NOW_S - 1 }), { expiresAt: "2099-01-01T00:00:00Z" });
     expect(await list(fake)).toEqual([]);
   });
 });

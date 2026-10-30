@@ -27,6 +27,9 @@ const HELD_OWNER_CHAIN_ID = "1";
 /** A recordId is a canonicalDigest: 43 base64url characters. Anything else never reaches a key. */
 const RECORD_ID_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
+/** The KV service's error code for a missing key (`ErrorCodes.KV_NOT_FOUND` in sdk-services). */
+const KV_NOT_FOUND = "KV_NOT_FOUND";
+
 /** Issuer policy for the S3.1 verifier. The owner and the clock are supplied per call. */
 export type HeldIssuerPolicy = Omit<HeldEmailCredentialOptions, "owner" | "now">;
 
@@ -55,6 +58,7 @@ export interface HeldStorageReceipt {
 
 /**
  * A stored record that re-verified under the caller's policy, with the verifier's output.
+ * `record` is the raw stored value: only `verified` and the summary fields below are authoritative.
  * `recordId`, `email`, `issuedAt`, `expiresAt` and `issuer` are a summary for display. They come from the
  * re-verified credential and from the record key, never from any stored field other than `credential`.
  */
@@ -242,10 +246,8 @@ type HeldReading =
   | { readonly kind: "invalid" };
 
 /**
- * Re-verifies one stored record. The stored `credential` is the only input trusted. The record must sit
- * under its own recordId key, bind to the owner, and re-verify under the caller's policy.
- * `expired` means the signature verified and the credential is past its expiry: prune may delete it.
- * Every other failure is `invalid` and is left alone.
+ * Reads and judges one stored record. A `kv.get` that throws propagates. A get that resolves not-ok is
+ * `invalid`, and the record is left alone. See `judgeHeld` for the rest.
  */
 async function readHeld(
   kv: IKVService,
@@ -255,7 +257,22 @@ async function readHeld(
   now: Date,
 ): Promise<HeldReading> {
   const got = await kv.get(key);
-  const value: unknown = got.ok ? got.data.data : undefined;
+  return judgeHeld(got.ok ? got.data.data : undefined, key, owner, policy, now);
+}
+
+/**
+ * Re-verifies one stored value. The stored `credential` is the only input trusted. The record must sit
+ * under its own recordId key, bind to the owner, and re-verify under the caller's policy.
+ * `expired` means the signature verified and the credential is past its expiry: prune may delete it.
+ * Every other failure is `invalid` and is left alone.
+ */
+async function judgeHeld(
+  value: unknown,
+  key: string,
+  owner: string,
+  policy: HeldIssuerPolicy,
+  now: Date,
+): Promise<HeldReading> {
   if (!isHeldRecord(value)) return { kind: "invalid" };
   if (!pkhPrincipalsEqual(value.ownerDid, owner)) return { kind: "invalid" };
   const credentialDigest = await canonicalDigest(value.credential);
@@ -288,8 +305,9 @@ async function readHeld(
 export class HeldListingLimitError extends CredentialError {}
 
 /**
- * Lists every key under the owner prefix by following cursors. Returns undefined when the KV list call
- * fails. Refuses a truncated listing with no cursor, and any listing beyond the page limit.
+ * Lists every key under the owner prefix by following cursors, each key once (a listing that repeats a key
+ * must not make prune compare a record with itself, or the list return it twice). Returns undefined when the
+ * KV list call fails. Refuses a truncated listing with no cursor, and any listing beyond the page limit.
  */
 async function listHeldKeys(kv: IKVService, prefix: string): Promise<readonly string[] | undefined> {
   const keys: string[] = [];
@@ -298,7 +316,7 @@ async function listHeldKeys(kv: IKVService, prefix: string): Promise<readonly st
     const listing = await kv.list(cursor === undefined ? { prefix } : { prefix, cursor });
     if (!listing.ok) return undefined;
     keys.push(...listing.data.keys);
-    if (!listing.data.truncated) return keys;
+    if (!listing.data.truncated) return [...new Set(keys)];
     const next = listing.data.nextCursor;
     if (next === undefined || next === "") {
       throw new CredentialError("VERIFICATION_FAILED", "Held listing is truncated without a continuation cursor");
@@ -353,23 +371,35 @@ export type ListHeldEmailCredentialsInput = Omit<FindHeldCredentialInput, "email
  * a record that `findHeldCredential` or a presentation would refuse.
  *
  * Order: newest `issuedAt` first; equal `issuedAt` by ascending `recordId`. Returns `[]` when there are none.
- * A corrupt or unverifiable record is skipped silently; it never throws. A refused owner, or a listing that
- * is truncated or beyond the page limit, still throws, as for `findHeldCredential`.
+ *
+ * Throws if the store cannot be read; skips records that fail verification. A record that is corrupt,
+ * malformed or fails verification is skipped silently, never reported and never thrown. A store failure is
+ * not a bad record, so the screen can tell "none" from "unreachable": a `kv.get` or `kv.list` that throws
+ * propagates, and one that resolves not-ok is an `OFFLINE` CredentialError (a key that is gone by the time it
+ * is read, `KV_NOT_FOUND`, is skipped). A refused owner, or a listing that is truncated or beyond the page
+ * limit, also throws. `findHeldCredential` is looser: it reads a failed `kv.list` as "not found".
  * Every returned summary field comes from the re-verified credential, never from other stored fields.
+ * `record` is the raw stored value; only the `verified` fields and the summary above are authoritative.
  */
 export async function listHeldEmailCredentials(input: ListHeldEmailCredentialsInput): Promise<readonly HeldMatch[]> {
   const now = input.now ?? new Date();
   const owner = heldAccountOwner(input.ownerDid);
   const keys = await listHeldKeys(input.kv, heldPrefix(owner));
-  if (keys === undefined) return [];
+  if (keys === undefined) throw new CredentialError("OFFLINE", "Held credentials could not be listed");
   const matches: HeldMatch[] = [];
   for (const key of keys) {
-    try {
-      const reading = await readHeld(input.kv, key, owner, input, now);
-      if (reading.kind === "verified" && clearsReuseMargin(reading.match.verified.expiresAt, now)) matches.push(reading.match);
-    } catch {
-      // A record that cannot even be read is skipped like any other unverifiable record.
+    const got = await input.kv.get(key);
+    if (!got.ok) {
+      if ("error" in got && got.error.code === KV_NOT_FOUND) continue;
+      throw new CredentialError("OFFLINE", "A held credential could not be read");
     }
+    let reading: HeldReading;
+    try {
+      reading = await judgeHeld(got.data.data, key, owner, input, now);
+    } catch {
+      continue;
+    }
+    if (reading.kind === "verified" && clearsReuseMargin(reading.match.verified.expiresAt, now)) matches.push(reading.match);
   }
   return matches.sort((a, b) => {
     const newestFirst = b.issuedAt.getTime() - a.issuedAt.getTime();
