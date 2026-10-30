@@ -65,6 +65,8 @@ export interface CheckedHeldCredential {
   /** The `sub` claim as signed (already a valid eip155 did:pkh on the row's chain). */
   subject: string;
   subjectPkh: PkhDid;
+  /** The signed `iat`. */
+  issuedAt: Date;
   expiresAt: Date;
   credentialId: string;
   profile: string;
@@ -187,6 +189,7 @@ export function checkHeldCredential(sdJwtText: string, policy: HeldCredentialPol
     issuer: issuerDid,
     subject,
     subjectPkh,
+    issuedAt: new Date((iat as number) * 1000),
     expiresAt: new Date((exp as number) * 1000),
     credentialId: payload.jti as string,
     profile,
@@ -211,6 +214,11 @@ export function toVerifiedCredential(checked: CheckedHeldCredential): VerifiedHe
   };
 }
 
+/** `verifyHeldEmailCredential` output: the shared verified shape plus the signed issuance time (`iat`). The presentation verifier's output has no `issuedAt`. */
+export interface VerifiedHeldEmailCredential extends VerifiedHeldCredential {
+  issuedAt: Date;
+}
+
 export interface HeldEmailCredentialOptions {
   /** Explicit clock. The verifier never reads one. */
   now: Date;
@@ -229,7 +237,7 @@ export interface HeldEmailCredentialOptions {
  * code as the presentation path. Synchronous; the email row is fixed.
  * The code `nonce-account-mismatch` is kept for parity with the presentation path. This path spends no nonce.
  */
-export function verifyHeldEmailCredential(sdJwt: unknown, options: HeldEmailCredentialOptions): VerifiedHeldCredential {
+export function verifyHeldEmailCredential(sdJwt: unknown, options: HeldEmailCredentialOptions): VerifiedHeldEmailCredential {
   const { now, issuerSet, acceptedIssuers, didMethods, owner } = options;
   if (!(now instanceof Date) || Number.isNaN(now.getTime())) refuse("bad-config", "now must be a valid Date");
   if (!IssuerSet.is(issuerSet)) refuse("bad-config", "issuerSet must come from parseIssuerSet");
@@ -245,7 +253,7 @@ export function verifyHeldEmailCredential(sdJwt: unknown, options: HeldEmailCred
     rows: [EMAIL_HELD_ROW],
   });
   if (!pkhPrincipalsEqual(owner, checked.subject)) refuse("nonce-account-mismatch", "subject is not the authenticated owner");
-  return toVerifiedCredential(checked);
+  return { ...toVerifiedCredential(checked), issuedAt: checked.issuedAt };
 }
 
 /**

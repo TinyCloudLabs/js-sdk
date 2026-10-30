@@ -1659,3 +1659,29 @@ describe("returned presentation check", () => {
     expect(await code(verifyHeldPresentation({ sdJwt, siwe }, h.options))).toBe("bad-signature");
   });
 });
+
+describe("verifyHeldEmailCredential reports the signed issuance time (TC-1454)", () => {
+  const policy = () => ({
+    now: NOW, issuerSet: parseIssuerSet(setOf(entryA()), { didMethods: METHODS }),
+    acceptedIssuers: [{ issuerDid: ISSUER_A }], didMethods: METHODS, owner: SUB,
+  });
+
+  test("issuedAt is the signed iat, as a Date", () => {
+    const verified = verifyHeldEmailCredential(makeCredential().sdJwt, policy());
+    expect(verified.issuedAt).toEqual(new Date((NOW_S - 1000) * 1000));
+    expect(verified.issuedAt.getTime()).toBeLessThan(verified.expiresAt.getTime());
+  });
+
+  test("issuedAt follows a different signed iat", () => {
+    const iat = NOW_S - 5000;
+    const sdJwt = makeCredential({ payload: (p) => ({ ...p, iat, nbf: iat, exp: iat + 365 * DAY }) }).sdJwt;
+    expect(verifyHeldEmailCredential(sdJwt, policy()).issuedAt).toEqual(new Date(iat * 1000));
+  });
+
+  test("the presentation verifier's output shape is unchanged (no issuedAt)", async () => {
+    const h = harness();
+    const { presentation } = h.present();
+    const result = await verifyHeldPresentation(presentation, h.options);
+    expect("issuedAt" in result).toBe(false);
+  });
+});
