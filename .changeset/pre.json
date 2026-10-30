@@ -55,6 +55,7 @@
     "replication-content-fetch-lazy",
     "sdk-issued-delegations",
     "sdk-manifest-app-keys",
+    "share-sdk-wrapped-key-digest-kind",
     "siwe-metadata-resources",
     "tc-2177-v3-email-share-publisher",
     "tc-2192-named-key-recipient",

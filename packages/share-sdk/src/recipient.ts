@@ -313,6 +313,16 @@ function canonicalHashHex(value: string): string {
   return hex(sha256(new TextEncoder().encode(canonicalize(value))));
 }
 
+/**
+ * The wrapped-key digest a V3 source registers. A path-bound source (`encryptionKeyPath`) registers the digest of the
+ * raw wrapped-key bytes; a legacy no-path source registers the canonical hash of the base64 string, as the node accepts
+ * for the no-path case. The key is validated as strict base64 either way.
+ */
+function registeredWrappedKeyDigest(encryptedSymmetricKey: string, pathBound: boolean): string {
+  const rawDigest = hex(sha256(fromBase64(encryptedSymmetricKey, "v3 encrypted symmetric key")));
+  return pathBound ? rawDigest : canonicalHashHex(encryptedSymmetricKey);
+}
+
 async function aesGcmDecrypt(key: Uint8Array, blob: Uint8Array, aad?: Uint8Array): Promise<Uint8Array> {
   if (key.length !== 32 || blob.length < 28) throw new Error("encrypted content is malformed");
   const cryptoKey = await crypto.subtle.importKey("raw", key as unknown as BufferSource, "AES-GCM", false, ["decrypt"]);
@@ -358,7 +368,7 @@ function parseV3InlineEncryptedEnvelope(bytes: Uint8Array, expected: ShareEnvelo
     || record.keyPath !== undefined && (record.keyPath !== `share/${expected.shareId}`)
     || record.alg !== "x25519-aes256gcm/v1" || record.keyVersion !== source.keyVersion
     || typeof record.encryptedSymmetricKey !== "string" || typeof record.encryptedSymmetricKeyHash !== "string"
-    || hex(sha256(fromBase64(record.encryptedSymmetricKey, "v3 encrypted symmetric key"))) !== source.encryptedSymmetricKeyDigestHex
+    || registeredWrappedKeyDigest(record.encryptedSymmetricKey, source.encryptionKeyPath !== undefined) !== source.encryptedSymmetricKeyDigestHex
     || record.encryptedSymmetricKeyHash !== canonicalHashHex(record.encryptedSymmetricKey)
     || typeof record.ciphertext !== "string"
     || record.aad !== undefined && typeof record.aad !== "string"
@@ -531,7 +541,11 @@ export class ShareRecipientClient {
     return this.session;
   }
 
-  /** Decrypt unscoped v1 or path-bound v2 content, independently checking canonical and registered raw-key digests. */
+  /**
+   * Decrypt unscoped v1 or path-bound v2 content. The wrapped-key digest is compared by source kind: the raw-byte digest
+   * when the source has `encryptionKeyPath`, the canonical hash for a no-path source. The envelope's own canonical hash
+   * is checked independently either way.
+   */
   async decryptV3Content(bytes: Uint8Array): Promise<{ readonly bytes: Uint8Array; readonly mediaType: string }> {
     const envelope = this.options.envelope;
     const signer = this.nativeSigner ?? this.signer;
