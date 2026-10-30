@@ -29,11 +29,6 @@ const API = "https://api.tinycloud.xyz";
 const SPACE = "tinycloud:pkh:eip155:1:0x0000000000000000000000000000000000000001:default";
 const SEED = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
 const signer: LinkSigner = signerFromSeed(SEED);
-const emailDescriptorFixture = await Bun.file(new URL("../../../sdk-core/test-fixtures/opencredentials-v1/golden-descriptor-digests.json", import.meta.url)).json() as {
-  vectors: { name: string; descriptor: unknown }[];
-};
-const emailDescriptor = emailDescriptorFixture.vectors.find((vector) => vector.name === "email")?.descriptor;
-if (emailDescriptor === undefined) throw new Error("golden email descriptor is missing");
 
 interface Request {
   readonly method: string;
@@ -93,10 +88,10 @@ async function publishedShare(shareId = "share-1", lifetimeSeconds = 7 * 86_400)
     link: { kind: "policy", cid: sealed.cid },
     metadata: {
       protocol: "tinycloud-share", version: 1, shareId, origin: ORIGIN,
-      target: { kind: "email", origin: "https://node.example", nodeAudience: "did:key:z6Mknode", spaceId: SPACE },
+      target: { kind: "emailDomain", origin: "https://node.example", nodeAudience: "did:key:z6Mknode", spaceId: SPACE },
       resource: { kind: "exact", path: `shares/${shareId}/note.md` }, actions: ["read"],
       expiresAt: expiresAt.toISOString(), display: { filename: "note.md" },
-      recipientMatcher: { kind: "exactEmail", value: "alice@example.com" },
+      recipientMatcher: { kind: "emailDomain", value: "example.com" },
     },
     deliveryMaterial: { envelope: {}, shareCid: sealed.cid, sealedEnvelope: toBase64Url(sealed.blob), envelopeKey: toBase64Url(key) },
     key: toBase64Url(key),
@@ -229,7 +224,8 @@ describe("tc share with links", () => {
   afterEach(() => configureShareCommandServices({}));
 
   async function run(args: readonly string[], services: ShareCommandServices) {
-    configureShareCommandServices(services);
+    // Domain fixtures have support; a test can still override the probe.
+    configureShareCommandServices({ assertDomainDelivery: async () => {}, ...services });
     const stdout: string[] = [];
     const stderr: string[] = [];
     const out = process.stdout.write.bind(process.stdout);
@@ -271,9 +267,7 @@ describe("tc share with links", () => {
   async function publish(args: readonly string[], input: { readonly fetchFn: typeof fetch; readonly lifetimeSeconds?: number; readonly timeoutMs?: number; readonly invitations?: boolean; readonly productionShape?: boolean; readonly rootJson?: boolean; readonly omitMaterial?: boolean }) {
     const directory = await mkdtemp(join(tmpdir(), "tc-share-links-"));
     const file = join(directory, "note.md");
-    const descriptorPath = join(directory, "email-descriptor.json");
     await writeFile(file, "# note\n");
-    await writeFile(descriptorPath, JSON.stringify(emailDescriptor));
     const published = await publishedShare("share-cmd", input.lifetimeSeconds);
     if (input.omitMaterial === true) delete (published as { deliveryMaterial?: PublishedShare["deliveryMaterial"] }).deliveryMaterial;
     if (input.productionShape === true) {
@@ -290,8 +284,8 @@ describe("tc share with links", () => {
       links: { ...links, show: (...args) => { linkShowCalls += 1; return links.show(...args); } },
       ...(input.invitations === undefined ? {} : { shortLinkInvitations: input.invitations }),
     };
-    const command = ["publish", file, "--to", "alice@example.com", "--credential-descriptor", descriptorPath,
-      "--issuer-did", "did:web:issuer.credentials.org", "--issuer-kid", "did:web:issuer.credentials.org#controller", ...args];
+    const command = ["publish", file, "--to", "domain:example.com",
+      ...(args.includes("--notify") ? ["--notify-to", "alice@example.com"] : []), ...args];
     const result = input.rootJson === true
       ? (configureShareCommandServices(services), await runShareCaptured(["--json", "share", ...command]))
       : await run(command, services);
@@ -530,16 +524,9 @@ describe("tc share with links", () => {
   test("keeps over-limit addressed publishes at MAX_BYTES_EXCEEDED without creating a short link", async () => {
     const directory = await mkdtemp(join(tmpdir(), "tc-share-limit-"));
     const file = join(directory, "note.md");
-    const descriptorPath = join(directory, "email-descriptor.json");
     await writeFile(file, "# note\n");
-    await writeFile(descriptorPath, JSON.stringify(emailDescriptor));
     const api = stubApi();
-    const email = [
-      "--to", "alice@example.com",
-      "--credential-descriptor", descriptorPath,
-      "--issuer-did", "did:web:issuer.credentials.org",
-      "--issuer-kid", "did:web:issuer.credentials.org#controller",
-    ] as const;
+    const addressed = ["--to", "domain:example.com"] as const;
     const errorCode = (stderr: string) => {
       const start = stderr.lastIndexOf('{\n  "error"');
       const document: unknown = JSON.parse(stderr.slice(start));
@@ -550,7 +537,7 @@ describe("tc share with links", () => {
     };
 
     let publishCalls = 0;
-    const limited = await run(["publish", file, ...email, "--max-bytes", "3", "--json"], {
+    const limited = await run(["publish", file, ...addressed, "--max-bytes", "3", "--json"], {
       targetAdapter: { publish: async () => { publishCalls += 1; throw new Error("input limit must refuse before publish"); } },
       links: createShareLinks({ signer: async () => signer, fetchFn: api.fetchFn }),
     });
@@ -560,7 +547,7 @@ describe("tc share with links", () => {
     expect(publishCalls).toBe(0);
     expect(api.requests).toEqual([]);
 
-    const refused = await run(["publish", file, ...email, "--json"], {
+    const refused = await run(["publish", file, ...addressed, "--json"], {
       targetAdapter: { publish: async () => { throw new SharePublishError("max-bytes-exceeded", ADDRESSED_SHARE_TOO_LARGE_MESSAGE); } },
       links: createShareLinks({ signer: async () => signer, fetchFn: api.fetchFn }),
     });
@@ -568,7 +555,7 @@ describe("tc share with links", () => {
     expect(refused.exitCode).toBe(7);
     expect(refused.stdout).toBe("");
 
-    const removed = await run(["publish", file, ...email, "--json"], {
+    const removed = await run(["publish", file, ...addressed, "--json"], {
       targetAdapter: { publish: async () => { throw new SharePublishAuthorityError({ kind: "over-limit", remaining: ["a policy record stays on your node with both of its roots revoked, so it admits no one"] }); } },
       links: createShareLinks({ signer: async () => signer, fetchFn: api.fetchFn }),
     });

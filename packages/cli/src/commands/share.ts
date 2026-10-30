@@ -1,5 +1,4 @@
 import { Command, Option } from "commander";
-import { readFile } from "node:fs/promises";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
 import {
   ArtifactError,
@@ -452,21 +451,16 @@ export function registerShareCommand(program: Command): void {
         // differs from the one signed into the share, so it would break on the first update. Ongoing shares come
         // with link-as-delegation (TC-1428 ruling).
         if (options.ongoing === true) throw new CLIError("UNSUPPORTED_TARGET", ONGOING_UNAVAILABLE, 2);
+        const target = parseShareTarget(options.to);
+        if (target.kind === "email") throw new CLIError("UNAVAILABLE", "email-addressed shares are not available in this release; nothing was shared", 4);
         const maxBytes = byteLimit(options.maxBytes);
         if (files.length === 0 || (files.includes("-") && files.length > 1)) throw new CLIError("INVALID_ARGUMENT", "stdin must be the only publish input", 2);
         const name = files.length === 1 ? options.name : undefined;
-        const target = parseShareTarget(options.to);
         const actions = requestedActions(options.action);
         if (options.notify === true && !actions.includes("read")) throw new CLIError("INVALID_ARGUMENT", "--notify requires the read action; nothing was shared", 2);
-        if (target.kind === "email" && (!options.credentialDescriptor || !options.issuerDid || !options.issuerKid)) {
-          throw new CLIError("INVALID_ARGUMENT", "email publication requires --credential-descriptor, --issuer-did, and --issuer-kid", 2);
-        }
-        if (target.kind !== "email" && (options.credentialDescriptor || options.issuerDid || options.issuerKid)) {
+        if (options.credentialDescriptor || options.issuerDid || options.issuerKid) {
           throw new CLIError("INVALID_ARGUMENT", "credential options require an exact email target", 2);
         }
-        const credentialDescriptor = target.kind === "email"
-          ? JSON.parse(await readFile(options.credentialDescriptor, "utf8")) as unknown
-          : undefined;
         // A folder with an index.html becomes one self-contained page for an anyone-with-the-link share. Addressed and
         // --prefix publication of a folder is not offered: a directory falls through to the file reader and is refused.
         const folder = files.length === 1 && target.kind === "bearer" && options.prefix !== true && await isDirectoryInput(files[0]!);
@@ -497,8 +491,7 @@ export function registerShareCommand(program: Command): void {
           throw new CLIError("INVALID_ARGUMENT", "--notify-to requires --to domain:<name> --notify", 2);
         }
         let notifyRecipient: string | undefined;
-        if (options.notify === true && target.kind === "email") notifyRecipient = target.address;
-        else if (options.notify === true && target.kind === "emailDomain") {
+        if (options.notify === true && target.kind === "emailDomain") {
           const mailbox = options.notifyTo === undefined ? undefined : canonicalMailbox(options.notifyTo);
           if (mailbox === undefined || mailbox.domain !== target.domain) {
             throw new CLIError("INVALID_ARGUMENT", "--to domain:<name> --notify requires --notify-to <email> at that exact domain (node 1.17.3+)", 2);
@@ -523,7 +516,6 @@ export function registerShareCommand(program: Command): void {
           origin: options.viewerOrigin,
           ...(maxBytes === undefined ? {} : { maxBytes }),
           notify: options.notify === true,
-          ...(credentialDescriptor === undefined ? {} : { credentialDescriptor, issuerDid: options.issuerDid, issuerKid: options.issuerKid }),
           // The artifact request rides on the adapter call rather than through `publishTargetShare`, whose code is part of
           // the browser bundles (the web-sdk size ceiling counts every byte it carries).
           targetAdapter: artifact === undefined || shareServices.targetAdapter === undefined
@@ -658,6 +650,8 @@ export function registerShareCommand(program: Command): void {
             process.exitCode = 6;
             return;
           }
+          // The CLI has no email-proof flow: say so instead of pointing at an adapter nobody can run.
+          if (result.method === "email-claim") throw new CLIError("CLAIM_REQUIRED", "email-addressed shares cannot be opened with this version of the CLI yet; open the link in a web browser", 6);
           throw new CLIError(result.method === "openkey-device" ? "DEVICE_AUTH_REQUIRED" : "CLAIM_REQUIRED", "recipient authorization is required; resume through the configured authority adapter", 6);
         }
         if (options.stdout) {

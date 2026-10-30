@@ -1,5 +1,211 @@
 # @tinycloud/cli
 
+## 1.5.1-beta.0
+
+### Patch Changes
+
+- Updated dependencies [f1744fb]
+  - @tinycloud/node-sdk@3.8.1-beta.0
+  - @tinycloud/operations@0.7.8-beta.0
+
+## 1.5.0
+
+### Minor Changes
+
+- e740a6d: From a delegate (agent) profile, `tc delegation list --granted` lists the delegations that profile's own key issued (every page, each with its `status`, sorted by delegation ID rather than by date), and `tc delegation revoke <cid>` revokes one of them with a revocation signed by that key, so the profile doesn't need a revoke grant from its owner. Revoking one that's already revoked also succeeds. A delegation the key didn't issue is refused with the node's message (exit 5). A node that can't list issued delegations yet answers `ISSUED_DELEGATIONS_UNAVAILABLE` (exit 7). Owner profiles are unchanged.
+
+  Details: TC-2132
+
+- 0f7a069: `tc kv put --if-none-match '*'` creates a key only when it is absent and reports an existing key as a refused write.
+
+  Details: TC-2049
+
+- 15080ed: `tc auth login --keys <folder>` (local-key or OpenKey sign-in) also grants named-key create and decrypt on keys below the folder, and `tc keys ensure|encrypt|decrypt` use them. Node SDK: `additionalRawAbilities` adds top-level resource abilities to the sign-in request.
+
+  Details: TC-2034
+
+- 68f276f: `tinycloud onboard` sets up a computer to act for its owner: it creates the profile (the default one unless `--profile` or `TC_PROFILE` names another), then asks for two OpenKey approvals, each for 30 days. The first signs the owner in, or lets them create an account, and grants read and write on their `applications` space. The second grants read-only `spaces/` and `applications/` in their `account` space. Each run does the next approval and never waits: it prints JSON with the approval link and exits 8, and the next run takes the code OpenKey shows with `--code`. It exits 0 with `"onboarded": true` once both are granted, and again on every later run until they expire. The `tc-cli` skill describes it under "Sign in".
+
+  Details: TC-2168
+
+- 8398c72: Add `tc secrets run NAME... [--map NAME=ENV_VAR] -- <command> [args...]`: it reads the named secrets as `tc secrets get` does and starts the command directly, without a shell, with the values only in its environment. If a secret cannot be read, the command does not start and tc exits as `get` would. tc exits with the command's exit code or signal, passes SIGINT, SIGTERM, SIGHUP and SIGQUIT on to it (except SIGINT, SIGQUIT and SIGHUP when tc runs in a terminal's foreground, since the terminal sends those to the command already), and exits 127 or 126 when the command isn't found or can't be run. tc doesn't pass its own `TC_PRIVATE_KEY` to the command. The command, and anything it starts, still receives the values and can print or pass them on.
+
+  Details: TC-2093
+
+- 19048ec: Add immutable, signed OpenKey approval-request links using the shared `/a/<id>#v=4&k=<key>&c=<sealedBodyCid>` grammar. Requests default to one hour, are capped at 24 hours, and use repeatable non-consuming reads. Validate the sealed issuer, target Ed25519 key, and P-256 result encryption key without changing existing login, share, or courier links.
+
+  Use these short requests for browser approval in the CLI and onboarding. Recover the encrypted result through repeatable requester-authenticated fetches, verify the signed authority, and durably save the profile and stable ACK intent before acknowledgement. Explicit manual paste remains available with the existing return-code contract.
+
+  Bind agent-grant approvals to the exact prepared request. Durably retain the verified child grant, command output, history, and signed-parent/ACK binding before acknowledgement, so retries recover the saved result rather than issuing another grant.
+
+  Keep the existing seven-day default for normal OpenKey requests and explicit 30-day onboarding. Complete saved approvals after delivery retention ends, clear pending request credentials on logout, and document the automatic wait-and-resume flow.
+
+  Details: TC-2212
+
+- 3daddbb: Add the shared SQLite Home feed protocol and CLI commands for owner-provisioned agent connections, card publishing, durable responses, acknowledgements, outcomes, and external runtime handoff. Hook readiness and logical database notifications drive response reconciliation. Feed watch uses a durable local SQLite handoff ledger with explicit saved, delivered, and handling states, and supports Bun or Node.js 22.13+.
+
+  Support versioned private response payloads saved atomically with their headers and read explicitly through the existing response database authority. Default response notifications and durable handoff copies include only allowlisted headers and payload metadata.
+
+  Add opt-in `redactErrors` to SQL query, execute, and batch calls so private response operations receive static errors with known codes and HTTP status before ordinary service-error delivery. Calls without the option retain their existing error details.
+
+  Add explicit outbound feed messages without changing card decisions or owner-private state. Messages share immutable response identities, atomic private payloads, and notification-safe handoff. Exact-identity handling reads retain historical acknowledgement and outcome receipts after later answers or messages.
+
+  Feed listeners cancel pending response queries on caller abort and stop cleanly for expected cancellation while preserving unrelated query failures.
+
+  Refresh the generated MCP skill coverage for the Commander-owned feed commands; no MCP tools are added.
+
+  Details: TC-2205
+
+- de9e0ff: Add explicit owner-only `feed export` for lossless KV and operator-supplied sidecar bytes. Preserve full source keys, base64 bytes, SHA-256, matching strong ETags, tombstones, and opaque change-feed cursor/source/authority metadata. Publish a complete snapshot only after an empty same-scope final tail, using durable exclusive `0600` output. Normal command output contains only a safe receipt, not raw snapshot contents. Export does not classify or restore records.
+
+  Require an output directory owned by the effective user and a trusted ancestor chain, including every intermediate symbolic-link target, that prevents other-UID replacement of staging entries. Mode `0600` alone does not establish staging-file identity; same-UID and root actors remain trusted.
+
+  Regenerate the MCP skill coverage block for the new legacy CLI registration; no MCP operation is added.
+
+  Details: TC-2209
+
+- a83e55c: Add generic owner-authorized structural feed restore and recipient-filtered delivery pages over the current initialized SQL database pair. Bind immutable response content and full card identities to import origins; atomically store each response header, optional private payload, provenance, and default-deny policies in the response database. Existing live response IDs cannot be reclassified as imports. Output cards and responses are not one cross-database transaction.
+
+  Before upgrading live watch consumers, the owner must run the current `initializeFeedDatabases` for each existing registered pair; owner connection and import paths also initialize the schema. This creates the three import-metadata tables required by delivery reads. Agents and listeners never create those tables, and missing tables fail closed.
+
+  Require each origin's consistent exact-recipient pending/mapped evidence and a valid deadline or explicit null before dispatch. Keep raw receipts out of agent-readable policy rows. Fail closed on missing or malformed metadata, preserve unrelated SQL failures during coincident cancellation, and retain safe deadlines in notification headers without private payload data. Uncertain handoffs are not automatically resent; external runtime acceptance, deadline checks, and deduplication remain necessary. No exactly-once external execution guarantee is added.
+
+  Add read-only full card-issuance history with BINARY full-tuple keyset pages, default limit 100 and maximum 1000; reconciliation starts cursorless because this is not a durable tail, and latest-card listing remains unchanged.
+
+  Preserve literal own JSON payload keys when validating stored card-history and restored-card envelopes. Preserve completed restore failures during caller-abort races without removing identical-replay readback recovery.
+
+  Add `tinycloud feed import --space <full-uri> --file <prepared.json>` for structurally validated FORMAT1 data and immutable scoped owner-only archives, using canonical SDK restore without legacy projection. Regenerate the CLI reference and MCP coverage metadata.
+
+  Reject the reserved wildcard runtime recipient during import preflight, before publishing an immutable archive or creating agent schemas.
+
+  Details: TC-2209
+
+- 8c24574: Make `tinycloud` the preferred CLI command and rename the core skill to `tinycloud-cli`. Keep `tc` as a deprecated compatibility alias at the same entry, with identical commands, flags, exit codes, and stdout. Invoking the alias through a POSIX executable link emits one deprecation notice on stderr; existing scripts and piped JSON keep working.
+
+  Details: TC-2202
+
+### Patch Changes
+
+- 73b4604: The `tinycloud-cli` skill, the MCP skill and both READMEs now describe one agent setup path: start at https://agents.tinycloud.xyz/onboarding, sign in with `tinycloud onboard`, and ask for more access with `tinycloud auth request ... --grant --paste`. Agent guides use Node.js 22.20 or later.
+
+  Details: TC-2239
+
+- ac50932: Show the account site delegation page when an OpenKey profile cannot complete a CLI revocation.
+
+  Details: TC-2005
+
+- 90941f8: `tc auth login --method openkey --keys <folder>` works together with replication prefixes: one OpenKey approval covers the replica request and the folder's key row.
+
+  Details: TC-2034
+
+- 09d7ae1: `tinycloud auth login --method openkey` on a profile that does not exist now creates a key-only profile (a local key, as `init --key-only` does) and continues into the login, instead of failing with `PROFILE_NOT_FOUND`. Nothing is granted until the owner approves; abandoning the login leaves a key-only profile with no session. `auth logout` on a missing profile still fails and creates nothing.
+
+  Details: TC-2212
+
+- 3cb038a: `tinycloud onboard` says its first grant lets the agent read, change and delete apps' data. The grant already included delete; the text now names it.
+
+  Details: TC-2168
+
+- 1d21328: `tinycloud onboard` now also grants SQL read and write of apps' database rows on the applications space, under the same approval as files, so apps such as Health Log can read and write rows without a second approval.
+
+  Details: TC-2178
+
+- 5a7cf08: `tinycloud share notify` and `tinycloud share publish --notify` send invitation emails again.
+
+  Details: TC-2177
+
+- 30da240: Share publishing can create a short link from the signed full policy link when the publish result has no separate delivery material. JSON output keeps link details redacted.
+
+  Details: TC-1737
+
+- 177856d: `builtin:share-publishing` now also asks for decrypt on the account's own default key when signing in with `--paste`, so that profile can create email-addressed shares. `--device` sign-in and `enable share` still request it without that entry; an email share from a device sign-in says to run `tc auth login --paste --manifest builtin:share-publishing`.
+
+  Details: TC-2177
+
+- 812a818: Publish new CLI email shares as signed V3 Policy/v2 envelopes inside current v4 Share link records, with a unique exact `default/share/<shareId>` encryption key, a path-bound policy, and a committed email credential requirement. The `builtin:share-publishing` paste approval requests decrypt only for the owner's default-network `share/` prefix; device authorization and `enable share` omit decrypt. Existing V2 envelopes retain their read path.
+
+  Details: TC-2177
+
+- 406ec01: Add a one-prompt guided start with persisted chat discovery, explicit selection, and signed invitation links. Support same-owner agents, anyone holding the link, and named Courier keys or verified paired handles through a participating issuer's scoped KV pairing relay. Bind joins and durable winning claims to the intended session; keep existing manual pairing guards and restrict guided peer grants to one thread. Email recipient identifiers are refused rather than treated as verified names.
+
+  Explicitly supplied empty invitation links, including positional links, are refused before chat discovery or creation; they cannot create or activate a fallback session.
+
+  Details: TC-1543
+
+- c59163b: Temporarily refuse exact-email share publication with UNAVAILABLE (exit 4) before reading inputs or credential files or reaching publication services. Domain, DID and anyone targets, and notification of existing shares, keep their existing behavior. Do not fall back to a network-wide email policy when the node refuses path-bound registration.
+
+  Details: TC-2202
+
+- aa4c782: Temporarily refuse domain and DID addressed share publication with UNAVAILABLE (exit 4), first in the share authority adapter, before authentication, profile or key access, or any request. Anyone (link) shares are unchanged, and email-addressed publication is refused as before. Sharing to an email address, domain or DID isn't available in this release; link shares are.
+
+  Details: TC-2242
+
+- Updated dependencies [15080ed]
+- Updated dependencies [32ed899]
+- Updated dependencies [49f3665]
+- Updated dependencies [20a872e]
+- Updated dependencies [479205d]
+- Updated dependencies [19048ec]
+- Updated dependencies [92e4bd0]
+- Updated dependencies [e740a6d]
+- Updated dependencies [c541786]
+- Updated dependencies [e839be0]
+- Updated dependencies [e424ba9]
+- Updated dependencies [812a818]
+- Updated dependencies [0b024c2]
+- Updated dependencies [1fc87b6]
+- Updated dependencies [7b22f61]
+- Updated dependencies [4a19c47]
+- Updated dependencies [5d9d314]
+- Updated dependencies [44c439a]
+- Updated dependencies [2789240]
+- Updated dependencies [f167805]
+- Updated dependencies [9fb359a]
+- Updated dependencies [9fb359a]
+- Updated dependencies [812a818]
+- Updated dependencies [3daddbb]
+- Updated dependencies [a83e55c]
+  - @tinycloud/node-sdk@3.8.0
+  - @tinycloud/sdk-core@3.8.0
+  - @tinycloud/share-envelope@1.4.0
+  - @tinycloud/sdk-services@3.8.0
+  - @tinycloud/share-sdk@1.4.1
+  - @tinycloud/operations@0.7.7
+
+## 1.5.0-beta.36
+
+### Patch Changes
+
+- aa4c782: Temporarily refuse domain and DID addressed share publication with UNAVAILABLE (exit 4), first in the share authority adapter, before authentication, profile or key access, or any request. Anyone (link) shares are unchanged, and email-addressed publication is refused as before. Sharing to an email address, domain or DID isn't available in this release; link shares are.
+
+  Details: TC-2242
+
+## 1.5.0-beta.35
+
+### Patch Changes
+
+- Updated dependencies [e839be0]
+  - @tinycloud/share-sdk@1.4.1-beta.4
+  - @tinycloud/node-sdk@3.8.0-beta.23
+  - @tinycloud/sdk-core@3.8.0-beta.23
+  - @tinycloud/operations@0.7.7-beta.22
+
+## 1.5.0-beta.34
+
+### Patch Changes
+
+- c59163b: Temporarily refuse exact-email share publication with UNAVAILABLE (exit 4) before reading inputs or credential files or reaching publication services. Domain, DID and anyone targets, and notification of existing shares, keep their existing behavior. Do not fall back to a network-wide email policy when the node refuses path-bound registration.
+
+  Details: TC-2202
+
+## 1.5.0-beta.33
+
+### Patch Changes
+
+- 09d7ae1: `tinycloud auth login --method openkey` on a profile that does not exist now creates a key-only profile (a local key, as `init --key-only` does) and continues into the login, instead of failing with `PROFILE_NOT_FOUND`. Nothing is granted until the owner approves; abandoning the login leaves a key-only profile with no session. `auth logout` on a missing profile still fails and creates nothing.
+
+  Details: TC-2212
+
 ## 1.5.0-beta.32
 
 ### Minor Changes

@@ -7672,7 +7672,7 @@ var init_profiles = __esm({
         if (!profile) {
           throw new CLIError(
             "PROFILE_NOT_FOUND",
-            `Profile "${name}" does not exist. Create it with \`${CLI_NAME11} init --name ${name}\`.`
+            `Profile "${name}" does not exist. Create it with \`${CLI_NAME11} init --key-only --name ${name}\`.`
           );
         }
         return profile;
@@ -15199,7 +15199,6 @@ init_profiles();
 
 // src/commands/share.ts
 import { Option } from "commander";
-import { readFile as readFile8 } from "fs/promises";
 import { CLI_NAME as CLI_NAME12 } from "@tinycloud/operations/cli-name";
 
 // ../share-sdk/dist/artifact.js
@@ -31130,6 +31129,8 @@ function createShareAuthorityAdapters(input = {}) {
   });
   const targetAdapter = { async publish(targetInput) {
     if (input.publishTarget !== void 0) return input.publishTarget(targetInput);
+    const refusedKind = { emailDomain: "domain", recipientDid: "did" }[targetInput.target.kind];
+    if (refusedKind !== void 0) throw new CLIError("UNAVAILABLE", `${refusedKind}-addressed shares are not available in this release; nothing was shared`, 4);
     const node = await authenticatedNode();
     const session = node.restorableSession;
     const ownerSpaceId = session?.spaceId;
@@ -33060,19 +33061,16 @@ function registerShareCommand(program2) {
     try {
       const json = jsonOutput(options, command);
       if (options.ongoing === true) throw new CLIError("UNSUPPORTED_TARGET", ONGOING_UNAVAILABLE, 2);
+      const target = parseShareTarget(options.to);
+      if (target.kind === "email") throw new CLIError("UNAVAILABLE", "email-addressed shares are not available in this release; nothing was shared", 4);
       const maxBytes = byteLimit(options.maxBytes);
       if (files.length === 0 || files.includes("-") && files.length > 1) throw new CLIError("INVALID_ARGUMENT", "stdin must be the only publish input", 2);
       const name = files.length === 1 ? options.name : void 0;
-      const target = parseShareTarget(options.to);
       const actions = requestedActions(options.action);
       if (options.notify === true && !actions.includes("read")) throw new CLIError("INVALID_ARGUMENT", "--notify requires the read action; nothing was shared", 2);
-      if (target.kind === "email" && (!options.credentialDescriptor || !options.issuerDid || !options.issuerKid)) {
-        throw new CLIError("INVALID_ARGUMENT", "email publication requires --credential-descriptor, --issuer-did, and --issuer-kid", 2);
-      }
-      if (target.kind !== "email" && (options.credentialDescriptor || options.issuerDid || options.issuerKid)) {
+      if (options.credentialDescriptor || options.issuerDid || options.issuerKid) {
         throw new CLIError("INVALID_ARGUMENT", "credential options require an exact email target", 2);
       }
-      const credentialDescriptor = target.kind === "email" ? JSON.parse(await readFile8(options.credentialDescriptor, "utf8")) : void 0;
       const folder = files.length === 1 && target.kind === "bearer" && options.prefix !== true && await isDirectoryInput(files[0]);
       let inputs;
       if (folder) {
@@ -33098,8 +33096,7 @@ function registerShareCommand(program2) {
         throw new CLIError("INVALID_ARGUMENT", "--notify-to requires --to domain:<name> --notify", 2);
       }
       let notifyRecipient;
-      if (options.notify === true && target.kind === "email") notifyRecipient = target.address;
-      else if (options.notify === true && target.kind === "emailDomain") {
+      if (options.notify === true && target.kind === "emailDomain") {
         const mailbox = options.notifyTo === void 0 ? void 0 : canonicalMailbox2(options.notifyTo);
         if (mailbox === void 0 || mailbox.domain !== target.domain) {
           throw new CLIError("INVALID_ARGUMENT", "--to domain:<name> --notify requires --notify-to <email> at that exact domain (node 1.17.3+)", 2);
@@ -33123,7 +33120,6 @@ function registerShareCommand(program2) {
         origin: options.viewerOrigin,
         ...maxBytes === void 0 ? {} : { maxBytes },
         notify: options.notify === true,
-        ...credentialDescriptor === void 0 ? {} : { credentialDescriptor, issuerDid: options.issuerDid, issuerKid: options.issuerKid },
         // The artifact request rides on the adapter call rather than through `publishTargetShare`, whose code is part of
         // the browser bundles (the web-sdk size ceiling counts every byte it carries).
         targetAdapter: artifact === void 0 || shareServices.targetAdapter === void 0 ? shareServices.targetAdapter : { publish: (request) => shareServices.targetAdapter.publish({ ...request, artifact }) }
@@ -33247,6 +33243,7 @@ function registerShareCommand(program2) {
           process.exitCode = 6;
           return;
         }
+        if (result.method === "email-claim") throw new CLIError("CLAIM_REQUIRED", "email-addressed shares cannot be opened with this version of the CLI yet; open the link in a web browser", 6);
         throw new CLIError(result.method === "openkey-device" ? "DEVICE_AUTH_REQUIRED" : "CLAIM_REQUIRED", "recipient authorization is required; resume through the configured authority adapter", 6);
       }
       if (options.stdout) {
