@@ -35,6 +35,10 @@ export type {
   StoredEmailProofRecord,
 } from "@tinycloud/node-sdk/credentials";
 // Held credentials: the account-holder signer, the owner-scoped held store, and the held credential source.
+// The issuer set must come from the same bundle as the store: `IssuerSet` is a brand check, and this entry
+// bundles its own copy of the held-credentials module, so a set parsed by a separate copy is refused.
+export { parseIssuerSet } from "@tinycloud/sdk-core/held-credentials";
+export type { IssuerSet, IssuerSetOptions } from "@tinycloud/sdk-core/held-credentials";
 export { createAccountHolderSigner } from "./credentials/account-holder";
 export {
   findHeldCredential,
