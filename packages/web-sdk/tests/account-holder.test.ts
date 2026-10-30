@@ -53,7 +53,9 @@ function wallet(account: typeof OWNER, shape: (signature: Uint8Array) => Uint8Ar
 }
 
 /** Account-binding bytes: the domain, one zero byte, then a non-empty body. */
-function bindingBytes(body: string = `{"did":"${ACCOUNT}"}`): Uint8Array {
+/** A valid account binding for ACCOUNT: `holderProof.fixed.canonicalJcs` of the TC-2254 contract vectors (938 bytes, JCS). */
+const BINDING_BODY = "{\"audience\":\"tinycloud://credentials\",\"challengeNonce\":\"CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC\",\"completionContext\":\"sdk-acquisition\",\"completionOrigin\":\"https://localhost\",\"credentialLifetimeSeconds\":31536000,\"descriptorDigest\":\"dc3_DuvzipXwYkTfjKqTaK1c3VS0YSPnaBsYSQriC0w\",\"expiresAt\":\"2026-08-03T01:10:00Z\",\"holderDid\":\"did:pkh:eip155:1:0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266\",\"issuedAt\":\"2026-08-03T01:00:00Z\",\"issuer\":\"did:web:issuer.credentials.org\",\"issuerKid\":\"did:web:issuer.credentials.org#controller\",\"jti\":\"urn:uuid:5f1c9a2e-7b3d-4e8a-9c61-2d4b8e7f0a13\",\"normalizedClaimsDigest\":\"kyc5jDA7koLzgm-dOmWhfGPXIOTOBmUdrSs-36KJJpc\",\"openerOrigin\":\"https://localhost\",\"profile\":\"tinycloud.email-held/v1\",\"profileVersion\":1,\"protocol\":\"tinycloud.credentials/acquisition/v1\",\"requestId\":\"RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR\",\"requirementDigest\":\"Q_dnVOBsX_7fRjuzLPtCmDe_SKPiXW0Sxv0zSPb_Jd4\",\"type\":\"tinycloud.credentials/account-binding/v1\"}";
+function bindingBytes(body: string = BINDING_BODY): Uint8Array {
   return new TextEncoder().encode(`${DOMAIN}\u0000${body}`);
 }
 
@@ -92,7 +94,7 @@ test("signer hands the wallet the very bytes it was given and returns the wallet
 });
 
 test("the wallet receives UTF8(domain), one 0x00 byte, then the JCS binding, byte for byte", async () => {
-  const jcs = `{"did":"${ACCOUNT}","signingDomain":"${DOMAIN}"}`;
+  const jcs = BINDING_BODY;
   const expected = new Uint8Array([...new TextEncoder().encode(DOMAIN), 0x00, ...new TextEncoder().encode(jcs)]);
   const seen: Uint8Array[] = [];
   const signer = createAccountHolderSigner(ACCOUNT, async (bytes) => {
