@@ -30,6 +30,38 @@ const RECORD_ID_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 /** The KV service's error code for a missing key (`ErrorCodes.KV_NOT_FOUND` in sdk-services). */
 const KV_NOT_FOUND = "KV_NOT_FOUND";
 
+// The node answers 401 both for a missing capability and for a stale session, and the SDK cannot tell them apart, so the text names both.
+const READ_DENIED = "This app can't read held credentials: the session may lack kv get and list on v1/held/ (skipPrefix), or may need to sign in again.";
+const DELETE_DENIED = "This app can't delete held credentials: the session may lack kv del on v1/held/ (skipPrefix), or may need to sign in again.";
+
+/**
+ * Fixed, non-secret marker (`details.state`) on a `VERIFIED_NOT_SAVED` error whose write or read-back was refused by a typed kv 401 or 403: the
+ * credential was issued and verified but the app session may not store it. The error keeps its code; nothing from the kv error (message, address,
+ * space, token) is attached.
+ */
+export const HELD_STORE_PERMISSION_DENIED_STATE = "permission_denied";
+
+/**
+ * True when a failed kv result says the app session may not make the call: a typed HTTP 401 or 403 (`status`, `statusCode` or `meta.status`, 4xx/5xx
+ * only, outermost first along `cause`), or the kv service's `AUTH_UNAUTHORIZED` code with no status at all. Same rule as sdk-services'
+ * `authorizationVerdictOf`, which this package does not depend on. The decision never reads message text, and any other status (a 5xx that carries
+ * the code too, a 404) is not a permission failure. A real network failure has neither signal and stays `OFFLINE`.
+ */
+function isPermissionDenied(failed: unknown): boolean {
+  let node: unknown = typeof failed === "object" && failed !== null && "error" in failed ? (failed as { error: unknown }).error : undefined;
+  let unauthorizedCode = false;
+  for (let depth = 0; depth < 8 && typeof node === "object" && node !== null; depth += 1) {
+    const record = node as Record<string, unknown>;
+    const meta = record.meta;
+    const status = [record.status, record.statusCode, typeof meta === "object" && meta !== null ? (meta as Record<string, unknown>).status : undefined]
+      .find((candidate): candidate is number => typeof candidate === "number" && Number.isInteger(candidate) && candidate >= 400 && candidate <= 599);
+    if (status !== undefined) return status === 401 || status === 403;
+    if (record.code === "AUTH_UNAUTHORIZED") unauthorizedCode = true;
+    node = record.cause;
+  }
+  return unauthorizedCode;
+}
+
 /** Issuer policy for the S3.1 verifier. The owner and the clock are supplied per call. */
 export type HeldIssuerPolicy = Omit<HeldEmailCredentialOptions, "owner" | "now">;
 
@@ -229,10 +261,12 @@ export async function storeHeldCredential(
  * timestamp, and that record is equally valid.
  */
 async function writeAndReadBack(kv: IKVService, key: string, attempt: HeldCredentialRecord): Promise<HeldCredentialRecord> {
-  const unsaved = () => new CredentialError("VERIFIED_NOT_SAVED", "Held credential could not be confirmed in storage");
+  const unsaved = (permission = false) =>
+    new CredentialError("VERIFIED_NOT_SAVED", "Held credential could not be confirmed in storage", permission ? { state: HELD_STORE_PERMISSION_DENIED_STATE } : {});
   const written = await kv.batchPut([{ key, value: attempt }]).catch(() => undefined);
-  if (written?.ok !== true) throw unsaved();
+  if (written?.ok !== true) throw unsaved(written !== undefined && isPermissionDenied(written));
   const readback = await kv.get(key).catch(() => undefined);
+  if (readback !== undefined && !readback.ok && isPermissionDenied(readback)) throw unsaved(true);
   const value: unknown = readback?.ok === true ? readback.data.data : undefined;
   if (
     !isHeldRecord(value) ||
@@ -253,7 +287,7 @@ type HeldReading =
 
 /**
  * Reads and judges one stored record. A `kv.get` that throws propagates. A get that resolves not-ok is
- * `invalid`, and the record is left alone. See `judgeHeld` for the rest.
+ * `invalid` and the record is left alone, unless the app may not read it: that is `PERMISSION_DENIED`. See `judgeHeld` for the rest.
  */
 async function readHeld(
   kv: IKVService,
@@ -263,6 +297,7 @@ async function readHeld(
   now: Date,
 ): Promise<HeldReading> {
   const got = await kv.get(key);
+  if (!got.ok && isPermissionDenied(got)) throw new CredentialError("PERMISSION_DENIED", READ_DENIED);
   return judgeHeld(got.ok ? got.data.data : undefined, key, owner, policy, now);
 }
 
@@ -313,14 +348,17 @@ export class HeldListingLimitError extends CredentialError {}
 /**
  * Lists every key under the owner prefix by following cursors, each key once (a listing that repeats a key
  * must not make prune compare a record with itself, or the list return it twice). Returns undefined when the
- * KV list call fails. Refuses a truncated listing with no cursor, and any listing beyond the page limit.
+ * KV list call fails, except that a list the app may not make is `PERMISSION_DENIED`. Refuses a truncated listing with no cursor, and any listing beyond the page limit.
  */
 async function listHeldKeys(kv: IKVService, prefix: string): Promise<readonly string[] | undefined> {
   const keys: string[] = [];
   let cursor: string | undefined;
   for (let page = 0; page < HELD_LIST_MAX_PAGES; page += 1) {
     const listing = await kv.list(cursor === undefined ? { prefix } : { prefix, cursor });
-    if (!listing.ok) return undefined;
+    if (!listing.ok) {
+      if (isPermissionDenied(listing)) throw new CredentialError("PERMISSION_DENIED", READ_DENIED);
+      return undefined;
+    }
     keys.push(...listing.data.keys);
     if (!listing.data.truncated) return [...new Set(keys)];
     const next = listing.data.nextCursor;
@@ -341,7 +379,9 @@ export interface FindHeldCredentialInput extends HeldIssuerPolicy {
 
 /**
  * Owner-scoped read. Lists only `v1/held/<registryKey>/`, so `v1/records/` is never considered.
- * Returns the verified record with the latest expiry that still clears the reuse margin, or undefined.
+ * Returns the verified record with the latest expiry that still clears the reuse margin, or undefined. A failed list is "not found" (looser than
+ * `listHeldEmailCredentials`), EXCEPT a list or get the app may not make: that throws `PERMISSION_DENIED`, because "not found" there would send the
+ * caller to acquire a credential (a mailed code) that its session then cannot store.
  */
 export async function findHeldCredential(input: FindHeldCredentialInput): Promise<HeldMatch | undefined> {
   const now = input.now ?? new Date();
@@ -382,8 +422,8 @@ export type ListHeldEmailCredentialsInput = Omit<FindHeldCredentialInput, "email
  * malformed or fails verification is skipped silently, never reported and never thrown. A store failure is
  * not a bad record, so the screen can tell "none" from "unreachable": a `kv.get` or `kv.list` that throws
  * propagates, and one that resolves not-ok is an `OFFLINE` CredentialError (a key that is gone by the time it
- * is read, `KV_NOT_FOUND`, is skipped). A refused owner, or a listing that is truncated or beyond the page
- * limit, also throws. `findHeldCredential` is looser: it reads a failed `kv.list` as "not found".
+ * is read, `KV_NOT_FOUND`, is skipped). A call the app session may not make (a typed 401 or 403 from kv) is `PERMISSION_DENIED`, not `OFFLINE`. A refused owner, or a listing that is truncated or beyond the page
+ * limit, also throws. `findHeldCredential` is looser: it reads a failed `kv.list` as "not found" (but not a permission failure).
  * Every returned summary field comes from the re-verified credential, never from other stored fields.
  * `record` is the raw stored value; only the `verified` fields and the summary above are authoritative.
  */
@@ -397,6 +437,7 @@ export async function listHeldEmailCredentials(input: ListHeldEmailCredentialsIn
     const got = await input.kv.get(key);
     if (!got.ok) {
       if ("error" in got && got.error.code === KV_NOT_FOUND) continue;
+      if (isPermissionDenied(got)) throw new CredentialError("PERMISSION_DENIED", READ_DENIED);
       throw new CredentialError("OFFLINE", "A held credential could not be read");
     }
     let reading: HeldReading;
@@ -430,6 +471,7 @@ export async function deleteHeldCredential(input: {
     throw new CredentialError("DESCRIPTOR_INVALID", "recordId must be a 43-character base64url digest");
   }
   const result = await input.kv.delete(heldRecordKey(owner, input.recordId));
+  if (!result.ok && isPermissionDenied(result)) throw new CredentialError("PERMISSION_DENIED", DELETE_DENIED);
   return result.ok;
 }
 
@@ -478,6 +520,7 @@ export async function pruneHeldCredentials(input: PruneHeldCredentialsInput): Pr
   const removed: string[] = [];
   for (const key of doomed) {
     const result = await input.kv.delete(key);
+    if (!result.ok && isPermissionDenied(result)) throw new CredentialError("PERMISSION_DENIED", DELETE_DENIED);
     if (result.ok) removed.push(key);
   }
   return removed;
