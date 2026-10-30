@@ -1,5 +1,59 @@
 # @tinycloud/courier
 
+## 0.4.0
+
+### Minor Changes
+
+- c6b78b2: Courier pairing now accepts artifacts from a different Courier agent key of the same owner, so two agents sharing one `did:pkh` pair like any two agents. Pairing still refuses the agent's own courier DID, and the peer delegation binding is unchanged. Tested with an isolated same-owner A→B→C exchange plus self-pair, key-substitution and different-owner regression checks.
+
+  Details: TC-1248
+
+### Patch Changes
+
+- 406ec01: Add a one-prompt guided start with persisted chat discovery, explicit selection, and signed invitation links. Support same-owner agents, anyone holding the link, and named Courier keys or verified paired handles through a participating issuer's scoped KV pairing relay. Bind joins and durable winning claims to the intended session; keep existing manual pairing guards and restrict guided peer grants to one thread. Email recipient identifiers are refused rather than treated as verified names.
+
+  Explicitly supplied empty invitation links, including positional links, are refused before chat discovery or creation; they cannot create or activate a fallback session.
+
+  Details: TC-1543
+
+- Updated dependencies [15080ed]
+- Updated dependencies [32ed899]
+- Updated dependencies [49f3665]
+- Updated dependencies [20a872e]
+- Updated dependencies [479205d]
+- Updated dependencies [19048ec]
+- Updated dependencies [92e4bd0]
+- Updated dependencies [e740a6d]
+- Updated dependencies [c541786]
+- Updated dependencies [e424ba9]
+- Updated dependencies [812a818]
+- Updated dependencies [7b22f61]
+- Updated dependencies [4a19c47]
+- Updated dependencies [5d9d314]
+- Updated dependencies [44c439a]
+- Updated dependencies [2789240]
+- Updated dependencies [f167805]
+- Updated dependencies [9fb359a]
+- Updated dependencies [9fb359a]
+- Updated dependencies [812a818]
+  - @tinycloud/node-sdk@3.8.0
+  - @tinycloud/sdk-core@3.8.0
+  - @tinycloud/share-envelope@1.4.0
+
+## 0.4.0-beta.23
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.8.0-beta.23
+- @tinycloud/sdk-core@3.8.0-beta.23
+
+## 0.4.0-beta.22
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.8.0-beta.22
+- @tinycloud/sdk-core@3.8.0-beta.22
+
 ## 0.4.0-beta.21
 
 ### Patch Changes

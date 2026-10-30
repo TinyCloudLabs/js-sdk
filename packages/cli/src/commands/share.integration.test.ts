@@ -10,24 +10,6 @@ import { runShareCaptured } from "./share.integration-harness.js";
 import { MemorySenderShareRecordStorage, type PublishedShare } from "@tinycloud/share-sdk";
 
 describe("tc share command integration", () => {
-  test("refuses email publication without descriptor and issuer before any publication", async () => {
-    let publications = 0;
-    configureShareCommandServices({ targetAdapter: { publish: async () => {
-      publications += 1;
-      throw new Error("must not publish");
-    } } });
-    const originalExit = process.exit;
-    let exitCode: number | undefined;
-    process.exit = ((code?: number) => { exitCode = code; }) as typeof process.exit;
-    try {
-      const result = await runShareCaptured(["share", "publish", "-", "--to", "email:person@example.com", "--json"]);
-      expect(exitCode).toBe(2);
-      expect(result.stderr).toContain("email publication requires --credential-descriptor, --issuer-did, and --issuer-kid");
-    } finally {
-      process.exit = originalExit;
-    }
-    expect(publications).toBe(0);
-  });
 
   test("publishes, receives, and records one native TinyCloud bearer link", async () => {
     const viewerOrigin = "https://share-dev.tinycloud.link";

@@ -1,4 +1,5 @@
 import type { FeedApi, FeedResponse } from "./types";
+import { validDispatchBefore } from "./dispatch";
 
 /** A notification is an allowlisted header, never a copy of private payload data. */
 export const projectFeedResponseNotification: FeedApi["projectFeedResponseNotification"] = (response) => {
@@ -16,5 +17,6 @@ export const projectFeedResponseNotification: FeedApi["projectFeedResponseNotifi
   if (response.kind !== "message" && response.supersedesResponseId !== undefined) notification.supersedesResponseId = response.supersedesResponseId;
   if (response.payloadType !== undefined) notification.payloadType = response.payloadType;
   if (response.payloadVersion !== undefined) notification.payloadVersion = response.payloadVersion;
+  if (validDispatchBefore(response.dispatchBefore)) notification.dispatchBefore = response.dispatchBefore;
   return notification;
 };

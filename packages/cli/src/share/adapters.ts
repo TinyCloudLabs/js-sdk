@@ -655,6 +655,11 @@ export function createShareAuthorityAdapters(input: {
   });
   const targetAdapter: TargetPublishAdapter = { async publish(targetInput) {
     if (input.publishTarget !== undefined) return input.publishTarget(targetInput);
+    // Not available in this release (TC-2242). First statement of the real path: before authentication, profile keys,
+    // the Share config or any other request, and before anything is created. The kind lookup keeps the later
+    // domain-target code type-checked as it was.
+    const refusedKind: string | undefined = ({ emailDomain: "domain", recipientDid: "did" } as Record<string, string>)[targetInput.target.kind];
+    if (refusedKind !== undefined) throw new CLIError("UNAVAILABLE", `${refusedKind}-addressed shares are not available in this release; nothing was shared`, 4);
     // The Share config is fetched only after the local checks below, so a refusal makes no request.
     const node = await authenticatedNode();
     const session = node.restorableSession;

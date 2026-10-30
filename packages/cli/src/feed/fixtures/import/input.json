@@ -1,0 +1,438 @@
+{
+  "source": {
+    "spaceId": "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:legacy",
+    "namespace": "xyz.tinycloud.rocinante/",
+    "snapshotId": "prepared-base-224",
+    "completePrefixSnapshot": true,
+    "cursor": {
+      "opaque": "frozen-cursor"
+    }
+  },
+  "frozenAt": "2026-10-29T12:00:00.000Z",
+  "rows": [
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/ask/ask-synthetic.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJmcm9tIjoiU3ludGhldGljT2ZmaWNlciIsIm93bmVyIjoiU3ludGhldGljT3duZXIiLCJib2R5IjoiU3ludGhldGljIGNhcmQgYm9keS4iLCJjcmVhdGVkQXQiOiIyMDI2LTEwLTI4VDEyOjAwOjAwLjAwMFoiLCJ1cGRhdGVkQXQiOiIyMDI2LTEwLTI4VDEyOjAwOjAwLjAwMFoiLCJ1cmdlbmN5IjoyLCJpbXBvcnRhbmNlIjoyLCJsaW5rcyI6W3sibGFiZWwiOiJQcml2YXRlIHJlcG9ydCIsInVybCI6Imh0dHBzOi8vcmVwb3J0cy5zeW50aGV0aWMtZXhhbXBsZS50cy5uZXQvcmVoZWFyc2FsLm1kIn1dLCJraW5kIjoiYXNrIiwiaWQiOiJhc2stc3ludGhldGljIiwidGl0bGUiOiJDaG9vc2UgdGhlIHN5bnRoZXRpYyBhcHByb2FjaCIsImFza2VkQXQiOiIyMDI2LTEwLTI4VDEyOjAwOjAwLjAwMFoiLCJzdGF0dXMiOiJvcGVuIiwiY29udGV4dCI6eyJiYWNrZ3JvdW5kIjoiQSBzeW50aGV0aWMgcmVoZWFyc2FsIGNoZWNrcyB0aGUgZXhpc3RpbmcgY2FyZCBzZW1hbnRpY3Mgd2l0aG91dCByZWFkaW5nIG9yIGNoYW5naW5nIGFueSBsaXZlIHJlY29yZHMuIiwid2h5Tm93IjoiVGhlIGlzb2xhdGVkIG93bmVyIG5lZWRzIHRvIGNob29zZSB0aGUgbmV4dCByZXZlcnNpYmxlIHN0ZXAuIiwiaWZOb0Fuc3dlciI6Ik5vdGhpbmcgaXMgYXBwcm92ZWQgb3IgZXhlY3V0ZWQgdW50aWwgYSB2YWxpZCBvd25lciByZXNwb25zZSBhcnJpdmVzLiIsImtub3duIjpbXSwicmVsYXRlZCI6W119LCJvcHRpb25zIjpbeyJpZCI6InF1aWNrIiwibGFiZWwiOiJRdWljayBvcHRpb24iLCJkZXRhaWwiOiJGYXN0IGJ1dCBsaW1pdGVkLiJ9LHsiaWQiOiJjYXJlZnVsIiwibGFiZWwiOiJDYXJlZnVsIG9wdGlvbiIsImRldGFpbCI6IlNsb3dlciBhbmQgcmV2ZXJzaWJsZS4ifV0sInJlY29tbWVuZCI6ImNhcmVmdWwifQ==",
+      "sha256": "006794754c6ad4884fa54c9f52d0a7117d4c2db4a8521704c8f25efc2d12fc48"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/task/task-synthetic.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJmcm9tIjoiU3ludGhldGljT2ZmaWNlciIsIm93bmVyIjoiU3ludGhldGljT3duZXIiLCJib2R5IjoiU3ludGhldGljIGNhcmQgYm9keS4iLCJjcmVhdGVkQXQiOiIyMDI2LTEwLTI4VDEyOjAwOjAwLjAwMFoiLCJ1cGRhdGVkQXQiOiIyMDI2LTEwLTI4VDEyOjAwOjAwLjAwMFoiLCJ1cmdlbmN5IjoyLCJpbXBvcnRhbmNlIjoyLCJsaW5rcyI6W3sibGFiZWwiOiJQcml2YXRlIHJlcG9ydCIsInVybCI6Imh0dHBzOi8vcmVwb3J0cy5zeW50aGV0aWMtZXhhbXBsZS50cy5uZXQvcmVoZWFyc2FsLm1kIn1dLCJraW5kIjoidGFzayIsImlkIjoidGFzay1zeW50aGV0aWMiLCJ0aXRsZSI6IkNvbXBsZXRlIHRoZSBzeW50aGV0aWMgY2hlY2tzIiwic3RhdHVzIjoidG9kbyIsImNvbnRleHQiOnsiYmFja2dyb3VuZCI6IkEgc3ludGhldGljIHJlaGVhcnNhbCBjaGVja3MgdGhlIGV4aXN0aW5nIGNhcmQgc2VtYW50aWNzIHdpdGhvdXQgcmVhZGluZyBvciBjaGFuZ2luZyBhbnkgbGl2ZSByZWNvcmRzLiIsIndoeU5vdyI6IlRoZSBpc29sYXRlZCBvd25lciBuZWVkcyB0byBjaG9vc2UgdGhlIG5leHQgcmV2ZXJzaWJsZSBzdGVwLiIsImlmTm9BbnN3ZXIiOiJOb3RoaW5nIGlzIGFwcHJvdmVkIG9yIGV4ZWN1dGVkIHVudGlsIGEgdmFsaWQgb3duZXIgcmVzcG9uc2UgYXJyaXZlcy4iLCJrbm93biI6W10sInJlbGF0ZWQiOltdfSwic3RlcHMiOlt7ImlkIjoidmVyaWZ5IiwidGV4dCI6IlZlcmlmeSB0aGUgaXNvbGF0ZWQgcmVzdWx0In0seyJpZCI6InVuZG8iLCJ0ZXh0IjoiQ29uZmlybSB0aGUgYWN0aW9uIGlzIHJldmVyc2libGUifV19",
+      "sha256": "aa88fafecac7a6ed502d0f553004a967f016c535a0f4134c434d00e7fae24011"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/approval/approval-synthetic.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJmcm9tIjoiU3ludGhldGljT2ZmaWNlciIsIm93bmVyIjoiU3ludGhldGljT3duZXIiLCJib2R5IjoiU3ludGhldGljIGNhcmQgYm9keS4iLCJjcmVhdGVkQXQiOiIyMDI2LTEwLTI4VDEyOjAwOjAwLjAwMFoiLCJ1cGRhdGVkQXQiOiIyMDI2LTEwLTI4VDEyOjAwOjAwLjAwMFoiLCJ1cmdlbmN5IjoyLCJpbXBvcnRhbmNlIjoyLCJsaW5rcyI6W3sibGFiZWwiOiJQcml2YXRlIHJlcG9ydCIsInVybCI6Imh0dHBzOi8vcmVwb3J0cy5zeW50aGV0aWMtZXhhbXBsZS50cy5uZXQvcmVoZWFyc2FsLm1kIn1dLCJraW5kIjoiYXBwcm92YWwiLCJpZCI6ImFwcHJvdmFsLXN5bnRoZXRpYyIsInRpdGxlIjoiQXBwcm92ZSB0aGUgc3ludGhldGljIGRlcGxveSB3aW5kb3ciLCJhcHByb3ZhbFR5cGUiOiJnbyIsImFwcHJvdmFsS2luZCI6ImRlcGxveSIsImNvZGVFeHBlY3RlZCI6ZmFsc2UsImlzc3VlZEF0IjoiMjAyNi0xMC0yOVQxMDowMDowMC4wMDBaIiwiZXhwaXJlc0F0IjoiMjA5OS0wMS0wMVQwMDowMDowMC4wMDBaIiwic3RhdHVzIjoib3BlbiIsImNvbnRleHQiOnsiYmFja2dyb3VuZCI6IkEgc3ludGhldGljIHJlaGVhcnNhbCBjaGVja3MgdGhlIGV4aXN0aW5nIGNhcmQgc2VtYW50aWNzIHdpdGhvdXQgcmVhZGluZyBvciBjaGFuZ2luZyBhbnkgbGl2ZSByZWNvcmRzLiIsIndoeU5vdyI6IlRoZSBpc29sYXRlZCBvd25lciBuZWVkcyB0byBjaG9vc2UgdGhlIG5leHQgcmV2ZXJzaWJsZSBzdGVwLiIsImlmTm9BbnN3ZXIiOiJOb3RoaW5nIGlzIGFwcHJvdmVkIG9yIGV4ZWN1dGVkIHVudGlsIGEgdmFsaWQgb3duZXIgcmVzcG9uc2UgYXJyaXZlcy4iLCJrbm93biI6W10sInJlbGF0ZWQiOltdfX0=",
+      "sha256": "4182451e6b3e314aa2f5bd5125ec2997761a001971597bb41d2fc2ada1a4e827"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/incident/incident-synthetic.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJmcm9tIjoiU3ludGhldGljT2ZmaWNlciIsIm93bmVyIjoiU3ludGhldGljT3duZXIiLCJib2R5IjoiU3ludGhldGljIGNhcmQgYm9keS4iLCJjcmVhdGVkQXQiOiIyMDI2LTEwLTI4VDEyOjAwOjAwLjAwMFoiLCJ1cGRhdGVkQXQiOiIyMDI2LTEwLTI4VDEyOjAwOjAwLjAwMFoiLCJ1cmdlbmN5IjoyLCJpbXBvcnRhbmNlIjoyLCJsaW5rcyI6W3sibGFiZWwiOiJQcml2YXRlIHJlcG9ydCIsInVybCI6Imh0dHBzOi8vcmVwb3J0cy5zeW50aGV0aWMtZXhhbXBsZS50cy5uZXQvcmVoZWFyc2FsLm1kIn1dLCJraW5kIjoiaW5jaWRlbnQiLCJpZCI6ImluY2lkZW50LXN5bnRoZXRpYyIsInRpdGxlIjoiU3ludGhldGljIGluY2lkZW50Iiwic3RhdHVzIjoiZGVncmFkZWQiLCJzZXZlcml0eSI6InNldjIiLCJpbXBhY3QiOiJPbmx5IHRoZSBkaXNwb3NhYmxlIHJlaGVhcnNhbCBpcyBhZmZlY3RlZC4iLCJzdGFydGVkQXQiOiIyMDI2LTEwLTI4VDEyOjAwOjAwLjAwMFoifQ==",
+      "sha256": "9fbecdaa3a727e35e79eaa7fb140c76d5da5f758e0f3f215cbe1ed81a30cb0d3"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/work/work-synthetic.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJmcm9tIjoiU3ludGhldGljT2ZmaWNlciIsIm93bmVyIjoiU3ludGhldGljT3duZXIiLCJib2R5IjoiU3ludGhldGljIGNhcmQgYm9keS4iLCJjcmVhdGVkQXQiOiIyMDI2LTEwLTI4VDEyOjAwOjAwLjAwMFoiLCJ1cGRhdGVkQXQiOiIyMDI2LTEwLTI4VDEyOjAwOjAwLjAwMFoiLCJ1cmdlbmN5IjoyLCJpbXBvcnRhbmNlIjoyLCJsaW5rcyI6W3sibGFiZWwiOiJQcml2YXRlIHJlcG9ydCIsInVybCI6Imh0dHBzOi8vcmVwb3J0cy5zeW50aGV0aWMtZXhhbXBsZS50cy5uZXQvcmVoZWFyc2FsLm1kIn1dLCJraW5kIjoid29yayIsImlkIjoid29yay1zeW50aGV0aWMiLCJ0aXRsZSI6IlN5bnRoZXRpYyB3b3JrIiwic3RhdHVzIjoid2FpdGluZy1zYW0iLCJ3YWl0c09uIjoiVGhlIGlzb2xhdGVkIG93bmVyIGRlY2lzaW9uIiwibmV4dCI6IlJlc3VtZSBvbmx5IGFmdGVyIGEgdmFsaWQgZGVjaXNpb24iLCJhc2tJZHMiOlsiYXNrLXN5bnRoZXRpYyJdLCJzdGFuZGluZyI6ZmFsc2V9",
+      "sha256": "5ab69d6e0f19669e4315a63170d03f2e995e59babd88dab13f241003b71b1e8a"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/ship/ship-synthetic.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJmcm9tIjoiU3ludGhldGljT2ZmaWNlckIiLCJvd25lciI6IlN5bnRoZXRpY093bmVyQiIsImJvZHkiOiJTeW50aGV0aWMgY2FyZCBib2R5LiIsImNyZWF0ZWRBdCI6IjIwMjYtMTAtMjhUMTI6MDA6MDAuMDAwWiIsInVwZGF0ZWRBdCI6IjIwMjYtMTAtMjhUMTI6MDA6MDAuMDAwWiIsInVyZ2VuY3kiOjIsImltcG9ydGFuY2UiOjIsImxpbmtzIjpbeyJsYWJlbCI6IlByaXZhdGUgcmVwb3J0IiwidXJsIjoiaHR0cHM6Ly9yZXBvcnRzLnN5bnRoZXRpYy1leGFtcGxlLnRzLm5ldC9yZWhlYXJzYWwubWQifV0sImtpbmQiOiJzaGlwIiwiaWQiOiJzaGlwLXN5bnRoZXRpYyIsInRpdGxlIjoiU3ludGhldGljIHJlbGVhc2UiLCJjb21wb25lbnQiOiJSZWhlYXJzYWwgY29tcG9uZW50IiwidmVyc2lvbiI6IjAuMC4yLXRlc3QiLCJwcmV2VmVyc2lvbiI6IjAuMC4xLXRlc3QiLCJhdCI6IjIwMjYtMTAtMjhUMTI6MDA6MDAuMDAwWiIsInN0YXR1cyI6ImxpdmUifQ==",
+      "sha256": "975000634dda5f55476fc51d375649b8170fef23131dc6fc78fcd8a819017c65"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/order/order-synthetic.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJmcm9tIjoiU3ludGhldGljT2ZmaWNlckIiLCJvd25lciI6IlN5bnRoZXRpY093bmVyQiIsImJvZHkiOiJTeW50aGV0aWMgY2FyZCBib2R5LiIsImNyZWF0ZWRBdCI6IjIwMjYtMTAtMjhUMTI6MDA6MDAuMDAwWiIsInVwZGF0ZWRBdCI6IjIwMjYtMTAtMjhUMTI6MDA6MDAuMDAwWiIsInVyZ2VuY3kiOjIsImltcG9ydGFuY2UiOjIsImxpbmtzIjpbeyJsYWJlbCI6IlByaXZhdGUgcmVwb3J0IiwidXJsIjoiaHR0cHM6Ly9yZXBvcnRzLnN5bnRoZXRpYy1leGFtcGxlLnRzLm5ldC9yZWhlYXJzYWwubWQifV0sImtpbmQiOiJvcmRlciIsImlkIjoib3JkZXItc3ludGhldGljIiwidGl0bGUiOiJTeW50aGV0aWMgc3RhbmRpbmcgb3JkZXIiLCJhdCI6IjIwMjYtMTAtMjhUMTI6MDA6MDAuMDAwWiIsInNvdXJjZSI6ImNoYXQiLCJ2ZXJiYXRpbSI6IktlZXAgZXZlcnkgcmVoZWFyc2FsIGFjdGlvbiBpbnNpZGUgaXRzIGRpc3Bvc2FibGUgZGlyZWN0b3J5LiIsImFwcGxpZXNUbyI6IlN5bnRoZXRpYyByZWhlYXJzYWwgb25seSIsInN0YXR1cyI6ImFjdGl2ZSJ9",
+      "sha256": "cf2efed5d8f4e5a84277a21d808414fe88b27c29de79671058ff46d6573d0143"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/claim/T-001.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJmcm9tIjoiU3ludGhldGljT2ZmaWNlckIiLCJvd25lciI6IlN5bnRoZXRpY093bmVyQiIsImJvZHkiOiJTeW50aGV0aWMgY2FyZCBib2R5LiIsImNyZWF0ZWRBdCI6IjIwMjYtMTAtMjhUMTI6MDA6MDAuMDAwWiIsInVwZGF0ZWRBdCI6IjIwMjYtMTAtMjhUMTI6MDA6MDAuMDAwWiIsInVyZ2VuY3kiOjIsImltcG9ydGFuY2UiOjIsImxpbmtzIjpbeyJsYWJlbCI6IlByaXZhdGUgcmVwb3J0IiwidXJsIjoiaHR0cHM6Ly9yZXBvcnRzLnN5bnRoZXRpYy1leGFtcGxlLnRzLm5ldC9yZWhlYXJzYWwubWQifV0sImtpbmQiOiJjbGFpbSIsImlkIjoiVC0wMDEiLCJ0aXRsZSI6IlN5bnRoZXRpYyBjbGFpbSIsInN0YXR1cyI6Im9wZW4iLCJzaXRlIjoiU3ludGhldGljIHNpdGUiLCJ1cmwiOiJodHRwczovL2V4YW1wbGUudGVzdC9jbGFpbSIsInF1b3RlIjoiRXZlcnkgcmVoZWFyc2FsIGlzIHJldmVyc2libGUuIiwibG9jYXRpb24iOiJTeW50aGV0aWMgcGFnZSwgZmlyc3QgcGFyYWdyYXBoIiwidHJ1ZVRvZGF5IjoiT25seSB0aGUgaXNvbGF0ZWQgbWFya2VyIGFjdGlvbiBoYXMgYmVlbiBkZW1vbnN0cmF0ZWQuIiwiZXZpZGVuY2UiOlt7ImxhYmVsIjoiU3ludGhldGljIGV2aWRlbmNlIiwicmVmIjoiaHR0cHM6Ly9leGFtcGxlLnRlc3QvZXZpZGVuY2UifV0sIm1ha2VUcnVlIjp7InRjIjpbIlRDLTEiXSwiZWZmb3J0IjoiVmVyaWZ5IGFsbCBzeW50aGV0aWMgb3BlcmF0aW9ucyJ9LCJzZXZlcml0eSI6Im1lZCJ9",
+      "sha256": "ddbaf4299da7315623a7bd14292292f741512da0549adbd3d4ed201f5fced766"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/hold/hold-synthetic.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJmcm9tIjoiU3ludGhldGljT2ZmaWNlckIiLCJvd25lciI6IlN5bnRoZXRpY09mZmljZXIgLyBTeW50aGV0aWNBbGlhcyIsImJvZHkiOiJTeW50aGV0aWMgY2FyZCBib2R5LiIsImNyZWF0ZWRBdCI6IjIwMjYtMTAtMjhUMTI6MDA6MDAuMDAwWiIsInVwZGF0ZWRBdCI6IjIwMjYtMTAtMjhUMTI6MDA6MDAuMDAwWiIsInVyZ2VuY3kiOjIsImltcG9ydGFuY2UiOjIsImxpbmtzIjpbeyJsYWJlbCI6IlByaXZhdGUgcmVwb3J0IiwidXJsIjoiaHR0cHM6Ly9yZXBvcnRzLnN5bnRoZXRpYy1leGFtcGxlLnRzLm5ldC9yZWhlYXJzYWwubWQifV0sImtpbmQiOiJob2xkIiwiaWQiOiJob2xkLXN5bnRoZXRpYyIsInRpdGxlIjoiSG9sZCB0aGUgc3ludGhldGljIHJlbGVhc2UiLCJzdGF0dXMiOiJhY3RpdmUiLCJ3aGF0IjoiSG9sZCB0aGUgc3ludGhldGljIHJlbGVhc2UiLCJjYXVzZSI6IkEgcmV2ZXJzaWJsZSBjaGVjayBpcyBpbmNvbXBsZXRlLiIsImV4aXQiOiJCb3RoIHN5bnRoZXRpYyB0YXNrIGNoZWNrcyBhcmUgY29tcGxldGUuIiwicmVsZWFzZWRCeSI6InNhbSIsInVuYmxvY2tlZEJ5IjpbInRhc2s6dGFzay1zeW50aGV0aWMiXX0=",
+      "sha256": "ce7347b97d7255aefd7d62b996c9d54fe1c4ffd62adffe2af6d28b5478485636"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/progress/progress-synthetic.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJmcm9tIjoiU3ludGhldGljT2ZmaWNlckIiLCJvd25lciI6IlVubWFwcGVkT3duZXIiLCJib2R5IjoiU3ludGhldGljIGNhcmQgYm9keS4iLCJjcmVhdGVkQXQiOiIyMDI2LTEwLTI4VDEyOjAwOjAwLjAwMFoiLCJ1cGRhdGVkQXQiOiIyMDI2LTEwLTI4VDEyOjAwOjAwLjAwMFoiLCJ1cmdlbmN5IjoyLCJpbXBvcnRhbmNlIjoyLCJsaW5rcyI6W3sibGFiZWwiOiJQcml2YXRlIHJlcG9ydCIsInVybCI6Imh0dHBzOi8vcmVwb3J0cy5zeW50aGV0aWMtZXhhbXBsZS50cy5uZXQvcmVoZWFyc2FsLm1kIn1dLCJraW5kIjoicHJvZ3Jlc3MiLCJpZCI6InByb2dyZXNzLXN5bnRoZXRpYyIsInRpdGxlIjoiU3ludGhldGljIG93bmVyIHByb2dyZXNzIiwidGlja2V0IjoiVEMtMSIsInN0ZXBzIjpbeyJuYW1lIjoiQnVpbGQiLCJzdGF0ZSI6ImxpdmUifSx7Im5hbWUiOiJSZXZpZXciLCJzdGF0ZSI6ImluLXByb2dyZXNzIn1dLCJjdXJyZW50U3RlcCI6MSwiaW1wb3J0YW50Ijp0cnVlLCJzdGF0dXMiOiJvcGVuIiwibm90ZSI6IlJldmlldyBiZWxvbmdzIHRvIHRoZSBhc3NpZ25lZCBvd25lci4iLCJ1cGRhdGVycyI6WyIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiXX0=",
+      "sha256": "13ee774f95186f873098d03d7ce86a6d8cc2af7715cbbef2a723f0291bdf6a73"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/approval/approval-code.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJmcm9tIjoiU3ludGhldGljT2ZmaWNlciIsIm93bmVyIjoiU3ludGhldGljT3duZXIiLCJib2R5IjoiU3ludGhldGljIGNhcmQgYm9keS4iLCJjcmVhdGVkQXQiOiIyMDI2LTEwLTI4VDEyOjAwOjAwLjAwMFoiLCJ1cGRhdGVkQXQiOiIyMDI2LTEwLTI4VDEyOjAwOjAwLjAwMFoiLCJ1cmdlbmN5IjoyLCJpbXBvcnRhbmNlIjoyLCJsaW5rcyI6W3sibGFiZWwiOiJQcml2YXRlIHJlcG9ydCIsInVybCI6Imh0dHBzOi8vcmVwb3J0cy5zeW50aGV0aWMtZXhhbXBsZS50cy5uZXQvcmVoZWFyc2FsLm1kIn1dLCJraW5kIjoiYXBwcm92YWwiLCJpZCI6ImFwcHJvdmFsLWNvZGUiLCJ0aXRsZSI6IkFwcHJvdmUgdGhlIHN5bnRoZXRpYyBkZXBsb3kgd2luZG93IiwiYXBwcm92YWxUeXBlIjoib3BlbmtleSIsImNvZGVFeHBlY3RlZCI6dHJ1ZSwiaXNzdWVkQXQiOiIyMDI2LTEwLTI5VDEwOjAwOjAwLjAwMFoiLCJleHBpcmVzQXQiOiIyMDk5LTAxLTAxVDAwOjAwOjAwLjAwMFoiLCJzdGF0dXMiOiJvcGVuIiwiY29udGV4dCI6eyJiYWNrZ3JvdW5kIjoiQSBzeW50aGV0aWMgcmVoZWFyc2FsIGNoZWNrcyB0aGUgZXhpc3RpbmcgY2FyZCBzZW1hbnRpY3Mgd2l0aG91dCByZWFkaW5nIG9yIGNoYW5naW5nIGFueSBsaXZlIHJlY29yZHMuIiwid2h5Tm93IjoiVGhlIGlzb2xhdGVkIG93bmVyIG5lZWRzIHRvIGNob29zZSB0aGUgbmV4dCByZXZlcnNpYmxlIHN0ZXAuIiwiaWZOb0Fuc3dlciI6Ik5vdGhpbmcgaXMgYXBwcm92ZWQgb3IgZXhlY3V0ZWQgdW50aWwgYSB2YWxpZCBvd25lciByZXNwb25zZSBhcnJpdmVzLiIsImtub3duIjpbXSwicmVsYXRlZCI6W119LCJ1cmwiOiJodHRwczovL29wZW5rZXkuc28vZGVsZWdhdGU/Zml4dHVyZT10YzIyMDkifQ==",
+      "sha256": "da7a176b8c7334c211c50e3fcb37746378e36522b99c55d7904c90053aa045ad"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/approval/approval-expired.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJmcm9tIjoiU3ludGhldGljT2ZmaWNlciIsIm93bmVyIjoiU3ludGhldGljT3duZXIiLCJib2R5IjoiU3ludGhldGljIGNhcmQgYm9keS4iLCJjcmVhdGVkQXQiOiIyMDI2LTEwLTI4VDEyOjAwOjAwLjAwMFoiLCJ1cGRhdGVkQXQiOiIyMDI2LTEwLTI4VDEyOjAwOjAwLjAwMFoiLCJ1cmdlbmN5IjoyLCJpbXBvcnRhbmNlIjoyLCJsaW5rcyI6W3sibGFiZWwiOiJQcml2YXRlIHJlcG9ydCIsInVybCI6Imh0dHBzOi8vcmVwb3J0cy5zeW50aGV0aWMtZXhhbXBsZS50cy5uZXQvcmVoZWFyc2FsLm1kIn1dLCJraW5kIjoiYXBwcm92YWwiLCJpZCI6ImFwcHJvdmFsLWV4cGlyZWQiLCJ0aXRsZSI6IkFwcHJvdmUgdGhlIHN5bnRoZXRpYyBkZXBsb3kgd2luZG93IiwiYXBwcm92YWxUeXBlIjoiZ28iLCJhcHByb3ZhbEtpbmQiOiJkZXBsb3kiLCJjb2RlRXhwZWN0ZWQiOmZhbHNlLCJpc3N1ZWRBdCI6IjIwMjYtMTAtMjlUMTA6MDA6MDAuMDAwWiIsImV4cGlyZXNBdCI6IjIwMjYtMTAtMjlUMTE6MzA6MDAuMDAwWiIsInN0YXR1cyI6Im9wZW4iLCJjb250ZXh0Ijp7ImJhY2tncm91bmQiOiJBIHN5bnRoZXRpYyByZWhlYXJzYWwgY2hlY2tzIHRoZSBleGlzdGluZyBjYXJkIHNlbWFudGljcyB3aXRob3V0IHJlYWRpbmcgb3IgY2hhbmdpbmcgYW55IGxpdmUgcmVjb3Jkcy4iLCJ3aHlOb3ciOiJUaGUgaXNvbGF0ZWQgb3duZXIgbmVlZHMgdG8gY2hvb3NlIHRoZSBuZXh0IHJldmVyc2libGUgc3RlcC4iLCJpZk5vQW5zd2VyIjoiTm90aGluZyBpcyBhcHByb3ZlZCBvciBleGVjdXRlZCB1bnRpbCBhIHZhbGlkIG93bmVyIHJlc3BvbnNlIGFycml2ZXMuIiwia25vd24iOltdLCJyZWxhdGVkIjpbXX19",
+      "sha256": "d2fa08df65fe561d6b306c339f0578c3806e97ae74c23c4906ea0d189c97a97f"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/answers/ask-synthetic/20261029T110000000Z.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJhc2tJZCI6ImFzay1zeW50aGV0aWMiLCJhY3Rpb24iOiJhbnN3ZXIiLCJjaG9pY2UiOiJjYXJlZnVsIiwidGV4dCI6IkEgcHJlcGFyZWQgb3duZXIgYW5zd2VyLiIsImF0IjoiMjAyNi0xMC0yOVQxMTowMDowMC4wMDBaIn0=",
+      "sha256": "0efd15d654f68fcfada355387554095eb683c7fa3038cc8286368f34cc590f14"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/answers/approval-code/20261029T110100000Z.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJhc2tJZCI6ImFwcHJvdmFsLWNvZGUiLCJhY3Rpb24iOiJjb2RlIiwidGV4dCI6IlNZTlRIRVRJQzIyNENPREXOsSIsImlzc3VlZEF0IjoiMjAyNi0xMC0yOVQxMDowMDowMC4wMDBaIiwiYXQiOiIyMDI2LTEwLTI5VDExOjAxOjAwLjAwMFoifQ==",
+      "sha256": "36bf3680ec566819e42e591bd338095bd661daca210cb8fba5c1cf65a2af277c"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/answers/approval-expired/20261029T110200000Z.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJhc2tJZCI6ImFwcHJvdmFsLWV4cGlyZWQiLCJhY3Rpb24iOiJkb25lIiwidGV4dCI6IiIsImlzc3VlZEF0IjoiMjAyNi0xMC0yOVQxMDowMDowMC4wMDBaIiwiYXQiOiIyMDI2LTEwLTI5VDExOjAyOjAwLjAwMFoifQ==",
+      "sha256": "d00c2cd744c636970172da43c7a692f1632bb5f9f05dc9de85a7841464c81a9e"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/state/task/task-synthetic.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJraW5kIjoidGFzayIsImlkIjoidGFzay1zeW50aGV0aWMiLCJzdGVwcyI6eyJ2ZXJpZnkiOiIyMDI2LTEwLTI5VDEyOjAwOjAwLjAwMFoifSwic2VlbkF0IjoiMjAyNi0xMC0yOVQxMjowMDowMC4wMDBaIiwic25vb3plZFVudGlsIjoiMjA5OS0wMS0wMVQwMDowMDowMC4wMDBaIiwidXBkYXRlZEF0IjoiMjAyNi0xMC0yOVQxMjowMDowMC4wMDBaIn0=",
+      "sha256": "0e913bcf6a13b2da3da12584609a0d5956974dcdb77e1ea86050210b3e3bcd76"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/state/progress/progress-synthetic.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJraW5kIjoicHJvZ3Jlc3MiLCJpZCI6InByb2dyZXNzLXN5bnRoZXRpYyIsInN0ZXBzIjp7fSwibm90ZXMiOlt7ImlkIjoicHJpdmF0ZW5vdGUyMjQiLCJhdCI6IjIwMjYtMTAtMjlUMTI6MDA6MDAuMDAwWiIsInRleHQiOiJPV05FUi1PTkxZLURJQVJZLTIyNCJ9XSwidXBkYXRlZEF0IjoiMjAyNi0xMC0yOVQxMjowMDowMC4wMDBaIn0=",
+      "sha256": "22b0bc68204b244f6e7995406616a614256e721482fccc014713383f50b1e814"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/state/hold/hold-synthetic.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJraW5kIjoiaG9sZCIsImlkIjoiaG9sZC1zeW50aGV0aWMiLCJzdGVwcyI6e30sIm5vdGVzIjpbeyJpZCI6ImFsaWFzbm90ZTIyNCIsImF0IjoiMjAyNi0xMC0yOVQxMjowMDowMC4wMDBaIiwidGV4dCI6IkV4cGxpY2l0bHkgc2VuZCB0aGlzIHN5bnRoZXRpYyBvd25lciBub3RlLiJ9XSwidXBkYXRlZEF0IjoiMjAyNi0xMC0yOVQxMjowMDowMC4wMDBaIn0=",
+      "sha256": "fbcd9fce277ed4b4a9f53950de1e3656c3613abdc995038a831ce9c04e800fa7"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/thread/ask/ask-synthetic/20261029T111000000Z-00000000000000000000000000000001.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJraW5kIjoiYXNrIiwiaWQiOiJhc2stc3ludGhldGljIiwiYXQiOiIyMDI2LTEwLTI5VDExOjEwOjAwLjAwMFoiLCJ0ZXh0IjoiU3ludGhldGljIHRocmVhZCByZWNlaXB0IHdhaXRpbmcgMC4ifQ==",
+      "sha256": "5ed5ef7e74905a4f51c71d908c9281c8975347e2f9fc13aff7ea2637d6f99a2e"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/thread/ask/ask-synthetic/20261029T111100000Z-00000000000000000000000000000002.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJraW5kIjoiYXNrIiwiaWQiOiJhc2stc3ludGhldGljIiwiYXQiOiIyMDI2LTEwLTI5VDExOjExOjAwLjAwMFoiLCJ0ZXh0IjoiU3ludGhldGljIHRocmVhZCByZWNlaXB0IGRlbGl2ZXJlZCAxLiJ9",
+      "sha256": "05b490b8938862ddb6276935bca519e36a7961699ba1fa55a9b8cee7d9fce1de"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/thread/ask/ask-synthetic/20261029T111200000Z-00000000000000000000000000000003.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJraW5kIjoiYXNrIiwiaWQiOiJhc2stc3ludGhldGljIiwiYXQiOiIyMDI2LTEwLTI5VDExOjEyOjAwLjAwMFoiLCJ0ZXh0IjoiU3ludGhldGljIHRocmVhZCByZWNlaXB0IGNsYWltZWQgMi4ifQ==",
+      "sha256": "0833ea3d879b03e88978ba48f1ec33a17d0f51d3eaf8c58f28d36f2abd93de8b"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/thread/ask/ask-synthetic/20261029T111300000Z-00000000000000000000000000000004.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJraW5kIjoiYXNrIiwiaWQiOiJhc2stc3ludGhldGljIiwiYXQiOiIyMDI2LTEwLTI5VDExOjEzOjAwLjAwMFoiLCJ0ZXh0IjoiU3ludGhldGljIHRocmVhZCByZWNlaXB0IHdhaXRpbmcgMy4ifQ==",
+      "sha256": "3ff27cd10afc332ac4ef9c34f657765015ba100f33774ac618ed36f41984b8b7"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/thread/ask/ask-synthetic/20261029T111400000Z-00000000000000000000000000000005.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJraW5kIjoiYXNrIiwiaWQiOiJhc2stc3ludGhldGljIiwiYXQiOiIyMDI2LTEwLTI5VDExOjE0OjAwLjAwMFoiLCJ0ZXh0IjoiU3ludGhldGljIHRocmVhZCByZWNlaXB0IHJlZnVzZWQgNC4ifQ==",
+      "sha256": "30e0f3b36bf26664d6f433f8c3a12a678deeb26b86539a8b86719c3d4b0ea2d5"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/thread/progress/progress-synthetic/20261029T112000000Z-00000000000000000000000000000009.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJraW5kIjoicHJvZ3Jlc3MiLCJpZCI6InByb2dyZXNzLXN5bnRoZXRpYyIsImF0IjoiMjAyNi0xMC0yOVQxMToyMDowMC4wMDBaIiwidGV4dCI6Ik93bmVyLW9ubHkgdW5yZXNvbHZlZCBkZXN0aW5hdGlvbiBtZXNzYWdlLiJ9",
+      "sha256": "96cb4f8d343f890fb511e90342ff2559966f65813abfe893820880747f3028e8"
+    },
+    {
+      "sourceKey": "watch.synthetic.json",
+      "sourceArea": "watch-state",
+      "encoding": "base64",
+      "rawBase64": "eyJ2ZXJzaW9uIjoyLCJjdXJzb3IiOiIyMDI2LTEwLTI4VDAwOjAwOjAwLjAwMFoiLCJkZWxpdmVyZWQiOnsieHl6LnRpbnljbG91ZC5yb2NpbmFudGUvc2FtL2Fuc3dlcnMvYXNrLXN5bnRoZXRpYy8yMDI2MTAyOVQxMTAwMDAwMDBaLmpzb24iOnsiZG9uZSI6WyJTeW50aGV0aWNPZmZpY2VyIl0sImNvbXBsZXRlIjpmYWxzZSwib3JpZ2luYWxEaWFnbm9zdGljIjoiT1dORVItT05MWS1SRUNFSVBULTIyNCJ9LCJub3RlOmhvbGQvaG9sZC1zeW50aGV0aWMvYWxpYXNub3RlMjI0Ijp7ImRvbmUiOlsiU3ludGhldGljT2ZmaWNlciJdLCJjb21wbGV0ZSI6ZmFsc2UsIm9yaWdpbmFsRGlhZ25vc3RpYyI6Ik9XTkVSLU9OTFktUkVDRUlQVC0yMjQifX0sImNsYWltRGVsaXZlcmVkIjp7fSwidGFza3MiOnsidGFzay1zeW50aGV0aWMiOnsidmVyaWZ5IjoiMjAyNi0xMC0yOVQxMjowMDowMC4wMDBaIiwidW5kbyI6bnVsbH19LCJ0YXNrQ2xvc2VkIjp7fSwiY2hhdFJlY2VpcHQiOiIyMDI2LTEwLTI4VDAwOjAwOjAwLjAwMFoifQ==",
+      "sha256": "ffaa48607bc108d2a5bf618dbebfe06172b2a6fc3c3ed3d0607e35e564436a77"
+    },
+    {
+      "sourceKey": "watch.threads.synthetic.json",
+      "sourceArea": "thread-watch-state",
+      "encoding": "base64",
+      "rawBase64": "eyJhdHRlbXB0cyI6eyJ4eXoudGlueWNsb3VkLnJvY2luYW50ZS9zYW0vdGhyZWFkL2Fzay9hc2stc3ludGhldGljLzIwMjYxMDI5VDExMTAwMDAwMFotMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDEuanNvbiI6eyJzdGF0ZSI6IndhaXRpbmciLCJyZWNpcGllbnQiOiJTeW50aGV0aWNPZmZpY2VyIiwicm91dGVkVG8iOiJvd25lciIsImF0IjoiMjAyNi0xMC0yOVQxMToxMDowMC4wMDBaIn0sInh5ei50aW55Y2xvdWQucm9jaW5hbnRlL3NhbS90aHJlYWQvYXNrL2Fzay1zeW50aGV0aWMvMjAyNjEwMjlUMTExMTAwMDAwWi0wMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMi5qc29uIjp7InN0YXRlIjoiZGVsaXZlcmVkIiwicmVjaXBpZW50IjoiU3ludGhldGljT2ZmaWNlciIsInJvdXRlZFRvIjoib3duZXIiLCJhdCI6IjIwMjYtMTAtMjlUMTE6MTE6MDAuMDAwWiJ9LCJ4eXoudGlueWNsb3VkLnJvY2luYW50ZS9zYW0vdGhyZWFkL2Fzay9hc2stc3ludGhldGljLzIwMjYxMDI5VDExMTIwMDAwMFotMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDMuanNvbiI6eyJzdGF0ZSI6ImNsYWltZWQiLCJyZWNpcGllbnQiOiJTeW50aGV0aWNPZmZpY2VyIiwicm91dGVkVG8iOiJvd25lciIsImF0IjoiMjAyNi0xMC0yOVQxMToxMjowMC4wMDBaIn0sInh5ei50aW55Y2xvdWQucm9jaW5hbnRlL3NhbS90aHJlYWQvYXNrL2Fzay1zeW50aGV0aWMvMjAyNjEwMjlUMTExMzAwMDAwWi0wMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwNC5qc29uIjp7InN0YXRlIjoid2FpdGluZyIsInJlY2lwaWVudCI6IlN5bnRoZXRpY09mZmljZXIiLCJyb3V0ZWRUbyI6Im93bmVyIiwiYXQiOiIyMDI2LTEwLTI5VDExOjEzOjAwLjAwMFoiLCJyZWFzb24iOiJFeHBsaWNpdGx5IGhlbGQgYnkgY2FwdHVyZWQgcnVudGltZSJ9LCJ4eXoudGlueWNsb3VkLnJvY2luYW50ZS9zYW0vdGhyZWFkL2Fzay9hc2stc3ludGhldGljLzIwMjYxMDI5VDExMTQwMDAwMFotMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDUuanNvbiI6eyJzdGF0ZSI6InJlZnVzZWQiLCJyZWNpcGllbnQiOiJTeW50aGV0aWNPZmZpY2VyIiwicm91dGVkVG8iOiJvd25lciIsImF0IjoiMjAyNi0xMC0yOVQxMToxNDowMC4wMDBaIn19LCJjdXJzb3IiOiJjYXB0dXJlZC10aHJlYWQtY3Vyc29yIn0=",
+      "sha256": "9b92dd480497afc6544c3bb0fda93d0a66dc1233f13f12eb8006ce6c82641e3c"
+    },
+    {
+      "sourceKey": "watch.expiry.synthetic.json",
+      "sourceArea": "expiry-state",
+      "encoding": "base64",
+      "rawBase64": "eyJ2ZXJzaW9uIjoxLCJzaW5jZSI6IjIwMjYtMTAtMjhUMTI6MDA6MDAuMDAwWiIsImZpcnN0UnVuIjp7IlN5bnRoZXRpY09mZmljZXIiOlsiYXNrL2Fzay1zeW50aGV0aWMiXX0sIm93ZWQiOnsiYXNrL2Fzay1zeW50aGV0aWNAb3JpZ2luYWwiOiJTeW50aGV0aWNPZmZpY2VyIn19",
+      "sha256": "5e526be6f0de767359d59091ea333f8540628a6bdbbcb531d473d69079374316"
+    },
+    {
+      "sourceKey": "watch.hold-actions.synthetic.json",
+      "sourceArea": "watch-state",
+      "encoding": "base64",
+      "rawBase64": "eyJ2ZXJzaW9uIjoxLCJhY3RlZCI6e30sIm93ZWQiOnt9fQ==",
+      "sha256": "33a0849a9403e89ce2da631e82a44b0e7d3a8d99a437e6178cc1bf3ec4b9fce5"
+    },
+    {
+      "sourceKey": "watch.unknown.synthetic.json",
+      "sourceArea": "watch-state",
+      "encoding": "base64",
+      "rawBase64": "eyJvd25lck9ubHkiOiJPV05FUi1PTkxZLURJQVJZLTIyNCJ9",
+      "sha256": "3bc1817dc238cc9cbb439f8952dac932544c4e2f811c8eeaf71960d7baa2e508"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/future/unknown.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJmdXR1cmUiOnRydWUsInVudG91Y2hlZCI6Is6xXG7OsiJ9",
+      "sha256": "54c635995537c3ac73d7ad0164c81b57e1a768e11aa5ed05d7c6aa696c1c59b0"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/future/invalid.bin",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "/8CAAH8=",
+      "sha256": "193901e0608c8335da051be971163719164f2f809ca0e3bbdb12e67c48a56650"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/work/work-partial.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJmcm9tIjoiU3ludGhldGljT2ZmaWNlciIsIm93bmVyIjoiU3ludGhldGljT3duZXIgLyBNaXNzaW5nT2ZmaWNlciIsImJvZHkiOiJTeW50aGV0aWMgY2FyZCBib2R5LiIsImNyZWF0ZWRBdCI6IjIwMjYtMTAtMjhUMTI6MDA6MDAuMDAwWiIsInVwZGF0ZWRBdCI6IjIwMjYtMTAtMjhUMTI6MDA6MDAuMDAwWiIsInVyZ2VuY3kiOjIsImltcG9ydGFuY2UiOjIsImxpbmtzIjpbeyJsYWJlbCI6IlByaXZhdGUgcmVwb3J0IiwidXJsIjoiaHR0cHM6Ly9yZXBvcnRzLnN5bnRoZXRpYy1leGFtcGxlLnRzLm5ldC9yZWhlYXJzYWwubWQifV0sImtpbmQiOiJ3b3JrIiwiaWQiOiJ3b3JrLXBhcnRpYWwiLCJ0aXRsZSI6IlN5bnRoZXRpYyB3b3JrIiwic3RhdHVzIjoid2FpdGluZy1zYW0iLCJ3YWl0c09uIjoiVGhlIGlzb2xhdGVkIG93bmVyIGRlY2lzaW9uIiwibmV4dCI6IlJlc3VtZSBvbmx5IGFmdGVyIGEgdmFsaWQgZGVjaXNpb24iLCJhc2tJZHMiOlsiYXNrLXN5bnRoZXRpYyJdLCJzdGFuZGluZyI6ZmFsc2V9",
+      "sha256": "6eeb691941a798fb188720006f3bfd5623bdff5847a4d6224d99ea1f5f9c5ffa"
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/sam/state/work/work-partial.json",
+      "sourceArea": "kv",
+      "encoding": "base64",
+      "rawBase64": "eyJraW5kIjoid29yayIsImlkIjoid29yay1wYXJ0aWFsIiwic3RlcHMiOnt9LCJub3RlcyI6W3siaWQiOiJwYXJ0aWFsbm90ZTIyNCIsImF0IjoiMjAyNi0xMC0yOVQxMjowMDowMC4wMDBaIiwidGV4dCI6IkV4cGxpY2l0IHBhcnRpYWwtcmVjaXBpZW50IHN5bnRoZXRpYyBub3RlLiJ9XSwidXBkYXRlZEF0IjoiMjAyNi0xMC0yOVQxMjowMDowMC4wMDBaIn0=",
+      "sha256": "34b61ac254a51b38f958ea815e0b12ba91c0f9cef2b00cad9d4e57afe2c661c4"
+    }
+  ],
+  "publishers": [
+    {
+      "publisherId": "legacy-alpha",
+      "agentId": "alpha",
+      "agentDid": "did:key:synthetic-alpha",
+      "outputResource": "xyz.tinycloud.tinychat/feed/feed_output_alpha",
+      "responseResource": "xyz.tinycloud.tinychat/feed/feed_responses_alpha"
+    },
+    {
+      "publisherId": "legacy-beta",
+      "agentId": "beta",
+      "agentDid": "did:key:synthetic-beta",
+      "outputResource": "xyz.tinycloud.tinychat/feed/feed_output_beta",
+      "responseResource": "xyz.tinycloud.tinychat/feed/feed_responses_beta"
+    }
+  ],
+  "recipients": [
+    {
+      "recipientKey": "logical-alpha",
+      "legacyName": "SyntheticOfficer",
+      "runtimeTarget": {
+        "agentId": "runtime-alpha",
+        "provider": "omp"
+      }
+    },
+    {
+      "recipientKey": "logical-alpha-alias",
+      "legacyName": "SyntheticAlias",
+      "runtimeTarget": {
+        "agentId": "runtime-alpha",
+        "provider": "omp"
+      }
+    },
+    {
+      "recipientKey": "logical-owner",
+      "legacyName": "SyntheticOwner",
+      "runtimeTarget": {
+        "agentId": "runtime-alpha",
+        "provider": "omp"
+      }
+    },
+    {
+      "recipientKey": "logical-beta",
+      "legacyName": "SyntheticOfficerB",
+      "runtimeTarget": {
+        "agentId": "runtime-beta",
+        "provider": "omp"
+      }
+    },
+    {
+      "recipientKey": "logical-beta-owner",
+      "legacyName": "SyntheticOwnerB",
+      "runtimeTarget": {
+        "agentId": "runtime-beta",
+        "provider": "omp"
+      }
+    },
+    {
+      "recipientKey": "logical-monica",
+      "legacyName": "Monica",
+      "runtimeTarget": {
+        "agentId": "runtime-beta",
+        "provider": "omp"
+      }
+    },
+    {
+      "recipientKey": "logical-unmapped",
+      "legacyName": "UnmappedOwner"
+    },
+    {
+      "recipientKey": "logical-xo",
+      "legacyName": "xo"
+    }
+  ],
+  "publisherBindings": [
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/ask/ask-synthetic.json",
+      "publisherId": "legacy-alpha",
+      "identity": {
+        "cardId": "card-ask-ask-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-ask-ask-synthetic"
+      }
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/task/task-synthetic.json",
+      "publisherId": "legacy-alpha",
+      "identity": {
+        "cardId": "card-task-task-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-task-task-synthetic"
+      }
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/approval/approval-synthetic.json",
+      "publisherId": "legacy-alpha",
+      "identity": {
+        "cardId": "card-approval-approval-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-approval-approval-synthetic"
+      }
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/incident/incident-synthetic.json",
+      "publisherId": "legacy-alpha",
+      "identity": {
+        "cardId": "card-incident-incident-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-incident-incident-synthetic"
+      }
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/work/work-synthetic.json",
+      "publisherId": "legacy-alpha",
+      "identity": {
+        "cardId": "card-work-work-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-work-work-synthetic"
+      }
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/ship/ship-synthetic.json",
+      "publisherId": "legacy-beta",
+      "identity": {
+        "cardId": "card-ship-ship-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-ship-ship-synthetic"
+      }
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/order/order-synthetic.json",
+      "publisherId": "legacy-beta",
+      "identity": {
+        "cardId": "card-order-order-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-order-order-synthetic"
+      }
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/claim/T-001.json",
+      "publisherId": "legacy-beta",
+      "identity": {
+        "cardId": "card-claim-T-001",
+        "revision": 1,
+        "issuanceId": "issuance-claim-T-001"
+      }
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/hold/hold-synthetic.json",
+      "publisherId": "legacy-beta",
+      "identity": {
+        "cardId": "card-hold-hold-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-hold-hold-synthetic"
+      }
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/progress/progress-synthetic.json",
+      "publisherId": "legacy-beta",
+      "identity": {
+        "cardId": "card-progress-progress-synthetic",
+        "revision": 1,
+        "issuanceId": "issuance-progress-progress-synthetic"
+      }
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/approval/approval-code.json",
+      "publisherId": "legacy-alpha",
+      "identity": {
+        "cardId": "card-approval-approval-code",
+        "revision": 1,
+        "issuanceId": "issuance-approval-approval-code"
+      }
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/approval/approval-expired.json",
+      "publisherId": "legacy-alpha",
+      "identity": {
+        "cardId": "card-approval-approval-expired",
+        "revision": 1,
+        "issuanceId": "issuance-approval-approval-expired"
+      }
+    },
+    {
+      "sourceKey": "xyz.tinycloud.rocinante/board/work/work-partial.json",
+      "publisherId": "legacy-alpha",
+      "identity": {
+        "cardId": "card-work-partial",
+        "revision": 1,
+        "issuanceId": "issuance-work-partial"
+      }
+    }
+  ]
+}
