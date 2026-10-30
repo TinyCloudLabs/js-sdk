@@ -175,14 +175,20 @@ export interface StoreHeldCredentialInput extends HeldIssuerPolicy {
   readonly now?: Date;
 }
 
+export interface StoreHeldCredentialResult {
+  readonly record: HeldCredentialRecord;
+  readonly receipt: HeldStorageReceipt;
+  readonly verified: VerifiedHeldEmailCredential;
+}
+
 /**
  * Store-on-issue. Verifies the SD-JWT itself, writes one record under the owner's prefix, and reads
  * it back. Refuses before any write unless the credential verifies, belongs to the owner, and stays
- * outside the reuse margin.
+ * outside the reuse margin. `verified` is the verifier's output for the stored credential.
  */
 export async function storeHeldCredential(
   input: StoreHeldCredentialInput,
-): Promise<{ readonly record: HeldCredentialRecord; readonly receipt: HeldStorageReceipt }> {
+): Promise<StoreHeldCredentialResult> {
   const now = input.now ?? new Date();
   const owner = heldAccountOwner(input.ownerDid);
   let verified: VerifiedHeldEmailCredential;
@@ -214,7 +220,7 @@ export async function storeHeldCredential(
     storedAt: now.toISOString(),
   };
   const durable = await writeAndReadBack(input.kv, heldRecordKey(owner, recordId), attempt);
-  return { record: durable, receipt: await createHeldStorageReceipt(durable) };
+  return { record: durable, receipt: await createHeldStorageReceipt(durable), verified };
 }
 
 /**

@@ -340,7 +340,7 @@ describe("held acquisition success branch through the injected seam", () => {
     expect(seen.map((input) => input.profile)).toEqual([PROFILE]);
     expect(receipt.credential).toBe(credential);
     expect(receipt.holderDid).toBe(OWNER_A);
-    expect(receipt.expiresAt).toEqual(new Date("2027-10-20T00:00:00.000Z"));
+    expect(receipt.expiresAt).toEqual(new Date((NOW_S - 1000 + 365 * DAY) * 1000));
     expect(fake.calls.batchPut).toBe(1);
 
     const cached = await acquireHeldCredentialWith(
@@ -350,6 +350,19 @@ describe("held acquisition success branch through the injected seam", () => {
       },
     );
     expect(cached.credential).toBe(credential);
+  });
+
+  test("the receipt's expiresAt is the signed exp, whatever the witness response says", async () => {
+    const fake = fakeKv();
+    const holder = createAccountHolderSigner(OWNER_A, sign);
+    const credential = makeSdJwt(OWNER_A);
+    const lying = { envelope: { credential }, expiresAt: "2099-01-01T00:00:00.000Z" } as unknown as EmailProofResult;
+    const receipt = await acquireHeldCredentialWith(
+      { ...POLICY, kv: fake.kv, address: EMAIL, holder, getCode: async () => "12345678", now: () => NOW },
+      stepReturning({ status: "issued", result: lying, warnings: [] }),
+    );
+    expect(receipt.expiresAt).toEqual(new Date((NOW_S - 1000 + 365 * DAY) * 1000));
+    expect(receipt.expiresAt.getTime()).not.toBe(new Date("2099-01-01T00:00:00.000Z").getTime());
   });
 
   test("a store failure after a verified issue surfaces VERIFIED_NOT_SAVED", async () => {

@@ -17,6 +17,7 @@ import {
   storeHeldCredential,
   type HeldIssuerPolicy,
   type HeldMatch,
+  type StoreHeldCredentialResult,
 } from "./held-store";
 
 /** Held profile id. Its pin is disabled, so every acquisition is refused before network until the wire path ships. */
@@ -39,9 +40,11 @@ export class HeldSourceError extends Error {
 const LISTING_LIMIT_MESSAGE = "Saved held credentials list is too long to read; clear old ones";
 
 /**
- * Owner-scoped find. On the listing-limit refusal it prunes the owner's expired records once and retries
- * the find once. A refusal that survives either step is a HeldSourceError. Any other error passes through
- * unchanged. Never re-acquires: that would spend the mailbox limit and add records to a full store.
+ * Owner-scoped find. On the listing-limit refusal it prunes the owner's records once and retries the find
+ * once. Prune deletes expired records AND, for each email, every verified record but the newest, so a valid
+ * older record for the same email is removed too. A refusal that survives either step is a HeldSourceError.
+ * Any other error passes through unchanged. Never re-acquires: that would spend the mailbox limit and add
+ * records to a full store.
  */
 async function findWithListingRecovery(
   kv: IKVService,
@@ -131,12 +134,14 @@ export async function acquireHeldCredentialWith(input: HeldAcquireInput, acquire
     throw new CredentialError("PROOF_REJECTED", "Held acquisition did not issue a credential");
   }
   const credential = acquisition.result.envelope.credential;
+  let stored: StoreHeldCredentialResult;
   try {
-    await storeHeldCredential({ ...policy, kv, ownerDid: holderDid, sdJwt: credential, now: now() });
+    stored = await storeHeldCredential({ ...policy, kv, ownerDid: holderDid, sdJwt: credential, now: now() });
   } catch {
     throw new CredentialError("VERIFIED_NOT_SAVED", "Verified held credential could not be stored");
   }
-  return { credential, holderDid, expiresAt: new Date(acquisition.result.expiresAt) };
+  // The signed `exp` of the verified credential, never the witness response's own `expiresAt`.
+  return { credential, holderDid, expiresAt: stored.verified.expiresAt };
 }
 
 /**
