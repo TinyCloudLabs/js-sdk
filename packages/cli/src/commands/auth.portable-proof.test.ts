@@ -595,3 +595,51 @@ describe("signed portable OpenKey grants", () => {
     }
   });
 });
+
+// TC-2276 (PR B): `auth request --grant --paste` builds a plain link, so it opts in to a user-chosen expiry and holds the
+// signed one to the policy bound; the same command without --paste keeps the --expiry ceiling.
+describe("grant paste-link expiry opt-in", () => {
+  const YEAR_S = 365 * 86_400;
+  const request = (...flags: string[]) => {
+    const program = new Command();
+    program.option("-p, --profile <name>");
+    registerAuthCommand(program);
+    return program.parseAsync(["node", "tc", "--profile", profileName, "auth", "request", "--grant",
+      "--cap", "tinycloud.kv:secrets:vault/secrets/KEY:get", "--expiry", "7d", ...flags], { from: "node" });
+  };
+  const signedFor = async (lifetimeSeconds: number) => ({ ...await signedProof({ raw: false, lifetimeSeconds }), permissions: [] });
+  const siweExpiry = (siwe: unknown) => Date.parse(/Expiration Time: (.+)/.exec(String(siwe))![1]!);
+
+  test("--paste sends the opt-in, accepts a one-year pick and stores the signed expiry", async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    callback = await signedFor(YEAR_S);
+    acquire = async (_did, options) => { seen.push(options as Record<string, unknown>); return callback; };
+    await request("--paste");
+    expect(recordedErrors).toEqual([]);
+    expect(seen[0]).toMatchObject({ paste: true, expiry: "604800s", expiryChangeable: true });
+    const stored = await loadAdditionalDelegations(profileName);
+    expect(stored).toHaveLength(1);
+    expect(new Date(stored[0]!.delegation.expiry).getTime()).toBe(siweExpiry(callback.siwe));
+  });
+
+  test("--paste refuses a signed expiry more than 10 years away and stores nothing", async () => {
+    callback = await signedFor(11 * YEAR_S);
+    acquire = async () => callback;
+    await request("--paste");
+    expect(recordedErrors).toEqual([expect.objectContaining({
+      code: "OPENKEY_EXPIRY_EXCEEDED", message: expect.stringContaining("more than 10 years"),
+    })]);
+    expect(activated).toEqual([]);
+    expect(await loadAdditionalDelegations(profileName)).toEqual([]);
+  });
+
+  test("without --paste no opt-in is sent and a one-year pick is refused by the --expiry ceiling", async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    callback = await signedFor(YEAR_S);
+    acquire = async (_did, options) => { seen.push(options as Record<string, unknown>); return callback; };
+    await request();
+    expect(seen[0]!.expiryChangeable).toBeUndefined();
+    expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_EXPIRY_EXCEEDED" })]);
+    expect(await loadAdditionalDelegations(profileName)).toEqual([]);
+  });
+});

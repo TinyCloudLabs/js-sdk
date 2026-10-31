@@ -44,6 +44,12 @@ export interface AuthFlowOptions {
    * Undefined preserves the caller's existing default.
    */
   expiry?: string | number;
+  /**
+   * Opt in to a user-chosen lifetime on a PLAIN link (the explicit paste flow). Only `buildAuthUrl` reads it, so the
+   * signed approval request, which carries its lifetime in an immutable signed body, never sends it. Callers that set
+   * it must verify the signed result with the matching `expiryChangeable` expectation.
+   */
+  expiryChangeable?: boolean;
 }
 
 const PRIVATE_JWK_FIELDS = new Set([
@@ -115,6 +121,12 @@ export function buildAuthUrl(did: string, options: AuthFlowOptions & { callback?
   }
   if (options.expiry !== undefined) {
     params.set("expiry", String(options.expiry));
+  }
+  // OpenKey reads exactly the string "true". Without it the plain link is shorter-only: the user can pick no longer
+  // than the `expiry` above (or the 7-day default when there is none). With it the picker is uncapped, and the CLI
+  // holds the signed result to its own bound (see `expiryChangeable` in SignedSessionExpectations).
+  if (options.expiryChangeable === true) {
+    params.set("expiryChangeable", "true");
   }
   // Announce the negotiated authorization protocol so OpenKey can pick the
   // right widget copy. Older OpenKey builds ignore unknown params.
