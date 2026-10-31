@@ -108,6 +108,12 @@ function assertMaxExpiresAt(value: OpenKeyMaxExpiresAt | undefined): void {
     throw new Error("maxExpiresAt must be a finite number of epoch milliseconds, a valid Date, or a function returning one");
   }
 }
+
+/** The capture of the LAST match of a global, multiline, line-anchored pattern, or `undefined`. */
+function lastAnchoredLine(siwe: string, pattern: RegExp): string | undefined {
+  return [...siwe.matchAll(pattern)].at(-1)?.[1];
+}
+
 export type OpenKeyAuthorizationResultV1 = Awaited<ReturnType<NodeUserAuthorizationAuthorizeFn>>;
 
 type PreparedOpenKeySession = {
@@ -2047,11 +2053,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
     // The signed expiry and creation time are the message's own lines. Anchored, and the LAST match: a ReCap statement
     // is not compared, and a statement that itself begins with `Expiration Time: ` or `Issued At: ` matches the anchored
     // regex too, but the real lines follow the statement.
-    const lastLine = (pattern: RegExp): string | undefined => [...(prepared.siwe ?? "").matchAll(pattern)].at(-1)?.[1];
     const expiresAt =
-      lastLine(/^Expiration Time: (.+)$/gm) ??
+      lastAnchoredLine(prepared.siwe ?? "", /^Expiration Time: (.+)$/gm) ??
       new Date(Date.now() + this.sessionExpirationMs).toISOString();
-    const createdAt = lastLine(/^Issued At: (.+)$/gm) ?? new Date().toISOString();
+    const createdAt = lastAnchoredLine(prepared.siwe ?? "", /^Issued At: (.+)$/gm) ?? new Date().toISOString();
 
     const replicaStamp = await this.establishReplicaStamp?.(tinyCloudSession);
     const persistedData = this.persistedData(tinyCloudSession, expiresAt, createdAt, replicaStamp);
@@ -2444,6 +2449,20 @@ export class NodeUserAuthorization implements IUserAuthorization {
       throw new Error(
         `OpenKey signedMessage.address (${parsedSignedSiwe.address}) does not match local signer address (${expectedAddress})`,
       );
+    }
+
+    // The expiry this code goes on to read (persisted `expiresAt`, the immutable-field comparison, the changed-expiry
+    // check) comes from the message's `Expiration Time` LINES. The parsed message must have an expiry of its own, and it
+    // must be the same instant as that line, so text inside the (ReCap-bearing, uncompared) statement can never stand in
+    // for a dropped real line.
+    const parsedExpiry = parsedSignedSiwe.expirationTime;
+    const lineExpiry = lastAnchoredLine(result.signedMessage, /^Expiration Time: (.+)$/gm);
+    if (parsedExpiry === undefined || parsedExpiry === null || lineExpiry === undefined) {
+      throw new Error("OpenKey signedMessage has no Expiration Time line of its own");
+    }
+    const parsedExpiryMs = Date.parse(parsedExpiry);
+    if (!Number.isFinite(parsedExpiryMs) || parsedExpiryMs !== Date.parse(lineExpiry)) {
+      throw new Error("OpenKey signedMessage Expiration Time line does not match the message's own expiry");
     }
 
     // (3) Immutable-fields comparison. Any drift on domain/address/URI/version/

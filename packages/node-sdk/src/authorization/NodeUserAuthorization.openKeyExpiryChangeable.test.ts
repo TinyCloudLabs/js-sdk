@@ -404,3 +404,39 @@ describe("a statement that begins with an expiry or issued-at line cannot stand 
     expect(persisted?.createdAt).toBe(real);
   });
 });
+
+// A signed message may not DROP its real `Expiration Time` line and let a line inside the (ReCap-bearing, so not
+// compared) statement stand in for it: the extractors would read the statement text, the SIWE parser sees no expiry.
+describe("a signed message must carry its own Expiration Time line", () => {
+  const REFUSAL = /OpenKey signedMessage has no Expiration Time line of its own/;
+  const withoutRealLine = (siwe: string, statementLine: (prepared: string, original: string) => string) => {
+    const prepared = /^Expiration Time: (.+)$/m.exec(siwe)![1]!;
+    const lines = siwe.split("\n").filter((line) => !/^Expiration Time: /.test(line));
+    lines[3] = statementLine(prepared, lines[3]!);
+    return lines.join("\n");
+  };
+
+  for (const [label, build] of [
+    ["the statement is prefixed with the prepared timestamp line", (ts: string, original: string) => `Expiration Time: ${ts} ${original}`],
+    ["the statement is exactly the prepared timestamp line", (ts: string) => `Expiration Time: ${ts}`],
+  ] as const) {
+    for (const [path, options] of [["default path", undefined], ["opt-in path", { expiryChangeable: true }]] as const) {
+      test(`${label}: refused on the ${path}, and no session is created`, async () => {
+        const s = await setup();
+        const forged = withoutRealLine(s.prepared.siwe, build);
+        expect(/^Expiration Time: /m.test(forged)).toBe(true);
+        await expect(complete(s, forged, options)).rejects.toThrow(REFUSAL);
+        expect(s.auth.tinyCloudSession).toBeUndefined();
+        expect(await s.storage.load(await s.signer.getAddress())).toBeNull();
+      });
+    }
+  }
+
+  test("a normal message is accepted on both paths", async () => {
+    const s = await setup();
+    expect((await complete(s, s.prepared.siwe)).siwe).toBe(s.prepared.siwe);
+    const t = await setup();
+    const changed = withExpiration(t.prepared.siwe, iso(2 * DAY_MS));
+    expect((await complete(t, changed, { expiryChangeable: true })).siwe).toBe(changed);
+  });
+});
