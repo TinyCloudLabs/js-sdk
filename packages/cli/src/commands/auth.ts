@@ -76,6 +76,7 @@ import {
   type RequestedExpiry,
   openKeyExpiryParam,
   expiryLimit,
+  defaultExpiryLimit,
   sdkMaxExpiryRefusal,
   withVerifiedAuthority,
   ownerSpaceId,
@@ -2874,22 +2875,23 @@ async function refreshPreparedOpenKeySession(params: {
   } catch (error) {
     await handoff?.complete(false);
     await undoPreparedAttempt(profileName, node, owner, gateWasActive).catch(() => undefined);
-    throw sdkMaxExpiryRefusal(error) ?? (namedKeys !== undefined && isNarrowedRecapMismatch(error) &&
+    throw sdkMaxExpiryRefusal(error, expiry === undefined) ?? (namedKeys !== undefined && isNarrowedRecapMismatch(error) &&
       namedKeysGrantIn(handedBackSiwe, namedKeys) === "partial" ? partialKeysGrantError() : error);
   }
 }
 
 /**
  * The prepared OpenKey handoff lets the user pick a shorter lifetime than the one this CLI asked for. Telling the SDK
- * so makes it accept and sign with the picked expiry. The CLI ceiling (`--expiry` + the clock-skew allowance, read when
- * the approval arrives) is handed to the SDK too, so an above-ceiling pick is refused before any session is activated;
- * `verifyScopedLogin` still checks it afterwards. Without `--expiry` there is no CLI ceiling, and the SDK's own bounds
- * apply (more than 60 seconds, at most 10 years). The SDK checks every other field of the signed message as before.
+ * so makes it accept and sign with the picked expiry. The CLI ceiling is handed to the SDK too, read when the approval
+ * arrives, so an above-ceiling pick is refused before any session is activated; `verifyScopedLogin` still checks an
+ * explicit `--expiry` afterwards. The ceiling is `--expiry` + the clock-skew allowance, or, without `--expiry`, the SDK's
+ * default 30 day session request + the same allowance, so the default request is held as tightly as an explicit one.
+ * The SDK checks every other field of the signed message as before.
  */
 function preparedSignInOptions(expiry: RequestedExpiry | undefined) {
   return {
     expiryChangeable: true,
-    ...(expiry === undefined ? {} : { maxExpiresAt: () => expiryLimit(expiry) }),
+    maxExpiresAt: expiry === undefined ? defaultExpiryLimit : () => expiryLimit(expiry),
   } as const;
 }
 
@@ -3000,7 +3002,7 @@ async function refreshPreparedKeysSession(params: {
   } catch (error) {
     await handoff?.complete(false);
     await node.replication?.close();
-    throw sdkMaxExpiryRefusal(error) ?? (isNarrowedRecapMismatch(error) &&
+    throw sdkMaxExpiryRefusal(error, expiry === undefined) ?? (isNarrowedRecapMismatch(error) &&
       namedKeysGrantIn(handedBackSiwe, namedKeys) === "partial" ? partialKeysGrantError() : error);
   }
 }

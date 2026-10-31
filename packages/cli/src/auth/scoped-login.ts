@@ -1,3 +1,4 @@
+import { EXPIRY } from "@tinycloud/sdk-core";
 import { NodeWasmBindings, signedCompactUcanExpiry, type PermissionEntry } from "@tinycloud/node-sdk";
 import { isLocalOwnerProfile, ownerSessionLacksProof } from "@tinycloud/operations/profile";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
@@ -54,16 +55,28 @@ export function expiryLimit(expiry: RequestedExpiry): number {
 }
 
 /**
- * The SDK refuses a signed expiry above the `maxExpiresAt` the CLI hands it, with a plain `Error`. Report it as the
- * same `OPENKEY_EXPIRY_EXCEEDED` the ceiling check in `verifySignedSession` raises, naming the latest allowed time.
- * Any other error is not ours: returns `undefined`.
+ * Latest signed expiry when no `--expiry` was given: the SDK's default session request (`EXPIRY.SESSION_MS`, 30 days)
+ * from now, plus the same clock-skew allowance, evaluated when the approval arrives.
  */
-export function sdkMaxExpiryRefusal(error: unknown): CLIError | undefined {
+export function defaultExpiryLimit(): number {
+  return Date.now() + EXPIRY.SESSION_MS + CLOCK_SKEW_MS;
+}
+
+/**
+ * The SDK refuses a signed expiry above the `maxExpiresAt` the CLI hands it, with a plain `Error`. Report it as the
+ * same `OPENKEY_EXPIRY_EXCEEDED` the ceiling check in `verifySignedSession` raises, naming the lifetime that was
+ * requested and the latest allowed time. `defaultRequest` is true when no `--expiry` was given. Any other error is not
+ * ours: returns `undefined`.
+ */
+export function sdkMaxExpiryRefusal(error: unknown, defaultRequest = false): CLIError | undefined {
   const message = error instanceof Error ? error.message : "";
   const match = /^OpenKey signedMessage expiry is later than the maximum for this request \(the latest allowed is ([^)]+)\)$/.exec(message);
   if (match === null) return undefined;
+  const requested = defaultRequest
+    ? `the default ${EXPIRY.SESSION_MS / 86_400_000} day lifetime this login requested`
+    : "the requested --expiry";
   return Object.assign(
-    new CLIError("OPENKEY_EXPIRY_EXCEEDED", `The signed session outlives the requested --expiry (the latest allowed is ${match[1]}). No session was saved.`, ExitCode.PERMISSION_DENIED),
+    new CLIError("OPENKEY_EXPIRY_EXCEEDED", `The signed session outlives ${requested} (the latest allowed is ${match[1]}). No session was saved.`, ExitCode.PERMISSION_DENIED),
     { cause: error },
   );
 }

@@ -170,3 +170,66 @@ describe("the --expiry ceiling is enforced before activation", () => {
     expect(await ProfileManager.getSession("owner")).not.toBeNull();
   });
 });
+
+// Without --expiry the SDK requests its default 30 day session. That request, plus the same 30 s margin, is the ceiling,
+// so the no-`--expiry` case is held as tightly as an explicit one (on master the SDK refused any changed expiry).
+describe("without --expiry the default 30 day request is the ceiling", () => {
+  const DAY = 24 * HOUR;
+  const loginDefault = () => refreshOpenKeySession("owner", host, {
+    expectedOwner: ownerDid, replication: { prefixes: ["notes/"] }, replaceSession: true, noPopup: true,
+  });
+
+  test("hands the SDK a maximum, read when the approval arrives", async () => {
+    pickedLifetimeMs = 29 * DAY;
+    await loginDefault();
+    expect(created[0]!.signInOptions).toEqual([{ expiryChangeable: true, maxExpiresAt: expect.any(Function) }]);
+  });
+
+  test("replica login: a 31 day pick is refused before activation, naming the default lifetime and the latest allowed time", async () => {
+    pickedLifetimeMs = 31 * DAY;
+    await expect(loginDefault()).rejects.toMatchObject({
+      code: "OPENKEY_EXPIRY_EXCEEDED",
+      message: expect.stringMatching(/default 30 day lifetime.*the latest allowed is \d{4}-/),
+    });
+    expect(hits.delegate).toBe(0);
+    expect(await ProfileManager.getSession("owner")).toBeNull();
+  });
+
+  test("--keys login: a 31 day pick is refused before activation", async () => {
+    pickedLifetimeMs = 31 * DAY;
+    await expect(refreshOpenKeySession("owner", host, {
+      expectedOwner: ownerDid, keys: "notes", replaceSession: true, noPopup: true,
+    })).rejects.toMatchObject({ code: "OPENKEY_EXPIRY_EXCEEDED" });
+    expect(hits.delegate).toBe(0);
+  });
+
+  test("a 29 day pick is accepted (activation runs)", async () => {
+    pickedLifetimeMs = 29 * DAY;
+    await loginDefault();
+    expect(hits.delegate).toBeGreaterThan(0);
+    expect(await ProfileManager.getSession("owner")).not.toBeNull();
+  });
+
+  test("the ceiling includes the 30 second margin: 20 s over 30 days is accepted, 40 s over is refused", async () => {
+    pickedLifetimeMs = 30 * DAY + 20_000;
+    await loginDefault();
+    expect(await ProfileManager.getSession("owner")).not.toBeNull();
+    await ProfileManager.clearSession("owner");
+    hits.delegate = 0;
+    pickedLifetimeMs = 30 * DAY + 40_000;
+    await expect(loginDefault()).rejects.toMatchObject({ code: "OPENKEY_EXPIRY_EXCEEDED" });
+    expect(hits.delegate).toBe(0);
+  });
+
+  test("a slow approval is not refused for its delay: the full 30 days picked four minutes after the request", async () => {
+    pickedLifetimeMs = 30 * DAY;
+    handoffDelayMs = 4 * 60_000;
+    try {
+      await loginDefault();
+    } finally {
+      handoffDelayMs = 0;
+      setSystemTime();
+    }
+    expect(await ProfileManager.getSession("owner")).not.toBeNull();
+  });
+});
