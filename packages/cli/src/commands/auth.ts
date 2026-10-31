@@ -75,6 +75,8 @@ import {
   verifySignedSession,
   type RequestedExpiry,
   openKeyExpiryParam,
+  expiryLimit,
+  sdkMaxExpiryRefusal,
   withVerifiedAuthority,
   ownerSpaceId,
   sessionStateIsUsable,
@@ -2820,7 +2822,7 @@ async function refreshPreparedOpenKeySession(params: {
         handedBackSiwe = result.signedMessage;
         return result;
       });
-    }, OPENKEY_PREPARED_SIGN_IN);
+    }, preparedSignInOptions(expiry));
     const active = node.restorableSession;
     if (!active || !preparedDid || node.sessionDid !== preparedDid || active.verificationMethod !== preparedDid) {
       throw new CLIError("OPENKEY_SESSION_MISMATCH", "OpenKey signed a different SDK session key; no profile or session was saved.", ExitCode.PERMISSION_DENIED);
@@ -2872,17 +2874,24 @@ async function refreshPreparedOpenKeySession(params: {
   } catch (error) {
     await handoff?.complete(false);
     await undoPreparedAttempt(profileName, node, owner, gateWasActive).catch(() => undefined);
-    throw namedKeys !== undefined && isNarrowedRecapMismatch(error) &&
-      namedKeysGrantIn(handedBackSiwe, namedKeys) === "partial" ? partialKeysGrantError() : error;
+    throw sdkMaxExpiryRefusal(error) ?? (namedKeys !== undefined && isNarrowedRecapMismatch(error) &&
+      namedKeysGrantIn(handedBackSiwe, namedKeys) === "partial" ? partialKeysGrantError() : error);
   }
 }
 
 /**
  * The prepared OpenKey handoff lets the user pick a shorter lifetime than the one this CLI asked for. Telling the SDK
- * so makes it accept and sign with the picked expiry; `verifyScopedLogin` still refuses one beyond the requested
- * `--expiry`. The SDK checks every other field of the signed message as before.
+ * so makes it accept and sign with the picked expiry. The CLI ceiling (`--expiry` + the clock-skew allowance, read when
+ * the approval arrives) is handed to the SDK too, so an above-ceiling pick is refused before any session is activated;
+ * `verifyScopedLogin` still checks it afterwards. Without `--expiry` there is no CLI ceiling, and the SDK's own bounds
+ * apply (more than 60 seconds, at most 10 years). The SDK checks every other field of the signed message as before.
  */
-const OPENKEY_PREPARED_SIGN_IN = { expiryChangeable: true } as const;
+function preparedSignInOptions(expiry: RequestedExpiry | undefined) {
+  return {
+    expiryChangeable: true,
+    ...(expiry === undefined ? {} : { maxExpiresAt: () => expiryLimit(expiry) }),
+  } as const;
+}
 
 const KEYS_APPROVAL_NOTE = (folder: string): string =>
   `On the OpenKey page, the row that mentions tinycloud.encryption lets this profile create and use keys in the folder "${folder}/". Keep every row ticked. To sign in without keys, untick that whole row and nothing else; any other change makes OpenKey refuse the sign-in.\n`;
@@ -2959,7 +2968,7 @@ async function refreshPreparedKeysSession(params: {
         handedBackSiwe = result.signedMessage;
         return result;
       });
-    }, OPENKEY_PREPARED_SIGN_IN);
+    }, preparedSignInOptions(expiry));
     const active = node.restorableSession;
     if (!active || !preparedDid || node.sessionDid !== preparedDid || active.verificationMethod !== preparedDid) {
       throw new CLIError("OPENKEY_SESSION_MISMATCH", "OpenKey signed a different SDK session key; no profile or session was saved.", ExitCode.PERMISSION_DENIED);
@@ -2991,8 +3000,8 @@ async function refreshPreparedKeysSession(params: {
   } catch (error) {
     await handoff?.complete(false);
     await node.replication?.close();
-    throw isNarrowedRecapMismatch(error) &&
-      namedKeysGrantIn(handedBackSiwe, namedKeys) === "partial" ? partialKeysGrantError() : error;
+    throw sdkMaxExpiryRefusal(error) ?? (isNarrowedRecapMismatch(error) &&
+      namedKeysGrantIn(handedBackSiwe, namedKeys) === "partial" ? partialKeysGrantError() : error);
   }
 }
 

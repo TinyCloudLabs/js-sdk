@@ -53,6 +53,21 @@ export function expiryLimit(expiry: RequestedExpiry): number {
   return Date.now() + expiry.durationMs + CLOCK_SKEW_MS;
 }
 
+/**
+ * The SDK refuses a signed expiry above the `maxExpiresAt` the CLI hands it, with a plain `Error`. Report it as the
+ * same `OPENKEY_EXPIRY_EXCEEDED` the ceiling check in `verifySignedSession` raises, naming the latest allowed time.
+ * Any other error is not ours: returns `undefined`.
+ */
+export function sdkMaxExpiryRefusal(error: unknown): CLIError | undefined {
+  const message = error instanceof Error ? error.message : "";
+  const match = /^OpenKey signedMessage expiry is later than the maximum for this request \(the latest allowed is ([^)]+)\)$/.exec(message);
+  if (match === null) return undefined;
+  return Object.assign(
+    new CLIError("OPENKEY_EXPIRY_EXCEEDED", `The signed session outlives the requested --expiry (the latest allowed is ${match[1]}). No session was saved.`, ExitCode.PERMISSION_DENIED),
+    { cause: error },
+  );
+}
+
 /** OpenKey's minimum delegation lifetime; it raises anything shorter. */
 const OPENKEY_MIN_LIFETIME_SECONDS = 60;
 

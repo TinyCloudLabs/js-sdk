@@ -2,7 +2,7 @@
 // lifetime, and still refuses a signed expiry beyond `--expiry`. The OpenKey page is simulated: the handoff returns a
 // result signed by a local owner key for the SIWE the SDK prepared, with a lifetime chosen by the test.
 
-import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, mock, setSystemTime, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -32,10 +32,12 @@ mock.module("@tinycloud/node-sdk", () => ({ ...nodeSdk, TinyCloudNode: Recording
 const signer = new nodeSdk.PrivateKeySigner("4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d4b2c197a7e5e7b7");
 const ownerDid = `did:pkh:eip155:1:${await signer.getAddress()}`;
 let pickedLifetimeMs = 0;
+let handoffDelayMs = 0;
 const realHandoff = await import("./prepared-openkey.js");
 mock.module("./prepared-openkey.js", () => ({
   ...realHandoff,
   startPreparedOpenKeyHandoff: async (options: { prepared: { siwe: string } }) => {
+    if (handoffDelayMs > 0) setSystemTime(new Date(Date.now() + handoffDelayMs));
     const siwe = options.prepared.siwe.replace(/^Expiration Time: .*$/m, `Expiration Time: ${new Date(Date.now() + pickedLifetimeMs).toISOString()}`);
     const selectedActionKeys: string[] = [];
     const permissions: Array<{ service: string; space: string; path: string; actions: string[] }> = [];
@@ -64,10 +66,11 @@ const { ProfileManager } = await import("../config/profiles.js");
 const { refreshOpenKeySession } = await import("../commands/auth.js");
 
 const HOUR = 3600_000;
+const hits = { delegate: 0 };
 const node = Bun.serve({ port: 0, fetch(request) {
   const path = new URL(request.url).pathname;
   if (path === "/info") return Response.json({ protocol: 1, version: "1.0.0", features: ["encryption-named-keys-v1"] });
-  if (path === "/delegate" && request.method === "POST") return Response.json({ activated: [], skipped: [] });
+  if (path === "/delegate" && request.method === "POST") { hits.delegate++; return Response.json({ activated: [], skipped: [] }); }
   return new Response(`Unexpected node request: ${path}`, { status: 404 });
 } });
 const host = node.url.origin;
@@ -80,6 +83,7 @@ afterAll(async () => {
 });
 beforeEach(async () => {
   created.length = 0;
+  hits.delegate = 0;
   await ProfileManager.ensureConfigDir();
   await ProfileManager.setProfile("owner", {
     name: "owner", host, chainId: 1, spaceName: "default", did: "did:key:prior", ownerDid,
@@ -97,7 +101,7 @@ describe("prepared replica login", () => {
     pickedLifetimeMs = 20 * 60_000;
     await login();
     expect(created).toHaveLength(1);
-    expect(created[0]!.signInOptions).toEqual([{ expiryChangeable: true }]);
+    expect(created[0]!.signInOptions).toEqual([{ expiryChangeable: true, maxExpiresAt: expect.any(Function) }]);
     expect(created[0]!.config.sessionExpirationMs).toBe(HOUR);
     const saved = await ProfileManager.getSession("owner") as { expiresAt?: string; siwe: string };
     expect(saved.expiresAt).toBe(/Expiration Time: (.+)/.exec(saved.siwe)?.[1]);
@@ -119,7 +123,50 @@ describe("prepared --keys login", () => {
       expectedOwner: ownerDid, keys: "notes", expiry: "1h", replaceSession: true, noPopup: true,
     }).catch(() => undefined);
     expect(created).toHaveLength(1);
-    expect(created[0]!.signInOptions).toEqual([{ expiryChangeable: true }]);
+    expect(created[0]!.signInOptions).toEqual([{ expiryChangeable: true, maxExpiresAt: expect.any(Function) }]);
     expect(created[0]!.config.sessionExpirationMs).toBe(HOUR);
+  });
+});
+
+// Review follow-up: the CLI ceiling is also passed to the SDK, so an above-ceiling pick is refused BEFORE the session is
+// activated (no /delegate request), not after.
+describe("the --expiry ceiling is enforced before activation", () => {
+  test("replica login: refused with OPENKEY_EXPIRY_EXCEEDED, the latest allowed time named, and no activation request", async () => {
+    pickedLifetimeMs = 2 * HOUR;
+    await expect(login()).rejects.toMatchObject({
+      code: "OPENKEY_EXPIRY_EXCEEDED",
+      message: expect.stringContaining("the latest allowed is"),
+    });
+    expect(hits.delegate).toBe(0);
+    expect(await ProfileManager.getSession("owner")).toBeNull();
+  });
+
+  test("--keys login: the same", async () => {
+    pickedLifetimeMs = 2 * HOUR;
+    await expect(refreshOpenKeySession("owner", host, {
+      expectedOwner: ownerDid, keys: "notes", expiry: "1h", replaceSession: true, noPopup: true,
+    })).rejects.toMatchObject({ code: "OPENKEY_EXPIRY_EXCEEDED" });
+    expect(hits.delegate).toBe(0);
+  });
+
+  test("a pick at the --expiry it asked for is accepted (activation runs)", async () => {
+    pickedLifetimeMs = HOUR;
+    await login();
+    expect(hits.delegate).toBeGreaterThan(0);
+    expect(await ProfileManager.getSession("owner")).not.toBeNull();
+  });
+
+  test("the ceiling is read when the approval arrives: a slow approval is not refused for its delay", async () => {
+    // Approved four minutes after the request was prepared, for the full hour it asked for: later than request time + 1 h
+    // + 30 s, so a ceiling computed when the request was prepared would refuse it.
+    pickedLifetimeMs = HOUR;
+    handoffDelayMs = 4 * 60_000;
+    try {
+      await login();
+    } finally {
+      handoffDelayMs = 0;
+      setSystemTime();
+    }
+    expect(await ProfileManager.getSession("owner")).not.toBeNull();
   });
 });
