@@ -643,3 +643,50 @@ describe("grant paste-link expiry opt-in", () => {
     expect(await loadAdditionalDelegations(profileName)).toEqual([]);
   });
 });
+
+// TC-2276 (PR B, Naomi's ruling): agent presets keep the 7-day agent policy. `--preset apps-agent --paste` offers a link
+// WITHOUT the opt-in and is held to its proposal (7d) + 30 s, like every path that did not send it; custom grants keep it.
+// The real link builder, imported under another specifier because this file mocks `../auth/browser-auth.js`.
+const actualSpecifier: string = "../auth/browser-auth.js?actual";
+const actual = await import(actualSpecifier) as typeof import("../auth/browser-auth.js");
+describe("apps-agent preset paste grants keep the agent policy", () => {
+  const YEAR_S = 365 * 86_400;
+  const run = (...args: string[]) => {
+    const program = new Command();
+    program.option("-p, --profile <name>");
+    registerAuthCommand(program);
+    return program.parseAsync(["node", "tc", "--profile", profileName, "auth", "request", "--grant", ...args], { from: "node" });
+  };
+  const oneYear = async () => ({ ...await signedProof({ raw: false, lifetimeSeconds: YEAR_S }), permissions: [] });
+
+  for (const [label, flags] of [
+    ["read", ["--preset", "apps-agent", "--paste"]],
+    ["--write --app", ["--preset", "apps-agent", "--write", "--app", "notes", "--paste"]],
+  ] as const) {
+    test(`${label}: the link carries no expiryChangeable and a one-year pick is refused by the 7 day ceiling`, async () => {
+      const seen: Array<{ did: string; options: Record<string, unknown> }> = [];
+      callback = await oneYear();
+      acquire = async (did, options) => { seen.push({ did, options: options as Record<string, unknown> }); return callback; };
+      await run(...flags);
+      expect(seen).toHaveLength(1);
+      expect(seen[0]!.options.paste).toBe(true);
+      expect(seen[0]!.options.expiry).toBe("604800s");
+      expect(seen[0]!.options.expiryChangeable).toBeUndefined();
+      const link = new URL(actual.buildAuthUrl(seen[0]!.did, seen[0]!.options as never));
+      expect(link.searchParams.has("expiryChangeable")).toBe(false);
+      expect(link.searchParams.get("expiry")).toBe("604800s");
+      expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_EXPIRY_EXCEEDED", message: expect.stringContaining("--expiry") })]);
+      expect(await loadAdditionalDelegations(profileName)).toEqual([]);
+    });
+  }
+
+  test("a custom --cap grant with --paste still opts in: its real link carries expiryChangeable=true", async () => {
+    const seen: Array<{ did: string; options: Record<string, unknown> }> = [];
+    callback = await oneYear();
+    acquire = async (did, options) => { seen.push({ did, options: options as Record<string, unknown> }); return callback; };
+    await run("--cap", "tinycloud.kv:secrets:vault/secrets/KEY:get", "--expiry", "7d", "--paste");
+    expect(recordedErrors).toEqual([]);
+    expect(new URL(actual.buildAuthUrl(seen[0]!.did, seen[0]!.options as never)).searchParams.get("expiryChangeable")).toBe("true");
+    expect(await loadAdditionalDelegations(profileName)).toHaveLength(1);
+  });
+});

@@ -1014,13 +1014,17 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           const openkeyHost = resolveOpenKeyHost(profile);
           const grants: StagedOpenKeyGrant[] = [];
           const expiryCap = expiryOption === undefined ? undefined : parseRequestedExpiry(expiryOption);
+          // An agent preset keeps the 7-day agent policy (Naomi's ruling): its link does not opt in, so the user can
+          // shorten the proposed lifetime but not extend it. Custom --cap/--permission/--manifest grants opt in.
+          const grantLinkOptsIn = options.paste === true && preset === undefined;
           const proof: PortableGrantProof = {
             key,
             sessionDid: profile.sessionDid ?? profile.did,
             expectedOwner: pinnedOwner(profile),
             expiry: expiryCap,
-            // Only the plain paste link opts in; the device and approval-request paths keep the --expiry ceiling.
-            ...(options.paste === true ? { expiryChangeable: true } : {}),
+            // Only a plain paste link for a custom grant opts in; the device and approval-request paths, and the agent
+            // preset, keep the --expiry ceiling.
+            ...(grantLinkOptsIn ? { expiryChangeable: true } : {}),
           };
           const declined: PermissionEntry[] = [];
           const groups = groupPermissionsBySpace(requested);
@@ -1061,7 +1065,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
                 expiry: expiryCap === undefined ? undefined : openKeyExpiryParam(expiryCap),
                 noPopup: options.popup === false,
                 paste: options.paste,
-                ...(options.paste === true ? { expiryChangeable: true } : {}),
+                ...(grantLinkOptsIn ? { expiryChangeable: true } : {}),
               });
             }
             const delegation = portableFromOpenKeyDelegation(delegationData, request, ctx.host, proof);
