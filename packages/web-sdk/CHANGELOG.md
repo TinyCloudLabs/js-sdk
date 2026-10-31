@@ -1,5 +1,13 @@
 # @tinycloudlabs/web-sdk
 
+## 3.9.0-beta.9
+
+### Patch Changes
+
+- c523295: `requestPermissions` on a restored session whose OpenKey client was never connected no longer opens an OpenKey sign popup that hangs on "Please connect first to sign messages." It refuses before any popup and makes no OpenKey call. When no wallet provider is configured the node throws its usual "grantRuntimePermissions requires wallet mode with a signer or privateKey." error, as in 3.8.0; with a provider the grant falls through to the node's wallet signer exactly as in 3.8.0. The OpenKey client still signs the runtime grant when this instance's session was established through it, or when its `connect()` has run (the client's in-memory `lastAuth` is set); a client that does not expose `lastAuth` (an `@openkey/sdk` shape this SDK does not know) behaves as before. A signer set with `setRuntimePermissionSigner` still wins, and a wallet-mode session signs with its own signer. An app that connects through a different OpenKey instance than `config.openkey.client`, or restores after an authorize-only sign-in, must call `openkey.connect()` on the configured client or `setRuntimePermissionSigner`.
+
+  Details: TC-2281
+
 ## 3.9.0-beta.8
 
 ### Patch Changes

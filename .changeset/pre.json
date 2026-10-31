@@ -39,6 +39,7 @@
     "suggested-lifetime-seconds",
     "tc1739-share-index-owner-validation",
     "web-sdk-panel-allow-diagnostics",
+    "web-sdk-request-permissions-unconnected-openkey",
     "web-sdk-signin-restore-docs"
   ]
 }
