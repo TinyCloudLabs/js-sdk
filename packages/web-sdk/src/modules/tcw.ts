@@ -1636,10 +1636,13 @@ export class TinyCloudWeb {
    * Whether the OpenKey client may sign a runtime grant: always, unless there is POSITIVE evidence that it is not connected. It may sign when
    * this instance's session was established through it (and is still the live session), or when its in-memory `lastAuth` is set (`connect()` ran
    * on this client, for example because the app connected it after a restore), or when it exposes no `lastAuth` at all (a client shape this SDK
-   * does not know: today's behaviour, fail open). `lastAuth` is read here because nothing public says it: in `@openkey/sdk` 0.9.0 and 0.12.2 it
-   * is declared `lastAuth = null`, set by `connect()` and cleared by `signOut()`, while `getSessionToken()` always answers null (0.12.2) and
-   * `isConnected()` reads the OpenKey cookie, which can be true when `connect()` never ran on this page. web-sdk documents `@openkey/sdk` >= 0.12.2,
-   * so 0.12.2 is the lowest version checked. The clean fix is `signMessage()` rejecting when not connected, in `@openkey/sdk`.
+   * does not know: today's behaviour, fail open). `lastAuth` is read here because nothing public says it: `@openkey/sdk` 0.12.2 declares
+   * `lastAuth = null`, sets it in `connect()` and clears it in `signOut()`; 0.9.0 declares it and sets it in `connect()` but has no `signOut`.
+   * `getSessionToken()` always answers null in 0.12.2 and `isConnected()` reads the OpenKey cookie, which can be true when `connect()` never ran
+   * on this page. web-sdk documents `@openkey/sdk` >= 0.12.2, so 0.12.2 is the lowest version this was checked against. The clean fix is
+   * `signMessage()` rejecting when not connected, in `@openkey/sdk`. Trade-off: an app that connects through a DIFFERENT OpenKey instance than
+   * `config.openkey.client`, or restores after an authorize-only sign-in, must call `openkey.connect()` on the configured client or
+   * `setRuntimePermissionSigner`.
    */
   private openkeyClientMaySign(client: object): boolean {
     const established = this.openkeySession;

@@ -6,9 +6,11 @@
  *
  * The OpenKey client is used for a runtime grant only with no positive evidence that it is NOT connected: a bound runtime signer, or
  * a session this instance established through the client, or a client whose in-memory `lastAuth` is set (its `connect()` ran), or a
- * client that exposes no `lastAuth` at all (a shape this SDK does not know: today's behaviour). `@openkey/sdk` 0.9.0 and 0.12.2 both
- * declare `lastAuth = null`, set it in `connect()` and clear it in `signOut()`; `getSessionToken()` always answers null in 0.12.2 and
- * `isConnected()` reads the OpenKey cookie, so neither says whether `connect()` ran on this client.
+ * client that exposes no `lastAuth` at all (a shape this SDK does not know: today's behaviour). `@openkey/sdk` 0.12.2 declares
+ * `lastAuth = null`, sets it in `connect()` and clears it in `signOut()`; 0.9.0 declares it and sets it in `connect()` but has no `signOut`.
+ * `getSessionToken()` always answers null in 0.12.2 and `isConnected()` reads the OpenKey cookie, so neither says whether `connect()`
+ * ran on this client. The tests that use the "real OpenKey class" run against the hoisted 0.9.0 (the version `apps/openkey-vite` pins),
+ * not 0.12.2: web-sdk has no `@openkey/sdk` devDependency.
  */
 import "./support/browserGlobalsShim";
 import { afterEach, beforeAll, describe, expect, mock, spyOn, test } from "bun:test";
