@@ -1,5 +1,13 @@
 # @tinycloudlabs/web-sdk
 
+## 3.9.0-beta.7
+
+### Patch Changes
+
+- 7d3f8df: README: `signIn()` restores a stored session only when it covers the app's current manifest. The check is local and does not contact the node, so a session the node rejects is still restored; call `signOut()` before `signIn()` to force a fresh consent.
+
+  Details: TC-2267
+
 ## 3.9.0-beta.6
 
 ### Patch Changes
