@@ -2441,5 +2441,33 @@
     "worker": { "delta": 0, "ceiling": 776539 },
     "replicaWorker": { "delta": 0, "ceiling": 770467 },
     "reason": "TC-2254 held wire path row; exact SQLite and PostgreSQL CI root gzip measurements agree. All non-root size buckets are carried unchanged from TC-2113."
+  },
+  "tc2281OpenKeyUnconnectedGuard": {
+    "label": "refuse a runtime grant before an OpenKey popup when the client was never connected (TC-2281, #811)",
+    "ruling": "Exact canonical SQLite and PostgreSQL CI at source head fdcc9f5ece5bfbebf3b34f23f48ecd42ad4b691e measures 1,477,185/1,418,730 B, +97/+91 B over TC-2254. Bun 1.3.14; rustc 1.99.0 (b940084d7 2026-09-28).",
+    "base": "a4c56c24bca54d5b29402bbf6904a8cd315f3402",
+    "sourceCommits": ["fdcc9f5ece5bfbebf3b34f23f48ecd42ad4b691e"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41206978100",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41206978100/job/124553955350",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41206978100/job/124553955618"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 97, "index.cjs": 91 },
+      "ceiling": { "index.mjs": 1477185, "index.cjs": 1418730 }
+    },
+    "firstImport": {
+      "delta": { "replica.mjs": 0, "replica.cjs": 0 },
+      "ceiling": { "replica.mjs": 52757, "replica.cjs": 67957 }
+    },
+    "activation": {
+      "delta": { "activation.mjs": 0, "activation.cjs": 0 },
+      "ceiling": { "activation.mjs": 23412, "activation.cjs": 24981 }
+    },
+    "worker": { "delta": 0, "ceiling": 776539 },
+    "replicaWorker": { "delta": 0, "ceiling": 770467 },
+    "reason": "TC-2281 OpenKey unconnected guard row; exact SQLite and PostgreSQL CI root gzip measurements agree. All non-root size buckets are carried unchanged from TC-2254."
   }
 }
