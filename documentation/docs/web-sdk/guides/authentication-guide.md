@@ -95,6 +95,10 @@ Pass `openkey: { client: openkey, expiryChangeable: true }` to let the user chan
 
 The option is a pass-through. `@openkey/sdk` >= 0.13.0 (beta: 0.13.0-beta.0) forwards `expiryChangeable` to the approval. `@openkey/sdk` 0.12.x ignores the option, so the user cannot change the expiry and the session keeps the requested one.
 
+To limit how long a session the user can choose, add `maxExpiresAt`: `openkey: { client: openkey, expiryChangeable: true, maxExpiresAt: () => Date.now() + 7 * 24 * 60 * 60 * 1000 }`. It is the latest signed expiry you accept, as epoch milliseconds, a `Date`, or a function returning either. A function is called when the approval comes back, so the time the user spends on the approval page does not count against it. A signed expiry beyond it is refused before the session is built, stored or activated, with `OpenKey signedMessage expiry is later than the maximum for this request (the latest allowed is <time>)`. `maxExpiresAt` is never sent to OpenKey and is never stored. It limits a changed expiry only: an expiry equal to the one the SDK requested is accepted, so keep `sessionExpirationMs` within it.
+
+Two limits sit at the edges. The signed expiry must be more than 60 seconds away when the approval comes back, so the shortest pick OpenKey offers (one minute) is always refused. The ten-year limit is exact, so a pick of exactly ten years can be refused when the device clock that made the pick is ahead of the clock running the SDK.
+
 ## Working with Sessions
 
 The SDK manages user sessions automatically, but you can access session information if needed:

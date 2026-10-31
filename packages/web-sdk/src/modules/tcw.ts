@@ -168,6 +168,13 @@ export interface Config extends ClientConfig {
     client: OpenKeyAuthorizeTinyCloud;
     mode?: "iframe" | "popup" | "redirect";
     expiryChangeable?: boolean;
+    /**
+     * With `expiryChangeable`: the latest expiry you will accept. A signed expiry beyond it is refused before the
+     * session is built or stored. Epoch MILLISECONDS or a `Date`; a function is called when the approval comes back, so
+     * a slow approval does not count against it. It is never sent to OpenKey. It limits a CHANGED expiry only, so keep
+     * `sessionExpirationMs` within it.
+     */
+    maxExpiresAt?: number | Date | (() => number | Date);
   };
   /** Notifications. `throwErrors` rethrows each error's raw message asynchronously, once per burst of identical errors (200 ms window). It applies unless `ui: false` or `ui.toasts: false`, which turn off toasts and throws together, as the old `popups: false` did; `ui.button: false` leaves throws on. Toast placement and visibility are set through `ui`. */
   notifications?: NotificationConfig;
@@ -1109,9 +1116,18 @@ export class TinyCloudWeb {
     this.preparedSignIn = { node, request, createdAt: Date.now(), signOuts };
   }
 
-  /** Options forwarded to the node's OpenKey sign-in; `undefined` unless the app opted in to `expiryChangeable`. */
-  private openKeySignInOptions(): { expiryChangeable: true } | undefined {
-    return this.config.openkey?.expiryChangeable === true ? { expiryChangeable: true } : undefined;
+  /**
+   * Options forwarded to the node's OpenKey sign-in; `undefined` unless the app opted in to `expiryChangeable`.
+   * `maxExpiresAt` is forwarded only with it.
+   */
+  private openKeySignInOptions():
+    | { expiryChangeable: true; maxExpiresAt?: number | Date | (() => number | Date) }
+    | undefined {
+    const openkey = this.config.openkey;
+    if (openkey?.expiryChangeable !== true) return undefined;
+    return openkey.maxExpiresAt === undefined
+      ? { expiryChangeable: true }
+      : { expiryChangeable: true, maxExpiresAt: openkey.maxExpiresAt };
   }
 
   signIn = (options?: SignInOptions): Promise<ClientSession> => {

@@ -1,5 +1,5 @@
 import "./support/browserGlobalsShim";
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { extractRecapAttenuations, parseCanonicalRecapResource } from "@tinycloud/sdk-core";
 import { privateKeyToAccount } from "viem/accounts";
 
@@ -171,4 +171,36 @@ test("a signed expiry more than 10 years away is refused with a message naming t
     "OpenKey signedMessage expiry is more than 10 years away, the longest this SDK accepts; choose a shorter expiry",
   );
   expect(storedExpiries()).toEqual([]);
+});
+
+// Review follow-up: an app-level maximum for the signed expiry. It limits the user's choice at the SDK, is never sent to
+// OpenKey, and refuses before the session is built or stored.
+describe("openkey.maxExpiresAt", () => {
+  test("a signed expiry above it is refused before anything is stored, for a number, a Date and a function", async () => {
+    const max = Date.now() + 2 * DAY_MS;
+    for (const maxExpiresAt of [max, new Date(max), () => max]) {
+      const setup = create(new Date(Date.now() + 10 * DAY_MS).toISOString(), { expiryChangeable: true, maxExpiresAt });
+      const web = await setup.create();
+      await expect(web.signIn()).rejects.toThrow(/OpenKey signedMessage expiry is later than the maximum for this request \(the latest allowed is \d{4}-/);
+      expect(storedExpiries()).toEqual([]);
+      expect(Object.keys(setup.requests[0]!)).not.toContain("maxExpiresAt");
+    }
+  });
+
+  test("an expiry at or below it is accepted and stored as signed", async () => {
+    const signedExpiry = new Date(Date.now() + 2 * DAY_MS).toISOString();
+    const setup = create(signedExpiry, { expiryChangeable: true, maxExpiresAt: Date.parse(signedExpiry) });
+    const web = await setup.create();
+    const session = await web.signIn();
+    expect(/Expiration Time: (.+)/.exec(session.siwe)?.[1]).toBe(signedExpiry);
+    expect(storedExpiries()).toContain(signedExpiry);
+  });
+
+  test("it applies after prepareSignIn too", async () => {
+    const setup = create(new Date(Date.now() + 10 * DAY_MS).toISOString(), { expiryChangeable: true, maxExpiresAt: () => Date.now() + DAY_MS });
+    const web = await setup.create();
+    await web.prepareSignIn();
+    await expect(web.signIn()).rejects.toThrow(/later than the maximum/);
+    expect(storedExpiries()).toEqual([]);
+  });
 });
