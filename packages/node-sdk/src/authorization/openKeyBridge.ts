@@ -36,6 +36,12 @@ export interface OpenKeyAuthorizeTinyCloud {
      * validates and size-bounds it before use.
      */
     presentation?: CapabilityPresentationEnvelopeV1;
+    /**
+     * Ask OpenKey to let the user change the session expiry in the approval.
+     * Sent only when true. `@openkey/sdk` >= 0.13.0 (beta) forwards it; version
+     * TBD until released, and earlier versions ignore it.
+     */
+    expiryChangeable?: boolean;
   }, opts?: { mode?: "iframe" | "popup" | "redirect" }): Promise<{
     protocolVersion: 1;
     address: string;
@@ -68,6 +74,12 @@ export interface OpenKeyBridgeInput {
    * manifest. Display-only.
    */
   presentation?: CapabilityPresentationEnvelopeV1;
+  /**
+   * Ask OpenKey to let the user change the session expiry. Forwarded only
+   * when true. The SDK accepts a changed expiry only for a request that
+   * carried this flag, and then uses the SIGNED expiry.
+   */
+  expiryChangeable?: boolean;
 }
 
 export type NodeUserAuthorizationAuthorizeFn = (
@@ -117,6 +129,8 @@ export function wireOpenKeyAuthorize(
       // Forward the presentation envelope verbatim — the OpenKey SDK
       // validates and size-bounds it before use.
       presentation: input.presentation,
+      // Sent only when true, so a request without it keeps its prior shape.
+      ...(input.expiryChangeable === true ? { expiryChangeable: true } : {}),
     }, opts);
     if (result.protocolVersion !== 1) {
       throw new Error(

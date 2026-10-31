@@ -49,6 +49,7 @@ import {
   pkhDid,
   extractImmutableSiweFields,
   diffImmutableSiweFields,
+  checkChangedExpiration,
   extractRecapAttenuations,
   unauthorizedRecapCapabilities,
   parseCanonicalRecapResource,
@@ -2104,6 +2105,13 @@ export class NodeUserAuthorization implements IUserAuthorization {
       /** Caller-supplied display reason, not signed authority. */
       reason?: string;
       /**
+       * Let the user change the session expiry in the OpenKey approval. Sent
+       * to OpenKey as `expiryChangeable: true` (`@openkey/sdk` >= 0.13.0
+       * (beta) forwards it; version TBD until released; older versions
+       * ignore it). The SIGNED expiry is then the session's expiry.
+       */
+      expiryChangeable?: boolean;
+      /**
        * Supply another candidate without regenerating the SIWE or session key.
        * Called only after transport or pre-commit verification rejects a result.
        * Return null to cancel; activation errors are never signing retries.
@@ -2173,6 +2181,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
       host: hostHint,
       keyId: options?.openkeyKeyId,
       presentation,
+      // Present only when set, so the default request shape is unchanged.
+      ...(options?.expiryChangeable === true ? { expiryChangeable: true } : {}),
     };
     return {
       request: originalRequest,
@@ -2205,7 +2215,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
     for (let attempt = 0; ; ) {
       try {
         result ??= await authorization;
-        signed = await this.verifyOpenKeyResult(result, prepared);
+        signed = await this.verifyOpenKeyResult(result, prepared, {
+          // Relax only for a request that actually carried the opt-in.
+          allowExpirationChange: originalRequest.expiryChangeable === true,
+        });
         signature = result.signature;
         break;
       } catch (error) {
@@ -2311,14 +2324,24 @@ export class NodeUserAuthorization implements IUserAuthorization {
    *    in the original prepared SIWE — narrowing OK, broadening rejected.
    * 5. Every `result.selectedActionKeys` entry corresponds to a
    *    (resource, action) pair in the returned SIWE.
+   *
+   * `options.expiryChangeable` is true only when the request sent to OpenKey
+   * carried `expiryChangeable: true`. Then (and only then) the signed
+   * `Expiration Time` may differ from the prepared one and is the expiry the
+   * session is built with; the changed expiry must pass
+   * `checkChangedExpiration` and every other field in (3) must still match.
+   * Without it, any expiry difference is refused as in (3).
    */
   async signInWithOpenKeyResult(
     result: OpenKeyAuthorizationResultV1,
     prepared: PreparedOpenKeySession,
     keyId: string,
     jwk: Record<string, unknown>,
+    options?: { expiryChangeable?: boolean },
   ): Promise<ClientSession> {
-    const signed = await this.verifyOpenKeyResult(result, prepared);
+    const signed = await this.verifyOpenKeyResult(result, prepared, {
+      allowExpirationChange: options?.expiryChangeable === true,
+    });
     return this.signInWithPreparedSession(signed, result.signature, keyId, jwk);
   }
 
@@ -2326,6 +2349,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private async verifyOpenKeyResult(
     result: OpenKeyAuthorizationResultV1,
     prepared: PreparedOpenKeySession,
+    options?: { allowExpirationChange?: boolean },
   ): Promise<PreparedOpenKeySession> {
     if (result.protocolVersion !== 1) {
       throw new Error(`Unsupported OpenKey protocol version ${result.protocolVersion}`);
@@ -2407,13 +2431,29 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const originalHasRecap = /(?:^|\n)-\s+urn:recap:/i.test(prepared.siwe);
     const originalFields = extractImmutableSiweFields(prepared.siwe);
     const signedFields = extractImmutableSiweFields(result.signedMessage);
-    const changedFields = diffImmutableSiweFields(originalFields, signedFields, {
-      originalHasRecap,
-    });
-    if (changedFields.length > 0) {
-      throw new Error(
-        `OpenKey signedMessage altered immutable SIWE fields: ${changedFields.join(", ")}`,
-      );
+    if (options?.allowExpirationChange === true) {
+      // TC-2276: the request told OpenKey the user may change the expiry, so
+      // the signed Expiration Time may differ. Every other immutable field
+      // still has to match, and the signed expiry must be one this SDK will
+      // run a session on. The helper reports both kinds of refusal.
+      const refusal = checkChangedExpiration({
+        preparedSiwe: prepared.siwe,
+        signedSiwe: result.signedMessage,
+        now: Date.now(),
+        originalHasRecap,
+      });
+      if (refusal !== null) {
+        throw new Error(`OpenKey signedMessage ${refusal}`);
+      }
+    } else {
+      const changedFields = diffImmutableSiweFields(originalFields, signedFields, {
+        originalHasRecap,
+      });
+      if (changedFields.length > 0) {
+        throw new Error(
+          `OpenKey signedMessage altered immutable SIWE fields: ${changedFields.join(", ")}`,
+        );
+      }
     }
 
     // (4) Capability subset. The widget may narrow the caller's request but
