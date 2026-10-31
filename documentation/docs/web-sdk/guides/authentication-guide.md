@@ -93,7 +93,7 @@ OpenKey approval uses a popup by default. You can set `openkey: { client: openke
 
 Pass `openkey: { client: openkey, expiryChangeable: true }` to let the user change the session expiry in the OpenKey approval. TinyCloudWeb then accepts the changed expiry and builds the session with the value the user signed, so `session.siwe`, the stored session and the delegations you issue all use that expiry. Every other field of the signed message must still match the request, and the SDK refuses an expiry that is within 60 seconds of now, not after the message was issued, or more than 10 years away.
 
-The option is a pass-through. `@openkey/sdk` >= 0.13.0 (beta) forwards `expiryChangeable` to the approval; the version is TBD until it is released. `@openkey/sdk` 0.12.x ignores the option, so the user cannot change the expiry and the session keeps the requested one.
+The option is a pass-through. `@openkey/sdk` >= 0.13.0 (beta: 0.13.0-beta.0) forwards `expiryChangeable` to the approval. `@openkey/sdk` 0.12.x ignores the option, so the user cannot change the expiry and the session keeps the requested one.
 
 ## Working with Sessions
 

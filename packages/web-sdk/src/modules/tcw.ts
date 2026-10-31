@@ -162,7 +162,7 @@ export interface Config extends ClientConfig {
    *
    * `expiryChangeable: true` asks OpenKey to let the user change the session expiry in the approval. The SDK then
    * accepts the changed expiry and builds the session with the SIGNED value. It is a pass-through: `@openkey/sdk`
-   * >= 0.13.0 (beta) forwards it (version TBD until released); 0.12.x ignores it, so the expiry stays as requested.
+   * >= 0.13.0 (beta: 0.13.0-beta.0) forwards it; it is inert on 0.12.x, so the expiry stays as requested.
    */
   openkey?: {
     client: OpenKeyAuthorizeTinyCloud;

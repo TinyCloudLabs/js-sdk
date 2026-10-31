@@ -38,8 +38,8 @@ export interface OpenKeyAuthorizeTinyCloud {
     presentation?: CapabilityPresentationEnvelopeV1;
     /**
      * Ask OpenKey to let the user change the session expiry in the approval.
-     * Sent only when true. `@openkey/sdk` >= 0.13.0 (beta) forwards it; version
-     * TBD until released, and earlier versions ignore it.
+     * Sent only when true. `@openkey/sdk` >= 0.13.0 (beta: 0.13.0-beta.0)
+     * forwards it; 0.12.x ignores it.
      */
     expiryChangeable?: boolean;
   }, opts?: { mode?: "iframe" | "popup" | "redirect" }): Promise<{

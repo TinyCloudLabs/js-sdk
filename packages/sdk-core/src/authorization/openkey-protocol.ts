@@ -31,9 +31,9 @@ export interface TinyCloudAuthorizationRequestV1 {
   /**
    * The user may change the expiration time in the OpenKey approval. Send it
    * only when the app accepts the signed value; without it a changed
-   * `Expiration Time` in the signed message is refused. `@openkey/sdk` 0.13.0
-   * (beta) and later forward the field (exact version TBD until released);
-   * an older `@openkey/sdk` drops it and the approval keeps the app's expiry.
+   * `Expiration Time` in the signed message is refused. `@openkey/sdk`
+   * >= 0.13.0 (beta: 0.13.0-beta.0) forwards the field; 0.12.x drops it and
+   * the approval keeps the app's expiry.
    */
   expiryChangeable?: boolean;
 }

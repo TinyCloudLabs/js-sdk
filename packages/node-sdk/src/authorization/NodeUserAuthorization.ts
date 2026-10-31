@@ -2107,8 +2107,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
       /**
        * Let the user change the session expiry in the OpenKey approval. Sent
        * to OpenKey as `expiryChangeable: true` (`@openkey/sdk` >= 0.13.0
-       * (beta) forwards it; version TBD until released; older versions
-       * ignore it). The SIGNED expiry is then the session's expiry.
+       * (beta: 0.13.0-beta.0) forwards it; 0.12.x ignores it). The SIGNED
+       * expiry is then the session's expiry.
        */
       expiryChangeable?: boolean;
       /**
