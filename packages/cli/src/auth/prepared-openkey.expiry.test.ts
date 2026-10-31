@@ -63,7 +63,7 @@ const { refreshOpenKeySession } = await import("../commands/auth.js");
 const HOUR = 3600_000;
 const node = Bun.serve({ port: 0, fetch(request) {
   const path = new URL(request.url).pathname;
-  if (path === "/info") return Response.json({ protocol: 1, version: "1.0.0", features: [] });
+  if (path === "/info") return Response.json({ protocol: 1, version: "1.0.0", features: ["encryption-named-keys-v1"] });
   if (path === "/delegate" && request.method === "POST") return Response.json({ activated: [], skipped: [] });
   return new Response(`Unexpected node request: ${path}`, { status: 404 });
 } });
@@ -105,5 +105,18 @@ describe("prepared replica login", () => {
     pickedLifetimeMs = 2 * HOUR;
     await expect(login()).rejects.toMatchObject({ code: "OPENKEY_EXPIRY_EXCEEDED" });
     expect(await ProfileManager.getSession("owner")).toBeNull();
+  });
+});
+
+describe("prepared --keys login", () => {
+  test("opts in to a changed expiry too", async () => {
+    pickedLifetimeMs = 20 * 60_000;
+    // Named-key setup after sign-in needs a real node; only the sign-in call is under test, so its outcome is ignored.
+    await refreshOpenKeySession("owner", host, {
+      expectedOwner: ownerDid, keys: "notes", expiry: "1h", replaceSession: true, noPopup: true,
+    }).catch(() => undefined);
+    expect(created).toHaveLength(1);
+    expect(created[0]!.signInOptions).toEqual([{ expiryChangeable: true }]);
+    expect(created[0]!.config.sessionExpirationMs).toBe(HOUR);
   });
 });
