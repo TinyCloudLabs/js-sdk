@@ -46,6 +46,29 @@ const result = await storage.get('myKey');
 console.log(result.data); // { hello: 'world' }
 ```
 
+### Stored sessions and `signIn()`
+
+`signIn()` first restores a stored session for the connected wallet when that
+session covers every permission in the app's current manifest. If the app
+changed its manifest (for example a new permission or prefix), the stored
+session is cleared and the user is asked again, automatically. The check is
+local: it reads the session's signed permissions (and any approved runtime
+grants), and the default browser storage does not restore a session past its
+expiry. It does not contact the node, so a session the node rejects (a 401
+after a revocation or a reset, for example) is still restored. With OpenKey,
+`prepareSignIn()` makes the same check.
+
+To force a fresh consent, sign out first. `signOut()` clears the stored session
+and blocks restoring until the next sign-in succeeds, so `signIn()` prompts:
+
+```typescript
+await tc.signOut();
+await tc.signIn();
+```
+
+There is no separate "fresh sign-in" option. Calling `restoreSession()` yourself
+restores a stored session without the manifest check.
+
 ## Optional local KV replication
 
 Install `@tinycloud/replica`, then load and register the optional browser plugin
