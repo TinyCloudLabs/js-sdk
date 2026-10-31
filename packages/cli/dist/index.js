@@ -15073,8 +15073,13 @@ var init_links = __esm({
       permissions: external_exports2.array(permission).min(1),
       reason: external_exports2.string().optional(),
       grantLifetimeSeconds: external_exports2.number().int().positive(),
-      resultEncryptionPublicJwk: p256Jwk
-    }).strict();
+      resultEncryptionPublicJwk: p256Jwk,
+      /**
+       * The lifetime the requester suggests approving, in seconds. Absent means the maximum, `grantLifetimeSeconds`. When present it is at most that
+       * maximum; it has no upper bound of its own, and the approver may still choose less.
+       */
+      suggestedLifetimeSeconds: external_exports2.number().int().positive().optional()
+    }).strict().refine((request) => request.suggestedLifetimeSeconds === void 0 || request.suggestedLifetimeSeconds <= request.grantLifetimeSeconds);
     DEFAULT_TIMEOUT_MS = 1e4;
     MAX_JSON_RESPONSE_BYTES = 4096;
     AUDIENCE_ORIGIN = /^https:\/\/[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]{1,5})?$/;

@@ -36,6 +36,7 @@
     "held-wire-acquisition",
     "replica-sdk-services-pin",
     "share-envelope-cjs-links",
+    "suggested-lifetime-seconds",
     "tc1739-share-index-owner-validation",
     "web-sdk-panel-allow-diagnostics",
     "web-sdk-signin-restore-docs"

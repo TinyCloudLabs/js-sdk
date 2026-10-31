@@ -1,5 +1,13 @@
 # @tinycloud/share-envelope
 
+## 1.4.1-beta.1
+
+### Patch Changes
+
+- b0da170: The signed approval request may carry an optional `suggestedLifetimeSeconds`: a whole number above 0 and no more than `grantLifetimeSeconds`. When it is absent, the maximum applies. The field is optional and additive. No client sends it yet: OpenKey must accept it first. Requests without it parse and canonicalize byte-identically.
+
+  Details: TC-2272
+
 ## 1.4.1-beta.0
 
 ### Patch Changes
