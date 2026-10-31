@@ -172,6 +172,17 @@ describe("a connected OpenKey session still signs through the client", () => {
     expect(stub.signatures).toEqual(["0xopenkey"]);
   });
 
+  test("a client whose lastAuth cannot be read (a getter that throws) is not treated as unconnected: it signs", async () => {
+    const stub = stubNode();
+    const { client, signMessage } = fakeClient("absent");
+    Object.defineProperty(client, "lastAuth", { get() { throw new Error("not readable"); }, enumerable: true });
+    const tcw = restored(stub, { openkey: { client } });
+
+    await tcw.requestPermissions([ENTRY]);
+
+    expect(signMessage).toHaveBeenCalledTimes(1);
+  });
+
   test("a bound runtime signer wins over an unconnected client, and the client is never asked", async () => {
     const stub = stubNode();
     const { client, signMessage } = fakeClient(null);
@@ -232,7 +243,56 @@ describe("a session established through OpenKey in this instance (real signIn / 
     expect(stub.signatures).toEqual(["0xopenkey"]);
   });
 
+  test("a session for another account does not use the flag: the unconnected client is refused", async () => {
+    await tcw.signIn();
+    stub.node.address = "0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
+    try {
+      await expect(tcw.requestPermissions([ENTRY])).rejects.toThrow(NODE_REFUSAL);
+      expect(client.signMessage).not.toHaveBeenCalled();
+    } finally {
+      stub.node.address = ALICE;
+    }
+  });
+
+  test("a restore clears the flag: the unconnected client is refused again", async () => {
+    await tcw.signIn();
+    await tcw.restoreSession().catch(() => undefined);
+
+    await expect(tcw.requestPermissions([ENTRY])).rejects.toThrow(NODE_REFUSAL);
+
+    expect(client.signMessage).not.toHaveBeenCalled();
+  });
+
+  test("a new sign-in clears the flag before it starts: if it does not complete, the unconnected client is refused", async () => {
+    await tcw.signIn();
+    (stub.node.signInWithOpenKey as ReturnType<typeof mock>).mockImplementationOnce(async () => { throw new Error("sign-in failed"); });
+    await tcw.signIn().catch(() => undefined);
+
+    await expect(tcw.requestPermissions([ENTRY])).rejects.toThrow(NODE_REFUSAL);
+
+    expect(client.signMessage).not.toHaveBeenCalled();
+  });
+
+  test("a prepared OpenKey sign-in that fails also clears the flag at its start (no restore runs on that path)", async () => {
+    await tcw.signIn();
+    const state = tcw as unknown as Record<string, unknown>;
+    state.preparedSignIn = { node: stub.node, request: {}, createdAt: Date.now(), signOuts: state.signOutCount };
+    (stub.node.signInWithPreparedOpenKey as ReturnType<typeof mock>).mockImplementationOnce(async () => { throw new Error("prepared sign-in failed"); });
+    await tcw.signIn().catch(() => undefined);
+    expect(stub.node.signInWithPreparedOpenKey).toHaveBeenCalled();
+
+    await expect(tcw.requestPermissions([ENTRY])).rejects.toThrow(NODE_REFUSAL);
+
+    expect(client.signMessage).not.toHaveBeenCalled();
+  });
+
   test("after signOut() the flag is cleared: the unconnected client is refused again, with zero sign requests", async () => {
+    await tcw.signIn();
+    expect((await tcw.requestPermissions([ENTRY])).approved).toBe(true);
+    expect(client.signMessage).toHaveBeenCalledTimes(1);
+    client.signMessage.mockClear();
+    stub.signatures.length = 0;
+
     await tcw.signOut();
 
     await expect(tcw.requestPermissions([ENTRY])).rejects.toThrow(NODE_REFUSAL);
