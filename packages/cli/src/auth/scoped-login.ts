@@ -22,9 +22,10 @@ export const CLOCK_SKEW_MS = 30_000;
 export const SIGNED_RECAP = "signed-recap";
 
 /**
- * A requested `--expiry`, as a lifetime. OpenKey signs approval time plus a
- * lifetime, so an absolute deadline cannot be honored once approval takes
- * longer than the clock-skew allowance; only durations are accepted.
+ * A requested `--expiry`, as a lifetime, and the maximum lifetime the signed request allows (today the two are the
+ * same: `grantLifetimeSeconds` is derived from `--expiry`). OpenKey signs approval time plus a lifetime, so an
+ * absolute deadline cannot be honored once approval takes longer than the clock-skew allowance; only durations are
+ * accepted.
  */
 export interface RequestedExpiry {
   readonly durationMs: number;
@@ -43,7 +44,11 @@ export function parseRequestedExpiry(value: string | number): RequestedExpiry {
   );
 }
 
-/** Latest signed expiry the request allows, evaluated when the approval arrives. */
+/**
+ * Latest signed expiry the request allows, evaluated when the approval arrives: the request's maximum lifetime
+ * (`grantLifetimeSeconds`) from now, plus the clock-skew allowance. The signed value is compared, not the value the
+ * request proposed, so a lifetime the user changed in the approval is held to the same ceiling.
+ */
 export function expiryLimit(expiry: RequestedExpiry): number {
   return Date.now() + expiry.durationMs + CLOCK_SKEW_MS;
 }
@@ -373,7 +378,11 @@ function withCapabilitiesRead(permissions: PermissionEntry[], space: string): Pe
 export interface SignedSessionExpectations {
   /** Primary DID the approving identity must match, when known. */
   expectedOwner?: string;
-  /** Requested `--expiry`; a signed expiry beyond it (+ skew) is refused. */
+  /**
+   * The longest lifetime the signed request allows: the request's `grantLifetimeSeconds`, which is the requested
+   * `--expiry`. A signed expiry beyond it (+ skew) is refused. The user may sign a SHORTER lifetime (the SDK accepts a
+   * changed expiry, see `expiryChangeable`); a longer one is still refused here until TC-2274 lets OpenKey grant more.
+   */
   expiry?: RequestedExpiry;
   /** Grant escalation stores a portable delegation, not a login session. */
   purpose?: "grant";

@@ -2800,6 +2800,7 @@ async function refreshPreparedOpenKeySession(params: {
     includeAccountRegistryPermissions: false, autoBootstrapAccount: false,
     replication: replicationConfig,
     ...(namedKeys === undefined ? {} : { additionalRawAbilities: keyAbilitiesFor(namedKeys) }),
+    ...(expiry ? { sessionExpirationMs: expiry.durationMs } : {}),
   });
   let handoff: PreparedOpenKeyHandoff | undefined;
   let preparedDid: string | undefined;
@@ -2819,7 +2820,7 @@ async function refreshPreparedOpenKeySession(params: {
         handedBackSiwe = result.signedMessage;
         return result;
       });
-    });
+    }, OPENKEY_PREPARED_SIGN_IN);
     const active = node.restorableSession;
     if (!active || !preparedDid || node.sessionDid !== preparedDid || active.verificationMethod !== preparedDid) {
       throw new CLIError("OPENKEY_SESSION_MISMATCH", "OpenKey signed a different SDK session key; no profile or session was saved.", ExitCode.PERMISSION_DENIED);
@@ -2875,6 +2876,13 @@ async function refreshPreparedOpenKeySession(params: {
       namedKeysGrantIn(handedBackSiwe, namedKeys) === "partial" ? partialKeysGrantError() : error;
   }
 }
+
+/**
+ * The prepared OpenKey handoff lets the user pick a shorter lifetime than the one this CLI asked for. Telling the SDK
+ * so makes it accept and sign with the picked expiry; `verifyScopedLogin` still refuses one beyond the requested
+ * `--expiry`. The SDK checks every other field of the signed message as before.
+ */
+const OPENKEY_PREPARED_SIGN_IN = { expiryChangeable: true } as const;
 
 const KEYS_APPROVAL_NOTE = (folder: string): string =>
   `On the OpenKey page, the row that mentions tinycloud.encryption lets this profile create and use keys in the folder "${folder}/". Keep every row ticked. To sign in without keys, untick that whole row and nothing else; any other change makes OpenKey refuse the sign-in.\n`;
@@ -2951,7 +2959,7 @@ async function refreshPreparedKeysSession(params: {
         handedBackSiwe = result.signedMessage;
         return result;
       });
-    });
+    }, OPENKEY_PREPARED_SIGN_IN);
     const active = node.restorableSession;
     if (!active || !preparedDid || node.sessionDid !== preparedDid || active.verificationMethod !== preparedDid) {
       throw new CLIError("OPENKEY_SESSION_MISMATCH", "OpenKey signed a different SDK session key; no profile or session was saved.", ExitCode.PERMISSION_DENIED);

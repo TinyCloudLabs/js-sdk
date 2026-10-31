@@ -1,0 +1,109 @@
+// TC-2276: the prepared OpenKey login tells the SDK the user may pick the lifetime, builds its node with the requested
+// lifetime, and still refuses a signed expiry beyond `--expiry`. The OpenKey page is simulated: the handoff returns a
+// result signed by a local owner key for the SIWE the SDK prepared, with a lifetime chosen by the test.
+
+import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { extractRecapAttenuations, parseCanonicalRecapResource } from "@tinycloud/sdk-core";
+
+const nodeSdk = await import("@tinycloud/node-sdk");
+type NodeConfig = ConstructorParameters<typeof nodeSdk.TinyCloudNode>[0];
+const created: Array<{ config: NodeConfig; signInOptions: unknown[] }> = [];
+
+class RecordingNode extends nodeSdk.TinyCloudNode {
+  private readonly record: { config: NodeConfig; signInOptions: unknown[] };
+  constructor(config: NodeConfig) {
+    super(config);
+    this.record = { config, signInOptions: [] };
+    created.push(this.record);
+  }
+  override async signInWithOpenKey(...args: Parameters<nodeSdk.TinyCloudNode["signInWithOpenKey"]>): Promise<void> {
+    this.record.signInOptions.push(args[1]);
+    return super.signInWithOpenKey(...args);
+  }
+}
+mock.module("@tinycloud/node-sdk", () => ({ ...nodeSdk, TinyCloudNode: RecordingNode }));
+
+const signer = new nodeSdk.PrivateKeySigner("4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d4b2c197a7e5e7b7");
+const ownerDid = `did:pkh:eip155:1:${await signer.getAddress()}`;
+let pickedLifetimeMs = 0;
+const realHandoff = await import("./prepared-openkey.js");
+mock.module("./prepared-openkey.js", () => ({
+  ...realHandoff,
+  startPreparedOpenKeyHandoff: async (options: { prepared: { siwe: string } }) => {
+    const siwe = options.prepared.siwe.replace(/^Expiration Time: .*$/m, `Expiration Time: ${new Date(Date.now() + pickedLifetimeMs).toISOString()}`);
+    const selectedActionKeys: string[] = [];
+    const permissions: Array<{ service: string; space: string; path: string; actions: string[] }> = [];
+    for (const [resource, actions] of Object.entries(extractRecapAttenuations(siwe))) {
+      const { space, path } = parseCanonicalRecapResource(resource);
+      const grouped = new Map<string, string[]>();
+      for (const ability of Object.keys(actions)) {
+        const service = ability.slice(0, ability.indexOf("/"));
+        if (ability !== "tinycloud.capabilities/read") selectedActionKeys.push(`${service}\0${space}\0${path}\0${ability}`);
+        grouped.set(service, [...(grouped.get(service) ?? []), ability]);
+      }
+      for (const [service, granted] of grouped) permissions.push({ service, space, path, actions: granted });
+    }
+    const result = {
+      protocolVersion: 1 as const, address: await signer.getAddress(), signature: await signer.signMessage(siwe),
+      signedMessage: siwe, selectedActionKeys, permissions,
+    };
+    return { result: Promise.resolve(result), url: "https://openkey.test/delegate#tv2=test", complete: async () => undefined };
+  },
+}));
+
+const originalTcHome = process.env.TC_HOME;
+const home = await mkdtemp(join(tmpdir(), "tc-prepared-expiry-"));
+process.env.TC_HOME = home;
+const { ProfileManager } = await import("../config/profiles.js");
+const { refreshOpenKeySession } = await import("../commands/auth.js");
+
+const HOUR = 3600_000;
+const node = Bun.serve({ port: 0, fetch(request) {
+  const path = new URL(request.url).pathname;
+  if (path === "/info") return Response.json({ protocol: 1, version: "1.0.0", features: [] });
+  if (path === "/delegate" && request.method === "POST") return Response.json({ activated: [], skipped: [] });
+  return new Response(`Unexpected node request: ${path}`, { status: 404 });
+} });
+const host = node.url.origin;
+
+afterAll(async () => {
+  node.stop(true);
+  if (originalTcHome === undefined) delete process.env.TC_HOME;
+  else process.env.TC_HOME = originalTcHome;
+  await rm(home, { recursive: true, force: true });
+});
+beforeEach(async () => {
+  created.length = 0;
+  await ProfileManager.ensureConfigDir();
+  await ProfileManager.setProfile("owner", {
+    name: "owner", host, chainId: 1, spaceName: "default", did: "did:key:prior", ownerDid,
+    posture: "owner-openkey", authMethod: "openkey", createdAt: "2026-10-01T00:00:00.000Z",
+  });
+  await ProfileManager.clearSession("owner");
+});
+
+const login = () => refreshOpenKeySession("owner", host, {
+  expectedOwner: ownerDid, replication: { prefixes: ["notes/"] }, expiry: "1h", replaceSession: true, noPopup: true,
+});
+
+describe("prepared replica login", () => {
+  test("opts in to a changed expiry, builds the node with the requested lifetime, and saves a shorter pick as signed", async () => {
+    pickedLifetimeMs = 20 * 60_000;
+    await login();
+    expect(created).toHaveLength(1);
+    expect(created[0]!.signInOptions).toEqual([{ expiryChangeable: true }]);
+    expect(created[0]!.config.sessionExpirationMs).toBe(HOUR);
+    const saved = await ProfileManager.getSession("owner") as { expiresAt?: string; siwe: string };
+    expect(saved.expiresAt).toBe(/Expiration Time: (.+)/.exec(saved.siwe)?.[1]);
+    expect(Date.parse(saved.expiresAt!) - Date.now()).toBeLessThan(21 * 60_000);
+  });
+
+  test("an expiry beyond the requested --expiry is still refused and nothing is saved", async () => {
+    pickedLifetimeMs = 2 * HOUR;
+    await expect(login()).rejects.toMatchObject({ code: "OPENKEY_EXPIRY_EXCEEDED" });
+    expect(await ProfileManager.getSession("owner")).toBeNull();
+  });
+});
