@@ -157,10 +157,17 @@ interface OpenKeyMessageSigner {
  * Extends ClientConfig with browser-specific options.
  */
 export interface Config extends ClientConfig {
-  /** OpenKey authorize-sign client. Requires @openkey/sdk >=0.12.2; popup is the default mode. */
+  /**
+   * OpenKey authorize-sign client. Requires @openkey/sdk >=0.12.2; popup is the default mode.
+   *
+   * `expiryChangeable: true` asks OpenKey to let the user change the session expiry in the approval. The SDK then
+   * accepts the changed expiry and builds the session with the SIGNED value. It is a pass-through: `@openkey/sdk`
+   * >= 0.13.0 (beta) forwards it (version TBD until released); 0.12.x ignores it, so the expiry stays as requested.
+   */
   openkey?: {
     client: OpenKeyAuthorizeTinyCloud;
     mode?: "iframe" | "popup" | "redirect";
+    expiryChangeable?: boolean;
   };
   /** Notifications. `throwErrors` rethrows each error's raw message asynchronously, once per burst of identical errors (200 ms window). It applies unless `ui: false` or `ui.toasts: false`, which turn off toasts and throws together, as the old `popups: false` did; `ui.button: false` leaves throws on. Toast placement and visibility are set through `ui`. */
   notifications?: NotificationConfig;
@@ -1097,9 +1104,14 @@ export class TinyCloudWeb {
       this._sessionRestoreStatus = "stale";
     }
     assertCurrent();
-    const request = await node.prepareOpenKeySignIn();
+    const request = await node.prepareOpenKeySignIn(this.openKeySignInOptions());
     assertCurrent();
     this.preparedSignIn = { node, request, createdAt: Date.now(), signOuts };
+  }
+
+  /** Options forwarded to the node's OpenKey sign-in; `undefined` unless the app opted in to `expiryChangeable`. */
+  private openKeySignInOptions(): { expiryChangeable: true } | undefined {
+    return this.config.openkey?.expiryChangeable === true ? { expiryChangeable: true } : undefined;
   }
 
   signIn = (options?: SignInOptions): Promise<ClientSession> => {
@@ -1167,6 +1179,7 @@ export class TinyCloudWeb {
       } else if (this.config.openkey) {
         await node.signInWithOpenKey(
           wireOpenKeyAuthorize(this.config.openkey.client, { mode: this.config.openkey.mode ?? "popup" }),
+          this.openKeySignInOptions(),
         );
       } else {
         await node.signIn(options);

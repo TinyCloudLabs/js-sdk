@@ -89,6 +89,12 @@ approveButton.addEventListener('click', () => { void tc.signIn(); });
 
 OpenKey approval uses a popup by default. You can set `openkey: { client: openkey, mode: 'redirect' }` or `mode: 'iframe'` when your app needs another display mode. `prepareSignIn()` makes the popup start in the click handler, which Safari requires. In Chrome and Firefox, `signIn()` also works without preparation within their user activation window. A prepared request is used once and expires after five minutes. Call `prepareSignIn()` again after every sign-in attempt, including a canceled approval or a failed sign-in, and before the next click. Preparation also needs to be repeated if the button remains visible for more than five minutes.
 
+### Letting the user change the session expiry
+
+Pass `openkey: { client: openkey, expiryChangeable: true }` to let the user change the session expiry in the OpenKey approval. TinyCloudWeb then accepts the changed expiry and builds the session with the value the user signed, so `session.siwe`, the stored session and the delegations you issue all use that expiry. Every other field of the signed message must still match the request, and the SDK refuses an expiry that is within 60 seconds of now, not after the message was issued, or more than 10 years away.
+
+The option is a pass-through. `@openkey/sdk` >= 0.13.0 (beta) forwards `expiryChangeable` to the approval; the version is TBD until it is released. `@openkey/sdk` 0.12.x ignores the option, so the user cannot change the expiry and the session keeps the requested one.
+
 ## Working with Sessions
 
 The SDK manages user sessions automatically, but you can access session information if needed:
