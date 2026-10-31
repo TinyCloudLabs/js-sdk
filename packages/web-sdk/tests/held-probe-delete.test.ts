@@ -51,6 +51,8 @@ describe("probeHeldStoreAccess: a permission failure of the one list is PERMISSI
       const error = await failure(() => probe(kv));
       expect([error?.code, error?.message, error?.recoverable]).toEqual(["PERMISSION_DENIED", READ_TEXT, false]);
       expect(calls.list).toHaveLength(1);
+      // Nothing from the kv error is attached: no cause, no detail (no node message, address, space id or token can leak through the error object).
+      expect([(error as Error).cause, error?.details]).toEqual([undefined, {}]);
     });
   }
 });
@@ -94,6 +96,9 @@ describe("probeHeldStoreAccess: any other failure is OFFLINE with the list text"
     ["a message that merely says 401, with another code and no status", { list: kvError({ code: "NETWORK_ERROR", message: "kv/list: 401 - Unauthorized Action" }) }],
     ["a 5xx that carries the AUTH_UNAUTHORIZED code (the status decides)", { list: kvError({ code: "AUTH_UNAUTHORIZED", meta: { status: 503 } }) }],
     ["a kv that throws", { throwOnList: true }],
+    ["a not-ok result with no error object at all", { list: { ok: false } }],
+    ["a not-ok result whose error is undefined", { list: { ok: false, error: undefined } }],
+    ["a not-ok result whose error is null", { list: { ok: false, error: null } }],
   ];
   for (const [name, responses] of cases) {
     test(name, async () => {
@@ -101,6 +106,7 @@ describe("probeHeldStoreAccess: any other failure is OFFLINE with the list text"
       const error = await failure(() => probe(kv));
       expect([error?.code, error?.message, error?.recoverable]).toEqual(["OFFLINE", LIST_TEXT, true]);
       expect([calls.get, calls.put, calls.batchPut, calls.delete.length]).toEqual([0, 0, 0, 0]);
+      expect([(error as Error).cause, error?.details]).toEqual([undefined, {}]);
     });
   }
 });
