@@ -34,7 +34,12 @@ const requestSchema = z.object({
   targetPublicJwk: ed25519Jwk, nodeOrigin: origin,
   permissions: z.array(permission).min(1), reason: z.string().optional(),
   grantLifetimeSeconds: z.number().int().positive(), resultEncryptionPublicJwk: p256Jwk,
-}).strict();
+  /**
+   * The lifetime the requester suggests approving, in seconds. Absent means the maximum, `grantLifetimeSeconds`. When present it is at most that
+   * maximum; it has no upper bound of its own, and the approver may still choose less.
+   */
+  suggestedLifetimeSeconds: z.number().int().positive().optional(),
+}).strict().refine((request) => request.suggestedLifetimeSeconds === undefined || request.suggestedLifetimeSeconds <= request.grantLifetimeSeconds);
 
 export type OpenKeyApprovalRequestV1 = z.infer<typeof requestSchema>;
 
