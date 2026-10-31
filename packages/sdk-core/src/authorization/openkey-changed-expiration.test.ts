@@ -142,3 +142,49 @@ describe("checkChangedExpiration refuses", () => {
     expect(check(siwe({ nonce: "00000000" }))).toContain("nonce");
   });
 });
+
+// Review follow-up (TC-2276): the helper is a public export, so it must not accept on its own what only the SIWE
+// parser would have refused, and it must fail closed on inputs that make every comparison false.
+describe("checkChangedExpiration fails closed", () => {
+  const later = () => siwe({ expiry: "2026-08-02T00:00:00.000Z" });
+
+  it("on a non-finite current time, changed or unchanged expiry", () => {
+    for (const now of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      expect(check(later(), { now })).toContain("finite");
+      expect(check(siwe(), { now })).toContain("finite");
+    }
+    expect(checkChangedExpiration({ preparedSiwe: siwe(), signedSiwe: later(), now: new Date(Number.NaN) })).toContain("finite");
+  });
+
+  it("on a non-finite maximum, however far the expiry is", () => {
+    for (const maxExpiresAt of [Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(check(later(), { maxExpiresAt })).toContain("finite");
+    }
+    expect(checkChangedExpiration({ preparedSiwe: siwe(), signedSiwe: later(), now: NOW, maxExpiresAt: new Date(Number.NaN) })).toContain("finite");
+  });
+});
+
+describe("checkChangedExpiration refuses a non-canonical Expiration Time line", () => {
+  const expiry = "2026-08-02T00:00:00.000Z";
+  const canonical = () => siwe({ expiry });
+  const variants: Array<[string, () => string]> = [
+    ["CRLF line endings", () => canonical().replace(/\n/g, "\r\n")],
+    ["a lone carriage return", () => canonical().replace("\nURI:", "\r\nURI:")],
+    ["a tab after the colon", () => canonical().replace("Expiration Time: ", "Expiration Time:\t")],
+    ["a no-break space after the colon", () => canonical().replace("Expiration Time: ", "Expiration Time:\u00a0")],
+    ["two spaces after the colon", () => canonical().replace("Expiration Time: ", "Expiration Time:  ")],
+    ["a trailing space", () => canonical().replace(expiry, `${expiry} `)],
+    ["no space after the colon", () => canonical().replace("Expiration Time: ", "Expiration Time:")],
+    ["the line after Resources", () => `${siwe({ expiry: null })}\nExpiration Time: ${expiry}`],
+  ];
+
+  for (const [label, build] of variants) {
+    it(label, () => {
+      expect(check(build())).toContain("canonical");
+    });
+  }
+
+  it("but still accepts the canonical form", () => {
+    expect(check(canonical())).toBeNull();
+  });
+});

@@ -458,6 +458,20 @@ function parseInstantMs(value: string | undefined): number | undefined {
 
 const EXPIRATION_LINE = /^Expiration Time:/;
 
+/**
+ * True when the message has one `Expiration Time` line written exactly as the
+ * SIWE grammar allows: LF line endings only, one space after the colon, a value
+ * with no whitespace, and before the `Resources:` list.
+ */
+function hasCanonicalExpirationLine(siwe: string): boolean {
+  if (siwe.includes("\r")) return false;
+  const lines = siwe.split("\n");
+  const index = lines.findIndex((line) => EXPIRATION_LINE.test(line));
+  if (index < 0 || !/^Expiration Time: \S+$/.test(lines[index]!)) return false;
+  const resources = lines.indexOf("Resources:");
+  return resources < 0 || index < resources;
+}
+
 export interface CheckChangedExpirationInput {
   /** The SIWE the SDK prepared and sent. */
   preparedSiwe: string;
@@ -476,10 +490,17 @@ export interface CheckChangedExpirationInput {
  * changed is acceptable. Returns `null` to accept, else a short reason.
  * Call it only for a request that carried `expiryChangeable: true`.
  *
+ * Call it only after `signedSiwe` was parsed and its signature verified with
+ * `SiweMessage` (as `NodeUserAuthorization` does). The helper also refuses a
+ * non-canonical `Expiration Time` line on its own (CR or CRLF anywhere, a
+ * separator other than one space, trailing characters, or the line after
+ * `Resources:`), but it is not a SIWE parser.
+ *
  * Refused unless:
+ *   - `now` and `maxExpiresAt` (when given) are finite;
  *   - both messages have EXACTLY ONE `Expiration Time` line (the field
  *     extractor is last-wins, so it cannot be trusted to find a hidden second
- *     line);
+ *     line), and the signed one is canonical;
  *   - every other immutable field is byte-identical (`domain`, `uri`,
  *     `version`, `chainId`, `nonce`, `issuedAt`, `notBefore`, `address`,
  *     non-ReCap resources, and the statement when there is no ReCap);
@@ -493,11 +514,20 @@ export interface CheckChangedExpirationInput {
  */
 export function checkChangedExpiration(input: CheckChangedExpirationInput): string | null {
   const nowMs = input.now instanceof Date ? input.now.getTime() : input.now;
+  // Every comparison below is false for NaN, which would accept. Refuse instead.
+  if (!Number.isFinite(nowMs)) return "expiry check needs a finite current time";
+  const maxMs = input.maxExpiresAt === undefined
+    ? undefined
+    : input.maxExpiresAt instanceof Date ? input.maxExpiresAt.getTime() : input.maxExpiresAt;
+  if (maxMs !== undefined && !Number.isFinite(maxMs)) return "expiry check needs a finite maximum";
   const originalHasRecap =
     input.originalHasRecap ?? /(?:^|\n)-\s+urn:recap:/i.test(input.preparedSiwe);
   const countLines = (siwe: string) => siwe.split(/\r?\n/).filter((line) => EXPIRATION_LINE.test(line)).length;
   if (countLines(input.preparedSiwe) !== 1 || countLines(input.signedSiwe) !== 1) {
     return "expiry check needs exactly one Expiration Time line in both messages";
+  }
+  if (!hasCanonicalExpirationLine(input.signedSiwe)) {
+    return "the Expiration Time line is not in canonical SIWE form";
   }
   const prepared = extractImmutableSiweFields(input.preparedSiwe);
   const signed = extractImmutableSiweFields(input.signedSiwe);
@@ -516,9 +546,8 @@ export function checkChangedExpiration(input: CheckChangedExpirationInput): stri
     if (bound === undefined) return `${label} is not a valid timestamp`;
     if (expiresAt <= bound) return `expiry must be after ${label}`;
   }
-  if (input.maxExpiresAt !== undefined) {
-    const max = input.maxExpiresAt instanceof Date ? input.maxExpiresAt.getTime() : input.maxExpiresAt;
-    if (expiresAt > max) return "expiry is later than the maximum for this request";
+  if (maxMs !== undefined && expiresAt > maxMs) {
+    return "expiry is later than the maximum for this request";
   }
   if (expiresAt > nowMs + EXPIRY.MAX_MS) {
     return "expiry is more than 10 years away, the longest this SDK accepts; choose a shorter expiry";
