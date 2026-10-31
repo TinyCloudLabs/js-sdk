@@ -377,7 +377,7 @@ export interface SignedSessionExpectations {
   expiry?: RequestedExpiry;
   /** Grant escalation stores a portable delegation, not a login session. */
   purpose?: "grant";
-  /** Agent grant: the approval must cover every requested action, or no grant is stored. */
+  /** Agent grant: cover every requested action; additional owner-signed authority is allowed. */
   exactApproval?: boolean;
   /** The named-key folder row this login asked for; the only encryption folder row a signed grant may carry. */
   namedKeyRow?: ProfileNamedKeys;
@@ -492,7 +492,7 @@ function withoutRequestedKeyRow(
   return rest;
 }
 
-/** Verify signed authority, and that it stays inside the requested manifest, before a scoped login saves anything. */
+/** Verify signed authority against the whole-request grant or legacy narrowed-manifest contract before saving. */
 export function verifyScopedLogin(
   data: Record<string, unknown>,
   key: object,
@@ -542,9 +542,9 @@ export function verifyScopedLogin(
       throw new CLIError("OPENKEY_SCOPE_MISMATCH", `OpenKey signed decrypt for a network not owned by the approving identity. ${notStored}`, ExitCode.PERMISSION_DENIED);
     }
   }
-  // A signed action is inside the request when a requested one covers it: the
-  // same action, unrestricted or with the same caveats (OpenKey may narrow).
-  if (!scopeCovers(requested, approved, signed.ownerDid)) {
+  // Legacy manifest login may narrow the request, but cannot add authority.
+  // A whole-request grant may carry additional authority approved by the signer.
+  if (!expected.exactApproval && !scopeCovers(requested, approved, signed.ownerDid)) {
     throw new CLIError("OPENKEY_GRANT_BROADENED", `The signed grant contains authority beyond the requested ${expected.purpose === "grant" ? "grant" : "manifest"}. ${notStored}`, ExitCode.PERMISSION_DENIED);
   }
   // An agent grant stands for the whole request. An action the owner unchecked
@@ -552,8 +552,8 @@ export function verifyScopedLogin(
   if (expected.exactApproval && !scopeCovers(approved, requested, signed.ownerDid)) {
     throw new CLIError("OPENKEY_APPROVAL_NARROWER", `The approval was narrower than the request. Approve all of it, or ask the agent to request less. ${notStored}`, ExitCode.PERMISSION_DENIED);
   }
-  // The SIWE proof stays intact for validation/diagnostics. Only effective,
-  // requested authority is recorded as approved and compared on renewals.
+  // The SIWE proof stays intact for validation/diagnostics. Record only verified,
+  // effective authority, including signed extras in a whole-request grant.
   const session = withVerifiedAuthority({ ...data, jwk: key }, { ...signed, permissions: approved });
   return { session, legacyNested };
 }
