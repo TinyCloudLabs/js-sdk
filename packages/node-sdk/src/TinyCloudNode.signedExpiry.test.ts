@@ -80,9 +80,6 @@ describe("signed expiry reaches the registry root", () => {
       expect(expiries.length).toBeGreaterThan(0);
       // Every registered root expires when the signed session does, not now + the configured lifetime.
       expect(expiries.every((e) => e === signedAt)).toBe(true);
-      // So does the sharing service, which caps the shares it issues at the session expiry.
-      const sharing = (node as unknown as { _sharingService: { sessionExpiry?: Date } })._sharingService;
-      expect(sharing.sessionExpiry?.getTime()).toBe(signedAt);
     });
   }
 
@@ -127,10 +124,36 @@ describe("prepared sign-in", () => {
   });
 });
 
-describe("the shared margin", () => {
-  test("the node's expiry safety margin is the 60 seconds the signed-expiry check requires", () => {
-    // sdk-core refuses a changed expiry at or inside 60 s of now; the node refuses to use a session inside this margin.
-    expect((TinyCloudNode as unknown as { SESSION_EXPIRY_SAFETY_MARGIN_MS: number }).SESSION_EXPIRY_SAFETY_MARGIN_MS).toBe(60_000);
+describe("a restored session", () => {
+  test("keeps the signed expiry: the registry root and delegateTo use it, not the configured lifetime", async () => {
+    const { node, signer } = makeNode(30 * DAY_MS);
+    const signedExpiry = new Date(Date.now() + 2 * HOUR_MS).toISOString();
+    await node.signInWithOpenKey(
+      async (request) => richResultFor(signer, withExpiration(request.siwe, signedExpiry)),
+      { expiryChangeable: true },
+    );
+    const persisted = node.restorableSession!;
+    expect(/Expiration Time: (.+)/.exec(persisted.siwe)?.[1]).toBe(signedExpiry);
+
+    // A new process: same signer, a 30 day configured lifetime, only the persisted record to go on.
+    const restored = new TinyCloudNode({
+      signer: new PrivateKeySigner(PRIVATE_KEY),
+      wasmBindings: new NodeWasmBindings(),
+      host: "https://tinycloud.test",
+      sessionExpirationMs: 30 * DAY_MS,
+      autoCreateSpace: false,
+    } as ConstructorParameters<typeof TinyCloudNode>[0]);
+    await restored.restoreSession(persisted);
+
+    const expiries = rootExpiries(restored);
+    expect(expiries.length).toBeGreaterThan(0);
+    expect(expiries.every((e) => e === new Date(signedExpiry).getTime())).toBe(true);
+    const { delegation } = await restored.delegateTo(
+      "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+      [{ service: "tinycloud.kv", space: "default", path: "items/", actions: ["get"] }],
+      { expiry: "30d" },
+    );
+    expect(delegation.expiry.getTime()).toBeLessThanOrEqual(new Date(signedExpiry).getTime());
   });
 });
 

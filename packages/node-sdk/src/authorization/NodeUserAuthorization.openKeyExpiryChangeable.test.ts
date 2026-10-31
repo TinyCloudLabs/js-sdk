@@ -1,7 +1,7 @@
 // TC-2276: a user may change the expiry in the OpenKey approval. The SDK accepts the SIGNED expiry only when the
 // request it sent carried `expiryChangeable: true`; every other difference stays refused.
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bun:test";
 
 import { NodeUserAuthorization, type PreparedOpenKeyAuthorization } from "./NodeUserAuthorization";
 import { NodeWasmBindings } from "../NodeWasmBindings";
@@ -11,7 +11,10 @@ import { richResultFor, withExpiration } from "../test-support/openkey-result";
 
 let originalFetch: typeof globalThis.fetch;
 
+const calls = { delegate: 0 };
+
 beforeEach(() => {
+  calls.delegate = 0;
   originalFetch = globalThis.fetch;
   globalThis.fetch = (async (input: unknown, init?: { method?: string }) => {
     const url = String(input);
@@ -22,6 +25,7 @@ beforeEach(() => {
       });
     }
     if (url.endsWith("/delegate") && init?.method === "POST") {
+      calls.delegate++;
       return new Response(JSON.stringify({ activated: ["space"], skipped: [] }), {
         status: 200,
         headers: { "content-type": "application/json" },
@@ -39,7 +43,7 @@ const PRIVATE_KEY = "1".padStart(64, "0");
 const DAY_MS = 24 * 60 * 60 * 1000;
 const iso = (offsetMs: number) => new Date(Date.now() + offsetMs).toISOString();
 
-async function setup() {
+async function setup(extra: Record<string, unknown> = {}) {
   const signer = new PrivateKeySigner(PRIVATE_KEY);
   const storage = new MemorySessionStorage();
   const auth = new NodeUserAuthorization({
@@ -49,6 +53,7 @@ async function setup() {
     domain: "example.com",
     tinycloudHosts: ["https://tinycloud.test"],
     sessionStorage: storage,
+    ...extra,
   });
   const preparation = await auth.prepareSessionForSigning();
   const prepared = {
@@ -62,7 +67,7 @@ async function setup() {
 
 type Setup = Awaited<ReturnType<typeof setup>>;
 
-function complete(s: Setup, signedMessage: string, options?: { expiryChangeable?: boolean }) {
+function complete(s: Setup, signedMessage: string, options?: Parameters<NodeUserAuthorization["signInWithOpenKeyResult"]>[4]) {
   return richResultFor(s.signer, signedMessage).then((result) =>
     s.auth.signInWithOpenKeyResult(result, s.prepared, s.preparation.keyId, s.preparation.prepared.jwk, options),
   );
@@ -150,7 +155,9 @@ describe("with the opt-in", () => {
     const s = await setup();
     const valid = withExpiration(s.prepared.siwe, iso(40 * DAY_MS));
     const twice = valid.replace(/(Expiration Time: .*)/, `$1\nExpiration Time: ${iso(10 * 60_000)}`);
-    await expect(complete(s, twice, { expiryChangeable: true })).rejects.toThrow();
+    // The SIWE parser refuses a second line before the helper runs; the helper's own one-line rule is pinned in
+    // sdk-core (`openkey-changed-expiration.test.ts`, "two Expiration Time lines, whichever one the parser would pick").
+    await expect(complete(s, twice, { expiryChangeable: true })).rejects.toThrow(/not a parseable SIWE/);
     expect(s.auth.tinyCloudSession).toBeUndefined();
   });
 
@@ -162,7 +169,7 @@ describe("with the opt-in", () => {
     const result = await richResultFor(s.signer, valid);
     await expect(
       s.auth.signInWithOpenKeyResult(result, narrowedPrepared, s.preparation.keyId, s.preparation.prepared.jwk, { expiryChangeable: true }),
-    ).rejects.toThrow();
+    ).rejects.toThrow(/broadened authorization/);
   });
 });
 
@@ -248,5 +255,125 @@ describe("through signInWithOpenKey / prepareOpenKeySignIn", () => {
       }),
     ).rejects.toThrow(DEFAULT_REFUSAL);
     expect(Object.keys(sent ?? {})).not.toContain("expiryChangeable");
+  });
+});
+
+// Review follow-up (TC-2276): an app-level maximum (`maxExpiresAt`), checked before anything is activated.
+describe("maxExpiresAt: an app-level maximum for the signed expiry", () => {
+  const refusal = /^OpenKey signedMessage expiry is later than the maximum for this request \(the latest allowed is \d{4}-\d{2}-\d{2}T/;
+
+  test("a signed expiry above the maximum is refused BEFORE any session, storage, replica stamp or activation", async () => {
+    for (const asMax of [(ms: number) => ms, (ms: number) => new Date(ms), (ms: number) => () => ms]) {
+      let stamps = 0;
+      const s = await setup({ establishReplicaStamp: async () => { stamps++; return undefined; } });
+      calls.delegate = 0;
+      const max = Date.now() + DAY_MS;
+      await expect(complete(s, withExpiration(s.prepared.siwe, iso(10 * DAY_MS)), { expiryChangeable: true, maxExpiresAt: asMax(max) }))
+        .rejects.toThrow(refusal);
+      expect(s.auth.tinyCloudSession).toBeUndefined();
+      expect(await s.storage.load(await s.signer.getAddress())).toBeNull();
+      expect(stamps).toBe(0);
+      expect(calls.delegate).toBe(0);
+    }
+  });
+
+  test("an expiry at or below the maximum is accepted, and the activation then runs", async () => {
+    const s = await setup();
+    calls.delegate = 0;
+    const atMax = new Date(Date.now() + DAY_MS).toISOString();
+    const session = await complete(s, withExpiration(s.prepared.siwe, atMax), { expiryChangeable: true, maxExpiresAt: Date.parse(atMax) });
+    expect(/Expiration Time: (.+)/.exec(session.siwe)?.[1]).toBe(atMax);
+    expect(calls.delegate).toBeGreaterThan(0);
+    const t = await setup();
+    await complete(t, withExpiration(t.prepared.siwe, iso(10 * 60_000)), { expiryChangeable: true, maxExpiresAt: Date.now() + DAY_MS });
+    expect(t.auth.tinyCloudSession).toBeDefined();
+  });
+
+  test("a function maximum is read when the result arrives, so a slow approval is not refused for the delay", async () => {
+    const signer = new PrivateKeySigner(PRIVATE_KEY);
+    const auth = new NodeUserAuthorization({
+      signer, wasmBindings: new NodeWasmBindings(), signStrategy: { type: "auto-sign" }, domain: "example.com",
+      tinycloudHosts: ["https://tinycloud.test"], sessionStorage: new MemorySessionStorage(),
+    });
+    // The request asks for 10 minutes. The ceiling is "10 minutes + 30 s from now", evaluated at each call.
+    let reads = 0;
+    const pending = await auth.prepareOpenKeySignIn({ expiryChangeable: true, maxExpiresAt: () => { reads++; return Date.now() + 10 * 60_000 + 30_000; } });
+    expect(reads).toBe(0);
+    setSystemTime(new Date(Date.now() + 4 * 60_000));
+    try {
+      // Approved four minutes later; the user picks nine minutes from then: later than "request time + 10.5 minutes".
+      const signed = withExpiration(pending.request.siwe, new Date(Date.now() + 9 * 60_000).toISOString());
+      const session = await auth.completeOpenKeySignIn(pending, richResultFor(signer, signed));
+      expect(session.siwe).toBe(signed);
+      expect(reads).toBe(1);
+    } finally {
+      setSystemTime();
+    }
+  });
+
+  test("it is never sent to OpenKey and never persisted", async () => {
+    const signer = new PrivateKeySigner(PRIVATE_KEY);
+    const storage = new MemorySessionStorage();
+    const auth = new NodeUserAuthorization({
+      signer, wasmBindings: new NodeWasmBindings(), signStrategy: { type: "auto-sign" }, domain: "example.com",
+      tinycloudHosts: ["https://tinycloud.test"], sessionStorage: storage,
+    });
+    let sent = "";
+    await auth.signInWithOpenKey(async (request) => {
+      sent = JSON.stringify(request);
+      return richResultFor(signer, withExpiration(request.siwe, iso(60 * 60_000)));
+    }, { expiryChangeable: true, maxExpiresAt: Date.now() + DAY_MS });
+    expect(sent).toContain("expiryChangeable");
+    expect(sent).not.toContain("maxExpiresAt");
+    const persisted = await storage.load(await signer.getAddress());
+    expect(JSON.stringify(persisted)).not.toContain("maxExpiresAt");
+  });
+
+  test("a maximum that is not a finite time is refused before OpenKey is asked", async () => {
+    const signer = new PrivateKeySigner(PRIVATE_KEY);
+    const auth = new NodeUserAuthorization({
+      signer, wasmBindings: new NodeWasmBindings(), signStrategy: { type: "auto-sign" }, domain: "example.com",
+      tinycloudHosts: ["https://tinycloud.test"], sessionStorage: new MemorySessionStorage(),
+    });
+    for (const maxExpiresAt of [Number.NaN, new Date(Number.NaN), Number.POSITIVE_INFINITY]) {
+      let asked = false;
+      await expect(auth.signInWithOpenKey(async () => { asked = true; throw new Error("unreachable"); }, { expiryChangeable: true, maxExpiresAt }))
+        .rejects.toThrow(/maxExpiresAt must be/);
+      expect(asked).toBe(false);
+    }
+  });
+
+  test("without the opt-in it is not consulted: a changed expiry is still refused with the unchanged message", async () => {
+    const s = await setup();
+    await expect(complete(s, withExpiration(s.prepared.siwe, iso(60 * 60_000)), { maxExpiresAt: Date.now() + 2 * 60 * 60_000 }))
+      .rejects.toThrow(DEFAULT_REFUSAL);
+  });
+});
+
+// Review follow-up (TC-2276, pre-existing): the persisted expiry and creation time come from the signed message's own
+// lines. A ReCap-bearing statement is not diffed, so a signer can put `Expiration Time: ...` text inside it.
+describe("the persisted expiry is the signed Expiration Time line, not text in the statement", () => {
+  const injected = " x Expiration Time: 2099-01-01T00:00:00.000Z Issued At: 1999-01-01T00:00:00.000Z";
+
+  test("unchanged expiry", async () => {
+    const s = await setup();
+    const lines = s.prepared.siwe.split("\n");
+    expect(lines[3]).toMatch(/^I further authorize/);
+    lines[3] += injected;
+    await complete(s, lines.join("\n"));
+    const persisted = await s.storage.load(await s.signer.getAddress());
+    expect(persisted?.expiresAt).toBe(/^Expiration Time: (.+)$/m.exec(s.prepared.siwe)![1]);
+    expect(persisted?.createdAt).toBe(/^Issued At: (.+)$/m.exec(s.prepared.siwe)![1]);
+  });
+
+  test("changed expiry with the opt-in", async () => {
+    const s = await setup();
+    const expiry = iso(2 * DAY_MS);
+    const lines = withExpiration(s.prepared.siwe, expiry).split("\n");
+    lines[3] += injected;
+    await complete(s, lines.join("\n"), { expiryChangeable: true });
+    const persisted = await s.storage.load(await s.signer.getAddress());
+    expect(persisted?.expiresAt).toBe(expiry);
+    expect(persisted?.createdAt).toBe(/^Issued At: (.+)$/m.exec(s.prepared.siwe)![1]);
   });
 });
