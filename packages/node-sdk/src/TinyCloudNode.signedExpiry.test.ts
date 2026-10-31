@@ -80,6 +80,9 @@ describe("signed expiry reaches the registry root", () => {
       expect(expiries.length).toBeGreaterThan(0);
       // Every registered root expires when the signed session does, not now + the configured lifetime.
       expect(expiries.every((e) => e === signedAt)).toBe(true);
+      // So does the sharing service, which caps the shares it issues at the session expiry.
+      const sharing = (node as unknown as { _sharingService: { sessionExpiry?: Date } })._sharingService;
+      expect(sharing.sessionExpiry?.getTime()).toBe(signedAt);
     });
   }
 
