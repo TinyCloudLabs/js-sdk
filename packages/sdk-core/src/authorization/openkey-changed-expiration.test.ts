@@ -95,7 +95,10 @@ describe("checkChangedExpiration refuses", () => {
 
   it("an expiry beyond the request max", () => {
     const max = Date.parse("2026-08-01T03:00:00.000Z");
-    expect(check(siwe({ expiry: iso(max + 1) }), { maxExpiresAt: max })).toContain("maximum");
+    const reason = check(siwe({ expiry: iso(max + 1) }), { maxExpiresAt: max });
+    expect(reason).toContain("maximum");
+    // Names the limit, so the person who picked the expiry knows what to choose instead.
+    expect(reason).toContain("2026-08-01T03:00:00.000Z");
   });
 
   it("an expiry beyond the ten-year ceiling when there is no request max", () => {
@@ -157,7 +160,7 @@ describe("checkChangedExpiration fails closed", () => {
   });
 
   it("on a non-finite maximum, however far the expiry is", () => {
-    for (const maxExpiresAt of [Number.NaN, Number.POSITIVE_INFINITY]) {
+    for (const maxExpiresAt of [Number.NaN, Number.POSITIVE_INFINITY, 1e20]) {
       expect(check(later(), { maxExpiresAt })).toContain("finite");
     }
     expect(checkChangedExpiration({ preparedSiwe: siwe(), signedSiwe: later(), now: NOW, maxExpiresAt: new Date(Number.NaN) })).toContain("finite");

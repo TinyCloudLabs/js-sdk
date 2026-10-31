@@ -519,7 +519,8 @@ export function checkChangedExpiration(input: CheckChangedExpirationInput): stri
   const maxMs = input.maxExpiresAt === undefined
     ? undefined
     : input.maxExpiresAt instanceof Date ? input.maxExpiresAt.getTime() : input.maxExpiresAt;
-  if (maxMs !== undefined && !Number.isFinite(maxMs)) return "expiry check needs a finite maximum";
+  // A finite number outside the Date range would make `toISOString` throw below.
+  if (maxMs !== undefined && !Number.isFinite(new Date(maxMs).getTime())) return "expiry check needs a finite maximum";
   const originalHasRecap =
     input.originalHasRecap ?? /(?:^|\n)-\s+urn:recap:/i.test(input.preparedSiwe);
   const countLines = (siwe: string) => siwe.split(/\r?\n/).filter((line) => EXPIRATION_LINE.test(line)).length;
@@ -547,7 +548,7 @@ export function checkChangedExpiration(input: CheckChangedExpirationInput): stri
     if (expiresAt <= bound) return `expiry must be after ${label}`;
   }
   if (maxMs !== undefined && expiresAt > maxMs) {
-    return "expiry is later than the maximum for this request";
+    return `expiry is later than the maximum for this request (the latest allowed is ${new Date(maxMs).toISOString()})`;
   }
   if (expiresAt > nowMs + EXPIRY.MAX_MS) {
     return "expiry is more than 10 years away, the longest this SDK accepts; choose a shorter expiry";
