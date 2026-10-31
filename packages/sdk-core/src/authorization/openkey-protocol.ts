@@ -14,6 +14,11 @@
 //     to remove any non-required grant.
 //   - `selectedActionKeys` are opaque IDs the API produced. Consumers must
 //     not rebuild them from ability strings alone.
+//   - `expirationTime` is the one header field the user may change, and only
+//     when the request carried `expiryChangeable: true`. The session then
+//     lives for the SIGNED expiry; see `checkChangedExpiration`.
+
+import { EXPIRY } from "../expiry";
 
 export interface TinyCloudAuthorizationRequestV1 {
   protocolVersion: 1;
@@ -23,6 +28,14 @@ export interface TinyCloudAuthorizationRequestV1 {
   keyId?: string;
   /** Optional presentation envelope for the review page. */
   presentation?: CapabilityPresentationEnvelopeV1;
+  /**
+   * The user may change the expiration time in the OpenKey approval. Send it
+   * only when the app accepts the signed value; without it a changed
+   * `Expiration Time` in the signed message is refused. `@openkey/sdk` 0.13.0
+   * (beta) and later forward the field (exact version TBD until released);
+   * an older `@openkey/sdk` drops it and the approval keeps the app's expiry.
+   */
+  expiryChangeable?: boolean;
 }
 
 export interface TinyCloudAuthorizationResultV1 {
@@ -375,11 +388,15 @@ export function extractImmutableSiweFields(siwe: string): ImmutableSiweFields {
  * Callers signal which regime applies via `options.originalHasRecap`.
  * When omitted (legacy callers), statement is included in the diff — the
  * safer default for non-ReCap flows.
+ *
+ * `options.allowExpirationChange` drops `expirationTime` from the comparison and
+ * nothing else. Use it only for a request that carried `expiryChangeable: true`,
+ * and gate the changed value with `checkChangedExpiration`.
  */
 export function diffImmutableSiweFields(
   original: ImmutableSiweFields,
   signed: ImmutableSiweFields,
-  options?: { originalHasRecap?: boolean },
+  options?: { originalHasRecap?: boolean; allowExpirationChange?: boolean },
 ): string[] {
   // Sol MAJOR-4: include the complete immutable-field set. Any drift on
   // ANY of these fields is a broadening or a substitution — reject.
@@ -400,9 +417,11 @@ export function diffImmutableSiweFields(
   // `statement` when the original had NO ReCap. A ReCap-bearing SIWE
   // has its statement derived from the ReCap contents by WASM, and the
   // ReCap subset check is the authoritative narrowing gate.
-  const keys = options?.originalHasRecap
-    ? baseKeys
-    : [...baseKeys, "statement" as keyof ImmutableSiweFields];
+  const keys = (
+    options?.originalHasRecap
+      ? baseKeys
+      : [...baseKeys, "statement" as keyof ImmutableSiweFields]
+  ).filter((key) => !(options?.allowExpirationChange === true && key === "expirationTime"));
   const diffs: string[] = [];
   for (const key of keys) {
     // Normalize undefined to "" so a field missing on both sides is
@@ -414,6 +433,97 @@ export function diffImmutableSiweFields(
     }
   }
   return diffs;
+}
+
+/**
+ * The signed message must have more than this long left. Mirrors the node's
+ * session-expiry safety margin (`TinyCloudNode`): inside it, grants and
+ * delegations refuse, so such a session would be born unusable.
+ */
+const CHANGED_EXPIRY_MIN_REMAINING_MS = 60_000;
+
+const ISO_INSTANT =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+
+/** A strict ISO-8601 instant as epoch milliseconds, or `undefined`. */
+function parseInstantMs(value: string | undefined): number | undefined {
+  const match = value === undefined ? null : ISO_INSTANT.exec(value);
+  if (!match || value === undefined) return undefined;
+  const [year, month, day] = [Number(match[1]), Number(match[2]), Number(match[3])];
+  // Date.parse may roll an impossible day (Feb 31) into the next month.
+  if (new Date(Date.UTC(year, month - 1, day)).getUTCDate() !== day) return undefined;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : undefined;
+}
+
+const EXPIRATION_LINE = /^Expiration Time:/;
+
+export interface CheckChangedExpirationInput {
+  /** The SIWE the SDK prepared and sent. */
+  preparedSiwe: string;
+  /** The exact message OpenKey returned and signed. */
+  signedSiwe: string;
+  /** Current time, as a Date or epoch milliseconds. */
+  now: Date | number;
+  /** The latest expiry this request allows (for example from a grant lifetime), when it has one. */
+  maxExpiresAt?: Date | number;
+  /** Whether the prepared message carries a ReCap. Computed from `preparedSiwe` when omitted. */
+  originalHasRecap?: boolean;
+}
+
+/**
+ * Decide whether a signed message whose `Expiration Time` the user may have
+ * changed is acceptable. Returns `null` to accept, else a short reason.
+ * Call it only for a request that carried `expiryChangeable: true`.
+ *
+ * Refused unless:
+ *   - both messages have EXACTLY ONE `Expiration Time` line (the field
+ *     extractor is last-wins, so it cannot be trusted to find a hidden second
+ *     line);
+ *   - every other immutable field is byte-identical (`domain`, `uri`,
+ *     `version`, `chainId`, `nonce`, `issuedAt`, `notBefore`, `address`,
+ *     non-ReCap resources, and the statement when there is no ReCap);
+ *   - a CHANGED expiry is a valid timestamp, more than 60 seconds from now,
+ *     after `Issued At` and after `Not Before` (when the prepared message has
+ *     them), not after `maxExpiresAt` (when given), and within ten years
+ *     (`EXPIRY.MAX_MS`).
+ *
+ * An unchanged expiry passes the expiry rules. The ReCap subset check and the
+ * rest of the result verification stay with the caller and are not relaxed.
+ */
+export function checkChangedExpiration(input: CheckChangedExpirationInput): string | null {
+  const nowMs = input.now instanceof Date ? input.now.getTime() : input.now;
+  const originalHasRecap =
+    input.originalHasRecap ?? /(?:^|\n)-\s+urn:recap:/i.test(input.preparedSiwe);
+  const countLines = (siwe: string) => siwe.split(/\r?\n/).filter((line) => EXPIRATION_LINE.test(line)).length;
+  if (countLines(input.preparedSiwe) !== 1 || countLines(input.signedSiwe) !== 1) {
+    return "expiry check needs exactly one Expiration Time line in both messages";
+  }
+  const prepared = extractImmutableSiweFields(input.preparedSiwe);
+  const signed = extractImmutableSiweFields(input.signedSiwe);
+  const drift = diffImmutableSiweFields(prepared, signed, { originalHasRecap, allowExpirationChange: true });
+  if (drift.length > 0) return `altered immutable SIWE fields: ${drift.join(", ")}`;
+  if (signed.expirationTime === prepared.expirationTime) return null;
+
+  const expiresAt = parseInstantMs(signed.expirationTime);
+  if (expiresAt === undefined) return "expiry is not a valid timestamp";
+  if (expiresAt <= nowMs + CHANGED_EXPIRY_MIN_REMAINING_MS) {
+    return "expiry must be more than 60 seconds from now";
+  }
+  for (const [label, value] of [["Issued At", prepared.issuedAt], ["Not Before", prepared.notBefore]] as const) {
+    if (value === undefined || value === "") continue;
+    const bound = parseInstantMs(value);
+    if (bound === undefined) return `${label} is not a valid timestamp`;
+    if (expiresAt <= bound) return `expiry must be after ${label}`;
+  }
+  if (input.maxExpiresAt !== undefined) {
+    const max = input.maxExpiresAt instanceof Date ? input.maxExpiresAt.getTime() : input.maxExpiresAt;
+    if (expiresAt > max) return "expiry is later than the maximum for this request";
+  }
+  if (expiresAt > nowMs + EXPIRY.MAX_MS) {
+    return "expiry is more than 10 years away, the longest this SDK accepts; choose a shorter expiry";
+  }
+  return null;
 }
 
 /**
