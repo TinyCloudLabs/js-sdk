@@ -468,7 +468,8 @@ function hasCanonicalExpirationLine(siwe: string): boolean {
   const lines = siwe.split("\n");
   const index = lines.findIndex((line) => EXPIRATION_LINE.test(line));
   if (index < 0 || !/^Expiration Time: \S+$/.test(lines[index]!)) return false;
-  const resources = lines.indexOf("Resources:");
+  // Line 3 is the statement (or `URI:`), so start after it: a statement that is exactly `Resources:` is not the list.
+  const resources = lines.indexOf("Resources:", 4);
   return resources < 0 || index < resources;
 }
 

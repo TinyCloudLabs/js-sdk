@@ -2044,15 +2044,14 @@ export class NodeUserAuthorization implements IUserAuthorization {
       signature,
     };
 
-    // Extract expiration from SIWE message (parse the string)
-    // The signed expiry and creation time are the message's own lines. Anchored, so text inside a ReCap statement
-    // (which is not compared) cannot stand in for them.
-    const expirationMatch = prepared.siwe?.match(/^Expiration Time: (.+)$/m);
-    const issuedAtMatch = prepared.siwe?.match(/^Issued At: (.+)$/m);
+    // The signed expiry and creation time are the message's own lines. Anchored, and the LAST match: a ReCap statement
+    // is not compared, and a statement that itself begins with `Expiration Time: ` or `Issued At: ` matches the anchored
+    // regex too, but the real lines follow the statement.
+    const lastLine = (pattern: RegExp): string | undefined => [...(prepared.siwe ?? "").matchAll(pattern)].at(-1)?.[1];
     const expiresAt =
-      expirationMatch?.[1] ??
+      lastLine(/^Expiration Time: (.+)$/gm) ??
       new Date(Date.now() + this.sessionExpirationMs).toISOString();
-    const createdAt = issuedAtMatch?.[1] ?? new Date().toISOString();
+    const createdAt = lastLine(/^Issued At: (.+)$/gm) ?? new Date().toISOString();
 
     const replicaStamp = await this.establishReplicaStamp?.(tinyCloudSession);
     const persistedData = this.persistedData(tinyCloudSession, expiresAt, createdAt, replicaStamp);

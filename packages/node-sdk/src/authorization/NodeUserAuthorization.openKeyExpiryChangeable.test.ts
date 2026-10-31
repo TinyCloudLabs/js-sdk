@@ -377,3 +377,30 @@ describe("the persisted expiry is the signed Expiration Time line, not text in t
     expect(persisted?.createdAt).toBe(/^Issued At: (.+)$/m.exec(s.prepared.siwe)![1]);
   });
 });
+
+// A statement line that BEGINS with `Expiration Time: ` / `Issued At: ` also matches an anchored regex, and it comes
+// before the real line. The real line follows the statement, so the LAST anchored match is the signed one.
+describe("a statement that begins with an expiry or issued-at line cannot stand in for the real line (default path)", () => {
+  test("Expiration Time: 2099-... at the start of the statement", async () => {
+    const s = await setup();
+    const lines = s.prepared.siwe.split("\n");
+    expect(lines[3]).toMatch(/^I further authorize/);
+    lines[3] = `Expiration Time: 2099-01-01T00:00:00.000Z ${lines[3]}`;
+    await complete(s, lines.join("\n"));
+    const persisted = await s.storage.load(await s.signer.getAddress());
+    const real = /^Expiration Time: (.+)$/m.exec(s.prepared.siwe)![1]!;
+    expect(Number.isFinite(Date.parse(persisted!.expiresAt))).toBe(true);
+    expect(persisted?.expiresAt).toBe(real);
+  });
+
+  test("Issued At: 1999-... at the start of the statement", async () => {
+    const s = await setup();
+    const lines = s.prepared.siwe.split("\n");
+    lines[3] = `Issued At: 1999-01-01T00:00:00.000Z ${lines[3]}`;
+    await complete(s, lines.join("\n"));
+    const persisted = await s.storage.load(await s.signer.getAddress());
+    const real = /^Issued At: (.+)$/m.exec(s.prepared.siwe)![1]!;
+    expect(Number.isFinite(Date.parse(persisted!.createdAt))).toBe(true);
+    expect(persisted?.createdAt).toBe(real);
+  });
+});

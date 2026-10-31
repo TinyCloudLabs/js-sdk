@@ -191,3 +191,22 @@ describe("checkChangedExpiration refuses a non-canonical Expiration Time line", 
     expect(check(canonical())).toBeNull();
   });
 });
+
+// Opus P3-2: the statement is line 3. A statement that is exactly `Resources:` must not be mistaken for the Resources
+// list (which would wrongly refuse even an unchanged expiry).
+describe("checkChangedExpiration with a statement that is exactly Resources:", () => {
+  const statement = "Resources:";
+
+  it("accepts an unchanged expiry", () => {
+    expect(check(siwe({ statement }), { prepared: siwe({ statement }) })).toBeNull();
+  });
+
+  it("accepts a changed expiry", () => {
+    expect(check(siwe({ statement, expiry: "2026-08-02T00:00:00.000Z" }), { prepared: siwe({ statement }) })).toBeNull();
+  });
+
+  it("still refuses an expiry line placed after the real Resources list", () => {
+    const after = `${siwe({ statement, expiry: null })}\nExpiration Time: 2026-08-02T00:00:00.000Z`;
+    expect(check(after, { prepared: siwe({ statement }) })).toContain("canonical");
+  });
+});
