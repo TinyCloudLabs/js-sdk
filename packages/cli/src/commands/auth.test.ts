@@ -169,7 +169,7 @@ function resetState(): void {
     spaceId: "tinycloud:pkh:eip155:1:0xowner:default",
     ownerDid: "did:pkh:eip155:1:0xowner",
     verificationMethod: "did:key:new-openkey",
-    expiry: "2099-01-01T00:00:00.000Z",
+    expiry: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
     // OpenKey always returns its SIWE proof; the wasm verifier below stands in for checking it.
     siwe: "siwe-message",
     signature: "0xsignature",
