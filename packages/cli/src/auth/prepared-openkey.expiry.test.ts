@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { extractRecapAttenuations, parseCanonicalRecapResource } from "@tinycloud/sdk-core";
 
 const nodeSdk = await import("@tinycloud/node-sdk");
-type NodeConfig = ConstructorParameters<typeof nodeSdk.TinyCloudNode>[0];
+type NodeConfig = NonNullable<ConstructorParameters<typeof nodeSdk.TinyCloudNode>[0]>;
 const created: Array<{ config: NodeConfig; signInOptions: unknown[] }> = [];
 
 class RecordingNode extends nodeSdk.TinyCloudNode {
@@ -19,9 +19,12 @@ class RecordingNode extends nodeSdk.TinyCloudNode {
     this.record = { config, signInOptions: [] };
     created.push(this.record);
   }
-  override async signInWithOpenKey(...args: Parameters<nodeSdk.TinyCloudNode["signInWithOpenKey"]>): Promise<void> {
-    this.record.signInOptions.push(args[1]);
-    return super.signInWithOpenKey(...args);
+  override async signInWithOpenKey(
+    authorizeFn: Parameters<InstanceType<typeof nodeSdk.TinyCloudNode>["signInWithOpenKey"]>[0],
+    options?: Parameters<InstanceType<typeof nodeSdk.TinyCloudNode>["signInWithOpenKey"]>[1],
+  ): Promise<void> {
+    this.record.signInOptions.push(options);
+    return super.signInWithOpenKey(authorizeFn, options);
   }
 }
 mock.module("@tinycloud/node-sdk", () => ({ ...nodeSdk, TinyCloudNode: RecordingNode }));
