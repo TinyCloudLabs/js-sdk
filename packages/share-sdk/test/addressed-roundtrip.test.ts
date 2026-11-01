@@ -88,7 +88,7 @@ describe("canonical addressed publication", () => {
     expect(JSON.stringify(published)).not.toContain(published.url);
     expect(published.deliveryMaterial?.sealedEnvelope).toMatch(/^[A-Za-z0-9_-]+$/);
     expect(published.deliveryMaterial?.envelopeKey).toMatch(/^[A-Za-z0-9_-]{43}$/);
-    expect(JSON.stringify(registration)).not.toContain("/share/");
+    expect(JSON.stringify(registration)).toContain(":default/share/addressedroundtrip0001");
   });
 
   it("retains the v3 envelope and binding material in encrypted sender history", async () => {
