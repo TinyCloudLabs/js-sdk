@@ -256,6 +256,49 @@ describe("plan: path, permissions and the checksummed network", () => {
   });
 });
 
+describe("owner input, share ids and plaintext handling (composer review)", () => {
+  it("accepts the owner as a DID in any case, a bare address, or { address, chainId } and always returns the checksummed network", () => {
+    const address = "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed";
+    for (const owner of [OWNER_PKH, OWNER_PKH.toLowerCase(), address, address.toLowerCase(), { address: address.toLowerCase() }, { address, chainId: 1 }]) {
+      expect(defaultEncryptionNetworkForOwner(owner)).toBe(NETWORK);
+    }
+    expect(defaultEncryptionNetworkForOwner({ address: address.toLowerCase(), chainId: 137 })).toBe(NETWORK.replace("eip155:1:", "eip155:137:"));
+    for (const bad of ["0x1234", { address: "nope" }, { address, chainId: 0 }, ""]) {
+      expect(() => defaultEncryptionNetworkForOwner(bad as never)).toThrow(expect.objectContaining({ code: "network-invalid" }));
+    }
+  });
+
+  it("accepts a lowercase hyphenated UUID as a share id and refuses ids the node would refuse as a key path", () => {
+    const uuid = "0f8fad5b-d9cb-469f-a165-70867728950e";
+    expect(pathBoundKeyPath(uuid)).toBe(`share/${uuid}`);
+    expect(planPathBoundShare({ shareId: uuid, encryptionNetwork: NETWORK }).keyResource).toBe(`${NETWORK}/share/${uuid}`);
+    for (const bad of [uuid.toUpperCase(), `-${uuid}`, `_${uuid}`, "a".repeat(65), "a".repeat(15), "a/b".padEnd(20, "x"), "aaaaaaaa aaaaaaaa"]) {
+      expect(() => pathBoundKeyPath(bad)).toThrow(expect.objectContaining({ code: "share-id-invalid" }));
+    }
+  });
+
+  it("does not retain or alter the plaintext buffer it is given: zeroing it afterwards changes nothing that was returned", async () => {
+    const { keys } = realKeys();
+    const plan = planPathBoundShare({ shareId: SHARE_ID, encryptionNetwork: NETWORK });
+    const plaintext = new TextEncoder().encode("secret plaintext");
+    const before = plaintext.slice();
+    const encrypted = await encryptAddressedShareContent({ plan, keys, plaintext });
+    expect(plaintext).toEqual(before);
+    const stored = encrypted.storedBytes.slice();
+    plaintext.fill(0);
+    expect(encrypted.byteLength).toBe(before.byteLength);
+    expect(encrypted.storedBytes).toEqual(stored);
+    expect(new TextDecoder().decode(encrypted.storedBytes)).not.toContain("secret plaintext");
+  });
+
+  it("never requests a permission itself: a session that already holds key.create gets no second prompt", async () => {
+    const { keys, requests } = realKeys();
+    const plan = planPathBoundShare({ shareId: SHARE_ID, encryptionNetwork: NETWORK });
+    await encryptAddressedShareContent({ plan, keys, plaintext: new Uint8Array(3) });
+    expect(requests.filter((request) => request.url !== `${HOST}/info`).map((request) => request.method)).toEqual(["POST", "GET"]);
+  });
+});
+
 describe("bind and encrypt refuse what the recipient or node would", () => {
   it("a 403 on key creation also names the first-party-origin rule for OpenKey owners", async () => {
     const { keys } = realKeys({ createStatus: 403, createBody: "app_key_grant_refused" });

@@ -49,7 +49,9 @@ export interface PathBoundPermissionEntry {
   actions: string[];
 }
 
-const SHARE_ID = /^[A-Za-z0-9_-]{16,128}$/;
+// The node's key-path grammar for the `share/<id>` segment (key_id.rs valid_segment): first byte a lowercase letter or digit, then lowercase
+// letters, digits, `.`, `_`, `-`; at most 64 bytes. 16 is this SDK's own minimum share id length.
+const SHARE_ID = /^[a-z0-9][a-z0-9._-]{15,63}$/;
 const NETWORK = /^urn:tinycloud:encryption:(did:[^/\s]+):default$/;
 const PKH_EIP155 = /^did:pkh:eip155:(\d+):(0x[0-9a-fA-F]{40})$/;
 const HEX_DIGEST = /^[0-9a-f]{64}$/;
@@ -75,21 +77,31 @@ function checksumAddress(address: string): string {
 /** The key path every addressed share is encrypted under: `share/<shareId>`. */
 export function pathBoundKeyPath(shareId: string): string {
   if (typeof shareId !== "string" || !SHARE_ID.test(shareId)) {
-    throw new AddressedContentSourceError("share-id-invalid", "addressed share id is invalid");
+    throw new AddressedContentSourceError("share-id-invalid", "addressed share id is invalid: 16 to 64 characters, lowercase letters, digits, '.', '_' or '-', starting with a letter or digit (a lowercase UUID, hyphens included, is valid)");
   }
   return `share/${shareId}`;
 }
 
 /**
  * The owner's default encryption network URN with the EIP-55 checksummed address, which is the only spelling the node
- * accepts for key and prefix resources. Pure; call it to turn a lower-cased owner DID into the network a plan requires.
+ * accepts for key and prefix resources. Pure. Accepts the owner DID (`did:pkh:eip155:<chain>:<address>`, any case), or just the
+ * owner's address (a string `0x...`, or `{ address, chainId? }`; chain id defaults to 1), so a caller never writes the spelling.
  */
-export function defaultEncryptionNetworkForOwner(ownerDid: string): string {
-  const pkh = typeof ownerDid === "string" ? PKH_EIP155.exec(ownerDid) : null;
-  const did = pkh === null ? ownerDid : `did:pkh:eip155:${pkh[1]}:${checksumAddress(pkh[2]!)}`;
-  const network = `urn:tinycloud:encryption:${did}:default`;
-  if (typeof did !== "string" || !NETWORK.test(network)) {
-    throw new AddressedContentSourceError("network-invalid", "owner DID does not name an encryption network");
+export function defaultEncryptionNetworkForOwner(owner: string | { readonly address: string; readonly chainId?: number }): string {
+  let did: unknown = owner;
+  const address = typeof owner === "string" ? (/^0x[0-9a-fA-F]{40}$/.test(owner) ? owner : undefined) : owner?.address;
+  if (address !== undefined) {
+    const chainId = typeof owner === "string" ? 1 : owner.chainId ?? 1;
+    if (typeof address !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(address) || !Number.isSafeInteger(chainId) || chainId < 1) {
+      throw new AddressedContentSourceError("network-invalid", "owner address is not an Ethereum address");
+    }
+    did = `did:pkh:eip155:${chainId}:${address}`;
+  }
+  const pkh = typeof did === "string" ? PKH_EIP155.exec(did) : null;
+  const normalized = pkh === null ? did : `did:pkh:eip155:${pkh[1]}:${checksumAddress(pkh[2]!)}`;
+  const network = `urn:tinycloud:encryption:${String(normalized)}:default`;
+  if (typeof normalized !== "string" || !NETWORK.test(network)) {
+    throw new AddressedContentSourceError("network-invalid", "owner does not name an encryption network");
   }
   return network;
 }
@@ -251,6 +263,8 @@ export async function encryptAddressedShareContent(input: {
   readonly metadata?: Readonly<Record<string, string>>;
 }): Promise<EncryptedAddressedContent> {
   const { plan, keys } = input;
+  // Read before encrypting: the caller owns the buffer and may zero it (`fill(0)`) as soon as this returns; it is never retained or transferred.
+  const byteLength = input.plaintext.byteLength;
   let receipt;
   try {
     receipt = await keys.createKey(plan.keyPath, { networkId: plan.encryptionNetwork });
@@ -274,7 +288,7 @@ export async function encryptAddressedShareContent(input: {
     throw new AddressedContentSourceError("key-receipt-mismatch", "the envelope key version does not match the created key");
   }
   const storedBytes = pathBoundStoredBytes(envelope);
-  return { envelope, storedBytes, byteLength: input.plaintext.byteLength };
+  return { envelope, storedBytes, byteLength };
 }
 
 /**
