@@ -11,6 +11,7 @@ import {
   ENCRYPTION_PERMISSION_SERVICE,
   ManifestValidationError,
   expandPermissionEntries,
+  expandRuntimePermissionEntries,
   type PermissionEntry,
 } from "./manifest";
 
@@ -70,5 +71,12 @@ describe("key.create on the default network's share prefix (static manifest)", (
 
   it("still refuses key.create on a whole network with the existing unknown-action error", () => {
     expect(() => expanded(NETWORK, ["key.create"])).toThrow(/unknown encryption action/);
+  });
+
+  it("keeps the runtime route exact-key only: a runtime request for key.create on the share prefix is refused", () => {
+    expect(() => expandRuntimePermissionEntries([entry(PREFIX, ["tinycloud.encryption/key.create"])], OWNER)).toThrow(ManifestValidationError);
+    expect(() => expandRuntimePermissionEntries([entry(PREFIX, ["key.create", "decrypt"])], OWNER)).toThrow(ManifestValidationError);
+    expect(expandRuntimePermissionEntries([entry(PREFIX, ["decrypt"])], OWNER)).toEqual(exact([DECRYPT]));
+    expect(expandRuntimePermissionEntries([entry(`${NETWORK}/share/abc`, ["tinycloud.encryption/key.create"])], OWNER)).toHaveLength(1);
   });
 });

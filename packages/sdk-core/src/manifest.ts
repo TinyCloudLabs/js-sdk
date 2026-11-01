@@ -19,7 +19,25 @@ import ms from "ms";
 import { ACCOUNT_MANIFEST_PERMISSIONS } from "@tinycloud/bootstrap";
 import { resolveSecretPath, SECRET_NAME_RE, parseNetworkId } from "@tinycloud/sdk-services";
 import { parseEncryptionResource } from "@tinycloud/sdk-services/encryption/resource";
+import { keccak_256 } from "@noble/hashes/sha3";
 
+
+/**
+ * Whether every `did:pkh:eip155` address inside an encryption network URN is in EIP-55 checksummed form. The node compares key and
+ * prefix resources byte for byte, so a capability naming a lower-cased owner address could never be exercised.
+ */
+function networkAddressIsChecksummed(path: string): boolean {
+  const match = /:0x([0-9a-fA-F]{40}):/.exec(path);
+  if (match === null) return true;
+  const lower = match[1]!.toLowerCase();
+  const hash = keccak_256(new TextEncoder().encode(lower));
+  let checksummed = "";
+  for (let index = 0; index < lower.length; index++) {
+    const nibble = (hash[index >> 1]! >> (index % 2 === 0 ? 4 : 0)) & 0x0f;
+    checksummed += nibble >= 8 ? lower[index]!.toUpperCase() : lower[index]!;
+  }
+  return match[1] === checksummed;
+}
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
@@ -547,6 +565,10 @@ function expandEncryptionPermissionEntry(
       normalizedActions.push("tinycloud.encryption/network.revoke");
       continue;
     }
+    if (sharePrefix && (action === "key.create" || action === "tinycloud.encryption/key.create")) {
+      normalizedActions.push("tinycloud.encryption/key.create");
+      continue;
+    }
     if (action.includes("/")) {
       throw new ManifestValidationError(
         `unknown encryption action ${JSON.stringify(action)}; expected decrypt, network.create, or network.revoke`,
@@ -565,8 +587,15 @@ function expandEncryptionPermissionEntry(
       seen.add(a);
     }
   }
-  if (sharePrefix && dedupedActions.some((action) => action !== "tinycloud.encryption/decrypt")) {
-    throw new ManifestValidationError("share prefix only supports decrypt");
+  if (
+    sharePrefix &&
+    dedupedActions.some((action) => action !== "tinycloud.encryption/decrypt" && action !== "tinycloud.encryption/key.create")
+  ) {
+    throw new ManifestValidationError("share prefix only supports decrypt and key.create");
+  }
+  // `key.create` on the share prefix lets the owner create the per-share keys, so it is held to the one spelling the node accepts.
+  if (dedupedActions.includes("tinycloud.encryption/key.create") && !networkAddressIsChecksummed(entry.path)) {
+    throw new ManifestValidationError("share prefix key.create requires the EIP-55 checksummed owner address");
   }
   // Encryption resources are network-scoped, not space-scoped. We
   // always emit the synthetic "encryption" space label so manifest
@@ -606,6 +635,11 @@ export function expandRuntimePermissionEntries(
   ownerDid?: string,
 ): PermissionEntry[] {
   return entries.flatMap((entry) => {
+    // A key.create on the share PREFIX is a sign-in (manifest) capability only; a runtime request names one exact key.
+    if (entry.service === ENCRYPTION_PERMISSION_SERVICE && typeof entry.path === "string" && entry.path.endsWith("/share/") &&
+      Array.isArray(entry.actions) && entry.actions.some((action) => action === "key.create" || action === "tinycloud.encryption/key.create")) {
+      throw new ManifestValidationError("runtime Share key creation requires the current owner's exact default/share/<id> key and key.create only");
+    }
     if (entry.service !== ENCRYPTION_PERMISSION_SERVICE ||
       typeof entry.path !== "string" || !entry.path.includes("/") ||
       entry.path.endsWith("/share/")) {
