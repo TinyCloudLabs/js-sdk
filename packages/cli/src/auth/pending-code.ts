@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
-import { chmod, lstat, rm } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import { open, rm, type FileHandle } from "node:fs/promises";
 import { join } from "node:path";
 import { profilePath } from "@tinycloud/operations/state";
-import { readJson, writeJsonDurable } from "../config/storage.js";
+import { writeJsonDurable } from "../config/storage.js";
 import type { DelegationData } from "./browser-auth.js";
 import { sessionExpiresAt } from "./scoped-login.js";
 
@@ -45,19 +46,25 @@ async function write(profile: string, records: PendingCode[]): Promise<void> {
 async function live(profile: string): Promise<PendingCode[]> {
   const file = fileOf(profile);
   let records: PendingCode[];
+  let handle: FileHandle | undefined;
   try {
-    const info = await lstat(file);
-    // A symlink, directory or another user's file is not ours to read or delete.
+    // O_NOFOLLOW: a symlink is never followed. Everything after the open works on the descriptor, not the path.
+    handle = await open(file, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    const info = await handle.stat();
     if (!info.isFile() || info.uid !== process.getuid?.()) return [];
-    // The only copy of a consumed code is repaired, not destroyed, over a loose mode.
-    if ((info.mode & 0o077) !== 0) await chmod(file, 0o600);
-    const stored = await readJson<PendingCodes>(file);
+    // The only copy of a consumed code is repaired, not destroyed, over a loose mode; a failed repair still reads it.
+    if ((info.mode & 0o077) !== 0) await handle.chmod(0o600).catch(() => undefined);
+    const stored = JSON.parse(await handle.readFile("utf8")) as PendingCodes;
     if (stored?.version !== 1 || !Array.isArray(stored.records)) throw new Error("unknown format");
     records = stored.records.filter((record) => typeof record?.codeHash === "string"
       && Number.isFinite(Date.parse(record.expiresAt)) && typeof record.delegation === "object" && record.delegation !== null);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") await rm(file, { force: true });
+    const code = (error as NodeJS.ErrnoException).code;
+    // ENOENT: nothing saved. ELOOP/EMLINK: a symlink stands there, not ours to touch.
+    if (code !== "ENOENT" && code !== "ELOOP") await rm(file, { force: true });
     return [];
+  } finally {
+    await handle?.close();
   }
   const unexpired = records.filter((record) => Date.parse(record.expiresAt) > Date.now());
   if (unexpired.length !== records.length) await write(profile, unexpired);

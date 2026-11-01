@@ -64,18 +64,24 @@ function isRecord(value: unknown): value is PendingRecord {
 function readRecords(): PendingRecord[] {
   const file = pendingPath();
   let records: PendingRecord[];
+  let fd: number | undefined;
   try {
-    const stat = fs.lstatSync(file);
-    // A symlink, directory or another user's file is not ours to read or delete.
+    // O_NOFOLLOW: a symlink is never followed. Everything after the open works on the descriptor, not the path.
+    fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    const stat = fs.fstatSync(fd);
     if (!stat.isFile() || stat.uid !== process.getuid?.()) return [];
-    // The only copy of a consumed code is repaired, not destroyed, over a loose mode.
-    if ((stat.mode & 0o077) !== 0) fs.chmodSync(file, 0o600);
-    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as PendingFile;
+    // The only copy of a consumed code is repaired, not destroyed, over a loose mode; a failed repair still reads it.
+    if ((stat.mode & 0o077) !== 0) { try { fs.fchmodSync(fd, 0o600); } catch { /* read it as it is */ } }
+    const parsed = JSON.parse(fs.readFileSync(fd, 'utf8')) as PendingFile;
     if (parsed.v !== 1 || !Array.isArray(parsed.records)) throw new Error('unknown format');
     records = parsed.records.filter(isRecord);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') fs.rmSync(file, { force: true });
+    const code = (error as NodeJS.ErrnoException).code;
+    // ENOENT: nothing saved. ELOOP/EMLINK: a symlink stands there, not ours to touch.
+    if (code !== 'ENOENT' && code !== 'ELOOP') fs.rmSync(file, { force: true });
     return [];
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
   }
   const live = records.filter((record) => Date.parse(record.expiresAt) > Date.now());
   if (live.length !== records.length) store(live);
