@@ -13,6 +13,7 @@ import {
   type PublishedShare, type PublishedShareDeliveryMaterial,
 } from "./publish.js";
 import { ARTIFACT_ROOT } from "./artifact-core.js";
+import { AddressedContentSourceError, assertPathBoundContentSource, pathBoundKeyPath, type PathBoundContentSource } from "./addressed-content.js";
 import { normalizeShareTarget, type ShareTarget } from "./targets.js";
 import type { OwnerShareAction, OwnerShareMatcher } from "./owner-policy.js";
 
@@ -93,7 +94,8 @@ export interface AddressedSharePublishOptions {
   readonly resource: { readonly kind: "exact" | "prefix"; readonly path: string };
   readonly actions: readonly ShareAction[];
   readonly policyActions: readonly OwnerShareAction[];
-  readonly contentSource: UnifiedContentSource;
+  /** Path-bound to this share's own key (`share/<shareId>`) with the wrapped-key digest; build it with `bindPathBoundContentSource`. Anything else is refused before any signing or write. */
+  readonly contentSource: PathBoundContentSource;
   readonly credentialRequirement?: PolicyCredentialRequirementV1;
   readonly filename: string;
   readonly mediaType: string;
@@ -122,6 +124,7 @@ const OWNER_SHARE_ACTIONS: ReadonlySet<string> = new Set<OwnerShareAction>(["tin
 
 function assertSafeInput(input: AddressedSharePublishOptions): void {
   if (!/^[A-Za-z0-9_-]{16,128}$/.test(input.shareId)) throw new TypeError("addressed share id is invalid");
+  assertPathBoundContentSource(input.contentSource, input.shareId);
   if (!Number.isSafeInteger(input.byteLength) || input.byteLength < 0 || input.byteLength > SHARE_CONTENT_LIMIT) throw new TypeError("addressed content length is invalid");
   if (!Number.isFinite(input.expiresAt.getTime()) || input.expiresAt.getTime() <= Date.now()) throw new TypeError("addressed share expiry must be in the future");
   if (input.artifact === "html" && (input.resource.kind !== "prefix" || !input.actions.includes("read") || !input.actions.includes("list"))) throw new TypeError("html artifacts require a readable prefix");
@@ -204,9 +207,8 @@ async function createPolicy(options: PolicyOptions, capabilities: readonly Unifi
 function addressedPlan(options: Pick<AddressedSharePublishOptions, "resource" | "contentSource" | "policyActions" | "expiresAt">) {
   const capabilities = sortCanonical<UnifiedPolicyCapability>([
     { kind: "kv", resource: options.contentSource.kvResource, selector: options.resource.kind, actions: [...options.policyActions] },
-    { kind: "encryption", resource: options.contentSource.encryptionKeyPath === undefined
-      ? options.contentSource.encryptionNetwork
-      : `${options.contentSource.encryptionNetwork}/${options.contentSource.encryptionKeyPath}`, action: "tinycloud.encryption/decrypt" },
+    // Only this share's one key: there is no network-scope capability.
+    { kind: "encryption", resource: `${options.contentSource.encryptionNetwork}/${options.contentSource.encryptionKeyPath}`, action: "tinycloud.encryption/decrypt" },
   ]);
   return {
     expiry: rfc3339Seconds(options.expiresAt),
@@ -620,6 +622,7 @@ export interface AddressedShareBoundInput extends AddressedShareRequest {
   readonly storage: { readonly path: string } | { readonly artifactId: string; readonly storageName: string };
   /** The owner's encryption network for the space. */
   readonly encryptionNetwork: string;
+  /** Optional and redundant: the path is always `share/<shareId>`. A different value is refused. */
   readonly encryptionKeyPath?: string;
   readonly mediaType: string;
   readonly byteLength: number;
@@ -644,9 +647,11 @@ export async function addressedShareBodyUpperBound(input: AddressedShareBoundInp
   const path = "path" in input.storage
     ? input.storage.path
     : `${ARTIFACT_ROOT}/${input.storage.artifactId}/versions/${Number.MAX_SAFE_INTEGER}/${input.storage.storageName}`;
-  const contentSource: UnifiedContentSource = {
+  const keyPath = pathBoundKeyPath(input.shareId);
+  if (input.encryptionKeyPath !== undefined && input.encryptionKeyPath !== keyPath) throw new AddressedContentSourceError("key-path-mismatch", "addressed content source key path must be share/<shareId> of this share");
+  const contentSource: PathBoundContentSource = {
     shareId: input.shareId, kvResource: `${input.spaceId}/kv/${path}`, selector: input.resource.kind, encryptionNetwork: input.encryptionNetwork,
-    ...(input.encryptionKeyPath === undefined ? {} : { encryptionKeyPath: input.encryptionKeyPath }),
+    encryptionKeyPath: keyPath,
     encryptedSymmetricKeyDigestHex: "f".repeat(64), keyVersion: Number.MAX_SAFE_INTEGER, mode: "immutable", initialCiphertextDigestHex: "f".repeat(64),
   };
   const artifactPin: ArtifactPin | undefined = artifactStorage === undefined ? undefined : {
