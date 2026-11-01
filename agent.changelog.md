@@ -3,6 +3,13 @@
 Track changes to agent-facing development guidance for the TinyCloud JavaScript SDK. Add a concise
 entry when `agent.dev.md` or related agent workflow expectations change.
 
+## 2026-11-01
+
+- TC-2234: Courier email invitations reuse the Share path. `publishEmailShareV3` now lives in
+  `@tinycloud/node-sdk/share-publish` (the CLI imports it). Courier's grant check is additive: exact
+  `AGENT_GRANT`, plus optional `key.create`/`decrypt` on `share/` only when the owner DID is passed. The
+  OpenKey request and `AGENT_GRANT` are unchanged and need a separate decision.
+
 ## 2026-10-29
 
 - TC-2192: documented the exact-owner Share-key runtime consent boundary and

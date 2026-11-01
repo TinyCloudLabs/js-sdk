@@ -59,7 +59,7 @@ const credentialUsage = () => `${acquireUsage()}\n${showUsage()}`;
  * Holder over Courier's did:key Ed25519 agent key. The private key stays inside
  * Node's KeyObject; only signature bytes leave this function.
  */
-function holderFor(key: AgentKey): HolderSigner {
+export function holderFor(key: AgentKey): HolderSigner {
   let privateKey: KeyObject;
   try {
     privateKey = createPrivateKey({ key: key.jwk as JsonWebKey, format: 'jwk' });

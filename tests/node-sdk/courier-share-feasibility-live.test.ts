@@ -25,6 +25,7 @@ import { canonicalize } from "@tinycloud/share-envelope";
 import { prepareAddressedShare, publishAddressedShare } from "@tinycloud/share-sdk";
 import { Wallet } from "ethers";
 import { AGENT_GRANT } from "../../packages/courier/src/keys";
+import { assertAgentGrant, siweTimes } from "../../packages/courier/src/authority";
 import { checkServerHealth, SERVER_URL } from "./setup";
 
 setDefaultTimeout(60_000);
@@ -44,7 +45,7 @@ let ownerNode: TinyCloudNode;
 let nodeDid: string;
 let defaultNetwork: string;
 
-interface CourierSession { node: TinyCloudNode; spaceId: string; did: string; }
+interface CourierSession { node: TinyCloudNode; spaceId: string; did: string; siwe: string; }
 
 /** Mint a Courier-shaped grant to a fresh agent key and restore it as a session-only node. */
 async function courierSession(extra: Record<string, string[]>): Promise<CourierSession> {
@@ -80,7 +81,7 @@ async function courierSession(extra: Record<string, string[]>): Promise<CourierS
   });
   expect(node.isSessionOnly).toBe(true);
   expect(node.credentialHolderDid).toBe(agentDid.split("#", 1)[0]);
-  return { node, spaceId, did: node.credentialHolderDid };
+  return { node, spaceId, did: node.credentialHolderDid, siwe: prepared.siwe };
 }
 
 const errorText = (error: unknown) => String(error instanceof Error ? error.message : JSON.stringify(error)).slice(0, 240);
@@ -110,6 +111,27 @@ describe("delegated Courier did:key as Share policy owner", () => {
     const attempt = await legacy.node.keys.createKey(`share/${newShareId()}`).then(() => "created", errorText);
     console.log("[feasibility] baseline createKey:", attempt);
     expect(attempt).not.toBe("created");
+  });
+
+  test("an install made before this change (exact AGENT_GRANT, no encryption entries) still restores and still works", async () => {
+    const legacy = await courierSession({});
+    const ownerDid = `did:pkh:eip155:1:${await wallet.getAddress()}`;
+    expect(() => assertAgentGrant(legacy.node.getVerifiedSessionCapabilities(), siweTimes(legacy.siwe), Date.now(), ownerDid)).not.toThrow();
+    expect(() => assertAgentGrant(legacy.node.getVerifiedSessionCapabilities(), siweTimes(legacy.siwe))).not.toThrow();
+    const path = `xyz.tinycloud.courier/to/legacy/threads/${newShareId()}/msg/m.json`;
+    expect((await legacy.node.kv.put(path, new TextEncoder().encode("{}"))).ok).toBe(true);
+    expect((await legacy.node.kv.get(path)).ok).toBe(true);
+    // Outside its grant it still has nothing.
+    expect((await legacy.node.kv.put("xyz.tinycloud.courier/me/approvals/x.json", new TextEncoder().encode("{}"))).ok).toBe(false);
+  });
+
+  test("the real restored authority of an invitation-capable grant passes the additive Courier check only for its owner", async () => {
+    const courier = await courierSession({ [`${defaultNetwork}/share/`]: [KEY_CREATE, DECRYPT] });
+    const ownerDid = `did:pkh:eip155:1:${await wallet.getAddress()}`;
+    const capabilities = courier.node.getVerifiedSessionCapabilities();
+    expect(() => assertAgentGrant(capabilities, siweTimes(courier.siwe), Date.now(), ownerDid)).not.toThrow();
+    expect(() => assertAgentGrant(capabilities, siweTimes(courier.siwe), Date.now(), "did:pkh:eip155:1:0x1111111111111111111111111111111111111111")).toThrow();
+    expect(() => assertAgentGrant(capabilities, siweTimes(courier.siwe))).toThrow();
   });
 
   test("delegated Courier key creates share/<id> and registers the path-bound digested policy", async () => {

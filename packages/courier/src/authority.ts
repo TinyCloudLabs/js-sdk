@@ -95,8 +95,51 @@ export function siweTimes(siwe: string): { issuedAt?: Date; expiresAt?: Date } {
   };
 }
 
-export function assertAgentGrant(caps: readonly PermissionEntry[], times: { issuedAt?: Date; expiresAt?: Date }, now = Date.now()): void {
-  assertExactAuthority(caps, AGENT_GRANT, 'OpenKey grant');
+const SHARE_KEY_ACTIONS: readonly string[] = ['tinycloud.encryption/key.create', 'tinycloud.encryption/decrypt'];
+const SHARE_ID = /^[a-f0-9]{32}$/;
+
+/** The owner's default encryption network: the only network an invitation key may live on. */
+export function ownerEncryptionNetwork(ownerDid: string): string {
+  return `urn:tinycloud:encryption:${ownerDid}:default`;
+}
+
+/** `<network>/share/` or `<network>/share/<id>` with only key.create and decrypt, no caveats. */
+function isInvitationKeyEntry(entry: PermissionEntry, network: string): boolean {
+  if (entry.service !== 'tinycloud.encryption' || (entry.space ?? '') !== '' || (entry.caveats?.length ?? 0) > 0) return false;
+  const root = `${network}/share/`;
+  if (!entry.path.toLowerCase().startsWith(root.toLowerCase())) return false;
+  const leaf = entry.path.slice(root.length);
+  return (leaf === '' || SHARE_ID.test(leaf)) && entry.actions.every((action) => SHARE_KEY_ACTIONS.includes(action));
+}
+
+/**
+ * Split a verified grant into the fixed Courier authority and the optional email-invitation key authority. Entries
+ * that are not exactly invitation-key shaped stay in `base`, so they still fail the exact Courier check.
+ */
+export function splitInvitationAuthority(caps: readonly PermissionEntry[], ownerDid?: string): { base: PermissionEntry[]; invitation: PermissionEntry[] } {
+  if (ownerDid === undefined) return { base: [...caps], invitation: [] };
+  const network = ownerEncryptionNetwork(ownerDid);
+  const base: PermissionEntry[] = [];
+  const invitation: PermissionEntry[] = [];
+  for (const entry of caps) (isInvitationKeyEntry(entry, network) ? invitation : base).push(entry);
+  return { base, invitation };
+}
+
+/** True when the grant holds both key.create and decrypt covering `share/<shareId>` on the owner's default network. */
+export function holdsInvitationKeyAuthority(caps: readonly PermissionEntry[], ownerDid: string, shareId: string): boolean {
+  const key = `${ownerEncryptionNetwork(ownerDid)}/share/${shareId}`.toLowerCase();
+  const { invitation } = splitInvitationAuthority(caps, ownerDid);
+  const covers = (action: string) => invitation.some((entry) => entry.actions.includes(action)
+    && (key === entry.path.toLowerCase() || (entry.path.endsWith('/') && key.startsWith(entry.path.toLowerCase()))));
+  return SHARE_KEY_ACTIONS.every(covers);
+}
+
+/**
+ * The fixed Courier authority, plus (only when `ownerDid` is given) optional invitation-key authority. A grant without
+ * that addition is checked exactly as before, so installs made before email invitations keep working.
+ */
+export function assertAgentGrant(caps: readonly PermissionEntry[], times: { issuedAt?: Date; expiresAt?: Date }, now = Date.now(), ownerDid?: string): void {
+  assertExactAuthority(splitInvitationAuthority(caps, ownerDid).base, AGENT_GRANT, 'OpenKey grant');
   if (!times.issuedAt) throw new CourierError('bad-grant', 'OpenKey grant SIWE is missing Issued At.');
   assertLifetime('OpenKey grant', times.expiresAt, AGENT_GRANT_MAX_MS, now, times.issuedAt);
 }

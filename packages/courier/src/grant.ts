@@ -258,7 +258,7 @@ async function restoreVerifiedGrant(profile: Profile, key: AgentKey, payload: Gr
     expiresAt: expiresAt.toISOString(),
     tinycloudHosts: [profile.host],
   });
-  assertAgentGrant(node.getVerifiedSessionCapabilities(), times);
+  assertAgentGrant(node.getVerifiedSessionCapabilities(), times, Date.now(), `did:pkh:eip155:${payload.chainId}:${payload.address}`);
   if (node.credentialHolderDid !== profile.courierDid) {
     throw new CourierError('bad-grant', `Grant holder ${node.credentialHolderDid} does not match courier key ${profile.courierDid}.`);
   }

@@ -23,6 +23,7 @@ import { requireFlag } from './args.js';
 import type { ParsedArgs } from './args.js';
 import { activateSession, INVITATION_MODES, selectedSession, sessionKey, validSessionId } from './guided.js';
 import type { CourierSession, InvitationMode } from './guided.js';
+import { canonicalInviteEmail, isShareLink, receiveEmailInvitation, sendEmailInvitation } from './email-invitation.js';
 
 const DEFAULT_API = 'https://api.tinycloud.xyz';
 const DEFAULT_VIEWER = 'https://courier.tinycloud.xyz';
@@ -39,7 +40,7 @@ export interface CourierInvitation {
   issuer: string;
   host: string;
   session: CourierSession;
-  mode: InvitationMode;
+  mode: InvitationMode | 'email';
   recipient?: string;
   expiresAt: string;
   artifact: PairArtifact;
@@ -72,9 +73,11 @@ export function parseInvitation(value: unknown): CourierInvitation {
   let host: URL;
   try { host = new URL(value.host); } catch { return refuse('Invalid node origin.'); }
   if (host.origin !== value.host || (host.protocol !== 'https:' && !(host.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(host.hostname)))) refuse('Node must be an HTTPS origin (or a loopback test host).');
-  if (!INVITATION_MODES.includes(value.mode as InvitationMode)) refuse('Unknown invitation mode.');
+  if (value.mode !== 'email' && !INVITATION_MODES.includes(value.mode as InvitationMode)) refuse('Unknown invitation mode.');
   if (value.mode === 'named') {
-    if (typeof value.recipient !== 'string' || !linkIssuerPublicKey(value.recipient)) refuse('Named invitations require an exact Courier did:key; email identifiers are not supported.');
+    if (typeof value.recipient !== 'string' || !linkIssuerPublicKey(value.recipient)) refuse('Named invitations require an exact Courier did:key; use --mode email for a mailbox.');
+  } else if (value.mode === 'email') {
+    if (typeof value.recipient !== 'string' || value.recipient !== canonicalInviteEmail(value.recipient)) refuse('Email invitations require one canonical email address.');
   } else if (value.recipient !== undefined) refuse('Unexpected recipient constraint.');
   if (typeof value.expiresAt !== 'string' || !Number.isFinite(Date.parse(value.expiresAt)) || new Date(value.expiresAt).toISOString() !== value.expiresAt) refuse('Invalid invitation expiry.');
   if (!isRecord(value.session)) refuse('Missing intended session.');
@@ -262,10 +265,12 @@ export async function cmdInvite(args: ParsedArgs): Promise<void> {
     return serveInvitation(node, profile, body, wait);
   }
   const mode = requireFlag(args, 'mode', 'courier invite --session <id> --mode same-owner|anyone|named --consent');
-  if (!INVITATION_MODES.includes(mode as InvitationMode)) throw new CourierError('usage', 'Choose exactly one invitation mode: same-owner, anyone, named.');
+  if (mode !== 'email' && !INVITATION_MODES.includes(mode as InvitationMode)) throw new CourierError('usage', 'Choose exactly one invitation mode: same-owner, anyone, named.');
   if (args.get('consent') !== 'true') throw new CourierError('consent-required', 'Owner consent is required: pass --consent to invite a participant to this session.');
   let recipient: string | undefined;
-  if (mode === 'named') {
+  if (mode === 'email') {
+    recipient = canonicalInviteEmail(requireFlag(args, 'recipient', 'courier invite --session <id> --mode email --recipient <email> --consent'));
+  } else if (mode === 'named') {
     const target = requireFlag(args, 'recipient', 'Named invitations require --recipient <did:key|verified-peer-handle>.');
     const peer = profile.peers[target];
     recipient = target.startsWith('did:key:') ? target : peer?.status === 'paired' && peer.inbound ? peer.courierDid : undefined;
@@ -288,6 +293,12 @@ export async function cmdInvite(args: ParsedArgs): Promise<void> {
   body.relay.delegation = serializeDelegation(relay.delegation);
   parseInvitation(body);
   await putCreate(node.kv, inviteStateKey(id), { body });
+  if (mode === 'email') {
+    // The bearer link goes to the mailbox only; it is never printed or stored.
+    await sendEmailInvitation(node, profile, body);
+    console.log(JSON.stringify({ status: 'invitation', invitationId: id, sessionId: session.sessionId, mode, recipient, expiresAt }));
+    return serveInvitation(node, profile, body, wait);
+  }
   const result = await createLink({ type: 'courier', issuerKey: signerFromJwk(loadKey().jwk as unknown as Ed25519PrivateJwk),
     apiOrigin: process.env.COURIER_LINKS_API_ORIGIN ?? DEFAULT_API, linkOrigin: process.env.COURIER_LINK_ORIGIN ?? DEFAULT_VIEWER,
     expiresAt: new Date(expiresAt), plaintext: new TextEncoder().encode(canonicalJson(body)) });
@@ -305,10 +316,17 @@ async function validateHandle(node: TinyCloudNode, profile: Profile, peer: Store
 export async function joinInvitation(link: string, args: ParsedArgs): Promise<void> {
   if (args.get('consent') !== 'true') throw new CourierError('consent-required', 'Joining delegates read access to your side of this session. Pass --consent after owner approval.');
   const wait = waitSeconds(args);
-  const opened = await resolveLink(link, { apiOrigin: process.env.COURIER_LINKS_API_ORIGIN ?? DEFAULT_API,
-    trustedOrigins: [process.env.COURIER_LINK_ORIGIN ?? DEFAULT_VIEWER], validateBody: (type, value) => { if (type !== 'courier') refuse('Not a Courier invitation.'); parseInvitation(value); } });
-  const body = parseInvitation(opened.value);
-  if (opened.header.audience !== (process.env.COURIER_LINKS_API_ORIGIN ?? DEFAULT_API) || opened.header.expiresAt !== body.expiresAt) refuse('Invitation audience or expiry changed.');
+  let body: CourierInvitation;
+  if (isShareLink(link)) {
+    const received = await receiveEmailInvitation(link, args.has('code-stdin'));
+    if (received === undefined) return;
+    body = received;
+  } else {
+    const opened = await resolveLink(link, { apiOrigin: process.env.COURIER_LINKS_API_ORIGIN ?? DEFAULT_API,
+      trustedOrigins: [process.env.COURIER_LINK_ORIGIN ?? DEFAULT_VIEWER], validateBody: (type, value) => { if (type !== 'courier') refuse('Not a Courier invitation.'); parseInvitation(value); } });
+    body = parseInvitation(opened.value);
+    if (opened.header.audience !== (process.env.COURIER_LINKS_API_ORIGIN ?? DEFAULT_API) || opened.header.expiresAt !== body.expiresAt) refuse('Invitation audience or expiry changed.');
+  }
   expiryCheck(body);
   const profile = loadProfile();
   const node = await courierNode(profile);
