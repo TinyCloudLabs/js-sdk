@@ -4,7 +4,7 @@
  * These tests drive the REAL `NamedKeyClient` (sdk-services) against a stub node, then the real helpers and the real
  * `publishAddressedShare`, so the shape contract between them is pinned.
  */
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { describe, expect, it } from "bun:test";
 import { sha256 } from "@noble/hashes/sha256";
 import { ed25519 } from "@noble/curves/ed25519";
@@ -275,7 +275,7 @@ describe("plan: path, permissions and the checksummed network", () => {
 });
 
 describe("one share-id grammar for the plan, the size bound and the publisher (no orphan keys)", () => {
-  const accepted = [crypto.randomUUID(), crypto.randomUUID().replaceAll("-", ""), "a".repeat(16), "a".repeat(64), "0123456789abcdef", "ab_cd-ef_gh-ij_kl"];
+  const accepted = [randomUUID(), randomUUID().replaceAll("-", ""), "a".repeat(16), "a".repeat(64), "0123456789abcdef", "ab_cd-ef_gh-ij_kl"];
   const refused = ["dot.share.0000000001", "a".repeat(15), "a".repeat(65), "..", "../../etc/passwd-xx", "a/b/c/d/e/f/g/h/i", "%61%61%61%61%61%61%61%61%61%61", "ünïcödé-share-id-0001", "UPPERCASE-SHARE-ID-0001", "-leading-dash-0000001", "_leading-underscore-01", "has space in the id 01", "tab\tin-the-id-00000001"];
 
   it("accepts the ids the producers use (lowercase UUID with and without hyphens) and refuses everything outside [a-z0-9_-] (16..64, first char a letter or digit)", () => {
