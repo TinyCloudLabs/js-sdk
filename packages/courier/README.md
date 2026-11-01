@@ -127,10 +127,12 @@ to copy back. `init --wait [--timeout <duration, at most 9m>]` polls OpenKey
 (every 2 s) with a proof signed by the agent key, decrypts the result, checks that
 it answers this request, installs the grant, and only then acknowledges it to
 OpenKey. The default timeout is 90 s: at the deadline it exits 8 and prints
-`{"pending":{"step":1,"of":1,"approvalUrl":…,"expiresAt":…}}`, and the next
-`init --wait` resumes the same request (no new link, no second approval). The
+`{"pending":{"step":1,"of":1,"approvalUrl":…,"expiresAt":…}}` on stdout, and the next
+`init --wait` resumes the same request (no new link, no second approval). Exit 8 is not a failure: the approval is still pending. Send the owner the `pending.approvalUrl` (the same link as `openkeyUrl`), ask them to approve it, then re-run `courier init --wait --timeout 60s`. Repeat while it exits 8. Any other non-zero exit is an error: stderr carries `[code]`. The
 approved result is saved encrypted in the pending record before any install work,
-so a killed process resumes from disk. OpenKey keeps an approved result for 10
+so a killed process resumes from disk. A request that holds an approval is never
+replaced by a run with other flags; a renewal approved by a different owner than the
+one that holds the grant is refused (`--rotate-key` binds a new owner). OpenKey keeps an approved result for 10
 minutes: after that `init --wait` reports `[approval-result-expired]` and you run
 `init --request` again; an expired request reports `[approval-expired]`.
 `init` without flags still starts an interactive loopback grant flow (same

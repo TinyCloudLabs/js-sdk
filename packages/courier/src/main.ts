@@ -35,10 +35,15 @@ Setup & pairing (humans run these):
        [--openkey-host url] [--openkey-api-host url] [--label s] [--handle h] [--expiry 30d] [--rotate-key]
                                    Create/renew the agent key's restricted grant in OpenKey.
                                    --request prints {"openkeyUrl": …}, a short https://openkey.so/a/… link for the
-                                   owner, and exits. --wait then collects the approval (no code to paste): it
-                                   polls, installs the grant, and acknowledges it. --timeout (default 90s, at
-                                   most 9m) ends the wait with exit 8 and {"pending":{"approvalUrl","expiresAt"}};
-                                   run init --wait again, the same request resumes with no second approval.
+                                   owner (send it to the owner only, privately), and exits. --wait then collects the
+                                   approval (no code to paste): it polls, installs the grant, and acknowledges it.
+                                   --timeout (default 90s, at most 9m) ends the wait with exit 8 and, on stdout,
+                                   {"pending":{"step":1,"of":1,"approvalUrl","expiresAt"}}.
+                                   Exit 8 is not a failure: the approval is still pending. Send the owner the
+                                   \`pending.approvalUrl\` (the same link as \`openkeyUrl\`), ask them to approve it, then
+                                   re-run \`${name} init --wait --timeout 60s\`. Repeat while it exits 8. Any other
+                                   non-zero exit is an error: stderr carries \`[code]\`.
+                                   The same request resumes each time: no second link, no second approval.
                                    An approved result is kept by OpenKey for 10 minutes only: wait promptly.
                                    --paste and --grant-file still take an old OpenKey XXXX-XXXX code.
   manifest                         Print the agent grant permissions

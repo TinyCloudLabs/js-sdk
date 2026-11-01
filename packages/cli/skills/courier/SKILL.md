@@ -36,16 +36,19 @@ Commands below run it as `"$TC" courier`, set by the block above; prose calls it
 in OpenKey and decides who to pair with. Setup takes no code to copy back:
 
 1. `tinycloud courier init --request` prints JSON; send its `openkeyUrl` (a short
-   `https://openkey.so/a/…` link) to the owner. It also saves the request.
-2. `tinycloud courier init --wait` collects the approval, installs the grant and
-   acknowledges it. It waits at most 90 s by default (`--timeout 5m`, at most 9m):
-   if the owner has not approved by then it exits 8 with
-   `{"pending":{"step":1,"of":1,"approvalUrl":…,"expiresAt":…}}`. Run it again; the same
-   request resumes, with no new link and no second approval. Never wait in a
-   sleep loop: re-run `init --wait` after you have sent the link.
+   `https://openkey.so/a/…` link) to the owner at once, and only to the owner, privately:
+   the first account to approve the link wins, and a renewal approved by a different
+   owner is refused. It also saves the request.
+2. Then run `tinycloud courier init --wait --timeout 60s`. It collects the approval,
+   installs the grant and acknowledges it. Keep every call under your tool's time
+   limit (the default wait is 90 s; `--timeout` accepts at most 9m). Never wait in a
+   sleep loop. If the owner has not approved by the deadline it exits 8 and prints
+   `{"pending":{"step":1,"of":1,"approvalUrl":…,"expiresAt":…}}` on stdout.
+   Exit 8 is not a failure: the approval is still pending. Send the owner the `pending.approvalUrl` (the same link as `openkeyUrl`), ask them to approve it, then re-run `courier init --wait --timeout 60s`. Repeat while it exits 8. Any other non-zero exit is an error: stderr carries `[code]`.
+   The same request resumes each time: no new link and no second approval.
 3. OpenKey keeps an approved result for 10 minutes only. If `init --wait` reports
    `approval-result-expired` or `approval-expired`, nothing was installed: run
-   `init --request` again.
+   `init --request` again, send the new link, and re-run `init --wait` at once.
 
 `init --grant-file f|-` and `init --paste` remain for an old OpenKey `XXXX-XXXX` code.
 If OpenKey reports the space is still being set up, `init --wait` waits for it within its `--timeout` (the old `init` flows wait about 2.5 minutes); otherwise use `init --resume`.
