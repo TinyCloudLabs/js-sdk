@@ -394,3 +394,76 @@ test('a delegation for another key is refused at redeem and nothing is stored', 
     await api.close();
   }
 }));
+
+test('a saved delegation that can never install is dropped: the same code and --resume do not replay it, a fresh code works', async (t) => withHome(async (home) => {
+  const agent = agentKey();
+  saveKey(agent);
+  saveProfile(profileFor(agent));
+  stubSpace(t, ready);
+  const good = await signedGrant(agent);
+  // OpenKey approved a grant for a space that is not the agents space: installGrant refuses it for good.
+  const poisoned = { ...(await signedGrant(agent)), spaceId: good.spaceId.replace(/:agents$/, ':applications') };
+  const api = await fakeOpenKey(new Map([[CODE.toLowerCase(), poisoned], [OTHER_CODE.toLowerCase(), good]]));
+  try {
+    await assert.rejects(init(t, ['--grant-file', codeFile(home), '--openkey-api-host', api.url]), { code: 'bad-grant' });
+    assert.equal(fs.existsSync(pendingFile(home)), false, 'a permanently refused record is not kept');
+    assert.equal(fs.existsSync(path.join(home, 'grant.json')), false);
+    await assert.rejects(init(t, ['--resume']), { code: 'usage' });
+    // The same code now reaches OpenKey again (it was consumed): the plain "approve again" answer, not a replayed refusal.
+    await assert.rejects(init(t, ['--grant-file', codeFile(home), '--openkey-api-host', api.url]), { code: 'code-not-found' });
+    assert.equal(JSON.parse(await init(t, ['--grant-file', codeFile(home, OTHER_CODE), '--openkey-api-host', api.url])).ok, true);
+    assert.equal(loadProfile().status, 'ready');
+    assert.equal(fs.existsSync(pendingFile(home)), false, 'no poisoned record is left behind');
+  } finally {
+    await api.close();
+  }
+}));
+
+test('a transient failure keeps the record: a missing space is finished by --resume with no second redeem', async (t) => withHome(async (home) => {
+  const agent = agentKey();
+  saveKey(agent);
+  saveProfile(profileFor(agent));
+  const { delegation, api } = await redeemable(agent);
+  try {
+    stubSpace(t, missing);
+    await assert.rejects(init(t, ['--grant-file', codeFile(home), '--openkey-api-host', api.url]), { code: 'no-space' });
+    assert.equal(fs.existsSync(pendingFile(home)), true);
+    stubSpace(t, ready);
+    assert.equal(JSON.parse(await init(t, ['--resume'])).ok, true);
+    assertInstalled(home, delegation, api);
+  } finally {
+    await api.close();
+  }
+}));
+
+test('a pending record with a loose mode is repaired to 0600 and used, never deleted', async () => withHome(async (home) => {
+  const agent = agentKey();
+  saveKey(agent);
+  const { delegation, api } = await redeemable(agent);
+  try {
+    await grantFromInput(CODE, agent, { apiHost: api.url });
+    fs.chmodSync(pendingFile(home), 0o644);
+    assert.equal((await grantFromInput(CODE, agent, { apiHost: api.url })).delegationCid, delegation.delegationCid);
+    assert.equal(api.hits.length, 1, 'the consumed code is served from the only copy');
+    assert.equal(fs.statSync(pendingFile(home)).mode & 0o777, 0o600);
+  } finally {
+    await api.close();
+  }
+}));
+
+test('a pending path that is not a regular file is not trusted and not deleted', async () => withHome(async (home) => {
+  const agent = agentKey();
+  saveKey(agent);
+  const { api } = await redeemable(agent);
+  try {
+    await grantFromInput(CODE, agent, { apiHost: api.url });
+    const real = path.join(home, 'elsewhere.json');
+    fs.renameSync(pendingFile(home), real);
+    fs.symlinkSync(real, pendingFile(home));
+    await assert.rejects(grantFromInput(CODE, agent, { apiHost: api.url }), { code: 'code-not-found' });
+    assert.equal(api.hits.length, 2, 'a symlinked record is not read');
+    assert.equal(fs.existsSync(real), true, 'the target is left alone');
+  } finally {
+    await api.close();
+  }
+}));

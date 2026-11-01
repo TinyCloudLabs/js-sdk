@@ -3,7 +3,7 @@
 // fake OpenKey code server that, like the real one, answers 404 to a code it has already handed out.
 import { afterAll, afterEach, beforeEach, describe, expect, setSystemTime, spyOn, test } from "bun:test";
 import { createServer, type Server } from "node:http";
-import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, readdir, rename, rm, stat, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -66,10 +66,12 @@ async function fakeOpenKey(): Promise<typeof api> {
 }
 
 /** Run `fn` with the code piped to stdin, as `tc ... --paste` reads it. */
+let stderrLines: string[] = [];
 async function pasting<T>(code: string, fn: () => Promise<T>): Promise<T> {
   const stdin = Object.getOwnPropertyDescriptor(process, "stdin");
   Object.defineProperty(process, "stdin", { configurable: true, value: Readable.from([`${code}\n`]) });
-  const stderr = spyOn(console, "error").mockImplementation(() => {});
+  stderrLines = [];
+  const stderr = spyOn(console, "error").mockImplementation((...args: unknown[]) => { stderrLines.push(args.join(" ")); });
   try {
     return await fn();
   } finally {
@@ -219,5 +221,70 @@ describe("a redeemed --paste short code is saved before the caller's work", () =
     api.codes.set(CODE, await proof());
     await pasting(CODE, () => flow(null));
     expect(await exists(pendingPath())).toBe(false);
+  });
+
+  test("a delegation bound to a key this profile has not saved is not kept, and the user is told to approve again", async () => {
+    // First sign-in on a profile with no key.json: the candidate key exists only in memory, so a record could never be finished.
+    await ProfileManager.setProfile("keyless", { name: "keyless", host, did, sessionDid: did, chainId: 1, spaceName: "default", createdAt: new Date().toISOString() });
+    const delegation = await proof();
+    api.codes.set(CODE, delegation);
+    expect((await pasting(CODE, () => flow("keyless"))).delegationCid).toBe(delegation.delegationCid);
+    expect(await exists(pendingPath("keyless"))).toBe(false);
+    expect(stderrLines.join("\n")).toMatch(/approve again/);
+    // The re-run is the plain consumed-code answer, not a confusing binding error.
+    await expect(pasting(CODE, () => flow("keyless"))).rejects.toMatchObject({
+      status: 404, message: "Delegation code not found or expired. Use the full code shown in OpenKey instead.",
+    });
+    expect(api.hits).toHaveLength(2);
+    // A profile that has saved its key prints no such note.
+    api.codes.set(OTHER_CODE, await proof());
+    await pasting(OTHER_CODE, () => flow("scoped"));
+    expect(stderrLines.join("\n")).not.toMatch(/approve again/);
+  });
+
+  test("a failure to remove the record after the commit never fails the committed login", async () => {
+    const delegation = await proof();
+    api.codes.set(CODE, delegation);
+    await pasting(CODE, () => flow());
+    await chmod(profilePath("scoped"), 0o500);
+    try {
+      const warnings: string[] = [];
+      const stderr = spyOn(console, "error").mockImplementation((...args: unknown[]) => { warnings.push(args.join(" ")); });
+      try {
+        await completeApprovalResult("scoped", { delegationCid: delegation.delegationCid });
+      } finally {
+        stderr.mockRestore();
+      }
+      expect(warnings.join("\n")).toMatch(/saved delegation code/);
+    } finally {
+      await chmod(profilePath("scoped"), 0o700);
+    }
+    // The record survives (it expires on its own) and is still removable once the directory is writable again.
+    expect(await exists(pendingPath())).toBe(true);
+    await completeApprovalResult("scoped", { delegationCid: delegation.delegationCid });
+    expect(await exists(pendingPath())).toBe(false);
+  });
+
+  test("a record with a loose mode is repaired to 0600 and used, never deleted", async () => {
+    const delegation = await proof();
+    api.codes.set(CODE, delegation);
+    await pasting(CODE, () => flow());
+    await chmod(pendingPath(), 0o644);
+    expect((await pasting(CODE, () => flow())).delegationCid).toBe(delegation.delegationCid);
+    expect(api.hits).toHaveLength(1);
+    expect((await stat(pendingPath())).mode & 0o777).toBe(0o600);
+  });
+
+  test("a record path that is not a regular file is not trusted and not deleted", async () => {
+    api.codes.set(CODE, await proof());
+    await pasting(CODE, () => flow());
+    const real = join(profilePath("scoped"), "elsewhere.json");
+    await rename(pendingPath(), real);
+    await symlink(real, pendingPath());
+    await expect(pasting(CODE, () => flow())).rejects.toMatchObject({ status: 404 });
+    expect(api.hits).toHaveLength(2);
+    expect(await exists(real)).toBe(true);
+    await rm(pendingPath(), { force: true });
+    await rm(real, { force: true });
   });
 });
