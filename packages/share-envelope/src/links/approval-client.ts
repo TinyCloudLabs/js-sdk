@@ -378,19 +378,25 @@ export interface CheckedApprovalResult {
 
 /**
  * Check that a decrypted result answers exactly this request: result version, request id, request digest,
- * requester, target, an owner, a canonical not-yet-passed expiry and a delegation object. The delegation's content
- * (signature, permissions, owner agreement) is NOT checked here; it depends on what the caller asked for.
+ * requester, target, an owner, a canonical not-yet-passed expiry and a delegation object. The error names the fields
+ * that differ and never their values. The delegation's content (signature, permissions, owner agreement) is NOT
+ * checked here; it depends on what the caller asked for.
  */
 export function checkApprovalResultBinding(opened: Record<string, unknown>, expected: ApprovalResultExpectation): CheckedApprovalResult {
   const { ownerDid, delegationExpiresAt, delegation } = opened;
-  if (opened.resultVersion !== 1 || opened.requestId !== expected.requestId || opened.requestDigest !== expected.bodyCid ||
-      opened.requesterDid !== expected.request.issuer || opened.targetDid !== expected.request.targetDid ||
-      typeof ownerDid !== "string" || ownerDid.length === 0 ||
-      typeof delegationExpiresAt !== "string" || !Number.isFinite(Date.parse(delegationExpiresAt)) ||
-      new Date(delegationExpiresAt).toISOString() !== delegationExpiresAt ||
-      !delegation || typeof delegation !== "object" || Array.isArray(delegation)) {
-    throw invalidResult("The encrypted result does not match this request.");
-  }
-  if (Date.parse(delegationExpiresAt) <= (expected.now ?? Date.now())) throw invalidResult("The approved delegation has already expired.");
-  return { ownerDid, delegationExpiresAt, delegation: delegation as Record<string, unknown> };
+  const expiryValid = typeof delegationExpiresAt === "string" && Number.isFinite(Date.parse(delegationExpiresAt)) &&
+    new Date(delegationExpiresAt).toISOString() === delegationExpiresAt;
+  const differing = [
+    ["resultVersion", opened.resultVersion === 1],
+    ["requestId", opened.requestId === expected.requestId],
+    ["requestDigest", opened.requestDigest === expected.bodyCid],
+    ["requesterDid", opened.requesterDid === expected.request.issuer],
+    ["targetDid", opened.targetDid === expected.request.targetDid],
+    ["ownerDid", typeof ownerDid === "string" && ownerDid.length > 0],
+    ["delegationExpiresAt", expiryValid],
+    ["delegation", !!delegation && typeof delegation === "object" && !Array.isArray(delegation)],
+  ].filter(([, matches]) => !matches).map(([field]) => field);
+  if (differing.length > 0) throw invalidResult(`The encrypted result does not match this request (${differing.join(", ")}).`);
+  if (Date.parse(delegationExpiresAt as string) <= (expected.now ?? Date.now())) throw invalidResult("The approved delegation has already expired.");
+  return { ownerDid: ownerDid as string, delegationExpiresAt: delegationExpiresAt as string, delegation: delegation as Record<string, unknown> };
 }
