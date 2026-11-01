@@ -540,16 +540,16 @@ export function checkChangedExpiration(input: CheckChangedExpirationInput): stri
   const expiresAt = parseInstantMs(signed.expirationTime);
   if (expiresAt === undefined) return "expiry is not a valid timestamp";
   if (expiresAt <= nowMs + CHANGED_EXPIRY_MIN_REMAINING_MS) {
-    return "expiry must be more than 60 seconds from now";
+    return "expiry must be more than 60 seconds from now; choose a longer expiry";
   }
   for (const [label, value] of [["Issued At", prepared.issuedAt], ["Not Before", prepared.notBefore]] as const) {
     if (value === undefined || value === "") continue;
     const bound = parseInstantMs(value);
     if (bound === undefined) return `${label} is not a valid timestamp`;
-    if (expiresAt <= bound) return `expiry must be after ${label}`;
+    if (expiresAt <= bound) return `expiry must be after ${label}; choose a later expiry`;
   }
   if (maxMs !== undefined && expiresAt > maxMs) {
-    return `expiry is later than the maximum for this request (the latest allowed is ${new Date(maxMs).toISOString()})`;
+    return `expiry is later than the maximum for this request (the latest allowed is ${new Date(maxMs).toISOString()}); choose an earlier expiry`;
   }
   if (expiresAt > nowMs + EXPIRY.MAX_MS) {
     return "expiry is more than 10 years away, the longest this SDK accepts; choose a shorter expiry";

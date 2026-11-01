@@ -181,7 +181,7 @@ describe("openkey.maxExpiresAt", () => {
     for (const maxExpiresAt of [max, new Date(max), () => max]) {
       const setup = create(new Date(Date.now() + 10 * DAY_MS).toISOString(), { expiryChangeable: true, maxExpiresAt });
       const web = await setup.create();
-      await expect(web.signIn()).rejects.toThrow(/OpenKey signedMessage expiry is later than the maximum for this request \(the latest allowed is \d{4}-/);
+      await expect(web.signIn()).rejects.toThrow(/OpenKey signedMessage expiry is later than the maximum for this request \(the latest allowed is \d{4}-[^)]*\); choose an earlier expiry$/);
       expect(storedExpiries()).toEqual([]);
       expect(Object.keys(setup.requests[0]!)).not.toContain("maxExpiresAt");
     }
