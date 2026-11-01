@@ -1,8 +1,5 @@
-import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
 import { createECDH } from 'node:crypto';
 import { main } from '../dist/main.js';
 import { cmdInit } from '../dist/commands.js';
@@ -10,43 +7,12 @@ import { parseArgs } from '../dist/args.js';
 import { AGENT_GRANT } from '../dist/keys.js';
 import { loadProfile } from '../dist/profile.js';
 import {
-  captureStdout, Crash, crashAtWrite, DAY, fakeTime, grantExtraHost, homeFile, installFakeOpenKey, missingSpace, readHome, readySpace,
-  stubSpaceProbe, useFixtureEnv,
+  captureStdout, Crash, crashAtWrite, DAY, fakeTime, grantExtraHost, homeFile, missingSpace, readHome, readySpace, scenario, stubSpaceProbe,
 } from './support/approval-fixture.mjs';
 
 // TC-2300: `courier init --request` prints OpenKey's short approval link and `courier init --wait` collects the result.
 // The services are synthetic (see support/approval-fixture.mjs): a real SIWE grant is signed by a throwaway wallet and
 // installed by the real installGrant; only OpenKey, the links API and the space probe are fake.
-
-function withHome(run) {
-  const previous = process.env.COURIER_HOME;
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'courier-approval-'));
-  process.env.COURIER_HOME = path.join(home, 'courier');
-  return Promise.resolve().then(() => run(home)).finally(() => {
-    if (previous === undefined) delete process.env.COURIER_HOME; else process.env.COURIER_HOME = previous;
-    fs.rmSync(home, { recursive: true, force: true });
-  });
-}
-
-function scenario(name, options, body) {
-  const [run, opts] = body === undefined ? [options, {}] : [body, options];
-  test(name, opts, (t) => withHome(async () => {
-    useFixtureEnv(t);
-    const fx = installFakeOpenKey(t);
-    const errors = [];
-    t.mock.method(console, 'error', (...args) => { errors.push(args.join(' ')); });
-    const courier = async (...argv) => {
-      const { result, stdout } = await captureStdout(() => main(['init', ...argv]));
-      return { code: result, stdout, stderr: errors.join('\n') };
-    };
-    const request = async (...argv) => {
-      const run = await courier('--request', ...argv);
-      assert.equal(run.code, 0, run.stderr);
-      return JSON.parse(run.stdout);
-    };
-    await run({ t, fx, errors, courier, request });
-  }));
-}
 
 const pendingFile = () => readHome('approval-pending.json');
 const requestId = (link) => new URL(link).pathname.split('/')[2];

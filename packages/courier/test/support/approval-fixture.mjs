@@ -7,11 +7,14 @@
 // Not a test file.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { test } from 'node:test';
 import { createCipheriv, createECDH, createHash, createHmac, createPublicKey, randomBytes, verify } from 'node:crypto';
 import { NodeWasmBindings, PrivateKeySigner, TinyCloudNode } from '@tinycloud/node-sdk';
 import { checkLinkRecord, openLinkRecord, parseApprovalRequest } from '@tinycloud/share-envelope/links';
 import { AGENT_GRANT, COURIER_SPACE } from '../../dist/keys.js';
+import { main } from '../../dist/main.js';
 
 export const LINKS_ORIGIN = 'https://links.fixture.test';
 export const OPENKEY_API = 'https://api.openkey.fixture.test';
@@ -124,12 +127,15 @@ export function installFakeOpenKey(t) {
     linksStatus: 200,
     expiredRequests: new Set(),
     expiredResults: new Set(),
+    /** One-shot OpenKey error replies, consumed in order by the next `discover` / `fetch` call: { status, code }. */
+    inject: { discover: [], fetch: [] },
   };
   const polls = new Map();
 
   async function sign(request, link, options) {
     const key = JSON.parse(fs.readFileSync(homeFile('key.json'), 'utf8'));
-    const grant = await signedGrant(key, options.grant ?? {});
+    // OpenKey signs the lifetime the request asked for unless the owner chose less; tests override it through options.grant.
+    const grant = await signedGrant(key, { lifetimeMs: request.grantLifetimeSeconds * 1000, ...(options.grant ?? {}) });
     const bodyCid = new URL(link).hash.match(/c=([^&]+)/)[1];
     const id = new URL(link).pathname.split('/')[2];
     const expiresAt = new Date(Date.parse(grant.siwe.match(/^Expiration Time:\s*(.+)$/m)[1])).toISOString();
@@ -192,6 +198,8 @@ export function installFakeOpenKey(t) {
       && claims.cred_hash === createHash('sha256').update(credential).digest('base64url');
     if (!valid || !stored) return json({ code: valid ? 'not_found' : 'invalid_proof' }, valid ? 404 : 401);
     calls.push({ action: act, requestId, resultRef: act === 'discover' ? undefined : ref });
+    const injected = (control.inject[act] ?? []).shift();
+    if (injected) return json({ code: injected.code }, injected.status);
     if (control.expiredRequests.has(requestId) && act === 'discover') return json({ code: 'expired_request' }, 410);
     if (act === 'discover') {
       if (!approvals.has(requestId) && control.autoApprove) {
@@ -281,4 +289,39 @@ export function crashAtWrite(t, file, { phase, when = () => true, nth = 1 }) {
   };
   t.after(() => { fs.renameSync = original; });
   return { fired: () => fired, disarm: () => { fs.renameSync = original; } };
+}
+
+function withHome(run) {
+  const previous = process.env.COURIER_HOME;
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'courier-approval-'));
+  process.env.COURIER_HOME = path.join(home, 'courier');
+  return Promise.resolve().then(() => run(home)).finally(() => {
+    if (previous === undefined) delete process.env.COURIER_HOME; else process.env.COURIER_HOME = previous;
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+}
+
+/**
+ * One test in a fresh COURIER_HOME with the fake services installed. The body gets { t, fx, errors, courier, request }:
+ * `courier(...argv)` runs `courier init <argv>` in-process and returns { code, stdout, stderr } (stderr accumulates across
+ * calls of the test); `request(...argv)` runs `init --request` and returns its parsed JSON.
+ */
+export function scenario(name, options, body) {
+  const [run, opts] = body === undefined ? [options, {}] : [body, options];
+  test(name, opts, (t) => withHome(async () => {
+    useFixtureEnv(t);
+    const fx = installFakeOpenKey(t);
+    const errors = [];
+    t.mock.method(console, 'error', (...args) => { errors.push(args.join(' ')); });
+    const courier = async (...argv) => {
+      const { result, stdout } = await captureStdout(() => main(['init', ...argv]));
+      return { code: result, stdout, stderr: errors.join('\n') };
+    };
+    const request = async (...argv) => {
+      const first = await courier('--request', ...argv);
+      assert.equal(first.code, 0, first.stderr);
+      return JSON.parse(first.stdout);
+    };
+    await run({ t, fx, errors, courier, request });
+  }));
 }
