@@ -183,6 +183,8 @@ test('paired renewal exports a C artifact without reading stale inbound and inst
   assert.equal(renewedOne.step, 'C');
   assert.equal(renewedOne.peer, 'issuer-one');
   assert.equal(renewedOne.callMe, 'recipient-one');
+  await new Promise((resolve) => setTimeout(resolve, 1100));
+  const renewedOneLater = await run(issuer.home, ['pair', 'renew', 'issuer-one', '--artifact']);
 
   const before = profileAt(recipient.home);
   const renewedTwo = await run(issuer.home, ['pair', 'renew', 'issuer-two', '--artifact']);
@@ -201,10 +203,13 @@ test('paired renewal exports a C artifact without reading stale inbound and inst
   const recipientProfile = profileAt(recipient.home);
   recipientProfile.peers['recipient-one'].inbound.delegation = 'not-a-valid-delegation';
   fs.writeFileSync(path.join(recipient.home, 'profile.json'), `${JSON.stringify(recipientProfile, null, 2)}\n`);
-  const installed = await run(recipient.home, ['pair', 'accept', JSON.stringify(renewedOne)]);
+  const installed = await run(recipient.home, ['pair', 'accept', JSON.stringify(renewedOneLater)]);
   const after = profileAt(recipient.home);
   assert.equal(installed.ok, true);
   assert.ok(Date.parse(after.peers['recipient-one'].inbound.expiresAt) > Date.parse(before.peers['recipient-one'].inbound.expiresAt));
+  const replay = await runFail(recipient.home, ['pair', 'accept', JSON.stringify(renewedOne)]);
+  assert.match(replay.stderr, /\[stale-artifact\]/);
+  assert.deepEqual(profileAt(recipient.home).peers['recipient-one'], after.peers['recipient-one']);
   assert.deepEqual(after.peers['recipient-two'], unrelated, 'the other peer is untouched');
 });
 

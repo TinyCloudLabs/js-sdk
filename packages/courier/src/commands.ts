@@ -293,6 +293,12 @@ async function pairAccept(args: ParsedArgs) {
     fail('bad-artifact', `Artifact C changes the established mailbox scope for ${peer.handle}.`);
   }
   const incoming = await validatePeerDelegation(node, profile, peer, art.delegation!);
+  if (peer.status === 'paired') {
+    const currentExpiry = Date.parse(peer.inbound?.expiresAt ?? '');
+    if (!Number.isFinite(currentExpiry) || Date.parse(incoming.expiresAt) <= currentExpiry) {
+      fail('stale-artifact', `Artifact C does not extend the current inbound delegation for ${peer.handle}.`);
+    }
+  }
   peer.inbound = { delegation: serializeDelegation(incoming.delegation), cid: incoming.cid, expiresAt: incoming.expiresAt };
   peer.status = 'paired';
   saveProfile(profile);
