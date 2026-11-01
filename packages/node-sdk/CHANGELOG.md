@@ -1,5 +1,12 @@
 # @tinycloudlabs/node-sdk
 
+## 3.9.1-beta.1
+
+### Patch Changes
+
+- Updated dependencies [29fd1f9]
+  - @tinycloud/replica@0.4.2-beta.0
+
 ## 3.9.1-beta.0
 
 ### Patch Changes
