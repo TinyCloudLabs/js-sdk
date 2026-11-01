@@ -1,5 +1,55 @@
 # @tinycloudlabs/web-sdk
 
+## 3.9.0
+
+### Minor Changes
+
+- a9bc978: The SDK can acquire a `tinycloud.email-held/v1` credential from the witness, for a caller that opts in per call. Nothing is enabled by default: the held profile stays disabled, and a call without `allowHeldProfile: true` is refused `PROFILE_UNAVAILABLE` before any request. `@tinycloud/node-sdk`: `acquireEmailProof`, `requestEmailProofCode` and `completeEmailProof` take `allowHeldProfile: true`; the holder is a canonical `did:pkh:eip155:1` (EIP-55) account with `EIP191`; the address is trimmed, refused if non-ASCII, lowercased and checked against the witness's rules (`ADDRESS_INVALID` before any request); the account binding the witness serves is checked against the SDK's own values before the wallet is asked to sign; the result is verified with the held verifier against the pinned issuer and cross-checked against the request. New public error code `CLIENT_CLOCK_SKEW` (not recoverable; default message "Your device clock is more than 5 minutes behind. Correct it and try again."): a device clock more than 5 minutes behind the witness is refused after the create call and before the code is mailed. `DESCRIPTOR_MISMATCH` and `UNSUPPORTED_VERSION` from the witness map to `PROFILE_UNAVAILABLE`. `EmailProofResult.verified` is now the ticket or the held verifier's result (`isTicketEmailProofResult` narrows it), and `EMAIL_PROOF_PINS` is exported from `@tinycloud/node-sdk/credentials`. `@tinycloud/sdk-core`: the credential descriptor and holder binding accept the held account shape next to the ticket shape (`AccountHolderBinding`, `TicketHolderBinding`, `ACCOUNT_HOLDER_BINDING_DOMAIN`). `@tinycloud/web-sdk`: `createAccountHolderSigner` signs only an exact held account binding for its own account and refuses any other bytes with `HOLDER_INVALID` before the wallet is called; `acquireHeldCredential` takes `allowHeldProfile`, checks that the issuer policy accepts the pinned issuer and reads the member's storage strictly before any request (a failed read is `OFFLINE`), and stores at `max(client time, credential iat)`. `@tinycloud/courier` stores ticket credentials only (a held result is refused there).
+
+  Only the email-proof functions (and the held source that forwards their `allowHeldProfile: true`) reach the held profile. `OpenCredentialsHttpTransport` (constructor option) and `interpretCredentialFlow` (input) refuse an account-bound descriptor with `UNSUPPORTED_PROFILE`, before any request, unless called with `allowAccountSubject: true`. That is a public option of both; the SDK's own callers pass it only for the held profile, after the per-call opt-in was accepted. The `CredentialsService` operations (`acquire`, `ensure`, `verify`) refuse a held requirement or descriptor with `UNSUPPORTED_PROFILE` and `publishEmailShareV3` refuses it; `validateCredentialFlowDescriptor` stays shape-only. A held request that stopped after a failed wallet prompt (`SIGNATURE_REJECTED`, recoverable, the pending kept) or a failed notice (`ISSUER_UNAVAILABLE`) is retried with the same pending: the SDK reads the binding again and checks it, does not ask the wallet again after the signature was accepted, and mails no second code. On the retry the `jti` of the binding is format-checked only (contract addendum A3): a witness that serves a different `jti` is detected only when the credential disagrees with it, after the notice was sent. The file pending store persists a held request's non-secret `serverExpiresAt` (a ticket file is unchanged) and adds no other secret. `HELD_ACCOUNT_BINDING_PINS` (exported from `@tinycloud/node-sdk/credentials`) holds the static fields of the account binding; the create request, the binding checks and the web-sdk account signer all use it, and the signer refuses a binding with free text in any field. In `@tinycloud/web-sdk` the account signer copies its input once and decodes it strictly (a byte-order mark is refused); a cache miss without the opt-in is `PROFILE_UNAVAILABLE`. `email-publish-v3` refuses a descriptor that is not a ticket descriptor.
+
+  Details: TC-2254
+
+### Patch Changes
+
+- 614c1c2: Held credentials for the claim screen. `@tinycloud/sdk-core/held-credentials` adds `buildHeldPresentationSiwe` and `checkReturnedPresentation`, and `verifyHeldEmailCredential` now also returns the signed `issuedAt`. `@tinycloud/web-sdk/credentials` now exports `createAccountHolderSigner`, `storeHeldCredential`, `findHeldCredential`, `acquireHeldCredential` and a new `listHeldEmailCredentials`, which returns all of one account's valid held email credentials: owner only; expired, revoked, unverifiable and within-10-minutes-of-expiry records are left out (the same margin as `findHeldCredential`); newest `issuedAt` first. That entry now imports `@tinycloud/sdk-core` instead of bundling a copy, so parse the issuer set with `parseIssuerSet` from `@tinycloud/sdk-core/held-credentials` and `CredentialError` is sdk-core's own class. `HeldMatch` gains `recordId`, `email`, `issuedAt`, `expiresAt` and `issuer`, all read from the re-verified credential. `@tinycloud/node-sdk` keeps the held profile disabled and no longer resumes a pending code request of another profile for the same address.
+
+  Details: TC-1454
+
+- 9758dfd: A held-credential storage call the app session may not make is now `CredentialError` code `PERMISSION_DENIED`, not `OFFLINE`: `listHeldEmailCredentials`, `findHeldCredential`, `deleteHeldCredential`, `pruneHeldCredentials` and `acquireHeldCredential`'s read of the store throw it when kv answers 401 or 403 (`This app can't read held credentials: the session may lack kv get and list on v1/held/ (skipPrefix), or may need to sign in again.`, or the same shape for delete with kv del; the node answers 401 both for a missing capability and for a stale session, so the text names both). The decision reads the typed kv error status, never its message text; a real network failure stays `OFFLINE`, and a failed write after a successful issue stays `VERIFIED_NOT_SAVED` (a write or read-back refused by kv 401/403 adds the fixed marker `details.state === "permission_denied"`, nothing else from the kv error). `PERMISSION_DENIED` is an additive code in `@tinycloud/sdk-core`'s `CredentialErrorCode` and is not recoverable by retrying. `findHeldCredential` still reads a failed list that is not a permission failure as "not found". `@tinycloud/web-sdk` `CREDENTIALS.md` now lists the manifest grant the held functions need (`tinycloud.kv` get, list, put, del on `v1/held/`, `skipPrefix: true`). `@tinycloud/node-sdk`: the local refusal of the disabled held profile (`PROFILE_UNAVAILABLE`, no witness contacted) now says "This SDK build doesn't enable the email verification profile."; the code is unchanged, and the witness-side `PROFILE_UNAVAILABLE` keeps "The witness does not offer the email verification profile.". `@tinycloud/web-sdk`: the account signer's refusals of its input (`HOLDER_INVALID`, 0 sign calls, behaviour unchanged) now say "The wallet signer signs only the exact account binding for this request." instead of the generic "Holder must be a did:key Ed25519 identifier."; the refusal of a non-mainnet-account did and of a bad signature returned by the wallet keep the shared text, and so does the did:key holder refusal in `@tinycloud/node-sdk`.
+
+  Details: TC-1454
+
+- f1744fb: `requestPermissions` on an OpenKey session signs the runtime grant through the OpenKey client the session was established with, so the Delegations tab's "Allow delegation list" completes. New `TinyCloudWeb.setRuntimePermissionSigner(signer?)` sets a signer for runtime permission grants only, for apps whose sign-in is not the SDK's OpenKey flow; sign-out, a new sign-in, a restore or a session for another account clear it. `grantRuntimePermissions` accepts `signMessage` to sign the prepared SIWE in place of the connected signer, and refuses a message that is not in canonical form, or a signature that does not recover to the session's account from the exact message bytes.
+
+  The permission prompt for `tinycloud.delegation/list` shows OpenKey's label and sentence for reading the delegation list; other delegation actions read "Manage your delegations (action)". When the panel's permission request throws, the error's name and code are written to the console and the SDK debug log; the panel text is unchanged.
+
+  Details: TC-2113
+
+- c523295: `requestPermissions` on a restored session whose OpenKey client was never connected no longer opens an OpenKey sign popup that hangs on "Please connect first to sign messages." It refuses before any popup and makes no OpenKey call. When no wallet provider is configured the node throws its usual "grantRuntimePermissions requires wallet mode with a signer or privateKey." error, as in 3.8.0; with a provider the grant falls through to the node's wallet signer exactly as in 3.8.0. The OpenKey client still signs the runtime grant when this instance's session was established through it, or when its `connect()` has run (the client's in-memory `lastAuth` is set); a client that does not expose `lastAuth` (an `@openkey/sdk` shape this SDK does not know) behaves as before. A signer set with `setRuntimePermissionSigner` still wins, and a wallet-mode session signs with its own signer. An app that connects through a different OpenKey instance than `config.openkey.client`, or restores after an authorize-only sign-in, must call `openkey.connect()` on the configured client or `setRuntimePermissionSigner`.
+
+  Details: TC-2281
+
+- 7d3f8df: README: `signIn()` restores a stored session only when it covers the app's current manifest. The check is local and does not contact the node, so a session the node rejects is still restored; call `signOut()` before `signIn()` to force a fresh consent.
+
+  Details: TC-2267
+
+- Updated dependencies [614c1c2]
+- Updated dependencies [614c1c2]
+- Updated dependencies [614c1c2]
+- Updated dependencies [9758dfd]
+- Updated dependencies [a9bc978]
+- Updated dependencies [a04807f]
+- Updated dependencies [5e47629]
+- Updated dependencies [b0da170]
+- Updated dependencies [853774e]
+- Updated dependencies [f1744fb]
+  - @tinycloud/node-sdk@3.9.0
+  - @tinycloud/sdk-core@3.9.0
+  - @tinycloud/replica@0.4.1
+  - @tinycloud/share-envelope@1.4.1
+  - @tinycloud/share-sdk@1.4.2
+
 ## 3.9.0-beta.9
 
 ### Patch Changes

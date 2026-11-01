@@ -1,5 +1,14 @@
 # @tinycloud/replica
 
+## 0.4.1
+
+### Patch Changes
+
+- a04807f: Move the sdk-services pin to the version published with this release so installs get one copy.
+
+  Details: TC-2263
+  - @tinycloud/sdk-services@3.8.1
+
 ## 0.4.1-beta.0
 
 ### Patch Changes
