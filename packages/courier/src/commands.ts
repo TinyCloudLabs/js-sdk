@@ -6,14 +6,15 @@ import { ulid } from 'ulid';
 import { TinyCloudNode, NodeWasmBindings, activateValidatedRuntimeDelegation, deserializeDelegation, serializeDelegation } from '@tinycloud/node-sdk';
 import type { PortableDelegation } from '@tinycloud/node-sdk';
 import { cmd } from './program.js';
-import { CourierError, errInfo } from './errors.js';
+import { CourierError, CourierPending, errInfo } from './errors.js';
 import { AGENT_GRANT, AGENT_GRANT_EXPIRY, COURIER_SPACE, DEFAULT_HOST, EXT, k, peerReadPermissions, PREFIX } from './keys.js';
 import {
   loadProfile, saveProfile, getPeer, profileDir, profileExists, loadKey, saveKey,
   type AgentKey, type Profile, type StoredPeer,
 } from './profile.js';
 import { courierNode, peerKv } from './node.js';
-import { courierGrantRequest, grantFromInput, installGrant, openKeyDelegateUrl, receiveGrant, resumeGrant } from './grant.js';
+import { courierGrantRequest, grantFromInput, installGrant, noSpaceError, pendingSpaceError, receiveGrant, resumeGrant } from './grant.js';
+import { completeApproval, DEFAULT_WAIT_MS, MAX_WAIT_MS, requestApproval, waitApproval } from './grant-request.js';
 import {
   artifactA, artifactWithDelegation, parseArtifact, peerRecordBody, PEER_DELEGATION_EXPIRY, validateArtifactIdentity,
 } from './pairing.js';
@@ -94,6 +95,13 @@ export async function cmdInit(args: ParsedArgs) {
   if (args.has('resume') && (args.has('request') || args.has('grant-file') || args.has('paste') || args.has('rotate-key'))) {
     fail('usage', `\`${cmd('init --resume')}\` cannot be combined with --request, --grant-file, --paste or --rotate-key.`);
   }
+  const timeoutFlag = initValue(args, 'timeout');
+  if (args.has('wait') && (args.has('request') || args.has('grant-file') || args.has('paste') || args.has('resume'))) {
+    fail('usage', `\`${cmd('init --wait')}\` cannot be combined with --request, --grant-file, --paste or --resume.`);
+  }
+  if (timeoutFlag !== undefined && !args.has('wait')) fail('usage', `--timeout needs --wait.`);
+  const waitMs = timeoutFlag === undefined ? DEFAULT_WAIT_MS : durationMs(timeoutFlag);
+  if (!waitMs || waitMs > MAX_WAIT_MS) fail('usage', `--timeout must be a duration such as 90s or 5m, at most 9m.`);
   const grantFile = args.has('grant-file')
     ? requireFlag(args, 'grant-file', `Usage: ${cmd('init [--request | --grant-file <file|->]')}`)
     : undefined;
@@ -145,8 +153,24 @@ export async function cmdInit(args: ParsedArgs) {
   if (rotate) console.error('Agent key rotated. Existing peer pairings must be re-established; the old grant remains valid until expiry.');
 
   if (args.has('request')) {
-    const openkeyUrl = openKeyDelegateUrl(request);
-    printJson({ did: key.did, courierDid: profile.courierDid, publicJwk: Object.fromEntries(Object.entries(key.jwk).filter(([name]) => !['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth', 'k'].includes(name))), host, space: COURIER_SPACE, permissions: AGENT_GRANT, expiry, openkeyUrl });
+    const pending = await requestApproval(profile, key, expiry, { openkeyApiHost: apiHostFlag });
+    console.error(`Send this link to the owner to approve (it expires ${pending.requestExpiresAt}). Then run \`${cmd('init --wait')}\` to collect the approval.`);
+    printJson({ did: key.did, courierDid: profile.courierDid, publicJwk: Object.fromEntries(Object.entries(key.jwk).filter(([name]) => !['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth', 'k'].includes(name))), host, space: COURIER_SPACE, permissions: AGENT_GRANT, expiry, openkeyUrl: pending.approvalUrl });
+    return;
+  }
+
+  if (args.has('wait')) {
+    const deadline = Date.now() + waitMs;
+    const { pending, resumed } = await waitApproval(profile, key, expiry, { openkeyApiHost: apiHostFlag });
+    if (!pending.committed) {
+      console.error(`${resumed ? 'Resuming the saved approval request. Owner: approve' : 'Owner: approve'} in OpenKey: ${pending.approvalUrl}\nWaiting for approval (up to ${Math.round(waitMs / 1000)} s). Run \`${cmd('init --wait')}\` again after an interruption; no new approval is needed.`);
+    }
+    if (await completeApproval(profile, key, pending, { deadline }) === 'deadline') {
+      throw new CourierPending({ step: 1, of: 1, approvalUrl: pending.approvalUrl, expiresAt: pending.requestExpiresAt });
+    }
+    const active = loadProfile();
+    if (active.status !== 'ready') throw active.spacePending ? pendingSpaceError(active) : noSpaceError(active);
+    await finishInit(active, active.host);
     return;
   }
 

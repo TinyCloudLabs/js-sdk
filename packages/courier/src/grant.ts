@@ -112,7 +112,7 @@ async function redeemShortCode(code: string, apiHost: string): Promise<unknown> 
 }
 
 /** Same binding checks as `tc`'s delegationFromInput: the redeemed delegation must be for this agent key. */
-function assertBoundToKey(delegation: unknown, key: Pick<AgentKey, 'did' | 'jwk'>): void {
+export function assertBoundToKey(delegation: unknown, key: Pick<AgentKey, 'did' | 'jwk'>): void {
   const value = delegation as Record<string, unknown> | null | undefined;
   const jwk = value?.jwk as Record<string, unknown> | undefined;
   if (
@@ -346,7 +346,8 @@ function applyGrantToProfile(profile: Profile, grant: OwnerGrant): void {
   profile.grantExpiresAt = grant.expiresAt;
 }
 
-export async function installGrant(profile: Profile, key: AgentKey, payload: GrantPayload): Promise<void> {
+/** `spaceTimeoutMs` bounds the wait for OpenKey to host a pending agents space (default 150 s); `init --wait` passes what its --timeout leaves. */
+export async function installGrant(profile: Profile, key: AgentKey, payload: GrantPayload, options: { spaceTimeoutMs?: number } = {}): Promise<void> {
   const expectedSpace = ownerSpaceId(payload);
   if (payload.spaceId.toLowerCase() !== expectedSpace.toLowerCase()) {
     throw new CourierError('bad-grant', `Grant space ${payload.spaceId} is not ${COURIER_SPACE} for did:pkh:eip155:${payload.chainId}:${payload.address}.`);
@@ -362,8 +363,9 @@ export async function installGrant(profile: Profile, key: AgentKey, payload: Gra
     else delete profile.spacePending;
     saveProfile(profile);
     if (!pending) throw noSpaceError(profile);
-    console.error(`OpenKey is setting up your TinyCloud "${COURIER_SPACE}" space; waiting up to 2.5 minutes…`);
-    if (!(await waitForSpaceReady(() => verifySpaceReady(node)))) throw pendingSpaceError(profile);
+    const spaceTimeoutMs = options.spaceTimeoutMs;
+    console.error(`OpenKey is setting up your TinyCloud "${COURIER_SPACE}" space; waiting up to ${spaceTimeoutMs === undefined ? '2.5 minutes' : `${Math.ceil(spaceTimeoutMs / 1000)} seconds`}…`);
+    if (!(await waitForSpaceReady(() => verifySpaceReady(node), spaceTimeoutMs === undefined ? {} : { timeoutMs: spaceTimeoutMs }))) throw pendingSpaceError(profile);
   }
   profile.status = 'ready';
   delete profile.spacePending;
