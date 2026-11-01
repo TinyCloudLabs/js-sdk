@@ -505,7 +505,7 @@ export function verifySignedSession(
       throw new CLIError("OPENKEY_EXPIRY_EXCEEDED", `The signed session expires more than 10 years from now, the longest this CLI accepts. Choose a shorter lifetime in OpenKey. ${notStored}`, ExitCode.PERMISSION_DENIED);
     }
   } else if (expected.expiry !== undefined && signedExpiry > expiryLimit(expected.expiry)) {
-    throw new CLIError("OPENKEY_EXPIRY_EXCEEDED", `The signed session outlives the requested --expiry. ${notStored}`, ExitCode.PERMISSION_DENIED);
+    throw new CLIError("OPENKEY_EXPIRY_EXCEEDED", `The signed session outlives the requested --expiry. Choose an earlier lifetime in OpenKey, or re-run with a longer --expiry. ${notStored}`, ExitCode.PERMISSION_DENIED);
   }
   const ownerDid = `did:pkh:eip155:${data.chainId}:${data.address}`;
   if (expected.expectedOwner && normalizePkhIdentifier(expected.expectedOwner) !== normalizePkhIdentifier(ownerDid)) {
