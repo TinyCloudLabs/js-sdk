@@ -125,7 +125,7 @@ describe("with the opt-in", () => {
     // An already-expired message never reaches the expiry check: SIWE verification refuses it first.
     for (const [offset, message] of [
       [-1_000, "OpenKey signature verification failed: Expired message"],
-      [30_000, "OpenKey signedMessage expiry must be more than 60 seconds from now"],
+      [30_000, "OpenKey signedMessage expiry must be more than 60 seconds from now; choose a longer expiry"],
       [11 * 365 * DAY_MS, "OpenKey signedMessage expiry is more than 10 years away, the longest this SDK accepts; choose a shorter expiry"],
     ] as const) {
       const s = await setup();
@@ -260,7 +260,7 @@ describe("through signInWithOpenKey / prepareOpenKeySignIn", () => {
 
 // Review follow-up (TC-2276): an app-level maximum (`maxExpiresAt`), checked before anything is activated.
 describe("maxExpiresAt: an app-level maximum for the signed expiry", () => {
-  const refusal = /^OpenKey signedMessage expiry is later than the maximum for this request \(the latest allowed is \d{4}-\d{2}-\d{2}T/;
+  const refusal = /^OpenKey signedMessage expiry is later than the maximum for this request \(the latest allowed is \d{4}-\d{2}-\d{2}T[^)]*\); choose an earlier expiry$/;
 
   test("a signed expiry above the maximum is refused BEFORE any session, storage, replica stamp or activation", async () => {
     for (const asMax of [(ms: number) => ms, (ms: number) => new Date(ms), (ms: number) => () => ms]) {

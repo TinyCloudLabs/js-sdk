@@ -135,7 +135,7 @@ describe("the --expiry ceiling is enforced before activation", () => {
     pickedLifetimeMs = 2 * HOUR;
     await expect(login()).rejects.toMatchObject({
       code: "OPENKEY_EXPIRY_EXCEEDED",
-      message: expect.stringContaining("the latest allowed is"),
+      message: expect.stringMatching(/the latest allowed is \d{4}-[^)]*\)\. Choose an earlier lifetime in OpenKey, or re-run with a longer --expiry\. No session was saved\.$/),
     });
     expect(hits.delegate).toBe(0);
     expect(await ProfileManager.getSession("owner")).toBeNull();
@@ -189,7 +189,7 @@ describe("without --expiry the default 30 day request is the ceiling", () => {
     pickedLifetimeMs = 31 * DAY;
     await expect(loginDefault()).rejects.toMatchObject({
       code: "OPENKEY_EXPIRY_EXCEEDED",
-      message: expect.stringMatching(/default 30 day lifetime.*the latest allowed is \d{4}-/),
+      message: expect.stringMatching(/default 30 day lifetime.*the latest allowed is \d{4}-[^)]*\)\. Choose an earlier lifetime in OpenKey, or re-run with a longer --expiry\. No session was saved\.$/),
     });
     expect(hits.delegate).toBe(0);
     expect(await ProfileManager.getSession("owner")).toBeNull();

@@ -70,13 +70,13 @@ export function defaultExpiryLimit(): number {
  */
 export function sdkMaxExpiryRefusal(error: unknown, defaultRequest = false): CLIError | undefined {
   const message = error instanceof Error ? error.message : "";
-  const match = /^OpenKey signedMessage expiry is later than the maximum for this request \(the latest allowed is ([^)]+)\)$/.exec(message);
+  const match = /^OpenKey signedMessage expiry is later than the maximum for this request \(the latest allowed is ([^)]+)\)(?:; choose an earlier expiry)?$/.exec(message);
   if (match === null) return undefined;
   const requested = defaultRequest
     ? `the default ${EXPIRY.SESSION_MS / 86_400_000} day lifetime this login requested`
     : "the requested --expiry";
   return Object.assign(
-    new CLIError("OPENKEY_EXPIRY_EXCEEDED", `The signed session outlives ${requested} (the latest allowed is ${match[1]}). No session was saved.`, ExitCode.PERMISSION_DENIED),
+    new CLIError("OPENKEY_EXPIRY_EXCEEDED", `The signed session outlives ${requested} (the latest allowed is ${match[1]}). Choose an earlier lifetime in OpenKey, or re-run with a longer --expiry. No session was saved.`, ExitCode.PERMISSION_DENIED),
     { cause: error },
   );
 }
