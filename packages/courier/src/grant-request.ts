@@ -12,7 +12,8 @@ import { cmd } from './program.js';
 import { CourierError } from './errors.js';
 import { AGENT_GRANT, AGENT_GRANT_EXPIRY } from './keys.js';
 import { profileDir, readSecure, writeSecure, type AgentKey, type Profile } from './profile.js';
-import { assertBoundToKey, installGrant, parseGrantPayload, resolveOpenKeyApiHost, type GrantPayload } from './grant.js';
+import { assertBoundToKey, parseGrantPayload, resolveOpenKeyApiHost, type GrantPayload } from './grant.js';
+import { installRefusing, withRefusalNotice } from './grant-refusal.js';
 import { bareDid, CLOCK_SKEW_MS, durationMs, siweTimes } from './authority.js';
 
 /**
@@ -29,6 +30,7 @@ export const MAX_WAIT_MS = 9 * 60_000;
  * MIN_SPACE_WAIT_MS), so a default `init --wait` stays inside an agent's 2-minute tool-call limit. The grant is saved and
  * acknowledged before that wait, so running out of it costs nothing: `init --resume` finishes.
  */
+const DAY_MS = 86_400_000;
 const SPACE_GRACE_MS = 5_000;
 const MIN_SPACE_WAIT_MS = 1_000;
 const MAX_SPACE_WAIT_MS = 150_000;
@@ -251,8 +253,11 @@ function requesterState(pending: PendingGrantRequest, key: AgentKey): ApprovalRe
 
 /** Decrypt the saved result and check it answers this request and this key. Throws after dropping the request if it does not. */
 async function verifiedPayload(profile: Profile, pending: PendingGrantRequest, key: AgentKey): Promise<GrantPayload> {
+  let delegationCid: string | undefined;
   try {
     const opened = await openRelayResult(pending.resultEnvelope, pending.requestId, pending.relayPrivateKey);
+    const claimedCid = (opened.delegation as { delegationCid?: unknown } | null | undefined)?.delegationCid;
+    delegationCid = typeof claimedCid === 'string' && claimedCid !== '' ? claimedCid : undefined;
     const checked = checkApprovalResultBinding(opened, { requestId: pending.requestId, bodyCid: pending.bodyCid, request: pending.request });
     const payload = parseGrantPayload(checked.delegation, key);
     assertBoundToKey(checked.delegation, key);
@@ -265,19 +270,16 @@ async function verifiedPayload(profile: Profile, pending: PendingGrantRequest, k
     }
     // The grant may not outlast what was asked for (OpenKey lets the owner choose less, never more).
     if (times.issuedAt && times.expiresAt.getTime() - times.issuedAt.getTime() > pending.request.grantLifetimeSeconds * 1000 + CLOCK_SKEW_MS) {
-      throw new CourierError('grant-too-long', `The approved grant lasts longer than the ${pending.request.grantLifetimeSeconds} seconds this request asked for.`);
+      throw new CourierError('grant-too-long', `The approved grant is valid for ${+((times.expiresAt.getTime() - times.issuedAt.getTime()) / DAY_MS).toFixed(2)} days, but this request asked for at most ${+(pending.request.grantLifetimeSeconds * 1000 / DAY_MS).toFixed(2)} days.`);
     }
     // A renewal stays with the owner that holds the grant: with no code to paste back, whoever approves the link first would win.
     if (profile.ownerDid && checked.ownerDid.toLowerCase() !== profile.ownerDid.toLowerCase()) {
-      throw new CourierError('approval-result-invalid', `This agent is bound to owner ${profile.ownerDid}, but a different owner (${checked.ownerDid}) approved the request. Nothing was installed. Send the link only to the owner, privately. If the owner changed on purpose, run \`${cmd('init --rotate-key --request')}\` (this re-pairs every peer).`);
+      throw new CourierError('approval-result-invalid', `This agent is bound to owner ${profile.ownerDid}, but a different owner (${checked.ownerDid}) approved the request. Send the link only to the owner, privately. If the owner changed on purpose, run \`${cmd('init --rotate-key --request')}\` (this re-pairs every peer).`);
     }
     return payload;
   } catch (error) {
     clearPending();
-    if (isApprovalClientError(error)) {
-      throw new CourierError('approval-result-invalid', `The approved result does not match this request (${error.message}). Nothing was installed. Run \`${cmd('init --request')}\` for a new link.`);
-    }
-    throw error;
+    throw withRefusalNotice(isApprovalClientError(error) ? new CourierError('approval-result-invalid', `The approved result was refused. ${error.message}`) : error, delegationCid);
   }
 }
 
@@ -333,7 +335,7 @@ export async function completeApproval(profile: Profile, key: AgentKey, pending:
     const spaceTimeoutMs = Math.min(MAX_SPACE_WAIT_MS, Math.max(MIN_SPACE_WAIT_MS, options.deadline + SPACE_GRACE_MS - Date.now()));
     let spaceError: CourierError | undefined;
     try {
-      await installGrant(profile, key, payload, { spaceTimeoutMs });
+      await installRefusing(profile, key, payload, { spaceTimeoutMs });
     } catch (error) {
       if (error instanceof CourierError && error.code === 'no-space') spaceError = error; // grant and profile are saved
       else {

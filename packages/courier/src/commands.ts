@@ -13,7 +13,8 @@ import {
   type AgentKey, type Profile, type StoredPeer,
 } from './profile.js';
 import { courierNode, peerKv } from './node.js';
-import { courierGrantRequest, grantFromInput, installGrant, noSpaceError, pendingSpaceError, receiveGrant, resumeGrant } from './grant.js';
+import { courierGrantRequest, grantFromInput, noSpaceError, pendingSpaceError, receiveGrant, resumeGrant } from './grant.js';
+import { installRefusing } from './grant-refusal.js';
 import { completeApproval, DEFAULT_WAIT_MS, loadPending, MAX_WAIT_MS, requestApproval, waitApproval } from './grant-request.js';
 import {
   artifactA, artifactWithDelegation, parseArtifact, peerRecordBody, PEER_DELEGATION_EXPIRY, validateArtifactIdentity,
@@ -188,7 +189,7 @@ export async function cmdInit(args: ParsedArgs) {
   } else {
     payload = await receiveGrant(request, { paste: args.has('paste') });
   }
-  await installGrant(profile, key, payload);
+  await installRefusing(profile, key, payload);
   await finishInit(profile, host);
 }
 
