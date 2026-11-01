@@ -147,9 +147,18 @@ export interface PathBoundSharePlan {
   readonly keyPath: string;
   /** `<network>/share/<shareId>`: the one decrypt resource the share grants. */
   readonly keyResource: string;
-  /** The owner session must hold these before the key is created: `key.create` on exactly this share's key. */
+  /**
+   * ROUTE A, per share at runtime: `key.create` on exactly this share's key, requested with `requestPermissions` before the key is created
+   * (one extra consent per share). For apps that cannot use the sign-in route (for example apps whose sign-in goes through the OpenKey widget
+   * `authorizeTinyCloud` route, which refuses decrypt and key.create outside `apps/`).
+   */
   readonly requiredPermissions: PathBoundPermissionEntry[];
-  /** The owner session must hold these for the node to register the policy: decrypt under `<network>/share/`. */
+  /**
+   * ROUTE B, once at sign-in (manifest entries): `key.create` and `decrypt` on the default network's `<network>/share/` prefix, so every share's
+   * key can be created without a further prompt. Put these in the `permissions` of the manifest the owner signs in with.
+   */
+  readonly sessionPermissions: PathBoundPermissionEntry[];
+  /** The owner session must hold these for the node to register the policy: decrypt under `<network>/share/` (also part of `sessionPermissions`). */
   readonly registrationPermissions: PathBoundPermissionEntry[];
   /** Options for `keys.encrypt(plan.keyPath, plaintext, plan.encryptOptions({ metadata }))`. */
   encryptOptions(extra?: { readonly metadata?: Readonly<Record<string, string>> }): { networkId: string; metadata?: Record<string, string> };
@@ -166,6 +175,7 @@ export function planPathBoundShare(input: { readonly shareId: string; readonly e
     keyPath,
     keyResource,
     requiredPermissions: [{ service: "tinycloud.encryption", path: keyResource, actions: ["tinycloud.encryption/key.create"] }],
+    sessionPermissions: [{ service: "tinycloud.encryption", path: `${encryptionNetwork}/share/`, actions: ["tinycloud.encryption/decrypt", "tinycloud.encryption/key.create"] }],
     registrationPermissions: [{ service: "tinycloud.encryption", path: `${encryptionNetwork}/share/`, actions: ["tinycloud.encryption/decrypt"] }],
     encryptOptions: (extra) => ({ networkId: encryptionNetwork, ...(extra?.metadata === undefined ? {} : { metadata: { ...extra.metadata } }) }),
   };
@@ -273,7 +283,7 @@ export async function encryptAddressedShareContent(input: {
       const status = (error as { readonly status?: unknown }).status;
       throw new AddressedContentSourceError(
         "key-not-authorized",
-        `the owner session does not hold tinycloud.encryption/key.create on ${plan.keyResource} (the node answers "Unauthorized Action: ${plan.keyResource} / tinycloud.encryption/key.create"); request plan.requiredPermissions (requestPermissions) before creating the key` +
+        `the owner session does not hold tinycloud.encryption/key.create on ${plan.keyResource} (the node answers "Unauthorized Action: ${plan.keyResource} / tinycloud.encryption/key.create"); hold it either at sign-in (put plan.sessionPermissions in the manifest: key.create on ${plan.encryptionNetwork}/share/) or per share (requestPermissions(plan.requiredPermissions)) before creating the key` +
           (status === 403 ? "; if the owner signs in through OpenKey, the request must come from a first-party TinyCloud origin" : ""),
       );
     }

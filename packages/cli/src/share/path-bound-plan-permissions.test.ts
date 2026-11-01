@@ -4,7 +4,7 @@
  * `key.create`, and the decrypt prefix the node's policy registration needs. Checked against the real sdk-core expander.
  */
 import { describe, expect, test } from "bun:test";
-import { expandRuntimePermissionEntries, type PermissionEntry } from "@tinycloud/sdk-core";
+import { expandPermissionEntries, expandRuntimePermissionEntries, type PermissionEntry } from "@tinycloud/sdk-core";
 import { defaultEncryptionNetworkForOwner, planPathBoundShare } from "@tinycloud/share-sdk";
 
 const OWNER = "did:pkh:eip155:1:0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed";
@@ -32,5 +32,14 @@ describe("path-bound plan permissions are valid runtime entries", () => {
       expect(entry.path).not.toBe(plan.encryptionNetwork);
       expect(entry.path.startsWith(`${plan.encryptionNetwork}/share/`)).toBe(true);
     }
+  });
+
+  test("sessionPermissions are valid manifest entries (key.create + decrypt on the share prefix), and the runtime route refuses that prefix key.create", () => {
+    const entries: PermissionEntry[] = plan.sessionPermissions;
+    const expanded = expandPermissionEntries(entries);
+    expect(expanded.map((entry) => [entry.path, entry.actions])).toEqual([
+      [`${plan.encryptionNetwork}/share/`, ["tinycloud.encryption/decrypt", "tinycloud.encryption/key.create"]],
+    ]);
+    expect(() => expandRuntimePermissionEntries(entries, OWNER)).toThrow();
   });
 });
