@@ -14,7 +14,7 @@ import {
 } from './profile.js';
 import { courierNode, peerKv } from './node.js';
 import { courierGrantRequest, grantFromInput, installGrant, noSpaceError, pendingSpaceError, receiveGrant, resumeGrant } from './grant.js';
-import { completeApproval, DEFAULT_WAIT_MS, MAX_WAIT_MS, requestApproval, waitApproval } from './grant-request.js';
+import { completeApproval, DEFAULT_WAIT_MS, loadPending, MAX_WAIT_MS, requestApproval, waitApproval } from './grant-request.js';
 import {
   artifactA, artifactWithDelegation, parseArtifact, peerRecordBody, PEER_DELEGATION_EXPIRY, validateArtifactIdentity,
 } from './pairing.js';
@@ -121,6 +121,12 @@ export async function cmdInit(args: ParsedArgs) {
 
   const rotate = args.has('rotate-key');
   const prior = profileExists() && !rotate ? loadProfile() : undefined;
+  // A renewal is asked for with `--request`; `--wait` only collects. Starting a request here would hide its link on stderr.
+  if (args.has('wait') && prior && prior.status !== 'awaiting-grant' && !loadPending()) {
+    fail('usage', prior.status === 'awaiting-space'
+      ? `The grant is saved and the "${COURIER_SPACE}" space is still being set up: run \`${cmd('init --resume')}\`. \`${cmd('init --wait')}\` collects an approval that \`${cmd('init --request')}\` asked for.`
+      : `This profile already has a grant and no approval request is pending. To renew it, run \`${cmd('init --request')}\`, send the printed openkeyUrl to the owner, then run \`${cmd('init --wait')}\`.`);
+  }
   const key = prior ? loadKey() : newAgentKey();
   const host = hostFlag ?? prior?.host ?? process.env.COURIER_HOST ?? DEFAULT_HOST;
   const openkeyHost = openkeyHostFlag ?? prior?.openkeyHost ?? process.env.COURIER_OPENKEY_HOST ?? 'https://openkey.so';
@@ -153,15 +159,17 @@ export async function cmdInit(args: ParsedArgs) {
   if (rotate) console.error('Agent key rotated. Existing peer pairings must be re-established; the old grant remains valid until expiry.');
 
   if (args.has('request')) {
-    const pending = await requestApproval(profile, key, expiry, { openkeyApiHost: apiHostFlag });
+    const pending = await requestApproval(profile, key, args.get('expiry'), { openkeyApiHost: apiHostFlag });
     console.error(`Send this link to the owner to approve (it expires ${pending.requestExpiresAt}). Then run \`${cmd('init --wait')}\` to collect the approval.`);
-    printJson({ did: key.did, courierDid: profile.courierDid, publicJwk: Object.fromEntries(Object.entries(key.jwk).filter(([name]) => !['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth', 'k'].includes(name))), host, space: COURIER_SPACE, permissions: AGENT_GRANT, expiry, openkeyUrl: pending.approvalUrl });
+    // A resumed request keeps the lifetime it was made with.
+    const lifetime = pending.request.grantLifetimeSeconds * 1000 === expiryMs ? expiry : `${pending.request.grantLifetimeSeconds}s`;
+    printJson({ did: key.did, courierDid: profile.courierDid, publicJwk: Object.fromEntries(Object.entries(key.jwk).filter(([name]) => !['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth', 'k'].includes(name))), host, space: COURIER_SPACE, permissions: AGENT_GRANT, expiry: lifetime, openkeyUrl: pending.approvalUrl });
     return;
   }
 
   if (args.has('wait')) {
     const deadline = Date.now() + waitMs;
-    const { pending, resumed } = await waitApproval(profile, key, expiry, { openkeyApiHost: apiHostFlag });
+    const { pending, resumed } = await waitApproval(profile, key, args.get('expiry'), { openkeyApiHost: apiHostFlag });
     if (!pending.committed) {
       console.error(`${resumed ? 'Resuming the saved approval request. Owner: approve' : 'Owner: approve'} in OpenKey: ${pending.approvalUrl}\nWaiting for approval (up to ${Math.round(waitMs / 1000)} s). Run \`${cmd('init --wait')}\` again after an interruption; no new approval is needed.`);
     }
