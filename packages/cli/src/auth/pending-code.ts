@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { lstat, rm } from "node:fs/promises";
+import { chmod, lstat, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { profilePath } from "@tinycloud/operations/state";
 import { readJson, writeJsonDurable } from "../config/storage.js";
@@ -41,13 +41,16 @@ async function write(profile: string, records: PendingCode[]): Promise<void> {
   else await writeJsonDurable(fileOf(profile), { version: 1, records } satisfies PendingCodes);
 }
 
-/** Live records. A record that expired, or a file that is not an owner-only regular file, is removed rather than trusted. */
+/** Live records. An expired record or an unreadable file is removed; a loose mode is repaired; a non-regular path is left alone. */
 async function live(profile: string): Promise<PendingCode[]> {
   const file = fileOf(profile);
   let records: PendingCode[];
   try {
     const info = await lstat(file);
-    if (!info.isFile() || (info.mode & 0o077) !== 0) throw new Error("not an owner-only regular file");
+    // A symlink, directory or another user's file is not ours to read or delete.
+    if (!info.isFile() || info.uid !== process.getuid?.()) return [];
+    // The only copy of a consumed code is repaired, not destroyed, over a loose mode.
+    if ((info.mode & 0o077) !== 0) await chmod(file, 0o600);
     const stored = await readJson<PendingCodes>(file);
     if (stored?.version !== 1 || !Array.isArray(stored.records)) throw new Error("unknown format");
     records = stored.records.filter((record) => typeof record?.codeHash === "string"
