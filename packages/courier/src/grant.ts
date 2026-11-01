@@ -378,7 +378,19 @@ function applyGrantToProfile(profile: Profile, grant: OwnerGrant): void {
   profile.grantExpiresAt = grant.expiresAt;
 }
 
+/** Refusals that no retry can change: the saved copy of such a delegation is useless and must not be replayed. */
+const PERMANENT_GRANT_ERRORS = new Set(['bad-grant', 'grant-too-broad', 'grant-incomplete', 'grant-expired']);
+
 export async function installGrant(profile: Profile, key: AgentKey, payload: GrantPayload): Promise<void> {
+  try {
+    await installGrantFrom(profile, key, payload);
+  } catch (error) {
+    if (error instanceof CourierError && PERMANENT_GRANT_ERRORS.has(error.code)) dropPendingDelegation(payload.delegationCid);
+    throw error;
+  }
+}
+
+async function installGrantFrom(profile: Profile, key: AgentKey, payload: GrantPayload): Promise<void> {
   const expectedSpace = ownerSpaceId(payload);
   if (payload.spaceId.toLowerCase() !== expectedSpace.toLowerCase()) {
     throw new CourierError('bad-grant', `Grant space ${payload.spaceId} is not ${COURIER_SPACE} for did:pkh:eip155:${payload.chainId}:${payload.address}.`);
