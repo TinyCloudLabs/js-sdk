@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { PREFIX } from '../dist/keys.js';
 import { loadProfile } from '../dist/profile.js';
 import {
@@ -98,3 +100,11 @@ for (const [name, code, options, what] of legacyClasses) {
     assert.equal(loadProfile().status, 'awaiting-grant');
   });
 }
+
+test('the README and both skill copies tell the agent what to do when a grant is refused', () => {
+  const sentence = 'If a grant is refused, nothing was installed; tell the owner to revoke the listed delegation at account.tinycloud.xyz/delegations, then run `init --request` for a new link.';
+  for (const relative of ['../README.md', '../skills/courier/SKILL.md', '../../cli/skills/courier/SKILL.md']) {
+    const text = fs.readFileSync(fileURLToPath(new URL(relative, import.meta.url)), 'utf8').replace(/\s+/g, ' ');
+    assert.ok(text.includes(sentence), `${relative} must say: ${sentence}`);
+  }
+});
