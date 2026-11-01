@@ -59,14 +59,19 @@ export async function captureStdout(fn) {
   finally { process.stdout.write = original; }
 }
 
-/** A grant exactly as OpenKey signs one for `agent`: the AGENT_GRANT set (plus `extra`) on the owner's agents space. */
-export async function signedGrant(agent, { extra = [], omit = [], lifetimeMs = 30 * DAY, wallet = randomBytes(32).toString('hex') } = {}) {
+/**
+ * A grant exactly as OpenKey signs one for `agent`: the AGENT_GRANT set (plus `extra`) on the owner's agents space.
+ * `hooksPath` replaces the path of the hooks permission (a retyped or widened scope).
+ */
+export async function signedGrant(agent, { extra = [], omit = [], lifetimeMs = 30 * DAY, wallet = randomBytes(32).toString('hex'), hooksPath } = {}) {
   const signer = new PrivateKeySigner(wallet);
   const address = await signer.getAddress();
   const chainId = 1;
   const spaceId = wasm.makeSpaceId(address, chainId, COURIER_SPACE);
   const abilities = {};
-  for (const permission of [...AGENT_GRANT.filter((entry) => !omit.includes(entry.service)), ...extra]) {
+  const granted = AGENT_GRANT.filter((entry) => !omit.includes(entry.service))
+    .map((entry) => (hooksPath !== undefined && entry.service === 'tinycloud.hooks' ? { ...entry, path: hooksPath } : entry));
+  for (const permission of [...granted, ...extra]) {
     const service = permission.service.replace(/^tinycloud\./, '');
     const actions = abilities[service] ??= {};
     (actions[permission.path] ??= []).push(...permission.actions);
