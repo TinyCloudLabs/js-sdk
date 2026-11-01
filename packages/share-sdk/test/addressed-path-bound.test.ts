@@ -46,7 +46,7 @@ const crypto: NamedKeyClientConfig["crypto"] = {
   randomBytes: (length) => Uint8Array.from({ length }, () => (counter = (Math.imul(counter, 1664525) + 1013904223) >>> 0) & 0xff),
   x25519FromSeed: (seed) => ({ publicKey: seed, privateKey: seed }),
   x25519Dh: (a, b) => xor(a, b),
-  authEncrypt: (key, plaintext) => xor(key, plaintext),
+  authEncrypt: (key, plaintext) => Uint8Array.from([...new Uint8Array(28).fill(1), ...xor(key, plaintext)]),
   authDecrypt: (key, ciphertext) => xor(key, ciphertext),
   sealToNetworkKey: (pub, symmetric) => Uint8Array.from([...xor(pub, symmetric), 1, 2, 3]),
   openWithReceiverKey: (priv, wrapped) => xor(priv, wrapped),
@@ -181,6 +181,13 @@ describe("the publisher refuses anything not path-bound before it signs, registe
     ["an upper-case digest", bad({ encryptedSymmetricKeyDigestHex: "AB".repeat(32) }), "digest-invalid"],
     ["a network that is not a default network", bad({ encryptionNetwork: NETWORK.replace(":default", ":other") }), "network-invalid"],
     ["a bare key resource as the network", bad({ encryptionNetwork: `${NETWORK}/share/${SHARE_ID}` }), "network-invalid"],
+    ["a lower-cased owner address in the network", bad({ encryptionNetwork: NETWORK.toLowerCase() }), "network-not-checksummed"],
+    ["a wrong mixed-case (not EIP-55) owner address", bad({ encryptionNetwork: NETWORK.replace("0x5aAeb", "0x5AAeb") }), "network-not-checksummed"],
+    ["an extra :default segment", bad({ encryptionNetwork: `${NETWORK}:default` }), "network-invalid"],
+    ["a 0X-prefixed address", bad({ encryptionNetwork: NETWORK.replace(":0x", ":0X") }), "network-invalid"],
+    ["a chain id with a leading zero", bad({ encryptionNetwork: NETWORK.replace("eip155:1:", "eip155:01:") }), "network-invalid"],
+    ["a did:key owner with extra segments", bad({ encryptionNetwork: "urn:tinycloud:encryption:did:key:z6Mk:extra:default" }), "network-invalid"],
+    ["a did:web owner", bad({ encryptionNetwork: "urn:tinycloud:encryption:did:web:example.com:default" }), "network-invalid"],
   ];
   for (const [name, make, code] of cases) {
     for (const { kind, target } of TARGETS) {
@@ -224,6 +231,16 @@ describe("the size bound sees the path", () => {
     expect(await addressedShareBodyUpperBound(input() as never)).toBe(await addressedShareBodyUpperBound(input({ encryptionKeyPath: `share/${SHARE_ID}` }) as never));
   });
 
+  it("refuses a network the publisher would refuse (so assertAddressedShareFits is a real gate)", async () => {
+    for (const [encryptionNetwork, code] of [[NETWORK.toLowerCase(), "network-not-checksummed"], [NETWORK.replace(":default", ":other"), "network-invalid"], ["not-a-urn", "network-invalid"], [`${NETWORK}:default`, "network-invalid"]] as const) {
+      await expect(addressedShareBodyUpperBound(input({ encryptionNetwork }) as never)).rejects.toMatchObject({ code });
+    }
+  });
+
+  it("refuses a share id the publisher would refuse, before anything is created", async () => {
+    await expect(addressedShareBodyUpperBound(input({ shareId: "dot.share.0000000001" }) as never)).rejects.toMatchObject({ code: "share-id-invalid" });
+  });
+
   it("refuses a key path that is not this share's", async () => {
     await expect(addressedShareBodyUpperBound(input({ encryptionKeyPath: "share/someothershare0000001" }) as never)).rejects.toMatchObject({ code: "key-path-mismatch" });
     await expect(addressedShareBodyUpperBound(input({ encryptionKeyPath: `share/${SHARE_ID}` }) as never)).resolves.toBeGreaterThan(0);
@@ -254,6 +271,27 @@ describe("plan: path, permissions and the checksummed network", () => {
     expect(() => planPathBoundShare({ shareId: "short", encryptionNetwork: NETWORK })).toThrow(expect.objectContaining({ code: "share-id-invalid" }));
     expect(() => planPathBoundShare({ shareId: SHARE_ID, encryptionNetwork: NETWORK.replace(":default", ":other") })).toThrow(expect.objectContaining({ code: "network-invalid" }));
     expect(() => planPathBoundShare({ shareId: SHARE_ID, encryptionNetwork: NETWORK.replace("urn:tinycloud:encryption:", "") })).toThrow(expect.objectContaining({ code: "network-invalid" }));
+  });
+});
+
+describe("one share-id grammar for the plan, the size bound and the publisher (no orphan keys)", () => {
+  const accepted = [crypto.randomUUID(), crypto.randomUUID().replaceAll("-", ""), "a".repeat(16), "a".repeat(64), "0123456789abcdef", "ab_cd-ef_gh-ij_kl"];
+  const refused = ["dot.share.0000000001", "a".repeat(15), "a".repeat(65), "..", "../../etc/passwd-xx", "a/b/c/d/e/f/g/h/i", "%61%61%61%61%61%61%61%61%61%61", "ünïcödé-share-id-0001", "UPPERCASE-SHARE-ID-0001", "-leading-dash-0000001", "_leading-underscore-01", "has space in the id 01", "tab\tin-the-id-00000001"];
+
+  it("accepts the ids the producers use (lowercase UUID with and without hyphens) and refuses everything outside [a-z0-9_-] (16..64, first char a letter or digit)", () => {
+    for (const id of accepted) expect(pathBoundKeyPath(id)).toBe(`share/${id}`);
+    for (const id of refused) expect(() => planPathBoundShare({ shareId: id, encryptionNetwork: NETWORK })).toThrow(expect.objectContaining({ code: "share-id-invalid" }));
+  });
+
+  it("the publisher refuses exactly what the plan refuses, with the same code and before it signs anything", async () => {
+    const { contentSource } = await encryptAndBind();
+    for (const id of refused) {
+      const auth = authority();
+      const failure = await publishAddressedShare(publishOptions(TARGETS[1].target, { ...contentSource, shareId: id, encryptionKeyPath: `share/${id}` }, auth.value, id)).then(() => undefined, (error: unknown) => error);
+      expect(failure).toMatchObject({ code: "share-id-invalid" });
+      expect(auth.seen.signs).toBe(0);
+      expect(auth.seen.registrations).toEqual([]);
+    }
   });
 });
 
@@ -322,6 +360,29 @@ describe("bind and encrypt refuse what the recipient or node would", () => {
     expect(attempt({ ...encrypted.envelope, networkId: NETWORK.replace(":default", ":other") })).toThrow(expect.objectContaining({ code: "key-path-mismatch" }));
     expect(attempt({ ...encrypted.envelope, encryptedSymmetricKeyHash: "0".repeat(64) })).toThrow(expect.objectContaining({ code: "envelope-invalid" }));
     expect(attempt({ ...encrypted.envelope, encryptedSymmetricKey: "not*base64" })).toThrow(expect.objectContaining({ code: "envelope-invalid" }));
+  });
+
+  it("an envelope the RECIPIENT would refuse is refused at bind time: extra field, wrong alg, non-string ciphertext/aad/metadata, short or non-base64 ciphertext", async () => {
+    const { plan, encrypted } = await encryptAndBind();
+    const attempt = (changes: Record<string, unknown>) => () => {
+      const envelope = { ...encrypted.envelope, ...changes } as typeof encrypted.envelope;
+      return bindPathBoundContentSource({ plan, envelope, storedBytes: pathBoundStoredBytes(envelope), kvResource: `${SPACE}/kv/${PATH}`, selector: "exact" });
+    };
+    expect(attempt({})).not.toThrow();
+    for (const changes of [{ extraField: "x" }, { alg: "other/v9" }, { ciphertext: 12 }, { ciphertext: "AAAA" }, { ciphertext: "not*base64" }, { aad: 5 }, { aad: "not*base64" }, { metadata: { contentType: 1 } }, { metadata: ["x"] }, { metadata: null }]) {
+      expect(attempt(changes), JSON.stringify(changes)).toThrow(expect.objectContaining({ code: "envelope-invalid" }));
+    }
+  });
+
+  it("a created key whose receipt is not active (blocked) is refused before anything is encrypted", async () => {
+    const plan = planPathBoundShare({ shareId: SHARE_ID, encryptionNetwork: NETWORK });
+    let encrypts = 0;
+    const keys = {
+      createKey: async (path: string, options: { networkId: string }) => ({ networkId: options.networkId, keyPath: path, state: "blocked", keyVersion: 1 }),
+      encrypt: async () => { encrypts++; throw new Error("must not encrypt"); },
+    };
+    await expect(encryptAddressedShareContent({ plan, keys: keys as never, plaintext: new Uint8Array(1) })).rejects.toMatchObject({ code: "key-receipt-mismatch" });
+    expect(encrypts).toBe(0);
   });
 
   it("bytes that are not the canonical envelope are refused: upload pathBoundStoredBytes(envelope), nothing else", async () => {

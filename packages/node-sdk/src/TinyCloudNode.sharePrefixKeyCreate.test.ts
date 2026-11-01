@@ -293,3 +293,53 @@ describe("sign-in: key.create on the current owner's default share prefix", () =
     });
   }
 });
+
+// The explicit `capabilityRequest` config takes precedence over the manifest and BYPASSES the sdk-core manifest expander, so these tests
+// exercise node-sdk's own check alone (the second layer): any loosening of it is visible here.
+async function signInWithCapabilityRequest(resources: { path: string; actions: string[] }[]) {
+  const wasm = makeFakeWasmBindings();
+  const node = makeNodeWithSigner(wasm, {
+    includeAccountRegistryPermissions: false,
+    capabilityRequest: {
+      manifests: [],
+      resources: resources.map((entry) => ({ service: "tinycloud.encryption", space: "encryption", skipPrefix: true, ...entry })),
+      delegationTargets: [],
+      registryRecords: [],
+      expiryMs: 60_000,
+      includePublicSpace: false,
+    } as never,
+  });
+  (node as any).ensureEncryptionNetwork = mock(async () => ({}));
+  await withFetchResponses(
+    [
+      new Response(JSON.stringify({ protocol: 1, version: "test", features: ["encryption"], nodeId: "did:key:z6MkNode" }), { status: 200, headers: { "Content-Type": "application/json" } }),
+      new Response(JSON.stringify({ activated: ["space://test"], skipped: [] }), { status: 200, headers: { "Content-Type": "application/json" } }),
+    ],
+    async () => { await node.signIn(); },
+    expectedActivationAuthorizationFor(wasm),
+  );
+  return (wasm.prepareSession as any).mock.calls[0][0].rawAbilities as Record<string, string[]>;
+}
+
+describe("sign-in through the explicit capabilityRequest (node-sdk's own check, without the manifest expander)", () => {
+  test("accepts decrypt and key.create on the current owner's default share prefix", async () => {
+    expect(await signInWithCapabilityRequest([{ path: PREFIX, actions: [DECRYPT, CREATE] }])).toEqual({ [PREFIX]: [DECRYPT, CREATE] });
+    expect(await signInWithCapabilityRequest([{ path: PREFIX, actions: [CREATE] }])).toEqual({ [PREFIX]: [CREATE] });
+  });
+
+  const refused: [string, string, string[]][] = [
+    ["key.create on another prefix", `${NETWORK}/other/`, [CREATE]],
+    ["key.create on an apps prefix", `${NETWORK}/apps/billing/`, [CREATE]],
+    ["key.create on a non-default network's share prefix", `${NETWORK.replace(":default", ":other")}/share/`, [CREATE]],
+    ["key.create on another owner's share prefix", OTHER_OWNER_PREFIX, [CREATE]],
+    ["decrypt + key.create + key.delete on the share prefix", PREFIX, [DECRYPT, CREATE, "tinycloud.encryption/key.delete"]],
+    ["decrypt + a non-encryption action on the share prefix", PREFIX, [DECRYPT, "tinycloud.kv/get"]],
+    ["key.create on an exact share key", `${NETWORK}/share/abc`, [CREATE]],
+    ["key.block on the share prefix", PREFIX, ["tinycloud.encryption/key.block"]],
+  ];
+  for (const [name, path, actions] of refused) {
+    test(`refuses ${name} with the named-keys refusal`, async () => {
+      await expect(signInWithCapabilityRequest([{ path, actions }])).rejects.toThrow("named keys go in manifest.keys");
+    });
+  }
+});
