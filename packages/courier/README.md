@@ -140,7 +140,7 @@ minutes: after that `init --wait` reports `[approval-result-expired]` and you ru
 If a grant is refused, nothing was installed; tell the owner to revoke the listed delegation at account.tinycloud.xyz/delegations, then run `init --request` for a new link. The refusal on stderr (`[grant-too-broad]`, `[grant-incomplete]`, `[grant-too-long]`, `[bad-grant]`, `[approval-result-invalid]`) names the delegation's CID and what was too broad or different; the agent cannot revoke it, and the header, signature and keys are never printed.
 `init` without flags still starts an interactive loopback grant flow (same
 machine only) and `--paste` shows the long `/delegate` link; `--grant-file f|-`
-installs a grant from a file or stdin. If OpenKey approves a grant before the
+installs a grant from a file or stdin (a successful import discards an open short-link request, a refused one leaves it). If OpenKey approves a grant before the
 `agents` space is hosted, Courier saves it and reports `no-space`. Complete setup by
 signing in at the Share view, or from a wallet profile run
 `tinycloud space host agents`, then use `init --resume` without requesting another

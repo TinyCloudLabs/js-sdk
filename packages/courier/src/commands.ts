@@ -15,7 +15,7 @@ import {
 import { courierNode, peerKv } from './node.js';
 import { courierGrantRequest, grantFromInput, noSpaceError, pendingSpaceError, receiveGrant, resumeGrant } from './grant.js';
 import { installRefusing } from './grant-refusal.js';
-import { completeApproval, DEFAULT_WAIT_MS, loadPending, MAX_WAIT_MS, requestApproval, waitApproval } from './grant-request.js';
+import { clearPending, completeApproval, DEFAULT_WAIT_MS, loadPending, MAX_WAIT_MS, requestApproval, waitApproval } from './grant-request.js';
 import {
   artifactA, artifactWithDelegation, parseArtifact, peerRecordBody, PEER_DELEGATION_EXPIRY, validateArtifactIdentity,
 } from './pairing.js';
@@ -189,7 +189,15 @@ export async function cmdInit(args: ParsedArgs) {
   } else {
     payload = await receiveGrant(request, { paste: args.has('paste') });
   }
-  await installRefusing(profile, key, payload);
+  try {
+    await installRefusing(profile, key, payload);
+  } catch (error) {
+    // `no-space` means the grant IS saved (awaiting the space); any other error installed nothing and leaves an open short-link request alone.
+    if (error instanceof CourierError && error.code === 'no-space') clearPending();
+    throw error;
+  }
+  // An open short-link request would otherwise be collected later, on top of this grant.
+  clearPending();
   await finishInit(profile, host);
 }
 
