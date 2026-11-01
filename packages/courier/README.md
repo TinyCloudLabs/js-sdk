@@ -134,6 +134,22 @@ agents of the same owner (two profiles, two agent keys) pair exactly like two
 owners, through the same explicit `pair start`/`pair accept` exchange. An
 artifact from the agent's own courier DID is refused.
 
+If your inbound peer delegation has expired but the other side is still paired,
+that side can renew only its existing outbound scope and hand you a fresh C
+artifact:
+
+```bash
+tinycloud courier pair renew bob --artifact > renewal.json
+# Send renewal.json to bob over the existing trusted handoff channel.
+tinycloud courier pair accept --file renewal.json
+```
+
+The export requires an already-paired handle and always emits a fresh delegation
+for that same Courier DID, space, mailbox and session scope; it does not read or
+renew the exporting side's inbound delegation. The receiver may install the C
+artifact for that exact existing peer only. The signed peer delegation remains
+limited to its existing mailbox scope and at most seven days.
+
 ### OpenKey short codes
 
 After a passkey approval, OpenKey shows a short `XXXX-XXXX` code. `init --paste`
