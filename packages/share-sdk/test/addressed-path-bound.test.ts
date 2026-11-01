@@ -346,3 +346,14 @@ describe("bind and encrypt refuse what the recipient or node would", () => {
     expect(requests.filter((request) => request.method === "GET" && request.url.includes("/keys/"))).toEqual([]);
   });
 });
+
+describe("pathBoundSessionPermissions: the sign-in manifest entries need no share id", () => {
+  it("returns the prefix decrypt + key.create entry, identical to the plan's sessionPermissions, and refuses a lower-cased or non-default network", () => {
+    const { pathBoundSessionPermissions } = shareSdk;
+    const entries = pathBoundSessionPermissions({ encryptionNetwork: NETWORK });
+    expect(entries).toEqual([{ service: "tinycloud.encryption", path: `${NETWORK}/share/`, actions: ["tinycloud.encryption/decrypt", "tinycloud.encryption/key.create"] }]);
+    expect(entries).toEqual(planPathBoundShare({ shareId: SHARE_ID, encryptionNetwork: NETWORK }).sessionPermissions);
+    expect(() => pathBoundSessionPermissions({ encryptionNetwork: NETWORK.toLowerCase() })).toThrow(expect.objectContaining({ code: "network-not-checksummed" }));
+    expect(() => pathBoundSessionPermissions({ encryptionNetwork: NETWORK.replace(":default", ":other") })).toThrow(expect.objectContaining({ code: "network-invalid" }));
+  });
+});

@@ -164,6 +164,15 @@ export interface PathBoundSharePlan {
   encryptOptions(extra?: { readonly metadata?: Readonly<Record<string, string>> }): { networkId: string; metadata?: Record<string, string> };
 }
 
+/**
+ * The manifest entries (route B, sign-in) that let one session create every share's key: `decrypt` and `key.create` on the default network's
+ * `<network>/share/` prefix. Needs no share id, so an app builds its manifest before any share exists. Put the result in `manifest.permissions`.
+ */
+export function pathBoundSessionPermissions(input: { readonly encryptionNetwork: string }): PathBoundPermissionEntry[] {
+  const encryptionNetwork = assertNetwork(input.encryptionNetwork);
+  return [{ service: "tinycloud.encryption", path: `${encryptionNetwork}/share/`, actions: ["tinycloud.encryption/decrypt", "tinycloud.encryption/key.create"] }];
+}
+
 /** Validate the share id and network and derive the key path and the permissions the share needs. Writes and signs nothing. */
 export function planPathBoundShare(input: { readonly shareId: string; readonly encryptionNetwork: string }): PathBoundSharePlan {
   const keyPath = pathBoundKeyPath(input.shareId);
@@ -175,7 +184,7 @@ export function planPathBoundShare(input: { readonly shareId: string; readonly e
     keyPath,
     keyResource,
     requiredPermissions: [{ service: "tinycloud.encryption", path: keyResource, actions: ["tinycloud.encryption/key.create"] }],
-    sessionPermissions: [{ service: "tinycloud.encryption", path: `${encryptionNetwork}/share/`, actions: ["tinycloud.encryption/decrypt", "tinycloud.encryption/key.create"] }],
+    sessionPermissions: pathBoundSessionPermissions({ encryptionNetwork }),
     registrationPermissions: [{ service: "tinycloud.encryption", path: `${encryptionNetwork}/share/`, actions: ["tinycloud.encryption/decrypt"] }],
     encryptOptions: (extra) => ({ networkId: encryptionNetwork, ...(extra?.metadata === undefined ? {} : { metadata: { ...extra.metadata } }) }),
   };
