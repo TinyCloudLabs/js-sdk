@@ -93,7 +93,12 @@ export async function dropPendingDelegationFor(profile: string, code: string): P
 export async function dropCommittedDelegation(profile: string, delegation: object): Promise<void> {
   const committed = "delegationCid" in delegation ? delegation.delegationCid : "cid" in delegation ? delegation.cid : undefined;
   if (typeof committed !== "string") return;
-  const records = await live(profile);
-  const kept = records.filter((record) => record.delegation.delegationCid !== committed);
-  if (kept.length !== records.length) await write(profile, kept);
+  try {
+    const records = await live(profile);
+    const kept = records.filter((record) => record.delegation.delegationCid !== committed);
+    if (kept.length !== records.length) await write(profile, kept);
+  } catch (error) {
+    // The login or grant is already durably committed: a leftover record only expires on its own.
+    console.error(`warning: could not remove the saved delegation code record (${(error as Error).message}); it expires on its own.`);
+  }
 }
