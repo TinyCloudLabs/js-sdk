@@ -9,72 +9,39 @@ concurrency:
   group: operations-mcp-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# The former single `conformance` job ran for ~22 minutes. It is split into
+# parallel jobs that each build the same tree (.github/actions/conformance-setup)
+# and run a disjoint part of the old step list:
+#
+#   conformance-core   Phala deploy env regression, scanners, share unit tests,
+#                      focused conformance/concurrency tests, the three isolated
+#                      regressions, generated-file/ledger/release-pin/pack checks.
+#   conformance-unit   The CLI, bootstrap, server, MCP OAuth and tests/cli unit
+#                      loop, sharded by file index across the matrix. Every file
+#                      runs in exactly one shard.
+#   conformance        Aggregate. Its name is the required status check on
+#                      master, so it must keep this id; it fails unless every
+#                      job above succeeded.
 jobs:
-  conformance:
+  conformance-core:
+    name: conformance-core
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
+      - id: setup
+        uses: ./.github/actions/conformance-setup
       - name: Run MCP Phala deploy environment consumer regression
         run: |
           npm ci --prefix .github/deploy-tools --ignore-scripts --no-audit --no-fund
           PHALA_BIN="$GITHUB_WORKSPACE/.github/deploy-tools/node_modules/.bin/phala" \
             node .github/scripts/test-mcp-deploy-env.mjs
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.3.14"
-      - name: Cache Bun packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-      - name: Read Rust toolchain version
-        id: rust-version
-        run: echo "version=$(rustc --version | tr ' ' '-')" >> "$GITHUB_OUTPUT"
-      - name: Restore Rust/Cargo cache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: cargo-${{ runner.os }}-${{ steps.rust-version.outputs.version }}-${{ github.workflow }}-${{ github.job }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            cargo-${{ runner.os }}-${{ steps.rust-version.outputs.version }}-${{ github.workflow }}-${{ github.job }}-
-      - run: bun install --frozen-lockfile
-      - name: Build SDK runtime prerequisites
-        run: |
-          bun run --cwd packages/sdk-rs build:wasm:node
-          bun run --cwd packages/sdk-rs/packages/node build
-          # @tinycloud/replica's worker entry imports @tinycloud/web-sdk-wasm.
-          bun run --cwd packages/sdk-rs build:wasm:web
-          bun run --cwd packages/sdk-rs/packages/web build
-          bun run --cwd packages/bootstrap build
-          bun run --cwd packages/sdk-services build
-          bun run --cwd packages/share-envelope build
-          bun run --cwd packages/share-sdk build
-          bun run --cwd packages/sdk-core build
-          bun run --cwd packages/node-sdk build
-      # The scanners import the CLI command registry, whose `tc replica`
-      # handlers import @tinycloud/replica.
-      - name: Build operations and replica packages for source scanners
-        run: |
-          bun run --cwd packages/operations build
-          bun run --cwd packages/replica build
       - name: Generate and scan authored coverage
         run: |
           bun run check:operations-mcp
           bun run check:operations-mcp-boundaries
-      - name: Build operations, CLI, and MCP
-        run: |
-          bun run --cwd packages/courier build
-          bun run --cwd packages/cli build
-          bun run --cwd packages/mcp build
       # One bun process per file, found by glob so new files are picked up.
       # Fails on any failing file, on a file that reports `0 pass` with skips,
       # and on a file that runs past its per-file timeout.
@@ -131,20 +98,67 @@ jobs:
         run: bun test packages/mcp/src/cli.test.ts
       - name: Run packed MCP CLI regression in isolation
         run: bun test packages/mcp/src/packed-cli.test.ts
+      - name: Verify generated files and coverage ledger
+        run: |
+          bun run check:operations-mcp
+          bun run --cwd packages/cli check:coverage
+      - name: Verify node release pin against upstream
+        run: bun run --cwd packages/cli check:node-release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Verify packed Node 20 fixtures
+        run: bun run check:operations-mcp-pack
+
+      # Only this job saves the shared cache; conformance-unit jobs restore it.
+      - name: Save Rust/Cargo cache
+        if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/')
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ steps.setup.outputs.rust-version }}-${{ github.workflow }}-conformance-${{ hashFiles('Cargo.lock') }}
+
+  conformance-unit:
+    name: conformance-unit (shard ${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # SHARD_TOTAL below is strategy.job-total, so adding a shard here is
+        # the only edit needed to change the split.
+        shard: [0, 1, 2]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/conformance-setup
       # One bun process per file, found by glob so new files are picked up.
       # Fails on a failing file, on a file that runs past its per-file timeout,
       # on a file with no passing test (all skipped, only todo, or empty), on an
       # empty file set, on a configured path that does not exist, and on an
       # excluded file that no longer exists.
-      # This job holds every build these files import (node/web wasm runtime,
+      # Each shard holds every build these files import (node/web wasm runtime,
       # sdk-core, node-sdk, operations, replica, courier, CLI), so one loop
       # covers the CLI, bootstrap, server, mcp oauth and tests/cli files.
+      # Sharding: the sorted, non-excluded files are numbered from 0 and shard
+      # N runs the files whose number is N modulo the shard count, so every
+      # file runs in exactly one shard. Every shard validates the whole
+      # configuration (roots, single files, excluded files, empty file set).
       - name: Run CLI, bootstrap, server, MCP OAuth and tests/cli unit tests
         timeout-minutes: 30
         env:
           BUN_JSC_useConcurrentJIT: "0"
+          SHARD_INDEX: ${{ matrix.shard }}
+          SHARD_TOTAL: ${{ strategy.job-total }}
         run: |
           set -o pipefail
+          if [ "$SHARD_INDEX" -lt 0 ] || [ "$SHARD_INDEX" -ge "$SHARD_TOTAL" ]; then
+            echo "::error title=unit tests::shard $SHARD_INDEX is outside 0..$((SHARD_TOTAL - 1))"
+            exit 1
+          fi
           log="$RUNNER_TEMP/remaining-unit-tests.log"
           roots=(packages/cli/src packages/cli/test packages/bootstrap/src packages/server/src tests/cli)
           single_files=(packages/mcp/src/oauth.test.ts packages/mcp/src/token-status.test.ts)
@@ -162,7 +176,7 @@ jobs:
             [tests/cli/kv/kv.test.ts]="needs a live node; run by replica-e2e.yml; TC-1902"
             [tests/cli/sql/sql.test.ts]="needs a live node; run by replica-e2e.yml; TC-1902"
             [tests/cli/secrets/secrets-e2e.test.ts]="needs a live node; run by replica-e2e.yml; TC-1902"
-            # Run in their own step above:
+            # Run in their own step in conformance-core:
             [packages/cli/src/commands/secrets-private-key-production.test.ts]="run in isolation by its own step"
             # Known failures, tracked:
             [packages/cli/src/config/shared-state-writers.test.ts]="fails on master: test-support harness writes shared state directly; TC-1898"
@@ -199,9 +213,15 @@ jobs:
             fi
           done
           ran=0
+          position=0
           for file in "${files[@]}"; do
             if [ -n "${excluded[$file]+set}" ]; then
               echo "EXCLUDED: $file: ${excluded[$file]}"
+              continue
+            fi
+            this_position=$position
+            position=$((position + 1))
+            if [ $((this_position % SHARD_TOTAL)) -ne "$SHARD_INDEX" ]; then
               continue
             fi
             ran=$((ran + 1))
@@ -218,28 +238,31 @@ jobs:
             fi
             echo "::endgroup::"
           done
-          echo "ran $ran files, ${#excluded[@]} excluded, ${#failed[@]} failed"
+          echo "shard $SHARD_INDEX/$SHARD_TOTAL: ran $ran of $position files, ${#excluded[@]} excluded, ${#failed[@]} failed"
           if [ "${#failed[@]}" -gt 0 ]; then
             printf 'FAILED: %s\n' "${failed[@]}"
             exit 1
           fi
-      - name: Verify generated files and coverage ledger
-        run: |
-          bun run check:operations-mcp
-          bun run --cwd packages/cli check:coverage
-      - name: Verify node release pin against upstream
-        run: bun run --cwd packages/cli check:node-release
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-      - name: Verify packed Node 20 fixtures
-        run: bun run check:operations-mcp-pack
 
-      - name: Save Rust/Cargo cache
-        if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/')
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: cargo-${{ runner.os }}-${{ steps.rust-version.outputs.version }}-${{ github.workflow }}-${{ github.job }}-${{ hashFiles('Cargo.lock') }}
+  # Required status check "conformance". Runs even when a split job failed,
+  # was cancelled or was skipped, and fails in every case but full success, so
+  # a missing or skipped job can never turn the required check green.
+  conformance:
+    name: conformance
+    if: always()
+    needs: [conformance-core, conformance-unit]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Require every conformance job to succeed
+        env:
+          CORE_RESULT: ${{ needs.conformance-core.result }}
+          UNIT_RESULT: ${{ needs.conformance-unit.result }}
+        run: |
+          echo "conformance-core: $CORE_RESULT"
+          echo "conformance-unit: $UNIT_RESULT"
+          if [ "$CORE_RESULT" != "success" ] || [ "$UNIT_RESULT" != "success" ]; then
+            echo "::error title=conformance::a conformance job did not succeed"
+            exit 1
+          fi
