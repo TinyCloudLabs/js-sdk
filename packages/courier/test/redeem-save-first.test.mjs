@@ -27,7 +27,7 @@ function agentKey() {
   return { v: 1, jwk: JSON.parse(manager.jwk(id)), did: manager.getDID(id), createdAt: new Date().toISOString() };
 }
 
-async function signedGrant(agent, { lifetimeMs = 30 * DAY } = {}) {
+async function signedGrant(agent, { lifetimeMs = 30 * DAY, issuedAt = new Date() } = {}) {
   const signer = new PrivateKeySigner(randomBytes(32).toString('hex'));
   const address = await signer.getAddress();
   const chainId = 1;
@@ -37,7 +37,6 @@ async function signedGrant(agent, { lifetimeMs = 30 * DAY } = {}) {
     const service = permission.service.replace(/^tinycloud\./, '');
     (abilities[service] ??= {})[permission.path] = [...((abilities[service] ?? {})[permission.path] ?? []), ...permission.actions];
   }
-  const issuedAt = new Date();
   const prepared = wasm.prepareSession({
     abilities, address, chainId, domain: 'courier.offline-test', issuedAt: issuedAt.toISOString(),
     expirationTime: new Date(issuedAt.getTime() + lifetimeMs).toISOString(), spaceId, jwk: agent.jwk,
@@ -467,3 +466,44 @@ test('a pending path that is not a regular file is not trusted and not deleted',
     await api.close();
   }
 }));
+
+test('a grant that looks issued in the future (local clock behind) keeps its record; the same code finishes once the clock is right', async (t) => withHome(async (home) => {
+  const agent = agentKey();
+  saveKey(agent);
+  saveProfile(profileFor(agent));
+  stubSpace(t, ready);
+  const delegation = await signedGrant(agent, { issuedAt: new Date(Date.now() + 10 * 60_000) });
+  const api = await fakeOpenKey(new Map([[CODE.toLowerCase(), delegation]]));
+  try {
+    await assert.rejects(init(t, ['--grant-file', codeFile(home), '--openkey-api-host', api.url]), { code: 'bad-grant', message: /issued in the future/ });
+    assert.equal(fs.existsSync(pendingFile(home)), true, 'a clock problem must not destroy the only copy of a consumed code');
+    assert.equal(fs.existsSync(path.join(home, 'grant.json')), false);
+    // The clock is fixed (10 minutes later): the same code completes from the local copy.
+    const now = Date.now();
+    t.mock.method(Date, 'now', () => now + 10 * 60_000);
+    assert.equal(JSON.parse(await init(t, ['--grant-file', codeFile(home), '--openkey-api-host', api.url])).ok, true);
+    assertInstalled(home, delegation, api);
+  } finally {
+    await api.close();
+  }
+}));
+
+test('a grant whose expiry is past by more than the skew is useless: its record is dropped', async (t) => withHome(async (home) => {
+  const agent = agentKey();
+  saveKey(agent);
+  const profile = profileFor(agent);
+  stubSpace(t, ready);
+  const delegation = await signedGrant(agent, { lifetimeMs: 3_600_000 });
+  const api = await fakeOpenKey(new Map([[CODE.toLowerCase(), delegation]]));
+  try {
+    const payload = await grantFromInput(CODE, agent, { apiHost: api.url });
+    assert.equal(fs.existsSync(pendingFile(home)), true);
+    const now = Date.now();
+    t.mock.method(Date, 'now', () => now + 2 * 3_600_000);
+    await assert.rejects(installGrant(profile, agent, payload), { code: 'bad-grant' });
+    assert.equal(fs.existsSync(pendingFile(home)), false);
+  } finally {
+    await api.close();
+  }
+}));
+
