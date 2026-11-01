@@ -62,6 +62,13 @@ export function registerOnboardCommand(program: Command): void {
       try {
         // Refused before anything is created or contacted. One deadline bounds the whole command, every approval in it.
         const deadlineMs = options.timeout === undefined ? undefined : Date.now() + parseApprovalTimeout(options.timeout);
+        if (options.timeout !== undefined && typeof options.code === "string" && options.code.trim() !== "") {
+          throw new CLIError(
+            "INVALID_OPTIONS",
+            `--code and --timeout cannot be used together: running the command again would send the same code to the next approval step. Run \`${CLI_NAME} onboard --code <code>\` without --timeout.`,
+            ExitCode.USAGE_ERROR,
+          );
+        }
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
         if (!await ProfileManager.profileExists(ctx.profile)) await createKeyOnlyProfile(ctx.profile, ctx.host);

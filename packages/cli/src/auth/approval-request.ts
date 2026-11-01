@@ -18,7 +18,7 @@ import { entriesForSigning, finalizeSigningEntries } from "../lib/apps-agent-pre
 import type { AuthFlowOptions, DelegationData } from "./browser-auth.js";
 import { decryptRelayResult, relayPublicJwkOf } from "./device-auth.js";
 import { canonicalJson, parseRequestedExpiry, sameLoginSpace, verifyScopedLogin } from "./scoped-login.js";
-import { APPROVAL_COLLECT_GRACE_MS, APPROVAL_POLL_INTERVAL_MS, approvalPendingError, type ApprovalWait } from "./approval-wait.js";
+import { APPROVAL_POLL_INTERVAL_MS, approvalLimitMs, approvalPendingError, approvalRequestTimeoutMs, type ApprovalWait } from "./approval-wait.js";
 
 interface PendingApproval {
   version: 1;
@@ -50,6 +50,8 @@ export function trackApprovalResult(source: object, verified: object): void {
 }
 
 const acquisitions = new WeakMap<object, PendingApproval>();
+/** The `--timeout` a request was acquired under; its acknowledgement is bounded by the same limit. */
+const approvalWaits = new WeakMap<PendingApproval, ApprovalWait>();
 
 /** Remote results require the durable login commit before their delivery can be acknowledged. */
 export function approvalResultNeedsAck(delegation: object): boolean {
@@ -245,7 +247,7 @@ export function approvalSessionProof(entry: Pick<PendingApproval, "requestId" | 
   })).toString("base64url")}`;
 }
 
-async function post(entry: PendingApproval, action: "discover" | "fetch" | "ack", signingKey: Ed25519PrivateJwk): Promise<Response> {
+async function post(entry: PendingApproval, action: "discover" | "fetch" | "ack", signingKey: Ed25519PrivateJwk, timeoutMs = 10_000): Promise<Response> {
   const ref = action === "discover" ? "" : entry.resultRef ?? "";
   const path = action === "discover" ? `/api/approval-requests/${entry.requestId}/result` : `/api/approval-results/${ref}/${action}`;
   const body = action === "discover" ? { bodyCid: entry.bodyCid, header: entry.record.header, signature: entry.record.signature }
@@ -253,7 +255,7 @@ async function post(entry: PendingApproval, action: "discover" | "fetch" | "ack"
   return fetch(entry.apiOrigin + path, {
     method: "POST", credentials: "omit", redirect: "error", cache: "no-store", referrerPolicy: "no-referrer",
     headers: { "content-type": "application/json", "OpenKey-Session-Proof": approvalSessionProof({ requestId: entry.requestId, bodyCid: entry.bodyCid, apiOrigin: entry.apiOrigin, signingKey }, action, ref, action === "ack" ? entry.ackId : "") },
-    body: JSON.stringify(body), signal: AbortSignal.timeout(10_000),
+    body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs),
   });
 }
 async function throwRemoteError(profile: string, entry: PendingApproval, response: Response, action: "discover" | "fetch"): Promise<never> {
@@ -319,19 +321,25 @@ function pendingApproval(entry: PendingApproval, approvalWait: ApprovalWait): CL
  * exists) the deadline no longer applies: collecting the result gets a bounded grace and ends as "result
  * unavailable", which a re-run resumes from the saved reference, never as a pending approval.
  */
-async function pauseBetweenAttempts(entry: PendingApproval, approvalWait: ApprovalWait | undefined): Promise<void> {
+async function pauseBetweenAttempts(profile: string, entry: PendingApproval, approvalWait: ApprovalWait | undefined): Promise<void> {
   if (!approvalWait) {
     await wait(2000);
     return;
   }
   const now = approvalWait.now ?? Date.now;
   const approved = entry.resultRef !== undefined;
-  const limit = approvalWait.deadlineMs + (approved ? APPROVAL_COLLECT_GRACE_MS : 0);
-  const remaining = limit - now();
+  const remaining = approvalLimitMs(approvalWait, approved) - now();
   if (remaining <= 0) {
-    if (!approved) throw pendingApproval(entry, approvalWait);
-    throw new CLIError("APPROVAL_RESULT_UNAVAILABLE",
-      "OpenKey could not fetch this approved result in time. It is saved by reference; retry the command to resume.", ExitCode.PENDING);
+    if (approved) {
+      throw new CLIError("APPROVAL_RESULT_UNAVAILABLE",
+        "OpenKey could not fetch this approved result in time. It is saved by reference; retry the command to resume.", ExitCode.PENDING);
+    }
+    // OpenKey could not be asked (a network failure) and the link has run out: never hand out a dead link as pending.
+    // The entry stays: a result approved before expiry may still be there, and the next run asks OpenKey.
+    if (now() >= Date.parse(entry.requestExpiresAt)) {
+      throw new CLIError("APPROVAL_REQUEST_EXPIRED", "This approval request expired before it was approved. Run the command again to start a new request.", ExitCode.AUTH_REQUIRED);
+    }
+    throw pendingApproval(entry, approvalWait);
   }
   await (approvalWait.sleep ?? ((ms: number) => wait(ms)))(Math.min(APPROVAL_POLL_INTERVAL_MS, remaining));
 }
@@ -384,7 +392,7 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
   });
   if (matching.length > 1) throw invalid("Multiple approvals match this command; no result was selected.");
   let entry = matching[0];
-  const created = entry === undefined;
+  const isNewRequest = entry === undefined;
   if (!entry) {
     const relay = createECDH("prime256v1");
     relay.generateKeys();
@@ -405,18 +413,18 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
       await tryOpenBrowser(entry.approvalUrl);
     }
     // A new link cannot be approved yet. With a deadline, hand it to the caller at once so it can be sent.
-    if (created && approvalWait) throw pendingApproval(entry, approvalWait);
+    if (isNewRequest && approvalWait) throw pendingApproval(entry, approvalWait);
   }
   if (!entry.resultEnvelope) {
     for (;;) {
       let response: Response;
-      try { response = await post(entry, "discover", signingKey); }
+      try { response = await post(entry, "discover", signingKey, approvalRequestTimeoutMs(approvalWait, entry.resultRef !== undefined)); }
       catch {
-        await pauseBetweenAttempts(entry, approvalWait);
+        await pauseBetweenAttempts(profile, entry, approvalWait);
         continue;
       }
       if (response.status === 202) {
-        await pauseBetweenAttempts(entry, approvalWait);
+        await pauseBetweenAttempts(profile, entry, approvalWait);
         continue;
       }
       if (!response.ok) await throwRemoteError(profile, entry, response, "discover");
@@ -429,9 +437,9 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
       entry.resultExpiresAt = discovered.expiresAt;
       await updatePending(profile, (items) => items.map((item) => item.requestId === entry!.requestId ? entry! : item));
       let fetched: Response;
-      try { fetched = await post(entry, "fetch", signingKey); } catch {
+      try { fetched = await post(entry, "fetch", signingKey, approvalRequestTimeoutMs(approvalWait, true)); } catch {
         // The owner approved: collect past the deadline, paced, for a bounded grace.
-        if (approvalWait) await pauseBetweenAttempts(entry, approvalWait);
+        if (approvalWait) await pauseBetweenAttempts(profile, entry, approvalWait);
         continue;
       }
       if (!fetched.ok) await throwRemoteError(profile, entry, fetched, "fetch");
@@ -446,6 +454,7 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
   const verified = verifyPendingResult(entry, signingKey);
   await updatePending(profile, (items) => items.map((item) => item.requestId === entry!.requestId ? entry! : item));
   acquisitions.set(verified.delegation, entry);
+  if (approvalWait) approvalWaits.set(entry, approvalWait);
   return verified.delegation as DelegationData;
 }
 
@@ -513,7 +522,7 @@ export async function completeApprovalResult(profile: string, delegation?: objec
     }
     if (entry.acknowledged) continue;
     let response: Response;
-    try { response = await post(entry, "ack", ackKey); }
+    try { response = await post(entry, "ack", ackKey, approvalRequestTimeoutMs(approvalWaits.get(entry), true)); }
     catch { throw new CLIError("APPROVAL_ACK_PENDING", "Approval is saved; ACK outcome is unknown. Retry this command to acknowledge the same result.", ExitCode.PENDING); }
     const result = await response.json().catch(() => null) as { ackId?: string; status?: string; code?: string } | null;
     const terminal = !response.ok && ["expired_result", "not_found", "acknowledged"].includes(result?.code ?? "");

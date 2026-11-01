@@ -72,9 +72,10 @@ test("`auth grant` checks --timeout before it reads its request, so a bad value 
   expect(result.stderr + result.stdout).not.toContain("INVALID_AUTH_REQUEST");
 });
 
-test("a valid --timeout is not refused as a usage error", async () => {
+test("a valid --timeout passes the check and the command goes on to its own work (here: no such profile, exit 1)", async () => {
   const result = await cli(["auth", "grant", "missing-request.json", "--timeout", "90s"]);
-  expect(result.stderr + result.stdout).not.toContain("INVALID_TIMEOUT");
+  expect(result.exitCode).toBe(1);
+  expect(JSON.parse(result.stdout || result.stderr).error.code).toBe("PROFILE_NOT_FOUND");
 });
 
 test("`onboard --code` with `--timeout` is refused: re-running would send the step-1 code to step 2", async () => {

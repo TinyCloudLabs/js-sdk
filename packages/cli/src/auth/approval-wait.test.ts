@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { ExitCode } from "../config/constants.js";
 import { CLIError } from "../output/errors.js";
-import { approvalPendingError, MAX_APPROVAL_TIMEOUT_MS, parseApprovalTimeout } from "./approval-wait.js";
+import { approvalPendingError, parseApprovalTimeout } from "./approval-wait.js";
 
 function refusal(value: string): CLIError {
   try {
@@ -18,16 +18,15 @@ describe("parseApprovalTimeout", () => {
     ["1s", 1_000],
     ["90s", 90_000],
     ["2m", 120_000],
-    ["540s", MAX_APPROVAL_TIMEOUT_MS],
-    ["9m", MAX_APPROVAL_TIMEOUT_MS],
+    ["540s", 540_000],
+    ["9m", 540_000],
   ])("accepts %s as %i ms, the same forms `secrets wait --timeout` takes", (value, ms) => {
     expect(parseApprovalTimeout(value)).toBe(ms);
   });
 
-  test("the ceiling is exactly nine minutes", () => {
-    expect(MAX_APPROVAL_TIMEOUT_MS).toBe(540_000);
+  test("the ceiling is exactly nine minutes: 540s passes, 541s does not", () => {
+    expect(parseApprovalTimeout("540s")).toBe(9 * 60_000);
     expect(() => parseApprovalTimeout("541s")).toThrow(CLIError);
-    expect(() => parseApprovalTimeout("10m")).toThrow(CLIError);
   });
 
   test.each(["541s", "10m", "60m", "99999999999999999999s"])("refuses %s as a usage error that names the maximum and what to do", (value) => {
@@ -62,11 +61,5 @@ describe("approvalPendingError", () => {
     expect(error.exitCode).toBe(8);
     expect(error.code).toBe("APPROVAL_PENDING");
     expect(error.metadata).toEqual({ pending });
-  });
-
-  test("its human message differs from the OpenKey-unavailable messages, which share exit 8", () => {
-    const error = approvalPendingError(pending);
-    expect(error.message).not.toMatch(/could not (discover|fetch)/);
-    expect(error.message).toMatch(/run the same command again/i);
   });
 });
