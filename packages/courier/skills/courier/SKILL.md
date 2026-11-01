@@ -52,6 +52,8 @@ in OpenKey and decides who to pair with. Setup takes no code to copy back:
    `approval-result-expired` or `approval-expired`, nothing was installed: run
    `init --request` again, send the new link, and re-run `init --wait` at once.
 
+If a grant is refused, nothing was installed; tell the owner to revoke the listed delegation at account.tinycloud.xyz/delegations, then run `init --request` for a new link. The refusal on stderr names the delegation's CID and what was too broad or different; the agent cannot revoke it.
+
 `init --grant-file f|-` and `init --paste` remain for an old OpenKey `XXXX-XXXX` code.
 If OpenKey reports the space is still being set up, `init --wait` waits for it within its `--timeout` (the old `init` flows wait about 2.5 minutes); otherwise use `init --resume`.
 

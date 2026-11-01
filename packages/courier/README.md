@@ -137,6 +137,7 @@ replaced by a run with other flags; a renewal approved by a different owner than
 one that holds the grant is refused (`--rotate-key` binds a new owner). OpenKey keeps an approved result for 10
 minutes: after that `init --wait` reports `[approval-result-expired]` and you run
 `init --request` again; an expired request reports `[approval-expired]`.
+If a grant is refused, nothing was installed; tell the owner to revoke the listed delegation at account.tinycloud.xyz/delegations, then run `init --request` for a new link. The refusal on stderr (`[grant-too-broad]`, `[grant-incomplete]`, `[grant-too-long]`, `[bad-grant]`, `[approval-result-invalid]`) names the delegation's CID and what was too broad or different; the agent cannot revoke it, and the header, signature and keys are never printed.
 `init` without flags still starts an interactive loopback grant flow (same
 machine only) and `--paste` shows the long `/delegate` link; `--grant-file f|-`
 installs a grant from a file or stdin. If OpenKey approves a grant before the
