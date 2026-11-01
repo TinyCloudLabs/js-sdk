@@ -200,7 +200,7 @@ const node = {
         v: 2 as const, networkId: options.networkId, keyPath, alg: "x25519-aes256gcm/v1", keyVersion: 1,
         // A fresh wrapped key per encryption, so reuse of an earlier ciphertext is observable.
         encryptedSymmetricKey: wrappedKeyFor(encryptions), encryptedSymmetricKeyHash: canonicalKeyHash(encryptions),
-        ciphertext: "AQ", metadata: { contentType: "text/plain" },
+        ciphertext: Buffer.from(new Uint8Array(32).fill(1)).toString("base64"), metadata: { contentType: "text/plain" },
       };
     },
   },
