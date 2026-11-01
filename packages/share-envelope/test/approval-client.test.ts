@@ -280,6 +280,19 @@ describe("collectApprovalResult", () => {
     expect(outcome).toEqual({ status: "result", ...found, relay });
     expect(calls.map((call) => call.action)).toEqual(["discover", "fetch"]);
   });
+
+  test("a poll that starts near the deadline cannot outlive it by a full request timeout", async () => {
+    // Real time on purpose: the request timeout is `AbortSignal.timeout`, a platform timer that fake clocks here cannot drive.
+    // A hung OpenKey only ends a request when its signal fires. The default request timeout is 10 s; a wait whose deadline is
+    // 300 ms away must end about a second later, not ten.
+    const hung = (_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("timed out", "TimeoutError")));
+    });
+    const started = Date.now();
+    const outcome = await collectApprovalResult(state, { fetch: hung as typeof globalThis.fetch, deadline: started + 300, sleep: async () => {} });
+    expect(outcome).toEqual({ status: "deadline" });
+    expect(Date.now() - started).toBeLessThan(3000);
+  });
 });
 
 describe("relay key and encrypted result", () => {
