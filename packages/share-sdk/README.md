@@ -23,9 +23,13 @@ import {
 // 1. Plan, before anything is written. The network must be the owner's default network with the EIP-55 checksummed address.
 const plan = planPathBoundShare({ shareId, encryptionNetwork: defaultEncryptionNetworkForOwner(ownerDid) });
 
-// 2. Hold the key-create capability for this one key (a runtime request: a manifest cannot carry it), e.g.
-//    await tcw.requestPermissions(plan.requiredPermissions);
-//    The session also needs `plan.registrationPermissions` (decrypt under `<network>/share/`).
+// 2. Hold two capabilities. (a) decrypt under `<network>/share/` (`plan.registrationPermissions`): the node refuses to register the share
+//    unless the owner holds it; a bare-network decrypt never covers a share key. (b) `key.create` for the share's key, by ONE of:
+//      - `plan.sessionPermissions` in the manifest the owner signs in with (decrypt + key.create on `<network>/share/`, no prompt per
+//        share; needs a sign-in route that signs these, for example `signMessage` from a first-party origin), or
+//      - `await tcw.requestPermissions(plan.requiredPermissions)` per share (one consent per share).
+//    Without it, `encryptAddressedShareContent` throws `key-not-authorized`. A failure after the key exists leaves an unused key (there is
+//    no key delete): retry with a NEW shareId.
 
 // 3. Create the key and encrypt under it (`keys` is a named-key client: `tcw.keys`, `node.keys` or `NamedKeyClient`).
 const encrypted = await encryptAddressedShareContent({ plan, keys, plaintext, metadata: { contentType } });
