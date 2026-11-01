@@ -27,13 +27,13 @@ function agentKey() {
   return { v: 1, jwk: JSON.parse(manager.jwk(id)), did: manager.getDID(id), createdAt: new Date().toISOString() };
 }
 
-async function signedGrant(agent, { lifetimeMs = 30 * DAY, issuedAt = new Date() } = {}) {
+async function signedGrant(agent, { lifetimeMs = 30 * DAY, issuedAt = new Date(), extra = [], omitLast = false } = {}) {
   const signer = new PrivateKeySigner(randomBytes(32).toString('hex'));
   const address = await signer.getAddress();
   const chainId = 1;
   const spaceId = wasm.makeSpaceId(address, chainId, COURIER_SPACE);
   const abilities = {};
-  for (const permission of AGENT_GRANT) {
+  for (const permission of [...(omitLast ? AGENT_GRANT.slice(0, -1) : AGENT_GRANT), ...extra]) {
     const service = permission.service.replace(/^tinycloud\./, '');
     (abilities[service] ??= {})[permission.path] = [...((abilities[service] ?? {})[permission.path] ?? []), ...permission.actions];
   }
@@ -507,3 +507,61 @@ test('a grant whose expiry is past by more than the skew is useless: its record 
   }
 }));
 
+
+for (const [label, options, code] of [
+  ['carries more authority than Courier allows', { extra: [{ service: 'tinycloud.space', space: 'agents', path: '', actions: ['tinycloud.space/host'] }] }, 'grant-too-broad'],
+  ['is missing authority Courier needs', { omitLast: true }, 'grant-incomplete'],
+]) {
+  test(`a saved delegation that ${label} is dropped (${code}) and not replayed`, async (t) => withHome(async (home) => {
+    const agent = agentKey();
+    saveKey(agent);
+    saveProfile(profileFor(agent));
+    stubSpace(t, ready);
+    const api = await fakeOpenKey(new Map([[CODE.toLowerCase(), await signedGrant(agent, options)]]));
+    try {
+      await assert.rejects(init(t, ['--grant-file', codeFile(home), '--openkey-api-host', api.url]), { code });
+      assert.equal(fs.existsSync(pendingFile(home)), false);
+      await assert.rejects(init(t, ['--grant-file', codeFile(home), '--openkey-api-host', api.url]), { code: 'code-not-found' });
+      assert.equal(api.hits.length, 2);
+    } finally {
+      await api.close();
+    }
+  }));
+}
+
+test('a failing cleanup after a refused install does not replace the refusal', async (t) => withHome(async (home) => {
+  const agent = agentKey();
+  saveKey(agent);
+  const profile = profileFor(agent);
+  stubSpace(t, ready);
+  const api = await fakeOpenKey(new Map([[CODE.toLowerCase(), await signedGrant(agent, { omitLast: true })]]));
+  try {
+    const payload = await grantFromInput(CODE, agent, { apiHost: api.url });
+    // Make the rewrite of the record fail: the profile directory is read-only for the cleanup.
+    const rename = fs.renameSync;
+    t.mock.method(fs, 'renameSync', (from, to) => {
+      if (path.basename(String(to)) === 'pending-grant.json') throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+      return rename(from, to);
+    });
+    t.mock.method(console, 'error', () => {});
+    await assert.rejects(installGrant(profile, agent, payload), { code: 'grant-incomplete' });
+  } finally {
+    await api.close();
+  }
+}));
+
+test('a symlink standing in for the pending record is left in place', async () => withHome(async (home) => {
+  const agent = agentKey();
+  saveKey(agent);
+  const { api } = await redeemable(agent);
+  try {
+    await grantFromInput(CODE, agent, { apiHost: api.url });
+    const real = path.join(home, 'elsewhere.json');
+    fs.renameSync(pendingFile(home), real);
+    fs.symlinkSync(real, pendingFile(home));
+    await assert.rejects(grantFromInput(CODE, agent, { apiHost: api.url }), { code: 'code-not-found' });
+    assert.equal(fs.lstatSync(pendingFile(home)).isSymbolicLink(), true, 'the symlink itself is not deleted');
+  } finally {
+    await api.close();
+  }
+}));

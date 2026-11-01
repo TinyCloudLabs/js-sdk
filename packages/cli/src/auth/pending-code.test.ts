@@ -3,7 +3,7 @@
 // fake OpenKey code server that, like the real one, answers 404 to a code it has already handed out.
 import { afterAll, afterEach, beforeEach, describe, expect, setSystemTime, spyOn, test } from "bun:test";
 import { createServer, type Server } from "node:http";
-import { chmod, mkdtemp, readFile, readdir, rename, rm, stat, symlink } from "node:fs/promises";
+import { chmod, lstat, mkdtemp, readFile, readdir, rename, rm, stat, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -283,6 +283,7 @@ describe("a redeemed --paste short code is saved before the caller's work", () =
     await symlink(real, pendingPath());
     await expect(pasting(CODE, () => flow())).rejects.toMatchObject({ status: 404 });
     expect(api.hits).toHaveLength(2);
+    expect((await lstat(pendingPath())).isSymbolicLink()).toBe(true);
     expect(await exists(real)).toBe(true);
     await rm(pendingPath(), { force: true });
     await rm(real, { force: true });
