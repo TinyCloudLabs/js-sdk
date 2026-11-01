@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { completeEmailProof, requestEmailProofCode } from '@tinycloud/node-sdk/credentials';
+import { DEFAULT_EMAIL_PROOF_PROFILE, EMAIL_PROOF_CREDENTIAL_TYPE, requestEmailProofCode } from '@tinycloud/node-sdk/credentials';
+import { completeAgentShareReceive } from '@tinycloud/node-sdk/share-receive';
+import { createEmailCredentialRequirement, credentialRequirementDigest } from '@tinycloud/sdk-core';
 import { ShareReceiveError } from '@tinycloud/share-sdk';
 import { receiveEmailInvitation } from '../dist/email-invitation.js';
 import { PREFIX } from '../dist/keys.js';
@@ -24,6 +26,12 @@ function withHome(home, run) {
   try { return run(); } finally { if (previous === undefined) delete process.env.COURIER_HOME; else process.env.COURIER_HOME = previous; }
 }
 
+const REAL_PROFILE = { id: DEFAULT_EMAIL_PROOF_PROFILE, version: 1 };
+const REAL_REQUIREMENT = {
+  profile: REAL_PROFILE, credentialType: EMAIL_PROOF_CREDENTIAL_TYPE,
+  requirementDigest: await credentialRequirementDigest(createEmailCredentialRequirement({ email: ADDRESS, profile: REAL_PROFILE, credentialType: EMAIL_PROOF_CREDENTIAL_TYPE })),
+};
+
 /** The signed envelope fields the recipient can read before it enters a code. */
 function envelopeFor(body, over = {}) {
   return {
@@ -31,7 +39,7 @@ function envelopeFor(body, over = {}) {
     recipientMatcher: { kind: 'exactEmail', value: ADDRESS },
     resource: { kind: 'exact', path: `${PREFIX}/to/invite-${body.id}/envelope/${SHARE_ID}.json` },
     target: { origin: HOST, nodeAudience: 'did:key:z6MkNode', spaceId: SPACE },
-    policy: { ownerDid: ISSUER_DID },
+    policy: { ownerDid: ISSUER_DID, schema: 'xyz.tinycloud.policy/policy/v2', credentialRequirement: REAL_REQUIREMENT },
     expiry: body.expiresAt,
     ...over,
   };
@@ -71,8 +79,9 @@ function setup({ maxAttempts, outcome, body = invitationBody(), envelope, bodyOv
       complete: async (pending, code, options) => {
         calls.order.push('complete');
         calls.complete.push(code);
-        // A wrong code goes to the real witness stub and fails there, recoverably or terminally.
-        if (code !== witness.code) await completeEmailProof({ pending: pending.proof, code, holder: options.holder, fetch: options.fetch });
+        // A wrong code goes through the SHIPPED `@tinycloud/node-sdk/share-receive` entrypoint to the stub witness and fails
+        // there, recoverably or terminally, with that bundle's own EmailProofError class.
+        if (code !== witness.code) return completeAgentShareReceive(pending, code, options);
         if (outcome === 'decrypt-failed') throw new ShareReceiveError('decrypt-failed', 'share content could not be opened');
         if (typeof outcome === 'function') outcome(home);
         return { text: JSON.stringify(sent), bytes: new Uint8Array(), mediaType: 'application/json', untrusted: true, metadata: {} };

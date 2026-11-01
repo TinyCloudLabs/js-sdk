@@ -23,7 +23,7 @@ import { requireFlag } from './args.js';
 import type { ParsedArgs } from './args.js';
 import { activateSession, INVITATION_MODES, selectedSession, sessionKey, validSessionId } from './guided.js';
 import type { CourierSession, InvitationMode } from './guided.js';
-import { canonicalInviteEmail, isShareLink, receiveEmailInvitation, sendEmailInvitation } from './email-invitation.js';
+import { canonicalInviteEmail, isShareLink, newShareId, receiveEmailInvitation, requireInvitationKeyAuthority, sendEmailInvitation } from './email-invitation.js';
 
 const DEFAULT_API = 'https://api.tinycloud.xyz';
 const DEFAULT_VIEWER = 'https://courier.tinycloud.xyz';
@@ -269,8 +269,12 @@ export async function issueInvitation(node: TinyCloudNode, profile: Profile, ses
   return body;
 }
 
-/** Test seam: how the profile's node is opened. */
-export interface InviteDeps { node?: (profile: Profile) => Promise<TinyCloudNode> }
+/** Test seams: how the profile's node is opened, where the share id comes from, and the Share step. */
+export interface InviteDeps {
+  node?: (profile: Profile) => Promise<TinyCloudNode>;
+  shareId?: () => string;
+  send?: typeof sendEmailInvitation;
+}
 
 export async function cmdInvite(args: ParsedArgs, deps: InviteDeps = {}): Promise<void> {
   const profile = loadProfile();
@@ -301,12 +305,16 @@ export async function cmdInvite(args: ParsedArgs, deps: InviteDeps = {}): Promis
   } else if (args.has('recipient')) throw new CourierError('usage', '--recipient is only valid in named mode.');
   const selected = await selectedSession(node, profile, requireFlag(args, 'session', 'courier invite --session <id>'), args.get('peer'));
   const session = { sessionId: selected.sessionId, subject: selected.subject, createdAt: selected.createdAt };
+  // Email invitations decide the share id and check authority for exactly that key BEFORE anything is created: no relay
+  // delegation, no invitation state. The same id then goes to the Share step.
+  const shareId = mode === 'email' ? (deps.shareId ?? newShareId)() : undefined;
+  if (shareId !== undefined) requireInvitationKeyAuthority(node, profile, shareId);
   const body = await issueInvitation(node, profile, session, mode as CourierInvitation['mode'], recipient);
   const id = body.id;
   const expiresAt = body.expiresAt;
-  if (mode === 'email') {
+  if (shareId !== undefined) {
     // The bearer link goes to the mailbox only; it is never printed or stored.
-    await sendEmailInvitation(node, profile, body);
+    await (deps.send ?? sendEmailInvitation)(node, profile, body, { shareId: () => shareId });
     console.log(JSON.stringify({ status: 'invitation', invitationId: id, sessionId: session.sessionId, mode, recipient, expiresAt }));
     return serveInvitation(node, profile, body, wait);
   }

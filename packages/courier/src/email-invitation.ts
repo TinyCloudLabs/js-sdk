@@ -42,7 +42,20 @@ export interface EmailInvitationDeps {
 interface ShareConfig { shareOrigin: string; registryOrigin: string; credentialsOrigin: string }
 
 const envelopePath = (invitationId: string, shareId: string) => `${PREFIX}/to/invite-${invitationId}/envelope/${shareId}.json`;
-const randomShareId = () => randomBytes(16).toString('hex');
+export const newShareId = () => randomBytes(16).toString('hex');
+
+/**
+ * Refuse BEFORE anything is created unless this grant holds key.create and decrypt on exactly `share/<shareId>`.
+ * Nothing here requests that authority: the grant only gains it from an owner approval for this key, which Courier has
+ * no interface for yet, so today this only passes for a grant that already names the generated id.
+ */
+export function requireInvitationKeyAuthority(node: Pick<TinyCloudNode, 'getVerifiedSessionCapabilities'>, profile: Profile, shareId: string): void {
+  if (!profile.ownerDid || !profile.spaceId) throw new CourierError('no-grant', 'No owner grant is installed.');
+  if (!holdsInvitationKeyAuthority(node.getVerifiedSessionCapabilities(), profile.ownerDid, shareId)) {
+    throw new CourierError('invite-authority-missing',
+      "This Courier grant does not hold key.create and decrypt on this invitation's share key, so nothing was created: no pairing relay delegation, invitation state, Share key, link or email.");
+  }
+}
 
 function canonicalOrigin(value: unknown, label: string): string {
   if (typeof value !== 'string') throw new CourierError('share-config', `Share ${label} is unavailable.`);
@@ -90,11 +103,12 @@ export async function sendEmailInvitation(node: TinyCloudNode, profile: Profile,
   const email = body.recipient;
   if (body.mode !== 'email' || email === undefined || email !== canonicalInviteEmail(email)) throw new CourierError('bad-invitation', 'Not an email invitation.');
   if (!profile.ownerDid || !profile.spaceId) throw new CourierError('no-grant', 'No owner grant is installed.');
-  const shareId = (deps.shareId ?? randomShareId)();
+  const shareId = (deps.shareId ?? newShareId)();
   if (!holdsInvitationKeyAuthority(node.getVerifiedSessionCapabilities(), profile.ownerDid, shareId)) {
-    // The body comes from `issueInvitation`, which already stored the invitation state and issued the pairing relay delegation.
+    // A direct caller that already ran `issueInvitation` has stored its state and issued the pairing relay delegation.
+    // `cmdInvite` checks first (`requireInvitationKeyAuthority`), so it never reaches this branch.
     throw new CourierError('invite-authority-missing',
-      `This Courier grant does not hold key.create and decrypt on this invitation's share key, so no Share key, link or email was created or sent. Already created before this check: a pairing relay delegation and invitation state ${body.id} (unused; both expire ${body.expiresAt}).`);
+      `This Courier grant does not hold key.create and decrypt on this invitation's share key, so no Share key, link or email was created or sent. Already created before this check: a pairing relay delegation (expires ${body.expiresAt}) and invitation state ${body.id}, a record that stays in your Courier space (nothing deletes it).`);
   }
   const fetchFn = deps.fetch ?? fetch;
   const config = await shareConfig(deps);

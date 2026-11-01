@@ -97,6 +97,10 @@ test('no invitation key authority: refused before any key, store, publish or net
   assert.match(failure.message, new RegExp(`invitation state ${sent.id}`));
   assert.match(failure.message, /no Share key, link or email was created or sent/);
   assert.doesNotMatch(failure.message, /nothing was (created|changed)/i);
+  // Only the relay delegation expires; the stored invitation state record is not deleted by anything.
+  assert.match(failure.message, /relay delegation \(expires 20\d\d-[^)]*\)/);
+  assert.match(failure.message, /invitation state [0-9A-Z]{26}[^.]*stays in your Courier space/);
+  assert.doesNotMatch(failure.message, /both expire|unused/i);
 });
 
 test('key.create alone, or authority for another share key, is not enough', async () => {

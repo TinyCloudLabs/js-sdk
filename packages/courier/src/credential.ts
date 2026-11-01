@@ -73,8 +73,16 @@ export function holderFor(key: AgentKey): HolderSigner {
   }
 }
 
+/**
+ * node-sdk bundles `EmailProofError` once per entrypoint (`credentials`, `share-receive`), so an error thrown through
+ * one entrypoint is not `instanceof` the class another one exports. Accept the class, or an error with its exact shape.
+ */
 function isEmailProofError(error: unknown): error is EmailProofError {
-  return error instanceof EmailProofError;
+  if (error instanceof EmailProofError) return true;
+  return error instanceof Error && error.name === 'EmailProofError'
+    && 'step' in error && typeof error.step === 'string'
+    && 'code' in error && typeof error.code === 'string'
+    && 'recoverable' in error && typeof error.recoverable === 'boolean';
 }
 
 /**
