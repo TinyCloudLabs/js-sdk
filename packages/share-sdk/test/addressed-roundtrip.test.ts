@@ -33,6 +33,7 @@ async function fixture(onDeliveryMaterial?: AddressedSharePublishOptions["onDeli
       kvResource: `tinycloud:test-space/kv/shares/addressedroundtrip0001/${pathPadding}readme.md`,
       selector: "exact",
       encryptionNetwork: `urn:tinycloud:encryption:${ownerDid}:default`,
+      encryptionKeyPath: "share/addressedroundtrip0001",
       encryptedSymmetricKeyDigestHex: "1".repeat(64),
       keyVersion: 1,
       mode: "immutable",

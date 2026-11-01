@@ -21,7 +21,7 @@ async function published(artifact = false) {
     shareId, shareOrigin: SHARE_ORIGIN, nodeOrigin: "https://node.test", nodeAudience: nodeDid, enforcerDid: nodeDid,
     spaceId: CONTENT_SPACE_ID, target: { kind: "recipientDid", did: nodeDid },
     resource: { kind: "exact", path }, actions: ["read"], policyActions: ["tinycloud.kv/get", "tinycloud.kv/metadata"],
-    contentSource: { shareId, kvResource: `${CONTENT_SPACE_ID}/kv/${path}`, selector: "exact", encryptionNetwork: NETWORK_ID, encryptedSymmetricKeyDigestHex: "1".repeat(64), keyVersion: 1, mode: "immutable", initialCiphertextDigestHex: "2".repeat(64) },
+    contentSource: { shareId, kvResource: `${CONTENT_SPACE_ID}/kv/${path}`, selector: "exact", encryptionNetwork: NETWORK_ID, encryptionKeyPath: `share/${shareId}`, encryptedSymmetricKeyDigestHex: "1".repeat(64), keyVersion: 1, mode: "immutable", initialCiphertextDigestHex: "2".repeat(64) },
     ...(artifact ? { artifactPin: { v: 1 as const, artifactId: "art_history", version: 7, manifestSha256: "3".repeat(64), files: [{ path: "note.txt", sha256: "2".repeat(64), bytes: 8 }] } } : {}),
     filename: "note.txt", mediaType: "text/plain", byteLength: 8, expiresAt,
     authority: { ownerDid, createOwnerRoot: async input => signedRoot(input), sign: async bytes => ed25519.sign(bytes, ownerSeed), registerPolicy: async input => ({ policyCid: input.policyCid, policyRootCid: input.policyRoot.cid, enforcementRootCid: input.enforcementRoot.cid, attestedEnforcerBinding: signedBinding(expiresAt) }) },
