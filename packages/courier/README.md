@@ -108,8 +108,9 @@ the owner's private key. Courier keeps its own profile and does not use tc
 profiles, so `tinycloud courier` takes no TinyCloud CLI options (`tinycloud -p x courier …` exits 2).
 
 ```bash
-tinycloud courier init --paste --handle alice
-# Open the printed OpenKey URL, approve, and paste the XXXX-XXXX code (or the full grant).
+tinycloud courier init --request --handle alice
+# Send the printed "openkeyUrl" (https://openkey.so/a/…) to the owner, then collect the approval:
+tinycloud courier init --wait
 tinycloud courier pair start bob
 tinycloud courier pair accept --file a.json
 tinycloud courier send bob --new "Subject" --ask "…" --file handoff.md
@@ -119,15 +120,29 @@ tinycloud courier request <threadId> --peer bob --task <id> --verb merge --targe
 tinycloud courier orders bob
 ```
 
-`init` without `--paste` starts an interactive loopback grant flow. `--request`
-prints the OpenKey URL and the agent key as JSON; `--grant-file f|-` installs a
-grant from a file or stdin. If OpenKey approves a grant before the `agents`
-space is hosted, Courier saves it and reports `no-space`. Complete setup by
+`init --request` creates an OpenKey approval request (sealed at the links API,
+the same flow `tinycloud onboard` uses), saves it in `$COURIER_HOME/approval-pending.json`
+(owner-only) and prints the agent key and `openkeyUrl` as JSON. There is no code
+to copy back. `init --wait [--timeout <duration, at most 9m>]` polls OpenKey
+(every 2 s) with a proof signed by the agent key, decrypts the result, checks that
+it answers this request, installs the grant, and only then acknowledges it to
+OpenKey. The default timeout is 90 s: at the deadline it exits 8 and prints
+`{"pending":{"step":1,"of":1,"approvalUrl":…,"expiresAt":…}}`, and the next
+`init --wait` resumes the same request (no new link, no second approval). The
+approved result is saved encrypted in the pending record before any install work,
+so a killed process resumes from disk. OpenKey keeps an approved result for 10
+minutes: after that `init --wait` reports `[approval-result-expired]` and you run
+`init --request` again; an expired request reports `[approval-expired]`.
+`init` without flags still starts an interactive loopback grant flow (same
+machine only) and `--paste` shows the long `/delegate` link; `--grant-file f|-`
+installs a grant from a file or stdin. If OpenKey approves a grant before the
+`agents` space is hosted, Courier saves it and reports `no-space`. Complete setup by
 signing in at the Share view, or from a wallet profile run
 `tinycloud space host agents`, then use `init --resume` without requesting another
-approval. Run `init` again to renew the owner-approved grant, or
+approval. Run `init --request` again to renew the owner-approved grant, or
 `init --rotate-key` to replace the agent key and re-pair every peer.
-If OpenKey reports the space is still being set up, `init` waits up to about 2.5 minutes; otherwise use `init --resume`.
+If OpenKey reports the space is still being set up, `init --wait` waits for it
+within its `--timeout`; the legacy `init` flows wait about 2.5 minutes; otherwise use `init --resume`.
 
 Pairing binds a peer by its Courier `did:key`, not by owner DID: two Courier
 agents of the same owner (two profiles, two agent keys) pair exactly like two
@@ -136,7 +151,7 @@ artifact from the agent's own courier DID is refused.
 
 ### OpenKey short codes
 
-After a passkey approval, OpenKey shows a short `XXXX-XXXX` code. `init --paste`
+After a passkey approval on the old `/delegate` link, OpenKey shows a short `XXXX-XXXX` code. `init --paste`
 and `init --grant-file -` accept it as well as the full JSON or base64 grant.
 Courier redeems the code at `<OpenKey API host>/api/delegation-codes/<code>`
 (redirects are refused) and installs the result only if it is bound to the

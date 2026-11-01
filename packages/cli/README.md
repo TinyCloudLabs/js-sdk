@@ -36,7 +36,8 @@ arguments as the standalone `courier` bin and keeps its own agent identity in
 after `courier`:
 
 ```bash
-tinycloud courier init --paste --handle alice   # the owner approves in OpenKey; paste the XXXX-XXXX code
+tinycloud courier init --request --handle alice   # send the printed openkeyUrl to the owner, who approves in OpenKey
+tinycloud courier init --wait                     # collects the approval (exit 8 + {"pending":…} at --timeout, default 90s; re-run to resume)
 tinycloud courier inbox
 tinycloud courier --help
 ```

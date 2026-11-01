@@ -33,9 +33,22 @@ arguments and shares the same profile (`$COURIER_HOME`, default `~/.courier`).
 Commands below run it as `"$TC" courier`, set by the block above; prose calls it `tinycloud courier`.
 
 `init`, `pair` and `revoke` are human steps: the owner approves the agent grant
-in OpenKey (`tinycloud courier init --paste` also accepts the OpenKey `XXXX-XXXX`
-code) and decides who to pair with.
-If OpenKey reports the space is still being set up, `init` waits up to about 2.5 minutes; otherwise use `init --resume`.
+in OpenKey and decides who to pair with. Setup takes no code to copy back:
+
+1. `tinycloud courier init --request` prints JSON; send its `openkeyUrl` (a short
+   `https://openkey.so/a/…` link) to the owner. It also saves the request.
+2. `tinycloud courier init --wait` collects the approval, installs the grant and
+   acknowledges it. It waits at most 90 s by default (`--timeout 5m`, at most 9m):
+   if the owner has not approved by then it exits 8 with
+   `{"pending":{"step":1,"of":1,"approvalUrl":…,"expiresAt":…}}`. Run it again; the same
+   request resumes, with no new link and no second approval. Never wait in a
+   sleep loop: re-run `init --wait` after you have sent the link.
+3. OpenKey keeps an approved result for 10 minutes only. If `init --wait` reports
+   `approval-result-expired` or `approval-expired`, nothing was installed: run
+   `init --request` again.
+
+`init --grant-file f|-` and `init --paste` remain for an old OpenKey `XXXX-XXXX` code.
+If OpenKey reports the space is still being set up, `init --wait` waits for it within its `--timeout` (the old `init` flows wait about 2.5 minutes); otherwise use `init --resume`.
 
 ## Guided start
 
