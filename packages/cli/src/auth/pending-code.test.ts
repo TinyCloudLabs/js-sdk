@@ -79,8 +79,8 @@ async function pasting<T>(code: string, fn: () => Promise<T>): Promise<T> {
 }
 
 const pendingPath = (profile = "scoped") => join(profilePath(profile), "pending-delegation-code.json");
-const flow = (profileName: string | undefined = "scoped", jwk: object = key) =>
-  startAuthFlow(did, { paste: true, profileName, jwk, host, openkeyHost: "https://openkey.test", permissions: requested });
+const flow = (profileName: string | null = "scoped", jwk: object = key) =>
+  startAuthFlow(did, { paste: true, profileName: profileName ?? undefined, jwk, host, openkeyHost: "https://openkey.test", permissions: requested });
 const exists = (path: string) => stat(path).then(() => true, () => false);
 
 beforeEach(async () => {
@@ -217,7 +217,7 @@ describe("a redeemed --paste short code is saved before the caller's work", () =
 
   test("a flow without a profile (no durable state to protect) writes no record", async () => {
     api.codes.set(CODE, await proof());
-    await pasting(CODE, () => flow(undefined));
+    await pasting(CODE, () => flow(null));
     expect(await exists(pendingPath())).toBe(false);
   });
 });

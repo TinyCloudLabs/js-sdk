@@ -5,10 +5,11 @@ import type { PermissionEntry } from '@tinycloud/node-sdk';
 import { cmd, tcCmd } from './program.js';
 import { CourierError } from './errors.js';
 import { AGENT_GRANT, AGENT_GRANT_EXPIRY, COURIER_SPACE, k } from './keys.js';
-import { loadGrant, saveGrant, saveProfile, type AgentKey, type OwnerGrant, type Profile } from './profile.js';
+import { loadGrant, loadKey, saveGrant, saveProfile, type AgentKey, type OwnerGrant, type Profile } from './profile.js';
 import { nodeOpts } from './node.js';
 import { listAll } from './store.js';
 import { assertAgentGrant, siweTimes } from './authority.js';
+import { dropAllPending, dropPendingDelegation, dropPendingForCode, newestPending, pendingForCode, savePending } from './pending.js';
 
 const PRIVATE_JWK_FIELDS = new Set(['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth', 'k']);
 
@@ -133,11 +134,42 @@ function assertBoundToKey(delegation: unknown, key: Pick<AgentKey, 'did' | 'jwk'
  */
 export async function grantFromInput(input: unknown, key: Pick<AgentKey, 'did' | 'jwk'>, options: { apiHost: string }): Promise<GrantPayload> {
   if (typeof input === 'string' && isShortCode(input)) {
+    // OpenKey consumes the code on redeem: a code redeemed by an interrupted run is finished from its local copy.
+    const saved = pendingForCode(input);
+    if (saved) {
+      try {
+        assertBoundToKey(saved, key);
+        return parseGrantPayload(saved, key);
+      } catch (error) {
+        dropPendingForCode(input);
+        throw error;
+      }
+    }
     const delegation = await redeemShortCode(input, options.apiHost);
     assertBoundToKey(delegation, key);
-    return parseGrantPayload(delegation, key);
+    const payload = parseGrantPayload(delegation, key);
+    // Before any node call, so a kill from here on cannot lose the owner's approval.
+    const expiresAt = signedExpiry(payload.siwe);
+    if (expiresAt && expiresAt.getTime() > Date.now()) savePending(input, publicGrant(payload), expiresAt);
+    return payload;
   }
   return parseGrantPayload(input, key);
+}
+
+/** The SIWE's expiry; undefined for a message that cannot be parsed (installGrant refuses such a grant itself). */
+function signedExpiry(siwe: string): Date | undefined {
+  try { return siweTimes(siwe).expiresAt; } catch { return undefined; }
+}
+
+/** The grant fields `installGrant` uses, with the key reduced to its public members. */
+function publicGrant(payload: GrantPayload): GrantPayload {
+  const { delegationHeader, delegationCid, spaceId, address, chainId, siwe, signature, verificationMethod, jwk, spaceReady, spacePending } = payload;
+  return {
+    delegationHeader: { Authorization: delegationHeader.Authorization }, delegationCid, spaceId, address, chainId, siwe, signature, verificationMethod,
+    ...(jwk ? { jwk: Object.fromEntries(Object.entries(jwk).filter(([name]) => !PRIVATE_JWK_FIELDS.has(name))) } : {}),
+    ...(spaceReady !== undefined ? { spaceReady } : {}),
+    ...(spacePending !== undefined ? { spacePending } : {}),
+  };
 }
 
 export async function receiveGrant(request: DelegateRequest, options: { paste?: boolean } = {}): Promise<GrantPayload> {
@@ -368,6 +400,7 @@ export async function installGrant(profile: Profile, key: AgentKey, payload: Gra
   profile.status = 'ready';
   delete profile.spacePending;
   saveProfile(profile);
+  dropPendingDelegation(payload.delegationCid);
 }
 
 export async function resumeGrant(profile: Profile, key: AgentKey): Promise<void> {
@@ -393,6 +426,35 @@ export async function resumeGrant(profile: Profile, key: AgentKey): Promise<void
   delete profile.spacePending;
   applyGrantToProfile(profile, grant);
   saveProfile(profile);
+  dropPendingDelegation(grant.delegationCid);
+}
+
+/**
+ * `init --resume` for a profile left `awaiting-grant` by a kill: finish from the redeemed delegation saved
+ * before the install, else from the grant file the install had already written. False when there is neither.
+ */
+export async function resumeAwaitingGrant(profile: Profile): Promise<boolean> {
+  if (!newestPending() && !loadGrant()) return false;
+  const key = loadKey();
+  const saved = newestPending();
+  if (saved) {
+    let payload: GrantPayload | undefined;
+    try {
+      assertBoundToKey(saved, key);
+      payload = parseGrantPayload(saved, key);
+    } catch (error) {
+      // Bound to a key this profile does not hold: never installed, and useless to keep.
+      if (!(error instanceof CourierError) || error.code !== 'bad-grant') throw error;
+      dropAllPending();
+    }
+    if (payload) {
+      await installGrant(profile, key, payload);
+      return true;
+    }
+  }
+  if (!loadGrant()) return false;
+  await resumeGrant(profile, key);
+  return true;
 }
 
 export function courierGrantRequest(profile: Profile, key: AgentKey, expiry: string, options: { openkeyApiHost?: string } = {}): DelegateRequest {
