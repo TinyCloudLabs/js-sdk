@@ -13,7 +13,7 @@ import {
   type PublishedShare, type PublishedShareDeliveryMaterial,
 } from "./publish.js";
 import { ARTIFACT_ROOT } from "./artifact-core.js";
-import { AddressedContentSourceError, assertPathBoundContentSource, pathBoundKeyPath, type PathBoundContentSource } from "./addressed-content.js";
+import { AddressedContentSourceError, assertEncryptionNetwork, assertPathBoundContentSource, pathBoundKeyPath, type PathBoundContentSource } from "./addressed-content.js";
 import { normalizeShareTarget, type ShareTarget } from "./targets.js";
 import type { OwnerShareAction, OwnerShareMatcher } from "./owner-policy.js";
 
@@ -123,7 +123,8 @@ function targetKind(target: Exclude<ShareTarget, { readonly kind: "bearer" }>): 
 const OWNER_SHARE_ACTIONS: ReadonlySet<string> = new Set<OwnerShareAction>(["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/metadata", "tinycloud.kv/put"]);
 
 function assertSafeInput(input: AddressedSharePublishOptions): void {
-  if (!/^[A-Za-z0-9_-]{16,128}$/.test(input.shareId)) throw new TypeError("addressed share id is invalid");
+  // ONE share-id grammar for the plan, the size bound and the publisher: a share id this refuses was refused before any key was created.
+  pathBoundKeyPath(input.shareId);
   assertPathBoundContentSource(input.contentSource, input.shareId);
   if (!Number.isSafeInteger(input.byteLength) || input.byteLength < 0 || input.byteLength > SHARE_CONTENT_LIMIT) throw new TypeError("addressed content length is invalid");
   if (!Number.isFinite(input.expiresAt.getTime()) || input.expiresAt.getTime() <= Date.now()) throw new TypeError("addressed share expiry must be in the future");
@@ -648,6 +649,7 @@ export async function addressedShareBodyUpperBound(input: AddressedShareBoundInp
     ? input.storage.path
     : `${ARTIFACT_ROOT}/${input.storage.artifactId}/versions/${Number.MAX_SAFE_INTEGER}/${input.storage.storageName}`;
   const keyPath = pathBoundKeyPath(input.shareId);
+  assertEncryptionNetwork(input.encryptionNetwork);
   if (input.encryptionKeyPath !== undefined && input.encryptionKeyPath !== keyPath) throw new AddressedContentSourceError("key-path-mismatch", "addressed content source key path must be share/<shareId> of this share");
   const contentSource: PathBoundContentSource = {
     shareId: input.shareId, kvResource: `${input.spaceId}/kv/${path}`, selector: input.resource.kind, encryptionNetwork: input.encryptionNetwork,

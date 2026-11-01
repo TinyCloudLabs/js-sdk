@@ -28,8 +28,12 @@ const plan = planPathBoundShare({ shareId, encryptionNetwork: defaultEncryptionN
 //      - `plan.sessionPermissions` in the manifest the owner signs in with (decrypt + key.create on `<network>/share/`, no prompt per
 //        share; needs a sign-in route that signs these, for example `signMessage` from a first-party origin), or
 //      - `await tcw.requestPermissions(plan.requiredPermissions)` per share (one consent per share).
-//    Without it, `encryptAddressedShareContent` throws `key-not-authorized`. A failure after the key exists leaves an unused key (there is
-//    no key delete): retry with a NEW shareId.
+//    Without it, `encryptAddressedShareContent` throws `key-not-authorized`. Every created key permanently uses one of the node's 1000 key slots per
+//    network (deleted keys count, and the count is shared with `apps/` keys): each shared file uses one slot, so validate everything first
+//    (`planPathBoundShare` refuses a bad share id or network before any key exists). A failure after the key exists still costs the slot and there
+//    is no key delete: retry with a NEW shareId.
+//    The share id is ONE grammar everywhere (plan, size bound, publisher): `[a-z0-9][a-z0-9_-]{15,63}` (16 to 64 characters; a lowercase `randomUUID()`,
+//    with or without its hyphens, is valid). Uppercase, `.`, a leading `_` or `-`, and anything longer than 64 characters are refused.
 
 // 3. Create the key and encrypt under it (`keys` is a named-key client: `tcw.keys`, `node.keys` or `NamedKeyClient`).
 const encrypted = await encryptAddressedShareContent({ plan, keys, plaintext, metadata: { contentType } });
@@ -45,3 +49,5 @@ await publishAddressedShare({ /* shareId, target, resource, actions, ... */ cont
 ```
 
 `publishAddressedShare` refuses a content source that is not bound to its own share's key (`AddressedContentSourceError`, match on `code`: `key-path-required`, `key-path-mismatch`, `digest-invalid`, `network-invalid`) before it signs, registers or writes anything; there is no network-wide fallback. Do not call `encryptToNetwork` with a `keyPath` for a share: it returns a v1 envelope wrapped to the network key, which neither the node nor the recipient opens. `assertAddressedShareFits` and `addressedShareBodyUpperBound` derive the key path from `shareId`. Opening an older share that has no key path is unchanged.
+
+`pathBoundSessionPermissions({ encryptionNetwork })` returns the one manifest entry for the sign-in route (`decrypt` + `key.create` on `<network>/share/`) without needing a share id; build both your manifest and any scope guard of your own from it. Hand-written content sources are not supported: the publisher checks the path, the digest's format and the network, but only `bindPathBoundContentSource` derives the raw-byte digest the recipient and the node compare.

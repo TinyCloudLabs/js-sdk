@@ -36,7 +36,12 @@ export class AddressedContentSourceError extends TypeError {
   }
 }
 
-/** The content source of an addressed share: a `UnifiedContentSource` that is bound to its one key. */
+/**
+ * The content source of an addressed share: a `UnifiedContentSource` that is bound to its one key. **Build it ONLY with
+ * `bindPathBoundContentSource`.** The publisher can check the path, the digest's FORMAT and the network, but it cannot verify that the digest is the
+ * raw-byte digest of the wrapped key (a hand-written literal that registers `encryptedSymmetricKeyHash`, the canonical hash of the base64 text, type-checks
+ * and publishes, and no recipient or node will ever open it). No runtime brand is used, because two copies of this package must interoperate.
+ */
 export type PathBoundContentSource = UnifiedContentSource & {
   readonly encryptionKeyPath: string;
   readonly encryptedSymmetricKeyDigestHex: string;
@@ -49,11 +54,15 @@ export interface PathBoundPermissionEntry {
   actions: string[];
 }
 
-// The node's key-path grammar for the `share/<id>` segment (key_id.rs valid_segment): first byte a lowercase letter or digit, then lowercase
-// letters, digits, `.`, `_`, `-`; at most 64 bytes. 16 is this SDK's own minimum share id length.
-const SHARE_ID = /^[a-z0-9][a-z0-9._-]{15,63}$/;
-const NETWORK = /^urn:tinycloud:encryption:(did:[^/\s]+):default$/;
-const PKH_EIP155 = /^did:pkh:eip155:(\d+):(0x[0-9a-fA-F]{40})$/;
+// ONE share-id grammar, used by the plan, the key helper, the size bound and the publisher: the INTERSECTION of the node's key-path segment grammar
+// (key_id.rs valid_segment: first byte a lowercase letter or digit, then lowercase letters, digits, `.`, `_`, `-`; at most 64 bytes) and the
+// publisher's own id alphabet (no `.`). 16 is this SDK's minimum length. An id outside it is refused BEFORE a key is created.
+const SHARE_ID = /^[a-z0-9][a-z0-9_-]{15,63}$/;
+const NETWORK = /^urn:tinycloud:encryption:(.+):default$/;
+const OWNER_PKH = /^did:pkh:eip155:([1-9][0-9]*):(0x[0-9a-fA-F]{40})$/;
+const OWNER_KEY = /^did:key:[A-Za-z0-9]+$/;
+const ENVELOPE_FIELDS = ["v", "networkId", "keyPath", "alg", "keyVersion", "encryptedSymmetricKey", "encryptedSymmetricKeyHash", "ciphertext", "aad", "metadata"];
+const ENVELOPE_ALG = "x25519-aes256gcm/v1";
 const HEX_DIGEST = /^[0-9a-f]{64}$/;
 const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 const textEncoder = new TextEncoder();
@@ -77,7 +86,7 @@ function checksumAddress(address: string): string {
 /** The key path every addressed share is encrypted under: `share/<shareId>`. */
 export function pathBoundKeyPath(shareId: string): string {
   if (typeof shareId !== "string" || !SHARE_ID.test(shareId)) {
-    throw new AddressedContentSourceError("share-id-invalid", "addressed share id is invalid: 16 to 64 characters, lowercase letters, digits, '.', '_' or '-', starting with a letter or digit (a lowercase UUID, hyphens included, is valid)");
+    throw new AddressedContentSourceError("share-id-invalid", "addressed share id is invalid: 16 to 64 characters from lowercase letters, digits, '_' and '-', starting with a letter or digit (a lowercase UUID, hyphens included, is valid)");
   }
   return `share/${shareId}`;
 }
@@ -97,26 +106,38 @@ export function defaultEncryptionNetworkForOwner(owner: string | { readonly addr
     }
     did = `did:pkh:eip155:${chainId}:${address}`;
   }
-  const pkh = typeof did === "string" ? PKH_EIP155.exec(did) : null;
+  const pkh = typeof did === "string" ? OWNER_PKH.exec(did) : null;
   const normalized = pkh === null ? did : `did:pkh:eip155:${pkh[1]}:${checksumAddress(pkh[2]!)}`;
   const network = `urn:tinycloud:encryption:${String(normalized)}:default`;
-  if (typeof normalized !== "string" || !NETWORK.test(network)) {
+  if (typeof normalized !== "string" || !(pkh !== null || OWNER_KEY.test(normalized))) {
     throw new AddressedContentSourceError("network-invalid", "owner does not name an encryption network");
   }
   return network;
 }
 
-function assertNetwork(network: unknown): string {
+/**
+ * The strict form of the owner's default encryption network: `urn:tinycloud:encryption:<owner>:default` with `<owner>` either
+ * `did:pkh:eip155:<chain, no leading zero>:<0x + 40 hex, EIP-55 checksummed>` or `did:key:<alphanumeric, no `:`>`. Anything else (another
+ * network name, an extra `:` segment, a lower-cased or `0X` address, another DID method) is refused with a specific code.
+ */
+export function assertEncryptionNetwork(network: unknown): string {
   const match = typeof network === "string" ? NETWORK.exec(network) : null;
   if (match === null) {
     throw new AddressedContentSourceError("network-invalid", "encryption network must be the owner's default network: urn:tinycloud:encryption:<did>:default");
   }
-  const pkh = PKH_EIP155.exec(match[1]!);
-  if (pkh !== null && pkh[2] !== checksumAddress(pkh[2]!)) {
-    throw new AddressedContentSourceError("network-not-checksummed", "encryption network address must be EIP-55 checksummed; use defaultEncryptionNetworkForOwner(ownerDid)");
+  const owner = match[1]!;
+  const pkh = OWNER_PKH.exec(owner);
+  if (pkh !== null) {
+    if (pkh[2] !== checksumAddress(pkh[2]!)) {
+      throw new AddressedContentSourceError("network-not-checksummed", "encryption network address must be EIP-55 checksummed; use defaultEncryptionNetworkForOwner(ownerDid)");
+    }
+  } else if (!OWNER_KEY.test(owner)) {
+    throw new AddressedContentSourceError("network-invalid", "encryption network owner must be a did:pkh:eip155 address or a did:key");
   }
   return network as string;
 }
+
+const assertNetwork = assertEncryptionNetwork;
 
 function decodeWrappedKey(encryptedSymmetricKey: unknown): Uint8Array {
   if (typeof encryptedSymmetricKey !== "string" || !BASE64.test(encryptedSymmetricKey)) {
@@ -127,6 +148,15 @@ function decodeWrappedKey(encryptedSymmetricKey: unknown): Uint8Array {
     return fromBase64Url(encryptedSymmetricKey.replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_"));
   } catch {
     throw new AddressedContentSourceError("envelope-invalid", "wrapped content key is not strict base64");
+  }
+}
+
+/** Strict base64 (padded, standard alphabet, zero trailing pad bits), as the recipient decodes; throws `envelope-invalid`. */
+function decodeBase64(value: string): Uint8Array {
+  try {
+    return fromBase64Url(value.replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_"));
+  } catch {
+    throw new AddressedContentSourceError("envelope-invalid", "envelope field is not strict base64");
   }
 }
 
@@ -218,6 +248,22 @@ function assertEnvelope(plan: PathBoundSharePlan, envelope: PathBoundEnvelope): 
   wrappedKeyDigestHex(envelope.encryptedSymmetricKey);
   if (envelope.encryptedSymmetricKeyHash !== canonicalKeyHashHex(envelope.encryptedSymmetricKey)) {
     throw new AddressedContentSourceError("envelope-invalid", "envelope key hash does not match its wrapped key");
+  }
+  // Mirror what the recipient checks before it opens the content (recipient.ts parseV3InlineEncryptedEnvelope), so a share it would refuse is
+  // refused here, before the key's slot is spent on a share nobody can open.
+  const record = envelope as unknown as Record<string, unknown>;
+  if (Object.keys(record).some((key) => !ENVELOPE_FIELDS.includes(key)) || record.alg !== ENVELOPE_ALG) {
+    throw new AddressedContentSourceError("envelope-invalid", "envelope has a field or algorithm the recipient does not accept");
+  }
+  if (typeof record.ciphertext !== "string" || !BASE64.test(record.ciphertext) || decodeBase64(record.ciphertext).length < 28) {
+    throw new AddressedContentSourceError("envelope-invalid", "envelope ciphertext is not strict base64 of at least 28 bytes");
+  }
+  if (record.aad !== undefined && (typeof record.aad !== "string" || !BASE64.test(record.aad))) {
+    throw new AddressedContentSourceError("envelope-invalid", "envelope aad is not strict base64");
+  }
+  if (record.metadata !== undefined && (record.metadata === null || typeof record.metadata !== "object" || Array.isArray(record.metadata) ||
+      Object.values(record.metadata as Record<string, unknown>).some((entry) => typeof entry !== "string"))) {
+    throw new AddressedContentSourceError("envelope-invalid", "envelope metadata must be an object of strings");
   }
 }
 
@@ -327,7 +373,5 @@ export function assertPathBoundContentSource(source: Partial<UnifiedContentSourc
   if (typeof source.encryptedSymmetricKeyDigestHex !== "string" || !HEX_DIGEST.test(source.encryptedSymmetricKeyDigestHex)) {
     throw new AddressedContentSourceError("digest-invalid", "addressed content source needs encryptedSymmetricKeyDigestHex: 64 lowercase hex characters");
   }
-  if (typeof source.encryptionNetwork !== "string" || !NETWORK.test(source.encryptionNetwork)) {
-    throw new AddressedContentSourceError("network-invalid", "addressed content source network must be the owner's default network");
-  }
+  assertEncryptionNetwork(source.encryptionNetwork);
 }
