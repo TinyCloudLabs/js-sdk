@@ -173,21 +173,24 @@ test('paired renewal exports a C artifact without reading stale inbound and inst
   await pairAll(issuer, 'issuer-two', recipient, 'recipient-two');
 
   const issuerProfile = profileAt(issuer.home);
+  for (const handle of ['issuer-one', 'issuer-two']) {
+    issuerProfile.peers[handle].outbound.at(-1).issuedAt = new Date(Date.now() - 21 * 3600 * 1000).toISOString();
+  }
   issuerProfile.peers['issuer-one'].inbound.delegation = 'not-a-valid-delegation';
   fs.writeFileSync(path.join(issuer.home, 'profile.json'), `${JSON.stringify(issuerProfile, null, 2)}\n`);
 
-  const unknown = await runFail(issuer.home, ['pair', 'renew', 'missing-peer', '--artifact']);
+  const unknown = await runFail(issuer.home, ['pair', 'renew', 'missing-peer', '--renew-artifact']);
   assert.match(unknown.stderr, /\[unknown-peer\]/);
 
-  const renewedOne = await run(issuer.home, ['pair', 'renew', 'issuer-one', '--artifact']);
+  const renewedOne = await run(issuer.home, ['pair', 'renew', 'issuer-one', '--renew-artifact']);
   assert.equal(renewedOne.step, 'C');
   assert.equal(renewedOne.peer, 'issuer-one');
   assert.equal(renewedOne.callMe, 'recipient-one');
   await new Promise((resolve) => setTimeout(resolve, 1100));
-  const renewedOneLater = await run(issuer.home, ['pair', 'renew', 'issuer-one', '--artifact']);
+  const renewedOneLater = await run(issuer.home, ['pair', 'renew', 'issuer-one', '--renew-artifact', '--force']);
 
   const before = profileAt(recipient.home);
-  const renewedTwo = await run(issuer.home, ['pair', 'renew', 'issuer-two', '--artifact']);
+  const renewedTwo = await run(issuer.home, ['pair', 'renew', 'issuer-two', '--renew-artifact', '--force']);
   const changedScope = await runFail(recipient.home, ['pair', 'accept', JSON.stringify({ ...renewedTwo, callMe: 'recipient-one' })]);
   assert.match(changedScope.stderr, /\[bad-artifact\]/);
   assert.deepEqual(profileAt(recipient.home).peers['recipient-one'], before.peers['recipient-one']);

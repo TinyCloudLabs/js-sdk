@@ -30,7 +30,7 @@ import { requestHash } from './canonical.js';
 import { targetHelp } from './guard/target.js';
 import type { ParsedArgs } from './args.js';
 import { requireFlag, oneOf } from './args.js';
-import { assertPeerDelegation, bareDid, durationMs, AGENT_GRANT_MAX_MS } from './authority.js';
+import { assertExactAuthority, assertPeerDelegation, bareDid, durationMs, AGENT_GRANT_MAX_MS } from './authority.js';
 
 interface Ctx {
   profile: Profile;
@@ -180,7 +180,7 @@ export async function cmdPair(args: ParsedArgs) {
   if (sub === 'start') return pairStart(args);
   if (sub === 'accept') return pairAccept(args);
   if (sub === 'renew') return pairRenew(args);
-  fail('usage', `Usage: ${cmd('pair start <peer> | pair accept <artifact-json|--file f|--stdin> | pair renew [peer] [--force] [--artifact]')}`);
+  fail('usage', `Usage: ${cmd('pair start <peer> | pair accept <artifact-json|--file f|--stdin> | pair renew [peer] [--force] [--renew-artifact]')}`);
 }
 
 async function pairStart(args: ParsedArgs) {
@@ -220,7 +220,13 @@ async function validatePeerDelegation(node: TinyCloudNode, profile: Profile, pee
     fail('bad-artifact', 'Peer delegation space or owner does not match the pairing artifact.');
   }
   if (!peer.theirHandleForMe) fail('bad-artifact', 'Pairing artifact is missing the peer mailbox handle.');
-  const active = await activateValidatedRuntimeDelegation(node, delegation, { host: profile.host });
+  const active = await activateValidatedRuntimeDelegation(node, delegation, {
+    host: profile.host,
+    authorize: (permissions) => {
+      assertExactAuthority(permissions, peerReadPermissions(peer.theirHandleForMe!, peer.spaceId, peer.sessionId), 'Pair renewal');
+      return true;
+    },
+  });
   assertPeerDelegation(active, {
     issuer: peer.courierDid,
     audience: profile.courierDid,
@@ -314,16 +320,16 @@ function recordOutbound(peer: StoredPeer, delegation: PortableDelegation): void 
 async function pairRenew(args: ParsedArgs) {
   const active = await ctx();
   const requested = args.positional[1];
-  if (args.has('artifact') && !requested) {
-    fail('usage', `Usage: ${cmd('pair renew <peer> --artifact')}`);
+  if (args.has('renew-artifact') && !requested) {
+    fail('usage', `Usage: ${cmd('pair renew <peer> --renew-artifact [--force]')}`);
   }
   const peers = requested ? [getPeer(active.profile, requested)] : Object.values(active.profile.peers).filter((peer) => peer.status === 'paired');
-  if (args.has('artifact')) {
+  if (args.has('renew-artifact')) {
     const peer = peers[0]!;
     if (peer.status !== 'paired') fail('not-paired', `Cannot renew ${peer.handle}: pairing is not complete.`);
     if (!peer.theirHandleForMe) fail('not-paired', `Peer ${peer.handle} is missing its paired mailbox handle.`);
-    const delegation = await renewOutbound(active, peer, true);
-    if (!delegation) fail('renew-failed', `Courier did not issue a fresh delegation for ${peer.handle}.`);
+    const delegation = await renewOutbound(active, peer, args.has('force'));
+    if (!delegation) fail('renew-throttled', `Outbound delegation for ${peer.handle} was renewed within the last 20 hours; use --force to renew it now.`);
     printJson(artifactWithDelegation('C', active.profile, delegation, peer.handle, peer.theirHandleForMe));
     return;
   }

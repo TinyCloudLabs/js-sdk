@@ -40,7 +40,7 @@ Setup & pairing (humans run these):
   pair accept <json|--file f|--stdin>
                                    Accept artifact A, B or C; prints B or C to pass on
   pair renew [peer] [--force]      Renew both directions; humans or watcher only
-  pair renew <peer> --artifact    Emit renewed C artifact for handoff; receiver runs pair accept
+  pair renew <peer> --renew-artifact [--force]  Emit renewed C artifact for handoff; receiver runs pair accept
   revoke <peer>                    Stop renewing + drop the peer (access lapses at delegation expiry)
 
 Threads (agents run these):

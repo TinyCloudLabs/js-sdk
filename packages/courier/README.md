@@ -139,7 +139,7 @@ that side can renew only its existing outbound scope and hand you a fresh C
 artifact:
 
 ```bash
-tinycloud courier pair renew bob --artifact > renewal.json
+tinycloud courier pair renew bob --renew-artifact > renewal.json
 # Send renewal.json to bob over the existing trusted handoff channel.
 tinycloud courier pair accept --file renewal.json
 ```
@@ -149,6 +149,8 @@ for that same Courier DID, space, mailbox and session scope; it does not read or
 renew the exporting side's inbound delegation. The receiver may install the C
 artifact for that exact existing peer only. The signed peer delegation remains
 limited to its existing mailbox scope and at most seven days.
+By default, exporting is rate-limited to one renewal per peer in 20 hours. Use
+`--force` only when the same peer needs an immediate additional artifact.
 
 ### OpenKey short codes
 
