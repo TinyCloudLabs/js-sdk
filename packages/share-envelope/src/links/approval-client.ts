@@ -27,6 +27,7 @@ export const APPROVAL_RESULT_CLIENT_ID = "openkey-approval-result-v1";
 /** What the CLI and Courier wait between result polls. */
 export const APPROVAL_POLL_INTERVAL_MS = 2000;
 const REQUEST_TIMEOUT_MS = 10_000;
+const MIN_REQUEST_TIMEOUT_MS = 1000;
 const RESULT_REF_PATTERN = /^[A-Za-z0-9_-]{20,128}$/;
 const RELAY_INFO = "openkey-device-relay-v1";
 
@@ -241,11 +242,18 @@ export interface CollectApprovalOptions extends ApprovalTransportOptions {
 
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+/** The transport options for the next request: its timeout never reaches far past the wait's deadline. */
+function bounded(options: CollectApprovalOptions, now: () => number): ApprovalTransportOptions {
+  if (options.deadline === undefined) return options;
+  return { ...options, timeoutMs: Math.min(options.timeoutMs ?? REQUEST_TIMEOUT_MS, Math.max(MIN_REQUEST_TIMEOUT_MS, options.deadline - now() + 1000)) };
+}
+
 /**
  * Poll until the owner approves, then fetch the encrypted result. Network failures are retried at the poll
  * interval; every other failure throws an `ApprovalClientError`. With a `deadline`, returns `{ status: "deadline" }`
- * once it passes without a result. The deadline is checked between polls, so a wait ends within one poll
- * interval plus one request timeout of it.
+ * once it passes without a result. The deadline is checked between polls, and a request that starts near it is given
+ * only the time left plus one second (never more than `timeoutMs`), so a wait ends about a second after its deadline
+ * instead of a full request timeout after it.
  */
 export async function collectApprovalResult(
   state: ApprovalRequesterState,
@@ -258,7 +266,7 @@ export async function collectApprovalResult(
   for (;;) {
     if (!found) {
       let discovered: DiscoverResult | undefined;
-      try { discovered = await discoverApprovalResult(state, options); }
+      try { discovered = await discoverApprovalResult(state, bounded(options, now)); }
       catch (error) { if (!isApprovalClientError(error) || error.code !== "network") throw error; }
       if (discovered?.status === "ready") {
         found = { resultRef: discovered.resultRef, expiresAt: discovered.expiresAt };
@@ -267,7 +275,7 @@ export async function collectApprovalResult(
     }
     if (found) {
       try {
-        return { status: "result", ...found, relay: await fetchApprovalResult(state, found, options) };
+        return { status: "result", ...found, relay: await fetchApprovalResult(state, found, bounded(options, now)) };
       } catch (error) { if (!isApprovalClientError(error) || error.code !== "network") throw error; }
     }
     if (options.deadline !== undefined && now() >= options.deadline) return { status: "deadline" };
