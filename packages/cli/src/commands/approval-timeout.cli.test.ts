@@ -76,3 +76,13 @@ test("a valid --timeout is not refused as a usage error", async () => {
   const result = await cli(["auth", "grant", "missing-request.json", "--timeout", "90s"]);
   expect(result.stderr + result.stdout).not.toContain("INVALID_TIMEOUT");
 });
+
+test("`onboard --code` with `--timeout` is refused: re-running would send the step-1 code to step 2", async () => {
+  const before = readdirSync(join(home, "tc")).sort();
+  const result = await cli(["onboard", "--code", "abc123", "--timeout", "90s"]);
+  expect(result.exitCode).toBe(2);
+  expect(result.stderr + result.stdout).toContain("--code");
+  expect(result.stderr + result.stdout).toContain("--timeout");
+  expect(result.stdout).not.toContain("pending");
+  expect(readdirSync(join(home, "tc")).sort()).toEqual(before);
+});

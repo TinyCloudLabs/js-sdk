@@ -25,7 +25,7 @@ const fixtureEnvironment = { HOME: home, TC_HOME: join(home, "tc"), COURIER_HOME
 Object.assign(process.env, fixtureEnvironment);
 const { ProfileManager } = await import("../config/profiles.js");
 const { profilePath } = await import("@tinycloud/operations/state");
-const { readJson } = await import("../config/storage.js");
+const { readJson, writeJsonDurable } = await import("../config/storage.js");
 const { readProfileSnapshot, commitLogin } = await import("./login-commit.js");
 const { acquireApprovalRequest, completeApprovalResult } = await import("./approval-request.js");
 const { verifyScopedLogin } = await import("./scoped-login.js");
@@ -150,24 +150,24 @@ let offered: string[] = [];
 const send = globalThis.fetch;
 let fetchSpy: Mock<typeof fetch> | undefined;
 
-let onRequest: (url: URL) => Promise<void> | void = () => undefined;
+let onRequest: (url: URL, init?: RequestInit) => Promise<void> | void = () => undefined;
 async function route(input: Parameters<typeof fetch>[0], init?: RequestInit): Promise<Response> {
   const url = new URL(input instanceof Request ? input.url : String(input));
   // The links API is OpenKey's own host in production; here its one route lands on the fixture.
   if (url.origin === "https://api.tinycloud.xyz" && url.pathname === "/v1/links") return send(server.url.origin + url.pathname, init);
   if (url.origin !== server.url.origin) throw new Error("Only the owned fixture may receive requests");
-  await onRequest(url);
+  await onRequest(url, init);
   if (networkFault(url)) throw new TypeError("fetch failed");
   return send(input, init);
 }
 const routed = Object.assign(route, { preconnect: send.preconnect });
 
-function options(wait?: { deadlineMs: number; step?: number; of?: number }) {
+function options(wait?: { deadlineMs: number; step?: number; of?: number }, clock: { now?: () => number; sleep?: (ms: number) => Promise<void> } = { now: virtual.now, sleep: virtual.sleep }) {
   return {
     profileName: "approval", jwk: key, host, permissions: requested, expectedOwner: ownerDid, expiry: "1h",
     openkeyHost: "https://openkey.example", openkeyApiHost: server.url.origin, noPopup: true,
     onApprovalRequest: ({ approvalUrl }: { approvalUrl: string }) => { offered.push(approvalUrl); },
-    ...(wait ? { approvalWait: { step: 1, of: 1, ...wait, now: virtual.now, sleep: virtual.sleep } } : {}),
+    ...(wait ? { approvalWait: { step: 1, of: 1, ...wait, ...clock } } : {}),
   };
 }
 const withDeadline = (ms: number, extra: { step?: number; of?: number } = {}) => options({ deadlineMs: START + ms, ...extra });
@@ -335,6 +335,86 @@ describe("a RESUMED request keeps waiting until the deadline", () => {
   });
 });
 
+describe("an expired link is never reported as pending", () => {
+  test("OpenKey unreachable at the network level and the link already past its expiry: exit 3, not pending with a dead link", async () => {
+    await pendingOf(() => acquireApprovalRequest(did, withDeadline(60_000)));
+    const [saved] = await entries();
+    await writeJsonDurable(pendingPath(), [{ ...saved!, requestExpiresAt: new Date(START - 60_000).toISOString() }]);
+    networkFault = (url) => url.pathname.endsWith("/result");
+    const error = await pendingOf(() => acquireApprovalRequest(did, withDeadline(7_000)));
+    expect(error.code).toBe("APPROVAL_REQUEST_EXPIRED");
+    expect(error.exitCode).toBe(3);
+    expect(error.metadata?.pending).toBeUndefined();
+    // Kept, not dropped: OpenKey may still hold a result approved before expiry, and the next run asks it.
+    expect((await entries()).map((item) => item.requestId)).toEqual([saved!.requestId]);
+  });
+
+  test("the same unreachable wait with a link that is still valid stays pending, with that link", async () => {
+    await pendingOf(() => acquireApprovalRequest(did, withDeadline(60_000)));
+    const [saved] = await entries();
+    networkFault = (url) => url.pathname.endsWith("/result");
+    const error = await pendingOf(() => acquireApprovalRequest(did, withDeadline(7_000)));
+    expect(error.code).toBe("APPROVAL_PENDING");
+    expect((error.metadata as { pending: { approvalUrl: string } }).pending.approvalUrl).toBe(saved!.approvalUrl);
+  });
+});
+
+describe("the whole call is bounded by timeout + grace, real clock, slow OpenKey", () => {
+  const hangUntilAbort = (init?: RequestInit) => new Promise<void>((_, reject) => {
+    init?.signal?.addEventListener("abort", () => reject(init.signal!.reason), { once: true });
+  });
+  const realClock = { now: undefined, sleep: undefined };
+  const bounded = (timeoutMs: number, graceMs: number) => options({ deadlineMs: Date.now() + timeoutMs, graceMs } as { deadlineMs: number }, realClock);
+
+  test("an unanswered wait whose polls hang ends at the timeout, not one 10 s request later", async () => {
+    await pendingOf(() => acquireApprovalRequest(did, withDeadline(60_000)));
+    onRequest = (url, init) => url.pathname.endsWith("/result") ? hangUntilAbort(init) : undefined;
+    const started = Date.now();
+    const error = await pendingOf(() => acquireApprovalRequest(did, bounded(1_000, 1_500)));
+    const elapsed = Date.now() - started;
+    expect(error.code).toBe("APPROVAL_PENDING");
+    expect(elapsed).toBeGreaterThanOrEqual(900);
+    expect(elapsed).toBeLessThanOrEqual(1_000 + 1_800);
+  }, 20_000);
+
+  test("an approved result whose fetch hangs ends as result-unavailable within timeout + grace, and resumes later", async () => {
+    await pendingOf(() => acquireApprovalRequest(did, withDeadline(60_000)));
+    await approve();
+    onRequest = (url, init) => url.pathname.endsWith("/fetch") ? hangUntilAbort(init) : undefined;
+    const started = Date.now();
+    const error = await pendingOf(() => acquireApprovalRequest(did, bounded(1_000, 1_500)));
+    const elapsed = Date.now() - started;
+    expect(error.code).toBe("APPROVAL_RESULT_UNAVAILABLE");
+    expect(error.metadata?.pending).toBeUndefined();
+    expect(elapsed).toBeGreaterThanOrEqual(1_000);
+    expect(elapsed).toBeLessThanOrEqual(1_000 + 1_500 + 1_800);
+    expect((await entries())[0]!.resultRef).toBeDefined();
+    onRequest = () => undefined;
+    const delegation = await acquireApprovalRequest(did, withDeadline(10_000));
+    await commitAndAcknowledge(delegation);
+    expect(acks).toHaveLength(1);
+    expect(linkPosts).toBe(1);
+  }, 20_000);
+
+  test("the acknowledgement counts inside the grace: a hanging ack ends as ack-pending in time, and the re-run sends it once", async () => {
+    await pendingOf(() => acquireApprovalRequest(did, withDeadline(60_000)));
+    await approve();
+    const started = Date.now();
+    const delegation = await acquireApprovalRequest(did, bounded(1_000, 1_500));
+    onRequest = (url, init) => url.pathname.endsWith("/ack") ? hangUntilAbort(init) : undefined;
+    const error = await pendingOf(() => commitAndAcknowledge(delegation));
+    const elapsed = Date.now() - started;
+    expect(error.code).toBe("APPROVAL_ACK_PENDING");
+    expect(error.exitCode).toBe(8);
+    expect(elapsed).toBeLessThanOrEqual(1_000 + 1_500 + 1_800);
+    expect(acks).toHaveLength(0);
+    onRequest = () => undefined;
+    await completeApprovalResult("approval");
+    expect(acks).toHaveLength(1);
+    expect(await entries()).toEqual([]);
+  }, 20_000);
+});
+
 describe("after the owner approved, the command finishes even past the deadline", () => {
   test("a flaky result fetch that recovers after the deadline still returns the grant, never exit 8", async () => {
     await pendingOf(() => acquireApprovalRequest(did, withDeadline(60_000)));
@@ -461,7 +541,7 @@ describe("a process killed at any seam resumes from local state: exit-0 completi
     expect(linkPosts).toBe(1);
   });
 
-  test("while the ack is in flight and its reply is lost: the retry repeats the same ack id, one acknowledgement in total", async () => {
+  test("while the ack is in flight and its reply is lost: the retry repeats the same ack id (two ack requests, one ack id)", async () => {
     await createApprovedRequest();
     const delegation = await acquireApprovalRequest(did, withDeadline(60_000));
     killWhen((url) => url.pathname.endsWith("/ack"), "after-body");
