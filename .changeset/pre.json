@@ -28,5 +28,10 @@
     "@tinycloud/operations-mcp-conformance": "0.0.0",
     "@tinycloud/sdk-services-test": "21.0.2"
   },
-  "changesets": []
+  "changesets": [
+    "cli-addressed-path-bound",
+    "node-sdk-share-prefix-key-create",
+    "sdk-core-share-prefix-key-create",
+    "share-sdk-addressed-path-bound"
+  ]
 }

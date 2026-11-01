@@ -1,0 +1,7 @@
+---
+"@tinycloud/share-sdk": patch
+---
+
+Addressed shares are path-bound. New `planPathBoundShare`, `encryptAddressedShareContent`, `bindPathBoundContentSource` (with `pathBoundStoredBytes`, `pathBoundKeyPath`, `wrappedKeyDigestHex`, `defaultEncryptionNetworkForOwner`) build the content source for a share encrypted under its own named key `share/<shareId>`: the key path, the raw-byte wrapped-key digest and the exact bytes to store are derived in one place. `publishAddressedShare` now requires that source and refuses anything else, with a typed `AddressedContentSourceError` (`code`: `share-id-invalid`, `network-invalid`, `network-not-checksummed`, `key-path-required`, `key-path-mismatch`, `digest-invalid`, `key-not-authorized`, `key-receipt-mismatch`, `envelope-invalid`, `stored-bytes-mismatch`) before it signs, registers or writes; the network-wide decrypt fallback is gone, so the recipient's only decrypt capability is `<network>/share/<shareId>`. The share id is one grammar everywhere, `[a-z0-9][a-z0-9_-]{15,63}`, checked before any key is created. `pathBoundSessionPermissions` returns the sign-in manifest entry. `planPathBoundShare` returns the permission entries for both ways to hold the key-creation capability: `sessionPermissions` (once, in the sign-in manifest) and `requiredPermissions` (per share, as a runtime request). `assertAddressedShareFits` and `addressedShareBodyUpperBound` derive the key path from `shareId`. Opening existing shares, with or without a key path, is unchanged.
+
+Details: TC-2242

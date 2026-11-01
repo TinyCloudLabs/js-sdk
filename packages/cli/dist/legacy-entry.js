@@ -2046,6 +2046,10 @@ function expandEncryptionPermissionEntry(entry) {
       normalizedActions.push("tinycloud.encryption/network.revoke");
       continue;
     }
+    if (sharePrefix && (action === "key.create" || action === "tinycloud.encryption/key.create")) {
+      normalizedActions.push("tinycloud.encryption/key.create");
+      continue;
+    }
     if (action.includes("/")) {
       throw new ManifestValidationError(
         `unknown encryption action ${JSON.stringify(action)}; expected decrypt, network.create, or network.revoke`
@@ -2063,8 +2067,20 @@ function expandEncryptionPermissionEntry(entry) {
       seen.add(a);
     }
   }
-  if (sharePrefix && dedupedActions.some((action) => action !== "tinycloud.encryption/decrypt")) {
-    throw new ManifestValidationError("share prefix only supports decrypt");
+  if (sharePrefix && dedupedActions.some((action) => action !== "tinycloud.encryption/decrypt" && action !== "tinycloud.encryption/key.create")) {
+    throw new ManifestValidationError("share prefix only supports decrypt and key.create");
+  }
+  if (dedupedActions.includes("tinycloud.encryption/key.create")) {
+    let canonical = false;
+    try {
+      const parsed = parseEncryptionResource(entry.path);
+      canonical = parsed.kind === "prefix" && parsed.network === "default" && parsed.prefix === "share";
+    } catch {
+      canonical = false;
+    }
+    if (!canonical) {
+      throw new ManifestValidationError("share prefix key.create requires the canonical owner address (EIP-55 checksummed) on the default network");
+    }
   }
   return [
     {
@@ -31158,6 +31174,7 @@ var SharePublishError = class extends Error {
     this.code = code32;
   }
 };
+var textEncoder = new TextEncoder();
 function authorizationMethodForTarget(target) {
   if (target.kind === "recipientDid") return "openkey-device";
   if (target.kind === "email") return "email-claim";
@@ -31621,7 +31638,7 @@ async function publishTargetShare(input) {
     ...input.issuerKid === void 0 ? {} : { issuerKid: input.issuerKid }
   });
 }
-var textEncoder = new TextEncoder();
+var textEncoder2 = new TextEncoder();
 var EMAIL_CREDENTIAL_ISSUER_DID = "did:web:issuer.credentials.org";
 var EMAIL_CREDENTIAL_ISSUER_KID = `${EMAIL_CREDENTIAL_ISSUER_DID}#controller`;
 var ADDRESSED_SHARE_TOO_LARGE_MESSAGE = "This share is too large to send as a link, so nothing was shared. Use a shorter path or fewer folders.";
