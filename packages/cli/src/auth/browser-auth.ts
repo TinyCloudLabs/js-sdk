@@ -4,6 +4,7 @@ import { DEFAULT_OPENKEY_HOST, DEFAULT_OPENKEY_DEVICE_API_HOST, ExitCode } from 
 import { CLIError } from "../output/errors.js";
 import { assertNoCaveatLimits } from "../lib/caveat-refusal.js";
 import { acquireApprovalRequest } from "./approval-request.js";
+import { ProfileManager } from "../config/profiles.js";
 import { dropPendingDelegationFor, pendingDelegationFor, savePendingDelegation } from "./pending-code.js";
 
 export interface DelegationData {
@@ -230,7 +231,11 @@ export async function delegationFromInput(input: string, did: string, options: A
     assertBoundToKey(parsed, did, localJwk);
     // Before the caller verifies or activates anything, so a kill from here on cannot lose the owner's approval.
     if (options.profileName !== undefined && validateDelegationCallbackPayload(parsed) === null) {
-      await savePendingDelegation(options.profileName, trimmed, parsed as DelegationData);
+      // A first sign-in holds its new key only in memory until the login commits; a copy bound to a key that is
+      // never saved could not be finished after a kill, so say what to do instead of keeping it.
+      const stored = await ProfileManager.getKey(options.profileName) as Record<string, unknown> | null;
+      if (stored?.x === localJwk.x) await savePendingDelegation(options.profileName, trimmed, parsed as DelegationData);
+      else console.error("Note: this profile has no saved key yet, so an interrupted first sign-in cannot be resumed; if this one is interrupted, approve again in OpenKey.");
     }
   } else {
     try {
