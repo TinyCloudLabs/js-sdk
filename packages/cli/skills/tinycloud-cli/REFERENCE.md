@@ -39,9 +39,12 @@ tinycloud --version
 
 ```bash
 tinycloud onboard                         # once; every later task reuses this profile
+tinycloud onboard --timeout 90s           # same, bounded: 0 done, 8 pending (JSON on stdout), 3 request expired
 tinycloud auth request --cap SPEC --grant --paste --expiry 30d   # more access: ask once
 tinycloud context --json
 ```
+
+`onboard --timeout <Ns|Nm>` and `auth grant --timeout <Ns|Nm>` bound the wait for the owner's OpenKey approval (more than 0, at most 9m; longer values and 0 are usage errors, exit 2 `INVALID_TIMEOUT`). While an approval is outstanding the command exits 8 and prints `{"pending":{"step":N,"of":M,"approvalUrl":"<link>","expiresAt":"<ISO time>"}}` on stdout, once as soon as a new link has been created (so it can be sent at once) and again when the wait ends with a resumed link still unanswered; stderr keeps its human text. Run the same command again: a pending link is reused, never replaced, and a second approval is never requested. `onboard` has 2 steps; `auth grant` is `step 1 of 1` (an agent grant covers exactly one space). Exit 0 prints the normal result, exit 3 `APPROVAL_REQUEST_EXPIRED` means the link expired, and exit 8 without a `pending` object is OpenKey being unavailable (`APPROVAL_REQUEST_UNAVAILABLE`, `APPROVAL_RESULT_UNAVAILABLE`). Once the owner has approved, the command collects, verifies, saves and acknowledges the result even past the timeout (a short grace), and never exits 8 for an approval that was given. OpenKey keeps an approved result for 10 minutes, so run the command again right after sending the link. Without `--timeout` the command waits until the approval is answered.
 
 `context` always emits JSON: profile, `ownerDid`, `sessionDid`, host, `spaceId` and local session expiry, with `access: "not-tested"`. It never prints keys or signed material.
 

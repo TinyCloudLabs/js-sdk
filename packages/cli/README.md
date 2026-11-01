@@ -581,6 +581,19 @@ result retention. Normal login keeps its seven-day default; onboarding requests
 30 days explicitly. `--paste` remains an explicit manual fallback with a
 five-minute, single-use return code, not the automatic short-link transport.
 
+`tinycloud onboard --timeout 90s` and `tinycloud auth grant REQUEST.json --timeout 90s`
+bound the wait for the owner's approval (`Ns` or `Nm`, more than zero, at most `9m`;
+anything else is a usage error, exit 2). Exit 8 means the approval is still pending
+and prints `{"pending":{"step":N,"of":M,"approvalUrl":"...","expiresAt":"..."}}` on
+stdout: right away when a new link was created (send it to the owner at once), and
+after the timeout when a resumed link is still unanswered. Run the same command again;
+the link is reused and no second approval is requested. `onboard` has two steps; `auth
+grant` is step 1 of 1. Exit 0 is the normal result and exit 3 `APPROVAL_REQUEST_EXPIRED`
+a link that expired; exit 8 without a `pending` object is OpenKey being unavailable. An
+approval the owner already gave is always collected, verified, saved and acknowledged,
+even past the timeout. OpenKey keeps an approved result for 10 minutes, so run the command
+again right after sending the link. Without `--timeout` nothing changes.
+
 Use `tinycloud replica report` for read-only aggregates of persisted replication events
 and identity partitions. Live replica status is unavailable there. Report
 `--purge` and `--clear-pending` refuse with exit 2 `REPORT_READ_ONLY`.
