@@ -55,10 +55,13 @@ describe.each(commands)("%s --timeout", (_name, base) => {
   test("--help documents the option, its limit and the exit 8 JSON", async () => {
     const result = await cli([...base, "--help"]);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("--timeout <duration>");
-    expect(result.stdout).toContain("9m");
-    expect(result.stdout).toContain('"pending"');
-    expect(result.stdout).toContain("exits 8");
+    // Help wraps long lines; compare the text with its whitespace collapsed.
+    const help = result.stdout.replace(/\s+/g, " ");
+    expect(help).toContain("--timeout <duration>");
+    expect(help).toContain("at most 9m");
+    expect(help).toContain('{"pending":{"step","of","approvalUrl","expiresAt"}}');
+    expect(help).toMatch(/exits 8/i);
+    expect(help).toContain("run the same command again");
   });
 });
 

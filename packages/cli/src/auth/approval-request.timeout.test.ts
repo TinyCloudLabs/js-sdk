@@ -11,7 +11,7 @@ import { signerFromJwk, type Ed25519PrivateJwk } from "@tinycloud/share-envelope
 // clock. "Killed" seams stop the flow exactly where a SIGKILL would and the next
 // call is a fresh start from the saved profile state alone.
 
-const environmentKeys = ["HOME", "TC_HOME", "COURIER_HOME", "BUN_INSTALL_CACHE_DIR", "TC_LINKS_API_ORIGIN"] as const;
+const environmentKeys = ["HOME", "TC_HOME", "COURIER_HOME", "BUN_INSTALL_CACHE_DIR"] as const;
 const snapshotEnvironment = () => Object.fromEntries(environmentKeys.map((key) => [key, process.env[key]]));
 function restoreEnvironment(snapshot: Record<string, string | undefined>): void {
   for (const [name, value] of Object.entries(snapshot)) {
@@ -100,7 +100,6 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) 
   acks.push({ ackId: body.ackId!, resultRef: result.resultRef });
   return Response.json({ ackId: body.ackId, status: "acknowledged" });
 } });
-const fixtureEnvironmentWithLinks = { ...fixtureEnvironment, TC_LINKS_API_ORIGIN: server.url.origin };
 
 async function signedDelegation(lifetimeSeconds = 3600) {
   const prepared = wasm.prepareSession({ abilities: { kv: { "": ["tinycloud.kv/list"] } }, address, chainId: 1,
@@ -151,6 +150,18 @@ let offered: string[] = [];
 const send = globalThis.fetch;
 let fetchSpy: Mock<typeof fetch> | undefined;
 
+let onRequest: (url: URL) => Promise<void> | void = () => undefined;
+async function route(input: Parameters<typeof fetch>[0], init?: RequestInit): Promise<Response> {
+  const url = new URL(input instanceof Request ? input.url : String(input));
+  // The links API is OpenKey's own host in production; here its one route lands on the fixture.
+  if (url.origin === "https://api.tinycloud.xyz" && url.pathname === "/v1/links") return send(server.url.origin + url.pathname, init);
+  if (url.origin !== server.url.origin) throw new Error("Only the owned fixture may receive requests");
+  await onRequest(url);
+  if (networkFault(url)) throw new TypeError("fetch failed");
+  return send(input, init);
+}
+const routed = Object.assign(route, { preconnect: send.preconnect });
+
 function options(wait?: { deadlineMs: number; step?: number; of?: number }) {
   return {
     profileName: "approval", jwk: key, host, permissions: requested, expectedOwner: ownerDid, expiry: "1h",
@@ -179,19 +190,14 @@ async function commitAndAcknowledge(delegation: Record<string, unknown>): Promis
 
 beforeEach(async () => {
   caseEnvironment = snapshotEnvironment();
-  Object.assign(process.env, fixtureEnvironmentWithLinks);
+  Object.assign(process.env, fixtureEnvironment);
   results.clear(); linkPosts = 0; discoverCalls = 0; fetchCalls = 0; acks = []; ackSeenSaved = []; expireRequests = false;
-  clock = START; sleeps = []; onTick = () => undefined; networkFault = () => false; offered = [];
+  clock = START; sleeps = []; onTick = () => undefined; networkFault = () => false; onRequest = () => undefined; offered = [];
   await rm(pendingPath(), { force: true });
   await ProfileManager.setProfile("approval", { name: "approval", did, sessionDid: did, ownerDid, host, chainId: 1, spaceName: "applications", createdAt: new Date().toISOString(), authMethod: "openkey", posture: "owner-openkey" });
   await ProfileManager.setKey("approval", key);
   await ProfileManager.clearSession("approval");
-  fetchSpy = spyOn(globalThis, "fetch").mockImplementation(Object.assign((input: Parameters<typeof fetch>[0], init?: RequestInit) => {
-    const url = new URL(input instanceof Request ? input.url : String(input));
-    if (url.origin !== server.url.origin) throw new Error("Only the owned fixture may receive requests");
-    if (networkFault(url)) return Promise.reject(new TypeError("fetch failed"));
-    return send(input, init);
-  }, { preconnect: send.preconnect }));
+  fetchSpy = spyOn(globalThis, "fetch").mockImplementation(routed);
 });
 afterEach(async () => {
   fetchSpy?.mockRestore();
@@ -219,21 +225,13 @@ describe("a NEW request returns at once, with its link", () => {
   });
 
   test("without a deadline the same call does not return early and behaves as before", async () => {
-    const send2 = globalThis.fetch;
     // The owner is already approving: the first poll finds the result.
-    onTick = () => undefined;
-    const approver = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
-      const url = new URL(input instanceof Request ? input.url : String(input));
-      if (url.pathname.endsWith("/result") && !results.size) await approve();
-      return send2(input, init);
-    }, { preconnect: send2.preconnect }));
-    try {
-      const delegation = await acquireApprovalRequest(did, options());
-      expect(delegation.delegationCid).toBeDefined();
-      expect(discoverCalls).toBe(1);
-      expect(linkPosts).toBe(1);
-      expect(sleeps).toEqual([]);
-    } finally { approver.mockRestore(); }
+    onRequest = async (url) => { if (url.pathname.endsWith("/result") && !results.size) await approve(); };
+    const delegation = await acquireApprovalRequest(did, options());
+    expect(delegation.delegationCid).toBeDefined();
+    expect(discoverCalls).toBe(1);
+    expect(linkPosts).toBe(1);
+    expect(sleeps).toEqual([]);
   });
 });
 
@@ -280,7 +278,7 @@ describe("a RESUMED request keeps waiting until the deadline", () => {
     await pendingOf(() => acquireApprovalRequest(did, withDeadline(60_000)));
     onTick = async (now) => { if (now === START + 6_000) await approve(); };
     const delegation = await acquireApprovalRequest(did, withDeadline(60_000));
-    expect(clock).toBe(START + 8_000);
+    expect(clock).toBe(START + 6_000);
     expect(linkPosts).toBe(1);
     await commitAndAcknowledge(delegation);
     expect(acks).toHaveLength(1);
@@ -384,16 +382,16 @@ describe("a process killed at any seam resumes from local state: exit-0 completi
     expect(acks).toHaveLength(1);
     expect(new Set(acks.map((ack) => ack.ackId)).size).toBe(1);
     expect(await entries()).toEqual([]);
-    expect((await ProfileManager.getSession("approval"))?.delegationCid).toBe(delegation.delegationCid);
+    expect(((await ProfileManager.getSession("approval")) as Record<string, unknown> | null)?.delegationCid).toBe(delegation.delegationCid);
   }
   function killWhen(match: (url: URL) => boolean, effect: "before-response" | "after-body") {
     let fired = false;
     fetchSpy!.mockImplementation(Object.assign(async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
       const url = new URL(input instanceof Request ? input.url : String(input));
-      if (fired || !match(url)) return send(input, init);
+      if (fired || !match(url)) return route(input, init);
       fired = true;
       if (effect === "before-response") throw KILLED;
-      const response = await send(input, init);
+      const response = await route(input, init);
       await response.clone().text();
       Object.defineProperty(response, "json", { value: async () => { throw KILLED; } });
       return response;
@@ -405,7 +403,7 @@ describe("a process killed at any seam resumes from local state: exit-0 completi
     killWhen((url) => url.pathname.endsWith("/result"), "after-body");
     await expect(acquireApprovalRequest(did, withDeadline(60_000))).rejects.toBe(KILLED);
     expect(acks).toHaveLength(0);
-    fetchSpy!.mockImplementation(Object.assign((input: Parameters<typeof fetch>[0], init?: RequestInit) => send(input, init), { preconnect: send.preconnect }));
+    fetchSpy!.mockImplementation(routed);
     await finishAfterKill();
   });
 
@@ -415,7 +413,7 @@ describe("a process killed at any seam resumes from local state: exit-0 completi
     await expect(acquireApprovalRequest(did, withDeadline(60_000))).rejects.toBe(KILLED);
     expect(acks).toHaveLength(0);
     expect((await entries())[0]!.resultEnvelope).toBeUndefined();
-    fetchSpy!.mockImplementation(Object.assign((input: Parameters<typeof fetch>[0], init?: RequestInit) => send(input, init), { preconnect: send.preconnect }));
+    fetchSpy!.mockImplementation(routed);
     await finishAfterKill();
   });
 
@@ -451,13 +449,14 @@ describe("a process killed at any seam resumes from local state: exit-0 completi
     const verified = verifyScopedLogin(delegation, key, did, requested, { expectedOwner: ownerDid, exactApproval: true });
     await commitLogin("approval", snapshot, { key, session: verified.session, profile: { ...snapshot.profile!, spaceId }, durable: true });
     expect(acks).toHaveLength(0);
+    const discoverBefore = discoverCalls, fetchBefore = fetchCalls;
     // The next process is the next command: a resumed `onboard` / `auth grant` first completes the saved result.
     networkFault = (url) => url.pathname !== "/v1/links" && !url.pathname.endsWith("/ack");
     await completeApprovalResult("approval");
     expect(acks).toHaveLength(1);
     expect(ackSeenSaved).toEqual([{ committed: true, envelopeOnDisk: true, sessionOnDisk: true }]);
-    expect(discoverCalls).toBe(0);
-    expect(fetchCalls).toBe(0);
+    expect(discoverCalls).toBe(discoverBefore);
+    expect(fetchCalls).toBe(fetchBefore);
     expect(await entries()).toEqual([]);
     expect(linkPosts).toBe(1);
   });
@@ -468,7 +467,7 @@ describe("a process killed at any seam resumes from local state: exit-0 completi
     killWhen((url) => url.pathname.endsWith("/ack"), "after-body");
     await expect(commitAndAcknowledge(delegation)).rejects.toBeInstanceOf(CLIError);
     expect(acks).toHaveLength(1);
-    fetchSpy!.mockImplementation(Object.assign((input: Parameters<typeof fetch>[0], init?: RequestInit) => send(input, init), { preconnect: send.preconnect }));
+    fetchSpy!.mockImplementation(routed);
     await completeApprovalResult("approval");
     expect(new Set(acks.map((ack) => ack.ackId)).size).toBe(1);
     expect(new Set(acks.map((ack) => ack.resultRef)).size).toBe(1);

@@ -18,6 +18,7 @@ import { entriesForSigning, finalizeSigningEntries } from "../lib/apps-agent-pre
 import type { AuthFlowOptions, DelegationData } from "./browser-auth.js";
 import { decryptRelayResult, relayPublicJwkOf } from "./device-auth.js";
 import { canonicalJson, parseRequestedExpiry, sameLoginSpace, verifyScopedLogin } from "./scoped-login.js";
+import { APPROVAL_COLLECT_GRACE_MS, APPROVAL_POLL_INTERVAL_MS, approvalPendingError, type ApprovalWait } from "./approval-wait.js";
 
 interface PendingApproval {
   version: 1;
@@ -307,6 +308,34 @@ function verifyPendingResult(entry: PendingApproval, key: Ed25519PrivateJwk): {
   return { delegation, session: verified.session };
 }
 
+/** The wait ended with the owner's approval still outstanding: nothing is lost, the same link stays pending. */
+function pendingApproval(entry: PendingApproval, approvalWait: ApprovalWait): CLIError {
+  return approvalPendingError({ step: approvalWait.step, of: approvalWait.of, approvalUrl: entry.approvalUrl, expiresAt: entry.requestExpiresAt });
+}
+
+/**
+ * The pause between two attempts to learn the outcome. Without a deadline it is the fixed 2 s. With one, the pause
+ * ends at the deadline, after which one last attempt is made. Once the owner has approved (a result reference
+ * exists) the deadline no longer applies: collecting the result gets a bounded grace and ends as "result
+ * unavailable", which a re-run resumes from the saved reference, never as a pending approval.
+ */
+async function pauseBetweenAttempts(entry: PendingApproval, approvalWait: ApprovalWait | undefined): Promise<void> {
+  if (!approvalWait) {
+    await wait(2000);
+    return;
+  }
+  const now = approvalWait.now ?? Date.now;
+  const approved = entry.resultRef !== undefined;
+  const limit = approvalWait.deadlineMs + (approved ? APPROVAL_COLLECT_GRACE_MS : 0);
+  const remaining = limit - now();
+  if (remaining <= 0) {
+    if (!approved) throw pendingApproval(entry, approvalWait);
+    throw new CLIError("APPROVAL_RESULT_UNAVAILABLE",
+      "OpenKey could not fetch this approved result in time. It is saved by reference; retry the command to resume.", ExitCode.PENDING);
+  }
+  await (approvalWait.sleep ?? ((ms: number) => wait(ms)))(Math.min(APPROVAL_POLL_INTERVAL_MS, remaining));
+}
+
 /** Retryable reads never acknowledge or consume. The private result key is synced before the URL is exposed. */
 export async function acquireApprovalRequest(_did: string, options: AuthFlowOptions): Promise<DelegationData> {
   const profile = options.profileName;
@@ -314,6 +343,7 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
     throw new CLIError("APPROVAL_REQUEST_CONTEXT_REQUIRED", "Approval requires a profile, session key, host and permissions.", ExitCode.USAGE_ERROR);
   }
   const signingKey = options.jwk as Ed25519PrivateJwk;
+  const approvalWait = options.approvalWait;
   const signer = signerFromJwk(signingKey);
   const openkeyOrigin = configuredOrigin(options.openkeyHost ?? DEFAULT_OPENKEY_HOST, "OpenKey");
   const apiOrigin = configuredOrigin(options.openkeyApiHost ?? process.env.TC_OPENKEY_API_HOST ??
@@ -354,6 +384,7 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
   });
   if (matching.length > 1) throw invalid("Multiple approvals match this command; no result was selected.");
   let entry = matching[0];
+  const created = entry === undefined;
   if (!entry) {
     const relay = createECDH("prime256v1");
     relay.generateKeys();
@@ -373,17 +404,19 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
     if (!options.noPopup && !options.onApprovalRequest && process.env.TC_AUTH_NO_POPUP !== "1" && process.env.TC_NO_POPUP !== "1") {
       await tryOpenBrowser(entry.approvalUrl);
     }
+    // A new link cannot be approved yet. With a deadline, hand it to the caller at once so it can be sent.
+    if (created && approvalWait) throw pendingApproval(entry, approvalWait);
   }
   if (!entry.resultEnvelope) {
     for (;;) {
       let response: Response;
       try { response = await post(entry, "discover", signingKey); }
       catch {
-        await wait(2000);
+        await pauseBetweenAttempts(entry, approvalWait);
         continue;
       }
       if (response.status === 202) {
-        await wait(2000);
+        await pauseBetweenAttempts(entry, approvalWait);
         continue;
       }
       if (!response.ok) await throwRemoteError(profile, entry, response, "discover");
@@ -396,7 +429,11 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
       entry.resultExpiresAt = discovered.expiresAt;
       await updatePending(profile, (items) => items.map((item) => item.requestId === entry!.requestId ? entry! : item));
       let fetched: Response;
-      try { fetched = await post(entry, "fetch", signingKey); } catch { continue; }
+      try { fetched = await post(entry, "fetch", signingKey); } catch {
+        // The owner approved: collect past the deadline, paced, for a bounded grace.
+        if (approvalWait) await pauseBetweenAttempts(entry, approvalWait);
+        continue;
+      }
       if (!fetched.ok) await throwRemoteError(profile, entry, fetched, "fetch");
       const result = await fetched.json() as Record<string, unknown>;
       if (result.requestId !== entry.requestId || result.bodyCid !== entry.bodyCid ||
