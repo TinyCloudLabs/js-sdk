@@ -88,8 +88,15 @@ const fetchTrap = () => { throw new Error('no network before the authority check
 test('no invitation key authority: refused before any key, store, publish or network call', async () => {
   const split = AGENT_GRANT.flatMap((permission) => permission.actions.map((action) => ({ ...permission, actions: [action], caveats: [] })));
   const { node, calls } = fakeNode(split);
-  await assert.rejects(sendEmailInvitation(node, profile, body(), { fetch: fetchTrap }), { code: 'invite-authority-missing' });
+  const sent = body();
+  const failure = await sendEmailInvitation(node, profile, sent, { fetch: fetchTrap }).then(() => undefined, (error) => error);
+  assert.equal(failure?.code, 'invite-authority-missing');
   assert.deepEqual(calls, []);
+  // The message itself (not only a caller's wrapper) names what already exists and what was not created.
+  assert.match(failure.message, /pairing relay delegation/);
+  assert.match(failure.message, new RegExp(`invitation state ${sent.id}`));
+  assert.match(failure.message, /no Share key, link or email was created or sent/);
+  assert.doesNotMatch(failure.message, /nothing was (created|changed)/i);
 });
 
 test('key.create alone, or authority for another share key, is not enough', async () => {

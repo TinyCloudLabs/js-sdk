@@ -251,9 +251,30 @@ export async function serveInvitation(node: TinyCloudNode, profile: Profile, bod
   }
 }
 
-export async function cmdInvite(args: ParsedArgs): Promise<void> {
+/** Build one invitation with its pairing relay and store it as this issuer's state. Sends nothing. */
+export async function issueInvitation(node: TinyCloudNode, profile: Profile, session: CourierSession, mode: CourierInvitation['mode'], recipient: string | undefined): Promise<CourierInvitation> {
+  const id = ulid();
+  const manager = new NodeWasmBindings().createSessionManager();
+  const keyId = manager.createSessionKey('courier-relay');
+  const key: AgentKey = { v: 1, did: manager.getDID(keyId), jwk: JSON.parse(manager.jwk(keyId)!), createdAt: new Date().toISOString() };
+  const expiresAt = new Date(Math.floor(Math.min(Date.now() + 86400000, Date.parse(profile.grantExpiresAt!)) / 1000) * 1000).toISOString();
+  const body: CourierInvitation = {
+    type: 'courier-invitation', v: 1, id, issuer: profile.courierDid, host: profile.host, session, mode,
+    ...(recipient ? { recipient } : {}), expiresAt, artifact: artifactA(profile, `chat-${id}-recipient`, `chat-${id}-issuer`), relay: { key, delegation: '' },
+  };
+  const relay = await node.delegateTo(bareDid(key.did), relayPermissions(body), { expiry: Date.parse(expiresAt) - Date.now(), requireActivation: true });
+  body.relay.delegation = serializeDelegation(relay.delegation);
+  parseInvitation(body);
+  await putCreate(node.kv, inviteStateKey(id), { body });
+  return body;
+}
+
+/** Test seam: how the profile's node is opened. */
+export interface InviteDeps { node?: (profile: Profile) => Promise<TinyCloudNode> }
+
+export async function cmdInvite(args: ParsedArgs, deps: InviteDeps = {}): Promise<void> {
   const profile = loadProfile();
-  const node = await courierNode(profile);
+  const node = await (deps.node ?? courierNode)(profile);
   const wait = waitSeconds(args);
   if (args.positional[0] === 'serve') {
     const id = args.positional[1] ?? '';
@@ -280,19 +301,9 @@ export async function cmdInvite(args: ParsedArgs): Promise<void> {
   } else if (args.has('recipient')) throw new CourierError('usage', '--recipient is only valid in named mode.');
   const selected = await selectedSession(node, profile, requireFlag(args, 'session', 'courier invite --session <id>'), args.get('peer'));
   const session = { sessionId: selected.sessionId, subject: selected.subject, createdAt: selected.createdAt };
-  const id = ulid();
-  const manager = new NodeWasmBindings().createSessionManager();
-  const keyId = manager.createSessionKey('courier-relay');
-  const key: AgentKey = { v: 1, did: manager.getDID(keyId), jwk: JSON.parse(manager.jwk(keyId)!), createdAt: new Date().toISOString() };
-  const expiresAt = new Date(Math.floor(Math.min(Date.now() + 86400000, Date.parse(profile.grantExpiresAt!)) / 1000) * 1000).toISOString();
-  const body: CourierInvitation = {
-    type: 'courier-invitation', v: 1, id, issuer: profile.courierDid, host: profile.host, session, mode: mode as InvitationMode,
-    ...(recipient ? { recipient } : {}), expiresAt, artifact: artifactA(profile, `chat-${id}-recipient`, `chat-${id}-issuer`), relay: { key, delegation: '' },
-  };
-  const relay = await node.delegateTo(bareDid(key.did), relayPermissions(body), { expiry: Date.parse(expiresAt) - Date.now(), requireActivation: true });
-  body.relay.delegation = serializeDelegation(relay.delegation);
-  parseInvitation(body);
-  await putCreate(node.kv, inviteStateKey(id), { body });
+  const body = await issueInvitation(node, profile, session, mode as CourierInvitation['mode'], recipient);
+  const id = body.id;
+  const expiresAt = body.expiresAt;
   if (mode === 'email') {
     // The bearer link goes to the mailbox only; it is never printed or stored.
     await sendEmailInvitation(node, profile, body);
@@ -313,6 +324,21 @@ async function validateHandle(node: TinyCloudNode, profile: Profile, peer: Store
   assertPeerDelegation(active, { issuer: peer.courierDid, audience: profile.courierDid, spaceId: peer.spaceId, mailbox: peer.theirHandleForMe, sessionId: peer.sessionId });
 }
 
+/** One local record per invitation id: a join in progress, or finished (`joined`). */
+export function joinStateFile(id: string, home = profileDir()): string {
+  return path.join(home, 'invitation-joins', `${id}.json`);
+}
+
+/** True when this profile already joined the invitation. A join that is only in progress is not "used": it may resume. */
+export function joinedAlready(id: string, home = profileDir()): boolean {
+  try {
+    return (JSON.parse(fs.readFileSync(joinStateFile(id, home), 'utf8')) as JoinState).joined === true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
 export async function joinInvitation(link: string, args: ParsedArgs): Promise<void> {
   if (args.get('consent') !== 'true') throw new CourierError('consent-required', 'Joining delegates read access to your side of this session. Pass --consent after owner approval.');
   const wait = waitSeconds(args);
@@ -327,6 +353,11 @@ export async function joinInvitation(link: string, args: ParsedArgs): Promise<vo
     body = parseInvitation(opened.value);
     if (opened.header.audience !== (process.env.COURIER_LINKS_API_ORIGIN ?? DEFAULT_API) || opened.header.expiresAt !== body.expiresAt) refuse('Invitation audience or expiry changed.');
   }
+  return joinWithBody(body, wait);
+}
+
+/** Everything after the invitation body is in hand: the relay claim, the issuer's answer and the installed peer. */
+export async function joinWithBody(body: CourierInvitation, wait: number): Promise<void> {
   expiryCheck(body);
   const profile = loadProfile();
   const node = await courierNode(profile);
@@ -335,7 +366,7 @@ export async function joinInvitation(link: string, args: ParsedArgs): Promise<vo
   if (body.mode === 'same-owner' && !sameIdentity(body.artifact.from.owner, profile.ownerDid!)) refuse('Invitation requires another agent of the same owner.');
   if (body.mode === 'named' && body.recipient !== profile.courierDid) refuse('Invitation is addressed to another agent key.');
   const hash = requestHash(body);
-  const localFile = path.join(profileDir(), 'invitation-joins', `${body.id}.json`);
+  const localFile = joinStateFile(body.id);
   fs.mkdirSync(path.dirname(localFile), { recursive: true, mode: 0o700 });
   let state: JoinState | undefined;
   try { state = JSON.parse(fs.readFileSync(localFile, 'utf8')) as JoinState; } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }

@@ -125,8 +125,8 @@ describe("delegated Courier did:key as Share policy owner", () => {
     expect((await legacy.node.kv.put("xyz.tinycloud.courier/me/approvals/x.json", new TextEncoder().encode("{}"))).ok).toBe(false);
   });
 
-  test("the real restored authority of an invitation-capable grant passes the additive Courier check only for its owner", async () => {
-    const courier = await courierSession({ [`${defaultNetwork}/share/`]: [KEY_CREATE, DECRYPT] });
+  test("the real restored authority of an exact invitation-key grant passes the additive Courier check only for its owner", async () => {
+    const courier = await courierSession({ [`${defaultNetwork}/share/${newShareId()}`]: [KEY_CREATE, DECRYPT] });
     const ownerDid = `did:pkh:eip155:1:${await wallet.getAddress()}`;
     const capabilities = courier.node.getVerifiedSessionCapabilities();
     expect(() => assertAgentGrant(capabilities, siweTimes(courier.siwe), Date.now(), ownerDid)).not.toThrow();

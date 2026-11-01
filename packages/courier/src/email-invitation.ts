@@ -1,23 +1,27 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { emailProofDescriptor } from '@tinycloud/node-sdk/credentials';
-import { createFileEmailProofPendingStore, PendingStoreError } from '@tinycloud/node-sdk/credential-pending-store';
+import { createFileEmailProofPendingStore } from '@tinycloud/node-sdk/credential-pending-store';
 import { completeAgentShareReceive, requestAgentShareEmailProof, resumeAgentShareReceive } from '@tinycloud/node-sdk/share-receive';
-import type { AgentShareContent } from '@tinycloud/node-sdk/share-receive';
+import type { AgentShareContent, PendingAgentShareReceive } from '@tinycloud/node-sdk/share-receive';
 import { publishEmailShareV3 } from '@tinycloud/node-sdk/share-publish';
 import type { TinyCloudNode } from '@tinycloud/node-sdk';
 import { deliverCredentialInvitation, prepareAddressedShare, ShareReceiveError } from '@tinycloud/share-sdk';
 import { canonicalize, isEnvelopeDeliveryEmail } from '@tinycloud/share-envelope';
+import type { ShareEnvelopeV3 } from '@tinycloud/share-envelope';
 import { createLink, signerFromJwk } from '@tinycloud/share-envelope/links';
 import type { Ed25519PrivateJwk } from '@tinycloud/share-envelope/links';
-import { holdsInvitationKeyAuthority } from './authority.js';
+import { bareDid, holdsInvitationKeyAuthority } from './authority.js';
 import { canonicalJson } from './canonical.js';
 import { CourierError } from './errors.js';
 import { PREFIX } from './keys.js';
-import { holderFor } from './credential.js';
+import { holderFor, keepsPendingAfterFailure, mapEmailProofError, withStoreErrors } from './credential.js';
+import type { Step } from './credential.js';
 import { cmd } from './program.js';
-import { loadKey, profileDir, type Profile } from './profile.js';
-import { parseInvitation } from './invitation.js';
+import { courierNode } from './node.js';
+import { loadKey, loadProfile, profileDir } from './profile.js';
+import type { AgentKey, Profile } from './profile.js';
+import { joinedAlready, parseInvitation } from './invitation.js';
 import type { CourierInvitation } from './invitation.js';
 
 const DEFAULT_SHARE_ORIGIN = 'https://share.tinycloud.xyz';
@@ -88,7 +92,9 @@ export async function sendEmailInvitation(node: TinyCloudNode, profile: Profile,
   if (!profile.ownerDid || !profile.spaceId) throw new CourierError('no-grant', 'No owner grant is installed.');
   const shareId = (deps.shareId ?? randomShareId)();
   if (!holdsInvitationKeyAuthority(node.getVerifiedSessionCapabilities(), profile.ownerDid, shareId)) {
-    throw new CourierError('invite-authority-missing', 'This Courier grant cannot create invitation keys, so no email invitation was sent. Nothing was changed.');
+    // The body comes from `issueInvitation`, which already stored the invitation state and issued the pairing relay delegation.
+    throw new CourierError('invite-authority-missing',
+      `This Courier grant does not hold key.create and decrypt on this invitation's share key, so no Share key, link or email was created or sent. Already created before this check: a pairing relay delegation and invitation state ${body.id} (unused; both expire ${body.expiresAt}).`);
   }
   const fetchFn = deps.fetch ?? fetch;
   const config = await shareConfig(deps);
@@ -145,9 +151,22 @@ export async function sendEmailInvitation(node: TinyCloudNode, profile: Profile,
   return { shareId };
 }
 
+/** The three Share-receive steps; the defaults are node-sdk's. A seam so the proof lifecycle is testable without a Share deployment. */
+export interface ShareReceiveOps {
+  request: typeof requestAgentShareEmailProof;
+  resume: typeof resumeAgentShareReceive;
+  complete: typeof completeAgentShareReceive;
+}
+
 export interface EmailReceiveDeps extends EmailInvitationDeps {
+  home?: string;
+  loadKey?: (home: string) => AgentKey;
   readStdinLine?: () => Promise<string>;
   out?: (text: string) => void;
+  err?: (text: string) => void;
+  receive?: ShareReceiveOps;
+  /** Test seam: how the profile's node is opened for the grant check. */
+  node?: (profile: Profile, home: string) => Promise<TinyCloudNode>;
 }
 
 /** True for a Share link (`/s/…`); Courier's own `/c/` links take the existing path. */
@@ -155,48 +174,116 @@ export function isShareLink(link: string): boolean {
   try { return new URL(link).pathname.startsWith('/s/'); } catch { return false; }
 }
 
-async function withStoreErrors<T>(run: () => Promise<T>): Promise<T> {
-  try { return await run(); } catch (error) {
-    if (error instanceof PendingStoreError) throw new CourierError(error.code, error.message);
-    throw error;
-  }
-}
-
 /**
  * Open an email-bound invitation with this agent's own Courier key. Step 1 asks OpenCredentials to mail an 8-digit code
  * and stops; step 2 (`--code-stdin`) completes the proof, admits at the owner Node and decrypts the one invitation.
  * Returns the invitation body, or `undefined` after step 1.
+ *
+ * The pending proof follows `credential acquire`: it is kept only while the witness says the same request can take
+ * another code (`EmailProofError.recoverable`), and deleted on a terminal failure, on any failure after the code was
+ * accepted, and on success.
  */
 export async function receiveEmailInvitation(link: string, withCode: boolean, deps: EmailReceiveDeps = {}): Promise<CourierInvitation | undefined> {
   const out = deps.out ?? ((text: string) => { process.stdout.write(text); });
+  const err = deps.err ?? ((text: string) => { process.stderr.write(text); });
+  const home = deps.home ?? profileDir();
+  const ops = deps.receive ?? { request: requestAgentShareEmailProof, resume: resumeAgentShareReceive, complete: completeAgentShareReceive };
   const config = await shareConfig(deps);
-  const holder = holderFor(loadKey());
-  const store = createFileEmailProofPendingStore({ home: profileDir() });
+  const holder = holderFor((deps.loadKey ?? loadKey)(home));
+  const store = createFileEmailProofPendingStore({ home });
   const options = {
     holder, expectedOrigin: config.shareOrigin, registryOrigin: config.registryOrigin, fetch: deps.fetch, now: deps.now,
     apiOrigin: deps.linksApiOrigin ?? process.env.COURIER_LINKS_API_ORIGIN ?? DEFAULT_LINKS_API,
   };
-  try {
-    if (!withCode) {
-      const pending = await requestAgentShareEmailProof(link, options);
-      await withStoreErrors(() => store.put(pending.proof));
-      out(JSON.stringify({ status: 'code-sent', address: pending.proof.address }) + '\n');
-      process.stderr.write(`Verification code sent to ${pending.proof.address}. Run \`${cmd('join <link> --consent --code-stdin')}\` and enter the 8-digit code.\n`);
-      return undefined;
-    }
-    const code = ((await (deps.readStdinLine ?? readStdinFirstLine)()) ?? '').trim();
-    if (!/^\d{8}$/.test(code)) throw new CourierError('credential.code.CODE_INVALID', 'Verification code must be 8 digits.');
-    const pending = await resumeAgentShareReceive(link, (address) => withStoreErrors(() => store.findLive(address, new Date(deps.now?.() ?? Date.now()))), options);
-    let content: AgentShareContent;
-    try { content = await completeAgentShareReceive(pending, code, options); } finally {
-      // The code was offered to the witness: this proof is spent whether or not the open succeeded.
-      await withStoreErrors(() => store.delete(pending.proof.requestId));
-    }
-    return invitationFromShareContent(content.text, pending.proof.address);
-  } catch (error) {
-    if (error instanceof ShareReceiveError) throw new CourierError(`share.${error.code}`, error.message);
-    throw error;
+  if (!withCode) {
+    let requested: PendingAgentShareReceive;
+    try { requested = await ops.request(link, options); } catch (error) { throw mapReceiveError(error, 'request'); }
+    await withStoreErrors(() => store.put(requested.proof));
+    out(JSON.stringify({ status: 'code-sent', address: requested.proof.address }) + '\n');
+    err(`Verification code sent to ${requested.proof.address}. Run \`${cmd('join <link> --consent --code-stdin')}\` and enter the 8-digit code.\n`);
+    return undefined;
   }
+  const code = ((await (deps.readStdinLine ?? readStdinFirstLine)()) ?? '').trim();
+  if (!/^\d{8}$/.test(code)) throw new CourierError('credential.code.CODE_INVALID', 'Verification code must be 8 digits.');
+  let pending: PendingAgentShareReceive;
+  try {
+    pending = await ops.resume(link, (address) => withStoreErrors(() => store.findLive(address, new Date(deps.now?.() ?? Date.now()))), options);
+  } catch (error) { throw mapReceiveError(error, 'session'); }
+  // Refuse everything local and everything the signed envelope already says BEFORE the one-time code is spent.
+  const bindings = await preflight(pending.envelope, deps, home);
+  let content: AgentShareContent;
+  try {
+    content = await ops.complete(pending, code, options);
+  } catch (error) {
+    if (keepsPendingAfterFailure(error)) {
+      const mapped = mapEmailProofError(error, 'credential');
+      throw new CourierError(mapped.code, `${mapped.message} Retry with \`${cmd('join <link> --consent --code-stdin')}\` before ${pending.proof.expiresAt}.`);
+    }
+    // Terminal, or after the code was accepted: this proof is spent.
+    await withStoreErrors(() => store.delete(pending.proof.requestId));
+    throw mapReceiveError(error, 'credential');
+  }
+  await withStoreErrors(() => store.delete(pending.proof.requestId));
+  const body = invitationFromShareContent(content.text, pending.proof.address);
+  assertBodyMatchesEnvelope(body, pending.envelope, bindings);
+  // Another process may have joined while the code was out.
+  if (joinedAlready(body.id, home)) throw new CourierError('invite-used', 'Invitation already joined. No other session was activated.');
+  return body;
+}
+
+const ENVELOPE_PATH_PREFIX = `${PREFIX}/to/invite-`;
+const ENVELOPE_PATH_TAIL = /^([0-9A-HJKMNP-TV-Z]{26})\/envelope\/([a-f0-9]{32})\.json$/;
+
+interface EnvelopeBindings { invitationId: string; shareId: string }
+
+/**
+ * The invitation id and share id in the SIGNED envelope's exact resource path, which Courier writes as
+ * `<PREFIX>/to/invite-<id>/envelope/<shareId>.json`. Anything else is not a Courier invitation.
+ */
+export function envelopeBindings(envelope: ShareEnvelopeV3): EnvelopeBindings {
+  const { resource } = envelope;
+  const tail = resource.kind === 'exact' && resource.path.startsWith(ENVELOPE_PATH_PREFIX)
+    ? ENVELOPE_PATH_TAIL.exec(resource.path.slice(ENVELOPE_PATH_PREFIX.length))
+    : null;
+  if (!tail || tail[2] !== envelope.shareId) throw new CourierError('bad-invitation', 'This share is not a Courier invitation.');
+  return { invitationId: tail[1]!, shareId: tail[2] };
+}
+
+/**
+ * What can be refused before the code is entered. The body is encrypted, so only the signed envelope and local state
+ * are available here: its invitation id, node origin, issuer (policy owner) and expiry, the profile, the grant, the node
+ * and whether this invitation was joined. What stays unknown until decrypt: the session, the pairing relay and the pairing
+ * artifact; `assertBodyMatchesEnvelope` ties the body to the envelope afterwards.
+ */
+async function preflight(envelope: ShareEnvelopeV3, deps: EmailReceiveDeps, home: string): Promise<EnvelopeBindings> {
+  const bindings = envelopeBindings(envelope);
+  if (Date.parse(envelope.expiry) <= (deps.now?.() ?? Date.now())) throw new CourierError('invite-expired', 'Invitation expired; no code was entered and nothing was changed.');
+  const profile = loadProfile(home);
+  await (deps.node ?? courierNode)(profile, home);
+  if (new URL(envelope.target.origin).origin !== new URL(profile.host).origin) {
+    throw new CourierError('bad-invitation', 'Invitation uses another node host; no code was entered and nothing was changed.');
+  }
+  if (bareDid(envelope.policy.ownerDid) === profile.courierDid) throw new CourierError('bad-invitation', 'Refusing to join this agent identity.');
+  if (joinedAlready(bindings.invitationId, home)) throw new CourierError('invite-used', 'Invitation already joined; no code was entered.');
+  return bindings;
+}
+
+/** The decrypted body must be the one the signed envelope described. */
+function assertBodyMatchesEnvelope(body: CourierInvitation, envelope: ShareEnvelopeV3, bindings: EnvelopeBindings): void {
+  const same = body.id === bindings.invitationId
+    && body.host === new URL(envelope.target.origin).origin
+    && body.issuer === bareDid(envelope.policy.ownerDid)
+    && Date.parse(body.expiresAt) === Date.parse(envelope.expiry)
+    // Canonical resource identifiers, used verbatim as a KV space path: no case folding.
+    && body.artifact.spaceId === envelope.target.spaceId;
+  if (!same) throw new CourierError('bad-invitation', 'The invitation does not match the share that carried it.');
+}
+
+/** Share-link errors keep their `share.<code>`; witness errors map like `credential acquire`. */
+function mapReceiveError(error: unknown, fallbackStep: Step): unknown {
+  if (error instanceof CourierError) return error;
+  if (error instanceof ShareReceiveError) return new CourierError(`share.${error.code}`, error.message);
+  return mapEmailProofError(error, fallbackStep);
 }
 
 /** The decrypted Share content must be an email invitation addressed to exactly the mailbox that was verified. */

@@ -103,35 +103,41 @@ export function ownerEncryptionNetwork(ownerDid: string): string {
   return `urn:tinycloud:encryption:${ownerDid}:default`;
 }
 
-/** `<network>/share/` or `<network>/share/<id>` with only key.create and decrypt, no caveats. */
+/**
+ * Exactly `<network>/share/<32 lowercase hex>`, byte for byte, with only key.create and decrypt and no caveats. The
+ * `share/` prefix is a grant-scope decision that has not been made, so it is not accepted; nor is any other spelling.
+ */
 function isInvitationKeyEntry(entry: PermissionEntry, network: string): boolean {
   if (entry.service !== 'tinycloud.encryption' || (entry.space ?? '') !== '' || (entry.caveats?.length ?? 0) > 0) return false;
   const root = `${network}/share/`;
-  if (!entry.path.toLowerCase().startsWith(root.toLowerCase())) return false;
-  const leaf = entry.path.slice(root.length);
-  return (leaf === '' || SHARE_ID.test(leaf)) && entry.actions.every((action) => SHARE_KEY_ACTIONS.includes(action));
+  if (!entry.path.startsWith(root) || !SHARE_ID.test(entry.path.slice(root.length))) return false;
+  return entry.actions.every((action) => SHARE_KEY_ACTIONS.includes(action));
 }
 
 /**
  * Split a verified grant into the fixed Courier authority and the optional email-invitation key authority. Entries
- * that are not exactly invitation-key shaped stay in `base`, so they still fail the exact Courier check.
+ * that are not exactly invitation-key shaped stay in `base`, so they still fail the exact Courier check. Invitation
+ * authority is one exact key holding BOTH key.create and decrypt: several keys approximate the undecided prefix, and
+ * half a pair is not an invitation authority, so either stays in `base`. Nothing here binds the key to a request:
+ * the grant request is unchanged, so the id is whatever the owner signed.
  */
 export function splitInvitationAuthority(caps: readonly PermissionEntry[], ownerDid?: string): { base: PermissionEntry[]; invitation: PermissionEntry[] } {
   if (ownerDid === undefined) return { base: [...caps], invitation: [] };
   const network = ownerEncryptionNetwork(ownerDid);
   const base: PermissionEntry[] = [];
-  const invitation: PermissionEntry[] = [];
-  for (const entry of caps) (isInvitationKeyEntry(entry, network) ? invitation : base).push(entry);
-  return { base, invitation };
+  const candidates: PermissionEntry[] = [];
+  for (const entry of caps) (isInvitationKeyEntry(entry, network) ? candidates : base).push(entry);
+  const paths = new Set(candidates.map((entry) => entry.path));
+  const actions = new Set(candidates.flatMap((entry) => entry.actions));
+  const oneCompleteKey = paths.size === 1 && SHARE_KEY_ACTIONS.every((action) => actions.has(action));
+  return oneCompleteKey ? { base, invitation: candidates } : { base: [...base, ...candidates], invitation: [] };
 }
 
-/** True when the grant holds both key.create and decrypt covering `share/<shareId>` on the owner's default network. */
+/** True when the grant holds both key.create and decrypt on exactly `share/<shareId>` of the owner's default network. */
 export function holdsInvitationKeyAuthority(caps: readonly PermissionEntry[], ownerDid: string, shareId: string): boolean {
-  const key = `${ownerEncryptionNetwork(ownerDid)}/share/${shareId}`.toLowerCase();
+  const key = `${ownerEncryptionNetwork(ownerDid)}/share/${shareId}`;
   const { invitation } = splitInvitationAuthority(caps, ownerDid);
-  const covers = (action: string) => invitation.some((entry) => entry.actions.includes(action)
-    && (key === entry.path.toLowerCase() || (entry.path.endsWith('/') && key.startsWith(entry.path.toLowerCase()))));
-  return SHARE_KEY_ACTIONS.every(covers);
+  return SHARE_KEY_ACTIONS.every((action) => invitation.some((entry) => entry.path === key && entry.actions.includes(action)));
 }
 
 /**
