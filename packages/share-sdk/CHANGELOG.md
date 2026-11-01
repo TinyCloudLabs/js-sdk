@@ -1,5 +1,36 @@
 # @tinycloud/share-sdk
 
+## 1.4.3-beta.0
+
+### Patch Changes
+
+- e8d42b5: Addressed shares are path-bound. New `planPathBoundShare`, `encryptAddressedShareContent`, `bindPathBoundContentSource` (with `pathBoundStoredBytes`, `pathBoundKeyPath`, `wrappedKeyDigestHex`, `defaultEncryptionNetworkForOwner`) build the content source for a share encrypted under its own named key `share/<shareId>`: the key path, the raw-byte wrapped-key digest and the exact bytes to store are derived in one place. `publishAddressedShare` now requires that source and refuses anything else, with a typed `AddressedContentSourceError` (`code`: `share-id-invalid`, `network-invalid`, `network-not-checksummed`, `key-path-required`, `key-path-mismatch`, `digest-invalid`, `key-not-authorized`, `key-receipt-mismatch`, `envelope-invalid`, `stored-bytes-mismatch`) before it signs, registers or writes; the network-wide decrypt fallback is gone, so the recipient's only decrypt capability is `<network>/share/<shareId>`. The share id is one grammar everywhere, `[a-z0-9][a-z0-9_-]{15,63}`, checked before any key is created. `pathBoundSessionPermissions` returns the sign-in manifest entry. `planPathBoundShare` returns the permission entries for both ways to hold the key-creation capability: `sessionPermissions` (once, in the sign-in manifest) and `requiredPermissions` (per share, as a runtime request). `assertAddressedShareFits` and `addressedShareBodyUpperBound` derive the key path from `shareId`. Opening existing shares, with or without a key path, is unchanged.
+
+  Details: TC-2242
+
+## 1.4.2
+
+### Patch Changes
+
+- 853774e: Expose the existing owner record-schema context, schema checker and registration-time validator through `@tinycloud/share-sdk/share-index`. Admit canonical exact read-only artifact version files with their existing signed source checks. Retain original full-link renderer origin, signed header and signature beside one sealed body, and restore the original URL during readback with trusted-origin validation before owner admission. Existing three-field delivery material remains readable.
+
+  Metadata-bearing records require the updated reader; earlier strict readers reject the added `deliveryMaterial.fullLink` field. Upgrade every reader of the shared owner index before using the existing owner-agent `recheck` operation for affected agents: an older reader can cache schema rejections again or pause the agent. Updating the SDK alone does not clear those cached rejections.
+
+  `STORED_DELIVERY_MATERIAL_KEYS` now lists required keys rather than the exact allowed key set; external exact-key validators need to be updated for optional `fullLink` metadata.
+
+  Details: TC-1739
+
+- Updated dependencies [5e47629]
+- Updated dependencies [b0da170]
+  - @tinycloud/share-envelope@1.4.1
+
+## 1.4.2-beta.2
+
+### Patch Changes
+
+- Updated dependencies [b0da170]
+  - @tinycloud/share-envelope@1.4.1-beta.1
+
 ## 1.4.2-beta.1
 
 ### Patch Changes

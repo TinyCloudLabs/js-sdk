@@ -65,6 +65,7 @@ async function publishPinned(options: { readonly store?: ArtifactStore; readonly
       kvResource: `tinycloud:test-space/kv/${path}`,
       selector: "exact",
       encryptionNetwork: `urn:tinycloud:encryption:${ownerDid}:default`,
+      encryptionKeyPath: "share/pinnedshare0000001",
       encryptedSymmetricKeyDigestHex: "1".repeat(64),
       keyVersion: 1,
       mode: "immutable",

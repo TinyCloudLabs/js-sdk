@@ -887,7 +887,7 @@ function add(Ah, Al, Bh, Bl) {
   const l = (Al >>> 0) + (Bl >>> 0);
   return { h: Ah + Bh + (l / 2 ** 32 | 0) | 0, l: l | 0 };
 }
-var U32_MASK64, _32n, shrSH, shrSL, rotrSH, rotrSL, rotrBH, rotrBL, add3L, add3H, add4L, add4H, add5L, add5H;
+var U32_MASK64, _32n, shrSH, shrSL, rotrSH, rotrSL, rotrBH, rotrBL, rotlSH, rotlSL, rotlBH, rotlBL, add3L, add3H, add4L, add4H, add5L, add5H;
 var init_u64 = __esm({
   "../../node_modules/@noble/hashes/esm/_u64.js"() {
     "use strict";
@@ -899,6 +899,10 @@ var init_u64 = __esm({
     rotrSL = (h, l, s) => h << 32 - s | l >>> s;
     rotrBH = (h, l, s) => h << 64 - s | l >>> s - 32;
     rotrBL = (h, l, s) => h >>> s - 32 | l << 64 - s;
+    rotlSH = (h, l, s) => h << s | l >>> 32 - s;
+    rotlSL = (h, l, s) => l << s | h >>> 32 - s;
+    rotlBH = (h, l, s) => l << s - 32 | h >>> 64 - s;
+    rotlBL = (h, l, s) => h << s - 32 | l >>> 64 - s;
     add3L = (Al, Bl, Cl) => (Al >>> 0) + (Bl >>> 0) + (Cl >>> 0);
     add3H = (low, Ah, Bh, Ch) => Ah + Bh + Ch + (low / 2 ** 32 | 0) | 0;
     add4L = (Al, Bl, Cl, Dl) => (Al >>> 0) + (Bl >>> 0) + (Cl >>> 0) + (Dl >>> 0);
@@ -981,11 +985,11 @@ function bytesToHex(bytes) {
   abytes(bytes);
   if (hasHexBuiltin)
     return bytes.toHex();
-  let hex3 = "";
+  let hex4 = "";
   for (let i = 0; i < bytes.length; i++) {
-    hex3 += hexes[bytes[i]];
+    hex4 += hexes[bytes[i]];
   }
-  return hex3;
+  return hex4;
 }
 function asciiToBase16(ch) {
   if (ch >= asciis._0 && ch <= asciis._9)
@@ -996,21 +1000,21 @@ function asciiToBase16(ch) {
     return ch - (asciis.a - 10);
   return;
 }
-function hexToBytes(hex3) {
-  if (typeof hex3 !== "string")
-    throw new Error("hex string expected, got " + typeof hex3);
+function hexToBytes(hex4) {
+  if (typeof hex4 !== "string")
+    throw new Error("hex string expected, got " + typeof hex4);
   if (hasHexBuiltin)
-    return Uint8Array.fromHex(hex3);
-  const hl = hex3.length;
+    return Uint8Array.fromHex(hex4);
+  const hl = hex4.length;
   const al = hl / 2;
   if (hl % 2)
     throw new Error("hex string expected, got unpadded hex of length " + hl);
   const array = new Uint8Array(al);
   for (let ai = 0, hi = 0; ai < al; ai++, hi += 2) {
-    const n1 = asciiToBase16(hex3.charCodeAt(hi));
-    const n2 = asciiToBase16(hex3.charCodeAt(hi + 1));
+    const n1 = asciiToBase16(hex4.charCodeAt(hi));
+    const n2 = asciiToBase16(hex4.charCodeAt(hi + 1));
     if (n1 === void 0 || n2 === void 0) {
-      const char = hex3[hi] + hex3[hi + 1];
+      const char = hex4[hi] + hex4[hi + 1];
       throw new Error('hex string expected, got non-hex character "' + char + '" at index ' + hi);
     }
     array[ai] = n1 * 16 + n2;
@@ -1084,6 +1088,195 @@ var init_utils = __esm({
     asciis = { _0: 48, _9: 57, A: 65, F: 70, a: 97, f: 102 };
     Hash = class {
     };
+  }
+});
+
+// ../../node_modules/@noble/hashes/esm/sha3.js
+function keccakP(s, rounds = 24) {
+  const B = new Uint32Array(5 * 2);
+  for (let round = 24 - rounds; round < 24; round++) {
+    for (let x = 0; x < 10; x++)
+      B[x] = s[x] ^ s[x + 10] ^ s[x + 20] ^ s[x + 30] ^ s[x + 40];
+    for (let x = 0; x < 10; x += 2) {
+      const idx1 = (x + 8) % 10;
+      const idx0 = (x + 2) % 10;
+      const B0 = B[idx0];
+      const B1 = B[idx0 + 1];
+      const Th = rotlH(B0, B1, 1) ^ B[idx1];
+      const Tl = rotlL(B0, B1, 1) ^ B[idx1 + 1];
+      for (let y = 0; y < 50; y += 10) {
+        s[x + y] ^= Th;
+        s[x + y + 1] ^= Tl;
+      }
+    }
+    let curH = s[2];
+    let curL = s[3];
+    for (let t = 0; t < 24; t++) {
+      const shift = SHA3_ROTL[t];
+      const Th = rotlH(curH, curL, shift);
+      const Tl = rotlL(curH, curL, shift);
+      const PI = SHA3_PI[t];
+      curH = s[PI];
+      curL = s[PI + 1];
+      s[PI] = Th;
+      s[PI + 1] = Tl;
+    }
+    for (let y = 0; y < 50; y += 10) {
+      for (let x = 0; x < 10; x++)
+        B[x] = s[y + x];
+      for (let x = 0; x < 10; x++)
+        s[y + x] ^= ~B[(x + 2) % 10] & B[(x + 4) % 10];
+    }
+    s[0] ^= SHA3_IOTA_H[round];
+    s[1] ^= SHA3_IOTA_L[round];
+  }
+  clean(B);
+}
+var _0n, _1n, _2n, _7n, _256n, _0x71n, SHA3_PI, SHA3_ROTL, _SHA3_IOTA, IOTAS, SHA3_IOTA_H, SHA3_IOTA_L, rotlH, rotlL, Keccak, gen, keccak_256;
+var init_sha3 = __esm({
+  "../../node_modules/@noble/hashes/esm/sha3.js"() {
+    "use strict";
+    init_u64();
+    init_utils();
+    _0n = BigInt(0);
+    _1n = BigInt(1);
+    _2n = BigInt(2);
+    _7n = BigInt(7);
+    _256n = BigInt(256);
+    _0x71n = BigInt(113);
+    SHA3_PI = [];
+    SHA3_ROTL = [];
+    _SHA3_IOTA = [];
+    for (let round = 0, R = _1n, x = 1, y = 0; round < 24; round++) {
+      [x, y] = [y, (2 * x + 3 * y) % 5];
+      SHA3_PI.push(2 * (5 * y + x));
+      SHA3_ROTL.push((round + 1) * (round + 2) / 2 % 64);
+      let t = _0n;
+      for (let j = 0; j < 7; j++) {
+        R = (R << _1n ^ (R >> _7n) * _0x71n) % _256n;
+        if (R & _2n)
+          t ^= _1n << (_1n << /* @__PURE__ */ BigInt(j)) - _1n;
+      }
+      _SHA3_IOTA.push(t);
+    }
+    IOTAS = split(_SHA3_IOTA, true);
+    SHA3_IOTA_H = IOTAS[0];
+    SHA3_IOTA_L = IOTAS[1];
+    rotlH = (h, l, s) => s > 32 ? rotlBH(h, l, s) : rotlSH(h, l, s);
+    rotlL = (h, l, s) => s > 32 ? rotlBL(h, l, s) : rotlSL(h, l, s);
+    Keccak = class _Keccak extends Hash {
+      // NOTE: we accept arguments in bytes instead of bits here.
+      constructor(blockLen, suffix, outputLen, enableXOF = false, rounds = 24) {
+        super();
+        this.pos = 0;
+        this.posOut = 0;
+        this.finished = false;
+        this.destroyed = false;
+        this.enableXOF = false;
+        this.blockLen = blockLen;
+        this.suffix = suffix;
+        this.outputLen = outputLen;
+        this.enableXOF = enableXOF;
+        this.rounds = rounds;
+        anumber(outputLen);
+        if (!(0 < blockLen && blockLen < 200))
+          throw new Error("only keccak-f1600 function is supported");
+        this.state = new Uint8Array(200);
+        this.state32 = u32(this.state);
+      }
+      clone() {
+        return this._cloneInto();
+      }
+      keccak() {
+        swap32IfBE(this.state32);
+        keccakP(this.state32, this.rounds);
+        swap32IfBE(this.state32);
+        this.posOut = 0;
+        this.pos = 0;
+      }
+      update(data) {
+        aexists(this);
+        data = toBytes(data);
+        abytes(data);
+        const { blockLen, state: state2 } = this;
+        const len = data.length;
+        for (let pos = 0; pos < len; ) {
+          const take = Math.min(blockLen - this.pos, len - pos);
+          for (let i = 0; i < take; i++)
+            state2[this.pos++] ^= data[pos++];
+          if (this.pos === blockLen)
+            this.keccak();
+        }
+        return this;
+      }
+      finish() {
+        if (this.finished)
+          return;
+        this.finished = true;
+        const { state: state2, suffix, pos, blockLen } = this;
+        state2[pos] ^= suffix;
+        if ((suffix & 128) !== 0 && pos === blockLen - 1)
+          this.keccak();
+        state2[blockLen - 1] ^= 128;
+        this.keccak();
+      }
+      writeInto(out) {
+        aexists(this, false);
+        abytes(out);
+        this.finish();
+        const bufferOut = this.state;
+        const { blockLen } = this;
+        for (let pos = 0, len = out.length; pos < len; ) {
+          if (this.posOut >= blockLen)
+            this.keccak();
+          const take = Math.min(blockLen - this.posOut, len - pos);
+          out.set(bufferOut.subarray(this.posOut, this.posOut + take), pos);
+          this.posOut += take;
+          pos += take;
+        }
+        return out;
+      }
+      xofInto(out) {
+        if (!this.enableXOF)
+          throw new Error("XOF is not possible for this instance");
+        return this.writeInto(out);
+      }
+      xof(bytes) {
+        anumber(bytes);
+        return this.xofInto(new Uint8Array(bytes));
+      }
+      digestInto(out) {
+        aoutput(out, this);
+        if (this.finished)
+          throw new Error("digest() was already called");
+        this.writeInto(out);
+        this.destroy();
+        return out;
+      }
+      digest() {
+        return this.digestInto(new Uint8Array(this.outputLen));
+      }
+      destroy() {
+        this.destroyed = true;
+        clean(this.state);
+      }
+      _cloneInto(to) {
+        const { blockLen, suffix, outputLen, rounds, enableXOF } = this;
+        to || (to = new _Keccak(blockLen, suffix, outputLen, enableXOF, rounds));
+        to.state32.set(this.state32);
+        to.pos = this.pos;
+        to.posOut = this.posOut;
+        to.finished = this.finished;
+        to.rounds = rounds;
+        to.suffix = suffix;
+        to.outputLen = outputLen;
+        to.enableXOF = enableXOF;
+        to.destroyed = this.destroyed;
+        return to;
+      }
+    };
+    gen = (suffix, blockLen, outputLen) => createHasher(() => new Keccak(blockLen, suffix, outputLen));
+    keccak_256 = /* @__PURE__ */ (() => gen(1, 136, 256 / 8))();
   }
 });
 
@@ -2310,13 +2503,13 @@ function _abytes2(value, length5, title = "") {
   return value;
 }
 function numberToHexUnpadded(num) {
-  const hex3 = num.toString(16);
-  return hex3.length & 1 ? "0" + hex3 : hex3;
+  const hex4 = num.toString(16);
+  return hex4.length & 1 ? "0" + hex4 : hex4;
 }
-function hexToNumber(hex3) {
-  if (typeof hex3 !== "string")
-    throw new Error("hex string expected, got " + typeof hex3);
-  return hex3 === "" ? _0n : BigInt("0x" + hex3);
+function hexToNumber(hex4) {
+  if (typeof hex4 !== "string")
+    throw new Error("hex string expected, got " + typeof hex4);
+  return hex4 === "" ? _0n2 : BigInt("0x" + hex4);
 }
 function bytesToNumberBE(bytes) {
   return hexToNumber(bytesToHex(bytes));
@@ -2331,16 +2524,16 @@ function numberToBytesBE(n, len) {
 function numberToBytesLE(n, len) {
   return numberToBytesBE(n, len).reverse();
 }
-function ensureBytes(title, hex3, expectedLength) {
+function ensureBytes(title, hex4, expectedLength) {
   let res;
-  if (typeof hex3 === "string") {
+  if (typeof hex4 === "string") {
     try {
-      res = hexToBytes(hex3);
+      res = hexToBytes(hex4);
     } catch (e) {
       throw new Error(title + " must be hex string or Uint8Array, cause: " + e);
     }
-  } else if (isBytes(hex3)) {
-    res = Uint8Array.from(hex3);
+  } else if (isBytes(hex4)) {
+    res = Uint8Array.from(hex4);
   } else {
     throw new Error(title + " must be hex string or Uint8Array");
   }
@@ -2369,7 +2562,7 @@ function aInRange(title, n, min, max) {
 }
 function bitLen(n) {
   let len;
-  for (len = 0; n > _0n; n >>= _1n, len += 1)
+  for (len = 0; n > _0n2; n >>= _1n2, len += 1)
     ;
   return len;
 }
@@ -2399,7 +2592,7 @@ function createHmacDrbg(hashLen, qByteLen, hmacFn) {
     k = h(u8of(1), seed);
     v = h();
   };
-  const gen = () => {
+  const gen2 = () => {
     if (i++ >= 1e3)
       throw new Error("drbg: tried 1000 values");
     let len = 0;
@@ -2416,7 +2609,7 @@ function createHmacDrbg(hashLen, qByteLen, hmacFn) {
     reset();
     reseed(seed);
     let res = void 0;
-    while (!(res = pred(gen())))
+    while (!(res = pred(gen2())))
       reseed();
     reset();
     return res;
@@ -2448,16 +2641,16 @@ function memoized(fn) {
     return computed;
   };
 }
-var _0n, _1n, isPosBig, bitMask, notImplemented;
+var _0n2, _1n2, isPosBig, bitMask, notImplemented;
 var init_utils2 = __esm({
   "../../node_modules/@noble/curves/esm/utils.js"() {
     "use strict";
     init_utils();
     init_utils();
-    _0n = /* @__PURE__ */ BigInt(0);
-    _1n = /* @__PURE__ */ BigInt(1);
-    isPosBig = (n) => typeof n === "bigint" && _0n <= n;
-    bitMask = (n) => (_1n << BigInt(n)) - _1n;
+    _0n2 = /* @__PURE__ */ BigInt(0);
+    _1n2 = /* @__PURE__ */ BigInt(1);
+    isPosBig = (n) => typeof n === "bigint" && _0n2 <= n;
+    bitMask = (n) => (_1n2 << BigInt(n)) - _1n2;
     notImplemented = () => {
       throw new Error("not implemented");
     };
@@ -2467,25 +2660,25 @@ var init_utils2 = __esm({
 // ../../node_modules/@noble/curves/esm/abstract/modular.js
 function mod(a, b) {
   const result = a % b;
-  return result >= _0n2 ? result : b + result;
+  return result >= _0n3 ? result : b + result;
 }
 function pow2(x, power, modulo) {
   let res = x;
-  while (power-- > _0n2) {
+  while (power-- > _0n3) {
     res *= res;
     res %= modulo;
   }
   return res;
 }
 function invert(number, modulo) {
-  if (number === _0n2)
+  if (number === _0n3)
     throw new Error("invert: expected non-zero number");
-  if (modulo <= _0n2)
+  if (modulo <= _0n3)
     throw new Error("invert: expected positive modulus, got " + modulo);
   let a = mod(number, modulo);
   let b = modulo;
-  let x = _0n2, y = _1n2, u = _1n2, v = _0n2;
-  while (a !== _0n2) {
+  let x = _0n3, y = _1n3, u = _1n3, v = _0n3;
+  while (a !== _0n3) {
     const q = b / a;
     const r = b % a;
     const m = x - u * q;
@@ -2493,7 +2686,7 @@ function invert(number, modulo) {
     b = a, a = r, x = u, y = v, u = m, v = n;
   }
   const gcd = b;
-  if (gcd !== _1n2)
+  if (gcd !== _1n3)
     throw new Error("invert: does not exist");
   return mod(x, modulo);
 }
@@ -2502,17 +2695,17 @@ function assertIsSquare(Fp2, root, n) {
     throw new Error("Cannot find square root");
 }
 function sqrt3mod4(Fp2, n) {
-  const p1div4 = (Fp2.ORDER + _1n2) / _4n;
+  const p1div4 = (Fp2.ORDER + _1n3) / _4n;
   const root = Fp2.pow(n, p1div4);
   assertIsSquare(Fp2, root, n);
   return root;
 }
 function sqrt5mod8(Fp2, n) {
   const p5div8 = (Fp2.ORDER - _5n) / _8n;
-  const n2 = Fp2.mul(n, _2n);
+  const n2 = Fp2.mul(n, _2n2);
   const v = Fp2.pow(n2, p5div8);
   const nv = Fp2.mul(n, v);
-  const i = Fp2.mul(Fp2.mul(nv, _2n), v);
+  const i = Fp2.mul(Fp2.mul(nv, _2n2), v);
   const root = Fp2.mul(nv, Fp2.sub(i, Fp2.ONE));
   assertIsSquare(Fp2, root, n);
   return root;
@@ -2523,7 +2716,7 @@ function sqrt9mod16(P) {
   const c1 = tn(Fp_, Fp_.neg(Fp_.ONE));
   const c2 = tn(Fp_, c1);
   const c3 = tn(Fp_, Fp_.neg(c1));
-  const c4 = (P + _7n) / _16n;
+  const c4 = (P + _7n2) / _16n;
   return (Fp2, n) => {
     let tv1 = Fp2.pow(n, c4);
     let tv2 = Fp2.mul(tv1, c1);
@@ -2542,13 +2735,13 @@ function sqrt9mod16(P) {
 function tonelliShanks(P) {
   if (P < _3n)
     throw new Error("sqrt is not defined for small field");
-  let Q = P - _1n2;
+  let Q = P - _1n3;
   let S = 0;
-  while (Q % _2n === _0n2) {
-    Q /= _2n;
+  while (Q % _2n2 === _0n3) {
+    Q /= _2n2;
     S++;
   }
-  let Z = _2n;
+  let Z = _2n2;
   const _Fp = Field(P);
   while (FpLegendre(_Fp, Z) === 1) {
     if (Z++ > 1e3)
@@ -2557,7 +2750,7 @@ function tonelliShanks(P) {
   if (S === 1)
     return sqrt3mod4;
   let cc = _Fp.pow(Z, Q);
-  const Q1div2 = (Q + _1n2) / _2n;
+  const Q1div2 = (Q + _1n3) / _2n2;
   return function tonelliSlow(Fp2, n) {
     if (Fp2.is0(n))
       return n;
@@ -2578,7 +2771,7 @@ function tonelliShanks(P) {
         if (i === M)
           throw new Error("Cannot find square root");
       }
-      const exponent = _1n2 << BigInt(M - i - 1);
+      const exponent = _1n3 << BigInt(M - i - 1);
       const b = Fp2.pow(c, exponent);
       M = i;
       c = Fp2.sqr(b);
@@ -2612,19 +2805,19 @@ function validateField(field) {
   return field;
 }
 function FpPow(Fp2, num, power) {
-  if (power < _0n2)
+  if (power < _0n3)
     throw new Error("invalid exponent, negatives unsupported");
-  if (power === _0n2)
+  if (power === _0n3)
     return Fp2.ONE;
-  if (power === _1n2)
+  if (power === _1n3)
     return num;
   let p = Fp2.ONE;
   let d = num;
-  while (power > _0n2) {
-    if (power & _1n2)
+  while (power > _0n3) {
+    if (power & _1n3)
       p = Fp2.mul(p, d);
     d = Fp2.sqr(d);
-    power >>= _1n2;
+    power >>= _1n3;
   }
   return p;
 }
@@ -2646,7 +2839,7 @@ function FpInvertBatch(Fp2, nums, passZero = false) {
   return inverted;
 }
 function FpLegendre(Fp2, n) {
-  const p1mod2 = (Fp2.ORDER - _1n2) / _2n;
+  const p1mod2 = (Fp2.ORDER - _1n3) / _2n2;
   const powered = Fp2.pow(n, p1mod2);
   const yes = Fp2.eql(powered, Fp2.ONE);
   const zero = Fp2.eql(powered, Fp2.ZERO);
@@ -2663,7 +2856,7 @@ function nLength(n, nBitLength) {
   return { nBitLength: _nBitLength, nByteLength };
 }
 function Field(ORDER, bitLenOrOpts, isLE2 = false, opts = {}) {
-  if (ORDER <= _0n2)
+  if (ORDER <= _0n3)
     throw new Error("invalid field: expected ORDER > 0, got " + ORDER);
   let _nbitLength = void 0;
   let _sqrt = void 0;
@@ -2698,19 +2891,19 @@ function Field(ORDER, bitLenOrOpts, isLE2 = false, opts = {}) {
     BITS,
     BYTES,
     MASK: bitMask(BITS),
-    ZERO: _0n2,
-    ONE: _1n2,
+    ZERO: _0n3,
+    ONE: _1n3,
     allowedLengths,
     create: (num) => mod(num, ORDER),
     isValid: (num) => {
       if (typeof num !== "bigint")
         throw new Error("invalid field element: expected bigint, got " + typeof num);
-      return _0n2 <= num && num < ORDER;
+      return _0n3 <= num && num < ORDER;
     },
-    is0: (num) => num === _0n2,
+    is0: (num) => num === _0n3,
     // is valid and invertible
     isValidNot0: (num) => !f.is0(num) && f.isValid(num),
-    isOdd: (num) => (num & _1n2) === _1n2,
+    isOdd: (num) => (num & _1n3) === _1n3,
     neg: (num) => mod(-num, ORDER),
     eql: (lhs, rhs) => lhs === rhs,
     sqr: (num) => mod(num * num, ORDER),
@@ -2776,25 +2969,25 @@ function mapHashToField(key, fieldOrder, isLE2 = false) {
   if (len < 16 || len < minLen || len > 1024)
     throw new Error("expected " + minLen + "-1024 bytes of input, got " + len);
   const num = isLE2 ? bytesToNumberLE(key) : bytesToNumberBE(key);
-  const reduced = mod(num, fieldOrder - _1n2) + _1n2;
+  const reduced = mod(num, fieldOrder - _1n3) + _1n3;
   return isLE2 ? numberToBytesLE(reduced, fieldLen) : numberToBytesBE(reduced, fieldLen);
 }
-var _0n2, _1n2, _2n, _3n, _4n, _5n, _7n, _8n, _9n, _16n, isNegativeLE, FIELD_FIELDS;
+var _0n3, _1n3, _2n2, _3n, _4n, _5n, _7n2, _8n, _9n, _16n, isNegativeLE, FIELD_FIELDS;
 var init_modular = __esm({
   "../../node_modules/@noble/curves/esm/abstract/modular.js"() {
     "use strict";
     init_utils2();
-    _0n2 = BigInt(0);
-    _1n2 = BigInt(1);
-    _2n = /* @__PURE__ */ BigInt(2);
+    _0n3 = BigInt(0);
+    _1n3 = BigInt(1);
+    _2n2 = /* @__PURE__ */ BigInt(2);
     _3n = /* @__PURE__ */ BigInt(3);
     _4n = /* @__PURE__ */ BigInt(4);
     _5n = /* @__PURE__ */ BigInt(5);
-    _7n = /* @__PURE__ */ BigInt(7);
+    _7n2 = /* @__PURE__ */ BigInt(7);
     _8n = /* @__PURE__ */ BigInt(8);
     _9n = /* @__PURE__ */ BigInt(9);
     _16n = /* @__PURE__ */ BigInt(16);
-    isNegativeLE = (num, modulo) => (mod(num, modulo) & _1n2) === _1n2;
+    isNegativeLE = (num, modulo) => (mod(num, modulo) & _1n3) === _1n3;
     FIELD_FIELDS = [
       "create",
       "isValid",
@@ -2845,7 +3038,7 @@ function calcOffsets(n, window, wOpts) {
   let nextN = n >> shiftBy;
   if (wbits > windowSize) {
     wbits -= maxNumber;
-    nextN += _1n3;
+    nextN += _1n4;
   }
   const offsetStart = window * windowSize;
   const offset = offsetStart + Math.abs(wbits) - 1;
@@ -2875,21 +3068,21 @@ function getW(P) {
   return pointWindowSizes.get(P) || 1;
 }
 function assert0(n) {
-  if (n !== _0n3)
+  if (n !== _0n4)
     throw new Error("invalid wNAF");
 }
 function mulEndoUnsafe(Point, point, k1, k2) {
   let acc = point;
   let p1 = Point.ZERO;
   let p2 = Point.ZERO;
-  while (k1 > _0n3 || k2 > _0n3) {
-    if (k1 & _1n3)
+  while (k1 > _0n4 || k2 > _0n4) {
+    if (k1 & _1n4)
       p1 = p1.add(acc);
-    if (k2 & _1n3)
+    if (k2 & _1n4)
       p2 = p2.add(acc);
     acc = acc.double();
-    k1 >>= _1n3;
-    k2 >>= _1n3;
+    k1 >>= _1n4;
+    k2 >>= _1n4;
   }
   return { p1, p2 };
 }
@@ -2949,7 +3142,7 @@ function _createCurveFields(type, CURVE, curveOpts = {}, FpFnLE) {
     throw new Error(`expected valid ${type} CURVE object`);
   for (const p of ["p", "n", "h"]) {
     const val = CURVE[p];
-    if (!(typeof val === "bigint" && val > _0n3))
+    if (!(typeof val === "bigint" && val > _0n4))
       throw new Error(`CURVE.${p} must be positive bigint`);
   }
   const Fp2 = createField(CURVE.p, curveOpts.Fp, FpFnLE);
@@ -2963,14 +3156,14 @@ function _createCurveFields(type, CURVE, curveOpts = {}, FpFnLE) {
   CURVE = Object.freeze(Object.assign({}, CURVE));
   return { CURVE, Fp: Fp2, Fn: Fn2 };
 }
-var _0n3, _1n3, pointPrecomputes, pointWindowSizes, wNAF;
+var _0n4, _1n4, pointPrecomputes, pointWindowSizes, wNAF;
 var init_curve = __esm({
   "../../node_modules/@noble/curves/esm/abstract/curve.js"() {
     "use strict";
     init_utils2();
     init_modular();
-    _0n3 = BigInt(0);
-    _1n3 = BigInt(1);
+    _0n4 = BigInt(0);
+    _1n4 = BigInt(1);
     pointPrecomputes = /* @__PURE__ */ new WeakMap();
     pointWindowSizes = /* @__PURE__ */ new WeakMap();
     wNAF = class {
@@ -2984,11 +3177,11 @@ var init_curve = __esm({
       // non-const time multiplication ladder
       _unsafeLadder(elm, n, p = this.ZERO) {
         let d = elm;
-        while (n > _0n3) {
-          if (n & _1n3)
+        while (n > _0n4) {
+          if (n & _1n4)
             p = p.add(d);
           d = d.double();
-          n >>= _1n3;
+          n >>= _1n4;
         }
         return p;
       }
@@ -3052,7 +3245,7 @@ var init_curve = __esm({
       wNAFUnsafe(W, precomputes, n, acc = this.ZERO) {
         const wo = calcWOpts(W, this.bits);
         for (let window = 0; window < wo.windows; window++) {
-          if (n === _0n3)
+          if (n === _0n4)
             break;
           const { nextN, offset, isZero, isNeg } = calcOffsets(n, window, wo);
           n = nextN;
@@ -3117,19 +3310,19 @@ function edwards(params, extraOpts = {}) {
   let CURVE = validated.CURVE;
   const { h: cofactor } = CURVE;
   _validateObject(extraOpts, {}, { uvRatio: "function" });
-  const MASK = _2n2 << BigInt(Fn2.BYTES * 8) - _1n4;
+  const MASK = _2n3 << BigInt(Fn2.BYTES * 8) - _1n5;
   const modP = (n) => Fp2.create(n);
   const uvRatio2 = extraOpts.uvRatio || ((u, v) => {
     try {
       return { isValid: true, value: Fp2.sqrt(Fp2.div(u, v)) };
     } catch (e) {
-      return { isValid: false, value: _0n4 };
+      return { isValid: false, value: _0n5 };
     }
   });
   if (!isEdValidXY(Fp2, CURVE, CURVE.Gx, CURVE.Gy))
     throw new Error("bad curve params: generator point");
   function acoord(title, n, banZero = false) {
-    const min = banZero ? _1n4 : _0n4;
+    const min = banZero ? _1n5 : _0n5;
     aInRange("coordinate " + title, n, min, MASK);
     return n;
   }
@@ -3146,8 +3339,8 @@ function edwards(params, extraOpts = {}) {
     const y = modP(Y * iz);
     const zz = Fp2.mul(Z, iz);
     if (is0)
-      return { x: _0n4, y: _1n4 };
-    if (zz !== _1n4)
+      return { x: _0n5, y: _1n5 };
+    if (zz !== _1n5)
       throw new Error("invZ was invalid");
     return { x, y };
   });
@@ -3188,7 +3381,7 @@ function edwards(params, extraOpts = {}) {
       const { x, y } = p || {};
       acoord("x", x);
       acoord("y", y);
-      return new Point(x, y, _1n4, modP(x * y));
+      return new Point(x, y, _1n5, modP(x * y));
     }
     // Uses algo from RFC8032 5.1.3.
     static fromBytes(bytes, zip215 = false) {
@@ -3201,16 +3394,16 @@ function edwards(params, extraOpts = {}) {
       normed[len - 1] = lastByte & ~128;
       const y = bytesToNumberLE(normed);
       const max = zip215 ? MASK : Fp2.ORDER;
-      aInRange("point.y", y, _0n4, max);
+      aInRange("point.y", y, _0n5, max);
       const y2 = modP(y * y);
-      const u = modP(y2 - _1n4);
+      const u = modP(y2 - _1n5);
       const v = modP(d * y2 - a);
       let { isValid: isValid4, value: x } = uvRatio2(u, v);
       if (!isValid4)
         throw new Error("bad point: invalid y coordinate");
-      const isXOdd = (x & _1n4) === _1n4;
+      const isXOdd = (x & _1n5) === _1n5;
       const isLastByteOdd = (lastByte & 128) !== 0;
-      if (!zip215 && x === _0n4 && isLastByteOdd)
+      if (!zip215 && x === _0n5 && isLastByteOdd)
         throw new Error("bad point: x=0 and x_0=1");
       if (isLastByteOdd !== isXOdd)
         x = modP(-x);
@@ -3228,7 +3421,7 @@ function edwards(params, extraOpts = {}) {
     precompute(windowSize = 8, isLazy = true) {
       wnaf.createCache(this, windowSize);
       if (!isLazy)
-        this.multiply(_2n2);
+        this.multiply(_2n3);
       return this;
     }
     // Useful in fromAffine() - not for fromBytes(), which always created valid points.
@@ -3260,7 +3453,7 @@ function edwards(params, extraOpts = {}) {
       const { X: X1, Y: Y1, Z: Z1 } = this;
       const A = modP(X1 * X1);
       const B = modP(Y1 * Y1);
-      const C = modP(_2n2 * modP(Z1 * Z1));
+      const C = modP(_2n3 * modP(Z1 * Z1));
       const D = modP(a * A);
       const x1y1 = X1 + Y1;
       const E = modP(modP(x1y1 * x1y1) - A - B);
@@ -3313,9 +3506,9 @@ function edwards(params, extraOpts = {}) {
     multiplyUnsafe(scalar, acc = Point.ZERO) {
       if (!Fn2.isValid(scalar))
         throw new Error("invalid scalar: expected 0 <= sc < curve.n");
-      if (scalar === _0n4)
+      if (scalar === _0n5)
         return Point.ZERO;
-      if (this.is0() || scalar === _1n4)
+      if (this.is0() || scalar === _1n5)
         return this;
       return wnaf.unsafe(this, scalar, (p) => normalizeZ(Point, p), acc);
     }
@@ -3337,14 +3530,14 @@ function edwards(params, extraOpts = {}) {
       return toAffineMemo(this, invertedZ);
     }
     clearCofactor() {
-      if (cofactor === _1n4)
+      if (cofactor === _1n5)
         return this;
       return this.multiplyUnsafe(cofactor);
     }
     toBytes() {
       const { x, y } = this.toAffine();
       const bytes = Fp2.toBytes(y);
-      bytes[bytes.length - 1] |= x & _1n4 ? 128 : 0;
+      bytes[bytes.length - 1] |= x & _1n5 ? 128 : 0;
       return bytes;
     }
     toHex() {
@@ -3379,8 +3572,8 @@ function edwards(params, extraOpts = {}) {
       return this.toBytes();
     }
   }
-  Point.BASE = new Point(CURVE.Gx, CURVE.Gy, _1n4, modP(CURVE.Gx * CURVE.Gy));
-  Point.ZERO = new Point(_0n4, _1n4, _1n4, _0n4);
+  Point.BASE = new Point(CURVE.Gx, CURVE.Gy, _1n5, modP(CURVE.Gx * CURVE.Gy));
+  Point.ZERO = new Point(_0n5, _1n5, _1n5, _0n5);
   Point.Fp = Fp2;
   Point.Fn = Fn2;
   const wnaf = new wNAF(Point, Fn2.BITS);
@@ -3518,7 +3711,7 @@ function eddsa(Point, cHash, eddsaOpts = {}) {
       const is25519 = size === 32;
       if (!is25519 && size !== 57)
         throw new Error("only defined for 25519 and 448");
-      const u = is25519 ? Fp2.div(_1n4 + y, _1n4 - y) : Fp2.div(y - _1n4, y + _1n4);
+      const u = is25519 ? Fp2.div(_1n5 + y, _1n5 - y) : Fp2.div(y - _1n5, y + _1n5);
       return Fp2.toBytes(u);
     },
     toMontgomerySecret(secretKey) {
@@ -3582,16 +3775,16 @@ function twistedEdwards(c) {
   const EDDSA = eddsa(Point, hash, eddsaOpts);
   return _eddsa_new_output_to_legacy(c, EDDSA);
 }
-var _0n4, _1n4, _2n2, _8n2, PrimeEdwardsPoint;
+var _0n5, _1n5, _2n3, _8n2, PrimeEdwardsPoint;
 var init_edwards = __esm({
   "../../node_modules/@noble/curves/esm/abstract/edwards.js"() {
     "use strict";
     init_utils2();
     init_curve();
     init_modular();
-    _0n4 = BigInt(0);
-    _1n4 = BigInt(1);
-    _2n2 = BigInt(2);
+    _0n5 = BigInt(0);
+    _1n5 = BigInt(1);
+    _2n3 = BigInt(2);
     _8n2 = BigInt(8);
     PrimeEdwardsPoint = class {
       constructor(ep) {
@@ -3669,8 +3862,8 @@ function ed25519_pow_2_252_3(x) {
   const P = ed25519_CURVE_p;
   const x2 = x * x % P;
   const b2 = x2 * x % P;
-  const b4 = pow2(b2, _2n3, P) * b2 % P;
-  const b5 = pow2(b4, _1n5, P) * x % P;
+  const b4 = pow2(b2, _2n4, P) * b2 % P;
+  const b5 = pow2(b4, _1n6, P) * x % P;
   const b10 = pow2(b5, _5n2, P) * b5 % P;
   const b20 = pow2(b10, _10n, P) * b10 % P;
   const b40 = pow2(b20, _20n, P) * b20 % P;
@@ -3678,7 +3871,7 @@ function ed25519_pow_2_252_3(x) {
   const b160 = pow2(b80, _80n, P) * b80 % P;
   const b240 = pow2(b160, _80n, P) * b80 % P;
   const b250 = pow2(b240, _10n, P) * b10 % P;
-  const pow_p_5_8 = pow2(b250, _2n3, P) * x % P;
+  const pow_p_5_8 = pow2(b250, _2n4, P) * x % P;
   return { pow_p_5_8, b2 };
 }
 function adjustScalarBytes(bytes) {
@@ -3712,7 +3905,7 @@ function calcElligatorRistrettoMap(r0) {
   const P = ed25519_CURVE_p;
   const mod2 = (n) => Fp.create(n);
   const r = mod2(SQRT_M1 * r0 * r0);
-  const Ns = mod2((r + _1n5) * ONE_MINUS_D_SQ);
+  const Ns = mod2((r + _1n6) * ONE_MINUS_D_SQ);
   let c = BigInt(-1);
   const D = mod2((c - d * r) * mod2(r + d));
   let { isValid: Ns_D_is_sq, value: s } = uvRatio(Ns, D);
@@ -3723,12 +3916,12 @@ function calcElligatorRistrettoMap(r0) {
     s = s_;
   if (!Ns_D_is_sq)
     c = r;
-  const Nt = mod2(c * (r - _1n5) * D_MINUS_ONE_SQ - D);
+  const Nt = mod2(c * (r - _1n6) * D_MINUS_ONE_SQ - D);
   const s2 = s * s;
   const W0 = mod2((s + s) * D);
   const W1 = mod2(Nt * SQRT_AD_MINUS_ONE);
-  const W2 = mod2(_1n5 - s2);
-  const W3 = mod2(_1n5 + s2);
+  const W2 = mod2(_1n6 - s2);
+  const W3 = mod2(_1n6 + s2);
   return new ed25519.Point(mod2(W0 * W3), mod2(W2 * W1), mod2(W1 * W3), mod2(W0 * W2));
 }
 function ristretto255_map(bytes) {
@@ -3739,7 +3932,7 @@ function ristretto255_map(bytes) {
   const R2 = calcElligatorRistrettoMap(r2);
   return new _RistrettoPoint(R1.add(R2));
 }
-var _0n5, _1n5, _2n3, _3n2, _5n2, _8n3, ed25519_CURVE_p, ed25519_CURVE, ED25519_SQRT_M1, Fp, Fn, ed25519Defaults, ed25519, SQRT_M1, SQRT_AD_MINUS_ONE, INVSQRT_A_MINUS_D, ONE_MINUS_D_SQ, D_MINUS_ONE_SQ, invertSqrt, MAX_255B, bytes255ToNumberLE, _RistrettoPoint;
+var _0n6, _1n6, _2n4, _3n2, _5n2, _8n3, ed25519_CURVE_p, ed25519_CURVE, ED25519_SQRT_M1, Fp, Fn, ed25519Defaults, ed25519, SQRT_M1, SQRT_AD_MINUS_ONE, INVSQRT_A_MINUS_D, ONE_MINUS_D_SQ, D_MINUS_ONE_SQ, invertSqrt, MAX_255B, bytes255ToNumberLE, _RistrettoPoint;
 var init_ed25519 = __esm({
   "../../node_modules/@noble/curves/esm/ed25519.js"() {
     "use strict";
@@ -3749,9 +3942,9 @@ var init_ed25519 = __esm({
     init_edwards();
     init_modular();
     init_utils2();
-    _0n5 = /* @__PURE__ */ BigInt(0);
-    _1n5 = BigInt(1);
-    _2n3 = BigInt(2);
+    _0n6 = /* @__PURE__ */ BigInt(0);
+    _1n6 = BigInt(1);
+    _2n4 = BigInt(2);
     _3n2 = BigInt(3);
     _5n2 = BigInt(5);
     _8n3 = BigInt(8);
@@ -3784,7 +3977,7 @@ var init_ed25519 = __esm({
     INVSQRT_A_MINUS_D = /* @__PURE__ */ BigInt("54469307008909316920995813868745141605393597292927456921205312896311721017578");
     ONE_MINUS_D_SQ = /* @__PURE__ */ BigInt("1159843021668779879193775521855586647937357759715417654439879720876111806838");
     D_MINUS_ONE_SQ = /* @__PURE__ */ BigInt("40440834346308536858101042469323190826248399146238708352240133220865137265952");
-    invertSqrt = (number) => uvRatio(_1n5, number);
+    invertSqrt = (number) => uvRatio(_1n6, number);
     MAX_255B = /* @__PURE__ */ BigInt("0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
     bytes255ToNumberLE = (bytes) => ed25519.Point.Fp.create(bytesToNumberLE(bytes) & MAX_255B);
     _RistrettoPoint = class __RistrettoPoint extends PrimeEdwardsPoint {
@@ -3802,8 +3995,8 @@ var init_ed25519 = __esm({
         return new __RistrettoPoint(ep);
       }
       /** @deprecated use `import { ristretto255_hasher } from '@noble/curves/ed25519.js';` */
-      static hashToCurve(hex3) {
-        return ristretto255_map(ensureBytes("ristrettoHash", hex3, 64));
+      static hashToCurve(hex4) {
+        return ristretto255_map(ensureBytes("ristrettoHash", hex4, 64));
       }
       static fromBytes(bytes) {
         abytes(bytes, 32);
@@ -3814,8 +4007,8 @@ var init_ed25519 = __esm({
         if (!equalBytes(Fp.toBytes(s), bytes) || isNegativeLE(s, P))
           throw new Error("invalid ristretto255 encoding 1");
         const s2 = mod2(s * s);
-        const u1 = mod2(_1n5 + a * s2);
-        const u2 = mod2(_1n5 - a * s2);
+        const u1 = mod2(_1n6 + a * s2);
+        const u2 = mod2(_1n6 - a * s2);
         const u1_2 = mod2(u1 * u1);
         const u2_2 = mod2(u2 * u2);
         const v = mod2(a * d * u1_2 - u2_2);
@@ -3827,17 +4020,17 @@ var init_ed25519 = __esm({
           x = mod2(-x);
         const y = mod2(u1 * Dy);
         const t = mod2(x * y);
-        if (!isValid4 || isNegativeLE(t, P) || y === _0n5)
+        if (!isValid4 || isNegativeLE(t, P) || y === _0n6)
           throw new Error("invalid ristretto255 encoding 2");
-        return new __RistrettoPoint(new ed25519.Point(x, y, _1n5, t));
+        return new __RistrettoPoint(new ed25519.Point(x, y, _1n6, t));
       }
       /**
        * Converts ristretto-encoded string to ristretto point.
        * Described in [RFC9496](https://www.rfc-editor.org/rfc/rfc9496#name-decode).
        * @param hex Ristretto-encoded 32 bytes. Not every 32-byte string is valid ristretto encoding
        */
-      static fromHex(hex3) {
-        return __RistrettoPoint.fromBytes(ensureBytes("ristrettoHex", hex3, 32));
+      static fromHex(hex4) {
+        return __RistrettoPoint.fromBytes(ensureBytes("ristrettoHex", hex4, 32));
       }
       static msm(points, scalars) {
         return pippenger(__RistrettoPoint, ed25519.Point.Fn, points, scalars);
@@ -13009,14 +13202,14 @@ function _splitEndoScalar(k, basis, n) {
   const c2 = divNearest(-b1 * k, n);
   let k1 = k - c1 * a1 - c2 * a2;
   let k2 = -c1 * b1 - c2 * b2;
-  const k1neg = k1 < _0n6;
-  const k2neg = k2 < _0n6;
+  const k1neg = k1 < _0n7;
+  const k2neg = k2 < _0n7;
   if (k1neg)
     k1 = -k1;
   if (k2neg)
     k2 = -k2;
-  const MAX_NUM = bitMask(Math.ceil(bitLen(n) / 2)) + _1n6;
-  if (k1 < _0n6 || k1 >= MAX_NUM || k2 < _0n6 || k2 >= MAX_NUM) {
+  const MAX_NUM = bitMask(Math.ceil(bitLen(n) / 2)) + _1n7;
+  if (k1 < _0n7 || k1 >= MAX_NUM || k2 < _0n7 || k2 >= MAX_NUM) {
     throw new Error("splitScalar (endomorphism): failed, k=" + k);
   }
   return { k1neg, k1, k2neg, k2 };
@@ -13222,8 +13415,8 @@ function weierstrassN(params, extraOpts = {}) {
       P.assertValidity();
       return P;
     }
-    static fromHex(hex3) {
-      return Point.fromBytes(ensureBytes("pointHex", hex3));
+    static fromHex(hex4) {
+      return Point.fromBytes(ensureBytes("pointHex", hex4));
     }
     get x() {
       return this.toAffine().x;
@@ -13406,9 +13599,9 @@ function weierstrassN(params, extraOpts = {}) {
       const p = this;
       if (!Fn2.isValid(sc))
         throw new Error("invalid scalar: out of range");
-      if (sc === _0n6 || p.is0())
+      if (sc === _0n7 || p.is0())
         return Point.ZERO;
-      if (sc === _1n6)
+      if (sc === _1n7)
         return p;
       if (wnaf.hasCache(this))
         return this.multiply(sc);
@@ -13437,7 +13630,7 @@ function weierstrassN(params, extraOpts = {}) {
      */
     isTorsionFree() {
       const { isTorsionFree } = extraOpts;
-      if (cofactor === _1n6)
+      if (cofactor === _1n7)
         return true;
       if (isTorsionFree)
         return isTorsionFree(Point, this);
@@ -13445,7 +13638,7 @@ function weierstrassN(params, extraOpts = {}) {
     }
     clearCofactor() {
       const { clearCofactor } = extraOpts;
-      if (cofactor === _1n6)
+      if (cofactor === _1n7)
         return this;
       if (clearCofactor)
         return clearCofactor(Point, this);
@@ -13603,7 +13796,7 @@ function ecdsa(Point, hash, ecdsaOpts = {}) {
   };
   const defaultSigOpts_format = "compact";
   function isBiggerThanHalfOrder(number) {
-    const HALF = CURVE_ORDER >> _1n6;
+    const HALF = CURVE_ORDER >> _1n7;
     return number > HALF;
   }
   function validateRS(title, num) {
@@ -13642,8 +13835,8 @@ function ecdsa(Point, hash, ecdsaOpts = {}) {
       const s = bytes.subarray(L, L * 2);
       return new Signature(Fn2.fromBytes(r), Fn2.fromBytes(s), recid);
     }
-    static fromHex(hex3, format5) {
-      return this.fromBytes(hexToBytes(hex3), format5);
+    static fromHex(hex4, format5) {
+      return this.fromBytes(hexToBytes(hex4), format5);
     }
     addRecoveryBit(recovery) {
       return new Signature(this.r, this.s, recovery);
@@ -13653,7 +13846,7 @@ function ecdsa(Point, hash, ecdsaOpts = {}) {
       const { r, s, recovery: rec } = this;
       if (rec == null || ![0, 1, 2, 3].includes(rec))
         throw new Error("recovery id invalid");
-      const hasCofactor = CURVE_ORDER * _2n4 < FIELD_ORDER;
+      const hasCofactor = CURVE_ORDER * _2n5 < FIELD_ORDER;
       if (hasCofactor && rec > 1)
         throw new Error("recovery id is ambiguous for h>1 curve");
       const radj = rec === 2 || rec === 3 ? r + CURVE_ORDER : r;
@@ -13694,11 +13887,11 @@ function ecdsa(Point, hash, ecdsaOpts = {}) {
     // TODO: remove
     assertValidity() {
     }
-    static fromCompact(hex3) {
-      return Signature.fromBytes(ensureBytes("sig", hex3), "compact");
+    static fromCompact(hex4) {
+      return Signature.fromBytes(ensureBytes("sig", hex4), "compact");
     }
-    static fromDER(hex3) {
-      return Signature.fromBytes(ensureBytes("sig", hex3), "der");
+    static fromDER(hex4) {
+      return Signature.fromBytes(ensureBytes("sig", hex4), "der");
     }
     normalizeS() {
       return this.hasHighS() ? new Signature(this.r, Fn2.neg(this.s), this.recovery) : this;
@@ -13728,7 +13921,7 @@ function ecdsa(Point, hash, ecdsaOpts = {}) {
   };
   const ORDER_MASK = bitMask(fnBits);
   function int2octets(num) {
-    aInRange("num < 2^" + fnBits, num, _0n6, ORDER_MASK);
+    aInRange("num < 2^" + fnBits, num, _0n7, ORDER_MASK);
     return Fn2.toBytes(num);
   }
   function validateMsgAndHash(message, prehash) {
@@ -13756,12 +13949,12 @@ function ecdsa(Point, hash, ecdsaOpts = {}) {
       const ik = Fn2.inv(k);
       const q = Point.BASE.multiply(k).toAffine();
       const r = Fn2.create(q.x);
-      if (r === _0n6)
+      if (r === _0n7)
         return;
       const s = Fn2.create(ik * Fn2.create(m + r * d));
-      if (s === _0n6)
+      if (s === _0n7)
         return;
-      let recovery = (q.x === r ? 0 : 2) | Number(q.y & _1n6);
+      let recovery = (q.x === r ? 0 : 2) | Number(q.y & _1n7);
       let normS = s;
       if (lowS && isBiggerThanHalfOrder(s)) {
         normS = Fn2.neg(s);
@@ -13904,7 +14097,7 @@ function weierstrass(c) {
   const signs = ecdsa(Point, hash, ecdsaOpts);
   return _ecdsa_new_output_to_legacy(c, signs);
 }
-var divNearest, DERErr, DER, _0n6, _1n6, _2n4, _3n3, _4n2;
+var divNearest, DERErr, DER, _0n7, _1n7, _2n5, _3n3, _4n2;
 var init_weierstrass = __esm({
   "../../node_modules/@noble/curves/esm/abstract/weierstrass.js"() {
     "use strict";
@@ -13913,7 +14106,7 @@ var init_weierstrass = __esm({
     init_utils2();
     init_curve();
     init_modular();
-    divNearest = (num, den) => (num + (num >= 0 ? den : -den) / _2n4) / den;
+    divNearest = (num, den) => (num + (num >= 0 ? den : -den) / _2n5) / den;
     DERErr = class extends Error {
       constructor(m = "") {
         super(m);
@@ -13981,14 +14174,14 @@ var init_weierstrass = __esm({
       _int: {
         encode(num) {
           const { Err: E } = DER;
-          if (num < _0n6)
+          if (num < _0n7)
             throw new E("integer: negative integers are not allowed");
-          let hex3 = numberToHexUnpadded(num);
-          if (Number.parseInt(hex3[0], 16) & 8)
-            hex3 = "00" + hex3;
-          if (hex3.length & 1)
+          let hex4 = numberToHexUnpadded(num);
+          if (Number.parseInt(hex4[0], 16) & 8)
+            hex4 = "00" + hex4;
+          if (hex4.length & 1)
             throw new E("unexpected DER parsing assertion: unpadded hex");
-          return hex3;
+          return hex4;
         },
         decode(data) {
           const { Err: E } = DER;
@@ -13999,9 +14192,9 @@ var init_weierstrass = __esm({
           return bytesToNumberBE(data);
         }
       },
-      toSig(hex3) {
+      toSig(hex4) {
         const { Err: E, _int: int, _tlv: tlv } = DER;
-        const data = ensureBytes("signature", hex3);
+        const data = ensureBytes("signature", hex4);
         const { v: seqBytes, l: seqLeftBytes } = tlv.decode(48, data);
         if (seqLeftBytes.length)
           throw new E("invalid signature: left bytes after parsing");
@@ -14019,9 +14212,9 @@ var init_weierstrass = __esm({
         return tlv.encode(48, seq);
       }
     };
-    _0n6 = BigInt(0);
-    _1n6 = BigInt(1);
-    _2n4 = BigInt(2);
+    _0n7 = BigInt(0);
+    _1n7 = BigInt(1);
+    _2n5 = BigInt(2);
     _3n3 = BigInt(3);
     _4n2 = BigInt(4);
   }
@@ -15073,8 +15266,13 @@ var init_links = __esm({
       permissions: external_exports2.array(permission).min(1),
       reason: external_exports2.string().optional(),
       grantLifetimeSeconds: external_exports2.number().int().positive(),
-      resultEncryptionPublicJwk: p256Jwk
-    }).strict();
+      resultEncryptionPublicJwk: p256Jwk,
+      /**
+       * The lifetime the requester suggests approving, in seconds. Absent means the maximum, `grantLifetimeSeconds`. When present it is at most that
+       * maximum; it has no upper bound of its own, and the approver may still choose less.
+       */
+      suggestedLifetimeSeconds: external_exports2.number().int().positive().optional()
+    }).strict().refine((request) => request.suggestedLifetimeSeconds === void 0 || request.suggestedLifetimeSeconds <= request.grantLifetimeSeconds);
     DEFAULT_TIMEOUT_MS = 1e4;
     MAX_JSON_RESPONSE_BYTES = 4096;
     AUDIENCE_ORIGIN = /^https:\/\/[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]{1,5})?$/;
@@ -20844,6 +21042,8 @@ init_blake3();
 init_ed25519();
 init_sha256();
 init_sha256();
+init_sha256();
+init_sha3();
 var __defProp3 = Object.defineProperty;
 var __export3 = (target, all) => {
   for (var name in all)
@@ -26978,6 +27178,197 @@ var SharePublishError = class extends Error {
     this.code = code32;
   }
 };
+var AddressedContentSourceError = class extends TypeError {
+  code;
+  constructor(code32, message) {
+    super(message);
+    this.name = "AddressedContentSourceError";
+    this.code = code32;
+  }
+};
+var SHARE_ID = /^[a-z0-9][a-z0-9_-]{15,63}$/;
+var NETWORK = /^urn:tinycloud:encryption:(.+):default$/;
+var OWNER_PKH = /^did:pkh:eip155:([1-9][0-9]*):(0x[0-9a-fA-F]{40})$/;
+var OWNER_KEY = /^did:key:[A-Za-z0-9]+$/;
+var ENVELOPE_FIELDS = ["v", "networkId", "keyPath", "alg", "keyVersion", "encryptedSymmetricKey", "encryptedSymmetricKeyHash", "ciphertext", "aad", "metadata"];
+var ENVELOPE_ALG = "x25519-aes256gcm/v1";
+var HEX_DIGEST = /^[0-9a-f]{64}$/;
+var BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+var textEncoder = new TextEncoder();
+function hex2(bytes3) {
+  return [...bytes3].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+function checksumAddress(address) {
+  const lower = address.toLowerCase().slice(2);
+  const hash = keccak_256(textEncoder.encode(lower));
+  let out = "0x";
+  for (let index = 0; index < lower.length; index++) {
+    const nibble = hash[index >> 1] >> (index % 2 === 0 ? 4 : 0) & 15;
+    out += nibble >= 8 ? lower[index].toUpperCase() : lower[index];
+  }
+  return out;
+}
+function pathBoundKeyPath(shareId) {
+  if (typeof shareId !== "string" || !SHARE_ID.test(shareId)) {
+    throw new AddressedContentSourceError("share-id-invalid", "addressed share id is invalid: 16 to 64 characters from lowercase letters, digits, '_' and '-', starting with a letter or digit (a lowercase UUID, hyphens included, is valid)");
+  }
+  return `share/${shareId}`;
+}
+function assertEncryptionNetwork(network) {
+  const match = typeof network === "string" ? NETWORK.exec(network) : null;
+  if (match === null) {
+    throw new AddressedContentSourceError("network-invalid", "encryption network must be the owner's default network: urn:tinycloud:encryption:<did>:default");
+  }
+  const owner = match[1];
+  const pkh = OWNER_PKH.exec(owner);
+  if (pkh !== null) {
+    if (pkh[2] !== checksumAddress(pkh[2])) {
+      throw new AddressedContentSourceError("network-not-checksummed", "encryption network address must be EIP-55 checksummed; use defaultEncryptionNetworkForOwner(ownerDid)");
+    }
+  } else if (!OWNER_KEY.test(owner)) {
+    throw new AddressedContentSourceError("network-invalid", "encryption network owner must be a did:pkh:eip155 address or a did:key");
+  }
+  return network;
+}
+var assertNetwork = assertEncryptionNetwork;
+function decodeWrappedKey(encryptedSymmetricKey) {
+  if (typeof encryptedSymmetricKey !== "string" || !BASE64.test(encryptedSymmetricKey)) {
+    throw new AddressedContentSourceError("envelope-invalid", "wrapped content key is not strict base64");
+  }
+  try {
+    return fromBase64Url3(encryptedSymmetricKey.replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_"));
+  } catch {
+    throw new AddressedContentSourceError("envelope-invalid", "wrapped content key is not strict base64");
+  }
+}
+function decodeBase64(value) {
+  try {
+    return fromBase64Url3(value.replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_"));
+  } catch {
+    throw new AddressedContentSourceError("envelope-invalid", "envelope field is not strict base64");
+  }
+}
+function wrappedKeyDigestHex(encryptedSymmetricKey) {
+  return hex2(sha2562(decodeWrappedKey(encryptedSymmetricKey)));
+}
+function canonicalKeyHashHex(encryptedSymmetricKey) {
+  return hex2(sha2562(textEncoder.encode(canonicalize3(encryptedSymmetricKey))));
+}
+function pathBoundSessionPermissions(input) {
+  const encryptionNetwork = assertNetwork(input.encryptionNetwork);
+  return [{ service: "tinycloud.encryption", path: `${encryptionNetwork}/share/`, actions: ["tinycloud.encryption/decrypt", "tinycloud.encryption/key.create"] }];
+}
+function planPathBoundShare(input) {
+  const keyPath = pathBoundKeyPath(input.shareId);
+  const encryptionNetwork = assertNetwork(input.encryptionNetwork);
+  const keyResource = `${encryptionNetwork}/${keyPath}`;
+  return {
+    shareId: input.shareId,
+    encryptionNetwork,
+    keyPath,
+    keyResource,
+    requiredPermissions: [{ service: "tinycloud.encryption", path: keyResource, actions: ["tinycloud.encryption/key.create"] }],
+    sessionPermissions: pathBoundSessionPermissions({ encryptionNetwork }),
+    registrationPermissions: [{ service: "tinycloud.encryption", path: `${encryptionNetwork}/share/`, actions: ["tinycloud.encryption/decrypt"] }],
+    encryptOptions: (extra) => ({ networkId: encryptionNetwork, ...extra?.metadata === void 0 ? {} : { metadata: { ...extra.metadata } } })
+  };
+}
+function pathBoundStoredBytes(envelope) {
+  return textEncoder.encode(canonicalize3(envelope));
+}
+function assertEnvelope(plan, envelope) {
+  if (envelope === null || typeof envelope !== "object" || envelope.v !== 2) {
+    throw new AddressedContentSourceError("envelope-invalid", "path-bound content must be a v2 named-key envelope (encrypt with keys.encrypt, not encryptToNetwork)");
+  }
+  if (envelope.networkId !== plan.encryptionNetwork || envelope.keyPath !== plan.keyPath) {
+    throw new AddressedContentSourceError("key-path-mismatch", "envelope network or key path does not match the share's plan");
+  }
+  if (!Number.isSafeInteger(envelope.keyVersion) || envelope.keyVersion < 1) {
+    throw new AddressedContentSourceError("envelope-invalid", "envelope key version is invalid");
+  }
+  wrappedKeyDigestHex(envelope.encryptedSymmetricKey);
+  if (envelope.encryptedSymmetricKeyHash !== canonicalKeyHashHex(envelope.encryptedSymmetricKey)) {
+    throw new AddressedContentSourceError("envelope-invalid", "envelope key hash does not match its wrapped key");
+  }
+  const record2 = envelope;
+  if (Object.keys(record2).some((key) => !ENVELOPE_FIELDS.includes(key)) || record2.alg !== ENVELOPE_ALG) {
+    throw new AddressedContentSourceError("envelope-invalid", "envelope has a field or algorithm the recipient does not accept");
+  }
+  if (typeof record2.ciphertext !== "string" || !BASE64.test(record2.ciphertext) || decodeBase64(record2.ciphertext).length < 28) {
+    throw new AddressedContentSourceError("envelope-invalid", "envelope ciphertext is not strict base64 of at least 28 bytes");
+  }
+  if (record2.aad !== void 0 && (typeof record2.aad !== "string" || !BASE64.test(record2.aad))) {
+    throw new AddressedContentSourceError("envelope-invalid", "envelope aad is not strict base64");
+  }
+  if (record2.metadata !== void 0 && (record2.metadata === null || typeof record2.metadata !== "object" || Array.isArray(record2.metadata) || Object.values(record2.metadata).some((entry) => typeof entry !== "string"))) {
+    throw new AddressedContentSourceError("envelope-invalid", "envelope metadata must be an object of strings");
+  }
+}
+function bindPathBoundContentSource(input) {
+  const { plan, envelope } = input;
+  assertEnvelope(plan, envelope);
+  const expected = pathBoundStoredBytes(envelope);
+  if (input.storedBytes.length !== expected.length || input.storedBytes.some((byte, index) => byte !== expected[index])) {
+    throw new AddressedContentSourceError("stored-bytes-mismatch", "uploaded bytes are not the canonical v2 envelope; upload pathBoundStoredBytes(envelope)");
+  }
+  return {
+    shareId: plan.shareId,
+    kvResource: input.kvResource,
+    selector: input.selector,
+    encryptionNetwork: plan.encryptionNetwork,
+    encryptionKeyPath: plan.keyPath,
+    encryptedSymmetricKeyDigestHex: wrappedKeyDigestHex(envelope.encryptedSymmetricKey),
+    keyVersion: envelope.keyVersion,
+    mode: "immutable",
+    initialCiphertextDigestHex: hex2(sha2562(expected))
+  };
+}
+function isUnauthorized(error) {
+  const value = error;
+  return value !== null && typeof value === "object" && (value.status === 401 || value.status === 403 || value.code === "PERMISSION_DENIED" || value.code === "AUTH_UNAUTHORIZED");
+}
+async function encryptAddressedShareContent(input) {
+  const { plan, keys } = input;
+  const byteLength = input.plaintext.byteLength;
+  let receipt;
+  try {
+    receipt = await keys.createKey(plan.keyPath, { networkId: plan.encryptionNetwork });
+  } catch (error) {
+    if (isUnauthorized(error)) {
+      const status = error.status;
+      throw new AddressedContentSourceError(
+        "key-not-authorized",
+        `the owner session does not hold tinycloud.encryption/key.create on ${plan.keyResource} (the node answers "Unauthorized Action: ${plan.keyResource} / tinycloud.encryption/key.create"); hold it either at sign-in (put plan.sessionPermissions in the manifest: key.create on ${plan.encryptionNetwork}/share/) or per share (requestPermissions(plan.requiredPermissions)) before creating the key` + (status === 403 ? "; if the owner signs in through OpenKey, the request must come from a first-party TinyCloud origin" : "")
+      );
+    }
+    throw error;
+  }
+  if (receipt.networkId !== plan.encryptionNetwork || receipt.keyPath !== plan.keyPath || receipt.state !== void 0 && receipt.state !== "active") {
+    throw new AddressedContentSourceError("key-receipt-mismatch", "the created key does not match this share");
+  }
+  const envelope = await keys.encrypt(plan.keyPath, input.plaintext, plan.encryptOptions(input.metadata === void 0 ? void 0 : { metadata: input.metadata }));
+  assertEnvelope(plan, envelope);
+  if (receipt.keyVersion !== void 0 && envelope.keyVersion !== receipt.keyVersion) {
+    throw new AddressedContentSourceError("key-receipt-mismatch", "the envelope key version does not match the created key");
+  }
+  const storedBytes = pathBoundStoredBytes(envelope);
+  return { envelope, storedBytes, byteLength };
+}
+function assertPathBoundContentSource(source, shareId) {
+  if (source === void 0 || source === null || typeof source !== "object") {
+    throw new AddressedContentSourceError("key-path-required", "addressed content source is missing");
+  }
+  if (source.encryptionKeyPath === void 0) {
+    throw new AddressedContentSourceError("key-path-required", "addressed content source must name its key (encryptionKeyPath: share/<shareId>); a network-wide source is not accepted");
+  }
+  if (source.encryptionKeyPath !== pathBoundKeyPath(shareId)) {
+    throw new AddressedContentSourceError("key-path-mismatch", "addressed content source key path must be share/<shareId> of this share");
+  }
+  if (typeof source.encryptedSymmetricKeyDigestHex !== "string" || !HEX_DIGEST.test(source.encryptedSymmetricKeyDigestHex)) {
+    throw new AddressedContentSourceError("digest-invalid", "addressed content source needs encryptedSymmetricKeyDigestHex: 64 lowercase hex characters");
+  }
+  assertEncryptionNetwork(source.encryptionNetwork);
+}
 function authorizationMethodForTarget(target) {
   if (target.kind === "recipientDid") return "openkey-device";
   if (target.kind === "email") return "email-claim";
@@ -27447,7 +27838,7 @@ var POLICY_CAPABILITY_V1_DOMAIN2 = "xyz.tinycloud.policy/PolicyCapability/v1\0";
 var CONTENT_SOURCE_V1_DOMAIN2 = "xyz.tinycloud.policy/ContentSource/v1\0";
 var NATIVE_PROJECTION_V1_DOMAIN2 = "xyz.tinycloud.policy/NativeProjection/v1\0";
 var ENVELOPE_V3_DOMAIN = "xyz.tinycloud.share/envelope/v3\0";
-var textEncoder = new TextEncoder();
+var textEncoder2 = new TextEncoder();
 function targetMatcher(target) {
   if (target.kind === "recipientDid") return { kind: "recipientDid", value: target.did };
   if (target.kind === "email") return { kind: "exactEmail", value: target.address };
@@ -27458,17 +27849,18 @@ function targetKind(target) {
 }
 var OWNER_SHARE_ACTIONS = /* @__PURE__ */ new Set(["tinycloud.kv/get", "tinycloud.kv/list", "tinycloud.kv/metadata", "tinycloud.kv/put"]);
 function assertSafeInput(input) {
-  if (!/^[A-Za-z0-9_-]{16,128}$/.test(input.shareId)) throw new TypeError("addressed share id is invalid");
+  pathBoundKeyPath(input.shareId);
+  assertPathBoundContentSource(input.contentSource, input.shareId);
   if (!Number.isSafeInteger(input.byteLength) || input.byteLength < 0 || input.byteLength > SHARE_CONTENT_LIMIT) throw new TypeError("addressed content length is invalid");
   if (!Number.isFinite(input.expiresAt.getTime()) || input.expiresAt.getTime() <= Date.now()) throw new TypeError("addressed share expiry must be in the future");
   if (input.artifact === "html" && (input.resource.kind !== "prefix" || !input.actions.includes("read") || !input.actions.includes("list"))) throw new TypeError("html artifacts require a readable prefix");
   if (input.contentSource.shareId !== input.shareId || input.contentSource.selector !== input.resource.kind) throw new TypeError("addressed content source is not bound to the share");
 }
-function hex2(bytes3) {
+function hex3(bytes3) {
   return [...bytes3].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 function digestHex(value, domain) {
-  return hex2(sha2562(textEncoder.encode(`${domain}${canonicalize3(value)}`)));
+  return hex3(sha2562(textEncoder2.encode(`${domain}${canonicalize3(value)}`)));
 }
 function sortCanonical(values) {
   return [...values].sort((left, right) => canonicalize3(left).localeCompare(canonicalize3(right)));
@@ -27512,19 +27904,20 @@ async function createPolicy(options, capabilities) {
   const unsigned = options.credentialRequirement === void 0 ? { schema: "xyz.tinycloud.policy/policy/v1", ...fields } : { schema: "xyz.tinycloud.policy/policy/v2", ...fields, credentialRequirement: options.credentialRequirement };
   const domain = options.credentialRequirement === void 0 ? POLICY_V1_DOMAIN : POLICY_V2_DOMAIN;
   const policyDigestHex = digestHex(unsigned, domain);
-  const signature = await options.authority.sign(sha2562(textEncoder.encode(`${domain}${canonicalize3(unsigned)}`)));
+  const signature = await options.authority.sign(sha2562(textEncoder2.encode(`${domain}${canonicalize3(unsigned)}`)));
   if (signature.byteLength !== 64) throw new TypeError("policy signature must be Ed25519");
   const policy = {
     ...unsigned,
     policyId: `pol_${base32Lower2(Uint8Array.from(policyDigestHex.match(/../g), (byte) => Number.parseInt(byte, 16)))}`,
     signature: { suite: "Ed25519", signerDid: options.authority.ownerDid, value: toBase64Url2(signature) }
   };
-  return { policy, policyCid: await computeCid2(textEncoder.encode(canonicalize3(policy))), policyDigestHex };
+  return { policy, policyCid: await computeCid2(textEncoder2.encode(canonicalize3(policy))), policyDigestHex };
 }
 function addressedPlan(options) {
   const capabilities = sortCanonical([
     { kind: "kv", resource: options.contentSource.kvResource, selector: options.resource.kind, actions: [...options.policyActions] },
-    { kind: "encryption", resource: options.contentSource.encryptionKeyPath === void 0 ? options.contentSource.encryptionNetwork : `${options.contentSource.encryptionNetwork}/${options.contentSource.encryptionKeyPath}`, action: "tinycloud.encryption/decrypt" }
+    // Only this share's one key: there is no network-scope capability.
+    { kind: "encryption", resource: `${options.contentSource.encryptionNetwork}/${options.contentSource.encryptionKeyPath}`, action: "tinycloud.encryption/decrypt" }
   ]);
   return {
     expiry: rfc3339Seconds(options.expiresAt),
@@ -27612,7 +28005,7 @@ function mailboxCredentialCommitment(target) {
   return {
     type: "TinyCloudPolicyCredentialRequirement",
     version: 1,
-    requirementDigest: toBase64Url2(sha2562(textEncoder.encode(canonicalize3(requirement)))),
+    requirementDigest: toBase64Url2(sha2562(textEncoder2.encode(canonicalize3(requirement)))),
     descriptorDigest: target.kind === "email" ? EMAIL_DESCRIPTOR_DIGEST : EMAIL_DOMAIN_DESCRIPTOR_DIGEST,
     issuerDid: EMAIL_CREDENTIAL_ISSUER_DID,
     issuerKid: EMAIL_CREDENTIAL_ISSUER_KID,
@@ -27702,11 +28095,11 @@ async function publishAddressedShare(input) {
     expiry
   });
   unsignedShareEnvelopeV3Schema2.parse(unsigned);
-  const envelopeSignature = await options.authority.sign(sha2562(textEncoder.encode(`${ENVELOPE_V3_DOMAIN}${canonicalize3(unsigned)}`)));
+  const envelopeSignature = await options.authority.sign(sha2562(textEncoder2.encode(`${ENVELOPE_V3_DOMAIN}${canonicalize3(unsigned)}`)));
   if (envelopeSignature.byteLength !== 64) throw new TypeError("v3 envelope signature must be Ed25519");
   const envelope = signedAddressedEnvelope(unsigned, options.authority.ownerDid, envelopeSignature);
   shareEnvelopeV3Schema2.parse(envelope);
-  const envelopeBytes = textEncoder.encode(canonicalize3(envelope));
+  const envelopeBytes = textEncoder2.encode(canonicalize3(envelope));
   const envelopeKeyBytes = generateKey2();
   const sealed = await seal2(envelopeBytes, envelopeKeyBytes);
   const envelopeKey = toBase64Url2(envelopeKeyBytes);
@@ -27786,7 +28179,7 @@ function rootAuthorizationBound(input) {
     nnc: "A".repeat(36),
     prf: []
   };
-  return `${toBase64Url2(textEncoder.encode(canonicalize3(header)))}.${toBase64Url2(textEncoder.encode(canonicalize3(payload)))}.${"A".repeat(86)}`;
+  return `${toBase64Url2(textEncoder2.encode(canonicalize3(header)))}.${toBase64Url2(textEncoder2.encode(canonicalize3(payload)))}.${"A".repeat(86)}`;
 }
 async function sealedBodyUpperBound(options) {
   const plan = addressedPlan(options);
@@ -27834,7 +28227,7 @@ async function sealedBodyUpperBound(options) {
     expiry: plan.expiry
   });
   const envelope = signedAddressedEnvelope(unsigned, options.ownerDid, signature);
-  return (await seal2(textEncoder.encode(canonicalize3(envelope)), generateKey2())).blob.length;
+  return (await seal2(textEncoder2.encode(canonicalize3(envelope)), generateKey2())).blob.length;
 }
 async function assertSealedBodyFits(options) {
   if (await sealedBodyUpperBound(options) > await linkBodyLimit()) throw new SharePublishError("max-bytes-exceeded", ADDRESSED_SHARE_TOO_LARGE_MESSAGE);
@@ -27844,12 +28237,15 @@ async function addressedShareBodyUpperBound(input) {
   const deliveryEmail = input.deliveryEmail ?? (target.kind === "email" && isEnvelopeDeliveryEmail(target.address) ? target.address : void 0);
   const artifactStorage = "artifactId" in input.storage ? input.storage : void 0;
   const path = "path" in input.storage ? input.storage.path : `${ARTIFACT_ROOT2}/${input.storage.artifactId}/versions/${Number.MAX_SAFE_INTEGER}/${input.storage.storageName}`;
+  const keyPath = pathBoundKeyPath(input.shareId);
+  assertEncryptionNetwork(input.encryptionNetwork);
+  if (input.encryptionKeyPath !== void 0 && input.encryptionKeyPath !== keyPath) throw new AddressedContentSourceError("key-path-mismatch", "addressed content source key path must be share/<shareId> of this share");
   const contentSource = {
     shareId: input.shareId,
     kvResource: `${input.spaceId}/kv/${path}`,
     selector: input.resource.kind,
     encryptionNetwork: input.encryptionNetwork,
-    ...input.encryptionKeyPath === void 0 ? {} : { encryptionKeyPath: input.encryptionKeyPath },
+    encryptionKeyPath: keyPath,
     encryptedSymmetricKeyDigestHex: "f".repeat(64),
     keyVersion: Number.MAX_SAFE_INTEGER,
     mode: "immutable",
@@ -30072,68 +30468,6 @@ var unsignedShareEnvelopeV3Schema3 = unsignedShareEnvelopeV3BaseSchema3.superRef
 var shareEnvelopeV3Schema3 = unsignedShareEnvelopeV3BaseSchema3.extend({ signature: signatureSchema3 }).strict().superRefine(validateV3Invariants3);
 var ENVELOPE_AAD_LABEL4 = "tinycloud-share-envelope-v1";
 var AAD4 = utf8Bytes4(ENVELOPE_AAD_LABEL4);
-function isPlainRecord4(value) {
-  const proto = Object.getPrototypeOf(value);
-  return proto === Object.prototype || proto === null;
-}
-function assertNoLoneSurrogates4(text) {
-  for (let i = 0; i < text.length; i++) {
-    const unit = text.charCodeAt(i);
-    if (unit >= 56320 && unit <= 57343) {
-      throw new TypeError(
-        `cannot canonicalize string with unpaired low surrogate at index ${i}`
-      );
-    }
-    if (unit >= 55296 && unit <= 56319) {
-      const next = text.charCodeAt(i + 1);
-      if (!(next >= 56320 && next <= 57343)) {
-        throw new TypeError(
-          `cannot canonicalize string with unpaired high surrogate at index ${i}`
-        );
-      }
-      i++;
-    }
-  }
-}
-function serializeString4(text) {
-  assertNoLoneSurrogates4(text);
-  return JSON.stringify(text);
-}
-function serialize4(value) {
-  if (value === null) return "null";
-  switch (typeof value) {
-    case "boolean":
-      return JSON.stringify(value);
-    case "string":
-      return serializeString4(value);
-    case "number":
-      if (!Number.isFinite(value)) {
-        throw new TypeError(`cannot canonicalize non-finite number: ${value}`);
-      }
-      return JSON.stringify(value);
-    case "object":
-      break;
-    default:
-      throw new TypeError(`cannot canonicalize value of type ${typeof value}`);
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => serialize4(item)).join(",")}]`;
-  }
-  if (!isPlainRecord4(value)) {
-    throw new TypeError("cannot canonicalize non-plain object");
-  }
-  const keys = Object.keys(value).sort();
-  const members = [];
-  for (const key of keys) {
-    const member = value[key];
-    if (member === void 0) continue;
-    members.push(`${serializeString4(key)}:${serialize4(member)}`);
-  }
-  return `{${members.join(",")}}`;
-}
-function canonicalize4(value) {
-  return serialize4(value);
-}
 var LABEL2 = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 function isCanonicalEmailDomain2(value) {
   if (value.length === 0 || value.length > 253) return false;
@@ -31182,11 +31516,9 @@ function createShareAuthorityAdapters(input = {}) {
       throw new TypeError("email credential descriptor and issuer are required");
     }
     const addressedEncryptionNetwork = targetInput.target.kind === "bearer" ? void 0 : targetInput.target.kind === "email" ? node.getDefaultEncryptionNetworkId() : node.getEncryptionNetworkIdForSpace(ownerSpaceId);
-    const emailKeyPath = targetInput.target.kind === "email" ? `share/${crypto.randomUUID().replaceAll("-", "")}` : void 0;
-    if (addressedEncryptionNetwork !== void 0 && node.isSessionOnly && !sessionHoldsEncryptionDecrypt(
-      node,
-      emailKeyPath === void 0 ? addressedEncryptionNetwork : `${addressedEncryptionNetwork}/${emailKeyPath}`
-    )) {
+    const shareId = crypto.randomUUID().replaceAll("-", "");
+    const pathPlan = addressedEncryptionNetwork === void 0 ? void 0 : planPathBoundShare({ shareId, encryptionNetwork: addressedEncryptionNetwork });
+    if (pathPlan !== void 0 && node.isSessionOnly && !sessionHoldsEncryptionDecrypt(node, pathPlan.keyResource)) {
       throw new SharePublishAuthorityError({ kind: "decrypt-not-held" });
     }
     const config = await publicConfig();
@@ -31195,7 +31527,6 @@ function createShareAuthorityAdapters(input = {}) {
     if (targetInput.notify === true && targetInput.target.kind === "emailDomain") {
       await assertDomainDeliveryForOrigin(activeNode.origin, "publish");
     }
-    const shareId = emailKeyPath?.slice("share/".length) ?? crypto.randomUUID().replaceAll("-", "");
     const files = targetInput.files === void 0 || targetInput.files.length === 0 ? [{ bytes: targetInput.source, filename: targetInput.filename, mediaType: targetInput.mediaType }] : targetInput.files;
     const resourceKind = targetInput.resourceKind ?? "exact";
     if (targetInput.target.kind === "bearer") {
@@ -31317,7 +31648,6 @@ function createShareAuthorityAdapters(input = {}) {
       resource: { kind: resourceKind },
       storage: artifact === void 0 ? { path: resourcePath } : { artifactId: artifact.id, storageName },
       encryptionNetwork: addressedEncryptionNetwork,
-      ...emailKeyPath === void 0 ? {} : { encryptionKeyPath: emailKeyPath },
       actions,
       policyActions,
       ...deliveryEmail === void 0 ? {} : { deliveryEmail },
@@ -31332,16 +31662,14 @@ function createShareAuthorityAdapters(input = {}) {
       const rejected = error instanceof LocationRecordValidationError || error instanceof LocationRegistryHttpError && error.status >= 400 && error.status < 500 && error.status !== 408 && error.status !== 429;
       throw new SharePublishAuthorityError({ kind: rejected ? "registry-rejected" : "registry-unavailable" });
     }
-    const encryptionNetwork = addressedEncryptionNetwork;
-    const encrypted = await node.encryption.encryptToNetwork(encryptionNetwork, file.bytes, {
-      ...emailKeyPath === void 0 ? {} : { keyPath: emailKeyPath },
+    const pathPlanForShare = pathPlan;
+    const encrypted = await encryptAddressedShareContent({
+      plan: pathPlanForShare,
+      keys: node.keys,
+      plaintext: file.bytes,
       metadata: { contentType: mediaType }
     });
-    if (!encrypted.ok) throw new Error("addressed source encryption was rejected");
-    if (emailKeyPath !== void 0 && (encrypted.data.networkId !== encryptionNetwork || encrypted.data.keyPath !== emailKeyPath)) {
-      throw new Error("email share encryption was rejected");
-    }
-    const storedBytes = new TextEncoder().encode(canonicalize4(encrypted.data));
+    const storedBytes = encrypted.storedBytes;
     let artifactVersion;
     if (artifact !== void 0) {
       artifactVersion = await storeArtifactVersion(node.kvForSpace(ownerSpaceId), {
@@ -31368,17 +31696,13 @@ function createShareAuthorityAdapters(input = {}) {
         throwKvUploadFailure(stored.error);
       }
     }
-    const contentSource = {
-      shareId,
+    const contentSource = bindPathBoundContentSource({
+      plan: pathPlanForShare,
+      envelope: encrypted.envelope,
+      storedBytes,
       kvResource: `${ownerSpaceId}/kv/${resourcePath}`,
-      selector: resourceKind,
-      encryptionNetwork: encrypted.data.networkId,
-      ...emailKeyPath === void 0 ? {} : { encryptionKeyPath: emailKeyPath },
-      encryptedSymmetricKeyDigestHex: encrypted.data.encryptedSymmetricKeyHash,
-      keyVersion: encrypted.data.keyVersion,
-      mode: "immutable",
-      initialCiphertextDigestHex: createHash("sha256").update(storedBytes).digest("hex")
-    };
+      selector: resourceKind
+    });
     const addressedOptions = {
       shareId,
       shareOrigin: config.shareOrigin,
@@ -31910,9 +32234,9 @@ var NAMED_CHARACTERS = {
   newline: "\n"
 };
 function decodeAttributeValue(value) {
-  return value.replace(/&(?:#[xX]([0-9a-fA-F]{1,6})|#([0-9]{1,7})|([A-Za-z]{2,8}));?/g, (whole, hex3, decimal, name) => {
+  return value.replace(/&(?:#[xX]([0-9a-fA-F]{1,6})|#([0-9]{1,7})|([A-Za-z]{2,8}));?/g, (whole, hex4, decimal, name) => {
     if (name !== void 0) return NAMED_CHARACTERS[name.toLowerCase()] ?? whole;
-    const point = Number.parseInt(hex3 ?? decimal ?? "", hex3 === void 0 ? 10 : 16);
+    const point = Number.parseInt(hex4 ?? decimal ?? "", hex4 === void 0 ? 10 : 16);
     return point > 0 && point <= 1114111 && !(point >= 55296 && point <= 57343) ? String.fromCodePoint(point) : "\uFFFD";
   });
 }
@@ -32219,10 +32543,10 @@ function normalizeCssEscapes(source) {
           }
           if (next === "\n" || next === "\r" || next === "\f") break;
           escaped = true;
-          const hex3 = /^[0-9a-fA-F]{1,6}/.exec(source.slice(cursor + 1, cursor + 7));
-          if (hex3 !== null) {
-            const point = Number.parseInt(hex3[0], 16);
-            cursor += 1 + hex3[0].length;
+          const hex4 = /^[0-9a-fA-F]{1,6}/.exec(source.slice(cursor + 1, cursor + 7));
+          if (hex4 !== null) {
+            const point = Number.parseInt(hex4[0], 16);
+            cursor += 1 + hex4[0].length;
             if (source[cursor] === "\r" && source[cursor + 1] === "\n") cursor += 2;
             else if (/[ \t\n\r\f]/.test(source[cursor] ?? "")) cursor += 1;
             decoded += point === 0 || point > 1114111 || point >= 55296 && point <= 57343 ? "\uFFFD" : String.fromCodePoint(point);

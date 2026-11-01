@@ -30,6 +30,13 @@ const registeredPolicies: unknown[] = [];
 /** The owner's KV as the artifact layout sees it: write-once creates, reads and prefix lists. */
 const ownerKv = new Map<string, Uint8Array>();
 let encryptions = 0;
+/** The wrapped key of the n-th encryption: 33 raw bytes filled with n (TC-2242). */
+const wrappedKeyBytes = (n: number) => new Uint8Array(33).fill(n);
+const wrappedKeyFor = (n: number) => Buffer.from(wrappedKeyBytes(n)).toString("base64");
+/** The envelope's own key hash: the canonical hash of the base64 string. */
+const canonicalKeyHash = (n: number) => createHash("sha256").update(JSON.stringify(wrappedKeyFor(n))).digest("hex");
+/** The digest a path-bound source registers: SHA-256 of the raw wrapped-key bytes. */
+const rawKeyDigest = (n: number) => createHash("sha256").update(wrappedKeyBytes(n)).digest("hex");
 /** When set, the stub node's owner roots carry this authorization: a root far larger than any real one. */
 let oversizedRootAuthorization: string | undefined;
 
@@ -181,6 +188,19 @@ const node = {
           ciphertext: "AQ",
           metadata: { contentType: "text/plain" },
         },
+      };
+    },
+  },
+  // The named-key client the producer uses (TC-2242): a v2 envelope, wrapped to the share's own key.
+  keys: {
+    createKey: async (keyPath: string, options: { readonly networkId: string }) => ({ networkId: options.networkId, keyPath, state: "active", keyVersion: 1 }),
+    encrypt: async (keyPath: string, _bytes: Uint8Array, options: { readonly networkId: string }) => {
+      encryptions += 1;
+      return {
+        v: 2 as const, networkId: options.networkId, keyPath, alg: "x25519-aes256gcm/v1", keyVersion: 1,
+        // A fresh wrapped key per encryption, so reuse of an earlier ciphertext is observable.
+        encryptedSymmetricKey: wrappedKeyFor(encryptions), encryptedSymmetricKeyHash: canonicalKeyHash(encryptions),
+        ciphertext: Buffer.from(new Uint8Array(32).fill(1)).toString("base64"), metadata: { contentType: "text/plain" },
       };
     },
   },
@@ -1146,7 +1166,7 @@ describe("TinyCloud share authority adapter", () => {
       expect(first.metadata.resource).toEqual({ kind: "exact", path: "artifacts/art_t/versions/1/note.md" });
       expect(first.metadata.artifact).toEqual({ id: "art_t", version: 1, mode: "pinned" });
       const stored = JSON.parse(decode("artifacts/art_t/versions/1/note.md"));
-      expect(stored.encryptedSymmetricKeyHash).toBe((1).toString(16).padStart(64, "0"));
+      expect(stored.encryptedSymmetricKeyHash).toBe(canonicalKeyHash(1));
       // The manifest holds the digest of the stored ciphertext only, never of the plaintext.
       const manifestText = decode("artifacts/art_t/versions/1/manifest.json");
       const manifest = JSON.parse(manifestText);
@@ -1167,9 +1187,9 @@ describe("TinyCloud share authority adapter", () => {
       expect(second.metadata.artifact?.version).toBe(2);
       const bound = registeredPolicies.map((policy) => unifiedPolicyV2Schema.parse(policy).contentSource);
       expect(encryptions).toBe(2);
-      expect(bound.map((source) => source.encryptedSymmetricKeyDigestHex)).toEqual([(1).toString(16).padStart(64, "0"), (2).toString(16).padStart(64, "0")]);
+      expect(bound.map((source) => source.encryptedSymmetricKeyDigestHex)).toEqual([rawKeyDigest(1), rawKeyDigest(2)]);
       expect(bound.map((source) => source.kvResource.split("/kv/")[1])).toEqual(["artifacts/art_t/versions/1/note.md", "artifacts/art_t/versions/2/note.md"]);
-      expect(JSON.parse(decode("artifacts/art_t/versions/1/note.md")).encryptedSymmetricKeyHash).toBe((1).toString(16).padStart(64, "0"));
+      expect(JSON.parse(decode("artifacts/art_t/versions/1/note.md")).encryptedSymmetricKeyHash).toBe(canonicalKeyHash(1));
     });
 
     it("reports a denied artifact listing with the same re-login hint publish gives", async () => {
