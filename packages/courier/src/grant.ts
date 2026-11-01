@@ -8,7 +8,7 @@ import { AGENT_GRANT, AGENT_GRANT_EXPIRY, COURIER_SPACE, k } from './keys.js';
 import { loadGrant, loadKey, saveGrant, saveProfile, type AgentKey, type OwnerGrant, type Profile } from './profile.js';
 import { nodeOpts } from './node.js';
 import { listAll } from './store.js';
-import { assertAgentGrant, siweTimes } from './authority.js';
+import { assertAgentGrant, CLOCK_SKEW_MS, siweTimes } from './authority.js';
 import { dropAllPending, dropPendingDelegation, dropPendingForCode, newestPending, pendingForCode, savePending } from './pending.js';
 
 const PRIVATE_JWK_FIELDS = new Set(['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth', 'k']);
@@ -378,14 +378,35 @@ function applyGrantToProfile(profile: Profile, grant: OwnerGrant): void {
   profile.grantExpiresAt = grant.expiresAt;
 }
 
-/** Refusals that no retry can change: the saved copy of such a delegation is useless and must not be replayed. */
-const PERMANENT_GRANT_ERRORS = new Set(['bad-grant', 'grant-too-broad', 'grant-incomplete', 'grant-expired']);
+/** Refusals that depend only on what OpenKey signed: no retry can change them, so the saved copy is useless. */
+const CONTENT_REFUSALS = new Set(['bad-grant', 'grant-too-broad', 'grant-incomplete']);
+/** Refusals that depend on the local clock (bad-grant, expiry): a wrong clock must never cost the consumed code. */
+const CLOCK_REFUSAL = /issued in the future|future SIWE expiry/;
+
+/** Whether a failed install of a saved delegation can never succeed on a retry with a correct clock. */
+function isPermanentRefusal(error: unknown, siwe: string): boolean {
+  if (!(error instanceof CourierError)) return false;
+  const clockDependent = error.code === 'grant-expired' || (error.code === 'bad-grant' && CLOCK_REFUSAL.test(error.message));
+  if (clockDependent) {
+    // Useless only once the signed expiry is past even allowing for clock skew.
+    const expiresAt = signedExpiry(siwe);
+    return !expiresAt || expiresAt.getTime() + CLOCK_SKEW_MS < Date.now();
+  }
+  return CONTENT_REFUSALS.has(error.code);
+}
+
+/** Best effort: a failed cleanup must neither replace the error the caller needs to see nor fail a saved grant. */
+function dropPendingQuietly(delegationCid: string): void {
+  try { dropPendingDelegation(delegationCid); } catch (error) {
+    console.error(`warning: could not remove the saved grant record (${(error as Error).message}); it expires on its own.`);
+  }
+}
 
 export async function installGrant(profile: Profile, key: AgentKey, payload: GrantPayload): Promise<void> {
   try {
     await installGrantFrom(profile, key, payload);
   } catch (error) {
-    if (error instanceof CourierError && PERMANENT_GRANT_ERRORS.has(error.code)) dropPendingDelegation(payload.delegationCid);
+    if (isPermanentRefusal(error, payload.siwe)) dropPendingQuietly(payload.delegationCid);
     throw error;
   }
 }
@@ -412,7 +433,7 @@ async function installGrantFrom(profile: Profile, key: AgentKey, payload: GrantP
   profile.status = 'ready';
   delete profile.spacePending;
   saveProfile(profile);
-  dropPendingDelegation(payload.delegationCid);
+  dropPendingQuietly(payload.delegationCid);
 }
 
 export async function resumeGrant(profile: Profile, key: AgentKey): Promise<void> {
@@ -438,7 +459,7 @@ export async function resumeGrant(profile: Profile, key: AgentKey): Promise<void
   delete profile.spacePending;
   applyGrantToProfile(profile, grant);
   saveProfile(profile);
-  dropPendingDelegation(grant.delegationCid);
+  dropPendingQuietly(grant.delegationCid);
 }
 
 /**
