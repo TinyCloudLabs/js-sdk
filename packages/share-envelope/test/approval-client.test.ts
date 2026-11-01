@@ -383,6 +383,17 @@ describe("checkApprovalResultBinding", () => {
     expect((error as ApprovalClientError).code).toBe("result_invalid");
   });
 
+  test("the error names the fields that differ, never their values", () => {
+    let error: unknown;
+    try { checkApprovalResultBinding({ ...good, requestDigest: "bafkreisecretvalue", requesterDid: "did:key:z6Mksecretvalue" }, expected); } catch (caught) { error = caught; }
+    const message = (error as ApprovalClientError).message;
+    expect(message).toContain("requestDigest, requesterDid");
+    expect(message).not.toContain("bafkreisecretvalue");
+    expect(message).not.toContain("z6Mksecretvalue");
+    try { checkApprovalResultBinding({ ...good, delegation: undefined, ownerDid: "" }, expected); } catch (caught) { error = caught; }
+    expect((error as ApprovalClientError).message).toContain("ownerDid, delegation");
+  });
+
   test("the expiry is judged against the supplied clock", () => {
     expect(() => checkApprovalResultBinding(good, { ...expected, now: Date.parse(expiresAt) + 1 })).toThrow();
     expect(() => checkApprovalResultBinding(good, { ...expected, now: Date.parse(expiresAt) - 1 })).not.toThrow();

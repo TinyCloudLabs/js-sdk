@@ -150,7 +150,7 @@ export function installFakeOpenKey(t) {
       ownerDid: `did:pkh:eip155:${grant.chainId}:${grant.address}`, targetDid: request.targetDid,
       delegationExpiresAt: expiresAt, delegation, ...(options.result ?? {}),
     };
-    return sealRelay(request.resultEncryptionPublicJwk, id, plaintext);
+    return { relay: sealRelay(request.resultEncryptionPublicJwk, id, plaintext), grant };
   }
 
   /** The request the owner would see behind `link`: the stored record opened with the key from the link fragment. */
@@ -165,11 +165,12 @@ export function installFakeOpenKey(t) {
   control.approve = async (link, options = {}) => {
     const id = new URL(link).pathname.split('/')[2];
     const request = await control.openRequest(link);
+    const { relay, grant } = await sign(request, link, options);
+    // `grant` is what the owner signed (header, signature, CID): tests use it to look for it in output; it is never sent in the clear.
     approvals.set(id, {
       resultRef: `result-ref-${randomBytes(12).toString('hex')}`,
       expiresAt: new Date(Date.now() + (options.retentionMs ?? 600_000)).toISOString(),
-      relay: await sign(request, link, options),
-      request,
+      relay, grant, request,
     });
     return request;
   };
