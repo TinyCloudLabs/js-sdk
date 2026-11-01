@@ -375,7 +375,7 @@ test('an unknown code with nothing pending still says code-not-found', async () 
   const agent = agentKey();
   const api = await fakeOpenKey(new Map());
   try {
-    await assert.rejects(grantFromInput(CODE, agent, { apiHost: api.url }), { code: 'code-not-found', message: /Delegation code not found or expired\. Paste the full grant code/ });
+    await assert.rejects(grantFromInput(CODE, agent, { apiHost: api.url }), { code: 'code-not-found', message: /^Delegation code not found or expired\. A short code works only once: .*`courier init --resume`.*approve again in OpenKey to get a new code\.$/ });
     assert.equal(fs.existsSync(pendingFile(home)), false);
   } finally {
     await api.close();

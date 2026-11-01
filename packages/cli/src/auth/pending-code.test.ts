@@ -20,6 +20,7 @@ const { refreshOpenKeySession } = await import("../commands/auth.js");
 const { profilePath } = await import("@tinycloud/operations/state");
 
 const host = "https://node.example.test";
+const NOT_FOUND = "Delegation code not found or expired. A short code works only once: if this one was already used and the approval was saved, re-run the same command and paste the same code; otherwise approve again in OpenKey to get a new code.";
 const CODE = "abcd-efgh";
 const OTHER_CODE = "wxyz-2345";
 const wasm = new NodeWasmBindings();
@@ -175,7 +176,7 @@ describe("a redeemed --paste short code is saved before the caller's work", () =
     expect((await pasting(CODE, () => flow())).delegationCid).toBe(first.delegationCid);
     expect(api.hits).toHaveLength(2);
     await expect(pasting("qqqq-qqqq", () => flow())).rejects.toMatchObject({
-      status: 404, message: "Delegation code not found or expired. Use the full code shown in OpenKey instead.",
+      status: 404, message: NOT_FOUND,
     });
   });
 
@@ -206,7 +207,7 @@ describe("a redeemed --paste short code is saved before the caller's work", () =
 
   test("an unknown code with nothing pending keeps the existing error and writes nothing", async () => {
     await expect(pasting(CODE, () => flow())).rejects.toMatchObject({
-      status: 404, message: "Delegation code not found or expired. Use the full code shown in OpenKey instead.",
+      status: 404, message: NOT_FOUND,
     });
     expect(await exists(pendingPath())).toBe(false);
   });
@@ -233,7 +234,7 @@ describe("a redeemed --paste short code is saved before the caller's work", () =
     expect(stderrLines.join("\n")).toMatch(/approve again/);
     // The re-run is the plain consumed-code answer, not a confusing binding error.
     await expect(pasting(CODE, () => flow("keyless"))).rejects.toMatchObject({
-      status: 404, message: "Delegation code not found or expired. Use the full code shown in OpenKey instead.",
+      status: 404, message: NOT_FOUND,
     });
     expect(api.hits).toHaveLength(2);
     // A profile that has saved its key prints no such note.
