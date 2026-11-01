@@ -291,7 +291,7 @@ describe("a redeemed --paste short code is saved before the caller's work", () =
     await rm(real, { force: true });
   });
 
-  test("a FIFO standing in for the record returns promptly, is not trusted and is left in place", async () => {
+  test("a FIFO standing in for the record returns promptly and is not trusted; the save then replaces it with a real record", async () => {
     const delegation = await proof();
     api.codes.set(CODE, delegation);
     execFileSync("mkfifo", [pendingPath()]);
@@ -301,7 +301,9 @@ describe("a redeemed --paste short code is saved before the caller's work", () =
     ]);
     expect(outcome).toBe(delegation.delegationCid);
     expect(api.hits).toHaveLength(1);
-    expect((await lstat(pendingPath())).isFIFO()).toBe(true);
-    await rm(pendingPath(), { force: true });
+    // The read never opened the FIFO; the atomic save replaced it, so the consumed code is now protected.
+    expect((await lstat(pendingPath())).isFile()).toBe(true);
+    expect((await pasting(CODE, () => flow())).delegationCid).toBe(delegation.delegationCid);
+    expect(api.hits).toHaveLength(1);
   });
 });

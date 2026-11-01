@@ -48,8 +48,8 @@ async function live(profile: string): Promise<PendingCode[]> {
   let records: PendingCode[];
   let handle: FileHandle | undefined;
   try {
-    // O_NOFOLLOW: a symlink is never followed. Everything after the open works on the descriptor, not the path.
-    handle = await open(file, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    // O_NOFOLLOW: a symlink is never followed; O_NONBLOCK: a FIFO cannot hang the open (stat then refuses it). Everything after the open works on the descriptor, not the path.
+    handle = await open(file, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
     const info = await handle.stat();
     if (!info.isFile() || info.uid !== process.getuid?.()) return [];
     // The only copy of a consumed code is repaired, not destroyed, over a loose mode; a failed repair still reads it.
@@ -60,7 +60,7 @@ async function live(profile: string): Promise<PendingCode[]> {
       && Number.isFinite(Date.parse(record.expiresAt)) && typeof record.delegation === "object" && record.delegation !== null);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    // ENOENT: nothing saved. ELOOP/EMLINK: a symlink stands there, not ours to touch.
+    // ENOENT: nothing saved. ELOOP: a symlink stands there, not ours to touch.
     if (code !== "ENOENT" && code !== "ELOOP") await rm(file, { force: true });
     return [];
   } finally {

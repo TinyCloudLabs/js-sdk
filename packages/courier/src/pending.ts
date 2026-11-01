@@ -66,8 +66,8 @@ function readRecords(): PendingRecord[] {
   let records: PendingRecord[];
   let fd: number | undefined;
   try {
-    // O_NOFOLLOW: a symlink is never followed. Everything after the open works on the descriptor, not the path.
-    fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    // O_NOFOLLOW: a symlink is never followed; O_NONBLOCK: a FIFO cannot hang the open (fstat then refuses it). Everything after the open works on the descriptor, not the path.
+    fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
     const stat = fs.fstatSync(fd);
     if (!stat.isFile() || stat.uid !== process.getuid?.()) return [];
     // The only copy of a consumed code is repaired, not destroyed, over a loose mode; a failed repair still reads it.
@@ -77,7 +77,7 @@ function readRecords(): PendingRecord[] {
     records = parsed.records.filter(isRecord);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    // ENOENT: nothing saved. ELOOP/EMLINK: a symlink stands there, not ours to touch.
+    // ENOENT: nothing saved. ELOOP: a symlink stands there, not ours to touch.
     if (code !== 'ENOENT' && code !== 'ELOOP') fs.rmSync(file, { force: true });
     return [];
   } finally {

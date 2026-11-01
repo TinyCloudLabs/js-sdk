@@ -576,7 +576,7 @@ test('a failing cleanup after a successful install leaves the grant installed an
   }
 }));
 
-test('a FIFO standing in for the pending record returns promptly, is not trusted and is left in place', async (t) => withHome(async (home) => {
+test('a FIFO standing in for the pending record returns promptly and is not trusted; the save then replaces it with a real record', async (t) => withHome(async (home) => {
   const agent = agentKey();
   saveKey(agent);
   const { api } = await redeemable(agent);
@@ -588,7 +588,10 @@ test('a FIFO standing in for the pending record returns promptly, is not trusted
     ]);
     assert.equal(outcome, 'served', 'the code is redeemed normally, not blocked on the FIFO');
     assert.equal(api.hits.length, 1);
-    assert.equal(fs.lstatSync(pendingFile(home)).isFIFO(), true, 'the FIFO is neither read nor deleted');
+    // The read never opened the FIFO; the atomic save replaced it, so the consumed code is now protected.
+    assert.equal(fs.lstatSync(pendingFile(home)).isFile(), true);
+    assert.equal((await grantFromInput(CODE, agent, { apiHost: api.url })).delegationCid, (await grantFromInput(CODE, agent, { apiHost: api.url })).delegationCid);
+    assert.equal(api.hits.length, 1, 'the re-run is served from the saved copy');
   } finally {
     await api.close();
   }
