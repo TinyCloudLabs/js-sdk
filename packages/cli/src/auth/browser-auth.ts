@@ -223,7 +223,7 @@ export async function delegationFromInput(input: string, did: string, options: A
     });
     if (!response.ok) {
       throw Object.assign(new Error(response.status === 404
-        ? "Delegation code not found or expired. Use the full code shown in OpenKey instead."
+        ? "Delegation code not found or expired. A short code works only once: if this one was already used and the approval was saved, re-run the same command and paste the same code; otherwise approve again in OpenKey to get a new code."
         : `Could not retrieve delegation code (HTTP ${response.status}).`), { status: response.status });
     }
     const result = await response.json() as { delegation?: unknown };

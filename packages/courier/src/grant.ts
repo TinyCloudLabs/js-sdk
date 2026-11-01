@@ -102,7 +102,7 @@ async function redeemShortCode(code: string, apiHost: string): Promise<unknown> 
     throw new CourierError('code-lookup-failed', `Could not reach OpenKey at ${apiHost} to redeem the code: ${(error as Error).message}`);
   }
   if (response.status === 404) {
-    throw new CourierError('code-not-found', 'Delegation code not found or expired. Paste the full grant code shown in OpenKey instead.');
+    throw new CourierError('code-not-found', 'Delegation code not found or expired. A short code works only once: if this one was already used and the approval was saved, resume it with `' + cmd('init --resume') + '`; otherwise approve again in OpenKey to get a new code.');
   }
   if (!response.ok) throw new CourierError('code-lookup-failed', `Could not redeem the delegation code (HTTP ${response.status}).`);
   let body: unknown;
