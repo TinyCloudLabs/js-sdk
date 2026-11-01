@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createServer } from 'node:http';
+import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { NodeWasmBindings, PrivateKeySigner, TinyCloudNode } from '@tinycloud/node-sdk';
 import { grantFromInput, installGrant } from '../dist/grant.js';
@@ -529,6 +530,18 @@ for (const [label, options, code] of [
   }));
 }
 
+/** Make removing the last pending record fail (what dropping the final record does), and collect warnings. */
+function failPendingRemoval(t) {
+  const rm = fs.rmSync;
+  t.mock.method(fs, 'rmSync', (target, ...rest) => {
+    if (path.basename(String(target)) === 'pending-grant.json') throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+    return rm(target, ...rest);
+  });
+  const warnings = [];
+  t.mock.method(console, 'error', (message) => warnings.push(String(message)));
+  return warnings;
+}
+
 test('a failing cleanup after a refused install does not replace the refusal', async (t) => withHome(async (home) => {
   const agent = agentKey();
   saveKey(agent);
@@ -537,14 +550,45 @@ test('a failing cleanup after a refused install does not replace the refusal', a
   const api = await fakeOpenKey(new Map([[CODE.toLowerCase(), await signedGrant(agent, { omitLast: true })]]));
   try {
     const payload = await grantFromInput(CODE, agent, { apiHost: api.url });
-    // Make the rewrite of the record fail: the profile directory is read-only for the cleanup.
-    const rename = fs.renameSync;
-    t.mock.method(fs, 'renameSync', (from, to) => {
-      if (path.basename(String(to)) === 'pending-grant.json') throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
-      return rename(from, to);
-    });
-    t.mock.method(console, 'error', () => {});
+    const warnings = failPendingRemoval(t);
     await assert.rejects(installGrant(profile, agent, payload), { code: 'grant-incomplete' });
+    assert.match(warnings.join('\n'), /could not remove the saved grant record \(disk full\)/);
+  } finally {
+    await api.close();
+  }
+}));
+
+test('a failing cleanup after a successful install leaves the grant installed and ready', async (t) => withHome(async (home) => {
+  const agent = agentKey();
+  saveKey(agent);
+  const profile = profileFor(agent);
+  stubSpace(t, ready);
+  const { delegation, api } = await redeemable(agent);
+  try {
+    const payload = await grantFromInput(CODE, agent, { apiHost: api.url });
+    const warnings = failPendingRemoval(t);
+    await installGrant(profile, agent, payload);
+    assert.equal(loadProfile().status, 'ready');
+    assert.equal(loadGrant().delegationCid, delegation.delegationCid);
+    assert.match(warnings.join('\n'), /could not remove the saved grant record/);
+  } finally {
+    await api.close();
+  }
+}));
+
+test('a FIFO standing in for the pending record returns promptly, is not trusted and is left in place', async (t) => withHome(async (home) => {
+  const agent = agentKey();
+  saveKey(agent);
+  const { api } = await redeemable(agent);
+  try {
+    execFileSync('mkfifo', [pendingFile(home)]);
+    const outcome = await Promise.race([
+      grantFromInput(CODE, agent, { apiHost: api.url }).then(() => 'served', (error) => error.code),
+      new Promise((resolve) => setTimeout(() => resolve('hung'), 3000).unref()),
+    ]);
+    assert.equal(outcome, 'served', 'the code is redeemed normally, not blocked on the FIFO');
+    assert.equal(api.hits.length, 1);
+    assert.equal(fs.lstatSync(pendingFile(home)).isFIFO(), true, 'the FIFO is neither read nor deleted');
   } finally {
     await api.close();
   }

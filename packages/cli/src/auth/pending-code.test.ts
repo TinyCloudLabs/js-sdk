@@ -6,6 +6,7 @@ import { createServer, type Server } from "node:http";
 import { chmod, lstat, mkdtemp, readFile, readdir, rename, rm, stat, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
 import { Readable } from "node:stream";
 import { NodeWasmBindings, PrivateKeySigner, type PermissionEntry } from "@tinycloud/node-sdk";
 
@@ -288,5 +289,19 @@ describe("a redeemed --paste short code is saved before the caller's work", () =
     expect(await exists(real)).toBe(true);
     await rm(pendingPath(), { force: true });
     await rm(real, { force: true });
+  });
+
+  test("a FIFO standing in for the record returns promptly, is not trusted and is left in place", async () => {
+    const delegation = await proof();
+    api.codes.set(CODE, delegation);
+    execFileSync("mkfifo", [pendingPath()]);
+    const outcome = await Promise.race([
+      pasting(CODE, () => flow()).then((result) => result.delegationCid, (error: Error) => error.message),
+      new Promise<string>((resolve) => setTimeout(() => resolve("hung"), 3000)),
+    ]);
+    expect(outcome).toBe(delegation.delegationCid);
+    expect(api.hits).toHaveLength(1);
+    expect((await lstat(pendingPath())).isFIFO()).toBe(true);
+    await rm(pendingPath(), { force: true });
   });
 });
