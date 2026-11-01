@@ -60,13 +60,16 @@ function isRecord(value: unknown): value is PendingRecord {
     && typeof record.expiresAt === 'string' && !!record.delegation && typeof record.delegation === 'object';
 }
 
-/** Live records, newest last. Expired or unreadable state is removed rather than trusted. */
+/** Live records, newest last. Expired or unreadable state is removed; a loose mode is repaired; a non-regular path is left alone. */
 function readRecords(): PendingRecord[] {
   const file = pendingPath();
   let records: PendingRecord[];
   try {
     const stat = fs.lstatSync(file);
-    if (!stat.isFile() || (stat.mode & 0o077) !== 0) throw new Error('not an owner-only regular file');
+    // A symlink, directory or another user's file is not ours to read or delete.
+    if (!stat.isFile() || stat.uid !== process.getuid?.()) return [];
+    // The only copy of a consumed code is repaired, not destroyed, over a loose mode.
+    if ((stat.mode & 0o077) !== 0) fs.chmodSync(file, 0o600);
     const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as PendingFile;
     if (parsed.v !== 1 || !Array.isArray(parsed.records)) throw new Error('unknown format');
     records = parsed.records.filter(isRecord);
