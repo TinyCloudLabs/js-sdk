@@ -148,7 +148,7 @@ describe("discoverApprovalResult", () => {
     const { fetch } = fakeOpenKey(() => json({ code }, status));
     const error = await refusalOf(() => discoverApprovalResult(state, { fetch }));
     expect(error).toBeInstanceOf(ApprovalClientError);
-    expect(error.code).toBe(expected);
+    expect<string>(error.code).toBe(expected);
     expect(error.status).toBe(status);
   });
 

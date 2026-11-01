@@ -56,7 +56,12 @@ scenario('init --request prints the short link in the existing JSON shape and sa
   let pendingAtPrint;
   let out = '';
   const write = process.stdout.write;
-  process.stdout.write = (chunk) => { pendingAtPrint ??= fs.existsSync(homeFile('approval-pending.json')); out += String(chunk); return true; };
+  process.stdout.write = (chunk, ...rest) => {
+    if (typeof chunk !== 'string') return write.call(process.stdout, chunk, ...rest);
+    pendingAtPrint ??= fs.existsSync(homeFile('approval-pending.json'));
+    out += chunk;
+    return true;
+  };
   let code;
   try { code = await main(['init', '--request', '--handle', 'alice']); } finally { process.stdout.write = write; }
   assert.equal(code, 0);

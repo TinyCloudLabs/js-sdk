@@ -46,7 +46,12 @@ export function readHome(name) {
 export async function captureStdout(fn) {
   const original = process.stdout.write;
   let out = '';
-  process.stdout.write = (chunk) => { out += String(chunk); return true; };
+  process.stdout.write = (chunk, ...rest) => {
+    // The test runner streams its own binary events through stdout; only Courier's string output is captured.
+    if (typeof chunk !== 'string') return original.call(process.stdout, chunk, ...rest);
+    out += chunk;
+    return true;
+  };
   try { return { result: await fn(), stdout: out }; }
   finally { process.stdout.write = original; }
 }
@@ -172,7 +177,7 @@ export function installFakeOpenKey(t) {
     }
     if (!url.startsWith(`${OPENKEY_API}/api/approval-`)) throw new Error(`unexpected network call: ${url}`);
     const body = JSON.parse(init.body);
-    const [, , , kind, ref, action] = new URL(url).pathname.split('/');
+    const [, , kind, ref, action] = new URL(url).pathname.split('/');
     const act = kind === 'approval-requests' ? 'discover' : action;
     const requestId = kind === 'approval-requests' ? ref : body.requestId;
     const stored = created.find((item) => item.id === requestId);
