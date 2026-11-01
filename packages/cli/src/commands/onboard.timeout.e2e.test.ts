@@ -79,7 +79,7 @@ describe.skipIf(!NODE_BIN)("tinycloud onboard --timeout, against a real node", (
     const pending = saved.pending.find((item) => item.requestId === entry.id);
     const delegation = entry.delegation;
     const sessionMatches = saved.session?.delegationCid === delegation.delegationCid &&
-      saved.session.signature === delegation.signature && saved.session.siwe === delegation.siwe;
+      saved.session!.signature === delegation.signature && saved.session!.siwe === delegation.siwe;
     const grantMatches = saved.grants.some((item) => item.delegation.cid === delegation.delegationCid &&
       item.delegation.siweProof?.signature === delegation.signature && item.delegation.siweProof?.siwe === delegation.siwe);
     const profilePrincipal = saved.profile?.sessionDid ?? saved.profile?.did;
