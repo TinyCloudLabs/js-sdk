@@ -38,7 +38,9 @@ in OpenKey and decides who to pair with. Setup takes no code to copy back:
 1. `tinycloud courier init --request` prints JSON; send its `openkeyUrl` (a short
    `https://openkey.so/a/…` link) to the owner at once, and only to the owner, privately:
    the first account to approve the link wins, and a renewal approved by a different
-   owner is refused. It also saves the request.
+   owner is refused. It also saves the request. Copy the link exactly as printed
+   (stderr shows it again on a line of its own); never retype it. A retyped link
+   can lose characters, and Courier refuses a grant whose scopes differ from the request.
 2. Then run `tinycloud courier init --wait --timeout 60s`. It collects the approval,
    installs the grant and acknowledges it. Keep every call under your tool's time
    limit (the default wait is 90 s; `--timeout` accepts at most 9m). Never wait in a

@@ -160,7 +160,7 @@ export async function cmdInit(args: ParsedArgs) {
 
   if (args.has('request')) {
     const pending = await requestApproval(profile, key, args.get('expiry'), { openkeyApiHost: apiHostFlag });
-    console.error(`Send this link to the owner to approve (it expires ${pending.requestExpiresAt}). Then run \`${cmd('init --wait')}\` to collect the approval.`);
+    console.error(`Send the owner this link to approve (it expires ${pending.requestExpiresAt}). Copy it exactly, never retype it:\n${pending.approvalUrl}\nThen run \`${cmd('init --wait --timeout 60s')}\` to collect the approval.`);
     // A resumed request keeps the lifetime it was made with.
     const lifetime = pending.request.grantLifetimeSeconds * 1000 === expiryMs ? expiry : `${pending.request.grantLifetimeSeconds}s`;
     printJson({ did: key.did, courierDid: profile.courierDid, publicJwk: Object.fromEntries(Object.entries(key.jwk).filter(([name]) => !['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth', 'k'].includes(name))), host, space: COURIER_SPACE, permissions: AGENT_GRANT, expiry: lifetime, openkeyUrl: pending.approvalUrl });
@@ -171,7 +171,7 @@ export async function cmdInit(args: ParsedArgs) {
     const deadline = Date.now() + waitMs;
     const { pending, resumed } = await waitApproval(profile, key, args.get('expiry'), { openkeyApiHost: apiHostFlag });
     if (!pending.committed) {
-      console.error(`${resumed ? 'Resuming the saved approval request. Owner: approve' : 'Owner: approve'} in OpenKey: ${pending.approvalUrl}\nWaiting for approval (up to ${Math.round(waitMs / 1000)} s). Run \`${cmd('init --wait')}\` again after an interruption; no new approval is needed.`);
+      console.error(`${resumed ? 'Resuming the saved approval request.' : 'Created an approval request.'} Owner: approve it in OpenKey (copy the link exactly, never retype it):\n${pending.approvalUrl}\nWaiting for approval (up to ${Math.round(waitMs / 1000)} s). Run \`${cmd('init --wait')}\` again after an interruption; no new approval is needed.`);
     }
     if (await completeApproval(profile, key, pending, { deadline }) === 'deadline') {
       throw new CourierPending({ step: 1, of: 1, approvalUrl: pending.approvalUrl, expiresAt: pending.requestExpiresAt });

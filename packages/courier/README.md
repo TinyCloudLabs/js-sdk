@@ -122,8 +122,10 @@ tinycloud courier orders bob
 
 `init --request` creates an OpenKey approval request (sealed at the links API,
 the same flow `tinycloud onboard` uses), saves it in `$COURIER_HOME/approval-pending.json`
-(owner-only) and prints the agent key and `openkeyUrl` as JSON. There is no code
-to copy back. `init --wait [--timeout <duration, at most 9m>]` polls OpenKey
+(owner-only) and prints the agent key and `openkeyUrl` as JSON; stderr shows the link
+again alone on a line, to copy verbatim (never retype it: a grant whose scopes differ
+from the request, such as a changed hooks path, is refused with `[grant-too-broad]`).
+There is no code to copy back. `init --wait [--timeout <duration, at most 9m>]` polls OpenKey
 (every 2 s) with a proof signed by the agent key, decrypts the result, checks that
 it answers this request, installs the grant, and only then acknowledges it to
 OpenKey. The default timeout is 90 s: at the deadline it exits 8 and prints
