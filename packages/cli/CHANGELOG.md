@@ -1,5 +1,21 @@
 # @tinycloud/cli
 
+## 1.5.2-beta.0
+
+### Patch Changes
+
+- e8d42b5: The addressed share producer (DID, email and email-domain targets) encrypts under the share's own named key `share/<shareId>` and registers the raw-byte wrapped-key digest, through the share-sdk helpers. Which addressed targets the CLI offers is unchanged.
+
+  Details: TC-2242
+
+- Updated dependencies [8d278fb]
+- Updated dependencies [8d278fb]
+- Updated dependencies [e8d42b5]
+  - @tinycloud/node-sdk@3.9.1-beta.0
+  - @tinycloud/sdk-core@3.9.1-beta.0
+  - @tinycloud/share-sdk@1.4.3-beta.0
+  - @tinycloud/operations@0.7.9-beta.0
+
 ## 1.5.1
 
 ### Patch Changes

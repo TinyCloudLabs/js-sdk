@@ -1,5 +1,18 @@
 # @tinycloudlabs/node-sdk
 
+## 3.9.1-beta.0
+
+### Patch Changes
+
+- 8d278fb: Sign-in accepts `key.create` beside `decrypt` on the current owner's default-network `share/` prefix, so the session can create the per-share keys an addressed share is encrypted under. No other encryption entry is widened.
+
+  Details: TC-2242
+
+- Updated dependencies [8d278fb]
+- Updated dependencies [e8d42b5]
+  - @tinycloud/sdk-core@3.9.1-beta.0
+  - @tinycloud/share-sdk@1.4.3-beta.0
+
 ## 3.9.0
 
 ### Minor Changes

@@ -71,6 +71,7 @@ function share(target: Target, path: string, extra: { readonly artifactPin?: Add
     spaceId: SPACE, target, resource: { kind: "exact", path }, actions: ["read"], policyActions: ["tinycloud.kv/get", "tinycloud.kv/metadata"],
     contentSource: {
       shareId: SHARE_ID, kvResource: `${SPACE}/kv/${path}`, selector: "exact", encryptionNetwork: NETWORK,
+      encryptionKeyPath: `share/${SHARE_ID}`,
       encryptedSymmetricKeyDigestHex: "1".repeat(64), keyVersion: 3, mode: "immutable", initialCiphertextDigestHex: "2".repeat(64),
     },
     ...(extra.artifactPin === undefined ? {} : { artifactPin: extra.artifactPin }),

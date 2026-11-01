@@ -44,7 +44,7 @@ import { approvedTc2242WrappedKeyDigestRatchet, validateTc2242WrappedKeyDigestRa
 import { approvedTc2113AllowAbilityRatchet, validateTc2113AllowAbilityRatchetTransition } from "./replica-size-policy";
 import { approvedTc2254HeldWireRatchet, validateTc2254HeldWireRatchetTransition } from "./replica-size-policy";
 import { approvedTc2281OpenKeyUnconnectedGuard, validateTc2281OpenKeyUnconnectedGuardTransition } from "./replica-size-policy";
-import { approvedTc2276SignedExpiry, validateTc2276SignedExpiryTransition } from "./replica-size-policy";
+import { approvedTc2242PathBoundShares, validateTc2242PathBoundSharesTransition } from "./replica-size-policy";
 import { approvedTc2038PanelPrefetchRatchet, validateTc2038PanelPrefetchRatchetTransition, type Tc2038PanelPrefetchRatchet } from "./replica-size-policy";
 import { approvedTc2005RevokeWindowRatchet, validateTc2005RevokeWindowRatchetTransition, type Tc2005RevokeWindowRatchet } from "./replica-size-policy";
 import { approvedTc2096RepairBackoffRatchet, validateTc2096RepairBackoffRatchetTransition, type Tc2096RepairBackoffRatchet } from "./replica-size-policy";
@@ -2932,7 +2932,7 @@ delete tc2043Ledger.tc2242WrappedKeyDigestRatchet;
 delete tc2043Ledger.tc2113AllowAbilityRatchet;
 delete tc2043Ledger.tc2254HeldWireRatchet;
 delete tc2043Ledger.tc2281OpenKeyUnconnectedGuard;
-delete tc2043Ledger.tc2276SignedExpiry;
+delete tc2043Ledger.tc2242PathBoundShares;
 tc2043Ledger.entries = structuredClone(current.entries.slice(0, current.entries.findIndex((entry) => entry.pr === "#728")));
 describe("replication syncScope opt-in (#742, TC-2043) size ratchet", () => {
   const row = () => structuredClone(approvedTc2043SyncScopeRatchet);
@@ -4052,26 +4052,26 @@ describe("refuse a runtime grant before an OpenKey popup when the client was nev
   });
 });
 
-describe("accept a user-changed OpenKey expiry behind an opt-in and use the signed expiry (TC-2276, #813) size ratchet", () => {
-  const row = () => structuredClone(approvedTc2276SignedExpiry);
+describe("path-bound addressed shares, one share-id grammar, sign-in key creation on the share prefix (TC-2242, #815) size ratchet", () => {
+  const row = () => structuredClone(approvedTc2242PathBoundShares);
   const prerequisite = () => approvedTc2281OpenKeyUnconnectedGuard;
 
   it("pins exact canonical CI root bytes and carries every other size bucket", () => {
     expect(() => validateLedger(current)).not.toThrow();
-    expect(current.tc2276SignedExpiry).toEqual(approvedTc2276SignedExpiry);
+    expect(current.tc2242PathBoundShares).toEqual(approvedTc2242PathBoundShares);
     expect(row().root).toEqual({
-      delta: { "index.mjs": 1052, "index.cjs": 1149 },
-      ceiling: { "index.mjs": 1478237, "index.cjs": 1419879 },
+      delta: { "index.mjs": 142, "index.cjs": 153 },
+      ceiling: { "index.mjs": 1477327, "index.cjs": 1418883 },
     });
     expect(row().root.ceiling["index.mjs"]).toBe(prerequisite().root.ceiling["index.mjs"] + row().root.delta["index.mjs"]);
     expect(row().root.ceiling["index.cjs"]).toBe(prerequisite().root.ceiling["index.cjs"] + row().root.delta["index.cjs"]);
     expect(row().base).toBe("8aa05c39fab1e73efb1f22a856a7b2d304f18688");
-    expect(row().sourceCommits).toEqual(["c35c6469962b9b75a1711aed2332e87d3c42352e"]);
+    expect(row().sourceCommits).toEqual(["1c92ba487c1f108c4772b972653ecf453b4f663a"]);
     expect(row().canonicalCI).toEqual({
-      run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41272463405",
+      run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41276400756",
       jobs: [
-        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41272463405/job/124747864915",
-        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41272463405/job/124747864929",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41276400756/job/124759347436",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41276400756/job/124759347215",
       ],
     });
     expect(row().firstImport).toEqual(prerequisite().firstImport);
@@ -4079,31 +4079,31 @@ describe("accept a user-changed OpenKey expiry behind an opt-in and use the sign
     expect(row().worker).toEqual({ delta: 0, ceiling: prerequisite().worker.ceiling });
     expect(row().replicaWorker).toEqual({ delta: 0, ceiling: prerequisite().replicaWorker.ceiling });
     expect(rootCeilings(current)).toContainEqual({
-      row: "tc2276SignedExpiry",
-      ceiling: { "index.mjs": 1478237, "index.cjs": 1419879 },
+      row: "tc2242PathBoundShares",
+      ceiling: { "index.mjs": 1477327, "index.cjs": 1418883 },
     });
     expect(ancestryPins(current, false)).toContainEqual({
-      row: "tc2276SignedExpiry",
-      pin: "c35c6469962b9b75a1711aed2332e87d3c42352e",
+      row: "tc2242PathBoundShares",
+      pin: "1c92ba487c1f108c4772b972653ecf453b4f663a",
     });
   });
 
   it("refuses changed bytes or a missing TC-2281 prerequisite", () => {
     const changed = copy(current);
-    changed.tc2276SignedExpiry!.root.ceiling["index.mjs"]++;
-    expect(() => validateLedger(changed)).toThrow("TC-2276");
+    changed.tc2242PathBoundShares!.root.ceiling["index.mjs"]++;
+    expect(() => validateLedger(changed)).toThrow("TC-2242");
     const withoutPrerequisite = copy(current);
     delete withoutPrerequisite.tc2281OpenKeyUnconnectedGuard;
-    expect(() => validateLedger(withoutPrerequisite)).toThrow("TC-2276");
+    expect(() => validateLedger(withoutPrerequisite)).toThrow("TC-2242");
   });
 
   it("may be introduced once and never changed or removed", () => {
-    expect(() => validateTc2276SignedExpiryTransition(undefined, row())).not.toThrow();
-    expect(() => validateTc2276SignedExpiryTransition(row(), row())).not.toThrow();
+    expect(() => validateTc2242PathBoundSharesTransition(undefined, row())).not.toThrow();
+    expect(() => validateTc2242PathBoundSharesTransition(row(), row())).not.toThrow();
     const changed = row();
     changed.root.ceiling["index.cjs"]++;
-    expect(() => validateTc2276SignedExpiryTransition(undefined, changed)).toThrow("TC-2276");
-    expect(() => validateTc2276SignedExpiryTransition(row(), undefined)).toThrow("TC-2276");
+    expect(() => validateTc2242PathBoundSharesTransition(undefined, changed)).toThrow("TC-2242");
+    expect(() => validateTc2242PathBoundSharesTransition(row(), undefined)).toThrow("TC-2242");
   });
 });
 
