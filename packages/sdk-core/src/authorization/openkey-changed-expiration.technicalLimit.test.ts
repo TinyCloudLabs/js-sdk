@@ -12,7 +12,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const ISSUED = "2026-08-01T00:00:00.000Z";
 const PREPARED_EXPIRY = "2026-08-01T01:00:00.000Z";
 const DATED =
-  "expiry is later than 9999-12-31, the latest date a TinyCloud sign-in message can carry; choose an earlier expiry";
+  "expiry is not a valid date or is later than 9999-12-31, the latest date a TinyCloud sign-in message can carry; choose an earlier expiry";
 
 function siwe(expiry: string): string {
   return [

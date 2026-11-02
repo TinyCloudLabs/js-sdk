@@ -1678,7 +1678,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
    */
   private sessionExpiryFrom(now: Date): Date {
     const expirationTime = new Date(now.getTime() + this.sessionExpirationMs);
-    assertExpiryWithinTechnicalLimit(expirationTime, "siwe");
+    assertExpiryWithinTechnicalLimit(expirationTime);
     return expirationTime;
   }
 

@@ -542,7 +542,7 @@ export function checkChangedExpiration(input: CheckChangedExpirationInput): stri
   if (expiresAt === undefined) {
     // The strict timestamp grammar reads four-digit years only: name the 9999 limit for a later year.
     const later = Date.parse(signed.expirationTime ?? "");
-    return later > MAX_SIWE_EXPIRY_MS ? technicalExpiryRefusal(later, "siwe") : "expiry is not a valid timestamp";
+    return later > MAX_SIWE_EXPIRY_MS ? technicalExpiryRefusal(later) : "expiry is not a valid timestamp";
   }
   if (expiresAt <= nowMs + CHANGED_EXPIRY_MIN_REMAINING_MS) {
     return "expiry must be more than 60 seconds from now; choose a longer expiry";
@@ -556,7 +556,7 @@ export function checkChangedExpiration(input: CheckChangedExpirationInput): stri
   if (maxMs !== undefined && expiresAt > maxMs) {
     return `expiry is later than the maximum for this request (the latest allowed is ${new Date(maxMs).toISOString()}); choose an earlier expiry`;
   }
-  return technicalExpiryRefusal(expiresAt, "siwe");
+  return technicalExpiryRefusal(expiresAt);
 }
 
 /**

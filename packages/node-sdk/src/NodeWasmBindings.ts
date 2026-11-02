@@ -33,6 +33,7 @@ import {
   vault_random_bytes,
   vault_sha256,
 } from "@tinycloud/node-sdk-wasm";
+import { assertUcanExpiryWithinLimit } from "./ucanExpiry";
 import type {
   IWasmBindings,
   ISessionManager,
@@ -69,7 +70,11 @@ export class NodeWasmBindings implements IWasmBindings {
   }
   ensureEip55 = ensureEip55;
   makeSpaceId = makeSpaceId;
-  createDelegation = createDelegation;
+  /** The WASM fails past 2255-06-05T23:47:34Z with an opaque range error; refuse first, with the date. */
+  createDelegation = (...args: Parameters<typeof createDelegation>) => {
+    assertUcanExpiryWithinLimit(Number(args[4]) * 1000);
+    return createDelegation(...args);
+  };
   parseRecapFromSiwe = parseRecapFromSiwe;
   parseVerifiedRecapFromSiwe = parseVerifiedRecapFromSiwe;
   generateHostSIWEMessage = generateHostSIWEMessage;

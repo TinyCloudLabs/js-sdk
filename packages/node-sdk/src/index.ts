@@ -286,6 +286,11 @@ export {
 
 // WASM bindings
 export { NodeWasmBindings } from "./NodeWasmBindings";
+export {
+  MAX_UCAN_EXPIRY_MS,
+  assertUcanExpiryWithinLimit,
+  ucanExpiryRefusal,
+} from "./ucanExpiry";
 
 // Delegation
 export { DelegatedAccess } from "./DelegatedAccess";

@@ -13,9 +13,9 @@ import { MemorySessionStorage } from "../storage/MemorySessionStorage";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const YEAR_MS = 365 * DAY_MS;
 const DATED =
-  "expiry is later than 9999-12-31, the latest date a TinyCloud sign-in message can carry; choose an earlier expiry";
+  "expiry is not a valid date or is later than 9999-12-31, the latest date a TinyCloud sign-in message can carry; choose an earlier expiry";
 const NOT_A_DATE =
-  "expiry is not a valid date or is too far away to hold; choose one before 9999-12-31";
+  "expiry is not a valid date or is later than 9999-12-31, the latest date a TinyCloud sign-in message can carry; choose an earlier expiry";
 
 let originalFetch: typeof globalThis.fetch;
 beforeEach(() => {
