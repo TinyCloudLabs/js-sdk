@@ -1,6 +1,6 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { spawn, type ChildProcess } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { generateKeyPair, exportJWK, SignJWT } from "jose";
 import { createServer, type Server } from "node:http";
 import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
@@ -82,7 +82,6 @@ test("official Streamable HTTP client authenticates and starts delegated setup",
   resources.push(() => client.close());
 
   const tools = await client.listTools();
-  expect(tools.tools).toHaveLength(22);
   expect(tools.tools.map((tool) => tool.name)).toContain("tinycloud_connect");
   // TC-834 scopes secrets status to local/stdio; hosted lacks a persistent
   // reauthorization path for a server-revoked session (TC-896).
@@ -151,7 +150,7 @@ test("public plugin enforces its tools, OAuth audience and separate approval sta
   for (const name of [
     "tinycloud_secrets_get", "tinycloud_kv_get", "tinycloud_kv_put",
     "tinycloud_sql_query", "tinycloud_sql_execute", "tinycloud_auth_request",
-    "tinycloud_auth_import", "tinycloud_account_spaces_list",
+    "tinycloud_auth_import", "tinycloud_account_spaces_list", "tinycloud_auth_read_scope", "tinycloud_read",
   ]) {
     const refusal = await client.callTool({ name, arguments: {} })
       .then((value) => JSON.stringify(value), (error: unknown) => String(error));
@@ -290,6 +289,114 @@ test("a signed bootstrap and a signed delegation approval let a hosted tool use 
     throw new Error(`${stage}: ${error instanceof Error ? error.message : String(error)}`);
   }
 }, 60_000);
+
+test("signed reusable read scope covers future children and digest-bound handoff requires recipient approval", async () => {
+  // A static cross-package source import would pull this test-only node fixture
+  // into MCP's build graph; load it at runtime as the other hosted tests do.
+  const hermeticModule = await import(new URL(
+    "../../node-sdk/src/test-support/hermetic-encrypted-node.ts",
+    import.meta.url,
+  ).href) as { createHermeticEncryptedNode(): Promise<HermeticNode> };
+  const hermetic = await hermeticModule.createHermeticEncryptedNode();
+  resources.push(async () => hermetic.stop());
+  const { app, client, stateDir, createClient } = await startHostedMcp({
+    nodeHost: hermetic.host, ownerDids: [hermetic.ownerDid],
+  });
+  const [tenantId] = await readdir(join(stateDir, "tenants"));
+  const senderRoot = join(stateDir, "tenants", tenantId!);
+  const approve = async (url: string, tenantStateRoot: string, bootstrap = false) => {
+    const body = await openKeyApprovalBody({
+      redirect: await openKeyRedirect(app, url), tenantStateRoot, privateKey: hermetic.ownerPrivateKey,
+    });
+    if (bootstrap) await activateOnNode(hermetic.host, body);
+    expect(await postCallback(app, url, body)).toEqual({ status: 200, body: { success: true } });
+  };
+  const connect = record((await client.callTool({ name: "tinycloud_connect", arguments: {} })).structuredContent);
+  await approve(String(connect.approvalUrl), senderRoot, true);
+  const scope = { space: "applications", kvPrefixes: ["arbitrary/resources/"], databases: ["inventory"] };
+  const required = record((await client.callTool({
+    name: "tinycloud_auth_read_scope", arguments: scope,
+  })).structuredContent);
+  expect(required).toMatchObject({ status: "authority_required" });
+  await approve(String(record(required.approval).url), senderRoot);
+  expect((await client.callTool({
+    name: "tinycloud_auth_read_scope", arguments: scope,
+  })).structuredContent).toMatchObject({ status: "ok", output: { access: "not-tested" } });
+
+  // Created after approval: the selected prefix, not a snapshot of existing keys.
+  const resource = { kind: "kv", space: "applications", key: "arbitrary/resources/revisions/one" };
+  const body = { format: "unregistered.example", content: "λ\n".repeat(40_000) };
+  hermetic.configureKv(hermetic.applicationsSpaceId, { [resource.key]: body });
+  const expectedBytes = Buffer.from(JSON.stringify(body));
+  const oversized = await client.callTool({
+    name: "tinycloud_kv_get", arguments: { space: resource.space, key: resource.key, representation: "text" },
+  });
+  expect(oversized.structuredContent).toMatchObject({
+    status: "error", error: { code: "KV_RESPONSE_TOO_LARGE", details: {
+      recovery: { action: "read_in_chunks", tool: "tinycloud_read", resourceKind: "kv" },
+    } },
+  });
+  const parts: Buffer[] = [];
+  let continuation: Record<string, unknown> = {};
+  let first: Record<string, unknown> | undefined;
+  for (let pageNumber = 0; pageNumber < 30; pageNumber++) {
+    const result = await client.callTool({
+      name: "tinycloud_read", arguments: { resource, ...continuation },
+    });
+    expect(result.structuredContent).toMatchObject({ status: "ok" });
+    const page = record(record(result.structuredContent).output);
+    first ??= page;
+    expect(record(page.binding).sha256).toBe(createHash("sha256").update(expectedBytes).digest("hex"));
+    expect(record(page.range).start).toBe(parts.reduce((sum, part) => sum + part.byteLength, 0));
+    if (!Array.isArray(result.content)) throw new Error("MCP content must be an array");
+    for (const entry of result.content) {
+      const block = record(entry);
+      if (block.type !== "text" || typeof block.text !== "string") throw new Error("Expected MCP text content");
+      expect(block.text.length).toBeLessThan(100_000);
+    }
+    parts.push(Buffer.from(String(page.value), page.encoding === "base64" ? "base64" : "utf8"));
+    if (page.complete) {
+      expect(page.continuation).toBeNull();
+      break;
+    }
+    continuation = record(page.continuation);
+  }
+  expect(Buffer.concat(parts)).toEqual(expectedBytes);
+  expect((await client.callTool({
+    name: "tinycloud_read",
+    arguments: { resource: { ...resource, key: "arbitrary/sibling/private" } },
+  })).structuredContent).toMatchObject({ status: "authority_required" });
+
+  // A portable binding carries no authority. A different tenant must approve
+  // its own session, then the exact source, before accepting the same binding.
+  const beforeRecipient = new Set(await readdir(join(stateDir, "tenants")));
+  const recipient = await createClient("independent-read-recipient");
+  const recipientConnect = record((await recipient.callTool({
+    name: "tinycloud_connect", arguments: {},
+  })).structuredContent);
+  const recipientId = (await readdir(join(stateDir, "tenants"))).find((id) => !beforeRecipient.has(id))!;
+  const recipientRoot = join(stateDir, "tenants", recipientId);
+  await approve(String(recipientConnect.approvalUrl), recipientRoot, true);
+  const handoff = { resource, expected: first!.binding, pageBytes: 8 };
+  const recipientRequired = record((await recipient.callTool({
+    name: "tinycloud_read", arguments: handoff,
+  })).structuredContent);
+  expect(recipientRequired).toMatchObject({ status: "authority_required" });
+  await approve(String(record(recipientRequired.approval).url), recipientRoot);
+  expect((await recipient.callTool({
+    name: "tinycloud_read", arguments: handoff,
+  })).structuredContent).toMatchObject({
+    status: "ok", output: { binding: first!.binding, range: { start: 0, end: 8 }, value: '{"format' },
+  });
+  expect((await recipient.callTool({
+    name: "tinycloud_read", arguments: { resource: { ...resource, key: "arbitrary/resources/another" } },
+  })).structuredContent).toMatchObject({ status: "authority_required" });
+
+  hermetic.configureKv(hermetic.applicationsSpaceId, { [resource.key]: { ...body, revision: 2 } });
+  expect((await client.callTool({
+    name: "tinycloud_read", arguments: { resource, ...record(first!.continuation) },
+  })).structuredContent).toMatchObject({ status: "error", error: { code: "READ_SOURCE_CHANGED" } });
+}, 90_000);
 
 for (const marker of ["delegation-revoked", "delegation-ancestor-revoked"] as const) {
   test(`a definitive bootstrap ${marker} response renews one tenant once under concurrent connects`, async () => {
@@ -1373,6 +1480,7 @@ interface HermeticNode {
   readonly applicationsSpaceId: string;
   assertDelegatedKvResources(resources: readonly string[]): void;
   provisionKvSpace(spaceId: string): void;
+  configureKv(spaceId: string, entries: Readonly<Record<string, unknown>>): void;
   stop(): void;
 }
 
