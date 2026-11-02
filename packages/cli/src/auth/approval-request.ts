@@ -476,7 +476,7 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
         await pauseBetweenAttempts(profile, entry, approvalWait, true);
         continue;
       }
-      if (!response.ok && approvalWait && await discoverRefusedAsExpired(entry, response, (approvalWait.now ?? Date.now)())) {
+      if (!response.ok && await discoverRefusedAsExpired(entry, response, (approvalWait?.now ?? Date.now)())) {
         throw await expiredRequest(profile, entry, true);
       }
       if (!response.ok) await throwRemoteError(profile, entry, response, "discover");

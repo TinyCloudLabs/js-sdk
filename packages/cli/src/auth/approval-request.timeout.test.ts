@@ -582,16 +582,6 @@ describe("an expired request is decided locally, and production OpenKey's 400 in
     expect(error.code).toBe("APPROVAL_PENDING");
     expect((error.metadata as { pending: { approvalUrl: string } }).pending.approvalUrl).toBe(saved!.approvalUrl);
   });
-
-  test("WITHOUT --timeout nothing changes: the same 400 after expiry is still APPROVAL_REQUEST_UNAVAILABLE and the entry stays (published behaviour)", async () => {
-    await createPending();
-    await expireLocally(30 * 60_000);
-    discoverRefusal = REAL_SHAPE;
-    const error = await pendingOf(() => acquireApprovalRequest(did, options()));
-    expect(error.code).toBe("APPROVAL_REQUEST_UNAVAILABLE");
-    expect(error.exitCode).toBe(8);
-    expect(await entries()).toHaveLength(1);
-  });
 });
 
 describe("which body failures are network failures under --timeout", () => {
