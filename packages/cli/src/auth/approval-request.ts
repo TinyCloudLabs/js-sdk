@@ -326,12 +326,28 @@ function bodyCutOff(error: unknown): boolean {
 }
 
 /**
- * OpenKey keeps an approved result this long (its 600 s retention); a request expired longer than that, plus clock
- * skew, can no longer have one. Mirrors OpenKey's APPROVAL_RESULT_RETENTION_SECONDS (docker-compose.prod.yml): if
- * OpenKey raises that setting, raise this with it, or a result OpenKey still holds could lose its local relay key.
+ * Clock skew allowed before a stored expiry is acted on without asking OpenKey: a local clock that runs ahead must
+ * never declare a link dead that OpenKey still accepts, so the local decision waits this long past the stored time.
  */
-const RESULT_RETENTION_MS = 600_000;
-const CLOCK_SKEW_MS = 60_000;
+const EXPIRY_SKEW_MS = 60_000;
+
+/**
+ * An approval request that expired before anyone approved it. Production OpenKey rejects every discover after a
+ * request's expiry, so an entry that holds no result can never be collected again: dropping it loses nothing, and
+ * the next run makes a new request. `drop: false` leaves it in place for a run that may still ask OpenKey.
+ */
+async function expiredRequest(profile: string, entry: PendingApproval, drop: boolean): Promise<CLIError> {
+  if (drop) await updatePending(profile, (items) => items.filter((item) => item.requestId !== entry.requestId));
+  return new CLIError("APPROVAL_REQUEST_EXPIRED",
+    "This approval request expired before it was approved. Run the command again: the next run makes a new request with a new link.", ExitCode.AUTH_REQUIRED);
+}
+
+/** OpenKey's answer to a discover for a request past its expiry: HTTP 400 invalid_request ("invalid or expired"), not expired_request. */
+async function discoverRefusedAsExpired(entry: PendingApproval, response: Response, now: number): Promise<boolean> {
+  if (response.status !== 400 || entry.resultRef !== undefined || now < Date.parse(entry.requestExpiresAt)) return false;
+  const body = await response.clone().json().catch(() => null) as { code?: unknown; error?: unknown } | null;
+  return body?.code === "invalid_request" || (typeof body?.error === "string" && /expired/i.test(body.error));
+}
 
 /**
  * The pause between two attempts to learn the outcome. Without a deadline it is the fixed 2 s. With one, the pause
@@ -354,16 +370,9 @@ async function pauseBetweenAttempts(profile: string, entry: PendingApproval, app
         "OpenKey could not fetch this approved result in time. It is saved by reference; retry the command to resume.", ExitCode.PENDING);
     }
     // OpenKey could not be asked (a network failure) and the link has run out: never hand out a dead link as pending.
-    // The entry stays for the next run to ask OpenKey, since a result approved before expiry may still be there, until
-    // no result can exist any more.
+    // No result can exist for it any more, so past the skew the entry goes and the next run makes a new request.
     const expiredAt = Date.parse(entry.requestExpiresAt);
-    if (!reached && now() >= expiredAt) {
-      if (now() >= expiredAt + RESULT_RETENTION_MS + CLOCK_SKEW_MS) {
-        await updatePending(profile, (items) => items.filter((item) => item.requestId !== entry.requestId));
-      }
-      throw new CLIError("APPROVAL_REQUEST_EXPIRED",
-        "This approval request expired before it was approved. The next run asks OpenKey once more, then starts a new request; if OpenKey stays unreachable this repeats until OpenKey answers, for at most about 11 minutes after the link expired.", ExitCode.AUTH_REQUIRED);
-    }
+    if (!reached && now() >= expiredAt) throw await expiredRequest(profile, entry, now() >= expiredAt + EXPIRY_SKEW_MS);
     throw pendingApproval(entry, approvalWait);
   }
   await (approvalWait.sleep ?? ((ms: number) => wait(ms)))(Math.min(APPROVAL_POLL_INTERVAL_MS, remaining));
@@ -418,6 +427,12 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
   if (matching.length > 1) throw invalid("Multiple approvals match this command; no result was selected.");
   let entry = matching[0];
   const isNewRequest = entry === undefined;
+  // Under --timeout a stored request past its own expiry that holds no result is decided here, before OpenKey is asked
+  // and before its dead link is shown again.
+  if (entry && approvalWait && !entry.resultRef && !entry.resultEnvelope &&
+    (approvalWait.now ?? Date.now)() >= Date.parse(entry.requestExpiresAt) + EXPIRY_SKEW_MS) {
+    throw await expiredRequest(profile, entry, true);
+  }
   if (!entry) {
     const relay = createECDH("prime256v1");
     relay.generateKeys();
@@ -451,6 +466,9 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
       if (response.status === 202) {
         await pauseBetweenAttempts(profile, entry, approvalWait, true);
         continue;
+      }
+      if (!response.ok && approvalWait && await discoverRefusedAsExpired(entry, response, (approvalWait.now ?? Date.now)())) {
+        throw await expiredRequest(profile, entry, true);
       }
       if (!response.ok) await throwRemoteError(profile, entry, response, "discover");
       let discovered: { resultRef?: unknown; expiresAt?: unknown };
