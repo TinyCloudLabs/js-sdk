@@ -397,7 +397,7 @@ if (seam === "after-save") {
   /** The link the CLI printed for the owner, opened the way OpenKey opens it. */
   async function openLink(name: string, stderr: string): Promise<ApprovalEntry> {
     // A resumed run prints the links it passes again; the newest is the last.
-    const url = [...stderr.matchAll(/Approve in OpenKey: (https:\/\/\S+)/g)].at(-1)?.[1];
+    const url = stderr.match(approvalLinkPattern)?.at(-1);
     if (!url) throw new Error("No approval link on stderr: " + stderr);
     const opened = await resolveApprovalRequest(url, {
       trustedOrigins: ["https://openkey.so"], apiOrigin: approvalServer!.url.origin,
@@ -414,7 +414,7 @@ if (seam === "after-save") {
     return entry;
   }
 
-  const lastLink = (stderr: string) => [...stderr.matchAll(/Approve in OpenKey: (\S+)/g)].at(-1)![1]!;
+  const approvalLinkPattern = /https:\/\/openkey\.so\/a\/\S+(?=\r?\n)/g;
   const acksOf = (entry: ApprovalEntry) => ackEvidence.filter((item) => item.requestId === entry.id);
   const stdoutPending = (stdout: string) => JSON.parse(stdout) as { pending: { step: number; of: number; approvalUrl: string; expiresAt: string } };
 
@@ -427,7 +427,7 @@ if (seam === "after-save") {
       const reader = child.stderr.getReader();
       const decoder = new TextDecoder();
       let stderr = "";
-      while (!/Approve in OpenKey: https:\/\/\S+/.test(stderr)) {
+      while (!stderr.match(approvalLinkPattern)) {
         const { value, done } = await reader.read();
         if (done) throw new Error("onboard ended before showing a link: " + stderr);
         stderr += decoder.decode(value, { stream: true });
