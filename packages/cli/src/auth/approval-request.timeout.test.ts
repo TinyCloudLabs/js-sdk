@@ -148,6 +148,8 @@ const virtual = {
 let networkFault: (url: URL) => boolean = () => false;
 /** Headers arrive with 200, then the body stalls until the request is aborted. */
 let stalledBody: (url: URL) => boolean = () => false;
+/** Headers arrive with 200, then the body fails at once: a connection reset (Bun raises a plain Error with code ECONNRESET) or malformed JSON. */
+let brokenBody: (url: URL) => "reset" | "malformed" | undefined = () => undefined;
 let offered: string[] = [];
 const send = globalThis.fetch;
 let fetchSpy: Mock<typeof fetch> | undefined;
@@ -160,6 +162,12 @@ async function route(input: Parameters<typeof fetch>[0], init?: RequestInit): Pr
   if (url.origin !== server.url.origin) throw new Error("Only the owned fixture may receive requests");
   await onRequest(url, init);
   if (networkFault(url)) throw new TypeError("fetch failed");
+  const broken = brokenBody(url);
+  if (broken === "malformed") return new Response("{ not json", { status: 200, headers: { "content-type": "application/json" } });
+  if (broken === "reset") {
+    return new Response(new ReadableStream({ start(controller) { controller.error(Object.assign(new Error("The socket connection was closed unexpectedly"), { code: "ECONNRESET" })); } }),
+      { status: 200, headers: { "content-type": "application/json" } });
+  }
   if (stalledBody(url)) {
     return new Response(new ReadableStream({ start(controller) {
       init?.signal?.addEventListener("abort", () => controller.error(init.signal!.reason), { once: true });
@@ -199,7 +207,7 @@ beforeEach(async () => {
   caseEnvironment = snapshotEnvironment();
   Object.assign(process.env, fixtureEnvironment);
   results.clear(); linkPosts = 0; discoverCalls = 0; fetchCalls = 0; acks = []; ackSeenSaved = []; expireRequests = false;
-  clock = START; sleeps = []; onTick = () => undefined; networkFault = () => false; stalledBody = () => false; onRequest = () => undefined; offered = [];
+  clock = START; sleeps = []; onTick = () => undefined; networkFault = () => false; stalledBody = () => false; brokenBody = () => undefined; onRequest = () => undefined; offered = [];
   await rm(pendingPath(), { force: true });
   await ProfileManager.setProfile("approval", { name: "approval", did, sessionDid: did, ownerDid, host, chainId: 1, spaceName: "applications", createdAt: new Date().toISOString(), authMethod: "openkey", posture: "owner-openkey" });
   await ProfileManager.setKey("approval", key);
@@ -400,6 +408,44 @@ describe("a response body that stalls past the cap is a network failure, never e
   }, 20_000);
 });
 
+describe("which body failures are network failures under --timeout", () => {
+  const realClock = { now: undefined, sleep: undefined };
+  const bounded = (timeoutMs: number, graceMs: number) => options({ deadlineMs: Date.now() + timeoutMs, graceMs } as { deadlineMs: number }, realClock);
+
+  test("a connection reset mid-body (a plain Error with code ECONNRESET, as Bun raises it) is a network failure: pending, then the next run resumes", async () => {
+    await pendingOf(() => acquireApprovalRequest(did, withDeadline(60_000)));
+    await approve();
+    brokenBody = (url) => url.pathname.endsWith("/result") ? "reset" : undefined;
+    const error = await pendingOf(() => acquireApprovalRequest(did, bounded(1_000, 1_500)));
+    expect(error.code).toBe("APPROVAL_PENDING");
+    brokenBody = () => undefined;
+    const delegation = await acquireApprovalRequest(did, withDeadline(10_000));
+    await commitAndAcknowledge(delegation);
+    expect(acks).toHaveLength(1);
+    expect(linkPosts).toBe(1);
+  }, 20_000);
+
+  test("a malformed (non-JSON) body is NOT swallowed as a network failure: it throws as without --timeout", async () => {
+    await pendingOf(() => acquireApprovalRequest(did, withDeadline(60_000)));
+    await approve();
+    brokenBody = (url) => url.pathname.endsWith("/result") ? "malformed" : undefined;
+    await expect(acquireApprovalRequest(did, withDeadline(7_000))).rejects.toBeInstanceOf(SyntaxError);
+    brokenBody = (url) => url.pathname.endsWith("/fetch") ? "malformed" : undefined;
+    await expect(acquireApprovalRequest(did, withDeadline(7_000))).rejects.toBeInstanceOf(SyntaxError);
+    expect((await entries())[0]!.resultRef).toBeDefined();
+  });
+
+  test("OpenKey answered 200 and only the body was cut off: with a link that looks expired it is pending, not exit 3", async () => {
+    await pendingOf(() => acquireApprovalRequest(did, withDeadline(60_000)));
+    const [saved] = await entries();
+    await writeJsonDurable(pendingPath(), [{ ...saved!, requestExpiresAt: new Date(START - 60_000).toISOString() }]);
+    brokenBody = (url) => url.pathname.endsWith("/result") ? "reset" : undefined;
+    const error = await pendingOf(() => acquireApprovalRequest(did, withDeadline(7_000)));
+    expect(error.code).toBe("APPROVAL_PENDING");
+    expect(error.exitCode).toBe(8);
+  });
+});
+
 describe("the expired-link exit 3 is only for a link nobody could ask about", () => {
   test("OpenKey answers (202, still open) with a link that looks expired by our clock: still pending, not exit 3", async () => {
     await pendingOf(() => acquireApprovalRequest(did, withDeadline(60_000)));
@@ -418,6 +464,7 @@ describe("the expired-link exit 3 is only for a link nobody could ask about", ()
     const error = await pendingOf(() => acquireApprovalRequest(did, withDeadline(7_000)));
     expect(error.code).toBe("APPROVAL_REQUEST_EXPIRED");
     expect(error.message).toMatch(/asks OpenKey once more, then starts a new request/);
+    expect(error.message).toMatch(/until OpenKey answers/);
   });
 
   test("a link expired for longer than OpenKey keeps any result (10 min + skew) is dropped locally, and the next run starts a new request", async () => {
