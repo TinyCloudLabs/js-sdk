@@ -4,6 +4,7 @@ import { DEFAULT_OPENKEY_HOST, DEFAULT_OPENKEY_DEVICE_API_HOST, ExitCode } from 
 import { CLIError } from "../output/errors.js";
 import { assertNoCaveatLimits } from "../lib/caveat-refusal.js";
 import { acquireApprovalRequest } from "./approval-request.js";
+import type { ApprovalWait } from "./approval-wait.js";
 import { ProfileManager } from "../config/profiles.js";
 import { dropPendingDelegationFor, pendingDelegationFor, savePendingDelegation } from "./pending-code.js";
 
@@ -22,6 +23,11 @@ export interface AuthFlowOptions {
   /** Local command identity only; never sent in the signed request or delegation. */
   commandIntent?: string;
   onApprovalRequest?: (request: { approvalUrl: string; requestId: string; expiresAt: string }) => void;
+  /**
+   * Bound the wait for the owner's approval (`--timeout`). A new request then ends the call at once with
+   * APPROVAL_PENDING (exit 8), a resumed one waits until the deadline; an approval that has arrived is always collected.
+   */
+  approvalWait?: ApprovalWait;
   noPopup?: boolean;
   jwk?: object;
   host?: string;

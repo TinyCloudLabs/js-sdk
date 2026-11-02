@@ -662,6 +662,13 @@ import { authorizationVerdictOf, parseCapabilityResource, SERVICE_LONG_TO_SHORT,
 function setActiveProfileName(name) {
   activeProfileName = name;
 }
+function approvalPendingOf(error) {
+  const pending = error.code === "APPROVAL_PENDING" ? error.metadata?.pending : void 0;
+  if (typeof pending !== "object" || pending === null) return void 0;
+  const { step, of, approvalUrl, expiresAt } = pending;
+  if (typeof step !== "number" || !Number.isInteger(step) || typeof of !== "number" || !Number.isInteger(of) || typeof approvalUrl !== "string" || typeof expiresAt !== "string") return void 0;
+  return { step, of, approvalUrl, expiresAt };
+}
 function cliErrorFromService(error, message = error.message) {
   if (error instanceof CLIError) return error;
   const nodeRetry = nodeRetryError(error);
@@ -774,6 +781,14 @@ function storageFullError(error, progress) {
 }
 function handleError(error) {
   const cliError = wrapError(error);
+  const pending = approvalPendingOf(cliError);
+  if (pending) {
+    outputJson({ pending });
+    process.stderr.write(`${safeBlock(cliError.message)}
+`);
+    if (registeredReplications().size === 0) return process.exit(cliError.exitCode);
+    return closeReplication().then(() => process.exit(cliError.exitCode));
+  }
   const prebuilt = typeof cliError.metadata?.hint === "string" ? cliError.metadata.hint : void 0;
   const hint = prebuilt ?? buildAuthHint(cliError) ?? (cliError.code === "NETWORK_ERROR" ? buildNetworkHint() : void 0);
   const authMeta = cliError.code === "AUTH_REQUIRED" || cliError.code === "PERMISSION_DENIED" ? cliError.metadata : void 0;
@@ -914,6 +929,7 @@ var init_errors = __esm({
     init_replication_registry();
     init_constants();
     init_formatter();
+    init_safe_text();
     init_storage2();
     init_warnings();
     GRANT_REVOKED_EXIT_CODE = ExitCode.PERMISSION_DENIED;
@@ -32512,6 +32528,14 @@ async function defaultIdempotencyKey(shareId, recipient) {
   ));
   return `tinycloud-share:${shareId}:${toBase64Url2(digest3)}`;
 }
+var ShareRevocationIncompleteError = class extends Error {
+  constructor(revoked, failed) {
+    super(`share revocation incomplete: ${failed.map((failure) => failure.targetRole).join(", ")} not revoked`);
+    this.revoked = revoked;
+    this.failed = failed;
+    this.name = "ShareRevocationIncompleteError";
+  }
+};
 function targetKind2(record3) {
   if (record3.targetKind !== void 0) return record3.targetKind;
   return record3.recipientMatcher.kind === "exactEmail" ? "email" : record3.recipientMatcher.kind === "emailDomain" ? "emailDomain" : record3.recipientMatcher.kind === "recipientDid" ? "recipientDid" : "bearer";
@@ -32527,22 +32551,49 @@ function policyNodeAudience(record3) {
 async function revokeShare(input) {
   const target = targetKind2(input.record);
   if (input.adapter === void 0) return { state: "unsupported", target, reason: "node revocation authority is required", code: "unsupported-target" };
-  const scope = input.scope ?? "direct";
-  const delegationCid = scope === "ancestor" ? input.record.ownerDelegationCid : input.record.enforcementDelegationCid;
-  if (delegationCid === void 0) return { state: "unsupported", target, reason: "share has no node-enforced delegation receipt", code: "unsupported-target" };
+  let delegationCid;
+  let roots;
   if (target === "bearer") {
+    const scope = input.scope ?? "direct";
+    const selected = scope === "ancestor" ? input.record.ownerDelegationCid : input.record.enforcementDelegationCid;
+    if (selected === void 0) return { state: "unsupported", target, reason: "share has no node-enforced delegation receipt", code: "unsupported-target" };
     if (input.adapter.revokeDelegation === void 0) return { state: "unsupported", target, reason: "native delegation revocation authority is required", code: "unsupported-target" };
-    await input.adapter.revokeDelegation({ delegationCid, scope, record: input.record });
+    await input.adapter.revokeDelegation({ delegationCid: selected, scope, record: input.record });
+    delegationCid = selected;
   } else {
-    if (input.record.ownerDid === void 0) return { state: "unsupported", target, reason: "share has no Policy/v3 owner receipt", code: "unsupported-target" };
-    if (input.adapter.revokePolicyRoot === void 0) return { state: "unsupported", target, reason: "Policy/v3 root revocation authority is required", code: "unsupported-target" };
-    await input.adapter.revokePolicyRoot({
-      rootCid: delegationCid,
-      targetRole: scope === "ancestor" ? "policy-authority" : "policy-enforcement",
-      ownerDid: input.record.ownerDid,
-      nodeOrigin: input.record.target.origin,
-      nodeAudience: policyNodeAudience(input.record)
-    });
+    const requests = [
+      [input.record.enforcementDelegationCid, "policy-enforcement"],
+      [input.record.ownerDelegationCid, "policy-authority"]
+    ].flatMap(([rootCid, targetRole]) => rootCid === void 0 ? [] : [{ rootCid, targetRole }]);
+    const first = requests[0];
+    if (first === void 0) return { state: "unsupported", target, reason: "share has no node-enforced delegation receipt", code: "unsupported-target" };
+    const ownerDid = input.record.ownerDid;
+    if (ownerDid === void 0) return { state: "unsupported", target, reason: "share has no Policy/v3 owner receipt", code: "unsupported-target" };
+    const revokePolicyRoot = input.adapter.revokePolicyRoot;
+    if (revokePolicyRoot === void 0) return { state: "unsupported", target, reason: "Policy/v3 root revocation authority is required", code: "unsupported-target" };
+    const nodeAudience = policyNodeAudience(input.record);
+    roots = [];
+    const failed = [];
+    for (const request of requests) {
+      try {
+        const outcome = await revokePolicyRoot({ ...request, ownerDid, nodeOrigin: input.record.target.origin, nodeAudience });
+        if (outcome === "left-live") {
+          if (request.targetRole !== "policy-authority") throw new Error("the enforcement root cannot be left live");
+          roots.push({ rootCid: request.rootCid, targetRole: "policy-authority", state: "left-live", expiresAt: input.record.expiresAt });
+        } else if (outcome === void 0) {
+          roots.push({ ...request, state: "revoked" });
+        } else {
+          throw new Error("root revocation returned an unknown outcome");
+        }
+      } catch (error) {
+        failed.push({ ...request, error });
+      }
+    }
+    const revoked = roots.flatMap((root) => root.state === "revoked" ? [root.rootCid] : []);
+    if (failed.length > 0 || revoked.length === 0) {
+      throw new ShareRevocationIncompleteError(revoked, failed.length > 0 ? failed : roots.map((root) => ({ rootCid: root.rootCid, targetRole: root.targetRole, error: new Error("no root was revoked") })));
+    }
+    delegationCid = first.rootCid;
   }
   let revokedAt = input.record.revokedAt ?? (input.now?.() ?? /* @__PURE__ */ new Date()).toISOString();
   if (input.records?.update !== void 0) {
@@ -32553,7 +32604,7 @@ async function revokeShare(input) {
     revokedAt = latest?.revokedAt ?? revokedAt;
     await input.records.put({ ...latest ?? input.record, revokedAt });
   }
-  return { state: "revoked", target, delegationCid, revokedAt };
+  return { state: "revoked", target, delegationCid, ...roots === void 0 ? {} : { roots }, revokedAt };
 }
 function redactRecord(record3, revealLink, link5) {
   const matcher = record3.recipientMatcher;
@@ -34514,12 +34565,58 @@ async function loginWithDeviceAuthorization(input) {
   return { profile, result };
 }
 
+// src/auth/approval-wait.ts
+init_constants();
+init_errors();
+var MAX_APPROVAL_TIMEOUT_MS = 9 * 6e4;
+var APPROVAL_POLL_INTERVAL_MS2 = 2e3;
+var APPROVAL_COLLECT_GRACE_MS = 3e4;
+var APPROVAL_TIMEOUT = /^(\d+)([sm])$/;
+function parseApprovalTimeout(value4) {
+  const match = APPROVAL_TIMEOUT.exec(value4);
+  if (!match && value4 !== "0") {
+    throw new CLIError("INVALID_TIMEOUT", `Invalid --timeout ${JSON.stringify(value4)}: use Ns or Nm (for example 60s or 5m), at most 9m.`, ExitCode.USAGE_ERROR);
+  }
+  const ms2 = match ? Number(match[1]) * (match[2] === "m" ? 6e4 : 1e3) : 0;
+  if (ms2 === 0) {
+    throw new CLIError("INVALID_TIMEOUT", `Invalid --timeout ${JSON.stringify(value4)}: the wait must be longer than zero. Use Ns or Nm (for example 60s or 5m), at most 9m, or leave --timeout off to wait until the approval is answered.`, ExitCode.USAGE_ERROR);
+  }
+  if (ms2 > MAX_APPROVAL_TIMEOUT_MS) {
+    throw new CLIError("INVALID_TIMEOUT", `--timeout may be at most 9m. Use a shorter wait (for example 60s); when the command exits with code 8 the approval is still pending, so run it again to keep waiting.`, ExitCode.USAGE_ERROR);
+  }
+  return ms2;
+}
+var REQUEST_TIMEOUT_MS2 = 1e4;
+var MIN_REQUEST_TIMEOUT_MS2 = 1e3;
+function approvalLimitMs(wait2, approved) {
+  return wait2.deadlineMs + (approved ? wait2.graceMs ?? APPROVAL_COLLECT_GRACE_MS : 0);
+}
+var MIN_SPACE_SETUP_MS = 15e3;
+function spaceSetupTimeoutMs(wait2) {
+  return Math.max(MIN_SPACE_SETUP_MS, approvalLimitMs(wait2, true) - (wait2.now ?? Date.now)());
+}
+function approvalRequestTimeoutMs(wait2, approved) {
+  if (!wait2) return REQUEST_TIMEOUT_MS2;
+  const left = approvalLimitMs(wait2, approved) - (wait2.now ?? Date.now)();
+  return Math.min(REQUEST_TIMEOUT_MS2, Math.max(MIN_REQUEST_TIMEOUT_MS2, left));
+}
+function approvalPendingError(pending) {
+  return new CLIError(
+    "APPROVAL_PENDING",
+    `Still waiting for the owner to approve in OpenKey. Run the same command again to keep waiting; the link stays valid until ${pending.expiresAt}.`,
+    ExitCode.PENDING,
+    { pending }
+  );
+}
+var APPROVAL_TIMEOUT_OPTION_DESCRIPTION = `Wait at most this long for the owner's OpenKey approval (Ns or Nm, more than 0, at most 9m; for example 60s). Exits 8 with {"pending":{"step","of","approvalUrl","expiresAt"}} on stdout as soon as a new approval link exists, and again if the wait ends while the approval is still pending: that is not a failure, so send the owner the link and run the same command again. A link that expired ends as exit 3 and its saved request is dropped once OpenKey says it is expired (or 11 minutes after its expiry); until then the next run asks OpenKey once more, so exit 3 can repeat once before a new request is made. An approval already given is still collected after the timeout, for at most 30 s more (plus up to 3 s, and in onboard the next link). On a new account onboard also waits for OpenKey to host the space, for the time left of timeout + 30 s grace (at least 15 s; about 90 s in all for 60s, at worst a little under 2 minutes); if it is not ready, exit 1 SPACE_SETUP_PENDING: wait a minute and run it again (the re-run continues with step 2; if a storage command later says Space not found, wait and retry). Without it the command waits until the approval is answered.`;
+
 // src/auth/approval-request.ts
 function trackApprovalResult(source, verified) {
   const entry = acquisitions.get(source);
   if (entry) acquisitions.set(verified, entry);
 }
 var acquisitions = /* @__PURE__ */ new WeakMap();
+var approvalWaits = /* @__PURE__ */ new WeakMap();
 function approvalResultNeedsAck(delegation) {
   return acquisitions.has(delegation);
 }
@@ -34691,7 +34788,7 @@ function approvalSessionProof2(entry, action, resultRef = "", ackId = "") {
     format: "jwk"
   })).toString("base64url")}`;
 }
-async function post2(entry, action, signingKey) {
+async function post2(entry, action, signingKey, timeoutMs = 1e4) {
   const ref = action === "discover" ? "" : entry.resultRef ?? "";
   const path = action === "discover" ? `/api/approval-requests/${entry.requestId}/result` : `/api/approval-results/${ref}/${action}`;
   const body = action === "discover" ? { bodyCid: entry.bodyCid, header: entry.record.header, signature: entry.record.signature } : { requestId: entry.requestId, bodyCid: entry.bodyCid, ...action === "ack" ? { ackId: entry.ackId } : {} };
@@ -34703,7 +34800,7 @@ async function post2(entry, action, signingKey) {
     referrerPolicy: "no-referrer",
     headers: { "content-type": "application/json", "OpenKey-Session-Proof": approvalSessionProof2({ requestId: entry.requestId, bodyCid: entry.bodyCid, apiOrigin: entry.apiOrigin, signingKey }, action, ref, action === "ack" ? entry.ackId : "") },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(1e4)
+    signal: AbortSignal.timeout(timeoutMs)
   });
 }
 async function throwRemoteError(profile, entry, response, action) {
@@ -34758,6 +34855,17 @@ function verifyPendingResult(entry, key) {
   if (verified.session.ownerDid.toLowerCase() !== opened.ownerDid.toLowerCase() || verified.session.expiresAt !== opened.delegationExpiresAt) throw invalid2("Result owner or expiry differs from its signed delegation.");
   return { delegation, session: verified.session };
 }
+function pendingApproval(entry, approvalWait) {
+  return approvalPendingError({ step: approvalWait.step, of: approvalWait.of, approvalUrl: entry.approvalUrl, expiresAt: entry.requestExpiresAt });
+}
+function bodyCutOff(error) {
+  return error instanceof TypeError || error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError" || error.code === "ECONNRESET");
+}
+var RESULT_RETENTION_MS = 6e5;
+var EXPIRY_SKEW_MS = 6e4;
+function lapsedPastRetention(entry, now) {
+  return now >= Date.parse(entry.requestExpiresAt) + RESULT_RETENTION_MS + EXPIRY_SKEW_MS;
+}
 async function expiredRequest(profile, entry, drop) {
   if (drop) await updatePending(profile, (items) => items.filter((item) => item.requestId !== entry.requestId));
   return new CLIError(
@@ -34771,12 +34879,34 @@ async function discoverRefusedAsExpired(entry, response, now) {
   const body = await response.clone().json().catch(() => null);
   return body?.code === "invalid_request" || typeof body?.error === "string" && /expired/i.test(body.error);
 }
+async function pauseBetweenAttempts(profile, entry, approvalWait, reached = false) {
+  if (!approvalWait) {
+    await wait(2e3);
+    return;
+  }
+  const now = approvalWait.now ?? Date.now;
+  const approved = entry.resultRef !== void 0;
+  const remaining = approvalLimitMs(approvalWait, approved) - now();
+  if (remaining <= 0) {
+    if (approved) {
+      throw new CLIError(
+        "APPROVAL_RESULT_UNAVAILABLE",
+        "OpenKey could not fetch this approved result in time. It is saved by reference; retry the command to resume.",
+        ExitCode.PENDING
+      );
+    }
+    if (!reached && now() >= Date.parse(entry.requestExpiresAt)) throw await expiredRequest(profile, entry, lapsedPastRetention(entry, now()));
+    throw pendingApproval(entry, approvalWait);
+  }
+  await (approvalWait.sleep ?? ((ms2) => wait(ms2)))(Math.min(APPROVAL_POLL_INTERVAL_MS2, remaining));
+}
 async function acquireApprovalRequest(_did, options) {
   const profile = options.profileName;
   if (!profile || !options.jwk || !options.host || !options.permissions?.length) {
     throw new CLIError("APPROVAL_REQUEST_CONTEXT_REQUIRED", "Approval requires a profile, session key, host and permissions.", ExitCode.USAGE_ERROR);
   }
   const signingKey = options.jwk;
+  const approvalWait = options.approvalWait;
   const signer = signerFromJwk(signingKey);
   const openkeyOrigin = configuredOrigin(options.openkeyHost ?? DEFAULT_OPENKEY_HOST, "OpenKey");
   const apiOrigin2 = configuredOrigin(options.openkeyApiHost ?? process.env.TC_OPENKEY_API_HOST ?? (openkeyOrigin === DEFAULT_OPENKEY_HOST ? DEFAULT_OPENKEY_DEVICE_API_HOST : openkeyOrigin), "OpenKey API");
@@ -34820,6 +34950,10 @@ async function acquireApprovalRequest(_did, options) {
   });
   if (matching.length > 1) throw invalid2("Multiple approvals match this command; no result was selected.");
   let entry = matching[0];
+  const isNewRequest = entry === void 0;
+  if (entry && approvalWait && !entry.resultRef && !entry.resultEnvelope && lapsedPastRetention(entry, (approvalWait.now ?? Date.now)())) {
+    throw await expiredRequest(profile, entry, true);
+  }
   if (!entry) {
     const relay = createECDH2("prime256v1");
     relay.generateKeys();
@@ -34853,25 +34987,33 @@ ${entry.approvalUrl}
     if (!options.noPopup && !options.onApprovalRequest && process.env.TC_AUTH_NO_POPUP !== "1" && process.env.TC_NO_POPUP !== "1") {
       await tryOpenBrowser(entry.approvalUrl);
     }
+    if (isNewRequest && approvalWait) throw pendingApproval(entry, approvalWait);
   }
   if (!entry.resultEnvelope) {
     for (; ; ) {
       let response;
       try {
-        response = await post2(entry, "discover", signingKey);
+        response = await post2(entry, "discover", signingKey, approvalRequestTimeoutMs(approvalWait, entry.resultRef !== void 0));
       } catch {
-        await wait(2e3);
+        await pauseBetweenAttempts(profile, entry, approvalWait);
         continue;
       }
       if (response.status === 202) {
-        await wait(2e3);
+        await pauseBetweenAttempts(profile, entry, approvalWait, true);
         continue;
       }
-      if (!response.ok && await discoverRefusedAsExpired(entry, response, Date.now())) {
+      if (!response.ok && await discoverRefusedAsExpired(entry, response, (approvalWait?.now ?? Date.now)())) {
         throw await expiredRequest(profile, entry, true);
       }
       if (!response.ok) await throwRemoteError(profile, entry, response, "discover");
-      const discovered = await response.json();
+      let discovered;
+      try {
+        discovered = await response.json();
+      } catch (error) {
+        if (!approvalWait || !bodyCutOff(error)) throw error;
+        await pauseBetweenAttempts(profile, entry, approvalWait, true);
+        continue;
+      }
       if (typeof discovered.resultRef !== "string" || !/^[A-Za-z0-9_-]{20,128}$/.test(discovered.resultRef) || typeof discovered.expiresAt !== "string" || !Number.isFinite(Date.parse(discovered.expiresAt))) {
         throw invalid2("Invalid approval result reference.");
       }
@@ -34880,12 +35022,20 @@ ${entry.approvalUrl}
       await updatePending(profile, (items) => items.map((item) => item.requestId === entry.requestId ? entry : item));
       let fetched2;
       try {
-        fetched2 = await post2(entry, "fetch", signingKey);
+        fetched2 = await post2(entry, "fetch", signingKey, approvalRequestTimeoutMs(approvalWait, true));
       } catch {
+        if (approvalWait) await pauseBetweenAttempts(profile, entry, approvalWait);
         continue;
       }
       if (!fetched2.ok) await throwRemoteError(profile, entry, fetched2, "fetch");
-      const result = await fetched2.json();
+      let result;
+      try {
+        result = await fetched2.json();
+      } catch (error) {
+        if (!approvalWait || !bodyCutOff(error)) throw error;
+        await pauseBetweenAttempts(profile, entry, approvalWait, true);
+        continue;
+      }
       if (result.requestId !== entry.requestId || result.bodyCid !== entry.bodyCid || result.resultRef !== entry.resultRef || result.expiresAt !== entry.resultExpiresAt || !result.relay || typeof result.relay !== "object") throw invalid2("Result reference does not match this request.");
       entry.resultEnvelope = result.relay;
       break;
@@ -34894,6 +35044,7 @@ ${entry.approvalUrl}
   const verified = verifyPendingResult(entry, signingKey);
   await updatePending(profile, (items) => items.map((item) => item.requestId === entry.requestId ? entry : item));
   acquisitions.set(verified.delegation, entry);
+  if (approvalWait) approvalWaits.set(entry, approvalWait);
   return verified.delegation;
 }
 async function completeApprovalResult(profile, delegation) {
@@ -34972,7 +35123,7 @@ async function completeApprovalResult(profile, delegation) {
     if (entry.acknowledged) continue;
     let response;
     try {
-      response = await post2(entry, "ack", ackKey);
+      response = await post2(entry, "ack", ackKey, approvalRequestTimeoutMs(approvalWaits.get(entry), true));
     } catch {
       throw new CLIError("APPROVAL_ACK_PENDING", "Approval is saved; ACK outcome is unknown. Retry this command to acknowledge the same result.", ExitCode.PENDING);
     }
@@ -35310,10 +35461,10 @@ function kvSpaceProbe(ctx, permissions, restore2 = restoreProfileSessionNode) {
     return result.error.code === "KV_NOT_FOUND" || status === 404 ? "hosted" : "transient";
   };
 }
-async function ensureSpaceSetup(ctx, delegation, permissions) {
+async function ensureSpaceSetup(ctx, delegation, permissions, timeoutMs) {
   const report = spaceSetupReport(delegation);
   if (!report) return;
-  await awaitSpaceSetup(report, { probe: kvSpaceProbe(ctx, permissions) });
+  await awaitSpaceSetup(report, { probe: kvSpaceProbe(ctx, permissions), ...timeoutMs === void 0 ? {} : { timeoutMs } });
 }
 
 // src/commands/auth.ts
@@ -37289,8 +37440,9 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
       return handleError(error);
     }
   });
-  auth.command("grant [request]").description("Grant a TinyCloud permission request artifact to its requester").option("--stdin", "Read the JSON request artifact from stdin").option("--paste", "Read the JSON request artifact from stdin").option("--yes", "Skip local-key TTY confirmation", false).action(async (source, options2, cmd) => {
+  auth.command("grant [request]").description("Grant a TinyCloud permission request artifact to its requester").option("--stdin", "Read the JSON request artifact from stdin").option("--paste", "Read the JSON request artifact from stdin").option("--yes", "Skip local-key TTY confirmation", false).option("--timeout <duration>", APPROVAL_TIMEOUT_OPTION_DESCRIPTION).action(async (source, options2, cmd) => {
     try {
+      const deadlineMs = options2.timeout === void 0 ? void 0 : Date.now() + parseApprovalTimeout(options2.timeout);
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts);
       const profile = await ProfileManager.getProfile(ctx.profile);
@@ -37357,7 +37509,8 @@ ${scope.text}
           reason: "Grant permissions requested by a TinyCloud auth request artifact.",
           exactApproval: true,
           noPopup: !(process.stdin.isTTY || process.stderr.isTTY),
-          commandIntent: approvalCommandIntent(parsed)
+          commandIntent: approvalCommandIntent(parsed),
+          ...deadlineMs === void 0 ? {} : { approvalWait: { deadlineMs, step: 1, of: 1 } }
         });
         const recovered = await recoverApprovalCommand(ctx.profile, approval.delegation, parsed);
         if (recovered) {
@@ -37802,7 +37955,8 @@ async function acquireOpenKeyApproval(params) {
     openkeyHost: resolveOpenKeyHost(params.profile),
     expiry: expiryCap === void 0 ? void 0 : openKeyExpiryParam(expiryCap),
     noPopup: params.noPopup,
-    commandIntent: params.commandIntent
+    commandIntent: params.commandIntent,
+    ...params.approvalWait === void 0 ? {} : { approvalWait: params.approvalWait }
   });
   return verifyOpenKeyApproval(delegationData, request, params.ctx.host, {
     key,
@@ -41673,8 +41827,16 @@ var ONBOARD_STEPS = [
   }
 ];
 function registerOnboardCommand(program) {
-  program.command("onboard").description("Set up this computer with its owner's OpenKey approvals and a starting grant for 30 days. Prints a short approval link, automatically retrieves and verifies the result, saves it durably, then acknowledges delivery. Re-run an interrupted command to resume.").option("--code <code>", "Manual fallback return code only; automatic short-link approvals do not produce a code").action(async (options, cmd) => {
+  program.command("onboard").description("Set up this computer with its owner's OpenKey approvals and a starting grant for 30 days. Prints a short approval link, automatically retrieves and verifies the result, saves it durably, then acknowledges delivery. Re-run an interrupted command to resume.").option("--code <code>", "Manual fallback return code only; automatic short-link approvals do not produce a code").option("--timeout <duration>", APPROVAL_TIMEOUT_OPTION_DESCRIPTION).action(async (options, cmd) => {
     try {
+      const deadlineMs = options.timeout === void 0 ? void 0 : Date.now() + parseApprovalTimeout(options.timeout);
+      if (options.timeout !== void 0 && typeof options.code === "string" && options.code.trim() !== "") {
+        throw new CLIError(
+          "INVALID_OPTIONS",
+          `--code and --timeout cannot be used together: running the command again would send the same code to the next approval step. Run \`${CLI_NAME29} onboard --code <code>\` without --timeout.`,
+          ExitCode.USAGE_ERROR
+        );
+      }
       const globalOpts = cmd.optsWithGlobals();
       const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
       if (!await ProfileManager.profileExists(ctx.profile)) await createKeyOnlyProfile(ctx.profile, ctx.host);
@@ -41688,6 +41850,7 @@ function registerOnboardCommand(program) {
       }
       await completeApprovalResult(ctx.profile);
       let code5 = typeof options.code === "string" && options.code.trim() !== "" ? options.code.trim() : void 0;
+      let currentStep = 1;
       const acquire = async (did, flow = {}) => {
         if (code5 !== void 0) {
           const pasted = code5;
@@ -41698,16 +41861,17 @@ function registerOnboardCommand(program) {
           ...flow,
           profileName: ctx.profile,
           noPopup: true,
+          ...deadlineMs === void 0 ? {} : { approvalWait: { deadlineMs, step: currentStep, of: ONBOARD_STEPS.length } },
           onApprovalRequest: ({ approvalUrl }) => {
             console.error(`${flow.reason}
 Approve in OpenKey (open the complete link):
 ${approvalUrl}
-
-Waiting for approval. Re-run this command after an interruption; no code is needed.`);
+${deadlineMs === void 0 ? "\nWaiting for approval. Re-run this command after an interruption; no code is needed." : ""}`);
           }
         });
       };
       for (const [index, step] of ONBOARD_STEPS.entries()) {
+        currentStep = index + 1;
         const reason = `TinyCloud onboarding, step ${index + 1} of ${ONBOARD_STEPS.length}: ${step.asks}`;
         const session2 = await ProfileManager.getSession(ctx.profile);
         if (!sessionStateIsUsable(storedSessionState(session2, profile).state)) {
@@ -41718,7 +41882,12 @@ Waiting for approval. Re-run this command after an interruption; no code is need
             persistHost: globalOpts.host !== void 0,
             openKeyAcquisition: acquire
           });
-          await ensureSpaceSetup({ profile: ctx.profile, host: ctx.host }, delegationData, delegationData.permissions);
+          await ensureSpaceSetup(
+            { profile: ctx.profile, host: ctx.host },
+            delegationData,
+            delegationData.permissions,
+            deadlineMs === void 0 ? void 0 : spaceSetupTimeoutMs({ deadlineMs, step: currentStep, of: ONBOARD_STEPS.length })
+          );
           profile = await ProfileManager.getProfile(ctx.profile);
           continue;
         }
@@ -46152,6 +46321,14 @@ function shareCliError(error, operation = "publish") {
       { hint: `Run \`${CLI_NAME34} share history recover\` to move the unreadable file aside. The old file is kept, not deleted.` }
     );
   }
+  if (error instanceof ShareRevocationIncompleteError) {
+    return new CLIError(
+      "REVOCATION_INCOMPLETE",
+      `the share was not fully revoked: ${error.failed.map((failure) => `${failure.targetRole} root ${failure.rootCid}`).join(", ")} is still live`,
+      1,
+      { hint: error.revoked.length > 0 ? "Recipient access has already ended. Run the same command again to revoke the rest." : "Run the same command again." }
+    );
+  }
   if (error instanceof SharePublishAuthorityError) {
     const failure = error.failure;
     const profileName2 = "profileName" in failure ? failure.profileName : void 0;
@@ -46609,7 +46786,7 @@ function registerShareCommand(program) {
       return handleError(shareCliError(error, "notify"));
     }
   });
-  share.command("revoke <id>").description("Revoke a bearer or addressed share this profile created").option("--ancestor", "Revoke the owner delegation ancestry").option("--json", "Print versioned JSON").action(async (id, options, command) => {
+  share.command("revoke <id>").description("Revoke a bearer or addressed share this profile created").option("--ancestor", "Bearer shares: revoke the owner delegation ancestry (addressed shares always revoke every root)").option("--json", "Print versioned JSON").action(async (id, options, command) => {
     try {
       const json = jsonOutput(options, command);
       if (shareServices.records === void 0) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);
