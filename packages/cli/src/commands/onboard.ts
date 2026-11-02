@@ -4,7 +4,7 @@ import type { PermissionEntry } from "@tinycloud/node-sdk";
 import { startAuthFlow, delegationFromInput } from "../auth/browser-auth.js";
 import { sessionStateIsUsable, storedSessionState } from "../auth/scoped-login.js";
 import { completeApprovalResult } from "../auth/approval-request.js";
-import { APPROVAL_TIMEOUT_OPTION_DESCRIPTION, parseApprovalTimeout } from "../auth/approval-wait.js";
+import { APPROVAL_TIMEOUT_OPTION_DESCRIPTION, parseApprovalTimeout, spaceSetupTimeoutMs } from "../auth/approval-wait.js";
 import { ensureSpaceSetup } from "../auth/space-setup.js";
 import { ExitCode } from "../config/constants.js";
 import { ProfileManager } from "../config/profiles.js";
@@ -110,7 +110,9 @@ export function registerOnboardCommand(program: Command): void {
               persistHost: globalOpts.host !== undefined,
               openKeyAcquisition: acquire,
             });
-            await ensureSpaceSetup({ profile: ctx.profile, host: ctx.host }, delegationData, delegationData.permissions as PermissionEntry[] | undefined);
+            // A new account's space can take OpenKey a minute or two to host; under --timeout the wait ends with the call's bound.
+            await ensureSpaceSetup({ profile: ctx.profile, host: ctx.host }, delegationData, delegationData.permissions as PermissionEntry[] | undefined,
+              deadlineMs === undefined ? undefined : spaceSetupTimeoutMs({ deadlineMs, step: currentStep, of: ONBOARD_STEPS.length }));
             profile = await ProfileManager.getProfile(ctx.profile);
             continue;
           }

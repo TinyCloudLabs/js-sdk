@@ -315,13 +315,18 @@ function pendingApproval(entry: PendingApproval, approvalWait: ApprovalWait): CL
   return approvalPendingError({ step: approvalWait.step, of: approvalWait.of, approvalUrl: entry.approvalUrl, expiresAt: entry.requestExpiresAt });
 }
 
+/** OpenKey keeps an approved result this long (its 600 s retention); a request expired longer than that, plus clock skew, can no longer have one. */
+const RESULT_RETENTION_MS = 600_000;
+const CLOCK_SKEW_MS = 60_000;
+
 /**
  * The pause between two attempts to learn the outcome. Without a deadline it is the fixed 2 s. With one, the pause
  * ends at the deadline, after which one last attempt is made. Once the owner has approved (a result reference
  * exists) the deadline no longer applies: collecting the result gets a bounded grace and ends as "result
  * unavailable", which a re-run resumes from the saved reference, never as a pending approval.
+ * `reached` says OpenKey answered the last attempt (the request is still open); otherwise it could not be asked.
  */
-async function pauseBetweenAttempts(profile: string, entry: PendingApproval, approvalWait: ApprovalWait | undefined): Promise<void> {
+async function pauseBetweenAttempts(profile: string, entry: PendingApproval, approvalWait: ApprovalWait | undefined, reached = false): Promise<void> {
   if (!approvalWait) {
     await wait(2000);
     return;
@@ -335,9 +340,15 @@ async function pauseBetweenAttempts(profile: string, entry: PendingApproval, app
         "OpenKey could not fetch this approved result in time. It is saved by reference; retry the command to resume.", ExitCode.PENDING);
     }
     // OpenKey could not be asked (a network failure) and the link has run out: never hand out a dead link as pending.
-    // The entry stays: a result approved before expiry may still be there, and the next run asks OpenKey.
-    if (now() >= Date.parse(entry.requestExpiresAt)) {
-      throw new CLIError("APPROVAL_REQUEST_EXPIRED", "This approval request expired before it was approved. Run the command again to start a new request.", ExitCode.AUTH_REQUIRED);
+    // The entry stays for the next run to ask OpenKey, since a result approved before expiry may still be there, until
+    // no result can exist any more.
+    const expiredAt = Date.parse(entry.requestExpiresAt);
+    if (!reached && now() >= expiredAt) {
+      if (now() >= expiredAt + RESULT_RETENTION_MS + CLOCK_SKEW_MS) {
+        await updatePending(profile, (items) => items.filter((item) => item.requestId !== entry.requestId));
+      }
+      throw new CLIError("APPROVAL_REQUEST_EXPIRED",
+        "This approval request expired before it was approved. The next run asks OpenKey once more, then starts a new request.", ExitCode.AUTH_REQUIRED);
     }
     throw pendingApproval(entry, approvalWait);
   }
@@ -424,11 +435,17 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
         continue;
       }
       if (response.status === 202) {
-        await pauseBetweenAttempts(profile, entry, approvalWait);
+        await pauseBetweenAttempts(profile, entry, approvalWait, true);
         continue;
       }
       if (!response.ok) await throwRemoteError(profile, entry, response, "discover");
-      const discovered = await response.json() as { resultRef?: unknown; expiresAt?: unknown };
+      let discovered: { resultRef?: unknown; expiresAt?: unknown };
+      try { discovered = await response.json() as { resultRef?: unknown; expiresAt?: unknown }; } catch (error) {
+        // Under --timeout a body the cap cut off is a network failure like a lost request; a malformed body is not.
+        if (!approvalWait || error instanceof SyntaxError) throw error;
+        await pauseBetweenAttempts(profile, entry, approvalWait);
+        continue;
+      }
       if (typeof discovered.resultRef !== "string" || !/^[A-Za-z0-9_-]{20,128}$/.test(discovered.resultRef) ||
         typeof discovered.expiresAt !== "string" || !Number.isFinite(Date.parse(discovered.expiresAt))) {
         throw invalid("Invalid approval result reference.");
@@ -443,7 +460,12 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
         continue;
       }
       if (!fetched.ok) await throwRemoteError(profile, entry, fetched, "fetch");
-      const result = await fetched.json() as Record<string, unknown>;
+      let result: Record<string, unknown>;
+      try { result = await fetched.json() as Record<string, unknown>; } catch (error) {
+        if (!approvalWait || error instanceof SyntaxError) throw error;
+        await pauseBetweenAttempts(profile, entry, approvalWait);
+        continue;
+      }
       if (result.requestId !== entry.requestId || result.bodyCid !== entry.bodyCid ||
         result.resultRef !== entry.resultRef || result.expiresAt !== entry.resultExpiresAt ||
         !result.relay || typeof result.relay !== "object") throw invalid("Result reference does not match this request.");

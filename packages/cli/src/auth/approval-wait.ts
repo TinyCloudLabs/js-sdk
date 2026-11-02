@@ -54,6 +54,17 @@ export function approvalLimitMs(wait: ApprovalWait, approved: boolean): number {
   return wait.deadlineMs + (approved ? wait.graceMs ?? APPROVAL_COLLECT_GRACE_MS : 0);
 }
 
+/** The least `onboard --timeout` leaves for OpenKey to host a new account's space: enough for a first probe or two. */
+const MIN_SPACE_SETUP_MS = 15_000;
+
+/**
+ * How long `onboard --timeout` lets a new account's space setup run after step 1 was approved: what is left of the
+ * timeout plus the grace, never less than 15 s. Unbounded `onboard` waits 150 s there.
+ */
+export function spaceSetupTimeoutMs(wait: ApprovalWait): number {
+  return Math.max(MIN_SPACE_SETUP_MS, approvalLimitMs(wait, true) - (wait.now ?? Date.now)());
+}
+
 /**
  * How long one request to OpenKey may take. Without a deadline: 10 s as always. With one, never past its limit
  * (by more than the minimum a request needs to answer), so the whole command is bounded by the timeout plus the
