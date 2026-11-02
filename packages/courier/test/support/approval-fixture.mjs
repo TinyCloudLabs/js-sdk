@@ -206,7 +206,7 @@ export function installFakeOpenKey(t) {
     calls.push({ action: act, requestId, resultRef: act === 'discover' ? undefined : ref });
     const injected = (control.inject[act] ?? []).shift();
     if (injected?.network) throw new TypeError('fetch failed');
-    if (injected) return json({ code: injected.code }, injected.status);
+    if (injected) return json({ code: injected.code, ...(injected.message ? { message: injected.message } : {}) }, injected.status);
     if (control.expiredRequests.has(requestId) && act === 'discover') return json({ code: 'expired_request' }, 410);
     if (act === 'discover') {
       if (!approvals.has(requestId) && control.autoApprove) {

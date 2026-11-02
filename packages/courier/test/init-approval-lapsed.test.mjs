@@ -175,3 +175,20 @@ scenario('a fetch answered 400 invalid_request on a held, not lapsed approval ke
   assert.equal(again.code, 0, again.stderr);
   assert.equal(fx.acks.length, 1);
 });
+
+// ---- the reply of OpenKey #407: an expired, never-opened request is answered HTTP 410 expired_request with a message ----
+
+scenario('lapsed + the exact OpenKey #407 reply (410 expired_request + message): ONE discover, [approval-expired], record dropped, next --request makes a new link', async ({ fx, request, courier }) => {
+  const printed = await request();
+  lapse(2 * MIN);
+  fx.inject.discover.push({ status: 410, code: 'expired_request', message: 'Approval request expired. Start a new request.' });
+  const run = await courier('--wait');
+  assert.equal(run.code, 1);
+  assert.match(run.stderr, /\[approval-expired\]/);
+  assert.equal(polls(fx), 1, 'exactly one discover call');
+  assert.equal(fx.calls.length, 1);
+  assert.equal(fs.existsSync(homeFile('approval-pending.json')), false);
+  const next = await request();
+  assert.notEqual(next.openkeyUrl, printed.openkeyUrl);
+  assert.equal(fx.created.length, 2);
+});

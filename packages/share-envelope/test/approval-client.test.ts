@@ -175,6 +175,27 @@ describe("invalid_request (HTTP 400) means an expired request only when discover
   });
 });
 
+describe("the expired-request reply of OpenKey #407", () => {
+  const expiredBody = { code: "expired_request", message: "Approval request expired. Start a new request." };
+  test("discover answered 410 with the exact #407 body is request_expired, carrying the status", async () => {
+    const { fetch } = fakeOpenKey(() => json(expiredBody, 410));
+    const error = await refusalOf(() => discoverApprovalResult(state, { fetch }));
+    expect(error).toBeInstanceOf(ApprovalClientError);
+    expect<string>(error.code).toBe("request_expired");
+    expect(error.status).toBe(410);
+  });
+  test("discover answered 400 with a bad-header invalid_request body is still request_expired", async () => {
+    const { fetch } = fakeOpenKey(() => json({ code: "invalid_request", message: "Signed approval request header is invalid or expired" }, 400));
+    expect<string>((await refusalOf(() => discoverApprovalResult(state, { fetch }))).code).toBe("request_expired");
+  });
+  test("fetch and ack answered 400 invalid_request are not request_expired", async () => {
+    const { fetch } = fakeOpenKey(() => json({ code: "invalid_request", message: "Signed approval request header is invalid or expired" }, 400));
+    const found = { resultRef: RESULT_REF, expiresAt: RESULT_EXPIRES };
+    expect<string>((await refusalOf(() => fetchApprovalResult(state, found, { fetch }))).code).not.toBe("request_expired");
+    expect<string>((await refusalOf(() => ackApprovalResult(state, RESULT_REF, "ack-id-1", { fetch }))).code).not.toBe("request_expired");
+  });
+});
+
 describe("fetchApprovalResult", () => {
   const found = { resultRef: RESULT_REF, expiresAt: RESULT_EXPIRES };
   const relay = { version: 1 };
