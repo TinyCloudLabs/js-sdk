@@ -1,10 +1,12 @@
-import { canonicalize } from "@tinycloud/share-envelope";
+import { canonicalize, shareEnvelopeV3Schema } from "@tinycloud/share-envelope";
 import type { SenderShareRecord } from "../history.js";
+import { parseArtifactVersionPath } from "../artifact-core.js";
+import { verifyArtifactShare } from "../artifact-pin.js";
 import { AgentRecordError, OwnerUnwrapUnavailableError, openAgentRecordAsOwner, parseStoredAgentRecord, SUPPORTED_AGENT_RECORD_V, MAX_AGENT_RECORD_BYTES } from "./agent-record.js";
 import type { ShareIndexBackend } from "./backend.js";
 import { DEFAULT_CAS_POLICY, runCas, type CasPolicy } from "./cas.js";
 import { agentIdFromDid, agentRecordPrefix, classifyRecordKey, INDEX_MAIN_KEY, rejectedKeyEntry, SHARE_RECORDS_VAULT_PREFIX } from "./ids.js";
-import { assertLinkBoundToMaterial, type StoredShareRecord } from "./delivery.js";
+import { assertLinkBoundToMaterial, openDeliveryEnvelope, restoreShareRecordLink, type StoredShareRecord } from "./delivery.js";
 import { validateShareLink } from "./link.js";
 import { claimRank, decideClaim } from "./precedence.js";
 import {
@@ -467,11 +469,12 @@ export class SenderShareIndex {
     } catch (error) {
       return { kind: "reject", reason: error instanceof ShareRecordSchemaError && error.reason === "provenance" ? "provenance" : "schema" };
     }
-    // 6. link. The stored link must be a share link on a configured origin; a Policy/v3 record's link must also be the
-    // link of its sealed material (its key and body), which its chain check opens and binds to shareCid below.
-    if (record.link !== undefined && !validateShareLink(record.link, this.options.shareOrigins).ok) return { kind: "reject", reason: "link" };
-    if (record.link !== undefined && record.deliveryMaterial !== undefined) {
-      try { assertLinkBoundToMaterial(record.link, record.deliveryMaterial); } catch { return { kind: "reject", reason: "link" }; }
+    // Reconstruct and verify original wrapper metadata before link and chain admission. Details: TC-1739
+    let link: string | undefined;
+    try { link = await restoreShareRecordLink(record, this.options.shareOrigins); } catch { return { kind: "reject", reason: "link" }; }
+    if (link !== undefined && !validateShareLink(link, this.options.shareOrigins).ok) return { kind: "reject", reason: "link" };
+    if (link !== undefined && record.deliveryMaterial !== undefined) {
+      try { assertLinkBoundToMaterial(link, record.deliveryMaterial); } catch { return { kind: "reject", reason: "link" }; }
     }
     // 7. CID ownership by proof. A migrated record has no agent binding, so it is never `proven`.
     const verdict = await verifyAgentRecordChain(record, {
@@ -479,6 +482,12 @@ export class SenderShareIndex {
       ...(this.options.registrationKey === undefined ? {} : { registrationKey: this.options.registrationKey }),
     });
     if (!verdict.ok) return { kind: "reject", reason: "proof" };
+    if (parseArtifactVersionPath(record.resource.path) !== undefined && record.deliveryMaterial !== undefined) {
+      try {
+        const envelope = shareEnvelopeV3Schema.parse(await openDeliveryEnvelope(record.deliveryMaterial));
+        if (verifyArtifactShare(envelope, { expectedOwnerDid: envelope.policy.ownerDid }) === undefined) return { kind: "reject", reason: "proof" };
+      } catch { return { kind: "reject", reason: "proof" }; }
+    }
     // registeredAt against signed times in the chain, never against when the owner happens to look. A one-time
     // owner import keeps the ruled exemption from the ±1-day anchor; it still may not postdate the chain or the clock.
     const window = input.source === "migrated" ? { ...(verdict.issued.latest === undefined ? {} : { latest: verdict.issued.latest }) } : verdict.issued;

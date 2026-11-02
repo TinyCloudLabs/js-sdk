@@ -16,6 +16,7 @@ import { loadAdditionalDelegations } from "../lib/permissions.js";
 import * as commandGrants from "../lib/permissions.js";
 import { entriesForSigning, finalizeSigningEntries } from "../lib/apps-agent-preset.js";
 import type { AuthFlowOptions, DelegationData } from "./browser-auth.js";
+import { dropCommittedDelegation } from "./pending-code.js";
 import { decryptRelayResult, relayPublicJwkOf } from "./device-auth.js";
 import { canonicalJson, parseRequestedExpiry, sameLoginSpace, verifyScopedLogin } from "./scoped-login.js";
 
@@ -307,6 +308,24 @@ function verifyPendingResult(entry: PendingApproval, key: Ed25519PrivateJwk): {
   return { delegation, session: verified.session };
 }
 
+/**
+ * An approval request that expired before anyone approved it. Production OpenKey rejects every discover after a
+ * request's expiry, so an entry that holds no result can never be collected again: dropping it loses nothing, and
+ * the next run makes a new request. `drop: false` leaves it in place for a run that may still ask OpenKey.
+ */
+async function expiredRequest(profile: string, entry: PendingApproval, drop: boolean): Promise<CLIError> {
+  if (drop) await updatePending(profile, (items) => items.filter((item) => item.requestId !== entry.requestId));
+  return new CLIError("APPROVAL_REQUEST_EXPIRED",
+    "This approval request expired before it was approved. Run the command again: the next run makes a new request with a new link.", ExitCode.AUTH_REQUIRED);
+}
+
+/** OpenKey's answer to a discover for a request past its expiry: HTTP 400 invalid_request ("invalid or expired"), not expired_request. */
+async function discoverRefusedAsExpired(entry: PendingApproval, response: Response, now: number): Promise<boolean> {
+  if (response.status !== 400 || entry.resultRef !== undefined || now < Date.parse(entry.requestExpiresAt)) return false;
+  const body = await response.clone().json().catch(() => null) as { code?: unknown; error?: unknown } | null;
+  return body?.code === "invalid_request" || (typeof body?.error === "string" && /expired/i.test(body.error));
+}
+
 /** Retryable reads never acknowledge or consume. The private result key is synced before the URL is exposed. */
 export async function acquireApprovalRequest(_did: string, options: AuthFlowOptions): Promise<DelegationData> {
   const profile = options.profileName;
@@ -386,6 +405,9 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
         await wait(2000);
         continue;
       }
+      if (!response.ok && await discoverRefusedAsExpired(entry, response, Date.now())) {
+        throw await expiredRequest(profile, entry, true);
+      }
       if (!response.ok) await throwRemoteError(profile, entry, response, "discover");
       const discovered = await response.json() as { resultRef?: unknown; expiresAt?: unknown };
       if (typeof discovered.resultRef !== "string" || !/^[A-Za-z0-9_-]{20,128}$/.test(discovered.resultRef) ||
@@ -414,6 +436,8 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
 
 /** Call only after committing authority. Re-check stored evidence under the profile lock and sync it before ACK intent. */
 export async function completeApprovalResult(profile: string, delegation?: object): Promise<void> {
+  // A pasted short code's local copy is dropped only now: every caller reaches here after its durable commit.
+  if (delegation) await dropCommittedDelegation(profile, delegation);
   const acquired = delegation ? acquisitions.get(delegation) : undefined;
   const entries = acquired ? [acquired] : await activePending(profile);
   for (const entry of entries) {

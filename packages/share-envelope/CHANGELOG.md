@@ -1,5 +1,25 @@
 # @tinycloud/share-envelope
 
+## 1.4.1
+
+### Patch Changes
+
+- 5e47629: `require("@tinycloud/share-envelope/links")` now loads from CommonJS. `dist/links.cjs` bundles `multiformats`, whose subpath exports have no `require` condition, as `dist/index.cjs` already does; the ESM build is unchanged. This also fixes `require("@tinycloud/share-sdk/share-index")`, which requires it.
+
+  Details: TC-1739
+
+- b0da170: The signed approval request may carry an optional `suggestedLifetimeSeconds`: a whole number above 0 and no more than `grantLifetimeSeconds`. When it is absent, the maximum applies. The field is optional and additive. No client sends it yet: OpenKey must accept it first. Requests without it parse and canonicalize byte-identically.
+
+  Details: TC-2272
+
+## 1.4.1-beta.1
+
+### Patch Changes
+
+- b0da170: The signed approval request may carry an optional `suggestedLifetimeSeconds`: a whole number above 0 and no more than `grantLifetimeSeconds`. When it is absent, the maximum applies. The field is optional and additive. No client sends it yet: OpenKey must accept it first. Requests without it parse and canonicalize byte-identically.
+
+  Details: TC-2272
+
 ## 1.4.1-beta.0
 
 ### Patch Changes

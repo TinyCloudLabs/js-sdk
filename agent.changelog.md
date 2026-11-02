@@ -3,6 +3,16 @@
 Track changes to agent-facing development guidance for the TinyCloud JavaScript SDK. Add a concise
 entry when `agent.dev.md` or related agent workflow expectations change.
 
+## 2026-11-01
+
+- CI: the `conformance` PR job in `.github/workflows/operations-mcp.yml` is split into
+  `conformance-core`, `conformance-unit (shard N)` and an aggregate job still named `conformance`
+  (the required status check). The CLI/bootstrap/server/MCP OAuth/tests/cli unit loop is sharded by
+  file number; every file runs in exactly one shard. New CLI test files are still picked up by
+  that glob; focused tests are still listed by hand in `conformance-core`. Shared build steps live
+  in `.github/actions/conformance-setup`. Add a new job to the aggregate's `needs:` or it is not
+  gated.
+
 ## 2026-10-29
 
 - TC-2192: documented the exact-owner Share-key runtime consent boundary and

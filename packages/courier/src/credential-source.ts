@@ -16,6 +16,7 @@ import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { checkSecureDir, ensureSecureDir } from '@tinycloud/node-sdk/credential-pending-store';
 import {
+  isTicketEmailProofResult,
   verifyStoredEmailProof,
   type EmailProofResult,
   type StoredEmailProofRecord,
@@ -181,6 +182,8 @@ export class StoredCredentialSource {
 
   async store(input: { readonly result: EmailProofResult; readonly requirement: CredentialRequirement; readonly requirementDigest: string; readonly holderDid: string; readonly now?: Date }): Promise<StoredEmailProofRecord> {
     const now = input.now ?? new Date();
+    // The courier stores the ticket (did:key) credential only; a held (account) result is kept by the held store.
+    if (!isTicketEmailProofResult(input.result)) throw new CourierError('credential-record-invalid', 'Only a ticket email credential is stored here.');
     const base = await createStoredCredentialRecord({
       verified: input.result.verified,
       ownerDid: input.holderDid,

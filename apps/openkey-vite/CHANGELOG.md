@@ -1,5 +1,82 @@
 # openkey-vite
 
+## 0.0.44-beta.1
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.9.1-beta.1
+
+## 0.0.44-beta.0
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.9.1-beta.0
+
+## 0.0.43
+
+### Patch Changes
+
+- Updated dependencies [614c1c2]
+- Updated dependencies [9758dfd]
+- Updated dependencies [a9bc978]
+- Updated dependencies [f1744fb]
+- Updated dependencies [c523295]
+- Updated dependencies [7d3f8df]
+  - @tinycloud/web-sdk@3.9.0
+
+## 0.0.43-beta.9
+
+### Patch Changes
+
+- Updated dependencies [c523295]
+  - @tinycloud/web-sdk@3.9.0-beta.9
+
+## 0.0.43-beta.8
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.9.0-beta.8
+
+## 0.0.43-beta.7
+
+### Patch Changes
+
+- Updated dependencies [7d3f8df]
+  - @tinycloud/web-sdk@3.9.0-beta.7
+
+## 0.0.43-beta.6
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.9.0-beta.6
+
+## 0.0.43-beta.5
+
+### Patch Changes
+
+- Updated dependencies [9758dfd]
+  - @tinycloud/web-sdk@3.9.0-beta.5
+
+## 0.0.43-beta.4
+
+### Patch Changes
+
+- Updated dependencies [a9bc978]
+  - @tinycloud/web-sdk@3.9.0-beta.4
+
+## 0.0.43-beta.3
+
+### Patch Changes
+
+- Updated dependencies [614c1c2]
+  - @tinycloud/web-sdk@3.9.0-beta.3
+
+## 0.0.43-beta.2
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.8.1-beta.2
+
 ## 0.0.43-beta.1
 
 ### Patch Changes

@@ -327,16 +327,26 @@ const lazyCjsConfig = {
 
 // Headless subpath (`@tinycloud/web-sdk/credentials`). Built from the base
 // configs only: no replica externals or plugins, so index/replica are unchanged.
+// `@tinycloud/sdk-core` (every subpath) stays a package import here, not a second bundled copy: the held
+// store takes an `IssuerSet` and throws `CredentialError` / `HeldCredentialError`, and those must be the same
+// objects as the ones a consumer imports from `@tinycloud/sdk-core`. It is a dependency of this package.
+const sdkCoreExternal = (type) => ({ request }, callback) => {
+  if (request && /^@tinycloud\/sdk-core(?:\/|$)/.test(request)) {
+    callback(null, `${type} ${request}`);
+    return;
+  }
+  callback();
+};
 const credentialsEsmConfig = {
   ...esmConfig,
   entry: "./src/credentials-subpath.ts",
-  externals: [linksExternal, issuedDelegationsExternal("import", "mjs")],
+  externals: [linksExternal, sdkCoreExternal("module")],
   output: { ...esmConfig.output, filename: "credentials.mjs" },
 };
 const credentialsCjsConfig = {
   ...cjsConfig,
   entry: "./src/credentials-subpath.ts",
-  externals: [linksExternal, issuedDelegationsExternal("commonjs", "cjs")],
+  externals: [linksExternal, sdkCoreExternal("commonjs")],
   output: { ...cjsConfig.output, filename: "credentials.cjs" },
 };
 

@@ -73,6 +73,8 @@ const FILE_TEXT_FIELDS = [
   'expiresAt',
 ] as const;
 
+const HELD_PROFILE_ID = 'tinycloud.email-held/v1';
+
 interface FileRecord {
   readonly type: 'TinyCloudEmailProofPending';
   readonly version: 1;
@@ -86,6 +88,8 @@ interface FileRecord {
   readonly openerOrigin: string;
   readonly createdAt: string;
   readonly expiresAt: string;
+  /** Held profile only (`tinycloud.email-held/v1`): `expiresAt` of the create response. Required for a held record, absent from every other. */
+  readonly serverExpiresAt?: string;
   readonly secret?: string;
 }
 
@@ -291,6 +295,12 @@ function isFileRecord(value: unknown): value is FileRecord {
   if (record.type !== 'TinyCloudEmailProofPending' || record.version !== 1) return false;
   if (!FILE_TEXT_FIELDS.every((field) => typeof record[field] === 'string')) return false;
   if (record.secret !== undefined && (typeof record.secret !== 'string' || !BASE64.test(record.secret))) return false;
+  // serverExpiresAt: present and parseable for the held profile, absent for every other profile. Neither shape loads as the other.
+  if (record.profile === HELD_PROFILE_ID) {
+    if (typeof record.serverExpiresAt !== 'string' || !Number.isFinite(Date.parse(record.serverExpiresAt))) return false;
+  } else if (record.serverExpiresAt !== undefined) {
+    return false;
+  }
   return Number.isFinite(Date.parse(record.createdAt as string)) && Number.isFinite(Date.parse(record.expiresAt as string));
 }
 
@@ -309,6 +319,7 @@ function restoreFromFile(record: FileRecord): EmailProofPending {
     openerOrigin: record.openerOrigin,
     createdAt: record.createdAt,
     expiresAt: record.expiresAt,
+    ...(record.serverExpiresAt === undefined ? {} : { serverExpiresAt: record.serverExpiresAt }),
   });
 }
 
@@ -358,6 +369,7 @@ function toFileRecord(pending: EmailProofPending, secret: Uint8Array | undefined
     openerOrigin: pending.openerOrigin,
     createdAt: pending.createdAt,
     expiresAt: pending.expiresAt,
+    ...(pending.serverExpiresAt === undefined ? {} : { serverExpiresAt: pending.serverExpiresAt }),
     ...(secret === undefined ? {} : { secret: Buffer.from(secret).toString('base64') }),
   };
 }
@@ -396,7 +408,11 @@ export function createFileEmailProofPendingStore(options: FileEmailProofPendingS
         if (exceedsWindow(pending)) {
           throw new PendingStoreError('credential-store-invalid', 'Pending record expires beyond the 15-minute window and was rejected.');
         }
-        writeOwnerOnly(home, pendingFile(home, pending.requestId), toFileRecord(pending, putOptions?.secret));
+        const record = toFileRecord(pending, putOptions?.secret);
+        if (!isFileRecord(record)) {
+          throw new PendingStoreError('credential-store-invalid', 'Pending record is not a valid held or ticket record and was rejected.');
+        }
+        writeOwnerOnly(home, pendingFile(home, pending.requestId), record);
       });
     },
     async delete(requestId) {
