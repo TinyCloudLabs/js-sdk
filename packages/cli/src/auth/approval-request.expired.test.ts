@@ -215,30 +215,6 @@ async function expireLocally(agoMs: number): Promise<void> {
   const [saved] = await entries();
   await writeJsonDurable(pendingPath(), [{ ...saved!, requestExpiresAt: new Date(Date.now() - agoMs).toISOString() }]);
 }
-/** The owner approves the newest pending request: an encrypted, owner-signed result appears at OpenKey. */
-async function approve(): Promise<void> {
-  const entry = (await entries()).at(-1);
-  if (!entry) throw new Error("No pending request to approve");
-  const delegation = await signedDelegation();
-  const recipient = entry.request.resultEncryptionPublicJwk;
-  const ephemeral = createECDH("prime256v1"); ephemeral.generateKeys();
-  const shared = ephemeral.computeSecret(Buffer.concat([Buffer.from([4]), Buffer.from(recipient.x, "base64url"), Buffer.from(recipient.y, "base64url")]));
-  const extracted = createHmac("sha256", Buffer.from(entry.requestId)).update(shared).digest();
-  const encryptionKey = createHmac("sha256", extracted).update("openkey-device-relay-v1").update(Buffer.from([1])).digest();
-  const nonce = randomBytes(12);
-  const cipher = createCipheriv("aes-256-gcm", encryptionKey, nonce);
-  cipher.setAAD(Buffer.from(entry.requestId));
-  const delegationExpiresAt = new Date((delegation.siwe as string).match(/^Expiration Time:\s*(.+)$/m)![1]!).toISOString();
-  const plaintext = { resultVersion: 1, requestId: entry.requestId, requestDigest: entry.bodyCid, requesterDid: did,
-    ownerDid, targetDid: did, delegationExpiresAt, delegation };
-  const ciphertext = Buffer.concat([cipher.update(JSON.stringify(plaintext), "utf8"), cipher.final(), cipher.getAuthTag()]);
-  results.set(entry.requestId, {
-    resultRef: randomBytes(24).toString("base64url"), expiresAt: new Date(Date.now() + 600_000).toISOString(),
-    relay: { version: 1, algorithm: "ECDH-P256-A256GCM", ephemeralPublicJwk: relayPublicJwkOf(ephemeral),
-      nonce: nonce.toString("base64url"), ciphertext: ciphertext.toString("base64url") },
-  });
-}
-
 describe("without --timeout, an approval request that expired unanswered ends the command instead of looping", () => {
   test("(b) production OpenKey's real answer to a discover for an expired request, HTTP 400 invalid_request, is exit 3 and drops the entry, never exit 8", async () => {
     await createPending();
