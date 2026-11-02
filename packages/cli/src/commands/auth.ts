@@ -89,7 +89,7 @@ import { assertNoCaveatLimits } from "../lib/caveat-refusal.js";
 import { isRawEncryptionPermission, isVerifiedRawEncryptionPermission } from "../lib/raw-encryption.js";
 import { canonicalOwnerDid } from "../lib/owner-did.js";
 import { assertNotLocalOwner, assertSessionReplaceable, commitLogin, readProfileSnapshot } from "../auth/login-commit.js";
-import { discardRefusedApproval, type CreatedProfile } from "../auth/refused-approval.js";
+import { discardRefusedApproval, type CreatedProfile, type KeyOrigin } from "../auth/refused-approval.js";
 import { ownerIdentitySigner, startPreparedOpenKeyHandoff, type PreparedOpenKeyHandoff } from "../auth/prepared-openkey.js";
 import { announceFirstOwner, openKeyPrimaryFlag, ownerLoginPermissions, warnIfNotPrimaryKey, withOwnerKeyPrimary } from "../auth/owner-key.js";
 import { SHARE_PUBLISHING_MANIFEST_REF } from "../share/publishing-manifest.js";
@@ -2504,6 +2504,7 @@ async function rotateAuthKey(
     noPopup: options.noPopup,
     permissions,
     ...(profile.namedKeys === undefined ? {} : { keys: profile.namedKeys.prefix, expectedOwner: profile.ownerDid }),
+    rotatedKey: true,
   });
   outputRotationResult(result.profile, profileName, oldDid, "openkey");
 }
@@ -2781,8 +2782,10 @@ interface OpenKeyLoginOptions {
   force?: boolean;
   /** `--keys` folder: also ask OpenKey to approve named-key create and decrypt there. */
   keys?: string;
-  /** The profile was created by this login: a refused paste approval removes it again (see `discardRefusedApproval`). */
+  /** The profile (and its key) was created by this login. */
   createdProfile?: CreatedProfile;
+  /** `auth rotate` generated the key just before this sign-in. */
+  rotatedKey?: boolean;
 }
 
 /** Only a fresh SDK-prepared, OpenKey-signed owner session may establish replica consent. */
@@ -3143,6 +3146,8 @@ export async function refreshOpenKeySession(
   let verifiedOwner: string | undefined;
   let declined: PermissionEntry[] = [];
   let legacyNested: PermissionEntry[] = [];
+  // How this sign-in's key came to be: only a key this sign-in created may be deleted when the approval is refused.
+  const keyOrigin: KeyOrigin = { ...(options.createdProfile === undefined ? {} : { createdProfile: options.createdProfile }), ...(options.rotatedKey === true ? { rotatedKey: true } : {}) };
   try {
     if (permissions) {
       const verified = verifyScopedLogin(delegationData, key, sessionDid, permissions, { expectedOwner, expiry, ...(plainPasteLink ? { expiryChangeable: true } : {}) });
@@ -3163,8 +3168,8 @@ export async function refreshOpenKeySession(
     }
   } catch (error) {
     // A paste login's approval already exists on OpenKey's side (it is created before the code reaches the CLI): refusing
-    // the signed message must also make that approval unusable.
-    if (plainPasteLink) await discardRefusedApproval(profileName, snapshot, options.createdProfile);
+    // the signed message must also make that approval unusable where this sign-in can (see `discardRefusedApproval`).
+    if (plainPasteLink) await discardRefusedApproval(profileName, snapshot, delegationData as Record<string, unknown>, keyOrigin);
     throw error;
   }
 
@@ -3195,8 +3200,8 @@ export async function refreshOpenKeySession(
         : {}),
     });
   } catch (error) {
-    // The commit's own refusal to replace a live session with this approval: the approval is refused too (its key stays).
-    if (plainPasteLink && (error as { code?: unknown }).code === "SESSION_IN_USE") await discardRefusedApproval(profileName, snapshot, options.createdProfile);
+    // The commit's own refusal to replace a live session with this approval: the approval is refused too.
+    if (plainPasteLink && (error as { code?: unknown }).code === "SESSION_IN_USE") await discardRefusedApproval(profileName, snapshot, delegationData as Record<string, unknown>, keyOrigin);
     throw error;
   }
   await completeApprovalResult(profileName, delegationData);

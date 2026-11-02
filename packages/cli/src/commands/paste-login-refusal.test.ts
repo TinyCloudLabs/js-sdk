@@ -1,7 +1,9 @@
 // TC-2276: in a paste login OpenKey creates the delegation to the profile's key BEFORE the CLI sees the code. When the CLI
-// then refuses the signed message (an 11 year or 1 minute pick, a wrong owner, a bad proof ...) that delegation is live, so
-// the refusal must also make it unusable: the profile's key and the saved copy of the approval are deleted, a profile this
-// login created is removed, and ONE plain line says so. A key a live session still uses is NEVER deleted.
+// then refuses the signed message (an 11 year or 1 minute pick, a wrong owner, a bad proof ...) that grant is LIVE, so:
+//   - the saved copy of the pasted code is deleted;
+//   - the key is deleted IF THIS SIGN-IN CREATED IT (a profile this login created, a rotation, a first key), so the grant
+//     cannot be used; a key that already existed (other grants or sessions may depend on it) is KEPT;
+//   - the owner is told, in one plain line, that the grant is live until <date> and where to revoke it (two wordings).
 // Real ProfileManager and real refreshOpenKeySession; only the OpenKey acquisition is simulated (it also saves the redeemed
 // code's local copy, as the real paste flow does).
 
@@ -15,8 +17,10 @@ import { NodeWasmBindings, PrivateKeySigner } from "@tinycloud/node-sdk";
 
 const recordedErrors: Array<{ code?: string; exitCode?: number; message?: string }> = [];
 let pickedLifetimeMs = 0;
-let tamper: "none" | "signature" = "none";
+let tamper: "none" | "signature" | "no-expiry-line" = "none";
 let savedPendingCopies = 0;
+/** The Expiration Time of the grant the simulated OpenKey just made (what the owner is told). */
+let grantedUntil = "";
 const stderr: string[] = [];
 
 const realBrowserAuth = await import("../auth/browser-auth.js");
@@ -37,11 +41,14 @@ async function proofFor(did: string, jwk: Record<string, unknown>, lifetimeMs: n
   });
   const signature = await signer.signMessage(prepared.siwe);
   const session = wasm.completeSessionSetup({ ...prepared, signature });
+  grantedUntil = /Expiration Time: (.+)/.exec(prepared.siwe)![1]!;
   const { d: _private, ...publicJwk } = jwk;
   return {
     ...session, jwk: publicJwk, verificationMethod: did, address, chainId: 1,
     spaceId,
-    ownerDid: `did:pkh:eip155:1:${address}`, siwe: prepared.siwe,
+    ownerDid: `did:pkh:eip155:1:${address}`,
+    // A result with no readable proof at all: the CLI cannot say until when the grant lasts.
+    ...(tamper === "no-expiry-line" ? {} : { siwe: prepared.siwe }),
     signature: tamper === "signature" ? await signer.signMessage("not the message that was approved") : signature,
   };
 }
@@ -55,7 +62,7 @@ mock.module("../auth/browser-auth.js", () => ({
     // Another login replaces the profile's key while the owner is still approving.
     if (replaceKeyDuringAcquisition !== undefined) await ProfileManager.setKey(options.profileName as string, replaceKeyDuringAcquisition);
     // What the real paste flow does right after it redeems a short code: keep the owner's approval locally.
-    if (options.profileName !== undefined && Date.parse(/Expiration Time: (.+)/.exec(delegation.siwe)![1]!) > Date.now()) {
+    if (options.profileName !== undefined && pickedLifetimeMs > 0 && tamper !== "no-expiry-line") {
       await savePendingDelegation(options.profileName as string, "abcd-efgh", delegation as never);
       savedPendingCopies += 1;
     }
@@ -98,17 +105,19 @@ const { registerAuthCommand, refreshOpenKeySession } = await import("./auth.js")
 
 const DAY = 86_400_000;
 const HOST = "https://node.example.test";
-// The exact lines (no secrets): the owner is told the approval was not used, what happened to its key, and where to remove it.
-const DELETED_LINE = "The approval was not used and its key was deleted, so it cannot be used. You can also remove it at account.tinycloud.xyz.";
-const KEPT_LINE = "The approval was not used, but this profile's key was kept because it is still in use, so the approval stays active until you remove it at account.tinycloud.xyz.";
+// The exact lines (no secrets): the grant is live until <date>, what happened to its key, and where to revoke it.
+const deletedLine = (until: string = grantedUntil) =>
+  `OpenKey granted this approval${until === "" ? "" : ` until ${until}`}, but this CLI did not use it and its key was deleted, so it cannot be used. You can also remove it at account.tinycloud.xyz.`;
+const keptLine = (until: string = grantedUntil) =>
+  `OpenKey granted this approval${until === "" ? "" : ` until ${until}`} and the key it belongs to still exists on this device (other grants use it). Revoke it at account.tinycloud.xyz.`;
 let profileNumber = 0;
 let profileName = "";
-// (stderr capture: see `capturing` below)
 
 beforeEach(async () => {
   recordedErrors.length = 0;
   stderr.length = 0;
   savedPendingCopies = 0;
+  grantedUntil = "";
   tamper = "none";
   replaceKeyDuringAcquisition = undefined;
   profileName = `refusal-${++profileNumber}`;
@@ -116,7 +125,6 @@ beforeEach(async () => {
   await ProfileManager.setConfig({ ...(await ProfileManager.getConfig()), defaultProfile: "default" });
 });
 afterAll(async () => {
-  // (nothing to restore: stderr is captured per command)
   if (originalHome === undefined) delete process.env.TC_HOME;
   else process.env.TC_HOME = originalHome;
   await rm(home, { recursive: true, force: true });
@@ -154,9 +162,9 @@ const REFUSALS: Array<[string, number, () => void, string[]]> = [
   ["OPENKEY_OWNER_MISMATCH", 5, () => { pickedLifetimeMs = 7 * DAY; }, ["--owner", `did:pkh:eip155:1:${OTHER_ADDRESS}`]],
 ];
 
-describe("tc auth login --paste: a refused approval leaves no usable key (the profile was created by this login)", () => {
+describe("tc auth login --paste: the profile and its key were created by this login, so a refusal deletes them", () => {
   for (const [code, exitCode, arrange, extra] of REFUSALS) {
-    test(`${code}: no key, no saved approval, no session, no profile; the plain line once; exit ${exitCode}`, async () => {
+    test(`${code}: no key, no saved approval, no session, no profile; the dated deleted line once; exit ${exitCode}`, async () => {
       arrange();
       await login(...extra);
       expect(recordedErrors).toEqual([expect.objectContaining({ code, exitCode })]);
@@ -164,12 +172,23 @@ describe("tc auth login --paste: a refused approval leaves no usable key (the pr
       expect(files(profileName)).toEqual({ key: false, pending: false, session: false });
       expect(await ProfileManager.profileExists(profileName)).toBe(false);
       expect(await ProfileManager.getKey(profileName)).toBeNull();
-      expect(lines(DELETED_LINE)).toHaveLength(1);
-      expect(lines(KEPT_LINE)).toHaveLength(0);
+      expect(grantedUntil).not.toBe("");
+      expect(lines(deletedLine())).toHaveLength(1);
+      expect(lines(keptLine())).toHaveLength(0);
       // The default profile is what it was before this login created (and removed) the profile.
       expect((await ProfileManager.getConfig()).defaultProfile).toBe("default");
     });
   }
+
+  test("a result with no readable expiry: the line says the grant was made, with no date", async () => {
+    pickedLifetimeMs = 7 * DAY;
+    tamper = "no-expiry-line";
+    await login();
+    expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_PROOF_INVALID" })]);
+    expect(files(profileName)).toEqual({ key: false, pending: false, session: false });
+    expect(lines(deletedLine(""))).toHaveLength(1);
+    expect(stderr.join("")).not.toContain(" until ");
+  });
 
   test("a SUCCESSFUL paste login still keeps its key and session, and prints neither line", async () => {
     pickedLifetimeMs = 30 * DAY;
@@ -177,13 +196,13 @@ describe("tc auth login --paste: a refused approval leaves no usable key (the pr
     expect(recordedErrors).toEqual([]);
     expect(files(profileName)).toMatchObject({ key: true, session: true });
     expect(await ProfileManager.profileExists(profileName)).toBe(true);
-    expect(lines(DELETED_LINE)).toHaveLength(0);
-    expect(lines(KEPT_LINE)).toHaveLength(0);
+    expect(lines(deletedLine())).toHaveLength(0);
+    expect(lines(keptLine())).toHaveLength(0);
   });
 });
 
-describe("tc init --paste: a refused approval removes the profile it created", () => {
-  test("OPENKEY_EXPIRY_EXCEEDED: no key, no saved approval, no profile; the plain line once", async () => {
+describe("tc init --paste: the profile and its key were created by this command, so a refusal deletes them", () => {
+  test("OPENKEY_EXPIRY_EXCEEDED: no key, no saved approval, no profile; the dated deleted line once", async () => {
     pickedLifetimeMs = 11 * 365 * DAY;
     const program = new Command();
     program.option("-p, --profile <name>");
@@ -192,52 +211,56 @@ describe("tc init --paste: a refused approval removes the profile it created", (
     expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_EXPIRY_EXCEEDED", exitCode: 5 })]);
     expect(files(profileName)).toEqual({ key: false, pending: false, session: false });
     expect(await ProfileManager.profileExists(profileName)).toBe(false);
-    expect(lines(DELETED_LINE)).toHaveLength(1);
+    expect(lines(deletedLine())).toHaveLength(1);
     expect((await ProfileManager.getConfig()).defaultProfile).toBe("default");
   });
 });
 
-describe("a profile that already existed (key only, no session): the key and the saved approval go, the profile stays", () => {
-  test("OPENKEY_EXPIRY_EXCEEDED", async () => {
+describe("a key that ALREADY EXISTED (a profile this login did not create) is kept; only the saved approval goes", () => {
+  test("a key-only profile, OPENKEY_EXPIRY_EXCEEDED: key, profile and no-session state stay, the kept line is printed once", async () => {
     await createKeyOnlyProfile(profileName, HOST);
+    const before = JSON.stringify(await ProfileManager.getKey(profileName));
     pickedLifetimeMs = 11 * 365 * DAY;
     await expect(capturing(() => refreshOpenKeySession(profileName, HOST, { paste: true }))).rejects.toMatchObject({ code: "OPENKEY_EXPIRY_EXCEEDED", exitCode: 5 });
     expect(savedPendingCopies).toBe(1);
-    expect(files(profileName)).toEqual({ key: false, pending: false, session: false });
+    expect(files(profileName)).toEqual({ key: true, pending: false, session: false });
+    expect(JSON.stringify(await ProfileManager.getKey(profileName))).toBe(before);
     expect(await ProfileManager.profileExists(profileName)).toBe(true);
-    expect(lines(DELETED_LINE)).toHaveLength(1);
+    expect(lines(keptLine())).toHaveLength(1);
+    expect(lines(deletedLine())).toHaveLength(0);
   });
 
   for (const [code, scope] of [
     ["OPENKEY_GRANT_BROADENED", { service: "tinycloud.kv", space: "default", path: "example/", actions: ["tinycloud.kv/get"] }],
     ["OPENKEY_SCOPE_MISMATCH", { service: "tinycloud.kv", space: "other", path: "", actions: ["tinycloud.kv/get"] }],
   ] as const) {
-    test(`a scoped (--manifest) login: ${code}`, async () => {
+    test(`a scoped (--manifest) login: ${code}: the key stays`, async () => {
       await createKeyOnlyProfile(profileName, HOST);
       pickedLifetimeMs = 7 * DAY;
       await expect(capturing(() => refreshOpenKeySession(profileName, HOST, { paste: true, permissions: [scope as never] }))).rejects.toMatchObject({ code });
-      expect(files(profileName)).toEqual({ key: false, pending: false, session: false });
-      expect(lines(DELETED_LINE)).toHaveLength(1);
+      expect(files(profileName)).toEqual({ key: true, pending: false, session: false });
+      expect(lines(keptLine())).toHaveLength(1);
+      expect(lines(deletedLine())).toHaveLength(0);
     });
   }
 });
 
 describe("a key another login replaced while this approval was pending is not this login's to delete", () => {
-  test("the profile's current key stays, the saved approval goes, the kept line is printed once", async () => {
-    await createKeyOnlyProfile(profileName, HOST);
+  test("the profile created by this login keeps the key that is there now, the saved approval goes, the kept line is printed once", async () => {
     pickedLifetimeMs = 11 * 365 * DAY;
     const { generateKey } = await import("../auth/local-key.js");
     const other = (await generateKey()).jwk as Record<string, unknown>;
     replaceKeyDuringAcquisition = other;
-    await expect(capturing(() => refreshOpenKeySession(profileName, HOST, { paste: true }))).rejects.toMatchObject({ code: "OPENKEY_EXPIRY_EXCEEDED" });
+    await login();
+    expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_EXPIRY_EXCEEDED" })]);
     expect(((await ProfileManager.getKey(profileName)) as Record<string, unknown>).x).toBe(other.x);
     expect(files(profileName)).toEqual({ key: true, pending: false, session: false });
-    expect(lines(KEPT_LINE)).toHaveLength(1);
-    expect(lines(DELETED_LINE)).toHaveLength(0);
+    expect(lines(keptLine())).toHaveLength(1);
+    expect(lines(deletedLine())).toHaveLength(0);
   });
 });
 
-describe("a profile with a LIVE session: its key is never deleted", () => {
+describe("a profile with a LIVE session: its existing key is kept, byte for byte", () => {
   const signedIn = async () => {
     pickedLifetimeMs = 30 * DAY;
     await login();
@@ -248,7 +271,7 @@ describe("a profile with a LIVE session: its key is never deleted", () => {
     return before;
   };
 
-  test("an 11 year pick is refused, the key and the session stay byte for byte, the saved approval goes, the kept line is printed once", async () => {
+  test("an 11 year pick is refused, the key and the session stay, the saved approval goes, the kept line is printed once", async () => {
     const before = await signedIn();
     pickedLifetimeMs = 11 * 365 * DAY;
     await login("--replace-session");
@@ -257,8 +280,8 @@ describe("a profile with a LIVE session: its key is never deleted", () => {
     expect(files(profileName)).toEqual({ key: true, pending: false, session: true });
     expect(JSON.stringify(await ProfileManager.getKey(profileName))).toBe(before.key);
     expect(JSON.stringify(await ProfileManager.getSession(profileName))).toBe(before.session);
-    expect(lines(KEPT_LINE)).toHaveLength(1);
-    expect(lines(DELETED_LINE)).toHaveLength(0);
+    expect(lines(keptLine())).toHaveLength(1);
+    expect(lines(deletedLine())).toHaveLength(0);
   });
 
   // Only a SCOPED (--manifest) login re-checks the live session at the commit; it refuses a pick that would shorten it.
@@ -276,12 +299,12 @@ describe("a profile with a LIVE session: its key is never deleted", () => {
     expect(files(profileName)).toEqual({ key: true, pending: false, session: true });
     expect(JSON.stringify(await ProfileManager.getKey(profileName))).toBe(before.key);
     expect(JSON.stringify(await ProfileManager.getSession(profileName))).toBe(before.session);
-    expect(lines(KEPT_LINE)).toHaveLength(1);
-    expect(lines(DELETED_LINE)).toHaveLength(0);
+    expect(lines(keptLine())).toHaveLength(1);
+    expect(lines(deletedLine())).toHaveLength(0);
   });
 });
 
-describe("tc auth rotate --paste: the rotation already replaced the key and cleared the session, so a refusal deletes the new key", () => {
+describe("tc auth rotate --paste: the rotation created the key, so a refusal deletes it", () => {
   test("OPENKEY_EXPIRY_EXCEEDED", async () => {
     pickedLifetimeMs = 30 * DAY;
     await login();
@@ -291,6 +314,7 @@ describe("tc auth rotate --paste: the rotation already replaced the key and clea
     await runAuth("rotate", "--paste", "--no-popup", "--force");
     expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_EXPIRY_EXCEEDED", exitCode: 5 })]);
     expect(files(profileName)).toEqual({ key: false, pending: false, session: false });
-    expect(lines(DELETED_LINE)).toHaveLength(1);
+    expect(await ProfileManager.profileExists(profileName)).toBe(true);
+    expect(lines(deletedLine())).toHaveLength(1);
   });
 });
