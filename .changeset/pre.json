@@ -29,7 +29,10 @@
     "@tinycloud/sdk-services-test": "21.0.3"
   },
   "changesets": [
+    "cli-approval-wait-timeout",
     "courier-short-link-approval",
-    "held-probe-delete"
+    "held-probe-delete",
+    "share-revoke-all-roots",
+    "tc-712-pair-renew-artifact"
   ]
 }

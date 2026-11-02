@@ -24,6 +24,7 @@ import {
   shareDeliveryWindowExpiresAt,
   ShareNotifyError,
   revokeShare,
+  ShareRevocationIncompleteError,
   redactPublishedShare,
   historyRecordForPublishedShare,
   type ShareTarget,
@@ -160,6 +161,14 @@ export function shareCliError(error: unknown, operation: "publish" | "notify" = 
       "sender history cannot be read with the current session key",
       1,
       { hint: `Run \`${CLI_NAME} share history recover\` to move the unreadable file aside. The old file is kept, not deleted.` },
+    );
+  }
+  if (error instanceof ShareRevocationIncompleteError) {
+    return new CLIError(
+      "REVOCATION_INCOMPLETE",
+      `the share was not fully revoked: ${error.failed.map((failure) => `${failure.targetRole} root ${failure.rootCid}`).join(", ")} is still live`,
+      1,
+      { hint: error.revoked.length > 0 ? "Recipient access has already ended. Run the same command again to revoke the rest." : "Run the same command again." },
     );
   }
   if (error instanceof SharePublishAuthorityError) {
@@ -723,7 +732,7 @@ export function registerShareCommand(program: Command): void {
 
   share.command("revoke <id>")
     .description("Revoke a bearer or addressed share this profile created")
-    .option("--ancestor", "Revoke the owner delegation ancestry")
+    .option("--ancestor", "Bearer shares: revoke the owner delegation ancestry (addressed shares always revoke every root)")
     .option("--json", "Print versioned JSON")
     .action(async (id: string, options, command: Command) => {
       try {

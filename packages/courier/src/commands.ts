@@ -31,7 +31,7 @@ import { requestHash } from './canonical.js';
 import { targetHelp } from './guard/target.js';
 import type { ParsedArgs } from './args.js';
 import { requireFlag, oneOf } from './args.js';
-import { assertPeerDelegation, bareDid, durationMs, AGENT_GRANT_MAX_MS } from './authority.js';
+import { assertExactAuthority, assertPeerDelegation, bareDid, durationMs, AGENT_GRANT_MAX_MS } from './authority.js';
 
 interface Ctx {
   profile: Profile;
@@ -261,7 +261,7 @@ export async function cmdPair(args: ParsedArgs) {
   if (sub === 'start') return pairStart(args);
   if (sub === 'accept') return pairAccept(args);
   if (sub === 'renew') return pairRenew(args);
-  fail('usage', `Usage: ${cmd('pair start <peer> | pair accept <artifact-json|--file f|--stdin> | pair renew [peer] [--force]')}`);
+  fail('usage', `Usage: ${cmd('pair start <peer> | pair accept <artifact-json|--file f|--stdin> | pair renew [peer] [--force] [--renew-artifact]')}`);
 }
 
 async function pairStart(args: ParsedArgs) {
@@ -301,7 +301,13 @@ async function validatePeerDelegation(node: TinyCloudNode, profile: Profile, pee
     fail('bad-artifact', 'Peer delegation space or owner does not match the pairing artifact.');
   }
   if (!peer.theirHandleForMe) fail('bad-artifact', 'Pairing artifact is missing the peer mailbox handle.');
-  const active = await activateValidatedRuntimeDelegation(node, delegation, { host: profile.host });
+  const active = await activateValidatedRuntimeDelegation(node, delegation, {
+    host: profile.host,
+    authorize: (permissions) => {
+      assertExactAuthority(permissions, peerReadPermissions(peer.theirHandleForMe!, peer.spaceId, peer.sessionId), 'Pair renewal');
+      return true;
+    },
+  });
   assertPeerDelegation(active, {
     issuer: peer.courierDid,
     audience: profile.courierDid,
@@ -360,13 +366,26 @@ async function pairAccept(args: ParsedArgs) {
   }
 
   const peer = profile.peers[art.callMe] ?? findPeerByCourier(profile, art.from.courier);
-  if (!peer) fail('unknown-peer', `No pending pairing for "${art.callMe}". Did you run \`pair accept\` on artifact A?`);
-  if (art.from.courier !== peer.courierDid || art.spaceId !== peer.spaceId || art.from.owner !== peer.ownerDid) {
-    fail('bad-artifact', `Artifact C does not match the pending pairing with ${peer.handle}.`);
+  if (!peer) fail('unknown-peer', `No paired peer for "${art.callMe}".`);
+  if (peer.handle !== art.callMe) {
+    fail('bad-artifact', `Artifact C names ${art.callMe}, but the matched peer handle is ${peer.handle}.`);
   }
-  const candidate = { ...peer, theirHandleForMe: art.peer };
-  const incoming = await validatePeerDelegation(node, profile, candidate, art.delegation!);
-  peer.theirHandleForMe = candidate.theirHandleForMe;
+  if (peer.status !== 'awaiting-C' && peer.status !== 'paired') {
+    fail('not-paired', `Cannot install artifact C for ${peer.handle}: pairing is not awaiting C or already paired.`);
+  }
+  if (art.from.courier !== peer.courierDid || art.spaceId !== peer.spaceId || art.from.owner !== peer.ownerDid) {
+    fail('bad-artifact', `Artifact C does not match the pairing with ${peer.handle}.`);
+  }
+  if (!peer.theirHandleForMe || art.peer !== peer.theirHandleForMe) {
+    fail('bad-artifact', `Artifact C changes the established mailbox scope for ${peer.handle}.`);
+  }
+  const incoming = await validatePeerDelegation(node, profile, peer, art.delegation!);
+  if (peer.status === 'paired') {
+    const currentExpiry = Date.parse(peer.inbound?.expiresAt ?? '');
+    if (!Number.isFinite(currentExpiry) || Date.parse(incoming.expiresAt) <= currentExpiry) {
+      fail('stale-artifact', `Artifact C does not extend the current inbound delegation for ${peer.handle}.`);
+    }
+  }
   peer.inbound = { delegation: serializeDelegation(incoming.delegation), cid: incoming.cid, expiresAt: incoming.expiresAt };
   peer.status = 'paired';
   saveProfile(profile);
@@ -382,7 +401,19 @@ function recordOutbound(peer: StoredPeer, delegation: PortableDelegation): void 
 async function pairRenew(args: ParsedArgs) {
   const active = await ctx();
   const requested = args.positional[1];
+  if (args.has('renew-artifact') && !requested) {
+    fail('usage', `Usage: ${cmd('pair renew <peer> --renew-artifact [--force]')}`);
+  }
   const peers = requested ? [getPeer(active.profile, requested)] : Object.values(active.profile.peers).filter((peer) => peer.status === 'paired');
+  if (args.has('renew-artifact')) {
+    const peer = peers[0]!;
+    if (peer.status !== 'paired') fail('not-paired', `Cannot renew ${peer.handle}: pairing is not complete.`);
+    if (!peer.theirHandleForMe) fail('not-paired', `Peer ${peer.handle} is missing its paired mailbox handle.`);
+    const delegation = await renewOutbound(active, peer, args.has('force'));
+    if (!delegation) fail('renew-throttled', `Outbound delegation for ${peer.handle} was renewed within the last 20 hours; use --force to renew it now.`);
+    printJson(artifactWithDelegation('C', active.profile, delegation, peer.handle, peer.theirHandleForMe));
+    return;
+  }
   for (const peer of peers) {
     if (peer.status !== 'paired') fail('not-paired', `Cannot renew ${peer.handle}: pairing is not complete.`);
     await renewOutbound(active, peer, args.has('force'));
@@ -391,9 +422,9 @@ async function pairRenew(args: ParsedArgs) {
   printJson({ ok: true, renewed: peers.map((peer) => peer.handle) });
 }
 
-async function renewOutbound(active: Ctx, peer: StoredPeer, force: boolean): Promise<void> {
+async function renewOutbound(active: Ctx, peer: StoredPeer, force: boolean): Promise<PortableDelegation | undefined> {
   const last = peer.outbound.at(-1);
-  if (!force && last && Date.now() - Date.parse(last.issuedAt) < 20 * 3600 * 1000) return;
+  if (!force && last && Date.now() - Date.parse(last.issuedAt) < 20 * 3600 * 1000) return undefined;
   const { profile, node } = active;
   const result = await node.delegateTo(peer.courierDid, peerReadPermissions(peer.handle, profile.spaceId!, peer.sessionId), { expiry: PEER_DELEGATION_EXPIRY });
   const issuedAt = new Date().toISOString();
@@ -408,6 +439,7 @@ async function renewOutbound(active: Ctx, peer: StoredPeer, force: boolean): Pro
     expiresAt: result.delegation.expiry instanceof Date ? result.delegation.expiry.toISOString() : new Date(result.delegation.expiry).toISOString(),
   });
   saveProfile(profile);
+  return result.delegation;
 }
 
 async function installInbound(active: Ctx, peer: StoredPeer): Promise<void> {
