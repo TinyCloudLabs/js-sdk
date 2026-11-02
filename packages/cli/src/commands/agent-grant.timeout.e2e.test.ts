@@ -549,16 +549,17 @@ if (seam === "after-save") {
     const file = await agentRequest("lapsed", ["--preset", "apps-agent", "--app", "demo"]);
     const prepared = JSON.parse(await readFile(file, "utf8")) as { requestId: string; sessionDid: string };
     const pendingFile = join(profilePath("owner"), "approval-pending.json");
-    const setExpiry = async (agoMs: number) => {
+    // The owner profile also holds the finished commands of earlier tests: change this request's entry only.
+    const setExpiry = async (requestId: string, agoMs: number) => {
       const saved = JSON.parse(await readFile(pendingFile, "utf8")) as Array<Record<string, unknown>>;
-      saved[0]!.requestExpiresAt = new Date(Date.now() - agoMs).toISOString();
+      saved.find((item) => item.requestId === requestId)!.requestExpiresAt = new Date(Date.now() - agoMs).toISOString();
       await writeFile(pendingFile, JSON.stringify(saved), { mode: 0o600 });
     };
     const first = await run(file, ["--timeout", "60s"]);
     expect(first.exitCode).toBe(8);
     const { entry } = await openLink(first.stderr, prepared);
 
-    await setExpiry(30_000);
+    await setExpiry(entry.id, 30_000);
     entry.invalidRequest = true;
     const polled = entry.polls;
     const viaOpenKey = await run(file, ["--timeout", "60s"]);
@@ -574,7 +575,7 @@ if (seam === "after-save") {
     expect(second.id).not.toBe(entry.id);
     expect(pendingOf(renewed.stdout).pending.step).toBe(1);
 
-    await setExpiry(20 * 60_000);
+    await setExpiry(second.id, 20 * 60_000);
     const before = second.polls;
     const local = await run(file, ["--timeout", "60s"]);
     expect(local.exitCode, local.stderr).toBe(3);
