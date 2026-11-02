@@ -261,6 +261,9 @@ var init_warnings = __esm({
 // src/output/formatter.ts
 import ora from "ora";
 import { CLI_NAME as CLI_NAME2 } from "@tinycloud/operations/cli-name";
+function outputJson(data) {
+  process.stdout.write(safeJsonStringify(data, 2) + "\n");
+}
 function warningLine(warnings) {
   const which = warnings.map((warning) => `${warning.grantCid ?? "unidentified"}: ${warning.reason}`).join(", ");
   const subject = warnings.length === 1 ? "A stored grant was" : `${warnings.length} stored grants were`;
@@ -432,6 +435,13 @@ import { authorizationVerdictOf, parseCapabilityResource, SERVICE_LONG_TO_SHORT,
 function setActiveProfileName(name) {
   activeProfileName = name;
 }
+function approvalPendingOf(error) {
+  const pending = error.code === "APPROVAL_PENDING" ? error.metadata?.pending : void 0;
+  if (typeof pending !== "object" || pending === null) return void 0;
+  const { step, of, approvalUrl, expiresAt } = pending;
+  if (typeof step !== "number" || !Number.isInteger(step) || typeof of !== "number" || !Number.isInteger(of) || typeof approvalUrl !== "string" || typeof expiresAt !== "string") return void 0;
+  return { step, of, approvalUrl, expiresAt };
+}
 function nodeRetryError(error) {
   if (typeof error !== "object" || error === null) return void 0;
   const { code: code5, meta, metadata } = error;
@@ -517,6 +527,14 @@ function storageFullError(error, progress) {
 }
 function handleError(error) {
   const cliError = wrapError(error);
+  const pending = approvalPendingOf(cliError);
+  if (pending) {
+    outputJson({ pending });
+    process.stderr.write(`${safeBlock(cliError.message)}
+`);
+    if (registeredReplications().size === 0) return process.exit(cliError.exitCode);
+    return closeReplication().then(() => process.exit(cliError.exitCode));
+  }
   const prebuilt = typeof cliError.metadata?.hint === "string" ? cliError.metadata.hint : void 0;
   const hint = prebuilt ?? buildAuthHint(cliError) ?? (cliError.code === "NETWORK_ERROR" ? buildNetworkHint() : void 0);
   const authMeta = cliError.code === "AUTH_REQUIRED" || cliError.code === "PERMISSION_DENIED" ? cliError.metadata : void 0;
@@ -657,6 +675,7 @@ var init_errors = __esm({
     init_replication_registry();
     init_constants();
     init_formatter();
+    init_safe_text();
     init_storage();
     init_warnings();
     GRANT_REVOKED_EXIT_CODE = ExitCode.PERMISSION_DENIED;
