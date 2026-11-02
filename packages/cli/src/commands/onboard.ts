@@ -93,7 +93,7 @@ export function registerOnboardCommand(program: Command): void {
             ...flow, profileName: ctx.profile, noPopup: true,
             ...(deadlineMs === undefined ? {} : { approvalWait: { deadlineMs, step: currentStep, of: ONBOARD_STEPS.length } }),
             onApprovalRequest: ({ approvalUrl }) => {
-              console.error(`${flow.reason}\nApprove in OpenKey: ${approvalUrl}${deadlineMs === undefined ? "\nWaiting for approval. Re-run this command after an interruption; no code is needed." : ""}`);
+              console.error(`${flow.reason}\nApprove in OpenKey (open the complete link):\n${approvalUrl}\n${deadlineMs === undefined ? "\nWaiting for approval. Re-run this command after an interruption; no code is needed." : ""}`);
             },
           });
         };

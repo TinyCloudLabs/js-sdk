@@ -404,7 +404,8 @@ if (seam === "after-save") {
     }
   }
 
-  const linkOf = (stderr: string) => [...stderr.matchAll(/Approve this request in OpenKey: (https:\/\/\S+)/g)].at(-1)?.[1];
+  // The link is on its own line, as the chat-approval guidance asks (#824).
+  const linkOf = (stderr: string) => stderr.match(/https:\/\/openkey\.so\/a\/\S+(?=\r?\n)/g)?.at(-1);
 
   /** The link the CLI printed, opened the way OpenKey opens it. */
   async function openLink(stderr: string, preparedRequest: { requestId: string; sessionDid: string }) {

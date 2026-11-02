@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
-import { buildShortLink, parseLink, parseApprovalRequest, prepareLinkRecord, openLinkRecord, signerFromSeed, linkIssuerPublicKey } from "../src/links/index.js";
+import { buildShortLink, parseLink, parseApprovalRequest, prepareLinkRecord, openLinkRecord, signerFromSeed, linkIssuerPublicKey, createApprovalRequest, resolveApprovalRequest, type LinkRecord } from "../src/links/index.js";
+import { canonicalize } from "../src/jcs.js";
 
 const now = Date.parse("2026-10-28T12:00:00.000Z");
 const signer = signerFromSeed(new Uint8Array(32).fill(17));
@@ -49,4 +50,42 @@ test.each([
   { ...request, resultEncryptionPublicJwk: { ...request.resultEncryptionPublicJwk, x: "A".repeat(43), y: "A".repeat(43) } },
 ])("rejects inconsistent or unsafe request keys", (invalid) => {
   expect(() => parseApprovalRequest(invalid, { issuer: signer.did })).toThrow();
+});
+
+test("generated chat link resolves repeatedly without sending its key or consuming the request", async () => {
+  let record: LinkRecord | undefined;
+  const requests: Array<{ url: string; method: string }> = [];
+  const transport = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const method = init?.method ?? "GET";
+    requests.push({ url, method });
+    if (method === "POST" && url === "https://api.tinycloud.xyz/v1/links") {
+      record = JSON.parse(String(init?.body)) as LinkRecord;
+      return Response.json({ id: "abcdefghijklmnopqrstuvwxyz", expiresAt: record.header.expiresAt }, { status: 201 });
+    }
+    if (method === "GET" && url === "https://api.tinycloud.xyz/v1/links/abcdefghijklmnopqrstuvwxyz" && record) {
+      return new Response(Buffer.from(record.body, "base64url"), { headers: {
+        "Content-Type": "application/octet-stream",
+        "X-Link-Record": Buffer.from(canonicalize({ header: record.header, signature: record.signature })).toString("base64url"),
+      } });
+    }
+    throw new Error("Unexpected link transport");
+  }, { preconnect: fetch.preconnect }) as typeof fetch;
+  const created = await createApprovalRequest({ request, issuerKey: signer, apiOrigin: "https://api.tinycloud.xyz",
+    openkeyOrigin: "https://openkey.example", now, fetch: transport });
+  const url = new URL(created.link);
+  expect(url.search).toBe("");
+  expect(created.link.length).toBeLessThan(256);
+  const key = new URLSearchParams(url.hash.slice(1)).get("k")!;
+  expect(JSON.stringify(record)).not.toContain(key);
+  expect(created.link).not.toContain(request.targetDid);
+  const options = { trustedOrigins: [url.origin], apiOrigin: "https://api.tinycloud.xyz", now, fetch: transport };
+  expect((await resolveApprovalRequest(created.link, options)).request).toEqual(request);
+  expect((await resolveApprovalRequest(created.link, options)).request).toEqual(request);
+  expect(requests).toEqual([
+    { url: "https://api.tinycloud.xyz/v1/links", method: "POST" },
+    { url: "https://api.tinycloud.xyz/v1/links/abcdefghijklmnopqrstuvwxyz", method: "GET" },
+    { url: "https://api.tinycloud.xyz/v1/links/abcdefghijklmnopqrstuvwxyz", method: "GET" },
+  ]);
+  await expect(resolveApprovalRequest(created.link, { ...options, now: now + 3600_000 })).rejects.toMatchObject({ code: "expired" });
 });
