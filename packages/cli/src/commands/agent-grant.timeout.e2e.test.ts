@@ -370,13 +370,17 @@ if (seam === "after-save") {
     return path;
   };
 
-  async function run(requestFile: string, extra: string[], options: { seam?: string; requestId?: string; during?: () => Promise<void> } = {}) {
+  async function run(requestFile: string, extra: string[], options: { seam?: string; requestId?: string; stdin?: string /* a file whose content is the stdin */; during?: () => Promise<void> } = {}) {
     const pendingFile = join(profilePath("owner"), "approval-pending.json");
     const { argv, env } = cliArgs("owner", ["auth", "grant", requestFile, "--yes", ...extra],
       options.seam ? { TC_KILL_SEAM: options.seam, TC_KILL_PENDING_FILE: pendingFile, TC_KILL_REQUEST_ID: options.requestId ?? "" } : {},
       options.seam ? await killPreload() : undefined);
     const started = Date.now();
-    const child = Bun.spawn(argv, { env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    const child = Bun.spawn(argv, { env, stdin: options.stdin === undefined ? "ignore" : "pipe", stdout: "pipe", stderr: "pipe" });
+    if (options.stdin !== undefined) {
+      child.stdin!.write(await readFile(options.stdin, "utf8"));
+      await child.stdin!.end();
+    }
     try {
       const watching = options.during?.();
       const [stdout, stderr, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
@@ -518,6 +522,24 @@ if (seam === "after-save") {
     expect(expired.stdout + expired.stderr).toContain("APPROVAL_REQUEST_EXPIRED");
     expect(expired.stdout).not.toContain('"pending"');
     expect((await savedPending()).some((item) => item.requestId === entry.id)).toBe(false);
+  });
+
+  test("`auth grant --paste --timeout`: --paste only chooses stdin as the request source; the approval wait is bounded as usual", async () => {
+    const file = await agentRequest("paste", ["--preset", "apps-agent", "--app", "demo"]);
+    const prepared = JSON.parse(await readFile(file, "utf8")) as { requestId: string; sessionDid: string };
+    const baseline = approvalRequests.size;
+    // The file argument is replaced by stdin; nothing but the request source differs from the loop test.
+    const first = await run("-", ["--paste", "--timeout", "60s"], { stdin: file });
+    expect(first.exitCode, first.stderr).toBe(8);
+    const { entry, request, url } = await openLink(first.stderr, prepared);
+    expect(pendingOf(first.stdout).pending).toEqual({ step: 1, of: 1, approvalUrl: url, expiresAt: entry.record.header.expiresAt });
+    expect(approvalRequests.size).toBe(baseline + 1);
+    await approve(entry, request, ownerSigner);
+    const done = await run("-", ["--paste", "--timeout", "60s"], { stdin: file });
+    expect(done.exitCode, done.stderr).toBe(0);
+    expect((JSON.parse(done.stdout) as { requestId: string }).requestId).toBe(prepared.requestId);
+    expect(approvalRequests.size).toBe(baseline + 1);
+    expect(acksOf(entry)).toHaveLength(1);
   });
 
   for (const seam of ["after-poll", "after-fetch", "after-save", "before-ack"] as const) {
