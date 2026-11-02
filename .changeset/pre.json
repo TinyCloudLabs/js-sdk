@@ -29,6 +29,7 @@
     "@tinycloud/sdk-services-test": "21.0.2"
   },
   "changesets": [
+    "cian-chat-approval-output",
     "cli-addressed-path-bound",
     "cli-expired-approval-request",
     "node-sdk-share-prefix-key-create",
