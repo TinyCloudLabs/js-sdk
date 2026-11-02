@@ -71,7 +71,7 @@ export function registerOnboardCommand(program: Command): void {
         }
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts, { storedSession: "unused" });
-        if (!await ProfileManager.profileExists(ctx.profile)) await createKeyOnlyProfile(ctx.profile, ctx.host);
+        const created = await ProfileManager.profileExists(ctx.profile) ? undefined : await createKeyOnlyProfile(ctx.profile, ctx.host);
         let profile = await ProfileManager.getProfile(ctx.profile);
         if (resolveProfilePosture(profile) !== "owner-openkey") {
           throw new CLIError(
@@ -109,6 +109,7 @@ export function registerOnboardCommand(program: Command): void {
               reason,
               persistHost: globalOpts.host !== undefined,
               openKeyAcquisition: acquire,
+              ...(created === undefined ? {} : { createdProfile: { previousDefaultProfile: created.previousDefaultProfile } }),
             });
             // A new account's space can take OpenKey a minute or two to host; under --timeout the wait ends with the call's bound.
             await ensureSpaceSetup({ profile: ctx.profile, host: ctx.host }, delegationData, delegationData.permissions as PermissionEntry[] | undefined,

@@ -229,7 +229,7 @@ export async function delegationFromInput(input: string, did: string, options: A
     });
     if (!response.ok) {
       throw Object.assign(new Error(response.status === 404
-        ? "Delegation code not found or expired. A short code works only once: if this one was already used and the approval was saved, re-run the same command and paste the same code; otherwise approve again in OpenKey to get a new code."
+        ? "Delegation code not found or expired. A short code works only once and OpenKey no longer has this one (it was already used, it expired, or the CLI refused it). Approve again in OpenKey to get a new code."
         : `Could not retrieve delegation code (HTTP ${response.status}).`), { status: response.status });
     }
     const result = await response.json() as { delegation?: unknown };
@@ -241,7 +241,7 @@ export async function delegationFromInput(input: string, did: string, options: A
       // never saved could not be finished after a kill, so say what to do instead of keeping it.
       const stored = await ProfileManager.getKey(options.profileName) as Record<string, unknown> | null;
       if (stored?.x === localJwk.x) await savePendingDelegation(options.profileName, trimmed, parsed as DelegationData);
-      else console.error("Note: this profile has no saved key yet, so an interrupted first sign-in cannot be resumed; if this one is interrupted, approve again in OpenKey.");
+      else console.error("Note: this sign-in's key is not saved until the login commits, so an interrupted sign-in cannot be resumed; if this one is interrupted, approve again in OpenKey.");
     }
   } else {
     try {

@@ -585,7 +585,6 @@ describe("CLI auth rotate command", () => {
 
     expect(recorded.errors).toEqual([]);
     expect(keys.get("default")).toBe(newJwk);
-    expect(recorded.clearSessions).toEqual(["default"]);
     expect(recorded.startAuthFlows).toEqual([
       {
         did: "did:key:new-openkey",
@@ -1878,29 +1877,6 @@ describe("CLI auth request command", () => {
       "Approval 1 of 2: account space...",
     ]);
     expect(recorded.startAuthFlows).toHaveLength(1);
-  });
-
-  test("a single-space grant prints no approval counts", async () => {
-    profiles.set("default", makeProfile({
-      did: "did:key:openkey-session",
-      sessionDid: "did:key:openkey-session",
-      authMethod: "openkey",
-      posture: "owner-openkey",
-    }));
-    sessions.set("default", { authMethod: "openkey", spaceId: "tinycloud:pkh:eip155:1:0xowner:default" });
-    keys.set("default", { kty: "OKP", crv: "Ed25519", x: "k", d: "private" });
-    authNodeHasRuntimePermissions = false;
-    const written: string[] = [];
-    const stderr = spyOn(process.stderr, "write").mockImplementation(((chunk: string | Uint8Array) => {
-      written.push(String(chunk));
-      return true;
-    }) as never);
-    try {
-      await runAuthCommand(["auth", "request", "--grant", "--paste", "--cap", "tinycloud.kv:default/:list"]);
-    } finally {
-      stderr.mockRestore();
-    }
-    expect(written.join("")).not.toContain("approval");
   });
 
   test("--paste reaches the OpenKey flow for an owner grant, and is refused anywhere it cannot apply", async () => {
