@@ -30,6 +30,7 @@
   },
   "changesets": [
     "cli-addressed-path-bound",
+    "cli-expired-approval-request",
     "node-sdk-share-prefix-key-create",
     "redeem-save-first",
     "replica-sdk-services-pin-392",
