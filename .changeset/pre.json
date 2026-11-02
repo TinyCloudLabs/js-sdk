@@ -29,6 +29,7 @@
     "@tinycloud/sdk-services-test": "21.0.3"
   },
   "changesets": [
+    "courier-short-link-approval",
     "held-probe-delete"
   ]
 }
