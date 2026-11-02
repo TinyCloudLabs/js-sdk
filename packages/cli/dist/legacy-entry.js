@@ -32528,6 +32528,14 @@ async function defaultIdempotencyKey(shareId, recipient) {
   ));
   return `tinycloud-share:${shareId}:${toBase64Url2(digest3)}`;
 }
+var ShareRevocationIncompleteError = class extends Error {
+  constructor(revoked, failed) {
+    super(`share revocation incomplete: ${failed.map((failure) => failure.targetRole).join(", ")} not revoked`);
+    this.revoked = revoked;
+    this.failed = failed;
+    this.name = "ShareRevocationIncompleteError";
+  }
+};
 function targetKind2(record3) {
   if (record3.targetKind !== void 0) return record3.targetKind;
   return record3.recipientMatcher.kind === "exactEmail" ? "email" : record3.recipientMatcher.kind === "emailDomain" ? "emailDomain" : record3.recipientMatcher.kind === "recipientDid" ? "recipientDid" : "bearer";
@@ -32543,22 +32551,49 @@ function policyNodeAudience(record3) {
 async function revokeShare(input) {
   const target = targetKind2(input.record);
   if (input.adapter === void 0) return { state: "unsupported", target, reason: "node revocation authority is required", code: "unsupported-target" };
-  const scope = input.scope ?? "direct";
-  const delegationCid = scope === "ancestor" ? input.record.ownerDelegationCid : input.record.enforcementDelegationCid;
-  if (delegationCid === void 0) return { state: "unsupported", target, reason: "share has no node-enforced delegation receipt", code: "unsupported-target" };
+  let delegationCid;
+  let roots;
   if (target === "bearer") {
+    const scope = input.scope ?? "direct";
+    const selected = scope === "ancestor" ? input.record.ownerDelegationCid : input.record.enforcementDelegationCid;
+    if (selected === void 0) return { state: "unsupported", target, reason: "share has no node-enforced delegation receipt", code: "unsupported-target" };
     if (input.adapter.revokeDelegation === void 0) return { state: "unsupported", target, reason: "native delegation revocation authority is required", code: "unsupported-target" };
-    await input.adapter.revokeDelegation({ delegationCid, scope, record: input.record });
+    await input.adapter.revokeDelegation({ delegationCid: selected, scope, record: input.record });
+    delegationCid = selected;
   } else {
-    if (input.record.ownerDid === void 0) return { state: "unsupported", target, reason: "share has no Policy/v3 owner receipt", code: "unsupported-target" };
-    if (input.adapter.revokePolicyRoot === void 0) return { state: "unsupported", target, reason: "Policy/v3 root revocation authority is required", code: "unsupported-target" };
-    await input.adapter.revokePolicyRoot({
-      rootCid: delegationCid,
-      targetRole: scope === "ancestor" ? "policy-authority" : "policy-enforcement",
-      ownerDid: input.record.ownerDid,
-      nodeOrigin: input.record.target.origin,
-      nodeAudience: policyNodeAudience(input.record)
-    });
+    const requests = [
+      [input.record.enforcementDelegationCid, "policy-enforcement"],
+      [input.record.ownerDelegationCid, "policy-authority"]
+    ].flatMap(([rootCid, targetRole]) => rootCid === void 0 ? [] : [{ rootCid, targetRole }]);
+    const first = requests[0];
+    if (first === void 0) return { state: "unsupported", target, reason: "share has no node-enforced delegation receipt", code: "unsupported-target" };
+    const ownerDid = input.record.ownerDid;
+    if (ownerDid === void 0) return { state: "unsupported", target, reason: "share has no Policy/v3 owner receipt", code: "unsupported-target" };
+    const revokePolicyRoot = input.adapter.revokePolicyRoot;
+    if (revokePolicyRoot === void 0) return { state: "unsupported", target, reason: "Policy/v3 root revocation authority is required", code: "unsupported-target" };
+    const nodeAudience = policyNodeAudience(input.record);
+    roots = [];
+    const failed = [];
+    for (const request of requests) {
+      try {
+        const outcome = await revokePolicyRoot({ ...request, ownerDid, nodeOrigin: input.record.target.origin, nodeAudience });
+        if (outcome === "left-live") {
+          if (request.targetRole !== "policy-authority") throw new Error("the enforcement root cannot be left live");
+          roots.push({ rootCid: request.rootCid, targetRole: "policy-authority", state: "left-live", expiresAt: input.record.expiresAt });
+        } else if (outcome === void 0) {
+          roots.push({ ...request, state: "revoked" });
+        } else {
+          throw new Error("root revocation returned an unknown outcome");
+        }
+      } catch (error) {
+        failed.push({ ...request, error });
+      }
+    }
+    const revoked = roots.flatMap((root) => root.state === "revoked" ? [root.rootCid] : []);
+    if (failed.length > 0 || revoked.length === 0) {
+      throw new ShareRevocationIncompleteError(revoked, failed.length > 0 ? failed : roots.map((root) => ({ rootCid: root.rootCid, targetRole: root.targetRole, error: new Error("no root was revoked") })));
+    }
+    delegationCid = first.rootCid;
   }
   let revokedAt = input.record.revokedAt ?? (input.now?.() ?? /* @__PURE__ */ new Date()).toISOString();
   if (input.records?.update !== void 0) {
@@ -32569,7 +32604,7 @@ async function revokeShare(input) {
     revokedAt = latest?.revokedAt ?? revokedAt;
     await input.records.put({ ...latest ?? input.record, revokedAt });
   }
-  return { state: "revoked", target, delegationCid, revokedAt };
+  return { state: "revoked", target, delegationCid, ...roots === void 0 ? {} : { roots }, revokedAt };
 }
 function redactRecord(record3, revealLink, link5) {
   const matcher = record3.recipientMatcher;
@@ -46286,6 +46321,14 @@ function shareCliError(error, operation = "publish") {
       { hint: `Run \`${CLI_NAME34} share history recover\` to move the unreadable file aside. The old file is kept, not deleted.` }
     );
   }
+  if (error instanceof ShareRevocationIncompleteError) {
+    return new CLIError(
+      "REVOCATION_INCOMPLETE",
+      `the share was not fully revoked: ${error.failed.map((failure) => `${failure.targetRole} root ${failure.rootCid}`).join(", ")} is still live`,
+      1,
+      { hint: error.revoked.length > 0 ? "Recipient access has already ended. Run the same command again to revoke the rest." : "Run the same command again." }
+    );
+  }
   if (error instanceof SharePublishAuthorityError) {
     const failure = error.failure;
     const profileName2 = "profileName" in failure ? failure.profileName : void 0;
@@ -46743,7 +46786,7 @@ function registerShareCommand(program) {
       return handleError(shareCliError(error, "notify"));
     }
   });
-  share.command("revoke <id>").description("Revoke a bearer or addressed share this profile created").option("--ancestor", "Revoke the owner delegation ancestry").option("--json", "Print versioned JSON").action(async (id, options, command) => {
+  share.command("revoke <id>").description("Revoke a bearer or addressed share this profile created").option("--ancestor", "Bearer shares: revoke the owner delegation ancestry (addressed shares always revoke every root)").option("--json", "Print versioned JSON").action(async (id, options, command) => {
     try {
       const json = jsonOutput(options, command);
       if (shareServices.records === void 0) throw new CLIError("AUTH_REQUIRED", "sender history storage is not configured", 3);

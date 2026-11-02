@@ -31,6 +31,7 @@
   "changesets": [
     "cli-approval-wait-timeout",
     "courier-short-link-approval",
-    "held-probe-delete"
+    "held-probe-delete",
+    "share-revoke-all-roots"
   ]
 }
