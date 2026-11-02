@@ -195,11 +195,25 @@ async function rootState(rootCid: string): Promise<string> {
   return RootStatus.parse(await response.json()).state;
 }
 
-/** The composer's wallet path: one approval, for the enforcement root; the keyless policy root is left to lapse. */
+/** Only the enforcement root, through the root revocation route; the keyless policy root is left to lapse. */
 const enforcementOnly: ShareRevocationAdapter = {
   async revokePolicyRoot(request) {
     if (request.targetRole === "policy-authority") return "left-live";
     await revocation.revokePolicyRoot!(request);
+  },
+};
+
+/**
+ * The composer's path when the creating session is gone: one owner-wallet
+ * revocation of the enforcement root on the generic `/revoke`, after checking
+ * the Node does not already hold it revoked; the policy root is left live.
+ */
+const walletEnforcementOnly: ShareRevocationAdapter = {
+  async revokePolicyRoot(request) {
+    if (request.targetRole === "policy-authority") return "left-live";
+    if ((await rootState(request.rootCid)) === "revoked") return;
+    const response = await fetch(new URL("/revoke", SERVER_URL), { method: "POST", headers: { Authorization: await owner.signOwnerRevocation(request.rootCid) } });
+    if (!response.ok) throw new Error(`owner revocation rejected: HTTP ${response.status}`);
   },
 };
 
@@ -231,6 +245,7 @@ beforeAll(async () => {
 describe.each([
   { mode: "every root", adapter: revocation, policyRoot: "revoked" },
   { mode: "the enforcement root, policy root left live", adapter: enforcementOnly, policyRoot: "left-live" },
+  { mode: "the enforcement root with the owner wallet, policy root left live", adapter: walletEnforcementOnly, policyRoot: "left-live" },
 ])("TC-2337: revokeShare revoking $mode ends recipient access (live node)", ({ adapter, policyRoot }) => {
   const holder = newHolder();
   const text = `revoke ${crypto.randomUUID()}`;
