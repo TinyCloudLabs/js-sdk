@@ -212,3 +212,61 @@ describe("a fetched result that is refused for good drops its pending entry", ()
     expect(acknowledgements.size).toBe(0);
   });
 });
+
+const { refusing } = await import("./refused-approval.js");
+const { dropRefusedApproval } = await import("./approval-request.js");
+
+/** stderr is captured only while a step runs (a global spy would also swallow bun's own report). */
+async function noticeOf(step: () => Promise<unknown>): Promise<string[]> {
+  const written: string[] = [];
+  const spy = spyOn(process.stderr, "write").mockImplementation(((chunk: unknown) => { written.push(String(chunk)); return true; }) as never);
+  try { await step().catch(() => undefined); } finally { spy.mockRestore(); }
+  return written.join("").split("\n").filter((line) => line.includes("OpenKey granted this approval"));
+}
+
+describe("the refusal of a fetched result is announced where the command catches it", () => {
+  test("a stored key: ONE notice names the refused delegation's CID and says the key still exists; the pending request is gone", async () => {
+    const delegation = await signedDelegation(["tinycloud.kv/list"]);
+    await unfetched(delegation);
+    const notices = await noticeOf(() => refusing({ profileName: "approval", key, storedKey: key }, () => acquireApprovalRequest(did, ACQUIRE)));
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toStartWith(`Refused delegation: ${delegation.delegationCid}. OpenKey granted this approval until `);
+    expect(notices[0]).toContain("the key it belongs to still exists on this device");
+    expect(notices[0]).toContain("cannot revoke it");
+    expect(notices[0]).toContain("https://account.tinycloud.xyz/delegations");
+    expect(await entries()).toEqual([]);
+  });
+
+  test("a first sign-in's key that lived only in the refused request: the notice says it was deleted", async () => {
+    await unfetched(await signedDelegation(["tinycloud.kv/list"]));
+    const notices = await noticeOf(() => refusing({ profileName: "approval", key, storedKey: null }, () => acquireApprovalRequest(did, ACQUIRE)));
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain("its key was deleted, so it cannot be used");
+    expect(await pendingApprovalKey("approval")).toBeUndefined();
+  });
+
+  test("the same key still held by another pending request: it still exists, so the notice does not say it was deleted", async () => {
+    await unfetched(await signedDelegation(["tinycloud.kv/list"]));
+    const [refused] = (await entries())!;
+    await writeJsonDurable(PENDING(), [refused, { ...refused, requestId: "another-request-identifier-1", resultRef: undefined, commandIntent: "auth-grant:" + "b".repeat(64) }]);
+    const notices = await noticeOf(() => refusing({ profileName: "approval", key, storedKey: null }, () => acquireApprovalRequest(did, ACQUIRE)));
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain("the key it belongs to still exists on this device");
+    expect(notices[0]).not.toContain("its key was deleted");
+  });
+
+  test("AUTH_EXPIRED prints no notice and keeps the request", async () => {
+    await unfetched(await signedDelegation(undefined, -30));
+    expect(await noticeOf(() => refusing({ profileName: "approval", key, storedKey: key }, () => acquireApprovalRequest(did, ACQUIRE)))).toEqual([]);
+    expect((await entries())!.map((entry) => entry.requestId)).toEqual([requestId]);
+  });
+
+  test("a result refused by the CALLER's own checks (not at the fetch): its pending request is dropped by the result it returned; another result is not touched", async () => {
+    await unfetched(await signedDelegation());
+    const verified = await acquireApprovalRequest(did, ACQUIRE);
+    await dropRefusedApproval("approval", { ...verified });
+    expect((await entries())!.map((entry) => entry.requestId)).toEqual([requestId]);
+    await dropRefusedApproval("approval", verified);
+    expect(await entries()).toEqual([]);
+  });
+});

@@ -548,12 +548,39 @@ describe("ensureDelegationAuthority: a refused approval of an established profil
     expect(text()).toContain(REVOKE_URL);
   });
 
+  test("a one-use approval (persist: false): refused, one kept notice, nothing is activated", async () => {
+    const profile = await owned();
+    pickedLifetimeMs = 6 * DAY;
+    tamper = "signature";
+    await expect(ensure(profile, [request("default")], { persist: false })).rejects.toMatchObject({ code: "OPENKEY_PROOF_INVALID" });
+    expect(files(profileName)).toMatchObject({ key: true, pending: false });
+    expectOneNotice("kept");
+  });
+
   test("AUTH_EXPIRED stays by design: no notice, the existing key stays", async () => {
     const profile = await owned();
     pickedLifetimeMs = -30_000;
     await expect(ensure(profile, [request("default")])).rejects.toMatchObject({ code: "AUTH_EXPIRED" });
     expect(files(profileName)).toMatchObject({ key: true });
     expectNoNotice();
+  });
+});
+
+describe("tc auth request --grant: a refused approval", () => {
+  test("the saved approval goes, the signed-in key and session stay, one kept notice", async () => {
+    pickedLifetimeMs = 6 * DAY;
+    await login("--expiry", "7d");
+    expect(recordedErrors).toEqual([]);
+    const before = { key: JSON.stringify(await ProfileManager.getKey(profileName)), session: JSON.stringify(await ProfileManager.getSession(profileName)) };
+    stderr.length = 0;
+    savedPendingCopies = 0;
+    signRequest = false; // the owner signs the default read, not the list that was asked for
+    await runAuth("request", "--grant", "--paste", "--no-popup", "--cap", "tinycloud.kv:default:data/KEY:list", "--yes");
+    expect(recordedErrors).toEqual([expect.objectContaining({ code: expect.stringMatching(/^OPENKEY_(GRANT_BROADENED|APPROVAL_NARROWER|SCOPE_MISMATCH)$/) })]);
+    expect(files(profileName)).toEqual({ key: true, pending: false, session: true });
+    expect(JSON.stringify(await ProfileManager.getKey(profileName))).toBe(before.key);
+    expect(JSON.stringify(await ProfileManager.getSession(profileName))).toBe(before.session);
+    expectOneNotice("kept");
   });
 });
 
