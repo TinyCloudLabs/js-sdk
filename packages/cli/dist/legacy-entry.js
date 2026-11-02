@@ -34508,7 +34508,9 @@ async function acquireApprovalRequest(_did, options) {
   }
   if (!entry.resultRef && !entry.resultEnvelope) {
     options.onApprovalRequest?.({ approvalUrl: entry.approvalUrl, requestId: entry.requestId, expiresAt: entry.requestExpiresAt });
-    if (!options.onApprovalRequest) console.error(`Approve this request in OpenKey: ${entry.approvalUrl}`);
+    if (!options.onApprovalRequest) console.error(`Approve this request in OpenKey (open the complete link):
+${entry.approvalUrl}
+`);
     if (!options.noPopup && !options.onApprovalRequest && process.env.TC_AUTH_NO_POPUP !== "1" && process.env.TC_NO_POPUP !== "1") {
       await tryOpenBrowser(entry.approvalUrl);
     }
@@ -41336,7 +41338,9 @@ function registerOnboardCommand(program) {
           noPopup: true,
           onApprovalRequest: ({ approvalUrl }) => {
             console.error(`${flow.reason}
-Approve in OpenKey: ${approvalUrl}
+Approve in OpenKey (open the complete link):
+${approvalUrl}
+
 Waiting for approval. Re-run this command after an interruption; no code is needed.`);
           }
         });

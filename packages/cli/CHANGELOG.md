@@ -1,5 +1,13 @@
 # @tinycloud/cli
 
+## Unreleased
+
+### Patch Changes
+
+- Print signed OpenKey approval links on a standalone line in normal approval
+  and onboarding output so chat clients can copy the complete fragment. Document
+  stable 1.5.0 short-link wait/resume and the explicit long-link `--paste` fallback.
+
 ## 1.5.1-beta.1
 
 ### Patch Changes
