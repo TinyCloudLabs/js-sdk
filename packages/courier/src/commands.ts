@@ -201,11 +201,11 @@ export async function cmdInit(args: ParsedArgs) {
     await installRefusing(profile, key, payload);
   } catch (error) {
     // `no-space` means the grant IS saved (awaiting the space); any other error installed nothing and leaves an open short-link request alone.
-    if (error instanceof CourierError && error.code === 'no-space') clearPending();
+    if (error instanceof CourierError && error.code === 'no-space') clearPendingQuietly();
     throw error;
   }
   // An open short-link request would otherwise be collected later, on top of this grant.
-  clearPending();
+  clearPendingQuietly();
   await finishInit(profile, host);
 }
 
@@ -213,9 +213,16 @@ export async function cmdInit(args: ParsedArgs) {
  * A grant is installed from another source: an open short-link request would be collected later, on top of it. A request whose
  * result was already installed (committed) stays, so the next `init --wait` can still send its acknowledgement.
  */
+function clearPendingQuietly(): void {
+  try { clearPending(); } catch (error) {
+    console.error(`warning: could not remove the saved approval request (${(error as Error).message}).`);
+  }
+}
+
 function dropOpenRequest(): void {
+  // Only a request that holds nothing: one with a result reference, the encrypted result or a committed grant is kept for `--wait`.
   const saved = loadPending();
-  if (saved && !saved.committed) clearPending();
+  if (saved && !holdsApproval(saved)) clearPendingQuietly();
 }
 
 async function finishInit(profile: Profile, host: string): Promise<void> {

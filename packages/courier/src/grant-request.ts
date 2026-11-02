@@ -61,12 +61,22 @@ export interface PendingGrantRequest {
   committed?: true;
 }
 
+/**
+ * The saved request, if there is a readable one. A record that cannot be read (corrupt, wrong mode) is reported on stderr and treated
+ * as no record: it must never fail a command that already installed a grant, or block `--rotate-key`. The next request replaces it.
+ */
 export function loadPending(): PendingGrantRequest | undefined {
-  const pending = readSecure<PendingGrantRequest>(PENDING_FILE, false);
-  if (pending === undefined) return undefined;
-  if (pending.version !== 1 || !pending.request || typeof pending.requestId !== 'string' || typeof pending.bodyCid !== 'string'
-    || typeof pending.approvalUrl !== 'string' || typeof pending.relayPrivateKey !== 'string' || typeof pending.ackId !== 'string') {
-    throw new CourierError('bad-profile', `Corrupt ${PENDING_FILE} in ${profileDir()}. Delete it and run \`${cmd('init --request')}\` again.`);
+  let pending: PendingGrantRequest | undefined;
+  try {
+    pending = readSecure<PendingGrantRequest>(PENDING_FILE, false);
+    if (pending !== undefined && (pending.version !== 1 || !pending.request || typeof pending.requestId !== 'string' || typeof pending.bodyCid !== 'string'
+      || typeof pending.approvalUrl !== 'string' || typeof pending.relayPrivateKey !== 'string' || typeof pending.ackId !== 'string')) {
+      throw new CourierError('bad-profile', 'unexpected contents');
+    }
+  } catch (error) {
+    if (!(error instanceof CourierError)) throw error;
+    console.error(`warning: ignoring the saved approval request ${PENDING_FILE} in ${profileDir()} (${error.message}). Run \`${cmd('init --request')}\` for a new link.`);
+    return undefined;
   }
   return pending;
 }
@@ -179,7 +189,7 @@ export async function requestApproval(profile: Profile, key: AgentKey, expiry: s
   const existing = loadPending();
   if (existing && existing.request.issuer === want.signer.did) {
     if (holdsApproval(existing)) {
-      throw new CourierError('usage', `Approval request ${existing.requestId} has already been approved by the owner. Run \`${cmd('init --wait')}\` to finish it first; \`${cmd('init --request')}\` can ask for another approval after that.`);
+      throw new CourierError('usage', `Approval request ${existing.requestId} has already been approved by the owner. Run \`${cmd('init --wait')}\` to finish it first; \`${cmd('init --request')}\` can ask for another approval after that. To discard that approval instead, run \`${cmd('init --rotate-key --request')}\` (this replaces the agent key and re-pairs every peer).`);
     }
     if (matches(existing, profile, want) && !requestLapsed(existing)) return existing;
   }

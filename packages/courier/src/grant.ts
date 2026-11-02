@@ -463,12 +463,23 @@ async function installGrantFrom(profile: Profile, key: AgentKey, payload: GrantP
   dropPendingQuietly(payload.delegationCid);
 }
 
+/**
+ * A refusal with the TC-2308 notice, except that one caused by THIS machine's clock (and not yet past its signed expiry) says to check
+ * the clock and retry: a valid delegation is nothing to revoke.
+ */
+function noticedRefusal(error: unknown, payload: Pick<GrantPayload, 'delegationCid' | 'siwe'>, retry: string): unknown {
+  if (isClockRefusal(error) && !isPermanentRefusal(error, payload.siwe)) {
+    return new CourierError((error as CourierError).code, `${(error as CourierError).message}\nThe system clock may be wrong. Nothing was installed and the grant is not something to revoke: check the system clock, then ${retry}.`);
+  }
+  return withRefusalNotice(error, payload.delegationCid);
+}
+
 /** `installGrant` for a grant that came from outside (an approval result, a code, a file): a refusal carries the TC-2308 notice. */
 export async function installRefusing(profile: Profile, key: AgentKey, payload: GrantPayload, options: { spaceTimeoutMs?: number } = {}): Promise<void> {
   try {
     await installGrant(profile, key, payload, options);
   } catch (error) {
-    throw withRefusalNotice(error, payload.delegationCid);
+    throw noticedRefusal(error, payload, `run \`${cmd('init')}\` with the same grant again (or \`${cmd('init --resume')}\`)`);
   }
 }
 
@@ -483,7 +494,7 @@ export async function resumeGrant(profile: Profile, key: AgentKey): Promise<void
     throw new CourierError('bad-grant', `Saved grant space is not ${COURIER_SPACE}.`);
   }
   let node: TinyCloudNode;
-  try { ({ node } = await restoreVerifiedGrant(profile, key, payload)); } catch (error) { throw withRefusalNotice(error, grant.delegationCid); }
+  try { ({ node } = await restoreVerifiedGrant(profile, key, payload)); } catch (error) { throw noticedRefusal(error, { delegationCid: grant.delegationCid, siwe: grant.siwe }, `run \`${cmd('init --resume')}\` again`); }
   const ready = profile.spacePending
     ? await waitForSpaceReady(() => verifySpaceReady(node), { timeoutMs: 60_000 })
     : await verifySpaceReady(node);
