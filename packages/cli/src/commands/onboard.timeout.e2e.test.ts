@@ -45,6 +45,8 @@ describe.skipIf(!NODE_BIN)("tinycloud onboard --timeout, against a real node", (
     expired?: boolean;
     /** OpenKey answers every result lookup with HTTP 503. */
     unavailable?: boolean;
+    /** OpenKey answers a discover like production does for an expired request: HTTP 400 invalid_request. */
+    invalidRequest?: boolean;
     polls: number;
   }
   interface SavedState {
@@ -165,6 +167,7 @@ describe.skipIf(!NODE_BIN)("tinycloud onboard --timeout, against a real node", (
       : Response.json({ code: "result_acknowledged" }, { status: 410 });
     if (discovery) entry.polls++;
     if (discovery && entry.unavailable) return new Response(null, { status: 503 });
+    if (discovery && entry.invalidRequest) return Response.json({ error: "Signed approval request header is invalid or expired", code: "invalid_request" }, { status: 400 });
     if (!entry.relay) return entry.expired || Date.parse(entry.record.header.expiresAt) <= Date.now()
       ? Response.json({ code: "expired_request" }, { status: 410 }) : new Response(null, { status: 202 });
     if (Date.parse(entry.resultExpiresAt!) <= Date.now()) return Response.json({ code: "expired_result" }, { status: 410 });
@@ -493,6 +496,49 @@ if (seam === "after-save") {
     const next = await openLink("expire", renewed.stderr);
     expect(next.id).not.toBe(entry.id);
     expect(stdoutPending(renewed.stdout).pending.approvalUrl).not.toBe(stdoutPending(first.stdout).pending.approvalUrl);
+  });
+
+  test("an expired link ends the loop: production's 400 invalid_request is exit 3 and a local expiry exits 3 with no OpenKey call; the next run makes a new link", async () => {
+    await mkdir(home("lapsed"), { recursive: true, mode: 0o700 });
+    const pendingFile = await withTinyCloudStateRoot(home("lapsed"), async () => join(profilePath("default"), "approval-pending.json"));
+    const setExpiry = async (agoMs: number) => {
+      const saved = JSON.parse(await readFile(pendingFile, "utf8")) as Array<Record<string, unknown>>;
+      saved[0]!.requestExpiresAt = new Date(Date.now() - agoMs).toISOString();
+      await writeFile(pendingFile, JSON.stringify(saved), { mode: 0o600 });
+    };
+    const first = await run("lapsed", ["onboard", "--timeout", "60s"]);
+    expect(first.exitCode).toBe(8);
+    const entry = await openLink("lapsed", first.stderr);
+
+    // 30 s past the stored expiry (inside the skew): the CLI asks, OpenKey answers 400, the CLI says exit 3 and drops it.
+    await setExpiry(30_000);
+    entry.invalidRequest = true;
+    const polled = entry.polls;
+    const viaOpenKey = await run("lapsed", ["onboard", "--timeout", "60s"]);
+    expect(viaOpenKey.exitCode, viaOpenKey.stderr).toBe(3);
+    expect(viaOpenKey.stdout + viaOpenKey.stderr).toContain("APPROVAL_REQUEST_EXPIRED");
+    expect(viaOpenKey.stdout).not.toContain('"pending"');
+    expect(entry.polls).toBeGreaterThan(polled);
+    expect((await savedState("lapsed")).pending).toEqual([]);
+
+    // The next run is a new request with a new link.
+    const renewed = await run("lapsed", ["onboard", "--timeout", "60s"]);
+    expect(renewed.exitCode).toBe(8);
+    const second = await openLink("lapsed", renewed.stderr);
+    expect(second.id).not.toBe(entry.id);
+    expect(stdoutPending(renewed.stdout).pending.step).toBe(1);
+
+    // Well past the expiry: decided locally, OpenKey is not asked, the entry goes, and the run after is new again.
+    await setExpiry(20 * 60_000);
+    const before = second.polls;
+    const local = await run("lapsed", ["onboard", "--timeout", "60s"]);
+    expect(local.exitCode, local.stderr).toBe(3);
+    expect(local.stdout + local.stderr).toContain("APPROVAL_REQUEST_EXPIRED");
+    expect(second.polls).toBe(before);
+    expect((await savedState("lapsed")).pending).toEqual([]);
+    const again = await run("lapsed", ["onboard", "--timeout", "60s"]);
+    expect(again.exitCode).toBe(8);
+    expect((await openLink("lapsed", again.stderr)).id).not.toBe(second.id);
   });
 
   test("OpenKey being unavailable stays its own exit 8 error, without the pending JSON", async () => {
