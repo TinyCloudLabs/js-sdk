@@ -14,7 +14,7 @@ import {
 } from './profile.js';
 import { courierNode, peerKv } from './node.js';
 import { courierGrantRequest, grantFromInput, installRefusing, isShortCode, noSpaceError, pendingSpaceError, receiveGrant, resumeAwaitingGrant, resumeGrant } from './grant.js';
-import { clearPending, completeApproval, DEFAULT_WAIT_MS, holdsApproval, loadPending, MAX_WAIT_MS, requestApproval, waitApproval } from './grant-request.js';
+import { assertPendingReadable, clearPending, completeApproval, DEFAULT_WAIT_MS, holdsApproval, loadPending, MAX_WAIT_MS, readPending, requestApproval, waitApproval } from './grant-request.js';
 import {
   artifactA, artifactWithDelegation, parseArtifact, peerRecordBody, PEER_DELEGATION_EXPIRY, validateArtifactIdentity,
 } from './pairing.js';
@@ -126,6 +126,8 @@ export async function cmdInit(args: ParsedArgs) {
   }
 
   const rotate = args.has('rotate-key');
+  // A writer must learn that the saved approval is unreadable BEFORE the key, grant or profile is changed.
+  if (args.has('request') || args.has('wait')) assertPendingReadable();
   // Read before the key is replaced: an approval the owner already gave is bound to the old key and is lost by a rotation.
   const heldApproval = rotate && (() => { const saved = loadPending(); return saved !== undefined && holdsApproval(saved); })();
   const prior = profileExists() && !rotate ? loadProfile() : undefined;
@@ -215,8 +217,14 @@ export async function cmdInit(args: ParsedArgs) {
  */
 function clearPendingQuietly(): void {
   try {
-    const saved = loadPending();
-    if (saved && holdsApproval(saved)) console.error('This grant replaces the saved short-link approval: discarded a saved approval that was not installed.');
+    const read = readPending();
+    if (read.kind === 'ok' && read.pending.committed) {
+      console.error('This grant replaces a saved short-link approval that was already installed: its acknowledgement to OpenKey is never sent (harmless; OpenKey discards the result).');
+    } else if (read.kind === 'ok' && holdsApproval(read.pending)) {
+      console.error('This grant replaces the saved short-link approval: discarded a saved approval that was not installed.');
+    } else if (read.kind === 'unreadable' || read.kind === 'corrupt') {
+      console.error('This grant replaces the saved short-link request: discarded an unreadable saved approval request (it may have held an approval that was not installed).');
+    }
     clearPending();
   } catch (error) {
     console.error(`warning: could not remove the saved approval request (${(error as Error).message}).`);

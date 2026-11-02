@@ -82,7 +82,7 @@ scenario('legacy import notes: a committed record says its ack is never sent; an
   fs.writeFileSync(homeFile('legacy-grant.json'), JSON.stringify(grant));
   const committed = await courier('--grant-file', homeFile('legacy-grant.json'));
   assert.equal(committed.code, 0, committed.stderr);
-  assert.match(committed.stderr, /was installed.*acknowledgement.*never sent/s);
+  assert.match(committed.stderr, /already installed.*acknowledgement.*never sent/s);
   assert.doesNotMatch(committed.stderr, /was not installed/);
   // an unreadable record
   const again = await request();

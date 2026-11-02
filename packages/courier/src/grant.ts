@@ -530,7 +530,7 @@ export async function resumeAwaitingGrant(profile: Profile): Promise<boolean> {
       dropAllPending();
     }
     if (payload) {
-      await installRefusing(profile, key, payload);
+      await installRefusing(profile, key, payload, { viaCode: true });
       return true;
     }
   }

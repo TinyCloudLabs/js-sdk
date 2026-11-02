@@ -61,7 +61,7 @@ export interface PendingGrantRequest {
   committed?: true;
 }
 
-type PendingRead =
+export type PendingRead =
   | { kind: 'none' }
   | { kind: 'ok'; pending: PendingGrantRequest }
   /** The file or its directory has the wrong mode, or the file cannot be read (EACCES, EIO): the record may well be intact. */
@@ -69,7 +69,7 @@ type PendingRead =
   /** The file is readable and is not a saved request. */
   | { kind: 'corrupt'; reason: string };
 
-function readPending(): PendingRead {
+export function readPending(): PendingRead {
   const file = path.join(profileDir(), PENDING_FILE);
   if (!fs.existsSync(file)) return { kind: 'none' };
   const dirMode = fs.statSync(profileDir()).mode & 0o777;
@@ -84,11 +84,28 @@ function readPending(): PendingRead {
   }
   let pending: PendingGrantRequest;
   try { pending = JSON.parse(text) as PendingGrantRequest; } catch (error) { return { kind: 'corrupt', reason: (error as Error).message }; }
+  if (pending && typeof pending.version === 'number' && pending.version > 1) {
+    // Written by a newer Courier: not corrupt, and not ours to set aside. Use that Courier, or move the file away by hand.
+    return { kind: 'unreadable', reason: `${file} was written by a newer Courier (record version ${pending.version})`, fix: `mv ${file} ${file}.newer` };
+  }
   if (!pending || pending.version !== 1 || !pending.request || typeof pending.requestId !== 'string' || typeof pending.bodyCid !== 'string'
     || typeof pending.approvalUrl !== 'string' || typeof pending.relayPrivateKey !== 'string' || typeof pending.ackId !== 'string') {
     return { kind: 'corrupt', reason: 'unexpected contents' };
   }
   return { kind: 'ok', pending };
+}
+
+/**
+ * Stops (without changing anything) when a saved approval request exists but cannot be read. Call it before a writer changes any
+ * other state, so a key, grant or profile is never replaced while the approval it belongs to is unreachable.
+ */
+export function assertPendingReadable(): void {
+  const read = readPending();
+  if (read.kind === 'unreadable') throw unreadableError(read);
+}
+
+function unreadableError(read: Extract<PendingRead, { kind: 'unreadable' }>): CourierError {
+  return new CourierError('approval-unreadable', `The saved approval request cannot be used: ${read.reason}. It may hold an approval the owner already gave, so it was not touched and nothing else was changed. Fix it with \`${read.fix}\`, then run \`${cmd('init --wait')}\` again.`);
 }
 
 /**
@@ -114,7 +131,7 @@ function loadPendingForWrite(): PendingGrantRequest | undefined {
   const read = readPending();
   if (read.kind === 'ok') return read.pending;
   if (read.kind === 'unreadable') {
-    throw new CourierError('approval-unreadable', `The saved approval request cannot be used: ${read.reason}. It may hold an approval the owner already gave, so it was not touched. Fix it with \`${read.fix}\`, then run \`${cmd('init --wait')}\` again.`);
+    throw unreadableError(read);
   }
   if (read.kind === 'corrupt') {
     const file = path.join(profileDir(), PENDING_FILE);
@@ -329,7 +346,7 @@ async function verifiedPayload(profile: Profile, pending: PendingGrantRequest, k
     }
     // A renewal stays with the owner that holds the grant: with no code to paste back, whoever approves the link first would win.
     if (profile.ownerDid && checked.ownerDid.toLowerCase() !== profile.ownerDid.toLowerCase()) {
-      throw new CourierError('approval-result-invalid', `This agent is bound to owner ${profile.ownerDid}, but a different owner (${checked.ownerDid}) approved the request. Send the link only to the owner, privately. If the owner changed on purpose, run \`${cmd('init --rotate-key --request')}\` (this re-pairs every peer).`);
+      throw new CourierError('approval-result-invalid', `This agent is bound to owner ${profile.ownerDid}, but a different owner (${checked.ownerDid}) approved the request. Send the link only to the owner, privately. If the owner changed on purpose, run \`${cmd('init --rotate-key --request')}\` it replaces the agent key, clears every pairing (peers must be re-paired by hand) and deletes grant.json.`);
     }
     return payload;
   } catch (error) {
