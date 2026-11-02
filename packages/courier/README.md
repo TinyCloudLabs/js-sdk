@@ -148,6 +148,7 @@ approval. Run `init --request` again to renew the owner-approved grant, or
 `init --rotate-key` to replace the agent key and re-pair every peer.
 If OpenKey reports the space is still being set up, `init --wait` waits for it
 within its `--timeout`; the legacy `init` flows wait about 2.5 minutes; otherwise use `init --resume`.
+An OpenKey `XXXX-XXXX` code works once. Courier saves the redeemed grant (`<COURIER_HOME>/pending-grant.json`, owner-only, public fields) before installing it, so if `init` is killed after the redeem, run it again with the same code or use `init --resume`; no second approval is needed. The saved copy is deleted once the grant and profile are saved, and ignored after the grant expires.
 
 Pairing binds a peer by its Courier `did:key`, not by owner DID: two Courier
 agents of the same owner (two profiles, two agent keys) pair exactly like two
