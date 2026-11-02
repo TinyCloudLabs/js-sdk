@@ -96,6 +96,11 @@ export async function dropPendingDelegationFor(profile: string, code: string): P
   if (kept.length !== records.length) await write(profile, kept);
 }
 
+/** Delete every saved record of this profile: the approvals they hold were refused, so none may be served again. */
+export async function dropAllPendingDelegations(profile: string): Promise<void> {
+  await write(profile, []);
+}
+
 /**
  * Delete the record whose delegation a durable commit has just stored. `delegation` is the verified
  * login's `delegationCid` or a stored grant's portable `cid`; other records are untouched.

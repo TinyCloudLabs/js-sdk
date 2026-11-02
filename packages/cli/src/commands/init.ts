@@ -67,6 +67,7 @@ export function registerInitCommand(program: Command): void {
           );
         }
 
+        const { defaultProfile: previousDefaultProfile } = await ProfileManager.getConfig();
         const { did } = await withSpinner("Generating key...", () => createKeyOnlyProfile(profileName, host, defaultSpace));
 
         if (options.keyOnly) {
@@ -85,6 +86,7 @@ export function registerInitCommand(program: Command): void {
           paste: options.paste,
           noPopup: options.popup === false,
           persistHost: true,
+          createdProfile: { previousDefaultProfile },
         });
         await ensureSpaceSetup({ profile: profileName, host }, delegationData, delegationData.permissions as PermissionEntry[] | undefined);
 

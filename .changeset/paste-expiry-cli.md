@@ -8,4 +8,6 @@
 
 A long paste session makes a later, shorter scoped login on the same profile ask for `--replace-session`. That is the existing policy for replacing a live session with a shorter one, and the error message names the flag.
 
+When `tc auth login --paste`, `tc init --paste` or `tc auth rotate --paste` refuses the approval it was given (a lifetime beyond the limits above, a wrong owner, an expired or invalid proof, a scope that does not match), the approval already exists on OpenKey's side, bound to the profile's key. The CLI now makes it unusable: it deletes the saved copy of the pasted code and the profile's key, removes a profile that this login created, and prints one line saying the approval was not used and its key was deleted (you can also remove it at account.tinycloud.xyz). A key that a live session still uses is never deleted: the line then says the key was kept and the approval stays active until you remove it. The exit code is unchanged. A login that succeeds is unchanged.
+
 Details: TC-2276

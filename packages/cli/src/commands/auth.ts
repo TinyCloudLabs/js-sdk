@@ -89,6 +89,7 @@ import { assertNoCaveatLimits } from "../lib/caveat-refusal.js";
 import { isRawEncryptionPermission, isVerifiedRawEncryptionPermission } from "../lib/raw-encryption.js";
 import { canonicalOwnerDid } from "../lib/owner-did.js";
 import { assertNotLocalOwner, assertSessionReplaceable, commitLogin, readProfileSnapshot } from "../auth/login-commit.js";
+import { discardRefusedApproval, type CreatedProfile } from "../auth/refused-approval.js";
 import { ownerIdentitySigner, startPreparedOpenKeyHandoff, type PreparedOpenKeyHandoff } from "../auth/prepared-openkey.js";
 import { announceFirstOwner, openKeyPrimaryFlag, ownerLoginPermissions, warnIfNotPrimaryKey, withOwnerKeyPrimary } from "../auth/owner-key.js";
 import { SHARE_PUBLISHING_MANIFEST_REF } from "../share/publishing-manifest.js";
@@ -756,8 +757,10 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           // only a local key is generated, and nothing is granted until the
           // owner approves. Only an explicit --host is saved on it.
           // The check and the create share one lock, so two logins cannot both create it.
+          let previousDefaultProfile: string | undefined;
           const created = await ProfileManager.withLock(ctx.profile, async () => {
             if (await ProfileManager.profileExists(ctx.profile)) return false;
+            previousDefaultProfile = (await ProfileManager.getConfig()).defaultProfile;
             await createKeyOnlyProfile(ctx.profile, globalOpts.host ?? DEFAULT_HOST);
             return true;
           });
@@ -773,6 +776,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             persistHost,
             force: options.force === true,
             keys: options.keys,
+            ...(created && previousDefaultProfile !== undefined ? { createdProfile: { previousDefaultProfile } } : {}),
           });
           if (!preparedCommitted) await persistReplicationLogin(ctx.profile, replicationOptions);
           if (replicationOptions.allowSecrets) writeReplicationSecretsWarning();
@@ -2777,6 +2781,8 @@ interface OpenKeyLoginOptions {
   force?: boolean;
   /** `--keys` folder: also ask OpenKey to approve named-key create and decrypt there. */
   keys?: string;
+  /** The profile was created by this login: a refused paste approval removes it again (see `discardRefusedApproval`). */
+  createdProfile?: CreatedProfile;
 }
 
 /** Only a fresh SDK-prepared, OpenKey-signed owner session may establish replica consent. */
@@ -3137,22 +3143,29 @@ export async function refreshOpenKeySession(
   let verifiedOwner: string | undefined;
   let declined: PermissionEntry[] = [];
   let legacyNested: PermissionEntry[] = [];
-  if (permissions) {
-    const verified = verifyScopedLogin(delegationData, key, sessionDid, permissions, { expectedOwner, expiry, ...(plainPasteLink ? { expiryChangeable: true } : {}) });
-    sanitizedSession = verified.session;
-    legacyNested = verified.legacyNested;
-    verifiedOwner = sanitizedSession.ownerDid as string;
-    declined = declinedPermissions(permissions, sanitizedSession.permissions as PermissionEntry[], verifiedOwner);
-  } else {
-    // A delegation without a verifiable proof for this key is refused, never saved (TC-1053).
-    const signed = verifySignedSession(delegationData, key, sessionDid, { expectedOwner, expiry, ...(plainPasteLink ? { expiryChangeable: true } : {}) });
-    // The session's space must belong to the signing owner, as on the scoped path.
-    const spaceId = String(delegationData.spaceId);
-    if (normalizePkhIdentifier(ownerSpaceId(spaceId.split(":").at(-1) ?? "", signed.ownerDid)) !== normalizePkhIdentifier(spaceId)) {
-      throw new CLIError("OPENKEY_SCOPE_MISMATCH", "The approved session is for a space the signing account doesn't own. No session was saved.", ExitCode.PERMISSION_DENIED);
+  try {
+    if (permissions) {
+      const verified = verifyScopedLogin(delegationData, key, sessionDid, permissions, { expectedOwner, expiry, ...(plainPasteLink ? { expiryChangeable: true } : {}) });
+      sanitizedSession = verified.session;
+      legacyNested = verified.legacyNested;
+      verifiedOwner = sanitizedSession.ownerDid as string;
+      declined = declinedPermissions(permissions, sanitizedSession.permissions as PermissionEntry[], verifiedOwner);
+    } else {
+      // A delegation without a verifiable proof for this key is refused, never saved (TC-1053).
+      const signed = verifySignedSession(delegationData, key, sessionDid, { expectedOwner, expiry, ...(plainPasteLink ? { expiryChangeable: true } : {}) });
+      // The session's space must belong to the signing owner, as on the scoped path.
+      const spaceId = String(delegationData.spaceId);
+      if (normalizePkhIdentifier(ownerSpaceId(spaceId.split(":").at(-1) ?? "", signed.ownerDid)) !== normalizePkhIdentifier(spaceId)) {
+        throw new CLIError("OPENKEY_SCOPE_MISMATCH", "The approved session is for a space the signing account doesn't own. No session was saved.", ExitCode.PERMISSION_DENIED);
+      }
+      verifiedOwner = signed.ownerDid;
+      sanitizedSession = withVerifiedAuthority({ ...delegationData, jwk: key }, signed);
     }
-    verifiedOwner = signed.ownerDid;
-    sanitizedSession = withVerifiedAuthority({ ...delegationData, jwk: key }, signed);
+  } catch (error) {
+    // A paste login's approval already exists on OpenKey's side (it is created before the code reaches the CLI): refusing
+    // the signed message must also make that approval unusable.
+    if (plainPasteLink) await discardRefusedApproval(profileName, snapshot, options.createdProfile);
+    throw error;
   }
 
   // OpenKey's unsigned `primary` flag describes the key that signed, so it is
@@ -3171,15 +3184,21 @@ export async function refreshOpenKeySession(
   }, ownerKeyPrimary);
   delete updatedProfile.namedKeys;
 
-  await commitLogin(profileName, snapshot, {
-    key,
-    session: sanitizedSession,
-    profile: updatedProfile,
-    durable: approvalResultNeedsAck(delegationData),
-    ...(permissions && verifiedOwner
-      ? { approved: { scope: sanitizedSession.permissions as PermissionEntry[], ownerDid: verifiedOwner, replaceSession: options.replaceSession === true } }
-      : {}),
-  });
+  try {
+    await commitLogin(profileName, snapshot, {
+      key,
+      session: sanitizedSession,
+      profile: updatedProfile,
+      durable: approvalResultNeedsAck(delegationData),
+      ...(permissions && verifiedOwner
+        ? { approved: { scope: sanitizedSession.permissions as PermissionEntry[], ownerDid: verifiedOwner, replaceSession: options.replaceSession === true } }
+        : {}),
+    });
+  } catch (error) {
+    // The commit's own refusal to replace a live session with this approval: the approval is refused too (its key stays).
+    if (plainPasteLink && (error as { code?: unknown }).code === "SESSION_IN_USE") await discardRefusedApproval(profileName, snapshot, options.createdProfile);
+    throw error;
+  }
   await completeApprovalResult(profileName, delegationData);
   warnIfNotPrimaryKey(verifiedOwner, ownerKeyPrimary);
   announceFirstOwner(profileName, expectedOwner, verifiedOwner);

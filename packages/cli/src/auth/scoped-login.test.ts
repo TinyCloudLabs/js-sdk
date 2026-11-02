@@ -588,24 +588,28 @@ describe("paste-link expiry opt-in", () => {
 
   test("a signed expiry more than 10 years away is refused with a message naming the limit, and nothing is saved", async () => {
     for (const [lifetimeMs, expiry] of [[11 * 365 * DAY, "7d"], [3651 * DAY, undefined]] as const) {
+      await ProfileManager.setKey("scoped", key);
       await expect(loginWith(lifetimeMs, expiry ? { expiry } : {})).rejects.toMatchObject({
         code: "OPENKEY_EXPIRY_EXCEEDED",
         message: expect.stringContaining("more than 10 years"),
       });
       expect(await ProfileManager.getSession("scoped")).toBeNull();
     }
+    await ProfileManager.setKey("scoped", key);
     await loginWith(3649 * DAY);
     expect(await ProfileManager.getSession("scoped")).not.toBeNull();
   });
 
   test("a signed expiry of 60 seconds or less is refused; a little over is accepted", async () => {
     for (const lifetimeMs of [30_000, 55_000]) {
+      await ProfileManager.setKey("scoped", key);
       await expect(loginWith(lifetimeMs, { expiry: "1h" })).rejects.toMatchObject({
         code: "OPENKEY_EXPIRY_TOO_SHORT",
         message: expect.stringContaining("60 seconds"),
       });
       expect(await ProfileManager.getSession("scoped")).toBeNull();
     }
+    await ProfileManager.setKey("scoped", key);
     await loginWith(90_000, { expiry: "1h" });
     expect(await ProfileManager.getSession("scoped")).not.toBeNull();
   });
@@ -623,7 +627,10 @@ describe("paste-link expiry opt-in", () => {
     expect(saved.expiresAt).toBe(lastLine(saved.siwe));
     expect(Date.parse(saved.expiresAt!) - Date.now()).toBeGreaterThan(29 * DAY);
     await ProfileManager.clearSession("scoped");
+    // A refused paste approval now deletes the profile's key, so each refusal below starts from the key the profile had.
+    await ProfileManager.setKey("scoped", key);
     await expect(unscoped(11 * 365 * DAY)).rejects.toMatchObject({ code: "OPENKEY_EXPIRY_EXCEEDED", message: expect.stringContaining("more than 10 years") });
+    await ProfileManager.setKey("scoped", key);
     await expect(unscoped(30_000)).rejects.toMatchObject({ code: "OPENKEY_EXPIRY_TOO_SHORT" });
     expect(await ProfileManager.getSession("scoped")).toBeNull();
   });
