@@ -545,6 +545,23 @@ describe("an expired request is decided locally, and production OpenKey's 400 in
     expect(await entries()).toEqual([]);
   });
 
+  test("(e3) the boundary is `>=`, exactly: at expiry + 660 000 ms the entry is dropped with zero calls, 1 ms earlier OpenKey is asked", async () => {
+    await createPending();
+    await expireLocally(659_999);
+    openkeyCalls = 0;
+    const early = await pendingOf(() => acquireApprovalRequest(did, withDeadline(2_000)));
+    expect(early.code).toBe("APPROVAL_PENDING");
+    expect(openkeyCalls).toBeGreaterThan(0);
+    expect(await entries()).toHaveLength(1);
+    clock = START; // the first wait advanced the virtual clock
+    await expireLocally(660_000);
+    openkeyCalls = 0;
+    const exact = await pendingOf(() => acquireApprovalRequest(did, withDeadline(2_000)));
+    expect(exact.code).toBe("APPROVAL_REQUEST_EXPIRED");
+    expect(openkeyCalls).toBe(0);
+    expect(await entries()).toEqual([]);
+  });
+
   test("(f) the loop ends: after the drop the next run makes a NEW request, a new link, step/of in the JSON, exit 8", async () => {
     const first = await createPending();
     const oldLink = (first.metadata as { pending: { approvalUrl: string } }).pending.approvalUrl;
