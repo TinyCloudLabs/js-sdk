@@ -535,7 +535,8 @@ export function createShareAuthorityAdapters(input: {
   readonly publishTarget?: (value: TargetPublishInput) => Promise<TargetPublishOutcome>;
   readonly deliver?: ShareDeliveryAdapter["deliver"];
   readonly revokeDelegation?: ShareRevocationAdapter["revokeDelegation"];
-  readonly revokePolicyRoot?: ShareRevocationAdapter["revokePolicyRoot"];
+  /** The CLI revokes every root; it never leaves one live. */
+  readonly revokePolicyRoot?: (request: SharePolicyRootRevocation) => Promise<void>;
   /** Bearer-link sharing service: `undefined` host decodes the link, a host reads from that owner Node. */
   readonly nativeSharing?: (host: string | undefined) => TinyCloudNode["sharing"];
 } = {}): {
@@ -639,22 +640,27 @@ export function createShareAuthorityAdapters(input: {
     const node = await authenticatedNode();
     await assertDomainDeliveryForOrigin((await node.activeNodeIdentity()).origin, "notify");
   };
-  const revokeRoot: NonNullable<ShareRevocationAdapter["revokePolicyRoot"]> = input.revokePolicyRoot ?? (async (request) => {
+  const revokeRoot: (request: SharePolicyRootRevocation) => Promise<void> = input.revokePolicyRoot ?? (async (request) => {
     const node = await authenticatedNode();
     const activeNode = await node.activeNodeIdentity();
     if (request.nodeOrigin !== activeNode.origin || request.nodeAudience !== activeNode.nodeDid || request.ownerDid !== node.credentialHolderDid) {
       throw new Error("share Policy/v3 revocation is not bound to the active owner node");
     }
-    await revokePolicyRootV3({
-      nodeOrigin: activeNode.origin,
-      rootCid: request.rootCid,
-      targetRole: request.targetRole,
-      ownerDid: node.credentialHolderDid,
-      issuerDid: node.credentialHolderDid,
-      nodeAudience: activeNode.nodeDid,
-      reason: "share revoked",
-      sign: (digest) => node.signSessionBytes(digest),
-    });
+    try {
+      await revokePolicyRootV3({
+        nodeOrigin: activeNode.origin,
+        rootCid: request.rootCid,
+        targetRole: request.targetRole,
+        ownerDid: node.credentialHolderDid,
+        issuerDid: node.credentialHolderDid,
+        nodeAudience: activeNode.nodeDid,
+        reason: "share revoked",
+        sign: (digest) => node.signSessionBytes(digest),
+      });
+    } catch (error) {
+      // The Node answers this only for a root it already holds a signed revocation for (a retry signs a new `revokedAt`).
+      if (!(error instanceof Error && error.message.endsWith(" - root-revocation-irreversible"))) throw error;
+    }
   });
   const targetAdapter: TargetPublishAdapter = { async publish(targetInput) {
     if (input.publishTarget !== undefined) return input.publishTarget(targetInput);
