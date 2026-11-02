@@ -213,7 +213,7 @@ describe.skipIf(!NODE_BIN)("tinycloud onboard --timeout, against a real node", (
     return spaces[0];
   }
 
-  async function approve(entry: ApprovalEntry, request: OpenKeyApprovalRequestV1, signer: PrivateKeySigner) {
+  async function approve(entry: ApprovalEntry, request: OpenKeyApprovalRequestV1, signer: PrivateKeySigner, relayed: Record<string, unknown> = {}) {
     const abilities: Record<string, Record<string, string[]>> = {};
     for (const permission of request.permissions) {
       const service = permission.service.slice("tinycloud.".length);
@@ -229,7 +229,7 @@ describe.skipIf(!NODE_BIN)("tinycloud onboard --timeout, against a real node", (
     const signature = await signer.signMessage(prepared.siwe);
     const session = wasm.completeSessionSetup({ ...prepared, signature });
     await activateSessionWithHost(host, session.delegationHeader);
-    const delegation = { ...session, address, chainId: 1, spaceId, ownerDid, verificationMethod: request.targetDid, siwe: prepared.siwe, signature };
+    const delegation = { ...session, address, chainId: 1, spaceId, ownerDid, verificationMethod: request.targetDid, siwe: prepared.siwe, signature, ...relayed };
     const signedExpiry = prepared.siwe.match(/^Expiration Time:\s*(.+)$/m)?.[1];
     const signedIssuedAt = prepared.siwe.match(/^Issued At:\s*(.+)$/m)?.[1];
     if (!signedExpiry || !signedIssuedAt) throw new Error("Fixture grant lacks signed lifetime");
@@ -506,6 +506,27 @@ if (seam === "after-save") {
     expect(down.stdout + down.stderr).toContain("APPROVAL_REQUEST_UNAVAILABLE");
     expect(down.stdout).not.toContain('"pending"');
     expect((await savedState("unavailable")).pending.map((item) => item.requestId)).toEqual([entry.id]);
+  });
+
+  test("a new account whose space OpenKey is still hosting: the wait is bounded by the timeout, as SPACE_SETUP_PENDING, not 150 s", async () => {
+    await mkdir(home("hosting"), { recursive: true, mode: 0o700 });
+    // A wallet whose spaces nobody hosts: the node answers "Space not found" to every read.
+    const newOwner = new PrivateKeySigner(randomBytes(32).toString("hex"));
+    const first = await run("hosting", ["onboard", "--timeout", "1s"]);
+    expect(first.exitCode).toBe(8);
+    const entry = await openLink("hosting", first.stderr);
+    // OpenKey's relay says the space is still being set up, as it does for a brand-new account.
+    await approve(entry, entry.request!, newOwner, { spaceReady: null, spacePending: true });
+    const started = Date.now();
+    const result = await run("hosting", ["onboard", "--timeout", "1s"]);
+    const elapsed = Date.now() - started;
+    expect(result.exitCode, result.stderr).toBe(1);
+    expect(result.stdout + result.stderr).toContain("SPACE_SETUP_PENDING");
+    expect(result.stdout).not.toContain('"pending"');
+    // timeout 1 s + 30 s grace is the most the call may take (here: the 15 s floor, plus start-up and probes).
+    expect(elapsed).toBeLessThan(45_000);
+    expect(acksOf(entry)).toHaveLength(1);
+    expect((await savedState("hosting")).session?.delegationCid).toBe(entry.delegation!.delegationCid);
   });
 
   for (const seam of ["after-poll", "after-fetch", "after-save", "before-ack"] as const) {

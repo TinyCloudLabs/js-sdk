@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { ExitCode } from "../config/constants.js";
 import { CLIError } from "../output/errors.js";
-import { approvalPendingError, parseApprovalTimeout } from "./approval-wait.js";
+import { APPROVAL_COLLECT_GRACE_MS, approvalPendingError, approvalRequestTimeoutMs, parseApprovalTimeout, spaceSetupTimeoutMs } from "./approval-wait.js";
 
 function refusal(value: string): CLIError {
   try {
@@ -61,5 +61,48 @@ describe("approvalPendingError", () => {
     expect(error.exitCode).toBe(8);
     expect(error.code).toBe("APPROVAL_PENDING");
     expect(error.metadata).toEqual({ pending });
+  });
+});
+
+describe("approvalRequestTimeoutMs", () => {
+  const NOW = 1_000_000;
+  const wait = (deadlineMs: number) => ({ deadlineMs, step: 1, of: 1, now: () => NOW });
+
+  test("without a deadline a request keeps its 10 s", () => {
+    expect(approvalRequestTimeoutMs(undefined, false)).toBe(10_000);
+    expect(approvalRequestTimeoutMs(undefined, true)).toBe(10_000);
+  });
+
+  test("before the owner approved, a request never runs past the deadline (1 s at the least)", () => {
+    expect(approvalRequestTimeoutMs(wait(NOW + 4_000), false)).toBe(4_000);
+    expect(approvalRequestTimeoutMs(wait(NOW + 60_000), false)).toBe(10_000);
+    expect(approvalRequestTimeoutMs(wait(NOW - 5_000), false)).toBe(1_000);
+  });
+
+  test("after the owner approved, a request may use the grace beyond the deadline, not more", () => {
+    // At the deadline itself the grace is still all there: a request is capped by 10 s, not by the (zero) time to the deadline.
+    expect(approvalRequestTimeoutMs(wait(NOW), true)).toBe(10_000);
+    expect(approvalRequestTimeoutMs(wait(NOW - 25_000), true)).toBe(APPROVAL_COLLECT_GRACE_MS - 25_000);
+    expect(approvalRequestTimeoutMs(wait(NOW - APPROVAL_COLLECT_GRACE_MS), true)).toBe(1_000);
+  });
+});
+
+describe("spaceSetupTimeoutMs: what `onboard --timeout` leaves for OpenKey to host a new account's space", () => {
+  const NOW = 2_000_000;
+  const wait = (deadlineMs: number) => ({ deadlineMs, step: 1, of: 2, now: () => NOW });
+
+  test("is the time left up to the deadline plus the grace", () => {
+    expect(spaceSetupTimeoutMs(wait(NOW + 20_000))).toBe(20_000 + APPROVAL_COLLECT_GRACE_MS);
+    expect(spaceSetupTimeoutMs(wait(NOW))).toBe(APPROVAL_COLLECT_GRACE_MS);
+  });
+
+  test("never less than 15 s, however late the approval arrived", () => {
+    expect(spaceSetupTimeoutMs(wait(NOW - APPROVAL_COLLECT_GRACE_MS))).toBe(15_000);
+    expect(spaceSetupTimeoutMs(wait(NOW - 10 * 60_000))).toBe(15_000);
+  });
+
+  test("is always below the 150 s an unbounded onboard waits", () => {
+    expect(spaceSetupTimeoutMs(wait(NOW + 9 * 60_000))).toBeGreaterThan(150_000);
+    expect(spaceSetupTimeoutMs(wait(NOW + 60_000))).toBeLessThan(150_000);
   });
 });

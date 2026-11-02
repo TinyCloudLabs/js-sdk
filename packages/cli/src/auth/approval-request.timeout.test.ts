@@ -146,6 +146,8 @@ const virtual = {
 };
 
 let networkFault: (url: URL) => boolean = () => false;
+/** Headers arrive with 200, then the body stalls until the request is aborted. */
+let stalledBody: (url: URL) => boolean = () => false;
 let offered: string[] = [];
 const send = globalThis.fetch;
 let fetchSpy: Mock<typeof fetch> | undefined;
@@ -158,6 +160,11 @@ async function route(input: Parameters<typeof fetch>[0], init?: RequestInit): Pr
   if (url.origin !== server.url.origin) throw new Error("Only the owned fixture may receive requests");
   await onRequest(url, init);
   if (networkFault(url)) throw new TypeError("fetch failed");
+  if (stalledBody(url)) {
+    return new Response(new ReadableStream({ start(controller) {
+      init?.signal?.addEventListener("abort", () => controller.error(init.signal!.reason), { once: true });
+    } }), { status: 200, headers: { "content-type": "application/json" } });
+  }
   return send(input, init);
 }
 const routed = Object.assign(route, { preconnect: send.preconnect });
@@ -192,7 +199,7 @@ beforeEach(async () => {
   caseEnvironment = snapshotEnvironment();
   Object.assign(process.env, fixtureEnvironment);
   results.clear(); linkPosts = 0; discoverCalls = 0; fetchCalls = 0; acks = []; ackSeenSaved = []; expireRequests = false;
-  clock = START; sleeps = []; onTick = () => undefined; networkFault = () => false; onRequest = () => undefined; offered = [];
+  clock = START; sleeps = []; onTick = () => undefined; networkFault = () => false; stalledBody = () => false; onRequest = () => undefined; offered = [];
   await rm(pendingPath(), { force: true });
   await ProfileManager.setProfile("approval", { name: "approval", did, sessionDid: did, ownerDid, host, chainId: 1, spaceName: "applications", createdAt: new Date().toISOString(), authMethod: "openkey", posture: "owner-openkey" });
   await ProfileManager.setKey("approval", key);
@@ -356,6 +363,76 @@ describe("an expired link is never reported as pending", () => {
     const error = await pendingOf(() => acquireApprovalRequest(did, withDeadline(7_000)));
     expect(error.code).toBe("APPROVAL_PENDING");
     expect((error.metadata as { pending: { approvalUrl: string } }).pending.approvalUrl).toBe(saved!.approvalUrl);
+  });
+});
+
+describe("a response body that stalls past the cap is a network failure, never exit 1", () => {
+  const realClock = { now: undefined, sleep: undefined };
+  const bounded = (timeoutMs: number, graceMs: number) => options({ deadlineMs: Date.now() + timeoutMs, graceMs } as { deadlineMs: number }, realClock);
+
+  test("a discover body that stalls ends at the timeout as pending", async () => {
+    await pendingOf(() => acquireApprovalRequest(did, withDeadline(60_000)));
+    await approve();
+    stalledBody = (url) => url.pathname.endsWith("/result");
+    const error = await pendingOf(() => acquireApprovalRequest(did, bounded(1_000, 1_500)));
+    expect(error.code).toBe("APPROVAL_PENDING");
+    stalledBody = () => false;
+    const delegation = await acquireApprovalRequest(did, withDeadline(10_000));
+    await commitAndAcknowledge(delegation);
+    expect(acks).toHaveLength(1);
+    expect(linkPosts).toBe(1);
+  }, 20_000);
+
+  test("a fetch body that stalls ends as result-unavailable within the grace, and the next run resumes", async () => {
+    await pendingOf(() => acquireApprovalRequest(did, withDeadline(60_000)));
+    await approve();
+    stalledBody = (url) => url.pathname.endsWith("/fetch");
+    const started = Date.now();
+    const error = await pendingOf(() => acquireApprovalRequest(did, bounded(1_000, 1_500)));
+    expect(error.code).toBe("APPROVAL_RESULT_UNAVAILABLE");
+    expect(error.exitCode).toBe(8);
+    expect(Date.now() - started).toBeLessThanOrEqual(1_000 + 1_500 + 1_800);
+    stalledBody = () => false;
+    const delegation = await acquireApprovalRequest(did, withDeadline(10_000));
+    await commitAndAcknowledge(delegation);
+    expect(acks).toHaveLength(1);
+    expect(linkPosts).toBe(1);
+  }, 20_000);
+});
+
+describe("the expired-link exit 3 is only for a link nobody could ask about", () => {
+  test("OpenKey answers (202, still open) with a link that looks expired by our clock: still pending, not exit 3", async () => {
+    await pendingOf(() => acquireApprovalRequest(did, withDeadline(60_000)));
+    const [saved] = await entries();
+    await writeJsonDurable(pendingPath(), [{ ...saved!, requestExpiresAt: new Date(START - 60_000).toISOString() }]);
+    const error = await pendingOf(() => acquireApprovalRequest(did, withDeadline(7_000)));
+    expect(error.code).toBe("APPROVAL_PENDING");
+    expect(discoverCalls).toBeGreaterThan(0);
+  });
+
+  test("exit 3 says what the next run does: ask OpenKey once more, then start a new request", async () => {
+    await pendingOf(() => acquireApprovalRequest(did, withDeadline(60_000)));
+    const [saved] = await entries();
+    await writeJsonDurable(pendingPath(), [{ ...saved!, requestExpiresAt: new Date(START - 60_000).toISOString() }]);
+    networkFault = (url) => url.pathname.endsWith("/result");
+    const error = await pendingOf(() => acquireApprovalRequest(did, withDeadline(7_000)));
+    expect(error.code).toBe("APPROVAL_REQUEST_EXPIRED");
+    expect(error.message).toMatch(/asks OpenKey once more, then starts a new request/);
+  });
+
+  test("a link expired for longer than OpenKey keeps any result (10 min + skew) is dropped locally, and the next run starts a new request", async () => {
+    await pendingOf(() => acquireApprovalRequest(did, withDeadline(60_000)));
+    const [saved] = await entries();
+    await writeJsonDurable(pendingPath(), [{ ...saved!, requestExpiresAt: new Date(START - 20 * 60_000).toISOString() }]);
+    networkFault = (url) => url.pathname.endsWith("/result");
+    const error = await pendingOf(() => acquireApprovalRequest(did, withDeadline(7_000)));
+    expect(error.code).toBe("APPROVAL_REQUEST_EXPIRED");
+    expect(await entries()).toEqual([]);
+    networkFault = () => false;
+    const renewed = await pendingOf(() => acquireApprovalRequest(did, withDeadline(7_000)));
+    expect(renewed.code).toBe("APPROVAL_PENDING");
+    expect(linkPosts).toBe(2);
+    expect((renewed.metadata as { pending: { approvalUrl: string } }).pending.approvalUrl).not.toBe(saved!.approvalUrl);
   });
 });
 
