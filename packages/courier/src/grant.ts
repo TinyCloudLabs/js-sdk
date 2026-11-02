@@ -9,6 +9,7 @@ import { loadGrant, loadKey, saveGrant, saveProfile, type AgentKey, type OwnerGr
 import { nodeOpts } from './node.js';
 import { listAll } from './store.js';
 import { assertAgentGrant, CLOCK_SKEW_MS, siweTimes } from './authority.js';
+import { withRefusalNotice } from './grant-refusal.js';
 import { dropAllPending, dropPendingDelegation, dropPendingForCode, newestPending, pendingForCode, savePending } from './pending.js';
 
 const PRIVATE_JWK_FIELDS = new Set(['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth', 'k']);
@@ -133,10 +134,29 @@ export function assertBoundToKey(delegation: unknown, key: Pick<AgentKey, 'did' 
  * `XXXX-XXXX` code (redeemed at `apiHost`), JSON, or base64 JSON.
  */
 export async function grantFromInput(input: unknown, key: Pick<AgentKey, 'did' | 'jwk'>, options: { apiHost: string }): Promise<GrantPayload> {
+  const seen: { delegationCid?: string } = {};
+  try {
+    return await readGrantInput(input, key, options, seen);
+  } catch (error) {
+    // A grant refused before install (wrong key, malformed) still tells the owner which delegation it was, when one could be read.
+    throw withRefusalNotice(error, seen.delegationCid ?? cidOf(input));
+  }
+}
+
+/** The delegation CID of a grant given as an object, JSON or base64 JSON; undefined when it cannot be read. */
+function cidOf(value: unknown): string | undefined {
+  try {
+    const parsed = (typeof value === 'string' ? decodePayload(value) : value) as { delegationCid?: unknown } | null;
+    return typeof parsed?.delegationCid === 'string' && parsed.delegationCid !== '' ? parsed.delegationCid : undefined;
+  } catch { return undefined; }
+}
+
+async function readGrantInput(input: unknown, key: Pick<AgentKey, 'did' | 'jwk'>, options: { apiHost: string }, seen: { delegationCid?: string }): Promise<GrantPayload> {
   if (typeof input === 'string' && isShortCode(input)) {
     // OpenKey consumes the code on redeem: a code redeemed by an interrupted run is finished from its local copy.
     const saved = pendingForCode(input);
     if (saved) {
+      seen.delegationCid = cidOf(saved);
       try {
         assertBoundToKey(saved, key);
         return parseGrantPayload(saved, key);
@@ -146,6 +166,7 @@ export async function grantFromInput(input: unknown, key: Pick<AgentKey, 'did' |
       }
     }
     const delegation = await redeemShortCode(input, options.apiHost);
+    seen.delegationCid = cidOf(delegation);
     assertBoundToKey(delegation, key);
     const payload = parseGrantPayload(delegation, key);
     // Before any node call, so a kill from here on cannot lose the owner's approval.
@@ -384,10 +405,13 @@ const CONTENT_REFUSALS = new Set(['bad-grant', 'grant-too-broad', 'grant-incompl
 const CLOCK_REFUSAL = /issued in the future|future SIWE expiry/;
 
 /** Whether a failed install of a saved delegation can never succeed on a retry with a correct clock. */
-function isPermanentRefusal(error: unknown, siwe: string): boolean {
+export function isClockRefusal(error: unknown): boolean {
+  return error instanceof CourierError && (error.code === 'grant-expired' || (error.code === 'bad-grant' && CLOCK_REFUSAL.test(error.message)));
+}
+
+export function isPermanentRefusal(error: unknown, siwe: string): boolean {
   if (!(error instanceof CourierError)) return false;
-  const clockDependent = error.code === 'grant-expired' || (error.code === 'bad-grant' && CLOCK_REFUSAL.test(error.message));
-  if (clockDependent) {
+  if (isClockRefusal(error)) {
     // Useless only once the signed expiry is past even allowing for clock skew.
     const expiresAt = signedExpiry(siwe);
     return !expiresAt || expiresAt.getTime() + CLOCK_SKEW_MS < Date.now();
@@ -439,6 +463,15 @@ async function installGrantFrom(profile: Profile, key: AgentKey, payload: GrantP
   dropPendingQuietly(payload.delegationCid);
 }
 
+/** `installGrant` for a grant that came from outside (an approval result, a code, a file): a refusal carries the TC-2308 notice. */
+export async function installRefusing(profile: Profile, key: AgentKey, payload: GrantPayload, options: { spaceTimeoutMs?: number } = {}): Promise<void> {
+  try {
+    await installGrant(profile, key, payload, options);
+  } catch (error) {
+    throw withRefusalNotice(error, payload.delegationCid);
+  }
+}
+
 export async function resumeGrant(profile: Profile, key: AgentKey): Promise<void> {
   const grant = loadGrant();
   if (!grant) throw new CourierError('no-grant', `No saved OpenKey grant to resume. Run \`${cmd('init')}\` and approve a grant first.`);
@@ -449,7 +482,8 @@ export async function resumeGrant(profile: Profile, key: AgentKey): Promise<void
   if (payload.spaceId.toLowerCase() !== ownerSpaceId(payload).toLowerCase()) {
     throw new CourierError('bad-grant', `Saved grant space is not ${COURIER_SPACE}.`);
   }
-  const { node } = await restoreVerifiedGrant(profile, key, payload);
+  let node: TinyCloudNode;
+  try { ({ node } = await restoreVerifiedGrant(profile, key, payload)); } catch (error) { throw withRefusalNotice(error, grant.delegationCid); }
   const ready = profile.spacePending
     ? await waitForSpaceReady(() => verifySpaceReady(node), { timeoutMs: 60_000 })
     : await verifySpaceReady(node);
@@ -484,7 +518,7 @@ export async function resumeAwaitingGrant(profile: Profile): Promise<boolean> {
       dropAllPending();
     }
     if (payload) {
-      await installGrant(profile, key, payload);
+      await installRefusing(profile, key, payload);
       return true;
     }
   }

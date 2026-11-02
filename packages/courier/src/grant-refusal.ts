@@ -1,8 +1,5 @@
 import { cmd } from './program.js';
 import { CourierError } from './errors.js';
-import { installGrant } from './grant.js';
-import type { AgentKey, Profile } from './profile.js';
-import type { GrantPayload } from './grant.js';
 
 /** Where an owner can revoke a delegation; the agent cannot revoke one itself. */
 export const REVOKE_URL = 'https://account.tinycloud.xyz/delegations';
@@ -25,13 +22,4 @@ export function withRefusalNotice(error: unknown, delegationCid: string | undefi
     ? `Refused delegation: ${delegationCid}. Nothing was installed or used, and this agent cannot revoke it. If the owner approved it, they can revoke it at ${REVOKE_URL}. ${next}`
     : `Nothing was installed or used. ${next}`;
   return new CourierError(error.code, `${error.message}\n${notice}`);
-}
-
-/** `installGrant` for a grant that came from outside (an approval result, a pasted code or a file): a refusal carries the notice. */
-export async function installRefusing(profile: Profile, key: AgentKey, payload: GrantPayload, options: { spaceTimeoutMs?: number } = {}): Promise<void> {
-  try {
-    await installGrant(profile, key, payload, options);
-  } catch (error) {
-    throw withRefusalNotice(error, payload.delegationCid);
-  }
 }

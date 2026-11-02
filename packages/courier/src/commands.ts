@@ -13,8 +13,7 @@ import {
   type AgentKey, type Profile, type StoredPeer,
 } from './profile.js';
 import { courierNode, peerKv } from './node.js';
-import { courierGrantRequest, grantFromInput, noSpaceError, pendingSpaceError, receiveGrant, resumeAwaitingGrant, resumeGrant } from './grant.js';
-import { installRefusing } from './grant-refusal.js';
+import { courierGrantRequest, grantFromInput, installRefusing, noSpaceError, pendingSpaceError, receiveGrant, resumeAwaitingGrant, resumeGrant } from './grant.js';
 import { clearPending, completeApproval, DEFAULT_WAIT_MS, holdsApproval, loadPending, MAX_WAIT_MS, requestApproval, waitApproval } from './grant-request.js';
 import {
   artifactA, artifactWithDelegation, parseArtifact, peerRecordBody, PEER_DELEGATION_EXPIRY, validateArtifactIdentity,
@@ -115,11 +114,13 @@ export async function cmdInit(args: ParsedArgs) {
     if (!profileExists()) fail('no-grant', `No Courier profile to resume. Run \`${cmd('init')}\` and approve a grant first.`);
     const profile = loadProfile();
     if (profile.status === 'awaiting-grant' && await resumeAwaitingGrant(profile)) {
+      dropOpenRequest();
       await finishInit(profile, profile.host);
       return;
     }
     if (profile.status !== 'awaiting-space') fail('usage', `\`${cmd('init --resume')}\` requires a profile in awaiting-space state.`);
     await resumeGrant(profile, loadKey());
+    dropOpenRequest();
     await finishInit(profile, profile.host);
     return;
   }
@@ -206,6 +207,15 @@ export async function cmdInit(args: ParsedArgs) {
   // An open short-link request would otherwise be collected later, on top of this grant.
   clearPending();
   await finishInit(profile, host);
+}
+
+/**
+ * A grant is installed from another source: an open short-link request would be collected later, on top of it. A request whose
+ * result was already installed (committed) stays, so the next `init --wait` can still send its acknowledgement.
+ */
+function dropOpenRequest(): void {
+  const saved = loadPending();
+  if (saved && !saved.committed) clearPending();
 }
 
 async function finishInit(profile: Profile, host: string): Promise<void> {

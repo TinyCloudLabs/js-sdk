@@ -12,8 +12,8 @@ import { cmd } from './program.js';
 import { CourierError } from './errors.js';
 import { AGENT_GRANT, AGENT_GRANT_EXPIRY } from './keys.js';
 import { profileDir, readSecure, writeSecure, type AgentKey, type Profile } from './profile.js';
-import { assertBoundToKey, parseGrantPayload, resolveOpenKeyApiHost, type GrantPayload } from './grant.js';
-import { installRefusing, withRefusalNotice } from './grant-refusal.js';
+import { assertBoundToKey, installGrant, isClockRefusal, isPermanentRefusal, parseGrantPayload, resolveOpenKeyApiHost, type GrantPayload } from './grant.js';
+import { withRefusalNotice } from './grant-refusal.js';
 import { bareDid, CLOCK_SKEW_MS, durationMs, siweTimes } from './authority.js';
 
 /**
@@ -335,12 +335,15 @@ export async function completeApproval(profile: Profile, key: AgentKey, pending:
     const spaceTimeoutMs = Math.min(MAX_SPACE_WAIT_MS, Math.max(MIN_SPACE_WAIT_MS, options.deadline + SPACE_GRACE_MS - Date.now()));
     let spaceError: CourierError | undefined;
     try {
-      await installRefusing(profile, key, payload, { spaceTimeoutMs });
+      await installGrant(profile, key, payload, { spaceTimeoutMs });
     } catch (error) {
       if (error instanceof CourierError && error.code === 'no-space') spaceError = error; // grant and profile are saved
-      else {
+      else if (isClockRefusal(error) && !isPermanentRefusal(error, payload.siwe)) {
+        // Refused because of THIS machine's clock (issued "in the future", no future expiry): the approval is fine and is kept.
+        throw new CourierError((error as CourierError).code, `${(error as CourierError).message}\nThe system clock may be wrong. Nothing was installed and the saved approval is kept (it is not something to revoke): check the system clock, then run \`${cmd('init --wait')}\` again.`);
+      } else {
         if (error instanceof CourierError && REFUSED_CODES[error.code]) clearPending();
-        throw error;
+        throw withRefusalNotice(error, payload.delegationCid);
       }
     }
     pending.committed = true;
