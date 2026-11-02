@@ -557,6 +557,14 @@ describe("ensureDelegationAuthority: a refused approval of an established profil
     expectOneNotice("kept");
   });
 
+  test("a refusal raised BEFORE any approval exists grants nothing: no notice, nothing dropped", async () => {
+    const profile = await owned();
+    const { CLIError } = await import("../output/errors.js");
+    const early = async () => { throw new CLIError("OPENKEY_OWNER_MISMATCH", "refused before the owner approved anything", 5); };
+    await expect(ensure(profile, [request("default")], { openKeyAcquisition: early as never })).rejects.toMatchObject({ code: "OPENKEY_OWNER_MISMATCH" });
+    expectNoNotice();
+  });
+
   test("AUTH_EXPIRED stays by design: no notice, the existing key stays", async () => {
     const profile = await owned();
     pickedLifetimeMs = -30_000;
