@@ -581,6 +581,19 @@ result retention. Normal login keeps its seven-day default; onboarding requests
 30 days explicitly. `--paste` remains an explicit manual fallback with a
 five-minute, single-use return code, not the automatic short-link transport.
 
+For chat approvals, use CLI 1.5.0 or later and send the complete `/a/...#...`
+URL on its own line. For a scoped grant, run
+`tinycloud auth request ... --grant --no-popup` with the intended scope flags
+and profile; after interruption, rerun that same command and profile to resume.
+Do not add `--paste` for this path: that explicit manual fallback still generates
+the longer `/delegate?...` URL and requires the owner's return code.
+The short URL carries only a request reference and fragment key, not the
+permission payload or a session private key. Keep the complete fragment intact;
+never substitute a URL shortener or remove text after `#`. A chat preview does
+not approve or consume the request. If the in-app browser blocks site storage,
+open the original complete message link in Safari or Chrome. An expired or
+incomplete link requires a fresh request from the originating app or command.
+
 Use `tinycloud replica report` for read-only aggregates of persisted replication events
 and identity partitions. Live replica status is unavailable there. Report
 `--purge` and `--clear-pending` refuse with exit 2 `REPORT_READ_ONLY`.

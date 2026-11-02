@@ -13,7 +13,7 @@ import {
   type AgentKey, type Profile, type StoredPeer,
 } from './profile.js';
 import { courierNode, peerKv } from './node.js';
-import { courierGrantRequest, grantFromInput, installGrant, openKeyDelegateUrl, receiveGrant, resumeGrant } from './grant.js';
+import { courierGrantRequest, grantFromInput, installGrant, openKeyDelegateUrl, receiveGrant, resumeAwaitingGrant, resumeGrant } from './grant.js';
 import {
   artifactA, artifactWithDelegation, parseArtifact, peerRecordBody, PEER_DELEGATION_EXPIRY, validateArtifactIdentity,
 } from './pairing.js';
@@ -105,6 +105,10 @@ export async function cmdInit(args: ParsedArgs) {
   if (args.has('resume')) {
     if (!profileExists()) fail('no-grant', `No Courier profile to resume. Run \`${cmd('init')}\` and approve a grant first.`);
     const profile = loadProfile();
+    if (profile.status === 'awaiting-grant' && await resumeAwaitingGrant(profile)) {
+      await finishInit(profile, profile.host);
+      return;
+    }
     if (profile.status !== 'awaiting-space') fail('usage', `\`${cmd('init --resume')}\` requires a profile in awaiting-space state.`);
     await resumeGrant(profile, loadKey());
     await finishInit(profile, profile.host);

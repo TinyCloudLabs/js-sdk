@@ -1,5 +1,14 @@
 # @tinycloud/replica
 
+## 0.4.2
+
+### Patch Changes
+
+- 29fd1f9: Re-pin `@tinycloud/sdk-services` to 3.8.2, the version published in this release (a linked-group bump of identical code), so installs get one copy.
+
+  Details: TC-2263
+  - @tinycloud/sdk-services@3.8.2
+
 ## 0.4.2-beta.0
 
 ### Patch Changes

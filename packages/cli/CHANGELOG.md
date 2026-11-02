@@ -1,5 +1,58 @@
 # @tinycloud/cli
 
+## 1.5.2
+
+### Patch Changes
+
+- Print signed OpenKey approval links on their own line in login, permission approval and onboarding output so chat clients can copy the complete URL and fragment. Document the existing short-link wait/resume path and the explicit longer `--paste` fallback. Approval authority, requested scope and expiry checks are unchanged.
+
+  Details: TC-2212
+
+- e8d42b5: The addressed share producer (DID, email and email-domain targets) encrypts under the share's own named key `share/<shareId>` and registers the raw-byte wrapped-key digest, through the share-sdk helpers. Which addressed targets the CLI offers is unchanged.
+
+  Details: TC-2242
+
+- 0399647: An approval request that expired before anyone approved it no longer leaves `onboard`, `auth grant` and `auth login` in an endless loop. Production OpenKey answers a status check for an expired request with HTTP 400 `invalid_request`, which the CLI reported as exit 8 `APPROVAL_REQUEST_UNAVAILABLE` while keeping the saved request, so "exit 8, run it again" never ended. Now that answer, received after the request's own expiry for a request that holds no result, is exit 3 `APPROVAL_REQUEST_EXPIRED` and the saved request is dropped, so the next run makes a new request with a new link. The same 400 before the request's expiry still ends as exit 8 `APPROVAL_REQUEST_UNAVAILABLE` and keeps the saved request, a saved request that already holds an approved result is never dropped, and every other behaviour is unchanged. If OpenKey cannot be reached at all, an expired request still waits as before.
+
+  Details: TC-2323
+
+- f7639ea: An OpenKey short code is consumed the moment it is redeemed, so a run that was killed after the redeem (an agent tool's two-minute limit hit this) lost the owner's approval and the retry could only say "Delegation code not found". The redeemed delegation is now saved first, to an owner-only `pending-grant.json` in the Courier home (`pending-delegation-code.json` in the CLI profile directory), fsynced and holding public fields only. Re-running with the same code, or `courier init --resume`, finishes from that copy with no second redeem and no second approval; the record is deleted only after the grant and profile are saved (the CLI: after its login or grant commit), and an expired or wrong-key record is never installed. `courier init --resume` also accepts a profile left `awaiting-grant` beside a saved grant. Courier covers `init` with a code, and the CLI covers `--paste` for `auth login`, `init`, `auth rotate`, `auth grant` and `onboard --code`. One limit remains: the first `tc auth login --paste` on a profile with no saved key keeps its new private key only in memory until the login commits, so a kill before the commit needs a fresh approval. Nothing changes when a run is not interrupted: every message and exit code is unchanged, and no flag is added.
+
+  Details: TC-2301
+
+- Updated dependencies [8d278fb]
+- Updated dependencies [8d278fb]
+- Updated dependencies [e8d42b5]
+  - @tinycloud/node-sdk@3.9.1
+  - @tinycloud/sdk-core@3.9.1
+  - @tinycloud/share-sdk@1.4.3
+  - @tinycloud/operations@0.7.9
+  - @tinycloud/sdk-services@3.8.2
+
+## 1.5.2-beta.4
+
+### Patch Changes
+
+- Print signed OpenKey approval links on their own line in login, permission approval and onboarding output so chat clients can copy the complete URL and fragment. Document the existing short-link wait/resume path and the explicit longer `--paste` fallback. Approval authority, requested scope and expiry checks are unchanged.
+
+  Details: TC-2212
+
+## 1.5.2-beta.3
+
+### Patch Changes
+
+- 0399647: An approval request that expired before anyone approved it no longer leaves `onboard`, `auth grant` and `auth login` in an endless loop. Production OpenKey answers a status check for an expired request with HTTP 400 `invalid_request`, which the CLI reported as exit 8 `APPROVAL_REQUEST_UNAVAILABLE` while keeping the saved request, so "exit 8, run it again" never ended. Now that answer, received after the request's own expiry for a request that holds no result, is exit 3 `APPROVAL_REQUEST_EXPIRED` and the saved request is dropped, so the next run makes a new request with a new link. The same 400 before the request's expiry still ends as exit 8 `APPROVAL_REQUEST_UNAVAILABLE` and keeps the saved request, a saved request that already holds an approved result is never dropped, and every other behaviour is unchanged. If OpenKey cannot be reached at all, an expired request still waits as before.
+
+  Details: TC-2323
+
+## 1.5.2-beta.2
+
+### Patch Changes
+
+- f7639ea: An OpenKey short code is consumed the moment it is redeemed, so a run that was killed after the redeem (an agent tool's two-minute limit hit this) lost the owner's approval and the retry could only say "Delegation code not found". The redeemed delegation is now saved first, to an owner-only `pending-grant.json` in the Courier home (`pending-delegation-code.json` in the CLI profile directory), fsynced and holding public fields only. Re-running with the same code, or `courier init --resume`, finishes from that copy with no second redeem and no second approval; the record is deleted only after the grant and profile are saved (the CLI: after its login or grant commit), and an expired or wrong-key record is never installed. `courier init --resume` also accepts a profile left `awaiting-grant` beside a saved grant. Courier covers `init` with a code, and the CLI covers `--paste` for `auth login`, `init`, `auth rotate`, `auth grant` and `onboard --code`. One limit remains: the first `tc auth login --paste` on a profile with no saved key keeps its new private key only in memory until the login commits, so a kill before the commit needs a fresh approval. Nothing changes when a run is not interrupted: every message and exit code is unchanged, and no flag is added.
+
+  Details: TC-2301
+
 ## 1.5.2-beta.1
 
 ### Patch Changes

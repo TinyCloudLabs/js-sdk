@@ -9859,7 +9859,7 @@ async function bootstrapDelegatedSession(ctx, delegation) {
 }
 async function restoreBeforeBootstrap(profileName2, previousProfile) {
   const failures = [];
-  for (const write of [
+  for (const write2 of [
     () => ProfileManager.clearSession(profileName2),
     () => ProfileManager.updateProfile(profileName2, (current) => {
       const restored = { ...current };
@@ -9870,7 +9870,7 @@ async function restoreBeforeBootstrap(profileName2, previousProfile) {
       return restored;
     })
   ]) {
-    await write().catch((error) => {
+    await write2().catch((error) => {
       failures.push(failureName(error));
     });
   }
@@ -17993,12 +17993,12 @@ import { get as httpGet } from "http";
 import { get as httpsGet } from "https";
 import { spawn } from "child_process";
 import { lstat as lstat7, mkdir as mkdir4, readFile as readFile9, writeFile as writeFile2 } from "fs/promises";
-import { dirname as dirname6, join as join15 } from "path";
+import { dirname as dirname6, join as join16 } from "path";
 import { createInterface as createInterface3 } from "readline";
 import { TinyCloudNode as TinyCloudNode3, grantAuthRequest, principalDidEquals as principalDidEquals3, REPLICA_LOGOUT_PENDING_FILE as REPLICA_LOGOUT_PENDING_FILE4, signedCompactUcanExpiry as signedCompactUcanExpiry3 } from "@tinycloud/node-sdk";
 import { composeManifestRequest } from "@tinycloud/sdk-core";
 import { invokeOperation } from "@tinycloud/operations";
-import { namedProfilePath as namedProfilePath3, profilePath as profilePath9 } from "@tinycloud/operations/state";
+import { namedProfilePath as namedProfilePath3, profilePath as profilePath10 } from "@tinycloud/operations/state";
 import { REPLICA_GATE_FILE as REPLICA_GATE_FILE3 } from "@tinycloud/sdk-services/kv/replication/contractConstants";
 
 // src/lib/logout-revocation.ts
@@ -32526,7 +32526,7 @@ function createEncryptedProfileHistory(profileName2, sessionSigner) {
     if (iv.length !== 12 || ciphertext.length <= 16) throw new ShareHistoryUnreadableError();
     return decryptRecords(ready.key, iv, ciphertext);
   };
-  const write = async (profile, values, ready) => {
+  const write2 = async (profile, values, ready) => {
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const bytes = new TextEncoder().encode(JSON.stringify(values));
     const encrypted = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, ready.key, bytes));
@@ -32644,7 +32644,7 @@ function createEncryptedProfileHistory(profileName2, sessionSigner) {
         const index = values.findIndex((value4) => value4.shareId === record3.shareId);
         if (index >= 0) values[index] = record3;
         else values.push(record3);
-        await write(profile, values, ready);
+        await write2(profile, values, ready);
       }, true);
     },
     async update(shareId, change) {
@@ -32654,7 +32654,7 @@ function createEncryptedProfileHistory(profileName2, sessionSigner) {
         if (index < 0) return void 0;
         const updated = await change(values[index]);
         values[index] = updated;
-        await write(profile, values, ready);
+        await write2(profile, values, ready);
         return updated;
       }, true);
     },
@@ -32666,7 +32666,7 @@ function createEncryptedProfileHistory(profileName2, sessionSigner) {
     },
     async delete(shareId) {
       return locked(async (profile, ready) => {
-        await write(profile, (await read5(profile, ready)).filter((record3) => record3.shareId !== shareId), ready);
+        await write2(profile, (await read5(profile, ready)).filter((record3) => record3.shareId !== shareId), ready);
       }, true);
     },
     quarantineUnreadable
@@ -32741,9 +32741,9 @@ init_caveat_refusal();
 import { createInterface } from "readline";
 
 // src/auth/approval-request.ts
-import { createECDH as createECDH2, createHash as createHash3, createPrivateKey, randomBytes as randomBytes5, randomUUID as randomUUID2, sign } from "crypto";
-import { open as open11 } from "fs/promises";
-import { join as join14 } from "path";
+import { createECDH as createECDH2, createHash as createHash4, createPrivateKey, randomBytes as randomBytes5, randomUUID as randomUUID2, sign } from "crypto";
+import { open as open12 } from "fs/promises";
+import { join as join15 } from "path";
 import { setTimeout as wait } from "timers/promises";
 
 // src/lib/browser.ts
@@ -32785,7 +32785,7 @@ init_constants();
 init_errors();
 init_permissions();
 init_permissions();
-import { additionalDelegationsPath as additionalDelegationsPath3, profilePath as profilePath8 } from "@tinycloud/operations/state";
+import { additionalDelegationsPath as additionalDelegationsPath3, profilePath as profilePath9 } from "@tinycloud/operations/state";
 import { principalDidEquals as principalDidEquals2 } from "@tinycloud/node-sdk";
 import { canonicalizeRecapCaveats, parseSignedCompactUcanAttenuation as parseSignedCompactUcanAttenuation3 } from "@tinycloud/sdk-core";
 
@@ -33078,105 +33078,13 @@ function describeGrantScope(requested, requestedExpiry, applicationsSpace, maxLi
   return { text: lines.join("\n"), entries: requested, extras };
 }
 
-// src/auth/device-auth.ts
-init_constants();
-init_errors();
-init_caveat_refusal();
-import {
-  createDecipheriv,
-  createECDH,
-  createHash as createHash2,
-  createHmac,
-  randomBytes as randomBytes4
-} from "crypto";
-
-// src/auth/local-key.ts
-init_replication_config();
-import { TCWSessionManager, importKey, initPanicHook } from "@tinycloud/node-sdk-wasm";
-import { PrivateKeySigner } from "@tinycloud/node-sdk";
-import { randomBytes as randomBytes3 } from "crypto";
-var wasmInitialized = false;
-function ensureWasm() {
-  if (!wasmInitialized) {
-    initPanicHook();
-    wasmInitialized = true;
-  }
-}
-function generateKey2() {
-  ensureWasm();
-  const mgr = new TCWSessionManager();
-  const keyId = mgr.createSessionKey("cli");
-  const jwkStr = mgr.jwk(keyId);
-  if (!jwkStr) throw new Error("Failed to generate key");
-  const jwk = JSON.parse(jwkStr);
-  const did = mgr.getDID(keyId);
-  return { jwk, did };
-}
-function keyToDID(jwk) {
-  ensureWasm();
-  const mgr = new TCWSessionManager();
-  const keyId = importKey(mgr, JSON.stringify(jwk), "imported");
-  return mgr.getDID(keyId);
-}
-function generateEthereumPrivateKey() {
-  const keyBytes = randomBytes3(32);
-  return "0x" + keyBytes.toString("hex");
-}
-async function deriveAddress(privateKey) {
-  const signer = new PrivateKeySigner(privateKey);
-  return signer.getAddress();
-}
-function addressToDID(address, chainId = 1) {
-  return `did:pkh:eip155:${chainId}:${address}`;
-}
-async function generateLocalIdentity(chainId = 1) {
-  const privateKey = generateEthereumPrivateKey();
-  const address = await deriveAddress(privateKey);
-  const did = addressToDID(address, chainId);
-  return { privateKey, address, did };
-}
-async function localKeySignIn(options) {
-  const { TinyCloudNode: TinyCloudNode4 } = await import("@tinycloud/node-sdk");
-  const profile = options.profile ?? "default";
-  const replication = createCliReplicationConfig(
-    profile,
-    options.replication,
-    { debug: false, quiet: true },
-    options.replication !== void 0
-  );
-  const node = new TinyCloudNode4({
-    privateKey: options.privateKey,
-    host: options.host,
-    autoCreateSpace: true,
-    ...options.keyAbilities ? { additionalRawAbilities: options.keyAbilities } : {},
-    ...replication ? { replication } : {}
-  });
-  await node.signIn();
-  let networkReady;
-  if (options.keyAbilities && !node.freshEncryptionNetworkCreated) {
-    networkReady = await node.ensureEncryptionNetwork().then(() => true, () => false);
-  } else if (options.keyAbilities) {
-    networkReady = true;
-  }
-  const address = await new PrivateKeySigner(options.privateKey).getAddress();
-  const session = node.session;
-  if (!session) {
-    throw new Error("Local key sign-in did not produce a TinyCloud session");
-  }
-  return {
-    spaceId: session.spaceId,
-    address,
-    chainId: 1,
-    delegationHeader: session.delegationHeader,
-    delegationCid: session.delegationCid,
-    jwk: session.jwk,
-    verificationMethod: session.verificationMethod,
-    siwe: session.siwe,
-    signature: session.signature,
-    ...node.replicaStamp === void 0 ? {} : { replicaStamp: node.replicaStamp },
-    ...networkReady === void 0 ? {} : { networkReady }
-  };
-}
+// src/auth/pending-code.ts
+init_storage();
+import { createHash as createHash2 } from "crypto";
+import { constants as fsConstants5 } from "fs";
+import { open as open11, rm as rm6 } from "fs/promises";
+import { join as join13 } from "path";
+import { profilePath as profilePath7 } from "@tinycloud/operations/state";
 
 // src/auth/scoped-login.ts
 init_errors();
@@ -33625,6 +33533,171 @@ function verifyScopedLogin(data, key, sessionDid, requested, expected = {}) {
   return { session, legacyNested };
 }
 
+// src/auth/pending-code.ts
+var FILE = "pending-delegation-code.json";
+function hashOf(code5) {
+  return createHash2("sha256").update(code5.trim().toLowerCase()).digest("hex");
+}
+function fileOf(profile) {
+  return join13(profilePath7(profile), FILE);
+}
+async function write(profile, records) {
+  if (records.length === 0) await rm6(fileOf(profile), { force: true });
+  else await writeJsonDurable(fileOf(profile), { version: 1, records });
+}
+async function live(profile) {
+  const file = fileOf(profile);
+  let records;
+  let handle;
+  try {
+    handle = await open11(file, fsConstants5.O_RDONLY | fsConstants5.O_NOFOLLOW | fsConstants5.O_NONBLOCK);
+    const info = await handle.stat();
+    if (!info.isFile() || info.uid !== process.getuid?.()) return [];
+    if ((info.mode & 63) !== 0) await handle.chmod(384).catch(() => void 0);
+    const stored = JSON.parse(await handle.readFile("utf8"));
+    if (stored?.version !== 1 || !Array.isArray(stored.records)) throw new Error("unknown format");
+    records = stored.records.filter((record3) => typeof record3?.codeHash === "string" && Number.isFinite(Date.parse(record3.expiresAt)) && typeof record3.delegation === "object" && record3.delegation !== null);
+  } catch (error) {
+    const code5 = error.code;
+    if (code5 !== "ENOENT" && code5 !== "ELOOP") await rm6(file, { force: true });
+    return [];
+  } finally {
+    await handle?.close();
+  }
+  const unexpired = records.filter((record3) => Date.parse(record3.expiresAt) > Date.now());
+  if (unexpired.length !== records.length) await write(profile, unexpired);
+  return unexpired;
+}
+async function pendingDelegationFor(profile, code5) {
+  const hash = hashOf(code5);
+  return (await live(profile)).find((record3) => record3.codeHash === hash)?.delegation;
+}
+async function savePendingDelegation(profile, code5, delegation) {
+  const expiresAt = sessionExpiresAt(delegation);
+  if (expiresAt === null || Date.parse(expiresAt) <= Date.now()) return;
+  const hash = hashOf(code5);
+  const records = (await live(profile)).filter((record3) => record3.codeHash !== hash);
+  records.push({ codeHash: hash, expiresAt, savedAt: (/* @__PURE__ */ new Date()).toISOString(), delegation });
+  await write(profile, records);
+}
+async function dropPendingDelegationFor(profile, code5) {
+  const hash = hashOf(code5);
+  const records = await live(profile);
+  const kept = records.filter((record3) => record3.codeHash !== hash);
+  if (kept.length !== records.length) await write(profile, kept);
+}
+async function dropCommittedDelegation(profile, delegation) {
+  const committed = "delegationCid" in delegation ? delegation.delegationCid : "cid" in delegation ? delegation.cid : void 0;
+  if (typeof committed !== "string") return;
+  try {
+    const records = await live(profile);
+    const kept = records.filter((record3) => record3.delegation.delegationCid !== committed);
+    if (kept.length !== records.length) await write(profile, kept);
+  } catch (error) {
+    console.error(`warning: could not remove the saved delegation code record (${error.message}); it expires on its own.`);
+  }
+}
+
+// src/auth/device-auth.ts
+init_constants();
+init_errors();
+init_caveat_refusal();
+import {
+  createDecipheriv,
+  createECDH,
+  createHash as createHash3,
+  createHmac,
+  randomBytes as randomBytes4
+} from "crypto";
+
+// src/auth/local-key.ts
+init_replication_config();
+import { TCWSessionManager, importKey, initPanicHook } from "@tinycloud/node-sdk-wasm";
+import { PrivateKeySigner } from "@tinycloud/node-sdk";
+import { randomBytes as randomBytes3 } from "crypto";
+var wasmInitialized = false;
+function ensureWasm() {
+  if (!wasmInitialized) {
+    initPanicHook();
+    wasmInitialized = true;
+  }
+}
+function generateKey2() {
+  ensureWasm();
+  const mgr = new TCWSessionManager();
+  const keyId = mgr.createSessionKey("cli");
+  const jwkStr = mgr.jwk(keyId);
+  if (!jwkStr) throw new Error("Failed to generate key");
+  const jwk = JSON.parse(jwkStr);
+  const did = mgr.getDID(keyId);
+  return { jwk, did };
+}
+function keyToDID(jwk) {
+  ensureWasm();
+  const mgr = new TCWSessionManager();
+  const keyId = importKey(mgr, JSON.stringify(jwk), "imported");
+  return mgr.getDID(keyId);
+}
+function generateEthereumPrivateKey() {
+  const keyBytes = randomBytes3(32);
+  return "0x" + keyBytes.toString("hex");
+}
+async function deriveAddress(privateKey) {
+  const signer = new PrivateKeySigner(privateKey);
+  return signer.getAddress();
+}
+function addressToDID(address, chainId = 1) {
+  return `did:pkh:eip155:${chainId}:${address}`;
+}
+async function generateLocalIdentity(chainId = 1) {
+  const privateKey = generateEthereumPrivateKey();
+  const address = await deriveAddress(privateKey);
+  const did = addressToDID(address, chainId);
+  return { privateKey, address, did };
+}
+async function localKeySignIn(options) {
+  const { TinyCloudNode: TinyCloudNode4 } = await import("@tinycloud/node-sdk");
+  const profile = options.profile ?? "default";
+  const replication = createCliReplicationConfig(
+    profile,
+    options.replication,
+    { debug: false, quiet: true },
+    options.replication !== void 0
+  );
+  const node = new TinyCloudNode4({
+    privateKey: options.privateKey,
+    host: options.host,
+    autoCreateSpace: true,
+    ...options.keyAbilities ? { additionalRawAbilities: options.keyAbilities } : {},
+    ...replication ? { replication } : {}
+  });
+  await node.signIn();
+  let networkReady;
+  if (options.keyAbilities && !node.freshEncryptionNetworkCreated) {
+    networkReady = await node.ensureEncryptionNetwork().then(() => true, () => false);
+  } else if (options.keyAbilities) {
+    networkReady = true;
+  }
+  const address = await new PrivateKeySigner(options.privateKey).getAddress();
+  const session = node.session;
+  if (!session) {
+    throw new Error("Local key sign-in did not produce a TinyCloud session");
+  }
+  return {
+    spaceId: session.spaceId,
+    address,
+    chainId: 1,
+    delegationHeader: session.delegationHeader,
+    delegationCid: session.delegationCid,
+    jwk: session.jwk,
+    verificationMethod: session.verificationMethod,
+    siwe: session.siwe,
+    signature: session.signature,
+    ...node.replicaStamp === void 0 ? {} : { replicaStamp: node.replicaStamp },
+    ...networkReady === void 0 ? {} : { networkReady }
+  };
+}
+
 // src/auth/login-commit.ts
 import { lstat as lstat6 } from "fs/promises";
 init_constants();
@@ -33632,11 +33705,11 @@ init_profiles();
 init_storage();
 init_errors();
 init_space();
-import { join as join13 } from "path";
+import { join as join14 } from "path";
 import { REPLICA_LOGOUT_PENDING_FILE as REPLICA_LOGOUT_PENDING_FILE3 } from "@tinycloud/node-sdk";
 import { CLI_NAME as CLI_NAME14 } from "@tinycloud/operations/cli-name";
 import { isLocalOwnerProfile as isLocalOwnerProfile3, ownerSessionLacksProof as ownerSessionLacksProof3 } from "@tinycloud/operations/profile";
-import { ProfileLockTimeoutError as ProfileLockTimeoutError2, profilePath as profilePath7 } from "@tinycloud/operations/state";
+import { ProfileLockTimeoutError as ProfileLockTimeoutError2, profilePath as profilePath8 } from "@tinycloud/operations/state";
 function assertNotLocalOwner(profileName2, profile, flow) {
   if (profile === null || !isLocalOwnerProfile3(profile)) return;
   throw new CLIError(
@@ -33708,9 +33781,9 @@ async function restore(profileName2, state2) {
     restoreProfile
   ];
   const failures = [];
-  for (const write of writes) {
+  for (const write2 of writes) {
     try {
-      await write();
+      await write2();
     } catch (error) {
       failures.push(error);
     }
@@ -33731,7 +33804,7 @@ async function commitLogin(profileName2, snapshot, commit) {
       );
     }
     try {
-      await lstat6(join13(profilePath7(profileName2), REPLICA_LOGOUT_PENDING_FILE3));
+      await lstat6(join14(profilePath8(profileName2), REPLICA_LOGOUT_PENDING_FILE3));
       throw new CLIError(
         "REPLICA_GATED",
         "A durable logout started while sign-in was awaiting approval; no session or key was saved. Finish logout and start a fresh sign-in.",
@@ -33749,7 +33822,7 @@ async function commitLogin(profileName2, snapshot, commit) {
       await ProfileManager.setKey(profileName2, commit.key);
       await ProfileManager.setSession(profileName2, commit.session);
       if (current.profile?.authSignedOut === true || commit.durable === true) {
-        await syncAuthCredentialFiles(profilePath7(profileName2));
+        await syncAuthCredentialFiles(profilePath8(profileName2));
         await ProfileManager.setProfileDurable(profileName2, { ...profile, authSignedOut: false });
       } else {
         await ProfileManager.setProfile(profileName2, profile);
@@ -33816,7 +33889,7 @@ function resolveDeviceApiHost(profile) {
   return process.env.TC_OPENKEY_HOST ?? profile?.openkeyHost;
 }
 function digest(value4) {
-  return createHash2("sha256").update(value4).digest("base64url");
+  return createHash3("sha256").update(value4).digest("base64url");
 }
 function canonicalOrigin(value4, label) {
   const url = new URL(value4);
@@ -34221,7 +34294,7 @@ function approvalResultNeedsAck(delegation) {
 }
 var STATE_FILE = "approval-pending.json";
 function approvalCommandIntent(request) {
-  return "auth-grant:" + createHash3("sha256").update(canonicalJson(request)).digest("hex");
+  return "auth-grant:" + createHash4("sha256").update(canonicalJson(request)).digest("hex");
 }
 async function commandParent(profile, entry) {
   const key = await ProfileManager.getKey(profile);
@@ -34266,8 +34339,8 @@ async function syncCommandFiles(profile, result) {
   if (!stored || canonicalJson(JSON.parse(JSON.stringify(stored.delegation))) !== canonicalJson(JSON.parse(JSON.stringify(result.delegation))) || !history) {
     throw invalid2("The verified command result and history have not both been saved.");
   }
-  for (const path of [localGrantArtifactsPath(profile), grantHistoryPath(profile), profilePath8(profile)]) {
-    const handle = await open11(path, "r");
+  for (const path of [localGrantArtifactsPath(profile), grantHistoryPath(profile), profilePath9(profile)]) {
+    const handle = await open12(path, "r");
     try {
       await handle.sync();
     } finally {
@@ -34291,7 +34364,7 @@ async function recoverApprovalCommand(profile, approval, request) {
   const acquired = acquisitions.get(approval);
   if (!acquired) return void 0;
   return ProfileManager.withLock(profile, async () => {
-    const entries = await readJson(join14(profilePath8(profile), STATE_FILE)) ?? [];
+    const entries = await readJson(join15(profilePath9(profile), STATE_FILE)) ?? [];
     const matching = entries.filter((item) => item.commandIntent === approvalCommandIntent(request));
     if (matching.length !== 1 || matching[0].requestId !== acquired.requestId) throw invalid2("Ambiguous command approval.");
     const entry = matching[0];
@@ -34307,7 +34380,7 @@ async function commitApprovalCommand(profile, approval, request, result) {
   const acquired = acquisitions.get(approval);
   if (!acquired) throw invalid2("Command approval is not tracked.");
   await ProfileManager.withLock(profile, async () => {
-    const entries = await readJson(join14(profilePath8(profile), STATE_FILE)) ?? [];
+    const entries = await readJson(join15(profilePath9(profile), STATE_FILE)) ?? [];
     const matching = entries.filter((item) => item.commandIntent === approvalCommandIntent(request));
     if (matching.length !== 1 || matching[0].requestId !== acquired.requestId) throw invalid2("Ambiguous command approval.");
     const entry = matching[0];
@@ -34316,7 +34389,7 @@ async function commitApprovalCommand(profile, approval, request, result) {
       throw invalid2("A different result is already saved for this command.");
     }
     entry.command = { request, result };
-    await writeJsonDurable(join14(profilePath8(profile), STATE_FILE), entries);
+    await writeJsonDurable(join15(profilePath9(profile), STATE_FILE), entries);
     await persistCommandFiles(profile, result);
     acquisitions.set(approval, entry);
   }, { requireProfile: true });
@@ -34346,12 +34419,12 @@ function grantLifetimeSeconds(expiry) {
 async function updatePending(profile, update) {
   await ProfileManager.withLock(profile, async () => {
     const directory = await ProfileManager.ensureProfileDir(profile);
-    const path = join14(directory, STATE_FILE);
+    const path = join15(directory, STATE_FILE);
     await writeJsonDurable(path, update(await readJson(path) ?? []));
   }, { requireProfile: true });
 }
 async function activePending(profile) {
-  const path = join14(profilePath8(profile), STATE_FILE);
+  const path = join15(profilePath9(profile), STATE_FILE);
   if (!(await readJson(path))?.length) return [];
   return ProfileManager.withLock(profile, async () => {
     const entries = await readJson(path) ?? [];
@@ -34370,12 +34443,12 @@ async function pendingApprovalKey(profile) {
 }
 function approvalSessionProof(entry, action, resultRef = "", ackId = "") {
   const jwk = entry.signingKey;
-  const jkt = createHash3("sha256").update(JSON.stringify({ crv: "Ed25519", kty: "OKP", x: jwk.x })).digest("base64url");
+  const jkt = createHash4("sha256").update(JSON.stringify({ crv: "Ed25519", kty: "OKP", x: jwk.x })).digest("base64url");
   const path = action === "discover" ? `/api/approval-requests/${entry.requestId}/result` : `/api/approval-results/${resultRef}/${action}`;
   const header = Buffer.from(JSON.stringify({ alg: "EdDSA", kid: jkt, typ: "openkey-session-proof+jwt" })).toString("base64url");
   const payload = Buffer.from(JSON.stringify({
     client_id: "openkey-approval-result-v1",
-    cred_hash: createHash3("sha256").update(JSON.stringify([action, entry.requestId, entry.bodyCid, resultRef, ackId])).digest("base64url"),
+    cred_hash: createHash4("sha256").update(JSON.stringify([action, entry.requestId, entry.bodyCid, resultRef, ackId])).digest("base64url"),
     htm: "POST",
     htu: entry.apiOrigin + path,
     iat: Math.floor(Date.now() / 1e3),
@@ -34454,6 +34527,19 @@ function verifyPendingResult(entry, key) {
   if (verified.session.ownerDid.toLowerCase() !== opened.ownerDid.toLowerCase() || verified.session.expiresAt !== opened.delegationExpiresAt) throw invalid2("Result owner or expiry differs from its signed delegation.");
   return { delegation, session: verified.session };
 }
+async function expiredRequest(profile, entry, drop) {
+  if (drop) await updatePending(profile, (items) => items.filter((item) => item.requestId !== entry.requestId));
+  return new CLIError(
+    "APPROVAL_REQUEST_EXPIRED",
+    "This approval request expired before it was approved. Run the command again: the next run makes a new request with a new link.",
+    ExitCode.AUTH_REQUIRED
+  );
+}
+async function discoverRefusedAsExpired(entry, response, now) {
+  if (response.status !== 400 || entry.resultRef !== void 0 || now < Date.parse(entry.requestExpiresAt)) return false;
+  const body = await response.clone().json().catch(() => null);
+  return body?.code === "invalid_request" || typeof body?.error === "string" && /expired/i.test(body.error);
+}
 async function acquireApprovalRequest(_did, options) {
   const profile = options.profileName;
   if (!profile || !options.jwk || !options.host || !options.permissions?.length) {
@@ -34530,7 +34616,9 @@ async function acquireApprovalRequest(_did, options) {
   }
   if (!entry.resultRef && !entry.resultEnvelope) {
     options.onApprovalRequest?.({ approvalUrl: entry.approvalUrl, requestId: entry.requestId, expiresAt: entry.requestExpiresAt });
-    if (!options.onApprovalRequest) console.error(`Approve this request in OpenKey: ${entry.approvalUrl}`);
+    if (!options.onApprovalRequest) console.error(`Approve this request in OpenKey (open the complete link):
+${entry.approvalUrl}
+`);
     if (!options.noPopup && !options.onApprovalRequest && process.env.TC_AUTH_NO_POPUP !== "1" && process.env.TC_NO_POPUP !== "1") {
       await tryOpenBrowser(entry.approvalUrl);
     }
@@ -34547,6 +34635,9 @@ async function acquireApprovalRequest(_did, options) {
       if (response.status === 202) {
         await wait(2e3);
         continue;
+      }
+      if (!response.ok && await discoverRefusedAsExpired(entry, response, Date.now())) {
+        throw await expiredRequest(profile, entry, true);
       }
       if (!response.ok) await throwRemoteError(profile, entry, response, "discover");
       const discovered = await response.json();
@@ -34575,6 +34666,7 @@ async function acquireApprovalRequest(_did, options) {
   return verified.delegation;
 }
 async function completeApprovalResult(profile, delegation) {
+  if (delegation) await dropCommittedDelegation(profile, delegation);
   const acquired = delegation ? acquisitions.get(delegation) : void 0;
   const entries = acquired ? [acquired] : await activePending(profile);
   for (const entry of entries) {
@@ -34600,20 +34692,20 @@ async function completeApprovalResult(profile, delegation) {
       if (current.ownerDid?.toLowerCase() !== verifiedSession.ownerDid.toLowerCase()) return;
       const session = await ProfileManager.getSession(profile);
       if (session && session.delegationCid === verifiedDelegation.delegationCid && session.signature === verifiedDelegation.signature && session.siwe === verifiedDelegation.siwe) {
-        await syncAuthCredentialFiles(profilePath8(profile));
+        await syncAuthCredentialFiles(profilePath9(profile));
         await ProfileManager.setProfileDurable(profile, current);
         saved = true;
       } else {
         const grants = await loadAdditionalDelegations(profile);
         const stored = grants.find((item) => item.delegation.cid === verifiedDelegation.delegationCid && item.delegation.siweProof?.siwe === verifiedDelegation.siwe && item.delegation.siweProof?.signature === verifiedDelegation.signature);
         if (stored) {
-          const file = await open11(additionalDelegationsPath3(profile), "r");
+          const file = await open12(additionalDelegationsPath3(profile), "r");
           try {
             await file.sync();
           } finally {
             await file.close();
           }
-          const directory = await open11(profilePath8(profile), "r");
+          const directory = await open12(profilePath9(profile), "r");
           try {
             await directory.sync();
           } finally {
@@ -34663,6 +34755,7 @@ async function completeApprovalResult(profile, delegation) {
 }
 
 // src/auth/browser-auth.ts
+init_profiles();
 var PRIVATE_JWK_FIELDS = /* @__PURE__ */ new Set([
   "d",
   "p",
@@ -34767,25 +34860,43 @@ function validateDelegationCallbackPayload(value4) {
   }
   return null;
 }
+function assertBoundToKey(parsed, did, localJwk) {
+  const delegation = parsed;
+  const jwk = delegation?.jwk;
+  if (typeof delegation?.verificationMethod !== "string" || delegation.verificationMethod.split("#")[0] !== did.split("#")[0] || !jwk || typeof jwk !== "object" || Array.isArray(jwk) || jwk.kty !== "OKP" || jwk.crv !== "Ed25519" || typeof jwk.x !== "string" || jwk.x !== localJwk.x || [...PRIVATE_JWK_FIELDS].some((field) => field in jwk)) {
+    throw new Error("Delegation is bound to a different CLI key.");
+  }
+}
 async function delegationFromInput(input, did, options) {
   const trimmed = input.trim();
   let parsed;
   if (/^[a-z2-7]{4}-[a-z2-7]{4}$/i.test(trimmed)) {
     if (!options.jwk) throw new Error("A CLI session key is required to retrieve a delegation.");
+    const localJwk = publicJwkForDelegation(options.jwk);
+    const saved = options.profileName === void 0 ? void 0 : await pendingDelegationFor(options.profileName, trimmed);
+    if (saved !== void 0) {
+      try {
+        assertBoundToKey(saved, did, localJwk);
+      } catch (error) {
+        await dropPendingDelegationFor(options.profileName, trimmed);
+        throw error;
+      }
+      return saved;
+    }
     const apiHost = process.env.TC_OPENKEY_API_HOST ?? options.openkeyApiHost ?? (options.openkeyHost && options.openkeyHost !== DEFAULT_OPENKEY_HOST ? options.openkeyHost : DEFAULT_OPENKEY_DEVICE_API_HOST);
     const response = await fetch(`${apiHost.replace(/\/$/, "")}/api/delegation-codes/${trimmed.toLowerCase()}`, {
       redirect: "error"
     });
     if (!response.ok) {
-      throw Object.assign(new Error(response.status === 404 ? "Delegation code not found or expired. Use the full code shown in OpenKey instead." : `Could not retrieve delegation code (HTTP ${response.status}).`), { status: response.status });
+      throw Object.assign(new Error(response.status === 404 ? "Delegation code not found or expired. A short code works only once: if this one was already used and the approval was saved, re-run the same command and paste the same code; otherwise approve again in OpenKey to get a new code." : `Could not retrieve delegation code (HTTP ${response.status}).`), { status: response.status });
     }
     const result = await response.json();
     parsed = result.delegation;
-    const delegation = parsed;
-    const jwk = delegation?.jwk;
-    const localJwk = publicJwkForDelegation(options.jwk);
-    if (typeof delegation?.verificationMethod !== "string" || delegation.verificationMethod.split("#")[0] !== did.split("#")[0] || !jwk || typeof jwk !== "object" || Array.isArray(jwk) || jwk.kty !== "OKP" || jwk.crv !== "Ed25519" || typeof jwk.x !== "string" || jwk.x !== localJwk.x || [...PRIVATE_JWK_FIELDS].some((field) => field in jwk)) {
-      throw new Error("Delegation is bound to a different CLI key.");
+    assertBoundToKey(parsed, did, localJwk);
+    if (options.profileName !== void 0 && validateDelegationCallbackPayload(parsed) === null) {
+      const stored = await ProfileManager.getKey(options.profileName);
+      if (stored?.x === localJwk.x) await savePendingDelegation(options.profileName, trimmed, parsed);
+      else console.error("Note: this profile has no saved key yet, so an interrupted first sign-in cannot be resumed; if this one is interrupted, approve again in OpenKey.");
     }
   } else {
     try {
@@ -34870,7 +34981,7 @@ function spaceSetupReport(delegation) {
   };
 }
 async function awaitSpaceSetup(report, deps) {
-  const write = deps.write ?? ((line) => {
+  const write2 = deps.write ?? ((line) => {
     process.stderr.write(`${line}
 `);
   });
@@ -34880,12 +34991,12 @@ async function awaitSpaceSetup(report, deps) {
   const started = now();
   const deadline = started + timeoutMs;
   const probe = async () => deps.probe().catch(() => "transient");
-  const unreadable = () => write(
+  const unreadable = () => write2(
     `Warning: this login cannot read your TinyCloud space to check it${report.error ? `; OpenKey reported: ${report.error}` : report.pending ? "; OpenKey is still setting it up" : ""}. If the first storage command fails with "Space not found", OpenKey is still setting up your space. ${OPENKEY_SPACE_SETUP_RETRY_HINT}`
   );
   let result = await probe();
   if (result === "hosted") {
-    if (!report.pending && report.error) write(`Warning: OpenKey reported a problem finishing your account setup: ${report.error}`);
+    if (!report.pending && report.error) write2(`Warning: OpenKey reported a problem finishing your account setup: ${report.error}`);
     return;
   }
   if (result === "unreadable") {
@@ -34894,7 +35005,7 @@ async function awaitSpaceSetup(report, deps) {
   }
   if (!report.pending) {
     if (result === "transient") {
-      write(`Warning: could not check whether your TinyCloud space is hosted${report.error ? `; OpenKey reported: ${report.error}` : ""}. ${OPENKEY_SPACE_SETUP_RETRY_HINT}`);
+      write2(`Warning: could not check whether your TinyCloud space is hosted${report.error ? `; OpenKey reported: ${report.error}` : ""}. ${OPENKEY_SPACE_SETUP_RETRY_HINT}`);
       return;
     }
     if (report.error) {
@@ -34905,12 +35016,12 @@ async function awaitSpaceSetup(report, deps) {
         { hint: "Approve again in OpenKey to re-run the setup, then retry." }
       );
     }
-    write(
+    write2(
       'Warning: OpenKey did not set up your TinyCloud space (spaceReady: false), so storage commands will fail with "Space not found". Turn on Auto-Sign in OpenKey and approve again, or host the space from a wallet profile.'
     );
     return;
   }
-  write(
+  write2(
     "Setting up your space\u2026 (OpenKey is hosting it; this can take a minute or two)" + (report.error ? ` OpenKey reported: ${report.error} It is still retrying.` : "")
   );
   let lastProgress = started;
@@ -34920,7 +35031,7 @@ async function awaitSpaceSetup(report, deps) {
     await sleep(Math.min(POLL_DELAYS_MS[Math.min(attempt, POLL_DELAYS_MS.length - 1)], deadline - current));
     result = await probe();
     if (result === "hosted") {
-      write("Your space is ready.");
+      write2("Your space is ready.");
       return;
     }
     if (result === "unreadable") {
@@ -34930,7 +35041,7 @@ async function awaitSpaceSetup(report, deps) {
     const elapsed = now();
     if (elapsed < deadline && elapsed - lastProgress >= PROGRESS_INTERVAL_MS) {
       lastProgress = elapsed;
-      write(`Still setting up your space\u2026 (${Math.round((elapsed - started) / 1e3)}s)`);
+      write2(`Still setting up your space\u2026 (${Math.round((elapsed - started) / 1e3)}s)`);
     }
   }
   throw new CLIError(
@@ -34985,7 +35096,7 @@ init_errors();
 import { randomBytes as randomBytes6, timingSafeEqual } from "crypto";
 import { createServer } from "http";
 import { createInterface as createInterface2 } from "readline";
-import open12 from "open";
+import open13 from "open";
 init_owner_did();
 var MAX_BODY_BYTES = 1024 * 1024;
 var RESULT_FIELDS = ["address", "permissions", "protocolVersion", "selectedActionKeys", "signature", "signedMessage"];
@@ -35190,7 +35301,7 @@ async function startPreparedOpenKeyHandoff(options) {
     console.error(`Open this URL in a browser to authenticate: ${url}`);
     if (!options.noPopup && !options.paste) {
       try {
-        await open12(url);
+        await open13(url);
       } catch {
         console.error("Could not open browser. Use the printed URL or paste the signed code.");
       }
@@ -35983,8 +36094,8 @@ async function promptAuthMethod() {
 }
 async function hasGatedReplicaState(profile, name, replicationEnabled) {
   if (replicationEnabled || profile.replication !== void 0) return true;
-  const root = profilePath9(name);
-  for (const path of [join15(root, REPLICA_GATE_FILE3), join15(root, REPLICA_LOGOUT_PENDING_FILE4), join15(root, "replication")]) {
+  const root = profilePath10(name);
+  for (const path of [join16(root, REPLICA_GATE_FILE3), join16(root, REPLICA_LOGOUT_PENDING_FILE4), join16(root, "replication")]) {
     try {
       await lstat7(path);
       return true;
@@ -36003,7 +36114,7 @@ async function existingReplicaRoots(profile) {
   const roots = [];
   for (const name of ["replicas", "replication"]) {
     try {
-      await lstat7(join15(profilePath9(profile), name));
+      await lstat7(join16(profilePath10(profile), name));
       roots.push(name);
     } catch (error) {
       if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") continue;
@@ -36031,7 +36142,7 @@ async function preflightLogout(purge, principal, discardLocalChanges) {
 }
 async function logoutGateSnapshot(profile) {
   const files = await Promise.all([REPLICA_GATE_FILE3, REPLICA_DENY_FLOOR_FILE].map(async (name) => {
-    const path = join15(profilePath9(profile), name);
+    const path = join16(profilePath10(profile), name);
     try {
       const file = await lstat7(path, { bigint: true });
       return { bytes: await readFile9(path, "utf8"), dev: String(file.dev), ino: String(file.ino) };
@@ -36246,7 +36357,7 @@ async function finishProfileLogout(ctx, options = {}) {
           let remotePending = false;
           try {
             const pending = JSON.parse(await readFile9(
-              join15(profilePath9(ctx.profile), REPLICA_LOGOUT_PENDING_FILE4),
+              join16(profilePath10(ctx.profile), REPLICA_LOGOUT_PENDING_FILE4),
               "utf8"
             ));
             pendingMarker = pending;
@@ -36318,7 +36429,7 @@ async function finishProfileLogout(ctx, options = {}) {
                 });
               } catch (error) {
                 if (pendingMarker?.v === 2 && typeof error === "object" && error !== null && "code" in error && error.code === "REPLICA_GATED" && "gate" in error && error.gate === "gate_unavailable") {
-                  const gatePath = join15(namedProfilePath3(ctx.profile), REPLICA_GATE_FILE3);
+                  const gatePath = join16(namedProfilePath3(ctx.profile), REPLICA_GATE_FILE3);
                   throw new CLIError(
                     "REPLICA_GATED",
                     `A damaged lock file from an interrupted logout; move it aside and re-run \`tc auth logout\`: ${gatePath}. Inspect it first to ensure it is not a valid replacement. ` + (profile.authSignedOut === true ? "The profile is already signed out; credentials remain removed, while replica data and the marker stay intact." : "Credentials and data stay intact; the marker remains and cleanup did not proceed."),
@@ -36358,7 +36469,7 @@ async function finishProfileLogout(ctx, options = {}) {
             options.discardLocalChanges === true
           );
         } else {
-          const gate = await readGateSnapshot(profilePath9(ctx.profile));
+          const gate = await readGateSnapshot(profilePath10(ctx.profile));
           if (roots.length || gate && (gate.principalHash !== null || gate.intents.length)) {
             throw new CLIError(
               "REPLICA_GATED",
@@ -37847,7 +37958,7 @@ async function persistCurrentLocalSession(profileName2, profile, session, replic
       );
     }
     try {
-      await lstat7(join15(profilePath9(profileName2), REPLICA_LOGOUT_PENDING_FILE4));
+      await lstat7(join16(profilePath10(profileName2), REPLICA_LOGOUT_PENDING_FILE4));
       throw new CLIError(
         "PROFILE_CHANGED_DURING_LOGIN",
         "A durable logout started while the local grant was in flight; its session and key were not restored.",
@@ -38061,7 +38172,7 @@ async function refreshPreparedOpenKeySession(params) {
   let handoff;
   let preparedDid;
   let handedBackSiwe;
-  const gateWasActive = await readGateSnapshot(profilePath9(profileName2)).then((gate) => gate !== void 0 && gate.principalHash !== null, () => true);
+  const gateWasActive = await readGateSnapshot(profilePath10(profileName2)).then((gate) => gate !== void 0 && gate.principalHash !== null, () => true);
   try {
     if (namedKeys !== void 0) process.stderr.write(KEYS_APPROVAL_NOTE(namedKeys.prefix));
     await node.signInWithOpenKey(async (prepared) => {
@@ -38236,7 +38347,7 @@ async function refreshPreparedKeysSession(params) {
 async function undoPreparedAttempt(profileName2, node, owner, gateWasActive) {
   if (!gateWasActive) {
     const undone = await ProfileManager.withLock(profileName2, async () => {
-      const gate = await readGateSnapshot(profilePath9(profileName2));
+      const gate = await readGateSnapshot(profilePath10(profileName2));
       if (gate === void 0 || gate.principalHash !== await principalHashOf(gate.salt, owner)) return false;
       if (await ProfileManager.getSession(profileName2) !== null) return false;
       await node.signOut();
@@ -39155,7 +39266,7 @@ function pinnedApp(appId) {
 }
 
 // src/lib/apps-install.ts
-import { createHash as createHash4 } from "crypto";
+import { createHash as createHash5 } from "crypto";
 function errorMessage2(error) {
   return error instanceof Error ? error.message : String(error);
 }
@@ -39168,7 +39279,7 @@ var AppsInstallError = class extends Error {
   }
 };
 function sha256Hex2(bytes) {
-  return createHash4("sha256").update(bytes).digest("hex");
+  return createHash5("sha256").update(bytes).digest("hex");
 }
 function bytesEqual(a, b) {
   return a.length === b.length && Buffer.from(a).equals(Buffer.from(b));
@@ -39460,7 +39571,7 @@ function printResult(result) {
 init_profiles();
 init_sdk();
 import { readFile as readFile12 } from "fs/promises";
-import { join as join17 } from "path";
+import { join as join18 } from "path";
 import { parseSpaceUri as parseSpaceUri3 } from "@tinycloud/sdk-core";
 import {
   appendFeedMessage,
@@ -39657,11 +39768,11 @@ async function connectFeedAgent(registry, source, activate) {
 // src/feed/export.ts
 init_constants();
 init_errors();
-import { createHash as createHash5, randomUUID as randomUUID3 } from "crypto";
+import { createHash as createHash6, randomUUID as randomUUID3 } from "crypto";
 import { isUtf8 } from "buffer";
 import { constants } from "fs";
-import { link as link3, lstat as lstat8, open as open13, readFile as readFile11, readlink, realpath as realpath2, rm as rm6, unlink as unlink5 } from "fs/promises";
-import { basename as basename2, dirname as dirname8, join as join16, resolve as resolve5 } from "path";
+import { link as link3, lstat as lstat8, open as open14, readFile as readFile11, readlink, realpath as realpath2, rm as rm7, unlink as unlink5 } from "fs/promises";
+import { basename as basename2, dirname as dirname8, join as join17, resolve as resolve5 } from "path";
 var RawExportRefusal = class extends Error {
 };
 function refuse(message) {
@@ -39679,7 +39790,7 @@ function rawRow(sourceKey, sourceArea, value4) {
     sourceArea,
     encoding: "base64",
     rawBase64: Buffer.from(value4.buffer, value4.byteOffset, value4.byteLength).toString("base64"),
-    sha256: createHash5("sha256").update(value4).digest("hex")
+    sha256: createHash6("sha256").update(value4).digest("hex")
   };
 }
 function pageProof(page, inputCursor) {
@@ -39773,8 +39884,8 @@ async function sidecarRows(options, keys) {
 async function publishSnapshot(outFile, snapshot, signal) {
   const parentPath = dirname8(outFile);
   await assertTrustedOutputDirectory(parentPath);
-  const parent = await open13(parentPath, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
-  const temporary = join16(parentPath, `.${basename2(outFile)}.${randomUUID3()}.tmp`);
+  const parent = await open14(parentPath, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
+  const temporary = join17(parentPath, `.${basename2(outFile)}.${randomUUID3()}.tmp`);
   let created = false;
   try {
     const identity2 = await parent.stat();
@@ -39785,7 +39896,7 @@ async function publishSnapshot(outFile, snapshot, signal) {
       }
     };
     await assertStableParent();
-    const file = await open13(temporary, "wx", 384);
+    const file = await open14(temporary, "wx", 384);
     created = true;
     try {
       await file.chmod(384);
@@ -39802,7 +39913,7 @@ async function publishSnapshot(outFile, snapshot, signal) {
     await assertStableParent();
     await parent.sync();
   } finally {
-    if (created) await rm6(temporary, { force: true }).catch(() => void 0);
+    if (created) await rm7(temporary, { force: true }).catch(() => void 0);
     await parent.close();
   }
 }
@@ -39890,7 +40001,7 @@ async function exportFeedRawSnapshot(options) {
 // src/feed/import.ts
 init_zod();
 init_errors();
-import { createHash as createHash6 } from "crypto";
+import { createHash as createHash7 } from "crypto";
 import { isDeepStrictEqual } from "util";
 import { parseSpaceUri as parseSpaceUri2 } from "@tinycloud/sdk-core";
 import { ErrorCodes } from "@tinycloud/sdk-services";
@@ -40009,7 +40120,7 @@ function validateBundle(input) {
     for (const row of rows.values()) {
       if (row.sourceArea === "kv" && !row.sourceKey.startsWith(bundle.source.namespace)) refuse2();
       const bytes = Buffer.from(row.rawBase64, "base64");
-      if (bytes.toString("base64") !== row.rawBase64 || createHash6("sha256").update(bytes).digest("hex") !== row.sha256) refuse2();
+      if (bytes.toString("base64") !== row.rawBase64 || createHash7("sha256").update(bytes).digest("hex") !== row.sha256) refuse2();
       if (row.classification !== "quarantine") {
         const value4 = JSON.parse(decoder.decode(bytes));
         if (!jsonValue(value4)) refuse2();
@@ -40436,7 +40547,7 @@ slash prefix and output are explicit; source get/sync grants are separate from f
       }
       const { profile, node, space, responses, resources } = await context(command);
       const directory = await ProfileManager.ensureProfileDir(profile.profile);
-      local = await openFeedHandoff(options.handoff ?? join17(directory, `feed-${options.agent}.sqlite`));
+      local = await openFeedHandoff(options.handoff ?? join18(directory, `feed-${options.agent}.sqlite`));
       process.on("SIGINT", stop);
       process.on("SIGTERM", stop);
       const runner = [argv[0], ...argv.slice(1)];
@@ -40622,8 +40733,8 @@ init_storage();
 init_errors();
 init_constants();
 import { randomUUID as randomUUID4 } from "crypto";
-import { lstat as lstat9, open as open14, rename as rename3, rm as rm7 } from "fs/promises";
-import { basename as basename3, dirname as dirname9, join as join18 } from "path";
+import { lstat as lstat9, open as open15, rename as rename3, rm as rm8 } from "fs/promises";
+import { basename as basename3, dirname as dirname9, join as join19 } from "path";
 async function validatePrivateOutput(path, label = "output") {
   try {
     const destination = await lstat9(path);
@@ -40646,10 +40757,10 @@ async function validatePrivateOutput(path, label = "output") {
 async function writePrivateOutput(path, value4, label = "output") {
   await validatePrivateOutput(path, label);
   const parentPath = dirname9(path);
-  const temp = join18(parentPath, `.${basename3(path)}.${randomUUID4()}.tmp`);
+  const temp = join19(parentPath, `.${basename3(path)}.${randomUUID4()}.tmp`);
   let created = false;
   try {
-    const handle = await open14(temp, "wx", PRIVATE_FILE_MODE);
+    const handle = await open15(temp, "wx", PRIVATE_FILE_MODE);
     created = true;
     try {
       await handle.writeFile(value4);
@@ -40659,12 +40770,12 @@ async function writePrivateOutput(path, value4, label = "output") {
     }
     await rename3(temp, path);
   } catch (error) {
-    if (created) await rm7(temp, { force: true }).catch(() => void 0);
+    if (created) await rm8(temp, { force: true }).catch(() => void 0);
     const code5 = error instanceof Error && "code" in error && typeof error.code === "string" ? ` (${error.code})` : "";
     throw new CLIError("ERROR", `Could not write ${label.toLowerCase()} "${path}"${code5}.`, ExitCode.ERROR);
   }
   try {
-    const parent = await open14(parentPath, "r");
+    const parent = await open15(parentPath, "r");
     try {
       await parent.sync();
     } finally {
@@ -41358,7 +41469,9 @@ function registerOnboardCommand(program) {
           noPopup: true,
           onApprovalRequest: ({ approvalUrl }) => {
             console.error(`${flow.reason}
-Approve in OpenKey: ${approvalUrl}
+Approve in OpenKey (open the complete link):
+${approvalUrl}
+
 Waiting for approval. Re-run this command after an interruption; no code is needed.`);
           }
         });
@@ -41633,9 +41746,9 @@ function parseOperatorType(raw) {
 init_profile_replicas();
 import { CLI_NAME as CLI_NAME31 } from "@tinycloud/operations/cli-name";
 import { randomBytes as randomBytes7 } from "crypto";
-import { constants as fsConstants5 } from "fs";
-import { mkdir as mkdir6, open as open15, readdir as readdir6, rename as rename4, unlink as unlink6, lstat as lstat10 } from "fs/promises";
-import { basename as basename4, dirname as dirname10, join as join19, resolve as resolve6 } from "path";
+import { constants as fsConstants6 } from "fs";
+import { mkdir as mkdir6, open as open16, readdir as readdir6, rename as rename4, unlink as unlink6, lstat as lstat10 } from "fs/promises";
+import { basename as basename4, dirname as dirname10, join as join20, resolve as resolve6 } from "path";
 
 // src/lib/replication-report.ts
 function percentile(values, fraction) {
@@ -41727,7 +41840,7 @@ init_theme();
 import {
   ProfileSymlinkError as ProfileSymlinkError3,
   ProfileDeletedError as ProfileDeletedError3,
-  profilePath as profilePath10,
+  profilePath as profilePath11,
   readAdditionalDelegations as readAdditionalDelegations2,
   readSession as readSession2,
   withProfileLock as withProfileLock5,
@@ -41809,7 +41922,7 @@ async function replicaNames(profile) {
       if (entry.isSymbolicLink()) throw localPathChanged(profile);
       if (!NAME.test(entry.name) || !entry.isDirectory()) continue;
       const present = await withPinnedLocalDirectory(profile, root, entry.name, async (directory) => {
-        const database = await lstat10(join19(directory, "replica.db"), { bigint: true }).catch((error) => {
+        const database = await lstat10(join20(directory, "replica.db"), { bigint: true }).catch((error) => {
           if (error.code === "ENOENT") return null;
           throw error;
         });
@@ -41829,11 +41942,11 @@ function assertName(name) {
   return name;
 }
 async function withReplicaRoot(profile, action, create5 = false) {
-  const profileDirectory = profilePath10(profile);
+  const profileDirectory = profilePath11(profile);
   const readRoot = async (directory, recheckProfile) => {
     if (create5) {
       if (recheckProfile) await recheckProfile();
-      await mkdir6(join19(directory, "replicas"), { mode: 448 }).catch((error) => {
+      await mkdir6(join20(directory, "replicas"), { mode: 448 }).catch((error) => {
         if (error.code !== "EEXIST") throw error;
       });
     }
@@ -41859,7 +41972,7 @@ async function withReplicaDirectory(profile, name, action, create5 = false) {
   const result = await withReplicaRoot(profile, async (root, recheckRoot, recheckProfile) => {
     if (create5) {
       await recheckRoot();
-      await mkdir6(join19(root, name), { mode: 448 }).catch((error) => {
+      await mkdir6(join20(root, name), { mode: 448 }).catch((error) => {
         if (error.code !== "EEXIST") throw error;
       });
     }
@@ -41870,7 +41983,7 @@ async function withReplicaDirectory(profile, name, action, create5 = false) {
       async (_directory, path, expectedDirectory, recheckChild) => {
         await recheckRoot();
         await recheckChild();
-        const database = await lstat10(join19(_directory, "replica.db"), { bigint: true }).catch((error) => {
+        const database = await lstat10(join20(_directory, "replica.db"), { bigint: true }).catch((error) => {
           if (error.code === "ENOENT") return null;
           throw error;
         });
@@ -41933,7 +42046,7 @@ function assertLegacyLogoutClear(dir) {
 }
 async function withLegacyReplicaRead(profile, action) {
   await withProfileLock5(profile, async () => {
-    const dir = profilePath10(profile);
+    const dir = profilePath11(profile);
     assertLegacyLogoutClear(dir);
     const session = await readSession2(profile);
     let checkDelivery;
@@ -42100,8 +42213,8 @@ function describeStatus(status) {
 }
 async function writeFileAtomic(path, bytes) {
   const target = resolve6(path);
-  const temp = join19(dirname10(target), `.${basename4(target)}.${randomBytes7(6).toString("hex")}.tmp`);
-  const handle = await open15(temp, fsConstants5.O_CREAT | fsConstants5.O_EXCL | fsConstants5.O_WRONLY, 384);
+  const temp = join20(dirname10(target), `.${basename4(target)}.${randomBytes7(6).toString("hex")}.tmp`);
+  const handle = await open16(temp, fsConstants6.O_CREAT | fsConstants6.O_EXCL | fsConstants6.O_WRONLY, 384);
   try {
     await handle.writeFile(bytes);
     await handle.sync();
@@ -42143,14 +42256,14 @@ async function assertNamedLocalEntry(profile, path, expected, kind) {
   if (!current || current.isSymbolicLink() || (kind === "directory" ? !current.isDirectory() : !current.isFile()) || !sameLocalEntry(expected, current)) throw localPathChanged(profile);
 }
 async function withPinnedLocalDirectory(profile, parent, name, action) {
-  const path = join19(parent, name);
+  const path = join20(parent, name);
   const before = await lstat10(path, { bigint: true }).catch((error) => {
     if (error.code === "ENOENT") return null;
     throw error;
   });
   if (!before) return null;
   if (before.isSymbolicLink() || !before.isDirectory()) throw localPathChanged(profile);
-  const handle = await open15(path, fsConstants5.O_RDONLY | fsConstants5.O_DIRECTORY | fsConstants5.O_NOFOLLOW).catch((error) => {
+  const handle = await open16(path, fsConstants6.O_RDONLY | fsConstants6.O_DIRECTORY | fsConstants6.O_NOFOLLOW).catch((error) => {
     if (error.code === "ELOOP" || error.code === "ENOTDIR" || error.code === "ENOENT") throw localPathChanged(profile);
     throw error;
   });
@@ -42172,14 +42285,14 @@ async function withPinnedLocalDirectory(profile, parent, name, action) {
   }
 }
 async function readReportFile(profile, parent, name) {
-  const path = join19(parent, name);
+  const path = join20(parent, name);
   const before = await lstat10(path, { bigint: true }).catch((error) => {
     if (error.code === "ENOENT") return null;
     throw error;
   });
   if (!before) return null;
   if (before.isSymbolicLink() || !before.isFile()) throw localPathChanged(profile);
-  const handle = await open15(path, fsConstants5.O_RDONLY | fsConstants5.O_NOFOLLOW).catch((error) => {
+  const handle = await open16(path, fsConstants6.O_RDONLY | fsConstants6.O_NOFOLLOW).catch((error) => {
     if (error.code === "ELOOP" || error.code === "ENOTDIR" || error.code === "ENOENT") throw localPathChanged(profile);
     throw error;
   });
@@ -42528,7 +42641,7 @@ init_warnings();
 init_constants();
 import { CLI_NAME as CLI_NAME33 } from "@tinycloud/operations/cli-name";
 import { readFile as readFile16 } from "fs/promises";
-import { join as join20 } from "path";
+import { join as join21 } from "path";
 import { constants as osConstants, homedir, hostname, userInfo } from "os";
 import { appSecretScope } from "@tinycloud/sdk-core";
 import { invokeOperation as invokeOperation3 } from "@tinycloud/operations";
@@ -43098,7 +43211,7 @@ function resolveSecretListPrefix(options = {}) {
 }
 function resolveProfilesDir() {
   const home = process.env.TC_HOME ?? process.env.HOME ?? process.env.USERPROFILE ?? homedir();
-  return join20(home, ".tinycloud", "profiles");
+  return join21(home, ".tinycloud", "profiles");
 }
 async function ensureSecretsNode(ctx, options, openKeyAcquisition, selectedProfile) {
   const auth = authOptions(options);
@@ -43480,7 +43593,7 @@ async function loadDelegationCandidates(source) {
     }
   }
   try {
-    const importedPath = join20(resolveProfilesDir(), source, "additional-delegations.json");
+    const importedPath = join21(resolveProfilesDir(), source, "additional-delegations.json");
     const raw = JSON.parse(await readFile16(importedPath, "utf8"));
     return normalizeDelegationCandidates(raw, source);
   } catch (error) {
@@ -44439,9 +44552,9 @@ function receiveJson(result, path) {
 
 // src/share/io.ts
 import { constants as constants2 } from "fs";
-import { lstat as lstat11, mkdir as mkdir7, mkdtemp, open as open16, readFile as readFile17, realpath as realpath3, stat as stat6, link as link4, rename as rename5, rm as rm8, unlink as unlink7 } from "fs/promises";
+import { lstat as lstat11, mkdir as mkdir7, mkdtemp, open as open17, readFile as readFile17, realpath as realpath3, stat as stat6, link as link4, rename as rename5, rm as rm9, unlink as unlink7 } from "fs/promises";
 import { randomBytes as randomBytes8 } from "crypto";
-import { basename as basename5, join as join21, resolve as resolve7, sep as sep3 } from "path";
+import { basename as basename5, join as join23, resolve as resolve7, sep as sep3 } from "path";
 init_errors();
 var MAX_SHARE_STDIN_BYTES = 100 * 1024 * 1024;
 var MAX_SHARE_URL_BYTES = 64 * 1024;
@@ -44495,7 +44608,7 @@ async function assertDirectory(path) {
   const segments = absolute.split(sep3).filter(Boolean);
   let current = absolute.startsWith(sep3) ? sep3 : "";
   for (const segment of segments) {
-    current = current === sep3 ? join21(current, segment) : join21(current, segment);
+    current = current === sep3 ? join23(current, segment) : join23(current, segment);
     try {
       const info = await lstat11(current);
       if (info.isSymbolicLink()) {
@@ -44515,19 +44628,19 @@ async function writeShareOutput(directory, filename, bytes, force) {
   const outputDirectory = resolve7(directory);
   await assertDirectory(outputDirectory);
   const safeName = safeFilename(filename);
-  const directoryHandle = await open16(outputDirectory, constants2.O_RDONLY | (constants2.O_DIRECTORY ?? 0) | (constants2.O_NOFOLLOW ?? 0));
+  const directoryHandle = await open17(outputDirectory, constants2.O_RDONLY | (constants2.O_DIRECTORY ?? 0) | (constants2.O_NOFOLLOW ?? 0));
   const stableDirectory = await realpath3(outputDirectory);
-  const outputPath = join21(stableDirectory, safeName);
+  const outputPath = join23(stableDirectory, safeName);
   const directoryIdentity = await directoryHandle.stat();
   const assertStableDirectory = async () => {
     const current = await stat6(stableDirectory);
     if (current.dev !== directoryIdentity.dev || current.ino !== directoryIdentity.ino) throw new Error("OUTPUT_EXISTS");
   };
   await assertStableDirectory();
-  const stagingDirectory = await mkdtemp(join21(stableDirectory, ".tinycloud-share-stage-"));
+  const stagingDirectory = await mkdtemp(join23(stableDirectory, ".tinycloud-share-stage-"));
   const stagingInfo = await lstat11(stagingDirectory);
   if (!stagingInfo.isDirectory() || (stagingInfo.mode & 511) !== 448) throw new Error("OUTPUT_EXISTS");
-  const stagingPath = join21(stagingDirectory, `.tinycloud-share-${randomBytes8(16).toString("hex")}.tmp`);
+  const stagingPath = join23(stagingDirectory, `.tinycloud-share-${randomBytes8(16).toString("hex")}.tmp`);
   let temporaryPath;
   let handle;
   try {
@@ -44539,7 +44652,7 @@ async function writeShareOutput(directory, filename, bytes, force) {
       if (error.code !== "ENOENT") throw error;
     }
     temporaryPath = stagingPath;
-    handle = await open16(temporaryPath, constants2.O_WRONLY | constants2.O_CREAT | constants2.O_EXCL | (constants2.O_NOFOLLOW ?? 0), 384);
+    handle = await open17(temporaryPath, constants2.O_WRONLY | constants2.O_CREAT | constants2.O_EXCL | (constants2.O_NOFOLLOW ?? 0), 384);
     await handle.writeFile(bytes);
     await handle.close();
     handle = void 0;
@@ -44561,10 +44674,10 @@ async function writeShareOutput(directory, filename, bytes, force) {
       if (temporaryPath !== void 0) await unlink7(temporaryPath);
     } catch {
     }
-    await rm8(stagingDirectory, { recursive: true, force: true });
+    await rm9(stagingDirectory, { recursive: true, force: true });
     await directoryHandle.close();
   }
-  return join21(outputDirectory, safeName);
+  return join23(outputDirectory, safeName);
 }
 
 // src/commands/share.ts
@@ -44572,8 +44685,8 @@ init_profiles();
 
 // src/share/html-folder.ts
 import { constants as constants3, existsSync as existsSync2 } from "fs";
-import { lstat as lstat12, open as open17, readdir as readdir7, realpath as realpath4, stat as stat7 } from "fs/promises";
-import { basename as basename6, dirname as dirname11, isAbsolute, join as join23, relative as relativePath, resolve as resolve8, sep as sep4 } from "path";
+import { lstat as lstat12, open as open18, readdir as readdir7, realpath as realpath4, stat as stat7 } from "fs/promises";
+import { basename as basename6, dirname as dirname11, isAbsolute, join as join24, relative as relativePath, resolve as resolve8, sep as sep4 } from "path";
 
 // ../share-sdk/dist/html-bundle.js
 var UNSAFE_FILENAME_CODE_POINT3 = /[\p{Cc}\p{Cf}\p{Cs}\u2028\u2029]/u;
@@ -44927,9 +45040,9 @@ function scanMarkup(html, options) {
     if (comments > MAX_ARTIFACT_COMMENTS) fail("limit", "artifact page has too many comments");
   };
   while (index < length5) {
-    const open18 = html.indexOf("<", index);
-    if (open18 === -1) return;
-    index = open18 + 1;
+    const open19 = html.indexOf("<", index);
+    if (open19 === -1) return;
+    index = open19 + 1;
     const next = html[index] ?? "";
     if (html.startsWith("!--", index)) {
       countComment();
@@ -45530,7 +45643,7 @@ async function readRegularFile(root, path, relative, remaining, limit, hooks = {
     await hooks.beforeOpen?.();
     before = await lstat12(path);
     await hooks.afterLstat?.();
-    handle = await open17(path, constants3.O_RDONLY | (constants3.O_NOFOLLOW ?? 0) | (constants3.O_NONBLOCK ?? 0));
+    handle = await open18(path, constants3.O_RDONLY | (constants3.O_NOFOLLOW ?? 0) | (constants3.O_NONBLOCK ?? 0));
   } catch (error) {
     if (error.code === "ELOOP") return problem("symbolic link");
     if (isRaceError(error)) return problem(CHANGED);
@@ -45589,7 +45702,7 @@ async function listFolderDirectory(root, absolute, relative, hooks = {}) {
     if (before.isSymbolicLink()) return problem("symbolic link");
     if (!before.isDirectory()) return problem(CHANGED);
     await hooks.afterLstat?.();
-    const handle = await open17(absolute, constants3.O_RDONLY | (constants3.O_DIRECTORY ?? 0) | (constants3.O_NOFOLLOW ?? 0));
+    const handle = await open18(absolute, constants3.O_RDONLY | (constants3.O_DIRECTORY ?? 0) | (constants3.O_NOFOLLOW ?? 0));
     try {
       await hooks.afterOpen?.();
       const info = await handle.stat();
@@ -45646,7 +45759,7 @@ async function readHtmlFolder(directory, limit) {
         continue;
       }
       const path = relative === "" ? entry.name : `${relative}/${entry.name}`;
-      const child = join23(absolute, entry.name);
+      const child = join24(absolute, entry.name);
       if (entry.isSymbolicLink()) {
         problems.push({ code: "UNSUPPORTED_FOLDER_ENTRY", path, reason: "symbolic link" });
       } else if (entry.isDirectory()) {

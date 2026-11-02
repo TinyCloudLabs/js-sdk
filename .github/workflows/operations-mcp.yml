@@ -167,6 +167,7 @@ jobs:
             # Live-node suites, each run by a node lane:
             [packages/cli/src/commands/agent-grant-openkey.e2e.test.ts]="needs a live node; run by node-replication-e2e.yml"
             [packages/cli/src/commands/knowledge.e2e.test.ts]="needs a live node; run by node-replication-e2e.yml"
+            [packages/cli/src/commands/onboard.expired.e2e.test.ts]="needs a live node; run by node-replication-e2e.yml; TC-2323"
             [packages/cli/src/commands/onboard.e2e.test.ts]="needs a live node; run by node-replication-e2e.yml"
             [packages/cli/src/commands/delegation-revoke-lookup.e2e.test.ts]="needs a live node; run by replica-e2e.yml"
             [packages/cli/src/commands/share-history-revoke.e2e.test.ts]="needs a live node; run by replica-e2e.yml"
