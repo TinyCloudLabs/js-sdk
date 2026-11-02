@@ -1,6 +1,6 @@
 {
   "name": "@tinycloud/cli",
-  "version": "1.5.2-beta.1",
+  "version": "1.5.2-beta.2",
   "description": "TinyCloud CLI - manage data, delegations, and nodes from the terminal",
   "author": "TinyCloud, Inc.",
   "license": "EGPL",
@@ -48,7 +48,7 @@
     "siwe": "^3.0.0"
   },
   "devDependencies": {
-    "@tinycloud/courier": "0.4.2-beta.1",
+    "@tinycloud/courier": "0.4.2-beta.2",
     "@tinycloud/replica": "0.4.2-beta.0",
     "@types/node": "^20",
     "tsup": "^8.0.0",
