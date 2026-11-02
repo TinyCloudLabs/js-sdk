@@ -14,7 +14,7 @@ export type ShareRevocationResult =
   | {
     readonly state: "revoked";
     readonly target: "bearer" | "recipientDid" | "email" | "emailDomain";
-    /** The bearer delegation, or the enforcement root of an addressed share. */
+    /** The bearer delegation; for an addressed share its enforcement root (its policy root when the record has no enforcement root). */
     readonly delegationCid: string;
     /** Addressed shares: every root the share created, with what this revocation did to it. Recipient access has ended. */
     readonly roots?: readonly ShareRootRevocationState[];
@@ -128,13 +128,16 @@ export async function revokeShare(input: {
     const failed: ShareRootRevocationFailure[] = [];
     for (const request of requests) {
       try {
-        const outcome = await revokePolicyRoot({ ...request, ownerDid, nodeOrigin: input.record.target.origin, nodeAudience });
+        // Untyped adapters: only `undefined` means revoked, and only `"left-live"` may skip a root.
+        const outcome: unknown = await revokePolicyRoot({ ...request, ownerDid, nodeOrigin: input.record.target.origin, nodeAudience });
         if (outcome === "left-live") {
           // Only the keyless policy-authority root may stay; an enforcement root left live is a failure.
           if (request.targetRole !== "policy-authority") throw new Error("the enforcement root cannot be left live");
           roots.push({ rootCid: request.rootCid, targetRole: "policy-authority", state: "left-live", expiresAt: input.record.expiresAt });
-        } else {
+        } else if (outcome === undefined) {
           roots.push({ ...request, state: "revoked" });
+        } else {
+          throw new Error("root revocation returned an unknown outcome");
         }
       } catch (error) {
         failed.push({ ...request, error });

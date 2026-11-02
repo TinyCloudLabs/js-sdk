@@ -308,13 +308,17 @@ describe("Share lifecycle and authorization parity", () => {
   });
 
   it.each([
-    ["the enforcement root is left live", async () => "left-live" as const],
-    ["only the policy root is offered and left live", async () => "left-live" as const],
-  ])("refuses to call a share revoked when %s", async (label, revokePolicyRoot) => {
-    const record = label.startsWith("only") ? { ...addressedRecord, enforcementDelegationCid: undefined } : addressedRecord;
+    // The policy root is revoked, so only the role check refuses this one.
+    ["the enforcement root is left live", addressedRecord, async (input: { targetRole: string }) => input.targetRole === "policy-enforcement" ? "left-live" as const : undefined, ["bafy-enforcement"]],
+    ["an untyped adapter returns an unknown outcome for the enforcement root", addressedRecord, async (input: { targetRole: string }) => (input.targetRole === "policy-enforcement" ? false : undefined) as unknown as undefined, ["bafy-enforcement"]],
+    ["only the policy root is offered and left live", { ...addressedRecord, enforcementDelegationCid: undefined }, async () => "left-live" as const, ["bafy-owner"]],
+  ])("refuses to call a share revoked when %s", async (_label, record, revokePolicyRoot, failedCids) => {
     const records = new MemorySenderShareRecordStorage();
     await records.put(record);
-    await expect(revokeShare({ record, records, adapter: { revokePolicyRoot } })).rejects.toBeInstanceOf(ShareRevocationIncompleteError);
+    const outcome = revokeShare({ record, records, adapter: { revokePolicyRoot } });
+    await expect(outcome).rejects.toBeInstanceOf(ShareRevocationIncompleteError);
+    const error = await outcome.catch((caught: unknown) => caught as ShareRevocationIncompleteError);
+    expect(error.failed.map((failure) => failure.rootCid)).toEqual(failedCids);
     expect((await records.get(record.shareId))?.revokedAt).toBeUndefined();
   });
 

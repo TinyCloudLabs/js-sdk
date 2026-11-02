@@ -659,7 +659,7 @@ export function createShareAuthorityAdapters(input: {
       });
     } catch (error) {
       // The Node answers this only for a root it already holds a signed revocation for (a retry signs a new `revokedAt`).
-      if (!(error instanceof Error && error.message.endsWith(" - root-revocation-irreversible"))) throw error;
+      if (!(error instanceof Error && "status" in error && error.status === 409 && error.message.endsWith(" - root-revocation-irreversible"))) throw error;
     }
   });
   const targetAdapter: TargetPublishAdapter = { async publish(targetInput) {
