@@ -1,5 +1,48 @@
 # @tinycloudlabs/sdk-core
 
+## 3.11.0-beta.0
+
+### Minor Changes
+
+- 75c0432: OpenKey authorization requests can say the user may change the session expiry. `TinyCloudAuthorizationRequestV1` gains an optional `expiryChangeable`, `diffImmutableSiweFields` gains an `allowExpirationChange` option that leaves only `expirationTime` out of the comparison (the default call still reports it), and the new `checkChangedExpiration` decides whether a changed signed expiry is acceptable. It refuses another changed immutable field, a missing or repeated `Expiration Time` line, an expiry within 60 seconds of now or not after `Issued At` / `Not Before`, an expiry past a given maximum, and an expiry more than 10 years away. It returns the refusal reason, or `null` to accept. `@openkey/sdk` >= 0.13.0 (beta: 0.13.0-beta.0) forwards `expiryChangeable`; 0.12.x ignores it.
+
+  `checkChangedExpiration` also refuses a non-finite `now` or `maxExpiresAt`, refuses a signed `Expiration Time` line that is not in canonical form (CR or CRLF, a separator other than one space, trailing characters, or after `Resources:`), and names the latest allowed time when it refuses for `maxExpiresAt`. Call it only after the message was parsed and its signature verified with `SiweMessage`.
+
+  Details: TC-2276
+
+## 3.10.0
+
+### Patch Changes
+
+- 7f81a1d: `revokeShare` on an addressed share now asks the adapter for every root the share created, the enforcement root and then the policy root, in one call, whatever `scope` says (`scope` now applies to bearer shares only). The result lists each root with what happened to it in a new `roots` field: `revoked`, or, for the policy-authority root only, `left-live` with its `expiresAt` when the adapter chose not to revoke it (`revokePolicyRoot` may now resolve `"left-live"` for that root). The share counts as revoked only when no root failed and at least one was revoked; otherwise `revokeShare` tries every root and throws the new `ShareRevocationIncompleteError` (`revoked`, `failed`), leaving the record unrevoked so a retry can finish. A `revokePolicyRoot` adapter must resolve for a root the Node already holds a revocation for. `@tinycloud/sdk-core` re-exports `ShareRevocationIncompleteError` and the new types. `tinycloud share revoke` revokes both roots, reports an incomplete revocation as `REVOCATION_INCOMPLETE`, and treats the Node's `root-revocation-irreversible` answer on a retry as already revoked.
+
+  Details: TC-2337
+
+- Updated dependencies [1d688b3]
+- Updated dependencies [7f81a1d]
+  - @tinycloud/share-envelope@1.5.0
+  - @tinycloud/share-sdk@1.4.4
+  - @tinycloud/sdk-services@3.8.3
+
+## 3.10.0-beta.2
+
+### Patch Changes
+
+- 7f81a1d: `revokeShare` on an addressed share now asks the adapter for every root the share created, the enforcement root and then the policy root, in one call, whatever `scope` says (`scope` now applies to bearer shares only). The result lists each root with what happened to it in a new `roots` field: `revoked`, or, for the policy-authority root only, `left-live` with its `expiresAt` when the adapter chose not to revoke it (`revokePolicyRoot` may now resolve `"left-live"` for that root). The share counts as revoked only when no root failed and at least one was revoked; otherwise `revokeShare` tries every root and throws the new `ShareRevocationIncompleteError` (`revoked`, `failed`), leaving the record unrevoked so a retry can finish. A `revokePolicyRoot` adapter must resolve for a root the Node already holds a revocation for. `@tinycloud/sdk-core` re-exports `ShareRevocationIncompleteError` and the new types. `tinycloud share revoke` revokes both roots, reports an incomplete revocation as `REVOCATION_INCOMPLETE`, and treats the Node's `root-revocation-irreversible` answer on a retry as already revoked.
+
+  Details: TC-2337
+
+- Updated dependencies [7f81a1d]
+  - @tinycloud/share-sdk@1.4.4-beta.1
+
+## 3.10.0-beta.1
+
+### Patch Changes
+
+- Updated dependencies [1d688b3]
+  - @tinycloud/share-envelope@1.5.0-beta.0
+  - @tinycloud/share-sdk@1.4.4-beta.0
+
 ## 3.9.1
 
 ### Patch Changes

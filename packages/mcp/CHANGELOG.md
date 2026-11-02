@@ -1,5 +1,41 @@
 # @tinycloud/mcp
 
+## 0.8.7-beta.0
+
+### Patch Changes
+
+- Updated dependencies [75c0432]
+  - @tinycloud/node-sdk@3.11.0-beta.0
+  - @tinycloud/operations@0.7.11-beta.0
+
+## 0.8.6
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.10.0
+- @tinycloud/operations@0.7.10
+
+## 0.8.6-beta.2
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.10.0-beta.3
+- @tinycloud/operations@0.7.10-beta.2
+
+## 0.8.6-beta.1
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.10.0-beta.2
+- @tinycloud/operations@0.7.10-beta.1
+
+## 0.8.6-beta.0
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.10.0-beta.1
+- @tinycloud/operations@0.7.10-beta.0
+
 ## 0.8.5
 
 ### Patch Changes

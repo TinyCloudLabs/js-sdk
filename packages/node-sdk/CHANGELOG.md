@@ -1,5 +1,57 @@
 # @tinycloudlabs/node-sdk
 
+## 3.11.0-beta.0
+
+### Minor Changes
+
+- 75c0432: `signInWithOpenKey` and `prepareOpenKeySignIn` accept `expiryChangeable: true`, which is sent to OpenKey and lets the user change the session expiry in the approval. For a request sent with it, `NodeUserAuthorization` accepts a different signed `Expiration Time` and builds the session, the persisted record and the delegations from the SIGNED expiry. The expiry must pass `checkChangedExpiration` (more than 60 seconds away, after `Issued At`, no more than 10 years out) and every other immutable field must still match; a refusal reads `OpenKey signedMessage <reason>`. Without the option nothing changes: an expiry difference still throws `OpenKey signedMessage altered immutable SIWE fields: expirationTime`. `TinyCloudNode.prepareOpenKeySignIn` now takes the same options. The registry root delegations now carry the expiry of the signed SIWE instead of `now + sessionExpirationMs`, so a session signed for a different lifetime no longer misreports its own expiry. `wireOpenKeyAuthorize` forwards the flag only when it is true.
+
+  A new `maxExpiresAt` option (epoch milliseconds, a `Date`, or a function read when the result arrives) sets the latest signed expiry an app accepts. A signed expiry beyond it is refused before any session is built, stored or activated; it is never sent to OpenKey or persisted, and it limits a changed expiry only. The persisted `expiresAt` and `createdAt` of every sign-in now come from the `Expiration Time` and `Issued At` lines at the start of a line, so text inside a ReCap statement can no longer stand in for them.
+
+  Details: TC-2276
+
+### Patch Changes
+
+- Updated dependencies [75c0432]
+  - @tinycloud/sdk-core@3.11.0-beta.0
+
+## 3.10.0
+
+### Patch Changes
+
+- Updated dependencies [1d688b3]
+- Updated dependencies [81fe64e]
+- Updated dependencies [7f81a1d]
+  - @tinycloud/share-envelope@1.5.0
+  - @tinycloud/replica@0.4.3
+  - @tinycloud/share-sdk@1.4.4
+  - @tinycloud/sdk-core@3.10.0
+  - @tinycloud/sdk-services@3.8.3
+
+## 3.10.0-beta.3
+
+### Patch Changes
+
+- Updated dependencies [81fe64e]
+  - @tinycloud/replica@0.4.3-beta.0
+
+## 3.10.0-beta.2
+
+### Patch Changes
+
+- Updated dependencies [7f81a1d]
+  - @tinycloud/share-sdk@1.4.4-beta.1
+  - @tinycloud/sdk-core@3.10.0-beta.2
+
+## 3.10.0-beta.1
+
+### Patch Changes
+
+- Updated dependencies [1d688b3]
+  - @tinycloud/share-envelope@1.5.0-beta.0
+  - @tinycloud/sdk-core@3.10.0-beta.1
+  - @tinycloud/share-sdk@1.4.4-beta.0
+
 ## 3.9.1
 
 ### Patch Changes

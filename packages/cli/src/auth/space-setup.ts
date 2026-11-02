@@ -223,8 +223,10 @@ export async function ensureSpaceSetup(
   ctx: ProfileSessionContext,
   delegation: Record<string, unknown>,
   permissions: readonly PermissionEntry[] | undefined,
+  /** Bound the wait (`onboard --timeout`); the default is {@link SPACE_SETUP_TIMEOUT_MS}. */
+  timeoutMs?: number,
 ): Promise<void> {
   const report = spaceSetupReport(delegation);
   if (!report) return;
-  await awaitSpaceSetup(report, { probe: kvSpaceProbe(ctx, permissions) });
+  await awaitSpaceSetup(report, { probe: kvSpaceProbe(ctx, permissions), ...(timeoutMs === undefined ? {} : { timeoutMs }) });
 }

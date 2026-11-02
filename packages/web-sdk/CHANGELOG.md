@@ -1,5 +1,76 @@
 # @tinycloudlabs/web-sdk
 
+## 3.11.0-beta.0
+
+### Minor Changes
+
+- 75c0432: `openkey.expiryChangeable` is a new TinyCloudWeb option. When true, the OpenKey request tells OpenKey the user may change the session expiry, and the session is built with the expiry the user signed. It is a pass-through: `@openkey/sdk` >= 0.13.0 (beta: 0.13.0-beta.0) forwards it and the option is inert on 0.12.x, so nothing changes until the app also updates `@openkey/sdk`.
+
+  `openkey.maxExpiresAt` (epoch milliseconds, a `Date`, or a function read when the approval comes back) sets the latest expiry the app accepts; a later signed expiry is refused before the session is built or stored, and the value is never sent to OpenKey.
+
+  Details: TC-2276
+
+### Patch Changes
+
+- Updated dependencies [75c0432]
+- Updated dependencies [75c0432]
+  - @tinycloud/node-sdk@3.11.0-beta.0
+  - @tinycloud/sdk-core@3.11.0-beta.0
+
+## 3.10.0
+
+### Minor Changes
+
+- d02c63e: `@tinycloud/web-sdk/credentials` exports two more held-credential functions. `probeHeldStoreAccess({ kv, ownerDid })` makes one `kv.list` of the account's `v1/held/` prefix and nothing else (no cursor, no read, no write): it resolves when the list is ok, throws `PERMISSION_DENIED` (the same text as the read functions) for a typed kv 401 or 403, and `OFFLINE` for any other failure; it checks list access only, so a session with list but not get passes it and fails later on get. `deleteHeldCredential({ kv, ownerDid, recordId })` (already built and tested in the held store, now public) deletes one record and returns `true`, `false` for a failed delete that is not a permission failure, or throws `PERMISSION_DENIED` for a delete the session may not make; it needs `kv del` on `v1/held/`. Both refuse a non-mainnet owner (`ACTIVE_SESSION_REQUIRED`) before any kv call. `pruneHeldCredentials` is not exported. `CREDENTIALS.md` documents both.
+
+  Details: TC-1454
+
+### Patch Changes
+
+- Updated dependencies [1d688b3]
+- Updated dependencies [81fe64e]
+- Updated dependencies [7f81a1d]
+  - @tinycloud/share-envelope@1.5.0
+  - @tinycloud/replica@0.4.3
+  - @tinycloud/share-sdk@1.4.4
+  - @tinycloud/sdk-core@3.10.0
+  - @tinycloud/node-sdk@3.10.0
+
+## 3.10.0-beta.3
+
+### Patch Changes
+
+- Updated dependencies [81fe64e]
+  - @tinycloud/replica@0.4.3-beta.0
+  - @tinycloud/node-sdk@3.10.0-beta.3
+
+## 3.10.0-beta.2
+
+### Patch Changes
+
+- Updated dependencies [7f81a1d]
+  - @tinycloud/share-sdk@1.4.4-beta.1
+  - @tinycloud/sdk-core@3.10.0-beta.2
+  - @tinycloud/node-sdk@3.10.0-beta.2
+
+## 3.10.0-beta.1
+
+### Patch Changes
+
+- Updated dependencies [1d688b3]
+  - @tinycloud/share-envelope@1.5.0-beta.0
+  - @tinycloud/node-sdk@3.10.0-beta.1
+  - @tinycloud/sdk-core@3.10.0-beta.1
+  - @tinycloud/share-sdk@1.4.4-beta.0
+
+## 3.10.0-beta.0
+
+### Minor Changes
+
+- d02c63e: `@tinycloud/web-sdk/credentials` exports two more held-credential functions. `probeHeldStoreAccess({ kv, ownerDid })` makes one `kv.list` of the account's `v1/held/` prefix and nothing else (no cursor, no read, no write): it resolves when the list is ok, throws `PERMISSION_DENIED` (the same text as the read functions) for a typed kv 401 or 403, and `OFFLINE` for any other failure; it checks list access only, so a session with list but not get passes it and fails later on get. `deleteHeldCredential({ kv, ownerDid, recordId })` (already built and tested in the held store, now public) deletes one record and returns `true`, `false` for a failed delete that is not a permission failure, or throws `PERMISSION_DENIED` for a delete the session may not make; it needs `kv del` on `v1/held/`. Both refuse a non-mainnet owner (`ACTIVE_SESSION_REQUIRED`) before any kv call. `pruneHeldCredentials` is not exported. `CREDENTIALS.md` documents both.
+
+  Details: TC-1454
+
 ## 3.9.1
 
 ### Patch Changes
