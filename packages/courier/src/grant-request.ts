@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  ackApprovalResult, checkApprovalResultBinding, collectApprovalResult, createApprovalRequest, DEFAULT_LINKS_API_ORIGIN, generateRelayKey,
+  ackApprovalResult, checkApprovalResultBinding, collectApprovalResult, createApprovalRequest, DEFAULT_LINKS_API_ORIGIN, discoverApprovalResult, generateRelayKey,
   isApprovalClientError, isLinkError, openRelayResult, signerFromJwk,
   type ApprovalClientError, type ApprovalRequesterState, type CollectedApprovalResult, type CreatedLink, type Ed25519PrivateJwk, type LinkRecord,
   type LinkSigner, type OpenKeyApprovalRequestV1,
@@ -220,7 +220,42 @@ function matches(pending: PendingGrantRequest, profile: Profile, want: WantedReq
 /** The saved request already holds something that cannot be made again: a reference to an approved result, the result itself, or an installed grant. */
 export const holdsApproval = (pending: PendingGrantRequest) => pending.resultRef !== undefined || pending.resultEnvelope !== undefined || pending.committed === true;
 
-const requestLapsed = (pending: PendingGrantRequest) => !pending.resultRef && !pending.resultEnvelope && Date.parse(pending.requestExpiresAt) <= Date.now();
+/**
+ * OpenKey keeps an approved result for this long after the approval: production APPROVAL_RESULT_RETENTION_SECONDS=600,
+ * docker-compose.prod.yml:28 (OpenKey repo). The constant follows the DEPLOYED value.
+ */
+const RESULT_RETENTION_MS = 600_000;
+/** Clock difference tolerated between this machine and OpenKey when judging the end of that window. */
+const EXPIRY_SKEW_MS = 60_000;
+
+/** The request's own expiry has passed and nothing was ever collected for it. */
+const requestLapsed = (pending: PendingGrantRequest) => !holdsApproval(pending) && Date.parse(pending.requestExpiresAt) <= Date.now();
+
+/**
+ * A lapsed, unapproved request may still have been approved just before it expired: OpenKey serves the result for
+ * RESULT_RETENTION_MS after the approval. So it is asked ONCE (the normal discover) before the record is dropped:
+ * a result is saved (`approved`), OpenKey still calling it open is `open`, an expired answer is `expired`. Past the whole window
+ * (expiry + retention + skew) no approval can exist any more: `expired` without a call. OpenKey being unreachable inside the window
+ * keeps the record (`approval-unavailable`).
+ */
+async function settleLapsed(pending: PendingGrantRequest, key: AgentKey): Promise<'approved' | 'open' | 'expired'> {
+  if (Date.now() >= Date.parse(pending.requestExpiresAt) + RESULT_RETENTION_MS + EXPIRY_SKEW_MS) return 'expired';
+  try {
+    const found = await discoverApprovalResult(requesterState(pending, key));
+    if (found.status === 'pending') return 'open';
+    pending.resultRef = found.resultRef;
+    pending.resultExpiresAt = found.expiresAt;
+    savePending(pending);
+    return 'approved';
+  } catch (error) {
+    if (!isApprovalClientError(error)) throw error;
+    if (error.code === 'request_expired' || error.code === 'not_found') return 'expired';
+    if (error.code === 'network' || error.code === 'unavailable') {
+      throw new CourierError('approval-unavailable', `OpenKey could not be asked whether this expired request was approved (${error.message}). Nothing was lost: the saved request is kept. Run \`${cmd('init --wait')}\` again once OpenKey is reachable.`);
+    }
+    throw collectFailure(error, false);
+  }
+}
 
 async function createPending(profile: Profile, want: WantedRequest): Promise<PendingGrantRequest> {
   const relay = generateRelayKey();
@@ -250,6 +285,11 @@ export async function requestApproval(profile: Profile, key: AgentKey, expiry: s
   const want = wanted(profile, key, expiry, options.openkeyApiHost);
   const existing = loadPendingForWrite();
   if (existing && existing.request.issuer === want.signer.did) {
+    if (!holdsApproval(existing) && requestLapsed(existing) && matches(existing, profile, want)) {
+      const settled = await settleLapsed(existing, key);
+      if (settled === 'open') return existing;
+      if (settled === 'expired') clearPending();
+    }
     if (holdsApproval(existing)) {
       throw new CourierError('usage', `Approval request ${existing.requestId} has already been approved by the owner. Run \`${cmd('init --wait')}\` to finish it first; \`${cmd('init --request')}\` can ask for another approval after that. To discard that approval instead, run \`${cmd('init --rotate-key --request')}\`: it replaces the agent key, CLEARS every pairing (peers must be re-paired by hand), deletes grant.json and puts the profile back to awaiting-grant, so there is no working grant until the owner approves.`);
     }
@@ -270,8 +310,8 @@ function expiredError(): CourierError {
 
 /**
  * `init --wait`: resumes the saved request for this key, or makes a new one. A request that holds an approval is resumed whatever
- * flags this run has; an unapproved one is replaced only when it differs from what this run asks for. An expired unapproved
- * request is dropped and reported.
+ * flags this run has; an unapproved one is replaced only when it differs from what this run asks for. A lapsed unapproved request
+ * is asked about once (see settleLapsed) and dropped and reported only when OpenKey too says it is expired.
  */
 export async function waitApproval(profile: Profile, key: AgentKey, expiry: string | undefined, options: Pick<WaitOptions, 'openkeyApiHost'> = {}): Promise<{ pending: PendingGrantRequest; resumed: boolean }> {
   const want = wanted(profile, key, expiry, options.openkeyApiHost);
@@ -280,8 +320,10 @@ export async function waitApproval(profile: Profile, key: AgentKey, expiry: stri
     if (holdsApproval(existing)) return { pending: existing, resumed: true };
     if (matches(existing, profile, want)) {
       if (requestLapsed(existing)) {
-        clearPending();
-        throw expiredError();
+        if (await settleLapsed(existing, key) === 'expired') {
+          clearPending();
+          throw expiredError();
+        }
       }
       return { pending: existing, resumed: true };
     }

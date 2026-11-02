@@ -150,7 +150,8 @@ async function refuse(response: Response, action: ApprovalAction): Promise<never
   const body = await response.json().catch(() => null) as { code?: unknown } | null;
   const code = typeof body?.code === "string" ? body.code : "";
   const status = response.status;
-  if (code === "expired_request") throw new ApprovalClientError("request_expired", "This approval request expired before it was approved.", status);
+  // OpenKey answers HTTP 400 `invalid_request` ("Signed approval request header is invalid or expired") for a request past its expiry.
+  if (code === "expired_request" || code === "invalid_request") throw new ApprovalClientError("request_expired", "This approval request expired before it was approved.", status);
   if (code === "expired_result") throw new ApprovalClientError("result_expired", "The approved result expired before it was collected.", status);
   if (code === "acknowledged") throw new ApprovalClientError("acknowledged", "OpenKey has already acknowledged this result.", status);
   if (code === "not_found") throw new ApprovalClientError("not_found", "OpenKey cannot find this approval request or result.", status);
