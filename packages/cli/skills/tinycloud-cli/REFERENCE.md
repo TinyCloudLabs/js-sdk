@@ -397,7 +397,7 @@ printf '%s' "$SHARE_URL" | tinycloud share receive - --output .
 tinycloud share list --json                                               # sender history, no complete URLs; human rows are shareId, target, expiresAt, status (active, revoked or expired), tab-separated
 tinycloud share show <id> [--reveal-link]
 tinycloud share notify <id> --to alice@example.com                        # retry email delivery within 5 minutes of publication
-tinycloud share revoke <id>                                               # bearer or addressed share this profile created
+tinycloud share revoke <id>                                               # bearer or addressed share this profile created; an addressed share revokes all its roots (REVOCATION_INCOMPLETE names any left: run it again)
 tinycloud share history recover [--json]                                  # move an unreadable sender history aside (renamed, never deleted)
 ```
 

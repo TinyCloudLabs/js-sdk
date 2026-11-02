@@ -932,6 +932,35 @@ describe("TinyCloud share authority adapter", () => {
     expect(commitment.descriptorDigest).toBe(await goldenDescriptorDigest("email"));
   });
 
+  describe("Policy/v3 root revocation (TC-2337)", () => {
+    const answering = (status: number, body: string) => (async (input: string | URL | Request) => {
+      if (String(input) !== "https://node.example/revoke") throw new Error(`unexpected request ${String(input)}`);
+      return new Response(body, { status });
+    }) as unknown as typeof globalThis.fetch;
+    const request = () => ({ rootCid: "bafy-root", targetRole: "policy-enforcement" as const, ownerDid: node.credentialHolderDid, nodeOrigin: "https://node.example", nodeAudience: nodeDid });
+    const revokeWith = async (fetchFn: typeof globalThis.fetch) => {
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = fetchFn;
+      try {
+        return await createShareAuthorityAdapters({ origin: "https://share.example", profileName: async () => "test" }).revocation.revokePolicyRoot!(request());
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    };
+
+    it("counts a root the Node already holds a revocation for as revoked", async () => {
+      await expect(revokeWith(answering(409, "root-revocation-irreversible"))).resolves.toBeUndefined();
+    });
+
+    it.each([
+      [409, "root-revocation-concurrent"],
+      [409, "status-chain-invalid"],
+      [403, "root-revocation-irreversible"],
+    ])("fails on any other answer (HTTP %i %s)", async (status, body) => {
+      await expect(revokeWith(answering(status, body))).rejects.toThrow(body);
+    });
+  });
+
   describe("link size limit", () => {
     const config = (async () => Response.json({
       version: "tinycloud.share/config-v2",
