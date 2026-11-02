@@ -34527,6 +34527,19 @@ function verifyPendingResult(entry, key) {
   if (verified.session.ownerDid.toLowerCase() !== opened.ownerDid.toLowerCase() || verified.session.expiresAt !== opened.delegationExpiresAt) throw invalid2("Result owner or expiry differs from its signed delegation.");
   return { delegation, session: verified.session };
 }
+async function expiredRequest(profile, entry, drop) {
+  if (drop) await updatePending(profile, (items) => items.filter((item) => item.requestId !== entry.requestId));
+  return new CLIError(
+    "APPROVAL_REQUEST_EXPIRED",
+    "This approval request expired before it was approved. Run the command again: the next run makes a new request with a new link.",
+    ExitCode.AUTH_REQUIRED
+  );
+}
+async function discoverRefusedAsExpired(entry, response, now) {
+  if (response.status !== 400 || entry.resultRef !== void 0 || now < Date.parse(entry.requestExpiresAt)) return false;
+  const body = await response.clone().json().catch(() => null);
+  return body?.code === "invalid_request" || typeof body?.error === "string" && /expired/i.test(body.error);
+}
 async function acquireApprovalRequest(_did, options) {
   const profile = options.profileName;
   if (!profile || !options.jwk || !options.host || !options.permissions?.length) {
@@ -34603,7 +34616,9 @@ async function acquireApprovalRequest(_did, options) {
   }
   if (!entry.resultRef && !entry.resultEnvelope) {
     options.onApprovalRequest?.({ approvalUrl: entry.approvalUrl, requestId: entry.requestId, expiresAt: entry.requestExpiresAt });
-    if (!options.onApprovalRequest) console.error(`Approve this request in OpenKey: ${entry.approvalUrl}`);
+    if (!options.onApprovalRequest) console.error(`Approve this request in OpenKey (open the complete link):
+${entry.approvalUrl}
+`);
     if (!options.noPopup && !options.onApprovalRequest && process.env.TC_AUTH_NO_POPUP !== "1" && process.env.TC_NO_POPUP !== "1") {
       await tryOpenBrowser(entry.approvalUrl);
     }
@@ -34620,6 +34635,9 @@ async function acquireApprovalRequest(_did, options) {
       if (response.status === 202) {
         await wait(2e3);
         continue;
+      }
+      if (!response.ok && await discoverRefusedAsExpired(entry, response, Date.now())) {
+        throw await expiredRequest(profile, entry, true);
       }
       if (!response.ok) await throwRemoteError(profile, entry, response, "discover");
       const discovered = await response.json();
@@ -41451,7 +41469,9 @@ function registerOnboardCommand(program) {
           noPopup: true,
           onApprovalRequest: ({ approvalUrl }) => {
             console.error(`${flow.reason}
-Approve in OpenKey: ${approvalUrl}
+Approve in OpenKey (open the complete link):
+${approvalUrl}
+
 Waiting for approval. Re-run this command after an interruption; no code is needed.`);
           }
         });

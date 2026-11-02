@@ -80,7 +80,7 @@ export function registerOnboardCommand(program: Command): void {
           return startAuthFlow(did, {
             ...flow, profileName: ctx.profile, noPopup: true,
             onApprovalRequest: ({ approvalUrl }) => {
-              console.error(`${flow.reason}\nApprove in OpenKey: ${approvalUrl}\nWaiting for approval. Re-run this command after an interruption; no code is needed.`);
+              console.error(`${flow.reason}\nApprove in OpenKey (open the complete link):\n${approvalUrl}\n\nWaiting for approval. Re-run this command after an interruption; no code is needed.`);
             },
           });
         };
