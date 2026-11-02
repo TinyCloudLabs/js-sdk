@@ -32,6 +32,7 @@
     "cli-approval-wait-timeout",
     "courier-short-link-approval",
     "held-probe-delete",
+    "replica-sdk-services-pin-383",
     "share-revoke-all-roots",
     "tc-712-pair-renew-artifact"
   ]
