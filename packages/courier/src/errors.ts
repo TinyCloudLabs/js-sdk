@@ -9,6 +9,23 @@ export class CourierError extends Error {
   }
 }
 
+/** Exit code of a bounded wait that ended before the owner approved (the same value as `tc`'s PENDING). */
+export const EXIT_PENDING = 8;
+
+/**
+ * Not a failure: a wait with a deadline ended while the request is still open. `main` prints `{"pending": …}` on
+ * stdout and exits with EXIT_PENDING; the saved request resumes on the next run.
+ */
+export class CourierPending extends Error {
+  readonly pending: { step: number; of: number; approvalUrl: string; expiresAt: string };
+
+  constructor(pending: { step: number; of: number; approvalUrl: string; expiresAt: string }) {
+    super('The approval is still pending.');
+    this.name = 'CourierPending';
+    this.pending = pending;
+  }
+}
+
 /** Shape of SDK Result objects and thrown errors, normalised for output. */
 export function errInfo(e: unknown): { name?: string; code?: unknown; message: string } {
   if (!e) return { message: 'unknown error' };

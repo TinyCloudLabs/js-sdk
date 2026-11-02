@@ -79,3 +79,27 @@ export {
 export { checkLinkRecord, openLinkRecord, type CheckedLinkRecord, type LinkBodyValidator, type OpenedLink } from "./record.js";
 export { signerFromJwk, signerFromSeed, type Ed25519PrivateJwk, type LinkSigner } from "./signer.js";
 export { parseApprovalRequest, type OpenKeyApprovalRequestV1 } from "./approval-request.js";
+export {
+  APPROVAL_POLL_INTERVAL_MS,
+  APPROVAL_RESULT_CLIENT_ID,
+  ApprovalClientError,
+  ackApprovalResult,
+  approvalSessionProof,
+  checkApprovalResultBinding,
+  collectApprovalResult,
+  discoverApprovalResult,
+  fetchApprovalResult,
+  generateRelayKey,
+  isApprovalClientError,
+  openRelayResult,
+  type ApprovalAction,
+  type ApprovalClientErrorCode,
+  type ApprovalRequesterState,
+  type ApprovalResultExpectation,
+  type ApprovalTransportOptions,
+  type CheckedApprovalResult,
+  type CollectApprovalOptions,
+  type CollectedApprovalResult,
+  type DiscoverResult,
+  type RelayKeyPair,
+} from "./approval-client.js";

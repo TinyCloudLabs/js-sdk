@@ -54,6 +54,7 @@ function resolveOpenKeyHost(profile: ProfileConfig): string {
   return process.env.TC_OPENKEY_HOST ?? profile.openkeyHost ?? DEFAULT_OPENKEY_HOST;
 }
 import { startAuthFlow } from "../auth/browser-auth.js";
+import { APPROVAL_TIMEOUT_OPTION_DESCRIPTION, parseApprovalTimeout, type ApprovalWait } from "../auth/approval-wait.js";
 import { approvalCommandIntent, approvalResultNeedsAck, commitApprovalCommand, completeApprovalResult, pendingApprovalKey, recoverApprovalCommand, trackApprovalResult } from "../auth/approval-request.js";
 import {
   acquireDeviceDelegation,
@@ -1316,8 +1317,11 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .option("--stdin", "Read the JSON request artifact from stdin")
     .option("--paste", "Read the JSON request artifact from stdin")
     .option("--yes", "Skip local-key TTY confirmation", false)
+    .option("--timeout <duration>", APPROVAL_TIMEOUT_OPTION_DESCRIPTION)
     .action(async (source: string | undefined, options, cmd) => {
       try {
+        // Refused before the request is read or anything is contacted. An agent grant is one approval: step 1 of 1.
+        const deadlineMs = options.timeout === undefined ? undefined : Date.now() + parseApprovalTimeout(options.timeout);
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const profile = await ProfileManager.getProfile(ctx.profile);
@@ -1396,6 +1400,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             exactApproval: true,
             noPopup: !(process.stdin.isTTY || process.stderr.isTTY),
             commandIntent: approvalCommandIntent(parsed),
+            ...(deadlineMs === undefined ? {} : { approvalWait: { deadlineMs, step: 1, of: 1 } }),
           });
           // Sign from the approval's own session, so the grant is bounded by that approval
           // and never takes the owner's stored authority.
@@ -1956,6 +1961,8 @@ export async function acquireOpenKeyApproval(params: {
   noPopup?: boolean;
   /** Local prepared-request identity, not an OpenKey or delegation claim. */
   commandIntent?: string;
+  /** `--timeout`: bound the wait for the owner's approval. */
+  approvalWait?: ApprovalWait;
   /** Test seam for the browser acquisition boundary; production uses startAuthFlow. */
   openKeyAcquisition?: OpenKeyAcquisition;
 }): Promise<OpenKeyApproval> {
@@ -1990,6 +1997,7 @@ export async function acquireOpenKeyApproval(params: {
     expiry: expiryCap === undefined ? undefined : openKeyExpiryParam(expiryCap),
     noPopup: params.noPopup,
     commandIntent: params.commandIntent,
+    ...(params.approvalWait === undefined ? {} : { approvalWait: params.approvalWait }),
   });
   return verifyOpenKeyApproval(delegationData, request, params.ctx.host, {
     key,

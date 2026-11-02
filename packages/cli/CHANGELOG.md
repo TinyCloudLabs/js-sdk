@@ -1,5 +1,68 @@
 # @tinycloud/cli
 
+## 1.6.0
+
+### Minor Changes
+
+- 10eba04: `tinycloud onboard` and `tinycloud auth grant` accept `--timeout <Ns|Nm>` (more than zero, at most 9m; anything else is a usage error, exit 2 `INVALID_TIMEOUT`; `onboard` refuses it together with `--code`) to bound the wait for the owner's OpenKey approval. Exit 8 with `{"pending":{"step","of","approvalUrl","expiresAt"}}` on stdout is not a failure: it is printed at once when a new approval link exists (so an agent can send it to the owner immediately) and again when a resumed link is still unanswered at the timeout; run the same command again. An approval the owner already gave is never reported as pending: it is collected, verified and saved, and acknowledged, even past the timeout (up to 30 s more, plus up to 3 s and local work, so `--timeout 60s` ends in about 105 s at the most for an existing account; an acknowledgement whose reply is lost is re-sent with the same id on the next run). On a new account `onboard` also bounds its wait for OpenKey to host the space by the time left of the timeout plus the 30 s grace (at least 15 s) instead of 150 s, about 90 s in all for `--timeout 60s` and at worst a little under 2 minutes, and ends with the existing `SPACE_SETUP_PENDING` (exit 1): wait a minute and run it again; the re-run continues with step 2, and if a storage command later says `Space not found`, wait and retry. `onboard` has 2 steps, `auth grant` is step 1 of 1. An expired request is exit 3 (OpenKey's HTTP 400 `invalid_request` answer for an expired request that holds no result is exit 3 and drops the saved request, so the next run makes a new request with a new link; a request approved just before its expiry is still collected, because OpenKey serves an approved result until its retention of 600 s ends, so a saved request is dropped without asking OpenKey only once it expired more than 11 minutes ago; a 400 before the link's own expiry stays exit 8 `APPROVAL_REQUEST_UNAVAILABLE`), and OpenKey being unavailable is still its own exit 8 error without the `pending` object. Without `--timeout` nothing changes.
+
+  Details: TC-2299
+
+### Patch Changes
+
+- 7f81a1d: `revokeShare` on an addressed share now asks the adapter for every root the share created, the enforcement root and then the policy root, in one call, whatever `scope` says (`scope` now applies to bearer shares only). The result lists each root with what happened to it in a new `roots` field: `revoked`, or, for the policy-authority root only, `left-live` with its `expiresAt` when the adapter chose not to revoke it (`revokePolicyRoot` may now resolve `"left-live"` for that root). The share counts as revoked only when no root failed and at least one was revoked; otherwise `revokeShare` tries every root and throws the new `ShareRevocationIncompleteError` (`revoked`, `failed`), leaving the record unrevoked so a retry can finish. A `revokePolicyRoot` adapter must resolve for a root the Node already holds a revocation for. `@tinycloud/sdk-core` re-exports `ShareRevocationIncompleteError` and the new types. `tinycloud share revoke` revokes both roots, reports an incomplete revocation as `REVOCATION_INCOMPLETE`, and treats the Node's `root-revocation-irreversible` answer on a retry as already revoked.
+
+  Details: TC-2337
+
+- Updated dependencies [1d688b3]
+- Updated dependencies [7f81a1d]
+  - @tinycloud/share-envelope@1.5.0
+  - @tinycloud/share-sdk@1.4.4
+  - @tinycloud/sdk-core@3.10.0
+  - @tinycloud/node-sdk@3.10.0
+  - @tinycloud/operations@0.7.10
+  - @tinycloud/sdk-services@3.8.3
+
+## 1.6.0-beta.3
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.10.0-beta.3
+- @tinycloud/operations@0.7.10-beta.2
+
+## 1.6.0-beta.2
+
+### Patch Changes
+
+- 7f81a1d: `revokeShare` on an addressed share now asks the adapter for every root the share created, the enforcement root and then the policy root, in one call, whatever `scope` says (`scope` now applies to bearer shares only). The result lists each root with what happened to it in a new `roots` field: `revoked`, or, for the policy-authority root only, `left-live` with its `expiresAt` when the adapter chose not to revoke it (`revokePolicyRoot` may now resolve `"left-live"` for that root). The share counts as revoked only when no root failed and at least one was revoked; otherwise `revokeShare` tries every root and throws the new `ShareRevocationIncompleteError` (`revoked`, `failed`), leaving the record unrevoked so a retry can finish. A `revokePolicyRoot` adapter must resolve for a root the Node already holds a revocation for. `@tinycloud/sdk-core` re-exports `ShareRevocationIncompleteError` and the new types. `tinycloud share revoke` revokes both roots, reports an incomplete revocation as `REVOCATION_INCOMPLETE`, and treats the Node's `root-revocation-irreversible` answer on a retry as already revoked.
+
+  Details: TC-2337
+
+- Updated dependencies [7f81a1d]
+  - @tinycloud/share-sdk@1.4.4-beta.1
+  - @tinycloud/sdk-core@3.10.0-beta.2
+  - @tinycloud/node-sdk@3.10.0-beta.2
+  - @tinycloud/operations@0.7.10-beta.1
+
+## 1.6.0-beta.1
+
+### Minor Changes
+
+- 10eba04: `tinycloud onboard` and `tinycloud auth grant` accept `--timeout <Ns|Nm>` (more than zero, at most 9m; anything else is a usage error, exit 2 `INVALID_TIMEOUT`; `onboard` refuses it together with `--code`) to bound the wait for the owner's OpenKey approval. Exit 8 with `{"pending":{"step","of","approvalUrl","expiresAt"}}` on stdout is not a failure: it is printed at once when a new approval link exists (so an agent can send it to the owner immediately) and again when a resumed link is still unanswered at the timeout; run the same command again. An approval the owner already gave is never reported as pending: it is collected, verified and saved, and acknowledged, even past the timeout (up to 30 s more, plus up to 3 s and local work, so `--timeout 60s` ends in about 105 s at the most for an existing account; an acknowledgement whose reply is lost is re-sent with the same id on the next run). On a new account `onboard` also bounds its wait for OpenKey to host the space by the time left of the timeout plus the 30 s grace (at least 15 s) instead of 150 s, about 90 s in all for `--timeout 60s` and at worst a little under 2 minutes, and ends with the existing `SPACE_SETUP_PENDING` (exit 1): wait a minute and run it again; the re-run continues with step 2, and if a storage command later says `Space not found`, wait and retry. `onboard` has 2 steps, `auth grant` is step 1 of 1. An expired request is exit 3 (OpenKey's HTTP 400 `invalid_request` answer for an expired request that holds no result is exit 3 and drops the saved request, so the next run makes a new request with a new link; a request approved just before its expiry is still collected, because OpenKey serves an approved result until its retention of 600 s ends, so a saved request is dropped without asking OpenKey only once it expired more than 11 minutes ago; a 400 before the link's own expiry stays exit 8 `APPROVAL_REQUEST_UNAVAILABLE`), and OpenKey being unavailable is still its own exit 8 error without the `pending` object. Without `--timeout` nothing changes.
+
+  Details: TC-2299
+
+## 1.5.3-beta.0
+
+### Patch Changes
+
+- Updated dependencies [1d688b3]
+  - @tinycloud/share-envelope@1.5.0-beta.0
+  - @tinycloud/node-sdk@3.10.0-beta.1
+  - @tinycloud/sdk-core@3.10.0-beta.1
+  - @tinycloud/share-sdk@1.4.4-beta.0
+  - @tinycloud/operations@0.7.10-beta.0
+
 ## 1.5.2
 
 ### Patch Changes

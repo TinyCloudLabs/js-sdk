@@ -12,7 +12,8 @@ import {
   isValidSecretName,
   SECRET_REQUEST_MAX_NAMES,
 } from "@tinycloud/operations/secret-request";
-import { operationWarnings, outputError, type ErrorOutputDetails } from "./formatter.js";
+import { operationWarnings, outputError, outputJson, type ErrorOutputDetails } from "./formatter.js";
+import { safeBlock } from "./safe-text.js";
 import { authorizationVerdictOf, parseCapabilityResource, SERVICE_LONG_TO_SHORT, validatedCapabilityOf } from "@tinycloud/sdk-core";
 import { describeStorageRejection, storageRejection } from "./storage.js";
 import { drainWarnings, mergeWarnings } from "./warnings.js";
@@ -26,6 +27,24 @@ export function setActiveProfileName(name: string): void {
 
 /** Every command that reports `GRANT_REVOKED` exits with this (documented: 5, a refused grant). */
 export const GRANT_REVOKED_EXIT_CODE = ExitCode.PERMISSION_DENIED;
+
+/** What an agent needs while an OpenKey approval is still outstanding: the link to send and when it stops working. */
+export interface ApprovalPending {
+  readonly step: number;
+  readonly of: number;
+  readonly approvalUrl: string;
+  readonly expiresAt: string;
+}
+
+/** The `pending` object of an APPROVAL_PENDING error, rebuilt field by field, or undefined for any other error. */
+export function approvalPendingOf(error: { code: string; metadata?: Record<string, unknown> }): ApprovalPending | undefined {
+  const pending = error.code === "APPROVAL_PENDING" ? error.metadata?.pending : undefined;
+  if (typeof pending !== "object" || pending === null) return undefined;
+  const { step, of, approvalUrl, expiresAt } = pending as Record<string, unknown>;
+  if (typeof step !== "number" || !Number.isInteger(step) || typeof of !== "number" || !Number.isInteger(of) ||
+    typeof approvalUrl !== "string" || typeof expiresAt !== "string") return undefined;
+  return { step, of, approvalUrl, expiresAt };
+}
 
 export class CLIError extends Error {
   readonly status?: number;
@@ -207,6 +226,14 @@ export function storageFullError(error: unknown, progress?: string): CLIError | 
 
 export function handleError(error: unknown): Promise<never> {
   const cliError = wrapError(error);
+  const pending = approvalPendingOf(cliError);
+  if (pending) {
+    // Not a failure: the owner has not answered yet. stdout carries the one JSON object an agent acts on.
+    outputJson({ pending });
+    process.stderr.write(`${safeBlock(cliError.message)}\n`);
+    if (registeredReplications().size === 0) return process.exit(cliError.exitCode);
+    return closeReplication().then(() => process.exit(cliError.exitCode));
+  }
   // A pre-built hint on the error (e.g. the identity-aware SPACE_NOT_HOSTED
   // hint) takes precedence over the derived auth/network hints.
   const prebuilt = typeof cliError.metadata?.hint === "string"

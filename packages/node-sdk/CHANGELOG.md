@@ -1,5 +1,42 @@
 # @tinycloudlabs/node-sdk
 
+## 3.10.0
+
+### Patch Changes
+
+- Updated dependencies [1d688b3]
+- Updated dependencies [81fe64e]
+- Updated dependencies [7f81a1d]
+  - @tinycloud/share-envelope@1.5.0
+  - @tinycloud/replica@0.4.3
+  - @tinycloud/share-sdk@1.4.4
+  - @tinycloud/sdk-core@3.10.0
+  - @tinycloud/sdk-services@3.8.3
+
+## 3.10.0-beta.3
+
+### Patch Changes
+
+- Updated dependencies [81fe64e]
+  - @tinycloud/replica@0.4.3-beta.0
+
+## 3.10.0-beta.2
+
+### Patch Changes
+
+- Updated dependencies [7f81a1d]
+  - @tinycloud/share-sdk@1.4.4-beta.1
+  - @tinycloud/sdk-core@3.10.0-beta.2
+
+## 3.10.0-beta.1
+
+### Patch Changes
+
+- Updated dependencies [1d688b3]
+  - @tinycloud/share-envelope@1.5.0-beta.0
+  - @tinycloud/sdk-core@3.10.0-beta.1
+  - @tinycloud/share-sdk@1.4.4-beta.0
+
 ## 3.9.1
 
 ### Patch Changes
