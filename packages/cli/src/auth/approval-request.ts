@@ -326,15 +326,25 @@ function bodyCutOff(error: unknown): boolean {
 }
 
 /**
- * Clock skew allowed before a stored expiry is acted on without asking OpenKey: a local clock that runs ahead must
- * never declare a link dead that OpenKey still accepts, so the local decision waits this long past the stored time.
+ * How long OpenKey serves an approved result after the approval: production APPROVAL_RESULT_RETENTION_SECONDS=600
+ * (OpenKey repo, docker-compose.prod.yml:28). A request approved just before its expiry can still be collected until
+ * then, so a stored request is not dropped locally before its expiry plus this. If OpenKey changes that setting,
+ * change this with it.
  */
+const RESULT_RETENTION_MS = 600_000;
+/** Clock skew allowed on top: a local clock that runs ahead must never drop a request OpenKey would still serve. */
 const EXPIRY_SKEW_MS = 60_000;
 
+/** Whether a stored request has been expired for so long that no result can still be served for it. */
+function lapsedPastRetention(entry: PendingApproval, now: number): boolean {
+  return now >= Date.parse(entry.requestExpiresAt) + RESULT_RETENTION_MS + EXPIRY_SKEW_MS;
+}
+
 /**
- * An approval request that expired before anyone approved it. Production OpenKey rejects every discover after a
- * request's expiry, so an entry that holds no result can never be collected again: dropping it loses nothing, and
- * the next run makes a new request. `drop: false` leaves it in place for a run that may still ask OpenKey.
+ * An approval request that expired before anyone approved it. Production OpenKey answers a discover after the
+ * request's expiry with 400 invalid_request unless the request was approved, in which case it serves the result until
+ * its retention ends; so an entry that holds no result may be dropped once OpenKey says so, or once the retention has
+ * passed, and the next run makes a new request. `drop: false` leaves it in place for a run that may still ask OpenKey.
  */
 async function expiredRequest(profile: string, entry: PendingApproval, drop: boolean): Promise<CLIError> {
   if (drop) await updatePending(profile, (items) => items.filter((item) => item.requestId !== entry.requestId));
@@ -370,9 +380,8 @@ async function pauseBetweenAttempts(profile: string, entry: PendingApproval, app
         "OpenKey could not fetch this approved result in time. It is saved by reference; retry the command to resume.", ExitCode.PENDING);
     }
     // OpenKey could not be asked (a network failure) and the link has run out: never hand out a dead link as pending.
-    // No result can exist for it any more, so past the skew the entry goes and the next run makes a new request.
-    const expiredAt = Date.parse(entry.requestExpiresAt);
-    if (!reached && now() >= expiredAt) throw await expiredRequest(profile, entry, now() >= expiredAt + EXPIRY_SKEW_MS);
+    // The entry stays until no result can be served for it any more, since one approved just before the expiry may be.
+    if (!reached && now() >= Date.parse(entry.requestExpiresAt)) throw await expiredRequest(profile, entry, lapsedPastRetention(entry, now()));
     throw pendingApproval(entry, approvalWait);
   }
   await (approvalWait.sleep ?? ((ms: number) => wait(ms)))(Math.min(APPROVAL_POLL_INTERVAL_MS, remaining));
@@ -427,10 +436,10 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
   if (matching.length > 1) throw invalid("Multiple approvals match this command; no result was selected.");
   let entry = matching[0];
   const isNewRequest = entry === undefined;
-  // Under --timeout a stored request past its own expiry that holds no result is decided here, before OpenKey is asked
-  // and before its dead link is shown again.
-  if (entry && approvalWait && !entry.resultRef && !entry.resultEnvelope &&
-    (approvalWait.now ?? Date.now)() >= Date.parse(entry.requestExpiresAt) + EXPIRY_SKEW_MS) {
+  // Under --timeout a stored request that holds no result and expired so long ago that OpenKey cannot serve one any
+  // more is decided here, before OpenKey is asked and before its dead link is shown again. A younger expired request
+  // is left to OpenKey: it may be an approval given just before the expiry.
+  if (entry && approvalWait && !entry.resultRef && !entry.resultEnvelope && lapsedPastRetention(entry, (approvalWait.now ?? Date.now)())) {
     throw await expiredRequest(profile, entry, true);
   }
   if (!entry) {
