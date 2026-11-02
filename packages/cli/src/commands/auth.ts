@@ -1015,7 +1015,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           const openkeyHost = resolveOpenKeyHost(profile);
           const grants: StagedOpenKeyGrant[] = [];
           const expiryCap = expiryOption === undefined ? undefined : parseRequestedExpiry(expiryOption);
-          // An agent preset keeps the 7-day agent policy (Naomi's ruling): its link does not opt in, so the user can
+          // An agent preset keeps the 7-day agent policy (a product ruling): its link does not opt in, so the user can
           // shorten the proposed lifetime but not extend it. Custom --cap/--permission/--manifest grants opt in.
           const grantLinkOptsIn = options.paste === true && preset === undefined;
           const proof: PortableGrantProof = {

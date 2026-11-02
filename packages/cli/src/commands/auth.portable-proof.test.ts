@@ -644,7 +644,7 @@ describe("grant paste-link expiry opt-in", () => {
   });
 });
 
-// TC-2276 (PR B, Naomi's ruling): agent presets keep the 7-day agent policy. `--preset apps-agent --paste` offers a link
+// TC-2276 (product ruling): agent presets keep the 7-day agent policy. `--preset apps-agent --paste` offers a link
 // WITHOUT the opt-in and is held to its proposal (7d) + 30 s, like every path that did not send it; custom grants keep it.
 // The real link builder, imported under another specifier because this file mocks `../auth/browser-auth.js`.
 const actualSpecifier: string = "../auth/browser-auth.js?actual";
