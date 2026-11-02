@@ -16,6 +16,7 @@ import { loadAdditionalDelegations } from "../lib/permissions.js";
 import * as commandGrants from "../lib/permissions.js";
 import { entriesForSigning, finalizeSigningEntries } from "../lib/apps-agent-preset.js";
 import type { AuthFlowOptions, DelegationData } from "./browser-auth.js";
+import { dropCommittedDelegation } from "./pending-code.js";
 import { decryptRelayResult, relayPublicJwkOf } from "./device-auth.js";
 import { canonicalJson, parseRequestedExpiry, sameLoginSpace, verifyScopedLogin } from "./scoped-login.js";
 import { APPROVAL_POLL_INTERVAL_MS, approvalLimitMs, approvalPendingError, approvalRequestTimeoutMs, type ApprovalWait } from "./approval-wait.js";
@@ -487,6 +488,8 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
 
 /** Call only after committing authority. Re-check stored evidence under the profile lock and sync it before ACK intent. */
 export async function completeApprovalResult(profile: string, delegation?: object): Promise<void> {
+  // A pasted short code's local copy is dropped only now: every caller reaches here after its durable commit.
+  if (delegation) await dropCommittedDelegation(profile, delegation);
   const acquired = delegation ? acquisitions.get(delegation) : undefined;
   const entries = acquired ? [acquired] : await activePending(profile);
   for (const entry of entries) {

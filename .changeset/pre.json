@@ -31,6 +31,7 @@
   "changesets": [
     "cli-addressed-path-bound",
     "node-sdk-share-prefix-key-create",
+    "redeem-save-first",
     "replica-sdk-services-pin-392",
     "sdk-core-share-prefix-key-create",
     "share-sdk-addressed-path-bound"
