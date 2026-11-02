@@ -33371,6 +33371,7 @@ import { profilePath as profilePath7 } from "@tinycloud/operations/state";
 // src/auth/scoped-login.ts
 init_errors();
 init_constants();
+import { EXPIRY } from "@tinycloud/sdk-core";
 import { NodeWasmBindings, signedCompactUcanExpiry as signedCompactUcanExpiry2 } from "@tinycloud/node-sdk";
 import { isLocalOwnerProfile as isLocalOwnerProfile2, ownerSessionLacksProof as ownerSessionLacksProof2 } from "@tinycloud/operations/profile";
 import { CLI_NAME as CLI_NAME13 } from "@tinycloud/operations/cli-name";
@@ -33504,6 +33505,19 @@ function parseRequestedExpiry(value4) {
 }
 function expiryLimit(expiry) {
   return Date.now() + expiry.durationMs + CLOCK_SKEW_MS;
+}
+function defaultExpiryLimit() {
+  return Date.now() + EXPIRY.SESSION_MS + CLOCK_SKEW_MS;
+}
+function sdkMaxExpiryRefusal(error, defaultRequest = false) {
+  const message = error instanceof Error ? error.message : "";
+  const match = /^OpenKey signedMessage expiry is later than the maximum for this request \(the latest allowed is ([^)]+)\)(?:; choose an earlier expiry)?$/.exec(message);
+  if (match === null) return void 0;
+  const requested = defaultRequest ? `the default ${EXPIRY.SESSION_MS / 864e5} day lifetime this login requested` : "the requested --expiry";
+  return Object.assign(
+    new CLIError("OPENKEY_EXPIRY_EXCEEDED", `The signed session outlives ${requested} (the latest allowed is ${match[1]}). Choose an earlier lifetime in OpenKey, or re-run with a longer --expiry. No session was saved.`, ExitCode.PERMISSION_DENIED),
+    { cause: error }
+  );
 }
 var OPENKEY_MIN_LIFETIME_SECONDS = 60;
 function openKeyExpiryParam(expiry) {
@@ -38552,7 +38566,8 @@ async function refreshPreparedOpenKeySession(params) {
     includeAccountRegistryPermissions: false,
     autoBootstrapAccount: false,
     replication: replicationConfig,
-    ...namedKeys === void 0 ? {} : { additionalRawAbilities: keyAbilitiesFor(namedKeys) }
+    ...namedKeys === void 0 ? {} : { additionalRawAbilities: keyAbilitiesFor(namedKeys) },
+    ...expiry ? { sessionExpirationMs: expiry.durationMs } : {}
   });
   let handoff;
   let preparedDid;
@@ -38572,7 +38587,7 @@ async function refreshPreparedOpenKeySession(params) {
         handedBackSiwe = result.signedMessage;
         return result;
       });
-    });
+    }, preparedSignInOptions(expiry));
     const active = node.restorableSession;
     if (!active || !preparedDid || node.sessionDid !== preparedDid || active.verificationMethod !== preparedDid) {
       throw new CLIError("OPENKEY_SESSION_MISMATCH", "OpenKey signed a different SDK session key; no profile or session was saved.", ExitCode.PERMISSION_DENIED);
@@ -38631,8 +38646,14 @@ async function refreshPreparedOpenKeySession(params) {
   } catch (error) {
     await handoff?.complete(false);
     await undoPreparedAttempt(profileName2, node, owner, gateWasActive).catch(() => void 0);
-    throw namedKeys !== void 0 && isNarrowedRecapMismatch(error) && namedKeysGrantIn(handedBackSiwe, namedKeys) === "partial" ? partialKeysGrantError() : error;
+    throw sdkMaxExpiryRefusal(error, expiry === void 0) ?? (namedKeys !== void 0 && isNarrowedRecapMismatch(error) && namedKeysGrantIn(handedBackSiwe, namedKeys) === "partial" ? partialKeysGrantError() : error);
   }
+}
+function preparedSignInOptions(expiry) {
+  return {
+    expiryChangeable: true,
+    maxExpiresAt: expiry === void 0 ? defaultExpiryLimit : () => expiryLimit(expiry)
+  };
 }
 var KEYS_APPROVAL_NOTE = (folder) => `On the OpenKey page, the row that mentions tinycloud.encryption lets this profile create and use keys in the folder "${folder}/". Keep every row ticked. To sign in without keys, untick that whole row and nothing else; any other change makes OpenKey refuse the sign-in.
 `;
@@ -38693,7 +38714,7 @@ async function refreshPreparedKeysSession(params) {
         handedBackSiwe = result.signedMessage;
         return result;
       });
-    });
+    }, preparedSignInOptions(expiry));
     const active = node.restorableSession;
     if (!active || !preparedDid || node.sessionDid !== preparedDid || active.verificationMethod !== preparedDid) {
       throw new CLIError("OPENKEY_SESSION_MISMATCH", "OpenKey signed a different SDK session key; no profile or session was saved.", ExitCode.PERMISSION_DENIED);
@@ -38726,7 +38747,7 @@ async function refreshPreparedKeysSession(params) {
   } catch (error) {
     await handoff?.complete(false);
     await node.replication?.close();
-    throw isNarrowedRecapMismatch(error) && namedKeysGrantIn(handedBackSiwe, namedKeys) === "partial" ? partialKeysGrantError() : error;
+    throw sdkMaxExpiryRefusal(error, expiry === void 0) ?? (isNarrowedRecapMismatch(error) && namedKeysGrantIn(handedBackSiwe, namedKeys) === "partial" ? partialKeysGrantError() : error);
   }
 }
 async function undoPreparedAttempt(profileName2, node, owner, gateWasActive) {

@@ -1,5 +1,19 @@
 # @tinycloud/cli
 
+## 1.6.1-beta.0
+
+### Patch Changes
+
+- 75c0432: The prepared OpenKey login accepts a shorter session lifetime picked on the OpenKey page instead of refusing the signed message, and saves the lifetime that was signed. A lifetime beyond the requested `--expiry` (plus 30 seconds) is still refused with `OPENKEY_EXPIRY_EXCEEDED`. The replica login now builds its node with the requested `--expiry` as the session lifetime, as the `--keys` login already did.
+
+  Details: TC-2276
+
+- Updated dependencies [75c0432]
+- Updated dependencies [75c0432]
+  - @tinycloud/node-sdk@3.11.0-beta.0
+  - @tinycloud/sdk-core@3.11.0-beta.0
+  - @tinycloud/operations@0.7.11-beta.0
+
 ## 1.6.0
 
 ### Minor Changes
