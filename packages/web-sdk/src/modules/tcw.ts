@@ -157,10 +157,24 @@ interface OpenKeyMessageSigner {
  * Extends ClientConfig with browser-specific options.
  */
 export interface Config extends ClientConfig {
-  /** OpenKey authorize-sign client. Requires @openkey/sdk >=0.12.2; popup is the default mode. */
+  /**
+   * OpenKey authorize-sign client. Requires @openkey/sdk >=0.12.2; popup is the default mode.
+   *
+   * `expiryChangeable: true` asks OpenKey to let the user change the session expiry in the approval. The SDK then
+   * accepts the changed expiry and builds the session with the SIGNED value. It is a pass-through: `@openkey/sdk`
+   * >= 0.13.0 (beta: 0.13.0-beta.0) forwards it; it is inert on 0.12.x, so the expiry stays as requested.
+   */
   openkey?: {
     client: OpenKeyAuthorizeTinyCloud;
     mode?: "iframe" | "popup" | "redirect";
+    expiryChangeable?: boolean;
+    /**
+     * With `expiryChangeable`: the latest expiry you will accept. A signed expiry beyond it is refused before the
+     * session is built or stored. Epoch MILLISECONDS or a `Date`; a function is called when the approval comes back, so
+     * a slow approval does not count against it. It is never sent to OpenKey. It limits a CHANGED expiry only, so keep
+     * `sessionExpirationMs` within it.
+     */
+    maxExpiresAt?: number | Date | (() => number | Date);
   };
   /** Notifications. `throwErrors` rethrows each error's raw message asynchronously, once per burst of identical errors (200 ms window). It applies unless `ui: false` or `ui.toasts: false`, which turn off toasts and throws together, as the old `popups: false` did; `ui.button: false` leaves throws on. Toast placement and visibility are set through `ui`. */
   notifications?: NotificationConfig;
@@ -1097,9 +1111,23 @@ export class TinyCloudWeb {
       this._sessionRestoreStatus = "stale";
     }
     assertCurrent();
-    const request = await node.prepareOpenKeySignIn();
+    const request = await node.prepareOpenKeySignIn(this.openKeySignInOptions());
     assertCurrent();
     this.preparedSignIn = { node, request, createdAt: Date.now(), signOuts };
+  }
+
+  /**
+   * Options forwarded to the node's OpenKey sign-in; `undefined` unless the app opted in to `expiryChangeable`.
+   * `maxExpiresAt` is forwarded only with it.
+   */
+  private openKeySignInOptions():
+    | { expiryChangeable: true; maxExpiresAt?: number | Date | (() => number | Date) }
+    | undefined {
+    const openkey = this.config.openkey;
+    if (openkey?.expiryChangeable !== true) return undefined;
+    return openkey.maxExpiresAt === undefined
+      ? { expiryChangeable: true }
+      : { expiryChangeable: true, maxExpiresAt: openkey.maxExpiresAt };
   }
 
   signIn = (options?: SignInOptions): Promise<ClientSession> => {
@@ -1167,6 +1195,7 @@ export class TinyCloudWeb {
       } else if (this.config.openkey) {
         await node.signInWithOpenKey(
           wireOpenKeyAuthorize(this.config.openkey.client, { mode: this.config.openkey.mode ?? "popup" }),
+          this.openKeySignInOptions(),
         );
       } else {
         await node.signIn(options);

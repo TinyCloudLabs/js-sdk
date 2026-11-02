@@ -346,6 +346,8 @@ export type Tc2254HeldWireRatchet = HardeningRatchet & { replicaWorker: { delta:
 export type Tc2281OpenKeyUnconnectedGuard = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
 /** Exact TC-2242 path-bound shares root admission; non-root buckets carry TC-2281. */
 export type Tc2242PathBoundShares = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
+/** Exact TC-2276 signed expiry root admission; non-root buckets carry TC-2242. */
+export type Tc2276SignedExpiry = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -411,6 +413,7 @@ export type Ledger = {
   tc2254HeldWireRatchet?: Tc2254HeldWireRatchet;
   tc2281OpenKeyUnconnectedGuard?: Tc2281OpenKeyUnconnectedGuard;
   tc2242PathBoundShares?: Tc2242PathBoundShares;
+  tc2276SignedExpiry?: Tc2276SignedExpiry;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -1006,6 +1009,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2254HeldWireRatchet !== undefined) pins.push({ row: "tc2254HeldWireRatchet", pin: root.tc2254HeldWireRatchet.sourceCommits.at(-1)! });
   if (root.tc2281OpenKeyUnconnectedGuard !== undefined) pins.push({ row: "tc2281OpenKeyUnconnectedGuard", pin: root.tc2281OpenKeyUnconnectedGuard.sourceCommits.at(-1)! });
   if (root.tc2242PathBoundShares !== undefined) pins.push({ row: "tc2242PathBoundShares", pin: root.tc2242PathBoundShares.sourceCommits.at(-1)! });
+  if (root.tc2276SignedExpiry !== undefined) pins.push({ row: "tc2276SignedExpiry", pin: root.tc2276SignedExpiry.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1077,6 +1081,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2254HeldWireRatchet", root.tc2254HeldWireRatchet?.root.ceiling],
     ["tc2281OpenKeyUnconnectedGuard", root.tc2281OpenKeyUnconnectedGuard?.root.ceiling],
     ["tc2242PathBoundShares", root.tc2242PathBoundShares?.root.ceiling],
+    ["tc2276SignedExpiry", root.tc2276SignedExpiry?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -2533,6 +2538,34 @@ export const approvedTc2242PathBoundShares: Tc2242PathBoundShares = {
   replicaWorker: { delta: 0, ceiling: 770467 },
   reason: "TC-2242 path-bound shares row; exact SQLite and PostgreSQL CI root gzip measurements agree. All non-root size buckets are carried unchanged from TC-2281.",
 };
+export const approvedTc2276SignedExpiry: Tc2276SignedExpiry = {
+  label: "accept a user-changed OpenKey expiry behind an opt-in and use the signed expiry (TC-2276, #813)",
+  ruling: "Exact canonical SQLite and PostgreSQL CI at source head 47c49c9ac1e6d4937681ef8171c3fc0d550cb9a1 measures 1,478,398/1,420,056 B, +1,071/+1,173 B over TC-2242. Bun 1.3.14; rustc 1.99.0 (b940084d7 2026-09-28).",
+  base: "06a547e6ff7a1f36963961d58f7712e155cfa9ea",
+  sourceCommits: ["47c49c9ac1e6d4937681ef8171c3fc0d550cb9a1"],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41282509733",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41282509733/job/124777129561",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41282509733/job/124777129514",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 1071, "index.cjs": 1173 },
+    ceiling: { "index.mjs": 1478398, "index.cjs": 1420056 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 52757, "replica.cjs": 67957 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23412, "activation.cjs": 24981 },
+  },
+  worker: { delta: 0, ceiling: 776539 },
+  replicaWorker: { delta: 0, ceiling: 770467 },
+  reason: "TC-2276 signed expiry row; exact SQLite and PostgreSQL CI root gzip measurements agree. All non-root size buckets are carried unchanged from TC-2242.",
+};
 
 export type GatedOnlyRatchet = {
   label: string;
@@ -2627,6 +2660,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2254HeldWireRatchet: approvedTc2254HeldWireRatchet,
   tc2281OpenKeyUnconnectedGuard: approvedTc2281OpenKeyUnconnectedGuard,
   tc2242PathBoundShares: approvedTc2242PathBoundShares,
+  tc2276SignedExpiry: approvedTc2276SignedExpiry,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -2919,6 +2953,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
   if (value.tc2242PathBoundShares !== undefined &&
       (!value.tc2281OpenKeyUnconnectedGuard || JSON.stringify(value.tc2242PathBoundShares) !== JSON.stringify(approvedTc2242PathBoundShares))) {
     throw new Error("Only Naomi's exact canonical TC-2242 path-bound shares ratchet is approved.");
+  }
+  if (value.tc2276SignedExpiry !== undefined &&
+      (!value.tc2242PathBoundShares || JSON.stringify(value.tc2276SignedExpiry) !== JSON.stringify(approvedTc2276SignedExpiry))) {
+    throw new Error("Only Naomi's exact canonical TC-2276 signed expiry ratchet is approved.");
   }
 }
 
@@ -3274,6 +3312,13 @@ export function validateTc2242PathBoundSharesTransition(base?: Tc2242PathBoundSh
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2242PathBoundShares) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-2242 path-bound shares ratchet may be introduced once and cannot change later.");
+  }
+}
+/** The TC-2276 signed expiry ratchet is introduced once and immutable afterwards. */
+export function validateTc2276SignedExpiryTransition(base?: Tc2276SignedExpiry, current?: Tc2276SignedExpiry): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2276SignedExpiry) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2276 signed expiry ratchet may be introduced once and cannot change later.");
   }
 }
 

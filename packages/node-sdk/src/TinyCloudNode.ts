@@ -2563,14 +2563,16 @@ export class TinyCloudNode {
   }
 
   /** Prepare the OpenKey request before the approval click. */
-  async prepareOpenKeySignIn(): Promise<PreparedOpenKeyAuthorization> {
+  async prepareOpenKeySignIn(
+    options?: Parameters<NodeUserAuthorization["prepareOpenKeySignIn"]>[0],
+  ): Promise<PreparedOpenKeyAuthorization> {
     if (!this.signer || !this.tc || !this.auth) {
       throw new Error("Cannot prepare OpenKey sign-in in session-only mode. Provide a signer in config.");
     }
     await this.signOutInFlight;
     await this.accountRegistryTail;
     await this.wasmBindings.ensureInitialized?.();
-    return this.auth.prepareOpenKeySignIn();
+    return this.auth.prepareOpenKeySignIn(options);
   }
 
   /** Start OpenKey authorization synchronously, then complete normal session setup. */
@@ -5747,7 +5749,7 @@ export class TinyCloudNode {
         spaceId: tcSession.spaceId,
         path: "", // Root access
         actions: [...ROOT_DELEGATION_ACTIONS],
-        expiry: this.getSessionExpiry(),
+        expiry: this.getSignedSessionExpiry(),
         isRevoked: false,
         allowSubDelegation: true,
       };
@@ -5764,7 +5766,7 @@ export class TinyCloudNode {
             spaceId,
             path: "",
             actions: [...ROOT_DELEGATION_ACTIONS],
-            expiry: this.getSessionExpiry(),
+            expiry: this.getSignedSessionExpiry(),
             isRevoked: false,
             allowSubDelegation: true,
           });
@@ -5871,7 +5873,7 @@ export class TinyCloudNode {
       assertActive: () => graph.assertActive(),
       keyProvider: this._keyProvider,
       registry: this._capabilityRegistry,
-      sessionExpiry: this.getSessionExpiry(),
+      sessionExpiry: this.getSignedSessionExpiry(),
       createDelegationWasm: (params) => {
         graph.assertActive();
         return this.createDelegationWrapper(params);
@@ -5923,6 +5925,30 @@ export class TinyCloudNode {
     // Default to the SESSION tier (30 days) if not explicitly set
     const expirationMs = this.config.sessionExpirationMs ?? DEFAULT_SESSION_EXPIRATION_MS;
     return new Date(Date.now() + expirationMs);
+  }
+
+  /**
+   * The expiry of the session that was actually signed, so the registry root
+   * and the sharing service never outlive or undercut what the SIWE grants
+   * (a user may change the expiry in the OpenKey approval).
+   *
+   * Any expiry the SIWE parses to is used exactly as signed, however near or
+   * far. The configured lifetime is used only when the SIWE cannot be parsed
+   * (the session is already established, so failing sign-in here would be
+   * worse; real sign-ins verify the SIWE first) or when a valid SIWE carries
+   * no `Expiration Time` line, as the other `extractSiweExpiration` callers do.
+   * @internal
+   */
+  private getSignedSessionExpiry(): Date {
+    const siwe = this.auth?.tinyCloudSession?.siwe;
+    if (!siwe) return this.getSessionExpiry();
+    let signed: Date | undefined;
+    try {
+      signed = extractSiweExpiration(siwe);
+    } catch {
+      return this.getSessionExpiry();
+    }
+    return signed ?? this.getSessionExpiry();
   }
 
   /**

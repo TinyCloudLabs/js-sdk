@@ -1,3 +1,4 @@
+import { EXPIRY } from "@tinycloud/sdk-core";
 import { NodeWasmBindings, signedCompactUcanExpiry, type PermissionEntry } from "@tinycloud/node-sdk";
 import { isLocalOwnerProfile, ownerSessionLacksProof } from "@tinycloud/operations/profile";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
@@ -22,9 +23,10 @@ export const CLOCK_SKEW_MS = 30_000;
 export const SIGNED_RECAP = "signed-recap";
 
 /**
- * A requested `--expiry`, as a lifetime. OpenKey signs approval time plus a
- * lifetime, so an absolute deadline cannot be honored once approval takes
- * longer than the clock-skew allowance; only durations are accepted.
+ * A requested `--expiry`, as a lifetime, and the maximum lifetime the signed request allows (today the two are the
+ * same: `grantLifetimeSeconds` is derived from `--expiry`). OpenKey signs approval time plus a lifetime, so an
+ * absolute deadline cannot be honored once approval takes longer than the clock-skew allowance; only durations are
+ * accepted.
  */
 export interface RequestedExpiry {
   readonly durationMs: number;
@@ -43,9 +45,40 @@ export function parseRequestedExpiry(value: string | number): RequestedExpiry {
   );
 }
 
-/** Latest signed expiry the request allows, evaluated when the approval arrives. */
+/**
+ * Latest signed expiry the request allows, evaluated when the approval arrives: the request's maximum lifetime
+ * (`grantLifetimeSeconds`) from now, plus the clock-skew allowance. The signed value is compared, not the value the
+ * request proposed, so a lifetime the user changed in the approval is held to the same ceiling.
+ */
 export function expiryLimit(expiry: RequestedExpiry): number {
   return Date.now() + expiry.durationMs + CLOCK_SKEW_MS;
+}
+
+/**
+ * Latest signed expiry when no `--expiry` was given: the SDK's default session request (`EXPIRY.SESSION_MS`, 30 days)
+ * from now, plus the same clock-skew allowance, evaluated when the approval arrives.
+ */
+export function defaultExpiryLimit(): number {
+  return Date.now() + EXPIRY.SESSION_MS + CLOCK_SKEW_MS;
+}
+
+/**
+ * The SDK refuses a signed expiry above the `maxExpiresAt` the CLI hands it, with a plain `Error`. Report it as the
+ * same `OPENKEY_EXPIRY_EXCEEDED` the ceiling check in `verifySignedSession` raises, naming the lifetime that was
+ * requested and the latest allowed time. `defaultRequest` is true when no `--expiry` was given. Any other error is not
+ * ours: returns `undefined`.
+ */
+export function sdkMaxExpiryRefusal(error: unknown, defaultRequest = false): CLIError | undefined {
+  const message = error instanceof Error ? error.message : "";
+  const match = /^OpenKey signedMessage expiry is later than the maximum for this request \(the latest allowed is ([^)]+)\)(?:; choose an earlier expiry)?$/.exec(message);
+  if (match === null) return undefined;
+  const requested = defaultRequest
+    ? `the default ${EXPIRY.SESSION_MS / 86_400_000} day lifetime this login requested`
+    : "the requested --expiry";
+  return Object.assign(
+    new CLIError("OPENKEY_EXPIRY_EXCEEDED", `The signed session outlives ${requested} (the latest allowed is ${match[1]}). Choose an earlier lifetime in OpenKey, or re-run with a longer --expiry. No session was saved.`, ExitCode.PERMISSION_DENIED),
+    { cause: error },
+  );
 }
 
 /** OpenKey's minimum delegation lifetime; it raises anything shorter. */
@@ -373,7 +406,11 @@ function withCapabilitiesRead(permissions: PermissionEntry[], space: string): Pe
 export interface SignedSessionExpectations {
   /** Primary DID the approving identity must match, when known. */
   expectedOwner?: string;
-  /** Requested `--expiry`; a signed expiry beyond it (+ skew) is refused. */
+  /**
+   * The longest lifetime the signed request allows: the request's `grantLifetimeSeconds`, which is the requested
+   * `--expiry`. A signed expiry beyond it (+ skew) is refused. The user may sign a SHORTER lifetime (the SDK accepts a
+   * changed expiry, see `expiryChangeable`); a longer one is still refused here until TC-2274 lets OpenKey grant more.
+   */
   expiry?: RequestedExpiry;
   /** Grant escalation stores a portable delegation, not a login session. */
   purpose?: "grant";

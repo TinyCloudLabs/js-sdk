@@ -76,6 +76,9 @@ import {
   verifySignedSession,
   type RequestedExpiry,
   openKeyExpiryParam,
+  expiryLimit,
+  defaultExpiryLimit,
+  sdkMaxExpiryRefusal,
   withVerifiedAuthority,
   ownerSpaceId,
   sessionStateIsUsable,
@@ -2808,6 +2811,7 @@ async function refreshPreparedOpenKeySession(params: {
     includeAccountRegistryPermissions: false, autoBootstrapAccount: false,
     replication: replicationConfig,
     ...(namedKeys === undefined ? {} : { additionalRawAbilities: keyAbilitiesFor(namedKeys) }),
+    ...(expiry ? { sessionExpirationMs: expiry.durationMs } : {}),
   });
   let handoff: PreparedOpenKeyHandoff | undefined;
   let preparedDid: string | undefined;
@@ -2827,7 +2831,7 @@ async function refreshPreparedOpenKeySession(params: {
         handedBackSiwe = result.signedMessage;
         return result;
       });
-    });
+    }, preparedSignInOptions(expiry));
     const active = node.restorableSession;
     if (!active || !preparedDid || node.sessionDid !== preparedDid || active.verificationMethod !== preparedDid) {
       throw new CLIError("OPENKEY_SESSION_MISMATCH", "OpenKey signed a different SDK session key; no profile or session was saved.", ExitCode.PERMISSION_DENIED);
@@ -2879,9 +2883,24 @@ async function refreshPreparedOpenKeySession(params: {
   } catch (error) {
     await handoff?.complete(false);
     await undoPreparedAttempt(profileName, node, owner, gateWasActive).catch(() => undefined);
-    throw namedKeys !== undefined && isNarrowedRecapMismatch(error) &&
-      namedKeysGrantIn(handedBackSiwe, namedKeys) === "partial" ? partialKeysGrantError() : error;
+    throw sdkMaxExpiryRefusal(error, expiry === undefined) ?? (namedKeys !== undefined && isNarrowedRecapMismatch(error) &&
+      namedKeysGrantIn(handedBackSiwe, namedKeys) === "partial" ? partialKeysGrantError() : error);
   }
+}
+
+/**
+ * The prepared OpenKey handoff lets the user pick a shorter lifetime than the one this CLI asked for. Telling the SDK
+ * so makes it accept and sign with the picked expiry. The CLI ceiling is handed to the SDK too, read when the approval
+ * arrives, so an above-ceiling pick is refused before any session is activated; `verifyScopedLogin` still checks an
+ * explicit `--expiry` afterwards. The ceiling is `--expiry` + the clock-skew allowance, or, without `--expiry`, the SDK's
+ * default 30 day session request + the same allowance, so the default request is held as tightly as an explicit one.
+ * The SDK checks every other field of the signed message as before.
+ */
+function preparedSignInOptions(expiry: RequestedExpiry | undefined) {
+  return {
+    expiryChangeable: true,
+    maxExpiresAt: expiry === undefined ? defaultExpiryLimit : () => expiryLimit(expiry),
+  } as const;
 }
 
 const KEYS_APPROVAL_NOTE = (folder: string): string =>
@@ -2959,7 +2978,7 @@ async function refreshPreparedKeysSession(params: {
         handedBackSiwe = result.signedMessage;
         return result;
       });
-    });
+    }, preparedSignInOptions(expiry));
     const active = node.restorableSession;
     if (!active || !preparedDid || node.sessionDid !== preparedDid || active.verificationMethod !== preparedDid) {
       throw new CLIError("OPENKEY_SESSION_MISMATCH", "OpenKey signed a different SDK session key; no profile or session was saved.", ExitCode.PERMISSION_DENIED);
@@ -2991,8 +3010,8 @@ async function refreshPreparedKeysSession(params: {
   } catch (error) {
     await handoff?.complete(false);
     await node.replication?.close();
-    throw isNarrowedRecapMismatch(error) &&
-      namedKeysGrantIn(handedBackSiwe, namedKeys) === "partial" ? partialKeysGrantError() : error;
+    throw sdkMaxExpiryRefusal(error, expiry === undefined) ?? (isNarrowedRecapMismatch(error) &&
+      namedKeysGrantIn(handedBackSiwe, namedKeys) === "partial" ? partialKeysGrantError() : error);
   }
 }
 

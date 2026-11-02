@@ -514,3 +514,41 @@ describe("scoped first login", () => {
     expect(await ProfileManager.getSession("scoped")).toBeNull();
   });
 });
+
+// TC-2276: the user may now sign a lifetime other than the requested one. The ceiling is the longest lifetime the
+// signed request allows (its grantLifetimeSeconds) plus the clock-skew allowance; today that equals `--expiry`.
+describe("signed expiry ceiling", () => {
+  const HOUR = 3600_000;
+  const MARGIN = 30_000;
+
+  test("the ceiling is the lifetime the request carried plus 30 seconds, unchanged from --expiry", async () => {
+    const received: unknown[] = [];
+    const acquire = (lifetimeMs: number) => async (_did: string, options: unknown) => {
+      received.push(options);
+      return proof({ lifetimeMs });
+    };
+    // 1h is sent to OpenKey as 3600s, and the ceiling is that lifetime + 30 s.
+    await refreshOpenKeySession("scoped", host, { permissions: requested, expiry: "1h", openKeyAcquisition: acquire(HOUR + MARGIN - 1_000) });
+    expect(received[0]).toMatchObject({ expiry: "3600s" });
+    expect(await ProfileManager.getSession("scoped")).not.toBeNull();
+    await ProfileManager.clearSession("scoped");
+    await expect(refreshOpenKeySession("scoped", host, { permissions: requested, expiry: "1h", openKeyAcquisition: acquire(HOUR + MARGIN + 1_000) }))
+      .rejects.toMatchObject({ code: "OPENKEY_EXPIRY_EXCEEDED" });
+    expect(await ProfileManager.getSession("scoped")).toBeNull();
+  });
+
+  test("a shorter lifetime picked in the approval is accepted and saved as signed", async () => {
+    const picked = await proof({ lifetimeMs: 10 * 60_000 });
+    await refreshOpenKeySession("scoped", host, { permissions: requested, expiry: "1h", openKeyAcquisition: async () => picked });
+    const saved = await ProfileManager.getSession("scoped") as { expiresAt?: string };
+    expect(saved.expiresAt).toBe(/Expiration Time: (.+)/.exec(picked.siwe)?.[1]);
+    expect(Date.parse(saved.expiresAt!) - Date.now()).toBeLessThan(11 * 60_000);
+  });
+
+  test("a pick above the maximum is refused and nothing is saved", async () => {
+    const tooLong = await proof({ lifetimeMs: 2 * HOUR });
+    await expect(refreshOpenKeySession("scoped", host, { permissions: requested, expiry: "1h", openKeyAcquisition: async () => tooLong }))
+      .rejects.toMatchObject({ code: "OPENKEY_EXPIRY_EXCEEDED" });
+    expect(await ProfileManager.getSession("scoped")).toBeNull();
+  });
+});

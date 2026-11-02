@@ -858,6 +858,8 @@ export {
   RecapAttenuation,
   extractImmutableSiweFields,
   diffImmutableSiweFields,
+  checkChangedExpiration,
+  CheckChangedExpirationInput,
   extractRecapAttenuations,
   unauthorizedRecapCapabilities,
 } from "./authorization";

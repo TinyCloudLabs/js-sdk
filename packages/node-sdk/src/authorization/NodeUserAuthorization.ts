@@ -49,6 +49,7 @@ import {
   pkhDid,
   extractImmutableSiweFields,
   diffImmutableSiweFields,
+  checkChangedExpiration,
   extractRecapAttenuations,
   unauthorizedRecapCapabilities,
   parseCanonicalRecapResource,
@@ -90,7 +91,29 @@ export interface PreparedOpenKeyAuthorization {
   readonly chainId: number;
   readonly generation: number;
   readonly createdAt: number;
+  /** The app-level maximum for a changed signed expiry, if one was given. In memory only; never sent or persisted. */
+  readonly maxExpiresAt?: OpenKeyMaxExpiresAt;
 }
+
+/**
+ * A latest acceptable signed expiry: epoch MILLISECONDS, a `Date`, or a function returning either. A function is read
+ * when the OpenKey result arrives, not when the request is prepared.
+ */
+export type OpenKeyMaxExpiresAt = number | Date | (() => number | Date);
+
+function assertMaxExpiresAt(value: OpenKeyMaxExpiresAt | undefined): void {
+  if (value === undefined || typeof value === "function") return;
+  const ms = value instanceof Date ? value.getTime() : value;
+  if (typeof ms !== "number" || !Number.isFinite(new Date(ms).getTime())) {
+    throw new Error("maxExpiresAt must be a finite number of epoch milliseconds, a valid Date, or a function returning one");
+  }
+}
+
+/** The capture of the LAST match of a global, multiline, line-anchored pattern, or `undefined`. */
+function lastAnchoredLine(siwe: string, pattern: RegExp): string | undefined {
+  return [...siwe.matchAll(pattern)].at(-1)?.[1];
+}
+
 export type OpenKeyAuthorizationResultV1 = Awaited<ReturnType<NodeUserAuthorizationAuthorizeFn>>;
 
 type PreparedOpenKeySession = {
@@ -2031,13 +2054,13 @@ export class NodeUserAuthorization implements IUserAuthorization {
       signature,
     };
 
-    // Extract expiration from SIWE message (parse the string)
-    const expirationMatch = prepared.siwe?.match(/Expiration Time: (.+)/);
-    const issuedAtMatch = prepared.siwe?.match(/Issued At: (.+)/);
+    // The signed expiry and creation time are the message's own lines. Anchored, and the LAST match: a ReCap statement
+    // is not compared, and a statement that itself begins with `Expiration Time: ` or `Issued At: ` matches the anchored
+    // regex too, but the real lines follow the statement.
     const expiresAt =
-      expirationMatch?.[1] ??
+      lastAnchoredLine(prepared.siwe ?? "", /^Expiration Time: (.+)$/gm) ??
       new Date(Date.now() + this.sessionExpirationMs).toISOString();
-    const createdAt = issuedAtMatch?.[1] ?? new Date().toISOString();
+    const createdAt = lastAnchoredLine(prepared.siwe ?? "", /^Issued At: (.+)$/gm) ?? new Date().toISOString();
 
     const replicaStamp = await this.establishReplicaStamp?.(tinyCloudSession);
     const persistedData = this.persistedData(tinyCloudSession, expiresAt, createdAt, replicaStamp);
@@ -2108,6 +2131,21 @@ export class NodeUserAuthorization implements IUserAuthorization {
       /** Caller-supplied display reason, not signed authority. */
       reason?: string;
       /**
+       * Let the user change the session expiry in the OpenKey approval. Sent
+       * to OpenKey as `expiryChangeable: true` (`@openkey/sdk` >= 0.13.0
+       * (beta: 0.13.0-beta.0) forwards it; 0.12.x ignores it). The SIGNED
+       * expiry is then the session's expiry.
+       */
+      expiryChangeable?: boolean;
+      /**
+       * The latest signed expiry the caller will accept, used only with `expiryChangeable`: a signed expiry beyond it
+       * is refused before any session is built, stored or activated. Epoch MILLISECONDS or a `Date`; a function is
+       * called when the result arrives (so a slow approval does not count against it) and returns either. It is not
+       * sent to OpenKey and not persisted. It limits a CHANGED expiry only: an expiry equal to the one this SDK
+       * requested is accepted, so keep the configured session lifetime within the maximum.
+       */
+      maxExpiresAt?: OpenKeyMaxExpiresAt;
+      /**
        * Supply another candidate without regenerating the SIWE or session key.
        * Called only after transport or pre-commit verification rejects a result.
        * Return null to cancel; activation errors are never signing retries.
@@ -2128,6 +2166,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     options?: Parameters<NodeUserAuthorization["signInWithOpenKey"]>[1],
   ): Promise<PreparedOpenKeyAuthorization> {
     refuseCaveated(this.getCapabilityRequest()?.manifests);
+    assertMaxExpiresAt(options?.maxExpiresAt);
     // A per-call host override is the host this session will actually use,
     // not merely a display hint for OpenKey. Install it before preparation so
     // the same value is bound into the authorization context and later used
@@ -2177,6 +2216,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
       host: hostHint,
       keyId: options?.openkeyKeyId,
       presentation,
+      // Present only when set, so the default request shape is unchanged.
+      ...(options?.expiryChangeable === true ? { expiryChangeable: true } : {}),
     };
     return {
       request: originalRequest,
@@ -2187,6 +2228,9 @@ export class NodeUserAuthorization implements IUserAuthorization {
       chainId,
       generation: this.sessionGeneration,
       createdAt: Date.now(),
+      // Kept in memory with the pending request. It is not part of `request`, so it is never sent to OpenKey, and
+      // nothing here is persisted.
+      ...(options?.maxExpiresAt === undefined ? {} : { maxExpiresAt: options.maxExpiresAt }),
     };
   }
 
@@ -2209,7 +2253,11 @@ export class NodeUserAuthorization implements IUserAuthorization {
     for (let attempt = 0; ; ) {
       try {
         result ??= await authorization;
-        signed = await this.verifyOpenKeyResult(result, prepared);
+        signed = await this.verifyOpenKeyResult(result, prepared, {
+          // Relax only for a request that actually carried the opt-in.
+          allowExpirationChange: originalRequest.expiryChangeable === true,
+          maxExpiresAt: pending.maxExpiresAt,
+        });
         signature = result.signature;
         break;
       } catch (error) {
@@ -2315,14 +2363,25 @@ export class NodeUserAuthorization implements IUserAuthorization {
    *    in the original prepared SIWE — narrowing OK, broadening rejected.
    * 5. Every `result.selectedActionKeys` entry corresponds to a
    *    (resource, action) pair in the returned SIWE.
+   *
+   * `options.expiryChangeable` is true only when the request sent to OpenKey
+   * carried `expiryChangeable: true`. Then (and only then) the signed
+   * `Expiration Time` may differ from the prepared one and is the expiry the
+   * session is built with; the changed expiry must pass
+   * `checkChangedExpiration` and every other field in (3) must still match.
+   * Without it, any expiry difference is refused as in (3).
    */
   async signInWithOpenKeyResult(
     result: OpenKeyAuthorizationResultV1,
     prepared: PreparedOpenKeySession,
     keyId: string,
     jwk: Record<string, unknown>,
+    options?: { expiryChangeable?: boolean; maxExpiresAt?: OpenKeyMaxExpiresAt },
   ): Promise<ClientSession> {
-    const signed = await this.verifyOpenKeyResult(result, prepared);
+    const signed = await this.verifyOpenKeyResult(result, prepared, {
+      allowExpirationChange: options?.expiryChangeable === true,
+      maxExpiresAt: options?.maxExpiresAt,
+    });
     return this.signInWithPreparedSession(signed, result.signature, keyId, jwk);
   }
 
@@ -2330,6 +2389,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
   private async verifyOpenKeyResult(
     result: OpenKeyAuthorizationResultV1,
     prepared: PreparedOpenKeySession,
+    options?: { allowExpirationChange?: boolean; maxExpiresAt?: OpenKeyMaxExpiresAt },
   ): Promise<PreparedOpenKeySession> {
     if (result.protocolVersion !== 1) {
       throw new Error(`Unsupported OpenKey protocol version ${result.protocolVersion}`);
@@ -2395,6 +2455,20 @@ export class NodeUserAuthorization implements IUserAuthorization {
       );
     }
 
+    // The expiry this code goes on to read (persisted `expiresAt`, the immutable-field comparison, the changed-expiry
+    // check) comes from the message's `Expiration Time` LINES. The parsed message must have an expiry of its own, and it
+    // must be the same instant as that line, so text inside the (ReCap-bearing, uncompared) statement can never stand in
+    // for a dropped real line.
+    const parsedExpiry = parsedSignedSiwe.expirationTime;
+    const lineExpiry = lastAnchoredLine(result.signedMessage, /^Expiration Time: (.+)$/gm);
+    if (parsedExpiry === undefined || parsedExpiry === null || lineExpiry === undefined) {
+      throw new Error("OpenKey signedMessage has no Expiration Time line of its own");
+    }
+    const parsedExpiryMs = Date.parse(parsedExpiry);
+    if (!Number.isFinite(parsedExpiryMs) || parsedExpiryMs !== Date.parse(lineExpiry)) {
+      throw new Error("OpenKey signedMessage Expiration Time line does not match the message's own expiry");
+    }
+
     // (3) Immutable-fields comparison. Any drift on domain/address/URI/version/
     // chainId/nonce/issuedAt/expirationTime/notBefore/requestId/nonRecapResources
     // means the widget is signing a materially different SIWE than we prepared —
@@ -2411,13 +2485,33 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const originalHasRecap = /(?:^|\n)-\s+urn:recap:/i.test(prepared.siwe);
     const originalFields = extractImmutableSiweFields(prepared.siwe);
     const signedFields = extractImmutableSiweFields(result.signedMessage);
-    const changedFields = diffImmutableSiweFields(originalFields, signedFields, {
-      originalHasRecap,
-    });
-    if (changedFields.length > 0) {
-      throw new Error(
-        `OpenKey signedMessage altered immutable SIWE fields: ${changedFields.join(", ")}`,
-      );
+    if (options?.allowExpirationChange === true) {
+      // TC-2276: the request told OpenKey the user may change the expiry, so
+      // the signed Expiration Time may differ. Every other immutable field
+      // still has to match, and the signed expiry must be one this SDK will
+      // run a session on. The helper reports both kinds of refusal.
+      // An app-level maximum, when the caller gave one. A function is read now, when the result arrives, so the time a
+      // person takes to approve does not count against it.
+      const maxExpiresAt = typeof options.maxExpiresAt === "function" ? options.maxExpiresAt() : options.maxExpiresAt;
+      const refusal = checkChangedExpiration({
+        preparedSiwe: prepared.siwe,
+        signedSiwe: result.signedMessage,
+        now: Date.now(),
+        originalHasRecap,
+        ...(maxExpiresAt === undefined ? {} : { maxExpiresAt }),
+      });
+      if (refusal !== null) {
+        throw new Error(`OpenKey signedMessage ${refusal}`);
+      }
+    } else {
+      const changedFields = diffImmutableSiweFields(originalFields, signedFields, {
+        originalHasRecap,
+      });
+      if (changedFields.length > 0) {
+        throw new Error(
+          `OpenKey signedMessage altered immutable SIWE fields: ${changedFields.join(", ")}`,
+        );
+      }
     }
 
     // (4) Capability subset. The widget may narrow the caller's request but

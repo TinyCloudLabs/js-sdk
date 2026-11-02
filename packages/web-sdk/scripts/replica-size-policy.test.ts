@@ -45,6 +45,7 @@ import { approvedTc2113AllowAbilityRatchet, validateTc2113AllowAbilityRatchetTra
 import { approvedTc2254HeldWireRatchet, validateTc2254HeldWireRatchetTransition } from "./replica-size-policy";
 import { approvedTc2281OpenKeyUnconnectedGuard, validateTc2281OpenKeyUnconnectedGuardTransition } from "./replica-size-policy";
 import { approvedTc2242PathBoundShares, validateTc2242PathBoundSharesTransition } from "./replica-size-policy";
+import { approvedTc2276SignedExpiry, validateTc2276SignedExpiryTransition } from "./replica-size-policy";
 import { approvedTc2038PanelPrefetchRatchet, validateTc2038PanelPrefetchRatchetTransition, type Tc2038PanelPrefetchRatchet } from "./replica-size-policy";
 import { approvedTc2005RevokeWindowRatchet, validateTc2005RevokeWindowRatchetTransition, type Tc2005RevokeWindowRatchet } from "./replica-size-policy";
 import { approvedTc2096RepairBackoffRatchet, validateTc2096RepairBackoffRatchetTransition, type Tc2096RepairBackoffRatchet } from "./replica-size-policy";
@@ -2933,6 +2934,7 @@ delete tc2043Ledger.tc2113AllowAbilityRatchet;
 delete tc2043Ledger.tc2254HeldWireRatchet;
 delete tc2043Ledger.tc2281OpenKeyUnconnectedGuard;
 delete tc2043Ledger.tc2242PathBoundShares;
+delete tc2043Ledger.tc2276SignedExpiry;
 tc2043Ledger.entries = structuredClone(current.entries.slice(0, current.entries.findIndex((entry) => entry.pr === "#728")));
 describe("replication syncScope opt-in (#742, TC-2043) size ratchet", () => {
   const row = () => structuredClone(approvedTc2043SyncScopeRatchet);
@@ -4104,6 +4106,61 @@ describe("path-bound addressed shares, one share-id grammar, sign-in key creatio
     changed.root.ceiling["index.cjs"]++;
     expect(() => validateTc2242PathBoundSharesTransition(undefined, changed)).toThrow("TC-2242");
     expect(() => validateTc2242PathBoundSharesTransition(row(), undefined)).toThrow("TC-2242");
+  });
+});
+
+describe("accept a user-changed OpenKey expiry behind an opt-in and use the signed expiry (TC-2276, #813) size ratchet", () => {
+  const row = () => structuredClone(approvedTc2276SignedExpiry);
+  const prerequisite = () => approvedTc2242PathBoundShares;
+
+  it("pins exact canonical CI root bytes and carries every other size bucket", () => {
+    expect(() => validateLedger(current)).not.toThrow();
+    expect(current.tc2276SignedExpiry).toEqual(approvedTc2276SignedExpiry);
+    expect(row().root).toEqual({
+      delta: { "index.mjs": 1071, "index.cjs": 1173 },
+      ceiling: { "index.mjs": 1478398, "index.cjs": 1420056 },
+    });
+    expect(row().root.ceiling["index.mjs"]).toBe(prerequisite().root.ceiling["index.mjs"] + row().root.delta["index.mjs"]);
+    expect(row().root.ceiling["index.cjs"]).toBe(prerequisite().root.ceiling["index.cjs"] + row().root.delta["index.cjs"]);
+    expect(row().base).toBe("06a547e6ff7a1f36963961d58f7712e155cfa9ea");
+    expect(row().sourceCommits).toEqual(["47c49c9ac1e6d4937681ef8171c3fc0d550cb9a1"]);
+    expect(row().canonicalCI).toEqual({
+      run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41282509733",
+      jobs: [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41282509733/job/124777129561",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41282509733/job/124777129514",
+      ],
+    });
+    expect(row().firstImport).toEqual(prerequisite().firstImport);
+    expect(row().activation).toEqual(prerequisite().activation);
+    expect(row().worker).toEqual({ delta: 0, ceiling: prerequisite().worker.ceiling });
+    expect(row().replicaWorker).toEqual({ delta: 0, ceiling: prerequisite().replicaWorker.ceiling });
+    expect(rootCeilings(current)).toContainEqual({
+      row: "tc2276SignedExpiry",
+      ceiling: { "index.mjs": 1478398, "index.cjs": 1420056 },
+    });
+    expect(ancestryPins(current, false)).toContainEqual({
+      row: "tc2276SignedExpiry",
+      pin: "47c49c9ac1e6d4937681ef8171c3fc0d550cb9a1",
+    });
+  });
+
+  it("refuses changed bytes or a missing TC-2242 prerequisite", () => {
+    const changed = copy(current);
+    changed.tc2276SignedExpiry!.root.ceiling["index.mjs"]++;
+    expect(() => validateLedger(changed)).toThrow("TC-2276");
+    const withoutPrerequisite = copy(current);
+    delete withoutPrerequisite.tc2242PathBoundShares;
+    expect(() => validateLedger(withoutPrerequisite)).toThrow("TC-2276");
+  });
+
+  it("may be introduced once and never changed or removed", () => {
+    expect(() => validateTc2276SignedExpiryTransition(undefined, row())).not.toThrow();
+    expect(() => validateTc2276SignedExpiryTransition(row(), row())).not.toThrow();
+    const changed = row();
+    changed.root.ceiling["index.cjs"]++;
+    expect(() => validateTc2276SignedExpiryTransition(undefined, changed)).toThrow("TC-2276");
+    expect(() => validateTc2276SignedExpiryTransition(row(), undefined)).toThrow("TC-2276");
   });
 });
 
