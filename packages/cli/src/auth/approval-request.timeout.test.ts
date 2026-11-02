@@ -416,14 +416,45 @@ describe("an expired request is decided locally, and production OpenKey's 400 in
     expect(sleeps).toEqual([]);
   });
 
-  test("(a2) the same with OpenKey down: the local decision does not wait for a network failure", async () => {
+  test("(a2) the same local decision with OpenKey down: expiry + 11 min and more needs no network", async () => {
     await createPending();
-    await expireLocally(90_000);
+    await expireLocally(20 * 60_000);
     networkFault = () => true;
     const error = await pendingOf(() => acquireApprovalRequest(did, withDeadline(7_000)));
     expect(error.code).toBe("APPROVAL_REQUEST_EXPIRED");
     expect(await entries()).toEqual([]);
     expect(sleeps).toEqual([]);
+  });
+
+  test("(a3) a request 5 min past its expiry is NOT dropped locally: OpenKey is asked, and one 400 invalid_request is the exit 3 and the drop", async () => {
+    await createPending();
+    await expireLocally(5 * 60_000);
+    openkeyCalls = 0;
+    discoverRefusal = REAL_SHAPE;
+    const error = await pendingOf(() => acquireApprovalRequest(did, withDeadline(7_000)));
+    expect(error.code).toBe("APPROVAL_REQUEST_EXPIRED");
+    expect(openkeyCalls).toBe(1);
+    expect(await entries()).toEqual([]);
+  });
+
+  test("(a4) 90 s past its expiry with OpenKey down: exit 3 at the end of the wait, the entry is KEPT (an approval given just before expiry may still be served)", async () => {
+    await createPending();
+    const [saved] = await entries();
+    await expireLocally(90_000);
+    networkFault = () => true;
+    const error = await pendingOf(() => acquireApprovalRequest(did, withDeadline(7_000)));
+    expect(error.code).toBe("APPROVAL_REQUEST_EXPIRED");
+    expect(error.exitCode).toBe(3);
+    expect((await entries()).map((item) => item.requestId)).toEqual([saved!.requestId]);
+  });
+
+  test("(a5) a request approved just before its expiry is still collected 5 min after it: OpenKey serves the result until its own retention ends", async () => {
+    await createPending();
+    await approve();
+    await expireLocally(5 * 60_000);
+    const delegation = await acquireApprovalRequest(did, withDeadline(7_000));
+    await commitAndAcknowledge(delegation);
+    expect(acks).toHaveLength(1);
   });
 
   test("(b) production OpenKey's real answer, HTTP 400 invalid_request, after the stored expiry: exit 3 and the entry is dropped, never exit 8", async () => {
@@ -498,15 +529,15 @@ describe("an expired request is decided locally, and production OpenKey's 400 in
     expect(saved).toBeDefined();
   });
 
-  test("(e) skew: expired by less than 60 s is still left to OpenKey by the local check (a 202 means pending), by 60 s or more it is dropped locally", async () => {
+  test("(e) the boundary is expiry + 10 min result retention + 60 s skew: at 10 min 59 s OpenKey is still asked, at 11 min 1 s the entry is dropped with zero calls", async () => {
     await createPending();
-    await expireLocally(59_000);
+    await expireLocally(659_000);
     openkeyCalls = 0;
     const within = await pendingOf(() => acquireApprovalRequest(did, withDeadline(2_000)));
     expect(within.code).toBe("APPROVAL_PENDING");
     expect(openkeyCalls).toBeGreaterThan(0);
     expect(await entries()).toHaveLength(1);
-    await expireLocally(61_000);
+    await expireLocally(661_000);
     openkeyCalls = 0;
     const beyond = await pendingOf(() => acquireApprovalRequest(did, withDeadline(2_000)));
     expect(beyond.code).toBe("APPROVAL_REQUEST_EXPIRED");
@@ -532,14 +563,15 @@ describe("an expired request is decided locally, and production OpenKey's 400 in
     expect(await entries()).toHaveLength(1);
   });
 
-  test("a link that expires DURING the wait, with OpenKey unreachable until the deadline, is exit 3 (dropped once 60 s past), never pending with a dead link", async () => {
+  test("a link that expires DURING the wait, with OpenKey unreachable until the deadline, is exit 3 and the entry is kept, never pending with a dead link", async () => {
     await createPending();
+    const [saved] = await entries();
     await expireLocally(-3_000); // expires 3 s into the wait
     networkFault = (url) => url.pathname.endsWith("/result");
     const error = await pendingOf(() => acquireApprovalRequest(did, withDeadline(70_000)));
     expect(error.code).toBe("APPROVAL_REQUEST_EXPIRED");
     expect(error.exitCode).toBe(3);
-    expect(await entries()).toEqual([]);
+    expect((await entries()).map((item) => item.requestId)).toEqual([saved!.requestId]);
   });
 
   test("a still-valid link with OpenKey unreachable stays pending, with that link", async () => {
