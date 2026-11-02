@@ -23,7 +23,7 @@ import { bareDid, CLOCK_SKEW_MS, durationMs, siweTimes } from './authority.js';
  */
 const PENDING_FILE = 'approval-pending.json';
 
-export const DEFAULT_WAIT_MS = 90_000;
+export const DEFAULT_WAIT_MS = 60_000;
 export const MAX_WAIT_MS = 9 * 60_000;
 /**
  * The wait for a pending agents space after an approval arrives ends this long after the --timeout deadline (never less than
@@ -146,7 +146,7 @@ function matches(pending: PendingGrantRequest, profile: Profile, want: WantedReq
 }
 
 /** The saved request already holds something that cannot be made again: a reference to an approved result, the result itself, or an installed grant. */
-const holdsApproval = (pending: PendingGrantRequest) => pending.resultRef !== undefined || pending.resultEnvelope !== undefined || pending.committed === true;
+export const holdsApproval = (pending: PendingGrantRequest) => pending.resultRef !== undefined || pending.resultEnvelope !== undefined || pending.committed === true;
 
 const requestLapsed = (pending: PendingGrantRequest) => !pending.resultRef && !pending.resultEnvelope && Date.parse(pending.requestExpiresAt) <= Date.now();
 

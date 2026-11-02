@@ -15,7 +15,7 @@ import {
 import { courierNode, peerKv } from './node.js';
 import { courierGrantRequest, grantFromInput, noSpaceError, pendingSpaceError, receiveGrant, resumeGrant } from './grant.js';
 import { installRefusing } from './grant-refusal.js';
-import { clearPending, completeApproval, DEFAULT_WAIT_MS, loadPending, MAX_WAIT_MS, requestApproval, waitApproval } from './grant-request.js';
+import { clearPending, completeApproval, DEFAULT_WAIT_MS, holdsApproval, loadPending, MAX_WAIT_MS, requestApproval, waitApproval } from './grant-request.js';
 import {
   artifactA, artifactWithDelegation, parseArtifact, peerRecordBody, PEER_DELEGATION_EXPIRY, validateArtifactIdentity,
 } from './pairing.js';
@@ -102,7 +102,7 @@ export async function cmdInit(args: ParsedArgs) {
   }
   if (timeoutFlag !== undefined && !args.has('wait')) fail('usage', `--timeout needs --wait.`);
   const waitMs = timeoutFlag === undefined ? DEFAULT_WAIT_MS : durationMs(timeoutFlag);
-  if (!waitMs || waitMs > MAX_WAIT_MS) fail('usage', `--timeout must be a duration such as 90s or 5m, at most 9m.`);
+  if (!waitMs || waitMs > MAX_WAIT_MS) fail('usage', `--timeout must be a duration such as 60s or 5m, at most 9m.`);
   const grantFile = args.has('grant-file')
     ? requireFlag(args, 'grant-file', `Usage: ${cmd('init [--request | --grant-file <file|->]')}`)
     : undefined;
@@ -121,6 +121,8 @@ export async function cmdInit(args: ParsedArgs) {
   }
 
   const rotate = args.has('rotate-key');
+  // Read before the key is replaced: an approval the owner already gave is bound to the old key and is lost by a rotation.
+  const heldApproval = rotate && (() => { const saved = loadPending(); return saved !== undefined && holdsApproval(saved); })();
   const prior = profileExists() && !rotate ? loadProfile() : undefined;
   // A renewal is asked for with `--request`; `--wait` only collects. Starting a request here would hide its link on stderr.
   if (args.has('wait') && prior && prior.status !== 'awaiting-grant' && !loadPending()) {
@@ -158,6 +160,7 @@ export async function cmdInit(args: ParsedArgs) {
   saveProfile(profile);
   const request = courierGrantRequest(profile, key, expiry, { openkeyApiHost: apiHostFlag });
   if (rotate) console.error('Agent key rotated. Existing peer pairings must be re-established; the old grant remains valid until expiry.');
+  if (heldApproval) console.error('The saved approval request already held an approval from the owner. It is bound to the old agent key, so this key rotation discards that approval: the owner must approve a new request.');
 
   if (args.has('request')) {
     const pending = await requestApproval(profile, key, args.get('expiry'), { openkeyApiHost: apiHostFlag });

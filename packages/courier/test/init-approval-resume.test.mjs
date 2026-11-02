@@ -335,7 +335,7 @@ scenario('--rotate-key --wait with a saved approval says on stderr that it disca
   fakeTime(t);
   const run = await courier('--rotate-key', '--wait', '--timeout', '5s');
   assert.equal(run.code, 8);
-  assert.match(errors.join('\n'), /discard.*approval.*already (gave|approved)|already approved.*discard/i);
+  assert.match(errors.join('\n'), /already held an approval.*discards that approval/);
   assert.equal(fx.created.length, 2);
 });
 

@@ -31,13 +31,13 @@ Setup & pairing (humans run these):
                                    Resume the same invitation and durable winning claim.
   join <invitation-link> --consent [--wait 300]
                                    Join and activate the link's intended session; never create a substitute.
-  init [--request | --wait [--timeout 90s] | --grant-file f|- | --paste | --resume] [--host url]
+  init [--request | --wait [--timeout 60s] | --grant-file f|- | --paste | --resume] [--host url]
        [--openkey-host url] [--openkey-api-host url] [--label s] [--handle h] [--expiry 30d] [--rotate-key]
                                    Create/renew the agent key's restricted grant in OpenKey.
                                    --request prints {"openkeyUrl": …}, a short https://openkey.so/a/… link for the
                                    owner (send it to the owner only, privately), and exits. --wait then collects the
                                    approval (no code to paste): it polls, installs the grant, and acknowledges it.
-                                   --timeout (default 90s, at most 9m) ends the wait with exit 8 and, on stdout,
+                                   --timeout (default 60s, at most 9m) ends the wait with exit 8 and, on stdout,
                                    {"pending":{"step":1,"of":1,"approvalUrl","expiresAt"}}.
                                    Exit 8 is not a failure: the approval is still pending. Send the owner the
                                    \`pending.approvalUrl\` (the same link as \`openkeyUrl\`), ask them to approve it, then

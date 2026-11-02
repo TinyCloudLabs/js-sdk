@@ -128,13 +128,13 @@ from the request, such as a changed hooks path, is refused with `[grant-too-broa
 There is no code to copy back. `init --wait [--timeout <duration, at most 9m>]` polls OpenKey
 (every 2 s) with a proof signed by the agent key, decrypts the result, checks that
 it answers this request, installs the grant, and only then acknowledges it to
-OpenKey. The default timeout is 90 s: at the deadline it exits 8 and prints
+OpenKey. The default timeout is 60 s: at the deadline it exits 8 and prints
 `{"pending":{"step":1,"of":1,"approvalUrl":…,"expiresAt":…}}` on stdout, and the next
 `init --wait` resumes the same request (no new link, no second approval). Exit 8 is not a failure: the approval is still pending. Send the owner the `pending.approvalUrl` (the same link as `openkeyUrl`), ask them to approve it, then re-run `courier init --wait --timeout 60s`. Repeat while it exits 8. Any other non-zero exit is an error: stderr carries `[code]`. The
 approved result is saved encrypted in the pending record before any install work,
 so a killed process resumes from disk. A request that holds an approval is never
-replaced by a run with other flags; a renewal approved by a different owner than the
-one that holds the grant is refused (`--rotate-key` binds a new owner). OpenKey keeps an approved result for 10
+replaced by a run with other flags; a short-link renewal approved by a different owner than the
+one that holds the grant is refused (`--rotate-key` binds a new owner; the legacy `--grant-file`/`--paste` import is not owner-pinned). OpenKey keeps an approved result for 10
 minutes: after that `init --wait` reports `[approval-result-expired]` and you run
 `init --request` again; an expired request reports `[approval-expired]`.
 If a grant is refused, nothing was installed; tell the owner to revoke the listed delegation at account.tinycloud.xyz/delegations, then run `init --request` for a new link. The refusal on stderr (`[grant-too-broad]`, `[grant-incomplete]`, `[grant-too-long]`, `[bad-grant]`, `[approval-result-invalid]`) names the delegation's CID and what was too broad or different; the agent cannot revoke it, and the header, signature and keys are never printed.
