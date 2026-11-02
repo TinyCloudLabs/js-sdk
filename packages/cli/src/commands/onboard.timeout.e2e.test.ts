@@ -523,7 +523,7 @@ if (seam === "after-save") {
     expect(result.exitCode, result.stderr).toBe(1);
     expect(result.stdout + result.stderr).toContain("SPACE_SETUP_PENDING");
     expect(result.stdout).not.toContain('"pending"');
-    // timeout 1 s + 30 s grace is the most the call may take (here: the 15 s floor, plus start-up and probes).
+    // The wait ends at deadline + the 30 s grace (measured about 32 s); the 15 s floor of spaceSetupTimeoutMs is unit-tested.
     expect(elapsed).toBeLessThan(45_000);
     expect(acksOf(entry)).toHaveLength(1);
     expect((await savedState("hosting")).session?.delegationCid).toBe(entry.delegation!.delegationCid);

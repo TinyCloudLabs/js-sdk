@@ -316,12 +316,20 @@ function pendingApproval(entry: PendingApproval, approvalWait: ApprovalWait): CL
   return approvalPendingError({ step: approvalWait.step, of: approvalWait.of, approvalUrl: entry.approvalUrl, expiresAt: entry.requestExpiresAt });
 }
 
-/** A response body read that the request's own timeout, an abort or the connection ended (not a malformed body). */
+/**
+ * A response body read that the request's own timeout, an abort or the connection ended, never a malformed body.
+ * Node reports a reset connection as a TypeError; Bun raises a plain Error with code ECONNRESET.
+ */
 function bodyCutOff(error: unknown): boolean {
-  return error instanceof TypeError || (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError"));
+  return error instanceof TypeError ||
+    (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError" || (error as { code?: unknown }).code === "ECONNRESET"));
 }
 
-/** OpenKey keeps an approved result this long (its 600 s retention); a request expired longer than that, plus clock skew, can no longer have one. */
+/**
+ * OpenKey keeps an approved result this long (its 600 s retention); a request expired longer than that, plus clock
+ * skew, can no longer have one. Mirrors OpenKey's APPROVAL_RESULT_RETENTION_SECONDS (docker-compose.prod.yml): if
+ * OpenKey raises that setting, raise this with it, or a result OpenKey still holds could lose its local relay key.
+ */
 const RESULT_RETENTION_MS = 600_000;
 const CLOCK_SKEW_MS = 60_000;
 
@@ -354,7 +362,7 @@ async function pauseBetweenAttempts(profile: string, entry: PendingApproval, app
         await updatePending(profile, (items) => items.filter((item) => item.requestId !== entry.requestId));
       }
       throw new CLIError("APPROVAL_REQUEST_EXPIRED",
-        "This approval request expired before it was approved. The next run asks OpenKey once more, then starts a new request.", ExitCode.AUTH_REQUIRED);
+        "This approval request expired before it was approved. The next run asks OpenKey once more, then starts a new request; if OpenKey stays unreachable this repeats until OpenKey answers, for at most about 11 minutes after the link expired.", ExitCode.AUTH_REQUIRED);
     }
     throw pendingApproval(entry, approvalWait);
   }
@@ -447,9 +455,10 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
       if (!response.ok) await throwRemoteError(profile, entry, response, "discover");
       let discovered: { resultRef?: unknown; expiresAt?: unknown };
       try { discovered = await response.json() as { resultRef?: unknown; expiresAt?: unknown }; } catch (error) {
-        // Under --timeout a body the request cap or the connection cut off is a network failure like a lost request.
+        // Under --timeout a body the request cap or the connection cut off is a network failure like a lost request,
+        // but OpenKey did answer (200): it is reached, so the expiry check does not apply.
         if (!approvalWait || !bodyCutOff(error)) throw error;
-        await pauseBetweenAttempts(profile, entry, approvalWait);
+        await pauseBetweenAttempts(profile, entry, approvalWait, true);
         continue;
       }
       if (typeof discovered.resultRef !== "string" || !/^[A-Za-z0-9_-]{20,128}$/.test(discovered.resultRef) ||
@@ -469,7 +478,7 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
       let result: Record<string, unknown>;
       try { result = await fetched.json() as Record<string, unknown>; } catch (error) {
         if (!approvalWait || !bodyCutOff(error)) throw error;
-        await pauseBetweenAttempts(profile, entry, approvalWait);
+        await pauseBetweenAttempts(profile, entry, approvalWait, true);
         continue;
       }
       if (result.requestId !== entry.requestId || result.bodyCid !== entry.bodyCid ||
