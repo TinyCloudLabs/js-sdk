@@ -461,3 +461,62 @@ describe("the wallet-signed paths refuse before the wallet is asked", () => {
     expect(huge.signMessage).not.toHaveBeenCalled();
   });
 });
+
+describe("authorizeShareDeliveryV3 (public, the expiry comes from the caller)", () => {
+  const SPACE = "tinycloud:pkh:eip155:1:0xD559CCd9EB87c530A9a349262669386dE93cf412:applications";
+  const SHARE_URL = `https://share.tinycloud.xyz/s/lqdw5iopqq2tkkvjj6gbbi5vbv#v=4&k=${"A".repeat(43)}&c=bafkreiewixmt5nwgi3ych6durcsheaql3ybswbplpjmpbdhfkvdkidzt5u`;
+
+  function deliveryNode() {
+    const requests: Array<Record<string, unknown>> = [];
+    globalThis.fetch = mock(async (_input: string | URL | Request, init?: RequestInit) => {
+      requests.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+    const wasmBindings = {
+      invoke: () => ({ Authorization: "delivery-invocation" }),
+      ensureEip55: (a: string) => a,
+      createSessionManager: () => ({
+        createSessionKey: (id: string) => id,
+        replaceSessionKey: (_jwk: object, id: string) => id,
+        renameSessionKeyId: () => {},
+        getDID: (id: string) => `did:key:z6MkTest-${id}`,
+        jwk: () => JSON.stringify({ kty: "OKP", crv: "Ed25519", x: "test" }),
+      }),
+    } as unknown as IWasmBindings;
+    const node = new TinyCloudNode({ host: HOST, wasmBindings });
+    Object.assign(node, { _restoredTcSession: { spaceId: SPACE }, _serviceContext: { session: { spaceId: SPACE } } });
+    const deliver = (expiresAt: string) =>
+      node.authorizeShareDeliveryV3({
+        envelope: { version: 3 },
+        resourcePath: "shares/test/readme.md",
+        recipientEmail: "recipient@example.test",
+        shareUrl: SHARE_URL,
+        documentName: "readme.md",
+        expiresAt,
+        deliveryAudience: "https://witness.credentials.org",
+        idempotencyKey: "stable-key",
+      });
+    return { deliver, requests };
+  }
+
+  test("a string that is not a date is refused cleanly, with no request sent and no RangeError", async () => {
+    const s = deliveryNode();
+    const refusal = await s.deliver("tomorrow").catch((error: unknown) => error);
+    expect(refusal).toBeInstanceOf(Error);
+    expect(refusal).not.toBeInstanceOf(RangeError);
+    expect((refusal as Error).message).toBe(NOT_A_DATE);
+    expect(s.requests).toEqual([]);
+  });
+
+  test("a year past 9999 is refused with the dated message, with no request sent", async () => {
+    const s = deliveryNode();
+    await expect(s.deliver("+010000-01-01T00:00:00.000Z")).rejects.toThrow(SIWE_DATED);
+    expect(s.requests).toEqual([]);
+  });
+
+  test("the last second of 9999 is sent, normalised to three-digit milliseconds", async () => {
+    const s = deliveryNode();
+    await s.deliver("9999-12-31T23:59:59Z").catch(() => undefined);
+    expect(s.requests[0]?.expiresAt).toBe("9999-12-31T23:59:59.000Z");
+  });
+});

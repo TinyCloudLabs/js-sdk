@@ -6148,6 +6148,7 @@ export class TinyCloudNode {
     /** The origins `shareUrl` may be on: the node's `return_origin`. Default: `https://share.tinycloud.xyz`. */
     readonly trustedOrigins?: readonly string[];
   }): Promise<ShareDeliveryAuthorizationV3Receipt> {
+    assertExpiryWithinTechnicalLimit(new Date(input.expiresAt), "siwe");
     const envelopeRef = await shortDeliveryLinkBodyCid(input.shareUrl, input.trustedOrigins);
     const session = this.currentTinyCloudSession();
     const serviceSession = this._serviceContext?.session;
