@@ -4,6 +4,8 @@ import { DEFAULT_OPENKEY_HOST, DEFAULT_OPENKEY_DEVICE_API_HOST, ExitCode } from 
 import { CLIError } from "../output/errors.js";
 import { assertNoCaveatLimits } from "../lib/caveat-refusal.js";
 import { acquireApprovalRequest } from "./approval-request.js";
+import { ProfileManager } from "../config/profiles.js";
+import { dropPendingDelegationFor, pendingDelegationFor, savePendingDelegation } from "./pending-code.js";
 
 export interface DelegationData {
   delegationHeader: { Authorization: string };
@@ -191,12 +193,40 @@ export function validateDelegationCallbackPayload(value: unknown): string | null
   return null;
 }
 
+/** The redeemed delegation must be for this CLI key and carry no private key material. */
+function assertBoundToKey(parsed: unknown, did: string, localJwk: Record<string, unknown>): void {
+  const delegation = parsed as Record<string, unknown> | null;
+  const jwk = delegation?.jwk as Record<string, unknown> | undefined;
+  if (
+    typeof delegation?.verificationMethod !== "string" ||
+    delegation.verificationMethod.split("#")[0] !== did.split("#")[0] ||
+    !jwk || typeof jwk !== "object" || Array.isArray(jwk) ||
+    jwk.kty !== "OKP" || jwk.crv !== "Ed25519" ||
+    typeof jwk.x !== "string" || jwk.x !== localJwk.x ||
+    [...PRIVATE_JWK_FIELDS].some((field) => field in jwk)
+  ) {
+    throw new Error("Delegation is bound to a different CLI key.");
+  }
+}
+
 /** A pasted OpenKey result: a short code (looked up and bound to this key) or the full delegation code. */
 export async function delegationFromInput(input: string, did: string, options: AuthFlowOptions): Promise<DelegationData> {
   const trimmed = input.trim();
   let parsed: unknown;
   if (/^[a-z2-7]{4}-[a-z2-7]{4}$/i.test(trimmed)) {
     if (!options.jwk) throw new Error("A CLI session key is required to retrieve a delegation.");
+    const localJwk = publicJwkForDelegation(options.jwk) as Record<string, unknown>;
+    // OpenKey consumes the code on redeem: a code an interrupted run already redeemed is finished from its local copy.
+    const saved = options.profileName === undefined ? undefined : await pendingDelegationFor(options.profileName, trimmed);
+    if (saved !== undefined) {
+      try {
+        assertBoundToKey(saved, did, localJwk);
+      } catch (error) {
+        await dropPendingDelegationFor(options.profileName!, trimmed);
+        throw error;
+      }
+      return saved;
+    }
     const apiHost = process.env.TC_OPENKEY_API_HOST ?? options.openkeyApiHost ??
       (options.openkeyHost && options.openkeyHost !== DEFAULT_OPENKEY_HOST
         ? options.openkeyHost : DEFAULT_OPENKEY_DEVICE_API_HOST);
@@ -205,23 +235,19 @@ export async function delegationFromInput(input: string, did: string, options: A
     });
     if (!response.ok) {
       throw Object.assign(new Error(response.status === 404
-        ? "Delegation code not found or expired. Use the full code shown in OpenKey instead."
+        ? "Delegation code not found or expired. A short code works only once: if this one was already used and the approval was saved, re-run the same command and paste the same code; otherwise approve again in OpenKey to get a new code."
         : `Could not retrieve delegation code (HTTP ${response.status}).`), { status: response.status });
     }
     const result = await response.json() as { delegation?: unknown };
     parsed = result.delegation;
-    const delegation = parsed as Record<string, unknown> | null;
-    const jwk = delegation?.jwk as Record<string, unknown> | undefined;
-    const localJwk = publicJwkForDelegation(options.jwk) as Record<string, unknown>;
-    if (
-      typeof delegation?.verificationMethod !== "string" ||
-      delegation.verificationMethod.split("#")[0] !== did.split("#")[0] ||
-      !jwk || typeof jwk !== "object" || Array.isArray(jwk) ||
-      jwk.kty !== "OKP" || jwk.crv !== "Ed25519" ||
-      typeof jwk.x !== "string" || jwk.x !== localJwk.x ||
-      [...PRIVATE_JWK_FIELDS].some((field) => field in jwk)
-    ) {
-      throw new Error("Delegation is bound to a different CLI key.");
+    assertBoundToKey(parsed, did, localJwk);
+    // Before the caller verifies or activates anything, so a kill from here on cannot lose the owner's approval.
+    if (options.profileName !== undefined && validateDelegationCallbackPayload(parsed) === null) {
+      // A first sign-in holds its new key only in memory until the login commits; a copy bound to a key that is
+      // never saved could not be finished after a kill, so say what to do instead of keeping it.
+      const stored = await ProfileManager.getKey(options.profileName) as Record<string, unknown> | null;
+      if (stored?.x === localJwk.x) await savePendingDelegation(options.profileName, trimmed, parsed as DelegationData);
+      else console.error("Note: this profile has no saved key yet, so an interrupted first sign-in cannot be resumed; if this one is interrupted, approve again in OpenKey.");
     }
   } else {
     try {
