@@ -137,6 +137,7 @@ describe("discoverApprovalResult", () => {
 
   test.each([
     ["expired_request", 410, "request_expired"],
+    ["invalid_request", 400, "request_expired"],
     ["expired_result", 410, "result_expired"],
     ["acknowledged", 409, "acknowledged"],
     ["not_found", 404, "not_found"],

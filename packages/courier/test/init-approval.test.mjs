@@ -316,14 +316,15 @@ scenario('a request OpenKey says expired: clear error, the request is dropped, a
   assert.equal(fx.created.length, 2);
 });
 
-scenario('a request whose own expiry has passed is refused without polling', async ({ fx, request, courier }) => {
+scenario('a request whose own expiry has passed is checked with OpenKey once, then reported expired', async ({ fx, request, courier }) => {
   await request();
   const pending = pendingFile();
   fs.writeFileSync(homeFile('approval-pending.json'), JSON.stringify({ ...pending, requestExpiresAt: new Date(Date.now() - 1000).toISOString() }), { mode: 0o600 });
+  fx.inject.discover.push({ status: 400, code: 'invalid_request' });
   const run = await courier('--wait');
   assert.equal(run.code, 1);
   assert.match(run.stderr, /\[approval-expired\]/);
-  assert.equal(fx.calls.length, 0);
+  assert.equal(fx.calls.length, 1);
   assert.equal((await request()).openkeyUrl === pending.approvalUrl, false);
 });
 
