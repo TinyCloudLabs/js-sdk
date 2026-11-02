@@ -264,16 +264,16 @@ scenario('a result OpenKey already acknowledged elsewhere cannot be fetched: the
 
 // ---- a default --wait stays inside an agent's tool-call limit ----
 
-scenario('a default --wait whose approval arrives late still ends inside 100 s, even with the agents space pending', async ({ t, fx, courier }) => {
+scenario('a default --wait whose approval arrives late still ends inside 70 s, even with the agents space pending', async ({ t, fx, courier }) => {
   const clock = fakeTime(t);
   stubSpaceProbe(t, missingSpace);
-  fx.pollsBeforeApproval = 43; // the owner approves on the 44th poll, 88 s in
+  fx.pollsBeforeApproval = 28; // the owner approves on the 29th poll, 56 s in
   fx.autoApprove = { options: { delegation: { spaceReady: null, spacePending: true } } };
   const run = await courier('--wait');
   assert.equal(run.code, 1, run.stderr);
   assert.match(run.stderr, /\[no-space\]/);
-  assert.ok(clock.elapsed() >= 86_000, `the approval came late (${clock.elapsed()} ms)`);
-  assert.ok(clock.elapsed() <= 100_000, `the whole command took ${clock.elapsed()} ms of waiting`);
+  assert.ok(clock.elapsed() >= 54_000, `the approval came late (${clock.elapsed()} ms)`);
+  assert.ok(clock.elapsed() <= 70_000, `the whole command took ${clock.elapsed()} ms of waiting`);
   assert.equal(fx.acks.length, 1, 'the grant is installed and acknowledged; init --resume finishes the space');
   assert.equal(loadProfile().status, 'awaiting-space');
 });
@@ -320,4 +320,29 @@ test('the courier README, both skill copies, the CLI README and --help all carry
     assert.ok(text.includes(flat(EXIT_EIGHT)), `${name} must say, in these words: ${EXIT_EIGHT}`);
     assert.ok(text.includes('{"pending":{"step":1,"of":1,"approvalUrl"'), `${name} must show the full pending shape`);
   }
+});
+
+// ---- --rotate-key warns when it throws away an approval the owner already gave ----
+
+scenario('--rotate-key --wait with a saved approval says on stderr that it discards that approval', async ({ t, fx, request, courier, errors }) => {
+  stubSpaceProbe(t, readySpace);
+  const printed = await request();
+  await fx.approve(printed.openkeyUrl);
+  const crash = crashAtWrite(t, 'approval-pending.json', { phase: 'after', when: (c) => c.resultEnvelope !== undefined });
+  await assert.rejects(cmdInit(parseArgs(['--wait'])), (error) => error instanceof Crash);
+  crash.disarm();
+  errors.length = 0;
+  fakeTime(t);
+  const run = await courier('--rotate-key', '--wait', '--timeout', '5s');
+  assert.equal(run.code, 8);
+  assert.match(errors.join('\n'), /discard.*approval.*already (gave|approved)|already approved.*discard/i);
+  assert.equal(fx.created.length, 2);
+});
+
+scenario('--rotate-key with no approval held prints no discard warning', async ({ request, courier, errors }) => {
+  await request();
+  errors.length = 0;
+  const run = await courier('--rotate-key', '--request');
+  assert.equal(run.code, 0, run.stderr);
+  assert.doesNotMatch(errors.join('\n'), /discard/i);
 });

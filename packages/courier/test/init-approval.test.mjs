@@ -276,12 +276,12 @@ scenario('--wait --timeout ends with exit 8 and the pending JSON, keeps the requ
   assert.equal(fx.acks.length, 1);
 });
 
-scenario('--wait without --timeout stops after 90 seconds, not never', async ({ t, courier, request }) => {
+scenario('--wait without --timeout stops after 60 seconds, not never', async ({ t, courier, request }) => {
   const clock = fakeTime(t);
   await request();
   const run = await courier('--wait');
   assert.equal(run.code, 8);
-  assert.ok(clock.elapsed() >= 90_000 && clock.elapsed() < 95_000, `waited ${clock.elapsed()} ms`);
+  assert.ok(clock.elapsed() >= 60_000 && clock.elapsed() < 65_000, `waited ${clock.elapsed()} ms`);
 });
 
 scenario('--timeout accepts up to 9 minutes and refuses anything else before touching the profile', async ({ t, courier }) => {
