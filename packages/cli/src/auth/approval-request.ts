@@ -315,6 +315,11 @@ function pendingApproval(entry: PendingApproval, approvalWait: ApprovalWait): CL
   return approvalPendingError({ step: approvalWait.step, of: approvalWait.of, approvalUrl: entry.approvalUrl, expiresAt: entry.requestExpiresAt });
 }
 
+/** A response body read that the request's own timeout, an abort or the connection ended (not a malformed body). */
+function bodyCutOff(error: unknown): boolean {
+  return error instanceof TypeError || (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError"));
+}
+
 /** OpenKey keeps an approved result this long (its 600 s retention); a request expired longer than that, plus clock skew, can no longer have one. */
 const RESULT_RETENTION_MS = 600_000;
 const CLOCK_SKEW_MS = 60_000;
@@ -441,8 +446,8 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
       if (!response.ok) await throwRemoteError(profile, entry, response, "discover");
       let discovered: { resultRef?: unknown; expiresAt?: unknown };
       try { discovered = await response.json() as { resultRef?: unknown; expiresAt?: unknown }; } catch (error) {
-        // Under --timeout a body the cap cut off is a network failure like a lost request; a malformed body is not.
-        if (!approvalWait || error instanceof SyntaxError) throw error;
+        // Under --timeout a body the request cap or the connection cut off is a network failure like a lost request.
+        if (!approvalWait || !bodyCutOff(error)) throw error;
         await pauseBetweenAttempts(profile, entry, approvalWait);
         continue;
       }
@@ -462,7 +467,7 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
       if (!fetched.ok) await throwRemoteError(profile, entry, fetched, "fetch");
       let result: Record<string, unknown>;
       try { result = await fetched.json() as Record<string, unknown>; } catch (error) {
-        if (!approvalWait || error instanceof SyntaxError) throw error;
+        if (!approvalWait || !bodyCutOff(error)) throw error;
         await pauseBetweenAttempts(profile, entry, approvalWait);
         continue;
       }
