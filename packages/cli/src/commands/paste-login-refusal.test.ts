@@ -91,13 +91,14 @@ mock.module("../output/errors.js", () => ({
   wrapError: (error: unknown) => error,
   setActiveProfileName: () => {},
 }));
+const outputs: unknown[] = [];
 mock.module("../output/formatter.js", () => ({
   operationWarnings: (value: unknown) => (Array.isArray(value) ? value : []),
   outputWarnings: () => {},
   isInteractive: () => false,
   shouldOutputJson: () => true,
   withSpinner: async (_label: string, action: () => Promise<unknown>) => action(),
-  outputJson: () => {},
+  outputJson: (value: unknown) => { outputs.push(value); },
   output: () => {},
   formatField: (label: string, value: unknown) => `${label}: ${value}`,
   formatTable: () => "",
@@ -165,7 +166,6 @@ const login = (...extra: string[]) => runAuth("login", "--method", "openkey", "-
 
 // [refusal code, its exit code today (unchanged), how the signed result is made refusable, extra login args]
 const REFUSALS: Array<[string, number, () => void, string[]]> = [
-  ["OPENKEY_EXPIRY_EXCEEDED", 5, () => { pickedLifetimeMs = 11 * 365 * DAY; }, []],
   ["OPENKEY_EXPIRY_TOO_SHORT", 5, () => { pickedLifetimeMs = 30_000; }, []],
   ["AUTH_EXPIRED", 3, () => { pickedLifetimeMs = -30_000; }, []],
   ["OPENKEY_PROOF_INVALID", 3, () => { pickedLifetimeMs = 7 * DAY; tamper = "signature"; }, []],
@@ -219,16 +219,35 @@ describe("tc auth login --paste: the profile and its key were created by this lo
     expect(lines(deletedLine())).toHaveLength(0);
     expect(lines(keptLine())).toHaveLength(0);
   });
+
+  // There is no upper bound on the paste path: whatever lifetime the owner signed is accepted and stored as signed.
+  for (const [years, lifetimeMs] of [[11, 11 * 365 * DAY], [30, 30 * 365 * DAY]] as const) {
+    test(`a ${years} year pick is ACCEPTED and stored as signed: no refusal, no cleanup, and auth status shows it`, async () => {
+      pickedLifetimeMs = lifetimeMs;
+      await login("--expiry", "7d");
+      expect(recordedErrors).toEqual([]);
+      expect(files(profileName)).toMatchObject({ key: true, session: true });
+      expect(await ProfileManager.profileExists(profileName)).toBe(true);
+      const saved = await ProfileManager.getSession(profileName) as { expiresAt?: string };
+      expect(saved.expiresAt).toBe(grantedUntil);
+      expect(Date.parse(saved.expiresAt!) - Date.now()).toBeGreaterThan(lifetimeMs - 60_000);
+      expect(lines(deletedLine())).toHaveLength(0);
+      expect(lines(keptLine())).toHaveLength(0);
+      outputs.length = 0;
+      await runAuth("status");
+      expect(outputs.at(-1)).toMatchObject({ authenticated: true, session: { state: "present", expiresAt: grantedUntil } });
+    });
+  }
 });
 
 describe("tc init --paste: the profile and its key were created by this command, so a refusal deletes them", () => {
-  test("OPENKEY_EXPIRY_EXCEEDED: no key, no saved approval, no profile; the dated deleted line once", async () => {
-    pickedLifetimeMs = 11 * 365 * DAY;
+  test("OPENKEY_EXPIRY_TOO_SHORT: no key, no saved approval, no profile; the dated deleted line once", async () => {
+    pickedLifetimeMs = 30_000;
     const program = new Command();
     program.option("-p, --profile <name>");
     registerInitCommand(program);
     await capturing(() => program.parseAsync(["node", "tc", "init", "--name", profileName, "--host", HOST, "--paste"], { from: "node" }));
-    expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_EXPIRY_EXCEEDED", exitCode: 5 })]);
+    expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_EXPIRY_TOO_SHORT", exitCode: 5 })]);
     expect(files(profileName)).toEqual({ key: false, pending: false, session: false });
     expect(await ProfileManager.profileExists(profileName)).toBe(false);
     expect(lines(deletedLine())).toHaveLength(1);
@@ -237,11 +256,11 @@ describe("tc init --paste: the profile and its key were created by this command,
 });
 
 describe("a key that ALREADY EXISTED (a profile this login did not create) is kept; only the saved approval goes", () => {
-  test("a key-only profile, OPENKEY_EXPIRY_EXCEEDED: key, profile and no-session state stay, the kept line is printed once", async () => {
+  test("a key-only profile, OPENKEY_EXPIRY_TOO_SHORT: key, profile and no-session state stay, the kept line is printed once", async () => {
     await createKeyOnlyProfile(profileName, HOST);
     const before = JSON.stringify(await ProfileManager.getKey(profileName));
-    pickedLifetimeMs = 11 * 365 * DAY;
-    await expect(capturing(() => refreshOpenKeySession(profileName, HOST, { paste: true }))).rejects.toMatchObject({ code: "OPENKEY_EXPIRY_EXCEEDED", exitCode: 5 });
+    pickedLifetimeMs = 30_000;
+    await expect(capturing(() => refreshOpenKeySession(profileName, HOST, { paste: true }))).rejects.toMatchObject({ code: "OPENKEY_EXPIRY_TOO_SHORT", exitCode: 5 });
     expect(savedPendingCopies).toBe(1);
     expect(files(profileName)).toEqual({ key: true, pending: false, session: false });
     expect(JSON.stringify(await ProfileManager.getKey(profileName))).toBe(before);
@@ -267,12 +286,12 @@ describe("a key that ALREADY EXISTED (a profile this login did not create) is ke
 
 describe("a key another login replaced while this approval was pending is not this login's to delete", () => {
   test("the profile created by this login keeps the key that is there now, the saved approval goes, the kept line is printed once", async () => {
-    pickedLifetimeMs = 11 * 365 * DAY;
+    pickedLifetimeMs = 30_000;
     const { generateKey } = await import("../auth/local-key.js");
     const other = (await generateKey()).jwk as Record<string, unknown>;
     replaceKeyDuringAcquisition = other;
     await login();
-    expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_EXPIRY_EXCEEDED" })]);
+    expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_EXPIRY_TOO_SHORT" })]);
     expect(((await ProfileManager.getKey(profileName)) as Record<string, unknown>).x).toBe(other.x);
     expect(files(profileName)).toEqual({ key: true, pending: false, session: false });
     expect(lines(keptLine())).toHaveLength(1);
@@ -280,10 +299,10 @@ describe("a key another login replaced while this approval was pending is not th
   });
 
   test("a session another login committed with this key while the approval was pending keeps it: the profile and key stay, the kept line is printed once", async () => {
-    pickedLifetimeMs = 11 * 365 * DAY;
+    pickedLifetimeMs = 30_000;
     sessionDuringAcquisition = true;
     await login();
-    expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_EXPIRY_EXCEEDED" })]);
+    expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_EXPIRY_TOO_SHORT" })]);
     expect(files(profileName)).toEqual({ key: true, pending: false, session: true });
     expect(await ProfileManager.profileExists(profileName)).toBe(true);
     expect(lines(keptLine())).toHaveLength(1);
@@ -302,11 +321,11 @@ describe("a profile with a LIVE session: its existing key is kept, byte for byte
     return before;
   };
 
-  test("an 11 year pick is refused, the key and the session stay, the saved approval goes, the kept line is printed once", async () => {
+  test("a 30 second pick (too short) is refused, the key and the session stay, the saved approval goes, the kept line is printed once", async () => {
     const before = await signedIn();
-    pickedLifetimeMs = 11 * 365 * DAY;
+    pickedLifetimeMs = 30_000;
     await login("--replace-session");
-    expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_EXPIRY_EXCEEDED", exitCode: 5 })]);
+    expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_EXPIRY_TOO_SHORT", exitCode: 5 })]);
     expect(savedPendingCopies).toBe(1);
     expect(files(profileName)).toEqual({ key: true, pending: false, session: true });
     expect(JSON.stringify(await ProfileManager.getKey(profileName))).toBe(before.key);
@@ -336,14 +355,14 @@ describe("a profile with a LIVE session: its existing key is kept, byte for byte
 });
 
 describe("tc auth rotate --paste: the rotation created the key, so a refusal deletes it", () => {
-  test("OPENKEY_EXPIRY_EXCEEDED", async () => {
+  test("OPENKEY_EXPIRY_TOO_SHORT", async () => {
     pickedLifetimeMs = 30 * DAY;
     await login();
     expect(recordedErrors).toEqual([]);
     stderr.length = 0;
-    pickedLifetimeMs = 11 * 365 * DAY;
+    pickedLifetimeMs = 30_000;
     await runAuth("rotate", "--paste", "--no-popup", "--force");
-    expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_EXPIRY_EXCEEDED", exitCode: 5 })]);
+    expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_EXPIRY_TOO_SHORT", exitCode: 5 })]);
     expect(files(profileName)).toEqual({ key: false, pending: false, session: false });
     expect(await ProfileManager.profileExists(profileName)).toBe(true);
     expect(lines(deletedLine())).toHaveLength(1);

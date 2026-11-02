@@ -2651,8 +2651,10 @@ describe("auth rotate --paste is a plain paste login", () => {
     expect(sessions.get("default")).toMatchObject({ expiresAt: expiry });
   });
 
-  test("refuses a pick beyond 10 years, naming the limit", async () => {
-    await rotate(inDays(11 * 365));
-    expect(recorded.errors).toEqual([expect.objectContaining({ code: "OPENKEY_EXPIRY_EXCEEDED", message: expect.stringContaining("more than 10 years") })]);
+  test("has no upper bound: an 11 year pick is accepted and the signed expiry is saved", async () => {
+    const expiry = inDays(11 * 365);
+    await rotate(expiry);
+    expect(recorded.errors).toEqual([]);
+    expect(sessions.get("default")).toMatchObject({ expiresAt: expiry });
   });
 });

@@ -1,6 +1,6 @@
 // TC-2276 (PR B): which commands are PLAIN paste logins. `tc init --paste` is one (it opts in to a user-chosen lifetime and
-// holds the signed one to the 10 year / 60 s policy bound); `tc onboard` with a pasted code is not (it never passes
-// `paste`, so it keeps its 30 day ceiling). `auth rotate --paste` is pinned in `auth.test.ts`.
+// accepts the signed one when it is more than 60 s away, with no upper bound); `tc onboard` with a pasted code is not (it
+// never passes `paste`, so it keeps its 30 day ceiling). `auth rotate --paste` is pinned in `auth.test.ts`.
 // Real ProfileManager, real refreshOpenKeySession and real link builder; only the OpenKey acquisition is simulated.
 
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
@@ -126,11 +126,13 @@ describe("tc init --paste is a plain paste login", () => {
     expect(Date.parse(saved.expiresAt!) - Date.now()).toBeGreaterThan(364 * DAY);
   });
 
-  test("refuses a pick beyond 10 years, naming the limit, and saves no session", async () => {
+  test("has no upper bound: an 11 year pick is accepted and the signed expiry is saved", async () => {
     pickedLifetimeMs = 11 * 365 * DAY;
     await init();
-    expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_EXPIRY_EXCEEDED", message: expect.stringContaining("more than 10 years") })]);
-    expect(await ProfileManager.getSession(profileName)).toBeNull();
+    expect(recordedErrors).toEqual([]);
+    const saved = await ProfileManager.getSession(profileName) as { expiresAt?: string; siwe: string };
+    expect(saved.expiresAt).toBe(signedExpiry(saved.siwe));
+    expect(Date.parse(saved.expiresAt!) - Date.now()).toBeGreaterThan(11 * 365 * DAY - 60_000);
   });
 
   test("without --paste there is no plain link and no opt-in", async () => {

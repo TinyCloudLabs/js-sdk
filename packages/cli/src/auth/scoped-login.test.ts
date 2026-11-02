@@ -553,9 +553,9 @@ describe("signed expiry ceiling", () => {
   });
 });
 
-// TC-2276 (PR B): a plain paste link opts in to a user-chosen expiry (`expiryChangeable`), so the ceiling is the policy
-// bound (more than 60 s, at most 10 years) instead of `--expiry` + 30 s. Every path that did not send the opt-in keeps
-// the `--expiry` ceiling.
+// TC-2276 (PR B): a plain paste link opts in to a user-chosen expiry (`expiryChangeable`), so the CLI accepts the lifetime
+// the owner signed as long as it is more than 60 s away (there is no upper bound) instead of `--expiry` + 30 s. Every path
+// that did not send the opt-in keeps the `--expiry` ceiling.
 describe("paste-link expiry opt-in", () => {
   const DAY = 86_400_000;
   const lastLine = (siwe: string) => /Expiration Time: (.+)/.exec(siwe)![1]!;
@@ -586,16 +586,15 @@ describe("paste-link expiry opt-in", () => {
     }
   });
 
-  test("a signed expiry more than 10 years away is refused with a message naming the limit, and nothing is saved", async () => {
-    for (const [lifetimeMs, expiry] of [[11 * 365 * DAY, "7d"], [3651 * DAY, undefined]] as const) {
-      await expect(loginWith(lifetimeMs, expiry ? { expiry } : {})).rejects.toMatchObject({
-        code: "OPENKEY_EXPIRY_EXCEEDED",
-        message: expect.stringContaining("more than 10 years"),
-      });
-      expect(await ProfileManager.getSession("scoped")).toBeNull();
+  test("there is no upper bound: an 11 year and a 30 year pick are accepted and saved as signed", async () => {
+    for (const [lifetimeMs, expiry] of [[11 * 365 * DAY, "7d"], [30 * 365 * DAY, "7d"], [3651 * DAY, undefined]] as const) {
+      await ProfileManager.clearSession("scoped");
+      const picked = await proof({ lifetimeMs });
+      await refreshOpenKeySession("scoped", host, { permissions: requested, paste: true, ...(expiry ? { expiry } : {}), openKeyAcquisition: async () => picked });
+      const saved = await ProfileManager.getSession("scoped") as { expiresAt?: string };
+      expect(saved.expiresAt).toBe(lastLine(picked.siwe));
+      expect(Date.parse(saved.expiresAt!) - Date.now()).toBeGreaterThan(lifetimeMs - 60_000);
     }
-    await loginWith(3649 * DAY);
-    expect(await ProfileManager.getSession("scoped")).not.toBeNull();
   });
 
   test("a signed expiry of 60 seconds or less is refused; a little over is accepted", async () => {
@@ -615,7 +614,7 @@ describe("paste-link expiry opt-in", () => {
       .rejects.toMatchObject({ code: "AUTH_EXPIRED" });
   });
 
-  test("an unscoped paste login (no permissions) gets the same bound: a longer pick is saved as signed, beyond 10 years or 60 seconds is refused", async () => {
+  test("an unscoped paste login (no permissions) gets the same rule: a longer pick, even 11 years, is saved as signed; 60 seconds or less is refused", async () => {
     const unscoped = (lifetimeMs: number, options: Record<string, unknown> = {}) =>
       refreshOpenKeySession("scoped", host, { paste: true, expiry: "7d", ...options, openKeyAcquisition: async () => proof({ lifetimeMs }) });
     await unscoped(30 * DAY);
@@ -623,7 +622,11 @@ describe("paste-link expiry opt-in", () => {
     expect(saved.expiresAt).toBe(lastLine(saved.siwe));
     expect(Date.parse(saved.expiresAt!) - Date.now()).toBeGreaterThan(29 * DAY);
     await ProfileManager.clearSession("scoped");
-    await expect(unscoped(11 * 365 * DAY)).rejects.toMatchObject({ code: "OPENKEY_EXPIRY_EXCEEDED", message: expect.stringContaining("more than 10 years") });
+    await unscoped(11 * 365 * DAY);
+    const long = await ProfileManager.getSession("scoped") as { expiresAt?: string; siwe: string };
+    expect(long.expiresAt).toBe(lastLine(long.siwe));
+    expect(Date.parse(long.expiresAt!) - Date.now()).toBeGreaterThan(11 * 365 * DAY - 60_000);
+    await ProfileManager.clearSession("scoped");
     await expect(unscoped(30_000)).rejects.toMatchObject({ code: "OPENKEY_EXPIRY_TOO_SHORT" });
     expect(await ProfileManager.getSession("scoped")).toBeNull();
   });

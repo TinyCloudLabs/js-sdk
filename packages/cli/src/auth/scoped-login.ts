@@ -417,9 +417,9 @@ export interface SignedSessionExpectations {
   expiry?: RequestedExpiry;
   /**
    * Set only for a request whose link carried the `expiryChangeable` opt-in (the plain paste link). OpenKey then lets
-   * the user pick any lifetime, so the ceiling is the policy bound instead of `expiry`: the signed expiry must be more
-   * than 60 seconds away and at most `EXPIRY.MAX_MS` (10 years). Signed approval requests, device login and prepared
-   * logins never send the opt-in and keep the `expiry` ceiling.
+   * the user pick any lifetime, so there is no `expiry` ceiling: the signed expiry only has to be more than 60 seconds
+   * away, with no upper bound. Signed approval requests, device login and prepared logins never send the opt-in and
+   * keep the `expiry` ceiling.
    */
   expiryChangeable?: boolean;
   /** Grant escalation stores a portable delegation, not a login session. */
@@ -496,13 +496,10 @@ export function verifySignedSession(
     throw new CLIError("AUTH_EXPIRED", `The approved session has expired. ${notStored}`, ExitCode.AUTH_REQUIRED);
   }
   if (expected.expiryChangeable === true) {
-    // The link told OpenKey the user may choose any lifetime, so `--expiry` is only a proposal. The signed value is
-    // held to the policy bound instead: more than 60 seconds, at most 10 years.
+    // The link told OpenKey the user may choose any lifetime, so `--expiry` is only a proposal. Whatever the owner signed
+    // is accepted as long as it is more than 60 seconds away: there is no upper bound.
     if (signedExpiry <= Date.now() + MIN_SIGNED_REMAINING_MS) {
       throw new CLIError("OPENKEY_EXPIRY_TOO_SHORT", `The signed session lasts 60 seconds or less, too short to use. Choose a longer lifetime in OpenKey. ${notStored}`, ExitCode.PERMISSION_DENIED);
-    }
-    if (signedExpiry > Date.now() + EXPIRY.MAX_MS) {
-      throw new CLIError("OPENKEY_EXPIRY_EXCEEDED", `The signed session expires more than 10 years from now, the longest this CLI accepts. Choose a shorter lifetime in OpenKey. ${notStored}`, ExitCode.PERMISSION_DENIED);
     }
   } else if (expected.expiry !== undefined && signedExpiry > expiryLimit(expected.expiry)) {
     throw new CLIError("OPENKEY_EXPIRY_EXCEEDED", `The signed session outlives the requested --expiry. Choose an earlier lifetime in OpenKey, or re-run with a longer --expiry. ${notStored}`, ExitCode.PERMISSION_DENIED);

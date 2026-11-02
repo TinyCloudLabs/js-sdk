@@ -596,8 +596,8 @@ describe("signed portable OpenKey grants", () => {
   });
 });
 
-// TC-2276 (PR B): `auth request --grant --paste` builds a plain link, so it opts in to a user-chosen expiry and holds the
-// signed one to the policy bound; the same command without --paste keeps the --expiry ceiling.
+// TC-2276 (PR B): `auth request --grant --paste` builds a plain link, so it opts in to a user-chosen expiry and accepts the
+// signed one (more than 60 s away, no upper bound); the same command without --paste keeps the --expiry ceiling.
 describe("grant paste-link expiry opt-in", () => {
   const YEAR_S = 365 * 86_400;
   const request = (...flags: string[]) => {
@@ -622,15 +622,14 @@ describe("grant paste-link expiry opt-in", () => {
     expect(new Date(stored[0]!.delegation.expiry).getTime()).toBe(siweExpiry(callback.siwe));
   });
 
-  test("--paste refuses a signed expiry more than 10 years away and stores nothing", async () => {
+  test("--paste has no upper bound: an 11 year pick is accepted and the signed expiry is stored", async () => {
     callback = await signedFor(11 * YEAR_S);
     acquire = async () => callback;
     await request("--paste");
-    expect(recordedErrors).toEqual([expect.objectContaining({
-      code: "OPENKEY_EXPIRY_EXCEEDED", message: expect.stringContaining("more than 10 years"),
-    })]);
-    expect(activated).toEqual([]);
-    expect(await loadAdditionalDelegations(profileName)).toEqual([]);
+    expect(recordedErrors).toEqual([]);
+    const stored = await loadAdditionalDelegations(profileName);
+    expect(stored).toHaveLength(1);
+    expect(new Date(stored[0]!.delegation.expiry).getTime()).toBe(siweExpiry(callback.siwe));
   });
 
   test("without --paste no opt-in is sent and a one-year pick is refused by the --expiry ceiling", async () => {
