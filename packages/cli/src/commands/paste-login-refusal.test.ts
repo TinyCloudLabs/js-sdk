@@ -46,11 +46,14 @@ async function proofFor(did: string, jwk: Record<string, unknown>, lifetimeMs: n
   };
 }
 
+let replaceKeyDuringAcquisition: Record<string, unknown> | undefined;
 let savePendingDelegation: typeof import("../auth/pending-code.js").savePendingDelegation;
 mock.module("../auth/browser-auth.js", () => ({
   ...realBrowserAuth,
   startAuthFlow: async (did: string, options: Record<string, unknown>) => {
     const delegation = await proofFor(did, options.jwk as Record<string, unknown>, pickedLifetimeMs);
+    // Another login replaces the profile's key while the owner is still approving.
+    if (replaceKeyDuringAcquisition !== undefined) await ProfileManager.setKey(options.profileName as string, replaceKeyDuringAcquisition);
     // What the real paste flow does right after it redeems a short code: keep the owner's approval locally.
     if (options.profileName !== undefined && Date.parse(/Expiration Time: (.+)/.exec(delegation.siwe)![1]!) > Date.now()) {
       await savePendingDelegation(options.profileName as string, "abcd-efgh", delegation as never);
@@ -107,6 +110,7 @@ beforeEach(async () => {
   stderr.length = 0;
   savedPendingCopies = 0;
   tamper = "none";
+  replaceKeyDuringAcquisition = undefined;
   profileName = `refusal-${++profileNumber}`;
   await ProfileManager.ensureConfigDir();
   await ProfileManager.setConfig({ ...(await ProfileManager.getConfig()), defaultProfile: "default" });
@@ -216,6 +220,21 @@ describe("a profile that already existed (key only, no session): the key and the
       expect(lines(DELETED_LINE)).toHaveLength(1);
     });
   }
+});
+
+describe("a key another login replaced while this approval was pending is not this login's to delete", () => {
+  test("the profile's current key stays, the saved approval goes, the kept line is printed once", async () => {
+    await createKeyOnlyProfile(profileName, HOST);
+    pickedLifetimeMs = 11 * 365 * DAY;
+    const { generateKey } = await import("../auth/local-key.js");
+    const other = (await generateKey()).jwk as Record<string, unknown>;
+    replaceKeyDuringAcquisition = other;
+    await expect(capturing(() => refreshOpenKeySession(profileName, HOST, { paste: true }))).rejects.toMatchObject({ code: "OPENKEY_EXPIRY_EXCEEDED" });
+    expect(((await ProfileManager.getKey(profileName)) as Record<string, unknown>).x).toBe(other.x);
+    expect(files(profileName)).toEqual({ key: true, pending: false, session: false });
+    expect(lines(KEPT_LINE)).toHaveLength(1);
+    expect(lines(DELETED_LINE)).toHaveLength(0);
+  });
 });
 
 describe("a profile with a LIVE session: its key is never deleted", () => {
