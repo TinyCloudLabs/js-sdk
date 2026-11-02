@@ -6,14 +6,15 @@ import { ulid } from 'ulid';
 import { TinyCloudNode, NodeWasmBindings, activateValidatedRuntimeDelegation, deserializeDelegation, serializeDelegation } from '@tinycloud/node-sdk';
 import type { PortableDelegation } from '@tinycloud/node-sdk';
 import { cmd } from './program.js';
-import { CourierError, errInfo } from './errors.js';
+import { CourierError, CourierPending, errInfo } from './errors.js';
 import { AGENT_GRANT, AGENT_GRANT_EXPIRY, COURIER_SPACE, DEFAULT_HOST, EXT, k, peerReadPermissions, PREFIX } from './keys.js';
 import {
   loadProfile, saveProfile, getPeer, profileDir, profileExists, loadKey, saveKey,
   type AgentKey, type Profile, type StoredPeer,
 } from './profile.js';
 import { courierNode, peerKv } from './node.js';
-import { courierGrantRequest, grantFromInput, installGrant, openKeyDelegateUrl, receiveGrant, resumeAwaitingGrant, resumeGrant } from './grant.js';
+import { courierGrantRequest, grantFromInput, installRefusing, isShortCode, noSpaceError, pendingSpaceError, receiveGrant, resumeAwaitingGrant, resumeGrant } from './grant.js';
+import { assertPendingReadable, clearPending, completeApproval, DEFAULT_WAIT_MS, holdsApproval, loadPending, MAX_WAIT_MS, readPending, requestApproval, waitApproval } from './grant-request.js';
 import {
   artifactA, artifactWithDelegation, parseArtifact, peerRecordBody, PEER_DELEGATION_EXPIRY, validateArtifactIdentity,
 } from './pairing.js';
@@ -94,6 +95,13 @@ export async function cmdInit(args: ParsedArgs) {
   if (args.has('resume') && (args.has('request') || args.has('grant-file') || args.has('paste') || args.has('rotate-key'))) {
     fail('usage', `\`${cmd('init --resume')}\` cannot be combined with --request, --grant-file, --paste or --rotate-key.`);
   }
+  const timeoutFlag = initValue(args, 'timeout');
+  if (args.has('wait') && (args.has('request') || args.has('grant-file') || args.has('paste') || args.has('resume'))) {
+    fail('usage', `\`${cmd('init --wait')}\` cannot be combined with --request, --grant-file, --paste or --resume.`);
+  }
+  if (timeoutFlag !== undefined && !args.has('wait')) fail('usage', `--timeout needs --wait.`);
+  const waitMs = timeoutFlag === undefined ? DEFAULT_WAIT_MS : durationMs(timeoutFlag);
+  if (!waitMs || waitMs > MAX_WAIT_MS) fail('usage', `--timeout must be a duration such as 60s or 5m, at most 9m.`);
   const grantFile = args.has('grant-file')
     ? requireFlag(args, 'grant-file', `Usage: ${cmd('init [--request | --grant-file <file|->]')}`)
     : undefined;
@@ -106,17 +114,29 @@ export async function cmdInit(args: ParsedArgs) {
     if (!profileExists()) fail('no-grant', `No Courier profile to resume. Run \`${cmd('init')}\` and approve a grant first.`);
     const profile = loadProfile();
     if (profile.status === 'awaiting-grant' && await resumeAwaitingGrant(profile)) {
+      dropOpenRequest();
       await finishInit(profile, profile.host);
       return;
     }
     if (profile.status !== 'awaiting-space') fail('usage', `\`${cmd('init --resume')}\` requires a profile in awaiting-space state.`);
     await resumeGrant(profile, loadKey());
+    dropOpenRequest();
     await finishInit(profile, profile.host);
     return;
   }
 
   const rotate = args.has('rotate-key');
+  // A writer must learn that the saved approval is unreadable BEFORE the key, grant or profile is changed.
+  if (args.has('request') || args.has('wait')) assertPendingReadable();
+  // Read before the key is replaced: an approval the owner already gave is bound to the old key and is lost by a rotation.
+  const heldApproval = rotate && (() => { const saved = loadPending(); return saved !== undefined && holdsApproval(saved); })();
   const prior = profileExists() && !rotate ? loadProfile() : undefined;
+  // A renewal is asked for with `--request`; `--wait` only collects. Starting a request here would hide its link on stderr.
+  if (args.has('wait') && prior && prior.status !== 'awaiting-grant' && !loadPending()) {
+    fail('usage', prior.status === 'awaiting-space'
+      ? `The grant is saved and the "${COURIER_SPACE}" space is still being set up: run \`${cmd('init --resume')}\`. \`${cmd('init --wait')}\` collects an approval that \`${cmd('init --request')}\` asked for.`
+      : `This profile already has a grant and no approval request is pending. To renew it, run \`${cmd('init --request')}\`, send the printed openkeyUrl to the owner, then run \`${cmd('init --wait')}\`.`);
+  }
   const key = prior ? loadKey() : newAgentKey();
   const host = hostFlag ?? prior?.host ?? process.env.COURIER_HOST ?? DEFAULT_HOST;
   const openkeyHost = openkeyHostFlag ?? prior?.openkeyHost ?? process.env.COURIER_OPENKEY_HOST ?? 'https://openkey.so';
@@ -147,10 +167,29 @@ export async function cmdInit(args: ParsedArgs) {
   saveProfile(profile);
   const request = courierGrantRequest(profile, key, expiry, { openkeyApiHost: apiHostFlag });
   if (rotate) console.error('Agent key rotated. Existing peer pairings must be re-established; the old grant remains valid until expiry.');
+  if (heldApproval) console.error('The saved approval request already held an approval from the owner. It is bound to the old agent key, so this key rotation discards that approval: the owner must approve a new request.');
 
   if (args.has('request')) {
-    const openkeyUrl = openKeyDelegateUrl(request);
-    printJson({ did: key.did, courierDid: profile.courierDid, publicJwk: Object.fromEntries(Object.entries(key.jwk).filter(([name]) => !['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth', 'k'].includes(name))), host, space: COURIER_SPACE, permissions: AGENT_GRANT, expiry, openkeyUrl });
+    const pending = await requestApproval(profile, key, args.get('expiry'), { openkeyApiHost: apiHostFlag });
+    console.error(`Send the owner this link to approve (it expires ${pending.requestExpiresAt}). Copy it exactly, never retype it:\n${pending.approvalUrl}\nThen run \`${cmd('init --wait --timeout 60s')}\` to collect the approval.`);
+    // A resumed request keeps the lifetime it was made with.
+    const lifetime = pending.request.grantLifetimeSeconds * 1000 === expiryMs ? expiry : `${pending.request.grantLifetimeSeconds}s`;
+    printJson({ did: key.did, courierDid: profile.courierDid, publicJwk: Object.fromEntries(Object.entries(key.jwk).filter(([name]) => !['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth', 'k'].includes(name))), host, space: COURIER_SPACE, permissions: AGENT_GRANT, expiry: lifetime, openkeyUrl: pending.approvalUrl });
+    return;
+  }
+
+  if (args.has('wait')) {
+    const deadline = Date.now() + waitMs;
+    const { pending, resumed } = await waitApproval(profile, key, args.get('expiry'), { openkeyApiHost: apiHostFlag });
+    if (!pending.committed) {
+      console.error(`${resumed ? 'Resuming the saved approval request.' : 'Created an approval request.'} Owner: approve it in OpenKey (copy the link exactly, never retype it):\n${pending.approvalUrl}\nWaiting for approval (up to ${Math.round(waitMs / 1000)} s). Run \`${cmd('init --wait')}\` again after an interruption; no new approval is needed.`);
+    }
+    if (await completeApproval(profile, key, pending, { deadline }) === 'deadline') {
+      throw new CourierPending({ step: 1, of: 1, approvalUrl: pending.approvalUrl, expiresAt: pending.requestExpiresAt });
+    }
+    const active = loadProfile();
+    if (active.status !== 'ready') throw active.spacePending ? pendingSpaceError(active) : noSpaceError(active);
+    await finishInit(active, active.host);
     return;
   }
 
@@ -160,8 +199,46 @@ export async function cmdInit(args: ParsedArgs) {
   } else {
     payload = await receiveGrant(request, { paste: args.has('paste') });
   }
-  await installGrant(profile, key, payload);
+  try {
+    await installRefusing(profile, key, payload, { viaCode: grantRaw !== undefined && isShortCode(grantRaw) });
+  } catch (error) {
+    // `no-space` means the grant IS saved (awaiting the space); any other error installed nothing and leaves an open short-link request alone.
+    if (error instanceof CourierError && error.code === 'no-space') clearPendingQuietly();
+    throw error;
+  }
+  // An open short-link request would otherwise be collected later, on top of this grant.
+  clearPendingQuietly();
   await finishInit(profile, host);
+}
+
+/**
+ * A grant was installed from another source (legacy import): the saved short-link request would be collected later, on top of it,
+ * so it is removed. Says so when it held an approval the owner gave (that approval is lost). Never fails the command.
+ */
+function clearPendingQuietly(): void {
+  try {
+    const read = readPending();
+    if (read.kind === 'ok' && read.pending.committed) {
+      console.error('This grant replaces a saved short-link approval that was already installed: its acknowledgement to OpenKey is never sent (harmless; OpenKey discards the result).');
+    } else if (read.kind === 'ok' && holdsApproval(read.pending)) {
+      console.error('This grant replaces the saved short-link approval: discarded a saved approval that was not installed.');
+    } else if (read.kind === 'unreadable' || read.kind === 'corrupt') {
+      console.error('This grant replaces the saved short-link request: discarded an unreadable saved approval request (it may have held an approval that was not installed).');
+    }
+    clearPending();
+  } catch (error) {
+    console.error(`warning: could not remove the saved approval request (${(error as Error).message}).`);
+  }
+}
+
+/**
+ * `init --resume` installed a grant: an open short-link request that holds nothing would be collected later, on top of it. One with a
+ * result reference, the encrypted result or a commit stays, so the next `init --wait` can install it or send its acknowledgement.
+ */
+function dropOpenRequest(): void {
+  // Only a request that holds nothing: one with a result reference, the encrypted result or a committed grant is kept for `--wait`.
+  const saved = loadPending();
+  if (saved && !holdsApproval(saved)) clearPendingQuietly();
 }
 
 async function finishInit(profile: Profile, host: string): Promise<void> {

@@ -36,10 +36,13 @@ arguments as the standalone `courier` bin and keeps its own agent identity in
 after `courier`:
 
 ```bash
-tinycloud courier init --paste --handle alice   # the owner approves in OpenKey; paste the XXXX-XXXX code
+tinycloud courier init --request --handle alice   # send the printed openkeyUrl to the owner, who approves in OpenKey
+tinycloud courier init --wait                     # collects the approval (exit 8 + {"pending":…} at --timeout, default 60s; re-run to resume)
 tinycloud courier inbox
 tinycloud courier --help
 ```
+
+`init --wait` stops after `--timeout` (default 60 s, at most 9m) with exit 8 and `{"pending":{"step":1,"of":1,"approvalUrl":…,"expiresAt":…}}` on stdout. Exit 8 is not a failure: the approval is still pending. Send the owner the `pending.approvalUrl` (the same link as `openkeyUrl`), ask them to approve it, then re-run `courier init --wait --timeout 60s`. Repeat while it exits 8. Any other non-zero exit is an error: stderr carries `[code]`.
 
 ## Operations coverage
 

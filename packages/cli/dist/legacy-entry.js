@@ -16597,6 +16597,9 @@ var init_p256 = __esm({
 // ../share-envelope/dist/links.js
 var links_exports = {};
 __export(links_exports, {
+  APPROVAL_POLL_INTERVAL_MS: () => APPROVAL_POLL_INTERVAL_MS,
+  APPROVAL_RESULT_CLIENT_ID: () => APPROVAL_RESULT_CLIENT_ID,
+  ApprovalClientError: () => ApprovalClientError,
   DEFAULT_LINKS_API_ORIGIN: () => DEFAULT_LINKS_API_ORIGIN,
   DEFAULT_SHARE_ORIGINS: () => DEFAULT_SHARE_ORIGINS,
   FULL_LINK_PATH: () => FULL_LINK_PATH,
@@ -16614,16 +16617,24 @@ __export(links_exports, {
   LinkError: () => LinkError,
   MAX_LINK_BODY_BYTES: () => MAX_LINK_BODY_BYTES,
   MAX_LINK_REQUEST_BYTES: () => MAX_LINK_REQUEST_BYTES,
+  ackApprovalResult: () => ackApprovalResult,
+  approvalSessionProof: () => approvalSessionProof,
   assertDidKeySignature: () => assertDidKeySignature,
   buildFullLink: () => buildFullLink,
   buildShortLink: () => buildShortLink,
+  checkApprovalResultBinding: () => checkApprovalResultBinding,
   checkLinkBody: () => checkLinkBody,
   checkLinkHeaderLife: () => checkLinkHeaderLife,
   checkLinkRecord: () => checkLinkRecord,
+  collectApprovalResult: () => collectApprovalResult,
   createApprovalRequest: () => createApprovalRequest,
   createLink: () => createLink,
   deleteLink: () => deleteLink,
+  discoverApprovalResult: () => discoverApprovalResult,
   ed25519KeyProblem: () => ed25519KeyProblem,
+  fetchApprovalResult: () => fetchApprovalResult,
+  generateRelayKey: () => generateRelayKey,
+  isApprovalClientError: () => isApprovalClientError,
   isLinkError: () => isLinkError,
   linkDeleteRequestV1Schema: () => linkDeleteRequestV1Schema,
   linkHeaderV1Schema: () => linkHeaderV1Schema,
@@ -16634,6 +16645,7 @@ __export(links_exports, {
   linkTypeSchema: () => linkTypeSchema,
   normalizeLinkId: () => normalizeLinkId,
   openLinkRecord: () => openLinkRecord,
+  openRelayResult: () => openRelayResult,
   parseApprovalRequest: () => parseApprovalRequest,
   parseLink: () => parseLink,
   parseLinkTimestamp: () => parseLinkTimestamp,
@@ -17428,7 +17440,204 @@ function signerFromJwk(jwk) {
   if (signer.did !== didKeyFromEd25519PublicKey(publicKey)) throw new LinkError("invalid_argument", "the JWK public key does not match its private key");
   return signer;
 }
-var SHA256_CODE2, ENVELOPE_AAD_LABEL2, SEALED_BLOB_VERSION, AAD2, KEY_LENGTH, NONCE_LENGTH, TAG_LENGTH, HEADER_LENGTH, LINK_TYPES, MAX_LINK_BODY_BYTES, MAX_LINK_REQUEST_BYTES, LINK_TYPE_SPECS, LINK_HEADER_DOMAIN, LINK_DELETE_DOMAIN, LINK_WINDOW_SECONDS, LINK_MIN_LIFE_SECONDS, LINK_MIN_BODY_BYTES, LINK_SEAL_OVERHEAD_BYTES, LINK_MAX_RECORD_HEADER_BYTES, DEFAULT_LINKS_API_ORIGIN, FULL_LINK_PATH, LINK_ID_PATTERN, LinkError, ED25519_MULTICODEC_PREFIX2, PUBLIC_KEY_LENGTH, ExtendedPoint, GROUP_ORDER, FIELD_PRIME, DID_KEY_PATTERN, SERVICE_ISSUER_PATTERN, AUDIENCE_PATTERN, TIMESTAMP_PATTERN, NONCE_PATTERN, CID_PATTERN, HEADER_KEYS, DELETE_KEYS, ed25519DidKey, linkTypeSchema, linkHeaderV1Schema, linkSignatureV1Schema, linkDeleteRequestV1Schema, LINK_FRAGMENT_VERSION, SHORT_PATH, SHORT_FRAGMENT, FULL_FRAGMENT, REMOVED_FRAGMENT, MAX_FULL_RECORD_JSON_BYTES, jsonObject, bytes32, ed25519Jwk, p256Jwk, origin, permission, requestSchema, DEFAULT_TIMEOUT_MS, MAX_JSON_RESPONSE_BYTES, AUDIENCE_ORIGIN, createdSchema, errorBodySchema, KEY_PARAMETER, DEFAULT_SHARE_ORIGINS;
+function isApprovalClientError(value4) {
+  return value4 instanceof ApprovalClientError;
+}
+function pathFor(action, requestId, resultRef) {
+  return action === "discover" ? `/api/approval-requests/${requestId}/result` : `/api/approval-results/${resultRef}/${action}`;
+}
+function approvalSessionProof(state2, action, resultRef = "", ackId = "") {
+  const jwk = state2.signingKey;
+  const thumbprint = toBase64Url(sha2562(utf8Bytes2(JSON.stringify({ crv: "Ed25519", kty: "OKP", x: jwk.x }))));
+  const header = toBase64Url(utf8Bytes2(JSON.stringify({ alg: "EdDSA", kid: thumbprint, typ: "openkey-session-proof+jwt" })));
+  const payload = toBase64Url(utf8Bytes2(JSON.stringify({
+    client_id: APPROVAL_RESULT_CLIENT_ID,
+    cred_hash: toBase64Url(sha2562(utf8Bytes2(JSON.stringify([action, state2.requestId, state2.bodyCid, resultRef, ackId])))),
+    htm: "POST",
+    htu: state2.apiOrigin + pathFor(action, state2.requestId, resultRef),
+    iat: Math.floor(Date.now() / 1e3),
+    jti: toBase64Url(globalThis.crypto.getRandomValues(new Uint8Array(24)))
+  })));
+  const input = `${header}.${payload}`;
+  return `${input}.${toBase64Url(ed25519.sign(utf8Bytes2(input), fromBase64Url2(jwk.d)))}`;
+}
+async function post(state2, action, resultRef, ackId, options) {
+  const body = action === "discover" ? { bodyCid: state2.bodyCid, header: state2.record.header, signature: state2.record.signature } : { requestId: state2.requestId, bodyCid: state2.bodyCid, ...action === "ack" ? { ackId } : {} };
+  const timeout = AbortSignal.timeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS);
+  try {
+    return await (options.fetch ?? globalThis.fetch)(state2.apiOrigin + pathFor(action, state2.requestId, resultRef), {
+      method: "POST",
+      credentials: "omit",
+      redirect: "error",
+      cache: "no-store",
+      referrerPolicy: "no-referrer",
+      headers: {
+        "content-type": "application/json",
+        "OpenKey-Session-Proof": approvalSessionProof(state2, action, resultRef, ackId)
+      },
+      body: JSON.stringify(body),
+      signal: options.signal ? AbortSignal.any([timeout, options.signal]) : timeout
+    });
+  } catch (error) {
+    if (options.signal?.aborted) throw error;
+    throw new ApprovalClientError("network", `OpenKey could not be reached to ${action} the approval result.`);
+  }
+}
+async function refuse(response, action) {
+  const body = await response.json().catch(() => null);
+  const code22 = typeof body?.code === "string" ? body.code : "";
+  const status = response.status;
+  if (code22 === "expired_request" || code22 === "invalid_request" && action === "discover") throw new ApprovalClientError("request_expired", "This approval request expired before it was approved.", status);
+  if (code22 === "expired_result") throw new ApprovalClientError("result_expired", "The approved result expired before it was collected.", status);
+  if (code22 === "acknowledged") throw new ApprovalClientError("acknowledged", "OpenKey has already acknowledged this result.", status);
+  if (code22 === "not_found") throw new ApprovalClientError("not_found", "OpenKey cannot find this approval request or result.", status);
+  if (code22 === "ack_conflict") throw new ApprovalClientError("ack_conflict", "OpenKey rejected a conflicting acknowledgement for this result.", status);
+  if (code22 === "request_binding" || code22 === "invalid_proof") {
+    throw new ApprovalClientError("request_binding", "OpenKey rejected the request or requester binding.", status);
+  }
+  throw new ApprovalClientError("unavailable", `OpenKey could not ${action} this approval result (HTTP ${status}).`, status);
+}
+async function discoverApprovalResult(state2, options = {}) {
+  const response = await post(state2, "discover", "", "", options);
+  if (response.status === 202) return { status: "pending" };
+  if (!response.ok) return refuse(response, "discover");
+  const found = await response.json().catch(() => null);
+  if (typeof found?.resultRef !== "string" || !RESULT_REF_PATTERN.test(found.resultRef) || typeof found.expiresAt !== "string" || !Number.isFinite(Date.parse(found.expiresAt))) {
+    throw new ApprovalClientError("result_invalid", "OpenKey returned an invalid approval result reference.");
+  }
+  return { status: "ready", resultRef: found.resultRef, expiresAt: found.expiresAt };
+}
+async function fetchApprovalResult(state2, found, options = {}) {
+  const response = await post(state2, "fetch", found.resultRef, "", options);
+  if (!response.ok) return refuse(response, "fetch");
+  const result = await response.json().catch(() => null);
+  if (!result || result.requestId !== state2.requestId || result.bodyCid !== state2.bodyCid || result.resultRef !== found.resultRef || result.expiresAt !== found.expiresAt || !result.relay || typeof result.relay !== "object") {
+    throw new ApprovalClientError("result_invalid", "The approval result does not match this request.");
+  }
+  return result.relay;
+}
+async function ackApprovalResult(state2, resultRef, ackId, options = {}) {
+  const response = await post(state2, "ack", resultRef, ackId, options);
+  const body = await response.clone().json().catch(() => null);
+  if (!response.ok && (body?.code === "expired_result" || body?.code === "not_found" || body?.code === "acknowledged")) return "settled";
+  if (!response.ok) return refuse(response, "ack");
+  if (body?.ackId !== ackId || body.status !== "acknowledged") {
+    throw new ApprovalClientError("unavailable", `OpenKey did not confirm the acknowledgement (HTTP ${response.status}).`, response.status);
+  }
+  return "acknowledged";
+}
+function bounded(options, now) {
+  if (options.deadline === void 0) return options;
+  return { ...options, timeoutMs: Math.min(options.timeoutMs ?? REQUEST_TIMEOUT_MS, Math.max(MIN_REQUEST_TIMEOUT_MS, options.deadline - now() + 1e3)) };
+}
+async function collectApprovalResult(state2, options = {}) {
+  const now = options.now ?? Date.now;
+  const sleep = options.sleep ?? defaultSleep;
+  const interval = options.intervalMs ?? APPROVAL_POLL_INTERVAL_MS;
+  let found = options.known;
+  for (; ; ) {
+    if (!found) {
+      let discovered;
+      try {
+        discovered = await discoverApprovalResult(state2, bounded(options, now));
+      } catch (error) {
+        if (!isApprovalClientError(error) || error.code !== "network") throw error;
+      }
+      if (discovered?.status === "ready") {
+        found = { resultRef: discovered.resultRef, expiresAt: discovered.expiresAt };
+        await options.onDiscovered?.(found);
+      }
+    }
+    if (found) {
+      try {
+        return { status: "result", ...found, relay: await fetchApprovalResult(state2, found, bounded(options, now)) };
+      } catch (error) {
+        if (!isApprovalClientError(error) || error.code !== "network") throw error;
+      }
+    }
+    if (options.deadline !== void 0 && now() >= options.deadline) return { status: "deadline" };
+    const wait2 = options.deadline === void 0 ? interval : Math.min(interval, Math.max(0, options.deadline - now()));
+    await sleep(wait2);
+    if (options.signal?.aborted) throw options.signal.reason;
+  }
+}
+function generateRelayKey() {
+  const privateKey = p2562.utils.randomPrivateKey();
+  const point = p2562.getPublicKey(privateKey, false);
+  return {
+    privateKey: toBase64Url(privateKey),
+    publicJwk: { kty: "EC", crv: "P-256", x: toBase64Url(point.subarray(1, 33)), y: toBase64Url(point.subarray(33)) }
+  };
+}
+function invalidResult(message) {
+  return new ApprovalClientError("result_invalid", message);
+}
+function strictBytes2(value4, label) {
+  if (typeof value4 !== "string" || !/^[A-Za-z0-9_-]+$/.test(value4)) throw invalidResult(`OpenKey returned an invalid ${label}.`);
+  try {
+    return fromBase64Url2(value4);
+  } catch {
+    throw invalidResult(`OpenKey returned an invalid ${label}.`);
+  }
+}
+async function openRelayResult(envelope, requestId, relayPrivateKey) {
+  if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) throw invalidResult("OpenKey returned an invalid encrypted relay result.");
+  const relay = envelope;
+  if (relay.version !== 1 || relay.algorithm !== "ECDH-P256-A256GCM") throw invalidResult("OpenKey returned an unsupported encrypted relay result.");
+  const peer = relay.ephemeralPublicJwk;
+  if (!peer || typeof peer !== "object" || peer.kty !== "EC" || peer.crv !== "P-256" || "d" in peer) throw invalidResult("OpenKey returned an invalid relay key.");
+  const x = strictBytes2(peer.x, "relay key");
+  const y = strictBytes2(peer.y, "relay key");
+  const nonce = strictBytes2(relay.nonce, "relay nonce");
+  const ciphertext = strictBytes2(relay.ciphertext, "relay ciphertext");
+  if (x.length !== 32 || y.length !== 32) throw invalidResult("OpenKey returned an invalid relay key.");
+  if (nonce.length !== 12 || ciphertext.length <= 16) throw invalidResult("OpenKey returned an invalid encrypted relay result.");
+  let secret;
+  try {
+    const point = new Uint8Array(65);
+    point[0] = 4;
+    point.set(x, 1);
+    point.set(y, 33);
+    p2562.ProjectivePoint.fromHex(point).assertValidity();
+    secret = p2562.getSharedSecret(fromBase64Url2(relayPrivateKey), point, true).subarray(1);
+  } catch {
+    throw invalidResult("OpenKey returned an invalid relay key.");
+  }
+  const salt = utf8Bytes2(requestId);
+  const key = hmac(sha2562, hmac(sha2562, salt, secret), Uint8Array.from([...utf8Bytes2(RELAY_INFO), 1]));
+  let value4;
+  try {
+    const aes = await globalThis.crypto.subtle.importKey("raw", key, "AES-GCM", false, ["decrypt"]);
+    const plain = await globalThis.crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: nonce, additionalData: salt, tagLength: 128 },
+      aes,
+      ciphertext
+    );
+    value4 = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(plain));
+  } catch {
+    throw invalidResult("OpenKey returned an unreadable encrypted relay result.");
+  }
+  if (!value4 || typeof value4 !== "object" || Array.isArray(value4)) throw invalidResult("OpenKey returned an invalid encrypted relay result.");
+  return value4;
+}
+function checkApprovalResultBinding(opened, expected) {
+  const { ownerDid, delegationExpiresAt, delegation } = opened;
+  const expiryValid = typeof delegationExpiresAt === "string" && Number.isFinite(Date.parse(delegationExpiresAt)) && new Date(delegationExpiresAt).toISOString() === delegationExpiresAt;
+  const differing = [
+    ["resultVersion", opened.resultVersion === 1],
+    ["requestId", opened.requestId === expected.requestId],
+    ["requestDigest", opened.requestDigest === expected.bodyCid],
+    ["requesterDid", opened.requesterDid === expected.request.issuer],
+    ["targetDid", opened.targetDid === expected.request.targetDid],
+    ["ownerDid", typeof ownerDid === "string" && ownerDid.length > 0],
+    ["delegationExpiresAt", expiryValid],
+    ["delegation", !!delegation && typeof delegation === "object" && !Array.isArray(delegation)]
+  ].filter(([, matches]) => !matches).map(([field]) => field);
+  if (differing.length > 0) throw invalidResult(`The encrypted result does not match this request (${differing.join(", ")}).`);
+  if (Date.parse(delegationExpiresAt) <= (expected.now ?? Date.now())) throw invalidResult("The approved delegation has already expired.");
+  return { ownerDid, delegationExpiresAt, delegation };
+}
+var SHA256_CODE2, ENVELOPE_AAD_LABEL2, SEALED_BLOB_VERSION, AAD2, KEY_LENGTH, NONCE_LENGTH, TAG_LENGTH, HEADER_LENGTH, LINK_TYPES, MAX_LINK_BODY_BYTES, MAX_LINK_REQUEST_BYTES, LINK_TYPE_SPECS, LINK_HEADER_DOMAIN, LINK_DELETE_DOMAIN, LINK_WINDOW_SECONDS, LINK_MIN_LIFE_SECONDS, LINK_MIN_BODY_BYTES, LINK_SEAL_OVERHEAD_BYTES, LINK_MAX_RECORD_HEADER_BYTES, DEFAULT_LINKS_API_ORIGIN, FULL_LINK_PATH, LINK_ID_PATTERN, LinkError, ED25519_MULTICODEC_PREFIX2, PUBLIC_KEY_LENGTH, ExtendedPoint, GROUP_ORDER, FIELD_PRIME, DID_KEY_PATTERN, SERVICE_ISSUER_PATTERN, AUDIENCE_PATTERN, TIMESTAMP_PATTERN, NONCE_PATTERN, CID_PATTERN, HEADER_KEYS, DELETE_KEYS, ed25519DidKey, linkTypeSchema, linkHeaderV1Schema, linkSignatureV1Schema, linkDeleteRequestV1Schema, LINK_FRAGMENT_VERSION, SHORT_PATH, SHORT_FRAGMENT, FULL_FRAGMENT, REMOVED_FRAGMENT, MAX_FULL_RECORD_JSON_BYTES, jsonObject, bytes32, ed25519Jwk, p256Jwk, origin, permission, requestSchema, DEFAULT_TIMEOUT_MS, MAX_JSON_RESPONSE_BYTES, AUDIENCE_ORIGIN, createdSchema, errorBodySchema, KEY_PARAMETER, DEFAULT_SHARE_ORIGINS, APPROVAL_RESULT_CLIENT_ID, APPROVAL_POLL_INTERVAL_MS, REQUEST_TIMEOUT_MS, MIN_REQUEST_TIMEOUT_MS, RESULT_REF_PATTERN, RELAY_INFO, ApprovalClientError, defaultSleep;
 var init_links = __esm({
   "../share-envelope/dist/links.js"() {
     "use strict";
@@ -17446,6 +17655,10 @@ var init_links = __esm({
     init_p256();
     init_zod();
     init_ed25519();
+    init_ed25519();
+    init_p256();
+    init_hmac();
+    init_sha256();
     SHA256_CODE2 = 18;
     ENVELOPE_AAD_LABEL2 = "tinycloud-share-envelope-v1";
     SEALED_BLOB_VERSION = 1;
@@ -17588,6 +17801,24 @@ var init_links = __esm({
     errorBodySchema = external_exports2.object({ error: external_exports2.string() }).passthrough();
     KEY_PARAMETER = /[#&]k=([A-Za-z0-9_-]{43})(?:&|$)/;
     DEFAULT_SHARE_ORIGINS = ["https://share.tinycloud.xyz"];
+    APPROVAL_RESULT_CLIENT_ID = "openkey-approval-result-v1";
+    APPROVAL_POLL_INTERVAL_MS = 2e3;
+    REQUEST_TIMEOUT_MS = 1e4;
+    MIN_REQUEST_TIMEOUT_MS = 1e3;
+    RESULT_REF_PATTERN = /^[A-Za-z0-9_-]{20,128}$/;
+    RELAY_INFO = "openkey-device-relay-v1";
+    ApprovalClientError = class extends Error {
+      code;
+      /** HTTP status of the OpenKey reply, when there was one. */
+      status;
+      constructor(code22, message, status) {
+        super(message);
+        this.name = "ApprovalClientError";
+        this.code = code22;
+        this.status = status;
+      }
+    };
+    defaultSleep = (ms2) => new Promise((resolve10) => setTimeout(resolve10, ms2));
   }
 });
 
@@ -34441,7 +34672,7 @@ async function pendingApprovalKey(profile) {
   const entries = await activePending(profile);
   return entries.find((entry) => entry.commandIntent === void 0 && !entry.committed)?.signingKey;
 }
-function approvalSessionProof(entry, action, resultRef = "", ackId = "") {
+function approvalSessionProof2(entry, action, resultRef = "", ackId = "") {
   const jwk = entry.signingKey;
   const jkt = createHash4("sha256").update(JSON.stringify({ crv: "Ed25519", kty: "OKP", x: jwk.x })).digest("base64url");
   const path = action === "discover" ? `/api/approval-requests/${entry.requestId}/result` : `/api/approval-results/${resultRef}/${action}`;
@@ -34460,7 +34691,7 @@ function approvalSessionProof(entry, action, resultRef = "", ackId = "") {
     format: "jwk"
   })).toString("base64url")}`;
 }
-async function post(entry, action, signingKey) {
+async function post2(entry, action, signingKey) {
   const ref = action === "discover" ? "" : entry.resultRef ?? "";
   const path = action === "discover" ? `/api/approval-requests/${entry.requestId}/result` : `/api/approval-results/${ref}/${action}`;
   const body = action === "discover" ? { bodyCid: entry.bodyCid, header: entry.record.header, signature: entry.record.signature } : { requestId: entry.requestId, bodyCid: entry.bodyCid, ...action === "ack" ? { ackId: entry.ackId } : {} };
@@ -34470,7 +34701,7 @@ async function post(entry, action, signingKey) {
     redirect: "error",
     cache: "no-store",
     referrerPolicy: "no-referrer",
-    headers: { "content-type": "application/json", "OpenKey-Session-Proof": approvalSessionProof({ requestId: entry.requestId, bodyCid: entry.bodyCid, apiOrigin: entry.apiOrigin, signingKey }, action, ref, action === "ack" ? entry.ackId : "") },
+    headers: { "content-type": "application/json", "OpenKey-Session-Proof": approvalSessionProof2({ requestId: entry.requestId, bodyCid: entry.bodyCid, apiOrigin: entry.apiOrigin, signingKey }, action, ref, action === "ack" ? entry.ackId : "") },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(1e4)
   });
@@ -34627,7 +34858,7 @@ ${entry.approvalUrl}
     for (; ; ) {
       let response;
       try {
-        response = await post(entry, "discover", signingKey);
+        response = await post2(entry, "discover", signingKey);
       } catch {
         await wait(2e3);
         continue;
@@ -34649,7 +34880,7 @@ ${entry.approvalUrl}
       await updatePending(profile, (items) => items.map((item) => item.requestId === entry.requestId ? entry : item));
       let fetched2;
       try {
-        fetched2 = await post(entry, "fetch", signingKey);
+        fetched2 = await post2(entry, "fetch", signingKey);
       } catch {
         continue;
       }
@@ -34741,7 +34972,7 @@ async function completeApprovalResult(profile, delegation) {
     if (entry.acknowledged) continue;
     let response;
     try {
-      response = await post(entry, "ack", ackKey);
+      response = await post2(entry, "ack", ackKey);
     } catch {
       throw new CLIError("APPROVAL_ACK_PENDING", "Approval is saved; ACK outcome is unknown. Retry this command to acknowledge the same result.", ExitCode.PENDING);
     }
@@ -39775,11 +40006,11 @@ import { link as link3, lstat as lstat8, open as open14, readFile as readFile11,
 import { basename as basename2, dirname as dirname8, join as join17, resolve as resolve5 } from "path";
 var RawExportRefusal = class extends Error {
 };
-function refuse(message) {
+function refuse2(message) {
   throw new RawExportRefusal(message);
 }
 function checkAbort(signal) {
-  if (signal?.aborted) refuse("Raw snapshot export was cancelled.");
+  if (signal?.aborted) refuse2("Raw snapshot export was cancelled.");
 }
 function strongETag(etag) {
   return typeof etag === "string" && /^"[\x21\x23-\x7e\x80-\xff]*"$/.test(etag);
@@ -39804,11 +40035,11 @@ function pageProof(page, inputCursor) {
 }
 function validateScope(page, options, nodeDid) {
   if (!page.source.nodeDid || page.source.space !== options.sourceSpace || page.source.prefix !== options.prefix || nodeDid !== void 0 && page.source.nodeDid !== nodeDid) {
-    refuse("The raw source scope changed or did not match the requested space and prefix.");
+    refuse2("The raw source scope changed or did not match the requested space and prefix.");
   }
 }
 function claimSourceKey(keys, key) {
-  if (!key || keys.has(key)) refuse("Raw capture contains duplicate or conflicting source identities.");
+  if (!key || keys.has(key)) refuse2("Raw capture contains duplicate or conflicting source identities.");
   keys.add(key);
 }
 async function assertUnusedOutput(path) {
@@ -39818,7 +40049,7 @@ async function assertUnusedOutput(path) {
     if (error.code === "ENOENT") return;
     throw error;
   }
-  refuse("Raw export output already exists; choose an unused output path.");
+  refuse2("Raw export output already exists; choose an unused output path.");
 }
 async function assertTrustedDirectoryChain(directory, uid, leaf = true, childUid, linkDepth = 0) {
   let path = directory;
@@ -39826,12 +40057,12 @@ async function assertTrustedDirectoryChain(directory, uid, leaf = true, childUid
   for (; ; ) {
     const entry = await lstat8(path);
     if (!Number.isSafeInteger(entry.uid) || !Number.isSafeInteger(entry.mode) || entry.uid !== uid && entry.uid !== 0) {
-      refuse("Raw export requires directories owned by the effective user or root.");
+      refuse2("Raw export requires directories owned by the effective user or root.");
     }
     if (entry.isSymbolicLink()) {
-      if (linkDepth >= 40) refuse("Raw export cannot verify cyclic or excessively nested directory aliases.");
+      if (linkDepth >= 40) refuse2("Raw export cannot verify cyclic or excessively nested directory aliases.");
       const targetBytes = await readlink(path, { encoding: "buffer" });
-      if (!isUtf8(targetBytes)) refuse("Raw export cannot verify a directory alias with an invalid UTF-8 target.");
+      if (!isUtf8(targetBytes)) refuse2("Raw export cannot verify a directory alias with an invalid UTF-8 target.");
       const target = targetBytes.toString("utf8");
       await assertTrustedDirectoryChain(
         target.startsWith("/") ? target : `${dirname8(path)}/${target}`,
@@ -39842,10 +40073,10 @@ async function assertTrustedDirectoryChain(directory, uid, leaf = true, childUid
       );
     } else {
       if (!entry.isDirectory() || leaf && entry.uid !== uid) {
-        refuse("Raw export requires an output directory owned by the effective user.");
+        refuse2("Raw export requires an output directory owned by the effective user.");
       }
       if ((entry.mode & 18) !== 0 && (leaf || (entry.mode & 512) === 0 || childUid !== uid && childUid !== 0)) {
-        refuse("Raw export refuses an output path writable or replaceable by other users.");
+        refuse2("Raw export refuses an output path writable or replaceable by other users.");
       }
     }
     const parent = dirname8(path);
@@ -39856,9 +40087,9 @@ async function assertTrustedDirectoryChain(directory, uid, leaf = true, childUid
   }
 }
 async function assertTrustedOutputDirectory(directory) {
-  if (typeof process.geteuid !== "function") refuse("Raw export requires verifiable POSIX ownership.");
+  if (typeof process.geteuid !== "function") refuse2("Raw export requires verifiable POSIX ownership.");
   const uid = process.geteuid();
-  if (!Number.isSafeInteger(uid) || uid < 0) refuse("Raw export cannot verify the effective filesystem owner.");
+  if (!Number.isSafeInteger(uid) || uid < 0) refuse2("Raw export cannot verify the effective filesystem owner.");
   await assertTrustedDirectoryChain(directory, uid);
   const physical = await realpath2(directory);
   if (physical !== directory) await assertTrustedDirectoryChain(physical, uid);
@@ -39866,12 +40097,12 @@ async function assertTrustedOutputDirectory(directory) {
 async function sidecarRows(options, keys) {
   if (options.sidecarsFile === void 0) return [];
   const config = JSON.parse(await readFile11(options.sidecarsFile, { encoding: "utf8", signal: options.signal }));
-  if (!Array.isArray(config)) refuse("Raw export sidecar configuration must be an array of explicit source records.");
+  if (!Array.isArray(config)) refuse2("Raw export sidecar configuration must be an array of explicit source records.");
   const rows = [];
   for (const value4 of config) {
     checkAbort(options.signal);
     if (value4 === null || typeof value4 !== "object" || typeof value4.sourceKey !== "string" || typeof value4.path !== "string" || !value4.path || !["watch-state", "thread-watch-state", "expiry-state"].includes(value4.sourceArea)) {
-      refuse("Raw export sidecar configuration contains an invalid explicit source record.");
+      refuse2("Raw export sidecar configuration contains an invalid explicit source record.");
     }
     const sidecar = value4;
     claimSourceKey(keys, sidecar.sourceKey);
@@ -39892,7 +40123,7 @@ async function publishSnapshot(outFile, snapshot, signal) {
     const assertStableParent = async () => {
       const current = await lstat8(parentPath);
       if (!current.isDirectory() || current.dev !== identity2.dev || current.ino !== identity2.ino) {
-        refuse("The raw export output directory changed during publication.");
+        refuse2("The raw export output directory changed during publication.");
       }
     };
     await assertStableParent();
@@ -39920,7 +40151,7 @@ async function publishSnapshot(outFile, snapshot, signal) {
 async function exportFeedRawSnapshot(options) {
   try {
     if (!/^tinycloud:[^\s:]+(?::[^\s:]+)+$/.test(options.sourceSpace) || !options.prefix || options.prefix.startsWith("/") || !options.prefix.endsWith("/") || !options.outFile || options.outFile === "-") {
-      refuse("Raw export requires an explicit full source-space URI, relative slash prefix and output file.");
+      refuse2("Raw export requires an explicit full source-space URI, relative slash prefix and output file.");
     }
     checkAbort(options.signal);
     const outFile = resolve5(options.outFile);
@@ -39937,20 +40168,20 @@ async function exportFeedRawSnapshot(options) {
       checkAbort(options.signal);
       const result = await options.kv.changes({ prefix: options.prefix, cursor, limit: 500, signal: options.signal });
       checkAbort(options.signal);
-      if (!result.ok) refuse("Could not read the raw change feed; explicit source read and sync authority are required.");
+      if (!result.ok) refuse2("Could not read the raw change feed; explicit source read and sync authority are required.");
       const page = result.data;
       validateScope(page, options, nodeDid);
       nodeDid = page.source.nodeDid;
       pages.push(pageProof(page, cursor));
       for (const change of page.changes) {
         checkAbort(options.signal);
-        if (!change.key.startsWith(options.prefix)) refuse("A raw change key falls outside the requested namespace.");
+        if (!change.key.startsWith(options.prefix)) refuse2("A raw change key falls outside the requested namespace.");
         claimSourceKey(keys, change.key);
         if (change.deleted) {
           deletions.push({ sourceKey: change.key, sourceArea: "kv", deleted: true });
           continue;
         }
-        if (!strongETag(change.etag)) refuse("Raw capture requires strong source ETags.");
+        if (!strongETag(change.etag)) refuse2("Raw capture requires strong source ETags.");
         const value4 = await options.kv.get(change.key, {
           prefix: "",
           binary: true,
@@ -39958,14 +40189,14 @@ async function exportFeedRawSnapshot(options) {
           signal: options.signal
         });
         checkAbort(options.signal);
-        if (!value4.ok) refuse("Could not read a raw source value at its change-feed revision.");
+        if (!value4.ok) refuse2("Could not read a raw source value at its change-feed revision.");
         if (!(value4.data.data instanceof Uint8Array) || !strongETag(value4.data.headers.etag) || value4.data.headers.etag !== change.etag) {
-          refuse("A raw source value changed during capture or did not provide matching strong ETags.");
+          refuse2("A raw source value changed during capture or did not provide matching strong ETags.");
         }
         rows.push({ ...rawRow(change.key, "kv", value4.data.data), etag: change.etag, metadata: { ...change.metadata } });
       }
       if (page.more && (page.cursor === cursor || cursors.has(page.cursor))) {
-        refuse("Raw change-feed pagination did not advance its opaque cursor.");
+        refuse2("Raw change-feed pagination did not advance its opaque cursor.");
       }
       cursor = page.cursor;
       if (!page.more) break;
@@ -39975,11 +40206,11 @@ async function exportFeedRawSnapshot(options) {
     checkAbort(options.signal);
     const tailResult = await options.kv.changes({ prefix: options.prefix, cursor, limit: 500, signal: options.signal });
     checkAbort(options.signal);
-    if (!tailResult.ok) refuse("Could not verify the final raw source cursor.");
+    if (!tailResult.ok) refuse2("Could not verify the final raw source cursor.");
     const tail = tailResult.data;
     validateScope(tail, options, nodeDid);
     if (tail.more || tail.changes.length !== 0 || tail.cursor !== cursor) {
-      refuse("The raw source changed during capture; no complete snapshot was published.");
+      refuse2("The raw source changed during capture; no complete snapshot was published.");
     }
     const snapshot = {
       format: "tinycloud.feed.raw-snapshot",
@@ -40087,7 +40318,7 @@ var bundleSchema = external_exports2.object({
   deletions: external_exports2.array(external_exports2.object({ sourceKey: text, classification, previousSha256: digest2.optional(), deletedAt: external_exports2.string().optional() }).strict()),
   quarantine: external_exports2.array(external_exports2.object({ sourceKey: text, reason: external_exports2.enum(["unknown", "invalid", "ambiguous-reference", "orphan-reference", "unmapped-publisher", "unresolved-issuance", "unsupported-receipt"]), detail: external_exports2.string() }).strict())
 }).strict();
-function refuse2() {
+function refuse3() {
   throw new CLIError(ErrorCodes.INVALID_INPUT, "Prepared feed bundle is structurally inconsistent");
 }
 function sameIdentity(a, b) {
@@ -40103,7 +40334,7 @@ function unique(values, key) {
   const map = /* @__PURE__ */ new Map();
   for (const value4 of values) {
     const id = key(value4);
-    if (map.has(id)) refuse2();
+    if (map.has(id)) refuse3();
     map.set(id, value4);
   }
   return map;
@@ -40111,19 +40342,19 @@ function unique(values, key) {
 function validateBundle(input) {
   try {
     const bundle = bundleSchema.parse(input);
-    if (bundle.source.previousSnapshotId === bundle.source.snapshotId) refuse2();
+    if (bundle.source.previousSnapshotId === bundle.source.snapshotId) refuse3();
     unique(bundle.origins, (origin2) => origin2.path);
-    for (const origin2 of bundle.origins) if (origin2.path.startsWith("/") || origin2.path.split("/").includes("..")) refuse2();
+    for (const origin2 of bundle.origins) if (origin2.path.startsWith("/") || origin2.path.split("/").includes("..")) refuse3();
     const rows = unique(bundle.sourceRows, (row) => row.sourceKey);
     const decoded = /* @__PURE__ */ new Map();
     const decoder = new TextDecoder("utf-8", { fatal: true });
     for (const row of rows.values()) {
-      if (row.sourceArea === "kv" && !row.sourceKey.startsWith(bundle.source.namespace)) refuse2();
+      if (row.sourceArea === "kv" && !row.sourceKey.startsWith(bundle.source.namespace)) refuse3();
       const bytes = Buffer.from(row.rawBase64, "base64");
-      if (bytes.toString("base64") !== row.rawBase64 || createHash7("sha256").update(bytes).digest("hex") !== row.sha256) refuse2();
+      if (bytes.toString("base64") !== row.rawBase64 || createHash7("sha256").update(bytes).digest("hex") !== row.sha256) refuse3();
       if (row.classification !== "quarantine") {
         const value4 = JSON.parse(decoder.decode(bytes));
-        if (!jsonValue(value4)) refuse2();
+        if (!jsonValue(value4)) refuse3();
         decoded.set(row.sourceKey, value4);
       }
     }
@@ -40134,41 +40365,41 @@ function validateBundle(input) {
     unique(bundle.cards, (card) => cardKey(card.publisherId, card.identity));
     const keys = (values) => {
       unique(values, (value4) => value4);
-      for (const key of values) if (!recipients.has(key)) refuse2();
+      for (const key of values) if (!recipients.has(key)) refuse3();
     };
     for (const card of cards.values()) {
       const raw = decoded.get(card.sourceKey);
-      if (!rows.has(card.sourceKey) || !publishers.has(card.publisherId) || !object2(raw) || typeof card.record.kind !== "string" || typeof card.record.id !== "string" || raw.kind !== card.record.kind || raw.id !== card.record.id || card.sourceKey !== `${bundle.source.namespace}board/${card.record.kind}/${card.record.id}.json` || !sameIdentity(card.identity, card.canonicalCard) || card.canonicalCard.kind !== card.record.kind) refuse2();
+      if (!rows.has(card.sourceKey) || !publishers.has(card.publisherId) || !object2(raw) || typeof card.record.kind !== "string" || typeof card.record.id !== "string" || raw.kind !== card.record.kind || raw.id !== card.record.id || card.sourceKey !== `${bundle.source.namespace}board/${card.record.kind}/${card.record.id}.json` || !sameIdentity(card.identity, card.canonicalCard) || card.canonicalCard.kind !== card.record.kind) refuse3();
       const payload = typedPayload.parse(card.canonicalCard.payload);
-      if (payload.source.ref !== card.sourceKey || !sameJSON(payload.sitrep.record, card.record) || card.currentAnswerSourceKey !== void 0 && !rows.has(card.currentAnswerSourceKey)) refuse2();
+      if (payload.source.ref !== card.sourceKey || !sameJSON(payload.sitrep.record, card.record) || card.currentAnswerSourceKey !== void 0 && !rows.has(card.currentAnswerSourceKey)) refuse3();
     }
     unique(bundle.routes, (route) => route.sourceKey);
     for (const route of bundle.routes) {
       const card = cards.get(route.sourceKey);
-      if (!card || card.record.kind !== route.card.kind || card.record.id !== route.card.id) refuse2();
+      if (!card || card.record.kind !== route.card.kind || card.record.id !== route.card.id) refuse3();
       keys(route.recipientKeys);
       keys(route.fallbackRecipientKeys);
     }
     const responses = unique(bundle.ownerResponses, (event) => event.response.responseId);
     unique(bundle.ownerResponses, (event) => event.eventKey);
     for (const event of responses.values()) {
-      if (!rows.has(event.sourceKey) || !publishers.has(event.publisherId)) refuse2();
+      if (!rows.has(event.sourceKey) || !publishers.has(event.publisherId)) refuse3();
       keys(event.recipientKeys);
-      if (event.restoreTarget === "agent-response" && !event.recipientKeys.some((key) => recipients.get(key)?.runtimeTarget)) refuse2();
+      if (event.restoreTarget === "agent-response" && !event.recipientKeys.some((key) => recipients.get(key)?.runtimeTarget)) refuse3();
     }
     for (const delivery of bundle.deliveries) {
       const event = responses.get(delivery.responseId);
       const recipient = recipients.get(delivery.recipientKey);
-      if (!rows.has(delivery.sourceKey) || !rows.has(delivery.eventSourceKey) || !event || !recipient || delivery.publisherId !== event.publisherId || delivery.eventSourceKey !== event.sourceKey || delivery.eventKey !== event.eventKey || !sameIdentity(delivery.identity, event.response) || !event.recipientKeys.includes(delivery.recipientKey)) refuse2();
-      if (delivery.dispatch === "resolved-pending" && (!recipient.runtimeTarget || delivery.state !== "pending" || event.restoreTarget !== "agent-response")) refuse2();
-      if (["delivered", "unconfirmed", "refused"].includes(delivery.state) && delivery.dispatch !== "never") refuse2();
+      if (!rows.has(delivery.sourceKey) || !rows.has(delivery.eventSourceKey) || !event || !recipient || delivery.publisherId !== event.publisherId || delivery.eventSourceKey !== event.sourceKey || delivery.eventKey !== event.eventKey || !sameIdentity(delivery.identity, event.response) || !event.recipientKeys.includes(delivery.recipientKey)) refuse3();
+      if (delivery.dispatch === "resolved-pending" && (!recipient.runtimeTarget || delivery.state !== "pending" || event.restoreTarget !== "agent-response")) refuse3();
+      if (["delivered", "unconfirmed", "refused"].includes(delivery.state) && delivery.dispatch !== "never") refuse3();
     }
-    for (const value4 of [...bundle.ownerState, ...bundle.checkpoints, ...bundle.quarantine]) if (!rows.has(value4.sourceKey)) refuse2();
-    for (const thread of bundle.threads) if (!rows.has(thread.sourceKey) || !publishers.has(thread.publisherId)) refuse2();
+    for (const value4 of [...bundle.ownerState, ...bundle.checkpoints, ...bundle.quarantine]) if (!rows.has(value4.sourceKey)) refuse3();
+    for (const thread of bundle.threads) if (!rows.has(thread.sourceKey) || !publishers.has(thread.publisherId)) refuse3();
     unique(bundle.deletions, (deletion) => deletion.sourceKey);
     return bundle;
   } catch {
-    refuse2();
+    refuse3();
   }
 }
 function safeError(error) {
@@ -40198,53 +40429,53 @@ async function verifyRegistry(owner, publishers) {
   const basenames = /* @__PURE__ */ new Set(["home_feed", "threads"]);
   for (const raw of result.rows) {
     const row = registryRow.parse(raw);
-    if (registered.has(row[0])) refuse2();
+    if (registered.has(row[0])) refuse3();
     const expected = value2(feedResourceNames(FEED_PREFIX, row[0]));
-    if (row[3] !== expected.outputResource || row[4] !== expected.responseResource) refuse2();
+    if (row[3] !== expected.outputResource || row[4] !== expected.responseResource) refuse3();
     for (const resource of [row[3], row[4]]) {
       const basename7 = resource.split("/").at(-1);
-      if (basenames.has(basename7)) refuse2();
+      if (basenames.has(basename7)) refuse3();
       basenames.add(basename7);
     }
     registered.set(row[0], row);
   }
   for (const publisher of publishers) {
     const row = registered.get(publisher.agentId);
-    if (!row || row[1] !== publisher.agentDid || row[3] !== publisher.outputResource || row[4] !== publisher.responseResource) refuse2();
+    if (!row || row[1] !== publisher.agentDid || row[3] !== publisher.outputResource || row[4] !== publisher.responseResource) refuse3();
   }
 }
 async function archiveRow(owner, bundle, snapshotId) {
   const rows = value2(await owner.query("SELECT bundle_json FROM feed_owner_imports WHERE source_space_id = ? AND namespace = ? AND snapshot_id = ?", [bundle.source.spaceId, bundle.source.namespace, snapshotId])).rows;
-  if (rows.length > 1 || rows.length && typeof rows[0][0] !== "string") refuse2();
+  if (rows.length > 1 || rows.length && typeof rows[0][0] !== "string") refuse3();
   return rows.length ? String(rows[0][0]) : void 0;
 }
 async function priorCards(owner, bundle, bytes) {
   const known = /* @__PURE__ */ new Map();
   const exists = value2(await owner.query("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?", ["feed_owner_imports"])).rows.length > 0;
   if (!exists) {
-    if (bundle.source.previousSnapshotId) refuse2();
+    if (bundle.source.previousSnapshotId) refuse3();
     return known;
   }
   const current = await archiveRow(owner, bundle, bundle.source.snapshotId);
-  if (current !== void 0 && current !== bytes) refuse2();
+  if (current !== void 0 && current !== bytes) refuse3();
   const publishers = new Map(bundle.publishers.map((publisher) => [publisher.publisherId, publisher]));
   const visited = /* @__PURE__ */ new Set([bundle.source.snapshotId]);
   let predecessor = bundle.source.previousSnapshotId;
   while (predecessor) {
-    if (visited.has(predecessor)) refuse2();
+    if (visited.has(predecessor)) refuse3();
     visited.add(predecessor);
     const prior = await archiveRow(owner, bundle, predecessor);
-    if (prior === void 0) refuse2();
+    if (prior === void 0) refuse3();
     const parsed = JSON.parse(prior);
     const history = validateBundle(parsed);
-    if (history.source.spaceId !== bundle.source.spaceId || history.source.namespace !== bundle.source.namespace || history.source.snapshotId !== predecessor) refuse2();
+    if (history.source.spaceId !== bundle.source.spaceId || history.source.namespace !== bundle.source.namespace || history.source.snapshotId !== predecessor) refuse3();
     for (const card of history.cards) {
       const publisher = history.publishers.find((item) => item.publisherId === card.publisherId);
       const currentPublisher = publishers.get(card.publisherId);
       if (!publisher || !currentPublisher || !sameJSON(publisher, currentPublisher)) continue;
       const key = cardKey(card.publisherId, card.identity);
       const previous = known.get(key);
-      if (previous && !sameJSON(previous.canonicalCard, card.canonicalCard)) refuse2();
+      if (previous && !sameJSON(previous.canonicalCard, card.canonicalCard)) refuse3();
       known.set(key, card);
     }
     predecessor = history.source.previousSnapshotId;
@@ -40258,7 +40489,7 @@ function prepareRecords(bundle, known) {
   for (const card of bundle.cards) {
     const key = cardKey(card.publisherId, card.identity);
     const previous = known.get(key);
-    if (previous && !sameJSON(previous.canonicalCard, card.canonicalCard)) refuse2();
+    if (previous && !sameJSON(previous.canonicalCard, card.canonicalCard)) refuse3();
     known.set(key, card);
     included.add(key);
     records.get(card.publisherId).cards.push(card.canonicalCard);
@@ -40274,7 +40505,7 @@ function prepareRecords(bundle, known) {
     const key = cardKey(event.publisherId, event.response);
     const parent = known.get(key);
     if (event.restoreTarget === "owner-only") continue;
-    if (!parent || parent.record.kind !== event.card.kind || parent.record.id !== event.card.id) refuse2();
+    if (!parent || parent.record.kind !== event.card.kind || parent.record.id !== event.card.id) refuse3();
     const group = records.get(event.publisherId);
     if (!included.has(key)) {
       group.cards.push(parent.canonicalCard);
@@ -40294,20 +40525,20 @@ function prepareRecords(bundle, known) {
 async function saveArchive(owner, bundle, bytes) {
   value2(await owner.execute(ARCHIVE_SCHEMA));
   const existing = await archiveRow(owner, bundle, bundle.source.snapshotId);
-  if (existing !== void 0 && existing !== bytes) refuse2();
+  if (existing !== void 0 && existing !== bytes) refuse3();
   if (existing === void 0) {
-    if (bundle.source.previousSnapshotId && await archiveRow(owner, bundle, bundle.source.previousSnapshotId) === void 0) refuse2();
+    if (bundle.source.previousSnapshotId && await archiveRow(owner, bundle, bundle.source.previousSnapshotId) === void 0) refuse3();
     try {
       value2(await owner.execute("INSERT INTO feed_owner_imports (source_space_id, namespace, snapshot_id, bundle_json, created_at) VALUES (?, ?, ?, ?, ?)", [bundle.source.spaceId, bundle.source.namespace, bundle.source.snapshotId, bytes, (/* @__PURE__ */ new Date()).toISOString()]));
     } catch (error) {
       if (await archiveRow(owner, bundle, bundle.source.snapshotId) !== bytes) throw error;
     }
   }
-  if (await archiveRow(owner, bundle, bundle.source.snapshotId) !== bytes) refuse2();
+  if (await archiveRow(owner, bundle, bundle.source.snapshotId) !== bytes) refuse3();
 }
 async function importFeedPreparedBundle(options) {
   try {
-    if (typeof options.targetSpace !== "string" || !options.targetSpace.startsWith("tinycloud:") || !parseSpaceUri2(options.targetSpace)?.owner) refuse2();
+    if (typeof options.targetSpace !== "string" || !options.targetSpace.startsWith("tinycloud:") || !parseSpaceUri2(options.targetSpace)?.owner) refuse3();
     const bundle = validateBundle(options.bundle);
     const bytes = JSON.stringify(options.bundle);
     const owner = privateDatabase(options.sql.db(OWNER_RESOURCE));

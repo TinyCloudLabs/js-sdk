@@ -1,5 +1,5 @@
 import { parseArgs, type ParsedArgs } from './args.js';
-import { CourierError, errInfo } from './errors.js';
+import { CourierError, CourierPending, EXIT_PENDING, errInfo } from './errors.js';
 import {
   requestHelp, cmdInit, cmdManifest, cmdPair, cmdRevoke, cmdSend, cmdInbox, cmdRead, cmdTask, cmdRequest, cmdOrders,
 } from './commands.js';
@@ -31,10 +31,21 @@ Setup & pairing (humans run these):
                                    Resume the same invitation and durable winning claim.
   join <invitation-link> --consent [--wait 300]
                                    Join and activate the link's intended session; never create a substitute.
-  init [--request | --grant-file f|- | --paste | --resume] [--host url] [--openkey-host url]
-       [--openkey-api-host url] [--label s] [--handle h] [--expiry 30d] [--rotate-key]
+  init [--request | --wait [--timeout 60s] | --grant-file f|- | --paste | --resume] [--host url]
+       [--openkey-host url] [--openkey-api-host url] [--label s] [--handle h] [--expiry 30d] [--rotate-key]
                                    Create/renew the agent key's restricted grant in OpenKey.
-                                   --paste and --grant-file also take an OpenKey XXXX-XXXX code.
+                                   --request prints {"openkeyUrl": …}, a short https://openkey.so/a/… link for the
+                                   owner (send it to the owner only, privately), and exits. --wait then collects the
+                                   approval (no code to paste): it polls, installs the grant, and acknowledges it.
+                                   --timeout (default 60s, at most 9m) ends the wait with exit 8 and, on stdout,
+                                   {"pending":{"step":1,"of":1,"approvalUrl","expiresAt"}}.
+                                   Exit 8 is not a failure: the approval is still pending. Send the owner the
+                                   \`pending.approvalUrl\` (the same link as \`openkeyUrl\`), ask them to approve it, then
+                                   re-run \`${name} init --wait --timeout 60s\`. Repeat while it exits 8. Any other
+                                   non-zero exit is an error: stderr carries \`[code]\`.
+                                   The same request resumes each time: no second link, no second approval.
+                                   An approved result is kept by OpenKey for 10 minutes only: wait promptly.
+                                   --paste and --grant-file still take an old OpenKey XXXX-XXXX code.
   manifest                         Print the agent grant permissions
   pair start <peer> [--call-me h]  Emit pairing artifact A (paste to the peer)
   pair accept <json|--file f|--stdin>
@@ -190,7 +201,8 @@ export async function run(argv: string[]): Promise<void> {
 
 /**
  * Run Courier with `argv` (no program name) and return the exit code:
- * 0 on success, 2 on a usage error, 1 on any other error. `prog` names
+ * 0 on success, 2 on a usage error, 8 when a bounded wait (`init --wait`) ended before the owner approved
+ * (stdout carries `{"pending": …}`), 1 on any other error. `prog` names
  * Courier in usage text and hints, e.g. `tc courier`.
  */
 export async function main(argv: string[], opts: { prog?: string } = {}): Promise<number> {
@@ -199,6 +211,10 @@ export async function main(argv: string[], opts: { prog?: string } = {}): Promis
     await run(argv);
     return 0;
   } catch (e) {
+    if (e instanceof CourierPending) {
+      process.stdout.write(JSON.stringify({ pending: e.pending }, null, 2) + '\n');
+      return EXIT_PENDING;
+    }
     const info = errInfo(e);
     if (e instanceof CourierError && e.code === 'usage') {
       console.error(info.message);
