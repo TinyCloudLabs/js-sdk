@@ -71,23 +71,55 @@ const SHARE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
  */
 const APP_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
-/**
- * Hard ceiling for caller-supplied expiry. Effectively "forever" — the
- * constant exists primarily to guard against integer overflow / typo'd
- * input, not as a security policy lever. Long-lived API-token-style
- * delegations are a first-class use case; revocation is the right
- * control for them.
- */
-const MAX_MS = 10 * 365 * 24 * 60 * 60 * 1000; // 10 years
-
 export const EXPIRY = {
   EPHEMERAL_MS,
   SIGNED_READ_URL_MS,
   SESSION_MS,
   SHARE_MS,
   APP_MS,
-  MAX_MS,
 } as const;
+
+/**
+ * The latest expiry a wallet-signed message (a SIWE session or delegation) can
+ * carry: 9999-12-31T23:59:59Z. SIWE writes times as RFC 3339 with a four-digit
+ * year, and the WASM and the node both refuse a year of 10000 or more.
+ */
+export const MAX_SIWE_EXPIRY_MS = 253402300799000;
+
+/**
+ * The latest expiry a token signed by the session key (`delegateTo`, agent and
+ * share delegations) can carry: 2255-06-05T23:47:34Z, floored to the second.
+ * The WASM's UCAN timestamps are exact to the microsecond in a double, which
+ * stops there. A session itself may still be signed to 9999.
+ */
+export const MAX_UCAN_EXPIRY_MS = 9007199254000;
+
+export type TechnicalExpiryKind = "siwe" | "ucan";
+
+/**
+ * Why `expiresAt` cannot be written into a message of this kind, or `null` when
+ * it can. These are the only upper limits on a lifetime the owner chooses; they
+ * are technical, not policy. An invalid Date, NaN and Infinity are refused too,
+ * because `toISOString()` throws a bare `RangeError` on them.
+ */
+export function technicalExpiryRefusal(expiresAt: Date | number, kind: TechnicalExpiryKind): string | null {
+  const ms = Number(expiresAt);
+  const siwe = kind === "siwe";
+  const last = siwe ? "9999-12-31" : "2255-06-05";
+  if (!Number.isFinite(ms)) return `expiry is not a valid date or is too far away to hold; choose one before ${last}`;
+  if (ms <= (siwe ? MAX_SIWE_EXPIRY_MS : MAX_UCAN_EXPIRY_MS)) return null;
+  return `expiry is later than ${last}, ${
+    siwe
+      ? "the latest date a TinyCloud sign-in message can carry"
+      : "the latest date an agent or share delegation can carry (UCAN limit); the session itself can be signed to 9999-12-31"
+  }; choose an earlier expiry`;
+}
+
+/** Throws the {@link technicalExpiryRefusal} message as an `Error`. */
+export function assertExpiryWithinTechnicalLimit(expiresAt: Date | number, kind: TechnicalExpiryKind): void {
+  const refusal = technicalExpiryRefusal(expiresAt, kind);
+  if (refusal) throw new Error(refusal);
+}
 
 export const DEFAULT_SIGNED_READ_URL_EXPIRY_MS = EXPIRY.SIGNED_READ_URL_MS;
 

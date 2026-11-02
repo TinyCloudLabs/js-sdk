@@ -121,18 +121,38 @@ describe("with the opt-in", () => {
     expect(session.siwe).toBe(s.prepared.siwe);
   });
 
-  test("an expiry in the past, inside the 60 second margin, or beyond 10 years is refused and creates no session", async () => {
+  test("an expiry in the past or inside the 60 second margin is refused and creates no session", async () => {
     // An already-expired message never reaches the expiry check: SIWE verification refuses it first.
     for (const [offset, message] of [
       [-1_000, "OpenKey signature verification failed: Expired message"],
       [30_000, "OpenKey signedMessage expiry must be more than 60 seconds from now; choose a longer expiry"],
-      [11 * 365 * DAY_MS, "OpenKey signedMessage expiry is more than 10 years away, the longest this SDK accepts; choose a shorter expiry"],
     ] as const) {
       const s = await setup();
       await expect(complete(s, withExpiration(s.prepared.siwe, iso(offset)), { expiryChangeable: true })).rejects.toThrow(message);
       expect(s.auth.tinyCloudSession).toBeUndefined();
       expect(await s.storage.load(await s.signer.getAddress())).toBeNull();
     }
+  });
+
+  // The former ten-year ceiling is gone: the only upper bound is the latest date a sign-in message can carry.
+  test("a signed expiry of eleven years, a hundred years or the last second of 9999 is accepted and persisted as signed", async () => {
+    for (const expiry of [iso(11 * 365 * DAY_MS), iso(100 * 365 * DAY_MS), "9999-12-31T23:59:59.000Z"]) {
+      const s = await setup();
+      const signed = withExpiration(s.prepared.siwe, expiry);
+      const session = await complete(s, signed, { expiryChangeable: true });
+      expect(session.siwe).toBe(signed);
+      expect((await s.storage.load(await s.signer.getAddress()))?.expiresAt).toBe(expiry);
+    }
+  });
+
+  test("a signed expiry in year 10000 is refused and creates no session", async () => {
+    const s = await setup();
+    const signed = withExpiration(s.prepared.siwe, "+010000-01-01T00:00:00.000Z");
+    const refusal = await complete(s, signed, { expiryChangeable: true }).catch((error: unknown) => error);
+    expect(refusal).toBeInstanceOf(Error);
+    expect(refusal).not.toBeInstanceOf(RangeError);
+    expect(s.auth.tinyCloudSession).toBeUndefined();
+    expect(await s.storage.load(await s.signer.getAddress())).toBeNull();
   });
 
   test("a changed nonce or Issued At together with a valid expiry is refused with the unchanged message", async () => {
