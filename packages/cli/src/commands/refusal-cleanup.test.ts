@@ -497,7 +497,7 @@ describe("ensureDelegationAuthority: a refused approval of an established profil
   const node = { hasRuntimePermissions: () => false, useRuntimeDelegation: async () => { throw new Error("nothing may be activated"); } } as never;
   const request = (space: string, path = ""): Permission => ({ service: "tinycloud.kv", space, path, actions: ["tinycloud.kv/get"] });
   const grantedFiles = (name: string) => existsSync(join(profilePath(name), "additional-delegations.json"));
-  const ensure = (profile: Awaited<ReturnType<typeof owned>>, requested: Permission[], extra: Record<string, unknown> = {}) =>
+  const ensure = (profile: Parameters<typeof ensureDelegationAuthority>[0]["profile"], requested: Permission[], extra: Record<string, unknown> = {}) =>
     capturing(() => ensureDelegationAuthority({
       ctx: { profile: profileName, host: HOST }, profile, node, requested: requested as never, expiryOption: "7d", reason: "test",
       yes: true, consentAlreadyGiven: true, openKeyAcquisition: acquisitionFlow as never, ...extra,

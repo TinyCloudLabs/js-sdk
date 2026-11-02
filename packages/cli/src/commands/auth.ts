@@ -2482,8 +2482,6 @@ async function rotateAuthKey(
   const result = await refreshOpenKeySession(profileName, host, {
     paste: options.paste,
     noPopup: options.noPopup,
-    // The rotation replaces the live session on purpose.
-    replaceSession: true,
     ...(profile.namedKeys === undefined
       ? { rotation: { jwk, did } }
       : { keys: profile.namedKeys.prefix, expectedOwner: profile.ownerDid }),
