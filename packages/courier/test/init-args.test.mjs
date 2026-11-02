@@ -8,6 +8,12 @@ import { fileURLToPath } from 'node:url';
 
 const CLI = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
 
+// TC-2300: `init --request` now creates an OpenKey approval link at the links API. Every spawned CLI below answers
+// that call from a local stub (support/fake-links-fetch.mjs); the origin is unresolvable, so a missing stub fails
+// instead of reaching a real service.
+process.env.TC_LINKS_API_ORIGIN = 'https://links.fixture.invalid';
+process.env.NODE_OPTIONS = `--import=${new URL('./support/fake-links-fetch.mjs', import.meta.url).href}`;
+
 function fixture() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'courier-init-args-'));
   const initial = spawnSync(process.execPath, [CLI, 'init', '--request', '--handle', 'alice'], {
