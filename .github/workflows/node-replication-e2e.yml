@@ -119,6 +119,11 @@ jobs:
           TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
         run: bun test --max-concurrency=1 packages/cli/src/commands/agent-grant-openkey.e2e.test.ts
 
+      - name: Run onboard expired-request e2e (a request that expired unanswered ends in exit 3, real node)
+        env:
+          TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
+        run: bun test --max-concurrency=1 packages/cli/src/commands/onboard.expired.e2e.test.ts
+
       - name: Run onboard e2e (profile, two OpenKey approvals, real node)
         env:
           TC_REPLICATION_E2E_NODE_BIN: ${{ runner.temp }}/tinycloud
