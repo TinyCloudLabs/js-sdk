@@ -162,6 +162,19 @@ describe("discoverApprovalResult", () => {
   });
 });
 
+describe("invalid_request (HTTP 400) means an expired request only when discovering", () => {
+  const found = { resultRef: RESULT_REF, expiresAt: RESULT_EXPIRES };
+  test("fetch and ack answered 400 invalid_request are `unavailable` (retryable), never `request_expired`", async () => {
+    const { fetch } = fakeOpenKey(() => json({ code: "invalid_request" }, 400));
+    expect((await refusalOf(() => fetchApprovalResult(state, found, { fetch }))).code).toBe("unavailable");
+    expect((await refusalOf(() => ackApprovalResult(state, RESULT_REF, "ack-id-1", { fetch }))).code).toBe("unavailable");
+  });
+  test("discover answered 400 invalid_request is still request_expired", async () => {
+    const { fetch } = fakeOpenKey(() => json({ code: "invalid_request" }, 400));
+    expect((await refusalOf(() => discoverApprovalResult(state, { fetch }))).code).toBe("request_expired");
+  });
+});
+
 describe("fetchApprovalResult", () => {
   const found = { resultRef: RESULT_REF, expiresAt: RESULT_EXPIRES };
   const relay = { version: 1 };

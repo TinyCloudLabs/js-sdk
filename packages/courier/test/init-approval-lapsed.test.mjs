@@ -158,3 +158,20 @@ scenario('a request that has NOT lapsed is resumed without any extra OpenKey cal
   assert.equal(run.code, 8);
   assert.ok(polls(fx) >= 1);
 });
+
+// ---- a 400 invalid_request on FETCH or ACK is not "expired": a held approval is kept ----
+
+scenario('a fetch answered 400 invalid_request on a held, not lapsed approval keeps the record: approval-unavailable, then it collects', async ({ t, fx, request, courier }) => {
+  stubSpaceProbe(t, readySpace);
+  const printed = await request();
+  await fx.approve(printed.openkeyUrl);
+  fx.inject.fetch.push({ status: 400, code: 'invalid_request' });
+  const run = await courier('--wait');
+  assert.equal(run.code, 1);
+  assert.match(run.stderr, /\[approval-unavailable\]/);
+  assert.doesNotMatch(run.stderr, /approval-expired/);
+  assert.ok(readHome('approval-pending.json').resultRef, 'the held approval is kept');
+  const again = await courier('--wait');
+  assert.equal(again.code, 0, again.stderr);
+  assert.equal(fx.acks.length, 1);
+});
