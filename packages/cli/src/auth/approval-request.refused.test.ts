@@ -1,0 +1,214 @@
+// TC-2363 row (b): a PERMANENT post-approval refusal of the fetched result drops the pending approval entry (its result key and
+// result reference), as a not_found / expired answer from OpenKey already does. A refusal the resume design keeps on purpose
+// (AUTH_EXPIRED) leaves the entry. The result is never ACKed: ACK means "saved", and no discard call exists.
+import { afterAll, afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { chmodSync, mkdtempSync } from "node:fs";
+import { rm } from "node:fs/promises";
+import { createCipheriv, createHash, createHmac, createPublicKey, randomBytes, verify } from "node:crypto";
+import { join } from "node:path";
+import { NodeWasmBindings, PrivateKeySigner } from "@tinycloud/node-sdk";
+import { buildShortLink, checkLinkRecord, prepareLinkRecord, signerFromJwk, type Ed25519PrivateJwk } from "@tinycloud/share-envelope/links";
+
+const environmentKeys = ["HOME", "TC_HOME", "COURIER_HOME", "BUN_INSTALL_CACHE_DIR"] as const;
+const snapshotEnvironment = () => Object.fromEntries(environmentKeys.map((key) => [key, process.env[key]]));
+function restoreEnvironment(snapshot: Record<string, string | undefined>): void {
+  for (const [name, value] of Object.entries(snapshot)) {
+    if (value === undefined) delete process.env[name]; else process.env[name] = value;
+  }
+}
+const original = snapshotEnvironment();
+const home = mkdtempSync("/var/tmp/TC2212-approval-test-");
+chmodSync(home, 0o700);
+const fixtureEnvironment = { HOME: home, TC_HOME: join(home, "tc"), COURIER_HOME: join(home, "courier"), BUN_INSTALL_CACHE_DIR: join(home, "bun-cache") };
+Object.assign(process.env, fixtureEnvironment);
+// Import without touching a real profile, then restore the importing process immediately.
+const { ProfileManager } = await import("../config/profiles.js");
+const { profilePath } = await import("@tinycloud/operations/state");
+const { readJson, writeJsonDurable } = await import("../config/storage.js");
+const { readProfileSnapshot, commitLogin } = await import("./login-commit.js");
+const { acquireApprovalRequest, completeApprovalResult, pendingApprovalKey } = await import("./approval-request.js");
+const { verifyScopedLogin } = await import("./scoped-login.js");
+const { clearProfileCredentials } = await import("../lib/logout-pending.js");
+const { relayPublicJwkOf } = await import("./device-auth.js");
+const { createECDH } = await import("node:crypto");
+restoreEnvironment(original);
+let caseEnvironment = original;
+const wasm = new NodeWasmBindings();
+const manager = wasm.createSessionManager();
+const key = JSON.parse(manager.jwk("default")!) as Ed25519PrivateJwk;
+const did = signerFromJwk(key).did;
+const wallet = new PrivateKeySigner(randomBytes(32).toString("hex"));
+const address = await wallet.getAddress();
+const ownerDid = `did:pkh:eip155:1:${address}`;
+const host = "https://node.example";
+const spaceId = wasm.makeSpaceId(address, 1, "applications");
+const requested = [{ service: "tinycloud.kv", space: "applications", path: "", actions: ["tinycloud.kv/list", "tinycloud.kv/get"] }];
+const requestId = "abcdefghijklmnopqrstuvwxyz";
+const resultRef = "synthetic-result-reference-123456";
+let acknowledgements = new Map<string, string>();
+let dropAck = false;
+let savedBeforeAck = false;
+let terminalAckCode: string | undefined;
+let terminalAck: { requestId: string; bodyCid: string; ackId: string } | undefined;
+let retainedResultExpiresAt: string | undefined;
+
+const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+  if (new URL(request.url).pathname === "/v1/links") {
+    const checked = await checkLinkRecord(await request.json(), Date.now());
+    if (checked.header.issuer !== did || checked.header.audience !== "https://api.tinycloud.xyz") return new Response(null, { status: 401 });
+    const id = Array.from(randomBytes(26), (byte) => String.fromCharCode(97 + byte % 26)).join("");
+    return Response.json({ id, expiresAt: checked.header.expiresAt }, { status: 201 });
+  }
+  const body = await request.json() as { requestId: string; bodyCid: string; ackId: string };
+  const pending = await readJson<Array<{ committed?: boolean; ackId: string; bodyCid: string; resultEnvelope: unknown; resultExpiresAt: string }>>(join(profilePath("approval"), "approval-pending.json"));
+  const session = await ProfileManager.getSession("approval") as Record<string, unknown> | null;
+  savedBeforeAck = pending?.[0]?.committed === true && pending[0].ackId === body.ackId && session?.signature !== undefined;
+  const [header, payload, signature] = (request.headers.get("OpenKey-Session-Proof") ?? "").split(".");
+  if (!header || !payload || !signature || !verify(null, Buffer.from(`${header}.${payload}`),
+    createPublicKey({ key: { kty: key.kty, crv: key.crv, x: key.x }, format: "jwk" }), Buffer.from(signature, "base64url"))) return new Response(null, { status: 401 });
+  const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as Record<string, unknown>;
+  const action = new URL(request.url).pathname.endsWith("/result") ? "discover"
+    : new URL(request.url).pathname.endsWith("/fetch") ? "fetch" : "ack";
+  const credential = JSON.stringify([action, requestId, body.bodyCid, action === "discover" ? "" : resultRef, action === "ack" ? body.ackId : ""]);
+  if (claims.htu !== request.url || claims.htm !== "POST" || claims.client_id !== "openkey-approval-result-v1" ||
+    claims.cred_hash !== createHash("sha256").update(credential).digest("base64url")) return new Response(null, { status: 401 });
+  if (action === "discover") return Response.json({ resultRef, expiresAt: pending![0]!.resultExpiresAt ?? retainedResultExpiresAt });
+  if (action === "fetch") return Response.json({
+    requestId, bodyCid: body.bodyCid, resultRef, expiresAt: pending![0]!.resultExpiresAt ?? retainedResultExpiresAt,
+    relay: await readJson(join(profilePath("approval"), "retained-result.json")) ?? pending![0]!.resultEnvelope,
+  });
+  if (terminalAckCode) {
+    terminalAck = body;
+    return Response.json({ code: terminalAckCode }, { status: terminalAckCode === "not_found" ? 404 : 410 });
+  }
+  const prior = acknowledgements.get(resultRef);
+  if (prior && prior !== body.ackId) return new Response(null, { status: 409 });
+  acknowledgements.set(resultRef, body.ackId);
+  if (dropAck) { dropAck = false; return new Response("interrupted JSON"); }
+  return Response.json({ ackId: body.ackId, status: "acknowledged" });
+} });
+
+async function signedDelegation(actions = ["tinycloud.kv/list", "tinycloud.kv/get"], lifetimeSeconds = 3600, tamper = false) {
+  const prepared = wasm.prepareSession({ abilities: { kv: { "": actions } }, address, chainId: 1,
+    domain: "cli.example", spaceId, jwk: key, issuedAt: new Date(Date.now() - 1000).toISOString(), expirationTime: new Date(Date.now() + lifetimeSeconds * 1000).toISOString() });
+  const signature = await wallet.signMessage(tamper ? "not the message that was approved" : prepared.siwe);
+  const session = wasm.completeSessionSetup({ ...prepared, signature });
+  return { ...session, jwk: { kty: key.kty, crv: key.crv, x: key.x }, verificationMethod: did,
+    address, chainId: 1, spaceId, ownerDid, siwe: prepared.siwe, signature };
+}
+
+async function stage(delegation: Record<string, unknown>, options: { expectedOwner?: string; grantLifetimeSeconds?: number; resultExpiresAt?: string } = { expectedOwner: ownerDid }) {
+  const relay = createECDH("prime256v1"); relay.generateKeys();
+  const recipientJwk = relayPublicJwkOf(relay);
+  const request = { issuer: did, requestVersion: 1 as const, targetDid: did,
+    targetPublicJwk: { kty: key.kty, crv: key.crv, x: key.x }, nodeOrigin: host, permissions: requested,
+    grantLifetimeSeconds: options.grantLifetimeSeconds ?? 3600, resultEncryptionPublicJwk: recipientJwk };
+  const prepared = await prepareLinkRecord({ type: "openkey-approval-request", plaintext: new TextEncoder().encode(JSON.stringify(request)),
+    issuerKey: signerFromJwk(key), apiOrigin: "https://api.tinycloud.xyz", expiresAt: new Date(Date.now() + 3600_000) });
+  const ephemeral = createECDH("prime256v1"); ephemeral.generateKeys();
+  const shared = ephemeral.computeSecret(Buffer.concat([
+    Buffer.from([4]), Buffer.from(recipientJwk.x, "base64url"), Buffer.from(recipientJwk.y, "base64url"),
+  ]));
+  const extracted = createHmac("sha256", Buffer.from(requestId)).update(shared).digest();
+  const encryptionKey = createHmac("sha256", extracted).update("openkey-device-relay-v1").update(Buffer.from([1])).digest();
+  const nonce = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", encryptionKey, nonce);
+  cipher.setAAD(Buffer.from(requestId));
+  const delegationExpiresAt = new Date((delegation.siwe as string).match(/^Expiration Time:\s*(.+)$/m)![1]!).toISOString();
+  const plaintext = { resultVersion: 1, requestId, requestDigest: prepared.bodyCid, requesterDid: did,
+    ownerDid, targetDid: did, delegationExpiresAt, delegation };
+  const ciphertext = Buffer.concat([
+    cipher.update(JSON.stringify(plaintext), "utf8"), cipher.final(), cipher.getAuthTag(),
+  ]);
+  const resultEnvelope = { version: 1, algorithm: "ECDH-P256-A256GCM", ephemeralPublicJwk: relayPublicJwkOf(ephemeral),
+    nonce: nonce.toString("base64url"), ciphertext: ciphertext.toString("base64url") };
+  const entry = { version: 1, request, requestId, bodyCid: prepared.bodyCid,
+    approvalUrl: buildShortLink({ origin: "https://openkey.example", type: "openkey-approval-request", id: requestId, key: prepared.key, bodyCid: prepared.bodyCid }),
+    requestExpiresAt: prepared.record.header.expiresAt, record: prepared.record, apiOrigin: server.url.origin,
+    linkApiOrigin: "https://api.tinycloud.xyz", openkeyOrigin: "https://openkey.example", signingKey: key,
+    relayPrivateKey: relay.getPrivateKey().toString("base64url"), expectedOwner: options.expectedOwner, resultRef,
+    resultExpiresAt: options.resultExpiresAt ?? new Date(Date.now() + 600_000).toISOString(), resultEnvelope, ackId: "synthetic-durable-ack-123456789" };
+  await writeJsonDurable(join(profilePath("approval"), "approval-pending.json"), [entry]);
+  return entry;
+}
+
+beforeEach(async () => {
+  caseEnvironment = snapshotEnvironment();
+  Object.assign(process.env, fixtureEnvironment);
+  acknowledgements = new Map(); dropAck = false; savedBeforeAck = false; terminalAckCode = undefined; terminalAck = undefined; retainedResultExpiresAt = undefined;
+  await rm(join(profilePath("approval"), "approval-pending.json"), { force: true });
+  await ProfileManager.setProfile("approval", { name: "approval", did, sessionDid: did, ownerDid, host, chainId: 1, spaceName: "applications", createdAt: new Date().toISOString(), authMethod: "openkey", posture: "owner-openkey" });
+  await ProfileManager.setKey("approval", key);
+  await ProfileManager.clearSession("approval");
+});
+afterEach(async () => {
+  try {
+    await rm(join(profilePath("approval"), "approval-pending.json"), { force: true });
+  } finally {
+    restoreEnvironment(caseEnvironment);
+  }
+});
+afterAll(async () => {
+  server.stop(true);
+  await rm(home, { recursive: true, force: true });
+});
+
+const PENDING = () => join(profilePath("approval"), "approval-pending.json");
+const entries = async () => await readJson<Array<{ requestId: string; resultRef?: string; relayPrivateKey?: string }>>(PENDING());
+const ACQUIRE = { profileName: "approval", jwk: key, host, permissions: requested, expectedOwner: ownerDid, expiry: "1h",
+  openkeyHost: "https://openkey.example", openkeyApiHost: server.url.origin, noPopup: true, onApprovalRequest: () => undefined };
+
+/** A stored request whose result OpenKey still holds, so acquisition discovers, fetches and verifies it (the real first-fetch path). */
+async function unfetched(delegation: Record<string, unknown>, options: Parameters<typeof stage>[1] = { expectedOwner: ownerDid }): Promise<void> {
+  const pending = await stage(delegation, options);
+  const { resultEnvelope: _, ...rest } = pending;
+  await writeJsonDurable(PENDING(), [rest]);
+  await writeJsonDurable(join(profilePath("approval"), "retained-result.json"), pending.resultEnvelope);
+}
+
+describe("a fetched result that is refused for good drops its pending entry", () => {
+  test("OPENKEY_APPROVAL_NARROWER (the owner unticked an item): the entry, its result key and reference are gone; nothing was ACKed", async () => {
+    await unfetched(await signedDelegation(["tinycloud.kv/list"]));
+    await expect(acquireApprovalRequest(did, ACQUIRE)).rejects.toMatchObject({ code: "OPENKEY_APPROVAL_NARROWER" });
+    expect(await entries()).toEqual([]);
+    expect(await pendingApprovalKey("approval")).toBeUndefined();
+    expect(acknowledgements.size).toBe(0);
+  });
+
+  test("OPENKEY_OWNER_MISMATCH (another account approved): the entry is gone", async () => {
+    await unfetched(await signedDelegation(), { expectedOwner: "did:pkh:eip155:1:0x000000000000000000000000000000000000dEaD" });
+    await expect(acquireApprovalRequest(did, { ...ACQUIRE, expectedOwner: "did:pkh:eip155:1:0x000000000000000000000000000000000000dEaD" }))
+      .rejects.toMatchObject({ code: "OPENKEY_OWNER_MISMATCH" });
+    expect(await entries()).toEqual([]);
+    expect(acknowledgements.size).toBe(0);
+  });
+
+  test("OPENKEY_PROOF_INVALID (a result whose signature is not the owner's): the entry is gone", async () => {
+    await unfetched(await signedDelegation(undefined, 3600, true));
+    await expect(acquireApprovalRequest(did, ACQUIRE)).rejects.toMatchObject({ code: "OPENKEY_PROOF_INVALID" });
+    expect(await entries()).toEqual([]);
+  });
+
+  test("only the refused entry goes: another pending request of the profile stays", async () => {
+    await unfetched(await signedDelegation(["tinycloud.kv/list"]));
+    const [refused] = (await entries())!;
+    await writeJsonDurable(PENDING(), [refused, { ...refused, requestId: "another-request-identifier-1", commandIntent: "auth-grant:" + "a".repeat(64) }]);
+    await expect(acquireApprovalRequest(did, ACQUIRE)).rejects.toMatchObject({ code: "OPENKEY_APPROVAL_NARROWER" });
+    expect((await entries())!.map((entry) => entry.requestId)).toEqual(["another-request-identifier-1"]);
+  });
+
+  test("AUTH_EXPIRED stays by design: the entry is kept to resume", async () => {
+    await unfetched(await signedDelegation(undefined, -30));
+    await expect(acquireApprovalRequest(did, ACQUIRE)).rejects.toMatchObject({ code: "AUTH_EXPIRED" });
+    expect((await entries())!.map((entry) => entry.requestId)).toEqual([requestId]);
+    expect(acknowledgements.size).toBe(0);
+  });
+
+  test("an APPROVED result is untouched: it verifies, keeps its entry until committed, and is ACKed only after the save", async () => {
+    await unfetched(await signedDelegation());
+    const verified = await acquireApprovalRequest(did, ACQUIRE);
+    expect(verified.delegationCid).toBeString();
+    expect((await entries())!.map((entry) => entry.requestId)).toEqual([requestId]);
+    expect(acknowledgements.size).toBe(0);
+  });
+});
