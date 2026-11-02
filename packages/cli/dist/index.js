@@ -261,6 +261,9 @@ var init_warnings = __esm({
 // src/output/formatter.ts
 import ora from "ora";
 import { CLI_NAME as CLI_NAME2 } from "@tinycloud/operations/cli-name";
+function outputJson(data) {
+  process.stdout.write(safeJsonStringify(data, 2) + "\n");
+}
 function warningLine(warnings) {
   const which = warnings.map((warning) => `${warning.grantCid ?? "unidentified"}: ${warning.reason}`).join(", ");
   const subject = warnings.length === 1 ? "A stored grant was" : `${warnings.length} stored grants were`;
@@ -432,6 +435,13 @@ import { authorizationVerdictOf, parseCapabilityResource, SERVICE_LONG_TO_SHORT,
 function setActiveProfileName(name) {
   activeProfileName = name;
 }
+function approvalPendingOf(error) {
+  const pending = error.code === "APPROVAL_PENDING" ? error.metadata?.pending : void 0;
+  if (typeof pending !== "object" || pending === null) return void 0;
+  const { step, of, approvalUrl, expiresAt } = pending;
+  if (typeof step !== "number" || !Number.isInteger(step) || typeof of !== "number" || !Number.isInteger(of) || typeof approvalUrl !== "string" || typeof expiresAt !== "string") return void 0;
+  return { step, of, approvalUrl, expiresAt };
+}
 function nodeRetryError(error) {
   if (typeof error !== "object" || error === null) return void 0;
   const { code: code5, meta, metadata } = error;
@@ -517,6 +527,14 @@ function storageFullError(error, progress) {
 }
 function handleError(error) {
   const cliError = wrapError(error);
+  const pending = approvalPendingOf(cliError);
+  if (pending) {
+    outputJson({ pending });
+    process.stderr.write(`${safeBlock(cliError.message)}
+`);
+    if (registeredReplications().size === 0) return process.exit(cliError.exitCode);
+    return closeReplication().then(() => process.exit(cliError.exitCode));
+  }
   const prebuilt = typeof cliError.metadata?.hint === "string" ? cliError.metadata.hint : void 0;
   const hint = prebuilt ?? buildAuthHint(cliError) ?? (cliError.code === "NETWORK_ERROR" ? buildNetworkHint() : void 0);
   const authMeta = cliError.code === "AUTH_REQUIRED" || cliError.code === "PERMISSION_DENIED" ? cliError.metadata : void 0;
@@ -657,6 +675,7 @@ var init_errors = __esm({
     init_replication_registry();
     init_constants();
     init_formatter();
+    init_safe_text();
     init_storage();
     init_warnings();
     GRANT_REVOKED_EXIT_CODE = ExitCode.PERMISSION_DENIED;
@@ -14289,6 +14308,9 @@ var init_p256 = __esm({
 // ../share-envelope/dist/links.js
 var links_exports = {};
 __export(links_exports, {
+  APPROVAL_POLL_INTERVAL_MS: () => APPROVAL_POLL_INTERVAL_MS,
+  APPROVAL_RESULT_CLIENT_ID: () => APPROVAL_RESULT_CLIENT_ID,
+  ApprovalClientError: () => ApprovalClientError,
   DEFAULT_LINKS_API_ORIGIN: () => DEFAULT_LINKS_API_ORIGIN,
   DEFAULT_SHARE_ORIGINS: () => DEFAULT_SHARE_ORIGINS,
   FULL_LINK_PATH: () => FULL_LINK_PATH,
@@ -14306,16 +14328,24 @@ __export(links_exports, {
   LinkError: () => LinkError,
   MAX_LINK_BODY_BYTES: () => MAX_LINK_BODY_BYTES,
   MAX_LINK_REQUEST_BYTES: () => MAX_LINK_REQUEST_BYTES,
+  ackApprovalResult: () => ackApprovalResult,
+  approvalSessionProof: () => approvalSessionProof,
   assertDidKeySignature: () => assertDidKeySignature,
   buildFullLink: () => buildFullLink,
   buildShortLink: () => buildShortLink,
+  checkApprovalResultBinding: () => checkApprovalResultBinding,
   checkLinkBody: () => checkLinkBody,
   checkLinkHeaderLife: () => checkLinkHeaderLife,
   checkLinkRecord: () => checkLinkRecord,
+  collectApprovalResult: () => collectApprovalResult,
   createApprovalRequest: () => createApprovalRequest,
   createLink: () => createLink,
   deleteLink: () => deleteLink,
+  discoverApprovalResult: () => discoverApprovalResult,
   ed25519KeyProblem: () => ed25519KeyProblem,
+  fetchApprovalResult: () => fetchApprovalResult,
+  generateRelayKey: () => generateRelayKey,
+  isApprovalClientError: () => isApprovalClientError,
   isLinkError: () => isLinkError,
   linkDeleteRequestV1Schema: () => linkDeleteRequestV1Schema,
   linkHeaderV1Schema: () => linkHeaderV1Schema,
@@ -14326,6 +14356,7 @@ __export(links_exports, {
   linkTypeSchema: () => linkTypeSchema,
   normalizeLinkId: () => normalizeLinkId,
   openLinkRecord: () => openLinkRecord,
+  openRelayResult: () => openRelayResult,
   parseApprovalRequest: () => parseApprovalRequest,
   parseLink: () => parseLink,
   parseLinkTimestamp: () => parseLinkTimestamp,
@@ -15120,7 +15151,204 @@ function signerFromJwk(jwk) {
   if (signer.did !== didKeyFromEd25519PublicKey(publicKey)) throw new LinkError("invalid_argument", "the JWK public key does not match its private key");
   return signer;
 }
-var SHA256_CODE2, ENVELOPE_AAD_LABEL2, SEALED_BLOB_VERSION, AAD2, KEY_LENGTH, NONCE_LENGTH, TAG_LENGTH, HEADER_LENGTH, LINK_TYPES, MAX_LINK_BODY_BYTES, MAX_LINK_REQUEST_BYTES, LINK_TYPE_SPECS, LINK_HEADER_DOMAIN, LINK_DELETE_DOMAIN, LINK_WINDOW_SECONDS, LINK_MIN_LIFE_SECONDS, LINK_MIN_BODY_BYTES, LINK_SEAL_OVERHEAD_BYTES, LINK_MAX_RECORD_HEADER_BYTES, DEFAULT_LINKS_API_ORIGIN, FULL_LINK_PATH, LINK_ID_PATTERN, LinkError, ED25519_MULTICODEC_PREFIX2, PUBLIC_KEY_LENGTH, ExtendedPoint, GROUP_ORDER, FIELD_PRIME, DID_KEY_PATTERN, SERVICE_ISSUER_PATTERN, AUDIENCE_PATTERN, TIMESTAMP_PATTERN, NONCE_PATTERN, CID_PATTERN, HEADER_KEYS, DELETE_KEYS, ed25519DidKey, linkTypeSchema, linkHeaderV1Schema, linkSignatureV1Schema, linkDeleteRequestV1Schema, LINK_FRAGMENT_VERSION, SHORT_PATH, SHORT_FRAGMENT, FULL_FRAGMENT, REMOVED_FRAGMENT, MAX_FULL_RECORD_JSON_BYTES, jsonObject, bytes32, ed25519Jwk, p256Jwk, origin, permission, requestSchema, DEFAULT_TIMEOUT_MS, MAX_JSON_RESPONSE_BYTES, AUDIENCE_ORIGIN, createdSchema, errorBodySchema, KEY_PARAMETER, DEFAULT_SHARE_ORIGINS;
+function isApprovalClientError(value) {
+  return value instanceof ApprovalClientError;
+}
+function pathFor(action, requestId, resultRef) {
+  return action === "discover" ? `/api/approval-requests/${requestId}/result` : `/api/approval-results/${resultRef}/${action}`;
+}
+function approvalSessionProof(state2, action, resultRef = "", ackId = "") {
+  const jwk = state2.signingKey;
+  const thumbprint = toBase64Url(sha2562(utf8Bytes2(JSON.stringify({ crv: "Ed25519", kty: "OKP", x: jwk.x }))));
+  const header = toBase64Url(utf8Bytes2(JSON.stringify({ alg: "EdDSA", kid: thumbprint, typ: "openkey-session-proof+jwt" })));
+  const payload = toBase64Url(utf8Bytes2(JSON.stringify({
+    client_id: APPROVAL_RESULT_CLIENT_ID,
+    cred_hash: toBase64Url(sha2562(utf8Bytes2(JSON.stringify([action, state2.requestId, state2.bodyCid, resultRef, ackId])))),
+    htm: "POST",
+    htu: state2.apiOrigin + pathFor(action, state2.requestId, resultRef),
+    iat: Math.floor(Date.now() / 1e3),
+    jti: toBase64Url(globalThis.crypto.getRandomValues(new Uint8Array(24)))
+  })));
+  const input = `${header}.${payload}`;
+  return `${input}.${toBase64Url(ed25519.sign(utf8Bytes2(input), fromBase64Url2(jwk.d)))}`;
+}
+async function post(state2, action, resultRef, ackId, options) {
+  const body = action === "discover" ? { bodyCid: state2.bodyCid, header: state2.record.header, signature: state2.record.signature } : { requestId: state2.requestId, bodyCid: state2.bodyCid, ...action === "ack" ? { ackId } : {} };
+  const timeout = AbortSignal.timeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS);
+  try {
+    return await (options.fetch ?? globalThis.fetch)(state2.apiOrigin + pathFor(action, state2.requestId, resultRef), {
+      method: "POST",
+      credentials: "omit",
+      redirect: "error",
+      cache: "no-store",
+      referrerPolicy: "no-referrer",
+      headers: {
+        "content-type": "application/json",
+        "OpenKey-Session-Proof": approvalSessionProof(state2, action, resultRef, ackId)
+      },
+      body: JSON.stringify(body),
+      signal: options.signal ? AbortSignal.any([timeout, options.signal]) : timeout
+    });
+  } catch (error) {
+    if (options.signal?.aborted) throw error;
+    throw new ApprovalClientError("network", `OpenKey could not be reached to ${action} the approval result.`);
+  }
+}
+async function refuse(response, action) {
+  const body = await response.json().catch(() => null);
+  const code22 = typeof body?.code === "string" ? body.code : "";
+  const status = response.status;
+  if (code22 === "expired_request" || code22 === "invalid_request" && action === "discover") throw new ApprovalClientError("request_expired", "This approval request expired before it was approved.", status);
+  if (code22 === "expired_result") throw new ApprovalClientError("result_expired", "The approved result expired before it was collected.", status);
+  if (code22 === "acknowledged") throw new ApprovalClientError("acknowledged", "OpenKey has already acknowledged this result.", status);
+  if (code22 === "not_found") throw new ApprovalClientError("not_found", "OpenKey cannot find this approval request or result.", status);
+  if (code22 === "ack_conflict") throw new ApprovalClientError("ack_conflict", "OpenKey rejected a conflicting acknowledgement for this result.", status);
+  if (code22 === "request_binding" || code22 === "invalid_proof") {
+    throw new ApprovalClientError("request_binding", "OpenKey rejected the request or requester binding.", status);
+  }
+  throw new ApprovalClientError("unavailable", `OpenKey could not ${action} this approval result (HTTP ${status}).`, status);
+}
+async function discoverApprovalResult(state2, options = {}) {
+  const response = await post(state2, "discover", "", "", options);
+  if (response.status === 202) return { status: "pending" };
+  if (!response.ok) return refuse(response, "discover");
+  const found = await response.json().catch(() => null);
+  if (typeof found?.resultRef !== "string" || !RESULT_REF_PATTERN.test(found.resultRef) || typeof found.expiresAt !== "string" || !Number.isFinite(Date.parse(found.expiresAt))) {
+    throw new ApprovalClientError("result_invalid", "OpenKey returned an invalid approval result reference.");
+  }
+  return { status: "ready", resultRef: found.resultRef, expiresAt: found.expiresAt };
+}
+async function fetchApprovalResult(state2, found, options = {}) {
+  const response = await post(state2, "fetch", found.resultRef, "", options);
+  if (!response.ok) return refuse(response, "fetch");
+  const result = await response.json().catch(() => null);
+  if (!result || result.requestId !== state2.requestId || result.bodyCid !== state2.bodyCid || result.resultRef !== found.resultRef || result.expiresAt !== found.expiresAt || !result.relay || typeof result.relay !== "object") {
+    throw new ApprovalClientError("result_invalid", "The approval result does not match this request.");
+  }
+  return result.relay;
+}
+async function ackApprovalResult(state2, resultRef, ackId, options = {}) {
+  const response = await post(state2, "ack", resultRef, ackId, options);
+  const body = await response.clone().json().catch(() => null);
+  if (!response.ok && (body?.code === "expired_result" || body?.code === "not_found" || body?.code === "acknowledged")) return "settled";
+  if (!response.ok) return refuse(response, "ack");
+  if (body?.ackId !== ackId || body.status !== "acknowledged") {
+    throw new ApprovalClientError("unavailable", `OpenKey did not confirm the acknowledgement (HTTP ${response.status}).`, response.status);
+  }
+  return "acknowledged";
+}
+function bounded(options, now) {
+  if (options.deadline === void 0) return options;
+  return { ...options, timeoutMs: Math.min(options.timeoutMs ?? REQUEST_TIMEOUT_MS, Math.max(MIN_REQUEST_TIMEOUT_MS, options.deadline - now() + 1e3)) };
+}
+async function collectApprovalResult(state2, options = {}) {
+  const now = options.now ?? Date.now;
+  const sleep = options.sleep ?? defaultSleep;
+  const interval = options.intervalMs ?? APPROVAL_POLL_INTERVAL_MS;
+  let found = options.known;
+  for (; ; ) {
+    if (!found) {
+      let discovered;
+      try {
+        discovered = await discoverApprovalResult(state2, bounded(options, now));
+      } catch (error) {
+        if (!isApprovalClientError(error) || error.code !== "network") throw error;
+      }
+      if (discovered?.status === "ready") {
+        found = { resultRef: discovered.resultRef, expiresAt: discovered.expiresAt };
+        await options.onDiscovered?.(found);
+      }
+    }
+    if (found) {
+      try {
+        return { status: "result", ...found, relay: await fetchApprovalResult(state2, found, bounded(options, now)) };
+      } catch (error) {
+        if (!isApprovalClientError(error) || error.code !== "network") throw error;
+      }
+    }
+    if (options.deadline !== void 0 && now() >= options.deadline) return { status: "deadline" };
+    const wait = options.deadline === void 0 ? interval : Math.min(interval, Math.max(0, options.deadline - now()));
+    await sleep(wait);
+    if (options.signal?.aborted) throw options.signal.reason;
+  }
+}
+function generateRelayKey() {
+  const privateKey = p2562.utils.randomPrivateKey();
+  const point = p2562.getPublicKey(privateKey, false);
+  return {
+    privateKey: toBase64Url(privateKey),
+    publicJwk: { kty: "EC", crv: "P-256", x: toBase64Url(point.subarray(1, 33)), y: toBase64Url(point.subarray(33)) }
+  };
+}
+function invalidResult(message) {
+  return new ApprovalClientError("result_invalid", message);
+}
+function strictBytes2(value, label) {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]+$/.test(value)) throw invalidResult(`OpenKey returned an invalid ${label}.`);
+  try {
+    return fromBase64Url2(value);
+  } catch {
+    throw invalidResult(`OpenKey returned an invalid ${label}.`);
+  }
+}
+async function openRelayResult(envelope, requestId, relayPrivateKey) {
+  if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) throw invalidResult("OpenKey returned an invalid encrypted relay result.");
+  const relay = envelope;
+  if (relay.version !== 1 || relay.algorithm !== "ECDH-P256-A256GCM") throw invalidResult("OpenKey returned an unsupported encrypted relay result.");
+  const peer = relay.ephemeralPublicJwk;
+  if (!peer || typeof peer !== "object" || peer.kty !== "EC" || peer.crv !== "P-256" || "d" in peer) throw invalidResult("OpenKey returned an invalid relay key.");
+  const x = strictBytes2(peer.x, "relay key");
+  const y = strictBytes2(peer.y, "relay key");
+  const nonce = strictBytes2(relay.nonce, "relay nonce");
+  const ciphertext = strictBytes2(relay.ciphertext, "relay ciphertext");
+  if (x.length !== 32 || y.length !== 32) throw invalidResult("OpenKey returned an invalid relay key.");
+  if (nonce.length !== 12 || ciphertext.length <= 16) throw invalidResult("OpenKey returned an invalid encrypted relay result.");
+  let secret;
+  try {
+    const point = new Uint8Array(65);
+    point[0] = 4;
+    point.set(x, 1);
+    point.set(y, 33);
+    p2562.ProjectivePoint.fromHex(point).assertValidity();
+    secret = p2562.getSharedSecret(fromBase64Url2(relayPrivateKey), point, true).subarray(1);
+  } catch {
+    throw invalidResult("OpenKey returned an invalid relay key.");
+  }
+  const salt = utf8Bytes2(requestId);
+  const key = hmac(sha2562, hmac(sha2562, salt, secret), Uint8Array.from([...utf8Bytes2(RELAY_INFO), 1]));
+  let value;
+  try {
+    const aes = await globalThis.crypto.subtle.importKey("raw", key, "AES-GCM", false, ["decrypt"]);
+    const plain = await globalThis.crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: nonce, additionalData: salt, tagLength: 128 },
+      aes,
+      ciphertext
+    );
+    value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(plain));
+  } catch {
+    throw invalidResult("OpenKey returned an unreadable encrypted relay result.");
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw invalidResult("OpenKey returned an invalid encrypted relay result.");
+  return value;
+}
+function checkApprovalResultBinding(opened, expected) {
+  const { ownerDid, delegationExpiresAt, delegation } = opened;
+  const expiryValid = typeof delegationExpiresAt === "string" && Number.isFinite(Date.parse(delegationExpiresAt)) && new Date(delegationExpiresAt).toISOString() === delegationExpiresAt;
+  const differing = [
+    ["resultVersion", opened.resultVersion === 1],
+    ["requestId", opened.requestId === expected.requestId],
+    ["requestDigest", opened.requestDigest === expected.bodyCid],
+    ["requesterDid", opened.requesterDid === expected.request.issuer],
+    ["targetDid", opened.targetDid === expected.request.targetDid],
+    ["ownerDid", typeof ownerDid === "string" && ownerDid.length > 0],
+    ["delegationExpiresAt", expiryValid],
+    ["delegation", !!delegation && typeof delegation === "object" && !Array.isArray(delegation)]
+  ].filter(([, matches]) => !matches).map(([field]) => field);
+  if (differing.length > 0) throw invalidResult(`The encrypted result does not match this request (${differing.join(", ")}).`);
+  if (Date.parse(delegationExpiresAt) <= (expected.now ?? Date.now())) throw invalidResult("The approved delegation has already expired.");
+  return { ownerDid, delegationExpiresAt, delegation };
+}
+var SHA256_CODE2, ENVELOPE_AAD_LABEL2, SEALED_BLOB_VERSION, AAD2, KEY_LENGTH, NONCE_LENGTH, TAG_LENGTH, HEADER_LENGTH, LINK_TYPES, MAX_LINK_BODY_BYTES, MAX_LINK_REQUEST_BYTES, LINK_TYPE_SPECS, LINK_HEADER_DOMAIN, LINK_DELETE_DOMAIN, LINK_WINDOW_SECONDS, LINK_MIN_LIFE_SECONDS, LINK_MIN_BODY_BYTES, LINK_SEAL_OVERHEAD_BYTES, LINK_MAX_RECORD_HEADER_BYTES, DEFAULT_LINKS_API_ORIGIN, FULL_LINK_PATH, LINK_ID_PATTERN, LinkError, ED25519_MULTICODEC_PREFIX2, PUBLIC_KEY_LENGTH, ExtendedPoint, GROUP_ORDER, FIELD_PRIME, DID_KEY_PATTERN, SERVICE_ISSUER_PATTERN, AUDIENCE_PATTERN, TIMESTAMP_PATTERN, NONCE_PATTERN, CID_PATTERN, HEADER_KEYS, DELETE_KEYS, ed25519DidKey, linkTypeSchema, linkHeaderV1Schema, linkSignatureV1Schema, linkDeleteRequestV1Schema, LINK_FRAGMENT_VERSION, SHORT_PATH, SHORT_FRAGMENT, FULL_FRAGMENT, REMOVED_FRAGMENT, MAX_FULL_RECORD_JSON_BYTES, jsonObject, bytes32, ed25519Jwk, p256Jwk, origin, permission, requestSchema, DEFAULT_TIMEOUT_MS, MAX_JSON_RESPONSE_BYTES, AUDIENCE_ORIGIN, createdSchema, errorBodySchema, KEY_PARAMETER, DEFAULT_SHARE_ORIGINS, APPROVAL_RESULT_CLIENT_ID, APPROVAL_POLL_INTERVAL_MS, REQUEST_TIMEOUT_MS, MIN_REQUEST_TIMEOUT_MS, RESULT_REF_PATTERN, RELAY_INFO, ApprovalClientError, defaultSleep;
 var init_links = __esm({
   "../share-envelope/dist/links.js"() {
     "use strict";
@@ -15138,6 +15366,10 @@ var init_links = __esm({
     init_p256();
     init_zod();
     init_ed25519();
+    init_ed25519();
+    init_p256();
+    init_hmac();
+    init_sha256();
     SHA256_CODE2 = 18;
     ENVELOPE_AAD_LABEL2 = "tinycloud-share-envelope-v1";
     SEALED_BLOB_VERSION = 1;
@@ -15280,6 +15512,24 @@ var init_links = __esm({
     errorBodySchema = external_exports2.object({ error: external_exports2.string() }).passthrough();
     KEY_PARAMETER = /[#&]k=([A-Za-z0-9_-]{43})(?:&|$)/;
     DEFAULT_SHARE_ORIGINS = ["https://share.tinycloud.xyz"];
+    APPROVAL_RESULT_CLIENT_ID = "openkey-approval-result-v1";
+    APPROVAL_POLL_INTERVAL_MS = 2e3;
+    REQUEST_TIMEOUT_MS = 1e4;
+    MIN_REQUEST_TIMEOUT_MS = 1e3;
+    RESULT_REF_PATTERN = /^[A-Za-z0-9_-]{20,128}$/;
+    RELAY_INFO = "openkey-device-relay-v1";
+    ApprovalClientError = class extends Error {
+      code;
+      /** HTTP status of the OpenKey reply, when there was one. */
+      status;
+      constructor(code22, message, status) {
+        super(message);
+        this.name = "ApprovalClientError";
+        this.code = code22;
+        this.status = status;
+      }
+    };
+    defaultSleep = (ms) => new Promise((resolve6) => setTimeout(resolve6, ms));
   }
 });
 

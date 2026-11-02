@@ -101,19 +101,24 @@ function ensureSecureDir(): void {
   mkdirOwnerOnly(profileDir());
 }
 
+/** Atomic, owner-only and durable: the bytes and the rename are fsynced, so a caller may act on "saved" (for example acknowledge an approval). */
 export function writeSecure(file: string, obj: unknown): void {
   ensureSecureDir();
   const temp = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
   try {
     fs.writeFileSync(temp, JSON.stringify(obj, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
     fs.chmodSync(temp, 0o600);
+    const fd = fs.openSync(temp, 'r');
+    try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
     fs.renameSync(temp, file);
+    const dirFd = fs.openSync(path.dirname(file), 'r');
+    try { fs.fsyncSync(dirFd); } finally { fs.closeSync(dirFd); }
   } finally {
     try { fs.unlinkSync(temp); } catch { /* renamed or absent */ }
   }
 }
 
-function readSecure<T>(name: string, required: boolean, home = profileDir()): T | undefined {
+export function readSecure<T>(name: string, required: boolean, home = profileDir()): T | undefined {
   const file = profilePath(name, home);
   if (!fs.existsSync(file)) {
     if (required) throw new CourierError('no-profile', `Missing ${name} in ${profileDir()}. Run \`${cmd('init')}\` first.`);
