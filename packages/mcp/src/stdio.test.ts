@@ -435,6 +435,7 @@ test("a fresh delegate bootstraps through the real CLI, then explores through MC
   }
 }, 300_000);
 
+// Two real Node process startups and signed fixture setup need an integration deadline.
 test("an authorized missing secret returns only the value-free setup action", async () => {
   const home = await mkdtemp(join(tmpdir(), "tinycloud-mcp-setup-"));
   const previousTcHome = process.env.TC_HOME;
@@ -497,7 +498,7 @@ test("an authorized missing secret returns only the value-free setup action", as
     else process.env.TC_HOME = previousTcHome;
     await rm(home, { recursive: true, force: true });
   }
-});
+}, 15_000);
 
 test("secrets status on an unreadable name is ok consent_required and saves no request", async () => {
   const home = await mkdtemp(join(tmpdir(), "tinycloud-mcp-status-consent-"));
