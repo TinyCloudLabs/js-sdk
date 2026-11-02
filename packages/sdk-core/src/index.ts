@@ -1124,8 +1124,10 @@ export {
   DEFAULT_SIGNED_READ_URL_EXPIRY_MS,
   EXPIRY,
   MAX_SIWE_EXPIRY_MS,
+  MAX_UCAN_EXPIRY_MS,
   technicalExpiryRefusal,
   type ExpiryTier,
+  type TechnicalExpiryKind,
 } from "./expiry";
 
 // Policy signed-object profile core

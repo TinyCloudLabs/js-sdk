@@ -1,28 +1,30 @@
 // The two technical expiry limits at the SDK boundary (no 10-year policy):
 //  - a wallet-signed message (owner delegation, sub-delegation, runtime grant, wallet-path delegation) can carry any
-//    expiry up to 9999-12-31T23:59:59Z (checked in TinyCloudNode);
+//    expiry up to 9999-12-31T23:59:59Z;
 //  - a token signed by the session key (delegateTo, agent and share delegations) can carry any expiry up to
-//    2255-06-05T23:47:34Z, because the WASM builder fails beyond it (checked in NodeWasmBindings.createDelegation,
-//    which is node-only; the browser bundle does not carry it).
+//    2255-06-05T23:47:34Z, because the WASM builder fails beyond it.
 // A value past either limit is refused with a dated message BEFORE the signer or the WASM is called.
 
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { createDelegation as rawCreateDelegation } from "@tinycloud/node-sdk-wasm";
-import { MAX_SIWE_EXPIRY_MS, type IWasmBindings, type PermissionEntry } from "@tinycloud/sdk-core";
+import {
+  MAX_SIWE_EXPIRY_MS,
+  MAX_UCAN_EXPIRY_MS,
+  type IWasmBindings,
+  type PermissionEntry,
+} from "@tinycloud/sdk-core";
 
 import { NodeWasmBindings } from "./NodeWasmBindings";
 import { PrivateKeySigner } from "./signers/PrivateKeySigner";
 import { TinyCloudNode } from "./TinyCloudNode";
-import { MAX_UCAN_EXPIRY_MS } from "./ucanExpiry";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const YEAR_MS = 365 * DAY_MS;
 const SIWE_DATED =
-  "expiry is not a valid date or is later than 9999-12-31, the latest date a TinyCloud sign-in message can carry; choose an earlier expiry";
+  "expiry is later than 9999-12-31, the latest date a TinyCloud sign-in message can carry; choose an earlier expiry";
 const UCAN_DATED =
-  "expiry is not a valid date or is later than 2255-06-05, the latest date an agent or share delegation can carry (UCAN limit); the session itself can be signed to 9999-12-31; choose an earlier expiry";
+  "expiry is later than 2255-06-05, the latest date an agent or share delegation can carry (UCAN limit); the session itself can be signed to 9999-12-31; choose an earlier expiry";
 const NOT_A_DATE =
-  "expiry is not a valid date or is later than 9999-12-31, the latest date a TinyCloud sign-in message can carry; choose an earlier expiry";
+  "expiry is not a valid date or is too far away to hold; choose one before 9999-12-31";
 const WASM_UCAN_RANGE = "Out of valid microsecond-precision range of NumericDate";
 
 const PRIVATE_KEY = "1".padStart(64, "0");
@@ -41,12 +43,14 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-/** The real WASM with a spy on the call a refused wallet-signed expiry must never reach. */
+/** The real WASM with spies on the two calls a refused expiry must never reach. */
 function spiedWasm() {
   const wasm = new NodeWasmBindings();
   const prepareSession = mock(wasm.prepareSession.bind(wasm));
+  const createDelegation = mock(wasm.createDelegation.bind(wasm));
   wasm.prepareSession = prepareSession;
-  return { wasm, prepareSession };
+  wasm.createDelegation = createDelegation;
+  return { wasm, prepareSession, createDelegation };
 }
 
 async function ownerNode() {
@@ -160,54 +164,48 @@ describe("the WASM accepts what the SDK now lets through", () => {
   });
 });
 
-/** A session signed with the real WASM to `sessionExpiry`, and what a token minted from it needs. */
-async function signedSession(sessionExpiry: Date) {
-  const wasm = new NodeWasmBindings();
-  const signer = new PrivateKeySigner(PRIVATE_KEY);
-  const address = await signer.getAddress();
-  const manager = wasm.createSessionManager();
-  const jwk = JSON.parse(manager.jwk("default")!);
-  const spaceId = wasm.makeSpaceId(address, 1, "applications");
-  const prepared = wasm.prepareSession({
-    abilities: { kv: { "": ["tinycloud.kv/get"] } },
-    address,
-    chainId: 1,
-    domain: "limits.test",
-    spaceId,
-    jwk,
-    issuedAt: new Date().toISOString(),
-    expirationTime: sessionExpiry.toISOString(),
-  });
-  const session = wasm.completeSessionSetup({ ...prepared, signature: await signer.signMessage(prepared.siwe) });
-  return { wasm, address, spaceId, jwk, manager, prepared, session };
-}
-
-describe("the child token limit (checked in NodeWasmBindings, before the WASM)", () => {
+describe("the child token limit", () => {
   async function signedSessionTo9999() {
-    const s = await signedSession(new Date(MAX_SIWE_EXPIRY_MS));
-    const node = new TinyCloudNode({ host: HOST, wasmBindings: s.wasm });
-    const verificationMethod = s.manager.getDID("default");
+    const spied = spiedWasm();
+    const signer = new PrivateKeySigner(PRIVATE_KEY);
+    const address = await signer.getAddress();
+    const manager = spied.wasm.createSessionManager();
+    const jwk = JSON.parse(manager.jwk("default")!);
+    const spaceId = spied.wasm.makeSpaceId(address, 1, "applications");
+    const prepared = spied.wasm.prepareSession({
+      abilities: { kv: { "": ["tinycloud.kv/get"] } },
+      address,
+      chainId: 1,
+      domain: "limits.test",
+      spaceId,
+      jwk,
+      issuedAt: new Date().toISOString(),
+      expirationTime: new Date(MAX_SIWE_EXPIRY_MS).toISOString(),
+    });
+    const session = spied.wasm.completeSessionSetup({ ...prepared, signature: await signer.signMessage(prepared.siwe) });
+    spied.prepareSession.mockClear();
+    const node = new TinyCloudNode({ host: HOST, wasmBindings: spied.wasm });
     const wasmSession = {
-      delegationHeader: s.session.delegationHeader,
-      delegationCid: s.session.delegationCid,
-      jwk: s.jwk,
-      spaceId: s.spaceId,
-      verificationMethod: verificationMethod.split("#", 1)[0]!,
+      delegationHeader: session.delegationHeader,
+      delegationCid: session.delegationCid,
+      jwk,
+      spaceId,
+      verificationMethod: manager.getDID("default").split("#", 1)[0]!,
     };
-    const audience = verificationMethod.split("#", 1)[0]!;
+    const audience = manager.getDID("default").split("#", 1)[0]!;
     const abilities = { kv: { "vault/": ["tinycloud.kv/get"] } };
-    // The raw WASM call, without the SDK's own check.
-    const direct = (expirationSecs: number) => rawCreateDelegation(wasmSession, audience, s.spaceId, abilities, expirationSecs, 0);
+    // What createDelegationWrapper does, minus the SDK's own check: the WASM call as it would be made.
+    const direct = (expirationSecs: number) => spied.wasm.createDelegation(wasmSession, audience, spaceId, abilities, expirationSecs, 0);
     // The SDK's wrapper, which every delegateTo, agent grant and share delegation goes through.
     const wrapper = (expirationSecs: number) =>
       (node as unknown as { createDelegationWrapper(p: unknown): { expiry: Date } }).createDelegationWrapper({
-        session: { ...wasmSession, verificationMethod },
+        session: { ...wasmSession, verificationMethod: manager.getDID("default") },
         delegateDID: audience,
-        spaceId: s.spaceId,
+        spaceId,
         abilities,
         expirationSecs,
       });
-    return { wrapper, direct };
+    return { ...spied, wrapper, direct };
   }
 
   test("the WASM itself accepts 2255-06-05T23:47:34Z and fails one second later (why the SDK checks first)", async () => {
@@ -218,17 +216,21 @@ describe("the child token limit (checked in NodeWasmBindings, before the WASM)",
 
   test("a token to exactly 2255-06-05T23:47:34Z is minted from a session signed to 9999", async () => {
     const s = await signedSessionTo9999();
-    expect(s.wrapper(MAX_UCAN_EXPIRY_MS / 1000).expiry.getTime()).toBe(MAX_UCAN_EXPIRY_MS);
+    const result = s.wrapper(MAX_UCAN_EXPIRY_MS / 1000);
+    expect(result.expiry.getTime()).toBe(MAX_UCAN_EXPIRY_MS);
   });
 
-  test("a token one second later is refused with the dated message, not the WASM's own error", async () => {
+  test("a token one second later is refused with the dated message before the WASM is called", async () => {
     const s = await signedSessionTo9999();
+    s.createDelegation.mockClear();
     expect(() => s.wrapper(MAX_UCAN_EXPIRY_MS / 1000 + 1)).toThrow(UCAN_DATED);
     expect(() => s.wrapper(Date.UTC(9999, 11, 31) / 1000)).toThrow(UCAN_DATED);
+    expect(s.createDelegation).not.toHaveBeenCalled();
   });
 
   test("an expiry that is not a date is refused, not passed on as NaN", async () => {
     const s = await signedSessionTo9999();
+    s.createDelegation.mockClear();
     for (const expirationSecs of [Number.NaN, Number.POSITIVE_INFINITY]) {
       const refusal = (() => {
         try {
@@ -238,63 +240,11 @@ describe("the child token limit (checked in NodeWasmBindings, before the WASM)",
         }
         return undefined;
       })();
-      expect(refusal?.message).toBe("expiry is not a valid date or is later than 2255-06-05, the latest date an agent or share delegation can carry (UCAN limit); the session itself can be signed to 9999-12-31; choose an earlier expiry");
+      expect(refusal?.message).toBe(
+        "expiry is not a valid date or is too far away to hold; choose one before 2255-06-05",
+      );
     }
-  });
-});
-
-describe("delegateTo with the real WASM", () => {
-  const BOB = "did:pkh:eip155:1:0x00000000000000000000000000000000000000BB";
-  const entry: PermissionEntry = { service: "tinycloud.kv", space: "applications", path: "items/", actions: ["tinycloud.kv/get"] };
-
-  async function realNode(sessionExpiry: Date) {
-    const s = await signedSession(sessionExpiry);
-    const node = new TinyCloudNode({ host: HOST, wasmBindings: s.wasm });
-    Object.assign(node, {
-      auth: {
-        tinyCloudSession: {
-          address: s.address,
-          chainId: 1,
-          sessionKey: "default",
-          spaceId: s.spaceId,
-          delegationCid: s.session.delegationCid,
-          delegationHeader: s.session.delegationHeader,
-          verificationMethod: s.manager.getDID("default"),
-          jwk: s.jwk,
-          siwe: s.prepared.siwe,
-          signature: "0x",
-        },
-      },
-    });
-    return node;
-  }
-
-  test("a hundred years is accepted from a session signed to 9999", async () => {
-    const node = await realNode(new Date(MAX_SIWE_EXPIRY_MS));
-    const { delegation } = await node.delegateTo(BOB, [entry], { expiry: 100 * YEAR_MS });
-    expect(delegation.expiry.getTime()).toBeGreaterThan(Date.now() + 99 * YEAR_MS);
-  });
-
-  test("an expiry past 2255-06-05 is refused with the dated message", async () => {
-    const node = await realNode(new Date(MAX_SIWE_EXPIRY_MS));
-    await expect(node.delegateTo(BOB, [entry], { expiry: 300 * YEAR_MS })).rejects.toThrow(UCAN_DATED);
-    await expect(node.delegateTo(BOB, [entry], { expiry: "250y" })).rejects.toThrow(UCAN_DATED);
-  });
-
-  test("a manifest-style duration of ms('99999999y') is refused cleanly, not as a RangeError", async () => {
-    const node = await realNode(new Date(MAX_SIWE_EXPIRY_MS));
-    const refusal = await node.delegateTo(BOB, [entry], { expiry: "99999999y" }).catch((error: unknown) => error);
-    expect(refusal).toBeInstanceOf(Error);
-    expect(refusal).not.toBeInstanceOf(RangeError);
-    expect((refusal as Error).message).toBe("expiry is not a valid date or is later than 2255-06-05, the latest date an agent or share delegation can carry (UCAN limit); the session itself can be signed to 9999-12-31; choose an earlier expiry");
-  });
-
-  test("the same far request against a 30-day session is still clamped to the session, as before", async () => {
-    const sessionExpiry = new Date(Date.now() + 30 * DAY_MS);
-    const node = await realNode(sessionExpiry);
-    const { delegation } = await node.delegateTo(BOB, [entry], { expiry: 300 * YEAR_MS });
-    expect(delegation.expiry.getTime()).toBeLessThanOrEqual(sessionExpiry.getTime());
-    expect(delegation.expiry.getTime()).toBeGreaterThan(sessionExpiry.getTime() - 2000);
+    expect(s.createDelegation).not.toHaveBeenCalled();
   });
 });
 
@@ -379,7 +329,40 @@ function mockedNode(sessionExpiry: string, options: { covered?: boolean; signer?
   return { node, createDelegation, prepareSession, signMessage };
 }
 
-describe("wallet-signed delegateTo from a session signed to 9999", () => {
+describe("delegateTo from a session signed to 9999", () => {
+  test("a hundred years is accepted (the session allows it and the token can carry it)", async () => {
+    const s = mockedNode("9999-12-31T23:59:59.000Z");
+    await s.node.delegateTo(BOB_DID, [ENTRY], { expiry: 100 * YEAR_MS });
+    expect(s.createDelegation).toHaveBeenCalledTimes(1);
+    const expirationSecs = (s.createDelegation.mock.calls[0] as unknown[])[4] as number;
+    expect(expirationSecs).toBeGreaterThan(Date.now() / 1000 + 99 * (YEAR_MS / 1000));
+  });
+
+  test("an expiry past 2255-06-05 is refused with the dated message and the WASM is never called", async () => {
+    const s = mockedNode("9999-12-31T23:59:59.000Z");
+    await expect(s.node.delegateTo(BOB_DID, [ENTRY], { expiry: 300 * YEAR_MS })).rejects.toThrow(UCAN_DATED);
+    await expect(s.node.delegateTo(BOB_DID, [ENTRY], { expiry: "250y" })).rejects.toThrow(UCAN_DATED);
+    expect(s.createDelegation).not.toHaveBeenCalled();
+  });
+
+  test("a manifest-style duration of ms('99999999y') is refused cleanly, not as a RangeError", async () => {
+    const s = mockedNode("9999-12-31T23:59:59.000Z");
+    const refusal = await s.node.delegateTo(BOB_DID, [ENTRY], { expiry: "99999999y" }).catch((error: unknown) => error);
+    expect(refusal).toBeInstanceOf(Error);
+    expect(refusal).not.toBeInstanceOf(RangeError);
+    expect((refusal as Error).message).toBe(
+      "expiry is not a valid date or is too far away to hold; choose one before 2255-06-05",
+    );
+    expect(s.createDelegation).not.toHaveBeenCalled();
+  });
+
+  test("the same far request against a 30-day session is still clamped to the session, as before", async () => {
+    const s = mockedNode(new Date(Date.now() + 30 * DAY_MS).toISOString());
+    await s.node.delegateTo(BOB_DID, [ENTRY], { expiry: 300 * YEAR_MS });
+    const expirationSecs = (s.createDelegation.mock.calls[0] as unknown[])[4] as number;
+    expect(expirationSecs * 1000).toBeLessThanOrEqual(Date.now() + 30 * DAY_MS);
+  });
+
   test("forceWalletSign allows what only a wallet-signed message can carry (300 years) and reaches the wallet", async () => {
     const s = mockedNode("9999-12-31T23:59:59.000Z", { signer: true });
     await s.node.delegateTo(BOB_DID, [ENTRY], { expiry: 300 * YEAR_MS, forceWalletSign: true }).catch(() => undefined);

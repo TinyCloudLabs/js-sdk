@@ -87,25 +87,37 @@ export const EXPIRY = {
 export const MAX_SIWE_EXPIRY_MS = 253402300799000;
 
 /**
- * Why `expiresAt` cannot be written into a wallet-signed message, or `null` when
- * it can. This is the only upper limit on a lifetime the owner chooses, and it
- * is technical, not policy. An invalid Date, NaN and Infinity are refused too,
- * because `toISOString()` throws a bare `RangeError` on them.
- *
- * The matching limit for tokens signed by the session key lives in
- * `@tinycloud/node-sdk` (`ucanExpiryRefusal`), which is the only place those
- * tokens are minted from.
+ * The latest expiry a token signed by the session key (`delegateTo`, agent and
+ * share delegations) can carry: 2255-06-05T23:47:34Z, floored to the second.
+ * The WASM's UCAN timestamps are exact to the microsecond in a double, which
+ * stops there. A session itself may still be signed to 9999.
  */
-export function technicalExpiryRefusal(expiresAt: Date | number): string | null {
-  // `NaN` (an invalid Date) and `Infinity` fail the comparison too, so they are refused with the same message.
-  return Number(expiresAt) <= MAX_SIWE_EXPIRY_MS
-    ? null
-    : "expiry is not a valid date or is later than 9999-12-31, the latest date a TinyCloud sign-in message can carry; choose an earlier expiry";
+export const MAX_UCAN_EXPIRY_MS = 9007199254000;
+
+export type TechnicalExpiryKind = "siwe" | "ucan";
+
+/**
+ * Why `expiresAt` cannot be written into a message of this kind, or `null` when
+ * it can. These are the only upper limits on a lifetime the owner chooses; they
+ * are technical, not policy. An invalid Date, NaN and Infinity are refused too,
+ * because `toISOString()` throws a bare `RangeError` on them.
+ */
+export function technicalExpiryRefusal(expiresAt: Date | number, kind: TechnicalExpiryKind): string | null {
+  const ms = Number(expiresAt);
+  const siwe = kind === "siwe";
+  const last = siwe ? "9999-12-31" : "2255-06-05";
+  if (!Number.isFinite(ms)) return `expiry is not a valid date or is too far away to hold; choose one before ${last}`;
+  if (ms <= (siwe ? MAX_SIWE_EXPIRY_MS : MAX_UCAN_EXPIRY_MS)) return null;
+  return `expiry is later than ${last}, ${
+    siwe
+      ? "the latest date a TinyCloud sign-in message can carry"
+      : "the latest date an agent or share delegation can carry (UCAN limit); the session itself can be signed to 9999-12-31"
+  }; choose an earlier expiry`;
 }
 
 /** Throws the {@link technicalExpiryRefusal} message as an `Error`. */
-export function assertExpiryWithinTechnicalLimit(expiresAt: Date | number): void {
-  const refusal = technicalExpiryRefusal(expiresAt);
+export function assertExpiryWithinTechnicalLimit(expiresAt: Date | number, kind: TechnicalExpiryKind): void {
+  const refusal = technicalExpiryRefusal(expiresAt, kind);
   if (refusal) throw new Error(refusal);
 }
 
