@@ -475,11 +475,12 @@ function noticedRefusal(error: unknown, payload: Pick<GrantPayload, 'delegationC
 }
 
 /** `installGrant` for a grant that came from outside (an approval result, a code, a file): a refusal carries the TC-2308 notice. */
-export async function installRefusing(profile: Profile, key: AgentKey, payload: GrantPayload, options: { spaceTimeoutMs?: number } = {}): Promise<void> {
+export async function installRefusing(profile: Profile, key: AgentKey, payload: GrantPayload, options: { spaceTimeoutMs?: number; viaCode?: boolean } = {}): Promise<void> {
   try {
     await installGrant(profile, key, payload, options);
   } catch (error) {
-    throw noticedRefusal(error, payload, `run \`${cmd('init')}\` with the same grant again (or \`${cmd('init --resume')}\`)`);
+    // `init --resume` finishes a redeemed XXXX-XXXX code from its saved copy; a file or JSON grant is simply given again.
+    throw noticedRefusal(error, payload, options.viaCode ? `run \`${cmd('init --resume')}\` (or give the same code again)` : `run \`${cmd('init')}\` with the same grant again`);
   }
 }
 

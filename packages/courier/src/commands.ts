@@ -13,7 +13,7 @@ import {
   type AgentKey, type Profile, type StoredPeer,
 } from './profile.js';
 import { courierNode, peerKv } from './node.js';
-import { courierGrantRequest, grantFromInput, installRefusing, noSpaceError, pendingSpaceError, receiveGrant, resumeAwaitingGrant, resumeGrant } from './grant.js';
+import { courierGrantRequest, grantFromInput, installRefusing, isShortCode, noSpaceError, pendingSpaceError, receiveGrant, resumeAwaitingGrant, resumeGrant } from './grant.js';
 import { clearPending, completeApproval, DEFAULT_WAIT_MS, holdsApproval, loadPending, MAX_WAIT_MS, requestApproval, waitApproval } from './grant-request.js';
 import {
   artifactA, artifactWithDelegation, parseArtifact, peerRecordBody, PEER_DELEGATION_EXPIRY, validateArtifactIdentity,
@@ -198,7 +198,7 @@ export async function cmdInit(args: ParsedArgs) {
     payload = await receiveGrant(request, { paste: args.has('paste') });
   }
   try {
-    await installRefusing(profile, key, payload);
+    await installRefusing(profile, key, payload, { viaCode: grantRaw !== undefined && isShortCode(grantRaw) });
   } catch (error) {
     // `no-space` means the grant IS saved (awaiting the space); any other error installed nothing and leaves an open short-link request alone.
     if (error instanceof CourierError && error.code === 'no-space') clearPendingQuietly();
@@ -210,15 +210,23 @@ export async function cmdInit(args: ParsedArgs) {
 }
 
 /**
- * A grant is installed from another source: an open short-link request would be collected later, on top of it. A request whose
- * result was already installed (committed) stays, so the next `init --wait` can still send its acknowledgement.
+ * A grant was installed from another source (legacy import): the saved short-link request would be collected later, on top of it,
+ * so it is removed. Says so when it held an approval the owner gave (that approval is lost). Never fails the command.
  */
 function clearPendingQuietly(): void {
-  try { clearPending(); } catch (error) {
+  try {
+    const saved = loadPending();
+    if (saved && holdsApproval(saved)) console.error('This grant replaces the saved short-link approval: discarded a saved approval that was not installed.');
+    clearPending();
+  } catch (error) {
     console.error(`warning: could not remove the saved approval request (${(error as Error).message}).`);
   }
 }
 
+/**
+ * `init --resume` installed a grant: an open short-link request that holds nothing would be collected later, on top of it. One with a
+ * result reference, the encrypted result or a commit stays, so the next `init --wait` can install it or send its acknowledgement.
+ */
 function dropOpenRequest(): void {
   // Only a request that holds nothing: one with a result reference, the encrypted result or a committed grant is kept for `--wait`.
   const saved = loadPending();

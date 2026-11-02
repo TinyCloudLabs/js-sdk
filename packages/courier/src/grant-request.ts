@@ -61,24 +61,69 @@ export interface PendingGrantRequest {
   committed?: true;
 }
 
+type PendingRead =
+  | { kind: 'none' }
+  | { kind: 'ok'; pending: PendingGrantRequest }
+  /** The file or its directory has the wrong mode, or the file cannot be read (EACCES, EIO): the record may well be intact. */
+  | { kind: 'unreadable'; reason: string; fix: string }
+  /** The file is readable and is not a saved request. */
+  | { kind: 'corrupt'; reason: string };
+
+function readPending(): PendingRead {
+  const file = path.join(profileDir(), PENDING_FILE);
+  if (!fs.existsSync(file)) return { kind: 'none' };
+  const dirMode = fs.statSync(profileDir()).mode & 0o777;
+  if ((dirMode & 0o077) !== 0) {
+    return { kind: 'unreadable', reason: `${profileDir()} has mode ${dirMode.toString(8)}`, fix: `chmod 700 ${profileDir()}` };
+  }
+  const mode = fs.statSync(file).mode & 0o777;
+  if ((mode & 0o077) !== 0) return { kind: 'unreadable', reason: `${file} has mode ${mode.toString(8)}, not 600`, fix: `chmod 600 ${file}` };
+  let text: string;
+  try { text = fs.readFileSync(file, 'utf8'); } catch (error) {
+    return { kind: 'unreadable', reason: `${file} cannot be read (${(error as Error).message})`, fix: `chmod 600 ${file}` };
+  }
+  let pending: PendingGrantRequest;
+  try { pending = JSON.parse(text) as PendingGrantRequest; } catch (error) { return { kind: 'corrupt', reason: (error as Error).message }; }
+  if (!pending || pending.version !== 1 || !pending.request || typeof pending.requestId !== 'string' || typeof pending.bodyCid !== 'string'
+    || typeof pending.approvalUrl !== 'string' || typeof pending.relayPrivateKey !== 'string' || typeof pending.ackId !== 'string') {
+    return { kind: 'corrupt', reason: 'unexpected contents' };
+  }
+  return { kind: 'ok', pending };
+}
+
 /**
- * The saved request, if there is a readable one. A record that cannot be read (corrupt, wrong mode) is reported on stderr and treated
- * as no record: it must never fail a command that already installed a grant, or block `--rotate-key`. The next request replaces it.
+ * The saved request for READ-ONLY and cleanup callers. A record that cannot be read is reported on stderr and treated as no record, so
+ * it never fails a command that already installed a grant or blocks `--rotate-key`. Callers that WRITE the record use
+ * `loadPendingForWrite`, which never lets an unreadable record be overwritten.
  */
 export function loadPending(): PendingGrantRequest | undefined {
-  let pending: PendingGrantRequest | undefined;
-  try {
-    pending = readSecure<PendingGrantRequest>(PENDING_FILE, false);
-    if (pending !== undefined && (pending.version !== 1 || !pending.request || typeof pending.requestId !== 'string' || typeof pending.bodyCid !== 'string'
-      || typeof pending.approvalUrl !== 'string' || typeof pending.relayPrivateKey !== 'string' || typeof pending.ackId !== 'string')) {
-      throw new CourierError('bad-profile', 'unexpected contents');
-    }
-  } catch (error) {
-    if (!(error instanceof CourierError)) throw error;
-    console.error(`warning: ignoring the saved approval request ${PENDING_FILE} in ${profileDir()} (${error.message}). Run \`${cmd('init --request')}\` for a new link.`);
-    return undefined;
+  const read = readPending();
+  if (read.kind === 'ok') return read.pending;
+  if (read.kind !== 'none') {
+    console.error(`warning: ignoring the saved approval request ${PENDING_FILE} in ${profileDir()} (${read.reason}).`);
   }
-  return pending;
+  return undefined;
+}
+
+/**
+ * The saved request for a caller that is about to write one. A record that exists but cannot be read stops the command with the file
+ * named and how to fix it: the approval in it may be intact (it comes back after the fix). Only a record that is readable and corrupt
+ * is set aside, as `approval-pending.json.corrupt-<time>` (0600), and the command goes on without it.
+ */
+function loadPendingForWrite(): PendingGrantRequest | undefined {
+  const read = readPending();
+  if (read.kind === 'ok') return read.pending;
+  if (read.kind === 'unreadable') {
+    throw new CourierError('approval-unreadable', `The saved approval request cannot be used: ${read.reason}. It may hold an approval the owner already gave, so it was not touched. Fix it with \`${read.fix}\`, then run \`${cmd('init --wait')}\` again.`);
+  }
+  if (read.kind === 'corrupt') {
+    const file = path.join(profileDir(), PENDING_FILE);
+    const aside = `${file}.corrupt-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+    fs.renameSync(file, aside);
+    fs.chmodSync(aside, 0o600);
+    console.error(`warning: ${PENDING_FILE} is corrupt (${read.reason}); it was moved to ${aside} and will be replaced by a new request.`);
+  }
+  return undefined;
 }
 
 function savePending(pending: PendingGrantRequest): void {
@@ -186,10 +231,10 @@ async function createPending(profile: Profile, want: WantedRequest): Promise<Pen
  */
 export async function requestApproval(profile: Profile, key: AgentKey, expiry: string | undefined, options: { openkeyApiHost?: string } = {}): Promise<PendingGrantRequest> {
   const want = wanted(profile, key, expiry, options.openkeyApiHost);
-  const existing = loadPending();
+  const existing = loadPendingForWrite();
   if (existing && existing.request.issuer === want.signer.did) {
     if (holdsApproval(existing)) {
-      throw new CourierError('usage', `Approval request ${existing.requestId} has already been approved by the owner. Run \`${cmd('init --wait')}\` to finish it first; \`${cmd('init --request')}\` can ask for another approval after that. To discard that approval instead, run \`${cmd('init --rotate-key --request')}\` (this replaces the agent key and re-pairs every peer).`);
+      throw new CourierError('usage', `Approval request ${existing.requestId} has already been approved by the owner. Run \`${cmd('init --wait')}\` to finish it first; \`${cmd('init --request')}\` can ask for another approval after that. To discard that approval instead, run \`${cmd('init --rotate-key --request')}\`: it replaces the agent key, CLEARS every pairing (peers must be re-paired by hand), deletes grant.json and puts the profile back to awaiting-grant, so there is no working grant until the owner approves.`);
     }
     if (matches(existing, profile, want) && !requestLapsed(existing)) return existing;
   }
@@ -213,7 +258,7 @@ function expiredError(): CourierError {
  */
 export async function waitApproval(profile: Profile, key: AgentKey, expiry: string | undefined, options: Pick<WaitOptions, 'openkeyApiHost'> = {}): Promise<{ pending: PendingGrantRequest; resumed: boolean }> {
   const want = wanted(profile, key, expiry, options.openkeyApiHost);
-  const existing = loadPending();
+  const existing = loadPendingForWrite();
   if (existing && existing.request.issuer === want.signer.did) {
     if (holdsApproval(existing)) return { pending: existing, resumed: true };
     if (matches(existing, profile, want)) {

@@ -62,7 +62,7 @@ scenario('the discard hint says exactly what --rotate-key does: clears every pai
   await heldApproval(ctx);
   const run = await ctx.courier('--request');
   assert.equal(run.code, 2);
-  assert.match(run.stderr, /clears every pairing/);
+  assert.match(run.stderr, /clears every pairing/i);
   assert.match(run.stderr, /grant\.json/);
   assert.match(run.stderr, /awaiting-grant/);
   assert.doesNotMatch(run.stderr, /re-pairs/);
