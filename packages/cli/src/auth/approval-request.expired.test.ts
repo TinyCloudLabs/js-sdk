@@ -297,6 +297,27 @@ describe("without --timeout, an approval request that expired unanswered ends th
     expect(acks).toHaveLength(1);
   });
 
+  test("(d3) the same result-reference-only entry past its expiry, with the real 400 shape: exit 8 and the entry kept, never dropped as expired", async () => {
+    await createPending();
+    await approve();
+    const failFetch = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      if (new URL(input instanceof Request ? input.url : String(input)).pathname.endsWith("/fetch")) return new Response(null, { status: 500 });
+      return route(input, init);
+    }, { preconnect: send.preconnect }));
+    try {
+      expect((await pendingOf(() => acquireApprovalRequest(did, options()))).code).toBe("APPROVAL_RESULT_UNAVAILABLE");
+    } finally { failFetch.mockRestore(); }
+    const [held] = await entries();
+    expect(held!.resultRef).toBeDefined();
+    await expireLocally(30 * 60_000);
+    results.clear(); // OpenKey no longer lists the result for this request ...
+    discoverRefusal = REAL_SHAPE; // ... and answers its discover with the 400
+    const error = await pendingOf(() => acquireApprovalRequest(did, options()));
+    expect(error.code).toBe("APPROVAL_REQUEST_UNAVAILABLE");
+    expect(error.exitCode).toBe(8);
+    expect((await entries()).map((item) => item.requestId)).toEqual([held!.requestId]);
+  });
+
   test("(e) the stored expiry having just passed does not hide an approved result: OpenKey still answers 200 with it and it is collected", async () => {
     await createPending();
     await approve();
@@ -309,13 +330,13 @@ describe("without --timeout, an approval request that expired unanswered ends th
     expect(acks).toHaveLength(1);
   });
 
-  test("(e2) the 400 mapping starts at the stored expiry itself, with no skew: 1 s past is exit 3, 1 s before is exit 8", async () => {
+  test("(e2) the 400 mapping starts at the stored expiry itself, with no skew: 5 s past is exit 3, 5 s before is exit 8", async () => {
     await createPending();
     discoverRefusal = REAL_SHAPE;
-    await expireLocally(-1_000);
+    await expireLocally(-5_000);
     expect((await pendingOf(() => acquireApprovalRequest(did, options()))).code).toBe("APPROVAL_REQUEST_UNAVAILABLE");
     expect(await entries()).toHaveLength(1);
-    await expireLocally(2_000); // 2 s past
+    await expireLocally(5_000);
     expect((await pendingOf(() => acquireApprovalRequest(did, options()))).code).toBe("APPROVAL_REQUEST_EXPIRED");
     expect(await entries()).toEqual([]);
   });
