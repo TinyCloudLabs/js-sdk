@@ -17,7 +17,7 @@ import { NodeWasmBindings, PrivateKeySigner } from "@tinycloud/node-sdk";
 
 const recordedErrors: Array<{ code?: string; exitCode?: number; message?: string }> = [];
 let pickedLifetimeMs = 0;
-let tamper: "none" | "signature" | "no-expiry-line" = "none";
+let tamper: "none" | "signature" | "no-expiry-line" | "injected-line" = "none";
 let savedPendingCopies = 0;
 /** The Expiration Time of the grant the simulated OpenKey just made (what the owner is told). */
 let grantedUntil = "";
@@ -28,6 +28,12 @@ const wasm = new NodeWasmBindings();
 const signer = new PrivateKeySigner("4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f4d9c5c1b5605dce6f");
 const address = await signer.getAddress();
 const OTHER_ADDRESS = "0x000000000000000000000000000000000000dEaD";
+/** A statement that begins with its own `Expiration Time: ` line (the real line follows the statement). */
+const injectExpiryLine = (siwe: string): string => {
+  const lines = siwe.split("\n");
+  lines[3] = `Expiration Time: 1999-01-01T00:00:00.000Z ${lines[3]}`;
+  return lines.join("\n");
+};
 
 /** A real owner-signed session for the profile's own key, with a lifetime chosen by the test. */
 async function proofFor(did: string, jwk: Record<string, unknown>, lifetimeMs: number) {
@@ -48,16 +54,19 @@ async function proofFor(did: string, jwk: Record<string, unknown>, lifetimeMs: n
     spaceId,
     ownerDid: `did:pkh:eip155:1:${address}`,
     // A result with no readable proof at all: the CLI cannot say until when the grant lasts.
-    ...(tamper === "no-expiry-line" ? {} : { siwe: prepared.siwe }),
+    ...(tamper === "no-expiry-line" ? {} : { siwe: tamper === "injected-line" ? injectExpiryLine(prepared.siwe) : prepared.siwe }),
     signature: tamper === "signature" ? await signer.signMessage("not the message that was approved") : signature,
   };
 }
 
 let replaceKeyDuringAcquisition: Record<string, unknown> | undefined;
+let sessionDuringAcquisition = false;
 let savePendingDelegation: typeof import("../auth/pending-code.js").savePendingDelegation;
 mock.module("../auth/browser-auth.js", () => ({
   ...realBrowserAuth,
   startAuthFlow: async (did: string, options: Record<string, unknown>) => {
+    // Another login commits a live session with this key while the owner is still approving.
+    if (sessionDuringAcquisition) await ProfileManager.setSession(options.profileName as string, await proofFor(did, options.jwk as Record<string, unknown>, 30 * DAY));
     const delegation = await proofFor(did, options.jwk as Record<string, unknown>, pickedLifetimeMs);
     // Another login replaces the profile's key while the owner is still approving.
     if (replaceKeyDuringAcquisition !== undefined) await ProfileManager.setKey(options.profileName as string, replaceKeyDuringAcquisition);
@@ -120,6 +129,7 @@ beforeEach(async () => {
   grantedUntil = "";
   tamper = "none";
   replaceKeyDuringAcquisition = undefined;
+  sessionDuringAcquisition = false;
   profileName = `refusal-${++profileNumber}`;
   await ProfileManager.ensureConfigDir();
   await ProfileManager.setConfig({ ...(await ProfileManager.getConfig()), defaultProfile: "default" });
@@ -190,6 +200,16 @@ describe("tc auth login --paste: the profile and its key were created by this lo
     expect(stderr.join("")).not.toContain(" until ");
   });
 
+  test("the date is the result's own last Expiration Time line: an earlier line inside the statement does not stand in for it", async () => {
+    pickedLifetimeMs = 7 * DAY;
+    tamper = "injected-line";
+    await login();
+    expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_PROOF_INVALID" })]);
+    expect(grantedUntil).not.toBe("");
+    expect(lines(deletedLine(grantedUntil))).toHaveLength(1);
+    expect(stderr.join("")).not.toContain("1999");
+  });
+
   test("a SUCCESSFUL paste login still keeps its key and session, and prints neither line", async () => {
     pickedLifetimeMs = 30 * DAY;
     await login("--expiry", "7d");
@@ -255,6 +275,17 @@ describe("a key another login replaced while this approval was pending is not th
     expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_EXPIRY_EXCEEDED" })]);
     expect(((await ProfileManager.getKey(profileName)) as Record<string, unknown>).x).toBe(other.x);
     expect(files(profileName)).toEqual({ key: true, pending: false, session: false });
+    expect(lines(keptLine())).toHaveLength(1);
+    expect(lines(deletedLine())).toHaveLength(0);
+  });
+
+  test("a session another login committed with this key while the approval was pending keeps it: the profile and key stay, the kept line is printed once", async () => {
+    pickedLifetimeMs = 11 * 365 * DAY;
+    sessionDuringAcquisition = true;
+    await login();
+    expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_EXPIRY_EXCEEDED" })]);
+    expect(files(profileName)).toEqual({ key: true, pending: false, session: true });
+    expect(await ProfileManager.profileExists(profileName)).toBe(true);
     expect(lines(keptLine())).toHaveLength(1);
     expect(lines(deletedLine())).toHaveLength(0);
   });
