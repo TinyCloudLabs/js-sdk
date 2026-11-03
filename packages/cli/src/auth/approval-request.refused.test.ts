@@ -1,7 +1,7 @@
 // TC-2363 row (b): a PERMANENT post-approval refusal of the fetched result drops the pending approval entry (its result key and
 // result reference), as a not_found / expired answer from OpenKey already does. A refusal the resume design keeps on purpose
 // (AUTH_EXPIRED) leaves the entry. The result is never ACKed: ACK means "saved", and no discard call exists.
-import { afterAll, afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, setSystemTime, spyOn, test } from "bun:test";
 import { chmodSync, mkdtempSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { createCipheriv, createHash, createHmac, createPublicKey, randomBytes, verify } from "node:crypto";
@@ -97,7 +97,7 @@ async function signedDelegation(actions = ["tinycloud.kv/list", "tinycloud.kv/ge
     address, chainId: 1, spaceId, ownerDid, siwe: prepared.siwe, signature };
 }
 
-async function stage(delegation: Record<string, unknown>, options: { expectedOwner?: string; grantLifetimeSeconds?: number; resultExpiresAt?: string } = { expectedOwner: ownerDid }) {
+async function stage(delegation: Record<string, unknown>, options: { expectedOwner?: string; grantLifetimeSeconds?: number; resultExpiresAt?: string; breakBinding?: boolean } = { expectedOwner: ownerDid }) {
   const relay = createECDH("prime256v1"); relay.generateKeys();
   const recipientJwk = relayPublicJwkOf(relay);
   const request = { issuer: did, requestVersion: 1 as const, targetDid: did,
@@ -115,7 +115,7 @@ async function stage(delegation: Record<string, unknown>, options: { expectedOwn
   const cipher = createCipheriv("aes-256-gcm", encryptionKey, nonce);
   cipher.setAAD(Buffer.from(requestId));
   const delegationExpiresAt = new Date((delegation.siwe as string).match(/^Expiration Time:\s*(.+)$/m)![1]!).toISOString();
-  const plaintext = { resultVersion: 1, requestId, requestDigest: prepared.bodyCid, requesterDid: did,
+  const plaintext = { resultVersion: 1, requestId, requestDigest: prepared.bodyCid, requesterDid: options.breakBinding ? "did:key:someone-else" : did,
     ownerDid, targetDid: did, delegationExpiresAt, delegation };
   const ciphertext = Buffer.concat([
     cipher.update(JSON.stringify(plaintext), "utf8"), cipher.final(), cipher.getAuthTag(),
@@ -268,5 +268,75 @@ describe("the refusal of a fetched result is announced where the command catches
     expect((await entries())!.map((entry) => entry.requestId)).toEqual([requestId]);
     await dropRefusedApproval("approval", verified);
     expect(await entries()).toEqual([]);
+  });
+});
+
+describe("a result whose binding does not match its request (APPROVAL_RESULT_INVALID)", () => {
+  test("the pending request is dropped and ONE notice names the delegation it carried; no ACK", async () => {
+    const delegation = await signedDelegation();
+    await unfetched(delegation, { expectedOwner: ownerDid, breakBinding: true });
+    let thrown: unknown;
+    const notices = await noticeOf(() => refusing({ profileName: "approval", key, storedKey: key }, () => acquireApprovalRequest(did, ACQUIRE).catch((error) => { thrown = error; throw error; })));
+    expect(thrown).toMatchObject({ code: "APPROVAL_RESULT_INVALID" });
+    expect(await entries()).toEqual([]);
+    expect(acknowledgements.size).toBe(0);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toStartWith(`Refused delegation: ${delegation.delegationCid}. `);
+  });
+});
+
+describe("a ceiling exceeded only because the CLI's clock is behind is kept like AUTH_EXPIRED", () => {
+  // OpenKey signed Issued At + the requested hour. The CLI's ceiling is its clock + the hour + 30 s, so a clock 2 minutes behind
+  // makes the approval look too long. The entry stays: the same command resumes it once the ceiling has caught up.
+  test("clock 2 min behind, lifetime as requested: OPENKEY_EXPIRY_EXCEEDED, entry kept, no notice", async () => {
+    await unfetched(await signedDelegation(undefined, 3599)); // Issued At is 1 s before: Expiration = Issued At + 1 h
+    setSystemTime(new Date(Date.now() - 120_000));
+    try {
+      let thrown: unknown;
+      const notices = await noticeOf(() => refusing({ profileName: "approval", key, storedKey: key }, () => acquireApprovalRequest(did, ACQUIRE).catch((error) => { thrown = error; throw error; })));
+      expect(thrown).toMatchObject({ code: "OPENKEY_EXPIRY_EXCEEDED" });
+      expect(notices).toEqual([]);
+    } finally { setSystemTime(); }
+    expect((await entries())!.map((entry) => entry.requestId)).toEqual([requestId]);
+  });
+
+  test("the same clock, a lifetime really above the request (3 days for 1 hour): permanent, entry dropped, one notice", async () => {
+    await unfetched(await signedDelegation(undefined, 3 * 86400));
+    setSystemTime(new Date(Date.now() - 120_000));
+    let notices: string[] = [];
+    try {
+      notices = await noticeOf(() => refusing({ profileName: "approval", key, storedKey: key }, () => acquireApprovalRequest(did, ACQUIRE)));
+    } finally { setSystemTime(); }
+    expect(notices).toHaveLength(1);
+    expect(await entries()).toEqual([]);
+  });
+});
+
+const { refreshOpenKeySession } = await import("../commands/auth.js");
+describe("auth rotate: a post-approval failure drops the request that holds the staged private key", () => {
+  const otherKey = JSON.parse(wasm.createSessionManager().jwk("default")!) as Ed25519PrivateJwk;
+  const viaRequest = (afterApproval: () => Promise<void>) => async (d: string, flow: Record<string, unknown>) => {
+    const result = await acquireApprovalRequest(d, { ...flow, ...ACQUIRE } as never);
+    await afterApproval();
+    return result;
+  };
+  const changeKeyMeanwhile = async () => { await ProfileManager.setKey("approval", otherKey); };
+
+  test("rotation (the staged key is only in the request): PROFILE_CHANGED_DURING_LOGIN after the approval drops the entry", async () => {
+    const oldKey = JSON.parse(wasm.createSessionManager().jwk("default")!) as Ed25519PrivateJwk;
+    await ProfileManager.setKey("approval", oldKey);
+    await unfetched(await signedDelegation());
+    await expect(refreshOpenKeySession("approval", host, {
+      rotation: { jwk: key, did }, openKeyAcquisition: viaRequest(changeKeyMeanwhile) as never,
+    })).rejects.toMatchObject({ code: "PROFILE_CHANGED_DURING_LOGIN" });
+    expect(await entries()).toEqual([]);
+  });
+
+  test("a plain login (the key is key.json's, so the entry can be resumed): the same failure KEEPS the entry", async () => {
+    await unfetched(await signedDelegation());
+    await expect(refreshOpenKeySession("approval", host, {
+      openKeyAcquisition: viaRequest(changeKeyMeanwhile) as never,
+    })).rejects.toMatchObject({ code: "PROFILE_CHANGED_DURING_LOGIN" });
+    expect((await entries())!.map((entry) => entry.requestId)).toEqual([requestId]);
   });
 });

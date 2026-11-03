@@ -9,7 +9,7 @@
 // Real ProfileManager and real refreshOpenKeySession / ensureDelegationAuthority; only the OpenKey acquisition is simulated
 // (it also saves the redeemed code's local copy, as the real paste flow does when the key it is bound to is stored).
 
-import { afterAll, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, setSystemTime, spyOn, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -19,7 +19,10 @@ import { NodeWasmBindings, PrivateKeySigner } from "@tinycloud/node-sdk";
 
 const recordedErrors: Array<{ code?: string; exitCode?: number; message?: string }> = [];
 let pickedLifetimeMs = 0;
-let tamper: "none" | "signature" | "no-expiry-line" | "injected-line" = "none";
+let tamper: "none" | "signature" | "no-expiry-line" | "injected-line" | "evil-cid" = "none";
+/** After OpenKey answers, the CLI's clock reads this many ms BEHIND the real time (a skewed machine). */
+let clockBehindMs = 0;
+const EVIL_CID = "bafy\u001b[2J\nRefused nothing. Login OK";
 let savedPendingCopies = 0;
 /** The Expiration Time and CID of the grant the simulated OpenKey just made (what the owner is told). */
 let grantedUntil = "";
@@ -64,7 +67,7 @@ async function proofFor(did: string, jwk: Record<string, unknown>, lifetimeMs: n
   grantedCid = session.delegationCid;
   const { d: _private, ...publicJwk } = jwk;
   return {
-    ...session, jwk: publicJwk, verificationMethod: did, address: signerAddress, chainId: 1,
+    ...session, ...(tamper === "evil-cid" ? { delegationCid: EVIL_CID } : {}), jwk: publicJwk, verificationMethod: did, address: signerAddress, chainId: 1,
     spaceId,
     ownerDid: `did:pkh:eip155:1:${signerAddress}`,
     // A result with no readable proof at all: the CLI cannot say until when the grant lasts.
@@ -99,6 +102,7 @@ const acquisitionFlow = async (did: string, options: Record<string, unknown>) =>
     savedPendingCopies += 1;
   }
   if (replaceKeyAfterRedeem !== undefined) await ProfileManager.setKey(options.profileName as string, replaceKeyAfterRedeem);
+  if (clockBehindMs > 0) setSystemTime(new Date(Date.now() - clockBehindMs));
   return delegation;
 };
 mock.module("../auth/browser-auth.js", () => ({ ...realBrowserAuth, startAuthFlow: acquisitionFlow }));
@@ -146,7 +150,7 @@ const REVOKE_URL = "https://account.tinycloud.xyz/delegations";
 const deletedLine = (until: string = grantedUntil) =>
   `OpenKey granted this approval${until === "" ? "" : ` until ${until}`}, but this CLI did not use it and its key was deleted, so it cannot be used. You can also remove it at account.tinycloud.xyz.`;
 const keptLine = (until: string = grantedUntil) =>
-  `OpenKey granted this approval${until === "" ? "" : ` until ${until}`} and the key it belongs to still exists on this device (other grants use it). Revoke it at account.tinycloud.xyz.`;
+  `OpenKey granted this approval${until === "" ? "" : ` until ${until}`} and the key it belongs to still exists on this device (other grants may use it). Revoke it at account.tinycloud.xyz.`;
 let profileNumber = 0;
 let profileName = "";
 
@@ -158,6 +162,7 @@ beforeEach(async () => {
   grantedUntil = "";
   grantedCid = "";
   tamper = "none";
+  clockBehindMs = 0;
   signedByOther = false;
   replaceKeyDuringAcquisition = undefined;
   replaceKeyAfterRedeem = undefined;
@@ -168,6 +173,7 @@ beforeEach(async () => {
   await ProfileManager.ensureConfigDir();
   await ProfileManager.setConfig({ ...(await ProfileManager.getConfig()), defaultProfile: "default" });
 });
+afterEach(() => { setSystemTime(); });
 afterAll(async () => {
   if (originalHome === undefined) delete process.env.TC_HOME;
   else process.env.TC_HOME = originalHome;
@@ -285,6 +291,58 @@ describe("tc init --paste: the profile and its key were created by this command,
     expect(await ProfileManager.profileExists(profileName)).toBe(false);
     expectOneNotice("deleted");
     expect((await ProfileManager.getConfig()).defaultProfile).toBe("default");
+  });
+});
+
+describe("a signed lifetime that only exceeds the ceiling because the CLI's clock is behind is NOT a permanent refusal", () => {
+  // OpenKey signs Issued At + the requested lifetime. The CLI's ceiling is its own clock + the lifetime + 30 s, so a clock 2 minutes
+  // behind makes a default-lifetime approval look too long. Nothing in the approval itself is wrong: the saved approval stays.
+  test("clock 2 min behind, lifetime exactly as requested: OPENKEY_EXPIRY_EXCEEDED, but the saved code, key, profile stay and no notice is printed", async () => {
+    pickedLifetimeMs = DAY - 60_000; // the proof's Issued At is 60 s before it was made: Expiration = Issued At + 1 day
+    clockBehindMs = 120_000;
+    await login("--expiry", "1d");
+    expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_EXPIRY_EXCEEDED", exitCode: 5 })]);
+    expect(files(profileName)).toMatchObject({ key: true, pending: true, session: false });
+    expect(await ProfileManager.profileExists(profileName)).toBe(true);
+    expectNoNotice();
+  });
+
+  test("the same clock, but a lifetime really above the request (6 days for 1 day): still permanent: cleaned up and announced", async () => {
+    pickedLifetimeMs = 6 * DAY;
+    clockBehindMs = 120_000;
+    await login("--expiry", "1d");
+    expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_EXPIRY_EXCEEDED", exitCode: 5 })]);
+    expect(files(profileName)).toEqual({ key: false, pending: false, session: false });
+    expectOneNotice("deleted");
+  });
+});
+
+describe("the notice prints a CID only when it looks like one", () => {
+  test("a result-supplied CID with an escape sequence and a newline prints no control character and no forged line", async () => {
+    pickedLifetimeMs = 7 * DAY;
+    tamper = "evil-cid";
+    await login("--expiry", "7d");
+    expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_PROOF_INVALID" })]);
+    expect(noticeCount()).toBe(1);
+    // eslint-disable-next-line no-control-regex
+    expect(text()).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f]/);
+    expect(text().split("\n").some((line) => line.startsWith("Refused nothing"))).toBe(false);
+    expect(text()).not.toContain("Refused delegation:");
+    expect(text()).toContain(deletedLine());
+  });
+
+  test("dropCommittedDelegation ignores a CID that is not a CID: a record keyed on it stays", async () => {
+    const { dropCommittedDelegation, pendingDelegationFor } = await import("../auth/pending-code.js");
+    await createKeyOnlyProfile(profileName, HOST);
+    pickedLifetimeMs = 7 * DAY;
+    const odd = { ...(await proofFor("did:key:x", { kty: "OKP", crv: "Ed25519", x: "k" }, pickedLifetimeMs)), delegationCid: "not a cid\n" };
+    await savePendingDelegation(profileName, "abcd-efgh", odd as never);
+    await dropCommittedDelegation(profileName, { delegationCid: "not a cid\n" });
+    expect(await pendingDelegationFor(profileName, "abcd-efgh")).toBeDefined();
+    const real = await proofFor("did:key:x", { kty: "OKP", crv: "Ed25519", x: "k" }, pickedLifetimeMs);
+    await savePendingDelegation(profileName, "wxyz-2345", real as never);
+    await dropCommittedDelegation(profileName, { delegationCid: real.delegationCid });
+    expect(await pendingDelegationFor(profileName, "wxyz-2345")).toBeUndefined();
   });
 });
 
