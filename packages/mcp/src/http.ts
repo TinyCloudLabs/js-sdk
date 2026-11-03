@@ -43,6 +43,8 @@ import type { McpOperationInvocation } from "./tools.js";
 import { MCP_VERSION } from "./version.js";
 
 const REQUIRED_SCOPE = "tinycloud:mcp";
+const MCP_CORS_ALLOWED_HEADERS =
+  "Authorization, Content-Type, Accept, Mcp-Protocol-Version, Mcp-Session-Id, Last-Event-ID, Mcp-Method, Mcp-Name";
 const LOCAL_CLI_PACKAGE = ["@tinycloud", "cli"].join("/");
 const LOCAL_MCP_PACKAGE = ["@tinycloud", "mcp"].join("/");
 
@@ -623,21 +625,20 @@ function requiredState(url: URL): string {
  * `Authorization: Bearer` header alone (no cookies or other ambient
  * credentials), so the Origin carries no authority. The wildcard origin can
  * never be combined with credentials, so `Access-Control-Allow-Credentials`
- * is not set. Only the bearer challenge header is exposed to scripts. A request
- * without an Origin header (not a browser cross-origin call) gets no CORS headers.
+ * is not set. Only the bearer challenge header is exposed to scripts, and a
+ * preflight allows a fixed list of the headers MCP clients send; the native
+ * service headers are not in it. A request without an Origin header (not a
+ * browser cross-origin call) gets no CORS headers. `Vary: Origin` is appended
+ * to every answer because the CORS headers depend on the request's Origin.
  */
 function mcpCors(response: Response, request: Request): Response {
-  if (!request.headers.has("origin")) return response;
   const headers = new Headers(response.headers);
-  headers.set("access-control-allow-origin", "*");
-  headers.set("access-control-allow-methods", "GET, POST, DELETE, OPTIONS");
-  headers.set("access-control-expose-headers", "WWW-Authenticate");
-  const requestedHeaders = request.method === "OPTIONS"
-    ? request.headers.get("access-control-request-headers")
-    : null;
-  if (requestedHeaders !== null) {
-    headers.set("access-control-allow-headers", requestedHeaders);
-    headers.set("vary", "Access-Control-Request-Headers");
+  headers.append("vary", "Origin");
+  if (request.headers.has("origin")) {
+    headers.set("access-control-allow-origin", "*");
+    headers.set("access-control-allow-methods", "GET, POST, DELETE, OPTIONS");
+    headers.set("access-control-expose-headers", "WWW-Authenticate");
+    if (request.method === "OPTIONS") headers.set("access-control-allow-headers", MCP_CORS_ALLOWED_HEADERS);
   }
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
