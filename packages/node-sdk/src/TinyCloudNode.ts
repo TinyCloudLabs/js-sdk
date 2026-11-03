@@ -4078,20 +4078,20 @@ export class TinyCloudNode {
     // /delegate that still lists the space under `skipped` means it is not
     // hosted for this session.
     if (!this.auth.registryRecordPresent) {
-    const activation = await activateSessionWithHost(
-      host,
-      session.delegationHeader,
-    );
-    if (!activation.success || activation.skipped?.includes(spaceId)) {
-      throw Object.assign(
-        new Error(
-          `Failed to activate session for owned space ${spaceId}: ${
-            activation.success ? "space was skipped" : describeHostFailure(activation)
-          }`,
-        ),
-        { cause: activation },
+      const activation = await activateSessionWithHost(
+        host,
+        session.delegationHeader,
       );
-    }
+      if (!activation.success || activation.skipped?.includes(spaceId)) {
+        throw Object.assign(
+          new Error(
+            `Failed to activate session for owned space ${spaceId}: ${
+              activation.success ? "space was skipped" : describeHostFailure(activation)
+            }`,
+          ),
+          { cause: activation },
+        );
+      }
     }
     if (this.auth?.tinyCloudSession === session) this.hostedOwnedSpaceIds.add(spaceId);
 
