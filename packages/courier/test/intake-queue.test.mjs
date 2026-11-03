@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { LOCAL, removalCommand } from './support/lock-identity.mjs';
 import { acquireLock, emptyState, ensureRealDir, readState, writeNew, writeReplace } from '../dist/intake/queue.js';
 
 const DEAD_PID = 2147483646;
@@ -81,9 +82,14 @@ test('the intake lock refuses a live holder and takes over a dead one', () => {
   release();
   assert.equal(fs.existsSync(file), false);
 
-  fs.writeFileSync(file, '2147483646\n');
+  fs.writeFileSync(file, `${JSON.stringify({ ...LOCAL, pid: DEAD_PID, nonce: 'dead00000000' })}\n`);
   const takeover = acquireLock(file);
   takeover();
+
+  // An old pid-only lock cannot be placed on this machine: it is kept, never judged dead from its pid.
+  fs.writeFileSync(file, '2147483646\n');
+  assert.throws(() => acquireLock(file), (e) => e.code === 'locked');
+  assert.equal(fs.readFileSync(file, 'utf8'), '2147483646\n');
 });
 
 test('readState: missing is empty, corrupt refuses to start', () => {
@@ -119,7 +125,7 @@ test('a live holder is never pre-empted, however old its files are', () => {
 
 test('a dead holder is recovered without any age check', () => {
   const file = path.join(tempDir(), 'intake.lock');
-  fs.writeFileSync(file, `${JSON.stringify({ pid: DEAD_PID, nonce: 'dead00000001' })}\n`);
+  fs.writeFileSync(file, `${JSON.stringify({ ...LOCAL, pid: DEAD_PID, nonce: 'dead00000001' })}\n`);
   const release = acquireLock(file);
   assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).pid, process.pid);
   release();
@@ -176,4 +182,19 @@ test('release leaves a lock with the same pid but another nonce', () => {
   writeReplace(dir, 'intake.lock', `${process.pid}\n`, 0o600);
   release();
   assert.equal(fs.readFileSync(file, 'utf8'), `${process.pid}\n`);
+});
+
+test('an intake lock held by an unknown holder is kept, and the refusal is one line with the lock path, the holder and the safe command', () => {
+  const file = path.join(tempDir(), 'intake.lock');
+  const body = `${JSON.stringify({ pid: 4242, nonce: 'foreign0001', host: 'other-host.example', machine: 'm', boot: 'b' })}\n`;
+  fs.writeFileSync(file, body);
+  assert.throws(() => acquireLock(file), (e) => {
+    assert.equal(e.code, 'locked');
+    assert.equal(e.message.includes('\n'), false, 'one line');
+    assert.ok(e.message.includes(file) && e.message.includes('4242') && e.message.includes('other-host.example'), e.message);
+    assert.ok(e.message.endsWith(removalCommand(file)), e.message);
+    assert.match(e.message, /only after confirming no Courier command is running/);
+    return true;
+  });
+  assert.equal(fs.readFileSync(file, 'utf8'), body, 'the lock stays');
 });

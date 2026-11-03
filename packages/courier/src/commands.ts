@@ -10,10 +10,11 @@ import { cmd } from './program.js';
 import { CourierError, CourierPending, errInfo } from './errors.js';
 import { AGENT_GRANT, AGENT_GRANT_EXPIRY, COURIER_SPACE, DEFAULT_HOST, EXT, k, peerReadPermissions, PREFIX } from './keys.js';
 import {
-  loadProfile, saveProfile, getPeer, profileDir, profileExists, loadKey, saveKey,
+  loadProfile, saveProfile, assertNotPaired, getPeer, profileDir, profileExists, loadKey, saveKey,
   type AgentKey, type Profile, type StoredPeer,
 } from './profile.js';
 import { courierNode, peerKv } from './node.js';
+import { REVOKE_URL } from './grant-refusal.js';
 import { courierGrantRequest, grantFromInput, installRefusing, isShortCode, noSpaceError, pendingSpaceError, receiveGrant, resumeAwaitingGrant, resumeGrant } from './grant.js';
 import { completeApproval, DEFAULT_WAIT_MS, MAX_WAIT_MS, requestApproval, waitApproval } from './grant-request.js';
 import { approvalPhase, assertPendingReadable, clearPending, holdsApproval, loadPending, readApprovalEntry, stageOf } from './approval-phase.js';
@@ -356,6 +357,7 @@ async function pairAccept(args: ParsedArgs) {
 
   if (art.step === 'A') {
     const handle = art.callMe;
+    assertNotPaired(profile, handle); // before delegateTo: a refusal after it would leave a live delegation nothing records
     const outbound = await node.delegateTo(art.from.courier, peerReadPermissions(handle, profile.spaceId!), { expiry: PEER_DELEGATION_EXPIRY });
     const peer: StoredPeer = {
       handle, ownerDid: art.from.owner, courierDid: art.from.courier, label: art.from.label,
@@ -363,7 +365,7 @@ async function pairAccept(args: ParsedArgs) {
     };
     recordOutbound(peer, outbound.delegation);
     profile.peers[handle] = peer;
-    saveProfile(profile);
+    saveAfterDelegation(profile, outbound.delegation);
     await writePeerRecord(node, peer);
     printJson(artifactWithDelegation('B', profile, outbound.delegation, handle, art.peer));
     return;
@@ -386,7 +388,7 @@ async function pairAccept(args: ParsedArgs) {
     const outgoing = await node.delegateTo(peer.courierDid, peerReadPermissions(peer.handle, profile.spaceId!), { expiry: PEER_DELEGATION_EXPIRY });
     recordOutbound(peer, outgoing.delegation);
     peer.status = 'paired';
-    saveProfile(profile);
+    saveAfterDelegation(profile, outgoing.delegation);
     await writePeerRecord(node, peer);
     printJson(artifactWithDelegation('C', profile, outgoing.delegation, peer.handle, art.peer));
     return;
@@ -418,6 +420,19 @@ async function pairAccept(args: ParsedArgs) {
   saveProfile(profile);
   await writePeerRecord(node, peer);
   printJson({ ok: true, paired: peer.handle, peerDid: peer.courierDid, peerSpace: peer.spaceId, delegationExpiresAt: peer.inbound.expiresAt });
+}
+
+/**
+ * Saves after `delegateTo` made a delegation that is live from that moment. A save that refuses (the pairing completed, or the peer was
+ * revoked, meanwhile) leaves a delegation no profile records: say so, with its CID and where the owner can revoke it, and never publish it.
+ */
+function saveAfterDelegation(profile: Profile, delegation: PortableDelegation): void {
+  try {
+    saveProfile(profile);
+  } catch (error) {
+    console.error(`warning: the delegation ${delegationCid(delegation)} created for this pairing is live and was not saved. Nothing was published. The owner can revoke it at ${REVOKE_URL}.`);
+    throw error;
+  }
 }
 
 function recordOutbound(peer: StoredPeer, delegation: PortableDelegation): void {
