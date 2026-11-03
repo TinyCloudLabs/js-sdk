@@ -111,7 +111,8 @@ test("official Streamable HTTP client authenticates and starts delegated setup",
     ["tinycloud_apps_context", false, true, true, false],
     ["tinycloud_apps_read", true, false, true, false],
     ["tinycloud_apps_write", false, true, false, false],
-    // TC-2468: deliberately pin the current over-annotation until its behavior fix.
+    // Intentional: query maintains the derived copy (stale markers, derived-row delete/repopulate).
+    // Changing these hints must be a deliberate decision that also updates this test.
     ["tinycloud_apps_query", false, true, true, false],
     ["tinycloud_connect", false, false, true, false],
   ]);
