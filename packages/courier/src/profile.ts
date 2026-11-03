@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { cmd } from './program.js';
 import { CourierError } from './errors.js';
 import { canonicalJson } from './canonical.js';
-import { acquireLock, type LockRefusal } from './file-lock.js';
+import { acquireLock } from './file-lock.js';
 
 /** Courier-local identity and peer store; never an OpenKey owner profile. */
 export interface AgentKey {
@@ -276,18 +276,6 @@ function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-const shellQuote = (text: string): string => `'${text.replace(/'/g, `'\\''`)}'`;
-
-/** The one line a refused lock prints: what holds it, and the only safe way out. The lock itself is never removed on doubt. */
-function lockRefusal({ file, reason, pid, host }: LockRefusal): string {
-  const holder = pid === undefined ? 'a holder that cannot be read' : `pid ${pid}${host === undefined ? '' : ` on host ${host}`}`;
-  const why = reason === 'alive' ? `is held by a running Courier command (${holder})`
-    : reason === 'corrupt' ? 'has a record Courier cannot read'
-      : reason === 'unknown' ? `is held by ${holder}, and Courier cannot tell whether that process is still running`
-        : `is held by ${holder}, which is dead, and another Courier command is clearing it`;
-  return `${file} ${why}; the lock was left in place. Try again; only after confirming no Courier command is running anywhere that uses this profile, clear it with: rm -f -- ${shellQuote(file)}`;
-}
-
 /**
  * Exclusive, held only while a save reads, merges and writes (milliseconds). The lock is intake's: created whole with a `{pid, nonce}` owner
  * record, released only by its nonce, and broken only when its holder is established dead (pid gone or reused by a process that started later).
@@ -300,7 +288,7 @@ function withProfileLock<T>(fn: () => T): T {
   let release: (() => void) | undefined;
   for (;;) {
     try {
-      release = acquireLock(lock, { refusal: lockRefusal });
+      release = acquireLock(lock);
       break;
     } catch (error) {
       if (!(error instanceof CourierError) || error.code !== 'locked') throw error;

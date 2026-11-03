@@ -202,14 +202,25 @@ export interface LockOptions {
   alive?: (pid: number) => boolean;
   /** Test seam: runs after a dead holder is observed, before any break guard is claimed. */
   afterObserve?: () => void;
-  /** The error message for a refusal. Default: the intake wording. */
+  /** The error message for a refusal. Default: `lockRefusal`, one line naming the lock, its holder and the safe manual command. */
   refusal?: (info: LockRefusal) => string;
 }
 
 /** Guard slots per dead lock. The bound stops a corrupt directory from looping forever. */
 const MAX_BREAK_GUARDS = 8;
 
-const INTAKE_REFUSAL = () => 'another courier intake is running';
+const shellQuote = (text: string): string => `'${text.replace(/'/g, `'\\''`)}'`;
+
+/** The one line a refused lock prints: what holds it, and the only safe way out. The lock itself is never removed on doubt. */
+export function lockRefusal({ file, reason, pid, host }: LockRefusal): string {
+  const holder = pid === undefined ? 'a holder that cannot be read' : `pid ${pid}${host === undefined ? '' : ` on host ${host}`}`;
+  const why = reason === 'alive' ? `is held by a running Courier command (${holder})`
+    : reason === 'corrupt' ? 'has a record Courier cannot read'
+      : reason === 'unknown' ? `is held by ${holder}, and Courier cannot tell whether that process is still running`
+        : `is held by ${holder}, which is dead, and another Courier command is clearing it`;
+  return `${file} ${why}; the lock was left in place. Try again; only after confirming no Courier command is running anywhere that uses this lock, clear it with: rm -f -- ${shellQuote(file)}`;
+}
+
 
 /**
  * Takes the lock `file`. A live or unknowable holder always refuses, however old its file is; only a holder that is established dead
@@ -222,7 +233,7 @@ export function acquireLock(file: string, opts: LockOptions = {}): () => void {
   const self: LockRecord = { pid, nonce: randomBytes(6).toString('hex'), ...identity(pid) };
   const state = (record: LockRecord): Liveness => (opts.alive ? (opts.alive(record.pid) ? 'alive' : 'dead') : recordLiveness(record));
   const refuse = (info: Omit<LockRefusal, 'file'>): never => {
-    throw new CourierError('locked', (opts.refusal ?? INTAKE_REFUSAL)({ file, ...info }));
+    throw new CourierError('locked', (opts.refusal ?? lockRefusal)({ file, ...info }));
   };
   for (let attempt = 0; attempt < 3; attempt++) {
     let seen = readLock(file);

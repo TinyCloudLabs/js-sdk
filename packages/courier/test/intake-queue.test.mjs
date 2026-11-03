@@ -183,3 +183,18 @@ test('release leaves a lock with the same pid but another nonce', () => {
   release();
   assert.equal(fs.readFileSync(file, 'utf8'), `${process.pid}\n`);
 });
+
+test('an intake lock held by an unknown holder is kept, and the refusal is one line with the lock path, the holder and the safe command', () => {
+  const file = path.join(tempDir(), 'intake.lock');
+  const body = `${JSON.stringify({ pid: 4242, nonce: 'foreign0001', host: 'other-host.example', machine: 'm', boot: 'b' })}\n`;
+  fs.writeFileSync(file, body);
+  assert.throws(() => acquireLock(file), (e) => {
+    assert.equal(e.code, 'locked');
+    assert.equal(e.message.includes('\n'), false, 'one line');
+    assert.ok(e.message.includes(file) && e.message.includes('4242') && e.message.includes('other-host.example'), e.message);
+    assert.ok(e.message.endsWith(`rm -f -- '${file}'`), e.message);
+    assert.match(e.message, /only after confirming no Courier command is running/);
+    return true;
+  });
+  assert.equal(fs.readFileSync(file, 'utf8'), body, 'the lock stays');
+});

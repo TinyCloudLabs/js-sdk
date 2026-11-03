@@ -10,5 +10,6 @@ Courier no longer loses pairings, revocations or key rotations when two commands
 - A `pending-A` or `awaiting-C` pairing that is more than 7 days old is forgotten.
 - Starting a pairing again over a pending one that expired is no longer refused.
 - `pair accept` of an artifact A that names an already paired peer is refused (`[usage]`, "Already paired with <peer>") before any delegation is created (a pairing that completes during `delegateTo` is refused with a warning naming the unsaved delegation and where to revoke it), and the pairing is left as it was.
+- `courier intake` uses the same lock: a lock it cannot prove dead is kept and its refusal is one line naming the lock file, the holder and `rm -f -- <lock>`, to run only after confirming no Courier command is running.
 
 Details: TC-2384
