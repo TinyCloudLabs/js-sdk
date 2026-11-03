@@ -161,7 +161,7 @@ describe.skipIf(!NODE_BIN)("tinycloud onboard, against a real node", () => {
     if (!entry.relay) return Date.parse(entry.record.header.expiresAt) <= Date.now()
       ? Response.json({ code: "expired_request" }, { status: 410 }) : new Response(null, { status: 202 });
     if (Date.parse(entry.resultExpiresAt!) <= Date.now()) return Response.json({ code: "expired_result" }, { status: 410 });
-    if (action === "discover") return Response.json({ resultRef: entry.resultRef, expiresAt: entry.resultExpiresAt });
+    if (action === "discover") return Response.json({ status: "approved", resultRef: entry.resultRef, expiresAt: entry.resultExpiresAt });
     if (action === "fetch") return Response.json({ requestId: entry.id, bodyCid: entry.record.header.bodyCid,
       resultRef: entry.resultRef, expiresAt: entry.resultExpiresAt, relay: entry.relay });
     if (typeof body.ackId !== "string" || !body.ackId) return new Response(null, { status: 400 });
