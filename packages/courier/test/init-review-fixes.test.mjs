@@ -5,6 +5,7 @@ import { cmdInit } from '../dist/commands.js';
 import { parseArgs } from '../dist/args.js';
 import { deriveState } from '../dist/state.js';
 import { loadProfile } from '../dist/profile.js';
+import { ed25519DidKey } from '../dist/did-key.js';
 import {
   Crash, crashAtWrite, homeFile, missingSpace, readHome, readySpace, scenario, signedGrant, stubSpaceProbe,
 } from './support/approval-fixture.mjs';
@@ -300,10 +301,12 @@ scenario('rotating with no redeemed delegation saved prints no delegation warnin
 
 // ---- (6) a journal that parses but is not a rotation is refused before anything is replayed ----
 
-const NEW_DID = 'did:key:z6MkNewAgentKeyForTheJournal';
+// The journal's key is proven before replay (Ed25519 JWK of 32-byte parts, did:key derived from `x`), so the stand-in is a well-formed one.
+const NEW_PUBLIC = Buffer.alloc(32, 1);
+const NEW_DID = ed25519DidKey(NEW_PUBLIC);
 const goodJournal = () => ({
   v: 1,
-  key: { v: 1, jwk: { kty: 'OKP', crv: 'Ed25519', x: 'public-part', d: SECRET }, did: NEW_DID, createdAt: '2026-01-01T00:00:00.000Z' },
+  key: { v: 1, jwk: { kty: 'OKP', crv: 'Ed25519', x: NEW_PUBLIC.toString('base64url'), d: SECRET }, did: NEW_DID, createdAt: '2026-01-01T00:00:00.000Z' },
   profile: {
     version: 3, host: 'https://node.test', openkeyHost: 'https://openkey.test', label: 'l', courierDid: NEW_DID, status: 'awaiting-grant', peers: {},
   },

@@ -10,6 +10,7 @@ import { bareDid, siweTimes } from './authority.js';
 import { dropPendingDelegation, hasLivePending, liveRedeemedDelegations } from './pending.js';
 import { REVOKE_URL } from './grant-refusal.js';
 import { CourierError } from './errors.js';
+import { base64url32, ed25519DidKey } from './did-key.js';
 
 /**
  * One derivation of where `init` stands, shared by every init mode.
@@ -87,10 +88,13 @@ function savedGrant(notes: string[]): boolean {
   const file = path.join(profileDir(), 'grant.json');
   if (!fs.existsSync(file)) return false;
   if (looseGrantMode()) {
+    // Inspect the content before any mode advice: only a file that is a grant has a mode worth fixing.
     try {
       const grant = JSON.parse(fs.readFileSync(file, 'utf8')) as { v?: unknown; delegationHeader?: { Authorization?: unknown }; delegationCid?: unknown; siwe?: unknown } | null;
-      return grant?.v === 1 && !!grant.delegationHeader?.Authorization && !!grant.delegationCid && !!grant.siwe;
-    } catch { return false; }
+      if (grant?.v === 1 && !!grant.delegationHeader?.Authorization && !!grant.delegationCid && !!grant.siwe) return true;
+    } catch { /* not JSON: reported below, without the parser's message */ }
+    notes.push('grant.json is not a usable saved grant, so it is treated as not saved and left as it is (it is corrupt or not a grant).');
+    return false;
   }
   try {
     return loadGrant() !== undefined;
@@ -217,7 +221,7 @@ export function readInputs(notes: string[] = []): StateInputs {
 export function deriveState(): DerivedState {
   const notes: string[] = [];
   const inputs = readInputs(notes);
-  const grantMode = looseGrantMode();
+  const grantMode = inputs.grant ? looseGrantMode() : undefined;
   return { inputs, notes, ...(grantMode ? { grantMode } : {}), ...classifyState(inputs) };
 }
 
@@ -269,7 +273,7 @@ export function recoverInterrupted(): void {
   finishRotation();
   for (const name of strayTemps()) scrub(path.join(profileDir(), name));
   for (const { name, pid } of liveWriterTemps()) {
-    console.error(`warning: ${name} was left as it is: process ${pid}, which named it, is still running (it may be writing it now). If that is not a Courier process, remove the file by hand.`);
+    console.error(`warning: ${name} was kept, not deleted: it may hold a private key, and process ${pid}, which named it, is running. That is either a Courier process still writing it or an unrelated process that was given the same pid after Courier died (pid reuse); Courier cannot tell which. Remove the file by hand only if process ${pid} is not Courier.`);
   }
 }
 
@@ -331,16 +335,23 @@ interface RotationJournal {
 const validGrantList = (list: unknown): boolean => Array.isArray(list)
   && list.every((g) => !!g && typeof g === 'object' && typeof g.delegationCid === 'string' && g.delegationCid !== '' && (g.expiresAt === undefined || typeof g.expiresAt === 'string'));
 
-/** A private JWK as `newAgentKey` makes one: a plain object with its public (`x`) and private (`d`) parts as text. */
-const hasKeyParts = (jwk: unknown): boolean => !!jwk && typeof jwk === 'object' && !Array.isArray(jwk)
-  && typeof (jwk as Record<string, unknown>).x === 'string' && typeof (jwk as Record<string, unknown>).d === 'string';
+/**
+ * Whether a key is an Ed25519 agent key as `newAgentKey` makes one: a plain-object JWK with kty OKP, crv Ed25519, and `x` and `d` as
+ * unpadded base64url text of exactly 32 bytes, whose `did:key` (fragment aside) is the one derived from `x`.
+ */
+function hasKeyProof(key: AgentKey): boolean {
+  const jwk = key.jwk;
+  if (Array.isArray(jwk) || jwk.kty !== 'OKP' || jwk.crv !== 'Ed25519') return false;
+  const x = base64url32(jwk.x);
+  return !!x && !!base64url32(jwk.d) && key.did.split('#')[0] === ed25519DidKey(x);
+}
 
 /** What is wrong with a parsed journal, or undefined when it is a rotation this code may replay. Never includes any of its content. */
 function journalProblem(journal: unknown): string | undefined {
   if (!journal || typeof journal !== 'object' || Array.isArray(journal)) return 'it is not an object';
   const j = journal as Partial<RotationJournal>;
   if (j.v !== 1) return 'its version is not 1';
-  if (!isAgentKey(j.key) || !hasKeyParts(j.key.jwk)) return 'its key is not a valid agent key';
+  if (!isAgentKey(j.key) || !hasKeyProof(j.key)) return 'its key is not a valid agent key';
   if (!hasProfileFields(j.profile ?? null)) return 'its profile is not a complete current profile';
   if (j.profile?.status !== 'awaiting-grant') return 'its profile is not awaiting-grant';
   if (j.profile.courierDid !== bareDid(j.key.did)) return 'its profile does not belong to its key';
