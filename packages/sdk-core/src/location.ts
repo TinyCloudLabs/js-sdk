@@ -752,17 +752,26 @@ function validateV2Origin(input: string): string {
 }
 
 function validateV2SpaceOwner(space: string, subject: string): string {
-  if (/[/?#\s]/.test(space)) {
-    throw new LocationRecordValidationError("space must be a complete TinyCloud space URI");
+  if (!/^[A-Za-z0-9._~!$&'()*+,;=:@%-]+$/.test(space)) {
+    throw new LocationRecordValidationError("space must be a complete normalized TinyCloud space URI");
+  }
+  for (let index = space.indexOf("%"); index !== -1; index = space.indexOf("%", index + 3)) {
+    const octet = space.slice(index + 1, index + 3);
+    if (
+      !/^[0-9A-F]{2}$/.test(octet) ||
+      /^[A-Za-z0-9._~-]$/.test(String.fromCharCode(Number.parseInt(octet, 16)))
+    ) {
+      throw new LocationRecordValidationError("space URI percent encoding must be normalized");
+    }
   }
   if (subject.startsWith("did:key:")) {
     const prefix = `tinycloud:${subject.slice("did:".length)}:`;
-    if (!space.startsWith(prefix) || space.length === prefix.length) {
+    if (!space.startsWith(prefix) || space.length === prefix.length || space.slice(prefix.length).includes(":")) {
       throw new LocationRecordValidationError("space owner must match the did:key subject");
     }
     return space;
   }
-  const parts = /^tinycloud:pkh:eip155:([1-9][0-9]*):(0x[a-fA-F0-9]{40}):(.+)$/.exec(space);
+  const parts = /^tinycloud:pkh:eip155:([1-9][0-9]*):(0x[a-fA-F0-9]{40}):([^:]+)$/.exec(space);
   const ownerAddress = subject.slice(subject.lastIndexOf(":") + 1);
   if (
     parts === null ||

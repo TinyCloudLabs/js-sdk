@@ -85,6 +85,50 @@ describe("signed location record v2 vectors", () => {
     expect(() => location.validateLocationRecordV2Payload({ ...payload, primaryNode: vectors.publicTestIdentities.box })).toThrow();
   });
 
+  it("rejects malformed or non-normalized space URI names for both owner methods", () => {
+    for (const id of ["split-data-and-encryption", "ed25519-owner-listed-space"]) {
+      const fixture = vectors.records.find((record) => record.id === id)!;
+      const { signature: _signature, ...payload } = locationModule.validateLocationRecordV2(fixture.record);
+      const membership = payload.spaces[0]!;
+      const prefix = membership.space.slice(0, membership.space.lastIndexOf(":") + 1);
+      for (const name of ["bad%", "bad%0", "%73ecrets", "secrets%41", "secrets%3a", "bad%GG", "secrets[1]", "secrets\\child", "secrets:child", "secrets\u0000"]) {
+        expect(() => locationModule.validateLocationRecordV2Payload({
+          ...payload,
+          spaces: [{ ...membership, space: prefix + name }],
+        })).toThrow(locationModule.LocationRecordValidationError);
+      }
+    }
+  });
+
+  it("preserves canonical reserved and non-ASCII percent octets in signed space strings", () => {
+    for (const id of ["split-data-and-encryption", "ed25519-owner-listed-space"]) {
+      const fixture = vectors.records.find((record) => record.id === id)!;
+      const { signature: _signature, ...payload } = locationModule.validateLocationRecordV2(fixture.record);
+      const membership = payload.spaces[0]!;
+      const prefix = membership.space.slice(0, membership.space.lastIndexOf(":") + 1);
+      for (const name of ["secrets%2Farchive", "key%3Aalias", "%C3%A9", "app!$&'()*+,;=@._~-"]) {
+        const space = prefix + name;
+        const supplied = { ...payload, spaces: [{ ...membership, space }] };
+        const validated = locationModule.validateLocationRecordV2Payload(supplied);
+        expect(validated.spaces[0]!.space).toBe(space);
+        expect(locationModule.canonicalLocationPayloadV2(validated)).toContain(`"space":${JSON.stringify(space)}`);
+        expect(supplied.spaces[0]!.space).toBe(space);
+      }
+    }
+  });
+
+  it("treats an unrecoverable canonical EOA signature as invalid rather than rejecting verification", async () => {
+    // x=5 has no secp256k1 curve point; r/s are still positive, in-range and low-s.
+    const signature = `0x${"5".padStart(64, "0")}${"1".padStart(64, "0")}1b`;
+    const record = locationModule.validateLocationRecordV2({ ...v2.record, signature });
+    await expect(locationModule.verifyLocationRecordV2(record)).resolves.toBe(false);
+    const verdict = await policyModule.resolveOwnerHosts(record.subject, {
+      registryUrl: "https://registry.test",
+      fetch: responseQueue([recordsResponse(record)]),
+    });
+    expect(verdict).toMatchObject({ status: "unavailable", reason: "invalid-signature" });
+  });
+
 
   it("accepts owner-bounded did:key spaces and rejects another did:key owner", () => {
     requireV2Api();
