@@ -1089,23 +1089,6 @@ interface RuntimePermissionOperation {
   caveats?: Record<string, unknown>[];
 }
 
-/** A read the session already holds, used to ask the node whether a space is hosted. */
-interface SpaceHostingRead {
-  service: string;
-  path: string;
-  action: string;
-  headers?: Record<string, string>;
-  body?: string;
-}
-
-/** Per request: the hosting probe never holds up a caller longer. */
-const SPACE_HOSTING_PROBE_TIMEOUT_MS = 5_000;
-/** A key that does not exist: a hosted space answers a read of it with a plain 404. */
-const SPACE_PROBE_KEY = ".tinycloud-space-probe";
-const KV_LIST_ACTION = "tinycloud.kv/list";
-const KV_METADATA_ACTION = "tinycloud.kv/metadata";
-const KV_GET_ACTION = "tinycloud.kv/get";
-const SPACE_INFO_ACTION = "tinycloud.space/info";
 
 /**
  * The parent `delegateTo` would sign under (TC-858 §4.3): the session's own
@@ -1450,9 +1433,6 @@ export class TinyCloudNode {
   /** The primary space's hosting answer when no authorization layer holds it (a session-only restore). */
   private _restoredSpaceHosting: SpaceHosting = "unknown";
 
-  /** `host space` pairs the node has answered `hosted`: hosting does not go away in normal operation. */
-  private readonly hostedSpaceProbeCache = new Set<string>();
-
   /**
    * Owned space ids known to be hosted for the current session: the sign-in
    * activation listed them as `activated`, or this session hosted them. Unlike
@@ -1756,126 +1736,46 @@ export class TinyCloudNode {
     const spaceId = space === undefined
       ? session.spaceId
       : space.startsWith("tinycloud:") ? space : this.ownedSpaceId(space);
-    const isPrimary = this.spaceIdsEqual(spaceId, session.spaceId);
-    // A session replaced while the read was in flight owns neither answer.
-    const record = (answer: SpaceHosting): SpaceHosting => {
-      if (isPrimary && answer !== "unknown" && this._serviceContext === context) {
-        if (this.auth) this.auth.noteSpaceHosting(answer);
-        else this._restoredSpaceHosting = answer;
-      }
-      return answer;
+    const graph = this._serviceGraph;
+    // A probe belongs to the session it started under: once that session's graph retires or another session is
+    // installed, it neither signs, registers nor reports anything more.
+    const assertCurrent = () => {
+      graph.assertActive();
+      if (this._serviceContext !== context) throw new Error("The session was replaced during the hosting check.");
     };
-
-    const cacheKey = `${host} ${this.normalizeSpaceAddress(spaceId)}`;
-    if (this.hostedSpaceProbeCache.has(cacheKey)) {
-      return record("hosted");
-    }
-    const read = this.selectHostingRead(spaceId);
-    if (!read) {
-      return "unknown";
-    }
-
-    let outcome = await this.sendHostingRead(context, host, session, spaceId, read);
-    if (outcome === "refused") {
-      // A session saved but never registered on this node is refused: register
-      // it once, then ask once more.
-      try {
-        await activateSessionWithHost(host, session.delegationHeader, AbortSignal.timeout(SPACE_HOSTING_PROBE_TIMEOUT_MS));
-      } catch {
-        return "unknown";
-      }
-      outcome = await this.sendHostingRead(context, host, session, spaceId, read);
-    }
-    if (outcome === "refused") {
-      return "unknown";
-    }
-    if (outcome === "hosted") {
-      this.hostedSpaceProbeCache.add(cacheKey);
-    }
-    return record(outcome);
-  }
-
-  /**
-   * The cheapest read of `spaceId` the session already holds, from its own recap
-   * and installed runtime grants: never one that downloads a body when another
-   * exists. Reads under a caveated grant are skipped, since their limits are not
-   * known here. The recap counts even when sign-in dropped it from the runtime
-   * grants because the node had not hosted the space yet: that is the read that
-   * says when it has.
-   */
-  private selectHostingRead(spaceId: string): SpaceHostingRead | undefined {
+    // Not a static import on purpose: web-sdk's root size budget has no room for the probe, so bundlers ship it as its own file.
+    const { askSpaceHosting } = await import("./space-hosting.js");
+    assertCurrent();
     this.pruneExpiredRuntimePermissionGrants();
+    // The recap counts even when sign-in dropped it from the runtime grants because the node had not hosted the
+    // space yet: that is the read that says when it has.
     const primary = this.currentTinyCloudSession();
-    const held = [
-      ...this.runtimePermissionGrants.flatMap((grant) => grant.operations),
-      ...(primary ? this.recapOperationsFromSession(primary) : []),
-    ].filter((operation) =>
-      operation.spaceId !== undefined &&
-      operation.resource === undefined &&
-      !operation.caveats?.length &&
-      this.spaceIdsEqual(operation.spaceId, spaceId));
-    const holding = (service: string, action: string) =>
-      held.filter((operation) => operation.service === service && this.actionContains(operation.action, action));
-    const isPrefix = (path: string) =>
-      path === "" || path.endsWith("/") || path.endsWith("/*") || path.endsWith("/**");
-    const prefixOf = (path: string) =>
-      path.endsWith("/**") ? path.slice(0, -2) : path.endsWith("/*") ? path.slice(0, -1) : path === "/" ? "" : path;
-    // A prefix grant is read at a key that does not exist; a grant on one key reads that key.
-    const keyOf = (path: string) => isPrefix(path) ? `${prefixOf(path)}${SPACE_PROBE_KEY}` : path;
-
-    return [
-      ...holding("kv", KV_LIST_ACTION).map((operation) => ({
-        service: "kv",
-        path: isPrefix(operation.path) ? prefixOf(operation.path) : operation.path,
-        action: KV_LIST_ACTION,
-        headers: { "x-tinycloud-limit": "1" },
-      })),
-      ...holding("kv", KV_METADATA_ACTION).map((operation) => ({
-        service: "kv", path: keyOf(operation.path), action: KV_METADATA_ACTION,
-      })),
-      ...holding("space", SPACE_INFO_ACTION).map(() => ({
-        service: "space", path: "", action: SPACE_INFO_ACTION, body: "{}",
-      })),
-      ...holding("kv", KV_GET_ACTION).map((operation) => ({
-        service: "kv", path: keyOf(operation.path), action: KV_GET_ACTION,
-      })),
-    ].find((read) => held.some((operation) => this.operationCovers(operation, {
-      spaceId, service: read.service, path: read.path, action: read.action,
-    })));
-  }
-
-  /**
-   * One signed read, classified. `invokeAny` carries the explicit space; `invoke`
-   * would always sign for the session's primary space.
-   */
-  private async sendHostingRead(
-    context: ServiceContext,
-    host: string,
-    session: ServiceSession,
-    spaceId: string,
-    read: SpaceHostingRead,
-  ): Promise<SpaceHosting | "refused"> {
-    try {
-      const headers = this.invokeAnyWithRuntimePermissions(
-        { ...session, spaceId },
-        [{ spaceId, service: read.service, path: read.path, action: read.action }],
-      );
-      const response = await unrecordedFetchOf(context)(`${host}/invoke`, {
-        method: "POST",
-        headers: { ...headers, ...read.headers },
-        ...(read.body === undefined ? {} : { body: read.body }),
-        signal: AbortSignal.timeout(SPACE_HOSTING_PROBE_TIMEOUT_MS),
-      });
-      if (response.ok) return "hosted";
-      if (response.status === 401 || response.status === 403) return "refused";
-      if (response.status === 404) {
-        // Only the node's unhosted-space 404 says "not hosted"; a missing key is a 404 too.
-        return /space not found/i.test(await response.text()) ? "not-hosted" : "hosted";
-      }
-      return "unknown";
-    } catch {
-      return "unknown";
+    const answer = await askSpaceHosting({
+      spaceId,
+      operations: [
+        ...this.runtimePermissionGrants.flatMap((grant) => grant.operations),
+        ...(primary ? this.recapOperationsFromSession(primary) : []),
+      ],
+      covers: (granted, requested) => this.operationCovers(granted, requested),
+      scope: context,
+      host,
+      fetch: unrecordedFetchOf(context),
+      sign: (entries) => {
+        assertCurrent();
+        return this.invokeAnyWithRuntimePermissions({ ...session, spaceId }, entries);
+      },
+      // A session saved but never registered on this node is refused: it registers once.
+      activate: (signal) => {
+        assertCurrent();
+        return activateSessionWithHost(host, session.delegationHeader, AbortSignal.any([signal, graph.signal]));
+      },
+    });
+    // A session replaced while the read was in flight owns neither answer.
+    if (answer !== "unknown" && this._serviceContext === context && this.spaceIdsEqual(spaceId, session.spaceId)) {
+      if (this.auth) this.auth.noteSpaceHosting(answer);
+      else this._restoredSpaceHosting = answer;
     }
+    return answer;
   }
 
   private get nodeFeatures(): string[] {

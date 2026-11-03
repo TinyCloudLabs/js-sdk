@@ -29,6 +29,16 @@
         "default": "./dist/encryption-keys.cjs"
       }
     },
+    "./space-hosting": {
+      "import": {
+        "types": "./dist/space-hosting.d.ts",
+        "default": "./dist/space-hosting.js"
+      },
+      "require": {
+        "types": "./dist/space-hosting.d.cts",
+        "default": "./dist/space-hosting.cjs"
+      }
+    },
     "./credential-pending-store": {
       "types": "./dist/credential-pending-store.d.ts",
       "import": "./dist/credential-pending-store.js",

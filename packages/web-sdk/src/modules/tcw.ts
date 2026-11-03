@@ -817,10 +817,6 @@ export class TinyCloudWeb {
   get spaceId(): string | undefined { return this._node?.spaceId; }
   /** The node's last answer for whether the primary space is hosted (`"unknown"` until it has answered). */
   get spaceHosting(): SpaceHosting { return this._node?.spaceHosting ?? "unknown"; }
-  /** Ask the node whether a space (default: the primary) is hosted. See `TinyCloudNode.checkSpaceHosting`. */
-  async checkSpaceHosting(space?: string): Promise<SpaceHosting> {
-    return (await this.ensureNode()).checkSpaceHosting(space);
-  }
   get accountSpaceId(): string | undefined { return this._node?.accountSpaceId; }
   get account(): AccountService { return this.node.account; }
   get hosts(): string[] { return this.node.hosts; }
@@ -1053,14 +1049,9 @@ export class TinyCloudWeb {
 
   /** One node read for the restored session, held to {@link spaceHostingCapMs}; past it, or on any failure, the answer stays unknown. */
   private async probeSpaceHosting(node: TinyCloudNode): Promise<void> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    // The web-sdk lib target predates Promise.withResolvers.
-    const capped = new Promise<void>((resolve) => { timer = setTimeout(resolve, this.spaceHostingCapMs); });
     try {
-      await Promise.race([Promise.resolve().then(() => node.checkSpaceHosting()), capped]);
-    } catch { /* a probe never fails a restore */ } finally {
-      clearTimeout(timer);
-    }
+      await Promise.race([node.checkSpaceHosting(), new Promise((resolve) => setTimeout(resolve, this.spaceHostingCapMs))]);
+    } catch { /* a probe never fails a restore */ }
   }
 
   // TC-2380 Q2 seam: undecided between a one-click OpenKey approval and a silent wait; keeps today's behaviour.

@@ -1245,4 +1245,85 @@ describe("TinyCloudNode.checkSpaceHosting", () => {
       { spaceId: proof.spaceId, service: "kv", path: "notes/", action: "tinycloud.kv/list" },
     ]);
   });
+
+  for (const signOutFirst of [true, false]) {
+    test(`a hosted answer is never served to a later session that holds no read on the space (${signOutFirst ? "after sign-out" : "restored over"})`, async () => {
+      const { node } = await restoredNode({ abilities: LIST_GET });
+      await withFetch(() => new Response("[]", { status: 200 }), async () => {
+        await expect(node.checkSpaceHosting()).resolves.toBe("hosted");
+      });
+      if (signOutFirst) await node.signOut();
+
+      await node.restoreSession(await signedRestorableSession({ abilities: { kv: { "notes/": ["tinycloud.kv/put"] } } }));
+      await withFetch(() => new Response("[]", { status: 200 }), async (calls) => {
+        await expect(node.checkSpaceHosting()).resolves.toBe("unknown");
+        expect(calls).toHaveLength(0);
+      });
+
+      // A session that does hold a read asks the node itself; it gets nothing from the earlier session.
+      await node.restoreSession(await signedRestorableSession({ abilities: LIST_GET }));
+      await withFetch(() => new Response("Space not found", { status: 404 }), async (calls) => {
+        await expect(node.checkSpaceHosting()).resolves.toBe("not-hosted");
+        expect(calls).toHaveLength(1);
+      });
+    });
+  }
+
+  test("a sign-out during the 401 activation aborts it: no re-probe is signed and the answer is unknown", async () => {
+    const { node, invokeAny } = await restoredNode({ abilities: LIST_GET });
+    let activationAborted = false;
+    const activationStarted = Promise.withResolvers<void>();
+    await withFetch(
+      (call) => call.url.endsWith("/delegate")
+        ? new Promise<Response>((_resolve, reject) => {
+          activationStarted.resolve();
+          call.init?.signal?.addEventListener("abort", () => {
+            activationAborted = true;
+            reject(new DOMException("aborted", "AbortError"));
+          });
+        })
+        : new Response("unauthorized", { status: 401 }),
+      async (calls) => {
+        const asked = node.checkSpaceHosting();
+        await activationStarted.promise;
+        await node.signOut();
+        await expect(asked).resolves.toBe("unknown");
+        expect(activationAborted).toBe(true);
+        expect(calls.map((call) => call.url.replace(RESTORE_HOST, ""))).toEqual(["/invoke", "/delegate"]);
+        expect(invokeAny).toHaveBeenCalledTimes(1);
+      },
+    );
+  });
+
+  test("a probe in flight when another session is restored neither activates nor re-signs under the new one", async () => {
+    const { node, invokeAny } = await restoredNode({ abilities: LIST_GET });
+    let release!: (response: Response) => void;
+    const probeSent = Promise.withResolvers<void>();
+    await withFetch(
+      () => new Promise<Response>((resolve) => { release = resolve; probeSent.resolve(); }),
+      async (calls) => {
+        const asked = node.checkSpaceHosting();
+        await probeSent.promise;
+        await node.restoreSession(await signedRestorableSession({ abilities: LIST_GET }));
+        release(new Response("unauthorized", { status: 401 }));
+        await expect(asked).resolves.toBe("unknown");
+        expect(calls).toHaveLength(1);
+        expect(invokeAny).toHaveBeenCalledTimes(1);
+        expect(node.spaceHosting).toBe("unknown");
+      },
+    );
+  });
+
+  test("a 2xx cancels the response body instead of downloading it", async () => {
+    const { node } = await restoredNode({ abilities: { kv: { "notes/": ["tinycloud.kv/get"] } } });
+    let cancelled = false;
+    const body = new ReadableStream({
+      start: (controller) => controller.enqueue(new Uint8Array([1])),
+      cancel: () => { cancelled = true; },
+    });
+    await withFetch(() => new Response(body, { status: 200 }), async () => {
+      await expect(node.checkSpaceHosting()).resolves.toBe("hosted");
+    });
+    expect(cancelled).toBe(true);
+  });
 });

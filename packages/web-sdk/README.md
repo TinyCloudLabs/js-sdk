@@ -61,10 +61,9 @@ With OpenKey, `prepareSignIn()` makes the same check.
 Restoring a session makes one node read, capped at 5 seconds, to learn whether
 the session's primary space is hosted. It never prompts and never fails the
 restore. Read the answer from `tc.spaceHosting` (`"hosted"`, `"not-hosted"` or
-`"unknown"`), or ask any time with `await tc.checkSpaceHosting()`; pass a space
-name or a full space id to ask about another space. At sign-in the answer comes
-from the node's activation of the new session. `signIn()` on a restored session
-whose space is `"not-hosted"` returns the restored session.
+`"unknown"`). At sign-in the answer comes from the node's activation of the new
+session. `signIn()` on a restored session whose space is `"not-hosted"` returns
+the restored session.
 
 To force a fresh consent, sign out first. `signOut()` clears the stored session
 and blocks restoring until the next sign-in succeeds, so `signIn()` prompts:

@@ -1504,7 +1504,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
 
     // Create the primary space
     try {
-      const created = await this.hostSpace();
+      const created = await this.hostSpace(primarySpaceId);
       if (!created.success) {
         const err = Object.assign(
           new Error(`Failed to create space ${primarySpaceId}: ${describeHostFailure(created)}`),
