@@ -69,7 +69,8 @@ export class FileSessionStorage implements ISessionStorage {
     // never leaves a half-written session where the previous one was.
     const tempPath = `${filePath}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
     try {
-      writeFileSync(tempPath, data, "utf-8");
+      // The session holds a key: the temp file, and so the file renamed over the target, is owner-only.
+      writeFileSync(tempPath, data, { encoding: "utf-8", mode: 0o600 });
       renameSync(tempPath, filePath);
     } catch (error) {
       try {
