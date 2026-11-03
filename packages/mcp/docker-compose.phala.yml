@@ -13,7 +13,6 @@ services:
       - TC_MCP_INTROSPECTION_CLIENT_SECRET=${TC_MCP_INTROSPECTION_CLIENT_SECRET}
       - TC_MCP_DELEGATION_EXPIRY=30d
       - TC_MCP_APPROVAL_TTL_SECONDS=900
-      - TC_MCP_ALLOWED_ORIGINS=https://claude.ai,https://chatgpt.com
       - TC_MCP_OAUTH_METADATA_URL=https://api.openkey.so/.well-known/oauth-authorization-server/api/auth
       - TC_OPENKEY_HOST=https://openkey.so
       - TC_HOST=https://tee.node.tinycloud.xyz

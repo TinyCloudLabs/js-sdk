@@ -48,7 +48,6 @@ const LOCAL_MCP_PACKAGE = ["@tinycloud", "mcp"].join("/");
 
 export interface HostedMcpConfig extends RemoteStoreConfig {
   readonly oauthMetadata: OAuthMetadata;
-  readonly allowedOrigins?: readonly string[];
   /**
    * OpenKey token introspection client (`TC_MCP_INTROSPECTION_URL` and client
    * credentials). The hosted server always sets this; without it only the
@@ -512,11 +511,9 @@ function createHostedSurface(
         });
       }
       if (url.pathname !== resourceUrl.pathname) return json({ error: "Not found" }, 404);
-      const originFailure = validateOrigin(request, config.allowedOrigins);
-      if (originFailure !== undefined) return originFailure;
+      if (request.method === "OPTIONS") return mcpCors(new Response(null, { status: 204 }), request);
       const auth = await authenticate(request);
-      if (auth instanceof Response) return auth;
-      return handler.fetch(request, { authInfo: auth });
+      return mcpCors(auth instanceof Response ? auth : await handler.fetch(request, { authInfo: auth }), request);
     },
     close: () => handler.close(),
   };
@@ -621,11 +618,28 @@ function requiredState(url: URL): string {
   return state;
 }
 
-function validateOrigin(request: Request, allowed: readonly string[] | undefined): Response | undefined {
-  const origin = request.headers.get("origin");
-  if (origin === null) return undefined;
-  const allowlist = allowed ?? [];
-  return allowlist.includes(origin) ? undefined : json({ error: "Origin is not allowed." }, 403);
+/**
+ * Any browser Origin may call the MCP endpoint: it is authenticated by the
+ * `Authorization: Bearer` header alone (no cookies or other ambient
+ * credentials), so the Origin carries no authority. The wildcard origin can
+ * never be combined with credentials, so `Access-Control-Allow-Credentials`
+ * is not set. Only the bearer challenge header is exposed to scripts. A request
+ * without an Origin header (not a browser cross-origin call) gets no CORS headers.
+ */
+function mcpCors(response: Response, request: Request): Response {
+  if (!request.headers.has("origin")) return response;
+  const headers = new Headers(response.headers);
+  headers.set("access-control-allow-origin", "*");
+  headers.set("access-control-allow-methods", "GET, POST, DELETE, OPTIONS");
+  headers.set("access-control-expose-headers", "WWW-Authenticate");
+  const requestedHeaders = request.method === "OPTIONS"
+    ? request.headers.get("access-control-request-headers")
+    : null;
+  if (requestedHeaders !== null) {
+    headers.set("access-control-allow-headers", requestedHeaders);
+    headers.set("vary", "Access-Control-Request-Headers");
+  }
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
 function validateCallbackOrigin(request: Request, openkeyHost: string): Response | undefined {
