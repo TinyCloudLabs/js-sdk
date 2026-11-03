@@ -1,3 +1,5 @@
+import { rmdir } from "node:fs/promises";
+import { profilePath } from "@tinycloud/operations/state";
 import { ProfileManager } from "../config/profiles.js";
 import { dropCommittedDelegation } from "./pending-code.js";
 import { carriedDelegation, isPermanentRefusal, refusalNotice, wasRefusedAfterApproval, type KeyOutcome } from "./refusal.js";
@@ -73,7 +75,8 @@ export async function discardRefusedApproval(site: RefusalSite, error: unknown, 
 /** Delete the key of a profile this command created, and the profile when this command's key was all that lived in it. */
 async function deleteCreatedProfileKey(site: RefusalSite): Promise<KeyOutcome> {
   const created = site.createdProfile!;
-  return ProfileManager.withLock(site.profileName, async (): Promise<KeyOutcome> => {
+  let removedProfile = false;
+  const outcome = await ProfileManager.withLock(site.profileName, async (): Promise<KeyOutcome> => {
     const profile = await ProfileManager.getProfile(site.profileName).catch(() => null);
     const session = await ProfileManager.getSession(site.profileName) as Record<string, unknown> | null;
     // A session that became live meanwhile (another login) uses this profile's key, as does a key another login replaced.
@@ -84,11 +87,17 @@ async function deleteCreatedProfileKey(site: RefusalSite): Promise<KeyOutcome> {
       profile.ownerDid === undefined && profile.authMethod === undefined && profile.spaceId === undefined;
     if (onlyThisLogin) {
       await ProfileManager.removeProfileConfig(site.profileName);
+      removedProfile = true;
       const config = await ProfileManager.getConfig();
       if (config.defaultProfile === site.profileName) await ProfileManager.setConfig({ ...config, defaultProfile: created.previousDefaultProfile });
     }
     return { kind: "deleted" };
   });
+  // The lock's own file goes when it is released, leaving the profile directory empty: remove it, so the profile is not listed
+  // with no settings. `rmdir` fails on a directory with anything in it (another tool's file, a writer that came meanwhile),
+  // which is then left alone.
+  if (removedProfile) await rmdir(profilePath(site.profileName)).catch(() => undefined);
+  return outcome;
 }
 
 /**
