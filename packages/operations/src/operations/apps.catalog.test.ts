@@ -97,7 +97,7 @@ describe("telling 'Health Log is not installed' apart from other failures", () =
   test("a missing database or table gives one recognisable, non-retryable error the rules can act on", async () => {
     for (const error of [
       { code: "SQL_DATABASE_NOT_FOUND", message: "SQL query failed: 404 - database not found", meta: { status: 404 } },
-      { code: "SQL_ERROR", message: "SQL query failed: 400 - no such table: meal" },
+      { code: "SQL_ERROR", message: "SQL query failed: 400 - SQLite error: no such table: meal" },
     ]) {
       const outcome = await failWith(error);
       expect(missing(outcome)).toBe(true);
