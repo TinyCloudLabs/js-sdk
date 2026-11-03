@@ -3,6 +3,8 @@ import { appsOperationDefinitions } from "./operations/apps.js";
 import { authOperationDefinitions } from "./operations/auth.js";
 import { explorationOperationDefinitions } from "./operations/exploration.js";
 import { knowledgeOperationDefinitions } from "./operations/knowledge.js";
+import { readOperationDefinitions } from "./operations/read.js";
+import { readScopeOperationDefinitions } from "./operations/read-scope.js";
 import { secretsGetOperationDefinitions } from "./operations/secrets-get.js";
 import { secretsStatusOperationDefinitions } from "./operations/secrets-status.js";
 import { sqlOperationDefinitions } from "./operations/sql.js";
@@ -28,6 +30,8 @@ function registeredOperationDefinitions(): readonly OperationDefinition<any, any
   operationDefinitions ??= [
     ...statusOperationDefinitions,
     ...authOperationDefinitions,
+    ...readScopeOperationDefinitions,
+    ...readOperationDefinitions,
     ...explorationOperationDefinitions,
     ...appsOperationDefinitions,
     ...sqlOperationDefinitions,

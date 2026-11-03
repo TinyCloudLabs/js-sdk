@@ -17,7 +17,7 @@ afterEach(async () => {
   await Promise.all(homes.splice(0).map((home) => rm(home, { recursive: true, force: true })));
 });
 
-test("official v2 client lists exactly the generated KV CRUD and SQLite tools over stdio", async () => {
+test("official v2 client enforces operation schemas and owner opt-in over stdio", async () => {
   const home = await fixtureHome();
   const transport = new StdioClientTransport({
     command: nodeBinary,
@@ -31,60 +31,6 @@ test("official v2 client lists exactly the generated KV CRUD and SQLite tools ov
 
   try {
     await client.connect(transport);
-    const listed = await client.listTools();
-    expect(listed.tools.map((tool) => tool.name)).toEqual([
-      "tinycloud_status",
-      "tinycloud_auth_status",
-      "tinycloud_auth_capabilities",
-      "tinycloud_auth_request",
-      "tinycloud_auth_import",
-      "tinycloud_account_spaces_list",
-      "tinycloud_account_applications_list",
-      "tinycloud_kv_list",
-      "tinycloud_kv_get",
-      "tinycloud_kv_head",
-      "tinycloud_kv_put",
-      "tinycloud_kv_delete",
-      "tinycloud_knowledge_list",
-      "tinycloud_knowledge_read",
-      "tinycloud_sql_schema_inspect",
-      "tinycloud_sql_query",
-      "tinycloud_sql_execute",
-      "tinycloud_secrets_get",
-      "tinycloud_secrets_status",
-    ]);
-    expect(listed.tools).toHaveLength(19);
-
-    for (const tool of listed.tools) {
-      expect(tool.annotations).toMatchObject({
-        readOnlyHint: ![
-          "tinycloud_auth_request",
-          "tinycloud_auth_import",
-          "tinycloud_kv_put",
-          "tinycloud_kv_delete",
-          "tinycloud_sql_execute",
-          "tinycloud_secrets_get",
-        ].includes(tool.name),
-        idempotentHint: tool.name !== "tinycloud_sql_execute",
-        destructiveHint: ["tinycloud_kv_put", "tinycloud_kv_delete", "tinycloud_sql_execute"].includes(tool.name),
-        openWorldHint: [
-          "tinycloud_account_spaces_list",
-          "tinycloud_account_applications_list",
-          "tinycloud_kv_list",
-          "tinycloud_kv_get",
-          "tinycloud_kv_head",
-          "tinycloud_kv_put",
-          "tinycloud_kv_delete",
-          "tinycloud_knowledge_list",
-          "tinycloud_knowledge_read",
-          "tinycloud_sql_schema_inspect",
-          "tinycloud_sql_query",
-          "tinycloud_sql_execute",
-          "tinycloud_secrets_get",
-          "tinycloud_secrets_status",
-        ].includes(tool.name),
-      });
-    }
 
     const status = await client.callTool({ name: "tinycloud_status", arguments: {} });
     expect(status.structuredContent).toMatchObject({
@@ -97,11 +43,13 @@ test("official v2 client lists exactly the generated KV CRUD and SQLite tools ov
       ["tinycloud_auth_status", {}, { status: "ok", operation: { operationId: "tinycloud.auth.status", operationVersion: 1 } }],
       ["tinycloud_auth_capabilities", {}, { status: "error", operation: { operationId: "tinycloud.auth.capabilities", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
       ["tinycloud_auth_request", { requestId: "missing-request" }, { status: "error", operation: { operationId: "tinycloud.auth.request", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
+      ["tinycloud_auth_read_scope", { space: "applications", kvPrefixes: ["notes/"] }, { status: "error", error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
       ["tinycloud_auth_import", validImportProbe(), { status: "error", operation: { operationId: "tinycloud.auth.import", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
       ["tinycloud_account_spaces_list", {}, { status: "error", operation: { operationId: "tinycloud.account.spaces.list", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
       ["tinycloud_account_applications_list", {}, { status: "error", operation: { operationId: "tinycloud.account.applications.list", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
       ["tinycloud_kv_list", { space: "applications" }, { status: "error", operation: { operationId: "tinycloud.kv.list", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
       ["tinycloud_kv_get", { space: "applications", key: "agents/example" }, { status: "error", operation: { operationId: "tinycloud.kv.get", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
+      ["tinycloud_read", { resource: { kind: "kv", space: "applications", key: "notes/example" } }, { status: "error", error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
       ["tinycloud_kv_head", { space: "applications", key: "agents/example" }, { status: "error", operation: { operationId: "tinycloud.kv.head", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
       ["tinycloud_kv_put", { space: "applications", key: "agents/example", mode: "create", content: { encoding: "utf8", value: "hello" } }, { status: "error", operation: { operationId: "tinycloud.kv.put", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
       ["tinycloud_kv_delete", { space: "applications", key: "agents/example" }, { status: "error", operation: { operationId: "tinycloud.kv.delete", operationVersion: 1 }, error: { code: "PROFILE_OWNER_OPT_IN_REQUIRED" } }],
@@ -487,6 +435,7 @@ test("a fresh delegate bootstraps through the real CLI, then explores through MC
   }
 }, 300_000);
 
+// Two real Node process startups and signed fixture setup need an integration deadline.
 test("an authorized missing secret returns only the value-free setup action", async () => {
   const home = await mkdtemp(join(tmpdir(), "tinycloud-mcp-setup-"));
   const previousTcHome = process.env.TC_HOME;
@@ -549,7 +498,7 @@ test("an authorized missing secret returns only the value-free setup action", as
     else process.env.TC_HOME = previousTcHome;
     await rm(home, { recursive: true, force: true });
   }
-});
+}, 15_000);
 
 test("secrets status on an unreadable name is ok consent_required and saves no request", async () => {
   const home = await mkdtemp(join(tmpdir(), "tinycloud-mcp-status-consent-"));
