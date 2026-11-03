@@ -20,6 +20,13 @@ const OWNER_WALLET = 'a1'.repeat(32);
 
 const REVOKE = 'https://account.tinycloud.xyz/delegations';
 const DISCARD = /discards that approval/;
+// test-ruling TC-2383: the notice for the grant installed on the old key names the revoke page, so "no revoke page anywhere" no longer holds
+// on a ready profile. What still holds: an approval that holds no grant (no result, only a reference) gets no revoke page of its own.
+const assertRevokeOnlyForInstalledGrant = (stderr) => {
+  for (const line of stderr.split('\n')) {
+    if (line.includes(REVOKE)) assert.match(line, /installed grant for the old agent key/, `a revoke page outside the installed-grant notice: ${line}`);
+  }
+};
 const LIVE = /live grant may exist/;
 
 const crashBeforeUnlink = (t, file) => {
@@ -102,7 +109,7 @@ scenario('rotate-key over a saved approval with no granted result keeps only the
   assert.equal(run.code, 0, run.stderr);
   assert.match(run.stderr, DISCARD);
   assert.doesNotMatch(run.stderr, LIVE);
-  assert.equal(run.stderr.includes(REVOKE), false);
+  assertRevokeOnlyForInstalledGrant(run.stderr);
 });
 
 scenario('rotate-key over an open request prints no discard or revoke warning', async (ctx) => {
@@ -111,7 +118,7 @@ scenario('rotate-key over an open request prints no discard or revoke warning', 
   const run = await ctx.courier('--rotate-key', '--request');
   assert.equal(run.code, 0, run.stderr);
   assert.doesNotMatch(run.stderr, DISCARD);
-  assert.equal(run.stderr.includes(REVOKE), false);
+  assertRevokeOnlyForInstalledGrant(run.stderr);
 });
 
 for (const boundary of BOUNDARIES) {
@@ -161,6 +168,6 @@ for (const boundary of BOUNDARIES) {
     ctx.errors.length = 0;
     const run = await ctx.courier('--request');
     assert.match(run.stderr, DISCARD);
-    assert.equal(run.stderr.includes(REVOKE), false);
+    assertRevokeOnlyForInstalledGrant(run.stderr);
   });
 }

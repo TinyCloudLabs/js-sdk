@@ -30,10 +30,12 @@ for (const file of ['key.json', 'rotation.json', 'approval-pending.json']) {
       assert.equal(fs.readFileSync(homeFile(name), 'utf8'), BODY, `kept, not zeroed, by init ${argv.join(' ')}`);
       assert.equal(fs.statSync(homeFile(name)).mode & 0o777, 0o600);
       assert.ok(run.stderr.includes(name), `the file is named: ${run.stderr}`);
-      assert.match(run.stderr, new RegExp(`process ${child.pid}\\b`));
+      assert.match(run.stderr, new RegExp(`[Pp]rocess ${child.pid}\\b`));
       assert.match(run.stderr, /kept/);
       assert.match(run.stderr, /reuse/i);
-      assert.match(run.stderr, /private key/);
+      assert.match(run.stderr, /private-key material/);
+      assert.ok(run.stderr.includes(`rm -- '${homeFile(name)}'`), `the exact cleanup command is given: ${run.stderr}`);
+      assert.ok(run.stderr.includes(`ps -p ${child.pid}`), 'and how to check the process first');
     }
     child.kill('SIGKILL');
     await once(child, 'exit');

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { cmdInit } from '../dist/commands.js';
 import { parseArgs } from '../dist/args.js';
 import { Crash, crashAtWrite, homeFile, readHome, scenario } from './support/approval-fixture.mjs';
-import { crashBeforeUnlink, readyProfile } from './support/review-fixture.mjs';
+import { REVOKE, crashBeforeUnlink, readyProfile } from './support/review-fixture.mjs';
 
 // TC-2383: `init --rotate-key` deletes the installed grant.json. The grant stays valid at the node until it expires. The invoking command
 // says so; when the process dies after the grant was deleted, the init that finishes the rotation must say it too, from non-secret facts
@@ -44,6 +44,7 @@ for (const boundary of BOUNDARIES) {
       assert.ok(run.stderr.includes(grant.delegationCid), 'the CID is named');
       assert.match(run.stderr, /may still be valid until \d{4}-\d{2}-\d{2}T/);
       assert.match(run.stderr, /cannot revoke/);
+      assert.ok(run.stderr.includes(REVOKE), 'the revoke page is named');
       assert.equal(fs.existsSync(homeFile('grant.json')), false);
       assert.equal(fs.existsSync(homeFile('rotation.json')), false);
       ctx.errors.length = 0;
@@ -52,6 +53,32 @@ for (const boundary of BOUNDARIES) {
     });
   }
 }
+
+scenario('the invoking rotation itself says the old installed grant may still be valid, with its CID, expiry and the revoke page', async (ctx) => {
+  const grant = await readyProfile(ctx);
+  ctx.errors.length = 0;
+  const run = await ctx.courier('--rotate-key', '--request');
+  assert.equal(run.code, 0, run.stderr);
+  const line = run.stderr.split('\n').find((l) => NOTICE.test(l));
+  assert.ok(line, `the notice is printed on the direct path: ${run.stderr}`);
+  assert.ok(line.includes(grant.delegationCid));
+  assert.match(line, /may still be valid until \d{4}-\d{2}-\d{2}T/);
+  assert.ok(line.includes(REVOKE));
+  assert.equal((run.stderr.match(NOTICE) ?? []).length, 1, 'said once');
+});
+
+scenario('a rotation over a saved approval with only a result reference gives the discard warning no revoke page, apart from the installed grant\'s own notice', async (ctx) => {
+  await readyProfile(ctx);
+  await ctx.request();
+  const open = readHome('approval-pending.json');
+  fs.writeFileSync(homeFile('approval-pending.json'), JSON.stringify({ ...open, resultRef: 'ref', resultExpiresAt: '2999-01-01T00:00:00.000Z' }), { mode: 0o600 });
+  ctx.errors.length = 0;
+  const run = await ctx.courier('--rotate-key', '--request');
+  assert.equal(run.code, 0, run.stderr);
+  for (const line of run.stderr.split('\n')) {
+    if (/approval request/.test(line)) assert.equal(line.includes(REVOKE), false, `a result reference is not a grant: ${line}`);
+  }
+});
 
 scenario('a rotation interrupted over a profile with no installed grant prints no installed-grant notice', async (ctx) => {
   await readyProfile(ctx);

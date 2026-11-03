@@ -10,7 +10,7 @@ import { bareDid, siweTimes } from './authority.js';
 import { dropPendingDelegation, hasLivePending, liveRedeemedDelegations } from './pending.js';
 import { REVOKE_URL } from './grant-refusal.js';
 import { CourierError } from './errors.js';
-import { base64url32, ed25519DidKey } from './did-key.js';
+import { base64url32, ed25519DidKey, ed25519PublicKey } from './did-key.js';
 
 /**
  * One derivation of where `init` stands, shared by every init mode.
@@ -29,7 +29,8 @@ import { base64url32, ed25519DidKey } from './did-key.js';
  *   (5) the discard warning is printed, then rotation.json is removed (its only deletion point).
  * Before the rename in (1) nothing but a stray temp file can differ from the old state. From then on every init mode rolls forward
  * from the journal alone; every step is idempotent. A process killed while writing a temp file leaves it behind (0600, holding a
- * key that was never installed): `recoverInterrupted` zero-fills and removes it.
+ * key that may or may not have been installed, or an approval's relay key and result): `recoverInterrupted` zero-fills and removes it, unless
+ * the process that named it is still running.
  */
 const ROTATION_FILE = 'rotation.json';
 const STRAY_TEMP = /^(?:rotation|key|approval-pending)\.json\.(\d+)\.[0-9a-f]{12}\.tmp$/;
@@ -273,7 +274,8 @@ export function recoverInterrupted(): void {
   finishRotation();
   for (const name of strayTemps()) scrub(path.join(profileDir(), name));
   for (const { name, pid } of liveWriterTemps()) {
-    console.error(`warning: ${name} was kept, not deleted: it may hold a private key, and process ${pid}, which named it, is running. That is either a Courier process still writing it or an unrelated process that was given the same pid after Courier died (pid reuse); Courier cannot tell which. Remove the file by hand only if process ${pid} is not Courier.`);
+    const file = path.join(profileDir(), name);
+    console.error(`warning: ${name} was kept, not deleted, and may contain private-key material (an agent key, or an approval's relay key and result). Process ${pid}, which named it, is running: either a Courier process still writing it, or an unrelated process that was given the same pid after Courier died (pid reuse); Courier cannot tell which. Check with \`ps -p ${pid} -o pid=,args=\`; only if that is not a Courier process, remove the file with \`rm -- '${file}'\`.`);
   }
 }
 
@@ -337,13 +339,18 @@ const validGrantList = (list: unknown): boolean => Array.isArray(list)
 
 /**
  * Whether a key is an Ed25519 agent key as `newAgentKey` makes one: a plain-object JWK with kty OKP, crv Ed25519, and `x` and `d` as
- * unpadded base64url text of exactly 32 bytes, whose `did:key` (fragment aside) is the one derived from `x`.
+ * unpadded base64url text of exactly 32 bytes, where `x` is the public key of `d`, and the `did:key` is the one derived from `x`
+ * (a `#fragment`, when present, names the same key).
  */
 function hasKeyProof(key: AgentKey): boolean {
   const jwk = key.jwk;
   if (Array.isArray(jwk) || jwk.kty !== 'OKP' || jwk.crv !== 'Ed25519') return false;
   const x = base64url32(jwk.x);
-  return !!x && !!base64url32(jwk.d) && key.did.split('#')[0] === ed25519DidKey(x);
+  const d = base64url32(jwk.d);
+  if (!x || !d || !x.equals(ed25519PublicKey(d))) return false;
+  const did = ed25519DidKey(x);
+  const [base, fragment] = key.did.split('#');
+  return base === did && (fragment === undefined || fragment === did.slice('did:key:'.length));
 }
 
 /** What is wrong with a parsed journal, or undefined when it is a rotation this code may replay. Never includes any of its content. */
@@ -441,15 +448,14 @@ function removeIfPresent(file: string): void {
   }
 }
 
-/** `replayed`: this init is finishing a rotation another command started, so it says what that command's own output said or never got to say. */
-function applyRotation(journal: RotationJournal, replayed = false): void {
+function applyRotation(journal: RotationJournal): void {
   saveKey(journal.key);
   saveProfile(journal.profile);
   removeIfPresent(path.join(profileDir(), 'grant.json'));
   if (journal.discardApproval) clearPending();
   for (const grant of journal.discardedGrants ?? []) dropPendingDelegation(grant.delegationCid);
   syncDir();
-  warnDiscarded(journal, replayed);
+  warnDiscarded(journal);
   fs.unlinkSync(rotationPath());
   syncDir();
 }
@@ -457,7 +463,7 @@ function applyRotation(journal: RotationJournal, replayed = false): void {
 const untilText = (expiresAt: string | undefined): string => (expiresAt ? `, valid until ${expiresAt}` : '');
 
 /** Printed from the journal, so any init mode that finishes the rotation, also after a crash, says the same thing. */
-function warnDiscarded(journal: RotationJournal, replayed: boolean): void {
+function warnDiscarded(journal: RotationJournal): void {
   if (journal.discardApproval) {
     console.error('The saved approval request already held an approval from the owner. It is bound to the old agent key, so this key rotation discards that approval: the owner must approve a new request.');
   }
@@ -471,10 +477,11 @@ function warnDiscarded(journal: RotationJournal, replayed: boolean): void {
   for (const grant of journal.unmatchedGrants ?? []) {
     console.error(`A redeemed grant saved in pending-grant.json (delegation ${grant.delegationCid}) could not be matched to the old agent key (key.json cannot be read), so it was kept as it is. A live grant may exist${untilText(grant.expiresAt)}. This agent cannot revoke it; the owner can revoke it at ${REVOKE_URL}.`);
   }
-  // The invoking command's own output already says the old grant stays valid; a command that only finishes the rotation says it here.
-  if (replayed && journal.installedGrant) {
-    const until = journal.installedGrant.expiresAt ? `until ${journal.installedGrant.expiresAt}` : 'until it expires';
-    console.error(`The installed grant for the old agent key (delegation ${journal.installedGrant.delegationCid}) was removed by this key rotation. It is not revoked: it may still be valid ${until}. This agent cannot revoke it; ask the owner to revoke it.`);
+  // The grant installed for the old key was removed, not revoked: the invoking command and one that finishes the rotation both say so.
+  if (journal.installedGrant) {
+    const { delegationCid, expiresAt } = journal.installedGrant;
+    const until = expiresAt ? `until ${expiresAt}` : 'until it expires';
+    console.error(`The installed grant for the old agent key (delegation ${delegationCid}) was removed by this key rotation. It is not revoked: it may still be valid ${until}. This agent cannot revoke it; the owner can revoke it at ${REVOKE_URL}.`);
   }
 }
 
@@ -486,6 +493,6 @@ export function finishRotation(): boolean {
   if (problem) {
     throw new CourierError('bad-profile', `${rotationPath()} is not a valid key rotation record (${problem}). Nothing was changed. Restore it from a backup, or move it aside and run \`${cmd('init --rotate-key')}\` to start over with a new agent key.`);
   }
-  applyRotation(journal as RotationJournal, true);
+  applyRotation(journal as RotationJournal);
   return true;
 }

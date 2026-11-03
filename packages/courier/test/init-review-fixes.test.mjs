@@ -5,7 +5,7 @@ import { cmdInit } from '../dist/commands.js';
 import { parseArgs } from '../dist/args.js';
 import { deriveState } from '../dist/state.js';
 import { loadProfile } from '../dist/profile.js';
-import { ed25519DidKey } from '../dist/did-key.js';
+import { ed25519DidKey, ed25519PublicKey } from '../dist/did-key.js';
 import {
   Crash, crashAtWrite, homeFile, missingSpace, readHome, readySpace, scenario, signedGrant, stubSpaceProbe,
 } from './support/approval-fixture.mjs';
@@ -302,7 +302,7 @@ scenario('rotating with no redeemed delegation saved prints no delegation warnin
 // ---- (6) a journal that parses but is not a rotation is refused before anything is replayed ----
 
 // The journal's key is proven before replay (Ed25519 JWK of 32-byte parts, did:key derived from `x`), so the stand-in is a well-formed one.
-const NEW_PUBLIC = Buffer.alloc(32, 1);
+const NEW_PUBLIC = ed25519PublicKey(Buffer.from(SECRET, 'base64url'));
 const NEW_DID = ed25519DidKey(NEW_PUBLIC);
 const goodJournal = () => ({
   v: 1,
