@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { cmd } from './program.js';
 import { CourierError } from './errors.js';
 import { canonicalJson } from './canonical.js';
+import { acquireLock, type LockRefusal } from './file-lock.js';
 
 /** Courier-local identity and peer store; never an OpenKey owner profile. */
 export interface AgentKey {
@@ -196,11 +197,18 @@ const same = (a: unknown, b: unknown): boolean => canonicalJson(a ?? null) === c
 function mergePeer(handle: string, base: StoredPeer | undefined, mine: StoredPeer | undefined, disk: StoredPeer | undefined): StoredPeer | undefined {
   if (same(mine, base)) return disk; // not touched by this command
   if (!mine) return undefined; // revoked here
-  if (!disk) return base ? undefined : mine; // revoked elsewhere stays revoked; a new peer is added
+  if (!disk) {
+    if (!base) return mine; // a new peer is added
+    throw new CourierError('peer-revoked', `${handle} was revoked while this command was running. Nothing was saved and nothing was published.`);
+  }
   if (disk.status === 'paired' && mine.status !== 'paired') {
     throw new CourierError('usage', `Already paired with ${handle}.`);
   }
-  if (!base) return mine;
+  if (!base) {
+    // Another command added this handle meanwhile: replacing it would drop that command's delegations.
+    if (same(mine, disk)) return disk;
+    throw new CourierError('profile-changed', `Another command started a pairing with ${handle} while this one ran. Nothing was saved; run the command again.`);
+  }
   const merged: Record<string, unknown> = {};
   const m = mine as unknown as Record<string, unknown>;
   const b = base as unknown as Record<string, unknown>;
@@ -224,9 +232,7 @@ function mergePeer(handle: string, base: StoredPeer | undefined, mine: StoredPee
 }
 
 function mergeProfile(base: Profile, mine: Profile, disk: Profile): Profile {
-  if (disk.courierDid !== base.courierDid) {
-    throw new CourierError('profile-changed', 'The agent key changed while this command was running (`init --rotate-key`). Nothing was saved; run the command again.');
-  }
+  assertSameAgent(base, disk);
   const merged: Record<string, unknown> = {};
   const m = mine as unknown as Record<string, unknown>;
   const b = base as unknown as Record<string, unknown>;
@@ -265,47 +271,73 @@ function adoptPeers(target: Record<string, unknown>, source: Record<string, unkn
 }
 
 const LOCK_WAIT_MS = 10_000;
-const LOCK_STALE_MS = 30_000;
 
 function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-function holderGone(lock: string): boolean {
-  try {
-    const { pid } = JSON.parse(fs.readFileSync(lock, 'utf8')) as { pid?: unknown };
-    if (typeof pid === 'number' && Number.isInteger(pid) && pid > 0) {
-      try { process.kill(pid, 0); } catch (error) { return (error as NodeJS.ErrnoException).code === 'ESRCH'; }
-    }
-  } catch { /* unreadable or half-written: judged by age below */ }
-  try { return Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS; } catch { return false; }
+const shellQuote = (text: string): string => `'${text.replace(/'/g, `'\\''`)}'`;
+
+/** The one line a refused lock prints: what holds it, and the only safe way out. The lock itself is never removed on doubt. */
+function lockRefusal({ file, reason, pid, host }: LockRefusal): string {
+  const holder = pid === undefined ? 'a holder that cannot be read' : `pid ${pid}${host === undefined ? '' : ` on host ${host}`}`;
+  const why = reason === 'alive' ? `is held by a running Courier command (${holder})`
+    : reason === 'corrupt' ? 'has a record Courier cannot read'
+      : reason === 'unknown' ? `is held by ${holder}, and Courier cannot tell whether that process is still running`
+        : `is being taken over by another Courier command (${holder})`;
+  return `${file} ${why}. Try again; only after confirming no Courier command is running anywhere that uses this profile, clear it with: rm -f -- ${shellQuote(file)}`;
 }
 
-/** Exclusive, held only while a save reads, merges and writes (milliseconds). A lock whose process is gone, or that is older than 30 s, is broken. */
+/**
+ * Exclusive, held only while a save reads, merges and writes (milliseconds). The lock is intake's: created whole with a `{pid, nonce}` owner
+ * record, released only by its nonce, and broken only when its holder is established dead (pid gone or reused by a process that started later).
+ * A live holder, or one whose liveness cannot be established, is waited for and then refused: age alone never breaks a lock.
+ */
 function withProfileLock<T>(fn: () => T): T {
   ensureSecureDir();
   const lock = `${profilePath('profile.json')}.lock`;
-  const deadline = Date.now() + LOCK_WAIT_MS;
+  const deadline = performance.now() + LOCK_WAIT_MS;
+  let release: (() => void) | undefined;
   for (;;) {
     try {
-      const fd = fs.openSync(lock, 'wx', 0o600);
-      try { fs.writeSync(fd, JSON.stringify({ pid: process.pid, at: Date.now() })); } finally { fs.closeSync(fd); }
+      release = acquireLock(lock, { refusal: lockRefusal });
       break;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      if (!(error instanceof CourierError) || error.code !== 'locked') throw error;
+      if (performance.now() >= deadline) throw new CourierError('profile-locked', error.message);
     }
-    if (holderGone(lock)) {
-      const broken = `${lock}.${process.pid}.${randomBytes(6).toString('hex')}.stale`;
-      try { fs.renameSync(lock, broken); fs.unlinkSync(broken); } catch { /* another process broke it first */ }
-      continue;
-    }
-    if (Date.now() >= deadline) throw new CourierError('profile-locked', `${lock} is held by another Courier command. Try again; if no Courier command is running, remove that file.`);
     sleepSync(10);
   }
   try {
     return fn();
   } finally {
-    try { fs.unlinkSync(lock); } catch { /* already gone */ }
+    release?.();
+  }
+}
+
+function assertSameAgent(base: Profile, disk: Profile): void {
+  if (disk.courierDid !== base.courierDid) {
+    throw new CourierError('profile-changed', 'The agent key changed while this command was running (`init --rotate-key`). Nothing was saved; run the command again.');
+  }
+}
+
+/**
+ * Writes grant.json for a profile loaded earlier, under the profile lock and only while profile.json still holds the agent key that
+ * grant is for, so a command that outlived `init --rotate-key` never leaves the old key's grant beside the new profile.
+ */
+export function saveGrantIfCurrent(profile: Profile, grant: OwnerGrant): void {
+  withProfileLock(() => {
+    const base = baselines.get(profile);
+    if (base && fs.existsSync(profilePath('profile.json'))) assertSameAgent(base, readProfile(profileDir()));
+    saveGrant(grant);
+  });
+}
+
+/** Refuses a pairing start for `handle` when this copy or the file as it is now already has it paired. Reads, does not lock: it only avoids work that save would refuse. */
+export function assertNotPaired(profile: Profile, handle: string): void {
+  const current = fs.existsSync(profilePath('profile.json')) ? readProfile(profileDir()) : undefined;
+  if (profile.peers[handle]?.status === 'paired' || current?.peers[handle]?.status === 'paired') {
+    throw new CourierError('usage', `Already paired with ${handle}.`);
   }
 }
 

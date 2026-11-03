@@ -10,7 +10,7 @@ import { cmd } from './program.js';
 import { CourierError, CourierPending, errInfo } from './errors.js';
 import { AGENT_GRANT, AGENT_GRANT_EXPIRY, COURIER_SPACE, DEFAULT_HOST, EXT, k, peerReadPermissions, PREFIX } from './keys.js';
 import {
-  loadProfile, saveProfile, getPeer, profileDir, profileExists, loadKey, saveKey,
+  loadProfile, saveProfile, assertNotPaired, getPeer, profileDir, profileExists, loadKey, saveKey,
   type AgentKey, type Profile, type StoredPeer,
 } from './profile.js';
 import { courierNode, peerKv } from './node.js';
@@ -349,7 +349,7 @@ async function pairAccept(args: ParsedArgs) {
 
   if (art.step === 'A') {
     const handle = art.callMe;
-    if (profile.peers[handle]?.status === 'paired') fail('usage', `Already paired with ${handle}.`);
+    assertNotPaired(profile, handle); // before delegateTo: a refusal after it would leave a live delegation nothing records
     const outbound = await node.delegateTo(art.from.courier, peerReadPermissions(handle, profile.spaceId!), { expiry: PEER_DELEGATION_EXPIRY });
     const peer: StoredPeer = {
       handle, ownerDid: art.from.owner, courierDid: art.from.courier, label: art.from.label,

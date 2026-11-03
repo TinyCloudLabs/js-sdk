@@ -128,7 +128,7 @@ test('a lock left by a dead process does not block saving', async () => {
   const pid = dead.pid;
   dead.kill('SIGKILL');
   await new Promise((resolve) => dead.once('exit', resolve));
-  fs.writeFileSync(`${PROFILE}.lock`, JSON.stringify({ pid, at: Date.now() }), { mode: 0o600 });
+  fs.writeFileSync(`${PROFILE}.lock`, JSON.stringify({ pid, nonce: 'dead-holder' }), { mode: 0o600 });
   const profile = loadProfile();
   profile.label = 'after-crash';
   saveProfile(profile);

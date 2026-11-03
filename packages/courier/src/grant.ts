@@ -5,7 +5,7 @@ import type { PermissionEntry } from '@tinycloud/node-sdk';
 import { cmd, tcCmd } from './program.js';
 import { CourierError } from './errors.js';
 import { AGENT_GRANT, AGENT_GRANT_EXPIRY, COURIER_SPACE, k } from './keys.js';
-import { loadGrant, loadKey, saveGrant, saveProfile, type AgentKey, type OwnerGrant, type Profile } from './profile.js';
+import { loadGrant, loadKey, saveGrantIfCurrent, saveProfile, type AgentKey, type OwnerGrant, type Profile } from './profile.js';
 import { nodeOpts } from './node.js';
 import { listAll } from './store.js';
 import { assertAgentGrant, CLOCK_SKEW_MS, siweTimes } from './authority.js';
@@ -444,7 +444,7 @@ async function installGrantFrom(profile: Profile, key: AgentKey, payload: GrantP
   }
   const { node, expiresAt } = await restoreVerifiedGrant(profile, key, payload);
   const grant = ownerGrant(payload, expiresAt);
-  saveGrant(grant);
+  saveGrantIfCurrent(profile, grant);
   applyGrantToProfile(profile, grant);
   if (!(await verifySpaceReady(node))) {
     const pending = payload.spacePending === true && payload.spaceReady === null;
