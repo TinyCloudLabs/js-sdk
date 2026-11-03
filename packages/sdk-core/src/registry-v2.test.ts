@@ -208,8 +208,18 @@ describe("signed resource routing", () => {
     const encryption = await route(vectors.publicTestIdentities.secrets, "encryption");
     expect(read.hosts.map(({ nodeDid }) => nodeDid)).toEqual([vectors.publicTestIdentities.box]);
     expect(write.hosts.map(({ nodeDid }) => nodeDid)).toEqual([vectors.publicTestIdentities.box]);
-    expect(host.hosts.map(({ nodeDid }) => nodeDid)).toEqual([vectors.publicTestIdentities.box, vectors.publicTestIdentities.hosted]);
+    expect(host.hosts.map(({ nodeDid }) => nodeDid)).toEqual([vectors.publicTestIdentities.box]);
     expect(encryption.hosts.map(({ nodeDid }) => nodeDid)).toEqual([vectors.publicTestIdentities.hosted]);
+  });
+
+  it("registers read-only space replicas without granting them ordinary writes", async () => {
+    const read = await route(vectors.publicTestIdentities.apps, "read");
+    const write = await route(vectors.publicTestIdentities.apps, "write");
+    const host = await route(vectors.publicTestIdentities.apps, "host");
+    expect(read.hosts.map(({ nodeDid }) => nodeDid)).toEqual([vectors.publicTestIdentities.box, vectors.publicTestIdentities.hosted]);
+    expect(write.hosts.map(({ nodeDid }) => nodeDid)).toEqual([vectors.publicTestIdentities.hosted]);
+    expect(host.hosts.map(({ nodeDid }) => nodeDid)).toEqual([vectors.publicTestIdentities.box, vectors.publicTestIdentities.hosted]);
+    expect(() => policy.assertSpaceCreationAllowed(host.verdict, "https://tc2481-box.tinycloud.link", vectors.publicTestIdentities.apps)).not.toThrow();
   });
 
   it("matches a checksummed EOA request to its lower-case signed space URI", async () => {
@@ -223,10 +233,12 @@ describe("signed resource routing", () => {
 
   it("refuses resources with no signed target and returns empty hosts only for genuine absence", async () => {
     if (!policy.resolveRegistryResource) throw new Error("resolveRegistryResource export is missing");
-    await expect(policy.resolveRegistryResource(vectors.publicTestIdentities.owner, "tinycloud:pkh:eip155:1:0xfcad0b19bb29d4674531d6f115237e16afce377c:missing", "read", {
-      registryUrl: "https://registry.test",
-      fetch: responseQueue([recordsResponse(v2.record)]),
-    })).rejects.toBeInstanceOf(policy.NodeNotFoundError);
+    for (const access of ["read", "write", "host"] as const) {
+      await expect(policy.resolveRegistryResource(vectors.publicTestIdentities.owner, "tinycloud:pkh:eip155:1:0xfcad0b19bb29d4674531d6f115237e16afce377c:missing", access, {
+        registryUrl: "https://registry.test",
+        fetch: responseQueue([recordsResponse(v2.record)]),
+      })).rejects.toBeInstanceOf(policy.NodeNotFoundError);
+    }
     const noEntry = await policy.resolveRegistryResource(vectors.publicTestIdentities.owner, vectors.publicTestIdentities.secrets, "read", {
       registryUrl: "https://registry.test",
       fetch: responseQueue([v2NotFound(), v2NotFound()]),
