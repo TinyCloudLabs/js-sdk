@@ -1,5 +1,32 @@
 # @tinycloudlabs/sdk-core
 
+## 3.11.0
+
+### Minor Changes
+
+- 75c0432: OpenKey authorization requests can say the user may change the session expiry. `TinyCloudAuthorizationRequestV1` gains an optional `expiryChangeable`, `diffImmutableSiweFields` gains an `allowExpirationChange` option that leaves only `expirationTime` out of the comparison (the default call still reports it), and the new `checkChangedExpiration` decides whether a changed signed expiry is acceptable. It refuses another changed immutable field, a missing or repeated `Expiration Time` line, an expiry within 60 seconds of now or not after `Issued At` / `Not Before`, an expiry past a given maximum, and an expiry more than 10 years away. It returns the refusal reason, or `null` to accept. `@openkey/sdk` >= 0.13.0 (beta: 0.13.0-beta.0) forwards `expiryChangeable`; 0.12.x ignores it.
+
+  `checkChangedExpiration` also refuses a non-finite `now` or `maxExpiresAt`, refuses a signed `Expiration Time` line that is not in canonical form (CR or CRLF, a separator other than one space, trailing characters, or after `Resources:`), and names the latest allowed time when it refuses for `maxExpiresAt`. Call it only after the message was parsed and its signature verified with `SiweMessage`.
+
+  Details: TC-2276
+
+  Update: the 10-year limit was removed in a later change; the only upper limits are year 9999 for a signed message and 2255 for a delegation signed by the session key.
+
+- cb0c6ce: The 10-year ceiling on lifetimes is gone. `EXPIRY.MAX_MS` is removed from the `EXPIRY` export (breaking for any code that read it; nothing in this repository or the other TinyCloud repositories did). In its place the SDK knows the two limits that are technical, with dates:
+  - `MAX_SIWE_EXPIRY_MS` (9999-12-31T23:59:59Z): the latest expiry a wallet-signed sign-in message can carry, because it writes times with a four-digit year. This covers sessions, owner delegations and an expiry the user changes in OpenKey.
+  - `MAX_UCAN_EXPIRY_MS` (2255-06-05T23:47:34Z): the latest expiry a token signed by the session key can carry (`delegateTo`, agent and share delegations), because the WASM builder stops there. A session itself can still be signed to 9999.
+
+  `technicalExpiryRefusal(expiresAt, "siwe" | "ucan")` returns a plain, dated reason (or `null`) and `assertExpiryWithinTechnicalLimit` throws it. Both also refuse an invalid Date, `NaN` and `Infinity`, which would otherwise surface as `RangeError: Invalid time value`.
+
+  `checkChangedExpiration` (the OpenKey changed-expiry check) now refuses an expiry later than 9999-12-31 with `expiry is later than 9999-12-31, the latest date a TinyCloud signed message can carry; choose an earlier expiry` instead of `more than 10 years away`. Every other rule is unchanged: a valid timestamp, more than 60 seconds from now, after `Issued At` and `Not Before`, and not after `maxExpiresAt`.
+
+  Details: TC-2272
+
+### Patch Changes
+
+- Updated dependencies [dc48089]
+  - @tinycloud/sdk-services@3.11.0
+
 ## 3.11.0-beta.2
 
 ### Patch Changes

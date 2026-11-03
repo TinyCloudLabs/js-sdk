@@ -89,6 +89,7 @@ import { assertNoCaveatLimits } from "../lib/caveat-refusal.js";
 import { isRawEncryptionPermission, isVerifiedRawEncryptionPermission } from "../lib/raw-encryption.js";
 import { canonicalOwnerDid } from "../lib/owner-did.js";
 import { assertNotLocalOwner, assertSessionReplaceable, commitLogin, readProfileSnapshot } from "../auth/login-commit.js";
+import { previousSignInNotice } from "../auth/previous-sign-in.js";
 import { ownerIdentitySigner, startPreparedOpenKeyHandoff, type PreparedOpenKeyHandoff } from "../auth/prepared-openkey.js";
 import { announceFirstOwner, openKeyPrimaryFlag, ownerLoginPermissions, warnIfNotPrimaryKey, withOwnerKeyPrimary } from "../auth/owner-key.js";
 import { SHARE_PUBLISHING_MANIFEST_REF } from "../share/publishing-manifest.js";
@@ -2485,6 +2486,9 @@ async function rotateAuthKey(
     return generateKey();
   });
 
+  // The session this rotation replaces, read now: the commit overwrites it, and the CLI cannot revoke its delegation.
+  const previousNotice = previousSignInNotice(await ProfileManager.getSession(profileName) as Record<string, unknown> | null, profile);
+
   // key.json is not touched until OpenKey's approval is verified: the new key is held in memory (paste) or in the pending
   // request's file, mode 0600 (default flow), and refreshOpenKeySession commits key, session and profile in one
   // compare-and-commit, so a refused or interrupted rotation leaves the old key and login exactly as they were. A concurrent change to the profile makes that commit refuse. A named-keys profile signs in through
@@ -2497,6 +2501,8 @@ async function rotateAuthKey(
       : { keys: profile.namedKeys.prefix, expectedOwner: profile.ownerDid }),
   });
   outputRotationResult(result.profile, profileName, oldDid, "openkey");
+  // Only a rotation that went through (every refusal and failure threw above) tells the owner that the sign-in it replaced stays live.
+  if (previousNotice !== undefined) process.stderr.write(`${previousNotice}\n`);
 }
 
 function outputRotationResult(
