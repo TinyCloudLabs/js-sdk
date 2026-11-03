@@ -87,7 +87,6 @@ import {
   createLocalStorageRegistrySequenceStore,
   type StorageFullEvent,
   type IStorageService,
-  canonicalizeAddress,
 } from "@tinycloud/sdk-core";
 import { showPermissionRequestModal } from "../notifications/lazy-prompts";
 import { applyLegacyNotificationKeys } from "../notifications/legacy-config";
@@ -1092,33 +1091,20 @@ export class TinyCloudWeb {
     const node = await this.ensureNode();
     const hosting = node.spaceHosting;
     if (hosting !== "not-hosted") return hosting;
+    const session = node.restorableSession;
+    if (session && this.walletSigner &&
+        (await this.walletSigner.getAddress()).toLowerCase() !== session.address.toLowerCase()) return "not-hosted";
 
     const signOuts = this.signOutCount;
     const spaceId = node.spaceId;
-    const session = node.restorableSession;
     const existing = this.spaceHostingInFlight;
     if (existing && existing.signOuts === signOuts && existing.spaceId === spaceId) {
       return existing.run;
     }
 
-    const signer = this.walletSigner;
-    const hasCreationPath = signer !== undefined &&
+    const hasCreationPath = this.walletSigner !== undefined &&
       (this.config.spaceCreationHandler !== undefined || this.config.autoCreateSpace !== false);
-    if (!hasCreationPath || !session) return "not-hosted";
-    if (canonicalizeAddress(await signer.getAddress()) !== session.address) return "not-hosted";
-    if (
-      this._node !== node ||
-      this.signOutCount !== signOuts ||
-      this.signOutInFlight > 0 ||
-      node.spaceId !== spaceId ||
-      node.restorableSession !== session
-    ) return "not-hosted";
-    const currentInFlight = this.spaceHostingInFlight;
-    if (
-      currentInFlight &&
-      currentInFlight.signOuts === signOuts &&
-      currentInFlight.spaceId === spaceId
-    ) return currentInFlight.run;
+    if (!hasCreationPath) return "not-hosted";
 
     const run = node.ensurePrimarySpaceHosted("not-hosted").then(() => node.spaceHosting);
     const inFlight = { run, signOuts, spaceId };
