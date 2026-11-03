@@ -8,6 +8,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { acquireLock } from '../dist/file-lock.js';
+import { LOCAL } from './support/lock-identity.mjs';
 import { loadProfile, saveProfile, writeSecure } from '../dist/profile.js';
 
 const HOME = process.env.COURIER_HOME;
@@ -65,7 +66,7 @@ test('a save removes only a lock it owns: a lock that another process holds by t
 
 test('processes that all find the same dead holder break its lock one at a time: they block on each other, no two saves overlap, no update is lost', async () => {
   seed();
-  fs.writeFileSync(LOCK, JSON.stringify({ pid: await deadPid(), nonce: 'dead-holder' }), { mode: 0o600 });
+  fs.writeFileSync(LOCK, JSON.stringify({ ...LOCAL, pid: await deadPid(), nonce: 'dead-holder' }), { mode: 0o600 });
   const start = path.join(HOME, 'lock-start');
   fs.rmSync(start, { force: true });
   const script = fileURLToPath(new URL('./profile-lock-child.mjs', import.meta.url));
@@ -111,7 +112,7 @@ const START = (pid) => { const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8
 test('two breakers that both saw the same dead lock: the one that runs second cannot steal the winner\'s fresh lock', async () => {
   const file = lockFile('race');
   fs.rmSync(file, { force: true });
-  fs.writeFileSync(file, JSON.stringify({ pid: await deadPid(), nonce: 'stale' }), { mode: 0o600 });
+  fs.writeFileSync(file, JSON.stringify({ ...LOCAL, pid: await deadPid(), nonce: 'stale' }), { mode: 0o600 });
   let winner;
   assert.throws(
     () => acquireLock(file, { afterObserve: () => { winner = acquireLock(file); } }), // the second breaker observed the stale lock, then the first ran to completion
@@ -137,8 +138,8 @@ test('a guard left by a breaker that died does not block the next breaker', asyn
   const file = lockFile('guard');
   fs.rmSync(file, { force: true });
   const dead = await deadPid();
-  fs.writeFileSync(file, JSON.stringify({ pid: dead, nonce: 'stale' }), { mode: 0o600 });
-  fs.writeFileSync(`${file}.break.stale.1`, JSON.stringify({ pid: dead, nonce: 'dead-breaker' }), { mode: 0o600 });
+  fs.writeFileSync(file, JSON.stringify({ ...LOCAL, pid: dead, nonce: 'stale' }), { mode: 0o600 });
+  fs.writeFileSync(`${file}.break.stale.1`, JSON.stringify({ ...LOCAL, pid: dead, nonce: 'dead-breaker' }), { mode: 0o600 });
   const release = acquireLock(file);
   assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).pid, process.pid);
   release();
@@ -151,10 +152,10 @@ test('a pid reused by a different process is not the holder; the same process st
   const bystander = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' });
   t.after(() => bystander.kill('SIGKILL'));
   const start = Number(START(bystander.pid));
-  fs.writeFileSync(file, JSON.stringify({ pid: bystander.pid, nonce: 'reused', start: String(start - 100) }), { mode: 0o600 });
+  fs.writeFileSync(file, JSON.stringify({ ...LOCAL, pid: bystander.pid, nonce: 'reused', start: String(start - 100) }), { mode: 0o600 });
   acquireLock(file)(); // the recorded start time is not this process's: the holder is gone
 
-  fs.writeFileSync(file, JSON.stringify({ pid: bystander.pid, nonce: 'genuine', start: String(start) }), { mode: 0o600 });
+  fs.writeFileSync(file, JSON.stringify({ ...LOCAL, pid: bystander.pid, nonce: 'genuine', start: String(start) }), { mode: 0o600 });
   assert.throws(() => acquireLock(file), (e) => e.code === 'locked');
 });
 
@@ -228,10 +229,10 @@ test('a record with this machine and boot and a dead pid is broken', async () =>
 test('a live breaker\'s guard refuses the break and leaves the dead lock where it is', async (t) => {
   const file = lockFile('liveguard');
   fs.rmSync(file, { force: true });
-  const stale = JSON.stringify({ pid: await deadPid(), nonce: 'stale' });
+  const stale = JSON.stringify({ ...LOCAL, pid: await deadPid(), nonce: 'stale' });
   fs.writeFileSync(file, stale, { mode: 0o600 });
   const breaker = sleeper(t);
-  fs.writeFileSync(`${file}.break.stale.1`, JSON.stringify({ pid: breaker.pid, nonce: 'live-breaker' }), { mode: 0o600 });
+  fs.writeFileSync(`${file}.break.stale.1`, JSON.stringify({ ...LOCAL, pid: breaker.pid, nonce: 'live-breaker' }), { mode: 0o600 });
   let info;
   assert.throws(() => acquireLock(file, { refusal: (i) => { info = i; return 'contended'; } }), (e) => e.code === 'locked');
   assert.equal(info.reason, 'contended');
@@ -243,8 +244,8 @@ test('when every guard slot holds a dead breaker\'s guard the break still recove
   const file = lockFile('fullguards');
   fs.rmSync(file, { force: true });
   const dead = await deadPid();
-  fs.writeFileSync(file, JSON.stringify({ pid: dead, nonce: 'stale' }), { mode: 0o600 });
-  for (let k = 1; k <= 8; k += 1) fs.writeFileSync(`${file}.break.stale.${k}`, JSON.stringify({ pid: dead, nonce: `dead${k}` }), { mode: 0o600 });
+  fs.writeFileSync(file, JSON.stringify({ ...LOCAL, pid: dead, nonce: 'stale' }), { mode: 0o600 });
+  for (let k = 1; k <= 8; k += 1) fs.writeFileSync(`${file}.break.stale.${k}`, JSON.stringify({ ...LOCAL, pid: dead, nonce: `dead${k}` }), { mode: 0o600 });
   acquireLock(file)();
   assert.deepEqual(fs.readdirSync(HOME).filter((name) => name.startsWith('fullguards.lock')), []);
 });
@@ -253,9 +254,9 @@ test('a pid owned by someone else (EPERM) is still told from a reused pid by its
   const file = lockFile('eperm');
   fs.rmSync(file, { force: true });
   const real = START(1); // pid 1 is not ours to signal unless we are root; either way it exists
-  fs.writeFileSync(file, JSON.stringify({ pid: 1, nonce: 'reused', start: `${Number(real) + 100}` }), { mode: 0o600 });
+  fs.writeFileSync(file, JSON.stringify({ ...LOCAL, pid: 1, nonce: 'reused', start: `${Number(real) + 100}` }), { mode: 0o600 });
   acquireLock(file)(); // a different start time: not the holder
-  fs.writeFileSync(file, JSON.stringify({ pid: 1, nonce: 'genuine', start: real }), { mode: 0o600 });
+  fs.writeFileSync(file, JSON.stringify({ ...LOCAL, pid: 1, nonce: 'genuine', start: real }), { mode: 0o600 });
   assert.throws(() => acquireLock(file), (e) => e.code === 'locked');
   fs.rmSync(file);
 });
@@ -264,7 +265,7 @@ test('a live pid whose start time cannot be read now is unknown: the lock stays'
   const file = lockFile('nostart');
   fs.rmSync(file, { force: true });
   const holder = sleeper(t);
-  const content = JSON.stringify({ pid: holder.pid, nonce: 'n', start: START(holder.pid) });
+  const content = JSON.stringify({ ...LOCAL, pid: holder.pid, nonce: 'n', start: START(holder.pid) });
   fs.writeFileSync(file, content, { mode: 0o600 });
   const read = fs.readFileSync;
   t.mock.method(fs, 'readFileSync', (f, ...rest) => { if (String(f) === `/proc/${holder.pid}/stat`) throw Object.assign(new Error('gone'), { code: 'ENOENT' }); return read(f, ...rest); });
@@ -279,7 +280,7 @@ test('a holder that has exited but is not reaped (a zombie) is dead', (t) => {
   fs.rmSync(file, { force: true });
   const holder = sleeper(t);
   const start = START(holder.pid);
-  fs.writeFileSync(file, JSON.stringify({ pid: holder.pid, nonce: 'n', start }), { mode: 0o600 });
+  fs.writeFileSync(file, JSON.stringify({ ...LOCAL, pid: holder.pid, nonce: 'n', start }), { mode: 0o600 });
   const read = fs.readFileSync;
   t.mock.method(fs, 'readFileSync', (f, ...rest) => (String(f) === `/proc/${holder.pid}/stat` ? `${holder.pid} (node) Z ${Array(18).fill('0').join(' ')} ${start} 0` : read(f, ...rest)));
   const release = acquireLock(file);
@@ -321,4 +322,32 @@ test('a waiter that finds a held lock writes no temp file', (t) => {
   assert.equal(wrote, 0);
   assert.equal(fs.readdirSync(HOME).join(), before);
   release();
+});
+
+// An old pid-only lock (no machine-id or boot id) cannot be placed on this machine, so it is never judged dead from its pid.
+for (const [label, make] of [
+  ['an old `pid` line', (pid) => `${pid}\n`],
+  ['a {pid, nonce} record', (pid) => JSON.stringify({ pid, nonce: 'legacy' })],
+]) {
+  test(`${label} with a dead pid is kept, and the refusal says how to clear it`, async () => {
+    const file = lockFile('legacy');
+    fs.rmSync(file, { force: true });
+    const content = make(await deadPid());
+    fs.writeFileSync(file, content, { mode: 0o600 });
+    let info;
+    assert.throws(() => acquireLock(file, { refusal: (i) => { info = i; return 'x'; } }), (e) => e.code === 'locked');
+    assert.equal(info.reason, 'unknown');
+    assert.equal(fs.readFileSync(file, 'utf8'), content, 'the lock stays');
+    fs.rmSync(file);
+  });
+}
+
+test('a profile save that meets an old pid-only lock refuses with the one-line recovery and keeps the lock', async () => {
+  seed({ old: peer('old') });
+  const content = JSON.stringify({ pid: await deadPid(), nonce: 'legacy' });
+  fs.writeFileSync(LOCK, content, { mode: 0o600 });
+  const profile = loadProfile();
+  profile.label = 'refused';
+  assert.throws(() => saveProfile(profile), (e) => e.code === 'profile-locked' && !e.message.includes('\n') && e.message.includes(`rm -f -- ${quoted(LOCK)}`) && /only after confirming no Courier command is running/.test(e.message));
+  assert.equal(fs.readFileSync(LOCK, 'utf8'), content);
 });

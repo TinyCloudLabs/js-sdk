@@ -165,17 +165,14 @@ export type Liveness = 'alive' | 'dead' | 'unknown';
 /**
  * Whether the process that wrote `record` still runs. `dead` only when that is established on THIS machine: the pid is gone, has exited
  * (a zombie), or now belongs to a process that started at a different time. A record from another machine, another boot, another pid
- * namespace, or one that names a host without a machine identity, is `unknown`: a shared home directory can hold a live remote pid that
- * looks dead here. A live pid whose start time cannot be compared is `unknown` too, and an unknown holder is never broken. A record with
- * no identity at all (an old `pid` lock) is judged by its pid alone, as before.
+ * namespace, or one without both a machine-id and a boot id (an old pid-only lock), is `unknown`: a shared home directory can hold a live
+ * remote pid that looks dead here. A live pid whose start time cannot be compared is `unknown` too, and an unknown holder is never broken.
  */
 export function recordLiveness(record: LockRecord): Liveness {
-  if (record.machine !== undefined || record.boot !== undefined || record.host !== undefined || record.pidns !== undefined) {
-    const here = machineIdentity();
-    if (record.machine === undefined || record.boot === undefined || record.machine !== here.machine || record.boot !== here.boot) return 'unknown';
-    if (record.host !== undefined && record.host !== os.hostname()) return 'unknown';
-    if (record.pidns !== undefined && record.pidns !== pidNamespace()) return 'unknown';
-  }
+  const here = machineIdentity();
+  if (record.machine === undefined || record.boot === undefined || record.machine !== here.machine || record.boot !== here.boot) return 'unknown';
+  if (record.host !== undefined && record.host !== os.hostname()) return 'unknown';
+  if (record.pidns !== undefined && record.pidns !== pidNamespace()) return 'unknown';
   try {
     process.kill(record.pid, 0);
   } catch (error) {
