@@ -14,7 +14,7 @@ import { ensureSpaceSetup } from "../auth/space-setup.js";
  * makes it. It becomes the default profile when it is named `default` or no
  * default profile exists yet.
  */
-export async function createKeyOnlyProfile(profileName: string, host: string, defaultSpace?: string): Promise<{ did: string }> {
+export async function createKeyOnlyProfile(profileName: string, host: string, defaultSpace?: string): Promise<{ did: string; previousDefaultProfile: string }> {
   await ProfileManager.ensureConfigDir();
   const { jwk, did } = await generateKey();
   await ProfileManager.setKey(profileName, jwk);
@@ -31,7 +31,8 @@ export async function createKeyOnlyProfile(profileName: string, host: string, de
   if (profileName === "default" || !await ProfileManager.profileExists(config.defaultProfile)) {
     await ProfileManager.setConfig({ ...config, defaultProfile: profileName });
   }
-  return { did };
+  // What the default profile was before this one: removing the profile again restores it.
+  return { did, previousDefaultProfile: config.defaultProfile };
 }
 
 export function registerInitCommand(program: Command): void {
@@ -67,8 +68,7 @@ export function registerInitCommand(program: Command): void {
           );
         }
 
-        const { defaultProfile: previousDefaultProfile } = await ProfileManager.getConfig();
-        const { did } = await withSpinner("Generating key...", () => createKeyOnlyProfile(profileName, host, defaultSpace));
+        const { did, previousDefaultProfile } = await withSpinner("Generating key...", () => createKeyOnlyProfile(profileName, host, defaultSpace));
 
         if (options.keyOnly) {
           outputJson({

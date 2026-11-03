@@ -7,3 +7,5 @@ OpenKey authorization requests can say the user may change the session expiry. `
 `checkChangedExpiration` also refuses a non-finite `now` or `maxExpiresAt`, refuses a signed `Expiration Time` line that is not in canonical form (CR or CRLF, a separator other than one space, trailing characters, or after `Resources:`), and names the latest allowed time when it refuses for `maxExpiresAt`. Call it only after the message was parsed and its signature verified with `SiweMessage`.
 
 Details: TC-2276
+
+Update: the 10-year limit was removed in a later change; the only upper limits are year 9999 for a signed message and 2255 for a delegation signed by the session key.

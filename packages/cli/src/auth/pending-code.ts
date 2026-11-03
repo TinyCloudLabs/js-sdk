@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { profilePath } from "@tinycloud/operations/state";
 import { writeJsonDurable } from "../config/storage.js";
 import type { DelegationData } from "./browser-auth.js";
+import { isCid } from "./refusal.js";
 import { sessionExpiresAt } from "./scoped-login.js";
 
 /**
@@ -96,18 +97,14 @@ export async function dropPendingDelegationFor(profile: string, code: string): P
   if (kept.length !== records.length) await write(profile, kept);
 }
 
-/** Delete every saved record of this profile: the approvals they hold were refused, so none may be served again. */
-export async function dropAllPendingDelegations(profile: string): Promise<void> {
-  await write(profile, []);
-}
-
 /**
  * Delete the record whose delegation a durable commit has just stored. `delegation` is the verified
  * login's `delegationCid` or a stored grant's portable `cid`; other records are untouched.
  */
 export async function dropCommittedDelegation(profile: string, delegation: object): Promise<void> {
   const committed = "delegationCid" in delegation ? delegation.delegationCid : "cid" in delegation ? delegation.cid : undefined;
-  if (typeof committed !== "string") return;
+  // A CID from an unverified result that does not look like one matches no record.
+  if (!isCid(committed)) return;
   try {
     const records = await live(profile);
     const kept = records.filter((record) => record.delegation.delegationCid !== committed);

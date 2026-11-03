@@ -157,7 +157,7 @@ describe("tc onboard with a pasted code keeps its 30 day ceiling", () => {
     await onboardWithCode(365 * DAY);
     expect(recordedErrors).toEqual([expect.objectContaining({
       code: "OPENKEY_EXPIRY_EXCEEDED",
-      message: expect.stringMatching(/outlives the requested --expiry\. Choose an earlier lifetime in OpenKey, or re-run with a longer --expiry\. No session was saved\.$/),
+      message: expect.stringMatching(/outlives the requested --expiry\. No session was saved\.$/),
     })]);
     expect(await ProfileManager.getSession(profileName)).toBeNull();
     expect(seen).toEqual([]);

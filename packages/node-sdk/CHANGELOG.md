@@ -1,5 +1,18 @@
 # @tinycloudlabs/node-sdk
 
+## 3.11.0-beta.1
+
+### Patch Changes
+
+- cb0c6ce: `createOwnerDelegation` no longer refuses an expiry more than 10 years away: any future date up to 9999-12-31T23:59:59Z is accepted. The same limit now guards every other place the SDK writes a wallet-signed expiry (the session lifetime from `sessionExpirationMs`, runtime grants, wallet-signed delegations, `createSubDelegation`, activating a received delegation, the root delegation of a share link, and the `expiresAt` of `authorizeShareDeliveryV3`), and a token signed by the session key (`delegateTo`, agent and share delegations) is refused past 2255-06-05T23:47:34Z.
+
+  A value past a limit, before 1970, or a lifetime no date can hold (such as `ms("99999999y")`), is refused with a message that names the date and the cause, before the wallet is asked to sign and before the WASM is called. It no longer surfaces as `RangeError: Invalid time value`, `the 'year' component could not be parsed` or `Out of valid microsecond-precision range of NumericDate`.
+
+  Details: TC-2272
+
+- Updated dependencies [cb0c6ce]
+  - @tinycloud/sdk-core@3.11.0-beta.1
+
 ## 3.11.0-beta.0
 
 ### Minor Changes

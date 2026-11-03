@@ -343,7 +343,7 @@ mock.module("@tinycloud/node-sdk", () => ({
     validatePersistedSession(proof: { spaceId: string }) {
       return {
         verifiedRecap: [
-          ...(openKeyDelegation.kvUnchecked === true ? [] : [{ service: "kv", space: proof.spaceId, path: typeof openKeyDelegation.verifiedPath === "string" ? openKeyDelegation.verifiedPath : "", actions: ["tinycloud.kv/get"] }]),
+          ...(openKeyDelegation.kvUnchecked === true ? [] : [{ service: "kv", space: proof.spaceId, path: typeof openKeyDelegation.verifiedPath === "string" ? openKeyDelegation.verifiedPath : "", actions: Array.isArray(openKeyDelegation.verifiedActions) ? openKeyDelegation.verifiedActions as string[] : ["tinycloud.kv/get"] }]),
           { service: "capabilities", space: proof.spaceId, path: "", actions: ["tinycloud.capabilities/read"] },
         ],
         expiresAt: typeof openKeyDelegation.expiry === "string" ? openKeyDelegation.expiry : "2099-01-01T00:00:00.000Z",
@@ -585,7 +585,6 @@ describe("CLI auth rotate command", () => {
 
     expect(recorded.errors).toEqual([]);
     expect(keys.get("default")).toBe(newJwk);
-    expect(recorded.clearSessions).toEqual(["default"]);
     expect(recorded.startAuthFlows).toEqual([
       {
         did: "did:key:new-openkey",
@@ -1890,6 +1889,8 @@ describe("CLI auth request command", () => {
     sessions.set("default", { authMethod: "openkey", spaceId: "tinycloud:pkh:eip155:1:0xowner:default" });
     keys.set("default", { kty: "OKP", crv: "Ed25519", x: "k", d: "private" });
     authNodeHasRuntimePermissions = false;
+    // The mocked OpenKey reply is bound to this profile's key and its verified proof covers `list`, so the grant is accepted.
+    openKeyDelegation = { ...openKeyDelegation, verificationMethod: "did:key:openkey-session", verifiedActions: ["tinycloud.kv/list"] };
     const written: string[] = [];
     const stderr = spyOn(process.stderr, "write").mockImplementation(((chunk: string | Uint8Array) => {
       written.push(String(chunk));
@@ -1900,6 +1901,7 @@ describe("CLI auth request command", () => {
     } finally {
       stderr.mockRestore();
     }
+    expect(recorded.errors).toEqual([]);
     expect(written.join("")).not.toContain("approval");
   });
 

@@ -164,13 +164,13 @@ test("without the opt-in no flag is sent and a changed expiry is refused", async
   expect(storedExpiries()).toEqual([]);
 });
 
-test("a signed expiry more than 10 years away is refused with a message naming the limit", async () => {
-  const setup = create(new Date(Date.now() + 11 * 365 * DAY_MS).toISOString(), { expiryChangeable: true });
+test.each([11, 100])("a signed expiry %i years away is accepted and stored as signed (no ten-year ceiling)", async (years) => {
+  const signedExpiry = new Date(Date.now() + years * 365 * DAY_MS).toISOString();
+  const setup = create(signedExpiry, { expiryChangeable: true });
   const web = await setup.create();
-  await expect(web.signIn()).rejects.toThrow(
-    "OpenKey signedMessage expiry is more than 10 years away, the longest this SDK accepts; choose a shorter expiry",
-  );
-  expect(storedExpiries()).toEqual([]);
+  const session = await web.signIn();
+  expect(/Expiration Time: (.+)/.exec(session.siwe)?.[1]).toBe(signedExpiry);
+  expect(storedExpiries()).toContain(signedExpiry);
 });
 
 // Review follow-up: an app-level maximum for the signed expiry. It limits the user's choice at the SDK, is never sent to

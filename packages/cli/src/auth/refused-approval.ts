@@ -1,82 +1,132 @@
+import { rmdir } from "node:fs/promises";
+import { profilePath } from "@tinycloud/operations/state";
 import { ProfileManager } from "../config/profiles.js";
-import { dropAllPendingDelegations } from "./pending-code.js";
+import { dropCommittedDelegation } from "./pending-code.js";
+import { carriedDelegation, isMaybeGranted, isPermanentRefusal, maybeGrantedNotice, refusalNotice, wasRefusedAfterApproval, type KeyOutcome } from "./refusal.js";
 import { canonicalJson, sessionStateIsUsable, storedSessionState } from "./scoped-login.js";
-import type { ProfileSnapshot } from "./login-commit.js";
 
 /** A profile this login created, and the default profile before it did (creating a profile can take over the default). */
 export interface CreatedProfile {
   readonly previousDefaultProfile: string;
 }
 
-/** How the key this sign-in used came to be. Only a key THIS sign-in created is ever deleted. */
-export interface KeyOrigin {
-  /** The profile (and its key) was created by this login. */
+/** What one sign-in or grant knew about its key when it asked OpenKey for the approval. */
+export interface RefusalSite {
+  readonly profileName: string;
+  /** The key the approval was requested for. */
+  readonly key: object;
+  /** The profile's stored key when the command began; null when there was none. */
+  readonly storedKey: object | null;
+  /** The profile (and its key) was created by this very command. */
   readonly createdProfile?: CreatedProfile;
-  /** `auth rotate` generated the key just before this sign-in. */
-  readonly rotatedKey?: boolean;
-}
-
-const approvalText = (until: string | undefined): string => `OpenKey granted this approval${until === undefined ? "" : ` until ${until}`}`;
-export const keyDeletedLine = (until?: string): string =>
-  `${approvalText(until)}, but this CLI did not use it and its key was deleted, so it cannot be used. You can also remove it at account.tinycloud.xyz.`;
-export const keyKeptLine = (until?: string): string =>
-  `${approvalText(until)} and the key it belongs to still exists on this device (other grants use it). Revoke it at account.tinycloud.xyz.`;
-const keyNotDeletedLine = (until: string | undefined, reason: string): string =>
-  `${approvalText(until)}, but this CLI did not use it and could not delete its key (${reason}). Revoke it at account.tinycloud.xyz.`;
-
-/**
- * When the grant OpenKey made ends: the `Expiration Time` of the result's own SIWE (the last anchored line, as the saved
- * session reads it). Display only, so an unverified result still says what it claims; no readable line means no date.
- */
-function grantedUntil(delegation: Record<string, unknown>): string | undefined {
-  const siwe = typeof delegation.siwe === "string" ? delegation.siwe : "";
-  const raw = [...siwe.matchAll(/^Expiration Time: (.+)$/gm)].at(-1)?.[1];
-  const ms = raw === undefined ? NaN : Date.parse(raw);
-  return Number.isFinite(ms) ? new Date(ms).toISOString() : undefined;
+  /**
+   * `auth rotate`: the staged key lives only in the pending request (the request file, mode 0600, until the approval verifies),
+   * and a rotation never resumes a kept request. ANY error therefore drops the request(s) holding that key, wherever it was
+   * raised (including inside the approval fetch, before the result is in hand).
+   */
+  readonly rotation?: boolean;
 }
 
 /**
- * A paste login's refusal comes AFTER OpenKey granted the approval to the profile's key, so refusing the signed message
- * alone leaves a live grant. Make it unusable where this sign-in can: always delete the saved copy of the pasted code, and
- * delete the key IF THIS SIGN-IN CREATED IT (a profile this login created, a rotation, a key held only in memory), removing
- * a profile this login created if nothing else lives in it. A key that already existed (other grants or sessions may depend
- * on it, whether or not one is live now), or one another login replaced meanwhile, is KEPT. One plain line goes to stderr
- * telling the owner the grant is live until its date and where to revoke it. This never throws: the caller is about to
- * report the refusal itself.
- *
- * The CLI cannot revoke the grant itself: revoking needs `tinycloud.delegation/revoke` on the delegation's CID, which a
- * login's approved set (kv, sql, capabilities read, delegation list) does not carry (TC-2308).
+ * A key THIS sign-in created is one that never was, or only just was, the profile's: held in memory (a first paste sign-in) or
+ * only in the pending request's file (a first sign-in or a rotation's staged key on the approval-request path: `key` is not the
+ * stored key). Only those, and the key of a profile this command created, are ever deleted. A stored key that already existed is kept, whether or not a session is live now.
  */
-export async function discardRefusedApproval(
-  profileName: string,
-  snapshot: ProfileSnapshot,
-  delegation: Record<string, unknown>,
-  origin: KeyOrigin = {},
-): Promise<void> {
-  const until = grantedUntil(delegation);
-  const createdKey = origin.createdProfile !== undefined || origin.rotatedKey === true || snapshot.key === null;
-  let line = keyKeptLine(until);
+const heldOnlyInMemory = (site: RefusalSite): boolean => site.storedKey === null || canonicalJson(site.storedKey) !== canonicalJson(site.key);
+
+/**
+ * OpenKey made the delegation BEFORE the CLI verified it, so refusing the signed message alone leaves a live grant. For a
+ * PERMANENT refusal (see `isPermanentRefusal`; AUTH_EXPIRED, SESSION_IN_USE and the other resumable ones are not) this makes
+ * the grant unusable where the CLI can and says so, once, on stderr:
+ *   - the saved copy of the pasted code and the pending approval request it came from are dropped;
+ *   - the key is deleted if this command created it (a key held only in memory, or the key of a profile it created, which
+ *     is then removed too if nothing else lives in it); a key that already existed, or one another login changed meanwhile, is
+ *     kept;
+ *   - the notice names the delegation, until when it is live, and where the owner revokes it. The CLI cannot revoke it: a
+ *     login's approved set (kv, sql, capabilities read, delegation list) carries no `tinycloud.delegation/revoke` (TC-2308).
+ * Never throws: the caller is about to report the refusal itself. Not a refusal: no effect. Returns whether a notice was printed.
+ */
+export async function discardRefusedApproval(site: RefusalSite, error: unknown, result?: object): Promise<boolean> {
+  if (!isPermanentRefusal(error)) return false;
+  // Raised before any approval existed (no result in hand, none carried): the owner granted nothing, so there is nothing to clean up or announce.
+  if (result === undefined && !wasRefusedAfterApproval(error)) return false;
+  const delegation = (result as Record<string, unknown> | undefined) ?? carriedDelegation(error);
+  let outcome: KeyOutcome = { kind: "kept" };
   try {
-    await ProfileManager.withLock(profileName, async () => {
-      // The saved copy of a refused approval must never be served again, whether or not the key goes.
-      await dropAllPendingDelegations(profileName);
-      if (!createdKey) return;
-      const profile = await ProfileManager.getProfile(profileName).catch(() => null);
-      const session = await ProfileManager.getSession(profileName) as Record<string, unknown> | null;
-      // Defensive: a session that became live meanwhile (another login) uses this profile's key.
-      if (session !== null && sessionStateIsUsable(storedSessionState(session, profile).state)) return;
-      if (canonicalJson(await ProfileManager.getKey(profileName)) !== canonicalJson(snapshot.key)) return;
-      await ProfileManager.removeKey(profileName);
-      line = keyDeletedLine(until);
-      const onlyThisLogin = origin.createdProfile !== undefined && session === null && profile !== null &&
-        profile.ownerDid === undefined && profile.authMethod === undefined && profile.spaceId === undefined;
-      if (!onlyThisLogin) return;
-      await ProfileManager.removeProfileConfig(profileName);
-      const config = await ProfileManager.getConfig();
-      if (config.defaultProfile === profileName) await ProfileManager.setConfig({ ...config, defaultProfile: origin.createdProfile!.previousDefaultProfile });
-    });
-  } catch (error) {
-    line = keyNotDeletedLine(until, error instanceof Error ? error.message : String(error));
+    if (delegation !== undefined) {
+      await dropCommittedDelegation(site.profileName, delegation);
+      const { dropRefusedApproval } = await import("./approval-request.js");
+      await dropRefusedApproval(site.profileName, delegation);
+    }
+    if (heldOnlyInMemory(site)) {
+      // A first sign-in's key may also sit in another pending request of the profile: then it still exists.
+      const { approvalHoldsKey } = await import("./approval-request.js");
+      if (!(await approvalHoldsKey(site.profileName, (site.key as { x?: unknown }).x))) outcome = { kind: "deleted" };
+    } else if (site.createdProfile !== undefined) {
+      outcome = await deleteCreatedProfileKey(site);
+    }
+  } catch (cleanupError) {
+    outcome = { kind: "failed", reason: cleanupError instanceof Error ? cleanupError.message : String(cleanupError) };
   }
-  process.stderr.write(`${line}\n`);
+  process.stderr.write(`${refusalNotice(delegation, outcome, site.rotation === true)}\n`);
+  return true;
+}
+
+/** Delete the key of a profile this command created, and the profile when this command's key was all that lived in it. */
+async function deleteCreatedProfileKey(site: RefusalSite): Promise<KeyOutcome> {
+  const created = site.createdProfile!;
+  let removedProfile = false;
+  const outcome = await ProfileManager.withLock(site.profileName, async (): Promise<KeyOutcome> => {
+    const profile = await ProfileManager.getProfile(site.profileName).catch(() => null);
+    const session = await ProfileManager.getSession(site.profileName) as Record<string, unknown> | null;
+    // A session that became live meanwhile (another login) uses this profile's key, as does a key another login replaced.
+    if (session !== null && sessionStateIsUsable(storedSessionState(session, profile).state)) return { kind: "kept" };
+    if (canonicalJson(await ProfileManager.getKey(site.profileName)) !== canonicalJson(site.key)) return { kind: "kept" };
+    await ProfileManager.removeKey(site.profileName);
+    const onlyThisLogin = session === null && profile !== null &&
+      profile.ownerDid === undefined && profile.authMethod === undefined && profile.spaceId === undefined;
+    if (onlyThisLogin) {
+      await ProfileManager.removeProfileConfig(site.profileName);
+      removedProfile = true;
+      const config = await ProfileManager.getConfig();
+      if (config.defaultProfile === site.profileName) await ProfileManager.setConfig({ ...config, defaultProfile: created.previousDefaultProfile });
+    }
+    return { kind: "deleted" };
+  });
+  // The lock's own file goes when it is released, leaving the profile directory empty: remove it, so the profile is not listed
+  // with no settings. `rmdir` fails on a directory with anything in it (another tool's file, a writer that came meanwhile),
+  // which is then left alone.
+  if (removedProfile) await rmdir(profilePath(site.profileName)).catch(() => undefined);
+  return outcome;
+}
+
+/**
+ * Run one approval-and-verify step. A permanent refusal from it is cleaned up and announced (`discardRefusedApproval`), then
+ * rethrown unchanged. `seen.result` is set by the step as soon as OpenKey's result is in hand.
+ */
+export async function refusing<T>(site: RefusalSite, step: (seen: { result?: object }) => Promise<T>): Promise<T> {
+  const seen: { result?: object } = {};
+  try {
+    return await step(seen);
+  } catch (error) {
+    // A rotation never resumes a kept request, and its staged private key sits in that request's file: drop every request
+    // holding the key (it was generated by this run, so only this rotation's request can). Other requests are not touched.
+    let swept: { dropped: boolean; approved: boolean; latestEnd?: string } = { dropped: false, approved: false };
+    if (site.rotation === true) {
+      try {
+        const { dropApprovalsHoldingKey } = await import("./approval-request.js");
+        swept = await dropApprovalsHoldingKey(site.profileName, (site.key as { x?: unknown }).x);
+      } catch { /* the request only expires on its own */ }
+    }
+    const announced = await discardRefusedApproval(site, error, seen.result);
+    if (!announced && swept.dropped) {
+      // The owner approved, but the refusal was not one that announces itself (a clock-dependent ceiling, AUTH_EXPIRED, a commit
+      // refusal, a fetch the CLI could not make): the grant is live and its staged key is gone, so say so. The grant's own date and
+      // CID are used when its result came back; otherwise the request's bound (never a value the CLI does not have).
+      if (swept.approved) process.stderr.write(`${refusalNotice(seen.result as Record<string, unknown> | undefined, { kind: "deleted" }, true, swept.latestEnd)}\n`);
+      // The poll itself was rejected: whether the owner approved is unknown, so the notice claims nothing about the grant.
+      else if (isMaybeGranted(error)) process.stderr.write(`${maybeGrantedNotice(true)}\n`);
+    }
+    throw error;
+  }
 }
