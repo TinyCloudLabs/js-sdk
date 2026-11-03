@@ -72,7 +72,7 @@ test("the catalog contains exactly the registered v1 definitions", async () => {
     "tinycloud.status.get@1",
   ]);
   expect(new Set(catalog.operations.map((operation) => operation.id)).size).toBe(24);
-  expect(catalog.operations).toHaveLength(23);
+  expect(catalog.operations).toHaveLength(24);
   for (const operation of catalog.operations) {
     expect(operation.input).toBeDefined();
     expect(operation.output).toBeDefined();
