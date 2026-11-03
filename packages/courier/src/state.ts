@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { cmd } from './program.js';
-import { hasProfileFields, isAgentKey, loadGrant, loadKey, profileDir, readRegularFile, readSecure, saveKey, saveProfile, writeSecure } from './profile.js';
+import { hasProfileFields, isAgentKey, loadGrant, loadKey, profileDir, readRegularFile, readSecure, readTempIdentity, removeTempIdentity, saveKey, saveProfile, writeSecure } from './profile.js';
 import type { AgentKey, Profile } from './profile.js';
 import { checkApprovalResultBinding, openRelayResult } from '@tinycloud/share-envelope/links';
 import { APPROVAL_FILE, approvalPhase, clearPending, lacksOwner, readApprovalEntry, resultEnvelopeOf } from './approval-phase.js';
@@ -11,12 +11,14 @@ import { dropPendingDelegation, hasLivePending, liveRedeemedDelegations } from '
 import { REVOKE_URL } from './grant-refusal.js';
 import { CourierError } from './errors.js';
 import { base64url32, ed25519DidKey, ed25519PublicKey } from './did-key.js';
+import { formatRemovalCommand, recordLiveness } from './file-lock.js';
+import type { Liveness } from './file-lock.js';
 
 /**
  * One derivation of where `init` stands, shared by every init mode.
  *
  * Inputs (all in the Courier home): profile.json (`status`, `spacePending`), grant.json, key.json, pending-grant.json (live records),
- * approval-pending.json, rotation.json, and any stray key-bearing temp file (`rotation.json.<pid>.<hex>.tmp`, `key.json.<pid>.<hex>.tmp`).
+ * approval-pending.json, rotation.json, and key-bearing temps (`<target>.<pid>.<nonce>.tmp`) with their identity sidecars.
  *
  * `readInputs` is the only place that touches the disk, so the way the inputs are read can be replaced in one spot.
  * `classifyState` is pure. `deriveState` only reads: it never repairs, drops or rewrites a file. Recovery is the explicit
@@ -27,13 +29,13 @@ import { base64url32, ed25519DidKey, ed25519PublicKey } from './did-key.js';
  *       non-secret facts about the approval being discarded, so nothing about the discard depends on the process staying alive;
  *   (2) key.json is replaced; (3) profile.json is replaced; (4) grant.json, and approval-pending.json when discarding, are removed;
  *   (5) the discard warning is printed, then rotation.json is removed (its only deletion point).
- * Before the rename in (1) nothing but a stray temp file can differ from the old state. From then on every init mode rolls forward
- * from the journal alone; every step is idempotent. A process killed while writing a temp file leaves it behind (0600, holding a
- * key that may or may not have been installed, or an approval's relay key and result): `recoverInterrupted` zero-fills and removes it, unless
- * the process that named it is still running.
+ * Before the rename in (1), only a stray temp can differ from the old state. From then on each init mode rolls forward from the journal;
+ * every step is idempotent. A temp's sidecar is durable before secret bytes are written, and recovery only zero-fills and removes it when
+ * the host and (on Linux) PID namespace match and the PID probe returns ESRCH, or a true boot-ID change proves the writer cannot survive.
+ * Missing, malformed or mismatched identity stays unknown and is reported for manual recovery.
  */
 const ROTATION_FILE = 'rotation.json';
-const STRAY_TEMP = /^(?:rotation|key|approval-pending)\.json\.(\d+)\.[0-9a-f]{12}\.tmp$/;
+const STRAY_TEMP = /^(?:rotation|key|approval-pending)\.json\.(\d+)\.([0-9a-f]{12})\.tmp$/;
 
 export type ApprovalState = 'none' | 'open' | 'held' | 'committed' | 'unreadable' | 'corrupt';
 /** `unreadable`: profile.json exists and cannot be read (permissions or content). It is never the same as `absent`. */
@@ -178,34 +180,49 @@ function readProfileFields(): { status: ProfileStatus; spacePending: boolean } {
   return { status: 'unreadable', spacePending: false };
 }
 
-/** `text` as one POSIX shell word. */
-function shellQuote(text: string): string {
-  return `'${text.replace(/'/g, `'\\''`)}'`;
+interface TempEntry {
+  name: string;
+  pid: number;
+  nonce: string;
 }
 
-/** Whether the process that named a temp file may still be writing it. This process is not: its writes are synchronous and finished. */
-function writerAlive(pid: number): boolean {
-  if (pid === process.pid) return false;
-  try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; }
+interface OrphanedTempEntry extends TempEntry {
+  liveness: Liveness;
+}
+
+function tempLiveness(name: string, pid: number, nonce: string): Liveness {
+  const record = readTempIdentity(path.join(profileDir(), name));
+  if (!record || record.pid !== pid || record.nonce !== nonce) return 'unknown';
+  return recordLiveness(record);
 }
 
 /**
- * The stray temp files, classified from ONE directory listing with ONE liveness probe per file: `dead` (writer gone: the only ones
- * `recoverInterrupted` removes) and `live` (writer may still be running: kept, because between its fsync and its rename the file is live).
- * A caller acts on this one snapshot, so a process that dies or whose pid is reused between two probes cannot split the decision.
+ * Classifies one directory snapshot. Only a matching sidecar whose writer is proven dead is scrubbed; missing, invalid and
+ * mismatched identity records remain unknown. Sidecars without a matching temp are considered separately and never treated as key files.
  */
-function classifyTemps(): { dead: string[]; live: { name: string; pid: number }[] } {
-  const dead: string[] = [];
-  const live: { name: string; pid: number }[] = [];
+function classifyTemps(): { dead: TempEntry[]; unknown: TempEntry[]; orphaned: OrphanedTempEntry[] } {
+  const dead: TempEntry[] = [];
+  const unknown: TempEntry[] = [];
+  const orphaned: OrphanedTempEntry[] = [];
   let names: string[] = [];
   try { names = fs.readdirSync(profileDir()).sort(); } catch { /* no home yet */ }
-  for (const name of names) {
-    const match = STRAY_TEMP.exec(name);
-    if (!match) continue;
-    const pid = Number(match[1]);
-    if (writerAlive(pid)) live.push({ name, pid }); else dead.push(name);
+  const tempNames = new Set(names.filter((name) => STRAY_TEMP.test(name)));
+  for (const name of tempNames) {
+    const match = STRAY_TEMP.exec(name)!;
+    const entry = { name, pid: Number(match[1]), nonce: match[2] };
+    if (tempLiveness(name, entry.pid, entry.nonce) === 'dead') dead.push(entry);
+    else unknown.push(entry);
   }
-  return { dead, live };
+  for (const name of names) {
+    if (!name.endsWith('.identity')) continue;
+    const tempName = name.slice(0, -'.identity'.length);
+    if (tempNames.has(tempName)) continue;
+    const match = STRAY_TEMP.exec(tempName);
+    if (!match) continue;
+    const entry = { name: tempName, pid: Number(match[1]), nonce: match[2] };
+    orphaned.push({ ...entry, liveness: tempLiveness(tempName, entry.pid, entry.nonce) });
+  }
+  return { dead, unknown, orphaned };
 }
 
 /** The one place the inputs are read. Reads only. `notes` are warnings the init mode prints once; nothing is repaired or removed. */
@@ -273,24 +290,35 @@ export function adviceFor(d: Pick<DerivedState, 'state' | 'inputs'>): string {
 
 /**
  * Explicit recovery, run once at the start of an init mode: roll an interrupted rotation forward (only after the journal validated), then
- * remove stray key-bearing temp files. A refusal in the first step happens before anything is changed.
+ * scrub key-bearing temps only when persisted identity proves the writer dead, preserve/report unknowns, and remove dead orphan sidecars.
  */
 export function recoverInterrupted(): void {
   finishRotation();
+  const dir = profileDir();
   const temps = classifyTemps();
-  for (const name of temps.dead) scrub(path.join(profileDir(), name));
-  for (const { name, pid } of temps.live) {
-    const file = path.join(profileDir(), name);
-    // A running pid does not excuse a file that is not a plain single-link file of this user: that is refused, as for a dead writer.
+  for (const { name } of temps.dead) scrub(path.join(dir, name));
+  for (const { name, pid } of temps.unknown) {
+    const file = path.join(dir, name);
     let stat: fs.Stats;
     try { stat = fs.lstatSync(file); } catch (error) {
-      // The writer finished and renamed it into place after the listing: it has moved, there is nothing to keep or refuse.
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
       throw error;
     }
     if (!isPlain(stat)) throw refuseStray(file);
-    console.error(`warning: ${name} was kept, not deleted, and may contain private-key material (an agent key, or an approval's relay key and result). Process ${pid}, which named it, is running: either a Courier process still writing it, or an unrelated process that was given the same pid after Courier died (pid reuse); Courier cannot tell which. Check with \`ps -p ${pid} -o pid=,args=\`; only if that is not a Courier process, remove the file with \`rm -- ${shellQuote(file)}\`.`);
+    console.error(`warning: ${name} was kept, not deleted, and may contain private-key material (an agent key, or an approval's relay key and result). Courier cannot establish that writer process ${pid} is gone; it may still be writing, or its PID may have been reused. Only after confirming no Courier writer anywhere is active that could be writing this temp, including on another host or PID namespace, remove it manually with \`${formatRemovalCommand(file)}\`.`);
   }
+  let removedOrphan = false;
+  for (const { name, pid, liveness } of temps.orphaned) {
+    const temp = path.join(dir, name);
+    if (liveness === 'dead') {
+      removeTempIdentity(temp);
+      removedOrphan = true;
+      continue;
+    }
+    const sidecar = `${temp}.identity`;
+    console.error(`warning: ${path.basename(sidecar)} has no matching temp file, and Courier cannot establish that writer process ${pid} is gone. Only after confirming no Courier writer anywhere is active that could be writing this identity sidecar, including on another host or PID namespace, remove the identity record manually with \`${formatRemovalCommand(sidecar)}\`.`);
+  }
+  if (removedOrphan) syncDir();
 }
 
 /**
@@ -314,7 +342,7 @@ function scrub(file: string): void {
     fs.closeSync(fd);
   }
   fs.unlinkSync(file);
-  syncDir();
+  try { removeTempIdentity(file); } finally { syncDir(); }
 }
 
 function syncDir(): void {

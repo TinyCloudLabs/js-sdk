@@ -54,7 +54,7 @@ export function writeNew(dir: string, name: string, body: string, mode: number):
  * `pid` and `nonce` are the ownership record. `machine` (machine-id) and `boot` (a true per-boot id) say which machine and boot it ran on;
  * `host` and `pidns` say where a pid number means anything.
  */
-interface LockRecord {
+export interface LockRecord {
   pid: number;
   nonce: string;
   host?: string;
@@ -86,12 +86,19 @@ function parseRecord(text: string): LockRecord | undefined {
       const field = fields[key];
       if (field === undefined) continue;
       if (typeof field !== 'string' || field.length > MAX_FIELD) return undefined; // an oversized or mistyped field is a corrupt record
+      if (key === 'boot' && !trueBootIdentity(field)) return undefined; // malformed boot IDs make the whole record untrustworthy
       record[key] = field;
     }
     return record;
   } catch {
     return undefined;
   }
+}
+
+/** Parses the JSON identity record used by Courier's temporary-file sidecars. Legacy pid-only locks are not sidecar records. */
+export function parseIdentityRecord(text: string): LockRecord | undefined {
+  if (!text.trimStart().startsWith('{')) return undefined;
+  return parseRecord(text);
 }
 
 function recordBody(record: LockRecord): string {
@@ -131,6 +138,13 @@ const realIo: IdentityIo = {
 };
 
 const firstLine = (text: string | undefined): string | undefined => text?.trim().split(/\r?\n/)[0]?.trim() || undefined;
+const UUID_BOOT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function trueBootIdentity(value: string | undefined): { kind: 'linux' | 'macos'; id: string } | undefined {
+  const match = /^(linux|macos):(.+)$/.exec(value ?? '');
+  if (!match || !UUID_BOOT_ID.test(match[2]!)) return undefined;
+  return { kind: match[1]!.toLowerCase() as 'linux' | 'macos', id: match[2]!.toLowerCase() };
+}
 
 /**
  * The machine and the boot this process runs on. `boot` is a true per-boot identifier or absent, and is prefixed with the platform that
@@ -145,11 +159,11 @@ export function machineIdentity(io: IdentityIo = realIo): { machine?: string; bo
   if (io.platform === 'linux') {
     machine = firstLine(io.readFile('/etc/machine-id')) ?? firstLine(io.readFile('/var/lib/dbus/machine-id'));
     const id = firstLine(io.readFile('/proc/sys/kernel/random/boot_id'));
-    if (id) boot = `linux:${id}`;
+    if (id && UUID_BOOT_ID.test(id)) boot = `linux:${id}`;
   } else if (io.platform === 'darwin') {
     machine = /"IOPlatformUUID"\s*=\s*"([^"]+)"/.exec(io.exec('/usr/sbin/ioreg', ['-rd1', '-c', 'IOPlatformExpertDevice']) ?? '')?.[1];
     const id = firstLine(io.exec('/usr/sbin/sysctl', ['-n', 'kern.bootsessionuuid']));
-    if (id) boot = `macos:${id}`;
+    if (id && UUID_BOOT_ID.test(id)) boot = `macos:${id}`;
   } else if (io.platform === 'win32') {
     const reg = `${io.systemRoot ?? 'C:\\Windows'}\\System32\\reg.exe`;
     machine = /MachineGuid\s+REG_SZ\s+(\S+)/.exec(io.exec(reg, ['query', 'HKLM\\SOFTWARE\\Microsoft\\Cryptography', '/v', 'MachineGuid']) ?? '')?.[1];
@@ -168,6 +182,11 @@ function identity(here: { machine?: string; boot?: string }): Pick<LockRecord, '
   return out;
 }
 
+/** The identity fields Courier records beside a temp file and in a lock. */
+export function processIdentityRecord(pid: number, nonce: string, here: { machine?: string; boot?: string } = currentIdentity()): LockRecord {
+  return { pid, nonce, ...identity(here) };
+}
+
 export type Liveness = 'alive' | 'dead' | 'unknown';
 
 /**
@@ -182,10 +201,9 @@ export type Liveness = 'alive' | 'dead' | 'unknown';
 export function recordLiveness(record: LockRecord, here: { machine?: string; boot?: string } = currentIdentity()): Liveness {
   if (record.machine === undefined || here.machine === undefined || record.machine !== here.machine) return 'unknown';
   if (record.host === undefined || record.host !== os.hostname()) return 'unknown';
-  if (record.boot !== undefined && here.boot !== undefined) {
-    const [kindA, kindB] = [record.boot.split(':', 1)[0], here.boot.split(':', 1)[0]];
-    if ((kindA === 'linux' || kindA === 'macos') && kindA === kindB && record.boot !== here.boot) return 'dead';
-  }
+  const recordBoot = trueBootIdentity(record.boot);
+  const currentBoot = trueBootIdentity(here.boot);
+  if (recordBoot && currentBoot && recordBoot.kind === currentBoot.kind && recordBoot.id !== currentBoot.id) return 'dead';
   const ns = pidNamespace();
   if (process.platform === 'linux' ? record.pidns === undefined || ns === undefined || record.pidns !== ns : record.pidns !== undefined && record.pidns !== ns) return 'unknown';
   try {
@@ -223,6 +241,13 @@ export interface LockOptions {
 /** Guard slots per dead lock. The bound stops a corrupt directory from looping forever. */
 const MAX_BREAK_GUARDS = 8;
 
+/** A shell-safe cleanup command for a literal path, using POSIX shell or PowerShell quoting. */
+export function formatRemovalCommand(file: string, platform: NodeJS.Platform = process.platform): string {
+  return platform === 'win32'
+    ? `Remove-Item -LiteralPath '${file.replace(/['\u2018-\u201B]/g, (quote) => quote + quote)}' -Force`
+    : `rm -f -- '${file.replace(/'/g, `'\\''`)}'`;
+}
+
 /** The one line a refused lock prints: what holds it, and the only safe way out. The lock itself is never removed on doubt. */
 export function lockRefusal({ file, reason, pid, host, record }: LockRefusal, platform: NodeJS.Platform = process.platform): string {
   // Text from a lock record is data, not words: JSON-quoted so a hostile host name cannot add lines or terminal escapes.
@@ -231,9 +256,7 @@ export function lockRefusal({ file, reason, pid, host, record }: LockRefusal, pl
     : reason === 'corrupt' ? 'has a record Courier cannot read'
       : reason === 'unknown' ? `is held by ${holder}, and Courier cannot tell whether that process is still running`
         : `is held by ${holder}, and another Courier command is already working on clearing it`;
-  const remove = platform === 'win32'
-    ? `Remove-Item -LiteralPath '${file.replace(/['\u2018-\u201B]/g, (quote) => quote + quote)}' -Force` // PowerShell: single quotes are literal; ' and its typographic forms U+2018 to U+201B each end the string unless doubled
-    : `rm -f -- '${file.replace(/'/g, `'\\''`)}'`;
+  const remove = formatRemovalCommand(file, platform);
   return `${file} ${why}${record === undefined ? '' : ` (record ${record})`}; the lock was left in place. Try again; only after confirming no Courier command is running anywhere that uses this lock, clear it with: ${remove}`;
 }
 
@@ -246,7 +269,7 @@ export function acquireLock(file: string, opts: LockOptions = {}): () => void {
   const name = path.basename(file);
   const pid = opts.pid ?? process.pid;
   const here = (opts.identity ?? currentIdentity)();
-  const self: LockRecord = { pid, nonce: randomBytes(6).toString('hex'), ...identity(here) };
+  const self = processIdentityRecord(pid, randomBytes(6).toString('hex'), here);
   const state = (record: LockRecord): Liveness => (opts.alive ? (opts.alive(record.pid) ? 'alive' : 'dead') : recordLiveness(record, here));
   const refuse = (info: Omit<LockRefusal, 'file'>): never => {
     throw new CourierError('locked', (opts.refusal ?? lockRefusal)({ file, ...info }));

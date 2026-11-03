@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import { once } from 'node:events';
 import { homeFile, scenario } from './support/approval-fixture.mjs';
+import { removalCommand, writeTempIdentity } from './support/lock-identity.mjs';
 
 // TC-2383: a key-bearing temp file whose pid is running is kept. That pid may be a Courier process still writing it, or an unrelated process
 // that was given the pid after Courier died. Courier cannot tell which, so it never deletes or zeroes the file, never reuses its name, and
@@ -24,6 +25,7 @@ for (const file of ['key.json', 'rotation.json', 'approval-pending.json']) {
     await ctx.request();
     const name = `${file}.${child.pid}.${HEX}.tmp`;
     fs.writeFileSync(homeFile(name), BODY, { mode: 0o600 });
+    writeTempIdentity(homeFile(name), child.pid, HEX);
     for (const argv of [['--request'], ['--wait', '--timeout', '1s'], ['--request']]) {
       ctx.errors.length = 0;
       const run = await ctx.courier(...argv);
@@ -34,14 +36,14 @@ for (const file of ['key.json', 'rotation.json', 'approval-pending.json']) {
       assert.match(run.stderr, /kept/);
       assert.match(run.stderr, /reuse/i);
       assert.match(run.stderr, /private-key material/);
-      assert.ok(run.stderr.includes(`rm -- '${homeFile(name)}'`), `the exact cleanup command is given: ${run.stderr}`);
-      assert.ok(run.stderr.includes(`ps -p ${child.pid}`), 'and how to check the process first');
+      assert.ok(run.stderr.includes(removalCommand(homeFile(name))), `the exact cleanup command is given: ${run.stderr}`);
     }
     child.kill('SIGKILL');
     await once(child, 'exit');
     const run = await ctx.courier('--request');
     assert.equal(run.code, 0, run.stderr);
     assert.equal(fs.existsSync(homeFile(name)), false, 'once the process is gone the temp file is scrubbed');
+    assert.equal(fs.existsSync(homeFile(`${name}.identity`)), false, 'the sidecar is removed after the temp is scrubbed');
   });
 }
 
@@ -50,6 +52,7 @@ scenario('a kept temp file is never what a later write uses: writes go to a fres
   await ctx.request();
   const name = `key.json.${child.pid}.${HEX}.tmp`;
   fs.writeFileSync(homeFile(name), BODY, { mode: 0o600 });
+  writeTempIdentity(homeFile(name), child.pid, HEX);
   const run = await ctx.courier('--rotate-key', '--request');
   assert.equal(run.code, 0, run.stderr);
   assert.equal(fs.readFileSync(homeFile(name), 'utf8'), BODY);

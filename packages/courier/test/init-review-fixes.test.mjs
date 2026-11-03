@@ -10,6 +10,7 @@ import { ed25519DidKey, ed25519PublicKey } from '../dist/did-key.js';
 import {
   Crash, crashAtWrite, homeFile, missingSpace, readHome, readySpace, scenario, signedGrant, stubSpaceProbe,
 } from './support/approval-fixture.mjs';
+import { writeTempIdentity } from './support/lock-identity.mjs';
 
 // TC-2383 review: (1) an unreadable profile or approval is its own state with permission advice, never absent and never "discard";
 // (2) the warning for a discarded granted approval says what happened and when the grant may be live; (3) `--wait` keeps its refusals
@@ -351,6 +352,7 @@ async function plantInvalidJournal(ctx, journal) {
   fs.writeFileSync(homeFile('pending-grant.json'), JSON.stringify({ v: 1, records: [record] }), { mode: 0o600 });
   fs.writeFileSync(homeFile('rotation.json'), JSON.stringify(journal), { mode: 0o600 });
   fs.writeFileSync(homeFile(STRAY_KEY_TEMP), JSON.stringify({ v: 1, jwk: { d: SECRET } }), { mode: 0o600 });
+  writeTempIdentity(homeFile(STRAY_KEY_TEMP), DEAD_PID, '0a1b2c3d4e5f');
 }
 
 async function assertRefusedUnchanged(ctx, argv) {
@@ -399,6 +401,7 @@ scenario('a stray key temp that is a hard link to another file is refused and th
   const victim = homeFile('victim.json');
   fs.writeFileSync(victim, JSON.stringify({ keep: 'this content' }), { mode: 0o600 });
   fs.linkSync(victim, homeFile(STRAY_KEY_TEMP));
+  writeTempIdentity(homeFile(STRAY_KEY_TEMP), DEAD_PID, '0a1b2c3d4e5f');
   const before = snapshot();
   ctx.errors.length = 0;
   const run = await ctx.courier('--request');
@@ -412,6 +415,7 @@ scenario('a stray key temp that is a symlink is refused and its target is not to
   const victim = homeFile('victim.json');
   fs.writeFileSync(victim, JSON.stringify({ keep: 'this content' }), { mode: 0o600 });
   fs.symlinkSync(victim, homeFile(STRAY_KEY_TEMP));
+  writeTempIdentity(homeFile(STRAY_KEY_TEMP), DEAD_PID, '0a1b2c3d4e5f');
   const bytes = fs.readFileSync(victim);
   ctx.errors.length = 0;
   const run = await ctx.courier('--request');

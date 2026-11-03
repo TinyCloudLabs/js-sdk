@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { homeFile, scenario } from './support/approval-fixture.mjs';
 import { DEAD_PID, snapshot } from './support/review-fixture.mjs';
+import { writeTempIdentity } from './support/lock-identity.mjs';
 
 // TC-2383: a stray temp file that is not a plain single-link file of this user is refused whether or not the process that named it is
 // running. The liveness skip must not hide the refusal: a live pid (pids are small numbers and are reused) and a hard link or symlink to
@@ -33,6 +34,7 @@ for (const [holder, pid] of Object.entries(HOLDERS)) {
         fs.writeFileSync(victim, JSON.stringify({ keep: 'this content' }), { mode: 0o600 });
         const name = `${file}.${pid}.${HEX}.tmp`;
         link(victim, homeFile(name));
+        writeTempIdentity(homeFile(name), pid, HEX);
         const before = snapshot();
         const linkTarget = kind === 'a symlink' ? fs.readlinkSync(homeFile(name)) : undefined;
         ctx.errors.length = 0;

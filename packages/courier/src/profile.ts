@@ -4,7 +4,8 @@ import { randomBytes } from 'node:crypto';
 import { cmd } from './program.js';
 import { CourierError } from './errors.js';
 import { canonicalJson } from './canonical.js';
-import { acquireLock } from './file-lock.js';
+import { acquireLock, fsyncDir, parseIdentityRecord, processIdentityRecord } from './file-lock.js';
+import type { LockRecord } from './file-lock.js';
 
 /** Courier-local identity and peer store; never an OpenKey owner profile. */
 export interface AgentKey {
@@ -103,20 +104,105 @@ function ensureSecureDir(): void {
   mkdirOwnerOnly(profileDir());
 }
 
+const IDENTITY_TRACKED_TARGET = /^(?:rotation|key|approval-pending)\.json$/;
+
+export const tempIdentityPath = (temp: string): string => `${temp}.identity`;
+
+const isSecureTempIdentity = (stat: fs.Stats): boolean => {
+  const uid = process.getuid?.();
+  return stat.isFile() && (uid === undefined || stat.uid === uid) && stat.nlink === 1 && (stat.mode & 0o077) === 0;
+};
+
+/** Persist the writer record before any key-bearing bytes are written to `temp`. */
+export function writeTempIdentity(temp: string, pid: number, nonce: string): void {
+  const file = tempIdentityPath(temp);
+  const fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
+  let open = true;
+  try {
+    fs.writeFileSync(fd, `${JSON.stringify(processIdentityRecord(pid, nonce))}\n`);
+    fs.fchmodSync(fd, 0o600);
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    open = false;
+    fsyncDir(path.dirname(temp));
+  } catch (error) {
+    if (open) { try { fs.closeSync(fd); } catch { /* preserve the write error */ } }
+    try { fs.unlinkSync(file); } catch { /* absent or best-effort cleanup */ }
+    throw error;
+  }
+}
+
+/** Read only a plain, owner-only identity sidecar; malformed or unsafe records are unknown. */
+export function readTempIdentity(temp: string): LockRecord | undefined {
+  const file = tempIdentityPath(temp);
+  let fd: number | undefined;
+  try {
+    const before = fs.lstatSync(file);
+    if (!isSecureTempIdentity(before)) return undefined;
+    fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    const opened = fs.fstatSync(fd);
+    if (!isSecureTempIdentity(opened) || opened.dev !== before.dev || opened.ino !== before.ino) return undefined;
+    return parseIdentityRecord(fs.readFileSync(fd, 'utf8'));
+  } catch { return undefined; } finally {
+    if (fd !== undefined) {
+      try { fs.closeSync(fd); } catch { /* unreadable identity is unknown */ }
+    }
+  }
+}
+
+/** Remove the non-secret record only when its temp file is gone or safely installed. */
+export function removeTempIdentity(temp: string): void {
+  try { fs.unlinkSync(tempIdentityPath(temp)); } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+}
+
 /** Atomic, owner-only and durable: the bytes and the rename are fsynced, so a caller may act on "saved" (for example acknowledge an approval). */
 export function writeSecure(file: string, obj: unknown): void {
   ensureSecureDir();
-  const temp = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+  const pid = process.pid;
+  const nonce = randomBytes(6).toString('hex');
+  const temp = `${file}.${pid}.${nonce}.tmp`;
+  const trackedTemp = path.resolve(path.dirname(file)) === path.resolve(profileDir()) && IDENTITY_TRACKED_TARGET.test(path.basename(file));
+  let identityWritten = false;
+  let tempCreated = false;
+  let renamed = false;
   try {
-    fs.writeFileSync(temp, JSON.stringify(obj, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
-    fs.chmodSync(temp, 0o600);
-    const fd = fs.openSync(temp, 'r');
-    try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    if (trackedTemp) {
+      writeTempIdentity(temp, pid, nonce);
+      identityWritten = true;
+    }
+    const fd = fs.openSync(temp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
+    tempCreated = true;
+    try {
+      fs.writeFileSync(fd, JSON.stringify(obj, null, 2) + '\n');
+      fs.fchmodSync(fd, 0o600);
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
     fs.renameSync(temp, file);
-    const dirFd = fs.openSync(path.dirname(file), 'r');
-    try { fs.fsyncSync(dirFd); } finally { fs.closeSync(dirFd); }
+    renamed = true;
+    fsyncDir(path.dirname(file));
+    if (identityWritten) {
+      try {
+        removeTempIdentity(temp);
+        fsyncDir(path.dirname(file));
+      } catch { /* the rename is durable; orphan sidecars are handled conservatively by recovery */ }
+      identityWritten = false;
+    }
   } finally {
-    try { fs.unlinkSync(temp); } catch { /* renamed or absent */ }
+    if (!renamed) {
+      let tempRemoved = !tempCreated;
+      if (tempCreated) {
+        try { fs.unlinkSync(temp); tempRemoved = true; } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') tempRemoved = true;
+        }
+      }
+      if (tempRemoved && identityWritten) {
+        try { removeTempIdentity(temp); } catch { /* orphan records are handled conservatively by recovery */ }
+      }
+    }
   }
 }
 
