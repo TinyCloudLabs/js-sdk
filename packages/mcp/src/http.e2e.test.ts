@@ -1079,6 +1079,7 @@ test(`${resourcePath} apps approvals persist records and recover an expired sess
   const hermetic = await hermeticModule.createHermeticEncryptedNode();
   resources.push(async () => hermetic.stop());
   hermetic.provisionKvSpace(await ownerSpace(hermetic.ownerPrivateKey, "default"));
+  hermetic.provisionKvSpace(await ownerSpace(hermetic.ownerPrivateKey, "applications"));
   const { app, client, stateDir } = await startHostedMcp({
     nodeHost: hermetic.host, ownerDids: [hermetic.ownerDid], resourcePath,
   });
@@ -1101,38 +1102,54 @@ test(`${resourcePath} apps approvals persist records and recover an expired sess
     redirect: await openKeyRedirect(app, recordsUrl), tenantStateRoot, privateKey: hermetic.ownerPrivateKey,
   });
   expect(await postCallback(app, recordsUrl, approval)).toEqual({ status: 200, body: { success: true } });
-  expect((await client.callTool({
-    name: "tinycloud_apps_context", arguments: { timezone: "Europe/Berlin" },
-  })).structuredContent).toMatchObject({ status: "ok", output: { timezone: "Europe/Berlin", catalog: { keys: [] } } });
+  // OpenKey signs one space per delegation, so a call that needs scopes in two spaces is approved in rounds.
+  const approved = async (name: string, args: Record<string, unknown>) => {
+    for (let round = 0; round < 4; round++) {
+      const result = record((await client.callTool({ name, arguments: args })).structuredContent);
+      if (result.status !== "authority_required") return result;
+      const url = String(record(result.approval).url);
+      const body = await openKeyApprovalBody({
+        redirect: await openKeyRedirect(app, url), tenantStateRoot, privateKey: hermetic.ownerPrivateKey,
+      });
+      expect(await postCallback(app, url, body)).toEqual({ status: 200, body: { success: true } });
+    }
+    throw new Error(`${name} kept asking for approval.`);
+  };
+  expect(await approved("tinycloud_apps_context", { timezone: "Europe/Berlin" })).toMatchObject({
+    status: "ok", output: { timezone: "Europe/Berlin", legacy: "not_approved", apps: [], catalog: { keys: [] } },
+  });
 
-  const root = "xyz.tinycloud.agent-data/";
-  const key = `${root}fitness/weight/2026-10/2026-10-14`;
-  const written = record((await client.callTool({
-    name: "tinycloud_apps_write",
-    arguments: { ops: [
-      { op: "put", key: `${root}catalog/fitness`, value: {
-        app: "fitness", title: "Fitness", about: "Body measurements", created: "2026-10-14",
-      } },
-      { op: "put", key: `${root}catalog/fitness/weight`, value: {
-        app: "fitness", kind: "weight", about: "Daily weight", shape: "log", per: "day", v: 1,
-        fields: { kg: "number: weight in kilograms" }, created: "2026-10-14",
-      } },
-      { op: "put", key, value: { at: "2026-10-14T09:00", data: { kg: 80.5 } } },
-    ] },
-  })).structuredContent);
+  const root = "xyz.tinycloud.tinyapps.fitness/";
+  const key = `${root}weight/2026-10/2026-10-14`;
+  const written = await approved("tinycloud_apps_write", { ops: [
+    { op: "put", key: `${root}catalog`, value: {
+      app: "fitness", title: "Fitness", about: "Body measurements", created: "2026-10-14",
+    } },
+    { op: "put", key: `${root}catalog/weight`, value: {
+      app: "fitness", kind: "weight", about: "Daily weight", shape: "log", per: "day", v: 1,
+      fields: { kg: "number: weight in kilograms" }, created: "2026-10-14",
+    } },
+    { op: "put", key: "xyz.tinycloud.tinyapps.catalog/fitness/entry", value: {
+      v: 1, app: "fitness", id: "xyz.tinycloud.tinyapps.fitness", title: "Fitness",
+    } },
+    { op: "put", key, value: { at: "2026-10-14T09:00", data: { kg: 80.5 } } },
+  ] });
   expect(written).toMatchObject({
     status: "ok", output: { ops: [
-      { outcome: "ok" }, { outcome: "ok" },
+      { outcome: "ok" }, { outcome: "ok" }, { outcome: "ok" },
       { outcome: "ok", key, value: { v: 1, by: "tinycloud-mcp", at: "2026-10-14T09:00+02:00", data: { kg: 80.5 } } },
     ] },
   });
+  expect(await approved("tinycloud_apps_context", {})).toMatchObject({
+    status: "ok", output: { apps: [{ app: "fitness", layout: "new", title: "Fitness" }] },
+  });
   // Two keys exercise the SDK batch response rather than its one-key get fallback.
   const read = await client.callTool({
-    name: "tinycloud_apps_read", arguments: { keys: [key, `${root}catalog/fitness/weight`] },
+    name: "tinycloud_apps_read", arguments: { keys: [key, `${root}catalog/weight`] },
   });
   expect(read.structuredContent).toMatchObject({ status: "ok", output: { records: [
     { key, value: { data: { kg: 80.5 }, by: "tinycloud-mcp" }, etag: expect.any(String) },
-    { key: `${root}catalog/fitness/weight`, value: { kind: "weight" } },
+    { key: `${root}catalog/weight`, value: { kind: "weight" } },
   ] } });
   expect(JSON.stringify(read.content)).toContain("80.5");
 

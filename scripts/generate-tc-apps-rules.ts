@@ -29,7 +29,7 @@ function between(text: string, start: string, end: string): string {
 }
 const skill = await source("SKILL.md");
 const sql = await source("SQL.md");
-let organization = between(skill, "## 2. How the records are organised\n", "## 3. Check the sign-in and read the catalog\n");
+let organization = between(skill, "## 2. How the records are organised\n", "## 3. Reuse access, find the app and read its catalog\n");
 // Adapt the CLI's stored-record examples to MCP write inputs without changing the vendor source.
 for (const [sourceLabel, hostedLabel] of [
   ["**A record** is one line of JSON: ", "**A record write value:** "],
