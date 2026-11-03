@@ -7,7 +7,7 @@
  * `AbortSignal.any` for the fallback). Node-runnable (node:test) so the Node
  * 20 lane can execute it; Bun runs it through `bun test`.
  */
-import { getEventListeners } from "node:events";
+import { getEventListeners, setMaxListeners } from "node:events";
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, test } from "node:test";
 import type { FetchFunction, IWasmBindings } from "@tinycloud/sdk-core";
@@ -183,6 +183,7 @@ describe("ServiceGraphLifetime [listeners] is unchanged from before", () => {
 
   test("each request that carries its own signal leaves a listener until the graph retires", async () => {
     const graph = graphFor(ok);
+    setMaxListeners(0, graph.signal); // the pile-up is the point; keep Node 20's warning out of the test output
     for (let i = 0; i < 50; i++) await graph.fetch(URL, { signal: fresh() });
     assert.equal(listeners(graph.signal), 50);
     graph.retire();

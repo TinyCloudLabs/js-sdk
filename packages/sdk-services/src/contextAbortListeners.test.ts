@@ -7,7 +7,7 @@
  * `AbortSignal.any` for the fallback). Node-runnable (node:test) so the Node
  * 20 lane can execute it; Bun runs it through `bun test`.
  */
-import { getEventListeners } from "node:events";
+import { getEventListeners, setMaxListeners } from "node:events";
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, test } from "node:test";
 import { ServiceContext } from "./context";
@@ -198,6 +198,7 @@ describe("ServiceContext [listeners] is unchanged from before", () => {
   test("each request that carries its own signal leaves a listener until the context aborts", async () => {
     const context = contextFor(respond);
     const longLived = context.abortSignal;
+    setMaxListeners(0, longLived); // the pile-up is the point; keep Node 20's warning out of the test output
     for (let i = 0; i < 50; i++) await context.fetch(URL, { signal: fresh() });
     assert.equal(listeners(longLived), 50);
     context.abort();
@@ -206,6 +207,7 @@ describe("ServiceContext [listeners] is unchanged from before", () => {
 
   test("an invokeWithRetry call leaves two (its sleep signal and its fetch)", async () => {
     const context = contextFor(respond);
+    setMaxListeners(0, context.abortSignal); // as above
     for (let i = 0; i < 10; i++) {
       await context.invokeWithRetry("https://node.test/invoke", () => ({ method: "POST", signal: fresh() }));
     }
