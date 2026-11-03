@@ -224,6 +224,7 @@ import { refuseCaveated } from "./authorization/caveatRefusal";
 import type { SignStrategy } from "./authorization/strategies";
 import { AccountService } from "./account/AccountService";
 import { FileSessionStorage } from "./storage/FileSessionStorage";
+import { clearPersistedSessionIfOwn } from "./storage/clearPersistedSessionIfOwn";
 import { MemorySessionStorage } from "./storage/MemorySessionStorage";
 import type { PortableDelegation, SessionGrantProof, VerifiedSessionGrant } from "./delegation";
 import { DelegatedAccess } from "./DelegatedAccess";
@@ -2437,6 +2438,7 @@ export class TinyCloudNode {
     const leavingPrincipal = this.replicaSessionPrincipal
       ?? (leavingAddress ? pkhDid(leavingAddress, leavingChainId) : undefined);
     const leavingAuth = this.auth;
+    const leavingSignature = leavingAuth?.tinyCloudSession?.signature ?? this._restoredTcSession?.signature;
     const leavingContext = this._serviceContext;
     let denied: { status: string; code?: string } | undefined;
     let erased: ReplicaLocalEraseReport | undefined;
@@ -2459,8 +2461,8 @@ export class TinyCloudNode {
         } finally {
           if (leavingAddress) {
             await (leavingAuth
-              ? leavingAuth.clearPersistedSession(leavingAddress)
-              : this.config.sessionStorage?.clear(leavingAddress));
+              ? leavingAuth.clearPersistedSession(leavingAddress, leavingSignature)
+              : this.config.sessionStorage && clearPersistedSessionIfOwn(this.config.sessionStorage, leavingAddress, leavingSignature));
           }
         }
       }

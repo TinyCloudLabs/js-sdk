@@ -169,7 +169,7 @@ function resetState(): void {
     spaceId: "tinycloud:pkh:eip155:1:0xowner:default",
     ownerDid: "did:pkh:eip155:1:0xowner",
     verificationMethod: "did:key:new-openkey",
-    expiry: "2099-01-01T00:00:00.000Z",
+    expiry: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
     // OpenKey always returns its SIWE proof; the wasm verifier below stands in for checking it.
     siwe: "siwe-message",
     signature: "0xsignature",
@@ -2608,5 +2608,55 @@ describe("auth grant asks the owner about entries beyond the preset on the termi
     expect(stderr).not.toContain("1 entry marked !");
     expect(recorded.errors).toEqual([]);
     expect(recorded.grantedRequests).toHaveLength(1);
+  });
+});
+
+// TC-2276 (PR B): `tc auth rotate --paste` is a plain paste login, so it opts in to a user-chosen lifetime (the other
+// plain paste logins are `auth login --paste`, `tc init --paste` and `auth request --grant --paste`).
+const actualBrowserAuthSpecifier: string = "../auth/browser-auth.js?actual";
+const actualBrowserAuth = await import(actualBrowserAuthSpecifier) as typeof import("../auth/browser-auth.js");
+describe("auth rotate --paste is a plain paste login", () => {
+  beforeEach(() => {
+    resetState();
+  });
+
+  const rotate = async (expiry: string) => {
+    const oldJwk = { kty: "OKP", crv: "Ed25519", x: "old-public", d: "old-private" };
+    const newJwk = { kty: "OKP", crv: "Ed25519", x: "new-public", d: "new-private" };
+    profiles.set("default", makeProfile({
+      ownerDid: "did:pkh:eip155:1:0xowner",
+      spaceId: "space-openkey-old",
+      openkeyHost: "https://openkey.test",
+    }));
+    keys.set("default", oldJwk);
+    sessions.set("default", { delegationCid: "old-session" });
+    generatedKeys.push({ jwk: newJwk, did: "did:key:new-openkey" });
+    openKeyDelegation = { ...openKeyDelegation, expiry };
+    await runAuthCommand(["auth", "rotate", "--paste"]);
+  };
+  const inDays = (days: number) => new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+
+  test("sends the opt-in: its real link carries expiryChangeable=true", async () => {
+    await rotate(inDays(7));
+    expect(recorded.errors).toEqual([]);
+    const [flow] = recorded.startAuthFlows;
+    expect(flow!.options.paste).toBe(true);
+    expect((flow!.options as Record<string, unknown>).expiryChangeable).toBe(true);
+    const link = new URL(actualBrowserAuth.buildAuthUrl(flow!.did, flow!.options as never));
+    expect(link.searchParams.get("expiryChangeable")).toBe("true");
+  });
+
+  test("accepts a one-year pick and saves the signed expiry", async () => {
+    const expiry = inDays(365);
+    await rotate(expiry);
+    expect(recorded.errors).toEqual([]);
+    expect(sessions.get("default")).toMatchObject({ expiresAt: expiry });
+  });
+
+  test("has no upper bound: an 11 year pick is accepted and the signed expiry is saved", async () => {
+    const expiry = inDays(11 * 365);
+    await rotate(expiry);
+    expect(recorded.errors).toEqual([]);
+    expect(sessions.get("default")).toMatchObject({ expiresAt: expiry });
   });
 });
