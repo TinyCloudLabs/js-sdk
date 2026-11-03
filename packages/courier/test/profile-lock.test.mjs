@@ -160,8 +160,8 @@ test('a pid reused by a different process is not the holder; the same process st
 });
 
 // A lock whose holder cannot be shown to be gone is never removed. The refusal is one line: the file, the holder, and the safe manual way out.
-const BOOT = fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
-const PIDNS = fs.readlinkSync('/proc/self/ns/pid');
+const BOOT = LOCAL.boot;
+const PIDNS = LOCAL.pidns;
 for (let [label, content] of [
   ['an empty record', ''],
   ['a corrupt record', '{"pid": 12'],
@@ -205,7 +205,7 @@ test('a profile save refused by a lock it cannot judge prints one recovery line 
 
 // ---- review lows ----
 
-const MACHINE = (() => { for (const f of ['/etc/machine-id', '/var/lib/dbus/machine-id']) { try { return fs.readFileSync(f, 'utf8').trim(); } catch { /* next */ } } return undefined; })();
+const MACHINE = LOCAL.machine;
 const sleeper = (t) => { const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' }); t.after(() => child.kill('SIGKILL')); return child; };
 
 test('a record from a machine with another machine-id is not judged here even when everything else matches', async () => {
@@ -350,4 +350,58 @@ test('a profile save that meets an old pid-only lock refuses with the one-line r
   profile.label = 'refused';
   assert.throws(() => saveProfile(profile), (e) => e.code === 'profile-locked' && !e.message.includes('\n') && e.message.includes(`rm -f -- ${quoted(LOCK)}`) && /only after confirming no Courier command is running/.test(e.message));
   assert.equal(fs.readFileSync(LOCK, 'utf8'), content);
+});
+
+// ---- round 3 lows ----
+
+test('clearing guards left by dead breakers never removes a guard another breaker claimed meanwhile', async () => {
+  const file = lockFile('sweeprace');
+  fs.rmSync(file, { force: true });
+  const gone = 2147483000;
+  fs.writeFileSync(file, JSON.stringify({ ...LOCAL, pid: gone, nonce: 'stale' }), { mode: 0o600 });
+  for (let k = 1; k <= 8; k += 1) fs.writeFileSync(`${file}.break.stale.${k}`, JSON.stringify({ pid: gone + k, nonce: `dead${k}` }), { mode: 0o600 });
+  const claimed = JSON.stringify({ pid: process.pid, nonce: 'claimed-meanwhile' });
+  const alive = (pid) => {
+    if (pid === gone + 8) fs.writeFileSync(`${file}.break.stale.3`, claimed, { mode: 0o600 }); // the last guard is judged; meanwhile slot 3 changes hands
+    return pid === process.pid;
+  };
+  acquireLock(file, { alive })();
+  assert.equal(fs.readFileSync(`${file}.break.stale.3`, 'utf8'), claimed, 'the claimed guard was not swept');
+  for (const k of [1, 2, 4, 5, 6, 7, 8]) assert.equal(fs.existsSync(`${file}.break.stale.${k}`), false, `dead guard ${k} was cleared`);
+  fs.rmSync(`${file}.break.stale.3`);
+});
+
+test('a refusal because another command is clearing the lock does not claim the holder is dead, and names the last holder record', async (t) => {
+  const file = lockFile('contendmsg');
+  fs.rmSync(file, { force: true });
+  fs.writeFileSync(file, JSON.stringify({ ...LOCAL, pid: await deadPid(), nonce: 'stale-nonce-1' }), { mode: 0o600 });
+  const breaker = sleeper(t);
+  fs.writeFileSync(`${file}.break.stale-nonce-1.1`, JSON.stringify({ ...LOCAL, pid: breaker.pid, nonce: 'live-breaker' }), { mode: 0o600 });
+  assert.throws(() => acquireLock(file), (e) => {
+    assert.equal(e.code, 'locked');
+    assert.equal(e.message.includes('\n'), false);
+    assert.doesNotMatch(e.message, /\bdead\b/);
+    assert.ok(e.message.includes('stale-nonce-1'), e.message);
+    assert.ok(e.message.includes(`rm -f -- '${file}'`) && /only after confirming/.test(e.message));
+    return true;
+  });
+  fs.rmSync(file); fs.rmSync(`${file}.break.stale-nonce-1.1`);
+});
+
+test('a guard that vanishes between the failed create and the read is not mistaken for a live breaker', async () => {
+  const file = lockFile('vanish');
+  fs.rmSync(file, { force: true });
+  fs.writeFileSync(file, JSON.stringify({ ...LOCAL, pid: await deadPid(), nonce: 'stale' }), { mode: 0o600 });
+  const guard = `${file}.break.stale.1`;
+  fs.writeFileSync(guard, JSON.stringify({ pid: process.pid, nonce: 'finishing-breaker' }), { mode: 0o600 });
+  const read = fs.readFileSync;
+  let vanished = false;
+  const mocked = (f, ...rest) => {
+    if (!vanished && String(f) === guard) { vanished = true; fs.rmSync(guard); } // the other breaker finished and cleaned up
+    return read(f, ...rest);
+  };
+  const { mock } = await import('node:test');
+  mock.method(fs, 'readFileSync', mocked);
+  try { acquireLock(file)(); } finally { mock.restoreAll(); }
+  assert.equal(vanished, true);
 });
