@@ -111,6 +111,20 @@ describe("telling 'Health Log is not installed' apart from other failures", () =
       { code: "NETWORK_ERROR", message: "fetch failed" },
       { code: "SQL_ERROR", message: "SQL query failed: 400 - near \"SELEC\": syntax error" },
       { code: "SQL_QUOTA_EXCEEDED", message: "SQL query failed: 429" },
+      { code: "SQL_ERROR", message: "SQL query failed: 400 - no such column: kcalz" },
+      { code: "SQL_DATABASE_NOT_FOUND", message: "SQL query failed: 404 - Space not found", meta: { status: 404 } },
+      { code: "NETWORK_ERROR", message: "SQL query failed: 503" },
     ]) expect(missing(await failWith(error))).toBe(false);
+  });
+});
+
+describe("an unhosted space is not 'not installed'", () => {
+  test("a 404 'Space not found' is reported as an unset-up space, with its own reason", async () => {
+    let outcome: { status: string; error?: { code: string; details?: { reason?: string }; retryable?: boolean } } | undefined;
+    await fixture(async (_kv, context) => {
+      const node = { ...context.runtime.node as object, sqlForSpace: () => ({ db: () => ({ query: async () => ({ ok: false as const, error: { code: "SQL_DATABASE_NOT_FOUND", message: "SQL query failed: 404 - Space not found", meta: { status: 404 } } }) }) }) };
+      outcome = await sqlDefinition("tinycloud.sql.query").execute({ ...context, runtime: { ...context.runtime, node } } as never, { space: "applications", database: HEALTHLOG_DATABASE, sql: HEALTHLOG_MEAL_DUPLICATE_CHECK, params: ["2026-11-03", "lunch", "Dal"] } as never);
+    });
+    expect(outcome).toMatchObject({ status: "error", error: { code: "NODE_ERROR", details: { reason: "space_not_hosted" }, retryable: false } });
   });
 });

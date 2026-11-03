@@ -688,6 +688,17 @@ function sqlServiceFailure(
       ),
     };
   }
+  // An unhosted space also answers 404, and is not a missing database: keep the two apart.
+  if (isRecord(error) && typeof error.message === "string" && /space not found/i.test(error.message)) {
+    return {
+      status: "error",
+      error: operationError(
+        "NODE_ERROR",
+        "Your TinyCloud storage space is not set up. Try again in a minute; if it still fails, ask for help setting up the space.",
+        { retryable: false, details: { reason: "space_not_hosted" } },
+      ),
+    };
+  }
   // A database or table that does not exist yet (for example an app that is not installed) is not a node fault: say so,
   // so a caller can tell it apart from a permission, quota or network failure without parsing text.
   if (isRecord(error) && (error.code === "SQL_DATABASE_NOT_FOUND" || (typeof error.message === "string" && /no such (?:table|view)/i.test(error.message)))) {
