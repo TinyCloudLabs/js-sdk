@@ -177,10 +177,10 @@ test("public plugin enforces its tools, OAuth audience and separate approval sta
   ]);
   expect(tools.find((tool) => tool.name === "tinycloud_apps_write")?.annotations)
     .toMatchObject({ readOnlyHint: false, destructiveHint: true, openWorldHint: false });
-  // The context call and the query delete no records. Context saves only the owner's timezone when one is supplied, and a query refreshes a derived copy, so neither is read-only.
+  // Context can replace the saved timezone, and a query refresh deletes/reinserts derived SQL rows.
   for (const name of ["tinycloud_apps_context", "tinycloud_apps_query"]) {
     expect(tools.find((tool) => tool.name === name)?.annotations)
-      .toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false });
+      .toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false });
   }
   expect(tools.find((tool) => tool.name === "tinycloud_apps_read")?.annotations)
     .toMatchObject({ readOnlyHint: true, destructiveHint: false, openWorldHint: false });
