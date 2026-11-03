@@ -1,5 +1,21 @@
 # @tinycloud/mcp
 
+## 0.8.7
+
+This release is cut on the 3.10 line: it depends on `@tinycloud/node-sdk` 3.10.0 and `@tinycloud/operations` 0.7.10 and carries only the two changes below. The first one removes the `allowedOrigins` option and the `TC_MCP_ALLOWED_ORIGINS` environment variable, which would normally ship as a minor release; it is published as 0.8.7 so that it does not collide with the next minor version on the main line.
+
+### Minor Changes
+
+- The MCP HTTP endpoint (hosted and self-hosted) now answers calls and CORS preflights from any browser Origin instead of an allowlist. Every call is still authorized only by the OAuth access token in the `Authorization: Bearer` header: a call without a valid token gets 401 with `WWW-Authenticate`, whatever its Origin. Responses carry `Access-Control-Allow-Origin: *` and `Vary: Origin`, never `Access-Control-Allow-Credentials`, and expose only `WWW-Authenticate`; a preflight allows a fixed list of the headers MCP clients send. The `allowedOrigins` config option and the `TC_MCP_ALLOWED_ORIGINS` environment variable are removed: a set `TC_MCP_ALLOWED_ORIGINS` is now ignored, and `allowedOrigins` is removed from the `createHostedMcpApp` config type, so TypeScript callers that set it get a compile error (JavaScript callers' value is ignored). The native-service path still refuses any request that carries an Origin.
+
+  Details: TC-2394
+
+### Patch Changes
+
+- When OpenKey's token introspection cannot answer, the hosted MCP now serves a token that OpenKey confirmed active only for 60 seconds after the confirming question was sent to OpenKey (and until the token expires), counted on a monotonic clock so that a wall-clock step cannot extend it, instead of for the token's whole lifetime. A token revoked during an introspection outage therefore stops working within about 60 seconds, however long the token lives. Tokens OpenKey never confirmed to this server, and tokens answered inactive, are still refused. The 30-second active-answer cache is unchanged.
+
+  Details: TC-2395
+
 ## 0.8.6
 
 ### Patch Changes
