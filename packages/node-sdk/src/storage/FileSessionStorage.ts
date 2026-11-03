@@ -1,6 +1,5 @@
 import { ISessionStorage, PersistedSessionData, validatePersistedSessionData } from "@tinycloud/sdk-core";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, unlinkSync } from "fs";
-import { randomBytes } from "crypto";
 import { dirname, join } from "path";
 
 /**
@@ -67,10 +66,11 @@ export class FileSessionStorage implements ISessionStorage {
     const data = JSON.stringify(session, null, 2);
     // Write a sibling temp file, then rename over the target: a crash or a failed write
     // never leaves a half-written session where the previous one was.
-    const tempPath = `${filePath}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+    // This body is synchronous, so saves in one process never interleave; another process has another pid.
+    const tempPath = `${filePath}.${process.pid}.tmp`;
     try {
       // The session holds a key: the temp file, and so the file renamed over the target, is owner-only.
-      writeFileSync(tempPath, data, { encoding: "utf-8", mode: 0o600 });
+      writeFileSync(tempPath, data, { mode: 0o600 });
       renameSync(tempPath, filePath);
     } catch (error) {
       try {
@@ -122,7 +122,7 @@ export class FileSessionStorage implements ISessionStorage {
       // A read or parse error says nothing about whether the session is still wanted:
       // keep the file and let the caller see why it could not be read.
       throw new Error(
-        `Could not read session file ${filePath}: ${error instanceof Error ? error.message : String(error)}`,
+        `Could not read session file ${filePath}: ${error}`,
       );
     }
   }
