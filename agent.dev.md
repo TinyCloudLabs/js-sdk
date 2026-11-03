@@ -201,3 +201,11 @@ version metadata and make the immutable release checkout fail the clean-tree pub
 - Never add a response `deadlineMs` to personal-record writes: deadlines abandon
   work rather than cancel it. Preserve per-op outcomes after any committed write,
   including a partial move or failed derived-copy upkeep.
+- Meals, food, calories, body weight and recipes are not generic personal
+  records: the rules route them to Health Log and Recipes through the generic
+  knowledge and SQL tools. The routing table is extracted from the vendored
+  `TINY-APPS.md`; the statements in `src/tc-apps/preamble.ts` (`HEALTHLOG_*`)
+  mirror the pinned Health Log schema (`packages/cli/src/lib/apps-install.healthlog.schema.sql`)
+  and are checked against the generic SQL tools' input schemas in
+  `apps.catalog.test.ts`. Drop the "not installed" step when onboarding grants
+  the schema for catalog apps (TC-2430).

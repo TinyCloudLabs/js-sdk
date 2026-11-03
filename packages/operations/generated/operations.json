@@ -2359,6 +2359,10 @@
           "now": {
             "type": "string"
           },
+          "utc": {
+            "type": "string",
+            "description": "The same instant in UTC, e.g. 2026-11-03T12:30:00Z, for a catalog app's logged_at."
+          },
           "timezone": {
             "type": [
               "string",
@@ -2479,6 +2483,7 @@
         "required": [
           "rules",
           "now",
+          "utc",
           "timezone",
           "apps",
           "legacy",
@@ -3443,6 +3448,10 @@
               "now": {
                 "type": "string"
               },
+              "utc": {
+                "type": "string",
+                "description": "The same instant in UTC, e.g. 2026-11-03T12:30:00Z, for a catalog app's logged_at."
+              },
               "timezone": {
                 "type": [
                   "string",
@@ -3563,6 +3572,7 @@
             "required": [
               "rules",
               "now",
+              "utc",
               "timezone",
               "apps",
               "legacy",

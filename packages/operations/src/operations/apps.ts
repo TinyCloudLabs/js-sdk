@@ -18,7 +18,7 @@ const RecordSchema = z.object({ key: z.string(), value: ObjectSchema, etag: z.st
 const ReadRecordSchema = z.union([RecordSchema, z.object({ key: z.string(), outcome: z.enum(["NOT_FOUND", "MALFORMED"]) }).strict()]);
 const AppSchema = z.object({ app: z.string(), layout: LayoutSchema, title: z.string().optional(), copy: CopyStateSchema }).strict();
 const ContextOutputSchema = z.object({
-  rules: z.string(), now: z.string(), timezone: z.string().nullable(),
+  rules: z.string(), now: z.string(), utc: z.string().describe("The same instant in UTC, e.g. 2026-11-03T12:30:00Z, for a catalog app's logged_at."), timezone: z.string().nullable(),
   apps: z.array(AppSchema),
   legacy: z.enum(["listed", "not_approved"]).describe("not_approved: the older layout's app list was not readable, so older apps are not in apps."),
   catalog: z.object({ keys: z.array(z.string()), records: z.array(RecordSchema).optional() }).strict(),
@@ -175,7 +175,7 @@ async function executeContext(context: OperationContext, input: ContextInput): P
     const listed = await Promise.all([...apps].sort(([a], [b]) => a.localeCompare(b)).map(async ([app, entry]) => ({
       app, ...entry, copy: await appsCopyState(context.summary.profile, entry.layout, app, appsSpace(context, entry.layout)),
     })));
-    return { status: "ok", output: { rules: TC_APPS_RULES, now: appsNow(timezone), timezone, apps: listed, legacy: legacy ? "listed" : "not_approved", catalog: { keys, ...(records === undefined ? {} : { records }) } } };
+    return { status: "ok", output: { rules: TC_APPS_RULES, now: appsNow(timezone), utc: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"), timezone, apps: listed, legacy: legacy ? "listed" : "not_approved", catalog: { keys, ...(records === undefined ? {} : { records }) } } };
   } catch (error) { return { status: "error", error: appsFailure(error) }; }
 }
 /** Every app with a discovery entry, with its title when the entry is well formed. */
