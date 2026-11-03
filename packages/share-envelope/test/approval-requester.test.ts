@@ -9,6 +9,7 @@ import {
   purgeAt,
   reduce,
   requesterState,
+  type ApprovalEntry,
   type ApprovalPhase,
   type Effect,
   type Event,
@@ -19,7 +20,7 @@ import {
   type Rule,
   type Step,
 } from "../src/links/index.js";
-import { CONTENT_KEY, E, PHASES, R, REQUEST_ID, RESULT_EXPIRES, RESULT_REF, S, SECRET_STRINGS, T0, entryIn, iso, liveState } from "./approval-machine-fixtures.js";
+import { CONTENT_KEY, E, PHASES, R, RELAY_KEY, REQUEST_ID, RESULT_EXPIRES, RESULT_REF, S, SECRET_STRINGS, T0, entryIn, iso, liveState } from "./approval-machine-fixtures.js";
 
 // TC-2377: the ONE approval-request requester machine. These tests are the contract: every (event x phase) cell of the
 // table is asserted against a SECOND, hand-written table below (never against `RULES`), so a wrong mapping in the
@@ -532,14 +533,15 @@ describe("a 401 never drops an approved result: fetch and ack keep the entry, bo
   test.each([
     ["fetch", fetch401],
     ["ack", ack401],
-  ])("%s 401 with a sane clock (<= 45 s, or no Date) keeps the entry and its keys and reports unexpected (exit 7)", (_call, run) => {
+  ])("%s 401 with a sane clock (<= 45 s, or no Date) keeps the entry and its keys and reports unexpected (exit 7)", (call, run) => {
     for (const skew of [undefined, 0, 44_000, -44_000, 45_000]) {
       const step = run(skew);
       expect(step.state.entry).toBeDefined();
       expect(step.state.entry!.hold).toBeUndefined();
       expect(step.state.entry!.keys!.relayPrivateKey).toBeDefined();
       expect(step.effects.some((effect) => effect.type === "purge")).toBe(false);
-      expect(finishOf(step)).toEqual({ kind: "unexpected" });
+      // D-2: after an ack 401 the grant IS saved (the caller's commit succeeded); a fetch 401 says nothing of the sort.
+      expect(finishOf(step)).toEqual(call === "ack" ? { kind: "unexpected", grantSaved: true } : { kind: "unexpected" });
       expect(exitCodeOf(finishOf(step)!)).toBe(7);
     }
   });
@@ -570,7 +572,7 @@ describe("a 401 never drops an approved result: fetch and ack keep the entry, bo
     for (const [run, entry] of [[fetch401, entryIn("discovered", { staged: true })], [ack401, entryIn("committed")]] as const) {
       const bound = purgeAt(entry);
       for (const skew of [undefined, 0, 46_000, -3_600_000]) {
-        for (const now of [T0, NOW, E, E + S, E + R, bound - 1]) expect(run(skew, now).state.entry).toBeDefined();
+        for (const now of [T0, NOW, bound - 1]) expect(run(skew, now).state.entry).toBeDefined();
         const kept = run(skew, bound - 1).state;
         // The run ended (stopped or held); the next run's start applies the clock first, so the purge comes before any call.
         const purged = reduce(kept, { type: "start", now: bound });
@@ -601,5 +603,104 @@ describe("a committed entry that reaches its purge time completes with a warning
   test("just before the purge time nothing is dropped", () => {
     const entry = entryIn("committed");
     expect(reduce(liveState(entry), { type: "tick", now: purgeAt(entry) - 1 }).state.entry).toBeDefined();
+  });
+});
+
+describe("the purge time WINS over any reply that lands after it (D-1)", () => {
+  const sane = 0;
+  const off = 90_000;
+  interface Landing {
+    readonly name: string;
+    readonly phase: ApprovalPhase;
+    readonly event: (now: number) => Event;
+    /** The reply is a keep/hold/continue just BEFORE the purge time (a 401 on an open entry past E + S lapses by §10.2, so it is not one). */
+    readonly keepsBefore: boolean;
+    readonly outcome: Outcome;
+  }
+  const lapsed: Outcome = { kind: "lapsed", reason: "purged", grantMayBeLive: "no" };
+  const gone: Outcome = { kind: "gone", reason: "purged", grantMayBeLive: "yes" };
+  const savedUnacked: Outcome = { kind: "completed", warning: "ack-expired" };
+  const LANDINGS: readonly Landing[] = [
+    { name: "open: network", phase: "open", event: (now) => replyEvent({ kind: "network" }, now), keepsBefore: true, outcome: lapsed },
+    { name: "open: malformed", phase: "open", event: (now) => replyEvent({ kind: "malformed", call: "discover" }, now), keepsBefore: true, outcome: lapsed },
+    { name: "open: 500", phase: "open", event: (now) => replyEvent(err("discover", "unknown", 500), now), keepsBefore: true, outcome: lapsed },
+    { name: "open: 401 sane", phase: "open", event: (now) => replyEvent(err("discover", "invalid_proof", 401), now, sane), keepsBefore: false, outcome: lapsed },
+    { name: "open: 401 clock off", phase: "open", event: (now) => replyEvent(err("discover", "invalid_proof", 401), now, off), keepsBefore: false, outcome: lapsed },
+    { name: "discovered: network", phase: "discovered", event: (now) => replyEvent({ kind: "network" }, now), keepsBefore: true, outcome: gone },
+    { name: "discovered: malformed", phase: "discovered", event: (now) => replyEvent({ kind: "malformed", call: "fetch" }, now), keepsBefore: true, outcome: gone },
+    { name: "discovered: 500", phase: "discovered", event: (now) => replyEvent(err("fetch", "unknown", 500), now), keepsBefore: true, outcome: gone },
+    { name: "discovered: 401 sane", phase: "discovered", event: (now) => replyEvent(err("fetch", "invalid_proof", 401), now, sane), keepsBefore: true, outcome: gone },
+    { name: "discovered: 401 clock off", phase: "discovered", event: (now) => replyEvent(err("fetch", "invalid_proof", 401), now, off), keepsBefore: true, outcome: gone },
+    { name: "fetched: verdict clock", phase: "fetched", event: (now) => ({ type: "verdict", now, verdict: "clock" }), keepsBefore: true, outcome: gone },
+    { name: "fetched: verdict ok", phase: "fetched", event: (now) => ({ type: "verdict", now, verdict: "ok" }), keepsBefore: true, outcome: gone },
+    // The caller's commit already succeeded: the grant is saved, so this is not a failure.
+    { name: "fetched: committed event", phase: "fetched", event: (now) => ({ type: "committed", now }), keepsBefore: true, outcome: savedUnacked },
+    { name: "committed: network", phase: "committed", event: (now) => replyEvent({ kind: "network" }, now), keepsBefore: true, outcome: savedUnacked },
+    { name: "committed: malformed", phase: "committed", event: (now) => replyEvent({ kind: "malformed", call: "ack" }, now), keepsBefore: true, outcome: savedUnacked },
+    { name: "committed: 500", phase: "committed", event: (now) => replyEvent(err("ack", "unknown", 500), now), keepsBefore: true, outcome: savedUnacked },
+    { name: "committed: 401 sane", phase: "committed", event: (now) => replyEvent(err("ack", "invalid_proof", 401), now, sane), keepsBefore: true, outcome: savedUnacked },
+    { name: "committed: 401 clock off", phase: "committed", event: (now) => replyEvent(err("ack", "invalid_proof", 401), now, off), keepsBefore: true, outcome: savedUnacked },
+  ];
+
+  for (const landing of LANDINGS) {
+    test(`${landing.name}: just before purgeAt it keeps; at purgeAt and 9 s later (the request limit) it purges and never persists`, () => {
+      const entry = entryIn(landing.phase, { staged: landing.phase !== "committed" });
+      const bound = purgeAt(entry);
+      if (landing.keepsBefore) expect(reduce(liveState(entry), landing.event(bound - 1)).state.entry).toBeDefined();
+      for (const now of [bound, bound + 9_000]) {
+        const step = reduce(liveState(entry), landing.event(now));
+        expect(step.state.entry).toBeUndefined();
+        expect(step.effects.some((effect) => effect.type === "persist")).toBe(false);
+        expect(step.effects[0]).toEqual({ type: "purge", requestId: entry.requestId, keys: heldKeys(entry), entry: "remove" });
+        expect(finishOf(step)).toEqual(landing.outcome);
+        expect(JSON.stringify(step.effects)).not.toContain(RELAY_KEY);
+      }
+    });
+  }
+});
+
+describe("an outcome says when the grant is already saved (D-2)", () => {
+  test("a committed entry's ack 401 (sane clock, then clock off) carries grantSaved: the caller must not report a failed sign-in", () => {
+    const sane = finishOf(reduce(liveState(entryIn("committed")), replyEvent(err("ack", "invalid_proof", 401), NOW, 1_000)))!;
+    const off = finishOf(reduce(liveState(entryIn("committed")), replyEvent(err("ack", "invalid_proof", 401), NOW, 90_000)))!;
+    expect(sane).toEqual({ kind: "unexpected", grantSaved: true });
+    expect(off).toMatchObject({ kind: "clock", grantSaved: true });
+    expect(exitCodeOf(sane)).toBe(7);
+    expect(exitCodeOf(off)).toBe(12);
+  });
+
+  test("it is NOT set before the caller's commit: open, discovered and fetched entries never carry it", () => {
+    const outcomes: Outcome[] = [
+      finishOf(reduce(liveState(entryIn("discovered")), replyEvent(err("fetch", "invalid_proof", 401), NOW, 1_000)))!,
+      finishOf(reduce(liveState(entryIn("discovered")), replyEvent(err("fetch", "invalid_proof", 401), NOW, 90_000)))!,
+      finishOf(reduce(liveState(entryIn("open")), replyEvent(err("discover", "invalid_proof", 401), NOW, 90_000)))!,
+      finishOf(reduce(liveState(entryIn("fetched")), { type: "verdict", now: NOW, verdict: "clock" }))!,
+      finishOf(reduce(liveState(entryIn("open"), { unexpectedStreak: 4 }), replyEvent(err("discover", "unknown", 500))))!,
+    ];
+    expect(outcomes.map((outcome) => outcome.kind)).toEqual(["unexpected", "clock", "clock", "clock", "unexpected"]);
+    for (const outcome of outcomes) expect("grantSaved" in outcome).toBe(false);
+  });
+});
+
+describe("createdThisRun is honoured only for a fresh open entry (D-3)", () => {
+  const confirmedAt = (entry: ApprovalEntry, now: number) => reduce(requesterState(entry), { type: "start", now, createdThisRun: true }).state.run.confirmedLiveAt;
+
+  test("a fresh open entry (created within the 120 s window, no result) is confirmed live at the start time", () => {
+    expect(confirmedAt(entryIn("open"), NOW)).toBe(NOW);
+    expect(confirmedAt(entryIn("open"), T0 + 120_000)).toBe(T0 + 120_000);
+    expect(confirmedAt(entryIn("open"), T0 - 120_000)).toBe(T0 - 120_000);
+  });
+
+  test("a resumed entry is not: created long ago, in the far future, already discovered, fetched, committed, or holding a result reference", () => {
+    expect(confirmedAt(entryIn("open"), T0 + 120_001)).toBeUndefined();
+    expect(confirmedAt(entryIn("open"), T0 - 120_001)).toBeUndefined();
+    for (const phase of ["discovered", "fetched", "committed"] as const) expect(confirmedAt(entryIn(phase), NOW)).toBeUndefined();
+    expect(confirmedAt({ ...entryIn("open"), resultRef: RESULT_REF }, NOW)).toBeUndefined();
+  });
+
+  test("so a caller passing true for a resumed entry still gets unreachable (6), never pending (8)", () => {
+    const old = { ...entryIn("open"), createdAt: iso(T0 - 3_600_000) };
+    const start = reduce(requesterState(old), { type: "start", now: NOW, deadline: NOW - 1, createdThisRun: true });
+    expect(finishOf(reduce(start.state, replyEvent({ kind: "network" }, NOW + 10_000)))?.kind).toBe("unreachable");
   });
 });

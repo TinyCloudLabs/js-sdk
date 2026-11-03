@@ -309,3 +309,19 @@ describe("an acknowledged entry holds no content key", () => {
     expect(parsed.file.unrecognized).toHaveLength(2);
   });
 });
+
+describe("an acknowledged entry holds no sealed body either (D-4)", () => {
+  test("a v2 acked entry that still carries record.body is refused on read (quarantined)", () => {
+    const file = JSON.parse(serializeApprovalFile({ version: 2, entries: [entryIn("acked", { requestId: id(79) })], unrecognized: [] }));
+    file.entries[0].record.body = "AAAA";
+    const parsed = ok(file);
+    expect(parsed.file.entries).toEqual([]);
+    expect(parsed.file.unrecognized).toHaveLength(1);
+  });
+
+  test("a live entry may keep its body (it is the signed record the CLI got back)", () => {
+    const file = JSON.parse(serializeApprovalFile({ version: 2, entries: [entryIn("open", { requestId: id(78) })], unrecognized: [] }));
+    file.entries[0].record.body = "AAAA";
+    expect(ok(file).file.entries).toHaveLength(1);
+  });
+});

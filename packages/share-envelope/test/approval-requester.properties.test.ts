@@ -32,7 +32,7 @@ const pick = <T>(random: () => number, items: readonly T[]): T => items[Math.flo
 
 const CODES: readonly ReplyCode[] = ["expired_request", "expired_result", "acknowledged", "not_found", "ack_conflict", "request_binding", "invalid_proof", "invalid_request", "invalid_ack", "request_denied", "unknown"];
 const CALLS = ["discover", "fetch", "ack"] as const;
-const SKEWS: readonly (number | undefined)[] = [undefined, 0, 10_000, 59_000, 61_000, -61_000, 600_000];
+const SKEWS: readonly (number | undefined)[] = [undefined, 0, 10_000, 44_000, 46_000, -46_000, 59_000, 61_000, -61_000, 600_000];
 
 function randomReply(random: () => number): Reply {
   switch (Math.floor(random() * 7)) {
@@ -89,7 +89,8 @@ function checkStep(before: RequesterState, event: Event, step: Step, violations:
   require(SECRET_STRINGS.every((secret) => !text.includes(secret)), "no key in effects");
   if (prev === undefined) return;
   // 1. no key past purge
-  require(!(event.type === "tick" && event.now >= purgeAt(prev) && before.settled === undefined) || after?.keys === undefined, "no key past purge");
+  // (D-1) the purge time wins over EVERY event type, not only a tick: a run that is still live has no key at or past purgeAt
+  require(!((before.settled === undefined || event.type === "start") && event.now >= purgeAt(prev)) || after?.keys === undefined, "no key past purge");
   // acked never holds a key
   require(after?.phase !== "acked" || after.keys === undefined, "acked holds no key");
   // 5. committed is monotone
