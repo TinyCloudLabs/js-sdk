@@ -23229,7 +23229,7 @@
       "id": "tinycloud.sql.execute",
       "version": 1,
       "title": "Execute a TinyCloud SQLite DML statement",
-      "description": "Run exactly one parameterized INSERT, UPDATE, or DELETE against one exact TinyCloud SQLite database. Approving tinycloud.sql/write grants full read/write/schema mutation authority over this exact database; the MCP tool itself accepts only one parameterized INSERT, UPDATE, or DELETE.",
+      "description": "Run exactly one parameterized INSERT, UPDATE, or DELETE against one exact TinyCloud SQLite database. Approving tinycloud.sql/write lets the agent read, insert, update and delete any row in this exact database. Nodes that enforce the schema split (the default) also stop it changing the tables; nodes that don't, let it. The MCP tool itself accepts only one parameterized INSERT, UPDATE or DELETE.",
       "input": {
         "type": "object",
         "properties": {
@@ -23287,7 +23287,7 @@
           "acknowledgeDatabaseWideAuthority": {
             "type": "boolean",
             "const": true,
-            "description": "Approving tinycloud.sql/write grants full read/write/schema mutation authority over this exact database; the MCP tool itself accepts only one parameterized INSERT, UPDATE, or DELETE."
+            "description": "Approving tinycloud.sql/write lets the agent read, insert, update and delete any row in this exact database. Nodes that enforce the schema split (the default) also stop it changing the tables; nodes that don't, let it. The MCP tool itself accepts only one parameterized INSERT, UPDATE or DELETE."
           }
         },
         "required": [
@@ -23335,7 +23335,7 @@
           },
           "authorityNotice": {
             "type": "string",
-            "const": "Approving tinycloud.sql/write grants full read/write/schema mutation authority over this exact database; the MCP tool itself accepts only one parameterized INSERT, UPDATE, or DELETE."
+            "const": "Approving tinycloud.sql/write lets the agent read, insert, update and delete any row in this exact database. Nodes that enforce the schema split (the default) also stop it changing the tables; nodes that don't, let it. The MCP tool itself accepts only one parameterized INSERT, UPDATE or DELETE."
           }
         },
         "required": [
@@ -24331,7 +24331,7 @@
               },
               "authorityNotice": {
                 "type": "string",
-                "const": "Approving tinycloud.sql/write grants full read/write/schema mutation authority over this exact database; the MCP tool itself accepts only one parameterized INSERT, UPDATE, or DELETE."
+                "const": "Approving tinycloud.sql/write lets the agent read, insert, update and delete any row in this exact database. Nodes that enforce the schema split (the default) also stop it changing the tables; nodes that don't, let it. The MCP tool itself accepts only one parameterized INSERT, UPDATE or DELETE."
               }
             },
             "required": [
