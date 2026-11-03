@@ -354,7 +354,7 @@ function ed25519JwkDid(jwk: { kty?: string; crv?: string; x?: string }): string 
 // Share Link Utilities (static, no auth required)
 
 /** A session storage that can fence a signed-out session (BrowserSessionStorage); others rely on the in-memory block. */
-type FenceCapableStorage = ISessionStorage & {
+export type FenceCapableStorage = ISessionStorage & {
   markSignedOut?: (address: string, signature: string) => void;
   isSignedOut?: (address: string, signature: string) => boolean;
 };
