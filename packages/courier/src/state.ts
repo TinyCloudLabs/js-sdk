@@ -276,7 +276,13 @@ export function recoverInterrupted(): void {
   for (const { name, pid } of liveWriterTemps()) {
     const file = path.join(profileDir(), name);
     // A running pid does not excuse a file that is not a plain single-link file of this user: that is refused, as for a dead writer.
-    if (!isPlain(fs.lstatSync(file))) throw refuseStray(file);
+    let stat: fs.Stats;
+    try { stat = fs.lstatSync(file); } catch (error) {
+      // The writer finished and renamed it into place after the listing: it has moved, there is nothing to keep or refuse.
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw error;
+    }
+    if (!isPlain(stat)) throw refuseStray(file);
     console.error(`warning: ${name} was kept, not deleted, and may contain private-key material (an agent key, or an approval's relay key and result). Process ${pid}, which named it, is running: either a Courier process still writing it, or an unrelated process that was given the same pid after Courier died (pid reuse); Courier cannot tell which. Check with \`ps -p ${pid} -o pid=,args=\`; only if that is not a Courier process, remove the file with \`rm -- '${file}'\`.`);
   }
 }
