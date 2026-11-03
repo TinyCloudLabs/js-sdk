@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PersistedSessionData } from "@tinycloud/sdk-core";
@@ -52,6 +52,23 @@ describe("FileSessionStorage", () => {
     expect(readFileSync(file, "utf-8")).toBe(before);
     chmodSync(dir, 0o755);
     expect((await storage.load(ADDRESS))?.signature).toBe("sig-old");
+  });
+
+  test("a saved session file is owner-only, whatever the umask or the mode of the file it replaces", async () => {
+    const dir = tempDir();
+    const storage = new FileSessionStorage(dir);
+    const previousUmask = process.umask(0);
+    try {
+      await storage.save(ADDRESS, session("first"));
+      const file = join(dir, readdirSync(dir)[0]!);
+      expect(statSync(file).mode & 0o777).toBe(0o600);
+
+      chmodSync(file, 0o644);
+      await storage.save(ADDRESS, session("second"));
+      expect(statSync(file).mode & 0o777).toBe(0o600);
+    } finally {
+      process.umask(previousUmask);
+    }
   });
 
   test("a completed save leaves exactly one file and the new session", async () => {

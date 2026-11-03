@@ -7,6 +7,6 @@
 
 `signOut()` in both SDKs clears the stored session only when it is still the session being signed out (same signature): a sign-out that finishes after a newer sign-in for the same address no longer erases the newer saved copy.
 
-`FileSessionStorage.save` writes a temp file and renames it, so a failed write keeps the previous session. `FileSessionStorage.load` no longer deletes a file it cannot read or parse; it rejects with `Could not read session file <path>: <cause>` and leaves the file. Expired and schema-invalid files are still removed.
+`FileSessionStorage.save` writes a temp file (mode 0600, so the saved file is owner-only) and renames it, so a failed write keeps the previous session. `FileSessionStorage.load` no longer deletes a file it cannot read or parse; it rejects with `Could not read session file <path>: <cause>` and leaves the file. Expired and schema-invalid files are still removed.
 
 Details: TC-2379
