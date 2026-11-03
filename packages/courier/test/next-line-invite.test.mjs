@@ -16,11 +16,13 @@ const fixture = await createGuidedFixture(path.join(root, 'guided-next-line'), p
 test.after(() => fixture.close());
 
 const lines = (text) => text.split('\n');
-// Wording v4: every Next line leads with the fact that the owner cannot see tool output (agents cut after the first clause).
+// Wording v4: every Next line that hands the owner a link leads with the fact that the owner cannot see tool output (agents cut
+// after the first clause). The one exception is the pending `invite serve` line (8): there is no link to relay, only a run-again.
 const OWNER_BLIND = 'Next: The owner cannot see this tool output.';
+const pendingServeLine = (id, wait) => `Next: No one has joined yet; run \`courier invite serve ${id} --wait ${wait}\` again now, in this same turn; do not end your turn or wait for a reply.`;
 const nextLines = (text) => {
   const found = lines(text).filter((line) => line.startsWith('Next: '));
-  for (const line of found) assert.ok(line.startsWith(OWNER_BLIND), line);
+  for (const line of found) assert.ok(line.startsWith(OWNER_BLIND) || line.startsWith('Next: No one has joined yet; run '), line);
   return found;
 };
 // Node itself can print warning blocks to stderr: on Node 20 a `MaxListenersExceededWarning` (`(node:<pid>) ...Warning: ...`,
@@ -91,7 +93,7 @@ function assertServePending(stderr, id) {
   assert.ok(all.indexOf(next[0]) < pending, 'the first Next line is printed before the wait, ahead of the pending error');
   assert.ok(all.indexOf(next[1]) > pending, 'the second follows the invite-pending error');
   assert.equal(lastLine(stderr), next[1], 'and is the last non-empty stderr line');
-  assert.ok(next[1].includes(`\`courier invite serve ${id} --wait 1\``), `the pending line names the command that was run: ${next[1]}`);
+  assert.equal(next[1], pendingServeLine(id, 1), 'the pending line is exactly the run-again text: it names the command that was run and has no owner-cannot-see sentence');
   return next;
 }
 

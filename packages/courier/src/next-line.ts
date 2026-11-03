@@ -65,9 +65,9 @@ export function inviteServeNextLine(link: string | undefined): string {
     : 'Next: The owner cannot see this tool output. Before your next tool call, write the invitation link printed by `invite` in your reply to the owner if you have not written it yet.';
 }
 
-/** The last line of a pending `invite serve`: nobody has joined yet, so run it again. `waitSeconds` is the `--wait` it ran with. */
+/** The last line of a pending `invite serve`: nobody has joined yet, so run it again (no link to hand over, so no owner-cannot-see sentence). `waitSeconds` is the `--wait` it ran with. */
 export function invitePendingNextLine(invitationId: string, waitSeconds: number): string {
-  return `Next: The owner cannot see this tool output. No one has joined yet; run \`${cmd(`invite serve ${invitationId} --wait ${waitSeconds}`)}\` again now, in this same turn; do not end your turn or wait for a reply.`;
+  return `Next: No one has joined yet; run \`${cmd(`invite serve ${invitationId} --wait ${waitSeconds}`)}\` again now, in this same turn; do not end your turn or wait for a reply.`;
 }
 
 /**
