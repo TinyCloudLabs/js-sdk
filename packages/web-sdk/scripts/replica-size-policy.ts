@@ -2639,19 +2639,19 @@ export const approvedTc2379SignOutFence: Tc2379SignOutFence = {
 };
 export const approvedTc2380SpaceHosting: Tc2380SpaceHosting = {
   label: "check space hosting on restore and record it at sign-in (TC-2380, #840)",
-  ruling: "Exact canonical SQLite and PostgreSQL CI at source head fb7de410972809b443cf4dbf7c587f72a8254931 measures 1,479,625/1,422,028 B, +543/+536 B over TC-2379. Bun 1.3.14; rustc 1.99.0 (b940084d7 2026-09-28).",
+  ruling: "Exact canonical SQLite and PostgreSQL CI at source head 8e255e454eca4eab7e2fc1f830caa4b95681e818 measures 1,479,598/1,422,028 B, +516/+536 B over TC-2379. Bun 1.3.14; rustc 1.99.0 (b940084d7 2026-09-28).",
   base: "356c6053b4789529ab6c84536a385adf2e4e0c77",
-  sourceCommits: ["fb7de410972809b443cf4dbf7c587f72a8254931"],
+  sourceCommits: ["8e255e454eca4eab7e2fc1f830caa4b95681e818"],
   canonicalCI: {
-    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41586552875",
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41590703536",
     jobs: [
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41586552875/job/125753290908",
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41586552875/job/125753291149",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41590703536/job/125766518078",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41590703536/job/125766518075",
     ],
   },
   root: {
-    delta: { "index.mjs": 543, "index.cjs": 536 },
-    ceiling: { "index.mjs": 1479625, "index.cjs": 1422028 },
+    delta: { "index.mjs": 516, "index.cjs": 536 },
+    ceiling: { "index.mjs": 1479598, "index.cjs": 1422028 },
   },
   firstImport: {
     delta: { "replica.mjs": 0, "replica.cjs": 0 },
