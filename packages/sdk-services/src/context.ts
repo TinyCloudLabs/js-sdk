@@ -420,90 +420,96 @@ export class ServiceContext implements IServiceContext {
     const policy = this._retryPolicy;
     const startedAt = Date.now();
     let backoffMs = 0;
-    let signal: AbortSignal | undefined;
-    for (let attempt = 1; ; attempt++) {
-      const init = await build();
-      signal ??= this.combineSignals(init.signal);
-      const response = await this._fetch(url, init);
-      const done = (): FetchResponse => {
-        try { response.retry = { attempts: attempt, backoffMs }; } catch { /* frozen custom response */ }
-        return response;
-      };
-      if (attempt >= policy.maxAttempts || response.status !== 503 || !response.clone) return done();
-      const text = await response.clone().text().catch(() => "");
-      const error = nodeRetryError("", "", response, text);
-      if (!error || error.meta?.retryable !== true || !policy.retryableErrors.includes(error.code)) {
-        return done();
+    let combined: { signal: AbortSignal; release: () => void } | undefined;
+    try {
+      for (let attempt = 1; ; attempt++) {
+        const init = await build();
+        combined ??= this.combineSignals(init.signal);
+        const { signal } = combined;
+        const response = await this._fetch(url, init);
+        const done = (): FetchResponse => {
+          try { response.retry = { attempts: attempt, backoffMs }; } catch { /* frozen custom response */ }
+          return response;
+        };
+        if (attempt >= policy.maxAttempts || response.status !== 503 || !response.clone) return done();
+        const text = await response.clone().text().catch(() => "");
+        const error = nodeRetryError("", "", response, text);
+        if (!error || error.meta?.retryable !== true || !policy.retryableErrors.includes(error.code)) {
+          return done();
+        }
+        const remaining = (policy.maxTotalMs ?? Infinity) - (Date.now() - startedAt);
+        if (remaining <= 0) return done();
+        const retryAfterMs = error.meta.retryAfterMs;
+        const step = Math.min(
+          policy.maxDelayMs,
+          policy.backoff === "exponential"
+            ? policy.baseDelayMs * 2 ** (attempt - 1)
+            : policy.backoff === "linear"
+              ? policy.baseDelayMs * attempt
+              : 0,
+        );
+        const delay = Math.min(
+          typeof retryAfterMs === "number" ? retryAfterMs : Math.random() * step,
+          remaining,
+        );
+        (response.body as { cancel?(): Promise<unknown> } | undefined)?.cancel?.()?.catch?.(() => {});
+        await abortableSleep(delay, signal);
+        if (signal.aborted) throw signal.reason;
+        backoffMs += delay;
       }
-      const remaining = (policy.maxTotalMs ?? Infinity) - (Date.now() - startedAt);
-      if (remaining <= 0) return done();
-      const retryAfterMs = error.meta.retryAfterMs;
-      const step = Math.min(
-        policy.maxDelayMs,
-        policy.backoff === "exponential"
-          ? policy.baseDelayMs * 2 ** (attempt - 1)
-          : policy.backoff === "linear"
-            ? policy.baseDelayMs * attempt
-            : 0,
-      );
-      const delay = Math.min(
-        typeof retryAfterMs === "number" ? retryAfterMs : Math.random() * step,
-        remaining,
-      );
-      (response.body as { cancel?(): Promise<unknown> } | undefined)?.cancel?.()?.catch?.(() => {});
-      await abortableSleep(delay, signal);
-      if (signal.aborted) throw signal.reason;
-      backoffMs += delay;
+    } finally {
+      combined?.release();
     }
   }
 
   private wrapFetch(fetchFn: FetchFunction): FetchFunction {
     return async (url, init) => {
       this.assertActive();
-      const request = {
-        ...init,
-        signal: this.combineSignals(init?.signal),
-      };
-      if (!tinyCloudDebugLogger.isEnabled()) {
-        return fetchFn(url, request);
-      }
-
-      const meta = { url, method: request.method ?? "GET" };
-      const timer = tinyCloudDebugLogger.startTimer("sdk.fetch", { ...meta, init: request });
-
+      const { signal, release } = this.combineSignals(init?.signal);
+      const request = { ...init, signal };
       try {
-        const response = await fetchFn(url, request);
-        timer.stop({
-          ...meta,
-          ok: response.ok,
-          status: response.status,
-          statusText: response.statusText,
-        });
-        return response;
-      } catch (error) {
-        timer.stop({ ...meta, ok: false, error });
-        throw error;
+        if (!tinyCloudDebugLogger.isEnabled()) {
+          return await fetchFn(url, request);
+        }
+
+        const meta = { url, method: request.method ?? "GET" };
+        const timer = tinyCloudDebugLogger.startTimer("sdk.fetch", { ...meta, init: request });
+
+        try {
+          const response = await fetchFn(url, request);
+          timer.stop({
+            ...meta,
+            ok: response.ok,
+            status: response.status,
+            statusText: response.statusText,
+          });
+          return response;
+        } catch (error) {
+          timer.stop({ ...meta, ok: false, error });
+          throw error;
+        }
+      } finally {
+        release();
       }
     };
   }
 
-  private combineSignals(signal?: AbortSignal): AbortSignal {
-    if (!signal) return this._abortController.signal;
+  /** `release` detaches this request's listener from the long-lived context signal; call it once the request settles. */
+  private combineSignals(signal?: AbortSignal): { signal: AbortSignal; release: () => void } {
+    const own = this._abortController.signal;
+    if (!signal) return { signal: own, release: () => {} };
     const combined = new AbortController();
     const abort = (source: AbortSignal) => combined.abort(source.reason);
+    const onOwnAbort = () => abort(own);
     if (signal.aborted) {
       abort(signal);
-    } else if (this._abortController.signal.aborted) {
-      abort(this._abortController.signal);
+    } else if (own.aborted) {
+      abort(own);
     } else {
       signal.addEventListener("abort", () => abort(signal), { once: true });
-      this._abortController.signal.addEventListener(
-        "abort",
-        () => abort(this._abortController.signal),
-        { once: true },
-      );
+      own.addEventListener("abort", onOwnAbort, { once: true });
     }
-    return combined.signal;
+    return { signal: combined.signal, release: () => own.removeEventListener("abort", onOwnAbort) };
   }
 }
 

@@ -617,10 +617,13 @@ class ServiceGraphLifetime {
 
   readonly fetch: FetchFunction = (url, init) => {
     this.assertActive();
-    return this.fetchFn(url, {
-      ...init,
-      signal: this.combineSignals(init?.signal),
-    });
+    const { signal, release } = this.combineSignals(init?.signal);
+    try {
+      return this.fetchFn(url, { ...init, signal }).finally(release);
+    } catch (error) {
+      release();
+      throw error;
+    }
   };
 
   track(context: ServiceContext): ServiceContext {
@@ -663,17 +666,19 @@ class ServiceGraphLifetime {
     }
   }
 
-  private combineSignals(signal?: AbortSignal): AbortSignal {
-    if (!signal) return this.abortController.signal;
+  /** `release` detaches this request's listener from the long-lived graph signal; call it once the request settles. */
+  private combineSignals(signal?: AbortSignal): { signal: AbortSignal; release: () => void } {
+    const own = this.abortController.signal;
+    if (!signal) return { signal: own, release: () => {} };
     const combined = new AbortController();
     const abort = () => combined.abort();
-    if (signal.aborted || this.abortController.signal.aborted) {
+    if (signal.aborted || own.aborted) {
       abort();
     } else {
       signal.addEventListener("abort", abort, { once: true });
-      this.abortController.signal.addEventListener("abort", abort, { once: true });
+      own.addEventListener("abort", abort, { once: true });
     }
-    return combined.signal;
+    return { signal: combined.signal, release: () => own.removeEventListener("abort", abort) };
   }
 }
 
