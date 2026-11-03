@@ -150,7 +150,7 @@ for (const [kind, shape, advice, notAdvice] of [
   });
 }
 
-scenario('--rotate-key with an unreadable saved approval does not discard it, and says nothing about discarding it', async (ctx) => {
+scenario('--rotate-key with an unreadable saved approval refuses before rotating, leaves it untouched, and says nothing about discarding it', async (ctx) => {
   stubSpaceProbe(ctx.t, readySpace);
   await readyProfile(ctx);
   await ctx.request();
@@ -160,7 +160,9 @@ scenario('--rotate-key with an unreadable saved approval does not discard it, an
   // `--grant-file` with an empty file ends the command after the rotation (no prompt, no wait).
   fs.writeFileSync(homeFile('empty-grant.json'), '', { mode: 0o600 });
   const run = await ctx.courier('--rotate-key', '--grant-file', homeFile('empty-grant.json'));
-  assert.equal(readHome('profile.json').status, 'awaiting-grant', 'the key was rotated');
+  assert.equal(run.code, 1, 'refused');
+  assert.equal(readHome('profile.json').status, 'ready', 'the key was not rotated');
+  assert.match(run.stderr, /chmod 600/);
   assert.deepEqual(fs.readFileSync(homeFile('approval-pending.json')), bytes, 'left as it was');
   assert.doesNotMatch(run.stderr, /discards that approval/);
 });
