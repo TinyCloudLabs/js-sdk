@@ -1167,15 +1167,17 @@ test("a restored session whose empty-list re-post says nothing is never reported
   }
 });
 
-test("ensurePrimarySpaceHosted creates the space only when it is given not-hosted", async () => {
+test("ensurePrimarySpaceHosted creates only a not-hosted space and re-activates its unchanged restored delegation", async () => {
   const session = restoredTinyCloudSession();
+  const restoredHeaders = Object.fromEntries(new Headers(session.delegationHeader));
+  const restoredCid = session.delegationCid;
   const originalFetch = globalThis.fetch;
-  const delegates: number[] = [];
+  const delegates: Array<Record<string, string>> = [];
   globalThis.fetch = async (input, init) => {
     const url = String(input);
     if (url.includes("/peer/generate/")) return new Response("peer-id");
     if (url.endsWith("/delegate") && init?.method === "POST") {
-      delegates.push(delegates.length + 1);
+      delegates.push(Object.fromEntries(new Headers(init?.headers)));
       return new Response(JSON.stringify({ activated: [session.spaceId], skipped: [] }), { status: 200 });
     }
     throw new Error(`Unexpected fetch: ${url}`);
@@ -1200,7 +1202,11 @@ test("ensurePrimarySpaceHosted creates the space only when it is given not-hoste
 
     await auth.ensurePrimarySpaceHosted("not-hosted");
     expect(confirmations).toBe(1);
-    expect(delegates).toHaveLength(2); // the host delegation, then the re-activation
+    expect(delegates).toEqual([
+      { authorization: "Bearer host" },
+      restoredHeaders,
+    ]);
+    expect(auth.tinyCloudSession?.delegationCid).toBe(restoredCid);
     expect(auth.spaceHosting).toBe("hosted");
   } finally {
     globalThis.fetch = originalFetch;
