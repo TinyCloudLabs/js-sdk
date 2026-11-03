@@ -1,5 +1,33 @@
 # @tinycloudlabs/node-sdk
 
+## 3.11.0-beta.2
+
+### Patch Changes
+
+- dc48089: Stop leaking an abort listener per request: long waits no longer print `MaxListenersExceededWarning` on Node 20. The node's service graph left one abort listener on its lifetime signal for every request that carried its own signal, so a loop of more than 10 requests (a poll, a `--wait`) made Node 20 warn `11 abort listeners added to [AbortSignal]` on stderr and held every listener until sign-out. The request's signal is now combined with the graph's through `AbortSignal.any` where it exists (Node 20.3 and later, current browsers), which adds no listener to the graph's signal. Retiring the graph still cancels in-flight requests and a response body being read. On Node the combined signals stay reachable while the graph lives (about 65 B per request on Node 20 and 180 B on Node 22, against about 1 KB per request before). Runtimes without `AbortSignal.any` behave as before.
+
+  One visible change: an abort now reaches the request with the abort reason of the signal that fired, so a request timeout surfaces as `TIMEOUT` instead of `ABORTED`. Three callers act on the difference: a timed-out DataVault write now counts as an outcome unknown; a timed-out AccountService batch write now triggers the per-space reconcile fallback; KVService `batchPut` reports `TIMEOUT` instead of "not valid JSON". Hooks SSE, retries and DelegationManager are unchanged.
+
+  Details: TC-2418
+
+- Updated dependencies [dc48089]
+  - @tinycloud/sdk-services@3.11.0-beta.2
+  - @tinycloud/replica@0.4.4-beta.0
+  - @tinycloud/sdk-core@3.11.0-beta.2
+
+## 3.11.0-beta.1
+
+### Patch Changes
+
+- cb0c6ce: `createOwnerDelegation` no longer refuses an expiry more than 10 years away: any future date up to 9999-12-31T23:59:59Z is accepted. The same limit now guards every other place the SDK writes a wallet-signed expiry (the session lifetime from `sessionExpirationMs`, runtime grants, wallet-signed delegations, `createSubDelegation`, activating a received delegation, the root delegation of a share link, and the `expiresAt` of `authorizeShareDeliveryV3`), and a token signed by the session key (`delegateTo`, agent and share delegations) is refused past 2255-06-05T23:47:34Z.
+
+  A value past a limit, before 1970, or a lifetime no date can hold (such as `ms("99999999y")`), is refused with a message that names the date and the cause, before the wallet is asked to sign and before the WASM is called. It no longer surfaces as `RangeError: Invalid time value`, `the 'year' component could not be parsed` or `Out of valid microsecond-precision range of NumericDate`.
+
+  Details: TC-2272
+
+- Updated dependencies [cb0c6ce]
+  - @tinycloud/sdk-core@3.11.0-beta.1
+
 ## 3.11.0-beta.0
 
 ### Minor Changes

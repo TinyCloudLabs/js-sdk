@@ -120,6 +120,22 @@ export function writeSecure(file: string, obj: unknown): void {
   }
 }
 
+/**
+ * The text of a regular file of this user, or undefined when there is none: a symlink is never followed (O_NOFOLLOW), a FIFO or device
+ * never blocks the open (O_NONBLOCK) and is refused by `fstat` before any read. Read-only callers use it; it never changes the file.
+ */
+export function readRegularFile(file: string): string | undefined {
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.uid !== process.getuid?.()) return undefined;
+    return fs.readFileSync(fd, 'utf8');
+  } catch { return undefined; } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
 export function readSecure<T>(name: string, required: boolean, home = profileDir()): T | undefined {
   const file = profilePath(name, home);
   if (!fs.existsSync(file)) {

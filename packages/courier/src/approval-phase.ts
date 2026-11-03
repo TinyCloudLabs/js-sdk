@@ -75,10 +75,11 @@ export function readApprovalEntry(): ApprovalEntry {
   if ((mode & 0o077) !== 0) return { kind: 'unreadable', reason: `${file} has mode ${mode.toString(8)}, not 600`, fix: `chmod 600 ${file}` };
   let text: string;
   try { text = fs.readFileSync(file, 'utf8'); } catch (error) {
-    return { kind: 'unreadable', reason: `${file} cannot be read (${(error as Error).message})`, fix: `chmod 600 ${file}` };
+    return { kind: 'unreadable', reason: `${file} cannot be read (${(error as NodeJS.ErrnoException).code ?? 'read error'})`, fix: `chmod 600 ${file}` };
   }
   let pending: PendingGrantRequest;
-  try { pending = JSON.parse(text) as PendingGrantRequest; } catch (error) { return { kind: 'corrupt', reason: (error as Error).message }; }
+  // The parser's message quotes the text around the failure, and this file holds `relayPrivateKey`: the reason is fixed, never the message.
+  try { pending = JSON.parse(text) as PendingGrantRequest; } catch { return { kind: 'corrupt', reason: 'the file is not valid JSON' }; }
   if (pending && typeof pending.version === 'number' && pending.version > 1) {
     // Written by a newer Courier: not corrupt, and not ours to set aside. Use that Courier, or move the file away by hand.
     return { kind: 'unreadable', reason: `${file} was written by a newer Courier (record version ${pending.version})`, fix: `mv ${file} ${file}.newer` };

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { DEAD_PID } from './support/review-fixture.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -194,7 +195,7 @@ function arrange(inputs) {
   if (inputs.pendingGrant) {
     put('pending-grant.json', { v: 1, records: [{ codeHash: 'h', expiresAt: '2999-01-01T00:00:00.000Z', savedAt: 'now', delegation: { delegationCid: 'c' } }] });
   }
-  if (inputs.rotationTemp) put('rotation.json.4242.0a1b2c3d4e5f.tmp', { v: 1, key: { v: 1, jwk: {}, did: 'did:key:z6Mn', createdAt: 'now' }, profile: {} });
+  if (inputs.rotationTemp) put(`rotation.json.${DEAD_PID}.0a1b2c3d4e5f.tmp`, { v: 1, key: { v: 1, jwk: {}, did: 'did:key:z6Mn', createdAt: 'now' }, profile: {} });
   if (inputs.rotation) put('rotation.json', { v: 1, key: { v: 1, jwk: {}, did: 'did:key:z6Mn', createdAt: 'now' }, profile: {} });
   switch (inputs.approval) {
     case 'open': put('approval-pending.json', APPROVAL); break;

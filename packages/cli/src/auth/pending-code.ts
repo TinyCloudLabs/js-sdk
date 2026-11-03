@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { profilePath } from "@tinycloud/operations/state";
 import { writeJsonDurable } from "../config/storage.js";
 import type { DelegationData } from "./browser-auth.js";
+import { isCid } from "./refusal.js";
 import { sessionExpiresAt } from "./scoped-login.js";
 
 /**
@@ -102,7 +103,8 @@ export async function dropPendingDelegationFor(profile: string, code: string): P
  */
 export async function dropCommittedDelegation(profile: string, delegation: object): Promise<void> {
   const committed = "delegationCid" in delegation ? delegation.delegationCid : "cid" in delegation ? delegation.cid : undefined;
-  if (typeof committed !== "string") return;
+  // A CID from an unverified result that does not look like one matches no record.
+  if (!isCid(committed)) return;
   try {
     const records = await live(profile);
     const kept = records.filter((record) => record.delegation.delegationCid !== committed);

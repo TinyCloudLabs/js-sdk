@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdirOwnerOnly, profileDir } from './profile.js';
+import { mkdirOwnerOnly, profileDir, readRegularFile } from './profile.js';
 import type { GrantPayload } from './grant.js';
 
 /**
@@ -96,7 +96,9 @@ function store(records: PendingRecord[]): void {
 /** The delegations of the unexpired records. Read-only: unlike the readers around it, it never removes, repairs or rewrites anything. */
 export function liveRedeemedDelegations(): GrantPayload[] {
   try {
-    const parsed = JSON.parse(fs.readFileSync(pendingPath(), 'utf8')) as PendingFile;
+    const text = readRegularFile(pendingPath());
+    if (text === undefined) return [];
+    const parsed = JSON.parse(text) as PendingFile;
     if (parsed.v !== 1 || !Array.isArray(parsed.records)) return [];
     return parsed.records.filter(isRecord).filter((record) => Date.parse(record.expiresAt) > Date.now()).map((record) => record.delegation);
   } catch {

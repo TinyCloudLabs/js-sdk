@@ -122,6 +122,12 @@ export async function cmdInit(args: ParsedArgs) {
   if (state.action === 'fix-profile' && !args.has('rotate-key')) { loadProfile(); fail('bad-profile', adviceFor(state)); }
   // A saved approval without its profile or key is left as it is; `--rotate-key` starts over with a new key.
   if (state.action === 'refuse' && !args.has('rotate-key')) fail('approval-orphaned', adviceFor(state));
+  // A grant.json that is not owner-only is a saved grant that cannot be used yet: it is neither replaced nor counted as missing. A rotation
+  // discards the grant by design, so it goes on.
+  if (state.grantMode && !args.has('rotate-key')) {
+    const file = path.join(profileDir(), 'grant.json');
+    fail('profile-permissions', `${file} must be owner-only (mode 0600); found mode ${state.grantMode}. It holds a saved grant, so nothing was changed. Run \`chmod 600 ${file}\`, then run the command again.`);
+  }
   const HELD_APPROVAL_KEPT = `The saved approval request holds an approval from the owner and was kept: run \`${cmd('init --wait')}\` to collect or acknowledge it.`;
   if (args.has('resume')) {
     if (!profileExists()) fail('no-grant', `No Courier profile to resume. Run \`${cmd('init')}\` and approve a grant first.`);
@@ -148,7 +154,8 @@ export async function cmdInit(args: ParsedArgs) {
 
   const rotate = args.has('rotate-key');
   // A writer must learn that the saved approval is unreadable BEFORE the key, grant or profile is changed.
-  if (args.has('request') || args.has('wait')) assertPendingReadable();
+  // Also for a plain `--rotate-key`: an approval that cannot be read may be bound to the old key, and a rotation would leave it there.
+  if (args.has('request') || args.has('wait') || rotate) assertPendingReadable();
   const prior = profileExists() && !rotate ? loadProfile() : undefined;
   // A renewal is asked for with `--request`; `--wait` only collects. The derived state says when `--wait` goes on.
   if (args.has('wait') && !rotate && !state.wait) fail('usage', adviceFor(state));

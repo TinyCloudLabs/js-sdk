@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
+import { DEAD_PID } from './support/review-fixture.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { cmdInit } from '../dist/commands.js';
 import { parseArgs } from '../dist/args.js';
 import { deriveState } from '../dist/state.js';
 import { loadProfile } from '../dist/profile.js';
+import { ed25519DidKey, ed25519PublicKey } from '../dist/did-key.js';
 import {
   Crash, crashAtWrite, homeFile, missingSpace, readHome, readySpace, scenario, signedGrant, stubSpaceProbe,
 } from './support/approval-fixture.mjs';
@@ -34,8 +36,8 @@ async function readyProfile({ t, request, courier }) {
 
 // ---- (4) a key-bearing file that cannot be parsed is reported without its content ----
 
-// A recognizable high-entropy private key part (43 base64url characters, like an Ed25519 `d`).
-const SECRET = 'q7Vn2xK9mT4rZ8wB1cL5hJ0dFgY3sA6uEiO-PpRkXe_';
+// A recognizable high-entropy private key part (43 base64url characters, canonical like an Ed25519 `d`).
+const SECRET = 'q7Vn2xK9mT4rZ8wB1cL5hJ0dFgY3sA6uEiO-PpRkXe8';
 /** The first 8-character window of the secret found in `text`, if any. */
 const secretFragment = (text) => {
   for (let at = 0; at + 8 <= SECRET.length; at += 1) if (text.includes(SECRET.slice(at, at + 8))) return SECRET.slice(at, at + 8);
@@ -150,7 +152,7 @@ for (const [kind, shape, advice, notAdvice] of [
   });
 }
 
-scenario('--rotate-key with an unreadable saved approval does not discard it, and says nothing about discarding it', async (ctx) => {
+scenario('--rotate-key with an unreadable saved approval refuses before rotating, leaves it untouched, and says nothing about discarding it', async (ctx) => {
   stubSpaceProbe(ctx.t, readySpace);
   await readyProfile(ctx);
   await ctx.request();
@@ -160,7 +162,9 @@ scenario('--rotate-key with an unreadable saved approval does not discard it, an
   // `--grant-file` with an empty file ends the command after the rotation (no prompt, no wait).
   fs.writeFileSync(homeFile('empty-grant.json'), '', { mode: 0o600 });
   const run = await ctx.courier('--rotate-key', '--grant-file', homeFile('empty-grant.json'));
-  assert.equal(readHome('profile.json').status, 'awaiting-grant', 'the key was rotated');
+  assert.equal(run.code, 1, 'refused');
+  assert.equal(readHome('profile.json').status, 'ready', 'the key was not rotated');
+  assert.match(run.stderr, /chmod 600/);
   assert.deepEqual(fs.readFileSync(homeFile('approval-pending.json')), bytes, 'left as it was');
   assert.doesNotMatch(run.stderr, /discards that approval/);
 });
@@ -298,10 +302,12 @@ scenario('rotating with no redeemed delegation saved prints no delegation warnin
 
 // ---- (6) a journal that parses but is not a rotation is refused before anything is replayed ----
 
-const NEW_DID = 'did:key:z6MkNewAgentKeyForTheJournal';
+// The journal's key is proven before replay (Ed25519 JWK of 32-byte parts, did:key derived from `x`), so the stand-in is a well-formed one.
+const NEW_PUBLIC = ed25519PublicKey(Buffer.from(SECRET, 'base64url'));
+const NEW_DID = ed25519DidKey(NEW_PUBLIC);
 const goodJournal = () => ({
   v: 1,
-  key: { v: 1, jwk: { kty: 'OKP', crv: 'Ed25519', x: 'public-part', d: SECRET }, did: NEW_DID, createdAt: '2026-01-01T00:00:00.000Z' },
+  key: { v: 1, jwk: { kty: 'OKP', crv: 'Ed25519', x: NEW_PUBLIC.toString('base64url'), d: SECRET }, did: NEW_DID, createdAt: '2026-01-01T00:00:00.000Z' },
   profile: {
     version: 3, host: 'https://node.test', openkeyHost: 'https://openkey.test', label: 'l', courierDid: NEW_DID, status: 'awaiting-grant', peers: {},
   },
@@ -335,7 +341,7 @@ const MALFORMED = {
   'null': null,
 };
 
-const STRAY_KEY_TEMP = 'key.json.4242.0a1b2c3d4e5f.tmp';
+const STRAY_KEY_TEMP = `key.json.${DEAD_PID}.0a1b2c3d4e5f.tmp`;
 
 /** A ready profile with an open request, a saved redeemed delegation, an invalid journal and a stray key temp: all must stay as they are. */
 async function plantInvalidJournal(ctx, journal) {
@@ -397,7 +403,7 @@ scenario('a stray key temp that is a hard link to another file is refused and th
   ctx.errors.length = 0;
   const run = await ctx.courier('--request');
   assert.notEqual(run.code, 0, run.stderr);
-  assert.match(run.stderr, /key\.json\.4242/);
+  assert.match(run.stderr, new RegExp(`key\\.json\\.${DEAD_PID}`));
   assert.deepEqual(snapshot(), before, 'no file was overwritten or removed');
 });
 

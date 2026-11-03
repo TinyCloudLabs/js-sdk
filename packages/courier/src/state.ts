@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { cmd } from './program.js';
-import { hasProfileFields, isAgentKey, loadGrant, loadKey, profileDir, readSecure, saveKey, saveProfile, writeSecure } from './profile.js';
+import { hasProfileFields, isAgentKey, loadGrant, loadKey, profileDir, readRegularFile, readSecure, saveKey, saveProfile, writeSecure } from './profile.js';
 import type { AgentKey, Profile } from './profile.js';
 import { checkApprovalResultBinding, openRelayResult } from '@tinycloud/share-envelope/links';
 import { APPROVAL_FILE, approvalPhase, clearPending, lacksOwner, readApprovalEntry, resultEnvelopeOf } from './approval-phase.js';
@@ -10,6 +10,7 @@ import { bareDid, siweTimes } from './authority.js';
 import { dropPendingDelegation, hasLivePending, liveRedeemedDelegations } from './pending.js';
 import { REVOKE_URL } from './grant-refusal.js';
 import { CourierError } from './errors.js';
+import { base64url32, ed25519DidKey, ed25519PublicKey } from './did-key.js';
 
 /**
  * One derivation of where `init` stands, shared by every init mode.
@@ -28,10 +29,11 @@ import { CourierError } from './errors.js';
  *   (5) the discard warning is printed, then rotation.json is removed (its only deletion point).
  * Before the rename in (1) nothing but a stray temp file can differ from the old state. From then on every init mode rolls forward
  * from the journal alone; every step is idempotent. A process killed while writing a temp file leaves it behind (0600, holding a
- * key that was never installed): `recoverInterrupted` zero-fills and removes it.
+ * key that may or may not have been installed, or an approval's relay key and result): `recoverInterrupted` zero-fills and removes it, unless
+ * the process that named it is still running.
  */
 const ROTATION_FILE = 'rotation.json';
-const STRAY_TEMP = /^(?:rotation|key)\.json\.\d+\.[0-9a-f]{12}\.tmp$/;
+const STRAY_TEMP = /^(?:rotation|key|approval-pending)\.json\.(\d+)\.[0-9a-f]{12}\.tmp$/;
 
 export type ApprovalState = 'none' | 'open' | 'held' | 'committed' | 'unreadable' | 'corrupt';
 /** `unreadable`: profile.json exists and cannot be read (permissions or content). It is never the same as `absent`. */
@@ -59,20 +61,42 @@ export interface DerivedState {
   inputs: StateInputs;
   state: StateName;
   action: StateAction;
-  /** A stray key-bearing temp file is on disk and `recoverInterrupted` removes it. */
+  /** A stray key-bearing temp file whose writer is gone is on disk and `recoverInterrupted` removes it. */
   cleanTemp: boolean;
   /** `init --wait` goes on; when false it advises `adviceFor(state)`. */
   wait: boolean;
   /** Warnings about files that were read and not used (printed once by the init mode). */
   notes: string[];
+  /** Set (octal mode) when grant.json is a regular file that is not owner-only: it is a saved grant, unusable until its mode is fixed. */
+  grantMode?: string;
+}
+
+/** The mode of a grant.json that is a regular file and not owner-only, else undefined. */
+function looseGrantMode(): string | undefined {
+  try {
+    const stat = fs.lstatSync(path.join(profileDir(), 'grant.json'));
+    return stat.isFile() && (stat.mode & 0o077) !== 0 ? (stat.mode & 0o777).toString(8) : undefined;
+  } catch { return undefined; }
 }
 
 /**
- * A saved grant is a regular, owner-only grant.json that parses and has the shape of a grant (the existing `loadGrant`). A truncated or
- * corrupt file, or a path that is not a file, is not a saved grant: it is left as it is, counted as absent, and reported once.
+ * A saved grant is a regular grant.json that parses and has the shape of a grant (the existing `loadGrant`). A truncated or corrupt file,
+ * or a path that is not a file, is not a saved grant: it is left as it is, counted as absent, and reported once. A grant.json that has the
+ * shape of a grant but a loose mode IS a saved grant (it is never counted absent); `DerivedState.grantMode` tells init to stop until
+ * its mode is fixed.
  */
 function savedGrant(notes: string[]): boolean {
-  if (!fs.existsSync(path.join(profileDir(), 'grant.json'))) return false;
+  const file = path.join(profileDir(), 'grant.json');
+  if (!fs.existsSync(file)) return false;
+  if (looseGrantMode()) {
+    // Inspect the content before any mode advice: only a file that is a grant has a mode worth fixing.
+    try {
+      const grant = JSON.parse(readRegularFile(file) ?? 'null') as { v?: unknown; delegationHeader?: { Authorization?: unknown }; delegationCid?: unknown; siwe?: unknown } | null;
+      if (grant?.v === 1 && !!grant.delegationHeader?.Authorization && !!grant.delegationCid && !!grant.siwe) return true;
+    } catch { /* not JSON: reported below, without the parser's message */ }
+    notes.push('grant.json is not a usable saved grant, so it is treated as not saved and left as it is (it is corrupt or not a grant).');
+    return false;
+  }
   try {
     return loadGrant() !== undefined;
   } catch (error) {
@@ -154,8 +178,34 @@ function readProfileFields(): { status: ProfileStatus; spacePending: boolean } {
   return { status: 'unreadable', spacePending: false };
 }
 
-function strayTemps(): string[] {
-  try { return fs.readdirSync(profileDir()).filter((name) => STRAY_TEMP.test(name)).sort(); } catch { return []; }
+/** `text` as one POSIX shell word. */
+function shellQuote(text: string): string {
+  return `'${text.replace(/'/g, `'\\''`)}'`;
+}
+
+/** Whether the process that named a temp file may still be writing it. This process is not: its writes are synchronous and finished. */
+function writerAlive(pid: number): boolean {
+  if (pid === process.pid) return false;
+  try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; }
+}
+
+/**
+ * The stray temp files, classified from ONE directory listing with ONE liveness probe per file: `dead` (writer gone: the only ones
+ * `recoverInterrupted` removes) and `live` (writer may still be running: kept, because between its fsync and its rename the file is live).
+ * A caller acts on this one snapshot, so a process that dies or whose pid is reused between two probes cannot split the decision.
+ */
+function classifyTemps(): { dead: string[]; live: { name: string; pid: number }[] } {
+  const dead: string[] = [];
+  const live: { name: string; pid: number }[] = [];
+  let names: string[] = [];
+  try { names = fs.readdirSync(profileDir()).sort(); } catch { /* no home yet */ }
+  for (const name of names) {
+    const match = STRAY_TEMP.exec(name);
+    if (!match) continue;
+    const pid = Number(match[1]);
+    if (writerAlive(pid)) live.push({ name, pid }); else dead.push(name);
+  }
+  return { dead, live };
 }
 
 /** The one place the inputs are read. Reads only. `notes` are warnings the init mode prints once; nothing is repaired or removed. */
@@ -170,14 +220,15 @@ export function readInputs(notes: string[] = []): StateInputs {
     pendingGrant: hasLivePending(),
     approval: approvalState(),
     rotation: fs.existsSync(rotationPath()),
-    rotationTemp: strayTemps().length > 0,
+    rotationTemp: classifyTemps().dead.length > 0,
   };
 }
 
 export function deriveState(): DerivedState {
   const notes: string[] = [];
   const inputs = readInputs(notes);
-  return { inputs, notes, ...classifyState(inputs) };
+  const grantMode = inputs.grant ? looseGrantMode() : undefined;
+  return { inputs, notes, ...(grantMode ? { grantMode } : {}), ...classifyState(inputs) };
 }
 
 /** Which mode to restore depends on what is loose: the profile directory is 0700, a private file inside it 0600. */
@@ -226,7 +277,20 @@ export function adviceFor(d: Pick<DerivedState, 'state' | 'inputs'>): string {
  */
 export function recoverInterrupted(): void {
   finishRotation();
-  for (const name of strayTemps()) scrub(path.join(profileDir(), name));
+  const temps = classifyTemps();
+  for (const name of temps.dead) scrub(path.join(profileDir(), name));
+  for (const { name, pid } of temps.live) {
+    const file = path.join(profileDir(), name);
+    // A running pid does not excuse a file that is not a plain single-link file of this user: that is refused, as for a dead writer.
+    let stat: fs.Stats;
+    try { stat = fs.lstatSync(file); } catch (error) {
+      // The writer finished and renamed it into place after the listing: it has moved, there is nothing to keep or refuse.
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw error;
+    }
+    if (!isPlain(stat)) throw refuseStray(file);
+    console.error(`warning: ${name} was kept, not deleted, and may contain private-key material (an agent key, or an approval's relay key and result). Process ${pid}, which named it, is running: either a Courier process still writing it, or an unrelated process that was given the same pid after Courier died (pid reuse); Courier cannot tell which. Check with \`ps -p ${pid} -o pid=,args=\`; only if that is not a Courier process, remove the file with \`rm -- ${shellQuote(file)}\`.`);
+  }
 }
 
 /**
@@ -234,15 +298,16 @@ export function recoverInterrupted(): void {
  * open descriptor so a swap between the check and the open is caught: its bytes are overwritten with zeros (best effort: a copy-on-write or
  * journaling filesystem may keep old blocks) and it is unlinked. Anything else is left as it is and reported.
  */
+const isPlain = (stat: fs.Stats): boolean => stat.isFile() && stat.uid === process.getuid?.() && stat.nlink === 1;
+const refuseStray = (file: string): CourierError => new CourierError('stray-temp', `${file} is not a plain file of this user with one link, so it was left as it is. Remove it by hand, then run the command again.`);
+
 function scrub(file: string): void {
-  const refuse = () => new CourierError('stray-temp', `${file} is not a plain file of this user with one link, so it was left as it is. Remove it by hand, then run the command again.`);
-  const plain = (stat: fs.Stats) => stat.isFile() && stat.uid === process.getuid?.() && stat.nlink === 1;
   const before = fs.lstatSync(file);
-  if (!plain(before)) throw refuse();
+  if (!isPlain(before)) throw refuseStray(file);
   const fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_NOFOLLOW);
   try {
     const open = fs.fstatSync(fd);
-    if (!plain(open) || open.dev !== before.dev || open.ino !== before.ino) throw refuse();
+    if (!isPlain(open) || open.dev !== before.dev || open.ino !== before.ino) throw refuseStray(file);
     fs.writeSync(fd, Buffer.alloc(open.size));
     fs.fsyncSync(fd);
   } finally {
@@ -278,6 +343,29 @@ interface RotationJournal {
   grantExpiresAt?: string;
   /** Redeemed delegations saved for the old key (pending-grant.json), removed in step 4. Not secrets: no header, no signature. */
   discardedGrants?: DiscardedGrant[];
+  /** Redeemed delegations that could not be tied to a key because key.json was unreadable: kept in pending-grant.json, reported only. */
+  unmatchedGrants?: DiscardedGrant[];
+  /** The installed grant.json (CID and expiry only) removed in step 4: it stays valid at the node until it expires. */
+  installedGrant?: DiscardedGrant;
+}
+
+const validGrantList = (list: unknown): boolean => Array.isArray(list)
+  && list.every((g) => !!g && typeof g === 'object' && typeof g.delegationCid === 'string' && g.delegationCid !== '' && (g.expiresAt === undefined || typeof g.expiresAt === 'string'));
+
+/**
+ * Whether a key is an Ed25519 agent key as `newAgentKey` makes one: a plain-object JWK with kty OKP, crv Ed25519, and `x` and `d` as
+ * unpadded base64url text of exactly 32 bytes, where `x` is the public key of `d`, and the `did:key` is the one derived from `x`
+ * (a `#fragment`, when present, names the same key).
+ */
+function hasKeyProof(key: AgentKey): boolean {
+  const jwk = key.jwk;
+  if (Array.isArray(jwk) || jwk.kty !== 'OKP' || jwk.crv !== 'Ed25519') return false;
+  const x = base64url32(jwk.x);
+  const d = base64url32(jwk.d);
+  if (!x || !d || !x.equals(ed25519PublicKey(d))) return false;
+  const did = ed25519DidKey(x);
+  const parts = key.did.split('#');
+  return parts.length <= 2 && parts[0] === did && (parts.length === 1 || parts[1] === did.slice('did:key:'.length));
 }
 
 /** What is wrong with a parsed journal, or undefined when it is a rotation this code may replay. Never includes any of its content. */
@@ -285,17 +373,16 @@ function journalProblem(journal: unknown): string | undefined {
   if (!journal || typeof journal !== 'object' || Array.isArray(journal)) return 'it is not an object';
   const j = journal as Partial<RotationJournal>;
   if (j.v !== 1) return 'its version is not 1';
-  if (!isAgentKey(j.key)) return 'its key is not a valid agent key';
+  if (!isAgentKey(j.key) || !hasKeyProof(j.key)) return 'its key is not a valid agent key';
   if (!hasProfileFields(j.profile ?? null)) return 'its profile is not a complete current profile';
   if (j.profile?.status !== 'awaiting-grant') return 'its profile is not awaiting-grant';
   if (j.profile.courierDid !== bareDid(j.key.did)) return 'its profile does not belong to its key';
   if (typeof j.discardApproval !== 'boolean' || typeof j.grantedResult !== 'boolean') return 'its approval facts are not booleans';
   if (j.delegationCid !== undefined && typeof j.delegationCid !== 'string') return 'its delegation is not text';
   if (j.grantExpiresAt !== undefined && typeof j.grantExpiresAt !== 'string') return 'its grant expiry is not text';
-  if (j.discardedGrants !== undefined
-    && (!Array.isArray(j.discardedGrants) || j.discardedGrants.some((g) => !g || typeof g.delegationCid !== 'string' || g.delegationCid === '' || (g.expiresAt !== undefined && typeof g.expiresAt !== 'string')))) {
-    return 'its discarded grants are not a list of delegations';
-  }
+  if (j.discardedGrants !== undefined && !validGrantList(j.discardedGrants)) return 'its discarded grants are not a list of delegations';
+  if (j.unmatchedGrants !== undefined && !validGrantList(j.unmatchedGrants)) return 'its unmatched grants are not a list of delegations';
+  if (j.installedGrant !== undefined && !validGrantList([j.installedGrant])) return 'its installed grant is not a delegation';
   return undefined;
 }
 
@@ -320,24 +407,52 @@ async function approvalFacts(): Promise<Pick<RotationJournal, 'discardApproval' 
   return { discardApproval: true, grantedResult, ...(delegationCid ? { delegationCid } : {}), ...(grantExpiresAt ? { grantExpiresAt } : {}) };
 }
 
-/** Redeemed delegations saved for the OLD agent key: they would be useless after the rotation and may be live grants. */
-function oldKeyDelegations(): DiscardedGrant[] {
-  let old: AgentKey;
-  try { old = loadKey(); } catch { return []; }
-  const found: DiscardedGrant[] = [];
+/** The non-secret facts (CID, expiry) of a saved delegation, or undefined when it names no CID. */
+function grantFacts(cid: unknown, expiresAt: () => Date | undefined): DiscardedGrant | undefined {
+  if (typeof cid !== 'string' || cid === '') return undefined;
+  let until: string | undefined;
+  try { until = expiresAt()?.toISOString(); } catch { /* unknown */ }
+  return { delegationCid: cid, ...(until ? { expiresAt: until } : {}) };
+}
+
+/**
+ * Redeemed delegations saved for the OLD agent key: they would be useless after the rotation and may be live grants (`discarded`).
+ * When key.json cannot be read no delegation can be tied to a key: they are `unmatched`, kept as they are and reported, never dropped.
+ */
+function oldKeyDelegations(): { discarded: DiscardedGrant[]; unmatched: DiscardedGrant[] } {
+  let old: AgentKey | undefined;
+  try { old = loadKey(); } catch { old = undefined; }
+  const discarded: DiscardedGrant[] = [];
+  const unmatched: DiscardedGrant[] = [];
   for (const delegation of liveRedeemedDelegations()) {
-    try { assertBoundToKey(delegation, old); } catch { continue; }
-    if (typeof delegation.delegationCid !== 'string' || delegation.delegationCid === '') continue;
-    let expiresAt: string | undefined;
-    try { expiresAt = siweTimes(delegation.siwe).expiresAt?.toISOString(); } catch { /* unknown */ }
-    found.push({ delegationCid: delegation.delegationCid, ...(expiresAt ? { expiresAt } : {}) });
+    if (old) {
+      try { assertBoundToKey(delegation, old); } catch { continue; }
+    }
+    const facts = grantFacts(delegation.delegationCid, () => siweTimes(delegation.siwe).expiresAt);
+    if (facts) (old ? discarded : unmatched).push(facts);
   }
-  return found;
+  return { discarded, unmatched };
+}
+
+/** The installed grant.json's CID and expiry, read before the rotation removes it. Reads it even at a loose mode; nothing secret is kept. */
+function installedGrantFacts(): DiscardedGrant | undefined {
+  try {
+    const grant = JSON.parse(readRegularFile(path.join(profileDir(), 'grant.json')) ?? 'null') as { delegationCid?: unknown; siwe?: unknown; expiresAt?: unknown } | null;
+    return grantFacts(grant?.delegationCid, () => {
+      if (typeof grant?.siwe === 'string') return siweTimes(grant.siwe).expiresAt;
+      return typeof grant?.expiresAt === 'string' ? new Date(grant.expiresAt) : undefined;
+    });
+  } catch { return undefined; }
 }
 
 /** Steps 1-5. `profile` is the complete new profile. */
 export async function rotateKey(key: AgentKey, profile: Profile): Promise<void> {
-  const journal: RotationJournal = { v: 1, key, profile, ...(await approvalFacts()), discardedGrants: oldKeyDelegations() };
+  const { discarded, unmatched } = oldKeyDelegations();
+  const installed = installedGrantFacts();
+  const journal: RotationJournal = {
+    v: 1, key, profile, ...(await approvalFacts()), discardedGrants: discarded,
+    ...(unmatched.length > 0 ? { unmatchedGrants: unmatched } : {}), ...(installed ? { installedGrant: installed } : {}),
+  };
   writeSecure(rotationPath(), journal);
   applyRotation(journal);
 }
@@ -360,6 +475,8 @@ function applyRotation(journal: RotationJournal): void {
   syncDir();
 }
 
+const untilText = (expiresAt: string | undefined): string => (expiresAt ? `, valid until ${expiresAt}` : '');
+
 /** Printed from the journal, so any init mode that finishes the rotation, also after a crash, says the same thing. */
 function warnDiscarded(journal: RotationJournal): void {
   if (journal.discardApproval) {
@@ -367,12 +484,19 @@ function warnDiscarded(journal: RotationJournal): void {
   }
   if (journal.discardApproval && journal.grantedResult) {
     const named = journal.delegationCid ? ` (delegation ${journal.delegationCid})` : '';
-    const until = journal.grantExpiresAt ? `, valid until ${journal.grantExpiresAt}` : '';
-    console.error(`That request was already granted by the owner${named}, so a live grant may exist${until}. This agent cannot revoke it; the owner can revoke it at ${REVOKE_URL}.`);
+    console.error(`That request was already granted by the owner${named}, so a live grant may exist${untilText(journal.grantExpiresAt)}. This agent cannot revoke it; the owner can revoke it at ${REVOKE_URL}.`);
   }
   for (const grant of journal.discardedGrants ?? []) {
-    const until = grant.expiresAt ? `, valid until ${grant.expiresAt}` : '';
-    console.error(`A redeemed grant saved for the old agent key and not installed (delegation ${grant.delegationCid}) was discarded by this key rotation. A live grant may exist${until}. This agent cannot revoke it; the owner can revoke it at ${REVOKE_URL}.`);
+    console.error(`A redeemed grant saved for the old agent key and not installed (delegation ${grant.delegationCid}) was discarded by this key rotation. A live grant may exist${untilText(grant.expiresAt)}. This agent cannot revoke it; the owner can revoke it at ${REVOKE_URL}.`);
+  }
+  for (const grant of journal.unmatchedGrants ?? []) {
+    console.error(`A redeemed grant saved in pending-grant.json (delegation ${grant.delegationCid}) could not be matched to the old agent key (key.json cannot be read), so it was kept as it is. A live grant may exist${untilText(grant.expiresAt)}. This agent cannot revoke it; the owner can revoke it at ${REVOKE_URL}.`);
+  }
+  // The grant installed for the old key was removed, not revoked: the invoking command and one that finishes the rotation both say so.
+  if (journal.installedGrant) {
+    const { delegationCid, expiresAt } = journal.installedGrant;
+    const until = expiresAt ? `until ${expiresAt}` : 'until it expires';
+    console.error(`The installed grant for the old agent key (delegation ${delegationCid}) was removed by this key rotation. It is not revoked: it may still be valid ${until}. This agent cannot revoke it; the owner can revoke it at ${REVOKE_URL}.`);
   }
 }
 
