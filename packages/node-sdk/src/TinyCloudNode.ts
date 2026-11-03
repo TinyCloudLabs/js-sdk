@@ -212,6 +212,8 @@ import {
 } from "@tinycloud/sdk-core";
 import {
   parsePermissionHint,
+  linkAbortSignal,
+  releaseWithBody,
   tinyCloudDebugLogger,
   type RequestLogReader,
   type RequestSink,
@@ -615,13 +617,21 @@ class ServiceGraphLifetime {
     return this.invokeAnyFn(session, entries, facts);
   };
 
+  // The graph signal stays linked until the response body is done, so retiring the graph still cancels a body being
+  // read; `releaseWithBody` unlinks it then.
   readonly fetch: FetchFunction = (url, init) => {
     this.assertActive();
-    const { signal, release } = this.combineSignals(init?.signal);
+    const { signal, release } = linkAbortSignal(this.abortController.signal, init?.signal);
     try {
-      return this.fetchFn(url, { ...init, signal }).finally(release);
+      return this.fetchFn(url, { ...init, signal }).then(
+        (response) => releaseWithBody(response, release),
+        (error: unknown) => {
+          release();
+          throw error;
+        },
+      );
     } catch (error) {
-      release?.();
+      release();
       throw error;
     }
   };
@@ -664,32 +674,6 @@ class ServiceGraphLifetime {
     if (this.retired) {
       throw new Error("Service graph has been retired: its session was replaced or signed out.");
     }
-  }
-
-  /**
-   * Combine the request's own signal with the graph's lifetime signal. The result is the signal given to `fetch`
-   * for the request's whole life, so retiring the graph (sign-out, session replaced) still cancels a response body
-   * that is being read.
-   *
-   * Where `AbortSignal.any` exists it holds that link without a listener on the long-lived signal. It carries the
-   * source's own abort reason; the listener fallback aborts without one. Trade-off: on Node its composites stay
-   * reachable while the long-lived signal lives (about 65 B per request on Node 20, 180 B on Node 22, against
-   * about 1 KB for a listener that is never removed). Where it is missing, a listener is added instead and
-   * `release` removes it; call it once the request settles.
-   */
-  private combineSignals(signal?: AbortSignal): { signal: AbortSignal; release?: () => void } {
-    const own = this.abortController.signal;
-    if (!signal) return { signal: own };
-    if (typeof AbortSignal.any === "function") return { signal: AbortSignal.any([signal, own]) };
-    const combined = new AbortController();
-    const abort = () => combined.abort();
-    if (signal.aborted || own.aborted) {
-      abort();
-    } else {
-      signal.addEventListener("abort", abort, { once: true });
-      own.addEventListener("abort", abort, { once: true });
-    }
-    return { signal: combined.signal, release: () => own.removeEventListener("abort", abort) };
   }
 }
 

@@ -22,6 +22,7 @@ import { tinyCloudDebugLogger } from "./debug";
 import { nodeRetryError } from "./errors";
 import { abortableSleep } from "./sleep";
 import { projectDiagnosticData } from "./diagnostics";
+import { linkAbortSignal, releaseWithBody } from "./abortLink";
 
 /**
  * Configuration options for ServiceContext.
@@ -420,11 +421,11 @@ export class ServiceContext implements IServiceContext {
     const policy = this._retryPolicy;
     const startedAt = Date.now();
     let backoffMs = 0;
-    let combined: { signal: AbortSignal; release?: () => void } | undefined;
+    let combined: { signal: AbortSignal; release: () => void } | undefined;
     try {
       for (let attempt = 1; ; attempt++) {
         const init = await build();
-        combined ??= this.combineSignals(init.signal);
+        combined ??= linkAbortSignal(this._abortController.signal, init.signal, true);
         const { signal } = combined;
         const response = await this._fetch(url, init);
         const done = (): FetchResponse => {
@@ -458,67 +459,44 @@ export class ServiceContext implements IServiceContext {
         backoffMs += delay;
       }
     } finally {
-      combined?.release?.();
+      combined?.release();
     }
   }
 
   private wrapFetch(fetchFn: FetchFunction): FetchFunction {
     return async (url, init) => {
       this.assertActive();
-      const { signal, release } = this.combineSignals(init?.signal);
+      // The long-lived signal stays linked until the response body is done, so aborting it (sign-out, retire)
+      // still cancels a body being read; `releaseWithBody` unlinks it then.
+      const { signal, release } = linkAbortSignal(this._abortController.signal, init?.signal, true);
       const request = { ...init, signal };
       try {
+        let response: FetchResponse;
         if (!tinyCloudDebugLogger.isEnabled()) {
-          return await fetchFn(url, request);
-        }
+          response = await fetchFn(url, request);
+        } else {
+          const meta = { url, method: request.method ?? "GET" };
+          const timer = tinyCloudDebugLogger.startTimer("sdk.fetch", { ...meta, init: request });
 
-        const meta = { url, method: request.method ?? "GET" };
-        const timer = tinyCloudDebugLogger.startTimer("sdk.fetch", { ...meta, init: request });
-
-        try {
-          const response = await fetchFn(url, request);
-          timer.stop({
-            ...meta,
-            ok: response.ok,
-            status: response.status,
-            statusText: response.statusText,
-          });
-          return response;
-        } catch (error) {
-          timer.stop({ ...meta, ok: false, error });
-          throw error;
+          try {
+            response = await fetchFn(url, request);
+            timer.stop({
+              ...meta,
+              ok: response.ok,
+              status: response.status,
+              statusText: response.statusText,
+            });
+          } catch (error) {
+            timer.stop({ ...meta, ok: false, error });
+            throw error;
+          }
         }
-      } finally {
-        release?.();
+        return releaseWithBody(response, release);
+      } catch (error) {
+        release();
+        throw error;
       }
     };
-  }
-
-  /**
-   * Combine the request's own signal with the context signal. The result is the signal given to `fetch` for the
-   * request's whole life, so aborting the context (sign-out, retire) still cancels a response body that is being read.
-   *
-   * Where `AbortSignal.any` exists it holds that link without a listener on the long-lived signal. Trade-off: on
-   * Node its composites stay reachable while the long-lived signal lives (about 65 B per request on Node 20, 180 B
-   * on Node 22, against about 1 KB for a listener that is never removed). Where it is missing, a listener is added
-   * instead and `release` removes it; call it once the request settles.
-   */
-  private combineSignals(signal?: AbortSignal): { signal: AbortSignal; release?: () => void } {
-    const own = this._abortController.signal;
-    if (!signal) return { signal: own };
-    if (typeof AbortSignal.any === "function") return { signal: AbortSignal.any([signal, own]) };
-    const combined = new AbortController();
-    const abort = (source: AbortSignal) => combined.abort(source.reason);
-    const onOwnAbort = () => abort(own);
-    if (signal.aborted) {
-      abort(signal);
-    } else if (own.aborted) {
-      abort(own);
-    } else {
-      signal.addEventListener("abort", () => abort(signal), { once: true });
-      own.addEventListener("abort", onOwnAbort, { once: true });
-    }
-    return { signal: combined.signal, release: () => own.removeEventListener("abort", onOwnAbort) };
   }
 }
 
