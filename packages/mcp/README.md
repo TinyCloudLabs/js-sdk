@@ -66,10 +66,10 @@ An app created earlier in the `default` space under `xyz.tinycloud.agent-data/`
 stays there, readable and writable, until the owner asks to move it:
 `tinycloud_apps_move` (dry run first) copies that app into its new folder
 without overwriting anything, reads it back, and only then adds its discovery
-entry; the older records are never changed or deleted. The move tool is on the
-hosted `/mcp` surface only: the public ChatGPT plugin (`/chatgpt/mcp`) keeps its
-reviewed tool list, so an owner who uses ChatGPT only cannot move older apps
-yet (TC-2432); their older apps keep working in place.
+entry; the older records are never changed or deleted. The move tool is offered on
+the hosted `/mcp` surface; the public ChatGPT plugin (`/chatgpt/mcp`) has a fixed,
+reviewed tool list that does not include it. Apps created earlier keep working in
+place under either surface.
 Approvals are per app, one OpenKey space at a time (OpenKey signs one space per
 delegation). After connect, pass `app` to `tinycloud_apps_context` to approve the
 app's folder and app list together. The first new app needs two requests (the

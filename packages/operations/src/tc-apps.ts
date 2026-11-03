@@ -67,16 +67,23 @@ const DISCOVERY_REASON = "Lets Claude list your apps and add or change entries i
 const LEGACY_READ_REASON = "Lets Claude read, but not change or delete, your older records in your TinyCloud default space (keys under xyz.tinycloud.agent-data/), so it can copy an app you ask it to move into its new folder. Nothing in your default space is changed or deleted. 30 days.";
 const named = (apps: readonly string[]) => apps.join(", ");
 
-interface Approval { legacyRecords: boolean; legacyRead: boolean; legacyCatalog: boolean; legacyCopy: boolean; discovery: boolean; discoveryRead: boolean; records: string[]; copies: string[]; catalog: { app: string; change: boolean }[] }
+interface Approval { legacyRecords: boolean; legacyRead: boolean; legacyCatalog: boolean; legacyCopy: boolean; discovery: boolean; discoveryRead: boolean; records: string[]; copies: string[]; catalog: { app: string; change: boolean }[]; bundle: "change" | "read" | undefined }
 
 function approval(permissions: readonly unknown[]): Approval | undefined {
   const kinds = permissions.map(tcAppsPermissionKind);
   if (kinds.length === 0 || kinds.some((kind) => kind === undefined)) return undefined;
   const has = (name: TcAppsPermissionKind["kind"]) => kinds.some((kind) => kind?.kind === name);
   const apps = (name: "app-records" | "app-copy") => [...new Set(kinds.flatMap((kind) => kind?.kind === name ? [kind.app] : []))].sort();
+  // A task bundle is exactly the app list plus one app folder; it is "change" only when both entries can write, "read" only when neither can.
+  const listAt = kinds.findIndex((kind) => kind?.kind === "discovery");
+  const folderAt = kinds.findIndex((kind) => kind?.kind === "app-records");
+  const writes = (index: number) => (permissions[index] as { actions: string[] }).actions.includes("tinycloud.kv/put");
+  const bundle = kinds.length === 2 && listAt >= 0 && folderAt >= 0
+    ? writes(listAt) && writes(folderAt) ? "change" : !writes(listAt) && !writes(folderAt) ? "read" : undefined
+    : undefined;
   return {
     legacyRecords: has("legacy-records"), legacyRead: has("legacy-read"), legacyCatalog: has("legacy-catalog-read"), legacyCopy: has("legacy-copy"),
-    discovery: has("discovery"), records: apps("app-records"), copies: apps("app-copy"),
+    discovery: has("discovery"), records: apps("app-records"), copies: apps("app-copy"), bundle,
     discoveryRead: !permissions.some((permission, index) => {
       const entry = permission as { actions: string[] };
       return kinds[index]?.kind === "discovery" && entry.actions.includes("tinycloud.kv/put");
@@ -95,12 +102,8 @@ function copyReason(apps: readonly string[]): string {
 export function tcAppsApprovalReason(permissions: readonly unknown[]): string | undefined {
   const kinds = approval(permissions);
   if (!kinds) return undefined;
-  if (kinds.discovery && kinds.records.length === 1 && permissions.length === 2) {
-    const changing = permissions.some((permission) => {
-      const entry = permission as { actions: string[] };
-      return entry.actions.includes("tinycloud.kv/put");
-    });
-    return changing
+  if (kinds.bundle !== undefined) {
+    return kinds.bundle === "change"
       ? `Lets Claude read your app list (keys under ${TC_APPS_DISCOVERY_ROOT}), add ${named(kinds.records)} to it, and read this app's records and add, change or delete them (keys under ${appRoot(kinds.records[0]!)}), for 30 days.`
       : `Lets Claude read your app list (keys under ${TC_APPS_DISCOVERY_ROOT}) and this app's records for ${named(kinds.records)} (keys under ${appRoot(kinds.records[0]!)}), for 30 days. It cannot change them.`;
   }
@@ -123,7 +126,7 @@ export function tcAppsApprovalReason(permissions: readonly unknown[]): string | 
 export function tcAppsApprovalMessage(permissions: readonly unknown[]): string | undefined {
   const kinds = approval(permissions);
   if (!kinds) return undefined;
-  if (kinds.catalog.length > 0 || (kinds.discovery && kinds.records.length === 1 && permissions.length === 2)) {
+  if (kinds.catalog.length > 0 || kinds.bundle !== undefined) {
     return `Open the approval link and approve the request on OpenKey. ${tcAppsApprovalReason(permissions)} I'll carry on after you approve.`;
   }
   const records: string[] = [];

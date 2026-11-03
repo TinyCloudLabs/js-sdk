@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { evaluateOperationAuthority } from "../authority.js";
+import { operationSpaceResolver } from "../secrets.js";
 import { TC_APPS_CATALOG_PERMISSIONS, TC_APPS_CATALOG_READ_ACTIONS } from "../tc-apps.js";
 import type { OperationContext, OperationDefinition, OperationExecutionOutcome, OperationExposure, RuntimeOperationContext, TinyCloudPosture } from "../contract.js";
 import { OPERATION_ERROR_CODES, operationError } from "../errors.js";
@@ -80,9 +81,10 @@ function scopesFor(context: RuntimeOperationContext, targets: readonly string[],
     else if (parts !== undefined || prefix?.app !== undefined) add(appRecordsPermission(context, (parts?.app ?? prefix!.app)!));
   }
   if (createsApp.length > 0) add(legacyCatalogPermission(context));
+  const resolve = operationSpaceResolver(context.runtime!.node, context.summary.space);
   const scopes = [...entries.values()].map((entry) => {
     if (!forWrite) return entry;
-    const actions = entry.actions.filter((action) => !evaluateOperationAuthority(context.runtime!.granted, [{ ...entry, actions: [action] }]).satisfied);
+    const actions = entry.actions.filter((action) => !evaluateOperationAuthority(context.runtime!.granted, [{ ...entry, actions: [action] }], resolve).satisfied);
     return actions.length > 0 ? { ...entry, actions } : entry;
   });
   return oneSpaceAtATime(context, scopes);
@@ -101,7 +103,7 @@ const contextAuthority = async (context: RuntimeOperationContext, input: Context
 };
 const readAuthority = async (context: RuntimeOperationContext, input: ReadInput) => scopesFor(context, [...(input.prefixes ?? []), ...(input.keys ?? [])]).map((entry) => {
   const read = { ...entry, actions: [...TC_APPS_CATALOG_READ_ACTIONS] };
-  return evaluateOperationAuthority(context.runtime!.granted, [read]).satisfied ? read : entry;
+  return evaluateOperationAuthority(context.runtime!.granted, [read], operationSpaceResolver(context.runtime!.node, context.summary.space)).satisfied ? read : entry;
 });
 const writeAuthority = async (context: RuntimeOperationContext, input: WriteInput) => scopesFor(
   context,
