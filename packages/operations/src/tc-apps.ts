@@ -77,6 +77,15 @@ function copyReason(apps: readonly string[]): string {
 export function tcAppsApprovalReason(permissions: readonly unknown[]): string | undefined {
   const kinds = approval(permissions);
   if (!kinds) return undefined;
+  if (kinds.discovery && kinds.records.length === 1 && permissions.length === 2) {
+    const changing = permissions.some((permission) => {
+      const entry = permission as { actions: string[] };
+      return entry.actions.includes("tinycloud.kv/put");
+    });
+    return changing
+      ? `Lets Claude read your app list (keys under ${TC_APPS_DISCOVERY_ROOT}), add ${named(kinds.records)} to it, and read this app's records and add, change or delete them (keys under ${appRoot(kinds.records[0]!)}), for 30 days.`
+      : `Lets Claude read your app list (keys under ${TC_APPS_DISCOVERY_ROOT}) and this app's records for ${named(kinds.records)} (keys under ${appRoot(kinds.records[0]!)}), for 30 days. It cannot change them.`;
+  }
   return [
     kinds.legacyRecords ? LEGACY_RECORDS_REASON : undefined,
     kinds.legacyRead && !kinds.legacyRecords ? LEGACY_READ_REASON : undefined,
@@ -91,6 +100,9 @@ export function tcAppsApprovalReason(permissions: readonly unknown[]): string | 
 export function tcAppsApprovalMessage(permissions: readonly unknown[]): string | undefined {
   const kinds = approval(permissions);
   if (!kinds) return undefined;
+  if (kinds.discovery && kinds.records.length === 1 && permissions.length === 2) {
+    return `Open the approval link and approve the request on OpenKey. ${tcAppsApprovalReason(permissions)} I'll carry on after you approve.`;
+  }
   const records: string[] = [];
   if (kinds.legacyRecords) records.push("your records under xyz.tinycloud.agent-data/");
   if (kinds.legacyRead && !kinds.legacyRecords) records.push("a read-only look at your older records under xyz.tinycloud.agent-data/, to copy one app into its new folder");

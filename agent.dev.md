@@ -198,6 +198,10 @@ version metadata and make the immutable release checkout fail the clean-tree pub
   vendored CLI attribution intact. MCP put/move values omit top-level `by`,
   including edits of read-back records and catalogs. Keep this restriction
   expressible in the generated JSON Schema; stored/read-back records retain `by`.
+- Personal-app context can bundle one app's folder and the app list via `app`
+  and `access` (`change` by default, or `read`). A change bundle includes app-list
+  put so creating the app needs only the separate older-catalog check; omitting
+  `app` retains per-call approvals. Reads reuse an existing read-only folder grant.
 - Never add a response `deadlineMs` to personal-record writes: deadlines abandon
   work rather than cancel it. Preserve per-op outcomes after any committed write,
   including a partial move or failed derived-copy upkeep.
