@@ -113,6 +113,7 @@ test("official Streamable HTTP client authenticates and starts delegated setup",
     ["tinycloud_apps_write", false, true, false, false],
     // Intentional: query maintains the derived copy (stale markers, derived-row delete/repopulate).
     // Changing these hints must be a deliberate decision that also updates this test.
+    // Only TC-2416 is expected to revise this row under its own test ruling: read-only/non-destructive hints and read+write effects for the rebuildable derived copy.
     ["tinycloud_apps_query", false, true, true, false],
     ["tinycloud_connect", false, false, true, false],
   ]);
