@@ -163,7 +163,7 @@ export function writeSecure(file: string, obj: unknown): void {
   const pid = process.pid;
   const nonce = randomBytes(6).toString('hex');
   const temp = `${file}.${pid}.${nonce}.tmp`;
-  const trackedTemp = path.dirname(file) === profileDir() && IDENTITY_TRACKED_TARGET.test(path.basename(file));
+  const trackedTemp = path.resolve(path.dirname(file)) === path.resolve(profileDir()) && IDENTITY_TRACKED_TARGET.test(path.basename(file));
   let identityWritten = false;
   let tempCreated = false;
   let renamed = false;
@@ -183,11 +183,14 @@ export function writeSecure(file: string, obj: unknown): void {
     }
     fs.renameSync(temp, file);
     renamed = true;
+    fsyncDir(path.dirname(file));
     if (identityWritten) {
-      removeTempIdentity(temp);
+      try {
+        removeTempIdentity(temp);
+        fsyncDir(path.dirname(file));
+      } catch { /* the rename is durable; orphan sidecars are handled conservatively by recovery */ }
       identityWritten = false;
     }
-    fsyncDir(path.dirname(file));
   } finally {
     if (!renamed) {
       let tempRemoved = !tempCreated;

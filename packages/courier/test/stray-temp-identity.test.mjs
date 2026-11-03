@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import path from 'node:path';
 import { homeFile, scenario } from './support/approval-fixture.mjs';
 import { recoverInterrupted } from '../dist/state.js';
 import { saveKey } from '../dist/profile.js';
@@ -176,7 +177,8 @@ const HAS_BOOT_ID = HAS_LOCAL_IDENTITY && !!LOCAL.boot;
 scenario('a true boot-id change scrubs a temp even when its pid appears alive', { skip: !HAS_BOOT_ID }, async (ctx) => {
   await ctx.request();
   const [kind, oldId] = LOCAL.boot.split(':', 2);
-  const { name, identityFile } = plantTemp(5_000_001, { boot: `${kind}:previous-${oldId}` });
+  const previousBoot = `${kind}:${oldId[0] === '0' ? '1' : '0'}${oldId.slice(1)}`;
+  const { name, identityFile } = plantTemp(5_000_001, { boot: previousBoot });
   const probes = mockPidProbe(ctx.t, 5_000_001, 'alive');
 
   recoverInterrupted();
@@ -184,4 +186,75 @@ scenario('a true boot-id change scrubs a temp even when its pid appears alive', 
   assert.equal(probes(), 0, 'a true boot-id change is sufficient without a pid probe');
   assert.equal(fs.existsSync(homeFile(name)), false, 'the previous-boot temp is scrubbed');
   assert.equal(fs.existsSync(homeFile(identityFile)), false, 'scrubbing removes the temp identity sidecar');
+});
+scenario('a malformed boot ID does not scrub a live key temp', { skip: !HAS_BOOT_ID }, async (ctx) => {
+  await ctx.request();
+  const keyBefore = fs.readFileSync(homeFile('key.json'));
+  const [kind] = LOCAL.boot.split(':', 1);
+  const { name, identityFile } = plantTemp(process.pid, { boot: `${kind}:corrupt` });
+  const tempBefore = fs.readFileSync(homeFile(name));
+  const identityBefore = fs.readFileSync(homeFile(identityFile));
+  ctx.errors.length = 0;
+
+  recoverInterrupted();
+
+  assert.deepEqual(fs.readFileSync(homeFile(name)), tempBefore, 'an invalid boot ID cannot zero or remove a live writer temp');
+  assert.deepEqual(fs.readFileSync(homeFile(identityFile)), identityBefore);
+  assert.deepEqual(fs.readFileSync(homeFile('key.json')), keyBefore);
+  const warning = ctx.errors.find((line) => line.includes(name) && /only after confirming no Courier writer anywhere is active/i.test(line));
+  assert.ok(warning, ctx.errors.join('\n'));
+  assert.ok(warning.includes(removalCommand(homeFile(name))), warning);
+});
+
+scenario('a saved key stays successful and durable when removing its sidecar fails', (ctx) => {
+  const home = process.env.COURIER_HOME;
+  const directoryFds = new Set();
+  let directorySyncs = 0;
+  const realOpen = fs.openSync;
+  ctx.t.mock.method(fs, 'openSync', (file, ...args) => {
+    const fd = realOpen.call(fs, file, ...args);
+    if (typeof file === 'string' && path.resolve(file) === path.resolve(home)) directoryFds.add(fd);
+    return fd;
+  });
+  const realFsync = fs.fsyncSync;
+  ctx.t.mock.method(fs, 'fsyncSync', (fd) => {
+    if (directoryFds.has(fd)) directorySyncs += 1;
+    return realFsync.call(fs, fd);
+  });
+  const realUnlink = fs.unlinkSync;
+  ctx.t.mock.method(fs, 'unlinkSync', (file) => {
+    if (String(file).endsWith('.tmp.identity')) {
+      assert.ok(directorySyncs >= 2, 'the installed key rename is directory-fsynced before sidecar cleanup');
+      throw Object.assign(new Error('sidecar removal unavailable'), { code: 'EACCES' });
+    }
+    return realUnlink.call(fs, file);
+  });
+
+  assert.doesNotThrow(() => saveKey({ v: 1, jwk: { d: 'durable-key' }, did: 'did:key:z6Mk', createdAt: 'now' }));
+
+  assert.equal(JSON.parse(fs.readFileSync(homeFile('key.json'), 'utf8')).jwk.d, 'durable-key');
+  assert.equal(fs.readdirSync(home).filter((name) => name.endsWith('.tmp.identity')).length, 1, 'failed sidecar cleanup leaves a recoverable orphan');
+});
+
+scenario('writeSecure tracks key temps for normalized and relative COURIER_HOME paths', (ctx) => {
+  const home = process.env.COURIER_HOME;
+  const realRename = fs.renameSync;
+  let identitySeenBeforeRename = 0;
+  ctx.t.mock.method(fs, 'renameSync', (temp, target) => {
+    if (path.resolve(target) === path.resolve(homeFile('key.json'))) {
+      const identityFile = `${temp}.identity`;
+      assert.ok(fs.existsSync(identityFile), 'the identity sidecar exists before the key temp is renamed');
+      const identity = JSON.parse(fs.readFileSync(identityFile, 'utf8'));
+      assert.equal(identity.pid, process.pid);
+      identitySeenBeforeRename += 1;
+    }
+    return realRename.call(fs, temp, target);
+  });
+
+  for (const configuredHome of [`${home}${path.sep}`, path.relative(process.cwd(), home)]) {
+    process.env.COURIER_HOME = configuredHome;
+    saveKey({ v: 1, jwk: { d: `tracked-temp-${identitySeenBeforeRename}` }, did: 'did:key:z6Mk', createdAt: 'now' });
+  }
+
+  assert.equal(identitySeenBeforeRename, 2);
 });

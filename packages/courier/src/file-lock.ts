@@ -137,6 +137,13 @@ const realIo: IdentityIo = {
 };
 
 const firstLine = (text: string | undefined): string | undefined => text?.trim().split(/\r?\n/)[0]?.trim() || undefined;
+const UUID_BOOT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function trueBootIdentity(value: string | undefined): { kind: 'linux' | 'macos'; id: string } | undefined {
+  const match = /^(linux|macos):(.+)$/.exec(value ?? '');
+  if (!match || !UUID_BOOT_ID.test(match[2]!)) return undefined;
+  return { kind: match[1]!.toLowerCase() as 'linux' | 'macos', id: match[2]!.toLowerCase() };
+}
 
 /**
  * The machine and the boot this process runs on. `boot` is a true per-boot identifier or absent, and is prefixed with the platform that
@@ -151,11 +158,11 @@ export function machineIdentity(io: IdentityIo = realIo): { machine?: string; bo
   if (io.platform === 'linux') {
     machine = firstLine(io.readFile('/etc/machine-id')) ?? firstLine(io.readFile('/var/lib/dbus/machine-id'));
     const id = firstLine(io.readFile('/proc/sys/kernel/random/boot_id'));
-    if (id) boot = `linux:${id}`;
+    if (id && UUID_BOOT_ID.test(id)) boot = `linux:${id}`;
   } else if (io.platform === 'darwin') {
     machine = /"IOPlatformUUID"\s*=\s*"([^"]+)"/.exec(io.exec('/usr/sbin/ioreg', ['-rd1', '-c', 'IOPlatformExpertDevice']) ?? '')?.[1];
     const id = firstLine(io.exec('/usr/sbin/sysctl', ['-n', 'kern.bootsessionuuid']));
-    if (id) boot = `macos:${id}`;
+    if (id && UUID_BOOT_ID.test(id)) boot = `macos:${id}`;
   } else if (io.platform === 'win32') {
     const reg = `${io.systemRoot ?? 'C:\\Windows'}\\System32\\reg.exe`;
     machine = /MachineGuid\s+REG_SZ\s+(\S+)/.exec(io.exec(reg, ['query', 'HKLM\\SOFTWARE\\Microsoft\\Cryptography', '/v', 'MachineGuid']) ?? '')?.[1];
@@ -193,10 +200,9 @@ export type Liveness = 'alive' | 'dead' | 'unknown';
 export function recordLiveness(record: LockRecord, here: { machine?: string; boot?: string } = currentIdentity()): Liveness {
   if (record.machine === undefined || here.machine === undefined || record.machine !== here.machine) return 'unknown';
   if (record.host === undefined || record.host !== os.hostname()) return 'unknown';
-  if (record.boot !== undefined && here.boot !== undefined) {
-    const [kindA, kindB] = [record.boot.split(':', 1)[0], here.boot.split(':', 1)[0]];
-    if ((kindA === 'linux' || kindA === 'macos') && kindA === kindB && record.boot !== here.boot) return 'dead';
-  }
+  const recordBoot = trueBootIdentity(record.boot);
+  const currentBoot = trueBootIdentity(here.boot);
+  if (recordBoot && currentBoot && recordBoot.kind === currentBoot.kind && recordBoot.id !== currentBoot.id) return 'dead';
   const ns = pidNamespace();
   if (process.platform === 'linux' ? record.pidns === undefined || ns === undefined || record.pidns !== ns : record.pidns !== undefined && record.pidns !== ns) return 'unknown';
   try {

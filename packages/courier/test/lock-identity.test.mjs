@@ -18,17 +18,23 @@ const calls = [];
 const spy = (fn) => (cmd, args) => { calls.push([cmd, ...args].join(' ')); return fn(cmd, args); };
 
 test('linux: machine-id and the kernel boot id come from /etc/machine-id and /proc', () => {
-  const read = files({ '/etc/machine-id': 'abc123\n', '/proc/sys/kernel/random/boot_id': 'boot-1\n' });
-  assert.deepEqual(machineIdentity(io('linux', { readFile: read })), { machine: 'abc123', boot: 'linux:boot-1' });
+  const read = files({ '/etc/machine-id': 'abc123\n', '/proc/sys/kernel/random/boot_id': '11111111-1111-4111-8111-111111111111\n' });
+  assert.deepEqual(machineIdentity(io('linux', { readFile: read })), { machine: 'abc123', boot: 'linux:11111111-1111-4111-8111-111111111111' });
 });
 
 test('linux: the dbus machine-id is used when /etc/machine-id is missing', () => {
-  const read = files({ '/var/lib/dbus/machine-id': 'dbus-id\n', '/proc/sys/kernel/random/boot_id': 'b' });
-  assert.equal(machineIdentity(io('linux', { readFile: read })).machine, 'dbus-id');
+  const read = files({ '/var/lib/dbus/machine-id': 'dbus-id\n', '/proc/sys/kernel/random/boot_id': '22222222-2222-4222-8222-222222222222' });
+  const identity = machineIdentity(io('linux', { readFile: read }));
+  assert.equal(identity.machine, 'dbus-id');
+  assert.equal(identity.boot, 'linux:22222222-2222-4222-8222-222222222222');
 });
 
 test('linux: an unreadable boot id leaves the boot unknown: no clock-derived value stands in for it', () => {
   assert.deepEqual(machineIdentity(io('linux', { readFile: files({ '/etc/machine-id': 'abc123' }) })), { machine: 'abc123' });
+});
+test('linux: a malformed boot ID is not recorded', () => {
+  const read = files({ '/etc/machine-id': 'abc123', '/proc/sys/kernel/random/boot_id': 'boot-1\n' });
+  assert.deepEqual(machineIdentity(io('linux', { readFile: read })), { machine: 'abc123' });
 });
 
 test('macOS: IOPlatformUUID and kern.bootsessionuuid, by absolute path; the wall-clock kern.boottime is never read', () => {
@@ -63,6 +69,11 @@ test('any other platform: no identity at all', () => {
 
 const HOST = os.hostname();
 const LOCAL_MACHINE = 'M';
+const LINUX_OLD = 'linux:11111111-1111-4111-8111-111111111111';
+const LINUX_NEW = 'linux:22222222-2222-4222-8222-222222222222';
+const LINUX_HERE = 'linux:33333333-3333-4333-8333-333333333333';
+const MACOS_OLD = 'macos:11111111-1111-4111-8111-111111111111';
+const MACOS_NEW = 'macos:22222222-2222-4222-8222-222222222222';
 const here = (machine, boot) => () => ({ machine, ...(boot === undefined ? {} : { boot }) });
 const ns = (name) => { try { return fs.readlinkSync(`/proc/self/ns/${name}`); } catch { return undefined; } };
 const PIDNS = ns('pid');
@@ -82,13 +93,13 @@ async function take(name, content, identity) {
 }
 
 test('a lock written in an earlier boot of this machine (true boot ids differ) is recovered, even if its pid is alive now', async () => {
-  assert.equal((await take('reboot', record({ pid: process.pid, machine: 'M', boot: 'linux:old' }), here('M', 'linux:new'))).taken, true);
-  assert.equal((await take('reboot-mac', record({ pid: process.pid, machine: 'M', boot: 'macos:old' }), here('M', 'macos:new'))).taken, true);
+  assert.equal((await take('reboot', record({ pid: process.pid, machine: 'M', boot: LINUX_OLD }), here('M', LINUX_NEW))).taken, true);
+  assert.equal((await take('reboot-mac', record({ pid: process.pid, machine: 'M', boot: MACOS_OLD }), here('M', MACOS_NEW))).taken, true);
 });
 
 test('the host is compared before the boot: a renamed host after a reboot keeps the lock and shows the recovery line', async () => {
-  const content = record({ pid: await gone(), machine: 'M', boot: 'linux:old', host: 'old-name' });
-  const run = await take('renamed', content, here('M', 'linux:new'));
+  const content = record({ pid: await gone(), machine: 'M', boot: LINUX_OLD, host: 'old-name' });
+  const run = await take('renamed', content, here('M', LINUX_NEW));
   assert.equal(run.taken, false);
   assert.equal(run.kept, content);
   assert.match(run.message, /only after confirming no Courier command is running/);
@@ -96,23 +107,23 @@ test('the host is compared before the boot: a renamed host after a reboot keeps 
 });
 
 test('a machine-id shared by two hosts (a cloned image) never lets one judge the other\'s lock', async () => {
-  const content = record({ pid: await gone(), machine: 'M', boot: 'linux:old', host: 'clone-b' });
-  assert.equal((await take('clone', content, here('M', 'linux:old'))).taken, false);
-  assert.equal((await take('clone2', content, here('M', 'linux:new'))).taken, false);
+  const content = record({ pid: await gone(), machine: 'M', boot: LINUX_OLD, host: 'clone-b' });
+  assert.equal((await take('clone', content, here('M', LINUX_OLD))).taken, false);
+  assert.equal((await take('clone2', content, here('M', LINUX_NEW))).taken, false);
 });
 
 test('a record without a host is not judged, however well its machine matches', async () => {
-  assert.equal((await take('nohost', JSON.stringify({ pid: await gone(), nonce: 'n', machine: 'M', boot: 'linux:b' }), here('M', 'linux:b'))).taken, false);
+  assert.equal((await take('nohost', JSON.stringify({ pid: await gone(), nonce: 'n', machine: 'M', boot: LINUX_HERE }), here('M', LINUX_HERE))).taken, false);
 });
 
 test('a live holder in this boot is never taken, even with an old file', () => {
-  const content = record({ pid: process.pid, machine: 'M', boot: 'linux:b', start: undefined });
+  const content = record({ pid: process.pid, machine: 'M', boot: LINUX_HERE, start: undefined });
   const old = new Date(Date.now() - 86_400_000);
   const file = lock('liveholder');
   fs.rmSync(file, { force: true });
   fs.writeFileSync(file, content);
   fs.utimesSync(file, old, old);
-  assert.throws(() => acquireLock(file, { identity: here('M', 'linux:b') }), (e) => e.code === 'locked');
+  assert.throws(() => acquireLock(file, { identity: here('M', LINUX_HERE) }), (e) => e.code === 'locked');
   assert.equal(fs.readFileSync(file, 'utf8'), content);
   fs.rmSync(file);
 });
@@ -120,9 +131,9 @@ test('a live holder in this boot is never taken, even with an old file', () => {
 // test-ruling: TC-2384 (replaces the earlier `fb-diff` assertion, which took a clock difference as a reboot even with a live pid)
 test('clock-derived boot values never decide: a live pid is kept, a gone pid is recovered by the pid evidence alone', async () => {
   for (const [kind, boot] of [['kern.boottime', 'boot:1699990000'], ['windows last boot', 'boot:2023-11-07T10:33:20.0000000Z'], ['uptime', 'up:1000000']]) {
-    const live = await take(`clock-live-${kind}`, record({ pid: process.pid, machine: 'M', boot }), here('M', 'linux:b'));
+    const live = await take(`clock-live-${kind}`, record({ pid: process.pid, machine: 'M', boot }), here('M', LINUX_HERE));
     assert.equal(live.taken, false, `${kind}: a live pid is not stolen on a clock difference`);
-    const dead = await take(`clock-dead-${kind}`, record({ pid: await gone(), machine: 'M', boot }), here('M', 'linux:b'));
+    const dead = await take(`clock-dead-${kind}`, record({ pid: await gone(), machine: 'M', boot }), here('M', LINUX_HERE));
     assert.equal(dead.taken, true, `${kind}: a gone pid is positive evidence`);
   }
 });
@@ -134,7 +145,15 @@ test('clock jitter between two reads of the same boot is not a reboot: a live ho
 });
 
 test('different kinds of boot identity are not compared', async () => {
-  assert.equal((await take('kinds', record({ pid: process.pid, machine: 'M', boot: 'macos:X' }), here('M', 'linux:Y'))).taken, false);
+  assert.equal((await take('kinds', record({ pid: process.pid, machine: 'M', boot: MACOS_OLD }), here('M', LINUX_NEW))).taken, false);
+});
+test('a malformed boot ID cannot prove a reboot while its pid exists', { skip: !['linux', 'darwin'].includes(process.platform) }, async () => {
+  const hereBoot = process.platform === 'darwin' ? MACOS_NEW : LINUX_NEW;
+  const recordBoot = process.platform === 'darwin' ? 'macos:corrupt' : 'linux:corrupt';
+  const content = record({ pid: process.pid, machine: 'M', boot: recordBoot });
+  const run = await take('malformed-boot', content, here('M', hereBoot));
+  assert.equal(run.taken, false);
+  assert.equal(run.kept, content);
 });
 
 test('a platform with no per-boot identity (windows): a live pid is kept, a gone pid is recovered', async () => {
@@ -143,20 +162,20 @@ test('a platform with no per-boot identity (windows): a live pid is kept, a gone
 });
 
 test('a different machine is never judged, whatever its boot', async () => {
-  const content = record({ machine: 'OTHER', boot: 'linux:b' });
-  const run = await take('othermachine', content, here('M', 'linux:b'));
+  const content = record({ machine: 'OTHER', boot: LINUX_HERE });
+  const run = await take('othermachine', content, here('M', LINUX_HERE));
   assert.equal(run.taken, false);
   assert.equal(run.kept, content);
-  assert.equal((await take('othermachine2', record({ machine: 'OTHER', boot: 'linux:a' }), here('M', 'linux:b'))).taken, false);
+  assert.equal((await take('othermachine2', record({ machine: 'OTHER', boot: LINUX_OLD }), here('M', LINUX_HERE))).taken, false);
 });
 
 test('when this machine\'s identity cannot be read, no record is judged', async () => {
-  const content = record({ machine: 'M', boot: 'linux:b' });
+  const content = record({ machine: 'M', boot: LINUX_HERE });
   assert.equal((await take('noidentity', content, () => ({}))).taken, false);
 });
 
 test('a record without a machine (an old pid-only lock) is never judged', async () => {
-  assert.equal((await take('legacy-id', JSON.stringify({ pid: await gone(), nonce: 'n' }), here('M', 'linux:b'))).taken, false);
+  assert.equal((await take('legacy-id', JSON.stringify({ pid: await gone(), nonce: 'n' }), here('M', LINUX_HERE))).taken, false);
 });
 
 // ---- the refusal line ----
@@ -186,28 +205,28 @@ test('a hostile host name in a lock record cannot break the one-line refusal', (
 const linux = { skip: process.platform !== 'linux' && 'Linux pid namespaces' };
 
 test('linux: a record without a pid namespace is not judged by its pid, even if the pid is gone here', linux, async () => {
-  const content = record({ pid: await gone(), machine: 'M', boot: 'linux:b', pidns: undefined });
-  const run = await take('nopidns', content, here('M', 'linux:b'));
+  const content = record({ pid: await gone(), machine: 'M', boot: LINUX_HERE, pidns: undefined });
+  const run = await take('nopidns', content, here('M', LINUX_HERE));
   assert.equal(run.taken, false);
   assert.equal(run.kept, content);
   assert.match(run.message, /cannot tell/);
 });
 
 test('linux: when this process cannot read its own pid namespace nothing is judged by pid', linux, async (t) => {
-  const content = record({ pid: await gone(), machine: 'M', boot: 'linux:b' });
+  const content = record({ pid: await gone(), machine: 'M', boot: LINUX_HERE });
   const file = lock('nocurrentns');
   fs.rmSync(file, { force: true });
   fs.writeFileSync(file, content, { mode: 0o600 });
   const readlink = fs.readlinkSync;
   t.mock.method(fs, 'readlinkSync', (f, ...rest) => { if (String(f) === '/proc/self/ns/pid') throw Object.assign(new Error('no'), { code: 'ENOENT' }); return readlink(f, ...rest); });
-  assert.throws(() => acquireLock(file, { identity: here('M', 'linux:b') }), (e) => e.code === 'locked');
+  assert.throws(() => acquireLock(file, { identity: here('M', LINUX_HERE) }), (e) => e.code === 'locked');
   t.mock.restoreAll();
   assert.equal(fs.readFileSync(file, 'utf8'), content, 'the lock is untouched');
   fs.rmSync(file);
 });
 
 test('linux: a reboot is still proven without a pid namespace (the true boot id changed on the same host)', linux, async () => {
-  const run = await take('nopidns-reboot', record({ pid: process.pid, machine: 'M', boot: 'linux:old', pidns: undefined }), here('M', 'linux:new'));
+  const run = await take('nopidns-reboot', record({ pid: process.pid, machine: 'M', boot: LINUX_OLD, pidns: undefined }), here('M', LINUX_NEW));
   assert.equal(run.taken, true);
 });
 
@@ -244,8 +263,8 @@ test('windows recovery: every PowerShell single-quote character in the path is d
 // death (and the /proc namespace machinery they needed) were removed with that machinery.
 
 test('test-ruling: a pid that exists is kept even when the record carries a start time that differs (a reused pid needs the manual fix)', async () => {
-  const content = record({ pid: process.pid, machine: 'M', boot: 'linux:b', start: '1', timens: 'time:[4026539999]' });
-  const run = await take('exists-start', content, here('M', 'linux:b'));
+  const content = record({ pid: process.pid, machine: 'M', boot: LINUX_HERE, start: '1', timens: 'time:[4026539999]' });
+  const run = await take('exists-start', content, here('M', LINUX_HERE));
   assert.equal(run.taken, false);
   assert.equal(run.kept, content);
   assert.match(run.message, /cannot tell/);
@@ -255,42 +274,42 @@ test('test-ruling: a pid that exists is kept even when the record carries a star
 test('test-ruling: a pid that exists is kept even when /proc reports it as exited (zombie)', linux, async (t) => {
   const holder = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' });
   t.after(() => holder.kill('SIGKILL'));
-  const content = record({ pid: holder.pid, machine: 'M', boot: 'linux:b' });
+  const content = record({ pid: holder.pid, machine: 'M', boot: LINUX_HERE });
   const file = lock('zombie-kept');
   fs.rmSync(file, { force: true });
   fs.writeFileSync(file, content, { mode: 0o600 });
   const read = fs.readFileSync;
   t.mock.method(fs, 'readFileSync', (f, ...rest) => (String(f) === `/proc/${holder.pid}/stat` ? `${holder.pid} (node) Z ${Array(18).fill('0').join(' ')} 5 0` : read(f, ...rest)));
-  assert.throws(() => acquireLock(file, { identity: here('M', 'linux:b') }), (e) => e.code === 'locked');
+  assert.throws(() => acquireLock(file, { identity: here('M', LINUX_HERE) }), (e) => e.code === 'locked');
   t.mock.restoreAll();
   assert.equal(fs.readFileSync(file, 'utf8'), content);
   fs.rmSync(file);
 });
 
 test('test-ruling: a pid owned by someone else (EPERM) is kept', async (t) => {
-  const content = record({ pid: process.pid, machine: 'M', boot: 'linux:b' });
+  const content = record({ pid: process.pid, machine: 'M', boot: LINUX_HERE });
   const file = lock('eperm-kept');
   fs.rmSync(file, { force: true });
   fs.writeFileSync(file, content, { mode: 0o600 });
   t.mock.method(process, 'kill', () => { throw Object.assign(new Error('EPERM'), { code: 'EPERM' }); });
-  assert.throws(() => acquireLock(file, { identity: here('M', 'linux:b') }), (e) => e.code === 'locked');
+  assert.throws(() => acquireLock(file, { identity: here('M', LINUX_HERE) }), (e) => e.code === 'locked');
   t.mock.restoreAll();
   assert.equal(fs.readFileSync(file, 'utf8'), content);
   fs.rmSync(file);
 });
 
 test('test-ruling: an absent pid (ESRCH) is dead and the lock is recovered', async () => {
-  assert.equal((await take('esrch', record({ pid: await gone(), machine: 'M', boot: 'linux:b' }), here('M', 'linux:b'))).taken, true);
+  assert.equal((await take('esrch', record({ pid: await gone(), machine: 'M', boot: LINUX_HERE }), here('M', LINUX_HERE))).taken, true);
 });
 
 test('test-ruling: a different true boot id on the same host is recovered even though the pid exists', async () => {
-  assert.equal((await take('boot-changed', record({ pid: process.pid, machine: 'M', boot: 'linux:old' }), here('M', 'linux:new'))).taken, true);
+  assert.equal((await take('boot-changed', record({ pid: process.pid, machine: 'M', boot: LINUX_OLD }), here('M', LINUX_NEW))).taken, true);
 });
 
 test('test-ruling: a lock records no start time and no time namespace', () => {
   const file = lock('record-fields');
   fs.rmSync(file, { force: true });
-  const release = acquireLock(file, { identity: here('M', 'linux:b') });
+  const release = acquireLock(file, { identity: here('M', LINUX_HERE) });
   const written = JSON.parse(fs.readFileSync(file, 'utf8'));
   assert.deepEqual(Object.keys(written).filter((key) => key === 'start' || key === 'timens'), []);
   assert.equal(written.pid, process.pid);
