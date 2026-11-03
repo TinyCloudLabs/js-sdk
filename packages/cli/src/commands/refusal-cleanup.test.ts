@@ -210,6 +210,11 @@ const expectNoNotice = (): void => {
   expect(text()).not.toContain("Refused delegation:");
   expect(text()).not.toContain(REVOKE_URL);
 };
+/** A successful rotation prints no REFUSAL notice (test-ruling: TC-2412: it does print the previous sign-in's, which holds the revoke URL). */
+const expectNoRefusalNotice = (): void => {
+  expect(text()).not.toContain("OpenKey granted this approval");
+  expect(text()).not.toContain("Refused delegation:");
+};
 /** stderr is captured only while a command runs (a global spy would also swallow bun's own report). */
 async function capturing<T>(run: () => Promise<T>): Promise<T> {
   const spy = spyOn(process.stderr, "write").mockImplementation(((chunk: unknown) => { stderr.push(String(chunk)); return true; }) as never);
@@ -619,6 +624,8 @@ describe("tc auth rotate --paste: the new key is staged in memory, so a refused 
 
   test("a SUCCESSFUL rotation is unchanged: new key, new session, new DID, the same output", async () => {
     const before = await signedIn();
+    const oldCid = grantedCid;
+    const oldUntil = grantedUntil;
     const oldDid = (await ProfileManager.getProfile(profileName)).did;
     pickedLifetimeMs = 6 * DAY;
     await runAuth("rotate", "--paste", "--no-popup", "--force");
@@ -630,7 +637,11 @@ describe("tc auth rotate --paste: the new key is staged in memory, so a refused 
     expect(profile.authMethod).toBe("openkey");
     expect(JSON.stringify(await ProfileManager.getSession(profileName))).not.toBe(before.session);
     expect(outputs.at(-1)).toMatchObject({ rotated: true, profile: profileName, oldDid, did: profile.did, authMethod: "openkey" });
-    expectNoNotice();
+    // test-ruling: TC-2412: a rotation that replaced a live session now ends with the previous sign-in's notice (it holds the revoke URL).
+    expectNoRefusalNotice();
+    const previous = `The previous sign-in (${oldCid}) stays live until ${oldUntil} unless you have already revoked it, because this CLI cannot revoke it; revoke it at ${REVOKE_URL}.`;
+    expect(text().split("\n").filter((line) => line.includes("The previous sign-in"))).toEqual([previous]);
+    expect(text()).not.toContain(grantedCid);
   });
 });
 
