@@ -226,6 +226,9 @@ const runAuth = (...args: string[]) => {
   return capturing(() => program.parseAsync(["node", "tc", "--profile", profileName, "auth", ...args], { from: "node" }));
 };
 const login = (...extra: string[]) => runAuth("login", "--method", "openkey", "--paste", "--no-popup", ...extra);
+// A login that did NOT send the expiryChangeable opt-in (the plain paste link now does): it keeps the --expiry ceiling, so a signed
+// lifetime above it is the permanent refusal these tests need. (The mocked acquisition answers either way.)
+const loginRequestFlow = (...extra: string[]) => runAuth("login", "--method", "openkey", "--no-popup", ...extra);
 
 // [refusal code, its exit code (unchanged), how the signed result is made refusable, extra login args]
 const REFUSALS: Array<[string, number, () => void, string[]]> = [
@@ -238,7 +241,7 @@ describe("tc auth login --paste: the profile and its key were created by this lo
   for (const [code, exitCode, arrange, extra] of REFUSALS) {
     test(`${code}: no key, no saved approval, no session, no profile; one dated deleted notice with the CID; exit ${exitCode}`, async () => {
       arrange();
-      await login(...extra);
+      await (code === "OPENKEY_EXPIRY_EXCEEDED" ? loginRequestFlow : login)(...extra);
       expect(recordedErrors).toEqual([expect.objectContaining({ code, exitCode })]);
       expect(savedPendingCopies).toBe(1);
       expect(files(profileName)).toEqual({ key: false, pending: false, session: false });
@@ -365,7 +368,7 @@ describe("a signed lifetime that only exceeds the ceiling because the CLI's cloc
   test("clock 2 min behind, lifetime exactly as requested: OPENKEY_EXPIRY_EXCEEDED, but the saved code, key, profile stay and no notice is printed", async () => {
     pickedLifetimeMs = DAY - 60_000; // the proof's Issued At is 60 s before it was made: Expiration = Issued At + 1 day
     clockBehindMs = 120_000;
-    await login("--expiry", "1d");
+    await loginRequestFlow("--expiry", "1d");
     expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_EXPIRY_EXCEEDED", exitCode: 5 })]);
     expect(files(profileName)).toMatchObject({ key: true, pending: true, session: false });
     expect(await ProfileManager.profileExists(profileName)).toBe(true);
@@ -375,7 +378,7 @@ describe("a signed lifetime that only exceeds the ceiling because the CLI's cloc
   test("the same clock, but a lifetime really above the request (6 days for 1 day): still permanent: cleaned up and announced", async () => {
     pickedLifetimeMs = 6 * DAY;
     clockBehindMs = 120_000;
-    await login("--expiry", "1d");
+    await loginRequestFlow("--expiry", "1d");
     expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_EXPIRY_EXCEEDED", exitCode: 5 })]);
     expect(files(profileName)).toEqual({ key: false, pending: false, session: false });
     expectOneNotice("deleted");
@@ -434,7 +437,7 @@ describe("a key that ALREADY EXISTED (a profile this login did not create) is ke
     await createKeyOnlyProfile(profileName, HOST);
     const before = JSON.stringify(await ProfileManager.getKey(profileName));
     pickedLifetimeMs = 30 * DAY;
-    await expect(capturing(() => refreshOpenKeySession(profileName, HOST, { paste: true, expiry: "7d" }))).rejects.toMatchObject({ code: "OPENKEY_EXPIRY_EXCEEDED", exitCode: 5 });
+    await expect(capturing(() => refreshOpenKeySession(profileName, HOST, { expiry: "7d" }))).rejects.toMatchObject({ code: "OPENKEY_EXPIRY_EXCEEDED", exitCode: 5 });
     expect(savedPendingCopies).toBe(1);
     expect(files(profileName)).toEqual({ key: true, pending: false, session: false });
     expect(JSON.stringify(await ProfileManager.getKey(profileName))).toBe(before);
@@ -464,7 +467,7 @@ describe("a key another login replaced while this approval was pending is not th
     const { generateKey } = await import("../auth/local-key.js");
     const other = (await generateKey()).jwk as Record<string, unknown>;
     replaceKeyDuringAcquisition = other;
-    await login("--expiry", "1d");
+    await loginRequestFlow("--expiry", "1d");
     expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_EXPIRY_EXCEEDED" })]);
     expect(((await ProfileManager.getKey(profileName)) as Record<string, unknown>).x).toBe(other.x);
     expect(files(profileName)).toEqual({ key: true, pending: false, session: false });
@@ -474,7 +477,7 @@ describe("a key another login replaced while this approval was pending is not th
   test("a session another login committed with this key while the approval was pending keeps it: the profile and key stay", async () => {
     pickedLifetimeMs = 6 * DAY;
     sessionDuringAcquisition = true;
-    await login("--expiry", "1d");
+    await loginRequestFlow("--expiry", "1d");
     expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_EXPIRY_EXCEEDED" })]);
     expect(files(profileName)).toEqual({ key: true, pending: false, session: true });
     expect(await ProfileManager.profileExists(profileName)).toBe(true);
@@ -491,7 +494,7 @@ describe("a profile with a LIVE session: its existing key is kept, byte for byte
     stderr.length = 0;
     savedPendingCopies = 0;
     pickedLifetimeMs = 30 * DAY;
-    await login("--expiry", "7d", "--replace-session");
+    await loginRequestFlow("--expiry", "7d", "--replace-session");
     expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_EXPIRY_EXCEEDED", exitCode: 5 })]);
     expect(savedPendingCopies).toBe(1);
     expect(files(profileName)).toEqual({ key: true, pending: false, session: true });

@@ -1,5 +1,11 @@
 # openkey-vite
 
+## 0.0.46-beta.2
+
+### Patch Changes
+
+- @tinycloud/web-sdk@3.11.0-beta.2
+
 ## 0.0.46-beta.1
 
 ### Patch Changes

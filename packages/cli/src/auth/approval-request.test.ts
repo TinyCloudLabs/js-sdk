@@ -332,3 +332,35 @@ test("an approved result remains discoverable after request expiry when its resu
     expect(await ProfileManager.getSession("approval")).toBeNull();
   } finally { clock.mockRestore(); localOnly.mockRestore(); await rm(encryptedPath, { force: true }); }
 });
+
+// TC-2276 (PR B): the signed approval request is not a plain link. It never carries the expiryChangeable opt-in, so its
+// body (and body digest) is the same whether or not a caller asks for it, and its ceiling stays the signed lifetime.
+test("a signed approval request never carries expiryChangeable", async () => {
+  const send = globalThis.fetch;
+  const interrupted = new Error("Owned approval prompt interruption");
+  const offers: string[] = [];
+  const localOnly = spyOn(globalThis, "fetch").mockImplementation(Object.assign((input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.origin === "https://api.tinycloud.xyz" && url.pathname === "/v1/links") return send(server.url.origin + url.pathname, init);
+    if (url.origin !== server.url.origin) throw new Error("Only the owned fixture may receive requests");
+    return send(input, init);
+  }, { preconnect: send.preconnect }));
+  const bodies: string[] = [];
+  try {
+    for (const extra of [{}, { expiryChangeable: true }]) {
+      await ProfileManager.setProfile("approval", await ProfileManager.getProfile("approval"));
+      await rm(join(profilePath("approval"), "approval-pending.json"), { force: true });
+      await expect(acquireApprovalRequest(did, { profileName: "approval", jwk: key, host, permissions: requested, expectedOwner: ownerDid,
+        expiry: "1h", openkeyHost: "https://openkey.example", openkeyApiHost: server.url.origin, noPopup: true, ...extra,
+        onApprovalRequest: ({ approvalUrl }) => { offers.push(approvalUrl); throw interrupted; },
+      })).rejects.toBe(interrupted);
+      const pending = await readJson<Array<{ request: Record<string, unknown>; bodyCid: string }>>(join(profilePath("approval"), "approval-pending.json"));
+      expect(pending).toHaveLength(1);
+      expect(Object.keys(pending![0]!.request)).not.toContain("expiryChangeable");
+      bodies.push(JSON.stringify({ ...pending![0]!.request, issuer: undefined, targetPublicJwk: undefined, resultEncryptionPublicJwk: undefined }));
+    }
+  } finally { localOnly.mockRestore(); }
+  expect(offers.some((url) => url.includes("expiryChangeable"))).toBe(false);
+  // Same request apart from the per-request key material: lifetime, permissions and target are identical.
+  expect(bodies[1]).toBe(bodies[0]);
+});
