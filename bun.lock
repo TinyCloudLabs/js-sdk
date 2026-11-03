@@ -196,7 +196,7 @@
     },
     "packages/cli": {
       "name": "@tinycloud/cli",
-      "version": "1.6.1-beta.4",
+      "version": "1.6.1-beta.5",
       "bin": {
         "tc": "./bin/tinycloud",
         "tinycloud": "./bin/tinycloud",

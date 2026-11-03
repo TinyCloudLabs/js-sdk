@@ -35811,6 +35811,19 @@ init_raw_encryption();
 init_owner_did();
 init_login_commit();
 
+// src/auth/previous-sign-in.ts
+init_refusal();
+init_scoped_login();
+function previousSignInNotice(session, profile) {
+  if (session === null) return void 0;
+  const header = session.delegationHeader;
+  if (typeof session.delegationCid !== "string" && (typeof header !== "object" || header === null)) return void 0;
+  const { state: state2, expiresAt } = storedSessionState(session, profile);
+  if (!sessionStateIsUsable(state2)) return void 0;
+  const cid = delegationCidOf(session);
+  return `The previous sign-in${cid === void 0 ? "" : ` (${cid})`} stays live until ${expiresAt ?? "it expires"} unless you have already revoked it, because this CLI cannot revoke it; revoke it at ${REVOKE_URL}.`;
+}
+
 // src/auth/prepared-openkey.ts
 init_constants();
 init_errors();
@@ -38663,12 +38676,15 @@ async function rotateAuthKey(profileName2, host, options = {}) {
   const { jwk, did } = await withSpinner("Generating session key...", async () => {
     return generateKey2();
   });
+  const previousNotice = previousSignInNotice(await ProfileManager.getSession(profileName2), profile);
   const result = await refreshOpenKeySession(profileName2, host, {
     paste: options.paste,
     noPopup: options.noPopup,
     ...profile.namedKeys === void 0 ? { rotation: { jwk, did } } : { keys: profile.namedKeys.prefix, expectedOwner: profile.ownerDid }
   });
   outputRotationResult(result.profile, profileName2, oldDid, "openkey");
+  if (previousNotice !== void 0) process.stderr.write(`${previousNotice}
+`);
 }
 function outputRotationResult(profile, profileName2, oldDid, authMethod) {
   outputJson({
