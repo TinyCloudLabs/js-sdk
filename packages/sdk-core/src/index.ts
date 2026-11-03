@@ -1018,6 +1018,7 @@ export {
   createInMemoryLocalNodeIdentityStore,
   createLocalStorageLocalNodeIdentityStore,
   discoverLocalTinyCloudNode,
+  exactHttpOrigin,
   fetchLocationRecord,
   httpUrlToMultiaddr,
   locationPayloadForRecord,
@@ -1099,7 +1100,6 @@ export {
 } from "./registry-policy";
 export {
   canonicalLocationPayloadV2,
-  exactHttpOrigin,
   signLocationRecordV2,
   validateLocationRecordV2,
   validateLocationRecordV2Payload,

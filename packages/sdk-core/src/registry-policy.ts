@@ -457,16 +457,14 @@ export async function resolveRegistryResource(
   }
 
   let targetDids: string[];
-  if (access === "host") {
-    targetDids = record.nodes.map(({ did }) => did);
-  } else if (access === "encryption") {
+  if (access === "encryption") {
     if (record.encryptionNode === null) throw new NodeNotFoundError(subject, verdict);
     targetDids = [record.encryptionNode];
   } else {
     const space = record.spaces.find(({ space: signedSpace }) => sameSpaceIdentifier(signedSpace, resource));
     if (space === undefined) throw new NodeNotFoundError(subject, verdict);
     targetDids = space.nodes
-      .filter(({ mode }) => access === "read" || mode === "read-write")
+      .filter(({ mode }) => access !== "write" || mode === "read-write")
       .map(({ did }) => did);
   }
 
@@ -639,9 +637,9 @@ function hostsForVerdict(verdict: RegistryVerdict, newUserHost: string | null): 
 }
 
 /**
- * The space-creation guard under `fail-closed`. For signed v2 verdicts, both
- * `spaceId` and the write-authorized node membership are required; v1 records
- * retain the existing host-only check for external legacy callers.
+ * The replica-registration guard under `fail-closed`. Signed v2 verdicts require
+ * the full `spaceId` and a listed node membership. Read-only members may register
+ * a replica; ordinary writes are separately restricted to read-write members.
  *
  * @throws NodeRegistryEntryExistsError when a registered owner does not list
  * the requested space on this host (including when v2 `spaceId` is omitted).
@@ -664,7 +662,7 @@ export function assertSpaceCreationAllowed(
           ? undefined
           : verdict.record.spaces.find(({ space: signedSpace }) => sameSpaceIdentifier(signedSpace, spaceId));
         const memberNodes = new Set(
-          space?.nodes.filter(({ mode }) => mode === "read-write").map(({ did }) => did) ?? [],
+          space?.nodes.map(({ did }) => did) ?? [],
         );
         const spaceHosts = verdict.record.nodes
           .filter(({ did }) => memberNodes.has(did))
