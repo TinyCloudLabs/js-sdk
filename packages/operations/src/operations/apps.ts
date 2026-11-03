@@ -122,8 +122,8 @@ const writeDefinition: OperationDefinition<WriteInput, WriteOutput> = {
   sensitivity: { input: ["/ops"], output: ["/ops"] }, authority: writeAuthority, execute: executeWrite,
 };
 const queryDefinition: OperationDefinition<QueryInput, QueryOutput> = {
-  id: "tinycloud.apps.query", version: 1, title: "Query personal records", description: "Answer the user's question over one app's personal records using an optional searchable copy. Requires separate copy approval. Name the app's layout and every kind covered; the server writes or replaces the app's derived SQL copy before running one SELECT or WITH query with bound params. Canonical records are unchanged. COPY_PARTIAL means the answer is incomplete; continue with the remaining kinds before answering.",
-  input: QueryInputSchema, output: QueryOutputSchema, effects: ["read", "write", "destructive"], runtime: "authenticated", postures: POSTURES, exposure: EXPOSURE,
+  id: "tinycloud.apps.query", version: 1, title: "Query personal records", description: "Answer the user's question over one app's personal records using an optional searchable copy. Requires separate copy approval. Name the app's layout and every kind covered; the server writes or replaces the app's derived SQL copy before running one SELECT or WITH query with bound params. It refreshes a derived copy; never changes records. COPY_PARTIAL means the answer is incomplete; continue with the remaining kinds before answering.",
+  input: QueryInputSchema, output: QueryOutputSchema, effects: ["read", "write"], runtime: "authenticated", postures: POSTURES, exposure: EXPOSURE,
   sensitivity: { input: ["/kinds", "/sql", "/params"], output: ["/kinds", "/rows", "/remaining"] }, authority: queryAuthority, execute: executeQuery,
 };
 const MOVE_BUDGET_MS = 60_000;

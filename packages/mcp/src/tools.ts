@@ -343,7 +343,7 @@ export const TOOL_BINDINGS: readonly ToolBinding[] = [
     operationVersion: 1,
     readOnlyHint: false,
     idempotentHint: true,
-    destructiveHint: true,
+    destructiveHint: false,
     openWorldHint: false,
     surfaces: ["hosted", "public"],
   },

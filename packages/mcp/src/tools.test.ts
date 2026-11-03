@@ -24,7 +24,7 @@ test("registers exact SQL read and mutation annotations", () => {
     });
 });
 
-test("the personal-apps tools are annotated by what they do: context deletes nothing, writes and queries can", () => {
+test("the personal-apps tools are annotated by what they do: only record writes are destructive", () => {
   const annotations = Object.fromEntries(toolBindingsForTest()
     .filter((candidate) => candidate.name.startsWith("tinycloud_apps_"))
     .map((candidate) => [candidate.name, [candidate.readOnlyHint, candidate.destructiveHint]]));
@@ -32,7 +32,7 @@ test("the personal-apps tools are annotated by what they do: context deletes not
     tinycloud_apps_context: [false, false],
     tinycloud_apps_read: [true, false],
     tinycloud_apps_write: [false, true],
-    tinycloud_apps_query: [false, true],
+    tinycloud_apps_query: [false, false],
   });
 });
 
