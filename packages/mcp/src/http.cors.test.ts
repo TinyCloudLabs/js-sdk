@@ -116,9 +116,9 @@ test("an Origin with the correct native service credential is refused on /mcp an
     "x-tinycloud-owner-did": "did:pkh:eip155:1:0x1111111111111111111111111111111111111111",
   };
   for (const path of ["/mcp", "/native/grant"]) {
-    // Control: the same request without an Origin is not refused for being a browser call.
+    // Control: the same request without an Origin gets past the Origin check; the grant is what is missing.
     const direct = await app.fetch(new Request(`https://mcp.test${path}`, { method: "POST", headers: native, body: "{}" }));
-    expect({ path, status: direct.status }).not.toEqual({ path, status: 403 });
+    expect({ path, status: direct.status }).toEqual({ path, status: 401 });
     for (const origin of [...FOREIGN_ORIGINS, "https://openkey.test"]) {
       const response = await app.fetch(new Request(`https://mcp.test${path}`, {
         method: "POST",

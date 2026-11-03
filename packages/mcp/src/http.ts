@@ -637,6 +637,9 @@ function mcpCors(response: Response, request: Request): Response {
   if (request.headers.has("origin")) {
     headers.set("access-control-allow-origin", "*");
     headers.set("access-control-allow-methods", "GET, POST, DELETE, OPTIONS");
+    // The server is stateless, so only the bearer challenge is exposed. If sessions
+    // are ever enabled, `Mcp-Session-Id` must be added here or browser clients
+    // cannot read it.
     headers.set("access-control-expose-headers", "WWW-Authenticate");
     if (request.method === "OPTIONS") headers.set("access-control-allow-headers", MCP_CORS_ALLOWED_HEADERS);
   }
