@@ -2673,19 +2673,19 @@ export const approvedTc2379SignOutFence: Tc2379SignOutFence = {
 };
 export const approvedTc2380SpaceHosting: Tc2380SpaceHosting = {
   label: "check space hosting on restore and record it at sign-in (TC-2380, #840)",
-  ruling: "Exact canonical SQLite and PostgreSQL CI at source head b27d0ddef8b6799112721b4da981853f29129ac0 measures 1,479,619/1,422,028 B, +530/+536 B over TC-2379. Bun 1.3.14; rustc 1.99.0 (b940084d7 2026-09-28).",
-  base: "356c6053b4789529ab6c84536a385adf2e4e0c77",
-  sourceCommits: ["b27d0ddef8b6799112721b4da981853f29129ac0"],
+  ruling: "Exact canonical SQLite and PostgreSQL CI at source head 59d136c11625519c17303c70b163a35197325554 measures 1,479,648/1,422,060 B, +524/+523 B over TC-2379. Bun 1.3.14; rustc 1.99.0 (b940084d7 2026-09-28).",
+  base: "902e603101695438557d67a065ef5dc97f706325",
+  sourceCommits: ["59d136c11625519c17303c70b163a35197325554"],
   canonicalCI: {
-    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41593817265",
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41598750543",
     jobs: [
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41593817265/job/125776397452",
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41593817265/job/125776397370",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41598750543/job/125792207258",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41598750543/job/125792207811",
     ],
   },
   root: {
-    delta: { "index.mjs": 530, "index.cjs": 536 },
-    ceiling: { "index.mjs": 1479619, "index.cjs": 1422028 },
+    delta: { "index.mjs": 524, "index.cjs": 523 },
+    ceiling: { "index.mjs": 1479648, "index.cjs": 1422060 },
   },
   firstImport: {
     delta: { "replica.mjs": 0, "replica.cjs": 0 },
@@ -2695,8 +2695,8 @@ export const approvedTc2380SpaceHosting: Tc2380SpaceHosting = {
     delta: { "activation.mjs": 0, "activation.cjs": 0 },
     ceiling: { "activation.mjs": 23412, "activation.cjs": 24981 },
   },
-  worker: { delta: 0, ceiling: 776539 },
-  replicaWorker: { delta: 0, ceiling: 770467 },
+  worker: { delta: 0, ceiling: 776561 },
+  replicaWorker: { delta: 0, ceiling: 770494 },
   reason: "TC-2380 space hosting row; exact SQLite and PostgreSQL CI root gzip measurements agree. All non-root size buckets are carried unchanged from TC-2379.",
 };
 
