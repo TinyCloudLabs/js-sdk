@@ -1,5 +1,18 @@
 # @tinycloudlabs/web-sdk
 
+## 3.12.0-beta.1
+
+### Minor Changes
+
+- 55d52f7: `TinyCloudWeb.restoreSession()` now makes one bounded node read before it reports `"restored"`: it asks the node whether the restored session's primary space is hosted, waiting at most 5 seconds. It never prompts and never fails or delays the restore past that cap; an answer it cannot get is `"unknown"`. Read the result from the new `TinyCloudWeb.spaceHosting` getter (`"hosted"`, `"not-hosted"` or `"unknown"`). `signIn()` on a restored session whose space is not hosted returns the restored session, as before. Exports the `SpaceHosting` type.
+
+  Details: TC-2380
+
+### Patch Changes
+
+- Updated dependencies [55d52f7]
+  - @tinycloud/node-sdk@3.12.0-beta.1
+
 ## 3.11.1-beta.0
 
 ### Patch Changes

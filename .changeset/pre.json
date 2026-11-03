@@ -29,6 +29,8 @@
     "@tinycloud/sdk-services-test": "21.0.5"
   },
   "changesets": [
-    "signout-local-first-fence"
+    "signout-local-first-fence",
+    "space-hosting-probe-node-sdk",
+    "space-hosting-probe-web-sdk"
   ]
 }
