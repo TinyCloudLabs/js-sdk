@@ -29,6 +29,7 @@
     "@tinycloud/sdk-services-test": "21.0.4"
   },
   "changesets": [
+    "refused-approval-cleanup-cli",
     "signed-expiry-cli",
     "signed-expiry-node-sdk",
     "signed-expiry-sdk-core",
