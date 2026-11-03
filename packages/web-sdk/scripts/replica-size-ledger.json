@@ -2584,19 +2584,19 @@
   },
   "tc2379SignOutFence": {
     "label": "sign out locally first, fence a signed-out session, clear only the own session (TC-2379)",
-    "ruling": "Exact canonical SQLite and PostgreSQL CI at source head d30bb448cd7f5931eaa78af4a145fcd502642194 measures 1,479,120/1,421,534 B, +405/+296 B over TC-2418. Bun 1.3.14; rustc 1.99.0 (b940084d7 2026-09-28).",
+    "ruling": "Exact canonical SQLite and PostgreSQL CI at source head b4f918a35a67cbcbb2d84b12379c1ba235fa9f22 measures 1,479,124/1,421,537 B, +409/+299 B over TC-2418. Bun 1.3.14; rustc 1.99.0 (b940084d7 2026-09-28).",
     "base": "902e603101695438557d67a065ef5dc97f706325",
-    "sourceCommits": ["d30bb448cd7f5931eaa78af4a145fcd502642194"],
+    "sourceCommits": ["b4f918a35a67cbcbb2d84b12379c1ba235fa9f22"],
     "canonicalCI": {
-      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41592468740",
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41595761198",
       "jobs": [
-        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41592468740/job/0",
-        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41592468740/job/1"
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41595761198/job/125782625804",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41595761198/job/125782625686"
       ]
     },
     "root": {
-      "delta": { "index.mjs": 405, "index.cjs": 296 },
-      "ceiling": { "index.mjs": 1479120, "index.cjs": 1421534 }
+      "delta": { "index.mjs": 409, "index.cjs": 299 },
+      "ceiling": { "index.mjs": 1479124, "index.cjs": 1421537 }
     },
     "firstImport": {
       "delta": { "replica.mjs": 0, "replica.cjs": 0 },
