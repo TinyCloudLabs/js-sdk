@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdirOwnerOnly, profileDir } from './profile.js';
+import { mkdirOwnerOnly, profileDir, readRegularFile } from './profile.js';
 import type { GrantPayload } from './grant.js';
 
 /**
@@ -91,6 +91,24 @@ function readRecords(): PendingRecord[] {
 function store(records: PendingRecord[]): void {
   if (records.length === 0) fs.rmSync(pendingPath(), { force: true });
   else writeDurable(pendingPath(), { v: 1, records });
+}
+
+/** The delegations of the unexpired records. Read-only: unlike the readers around it, it never removes, repairs or rewrites anything. */
+export function liveRedeemedDelegations(): GrantPayload[] {
+  try {
+    const text = readRegularFile(pendingPath());
+    if (text === undefined) return [];
+    const parsed = JSON.parse(text) as PendingFile;
+    if (parsed.v !== 1 || !Array.isArray(parsed.records)) return [];
+    return parsed.records.filter(isRecord).filter((record) => Date.parse(record.expiresAt) > Date.now()).map((record) => record.delegation);
+  } catch {
+    return [];
+  }
+}
+
+/** Whether an unexpired record exists (read-only, see `liveRedeemedDelegations`). */
+export function hasLivePending(): boolean {
+  return liveRedeemedDelegations().length > 0;
 }
 
 /** The unexpired record saved for this code, if any. */

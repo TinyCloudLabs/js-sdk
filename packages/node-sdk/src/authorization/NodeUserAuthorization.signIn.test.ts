@@ -1031,3 +1031,177 @@ test("isAppKeyHostBound agrees with the sign-in key grant for every SIWE domain"
     expect(isAppKeyHostBound(appId, `https://${domain}`)).toBe(bound);
   }
 });
+
+// TC-2380: the node is the only source of truth for hosting; sign-in records
+// what its own fresh activation said.
+type HostingActivation = (call: number, primary: string) => { activated: string[]; skipped: string[] };
+
+async function signInRecordingHosting(
+  activation: HostingActivation,
+  handler?: { confirmSpaceCreation: () => Promise<boolean> },
+  mode: "signIn" | "prepared" = "signIn",
+) {
+  const captured: Array<Record<string, unknown>> = [];
+  const originalFetch = globalThis.fetch;
+  let activations = 0;
+  globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith("/info")) {
+      return new Response(JSON.stringify({ protocol: 1, version: "1.0.0", features: [] }), { status: 200 });
+    }
+    if (url.includes("/peer/generate/")) return new Response("peer-id");
+    if (url.endsWith("/delegate") && init?.method === "POST") {
+      const primary = String(captured[0]?.spaceId);
+      return new Response(JSON.stringify(activation(++activations, primary)), { status: 200 });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+  const auth = new NodeUserAuthorization({
+    signer: createSigner([]),
+    wasmBindings: createWasmBindings(captured),
+    signStrategy: { type: "auto-sign" },
+    domain: "example.com",
+    tinycloudHosts: ["https://tinycloud.test"],
+    sessionStorage: new MemorySessionStorage(),
+    ...(handler ? { spaceCreationHandler: handler } : {}),
+  });
+  const outcome = await (async () => {
+    try {
+      if (mode === "signIn") {
+        await auth.signIn();
+      } else {
+        const p = await auth.prepareSessionForSigning();
+        await auth.signInWithPreparedSession(p.prepared, "0xsigned", p.keyId, p.jwk);
+      }
+      return { error: undefined as unknown };
+    } catch (error) {
+      return { error };
+    }
+  })();
+  globalThis.fetch = originalFetch;
+  return { auth, activations, ...outcome };
+}
+
+for (const mode of ["signIn", "prepared"] as const) {
+  test(`${mode}: a primary space the node skipped is recorded as not-hosted`, async () => {
+    const { auth, error } = await signInRecordingHosting(
+      (_call, primary) => ({ activated: [], skipped: [primary] }), undefined, mode,
+    );
+    expect(error).toBeUndefined();
+    expect(auth.spaceHosting).toBe("not-hosted");
+  });
+
+  test(`${mode}: a primary space the node activated is recorded as hosted`, async () => {
+    const { auth, error } = await signInRecordingHosting(
+      (_call, primary) => ({ activated: [primary], skipped: [] }), undefined, mode,
+    );
+    expect(error).toBeUndefined();
+    expect(auth.spaceHosting).toBe("hosted");
+  });
+
+  test(`${mode}: empty activation lists leave the answer unknown for the probe`, async () => {
+    const { auth, error } = await signInRecordingHosting(() => ({ activated: [], skipped: [] }), undefined, mode);
+    expect(error).toBeUndefined();
+    expect(auth.spaceHosting).toBe("unknown");
+  });
+
+  test(`${mode}: a dismissed creation modal records not-hosted and sign-in still resolves`, async () => {
+    const { auth, error, activations } = await signInRecordingHosting(
+      (_call, primary) => ({ activated: [], skipped: [primary] }),
+      { confirmSpaceCreation: async () => false },
+      mode,
+    );
+    expect(error).toBeUndefined();
+    expect(auth.spaceHosting).toBe("not-hosted");
+    expect(activations).toBe(1);
+  });
+
+  test(`${mode}: a created space is recorded as hosted`, async () => {
+    const { auth, error } = await signInRecordingHosting(
+      (call, primary) => call === 1
+        ? { activated: [], skipped: [primary] }
+        : { activated: [primary], skipped: [] },
+      { confirmSpaceCreation: async () => true },
+      mode,
+    );
+    expect(error).toBeUndefined();
+    expect(auth.spaceHosting).toBe("hosted");
+  });
+
+  test(`${mode}: a creation timeout records not-hosted and still throws`, async () => {
+    const timeout = Object.assign(new Error("TinyCloud waited for you to confirm"), { code: "SPACE_CREATION_TIMEOUT" });
+    const { auth, error } = await signInRecordingHosting(
+      (_call, primary) => ({ activated: [], skipped: [primary] }),
+      { confirmSpaceCreation: async () => { throw timeout; } },
+      mode,
+    );
+    expect(error).toBe(timeout);
+    expect(auth.spaceHosting).toBe("not-hosted");
+  });
+}
+
+test("a restored session whose empty-list re-post says nothing is never reported hosted", async () => {
+  const session = restoredTinyCloudSession();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    if (String(input).endsWith("/delegate") && init?.method === "POST") {
+      // The node answers a delegation it already holds with empty lists, hosted or not.
+      return new Response(JSON.stringify({ activated: [], skipped: [] }), { status: 200 });
+    }
+    throw new Error(`Unexpected fetch: ${String(input)}`);
+  };
+  try {
+    const auth = new NodeUserAuthorization({
+      signer: createSigner([]),
+      wasmBindings: createWasmBindings([]),
+      domain: "example.com",
+      tinycloudHosts: ["https://tinycloud.test"],
+      sessionStorage: new MemorySessionStorage(),
+    });
+    auth.setRestoredTinyCloudSession(session);
+    await auth.ensureSpaceExists();
+    expect(auth.spaceHosting).toBe("unknown");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("ensurePrimarySpaceHosted creates the space only when it is given not-hosted", async () => {
+  const session = restoredTinyCloudSession();
+  const originalFetch = globalThis.fetch;
+  const delegates: number[] = [];
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    if (url.includes("/peer/generate/")) return new Response("peer-id");
+    if (url.endsWith("/delegate") && init?.method === "POST") {
+      delegates.push(delegates.length + 1);
+      return new Response(JSON.stringify({ activated: [session.spaceId], skipped: [] }), { status: 200 });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+  try {
+    let confirmations = 0;
+    const auth = new NodeUserAuthorization({
+      signer: createSigner([]),
+      wasmBindings: createWasmBindings([]),
+      domain: "example.com",
+      signStrategy: { type: "auto-sign" },
+      tinycloudHosts: ["https://tinycloud.test"],
+      sessionStorage: new MemorySessionStorage(),
+      spaceCreationHandler: { confirmSpaceCreation: async () => { confirmations++; return true; } },
+    });
+    auth.setRestoredTinyCloudSession(session);
+
+    await auth.ensurePrimarySpaceHosted("hosted");
+    await auth.ensurePrimarySpaceHosted("unknown");
+    expect(confirmations).toBe(0);
+    expect(delegates).toHaveLength(0);
+
+    await auth.ensurePrimarySpaceHosted("not-hosted");
+    expect(confirmations).toBe(1);
+    expect(delegates).toHaveLength(2); // the host delegation, then the re-activation
+    expect(auth.spaceHosting).toBe("hosted");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

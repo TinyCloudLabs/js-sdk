@@ -1,5 +1,5 @@
 import { ISessionStorage, PersistedSessionData, validatePersistedSessionData } from "@tinycloud/sdk-core";
-import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, unlinkSync } from "fs";
 import { dirname, join } from "path";
 
 /**
@@ -64,11 +64,29 @@ export class FileSessionStorage implements ISessionStorage {
   async save(address: string, session: PersistedSessionData): Promise<void> {
     const filePath = this.getFilePath(address);
     const data = JSON.stringify(session, null, 2);
-    writeFileSync(filePath, data, "utf-8");
+    // Write a sibling temp file, then rename over the target: a crash or a failed write
+    // never leaves a half-written session where the previous one was.
+    // A fresh name per call, created exclusively: concurrent saves (other processes, worker threads) never share a temp file,
+    // and the file always gets the owner-only mode.
+    const tempPath = `${filePath}.${process.pid}.${process.hrtime.bigint()}.tmp`;
+    try {
+      // The session holds a key: the temp file, and so the file renamed over the target, is owner-only.
+      writeFileSync(tempPath, data, { mode: 0o600, flag: "wx" });
+      renameSync(tempPath, filePath);
+    } catch (error) {
+      try {
+        unlinkSync(tempPath);
+      } catch {
+        // The temp file may never have been created.
+      }
+      throw error;
+    }
   }
 
   /**
    * Load a session for an address.
+   *
+   * Rejects when the file exists but cannot be read or parsed; the file is left in place.
    */
   async load(address: string): Promise<PersistedSessionData | null> {
     const filePath = this.getFilePath(address);
@@ -102,13 +120,11 @@ export class FileSessionStorage implements ISessionStorage {
 
       return session;
     } catch (error) {
-      // Invalid JSON or read error - remove the file
-      try {
-        unlinkSync(filePath);
-      } catch {
-        // Ignore cleanup errors
-      }
-      return null;
+      // A read or parse error says nothing about whether the session is still wanted:
+      // keep the file and let the caller see why it could not be read.
+      throw new Error(
+        `Could not read session file ${filePath}: ${error}`,
+      );
     }
   }
 

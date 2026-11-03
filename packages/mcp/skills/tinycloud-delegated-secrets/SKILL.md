@@ -15,6 +15,7 @@ The following facts are generated from `@tinycloud/operations/operations.json`:
 - `tinycloud_apps_write` -> `tinycloud.apps.write@1`; surfaces: hosted, public; effects: destructive; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
 - `tinycloud_auth_capabilities` -> `tinycloud.auth.capabilities@1`; surfaces: local, hosted; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: no.
 - `tinycloud_auth_import` -> `tinycloud.auth.import@1`; surfaces: local; effects: local_write; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: no.
+- `tinycloud_auth_read_scope` -> `tinycloud.auth.read_scope@1`; surfaces: local, hosted; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
 - `tinycloud_auth_request` -> `tinycloud.auth.request@1`; surfaces: local, hosted; effects: local_write; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: no.
 - `tinycloud_auth_status` -> `tinycloud.auth.status@1`; surfaces: local, hosted; effects: read; postures: owner-openkey, delegate-session, local-owner-key, unauthenticated; sensitive output: no.
 - `tinycloud_knowledge_list` -> `tinycloud.knowledge.list@1`; surfaces: local, hosted; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
@@ -24,6 +25,7 @@ The following facts are generated from `@tinycloud/operations/operations.json`:
 - `tinycloud_kv_head` -> `tinycloud.kv.head@1`; surfaces: local, hosted; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: no.
 - `tinycloud_kv_list` -> `tinycloud.kv.list@1`; surfaces: local, hosted; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
 - `tinycloud_kv_put` -> `tinycloud.kv.put@1`; surfaces: local, hosted; effects: write; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: no.
+- `tinycloud_read` -> `tinycloud.read@1`; surfaces: local, hosted; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
 - `tinycloud_secrets_get` -> `tinycloud.secrets.get@1`; surfaces: local, hosted; effects: read, local_write; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
 - `tinycloud_secrets_status` -> `tinycloud.secrets.status@1`; surfaces: local; effects: read; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: no.
 - `tinycloud_sql_execute` -> `tinycloud.sql.execute@1`; surfaces: local, hosted; effects: write, destructive; postures: owner-openkey, delegate-session, local-owner-key; sensitive output: yes.
@@ -55,14 +57,16 @@ With hosted Streamable HTTP, call `tinycloud_connect`, give the owner the return
 3. Call `tinycloud_account_spaces_list` and
    `tinycloud_account_applications_list`. If either returns
    `authority_required`, send the owner `approval.url` and one line on what it
-   allows; pass back the code or delegation they send, exactly as sent, to
-   `tinycloud_auth_import`.
-4. Choose a non-secrets space from those results. Use `tinycloud_kv_list` with
-   an exact space and prefix. Follow the same link-and-retry steps when
-   authority is required.
-5. Use `tinycloud_kv_get` for one exact returned key. The default base64
-   representation is byte-exact; request `text` or `json` only when the stored
-   bytes have that encoding. A list grant does not imply get authority.
+   allows, then retry unchanged after approval. Only for local stdio, pass a
+   returned code or delegation unchanged to `tinycloud_auth_import`.
+4. Choose a non-secrets space from those results. App knowledge is optional.
+   Use `tinycloud_kv_list` with an exact space and prefix; preserve them while
+   following `nextCursor`. Truncated output with no cursor is incomplete:
+   narrow the prefix, never fabricate a cursor. Use SQL schema inspection for
+   an explicitly selected database. Follow approval-and-retry when required.
+5. Use `tinycloud_kv_get` for one exact key, or `tinycloud_read` for complete
+   digest-bound KV/SQL pages. Base64 is byte-exact; interpret text/JSON only
+   after acquiring and decoding all pages. LIST alone does not grant GET.
 6. Before replacing or deleting existing data, call `tinycloud_kv_head` and
    pass its ETag. Use `tinycloud_kv_put` mode `create` to reject collisions,
    `replace` with an ETag for optimistic concurrency, or `upsert` only when the
@@ -73,6 +77,37 @@ With hosted Streamable HTTP, call `tinycloud_connect`, give the owner the return
 8. Do not broaden a path, substitute a sibling key, change the audience, or
    use generic KV tools against account or secrets spaces. Use
    `tinycloud_secrets_get` for secrets.
+
+## Explicit reusable read approval and bounded content
+
+- When the user wants continuing read access, call `tinycloud_auth_read_scope`
+  with `space` and selected `kvPrefixes` and/or `databases`. A recursive KV
+  prefix must end in `/`; `""` explicitly selects the whole space. The request
+  contains GET/metadata/LIST and exact database read only. Never replace an
+  exact-key request with this broader intent without the user's selection.
+- Hosted approval uses the returned link; local approval uses the stored
+  request and existing import flow. Neither recipient, owner, space nor
+  permissions may be changed. Future children are covered until expiry or
+  revocation, but siblings and writes are not. `access: "not-tested"` confirms
+  capability coverage only, not that data exists or a node read succeeded.
+- Call `tinycloud_read` with `resource: {kind:"kv",space,key}` or
+  `{kind:"sql",space,database,sql,params?,maxRows?,maxBytes?}`. Keep this original
+  resource and replay each returned `continuation` alongside it. Concatenate
+  decoded byte ranges in order; finish only at `complete: true`, then verify
+  the assembled byte count and SHA-256. UTF-8 boundaries and base64 preserve
+  bytes; pages need not be independently parseable JSON.
+- Each page reacquires under current authorization. `READ_SOURCE_CHANGED`
+  requires an explicit new acquisition, not silently mixing revisions.
+  `READ_CONTEXT_MISMATCH` means host/owner/resource/query identity differs.
+  Page size does not lift the 1 MiB KV or bounded SQL acquisition limits.
+- Report provenance accurately: KV hashes original bytes; SQL hashes derived,
+  normalized query-result JSON. ETag and acquisition time are observations.
+  Share the original resource and `binding` for an exact-source handoff.
+  The recipient supplies `expected: binding` from offset zero using its own
+  separately authorized session. A binding/continuation never grants access.
+  SQL handoff needs the original query/parameters; their hash is not a query.
+- These tools are private/local, not additions to the public ChatGPT surface.
+  Do not claim that a deployment exposes them merely because local tests pass.
 
 ## Secret workflow
 

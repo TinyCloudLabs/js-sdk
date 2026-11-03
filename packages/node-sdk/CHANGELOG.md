@@ -1,5 +1,77 @@
 # @tinycloudlabs/node-sdk
 
+## 3.12.0-beta.1
+
+### Minor Changes
+
+- 55d52f7: Adds `TinyCloudNode.checkSpaceHosting(space?)`, which asks the node whether a space is hosted and answers `"hosted"`, `"not-hosted"` or `"unknown"`. It takes a space name or a full space id and defaults to the primary space. It sends one authorized read the session already holds on that space (a kv list under a granted prefix, else kv metadata, `tinycloud.space/info` or a kv get of a key that does not exist), signed for that space. A session with no such read sends nothing and answers `"unknown"`. A 401 or 403 registers the session delegation once and asks again once; a network failure, a 5xx or a 5 second timeout answers `"unknown"`. `"hosted"` is remembered for the session and `"not-hosted"` never is.
+
+  Adds the `TinyCloudNode.spaceHosting` getter, the last answer for the primary space, and the `SpaceHosting` type. Sign-in records it from the node's activation of the new session: a skipped primary space is `"not-hosted"`, an activated one is `"hosted"`, and when both lists are empty the SDK asks with `checkSpaceHosting()`. A dismissed or timed-out space creation records `"not-hosted"` (a dismissed one still resolves `signIn()`; a timeout still throws).
+
+  `NodeUserAuthorization.ensureSpaceExists()` is split into the activation step and `ensurePrimarySpaceHosted(hosting)`, which creates the space only when given `"not-hosted"`. An empty activation list is never read as "hosted". `TinyCloudNode.restoreSession()` still makes no network request.
+
+  Details: TC-2380
+
+## 3.11.1-beta.0
+
+### Patch Changes
+
+- 5817c2b: `TinyCloudWeb.signOut()` clears local state first. The node's sign-out starts at once, but `signOut()` waits for it for at most 3 seconds after the persisted session is cleared, so a node call that never answers (for example after a revoked grant) no longer leaves the tab signed in. When the 3 seconds pass, `signOut()` resolves while the node's own cleanup may still be running; the local session is already gone, but callers should not assume the node-side cleanup has finished. Errors the node's sign-out raises within that time still reject `signOut()`, as before. A session whose stored record could not be removed is now fenced in `BrowserSessionStorage` (`markSignedOut` / `isSignedOut`), so a reload cannot restore it; a successful `clear` or a different saved session lifts the fence. Other `ISessionStorage` implementations keep only the in-memory block, and a sign-out with no live session (a restore still pending) fences nothing: only the in-memory block applies there.
+
+  `signOut()` in both SDKs clears the stored session only when it is still the session being signed out (same signature): a sign-out that finishes after a newer sign-in for the same address no longer erases the newer saved copy.
+
+  `FileSessionStorage.save` writes a temp file (mode 0600, so the saved file is owner-only) and renames it, so a failed write keeps the previous session. `FileSessionStorage.load` no longer deletes a file it cannot read or parse; it rejects with `Could not read session file <path>: <cause>` and leaves the file. Expired and schema-invalid files are still removed.
+
+  Details: TC-2379
+
+## 3.11.0
+
+### Minor Changes
+
+- 75c0432: `signInWithOpenKey` and `prepareOpenKeySignIn` accept `expiryChangeable: true`, which is sent to OpenKey and lets the user change the session expiry in the approval. For a request sent with it, `NodeUserAuthorization` accepts a different signed `Expiration Time` and builds the session, the persisted record and the delegations from the SIGNED expiry. The expiry must pass `checkChangedExpiration` (more than 60 seconds away, after `Issued At`, no more than 10 years out) and every other immutable field must still match; a refusal reads `OpenKey signedMessage <reason>`. Without the option nothing changes: an expiry difference still throws `OpenKey signedMessage altered immutable SIWE fields: expirationTime`. `TinyCloudNode.prepareOpenKeySignIn` now takes the same options. The registry root delegations now carry the expiry of the signed SIWE instead of `now + sessionExpirationMs`, so a session signed for a different lifetime no longer misreports its own expiry. `wireOpenKeyAuthorize` forwards the flag only when it is true.
+
+  A new `maxExpiresAt` option (epoch milliseconds, a `Date`, or a function read when the result arrives) sets the latest signed expiry an app accepts. A signed expiry beyond it is refused before any session is built, stored or activated; it is never sent to OpenKey or persisted, and it limits a changed expiry only. The persisted `expiresAt` and `createdAt` of every sign-in now come from the `Expiration Time` and `Issued At` lines at the start of a line, so text inside a ReCap statement can no longer stand in for them.
+
+  Details: TC-2276
+
+  Update: the 10-year limit was removed in a later change; the only upper limits are year 9999 for a signed message and 2255 for a delegation signed by the session key.
+
+### Patch Changes
+
+- dc48089: Stop leaking an abort listener per request: long waits no longer print `MaxListenersExceededWarning` on Node 20. The node's service graph left one abort listener on its lifetime signal for every request that carried its own signal, so a loop of more than 10 requests (a poll, a `--wait`) made Node 20 warn `11 abort listeners added to [AbortSignal]` on stderr and held every listener until sign-out. The request's signal is now combined with the graph's through `AbortSignal.any` where it exists (Node 20.3 and later, current browsers), which adds no listener to the graph's signal. Retiring the graph still cancels in-flight requests and a response body being read. On Node the combined signals stay reachable while the graph lives (about 65 B per request on Node 20 and 180 B on Node 22, against about 1 KB per request before). Runtimes without `AbortSignal.any` behave as before.
+
+  One visible change: an abort now reaches the request with the abort reason of the signal that fired, so a request timeout surfaces as `TIMEOUT` instead of `ABORTED`. Three callers act on the difference: a timed-out DataVault write now counts as an outcome unknown; a timed-out AccountService batch write now triggers the per-space reconcile fallback; KVService `batchPut` reports `TIMEOUT` instead of "not valid JSON". Hooks SSE, retries and DelegationManager are unchanged.
+
+  Details: TC-2418
+
+- cb0c6ce: `createOwnerDelegation` no longer refuses an expiry more than 10 years away: any future date up to 9999-12-31T23:59:59Z is accepted. The same limit now guards every other place the SDK writes a wallet-signed expiry (the session lifetime from `sessionExpirationMs`, runtime grants, wallet-signed delegations, `createSubDelegation`, activating a received delegation, the root delegation of a share link, and the `expiresAt` of `authorizeShareDeliveryV3`), and a token signed by the session key (`delegateTo`, agent and share delegations) is refused past 2255-06-05T23:47:34Z.
+
+  A value past a limit, before 1970, or a lifetime no date can hold (such as `ms("99999999y")`), is refused with a message that names the date and the cause, before the wallet is asked to sign and before the WASM is called. It no longer surfaces as `RangeError: Invalid time value`, `the 'year' component could not be parsed` or `Out of valid microsecond-precision range of NumericDate`.
+
+  Details: TC-2272
+
+- Updated dependencies [dc48089]
+- Updated dependencies [75c0432]
+- Updated dependencies [cb0c6ce]
+  - @tinycloud/sdk-services@3.11.0
+  - @tinycloud/sdk-core@3.11.0
+  - @tinycloud/replica@0.4.4
+
+## 3.11.0-beta.2
+
+### Patch Changes
+
+- dc48089: Stop leaking an abort listener per request: long waits no longer print `MaxListenersExceededWarning` on Node 20. The node's service graph left one abort listener on its lifetime signal for every request that carried its own signal, so a loop of more than 10 requests (a poll, a `--wait`) made Node 20 warn `11 abort listeners added to [AbortSignal]` on stderr and held every listener until sign-out. The request's signal is now combined with the graph's through `AbortSignal.any` where it exists (Node 20.3 and later, current browsers), which adds no listener to the graph's signal. Retiring the graph still cancels in-flight requests and a response body being read. On Node the combined signals stay reachable while the graph lives (about 65 B per request on Node 20 and 180 B on Node 22, against about 1 KB per request before). Runtimes without `AbortSignal.any` behave as before.
+
+  One visible change: an abort now reaches the request with the abort reason of the signal that fired, so a request timeout surfaces as `TIMEOUT` instead of `ABORTED`. Three callers act on the difference: a timed-out DataVault write now counts as an outcome unknown; a timed-out AccountService batch write now triggers the per-space reconcile fallback; KVService `batchPut` reports `TIMEOUT` instead of "not valid JSON". Hooks SSE, retries and DelegationManager are unchanged.
+
+  Details: TC-2418
+
+- Updated dependencies [dc48089]
+  - @tinycloud/sdk-services@3.11.0-beta.2
+  - @tinycloud/replica@0.4.4-beta.0
+  - @tinycloud/sdk-core@3.11.0-beta.2
+
 ## 3.11.0-beta.1
 
 ### Patch Changes

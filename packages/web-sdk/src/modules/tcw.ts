@@ -126,7 +126,7 @@ import { resolveSpaceCreationHandler } from "../authorization/WebSpaceCreationHa
 import type { NotificationConfig } from "../notifications/types";
 import { WasmInitializer } from "./WasmInitializer";
 import { invoke } from "./Storage/tinycloud/module";
-import type { PortableDelegation, DelegatedAccess } from "@tinycloud/node-sdk/core";
+import type { PortableDelegation, DelegatedAccess, SpaceHosting } from "@tinycloud/node-sdk/core";
 import { CredentialsService } from "../credentials";
 import { ShareReceiverService, type ShareReceiverServiceOptions } from "../share";
 
@@ -353,6 +353,12 @@ function ed25519JwkDid(jwk: { kty?: string; crv?: string; x?: string }): string 
 
 // Share Link Utilities (static, no auth required)
 
+/** A session storage that can fence a signed-out session (BrowserSessionStorage); others rely on the in-memory block. */
+export type FenceCapableStorage = ISessionStorage & {
+  markSignedOut?: (address: string, signature: string) => void;
+  isSignedOut?: (address: string, signature: string) => boolean;
+};
+
 const TC1_PREFIX = "tc1:";
 
 function base64UrlDecode(encoded: string): string {
@@ -407,6 +413,8 @@ export interface ShareReceiveResult<T = unknown> {
 export class TinyCloudWeb {
   private openkeySignInInFlight = 0;
   private prepareSignInToken = 0;
+  /** How long a restore waits for the node's hosting answer. */
+  private spaceHostingCapMs = 5_000;
   private preparedSignIn?: {
     node: TinyCloudNode;
     request: PreparedOpenKeyAuthorization;
@@ -473,6 +481,7 @@ export class TinyCloudWeb {
   private signOutInFlight = 0;
   private persistedRestoreBlocked = false;
   private signOutCleanupFailed = false;
+  private remoteSignOutTimeoutMs = 3000;
   private readonly pendingRestoreAddresses = new Map<string, number>();
   private _secrets = new Map<string, ISecretsService>();
   private _credentialsService?: CredentialsService;
@@ -813,6 +822,8 @@ export class TinyCloudWeb {
   get delegations(): DelegationManager { return this.node.delegationManager; }
   get capabilityRegistry(): ICapabilityKeyRegistry { return this.node.capabilityRegistry; }
   get spaceId(): string | undefined { return this._node?.spaceId; }
+  /** The node's last answer for whether the primary space is hosted (`"unknown"` until it has answered). */
+  get spaceHosting(): SpaceHosting { return this._node?.spaceHosting ?? "unknown"; }
   get accountSpaceId(): string | undefined { return this._node?.accountSpaceId; }
   get account(): AccountService { return this.node.account; }
   get hosts(): string[] { return this.node.hosts; }
@@ -983,6 +994,12 @@ export class TinyCloudWeb {
         this._sessionRestoreStatus = loaded.status;
         return { status: loaded.status };
       }
+      // A record that sign-out could not remove stays fenced: a reload must not bring it back.
+      const fencing: FenceCapableStorage = this.sessionStorage;
+      if (fencing.isSignedOut?.(restoreAddress, loaded.data.signature)) {
+        this._sessionRestoreStatus = "missing";
+        return { status: "missing" };
+      }
       const node = await this.ensureNode();
       assertNotSignedOut();
       const was = node.spaceId;
@@ -1014,6 +1031,8 @@ export class TinyCloudWeb {
           { isCurrent: () => this.signOutCount === signOuts && this.signOutInFlight === 0 },
         );
       }
+      // One bounded node read: the restored session's primary space may not be hosted. Never prompts, never fails the restore.
+      await this.probeSpaceHosting(node);
       assertNotSignedOut();
       this.resetSessionScopedCaches();
       this.uiClient.armPrefetch(this);
@@ -1039,6 +1058,21 @@ export class TinyCloudWeb {
     } finally {
       this.untrackRestoreAddress(restoreAddress);
     }
+  }
+
+  /** One node read for the restored session, held to {@link spaceHostingCapMs}; past it, or on any failure, the answer stays unknown. */
+  private async probeSpaceHosting(node: TinyCloudNode): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([node.checkSpaceHosting(), new Promise((resolve) => { timer = setTimeout(resolve, this.spaceHostingCapMs); })]);
+    } catch { /* a probe never fails a restore */ } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  // TC-2380 Q2 seam: undecided between a one-click OpenKey approval and a silent wait; keeps today's behaviour.
+  private async restoredSessionNotHosted(_node: TinyCloudNode, restored: ClientSession): Promise<ClientSession> {
+    return restored;
   }
 
   async clearPersistedSession(address?: string): Promise<void> {
@@ -1105,6 +1139,7 @@ export class TinyCloudWeb {
       const permissions = this.configuredManifestPermissions(node);
       if (permissions.length === 0 || node.hasRuntimePermissions(permissions)) {
         assertCurrent();
+        if (node.spaceHosting === "not-hosted") await this.restoredSessionNotHosted(node, restored.session);
         return;
       }
       await this.clearPersistedSession(restored.session.address);
@@ -1175,7 +1210,9 @@ export class TinyCloudWeb {
         const permissions = this.configuredManifestPermissions(restoredNode);
         if (permissions.length === 0 || restoredNode.hasRuntimePermissions(permissions)) {
           assertNotSignedOut();
-          return restored.session;
+          return restoredNode.spaceHosting === "not-hosted"
+            ? this.restoredSessionNotHosted(restoredNode, restored.session)
+            : restored.session;
         }
         await this.clearPersistedSession(restored.session.address);
         assertNotSignedOut();
@@ -1231,6 +1268,7 @@ export class TinyCloudWeb {
     // The persisted entry is keyed by the live session's address; read it
     // before the node ends the session, without awaiting first.
     const liveAddress = this._node?.address;
+    const ownSignature = this._node?.session?.signature;
     const pendingAddresses = this.pendingRestoreAddresses.size
       ? [...this.pendingRestoreAddresses.keys()]
       : undefined;
@@ -1240,10 +1278,12 @@ export class TinyCloudWeb {
     this.invalidatePreparedSignIn();
     this.signOutInFlight++;
     this.persistedRestoreBlocked = true;
+    // The node retires the session's authority before its first await. Its remote cleanup can hang on a
+    // revoked grant, so it is awaited only after local state is gone, and only for a short while.
+    const remote = this._node?.signOut();
+    remote?.catch(() => undefined);
     let cleaned = false;
     try {
-      await this._node?.signOut();
-    } finally {
       try {
         this.resetSessionScopedCaches();
         this._credentialsService = undefined;
@@ -1251,17 +1291,48 @@ export class TinyCloudWeb {
         this._sessionRestoreStatus = "idle";
         this.uiClient.reset();
         const address = liveAddress ?? await this.resolveRestoreAddress().catch(() => undefined);
-        if (address) await this.clearPersistedSession(address);
+        if (address) await this.clearOwnPersistedSession(address, ownSignature);
         for (const pendingAddress of pendingAddresses ?? []) {
           if (pendingAddress !== address) await this.clearPersistedSession(pendingAddress);
         }
         cleaned = true;
       } finally {
-        this.signOutInFlight--;
         if (!cleaned) this.signOutCleanupFailed = true;
       }
+      if (remote) {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([remote, new Promise<void>((resolve) => { timer = setTimeout(resolve, this.remoteSignOutTimeoutMs); })]);
+        } finally {
+          clearTimeout(timer);
+        }
+      }
+    } finally {
+      this.signOutInFlight--;
     }
   };
+
+  /**
+   * Clears the stored session for `address` only while it is the signing-out session (`ownSignature`); a newer
+   * session saved for the same address is left alone. The session is fenced first, so that a clear that fails
+   * cannot let a reload restore it.
+   */
+  private async clearOwnPersistedSession(address: string, ownSignature: string | undefined): Promise<void> {
+    const storage: FenceCapableStorage | undefined = this.sessionStorage;
+    if (!storage) return;
+    let fenceError: unknown;
+    if (ownSignature !== undefined) {
+      const stored = await storage.load(address).catch(() => null);
+      if (stored !== null && stored.signature !== ownSignature) return;
+      try {
+        storage.markSignedOut?.(address, ownSignature);
+      } catch (error) {
+        fenceError = error;
+      }
+    }
+    await storage.clear(address);
+    if (fenceError !== undefined) throw fenceError;
+  }
 
   session = (): ClientSession | undefined => {
     if (!this._node) return undefined;

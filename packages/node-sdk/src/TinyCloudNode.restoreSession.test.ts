@@ -1020,3 +1020,351 @@ describe("TinyCloudNode.restoreSession session-key lifecycle", () => {
     }
   });
 });
+
+// TC-2380: one authorized read the session already holds says whether a space is hosted.
+describe("TinyCloudNode.checkSpaceHosting", () => {
+  type FetchCall = { url: string; init?: RequestInit };
+  const headersOf = (call: FetchCall | undefined) => (call?.init?.headers ?? {}) as Record<string, string>;
+
+  async function withFetch<T>(
+    handler: (call: FetchCall, count: number) => Response | Promise<Response>,
+    run: (calls: FetchCall[]) => Promise<T>,
+  ): Promise<T> {
+    const original = globalThis.fetch;
+    const calls: FetchCall[] = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const call = { url: String(input), init };
+      calls.push(call);
+      return handler(call, calls.length);
+    }) as typeof fetch;
+    try {
+      return await run(calls);
+    } finally {
+      globalThis.fetch = original;
+    }
+  }
+
+  async function restoredNode(options?: Parameters<typeof signedRestorableSession>[0], withSigner = false) {
+    const wasm = new NodeWasmBindings();
+    const invokeAny = spyOn(wasm, "invokeAny");
+    const invoke = spyOn(wasm, "invoke");
+    const proof = await signedRestorableSession(options);
+    const node = new TinyCloudNode({
+      host: RESTORE_HOST,
+      wasmBindings: wasm,
+      ...(withSigner ? { signer: new PrivateKeySigner(PROOF_PRIVATE_KEY) } : {}),
+    });
+    await node.restoreSession(proof);
+    return { node, wasm, proof, invokeAny, invoke };
+  }
+
+  const entriesOf = (spy: { mock: { calls: unknown[][] } }) =>
+    spy.mock.calls.map((call) => call[1] as Array<{ spaceId?: string; service: string; path: string; action: string }>);
+
+  const LIST_GET = { kv: { "notes/": ["tinycloud.kv/list", "tinycloud.kv/get"] } };
+
+  for (const withSigner of [false, true]) {
+    const mode = withSigner ? "wallet" : "session-only";
+
+    test(`${mode}: restore stays offline and unknown; a 2xx read is hosted and cached`, async () => {
+      const { node, proof, invokeAny } = await restoredNode({ abilities: LIST_GET }, withSigner);
+      await withFetch(() => new Response("[]", { status: 200 }), async (calls) => {
+        expect(node.spaceHosting).toBe("unknown");
+        expect(calls).toHaveLength(0);
+
+        await expect(node.checkSpaceHosting()).resolves.toBe("hosted");
+        expect(node.spaceHosting).toBe("hosted");
+        expect(calls).toHaveLength(1);
+        expect(calls[0]!.url).toBe(`${RESTORE_HOST}/invoke`);
+        expect(headersOf(calls[0])["x-tinycloud-limit"]).toBe("1");
+        expect(calls[0]!.init?.signal).toBeInstanceOf(AbortSignal);
+        expect(entriesOf(invokeAny)[0]).toEqual([
+          { spaceId: proof.spaceId, service: "kv", path: "notes/", action: "tinycloud.kv/list" },
+        ]);
+
+        // Hosting never goes away in normal operation: a second ask sends nothing.
+        await expect(node.checkSpaceHosting()).resolves.toBe("hosted");
+        expect(calls).toHaveLength(1);
+      });
+    });
+  }
+
+  test("a 404 saying the space is not found is not-hosted, and is asked again every time", async () => {
+    for (const body of ["Space not found", "404 - space not found: tinycloud:pkh:eip155:1:0x1:default"]) {
+      const { node } = await restoredNode({ abilities: LIST_GET });
+      let hosted = false;
+      await withFetch(
+        () => hosted ? new Response("[]", { status: 200 }) : new Response(body, { status: 404 }),
+        async (calls) => {
+          await expect(node.checkSpaceHosting()).resolves.toBe("not-hosted");
+          expect(node.spaceHosting).toBe("not-hosted");
+          await expect(node.checkSpaceHosting()).resolves.toBe("not-hosted");
+          expect(calls).toHaveLength(2);
+
+          hosted = true;
+          await expect(node.checkSpaceHosting()).resolves.toBe("hosted");
+          expect(node.spaceHosting).toBe("hosted");
+        },
+      );
+    }
+  });
+
+  test("any other 404 (a missing key) means the space is hosted", async () => {
+    const { node, invokeAny, proof } = await restoredNode({ abilities: { kv: { "notes/": ["tinycloud.kv/get"] } } });
+    await withFetch(() => new Response("Key not found", { status: 404 }), async () => {
+      await expect(node.checkSpaceHosting()).resolves.toBe("hosted");
+    });
+    expect(entriesOf(invokeAny)[0]).toEqual([
+      { spaceId: proof.spaceId, service: "kv", path: "notes/.tinycloud-space-probe", action: "tinycloud.kv/get" },
+    ]);
+  });
+
+  test("a 401 registers the session delegation once and re-probes once", async () => {
+    const { node, proof } = await restoredNode({ abilities: LIST_GET });
+    await withFetch(
+      (call, count) => call.url.endsWith("/delegate")
+        ? new Response(JSON.stringify({ activated: [], skipped: [] }), { status: 200 })
+        : count === 1 ? new Response("unauthorized", { status: 401 }) : new Response("[]", { status: 200 }),
+      async (calls) => {
+        await expect(node.checkSpaceHosting()).resolves.toBe("hosted");
+        expect(calls.map((call) => call.url.replace(RESTORE_HOST, ""))).toEqual(["/invoke", "/delegate", "/invoke"]);
+        expect(headersOf(calls[1]).Authorization).toBe(proof.delegationHeader.Authorization);
+      },
+    );
+  });
+
+  test("a probe still refused after the activation is unknown, and activates only once", async () => {
+    for (const status of [401, 403]) {
+      const { node } = await restoredNode({ abilities: LIST_GET });
+      await withFetch(
+        (call) => call.url.endsWith("/delegate")
+          ? new Response(JSON.stringify({ activated: [], skipped: [] }), { status: 200 })
+          : new Response("refused", { status }),
+        async (calls) => {
+          await expect(node.checkSpaceHosting()).resolves.toBe("unknown");
+          expect(calls.filter((call) => call.url.endsWith("/delegate"))).toHaveLength(1);
+          expect(calls.filter((call) => call.url.endsWith("/invoke"))).toHaveLength(2);
+          expect(node.spaceHosting).toBe("unknown");
+        },
+      );
+    }
+  });
+
+  test("a network failure or a 5xx is unknown and never activates", async () => {
+    const { node } = await restoredNode({ abilities: LIST_GET });
+    await withFetch(() => { throw new TypeError("fetch failed"); }, async (calls) => {
+      await expect(node.checkSpaceHosting()).resolves.toBe("unknown");
+      expect(calls).toHaveLength(1);
+    });
+    await withFetch(() => new Response("boom", { status: 503 }), async (calls) => {
+      await expect(node.checkSpaceHosting()).resolves.toBe("unknown");
+      expect(calls).toHaveLength(1);
+    });
+    expect(node.spaceHosting).toBe("unknown");
+  });
+
+  test("a failed probe keeps the previous answer", async () => {
+    const { node } = await restoredNode({ abilities: LIST_GET });
+    await withFetch(() => new Response("Space not found", { status: 404 }), () => node.checkSpaceHosting());
+    await withFetch(() => new Response("boom", { status: 503 }), async () => {
+      await expect(node.checkSpaceHosting()).resolves.toBe("unknown");
+    });
+    expect(node.spaceHosting).toBe("not-hosted");
+  });
+
+  test("a named space is probed with invokeAny on that space, not the primary", async () => {
+    const { node, wasm, proof, invokeAny, invoke } = await restoredNode({
+      abilities: { kv: { "": ["tinycloud.kv/get"] } },
+      ownedSpaceAbilities: { account: { kv: { "": ["tinycloud.kv/list"] } } },
+    });
+    const account = wasm.makeSpaceId(proof.address, proof.chainId, "account");
+    await withFetch(() => new Response("Space not found", { status: 404 }), async (calls) => {
+      await expect(node.checkSpaceHosting("account")).resolves.toBe("not-hosted");
+      await expect(node.checkSpaceHosting(account)).resolves.toBe("not-hosted");
+      expect(calls).toHaveLength(2);
+    });
+    for (const entries of entriesOf(invokeAny)) {
+      expect(entries).toEqual([{ spaceId: account, service: "kv", path: "", action: "tinycloud.kv/list" }]);
+    }
+    expect(invoke).not.toHaveBeenCalled();
+    // Only the primary space's answer is the node's `spaceHosting`.
+    expect(node.spaceHosting).toBe("unknown");
+  });
+
+  test("without a held read on the space nothing is sent and the answer is unknown", async () => {
+    const { node } = await restoredNode({
+      abilities: { sql: { default: ["tinycloud.sql/read"] } },
+      ownedSpaceAbilities: { account: { sql: { default: ["tinycloud.sql/read"] } } },
+    });
+    await withFetch(() => new Response("[]", { status: 200 }), async (calls) => {
+      await expect(node.checkSpaceHosting()).resolves.toBe("unknown");
+      await expect(node.checkSpaceHosting("account")).resolves.toBe("unknown");
+      await expect(node.checkSpaceHosting("applications")).resolves.toBe("unknown");
+      expect(calls).toHaveLength(0);
+    });
+  });
+
+  test("a signed-out node answers unknown and sends nothing", async () => {
+    const node = new TinyCloudNode({ host: RESTORE_HOST, wasmBindings: new NodeWasmBindings() });
+    await withFetch(() => new Response("[]", { status: 200 }), async (calls) => {
+      await expect(node.checkSpaceHosting()).resolves.toBe("unknown");
+      expect(calls).toHaveLength(0);
+    });
+  });
+
+  test("picks the read that never downloads a body: list, metadata, space info, then get", async () => {
+    const cases: Array<[Record<string, Record<string, string[]>>, { service: string; path: string; action: string }]> = [
+      [{ kv: { "a/": ["tinycloud.kv/get", "tinycloud.kv/metadata", "tinycloud.kv/list"] } },
+        { service: "kv", path: "a/", action: "tinycloud.kv/list" }],
+      [{ kv: { "a/": ["tinycloud.kv/get", "tinycloud.kv/metadata"] }, space: { "": ["tinycloud.space/info"] } },
+        { service: "kv", path: "a/.tinycloud-space-probe", action: "tinycloud.kv/metadata" }],
+      [{ kv: { "a/": ["tinycloud.kv/get"] }, space: { "": ["tinycloud.space/info"] } },
+        { service: "space", path: "", action: "tinycloud.space/info" }],
+      [{ kv: { "a/": ["tinycloud.kv/get"] } },
+        { service: "kv", path: "a/.tinycloud-space-probe", action: "tinycloud.kv/get" }],
+      // A grant on one key is read as that key.
+      [{ kv: { "a/key": ["tinycloud.kv/get"] } },
+        { service: "kv", path: "a/key", action: "tinycloud.kv/get" }],
+    ];
+    for (const [abilities, expected] of cases) {
+      const { node, proof, invokeAny } = await restoredNode({ abilities });
+      await withFetch(() => new Response("{}", { status: 200 }), () => node.checkSpaceHosting());
+      expect(entriesOf(invokeAny)[0]).toEqual([{ spaceId: proof.spaceId, ...expected }]);
+    }
+  });
+
+  test("the session's own recap is a held read even when sign-in dropped it from the runtime grants", async () => {
+    // Sign-in drops the recap of a space the node skipped, so a hosting answer needs the recap itself.
+    const { node, proof, invokeAny } = await restoredNode({ abilities: LIST_GET });
+    Reflect.set(node, "runtimePermissionGrants", []);
+    await withFetch(() => new Response("Space not found", { status: 404 }), async (calls) => {
+      await expect(node.checkSpaceHosting()).resolves.toBe("not-hosted");
+      expect(calls).toHaveLength(1);
+    });
+    expect(entriesOf(invokeAny)[0]).toEqual([
+      { spaceId: proof.spaceId, service: "kv", path: "notes/", action: "tinycloud.kv/list" },
+    ]);
+  });
+
+  for (const signOutFirst of [true, false]) {
+    test(`a hosted answer is never served to a later session that holds no read on the space (${signOutFirst ? "after sign-out" : "restored over"})`, async () => {
+      const { node } = await restoredNode({ abilities: LIST_GET });
+      await withFetch(() => new Response("[]", { status: 200 }), async () => {
+        await expect(node.checkSpaceHosting()).resolves.toBe("hosted");
+      });
+      if (signOutFirst) await node.signOut();
+
+      await node.restoreSession(await signedRestorableSession({ abilities: { kv: { "notes/": ["tinycloud.kv/put"] } } }));
+      await withFetch(() => new Response("[]", { status: 200 }), async (calls) => {
+        await expect(node.checkSpaceHosting()).resolves.toBe("unknown");
+        expect(calls).toHaveLength(0);
+      });
+
+      // A session that does hold a read asks the node itself; it gets nothing from the earlier session.
+      await node.restoreSession(await signedRestorableSession({ abilities: LIST_GET }));
+      await withFetch(() => new Response("Space not found", { status: 404 }), async (calls) => {
+        await expect(node.checkSpaceHosting()).resolves.toBe("not-hosted");
+        expect(calls).toHaveLength(1);
+      });
+    });
+  }
+
+  test("a sign-out during the 401 activation aborts it: no re-probe is signed and the answer is unknown", async () => {
+    const { node, invokeAny } = await restoredNode({ abilities: LIST_GET });
+    let activationAborted = false;
+    const activationStarted = Promise.withResolvers<void>();
+    await withFetch(
+      (call) => call.url.endsWith("/delegate")
+        ? new Promise<Response>((_resolve, reject) => {
+          activationStarted.resolve();
+          call.init?.signal?.addEventListener("abort", () => {
+            activationAborted = true;
+            reject(new DOMException("aborted", "AbortError"));
+          });
+        })
+        : new Response("unauthorized", { status: 401 }),
+      async (calls) => {
+        const asked = node.checkSpaceHosting();
+        await activationStarted.promise;
+        await node.signOut();
+        await expect(asked).resolves.toBe("unknown");
+        expect(activationAborted).toBe(true);
+        expect(calls.map((call) => call.url.replace(RESTORE_HOST, ""))).toEqual(["/invoke", "/delegate"]);
+        expect(invokeAny).toHaveBeenCalledTimes(1);
+      },
+    );
+  });
+
+  for (const [label, inFlight, expected] of [
+    ["a 401", new Response("unauthorized", { status: 401 }), "unknown"],
+    ["a 2xx", new Response("[]", { status: 200 }), "unknown"],
+    ["an unhosted-space 404", new Response("Space not found", { status: 404 }), "unknown"],
+  ] as const) {
+    test(`a probe in flight when another session is restored answers unknown on ${label} and writes nothing for the new session`, async () => {
+      const { node, invokeAny } = await restoredNode({ abilities: LIST_GET });
+      let release!: (response: Response) => void;
+      const probeSent = Promise.withResolvers<void>();
+      await withFetch(
+        () => new Promise<Response>((resolve) => { release = resolve; probeSent.resolve(); }),
+        async (calls) => {
+          const asked = node.checkSpaceHosting();
+          await probeSent.promise;
+          await node.restoreSession(await signedRestorableSession({ abilities: LIST_GET }));
+          release(inFlight.clone());
+          await expect(asked).resolves.toBe(expected);
+          expect(calls).toHaveLength(1);
+          expect(invokeAny).toHaveBeenCalledTimes(1);
+          expect(node.spaceHosting).toBe("unknown");
+        },
+      );
+      // Nothing was remembered for the new session: it asks the node itself.
+      await withFetch(() => new Response("[]", { status: 200 }), async (calls) => {
+        await expect(node.checkSpaceHosting()).resolves.toBe("hosted");
+        expect(calls).toHaveLength(1);
+      });
+    });
+  }
+
+  test("a sign-out during the read ends the probe: no activation is posted and the answer is unknown", async () => {
+    const { node, invokeAny } = await restoredNode({ abilities: LIST_GET });
+    let release!: (response: Response) => void;
+    const probeSent = Promise.withResolvers<void>();
+    await withFetch(
+      () => new Promise<Response>((resolve) => { release = resolve; probeSent.resolve(); }),
+      async (calls) => {
+        const asked = node.checkSpaceHosting();
+        await probeSent.promise;
+        await node.signOut();
+        release(new Response("unauthorized", { status: 401 }));
+        await expect(asked).resolves.toBe("unknown");
+        expect(calls.map((call) => call.url.replace(RESTORE_HOST, ""))).toEqual(["/invoke"]);
+        expect(invokeAny).toHaveBeenCalledTimes(1);
+        expect(node.spaceHosting).toBe("unknown");
+      },
+    );
+  });
+
+  test("a remembered hosted answer does not depend on the case of the address in the space id", async () => {
+    const { node, proof } = await restoredNode({ abilities: LIST_GET });
+    const address = /0x[0-9a-fA-F]{40}/.exec(proof.spaceId)![0];
+    const shouted = proof.spaceId.replace(address, `0x${address.slice(2).toUpperCase()}`);
+    await withFetch(() => new Response("[]", { status: 200 }), async (calls) => {
+      await expect(node.checkSpaceHosting(proof.spaceId)).resolves.toBe("hosted");
+      await expect(node.checkSpaceHosting(shouted)).resolves.toBe("hosted");
+      expect(calls).toHaveLength(1);
+    });
+  });
+
+  test("a 2xx cancels the response body instead of downloading it", async () => {
+    const { node } = await restoredNode({ abilities: { kv: { "notes/": ["tinycloud.kv/get"] } } });
+    let cancelled = false;
+    const body = new ReadableStream({
+      start: (controller) => controller.enqueue(new Uint8Array([1])),
+      cancel: () => { cancelled = true; },
+    });
+    await withFetch(() => new Response(body, { status: 200 }), async () => {
+      await expect(node.checkSpaceHosting()).resolves.toBe("hosted");
+    });
+    expect(cancelled).toBe(true);
+  });
+});
