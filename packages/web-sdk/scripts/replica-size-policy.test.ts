@@ -4409,3 +4409,60 @@ describe("TC-858 squash-proof ancestry pins", () => {
     ]);
   });
 });
+
+import { approvedTc2380SpaceHosting, validateTc2380SpaceHostingTransition } from "./replica-size-policy";
+
+describe("check space hosting on restore and record it at sign-in (TC-2380, #840) size ratchet", () => {
+  const row = () => structuredClone(approvedTc2380SpaceHosting);
+  const prerequisite = () => approvedTc2276TechnicalLimits;
+
+  it("pins exact canonical CI root bytes and carries every other size bucket", () => {
+    expect(() => validateLedger(current)).not.toThrow();
+    expect(current.tc2380SpaceHosting).toEqual(approvedTc2380SpaceHosting);
+    expect(row().root).toEqual({
+      delta: { "index.mjs": 952, "index.cjs": 924 },
+      ceiling: { "index.mjs": 1479636, "index.cjs": 1422120 },
+    });
+    expect(row().root.ceiling["index.mjs"]).toBe(prerequisite().root.ceiling["index.mjs"] + row().root.delta["index.mjs"]);
+    expect(row().root.ceiling["index.cjs"]).toBe(prerequisite().root.ceiling["index.cjs"] + row().root.delta["index.cjs"]);
+    expect(row().base).toBe("759e2cd0482281bc188c0a412f3a57fde15ceb09");
+    expect(row().sourceCommits).toEqual(["81b56f1231031dadefb67ad791f9932bbf025b99"]);
+    expect(row().canonicalCI).toEqual({
+      run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41578952089",
+      jobs: [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41578952089/job/125728984144",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41578952089/job/125728984208",
+      ],
+    });
+    expect(row().firstImport).toEqual(prerequisite().firstImport);
+    expect(row().activation).toEqual(prerequisite().activation);
+    expect(row().worker).toEqual({ delta: 0, ceiling: prerequisite().worker.ceiling });
+    expect(row().replicaWorker).toEqual({ delta: 0, ceiling: prerequisite().replicaWorker.ceiling });
+    expect(rootCeilings(current).at(-1)).toEqual({
+      row: "tc2380SpaceHosting",
+      ceiling: { "index.mjs": 1479636, "index.cjs": 1422120 },
+    });
+    expect(ancestryPins(current, false)).toContainEqual({
+      row: "tc2380SpaceHosting",
+      pin: "81b56f1231031dadefb67ad791f9932bbf025b99",
+    });
+  });
+
+  it("refuses changed bytes or a missing TC-2272 prerequisite", () => {
+    const changed = copy(current);
+    changed.tc2380SpaceHosting!.root.ceiling["index.mjs"]++;
+    expect(() => validateLedger(changed)).toThrow("TC-2380");
+    const withoutPrerequisite = copy(current);
+    delete withoutPrerequisite.tc2276TechnicalLimits;
+    expect(() => validateLedger(withoutPrerequisite)).toThrow("TC-2380");
+  });
+
+  it("may be introduced once and never changed or removed", () => {
+    expect(() => validateTc2380SpaceHostingTransition(undefined, row())).not.toThrow();
+    expect(() => validateTc2380SpaceHostingTransition(row(), row())).not.toThrow();
+    const changed = row();
+    changed.root.ceiling["index.cjs"]++;
+    expect(() => validateTc2380SpaceHostingTransition(undefined, changed)).toThrow("TC-2380");
+    expect(() => validateTc2380SpaceHostingTransition(row(), undefined)).toThrow("TC-2380");
+  });
+});

@@ -350,6 +350,8 @@ export type Tc2242PathBoundShares = HardeningRatchet & { replicaWorker: { delta:
 export type Tc2276SignedExpiry = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
 /** Exact TC-2272 technical expiry limits root admission; non-root buckets carry TC-2276. */
 export type Tc2276TechnicalLimits = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
+/** Exact TC-2380 space hosting root admission; non-root buckets carry TC-2272. */
+export type Tc2380SpaceHosting = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -417,6 +419,7 @@ export type Ledger = {
   tc2242PathBoundShares?: Tc2242PathBoundShares;
   tc2276SignedExpiry?: Tc2276SignedExpiry;
   tc2276TechnicalLimits?: Tc2276TechnicalLimits;
+  tc2380SpaceHosting?: Tc2380SpaceHosting;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -1014,6 +1017,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2242PathBoundShares !== undefined) pins.push({ row: "tc2242PathBoundShares", pin: root.tc2242PathBoundShares.sourceCommits.at(-1)! });
   if (root.tc2276SignedExpiry !== undefined) pins.push({ row: "tc2276SignedExpiry", pin: root.tc2276SignedExpiry.sourceCommits.at(-1)! });
   if (root.tc2276TechnicalLimits !== undefined) pins.push({ row: "tc2276TechnicalLimits", pin: root.tc2276TechnicalLimits.sourceCommits.at(-1)! });
+  if (root.tc2380SpaceHosting !== undefined) pins.push({ row: "tc2380SpaceHosting", pin: root.tc2380SpaceHosting.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1087,6 +1091,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2242PathBoundShares", root.tc2242PathBoundShares?.root.ceiling],
     ["tc2276SignedExpiry", root.tc2276SignedExpiry?.root.ceiling],
     ["tc2276TechnicalLimits", root.tc2276TechnicalLimits?.root.ceiling],
+    ["tc2380SpaceHosting", root.tc2380SpaceHosting?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -2599,6 +2604,34 @@ export const approvedTc2276TechnicalLimits: Tc2276TechnicalLimits = {
   replicaWorker: { delta: 0, ceiling: 770467 },
   reason: "TC-2272 technical expiry limits row; exact SQLite and PostgreSQL CI root gzip measurements agree. All non-root size buckets are carried unchanged from TC-2276.",
 };
+export const approvedTc2380SpaceHosting: Tc2380SpaceHosting = {
+  label: "check space hosting on restore and record it at sign-in (TC-2380, #840)",
+  ruling: "Exact canonical SQLite and PostgreSQL CI at source head 81b56f1231031dadefb67ad791f9932bbf025b99 measures 1,479,636/1,422,120 B, +952/+924 B over TC-2272. Bun 1.3.14; rustc 1.99.0 (b940084d7 2026-09-28).",
+  base: "759e2cd0482281bc188c0a412f3a57fde15ceb09",
+  sourceCommits: ["81b56f1231031dadefb67ad791f9932bbf025b99"],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41578952089",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41578952089/job/125728984144",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41578952089/job/125728984208",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 952, "index.cjs": 924 },
+    ceiling: { "index.mjs": 1479636, "index.cjs": 1422120 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 52757, "replica.cjs": 67957 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23412, "activation.cjs": 24981 },
+  },
+  worker: { delta: 0, ceiling: 776539 },
+  replicaWorker: { delta: 0, ceiling: 770467 },
+  reason: "TC-2380 space hosting row; exact SQLite and PostgreSQL CI root gzip measurements agree. All non-root size buckets are carried unchanged from TC-2272.",
+};
 
 export type GatedOnlyRatchet = {
   label: string;
@@ -2695,6 +2728,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2242PathBoundShares: approvedTc2242PathBoundShares,
   tc2276SignedExpiry: approvedTc2276SignedExpiry,
   tc2276TechnicalLimits: approvedTc2276TechnicalLimits,
+  tc2380SpaceHosting: approvedTc2380SpaceHosting,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -2995,6 +3029,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
   if (value.tc2276TechnicalLimits !== undefined &&
       (!value.tc2276SignedExpiry || JSON.stringify(value.tc2276TechnicalLimits) !== JSON.stringify(approvedTc2276TechnicalLimits))) {
     throw new Error("Only Naomi's exact canonical TC-2272 technical expiry limits ratchet is approved.");
+  }
+  if (value.tc2380SpaceHosting !== undefined &&
+      (!value.tc2276TechnicalLimits || JSON.stringify(value.tc2380SpaceHosting) !== JSON.stringify(approvedTc2380SpaceHosting))) {
+    throw new Error("Only the exact canonical TC-2380 space hosting ratchet is approved.");
   }
 }
 
@@ -3364,6 +3402,13 @@ export function validateTc2276TechnicalLimitsTransition(base?: Tc2276TechnicalLi
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2276TechnicalLimits) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-2272 technical expiry limits ratchet may be introduced once and cannot change later.");
+  }
+}
+/** The TC-2380 space hosting ratchet is introduced once and immutable afterwards. */
+export function validateTc2380SpaceHostingTransition(base?: Tc2380SpaceHosting, current?: Tc2380SpaceHosting): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2380SpaceHosting) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2380 space hosting ratchet may be introduced once and cannot change later.");
   }
 }
 
