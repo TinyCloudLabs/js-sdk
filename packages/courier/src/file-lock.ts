@@ -217,6 +217,11 @@ export function recordLiveness(record: LockRecord, here: { machine?: string; boo
     if ((error as NodeJS.ErrnoException).code !== 'EPERM') return (error as NodeJS.ErrnoException).code === 'ESRCH' ? 'dead' : 'unknown';
     // EPERM: the process exists but belongs to someone else. Its start time still tells a reused pid from the holder.
   }
+  // /proc is evidence only when it is this process's own view: after `unshare -p` without a remount it is served from the parent namespace,
+  // where a pid number names a different process, so a start time or state read from it could make a live holder look dead.
+  if (process.platform === 'linux') {
+    try { if (fs.readlinkSync('/proc/self') !== String(process.pid)) return 'unknown'; } catch { return 'unknown'; }
+  }
   const info = procInfo(record.pid);
   if (info?.state === 'Z' || info?.state === 'X') return 'dead'; // exited, only not yet reaped
   if (record.start === undefined || info?.start === undefined) return 'unknown';

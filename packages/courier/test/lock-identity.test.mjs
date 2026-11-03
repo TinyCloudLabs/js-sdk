@@ -232,3 +232,34 @@ test('windows recovery: every PowerShell single-quote character in the path is d
     assert.equal(powershellLiteral(command), file);
   }
 });
+
+// ---- a /proc that is not this process's own view ----
+
+test('linux: /proc served from another pid namespace (unshare -p without a remount) is not evidence: a live holder is kept', linux, async (t) => {
+  // The holder is this live process, but the record carries a start time that /proc would call "a different process", as a foreign /proc could.
+  const content = record({ pid: process.pid, machine: 'M', boot: 'linux:b', start: '1' });
+  const file = lock('foreignproc');
+  fs.rmSync(file, { force: true });
+  fs.writeFileSync(file, content, { mode: 0o600 });
+  const readlink = fs.readlinkSync;
+  t.mock.method(fs, 'readlinkSync', (f, ...rest) => (String(f) === '/proc/self' ? '1' : readlink(f, ...rest))); // /proc/self does not name this process
+  assert.throws(() => acquireLock(file, { identity: here('M', 'linux:b') }), (e) => e.code === 'locked' && /cannot tell/.test(e.message));
+  t.mock.restoreAll();
+  assert.equal(fs.readFileSync(file, 'utf8'), content, 'the lock is untouched');
+  fs.rmSync(file);
+});
+
+test('linux: with a /proc that is this process\'s own view, a different start time still proves a reused pid', linux, async () => {
+  const run = await take('ownproc', record({ pid: process.pid, machine: 'M', boot: 'linux:b', start: '1' }), here('M', 'linux:b'));
+  assert.equal(run.taken, true);
+});
+
+test('linux: a true boot-id change is still recovered when /proc is a foreign view', linux, async (t) => {
+  const file = lock('foreignproc-reboot');
+  fs.rmSync(file, { force: true });
+  fs.writeFileSync(file, record({ pid: process.pid, machine: 'M', boot: 'linux:old' }), { mode: 0o600 });
+  const readlink = fs.readlinkSync;
+  t.mock.method(fs, 'readlinkSync', (f, ...rest) => (String(f) === '/proc/self' ? '1' : readlink(f, ...rest)));
+  acquireLock(file, { identity: here('M', 'linux:new') })();
+  t.mock.restoreAll();
+});
