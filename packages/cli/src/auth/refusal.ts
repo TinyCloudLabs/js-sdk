@@ -83,13 +83,15 @@ export type KeyOutcome = { readonly kind: "deleted" } | { readonly kind: "kept" 
  * what became of its key, and that this CLI cannot revoke it. Never holds the delegation header, the SIWE signature, a code or
  * a key.
  */
-export function refusalNotice(delegation: Record<string, unknown> | undefined, key: KeyOutcome): string {
+export function refusalNotice(delegation: Record<string, unknown> | undefined, key: KeyOutcome, rotation = false): string {
   const until = grantedUntil(delegation);
   const cid = delegationCidOf(delegation);
   const live = until === undefined ? "It stays live" : `It stays live until ${until}`;
   const revoke = `this CLI cannot revoke it; revoke it at ${REVOKE_URL}.`;
-  const body = key.kind === "deleted" ? `${keyDeletedLine(until)} This CLI cannot revoke it; revoke it at ${REVOKE_URL}.`
-    : key.kind === "kept" ? `${keyKeptLine(until)} ${live} unless revoked, and ${revoke}`
-      : `${keyNotDeletedLine(until, key.reason)} ${live} unless revoked, and ${revoke}`;
+  // For a rotation "its key" is the staged new key; the key and login in use were never touched, and the notice says so.
+  const unchanged = rotation ? " Your current login and its key are unchanged." : "";
+  const body = key.kind === "deleted" ? `${keyDeletedLine(until)}${unchanged} This CLI cannot revoke it; revoke it at ${REVOKE_URL}.`
+    : key.kind === "kept" ? `${keyKeptLine(until)}${unchanged} ${live} unless revoked, and ${revoke}`
+      : `${keyNotDeletedLine(until, key.reason)}${unchanged} ${live} unless revoked, and ${revoke}`;
   return `${cid === undefined ? "" : `Refused delegation: ${cid}. `}${body}`;
 }

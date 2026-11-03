@@ -68,7 +68,7 @@ export async function discardRefusedApproval(site: RefusalSite, error: unknown, 
   } catch (cleanupError) {
     outcome = { kind: "failed", reason: cleanupError instanceof Error ? cleanupError.message : String(cleanupError) };
   }
-  process.stderr.write(`${refusalNotice(delegation, outcome)}\n`);
+  process.stderr.write(`${refusalNotice(delegation, outcome, site.rotation === true)}\n`);
   return true;
 }
 
@@ -121,7 +121,7 @@ export async function refusing<T>(site: RefusalSite, step: (seen: { result?: obj
     const announced = await discardRefusedApproval(site, error, seen.result);
     // The owner approved, but the refusal was not one that announces itself (a clock-dependent ceiling, AUTH_EXPIRED, a commit
     // refusal): the grant is live and its staged key is gone, so say so.
-    if (approvalArrived && !announced) process.stderr.write(`${refusalNotice(seen.result as Record<string, unknown> | undefined, { kind: "deleted" })}\n`);
+    if (approvalArrived && !announced) process.stderr.write(`${refusalNotice(seen.result as Record<string, unknown> | undefined, { kind: "deleted" }, true)}\n`);
     throw error;
   }
 }
