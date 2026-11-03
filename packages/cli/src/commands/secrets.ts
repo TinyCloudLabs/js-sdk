@@ -603,6 +603,9 @@ function throwCanonicalSecretGetError(
           { hint: `Sign in with: ${CLI_NAME} --profile ${result.context.profile} auth login` },
         );
       }
+      if (result.error.code === "NODE_NOT_RESPONDING") {
+        throw new CLIError("NODE_NOT_RESPONDING", result.error.message, ExitCode.NETWORK_ERROR);
+      }
       if (result.error.code === "NODE_UNREACHABLE") {
         throw new CLIError("NETWORK_ERROR", result.error.message, ExitCode.NETWORK_ERROR);
       }

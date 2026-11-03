@@ -82,6 +82,52 @@ test("restores the persisted session DID and rereads a real live delegation for 
   }
 });
 
+test("resolves registry URL precedence and keeps the profile host only as a no-entry hint", async () => {
+  const fixture = await createAuthRuntimeFixture();
+  const profileRegistryUrl = "https://profile-registry.test";
+  const envRegistryUrl = "https://current-registry.test";
+  const originalFetch = globalThis.fetch;
+  const previousRegistryUrl = process.env.TC_REGISTRY_URL;
+  const externalRequests: string[] = [];
+  try {
+    delete process.env.TC_REGISTRY_URL;
+    const storedProfile = await readJson<Record<string, unknown>>(profileConfigPath(fixture.profile));
+    if (storedProfile === null) throw new Error("expected the stored fixture profile");
+    await writeJsonAtomic(profileConfigPath(fixture.profile), {
+      ...storedProfile,
+      tinycloudRegistryUrl: profileRegistryUrl,
+    });
+
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith(`${fixture.hermetic.host}/`)) return originalFetch(input, init);
+      externalRequests.push(url);
+      return Response.json({ error: "location record not found" }, { status: 404 });
+    }) as typeof fetch;
+
+    const fromProfile = await createInvocationRuntime({ profile: fixture.profile });
+    expect(fromProfile.ok).toBe(true);
+    expect(externalRequests.length).toBeGreaterThan(0);
+    expect(externalRequests.every((url) => url.startsWith(`${profileRegistryUrl}/`))).toBe(true);
+    if (!fromProfile.ok) throw new Error("expected a restored runtime");
+    expect((fromProfile.context.runtime.node as TinyCloudNode).hosts).toContain(fixture.hermetic.host);
+
+    externalRequests.length = 0;
+    process.env.TC_REGISTRY_URL = envRegistryUrl;
+    const fromEnvironment = await createInvocationRuntime({ profile: fixture.profile });
+    expect(fromEnvironment.ok).toBe(true);
+    expect(externalRequests.length).toBeGreaterThan(0);
+    expect(externalRequests.every((url) => url.startsWith(`${envRegistryUrl}/`))).toBe(true);
+    if (!fromEnvironment.ok) throw new Error("expected a restored runtime");
+    expect((fromEnvironment.context.runtime.node as TinyCloudNode).hosts).toContain(fixture.hermetic.host);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (previousRegistryUrl === undefined) delete process.env.TC_REGISTRY_URL;
+    else process.env.TC_REGISTRY_URL = previousRegistryUrl;
+    fixture.hermetic.stop();
+  }
+});
+
 test("includes cryptographically restored base-session ReCap authority in runtime grants", async () => {
   const fixture = await createAuthRuntimeFixture({ delegateBasePermissions: true });
   try {

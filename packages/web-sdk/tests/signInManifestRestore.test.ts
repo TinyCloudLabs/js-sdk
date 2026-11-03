@@ -1394,12 +1394,16 @@ test("useDelegation() and useRuntimeDelegation() waiting for initialisation are 
   expect(node.useRuntimeDelegation).not.toHaveBeenCalled();
 });
 
-describe("registryPolicy fail-closed through TinyCloudWeb (TC-1443)", () => {
+describe("TinyCloudWeb restore registry defaults", () => {
   const REGISTRY = "https://registry.test";
+  const EXPLICIT_HOST = "https://explicit-hint.test";
+  const STALE_SESSION_HOST = "https://stale-session.test";
   const owner = new PrivateKeySigner(PROOF_PRIVATE_KEY);
 
-  /** A persisted walletless session with no hosts, so restore resolves one. */
-  async function restoreWithoutHosts(registry: () => Promise<Response>) {
+  async function restore(
+    registry: (url: string) => Promise<Response>,
+    options: { explicitHosts?: string[]; persistedHosts?: string[] } = {},
+  ) {
     const address = await owner.getAddress();
     const storage = {
       save: mock(async () => undefined),
@@ -1414,6 +1418,7 @@ describe("registryPolicy fail-closed through TinyCloudWeb (TC-1443)", () => {
           delegationCid: "bafy-restored-account",
           spaceId: `tinycloud:pkh:eip155:1:${address}:default`,
           verificationMethod: "did:key:default",
+          ...(options.persistedHosts === undefined ? {} : { tinycloudHosts: options.persistedHosts }),
         },
         expiresAt: "2099-01-01T00:00:00.000Z",
         createdAt: "2026-01-01T00:00:00.000Z",
@@ -1426,13 +1431,13 @@ describe("registryPolicy fail-closed through TinyCloudWeb (TC-1443)", () => {
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       const url = String(input);
       requests.push(url);
-      if (url.startsWith(`${REGISTRY}/`)) return registry();
+      if (url.startsWith(`${REGISTRY}/`)) return registry(url);
       throw new TypeError(`unreachable: ${url}`);
     }) as typeof fetch;
     try {
       const tcw = new TinyCloudWeb({
         sessionStorage: storage,
-        registryPolicy: "fail-closed",
+        ...(options.explicitHosts === undefined ? {} : { tinycloudHosts: options.explicitHosts }),
         tinycloudRegistryUrl: REGISTRY,
         autoDiscoverLocalNode: false,
       });
@@ -1442,31 +1447,50 @@ describe("registryPolicy fail-closed through TinyCloudWeb (TC-1443)", () => {
     }
   }
 
-  test("an unavailable registry fails the restore instead of using the hosted node", async () => {
-    const { result, requests } = await restoreWithoutHosts(async () => new Response("down", { status: 503 }));
+  test("default restore fails closed when the registry is unavailable despite an explicit host hint", async () => {
+    const { result, requests } = await restore(
+      async () => new Response("down", { status: 503 }),
+      { explicitHosts: [EXPLICIT_HOST] },
+    );
 
     expect(result.status).toBe("restore-failed");
-    expect(result.error).toMatchObject({ code: "registry_unavailable" });
+    expect(requests.length).toBeGreaterThan(0);
     expect(requests.every((url) => url.startsWith(`${REGISTRY}/`))).toBe(true);
   });
 
-  test("a registered owner is restored onto the record's host", async () => {
-    const { tcw, result } = await restoreWithoutHosts(async () => {
-      const record = await signLocationRecord(
-        {
-          version: 1,
-          subject: pkhDid(await owner.getAddress(), 1),
-          multiaddrs: ["/dns4/my.node.example/tcp/443/https"],
-          updated_at: "2026-10-18T00:00:00.000Z",
-          sequence: 1,
-        },
-        { type: "did:pkh", signMessage: (message: string) => owner.signMessage(message) },
-      );
-      return Response.json({ record });
-    });
+  test("true no-entry restore uses the configured host hint after registry lookup", async () => {
+    const { tcw, result, requests } = await restore(
+      async () => Response.json({ error: "location record not found" }, { status: 404 }),
+      { explicitHosts: [EXPLICIT_HOST] },
+    );
 
     expect(result.status).toBe("restored");
-    expect(tcw._node.hosts[0]).toBe("https://my.node.example");
+    expect(tcw.hosts[0]).toBe(EXPLICIT_HOST);
+    expect(requests.some((url) => url.startsWith(`${REGISTRY}/`))).toBe(true);
+    expect(requests.some((url) => url.includes("/v2/locations/"))).toBe(true);
+  });
+
+  test("a v1-only entry cannot restore through explicit or persisted stale hosts", async () => {
+    const record = await signLocationRecord(
+      {
+        version: 1,
+        subject: pkhDid(await owner.getAddress(), 1),
+        multiaddrs: ["/dns4/my.node.example/tcp/443/https"],
+        updated_at: "2026-10-18T00:00:00.000Z",
+        sequence: 1,
+      },
+      { type: "did:pkh", signMessage: (message: string) => owner.signMessage(message) },
+    );
+    const { result, requests } = await restore(
+      async (url) => url.includes("/v2/locations/")
+        ? Response.json({ error: "location record not found" }, { status: 404 })
+        : Response.json({ record }),
+      { explicitHosts: [EXPLICIT_HOST], persistedHosts: [STALE_SESSION_HOST] },
+    );
+
+    expect(result.status).toBe("restore-failed");
+    expect(requests.length).toBeGreaterThan(0);
+    expect(requests.every((url) => url.startsWith(`${REGISTRY}/`))).toBe(true);
   });
 });
 

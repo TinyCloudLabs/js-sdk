@@ -36,6 +36,7 @@ interface GlobalConfig {
 export type StoredProfile = {
   name: string;
   host: string;
+  tinycloudRegistryUrl?: unknown;
   chainId: number;
   spaceName: string;
   did: string;
@@ -231,7 +232,8 @@ function isStoredProfile(value: unknown): value is StoredProfile {
     isOptionalNonEmptyString(value.defaultSpace) &&
     isOptionalNonEmptyString(value.privateKey) &&
     isOptionalNonEmptyString(value.address) &&
-    isOptionalNonEmptyString(value.openkeyHost);
+    isOptionalNonEmptyString(value.openkeyHost) &&
+    isOptionalNonEmptyString(value.tinycloudRegistryUrl);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

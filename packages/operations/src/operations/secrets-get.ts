@@ -23,6 +23,9 @@ import {
   type SecretsGetInput,
 } from "../secrets.js";
 
+const NODE_NOT_RESPONDING_MESSAGE =
+  "The place where your data is at is not responsive right now. Please try again.";
+
 interface SecretsGetOutput {
   readonly value: string;
 }
@@ -147,14 +150,24 @@ async function executeSecretGet(
       name: reference.name,
       ...(reference.scope === undefined ? {} : { scope: reference.scope }),
     });
-  } catch {
+  } catch (error) {
+    const isNodeNotResponding =
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "NODE_NOT_RESPONDING";
     return {
       status: "error",
-      error: operationError(
-        "NODE_ERROR",
-        "The TinyCloud node could not read the secret.",
-        { retryable: true },
-      ),
+      error: isNodeNotResponding
+        ? operationError(
+          "NODE_NOT_RESPONDING",
+          NODE_NOT_RESPONDING_MESSAGE,
+          { retryable: true },
+        )
+        : operationError(
+          "NODE_ERROR",
+          "The TinyCloud node could not read the secret.",
+          { retryable: true },
+        ),
     };
   }
 
@@ -186,8 +199,8 @@ function classifySecretRead(
       return {
         status: "error",
         error: operationError(
-          "NODE_UNREACHABLE",
-          "The TinyCloud node could not be reached.",
+          "NODE_NOT_RESPONDING",
+          NODE_NOT_RESPONDING_MESSAGE,
           { retryable: true },
         ),
       };

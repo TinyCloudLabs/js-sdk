@@ -78,7 +78,6 @@ import {
   type OwnerDelegationReceipt,
   type LocalNodeIdentityStore,
   type OnNodeNotFound,
-  type RegistryPolicy,
   type RegistrySequenceStore,
   SignInOptions,
   ACCOUNT_MANIFEST_PERMISSIONS,
@@ -187,33 +186,19 @@ export interface Config extends ClientConfig {
   /** Local KV replication. Off unless set; node-sdk validates the config and owns the storage. */
   replication?: TinyCloudNodeConfig["replication"];
 
-  /** Explicit TinyCloud server hosts. When omitted, signIn resolves the user's host. */
+  /** Explicit host hints for owners absent from both registry namespaces. Signed v2 entries select their own hosts. */
   tinycloudHosts?: string[];
   /** TinyCloud location registry URL. Default: https://registry.tinycloud.xyz. */
   tinycloudRegistryUrl?: string | null;
-  /**
-   * Fallback TinyCloud hosts. Default: hosted TinyCloud node. Used only by the
-   * default `registryPolicy` ("legacy-fallback"), whose silent fallback is
-   * deprecated and will be removed in a future major release.
-   */
-  tinycloudFallbackHosts?: string[] | null;
-  /**
-   * How sign-in uses the location registry when no `tinycloudHosts` are set.
-   * Default `"legacy-fallback"` (deprecated). `"fail-closed"` routes on the
-   * registry verdict for the wallet address and refuses automatic space
-   * creation on a host the owner's registry record does not list, or when
-   * the registry gives no verdict. See `TinyCloudNodeConfig.registryPolicy`.
-   */
-  registryPolicy?: RegistryPolicy;
-  /** `fail-closed` only: host for owners with no registry record. Default https://node.tinycloud.xyz; `null` refuses them. */
+  /** Host hint for owners absent from both v2 and v1 registries. Default https://node.tinycloud.xyz; null disables onboarding. */
   newUserHost?: string | null;
-  /** `fail-closed` only: chain ID of the v1 registry subject built from the wallet address. Default 1. */
+  /** Chain ID used to distinguish a v1-only owner from an owner with no registry entry. Default 1. */
   registryChainId?: number;
-  /** `fail-closed` only: highest registry sequence seen per owner. Default: a `localStorage`-backed store. */
+  /** Highest signed v2 sequence seen per owner. Default: a `localStorage`-backed store. */
   registrySequenceStore?: RegistrySequenceStore;
-  /** `fail-closed` only: retry, use another host (not identity-checked; it persists with the session), or abort when sign-in resolves no host. Without it, sign-in throws. */
+  /** Called only when no host resolves for a genuinely unregistered owner. */
   onNodeNotFound?: OnNodeNotFound;
-  /** Probe configured/registered local nodes before registry/fallback resolution. Default: true. */
+  /** Probe local nodes only for owners absent from both registry namespaces. Default: true. */
   autoDiscoverLocalNode?: boolean;
   /** Local loopback node URL to probe. Omit to avoid probing loopback. */
   localNodeUrl?: string;
@@ -602,8 +587,6 @@ export class TinyCloudWeb {
     const nodeConfig: TinyCloudNodeConfig = {
       host: this.config.tinycloudHosts?.[0],
       tinycloudRegistryUrl: this.config.tinycloudRegistryUrl,
-      tinycloudFallbackHosts: this.config.tinycloudFallbackHosts,
-      registryPolicy: this.config.registryPolicy,
       newUserHost: this.config.newUserHost,
       registryChainId: this.config.registryChainId,
       registrySequenceStore:

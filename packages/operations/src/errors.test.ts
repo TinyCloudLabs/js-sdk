@@ -30,6 +30,7 @@ test("defines every stable v1 operation error code", () => {
     "DELEGATION_REJECTED",
     "ENCRYPTION_NETWORK_UNRESOLVED",
     "NODE_UNREACHABLE",
+    "NODE_NOT_RESPONDING",
     "NODE_ERROR",
     "STORAGE_QUOTA_EXCEEDED",
     "KV_NOT_FOUND",

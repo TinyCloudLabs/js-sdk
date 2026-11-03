@@ -148,7 +148,7 @@ isolatedTest("registered secret execution preserves classified node failures and
   const readSecret = spyOn(TinyCloudNode.prototype, "readSecret");
   try {
     for (const [status, code] of [
-      ["node_unreachable", "NODE_UNREACHABLE"],
+      ["node_unreachable", "NODE_NOT_RESPONDING"],
       ["read_failed", "SECRET_READ_FAILED"],
       ["corrupt_envelope", "SECRET_READ_FAILED"],
       ["decrypt_failed", "SECRET_DECRYPT_FAILED"],
@@ -166,6 +166,16 @@ isolatedTest("registered secret execution preserves classified node failures and
     expect(absent.status).toBe("setup_required");
     if (absent.status !== "setup_required") throw new Error("expected setup");
     expect(absent.setup.url).toContain("HERMETIC_DELEGATION_CANARY");
+
+    readSecret.mockImplementation(async () => {
+      throw Object.assign(new Error("private node detail"), { code: "NODE_NOT_RESPONDING" });
+    });
+    const notResponding = await invokeSecret(fixture.profile);
+    expect(notResponding).toMatchObject({
+      status: "error",
+      error: { code: "NODE_NOT_RESPONDING", retryable: true },
+    });
+    expect(JSON.stringify(notResponding)).not.toContain("private node detail");
 
     readSecret.mockImplementation(async () => {
       throw new Error("private node detail");

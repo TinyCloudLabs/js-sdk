@@ -78,6 +78,7 @@ export function registerProfileCommand(program: Command): void {
     .command("create <name>")
     .description("Create a new profile")
     .option("--host <url>", "TinyCloud node URL")
+    .option("--registry-url <url>", "TinyCloud location registry URL")
     .option(
       "--posture <posture>",
       `Profile posture: ${CLI_PROFILE_POSTURES.join(", ")}. Defaults to owner-openkey.`,
@@ -90,6 +91,7 @@ export function registerProfileCommand(program: Command): void {
       try {
         const globalOpts = cmd.optsWithGlobals();
         const host = options.host ?? globalOpts.host ?? DEFAULT_HOST;
+        const tinycloudRegistryUrl = options.registryUrl?.length ? options.registryUrl : undefined;
         const posture = parseProfilePosture(options.posture);
         const operatorType = parseOperatorType(options.operator);
 
@@ -110,9 +112,18 @@ export function registerProfileCommand(program: Command): void {
           createdAt: new Date().toISOString(),
           posture,
           operatorType,
+          ...(tinycloudRegistryUrl === undefined ? {} : { tinycloudRegistryUrl }),
         });
 
-        outputJson({ profile: name, did, host, posture, operatorType, created: true });
+        outputJson({
+          profile: name,
+          did,
+          host,
+          ...(tinycloudRegistryUrl === undefined ? {} : { tinycloudRegistryUrl }),
+          posture,
+          operatorType,
+          created: true,
+        });
       } catch (error) {
         return handleError(error);
       }
@@ -147,6 +158,7 @@ export function registerProfileCommand(program: Command): void {
         } else {
           process.stdout.write(`${theme.heading(p.name)}${isDefault ? theme.success(" (default)") : ""}\n`);
           process.stdout.write(formatField("Host", p.host) + "\n");
+          process.stdout.write(formatField("Registry URL", p.tinycloudRegistryUrl ?? null) + "\n");
           process.stdout.write(formatField("DID", p.did) + "\n");
           process.stdout.write(formatField("Session DID", p.sessionDid ?? null) + "\n");
           process.stdout.write(formatField("Posture", posture) + "\n");
