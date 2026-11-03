@@ -93,14 +93,20 @@ function store(records: PendingRecord[]): void {
   else writeDurable(pendingPath(), { v: 1, records });
 }
 
-/** Whether an unexpired record exists. Read-only: unlike the readers around it, it never removes, repairs or rewrites anything. */
-export function hasLivePending(): boolean {
+/** The delegations of the unexpired records. Read-only: unlike the readers around it, it never removes, repairs or rewrites anything. */
+export function liveRedeemedDelegations(): GrantPayload[] {
   try {
     const parsed = JSON.parse(fs.readFileSync(pendingPath(), 'utf8')) as PendingFile;
-    return parsed.v === 1 && Array.isArray(parsed.records) && parsed.records.filter(isRecord).some((record) => Date.parse(record.expiresAt) > Date.now());
+    if (parsed.v !== 1 || !Array.isArray(parsed.records)) return [];
+    return parsed.records.filter(isRecord).filter((record) => Date.parse(record.expiresAt) > Date.now()).map((record) => record.delegation);
   } catch {
-    return false;
+    return [];
   }
+}
+
+/** Whether an unexpired record exists (read-only, see `liveRedeemedDelegations`). */
+export function hasLivePending(): boolean {
+  return liveRedeemedDelegations().length > 0;
 }
 
 /** The unexpired record saved for this code, if any. */

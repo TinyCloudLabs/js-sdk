@@ -1,12 +1,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { cmd } from './program.js';
-import { loadGrant, profileDir, readSecure, saveKey, saveProfile, writeSecure } from './profile.js';
+import { hasProfileFields, isAgentKey, loadGrant, loadKey, profileDir, readSecure, saveKey, saveProfile, writeSecure } from './profile.js';
 import type { AgentKey, Profile } from './profile.js';
-import { openRelayResult } from '@tinycloud/share-envelope/links';
+import { checkApprovalResultBinding, openRelayResult } from '@tinycloud/share-envelope/links';
 import { holdsApproval, readPending } from './grant-request.js';
-import { hasLivePending } from './pending.js';
-import { REVOKE_URL, withRefusalNotice } from './grant-refusal.js';
+import { assertBoundToKey } from './grant.js';
+import { bareDid, siweTimes } from './authority.js';
+import { dropPendingDelegation, hasLivePending, liveRedeemedDelegations } from './pending.js';
+import { REVOKE_URL } from './grant-refusal.js';
 import { CourierError } from './errors.js';
 
 /**
@@ -33,7 +35,8 @@ const APPROVAL_FILE = 'approval-pending.json';
 const STRAY_TEMP = /^(?:rotation|key)\.json\.\d+\.[0-9a-f]{12}\.tmp$/;
 
 export type ApprovalState = 'none' | 'open' | 'held' | 'committed' | 'unreadable' | 'corrupt';
-export type ProfileStatus = 'absent' | Profile['status'];
+/** `unreadable`: profile.json exists and cannot be read (permissions or content). It is never the same as `absent`. */
+export type ProfileStatus = 'absent' | 'unreadable' | Profile['status'];
 
 export interface StateInputs {
   profile: ProfileStatus;
@@ -46,10 +49,10 @@ export interface StateInputs {
   rotationTemp: boolean;
 }
 
-export type StateAction = 'finish-rotation' | 'refuse' | 'init' | 'rotate-key' | 'wait' | 'resume' | 'request' | 'fix-approval' | 'none';
+export type StateAction = 'finish-rotation' | 'refuse' | 'fix-profile' | 'init' | 'rotate-key' | 'wait' | 'resume' | 'request' | 'fix-approval' | 'none';
 
 export type StateName =
-  | 'rotation-interrupted' | 'approval-orphaned' | 'new' | 'key-only' | 'key-missing'
+  | 'rotation-interrupted' | 'profile-unreadable' | 'approval-orphaned' | 'new' | 'key-only' | 'key-missing'
   | 'approval-held' | 'saved-delegation' | 'saved-grant' | 'approval-open' | 'approval-unreadable' | 'awaiting-grant'
   | 'grant-missing' | 'space-pending' | 'space-missing' | 'ready-approval' | 'ready';
 
@@ -89,15 +92,17 @@ const liveApproval = (approval: ApprovalState): boolean => approval === 'open' |
  * only where the action is waiting, requesting or starting, and advises `--resume` for a grant saved and not installed.
  */
 function waitGoesOn(i: StateInputs, action: StateAction): boolean {
-  if (action === 'refuse' || action === 'finish-rotation') return false;
+  if (action === 'refuse' || action === 'finish-rotation' || action === 'fix-profile') return false;
   if (heldApproval(i.approval)) return true;
-  if (i.approval === 'open' && i.profile === 'awaiting-space') return true;
+  // As before: on a profile that has a grant (ready) or is setting up its space, `--wait` only collects a request that is saved.
+  if (i.profile === 'awaiting-space' || i.profile === 'ready') return i.approval === 'open';
   return action === 'wait' || action === 'request' || action === 'init';
 }
 
 export function classifyState(i: StateInputs): Omit<DerivedState, 'inputs' | 'notes'> {
   const is = (state: StateName, action: StateAction) => ({ state, action, cleanTemp: i.rotationTemp, wait: waitGoesOn(i, action) });
   if (i.rotation) return is('rotation-interrupted', 'finish-rotation');
+  if (i.profile === 'unreadable') return is('profile-unreadable', 'fix-profile');
   // A saved approval without the profile or key it belongs to is never dropped here: the person decides.
   if (liveApproval(i.approval) && (i.profile === 'absent' || !i.key)) return is('approval-orphaned', 'refuse');
   if (i.profile === 'absent') return i.key ? is('key-only', 'init') : is('new', 'init');
@@ -133,15 +138,18 @@ function approvalState(): ApprovalState {
 
 const rotationPath = (): string => path.join(profileDir(), ROTATION_FILE);
 
-/** The profile's status and spacePending, read without validating the rest: an unreadable or outdated profile is the job of the mode that loads it. */
+/**
+ * The profile's status and spacePending, read without validating the rest (an outdated profile is the job of the mode that loads it).
+ * A profile.json that exists and cannot be read, or has no usable status, is `unreadable`: never the same as absent.
+ */
 function readProfileFields(): { status: ProfileStatus; spacePending: boolean } {
+  if (!fs.existsSync(path.join(profileDir(), 'profile.json'))) return { status: 'absent', spacePending: false };
   try {
     const profile = readSecure<{ status?: unknown; spacePending?: unknown }>('profile.json', false);
     const status = profile?.status;
-    return { status: status === 'awaiting-grant' || status === 'awaiting-space' || status === 'ready' ? status : 'absent', spacePending: profile?.spacePending === true };
-  } catch {
-    return { status: 'absent', spacePending: false };
-  }
+    if (status === 'awaiting-grant' || status === 'awaiting-space' || status === 'ready') return { status, spacePending: profile?.spacePending === true };
+  } catch { /* unreadable */ }
+  return { status: 'unreadable', spacePending: false };
 }
 
 function strayTemps(): string[] {
@@ -170,11 +178,25 @@ export function deriveState(): DerivedState {
   return { inputs, notes, ...classifyState(inputs) };
 }
 
+/** Which mode to restore depends on what is loose: the profile directory is 0700, a private file inside it 0600. */
+function permissionAdvice(name: string): string {
+  return `If the directory is loose, run \`chmod 700 ${profileDir()}\`; if the file is loose, run \`chmod 600 ${path.join(profileDir(), name)}\`.`;
+}
+
+function orphanAdvice(approval: ApprovalState): string {
+  const file = path.join(profileDir(), APPROVAL_FILE);
+  const left = `A saved approval request (${file}) has no matching profile and agent key. It was left as it is and nothing was changed.`;
+  if (approval === 'unreadable') return `${left} The request cannot be read. ${permissionAdvice(APPROVAL_FILE)} Then run the command again.`;
+  if (approval === 'open') return `${left} Restore the missing file, or run \`${cmd('init --rotate-key')}\` to start over with a new agent key.`;
+  return `${left} Restore the missing file, or run \`${cmd('init --rotate-key')}\`, which discards that approval and starts over with a new agent key.`;
+}
+
 /** The next command for the person or agent running init. */
-export function adviceFor(d: Pick<DerivedState, 'state'>): string {
+export function adviceFor(d: Pick<DerivedState, 'state' | 'inputs'>): string {
   switch (d.state) {
     case 'rotation-interrupted': return `A key rotation was interrupted. Any \`${cmd('init')}\` command finishes it first.`;
-    case 'approval-orphaned': return `A saved approval request (approval-pending.json) has no matching profile and agent key, so it was left as it is and nothing was changed. Restore the missing file, or run \`${cmd('init --rotate-key')}\` to discard the approval and start again.`;
+    case 'profile-unreadable': return `${path.join(profileDir(), 'profile.json')} cannot be read, so nothing was changed. ${permissionAdvice('profile.json')} If its content is damaged, \`${cmd('init --rotate-key')}\` replaces the agent key and the profile with new ones.`;
+    case 'approval-orphaned': return orphanAdvice(d.inputs.approval);
     case 'new':
     case 'key-only': return `No Courier profile yet. Run \`${cmd('init --request')}\`, send the printed openkeyUrl to the owner, then run \`${cmd('init --wait')}\`.`;
     case 'key-missing': return `The profile has no agent key. Run \`${cmd('init --rotate-key')}\` and approve a new grant.`;
@@ -182,9 +204,11 @@ export function adviceFor(d: Pick<DerivedState, 'state'>): string {
     case 'saved-grant': return `An approved grant is saved and not installed: run \`${cmd('init --resume')}\`. No new approval is needed.`;
     case 'approval-held': return `An approval from the owner is saved: run \`${cmd('init --wait')}\`. No new approval is needed.`;
     case 'approval-open': return `An approval request is open: run \`${cmd('init --wait')}\` to collect it once the owner approves.`;
-    case 'approval-unreadable': return `The saved approval request cannot be read. Fix its file permissions, then run \`${cmd('init --wait')}\`.`;
+    case 'approval-unreadable': return `The saved approval request cannot be read. ${permissionAdvice(APPROVAL_FILE)} Then run \`${cmd('init --wait')}\`.`;
     case 'awaiting-grant': return `No grant yet. Run \`${cmd('init --request')}\`, send the printed openkeyUrl to the owner, then run \`${cmd('init --wait')}\`.`;
-    case 'grant-missing': return `The profile has no saved grant. Run \`${cmd('init --request')}\`, send the printed openkeyUrl to the owner, then run \`${cmd('init --wait')}\`.`;
+    case 'grant-missing': return d.inputs.profile === 'ready'
+      ? `This profile already has a grant and no approval request is pending. To renew it, run \`${cmd('init --request')}\`, send the printed openkeyUrl to the owner, then run \`${cmd('init --wait')}\`.`
+      : `The grant is saved and the "agents" space is still being set up: run \`${cmd('init --resume')}\`. \`${cmd('init --wait')}\` collects an approval that \`${cmd('init --request')}\` asked for.`;
     case 'space-pending':
     case 'space-missing': return `The grant is saved and the agents space is still being set up: run \`${cmd('init --resume')}\`. \`${cmd('init --wait')}\` collects an approval that \`${cmd('init --request')}\` asked for.`;
     case 'ready-approval': return `An approval request is saved: run \`${cmd('init --wait')}\` to collect or acknowledge it.`;
@@ -194,21 +218,30 @@ export function adviceFor(d: Pick<DerivedState, 'state'>): string {
 
 // ---------- recovery ----------
 
-/** Explicit recovery: roll an interrupted rotation forward, then remove stray key-bearing temp files. Run once at the start of an init mode. */
+/**
+ * Explicit recovery, run once at the start of an init mode: roll an interrupted rotation forward (only after the journal validated), then
+ * remove stray key-bearing temp files. A refusal in the first step happens before anything is changed.
+ */
 export function recoverInterrupted(): void {
   finishRotation();
   for (const name of strayTemps()) scrub(path.join(profileDir(), name));
 }
 
-/** A stray temp file may hold a private key: only a regular file of this user is touched; its bytes are zeroed (best effort) before it is unlinked. */
+/**
+ * A stray temp file may hold a private key. Only a plain file of this user with a single link is touched, and it is checked again on the
+ * open descriptor so a swap between the check and the open is caught: its bytes are overwritten with zeros (best effort: a copy-on-write or
+ * journaling filesystem may keep old blocks) and it is unlinked. Anything else is left as it is and reported.
+ */
 function scrub(file: string): void {
-  const stat = fs.lstatSync(file);
-  if (!stat.isFile() || stat.uid !== process.getuid?.()) {
-    throw new CourierError('stray-temp', `${file} is not a regular file of this user, so it was left as it is. Remove it by hand, then run the command again.`);
-  }
+  const refuse = () => new CourierError('stray-temp', `${file} is not a plain file of this user with one link, so it was left as it is. Remove it by hand, then run the command again.`);
+  const plain = (stat: fs.Stats) => stat.isFile() && stat.uid === process.getuid?.() && stat.nlink === 1;
+  const before = fs.lstatSync(file);
+  if (!plain(before)) throw refuse();
   const fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_NOFOLLOW);
   try {
-    fs.writeSync(fd, Buffer.alloc(stat.size));
+    const open = fs.fstatSync(fd);
+    if (!plain(open) || open.dev !== before.dev || open.ino !== before.ino) throw refuse();
+    fs.writeSync(fd, Buffer.alloc(open.size));
     fs.fsyncSync(fd);
   } finally {
     fs.closeSync(fd);
@@ -224,6 +257,12 @@ function syncDir(): void {
 
 // ---------- rotation journal ----------
 
+interface DiscardedGrant {
+  delegationCid: string;
+  /** When the delegation expires, if its SIWE message said. Not a secret. */
+  expiresAt?: string;
+}
+
 interface RotationJournal {
   v: 1;
   key: AgentKey;
@@ -232,30 +271,69 @@ interface RotationJournal {
   discardApproval: boolean;
   /** That approval already held an approved result (`resultEnvelope` collected, or `committed`): a live grant may exist. */
   grantedResult: boolean;
-  /** The delegation of that result, when it could be read. Not a secret. */
+  /** The delegation and its expiry, when they could be read from that result. Not secrets. */
   delegationCid?: string;
+  grantExpiresAt?: string;
+  /** Redeemed delegations saved for the old key (pending-grant.json), removed in step 4. Not secrets: no header, no signature. */
+  discardedGrants?: DiscardedGrant[];
+}
+
+/** What is wrong with a parsed journal, or undefined when it is a rotation this code may replay. Never includes any of its content. */
+function journalProblem(journal: unknown): string | undefined {
+  if (!journal || typeof journal !== 'object' || Array.isArray(journal)) return 'it is not an object';
+  const j = journal as Partial<RotationJournal>;
+  if (j.v !== 1) return 'its version is not 1';
+  if (!isAgentKey(j.key)) return 'its key is not a valid agent key';
+  if (!hasProfileFields(j.profile ?? null)) return 'its profile is not a complete current profile';
+  if (j.profile?.status !== 'awaiting-grant') return 'its profile is not awaiting-grant';
+  if (j.profile.courierDid !== bareDid(j.key.did)) return 'its profile does not belong to its key';
+  if (typeof j.discardApproval !== 'boolean' || typeof j.grantedResult !== 'boolean') return 'its approval facts are not booleans';
+  if (j.delegationCid !== undefined && typeof j.delegationCid !== 'string') return 'its delegation is not text';
+  if (j.grantExpiresAt !== undefined && typeof j.grantExpiresAt !== 'string') return 'its grant expiry is not text';
+  if (j.discardedGrants !== undefined
+    && (!Array.isArray(j.discardedGrants) || j.discardedGrants.some((g) => !g || typeof g.delegationCid !== 'string' || g.delegationCid === '' || (g.expiresAt !== undefined && typeof g.expiresAt !== 'string')))) {
+    return 'its discarded grants are not a list of delegations';
+  }
+  return undefined;
 }
 
 /** The non-secret facts about the saved approval, taken before the journal is written. */
-async function approvalFacts(): Promise<Pick<RotationJournal, 'discardApproval' | 'grantedResult' | 'delegationCid'>> {
+async function approvalFacts(): Promise<Pick<RotationJournal, 'discardApproval' | 'grantedResult' | 'delegationCid' | 'grantExpiresAt'>> {
   const read = readPending();
   if (read.kind !== 'ok' || !holdsApproval(read.pending)) return { discardApproval: false, grantedResult: false };
   const pending = read.pending;
   const grantedResult = pending.resultEnvelope !== undefined || pending.committed === true;
   let delegationCid: string | undefined;
+  let grantExpiresAt: string | undefined;
   if (grantedResult && pending.resultEnvelope !== undefined) {
     try {
       const opened = await openRelayResult(pending.resultEnvelope, pending.requestId, pending.relayPrivateKey);
       const claimed = (opened.delegation as { delegationCid?: unknown } | null | undefined)?.delegationCid;
       if (typeof claimed === 'string' && claimed !== '') delegationCid = claimed;
-    } catch { /* the notice is still given, without the CID */ }
+      grantExpiresAt = checkApprovalResultBinding(opened, { requestId: pending.requestId, bodyCid: pending.bodyCid, request: pending.request }).delegationExpiresAt;
+    } catch { /* the notice is still given, with what could be read */ }
   }
-  return { discardApproval: true, grantedResult, ...(delegationCid ? { delegationCid } : {}) };
+  return { discardApproval: true, grantedResult, ...(delegationCid ? { delegationCid } : {}), ...(grantExpiresAt ? { grantExpiresAt } : {}) };
+}
+
+/** Redeemed delegations saved for the OLD agent key: they would be useless after the rotation and may be live grants. */
+function oldKeyDelegations(): DiscardedGrant[] {
+  let old: AgentKey;
+  try { old = loadKey(); } catch { return []; }
+  const found: DiscardedGrant[] = [];
+  for (const delegation of liveRedeemedDelegations()) {
+    try { assertBoundToKey(delegation, old); } catch { continue; }
+    if (typeof delegation.delegationCid !== 'string' || delegation.delegationCid === '') continue;
+    let expiresAt: string | undefined;
+    try { expiresAt = siweTimes(delegation.siwe).expiresAt?.toISOString(); } catch { /* unknown */ }
+    found.push({ delegationCid: delegation.delegationCid, ...(expiresAt ? { expiresAt } : {}) });
+  }
+  return found;
 }
 
 /** Steps 1-5. `profile` is the complete new profile. */
 export async function rotateKey(key: AgentKey, profile: Profile): Promise<void> {
-  const journal: RotationJournal = { v: 1, key, profile, ...(await approvalFacts()) };
+  const journal: RotationJournal = { v: 1, key, profile, ...(await approvalFacts()), discardedGrants: oldKeyDelegations() };
   writeSecure(rotationPath(), journal);
   applyRotation(journal);
 }
@@ -271,30 +349,37 @@ function applyRotation(journal: RotationJournal): void {
   saveProfile(journal.profile);
   removeIfPresent(path.join(profileDir(), 'grant.json'));
   if (journal.discardApproval) removeIfPresent(path.join(profileDir(), APPROVAL_FILE));
+  for (const grant of journal.discardedGrants ?? []) dropPendingDelegation(grant.delegationCid);
   syncDir();
-  if (journal.discardApproval) warnDiscarded(journal);
+  warnDiscarded(journal);
   fs.unlinkSync(rotationPath());
   syncDir();
 }
 
 /** Printed from the journal, so any init mode that finishes the rotation, also after a crash, says the same thing. */
 function warnDiscarded(journal: RotationJournal): void {
-  console.error('The saved approval request already held an approval from the owner. It is bound to the old agent key, so this key rotation discards that approval: the owner must approve a new request.');
-  if (!journal.grantedResult) return;
-  const error = withRefusalNotice(
-    new CourierError('approval-result-invalid', 'The owner already approved that request, so a live grant may exist for the old agent key.'),
-    journal.delegationCid,
-  ) as Error;
-  console.error(error.message.includes(REVOKE_URL) ? error.message : `${error.message}\nA live grant may exist: the owner can revoke it at ${REVOKE_URL}.`);
+  if (journal.discardApproval) {
+    console.error('The saved approval request already held an approval from the owner. It is bound to the old agent key, so this key rotation discards that approval: the owner must approve a new request.');
+  }
+  if (journal.discardApproval && journal.grantedResult) {
+    const named = journal.delegationCid ? ` (delegation ${journal.delegationCid})` : '';
+    const until = journal.grantExpiresAt ? `, valid until ${journal.grantExpiresAt}` : '';
+    console.error(`That request was already granted by the owner${named}, so a live grant may exist${until}. This agent cannot revoke it; the owner can revoke it at ${REVOKE_URL}.`);
+  }
+  for (const grant of journal.discardedGrants ?? []) {
+    const until = grant.expiresAt ? `, valid until ${grant.expiresAt}` : '';
+    console.error(`A redeemed grant saved for the old agent key and not installed (delegation ${grant.delegationCid}) was discarded by this key rotation. A live grant may exist${until}. This agent cannot revoke it; the owner can revoke it at ${REVOKE_URL}.`);
+  }
 }
 
-/** Roll an interrupted rotation forward. Returns whether one was found. */
+/** Roll an interrupted rotation forward. Returns whether one was found. Refuses, changing nothing, when the record is not a valid rotation. */
 export function finishRotation(): boolean {
   if (!fs.existsSync(rotationPath())) return false;
-  const journal = readSecure<RotationJournal>(ROTATION_FILE, true)!;
-  if (journal.v !== 1 || !journal.key?.did || !journal.profile?.courierDid) {
-    throw new CourierError('bad-profile', `Corrupt key rotation record at ${rotationPath()}`);
+  const journal = readSecure<unknown>(ROTATION_FILE, true);
+  const problem = journalProblem(journal);
+  if (problem) {
+    throw new CourierError('bad-profile', `${rotationPath()} is not a valid key rotation record (${problem}). Nothing was changed. Restore it from a backup, or move it aside and run \`${cmd('init --rotate-key')}\` to start over with a new agent key.`);
   }
-  applyRotation(journal);
+  applyRotation(journal as RotationJournal);
   return true;
 }

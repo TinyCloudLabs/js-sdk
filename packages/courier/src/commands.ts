@@ -115,7 +115,10 @@ export async function cmdInit(args: ParsedArgs) {
   recoverInterrupted();
   const state = deriveState();
   for (const note of state.notes) console.error(`warning: ${note}`);
-  // A saved approval without its profile or key is never dropped; `--rotate-key` is the explicit way to discard it.
+  // A profile.json that exists and cannot be read is never treated as absent: `loadProfile` refuses with its own message (an unreadable
+  // profile is replaced only by an explicit `--rotate-key`).
+  if (state.action === 'fix-profile' && !args.has('rotate-key')) { loadProfile(); fail('bad-profile', adviceFor(state)); }
+  // A saved approval without its profile or key is left as it is; `--rotate-key` starts over with a new key.
   if (state.action === 'refuse' && !args.has('rotate-key')) fail('approval-orphaned', adviceFor(state));
   const HELD_APPROVAL_KEPT = `The saved approval request holds an approval from the owner and was kept: run \`${cmd('init --wait')}\` to collect or acknowledge it.`;
   if (args.has('resume')) {

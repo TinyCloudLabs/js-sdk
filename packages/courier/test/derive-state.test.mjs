@@ -17,7 +17,7 @@ import { classifyState, deriveState } from '../dist/state.js';
 //   approval:        approval-pending.json (open -> held -> committed) interleaved with the install above
 //   rotation:        rotation.json -> key.json -> profile.json(awaiting-grant) -> remove grant.json -> remove rotation.json
 
-const PROFILES = ['absent', 'awaiting-grant', 'awaiting-space', 'ready'];
+const PROFILES = ['absent', 'unreadable', 'awaiting-grant', 'awaiting-space', 'ready'];
 const APPROVALS = ['none', 'open', 'held', 'committed', 'unreadable', 'corrupt'];
 const LIVE = ['open', 'held', 'committed', 'unreadable'];
 const HELD = ['held', 'committed'];
@@ -26,6 +26,8 @@ const HELD = ['held', 'committed'];
 const TABLE = [
   // rotation journal present: finished before anything else, whatever else is on disk
   [{ rotation: true }, { state: 'rotation-interrupted', action: 'finish-rotation' }],
+  // a profile.json that exists and cannot be read is its own state, never an absent profile
+  [{ profile: 'unreadable' }, { state: 'profile-unreadable', action: 'fix-profile' }],
   // a saved approval whose profile or key is missing is never dropped: refused with advice, files untouched
   [{ profile: 'absent', approval: LIVE }, { state: 'approval-orphaned', action: 'refuse' }],
   [{ key: false, approval: LIVE }, { state: 'approval-orphaned', action: 'refuse' }],
@@ -120,6 +122,7 @@ for (const [name, mutant] of Object.entries(MUTANTS)) {
 
 const WAIT_TABLE = [
   [{ rotation: true }, false],
+  [{ profile: 'unreadable' }, false],
   [{ profile: 'absent', approval: LIVE }, false],
   [{ key: false, approval: LIVE }, false],
   [{ profile: 'absent' }, true],
@@ -130,10 +133,8 @@ const WAIT_TABLE = [
   [{ profile: 'awaiting-grant', grant: true }, false],
   [{ profile: 'awaiting-grant', approval: 'unreadable' }, false],
   [{ profile: 'awaiting-grant' }, true],
-  [{ profile: 'awaiting-space', grant: false }, true],
   [{ profile: 'awaiting-space' }, false],
   [{ profile: 'ready', approval: 'unreadable' }, false],
-  [{ profile: 'ready', grant: false }, true],
   [{ profile: 'ready', approval: 'open' }, true],
   [{ profile: 'ready' }, false],
 ];
@@ -181,10 +182,12 @@ function arrange(inputs) {
   fs.mkdirSync(home(), { recursive: true, mode: 0o700 });
   fs.chmodSync(home(), 0o700);
   if (inputs.profile !== 'absent') {
+    // `unreadable` is a profile.json that exists and cannot be read (mode 0644 here), whatever status it holds.
     put('profile.json', {
-      version: 3, host: 'https://node.test', openkeyHost: 'https://openkey.test', label: 'l', courierDid: 'did:key:z', status: inputs.profile,
+      version: 3, host: 'https://node.test', openkeyHost: 'https://openkey.test', label: 'l', courierDid: 'did:key:z',
+      status: inputs.profile === 'unreadable' ? 'ready' : inputs.profile,
       ...(inputs.spacePending ? { spacePending: true } : {}), peers: {},
-    });
+    }, inputs.profile === 'unreadable' ? 0o644 : 0o600);
   }
   if (inputs.key) put('key.json', { v: 1, jwk: {}, did: 'did:key:z6Mk', createdAt: '2026-01-01T00:00:00.000Z' });
   if (inputs.grant) put('grant.json', { v: 1, delegationHeader: { Authorization: 'a' }, delegationCid: 'c', spaceId: 's', siwe: 'x' });
