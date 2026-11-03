@@ -330,7 +330,7 @@ describe("401 invalid_proof is ambiguous: kept by the clock only while the reque
   });
 
   test("after the approval exists, a clock-held entry is bounded by the purge time, not by E", () => {
-    const held = proof(E + S + 1, 90_000, "discovered");
+    const held = proof(purgeAt(entryIn("discovered")) - 1, 90_000, "discovered");
     expect(held.state.entry!.hold).toBeDefined();
     const entry = held.state.entry!;
     const purged = reduce({ entry, run: held.state.run }, { type: "tick", now: purgeAt(entry) });
@@ -541,7 +541,7 @@ describe("a 401 never drops an approved result: fetch and ack keep the entry, bo
       expect(step.state.entry!.keys!.relayPrivateKey).toBeDefined();
       expect(step.effects.some((effect) => effect.type === "purge")).toBe(false);
       // D-2: after an ack 401 the grant IS saved (the caller's commit succeeded); a fetch 401 says nothing of the sort.
-      expect(finishOf(step)).toEqual(call === "ack" ? { kind: "unexpected", grantSaved: true } : { kind: "unexpected" });
+      expect(finishOf(step)).toEqual(call === "ack" ? { kind: "unexpected", grantSaved: true as const } : { kind: "unexpected" });
       expect(exitCodeOf(finishOf(step)!)).toBe(7);
     }
   });

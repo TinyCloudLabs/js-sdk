@@ -22,7 +22,7 @@ import {
   type ApprovalKeyName,
   type ApprovalPhase,
 } from "./approval-entry.js";
-import { APPROVAL_POLL_INTERVAL_MS } from "./constants.js";
+import { APPROVAL_POLL_INTERVAL_MS, LINK_WINDOW_SECONDS } from "./constants.js";
 import { parseLinkTimestamp } from "./header.js";
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -76,13 +76,14 @@ export type Outcome =
   /** Exit 8: OpenKey confirmed the request live in this run, and `now < expiresAt`. */
   | { readonly kind: "pending"; readonly expiresAt: number; readonly confirmedLiveAt: number }
   | { readonly kind: "unreachable"; readonly expiresAt: number; readonly resultExpiresAt?: number }
-  | { readonly kind: "unexpected" }
+  /** `grantSaved`: the caller's commit already succeeded (the entry is `committed`), so this is NOT a failed sign-in: only the ack is outstanding. */
+  | { readonly kind: "unexpected"; readonly grantSaved?: true }
   | { readonly kind: "lapsed"; readonly reason: "expired_request" | "not_found" | "proof_after_expiry" | "purged"; readonly grantMayBeLive: "no" }
   | { readonly kind: "gone"; readonly reason: "expired_result" | "not_found" | "acknowledged" | "ended" | "purged"; readonly grantMayBeLive: "yes" }
   | { readonly kind: "refused"; readonly reason: "request_binding" | "request_invalid" | "proof" | "verification"; readonly grantMayBeLive: GrantMayBeLive }
   | { readonly kind: "denied" }
   /** Exit 12: the local clock disagrees with OpenKey's by more than 45 s (`CLOCK_DISAGREEMENT_MS`). The entry is kept. */
-  | { readonly kind: "clock"; readonly skewMs?: number }
+  | { readonly kind: "clock"; readonly skewMs?: number; readonly grantSaved?: true }
   | { readonly kind: "abandoned"; readonly reason: AbandonReason; readonly grantMayBeLive: GrantMayBeLive }
   | { readonly kind: "internal"; readonly reason: "illegal-event" | "missing-entry" };
 
@@ -229,7 +230,8 @@ function settle(entry: ApprovalEntry | undefined, run: RunContext, outcome: Outc
 
 /** The run ends and the entry stays (kept-by-clock, pending, unreachable, unexpected, an ack warning). */
 function stopKeep(live: LiveState, outcome: Outcome, entry: ApprovalEntry = live.entry): Step {
-  return settle(entry, live.run, outcome, entry === live.entry ? [] : [{ type: "persist" }]);
+  const saved = live.entry.phase === "committed" && (outcome.kind === "unexpected" || outcome.kind === "clock");
+  return settle(entry, live.run, saved ? { ...outcome, grantSaved: true } : outcome, entry === live.entry ? [] : [{ type: "persist" }]);
 }
 
 /** The run ends and the entry is REMOVED with every key it held. */
@@ -459,10 +461,14 @@ function onStart(state: RequesterState, event: Extract<Event, { type: "start" }>
     entry = { ...entry };
     delete entry.hold;
   }
+  // `createdThisRun` is only believed for a fresh open entry: no result yet, created within the links API's clock window. A caller
+  // that passes it for a resumed entry gets the resumed rules (a first check with no answer is unreachable, never pending).
+  const fresh = event.createdThisRun === true && entry.phase === "open" && entry.resultRef === undefined &&
+    Math.abs(event.now - Date.parse(entry.createdAt)) <= LINK_WINDOW_SECONDS * 1000;
   const run: RunContext = {
     unexpectedStreak: 0, firstCheckDone: false, finalPoll: false,
     ...(event.deadline === undefined ? {} : { deadline: event.deadline }),
-    ...(event.createdThisRun === true ? { confirmedLiveAt: event.now } : {}),
+    ...(fresh ? { confirmedLiveAt: event.now } : {}),
   };
   return advance(state.entry, { entry, run }, event.now);
 }
@@ -475,6 +481,11 @@ export function reduce(state: RequesterState, event: Event): Step {
   if (event.type === "start") return validTime(event.now) ? onStart(state, event) : settle(state.entry, state.run, { kind: "internal", reason: "illegal-event" });
   if (state.settled !== undefined) return { state, effects: [{ type: "finish", outcome: state.settled }] };
   if (!validTime(event.now)) return illegal(state);
+  // The purge time WINS over any event, not only a tick: a reply that lands after it (a delayed 401, a slow failure) must not
+  // keep, hold or persist an entry whose keys are due. The caller's commit, if it just succeeded, is not a failure.
+  if (event.type !== "tick" && event.type !== "abandon" && event.now >= purgeAt(state.entry)) {
+    return event.type === "committed" && state.entry.phase === "fetched" ? drop(state, { kind: "completed", warning: "ack-expired" }) : dropPurged(state);
+  }
   switch (event.type) {
     case "tick": return beforeCall(state, event.now);
     case "reply": return onReply(state, event);

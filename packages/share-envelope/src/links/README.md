@@ -36,12 +36,17 @@ command entries). A kept-by-clock `hold` is a flag, not a phase: the next run re
   state holds a key, held or not.
 - **Nothing is kept forever.** `E` is the signed header's `expiresAt`, `S` = 30 s, `R` = 600 s. A run ends by `E + S` (one final
   poll at `E + S`), by the caller's deadline, or by the collect grace (30 s) once approved.
+- **The purge time wins over every event.** An event of any kind that lands at or after `purgeAt` (a reply delayed by the network,
+  a slow failure) purges the entry like a tick at `purgeAt` would: `lapsed` (open), `gone` (discovered, fetched), or `completed` with
+  an `ack-expired` warning (committed, or the caller's commit that just succeeded). A keep, a hold or a `persist` is never returned
+  for an entry at or past its purge time.
 - **First check.** A resumed approval (no `createdThisRun`) completes at least one full status check, made with the full request
   limit however late the deadline is, before it reports pending; a first check that gets no answer is `unreachable` (exit 6), with
   the entry and its keys kept. A request created in this run (`createdThisRun`, the links API just answered 201) is live until `E` by
   construction: when the deadline passes before OpenKey answers it returns its link as `pending` (exit 8). Pending always needs a
   live confirmation from this run (a 202 or that creation) and `now < E`. An entry that already has a result keeps collecting past
-  the deadline (30 s grace), then `unreachable`.
+  the deadline (30 s grace), then `unreachable`. `createdThisRun` is believed only for an `open` entry with no result reference
+  created within 120 s of the start event (the links API's clock window); for any other entry it is ignored and the resumed rules apply.
 
 ### What each OpenKey answer means (`RULES`, keyed `<call>:<code>`)
 
@@ -70,6 +75,10 @@ command entries). A kept-by-clock `hold` is a flag, not a phase: the next run re
 clock 12. The CLI and Courier still print and exit with their own numbers until they adopt the machine; `collectApprovalResult`
 and `refuse` are unchanged until then.
 
+`unexpected` and `clock` outcomes carry `grantSaved: true` when the entry is `committed`: the caller's commit already succeeded and only
+the acknowledgement is outstanding (for example a 401 on the ack). An adapter must not report a failed sign-in for it. The entry is
+kept until `purgeAt`, then ends `completed` with an `ack-expired` warning (exit 0). The field is absent for every other outcome.
+
 ### The file
 
 `approval-pending.json`, version 2: `{ version: 2, entries: [...], unrecognized: [...] }`, mode 0600 in a 0700 directory, written
@@ -77,4 +86,5 @@ atomically by the adapter. An entry that cannot be read (including a repeated `r
 signing key with fields other than `kty`, `crv`, `x`, `d` and a short `kid`/`alg`/`use`) is moved to `unrecognized` with its raw
 content (never deleted silently) and purged `24 h + R + S` after it was set aside (a stamp in the future counts from now). A file
 written by a newer client (`version > 2`) is reported, not read. An `acked` entry holds no key and no approval URL (its fragment
-holds the content key).
+holds the content key), and no sealed body. `ext` belongs to the caller and is round-tripped untouched: adapters must not put content
+keys under it.

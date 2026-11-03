@@ -95,6 +95,7 @@ export const approvalEntrySchema = z
       if (entry.approvalUrl !== undefined) issue("an acked entry holds no approval URL (its fragment holds the content key)");
       if (entry.retainUntil === undefined) issue("an acked entry needs retainUntil");
       if (entry.hold !== undefined) issue("an acked entry cannot be held");
+      if (entry.record.body !== undefined) issue("an acked entry keeps no sealed body");
     } else {
       if (entry.keys === undefined) issue("an entry that is not acked holds its relay key");
       if (entry.approvalUrl === undefined) issue("an entry that is not acked holds its approval URL");
