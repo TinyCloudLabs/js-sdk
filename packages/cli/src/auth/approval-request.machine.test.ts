@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import type { ApprovalEntry } from "@tinycloud/share-envelope/links";
+import { driveApproval, signerFromJwk, type ApprovalEntry } from "@tinycloud/share-envelope/links";
 import type { AuthFlowOptions } from "./browser-auth.js";
 import { createApprovalFixture, SYNTHETIC_ACK_ID, type OpenKeyAction, type OpenKeyOverride } from "./test-support/approval-fixture.js";
 
@@ -11,6 +11,7 @@ import { createApprovalFixture, SYNTHETIC_ACK_ID, type OpenKeyAction, type OpenK
 
 const fx = await createApprovalFixture("TC2377-approval-machine");
 const { acquireApprovalRequest, completeApprovalResult, pendingApprovalKey, dropApprovalsHoldingKey, approvalHoldsKey, dropRefusedApproval, savableParent } = await import("./approval-request.js");
+const { fileApprovalStore } = await import("./approval-store.js");
 const { registerNextLineHelper } = await import("./approval-next-line.js");
 const { isMaybeGranted } = await import("./refusal.js");
 const { CLIError } = fx;
@@ -363,6 +364,101 @@ describe("several saved requests of one profile (command intents)", () => {
     expect(entries).toHaveLength(2);
     expect(entries[0]).toMatchObject({ requestId: built.requestId, phase: "acked" });
     expect(entries[0]!.keys).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+describe("a completed command's kept parent", () => {
+  test("after the ack no private key, content key or envelope survives anywhere in the file: the machine's own acked entry, ext included", async () => {
+    const built = await fx.buildRequest();
+    const delegation = await fx.signedDelegation();
+    const childExpiry = new Date(fx.clock + 3600_000).toISOString();
+    const fetched = await fx.v2Entry(built, { phase: "fetched", delegation, stagedKey: fx.key, commandIntent: COMMAND_A });
+    const withCommand: ApprovalEntry = { ...fetched,
+      ext: { cli: { expectedOwner: fx.ownerDid, commandIntent: COMMAND_A, command: { request: {}, result: { expiry: childExpiry }, parent: savableParent(fetched) } } } };
+    await seed([withCommand]);
+    const secrets = [fx.key.d, built.relayPrivateKey, withCommand.approvalUrl!.split("#")[1]!];
+    expect(await diskText()).toContain(built.relayPrivateKey);
+
+    const done = await driveApproval({
+      store: fileApprovalStore("approval", fx.virtual),
+      transport: {
+        discover: async () => ({ reply: { kind: "network" } }), fetch: async () => ({ reply: { kind: "network" } }),
+        ack: async () => ({ reply: { kind: "acked" } }),
+      },
+      verify: async () => "ok", commit: async () => ({ retainUntil: Date.parse(childExpiry) }),
+      now: fx.virtual.now, sleep: fx.virtual.sleep,
+    }, withCommand.requestId);
+    expect(done.outcome).toEqual({ kind: "completed" });
+
+    const text = await diskText();
+    const [kept] = await fx.entries();
+    expect(kept).toMatchObject({ requestId: withCommand.requestId, phase: "acked", retainUntil: childExpiry });
+    for (const secret of secrets) expect(text, "a key survived the ack").not.toContain(secret);
+    for (const field of ['"keys"', '"relayPrivateKey"', '"stagedSigningKey"', '"approvalUrl"', '"resultEnvelope"', '"ciphertext"', '"body"', '"d"']) expect(text).not.toContain(field);
+    // The parent is still there: that is the point of keeping it.
+    expect(text).toContain('"parent"');
+  });
+
+  describe("cannot be replayed: every use re-verifies it against the CURRENT command, and any mismatch asks for a new approval", () => {
+    const key2 = JSON.parse(fx.wasm.createSessionManager().jwk("default")!) as typeof fx.key;
+
+    async function repeatAsksAgain(entry: ApprovalEntry, flow: Record<string, unknown> = {}): Promise<void> {
+      await seed([entry]);
+      const error = await fx.caught(() => acquire(fx.options({ deadlineMs: fx.clock + 30_000 }, { commandIntent: COMMAND_A, ...flow })));
+      expect(error.code, "a kept parent must not answer a command it does not belong to").toBe("APPROVAL_PENDING");
+      expect(fx.counters.linkPosts).toBe(1);
+      expect(fx.openkeyCalls).toBe(0);
+      expect((await fx.entries())[0]).toEqual(entry);
+    }
+
+    test("a parent from request A kept under request B is refused", async () => {
+      const a = await fx.ackedCommandEntry(await fx.buildRequest(), { commandIntent: COMMAND_A });
+      const { entry } = await fx.ackedCommandEntry(await fx.buildRequest(), { commandIntent: COMMAND_A, parent: a.parent });
+      await repeatAsksAgain(entry);
+    });
+
+    test("a parent made for K1, kept in an entry that now names K2, is refused", async () => {
+      const built = await fx.buildRequest();
+      const did2 = signerFromJwk(key2).did;
+      const forged = { ...built.request, issuer: did2, targetDid: did2, targetPublicJwk: { kty: key2.kty, crv: key2.crv, x: key2.x } };
+      const { entry } = await fx.ackedCommandEntry(built, { commandIntent: COMMAND_A, request: forged });
+      await repeatAsksAgain(entry, { jwk: key2 });
+    });
+
+    test("a parent for K1 is not used by a command that now signs with K2", async () => {
+      const { entry } = await fx.ackedCommandEntry(await fx.buildRequest(), { commandIntent: COMMAND_A });
+      await repeatAsksAgain(entry, { jwk: key2 });
+    });
+
+    test("a parent past its signed expiry is refused", async () => {
+      const { entry } = await fx.ackedCommandEntry(await fx.buildRequest(), { commandIntent: COMMAND_A, delegation: await fx.signedDelegation(-30) });
+      await repeatAsksAgain(entry);
+    });
+
+    test("a parent with a tampered signature is refused", async () => {
+      const delegation = await fx.signedDelegation();
+      const { entry } = await fx.ackedCommandEntry(await fx.buildRequest(), { commandIntent: COMMAND_A, delegation: { ...delegation, signature: `0x${"11".repeat(65)}` } });
+      await repeatAsksAgain(entry);
+    });
+
+    test("a parent with a tampered SIWE message is refused", async () => {
+      const delegation = await fx.signedDelegation();
+      const siwe = String(delegation.siwe).replace(/Expiration Time: .*/, `Expiration Time: ${new Date(fx.clock + 30 * 86_400_000).toISOString()}`);
+      const { entry } = await fx.ackedCommandEntry(await fx.buildRequest(), { commandIntent: COMMAND_A, delegation: { ...delegation, siwe } });
+      await repeatAsksAgain(entry);
+    });
+
+    test("a parent whose permissions are narrower than the command is refused", async () => {
+      const { entry } = await fx.ackedCommandEntry(await fx.buildRequest(), { commandIntent: COMMAND_A, delegation: await fx.signedDelegation(3600, ["tinycloud.kv/get"]) });
+      await repeatAsksAgain(entry);
+    });
+
+    test("a parent whose owner is not the profile's owner is refused", async () => {
+      const { entry } = await fx.ackedCommandEntry(await fx.buildRequest(), { commandIntent: COMMAND_A });
+      await fx.ProfileManager.updateProfile("approval", (profile) => ({ ...profile, ownerDid: "did:pkh:eip155:1:0x000000000000000000000000000000000000dEaD" }));
+      await repeatAsksAgain(entry);
+    });
   });
 });
 

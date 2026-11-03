@@ -398,6 +398,7 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
     throw invalid("Invalid approval command intent.");
   }
   const store = fileApprovalStore(profile, clock);
+  const profileOwner = (await ProfileManager.getProfile(profile)).ownerDid;
   const matching = (await loadApprovals(profile, { now: clock.now() })).entries.filter((item) => {
     const cli = cliOf(item);
     if (cli.commandIntent !== options.commandIntent) return false;
@@ -410,12 +411,18 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
       priorPermissions.length !== nextPermissions.length) return false;
     // Saving the first signed result resolves logical space names to its owner.
     // Compare that spelling only after re-verifying the original encrypted result.
+    // A parent kept by a completed command (no envelope, no key) is re-verified on EVERY use against the CURRENT command: this request's
+    // session key and DID, permissions, signed expiry window and the profile's own owner. Any failure (a forged, tampered, narrower,
+    // expired or foreign parent) means "not a match": the command asks for a new approval and the kept entry is left alone.
+    const fromParent = item.resultEnvelope === undefined && cli.command?.parent !== undefined;
     let owner: string | undefined;
-    try { owner = item.resultEnvelope !== undefined || cli.command?.parent !== undefined ? verifyPendingResult(item, signingKey).session.ownerDid : cli.expectedOwner; }
+    try { owner = item.resultEnvelope !== undefined || fromParent ? verifyPendingResult(item, signingKey).session.ownerDid : cli.expectedOwner; }
     catch (error) {
+      if (fromParent) return false;
       if (error instanceof CLIError && error.code === "AUTH_EXPIRED") return false;
       throw error;
     }
+    if (fromParent && (profileOwner === undefined || owner?.toLowerCase() !== profileOwner.toLowerCase())) return false;
     if ((cli.expectedOwner !== undefined || options.expectedOwner !== undefined) &&
       (!owner || !options.expectedOwner || normalizePkhIdentifier(owner) !== normalizePkhIdentifier(options.expectedOwner))) return false;
     return priorPermissions.every(({ space, ...permission }, index) => {

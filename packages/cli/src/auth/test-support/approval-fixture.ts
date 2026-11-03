@@ -141,8 +141,8 @@ export async function createApprovalFixture(label: string) {
   const routed = Object.assign(route, { preconnect: send.preconnect });
 
   // ---- sealed results ----
-  async function signedDelegation(lifetimeSeconds = 3600) {
-    const prepared = wasm.prepareSession({ abilities: { kv: { "": ["tinycloud.kv/list"] } }, address, chainId: 1,
+  async function signedDelegation(lifetimeSeconds = 3600, actions: string[] = ["tinycloud.kv/list"]) {
+    const prepared = wasm.prepareSession({ abilities: { kv: { "": actions } }, address, chainId: 1,
       domain: "cli.example", spaceId, jwk: key, issuedAt: new Date(Date.now() - 1000).toISOString(), expirationTime: new Date(Date.now() + lifetimeSeconds * 1000).toISOString() });
     const signature = await wallet.signMessage(prepared.siwe);
     const session = wasm.completeSessionSetup({ ...prepared, signature });
@@ -263,17 +263,17 @@ export async function createApprovalFixture(label: string) {
    * sealed body), with the saved child and the opened parent the CLI keeps beside it (`ext.cli.command`) so a repeated command can
    * prove the child is bound to the approval without asking OpenKey again.
    */
-  async function ackedCommandEntry(built: Built, options: { commandIntent: string; delegation?: Record<string, unknown> }): Promise<{ entry: StoredEntry; delegation: Record<string, unknown> }> {
+  async function ackedCommandEntry(built: Built, options: { commandIntent: string; delegation?: Record<string, unknown>; parent?: Record<string, unknown>; request?: OpenKeyApprovalRequestV1 }): Promise<{ entry: StoredEntry; delegation: Record<string, unknown>; parent: Record<string, unknown> }> {
     const sealed = await sealResult(built, options.delegation);
     const retainUntil = new Date(clock + 3600_000).toISOString();
     const { body: _sealedBody, ...record } = built.record;
     const entry = {
-      requestId: built.requestId, bodyCid: built.bodyCid, request: built.request, record, ...ORIGINS,
+      requestId: built.requestId, bodyCid: built.bodyCid, request: options.request ?? built.request, record, ...ORIGINS,
       phase: "acked", resultRef: RESULT_REF, resultExpiresAt: new Date(clock + 600_000).toISOString(), ackId: SYNTHETIC_ACK_ID,
       retainUntil, createdAt: built.record.header.issuedAt,
-      ext: { cli: { expectedOwner: ownerDid, commandIntent: options.commandIntent, command: { request: {}, result: { expiry: retainUntil }, parent: sealed.opened } } },
+      ext: { cli: { expectedOwner: ownerDid, commandIntent: options.commandIntent, command: { request: {}, result: { expiry: retainUntil }, parent: options.parent ?? sealed.opened } } },
     } as StoredEntry;
-    return { entry, delegation: sealed.delegation };
+    return { entry, delegation: sealed.delegation, parent: sealed.opened };
   }
 
   /** A version 1 entry, as CLI 1.6.x wrote it (`PendingApproval`). */
