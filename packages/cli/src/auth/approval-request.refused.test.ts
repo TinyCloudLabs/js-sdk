@@ -50,7 +50,7 @@ let dropAck = false;
 let savedBeforeAck = false;
 let terminalAckCode: string | undefined;
 /** OpenKey answers the discover or the fetch with this error code (a rejected requester proof, an expired request ...). */
-let rejectWith: { action: "discover" | "fetch"; code: string } | undefined;
+let rejectWith: { action: "discover" | "fetch"; code: string; serverAheadMs?: number } | undefined;
 let terminalAck: { requestId: string; bodyCid: string; ackId: string } | undefined;
 let retainedResultExpiresAt: string | undefined;
 
@@ -62,9 +62,11 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) 
     return Response.json({ id, expiresAt: checked.header.expiresAt }, { status: 201 });
   }
   const body = await request.json() as { requestId: string; bodyCid: string; ackId: string };
-  const pending = await readJson<Array<{ committed?: boolean; ackId: string; bodyCid: string; resultEnvelope: unknown; resultExpiresAt: string }>>(join(profilePath("approval"), "approval-pending.json"));
+  // A version 1 file stays an array until a write that needs one (migration is on the first write), so the fake reads both shapes.
+  const stored = await readJson<{ entries: Array<{ phase: string; ackId: string; bodyCid: string; resultEnvelope: unknown; resultExpiresAt: string }> } | Array<{ ackId: string; bodyCid: string; resultEnvelope: unknown; resultExpiresAt: string }>>(join(profilePath("approval"), "approval-pending.json"));
+  const pending = Array.isArray(stored) ? stored.map((item) => ({ ...item, phase: "legacy" })) : stored?.entries;
   const session = await ProfileManager.getSession("approval") as Record<string, unknown> | null;
-  savedBeforeAck = pending?.[0]?.committed === true && pending[0].ackId === body.ackId && session?.signature !== undefined;
+  savedBeforeAck = pending?.[0]?.phase === "committed" && pending[0].ackId === body.ackId && session?.signature !== undefined;
   const [header, payload, signature] = (request.headers.get("OpenKey-Session-Proof") ?? "").split(".");
   if (!header || !payload || !signature || !verify(null, Buffer.from(`${header}.${payload}`),
     createPublicKey({ key: { kty: key.kty, crv: key.crv, x: key.x }, format: "jwk" }), Buffer.from(signature, "base64url"))) return new Response(null, { status: 401 });
@@ -74,8 +76,12 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) 
   const credential = JSON.stringify([action, requestId, body.bodyCid, action === "discover" ? "" : resultRef, action === "ack" ? body.ackId : ""]);
   if (claims.htu !== request.url || claims.htm !== "POST" || claims.client_id !== "openkey-approval-result-v1" ||
     claims.cred_hash !== createHash("sha256").update(credential).digest("base64url")) return new Response(null, { status: 401 });
-  if (rejectWith?.action === action) return Response.json({ code: rejectWith.code }, { status: rejectWith.code === "expired_request" ? 410 : 401 });
-  if (action === "discover") return Response.json({ resultRef, expiresAt: pending![0]!.resultExpiresAt ?? retainedResultExpiresAt });
+  if (rejectWith?.action === action) {
+    // A reply's `Date` header is how the CLI measures its own clock against OpenKey's.
+    const headers = rejectWith.serverAheadMs === undefined ? undefined : { date: new Date(Date.now() + rejectWith.serverAheadMs).toUTCString() };
+    return Response.json({ code: rejectWith.code }, { status: rejectWith.code === "expired_request" ? 410 : 401, ...(headers ? { headers } : {}) });
+  }
+  if (action === "discover") return Response.json({ status: "approved", resultRef, expiresAt: pending![0]!.resultExpiresAt ?? retainedResultExpiresAt });
   if (action === "fetch") return Response.json({
     requestId, bodyCid: body.bodyCid, resultRef, expiresAt: pending![0]!.resultExpiresAt ?? retainedResultExpiresAt,
     relay: await readJson(join(profilePath("approval"), "retained-result.json")) ?? pending![0]!.resultEnvelope,
@@ -157,7 +163,11 @@ afterAll(async () => {
 });
 
 const PENDING = () => join(profilePath("approval"), "approval-pending.json");
-const entries = async () => await readJson<Array<{ requestId: string; resultRef?: string; relayPrivateKey?: string }>>(PENDING());
+/** The saved requests, from either file shape: the version 1 array a test staged, or the version 2 file the CLI wrote since. */
+const entries = async () => {
+  const state = await readJson<Array<{ requestId: string; resultRef?: string }> | { entries: Array<{ requestId: string; resultRef?: string }> }>(PENDING());
+  return Array.isArray(state) ? state : state?.entries;
+};
 const ACQUIRE = { profileName: "approval", jwk: key, host, permissions: requested, expectedOwner: ownerDid, expiry: "1h",
   openkeyHost: "https://openkey.example", openkeyApiHost: server.url.origin, noPopup: true, onApprovalRequest: () => undefined };
 
@@ -195,9 +205,9 @@ describe("a fetched result that is refused for good drops its pending entry", ()
   test("only the refused entry goes: another pending request of the profile stays", async () => {
     await unfetched(await signedDelegation(["tinycloud.kv/list"]));
     const [refused] = (await entries())!;
-    await writeJsonDurable(PENDING(), [refused, { ...refused, requestId: "another-request-identifier-1", commandIntent: "auth-grant:" + "a".repeat(64) }]);
+    await writeJsonDurable(PENDING(), [refused, { ...refused, requestId: "anotherrequestidentifierab", commandIntent: "auth-grant:" + "a".repeat(64) }]);
     await expect(acquireApprovalRequest(did, ACQUIRE)).rejects.toMatchObject({ code: "OPENKEY_APPROVAL_NARROWER" });
-    expect((await entries())!.map((entry) => entry.requestId)).toEqual(["another-request-identifier-1"]);
+    expect((await entries())!.map((entry) => entry.requestId)).toEqual(["anotherrequestidentifierab"]);
   });
 
   test("AUTH_EXPIRED stays by design: the entry is kept to resume", async () => {
@@ -251,7 +261,7 @@ describe("the refusal of a fetched result is announced where the command catches
   test("the same key still held by another pending request: it still exists, so the notice does not say it was deleted", async () => {
     await unfetched(await signedDelegation(["tinycloud.kv/list"]));
     const [refused] = (await entries())!;
-    await writeJsonDurable(PENDING(), [refused, { ...refused, requestId: "another-request-identifier-1", resultRef: undefined, commandIntent: "auth-grant:" + "b".repeat(64) }]);
+    await writeJsonDurable(PENDING(), [refused, { ...refused, requestId: "anotherrequestidentifierab", resultRef: undefined, commandIntent: "auth-grant:" + "b".repeat(64) }]);
     const notices = await noticeOf(() => refusing({ profileName: "approval", key, storedKey: null }, () => acquireApprovalRequest(did, ACQUIRE)));
     expect(notices).toHaveLength(1);
     expect(notices[0]).toContain("the key it belongs to still exists on this device");
@@ -399,12 +409,12 @@ describe("auth rotate: a failure raised INSIDE the approval fetch (before the re
   test("only the request holding the staged key goes: another request of the profile, and another profile's request for the same key, stay", async () => {
     await arrange(3599);
     const [staged] = (await entries())!;
-    await writeJsonDurable(PENDING(), [staged, { ...staged, requestId: "another-request-identifier-1", resultRef: undefined, commandIntent: "auth-grant:" + "c".repeat(64), signingKey: oldKey }]);
+    await writeJsonDurable(PENDING(), [staged, { ...staged, requestId: "anotherrequestidentifierab", resultRef: undefined, commandIntent: "auth-grant:" + "c".repeat(64), signingKey: oldKey }]);
     await ProfileManager.setProfile("approval-other", { name: "approval-other", did, sessionDid: did, ownerDid: OTHER, host, chainId: 1, spaceName: "applications", createdAt: new Date().toISOString() } as never);
     const otherFile = join(profilePath("approval-other"), "approval-pending.json");
     await writeJsonDurable(otherFile, [staged]);
     await behind(() => withNotices(rotate));
-    expect((await entries())!.map((entry) => entry.requestId)).toEqual(["another-request-identifier-1"]);
+    expect((await entries())!.map((entry) => entry.requestId)).toEqual(["anotherrequestidentifierab"]);
     expect((await readJson<Array<{ requestId: string }>>(otherFile))!.map((entry) => entry.requestId)).toEqual([requestId]);
   });
 
@@ -422,14 +432,14 @@ describe("auth rotate: a failure raised INSIDE the approval fetch (before the re
     const [staged] = (await entries())!;
     const { resultRef: _r, resultEnvelope: _e, resultExpiresAt: _x, ...waiting } = staged as Record<string, unknown>;
     // Another request of the profile that DID get its result, holding another key: it is neither dropped nor announced.
-    const unrelated = { ...staged, requestId: "another-request-identifier-1", commandIntent: "auth-grant:" + "d".repeat(64), signingKey: oldKey };
+    const unrelated = { ...staged, requestId: "anotherrequestidentifierab", commandIntent: "auth-grant:" + "d".repeat(64), signingKey: oldKey };
     await writeJsonDurable(PENDING(), [waiting, unrelated]);
     const { thrown, notices } = await withNotices(() => refreshOpenKeySession("approval", host, {
       rotation: { jwk: key, did }, openKeyAcquisition: (async () => { throw new Error("network went away"); }) as never,
     }));
     expect((thrown as Error).message).toBe("network went away");
     expect(notices).toEqual([]);
-    expect((await entries())!.map((entry) => entry.requestId)).toEqual(["another-request-identifier-1"]);
+    expect((await entries())!.map((entry) => entry.requestId)).toEqual(["anotherrequestidentifierab"]);
   });
 
   test("a permanent refusal raised by the caller's own checks AFTER the result came back: the entry is dropped and the notice is printed ONCE, not twice", async () => {
@@ -508,12 +518,23 @@ describe("an approval the CLI cannot collect: OpenKey rejects the requester proo
     expect(notices[0]).not.toContain("Refused delegation:");
   });
 
-  test("(b) a PLAIN request-flow login with the same rejection: nothing is dropped (it resumes once the clock is right), the key stays, NO notice", async () => {
+  test("(b1) a PLAIN request-flow login with the same rejection and a sane clock: the proof is permanently wrong, so the request is dropped (exit 5), the key stays, NO notice", async () => {
     await ProfileManager.setKey("approval", key);
     await waiting();
     rejectWith = { action: "discover", code: "invalid_proof" };
     const { thrown, notices } = await withNotices(plain);
-    expect(thrown).toMatchObject({ code: "APPROVAL_RESULT_INVALID" });
+    expect(thrown).toMatchObject({ code: "APPROVAL_RESULT_INVALID", exitCode: 5 });
+    expect(notices).toEqual([]);
+    expect(await entries()).toEqual([]);
+    expect(JSON.stringify(await ProfileManager.getKey("approval"))).toBe(JSON.stringify(key));
+  });
+
+  test("(b2) the same login with OpenKey's Date two minutes ahead of this clock: nothing is dropped (it resumes once the clock is right), APPROVAL_CLOCK exit 12, the key stays, NO notice", async () => {
+    await ProfileManager.setKey("approval", key);
+    await waiting();
+    rejectWith = { action: "discover", code: "invalid_proof", serverAheadMs: 120_000 };
+    const { thrown, notices } = await withNotices(plain);
+    expect(thrown).toMatchObject({ code: "APPROVAL_CLOCK", exitCode: 12 });
     expect(notices).toEqual([]);
     expect((await entries())!.map((entry) => entry.requestId)).toEqual([requestId]);
     expect(JSON.stringify(await ProfileManager.getKey("approval"))).toBe(JSON.stringify(key));

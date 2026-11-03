@@ -1,3 +1,4 @@
+import { removeApprovalState } from "../auth/approval-store.js";
 import { lstat, open, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { createProfileReplicaPurge, logoutPrincipalDigest, REPLICA_LOGOUT_PENDING_FILE, RESTORED_GATE_MESSAGE } from "@tinycloud/node-sdk";
@@ -135,7 +136,7 @@ export async function clearProfileCredentials(name: string, syncDirectory = fals
   await ProfileManager.withLock(name, async () => {
     const profile = await ProfileManager.getProfile(name);
     const { namedKeys: _namedKeys, ...signedOutProfile } = profile;
-    await rm(join(profilePath(name), "approval-pending.json"), { force: true });
+    await removeApprovalState(name);
     // This durable profile write syncs the pending-key removal before logout can be observed.
     await ProfileManager.setProfileDurable(name, { ...signedOutProfile, authSignedOut: true, ...(legacyCleanup ? { legacyReplicaCleanup: true } : {}) });
     let failed = false;

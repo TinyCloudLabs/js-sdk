@@ -45,7 +45,7 @@ describe.skipIf(!NODE_BIN)("tinycloud onboard --timeout, against a real node", (
     expired?: boolean;
     /** OpenKey answers every result lookup with HTTP 503. */
     unavailable?: boolean;
-    /** OpenKey answers a discover like production does for an expired request: HTTP 400 invalid_request. */
+    /** OpenKey answers a discover like production does for an expired request: HTTP 410 expired_request. */
     invalidRequest?: boolean;
     polls: number;
   }
@@ -53,7 +53,7 @@ describe.skipIf(!NODE_BIN)("tinycloud onboard --timeout, against a real node", (
     profile: Record<string, unknown> | null;
     session: Record<string, unknown> | null;
     grants: Array<{ delegation: { cid: string; spaceId: string; siweProof?: { siwe: string; signature: string } } }>;
-    pending: Array<{ requestId: string; bodyCid: string; resultRef?: string; ackId: string; expectedOwner?: string }>;
+    pending: Array<{ requestId: string; bodyCid: string; phase: string; resultRef?: string; ackId: string }>;
   }
   let approvalServer: ReturnType<typeof Bun.serve> | undefined;
   let approvalCertificate = "";
@@ -71,7 +71,7 @@ describe.skipIf(!NODE_BIN)("tinycloud onboard --timeout, against a real node", (
       profile: await readJson<Record<string, unknown>>(profileConfigPath("default")),
       session: await readJson<Record<string, unknown>>(sessionPath("default")),
       grants: await readJson<SavedState["grants"]>(additionalDelegationsPath("default")) ?? [],
-      pending: await readJson<SavedState["pending"]>(join(profilePath("default"), "approval-pending.json")) ?? [],
+      pending: (await readJson<{ entries: SavedState["pending"] }>(join(profilePath("default"), "approval-pending.json")))?.entries ?? [],
     }));
   }
 
@@ -167,11 +167,11 @@ describe.skipIf(!NODE_BIN)("tinycloud onboard --timeout, against a real node", (
       : Response.json({ code: "result_acknowledged" }, { status: 410 });
     if (discovery) entry.polls++;
     if (discovery && entry.unavailable) return new Response(null, { status: 503 });
-    if (discovery && entry.invalidRequest) return Response.json({ error: "Signed approval request header is invalid or expired", code: "invalid_request" }, { status: 400 });
+    if (discovery && entry.invalidRequest) return Response.json({ code: "expired_request" }, { status: 410 });
     if (!entry.relay) return entry.expired || Date.parse(entry.record.header.expiresAt) <= Date.now()
       ? Response.json({ code: "expired_request" }, { status: 410 }) : new Response(null, { status: 202 });
     if (Date.parse(entry.resultExpiresAt!) <= Date.now()) return Response.json({ code: "expired_result" }, { status: 410 });
-    if (action === "discover") return Response.json({ resultRef: entry.resultRef, expiresAt: entry.resultExpiresAt });
+    if (action === "discover") return Response.json({ status: "approved", resultRef: entry.resultRef, expiresAt: entry.resultExpiresAt });
     if (action === "fetch") return Response.json({ requestId: entry.id, bodyCid: entry.record.header.bodyCid,
       resultRef: entry.resultRef, expiresAt: entry.resultExpiresAt, relay: entry.relay });
     if (typeof body.ackId !== "string" || !body.ackId) return new Response(null, { status: 400 });
@@ -501,19 +501,19 @@ if (seam === "after-save") {
     expect(stdoutPending(renewed.stdout).pending.approvalUrl).not.toBe(stdoutPending(first.stdout).pending.approvalUrl);
   });
 
-  test("an expired link ends the loop: production's 400 invalid_request is exit 3 and a local expiry exits 3 with no OpenKey call; the next run makes a new link", async () => {
+  test("an expired link ends the loop: a 410 expired_request is exit 3 and a local expiry long past is swept so the same run makes a new link", async () => {
     await mkdir(home("lapsed"), { recursive: true, mode: 0o700 });
     const pendingFile = await withTinyCloudStateRoot(home("lapsed"), async () => join(profilePath("default"), "approval-pending.json"));
     const setExpiry = async (agoMs: number) => {
-      const saved = JSON.parse(await readFile(pendingFile, "utf8")) as Array<Record<string, unknown>>;
-      saved[0]!.requestExpiresAt = new Date(Date.now() - agoMs).toISOString();
-      await writeFile(pendingFile, JSON.stringify(saved), { mode: 0o600 });
+      const saved = JSON.parse(await readFile(pendingFile, "utf8")) as { version: number; entries: Array<{ record: { header: { expiresAt: string } } }>; unrecognized: unknown[] };
+      saved.entries[0]!.record.header.expiresAt = new Date(Date.now() - agoMs).toISOString();
+      await writeFile(pendingFile, JSON.stringify({ ...saved, version: 2, unrecognized: [] }), { mode: 0o600 });
     };
     const first = await run("lapsed", ["onboard", "--timeout", "60s"]);
     expect(first.exitCode).toBe(8);
     const entry = await openLink("lapsed", first.stderr);
 
-    // 30 s past the stored expiry (inside the skew): the CLI asks, OpenKey answers 400, the CLI says exit 3 and drops it.
+    // 30 s past the stored expiry (inside the sweep window): the CLI asks, OpenKey answers 410, the CLI says exit 3 and drops it.
     await setExpiry(30_000);
     entry.invalidRequest = true;
     const polled = entry.polls;
@@ -531,27 +531,27 @@ if (seam === "after-save") {
     expect(second.id).not.toBe(entry.id);
     expect(stdoutPending(renewed.stdout).pending.step).toBe(1);
 
-    // Well past the expiry: decided locally, OpenKey is not asked, the entry goes, and the run after is new again.
+    // Well past the expiry plus the sweep window (630 s): swept silently, OpenKey is not asked, and the same run makes a new request.
     await setExpiry(20 * 60_000);
     const before = second.polls;
     const local = await run("lapsed", ["onboard", "--timeout", "60s"]);
-    expect(local.exitCode, local.stderr).toBe(3);
-    expect(local.stdout + local.stderr).toContain("APPROVAL_REQUEST_EXPIRED");
+    expect(local.exitCode, local.stderr).toBe(8);
+    expect(local.stdout + local.stderr).not.toContain("APPROVAL_REQUEST_EXPIRED");
     expect(second.polls).toBe(before);
-    expect((await savedState("lapsed")).pending).toEqual([]);
-    const again = await run("lapsed", ["onboard", "--timeout", "60s"]);
-    expect(again.exitCode).toBe(8);
-    expect((await openLink("lapsed", again.stderr)).id).not.toBe(second.id);
+    const third = await openLink("lapsed", local.stderr);
+    expect(third.id).not.toBe(second.id);
+    expect(stdoutPending(local.stdout).pending.step).toBe(1);
+    expect((await savedState("lapsed")).pending.map((item) => item.requestId)).toEqual([third.id]);
   });
 
-  test("OpenKey being unavailable stays its own exit 8 error, without the pending JSON", async () => {
+  test("OpenKey being unavailable on a resumed request is exit 7 APPROVAL_REQUEST_UNAVAILABLE, without the pending JSON", async () => {
     await mkdir(home("unavailable"), { recursive: true, mode: 0o700 });
     const first = await run("unavailable", ["onboard", "--timeout", "90s"]);
     expect(first.exitCode).toBe(8);
     const entry = await openLink("unavailable", first.stderr);
     entry.unavailable = true;
     const down = await run("unavailable", ["onboard", "--timeout", "30s"]);
-    expect(down.exitCode).toBe(8);
+    expect(down.exitCode).toBe(7);
     expect(down.stdout + down.stderr).toContain("APPROVAL_REQUEST_UNAVAILABLE");
     expect(down.stdout).not.toContain('"pending"');
     expect((await savedState("unavailable")).pending.map((item) => item.requestId)).toEqual([entry.id]);
@@ -594,7 +594,7 @@ if (seam === "after-save") {
       expect(killed.stdout).toBe("");
       expect(approvalRequests.size).toBe(baseline + 1);
       const afterKill = await savedState(name);
-      const saved = afterKill.pending.find((item) => item.requestId === entry1.id) as (SavedState["pending"][number] & { resultEnvelope?: unknown; committed?: boolean }) | undefined;
+      const saved = afterKill.pending.find((item) => item.requestId === entry1.id) as (SavedState["pending"][number] & { resultEnvelope?: unknown }) | undefined;
       expect(saved, "the pending entry survives the kill").toBeDefined();
       expect(acksOf(entry1)).toHaveLength(0);
       if (seam === "after-poll") expect(saved!.resultRef).toBeUndefined();
@@ -604,11 +604,11 @@ if (seam === "after-save") {
         expect(saved!.resultEnvelope).toBeDefined();
         expect(saved!.resultRef).toBe(entry1.resultRef);
         expect(afterKill.session).toBeNull();
-        expect(saved!.committed).toBeUndefined();
+        expect(saved!.phase).not.toBe("committed");
       }
       if (seam === "before-ack") {
         expect(saved!.resultEnvelope).toBeDefined();
-        expect(saved!.committed).toBe(true);
+        expect(saved!.phase).toBe("committed");
         expect(afterKill.session?.delegationCid).toBe(entry1.delegation!.delegationCid);
       }
 

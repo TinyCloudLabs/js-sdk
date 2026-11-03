@@ -59,18 +59,18 @@ describe.skipIf(!NODE_BIN)("agent OpenKey grant, against a real node", () => {
   async function observeDurableCommand(entry: ApprovalFixtureEntry, ackId: string) {
     const { profilePath } = await import("@tinycloud/operations/state");
     const directory = profilePath("owner");
-    const pending = JSON.parse(await readFile(join(directory, "approval-pending.json"), "utf8"));
+    const pending = JSON.parse(await readFile(join(directory, "approval-pending.json"), "utf8")).entries;
     const saved = pending.find((item: { requestId: string }) => item.requestId === entry.id);
     const artifacts = JSON.parse(await readFile(join(directory, "auth-grant-artifacts.json"), "utf8"));
     const history = (await readFile(join(directory, "auth-grants.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
-    const result = saved?.command?.result;
-    const filesMatch = saved?.ackId === ackId && saved?.command?.request?.requestId === entry.preparedRequestId &&
+    const result = saved?.ext?.cli?.command?.result;
+    const filesMatch = saved?.ackId === ackId && saved?.ext?.cli?.command?.request?.requestId === entry.preparedRequestId &&
       result?.requestId === entry.preparedRequestId && result?.delegation?.delegateDID === entry.agentTargetDid &&
       artifacts.some((item: { delegationCid: string }) => item.delegationCid === result?.delegationCid) &&
       history.some((item: { delegationCid: string }) => item.delegationCid === result?.delegationCid);
     if (!filesMatch) throw new Error("ACK arrived before the matching command result and history were saved");
     ackEvidence.push({ requestId: entry.id, resultRef: entry.resultRef!, ackId,
-      childCid: result.delegationCid, intent: saved.commandIntent, filesMatch });
+      childCid: result.delegationCid, intent: saved.ext.cli.commandIntent, filesMatch });
   }
 
   function validRequesterProof(request: Request, entry: ApprovalFixtureEntry, action: string, body: Record<string, unknown>): boolean {
@@ -129,7 +129,7 @@ describe.skipIf(!NODE_BIN)("agent OpenKey grant, against a real node", () => {
     if (!entry.relay) return Date.parse(entry.record.header.expiresAt) <= Date.now()
       ? Response.json({ code: "expired_request" }, { status: 410 }) : new Response(null, { status: 202 });
     if (Date.parse(entry.resultExpiresAt!) <= Date.now()) return Response.json({ code: "expired_result" }, { status: 410 });
-    if (action === "discover") return Response.json({ resultRef: entry.resultRef, expiresAt: entry.resultExpiresAt });
+    if (action === "discover") return Response.json({ status: "approved", resultRef: entry.resultRef, expiresAt: entry.resultExpiresAt });
     if (action === "fetch") {
       if (crashBoundary === "fetch") { crashBoundary = undefined; activeGrant!.kill("SIGKILL"); }
       return Response.json({ requestId: entry.id, bodyCid: entry.record.header.bodyCid,
@@ -505,22 +505,22 @@ describe.skipIf(!NODE_BIN)("agent OpenKey grant, against a real node", () => {
       expect(killed.approvalCallbacks).toBe(1);
       const { profilePath } = await import("@tinycloud/operations/state");
       const pendingPath = join(profilePath("owner"), "approval-pending.json");
-      const pending = JSON.parse(await readFile(pendingPath, "utf8"));
+      const pending = JSON.parse(await readFile(pendingPath, "utf8")).entries;
       const saved = pending.find((item: { requestId: string }) => item.requestId === killed.approvalRequestId);
       expect(saved.resultRef).toBe(killed.resultRef);
-      if (boundary === "fetch") expect(saved.command).toBeUndefined();
-      else expect(saved.command.result.requestId).toBe(prepared.requestId);
+      if (boundary === "fetch") expect(saved.ext?.cli?.command).toBeUndefined();
+      else expect(saved.ext.cli.command.result.requestId).toBe(prepared.requestId);
       const recovered = await grantWithOpenKey(req, () => { throw new Error("A saved command requested another approval"); });
       expect(recovered.exitCode).toBe(0);
       expect(recovered.approvalCallbacks).toBe(0);
       expect(recovered.approvalRequestId).toBe(killed.approvalRequestId);
       expect(recovered.resultRef).toBe(killed.resultRef);
       const result = JSON.parse(recovered.stdout);
-      if (saved.command) expect(result).toEqual(saved.command.result);
-      const final = JSON.parse(await readFile(pendingPath, "utf8")).find((item: { requestId: string }) => item.requestId === killed.approvalRequestId);
+      if (saved.ext?.cli?.command) expect(result).toEqual(saved.ext.cli.command.result);
+      const final = JSON.parse(await readFile(pendingPath, "utf8")).entries.find((item: { requestId: string }) => item.requestId === killed.approvalRequestId);
       expect(final.ackId).toBe(saved.ackId);
-      expect(final.acknowledged).toBe(true);
-      expect(final.command.result).toEqual(result);
+      expect(final.phase).toBe("acked");
+      expect(final.ext.cli.command.result).toEqual(result);
       const repeated = await grantWithOpenKey(req, () => { throw new Error("Completed command requested another approval"); });
       expect(repeated.exitCode).toBe(0);
       expect(repeated.approvalCallbacks).toBe(0);

@@ -114,8 +114,11 @@ export async function refusing<T>(site: RefusalSite, step: (seen: { result?: obj
     let swept: { dropped: boolean; approved: boolean; latestEnd?: string } = { dropped: false, approved: false };
     if (site.rotation === true) {
       try {
-        const { dropApprovalsHoldingKey } = await import("./approval-request.js");
+        const { dropApprovalsHoldingKey, droppedApprovalOf } = await import("./approval-request.js");
         swept = await dropApprovalsHoldingKey(site.profileName, (site.key as { x?: unknown }).x);
+        // The requester machine removes a refused request itself, with its keys, before this sweep runs: its error says what the sweep would have.
+        const alreadyDropped = droppedApprovalOf(error);
+        if (!swept.dropped && alreadyDropped !== undefined) swept = { dropped: true, ...alreadyDropped };
       } catch { /* the request only expires on its own */ }
     }
     const announced = await discardRefusedApproval(site, error, seen.result);

@@ -46,6 +46,7 @@ const clockDependent = new WeakSet<object>();
 export function markClockDependent(error: unknown): void {
   if (typeof error === "object" && error !== null) clockDependent.add(error);
 }
+export const isClockDependent = (error: unknown): boolean => typeof error === "object" && error !== null && clockDependent.has(error);
 
 /**
  * OpenKey answered a poll of a request the owner may already have approved with an error that ends the CLI's ability to collect

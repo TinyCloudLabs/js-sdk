@@ -42,7 +42,7 @@ describe.skipIf(!NODE_BIN)("auth grant --timeout, against a real node", () => {
     preparedRequestId?: string;
     agentTargetDid?: string;
     expired?: boolean;
-    /** OpenKey answers a discover like production does for an expired request: HTTP 400 invalid_request. */
+    /** OpenKey answers a discover like production does for an expired request: HTTP 410 expired_request. */
     invalidRequest?: boolean;
     polls: number;
     homeOpened?: boolean;
@@ -61,18 +61,18 @@ describe.skipIf(!NODE_BIN)("auth grant --timeout, against a real node", () => {
   async function observeDurableCommand(entry: ApprovalFixtureEntry, ackId: string) {
     const { profilePath } = await import("@tinycloud/operations/state");
     const directory = profilePath("owner");
-    const pending = JSON.parse(await readFile(join(directory, "approval-pending.json"), "utf8"));
-    const saved = pending.find((item: { requestId: string }) => item.requestId === entry.id);
+    const pending = JSON.parse(await readFile(join(directory, "approval-pending.json"), "utf8")) as { entries: Array<{ requestId: string; phase?: string; ackId?: string; ext?: { cli?: { commandIntent?: string; command?: { result?: { requestId?: string; delegationCid: string; delegation?: { delegateDID?: string } }; request?: { requestId?: string } } } } }> };
+    const saved = pending.entries.find((item) => item.requestId === entry.id);
     const artifacts = JSON.parse(await readFile(join(directory, "auth-grant-artifacts.json"), "utf8"));
     const history = (await readFile(join(directory, "auth-grants.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
-    const result = saved?.command?.result;
-    const filesMatch = saved?.ackId === ackId && saved?.command?.request?.requestId === entry.preparedRequestId &&
+    const result = saved?.ext?.cli?.command?.result;
+    const filesMatch = saved?.phase === "committed" && saved?.ackId === ackId && saved?.ext?.cli?.command?.request?.requestId === entry.preparedRequestId &&
       result?.requestId === entry.preparedRequestId && result?.delegation?.delegateDID === entry.agentTargetDid &&
       artifacts.some((item: { delegationCid: string }) => item.delegationCid === result?.delegationCid) &&
       history.some((item: { delegationCid: string }) => item.delegationCid === result?.delegationCid);
     if (!filesMatch) throw new Error("ACK arrived before the matching command result and history were saved");
     ackEvidence.push({ requestId: entry.id, resultRef: entry.resultRef!, ackId,
-      childCid: result.delegationCid, intent: saved.commandIntent, filesMatch });
+      childCid: result!.delegationCid, intent: saved!.ext!.cli!.commandIntent!, filesMatch });
   }
 
   function validRequesterProof(request: Request, entry: ApprovalFixtureEntry, action: string, body: Record<string, unknown>): boolean {
@@ -129,11 +129,11 @@ describe.skipIf(!NODE_BIN)("auth grant --timeout, against a real node", () => {
       ? Response.json({ ackId: entry.ackId, status: "acknowledged" })
       : Response.json({ code: "result_acknowledged" }, { status: 410 });
     if (discovery) entry.polls++;
-    if (discovery && entry.invalidRequest) return Response.json({ error: "Signed approval request header is invalid or expired", code: "invalid_request" }, { status: 400 });
+    if (discovery && entry.invalidRequest) return Response.json({ code: "expired_request" }, { status: 410 });
     if (!entry.relay) return entry.expired || Date.parse(entry.record.header.expiresAt) <= Date.now()
       ? Response.json({ code: "expired_request" }, { status: 410 }) : new Response(null, { status: 202 });
     if (Date.parse(entry.resultExpiresAt!) <= Date.now()) return Response.json({ code: "expired_result" }, { status: 410 });
-    if (action === "discover") return Response.json({ resultRef: entry.resultRef, expiresAt: entry.resultExpiresAt });
+    if (action === "discover") return Response.json({ status: "approved", resultRef: entry.resultRef, expiresAt: entry.resultExpiresAt });
     if (action === "fetch") {
       return Response.json({ requestId: entry.id, bodyCid: entry.record.header.bodyCid,
         resultRef: entry.resultRef, expiresAt: entry.resultExpiresAt, relay: entry.relay });
@@ -362,7 +362,7 @@ if (seam === "after-save") {
   fsp.mkdir = async (path: string, ...rest: unknown[]) => {
     if (String(path).includes("/profile-locks")) {
       try {
-        const saved = JSON.parse(readFileSync(process.env.TC_KILL_PENDING_FILE!, "utf8")) as Array<{ requestId: string; resultEnvelope?: unknown }>;
+        const saved = (JSON.parse(readFileSync(process.env.TC_KILL_PENDING_FILE!, "utf8")) as { entries: Array<{ requestId: string; resultEnvelope?: unknown }> }).entries;
         if (saved.some((item) => item.requestId === process.env.TC_KILL_REQUEST_ID && item.resultEnvelope !== undefined)) die();
       } catch {}
     }
@@ -467,7 +467,7 @@ if (seam === "after-save") {
 
   const acksOf = (entry: ApprovalFixtureEntry) => ackEvidence.filter((item) => item.requestId === entry.id);
   const pendingOf = (stdout: string) => JSON.parse(stdout) as { pending: { step: number; of: number; approvalUrl: string; expiresAt: string } };
-  const savedPending = async () => JSON.parse(await readFile(join(profilePath("owner"), "approval-pending.json"), "utf8")) as Array<{ requestId: string; resultRef?: string; resultEnvelope?: unknown; committed?: boolean; command?: { result: { requestId: string } } }>;
+  const savedPending = async () => (JSON.parse(await readFile(join(profilePath("owner"), "approval-pending.json"), "utf8")) as { entries: Array<{ requestId: string; resultRef?: string; resultEnvelope?: unknown; phase?: string; ext?: { cli?: { command?: { result: { requestId: string } } } } }> }).entries;
 
   test("the agent loop: a new link exits 8 at once as step 1 of 1, a resumed wait keeps waiting, the approval is collected, exit 0", async () => {
     const file = await agentRequest("loop", ["--preset", "apps-agent", "--app", "demo"]);
@@ -546,15 +546,15 @@ if (seam === "after-save") {
     expect(acksOf(entry)).toHaveLength(1);
   });
 
-  test("an expired link ends the loop: production's 400 invalid_request is exit 3 and a local expiry exits 3 with no OpenKey call; the next run makes a new link", async () => {
+  test("an expired link ends the loop: production's 410 expired_request is exit 3; a long-lapsed local expiry is swept and the same run makes a new link with no OpenKey call", async () => {
     const file = await agentRequest("lapsed", ["--preset", "apps-agent", "--app", "demo"]);
     const prepared = JSON.parse(await readFile(file, "utf8")) as { requestId: string; sessionDid: string };
     const pendingFile = join(profilePath("owner"), "approval-pending.json");
     // The owner profile also holds the finished commands of earlier tests: change this request's entry only.
     const setExpiry = async (requestId: string, agoMs: number) => {
-      const saved = JSON.parse(await readFile(pendingFile, "utf8")) as Array<Record<string, unknown>>;
-      saved.find((item) => item.requestId === requestId)!.requestExpiresAt = new Date(Date.now() - agoMs).toISOString();
-      await writeFile(pendingFile, JSON.stringify(saved), { mode: 0o600 });
+      const saved = JSON.parse(await readFile(pendingFile, "utf8")) as { version: 2; entries: Array<{ requestId: string; record: { header: { expiresAt: string } } }>; unrecognized: unknown[] };
+      saved.entries.find((item) => item.requestId === requestId)!.record.header.expiresAt = new Date(Date.now() - agoMs).toISOString();
+      await writeFile(pendingFile, JSON.stringify({ ...saved, version: 2, unrecognized: [] }), { mode: 0o600 });
     };
     const first = await run(file, ["--timeout", "60s"]);
     expect(first.exitCode).toBe(8);
@@ -578,13 +578,15 @@ if (seam === "after-save") {
 
     await setExpiry(second.id, 20 * 60_000);
     const before = second.polls;
-    const local = await run(file, ["--timeout", "60s"]);
-    expect(local.exitCode, local.stderr).toBe(3);
+    const swept = await run(file, ["--timeout", "60s"]);
+    expect(swept.exitCode, swept.stderr).toBe(8);
     expect(second.polls).toBe(before);
     expect((await savedPending()).some((item) => item.requestId === second.id)).toBe(false);
+    const { entry: third } = await openLink(swept.stderr, prepared);
+    expect(third.id).not.toBe(second.id);
     const again = await run(file, ["--timeout", "60s"]);
     expect(again.exitCode).toBe(8);
-    expect((await openLink(again.stderr, prepared)).entry.id).not.toBe(second.id);
+    expect((await openLink(again.stderr, prepared)).entry.id).toBe(third.id);
   });
 
   for (const seam of ["after-poll", "after-fetch", "after-save", "before-ack"] as const) {
@@ -609,11 +611,11 @@ if (seam === "after-save") {
       if (seam === "after-save") {
         expect(saved!.resultEnvelope).toBeDefined();
         expect(saved!.resultRef).toBe(entry.resultRef);
-        expect(saved!.command).toBeUndefined();
+        expect(saved!.ext?.cli?.command).toBeUndefined();
       }
       if (seam === "before-ack") {
         expect(saved!.resultEnvelope).toBeDefined();
-        expect(saved!.command?.result.requestId).toBe(prepared.requestId);
+        expect(saved!.ext?.cli?.command?.result.requestId).toBe(prepared.requestId);
       }
 
       const resumed = await run(file, ["--timeout", "90s"]);

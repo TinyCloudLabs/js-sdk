@@ -31,9 +31,13 @@
   "changesets": [
     "combine-signals-listener-leak-node-sdk",
     "combine-signals-listener-leak-sdk-services",
+    "courier-init-derive-state",
+    "courier-init-review-fixes",
+    "mcp-any-origin-bearer-only",
     "mcp-cap-introspection-tolerance",
     "paste-expiry-cli",
     "refused-approval-cleanup-cli",
+    "rotate-previous-sign-in-cli",
     "signed-expiry-cli",
     "signed-expiry-node-sdk",
     "signed-expiry-sdk-core",

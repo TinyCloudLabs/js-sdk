@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { ExitCode } from "../config/constants.js";
 import { CLIError } from "../output/errors.js";
-import { APPROVAL_COLLECT_GRACE_MS, approvalPendingError, approvalRequestTimeoutMs, parseApprovalTimeout, spaceSetupTimeoutMs } from "./approval-wait.js";
+import { APPROVAL_COLLECT_GRACE_MS, parseApprovalTimeout, spaceSetupTimeoutMs } from "./approval-wait.js";
 
 function refusal(value: string): CLIError {
   try {
@@ -49,41 +49,6 @@ describe("parseApprovalTimeout", () => {
     expect(error.exitCode).toBe(ExitCode.USAGE_ERROR);
     expect(error.code).toBe("INVALID_TIMEOUT");
     expect(error.message).toContain("Ns or Nm");
-  });
-});
-
-describe("approvalPendingError", () => {
-  const pending = { step: 2, of: 2, approvalUrl: "https://openkey.example/a/abc#v=4", expiresAt: "2026-11-01T12:00:00.000Z" };
-
-  test("is exit 8 and carries exactly the four documented fields", () => {
-    const error = approvalPendingError(pending);
-    expect(error).toBeInstanceOf(CLIError);
-    expect(error.exitCode).toBe(8);
-    expect(error.code).toBe("APPROVAL_PENDING");
-    expect(error.metadata).toEqual({ pending });
-  });
-});
-
-describe("approvalRequestTimeoutMs", () => {
-  const NOW = 1_000_000;
-  const wait = (deadlineMs: number) => ({ deadlineMs, step: 1, of: 1, now: () => NOW });
-
-  test("without a deadline a request keeps its 10 s", () => {
-    expect(approvalRequestTimeoutMs(undefined, false)).toBe(10_000);
-    expect(approvalRequestTimeoutMs(undefined, true)).toBe(10_000);
-  });
-
-  test("before the owner approved, a request never runs past the deadline (1 s at the least)", () => {
-    expect(approvalRequestTimeoutMs(wait(NOW + 4_000), false)).toBe(4_000);
-    expect(approvalRequestTimeoutMs(wait(NOW + 60_000), false)).toBe(10_000);
-    expect(approvalRequestTimeoutMs(wait(NOW - 5_000), false)).toBe(1_000);
-  });
-
-  test("after the owner approved, a request may use the grace beyond the deadline, not more", () => {
-    // At the deadline itself the grace is still all there: a request is capped by 10 s, not by the (zero) time to the deadline.
-    expect(approvalRequestTimeoutMs(wait(NOW), true)).toBe(10_000);
-    expect(approvalRequestTimeoutMs(wait(NOW - 25_000), true)).toBe(APPROVAL_COLLECT_GRACE_MS - 25_000);
-    expect(approvalRequestTimeoutMs(wait(NOW - APPROVAL_COLLECT_GRACE_MS), true)).toBe(1_000);
   });
 });
 

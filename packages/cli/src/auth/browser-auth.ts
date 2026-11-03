@@ -28,6 +28,11 @@ export interface AuthFlowOptions {
    * APPROVAL_PENDING (exit 8), a resumed one waits until the deadline; an approval that has arrived is always collected.
    */
   approvalWait?: ApprovalWait;
+  /**
+   * Test seam: the clock and the sleep between two checks when there is no `--timeout` (with one, `approvalWait.now` and
+   * `approvalWait.sleep` take precedence). Production never sets it.
+   */
+  approvalClock?: { readonly now: () => number; readonly sleep: (ms: number) => Promise<void> };
   noPopup?: boolean;
   jwk?: object;
   host?: string;

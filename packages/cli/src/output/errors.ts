@@ -1,3 +1,4 @@
+import { approvalNextLine } from "../auth/approval-next-line.js";
 import { closeReplication, registeredReplications } from "../lib/replication-registry.js";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -231,6 +232,9 @@ export function handleError(error: unknown): Promise<never> {
     // Not a failure: the owner has not answered yet. stdout carries the one JSON object an agent acts on.
     outputJson({ pending });
     process.stderr.write(`${safeBlock(cliError.message)}\n`);
+    // TC-2360: the agent-directed line, only with exit 8, the LAST line of stderr, and only once a helper is registered (#834).
+    const next = approvalNextLine(pending);
+    if (next !== undefined) process.stderr.write(`${safeBlock(next)}\n`);
     if (registeredReplications().size === 0) return process.exit(cliError.exitCode);
     return closeReplication().then(() => process.exit(cliError.exitCode));
   }
