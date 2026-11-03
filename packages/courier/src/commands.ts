@@ -187,7 +187,7 @@ export async function cmdInit(args: ParsedArgs) {
       console.error(`${resumed ? 'Resuming the saved approval request.' : 'Created an approval request.'} Owner: approve it in OpenKey (copy the link exactly, never retype it):\n${pending.approvalUrl}\nWaiting for approval (up to ${Math.round(waitMs / 1000)} s). Run \`${cmd('init --wait')}\` again after an interruption; no new approval is needed.`);
     }
     if (await completeApproval(profile, key, pending, { deadline }) === 'deadline') {
-      throw new CourierPending({ step: 1, of: 1, approvalUrl: pending.approvalUrl, expiresAt: pending.requestExpiresAt });
+      throw new CourierPending({ step: 1, of: 1, approvalUrl: pending.approvalUrl, expiresAt: pending.requestExpiresAt }, !resumed);
     }
     const active = loadProfile();
     if (active.status !== 'ready') throw active.spacePending ? pendingSpaceError(active) : noSpaceError(active);

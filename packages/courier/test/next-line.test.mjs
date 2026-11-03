@@ -93,3 +93,16 @@ scenario('a usage error prints no Next line', async ({ courier, errors }) => {
   assert.equal(run.code, 2);
   assert.deepEqual(nextLines(errors.join('\n')), []);
 });
+
+scenario('the pending init --wait line differs between a link created in this run and a resumed request, and names the same command in both', async ({ t, courier, errors }) => {
+  fakeTime(t);
+  const created = await courier('--wait', '--timeout', '5s');
+  assert.equal(created.code, 8);
+  const first = assertNextLast(created.stderr, JSON.parse(created.stdout).pending.approvalUrl);
+  errors.length = 0;
+  const resumed = await courier('--wait', '--timeout', '5s');
+  assert.equal(resumed.code, 8);
+  const second = assertNextLast(resumed.stderr, JSON.parse(resumed.stdout).pending.approvalUrl);
+  assert.notEqual(first, second);
+  for (const next of [first, second]) assert.ok(next.includes('`courier init --wait --timeout 5s`'), next);
+});

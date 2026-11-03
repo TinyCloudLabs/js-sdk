@@ -214,7 +214,7 @@ export async function main(argv: string[], opts: { prog?: string } = {}): Promis
   } catch (e) {
     if (e instanceof CourierPending) {
       process.stdout.write(JSON.stringify({ pending: e.pending }, null, 2) + '\n');
-      console.error(pendingNextLine(argv));
+      console.error(pendingNextLine(argv, e.created));
       return EXIT_PENDING;
     }
     const info = errInfo(e);

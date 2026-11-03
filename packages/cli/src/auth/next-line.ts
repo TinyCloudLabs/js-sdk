@@ -5,11 +5,11 @@
 
 /** The link was created by this run. */
 export const NEXT_NEW_LINK =
-  "Next: send the owner the link above now, then run this same command again right away, without waiting for a reply. The command sees the approval itself.";
+  "Next: send the owner the link above, then run this same command again now, in this same turn; do not wait for the owner to reply (the command sees the approval itself).";
 
 /** The wait ended on a saved request; the CLI cannot know whether the agent already relayed its link. */
 export const NEXT_RESUMED =
-  "Next: if you have not sent the owner this link yet, send it now. Then run this same command again right away, without waiting for a reply. The command sees the approval itself.";
+  "Next: run this same command again now, in this same turn, and send the owner the link above first only if you have not sent it yet; do not wait for the owner to reply.";
 
 export function approvalNextLine(created: boolean): string {
   return created ? NEXT_NEW_LINK : NEXT_RESUMED;
