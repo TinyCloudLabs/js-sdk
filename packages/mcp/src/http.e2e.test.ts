@@ -1,4 +1,5 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { generateKeyPair, exportJWK, SignJWT } from "jose";
@@ -1071,6 +1072,72 @@ function openKeyApprover(app: HostedApp, host: string, root: string) {
 }
 
 type HostedApp = Awaited<ReturnType<typeof startHostedMcp>>["app"];
+
+for (const namedApp of [true, false]) {
+test(`/mcp apps approvals Health Log ${namedApp ? "bundled" : "per-call"} save the first meal`, async () => {
+  const hermeticModule = await import(new URL("../../node-sdk/src/test-support/hermetic-encrypted-node.ts", import.meta.url).href) as { createHermeticEncryptedNode(): Promise<HermeticNode> };
+  const hermetic = await hermeticModule.createHermeticEncryptedNode();
+  resources.push(async () => hermetic.stop());
+  hermetic.provisionKvSpace(await ownerSpace(hermetic.ownerPrivateKey, "applications"));
+  const { app, client, stateDir } = await startHostedMcp({ nodeHost: hermetic.host, ownerDids: [hermetic.ownerDid] });
+  // The encrypted loopback fixture serves KV, not SQL; use the pinned schema in
+  // SQLite for SQL execution while exercising real MCP planning and signed approvals.
+  const db = new Database(":memory:");
+  db.exec(await readFile(new URL("../../cli/src/lib/apps-install.healthlog.schema.sql", import.meta.url), "utf8"));
+  const sql = { db: (database: string) => {
+    expect(database).toBe("xyz.tinycloud.sample.healthlog/healthlog");
+    return {
+      query: async (query: string, params: (string | number)[]) => {
+        const statement = db.query(query);
+        return { ok: true, data: { columns: statement.columnNames, rows: statement.values(...params) } };
+      },
+      execute: async (query: string, params: (string | number)[]) => {
+        const result = db.query(query).run(...params);
+        return { ok: true, data: { changes: result.changes, lastInsertRowId: Number(result.lastInsertRowid) } };
+      },
+    };
+  } } as unknown as ReturnType<TinyCloudNode["sqlForSpace"]>;
+  const sqlForSpace = spyOn(TinyCloudNode.prototype, "sqlForSpace").mockReturnValue(sql);
+  try {
+    const first = record((await client.callTool({ name: "tinycloud_apps_context", arguments: {} })).structuredContent);
+    const bootstrapUrl = String(record(record(first.error).details).approvalUrl);
+    const [tenantId] = await readdir(join(stateDir, "tenants"));
+    const tenantStateRoot = join(stateDir, "tenants", tenantId!);
+    const approve = async (url: string) => {
+      const body = await openKeyApprovalBody({ redirect: await openKeyRedirect(app, url), tenantStateRoot, privateKey: hermetic.ownerPrivateKey });
+      await activateOnNode(hermetic.host, body);
+      expect(await postCallback(app, url, body)).toEqual({ status: 200, body: { success: true } });
+    };
+    await approve(bootstrapUrl);
+    let approvals = 0;
+    const approved = async (name: string, args: Record<string, unknown>) => {
+      let result = record((await client.callTool({ name, arguments: args })).structuredContent);
+      if (result.status === "authority_required") {
+        approvals++;
+        const url = String(record(result.approval).url);
+        const redirect = await openKeyRedirect(app, url);
+        const request = JSON.parse(Buffer.from(redirect.searchParams.get("permissions")!, "base64url").toString("utf8"));
+        if (namedApp) {
+          expect(request.reason).toContain("whole Health Log database");
+          expect(request.reason).toContain("30 days");
+          expect(request.permissions).toHaveLength(2);
+          expect(request.permissions.every((entry: { space: string }) => entry.space.endsWith(":applications"))).toBe(true);
+        }
+        await approve(url);
+        result = record((await client.callTool({ name, arguments: args })).structuredContent);
+      }
+      expect(result.status).toBe("ok");
+      return record(result.output);
+    };
+    await approved("tinycloud_apps_context", { ...(namedApp ? { app: "healthlog" } : {}), timezone: "Europe/Berlin" });
+    const target = { space: "applications", database: "xyz.tinycloud.sample.healthlog/healthlog" };
+    expect((await approved("tinycloud_sql_query", { ...target, sql: "SELECT id FROM meal WHERE day = ? AND slot = ? AND name = ?", params: ["2026-11-03", "lunch", "Dal"] })).rows).toEqual([]);
+    await approved("tinycloud_sql_execute", { ...target, sql: "INSERT INTO meal (op_id, day, slot, name, kcal, source, logged_at) VALUES (?, ?, ?, ?, ?, 'agent', ?)", params: ["meal-1", "2026-11-03", "lunch", "Dal", 650, "2026-11-03T12:30:00Z"], acknowledgeDatabaseWideAuthority: true });
+    expect((await approved("tinycloud_sql_query", { ...target, sql: "SELECT name, kcal FROM meal WHERE op_id = ?", params: ["meal-1"] })).rows).toEqual([["Dal", 650]]);
+    expect(approvals).toBe(namedApp ? 1 : 3);
+  } finally { sqlForSpace.mockRestore(); db.close(); }
+}, 60_000);
+}
 
 for (const resourcePath of ["/mcp", "/chatgpt/mcp"]) {
 for (const namedApp of [true, false]) {

@@ -2347,7 +2347,8 @@
             "type": "string"
           },
           "app": {
-            "type": "string"
+            "type": "string",
+            "description": "Pass one personal app id or catalog slug (healthlog or recipes) to request its task access together."
           },
           "access": {
             "type": "string",
@@ -2355,7 +2356,8 @@
               "read",
               "change"
             ],
-            "default": "change"
+            "default": "change",
+            "description": "Use read for a question that changes nothing; change requests the app's supported write access too."
           }
         },
         "additionalProperties": false,

@@ -80,6 +80,13 @@ first new app). `access: "read"` requests only read access; the default
 `"change"` also covers adding the app to the list and adding, changing or
 deleting its records. Each grant lasts 30 days, and records use one prefix grant
 per app, not one grant per key.
+For Health Log on hosted `/mcp`, `app: "healthlog"` bundles app-list read
+and Health Log database read/write into one task approval; `access: "read"`
+requests read only. A first meal without `app` retains three task approvals.
+`app: "recipes"` bundles app-list and Recipes-notes reads; its database is
+learned from those notes and SQL read access is requested separately.
+Recipes writes remain unsupported. The public ChatGPT surface has no generic
+SQL tools; the catalog rules direct it to the app link when those tools are absent.
 Generic KV tools retain their exact-input scopes. The connector asks for an
 IANA timezone once, not the owner's city or precise location. In Claude
 **Settings → Connectors → TinyCloud**, set `tinycloud_apps_write` to
