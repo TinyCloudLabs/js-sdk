@@ -16,7 +16,13 @@ const fixture = await createGuidedFixture(path.join(root, 'guided-next-line'), p
 test.after(() => fixture.close());
 
 const lines = (text) => text.split('\n');
-const nextLines = (text) => lines(text).filter((line) => line.startsWith('Next: '));
+// Wording v4: every Next line leads with the fact that the owner cannot see tool output (agents cut after the first clause).
+const OWNER_BLIND = 'Next: The owner cannot see this tool output.';
+const nextLines = (text) => {
+  const found = lines(text).filter((line) => line.startsWith('Next: '));
+  for (const line of found) assert.ok(line.startsWith(OWNER_BLIND), line);
+  return found;
+};
 // Node itself can print warning blocks to stderr: on Node 20 a `MaxListenersExceededWarning` (`(node:<pid>) ...Warning: ...`,
 // then a `(Use \`node --trace-warnings ...\`)` hint, and indented `at ...` lines under --trace-warnings) from the pre-existing
 // listener leak in the services' combineSignals (TC-2418), about 3 s into a poll loop. They are not Courier output and land

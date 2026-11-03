@@ -83,7 +83,13 @@ async function endedWith(run: () => Promise<unknown>): Promise<{ code: number; s
   } finally { exit.mockRestore(); }
 }
 const linesOf = (text: string) => text.split("\n");
-const nextLines = (text: string) => linesOf(text).filter((line) => line.startsWith("Next: "));
+/** Wording v4: every Next line leads with the fact that the owner cannot see tool output (agents cut after the first clause). */
+const OWNER_BLIND = "Next: The owner cannot see this tool output.";
+const nextLines = (text: string) => {
+  const found = linesOf(text).filter((line) => line.startsWith("Next: "));
+  for (const line of found) expect(line).toStartWith(OWNER_BLIND);
+  return found;
+};
 // Node itself can print warning blocks to stderr (on Node 20 a `MaxListenersExceededWarning` from the pre-existing listener
 // leak in the services' combineSignals, TC-2418: `(node:<pid>) ...Warning: ...`, a `(Use \`node --trace-warnings ...\`)` hint,
 // indented `at ...` lines). They are not CLI output and can land after our last line, so it is picked among our own lines.
@@ -168,8 +174,8 @@ describe("approvalPendingError", () => {
   const lastLine = (error: InstanceType<typeof CLIError>) => error.message.split("\n").at(-1)!;
 
   test("a new link and a resumed one end with different Next lines; without the flag it is the resumed one", () => {
-    expect(lastLine(approvalPendingError(pending, true))).toStartWith("Next: ");
-    expect(lastLine(approvalPendingError(pending))).toStartWith("Next: ");
+    expect(lastLine(approvalPendingError(pending, true))).toStartWith(OWNER_BLIND);
+    expect(lastLine(approvalPendingError(pending))).toStartWith(OWNER_BLIND);
     expect(lastLine(approvalPendingError(pending, true))).not.toBe(lastLine(approvalPendingError(pending, false)));
     expect(lastLine(approvalPendingError(pending))).toBe(lastLine(approvalPendingError(pending, false)));
   });
@@ -183,7 +189,7 @@ describe("the command the Next line names", () => {
     process.argv = ["bun", "/opt/bin/tc"];
     for (const created of [true, false]) {
       const line = lastLine(approvalPendingError(pending, created));
-      expect(line).toStartWith("Next: ");
+      expect(line).toStartWith(OWNER_BLIND);
       expect(line).toContain("this same command");
       expect(line).not.toContain("`");
     }
