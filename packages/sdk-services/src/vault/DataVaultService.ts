@@ -23,6 +23,7 @@ import {
   ServiceError,
 } from "../types";
 import { authorizationVerdictOf, parsePermissionHint, wrapError } from "../errors";
+import { routingFailure } from "../resourceRouting";
 import type { IKVService } from "../kv/IKVService";
 import type { KVService } from "../kv/KVService";
 import type {
@@ -202,6 +203,8 @@ function defaultVaultMessage(input: VaultErrorInput): string {
     case "STORAGE_QUOTA_EXCEEDED":
     case "STORAGE_LIMIT_REACHED":
       return input.message;
+    default:
+      return input.message ?? input.code;
   }
 }
 
@@ -339,6 +342,8 @@ function kvWriteError(
   context: string,
   error: ServiceError
 ): Result<never, VaultError> {
+  const routing = routingFailure(error);
+  if (routing) return vaultError(routing);
   if (
     error.code === ErrorCodes.STORAGE_QUOTA_EXCEEDED ||
     error.code === ErrorCodes.STORAGE_LIMIT_REACHED
@@ -762,6 +767,8 @@ export class DataVaultService extends BaseService implements IDataVaultService {
         { aad, metadata },
       );
       if (!envelopeResult.ok) {
+        const routing = routingFailure(envelopeResult.error);
+        if (routing) return vaultError(routing);
         return vaultError({
           code: "STORAGE_ERROR",
           cause: new Error(envelopeResult.error.message),
@@ -801,6 +808,8 @@ export class DataVaultService extends BaseService implements IDataVaultService {
 
       return { ok: true, data: undefined };
     } catch (error) {
+      const routing = routingFailure(error);
+      if (routing) return vaultError(routing);
       return vaultError({
         code: "STORAGE_ERROR",
         cause: toError(error),
@@ -832,6 +841,8 @@ export class DataVaultService extends BaseService implements IDataVaultService {
         ...(options?.source === undefined ? {} : { source: options.source }),
       });
       if (!valueResult.ok) {
+        const routing = routingFailure(valueResult.error);
+        if (routing) return vaultError(routing);
         return vaultError({ code: "KEY_NOT_FOUND", key });
       }
 
@@ -855,6 +866,8 @@ export class DataVaultService extends BaseService implements IDataVaultService {
       const proof = await this.decryptCapabilityProof();
       const plaintextResult = await config.service.decryptEnvelope(envelope, proof);
       if (!plaintextResult.ok) {
+        const routing = routingFailure(plaintextResult.error);
+        if (routing) return vaultError(routing);
         return vaultError({
           code: "DECRYPTION_FAILED",
           message: plaintextResult.error.message,
@@ -880,6 +893,8 @@ export class DataVaultService extends BaseService implements IDataVaultService {
         data: { value, metadata, keyId, ...(etag === undefined ? {} : { etag }) },
       };
     } catch (error) {
+      const routing = routingFailure(error);
+      if (routing) return vaultError(routing);
       return vaultError({
         code: "STORAGE_ERROR",
         cause: toError(error),
@@ -923,6 +938,7 @@ export class DataVaultService extends BaseService implements IDataVaultService {
         return { status: "not_found" };
       }
       if (
+        valueResult.error.code === "NODE_NOT_RESPONDING" ||
         valueResult.error.code === "NETWORK_ERROR" ||
         valueResult.error.code === "TIMEOUT" ||
         valueResult.error.code === "ABORTED"
@@ -969,7 +985,7 @@ export class DataVaultService extends BaseService implements IDataVaultService {
       if (plaintextResult.error.code === "INVALID_ENVELOPE") {
         return { status: "corrupt_envelope" };
       }
-      if (plaintextResult.error.code === "TRANSPORT_ERROR") {
+      if (plaintextResult.error.code === "NODE_NOT_RESPONDING" || plaintextResult.error.code === "TRANSPORT_ERROR") {
         return { status: "node_unreachable" };
       }
       return { status: "decrypt_failed" };

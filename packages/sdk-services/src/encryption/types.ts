@@ -9,6 +9,7 @@
 
 import type { Json } from "./canonical";
 import type { PermissionHint } from "../types";
+import type { RoutingFailure } from "../resourceRouting";
 
 /** Default ciphersuite identifier for v1 envelopes. */
 export const DEFAULT_ENCRYPTION_ALG = "x25519-aes256gcm/v1" as const;
@@ -279,6 +280,7 @@ export interface DecryptInvocationSigner {
  * Errors thrown / returned from the encryption module.
  */
 export type EncryptionErrorInput =
+  | RoutingFailure
   | { code: "NETWORK_NOT_FOUND"; networkId?: string; name?: string; message?: string }
   | { code: "NETWORK_NOT_ACTIVE"; state: string; message?: string }
   | { code: "INVALID_NETWORK_ID"; message: string }
@@ -323,6 +325,8 @@ function defaultEncryptionMessage(input: EncryptionErrorInput): string {
       return input.message ?? input.cause.message;
     case "INVALID_INPUT":
       return input.message;
+    default:
+      return input.message ?? input.code;
   }
 }
 
