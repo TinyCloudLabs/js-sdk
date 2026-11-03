@@ -1,17 +1,12 @@
 /**
- * Registry policy for host resolution and space creation (TC-1443).
+ * Signed-v2 registry policy for host resolution and space creation (TC-2481).
+ * A genuine absence in both registry namespaces is the only state that may
+ * use the configured new-user host; registry errors and v1-only entries fail
+ * closed.
  *
- * - `legacy-fallback` (the default, deprecated): {@link resolveTinyCloudHosts}
- *   as before. A registry miss or failure silently routes to the hosted
- *   fallback node, with a one-time deprecation warning.
- * - `fail-closed` (opt-in): routing and space creation act on the three-state
- *   registry verdict. `unavailable` is never treated as `unregistered`.
- *
- * Registry lookups key on the owner's signer address, never the session
- * chain. The v1 registry stores records under an exact
- * `did:pkh:eip155:<chain>:<EIP-55 address>` subject, so v1 lookups use
- * {@link registryOwnerSubjectV1} with a configured chain (default 1). Registry
- * v2 keys owner records on the EIP-55 address alone, chain-independent.
+ * V2 owner keys are chain-independent: EOA records use the exact EIP-55
+ * address and did:key records use the exact DID. V1 is queried only after a
+ * genuine v2 absence to identify legacy-only owners, never to route them.
  */
 
 import { pkhDid } from "./identity";
@@ -31,13 +26,14 @@ import {
   classifyRegistryLookup,
   isCanonicalSubject,
   type RegisteredRegistryVerdict,
+  type RegistryHost,
   type RegistryLookupResponse,
   type RegistryVerdict,
   type UnavailableRegistryVerdict,
   type UnregisteredRegistryVerdict,
 } from "./registry-verdict";
 
-export type RegistryPolicy = "legacy-fallback" | "fail-closed";
+export type RegistryPolicy = "fail-closed";
 
 /** Chain of the v1 registry subject when none is configured. */
 export const DEFAULT_REGISTRY_OWNER_CHAIN_ID = 1;
@@ -46,7 +42,7 @@ export const DEFAULT_NEW_USER_HOST = DEFAULT_TINYCLOUD_FALLBACK_HOST;
 /** Budget for one registry lookup, covering the request and the body. */
 export const DEFAULT_REGISTRY_LOOKUP_TIMEOUT_MS = 3_000;
 /** Default key {@link createLocalStorageRegistrySequenceStore} stores its sequences under. */
-export const DEFAULT_REGISTRY_SEQUENCE_STORAGE_KEY = "tinycloud.registrySequences.v1";
+export const DEFAULT_REGISTRY_SEQUENCE_STORAGE_KEY = "tinycloud.registrySequences.v2";
 
 /** `did:pkh:eip155:` + a 16-digit safe-integer chain ID + `:` + a 42-character address. */
 const MAX_SUBJECT_LENGTH = 74;
@@ -153,24 +149,21 @@ function isSequence(value: unknown): value is number {
 export interface ResolveOwnerHostsOptions {
   /** Location registry base URL. Default https://registry.tinycloud.xyz. */
   registryUrl?: string;
-  /** Remembered sequences. Omit to remember nothing. */
+  /** Remembered v2 sequences keyed by EIP-55 address or exact did:key. */
   sequenceStore?: RegistrySequenceStore;
   /** Custom fetch implementation. Defaults to globalThis.fetch. */
   fetch?: typeof fetch;
   /** Lookup budget in milliseconds. Default {@link DEFAULT_REGISTRY_LOOKUP_TIMEOUT_MS}. */
   timeoutMs?: number;
+  /** V1 format-probe chain for EOA owners. V2 lookup is chain-independent. */
+  registryChainId?: number;
 }
 
 /**
- * Look up `subject` in the off-chain v1 location registry and classify the
- * answer with {@link classifyRegistryLookup}, using and updating the
- * remembered sequence. Transport failures, timeouts and oversize or non-UTF-8
- * bodies are `unavailable` verdicts. Performs no host probing and never
- * applies a fallback.
- *
- * @throws RegistryLookupInputError if `subject` is not canonical or a
- * remembered sequence is invalid. The subject is length-checked before any
- * other parsing.
+ * Look up the signed-v2 owner record first. Only a genuine v2 absence probes
+ * v1 to distinguish an unregistered owner from a v1-only owner; v1 records
+ * never supply routing hosts. Sequence memory is keyed by the chain-independent
+ * v2 owner key.
  */
 export async function resolveOwnerHosts(
   subject: string,
@@ -178,7 +171,6 @@ export async function resolveOwnerHosts(
 ): Promise<RegistryVerdict> {
   if (
     typeof subject !== "string" ||
-    // Bounds the work below; covers any did:pkh with a safe-integer chain ID.
     subject.length > MAX_SUBJECT_LENGTH ||
     !isCanonicalSubject(subject)
   ) {
@@ -187,17 +179,59 @@ export async function resolveOwnerHosts(
       "subject must be did:pkh:eip155:<chainId>:<EIP-55 address> or an Ed25519 did:key",
     );
   }
+  const ownerKey = registryOwnerKeyV2(subject);
   const store = options.sequenceStore;
-  // classifyRegistryLookup rejects an invalid remembered sequence.
-  const remembered = store === undefined ? undefined : await store.get(subject);
-
+  const remembered = store === undefined ? undefined : await store.get(ownerKey);
   const registryUrl = options.registryUrl ?? DEFAULT_TINYCLOUD_LOCATION_REGISTRY_URL;
-  const url = `${registryUrl.replace(/\/$/, "")}/v1/locations/${encodeURIComponent(subject)}`;
-  const observed = await observeRegistry(
-    url,
-    options.fetch ?? globalThis.fetch,
-    options.timeoutMs ?? DEFAULT_REGISTRY_LOOKUP_TIMEOUT_MS,
+  const baseUrl = registryUrl.replace(/\/$/, "");
+  const fetchFn = options.fetch ?? globalThis.fetch;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_REGISTRY_LOOKUP_TIMEOUT_MS;
+
+  const v2 = await classifyObservation(
+    subject,
+    await observeRegistry(`${baseUrl}/v2/locations/${encodeURIComponent(ownerKey)}`, fetchFn, timeoutMs),
+    2,
+    remembered ?? null,
   );
+  if (v2.status !== "unregistered") {
+    await rememberAcceptedSequence(store, ownerKey, remembered, v2);
+    return v2;
+  }
+
+  const v1Subject = legacyRegistrySubject(subject, options.registryChainId);
+  const v1 = await classifyObservation(
+    v1Subject,
+    await observeRegistry(`${baseUrl}/v1/locations/${encodeURIComponent(v1Subject)}`, fetchFn, timeoutMs),
+    1,
+    null,
+  );
+  if (v1.status === "registered") {
+    return {
+      status: "unavailable",
+      subject,
+      source: "offchain",
+      reason: "unsupported-format",
+      message: "owner has a v1 location record but no signed-v2 routing record",
+      hosts: [],
+    };
+  }
+  if (v1.status === "unavailable") return { ...v1, subject };
+  return { status: "unregistered", subject, source: "offchain", hosts: [] };
+}
+
+let sequenceWriteWarned = false;
+
+type RegistryObservation =
+  | RegistryLookupResponse
+  | { readonly kind: "oversize" }
+  | { readonly kind: "invalid-utf8" };
+
+async function classifyObservation(
+  subject: string,
+  observed: RegistryObservation,
+  recordVersion: 1 | 2,
+  rememberedSequence: number | null,
+): Promise<RegistryVerdict> {
   if (observed.kind === "oversize" || observed.kind === "invalid-utf8") {
     const oversize = observed.kind === "oversize";
     return {
@@ -211,33 +245,40 @@ export async function resolveOwnerHosts(
       hosts: [],
     };
   }
-
-  const verdict = await classifyRegistryLookup(subject, observed, {
-    rememberedSequence: remembered ?? null,
-  });
-  if (
-    store !== undefined &&
-    verdict.status === "registered" &&
-    (remembered === undefined || verdict.sequence > remembered)
-  ) {
-    try {
-      await store.set(subject, verdict.sequence);
-    } catch (error) {
-      if (!sequenceWriteWarned) {
-        sequenceWriteWarned = true;
-        console.warn("[tinycloud:registry] could not remember the registry sequence:", error);
-      }
-    }
-  }
-  return verdict;
+  return classifyRegistryLookup(subject, observed, { rememberedSequence, recordVersion });
 }
 
-let sequenceWriteWarned = false;
+async function rememberAcceptedSequence(
+  store: RegistrySequenceStore | undefined,
+  ownerKey: string,
+  remembered: number | undefined,
+  verdict: RegistryVerdict,
+): Promise<void> {
+  if (
+    store === undefined ||
+    verdict.status !== "registered" ||
+    (remembered !== undefined && verdict.sequence <= remembered)
+  ) return;
+  try {
+    await store.set(ownerKey, verdict.sequence);
+  } catch (error) {
+    if (!sequenceWriteWarned) {
+      sequenceWriteWarned = true;
+      console.warn("[tinycloud:registry] could not remember the registry sequence:", error);
+    }
+  }
+}
 
-type RegistryObservation =
-  | RegistryLookupResponse
-  | { readonly kind: "oversize" }
-  | { readonly kind: "invalid-utf8" };
+function registryOwnerKeyV2(subject: string): string {
+  return subject.startsWith("did:pkh:")
+    ? subject.slice(subject.lastIndexOf(":") + 1)
+    : subject;
+}
+
+function legacyRegistrySubject(subject: string, registryChainId?: number): string {
+  if (subject.startsWith("did:key:")) return subject;
+  return registryOwnerSubjectV1(subject.slice(subject.lastIndexOf(":") + 1), registryChainId);
+}
 
 async function observeRegistry(
   url: string,
@@ -355,11 +396,13 @@ export class NodeRegistryEntryExistsError extends Error {
 }
 
 export interface LookupOwnerRegistryVerdictOptions {
-  /** Location registry base URL. `null` means none, which is `RegistryUnavailableError`. */
+  /** Location registry base URL. `null` means none, which is unavailable. */
   registryUrl?: string | null;
   sequenceStore?: RegistrySequenceStore;
   fetch?: typeof fetch;
   timeoutMs?: number;
+  /** V1 format-probe chain for EOA owners. V2 lookup is chain-independent. */
+  registryChainId?: number;
 }
 
 /**
@@ -382,6 +425,7 @@ export async function lookupOwnerRegistryVerdict(
       sequenceStore: options.sequenceStore,
       fetch: options.fetch,
       timeoutMs: options.timeoutMs,
+      registryChainId: options.registryChainId,
     });
   } catch (error) {
     throw new RegistryUnavailableError(subject, undefined, {
@@ -389,6 +433,64 @@ export async function lookupOwnerRegistryVerdict(
       cause: error,
     });
   }
+}
+
+/**
+ * Resolve one resource exclusively from a verified v2 owner record. A genuine
+ * no-entry verdict returns no hosts for existing onboarding; a registered
+ * resource with no authorized destination throws instead of falling back.
+ */
+export async function resolveRegistryResource(
+  subject: string,
+  resource: string,
+  access: "read" | "write" | "host" | "encryption",
+  options: LookupOwnerRegistryVerdictOptions,
+): Promise<{ verdict: RegistryVerdict; hosts: RegistryHost[] }> {
+  const verdict = await lookupOwnerRegistryVerdict(subject, options);
+  if (verdict.status === "unregistered") return { verdict, hosts: [] };
+  if (verdict.status === "unavailable") throw new RegistryUnavailableError(subject, verdict);
+  const record = verdict.record;
+  if (record === undefined) {
+    throw new RegistryUnavailableError(subject, undefined, {
+      message: "registered owner has no verified v2 routing record",
+    });
+  }
+
+  let targetDids: string[];
+  if (access === "host") {
+    targetDids = record.nodes.map(({ did }) => did);
+  } else if (access === "encryption") {
+    if (record.encryptionNode === null) throw new NodeNotFoundError(subject, verdict);
+    targetDids = [record.encryptionNode];
+  } else {
+    const space = record.spaces.find(({ space: signedSpace }) => sameSpaceIdentifier(signedSpace, resource));
+    if (space === undefined) throw new NodeNotFoundError(subject, verdict);
+    targetDids = space.nodes
+      .filter(({ mode }) => access === "read" || mode === "read-write")
+      .map(({ did }) => did);
+  }
+
+  const nodeByDid = new Map(record.nodes.map((node) => [node.did, node.url]));
+  const hosts = targetDids.map((nodeDid) => {
+    const url = nodeByDid.get(nodeDid);
+    if (url === undefined) {
+      throw new RegistryUnavailableError(subject, undefined, {
+        message: "verified membership references a missing node",
+      });
+    }
+    return { nodeDid, urls: [url], source: "offchain" as const };
+  });
+  if (hosts.length === 0) throw new NodeNotFoundError(subject, verdict);
+  return { verdict, hosts };
+}
+
+function sameSpaceIdentifier(signedSpace: string, requestedSpace: string): boolean {
+  const signed = /^tinycloud:pkh:eip155:([1-9][0-9]*):(0x[a-fA-F0-9]{40}):([^/?#\s]+)$/.exec(signedSpace);
+  const requested = /^tinycloud:pkh:eip155:([1-9][0-9]*):(0x[a-fA-F0-9]{40}):([^/?#\s]+)$/.exec(requestedSpace);
+  if (signed === null || requested === null) return signedSpace === requestedSpace;
+  return signed[1] === requested[1] &&
+    signed[2]!.toLowerCase() === requested[2]!.toLowerCase() &&
+    signed[3] === requested[3];
 }
 
 export interface NodeNotFoundContext {
@@ -403,19 +505,15 @@ export type NodeNotFoundDecision =
   | { readonly action: "abort" };
 
 /**
- * Decides what sign-in does when no host can be resolved under `fail-closed`:
- * look up again, use another host, or abort with the error. A `use-host`
- * host must be an HTTPS or loopback HTTP origin. The SDK does not verify its
- * identity, and it persists with the session like any resolved host; space
- * creation there still goes through the creation guard.
+ * Decides what sign-in does when no host can be resolved under `fail-closed`.
+ * A callback may retry or abort for any error; `use-host` is accepted only
+ * for a genuine unregistered verdict with no configured host.
  */
 export type OnNodeNotFound = (
   context: NodeNotFoundContext,
 ) => NodeNotFoundDecision | Promise<NodeNotFoundDecision>;
 
 export interface FailClosedHostOptions extends LookupOwnerRegistryVerdictOptions {
-  /** Chain of the v1 registry subject. Default {@link DEFAULT_REGISTRY_OWNER_CHAIN_ID}. */
-  registryChainId?: number;
   /**
    * Host for owners the registry reports as `unregistered`, and only them.
    * Default {@link DEFAULT_NEW_USER_HOST}. `null`: unregistered owners get
@@ -425,9 +523,8 @@ export interface FailClosedHostOptions extends LookupOwnerRegistryVerdictOptions
   /** Without a callback, resolution throws the error. */
   onNodeNotFound?: OnNodeNotFound;
   /**
-   * Probe local nodes before routing on the verdict. Default true. Only
-   * configured candidates (`localNodeUrl`, `localLinkName`) and
-   * `*.local.tinycloud.link` hosts from a `registered` verdict are probed.
+   * Probe configured local candidates only after genuine unregistration.
+   * Discovery never overrides a registered or unavailable verdict.
    */
   autoDiscoverLocalNode?: boolean;
   localNodeUrl?: string;
@@ -438,18 +535,16 @@ export interface FailClosedHostOptions extends LookupOwnerRegistryVerdictOptions
 
 export interface FailClosedHosts {
   hosts: string[];
-  /** The registry verdict behind `hosts`. Absent when a verified local node was used. */
+  /** The registry verdict behind `hosts`. */
   verdict?: RegistryVerdict;
 }
 
 /**
- * Resolve the hosts for `address` under the `fail-closed` policy. The
- * registry verdict for {@link registryOwnerSubjectV1} comes first. Then a
- * verified local node is used if one is configured or listed by a
- * `registered` verdict. Otherwise `registered` routes to the record's hosts
- * (record order, HTTPS or loopback only), `unregistered` to `newUserHost`,
- * and `unavailable` or a record without a usable host goes to
- * `onNodeNotFound`, else throws.
+ * Resolve the hosts for `address` under the `fail-closed` policy. A
+ * registered v2 verdict routes only to its signed nodes; `unregistered`
+ * routes to `newUserHost` or a configured verified local node. An unavailable
+ * verdict or registered record without a usable host throws unless the
+ * callback retries or aborts.
  */
 export async function resolveFailClosedTinyCloudHosts(
   address: string,
@@ -462,34 +557,17 @@ export async function resolveFailClosedTinyCloudHosts(
   const subject = registryOwnerSubjectV1(address, options.registryChainId);
 
   const resolve = async (): Promise<FailClosedHosts> => {
-    let verdict: RegistryVerdict | undefined;
-    let unavailable: RegistryUnavailableError | undefined;
-    try {
-      verdict = await lookupOwnerRegistryVerdict(subject, options);
-    } catch (error) {
-      if (!(error instanceof RegistryUnavailableError)) throw error;
-      unavailable = error;
+    const verdict = await lookupOwnerRegistryVerdict(subject, options);
+    if (verdict.status === "unregistered" && (options.autoDiscoverLocalNode ?? true)) {
+      const local = await discoverLocalTinyCloudNode({
+        localNodeUrl: options.localNodeUrl,
+        localLinkName: options.localLinkName,
+        expectedNodeDid: options.expectedNodeDid,
+        identityStore: options.localNodeIdentityStore,
+        fetch: options.fetch,
+      });
+      if (local) return { hosts: [local.url], verdict };
     }
-    if (options.autoDiscoverLocalNode ?? true) {
-      // No `subject`: discovery never reads the registry itself, so an
-      // unclassified or rolled-back record cannot route.
-      const linkNames = verdict?.status === "registered"
-        ? secureRecordHosts(verdict).flatMap((host) => LOCAL_LINK_ORIGIN.exec(host)?.[1] ?? [])
-        : [];
-      for (const candidate of [
-        { localNodeUrl: options.localNodeUrl, localLinkName: options.localLinkName },
-        ...linkNames.map((localLinkName) => ({ localLinkName })),
-      ]) {
-        const local = await discoverLocalTinyCloudNode({
-          ...candidate,
-          expectedNodeDid: options.expectedNodeDid,
-          identityStore: options.localNodeIdentityStore,
-          fetch: options.fetch,
-        });
-        if (local) return { hosts: [local.url], ...(verdict === undefined ? {} : { verdict }) };
-      }
-    }
-    if (verdict === undefined) throw unavailable;
     return { hosts: hostsForVerdict(verdict, newUserHost), verdict };
   };
 
@@ -509,9 +587,12 @@ export async function resolveFailClosedTinyCloudHosts(
       case "retry":
         continue;
       case "use-host":
+        if (!(failure instanceof NodeNotFoundError) || failure.verdict.status !== "unregistered") {
+          throw failure;
+        }
         return {
           hosts: [exactHttpOrigin(decision.host, "onNodeNotFound host")],
-          ...(failure.verdict === undefined ? {} : { verdict: failure.verdict }),
+          verdict: failure.verdict,
         };
       case "abort":
         throw failure;
@@ -521,7 +602,6 @@ export async function resolveFailClosedTinyCloudHosts(
   }
 }
 
-const LOCAL_LINK_ORIGIN = /^https:\/\/([a-z0-9-]+)\.local\.tinycloud\.link$/;
 
 /**
  * The record's hosts that `fail-closed` routes to and creates spaces on:
@@ -559,15 +639,19 @@ function hostsForVerdict(verdict: RegistryVerdict, newUserHost: string | null): 
 }
 
 /**
- * The space-creation guard under `fail-closed`: creating a space on `host` is
- * allowed for an `unregistered` owner, or for a `registered` owner whose
- * record lists `host` as an HTTPS or loopback HTTP origin.
+ * The space-creation guard under `fail-closed`. For signed v2 verdicts, both
+ * `spaceId` and the write-authorized node membership are required; v1 records
+ * retain the existing host-only check for external legacy callers.
  *
- * @throws NodeRegistryEntryExistsError for a registered owner whose record
- * does not list `host` that way (including an empty record).
+ * @throws NodeRegistryEntryExistsError when a registered owner does not list
+ * the requested space on this host (including when v2 `spaceId` is omitted).
  * @throws RegistryUnavailableError for an `unavailable` verdict.
  */
-export function assertSpaceCreationAllowed(verdict: RegistryVerdict, host: string): void {
+export function assertSpaceCreationAllowed(
+  verdict: RegistryVerdict,
+  host: string,
+  spaceId?: string,
+): void {
   switch (verdict.status) {
     case "unregistered":
       return;
@@ -575,7 +659,18 @@ export function assertSpaceCreationAllowed(verdict: RegistryVerdict, host: strin
       throw new RegistryUnavailableError(verdict.subject, verdict);
     case "registered": {
       const origin = httpOrigin(host);
-      if (origin !== undefined && secureRecordHosts(verdict).includes(origin)) {
+      if (origin !== undefined && verdict.record !== undefined) {
+        const space = spaceId === undefined
+          ? undefined
+          : verdict.record.spaces.find(({ space: signedSpace }) => sameSpaceIdentifier(signedSpace, spaceId));
+        const memberNodes = new Set(
+          space?.nodes.filter(({ mode }) => mode === "read-write").map(({ did }) => did) ?? [],
+        );
+        const spaceHosts = verdict.record.nodes
+          .filter(({ did }) => memberNodes.has(did))
+          .map(({ url }) => httpOrigin(url));
+        if (spaceHosts.includes(origin)) return;
+      } else if (origin !== undefined && secureRecordHosts(verdict).includes(origin)) {
         return;
       }
       throw new NodeRegistryEntryExistsError(verdict.subject, host, verdict);

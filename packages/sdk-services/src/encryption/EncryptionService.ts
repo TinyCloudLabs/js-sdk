@@ -15,6 +15,7 @@
 
 import { BaseService } from "../base/BaseService";
 import { type Result } from "../types";
+import { routingFailure } from "../resourceRouting";
 import {
   base64Decode,
   base64Encode,
@@ -96,6 +97,8 @@ export interface EncryptionServiceConfig {
   transport: DecryptTransport;
   node?: NodeDescriptorFetcher;
   wellKnown?: WellKnownDescriptorFetcher;
+  /** Verified registry destination; overrides descriptor order and caller hints. */
+  resolveTargetNode?: (networkId: string) => Promise<string>;
   /** Bound by an owning service graph to prevent cross-session authority use. */
   assertActive?: () => void;
   [key: string]: unknown;
@@ -171,6 +174,8 @@ export class EncryptionService
       });
       return encOk(result.envelope);
     } catch (error) {
+      const routing = routingFailure(error);
+      if (routing) return encErr(encryptionError(routing));
       return encErr(
         encryptionError({
           code: "TRANSPORT_ERROR",
@@ -213,6 +218,9 @@ export class EncryptionService
       if (!usable.ok) return usable;
 
       const targetNode =
+        this._config.resolveTargetNode
+          ? await this._config.resolveTargetNode(envelope.networkId)
+          :
         options?.targetNode ?? descriptor.members[0]?.nodeId;
       if (targetNode === undefined) {
         return encErr(
@@ -223,6 +231,11 @@ export class EncryptionService
         );
       }
 
+      if (this._config.resolveTargetNode &&
+        ((options?.targetNode !== undefined && options.targetNode !== targetNode) ||
+          !descriptor.members.some((member) => member.nodeId === targetNode))) {
+        return encErr(encryptionError({ code: "INVALID_INPUT", message: "Encryption destination does not match the registry" }));
+      }
       // Generate per-request receiver key. We use the random mode by
       // default; callers wanting deterministic derivation must wrap
       // this service directly.
@@ -289,6 +302,8 @@ export class EncryptionService
         });
         this.assertActive();
       } catch (error) {
+        const routing = routingFailure(error);
+        if (routing) return encErr(encryptionError(routing));
         if (error instanceof DecryptTransportResponseError) {
           return encErr(
             encryptionError(
@@ -340,6 +355,8 @@ export class EncryptionService
       );
       return encOk(plaintext);
     } catch (error) {
+      const routing = routingFailure(error);
+      if (routing) return encErr(encryptionError(routing));
       return encErr(
         encryptionError({
           code: "INVALID_RESPONSE",

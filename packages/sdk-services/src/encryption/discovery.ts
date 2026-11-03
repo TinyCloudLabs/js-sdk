@@ -1,3 +1,4 @@
+import { routingFailure } from "../resourceRouting";
 /**
  * Network-descriptor discovery.
  *
@@ -118,6 +119,8 @@ export async function discoverNetwork(
         return { ok: true, data: { descriptor: validated.data, source: "node" } };
       }
     } catch (err) {
+      const routing = routingFailure(err);
+      if (routing) return { ok: false, error: encryptionError(routing) };
       // Fall through to well-known
     }
   }
@@ -138,6 +141,8 @@ export async function discoverNetwork(
         };
       }
     } catch (err) {
+      const routing = routingFailure(err);
+      if (routing) return { ok: false, error: encryptionError(routing) };
       // Fall through to NOT_FOUND
     }
   }
