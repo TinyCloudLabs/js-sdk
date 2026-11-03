@@ -242,8 +242,6 @@ describe("moving an app: guards found in the security review", () => {
       applications.beforePut = undefined;
       const again = await move(context, false);
       expect(again.output).toMatchObject({ status: "already_moved", drift: [oldKey(9)] });
-      const writes = applications.writes.length;
-      expect(applications.writes.length).toBe(writes);
       untouched(kv);
     });
   });
