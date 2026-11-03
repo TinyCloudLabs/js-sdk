@@ -1053,8 +1053,9 @@ export class TinyCloudWeb {
 
   /** One node read for the restored session, held to {@link spaceHostingCapMs}; past it, or on any failure, the answer stays unknown. */
   private async probeSpaceHosting(node: TinyCloudNode): Promise<void> {
-    const { promise: capped, resolve } = Promise.withResolvers<void>();
-    const timer = setTimeout(resolve, this.spaceHostingCapMs);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // The web-sdk lib target predates Promise.withResolvers.
+    const capped = new Promise<void>((resolve) => { timer = setTimeout(resolve, this.spaceHostingCapMs); });
     try {
       await Promise.race([Promise.resolve().then(() => node.checkSpaceHosting()), capped]);
     } catch { /* a probe never fails a restore */ } finally {
