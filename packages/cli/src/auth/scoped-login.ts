@@ -11,6 +11,7 @@ import { ENCRYPTION_MANIFEST_SPACE } from "../../../sdk-core/src/manifest.js";
 import { isRawEncryptionPermission, isVerifiedRawEncryptionPermission } from "../lib/raw-encryption.js";
 import { canonicalNetworkUrn, canonicalOwnerDid, rawEncryptionOwnerMatches } from "../lib/owner-did.js";
 import { assertNoCaveatLimits } from "../lib/caveat-refusal.js";
+import { markClockDependent } from "./refusal.js";
 import { keyAbilitiesFor, parseKeysPrefix, partialKeysGrantError, type ProfileNamedKeys } from "../lib/named-keys.js";
 
 /** OpenKey signs a scoped delegation only when it carries this read on the session space. */
@@ -60,6 +61,16 @@ export function expiryLimit(expiry: RequestedExpiry): number {
  */
 export function defaultExpiryLimit(): number {
   return Date.now() + EXPIRY.SESSION_MS + CLOCK_SKEW_MS;
+}
+
+/**
+ * Whether the signed expiry is above the request's lifetime counted from the SIWE's own `Issued At` (plus the skew allowance),
+ * which does not depend on this machine's clock. An unreadable Issued At proves nothing: false.
+ */
+export function outlivesRequestFromIssuedAt(siwe: string, signedExpiry: number, expiry: RequestedExpiry): boolean {
+  const raw = [...siwe.matchAll(/^Issued At: (.+)$/gm)].at(-1)?.[1];
+  const issuedAt = raw === undefined ? NaN : Date.parse(raw);
+  return Number.isFinite(issuedAt) && signedExpiry > issuedAt + expiry.durationMs + CLOCK_SKEW_MS;
 }
 
 /**
@@ -486,7 +497,10 @@ export function verifySignedSession(
     throw new CLIError("AUTH_EXPIRED", `The approved session has expired. ${notStored}`, ExitCode.AUTH_REQUIRED);
   }
   if (expected.expiry !== undefined && signedExpiry > expiryLimit(expected.expiry)) {
-    throw new CLIError("OPENKEY_EXPIRY_EXCEEDED", `The signed session outlives the requested --expiry. ${notStored}`, ExitCode.PERMISSION_DENIED);
+    const exceeded = new CLIError("OPENKEY_EXPIRY_EXCEEDED", `The signed session outlives the requested --expiry. ${notStored}`, ExitCode.PERMISSION_DENIED);
+    // Counted from the signed Issued At the lifetime fits: only the local clock makes it look too long. Not a refusal to clean up after.
+    if (!outlivesRequestFromIssuedAt(data.siwe as string, signedExpiry, expected.expiry)) markClockDependent(exceeded);
+    throw exceeded;
   }
   const ownerDid = `did:pkh:eip155:${data.chainId}:${data.address}`;
   if (expected.expectedOwner && normalizePkhIdentifier(expected.expectedOwner) !== normalizePkhIdentifier(ownerDid)) {
