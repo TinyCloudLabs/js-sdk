@@ -20,7 +20,7 @@ import { dropCommittedDelegation } from "./pending-code.js";
 import { carryRefusedDelegation, isPermanentRefusal, markMaybeGranted } from "./refusal.js";
 import { decryptRelayResult, relayPublicJwkOf } from "./device-auth.js";
 import { canonicalJson, parseRequestedExpiry, sameLoginSpace, verifyScopedLogin } from "./scoped-login.js";
-import { APPROVAL_POLL_INTERVAL_MS, approvalLimitMs, approvalPendingError, approvalRequestTimeoutMs, type ApprovalWait } from "./approval-wait.js";
+import { APPROVAL_POLL_INTERVAL_MS, approvalLimitMs, approvalPendingError, approvalRequestTimeoutMs, firstCheckTimeoutMs, type ApprovalWait } from "./approval-wait.js";
 
 interface PendingApproval {
   version: 1;
@@ -510,13 +510,20 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
     if (isNewRequest && approvalWait) throw pendingApproval(entry, approvalWait, true);
   }
   if (!entry.resultEnvelope) {
+    // The first check gets the full request limit whatever the deadline (see firstCheckTimeoutMs); the deadline decides only after an answer.
+    let answered = false;
     for (;;) {
       let response: Response;
-      try { response = await post(entry, "discover", signingKey, approvalRequestTimeoutMs(approvalWait, entry.resultRef !== undefined)); }
-      catch {
+      try { response = await post(entry, "discover", signingKey, answered || !approvalWait ? approvalRequestTimeoutMs(approvalWait, entry.resultRef !== undefined) : firstCheckTimeoutMs(approvalWait)); }
+      catch (error) {
+        // No answer at all within the first check's full limit: OpenKey is not reachable. That is not "still pending".
+        if (!answered && approvalWait && error instanceof Error && error.name === "TimeoutError") {
+          throw new CLIError("NETWORK_ERROR", `OpenKey did not answer the approval status check within ${Math.round(firstCheckTimeoutMs(approvalWait) / 1000)} seconds. The approval request is saved: run the same command again.`, ExitCode.NETWORK_ERROR);
+        }
         await pauseBetweenAttempts(profile, entry, approvalWait);
         continue;
       }
+      answered = true;
       if (response.status === 202) {
         await pauseBetweenAttempts(profile, entry, approvalWait, true);
         continue;
