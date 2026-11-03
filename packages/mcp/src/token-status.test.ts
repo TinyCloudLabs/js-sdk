@@ -447,6 +447,43 @@ test("the tolerance counts from when OpenKey was asked, not from when a slow ans
   expect(checker.toleratesUnknown(token)).toBe(false);
 });
 
+test("the 30 s active answer counts from when OpenKey was asked, not from when a slow answer arrived", async () => {
+  const stub = stubOpenKey("active");
+  const clock = { now: Date.now() };
+  const { sign } = await jwksServer();
+  const slowFetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    clock.now += 2_900;
+    return stub.fetch(input, init);
+  }) as typeof fetch;
+  const checker = checkerWithClocks(stub, clock, clock, slowFetch);
+  const token = await sign("24h");
+  expect(await checker.tokenStatus(token)).toBe("active"); // asked at t0, answered at t0 + 2.9 s
+
+  clock.now += 27_099; // 29.999 s after the ask
+  expect(await checker.tokenStatus(token)).toBe("active");
+  expect(stub.calls).toHaveLength(1);
+  clock.now += 1; // 30 s after the ask
+  await checker.tokenStatus(token);
+  expect(stub.calls).toHaveLength(2);
+});
+
+test("a forward wall-clock step does not move the windows, which run on the monotonic clock", async () => {
+  const stub = stubOpenKey("active");
+  const wall = { now: Date.now() };
+  const monotonic = { now: 1_000_000 };
+  const { sign } = await jwksServer();
+  const checker = checkerWithClocks(stub, wall, monotonic);
+  const token = await sign("24h");
+  expect(await checker.tokenStatus(token)).toBe("active");
+
+  wall.now += 3_600_000; // the wall clock jumps an hour ahead; the token has hours left
+  monotonic.now += 1_000;
+  expect(await checker.tokenStatus(token)).toBe("active");
+  expect(stub.calls).toHaveLength(1);
+  stub.answer = "down";
+  expect(checker.toleratesUnknown(token)).toBe(true);
+});
+
 test("an active-cache hit does not renew the outage tolerance", async () => {
   const stub = stubOpenKey("active");
   const clock = { now: Date.now() };
