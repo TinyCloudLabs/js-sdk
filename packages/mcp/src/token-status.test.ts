@@ -267,7 +267,7 @@ test("a 401 from OpenKey is logged once and refused even inside the outage allow
   await verify(token); // OpenKey answered at t0
 
   stub.answer = "unauthorized";
-  clock.now += 40_000; // active window over; well inside the 300 s allowance
+  clock.now += 40_000; // active window over; still inside the 60 s outage allowance
   for (let attempt = 0; attempt < 2; attempt += 1) {
     await expect(verify(token)).rejects.toMatchObject({ code: OAuthErrorCode.ServerError });
   }
