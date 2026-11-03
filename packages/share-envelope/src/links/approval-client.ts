@@ -255,6 +255,9 @@ export function classifyReply(call: ApprovalAction, status: number, body: unknow
     if (call === "discover" && status === 202) return { kind: "pending" };
     if (status !== 200 || record === null) return malformed;
     if (call === "discover") {
+      // OpenKey answers an approved request `{ status: "approved", resultRef, expiresAt }`; a 200 that says denied is the same denial as the 410.
+      if (record.status === "denied") return { kind: "error", call, status, code: "request_denied" };
+      if (record.status !== "approved") return malformed;
       const { resultRef, expiresAt } = record;
       return typeof resultRef === "string" && RESULT_REF_PATTERN.test(resultRef) && parseLinkTimestamp(expiresAt) !== null
         ? { kind: "ready", resultRef, resultExpiresAt: expiresAt as string }

@@ -23,6 +23,7 @@ import {
   type ApprovalPhase,
 } from "./approval-entry.js";
 import { APPROVAL_POLL_INTERVAL_MS } from "./constants.js";
+import { parseLinkTimestamp } from "./header.js";
 
 // ---------------------------------------------------------------------------------------------------------------
 // Replies: what OpenKey said, classified by `classifyReply` (approval-client.ts)
@@ -53,7 +54,11 @@ export type AbandonReason = "rotate-key" | "key-sweep" | "logout" | "superseded"
 export type ApprovalVerdict = "ok" | "refused" | "clock" | "ended";
 
 export type Event =
-  /** Begin a run. `deadline` is the caller's `--timeout`; `createdThisRun`: the links API just answered 201 (the request is live). */
+  /**
+   * Begin a run. `deadline` is the caller's `--timeout`. `createdThisRun`: the links API just answered 201, so the request is live
+   * until `E` by construction (a deadline that passes before OpenKey answers is then `pending`, exit 8). A RESUMED request omits it:
+   * it completes at least one full first check, and no answer is `unreachable` (exit 6).
+   */
   | { readonly type: "start"; readonly now: number; readonly deadline?: number; readonly createdThisRun?: boolean }
   | { readonly type: "tick"; readonly now: number }
   /** `serverDateSkewMs`: local clock minus the reply's HTTP `Date` header, at receipt; absent when there was no usable header. */
@@ -347,6 +352,8 @@ function onPending(live: LiveState, now: number, skewMs: number | undefined): St
 }
 
 function onReady(live: LiveState, now: number, reply: Extract<Reply, { kind: "ready" }>): Step {
+  // `Reply` is a public type: an adapter may build one. A result expiry that is not canonical would make the purge time unreadable.
+  if (parseLinkTimestamp(reply.resultExpiresAt) === null) return onFailure(live, now, "unexpected");
   const entry: ApprovalEntry = { ...live.entry, phase: "discovered", resultRef: reply.resultRef, resultExpiresAt: reply.resultExpiresAt };
   const collectUntil = Math.max(live.run.deadline ?? now, now) + COLLECT_GRACE_MS;
   return advance(live.entry, { entry, run: { ...live.run, unexpectedStreak: 0, firstCheckDone: true, collectUntil } }, now);
@@ -365,6 +372,9 @@ function onAckDone(live: LiveState, now: number, warning: "ack-conflict" | undef
   const acked: ApprovalEntry = { ...entry, phase: "acked" };
   delete acked.keys;
   delete acked.resultEnvelope;
+  // The approval URL's fragment holds the content key; the sealed body is useless without it. Keep only the signed header (the expiry).
+  delete acked.approvalUrl;
+  acked.record = { header: entry.record.header, signature: entry.record.signature };
   return settle(acked, live.run, outcome, [{ type: "purge", requestId: entry.requestId, keys: heldKeys(entry), entry: "rewrite" }]);
 }
 

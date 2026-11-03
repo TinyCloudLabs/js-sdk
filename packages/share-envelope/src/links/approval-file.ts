@@ -82,7 +82,9 @@ function migrateEntry(raw: unknown, notes: { requestId: string; note: "request-e
   const retainUntil = new Date(childExpiry ?? Date.parse(header.expiresAt) + RESULT_RETENTION_MS + APPROVAL_CLOCK_SKEW_MS).toISOString();
 
   return {
-    requestId: v1.requestId, bodyCid: v1.bodyCid, approvalUrl: v1.approvalUrl, request: v1.request, record: v1.record,
+    requestId: v1.requestId, bodyCid: v1.bodyCid, request: v1.request,
+    // An acknowledged entry holds no content key: the approval URL's fragment carries it, and the sealed body is useless without it.
+    ...(phase === "acked" ? { record: { header: v1.record.header, signature: v1.record.signature } } : { approvalUrl: v1.approvalUrl, record: v1.record }),
     apiOrigin: v1.apiOrigin, linkApiOrigin: v1.linkApiOrigin, openkeyOrigin: v1.openkeyOrigin,
     ...(phase === "acked" ? {} : {
       keys: { relayPrivateKey: v1.relayPrivateKey, ...(v1.signingKey === undefined ? {} : { stagedSigningKey: v1.signingKey }) },
@@ -113,10 +115,14 @@ export function parseApprovalFile(raw: unknown, options: { readonly now: number 
   const notes: { requestId: string; note: "request-expiry-mismatch" }[] = [];
   const entries: ApprovalEntry[] = [];
   const unrecognized: QuarantinedEntry[] = [];
+  const seen = new Set<string>();
   const take = (candidate: unknown, original: unknown): void => {
     const parsed = approvalEntrySchema.safeParse(candidate);
-    if (parsed.success) entries.push(parsed.data);
-    else unrecognized.push({ raw: original, quarantinedAt: stamp });
+    // A repeated requestId would make `read`/`remove` ambiguous: the first entry stays, the repeat is set aside.
+    if (parsed.success && !seen.has(parsed.data.requestId)) {
+      seen.add(parsed.data.requestId);
+      entries.push(parsed.data);
+    } else unrecognized.push({ raw: original, quarantinedAt: stamp });
   };
 
   if (Array.isArray(raw)) {
@@ -135,7 +141,9 @@ export function parseApprovalFile(raw: unknown, options: { readonly now: number 
     for (const item of listed) take(item, item);
     for (const item of quarantined ?? []) {
       const kept = quarantinedSchema.safeParse(item);
-      unrecognized.push(kept.success ? { raw: kept.data.raw, quarantinedAt: kept.data.quarantinedAt } : { raw: item, quarantinedAt: stamp });
+      // A stamp in the future (a clock that was ahead) would never be swept: it counts from now at the latest.
+      const quarantinedAt = kept.success && Date.parse(kept.data.quarantinedAt) <= options.now ? kept.data.quarantinedAt : stamp;
+      unrecognized.push({ raw: kept.success ? kept.data.raw : item, quarantinedAt });
     }
     return { kind: "ok", file: { version: 2, entries, unrecognized }, migratedFrom: 0, notes };
   }

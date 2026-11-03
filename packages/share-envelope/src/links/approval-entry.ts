@@ -9,7 +9,7 @@
 import { z } from "zod";
 
 import { parseApprovalRequest, type OpenKeyApprovalRequestV1 } from "./approval-request.js";
-import { LINK_ID_PATTERN } from "./constants.js";
+import { LINK_ID_PATTERN, LINK_TYPE_SPECS, LINK_WINDOW_SECONDS } from "./constants.js";
 import { decodeStrictBase64Url, linkHeaderV1Schema, linkSignatureV1Schema, parseLinkTimestamp } from "./header.js";
 
 /** `R`: how long OpenKey keeps an approved result (production `APPROVAL_RESULT_RETENTION_SECONDS=600`). */
@@ -36,7 +36,16 @@ export type ApprovalKeyName = "relayPrivateKey" | "stagedSigningKey";
 
 const isoTime = z.string().refine((text) => parseLinkTimestamp(text) !== null, "not a canonical ISO-8601 UTC timestamp");
 const bytes32 = z.string().refine((text) => decodeStrictBase64Url(text)?.length === 32, "not 32 base64url bytes");
-const ed25519Jwk = z.object({ kty: z.literal("OKP"), crv: z.literal("Ed25519"), x: bytes32, d: bytes32 }).strict();
+/**
+ * The CLI's session key as `TCWSessionManager.jwk()` emits it: `{ crv, d, kid, kty, x }`. `kid` (and `alg`/`use`, which a
+ * user-imported key.json may carry) are accepted as short strings; anything else is refused.
+ */
+const jwkLabel = z.string().min(1).max(128);
+const ed25519Jwk = z
+  .object({ kty: z.literal("OKP"), crv: z.literal("Ed25519"), x: bytes32, d: bytes32, kid: jwkLabel.optional(), alg: jwkLabel.optional(), use: jwkLabel.optional() })
+  .strict();
+/** The longest an approval request lives (OpenKey refuses more at creation). */
+const MAX_REQUEST_LIFE_MS = LINK_TYPE_SPECS["openkey-approval-request"].maxLifeSeconds * 1000;
 
 const request = z.custom<OpenKeyApprovalRequestV1>((value) => {
   try {
@@ -51,8 +60,8 @@ export const approvalEntrySchema = z
   .object({
     requestId: z.string().regex(LINK_ID_PATTERN),
     bodyCid: z.string().min(1),
-    /** Carries the content key in its fragment: secret. */
-    approvalUrl: z.string().min(1),
+    /** Carries the content key in its fragment: secret. Absent once `acked`. */
+    approvalUrl: z.string().min(1).optional(),
     request,
     /** The signed record that created the request; `header.expiresAt` is THE expiry. */
     record: z.object({ header: linkHeaderV1Schema, signature: linkSignatureV1Schema, body: z.string().optional() }).strict(),
@@ -80,9 +89,18 @@ export const approvalEntrySchema = z
     const issue = (message: string) => context.addIssue({ code: z.ZodIssueCode.custom, message });
     if (entry.phase === "acked") {
       if (entry.keys !== undefined) issue("an acked entry holds no key");
+      if (entry.approvalUrl !== undefined) issue("an acked entry holds no approval URL (its fragment holds the content key)");
       if (entry.retainUntil === undefined) issue("an acked entry needs retainUntil");
       if (entry.hold !== undefined) issue("an acked entry cannot be held");
-    } else if (entry.keys === undefined) issue("an entry that is not acked holds its relay key");
+    } else {
+      if (entry.keys === undefined) issue("an entry that is not acked holds its relay key");
+      if (entry.approvalUrl === undefined) issue("an entry that is not acked holds its approval URL");
+    }
+    // A key's life is bounded by construction: the signed request life, and the time since this entry was created.
+    const { issuedAt, expiresAt } = entry.record.header;
+    const expiry = Date.parse(expiresAt);
+    if (expiry - Date.parse(issuedAt) > MAX_REQUEST_LIFE_MS) issue("the request life exceeds the maximum");
+    if (expiry - Date.parse(entry.createdAt) > MAX_REQUEST_LIFE_MS + LINK_WINDOW_SECONDS * 1000) issue("the request expires too long after its creation");
     if (entry.phase !== "open" && entry.phase !== "acked" && (entry.resultRef === undefined || entry.resultExpiresAt === undefined)) {
       issue("a discovered entry names its result");
     }
@@ -111,7 +129,10 @@ export function localExpiry(entry: ApprovalEntry): number {
  */
 export function purgeAt(entry: ApprovalEntry): number {
   const expiry = localExpiry(entry);
-  if (entry.phase === "acked") return entry.retainUntil === undefined ? expiry + RESULT_RETENTION_MS + APPROVAL_CLOCK_SKEW_MS : Date.parse(entry.retainUntil);
-  if (entry.phase === "open" || entry.resultExpiresAt === undefined) return expiry + RESULT_RETENTION_MS + APPROVAL_CLOCK_SKEW_MS;
-  return Math.min(Date.parse(entry.resultExpiresAt), expiry + RESULT_RETENTION_MS) + APPROVAL_CLOCK_SKEW_MS;
+  const unapproved = expiry + RESULT_RETENTION_MS + APPROVAL_CLOCK_SKEW_MS;
+  if (entry.phase === "acked") return entry.retainUntil === undefined ? unapproved : Date.parse(entry.retainUntil);
+  if (entry.phase === "open" || entry.resultExpiresAt === undefined) return unapproved;
+  const result = Date.parse(entry.resultExpiresAt);
+  // An unreadable stored expiry must never make the purge time NaN (a NaN compares false forever): fall back to the open bound.
+  return Number.isFinite(result) ? Math.min(result, expiry + RESULT_RETENTION_MS) + APPROVAL_CLOCK_SKEW_MS : unapproved;
 }

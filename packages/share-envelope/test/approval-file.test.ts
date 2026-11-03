@@ -13,7 +13,7 @@ import { CONTENT_KEY, E, R, RELAY_KEY, RESULT_EXPIRES, RESULT_REF, S, STAGED_KEY
 // both are read, never lose a pending approval, and are written back as v2 only. A pending approval holds private keys,
 // so an entry that cannot be read is preserved (quarantined), never silently dropped.
 
-const id = (n: number) => `abcdefghijklmnopqrstuvwx${"abcdefg"[Math.floor(n / 10)]}${"234567abcd"[n % 10]}`;
+const id = (n: number) => `abcdefghijklmnopqrstuvwx${"abcdefghij"[Math.floor(n / 10)]}${"234567abcd"[n % 10]}`;
 
 /** What the CLI wrote (v1): `signingKey` is the staged rotation key; `record` is the full record the links API returned. */
 function cliV1(over: Record<string, unknown> = {}): Record<string, unknown> {

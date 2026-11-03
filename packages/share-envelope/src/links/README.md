@@ -36,8 +36,12 @@ command entries). A kept-by-clock `hold` is a flag, not a phase: the next run re
   state holds a key, held or not.
 - **Nothing is kept forever.** `E` is the signed header's `expiresAt`, `S` = 30 s, `R` = 600 s. A run ends by `E + S` (one final
   poll at `E + S`), by the caller's deadline, or by the collect grace (30 s) once approved.
-- **First check.** The first discover of a run is made with the full request limit, however late. Pending (exit 8) needs a live
-  confirmation from this run and `now < E`; a first check that gets no answer is `unreachable` (exit 6).
+- **First check.** A resumed approval (no `createdThisRun`) completes at least one full status check, made with the full request
+  limit however late the deadline is, before it reports pending; a first check that gets no answer is `unreachable` (exit 6), with
+  the entry and its keys kept. A request created in this run (`createdThisRun`, the links API just answered 201) is live until `E` by
+  construction: when the deadline passes before OpenKey answers it returns its link as `pending` (exit 8). Pending always needs a
+  live confirmation from this run (a 202 or that creation) and `now < E`. An entry that already has a result keeps collecting past
+  the deadline (30 s grace), then `unreachable`.
 
 ### What each OpenKey answer means (`RULES`, keyed `<call>:<code>`)
 
@@ -55,7 +59,7 @@ command entries). A kept-by-clock `hold` is a flag, not a phase: the next run re
 | 401 `invalid_proof` after `E + S` (open) | `lapsed` (3) | drop |
 | 401 `invalid_proof`, clock sane or `Date` missing | `refused` (5) | drop |
 | anything else, 5 in a row | `unexpected` (7) | keep until `purgeAt` |
-| no answer until the deadline | `unreachable` (6), or `pending` (8) if confirmed live this run and `now < E` | keep |
+| no answer until the deadline | resumed: `unreachable` (6), kept; created this run, or a 202 seen this run and `now < E`: `pending` (8) | keep |
 | ack 200 / 404 / 409 / 410 | `completed` (0) | drop, or keep key-free until `retainUntil` |
 | ack failure (network, other) | `completed` (0) with an `ack-pending` warning | keep (committed) |
 
@@ -66,5 +70,8 @@ and `refuse` are unchanged until then.
 ### The file
 
 `approval-pending.json`, version 2: `{ version: 2, entries: [...], unrecognized: [...] }`, mode 0600 in a 0700 directory, written
-atomically by the adapter. An entry that cannot be read is moved to `unrecognized` with its raw content (never deleted
-silently) and purged `24 h + R + S` later. A file written by a newer client (`version > 2`) is reported, not read.
+atomically by the adapter. An entry that cannot be read (including a repeated `requestId`, a request life above 24 h, or a
+signing key with fields other than `kty`, `crv`, `x`, `d` and a short `kid`/`alg`/`use`) is moved to `unrecognized` with its raw
+content (never deleted silently) and purged `24 h + R + S` after it was set aside (a stamp in the future counts from now). A file
+written by a newer client (`version > 2`) is reported, not read. An `acked` entry holds no key and no approval URL (its fragment
+holds the content key).
