@@ -33,6 +33,7 @@
     "combine-signals-listener-leak-sdk-services",
     "courier-init-derive-state",
     "courier-init-review-fixes",
+    "courier-profile-concurrency",
     "mcp-any-origin-bearer-only",
     "mcp-cap-introspection-tolerance",
     "paste-expiry-cli",
