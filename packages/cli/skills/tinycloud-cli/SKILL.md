@@ -13,6 +13,23 @@ tinycloud --version
 
 Run the command examples below with `tinycloud`. TinyCloud's agent guides use Node.js 22.20 or later. Check [release.json](release.json) for the CLI range this skill describes.
 
+## Files in this skill
+
+Every file is under 25 KB, so one command reads it whole. Size class: **S** is under 5 KB, **M** is 5 to 15 KB, **L** is 15 to 25 KB. Long references are split into numbered parts; the entry file keeps a `Moved: see ...` pointer under every heading it gave away, so an old link such as `REFERENCE.md#local-replicas` still lands on a heading.
+
+| File | Covers | Size |
+| --- | --- | --- |
+| SKILL.md | This overview: context, sign-in, reading data, apps, publish and share | L |
+| AUTH.md | Device login for servers, browser login with a manifest, more spaces after login, unscoped login and sign-out, verifying access | L |
+| AUTH-2.md | Secret reads for an agent, imported delegations and their request bindings, stored grants | L |
+| REFERENCE.md | Command reference entry: calling the CLI, global options, context and login, delegations, spaces, profiles, courier, node health, shell completions | L |
+| REFERENCE-2.md | Secrets (`run`, `request`, `wait`, `manage`, scoped reads), local replicas, read-through replication diagnostics | L |
+| REFERENCE-3.md | Share publish, inspect, receive, list and revoke, and the publish options | L |
+| REFERENCE-4.md | Artifacts, KV put input sources, profile directory and profile lock, DID formats, error and exit codes | L |
+| INSTALL.md | Installing, updating and removing the skills | S |
+| SDK.md | Programmatic use with `@tinycloud/node-sdk` | S |
+| release.json | The CLI and Node.js ranges this skill describes | S |
+
 ## Establish the context
 
 Keep the selected profile, host and space explicit across reads and follow-ups:
@@ -44,7 +61,7 @@ tinycloud --profile publisher auth login --method openkey --paste --manifest bui
 
 SQL commands need a profile whose session the owner granted through browser login; a device-login session has no SQL authority.
 
-To read a KV prefix while the host is unreachable, keep a local replica: `tinycloud replica sync --prefix PREFIX` under a device grant with `sync`, then `tinycloud replica get|list` read only local storage. See [REFERENCE.md](REFERENCE.md#local-replicas) for the grant flow, expiry and exit codes.
+To read a KV prefix while the host is unreachable, keep a local replica: `tinycloud replica sync --prefix PREFIX` under a device grant with `sync`, then `tinycloud replica get|list` read only local storage. See [REFERENCE-2.md](REFERENCE-2.md#local-replicas) for the grant flow, expiry and exit codes.
 
 ```bash
 tinycloud --profile PROFILE kv get KEY --space SPACE --json
@@ -103,7 +120,7 @@ Without `--to`, publish creates a bearer link: anyone holding the complete URL c
 
 Sharing to an email address, domain or DID isn't available in this release; link shares are.
 
-To show a person a document, page or small app, publish it as an artifact: a Markdown file, one self-contained HTML file, or a JSX component with a default export. Use `--to anyone` (the default) with `--artifact new --json`, then get the link with `tinycloud share show <id> --reveal-link`; `--json` output never contains the link. Revoke with `tinycloud share revoke <id>`. `--to anyone --action edit` is refused. See [REFERENCE.md](REFERENCE.md#artifacts) for the file kinds, the JSX library set and the `--tc-*` style tokens.
+To show a person a document, page or small app, publish it as an artifact: a Markdown file, one self-contained HTML file, or a JSX component with a default export. Use `--to anyone` (the default) with `--artifact new --json`, then get the link with `tinycloud share show <id> --reveal-link`; `--json` output never contains the link. Revoke with `tinycloud share revoke <id>`. `--to anyone --action edit` is refused. See [REFERENCE-4.md](REFERENCE-4.md#artifacts) for the file kinds, the JSX library set and the `--tc-*` style tokens.
 
 After a share is published, a profile-lock or history-write failure warns: human output still shows the published link, but `--json` output stays redacted and `share show <id> --reveal-link` cannot recover an unrecorded share. Later `share list`, `share notify <id>`, and `share revoke <id>` cannot find it either. Standalone domain notification checks the recipient and local five-minute window before probing the node; an expired window stays a non-retryable partial failure even when `/info` is unreachable.
 

@@ -3,18 +3,36 @@
 // frontmatter/release metadata that the cross-agent installer can read. The
 // courier skill is a committed mirror of packages/courier/skills/courier
 // (refresh with `bun run sync:courier-skill`) and must match it byte for byte.
+// No served skill file may exceed MAX_SKILL_FILE_BYTES: Claude Code truncates Bash
+// output at about 30 KB, and an agent that cannot `cat` a skill file in one command
+// falls back to its Read tool, which asks the owner for file access.
 import { execFileSync } from "node:child_process";
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, normalize } from "node:path";
 
+const MAX_SKILL_FILE_BYTES = 25_000;
+
 const SKILLS = [
-  { name: "tinycloud-cli", required: ["SKILL.md", "AUTH.md", "INSTALL.md", "REFERENCE.md", "SDK.md", "release.json"] },
+  {
+    name: "tinycloud-cli",
+    required: ["SKILL.md", "AUTH.md", "AUTH-2.md", "INSTALL.md", "REFERENCE.md", "REFERENCE-2.md", "REFERENCE-3.md", "REFERENCE-4.md", "SDK.md", "release.json"],
+  },
   { name: "courier", required: ["SKILL.md", "release.json"], mirrorOf: "../courier/skills/courier" },
 ];
 
 const [pack] = JSON.parse(execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], { encoding: "utf8" }));
 const files = new Set(pack.files.map((file) => file.path));
+
+const oversized = [...files]
+  .filter((path) => path.startsWith("skills/"))
+  .map((path) => ({ path, bytes: statSync(path).size }))
+  .filter(({ bytes }) => bytes > MAX_SKILL_FILE_BYTES);
+assert.equal(
+  oversized.length,
+  0,
+  `skill files must be at most ${MAX_SKILL_FILE_BYTES} bytes; split these at a section boundary and link the parts: ${oversized.map(({ path, bytes }) => `${path} is ${bytes} bytes`).join("; ")}`,
+);
 
 for (const { name: skillName, required, mirrorOf } of SKILLS) {
   const SKILL_DIR = `skills/${skillName}`;

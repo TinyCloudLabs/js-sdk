@@ -347,7 +347,7 @@ first command that restores the profile's session; after that, a record
 without a binding (from an older release or pasted into the profile) installs
 nothing until it is imported again. The binding is local profile data: it does
 not stop someone who can write the profile directory. See the CLI skill's
-`AUTH.md` for the full rules.
+`AUTH-2.md` for the full rules.
 
 Owner-profile data execution is disabled by default. It requires both an
 explicit owner profile and `--allow-owner-profile`.
