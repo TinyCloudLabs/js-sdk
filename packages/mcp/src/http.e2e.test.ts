@@ -1247,8 +1247,8 @@ test("an older app is moved into the new layout through the hosted tools, and bo
   expect(read).toMatchObject({ status: "ok", output: { records: [
     { value: { data: { kg: 80.5 }, by: "tinycloud-mcp" } }, { value: { kind: "weight" } },
   ] } });
-  // The older records are untouched, and the older root is refused for the moved app.
-  expect(await approved("tinycloud_apps_read", { keys: [oldKey] })).toMatchObject({ status: "ok", output: { records: [{ key: oldKey, value: { data: { kg: 80.5 } } }] } });
+  // The older root is refused for the moved app, for reads and writes alike (its records stay in place, untouched).
+  expect(await approved("tinycloud_apps_read", { keys: [oldKey] })).toMatchObject({ status: "error", error: { code: "INPUT_INVALID" } });
   expect(await approved("tinycloud_apps_write", { ops: [{ op: "put", key: `${legacy}fitness/weight/2026-10/2026-10-15`, value: { data: { kg: 80 } } }] }))
     .toMatchObject({ status: "ok", output: { ops: [{ outcome: "INVALID" }] } });
 }, 90_000);
