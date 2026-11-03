@@ -170,7 +170,7 @@ const SqlTargetInputSchema: z.ZodType<SqlTargetInput> = z.object({
   space: SpaceSchema,
   database: DatabaseSchema,
 }).strict();
-const SqlQueryInputSchema: z.ZodType<SqlQueryInput> = z.object({
+export const SqlQueryInputSchema = z.object({
   space: SpaceSchema,
   database: DatabaseSchema,
   sql: z.string().min(1).max(MAX_SQL_LENGTH).superRefine((sql, context) => {
@@ -317,7 +317,7 @@ export const sqlOperationDefinitions: readonly SqlDefinition[] = [
   },
 ];
 
-async function planSqlRead(
+export async function planSqlRead(
   context: RuntimeOperationContext,
   input: SqlTargetInput,
 ): Promise<readonly CapabilityRequirement[]> {
@@ -374,7 +374,7 @@ async function executeSqlSchemaInspect(
   }
 }
 
-async function executeSqlQuery(
+export async function executeSqlQuery(
   context: OperationContext,
   input: SqlQueryInput,
 ): Promise<OperationExecutionOutcome<SqlQueryOutput>> {

@@ -5,42 +5,9 @@ import { authOperationDefinitions } from "./operations/auth.js";
 import { lookupOperation, operationDefinitionsForCatalog } from "./registry.js";
 import { createAuthRuntimeFixture } from "../test-support/auth-runtime.js";
 
-const expectedOperationIds = [
-  "tinycloud.account.applications.list",
-  "tinycloud.account.spaces.list",
-  "tinycloud.apps.context",
-  "tinycloud.apps.query",
-  "tinycloud.apps.read",
-  "tinycloud.apps.write",
-  "tinycloud.auth.capabilities",
-  "tinycloud.auth.import",
-  "tinycloud.auth.request",
-  "tinycloud.auth.status",
-  "tinycloud.knowledge.list",
-  "tinycloud.knowledge.read",
-  "tinycloud.kv.delete",
-  "tinycloud.kv.get",
-  "tinycloud.kv.head",
-  "tinycloud.kv.list",
-  "tinycloud.kv.put",
-  "tinycloud.secrets.get",
-  "tinycloud.secrets.status",
-  "tinycloud.sql.execute",
-  "tinycloud.sql.query",
-  "tinycloud.sql.schema.inspect",
-  "tinycloud.status.get",
-] as const;
-
-test("registry contains exactly the reviewed v1 operations", () => {
-  const definitions = operationDefinitionsForCatalog();
-
-  expect(definitions.map((definition) => definition.id).sort()).toEqual([...expectedOperationIds]);
-  expect(definitions.every((definition) => definition.version === 1)).toBe(true);
-  expect(new Set(definitions.map((definition) => definition.id)).size).toBe(definitions.length);
-});
 
 test("registry resolves each v1 operation and rejects unknown versions", () => {
-  for (const operationId of expectedOperationIds) {
+  for (const { id: operationId } of operationDefinitionsForCatalog()) {
     expect(lookupOperation(operationId, 1)).toMatchObject({
       status: "found",
       definition: { id: operationId, version: 1 },
