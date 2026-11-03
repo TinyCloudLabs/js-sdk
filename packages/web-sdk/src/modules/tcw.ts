@@ -88,7 +88,7 @@ import {
   type StorageFullEvent,
   type IStorageService,
 } from "@tinycloud/sdk-core";
-import { showPermissionRequestModal } from "../notifications/lazy-prompts";
+import { closeActiveModal, showPermissionRequestModal } from "../notifications/lazy-prompts";
 import { applyLegacyNotificationKeys } from "../notifications/legacy-config";
 import {
   requestPermissionsCore,
@@ -1082,20 +1082,55 @@ export class TinyCloudWeb {
    * Call from a user gesture so the approval popup can open.
    */
   private async restoredSessionNotHosted(restored: ClientSession): Promise<ClientSession> {
-    await this.ensureSpaceHosted();
-    return restored;
+    const signOuts = this.signOutCount;
+    try {
+      await this.ensureSpaceHosted();
+      if (this.signOutCount !== signOuts) throw new Error("Sign-in was cancelled by sign-out.");
+      return restored;
+    } catch (error) {
+      if (this.signOutCount !== signOuts) throw new Error("Sign-in was cancelled by sign-out.");
+      throw error;
+    }
   }
 
-  /** Ensure the primary space is hosted, asking for approval only when needed. Call from a user gesture. */
+  /**
+   * Ensure the primary space is hosted, asking for approval only when needed.
+   * Resolves `"hosted"` when the node reports hosting or the space is created;
+   * resolves `"not-hosted"` when creation is unavailable or declined; and
+   * resolves `"unknown"` when the node has no hosting answer.
+   * Rejects with `Error("Space hosting was cancelled by sign-out.")` if sign-out
+   * happens during the hosting run. Call from a user gesture so the approval popup can open.
+   */
   async ensureSpaceHosted(): Promise<SpaceHosting> {
-    const node = await this.ensureNode();
+    const signOuts = this.signOutCount;
+    const cancellation = () => new Error("Space hosting was cancelled by sign-out.");
+    const assertNotSignedOut = (): void => {
+      if (this.signOutCount !== signOuts) throw cancellation();
+    };
+
+    let node: TinyCloudNode;
+    try {
+      node = await this.ensureNode();
+    } catch (error) {
+      if (this.signOutCount !== signOuts) throw cancellation();
+      throw error;
+    }
+    assertNotSignedOut();
     const hosting = node.spaceHosting;
     if (hosting !== "not-hosted") return hosting;
     const session = node.restorableSession;
-    if (session && this.walletSigner &&
-        (await this.walletSigner.getAddress()).toLowerCase() !== session.address.toLowerCase()) return "not-hosted";
+    if (session && this.walletSigner) {
+      let signerAddress: string;
+      try {
+        signerAddress = await this.walletSigner.getAddress();
+      } catch (error) {
+        if (this.signOutCount !== signOuts) throw cancellation();
+        throw error;
+      }
+      assertNotSignedOut();
+      if (signerAddress.toLowerCase() !== session.address.toLowerCase()) return "not-hosted";
+    }
 
-    const signOuts = this.signOutCount;
     const spaceId = node.spaceId;
     const existing = this.spaceHostingInFlight;
     if (existing && existing.signOuts === signOuts && existing.spaceId === spaceId) {
@@ -1106,7 +1141,16 @@ export class TinyCloudWeb {
       (this.config.spaceCreationHandler !== undefined || this.config.autoCreateSpace !== false);
     if (!hasCreationPath) return "not-hosted";
 
-    const run = node.ensurePrimarySpaceHosted("not-hosted").then(() => node.spaceHosting);
+    const run = node.ensurePrimarySpaceHosted("not-hosted").then(
+      () => {
+        assertNotSignedOut();
+        return node.spaceHosting;
+      },
+      (error: unknown) => {
+        if (this.signOutCount !== signOuts) throw cancellation();
+        throw error;
+      },
+    );
     const inFlight = { run, signOuts, spaceId };
     this.spaceHostingInFlight = inFlight;
     try {
@@ -1313,6 +1357,7 @@ export class TinyCloudWeb {
       ? [...this.pendingRestoreAddresses.keys()]
       : undefined;
     this.signOutCount++;
+    closeActiveModal();
     this.runtimeSigner = undefined;
     this.spaceHostingInFlight = undefined;
     this.openkeySession = undefined;
