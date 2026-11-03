@@ -416,13 +416,29 @@ describe("auth rotate: a failure raised INSIDE the approval fetch (before the re
     await arrange(3599);
     const [staged] = (await entries())!;
     const { resultRef: _r, resultEnvelope: _e, resultExpiresAt: _x, ...waiting } = staged as Record<string, unknown>;
-    await writeJsonDurable(PENDING(), [waiting]);
+    // Another request of the profile that DID get its result, holding another key: it is neither dropped nor announced.
+    const unrelated = { ...staged, requestId: "another-request-identifier-1", commandIntent: "auth-grant:" + "d".repeat(64), signingKey: oldKey };
+    await writeJsonDurable(PENDING(), [waiting, unrelated]);
     const { thrown, notices } = await withNotices(() => refreshOpenKeySession("approval", host, {
       rotation: { jwk: key, did }, openKeyAcquisition: (async () => { throw new Error("network went away"); }) as never,
     }));
     expect((thrown as Error).message).toBe("network went away");
     expect(notices).toEqual([]);
+    expect((await entries())!.map((entry) => entry.requestId)).toEqual(["another-request-identifier-1"]);
+  });
+
+  test("a permanent refusal raised by the caller's own checks AFTER the result came back: the entry is dropped and the notice is printed ONCE, not twice", async () => {
+    await arrange(3599);
+    const { thrown, notices } = await withNotices(() => refreshOpenKeySession("approval", host, {
+      rotation: { jwk: key, did },
+      // The fetch-time checks accept the result; the caller's own signature check then refuses this altered copy.
+      openKeyAcquisition: (async (d: string, flow: Record<string, unknown>) => ({
+        ...(await acquireApprovalRequest(d, { ...flow, ...ACQUIRE } as never)), signature: "0x" + "00".repeat(65),
+      })) as never,
+    }));
+    expect(thrown).toMatchObject({ code: "OPENKEY_PROOF_INVALID" });
     expect(await entries()).toEqual([]);
+    expect(notices).toHaveLength(1);
   });
 
   test("a PLAIN login with the clock behind KEEPS its entry, deletes nothing and prints no notice", async () => {
