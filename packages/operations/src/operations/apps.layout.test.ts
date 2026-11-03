@@ -223,3 +223,51 @@ describe("personal apps new layout: fast copy", () => {
     });
   });
 });
+
+describe("personal apps new layout: copy upkeep and scopes", () => {
+  test("the copy follows a move and a delete using keys relative to the app root", async () => {
+    await fixture(async (_kv, context, applications) => {
+      const sql = new FakeSql();
+      const active = withSql(context, sql, { space: NEW_SPACE, path: `${root}index` });
+      const open = `${root}goal/open/2026-11-03-read-dune`;
+      const done = `${root}goal/done/2026-11-03-read-dune`;
+      const goalKind = { app: "books", kind: "goal", about: "Reading goals", shape: "item", states: ["open", "done"], v: 1, fields: { title: "text" }, created: "2026-11-03" };
+      const created = await write(active, [createBooks[0]!, { op: "put", key: `${root}catalog/goal`, value: goalKind }, { op: "put", key: open, value: { data: { title: "Dune" } } }]);
+      expect(created.output.ops.map((op) => op.outcome)).toEqual(["ok", "ok", "ok"]);
+      expect([...sql.rows.keys()]).toEqual(["goal/open/2026-11-03-read-dune"]);
+      const moved = await write(active, [{ op: "move", from: open, to: done, etag: created.output.ops[2]!.etag!, value: { data: { title: "Dune", done: "2026-11-04" } } }]);
+      expect(moved.output.ops[0]?.steps).toEqual(["written", "deleted"]);
+      expect([...sql.rows.keys()]).toEqual(["goal/done/2026-11-03-read-dune"]);
+      await write(active, [{ op: "delete", key: done }]);
+      expect([...sql.rows.keys()]).toEqual([]);
+      expect(applications.values.has(`${root}index-stale/goal`)).toBe(false);
+    });
+  });
+  test("a failed sync of one app's copy leaves committed outcomes and marks the kinds of both layouts stale", async () => {
+    await fixture(async (kv, context, applications) => {
+      applications.seed(`${root}catalog`, booksApp);
+      applications.seed(`${root}catalog/read`, readKind);
+      const sql = new FakeSql();
+      sql.failures.push({ code: "AUTH_UNAUTHORIZED" }, { code: "AUTH_UNAUTHORIZED" });
+      const both = withSql(context, sql, [{ space: NEW_SPACE, path: `${root}index` }, { space: SPACE, path: "xyz.tinycloud.agent-data.index" }]);
+      const result = await write(both, [{ op: "put", key: record, value: { data: { title: "Dune" } } }, { op: "put", key: legacyKey, value: { data: { kg: 70 } } }]);
+      expect(result.output.ops.map((op) => op.outcome)).toEqual(["ok", "ok"]);
+      expect(result.output.ops[0]?.warnings?.join(" ")).toContain("fast-copy upkeep failed");
+      expect(applications.values.has(`${root}index-stale/read`)).toBe(true);
+      expect(kv.values.has(`${LEGACY}index-stale/fitness/weight`)).toBe(true);
+      expect(applications.values.has(record)).toBe(true);
+      expect(kv.values.has(legacyKey)).toBe(true);
+    });
+  });
+  test("reading a discovery entry needs only the app list, and query kinds named catalog or index-stale are refused", async () => {
+    await fixture(async (_kv, context) => {
+      expect(await definition("read").authority(context, { keys: [`${DISCOVERY}books/entry`] } as never)).toEqual([discoveryGrant]);
+      const sql = new FakeSql();
+      const active = withSql(context, sql, { space: NEW_SPACE, path: `${root}index` });
+      for (const kind of ["catalog", "index-stale"]) {
+        expect((await definition("query").execute(active, { layout: "new", kinds: [{ app: "books", kind }], sql: "SELECT 1" })).error.code).toBe("INPUT_INVALID");
+      }
+      expect(sql.calls).toEqual([]);
+    });
+  });
+});

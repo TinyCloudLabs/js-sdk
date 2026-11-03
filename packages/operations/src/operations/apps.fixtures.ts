@@ -166,11 +166,11 @@ export class FakeSql {
     return { ok: true as const, data: { columns: ["answer"], rows: [[params[0] ?? 42]], rowCount: 1 } };
   }
 }
-/** Grant the copy's SQL permission (or none) and record which database the operation opens. */
-export function withSql(context: RuntimeOperationContext, sql: FakeSql, granted: boolean | { space: string; path: string } = true): RuntimeOperationContext {
-  const grant = granted === true ? { space: SPACE, path: "xyz.tinycloud.agent-data.index" } : granted;
+/** Grant the copy's SQL permission(s) (or none) and record which database the operation opens. */
+export function withSql(context: RuntimeOperationContext, sql: FakeSql, granted: boolean | { space: string; path: string } | { space: string; path: string }[] = true): RuntimeOperationContext {
+  const grants = granted === true ? [{ space: SPACE, path: "xyz.tinycloud.agent-data.index" }] : granted === false ? [] : Array.isArray(granted) ? granted : [granted];
   return { ...context, runtime: { ...context.runtime,
-    granted: grant ? [{ service: "tinycloud.sql", space: grant.space, path: grant.path, actions: ["tinycloud.sql/read", "tinycloud.sql/write", "tinycloud.sql/schema"] }] : [],
+    granted: grants.map((grant) => ({ service: "tinycloud.sql", space: grant.space, path: grant.path, actions: ["tinycloud.sql/read", "tinycloud.sql/write", "tinycloud.sql/schema"] })),
     node: { ...context.runtime.node as object, sqlForSpace: () => ({ db: (name: string) => { sql.databases.push(name); return sql.handle(); } }) },
   } };
 }

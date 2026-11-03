@@ -35,6 +35,7 @@ const QueryInputSchema = z.object({
 }).strict().superRefine((input, context) => {
   if (input.kinds.some((kind) => kind.app !== input.kinds[0]!.app)) context.addIssue({ code: "custom", path: ["kinds"], message: "One query covers one app; query each app separately." });
   if (input.layout === "new" && !newApp(input.kinds[0]!.app)) context.addIssue({ code: "custom", path: ["kinds", 0, "app"], message: "That app name is reserved or invalid in the new layout." });
+  if (input.layout === "new" && input.kinds.some((kind) => kind.kind === "catalog" || kind.kind === "index-stale")) context.addIssue({ code: "custom", path: ["kinds"], message: "catalog and index-stale are not kinds in the new layout." });
 });
 const QueryOutputSchema = z.union([
   z.object({ kinds: z.array(CopyKindSchema.extend({ records: z.number().int().nonnegative() })), columns: z.array(z.string()), rows: z.array(z.array(SqlOutputValueSchema)), rowCount: z.number().int().nonnegative() }).strict(),
@@ -54,14 +55,14 @@ const EXPOSURE: OperationExposure = {
   mcp: { status: "required" }, skill: { status: "required" }, docs: { status: "required" },
 };
 
-/** One entry per distinct scope. Each is the whole grant for its prefix, so one approval covers every later call. */
-function scopesFor(context: RuntimeOperationContext, targets: readonly string[], createsApp: readonly string[] = []) {
+/** One entry per distinct scope. Each is the whole grant for its prefix, so one approval covers every later call. A discovery entry read needs only the app list; writing one also reads the app's own catalog. */
+function scopesFor(context: RuntimeOperationContext, targets: readonly string[], createsApp: readonly string[] = [], forWrite = false) {
   const entries = new Map<string, AppsPermission>();
   const add = (entry: AppsPermission) => entries.set(`${entry.space}|${entry.path}|${entry.service}`, entry);
   for (const target of targets) {
     const parts = parseKey(target);
     const prefix = parts === undefined ? parsePrefix(target) : undefined;
-    if (parts?.area === "discovery") { add(discoveryPermission(context)); add(appRecordsPermission(context, parts.app)); }
+    if (parts?.area === "discovery") { add(discoveryPermission(context)); if (forWrite) add(appRecordsPermission(context, parts.app)); }
     else if (parts?.layout === "legacy" || prefix?.layout === "legacy") add(legacyRecordsPermission(context));
     else if (prefix?.discovery) add(discoveryPermission(context));
     else if (parts !== undefined || prefix?.app !== undefined) add(appRecordsPermission(context, (parts?.app ?? prefix!.app)!));
@@ -75,6 +76,7 @@ const writeAuthority = async (context: RuntimeOperationContext, input: WriteInpu
   context,
   input.ops.flatMap((op) => op.op === "move" ? [op.from, op.to] : [op.key]),
   input.ops.flatMap((op) => op.op === "put" && op.etag === undefined && isNewAppCatalog(op.key) ? [op.key] : []),
+  true,
 );
 const queryAuthority = async (context: RuntimeOperationContext, input: QueryInput) => {
   const app = input.kinds[0]!.app;
