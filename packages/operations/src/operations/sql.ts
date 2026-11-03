@@ -688,6 +688,18 @@ function sqlServiceFailure(
       ),
     };
   }
+  // A database or table that does not exist yet (for example an app that is not installed) is not a node fault: say so,
+  // so a caller can tell it apart from a permission, quota or network failure without parsing text.
+  if (isRecord(error) && (error.code === "SQL_DATABASE_NOT_FOUND" || (typeof error.message === "string" && /no such (?:table|view)/i.test(error.message)))) {
+    return {
+      status: "error",
+      error: operationError(
+        "NODE_ERROR",
+        "The database or table does not exist in this space.",
+        { retryable: false, details: { reason: "sql_database_missing" } },
+      ),
+    };
+  }
   return nodeFailure(action);
 }
 

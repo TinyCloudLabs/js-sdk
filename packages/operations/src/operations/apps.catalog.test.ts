@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { HEALTHLOG_DATABASE, HEALTHLOG_DAY_CARD, HEALTHLOG_MEAL_DUPLICATE_CHECK, HEALTHLOG_MEAL_INSERT, HEALTHLOG_MEAL_READBACK, HEALTHLOG_MEAL_UPDATE, HEALTHLOG_WEIGHT_INSERT, HEALTHLOG_WEIGHT_READBACK } from "../tc-apps/preamble.js";
+import { HEALTHLOG_DATABASE, HEALTHLOG_DAY_CARD, HEALTHLOG_MEAL_DUPLICATE_CHECK, HEALTHLOG_MEAL_INSERT, HEALTHLOG_MEAL_READBACK, HEALTHLOG_MEAL_UPDATE, HEALTHLOG_WEIGHT_INSERT, HEALTHLOG_WEIGHT_READBACK, HEALTHLOG_WEIGHT_TODAY } from "../tc-apps/preamble.js";
 import { sqlOperationDefinitions } from "./sql.js";
 import { definition, fixture, SPACE } from "./apps.fixtures.js";
 
@@ -24,7 +24,7 @@ describe("Health Log through the generic SQL tools", () => {
     expect(write(HEALTHLOG_MEAL_UPDATE, [150, "0b6cbd3d-5d6e-4d0e-9f3a-9d1f6a1b7a11"])).toBe(true);
     expect(write(HEALTHLOG_WEIGHT_INSERT, ["0b6cbd3d-5d6e-4d0e-9f3a-9d1f6a1b7a12", "2026-11-03", 80.5, "2026-11-03T07:00:00Z"])).toBe(true);
     expect(write(HEALTHLOG_WEIGHT_INSERT, ["a", "2026-11-03", 80.5])).toBe(false);
-    for (const select of [HEALTHLOG_MEAL_DUPLICATE_CHECK, HEALTHLOG_MEAL_READBACK, HEALTHLOG_WEIGHT_READBACK, HEALTHLOG_DAY_CARD]) expect(read(select)).toBe(true);
+    for (const select of [HEALTHLOG_MEAL_DUPLICATE_CHECK, HEALTHLOG_MEAL_READBACK, HEALTHLOG_WEIGHT_READBACK, HEALTHLOG_WEIGHT_TODAY, HEALTHLOG_DAY_CARD]) expect(read(select)).toBe(true);
   });
   test("a meal write asks for the exact Health Log database in the applications space, and nothing else", async () => {
     await fixture(async (_kv, context) => {
@@ -66,6 +66,7 @@ describe("the statements in the rules against the pinned Health Log schema", () 
     expect(db.query(HEALTHLOG_WEIGHT_READBACK).all("0b6cbd3d-5d6e-4d0e-9f3a-9d1f6a1b7a12")).toMatchObject([{ day: "2026-11-03", weight_kg: 80.5 }]);
     expect(db.query(HEALTHLOG_DAY_CARD).all("2026-11-03")).toMatchObject([{ kcal: 650, meals: 1, weight_kg: 80.5 }]);
     expect(db.query(HEALTHLOG_MEAL_DUPLICATE_CHECK).all("2026-11-03", "lunch", "Dal and rice")).toHaveLength(1);
+    expect(db.query(HEALTHLOG_WEIGHT_TODAY).all("2026-11-03")).toMatchObject([{ weight_kg: 80.5 }]);
     db.query(HEALTHLOG_MEAL_UPDATE).run(150, op);
     expect(db.query(HEALTHLOG_MEAL_READBACK).all(op)).toMatchObject([{ kcal: 150 }]);
   });
@@ -77,5 +78,39 @@ describe("the statements in the rules against the pinned Health Log schema", () 
     meal(op, "lunch", 650)();
     expect(meal(op, "lunch", 650)).toThrow();
     expect(() => db.query(HEALTHLOG_WEIGHT_INSERT).run("w1", "2026-11-03", 19, "2026-11-03T07:00:00Z")).toThrow();
+  });
+});
+
+describe("telling 'Health Log is not installed' apart from other failures", () => {
+  async function failWith(error: unknown) {
+    let outcome: Awaited<ReturnType<(typeof sqlOperationDefinitions)[number]["execute"]>> | undefined;
+    await fixture(async (_kv, context) => {
+      const node = { ...context.runtime.node as object, sqlForSpace: () => ({ db: () => ({ query: async () => ({ ok: false as const, error }) }) }) };
+      outcome = await sqlDefinition("tinycloud.sql.query").execute({ ...context, runtime: { ...context.runtime, node } } as never, {
+        space: "applications", database: HEALTHLOG_DATABASE, sql: HEALTHLOG_MEAL_DUPLICATE_CHECK, params: ["2026-11-03", "lunch", "Dal"],
+      } as never);
+    });
+    return outcome!;
+  }
+  const missing = (outcome: Awaited<ReturnType<typeof failWith>>) => outcome.status === "error" && outcome.error.details?.reason === "sql_database_missing";
+
+  test("a missing database or table gives one recognisable, non-retryable error the rules can act on", async () => {
+    for (const error of [
+      { code: "SQL_DATABASE_NOT_FOUND", message: "SQL query failed: 404 - database not found", meta: { status: 404 } },
+      { code: "SQL_ERROR", message: "SQL query failed: 400 - no such table: meal" },
+    ]) {
+      const outcome = await failWith(error);
+      expect(missing(outcome)).toBe(true);
+      expect(outcome).toMatchObject({ status: "error", error: { code: "NODE_ERROR", retryable: false } });
+    }
+  });
+  test("permission, network and ordinary SQL errors are never reported as not installed", async () => {
+    for (const error of [
+      { code: "SQL_PERMISSION_DENIED", message: "SQL query failed: 403 - denied" },
+      { code: "AUTH_UNAUTHORIZED", message: "SQL query failed: 401" },
+      { code: "NETWORK_ERROR", message: "fetch failed" },
+      { code: "SQL_ERROR", message: "SQL query failed: 400 - near \"SELEC\": syntax error" },
+      { code: "SQL_QUOTA_EXCEEDED", message: "SQL query failed: 429" },
+    ]) expect(missing(await failWith(error))).toBe(false);
   });
 });

@@ -207,5 +207,7 @@ version metadata and make the immutable release checkout fail the clean-tree pub
   `TINY-APPS.md`; the statements in `src/tc-apps/preamble.ts` (`HEALTHLOG_*`)
   mirror the pinned Health Log schema (`packages/cli/src/lib/apps-install.healthlog.schema.sql`)
   and are checked against the generic SQL tools' input schemas in
-  `apps.catalog.test.ts`. Drop the "not installed" step when onboarding grants
+  `apps.catalog.test.ts`. "Not installed" is detected from the first query: a missing
+  database or table is `NODE_ERROR` with `details.reason: "sql_database_missing"`
+  (operations/src/operations/sql.ts). Drop that step when onboarding grants
   the schema for catalog apps (TC-2430).
