@@ -38,6 +38,8 @@ jobs:
           npm ci --prefix .github/deploy-tools --ignore-scripts --no-audit --no-fund
           PHALA_BIN="$GITHUB_WORKSPACE/.github/deploy-tools/node_modules/.bin/phala" \
             node .github/scripts/test-mcp-deploy-env.mjs
+      - name: Run MCP image :latest tag regression
+        run: node .github/scripts/test-mcp-image-latest.mjs
       - name: Generate and scan authored coverage
         run: |
           bun run check:operations-mcp
