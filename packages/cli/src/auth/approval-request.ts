@@ -17,7 +17,7 @@ import * as commandGrants from "../lib/permissions.js";
 import { entriesForSigning, finalizeSigningEntries } from "../lib/apps-agent-preset.js";
 import type { AuthFlowOptions, DelegationData } from "./browser-auth.js";
 import { dropCommittedDelegation } from "./pending-code.js";
-import { carryRefusedDelegation, isPermanentRefusal } from "./refusal.js";
+import { carryRefusedDelegation, isPermanentRefusal, markMaybeGranted } from "./refusal.js";
 import { decryptRelayResult, relayPublicJwkOf } from "./device-auth.js";
 import { canonicalJson, parseRequestedExpiry, sameLoginSpace, verifyScopedLogin } from "./scoped-login.js";
 import { APPROVAL_POLL_INTERVAL_MS, approvalLimitMs, approvalPendingError, approvalRequestTimeoutMs, type ApprovalWait } from "./approval-wait.js";
@@ -243,14 +243,18 @@ export async function dropRefusedApproval(profile: string, delegation: object): 
 
 /**
  * Forget every pending request of this profile whose saved session key is `x` (an `auth rotate` that failed: its staged key
- * exists only there). True when one of them already had an approval result (the owner approved, so a grant is live).
+ * exists only there). `approved`: one of them already had an approval result (the owner approved, so a grant is live), and
+ * `latestEnd` is the latest that grant can end: the request's own expiry (an approval cannot come later) plus the lifetime asked.
  */
-export async function dropApprovalsHoldingKey(profile: string, x: unknown): Promise<boolean> {
-  if (typeof x !== "string") return false;
+export async function dropApprovalsHoldingKey(profile: string, x: unknown): Promise<{ dropped: boolean; approved: boolean; latestEnd?: string }> {
+  if (typeof x !== "string") return { dropped: false, approved: false };
   const held = (await activePending(profile)).filter((entry) => entry.signingKey?.x === x);
-  if (held.length === 0) return false;
+  if (held.length === 0) return { dropped: false, approved: false };
   await updatePending(profile, (items) => items.filter((item) => item.signingKey?.x !== x));
-  return held.some((entry) => entry.resultRef !== undefined);
+  const ends = held.filter((entry) => entry.resultRef !== undefined)
+    .map((entry) => Date.parse(entry.requestExpiresAt) + entry.request.grantLifetimeSeconds * 1000).filter(Number.isFinite);
+  return { dropped: true, approved: ends.length > 0 || held.some((entry) => entry.resultRef !== undefined),
+    ...(ends.length > 0 ? { latestEnd: new Date(Math.max(...ends)).toISOString() } : {}) };
 }
 
 /** Whether a pending request of this profile still holds the session key `x` (a first sign-in's key lives only there). */
@@ -307,7 +311,11 @@ async function throwRemoteError(profile: string, entry: PendingApproval, respons
       action === "discover" ? "OpenKey cannot find this approval request." : "OpenKey cannot find this approval result.", ExitCode.AUTH_REQUIRED);
   }
   if (code === "ack_conflict") throw invalid("OpenKey rejected a conflicting approval ACK intent.");
-  if (code === "request_binding" || code === "invalid_proof") throw invalid("OpenKey rejected the request or requester binding.");
+  if (code === "request_binding" || code === "invalid_proof") {
+    // From the poll (no result reference yet) the CLI cannot tell whether the owner already approved.
+    const rejected = invalid("OpenKey rejected the request or requester binding.");
+    throw action === "discover" ? markMaybeGranted(rejected) : rejected;
+  }
   throw new CLIError(action === "discover" ? "APPROVAL_REQUEST_UNAVAILABLE" : "APPROVAL_RESULT_UNAVAILABLE",
     `OpenKey could not ${action === "discover" ? "discover this request" : "fetch this result"} (HTTP ${response.status}). Retry the command to resume.`, ExitCode.PENDING);
 }

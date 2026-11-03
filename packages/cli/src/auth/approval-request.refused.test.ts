@@ -224,7 +224,7 @@ async function noticeOf(step: () => Promise<unknown>): Promise<string[]> {
   const written: string[] = [];
   const spy = spyOn(process.stderr, "write").mockImplementation(((chunk: unknown) => { written.push(String(chunk)); return true; }) as never);
   try { await step().catch(() => undefined); } finally { spy.mockRestore(); }
-  return written.join("").split("\n").filter((line) => line.includes("OpenKey granted this approval"));
+  return written.join("").split("\n").filter((line) => /OpenKey (granted this approval|may already have granted)/.test(line));
 }
 
 describe("the refusal of a fetched result is announced where the command catches it", () => {
@@ -502,7 +502,7 @@ describe("an approval the CLI cannot collect: OpenKey rejects the requester proo
     expect(await entries()).toEqual([]);
     expect(notices).toHaveLength(1);
     const latest = new Date(Date.parse((staged as { requestExpiresAt: string }).requestExpiresAt) + 3600 * 1000).toISOString();
-    expect(notices[0]).toStartWith(`OpenKey granted this approval, at the latest until ${latest}, but this CLI did not use it and its key was deleted, so it cannot be used.`);
+    expect(notices[0]).toStartWith(`OpenKey granted this approval at the latest until ${latest}, but this CLI did not use it and its key was deleted, so it cannot be used.`);
     expect(notices[0]).toContain("Your current login and its key are unchanged. This CLI cannot revoke it; revoke it at https://account.tinycloud.xyz/delegations.");
     expect(notices[0]).not.toContain("Refused delegation:");
   });
