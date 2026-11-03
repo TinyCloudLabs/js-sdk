@@ -1313,6 +1313,7 @@ export class TinyCloudWeb {
       ? [...this.pendingRestoreAddresses.keys()]
       : undefined;
     this.signOutCount++;
+    this.runtimeSigner = undefined;
     this.spaceHostingInFlight = undefined;
     this.openkeySession = undefined;
     this.invalidatePreparedSignIn();

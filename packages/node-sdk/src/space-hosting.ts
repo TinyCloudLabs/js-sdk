@@ -178,6 +178,7 @@ export interface PrimarySpaceCreationPorts {
   activate(context: SpaceCreationContext): Promise<SpaceHostResult>;
   signal?: AbortSignal;
 }
+/** `<status> - <server text>` for a failed host call. */
 function describeFailure(result: SpaceHostResult): string {
   const text = result.error?.trim();
   return text ? `${result.status} - ${text}` : `${result.status}`;
@@ -211,7 +212,9 @@ export async function createPrimarySpace({
   if (session && signerAddress && (await signerAddress()).toLowerCase() !== session.address.toLowerCase()) return;
   checkCurrent();
   const context = existingContext ?? (session && {
-    ...session,
+    address: session.address,
+    chainId: session.chainId,
+    spaceId: session.spaceId,
     host: await resolveHost?.() ?? hostName ?? "",
   });
   if (!context) throw new Error("Space hosting requires a session context");

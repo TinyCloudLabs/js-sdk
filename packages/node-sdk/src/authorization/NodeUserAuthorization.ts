@@ -1493,6 +1493,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const session = this._tinyCloudSession;
     if (hosting !== "not-hosted") return;
     if (!session) throw new Error("Must be signed in to host the primary space");
+    // Determine the effective space creation handler:
+    // 1. Explicit spaceCreationHandler takes precedence
+    // 2. autoCreateSpace: true uses AutoApproveSpaceCreationHandler
+    // 3. Otherwise, no handler (space creation skipped silently)
     const handler: ISpaceCreationHandler | undefined =
       this.spaceCreationHandler ??
       (this.autoCreateSpace ? new AutoApproveSpaceCreationHandler() : undefined);
