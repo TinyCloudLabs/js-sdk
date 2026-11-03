@@ -276,3 +276,52 @@ describe("personal apps new layout: copy upkeep and scopes", () => {
     });
   });
 });
+
+describe("personal apps: guards found in the security review", () => {
+  const fitnessCatalog = { app: "fitness", title: "Fitness", about: "Health", created: "2026-10-14" };
+  const fitnessEntry = { v: 1, app: "fitness", id: `${ID}fitness`, title: "Fitness" };
+
+  test("an app the older layout still holds cannot get its discovery entry from a write: only a completed move may add it", async () => {
+    await fixture(async (_kv, context, applications) => {
+      applications.seed(`${ID}fitness/catalog`, fitnessCatalog);
+      applications.seed(`${ID}fitness/catalog/weight`, { app: "fitness", kind: "weight", about: "w", shape: "log", per: "day", v: 1, fields: { kg: "number" }, created: "2026-10-14" });
+      const attempt = [{ op: "put", key: `${DISCOVERY}fitness/entry`, value: fitnessEntry }];
+      const refused = await write(context, attempt);
+      expect(refused.output.ops[0]?.outcome).toBe("INVALID");
+      expect(refused.output.ops[0]?.warnings?.[0]).toContain("tinycloud_apps_move");
+      expect(applications.values.has(`${DISCOVERY}fitness/entry`)).toBe(false);
+      // The write asks for the older catalog first, so the check can run.
+      const root = kvScope(NEW_SPACE, `${ID}fitness/`);
+      expect(await definition("write").authority(withGrants(context, [root, discoveryGrant]), { ops: attempt } as never)).toEqual([kvScope(SPACE, `${LEGACY}catalog/`, ["tinycloud.kv/get", "tinycloud.kv/list"])]);
+    });
+  });
+  test("older-layout access to an app also needs the app list, and a moved app's older records are not served", async () => {
+    await fixture(async (kv, context, applications) => {
+      const legacyRoot = kvScope(SPACE, LEGACY);
+      const input = { keys: [legacyKey] } as never;
+      expect(await definition("read").authority(context, input)).toEqual([legacyRoot]);
+      expect(await definition("read").authority(withGrants(context, [LEGACY_ROOT_GRANT]), input)).toEqual([discoveryGrant]);
+      expect(await definition("read").authority(context, { prefixes: [`${LEGACY}catalog/`] } as never)).toEqual([legacyRoot]);
+      expect(await definition("write").authority(withGrants(context, [LEGACY_ROOT_GRANT]), { ops: [{ op: "put", key: legacyKey, value: { data: {} } }] } as never)).toEqual([discoveryGrant]);
+      kv.seed(legacyKey, { v: 1, data: { kg: 70 } });
+      expect((await definition("read").execute(withGrants(context, [LEGACY_ROOT_GRANT, discoveryGrant]), input)).output.records).toHaveLength(1);
+      applications.seed(`${DISCOVERY}fitness/entry`, fitnessEntry);
+      const moved = await definition("read").execute(withGrants(context, [LEGACY_ROOT_GRANT, discoveryGrant]), input);
+      expect(moved.error.code).toBe("INPUT_INVALID");
+      expect(moved.error.message).toContain(`${ID}fitness/`);
+    });
+  });
+  test("a folder that already holds another app's manifest cannot become a generic app, and deletes need the app's catalog", async () => {
+    await fixture(async (_kv, context, applications) => {
+      applications.seed(`${ID}food/manifest.json`, { app_id: "xyz.tinycloud.tinyapps.food" });
+      applications.seed(`${ID}food/records/meals/pizza.json`, { id: "pizza" });
+      const created = await write(context, [{ op: "put", key: `${ID}food/catalog`, value: { app: "food", title: "Food", about: "x", created: "2026-11-03" } }]);
+      expect(created.output.ops[0]?.outcome).toBe("INVALID");
+      expect(created.output.ops[0]?.warnings?.[0]).toContain("manifest.json");
+      const deleted = await write(context, [{ op: "delete", key: `${ID}food/records/meals/pizza.json` }]);
+      expect(deleted.output.ops[0]?.outcome).toBe("INVALID");
+      expect(applications.writes).toEqual([]);
+      expect(applications.deletes).toEqual([]);
+    });
+  });
+});

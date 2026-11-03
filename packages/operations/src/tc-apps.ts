@@ -48,7 +48,7 @@ export function isTcAppsPermission(permission: unknown, copy = false): boolean {
 const LEGACY_RECORDS_REASON = "Lets Claude keep your personal records in your TinyCloud default space (keys under xyz.tinycloud.agent-data/): read, add, change and delete them, for 30 days.";
 const LEGACY_CATALOG_REASON = "Lets Claude read, but not change, the list of your older apps in your TinyCloud default space (xyz.tinycloud.agent-data/catalog/), so it keeps an app where it already is.";
 const LEGACY_COPY_REASON = "Lets Claude keep a fast, searchable copy of those records (database xyz.tinycloud.agent-data.index) for 30 days.";
-const DISCOVERY_REASON = "Lets Claude list your apps and add new ones to your app list in your TinyCloud applications space (keys under xyz.tinycloud.tinyapps.catalog/), for 30 days.";
+const DISCOVERY_REASON = "Lets Claude list your apps and add or change entries in your app list in your TinyCloud applications space (keys under xyz.tinycloud.tinyapps.catalog/), for 30 days.";
 const named = (apps: readonly string[]) => apps.join(", ");
 
 interface Approval { legacyRecords: boolean; legacyCatalog: boolean; legacyCopy: boolean; discovery: boolean; records: string[]; copies: string[] }

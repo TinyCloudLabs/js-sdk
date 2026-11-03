@@ -5,7 +5,7 @@ import { TC_APPS_RULES } from "../tc-apps/rules.generated.js";
 import { appsDatabase, checkCopyKinds, copyPermission, hasCopyAuthority, queryCopy, syncCopyRows, type CopyRow } from "../tc-apps/copy.js";
 import { decodeSqlInputValue, isSingleReadQuery, SqlOutputValueSchema, SqlParamsSchema } from "./sql.js";
 import { appHasMoved, appRecordsPermission, type AppsPermission, type ReadRecord, appsFailure, appsKv, appsSpace, discoveryPermission, hasLegacyCatalogAccess, jsonBytes, legacyCatalogPermission, legacyHasApp, legacyRecordsPermission, listAppsKeys, markAppsKindStale, oneSpaceAtATime, readAppsRecords, type AppsKv } from "../tc-apps/kv.js";
-import { catalogKey, catalogPrefix, copyKey, discoveryKey, newApp, parseKey, parsePrefix, TC_APPS_DISCOVERY_ROOT, TC_APPS_LEGACY_ROOT, type KeyParts, type Layout } from "../tc-apps/layout.js";
+import { appRoot, catalogKey, catalogPrefix, copyKey, discoveryKey, newApp, parseKey, parsePrefix, TC_APPS_DISCOVERY_ROOT, TC_APPS_LEGACY_ROOT, type KeyParts, type Layout } from "../tc-apps/layout.js";
 import { appsCopyState, appsNow, appsTimezone, validTimezone, withLocalOffset } from "../tc-apps/state.js";
 import { catalogChangeAllowed, isObject, keyParts, KeySchema, newRecordFits, ObjectSchema, PrefixSchema, recordParts, recordWarnings, WriteInputSchema, type JsonObject, type WriteInput, type WriteOp } from "../tc-apps/records.js";
 
@@ -63,7 +63,11 @@ function scopesFor(context: RuntimeOperationContext, targets: readonly string[],
     const parts = parseKey(target);
     const prefix = parts === undefined ? parsePrefix(target) : undefined;
     if (parts?.area === "discovery") { add(discoveryPermission(context)); if (forWrite) add(appRecordsPermission(context, parts.app)); }
-    else if (parts?.layout === "legacy" || prefix?.layout === "legacy") add(legacyRecordsPermission(context));
+    else if (parts?.layout === "legacy" || prefix?.layout === "legacy") {
+      add(legacyRecordsPermission(context));
+      // A moved app must be recognised, so older-layout access to an app also needs the app list (a read of its entry).
+      if ((parts?.app ?? prefix?.app) !== undefined) add(discoveryPermission(context));
+    }
     else if (prefix?.discovery) add(discoveryPermission(context));
     else if (parts !== undefined || prefix?.app !== undefined) add(appRecordsPermission(context, (parts?.app ?? prefix!.app)!));
   }
@@ -75,7 +79,7 @@ const readAuthority = async (context: RuntimeOperationContext, input: ReadInput)
 const writeAuthority = async (context: RuntimeOperationContext, input: WriteInput) => scopesFor(
   context,
   input.ops.flatMap((op) => op.op === "move" ? [op.from, op.to] : [op.key]),
-  input.ops.flatMap((op) => op.op === "put" && op.etag === undefined && isNewAppCatalog(op.key) ? [op.key] : []),
+  input.ops.flatMap((op) => op.op === "put" && op.etag === undefined && (isNewAppCatalog(op.key) || parseKey(op.key)?.area === "discovery") ? [op.key] : []),
   true,
 );
 const queryAuthority = async (context: RuntimeOperationContext, input: QueryInput) => {
@@ -84,6 +88,16 @@ const queryAuthority = async (context: RuntimeOperationContext, input: QueryInpu
     ? [legacyRecordsPermission(context), copyPermission(context, "legacy", app)]
     : [appRecordsPermission(context, app), copyPermission(context, "new", app)];
 };
+/** The older-layout apps a set of keys and prefixes names; a whole-root prefix names none. */
+function olderApps(targets: readonly string[]): Set<string> {
+  const apps = new Set<string>();
+  for (const target of targets) {
+    const parts = parseKey(target);
+    const named = parts === undefined ? parsePrefix(target) : parts;
+    if (named?.layout === "legacy" && named.app !== undefined) apps.add(named.app);
+  }
+  return apps;
+}
 function isNewAppCatalog(key: string): boolean {
   const parts = parseKey(key);
   return parts?.layout === "new" && parts.area === "catalog" && parts.kind === undefined;
@@ -162,6 +176,9 @@ async function executeRead(context: OperationContext, input: ReadInput): Promise
     const lists = [];
     for (const prefix of parsed.data.prefixes ?? []) lists.push({ prefix, keys: await listAppsKeys(appsKv(context, parsePrefix(prefix)!.layout), prefix) });
     const requested = parsed.data.keys ?? [];
+    for (const app of olderApps([...(parsed.data.prefixes ?? []), ...requested])) {
+      if (await appHasMoved(context, app)) return { status: "error", error: operationError("INPUT_INVALID", `${app} has moved to xyz.tinycloud.tinyapps.${app}/; read it there.`) };
+    }
     const found = new Map<string, ReadRecord>();
     for (const layout of ["legacy", "new"] as const) {
       const keys = requested.filter((key) => keyParts(key).layout === layout);
@@ -286,6 +303,9 @@ async function writeOne(handles: Handles, op: WriteOp, timezone: string | null):
     return { key, outcome: "INVALID", warnings: [`${parts.app} has moved to xyz.tinycloud.tinyapps.${parts.app}/; use keys under that root.`] };
   }
   if (op.op === "delete") {
+    if (parts.layout === "new" && !("value" in (await readAppsRecords(kv, [catalogKey("new", parts.app)]))[0]!)) {
+      return { key, outcome: "INVALID", warnings: ["A record can only be deleted from an app that has a catalog record."] };
+    }
     const deleted = await kv.delete(key, op.etag === undefined ? {} : { ifMatch: op.etag });
     if (deleted.ok) return { key, outcome: "ok" };
     if (deleted.error.code === "KV_PRECONDITION_FAILED") return conflict(kv, key, "CHANGED");
@@ -298,8 +318,14 @@ async function writeOne(handles: Handles, op: WriteOp, timezone: string | null):
     if (catalog.kind !== undefined) {
       const app = (await readAppsRecords(kv, [catalogKey(parts.layout, parts.app)]))[0]!;
       if (!("value" in app)) return { key, outcome: "INVALID", warnings: ["A kind requires its app's catalog record."] };
-    } else if (parts.layout === "new" && op.op === "put" && op.etag === undefined && await legacyHasApp(handles.context, parts.app)) {
-      return { key, outcome: "INVALID", warnings: [`${parts.app} already exists in the older layout (xyz.tinycloud.agent-data/). Keep using keys under that root, or ask the owner to move it.`] };
+    } else if (parts.layout === "new" && op.op === "put" && op.etag === undefined) {
+      if (await legacyHasApp(handles.context, parts.app)) {
+        return { key, outcome: "INVALID", warnings: [`${parts.app} already exists in the older layout (xyz.tinycloud.agent-data/). Keep using keys under that root, or ask the owner to move it.`] };
+      }
+      const manifest = (await readAppsRecords(kv, [`${appRoot(parts.app)}manifest.json`]))[0]!;
+      if ("value" in manifest || manifest.outcome !== "NOT_FOUND") {
+        return { key, outcome: "INVALID", warnings: [`${appRoot(parts.app)} already holds another app's own files (manifest.json). Use a different app name.`] };
+      }
     }
     if (op.op === "put" && op.etag !== undefined) {
       const current = (await readAppsRecords(kv, [key]))[0]!;
@@ -360,6 +386,10 @@ async function writeDiscovery(handles: Handles, op: WriteOp, app: string): Promi
   const key = discoveryKey(app);
   const kv = handles.kv("new");
   if (op.op !== "put") return { key, outcome: "INVALID", warnings: ["A discovery entry is only created or replaced."] };
+  // Only a completed move may add the entry of an app the older layout still holds; otherwise a half-copied app would switch.
+  if (op.etag === undefined && await legacyHasApp(handles.context, app)) {
+    return { key, outcome: "INVALID", warnings: [`${app} is still in the older layout (xyz.tinycloud.agent-data/). Only tinycloud_apps_move adds its entry, after a verified copy.`] };
+  }
   const record = (await readAppsRecords(kv, [catalogKey("new", app)]))[0]!;
   if (!("value" in record)) return { key, outcome: "INVALID", warnings: ["Write the app's catalog record and a kind record before its discovery entry."] };
   if ((await listAppsKeys(kv, catalogPrefix("new", app))).length === 0) return { key, outcome: "INVALID", warnings: ["Write a kind record before the app's discovery entry."] };
