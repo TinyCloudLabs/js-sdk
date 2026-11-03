@@ -210,7 +210,7 @@ export interface LockRefusal {
 export interface LockOptions {
   /** Pid recorded in this contender's lock. Default: this process. */
   pid?: number;
-  /** Liveness probe for a recorded pid. Default: pid, start time, host and pid-namespace identity (`recordLiveness`). */
+  /** Liveness probe for a recorded pid. Default: `recordLiveness` (dead only on a true boot-id change or an absent pid in the same pid namespace). */
   alive?: (pid: number) => boolean;
   /** Test seam: runs after a dead holder is observed, before any break guard is claimed. */
   afterObserve?: () => void;
