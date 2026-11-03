@@ -2706,19 +2706,19 @@ export const approvedTc2380SpaceHosting: Tc2380SpaceHosting = {
 };
 export const approvedTc2380Q2OneClick: Tc2380Q2OneClick = {
   label: "host a restored session's missing primary space with one approval (TC-2380)",
-  ruling: "Naomi ruled 2026-11-03: up to +420 B per root for the session fence and address checks. Exact canonical SQLite and PostgreSQL CI at source head d28261263be3bd0b0a3292656727fe7c02536ac4 measures 1,479,964/1,422,387 B, +316/+327 B over TC-2380 space hosting. Bun 1.3.14; rustc 1.99.0 (b940084d7 2026-09-28).",
+  ruling: "Naomi ruled 2026-11-03: up to +420 B per root for the session fence and address checks. Exact canonical SQLite and PostgreSQL CI at source head 12d3e13d8bb2815b2d4772595eb9a91c25053890 measures 1,479,968/1,422,390 B, +320/+330 B over TC-2380 space hosting. Bun 1.3.14; rustc 1.99.0 (b940084d7 2026-09-28).",
   base: "902e603101695438557d67a065ef5dc97f706325",
-  sourceCommits: ["d28261263be3bd0b0a3292656727fe7c02536ac4"],
+  sourceCommits: ["12d3e13d8bb2815b2d4772595eb9a91c25053890"],
   canonicalCI: {
-    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41678110975",
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41684998151",
     jobs: [
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41678110975/job/126064110419",
-      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41678110975/job/126064111616",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41684998151/job/126088285784",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41684998151/job/126088286157",
     ],
   },
   root: {
-    delta: { "index.mjs": 316, "index.cjs": 327 },
-    ceiling: { "index.mjs": 1479964, "index.cjs": 1422387 },
+    delta: { "index.mjs": 320, "index.cjs": 330 },
+    ceiling: { "index.mjs": 1479968, "index.cjs": 1422390 },
   },
   firstImport: { delta: { "replica.mjs": 0, "replica.cjs": 0 }, ceiling: { "replica.mjs": 52757, "replica.cjs": 67957 } },
   activation: { delta: { "activation.mjs": 0, "activation.cjs": 0 }, ceiling: { "activation.mjs": 23412, "activation.cjs": 24981 } },
