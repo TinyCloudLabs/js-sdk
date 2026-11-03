@@ -16,5 +16,5 @@ export function previousSignInNotice(session: Record<string, unknown> | null, pr
   const { state, expiresAt } = storedSessionState(session, profile);
   if (!sessionStateIsUsable(state)) return undefined;
   const cid = delegationCidOf(session);
-  return `The previous sign-in${cid === undefined ? "" : ` (${cid})`} stays live until ${expiresAt ?? "it expires"} because this CLI cannot revoke it; revoke it at ${REVOKE_URL}.`;
+  return `The previous sign-in${cid === undefined ? "" : ` (${cid})`} stays live until ${expiresAt ?? "it expires"} unless you have already revoked it, because this CLI cannot revoke it; revoke it at ${REVOKE_URL}.`;
 }

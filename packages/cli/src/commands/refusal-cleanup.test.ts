@@ -639,7 +639,7 @@ describe("tc auth rotate --paste: the new key is staged in memory, so a refused 
     expect(outputs.at(-1)).toMatchObject({ rotated: true, profile: profileName, oldDid, did: profile.did, authMethod: "openkey" });
     // test-ruling: TC-2412: a rotation that replaced a live session now ends with the previous sign-in's notice (it holds the revoke URL).
     expectNoRefusalNotice();
-    const previous = `The previous sign-in (${oldCid}) stays live until ${oldUntil} because this CLI cannot revoke it; revoke it at ${REVOKE_URL}.`;
+    const previous = `The previous sign-in (${oldCid}) stays live until ${oldUntil} unless you have already revoked it, because this CLI cannot revoke it; revoke it at ${REVOKE_URL}.`;
     expect(text().split("\n").filter((line) => line.includes("The previous sign-in"))).toEqual([previous]);
     expect(text()).not.toContain(grantedCid);
   });

@@ -116,7 +116,7 @@ afterAll(async () => {
 const text = () => stderr.join("");
 /** The one sentence, exactly as the owner reads it. */
 const sentence = (cid: string | undefined, until: string): string =>
-  `The previous sign-in${cid === undefined ? "" : ` (${cid})`} stays live until ${until} because this CLI cannot revoke it; revoke it at ${REVOKE_URL}.`;
+  `The previous sign-in${cid === undefined ? "" : ` (${cid})`} stays live until ${until} unless you have already revoked it, because this CLI cannot revoke it; revoke it at ${REVOKE_URL}.`;
 const noticeLines = () => text().split("\n").filter((line) => line.includes("The previous sign-in"));
 async function capturing<T>(run: () => Promise<T>): Promise<T> {
   const spy = spyOn(process.stderr, "write").mockImplementation(((chunk: unknown) => { stderr.push(String(chunk)); return true; }) as never);
@@ -243,7 +243,7 @@ for (const [flow, args] of ROTATE_FLOWS) {
       await editSession(({ delegationCid: _cid, ...rest }) => rest);
       await runAuth(...args);
       expect(recordedErrors).toEqual([]);
-      expect(text()).toBe(`The previous sign-in stays live until ${old.until} because this CLI cannot revoke it; revoke it at ${REVOKE_URL}.\n`);
+      expect(text()).toBe(`The previous sign-in stays live until ${old.until} unless you have already revoked it, because this CLI cannot revoke it; revoke it at ${REVOKE_URL}.\n`);
     });
 
     test("no expiry readable: `until it expires`, with the CID", async () => {
@@ -253,7 +253,7 @@ for (const [flow, args] of ROTATE_FLOWS) {
       }));
       await runAuth(...args);
       expect(recordedErrors).toEqual([]);
-      expect(text()).toBe(`The previous sign-in (${old.cid}) stays live until it expires because this CLI cannot revoke it; revoke it at ${REVOKE_URL}.\n`);
+      expect(text()).toBe(`The previous sign-in (${old.cid}) stays live until it expires unless you have already revoked it, because this CLI cannot revoke it; revoke it at ${REVOKE_URL}.\n`);
     });
 
     for (const hostile of ["bafy\u001b[2J\nRefused nothing. Login OK", "short", "has-dash-in-it-12345678", `a${"b".repeat(128)}`, "\u001b[31mred\u001b[0m"]) {
@@ -262,7 +262,7 @@ for (const [flow, args] of ROTATE_FLOWS) {
         await editSession((session) => ({ ...session, delegationCid: hostile }));
         await runAuth(...args);
         expect(recordedErrors).toEqual([]);
-        expect(text()).toBe(`The previous sign-in stays live until ${old.until} because this CLI cannot revoke it; revoke it at ${REVOKE_URL}.\n`);
+        expect(text()).toBe(`The previous sign-in stays live until ${old.until} unless you have already revoked it, because this CLI cannot revoke it; revoke it at ${REVOKE_URL}.\n`);
         // eslint-disable-next-line no-control-regex
         expect(text().replace(/\n$/, "")).not.toMatch(/[\u0000-\u001f\u007f]/);
       });
