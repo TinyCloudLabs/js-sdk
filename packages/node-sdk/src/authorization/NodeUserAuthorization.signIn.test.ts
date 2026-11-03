@@ -7,6 +7,7 @@ import {
   type ISessionManager,
   type ISigner,
   type TinyCloudSession,
+  type SpaceCreationContext,
   BOOTSTRAP_SESSION_REQUESTS,
   pkhDid,
   type Manifest,
@@ -1031,3 +1032,304 @@ test("isAppKeyHostBound agrees with the sign-in key grant for every SIWE domain"
     expect(isAppKeyHostBound(appId, `https://${domain}`)).toBe(bound);
   }
 });
+
+// TC-2380: the node is the only source of truth for hosting; sign-in records
+// what its own fresh activation said.
+type HostingActivation = (call: number, primary: string) => { activated: string[]; skipped: string[] };
+
+async function signInRecordingHosting(
+  activation: HostingActivation,
+  handler?: { confirmSpaceCreation: () => Promise<boolean> },
+  mode: "signIn" | "prepared" = "signIn",
+) {
+  const captured: Array<Record<string, unknown>> = [];
+  const originalFetch = globalThis.fetch;
+  let activations = 0;
+  globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith("/info")) {
+      return new Response(JSON.stringify({ protocol: 1, version: "1.0.0", features: [] }), { status: 200 });
+    }
+    if (url.includes("/peer/generate/")) return new Response("peer-id");
+    if (url.endsWith("/delegate") && init?.method === "POST") {
+      const primary = String(captured[0]?.spaceId);
+      return new Response(JSON.stringify(activation(++activations, primary)), { status: 200 });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+  const auth = new NodeUserAuthorization({
+    signer: createSigner([]),
+    wasmBindings: createWasmBindings(captured),
+    signStrategy: { type: "auto-sign" },
+    domain: "example.com",
+    tinycloudHosts: ["https://tinycloud.test"],
+    sessionStorage: new MemorySessionStorage(),
+    ...(handler ? { spaceCreationHandler: handler } : {}),
+  });
+  const outcome = await (async () => {
+    try {
+      if (mode === "signIn") {
+        await auth.signIn();
+      } else {
+        const p = await auth.prepareSessionForSigning();
+        await auth.signInWithPreparedSession(p.prepared, "0xsigned", p.keyId, p.jwk);
+      }
+      return { error: undefined as unknown };
+    } catch (error) {
+      return { error };
+    }
+  })();
+  globalThis.fetch = originalFetch;
+  return { auth, activations, ...outcome };
+}
+
+for (const mode of ["signIn", "prepared"] as const) {
+  test(`${mode}: a primary space the node skipped is recorded as not-hosted`, async () => {
+    const { auth, error } = await signInRecordingHosting(
+      (_call, primary) => ({ activated: [], skipped: [primary] }), undefined, mode,
+    );
+    expect(error).toBeUndefined();
+    expect(auth.spaceHosting).toBe("not-hosted");
+  });
+
+  test(`${mode}: a primary space the node activated is recorded as hosted`, async () => {
+    const { auth, error } = await signInRecordingHosting(
+      (_call, primary) => ({ activated: [primary], skipped: [] }), undefined, mode,
+    );
+    expect(error).toBeUndefined();
+    expect(auth.spaceHosting).toBe("hosted");
+  });
+
+  test(`${mode}: empty activation lists leave the answer unknown for the probe`, async () => {
+    const { auth, error } = await signInRecordingHosting(() => ({ activated: [], skipped: [] }), undefined, mode);
+    expect(error).toBeUndefined();
+    expect(auth.spaceHosting).toBe("unknown");
+  });
+
+  test(`${mode}: a dismissed creation modal records not-hosted and sign-in still resolves`, async () => {
+    const { auth, error, activations } = await signInRecordingHosting(
+      (_call, primary) => ({ activated: [], skipped: [primary] }),
+      { confirmSpaceCreation: async () => false },
+      mode,
+    );
+    expect(error).toBeUndefined();
+    expect(auth.spaceHosting).toBe("not-hosted");
+    expect(activations).toBe(1);
+  });
+
+  test(`${mode}: a created space is recorded as hosted`, async () => {
+    const { auth, error } = await signInRecordingHosting(
+      (call, primary) => call === 1
+        ? { activated: [], skipped: [primary] }
+        : { activated: [primary], skipped: [] },
+      { confirmSpaceCreation: async () => true },
+      mode,
+    );
+    expect(error).toBeUndefined();
+    expect(auth.spaceHosting).toBe("hosted");
+  });
+
+  test(`${mode}: a creation timeout records not-hosted and still throws`, async () => {
+    const timeout = Object.assign(new Error("TinyCloud waited for you to confirm"), { code: "SPACE_CREATION_TIMEOUT" });
+    const { auth, error } = await signInRecordingHosting(
+      (_call, primary) => ({ activated: [], skipped: [primary] }),
+      { confirmSpaceCreation: async () => { throw timeout; } },
+      mode,
+    );
+    expect(error).toBe(timeout);
+    expect(auth.spaceHosting).toBe("not-hosted");
+  });
+}
+
+test("a restored session whose empty-list re-post says nothing is never reported hosted", async () => {
+  const session = restoredTinyCloudSession();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    if (String(input).endsWith("/delegate") && init?.method === "POST") {
+      // The node answers a delegation it already holds with empty lists, hosted or not.
+      return new Response(JSON.stringify({ activated: [], skipped: [] }), { status: 200 });
+    }
+    throw new Error(`Unexpected fetch: ${String(input)}`);
+  };
+  try {
+    const auth = new NodeUserAuthorization({
+      signer: createSigner([]),
+      wasmBindings: createWasmBindings([]),
+      domain: "example.com",
+      tinycloudHosts: ["https://tinycloud.test"],
+      sessionStorage: new MemorySessionStorage(),
+    });
+    auth.setRestoredTinyCloudSession(session);
+    await auth.ensureSpaceExists();
+    expect(auth.spaceHosting).toBe("unknown");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("ensurePrimarySpaceHosted creates the space only when it is given not-hosted", async () => {
+  const session = restoredTinyCloudSession();
+  const originalFetch = globalThis.fetch;
+  const delegates: number[] = [];
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    if (url.includes("/peer/generate/")) return new Response("peer-id");
+    if (url.endsWith("/delegate") && init?.method === "POST") {
+      delegates.push(delegates.length + 1);
+      return new Response(JSON.stringify({ activated: [session.spaceId], skipped: [] }), { status: 200 });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+  try {
+    let confirmations = 0;
+    const auth = new NodeUserAuthorization({
+      signer: createSigner([]),
+      wasmBindings: createWasmBindings([]),
+      domain: "example.com",
+      signStrategy: { type: "auto-sign" },
+      tinycloudHosts: ["https://tinycloud.test"],
+      sessionStorage: new MemorySessionStorage(),
+      spaceCreationHandler: { confirmSpaceCreation: async () => { confirmations++; return true; } },
+    });
+    auth.setRestoredTinyCloudSession(session);
+
+    await auth.ensurePrimarySpaceHosted("hosted");
+    await auth.ensurePrimarySpaceHosted("unknown");
+    expect(confirmations).toBe(0);
+    expect(delegates).toHaveLength(0);
+
+    await auth.ensurePrimarySpaceHosted("not-hosted");
+    expect(confirmations).toBe(1);
+    expect(delegates).toHaveLength(2); // the host delegation, then the re-activation
+    expect(auth.spaceHosting).toBe("hosted");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+async function verifyCreationContextPrivacy(
+  path: "restored" | "fresh",
+  outcome: "created" | "failed",
+): Promise<void> {
+  const session = {
+    ...restoredTinyCloudSession(),
+    sessionKey: `${path}-session-key-secret`,
+    delegationHeader: { Authorization: `Bearer ${path}-delegation-secret` },
+    jwk: { kty: "OKP", kid: `${path}-session-key-secret`, d: `${path}-private-d-secret` },
+    siwe: `${path} session siwe secret`,
+    signature: `${path} session signature secret`,
+  };
+  const contexts: Record<string, SpaceCreationContext[]> = {
+    guard: [],
+    confirm: [],
+    created: [],
+    failed: [],
+  };
+  const originalFetch = globalThis.fetch;
+  let delegationPosts = 0;
+  const captured: Array<Record<string, unknown>> = [];
+  const wasm = createWasmBindings(captured);
+  wasm.prepareSession = (params: Record<string, unknown>) => {
+    captured.push(params);
+    return {
+      siwe: "fresh session siwe secret",
+      jwk: session.jwk,
+      spaceId: String(params.spaceId),
+      verificationMethod: "did:key:fresh",
+    };
+  };
+  const primarySpace = () => path === "fresh" ? String(captured[0]?.spaceId) : session.spaceId;
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    if (url.endsWith("/info")) return new Response(JSON.stringify({ protocol: 1, version: "1.0.0", features: [] }));
+    if (url.includes("/peer/generate/")) return new Response("peer-id");
+    if (url.endsWith("/delegate") && init?.method === "POST") {
+      delegationPosts++;
+      if (path === "fresh" && delegationPosts === 1) {
+        return new Response(JSON.stringify({ activated: [], skipped: [primarySpace()] }));
+      }
+      if (outcome === "failed" && delegationPosts === (path === "fresh" ? 2 : 1)) {
+        return new Response("hosting rejected", { status: 403 });
+      }
+      return new Response(JSON.stringify({ activated: [primarySpace()], skipped: [] }));
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  const handler = {
+    confirmSpaceCreation: async (context: SpaceCreationContext) => {
+      contexts.confirm.push(context);
+      return true;
+    },
+    onSpaceCreated: (context: SpaceCreationContext) => contexts.created.push(context),
+    onSpaceCreationFailed: (context: SpaceCreationContext) => contexts.failed.push(context),
+  };
+  const auth = new NodeUserAuthorization({
+    signer: createSigner([]),
+    wasmBindings: wasm,
+    signStrategy: { type: "auto-sign" },
+    domain: "example.com",
+    tinycloudHosts: ["https://tinycloud.test"],
+    sessionStorage: new MemorySessionStorage(),
+    spaceCreationHandler: handler,
+  });
+  (auth as any).guardSpaceCreation = async (_handler: unknown, context: SpaceCreationContext) => {
+    contexts.guard.push(context);
+  };
+
+  try {
+    if (path === "restored") {
+      auth.setRestoredTinyCloudSession(session);
+      await auth.ensurePrimarySpaceHosted("not-hosted").then(
+        () => { if (outcome === "failed") throw new Error("expected host failure"); },
+        (error) => { if (outcome === "created") throw error; },
+      );
+    } else {
+      await auth.signIn().then(
+        () => { if (outcome === "failed") throw new Error("expected host failure"); },
+        (error) => { if (outcome === "created") throw error; },
+      );
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  const activeSession = (auth as any)._tinyCloudSession as TinyCloudSession;
+  const expectedCallbacks = outcome === "created" ? ["guard", "confirm", "created"] : ["guard", "confirm", "failed"];
+  expect(Object.keys(contexts).filter((callback) => contexts[callback]!.length > 0).sort()).toEqual(expectedCallbacks.sort());
+  const forbidden = [
+    activeSession.jwk,
+    (activeSession.jwk as Record<string, unknown>).d,
+    activeSession.sessionKey,
+    activeSession.delegationHeader.Authorization,
+    activeSession.siwe,
+    activeSession.signature,
+  ];
+  for (const callback of expectedCallbacks) {
+    for (const context of contexts[callback]!) {
+      expect(Object.keys(context).sort()).toEqual(["address", "chainId", "host", "spaceId"]);
+      const values: unknown[] = [];
+      const visit = (value: unknown): void => {
+        values.push(value);
+        if (value && typeof value === "object") Object.values(value).forEach(visit);
+      };
+      visit(context);
+      const renderedValues = values.map((value) =>
+        typeof value === "string" ? value : JSON.stringify(value),
+      );
+      for (const secret of forbidden) {
+        if (secret === undefined) continue;
+        const renderedSecret = typeof secret === "string" ? secret : JSON.stringify(secret);
+        expect(renderedValues.some((value) => value === renderedSecret || value?.includes(renderedSecret))).toBe(false);
+      }
+    }
+  }
+}
+
+for (const path of ["restored", "fresh"] as const) {
+  for (const outcome of ["created", "failed"] as const) {
+    test(`${path} space creation exposes only public context when ${outcome}`, async () => {
+      await verifyCreationContextPrivacy(path, outcome);
+    });
+  }
+}

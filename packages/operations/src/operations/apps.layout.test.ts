@@ -74,12 +74,12 @@ describe("personal apps new layout: approvals", () => {
       for (const bundle of [change, read]) {
         const granted = withGrants(context, bundle as AppsPermission[]);
         const plan = await definition("read").authority(granted, { keys: [record] });
-        expect(evaluateOperationAuthority(bundle, plan).missing).toEqual([]);
+        expect(evaluateOperationAuthority(bundle as AppsPermission[], plan as AppsPermission[]).missing).toEqual([]);
         expect((await definition("read").execute(granted, { keys: [record] })).output.records[0]).toMatchObject({ key: record, value: { data: { title: "Dune" } } });
       }
       const edit = { ops: [{ op: "put", key: record, etag: applications.values.get(record)!.etag, value: { data: { title: "Dune edited" } } }] };
       const plan = await definition("write").authority(withGrants(context, change as AppsPermission[]), edit);
-      expect(evaluateOperationAuthority(change, plan).missing).toEqual([]);
+      expect(evaluateOperationAuthority(change as AppsPermission[], plan as AppsPermission[]).missing).toEqual([]);
       expect((await definition("write").execute(withGrants(context, change as AppsPermission[]), edit)).output.ops[0]?.outcome).toBe("ok");
       expect(await definition("write").authority(withGrants(context, read as AppsPermission[]), edit)).toEqual([kvScope(NEW_SPACE, root, ALL.slice(2))]);
       expect(await definition("read").authority(context, { keys: [record] })).toEqual([kvScope(NEW_SPACE, root)]);
@@ -93,7 +93,7 @@ describe("personal apps new layout: approvals", () => {
         for (let round = 0; round < 4; round++) {
           const active = withGrants(context, grants);
           const plan = await definition(name).authority(active, input);
-          const missing = evaluateOperationAuthority(grants, plan).missing;
+          const missing = evaluateOperationAuthority(grants, plan as AppsPermission[]).missing;
           if (!missing.length) {
             expect((await definition(name).execute(active, input)).status).toBe("ok");
             return;
@@ -110,7 +110,7 @@ describe("personal apps new layout: approvals", () => {
       if (named) expect(requests.map((request) => request[0]!.space)).toEqual([NEW_SPACE, SPACE]);
       const before = requests.length;
       await approved("context", { app: "films" });
-      await approved("write", { ops: createBooks.map((op) => ({ ...op, key: op.key.replaceAll("books", "films"), value: { ...op.value, ...("app" in op.value ? { app: "films" } : {}), ...("id" in op.value ? { id: `${ID}films` } : {}) } })) });
+      await approved("write", { ops: createBooks.map((op) => ({ ...op, key: (op.key as string & { replaceAll(search: string, replacement: string): string }).replaceAll("books", "films"), value: { ...op.value, ...("app" in op.value ? { app: "films" } : {}), ...("id" in op.value ? { id: `${ID}films` } : {}) } })) });
       expect(requests.length - before).toBe(1);
       expect(applications.values.has(record.replace("books", "films"))).toBe(true);
     });
