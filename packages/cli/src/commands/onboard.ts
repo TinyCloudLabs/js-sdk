@@ -5,7 +5,7 @@ import { startAuthFlow, delegationFromInput } from "../auth/browser-auth.js";
 import { sessionStateIsUsable, storedSessionState } from "../auth/scoped-login.js";
 import { completeApprovalResult } from "../auth/approval-request.js";
 import { APPROVAL_TIMEOUT_OPTION_DESCRIPTION, parseApprovalTimeout, spaceSetupTimeoutMs } from "../auth/approval-wait.js";
-import { ensureSpaceSetup } from "../auth/space-setup.js";
+import { ensureSpaceSetup, recheckSpaceHosting } from "../auth/space-setup.js";
 import { ExitCode } from "../config/constants.js";
 import { ProfileManager } from "../config/profiles.js";
 import { resolveProfilePosture } from "../config/types.js";
@@ -98,6 +98,8 @@ export function registerOnboardCommand(program: Command): void {
           });
         };
 
+        // Spaces the node has been seen to host in this run; a re-run after SPACE_SETUP_PENDING has a usable session on an unhosted one.
+        const hostedSpaces = new Set<string>();
         for (const [index, step] of ONBOARD_STEPS.entries()) {
           currentStep = index + 1;
           const reason = `TinyCloud onboarding, step ${index + 1} of ${ONBOARD_STEPS.length}: ${step.asks}`;
@@ -117,6 +119,10 @@ export function registerOnboardCommand(program: Command): void {
             profile = await ProfileManager.getProfile(ctx.profile);
             continue;
           }
+          await recheckSpaceHosting({ profile: ctx.profile, host: ctx.host }, step.space, step.permissions, {
+            confirmed: hostedSpaces,
+            ...(deadlineMs === undefined ? {} : { timeoutMs: spaceSetupTimeoutMs({ deadlineMs, step: currentStep, of: ONBOARD_STEPS.length }) }),
+          });
           await ensureDelegationAuthority({
             ctx,
             profile,

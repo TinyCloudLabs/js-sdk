@@ -230,3 +230,43 @@ export async function ensureSpaceSetup(
   if (!report) return;
   await awaitSpaceSetup(report, { probe: kvSpaceProbe(ctx, permissions), ...(timeoutMs === undefined ? {} : { timeoutMs }) });
 }
+
+export interface SpaceRecheckOptions {
+  /** Spaces this run already confirmed hosted; a confirmed space is not read again, and a hosted answer is added. */
+  readonly confirmed: Set<string>;
+  /** Bound the wait (`onboard --timeout`); the default is {@link SPACE_SETUP_TIMEOUT_MS}. */
+  readonly timeoutMs?: number;
+  readonly restore?: (ctx: ProfileSessionContext) => Promise<ProfileSessionRestore>;
+  readonly sleep?: SpaceSetupDependencies["sleep"];
+  readonly now?: SpaceSetupDependencies["now"];
+  readonly write?: SpaceSetupDependencies["write"];
+}
+
+/**
+ * Ask the node, with the session already saved, whether a space the login was approved for is hosted, before an
+ * onboarding step trusts that session: a login cut short after its approval (`SPACE_SETUP_PENDING`) leaves a usable
+ * session on a space the node does not host yet.
+ *
+ * - `unhosted`: the same wait as after an approval (same backoff, messages, bound and `SPACE_SETUP_PENDING`).
+ * - `hosted`, `unreadable` (this session cannot read it yet) or `transient`: the run goes on, silently.
+ */
+export async function recheckSpaceHosting(
+  ctx: ProfileSessionContext,
+  space: string,
+  permissions: readonly PermissionEntry[] | undefined,
+  options: SpaceRecheckOptions,
+): Promise<void> {
+  if (options.confirmed.has(space)) return;
+  const probe = kvSpaceProbe(ctx, permissions, options.restore);
+  const first = await probe().catch(() => "transient" as const);
+  if (first === "hosted") options.confirmed.add(space);
+  if (first !== "unhosted") return;
+  await awaitSpaceSetup({ ready: null, pending: true }, {
+    probe,
+    ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+    ...(options.sleep === undefined ? {} : { sleep: options.sleep }),
+    ...(options.now === undefined ? {} : { now: options.now }),
+    ...(options.write === undefined ? {} : { write: options.write }),
+  });
+  options.confirmed.add(space);
+}
