@@ -16,6 +16,18 @@ import { createCliReplicationConfig } from "./replication-config.js";
 import { registerReplication } from "./replication-registry.js";
 import { assertPendingRemoteLogoutSession, recoverPendingLogout } from "./logout-pending.js";
 export { closeReplication, registerReplication, registeredReplications, replicationForProfile } from "./replication-registry.js";
+
+function configuredRegistryUrl(
+  contextUrl: string | undefined,
+  profile: ProfileConfig | null | undefined,
+): string | undefined {
+  const envUrl = process.env.TC_REGISTRY_URL;
+  if (typeof envUrl === "string" && envUrl.length > 0) return envUrl;
+  if (typeof contextUrl === "string" && contextUrl.length > 0) return contextUrl;
+  const profileUrl = profile?.tinycloudRegistryUrl;
+  return typeof profileUrl === "string" && profileUrl.length > 0 ? profileUrl : undefined;
+}
+
 /**
  * Returns true when a JWK carries the private-key parameter required by the
  * WASM signer. The CLI is OKP/EC-only (Ed25519, secp256k1) where `d` is the
@@ -127,9 +139,9 @@ export type ProfileSessionRestore =
 export type ProfileSessionContext = Pick<CLIContext, "profile" | "host"> & Partial<CLIContext>;
 
 /**
- * Inspect a profile's own persisted session without signing in or replaying a
- * stored grant; this call does not contact the node. Used for local grant
- * inspection and for the read that checks the space after a login.
+ * Inspect a profile's persisted session without signing in or replaying a
+ * stored grant. Restore may query the registry and resolved-node identity
+ * endpoints to validate routing.
  */
 export async function restoreProfileSessionNode(
   ctx: ProfileSessionContext,
@@ -149,7 +161,9 @@ export async function restoreProfileSessionNode(
   }
   const key = await ProfileManager.getKey(ctx.profile);
   try {
+    const tinycloudRegistryUrl = configuredRegistryUrl(ctx.tinycloudRegistryUrl, profile);
     const node = new TinyCloudNode({
+      ...(tinycloudRegistryUrl === undefined ? {} : { tinycloudRegistryUrl }),
       host: ctx.host,
       ...(profile.authMethod === "local" && profile.privateKey ? { privateKey: profile.privateKey } : {}),
     });
@@ -165,8 +179,9 @@ export async function restoreProfileSessionNode(
 
 /**
  * Whether the profile's stored session, when `createSDKInstance` would restore
- * it, passes the same local verification, run here in a throwaway node: no
- * request is sent and nothing is written. `true` when there is none to restore.
+ * it, passes the same verification in a throwaway node without signing in or
+ * writing profile state. Restore may query routing and node identity endpoints.
+ * `true` when there is none to restore.
  */
 export async function storedSessionVerifiesLocally(profileName: string): Promise<boolean> {
   const profile = await ProfileManager.getProfile(profileName).catch(() => null);
@@ -180,8 +195,10 @@ export async function storedSessionVerifiesLocally(profileName: string): Promise
       !("Authorization" in session.delegationHeader) ||
       typeof session.delegationHeader.Authorization !== "string") return true;
     const key = await ProfileManager.getKey(profileName);
+    const tinycloudRegistryUrl = configuredRegistryUrl(undefined, profile);
     const node = new TinyCloudNode({
       ...cliRetryPolicy(),
+      ...(tinycloudRegistryUrl === undefined ? {} : { tinycloudRegistryUrl }),
       host: profile.host ?? DEFAULT_HOST,
       ...(local ? { privateKey: profile.privateKey } : {}),
     });
@@ -224,6 +241,7 @@ export async function createSDKInstance(
   }
   // A headless --private-key identity is not the logged-out profile's key or replica.
   const profile = storedProfile?.authSignedOut === true ? null : storedProfile;
+  const tinycloudRegistryUrl = configuredRegistryUrl(ctx.tinycloudRegistryUrl, profile);
   const session = await ProfileManager.getSession(ctx.profile) as Record<string, unknown> | null;
   const key = await ProfileManager.getKey(ctx.profile);
 
@@ -252,6 +270,7 @@ export async function createSDKInstance(
     }
     const node = new TinyCloudNode({
       ...cliRetryPolicy(),
+      ...(tinycloudRegistryUrl === undefined ? {} : { tinycloudRegistryUrl }),
       host: ctx.host,
       privateKey: effectivePrivateKey,
       ...(replication ? { replication } : {}),
@@ -296,6 +315,7 @@ export async function createSDKInstance(
   }
   const node = new TinyCloudNode({
     ...cliRetryPolicy(),
+    ...(tinycloudRegistryUrl === undefined ? {} : { tinycloudRegistryUrl }),
     host: ctx.host,
     privateKey: options?.privateKey,
     ...(replication ? { replication } : {}),

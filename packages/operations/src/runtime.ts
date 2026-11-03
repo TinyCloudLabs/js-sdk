@@ -62,6 +62,14 @@ interface StoredSession extends Record<string, unknown> {
 type AuthenticatedRuntimeResolution =
   | Readonly<{ ok: true; context: RuntimeOperationContext }>
   | Exclude<InvocationRuntimeResolution, Readonly<{ ok: true; context: OperationContext }>>;
+function registryUrlForProfile(
+  profile: Readonly<{ tinycloudRegistryUrl?: unknown }>,
+): string | undefined {
+  const envUrl = process.env.TC_REGISTRY_URL;
+  if (typeof envUrl === "string" && envUrl.length > 0) return envUrl;
+  const profileUrl = profile.tinycloudRegistryUrl;
+  return typeof profileUrl === "string" && profileUrl.length > 0 ? profileUrl : undefined;
+}
 
 export function createInvocationRuntime(
   target: InvocationTarget,
@@ -118,6 +126,7 @@ export async function createInvocationRuntime(
         readJson<Record<string, unknown>>(`${profilePath(profileName)}/key.json`),
       ]);
     const profile = resolved.profile;
+    const tinycloudRegistryUrl = registryUrlForProfile(profile);
 
     // The inspection summary and authenticated material are intentionally
     // separate reads. Fail closed if the profile changed posture between
@@ -153,6 +162,7 @@ export async function createInvocationRuntime(
     }
     const node = new TinyCloudNodeConstructor({
       host: summary.host,
+      ...(tinycloudRegistryUrl === undefined ? {} : { tinycloudRegistryUrl }),
       ...(privateKey === undefined ? {} : { privateKey }),
     });
 
@@ -272,6 +282,7 @@ async function createRestoredRuntime(
   const summary = resolved.context;
   const profileName = summary.profile;
   const profile = resolved.profile;
+  const tinycloudRegistryUrl = registryUrlForProfile(profile);
   // Before any read beyond the profile, any node construction or request.
   if (typeof target.privateKey === "string") {
     return failed(summary, operationError(
@@ -336,6 +347,7 @@ async function createRestoredRuntime(
     // Wallet-mode restore needs the profile's own key when it has one.
     const node = new TinyCloudNodeConstructor({
       host: summary.host,
+      ...(tinycloudRegistryUrl === undefined ? {} : { tinycloudRegistryUrl }),
       ...(typeof profile.privateKey === "string" ? { privateKey: profile.privateKey } : {}),
     });
     try {
