@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { DEAD_PID } from './support/review-fixture.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { deriveState } from '../dist/state.js';
@@ -100,7 +101,7 @@ for (const boundary of BOUNDARIES) {
 
 // A process killed before the rename leaves `rotation.json.<pid>.<hex>.tmp` (0600, in the profile directory) holding the new key. The
 // in-process Crash used by the other tests unwinds through `finally`, so the file a real kill leaves is planted by hand.
-const STRAY = 'rotation.json.4242.0a1b2c3d4e5f.tmp';
+const STRAY = `rotation.json.${DEAD_PID}.0a1b2c3d4e5f.tmp`;
 for (const mode of [['--request'], ['--wait', '--timeout', '1s'], ['--resume'], ['--rotate-key', '--request']]) {
   scenario(`rotation killed before rotation.json is renamed: the old state stands and \`init ${mode.join(' ')}\` removes the stray temp file holding the new key`, async (ctx) => {
     await readyProfile(ctx);

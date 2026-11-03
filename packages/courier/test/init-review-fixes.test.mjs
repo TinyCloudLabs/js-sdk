@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { DEAD_PID } from './support/review-fixture.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { cmdInit } from '../dist/commands.js';
@@ -340,7 +341,7 @@ const MALFORMED = {
   'null': null,
 };
 
-const STRAY_KEY_TEMP = 'key.json.4242.0a1b2c3d4e5f.tmp';
+const STRAY_KEY_TEMP = `key.json.${DEAD_PID}.0a1b2c3d4e5f.tmp`;
 
 /** A ready profile with an open request, a saved redeemed delegation, an invalid journal and a stray key temp: all must stay as they are. */
 async function plantInvalidJournal(ctx, journal) {
@@ -402,7 +403,7 @@ scenario('a stray key temp that is a hard link to another file is refused and th
   ctx.errors.length = 0;
   const run = await ctx.courier('--request');
   assert.notEqual(run.code, 0, run.stderr);
-  assert.match(run.stderr, /key\.json\.4242/);
+  assert.match(run.stderr, new RegExp(`key\\.json\\.${DEAD_PID}`));
   assert.deepEqual(snapshot(), before, 'no file was overwritten or removed');
 });
 

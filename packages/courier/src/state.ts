@@ -275,6 +275,8 @@ export function recoverInterrupted(): void {
   for (const name of strayTemps()) scrub(path.join(profileDir(), name));
   for (const { name, pid } of liveWriterTemps()) {
     const file = path.join(profileDir(), name);
+    // A running pid does not excuse a file that is not a plain single-link file of this user: that is refused, as for a dead writer.
+    if (!isPlain(fs.lstatSync(file))) throw refuseStray(file);
     console.error(`warning: ${name} was kept, not deleted, and may contain private-key material (an agent key, or an approval's relay key and result). Process ${pid}, which named it, is running: either a Courier process still writing it, or an unrelated process that was given the same pid after Courier died (pid reuse); Courier cannot tell which. Check with \`ps -p ${pid} -o pid=,args=\`; only if that is not a Courier process, remove the file with \`rm -- '${file}'\`.`);
   }
 }
@@ -284,15 +286,16 @@ export function recoverInterrupted(): void {
  * open descriptor so a swap between the check and the open is caught: its bytes are overwritten with zeros (best effort: a copy-on-write or
  * journaling filesystem may keep old blocks) and it is unlinked. Anything else is left as it is and reported.
  */
+const isPlain = (stat: fs.Stats): boolean => stat.isFile() && stat.uid === process.getuid?.() && stat.nlink === 1;
+const refuseStray = (file: string): CourierError => new CourierError('stray-temp', `${file} is not a plain file of this user with one link, so it was left as it is. Remove it by hand, then run the command again.`);
+
 function scrub(file: string): void {
-  const refuse = () => new CourierError('stray-temp', `${file} is not a plain file of this user with one link, so it was left as it is. Remove it by hand, then run the command again.`);
-  const plain = (stat: fs.Stats) => stat.isFile() && stat.uid === process.getuid?.() && stat.nlink === 1;
   const before = fs.lstatSync(file);
-  if (!plain(before)) throw refuse();
+  if (!isPlain(before)) throw refuseStray(file);
   const fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_NOFOLLOW);
   try {
     const open = fs.fstatSync(fd);
-    if (!plain(open) || open.dev !== before.dev || open.ino !== before.ino) throw refuse();
+    if (!isPlain(open) || open.dev !== before.dev || open.ino !== before.ino) throw refuseStray(file);
     fs.writeSync(fd, Buffer.alloc(open.size));
     fs.fsyncSync(fd);
   } finally {

@@ -1,5 +1,6 @@
 // Helpers shared by the TC-2383 review-fix tests. Not a test file.
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadProfile } from '../../dist/profile.js';
@@ -48,3 +49,6 @@ export const crashBeforeUnlink = (t, file, Crash) => {
   t.after(() => { fs.unlinkSync = original; });
   return { disarm: () => { fs.unlinkSync = original; } };
 };
+
+/** The pid of a process that has already exited: no test may assume a fixed pid is (or is not) running. */
+export const DEAD_PID = spawnSync(process.execPath, ['-e', '']).pid;
