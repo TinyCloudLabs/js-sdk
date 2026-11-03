@@ -7,6 +7,7 @@ import {
   type ISessionManager,
   type ISigner,
   type TinyCloudSession,
+  type SpaceCreationContext,
   BOOTSTRAP_SESSION_REQUESTS,
   pkhDid,
   type Manifest,
@@ -1205,3 +1206,130 @@ test("ensurePrimarySpaceHosted creates the space only when it is given not-hoste
     globalThis.fetch = originalFetch;
   }
 });
+
+async function verifyCreationContextPrivacy(
+  path: "restored" | "fresh",
+  outcome: "created" | "failed",
+): Promise<void> {
+  const session = {
+    ...restoredTinyCloudSession(),
+    sessionKey: `${path}-session-key-secret`,
+    delegationHeader: { Authorization: `Bearer ${path}-delegation-secret` },
+    jwk: { kty: "OKP", kid: `${path}-session-key-secret`, d: `${path}-private-d-secret` },
+    siwe: `${path} session siwe secret`,
+    signature: `${path} session signature secret`,
+  };
+  const contexts: Record<string, SpaceCreationContext[]> = {
+    guard: [],
+    confirm: [],
+    created: [],
+    failed: [],
+  };
+  const originalFetch = globalThis.fetch;
+  let delegationPosts = 0;
+  const captured: Array<Record<string, unknown>> = [];
+  const wasm = createWasmBindings(captured);
+  wasm.prepareSession = (params: Record<string, unknown>) => {
+    captured.push(params);
+    return {
+      siwe: "fresh session siwe secret",
+      jwk: session.jwk,
+      spaceId: String(params.spaceId),
+      verificationMethod: "did:key:fresh",
+    };
+  };
+  const primarySpace = () => path === "fresh" ? String(captured[0]?.spaceId) : session.spaceId;
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    if (url.endsWith("/info")) return new Response(JSON.stringify({ protocol: 1, version: "1.0.0", features: [] }));
+    if (url.includes("/peer/generate/")) return new Response("peer-id");
+    if (url.endsWith("/delegate") && init?.method === "POST") {
+      delegationPosts++;
+      if (path === "fresh" && delegationPosts === 1) {
+        return new Response(JSON.stringify({ activated: [], skipped: [primarySpace()] }));
+      }
+      if (outcome === "failed" && delegationPosts === (path === "fresh" ? 2 : 1)) {
+        return new Response("hosting rejected", { status: 403 });
+      }
+      return new Response(JSON.stringify({ activated: [primarySpace()], skipped: [] }));
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  const handler = {
+    confirmSpaceCreation: async (context: SpaceCreationContext) => {
+      contexts.confirm.push(context);
+      return true;
+    },
+    onSpaceCreated: (context: SpaceCreationContext) => contexts.created.push(context),
+    onSpaceCreationFailed: (context: SpaceCreationContext) => contexts.failed.push(context),
+  };
+  const auth = new NodeUserAuthorization({
+    signer: createSigner([]),
+    wasmBindings: wasm,
+    signStrategy: { type: "auto-sign" },
+    domain: "example.com",
+    tinycloudHosts: ["https://tinycloud.test"],
+    sessionStorage: new MemorySessionStorage(),
+    spaceCreationHandler: handler,
+  });
+  (auth as any).guardSpaceCreation = async (_handler: unknown, context: SpaceCreationContext) => {
+    contexts.guard.push(context);
+  };
+
+  try {
+    if (path === "restored") {
+      auth.setRestoredTinyCloudSession(session);
+      await auth.ensurePrimarySpaceHosted("not-hosted").then(
+        () => { if (outcome === "failed") throw new Error("expected host failure"); },
+        (error) => { if (outcome === "created") throw error; },
+      );
+    } else {
+      await auth.signIn().then(
+        () => { if (outcome === "failed") throw new Error("expected host failure"); },
+        (error) => { if (outcome === "created") throw error; },
+      );
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  const activeSession = (auth as any)._tinyCloudSession as TinyCloudSession;
+  const expectedCallbacks = outcome === "created" ? ["guard", "confirm", "created"] : ["guard", "confirm", "failed"];
+  expect(Object.keys(contexts).filter((callback) => contexts[callback]!.length > 0).sort()).toEqual(expectedCallbacks.sort());
+  const forbidden = [
+    activeSession.jwk,
+    (activeSession.jwk as Record<string, unknown>).d,
+    activeSession.sessionKey,
+    activeSession.delegationHeader.Authorization,
+    activeSession.siwe,
+    activeSession.signature,
+  ];
+  for (const callback of expectedCallbacks) {
+    for (const context of contexts[callback]!) {
+      expect(Object.keys(context).sort()).toEqual(["address", "chainId", "host", "spaceId"]);
+      const values: unknown[] = [];
+      const visit = (value: unknown): void => {
+        values.push(value);
+        if (value && typeof value === "object") Object.values(value).forEach(visit);
+      };
+      visit(context);
+      const renderedValues = values.map((value) =>
+        typeof value === "string" ? value : JSON.stringify(value),
+      );
+      for (const secret of forbidden) {
+        if (secret === undefined) continue;
+        const renderedSecret = typeof secret === "string" ? secret : JSON.stringify(secret);
+        expect(renderedValues.some((value) => value === renderedSecret || value?.includes(renderedSecret))).toBe(false);
+      }
+    }
+  }
+}
+
+for (const path of ["restored", "fresh"] as const) {
+  for (const outcome of ["created", "failed"] as const) {
+    test(`${path} space creation exposes only public context when ${outcome}`, async () => {
+      await verifyCreationContextPrivacy(path, outcome);
+    });
+  }
+}

@@ -1723,6 +1723,19 @@ export class TinyCloudNode {
       return "unknown";
     }
   }
+  /** Run the existing primary-space creation flow for the restored session. */
+  async ensurePrimarySpaceHosted(hosting: SpaceHosting): Promise<void> {
+    const graph = this._serviceGraph;
+    const epoch = this.sessionEpoch;
+    graph.assertActive();
+    this.assertSessionEpoch(epoch, "Space hosting");
+    const auth = this.auth;
+    if (!auth || !this.session) return;
+    await auth.ensurePrimarySpaceHosted(hosting, graph.signal);
+    graph.assertActive();
+    this.assertSessionEpoch(epoch, "Space hosting");
+  }
+
 
   /**
    * The node's last answer for the primary space: recorded at sign-in from the

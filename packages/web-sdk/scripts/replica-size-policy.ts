@@ -356,6 +356,8 @@ export type Tc2418AbortListenerCleanup = HardeningRatchet & { replicaWorker: { d
 export type Tc2379SignOutFence = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
 /** Exact TC-2380 space hosting root admission; non-root buckets carry TC-2379. */
 export type Tc2380SpaceHosting = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
+/** Exact TC-2380 Q2 one-click root admission; non-root buckets carry TC-2380 space hosting. */
+export type Tc2380Q2OneClick = Tc2380SpaceHosting;
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -426,6 +428,7 @@ export type Ledger = {
   tc2418AbortListenerCleanup?: Tc2418AbortListenerCleanup;
   tc2379SignOutFence?: Tc2379SignOutFence;
   tc2380SpaceHosting?: Tc2380SpaceHosting;
+  tc2380Q2OneClick?: Tc2380Q2OneClick;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -1026,6 +1029,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2418AbortListenerCleanup !== undefined) pins.push({ row: "tc2418AbortListenerCleanup", pin: root.tc2418AbortListenerCleanup.sourceCommits.at(-1)! });
   if (root.tc2379SignOutFence !== undefined) pins.push({ row: "tc2379SignOutFence", pin: root.tc2379SignOutFence.sourceCommits.at(-1)! });
   if (root.tc2380SpaceHosting !== undefined) pins.push({ row: "tc2380SpaceHosting", pin: root.tc2380SpaceHosting.sourceCommits.at(-1)! });
+  if (root.tc2380Q2OneClick !== undefined) pins.push({ row: "tc2380Q2OneClick", pin: root.tc2380Q2OneClick.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1102,6 +1106,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2418AbortListenerCleanup", root.tc2418AbortListenerCleanup?.root.ceiling],
     ["tc2379SignOutFence", root.tc2379SignOutFence?.root.ceiling],
     ["tc2380SpaceHosting", root.tc2380SpaceHosting?.root.ceiling],
+    ["tc2380Q2OneClick", root.tc2380Q2OneClick?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -2699,6 +2704,28 @@ export const approvedTc2380SpaceHosting: Tc2380SpaceHosting = {
   replicaWorker: { delta: 0, ceiling: 770494 },
   reason: "TC-2380 space hosting row; exact SQLite and PostgreSQL CI root gzip measurements agree. All non-root size buckets are carried unchanged from TC-2379.",
 };
+export const approvedTc2380Q2OneClick: Tc2380Q2OneClick = {
+  label: "host a restored session's missing primary space with one approval (TC-2380)",
+  ruling: "Naomi ruled 2026-11-03: up to +425 B per root for the session fence, address checks and sign-out cancellation. Exact canonical SQLite and PostgreSQL CI at source head 9e27de9d9c524e368cc50439ca90e30571e9dee2 measures 1,480,070/1,422,484 B, +422/+424 B over TC-2380 space hosting. Bun 1.3.14; rustc 1.99.0 (b940084d7 2026-09-28).",
+  base: "902e603101695438557d67a065ef5dc97f706325",
+  sourceCommits: ["9e27de9d9c524e368cc50439ca90e30571e9dee2"],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41691826945",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41691826945/job/126112090064",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41691826945/job/126112090067",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 422, "index.cjs": 424 },
+    ceiling: { "index.mjs": 1480070, "index.cjs": 1422484 },
+  },
+  firstImport: { delta: { "replica.mjs": 0, "replica.cjs": 0 }, ceiling: { "replica.mjs": 52757, "replica.cjs": 67957 } },
+  activation: { delta: { "activation.mjs": 0, "activation.cjs": 0 }, ceiling: { "activation.mjs": 23412, "activation.cjs": 24981 } },
+  worker: { delta: 0, ceiling: 776561 },
+  replicaWorker: { delta: 0, ceiling: 770494 },
+  reason: "TC-2380 Q2 one-click hosting row; exact SQLite and PostgreSQL CI root gzip measurements agree. All non-root size buckets are carried unchanged from TC-2380 space hosting.",
+};
 
 export type GatedOnlyRatchet = {
   label: string;
@@ -2798,6 +2825,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2418AbortListenerCleanup: approvedTc2418AbortListenerCleanup,
   tc2379SignOutFence: approvedTc2379SignOutFence,
   tc2380SpaceHosting: approvedTc2380SpaceHosting,
+  tc2380Q2OneClick: approvedTc2380Q2OneClick,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -3110,6 +3138,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
   if (value.tc2380SpaceHosting !== undefined &&
       (!value.tc2379SignOutFence || JSON.stringify(value.tc2380SpaceHosting) !== JSON.stringify(approvedTc2380SpaceHosting))) {
     throw new Error("Only the exact canonical TC-2380 space hosting ratchet is approved.");
+  }
+  if (value.tc2380Q2OneClick !== undefined &&
+      (!value.tc2380SpaceHosting || JSON.stringify(value.tc2380Q2OneClick) !== JSON.stringify(approvedTc2380Q2OneClick))) {
+    throw new Error("Only the exact canonical TC-2380 Q2 one-click ratchet is approved.");
   }
 }
 
@@ -3501,6 +3533,13 @@ export function validateTc2380SpaceHostingTransition(base?: Tc2380SpaceHosting, 
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2380SpaceHosting) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-2380 space hosting ratchet may be introduced once and cannot change later.");
+  }
+}
+/** The TC-2380 Q2 one-click ratchet is introduced once and immutable afterwards. */
+export function validateTc2380Q2OneClickTransition(base?: Tc2380Q2OneClick, current?: Tc2380Q2OneClick): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2380Q2OneClick) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2380 Q2 one-click ratchet may be introduced once and cannot change later.");
   }
 }
 
