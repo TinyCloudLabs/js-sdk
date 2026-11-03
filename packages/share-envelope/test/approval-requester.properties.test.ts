@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  approvalEntrySchema,
   APPROVAL_POLL_INTERVAL_MS,
   exitCodeOf,
   purgeAt,
@@ -249,4 +250,49 @@ describe("no unmapped reply reaches keep-forever", () => {
 test("the phase of every fixture is one of the five", () => {
   const seen: ApprovalPhase[] = PHASES.map((phase) => entryIn(phase).phase);
   expect(seen).toEqual(["open", "discovered", "fetched", "committed", "acked"]);
+});
+
+describe("a machine-written entry is never refused by its own schema (R-2)", () => {
+  const MAX = Date.UTC(9999, 11, 31, 23, 59, 59, 999);
+  const NASTY_NOW = [MAX, MAX + 1, 8.64e15, -1, 0, Number.NaN];
+  const cache = new WeakMap<object, boolean>();
+  const parses = (entry: object): boolean => {
+    let ok = cache.get(entry);
+    if (ok === undefined) {
+      ok = approvalEntrySchema.safeParse(entry).success;
+      cache.set(entry, ok);
+    }
+    return ok;
+  };
+
+  /** Events an adapter could build that `classifyReply` and the driver never would: the public types allow all of them. */
+  function nastyEvent(random: () => number, now: number): Event {
+    switch (Math.floor(random() * 6)) {
+      case 0: return { type: "reply", now, reply: { kind: "ready", resultRef: pick(random, ["", RESULT_REF, "x"]), resultExpiresAt: pick(random, ["", "garbled", RESULT_EXPIRES, "2026-11-03T12:10:00Z", "9999-12-31T23:59:59.999Z"]) } };
+      case 1: return { type: "reply", now, reply: { kind: "envelope", envelope: pick(random, [undefined, null, {}, "relay"]) } };
+      case 2: return { type: "committed", now, retainUntil: pick(random, [8.64e15, -8.64e15, 0, now + 1e9, Number.NaN, MAX, MAX + 1]) };
+      case 3: return { type: "reply", now: pick(random, NASTY_NOW), reply: randomReply(random), serverDateSkewMs: pick(random, SKEWS) ?? 90_000 };
+      default: return randomEvent(random, now);
+    }
+  }
+
+  test("1,500 walks of ordinary and adapter-built events: every persisted (or rewritten) entry parses back", () => {
+    const random = rng(0x7e57);
+    const refused: string[] = [];
+    for (let walk = 0; walk < 1_500; walk++) {
+      const phase = pick(random, PHASES);
+      let state: RequesterState = requesterState(entryIn(phase, { staged: random() < 0.5 && phase !== "committed" && phase !== "acked" }));
+      let now = T0 + Math.floor(random() * 120_000);
+      for (let step = 0; step < 25; step++) {
+        now = nextNow(random, now);
+        const event = random() < 0.5 ? nastyEvent(random, now) : randomEvent(random, now);
+        const result = reduce(state, event);
+        const written = result.effects.some((effect) => effect.type === "persist" || (effect.type === "purge" && effect.entry === "rewrite"));
+        if (written && result.state.entry !== undefined && !parses(result.state.entry)) refused.push(`${state.entry?.phase} + ${JSON.stringify(event)}`);
+        if (result.state.settled !== undefined) break;
+        state = result.state;
+      }
+    }
+    expect(refused.slice(0, 5)).toEqual([]);
+  });
 });

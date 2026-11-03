@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  approvalEntrySchema,
   CLOCK_DISAGREEMENT_MS,
   APPROVAL_EXIT,
   RULES,
@@ -624,8 +625,9 @@ describe("the purge time WINS over any reply that lands after it (D-1)", () => {
     { name: "open: network", phase: "open", event: (now) => replyEvent({ kind: "network" }, now), keepsBefore: true, outcome: lapsed },
     { name: "open: malformed", phase: "open", event: (now) => replyEvent({ kind: "malformed", call: "discover" }, now), keepsBefore: true, outcome: lapsed },
     { name: "open: 500", phase: "open", event: (now) => replyEvent(err("discover", "unknown", 500), now), keepsBefore: true, outcome: lapsed },
-    { name: "open: 401 sane", phase: "open", event: (now) => replyEvent(err("discover", "invalid_proof", 401), now, sane), keepsBefore: false, outcome: lapsed },
-    { name: "open: 401 clock off", phase: "open", event: (now) => replyEvent(err("discover", "invalid_proof", 401), now, off), keepsBefore: false, outcome: lapsed },
+    // Already terminal by §10.2 (the request has run out): it keeps its own outcome, the purge time does not rewrite it.
+    { name: "open: 401 sane", phase: "open", event: (now) => replyEvent(err("discover", "invalid_proof", 401), now, sane), keepsBefore: false, outcome: { kind: "lapsed", reason: "proof_after_expiry", grantMayBeLive: "no" } },
+    { name: "open: 401 clock off", phase: "open", event: (now) => replyEvent(err("discover", "invalid_proof", 401), now, off), keepsBefore: false, outcome: { kind: "lapsed", reason: "proof_after_expiry", grantMayBeLive: "no" } },
     { name: "discovered: network", phase: "discovered", event: (now) => replyEvent({ kind: "network" }, now), keepsBefore: true, outcome: gone },
     { name: "discovered: malformed", phase: "discovered", event: (now) => replyEvent({ kind: "malformed", call: "fetch" }, now), keepsBefore: true, outcome: gone },
     { name: "discovered: 500", phase: "discovered", event: (now) => replyEvent(err("fetch", "unknown", 500), now), keepsBefore: true, outcome: gone },
@@ -702,5 +704,110 @@ describe("createdThisRun is honoured only for a fresh open entry (D-3)", () => {
     const old = { ...entryIn("open"), createdAt: iso(T0 - 3_600_000) };
     const start = reduce(requesterState(old), { type: "start", now: NOW, deadline: NOW - 1, createdThisRun: true });
     expect(finishOf(reduce(start.state, replyEvent({ kind: "network" }, NOW + 10_000)))?.kind).toBe("unreachable");
+  });
+});
+
+describe("a reply that was already TERMINAL keeps its own outcome when it lands after the purge time (R-1)", () => {
+  interface Terminal {
+    readonly name: string;
+    readonly phase: ApprovalPhase;
+    readonly event: (now: number) => Event;
+    readonly outcome: Outcome;
+    readonly exit: number;
+  }
+  const TERMINALS: readonly Terminal[] = [
+    { name: "open + 410 denied", phase: "open", event: (now) => replyEvent(err("discover", "request_denied", 410), now), outcome: { kind: "denied" }, exit: 11 },
+    {
+      name: "open + 410 expired_result (the owner approved: the 'maybe granted' notice survives)", phase: "open",
+      event: (now) => replyEvent(err("discover", "expired_result", 410), now), outcome: { kind: "gone", reason: "expired_result", grantMayBeLive: "yes" }, exit: 3,
+    },
+    {
+      name: "open + 400 request_binding", phase: "open", event: (now) => replyEvent(err("discover", "request_binding"), now),
+      outcome: { kind: "refused", reason: "request_binding", grantMayBeLive: "maybe" }, exit: 5,
+    },
+    { name: "open + 410 expired_request", phase: "open", event: (now) => replyEvent(err("discover", "expired_request", 410), now), outcome: { kind: "lapsed", reason: "expired_request", grantMayBeLive: "no" }, exit: 3 },
+    {
+      // The approved path is NOT terminal (it keeps the entry as `discovered`), so the purge time wins there: discovered, then purged at once.
+      name: "open + 200 approved (the approved path keeps, so the purge wins: discovered then purged at once)", phase: "open",
+      event: (now) => replyEvent({ kind: "ready", resultRef: RESULT_REF, resultExpiresAt: iso(now + R) }, now), outcome: { kind: "gone", reason: "purged", grantMayBeLive: "yes" }, exit: 3,
+    },
+    { name: "discovered + 404 not_found", phase: "discovered", event: (now) => replyEvent(err("fetch", "not_found", 404), now), outcome: { kind: "gone", reason: "not_found", grantMayBeLive: "yes" }, exit: 3 },
+    {
+      name: "fetched + verdict refused", phase: "fetched", event: (now) => ({ type: "verdict", now, verdict: "refused" }),
+      outcome: { kind: "refused", reason: "verification", grantMayBeLive: "yes" }, exit: 5,
+    },
+    { name: "committed + ack 200: a plain success, NO ack-expired warning", phase: "committed", event: (now) => replyEvent({ kind: "acked" }, now), outcome: { kind: "completed" }, exit: 0 },
+    { name: "committed + ack 404", phase: "committed", event: (now) => replyEvent(err("ack", "not_found", 404), now), outcome: { kind: "completed" }, exit: 0 },
+    { name: "committed + ack ack_conflict", phase: "committed", event: (now) => replyEvent(err("ack", "ack_conflict", 409), now), outcome: { kind: "completed", warning: "ack-conflict" }, exit: 0 },
+  ];
+
+  for (const terminal of TERMINALS) {
+    test(`${terminal.name}: at purgeAt + 1..9 s it keeps its outcome; keys purged exactly once, before the remove, no persist`, () => {
+      const entry = entryIn(terminal.phase, { staged: terminal.phase !== "committed" });
+      for (const now of [purgeAt(entry), purgeAt(entry) + 1_000, purgeAt(entry) + 9_000]) {
+        const step = reduce(liveState(entry), terminal.event(now));
+        expect(step.state.entry).toBeUndefined();
+        expect(step.effects.some((effect) => effect.type === "persist")).toBe(false);
+        expect(step.effects.filter((effect) => effect.type === "purge")).toEqual([{ type: "purge", requestId: entry.requestId, keys: heldKeys(entry), entry: "remove" }]);
+        expect(step.effects[0]!.type).toBe("purge");
+        expect(finishOf(step)).toEqual(terminal.outcome);
+        expect(exitCodeOf(finishOf(step)!)).toBe(terminal.exit);
+      }
+    });
+  }
+});
+
+describe("every entry the machine writes passes its own schema (R-2)", () => {
+  const MAX = Date.UTC(9999, 11, 31, 23, 59, 59, 999);
+  const persisted = (step: Step) => {
+    expect(step.effects.some((effect) => effect.type === "persist" || (effect.type === "purge" && effect.entry === "rewrite"))).toBe(true);
+    return approvalEntrySchema.safeParse(step.state.entry).success;
+  };
+
+  test("a ready reply with an empty result reference is an unexpected reply, not an entry the schema would refuse", () => {
+    for (const resultRef of ["", undefined as unknown as string]) {
+      const before = liveState(entryIn("open", { staged: true }));
+      const step = reduce(before, replyEvent({ kind: "ready", resultRef, resultExpiresAt: RESULT_EXPIRES }));
+      expect(step.state.entry).toBe(before.entry);
+      expect(nextEffect(step).type).toBe("sleep");
+      expect(step.state.run.unexpectedStreak).toBe(1);
+    }
+  });
+
+  test("an envelope reply with no envelope is an unexpected reply", () => {
+    const before = liveState(entryIn("discovered", { staged: true }));
+    const step = reduce(before, replyEvent({ kind: "envelope", envelope: undefined }));
+    expect(step.state.entry).toBe(before.entry);
+    expect(nextEffect(step).type).toBe("sleep");
+  });
+
+  test("retainUntil is clamped to a canonical timestamp: far future, far past, and the committed entry parses back", () => {
+    for (const retainUntil of [8.64e15, MAX + 1, MAX, 0, -8.64e15, -1]) {
+      const step = reduce(liveState(entryIn("fetched", { staged: true })), { type: "committed", now: NOW, retainUntil });
+      expect(persisted(step)).toBe(true);
+      expect(step.state.entry!.retainUntil).toBe(new Date(Math.min(Math.max(retainUntil, 0), MAX)).toISOString());
+    }
+    expect(finishOf(reduce(liveState(entryIn("fetched")), { type: "committed", now: NOW, retainUntil: Number.NaN }))?.kind).toBe("internal");
+  });
+
+  test("an ack of a command entry whose retainUntil was clamped still leaves a key-free entry that parses", () => {
+    const committed = reduce(liveState(entryIn("fetched")), { type: "committed", now: NOW, retainUntil: 8.64e15 }).state;
+    const acked = reduce(committed, replyEvent({ kind: "acked" }, NOW + 1_000));
+    expect(persisted(acked)).toBe(true);
+    expect(acked.state.entry!.phase).toBe("acked");
+  });
+
+  test("a clock past year 9999 (or before 1970) is an illegal event, never a hold.since the schema refuses; the last valid millisecond holds and parses", () => {
+    const late = { ...entryIn("open"), createdAt: "9999-12-31T00:00:00.000Z" };
+    late.record = { ...late.record, header: { ...late.record.header, issuedAt: "9999-12-31T00:00:00.000Z", expiresAt: "9999-12-31T23:59:59.000Z" } };
+    for (const now of [MAX + 1, 8.64e15, -1]) {
+      const step = reduce(liveState(late), replyEvent(err("discover", "invalid_proof", 401), now, 90_000));
+      expect(finishOf(step)?.kind).toBe("internal");
+      expect(step.state.entry).toBe(late);
+    }
+    const held = reduce(liveState(late), replyEvent(err("discover", "invalid_proof", 401), MAX, 90_000));
+    expect(finishOf(held)?.kind).toBe("clock");
+    expect(persisted(held)).toBe(true);
+    expect(held.state.entry!.hold!.since).toBe("9999-12-31T23:59:59.999Z");
   });
 });
