@@ -229,4 +229,4 @@ Moved: see [REFERENCE-4.md](REFERENCE-4.md#profile-lock)
 
 ## DID Formats
 
-Moved: see [REFERENCE-4.md](REFERENCE-4.md#did-formats)
+Moved: see [REFERENCE-4.md](REFERENCE-4.md#did-formats) (also holds the error and exit codes)
