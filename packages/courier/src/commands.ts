@@ -15,7 +15,8 @@ import {
 } from './profile.js';
 import { courierNode, peerKv } from './node.js';
 import { courierGrantRequest, grantFromInput, installRefusing, isShortCode, noSpaceError, pendingSpaceError, receiveGrant, resumeAwaitingGrant, resumeGrant } from './grant.js';
-import { assertPendingReadable, clearPending, completeApproval, DEFAULT_WAIT_MS, holdsApproval, loadPending, MAX_WAIT_MS, readPending, requestApproval, waitApproval } from './grant-request.js';
+import { completeApproval, DEFAULT_WAIT_MS, MAX_WAIT_MS, requestApproval, waitApproval } from './grant-request.js';
+import { approvalPhase, assertPendingReadable, clearPending, holdsApproval, loadPending, readApprovalEntry, stageOf } from './approval-phase.js';
 import {
   artifactA, artifactWithDelegation, parseArtifact, peerRecordBody, PEER_DELEGATION_EXPIRY, validateArtifactIdentity,
 } from './pairing.js';
@@ -221,12 +222,12 @@ export async function cmdInit(args: ParsedArgs) {
  */
 function clearPendingQuietly(): void {
   try {
-    const read = readPending();
-    if (read.kind === 'ok' && read.pending.committed) {
+    const phase = approvalPhase(readApprovalEntry());
+    if (phase.phase === 'held' && phase.stage === 'committed') {
       console.error('This grant replaces a saved short-link approval that was already installed: its acknowledgement to OpenKey is never sent (harmless; OpenKey discards the result).');
-    } else if (read.kind === 'ok' && holdsApproval(read.pending)) {
+    } else if (phase.phase === 'held') {
       console.error('This grant replaces the saved short-link approval: discarded a saved approval that was not installed.');
-    } else if (read.kind === 'unreadable' || read.kind === 'corrupt') {
+    } else if (phase.phase === 'unreadable' || phase.phase === 'corrupt') {
       console.error('This grant replaces the saved short-link request: discarded an unreadable saved approval request (it may have held an approval that was not installed).');
     }
     clearPending();
@@ -249,7 +250,7 @@ function dropOpenRequest(): void {
 async function collectApproval(profile: Profile, key: AgentKey, options: { expiry?: string; openkeyApiHost?: string; waitMs: number }): Promise<void> {
   const deadline = Date.now() + options.waitMs;
   const { pending, resumed } = await waitApproval(profile, key, options.expiry, { openkeyApiHost: options.openkeyApiHost });
-  if (!pending.committed) {
+  if (stageOf(pending) !== 'committed') {
     console.error(`${resumed ? 'Resuming the saved approval request.' : 'Created an approval request.'} Owner: approve it in OpenKey (copy the link exactly, never retype it):\n${pending.approvalUrl}\nWaiting for approval (up to ${Math.round(options.waitMs / 1000)} s). Run \`${cmd('init --wait')}\` again after an interruption; no new approval is needed.`);
   }
   if (await completeApproval(profile, key, pending, { deadline }) === 'deadline') {

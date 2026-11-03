@@ -4,7 +4,7 @@ import { cmd } from './program.js';
 import { hasProfileFields, isAgentKey, loadGrant, loadKey, profileDir, readSecure, saveKey, saveProfile, writeSecure } from './profile.js';
 import type { AgentKey, Profile } from './profile.js';
 import { checkApprovalResultBinding, openRelayResult } from '@tinycloud/share-envelope/links';
-import { holdsApproval, readPending } from './grant-request.js';
+import { APPROVAL_FILE, approvalPhase, clearPending, lacksOwner, readApprovalEntry, resultEnvelopeOf } from './approval-phase.js';
 import { assertBoundToKey } from './grant.js';
 import { bareDid, siweTimes } from './authority.js';
 import { dropPendingDelegation, hasLivePending, liveRedeemedDelegations } from './pending.js';
@@ -31,7 +31,6 @@ import { CourierError } from './errors.js';
  * key that was never installed): `recoverInterrupted` zero-fills and removes it.
  */
 const ROTATION_FILE = 'rotation.json';
-const APPROVAL_FILE = 'approval-pending.json';
 const STRAY_TEMP = /^(?:rotation|key)\.json\.\d+\.[0-9a-f]{12}\.tmp$/;
 
 export type ApprovalState = 'none' | 'open' | 'held' | 'committed' | 'unreadable' | 'corrupt';
@@ -104,7 +103,7 @@ export function classifyState(i: StateInputs): Omit<DerivedState, 'inputs' | 'no
   if (i.rotation) return is('rotation-interrupted', 'finish-rotation');
   if (i.profile === 'unreadable') return is('profile-unreadable', 'fix-profile');
   // A saved approval without the profile or key it belongs to is never dropped here: the person decides.
-  if (liveApproval(i.approval) && (i.profile === 'absent' || !i.key)) return is('approval-orphaned', 'refuse');
+  if (liveApproval(i.approval) && lacksOwner({ profile: i.profile !== 'absent', key: i.key })) return is('approval-orphaned', 'refuse');
   if (i.profile === 'absent') return i.key ? is('key-only', 'init') : is('new', 'init');
   if (!i.key) return is('key-missing', 'rotate-key');
   if (i.profile === 'awaiting-grant') {
@@ -129,11 +128,14 @@ export function classifyState(i: StateInputs): Omit<DerivedState, 'inputs' | 'no
   return is('ready', 'none');
 }
 
+/** The approval input of the state table, taken from the one classifier. */
 function approvalState(): ApprovalState {
-  const read = readPending();
-  if (read.kind !== 'ok') return read.kind;
-  if (read.pending.committed) return 'committed';
-  return holdsApproval(read.pending) ? 'held' : 'open';
+  const phase = approvalPhase(readApprovalEntry());
+  switch (phase.phase) {
+    case 'held': return phase.stage === 'committed' ? 'committed' : 'held';
+    case 'orphaned': return 'none';
+    default: return phase.phase;
+  }
 }
 
 const rotationPath = (): string => path.join(profileDir(), ROTATION_FILE);
@@ -299,15 +301,17 @@ function journalProblem(journal: unknown): string | undefined {
 
 /** The non-secret facts about the saved approval, taken before the journal is written. */
 async function approvalFacts(): Promise<Pick<RotationJournal, 'discardApproval' | 'grantedResult' | 'delegationCid' | 'grantExpiresAt'>> {
-  const read = readPending();
-  if (read.kind !== 'ok' || !holdsApproval(read.pending)) return { discardApproval: false, grantedResult: false };
-  const pending = read.pending;
-  const grantedResult = pending.resultEnvelope !== undefined || pending.committed === true;
+  const entry = readApprovalEntry();
+  const phase = approvalPhase(entry);
+  if (phase.phase !== 'held' || entry.kind !== 'ok') return { discardApproval: false, grantedResult: false };
+  const pending = entry.pending;
+  // A collected result or a commit means the owner approved and a grant may be live; a reference alone is not yet a result.
+  const grantedResult = phase.stage !== 'ref';
   let delegationCid: string | undefined;
   let grantExpiresAt: string | undefined;
-  if (grantedResult && pending.resultEnvelope !== undefined) {
+  if (grantedResult) {
     try {
-      const opened = await openRelayResult(pending.resultEnvelope, pending.requestId, pending.relayPrivateKey);
+      const opened = await openRelayResult(resultEnvelopeOf(pending), pending.requestId, pending.relayPrivateKey);
       const claimed = (opened.delegation as { delegationCid?: unknown } | null | undefined)?.delegationCid;
       if (typeof claimed === 'string' && claimed !== '') delegationCid = claimed;
       grantExpiresAt = checkApprovalResultBinding(opened, { requestId: pending.requestId, bodyCid: pending.bodyCid, request: pending.request }).delegationExpiresAt;
@@ -348,7 +352,7 @@ function applyRotation(journal: RotationJournal): void {
   saveKey(journal.key);
   saveProfile(journal.profile);
   removeIfPresent(path.join(profileDir(), 'grant.json'));
-  if (journal.discardApproval) removeIfPresent(path.join(profileDir(), APPROVAL_FILE));
+  if (journal.discardApproval) clearPending();
   for (const grant of journal.discardedGrants ?? []) dropPendingDelegation(grant.delegationCid);
   syncDir();
   warnDiscarded(journal);
