@@ -1796,19 +1796,24 @@ export class TinyCloudNode {
   }
 
   /**
-   * The cheapest read of `spaceId` the session already holds: never one that
-   * downloads a body when another exists. Reads under a caveated grant are
-   * skipped, since their limits are not known here.
+   * The cheapest read of `spaceId` the session already holds, from its own recap
+   * and installed runtime grants: never one that downloads a body when another
+   * exists. Reads under a caveated grant are skipped, since their limits are not
+   * known here. The recap counts even when sign-in dropped it from the runtime
+   * grants because the node had not hosted the space yet: that is the read that
+   * says when it has.
    */
   private selectHostingRead(spaceId: string): SpaceHostingRead | undefined {
     this.pruneExpiredRuntimePermissionGrants();
-    const held = this.runtimePermissionGrants
-      .flatMap((grant) => grant.operations)
-      .filter((operation) =>
-        operation.spaceId !== undefined &&
-        operation.resource === undefined &&
-        !operation.caveats?.length &&
-        this.spaceIdsEqual(operation.spaceId, spaceId));
+    const primary = this.currentTinyCloudSession();
+    const held = [
+      ...this.runtimePermissionGrants.flatMap((grant) => grant.operations),
+      ...(primary ? this.recapOperationsFromSession(primary) : []),
+    ].filter((operation) =>
+      operation.spaceId !== undefined &&
+      operation.resource === undefined &&
+      !operation.caveats?.length &&
+      this.spaceIdsEqual(operation.spaceId, spaceId));
     const holding = (service: string, action: string) =>
       held.filter((operation) => operation.service === service && this.actionContains(operation.action, action));
     const isPrefix = (path: string) =>
@@ -1834,9 +1839,9 @@ export class TinyCloudNode {
       ...holding("kv", KV_GET_ACTION).map((operation) => ({
         service: "kv", path: keyOf(operation.path), action: KV_GET_ACTION,
       })),
-    ].find((read) => this.findGrantForOperation({
+    ].find((read) => held.some((operation) => this.operationCovers(operation, {
       spaceId, service: read.service, path: read.path, action: read.action,
-    }) !== undefined);
+    })));
   }
 
   /**

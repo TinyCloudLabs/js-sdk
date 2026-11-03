@@ -1232,4 +1232,17 @@ describe("TinyCloudNode.checkSpaceHosting", () => {
       expect(entriesOf(invokeAny)[0]).toEqual([{ spaceId: proof.spaceId, ...expected }]);
     }
   });
+
+  test("the session's own recap is a held read even when sign-in dropped it from the runtime grants", async () => {
+    // Sign-in drops the recap of a space the node skipped, so a hosting answer needs the recap itself.
+    const { node, proof, invokeAny } = await restoredNode({ abilities: LIST_GET });
+    Reflect.set(node, "runtimePermissionGrants", []);
+    await withFetch(() => new Response("Space not found", { status: 404 }), async (calls) => {
+      await expect(node.checkSpaceHosting()).resolves.toBe("not-hosted");
+      expect(calls).toHaveLength(1);
+    });
+    expect(entriesOf(invokeAny)[0]).toEqual([
+      { spaceId: proof.spaceId, service: "kv", path: "notes/", action: "tinycloud.kv/list" },
+    ]);
+  });
 });
