@@ -1063,7 +1063,7 @@ export class TinyCloudWeb {
     }
   }
 
-  // TC-2380 Q2 seam: Sam has not decided between a one-click OpenKey approval and a silent wait
+  // TC-2380 Q2 seam: undecided between a one-click OpenKey approval and a silent wait; keeps today's behaviour.
   private async restoredSessionNotHosted(_node: TinyCloudNode, restored: ClientSession): Promise<ClientSession> {
     return restored;
   }
