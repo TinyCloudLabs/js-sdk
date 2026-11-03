@@ -1935,7 +1935,7 @@ describe("space hosting on restore (TC-2380)", () => {
     expect(confirm).toHaveBeenCalledTimes(1);
     expect(node.ensurePrimarySpaceHosted).toHaveBeenCalledWith("not-hosted");
     expect(node.signIn).not.toHaveBeenCalled();
-    // eth_accounts is a silent read; no account request or signature was made.
+    // eth_accounts is a silent read; nothing that prompts (an accounts request, a signature) was asked of the wallet.
     expect(walletRequest.mock.calls.map(([request]) => request.method).filter((method) => method !== "eth_accounts")).toEqual([]);
     expect(tcw.spaceHosting).toBe("hosted");
   });

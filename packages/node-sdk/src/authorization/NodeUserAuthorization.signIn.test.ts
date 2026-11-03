@@ -8,6 +8,7 @@ import {
   type ISigner,
   type TinyCloudSession,
   type SpaceCreationContext,
+  BOOTSTRAP_SESSION_REQUESTS,
   pkhDid,
   type Manifest,
 } from "@tinycloud/sdk-core";
