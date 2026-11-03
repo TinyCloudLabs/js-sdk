@@ -4478,18 +4478,18 @@ describe("check space hosting on restore and record it at sign-in (TC-2380, #840
     expect(() => validateLedger(current)).not.toThrow();
     expect(current.tc2380SpaceHosting).toEqual(approvedTc2380SpaceHosting);
     expect(row().root).toEqual({
-      delta: { "index.mjs": 516, "index.cjs": 536 },
-      ceiling: { "index.mjs": 1479598, "index.cjs": 1422028 },
+      delta: { "index.mjs": 530, "index.cjs": 536 },
+      ceiling: { "index.mjs": 1479619, "index.cjs": 1422028 },
     });
     expect(row().root.ceiling["index.mjs"]).toBe(prerequisite().root.ceiling["index.mjs"] + row().root.delta["index.mjs"]);
     expect(row().root.ceiling["index.cjs"]).toBe(prerequisite().root.ceiling["index.cjs"] + row().root.delta["index.cjs"]);
     expect(row().base).toBe("356c6053b4789529ab6c84536a385adf2e4e0c77");
-    expect(row().sourceCommits).toEqual(["8e255e454eca4eab7e2fc1f830caa4b95681e818"]);
+    expect(row().sourceCommits).toEqual(["b27d0ddef8b6799112721b4da981853f29129ac0"]);
     expect(row().canonicalCI).toEqual({
-      run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41590703536",
+      run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41593817265",
       jobs: [
-        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41590703536/job/125766518078",
-        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41590703536/job/125766518075",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41593817265/job/125776397452",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41593817265/job/125776397370",
       ],
     });
     expect(row().firstImport).toEqual(prerequisite().firstImport);
@@ -4498,11 +4498,11 @@ describe("check space hosting on restore and record it at sign-in (TC-2380, #840
     expect(row().replicaWorker).toEqual({ delta: 0, ceiling: prerequisite().replicaWorker.ceiling });
     expect(rootCeilings(current).at(-1)).toEqual({
       row: "tc2380SpaceHosting",
-      ceiling: { "index.mjs": 1479598, "index.cjs": 1422028 },
+      ceiling: { "index.mjs": 1479619, "index.cjs": 1422028 },
     });
     expect(ancestryPins(current, false)).toContainEqual({
       row: "tc2380SpaceHosting",
-      pin: "8e255e454eca4eab7e2fc1f830caa4b95681e818",
+      pin: "b27d0ddef8b6799112721b4da981853f29129ac0",
     });
   });
 
