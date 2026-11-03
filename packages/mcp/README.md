@@ -56,10 +56,15 @@ For personal records, ask naturally: “Log my weight: 80.5 kg today.”
 reads records with ETags, and `tinycloud_apps_write` creates, conditionally edits,
 moves or deletes records in ordered batches of up to ten operations.
 `tinycloud_apps_query` refreshes the optional fast copy and queries selected kinds.
-These tools are hosted-only and share the coding-agent skill's
-`xyz.tinycloud.agent-data/` records in the owner's `default` space without a
-local CLI or skill installation. First use requires connect and records approval.
-Records use one prefix grant with get/list/put/delete, not one grant per key.
+These tools are hosted-only and share the coding-agent skill's records without a
+local CLI or skill installation. New apps live in the `applications` space under
+`xyz.tinycloud.tinyapps.<app>/`; older apps keep their existing layout.
+After connect, pass `app` to `tinycloud_apps_context` to approve the app's folder
+and app list together. The first new app needs two requests (the bundle and an
+older-catalog read); later new apps need one. Omitting `app` retains per-call
+approvals (three for the first new app). `access: "read"` requests only read
+access; the default `"change"` also covers adding the app to the list and adding,
+changing or deleting its records. Records use one prefix grant per app.
 Generic KV tools retain their exact-input scopes. The connector asks for an
 IANA timezone once, not the owner's city or precise location. In Claude
 **Settings → Connectors → TinyCloud**, set `tinycloud_apps_write` to

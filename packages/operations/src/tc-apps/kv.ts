@@ -35,8 +35,8 @@ export function legacyRecordsPermission(context: OperationContext): AppsPermissi
 export function legacyCatalogPermission(context: OperationContext): AppsPermission {
   return { service: "tinycloud.kv", space: appsSpace(context, "legacy"), path: `${TC_APPS_LEGACY_ROOT}catalog/`, actions: [...TC_APPS_CATALOG_READ_ACTIONS] };
 }
-export function appRecordsPermission(context: OperationContext, app: string): AppsPermission {
-  return { service: "tinycloud.kv", space: appsSpace(context, "new"), path: appRoot(app), actions: [...TC_APPS_RECORDS_ACTIONS] };
+export function appRecordsPermission(context: OperationContext, app: string, actions: readonly string[] = TC_APPS_RECORDS_ACTIONS): AppsPermission {
+  return { service: "tinycloud.kv", space: appsSpace(context, "new"), path: appRoot(app), actions: [...actions] };
 }
 export function discoveryPermission(context: OperationContext, actions: readonly string[] = TC_APPS_DISCOVERY_ACTIONS): AppsPermission {
   return { service: "tinycloud.kv", space: appsSpace(context, "new"), path: TC_APPS_DISCOVERY_ROOT, actions: [...actions] };

@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { evaluateOperationAuthority } from "../authority.js";
+import { TC_APPS_CATALOG_READ_ACTIONS } from "../tc-apps.js";
 import type { OperationContext, OperationDefinition, OperationExecutionOutcome, OperationExposure, RuntimeOperationContext, TinyCloudPosture } from "../contract.js";
 import { OPERATION_ERROR_CODES, operationError } from "../errors.js";
 import { TC_APPS_RULES } from "../tc-apps/rules.generated.js";
@@ -11,7 +13,11 @@ import { catalogChangeAllowed, isObject, keyParts, KeySchema, newRecordFits, Obj
 
 const LayoutSchema = z.enum(["legacy", "new"]);
 const CopyStateSchema = z.enum(["present", "expired", "none"]);
-const ContextInputSchema = z.object({ timezone: z.string().refine(validTimezone, "An IANA timezone is required.").optional() }).strict();
+const ContextInputSchema = z.object({
+  timezone: z.string().refine(validTimezone, "An IANA timezone is required.").optional(),
+  app: z.string().refine(newApp, "A valid personal app id is required.").optional(),
+  access: z.enum(["read", "change"]).default("change"),
+}).strict();
 const ReadInputSchema = z.object({ prefixes: z.array(PrefixSchema).optional(), keys: z.array(KeySchema).max(100).optional() }).strict();
 const RecordSchema = z.object({ key: z.string(), value: ObjectSchema, etag: z.string().min(1) }).strict();
 const ReadRecordSchema = z.union([RecordSchema, z.object({ key: z.string(), outcome: z.enum(["NOT_FOUND", "MALFORMED"]) }).strict()]);
@@ -72,10 +78,21 @@ function scopesFor(context: RuntimeOperationContext, targets: readonly string[],
     else if (parts !== undefined || prefix?.app !== undefined) add(appRecordsPermission(context, (parts?.app ?? prefix!.app)!));
   }
   if (createsApp.length > 0) add(legacyCatalogPermission(context));
-  return oneSpaceAtATime(context, [...entries.values()]);
+  const scopes = [...entries.values()].map((entry) => {
+    if (!forWrite) return entry;
+    const actions = entry.actions.filter((action) => !evaluateOperationAuthority(context.runtime!.granted, [{ ...entry, actions: [action] }]).satisfied);
+    return actions.length > 0 ? { ...entry, actions } : entry;
+  });
+  return oneSpaceAtATime(context, scopes);
 }
-const contextAuthority = async (context: RuntimeOperationContext) => [discoveryPermission(context)];
-const readAuthority = async (context: RuntimeOperationContext, input: ReadInput) => scopesFor(context, [...(input.prefixes ?? []), ...(input.keys ?? [])]);
+const contextAuthority = async (context: RuntimeOperationContext, input: ContextInput) => input.app === undefined
+  ? [discoveryPermission(context)]
+  : [discoveryPermission(context, input.access === "read" ? TC_APPS_CATALOG_READ_ACTIONS : undefined),
+    appRecordsPermission(context, input.app, input.access === "read" ? TC_APPS_CATALOG_READ_ACTIONS : undefined)];
+const readAuthority = async (context: RuntimeOperationContext, input: ReadInput) => scopesFor(context, [...(input.prefixes ?? []), ...(input.keys ?? [])]).map((entry) => {
+  const read = { ...entry, actions: [...TC_APPS_CATALOG_READ_ACTIONS] };
+  return evaluateOperationAuthority(context.runtime!.granted, [read]).satisfied ? read : entry;
+});
 const writeAuthority = async (context: RuntimeOperationContext, input: WriteInput) => scopesFor(
   context,
   input.ops.flatMap((op) => op.op === "move" ? [op.from, op.to] : [op.key]),
@@ -129,7 +146,7 @@ export const appsOperationDefinitions = [contextDefinition, readDefinition, writ
 
 async function executeContext(context: OperationContext, input: ContextInput): Promise<OperationExecutionOutcome<ContextOutput>> {
   const parsed = ContextInputSchema.safeParse(input);
-  if (!parsed.success) return { status: "error", error: operationError("INPUT_INVALID", "An IANA timezone is required.") };
+  if (!parsed.success) return { status: "error", error: operationError("INPUT_INVALID", "Provide a valid app id, access mode and IANA timezone.") };
   try {
     const timezone = await appsTimezone(context.summary.profile, parsed.data.timezone);
     const legacyKv = appsKv(context, "legacy");
