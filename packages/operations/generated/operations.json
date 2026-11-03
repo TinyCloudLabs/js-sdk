@@ -4899,7 +4899,7 @@
       "id": "tinycloud.apps.query",
       "version": 1,
       "title": "Query personal records",
-      "description": "Answer the user's question over one app's personal records using an optional searchable copy. Requires separate copy approval. Name the app's layout and every kind covered; the server writes or replaces the app's derived SQL copy before running one SELECT or WITH query with bound params. Canonical records are unchanged. COPY_PARTIAL means the answer is incomplete; continue with the remaining kinds before answering.",
+      "description": "Answer the user's question over one app's personal records using an optional searchable copy. Requires separate copy approval. Name the app's layout and every kind covered; the server writes or replaces the app's derived SQL copy before running one SELECT or WITH query with bound params. It refreshes a derived copy; never changes records. COPY_PARTIAL means the answer is incomplete; continue with the remaining kinds before answering.",
       "input": {
         "type": "object",
         "properties": {
@@ -6193,8 +6193,7 @@
       ],
       "effects": [
         "read",
-        "write",
-        "destructive"
+        "write"
       ],
       "sensitivity": {
         "input": true,

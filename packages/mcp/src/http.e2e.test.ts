@@ -141,14 +141,13 @@ test("public plugin enforces its tools, OAuth audience and separate approval sta
     "tinycloud_apps_context", "tinycloud_apps_query", "tinycloud_apps_read",
     "tinycloud_apps_write", "tinycloud_connect",
   ]);
-  for (const name of ["tinycloud_apps_query", "tinycloud_apps_write"]) {
-    expect(tools.find((tool) => tool.name === name)?.annotations).toMatchObject({
-      readOnlyHint: false, destructiveHint: true, openWorldHint: false,
-    });
+  expect(tools.find((tool) => tool.name === "tinycloud_apps_write")?.annotations)
+    .toMatchObject({ readOnlyHint: false, destructiveHint: true, openWorldHint: false });
+  // The context call and the query delete no records. Context saves only the owner's timezone when one is supplied, and a query refreshes a derived copy, so neither is read-only.
+  for (const name of ["tinycloud_apps_context", "tinycloud_apps_query"]) {
+    expect(tools.find((tool) => tool.name === name)?.annotations)
+      .toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false });
   }
-  // The context call deletes nothing. It saves only the owner's timezone setting when one is supplied, so it is not read-only either.
-  expect(tools.find((tool) => tool.name === "tinycloud_apps_context")?.annotations)
-    .toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false });
   expect(tools.find((tool) => tool.name === "tinycloud_apps_read")?.annotations)
     .toMatchObject({ readOnlyHint: true, destructiveHint: false, openWorldHint: false });
   for (const name of [
