@@ -150,6 +150,17 @@ If OpenKey reports the space is still being set up, `init --wait` waits for it
 within its `--timeout`; the legacy `init` flows wait about 2.5 minutes; otherwise use `init --resume`.
 An OpenKey `XXXX-XXXX` code works once. Courier saves the redeemed grant (`<COURIER_HOME>/pending-grant.json`, owner-only, public fields) before installing it, so if `init` is killed after the redeem, run it again with the same code or use `init --resume`; no second approval is needed. The saved copy is deleted once the grant and profile are saved, and ignored after the grant expires.
 
+An interrupted write can leave a private-key-bearing `key.json`, `rotation.json`
+or `approval-pending.json` temp file and its owner-only `.identity` sidecar.
+Courier scrubs a temp only when the recorded machine and host match. After
+that gate, it requires either a true boot-ID change, or `ESRCH` proving the
+writer is gone (on Linux, only when the PID namespace also matches). Missing
+or uncertain identity is preserved with manual recovery guidance for the current platform:
+POSIX `rm -f -- '…'` or PowerShell `Remove-Item -LiteralPath '…' -Force`.
+Run the printed command only after confirming no Courier writer anywhere is
+active that could be writing the temp or sidecar, including on another host or
+PID namespace.
+
 Pairing binds a peer by its Courier `did:key`, not by owner DID: two Courier
 agents of the same owner (two profiles, two agent keys) pair exactly like two
 owners, through the same explicit `pair start`/`pair accept` exchange. An

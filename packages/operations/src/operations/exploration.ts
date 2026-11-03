@@ -1,4 +1,4 @@
-import type { TinyCloudNode } from "@tinycloud/node-sdk";
+import type { IKVService, TinyCloudNode } from "@tinycloud/node-sdk";
 import { authorizationFailure } from "../kv-failure.js";
 import { z } from "zod";
 
@@ -48,6 +48,7 @@ interface KvListInput {
   readonly space: string;
   readonly prefix?: string;
   readonly limit?: number;
+  readonly cursor?: string;
 }
 
 interface KvListOutput {
@@ -56,6 +57,7 @@ interface KvListOutput {
   readonly keys: readonly string[];
   readonly count: number;
   readonly truncated: boolean;
+  readonly nextCursor: string | null;
 }
 
 interface KvGetInput {
@@ -113,10 +115,7 @@ type KvOperationResult<T> =
   | Readonly<{ ok: true; data: T }>
   | Readonly<{ ok: false; error: Readonly<{ code?: string; meta?: Readonly<Record<string, unknown>> }> }>;
 interface KvOperationHandle {
-  list(options: Readonly<{ prefix?: string; limit: number }>): Promise<KvOperationResult<{
-    readonly keys: readonly string[];
-    readonly truncated?: boolean;
-  }>>;
+  list: IKVService["list"];
   get(key: string, options: Readonly<{
     binary: true;
     maxResponseBytes: number;
@@ -133,7 +132,7 @@ interface KvOperationHandle {
   }>>;
 }
 
-const MAX_KV_VALUE_BYTES = 1024 * 1024;
+export const MAX_KV_VALUE_BYTES = 1024 * 1024;
 const DEFAULT_KV_LIST_LIMIT = 100;
 const MAX_ACCOUNT_REGISTRY_RECORDS = 1000;
 const MAX_ACCOUNT_REGISTRY_BYTES = 4 * 1024 * 1024;
@@ -214,6 +213,7 @@ const KvListInputSchema: z.ZodType<KvListInput> = z.object({
   space: SpaceSchema,
   prefix: PrefixSchema.optional(),
   limit: LimitSchema.optional(),
+  cursor: z.string().optional(),
 }).strict();
 const KvListOutputSchema: z.ZodType<KvListOutput> = z.object({
   space: z.string().min(1),
@@ -221,9 +221,10 @@ const KvListOutputSchema: z.ZodType<KvListOutput> = z.object({
   keys: z.array(z.string()),
   count: z.number().int().nonnegative(),
   truncated: z.boolean(),
+  nextCursor: z.string().nullable(),
 }).strict();
 
-const KvGetInputSchema: z.ZodType<KvGetInput> = z.object({
+export const KvGetInputSchema = z.object({
   space: SpaceSchema,
   key: KeySchema,
   representation: z.enum(["base64", "text", "json"]).optional(),
@@ -369,7 +370,7 @@ export const explorationOperationDefinitions: readonly ExplorationDefinition[] =
     id: "tinycloud.kv.list",
     version: 1,
     title: "List TinyCloud KV keys",
-    description: "List keys at one exact prefix in a delegated TinyCloud space.",
+    description: "List a bounded page of keys at the supplied prefix in one delegated TinyCloud space. Continue with nextCursor as cursor and the same space and prefix; cursors are opaque and scope-bound. nextCursor is null when unavailable. If truncated is true without a cursor, coverage is incomplete: narrow the prefix rather than guessing offsets.",
     input: KvListInputSchema,
     output: KvListOutputSchema,
     effects: ["read"],
@@ -384,7 +385,7 @@ export const explorationOperationDefinitions: readonly ExplorationDefinition[] =
     id: "tinycloud.kv.get",
     version: 1,
     title: "Get a TinyCloud KV value",
-    description: "Read one exact key with a node-enforced one MiB response limit.",
+    description: "Read one exact key with a one MiB acquired-body limit in bytes. Hosted MCP separately caps the serialized response envelope at 100,000 UTF-16 code units; a value below one MiB can still exceed that cap. Use tinycloud_read for bounded, byte-preserving delivery within the acquisition limit.",
     input: KvGetInputSchema,
     output: KvGetOutputSchema,
     effects: ["read"],
@@ -449,7 +450,7 @@ async function planKvList(
   }];
 }
 
-async function planKvGet(
+export async function planKvGet(
   context: RuntimeOperationContext,
   input: KvGetInput,
 ): Promise<readonly CapabilityRequirement[]> {
@@ -519,10 +520,20 @@ async function executeKvList(
     const space = resolveGenericKvSpace(runtime, input.space);
     const result = await genericKv(runtime, space).list({
       ...(input.prefix === undefined ? {} : { prefix: input.prefix }),
+      ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
       limit: input.limit ?? DEFAULT_KV_LIST_LIMIT,
     });
-    if (!result.ok) return kvFailure(result.error, "list KV keys");
+    if (!result.ok) {
+      if (input.cursor !== undefined && result.error.meta?.status === 400) {
+        return {
+          status: "error",
+          error: operationError("INPUT_INVALID", "The node rejected the KV listing cursor. Restart the listing without a cursor and discard earlier pages rather than combining different listings."),
+        };
+      }
+      return kvFailure(result.error, "list KV keys");
+    }
     const keys = [...result.data.keys];
+    const nextCursor = result.data.nextCursor ?? null;
     return {
       status: "ok",
       output: {
@@ -530,7 +541,8 @@ async function executeKvList(
         prefix: input.prefix ?? "",
         keys,
         count: keys.length,
-        truncated: result.data.truncated ?? false,
+        truncated: result.data.truncated === true || nextCursor !== null,
+        nextCursor,
       },
     };
   } catch (error) {
@@ -655,7 +667,7 @@ function runtimeNode(context: OperationContext): TinyCloudNode {
   return runtimeContext(context).runtime.node as TinyCloudNode;
 }
 
-function genericKv(context: RuntimeOperationContext, space: string): KvOperationHandle {
+export function genericKv(context: RuntimeOperationContext, space: string): KvOperationHandle {
   return runtimeNode(context).kvForSpace(space) as unknown as KvOperationHandle;
 }
 
