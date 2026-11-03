@@ -34,6 +34,7 @@
     "courier-init-derive-state",
     "courier-init-review-fixes",
     "courier-profile-concurrency",
+    "generic-retrieval-read-scope",
     "mcp-any-origin-bearer-only",
     "mcp-cap-introspection-tolerance",
     "paste-expiry-cli",
