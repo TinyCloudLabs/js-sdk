@@ -10,7 +10,7 @@ import { cmd } from './program.js';
 
 /** After the link `init --request` prints: collect the approval in the same turn. */
 export function initRequestNextLine(): string {
-  return `Next: send the owner the link above now, then run \`${cmd('init --wait --timeout 60s')}\` right away, in this same turn; do not wait for a reply.`;
+  return `Next: write the link above in your reply to the owner now, and in that same reply run \`${cmd('init --wait --timeout 60s')}\`; do not end your turn or wait for a reply.`;
 }
 
 /**
@@ -20,25 +20,25 @@ export function initRequestNextLine(): string {
 export function pendingNextLine(argv: string[], created: boolean): string {
   const same = cmd(argv.map((arg) => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replace(/'/g, `'\\''`)}'`)).join(' '));
   return created
-    ? `Next: send the owner the link above now, then run \`${same}\` again right away, in this same turn; do not wait for a reply.`
-    : `Next: run \`${same}\` again now, in this same turn, and first send the owner the link above only if you have not sent it yet; do not wait for a reply.`;
+    ? `Next: write the link above in your reply to the owner now, and in that same reply run \`${same}\` again; do not end your turn or wait for a reply.`
+    : `Next: if you have not written the link above to the owner yet, write it in your reply now, and in that same reply run \`${same}\` again; do not end your turn or wait for a reply.`;
 }
 
 /** The last line of a pending `invite`: the link is on stdout; hand it to the owner, then serve the invitation. */
 export function inviteNextLine(invitationId: string): string {
-  return `Next: send this invite link to the owner now, then run \`${cmd(`invite serve ${invitationId} --wait 60`)}\` right away, in this same turn; do not wait for a reply.`;
+  return `Next: write the invitation link above in your reply to the owner now, and in that same reply run \`${cmd(`invite serve ${invitationId} --wait 60`)}\`; do not end your turn or wait for a reply.`;
 }
 
 /** The first line of every `invite serve` run: the saved link `invite` printed, or a pointer to it when none is saved. */
 export function inviteServeNextLine(link: string | undefined): string {
   return typeof link === 'string' && link !== ''
-    ? `Next: if you have not sent the owner this invitation link yet, send it now: ${link}`
-    : 'Next: if you have not sent the owner this invitation link yet, send the invitation link printed by `invite` now.';
+    ? `Next: if you have not written this invitation link to the owner yet, write it in your reply now: ${link}`
+    : 'Next: if you have not written the invitation link printed by `invite` to the owner yet, write it in your reply now.';
 }
 
 /** The last line of a pending `invite serve`: nobody has joined yet, so run it again. `waitSeconds` is the `--wait` it ran with. */
 export function invitePendingNextLine(invitationId: string, waitSeconds: number): string {
-  return `Next: no one has joined yet; run \`${cmd(`invite serve ${invitationId} --wait ${waitSeconds}`)}\` again now, in this same turn; do not wait for a reply.`;
+  return `Next: no one has joined yet; run \`${cmd(`invite serve ${invitationId} --wait ${waitSeconds}`)}\` again now, in this same turn; do not end your turn or wait for a reply.`;
 }
 
 /**

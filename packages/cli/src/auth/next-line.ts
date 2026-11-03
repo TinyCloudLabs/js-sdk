@@ -24,6 +24,6 @@ function sameCommand(argv: readonly string[]): string {
 export function approvalNextLine(created: boolean, argv: readonly string[] = process.argv.slice(2)): string {
   const command = sameCommand(argv);
   return created
-    ? `Next: send the owner the link above now, then run ${command} again right away, in this same turn; do not wait for a reply.`
-    : `Next: run ${command} again now, in this same turn, and first send the owner the link above only if you have not sent it yet; do not wait for a reply.`;
+    ? `Next: write the link above in your reply to the owner now, and in that same reply run ${command} again; do not end your turn or wait for a reply.`
+    : `Next: if you have not written the link above to the owner yet, write it in your reply now, and in that same reply run ${command} again; do not end your turn or wait for a reply.`;
 }
