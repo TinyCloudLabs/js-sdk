@@ -25,7 +25,7 @@ const SCHEMA_MAX_BYTES = 1024 * 1024;
 const MAX_PARAMETERS = 100;
 const MAX_SQL_LENGTH = 64 * 1024;
 const SQL_WRITE_AUTHORITY_NOTICE =
-  "Approving tinycloud.sql/write grants full read/write/schema mutation authority over this exact database; the MCP tool itself accepts only one parameterized INSERT, UPDATE, or DELETE.";
+  "Approving tinycloud.sql/write lets the agent insert, update and delete any row in this exact database; it cannot change its tables. The MCP tool itself accepts only one parameterized INSERT, UPDATE, or DELETE.";
 const SQL_REQUEST_TOO_LARGE_MESSAGE = "SQL request too large.";
 
 const SCHEMA_QUERY = `SELECT type, name, tbl_name, sql

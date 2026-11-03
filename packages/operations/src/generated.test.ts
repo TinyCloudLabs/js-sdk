@@ -103,7 +103,7 @@ test("the catalog contains exactly the registered v1 definitions", async () => {
     properties: {
       acknowledgeDatabaseWideAuthority: {
         const: true,
-        description: expect.stringContaining("full read/write/schema mutation authority"),
+        description: expect.stringMatching(/any row[^.]*cannot change its tables/),
       },
     },
     required: expect.arrayContaining(["acknowledgeDatabaseWideAuthority"]),
