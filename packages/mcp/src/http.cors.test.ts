@@ -72,7 +72,7 @@ test("a foreign Origin with a valid token reaches the MCP server", async () => {
   expect(tools.tools.map((tool) => tool.name)).toContain("tinycloud_connect");
 });
 
-test("a preflight from any Origin is answered without a token and never allows credentials", async () => {
+test("a preflight from any Origin is answered without a token, allows a fixed header list and no credentials", async () => {
   const { app } = await hostedApp();
   for (const origin of FOREIGN_ORIGINS) {
     const response = await app.fetch(mcpRequest({
@@ -80,16 +80,56 @@ test("a preflight from any Origin is answered without a token and never allows c
       origin,
       headers: {
         "access-control-request-method": "POST",
-        "access-control-request-headers": "authorization, content-type, mcp-protocol-version",
+        "access-control-request-headers":
+          "authorization, content-type, mcp-protocol-version, x-tinycloud-service-credential, x-tinycloud-owner-did",
       },
     }));
     expect({ origin, status: response.status }).toEqual({ origin, status: 204 });
     expect(response.headers.get("access-control-allow-origin")).toBe("*");
     expect(response.headers.get("access-control-allow-methods")).toContain("POST");
-    expect(response.headers.get("access-control-allow-headers")).toBe(
-      "authorization, content-type, mcp-protocol-version",
-    );
+    const allowed = (response.headers.get("access-control-allow-headers") ?? "").split(",").map((name) => name.trim().toLowerCase());
+    expect(allowed.sort()).toEqual([
+      "accept", "authorization", "content-type", "last-event-id",
+      "mcp-method", "mcp-name", "mcp-protocol-version", "mcp-session-id",
+    ]);
     expectNoCredentialedCors(response);
+  }
+});
+
+test("responses whose CORS depends on the Origin say so with Vary: Origin", async () => {
+  const { app } = await hostedApp();
+  for (const origin of [undefined, "https://anything.example"]) {
+    const headers: Record<string, string> = { host: "mcp.test" };
+    if (origin !== undefined) headers.origin = origin;
+    const response = await app.fetch(new Request("https://mcp.test/mcp", { method: "POST", headers }));
+    expect({ origin, vary: response.headers.get("vary") }).toEqual({ origin, vary: expect.stringMatching(/(^|,\s*)Origin(,|$)/) });
+  }
+});
+
+test("an Origin with the correct native service credential is refused on /mcp and /native/grant, without CORS headers", async () => {
+  const credential = "native-origin-test-credential-with-enough-entropy";
+  const { app } = await hostedApp(credential);
+  const native = {
+    host: "mcp.test",
+    "content-type": "application/json",
+    "x-tinycloud-service-credential": credential,
+    "x-tinycloud-owner-did": "did:pkh:eip155:1:0x1111111111111111111111111111111111111111",
+  };
+  for (const path of ["/mcp", "/native/grant"]) {
+    // Control: the same request without an Origin is not refused for being a browser call.
+    const direct = await app.fetch(new Request(`https://mcp.test${path}`, { method: "POST", headers: native, body: "{}" }));
+    expect({ path, status: direct.status }).not.toEqual({ path, status: 403 });
+    for (const origin of [...FOREIGN_ORIGINS, "https://openkey.test"]) {
+      const response = await app.fetch(new Request(`https://mcp.test${path}`, {
+        method: "POST",
+        headers: { ...native, origin },
+        body: "{}",
+      }));
+      expect({ path, origin, status: response.status }).toEqual({ path, origin, status: 403 });
+      expect(await response.json()).toEqual({ error: "native_service_unauthorized" });
+      expect(response.headers.get("access-control-allow-origin")).toBeNull();
+      expectNoCredentialedCors(response);
+    }
   }
 });
 
@@ -105,7 +145,9 @@ function mcpRequest(options: { method: string; origin: string; headers?: Record<
   });
 }
 
-async function hostedApp(): Promise<{ app: HostedMcpApp; signToken: () => Promise<string> }> {
+async function hostedApp(
+  nativeServiceCredential?: string,
+): Promise<{ app: HostedMcpApp; signToken: () => Promise<string> }> {
   const { privateKey, publicKey } = await generateKeyPair("EdDSA");
   const publicJwk = await exportJWK(publicKey);
   publicJwk.kid = "test-key";
@@ -121,6 +163,7 @@ async function hostedApp(): Promise<{ app: HostedMcpApp; signToken: () => Promis
     openkeyHost: "https://openkey.test",
     approvalTtlSeconds: 300,
     delegationExpiry: "1h",
+    ...(nativeServiceCredential === undefined ? {} : { nativeServiceCredential }),
     oauthMetadata: {
       issuer: "https://openkey.test/api/auth",
       authorization_endpoint: "https://openkey.test/api/auth/oauth2/authorize",
