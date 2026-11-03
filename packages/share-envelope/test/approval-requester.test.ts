@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  CLOCK_DISAGREEMENT_MS,
   APPROVAL_EXIT,
   RULES,
   exitCodeOf,
@@ -76,7 +77,8 @@ const ROWS: readonly Row[] = [
   { name: "fetch 410 expired_result", event: replyEvent(err("fetch", "expired_result", 410)), expect: { discovered: drop("gone", 3) } },
   { name: "fetch 409 acknowledged", event: replyEvent(err("fetch", "acknowledged", 409)), expect: { discovered: drop("gone", 3) } },
   { name: "fetch 400 request_binding", event: replyEvent(err("fetch", "request_binding")), expect: { discovered: drop("refused", 5) } },
-  { name: "fetch 401 invalid_proof, clock sane", event: replyEvent(err("fetch", "invalid_proof", 401), NOW, 5_000), expect: { discovered: drop("refused", 5) } },
+  { name: "fetch 401 invalid_proof, clock sane", event: replyEvent(err("fetch", "invalid_proof", 401), NOW, 5_000), expect: { discovered: stop("unexpected", 7) } },
+  { name: "fetch 401 invalid_proof, no Date header", event: replyEvent(err("fetch", "invalid_proof", 401)), expect: { discovered: stop("unexpected", 7) } },
   { name: "fetch 401 invalid_proof, clock 90 s off", event: replyEvent(err("fetch", "invalid_proof", 401), NOW, -90_000), expect: { discovered: stop("clock", 12, { hold: true }) } },
   { name: "fetch 410 expired_request (unmapped)", event: replyEvent(err("fetch", "expired_request", 410)), expect: { discovered: go("discovered", "sleep") } },
   { name: "fetch 400 invalid_request (unmapped)", event: replyEvent(err("fetch", "invalid_request")), expect: { discovered: go("discovered", "sleep") } },
@@ -87,7 +89,8 @@ const ROWS: readonly Row[] = [
   { name: "ack 410 expired_result", event: replyEvent(err("ack", "expired_result", 410)), expect: { committed: drop("completed", 0) } },
   { name: "ack 409 ack_conflict", event: replyEvent(err("ack", "ack_conflict", 409)), expect: { committed: drop("completed", 0) } },
   { name: "ack 400 invalid_ack", event: replyEvent(err("ack", "invalid_ack")), expect: { committed: stop("completed", 0) } },
-  { name: "ack 401 invalid_proof", event: replyEvent(err("ack", "invalid_proof", 401), NOW, 90_000), expect: { committed: stop("completed", 0) } },
+  { name: "ack 401 invalid_proof, clock 90 s off", event: replyEvent(err("ack", "invalid_proof", 401), NOW, 90_000), expect: { committed: stop("clock", 12, { hold: true }) } },
+  { name: "ack 401 invalid_proof, clock sane", event: replyEvent(err("ack", "invalid_proof", 401), NOW, 1_000), expect: { committed: stop("unexpected", 7) } },
   { name: "ack 400 request_binding", event: replyEvent(err("ack", "request_binding")), expect: { committed: stop("completed", 0) } },
   { name: "ack 503 unknown", event: replyEvent(err("ack", "unknown", 503)), expect: { committed: stop("completed", 0) } },
   // the caller's verdict on the opened result, and its durable commit
@@ -107,7 +110,7 @@ const ROWS: readonly Row[] = [
   },
   {
     name: "tick at the purge time", event: (state) => ({ type: "tick", now: purgeAt(state.entry!) }),
-    expect: { open: drop("lapsed", 3), discovered: drop("gone", 3), fetched: drop("gone", 3), committed: drop("gone", 3), acked: drop("completed", 0) },
+    expect: { open: drop("lapsed", 3), discovered: drop("gone", 3), fetched: drop("gone", 3), committed: drop("completed", 0), acked: drop("completed", 0) },
   },
 ];
 
@@ -174,7 +177,6 @@ describe("every (event x phase) cell of the table", () => {
       const held = reduce(liveState(entryIn(phase)), phase === "fetched"
         ? { type: "verdict", now: NOW, verdict: "clock" }
         : replyEvent(err(phase === "open" ? "discover" : phase === "discovered" ? "fetch" : "ack", "invalid_proof", 401), NOW, 90_000));
-      if (phase === "committed") continue; // a failed ack never holds: the grant is saved (asserted in the ack rows)
       expect(held.state.entry!.hold).toBeDefined();
       for (const row of ROWS) {
         const event = typeof row.event === "function" ? row.event(held.state) : row.event;
@@ -207,8 +209,8 @@ describe("RULES is the one code table and matches the contract", () => {
   const expected: Readonly<Record<string, Rule["act"]>> = {
     "discover:expired_request": "lapse", "discover:request_denied": "denied", "discover:invalid_request": "refuse",
     "discover:not_found": "lapse", "discover:expired_result": "gone", "discover:request_binding": "refuse", "discover:invalid_proof": "proof",
-    "fetch:not_found": "gone", "fetch:expired_result": "gone", "fetch:acknowledged": "gone", "fetch:request_binding": "refuse", "fetch:invalid_proof": "proof",
-    "ack:not_found": "ack-done", "ack:acknowledged": "ack-done", "ack:expired_result": "ack-done", "ack:ack_conflict": "ack-done",
+    "fetch:not_found": "gone", "fetch:expired_result": "gone", "fetch:acknowledged": "gone", "fetch:request_binding": "refuse", "fetch:invalid_proof": "proof-kept",
+    "ack:not_found": "ack-done", "ack:acknowledged": "ack-done", "ack:expired_result": "ack-done", "ack:ack_conflict": "ack-done", "ack:invalid_proof": "proof-kept",
   };
   test("maps exactly the documented (call:code) pairs, each to one action", () => {
     expect(Object.fromEntries(Object.entries(RULES).map(([key, rule]) => [key, rule.act]))).toEqual(expected);
@@ -256,7 +258,7 @@ describe("401 invalid_proof is ambiguous: kept by the clock only while the reque
   const proof = (now: number, skew?: number, phase: ApprovalPhase = "open") =>
     reduce(liveState(entryIn(phase)), replyEvent(err(phase === "open" ? "discover" : "fetch", "invalid_proof", 401), now, skew));
 
-  test("(a) a clock more than 60 s off keeps the entry, exit 12, and holds it", () => {
+  test("(a) a clock more than 45 s off keeps the entry, exit 12, and holds it", () => {
     const step = proof(NOW, 61_000);
     expect(step.state.entry!.hold).toMatchObject({ kind: "clock" });
     expect(finishOf(step)).toMatchObject({ kind: "clock" });
@@ -264,14 +266,24 @@ describe("401 invalid_proof is ambiguous: kept by the clock only while the reque
     expect(step.effects.some((effect) => effect.type === "purge")).toBe(false);
   });
 
-  test("a clock exactly 60 s off, either direction, is not measurably off", () => {
-    expect(finishOf(proof(NOW, 60_000))?.kind).toBe("refused");
-    expect(finishOf(proof(NOW, -60_000))?.kind).toBe("refused");
-    expect(finishOf(proof(NOW, -60_001))?.kind).toBe("clock");
+  test("(A) the boundary of 'measurably off' is the named constant: 44 s is sane (refused 5), 46 s is off (hold 12), either direction", () => {
+    expect(CLOCK_DISAGREEMENT_MS).toBe(45_000);
+    for (const skew of [44_000, -44_000, 45_000, -45_000]) {
+      const step = proof(NOW, skew);
+      expect(finishOf(step)?.kind).toBe("refused");
+      expect(step.state.entry).toBeUndefined();
+      expect(exitCodeOf(finishOf(step)!)).toBe(5);
+    }
+    for (const skew of [45_001, 46_000, -46_000]) {
+      const step = proof(NOW, skew);
+      expect(finishOf(step)?.kind).toBe("clock");
+      expect(step.state.entry!.hold).toBeDefined();
+      expect(exitCodeOf(finishOf(step)!)).toBe(12);
+    }
   });
 
   test("(b) the SAME 401 after E + S lapses the entry and drops its keys, exit 3, even with the clock still off", () => {
-    for (const skew of [61_000, 150_000, -150_000]) {
+    for (const skew of [44_000, 46_000, 61_000, 150_000, -150_000]) {
       const step = proof(E + S, skew);
       expect(step.state.entry).toBeUndefined();
       expect(step.effects[0]).toMatchObject({ type: "purge", keys: ["relayPrivateKey"], entry: "remove" });
@@ -282,7 +294,7 @@ describe("401 invalid_proof is ambiguous: kept by the clock only while the reque
     expect(finishOf(proof(E + S - 1, 150_000))?.kind).toBe("clock");
   });
 
-  test("(c) a sane clock (<= 60 s) drops the entry and its keys at once, exit 5", () => {
+  test("(c) a sane clock (<= 45 s) drops the entry and its keys at once, exit 5", () => {
     const step = proof(NOW, 12_000);
     expect(step.state.entry).toBeUndefined();
     expect(step.effects[0]).toMatchObject({ type: "purge", keys: ["relayPrivateKey"] });
@@ -510,5 +522,83 @@ describe("a request created in this run versus a resumed one (first check)", () 
     expect(nextEffect(start)).toMatchObject({ type: "call", call: "fetch" });
     const silent = reduce(start.state, replyEvent({ kind: "network" }, NOW + 1_000));
     expect(nextEffect(silent).type).toBe("sleep");
+  });
+});
+
+describe("a 401 never drops an approved result: fetch and ack keep the entry, bounded by its purge time", () => {
+  const fetch401 = (skew: number | undefined, now = NOW) => reduce(liveState(entryIn("discovered", { staged: true })), replyEvent(err("fetch", "invalid_proof", 401), now, skew));
+  const ack401 = (skew: number | undefined, now = NOW) => reduce(liveState(entryIn("committed")), replyEvent(err("ack", "invalid_proof", 401), now, skew));
+
+  test.each([
+    ["fetch", fetch401],
+    ["ack", ack401],
+  ])("%s 401 with a sane clock (<= 45 s, or no Date) keeps the entry and its keys and reports unexpected (exit 7)", (_call, run) => {
+    for (const skew of [undefined, 0, 44_000, -44_000, 45_000]) {
+      const step = run(skew);
+      expect(step.state.entry).toBeDefined();
+      expect(step.state.entry!.hold).toBeUndefined();
+      expect(step.state.entry!.keys!.relayPrivateKey).toBeDefined();
+      expect(step.effects.some((effect) => effect.type === "purge")).toBe(false);
+      expect(finishOf(step)).toEqual({ kind: "unexpected" });
+      expect(exitCodeOf(finishOf(step)!)).toBe(7);
+    }
+  });
+
+  test.each([
+    ["fetch", fetch401],
+    ["ack", ack401],
+  ])("%s 401 with the clock off (> 45 s) holds the entry and reports exit 12", (_call, run) => {
+    for (const skew of [46_000, -46_000, 3_600_000]) {
+      const step = run(skew);
+      expect(step.state.entry!.hold).toMatchObject({ kind: "clock" });
+      expect(step.state.entry!.keys!.relayPrivateKey).toBeDefined();
+      expect(step.effects[0]).toEqual({ type: "persist" });
+      expect(finishOf(step)).toMatchObject({ kind: "clock" });
+      expect(exitCodeOf(finishOf(step)!)).toBe(12);
+    }
+  });
+
+  test("the entry keeps its result reference and the next run retries it", () => {
+    const kept = fetch401(0).state;
+    expect(kept.entry!.resultRef).toBe(RESULT_REF);
+    expect(nextEffect(reduce(kept, { type: "start", now: NOW + 1_000 }))).toMatchObject({ type: "call", call: "fetch" });
+    const held = ack401(90_000).state;
+    expect(nextEffect(reduce(held, { type: "start", now: NOW + 1_000 }))).toMatchObject({ type: "call", call: "ack" });
+  });
+
+  test("it is never dropped by the 401, whatever the time and skew; at the purge time the entry is purged as before", () => {
+    for (const [run, entry] of [[fetch401, entryIn("discovered", { staged: true })], [ack401, entryIn("committed")]] as const) {
+      const bound = purgeAt(entry);
+      for (const skew of [undefined, 0, 46_000, -3_600_000]) {
+        for (const now of [T0, NOW, E, E + S, E + R, bound - 1]) expect(run(skew, now).state.entry).toBeDefined();
+        const kept = run(skew, bound - 1).state;
+        const purged = reduce(kept, { type: "tick", now: bound });
+        expect(purged.state.entry).toBeUndefined();
+        expect(purged.effects[0]).toMatchObject({ type: "purge", entry: "remove" });
+      }
+    }
+  });
+});
+
+describe("a committed entry that reaches its purge time completes with a warning: the grant is saved", () => {
+  test("outcome completed + ack-expired warning (exit 0), the entry and its relay key dropped the same way", () => {
+    const entry = entryIn("committed");
+    const step = reduce(liveState(entry), { type: "tick", now: purgeAt(entry) });
+    expect(finishOf(step)).toEqual({ kind: "completed", warning: "ack-expired" });
+    expect(exitCodeOf(finishOf(step)!)).toBe(0);
+    expect(step.state.entry).toBeUndefined();
+    expect(step.effects[0]).toEqual({ type: "purge", requestId: entry.requestId, keys: ["relayPrivateKey"], entry: "remove" });
+  });
+
+  test("an entry whose result was never saved by the caller still ends gone (exit 3); an acked entry ends completed without a warning", () => {
+    for (const phase of ["discovered", "fetched"] as const) {
+      expect(finishOf(reduce(liveState(entryIn(phase)), { type: "tick", now: purgeAt(entryIn(phase)) }))).toMatchObject({ kind: "gone", reason: "purged" });
+    }
+    expect(finishOf(reduce(liveState(entryIn("acked")), { type: "tick", now: purgeAt(entryIn("acked")) }))).toEqual({ kind: "completed" });
+  });
+
+  test("just before the purge time nothing is dropped", () => {
+    const entry = entryIn("committed");
+    expect(reduce(liveState(entry), { type: "tick", now: purgeAt(entry) - 1 }).state.entry).toBeDefined();
   });
 });

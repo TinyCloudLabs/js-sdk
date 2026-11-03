@@ -109,7 +109,7 @@ function checkStep(before: RequesterState, event: Event, step: Step, violations:
         (event.type === "verdict" && (event.verdict === "refused" || event.verdict === "ended")) ||
         (event.type === "reply" && (event.reply.kind === "acked" ||
           (event.reply.kind === "error" && (
-            (event.reply.call === "fetch" && ["not_found", "expired_result", "acknowledged", "request_binding", "invalid_proof"].includes(event.reply.code)) ||
+            (event.reply.call === "fetch" && ["not_found", "expired_result", "acknowledged", "request_binding"].includes(event.reply.code)) ||
             (event.reply.call === "ack" && ["not_found", "acknowledged", "expired_result", "ack_conflict"].includes(event.reply.code)))))),
       "no approval lost",
     );

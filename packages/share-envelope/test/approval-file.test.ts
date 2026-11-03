@@ -187,6 +187,13 @@ describe("sweepApprovalFile: private keys never outlive their use", () => {
     expect(sweepApprovalFile(file, T + 10_000 + QUARANTINE_RETENTION_MS).file.unrecognized).toHaveLength(0);
   });
 
+  test("a committed entry past its purge time completes with a warning (the grant is saved) and its keys go", () => {
+    const entry = entryIn("committed", { requestId: id(64) });
+    const swept = sweepApprovalFile({ version: 2, entries: [entry], unrecognized: [] }, purgeAt(entry));
+    expect(swept.file.entries).toEqual([]);
+    expect(swept.dropped).toEqual([{ requestId: id(64), outcome: { kind: "completed", warning: "ack-expired" } }]);
+  });
+
   test("a held entry is not given a longer life", () => {
     const entry = { ...entryIn("open", { requestId: id(63) }), hold: { kind: "clock" as const, since: iso(T) } };
     expect(sweepApprovalFile({ version: 2, entries: [entry], unrecognized: [] }, purgeAt(entry)).file.entries).toEqual([]);
