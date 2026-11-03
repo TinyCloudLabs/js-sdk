@@ -57,6 +57,24 @@
       "sensitiveOutput": true
     },
     {
+      "name": "tinycloud_apps_move",
+      "surfaces": [
+        "hosted"
+      ],
+      "operationId": "tinycloud.apps.move",
+      "operationVersion": 1,
+      "effects": [
+        "read",
+        "write"
+      ],
+      "postures": [
+        "owner-openkey",
+        "delegate-session",
+        "local-owner-key"
+      ],
+      "sensitiveOutput": true
+    },
+    {
       "name": "tinycloud_apps_query",
       "surfaces": [
         "hosted",

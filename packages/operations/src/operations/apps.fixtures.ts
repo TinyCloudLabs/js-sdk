@@ -8,7 +8,7 @@ import { TC_APPS_LEGACY_ROOT as R } from "../tc-apps.js";
 import { appsTimezone } from "../tc-apps/state.js";
 import type { AppsKv, KvResult, KvValue } from "../tc-apps/kv.js";
 import { COPY_DELETE, COPY_INSERT, type AppsDatabase, type CopyRow } from "../tc-apps/copy.js";
-import { appsOperationDefinitions, type ContextOutput, type ReadOutput, type WriteOutput, type QueryOutput } from "./apps.js";
+import { appsOperationDefinitions, type ContextOutput, type MoveOutput, type ReadOutput, type WriteOutput, type QueryOutput } from "./apps.js";
 
 export const SPACE = "tinycloud:pkh:eip155:1:0x1111111111111111111111111111111111111111:default";
 export const NEW_SPACE = SPACE.replace(/:default$/, ":applications");
@@ -16,7 +16,7 @@ export const app = { app: "fitness", title: "Fitness", about: "Health", created:
 export const kind = { app: "fitness", kind: "weight", about: "Body weight", shape: "log", per: "day", v: 1, fields: { kg: "number" }, created: "2026-10-14" };
 export const itemKind = { ...kind, kind: "goal", shape: "item", per: undefined, states: ["open", "done"] };
 export const key = `${R}fitness/weight/2026-10/2026-10-14`;
-type Outputs = { context: ContextOutput; read: ReadOutput; write: WriteOutput; query: QueryOutput };
+type Outputs = { context: ContextOutput; read: ReadOutput; write: WriteOutput; query: QueryOutput; move: MoveOutput };
 export function definition<N extends keyof Outputs>(name: N) {
   const found = appsOperationDefinitions.find((entry) => entry.id === `tinycloud.apps.${name}`);
   if (!found) throw new Error(`Missing ${name}`);

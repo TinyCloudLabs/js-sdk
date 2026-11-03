@@ -138,3 +138,8 @@ export function oneSpaceAtATime(context: OperationContext, scopes: readonly Apps
   }
   return [...scopes];
 }
+
+/** Read-only access to the older layout, which is all a move needs there. */
+export function legacyReadPermission(context: OperationContext): AppsPermission {
+  return { service: "tinycloud.kv", space: appsSpace(context, "legacy"), path: TC_APPS_LEGACY_ROOT, actions: [...TC_APPS_CATALOG_READ_ACTIONS] };
+}

@@ -49,6 +49,7 @@ test("the catalog contains exactly the registered v1 definitions", async () => {
     "tinycloud.account.applications.list@1",
     "tinycloud.account.spaces.list@1",
     "tinycloud.apps.context@1",
+    "tinycloud.apps.move@1",
     "tinycloud.apps.query@1",
     "tinycloud.apps.read@1",
     "tinycloud.apps.write@1",

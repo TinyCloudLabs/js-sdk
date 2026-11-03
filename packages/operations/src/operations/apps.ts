@@ -4,10 +4,11 @@ import { OPERATION_ERROR_CODES, operationError } from "../errors.js";
 import { TC_APPS_RULES } from "../tc-apps/rules.generated.js";
 import { appsDatabase, checkCopyKinds, copyPermission, hasCopyAuthority, queryCopy, syncCopyRows, type CopyRow } from "../tc-apps/copy.js";
 import { decodeSqlInputValue, isSingleReadQuery, SqlOutputValueSchema, SqlParamsSchema } from "./sql.js";
-import { appHasMoved, appRecordsPermission, type AppsPermission, type ReadRecord, appsFailure, appsKv, appsSpace, discoveryPermission, hasDiscoveryAccess, hasLegacyCatalogAccess, jsonBytes, legacyCatalogPermission, legacyHasApp, legacyRecordsPermission, listAppsKeys, markAppsKindStale, oneSpaceAtATime, readAppsRecords, type AppsKv } from "../tc-apps/kv.js";
+import { appHasMoved, appRecordsPermission, type AppsPermission, type ReadRecord, appsFailure, appsKv, appsSpace, discoveryPermission, hasDiscoveryAccess, hasLegacyCatalogAccess, jsonBytes, legacyCatalogPermission, legacyHasApp, legacyReadPermission, legacyRecordsPermission, listAppsKeys, markAppsKindStale, oneSpaceAtATime, readAppsRecords, type AppsKv } from "../tc-apps/kv.js";
 import { appRoot, catalogKey, catalogPrefix, copyKey, discoveryKey, newApp, parseKey, parsePrefix, TC_APPS_DISCOVERY_ROOT, TC_APPS_LEGACY_ROOT, type KeyParts, type Layout } from "../tc-apps/layout.js";
 import { appsCopyState, appsNow, appsTimezone, validTimezone, withLocalOffset } from "../tc-apps/state.js";
 import { catalogChangeAllowed, isObject, keyParts, KeySchema, newRecordFits, ObjectSchema, PrefixSchema, recordParts, recordWarnings, WriteInputSchema, type JsonObject, type WriteInput, type WriteOp } from "../tc-apps/records.js";
+import { moveApp, MoveInputSchema, MoveOutputSchema, type MoveInput, type MoveOutput } from "../tc-apps/move.js";
 
 const LayoutSchema = z.enum(["legacy", "new"]);
 const CopyStateSchema = z.enum(["present", "expired", "none"]);
@@ -48,6 +49,7 @@ export type ContextOutput = z.infer<typeof ContextOutputSchema>;
 type ReadInput = z.infer<typeof ReadInputSchema>;
 export type ReadOutput = z.infer<typeof ReadOutputSchema>;
 export type WriteOutput = z.infer<typeof WriteOutputSchema>;
+export type { MoveOutput };
 type OpOutcome = z.infer<typeof OpOutcomeSchema>;
 const POSTURES: readonly TinyCloudPosture[] = ["owner-openkey", "delegate-session", "local-owner-key"];
 const EXPOSURE: OperationExposure = {
@@ -124,8 +126,27 @@ const queryDefinition: OperationDefinition<QueryInput, QueryOutput> = {
   input: QueryInputSchema, output: QueryOutputSchema, effects: ["read", "write", "destructive"], runtime: "authenticated", postures: POSTURES, exposure: EXPOSURE,
   sensitivity: { input: ["/kinds", "/sql", "/params"], output: ["/kinds", "/rows", "/remaining"] }, authority: queryAuthority, execute: executeQuery,
 };
+const MOVE_BUDGET_MS = 60_000;
+const moveAuthority = async (context: RuntimeOperationContext, input: MoveInput) => input.dryRun || !newApp(input.app)
+  ? [legacyReadPermission(context)]
+  : oneSpaceAtATime(context, [legacyReadPermission(context), appRecordsPermission(context, input.app), discoveryPermission(context)]);
+const moveDefinition: OperationDefinition<MoveInput, MoveOutput> = {
+  id: "tinycloud.apps.move", version: 1, title: "Move an app to the new layout",
+  description: "Only when the owner asks to move one of their older apps (listed with layout legacy in tinycloud_apps_context) into its own folder. Call with dryRun true first and show the plan; run with dryRun false only after the owner agrees. Tell the owner to pause every other agent or device that writes this app. It copies the app's records into xyz.tinycloud.tinyapps.<app>/ without overwriting anything, reads them back, re-checks the older place, and only then adds the app's discovery entry. The older records are never changed or deleted. MOVE_PARTIAL: call again to continue. CONFLICT or NOT_SWITCHED: report it and stop; nothing switched.",
+  input: MoveInputSchema, output: MoveOutputSchema, effects: ["read", "write"], runtime: "authenticated", postures: POSTURES, exposure: EXPOSURE,
+  sensitivity: { input: ["/app"], output: ["/kinds", "/problems", "/conflicts"] }, authority: moveAuthority, execute: executeMove,
+};
 
-export const appsOperationDefinitions = [contextDefinition, readDefinition, writeDefinition, queryDefinition] as const;
+export const appsOperationDefinitions = [contextDefinition, readDefinition, writeDefinition, queryDefinition, moveDefinition] as const;
+
+async function executeMove(context: OperationContext, input: MoveInput): Promise<OperationExecutionOutcome<MoveOutput>> {
+  const parsed = MoveInputSchema.safeParse(input);
+  if (!parsed.success) return { status: "error", error: operationError("INPUT_INVALID", "Name one app and say whether this is a dry run.") };
+  try {
+    const env = { legacy: appsKv(context, "legacy"), next: appsKv(context, "new"), clock: Date.now, budgetMs: MOVE_BUDGET_MS };
+    return { status: "ok", output: await moveApp(env, parsed.data.app, parsed.data.dryRun) };
+  } catch (error) { return { status: "error", error: appsFailure(error) }; }
+}
 
 async function executeContext(context: OperationContext, input: ContextInput): Promise<OperationExecutionOutcome<ContextOutput>> {
   const parsed = ContextInputSchema.safeParse(input);
