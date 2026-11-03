@@ -4,7 +4,7 @@ import { OPERATION_ERROR_CODES, operationError } from "../errors.js";
 import { TC_APPS_RULES } from "../tc-apps/rules.generated.js";
 import { appsDatabase, checkCopyKinds, copyPermission, hasCopyAuthority, queryCopy, syncCopyRows, type CopyRow } from "../tc-apps/copy.js";
 import { decodeSqlInputValue, isSingleReadQuery, SqlOutputValueSchema, SqlParamsSchema } from "./sql.js";
-import { appHasMoved, appRecordsPermission, type AppsPermission, type ReadRecord, appsFailure, appsKv, appsSpace, discoveryPermission, hasLegacyCatalogAccess, jsonBytes, legacyCatalogPermission, legacyHasApp, legacyRecordsPermission, listAppsKeys, markAppsKindStale, oneSpaceAtATime, readAppsRecords, type AppsKv } from "../tc-apps/kv.js";
+import { appHasMoved, appRecordsPermission, type AppsPermission, type ReadRecord, appsFailure, appsKv, appsSpace, discoveryPermission, hasDiscoveryAccess, hasLegacyCatalogAccess, jsonBytes, legacyCatalogPermission, legacyHasApp, legacyRecordsPermission, listAppsKeys, markAppsKindStale, oneSpaceAtATime, readAppsRecords, type AppsKv } from "../tc-apps/kv.js";
 import { appRoot, catalogKey, catalogPrefix, copyKey, discoveryKey, newApp, parseKey, parsePrefix, TC_APPS_DISCOVERY_ROOT, TC_APPS_LEGACY_ROOT, type KeyParts, type Layout } from "../tc-apps/layout.js";
 import { appsCopyState, appsNow, appsTimezone, validTimezone, withLocalOffset } from "../tc-apps/state.js";
 import { catalogChangeAllowed, isObject, keyParts, KeySchema, newRecordFits, ObjectSchema, PrefixSchema, recordParts, recordWarnings, WriteInputSchema, type JsonObject, type WriteInput, type WriteOp } from "../tc-apps/records.js";
@@ -85,7 +85,7 @@ const writeAuthority = async (context: RuntimeOperationContext, input: WriteInpu
 const queryAuthority = async (context: RuntimeOperationContext, input: QueryInput) => {
   const app = input.kinds[0]!.app;
   return input.layout === "legacy"
-    ? [legacyRecordsPermission(context), copyPermission(context, "legacy", app)]
+    ? oneSpaceAtATime(context, [legacyRecordsPermission(context), copyPermission(context, "legacy", app), discoveryPermission(context)])
     : [appRecordsPermission(context, app), copyPermission(context, "new", app)];
 };
 /** The older-layout apps a set of keys and prefixes names; a whole-root prefix names none. */
@@ -302,10 +302,18 @@ async function writeOne(handles: Handles, op: WriteOp, timezone: string | null):
   if (parts.layout === "legacy" && await appHasMoved(handles.context, parts.app)) {
     return { key, outcome: "INVALID", warnings: [`${parts.app} has moved to xyz.tinycloud.tinyapps.${parts.app}/; use keys under that root.`] };
   }
-  if (op.op === "delete") {
-    if (parts.layout === "new" && !("value" in (await readAppsRecords(kv, [catalogKey("new", parts.app)]))[0]!)) {
-      return { key, outcome: "INVALID", warnings: ["A record can only be deleted from an app that has a catalog record."] };
+  if (parts.layout === "new" && parts.area === "record") {
+    // Every change to a record (create, replace, move, delete) needs the app's own catalog record, so a folder that holds
+    // another app's files can never be edited as a generic app.
+    if (!("value" in (await readAppsRecords(kv, [catalogKey("new", parts.app)]))[0]!)) {
+      return { key, outcome: "INVALID", warnings: ["Records can only be changed in an app that has a catalog record."] };
     }
+    // An app is switched on by its discovery entry; records written before it would sit in the folder and block a later move.
+    if (op.op === "put" && op.etag === undefined && hasDiscoveryAccess(handles.context) && !(await appHasMoved(handles.context, parts.app))) {
+      return { key, outcome: "INVALID", warnings: [`${parts.app} has no discovery entry yet: write its entry (after its first kind) before its first record.`] };
+    }
+  }
+  if (op.op === "delete") {
     const deleted = await kv.delete(key, op.etag === undefined ? {} : { ifMatch: op.etag });
     if (deleted.ok) return { key, outcome: "ok" };
     if (deleted.error.code === "KV_PRECONDITION_FAILED") return conflict(kv, key, "CHANGED");

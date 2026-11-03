@@ -325,3 +325,44 @@ describe("personal apps: guards found in the security review", () => {
     });
   });
 });
+
+describe("personal apps: second-round guards", () => {
+  const etagOf = `"blake3-${"d".repeat(64)}"`;
+  test("another app's files in a folder cannot be replaced or moved either: every record change needs the app's catalog record", async () => {
+    await fixture(async (_kv, context, applications) => {
+      applications.seed(`${ID}food/manifest.json`, { app_id: "xyz.tinycloud.tinyapps.food" });
+      const meal = applications.seed(`${ID}food/records/meals/a.json`, { id: "a", title: "pizza" });
+      applications.seed(`${ID}food/records/meals/b.json`, { id: "b" });
+      const result = await write(context, [
+        { op: "put", key: `${ID}food/records/meals/a.json`, etag: meal, value: { data: {} } },
+        { op: "move", from: `${ID}food/records/meals/b.json`, to: `${ID}food/records/meals/c.json`, etag: etagOf, value: { data: {} } },
+        { op: "delete", key: `${ID}food/records/meals/a.json` },
+      ]);
+      expect(result.output.ops.map((op) => op.outcome)).toEqual(["INVALID", "INVALID", "INVALID"]);
+      expect(applications.writes).toEqual([]);
+      expect(applications.deletes).toEqual([]);
+    });
+  });
+  test("a record is not created in an app that has no discovery entry yet, when the app list is readable", async () => {
+    await fixture(async (_kv, context, applications) => {
+      applications.seed(`${root}catalog`, booksApp);
+      applications.seed(`${root}catalog/read`, readKind);
+      const create = [{ op: "put", key: record, value: { data: { title: "Dune" } } }];
+      const early = await write(withGrants(context, [discoveryGrant]), create);
+      expect(early.output.ops[0]?.outcome).toBe("INVALID");
+      expect(early.output.ops[0]?.warnings?.[0]).toContain("discovery entry");
+      expect(applications.values.has(record)).toBe(false);
+      applications.seed(`${DISCOVERY}books/entry`, entry);
+      expect((await write(withGrants(context, [discoveryGrant]), create)).output.ops[0]?.outcome).toBe("ok");
+    });
+  });
+  test("a query of an older-layout app also needs the app list, so a moved app is not answered from its old copy", async () => {
+    await fixture(async (_kv, context) => {
+      const input = { layout: "legacy", kinds: [{ app: "fitness", kind: "weight" }], sql: "SELECT 1" } as never;
+      const first = await definition("query").authority(context, input);
+      expect(first.map((scope) => scope.path)).toEqual([LEGACY, "xyz.tinycloud.agent-data.index"]);
+      const withSqlGrant = withGrants(context, [LEGACY_ROOT_GRANT, { service: "tinycloud.sql", space: SPACE, path: "xyz.tinycloud.agent-data.index", actions: ["tinycloud.sql/read", "tinycloud.sql/write", "tinycloud.sql/schema"] }]);
+      expect(await definition("query").authority(withSqlGrant, input)).toEqual([discoveryGrant]);
+    });
+  });
+});
