@@ -781,6 +781,45 @@ describe("every entry the machine writes passes its own schema (R-2)", () => {
     expect(nextEffect(step).type).toBe("sleep");
   });
 
+  test("an envelope JSON cannot store is an unexpected reply: a function, a symbol, a bigint, a circular object, null, an array, a string", () => {
+    const circular: Record<string, unknown> = { relay: "x" };
+    circular.self = circular;
+    const bad: readonly unknown[] = [{ relay: () => 1 }, { relay: Symbol("s") }, { relay: 1n }, circular, { relay: undefined }, { relay: Number.NaN }, null, [], ["x"], "relay", 7, () => 1];
+    for (const envelope of bad) {
+      const before = liveState(entryIn("discovered", { staged: true }));
+      const step = reduce(before, replyEvent({ kind: "envelope", envelope }));
+      expect(step.state.entry).toBe(before.entry);
+      expect(nextEffect(step).type).toBe("sleep");
+      expect(step.state.run.unexpectedStreak).toBe(1);
+    }
+  });
+
+  test("a plain JSON object (nested objects, arrays, numbers, null values) is stored, and the entry round-trips the file", () => {
+    const envelope = { v: 1, relay: { epk: { x: "a", y: "b" }, ct: "c", list: [1, "two", null, { three: 3 }] } };
+    const step = reduce(liveState(entryIn("discovered", { staged: true })), replyEvent({ kind: "envelope", envelope }));
+    expect(step.state.entry!.phase).toBe("fetched");
+    expect(approvalEntrySchema.safeParse(JSON.parse(JSON.stringify(step.state.entry))).success).toBe(true);
+    expect(JSON.parse(JSON.stringify(step.state.entry)).resultEnvelope).toEqual(envelope);
+  });
+
+  test("a clock past 9999-12-31 is an illegal event on EVERY event type: the entry is untouched and no effect writes it", () => {
+    const MAX = Date.UTC(9999, 11, 31, 23, 59, 59, 999);
+    for (const now of [MAX + 1, 8.64e15, -1]) {
+      const events: Event[] = [
+        { type: "tick", now }, { type: "start", now }, { type: "verdict", now, verdict: "clock" }, { type: "committed", now }, { type: "abandon", now, reason: "logout" },
+        replyEvent({ kind: "network" }, now), replyEvent(err("discover", "invalid_proof", 401), now, 90_000),
+      ];
+      for (const event of events) {
+        const phase = event.type === "verdict" || event.type === "committed" ? "fetched" : "open";
+        const before = liveState(entryIn(phase));
+        const step = reduce(before, event);
+        expect(finishOf(step)?.kind).toBe("internal");
+        expect(step.state.entry).toBe(before.entry);
+        expect(step.effects.some((effect) => effect.type === "persist" || effect.type === "purge")).toBe(false);
+      }
+    }
+  });
+
   test("retainUntil is clamped to a canonical timestamp: far future, far past, and the committed entry parses back", () => {
     for (const retainUntil of [8.64e15, MAX + 1, MAX, 0, -8.64e15, -1]) {
       const step = reduce(liveState(entryIn("fetched", { staged: true })), { type: "committed", now: NOW, retainUntil });

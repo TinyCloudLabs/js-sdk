@@ -256,10 +256,21 @@ describe("a machine-written entry is never refused by its own schema (R-2)", () 
   const MAX = Date.UTC(9999, 11, 31, 23, 59, 59, 999);
   const NASTY_NOW = [MAX, MAX + 1, 8.64e15, -1, 0, Number.NaN];
   const cache = new WeakMap<object, boolean>();
+  const circular: Record<string, unknown> = { relay: "x" };
+  circular.self = circular;
+  /** Envelopes an adapter could build that JSON cannot store, among ordinary ones. */
+  const ENVELOPES: readonly unknown[] = [
+    undefined, null, {}, { relay: "ok", n: [1, { a: null }] }, "relay", [], { f: () => 1 }, { s: Symbol("s") }, { b: 1n }, circular, { u: undefined }, { n: Number.NaN },
+  ];
   const parses = (entry: object): boolean => {
     let ok = cache.get(entry);
     if (ok === undefined) {
-      ok = approvalEntrySchema.safeParse(entry).success;
+      // What the adapter writes is the JSON text of the entry: it must serialize, and what comes back must parse.
+      try {
+        ok = approvalEntrySchema.safeParse(JSON.parse(JSON.stringify(entry))).success;
+      } catch {
+        ok = false;
+      }
       cache.set(entry, ok);
     }
     return ok;
@@ -269,7 +280,7 @@ describe("a machine-written entry is never refused by its own schema (R-2)", () 
   function nastyEvent(random: () => number, now: number): Event {
     switch (Math.floor(random() * 6)) {
       case 0: return { type: "reply", now, reply: { kind: "ready", resultRef: pick(random, ["", RESULT_REF, "x"]), resultExpiresAt: pick(random, ["", "garbled", RESULT_EXPIRES, "2026-11-03T12:10:00Z", "9999-12-31T23:59:59.999Z"]) } };
-      case 1: return { type: "reply", now, reply: { kind: "envelope", envelope: pick(random, [undefined, null, {}, "relay"]) } };
+      case 1: return { type: "reply", now, reply: { kind: "envelope", envelope: pick(random, ENVELOPES) } };
       case 2: return { type: "committed", now, retainUntil: pick(random, [8.64e15, -8.64e15, 0, now + 1e9, Number.NaN, MAX, MAX + 1]) };
       case 3: return { type: "reply", now: pick(random, NASTY_NOW), reply: randomReply(random), serverDateSkewMs: pick(random, SKEWS) ?? 90_000 };
       default: return randomEvent(random, now);
