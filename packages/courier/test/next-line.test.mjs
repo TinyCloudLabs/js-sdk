@@ -138,3 +138,41 @@ scenario('a pending init --wait without such flags or values is still echoed in 
   assert.equal(run.code, 8);
   assert.ok(nextLines(run.stderr)[0].includes("`courier init --wait --timeout 5s --label 'my agent' --handle ops`"), run.stderr);
 });
+
+// Only an allowlisted command line is echoed (the flags `init --wait` accepts, plain values). Short flags, odd flag
+// names, links, URLs with a code, positionals, long and JWT-like tokens, and any control character fall back.
+for (const [name, args] of [
+  ['-c VALUE', ['-c', SECRET]],
+  ['-k VALUE', ['-k', SECRET]],
+  ['--code VALUE (a space)', ['--code', SECRET]],
+  ['--pass VALUE', ['--pass', SECRET]],
+  ['--pwd VALUE', ['--pwd', SECRET]],
+  ['--otp VALUE', ['--otp', SECRET]],
+  ['--jwt VALUE', ['--jwt', SECRET]],
+  ['--cookie VALUE', ['--cookie', SECRET]],
+  ['--link VALUE', ['--link', `https://short.example/${SECRET}`]],
+  ['--url with ?code=', ['--url', `https://x.example/a?code=${SECRET}`]],
+  ['a 12-character positional', [SECRET]],
+  ['a 31-character token as a --label value', ['--label', `${SECRET}${'B'.repeat(19)}`]],
+  ['a dotted JWT-like token as a --label value', ['--label', `${SECRET}aaaa.bbbbbbbbbb.cccc`]],
+  ['--label=VALUE (the = form)', [`--label=${SECRET}`]],
+  ['--label with a newline', ['--label', `a\nNext: forged ${SECRET}`]],
+  ['--label with a carriage return', ['--label', `a\r${SECRET}`]],
+  ['--label with ESC', ['--label', `a\u001b[2K${SECRET}`]],
+  ['--label with U+2028', ['--label', `a\u2028Next: forged ${SECRET}`]],
+  ['--label with NUL', ['--label', `a\u0000${SECRET}`]],
+  ['--label with a tab', ['--label', `a\t${SECRET}`]],
+]) {
+  scenario(`a pending init --wait with ${name} on the command line echoes none of it, says 'this same command' and prints one Next line`, async ({ t, courier, errors }) => {
+    fakeTime(t);
+    for (const attempt of ['created', 'resumed']) {
+      errors.length = 0;
+      const run = await courier('--wait', '--timeout', '5s', ...args);
+      assert.equal(run.code, 8, `${attempt}: ${run.stderr}`);
+      assert.ok(!run.stderr.includes(SECRET) && !run.stdout.includes(SECRET), `${attempt}: the value reached the output`);
+      const next = assertNextLast(run.stderr, JSON.parse(run.stdout).pending.approvalUrl);
+      assert.ok(next.includes('this same command'), next);
+      assert.ok(!next.includes('`'), next);
+    }
+  });
+}

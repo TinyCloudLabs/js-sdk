@@ -260,7 +260,8 @@ export async function cmdInvite(args: ParsedArgs): Promise<void> {
     if (!state) refuse('No invitation issued by this profile.');
     const body = parseInvitation(state.value.body);
     if (body.issuer !== profile.courierDid || !sameIdentity(body.artifact.from.owner, profile.ownerDid!) || body.host !== profile.host) refuse('Invitation belongs to another issuer.');
-    console.error(inviteServeNextLine(state.value.link));
+    expiryCheck(body);
+    if (!await getJson(node.kv, winnerKey(id))) console.error(inviteServeNextLine(state.value.link));
     return serveInvitation(node, profile, body, wait).catch(nextOnInvitePending(invitePendingNextLine(id, wait)));
   }
   const mode = requireFlag(args, 'mode', 'courier invite --session <id> --mode same-owner|anyone|named --consent');

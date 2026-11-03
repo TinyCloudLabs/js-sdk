@@ -156,3 +156,28 @@ test('a join that ends pending (invite-pending, a different producer) prints no 
   assert.match(joined.stderr, /\[invite-pending\]/);
   assert.deepEqual(nextLines(joined.stderr), []);
 });
+
+test('invite serve (7): an expired invitation prints no start line, only the expiry error', async () => {
+  const a = await fixture.home('next-serve-expired');
+  const { invitation } = await pendingInvitation(a);
+  const key = stateKey(a, invitation.invitationId);
+  const saved = fixture.values.get(key);
+  const state = JSON.parse(saved.bytes.toString());
+  state.body.expiresAt = new Date(Date.now() - 1000).toISOString();
+  fixture.values.set(key, { bytes: Buffer.from(JSON.stringify(state)), etag: saved.etag });
+  const run = await fixture.launch(a, ['invite', 'serve', invitation.invitationId, '--wait', '1']).done;
+  assert.equal(run.code, 1);
+  assert.match(run.stderr, /\[invite-expired\]/);
+  assert.deepEqual(nextLines(run.stderr), []);
+});
+
+test('invite serve (7): an invitation that was already claimed and paired prints no start line when served again', async () => {
+  const a = await fixture.home('next-serve-claimed-a');
+  const b = await fixture.home('next-serve-claimed-b');
+  const { invitation } = await pendingInvitation(a);
+  const serving = fixture.launch(a, ['invite', 'serve', invitation.invitationId, '--wait', '15']);
+  await fixture.run(b, ['join', invitation.link, '--consent', '--wait', '15']);
+  assert.equal((await serving.done).code, 0);
+  const again = await fixture.launch(a, ['invite', 'serve', invitation.invitationId, '--wait', '15']).done;
+  assert.deepEqual(nextLines(again.stderr), [], again.stderr);
+});

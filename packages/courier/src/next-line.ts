@@ -13,29 +13,41 @@ export function initRequestNextLine(): string {
   return `Next: write the link above in your reply to the owner now, and in that same reply run \`${cmd('init --wait --timeout 60s')}\`; do not end your turn or wait for a reply.`;
 }
 
-/** A flag whose name says it carries a secret, matched on the name alone (a value after `=` is not part of it). */
-const SECRET_FLAG = /code|secret|token|key|password|passphrase|delegation|proof|authorization|bearer|credential/i;
-/** A value that looks like a one-time code or a delegation: a JSON document or a long base64/base32 token. */
-const SECRET_VALUE = /^(?:\{|[A-Za-z0-9+/_-]{32,}={0,2}$)/;
+// What may be echoed is an ALLOWLIST: the command line is printed only when every token is known to be harmless.
+// Anything else (an unknown or short flag, `--flag=value`, a positional other than `init`, a value outside the plain
+// pattern, a long token, a JWT-like token, any control character) makes the line say `this same command` and echo
+// nothing. Flags are those `init --wait` accepts and a pending run can carry.
+const VALUE_FLAGS: Record<string, true> = {
+  '--timeout': true, '--label': true, '--handle': true, '--expiry': true, '--host': true, '--openkey-host': true, '--openkey-api-host': true,
+};
+const isKnown = (table: Record<string, true>, name: string): boolean => Object.hasOwn(table, name);
+const PLAIN_VALUE = /^[A-Za-z0-9._:@/+ -]{1,64}$/;
+/** Values that look like a one-time code or a delegation even though they are plain characters. */
+const LONG_TOKEN = /^[A-Za-z0-9+/_-]{24,}={0,2}$/;
+const JWT_LIKE = /^[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*$/;
 
-/** Whether echoing this command line could leak a secret. Over-matching is safe: the line then names no command. */
-function mayCarrySecret(argv: string[]): boolean {
-  return argv.some((arg) => {
-    if (!arg.startsWith('-')) return SECRET_VALUE.test(arg);
-    const [name, ...value] = arg.split('=');
-    return SECRET_FLAG.test(name!) || (value.length > 0 && SECRET_VALUE.test(value.join('=')));
-  });
+const safeValue = (value: string): boolean => PLAIN_VALUE.test(value) && !LONG_TOKEN.test(value) && !JWT_LIKE.test(value);
+
+function safeToEcho(argv: string[]): boolean {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index]!;
+    if (arg === '--wait' || arg === 'init') continue;
+    if (!isKnown(VALUE_FLAGS, arg)) return false;
+    const value = argv[(index += 1)];
+    if (value === undefined || !safeValue(value)) return false;
+  }
+  return true;
 }
 
 /**
  * After a pending `init --wait` (exit 8): `argv` is the command as it was run, without the program name; `created`
- * says the link was made in this run (otherwise the request was resumed and the link may already be sent). When any
- * argument could carry a secret the command is not echoed: the words `this same command`.
+ * says the link was made in this run (otherwise the request was resumed and the link may already be sent). The
+ * command is echoed in backticks only when it is safe to; otherwise the words `this same command`.
  */
 export function pendingNextLine(argv: string[], created: boolean): string {
-  const same = mayCarrySecret(argv)
-    ? 'this same command'
-    : `\`${cmd(argv.map((arg) => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replace(/'/g, `'\\''`)}'`)).join(' '))}\``;
+  const same = argv.length > 0 && safeToEcho(argv)
+    ? `\`${cmd(argv.map((arg) => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replace(/'/g, `'\\''`)}'`)).join(' '))}\``
+    : 'this same command';
   return created
     ? `Next: write the link above in your reply to the owner now, and in that same reply run ${same} again; do not end your turn or wait for a reply.`
     : `Next: if you have not written the link above to the owner yet, write it in your reply now, and in that same reply run ${same} again; do not end your turn or wait for a reply.`;

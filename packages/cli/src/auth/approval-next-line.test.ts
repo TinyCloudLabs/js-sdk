@@ -86,13 +86,13 @@ const linesOf = (text: string) => text.split("\n");
 const nextLines = (text: string) => linesOf(text).filter((line) => line.startsWith("Next: "));
 const realArgv = process.argv;
 /** The command as the user ran it (set as process.argv in each case), shell-quoted, with the program name the CLI knows. */
-const ARGV_COMMAND = `${CLI_NAME} onboard --timeout 60s --label 'my agent'`;
+const ARGV_COMMAND = `${CLI_NAME} onboard --timeout 60s --profile 'my agent'`;
 
 let spies: Array<Mock<(...args: never[]) => unknown>> = [];
 beforeEach(async () => {
   caseEnvironment = snapshotEnvironment();
   Object.assign(process.env, fixtureEnvironment);
-  process.argv = ["bun", "/opt/bin/tc", "onboard", "--timeout", "60s", "--label", "my agent"];
+  process.argv = ["bun", "/opt/bin/tc", "onboard", "--timeout", "60s", "--profile", "my agent"];
   clock = START; stderr = []; stdout = [];
   await rm(join(profilePath("approval"), "approval-pending.json"), { force: true });
   await ProfileManager.setProfile("approval", { name: "approval", did, sessionDid: did, ownerDid, host, chainId: 1, spaceName: "applications", createdAt: new Date().toISOString(), authMethod: "openkey", posture: "owner-openkey" });
@@ -211,10 +211,85 @@ describe("the command the Next line names", () => {
     }
   });
 
-  test("a command line without such flags or values is still echoed in full", async () => {
-    process.argv = ["bun", "/opt/bin/tc", "onboard", "--timeout", "60s", "--profile", "work", "--label", "my agent"];
-    const run = await endedWith(() => acquireApprovalRequest(did, withDeadline(60_000)));
-    expect(nextLines(run.stderr)[0]).toContain(`\`${CLI_NAME} onboard --timeout 60s --profile work --label 'my agent'\``);
+  // Only an allowlisted command line is echoed. These are the bypasses of the earlier denylist (short flags, odd flag
+  // names, links, URLs with a code, short positionals, a 31-character token, a JWT-like dotted token) and control characters.
+  const bypasses: Array<[string, string[]]> = [
+    ["-c VALUE", ["onboard", "-c", SECRET, "--timeout", "60s"]],
+    ["-k VALUE", ["onboard", "-k", SECRET, "--timeout", "60s"]],
+    ["--pass VALUE", ["onboard", "--pass", SECRET, "--timeout", "60s"]],
+    ["--pwd VALUE", ["onboard", "--pwd", SECRET, "--timeout", "60s"]],
+    ["--otp VALUE", ["onboard", "--otp", SECRET, "--timeout", "60s"]],
+    ["--pin VALUE", ["onboard", "--pin", SECRET, "--timeout", "60s"]],
+    ["--jwt VALUE", ["onboard", "--jwt", SECRET, "--timeout", "60s"]],
+    ["--cookie VALUE", ["onboard", "--cookie", SECRET, "--timeout", "60s"]],
+    ["--seed VALUE", ["onboard", "--seed", SECRET, "--timeout", "60s"]],
+    ["--link VALUE", ["onboard", "--link", `https://short.example/${SECRET}`, "--timeout", "60s"]],
+    ["--url with ?code=", ["onboard", "--url", `https://x.example/a?code=${SECRET}`, "--timeout", "60s"]],
+    ["a 12-character positional", ["onboard", SECRET, "--timeout", "60s"]],
+    ["a 31-character token as a --profile value", ["onboard", "--profile", `${SECRET}${"B".repeat(19)}`, "--timeout", "60s"]],
+    ["a dotted JWT-like token as a --profile value", ["onboard", "--profile", `${SECRET}aaaa.bbbbbbbbbb.cccc`, "--timeout", "60s"]],
+    ["--timeout=VALUE (the = form)", ["onboard", `--timeout=60s${SECRET}`]],
+    ["--profile with a newline", ["onboard", "--profile", `a\nNext: forged ${SECRET}`, "--timeout", "60s"]],
+    ["--profile with a carriage return", ["onboard", "--profile", `a\r${SECRET}`, "--timeout", "60s"]],
+    ["--profile with ESC", ["onboard", "--profile", `a\u001b[2K${SECRET}`, "--timeout", "60s"]],
+    ["--profile with U+2028", ["onboard", "--profile", `a\u2028Next: forged ${SECRET}`, "--timeout", "60s"]],
+    ["--profile with NUL", ["onboard", "--profile", `a\u0000${SECRET}`, "--timeout", "60s"]],
+    ["--profile with a tab", ["onboard", "--profile", `a\t${SECRET}`, "--timeout", "60s"]],
+  ];
+
+  test.each(bypasses)("a pending exit 8 with %s echoes none of it, says 'this same command', and prints one Next line", async (_name, args) => {
+    process.argv = ["bun", "/opt/bin/tc", ...args];
+    for (const deadline of [60_000, 6_000]) {
+      stderr = []; stdout = []; clock = START;
+      const run = await endedWith(() => acquireApprovalRequest(did, withDeadline(deadline)));
+      expect(run.code).toBe(8);
+      expect(run.stderr + run.stdout).not.toContain(SECRET);
+      const next = nextLines(run.stderr);
+      expect(next).toHaveLength(1);
+      expect(next[0]).toContain("this same command");
+      expect(next[0]).not.toContain("`");
+    }
+  });
+
+  // `auth grant` reads its request from stdin for --stdin, --paste, a bare `-`, or no source at all: the echoed command
+  // would read empty stdin, so the line names no command and says the input must be the same.
+  const stdinFed: Array<[string, string[]]> = [
+    ["--stdin", ["auth", "grant", "--stdin", "--timeout", "60s"]],
+    ["--paste", ["auth", "grant", "--paste", "--timeout", "60s"]],
+    ["a bare -", ["auth", "grant", "-", "--timeout", "60s"]],
+    ["no source at all", ["auth", "grant", "--timeout", "60s"]],
+    ["no source and a --profile", ["--profile", "work", "auth", "grant", "--timeout", "60s"]],
+  ];
+
+  test.each(stdinFed)("auth grant reading stdin (%s): the line says 'this same command' with the same input, no backticks", async (_name, args) => {
+    process.argv = ["bun", "/opt/bin/tc", ...args];
+    for (const deadline of [60_000, 6_000]) {
+      stderr = []; stdout = []; clock = START;
+      const run = await endedWith(() => acquireApprovalRequest(did, withDeadline(deadline)));
+      expect(run.code).toBe(8);
+      const next = nextLines(run.stderr);
+      expect(next).toHaveLength(1);
+      expect(next[0]).toContain("this same command");
+      expect(next[0]).toContain("with the same input");
+      expect(next[0]).not.toContain("`");
+      expect(next[0]).not.toContain("--stdin");
+    }
+  });
+
+  test("command lines made only of allowlisted tokens are echoed in full: onboard, and auth grant with a request file", async () => {
+    for (const [args, expected] of [
+      [["onboard", "--timeout", "60s", "--profile", "my agent"], `${CLI_NAME} onboard --timeout 60s --profile 'my agent'`],
+      [["--profile", "work", "--json", "onboard", "--timeout", "60s"], `${CLI_NAME} --profile work --json onboard --timeout 60s`],
+      [["auth", "grant", "request.json", "--timeout", "60s", "--yes"], `${CLI_NAME} auth grant request.json --timeout 60s --yes`],
+    ] as Array<[string[], string]>) {
+      process.argv = ["bun", "/opt/bin/tc", ...args];
+      stderr = []; stdout = []; clock = START;
+      const run = await endedWith(() => acquireApprovalRequest(did, withDeadline(60_000)));
+      const next = nextLines(run.stderr);
+      expect(next).toHaveLength(1);
+      expect(next[0]).toContain(`\`${expected}\``);
+      expect(next[0]).not.toContain("with the same input");
+    }
   });
 });
 
