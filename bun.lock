@@ -134,7 +134,7 @@
     },
     "apps/web-sdk-example": {
       "name": "tinycloud-web-sdk-example-app",
-      "version": "0.0.5",
+      "version": "0.0.6",
       "dependencies": {
         "@radix-ui/react-accordion": "^1.2.3",
         "@radix-ui/react-alert-dialog": "^1.1.6",
@@ -196,7 +196,7 @@
     },
     "packages/cli": {
       "name": "@tinycloud/cli",
-      "version": "1.6.2-beta.0",
+      "version": "1.6.2",
       "bin": {
         "tc": "./bin/tinycloud",
         "tinycloud": "./bin/tinycloud",
@@ -217,7 +217,7 @@
         "siwe": "^3.0.0",
       },
       "devDependencies": {
-        "@tinycloud/courier": "0.5.2-beta.0",
+        "@tinycloud/courier": "0.5.2",
         "@tinycloud/replica": "0.4.4",
         "@types/node": "^20",
         "tsup": "^8.0.0",
@@ -226,7 +226,7 @@
     },
     "packages/courier": {
       "name": "@tinycloud/courier",
-      "version": "0.5.2-beta.0",
+      "version": "0.5.2",
       "bin": {
         "courier": "./dist/cli.js",
       },
@@ -571,7 +571,7 @@
     },
     "tests/sdk-services": {
       "name": "@tinycloud/sdk-services-test",
-      "version": "21.0.4",
+      "version": "21.0.5",
       "devDependencies": {
         "@tinycloud/sdk-services": "workspace:*",
         "@types/node": "^20",

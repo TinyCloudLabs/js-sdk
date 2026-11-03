@@ -1,5 +1,15 @@
 # @tinycloud/cli
 
+## 1.6.2
+
+### Patch Changes
+
+- 7062e9f: When `onboard --timeout` or `auth grant --timeout` ends with exit 8 because the owner has not answered yet, stderr now ends with one `Next:` line after the link and the "Still waiting" message. The line asks the agent only to send the owner the link in its reply now, and to run the command again when the owner next writes to it; it no longer asks for the re-run in the same reply. For a link created in this run it says to send the link above now; for a resumed wait that reached its deadline it says to send the link only if it has not been sent yet. It never claims the owner already has the link. This works best with a short `--timeout` (for example `1s`), so the pending exit is immediate and the flow continues on the owner's next message; in testing the request is not always followed, so it is a request, not a guarantee. The line names the command as it was run (with the program name `tc` or `tinycloud`) only when every part of the command line is known to be harmless: the subcommand words, a `.json` request file, and the flags `--timeout`, `--profile`, `--host`, `--json`, `--yes`, `--quiet`, `--verbose`, `--no-cache`, `--no-retry`, `--replication` with plain values. For anything else (any other flag, short flags, `--flag=value`, a code or token, a JWT-like or long value, any control character) it says `this same command` and echoes nothing from the command line. When `auth grant` reads its request from stdin (`--stdin`, `--paste`, a bare `-`, or no source) it says `this same command ... again with the same input`, because the command alone would read an empty stdin. stdout (`{"pending":{...}}`) and the exit code are unchanged, and no other exit prints the line.
+
+  A resumed approval now completes at least one status check of OpenKey before `onboard` or `auth grant` reports it as pending, whatever the `--timeout` (a new link still exits 8 at once, with no check). Before, with `--timeout 1s` the status request was cut off after about a second, so an OpenKey answer that took 1.5 s made an approval the owner had already given read as pending (exit 8). The command can now take up to about 10 s longer than the timeout (with the 30 s collect grace, at most about 9m40s for `--timeout 9m`), and if OpenKey does not answer that first check at all it exits 6 instead of reporting the approval as pending; an approval OpenKey has already accepted (a saved result reference) keeps its earlier outcome.
+
+  Details: TC-2360
+
 ## 1.6.2-beta.0
 
 ### Patch Changes

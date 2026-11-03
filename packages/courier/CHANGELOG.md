@@ -1,5 +1,13 @@
 # @tinycloud/courier
 
+## 0.5.2
+
+### Patch Changes
+
+- 7062e9f: Courier now prints `Next:` lines on stderr. Every line that hands the owner a link asks the agent only to send the owner that link in its reply now, and, where there is a follow-up command, to run it when the owner next writes to the agent (it no longer asks for the command in the same reply). The follow-up command is named in backticks, written as the user ran Courier (`courier` or `tinycloud courier`). This works best with a short `--timeout` (for example `1s`) so the pending exit is immediate and the flow continues on the owner's next message; in testing the request is not always followed, so it is a request, not a guarantee. `courier init --request` ends its stderr with a line that asks for the link above to be sent now and `init --wait --timeout 60s` to be run when the owner next writes. A pending `courier init --wait` (exit 8) ends with a line that names the same command again (only when every part of the command line is a known `init --wait` flag with a plain value; otherwise the words `this same command` and nothing from the command line, including any control character, is echoed): for a link created in this run, send the link now and run the command when the owner next writes; for a resumed request, send the link only if it has not been sent yet. A pending `courier invite --wait` ends its stderr, after the existing `[invite-pending]` line, with a line that asks for the invitation link (which stays on stdout) to be sent now and `invite serve <id> --wait 60` to be run when the owner next writes. `courier invite serve` prints, at the start of every run of a live, unclaimed invitation (not an expired or already-claimed one), a line with the saved invitation link to send if it has not been sent yet, and, if it ends pending, a last line after `[invite-pending]` that says no one has joined yet and to run the same command again now (it has no link to hand over, so it keeps the run-again wording). A claimed invitation prints no run-again line. stdout JSON and exit codes are unchanged, and other runs print no such line.
+
+  Details: TC-2360
+
 ## 0.5.2-beta.0
 
 ### Patch Changes
