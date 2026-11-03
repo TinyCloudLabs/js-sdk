@@ -1,4 +1,6 @@
+import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { HEALTHLOG_DATABASE, HEALTHLOG_DAY_CARD, HEALTHLOG_MEAL_DUPLICATE_CHECK, HEALTHLOG_MEAL_INSERT, HEALTHLOG_MEAL_READBACK, HEALTHLOG_MEAL_UPDATE, HEALTHLOG_WEIGHT_INSERT, HEALTHLOG_WEIGHT_READBACK } from "../tc-apps/preamble.js";
 import { sqlOperationDefinitions } from "./sql.js";
 import { definition, fixture, SPACE } from "./apps.fixtures.js";
@@ -46,5 +48,34 @@ describe("context time for logged_at", () => {
       // `now` carries the owner's offset; the same instant in UTC is `utc`.
       expect(Math.abs(Date.parse(output.now) - Date.parse(output.utc))).toBeLessThan(60_000);
     });
+  });
+});
+
+describe("the statements in the rules against the pinned Health Log schema", () => {
+  function healthLog(): Database {
+    const db = new Database(":memory:");
+    db.exec(readFileSync(new URL("../../../cli/src/lib/apps-install.healthlog.schema.sql", import.meta.url), "utf8"));
+    return db;
+  }
+  const op = "0b6cbd3d-5d6e-4d0e-9f3a-9d1f6a1b7a11";
+  test("a meal and a weight go in with the documented parameters, read back, and total on the day card", () => {
+    const db = healthLog();
+    db.query(HEALTHLOG_MEAL_INSERT).run(op, "2026-11-03", "lunch", "Dal and rice", 650, "2026-11-03T12:30:00Z");
+    db.query(HEALTHLOG_WEIGHT_INSERT).run("0b6cbd3d-5d6e-4d0e-9f3a-9d1f6a1b7a12", "2026-11-03", 80.5, "2026-11-03T07:00:00Z");
+    expect(db.query(HEALTHLOG_MEAL_READBACK).all(op)).toMatchObject([{ slot: "lunch", name: "Dal and rice", kcal: 650 }]);
+    expect(db.query(HEALTHLOG_WEIGHT_READBACK).all("0b6cbd3d-5d6e-4d0e-9f3a-9d1f6a1b7a12")).toMatchObject([{ day: "2026-11-03", weight_kg: 80.5 }]);
+    expect(db.query(HEALTHLOG_DAY_CARD).all("2026-11-03")).toMatchObject([{ kcal: 650, meals: 1, weight_kg: 80.5 }]);
+    expect(db.query(HEALTHLOG_MEAL_DUPLICATE_CHECK).all("2026-11-03", "lunch", "Dal and rice")).toHaveLength(1);
+    db.query(HEALTHLOG_MEAL_UPDATE).run(150, op);
+    expect(db.query(HEALTHLOG_MEAL_READBACK).all(op)).toMatchObject([{ kcal: 150 }]);
+  });
+  test("the app refuses what the rules say never to send: bad slot, kcal or weight out of range, a repeated op_id", () => {
+    const db = healthLog();
+    const meal = (id: string, slot: string, kcal: number) => () => db.query(HEALTHLOG_MEAL_INSERT).run(id, "2026-11-03", slot, "Dal", kcal, "2026-11-03T12:30:00Z");
+    expect(meal(op, "brunch", 650)).toThrow();
+    expect(meal(op, "lunch", 5001)).toThrow();
+    meal(op, "lunch", 650)();
+    expect(meal(op, "lunch", 650)).toThrow();
+    expect(() => db.query(HEALTHLOG_WEIGHT_INSERT).run("w1", "2026-11-03", 19, "2026-11-03T07:00:00Z")).toThrow();
   });
 });

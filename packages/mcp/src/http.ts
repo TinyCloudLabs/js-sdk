@@ -139,7 +139,7 @@ function createHostedSurface(
         instructions: nativeOwner === undefined
           ? surface === "public"
             ? "Use TinyCloud only for the user's requested task. Call tinycloud_connect first. If an operation returns authority_required, present approval.url and wait for the user's approval before retrying. If approval is declined, stop that operation. For personal records, call tinycloud_apps_context first. Never request or store passwords, API keys, authentication codes, government identifiers, payment-card data, or protected health information."
-            : "Call tinycloud_connect first. If an operation returns authority_required, open approval.url, then retry that operation unchanged. For personal records such as weight, workouts, goals or todos, call tinycloud_apps_context first."
+            : "Call tinycloud_connect first. If an operation returns authority_required, open approval.url, then retry that operation unchanged. For personal records such as workouts, goals or todos, call tinycloud_apps_context first."
           : "Use only the user's requested connector-transcript data. The signed TinyCloud grant authorizes read-only SQL and transcript KV reads.",
       },
     );

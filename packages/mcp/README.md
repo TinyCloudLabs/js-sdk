@@ -51,7 +51,7 @@ personal-record tools, and omits local-only `tinycloud_secrets_status` and
 exact requested operation; approved delegations arrive only through that flow,
 which binds them to the requesting OpenKey account and stored request.
 
-For personal records, ask naturally: “Log my weight: 80.5 kg today.”
+For personal records, ask naturally: “Add renew passport to my todos.”
 `tinycloud_apps_context` supplies the rules and the app list (each app with its
 layout), `tinycloud_apps_read`
 reads records with ETags, and `tinycloud_apps_write` creates, conditionally edits,
