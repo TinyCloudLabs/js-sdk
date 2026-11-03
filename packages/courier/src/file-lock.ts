@@ -51,24 +51,20 @@ export function writeNew(dir: string, name: string, body: string, mode: number):
 }
 
 /**
- * `pid` and `nonce` are the ownership record. `start` (Linux process start ticks) says which process that pid was, so a reused pid is not
- * mistaken for the holder; `machine` (machine-id) and `boot` (boot id) say which machine and boot it ran on, `host` and `pidns` are
- * for people and for the pid namespace check.
+ * `pid` and `nonce` are the ownership record. `machine` (machine-id) and `boot` (a true per-boot id) say which machine and boot it ran on;
+ * `host` and `pidns` say where a pid number means anything.
  */
 interface LockRecord {
   pid: number;
   nonce: string;
-  start?: string;
   host?: string;
   pidns?: string;
-  /** Linux time namespace: /proc start times are shifted by it, so they are comparable only inside one. */
-  timens?: string;
   machine?: string;
   boot?: string;
 }
 
 const MAX_FIELD = 128;
-const OPTIONAL_FIELDS = ['start', 'host', 'pidns', 'timens', 'machine', 'boot'] as const;
+const OPTIONAL_FIELDS = ['host', 'pidns', 'machine', 'boot'] as const;
 
 type LockRead = { kind: 'missing' } | { kind: 'corrupt' } | { kind: 'held'; record: LockRecord };
 
@@ -113,48 +109,6 @@ function readLock(file: string): LockRead {
   }
   const record = parseRecord(text);
   return record ? { kind: 'held', record } : { kind: 'corrupt' };
-}
-
-/** State and start time (clock ticks since boot) of `pid` from Linux /proc, or undefined when it cannot be read. */
-function procInfo(pid: number): { state: string; start: string | undefined } | undefined {
-  try {
-    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
-    const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
-    return { state: fields[0] ?? '', start: fields[19] || undefined };
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Whether /proc is this process's own view, proved by the kernel: `/proc/1` (the init of the pid namespace the procfs was mounted in) and
- * `/proc/self` must name the same pid namespace (`ns/pid` links). A procfs from another pid namespace shows a different init, whatever pid
- * numbers happen to coincide. The pid and parent pid must also agree with what the kernel tells this process (`getpid`, `getppid`), as a
- * further check, never instead of the namespace one. Not Linux, or any of these unreadable (reading `/proc/1/ns/pid` needs ptrace rights on init,
- * which an ordinary user usually lacks): false, so no /proc evidence is recorded or trusted and an unproven holder stays `unknown`.
- */
-function ownProc(): boolean {
-  if (process.platform !== 'linux') return false;
-  try {
-    if (fs.readlinkSync('/proc/self') !== String(process.pid)) return false;
-    const stat = fs.readFileSync('/proc/self/stat', 'utf8');
-    if (stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1] !== String(process.ppid)) return false;
-    const init = fs.readlinkSync('/proc/1/ns/pid');
-    return init === fs.readlinkSync('/proc/self/ns/pid');
-  } catch {
-    return false;
-  }
-}
-
-/** This process's time namespace, only from an own /proc view. */
-function timeNamespace(): string | undefined {
-  if (!ownProc()) return undefined;
-  try { return fs.readlinkSync('/proc/self/ns/time'); } catch { return undefined; }
-}
-
-/** Start time of `pid`, only from a /proc that is this process's own view. */
-export function processStart(pid: number): string | undefined {
-  return ownProc() ? procInfo(pid)?.start : undefined;
 }
 
 function pidNamespace(): string | undefined {
@@ -206,13 +160,9 @@ export function machineIdentity(io: IdentityIo = realIo): { machine?: string; bo
 let cachedIdentity: { machine?: string; boot?: string } | undefined;
 const currentIdentity = (): { machine?: string; boot?: string } => (cachedIdentity ??= machineIdentity());
 
-/** What this process records about itself: enough to recognize it later, and to tell another machine's, boot's or pid namespace's records apart. */
-function identity(pid: number, here: { machine?: string; boot?: string }): Pick<LockRecord, 'start' | 'host' | 'pidns' | 'timens' | 'machine' | 'boot'> {
-  const out: Pick<LockRecord, 'start' | 'host' | 'pidns' | 'timens' | 'machine' | 'boot'> = { host: os.hostname(), ...here };
-  const start = processStart(pid);
-  if (start !== undefined) out.start = start;
-  const time = timeNamespace();
-  if (time !== undefined) out.timens = time;
+/** What this process records about itself: enough to tell another machine's, boot's or pid namespace's records apart. */
+function identity(here: { machine?: string; boot?: string }): Pick<LockRecord, 'host' | 'pidns' | 'machine' | 'boot'> {
+  const out: Pick<LockRecord, 'host' | 'pidns' | 'machine' | 'boot'> = { host: os.hostname(), ...here };
   const ns = pidNamespace();
   if (ns !== undefined) out.pidns = ns;
   return out;
@@ -221,13 +171,13 @@ function identity(pid: number, here: { machine?: string; boot?: string }): Pick<
 export type Liveness = 'alive' | 'dead' | 'unknown';
 
 /**
- * Whether the process that wrote `record` still runs. Order: (1) the record must name this machine (machine-id) AND this host, else
- * `unknown`: another machine, a cloned machine-id, a renamed host, an old pid-only record, or an identity this process cannot read is
- * never judged. (2) Two true boot ids of the same kind that differ prove a reboot: `dead`. Wall-clock boot values never decide. (3) Otherwise
- * only positive evidence about the pid counts: gone (`ESRCH`), exited (a zombie, Linux), or a different process start time (Linux, where
- * /proc gives one). A pid namespace that differs is `unknown`. A live pid that cannot be told from a reused one (no start time to compare,
- * every platform but Linux) is `unknown`, never `dead`. On Linux a record and this process must both name a pid namespace, and the same one,
- * before any pid evidence counts.
+ * Whether the process that wrote `record` still runs. A holder is `dead` in exactly two cases, and `unknown` (the lock is kept) in every other:
+ *   (a) a different true boot id of the same kind on the same machine and host: no process survives a reboot; or
+ *   (b) its pid is absent (`ESRCH`).
+ * Before either, the record must name this machine (machine-id) and this host (another machine, a cloned machine-id, a renamed host, an old
+ * pid-only record, or an identity this process cannot read is never judged), and on Linux the same pid namespace as this process: a reader in
+ * another pid namespace sees a live holder's pid as absent. A pid that exists is never `dead`, whatever its start time, state or owner: a
+ * crashed holder whose pid was reused needs the manual recovery line.
  */
 export function recordLiveness(record: LockRecord, here: { machine?: string; boot?: string } = currentIdentity()): Liveness {
   if (record.machine === undefined || here.machine === undefined || record.machine !== here.machine) return 'unknown';
@@ -236,25 +186,14 @@ export function recordLiveness(record: LockRecord, here: { machine?: string; boo
     const [kindA, kindB] = [record.boot.split(':', 1)[0], here.boot.split(':', 1)[0]];
     if ((kindA === 'linux' || kindA === 'macos') && kindA === kindB && record.boot !== here.boot) return 'dead';
   }
-  if (process.platform === 'linux') {
-    // A pid means something only inside one pid namespace: a writer that could not name its namespace, or a reader that cannot name its own,
-    // may be looking at a different pid table, where a live holder's pid is simply absent.
-    const ns = pidNamespace();
-    if (record.pidns === undefined || ns === undefined || record.pidns !== ns) return 'unknown';
-  } else if (record.pidns !== undefined && record.pidns !== pidNamespace()) return 'unknown';
+  const ns = pidNamespace();
+  if (process.platform === 'linux' ? record.pidns === undefined || ns === undefined || record.pidns !== ns : record.pidns !== undefined && record.pidns !== ns) return 'unknown';
   try {
     process.kill(record.pid, 0);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'EPERM') return (error as NodeJS.ErrnoException).code === 'ESRCH' ? 'dead' : 'unknown';
-    // EPERM: the process exists but belongs to someone else. Its start time still tells a reused pid from the holder.
+    return (error as NodeJS.ErrnoException).code === 'ESRCH' ? 'dead' : 'unknown';
   }
-  // /proc is evidence only when it is this process's own view (see `ownProc`): a start time or state read from a foreign one could make a live holder look dead.
-  if (!ownProc()) return 'unknown';
-  const info = procInfo(record.pid);
-  if (info?.state === 'Z' || info?.state === 'X') return 'dead'; // exited, only not yet reaped
-  // A start time is comparable only inside one time namespace (it is shifted by the namespace's boot offset): both sides must name it, and the same one.
-  if (record.start === undefined || info?.start === undefined || record.timens === undefined || record.timens !== timeNamespace()) return 'unknown';
-  return info.start === record.start ? 'alive' : 'dead';
+  return 'unknown';
 }
 
 /** Why a lock was refused: shown by the caller as one line naming the file, the holder and the safe manual way out. */
@@ -307,7 +246,7 @@ export function acquireLock(file: string, opts: LockOptions = {}): () => void {
   const name = path.basename(file);
   const pid = opts.pid ?? process.pid;
   const here = (opts.identity ?? currentIdentity)();
-  const self: LockRecord = { pid, nonce: randomBytes(6).toString('hex'), ...identity(pid, here) };
+  const self: LockRecord = { pid, nonce: randomBytes(6).toString('hex'), ...identity(here) };
   const state = (record: LockRecord): Liveness => (opts.alive ? (opts.alive(record.pid) ? 'alive' : 'dead') : recordLiveness(record, here));
   const refuse = (info: Omit<LockRefusal, 'file'>): never => {
     throw new CourierError('locked', (opts.refusal ?? lockRefusal)({ file, ...info }));
