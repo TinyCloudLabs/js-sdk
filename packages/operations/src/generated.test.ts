@@ -4,6 +4,8 @@ import { fileURLToPath } from "node:url";
 
 import { expect, test } from "bun:test";
 
+import { OPERATION_ERROR_CODES } from "./errors.js";
+
 const sourceDirectory = dirname(fileURLToPath(import.meta.url));
 const packageDirectory = resolve(sourceDirectory, "..");
 const catalogPath = resolve(packageDirectory, "generated/operations.json");
@@ -32,6 +34,71 @@ async function runGenerator(...arguments_: readonly string[]): Promise<number> {
 
   return process.exited;
 }
+
+test("the catalog contains exactly the registered v1 definitions", async () => {
+  const catalog = JSON.parse(await readFile(catalogPath, "utf8")) as {
+    schemaVersion: number;
+    stableErrors: readonly string[];
+    operations: CatalogOperation[];
+  };
+
+  expect(catalog.schemaVersion).toBe(1);
+  expect(catalog.stableErrors).toEqual(OPERATION_ERROR_CODES);
+  expect(catalog.operations.map((operation) => `${operation.id}@${operation.version}`)).toEqual([
+    "tinycloud.account.applications.list@1",
+    "tinycloud.account.spaces.list@1",
+    "tinycloud.apps.context@1",
+    "tinycloud.apps.query@1",
+    "tinycloud.apps.read@1",
+    "tinycloud.apps.write@1",
+    "tinycloud.auth.capabilities@1",
+    "tinycloud.auth.import@1",
+    "tinycloud.auth.read_scope@1",
+    "tinycloud.auth.request@1",
+    "tinycloud.auth.status@1",
+    "tinycloud.knowledge.list@1",
+    "tinycloud.knowledge.read@1",
+    "tinycloud.kv.delete@1",
+    "tinycloud.kv.get@1",
+    "tinycloud.kv.head@1",
+    "tinycloud.kv.list@1",
+    "tinycloud.kv.put@1",
+    "tinycloud.read@1",
+    "tinycloud.secrets.get@1",
+    "tinycloud.secrets.status@1",
+    "tinycloud.sql.execute@1",
+    "tinycloud.sql.query@1",
+    "tinycloud.sql.schema.inspect@1",
+    "tinycloud.status.get@1",
+  ]);
+  for (const operation of catalog.operations) {
+    expect(operation.result.anyOf).toHaveLength(4);
+    expect(Object.keys(operation.exposure).sort()).toEqual(["cli", "docs", "mcp", "skill"]);
+    expect(operation.stableErrors).toEqual(OPERATION_ERROR_CODES);
+    expect(operation.authority).toEqual({ dynamic: true });
+  }
+
+  const byId = new Map(catalog.operations.map((operation) => [operation.id, operation]));
+  for (const operationId of [
+    "tinycloud.auth.capabilities", "tinycloud.auth.status", "tinycloud.status.get", "tinycloud.auth.import",
+  ]) {
+    expect(byId.get(operationId)?.input.additionalProperties).toBe(false);
+  }
+  const requestInput = byId.get("tinycloud.auth.request")?.input.anyOf as Array<Record<string, unknown>>;
+  expect(requestInput).toHaveLength(2);
+  expect(requestInput.every((branch) => branch.additionalProperties === false)).toBe(true);
+
+  const secretGet = byId.get("tinycloud.secrets.get");
+  expect(secretGet?.sensitivity).toEqual({ input: false, output: true });
+  expect(secretGet?.effects).toEqual(["read", "local_write"]);
+
+  const sqlExecute = byId.get("tinycloud.sql.execute");
+  expect(sqlExecute?.input).toMatchObject({
+    properties: { acknowledgeDatabaseWideAuthority: { const: true } },
+    required: expect.arrayContaining(["acknowledgeDatabaseWideAuthority"]),
+  });
+  expect(sqlExecute?.effects).toEqual(["write", "destructive"]);
+});
 
 test("generated authority results require the complete strict request artifact", async () => {
   const catalog = JSON.parse(await readFile(catalogPath, "utf8")) as {
