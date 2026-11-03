@@ -14,11 +14,17 @@ import { E, RESULT_EXPIRES, RESULT_REF, SECRET_STRINGS, T0, entryIn, iso } from 
 // TC-2377: the driver is the one loop that polls, sleeps, fetches, verifies, commits and acks. Everything it touches is
 // injected: a fake clock, a recording store, a scripted OpenKey. No test sleeps or touches the network.
 
+interface Timed {
+  readonly reply: Reply;
+  readonly ms?: number;
+  readonly skew?: number;
+}
+type Scripted = Reply | Timed;
 interface Script {
   /** The scripted answer for the n-th call (per call kind); the fake clock advances by `ms` while it is "in flight". */
-  readonly discover?: readonly (Reply | { reply: Reply; ms?: number; skew?: number })[];
-  readonly fetch?: readonly (Reply | { reply: Reply; ms?: number })[];
-  readonly ack?: readonly (Reply | { reply: Reply; ms?: number })[];
+  readonly discover?: readonly Scripted[];
+  readonly fetch?: readonly Scripted[];
+  readonly ack?: readonly Scripted[];
   readonly verdict?: ApprovalVerdict;
   readonly commitRetainUntil?: number;
   readonly startAt?: number;
@@ -36,9 +42,9 @@ function harness(initial: ApprovalEntry | undefined, script: Script = {}) {
     const queue = script[kind] ?? [];
     const item = queue[Math.min(counts[kind]++, queue.length - 1)];
     if (item === undefined) throw new Error(`no scripted ${kind}`);
-    const scripted = "reply" in item ? item : { reply: item };
-    t += "ms" in scripted && scripted.ms !== undefined ? scripted.ms : 50;
-    return { reply: scripted.reply, ...("skew" in scripted && scripted.skew !== undefined ? { serverDateSkewMs: scripted.skew } : {}) };
+    const scripted: Timed = "reply" in item ? item : { reply: item };
+    t += scripted.ms ?? 50;
+    return { reply: scripted.reply, ...(scripted.skew === undefined ? {} : { serverDateSkewMs: scripted.skew }) };
   };
   const io: ApprovalDriverIo = {
     store: {

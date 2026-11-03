@@ -11,9 +11,11 @@ import {
   type ApprovalPhase,
   type Effect,
   type Event,
+  type Outcome,
   type Reply,
   type ReplyCode,
   type RequesterState,
+  type Rule,
   type Step,
 } from "../src/links/index.js";
 import { E, PHASES, R, RESULT_EXPIRES, RESULT_REF, S, SECRET_STRINGS, T0, entryIn, liveState } from "./approval-machine-fixtures.js";
@@ -30,12 +32,12 @@ const replyEvent = (reply: Reply, now = NOW, serverDateSkewMs?: number): Event =
 /** What one cell of the table must produce. `exit` is the number of the outcome the step finishes with, if it finishes. */
 type Cell =
   | "internal"
-  | { readonly entry: "keep"; readonly phase?: ApprovalPhase; readonly next: Effect["type"]; readonly outcome?: string; readonly exit?: number; readonly hold?: true }
-  | { readonly entry: "drop"; readonly outcome: string; readonly exit: number };
+  | { readonly entry: "keep"; readonly phase?: ApprovalPhase; readonly next: Effect["type"]; readonly outcome?: Outcome["kind"]; readonly exit?: number; readonly hold?: true }
+  | { readonly entry: "drop"; readonly outcome: Outcome["kind"]; readonly exit: number };
 
 const go = (phase: ApprovalPhase, next: Effect["type"]): Cell => ({ entry: "keep", phase, next });
-const stop = (outcome: string, exit: number, extra: { hold?: true } = {}): Cell => ({ entry: "keep", next: "finish", outcome, exit, ...extra });
-const drop = (outcome: string, exit: number): Cell => ({ entry: "drop", outcome, exit });
+const stop = (outcome: Outcome["kind"], exit: number, extra: { hold?: true } = {}): Cell => ({ entry: "keep", next: "finish", outcome, exit, ...extra });
+const drop = (outcome: Outcome["kind"], exit: number): Cell => ({ entry: "drop", outcome, exit });
 
 interface Row {
   readonly name: string;
@@ -151,7 +153,7 @@ function assertCell(cell: Cell, before: RequesterState, step: Step): void {
   expect(nextEffect(step).type).toBe(cell.next);
   if (cell.next === "finish") {
     expect(outcome?.kind).toBe(cell.outcome);
-    expect(exitCodeOf(outcome!)).toBe(cell.exit);
+    expect(exitCodeOf(outcome!)).toBe(cell.exit!);
   }
   expect(step.state.entry!.hold !== undefined).toBe(cell.hold === true);
 }
@@ -202,7 +204,7 @@ describe("every (event x phase) cell of the table", () => {
 });
 
 describe("RULES is the one code table and matches the contract", () => {
-  const expected: Readonly<Record<string, string>> = {
+  const expected: Readonly<Record<string, Rule["act"]>> = {
     "discover:expired_request": "lapse", "discover:request_denied": "denied", "discover:invalid_request": "refuse",
     "discover:not_found": "lapse", "discover:expired_result": "gone", "discover:request_binding": "refuse", "discover:invalid_proof": "proof",
     "fetch:not_found": "gone", "fetch:expired_result": "gone", "fetch:acknowledged": "gone", "fetch:request_binding": "refuse", "fetch:invalid_proof": "proof",
@@ -421,5 +423,19 @@ describe("requesterState starts a run with its first check still to do", () => {
   test("start on an open entry asks for a full-limit first discover, with no bound", () => {
     const start = reduce(requesterState(entryIn("open")), { type: "start", now: NOW, deadline: NOW + 1_000 });
     expect(nextEffect(start)).toEqual({ type: "call", call: "discover", firstCheck: true, settle: false });
+  });
+  test("a deadline that has already passed still gets one full first check before anything is reported", () => {
+    const start = reduce(requesterState(entryIn("open")), { type: "start", now: NOW, deadline: NOW - 5_000 });
+    expect(nextEffect(start)).toEqual({ type: "call", call: "discover", firstCheck: true, settle: false });
+    const answered = reduce(start.state, replyEvent({ kind: "pending" }, NOW + 100));
+    expect(finishOf(answered)).toMatchObject({ kind: "pending", confirmedLiveAt: NOW + 100 });
+    const silent = reduce(start.state, replyEvent({ kind: "network" }, NOW + 10_000));
+    expect(finishOf(silent)?.kind).toBe("unreachable");
+  });
+
+  test("a request created this run (201) counts as confirmed live", () => {
+    const start = reduce(requesterState(entryIn("open")), { type: "start", now: NOW, deadline: NOW - 1, createdThisRun: true });
+    const silent = reduce(start.state, replyEvent({ kind: "network" }, NOW + 10_000));
+    expect(finishOf(silent)).toMatchObject({ kind: "pending", confirmedLiveAt: NOW });
   });
 });

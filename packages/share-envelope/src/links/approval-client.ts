@@ -19,14 +19,15 @@ import { hmac } from "@noble/hashes/hmac";
 import { sha256 } from "@noble/hashes/sha256";
 
 import { fromBase64Url, toBase64Url, utf8Bytes } from "../bytes.js";
-import type { LinkRecord } from "./header.js";
+import type { ReplyCode, Reply } from "./approval-requester.js";
+import { APPROVAL_POLL_INTERVAL_MS, APPROVAL_REQUEST_TIMEOUT_MS } from "./constants.js";
+import { parseLinkTimestamp, type LinkRecord } from "./header.js";
 import type { Ed25519PrivateJwk } from "./signer.js";
 
 /** The `client_id` OpenKey expects in the session proof of every approval-result call. */
 export const APPROVAL_RESULT_CLIENT_ID = "openkey-approval-result-v1";
-/** What the CLI and Courier wait between result polls. */
-export const APPROVAL_POLL_INTERVAL_MS = 2000;
-const REQUEST_TIMEOUT_MS = 10_000;
+export { APPROVAL_POLL_INTERVAL_MS };
+const REQUEST_TIMEOUT_MS = APPROVAL_REQUEST_TIMEOUT_MS;
 const MIN_REQUEST_TIMEOUT_MS = 1000;
 const RESULT_REF_PATTERN = /^[A-Za-z0-9_-]{20,128}$/;
 const RELAY_INFO = "openkey-device-relay-v1";
@@ -219,6 +220,117 @@ export async function ackApprovalResult(
     throw new ApprovalClientError("unavailable", `OpenKey did not confirm the acknowledgement (HTTP ${response.status}).`, response.status);
   }
   return "acknowledged";
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Classification: the ONE place an OpenKey answer becomes a typed reply for the requester machine
+
+/** What a reply must name to be accepted: this request, its body CID, and (fetch, ack) the result and ack id. */
+export interface ReplyExpectation {
+  readonly requestId: string;
+  readonly bodyCid: string;
+  readonly resultRef?: string;
+  readonly resultExpiresAt?: string;
+  readonly ackId?: string;
+}
+
+const WIRE_CODES: readonly ReplyCode[] = [
+  "expired_request", "expired_result", "acknowledged", "not_found", "ack_conflict",
+  "request_binding", "invalid_proof", "invalid_request", "invalid_ack", "request_denied",
+];
+
+/**
+ * Classify one OpenKey answer (`status`, parsed JSON `body` or `null`) for `call`. Pure.
+ *
+ * Error bodies are `{ error, code }`; `code` is the machine-readable field. A denied request answers HTTP 410 with the
+ * EXISTING code `expired_request` plus `status: "denied"`: that, or the code `request_denied`, classifies as `request_denied`
+ * (never an expiry). A plain 410 `expired_request` stays `expired_request`. A 400 `invalid_request` keeps its own code: it is a
+ * real header fault, not an expiry. 401 `invalid_proof` and 400 `request_binding` stay distinct. A 2xx whose body does not have
+ * the expected shape and binding is `malformed`.
+ */
+export function classifyReply(call: ApprovalAction, status: number, body: unknown, expected: ReplyExpectation): Reply {
+  const record = typeof body === "object" && body !== null ? body as Record<string, unknown> : null;
+  if (status >= 200 && status < 300) {
+    const malformed: Reply = { kind: "malformed", call };
+    if (call === "discover" && status === 202) return { kind: "pending" };
+    if (status !== 200 || record === null) return malformed;
+    if (call === "discover") {
+      const { resultRef, expiresAt } = record;
+      return typeof resultRef === "string" && RESULT_REF_PATTERN.test(resultRef) && parseLinkTimestamp(expiresAt) !== null
+        ? { kind: "ready", resultRef, resultExpiresAt: expiresAt as string }
+        : malformed;
+    }
+    if (call === "fetch") {
+      const relay = record.relay;
+      return record.requestId === expected.requestId && record.bodyCid === expected.bodyCid && record.resultRef === expected.resultRef &&
+          record.expiresAt === expected.resultExpiresAt && typeof relay === "object" && relay !== null
+        ? { kind: "envelope", envelope: relay }
+        : malformed;
+    }
+    return record.ackId === expected.ackId && record.status === "acknowledged" ? { kind: "acked" } : malformed;
+  }
+  const wire = typeof record?.code === "string" ? record.code : "";
+  const denied = status >= 400 && (record?.status === "denied" || wire === "request_denied");
+  const code = denied ? "request_denied" : WIRE_CODES.find((known) => known === wire) ?? "unknown";
+  return { kind: "error", call, status, code };
+}
+
+const DATE_HEADER_PATTERN = /^[A-Za-z]{3}, \d{2} [A-Za-z]{3} \d{4} \d{2}:\d{2}:\d{2} GMT$/;
+
+/**
+ * The local clock minus the server's, from the reply's HTTP `Date` header and the local time at receipt: positive when the local
+ * clock is ahead. `undefined` when there is no usable header. `Date` has one-second resolution; callers compare it to a 60 s bound.
+ */
+export function serverDateSkewMs(dateHeader: string | null | undefined, receivedAt: number): number | undefined {
+  if (typeof dateHeader !== "string" || !DATE_HEADER_PATTERN.test(dateHeader)) return undefined;
+  const server = Date.parse(dateHeader);
+  return Number.isFinite(server) ? receivedAt - server : undefined;
+}
+
+export interface ApprovalCallArgs {
+  readonly resultRef?: string;
+  readonly resultExpiresAt?: string;
+  readonly ackId?: string;
+}
+export interface ApprovalCallOptions extends ApprovalTransportOptions {
+  /** The local clock used to measure the skew against the reply's `Date` header. */
+  readonly now?: () => number;
+}
+export interface ApprovalCallResult {
+  readonly reply: Reply;
+  /** Local clock minus the reply's HTTP `Date`; absent when there was no usable header or no reply. */
+  readonly serverDateSkewMs?: number;
+}
+
+/**
+ * One OpenKey call, classified: never throws for what OpenKey (or the network) answers. No reply is `{ kind: "network" }`; an
+ * abort the caller requested still rejects. This is what a requester's transport returns to the driver.
+ */
+export async function callApproval(
+  state: ApprovalRequesterState,
+  call: ApprovalAction,
+  args: ApprovalCallArgs = {},
+  options: ApprovalCallOptions = {},
+): Promise<ApprovalCallResult> {
+  let response: Response;
+  try {
+    response = await post(state, call, args.resultRef ?? "", args.ackId ?? "", options);
+  } catch (error) {
+    if (isApprovalClientError(error) && error.code === "network") return { reply: { kind: "network" } };
+    throw error;
+  }
+  const receivedAt = (options.now ?? Date.now)();
+  const body = await response.json().catch(() => null) as unknown;
+  const skew = serverDateSkewMs(response.headers.get("date"), receivedAt);
+  return {
+    reply: classifyReply(call, response.status, body, {
+      requestId: state.requestId, bodyCid: state.bodyCid,
+      ...(args.resultRef === undefined ? {} : { resultRef: args.resultRef }),
+      ...(args.resultExpiresAt === undefined ? {} : { resultExpiresAt: args.resultExpiresAt }),
+      ...(args.ackId === undefined ? {} : { ackId: args.ackId }),
+    }),
+    ...(skew === undefined ? {} : { serverDateSkewMs: skew }),
+  };
 }
 
 export interface CollectedApprovalResult {

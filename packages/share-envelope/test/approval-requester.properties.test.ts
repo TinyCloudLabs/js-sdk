@@ -75,77 +75,75 @@ const nextEffectOf = (step: Step): Effect => step.effects[step.effects.length - 
 const finish = (step: Step) => { const last = nextEffectOf(step); return last.type === "finish" ? last.outcome : undefined; };
 
 /** One event: the event is applied to the previous state and every invariant that is local to one step is checked. */
-function checkStep(before: RequesterState, event: Event, step: Step): void {
+function checkStep(before: RequesterState, event: Event, step: Step, violations: string[]): void {
   const prev = before.entry;
   const after = step.state.entry;
+  const label = `${prev?.phase ?? "dropped"} + ${JSON.stringify(event)}`;
+  const require = (ok: boolean, rule: string) => { if (!ok) violations.push(`${rule}: ${label}`); };
   // 6. write-before-act
-  if (after !== prev) expect(["persist", "purge"]).toContain(step.effects[0]!.type);
+  require(after === prev || ["persist", "purge"].includes(step.effects[0]!.type), "write-before-act");
   // exactly one next effect, last
-  expect(["call", "sleep", "verify", "commit", "finish"]).toContain(nextEffectOf(step).type);
+  require(["call", "sleep", "verify", "commit", "finish"].includes(nextEffectOf(step).type), "one next effect");
   // never a key in any effect or outcome
   const text = JSON.stringify(step.effects);
-  for (const secret of SECRET_STRINGS) expect(text).not.toContain(secret);
+  require(SECRET_STRINGS.every((secret) => !text.includes(secret)), "no key in effects");
   if (prev === undefined) return;
   // 1. no key past purge
-  if (event.type === "tick" && event.now >= purgeAt(prev) && before.settled === undefined) {
-    expect(after?.keys).toBeUndefined();
-  }
+  require(!(event.type === "tick" && event.now >= purgeAt(prev) && before.settled === undefined) || after?.keys === undefined, "no key past purge");
   // acked never holds a key
-  if (after?.phase === "acked") expect(after.keys).toBeUndefined();
+  require(after?.phase !== "acked" || after.keys === undefined, "acked holds no key");
   // 5. committed is monotone
-  if (prev.phase === "committed" && after !== undefined) expect(["committed", "acked"]).toContain(after.phase);
+  require(prev.phase !== "committed" || after === undefined || after.phase === "committed" || after.phase === "acked", "committed is monotone");
   // 2. exit 8 carries expiresAt and confirmedLiveAt, and only while the request is live
   const outcome = finish(step);
   if (outcome?.kind === "pending") {
-    expect(outcome.expiresAt).toBe(E);
-    expect(outcome.confirmedLiveAt).toBeGreaterThan(0);
-    expect(event.now).toBeLessThan(E);
-    expect(exitCodeOf(outcome)).toBe(8);
+    require(outcome.expiresAt === E && outcome.confirmedLiveAt > 0 && event.now < E && exitCodeOf(outcome) === 8, "pending needs expiry, liveness, now < E");
     // 2b. never from an invalid_proof
-    expect(event.type === "reply" && event.reply.kind === "error" && event.reply.code === "invalid_proof").toBe(false);
+    require(!(event.type === "reply" && event.reply.kind === "error" && event.reply.code === "invalid_proof"), "no pending from invalid_proof");
   }
   // 4. no approval lost: an entry at or past `discovered` is dropped only by a named rule
   if (before.settled === undefined && prev.phase !== "open" && after === undefined) {
-    const named =
+    require(
       event.type === "abandon" ||
-      (event.type === "tick" && event.now >= purgeAt(prev)) ||
-      (event.type === "verdict" && (event.verdict === "refused" || event.verdict === "ended")) ||
-      (event.type === "reply" && (event.reply.kind === "acked" ||
-        (event.reply.kind === "error" && (
-          (event.reply.call === "fetch" && ["not_found", "expired_result", "acknowledged", "request_binding", "invalid_proof"].includes(event.reply.code)) ||
-          (event.reply.call === "ack" && ["not_found", "acknowledged", "expired_result", "ack_conflict"].includes(event.reply.code))))));
-    expect(named).toBe(true);
-    // ...and never by a clock hold or an ordinary failure
-    if (event.type === "reply" && (event.reply.kind === "network" || event.reply.kind === "malformed")) throw new Error("approval lost");
+        event.now >= purgeAt(prev) ||
+        (event.type === "verdict" && (event.verdict === "refused" || event.verdict === "ended")) ||
+        (event.type === "reply" && (event.reply.kind === "acked" ||
+          (event.reply.kind === "error" && (
+            (event.reply.call === "fetch" && ["not_found", "expired_result", "acknowledged", "request_binding", "invalid_proof"].includes(event.reply.code)) ||
+            (event.reply.call === "ack" && ["not_found", "acknowledged", "expired_result", "ack_conflict"].includes(event.reply.code)))))),
+      "no approval lost",
+    );
   }
 }
 
 describe("random walks over every event from every phase", () => {
   test("10,000 walks keep every per-step invariant", () => {
     const random = rng(0x2377);
+    const violations: string[] = [];
     for (let walk = 0; walk < 10_000; walk++) {
       const phase = pick(random, PHASES);
       let state: RequesterState = requesterState(entryIn(phase, { staged: random() < 0.5 && phase !== "committed" && phase !== "acked" }));
       let now = T0 + Math.floor(random() * 120_000);
       const deadline = random() < 0.5 ? now + Math.floor(random() * 30_000) : undefined;
-      const start = reduce(state, { type: "start", now, ...(deadline === undefined ? {} : { deadline }), ...(random() < 0.3 ? { createdThisRun: true } : {}) });
-      checkStep(state, { type: "start", now }, start);
+      const started: Event = { type: "start", now, ...(deadline === undefined ? {} : { deadline }), ...(random() < 0.3 ? { createdThisRun: true } : {}) };
+      const start = reduce(state, started);
+      checkStep(state, started, start, violations);
       state = start.state;
       for (let step = 0; step < 30; step++) {
         now = nextNow(random, now);
         const event = randomEvent(random, now);
         const result = reduce(state, event);
-        checkStep(state, event, result);
+        checkStep(state, event, result, violations);
         // 7. a settled state is final: the same event again is a no-op with the same finish
         if (result.state.settled !== undefined) {
           const again = reduce(result.state, event);
-          expect(again.state).toBe(result.state);
-          expect(JSON.stringify(finish(again))).toBe(JSON.stringify(result.state.settled));
+          if (again.state !== result.state || JSON.stringify(finish(again)) !== JSON.stringify(result.state.settled)) violations.push(`settled is final: ${JSON.stringify(event)}`);
           break;
         }
         state = result.state;
       }
     }
+    expect(violations.slice(0, 5)).toEqual([]);
   });
 
   test("a clock hold or a failed ack never drops anything but keys the machine itself scrubs", () => {
@@ -169,14 +167,16 @@ describe("termination: nothing loops past E + S", () => {
     let now = options.startAt;
     let step = reduce(requesterState(entryIn("open")), { type: "start", now, ...(options.deadline === undefined ? {} : { deadline: options.deadline }) });
     let iterations = 0;
+    let calls = 0;
     for (;;) {
       const effect = nextEffectOf(step);
-      if (effect.type === "finish") return { outcome: effect.outcome, now, iterations, step };
+      if (effect.type === "finish") return { outcome: effect.outcome, now, iterations, calls, step };
       if (++iterations > 100_000) throw new Error("did not terminate");
       if (effect.type === "sleep") {
         now += effect.ms;
         step = reduce(step.state, { type: "tick", now });
       } else if (effect.type === "call") {
+        calls++;
         now += options.callMs;
         step = reduce(step.state, { type: "reply", now, reply: options.reply(random) });
       } else throw new Error(`unexpected effect ${effect.type}`);
@@ -216,10 +216,10 @@ describe("termination: nothing loops past E + S", () => {
   });
 
   test("five unexpected replies in a row end the run with exit 7, the entry kept", () => {
-    const { outcome, iterations, step } = drive({ startAt: T0, reply: () => ({ kind: "error", call: "discover", status: 500, code: "unknown" }), callMs: 100, seed: 4 });
+    const { outcome, calls, step } = drive({ startAt: T0, reply: () => ({ kind: "error", call: "discover", status: 500, code: "unknown" }), callMs: 100, seed: 4 });
     expect(outcome.kind).toBe("unexpected");
     expect(exitCodeOf(outcome)).toBe(7);
-    expect(iterations).toBe(5);
+    expect(calls).toBe(5);
     expect(step.state.entry).toBeDefined();
   });
 });

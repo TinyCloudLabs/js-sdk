@@ -59,8 +59,19 @@ export interface EntryOptions {
   readonly resultExpiresAt?: string;
 }
 
-/** A valid v2 entry in `phase`, parsed by the real schema so a fixture can never drift from the format. */
+const parsed = new Map<string, ApprovalEntry>();
+
+/** A valid v2 entry in `phase`, parsed by the real schema so a fixture can never drift from the format. Entries are immutable: cached. */
 export function entryIn(phase: ApprovalPhase, options: EntryOptions = {}): ApprovalEntry {
+  const cacheKey = JSON.stringify([phase, options]);
+  const cached = parsed.get(cacheKey);
+  if (cached !== undefined) return cached;
+  const entry = buildEntry(phase, options);
+  parsed.set(cacheKey, entry);
+  return entry;
+}
+
+function buildEntry(phase: ApprovalPhase, options: EntryOptions): ApprovalEntry {
   const keyed = phase !== "acked";
   const found = phase !== "open";
   return approvalEntrySchema.parse({

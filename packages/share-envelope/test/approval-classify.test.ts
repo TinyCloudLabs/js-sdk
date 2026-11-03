@@ -148,36 +148,39 @@ describe("callApproval", () => {
   const state: ApprovalRequesterState = {
     requestId: entry.requestId, bodyCid: entry.bodyCid, record: entry.record as ApprovalRequesterState["record"], apiOrigin: entry.apiOrigin, signingKey,
   };
+  const asFetch = (fn: () => Promise<Response>): typeof globalThis.fetch => fn as unknown as typeof globalThis.fetch;
   const json = (body: unknown, status: number, headers: Record<string, string> = {}) =>
     new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...headers } });
 
   test("returns the classified reply and the skew measured against the HTTP Date header", async () => {
     const result = await callApproval(state, "discover", {}, {
-      fetch: async () => json({ code: "invalid_proof" }, 401, { date: "Tue, 03 Nov 2026 12:00:00 GMT" }),
+      fetch: asFetch(async () => json({ code: "invalid_proof" }, 401, { date: "Tue, 03 Nov 2026 12:00:00 GMT" })),
       now: () => Date.parse("2026-11-03T12:02:00.000Z"),
     });
     expect(result).toEqual({ reply: { kind: "error", call: "discover", status: 401, code: "invalid_proof" }, serverDateSkewMs: 120_000 });
   });
 
   test("a network failure is a `network` reply, not an exception", async () => {
-    const result = await callApproval(state, "discover", {}, { fetch: async () => { throw new TypeError("fetch failed"); } });
+    const result = await callApproval(state, "discover", {}, { fetch: asFetch(async () => { throw new TypeError("fetch failed"); }) });
     expect(result.reply).toEqual({ kind: "network" });
   });
 
   test("an aborted call rethrows the abort", async () => {
     const controller = new AbortController();
     controller.abort(new Error("stop"));
-    await expect(callApproval(state, "discover", {}, { signal: controller.signal, fetch: async () => { throw new TypeError("fetch failed"); } })).rejects.toThrow("stop");
+    await expect(callApproval(state, "discover", {}, { signal: controller.signal, fetch: asFetch(async () => { throw controller.signal.reason; }) })).rejects.toThrow("stop");
   });
 
   test("a denied answer survives the transport", async () => {
-    const result = await callApproval(state, "discover", {}, { fetch: async () => json({ code: "expired_request", status: "denied", deniedAt: "2026-11-03T12:00:00.000Z" }, 410) });
+    const result = await callApproval(state, "discover", {}, {
+      fetch: asFetch(async () => json({ code: "expired_request", status: "denied", deniedAt: "2026-11-03T12:00:00.000Z" }, 410)),
+    });
     expect(result.reply).toMatchObject({ kind: "error", code: "request_denied", status: 410 });
   });
 
   test("a 202 is pending and a body that is not JSON is `unknown`", async () => {
-    expect((await callApproval(state, "discover", {}, { fetch: async () => json({ status: "pending" }, 202) })).reply).toEqual({ kind: "pending" });
-    expect((await callApproval(state, "discover", {}, { fetch: async () => new Response("<html>bad gateway</html>", { status: 502 }) })).reply)
+    expect((await callApproval(state, "discover", {}, { fetch: asFetch(async () => json({ status: "pending" }, 202)) })).reply).toEqual({ kind: "pending" });
+    expect((await callApproval(state, "discover", {}, { fetch: asFetch(async () => new Response("<html>bad gateway</html>", { status: 502 })) })).reply)
       .toEqual({ kind: "error", call: "discover", status: 502, code: "unknown" });
   });
 });
