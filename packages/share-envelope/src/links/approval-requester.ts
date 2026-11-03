@@ -368,8 +368,24 @@ function onReady(live: LiveState, now: number, reply: Extract<Reply, { kind: "re
   return advance(live.entry, { entry, run: { ...live.run, unexpectedStreak: 0, firstCheckDone: true, collectUntil } }, now);
 }
 
+const MAX_ENVELOPE_DEPTH = 32;
+const MAX_ENVELOPE_NODES = 10_000;
+
+/** Plain JSON only (no function, symbol, bigint, undefined, NaN, class instance), bounded in depth and size so a cycle ends. */
+function jsonStorable(value: unknown, budget: { nodes: number }, depth = 0): boolean {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value !== "object" || depth >= MAX_ENVELOPE_DEPTH || ++budget.nodes > MAX_ENVELOPE_NODES) return false;
+  if (Array.isArray(value)) return value.every((item) => jsonStorable(item, budget, depth + 1));
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return false;
+  return Object.values(value).every((item) => jsonStorable(item, budget, depth + 1));
+}
+
 function onEnvelope(live: LiveState, now: number, reply: Extract<Reply, { kind: "envelope" }>): Step {
-  if (reply.envelope === undefined) return onFailure(live, now, "unexpected");
+  // `Reply` is a public type: an adapter may build one. The envelope is written into the file as JSON, so it must be a plain object JSON can store.
+  const envelope = reply.envelope;
+  if (typeof envelope !== "object" || envelope === null || Array.isArray(envelope) || !jsonStorable(envelope, { nodes: 0 })) return onFailure(live, now, "unexpected");
   const entry: ApprovalEntry = { ...live.entry, phase: "fetched", resultEnvelope: reply.envelope };
   return advance(live.entry, { entry, run: { ...live.run, unexpectedStreak: 0 } }, now);
 }

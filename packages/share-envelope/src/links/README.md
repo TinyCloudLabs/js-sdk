@@ -34,15 +34,16 @@ command entries). A kept-by-clock `hold` is a flag, not a phase: the next run re
   an entry returns a `purge` effect naming the keys it held; a step that keeps an entry never purges. Effects and outcomes carry
   request ids and key *names*, never a key. At `purgeAt` (`E + R + S` while open, `min(resultExpiresAt, E + R) + S` after) no
   state holds a key, held or not.
-- **Nothing is kept forever.** `E` is the signed header's `expiresAt`, `S` = 30 s, `R` = 600 s. A run ends by `E + S` (one final
-  poll at `E + S`), by the caller's deadline, or by the collect grace (30 s) once approved.
+- **No keyed entry is kept past its purge time.** `E` is the signed header's `expiresAt`, `S` = 30 s, `R` = 600 s. A run ends by `E + S`
+  (one final poll at `E + S`), by the caller's deadline, or by the collect grace (30 s) once approved. A key-free `acked` entry
+  (a CLI command entry) is kept only until its retention date (`retainUntil`).
 - **The purge time wins over a step that would keep keys.** An event that lands at or after `purgeAt` (a reply delayed by the network,
   a slow failure) and would keep, hold or persist the entry purges it like a tick at `purgeAt` would: `lapsed` (open), `gone`
   (discovered, fetched), or `completed` with an `ack-expired` warning (committed, or the caller's commit that just succeeded). A reply
   that was already terminal (denied, refused, an ack success, a 410 on an approved request) keeps its own outcome; its keys are
-  purged exactly once, before the remove. A keep, a hold or a `persist` is never returned for an entry at or past its purge time.
+  purged exactly once, before the remove. A keep, a hold or a `persist` is never returned for a KEYED entry at or past its purge time.
 - **A machine-written entry always passes `approvalEntrySchema`.** Inputs an adapter builds itself are validated: an empty result
-  reference, a non-canonical result expiry or a missing envelope is an unexpected reply; `retainUntil` is clamped to 1970..9999; a clock
+  reference, a non-canonical result expiry, or an envelope that is not a plain JSON object (a function, symbol, bigint, cycle, null, array, string) is an unexpected reply; `retainUntil` is clamped to 1970..9999; a clock
   outside 1970..9999 is an illegal event.
 - **First check.** A resumed approval (no `createdThisRun`) completes at least one full status check, made with the full request
   limit however late the deadline is, before it reports pending; a first check that gets no answer is `unreachable` (exit 6), with
