@@ -1070,9 +1070,33 @@ export class TinyCloudWeb {
     }
   }
 
-  // TC-2380 Q2 seam: undecided between a one-click OpenKey approval and a silent wait; keeps today's behaviour.
-  private async restoredSessionNotHosted(_node: TinyCloudNode, restored: ClientSession): Promise<ClientSession> {
+  /**
+   * Host a restored session's primary space only when the node reports it
+   * missing. Reuses that session and its existing creation confirmation.
+   * Call from a user gesture so the approval popup can open.
+   */
+  private spaceHostingInFlight?: Promise<SpaceHosting>;
+  private async restoredSessionNotHosted(node: TinyCloudNode, restored: ClientSession): Promise<ClientSession> {
+    await this.ensureSpaceHosted();
     return restored;
+  }
+
+  /** Ensure the primary space is hosted, asking for approval only when needed. Call from a user gesture. */
+  async ensureSpaceHosted(): Promise<SpaceHosting> {
+    const node = await this.ensureNode();
+    const hosting = node.spaceHosting;
+    if (hosting !== "not-hosted") return hosting;
+    if (this.spaceHostingInFlight) return this.spaceHostingInFlight;
+    const hasCreationPath = this.walletSigner !== undefined &&
+      (this.config.spaceCreationHandler !== undefined || this.config.autoCreateSpace !== false);
+    if (!hasCreationPath) return "not-hosted";
+    const run = node.ensurePrimarySpaceHosted("not-hosted").then(() => node.spaceHosting);
+    this.spaceHostingInFlight = run;
+    try {
+      return await run;
+    } finally {
+      if (this.spaceHostingInFlight === run) this.spaceHostingInFlight = undefined;
+    }
   }
 
   async clearPersistedSession(address?: string): Promise<void> {
@@ -1139,7 +1163,6 @@ export class TinyCloudWeb {
       const permissions = this.configuredManifestPermissions(node);
       if (permissions.length === 0 || node.hasRuntimePermissions(permissions)) {
         assertCurrent();
-        if (node.spaceHosting === "not-hosted") await this.restoredSessionNotHosted(node, restored.session);
         return;
       }
       await this.clearPersistedSession(restored.session.address);

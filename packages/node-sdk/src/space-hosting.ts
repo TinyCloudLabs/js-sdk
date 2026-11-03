@@ -157,6 +157,7 @@ export interface PrimarySpaceCreationPorts {
   onHosted(): void;
   /** Register the session delegation again. */
   activate(): Promise<SpaceHostResult>;
+  signal?: AbortSignal;
 }
 
 /** `<status> - <server text>` for a failed host call. */
@@ -170,9 +171,12 @@ function describeFailure(result: SpaceHostResult): string {
  * space. A declined confirmation ends it quietly; a failure is reported to the
  * handler and thrown.
  */
-export async function createPrimarySpace({ handler, context, guard, host, onHosted, activate }: PrimarySpaceCreationPorts): Promise<void> {
+export async function createPrimarySpace({ handler, context, guard, host, onHosted, activate, signal }: PrimarySpaceCreationPorts): Promise<void> {
+  signal?.throwIfAborted();
   await guard();
+  signal?.throwIfAborted();
   if (!await handler.confirmSpaceCreation(context)) return;
+  signal?.throwIfAborted();
 
   try {
     const created = await host();
@@ -186,6 +190,7 @@ export async function createPrimarySpace({ handler, context, guard, host, onHost
     handler.onSpaceCreationFailed?.(context, error instanceof Error ? error : new Error(String(error)));
     throw error;
   }
+  signal?.throwIfAborted();
   onHosted();
 
   // Small delay to allow space creation to propagate

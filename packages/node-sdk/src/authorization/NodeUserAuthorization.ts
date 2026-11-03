@@ -1465,7 +1465,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
    *
    * @throws Error if the creation handler fails or times out, or hosting fails
    */
-  async ensurePrimarySpaceHosted(hosting: SpaceHosting): Promise<void> {
+  async ensurePrimarySpaceHosted(hosting: SpaceHosting, signal?: AbortSignal): Promise<void> {
     if (hosting !== "not-hosted") {
       return;
     }
@@ -1488,6 +1488,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     }
 
     await this.ensureTinyCloudHosts();
+    signal?.throwIfAborted();
     const host = this.primaryTinyCloudHost;
     const primarySpaceId = session.spaceId;
     const creationContext = {
@@ -1502,10 +1503,15 @@ export class NodeUserAuthorization implements IUserAuthorization {
     await createPrimarySpace({
       handler,
       context: creationContext,
-      guard: () => this.guardSpaceCreation(handler, creationContext),
-      host: () => this.hostSpace(primarySpaceId),
+      guard: async () => {
+        signal?.throwIfAborted();
+        await this.guardSpaceCreation(handler, creationContext);
+        signal?.throwIfAborted();
+      },
+      host: () => this.hostSpace(primarySpaceId, undefined, signal),
       onHosted: () => { this._spaceHosting = "hosted"; },
       activate: () => activateSessionWithHost(host, session.delegationHeader),
+      signal,
     });
   }
 
