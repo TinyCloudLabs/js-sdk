@@ -273,8 +273,9 @@ describe.skipIf(!NODE_BIN)("tinycloud onboard, against a real node", () => {
           if (newline < 0) break;
           const line = partial.slice(0, newline);
           partial = partial.slice(newline + 1);
-          // Only links on the OpenKey origin are approval links; the refusal notice also names the account site's revoke page.
-          for (const url of (line.match(/https:\/\/\S+/g) ?? []).filter((candidate) => candidate.startsWith("https://openkey.so/"))) {
+          for (const url of line.match(/https:\/\/\S+/g) ?? []) {
+            // Any other URL on stderr (the refusal notice names the account site's revoke page) is not an approval link: ignored.
+            if (!url.startsWith("https://openkey.so/")) continue;
             if (seen.has(url)) continue;
             seen.add(url);
             const opened = await resolveApprovalRequest(url, {
