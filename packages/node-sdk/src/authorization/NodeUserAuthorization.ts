@@ -1497,50 +1497,16 @@ export class NodeUserAuthorization implements IUserAuthorization {
       host,
     };
 
-    await this.guardSpaceCreation(handler, creationContext);
-    const confirmed = await handler.confirmSpaceCreation(creationContext);
-    if (!confirmed) {
-      return;
-    }
-
-    // Create the primary space
-    try {
-      const created = await this.hostSpace(primarySpaceId);
-      if (!created.success) {
-        const err = Object.assign(
-          new Error(`Failed to create space ${primarySpaceId}: ${describeHostFailure(created)}`),
-          { cause: created },
-        );
-        throw err;
-      }
-    } catch (error) {
-      handler.onSpaceCreationFailed?.(
-        creationContext,
-        error instanceof Error ? error : new Error(String(error)),
-      );
-      throw error;
-    }
-    this._spaceHosting = "hosted";
-
-    // Small delay to allow space creation to propagate
-    await new Promise((resolve) => setTimeout(resolve, 100));
-
-    // Retry activation
-    const retryResult = await activateSessionWithHost(
-      host,
-      session.delegationHeader,
-    );
-
-    if (!retryResult.success) {
-      const err = Object.assign(
-        new Error(`Failed to activate session after creating space: ${describeHostFailure(retryResult)}`),
-        { cause: retryResult },
-      );
-      handler.onSpaceCreationFailed?.(creationContext, err);
-      throw err;
-    }
-
-    handler.onSpaceCreated?.(creationContext);
+    // Not a static import on purpose: the creation sequence is rare, and web-sdk's root has no room for it.
+    const { createPrimarySpace } = await import("../space-hosting.js");
+    await createPrimarySpace({
+      handler,
+      context: creationContext,
+      guard: () => this.guardSpaceCreation(handler, creationContext),
+      host: () => this.hostSpace(primarySpaceId),
+      onHosted: () => { this._spaceHosting = "hosted"; },
+      activate: () => activateSessionWithHost(host, session.delegationHeader),
+    });
   }
 
   /** {@link assertMayCreateSpace}, reporting a refusal to the creation handler before rethrowing it. */

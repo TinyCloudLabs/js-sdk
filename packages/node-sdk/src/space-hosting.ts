@@ -1,8 +1,9 @@
 /**
- * The hosting probe's read selection and classification, loaded by
- * `TinyCloudNode.checkSpaceHosting` on first use so browser bundles carry it
- * as a separate file rather than in their root.
+ * The hosting probe's read selection and classification, and the sequence that
+ * creates a primary space that is not hosted. Both are loaded on first use, so
+ * browser bundles carry them as a separate file rather than in their root.
  */
+import type { ISpaceCreationHandler, SpaceCreationContext, SpaceHostResult } from "@tinycloud/sdk-core";
 import type { FetchFunction, InvokeAnyEntry, ServiceHeaders } from "@tinycloud/sdk-services";
 import type { SpaceHosting } from "./authorization/NodeUserAuthorization";
 
@@ -142,4 +143,61 @@ export async function askSpaceHosting(ports: SpaceHostingPorts): Promise<SpaceHo
   }
   if (outcome === "hosted") hostedBy.set(ports.scope, (hostedBy.get(ports.scope) ?? new Set<string>()).add(key));
   return outcome === "refused" ? "unknown" : outcome;
+}
+
+export interface PrimarySpaceCreationPorts {
+  handler: ISpaceCreationHandler;
+  context: SpaceCreationContext;
+  /** `assertMayCreateSpace`, reporting a refusal to the handler. */
+  guard(): Promise<void>;
+  /** Submit the host delegation for the primary space. */
+  host(): Promise<SpaceHostResult>;
+  /** Called once the node has the host delegation. */
+  onHosted(): void;
+  /** Register the session delegation again. */
+  activate(): Promise<SpaceHostResult>;
+}
+
+/** `<status> - <server text>` for a failed host call. */
+function describeFailure(result: SpaceHostResult): string {
+  const text = result.error?.trim();
+  return text ? `${result.status} - ${text}` : `${result.status}`;
+}
+
+/**
+ * The guard, confirm, host and re-activate sequence for an unhosted primary
+ * space. A declined confirmation ends it quietly; a failure is reported to the
+ * handler and thrown.
+ */
+export async function createPrimarySpace({ handler, context, guard, host, onHosted, activate }: PrimarySpaceCreationPorts): Promise<void> {
+  await guard();
+  if (!await handler.confirmSpaceCreation(context)) return;
+
+  try {
+    const created = await host();
+    if (!created.success) {
+      throw Object.assign(
+        new Error(`Failed to create space ${context.spaceId}: ${describeFailure(created)}`),
+        { cause: created },
+      );
+    }
+  } catch (error) {
+    handler.onSpaceCreationFailed?.(context, error instanceof Error ? error : new Error(String(error)));
+    throw error;
+  }
+  onHosted();
+
+  // Small delay to allow space creation to propagate
+  await new Promise((resolve) => setTimeout(resolve, 100));
+
+  const retry = await activate();
+  if (!retry.success) {
+    const err = Object.assign(
+      new Error(`Failed to activate session after creating space: ${describeFailure(retry)}`),
+      { cause: retry },
+    );
+    handler.onSpaceCreationFailed?.(context, err);
+    throw err;
+  }
+  handler.onSpaceCreated?.(context);
 }

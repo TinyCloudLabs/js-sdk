@@ -1295,7 +1295,37 @@ describe("TinyCloudNode.checkSpaceHosting", () => {
     );
   });
 
-  test("a probe in flight when another session is restored neither activates nor re-signs under the new one", async () => {
+  for (const [label, inFlight, expected] of [
+    ["a 401", new Response("unauthorized", { status: 401 }), "unknown"],
+    ["a 2xx", new Response("[]", { status: 200 }), "unknown"],
+    ["an unhosted-space 404", new Response("Space not found", { status: 404 }), "unknown"],
+  ] as const) {
+    test(`a probe in flight when another session is restored answers unknown on ${label} and writes nothing for the new session`, async () => {
+      const { node, invokeAny } = await restoredNode({ abilities: LIST_GET });
+      let release!: (response: Response) => void;
+      const probeSent = Promise.withResolvers<void>();
+      await withFetch(
+        () => new Promise<Response>((resolve) => { release = resolve; probeSent.resolve(); }),
+        async (calls) => {
+          const asked = node.checkSpaceHosting();
+          await probeSent.promise;
+          await node.restoreSession(await signedRestorableSession({ abilities: LIST_GET }));
+          release(inFlight.clone());
+          await expect(asked).resolves.toBe(expected);
+          expect(calls).toHaveLength(1);
+          expect(invokeAny).toHaveBeenCalledTimes(1);
+          expect(node.spaceHosting).toBe("unknown");
+        },
+      );
+      // Nothing was remembered for the new session: it asks the node itself.
+      await withFetch(() => new Response("[]", { status: 200 }), async (calls) => {
+        await expect(node.checkSpaceHosting()).resolves.toBe("hosted");
+        expect(calls).toHaveLength(1);
+      });
+    });
+  }
+
+  test("a sign-out during the read ends the probe: no activation is posted and the answer is unknown", async () => {
     const { node, invokeAny } = await restoredNode({ abilities: LIST_GET });
     let release!: (response: Response) => void;
     const probeSent = Promise.withResolvers<void>();
@@ -1304,10 +1334,10 @@ describe("TinyCloudNode.checkSpaceHosting", () => {
       async (calls) => {
         const asked = node.checkSpaceHosting();
         await probeSent.promise;
-        await node.restoreSession(await signedRestorableSession({ abilities: LIST_GET }));
+        await node.signOut();
         release(new Response("unauthorized", { status: 401 }));
         await expect(asked).resolves.toBe("unknown");
-        expect(calls).toHaveLength(1);
+        expect(calls.map((call) => call.url.replace(RESTORE_HOST, ""))).toEqual(["/invoke"]);
         expect(invokeAny).toHaveBeenCalledTimes(1);
         expect(node.spaceHosting).toBe("unknown");
       },

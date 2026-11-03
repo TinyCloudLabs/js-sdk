@@ -40,6 +40,13 @@ export default defineConfig({
     './replication/authority',
     './replication/gated-network',
   ],
+  esbuildPlugins: [{
+    // NodeUserAuthorization lives one directory down; both loaders share the one dist file.
+    name: 'lazy-space-hosting',
+    setup(build) {
+      build.onResolve({ filter: /^\.\.\/space-hosting\.js$/ }, () => ({ path: './space-hosting.js', external: true }));
+    },
+  }],
   async onSuccess() {
     // tsup preserves these external dynamic imports in both formats. Point CJS
     // entrypoints at the CJS subpath so they share its exports.

@@ -1738,11 +1738,14 @@ export class TinyCloudNode {
       ? session.spaceId
       : space.startsWith("tinycloud:") ? space : this.ownedSpaceId(space);
     const graph = this._serviceGraph;
-    // A probe belongs to the session it started under: once that session's graph retires or another session is
-    // installed, it neither signs, registers nor reports anything more.
+    const epoch = this.sessionEpoch;
+    // A probe belongs to the session it started under (the same guards sign-in and restore use): once that
+    // session's graph retires or another session is installed, it neither signs, registers nor reports anything.
     const assertCurrent = () => {
       graph.assertActive();
-      if (this._serviceContext !== context) throw new Error("The session was replaced during the hosting check.");
+      if (epoch !== this.sessionEpoch || graph !== this._serviceGraph || this._serviceContext !== context) {
+        throw new Error("The session changed during the hosting check.");
+      }
     };
     // Not a static import on purpose: web-sdk's root size budget has no room for the probe, so bundlers ship it as its own file.
     const { askSpaceHosting } = await import("./space-hosting.js");
@@ -1763,7 +1766,7 @@ export class TinyCloudNode {
       fetch: unrecordedFetchOf(context),
       sign: (entries) => {
         assertCurrent();
-        return this.invokeAnyWithRuntimePermissions({ ...session, spaceId }, entries);
+        return graph.invokeAny({ ...session, spaceId }, entries);
       },
       // A session saved but never registered on this node is refused: it registers once.
       activate: (signal) => {
@@ -1772,7 +1775,8 @@ export class TinyCloudNode {
       },
     });
     // A session replaced while the read was in flight owns neither answer.
-    if (answer !== "unknown" && this._serviceContext === context && this.spaceIdsEqual(spaceId, session.spaceId)) {
+    assertCurrent();
+    if (answer !== "unknown" && this.spaceIdsEqual(spaceId, session.spaceId)) {
       if (this.auth) this.auth.noteSpaceHosting(answer);
       else this._restoredSpaceHosting = answer;
     }
