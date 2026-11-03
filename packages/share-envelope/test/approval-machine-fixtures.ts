@@ -27,8 +27,11 @@ const b64 = (bytes: Uint8Array): string => Buffer.from(bytes).toString("base64ur
 /** Distinct, recognisable private-key strings: no test output, effect or outcome may ever contain them. */
 export const RELAY_KEY = b64(new Uint8Array(32).fill(0xab));
 const stagedSeed = new Uint8Array(32).fill(0xcd);
-export const STAGED_KEY: Ed25519PrivateJwk = { kty: "OKP", crv: "Ed25519", x: b64(ed25519.getPublicKey(stagedSeed)), d: b64(stagedSeed) };
-export const SECRET_STRINGS = [RELAY_KEY, STAGED_KEY.d] as const;
+/** The CLI's real signing key: `TCWSessionManager.jwk()` emits `{crv,d,kid,kty,x}` (published node-sdk-wasm 1.7.x). */
+export const STAGED_KEY = { kty: "OKP" as const, crv: "Ed25519" as const, x: b64(ed25519.getPublicKey(stagedSeed)), d: b64(stagedSeed), kid: "cli" };
+/** The content key sits in the fragment of the approval URL. */
+export const CONTENT_KEY = "content-key-in-the-fragment";
+export const SECRET_STRINGS = [RELAY_KEY, STAGED_KEY.d, CONTENT_KEY] as const;
 
 const signer = signerFromSeed(new Uint8Array(32).fill(17));
 const requestBody = {
@@ -77,7 +80,7 @@ function buildEntry(phase: ApprovalPhase, options: EntryOptions): ApprovalEntry 
   return approvalEntrySchema.parse({
     requestId: options.requestId ?? REQUEST_ID,
     bodyCid: prepared.bodyCid,
-    approvalUrl: `https://openkey.example/a/${options.requestId ?? REQUEST_ID}#v=4&k=content-key-in-the-fragment`,
+    ...(keyed ? { approvalUrl: `https://openkey.example/a/${options.requestId ?? REQUEST_ID}#v=4&k=${CONTENT_KEY}` } : {}),
     request: requestBody,
     record: { header: prepared.record.header, signature: prepared.record.signature },
     apiOrigin: "https://api.openkey.example", linkApiOrigin: "https://api.tinycloud.xyz", openkeyOrigin: "https://openkey.example",

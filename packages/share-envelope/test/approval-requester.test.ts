@@ -18,7 +18,7 @@ import {
   type Rule,
   type Step,
 } from "../src/links/index.js";
-import { E, PHASES, R, RESULT_EXPIRES, RESULT_REF, S, SECRET_STRINGS, T0, entryIn, liveState } from "./approval-machine-fixtures.js";
+import { CONTENT_KEY, E, PHASES, R, REQUEST_ID, RESULT_EXPIRES, RESULT_REF, S, SECRET_STRINGS, T0, entryIn, iso, liveState } from "./approval-machine-fixtures.js";
 
 // TC-2377: the ONE approval-request requester machine. These tests are the contract: every (event x phase) cell of the
 // table is asserted against a SECOND, hand-written table below (never against `RULES`), so a wrong mapping in the
@@ -360,6 +360,11 @@ describe("keys: every terminal transition that drops the entry purges its keys; 
     expect(step.state.entry!.phase).toBe("acked");
     expect(step.state.entry!.keys).toBeUndefined();
     expect(step.state.entry!.resultEnvelope).toBeUndefined();
+    // P3-9: the approval URL's fragment holds the content key; a key-free acked entry keeps neither it nor the sealed body.
+    expect(step.state.entry!.approvalUrl).toBeUndefined();
+    expect(step.state.entry!.record.body).toBeUndefined();
+    expect(JSON.stringify(step.state.entry)).not.toContain(CONTENT_KEY);
+    expect(step.state.entry!.record.header).toEqual(before.entry!.record.header);
     expect(step.effects[0]).toEqual({ type: "purge", requestId: before.entry!.requestId, keys: ["relayPrivateKey"], entry: "rewrite" });
     expect(finishOf(step)).toEqual({ kind: "completed" });
   });
@@ -437,5 +442,73 @@ describe("requesterState starts a run with its first check still to do", () => {
     const start = reduce(requesterState(entryIn("open")), { type: "start", now: NOW, deadline: NOW - 1, createdThisRun: true });
     const silent = reduce(start.state, replyEvent({ kind: "network" }, NOW + 10_000));
     expect(finishOf(silent)).toMatchObject({ kind: "pending", confirmedLiveAt: NOW });
+  });
+});
+
+describe("an approved result's expiry is validated on ingest (a bad one must not make the keys unpurgeable)", () => {
+  const ready = (resultExpiresAt: string): Event => replyEvent({ kind: "ready", resultRef: RESULT_REF, resultExpiresAt });
+
+  test("a garbled or non-canonical resultExpiresAt is an unexpected reply: the entry stays open and unchanged", () => {
+    for (const bad of ["", "tomorrow", "NaN", "2026-11-03T12:10:00Z", "2026-13-45T99:99:99.000Z", "9999-99-99"]) {
+      const before = liveState(entryIn("open", { staged: true }));
+      const step = reduce(before, ready(bad));
+      expect(step.state.entry).toBe(before.entry);
+      expect(step.state.settled).toBeUndefined();
+      expect(nextEffect(step).type).toBe("sleep");
+      expect(step.state.run.unexpectedStreak).toBe(1);
+    }
+  });
+
+  test("five bad replies in a row end the run (exit 7) with the entry kept and still purgeable", () => {
+    let step: Step = reduce(liveState(entryIn("open")), ready("tomorrow"));
+    for (let count = 1; count < 5; count++) step = reduce(step.state, ready("tomorrow"));
+    expect(finishOf(step)?.kind).toBe("unexpected");
+    expect(purgeAt(step.state.entry!)).toBe(E + R + S);
+  });
+
+  test("an expiry already in the past discovers, then the entry is purged at once (keys dropped), never kept", () => {
+    const step = reduce(liveState(entryIn("open", { staged: true })), ready(iso(NOW - 2 * S)));
+    expect(step.state.entry).toBeUndefined();
+    expect(step.effects[0]).toEqual({ type: "purge", requestId: REQUEST_ID, keys: ["relayPrivateKey", "stagedSigningKey"], entry: "remove" });
+  });
+
+  test("a far-future expiry cannot extend the entry's life past E + R + S", () => {
+    const step = reduce(liveState(entryIn("open")), ready(iso(E + 1_000 * R)));
+    expect(purgeAt(step.state.entry!)).toBe(E + R + S);
+  });
+
+  test("purgeAt never returns NaN: an entry whose stored expiry is unreadable is purged at E + R + S", () => {
+    const entry = { ...entryIn("discovered"), resultExpiresAt: "garbled" };
+    expect(purgeAt(entry)).toBe(E + R + S);
+    expect(reduce(liveState(entry), { type: "tick", now: E + R + S }).state.entry).toBeUndefined();
+  });
+});
+
+describe("a request created in this run versus a resumed one (first check)", () => {
+  const past = (createdThisRun: boolean) => reduce(requesterState(entryIn("open")), { type: "start", now: NOW, deadline: NOW - 5_000, ...(createdThisRun ? { createdThisRun } : {}) });
+
+  test("a resumed request whose first check gets no answer is unreachable (exit 6), kept with its keys, never pending", () => {
+    const silent = reduce(past(false).state, replyEvent({ kind: "network" }, NOW + 10_000));
+    expect(finishOf(silent)).toMatchObject({ kind: "unreachable", expiresAt: E });
+    expect(exitCodeOf(finishOf(silent)!)).toBe(6);
+    expect(silent.state.entry!.keys!.relayPrivateKey).toBeDefined();
+    expect(silent.effects.some((effect) => effect.type === "purge")).toBe(false);
+  });
+
+  test("a resumed request still gets its full first check even when the deadline has passed", () => {
+    expect(nextEffect(past(false))).toMatchObject({ type: "call", call: "discover", firstCheck: true });
+  });
+
+  test("a request created this run is live by construction: no answer at the deadline is pending (exit 8) with the creation time", () => {
+    const silent = reduce(past(true).state, replyEvent({ kind: "network" }, NOW + 10_000));
+    expect(finishOf(silent)).toEqual({ kind: "pending", expiresAt: E, confirmedLiveAt: NOW });
+    expect(exitCodeOf(finishOf(silent)!)).toBe(8);
+  });
+
+  test("a resumed entry that already has a result keeps collecting past the deadline (the first-check rule is for entries without one)", () => {
+    const start = reduce(requesterState(entryIn("discovered")), { type: "start", now: NOW, deadline: NOW - 5_000 });
+    expect(nextEffect(start)).toMatchObject({ type: "call", call: "fetch" });
+    const silent = reduce(start.state, replyEvent({ kind: "network" }, NOW + 1_000));
+    expect(nextEffect(silent).type).toBe("sleep");
   });
 });

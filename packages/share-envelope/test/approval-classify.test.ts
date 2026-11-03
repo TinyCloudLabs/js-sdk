@@ -32,9 +32,10 @@ describe("classifyReply: discover", () => {
       .toEqual({ kind: "ready", resultRef: RESULT_REF, resultExpiresAt: EXPIRES });
   });
 
-  test("a 200 without a usable reference or expiry is malformed, never ready", () => {
-    for (const body of [null, {}, { resultRef: "short", expiresAt: EXPIRES }, { resultRef: RESULT_REF }, { resultRef: RESULT_REF, expiresAt: "tomorrow" },
-      { resultRef: RESULT_REF, expiresAt: "2026-11-03T12:10:00Z" }]) {
+  test("a 200 without status approved, a usable reference and a canonical expiry is malformed, never ready", () => {
+    for (const body of [null, {}, { status: "approved", resultRef: "short", expiresAt: EXPIRES }, { status: "approved", resultRef: RESULT_REF },
+      { status: "approved", resultRef: RESULT_REF, expiresAt: "tomorrow" }, { status: "approved", resultRef: RESULT_REF, expiresAt: "2026-11-03T12:10:00Z" },
+      { resultRef: RESULT_REF, expiresAt: EXPIRES }, { status: "pending", resultRef: RESULT_REF, expiresAt: EXPIRES }, { status: 7, resultRef: RESULT_REF, expiresAt: EXPIRES }]) {
       expect(classifyReply("discover", 200, body, expect_)).toEqual({ kind: "malformed", call: "discover" });
     }
   });
@@ -52,8 +53,11 @@ describe("classifyReply: discover", () => {
     expect(classifyReply("discover", 410, { code: "expired_request", status: "expired" }, expect_)).toMatchObject({ code: "expired_request" });
   });
 
-  test("a 200 whose body says denied is NOT a denial (OpenKey never answers it so), it is malformed", () => {
-    expect(classifyReply("discover", 200, { status: "denied" }, expect_)).toEqual({ kind: "malformed", call: "discover" });
+  test("a 200 that says denied is never `ready`: it is the same denial as the 410", () => {
+    expect(classifyReply("discover", 200, { status: "denied", resultRef: RESULT_REF, expiresAt: EXPIRES }, expect_))
+      .toEqual({ kind: "error", call: "discover", status: 200, code: "request_denied" });
+    expect(classifyReply("discover", 200, { status: "denied" }, expect_)).toMatchObject({ code: "request_denied" });
+    expect(classifyReply("fetch", 200, { status: "denied" }, expect_)).toEqual({ kind: "malformed", call: "fetch" });
   });
 
   test("400 invalid_request keeps its own code: it is never mapped to expired_request", () => {
