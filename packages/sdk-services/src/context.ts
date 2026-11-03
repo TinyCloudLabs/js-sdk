@@ -420,7 +420,7 @@ export class ServiceContext implements IServiceContext {
     const policy = this._retryPolicy;
     const startedAt = Date.now();
     let backoffMs = 0;
-    let combined: { signal: AbortSignal; release: () => void } | undefined;
+    let combined: { signal: AbortSignal; release?: () => void } | undefined;
     try {
       for (let attempt = 1; ; attempt++) {
         const init = await build();
@@ -458,7 +458,7 @@ export class ServiceContext implements IServiceContext {
         backoffMs += delay;
       }
     } finally {
-      combined?.release();
+      combined?.release?.();
     }
   }
 
@@ -489,15 +489,24 @@ export class ServiceContext implements IServiceContext {
           throw error;
         }
       } finally {
-        release();
+        release?.();
       }
     };
   }
 
-  /** `release` detaches this request's listener from the long-lived context signal; call it once the request settles. */
-  private combineSignals(signal?: AbortSignal): { signal: AbortSignal; release: () => void } {
+  /**
+   * Combine the request's own signal with the context signal. The result is the signal given to `fetch` for the
+   * request's whole life, so aborting the context (sign-out, retire) still cancels a response body that is being read.
+   *
+   * Where `AbortSignal.any` exists it holds that link without a listener on the long-lived signal. Trade-off: on
+   * Node its composites stay reachable while the long-lived signal lives (about 65 B per request on Node 20, 180 B
+   * on Node 22, against about 1 KB for a listener that is never removed). Where it is missing, a listener is added
+   * instead and `release` removes it; call it once the request settles.
+   */
+  private combineSignals(signal?: AbortSignal): { signal: AbortSignal; release?: () => void } {
     const own = this._abortController.signal;
-    if (!signal) return { signal: own, release: () => {} };
+    if (!signal) return { signal: own };
+    if (typeof AbortSignal.any === "function") return { signal: AbortSignal.any([signal, own]) };
     const combined = new AbortController();
     const abort = (source: AbortSignal) => combined.abort(source.reason);
     const onOwnAbort = () => abort(own);
