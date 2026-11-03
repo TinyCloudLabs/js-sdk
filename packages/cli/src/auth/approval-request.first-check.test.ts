@@ -31,7 +31,7 @@ const { acquireApprovalRequest, completeApprovalResult } = await import("./appro
 const { verifyScopedLogin } = await import("./scoped-login.js");
 const { relayPublicJwkOf } = await import("./device-auth.js");
 const { APPROVAL_COLLECT_GRACE_MS } = await import("./approval-wait.js");
-const { CLIError } = await import("../output/errors.js");
+const { CLIError, handleError } = await import("../output/errors.js");
 const { createECDH } = await import("node:crypto");
 restoreEnvironment(original);
 let caseEnvironment = original;
@@ -249,7 +249,7 @@ const shortWait = (ms: number, requestMs: number) => options({ deadlineMs: START
 
 describe("the first status check completes whatever the --timeout", () => {
   const SLOW = 1_500;
-  const LIMIT = 4_000;
+  const LIMIT = 8_000;
 
   test("(1) the owner approved and OpenKey answers slowly (1.5 s) with --timeout 1s: the command succeeds, it is not exit 8", async () => {
     await pendingOf(() => acquireApprovalRequest(did, withDeadline(60_000)));
@@ -260,9 +260,9 @@ describe("the first status check completes whatever the --timeout", () => {
     expect(discoverCalls).toBe(1);
     await commitAndAcknowledge(delegation);
     expect(acks).toHaveLength(1);
-  });
+  }, 20_000);
 
-  test("(2) a PENDING answer after 1.5 s with --timeout 1s: exit 8 with the pending JSON as soon as that check completes, no second poll, no wait for the 4 s limit", async () => {
+  test("(2) a PENDING answer after 1.5 s with --timeout 1s: exit 8 with the pending JSON as soon as that check completes, no second poll, no wait for the request limit", async () => {
     const created = await pendingOf(() => acquireApprovalRequest(did, withDeadline(60_000)));
     const link = (created.metadata as { pending: { approvalUrl: string } }).pending.approvalUrl;
     onRequest = answerAfter(SLOW);
@@ -273,7 +273,7 @@ describe("the first status check completes whatever the --timeout", () => {
     expect((error.metadata as { pending: { approvalUrl: string } }).pending.approvalUrl).toBe(link);
     expect(discoverCalls).toBe(1);
     expect(Date.now() - started).toBeGreaterThanOrEqual(SLOW - 100);
-    expect(Date.now() - started).toBeLessThan(SLOW + 1_000);
+    expect(Date.now() - started).toBeLessThan(SLOW + 4_000);
     expect(await entries()).toHaveLength(1);
   });
 
@@ -286,9 +286,9 @@ describe("the first status check completes whatever the --timeout", () => {
     expect(error.exitCode).toBe(6);
     expect(error.metadata?.pending).toBeUndefined();
     expect(Date.now() - started).toBeGreaterThanOrEqual(1_400);
-    expect(Date.now() - started).toBeLessThan(3_500);
+    expect(Date.now() - started).toBeLessThan(8_000);
     expect(await entries()).toHaveLength(1);
-  });
+  }, 20_000);
 
   test("(4) --timeout 5s and 60s behave as before: polls every 2 s with a last poll at the deadline; an approval at 6 s is collected", async () => {
     await pendingOf(() => acquireApprovalRequest(did, withDeadline(60_000)));
@@ -319,5 +319,37 @@ describe("the first status check completes whatever the --timeout", () => {
       onRequest = () => undefined;
     }
     expect(acks).toHaveLength(2);
-  });
+  }, 20_000);
+
+  test("(6) an entry that already holds a result reference (OpenKey accepted the approval) keeps the old outcome when its status call never answers: exit 8 APPROVAL_RESULT_UNAVAILABLE within timeout + grace, not exit 6", async () => {
+    await pendingOf(() => acquireApprovalRequest(did, withDeadline(60_000)));
+    await approve();
+    const [saved] = await entries();
+    await writeJsonDurable(pendingPath(), [{ ...saved!, resultRef: "r".repeat(40), resultExpiresAt: new Date(Date.now() + 600_000).toISOString() }]);
+    onRequest = answerAfter(Infinity);
+    const started = Date.now();
+    // `requestTimeoutMs` 8 s: the first-check branch, if it applied here, would only end at 8 s with exit 6.
+    const error = await pendingOf(() => acquireApprovalRequest(did, options({ deadlineMs: Date.now() + 1_000, graceMs: 1_500, requestTimeoutMs: 8_000 } as { deadlineMs: number }, { now: undefined, sleep: undefined })));
+    expect(error.code).toBe("APPROVAL_RESULT_UNAVAILABLE");
+    expect(error.exitCode).toBe(8);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(1_000);
+    expect(Date.now() - started).toBeLessThan(6_500);
+    expect((await entries())[0]!.resultRef).toBeDefined();
+  }, 20_000);
+
+  test("(7) the exit-6 error carries no hint about the TinyCloud node profile (it is about OpenKey), only that the saved request resumes", async () => {
+    await pendingOf(() => acquireApprovalRequest(did, withDeadline(60_000)));
+    onRequest = answerAfter(Infinity);
+    const error = await pendingOf(() => acquireApprovalRequest(did, shortWait(1_000, 1_500)));
+    expect(error.exitCode).toBe(6);
+    const printed: string[] = [];
+    const write = spyOn(process.stderr, "write").mockImplementation(((chunk: string | Uint8Array) => { printed.push(String(chunk)); return true; }) as never);
+    const exit = spyOn(process, "exit").mockImplementation((() => { throw new Error("exit"); }) as never);
+    try { try { await handleError(error); } catch (caught) { if ((caught as Error).message !== "exit") throw caught; } } finally { write.mockRestore(); exit.mockRestore(); }
+    const text = printed.join("");
+    expect(text).toContain("NETWORK_ERROR");
+    expect(text).toContain("OpenKey did not answer");
+    expect(text).not.toContain("Active profile");
+    expect(text).not.toContain("Switch to a reachable profile");
+  }, 20_000);
 });

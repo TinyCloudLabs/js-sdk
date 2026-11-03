@@ -510,15 +510,19 @@ export async function acquireApprovalRequest(_did: string, options: AuthFlowOpti
     if (isNewRequest && approvalWait) throw pendingApproval(entry, approvalWait, true);
   }
   if (!entry.resultEnvelope) {
-    // The first check gets the full request limit whatever the deadline (see firstCheckTimeoutMs); the deadline decides only after an answer.
+    // An approval not yet discovered gets its first check with the full request limit whatever the deadline (see firstCheckTimeoutMs):
+    // the deadline decides only after an answer. An entry that already holds a result reference keeps the old limits and outcomes.
     let answered = false;
     for (;;) {
+      const firstWait = !answered && entry.resultRef === undefined ? approvalWait : undefined;
       let response: Response;
-      try { response = await post(entry, "discover", signingKey, answered || !approvalWait ? approvalRequestTimeoutMs(approvalWait, entry.resultRef !== undefined) : firstCheckTimeoutMs(approvalWait)); }
+      try { response = await post(entry, "discover", signingKey, firstWait ? firstCheckTimeoutMs(firstWait) : approvalRequestTimeoutMs(approvalWait, entry.resultRef !== undefined)); }
       catch (error) {
         // No answer at all within the first check's full limit: OpenKey is not reachable. That is not "still pending".
-        if (!answered && approvalWait && error instanceof Error && error.name === "TimeoutError") {
-          throw new CLIError("NETWORK_ERROR", `OpenKey did not answer the approval status check within ${Math.round(firstCheckTimeoutMs(approvalWait) / 1000)} seconds. The approval request is saved: run the same command again.`, ExitCode.NETWORK_ERROR);
+        if (firstWait && error instanceof Error && error.name === "TimeoutError") {
+          // The hint is set here so the generic network hint (about the TinyCloud node profile) is not attached.
+          throw new CLIError("NETWORK_ERROR", `OpenKey did not answer the approval status check within ${Math.round(firstCheckTimeoutMs(firstWait) / 1000)} seconds. The approval request is saved: run the same command again.`, ExitCode.NETWORK_ERROR,
+            { hint: "The saved approval request resumes on the next run; no new link is needed." });
         }
         await pauseBetweenAttempts(profile, entry, approvalWait);
         continue;
