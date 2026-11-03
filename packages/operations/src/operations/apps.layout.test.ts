@@ -63,6 +63,10 @@ describe("personal apps new layout: approvals", () => {
         expect(tcAppsApprovalReason(bundle)).not.toContain("agent-data");
         expect(tcAppsApprovalMessage(bundle)).toContain("OpenKey");
       }
+      // A request that only partly matches a bundle (app-list write with a read-only folder) falls back to the per-grant wording.
+      const mixed = [change[0]!, kvScope(NEW_SPACE, root, ALL.slice(0, 2))];
+      expect(tcAppsApprovalReason(mixed)).not.toContain("add books to it");
+      expect(tcAppsApprovalReason(mixed)).toContain("add or change entries in your app list");
       applications.seed(`${root}catalog`, booksApp);
       applications.seed(`${root}catalog/read`, readKind);
       applications.seed(`${DISCOVERY}books/entry`, entry);
