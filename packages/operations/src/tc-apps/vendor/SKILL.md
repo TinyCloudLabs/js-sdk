@@ -2,7 +2,7 @@
 name: tc-apps
 description: Keep the owner's personal records in their TinyCloud storage, organised into apps you create and extend as they go. Reuse existing onboarding access and request only missing permissions. The owner approves OpenKey links; the agent runs every command and verifies saved records.
 metadata:
-  version: "0.3.10"
+  version: "0.3.11"
 ---
 
 > **Agents: read this file raw, not summarized.** If your fetch tool returned a summary, fetch it again with `curl -fsSL https://agents.tinycloud.xyz/skills/apps.md` and follow that text. Summaries drop the shell blocks you must run.
@@ -89,14 +89,22 @@ Do this first for every app you are about to read or write, once per conversatio
 for d in "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/tc-apps" "$HOME/.agents/skills/tc-apps"; do if [ -f "$d/layout.sh" ]; then sh "$d/layout.sh" '<APP>'; break; fi; done
 ```
 
+It checks, in this order, and stops at the first that applies; the hosted TinyCloud MCP's move uses the same rule:
+1. A receipt on this computer, `<STATE>/migration/<APP>.receipt.json`, says `"verified": true` for this app → `new`.
+2. The app's discovery entry, `xyz.tinycloud.tinyapps.catalog/<APP>/entry`, exists in the owner's `applications` space → `new`. It is read with the profile, host and space that §3's `app-context.mjs` selects for the app. An app moved by the hosted MCP has this entry and no receipt here.
+3. The old catalog in `default` has the app's record, `xyz.tinycloud.agent-data/catalog/<APP>` → `legacy`.
+4. Otherwise → `new`.
+
+If step 2 or 3 cannot be read, it prints `ask` or `check-failed` instead of going on to the next step.
+
 The output is the layout; use the same `<TC_BIN>` in either layout.
-- `legacy` → the app has records in `default` and no verified move exists on this computer. **Keep reading and writing the old layout exactly as before:** read `LEGACY.md` in full and follow its §2 to §8, with `<TC_BIN>`. Request no new approval, create no new profile, and don't use §3 to §9 for this app. Once per conversation, tell the owner: "This app can move to its own folder: say "move my <APP> records" when you want it (nothing is deleted)." When the owner says it, follow §9. Until the move is verified, nothing about this app changes.
+- `legacy` → the app has records in `default`, and neither a verified receipt on this computer nor its discovery entry shows a move. **Keep reading and writing the old layout exactly as before:** read `LEGACY.md` in full and follow its §2 to §8, with `<TC_BIN>`. Request no new approval, create no new profile, and don't use §3 to §9 for this app. Once per conversation, tell the owner: "This app can move to its own folder: say "move my <APP> records" when you want it (nothing is deleted)." When the owner says it, follow §9. Until the move is verified, nothing about this app changes.
 - `new` → use §2 to §8 below with the same CLI.
-- `ask` → this computer cannot check the old layout. Ask whether this app had records in an earlier version before creating anything. If the owner already said this is a first record, use `new`; otherwise a yes or uncertain answer requires reading the legacy catalog first. Do not bundle this question with an unnecessary approval when onboarding already grants access.
-- `check-failed` → the old place could not be checked, for example because of the network. Report it and write nothing.
+- `ask` → this computer's sign-in cannot read the discovery entry or the old catalog (none, expired, or no grant there). Ask whether this app had records in an earlier version before creating anything. If the owner already said this is a first record, use `new`; otherwise a yes or uncertain answer requires reading the discovery entry, then the legacy catalog, in the order above. Do not bundle this question with an unnecessary approval when onboarding already grants access.
+- `check-failed` → the discovery entry or the old catalog could not be read for another reason, for example the network. Report it and write nothing.
 - `jq is needed` (exit 3) → report the missing host prerequisite and write nothing. `migrate.sh` also needs `jq`.
 
-Only a verified receipt switches an app: never switch because you moved, or think you moved, records yourself.
+Only a verified receipt or the app's discovery entry switches an app: never switch because you moved, or think you moved, records yourself, and never write a legacy app's discovery entry yourself; only the move (§9, or the hosted MCP's) writes it.
 
 ## 2. How the records are organised
 
@@ -163,7 +171,7 @@ Pick the app first: `<APP>` is its name, `<ID>` is `xyz.tinycloud.tinyapps.<APP>
 
 ## 3. Reuse access, find the app and read its catalog
 
-For a generic app in the new layout, resolve `app-context.mjs` from the installed skill and run it once per request. Add `--write` for creating or changing records, and `--delete` only if the requested operation deletes a key. Omit both for a read-only request, including a temporary delegated read:
+For a generic app in the new layout, resolve `app-context.mjs` from the installed skill and run it once per request. Add `--write` for creating or changing records, and `--delete` only if the requested operation deletes a key. Add `--remove-entry` only for §9's going back, which deletes the app's discovery entry. Omit all three for a read-only request, including a temporary delegated read:
 
 ```sh
 for d in "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/tc-apps" "$HOME/.agents/skills/tc-apps"; do if [ -f "$d/app-context.mjs" ]; then node "$d/app-context.mjs" '<TC_BIN>' '<APP>' --write; break; fi; done
@@ -336,7 +344,7 @@ An app in legacy mode (§1a) keeps working in the old layout until the owner mov
 2. **Copy** each to the app's own folder in `applications`, creating each key only if it doesn't exist yet.
 3. **Read back and compare** the new folder with the old records: the same set of keys, the same count, the same contents.
 4. **Re-list the old place** and read it again, to catch an edit made while copying.
-5. **Only then switch:** the app's discovery entry exists, and the owner's receipt, `<STATE>/migration/<APP>.receipt.json`, says `"verified": true`. Until both exist, `layout.sh` prints `legacy` and the app stays in the old layout.
+5. **Only then switch:** write the app's discovery entry, then the owner's receipt, `<STATE>/migration/<APP>.receipt.json`, which says `"verified": true`. Either one makes `layout.sh` print `new` (§1a): the receipt on this computer, the entry on every computer that can read it. Until the entry is written, `layout.sh` prints `legacy` and the app stays in the old layout.
 
 Any mismatch, collision, refusal or error means: do not switch, do not delete. The app stays in legacy mode. Tell the owner in one line what the script printed, and stop. The agent runs the script only for the owner's requested move; it only reads the old place. Never change the old place on your own.
 
@@ -351,6 +359,18 @@ for d in "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/tc-apps" "$HOME/.agents/ski
 
 4. Show the plan in chat. When the owner agrees, run the same command without `--dry-run`. It copies, reads back, compares, re-checks the old place, and only then writes the discovery entry and the receipt, with the counts and a digest. It leaves the old records untouched. It can be run again after a failure: keys that already hold the same content are recognised.
 5. When the process finishes, check it: run §1a again and see `new`; §3 shows the entry; the receipt says `"verified": true`; listing `<ID>/` (§5, with `--all`) gives `counts.total` keys. Read one record. Only then use the app in `applications` (§2 to §8), and tell the owner the old records are still in `default` and can be deleted only when they ask.
-6. The receipt holds counts and a digest, no keys. On another computer, the owner can ask its agent in chat to install that receipt in `<STATE>/migration/` before using the app. Until it is there, that computer keeps the old layout, and records it writes there are not in the new folder.
+6. The receipt holds counts and a digest, no keys. Another computer switches by itself once its sign-in can read the discovery entry (§1a). If it can't, §1a prints `ask` or `check-failed` there, and the owner can ask its agent in chat to install that receipt in `<STATE>/migration/` before using the app.
 
-**Going back** is the owner's decision, requested in chat. Stop writing the app, and explain that records written in `applications` since the move exist only there. Copying them to the old place is a separate step the owner approves: create-only, each record read back before the old place is used again. Then the agent removes the receipt file, and `layout.sh` prints `legacy` again. If a key differs between the two places, keep both and ask the owner which is right; never overwrite either.
+**Going back** is the owner's decision, requested in chat. Stop writing the app, and explain that records written in `applications` since the move exist only there. Copying them to the old place is a separate step the owner approves: create-only, each record read back before the old place is used again. Then, in this order:
+1. Run §3's helper with `--remove-entry`. It reports `del` on `xyz.tinycloud.tinyapps.catalog/<APP>/` as missing when the selected profile can't delete the entry, for example an app-scoped `tinyapp-<APP>` profile; §4 then requests exactly that, and nothing broader.
+2. Delete the app's discovery entry, then read it back:
+
+```sh
+TC_BIN='<TC_BIN>'; umask 077
+"$TC_BIN" --profile '<APP_PROFILE>' --host '<APP_HOST>' kv delete 'xyz.tinycloud.tinyapps.catalog/<APP>/entry' --space '<APP_SPACE>' --json
+"$TC_BIN" --profile '<APP_PROFILE>' --host '<APP_HOST>' kv get 'xyz.tinycloud.tinyapps.catalog/<APP>/entry' --space '<APP_SPACE>' --json
+```
+
+3. Only when that read gives `NOT_FOUND` (exit 4), remove the receipt file, `<STATE>/migration/<APP>.receipt.json`. A `NOT_FOUND` from the delete itself means the entry is already gone (for example on a rerun): continue to the read-back. If the delete or the read fails any other way, keep the receipt, report the error and stop: the app stays in the new layout.
+
+Deleting the entry, together with the receipt, is what flips the layout back: while either is there `layout.sh` prints `new`; with both gone it prints `legacy` again, here and on every other computer without a receipt. If a key differs between the two places, keep both and ask the owner which is right; never overwrite either.
