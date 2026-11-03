@@ -1335,32 +1335,55 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * This registers the user as the owner of the space.
    */
   private async hostSpace(
-    targetSpaceId?: string,
+    targetSpaceId?: string | SpaceCreationContext,
     purpose?: SignRequest["purpose"],
     signal?: AbortSignal,
+    assertCurrent?: () => void,
+    siweParameters?: (peerId: string) => {
+      address: string;
+      chainId: number;
+      domain: string;
+      issuedAt: string;
+      spaceId: string;
+      peerId: string;
+    },
   ): Promise<SpaceHostResult> {
-    if (!this._tinyCloudSession || !this._address || !this._chainId) {
+    const context = typeof targetSpaceId === "object" ? targetSpaceId : undefined;
+    const address = context?.address ?? this._address;
+    const chainId = context?.chainId ?? this._chainId;
+    if (!address || chainId === undefined || !this._tinyCloudSession) {
       throw new Error("Must be signed in to host space");
     }
+    const checkCurrent = () => {
+      signal?.throwIfAborted();
+      assertCurrent?.();
+    };
 
+    checkCurrent();
     await this.ensureTinyCloudHosts();
-    const host = this.primaryTinyCloudHost;
-    const spaceId = targetSpaceId ?? this._tinyCloudSession.spaceId;
+    checkCurrent();
+    const host = context?.host ?? this.primaryTinyCloudHost;
+    const spaceId = context?.spaceId ?? (typeof targetSpaceId === "string" ? targetSpaceId : this._tinyCloudSession.spaceId);
 
     // Get peer ID from TinyCloud server
     const peerId = await fetchPeerId(host, spaceId, signal);
+    checkCurrent();
 
     // Generate host SIWE message
-    const siwe = this.wasm.generateHostSIWEMessage({
-      address: this._address,
-      chainId: this._chainId,
-      domain: this.domain,
-      issuedAt: new Date().toISOString(),
-      spaceId,
-      peerId,
-    });
+    const siwe = this.wasm.generateHostSIWEMessage(
+      context && siweParameters
+        ? siweParameters(peerId)
+        : {
+            address,
+            chainId,
+            domain: this.domain,
+            issuedAt: new Date().toISOString(),
+            spaceId,
+            peerId,
+          },
+    );
 
-    if (signal?.aborted) throw signal.reason;
+    checkCurrent();
     const signing = this.signMessage(siwe, purpose);
     let signature: string;
     if (!signal) {
@@ -1382,9 +1405,10 @@ export class NodeUserAuthorization implements IUserAuthorization {
         signal.removeEventListener("abort", onAbort);
       }
     }
-    if (signal?.aborted) throw signal.reason;
+    checkCurrent();
     // Convert to delegation headers and submit
     const headers = this.wasm.siweToDelegationHeaders({ siwe, signature });
+    checkCurrent();
     return submitHostDelegation(host, headers, signal);
   }
 
@@ -1465,47 +1489,39 @@ export class NodeUserAuthorization implements IUserAuthorization {
    *
    * @throws Error if the creation handler fails or times out, or hosting fails
    */
-  async ensurePrimarySpaceHosted(hosting: SpaceHosting): Promise<void> {
-    if (hosting !== "not-hosted") {
-      return;
-    }
+  async ensurePrimarySpaceHosted(hosting: SpaceHosting, signal?: AbortSignal): Promise<void> {
     const session = this._tinyCloudSession;
-    if (!session) {
-      throw new Error("Must be signed in to host the primary space");
-    }
-
+    if (hosting !== "not-hosted") return;
+    if (!session) throw new Error("Must be signed in to host the primary space");
     // Determine the effective space creation handler:
     // 1. Explicit spaceCreationHandler takes precedence
     // 2. autoCreateSpace: true uses AutoApproveSpaceCreationHandler
     // 3. Otherwise, no handler (space creation skipped silently)
     const handler: ISpaceCreationHandler | undefined =
       this.spaceCreationHandler ??
-      (this.autoCreateSpace
-        ? new AutoApproveSpaceCreationHandler()
-        : undefined);
-    if (!handler) {
-      return;
-    }
-
-    await this.ensureTinyCloudHosts();
-    const host = this.primaryTinyCloudHost;
-    const primarySpaceId = session.spaceId;
-    const creationContext = {
-      spaceId: primarySpaceId,
-      address: this._address!,
-      chainId: this._chainId!,
-      host,
-    };
+      (this.autoCreateSpace ? new AutoApproveSpaceCreationHandler() : undefined);
+    if (!handler) return;
 
     // Not a static import on purpose: the creation sequence is rare, and web-sdk's root has no room for it.
     const { createPrimarySpace } = await import("../space-hosting.js");
     await createPrimarySpace({
       handler,
-      context: creationContext,
-      guard: () => this.guardSpaceCreation(handler, creationContext),
-      host: () => this.hostSpace(primarySpaceId),
-      onHosted: () => { this._spaceHosting = "hosted"; },
-      activate: () => activateSessionWithHost(host, session.delegationHeader),
+      session,
+      currentSession: () => this._tinyCloudSession,
+      signerAddress: () => this.signer.getAddress(),
+      resolveHost: async () => {
+        await this.ensureTinyCloudHosts();
+        return this.primaryTinyCloudHost;
+      },
+      domain: this.domain,
+      guard: (context) => this.guardSpaceCreation(handler, context),
+      host: (context, assertCurrent, siweParameters) =>
+        this.hostSpace(context, undefined, signal, assertCurrent, siweParameters),
+      onHosted: () => {
+        this._spaceHosting = "hosted";
+      },
+      activate: (context) => activateSessionWithHost(context.host, session.delegationHeader),
+      signal,
     });
   }
 

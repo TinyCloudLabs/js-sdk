@@ -31,6 +31,7 @@
   "changesets": [
     "signout-local-first-fence",
     "space-hosting-probe-node-sdk",
-    "space-hosting-probe-web-sdk"
+    "space-hosting-probe-web-sdk",
+    "tc2380-q2"
   ]
 }

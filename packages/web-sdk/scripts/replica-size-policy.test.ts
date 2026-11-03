@@ -2942,6 +2942,7 @@ delete tc2043Ledger.tc2276TechnicalLimits;
 delete tc2043Ledger.tc2418AbortListenerCleanup;
 delete tc2043Ledger.tc2379SignOutFence;
 delete tc2043Ledger.tc2380SpaceHosting;
+delete tc2043Ledger.tc2380Q2OneClick;
 tc2043Ledger.entries = structuredClone(current.entries.slice(0, current.entries.findIndex((entry) => entry.pr === "#728")));
 describe("replication syncScope opt-in (#742, TC-2043) size ratchet", () => {
   const row = () => structuredClone(approvedTc2043SyncScopeRatchet);
@@ -4568,7 +4569,7 @@ describe("check space hosting on restore and record it at sign-in (TC-2380, #840
     expect(row().activation).toEqual(prerequisite().activation);
     expect(row().worker).toEqual({ delta: 0, ceiling: prerequisite().worker.ceiling });
     expect(row().replicaWorker).toEqual({ delta: 0, ceiling: prerequisite().replicaWorker.ceiling });
-    expect(rootCeilings(current).at(-1)).toEqual({
+    expect(rootCeilings(current)).toContainEqual({
       row: "tc2380SpaceHosting",
       ceiling: { "index.mjs": 1479648, "index.cjs": 1422060 },
     });

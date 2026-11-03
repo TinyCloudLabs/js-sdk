@@ -146,19 +146,38 @@ export async function askSpaceHosting(ports: SpaceHostingPorts): Promise<SpaceHo
   return outcome === "refused" ? "unknown" : outcome;
 }
 
+type PrimarySpaceIdentity = Pick<SpaceCreationContext, "address" | "chainId" | "spaceId">;
+
 export interface PrimarySpaceCreationPorts {
   handler: ISpaceCreationHandler;
-  context: SpaceCreationContext;
+  session?: PrimarySpaceIdentity;
+  context?: SpaceCreationContext;
+  currentSession?(): unknown;
+  signerAddress?(): Promise<string>;
+  resolveHost?(): Promise<string>;
+  domain?: string;
+  hostName?: string;
   /** `assertMayCreateSpace`, reporting a refusal to the handler. */
-  guard(): Promise<void>;
-  /** Submit the host delegation for the primary space. */
-  host(): Promise<SpaceHostResult>;
+  guard(context: SpaceCreationContext): Promise<void>;
+  /** Confirm that the host delegation should be submitted. */
+  host(
+    context: SpaceCreationContext,
+    assertCurrent: () => void,
+    siweParameters: (peerId: string) => {
+      address: string;
+      chainId: number;
+      domain: string;
+      issuedAt: string;
+      spaceId: string;
+      peerId: string;
+    },
+  ): Promise<SpaceHostResult>;
   /** Called once the node has the host delegation. */
-  onHosted(): void;
+  onHosted(context: SpaceCreationContext): void;
   /** Register the session delegation again. */
-  activate(): Promise<SpaceHostResult>;
+  activate(context: SpaceCreationContext): Promise<SpaceHostResult>;
+  signal?: AbortSignal;
 }
-
 /** `<status> - <server text>` for a failed host call. */
 function describeFailure(result: SpaceHostResult): string {
   const text = result.error?.trim();
@@ -170,12 +189,51 @@ function describeFailure(result: SpaceHostResult): string {
  * space. A declined confirmation ends it quietly; a failure is reported to the
  * handler and thrown.
  */
-export async function createPrimarySpace({ handler, context, guard, host, onHosted, activate }: PrimarySpaceCreationPorts): Promise<void> {
-  await guard();
-  if (!await handler.confirmSpaceCreation(context)) return;
+export async function createPrimarySpace({
+  handler,
+  session,
+  context: existingContext,
+  currentSession,
+  signerAddress,
+  resolveHost,
+  domain,
+  hostName,
+  guard,
+  host,
+  onHosted,
+  activate,
+  signal,
+}: PrimarySpaceCreationPorts): Promise<void> {
+  const checkCurrent = () => {
+    signal?.throwIfAborted();
+    if (session && currentSession?.() !== session) throw new Error("Space hosting session changed");
+  };
+  checkCurrent();
+  if (session && signerAddress && (await signerAddress()).toLowerCase() !== session.address.toLowerCase()) return;
+  checkCurrent();
+  const context = existingContext ?? (session && {
+    address: session.address,
+    chainId: session.chainId,
+    spaceId: session.spaceId,
+    host: await resolveHost?.() ?? hostName ?? "",
+  });
+  if (!context) throw new Error("Space hosting requires a session context");
+  checkCurrent();
+  await guard(context);
+  checkCurrent();
+  const approved = await handler.confirmSpaceCreation(context);
+  checkCurrent();
+  if (!approved) return;
 
   try {
-    const created = await host();
+    const created = await host(context, checkCurrent, (peerId) => ({
+      address: context.address,
+      chainId: context.chainId,
+      domain: domain ?? "",
+      issuedAt: new Date().toISOString(),
+      spaceId: context.spaceId,
+      peerId,
+    }));
     if (!created.success) {
       throw Object.assign(
         new Error(`Failed to create space ${context.spaceId}: ${describeFailure(created)}`),
@@ -186,12 +244,15 @@ export async function createPrimarySpace({ handler, context, guard, host, onHost
     handler.onSpaceCreationFailed?.(context, error instanceof Error ? error : new Error(String(error)));
     throw error;
   }
-  onHosted();
+  checkCurrent();
+  onHosted(context);
 
   // Small delay to allow space creation to propagate
   await new Promise((resolve) => setTimeout(resolve, 100));
+  checkCurrent();
 
-  const retry = await activate();
+  const retry = await activate(context);
+  checkCurrent();
   if (!retry.success) {
     const err = Object.assign(
       new Error(`Failed to activate session after creating space: ${describeFailure(retry)}`),
