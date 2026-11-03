@@ -16,7 +16,8 @@ Availability depends on the ChatGPT plan and workspace settings. Follow
 
 Any agent that supports remote MCP can add the hosted URL and complete OpenKey
 OAuth when it supports Streamable HTTP and OAuth; in Claude, add it as a remote
-MCP connector. Meetings are available through the CLI.
+MCP connector. Generic KV/SQL reads do not require a CLI, app knowledge bundle,
+or app-specific retrieval helper.
 
 ## Local stdio requirements
 
@@ -37,13 +38,91 @@ information. Respect declined approval and the client's destructive-action
 confirmation flow. Ask for an IANA timezone, not a city or precise location.
 
 
+## Reusable read consent and complete delivery
+
+The private hosted and local surfaces expose `tinycloud_auth_read_scope` and
+`tinycloud_read`. The restricted public ChatGPT surface is unchanged. Native
+connector grants also expose `tinycloud_read`, within their existing read-only
+capability ceiling; they cannot use it to approve broader access.
+
+For reusable access, explicitly select an existing owner space and the desired
+recursive KV prefixes and/or exact SQL databases:
+
+```json
+{
+  "space": "applications",
+  "kvPrefixes": ["research/"],
+  "databases": ["catalog"]
+}
+```
+
+Call `tinycloud_auth_read_scope` with that input. The ordinary request-bound
+approval flow grants KV GET/metadata/LIST and SQL read only. Slash-ended prefixes
+cover future children until expiry/revocation, not siblings; `[""]` explicitly
+selects the whole KV space. No writes are requested. Ordinary GET/HEAD calls
+remain exact and never silently escalate to subtree consent. Success reports
+`access: "not-tested"`: capability coverage is not proof of storage access.
+
+Discover spaces through the account tools, then inspect KV prefixes or an
+exact database's schema. App knowledge is optional. Continue KV listings with
+their opaque `nextCursor`, retaining the same space, prefix and limit. A
+truncated listing without a cursor is incomplete; narrow the prefix rather
+than inventing a continuation or claiming exhaustive discovery.
+
+For complete content, call `tinycloud_read`:
+
+```json
+{
+  "resource": {
+    "kind": "kv",
+    "space": "applications",
+    "key": "research/report.json"
+  }
+}
+```
+
+SQL resources instead use `kind: "sql"`, `space`, `database`, `sql`, and optional
+`params`, `maxRows`, and `maxBytes`. Retain that original resource unchanged.
+For every nonfinal page, call again with `{ resource, ...output.continuation }`.
+Decode each `value` according to `encoding`, join ranges `[start, end)` in order,
+and check the assembled length and SHA-256 against `binding`. Do not parse a
+partial JSON page as a complete document or treat `complete: false` as success
+for the full retrieval.
+
+- Pages default to at most 12 KiB of source bytes and stay below an 80,000-byte
+  serialized output budget, leaving room for the hosted envelope. UTF-8 pages
+  end on character boundaries; arbitrary binary bytes use lossless base64.
+- KV digests cover original stored bytes. SQL digests cover normalized query
+  result JSON, not database files or original storage bytes. SQL query identity
+  binds the original SQL, parameters and supplied limits; use a deterministic
+  query/order when retrieving multiple pages.
+- Every page reacquires the bounded resource under current authority. There is
+  no content cache or bearer continuation. Changed bytes return
+  `READ_SOURCE_CHANGED`; mismatched host, owner, locator or query returns
+  `READ_CONTEXT_MISMATCH`. Do not silently restart and combine revisions.
+- Acquisition limits are unchanged: KV 1 MiB; SQL at most 1,000 rows and a
+  default 1 MiB / maximum 4 MiB result budget. Paging solves delivery limits,
+  not arbitrary-size acquisition or unbounded database export.
+- `provenance` records the representation, acquisition time, digest algorithm
+  and observed ETag when available. The digest identifies the acquired bytes;
+  the timestamp and ETag are observations, not claims of a server snapshot.
+
+For exact-source handoff, send the original resource plus `output.binding`.
+The recipient calls `tinycloud_read` with `{ resource, expected: binding }`
+from offset zero under its own authorized profile/session. The binding grants
+no authority and is portable across separately approved sessions. For SQL,
+the recipient needs the original query and parameters, not just `querySha256`.
+Locators, queries and results may be sensitive; share them only as requested.
+SDK callers use `invokeOperation` with `tinycloud.auth.read_scope@1` or
+`tinycloud.read@1`; existing CLI read commands remain unchanged.
+
 ## Install and configure
 
 ### Hosted Streamable HTTP
 
 Claude web, iOS, Android and other remote clients connect to
 `https://mcp.tinycloud.xyz/mcp` and authenticate through OpenKey OAuth. The
-hosted server registers 22 tools: it adds `tinycloud_connect` and four
+hosted server adds `tinycloud_connect` and four
 personal-record tools, and omits local-only `tinycloud_secrets_status` and
 `tinycloud_auth_import`.
 `tinycloud_connect` returns a short-lived browser approval URL on first use. Later
@@ -145,8 +224,14 @@ docker run --rm -p 3000:3000 \
   ghcr.io/tinycloudlabs/tinycloud-mcp:latest
 ```
 
-Set `TC_MCP_OAUTH_METADATA_URL` for a self-hosted OpenKey issuer and
-`TC_MCP_ALLOWED_ORIGINS` when browsers call the MCP endpoint directly. The
+Set `TC_MCP_OAUTH_METADATA_URL` for a self-hosted OpenKey issuer. The HTTP
+endpoint, hosted or self-hosted, answers calls and CORS preflights from any
+browser Origin: a call is authorized only by an OAuth access token for
+`TC_MCP_PUBLIC_URL` in its `Authorization: Bearer` header (the server sets no
+cookies), the `Host` header must match `TC_MCP_PUBLIC_URL` (a guard against
+DNS rebinding), responses never allow credentials, and only
+`WWW-Authenticate` is exposed to scripts. There is no Origin allowlist to
+configure. The
 default TinyCloud node is `https://tee.node.tinycloud.xyz`.
 The MCP server asks OpenKey's resource-server token introspection endpoint
 (RFC 7662) about each access token before serving a call.
@@ -164,7 +249,8 @@ inactive one. A 200 answer with `active: false` is answered with 401
 seconds. A 401 from the endpoint (`invalid_client`) is logged once and refused
 with 500 `server_error`. If OpenKey cannot be reached or answers otherwise
 (429, 5xx, timeout), a call is served only when OpenKey itself answered that
-same token active to this server, and only until the token expires; every other
+same token active to this server within the last 60 seconds (and the token has
+not expired), however long the token lives; every other
 call is answered with 500 `server_error`.
 
 The account owner can see the hosted MCP's delegation, and revoke it, on the
@@ -282,7 +368,7 @@ to select another profile.
 
 ## Tools
 
-The local server exposes 19 tools. Hosted mode exposes 22: it adds
+Hosted mode adds to the local data tools
 `tinycloud_connect`, `tinycloud_apps_context`, `tinycloud_apps_read`,
 `tinycloud_apps_write` and `tinycloud_apps_query`, and omits
 `tinycloud_secrets_status` and `tinycloud_auth_import` (local/stdio only):
@@ -290,6 +376,8 @@ The local server exposes 19 tools. Hosted mode exposes 22: it adds
 - Local and authorization state: `tinycloud_status`,
   `tinycloud_auth_status`, `tinycloud_auth_capabilities`
 - Exact permission flow: `tinycloud_auth_request`, `tinycloud_auth_import`
+- Explicit reusable read consent: `tinycloud_auth_read_scope`
+- Complete bounded KV/SQL delivery and provenance: `tinycloud_read`
 - Account discovery: `tinycloud_account_spaces_list`,
   `tinycloud_account_applications_list`
 - Bounded KV CRUD: `tinycloud_kv_list`, `tinycloud_kv_get`,
@@ -331,8 +419,10 @@ exact, resumable request instead of widening access.
 Hosted text blocks contain the status and canonical JSON so clients that ignore
 `structuredContent` can read the result. Successful `tinycloud_secrets_get`
 values remain structured-only. Read-only and personal-record context/query results
-exceeding 100,000 characters return a nonretryable SQL/KV size error with
-narrowing guidance. Canonical write outcomes are never cut off by this cap,
+exceeding 100,000 characters return a nonretryable SQL/KV size error. Oversized
+generic GET/query results identify `tinycloud_read` as the complete-delivery
+path when that tool is bound; other results retain narrowing guidance.
+Canonical write outcomes are never cut off by this cap,
 so a completed record write is not misreported as a retryable failure.
 Call logs contain only tool name, outcome code, duration and successful replayed
 grant count—never keys, values, catalog text, SQL or parameters.

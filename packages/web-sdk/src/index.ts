@@ -445,7 +445,7 @@ export {
   serializeDelegation,
   deserializeDelegation,
 } from "@tinycloud/node-sdk/core";
-export type { PortableDelegation } from "@tinycloud/node-sdk/core";
+export type { PortableDelegation, SpaceHosting } from "@tinycloud/node-sdk/core";
 
 // TinyCloudNode re-export (for advanced usage)
 export {

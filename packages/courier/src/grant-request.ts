@@ -1,6 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import fs from 'node:fs';
-import path from 'node:path';
 import {
   ackApprovalResult, checkApprovalResultBinding, collectApprovalResult, createApprovalRequest, DEFAULT_LINKS_API_ORIGIN, discoverApprovalResult, generateRelayKey,
   isApprovalClientError, isLinkError, openRelayResult, signerFromJwk,
@@ -11,7 +9,11 @@ import { canonicalJson } from './canonical.js';
 import { cmd } from './program.js';
 import { CourierError } from './errors.js';
 import { AGENT_GRANT, AGENT_GRANT_EXPIRY } from './keys.js';
-import { profileDir, readSecure, writeSecure, type AgentKey, type Profile } from './profile.js';
+import { profileDir, type AgentKey, type Profile } from './profile.js';
+import {
+  ackRef, clearPending, holdsApproval, knownResult, loadPendingForWrite, markCommitted, recordResultEnvelope, recordResultRef, resultEnvelopeOf,
+  resultSeen, savePending, stageOf, approvalPhase, type PendingGrantRequest,
+} from './approval-phase.js';
 import { assertBoundToKey, installGrant, isClockRefusal, isPermanentRefusal, parseGrantPayload, resolveOpenKeyApiHost, type GrantPayload } from './grant.js';
 import { withRefusalNotice } from './grant-refusal.js';
 import { bareDid, CLOCK_SKEW_MS, durationMs, siweTimes } from './authority.js';
@@ -21,7 +23,7 @@ import { bareDid, CLOCK_SKEW_MS, durationMs, siweTimes } from './authority.js';
  * request at the links API and saves it here; `init --wait` polls OpenKey for the result with the agent key's signed
  * proof, installs the grant, and only then acknowledges it. Every step is resumable from `approval-pending.json`.
  */
-const PENDING_FILE = 'approval-pending.json';
+// The saved request file, its reader, writers and phase live in approval-phase.ts; this module only calls them.
 
 export const DEFAULT_WAIT_MS = 60_000;
 export const MAX_WAIT_MS = 9 * 60_000;
@@ -38,120 +40,6 @@ const MAX_SPACE_WAIT_MS = 150_000;
 const ACK_TIMEOUT_MS = 5_000;
 /** installGrant failures that no retry can fix: the approved result itself is wrong, so the request is dropped. */
 const REFUSED_CODES: Record<string, true> = { 'bad-grant': true, 'grant-too-broad': true, 'grant-incomplete': true, 'grant-expired': true, 'grant-too-long': true };
-
-/** The durable record of one approval request. The result stays encrypted at rest under `relayPrivateKey`. */
-export interface PendingGrantRequest {
-  version: 1;
-  request: OpenKeyApprovalRequestV1;
-  requestId: string;
-  bodyCid: string;
-  approvalUrl: string;
-  requestExpiresAt: string;
-  record: LinkRecord;
-  apiOrigin: string;
-  linkApiOrigin: string;
-  openkeyOrigin: string;
-  relayPrivateKey: string;
-  /** Sent with the acknowledgement; stable across retries so OpenKey can recognise the same ack. */
-  ackId: string;
-  resultRef?: string;
-  resultExpiresAt?: string;
-  resultEnvelope?: unknown;
-  /** The grant and profile are saved; only the acknowledgement may remain. */
-  committed?: true;
-}
-
-export type PendingRead =
-  | { kind: 'none' }
-  | { kind: 'ok'; pending: PendingGrantRequest }
-  /** The file or its directory has the wrong mode, or the file cannot be read (EACCES, EIO): the record may well be intact. */
-  | { kind: 'unreadable'; reason: string; fix: string }
-  /** The file is readable and is not a saved request. */
-  | { kind: 'corrupt'; reason: string };
-
-export function readPending(): PendingRead {
-  const file = path.join(profileDir(), PENDING_FILE);
-  if (!fs.existsSync(file)) return { kind: 'none' };
-  const dirMode = fs.statSync(profileDir()).mode & 0o777;
-  if ((dirMode & 0o077) !== 0) {
-    return { kind: 'unreadable', reason: `${profileDir()} has mode ${dirMode.toString(8)}`, fix: `chmod 700 ${profileDir()}` };
-  }
-  const mode = fs.statSync(file).mode & 0o777;
-  if ((mode & 0o077) !== 0) return { kind: 'unreadable', reason: `${file} has mode ${mode.toString(8)}, not 600`, fix: `chmod 600 ${file}` };
-  let text: string;
-  try { text = fs.readFileSync(file, 'utf8'); } catch (error) {
-    return { kind: 'unreadable', reason: `${file} cannot be read (${(error as Error).message})`, fix: `chmod 600 ${file}` };
-  }
-  let pending: PendingGrantRequest;
-  try { pending = JSON.parse(text) as PendingGrantRequest; } catch (error) { return { kind: 'corrupt', reason: (error as Error).message }; }
-  if (pending && typeof pending.version === 'number' && pending.version > 1) {
-    // Written by a newer Courier: not corrupt, and not ours to set aside. Use that Courier, or move the file away by hand.
-    return { kind: 'unreadable', reason: `${file} was written by a newer Courier (record version ${pending.version})`, fix: `mv ${file} ${file}.newer` };
-  }
-  if (!pending || pending.version !== 1 || !pending.request || typeof pending.requestId !== 'string' || typeof pending.bodyCid !== 'string'
-    || typeof pending.approvalUrl !== 'string' || typeof pending.relayPrivateKey !== 'string' || typeof pending.ackId !== 'string') {
-    return { kind: 'corrupt', reason: 'unexpected contents' };
-  }
-  return { kind: 'ok', pending };
-}
-
-/**
- * Stops (without changing anything) when a saved approval request exists but cannot be read. Call it before a writer changes any
- * other state, so a key, grant or profile is never replaced while the approval it belongs to is unreachable.
- */
-export function assertPendingReadable(): void {
-  const read = readPending();
-  if (read.kind === 'unreadable') throw unreadableError(read);
-}
-
-function unreadableError(read: Extract<PendingRead, { kind: 'unreadable' }>): CourierError {
-  return new CourierError('approval-unreadable', `The saved approval request cannot be used: ${read.reason}. It may hold an approval the owner already gave, so it was not touched and nothing else was changed. Fix it with \`${read.fix}\`, then run \`${cmd('init --wait')}\` again.`);
-}
-
-/**
- * The saved request for READ-ONLY and cleanup callers. A record that cannot be read is reported on stderr and treated as no record, so
- * it never fails a command that already installed a grant or blocks `--rotate-key`. Callers that WRITE the record use
- * `loadPendingForWrite`, which never lets an unreadable record be overwritten.
- */
-export function loadPending(): PendingGrantRequest | undefined {
-  const read = readPending();
-  if (read.kind === 'ok') return read.pending;
-  if (read.kind !== 'none') {
-    console.error(`warning: ignoring the saved approval request ${PENDING_FILE} in ${profileDir()} (${read.reason}).`);
-  }
-  return undefined;
-}
-
-/**
- * The saved request for a caller that is about to write one. A record that exists but cannot be read stops the command with the file
- * named and how to fix it: the approval in it may be intact (it comes back after the fix). Only a record that is readable and corrupt
- * is set aside, as `approval-pending.json.corrupt-<time>` (0600), and the command goes on without it.
- */
-function loadPendingForWrite(): PendingGrantRequest | undefined {
-  const read = readPending();
-  if (read.kind === 'ok') return read.pending;
-  if (read.kind === 'unreadable') {
-    throw unreadableError(read);
-  }
-  if (read.kind === 'corrupt') {
-    const file = path.join(profileDir(), PENDING_FILE);
-    const aside = `${file}.corrupt-${new Date().toISOString().replace(/[:.]/g, '-')}`;
-    fs.renameSync(file, aside);
-    fs.chmodSync(aside, 0o600);
-    console.error(`warning: ${PENDING_FILE} is corrupt (${read.reason}); it was moved to ${aside} and will be replaced by a new request.`);
-  }
-  return undefined;
-}
-
-function savePending(pending: PendingGrantRequest): void {
-  writeSecure(path.join(profileDir(), PENDING_FILE), pending);
-}
-
-export function clearPending(): void {
-  try { fs.unlinkSync(path.join(profileDir(), PENDING_FILE)); } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-  }
-}
 
 function configuredOrigin(value: string, label: string): string {
   let url: URL;
@@ -217,9 +105,6 @@ function matches(pending: PendingGrantRequest, profile: Profile, want: WantedReq
     && pending.openkeyOrigin === want.openkeyOrigin && pending.apiOrigin === want.apiOrigin && pending.linkApiOrigin === want.linkApiOrigin;
 }
 
-/** The saved request already holds something that cannot be made again: a reference to an approved result, the result itself, or an installed grant. */
-export const holdsApproval = (pending: PendingGrantRequest) => pending.resultRef !== undefined || pending.resultEnvelope !== undefined || pending.committed === true;
-
 /**
  * OpenKey keeps an approved result for this long after the approval: production APPROVAL_RESULT_RETENTION_SECONDS=600,
  * docker-compose.prod.yml:28 (OpenKey repo). The constant follows the DEPLOYED value.
@@ -229,7 +114,10 @@ const RESULT_RETENTION_MS = 600_000;
 const EXPIRY_SKEW_MS = 60_000;
 
 /** The request's own expiry has passed and nothing was ever collected for it. */
-const requestLapsed = (pending: PendingGrantRequest) => !holdsApproval(pending) && Date.parse(pending.requestExpiresAt) <= Date.now();
+const requestLapsed = (pending: PendingGrantRequest) => {
+  const phase = approvalPhase({ kind: 'ok', pending });
+  return phase.phase === 'open' && phase.lapsed;
+};
 
 /**
  * A lapsed, unapproved request may still have been approved just before it expired: OpenKey serves the result for
@@ -243,8 +131,7 @@ async function settleLapsed(pending: PendingGrantRequest, key: AgentKey): Promis
   try {
     const found = await discoverApprovalResult(requesterState(pending, key));
     if (found.status === 'pending') return 'open';
-    pending.resultRef = found.resultRef;
-    pending.resultExpiresAt = found.expiresAt;
+    recordResultRef(pending, found.resultRef, found.expiresAt);
     savePending(pending);
     return 'approved';
   } catch (error) {
@@ -369,7 +256,7 @@ function requesterState(pending: PendingGrantRequest, key: AgentKey): ApprovalRe
 async function verifiedPayload(profile: Profile, pending: PendingGrantRequest, key: AgentKey): Promise<GrantPayload> {
   let delegationCid: string | undefined;
   try {
-    const opened = await openRelayResult(pending.resultEnvelope, pending.requestId, pending.relayPrivateKey);
+    const opened = await openRelayResult(resultEnvelopeOf(pending), pending.requestId, pending.relayPrivateKey);
     const claimedCid = (opened.delegation as { delegationCid?: unknown } | null | undefined)?.delegationCid;
     delegationCid = typeof claimedCid === 'string' && claimedCid !== '' ? claimedCid : undefined;
     const checked = checkApprovalResultBinding(opened, { requestId: pending.requestId, bodyCid: pending.bodyCid, request: pending.request });
@@ -399,12 +286,13 @@ async function verifiedPayload(profile: Profile, pending: PendingGrantRequest, k
 
 /** Acknowledge a saved grant. A failure is reported, never fatal: the grant is installed and the saved request keeps the ack to retry. */
 async function acknowledge(pending: PendingGrantRequest, key: AgentKey): Promise<void> {
-  if (!pending.resultRef) {
+  const ref = ackRef(pending);
+  if (!ref) {
     clearPending();
     return;
   }
   try {
-    await ackApprovalResult(requesterState(pending, key), pending.resultRef, pending.ackId, { timeoutMs: ACK_TIMEOUT_MS });
+    await ackApprovalResult(requesterState(pending, key), ref, pending.ackId, { timeoutMs: ACK_TIMEOUT_MS });
     clearPending();
   } catch (error) {
     if (!isApprovalClientError(error)) throw error;
@@ -424,25 +312,26 @@ async function acknowledge(pending: PendingGrantRequest, key: AgentKey): Promise
  * are durably saved; every earlier step is resumable from the saved request alone.
  */
 export async function completeApproval(profile: Profile, key: AgentKey, pending: PendingGrantRequest, options: WaitOptions): Promise<'done' | 'deadline'> {
-  if (!pending.committed) {
-    if (pending.resultEnvelope === undefined) {
+  const stage = stageOf(pending);
+  if (stage !== 'committed') {
+    if (stage !== 'result') {
+      const known = knownResult(pending);
       let collected: CollectedApprovalResult | { readonly status: 'deadline' };
       try {
         collected = await collectApprovalResult(requesterState(pending, key), {
           deadline: options.deadline,
-          ...(pending.resultRef && pending.resultExpiresAt ? { known: { resultRef: pending.resultRef, expiresAt: pending.resultExpiresAt } } : {}),
+          ...(known ? { known } : {}),
           onDiscovered: (found) => {
-            pending.resultRef = found.resultRef;
-            pending.resultExpiresAt = found.expiresAt;
+            recordResultRef(pending, found.resultRef, found.expiresAt);
             savePending(pending);
           },
         });
       } catch (error) {
         if (!isApprovalClientError(error)) throw error;
-        throw collectFailure(error, pending.resultRef !== undefined);
+        throw collectFailure(error, resultSeen(pending));
       }
       if (collected.status === 'deadline') return 'deadline';
-      pending.resultEnvelope = collected.relay;
+      recordResultEnvelope(pending, collected.relay);
       savePending(pending); // the encrypted result is on disk before any install work
     }
     const payload = await verifiedPayload(profile, pending, key);
@@ -460,7 +349,7 @@ export async function completeApproval(profile: Profile, key: AgentKey, pending:
         throw withRefusalNotice(error, payload.delegationCid);
       }
     }
-    pending.committed = true;
+    markCommitted(pending);
     savePending(pending);
     await acknowledge(pending, key);
     if (spaceError) throw spaceError;

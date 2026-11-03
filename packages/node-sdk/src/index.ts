@@ -166,6 +166,7 @@ export {
   type OpenKeyAuthorizeInput,
   type OpenKeyAuthorizationResultV1,
   type PreparedOpenKeyAuthorization,
+  type SpaceHosting,
 } from "./authorization/NodeUserAuthorization";
 export { isAppKeyHostBound } from "./authorization/appKeyHostBinding";
 

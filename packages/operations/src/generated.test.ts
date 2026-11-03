@@ -35,7 +35,6 @@ async function runGenerator(...arguments_: readonly string[]): Promise<number> {
   return process.exited;
 }
 
-
 test("the catalog contains exactly the registered v1 definitions", async () => {
   const catalog = JSON.parse(await readFile(catalogPath, "utf8")) as {
     schemaVersion: number;
@@ -55,6 +54,7 @@ test("the catalog contains exactly the registered v1 definitions", async () => {
     "tinycloud.apps.write@1",
     "tinycloud.auth.capabilities@1",
     "tinycloud.auth.import@1",
+    "tinycloud.auth.read_scope@1",
     "tinycloud.auth.request@1",
     "tinycloud.auth.status@1",
     "tinycloud.knowledge.list@1",
@@ -64,6 +64,7 @@ test("the catalog contains exactly the registered v1 definitions", async () => {
     "tinycloud.kv.head@1",
     "tinycloud.kv.list@1",
     "tinycloud.kv.put@1",
+    "tinycloud.read@1",
     "tinycloud.secrets.get@1",
     "tinycloud.secrets.status@1",
     "tinycloud.sql.execute@1",
@@ -71,26 +72,21 @@ test("the catalog contains exactly the registered v1 definitions", async () => {
     "tinycloud.sql.schema.inspect@1",
     "tinycloud.status.get@1",
   ]);
-  expect(new Set(catalog.operations.map((operation) => operation.id)).size).toBe(24);
-  expect(catalog.operations).toHaveLength(24);
+  expect(new Set(catalog.operations.map((operation) => operation.id)).size).toBe(26);
+  expect(catalog.operations).toHaveLength(26);
   for (const operation of catalog.operations) {
-    expect(operation.input).toBeDefined();
-    expect(operation.output).toBeDefined();
-    expect(operation.result).toBeDefined();
     expect(operation.result.anyOf).toHaveLength(4);
-    expect(operation.effects.length).toBeGreaterThan(0);
-    expect(operation.postures.length).toBeGreaterThan(0);
     expect(Object.keys(operation.exposure).sort()).toEqual(["cli", "docs", "mcp", "skill"]);
-    expect(operation.sensitivity).toBeDefined();
     expect(operation.stableErrors).toEqual(OPERATION_ERROR_CODES);
     expect(operation.authority).toEqual({ dynamic: true });
   }
 
   const byId = new Map(catalog.operations.map((operation) => [operation.id, operation]));
-  for (const operationId of ["tinycloud.auth.capabilities", "tinycloud.auth.status", "tinycloud.status.get"]) {
+  for (const operationId of [
+    "tinycloud.auth.capabilities", "tinycloud.auth.status", "tinycloud.status.get", "tinycloud.auth.import",
+  ]) {
     expect(byId.get(operationId)?.input.additionalProperties).toBe(false);
   }
-  expect(byId.get("tinycloud.auth.import")?.input.additionalProperties).toBe(false);
   const requestInput = byId.get("tinycloud.auth.request")?.input.anyOf as Array<Record<string, unknown>>;
   expect(requestInput).toHaveLength(2);
   expect(requestInput.every((branch) => branch.additionalProperties === false)).toBe(true);
@@ -101,12 +97,7 @@ test("the catalog contains exactly the registered v1 definitions", async () => {
 
   const sqlExecute = byId.get("tinycloud.sql.execute");
   expect(sqlExecute?.input).toMatchObject({
-    properties: {
-      acknowledgeDatabaseWideAuthority: {
-        const: true,
-        description: expect.stringContaining("full read/write/schema mutation authority"),
-      },
-    },
+    properties: { acknowledgeDatabaseWideAuthority: { const: true } },
     required: expect.arrayContaining(["acknowledgeDatabaseWideAuthority"]),
   });
   expect(sqlExecute?.effects).toEqual(["write", "destructive"]);

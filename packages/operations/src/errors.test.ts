@@ -40,6 +40,8 @@ test("defines every stable v1 operation error code", () => {
     "SQL_EXECUTION_FAILED",
     "SQL_RESULT_LIMIT_EXCEEDED",
     "SQL_VALUE_UNSAFE",
+    "READ_SOURCE_CHANGED",
+    "READ_CONTEXT_MISMATCH",
     "SECRET_READ_FAILED",
     "SECRET_DECRYPT_FAILED",
     "OUTPUT_INVALID",
