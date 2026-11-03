@@ -3724,6 +3724,12 @@
               "type": "string"
             }
           },
+          "drift": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "conflicts": {
             "type": "array",
             "items": {
@@ -4768,6 +4774,12 @@
                 "minimum": 0
               },
               "problems": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "drift": {
                 "type": "array",
                 "items": {
                   "type": "string"

@@ -52,8 +52,8 @@ describe("moving an app to the new layout", () => {
       const result = await move(context, false);
       expect(result.output).toMatchObject({ status: "moved", total: 5, catalog: 2 });
       const puts = applications.writes.map((write) => write.key);
-      expect(puts).toEqual([`${ID}catalog`, `${ID}catalog/weight`, newKey(1), newKey(2), newKey(3), ENTRY]);
-      expect(applications.writes.every((write) => write.options.ifNoneMatch === "*")).toBe(true);
+      expect(puts).toEqual([`${ID}catalog`, `${ID}catalog/weight`, newKey(1), newKey(2), newKey(3), `${ID}index-stale/weight`, ENTRY]);
+      expect(applications.writes.filter((write) => !write.key.includes("index-stale")).every((write) => write.options.ifNoneMatch === "*")).toBe(true);
       expect(stored(applications, newKey(2))).toEqual(stored(kv, oldKey(2)));
       expect(stored(applications, ENTRY)).toEqual({ v: 1, app: "fitness", id: "xyz.tinycloud.tinyapps.fitness", title: "Fitness" });
       untouched(kv);
@@ -122,7 +122,7 @@ describe("moving an app to the new layout", () => {
       applications.beforePut = (key) => { if (key === newKey(3)) kv.seed(oldKey(1), { v: 1, at: day(1), data: { kg: 1 } }); };
       const edited = await move(context, false);
       expect(edited.output.status).toBe("NOT_SWITCHED");
-      expect(edited.output.message).toContain("changed");
+      expect(edited.output.problems).toEqual([`${newKey(1)}: reads back different from the older record`]);
       expect(applications.values.has(ENTRY)).toBe(false);
     });
     await fixture(async (kv, context, applications) => {
@@ -180,6 +180,71 @@ describe("moving an app to the new layout", () => {
       expect(result.output).toMatchObject({ status: "moved", total: 6, catalog: 3 });
       expect(result.output.kinds).toEqual([{ kind: "goal", count: 1 }, { kind: "weight", count: 2 }]);
       expect(stored(applications, `${ID}catalog/goal`)).toEqual(stored(kv, `${LEGACY}catalog/fitness/goal`));
+    });
+  });
+});
+
+describe("moving an app: guards found in the security review", () => {
+  test("a rerun makes progress however much is already copied: the budget covers copying only, so a large app finishes", async () => {
+    await fixture(async (kv, context, applications) => {
+      seedOld(kv, 250);
+      // 130 records and the catalog already sit in the new folder from earlier runs.
+      applications.seed(`${ID}catalog`, stored(kv, `${LEGACY}catalog/fitness`));
+      applications.seed(`${ID}catalog/weight`, stored(kv, `${LEGACY}catalog/fitness/weight`));
+      for (let n = 1; n <= 130; n++) applications.seed(newKey(n), stored(kv, oldKey(n)));
+      let now = 0;
+      const env = { legacy: kv, next: applications, clock: () => (now += 100_000), budgetMs: 60_000 };
+      const first = await moveApp(env, "fitness", false);
+      expect(first).toMatchObject({ status: "MOVE_PARTIAL", copied: 100, remaining: 20 });
+      expect(applications.values.has(ENTRY)).toBe(false);
+      const second = await moveApp(env, "fitness", false);
+      expect(second.status).toBe("moved");
+      expect(applications.writes.filter((write) => write.key === newKey(5))).toEqual([]);
+      untouched(kv);
+    });
+  });
+  test("an app above the ceiling is refused before anything is copied, even for a dry run", async () => {
+    await fixture(async (kv, context, applications) => {
+      seedOld(kv, 5001);
+      for (const dryRun of [true, false]) {
+        const result = await move(context, dryRun);
+        expect(result.output.status).toBe("NOT_SWITCHED");
+        expect(result.output.message).toContain("at most");
+      }
+      expect(applications.writes).toEqual([]);
+    });
+  });
+  test("records without an older catalog record are not an older app: nothing is moved or switched", async () => {
+    await fixture(async (kv, context, applications) => {
+      kv.values.delete(`${LEGACY}catalog/fitness`);
+      kv.values.delete(`${LEGACY}catalog/fitness/weight`);
+      seedOld(kv, 2);
+      expect((await move(context, false)).output.status).toBe("nothing_to_move");
+      expect(applications.writes).toEqual([]);
+    });
+  });
+  test("every moved kind is marked stale before the switch, so an earlier fast copy is rebuilt", async () => {
+    await fixture(async (kv, context, applications) => {
+      seedOld(kv, 1);
+      kv.seed(`${LEGACY}catalog/fitness/goal`, itemKind);
+      kv.seed(`${LEGACY}fitness/goal/open/2026-10-14-goal`, { v: 1, at: day(14), data: { title: "goal" } });
+      await move(context, false);
+      const keys = applications.writes.map((write) => write.key);
+      for (const kindName of ["goal", "weight"]) expect(keys.indexOf(`${ID}index-stale/${kindName}`)).toBeLessThan(keys.indexOf(ENTRY));
+    });
+  });
+  test("records written to the older place after the move are reported, not stranded silently", async () => {
+    await fixture(async (kv, context, applications) => {
+      seedOld(kv, 2);
+      applications.beforePut = (key) => { if (key === ENTRY) kv.seed(oldKey(9), { v: 1, at: day(9), data: { kg: 9 } }); };
+      const result = await move(context, false);
+      expect(result.output).toMatchObject({ status: "moved", drift: [oldKey(9)] });
+      applications.beforePut = undefined;
+      const again = await move(context, false);
+      expect(again.output).toMatchObject({ status: "already_moved", drift: [oldKey(9)] });
+      const writes = applications.writes.length;
+      expect(applications.writes.length).toBe(writes);
+      untouched(kv);
     });
   });
 });

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { appsFailure, jsonBytes, listAppsKeys, readAppsRecords, type AppsKv, type ReadRecord } from "./kv.js";
-import { appRoot, catalogKey, discoveryKey, moveKey, newApp, parseKey, TC_APPS_LEGACY_ROOT } from "./layout.js";
+import { appRoot, catalogKey, discoveryKey, moveKey, newApp, parseKey, staleKey, TC_APPS_LEGACY_ROOT } from "./layout.js";
 import type { Json, JsonObject } from "./records.js";
 
 export const MoveInputSchema = z.object({
@@ -15,6 +15,7 @@ export const MoveOutputSchema = z.object({
   kinds: z.array(z.object({ kind: z.string(), count: z.number().int().nonnegative() }).strict()),
   copied: z.number().int().nonnegative().optional(), remaining: z.number().int().nonnegative().optional(),
   problems: z.array(z.string()).optional(),
+  drift: z.array(z.string()).optional(),
   conflicts: z.array(z.object({ from: z.string(), to: z.string(), fromEtag: z.string(), toEtag: z.string() }).strict()).optional(),
   message: z.string(),
 }).strict();
@@ -29,6 +30,8 @@ export interface MoveEnv {
   readonly budgetMs: number;
 }
 const CHUNK = 100;
+/** One call verifies and compares every record, so a move has a ceiling. */
+const MAX_KEYS = 5000;
 const LIST_LIMIT = 50;
 
 interface Mapping { from: string; to: string; catalog: boolean; kind?: string }
@@ -85,6 +88,8 @@ function stop(base: Pick<MoveOutput, "app" | "total" | "catalog" | "kinds">, sta
 /**
  * Copy one app from the older layout into its own folder in the new one. Create-only, verified, and the discovery entry
  * (the switch other clients read) is written last. The older records are never changed or deleted. Rerunning is safe.
+ * Only keys that are not yet in the new folder are copied inside the time budget, so every run makes progress; the
+ * comparison of everything that is there (keys copied earlier, by this tool or another) runs once the copy is complete.
  */
 export async function moveApp(env: MoveEnv, app: string, dryRun: boolean): Promise<MoveOutput> {
   const empty = { app, total: 0, catalog: 0, kinds: [] };
@@ -92,84 +97,102 @@ export async function moveApp(env: MoveEnv, app: string, dryRun: boolean): Promi
     return stop(empty, "NOT_SWITCHED", `${app} is a reserved name in the new layout, so it stays in the older layout (xyz.tinycloud.agent-data/). Nothing was changed.`);
   }
   const entryKey = discoveryKey(app);
-  if (!dryRun) {
-    const [entry] = await readAppsRecords(env.next, [entryKey]);
-    if (entry && "value" in entry) return stop(empty, "already_moved", `${app} already lives in ${appRoot(app)}. Nothing was changed.`);
-  }
   const keys = await inventory(env.legacy, app);
-  if (keys.length === 0) return stop(empty, "nothing_to_move", `There are no older records for ${app}. Nothing was written.`);
   const { map, problems } = plan(app, keys);
   const base = summary(app, map);
+  if (!dryRun) {
+    const [entry] = await readAppsRecords(env.next, [entryKey]);
+    if (entry && "value" in entry) {
+      const present = new Set(await listAppsKeys(env.next, appRoot(app)));
+      const stranded = map.filter((item) => !present.has(item.to)).map((item) => item.from);
+      return stranded.length === 0
+        ? stop(empty, "already_moved", `${app} already lives in ${appRoot(app)}. Nothing was changed.`)
+        : stop(base, "already_moved", `${app} already lives in ${appRoot(app)}, but ${stranded.length} records written to the older place after the move are not in it. They were not copied and nothing was changed; ask the owner what to do with them.`, { drift: sample(stranded) });
+    }
+  }
+  if (!keys.includes(catalogKey("legacy", app))) {
+    return stop(empty, "nothing_to_move", `The older layout has no catalog record for ${app}, so by the layout rule it is not an older app. Nothing was written.`);
+  }
   if (problems.length > 0) return stop({ ...base, total: keys.length }, "NOT_SWITCHED", "Some older keys cannot be held by the new layout. Nothing was copied.", { problems: sample(problems) });
+  if (map.length > MAX_KEYS) return stop(base, "NOT_SWITCHED", `${app} has ${map.length} records; one move handles at most ${MAX_KEYS}. Nothing was copied and the app stays in the older layout.`);
   if (dryRun) return stop(base, "dry_run", `Would copy ${base.total} records (${base.catalog} catalog) from xyz.tinycloud.agent-data/ into ${appRoot(app)} and then add ${entryKey}. The older records stay as they are.`);
 
-  const expected = new Set(map.map((entry) => entry.to));
+  const expected = new Set(map.map((item) => item.to));
   const existing = new Set(await listAppsKeys(env.next, appRoot(app)));
   const extras = [...existing].filter((key) => !expected.has(key) && !key.startsWith(`${appRoot(app)}index-stale/`));
   if (extras.length > 0) {
     return stop(base, "NOT_SWITCHED", `${appRoot(app)} already holds keys the older ${app} does not have. Nothing was written.`, { problems: sample(extras) });
   }
 
-  const sums = new Map<string, string>();
-  const conflicts: NonNullable<MoveOutput["conflicts"]> = [];
+  // 1. Copy what is not there yet, within the budget. The first group always runs, so a rerun always moves forward.
+  const missing = map.filter((item) => !existing.has(item.to));
+  const created = new Set<string>();
   const bad: string[] = [];
-  let title: unknown;
-  let copied = 0;
-  let done = 0;
   const started = env.clock();
-  for (const group of chunks(map)) {
+  let done = 0;
+  for (const group of chunks(missing)) {
     if (done > 0 && env.clock() - started >= env.budgetMs) {
-      return stop(base, "MOVE_PARTIAL", `Copied ${copied} so far; ${map.length - done} records remain. Run the move again to continue; nothing has switched.`, { copied, remaining: map.length - done });
+      return stop(base, "MOVE_PARTIAL", `Copied ${created.size} this run; ${missing.length - done} records remain. Run the move again to continue; nothing has switched.`, { copied: created.size, remaining: missing.length - done });
     }
-    const source = await readAppsRecords(env.legacy, group.map((entry) => entry.from));
-    const present = group.filter((entry) => existing.has(entry.to));
-    const found = new Map((await readAppsRecords(env.next, present.map((entry) => entry.to))).map((record) => [record.key, record]));
-    for (const [index, entry] of group.entries()) {
+    const source = await readAppsRecords(env.legacy, group.map((item) => item.from));
+    for (const [index, item] of group.entries()) {
       const old = source[index]!;
-      if (!("value" in old)) { bad.push(`${entry.from}: ${old.outcome === "MALFORMED" ? "is not a JSON object" : "disappeared while copying"}`); continue; }
-      const sum = digest(old.value);
-      sums.set(entry.from, sum);
-      if (entry.from === catalogKey("legacy", app)) title = old.value.title;
-      if (!existing.has(entry.to)) {
-        const put = await env.next.put(entry.to, jsonBytes(old.value), { ifNoneMatch: "*" });
-        if (put.ok) { copied++; continue; }
-        if (put.error.code !== "KV_PRECONDITION_FAILED") throw appsFailure(put.error);
-        found.set(entry.to, (await readAppsRecords(env.next, [entry.to]))[0]!);
-      }
-      const there: ReadRecord | undefined = found.get(entry.to);
-      if (!there || !("value" in there)) { bad.push(`${entry.to}: exists but cannot be read as a record`); continue; }
-      if (digest(there.value) !== sum) conflicts.push({ from: entry.from, to: entry.to, fromEtag: old.etag, toEtag: there.etag });
+      if (!("value" in old)) { bad.push(`${item.from}: ${old.outcome === "MALFORMED" ? "is not a JSON object" : "disappeared while copying"}`); continue; }
+      const put = await env.next.put(item.to, jsonBytes(old.value), { ifNoneMatch: "*" });
+      if (put.ok) created.add(item.to);
+      else if (put.error.code !== "KV_PRECONDITION_FAILED") throw appsFailure(put.error);
     }
     done += group.length;
   }
-  if (bad.length > 0) return stop(base, "NOT_SWITCHED", "Some records could not be copied as they are. Nothing switched and nothing was deleted.", { problems: sample(bad) });
-  if (conflicts.length > 0) {
-    return stop(base, "CONFLICT", "Some keys already hold different content in the new folder. Nothing was overwritten and the app did not switch; ask the owner which version is right.", { conflicts: conflicts.slice(0, LIST_LIMIT) });
-  }
 
-  // Read back: the same key set, and the same content under every key.
+  // 2. Compare every key, the ones copied now and the ones already there: same content under each.
+  const sums = new Map<string, string>();
+  const conflicts: NonNullable<MoveOutput["conflicts"]> = [];
+  let title: unknown;
+  for (const group of chunks(map)) {
+    const old = await readAppsRecords(env.legacy, group.map((item) => item.from));
+    const there = await readAppsRecords(env.next, group.map((item) => item.to));
+    for (const [index, item] of group.entries()) {
+      const from = old[index]!;
+      const to = there[index]!;
+      if (!("value" in from)) { bad.push(`${item.from}: ${from.outcome === "MALFORMED" ? "is not a JSON object" : "disappeared while copying"}`); continue; }
+      const sum = digest(from.value);
+      sums.set(item.from, sum);
+      if (item.from === catalogKey("legacy", app)) title = from.value.title;
+      if (!("value" in to)) bad.push(`${item.to}: missing or unreadable after copying`);
+      else if (digest(to.value) !== sum) {
+        if (created.has(item.to)) bad.push(`${item.to}: reads back different from the older record`);
+        else conflicts.push({ from: item.from, to: item.to, fromEtag: from.etag, toEtag: to.etag });
+      }
+    }
+  }
+  if (conflicts.length > 0) {
+    return stop(base, "CONFLICT", "Some keys already hold different content in the new folder. Nothing was overwritten and the app did not switch; ask the owner which version is right.", { conflicts: conflicts.slice(0, LIST_LIMIT), ...(bad.length > 0 ? { problems: sample(bad) } : {}) });
+  }
+  if (bad.length > 0) return stop(base, "NOT_SWITCHED", "Some records could not be copied as they are. Nothing switched and nothing was deleted.", { problems: sample(bad) });
+
+  // 3. The same key set in the new folder, then the older place once more for edits made while copying.
   const after = (await listAppsKeys(env.next, appRoot(app))).filter((key) => !key.startsWith(`${appRoot(app)}index-stale/`)).sort();
   const want = [...expected].sort();
   if (after.length !== want.length || after.some((key, index) => key !== want[index])) {
     return stop(base, "NOT_SWITCHED", "The new folder and the older app do not hold the same keys. Nothing switched.", { problems: sample(after.filter((key) => !expected.has(key)).concat(want.filter((key) => !after.includes(key)))) });
   }
-  for (const group of chunks(map)) {
-    const back = await readAppsRecords(env.next, group.map((entry) => entry.to));
-    const mismatch = group.filter((entry, index) => recordDigest(back[index]!) !== sums.get(entry.from));
-    if (mismatch.length > 0) return stop(base, "NOT_SWITCHED", "A copied record reads back different from the older one. Nothing switched.", { problems: sample(mismatch.map((entry) => entry.to)) });
-  }
-  // Re-check the older place for edits made while copying.
   const again = await inventory(env.legacy, app);
   if (again.length !== keys.length || again.some((key, index) => key !== keys[index])) {
     return stop(base, "NOT_SWITCHED", "The older place gained or lost records while copying. Pause every device that writes this app, then run the move again. Nothing switched.");
   }
   for (const group of chunks(map)) {
-    const read = await readAppsRecords(env.legacy, group.map((entry) => entry.from));
-    const changed = group.filter((entry, index) => recordDigest(read[index]!) !== sums.get(entry.from));
-    if (changed.length > 0) return stop(base, "NOT_SWITCHED", "An older record changed while copying. Pause every device that writes this app, then run the move again. Nothing switched.", { problems: sample(changed.map((entry) => entry.from)) });
+    const read = await readAppsRecords(env.legacy, group.map((item) => item.from));
+    const changed = group.filter((item, index) => recordDigest(read[index]!) !== sums.get(item.from));
+    if (changed.length > 0) return stop(base, "NOT_SWITCHED", "An older record changed while copying. Pause every device that writes this app, then run the move again. Nothing switched.", { problems: sample(changed.map((item) => item.from)) });
   }
 
-  // The discovery entry is the switch: it is written only after everything above holds.
+  // 4. Mark each kind's fast copy stale (a copy from an earlier life of this app must be rebuilt), then switch.
+  const since = new Date(env.clock()).toISOString().slice(0, 10);
+  for (const { kind } of base.kinds) {
+    const marked = await env.next.put(staleKey("new", app, kind), jsonBytes({ since, by: "tinycloud-mcp" }), {});
+    if (!marked.ok) throw appsFailure(marked.error);
+  }
   const entry: JsonObject = { v: 1, app, id: `xyz.tinycloud.tinyapps.${app}`, title: typeof title === "string" && title.length > 0 ? title : app };
   const put = await env.next.put(entryKey, jsonBytes(entry), { ifNoneMatch: "*" });
   if (!put.ok) {
@@ -179,5 +202,9 @@ export async function moveApp(env: MoveEnv, app: string, dryRun: boolean): Promi
       return stop(base, "NOT_SWITCHED", `${entryKey} already exists with different content. Nothing was overwritten.`);
     }
   }
-  return stop(base, "moved", `Moved ${base.total} records (${base.catalog} catalog) into ${appRoot(app)} and read them back the same. The older records in xyz.tinycloud.agent-data/ were left as they are; nothing was deleted.`, { copied });
+  // A write to the older place can land between the last check and the switch: report it rather than strand it silently.
+  const latest = new Set(await inventory(env.legacy, app));
+  const drift = [...latest].filter((key) => !keys.includes(key));
+  const moved = `Moved ${base.total} records (${base.catalog} catalog) into ${appRoot(app)} and read them back the same. The older records in xyz.tinycloud.agent-data/ were left as they are; nothing was deleted.`;
+  return stop(base, "moved", drift.length === 0 ? moved : `${moved} ${drift.length} records were written to the older place while it switched and are not in the new folder; ask the owner what to do with them.`, { copied: created.size, ...(drift.length > 0 ? { drift: sample(drift) } : {}) });
 }
