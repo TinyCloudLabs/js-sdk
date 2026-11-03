@@ -72,7 +72,7 @@ export type GrantMayBeLive = "yes" | "maybe" | "no";
 
 /** The end of a run. The adapter prints it and exits with `exitCodeOf(outcome)`; the entry is gone unless the outcome keeps it (see `stopped`). */
 export type Outcome =
-  | { readonly kind: "completed"; readonly warning?: "ack-pending" | "ack-conflict" }
+  | { readonly kind: "completed"; readonly warning?: "ack-pending" | "ack-conflict" | "ack-expired" }
   /** Exit 8: OpenKey confirmed the request live in this run, and `now < expiresAt`. */
   | { readonly kind: "pending"; readonly expiresAt: number; readonly confirmedLiveAt: number }
   | { readonly kind: "unreachable"; readonly expiresAt: number; readonly resultExpiresAt?: number }
@@ -81,7 +81,7 @@ export type Outcome =
   | { readonly kind: "gone"; readonly reason: "expired_result" | "not_found" | "acknowledged" | "ended" | "purged"; readonly grantMayBeLive: "yes" }
   | { readonly kind: "refused"; readonly reason: "request_binding" | "request_invalid" | "proof" | "verification"; readonly grantMayBeLive: GrantMayBeLive }
   | { readonly kind: "denied" }
-  /** Exit 12: the local clock disagrees with OpenKey's by more than 60 s. The entry is kept. */
+  /** Exit 12: the local clock disagrees with OpenKey's by more than 45 s (`CLOCK_DISAGREEMENT_MS`). The entry is kept. */
   | { readonly kind: "clock"; readonly skewMs?: number }
   | { readonly kind: "abandoned"; readonly reason: AbandonReason; readonly grantMayBeLive: GrantMayBeLive }
   | { readonly kind: "internal"; readonly reason: "illegal-event" | "missing-entry" };
@@ -168,8 +168,10 @@ export type Rule =
   | { readonly id: string; readonly act: "gone"; readonly reason: "expired_result" | "not_found" | "acknowledged" }
   | { readonly id: string; readonly act: "refuse"; readonly reason: "request_binding" | "request_invalid"; readonly grantMayBeLive: GrantMayBeLive }
   | { readonly id: string; readonly act: "denied" }
-  /** 401 `invalid_proof` is AMBIGUOUS (clock skew, wrong binding, an expired request seen through a skewed clock). */
+  /** 401 `invalid_proof` on DISCOVER is AMBIGUOUS (clock skew, wrong binding, an expired request seen through a skewed clock). */
   | { readonly id: string; readonly act: "proof" }
+  /** 401 `invalid_proof` on FETCH or ACK: a result already exists, so it is NEVER dropped by the 401; kept, bounded by its purge time. */
+  | { readonly id: string; readonly act: "proof-kept" }
   | { readonly id: string; readonly act: "ack-done"; readonly warning?: "ack-conflict" };
 
 /**
@@ -190,11 +192,12 @@ export const RULES: Readonly<Record<string, Rule>> = {
   "fetch:expired_result": { id: "T10", act: "gone", reason: "expired_result" },
   "fetch:acknowledged": { id: "T11", act: "gone", reason: "acknowledged" },
   "fetch:request_binding": { id: "T13", act: "refuse", reason: "request_binding", grantMayBeLive: "yes" },
-  "fetch:invalid_proof": { id: "T14", act: "proof" },
+  "fetch:invalid_proof": { id: "T14b", act: "proof-kept" },
   "ack:not_found": { id: "T23", act: "ack-done" },
   "ack:acknowledged": { id: "T23", act: "ack-done" },
   "ack:expired_result": { id: "T23", act: "ack-done" },
   "ack:ack_conflict": { id: "T24", act: "ack-done", warning: "ack-conflict" },
+  "ack:invalid_proof": { id: "T14b", act: "proof-kept" },
 };
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -260,6 +263,8 @@ function dropPurged(live: LiveState): Step {
   switch (live.entry.phase) {
     case "open": return drop(live, { kind: "lapsed", reason: "purged", grantMayBeLive: "no" });
     case "acked": return drop(live, { kind: "completed" });
+    // The grant is saved and only the ack never went through: completed, with a warning, the keys dropped the same way.
+    case "committed": return drop(live, { kind: "completed", warning: "ack-expired" });
     default: return drop(live, { kind: "gone", reason: "purged", grantMayBeLive: "yes" });
   }
 }
@@ -378,13 +383,18 @@ function onAckDone(live: LiveState, now: number, warning: "ack-conflict" | undef
   return settle(acked, live.run, outcome, [{ type: "purge", requestId: entry.requestId, keys: heldKeys(entry), entry: "rewrite" }]);
 }
 
-/** 401 `invalid_proof`: the clock case is kept by the clock, bounded by `E + S`; anything else is a permanent refusal. */
+/** 401 `invalid_proof` on discover: the clock case is kept by the clock, bounded by `E + S`; anything else is a permanent refusal. */
 function onProof(live: LiveState, now: number, skewMs: number | undefined): Step {
   const { entry } = live;
   // The request itself has run out (a skewed clock hides that behind this same 401): lapsed, keys dropped.
-  if (entry.phase === "open" && now >= localExpiry(entry) + S) return drop(live, { kind: "lapsed", reason: "proof_after_expiry", grantMayBeLive: "no" });
+  if (now >= localExpiry(entry) + S) return drop(live, { kind: "lapsed", reason: "proof_after_expiry", grantMayBeLive: "no" });
   if (clockOff(skewMs)) return holdClock(live, now, skewMs);
-  return drop(live, { kind: "refused", reason: "proof", grantMayBeLive: entry.phase === "open" ? "maybe" : "yes" });
+  return drop(live, { kind: "refused", reason: "proof", grantMayBeLive: "maybe" });
+}
+
+/** 401 `invalid_proof` on fetch or ack: never drops the approved result. A clock measurably off holds (12); otherwise unexpected (7). Either way the purge time bounds it. */
+function onProofKept(live: LiveState, now: number, skewMs: number | undefined): Step {
+  return clockOff(skewMs) ? holdClock(live, now, skewMs) : stopKeep(live, { kind: "unexpected" });
 }
 
 function onError(live: LiveState, now: number, reply: Extract<Reply, { kind: "error" }>, skewMs: number | undefined): Step {
@@ -396,6 +406,7 @@ function onError(live: LiveState, now: number, reply: Extract<Reply, { kind: "er
     case "refuse": return drop(live, { kind: "refused", reason: rule.reason, grantMayBeLive: rule.grantMayBeLive });
     case "denied": return drop(live, { kind: "denied" });
     case "proof": return onProof(live, now, skewMs);
+    case "proof-kept": return onProofKept(live, now, skewMs);
     case "ack-done": return onAckDone(live, now, rule.warning);
   }
 }

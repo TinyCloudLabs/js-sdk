@@ -282,7 +282,7 @@ const DATE_HEADER_PATTERN = /^[A-Za-z]{3}, \d{2} [A-Za-z]{3} \d{4} \d{2}:\d{2}:\
 
 /**
  * The local clock minus the server's, from the reply's HTTP `Date` header and the local time at receipt: positive when the local
- * clock is ahead. `undefined` when there is no usable header. `Date` has one-second resolution; callers compare it to a 60 s bound.
+ * clock is ahead. `undefined` when there is no usable header. `Date` has one-second resolution; callers compare it to a 45 s bound.
  */
 export function serverDateSkewMs(dateHeader: string | null | undefined, receivedAt: number): number | undefined {
   if (typeof dateHeader !== "string" || !DATE_HEADER_PATTERN.test(dateHeader)) return undefined;

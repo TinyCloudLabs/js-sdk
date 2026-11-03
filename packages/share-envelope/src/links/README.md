@@ -55,9 +55,12 @@ command entries). A kept-by-clock `hold` is a flag, not a phase: the next run re
 | discover 404 `not_found` | `lapsed` (3) | drop |
 | discover 410 `expired_result`; fetch 404 / 410 / 409 `acknowledged` | `gone` (3) | drop |
 | 400 `request_binding` | `refused` (5) | drop |
-| 401 `invalid_proof`, clock > 60 s off the `Date` header, before `E + S` | `clock` (12) | keep, held |
-| 401 `invalid_proof` after `E + S` (open) | `lapsed` (3) | drop |
-| 401 `invalid_proof`, clock sane or `Date` missing | `refused` (5) | drop |
+| 401 `invalid_proof` on discover, clock > 45 s off the `Date` header, before `E + S` | `clock` (12) | keep, held |
+| 401 `invalid_proof` on fetch or ack, clock > 45 s off | `clock` (12) | keep, held, until `purgeAt` |
+| 401 `invalid_proof` on fetch or ack, clock sane or `Date` missing | `unexpected` (7): an approved result is never dropped by a 401 | keep until `purgeAt` |
+| a committed entry reaches `purgeAt` (the grant is saved, the ack never went through) | `completed` (0) with an `ack-expired` warning | drop, keys purged |
+| 401 `invalid_proof` on discover after `E + S` | `lapsed` (3) | drop |
+| 401 `invalid_proof` on discover, clock sane or `Date` missing | `refused` (5) | drop |
 | anything else, 5 in a row | `unexpected` (7) | keep until `purgeAt` |
 | no answer until the deadline | resumed: `unreachable` (6), kept; created this run, or a 202 seen this run and `now < E`: `pending` (8) | keep |
 | ack 200 / 404 / 409 / 410 | `completed` (0) | drop, or keep key-free until `retainUntil` |

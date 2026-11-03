@@ -572,7 +572,8 @@ describe("a 401 never drops an approved result: fetch and ack keep the entry, bo
       for (const skew of [undefined, 0, 46_000, -3_600_000]) {
         for (const now of [T0, NOW, E, E + S, E + R, bound - 1]) expect(run(skew, now).state.entry).toBeDefined();
         const kept = run(skew, bound - 1).state;
-        const purged = reduce(kept, { type: "tick", now: bound });
+        // The run ended (stopped or held); the next run's start applies the clock first, so the purge comes before any call.
+        const purged = reduce(kept, { type: "start", now: bound });
         expect(purged.state.entry).toBeUndefined();
         expect(purged.effects[0]).toMatchObject({ type: "purge", entry: "remove" });
       }

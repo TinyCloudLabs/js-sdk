@@ -16,8 +16,11 @@ import { decodeStrictBase64Url, linkHeaderV1Schema, linkSignatureV1Schema, parse
 export const RESULT_RETENTION_MS = 600_000;
 /** `S`: the allowance added AFTER the signed expiry, never before it: a clock running ahead must not drop an entry OpenKey would still serve. */
 export const APPROVAL_CLOCK_SKEW_MS = 30_000;
-/** A local clock that differs from the server's HTTP `Date` by MORE than this is measurably off (OpenKey accepts a proof `iat` within 60 s). */
-export const CLOCK_DISAGREEMENT_MS = 60_000;
+/**
+ * A local clock that differs from the server's HTTP `Date` by MORE than this is measurably off. OpenKey accepts a proof `iat` within
+ * about 60 s but answers 401 from about 59 s on the past side, and `Date` has one-second resolution, so the band is set below it.
+ */
+export const CLOCK_DISAGREEMENT_MS = 45_000;
 /** How long an approved result may still be fetched after the caller's deadline passed. */
 export const COLLECT_GRACE_MS = 30_000;
 /** Unmapped replies in a row before a run gives up (exit 7). */
