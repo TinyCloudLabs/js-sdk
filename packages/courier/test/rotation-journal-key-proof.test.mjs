@@ -21,7 +21,21 @@ async function realJournal(ctx) {
   return { journal: readHome('rotation.json'), oldKey };
 }
 
+/** Same decoded bytes, non-canonical text: the last character's unused low bits are set. */
+const nonCanonical = (text) => {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+  const last = alphabet.indexOf(text.at(-1));
+  assert.equal(last % 4, 0, 'a real key is canonical');
+  const changed = text.slice(0, -1) + alphabet[last + 1];
+  assert.deepEqual(Buffer.from(changed, 'base64url'), Buffer.from(text, 'base64url'));
+  return changed;
+};
+
 const CASES = {
+  'an x whose text is not canonical (same bytes)': (j) => { j.key.jwk.x = nonCanonical(j.key.jwk.x); },
+  'a d whose text is not canonical (same bytes)': (j) => { j.key.jwk.d = nonCanonical(j.key.jwk.d); },
+  'a did with two fragments': (j) => { const bare = j.key.did.split('#')[0]; j.key.did = `${bare}#${bare.slice(8)}#${bare.slice(8)}`; },
+  'a did with an empty fragment': (j) => { j.key.did = `${j.key.did.split('#')[0]}#`; },
   'kty other than OKP': (j) => { j.key.jwk.kty = 'EC'; },
   'no kty': (j) => { delete j.key.jwk.kty; },
   'crv other than Ed25519': (j) => { j.key.jwk.crv = 'X25519'; },

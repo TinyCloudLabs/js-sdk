@@ -18,9 +18,11 @@ export function ed25519DidKey(publicKey: Uint8Array): string {
   return `did:key:z${base58(Buffer.concat([Buffer.from([0xed, 0x01]), publicKey]))}`;
 }
 
-/** The 32 bytes of unpadded base64url text (43 characters), or undefined when the text is not exactly that. */
+/** The 32 bytes of canonical unpadded base64url text (43 characters, unused bits zero), or undefined when the text is not exactly that. */
 export function base64url32(text: unknown): Buffer | undefined {
-  return typeof text === 'string' && /^[A-Za-z0-9_-]{43}$/.test(text) ? Buffer.from(text, 'base64url') : undefined;
+  if (typeof text !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(text)) return undefined;
+  const bytes = Buffer.from(text, 'base64url');
+  return bytes.toString('base64url') === text ? bytes : undefined;
 }
 
 /** The Ed25519 public key (32 bytes) of a 32-byte private seed. */

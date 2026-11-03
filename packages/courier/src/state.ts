@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { cmd } from './program.js';
-import { hasProfileFields, isAgentKey, loadGrant, loadKey, profileDir, readSecure, saveKey, saveProfile, writeSecure } from './profile.js';
+import { hasProfileFields, isAgentKey, loadGrant, loadKey, profileDir, readRegularFile, readSecure, saveKey, saveProfile, writeSecure } from './profile.js';
 import type { AgentKey, Profile } from './profile.js';
 import { checkApprovalResultBinding, openRelayResult } from '@tinycloud/share-envelope/links';
 import { APPROVAL_FILE, approvalPhase, clearPending, lacksOwner, readApprovalEntry, resultEnvelopeOf } from './approval-phase.js';
@@ -74,7 +74,7 @@ export interface DerivedState {
 /** The mode of a grant.json that is a regular file and not owner-only, else undefined. */
 function looseGrantMode(): string | undefined {
   try {
-    const stat = fs.statSync(path.join(profileDir(), 'grant.json'));
+    const stat = fs.lstatSync(path.join(profileDir(), 'grant.json'));
     return stat.isFile() && (stat.mode & 0o077) !== 0 ? (stat.mode & 0o777).toString(8) : undefined;
   } catch { return undefined; }
 }
@@ -91,7 +91,7 @@ function savedGrant(notes: string[]): boolean {
   if (looseGrantMode()) {
     // Inspect the content before any mode advice: only a file that is a grant has a mode worth fixing.
     try {
-      const grant = JSON.parse(fs.readFileSync(file, 'utf8')) as { v?: unknown; delegationHeader?: { Authorization?: unknown }; delegationCid?: unknown; siwe?: unknown } | null;
+      const grant = JSON.parse(readRegularFile(file) ?? 'null') as { v?: unknown; delegationHeader?: { Authorization?: unknown }; delegationCid?: unknown; siwe?: unknown } | null;
       if (grant?.v === 1 && !!grant.delegationHeader?.Authorization && !!grant.delegationCid && !!grant.siwe) return true;
     } catch { /* not JSON: reported below, without the parser's message */ }
     notes.push('grant.json is not a usable saved grant, so it is treated as not saved and left as it is (it is corrupt or not a grant).');
@@ -178,29 +178,34 @@ function readProfileFields(): { status: ProfileStatus; spacePending: boolean } {
   return { status: 'unreadable', spacePending: false };
 }
 
+/** `text` as one POSIX shell word. */
+function shellQuote(text: string): string {
+  return `'${text.replace(/'/g, `'\\''`)}'`;
+}
+
 /** Whether the process that named a temp file may still be writing it. This process is not: its writes are synchronous and finished. */
 function writerAlive(pid: number): boolean {
   if (pid === process.pid) return false;
   try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; }
 }
 
-function tempsByWriter(): { name: string; pid: number }[] {
-  try {
-    return fs.readdirSync(profileDir()).sort().flatMap((name) => {
-      const match = STRAY_TEMP.exec(name);
-      return match ? [{ name, pid: Number(match[1]) }] : [];
-    });
-  } catch { return []; }
-}
-
-/** Stray temp files whose writer is gone: the only ones `recoverInterrupted` removes. */
-function strayTemps(): string[] {
-  return tempsByWriter().filter(({ pid }) => !writerAlive(pid)).map(({ name }) => name);
-}
-
-/** Temp files whose writer may still be running: left alone (between its fsync and its rename the file is live). */
-function liveWriterTemps(): { name: string; pid: number }[] {
-  return tempsByWriter().filter(({ pid }) => writerAlive(pid));
+/**
+ * The stray temp files, classified from ONE directory listing with ONE liveness probe per file: `dead` (writer gone: the only ones
+ * `recoverInterrupted` removes) and `live` (writer may still be running: kept, because between its fsync and its rename the file is live).
+ * A caller acts on this one snapshot, so a process that dies or whose pid is reused between two probes cannot split the decision.
+ */
+function classifyTemps(): { dead: string[]; live: { name: string; pid: number }[] } {
+  const dead: string[] = [];
+  const live: { name: string; pid: number }[] = [];
+  let names: string[] = [];
+  try { names = fs.readdirSync(profileDir()).sort(); } catch { /* no home yet */ }
+  for (const name of names) {
+    const match = STRAY_TEMP.exec(name);
+    if (!match) continue;
+    const pid = Number(match[1]);
+    if (writerAlive(pid)) live.push({ name, pid }); else dead.push(name);
+  }
+  return { dead, live };
 }
 
 /** The one place the inputs are read. Reads only. `notes` are warnings the init mode prints once; nothing is repaired or removed. */
@@ -215,7 +220,7 @@ export function readInputs(notes: string[] = []): StateInputs {
     pendingGrant: hasLivePending(),
     approval: approvalState(),
     rotation: fs.existsSync(rotationPath()),
-    rotationTemp: strayTemps().length > 0,
+    rotationTemp: classifyTemps().dead.length > 0,
   };
 }
 
@@ -272,8 +277,9 @@ export function adviceFor(d: Pick<DerivedState, 'state' | 'inputs'>): string {
  */
 export function recoverInterrupted(): void {
   finishRotation();
-  for (const name of strayTemps()) scrub(path.join(profileDir(), name));
-  for (const { name, pid } of liveWriterTemps()) {
+  const temps = classifyTemps();
+  for (const name of temps.dead) scrub(path.join(profileDir(), name));
+  for (const { name, pid } of temps.live) {
     const file = path.join(profileDir(), name);
     // A running pid does not excuse a file that is not a plain single-link file of this user: that is refused, as for a dead writer.
     let stat: fs.Stats;
@@ -283,7 +289,7 @@ export function recoverInterrupted(): void {
       throw error;
     }
     if (!isPlain(stat)) throw refuseStray(file);
-    console.error(`warning: ${name} was kept, not deleted, and may contain private-key material (an agent key, or an approval's relay key and result). Process ${pid}, which named it, is running: either a Courier process still writing it, or an unrelated process that was given the same pid after Courier died (pid reuse); Courier cannot tell which. Check with \`ps -p ${pid} -o pid=,args=\`; only if that is not a Courier process, remove the file with \`rm -- '${file}'\`.`);
+    console.error(`warning: ${name} was kept, not deleted, and may contain private-key material (an agent key, or an approval's relay key and result). Process ${pid}, which named it, is running: either a Courier process still writing it, or an unrelated process that was given the same pid after Courier died (pid reuse); Courier cannot tell which. Check with \`ps -p ${pid} -o pid=,args=\`; only if that is not a Courier process, remove the file with \`rm -- ${shellQuote(file)}\`.`);
   }
 }
 
@@ -358,8 +364,8 @@ function hasKeyProof(key: AgentKey): boolean {
   const d = base64url32(jwk.d);
   if (!x || !d || !x.equals(ed25519PublicKey(d))) return false;
   const did = ed25519DidKey(x);
-  const [base, fragment] = key.did.split('#');
-  return base === did && (fragment === undefined || fragment === did.slice('did:key:'.length));
+  const parts = key.did.split('#');
+  return parts.length <= 2 && parts[0] === did && (parts.length === 1 || parts[1] === did.slice('did:key:'.length));
 }
 
 /** What is wrong with a parsed journal, or undefined when it is a rotation this code may replay. Never includes any of its content. */
@@ -431,7 +437,7 @@ function oldKeyDelegations(): { discarded: DiscardedGrant[]; unmatched: Discarde
 /** The installed grant.json's CID and expiry, read before the rotation removes it. Reads it even at a loose mode; nothing secret is kept. */
 function installedGrantFacts(): DiscardedGrant | undefined {
   try {
-    const grant = JSON.parse(fs.readFileSync(path.join(profileDir(), 'grant.json'), 'utf8')) as { delegationCid?: unknown; siwe?: unknown; expiresAt?: unknown } | null;
+    const grant = JSON.parse(readRegularFile(path.join(profileDir(), 'grant.json')) ?? 'null') as { delegationCid?: unknown; siwe?: unknown; expiresAt?: unknown } | null;
     return grantFacts(grant?.delegationCid, () => {
       if (typeof grant?.siwe === 'string') return siweTimes(grant.siwe).expiresAt;
       return typeof grant?.expiresAt === 'string' ? new Date(grant.expiresAt) : undefined;

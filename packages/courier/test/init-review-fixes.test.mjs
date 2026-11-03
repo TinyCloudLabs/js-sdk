@@ -36,8 +36,8 @@ async function readyProfile({ t, request, courier }) {
 
 // ---- (4) a key-bearing file that cannot be parsed is reported without its content ----
 
-// A recognizable high-entropy private key part (43 base64url characters, like an Ed25519 `d`).
-const SECRET = 'q7Vn2xK9mT4rZ8wB1cL5hJ0dFgY3sA6uEiO-PpRkXe_';
+// A recognizable high-entropy private key part (43 base64url characters, canonical like an Ed25519 `d`).
+const SECRET = 'q7Vn2xK9mT4rZ8wB1cL5hJ0dFgY3sA6uEiO-PpRkXe8';
 /** The first 8-character window of the secret found in `text`, if any. */
 const secretFragment = (text) => {
   for (let at = 0; at + 8 <= SECRET.length; at += 1) if (text.includes(SECRET.slice(at, at + 8))) return SECRET.slice(at, at + 8);
