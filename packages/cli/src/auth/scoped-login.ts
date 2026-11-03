@@ -1,3 +1,4 @@
+import { EXPIRY, technicalExpiryRefusal } from "@tinycloud/sdk-core";
 import { NodeWasmBindings, signedCompactUcanExpiry, type PermissionEntry } from "@tinycloud/node-sdk";
 import { isLocalOwnerProfile, ownerSessionLacksProof } from "@tinycloud/operations/profile";
 import { CLI_NAME } from "@tinycloud/operations/cli-name";
@@ -10,6 +11,7 @@ import { ENCRYPTION_MANIFEST_SPACE } from "../../../sdk-core/src/manifest.js";
 import { isRawEncryptionPermission, isVerifiedRawEncryptionPermission } from "../lib/raw-encryption.js";
 import { canonicalNetworkUrn, canonicalOwnerDid, rawEncryptionOwnerMatches } from "../lib/owner-did.js";
 import { assertNoCaveatLimits } from "../lib/caveat-refusal.js";
+import { markClockDependent } from "./refusal.js";
 import { keyAbilitiesFor, parseKeysPrefix, partialKeysGrantError, type ProfileNamedKeys } from "../lib/named-keys.js";
 
 /** OpenKey signs a scoped delegation only when it carries this read on the session space. */
@@ -22,9 +24,10 @@ export const CLOCK_SKEW_MS = 30_000;
 export const SIGNED_RECAP = "signed-recap";
 
 /**
- * A requested `--expiry`, as a lifetime. OpenKey signs approval time plus a
- * lifetime, so an absolute deadline cannot be honored once approval takes
- * longer than the clock-skew allowance; only durations are accepted.
+ * A requested `--expiry`, as a lifetime, and the maximum lifetime the signed request allows (today the two are the
+ * same: `grantLifetimeSeconds` is derived from `--expiry`). OpenKey signs approval time plus a lifetime, so an
+ * absolute deadline cannot be honored once approval takes longer than the clock-skew allowance; only durations are
+ * accepted.
  */
 export interface RequestedExpiry {
   readonly durationMs: number;
@@ -43,10 +46,54 @@ export function parseRequestedExpiry(value: string | number): RequestedExpiry {
   );
 }
 
-/** Latest signed expiry the request allows, evaluated when the approval arrives. */
+/**
+ * Latest signed expiry the request allows, evaluated when the approval arrives: the request's maximum lifetime
+ * (`grantLifetimeSeconds`) from now, plus the clock-skew allowance. The signed value is compared, not the value the
+ * request proposed, so a lifetime the user changed in the approval is held to the same ceiling.
+ */
 export function expiryLimit(expiry: RequestedExpiry): number {
   return Date.now() + expiry.durationMs + CLOCK_SKEW_MS;
 }
+
+/**
+ * Latest signed expiry when no `--expiry` was given: the SDK's default session request (`EXPIRY.SESSION_MS`, 30 days)
+ * from now, plus the same clock-skew allowance, evaluated when the approval arrives.
+ */
+export function defaultExpiryLimit(): number {
+  return Date.now() + EXPIRY.SESSION_MS + CLOCK_SKEW_MS;
+}
+
+/**
+ * Whether the signed expiry is above the request's lifetime counted from the SIWE's own `Issued At` (plus the skew allowance),
+ * which does not depend on this machine's clock. An unreadable Issued At proves nothing: false.
+ */
+export function outlivesRequestFromIssuedAt(siwe: string, signedExpiry: number, expiry: RequestedExpiry): boolean {
+  const raw = [...siwe.matchAll(/^Issued At: (.+)$/gm)].at(-1)?.[1];
+  const issuedAt = raw === undefined ? NaN : Date.parse(raw);
+  return Number.isFinite(issuedAt) && signedExpiry > issuedAt + expiry.durationMs + CLOCK_SKEW_MS;
+}
+
+/**
+ * The SDK refuses a signed expiry above the `maxExpiresAt` the CLI hands it, with a plain `Error`. Report it as the
+ * same `OPENKEY_EXPIRY_EXCEEDED` the ceiling check in `verifySignedSession` raises, naming the lifetime that was
+ * requested and the latest allowed time. `defaultRequest` is true when no `--expiry` was given. Any other error is not
+ * ours: returns `undefined`.
+ */
+export function sdkMaxExpiryRefusal(error: unknown, defaultRequest = false): CLIError | undefined {
+  const message = error instanceof Error ? error.message : "";
+  const match = /^OpenKey signedMessage expiry is later than the maximum for this request \(the latest allowed is ([^)]+)\)(?:; choose an earlier expiry)?$/.exec(message);
+  if (match === null) return undefined;
+  const requested = defaultRequest
+    ? `the default ${EXPIRY.SESSION_MS / 86_400_000} day lifetime this login requested`
+    : "the requested --expiry";
+  return Object.assign(
+    new CLIError("OPENKEY_EXPIRY_EXCEEDED", `The signed session outlives ${requested} (the latest allowed is ${match[1]}). Choose an earlier lifetime in OpenKey, or re-run with a longer --expiry. No session was saved.`, ExitCode.PERMISSION_DENIED),
+    { cause: error },
+  );
+}
+
+/** A signed expiry the user chose must be more than this far from now (matches the SDK's changed-expiry check). */
+const MIN_SIGNED_REMAINING_MS = 60_000;
 
 /** OpenKey's minimum delegation lifetime; it raises anything shorter. */
 const OPENKEY_MIN_LIFETIME_SECONDS = 60;
@@ -373,8 +420,19 @@ function withCapabilitiesRead(permissions: PermissionEntry[], space: string): Pe
 export interface SignedSessionExpectations {
   /** Primary DID the approving identity must match, when known. */
   expectedOwner?: string;
-  /** Requested `--expiry`; a signed expiry beyond it (+ skew) is refused. */
+  /**
+   * The longest lifetime the signed request allows: the request's `grantLifetimeSeconds`, which is the requested
+   * `--expiry`. A signed expiry beyond it (+ skew) is refused. The user may sign a SHORTER lifetime (the SDK accepts a
+   * changed expiry, see `expiryChangeable`); a longer one is refused here unless `expiryChangeable` is set.
+   */
   expiry?: RequestedExpiry;
+  /**
+   * Set only for a request whose link carried the `expiryChangeable` opt-in (the plain paste link). OpenKey then lets
+   * the user pick any lifetime, so there is no `expiry` ceiling: the signed expiry only has to be more than 60 seconds
+   * away and one a signed message can carry (before 10000-01-01). Signed approval requests, device login and prepared
+   * logins never send the opt-in and keep the `expiry` ceiling.
+   */
+  expiryChangeable?: boolean;
   /** Grant escalation stores a portable delegation, not a login session. */
   purpose?: "grant";
   /** Agent grant: the approval must cover every requested action, or no grant is stored. */
@@ -448,8 +506,21 @@ export function verifySignedSession(
   if (signedExpiry <= Date.now()) {
     throw new CLIError("AUTH_EXPIRED", `The approved session has expired. ${notStored}`, ExitCode.AUTH_REQUIRED);
   }
-  if (expected.expiry !== undefined && signedExpiry > expiryLimit(expected.expiry)) {
-    throw new CLIError("OPENKEY_EXPIRY_EXCEEDED", `The signed session outlives the requested --expiry. ${notStored}`, ExitCode.PERMISSION_DENIED);
+  if (expected.expiryChangeable === true) {
+    // The link told OpenKey the user may choose any lifetime, so `--expiry` is only a proposal. Whatever the owner signed
+    // is accepted as long as it is more than 60 seconds away: there is no upper bound beyond what a signed message can carry.
+    if (signedExpiry <= Date.now() + MIN_SIGNED_REMAINING_MS) {
+      throw new CLIError("OPENKEY_EXPIRY_TOO_SHORT", `The signed session lasts 60 seconds or less, too short to use. Choose a longer lifetime in OpenKey. ${notStored}`, ExitCode.PERMISSION_DENIED);
+    }
+    const technical = technicalExpiryRefusal(signedExpiry, "siwe");
+    if (technical !== null) {
+      throw new CLIError("OPENKEY_EXPIRY_UNREPRESENTABLE", `The signed session's ${technical}. ${notStored}`, ExitCode.PERMISSION_DENIED);
+    }
+  } else if (expected.expiry !== undefined && signedExpiry > expiryLimit(expected.expiry)) {
+    const exceeded = new CLIError("OPENKEY_EXPIRY_EXCEEDED", `The signed session outlives the requested --expiry. ${notStored}`, ExitCode.PERMISSION_DENIED);
+    // Counted from the signed Issued At the lifetime fits: only the local clock makes it look too long. Not a refusal to clean up after.
+    if (!outlivesRequestFromIssuedAt(data.siwe as string, signedExpiry, expected.expiry)) markClockDependent(exceeded);
+    throw exceeded;
   }
   const ownerDid = `did:pkh:eip155:${data.chainId}:${data.address}`;
   if (expected.expectedOwner && normalizePkhIdentifier(expected.expectedOwner) !== normalizePkhIdentifier(ownerDid)) {

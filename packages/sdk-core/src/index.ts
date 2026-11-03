@@ -858,6 +858,8 @@ export {
   RecapAttenuation,
   extractImmutableSiweFields,
   diffImmutableSiweFields,
+  checkChangedExpiration,
+  CheckChangedExpirationInput,
   extractRecapAttenuations,
   unauthorizedRecapCapabilities,
 } from "./authorization";
@@ -1118,9 +1120,14 @@ export {
 // Default lifetimes for delegation flows. See `expiry.ts` for the
 // "pick a tier, not a number" rationale.
 export {
+  assertExpiryWithinTechnicalLimit,
   DEFAULT_SIGNED_READ_URL_EXPIRY_MS,
   EXPIRY,
+  MAX_SIWE_EXPIRY_MS,
+  MAX_UCAN_EXPIRY_MS,
+  technicalExpiryRefusal,
   type ExpiryTier,
+  type TechnicalExpiryKind,
 } from "./expiry";
 
 // Policy signed-object profile core

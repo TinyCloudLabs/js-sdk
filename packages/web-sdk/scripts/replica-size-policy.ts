@@ -346,6 +346,12 @@ export type Tc2254HeldWireRatchet = HardeningRatchet & { replicaWorker: { delta:
 export type Tc2281OpenKeyUnconnectedGuard = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
 /** Exact TC-2242 path-bound shares root admission; non-root buckets carry TC-2281. */
 export type Tc2242PathBoundShares = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
+/** Exact TC-2276 signed expiry root admission; non-root buckets carry TC-2242. */
+export type Tc2276SignedExpiry = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
+/** Exact TC-2272 technical expiry limits root admission; non-root buckets carry TC-2276. */
+export type Tc2276TechnicalLimits = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
+/** Exact TC-2418 abort-listener cleanup admission (root, replica workers, first import, activation); the ceilings of the rows it follows carry where a bucket stays inside them. */
+export type Tc2418AbortListenerCleanup = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -411,6 +417,9 @@ export type Ledger = {
   tc2254HeldWireRatchet?: Tc2254HeldWireRatchet;
   tc2281OpenKeyUnconnectedGuard?: Tc2281OpenKeyUnconnectedGuard;
   tc2242PathBoundShares?: Tc2242PathBoundShares;
+  tc2276SignedExpiry?: Tc2276SignedExpiry;
+  tc2276TechnicalLimits?: Tc2276TechnicalLimits;
+  tc2418AbortListenerCleanup?: Tc2418AbortListenerCleanup;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -1006,6 +1015,9 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2254HeldWireRatchet !== undefined) pins.push({ row: "tc2254HeldWireRatchet", pin: root.tc2254HeldWireRatchet.sourceCommits.at(-1)! });
   if (root.tc2281OpenKeyUnconnectedGuard !== undefined) pins.push({ row: "tc2281OpenKeyUnconnectedGuard", pin: root.tc2281OpenKeyUnconnectedGuard.sourceCommits.at(-1)! });
   if (root.tc2242PathBoundShares !== undefined) pins.push({ row: "tc2242PathBoundShares", pin: root.tc2242PathBoundShares.sourceCommits.at(-1)! });
+  if (root.tc2276SignedExpiry !== undefined) pins.push({ row: "tc2276SignedExpiry", pin: root.tc2276SignedExpiry.sourceCommits.at(-1)! });
+  if (root.tc2276TechnicalLimits !== undefined) pins.push({ row: "tc2276TechnicalLimits", pin: root.tc2276TechnicalLimits.sourceCommits.at(-1)! });
+  if (root.tc2418AbortListenerCleanup !== undefined) pins.push({ row: "tc2418AbortListenerCleanup", pin: root.tc2418AbortListenerCleanup.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1077,6 +1089,9 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2254HeldWireRatchet", root.tc2254HeldWireRatchet?.root.ceiling],
     ["tc2281OpenKeyUnconnectedGuard", root.tc2281OpenKeyUnconnectedGuard?.root.ceiling],
     ["tc2242PathBoundShares", root.tc2242PathBoundShares?.root.ceiling],
+    ["tc2276SignedExpiry", root.tc2276SignedExpiry?.root.ceiling],
+    ["tc2276TechnicalLimits", root.tc2276TechnicalLimits?.root.ceiling],
+    ["tc2418AbortListenerCleanup", root.tc2418AbortListenerCleanup?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -2533,6 +2548,91 @@ export const approvedTc2242PathBoundShares: Tc2242PathBoundShares = {
   replicaWorker: { delta: 0, ceiling: 770467 },
   reason: "TC-2242 path-bound shares row; exact SQLite and PostgreSQL CI root gzip measurements agree. All non-root size buckets are carried unchanged from TC-2281.",
 };
+export const approvedTc2276SignedExpiry: Tc2276SignedExpiry = {
+  label: "accept a user-changed OpenKey expiry behind an opt-in and use the signed expiry (TC-2276, #813)",
+  ruling: "Exact canonical SQLite and PostgreSQL CI at source head 47c49c9ac1e6d4937681ef8171c3fc0d550cb9a1 measures 1,478,398/1,420,056 B, +1,071/+1,173 B over TC-2242. Bun 1.3.14; rustc 1.99.0 (b940084d7 2026-09-28).",
+  base: "06a547e6ff7a1f36963961d58f7712e155cfa9ea",
+  sourceCommits: ["47c49c9ac1e6d4937681ef8171c3fc0d550cb9a1"],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41282509733",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41282509733/job/124777129561",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41282509733/job/124777129514",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 1071, "index.cjs": 1173 },
+    ceiling: { "index.mjs": 1478398, "index.cjs": 1420056 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 52757, "replica.cjs": 67957 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23412, "activation.cjs": 24981 },
+  },
+  worker: { delta: 0, ceiling: 776539 },
+  replicaWorker: { delta: 0, ceiling: 770467 },
+  reason: "TC-2276 signed expiry row; exact SQLite and PostgreSQL CI root gzip measurements agree. All non-root size buckets are carried unchanged from TC-2242.",
+};
+export const approvedTc2276TechnicalLimits: Tc2276TechnicalLimits = {
+  label: "replace the 10-year lifetime ceiling with the technical expiry limits: 9999-12-31 for wallet-signed messages, 2255-06-05 for session-key tokens (TC-2272, #829)",
+  ruling: "Exact canonical SQLite and PostgreSQL CI at source head 62cf64215149a30d743317a3b88548080cd47f19 measures 1,478,684/1,421,196 B, +286/+1,140 B over TC-2276. Bun 1.3.14; rustc 1.99.0 (b940084d7 2026-09-28).",
+  base: "e981c1020eb208f4b9918ba3dba487dbb0f19191",
+  sourceCommits: ["62cf64215149a30d743317a3b88548080cd47f19"],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41550280828",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41550280828/job/125635880163",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41550280828/job/125635879697",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 286, "index.cjs": 1140 },
+    ceiling: { "index.mjs": 1478684, "index.cjs": 1421196 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 52757, "replica.cjs": 67957 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23412, "activation.cjs": 24981 },
+  },
+  worker: { delta: 0, ceiling: 776539 },
+  replicaWorker: { delta: 0, ceiling: 770467 },
+  reason: "TC-2272 technical expiry limits row; exact SQLite and PostgreSQL CI root gzip measurements agree. All non-root size buckets are carried unchanged from TC-2276.",
+};
+
+export const approvedTc2418AbortListenerCleanup: Tc2418AbortListenerCleanup = {
+  label: "stop leaking an abort listener per request: combine request signals with AbortSignal.any where it exists (TC-2418, #844)",
+  ruling: "Exact canonical SQLite and PostgreSQL CI at source head 7b80027520dffc43444b34a9f6696e2b082ab3ea measures root 1,478,715/1,421,238 B (+31/+42 over TC-2276 technical limits), kv-storage worker 776,561 B (+22) and replica worker 770,494 B (+27); replica first import +1/-3 B and activation -5/-2 B against master run 41579061096, inside their carried ceilings. Naomi ruled 2026-11-03: exact CI bytes, at most +150 B per bucket. Bun 1.3.14; rustc 1.99.0 (b940084d7 2026-09-28).",
+  base: "356c6053b4789529ab6c84536a385adf2e4e0c77",
+  sourceCommits: ["7b80027520dffc43444b34a9f6696e2b082ab3ea"],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41591153331",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41591153331/job/125767943580",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41591153331/job/125767943897",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 31, "index.cjs": 42 },
+    ceiling: { "index.mjs": 1478715, "index.cjs": 1421238 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 1, "replica.cjs": -3 },
+    ceiling: { "replica.mjs": 52757, "replica.cjs": 67957 },
+  },
+  activation: {
+    delta: { "activation.mjs": -5, "activation.cjs": -2 },
+    ceiling: { "activation.mjs": 23412, "activation.cjs": 24981 },
+  },
+  worker: { delta: 22, ceiling: 776561 },
+  replicaWorker: { delta: 27, ceiling: 770494 },
+  reason: "TC-2418 abort-listener cleanup (AbortSignal.any where present); exact SQLite and PostgreSQL CI measurements agree. First import and activation stay inside the ceilings carried from TC-2276.",
+};
 
 export type GatedOnlyRatchet = {
   label: string;
@@ -2627,6 +2727,9 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2254HeldWireRatchet: approvedTc2254HeldWireRatchet,
   tc2281OpenKeyUnconnectedGuard: approvedTc2281OpenKeyUnconnectedGuard,
   tc2242PathBoundShares: approvedTc2242PathBoundShares,
+  tc2276SignedExpiry: approvedTc2276SignedExpiry,
+  tc2276TechnicalLimits: approvedTc2276TechnicalLimits,
+  tc2418AbortListenerCleanup: approvedTc2418AbortListenerCleanup,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -2919,6 +3022,18 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
   if (value.tc2242PathBoundShares !== undefined &&
       (!value.tc2281OpenKeyUnconnectedGuard || JSON.stringify(value.tc2242PathBoundShares) !== JSON.stringify(approvedTc2242PathBoundShares))) {
     throw new Error("Only Naomi's exact canonical TC-2242 path-bound shares ratchet is approved.");
+  }
+  if (value.tc2276SignedExpiry !== undefined &&
+      (!value.tc2242PathBoundShares || JSON.stringify(value.tc2276SignedExpiry) !== JSON.stringify(approvedTc2276SignedExpiry))) {
+    throw new Error("Only Naomi's exact canonical TC-2276 signed expiry ratchet is approved.");
+  }
+  if (value.tc2276TechnicalLimits !== undefined &&
+      (!value.tc2276SignedExpiry || JSON.stringify(value.tc2276TechnicalLimits) !== JSON.stringify(approvedTc2276TechnicalLimits))) {
+    throw new Error("Only Naomi's exact canonical TC-2272 technical expiry limits ratchet is approved.");
+  }
+  if (value.tc2418AbortListenerCleanup !== undefined &&
+      (!value.tc2276TechnicalLimits || JSON.stringify(value.tc2418AbortListenerCleanup) !== JSON.stringify(approvedTc2418AbortListenerCleanup))) {
+    throw new Error("Only Naomi's exact canonical TC-2418 abort-listener cleanup ratchet is approved.");
   }
 }
 
@@ -3274,6 +3389,28 @@ export function validateTc2242PathBoundSharesTransition(base?: Tc2242PathBoundSh
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2242PathBoundShares) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-2242 path-bound shares ratchet may be introduced once and cannot change later.");
+  }
+}
+/** The TC-2276 signed expiry ratchet is introduced once and immutable afterwards. */
+export function validateTc2276SignedExpiryTransition(base?: Tc2276SignedExpiry, current?: Tc2276SignedExpiry): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2276SignedExpiry) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2276 signed expiry ratchet may be introduced once and cannot change later.");
+  }
+}
+/** The TC-2272 technical expiry limits ratchet is introduced once and immutable afterwards. */
+export function validateTc2276TechnicalLimitsTransition(base?: Tc2276TechnicalLimits, current?: Tc2276TechnicalLimits): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2276TechnicalLimits) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2272 technical expiry limits ratchet may be introduced once and cannot change later.");
+  }
+}
+
+/** The TC-2418 abort-listener cleanup ratchet is introduced once and immutable afterwards. */
+export function validateTc2418AbortListenerCleanupTransition(base?: Tc2418AbortListenerCleanup, current?: Tc2418AbortListenerCleanup): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2418AbortListenerCleanup) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2418 abort-listener cleanup ratchet may be introduced once and cannot change later.");
   }
 }
 

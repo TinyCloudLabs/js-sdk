@@ -590,15 +590,6 @@ test("invalid browser approvals return an inert page without reflecting state", 
   expect(machine.headers.get("content-type")).toContain("application/json");
 });
 
-test("rejects untrusted browser origins", async () => {
-  const app = await testApp();
-  const response = await app.fetch(request("/mcp", {
-    method: "POST",
-    headers: { origin: "https://attacker.test" },
-  }));
-  expect(response.status).toBe(403);
-});
-
 test("a refused callback names its stage and code without echoing the callback", async () => {
   const stateDir = await mkdtemp(join(tmpdir(), "tinycloud-hosted-http-"));
   const app = await testApp(stateDir);

@@ -7,9 +7,21 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AGENT_GRANT } from "@tinycloud/courier";
 import { registerCourierCommand } from "./courier.ts";
+import { afterAll } from "bun:test";
 
 // Runs the built CLI (`bun run --cwd packages/cli build` first) under Node, as users do.
 const CLI = fileURLToPath(new URL("../../dist/index.js", import.meta.url));
+
+// TC-2300: `courier init --request` creates an OpenKey approval link at the links API. The spawned CLI answers that call
+// from a local stub (loaded with NODE_OPTIONS); the origin is unresolvable, so a missing stub fails instead of reaching a real service.
+const previousEnv = { NODE_OPTIONS: process.env.NODE_OPTIONS, TC_LINKS_API_ORIGIN: process.env.TC_LINKS_API_ORIGIN };
+process.env.TC_LINKS_API_ORIGIN = "https://links.fixture.invalid";
+process.env.NODE_OPTIONS = `--import=${new URL("../../../courier/test/support/fake-links-fetch.mjs", import.meta.url).href}`;
+afterAll(() => {
+  for (const [name, value] of Object.entries(previousEnv)) {
+    if (value === undefined) delete process.env[name]; else process.env[name] = value;
+  }
+});
 
 function tc(args: string[]) {
   const home = mkdtempSync(join(tmpdir(), "tc-courier-"));
@@ -92,7 +104,7 @@ describe("tc courier", () => {
     expect(result.code).toBe(0);
     const request = JSON.parse(result.stdout);
     expect(request.host).toBe("https://node.example");
-    expect(request.openkeyUrl.startsWith("https://ok.example/delegate")).toBe(true);
+    expect(request.openkeyUrl).toMatch(/^https:\/\/ok\.example\/a\/[a-z2-7]{26}#v=4&/);
   });
 
   test("tc --help lists courier", () => {

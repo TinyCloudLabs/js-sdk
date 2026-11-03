@@ -105,6 +105,13 @@ test('peer delegation: lifetime capped at 7 days plus skew', () => {
   assert.equal(PEER_DELEGATION_MAX_MS, 7 * DAY);
 });
 
+test('peer delegation: expired grants cannot be installed', () => {
+  assert.throws(
+    () => assertPeerDelegation(signed({ expiry: new Date(NOW - 1) }), expected, NOW),
+    { code: 'grant-expired' },
+  );
+});
+
 test('durationMs recognizes supported units and rejects malformed values', () => {
   assert.equal(durationMs('30d'), 30 * DAY);
   assert.equal(durationMs('7d'), 7 * DAY);

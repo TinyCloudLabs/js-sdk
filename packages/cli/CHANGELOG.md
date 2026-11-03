@@ -1,5 +1,139 @@
 # @tinycloud/cli
 
+## 1.6.1-beta.5
+
+### Patch Changes
+
+- 4ea5add: `tc auth rotate` now says that the previous sign-in stays live until its expiry, and where to revoke it. This CLI cannot revoke the OpenKey login delegation a rotation replaces, so after a rotation that succeeded and replaced a live session it prints one line on stderr: `The previous sign-in (<CID>) stays live until <expiry> unless you have already revoked it, because this CLI cannot revoke it; revoke it at https://account.tinycloud.xyz/delegations.` The CID part is left out when the old session does not hold one, and `until it expires` stands in for an unknown date. Nothing is printed on a first login, when there was no previous session, when it had already ended, or when the rotation was refused or failed. stdout, the JSON output and exit codes are unchanged.
+
+  Details: TC-2412
+
+## 1.6.1-beta.4
+
+### Patch Changes
+
+- Updated dependencies [dc48089]
+- Updated dependencies [dc48089]
+  - @tinycloud/node-sdk@3.11.0-beta.2
+  - @tinycloud/sdk-services@3.11.0-beta.2
+  - @tinycloud/operations@0.7.11-beta.2
+  - @tinycloud/sdk-core@3.11.0-beta.2
+
+## 1.6.1-beta.3
+
+### Patch Changes
+
+- a2253b8: A login by paste now accepts the lifetime the owner chose in OpenKey, longer than 10 years included. `tc auth login --paste`, `tc auth rotate --paste` (on a profile without named keys), `tc init --paste` and `tc auth request --grant --paste` (custom `--cap`, `--permission` and `--manifest` grants) tell OpenKey the owner may choose the session lifetime (their link carries `expiryChangeable=true`), and the CLI saves the lifetime that was signed, however long, with no upper cap. It refuses only a signed lifetime of 60 seconds or less (`OPENKEY_EXPIRY_TOO_SHORT`), one that no signed message can carry (after 9999-12-31: OpenKey cannot produce it, and one presented anyway is refused as an invalid proof (`OPENKEY_PROOF_INVALID`) or as `OPENKEY_EXPIRY_UNREPRESENTABLE`, never accepted), and one that has already ended (`AUTH_EXPIRED`). The first two are refusals of an approval OpenKey already granted, so they get the same cleanup and notice as the other refusals (no saved code, no key this login created, one notice).
+
+  Logins that do not send the opt-in keep the `--expiry` ceiling, so a longer lifetime is still refused there with `OPENKEY_EXPIRY_EXCEEDED`: the approval-request login, the device login, the prepared replica and `--keys` logins, and `tc auth request --grant --preset apps-agent --paste` (agent presets keep the 7-day agent policy: the lifetime can be shortened on the OpenKey page but not extended).
+
+  A paste login no longer refuses before approval because `--expiry` is shorter than a live session; the check runs again on the signed lifetime when the login is saved. A long paste session makes a later, shorter scoped login on the same profile ask for `--replace-session`, which is the existing policy for replacing a live session with a shorter one.
+
+  Details: TC-2276
+
+## 1.6.1-beta.2
+
+### Patch Changes
+
+- Updated dependencies [cb0c6ce]
+- Updated dependencies [cb0c6ce]
+  - @tinycloud/node-sdk@3.11.0-beta.1
+  - @tinycloud/sdk-core@3.11.0-beta.1
+  - @tinycloud/operations@0.7.11-beta.1
+
+## 1.6.1-beta.1
+
+### Patch Changes
+
+- 83d1d3d: When the CLI refuses an approval OpenKey already granted (a wrong owner, a scope that does not match, a grant broader or narrower than asked, a bad proof, a signed lifetime above `--expiry`), the delegation is live even though nothing was saved, and the CLI cannot revoke it itself (a login's approval carries no revoke ability). The CLI now says so once, on stderr: the delegation's CID, until when OpenKey granted it, whether its key was deleted or still exists on this device (the delegation's CID is printed only when it looks like a CID), and where to revoke it (https://account.tinycloud.xyz/delegations). It also stops keeping what would let the refused result be used or served again:
+  - `tc auth login`, `tc init`, `tc onboard`, `tc auth rotate`, `tc auth request --grant`, `tc auth login --device` and the agent grant commands drop the saved copy of a pasted short code and the pending approval request (its result key and reference) of a refused result.
+  - The profile's key is deleted only when this command created it: a profile it created (which is removed again, with the previous default profile restored) or a key that exists only in memory or in the refused pending request. A key that already existed, which other grants or sessions may use, is kept.
+  - `tc auth rotate` no longer touches `key.json` or the session until the approval is verified: the new key waits in memory (`--paste`) or in the pending approval request's file (mode 0600, the default flow) and is written with the new session only then. A refused rotation leaves the old key and the old login exactly as they were, and any failed rotation drops the pending request that holds the new key (and says so when the owner had already approved, adding that the current login and its key are unchanged); before, the old session was cleared and the new key written first.
+  - A pasted short code that OpenKey no longer has (already used, expired or refused) now says to approve again in OpenKey, instead of telling you to re-run the same command with the same code.
+
+  When OpenKey rejects this computer's poll of a rotation's approval request (a clock behind OpenKey's), the CLI cannot tell whether the owner approved; it then drops the request and prints a notice that says OpenKey may already have granted the approval, without claiming a CID or date.
+
+  A refusal that only means the approval cannot be saved yet (an expired approval, a lifetime that only looks too long because this computer's clock is behind OpenKey's, a session in use, a profile changed or locked meanwhile, a replica logout) keeps the saved approval so the same command can finish it, and prints no notice. A successful login or rotation is unchanged.
+
+  Details: TC-2363
+
+## 1.6.1-beta.0
+
+### Patch Changes
+
+- 75c0432: The prepared OpenKey login accepts a shorter session lifetime picked on the OpenKey page instead of refusing the signed message, and saves the lifetime that was signed. A lifetime beyond the requested `--expiry` (plus 30 seconds) is still refused with `OPENKEY_EXPIRY_EXCEEDED`. The replica login now builds its node with the requested `--expiry` as the session lifetime, as the `--keys` login already did.
+
+  Details: TC-2276
+
+- Updated dependencies [75c0432]
+- Updated dependencies [75c0432]
+  - @tinycloud/node-sdk@3.11.0-beta.0
+  - @tinycloud/sdk-core@3.11.0-beta.0
+  - @tinycloud/operations@0.7.11-beta.0
+
+## 1.6.0
+
+### Minor Changes
+
+- 10eba04: `tinycloud onboard` and `tinycloud auth grant` accept `--timeout <Ns|Nm>` (more than zero, at most 9m; anything else is a usage error, exit 2 `INVALID_TIMEOUT`; `onboard` refuses it together with `--code`) to bound the wait for the owner's OpenKey approval. Exit 8 with `{"pending":{"step","of","approvalUrl","expiresAt"}}` on stdout is not a failure: it is printed at once when a new approval link exists (so an agent can send it to the owner immediately) and again when a resumed link is still unanswered at the timeout; run the same command again. An approval the owner already gave is never reported as pending: it is collected, verified and saved, and acknowledged, even past the timeout (up to 30 s more, plus up to 3 s and local work, so `--timeout 60s` ends in about 105 s at the most for an existing account; an acknowledgement whose reply is lost is re-sent with the same id on the next run). On a new account `onboard` also bounds its wait for OpenKey to host the space by the time left of the timeout plus the 30 s grace (at least 15 s) instead of 150 s, about 90 s in all for `--timeout 60s` and at worst a little under 2 minutes, and ends with the existing `SPACE_SETUP_PENDING` (exit 1): wait a minute and run it again; the re-run continues with step 2, and if a storage command later says `Space not found`, wait and retry. `onboard` has 2 steps, `auth grant` is step 1 of 1. An expired request is exit 3 (OpenKey's HTTP 400 `invalid_request` answer for an expired request that holds no result is exit 3 and drops the saved request, so the next run makes a new request with a new link; a request approved just before its expiry is still collected, because OpenKey serves an approved result until its retention of 600 s ends, so a saved request is dropped without asking OpenKey only once it expired more than 11 minutes ago; a 400 before the link's own expiry stays exit 8 `APPROVAL_REQUEST_UNAVAILABLE`), and OpenKey being unavailable is still its own exit 8 error without the `pending` object. Without `--timeout` nothing changes.
+
+  Details: TC-2299
+
+### Patch Changes
+
+- 7f81a1d: `revokeShare` on an addressed share now asks the adapter for every root the share created, the enforcement root and then the policy root, in one call, whatever `scope` says (`scope` now applies to bearer shares only). The result lists each root with what happened to it in a new `roots` field: `revoked`, or, for the policy-authority root only, `left-live` with its `expiresAt` when the adapter chose not to revoke it (`revokePolicyRoot` may now resolve `"left-live"` for that root). The share counts as revoked only when no root failed and at least one was revoked; otherwise `revokeShare` tries every root and throws the new `ShareRevocationIncompleteError` (`revoked`, `failed`), leaving the record unrevoked so a retry can finish. A `revokePolicyRoot` adapter must resolve for a root the Node already holds a revocation for. `@tinycloud/sdk-core` re-exports `ShareRevocationIncompleteError` and the new types. `tinycloud share revoke` revokes both roots, reports an incomplete revocation as `REVOCATION_INCOMPLETE`, and treats the Node's `root-revocation-irreversible` answer on a retry as already revoked.
+
+  Details: TC-2337
+
+- Updated dependencies [1d688b3]
+- Updated dependencies [7f81a1d]
+  - @tinycloud/share-envelope@1.5.0
+  - @tinycloud/share-sdk@1.4.4
+  - @tinycloud/sdk-core@3.10.0
+  - @tinycloud/node-sdk@3.10.0
+  - @tinycloud/operations@0.7.10
+  - @tinycloud/sdk-services@3.8.3
+
+## 1.6.0-beta.3
+
+### Patch Changes
+
+- @tinycloud/node-sdk@3.10.0-beta.3
+- @tinycloud/operations@0.7.10-beta.2
+
+## 1.6.0-beta.2
+
+### Patch Changes
+
+- 7f81a1d: `revokeShare` on an addressed share now asks the adapter for every root the share created, the enforcement root and then the policy root, in one call, whatever `scope` says (`scope` now applies to bearer shares only). The result lists each root with what happened to it in a new `roots` field: `revoked`, or, for the policy-authority root only, `left-live` with its `expiresAt` when the adapter chose not to revoke it (`revokePolicyRoot` may now resolve `"left-live"` for that root). The share counts as revoked only when no root failed and at least one was revoked; otherwise `revokeShare` tries every root and throws the new `ShareRevocationIncompleteError` (`revoked`, `failed`), leaving the record unrevoked so a retry can finish. A `revokePolicyRoot` adapter must resolve for a root the Node already holds a revocation for. `@tinycloud/sdk-core` re-exports `ShareRevocationIncompleteError` and the new types. `tinycloud share revoke` revokes both roots, reports an incomplete revocation as `REVOCATION_INCOMPLETE`, and treats the Node's `root-revocation-irreversible` answer on a retry as already revoked.
+
+  Details: TC-2337
+
+- Updated dependencies [7f81a1d]
+  - @tinycloud/share-sdk@1.4.4-beta.1
+  - @tinycloud/sdk-core@3.10.0-beta.2
+  - @tinycloud/node-sdk@3.10.0-beta.2
+  - @tinycloud/operations@0.7.10-beta.1
+
+## 1.6.0-beta.1
+
+### Minor Changes
+
+- 10eba04: `tinycloud onboard` and `tinycloud auth grant` accept `--timeout <Ns|Nm>` (more than zero, at most 9m; anything else is a usage error, exit 2 `INVALID_TIMEOUT`; `onboard` refuses it together with `--code`) to bound the wait for the owner's OpenKey approval. Exit 8 with `{"pending":{"step","of","approvalUrl","expiresAt"}}` on stdout is not a failure: it is printed at once when a new approval link exists (so an agent can send it to the owner immediately) and again when a resumed link is still unanswered at the timeout; run the same command again. An approval the owner already gave is never reported as pending: it is collected, verified and saved, and acknowledged, even past the timeout (up to 30 s more, plus up to 3 s and local work, so `--timeout 60s` ends in about 105 s at the most for an existing account; an acknowledgement whose reply is lost is re-sent with the same id on the next run). On a new account `onboard` also bounds its wait for OpenKey to host the space by the time left of the timeout plus the 30 s grace (at least 15 s) instead of 150 s, about 90 s in all for `--timeout 60s` and at worst a little under 2 minutes, and ends with the existing `SPACE_SETUP_PENDING` (exit 1): wait a minute and run it again; the re-run continues with step 2, and if a storage command later says `Space not found`, wait and retry. `onboard` has 2 steps, `auth grant` is step 1 of 1. An expired request is exit 3 (OpenKey's HTTP 400 `invalid_request` answer for an expired request that holds no result is exit 3 and drops the saved request, so the next run makes a new request with a new link; a request approved just before its expiry is still collected, because OpenKey serves an approved result until its retention of 600 s ends, so a saved request is dropped without asking OpenKey only once it expired more than 11 minutes ago; a 400 before the link's own expiry stays exit 8 `APPROVAL_REQUEST_UNAVAILABLE`), and OpenKey being unavailable is still its own exit 8 error without the `pending` object. Without `--timeout` nothing changes.
+
+  Details: TC-2299
+
+## 1.5.3-beta.0
+
+### Patch Changes
+
+- Updated dependencies [1d688b3]
+  - @tinycloud/share-envelope@1.5.0-beta.0
+  - @tinycloud/node-sdk@3.10.0-beta.1
+  - @tinycloud/sdk-core@3.10.0-beta.1
+  - @tinycloud/share-sdk@1.4.4-beta.0
+  - @tinycloud/operations@0.7.10-beta.0
+
 ## 1.5.2
 
 ### Patch Changes

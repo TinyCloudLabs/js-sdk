@@ -108,8 +108,9 @@ the owner's private key. Courier keeps its own profile and does not use tc
 profiles, so `tinycloud courier` takes no TinyCloud CLI options (`tinycloud -p x courier …` exits 2).
 
 ```bash
-tinycloud courier init --paste --handle alice
-# Open the printed OpenKey URL, approve, and paste the XXXX-XXXX code (or the full grant).
+tinycloud courier init --request --handle alice
+# Send the printed "openkeyUrl" (https://openkey.so/a/…) to the owner, then collect the approval:
+tinycloud courier init --wait
 tinycloud courier pair start bob
 tinycloud courier pair accept --file a.json
 tinycloud courier send bob --new "Subject" --ask "…" --file handoff.md
@@ -119,15 +120,34 @@ tinycloud courier request <threadId> --peer bob --task <id> --verb merge --targe
 tinycloud courier orders bob
 ```
 
-`init` without `--paste` starts an interactive loopback grant flow. `--request`
-prints the OpenKey URL and the agent key as JSON; `--grant-file f|-` installs a
-grant from a file or stdin. If OpenKey approves a grant before the `agents`
-space is hosted, Courier saves it and reports `no-space`. Complete setup by
+`init --request` creates an OpenKey approval request (sealed at the links API,
+the same flow `tinycloud onboard` uses), saves it in `$COURIER_HOME/approval-pending.json`
+(owner-only) and prints the agent key and `openkeyUrl` as JSON; stderr shows the link
+again alone on a line, to copy verbatim (never retype it: a grant whose scopes differ
+from the request, such as a changed hooks path, is refused with `[grant-too-broad]`).
+There is no code to copy back. `init --wait [--timeout <duration, at most 9m>]` polls OpenKey
+(every 2 s) with a proof signed by the agent key, decrypts the result, checks that
+it answers this request, installs the grant, and only then acknowledges it to
+OpenKey. The default timeout is 60 s: at the deadline it exits 8 and prints
+`{"pending":{"step":1,"of":1,"approvalUrl":…,"expiresAt":…}}` on stdout, and the next
+`init --wait` resumes the same request (no new link, no second approval). Exit 8 is not a failure: the approval is still pending. Send the owner the `pending.approvalUrl` (the same link as `openkeyUrl`), ask them to approve it, then re-run `courier init --wait --timeout 60s`. Repeat while it exits 8. Any other non-zero exit is an error: stderr carries `[code]`. The
+approved result is saved encrypted in the pending record before any install work,
+so a killed process resumes from disk. A request that holds an approval is never
+replaced by a run with other flags; a short-link renewal approved by a different owner than the
+one that holds the grant is refused (`--rotate-key` binds a new owner; the legacy `--grant-file`/`--paste` import is not owner-pinned). OpenKey keeps an approved result for 10
+minutes: after that `init --wait` reports `[approval-result-expired]` and you run
+`init --request` again; an expired request reports `[approval-expired]`.
+If a grant is refused, nothing was installed; tell the owner to revoke the listed delegation at account.tinycloud.xyz/delegations, then run `init --request` for a new link. The refusal on stderr (`[grant-too-broad]`, `[grant-incomplete]`, `[grant-too-long]`, `[bad-grant]`, `[approval-result-invalid]`) names the delegation's CID and what was too broad or different; the agent cannot revoke it, and the header, signature and keys are never printed.
+`init` without flags still starts an interactive loopback grant flow (same
+machine only) and `--paste` shows the long `/delegate` link; `--grant-file f|-`
+installs a grant from a file or stdin (a successful import discards an open short-link request, a refused one leaves it). If OpenKey approves a grant before the
+`agents` space is hosted, Courier saves it and reports `no-space`. Complete setup by
 signing in at the Share view, or from a wallet profile run
 `tinycloud space host agents`, then use `init --resume` without requesting another
-approval. Run `init` again to renew the owner-approved grant, or
+approval. Run `init --request` again to renew the owner-approved grant, or
 `init --rotate-key` to replace the agent key and re-pair every peer.
-If OpenKey reports the space is still being set up, `init` waits up to about 2.5 minutes; otherwise use `init --resume`.
+If OpenKey reports the space is still being set up, `init --wait` waits for it
+within its `--timeout`; the legacy `init` flows wait about 2.5 minutes; otherwise use `init --resume`.
 An OpenKey `XXXX-XXXX` code works once. Courier saves the redeemed grant (`<COURIER_HOME>/pending-grant.json`, owner-only, public fields) before installing it, so if `init` is killed after the redeem, run it again with the same code or use `init --resume`; no second approval is needed. The saved copy is deleted once the grant and profile are saved, and ignored after the grant expires.
 
 Pairing binds a peer by its Courier `did:key`, not by owner DID: two Courier
@@ -135,9 +155,27 @@ agents of the same owner (two profiles, two agent keys) pair exactly like two
 owners, through the same explicit `pair start`/`pair accept` exchange. An
 artifact from the agent's own courier DID is refused.
 
+If your inbound peer delegation has expired but the other side is still paired,
+that side can renew only its existing outbound scope and hand you a fresh C
+artifact:
+
+```bash
+tinycloud courier pair renew bob --renew-artifact > renewal.json
+# Send renewal.json to bob over the existing trusted handoff channel.
+tinycloud courier pair accept --file renewal.json
+```
+
+The export requires an already-paired handle and always emits a fresh delegation
+for that same Courier DID, space, mailbox and session scope; it does not read or
+renew the exporting side's inbound delegation. The receiver may install the C
+artifact for that exact existing peer only. The signed peer delegation remains
+limited to its existing mailbox scope and at most seven days.
+By default, exporting is rate-limited to one renewal per peer in 20 hours. Use
+`--force` only when the same peer needs an immediate additional artifact.
+
 ### OpenKey short codes
 
-After a passkey approval, OpenKey shows a short `XXXX-XXXX` code. `init --paste`
+After a passkey approval on the old `/delegate` link, OpenKey shows a short `XXXX-XXXX` code. `init --paste`
 and `init --grant-file -` accept it as well as the full JSON or base64 grant.
 Courier redeems the code at `<OpenKey API host>/api/delegation-codes/<code>`
 (redirects are refused) and installs the result only if it is bound to the

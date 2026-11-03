@@ -15,9 +15,14 @@ export interface TokenStatusConfig {
   /** How the confidential client authenticates: `client_secret_basic` or `client_secret_post`. */
   readonly authMethod: "basic" | "post";
   readonly timeoutMs?: number;
-  /** Test seams. */
+  /**
+   * Test seams. `now` is the wall clock, compared with the token's `exp`;
+   * `monotonicNow` measures the 30 s and 60 s windows and defaults to
+   * `performance.now` (to `now` when only `now` is given).
+   */
   readonly fetch?: typeof fetch;
   readonly now?: () => number;
+  readonly monotonicNow?: () => number;
   readonly log?: (message: string) => void;
 }
 
@@ -26,11 +31,11 @@ export interface TokenStatusChecker {
   readonly tokenStatus: (token: string) => Promise<TokenStatus>;
   /**
    * Whether an `unknown` status may still be accepted for this token: only a
-   * token that OpenKey itself answered active to this process, and only while
-   * the time since that answer is shorter than the token's own lifetime
-   * (`exp - iat`, 300 s when the token does not carry both). A token never
-   * confirmed active, or one answered inactive, is refused, and nothing is
-   * tolerated while OpenKey is refusing the client credentials.
+   * token that OpenKey itself answered active to this process, only while the
+   * token has not expired, and only for the 60 s after that answer, whatever
+   * the token's lifetime. A token never confirmed active, or one answered
+   * inactive, is refused, and nothing is tolerated while OpenKey is refusing
+   * the client credentials.
    */
   readonly toleratesUnknown: (token: string) => boolean;
 }
@@ -39,6 +44,12 @@ export interface TokenStatusChecker {
 type Outcome = TokenStatus | "credentials" | "mismatch";
 
 const ACTIVE_CACHE_MS = 30_000;
+/**
+ * How long after OpenKey last answered a token active an `unknown` answer is
+ * still tolerated. A fixed window, independent of the token's lifetime: a token
+ * revoked while introspection is unavailable stops working within this time.
+ */
+const UNKNOWN_TOLERANCE_MS = 60_000;
 const DEFAULT_TOKEN_LIFETIME_SECONDS = 300;
 const DEFAULT_TIMEOUT_MS = 3_000;
 const MAX_CACHED_TOKENS = 10_000;
@@ -46,6 +57,10 @@ const MAX_CACHED_TOKENS = 10_000;
 export function createTokenStatusChecker(config: TokenStatusConfig): TokenStatusChecker {
   const doFetch = config.fetch ?? fetch;
   const clock = config.now ?? Date.now;
+  // The windows are measured on a clock a wall-clock step cannot move back; `exp` is compared on the wall clock.
+  // `performance.now` does not count a host suspend on Linux, so a suspend can stretch a window in real
+  // time; the wall-clock `exp` check still bounds it.
+  const monotonic = config.monotonicNow ?? (config.now ?? (() => performance.now()));
   const log = config.log ?? ((message: string) => void process.stderr.write(`[tinycloud-mcp-http] ${message}\n`));
   const timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   /** token hash -> expiry (ms) of an inactive token; inactive is final. */
@@ -53,7 +68,10 @@ export function createTokenStatusChecker(config: TokenStatusConfig): TokenStatus
   /** token hash -> end (ms) of the active window. */
   const active = new Map<string, number>();
   const inFlight = new Map<string, Promise<TokenStatus>>();
-  /** token hash -> when OpenKey last answered this token active, and the token's expiry (ms). */
+  /**
+   * token hash -> when the question OpenKey last answered active was asked (monotonic clock),
+   * and the token's expiry (wall clock, ms).
+   */
   const confirmedActive = new Map<string, { at: number; expiresAt: number }>();
   /** Set while OpenKey refuses the client credentials; cleared by the next answer about a token. */
   let credentialsRefused = false;
@@ -95,6 +113,8 @@ export function createTokenStatusChecker(config: TokenStatusConfig): TokenStatus
   }
 
   async function query(key: string, token: string): Promise<TokenStatus> {
+    // The confirmation counts from when OpenKey was asked: its decision is no newer than that.
+    const askedAt = monotonic();
     const outcome = await introspect(token);
     if (outcome === "credentials") {
       if (!credentialsRefused) {
@@ -105,7 +125,7 @@ export function createTokenStatusChecker(config: TokenStatusConfig): TokenStatus
     }
     if (outcome === "unknown") return outcome;
     const now = clock();
-    prune(now);
+    prune(now, monotonic());
     if (outcome === "mismatch") {
       // The answer describes some other token: refused like an inactive one, but it
       // is not an answer about this token and confirms nothing.
@@ -118,18 +138,22 @@ export function createTokenStatusChecker(config: TokenStatusConfig): TokenStatus
       inactive.set(key, tokenExpiryMs(token, now));
       confirmedActive.delete(key);
     } else {
-      active.set(key, now + ACTIVE_CACHE_MS);
+      active.set(key, askedAt + ACTIVE_CACHE_MS);
       // Delete first so a re-confirmed token moves to the newest slot of the map.
       confirmedActive.delete(key);
-      confirmedActive.set(key, { at: now, expiresAt: tokenExpiryMs(token, now) });
+      confirmedActive.set(key, { at: askedAt, expiresAt: tokenExpiryMs(token, now) });
     }
     return outcome;
   }
 
-  function prune(now: number): void {
-    for (const [key, until] of active) if (until <= now) active.delete(key);
+  /** `now` is the wall clock (compared with `exp`), `elapsed` the monotonic clock (the windows). */
+  function prune(now: number, elapsed: number): void {
+    for (const [key, until] of active) if (until <= elapsed) active.delete(key);
     for (const [key, until] of inactive) if (until <= now) inactive.delete(key);
-    for (const [key, entry] of confirmedActive) if (entry.expiresAt <= now) confirmedActive.delete(key);
+    // A confirmation older than the tolerance can never be used again.
+    for (const [key, entry] of confirmedActive) {
+      if (entry.expiresAt <= now || elapsed - entry.at >= UNKNOWN_TOLERANCE_MS) confirmedActive.delete(key);
+    }
     // An evicted entry costs one more introspection for that token; an evicted
     // confirmation means that token is refused while OpenKey cannot answer.
     for (const cache of [active, inactive, confirmedActive]) {
@@ -145,10 +169,11 @@ export function createTokenStatusChecker(config: TokenStatusConfig): TokenStatus
     async tokenStatus(token) {
       const key = createHash("sha256").update(token).digest("hex");
       const now = clock();
+      const elapsed = monotonic();
       const inactiveUntil = inactive.get(key);
       if (inactiveUntil !== undefined && inactiveUntil > now) return "inactive";
       const activeUntil = active.get(key);
-      if (activeUntil !== undefined && activeUntil > now) return "active";
+      if (activeUntil !== undefined && activeUntil > elapsed) return "active";
       const pending = inFlight.get(key);
       if (pending !== undefined) return pending;
       const asking = query(key, token).finally(() => inFlight.delete(key));
@@ -159,8 +184,7 @@ export function createTokenStatusChecker(config: TokenStatusConfig): TokenStatus
       if (credentialsRefused) return false;
       const confirmed = confirmedActive.get(createHash("sha256").update(token).digest("hex"));
       if (confirmed === undefined) return false;
-      const now = clock();
-      return confirmed.expiresAt > now && now - confirmed.at < tokenLifetimeSeconds(token) * 1000;
+      return confirmed.expiresAt > clock() && monotonic() - confirmed.at < UNKNOWN_TOLERANCE_MS;
     },
   };
 }
@@ -192,13 +216,6 @@ function audienceList(value: unknown): string[] {
 function tokenExpiryMs(token: string, now: number): number {
   const exp = claims(token).exp;
   return typeof exp === "number" ? exp * 1000 : now + DEFAULT_TOKEN_LIFETIME_SECONDS * 1000;
-}
-
-function tokenLifetimeSeconds(token: string): number {
-  const { exp, iat } = claims(token);
-  return typeof exp === "number" && typeof iat === "number" && exp > iat
-    ? exp - iat
-    : DEFAULT_TOKEN_LIFETIME_SECONDS;
 }
 
 function claims(token: string): ReturnType<typeof decodeJwt> {

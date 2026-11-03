@@ -54,6 +54,7 @@ function resolveOpenKeyHost(profile: ProfileConfig): string {
   return process.env.TC_OPENKEY_HOST ?? profile.openkeyHost ?? DEFAULT_OPENKEY_HOST;
 }
 import { startAuthFlow } from "../auth/browser-auth.js";
+import { APPROVAL_TIMEOUT_OPTION_DESCRIPTION, parseApprovalTimeout, type ApprovalWait } from "../auth/approval-wait.js";
 import { approvalCommandIntent, approvalResultNeedsAck, commitApprovalCommand, completeApprovalResult, pendingApprovalKey, recoverApprovalCommand, trackApprovalResult } from "../auth/approval-request.js";
 import {
   acquireDeviceDelegation,
@@ -75,6 +76,9 @@ import {
   verifySignedSession,
   type RequestedExpiry,
   openKeyExpiryParam,
+  expiryLimit,
+  defaultExpiryLimit,
+  sdkMaxExpiryRefusal,
   withVerifiedAuthority,
   ownerSpaceId,
   sessionStateIsUsable,
@@ -85,6 +89,7 @@ import { assertNoCaveatLimits } from "../lib/caveat-refusal.js";
 import { isRawEncryptionPermission, isVerifiedRawEncryptionPermission } from "../lib/raw-encryption.js";
 import { canonicalOwnerDid } from "../lib/owner-did.js";
 import { assertNotLocalOwner, assertSessionReplaceable, commitLogin, readProfileSnapshot } from "../auth/login-commit.js";
+import { previousSignInNotice } from "../auth/previous-sign-in.js";
 import { ownerIdentitySigner, startPreparedOpenKeyHandoff, type PreparedOpenKeyHandoff } from "../auth/prepared-openkey.js";
 import { announceFirstOwner, openKeyPrimaryFlag, ownerLoginPermissions, warnIfNotPrimaryKey, withOwnerKeyPrimary } from "../auth/owner-key.js";
 import { SHARE_PUBLISHING_MANIFEST_REF } from "../share/publishing-manifest.js";
@@ -99,6 +104,7 @@ import {
 import { createCliReplicationConfig } from "../lib/replication-config.js";
 import { theme } from "../output/theme.js";
 import { registerAuthGrantsCommand } from "./auth-grants.js";
+import { refusing, type CreatedProfile } from "../auth/refused-approval.js";
 import { createKeyOnlyProfile } from "./init.js";
 import { bootstrapDelegatedSession, ensureAuthenticated, type DelegatedSessionBootstrap } from "../lib/sdk.js";
 import { signInAgainHint, withSignInHint } from "../auth/session-expired.js";
@@ -753,9 +759,8 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           // owner approves. Only an explicit --host is saved on it.
           // The check and the create share one lock, so two logins cannot both create it.
           const created = await ProfileManager.withLock(ctx.profile, async () => {
-            if (await ProfileManager.profileExists(ctx.profile)) return false;
-            await createKeyOnlyProfile(ctx.profile, globalOpts.host ?? DEFAULT_HOST);
-            return true;
+            if (await ProfileManager.profileExists(ctx.profile)) return undefined;
+            return createKeyOnlyProfile(ctx.profile, globalOpts.host ?? DEFAULT_HOST);
           });
           if (created) process.stderr.write(`Created profile "${ctx.profile}"\n`);
           const preparedCommitted = await handleOpenKeyAuth(ctx.profile, ctx.host, {
@@ -769,6 +774,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             persistHost,
             force: options.force === true,
             keys: options.keys,
+            ...(created === undefined ? {} : { createdProfile: { previousDefaultProfile: created.previousDefaultProfile } }),
           });
           if (!preparedCommitted) await persistReplicationLogin(ctx.profile, replicationOptions);
           if (replicationOptions.allowSecrets) writeReplicationSecretsWarning();
@@ -1011,11 +1017,17 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
           const openkeyHost = resolveOpenKeyHost(profile);
           const grants: StagedOpenKeyGrant[] = [];
           const expiryCap = expiryOption === undefined ? undefined : parseRequestedExpiry(expiryOption);
+          // An agent preset keeps the 7-day agent policy (a product ruling): its link does not opt in, so the user can
+          // shorten the proposed lifetime but not extend it. Custom --cap/--permission/--manifest grants opt in.
+          const grantLinkOptsIn = options.paste === true && preset === undefined;
           const proof: PortableGrantProof = {
             key,
             sessionDid: profile.sessionDid ?? profile.did,
             expectedOwner: pinnedOwner(profile),
             expiry: expiryCap,
+            // Only a plain paste link for a custom grant opts in; the device and approval-request paths, and the agent
+            // preset, keep the --expiry ceiling.
+            ...(grantLinkOptsIn ? { expiryChangeable: true } : {}),
           };
           const declined: PermissionEntry[] = [];
           const groups = groupPermissionsBySpace(requested);
@@ -1029,36 +1041,40 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
               group,
             );
             const request = grantRequestPermissions(group, profile.spaceId ?? profile.spaceName);
-            let delegationData: Record<string, unknown>;
-            if (options.device) {
-              const approval = await acquireDeviceDelegation({
-                sessionDid: keyToDID(key),
-                jwk: key,
-                nodeOrigin: ctx.host,
-                shareOrigin: DEFAULT_SHARE_ORIGIN,
-                permissions: request,
-                expiry: parseRequestedExpiry(expiryOption ?? "7d"),
-                reason,
-                expectedOwner: pinnedOwner(profile),
-                openkeyHost: resolveDeviceApiHost(profile),
-              });
-              declined.push(...approval.declined);
-              delegationData = approval.session;
-            } else {
-              delegationData = await startAuthFlow(profile.did, {
-                profileName: ctx.profile,
-                expectedOwner: pinnedOwner(profile),
-                jwk: key,
-                host: ctx.host,
-                permissions: request,
-                reason,
-                openkeyHost,
-                expiry: expiryCap === undefined ? undefined : openKeyExpiryParam(expiryCap),
-                noPopup: options.popup === false,
-                paste: options.paste,
-              });
-            }
-            const delegation = portableFromOpenKeyDelegation(delegationData, request, ctx.host, proof);
+            const delegation = await refusing({ profileName: ctx.profile, key, storedKey: key }, async (seen) => {
+              let delegationData: Record<string, unknown>;
+              if (options.device) {
+                const approval = await acquireDeviceDelegation({
+                  sessionDid: keyToDID(key),
+                  jwk: key,
+                  nodeOrigin: ctx.host,
+                  shareOrigin: DEFAULT_SHARE_ORIGIN,
+                  permissions: request,
+                  expiry: parseRequestedExpiry(expiryOption ?? "7d"),
+                  reason,
+                  expectedOwner: pinnedOwner(profile),
+                  openkeyHost: resolveDeviceApiHost(profile),
+                });
+                declined.push(...approval.declined);
+                delegationData = approval.session;
+              } else {
+                delegationData = await startAuthFlow(profile.did, {
+                  profileName: ctx.profile,
+                  expectedOwner: pinnedOwner(profile),
+                  jwk: key,
+                  host: ctx.host,
+                  permissions: request,
+                  reason,
+                  openkeyHost,
+                  expiry: expiryCap === undefined ? undefined : openKeyExpiryParam(expiryCap),
+                  noPopup: options.popup === false,
+                  paste: options.paste,
+                  ...(grantLinkOptsIn ? { expiryChangeable: true } : {}),
+                });
+              }
+              seen.result = delegationData;
+              return portableFromOpenKeyDelegation(delegationData, request, ctx.host, proof);
+            });
             grants.push({ delegation, effective: permissionsFromDelegation(delegation) });
           }
           await activateAndStoreOpenKeyGrants(ctx.profile, ctx.host, node, grants, options.manifest ? "manifest" : "cli");
@@ -1313,8 +1329,11 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
     .option("--stdin", "Read the JSON request artifact from stdin")
     .option("--paste", "Read the JSON request artifact from stdin")
     .option("--yes", "Skip local-key TTY confirmation", false)
+    .option("--timeout <duration>", APPROVAL_TIMEOUT_OPTION_DESCRIPTION)
     .action(async (source: string | undefined, options, cmd) => {
       try {
+        // Refused before the request is read or anything is contacted. An agent grant is one approval: step 1 of 1.
+        const deadlineMs = options.timeout === undefined ? undefined : Date.now() + parseApprovalTimeout(options.timeout);
         const globalOpts = cmd.optsWithGlobals();
         const ctx = await ProfileManager.resolveContext(globalOpts);
         const profile = await ProfileManager.getProfile(ctx.profile);
@@ -1393,6 +1412,7 @@ export function registerAuthCommand(program: Command, options?: { openKeyAcquisi
             exactApproval: true,
             noPopup: !(process.stdin.isTTY || process.stderr.isTTY),
             commandIntent: approvalCommandIntent(parsed),
+            ...(deadlineMs === undefined ? {} : { approvalWait: { deadlineMs, step: 1, of: 1 } }),
           });
           // Sign from the approval's own session, so the grant is bounded by that approval
           // and never takes the owner's stored authority.
@@ -1953,6 +1973,8 @@ export async function acquireOpenKeyApproval(params: {
   noPopup?: boolean;
   /** Local prepared-request identity, not an OpenKey or delegation claim. */
   commandIntent?: string;
+  /** `--timeout`: bound the wait for the owner's approval. */
+  approvalWait?: ApprovalWait;
   /** Test seam for the browser acquisition boundary; production uses startAuthFlow. */
   openKeyAcquisition?: OpenKeyAcquisition;
 }): Promise<OpenKeyApproval> {
@@ -1976,24 +1998,29 @@ export async function acquireOpenKeyApproval(params: {
   const anchorSpace = params.anchorSpace ?? params.profile.spaceId ?? params.profile.spaceName;
   const request = grantRequestPermissions(params.requested, anchorSpace);
   const acquireOpenKey = params.openKeyAcquisition ?? startAuthFlow;
-  const delegationData = await acquireOpenKey(params.profile.did, {
-    profileName: params.ctx.profile,
-    expectedOwner: pinnedOwner(params.profile),
-    jwk: key,
-    host: params.ctx.host,
-    permissions: request,
-    reason: permissionGrantReason(params.reason, request),
-    openkeyHost: resolveOpenKeyHost(params.profile),
-    expiry: expiryCap === undefined ? undefined : openKeyExpiryParam(expiryCap),
-    noPopup: params.noPopup,
-    commandIntent: params.commandIntent,
-  });
-  return verifyOpenKeyApproval(delegationData, request, params.ctx.host, {
-    key,
-    sessionDid: params.profile.sessionDid ?? params.profile.did,
-    expectedOwner: pinnedOwner(params.profile),
-    expiry: expiryCap,
-    exactApproval: params.exactApproval === true,
+  // The key already existed (it signs this profile's other grants): a refused approval is never a reason to delete it.
+  return refusing({ profileName: params.ctx.profile, key, storedKey: key }, async (seen) => {
+    const delegationData = await acquireOpenKey(params.profile.did, {
+      profileName: params.ctx.profile,
+      expectedOwner: pinnedOwner(params.profile),
+      jwk: key,
+      host: params.ctx.host,
+      permissions: request,
+      reason: permissionGrantReason(params.reason, request),
+      openkeyHost: resolveOpenKeyHost(params.profile),
+      expiry: expiryCap === undefined ? undefined : openKeyExpiryParam(expiryCap),
+      noPopup: params.noPopup,
+      commandIntent: params.commandIntent,
+      ...(params.approvalWait === undefined ? {} : { approvalWait: params.approvalWait }),
+    });
+    seen.result = delegationData;
+    return verifyOpenKeyApproval(delegationData, request, params.ctx.host, {
+      key,
+      sessionDid: params.profile.sessionDid ?? params.profile.did,
+      expectedOwner: pinnedOwner(params.profile),
+      expiry: expiryCap,
+      exactApproval: params.exactApproval === true,
+    });
   });
 }
 
@@ -2099,18 +2126,23 @@ export async function ensureDelegationAuthority(params: {
       // capabilities/read is part of the request, so the signed proof may
       // carry it without broadening the grant.
       const request = grantRequestPermissions(group, anchorSpace);
-      const delegationData = await acquireOpenKey(params.profile.did, {
-        profileName: params.ctx.profile,
-        expectedOwner: pinnedOwner(params.profile),
-        jwk: key,
-        host: params.ctx.host,
-        permissions: request,
-        reason: permissionGrantReason(params.reason, group),
-        openkeyHost,
-        expiry: expiryCap === undefined ? undefined : openKeyExpiryParam(expiryCap),
-        noPopup: params.noPopup,
+      // A refusal drops only this group's approval and says so once. Groups approved before it stay pending, unstored, and
+      // resume without a new approval when the command is run again.
+      const delegation = await refusing({ profileName: params.ctx.profile, key, storedKey: key }, async (seen) => {
+        const delegationData = await acquireOpenKey(params.profile.did, {
+          profileName: params.ctx.profile,
+          expectedOwner: pinnedOwner(params.profile),
+          jwk: key,
+          host: params.ctx.host,
+          permissions: request,
+          reason: permissionGrantReason(params.reason, group),
+          openkeyHost,
+          expiry: expiryCap === undefined ? undefined : openKeyExpiryParam(expiryCap),
+          noPopup: params.noPopup,
+        });
+        seen.result = delegationData;
+        return portableFromOpenKeyDelegation(delegationData, request, params.ctx.host, proof);
       });
-      const delegation = portableFromOpenKeyDelegation(delegationData, request, params.ctx.host, proof);
       grants.push({ delegation, effective: permissionsFromDelegation(delegation) });
     }
     await activateAndStoreOpenKeyGrants(params.ctx.profile, params.ctx.host, params.node, grants, "cli");
@@ -2326,6 +2358,8 @@ export interface PortableGrantProof {
   sessionDid: string;
   expectedOwner?: string;
   expiry?: RequestedExpiry;
+  /** The grant's link was a plain paste link that carried the expiryChangeable opt-in: no `expiry` ceiling applies to the signed expiry. */
+  expiryChangeable?: boolean;
   /** Agent request: the approval must cover every requested action, or no grant is stored. */
   exactApproval?: boolean;
 }
@@ -2356,6 +2390,7 @@ export function verifyOpenKeyApproval(
   const { session, legacyNested } = verifyScopedLogin(data, proof.key, proof.sessionDid, requested, {
     expectedOwner: proof.expectedOwner,
     expiry: proof.expiry,
+    ...(proof.expiryChangeable === true ? { expiryChangeable: true } : {}),
     purpose: "grant",
     exactApproval: proof.exactApproval,
   });
@@ -2451,36 +2486,23 @@ async function rotateAuthKey(
     return generateKey();
   });
 
-  // One transaction: a concurrent login commit either lands before (and this
-  // rotation then discards its session) or sees the new key and refuses.
-  let permissions: PermissionEntry[] | undefined;
-  await ProfileManager.withLock(profileName, async () => {
-    const current = await ProfileManager.getProfile(profileName);
-    if (current.replication?.prefixes.length) {
-      const previousSession = await ProfileManager.getSession(profileName) as Record<string, unknown> | null;
-      if (Array.isArray(previousSession?.permissions)) permissions = previousSession.permissions as PermissionEntry[];
-    }
-    await ProfileManager.setKey(profileName, jwk);
-    await ProfileManager.clearSession(profileName);
-    const { namedKeys: _rotated, ...currentFields } = current;
-    await ProfileManager.setProfile(profileName, {
-      ...currentFields,
-      host,
-      did,
-      sessionDid: did,
-      posture: current.posture ?? "owner-openkey",
-      operatorType: current.operatorType ?? "human",
-      authMethod: "openkey",
-    });
-  });
+  // The session this rotation replaces, read now: the commit overwrites it, and the CLI cannot revoke its delegation.
+  const previousNotice = previousSignInNotice(await ProfileManager.getSession(profileName) as Record<string, unknown> | null, profile);
 
+  // key.json is not touched until OpenKey's approval is verified: the new key is held in memory (paste) or in the pending
+  // request's file, mode 0600 (default flow), and refreshOpenKeySession commits key, session and profile in one
+  // compare-and-commit, so a refused or interrupted rotation leaves the old key and login exactly as they were. A concurrent change to the profile makes that commit refuse. A named-keys profile signs in through
+  // a prepared session whose key the SDK creates, so it has no key of ours to stage.
   const result = await refreshOpenKeySession(profileName, host, {
     paste: options.paste,
     noPopup: options.noPopup,
-    permissions,
-    ...(profile.namedKeys === undefined ? {} : { keys: profile.namedKeys.prefix, expectedOwner: profile.ownerDid }),
+    ...(profile.namedKeys === undefined
+      ? { rotation: { jwk, did } }
+      : { keys: profile.namedKeys.prefix, expectedOwner: profile.ownerDid }),
   });
   outputRotationResult(result.profile, profileName, oldDid, "openkey");
+  // Only a rotation that went through (every refusal and failure threw above) tells the owner that the sign-in it replaced stays live.
+  if (previousNotice !== undefined) process.stderr.write(`${previousNotice}\n`);
 }
 
 function outputRotationResult(
@@ -2756,6 +2778,10 @@ interface OpenKeyLoginOptions {
   force?: boolean;
   /** `--keys` folder: also ask OpenKey to approve named-key create and decrypt there. */
   keys?: string;
+  /** This command created the profile (and its key) just before asking OpenKey: a permanent refusal removes them. */
+  createdProfile?: CreatedProfile;
+  /** `auth rotate`: the new session key; key.json keeps the old key until the approval is verified and committed. */
+  rotation?: { jwk: object; did: string };
 }
 
 /** Only a fresh SDK-prepared, OpenKey-signed owner session may establish replica consent. */
@@ -2800,6 +2826,7 @@ async function refreshPreparedOpenKeySession(params: {
     includeAccountRegistryPermissions: false, autoBootstrapAccount: false,
     replication: replicationConfig,
     ...(namedKeys === undefined ? {} : { additionalRawAbilities: keyAbilitiesFor(namedKeys) }),
+    ...(expiry ? { sessionExpirationMs: expiry.durationMs } : {}),
   });
   let handoff: PreparedOpenKeyHandoff | undefined;
   let preparedDid: string | undefined;
@@ -2819,7 +2846,7 @@ async function refreshPreparedOpenKeySession(params: {
         handedBackSiwe = result.signedMessage;
         return result;
       });
-    });
+    }, preparedSignInOptions(expiry));
     const active = node.restorableSession;
     if (!active || !preparedDid || node.sessionDid !== preparedDid || active.verificationMethod !== preparedDid) {
       throw new CLIError("OPENKEY_SESSION_MISMATCH", "OpenKey signed a different SDK session key; no profile or session was saved.", ExitCode.PERMISSION_DENIED);
@@ -2871,9 +2898,24 @@ async function refreshPreparedOpenKeySession(params: {
   } catch (error) {
     await handoff?.complete(false);
     await undoPreparedAttempt(profileName, node, owner, gateWasActive).catch(() => undefined);
-    throw namedKeys !== undefined && isNarrowedRecapMismatch(error) &&
-      namedKeysGrantIn(handedBackSiwe, namedKeys) === "partial" ? partialKeysGrantError() : error;
+    throw sdkMaxExpiryRefusal(error, expiry === undefined) ?? (namedKeys !== undefined && isNarrowedRecapMismatch(error) &&
+      namedKeysGrantIn(handedBackSiwe, namedKeys) === "partial" ? partialKeysGrantError() : error);
   }
+}
+
+/**
+ * The prepared OpenKey handoff lets the user pick a shorter lifetime than the one this CLI asked for. Telling the SDK
+ * so makes it accept and sign with the picked expiry. The CLI ceiling is handed to the SDK too, read when the approval
+ * arrives, so an above-ceiling pick is refused before any session is activated; `verifyScopedLogin` still checks an
+ * explicit `--expiry` afterwards. The ceiling is `--expiry` + the clock-skew allowance, or, without `--expiry`, the SDK's
+ * default 30 day session request + the same allowance, so the default request is held as tightly as an explicit one.
+ * The SDK checks every other field of the signed message as before.
+ */
+function preparedSignInOptions(expiry: RequestedExpiry | undefined) {
+  return {
+    expiryChangeable: true,
+    maxExpiresAt: expiry === undefined ? defaultExpiryLimit : () => expiryLimit(expiry),
+  } as const;
 }
 
 const KEYS_APPROVAL_NOTE = (folder: string): string =>
@@ -2951,7 +2993,7 @@ async function refreshPreparedKeysSession(params: {
         handedBackSiwe = result.signedMessage;
         return result;
       });
-    });
+    }, preparedSignInOptions(expiry));
     const active = node.restorableSession;
     if (!active || !preparedDid || node.sessionDid !== preparedDid || active.verificationMethod !== preparedDid) {
       throw new CLIError("OPENKEY_SESSION_MISMATCH", "OpenKey signed a different SDK session key; no profile or session was saved.", ExitCode.PERMISSION_DENIED);
@@ -2983,8 +3025,8 @@ async function refreshPreparedKeysSession(params: {
   } catch (error) {
     await handoff?.complete(false);
     await node.replication?.close();
-    throw isNarrowedRecapMismatch(error) &&
-      namedKeysGrantIn(handedBackSiwe, namedKeys) === "partial" ? partialKeysGrantError() : error;
+    throw sdkMaxExpiryRefusal(error, expiry === undefined) ?? (isNarrowedRecapMismatch(error) &&
+      namedKeysGrantIn(handedBackSiwe, namedKeys) === "partial" ? partialKeysGrantError() : error);
   }
 }
 
@@ -3011,6 +3053,20 @@ async function undoPreparedAttempt(
   await node.replication?.close();
 }
 
+/** The profile as `auth rotate` leaves it once the new key's approval is committed: the new session DID, and no named-keys row. */
+function rotatedProfile(current: ProfileConfig, host: string, did: string): ProfileConfig {
+  const { namedKeys: _rotated, ...currentFields } = current;
+  return {
+    ...currentFields,
+    host,
+    did,
+    sessionDid: did,
+    posture: current.posture ?? "owner-openkey",
+    operatorType: current.operatorType ?? "human",
+    authMethod: "openkey",
+  };
+}
+
 export async function refreshOpenKeySession(
   profileName: string,
   host: string,
@@ -3021,7 +3077,9 @@ export async function refreshOpenKeySession(
   const snapshot = await readProfileSnapshot(profileName);
   // A missing profile is PROFILE_NOT_FOUND, not a missing key: `tc init` alone
   // would create the default profile instead of this one.
-  const profile = snapshot.profile ?? await ProfileManager.getProfile(profileName);
+  const storedProfile = snapshot.profile ?? await ProfileManager.getProfile(profileName);
+  // `auth rotate`: the profile as the rotation will leave it, held in memory until the approval is verified and committed.
+  const profile = options.rotation === undefined ? storedProfile : rotatedProfile(storedProfile, host, options.rotation.did);
   // Resolve before consent so an invalid scope, --expiry, owner conflict or
   // live session in use never opens OpenKey.
   const expiry = options.expiry === undefined ? undefined : parseRequestedExpiry(options.expiry);
@@ -3045,8 +3103,13 @@ export async function refreshOpenKeySession(
   if (permissions !== undefined) {
     assertNotLocalOwner(profileName, profile, "Scoped browser login");
   }
+  // Only the plain paste link below carries the expiryChangeable opt-in. The prepared logins (replica, --keys) use a
+  // prepared handoff and the non-paste login uses a signed approval request; both keep the --expiry ceiling.
+  const plainPasteLink = options.paste === true && replication.prefixes.length === 0 && options.keys === undefined;
   if (permissions !== undefined && options.replaceSession !== true) {
-    const estimatedExpiry = expiry === undefined ? undefined : new Date(Date.now() + expiry.durationMs).toISOString();
+    // An opted-in link lets the user pick the lifetime, so `--expiry` is not a lifetime this login will have. Do not
+    // refuse before consent for "shortening" a live session on that guess: the commit re-checks with the signed expiry.
+    const estimatedExpiry = expiry === undefined || plainPasteLink ? undefined : new Date(Date.now() + expiry.durationMs).toISOString();
     assertSessionReplaceable(profileName, snapshot, expectedOwner, permissions, estimatedExpiry);
   }
   if (options.keys !== undefined && replication.prefixes.length === 0) {
@@ -3060,13 +3123,23 @@ export async function refreshOpenKeySession(
 
   // A logged-out nonreplica profile has no restorable signer. Keep the
   // candidate private key in memory until the signed OpenKey result verifies
-  // and commitLogin atomically writes the key, session and matching DID.
+  // and commitLogin atomically writes the key, session and matching DID. A
+  // rotation's new key is held the same way (in the pending request's file, mode 0600, on the approval-request path): the old key
+  // and login stay until then.
   const pendingKey = snapshot.key === null ? await pendingApprovalKey(profileName) : undefined;
-  const fresh = snapshot.key === null && pendingKey === undefined ? generateKey() : null;
-  const key = snapshot.key ?? pendingKey ?? fresh!.jwk;
-  const sessionDid = fresh?.did ?? (pendingKey ? keyToDID(pendingKey) : profile.sessionDid ?? profile.did);
+  const fresh = snapshot.key === null && pendingKey === undefined && options.rotation === undefined ? generateKey() : null;
+  const key = options.rotation?.jwk ?? snapshot.key ?? pendingKey ?? fresh!.jwk;
+  const sessionDid = options.rotation?.did ?? fresh?.did ?? (pendingKey ? keyToDID(pendingKey) : profile.sessionDid ?? profile.did);
   const requestDid = (fresh || pendingKey) && profile.did.startsWith("did:key:") ? sessionDid : profile.did;
 
+  // OpenKey made the delegation before this command verifies it: a permanent refusal in the approval or the checks below
+  // drops the saved approval, deletes a key this command created, and tells the owner how to revoke the grant.
+  const site = {
+    profileName, key, storedKey: snapshot.key,
+    ...(options.createdProfile === undefined ? {} : { createdProfile: options.createdProfile }),
+    ...(options.rotation === undefined ? {} : { rotation: true }),
+  };
+  const committed = await refusing(site, async (seen) => {
   // Start browser auth flow
   const acquireOpenKey = options.openKeyAcquisition ?? startAuthFlow;
   const delegationData = await acquireOpenKey(requestDid, {
@@ -3082,8 +3155,11 @@ export async function refreshOpenKeySession(
     // owner is verified below.
     permissions: permissions ?? ownerLoginPermissions(expectedOwner),
     expiry: openKeyExpiry,
+    // The plain paste link lets the user pick the lifetime; the signed result has no `--expiry` ceiling.
+    ...(plainPasteLink ? { expiryChangeable: true } : {}),
     ...(permissions ? { reason: options.reason ?? "Allow this TinyCloud CLI profile to use the permissions in the requested manifest." } : {}),
   });
+  seen.result = delegationData;
 
   // Login persists only signed, verified authority: the owner, permissions,
   // expiry and space all come from OpenKey's proof for this profile's key.
@@ -3094,14 +3170,14 @@ export async function refreshOpenKeySession(
   let declined: PermissionEntry[] = [];
   let legacyNested: PermissionEntry[] = [];
   if (permissions) {
-    const verified = verifyScopedLogin(delegationData, key, sessionDid, permissions, { expectedOwner, expiry });
+    const verified = verifyScopedLogin(delegationData, key, sessionDid, permissions, { expectedOwner, expiry, ...(plainPasteLink ? { expiryChangeable: true } : {}) });
     sanitizedSession = verified.session;
     legacyNested = verified.legacyNested;
     verifiedOwner = sanitizedSession.ownerDid as string;
     declined = declinedPermissions(permissions, sanitizedSession.permissions as PermissionEntry[], verifiedOwner);
   } else {
     // A delegation without a verifiable proof for this key is refused, never saved (TC-1053).
-    const signed = verifySignedSession(delegationData, key, sessionDid, { expectedOwner, expiry });
+    const signed = verifySignedSession(delegationData, key, sessionDid, { expectedOwner, expiry, ...(plainPasteLink ? { expiryChangeable: true } : {}) });
     // The session's space must belong to the signing owner, as on the scoped path.
     const spaceId = String(delegationData.spaceId);
     if (normalizePkhIdentifier(ownerSpaceId(spaceId.split(":").at(-1) ?? "", signed.ownerDid)) !== normalizePkhIdentifier(spaceId)) {
@@ -3136,9 +3212,12 @@ export async function refreshOpenKeySession(
       ? { approved: { scope: sanitizedSession.permissions as PermissionEntry[], ownerDid: verifiedOwner, replaceSession: options.replaceSession === true } }
       : {}),
   });
-  await completeApprovalResult(profileName, delegationData);
-  warnIfNotPrimaryKey(verifiedOwner, ownerKeyPrimary);
-  announceFirstOwner(profileName, expectedOwner, verifiedOwner);
+  return { delegationData, sanitizedSession, verifiedOwner, ownerKeyPrimary, updatedProfile, declined, legacyNested };
+  });
+  // Committed: nothing below is a refusal of the owner's approval.
+  await completeApprovalResult(profileName, committed.delegationData);
+  warnIfNotPrimaryKey(committed.verifiedOwner, committed.ownerKeyPrimary);
+  announceFirstOwner(profileName, expectedOwner, committed.verifiedOwner);
 
-  return { profile: updatedProfile, delegationData: sanitizedSession, declined, legacyNested };
+  return { profile: committed.updatedProfile, delegationData: committed.sanitizedSession, declined: committed.declined, legacyNested: committed.legacyNested };
 }

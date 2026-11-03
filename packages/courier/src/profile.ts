@@ -101,19 +101,40 @@ function ensureSecureDir(): void {
   mkdirOwnerOnly(profileDir());
 }
 
+/** Atomic, owner-only and durable: the bytes and the rename are fsynced, so a caller may act on "saved" (for example acknowledge an approval). */
 export function writeSecure(file: string, obj: unknown): void {
   ensureSecureDir();
   const temp = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
   try {
     fs.writeFileSync(temp, JSON.stringify(obj, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
     fs.chmodSync(temp, 0o600);
+    const fd = fs.openSync(temp, 'r');
+    try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
     fs.renameSync(temp, file);
+    const dirFd = fs.openSync(path.dirname(file), 'r');
+    try { fs.fsyncSync(dirFd); } finally { fs.closeSync(dirFd); }
   } finally {
     try { fs.unlinkSync(temp); } catch { /* renamed or absent */ }
   }
 }
 
-function readSecure<T>(name: string, required: boolean, home = profileDir()): T | undefined {
+/**
+ * The text of a regular file of this user, or undefined when there is none: a symlink is never followed (O_NOFOLLOW), a FIFO or device
+ * never blocks the open (O_NONBLOCK) and is refused by `fstat` before any read. Read-only callers use it; it never changes the file.
+ */
+export function readRegularFile(file: string): string | undefined {
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.uid !== process.getuid?.()) return undefined;
+    return fs.readFileSync(fd, 'utf8');
+  } catch { return undefined; } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
+export function readSecure<T>(name: string, required: boolean, home = profileDir()): T | undefined {
   const file = profilePath(name, home);
   if (!fs.existsSync(file)) {
     if (required) throw new CourierError('no-profile', `Missing ${name} in ${profileDir()}. Run \`${cmd('init')}\` first.`);
@@ -129,9 +150,15 @@ function readSecure<T>(name: string, required: boolean, home = profileDir()): T 
   }
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8')) as T;
-  } catch (e) {
-    throw new CourierError('bad-profile', `Invalid ${name}: ${(e as Error).message}`);
+  } catch {
+    // A parser error quotes the text around the failure, and these files can hold private keys: say which file, never what was in it.
+    throw new CourierError('bad-profile', `Invalid ${name}: the file is unreadable or corrupt.`);
   }
+}
+
+/** The fields `loadProfile` requires of a current (version 3) profile. */
+export function hasProfileFields(profile: Partial<Profile> | null): profile is Profile {
+  return !!profile && typeof profile === 'object' && profile.version === 3 && !!profile.courierDid && !!profile.host && !!profile.openkeyHost;
 }
 
 export function loadProfile(home = profileDir()): Profile {
@@ -144,7 +171,7 @@ export function loadProfile(home = profileDir()): Profile {
   }
   if (loaded.version !== 3) throw new CourierError('bad-profile', `Unsupported profile version ${String(loaded.version)}; run \`${cmd('init --rotate-key')}\`.`);
   const profile = loaded as Profile;
-  if (!profile.courierDid || !profile.host || !profile.openkeyHost) throw new CourierError('bad-profile', `Corrupt profile at ${profilePath('profile.json')}`);
+  if (!hasProfileFields(profile)) throw new CourierError('bad-profile', `Corrupt profile at ${profilePath('profile.json')}`);
   profile.peers ??= {};
   return profile;
 }
@@ -153,9 +180,15 @@ export function saveProfile(profile: Profile): void {
   writeSecure(profilePath('profile.json'), profile);
 }
 
+/** The shape `loadKey` accepts: version 1, a JWK and a `did:key:` identifier. */
+export function isAgentKey(value: unknown): value is AgentKey {
+  const key = value as Partial<AgentKey> | null;
+  return !!key && typeof key === 'object' && key.v === 1 && !!key.jwk && typeof key.did === 'string' && key.did.startsWith('did:key:');
+}
+
 export function loadKey(home = profileDir()): AgentKey {
-  const key = readSecure<AgentKey>('key.json', true, home)!;
-  if (key.v !== 1 || !key.jwk || !key.did?.startsWith('did:key:')) {
+  const key = readSecure<unknown>('key.json', true, home)!;
+  if (!isAgentKey(key)) {
     throw new CourierError('bad-profile', `Corrupt agent key at ${profilePath('key.json')}`);
   }
   return key;

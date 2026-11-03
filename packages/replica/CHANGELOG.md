@@ -1,5 +1,29 @@
 # @tinycloud/replica
 
+## 0.4.4-beta.0
+
+### Patch Changes
+
+- Updated dependencies [dc48089]
+  - @tinycloud/sdk-services@3.11.0-beta.2
+
+## 0.4.3
+
+### Patch Changes
+
+- 81fe64e: Move the sdk-services pin to the version published with this release (3.8.3) so installs get one copy.
+
+  Details: TC-2263
+  - @tinycloud/sdk-services@3.8.3
+
+## 0.4.3-beta.0
+
+### Patch Changes
+
+- 81fe64e: Move the sdk-services pin to the version published with this release (3.8.3) so installs get one copy.
+
+  Details: TC-2263
+
 ## 0.4.2
 
 ### Patch Changes
