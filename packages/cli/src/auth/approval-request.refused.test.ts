@@ -374,6 +374,7 @@ describe("auth rotate: a failure raised INSIDE the approval fetch (before the re
     expect(await entries()).toEqual([]);
     expect(notices).toHaveLength(1);
     expect(notices[0]).toContain("its key was deleted, so it cannot be used");
+    expect(notices[0]).toContain("Your current login and its key are unchanged.");
     expect(notices[0]).toContain("cannot revoke it");
     expect(JSON.stringify(await ProfileManager.getKey("approval"))).toBe(before.key);
     expect(JSON.stringify(await ProfileManager.getSession("approval"))).toBe(before.session);

@@ -582,6 +582,24 @@ describe("tc auth rotate --paste: the new key is staged in memory, so a refused 
     });
   }
 
+  test("a refused rotation's notice says the current login and its key are unchanged; a refused FRESH login's notice does not", async () => {
+    await signedIn();
+    pickedLifetimeMs = 6 * DAY;
+    tamper = "signature";
+    await runAuth("rotate", "--paste", "--no-popup", "--force");
+    expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_PROOF_INVALID" })]);
+    const notice = text().split("\n").find((line) => line.includes("OpenKey granted this approval"))!;
+    expect(notice).toContain(`${deletedLine()} Your current login and its key are unchanged. This CLI cannot revoke it`);
+    // A fresh login that was refused owns the key it made: nothing of a "current login" to speak of.
+    recordedErrors.length = 0;
+    stderr.length = 0;
+    profileName = `refusal-fresh-${++profileNumber}`;
+    await login("--expiry", "7d");
+    expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_PROOF_INVALID" })]);
+    expectOneNotice("deleted");
+    expect(text()).not.toContain("Your current login");
+  });
+
   test("a refused rotation of a profile whose session is not usable still leaves the old key where it was", async () => {
     pickedLifetimeMs = 6 * DAY;
     await login("--expiry", "7d");
