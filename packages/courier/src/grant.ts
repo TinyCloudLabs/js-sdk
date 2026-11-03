@@ -4,10 +4,10 @@ import { TinyCloudNode, NodeWasmBindings } from '@tinycloud/node-sdk';
 import type { PermissionEntry } from '@tinycloud/node-sdk';
 import { cmd, tcCmd } from './program.js';
 import { CourierError } from './errors.js';
-import { AGENT_GRANT, AGENT_GRANT_EXPIRY, COURIER_SPACE, k } from './keys.js';
+import { AGENT_GRANT, AGENT_GRANT_EXPIRY, COURIER_SPACE } from './keys.js';
 import { loadGrant, loadKey, saveGrant, saveProfile, type AgentKey, type OwnerGrant, type Profile } from './profile.js';
 import { nodeOpts } from './node.js';
-import { listAll } from './store.js';
+import { verifySpaceReady } from './space-probe.js';
 import { assertAgentGrant, CLOCK_SKEW_MS, siweTimes } from './authority.js';
 import { withRefusalNotice } from './grant-refusal.js';
 import { dropAllPending, dropPendingDelegation, dropPendingForCode, newestPending, pendingForCode, savePending } from './pending.js';
@@ -318,16 +318,6 @@ async function restoreVerifiedGrant(profile: Profile, key: AgentKey, payload: Gr
   return { node, expiresAt };
 }
 
-async function verifySpaceReady(node: TinyCloudNode): Promise<boolean> {
-  try {
-    await listAll(node.kv, k.mePrefix);
-    return true;
-  } catch (error) {
-    if (/space not found/i.test(String((error as Error).message))) return false;
-    throw error;
-  }
-}
-
 /** Wait for a hosted space using the existing probe's error semantics. */
 export async function waitForSpaceReady(
   probe: () => Promise<boolean>,
@@ -359,7 +349,7 @@ export function pendingSpaceError(profile: Profile): CourierError {
 export function noSpaceError(profile: Profile): CourierError {
   return new CourierError(
     'no-space',
-    `Your TinyCloud "${COURIER_SPACE}" space is not set up on ${profile.host}, so the approved grant can't be used yet. Courier will not create it. If OpenKey auto-sign didn't host it, sign in once at the Share view (https://share.tinycloud.xyz) or, from a wallet profile, run \`${tcCmd(`space host ${COURIER_SPACE}`)}\`. Then run \`${cmd('init --resume')}\`. No new approval is needed.`,
+    `Your TinyCloud "${COURIER_SPACE}" space is not set up on ${profile.host}, so the approved grant can't be used yet. Courier will not create it. Turn on Auto-Sign in OpenKey and approve the Courier request again, or, from a wallet profile, run \`${tcCmd(`space host ${COURIER_SPACE}`)}\` and then \`${cmd('init --resume')}\`.`,
   );
 }
 
