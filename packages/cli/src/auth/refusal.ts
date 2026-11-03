@@ -58,7 +58,7 @@ export const isMaybeGranted = (error: unknown): boolean => typeof error === "obj
 
 /** The notice when the CLI abandons a request OpenKey MAY have approved: nothing is known of the grant, so nothing is claimed. */
 export function maybeGrantedNotice(rotation: boolean): string {
-  return `OpenKey may already have granted this approval; this CLI did not use it and cannot revoke it; check and revoke at ${REVOKE_URL}.${rotation ? " The key it would belong to was deleted, so it cannot be used. Your current login and its key are unchanged." : ""}`;
+  return `OpenKey may already have granted this approval; this CLI did not use it and cannot revoke it; check and revoke at ${REVOKE_URL}.${rotation ? " The new key was deleted, so it cannot be used. Your current login and its key are unchanged." : ""}`;
 }
 
 export function isPermanentRefusal(error: unknown): error is CLIError {
@@ -86,8 +86,9 @@ export function delegationCidOf(delegation: Record<string, unknown> | undefined)
 
 const approvalText = (until: string | undefined, atLatest = false): string =>
   `OpenKey granted this approval${until === undefined ? "" : ` ${atLatest ? "at the latest until" : "until"} ${until}`}`;
-export const keyDeletedLine = (until?: string, atLatest = false): string =>
-  `${approvalText(until, atLatest)}, but this CLI did not use it and its key was deleted, so it cannot be used. You can also remove it at account.tinycloud.xyz.`;
+// For a rotation the key that was deleted is the NEW one; "its key" would read as the login's key next to "Your current login and its key".
+export const keyDeletedLine = (until?: string, atLatest = false, rotation = false): string =>
+  `${approvalText(until, atLatest)}, but this CLI did not use it and ${rotation ? "the new key" : "its key"} was deleted, so it cannot be used. You can also remove it at account.tinycloud.xyz.`;
 export const keyKeptLine = (until?: string): string =>
   `${approvalText(until)} and the key it belongs to still exists on this device (other grants may use it). Revoke it at account.tinycloud.xyz.`;
 const keyNotDeletedLine = (until: string | undefined, reason: string): string =>
@@ -110,7 +111,7 @@ export function refusalNotice(delegation: Record<string, unknown> | undefined, k
   const revoke = `this CLI cannot revoke it; revoke it at ${REVOKE_URL}.`;
   // For a rotation "its key" is the staged new key; the key and login in use were never touched, and the notice says so.
   const unchanged = rotation ? " Your current login and its key are unchanged." : "";
-  const body = key.kind === "deleted" ? `${keyDeletedLine(until, atLatest)}${unchanged} This CLI cannot revoke it; revoke it at ${REVOKE_URL}.`
+  const body = key.kind === "deleted" ? `${keyDeletedLine(until, atLatest, rotation)}${unchanged} This CLI cannot revoke it; revoke it at ${REVOKE_URL}.`
     : key.kind === "kept" ? `${keyKeptLine(until)}${unchanged} ${live} unless revoked, and ${revoke}`
       : `${keyNotDeletedLine(until, key.reason)}${unchanged} ${live} unless revoked, and ${revoke}`;
   return `${cid === undefined ? "" : `Refused delegation: ${cid}. `}${body}`;

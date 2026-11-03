@@ -193,11 +193,12 @@ const text = () => stderr.join("");
 const lines = (line: string) => text().split("\n").filter((candidate) => candidate === line);
 /** Whole-notice assertions: ONE notice per refusal, naming the CID, saying it cannot be revoked here, and where to revoke it. */
 const noticeCount = () => text().split("\n").filter((line) => line.includes("OpenKey granted this approval")).length;
-function expectOneNotice(kind: "deleted" | "kept", options: { cid?: string; until?: string } = {}): void {
+function expectOneNotice(kind: "deleted" | "kept", options: { cid?: string; until?: string; rotation?: boolean } = {}): void {
   const until = options.until ?? grantedUntil;
   expect(noticeCount()).toBe(1);
   const notice = text().split("\n").find((line) => line.includes("OpenKey granted this approval"))!;
-  expect(notice).toContain(kind === "deleted" ? deletedLine(until) : keptLine(until));
+  // A rotation deletes the NEW key: "its key" would read as the login's key beside "Your current login and its key".
+  expect(notice).toContain(kind === "deleted" ? (options.rotation ? deletedLine(until).replace("its key was deleted", "the new key was deleted") : deletedLine(until)) : keptLine(until));
   expect(notice).toContain("cannot revoke it");
   expect(notice).toContain(REVOKE_URL);
   const cid = options.cid ?? grantedCid;
@@ -578,7 +579,7 @@ describe("tc auth rotate --paste: the new key is staged in memory, so a refused 
       expect(JSON.stringify(await ProfileManager.getKey(profileName))).toBe(before.key);
       expect(JSON.stringify(await ProfileManager.getSession(profileName))).toBe(before.session);
       expect(JSON.stringify(await ProfileManager.getProfile(profileName))).toBe(before.profile);
-      expectOneNotice("deleted");
+      expectOneNotice("deleted", { rotation: true });
     });
   }
 
