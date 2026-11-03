@@ -10,10 +10,10 @@
 // (it also saves the redeemed code's local copy, as the real paste flow does when the key it is bound to is stored).
 
 import { afterAll, afterEach, beforeEach, describe, expect, mock, setSystemTime, spyOn, test } from "bun:test";
-import { existsSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { existsSync, readdirSync } from "node:fs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Command } from "commander";
 import { NodeWasmBindings, PrivateKeySigner } from "@tinycloud/node-sdk";
 
@@ -36,6 +36,8 @@ const address = await signer.getAddress();
 const otherSigner = new PrivateKeySigner("1111111111111111111111111111111111111111111111111111111111111111");
 const OTHER_ADDRESS = "0x000000000000000000000000000000000000dEaD";
 let signedByOther = false;
+/** Another tool puts a file of its own into the profile directory while the owner is approving. */
+let foreignFileDuringAcquisition = false;
 const OWNER_DID = `did:pkh:eip155:1:${address}`;
 /** A statement that begins with its own `Expiration Time: ` line (the real line follows the statement). */
 const injectExpiryLine = (siwe: string): string => {
@@ -102,6 +104,7 @@ const acquisitionFlow = async (did: string, options: Record<string, unknown>) =>
     savedPendingCopies += 1;
   }
   if (replaceKeyAfterRedeem !== undefined) await ProfileManager.setKey(options.profileName as string, replaceKeyAfterRedeem);
+  if (foreignFileDuringAcquisition) await writeFile(join(profilePath(profileName), "notes-from-another-tool.txt"), "keep me");
   if (clockBehindMs > 0) setSystemTime(new Date(Date.now() - clockBehindMs));
   return delegation;
 };
@@ -164,6 +167,7 @@ beforeEach(async () => {
   tamper = "none";
   clockBehindMs = 0;
   signedByOther = false;
+  foreignFileDuringAcquisition = false;
   replaceKeyDuringAcquisition = undefined;
   replaceKeyAfterRedeem = undefined;
   signRequest = false;
@@ -291,6 +295,66 @@ describe("tc init --paste: the profile and its key were created by this command,
     expect(await ProfileManager.profileExists(profileName)).toBe(false);
     expectOneNotice("deleted");
     expect((await ProfileManager.getConfig()).defaultProfile).toBe("default");
+  });
+});
+
+describe("a profile this command created and removed leaves no directory and no listing", () => {
+  const gone = async (name: string) => {
+    expect(existsSync(profilePath(name)) ? readdirSync(profilePath(name)) : "no directory").toBe("no directory");
+    expect(readdirSync(dirname(profilePath(name)))).not.toContain(name);
+    expect(await ProfileManager.profileExists(name)).toBe(false);
+  };
+
+  test("auth login --paste, refused: the profile directory is gone and it is not listed", async () => {
+    pickedLifetimeMs = 7 * DAY;
+    tamper = "signature";
+    await login("--expiry", "7d");
+    expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_PROOF_INVALID" })]);
+    await gone(profileName);
+  });
+
+  test("init --paste, refused: same", async () => {
+    pickedLifetimeMs = 7 * DAY;
+    tamper = "signature";
+    const program = new Command();
+    program.option("-p, --profile <name>");
+    registerInitCommand(program);
+    await capturing(() => program.parseAsync(["node", "tc", "init", "--name", profileName, "--host", HOST, "--paste"], { from: "node" }));
+    expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_PROOF_INVALID" })]);
+    await gone(profileName);
+  });
+
+  test("onboard, refused: same", async () => {
+    pickedLifetimeMs = 7 * DAY;
+    tamper = "signature";
+    const program = new Command();
+    program.option("-p, --profile <name>");
+    registerOnboardCommand(program);
+    await capturing(() => program.parseAsync(["node", "tc", "--profile", profileName, "onboard"], { from: "node" }));
+    expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_PROOF_INVALID" })]);
+    await gone(profileName);
+  });
+
+  test("a profile that already existed (init --key-only, then a refused login) is NOT touched: directory, key and listing stay", async () => {
+    await createKeyOnlyProfile(profileName, HOST);
+    pickedLifetimeMs = 7 * DAY;
+    tamper = "signature";
+    await login("--expiry", "7d");
+    expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_PROOF_INVALID" })]);
+    expect(existsSync(profilePath(profileName))).toBe(true);
+    expect(readdirSync(dirname(profilePath(profileName)))).toContain(profileName);
+    expect(await ProfileManager.profileExists(profileName)).toBe(true);
+    expect(files(profileName)).toMatchObject({ key: true });
+  });
+
+  test("a directory another tool put a file into meanwhile is left alone: only an empty directory is removed", async () => {
+    pickedLifetimeMs = 7 * DAY;
+    tamper = "signature";
+    foreignFileDuringAcquisition = true;
+    await login("--expiry", "7d");
+    expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_PROOF_INVALID" })]);
+    expect(files(profileName)).toEqual({ key: false, pending: false, session: false });
+    expect(readdirSync(profilePath(profileName)).filter((entry) => !entry.startsWith("."))).toEqual(["notes-from-another-tool.txt"]);
   });
 });
 
