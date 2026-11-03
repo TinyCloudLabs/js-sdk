@@ -134,3 +134,11 @@ export function parsePrefix(prefix: string): { layout: Layout; app?: string; dis
   if (rest.length > 2 || !kindName(first!) || (second !== undefined && !NAME.test(second))) return undefined;
   return { layout: "new", app: where.app! };
 }
+
+/** Where a legacy catalog or record key of `app` goes in the new layout (the same mapping as the skill's `migrate.sh`). */
+export function moveKey(app: string, legacyKey: string): string {
+  const catalog = catalogKey("legacy", app);
+  if (legacyKey === catalog) return catalogKey("new", app);
+  if (legacyKey.startsWith(`${catalog}/`)) return `${catalogKey("new", app)}/${legacyKey.slice(catalog.length + 1)}`;
+  return `${appRoot(app)}${legacyKey.slice(`${TC_APPS_LEGACY_ROOT}${app}/`.length)}`;
+}

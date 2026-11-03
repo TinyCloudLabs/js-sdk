@@ -9,6 +9,7 @@ export const TC_APPS_COPY_ACTIONS = ["tinycloud.sql/read", "tinycloud.sql/write"
 /** What one stored or requested permission entry is, when it is one of the connector's own. */
 export type TcAppsPermissionKind =
   | { kind: "legacy-records" }
+  | { kind: "legacy-read" }
   | { kind: "legacy-catalog-read" }
   | { kind: "legacy-copy" }
   | { kind: "app-records"; app: string }
@@ -26,6 +27,7 @@ export function tcAppsPermissionKind(permission: unknown): TcAppsPermissionKind 
   const inside = (allowed: readonly string[]) => (entry.actions as unknown[]).every((action: unknown) => typeof action === "string" && allowed.includes(action));
   const path = entry.path;
   if (entry.service === "tinycloud.kv" && space === "default") {
+    if (path === TC_APPS_LEGACY_ROOT && inside(TC_APPS_CATALOG_READ_ACTIONS)) return { kind: "legacy-read" };
     if (path === TC_APPS_LEGACY_ROOT && inside(TC_APPS_RECORDS_ACTIONS)) return { kind: "legacy-records" };
     if (path === `${TC_APPS_LEGACY_ROOT}catalog/` && inside(TC_APPS_CATALOG_READ_ACTIONS)) return { kind: "legacy-catalog-read" };
   }
@@ -49,9 +51,10 @@ const LEGACY_RECORDS_REASON = "Lets Claude keep your personal records in your Ti
 const LEGACY_CATALOG_REASON = "Lets Claude read, but not change, the list of your older apps in your TinyCloud default space (xyz.tinycloud.agent-data/catalog/), so it keeps an app where it already is.";
 const LEGACY_COPY_REASON = "Lets Claude keep a fast, searchable copy of those records (database xyz.tinycloud.agent-data.index) for 30 days.";
 const DISCOVERY_REASON = "Lets Claude list your apps and add or change entries in your app list in your TinyCloud applications space (keys under xyz.tinycloud.tinyapps.catalog/), for 30 days.";
+const LEGACY_READ_REASON = "Lets Claude read, but not change or delete, your older records in your TinyCloud default space (keys under xyz.tinycloud.agent-data/), so it can copy an app you ask it to move into its new folder. Nothing in your default space is changed or deleted. 30 days.";
 const named = (apps: readonly string[]) => apps.join(", ");
 
-interface Approval { legacyRecords: boolean; legacyCatalog: boolean; legacyCopy: boolean; discovery: boolean; records: string[]; copies: string[]; bundle: "change" | "read" | undefined }
+interface Approval { legacyRecords: boolean; legacyRead: boolean; legacyCatalog: boolean; legacyCopy: boolean; discovery: boolean; records: string[]; copies: string[]; bundle: "change" | "read" | undefined }
 
 function approval(permissions: readonly unknown[]): Approval | undefined {
   const kinds = permissions.map(tcAppsPermissionKind);
@@ -66,7 +69,7 @@ function approval(permissions: readonly unknown[]): Approval | undefined {
     ? writes(listAt) && writes(folderAt) ? "change" : !writes(listAt) && !writes(folderAt) ? "read" : undefined
     : undefined;
   return {
-    legacyRecords: has("legacy-records"), legacyCatalog: has("legacy-catalog-read"), legacyCopy: has("legacy-copy"),
+    legacyRecords: has("legacy-records"), legacyRead: has("legacy-read"), legacyCatalog: has("legacy-catalog-read"), legacyCopy: has("legacy-copy"),
     discovery: has("discovery"), records: apps("app-records"), copies: apps("app-copy"), bundle,
   };
 }
@@ -88,9 +91,10 @@ export function tcAppsApprovalReason(permissions: readonly unknown[]): string | 
   }
   return [
     kinds.legacyRecords ? LEGACY_RECORDS_REASON : undefined,
+    kinds.legacyRead && !kinds.legacyRecords ? LEGACY_READ_REASON : undefined,
     kinds.records.length > 0 ? recordsReason(kinds.records) : undefined,
     kinds.discovery ? DISCOVERY_REASON : undefined,
-    kinds.legacyCatalog && !kinds.legacyRecords ? LEGACY_CATALOG_REASON : undefined,
+    kinds.legacyCatalog && !kinds.legacyRecords && !kinds.legacyRead ? LEGACY_CATALOG_REASON : undefined,
     kinds.legacyCopy ? LEGACY_COPY_REASON : undefined,
     kinds.copies.length > 0 ? copyReason(kinds.copies) : undefined,
   ].filter(Boolean).join(" ");
@@ -104,9 +108,10 @@ export function tcAppsApprovalMessage(permissions: readonly unknown[]): string |
   }
   const records: string[] = [];
   if (kinds.legacyRecords) records.push("your records under xyz.tinycloud.agent-data/");
+  if (kinds.legacyRead && !kinds.legacyRecords) records.push("a read-only look at your older records under xyz.tinycloud.agent-data/, to copy one app into its new folder");
   if (kinds.records.length > 0) records.push(`your records for ${named(kinds.records)} under ${kinds.records.map((app) => appRoot(app)).join(", ")}`);
   if (kinds.discovery) records.push("your app list under xyz.tinycloud.tinyapps.catalog/");
-  if (kinds.legacyCatalog && !kinds.legacyRecords) records.push("a read-only look at your older app list under xyz.tinycloud.agent-data/catalog/");
+  if (kinds.legacyCatalog && !kinds.legacyRecords && !kinds.legacyRead) records.push("a read-only look at your older app list under xyz.tinycloud.agent-data/catalog/");
   const copies = [...(kinds.legacyCopy ? [TC_APPS_LEGACY_DATABASE] : []), ...kinds.copies.map((app) => `${appRoot(app)}index`)];
   return [
     records.length > 0 ? `Open the approval link and approve the request on OpenKey. It lets Claude keep ${records.join(" and ")} for 30 days. I'll carry on after you approve.` : undefined,

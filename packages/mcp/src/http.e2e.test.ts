@@ -82,7 +82,7 @@ test("official Streamable HTTP client authenticates and starts delegated setup",
   resources.push(() => client.close());
 
   const tools = await client.listTools();
-  // Restores the hosted count pin removed in #826 and covers its actual 24-tool matrix.
+  // Restores the hosted count pin removed in #826 and covers its actual 25-tool matrix.
   // Tuple order: name, readOnlyHint, destructiveHint, idempotentHint, openWorldHint.
   expect(tools.tools.map(({ name, annotations }) => [
     name, annotations?.readOnlyHint, annotations?.destructiveHint,
@@ -115,8 +115,10 @@ test("official Streamable HTTP client authenticates and starts delegated setup",
     // Changing these hints must be a deliberate decision that also updates this test.
     // Only TC-2416 is expected to revise this row under its own test ruling: read-only/non-destructive hints and read+write effects for the rebuildable derived copy.
     ["tinycloud_apps_query", false, true, true, false],
+    ["tinycloud_apps_move", false, false, true, false],
     ["tinycloud_connect", false, false, true, false],
   ]);
+  expect(tools.tools).toHaveLength(25);
   expect(tools.tools.map((tool) => tool.name)).toContain("tinycloud_connect");
   // TC-834 scopes secrets status to local/stdio; hosted lacks a persistent
   // reauthorization path for a server-revoked session (TC-896).
@@ -1340,6 +1342,77 @@ test(`${resourcePath} apps approvals ${namedApp ? "bundled" : "per-call"} persis
 }, 60_000);
 }
 }
+
+test("an older app is moved into the new layout through the hosted tools, and both layouts then agree", async () => {
+  const hermeticModule = await import(new URL(
+    "../../node-sdk/src/test-support/hermetic-encrypted-node.ts", import.meta.url,
+  ).href) as { createHermeticEncryptedNode(): Promise<HermeticNode> };
+  const hermetic = await hermeticModule.createHermeticEncryptedNode();
+  resources.push(async () => hermetic.stop());
+  hermetic.provisionKvSpace(await ownerSpace(hermetic.ownerPrivateKey, "default"));
+  hermetic.provisionKvSpace(await ownerSpace(hermetic.ownerPrivateKey, "applications"));
+  const { app, client, stateDir } = await startHostedMcp({ nodeHost: hermetic.host, ownerDids: [hermetic.ownerDid] });
+  const first = record((await client.callTool({ name: "tinycloud_apps_context", arguments: {} })).structuredContent);
+  const bootstrapUrl = String(record(record(first.error).details).approvalUrl);
+  const [tenantId] = await readdir(join(stateDir, "tenants"));
+  const tenantStateRoot = join(stateDir, "tenants", tenantId!);
+  const bootstrap = await openKeyApprovalBody({
+    redirect: await openKeyRedirect(app, bootstrapUrl), tenantStateRoot, privateKey: hermetic.ownerPrivateKey,
+  });
+  await activateOnNode(hermetic.host, bootstrap);
+  expect(await postCallback(app, bootstrapUrl, bootstrap)).toEqual({ status: 200, body: { success: true } });
+  // OpenKey signs one space per delegation, so a call that needs scopes in two spaces is approved in rounds.
+  const approved = async (name: string, args: Record<string, unknown>) => {
+    for (let round = 0; round < 4; round++) {
+      const result = record((await client.callTool({ name, arguments: args })).structuredContent);
+      if (result.status !== "authority_required") return result;
+      const url = String(record(result.approval).url);
+      const body = await openKeyApprovalBody({
+        redirect: await openKeyRedirect(app, url), tenantStateRoot, privateKey: hermetic.ownerPrivateKey,
+      });
+      expect(await postCallback(app, url, body)).toEqual({ status: 200, body: { success: true } });
+    }
+    throw new Error(`${name} kept asking for approval.`);
+  };
+  await approved("tinycloud_apps_context", { timezone: "Europe/Berlin" });
+
+  const legacy = "xyz.tinycloud.agent-data/";
+  const oldKey = `${legacy}fitness/weight/2026-10/2026-10-14`;
+  const created = await approved("tinycloud_apps_write", { ops: [
+    { op: "put", key: `${legacy}catalog/fitness`, value: { app: "fitness", title: "Fitness", about: "Body", created: "2026-10-14" } },
+    { op: "put", key: `${legacy}catalog/fitness/weight`, value: {
+      app: "fitness", kind: "weight", about: "Daily weight", shape: "log", per: "day", v: 1, fields: { kg: "number" }, created: "2026-10-14",
+    } },
+    { op: "put", key: oldKey, value: { at: "2026-10-14T09:00", data: { kg: 80.5 } } },
+  ] });
+  expect(created).toMatchObject({ status: "ok", output: { ops: [{ outcome: "ok" }, { outcome: "ok" }, { outcome: "ok" }] } });
+  expect(await approved("tinycloud_apps_context", {})).toMatchObject({
+    status: "ok", output: { legacy: "listed", apps: [{ app: "fitness", layout: "legacy" }] },
+  });
+
+  expect(await approved("tinycloud_apps_move", { app: "fitness", dryRun: true })).toMatchObject({
+    status: "ok", output: { status: "dry_run", total: 3, catalog: 2, kinds: [{ kind: "weight", count: 1 }] },
+  });
+  expect(await approved("tinycloud_apps_move", { app: "fitness", dryRun: false })).toMatchObject({
+    status: "ok", output: { status: "moved", total: 3, catalog: 2 },
+  });
+  expect(await approved("tinycloud_apps_move", { app: "fitness", dryRun: false })).toMatchObject({
+    status: "ok", output: { status: "already_moved" },
+  });
+
+  const root = "xyz.tinycloud.tinyapps.fitness/";
+  expect(await approved("tinycloud_apps_context", {})).toMatchObject({
+    status: "ok", output: { apps: [{ app: "fitness", layout: "new", title: "Fitness" }] },
+  });
+  const read = await approved("tinycloud_apps_read", { keys: [`${root}weight/2026-10/2026-10-14`, `${root}catalog/weight`] });
+  expect(read).toMatchObject({ status: "ok", output: { records: [
+    { value: { data: { kg: 80.5 }, by: "tinycloud-mcp" } }, { value: { kind: "weight" } },
+  ] } });
+  // The older root is refused for the moved app, for reads and writes alike (its records stay in place, untouched).
+  expect(await approved("tinycloud_apps_read", { keys: [oldKey] })).toMatchObject({ status: "error", error: { code: "INPUT_INVALID" } });
+  expect(await approved("tinycloud_apps_write", { ops: [{ op: "put", key: `${legacy}fitness/weight/2026-10/2026-10-15`, value: { data: { kg: 80 } } }] }))
+    .toMatchObject({ status: "ok", output: { ops: [{ outcome: "INVALID" }] } });
+}, 90_000);
 
 test("a refused delegation approval names its stage, code and reason, and never echoes the approval", async () => {
   // The loopback node is outside this package's build graph, as above.
