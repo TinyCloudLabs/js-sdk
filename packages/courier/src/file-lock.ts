@@ -135,58 +135,47 @@ function pidNamespace(): string | undefined {
 /** How identity is read: injectable so every platform's branch is testable on one machine. */
 export interface IdentityIo {
   platform: NodeJS.Platform;
+  systemRoot?: string;
   readFile(file: string): string | undefined;
   exec(command: string, args: string[]): string | undefined;
-  now(): number;
-  uptime(): number;
 }
 
 const realIo: IdentityIo = {
   platform: process.platform,
+  ...(process.env.SystemRoot === undefined ? {} : { systemRoot: process.env.SystemRoot }),
   readFile: (file) => { try { return fs.readFileSync(file, 'utf8'); } catch { return undefined; } },
   exec: (command, args) => { try { return execFileSync(command, args, { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true }); } catch { return undefined; } },
-  now: () => Date.now(),
-  uptime: () => os.uptime(),
 };
 
 const firstLine = (text: string | undefined): string | undefined => text?.trim().split(/\r?\n/)[0]?.trim() || undefined;
 
 /**
- * The machine and the boot this process runs on. Linux: /etc/machine-id and the kernel boot id. macOS: IOPlatformUUID (ioreg) and
- * kern.boottime (sysctl). Windows: MachineGuid (registry) and the last boot time. Where the boot cannot be read, a boot time derived
- * from uptime and rounded to the second (`up:<epoch seconds>`). A machine identity that cannot be read stays absent: records are then never judged.
+ * The machine and the boot this process runs on. `boot` is a true per-boot identifier or absent, and is prefixed with the platform that
+ * produced it so two kinds are never compared. Linux: /etc/machine-id and the kernel boot id. macOS: IOPlatformUUID (`/usr/sbin/ioreg`) and
+ * kern.bootsessionuuid (`/usr/sbin/sysctl`). Windows: MachineGuid (`%SystemRoot%\\System32\\reg.exe`); Windows has no per-boot identifier
+ * verified to be stable, so it has none. Wall-clock values (`kern.boottime`, LastBootUpTime, uptime) are never used: they jitter and shift
+ * with the clock, and a lock must not be called dead on a clock difference. An identity that cannot be read stays absent: records are then not judged.
  */
 export function machineIdentity(io: IdentityIo = realIo): { machine?: string; boot?: string } {
   let machine: string | undefined;
   let boot: string | undefined;
   if (io.platform === 'linux') {
     machine = firstLine(io.readFile('/etc/machine-id')) ?? firstLine(io.readFile('/var/lib/dbus/machine-id'));
-    boot = firstLine(io.readFile('/proc/sys/kernel/random/boot_id'));
+    const id = firstLine(io.readFile('/proc/sys/kernel/random/boot_id'));
+    if (id) boot = `linux:${id}`;
   } else if (io.platform === 'darwin') {
-    machine = /"IOPlatformUUID"\s*=\s*"([^"]+)"/.exec(io.exec('ioreg', ['-rd1', '-c', 'IOPlatformExpertDevice']) ?? '')?.[1];
-    const sec = /sec\s*=\s*(\d+)/.exec(io.exec('sysctl', ['-n', 'kern.boottime']) ?? '')?.[1];
-    if (sec) boot = `boot:${sec}`;
+    machine = /"IOPlatformUUID"\s*=\s*"([^"]+)"/.exec(io.exec('/usr/sbin/ioreg', ['-rd1', '-c', 'IOPlatformExpertDevice']) ?? '')?.[1];
+    const id = firstLine(io.exec('/usr/sbin/sysctl', ['-n', 'kern.bootsessionuuid']));
+    if (id) boot = `macos:${id}`;
   } else if (io.platform === 'win32') {
-    machine = /MachineGuid\s+REG_SZ\s+(\S+)/.exec(io.exec('reg', ['query', 'HKLM\\SOFTWARE\\Microsoft\\Cryptography', '/v', 'MachineGuid']) ?? '')?.[1];
-    const last = firstLine(io.exec('powershell', ['-NoProfile', '-NonInteractive', '-Command', '(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().ToString(\'o\')']));
-    if (last) boot = `boot:${last}`;
+    const reg = `${io.systemRoot ?? 'C:\\Windows'}\\System32\\reg.exe`;
+    machine = /MachineGuid\s+REG_SZ\s+(\S+)/.exec(io.exec(reg, ['query', 'HKLM\\SOFTWARE\\Microsoft\\Cryptography', '/v', 'MachineGuid']) ?? '')?.[1];
   }
-  boot ??= `up:${Math.round((io.now() - io.uptime() * 1000) / 1000)}`;
-  return { ...(machine === undefined ? {} : { machine }), boot };
+  return { ...(machine === undefined ? {} : { machine }), ...(boot === undefined ? {} : { boot }) };
 }
 
 let cachedIdentity: { machine?: string; boot?: string } | undefined;
 const currentIdentity = (): { machine?: string; boot?: string } => (cachedIdentity ??= machineIdentity());
-
-/** Boot ids from one reader match exactly; two uptime-derived boot times match within two minutes of clock drift; different kinds are not comparable. */
-function compareBoot(recorded: string, current: string): 'same' | 'different' | 'unknown' {
-  const fallback = [recorded, current].map((boot) => boot.startsWith('up:'));
-  if (fallback[0] !== fallback[1]) return 'unknown';
-  if (!fallback[0]) return recorded === current ? 'same' : 'different';
-  const [a, b] = [recorded, current].map((boot) => Number(boot.slice(3)));
-  if (!Number.isFinite(a) || !Number.isFinite(b)) return 'unknown';
-  return Math.abs((a as number) - (b as number)) <= 120 ? 'same' : 'different';
-}
 
 /** What this process records about itself: enough to recognize it later, and to tell another machine's, boot's or pid namespace's records apart. */
 function identity(pid: number, here: { machine?: string; boot?: string }): Pick<LockRecord, 'start' | 'host' | 'pidns' | 'machine' | 'boot'> {
@@ -201,18 +190,20 @@ function identity(pid: number, here: { machine?: string; boot?: string }): Pick<
 export type Liveness = 'alive' | 'dead' | 'unknown';
 
 /**
- * Whether the process that wrote `record` still runs. A record is judged only against the machine that wrote it (same machine-id): another
- * machine's pid, or a record with no machine and boot identity (an old pid-only lock), or a machine identity this process cannot read, is
- * `unknown` and never broken. On the same machine, a different boot means the holder is gone (no process survives a reboot): `dead`.
- * In the same boot, `dead` only when the pid is gone, has exited (a zombie), or now belongs to a process that started at a different
- * time; a pid namespace or host that differs is `unknown`, and so is a live pid whose start time cannot be compared.
+ * Whether the process that wrote `record` still runs. Order: (1) the record must name this machine (machine-id) AND this host, else
+ * `unknown`: another machine, a cloned machine-id, a renamed host, an old pid-only record, or an identity this process cannot read is
+ * never judged. (2) Two true boot ids of the same kind that differ prove a reboot: `dead`. Wall-clock boot values never decide. (3) Otherwise
+ * only positive evidence about the pid counts: gone (`ESRCH`), exited (a zombie, Linux), or a different process start time (Linux, where
+ * /proc gives one). A pid namespace that differs is `unknown`. A live pid that cannot be told from a reused one (no start time to compare,
+ * every platform but Linux) is `unknown`, never `dead`.
  */
 export function recordLiveness(record: LockRecord, here: { machine?: string; boot?: string } = currentIdentity()): Liveness {
-  if (record.machine === undefined || record.boot === undefined || here.machine === undefined || here.boot === undefined || record.machine !== here.machine) return 'unknown';
-  const boot = compareBoot(record.boot, here.boot);
-  if (boot === 'unknown') return 'unknown';
-  if (boot === 'different') return 'dead';
-  if (record.host !== undefined && record.host !== os.hostname()) return 'unknown';
+  if (record.machine === undefined || here.machine === undefined || record.machine !== here.machine) return 'unknown';
+  if (record.host === undefined || record.host !== os.hostname()) return 'unknown';
+  if (record.boot !== undefined && here.boot !== undefined) {
+    const [kindA, kindB] = [record.boot.split(':', 1)[0], here.boot.split(':', 1)[0]];
+    if ((kindA === 'linux' || kindA === 'macos') && kindA === kindB && record.boot !== here.boot) return 'dead';
+  }
   if (record.pidns !== undefined && record.pidns !== pidNamespace()) return 'unknown';
   try {
     process.kill(record.pid, 0);
@@ -222,8 +213,7 @@ export function recordLiveness(record: LockRecord, here: { machine?: string; boo
   }
   const info = procInfo(record.pid);
   if (info?.state === 'Z' || info?.state === 'X') return 'dead'; // exited, only not yet reaped
-  if (record.start === undefined) return 'alive';
-  if (info?.start === undefined) return 'unknown';
+  if (record.start === undefined || info?.start === undefined) return 'unknown';
   return info.start === record.start ? 'alive' : 'dead';
 }
 
@@ -254,18 +244,19 @@ export interface LockOptions {
 /** Guard slots per dead lock. The bound stops a corrupt directory from looping forever. */
 const MAX_BREAK_GUARDS = 8;
 
-const shellQuote = (text: string): string => `'${text.replace(/'/g, `'\\''`)}'`;
-
 /** The one line a refused lock prints: what holds it, and the only safe way out. The lock itself is never removed on doubt. */
-export function lockRefusal({ file, reason, pid, host, record }: LockRefusal): string {
-  const holder = pid === undefined ? 'a holder that cannot be read' : `pid ${pid}${host === undefined ? '' : ` on host ${host}`}`;
+export function lockRefusal({ file, reason, pid, host, record }: LockRefusal, platform: NodeJS.Platform = process.platform): string {
+  // Text from a lock record is data, not words: JSON-quoted so a hostile host name cannot add lines or terminal escapes.
+  const holder = pid === undefined ? 'a holder that cannot be read' : `pid ${pid}${host === undefined ? '' : ` on host ${JSON.stringify(host)}`}`;
   const why = reason === 'alive' ? `is held by a running Courier command (${holder})`
     : reason === 'corrupt' ? 'has a record Courier cannot read'
       : reason === 'unknown' ? `is held by ${holder}, and Courier cannot tell whether that process is still running`
         : `is held by ${holder}, and another Courier command is already working on clearing it`;
-  return `${file} ${why}${record === undefined ? '' : ` (record ${record})`}; the lock was left in place. Try again; only after confirming no Courier command is running anywhere that uses this lock, clear it with: rm -f -- ${shellQuote(file)}`;
+  const remove = platform === 'win32'
+    ? `Remove-Item -LiteralPath '${file.replace(/'/g, "''")}' -Force` // PowerShell: single quotes are literal, a quote is doubled
+    : `rm -f -- '${file.replace(/'/g, `'\\''`)}'`;
+  return `${file} ${why}${record === undefined ? '' : ` (record ${record})`}; the lock was left in place. Try again; only after confirming no Courier command is running anywhere that uses this lock, clear it with: ${remove}`;
 }
-
 
 /**
  * Takes the lock `file`. A live or unknowable holder always refuses, however old its file is; only a holder that is established dead
