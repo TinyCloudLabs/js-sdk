@@ -219,7 +219,7 @@ import {
 import { RequestLog, observeReplicaReads, readOnlyRequestLog } from "@tinycloud/sdk-services/telemetry/requestLog";
 import { parseEncryptionResource } from "@tinycloud/sdk-services/encryption/resource";
 import type { NamedKeyClient } from "./encryption-keys";
-import { NodeUserAuthorization, type PreparedOpenKeyAuthorization } from "./authorization/NodeUserAuthorization";
+import { NodeUserAuthorization, type PreparedOpenKeyAuthorization, type SpaceHosting } from "./authorization/NodeUserAuthorization";
 import { refuseCaveated } from "./authorization/caveatRefusal";
 import type { SignStrategy } from "./authorization/strategies";
 import { AccountService } from "./account/AccountService";
@@ -1096,6 +1096,7 @@ interface RuntimePermissionOperation {
   caveats?: Record<string, unknown>[];
 }
 
+
 /**
  * The parent `delegateTo` would sign under (TC-858 §4.3): the session's own
  * delegation CID on the session path, or the selected runtime grant's
@@ -1436,6 +1437,9 @@ export class TinyCloudNode {
    */
   private readonly confirmedHostedSpaceIds = new Set<string>();
 
+  /** The primary space's hosting answer when no authorization layer holds it (a session-only restore). */
+  private _restoredSpaceHosting: SpaceHosting = "unknown";
+
   /**
    * Owned space ids known to be hosted for the current session: the sign-in
    * activation listed them as `activated`, or this session hosted them. Unlike
@@ -1694,6 +1698,95 @@ export class TinyCloudNode {
         { cause: error instanceof Error ? error : undefined },
       ));
     }
+  }
+
+  /**
+   * Whether the TinyCloud node hosts the primary space (the default) or a named
+   * or full-id space: `"hosted"`, `"not-hosted"`, or `"unknown"` when the node
+   * cannot say.
+   *
+   * Sends one authorized read the session already holds on that space (a kv
+   * list under a granted prefix, else kv metadata, `tinycloud.space/info`, or
+   * a kv get of a key that does not exist), signed for that space. A session
+   * with no such read sends nothing and answers `unknown`. A 401/403 registers
+   * the session delegation with the node once and asks again once. Network
+   * failures, 5xx and a 5 s timeout answer `unknown`; this never throws.
+   *
+   * `hosted` is remembered for the session and `not-hosted` never is. The
+   * answer for the primary space is also what {@link spaceHosting} reports; a
+   * `unknown` answer leaves the previous one in place.
+   */
+  async checkSpaceHosting(space?: string): Promise<SpaceHosting> {
+    try {
+      return await this.probeSpaceHosting(space);
+    } catch {
+      return "unknown";
+    }
+  }
+
+  /**
+   * The node's last answer for the primary space: recorded at sign-in from the
+   * activation, or by {@link checkSpaceHosting}. `unknown` after a restore until
+   * something asks.
+   */
+  get spaceHosting(): SpaceHosting {
+    return this.auth ? this.auth.spaceHosting : this._restoredSpaceHosting;
+  }
+
+  private async probeSpaceHosting(space: string | undefined): Promise<SpaceHosting> {
+    const context = this._serviceContext;
+    const session = context?.session;
+    const host = context?.hosts[0];
+    if (!context || !session || !host) {
+      return "unknown";
+    }
+    const spaceId = space === undefined
+      ? session.spaceId
+      : space.startsWith("tinycloud:") ? space : this.ownedSpaceId(space);
+    const graph = this._serviceGraph;
+    const epoch = this.sessionEpoch;
+    // A probe belongs to the session it started under (the same guards sign-in and restore use): once that
+    // session's graph retires or another session is installed, it neither signs, registers nor reports anything.
+    const assertCurrent = () => {
+      graph.assertActive();
+      if (epoch !== this.sessionEpoch || graph !== this._serviceGraph || this._serviceContext !== context) {
+        throw new Error("The session changed during the hosting check.");
+      }
+    };
+    // Not a static import on purpose: web-sdk's root size budget has no room for the probe, so bundlers ship it as its own file.
+    const { askSpaceHosting } = await import("./space-hosting.js");
+    assertCurrent();
+    this.pruneExpiredRuntimePermissionGrants();
+    // The recap counts even when sign-in dropped it from the runtime grants because the node had not hosted the
+    // space yet: that is the read that says when it has.
+    const primary = this.currentTinyCloudSession();
+    const answer = await askSpaceHosting({
+      spaceId,
+      operations: [
+        ...this.runtimePermissionGrants.flatMap((grant) => grant.operations),
+        ...(primary ? this.recapOperationsFromSession(primary) : []),
+      ],
+      covers: (granted, requested) => this.operationCovers(granted, requested),
+      scope: context,
+      host,
+      fetch: unrecordedFetchOf(context),
+      sign: (entries) => {
+        assertCurrent();
+        return graph.invokeAny({ ...session, spaceId }, entries);
+      },
+      // A session saved but never registered on this node is refused: it registers once.
+      activate: (signal) => {
+        assertCurrent();
+        return activateSessionWithHost(host, session.delegationHeader, AbortSignal.any([signal, graph.signal]));
+      },
+    });
+    // A session replaced while the read was in flight owns neither answer.
+    assertCurrent();
+    if (answer !== "unknown" && this.spaceIdsEqual(spaceId, session.spaceId)) {
+      if (this.auth) this.auth.noteSpaceHosting(answer);
+      else this._restoredSpaceHosting = answer;
+    }
+    return answer;
   }
 
   private get nodeFeatures(): string[] {
@@ -2492,6 +2585,7 @@ export class TinyCloudNode {
     this._spaceService = undefined;
     this.runtimePermissionGrants = [];
     this._recapOperationsCache = undefined;
+    this._restoredSpaceHosting = "unknown";
     this.confirmedHostedSpaceIds.clear();
     this.hostedOwnedSpaceIds.clear();
     this.cancelOwnedSpaceHosts();
@@ -2745,6 +2839,12 @@ export class TinyCloudNode {
     const primarySession = this.currentTinyCloudSession();
     if (primarySession) {
       this.registerPrimarySessionGrant(primarySession);
+      // The activation says nothing about the primary space when both of its
+      // lists are empty: ask the node with a read the session holds.
+      if (this.auth?.spaceHosting === "unknown") {
+        await this.checkSpaceHosting();
+        this.assertSessionEpoch(epoch, "Sign-in");
+      }
     }
 
     const bootstrapped = await this.bootstrapAccountIfNeeded();
@@ -4460,6 +4560,7 @@ export class TinyCloudNode {
     this.tc = stagedGraph.core;
     this._recapOperationsCache = stagedPrimary.cache;
     this.runtimePermissionGrants = stagedPrimary.grants;
+    this._restoredSpaceHosting = "unknown";
     this.confirmedHostedSpaceIds.clear();
     this.hostedOwnedSpaceIds.clear();
     this.cancelOwnedSpaceHosts();

@@ -147,6 +147,12 @@ function describeHostFailure(result: SpaceHostResult): string {
   return text ? `${result.status} - ${text}` : `${result.status}`;
 }
 
+/**
+ * What the TinyCloud node says about whether a space is hosted. `unknown` means
+ * no authorized read has answered yet (or the last one could not), never "hosted".
+ */
+export type SpaceHosting = "hosted" | "not-hosted" | "unknown";
+
 type JsonValue =
   | null
   | boolean
@@ -475,6 +481,8 @@ export class NodeUserAuthorization implements IUserAuthorization {
    * delegation lists them: the node answers a repeat with empty lists.
    */
   private _lastActivationActivatedSpaceIds: string[] = [];
+  /** See {@link spaceHosting}. Written only from node answers. */
+  private _spaceHosting: SpaceHosting = "unknown";
 
   constructor(config: NodeUserAuthorizationConfig) {
     this.wasm = config.wasmBindings;
@@ -673,6 +681,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     this.registryVerdict = undefined;
     this._lastActivationSkippedSpaceIds = [];
     this._lastActivationActivatedSpaceIds = [];
+    this._spaceHosting = "unknown";
     if (!session) {
       this._session = undefined;
       this._tinyCloudSession = undefined;
@@ -832,6 +841,20 @@ export class NodeUserAuthorization implements IUserAuthorization {
 
   get lastActivationActivatedSpaceIds(): string[] {
     return [...this._lastActivationActivatedSpaceIds];
+  }
+
+  /**
+   * The node's last answer for whether this session's primary space is hosted:
+   * recorded from the sign-in activation, or by {@link noteSpaceHosting}.
+   * `unknown` until one of them answers, and after a restore.
+   */
+  get spaceHosting(): SpaceHosting {
+    return this._spaceHosting;
+  }
+
+  /** @internal Record the hosting probe's answer for the primary space. */
+  noteSpaceHosting(hosting: SpaceHosting): void {
+    this._spaceHosting = hosting;
   }
 
   /**
@@ -1421,6 +1444,36 @@ export class NodeUserAuthorization implements IUserAuthorization {
     );
     this.recordActivationSkippedSpaces(result, primarySpaceId);
 
+    // A 404 is the backwards-compatible "not hosted" of older servers; any other
+    // failure is not an answer about hosting.
+    if (!result.success && result.status !== 404) {
+      throw Object.assign(
+        new Error(`Failed to activate session: ${describeHostFailure(result)}`),
+        { cause: result },
+      );
+    }
+
+    await this.ensurePrimarySpaceHosted(this._spaceHosting);
+  }
+
+  /**
+   * The create step of {@link ensureSpaceExists}: given the node's answer for
+   * the primary space, host it through the space creation handler when it is
+   * `not-hosted`. Any other answer, and a missing handler, change nothing. The
+   * caller supplies the answer (sign-in's activation, or the hosting probe);
+   * an empty activation list is never one.
+   *
+   * @throws Error if the creation handler fails or times out, or hosting fails
+   */
+  async ensurePrimarySpaceHosted(hosting: SpaceHosting): Promise<void> {
+    if (hosting !== "not-hosted") {
+      return;
+    }
+    const session = this._tinyCloudSession;
+    if (!session) {
+      throw new Error("Must be signed in to host the primary space");
+    }
+
     // Determine the effective space creation handler:
     // 1. Explicit spaceCreationHandler takes precedence
     // 2. autoCreateSpace: true uses AutoApproveSpaceCreationHandler
@@ -1430,7 +1483,13 @@ export class NodeUserAuthorization implements IUserAuthorization {
       (this.autoCreateSpace
         ? new AutoApproveSpaceCreationHandler()
         : undefined);
+    if (!handler) {
+      return;
+    }
 
+    await this.ensureTinyCloudHosts();
+    const host = this.primaryTinyCloudHost;
+    const primarySpaceId = session.spaceId;
     const creationContext = {
       spaceId: primarySpaceId,
       address: this._address!,
@@ -1438,119 +1497,16 @@ export class NodeUserAuthorization implements IUserAuthorization {
       host,
     };
 
-    if (result.success) {
-      // Check if primary space was actually activated or just skipped
-      const primarySkipped = result.skipped?.includes(primarySpaceId);
-
-      if (!primarySkipped) {
-        // Primary space exists and session is activated
-        return;
-      }
-
-      // Primary space was skipped (doesn't exist yet)
-      if (!handler) {
-        return;
-      }
-
-      await this.guardSpaceCreation(handler, creationContext);
-      const confirmed = await handler.confirmSpaceCreation(creationContext);
-      if (!confirmed) {
-        return;
-      }
-
-      // Create the primary space
-      try {
-        const created = await this.hostSpace();
-        if (!created.success) {
-          const err = Object.assign(
-            new Error(`Failed to create space ${primarySpaceId}: ${describeHostFailure(created)}`),
-            { cause: created },
-          );
-          throw err;
-        }
-      } catch (error) {
-        handler.onSpaceCreationFailed?.(
-          creationContext,
-          error instanceof Error ? error : new Error(String(error)),
-        );
-        throw error;
-      }
-
-      // Small delay to allow space creation to propagate
-      await new Promise((resolve) => setTimeout(resolve, 100));
-
-      // Retry activation
-      const retryResult = await activateSessionWithHost(
-        host,
-        this._tinyCloudSession.delegationHeader,
-      );
-
-      if (!retryResult.success) {
-        const err = Object.assign(
-          new Error(`Failed to activate session after creating space: ${describeHostFailure(retryResult)}`),
-          { cause: retryResult },
-        );
-        handler.onSpaceCreationFailed?.(creationContext, err);
-        throw err;
-      }
-
-      handler.onSpaceCreated?.(creationContext);
-      return;
-    }
-
-    // Handle 404 (backwards compat with older servers)
-    if (result.status === 404) {
-      if (!handler) {
-        return;
-      }
-
-      await this.guardSpaceCreation(handler, creationContext);
-      const confirmed = await handler.confirmSpaceCreation(creationContext);
-      if (!confirmed) {
-        return;
-      }
-
-      try {
-        const created = await this.hostSpace();
-        if (!created.success) {
-          const err = Object.assign(
-            new Error(`Failed to create space ${primarySpaceId}: ${describeHostFailure(created)}`),
-            { cause: created },
-          );
-          throw err;
-        }
-      } catch (error) {
-        handler.onSpaceCreationFailed?.(
-          creationContext,
-          error instanceof Error ? error : new Error(String(error)),
-        );
-        throw error;
-      }
-
-      await new Promise((resolve) => setTimeout(resolve, 100));
-
-      const retryResult = await activateSessionWithHost(
-        host,
-        this._tinyCloudSession.delegationHeader,
-      );
-
-      if (!retryResult.success) {
-        const err = Object.assign(
-          new Error(`Failed to activate session after creating space: ${describeHostFailure(retryResult)}`),
-          { cause: retryResult },
-        );
-        handler.onSpaceCreationFailed?.(creationContext, err);
-        throw err;
-      }
-
-      handler.onSpaceCreated?.(creationContext);
-      return;
-    }
-
-    throw Object.assign(
-      new Error(`Failed to activate session: ${describeHostFailure(result)}`),
-      { cause: result },
-    );
+    // Not a static import on purpose: the creation sequence is rare, and web-sdk's root has no room for it.
+    const { createPrimarySpace } = await import("../space-hosting.js");
+    await createPrimarySpace({
+      handler,
+      context: creationContext,
+      guard: () => this.guardSpaceCreation(handler, creationContext),
+      host: () => this.hostSpace(primarySpaceId),
+      onHosted: () => { this._spaceHosting = "hosted"; },
+      activate: () => activateSessionWithHost(host, session.delegationHeader),
+    });
   }
 
   /** {@link assertMayCreateSpace}, reporting a refusal to the creation handler before rethrowing it. */
@@ -1574,12 +1530,21 @@ export class NodeUserAuthorization implements IUserAuthorization {
     if (result.success) {
       this._lastActivationSkippedSpaceIds = result.skipped ?? [];
       this._lastActivationActivatedSpaceIds = result.activated ?? [];
+      // Only a first-time registration lists the primary space. Empty lists are
+      // what the node returns for a delegation it already holds, hosted or not,
+      // so they answer nothing.
+      this._spaceHosting = this._lastActivationSkippedSpaceIds.includes(primarySpaceId)
+        ? "not-hosted"
+        : this._lastActivationActivatedSpaceIds.includes(primarySpaceId)
+          ? "hosted"
+          : "unknown";
       return;
     }
     this._lastActivationActivatedSpaceIds = [];
     this._lastActivationSkippedSpaceIds = result.status === 404
       ? [primarySpaceId]
       : [];
+    this._spaceHosting = result.status === 404 ? "not-hosted" : "unknown";
   }
 
   async createBootstrapSession(
