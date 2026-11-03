@@ -1,24 +1,22 @@
 /**
- * Registry policy at sign-in routing and the space-creation guard (TC-1443).
+ * Default registry-first routing at sign-in and space hosting.
  *
- * The owner is a real EOA so the fake registry can serve owner-signed records.
- * Every request is recorded: the assertions are about which hosts the SDK
- * talks to and whether a host delegation (space creation) is ever signed.
+ * The owner is a real EOA so each fixture serves a signed v2 location record.
+ * Host identity and node-key endpoints are recorded before any activation.
  */
 import { afterEach, expect, test } from "bun:test";
 import {
   DEFAULT_TINYCLOUD_FALLBACK_HOST,
   NodeNotFoundError,
-  NodeRegistryEntryExistsError,
   REGISTRY_NOT_FOUND_BODY,
   RegistryUnavailableError,
   pkhDid,
   signLocationRecord,
+  signLocationRecordV2,
   type ISessionManager,
   type ISigner,
   type IWasmBindings,
-  type RegistryPolicy,
-  type SpaceCreationContext,
+  type LocationRecordV2Payload,
   type TinyCloudSession,
 } from "@tinycloud/sdk-core";
 
@@ -26,22 +24,34 @@ import { MemorySessionStorage } from "../storage/MemorySessionStorage";
 import { PrivateKeySigner } from "../signers/PrivateKeySigner";
 import { NodeUserAuthorization, type NodeUserAuthorizationConfig } from "./NodeUserAuthorization";
 
-// Test-only key.
 const ownerKey = new PrivateKeySigner(
   "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 );
 const REGISTRY = "https://registry.test";
 const HOST = "https://tinycloud.test";
-const HOST_MULTIADDR = "/dns4/tinycloud.test/tcp/443/https";
-const OTHER_MULTIADDR = "/dns4/elsewhere.example/tcp/443/https";
+const OTHER_HOST = "https://elsewhere.example";
+const STALE_HOST = "https://stale.example";
+const HOST_NODE_DID = "did:key:z6MkixsGj3MVGKMug2VMC2JbtzX3UjaAcfRs7G1RjbSnZJaH";
+const OTHER_NODE_DID = "did:key:z6MkjkxcrsuBXGxVYAZFC1hPUViiRXLC5Kup4G9aBkFoPimV";
 
-type RegistryAnswer = "not-found" | "down" | { multiaddrs: string[]; sequence?: number };
+type RegistryNode = { did: string; url: string };
+type RegistrySpace = {
+  space: string;
+  nodes: Array<{ did: string; mode: "read-write" | "read-only" }>;
+};
+interface V2Answer {
+  nodes?: RegistryNode[];
+  spaces?: RegistrySpace[];
+  encryptionNode?: string | null;
+  sequence?: number;
+}
+type RegistryAnswer = "not-found" | "down" | "v1-only" | V2Answer;
 
 interface FakeNetwork {
   requests: string[];
-  /** Host delegations submitted, i.e. spaces created. */
   hostDelegations: string[];
-  registryLookups(): string[];
+  v2Lookups(): string[];
+  v1Lookups(): string[];
 }
 
 let restoreFetch: (() => void) | undefined;
@@ -50,59 +60,17 @@ afterEach(() => {
   restoreFetch = undefined;
 });
 
-async function ownerAddress(): Promise<string> {
-  return ownerKey.getAddress();
+function spaceId(address: string, chainId: number, name: string): string {
+  return `tinycloud:pkh:eip155:${chainId}:${address}:${name}`;
 }
 
-async function recordBody(subject: string, multiaddrs: string[], sequence: number): Promise<string> {
-  const record = await signLocationRecord(
-    { version: 1, subject, multiaddrs, updated_at: "2026-10-18T00:00:00.000Z", sequence },
-    { type: "did:pkh", signMessage: (message) => ownerKey.signMessage(message) },
-  );
-  return JSON.stringify({ record });
+function signedSpaceId(spaceIdValue: string): string {
+  return spaceIdValue.toLowerCase();
 }
 
-/**
- * Registry plus TinyCloud nodes. The owner's primary space is missing until a
- * host delegation arrives. `answers` are served in order, the last one repeats.
- */
-function installNetwork(answers: RegistryAnswer[], primarySpaceId: string): FakeNetwork {
-  const network: FakeNetwork = {
-    requests: [],
-    hostDelegations: [],
-    registryLookups: () => network.requests.filter((url) => url.startsWith(`${REGISTRY}/`)),
-  };
-  const hosted = new Set<string>();
-  const original = globalThis.fetch;
-  restoreFetch = () => {
-    globalThis.fetch = original;
-  };
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
-    network.requests.push(url);
-    if (url.startsWith(`${REGISTRY}/v1/locations/`)) {
-      const answer = answers.length > 1 ? answers.shift()! : answers[0]!;
-      if (answer === "not-found") return new Response(REGISTRY_NOT_FOUND_BODY, { status: 404 });
-      if (answer === "down") return new Response("down", { status: 503 });
-      const subject = decodeURIComponent(url.slice(`${REGISTRY}/v1/locations/`.length));
-      return new Response(await recordBody(subject, answer.multiaddrs, answer.sequence ?? 1));
-    }
-    const origin = new URL(url).origin;
-    if (url.includes("/peer/generate/")) return new Response("peer-id");
-    if (url.endsWith("/delegate") && init?.method === "POST") {
-      const authorization = new Headers(init.headers).get("authorization");
-      if (authorization === "Bearer host") {
-        network.hostDelegations.push(origin);
-        hosted.add(origin);
-        return Response.json({ activated: [primarySpaceId], skipped: [] });
-      }
-      return hosted.has(origin)
-        ? Response.json({ activated: [primarySpaceId], skipped: [] })
-        : Response.json({ activated: [], skipped: [primarySpaceId] });
-    }
-    throw new Error(`unexpected request: ${url}`);
-  }) as typeof fetch;
-  return network;
+function sessionSpelling(signedSpace: string, address: string): string {
+  const match = /^(tinycloud:pkh:eip155:[1-9][0-9]*:)0x[0-9a-f]{40}(:[^/?#\s]+)$/.exec(signedSpace);
+  return match === null ? signedSpace : `${match[1]}${address}${match[2]}`;
 }
 
 function wasmBindings(): IWasmBindings {
@@ -123,7 +91,7 @@ function wasmBindings(): IWasmBindings {
     },
     ensureEip55: (address: string) => address,
     makeSpaceId: (address: string, chainId: number, prefix: string) =>
-      `tinycloud:pkh:eip155:${chainId}:${address}:${prefix}`,
+      spaceId(address, chainId, prefix),
     createDelegation: async () => {
       throw new Error("not used");
     },
@@ -141,7 +109,6 @@ function wasmBindings(): IWasmBindings {
   };
 }
 
-/** The owner's wallet, recording every signature it is asked for. */
 function wallet(signatures: string[], chainId = 1): ISigner {
   return {
     getAddress: () => ownerKey.getAddress(),
@@ -158,7 +125,7 @@ function restoredSession(address: string, chainId = 1): TinyCloudSession {
     address,
     chainId,
     sessionKey: "session-key",
-    spaceId: `tinycloud:pkh:eip155:${chainId}:${address}:default`,
+    spaceId: spaceId(address, chainId, "default"),
     delegationCid: "bafy-restored",
     delegationHeader: { Authorization: "Bearer restored" },
     verificationMethod: "did:key:restored#restored",
@@ -168,24 +135,144 @@ function restoredSession(address: string, chainId = 1): TinyCloudSession {
   };
 }
 
+function signedV2Payload(
+  subject: string,
+  primarySpaceId: string,
+  answer: V2Answer,
+): LocationRecordV2Payload {
+  const nodes = answer.nodes ?? [{ did: HOST_NODE_DID, url: HOST }];
+  const spaces = answer.spaces ?? (nodes[0] === undefined
+    ? []
+    : [{
+      space: signedSpaceId(primarySpaceId),
+      nodes: [{ did: nodes[0].did, mode: "read-write" as const }],
+    }]);
+  const encryptionNode = answer.encryptionNode === undefined
+    ? nodes[0]?.did ?? null
+    : answer.encryptionNode;
+  return {
+    version: 2,
+    subject,
+    nodes,
+    spaces,
+    encryptionNode,
+    updated_at: "2026-10-18T00:00:00.000Z",
+    sequence: answer.sequence ?? 1,
+  };
+}
+
 interface Scenario {
-  policy?: RegistryPolicy;
   registry: RegistryAnswer[];
-  /** Pinned host; omit to resolve one at sign-in. */
   host?: string;
+  persistedHosts?: string[];
   chainId?: number;
+  sessionActivation?: "skipped" | "not-found";
   config?: Partial<NodeUserAuthorizationConfig>;
 }
 
 async function restoredOwner(scenario: Scenario) {
-  const address = await ownerAddress();
-  const session = restoredSession(address, scenario.chainId);
-  const network = installNetwork([...scenario.registry], session.spaceId);
+  const address = await ownerKey.getAddress();
+  const chainId = scenario.chainId ?? 1;
+  const session = restoredSession(address, chainId);
+  const primarySpaceId = session.spaceId;
+  const answers = [...scenario.registry];
+  const network: FakeNetwork = {
+    requests: [],
+    hostDelegations: [],
+    v2Lookups: () => network.requests.filter((url) => url.startsWith(`${REGISTRY}/v2/locations/`)),
+    v1Lookups: () => network.requests.filter((url) => url.startsWith(`${REGISTRY}/v1/locations/`)),
+  };
+  const hostedByOrigin = new Map<string, Set<string>>();
+  const identityByOrigin: Record<string, string> = {
+    [HOST]: HOST_NODE_DID,
+    [OTHER_HOST]: OTHER_NODE_DID,
+  };
+  const original = globalThis.fetch;
+  restoreFetch = () => {
+    globalThis.fetch = original;
+  };
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    network.requests.push(url);
+    const v2Prefix = `${REGISTRY}/v2/locations/`;
+    if (url.startsWith(v2Prefix)) {
+      const answer = answers.length > 1 ? answers.shift()! : answers[0] ?? "not-found";
+      if (answer === "down") return new Response("down", { status: 503 });
+      if (answer === "not-found" || answer === "v1-only") {
+        return new Response(REGISTRY_NOT_FOUND_BODY, { status: 404 });
+      }
+      const registryAddress = decodeURIComponent(url.slice(v2Prefix.length));
+      const payload = signedV2Payload(pkhDid(registryAddress, 1), primarySpaceId, answer);
+      const record = await signLocationRecordV2(payload, {
+        type: "did:pkh",
+        signMessage: (message) => ownerKey.signMessage(message),
+      });
+      for (const signedSpace of payload.spaces) {
+        for (const membership of signedSpace.nodes) {
+          const node = payload.nodes.find((candidate) => candidate.did === membership.did);
+          if (!node) continue;
+          const origin = new URL(node.url).origin;
+          const hosted = hostedByOrigin.get(origin) ?? new Set<string>();
+          hosted.add(sessionSpelling(signedSpace.space, address));
+          hostedByOrigin.set(origin, hosted);
+        }
+      }
+      return Response.json({ record });
+    }
+    const v1Prefix = `${REGISTRY}/v1/locations/`;
+    if (url.startsWith(v1Prefix)) {
+      const answer = answers[0] ?? "not-found";
+      if (answer === "down") return new Response("down", { status: 503 });
+      if (answer !== "v1-only") return new Response(REGISTRY_NOT_FOUND_BODY, { status: 404 });
+      const subject = decodeURIComponent(url.slice(v1Prefix.length));
+      const record = await signLocationRecord(
+        {
+          version: 1,
+          subject,
+          multiaddrs: ["/dns4/stale.example/tcp/443/https"],
+          updated_at: "2026-10-18T00:00:00.000Z",
+          sequence: 1,
+        },
+        { type: "did:pkh", signMessage: (message) => ownerKey.signMessage(message) },
+      );
+      return Response.json({ record });
+    }
+
+    const parsed = new URL(url);
+    const origin = parsed.origin;
+    const nodeDid = identityByOrigin[origin] ?? HOST_NODE_DID;
+    if (parsed.pathname === "/info") {
+      return Response.json({ protocol: 1, version: "1.0.0", features: [], nodeId: nodeDid });
+    }
+    if (parsed.pathname === "/.well-known/tinycloud/node-keys") {
+      return Response.json({ nodeDid, shareInvitationPublicKey: "A".repeat(43) });
+    }
+    if (parsed.pathname.startsWith("/peer/generate/")) return new Response("peer-id");
+    if (parsed.pathname === "/delegate" && init?.method === "POST") {
+      const authorization = new Headers(init.headers).get("authorization");
+      const hosted = hostedByOrigin.get(origin) ?? new Set<string>();
+      if (authorization === "Bearer host") {
+        network.hostDelegations.push(origin);
+        hosted.add(primarySpaceId);
+        hostedByOrigin.set(origin, hosted);
+        return Response.json({ activated: [...hosted], skipped: [] });
+      }
+      if (scenario.sessionActivation === "not-found") {
+        return new Response("not found", { status: 404 });
+      }
+      if (scenario.sessionActivation === "skipped") {
+        return Response.json({ activated: [], skipped: [primarySpaceId] });
+      }
+      return hosted.has(primarySpaceId)
+        ? Response.json({ activated: [...hosted], skipped: [] })
+        : Response.json({ activated: [], skipped: [primarySpaceId] });
+    }
+    throw new Error(`unexpected request: ${url}`);
+  }) as typeof fetch;
+
   const signatures: string[] = [];
-  const confirmations: SpaceCreationContext[] = [];
-  const failures: Error[] = [];
   const auth = new NodeUserAuthorization({
-    signer: wallet(signatures, scenario.chainId),
+    signer: wallet(signatures, chainId),
     wasmBindings: wasmBindings(),
     signStrategy: { type: "auto-sign" },
     domain: "example.com",
@@ -193,115 +280,133 @@ async function restoredOwner(scenario: Scenario) {
     tinycloudRegistryUrl: REGISTRY,
     autoDiscoverLocalNode: false,
     ...(scenario.host === undefined ? {} : { tinycloudHosts: [scenario.host] }),
-    ...(scenario.policy === undefined ? {} : { registryPolicy: scenario.policy }),
     spaceCreationHandler: {
-      confirmSpaceCreation: async (context) => {
-        confirmations.push(context);
-        return true;
-      },
-      onSpaceCreationFailed: (_context, error) => {
-        failures.push(error);
-      },
+      confirmSpaceCreation: async () => true,
+      onSpaceCreationFailed: () => {},
     },
     ...scenario.config,
   });
-  auth.setRestoredTinyCloudSession(session);
-  return { auth, address, network, signatures, confirmations, failures };
+  auth.setRestoredTinyCloudSession(session, scenario.persistedHosts);
+  return {
+    auth,
+    address,
+    spaceId: (name: string) => spaceId(address, chainId, name),
+    network,
+    signatures,
+  };
 }
 
-test("default policy: an unregistered owner still falls back and gets a space, with one registry lookup", async () => {
+test("default routing uses signed full-space membership and verifies both node identity surfaces", async () => {
+  const owner = await restoredOwner({
+    chainId: 137,
+    host: STALE_HOST,
+    persistedHosts: [STALE_HOST],
+    registry: [{
+      nodes: [
+        { did: HOST_NODE_DID, url: HOST },
+        { did: OTHER_NODE_DID, url: OTHER_HOST },
+      ],
+      spaces: [{
+        space: signedSpaceId(spaceId(await ownerKey.getAddress(), 137, "default")),
+        nodes: [
+          { did: HOST_NODE_DID, mode: "read-write" },
+          { did: OTHER_NODE_DID, mode: "read-write" },
+        ],
+      }],
+      encryptionNode: OTHER_NODE_DID,
+    }],
+  });
+
+  await owner.auth.ensureSpaceExists();
+
+  const hostActivation = owner.network.requests.indexOf(`${HOST}/delegate`);
+  const replicaActivation = owner.network.requests.indexOf(`${OTHER_HOST}/delegate`);
+  expect(owner.auth.hosts).toEqual([HOST, OTHER_HOST]);
+  expect(owner.network.v2Lookups()).toContain(
+    `${REGISTRY}/v2/locations/${encodeURIComponent(owner.address)}`,
+  );
+  expect(owner.network.v1Lookups()).toEqual([]);
+  for (const [url, activation] of [
+    [`${HOST}/info`, hostActivation],
+    [`${HOST}/.well-known/tinycloud/node-keys`, hostActivation],
+    [`${OTHER_HOST}/info`, replicaActivation],
+    [`${OTHER_HOST}/.well-known/tinycloud/node-keys`, replicaActivation],
+  ] as const) {
+    expect(owner.network.requests.indexOf(url)).toBeGreaterThanOrEqual(0);
+    expect(owner.network.requests.indexOf(url)).toBeLessThan(activation);
+  }
+  expect(owner.network.requests.some((url) => url.startsWith(`${STALE_HOST}/`))).toBe(false);
+  expect(owner.signatures).toEqual([]);
+  expect(owner.network.hostDelegations).toEqual([]);
+});
+
+test("true absence in v2 and v1 keeps default onboarding and host-SIWE creation", async () => {
   const owner = await restoredOwner({ registry: ["not-found"] });
 
   await owner.auth.ensureSpaceExists();
 
   expect(owner.auth.hosts).toEqual([DEFAULT_TINYCLOUD_FALLBACK_HOST]);
-  expect(owner.network.hostDelegations).toEqual([DEFAULT_TINYCLOUD_FALLBACK_HOST]);
-  expect(owner.network.registryLookups()).toEqual([
-    `${REGISTRY}/v1/locations/${encodeURIComponent(pkhDid(owner.address, 1))}`,
-  ]);
+  expect(owner.network.v2Lookups().length).toBeGreaterThan(0);
+  expect(owner.network.v1Lookups().length).toBeGreaterThan(0);
+  expect(owner.network.hostDelegations).toContain(DEFAULT_TINYCLOUD_FALLBACK_HOST);
+  expect(owner.signatures.length).toBeGreaterThan(0);
 });
 
-test("default policy: a pinned host creates spaces with no registry lookup at all", async () => {
-  // Registered elsewhere, but the default policy never consults the registry here.
-  const owner = await restoredOwner({ registry: [{ multiaddrs: [OTHER_MULTIADDR] }], host: HOST });
-
-  await owner.auth.ensureSpaceExists();
-
-  expect(owner.network.hostDelegations).toEqual([HOST]);
-  expect(owner.network.registryLookups()).toEqual([]);
-});
-
-test("fail-closed: routing looks up the signer address on the configured chain, never the session chain", async () => {
-  const owner = await restoredOwner({
-    policy: "fail-closed",
-    registry: [{ multiaddrs: [HOST_MULTIADDR] }],
-    chainId: 137,
-  });
-
-  await owner.auth.ensureSpaceExists();
-
-  expect(owner.network.registryLookups()).toEqual([
-    `${REGISTRY}/v1/locations/${encodeURIComponent(pkhDid(owner.address, 1))}`,
-  ]);
-  expect(owner.auth.hosts).toEqual([HOST]);
-  // The record lists the host, so creation went ahead after confirmation, reusing the sign-in verdict.
-  expect(owner.confirmations).toHaveLength(1);
-  expect(owner.network.hostDelegations).toEqual([HOST]);
-});
-
-test("fail-closed: an unregistered owner goes to newUserHost and may create a space there", async () => {
-  const owner = await restoredOwner({
-    policy: "fail-closed",
-    registry: ["not-found"],
-    config: { newUserHost: HOST },
-  });
+test("true absence uses the explicit host hint only after both registry namespaces return not-found", async () => {
+  const owner = await restoredOwner({ registry: ["not-found"], host: HOST });
 
   await owner.auth.ensureSpaceExists();
 
   expect(owner.auth.hosts).toEqual([HOST]);
-  expect(owner.network.hostDelegations).toEqual([HOST]);
+  expect(owner.network.v2Lookups().length).toBeGreaterThan(0);
+  expect(owner.network.v1Lookups().length).toBeGreaterThan(0);
+  expect(owner.network.hostDelegations).toContain(HOST);
+  expect(owner.signatures.length).toBeGreaterThan(0);
 });
 
-test("fail-closed: an unavailable registry fails sign-in instead of using any host", async () => {
-  const owner = await restoredOwner({ policy: "fail-closed", registry: ["down"] });
+test("a v1-only entry is unavailable and cannot use explicit or persisted stale hosts", async () => {
+  const owner = await restoredOwner({
+    registry: ["v1-only"],
+    host: STALE_HOST,
+    persistedHosts: [STALE_HOST],
+  });
+
+  await expect(owner.auth.ensureSpaceExists()).rejects.toBeInstanceOf(RegistryUnavailableError);
+
+  expect(owner.network.v2Lookups().length).toBeGreaterThan(0);
+  expect(owner.network.v1Lookups().length).toBeGreaterThan(0);
+  expect(owner.network.requests.every((url) => url.startsWith(`${REGISTRY}/`))).toBe(true);
+  expect(owner.network.hostDelegations).toEqual([]);
+  expect(owner.signatures).toEqual([]);
+});
+
+test("an unavailable registry cannot be bypassed with use-host", async () => {
+  const owner = await restoredOwner({
+    registry: ["down"],
+    host: STALE_HOST,
+    persistedHosts: [STALE_HOST],
+    config: { onNodeNotFound: () => ({ action: "use-host", host: HOST }) },
+  });
 
   await expect(owner.auth.ensureSpaceExists()).rejects.toBeInstanceOf(RegistryUnavailableError);
 
   expect(owner.network.requests.every((url) => url.startsWith(`${REGISTRY}/`))).toBe(true);
+  expect(owner.network.hostDelegations).toEqual([]);
   expect(owner.signatures).toEqual([]);
 });
 
-test("fail-closed: a registered owner whose record lists no usable host gets NodeNotFoundError", async () => {
-  const owner = await restoredOwner({ policy: "fail-closed", registry: [{ multiaddrs: [] }] });
-
-  await expect(owner.auth.ensureSpaceExists()).rejects.toBeInstanceOf(NodeNotFoundError);
-
-  expect(owner.network.requests.every((url) => url.startsWith(`${REGISTRY}/`))).toBe(true);
-});
-
-test("fail-closed: a plaintext host from a signed record is used neither for routing nor for creation", async () => {
-  const plaintext = "/dns4/plain.example/tcp/80/http";
-  const routed = await restoredOwner({ policy: "fail-closed", registry: [{ multiaddrs: [plaintext] }] });
-
-  await expect(routed.auth.ensureSpaceExists()).rejects.toBeInstanceOf(NodeNotFoundError);
-  expect(routed.network.requests.every((url) => url.startsWith(`${REGISTRY}/`))).toBe(true);
-  restoreFetch?.();
-
-  const pinned = await restoredOwner({
-    policy: "fail-closed",
-    registry: [{ multiaddrs: [plaintext] }],
-    host: "http://plain.example",
-  });
-  await expect(pinned.auth.ensureSpaceExists()).rejects.toBeInstanceOf(NodeRegistryEntryExistsError);
-  expect(pinned.network.hostDelegations).toEqual([]);
-  expect(pinned.signatures).toEqual([]);
-});
-
-test("fail-closed: onNodeNotFound can retry the lookup", async () => {
+test("the not-found callback can retry and resolve the current signed route", async () => {
   const attempts: number[] = [];
+  const address = await ownerKey.getAddress();
+  const defaultSpace = spaceId(address, 1, "default");
   const owner = await restoredOwner({
-    policy: "fail-closed",
-    registry: ["down", { multiaddrs: [HOST_MULTIADDR] }],
+    registry: [
+      "down",
+      {
+        nodes: [{ did: HOST_NODE_DID, url: HOST }],
+        spaces: [{ space: signedSpaceId(defaultSpace), nodes: [{ did: HOST_NODE_DID, mode: "read-write" }] }],
+      },
+    ],
     config: {
       onNodeNotFound: ({ attempt }) => {
         attempts.push(attempt);
@@ -314,76 +419,64 @@ test("fail-closed: onNodeNotFound can retry the lookup", async () => {
 
   expect(attempts).toEqual([1]);
   expect(owner.auth.hosts).toEqual([HOST]);
-  expect(owner.network.hostDelegations).toEqual([HOST]);
+  expect(owner.network.v2Lookups().length).toBeGreaterThan(1);
+  expect(owner.signatures).toEqual([]);
 });
 
-test("fail-closed: onNodeNotFound can connect to another host, where creation is still guarded", async () => {
+test("registered resources without exact full-space membership are not routed for hosting or writes", async () => {
+  const address = await ownerKey.getAddress();
+  const defaultSpace = spaceId(address, 1, "default");
   const owner = await restoredOwner({
-    policy: "fail-closed",
-    registry: ["down"],
-    config: { onNodeNotFound: () => ({ action: "use-host", host: HOST }) },
+    registry: [{
+      nodes: [{ did: HOST_NODE_DID, url: HOST }],
+      spaces: [{
+        space: signedSpaceId(defaultSpace),
+        nodes: [{ did: HOST_NODE_DID, mode: "read-only" }],
+      }],
+    }],
+    host: HOST,
   });
 
-  await expect(owner.auth.ensureSpaceExists()).rejects.toBeInstanceOf(RegistryUnavailableError);
-
-  expect(owner.auth.hosts).toEqual([HOST]);
-  expect(owner.failures[0]).toBeInstanceOf(RegistryUnavailableError);
-  expect(owner.confirmations).toEqual([]);
+  await expect(owner.auth.resolveResourceDestinations(owner.spaceId("secrets"), "host"))
+    .rejects.toBeInstanceOf(NodeNotFoundError);
+  await expect(owner.auth.resolveResourceDestinations(defaultSpace, "write"))
+    .rejects.toBeInstanceOf(NodeNotFoundError);
   expect(owner.network.hostDelegations).toEqual([]);
   expect(owner.signatures).toEqual([]);
 });
 
-test("fail-closed: onNodeNotFound can abort", async () => {
+test("a registered primary activation failure does not fall back to host-SIWE approval", async () => {
+  const address = await ownerKey.getAddress();
+  const defaultSpace = spaceId(address, 1, "default");
   const owner = await restoredOwner({
-    policy: "fail-closed",
-    registry: ["not-found"],
-    config: { newUserHost: null, onNodeNotFound: () => ({ action: "abort" }) },
+    registry: [{
+      nodes: [{ did: HOST_NODE_DID, url: HOST }],
+      spaces: [{ space: signedSpaceId(defaultSpace), nodes: [{ did: HOST_NODE_DID, mode: "read-write" }] }],
+    }],
+    host: HOST,
+    sessionActivation: "skipped",
   });
 
-  await expect(owner.auth.ensureSpaceExists()).rejects.toBeInstanceOf(NodeNotFoundError);
-  expect(owner.network.requests.every((url) => url.startsWith(`${REGISTRY}/`))).toBe(true);
+  await expect(owner.auth.ensureSpaceExists()).rejects.toThrow();
+
+  expect(owner.network.hostDelegations).toEqual([]);
+  expect(owner.signatures).toEqual([]);
 });
 
-for (const [label, activation] of [
-  ["a skipped primary space", "skipped"],
-  ["an older node's 404", "404"],
-] as const) {
-  test(`fail-closed guard on ensureSpaceExists (${label}): pinned host vs. registry verdict`, async () => {
-    const cases: Array<{
-      registry: RegistryAnswer;
-      refusal?: typeof NodeRegistryEntryExistsError | typeof RegistryUnavailableError;
-    }> = [
-      { registry: "not-found" },
-      { registry: { multiaddrs: [HOST_MULTIADDR] } },
-      { registry: { multiaddrs: [OTHER_MULTIADDR] }, refusal: NodeRegistryEntryExistsError },
-      { registry: { multiaddrs: [] }, refusal: NodeRegistryEntryExistsError },
-      { registry: "down", refusal: RegistryUnavailableError },
-    ];
-    for (const { registry, refusal } of cases) {
-      const owner = await restoredOwner({ policy: "fail-closed", registry: [registry], host: HOST });
-      if (activation === "404") {
-        const fakeNode = globalThis.fetch;
-        globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) =>
-          String(input) === `${HOST}/delegate` &&
-          new Headers(init?.headers).get("authorization") === "Bearer restored" &&
-          owner.network.hostDelegations.length === 0
-            ? new Response("not found", { status: 404 })
-            : fakeNode(input, init)) as typeof fetch;
-      }
-
-      if (refusal) {
-        await expect(owner.auth.ensureSpaceExists()).rejects.toBeInstanceOf(refusal);
-        expect(owner.failures[0]).toBeInstanceOf(refusal);
-        expect(owner.confirmations).toEqual([]);
-        expect(owner.network.hostDelegations).toEqual([]);
-        expect(owner.signatures).toEqual([]);
-      } else {
-        await owner.auth.ensureSpaceExists();
-        expect(owner.network.hostDelegations).toEqual([HOST]);
-      }
-      // Pinned hosts look the verdict up lazily, once, at creation time.
-      expect(owner.network.registryLookups()).toHaveLength(1);
-      restoreFetch?.();
-    }
+test("a registered 404 activation does not fall back to host-SIWE approval", async () => {
+  const address = await ownerKey.getAddress();
+  const defaultSpace = spaceId(address, 1, "default");
+  const owner = await restoredOwner({
+    registry: [{
+      nodes: [{ did: HOST_NODE_DID, url: HOST }],
+      spaces: [{ space: signedSpaceId(defaultSpace), nodes: [{ did: HOST_NODE_DID, mode: "read-write" }] }],
+    }],
+    host: HOST,
+    sessionActivation: "not-found",
   });
-}
+
+  await expect(owner.auth.ensureSpaceExists()).rejects.toThrow();
+
+  expect(owner.network.hostDelegations).toEqual([]);
+  expect(owner.signatures).toEqual([]);
+});

@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeWasmBindings, PrivateKeySigner, TinyCloudNode } from "@tinycloud/node-sdk";
-import type { PermissionEntry } from "@tinycloud/sdk-core";
+import { REGISTRY_NOT_FOUND_BODY, type PermissionEntry } from "@tinycloud/sdk-core";
 
 import { canonicalizeCapabilities, evaluateAuthority } from "./authority.js";
 import type { OperationDefinition, RuntimeOperationContext } from "./contract.js";
@@ -102,7 +102,7 @@ test("resolves registry URL precedence and keeps the profile host only as a no-e
       const url = String(input);
       if (url.startsWith(`${fixture.hermetic.host}/`)) return originalFetch(input, init);
       externalRequests.push(url);
-      return Response.json({ error: "location record not found" }, { status: 404 });
+      return new Response(REGISTRY_NOT_FOUND_BODY, { status: 404 });
     }) as typeof fetch;
 
     const fromProfile = await createInvocationRuntime({ profile: fixture.profile });
