@@ -665,6 +665,12 @@ class ServiceGraphLifetime {
 
   private combineSignals(signal?: AbortSignal): AbortSignal {
     if (!signal) return this.abortController.signal;
+    // `AbortSignal.any` links the two signals for as long as the composite lives, with no listener on the long-lived
+    // signal (TC-2418), so retiring the graph (sign-out) still cancels a response body being read. It carries the
+    // aborting signal's own reason; the listeners below abort without one. Trade-off: on Node its composites stay
+    // reachable while the long-lived signal lives (about 65 B per request on Node 20, 180 B on Node 22; a listener
+    // that is never removed retains about 1 KB). Where it is missing (older browsers) the listeners are unchanged.
+    if (typeof AbortSignal.any === "function") return AbortSignal.any([signal, this.abortController.signal]);
     const combined = new AbortController();
     const abort = () => combined.abort();
     if (signal.aborted || this.abortController.signal.aborted) {

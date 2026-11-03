@@ -18222,6 +18222,8 @@ var init_refusal = __esm({
       "OPENKEY_APPROVAL_NARROWER",
       "OPENKEY_PROOF_INVALID",
       "OPENKEY_EXPIRY_EXCEEDED",
+      "OPENKEY_EXPIRY_TOO_SHORT",
+      "OPENKEY_EXPIRY_UNREPRESENTABLE",
       "OPENKEY_SESSION_MISMATCH",
       "RAW_RECAP_RESOURCE_UNSUPPORTED",
       "DEVICE_AUTH_BINDING_MISMATCH"
@@ -18359,7 +18361,7 @@ var init_named_keys = __esm({
 });
 
 // src/auth/scoped-login.ts
-import { EXPIRY } from "@tinycloud/sdk-core";
+import { EXPIRY, technicalExpiryRefusal } from "@tinycloud/sdk-core";
 import { NodeWasmBindings, signedCompactUcanExpiry as signedCompactUcanExpiry2 } from "@tinycloud/node-sdk";
 import { isLocalOwnerProfile as isLocalOwnerProfile2, ownerSessionLacksProof as ownerSessionLacksProof2 } from "@tinycloud/operations/profile";
 import { CLI_NAME as CLI_NAME13 } from "@tinycloud/operations/cli-name";
@@ -18619,7 +18621,15 @@ function verifySignedSession(data, key, sessionDid, expected = {}) {
   if (signedExpiry <= Date.now()) {
     throw new CLIError("AUTH_EXPIRED", `The approved session has expired. ${notStored}`, ExitCode.AUTH_REQUIRED);
   }
-  if (expected.expiry !== void 0 && signedExpiry > expiryLimit(expected.expiry)) {
+  if (expected.expiryChangeable === true) {
+    if (signedExpiry <= Date.now() + MIN_SIGNED_REMAINING_MS) {
+      throw new CLIError("OPENKEY_EXPIRY_TOO_SHORT", `The signed session lasts 60 seconds or less, too short to use. Choose a longer lifetime in OpenKey. ${notStored}`, ExitCode.PERMISSION_DENIED);
+    }
+    const technical = technicalExpiryRefusal(signedExpiry, "siwe");
+    if (technical !== null) {
+      throw new CLIError("OPENKEY_EXPIRY_UNREPRESENTABLE", `The signed session's ${technical}. ${notStored}`, ExitCode.PERMISSION_DENIED);
+    }
+  } else if (expected.expiry !== void 0 && signedExpiry > expiryLimit(expected.expiry)) {
     const exceeded = new CLIError("OPENKEY_EXPIRY_EXCEEDED", `The signed session outlives the requested --expiry. ${notStored}`, ExitCode.PERMISSION_DENIED);
     if (!outlivesRequestFromIssuedAt(data.siwe, signedExpiry, expected.expiry)) markClockDependent(exceeded);
     throw exceeded;
@@ -18702,7 +18712,7 @@ function verifyScopedLogin(data, key, sessionDid, requested, expected = {}) {
   const session = withVerifiedAuthority({ ...data, jwk: key }, { ...signed, permissions: approved });
   return { session, legacyNested };
 }
-var CAPABILITIES_READ, CLOCK_SKEW_MS, SIGNED_RECAP, OPENKEY_MIN_LIFETIME_SECONDS, TRUST_FIELDS;
+var CAPABILITIES_READ, CLOCK_SKEW_MS, SIGNED_RECAP, MIN_SIGNED_REMAINING_MS, OPENKEY_MIN_LIFETIME_SECONDS, TRUST_FIELDS;
 var init_scoped_login = __esm({
   "src/auth/scoped-login.ts"() {
     "use strict";
@@ -18719,6 +18729,7 @@ var init_scoped_login = __esm({
     CAPABILITIES_READ = "tinycloud.capabilities/read";
     CLOCK_SKEW_MS = 3e4;
     SIGNED_RECAP = "signed-recap";
+    MIN_SIGNED_REMAINING_MS = 6e4;
     OPENKEY_MIN_LIFETIME_SECONDS = 60;
     TRUST_FIELDS = ["ownerDid", "permissions", "permissionsSource", "expiresAt", "expiry", "expirationTime"];
   }
@@ -20314,6 +20325,9 @@ function buildAuthUrl(did, options = {}) {
   }
   if (options.expiry !== void 0) {
     params.set("expiry", String(options.expiry));
+  }
+  if (options.expiryChangeable === true) {
+    params.set("expiryChangeable", "true");
   }
   params.set("protocolVersion", "1");
   const base5 = options.openkeyHost ?? DEFAULT_OPENKEY_HOST;
@@ -37528,11 +37542,15 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
         const openkeyHost = resolveOpenKeyHost(profile);
         const grants = [];
         const expiryCap = expiryOption === void 0 ? void 0 : parseRequestedExpiry(expiryOption);
+        const grantLinkOptsIn = options2.paste === true && preset === void 0;
         const proof = {
           key,
           sessionDid: profile.sessionDid ?? profile.did,
           expectedOwner: pinnedOwner(profile),
-          expiry: expiryCap
+          expiry: expiryCap,
+          // Only a plain paste link for a custom grant opts in; the device and approval-request paths, and the agent
+          // preset, keep the --expiry ceiling.
+          ...grantLinkOptsIn ? { expiryChangeable: true } : {}
         };
         const declined = [];
         const groups = groupPermissionsBySpace(requested);
@@ -37574,7 +37592,8 @@ ${appsAgentScopeNotice(preset.mode, preset.appIds)}
                 openkeyHost,
                 expiry: expiryCap === void 0 ? void 0 : openKeyExpiryParam(expiryCap),
                 noPopup: options2.popup === false,
-                paste: options2.paste
+                paste: options2.paste,
+                ...grantLinkOptsIn ? { expiryChangeable: true } : {}
               });
             }
             seen.result = delegationData;
@@ -38563,6 +38582,7 @@ function verifyOpenKeyApproval(data, requested, host, proof) {
   const { session, legacyNested } = verifyScopedLogin(data, proof.key, proof.sessionDid, requested, {
     expectedOwner: proof.expectedOwner,
     expiry: proof.expiry,
+    ...proof.expiryChangeable === true ? { expiryChangeable: true } : {},
     purpose: "grant",
     exactApproval: proof.exactApproval
   });
@@ -39112,8 +39132,9 @@ async function refreshOpenKeySession(profileName2, host, options = {}) {
   if (permissions !== void 0) {
     assertNotLocalOwner(profileName2, profile, "Scoped browser login");
   }
+  const plainPasteLink = options.paste === true && replication.prefixes.length === 0 && options.keys === void 0;
   if (permissions !== void 0 && options.replaceSession !== true) {
-    const estimatedExpiry = expiry === void 0 ? void 0 : new Date(Date.now() + expiry.durationMs).toISOString();
+    const estimatedExpiry = expiry === void 0 || plainPasteLink ? void 0 : new Date(Date.now() + expiry.durationMs).toISOString();
     assertSessionReplaceable(profileName2, snapshot, expectedOwner, permissions, estimatedExpiry);
   }
   if (options.keys !== void 0 && replication.prefixes.length === 0) {
@@ -39159,6 +39180,8 @@ async function refreshOpenKeySession(profileName2, host, options = {}) {
       // owner is verified below.
       permissions: permissions ?? ownerLoginPermissions(expectedOwner),
       expiry: openKeyExpiry,
+      // The plain paste link lets the user pick the lifetime; the signed result has no `--expiry` ceiling.
+      ...plainPasteLink ? { expiryChangeable: true } : {},
       ...permissions ? { reason: options.reason ?? "Allow this TinyCloud CLI profile to use the permissions in the requested manifest." } : {}
     });
     seen.result = delegationData;
@@ -39167,13 +39190,13 @@ async function refreshOpenKeySession(profileName2, host, options = {}) {
     let declined = [];
     let legacyNested = [];
     if (permissions) {
-      const verified = verifyScopedLogin(delegationData, key, sessionDid, permissions, { expectedOwner, expiry });
+      const verified = verifyScopedLogin(delegationData, key, sessionDid, permissions, { expectedOwner, expiry, ...plainPasteLink ? { expiryChangeable: true } : {} });
       sanitizedSession = verified.session;
       legacyNested = verified.legacyNested;
       verifiedOwner = sanitizedSession.ownerDid;
       declined = declinedPermissions(permissions, sanitizedSession.permissions, verifiedOwner);
     } else {
-      const signed = verifySignedSession(delegationData, key, sessionDid, { expectedOwner, expiry });
+      const signed = verifySignedSession(delegationData, key, sessionDid, { expectedOwner, expiry, ...plainPasteLink ? { expiryChangeable: true } : {} });
       const spaceId = String(delegationData.spaceId);
       if (normalizePkhIdentifier(ownerSpaceId(spaceId.split(":").at(-1) ?? "", signed.ownerDid)) !== normalizePkhIdentifier(spaceId)) {
         throw new CLIError("OPENKEY_SCOPE_MISMATCH", "The approved session is for a space the signing account doesn't own. No session was saved.", ExitCode.PERMISSION_DENIED);
