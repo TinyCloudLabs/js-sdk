@@ -280,6 +280,18 @@ describe("plain paste login: a signed lifetime of 60 seconds or less is still re
     expectOneNotice("kept");
   });
 
+  test("a signed expiry no message can carry (year 10000): OPENKEY_EXPIRY_UNREPRESENTABLE, same cleanup, one notice", async () => {
+    pickedLifetimeMs = 7 * DAY;
+    const spy = spyOn(NodeWasmBindings.prototype, "validatePersistedSession").mockImplementation(((proof: { spaceId: string }) => ({
+      verifiedRecap: [{ service: "kv", space: proof.spaceId, path: "", actions: ["tinycloud.kv/get"] }], expiresAt: "+010000-01-01T00:00:00.000Z",
+    })) as never);
+    try { await login("--expiry", "7d"); } finally { spy.mockRestore(); }
+    expect(recordedErrors).toEqual([expect.objectContaining({ code: "OPENKEY_EXPIRY_UNREPRESENTABLE", exitCode: 5 })]);
+    expect(files(profileName)).toEqual({ key: false, pending: false, session: false });
+    expect(existsSync(profilePath(profileName))).toBe(false);
+    expectOneNotice("deleted");
+  });
+
   test("an approval that has already ended is still AUTH_EXPIRED: kept by design, no notice", async () => {
     pickedLifetimeMs = -30_000;
     await login("--expiry", "7d");
