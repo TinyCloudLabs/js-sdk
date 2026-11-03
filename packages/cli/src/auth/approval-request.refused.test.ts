@@ -49,6 +49,8 @@ let acknowledgements = new Map<string, string>();
 let dropAck = false;
 let savedBeforeAck = false;
 let terminalAckCode: string | undefined;
+/** OpenKey answers the discover or the fetch with this error code (a rejected requester proof, an expired request ...). */
+let rejectWith: { action: "discover" | "fetch"; code: string } | undefined;
 let terminalAck: { requestId: string; bodyCid: string; ackId: string } | undefined;
 let retainedResultExpiresAt: string | undefined;
 
@@ -72,6 +74,7 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) 
   const credential = JSON.stringify([action, requestId, body.bodyCid, action === "discover" ? "" : resultRef, action === "ack" ? body.ackId : ""]);
   if (claims.htu !== request.url || claims.htm !== "POST" || claims.client_id !== "openkey-approval-result-v1" ||
     claims.cred_hash !== createHash("sha256").update(credential).digest("base64url")) return new Response(null, { status: 401 });
+  if (rejectWith?.action === action) return Response.json({ code: rejectWith.code }, { status: rejectWith.code === "expired_request" ? 410 : 401 });
   if (action === "discover") return Response.json({ resultRef, expiresAt: pending![0]!.resultExpiresAt ?? retainedResultExpiresAt });
   if (action === "fetch") return Response.json({
     requestId, bodyCid: body.bodyCid, resultRef, expiresAt: pending![0]!.resultExpiresAt ?? retainedResultExpiresAt,
@@ -135,7 +138,7 @@ async function stage(delegation: Record<string, unknown>, options: { expectedOwn
 beforeEach(async () => {
   caseEnvironment = snapshotEnvironment();
   Object.assign(process.env, fixtureEnvironment);
-  acknowledgements = new Map(); dropAck = false; savedBeforeAck = false; terminalAckCode = undefined; terminalAck = undefined; retainedResultExpiresAt = undefined;
+  acknowledgements = new Map(); dropAck = false; savedBeforeAck = false; terminalAckCode = undefined; rejectWith = undefined; terminalAck = undefined; retainedResultExpiresAt = undefined;
   await rm(join(profilePath("approval"), "approval-pending.json"), { force: true });
   await ProfileManager.setProfile("approval", { name: "approval", did, sessionDid: did, ownerDid, host, chainId: 1, spaceName: "applications", createdAt: new Date().toISOString(), authMethod: "openkey", posture: "owner-openkey" });
   await ProfileManager.setKey("approval", key);
@@ -450,5 +453,88 @@ describe("auth rotate: a failure raised INSIDE the approval fetch (before the re
     expect(notices).toEqual([]);
     expect((await entries())!.map((entry) => entry.requestId)).toEqual([requestId]);
     expect(JSON.stringify(await ProfileManager.getKey("approval"))).toBe(JSON.stringify(key));
+  });
+});
+
+describe("an approval the CLI cannot collect: OpenKey rejects the requester proof (a CLI clock behind OpenKey's) after the link was shown", () => {
+  // R6: the owner approved and OpenKey activated the grant, but every poll of this CLI is answered `invalid_proof`. The CLI never learns
+  // the result reference or the delegation, so it cannot name the grant, but it must not abandon the request in silence.
+  const oldKey = JSON.parse(wasm.createSessionManager().jwk("default")!) as Ed25519PrivateJwk;
+  const viaRequest = async (d: string, flow: Record<string, unknown>) => acquireApprovalRequest(d, { ...flow, ...ACQUIRE } as never);
+  const rotate = () => refreshOpenKeySession("approval", host, { rotation: { jwk: key, did }, openKeyAcquisition: viaRequest as never });
+  const plain = () => refreshOpenKeySession("approval", host, { openKeyAcquisition: viaRequest as never });
+  const withNotices = async (run: () => Promise<unknown>) => {
+    let thrown: unknown;
+    const notices = await noticeOf(() => run().catch((error) => { thrown = error; throw error; }));
+    return { thrown, notices };
+  };
+  /** A stored request that never got its result (no result reference on disk). */
+  const waiting = async () => {
+    await unfetched(await signedDelegation());
+    const [staged] = (await entries())!;
+    const { resultRef: _r, resultEnvelope: _e, resultExpiresAt: _x, ...rest } = staged as Record<string, unknown>;
+    await writeJsonDurable(PENDING(), [rest]);
+  };
+  const GENERIC = "OpenKey may already have granted this approval; this CLI did not use it and cannot revoke it; check and revoke at https://account.tinycloud.xyz/delegations.";
+
+  test("(a) rotation, the discover is rejected: the request is dropped and ONE generic notice (no CID, no date) says the grant may exist; the current login is unchanged", async () => {
+    await ProfileManager.setKey("approval", oldKey);
+    const before = JSON.stringify(await ProfileManager.getKey("approval"));
+    await waiting();
+    rejectWith = { action: "discover", code: "invalid_proof" };
+    const { thrown, notices } = await withNotices(rotate);
+    expect(thrown).toMatchObject({ code: "APPROVAL_RESULT_INVALID", message: "OpenKey rejected the request or requester binding." });
+    expect(await entries()).toEqual([]);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toBe(`${GENERIC} The key it would belong to was deleted, so it cannot be used. Your current login and its key are unchanged.`);
+    expect(JSON.stringify(await ProfileManager.getKey("approval"))).toBe(before);
+  });
+
+  test("(a) rotation, the FETCH is rejected (the result reference is known, so the approval arrived): ONE notice without a CID, 'at the latest until' the request's own bound", async () => {
+    await ProfileManager.setKey("approval", oldKey);
+    await unfetched(await signedDelegation());
+    const [staged] = (await entries())!;
+    const { resultEnvelope: _e, ...fetched } = staged as Record<string, unknown>;
+    await writeJsonDurable(PENDING(), [fetched]);
+    rejectWith = { action: "fetch", code: "request_binding" };
+    const { thrown, notices } = await withNotices(rotate);
+    expect(thrown).toMatchObject({ code: "APPROVAL_RESULT_INVALID" });
+    expect(await entries()).toEqual([]);
+    expect(notices).toHaveLength(1);
+    const latest = new Date(Date.parse((staged as { requestExpiresAt: string }).requestExpiresAt) + 3600 * 1000).toISOString();
+    expect(notices[0]).toStartWith(`OpenKey granted this approval, at the latest until ${latest}, but this CLI did not use it and its key was deleted, so it cannot be used.`);
+    expect(notices[0]).toContain("Your current login and its key are unchanged. This CLI cannot revoke it; revoke it at https://account.tinycloud.xyz/delegations.");
+    expect(notices[0]).not.toContain("Refused delegation:");
+  });
+
+  test("(b) a PLAIN request-flow login with the same rejection: nothing is dropped (it resumes once the clock is right), the key stays, NO notice", async () => {
+    await ProfileManager.setKey("approval", key);
+    await waiting();
+    rejectWith = { action: "discover", code: "invalid_proof" };
+    const { thrown, notices } = await withNotices(plain);
+    expect(thrown).toMatchObject({ code: "APPROVAL_RESULT_INVALID" });
+    expect(notices).toEqual([]);
+    expect((await entries())!.map((entry) => entry.requestId)).toEqual([requestId]);
+    expect(JSON.stringify(await ProfileManager.getKey("approval"))).toBe(JSON.stringify(key));
+  });
+
+  test("(c) a rotation whose request expired unanswered (the owner never approved): the request goes, NO notice: nothing was granted", async () => {
+    await ProfileManager.setKey("approval", oldKey);
+    await waiting();
+    rejectWith = { action: "discover", code: "expired_request" };
+    const { thrown, notices } = await withNotices(rotate);
+    expect(thrown).toMatchObject({ code: "APPROVAL_REQUEST_EXPIRED" });
+    expect(notices).toEqual([]);
+    expect(await entries()).toEqual([]);
+  });
+
+  test("(c) a rotation whose request cannot even be created: no entry, NO notice", async () => {
+    await ProfileManager.setKey("approval", oldKey);
+    const { thrown, notices } = await withNotices(() => refreshOpenKeySession("approval", host, {
+      rotation: { jwk: key, did }, openKeyAcquisition: (async () => { throw new Error("could not create the approval request"); }) as never,
+    }));
+    expect((thrown as Error).message).toBe("could not create the approval request");
+    expect(notices).toEqual([]);
+    expect((await entries()) ?? []).toEqual([]);
   });
 });
