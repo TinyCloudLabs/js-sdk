@@ -1761,3 +1761,105 @@ describe("signIn refuses caveated manifests (TC-1855)", () => {
     });
   }
 });
+
+describe("space hosting on restore (TC-2380)", () => {
+  const address = "0x96F7fB7ed32640d9D3a982f67CD6c09fc53EBEF1";
+  const persisted = {
+    address,
+    chainId: 1,
+    sessionKey: JSON.stringify({ kty: "OKP", crv: "Ed25519", d: "private" }),
+    siwe: "siwe",
+    signature: "signature",
+    tinycloudSession: {
+      delegationHeader: { Authorization: "Bearer persisted" },
+      delegationCid: "bafy-persisted",
+      spaceId: `tinycloud:pkh:eip155:1:${address}:default`,
+      verificationMethod: "did:key:zPersisted#zPersisted",
+    },
+    expiresAt: "2099-01-01T00:00:00.000Z",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    version: "1.0",
+  };
+
+  type Hosting = "hosted" | "not-hosted" | "unknown";
+
+  /** A TinyCloudWeb over a fake node whose probe is `probe`; `node.spaceHosting` is what the probe last recorded. */
+  async function webWith(probe: (node: { spaceHosting: Hosting }) => Promise<Hosting>) {
+    const storage = { save: mock(async () => undefined), load: mock(async () => persisted), clear: mock(async () => undefined) };
+    const walletRequest = mock(async (_request: { method: string }): Promise<never> => {
+      throw new Error("wallet is closed in this test");
+    });
+    const tcw = new TinyCloudWeb({
+      sessionStorage: storage,
+      provider: { request: walletRequest },
+      includeAccountRegistryPermissions: false,
+      autoBootstrapAccount: false,
+    });
+    await tcw._initPromise;
+    walletRequest.mockClear();
+    const statusDuringProbe: string[] = [];
+    const node = {
+      spaceHosting: "unknown" as Hosting,
+      spaceId: persisted.tinycloudSession.spaceId,
+      hasRuntimePermissions: mock(() => true),
+      restoreSession: mock(async () => undefined),
+      signIn: mock(async () => undefined),
+      checkSpaceHosting: mock(async () => {
+        statusDuringProbe.push(tcw.sessionRestoreStatus);
+        return probe(node);
+      }),
+    };
+    tcw._node = node;
+    tcw._initPromise = Promise.resolve();
+    return { tcw, node, walletRequest, statusDuringProbe };
+  }
+
+  test("a restored session whose space is not hosted stays restored, reports not-hosted and prompts for nothing", async () => {
+    const { tcw, node, walletRequest, statusDuringProbe } = await webWith(async (n) => {
+      n.spaceHosting = "not-hosted";
+      return "not-hosted";
+    });
+
+    const result = await tcw.restoreSession(address);
+
+    expect(result.status).toBe("restored");
+    expect(result.session?.address).toBe(address);
+    expect(tcw.sessionRestoreStatus).toBe("restored");
+    expect(tcw.spaceHosting).toBe("not-hosted");
+    expect(node.checkSpaceHosting).toHaveBeenCalledTimes(1);
+    // The probe runs while the restore is still in progress, before "restored".
+    expect(statusDuringProbe).toEqual(["restoring"]);
+    expect(node.signIn).not.toHaveBeenCalled();
+    expect(walletRequest).not.toHaveBeenCalled();
+  });
+
+  test("a hung probe delays the restore only up to the cap and a throwing probe never fails it", async () => {
+    const hung = await webWith(() => new Promise<Hosting>(() => undefined));
+    hung.tcw.spaceHostingCapMs = 50;
+    const started = Date.now();
+    const result = await hung.tcw.restoreSession(address);
+    expect(result.status).toBe("restored");
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(hung.tcw.spaceHosting).toBe("unknown");
+
+    const failing = await webWith(async () => {
+      throw new Error("node unreachable");
+    });
+    expect((await failing.tcw.restoreSession(address)).status).toBe("restored");
+    expect(failing.tcw.spaceHosting).toBe("unknown");
+  });
+
+  test("TC-2380 Q2 seam: signIn on a restored session with an unhosted space keeps returning the restored session", async () => {
+    const { tcw, node, walletRequest } = await webWith(async () => "not-hosted");
+    node.spaceHosting = "not-hosted";
+    const restoredSession = { address, walletAddress: address, chainId: 1, sessionKey: {}, siwe: "siwe", signature: "signature" };
+    tcw.restoreSession = mock(async () => ({ status: "restored", session: restoredSession }));
+
+    const session = await tcw.signIn();
+
+    expect(session).toBe(restoredSession);
+    expect(node.signIn).not.toHaveBeenCalled();
+    // eth_accounts is a silent read; nothing that prompts (an accounts request, a signature) was asked of the wallet.
+    expect(walletRequest.mock.calls.map(([request]) => request.method).filter((method) => method !== "eth_accounts")).toEqual([]);
+  });
+});

@@ -126,7 +126,7 @@ import { resolveSpaceCreationHandler } from "../authorization/WebSpaceCreationHa
 import type { NotificationConfig } from "../notifications/types";
 import { WasmInitializer } from "./WasmInitializer";
 import { invoke } from "./Storage/tinycloud/module";
-import type { PortableDelegation, DelegatedAccess } from "@tinycloud/node-sdk/core";
+import type { PortableDelegation, DelegatedAccess, SpaceHosting } from "@tinycloud/node-sdk/core";
 import { CredentialsService } from "../credentials";
 import { ShareReceiverService, type ShareReceiverServiceOptions } from "../share";
 
@@ -407,6 +407,8 @@ export interface ShareReceiveResult<T = unknown> {
 export class TinyCloudWeb {
   private openkeySignInInFlight = 0;
   private prepareSignInToken = 0;
+  /** How long a restore waits for the node's hosting answer. */
+  private spaceHostingCapMs = 5_000;
   private preparedSignIn?: {
     node: TinyCloudNode;
     request: PreparedOpenKeyAuthorization;
@@ -813,6 +815,12 @@ export class TinyCloudWeb {
   get delegations(): DelegationManager { return this.node.delegationManager; }
   get capabilityRegistry(): ICapabilityKeyRegistry { return this.node.capabilityRegistry; }
   get spaceId(): string | undefined { return this._node?.spaceId; }
+  /** The node's last answer for whether the primary space is hosted (`"unknown"` until it has answered). */
+  get spaceHosting(): SpaceHosting { return this._node?.spaceHosting ?? "unknown"; }
+  /** Ask the node whether a space (default: the primary) is hosted. See `TinyCloudNode.checkSpaceHosting`. */
+  async checkSpaceHosting(space?: string): Promise<SpaceHosting> {
+    return (await this.ensureNode()).checkSpaceHosting(space);
+  }
   get accountSpaceId(): string | undefined { return this._node?.accountSpaceId; }
   get account(): AccountService { return this.node.account; }
   get hosts(): string[] { return this.node.hosts; }
@@ -1014,6 +1022,8 @@ export class TinyCloudWeb {
           { isCurrent: () => this.signOutCount === signOuts && this.signOutInFlight === 0 },
         );
       }
+      // One bounded node read: the restored session's primary space may not be hosted. Never prompts, never fails the restore.
+      await this.probeSpaceHosting(node);
       assertNotSignedOut();
       this.resetSessionScopedCaches();
       this.uiClient.armPrefetch(this);
@@ -1039,6 +1049,22 @@ export class TinyCloudWeb {
     } finally {
       this.untrackRestoreAddress(restoreAddress);
     }
+  }
+
+  /** One node read for the restored session, held to {@link spaceHostingCapMs}; past it, or on any failure, the answer stays unknown. */
+  private async probeSpaceHosting(node: TinyCloudNode): Promise<void> {
+    const { promise: capped, resolve } = Promise.withResolvers<void>();
+    const timer = setTimeout(resolve, this.spaceHostingCapMs);
+    try {
+      await Promise.race([Promise.resolve().then(() => node.checkSpaceHosting()), capped]);
+    } catch { /* a probe never fails a restore */ } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  // TC-2380 Q2 seam: Sam has not decided between a one-click OpenKey approval and a silent wait
+  private async restoredSessionNotHosted(_node: TinyCloudNode, restored: ClientSession): Promise<ClientSession> {
+    return restored;
   }
 
   async clearPersistedSession(address?: string): Promise<void> {
@@ -1105,6 +1131,7 @@ export class TinyCloudWeb {
       const permissions = this.configuredManifestPermissions(node);
       if (permissions.length === 0 || node.hasRuntimePermissions(permissions)) {
         assertCurrent();
+        if (node.spaceHosting === "not-hosted") await this.restoredSessionNotHosted(node, restored.session);
         return;
       }
       await this.clearPersistedSession(restored.session.address);
@@ -1175,7 +1202,9 @@ export class TinyCloudWeb {
         const permissions = this.configuredManifestPermissions(restoredNode);
         if (permissions.length === 0 || restoredNode.hasRuntimePermissions(permissions)) {
           assertNotSignedOut();
-          return restored.session;
+          return restoredNode.spaceHosting === "not-hosted"
+            ? this.restoredSessionNotHosted(restoredNode, restored.session)
+            : restored.session;
         }
         await this.clearPersistedSession(restored.session.address);
         assertNotSignedOut();
