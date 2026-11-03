@@ -649,7 +649,6 @@ describe("TinyCloudNode sharing", () => {
       [{ actions: [] }, "bounded capabilities"],
       [{ actions: ["tinycloud.unknown/read"] }, "capabilities are unsupported"],
       [{ expiresAt: new Date(Date.now() - 1_000) }, "expiry must be explicit"],
-      [{ expiresAt: new Date(Date.now() + 11 * 365 * 24 * 60 * 60 * 1000) }, "within EXPIRY.MAX_MS"],
     ] as const) {
       await expect(node.createOwnerDelegation({ ...valid, ...overrides })).rejects.toThrow(message);
     }

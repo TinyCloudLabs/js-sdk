@@ -27,6 +27,8 @@ import {
 } from "./scoped-login.js";
 import { assertNotLocalOwner, assertSessionReplaceable, commitLogin, readProfileSnapshot } from "./login-commit.js";
 import { announceFirstOwner, openKeyPrimaryFlag, warnIfNotPrimaryKey, withOwnerKeyPrimary } from "./owner-key.js";
+import { carryRefusedDelegation, isPermanentRefusal } from "./refusal.js";
+import { refusing } from "./refused-approval.js";
 
 /** OpenKey caps device-approved delegations at 30 days. */
 const DEVICE_DELEGATION_MAX_SECONDS = 30 * 24 * 60 * 60;
@@ -549,19 +551,25 @@ export async function acquireDeviceDelegation(input: DeviceAuthorizationInput): 
       throw invalidResponse("OpenKey returned an invalid device authorization result");
     }
     const delegation = decryptRelayResult(result.relay, started.transactionId, relayKey);
-    return verifyApproval({
-      binding: result.binding,
-      delegation,
-      transactionId: started.transactionId,
-      sessionDid: input.sessionDid,
-      nodeOrigin,
-      shareOrigin,
-      publicJwk,
-      key: input.jwk,
-      requested: input.permissions,
-      expiry,
-      expectedOwner: input.expectedOwner,
-    });
+    try {
+      return await verifyApproval({
+        binding: result.binding,
+        delegation,
+        transactionId: started.transactionId,
+        sessionDid: input.sessionDid,
+        nodeOrigin,
+        shareOrigin,
+        publicJwk,
+        key: input.jwk,
+        requested: input.permissions,
+        expiry,
+        expectedOwner: input.expectedOwner,
+      });
+    } catch (error) {
+      // The owner approved: the refused result is named in the notice the caller prints.
+      if (isPermanentRefusal(error)) carryRefusedDelegation(error, delegation);
+      throw error;
+    }
   }
   throw new CLIError("DEVICE_AUTH_EXPIRED", "OpenKey device authorization expired before approval. Run the command again.", ExitCode.AUTH_REQUIRED);
 }
@@ -592,14 +600,16 @@ export async function loginWithDeviceAuthorization(input: Omit<DeviceAuthorizati
   }
   const key = snapshot.key ?? generateKey().jwk;
   const sessionDid = keyToDID(key);
-  const result = await acquireDeviceDelegation({
+  // OpenKey made the delegation before the CLI verified it: a permanent refusal is announced once (the key is deleted only
+  // when this login made it, i.e. it was held in memory; a stored key is kept).
+  const result = await refusing({ profileName: input.profileName, key, storedKey: snapshot.key }, () => acquireDeviceDelegation({
     ...input,
     permissions,
     sessionDid,
     jwk: key,
     openkeyHost: input.openkeyHost ?? resolveDeviceApiHost(existing),
     expectedOwner,
-  });
+  }));
   const profile: ProfileConfig = withOwnerKeyPrimary({
     ...existing,
     name: input.profileName,

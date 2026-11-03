@@ -44,6 +44,7 @@ import {
   type RegistryVerdict,
   type SpaceCreationContext,
   EXPIRY,
+  assertExpiryWithinTechnicalLimit,
   canonicalizeAddress,
   makePkhSpaceId,
   pkhDid,
@@ -1599,7 +1600,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     }
     const jwk = JSON.parse(jwkString);
     const now = new Date();
-    const expirationTime = new Date(now.getTime() + this.sessionExpirationMs);
+    const expirationTime = this.sessionExpiryFrom(now);
     // Sign every requested permission onto its own space. The widened
     // default request carries account-space entries; flattening them under
     // `options.spaceId` signed `…:default/sql/account`, which the node
@@ -1668,6 +1669,18 @@ export class NodeUserAuthorization implements IUserAuthorization {
       siwe: prepared.siwe,
       signature,
     };
+  }
+
+  /**
+   * When a session that starts at `now` ends. Refused with a dated message when
+   * the configured lifetime reaches past what a sign-in message can carry,
+   * instead of the bare `RangeError` or WASM parse error `toISOString()` and
+   * `prepareSession` would otherwise give.
+   */
+  private sessionExpiryFrom(now: Date): Date {
+    const expirationTime = new Date(now.getTime() + this.sessionExpirationMs);
+    assertExpiryWithinTechnicalLimit(expirationTime, "siwe");
+    return expirationTime;
   }
 
   private persistedData(
@@ -1739,7 +1752,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const spaceId = capabilityPlan.spaceId;
 
     const now = new Date();
-    const expirationTime = new Date(now.getTime() + this.sessionExpirationMs);
+    const expirationTime = this.sessionExpiryFrom(now);
 
     // Prepare session - this creates the SIWE message with ReCap capabilities.
     //
@@ -1952,7 +1965,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     const spaceId = capabilityPlan.spaceId;
 
     const now = new Date();
-    const expirationTime = new Date(now.getTime() + this.sessionExpirationMs);
+    const expirationTime = this.sessionExpiryFrom(now);
 
     // Prepare session - this creates the SIWE message with ReCap capabilities.
     //
@@ -2060,7 +2073,7 @@ export class NodeUserAuthorization implements IUserAuthorization {
     // regex too, but the real lines follow the statement.
     const expiresAt =
       lastAnchoredLine(prepared.siwe ?? "", /^Expiration Time: (.+)$/gm) ??
-      new Date(Date.now() + this.sessionExpirationMs).toISOString();
+      this.sessionExpiryFrom(new Date()).toISOString();
     const createdAt = lastAnchoredLine(prepared.siwe ?? "", /^Issued At: (.+)$/gm) ?? new Date().toISOString();
 
     const replicaStamp = await this.establishReplicaStamp?.(tinyCloudSession);
