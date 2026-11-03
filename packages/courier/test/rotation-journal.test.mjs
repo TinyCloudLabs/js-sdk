@@ -10,6 +10,7 @@ import {
 import { cmdInit } from '../dist/commands.js';
 import { parseArgs } from '../dist/args.js';
 
+import { writeTempIdentity } from './support/lock-identity.mjs';
 // `main` turns any thrown error into an exit code, so a simulated kill only propagates when the command is called directly.
 const rotateAndDie = () => cmdInit(parseArgs(['--rotate-key', '--request']));
 
@@ -48,7 +49,7 @@ async function readyProfile({ t, request, courier }) {
 }
 
 const files = () => fs.readdirSync(path.dirname(homeFile('x'))).sort();
-const noTemporaries = () => assert.deepEqual(files().filter((name) => name.endsWith('.tmp')), []);
+const noTemporaries = () => assert.deepEqual(files().filter((name) => name.endsWith('.tmp') || name.endsWith('.tmp.identity')), []);
 
 const BOUNDARIES = [
   { name: 'after rotation.json is written', arm: (t) => crashAtWrite(t, 'rotation.json', { phase: 'after' }) },
@@ -99,8 +100,8 @@ for (const boundary of BOUNDARIES) {
   }
 }
 
-// A process killed before the rename leaves `rotation.json.<pid>.<hex>.tmp` (0600, in the profile directory) holding the new key. The
-// in-process Crash used by the other tests unwinds through `finally`, so the file a real kill leaves is planted by hand.
+// A process killed before the rename leaves `rotation.json.<pid>.<hex>.tmp` (0600, in the profile directory) holding the new key, plus its `.identity` sidecar. The
+// in-process Crash used by the other tests unwinds through `finally`, so both files a real kill leaves are planted by hand.
 const STRAY = `rotation.json.${DEAD_PID}.0a1b2c3d4e5f.tmp`;
 for (const mode of [['--request'], ['--wait', '--timeout', '1s'], ['--resume'], ['--rotate-key', '--request']]) {
   scenario(`rotation killed before rotation.json is renamed: the old state stands and \`init ${mode.join(' ')}\` removes the stray temp file holding the new key`, async (ctx) => {
@@ -111,6 +112,7 @@ for (const mode of [['--request'], ['--wait', '--timeout', '1s'], ['--resume'], 
     await assert.rejects(rotateAndDie(), (error) => error instanceof Crash);
     crash.disarm();
     fs.writeFileSync(homeFile(STRAY), JSON.stringify({ v: 1, key: { v: 1, jwk: { d: 'new-private-part' }, did: 'did:key:z6Mn', createdAt: 'now' }, profile: {} }), { mode: 0o600 });
+    writeTempIdentity(homeFile(STRAY), DEAD_PID, '0a1b2c3d4e5f');
     const derived = deriveState();
     assert.equal(derived.state, 'ready', 'roll back: the old state stands');
     assert.equal(derived.cleanTemp, true);

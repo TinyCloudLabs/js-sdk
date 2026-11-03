@@ -54,7 +54,7 @@ export function writeNew(dir: string, name: string, body: string, mode: number):
  * `pid` and `nonce` are the ownership record. `machine` (machine-id) and `boot` (a true per-boot id) say which machine and boot it ran on;
  * `host` and `pidns` say where a pid number means anything.
  */
-interface LockRecord {
+export interface LockRecord {
   pid: number;
   nonce: string;
   host?: string;
@@ -92,6 +92,12 @@ function parseRecord(text: string): LockRecord | undefined {
   } catch {
     return undefined;
   }
+}
+
+/** Parses the JSON identity record used by Courier's temporary-file sidecars. Legacy pid-only locks are not sidecar records. */
+export function parseIdentityRecord(text: string): LockRecord | undefined {
+  if (!text.trimStart().startsWith('{')) return undefined;
+  return parseRecord(text);
 }
 
 function recordBody(record: LockRecord): string {
@@ -168,6 +174,11 @@ function identity(here: { machine?: string; boot?: string }): Pick<LockRecord, '
   return out;
 }
 
+/** The identity fields Courier records beside a temp file and in a lock. */
+export function processIdentityRecord(pid: number, nonce: string, here: { machine?: string; boot?: string } = currentIdentity()): LockRecord {
+  return { pid, nonce, ...identity(here) };
+}
+
 export type Liveness = 'alive' | 'dead' | 'unknown';
 
 /**
@@ -223,6 +234,13 @@ export interface LockOptions {
 /** Guard slots per dead lock. The bound stops a corrupt directory from looping forever. */
 const MAX_BREAK_GUARDS = 8;
 
+/** A shell-safe cleanup command for a literal path, using POSIX shell or PowerShell quoting. */
+export function formatRemovalCommand(file: string, platform: NodeJS.Platform = process.platform): string {
+  return platform === 'win32'
+    ? `Remove-Item -LiteralPath '${file.replace(/['\u2018-\u201B]/g, (quote) => quote + quote)}' -Force`
+    : `rm -f -- '${file.replace(/'/g, `'\\''`)}'`;
+}
+
 /** The one line a refused lock prints: what holds it, and the only safe way out. The lock itself is never removed on doubt. */
 export function lockRefusal({ file, reason, pid, host, record }: LockRefusal, platform: NodeJS.Platform = process.platform): string {
   // Text from a lock record is data, not words: JSON-quoted so a hostile host name cannot add lines or terminal escapes.
@@ -231,9 +249,7 @@ export function lockRefusal({ file, reason, pid, host, record }: LockRefusal, pl
     : reason === 'corrupt' ? 'has a record Courier cannot read'
       : reason === 'unknown' ? `is held by ${holder}, and Courier cannot tell whether that process is still running`
         : `is held by ${holder}, and another Courier command is already working on clearing it`;
-  const remove = platform === 'win32'
-    ? `Remove-Item -LiteralPath '${file.replace(/['\u2018-\u201B]/g, (quote) => quote + quote)}' -Force` // PowerShell: single quotes are literal; ' and its typographic forms U+2018 to U+201B each end the string unless doubled
-    : `rm -f -- '${file.replace(/'/g, `'\\''`)}'`;
+  const remove = formatRemovalCommand(file, platform);
   return `${file} ${why}${record === undefined ? '' : ` (record ${record})`}; the lock was left in place. Try again; only after confirming no Courier command is running anywhere that uses this lock, clear it with: ${remove}`;
 }
 
@@ -246,7 +262,7 @@ export function acquireLock(file: string, opts: LockOptions = {}): () => void {
   const name = path.basename(file);
   const pid = opts.pid ?? process.pid;
   const here = (opts.identity ?? currentIdentity)();
-  const self: LockRecord = { pid, nonce: randomBytes(6).toString('hex'), ...identity(here) };
+  const self = processIdentityRecord(pid, randomBytes(6).toString('hex'), here);
   const state = (record: LockRecord): Liveness => (opts.alive ? (opts.alive(record.pid) ? 'alive' : 'dead') : recordLiveness(record, here));
   const refuse = (info: Omit<LockRefusal, 'file'>): never => {
     throw new CourierError('locked', (opts.refusal ?? lockRefusal)({ file, ...info }));

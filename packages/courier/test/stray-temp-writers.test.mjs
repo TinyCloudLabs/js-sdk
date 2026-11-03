@@ -2,10 +2,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { homeFile, scenario } from './support/approval-fixture.mjs';
 import { snapshot } from './support/review-fixture.mjs';
+import { writeTempIdentity } from './support/lock-identity.mjs';
 
 // TC-2383: a key-bearing temp file is `<file>.<pid>.<12 hex>.tmp`, written by `writeSecure` for key.json, rotation.json and
-// approval-pending.json (which holds `relayPrivateKey` and the encrypted result). The scrub removes one only when the process that
-// named it is gone: between the writer's fsync and its rename the file is live, and zeroing it would let the writer install an empty key.
+// approval-pending.json (which holds `relayPrivateKey` and the encrypted result). A persisted identity sidecar proves a writer gone
+// only when its host/namespace match and the PID probe returns ESRCH; every unknown identity preserves the temp.
 
 const HEX = '0a1b2c3d4e5f';
 const DEAD = 4_999_991;
@@ -28,6 +29,7 @@ function fakeProcessTable(t) {
 const plant = (file, pid) => {
   const name = `${file}.${pid}.${HEX}.tmp`;
   fs.writeFileSync(homeFile(name), BODY, { mode: 0o600 });
+  writeTempIdentity(homeFile(name), pid, HEX);
   return name;
 };
 
@@ -58,12 +60,15 @@ for (const file of FILES) {
   });
 }
 
-scenario('a temp file named for this very process is stale (one writeSecure finishes before another starts) and is removed', async (ctx) => {
+scenario('a temp file named for this process is unknown while the process exists and stays with recovery guidance', async (ctx) => {
   await ctx.request();
   const name = plant('approval-pending.json', process.pid);
+  const before = fs.readFileSync(homeFile(name));
   const run = await ctx.courier('--request');
   assert.equal(run.code, 0, run.stderr);
-  assert.equal(fs.existsSync(homeFile(name)), false);
+  assert.deepEqual(fs.readFileSync(homeFile(name)), before);
+  assert.ok(run.stderr.includes(name));
+  assert.match(run.stderr, /only after confirming/i);
 });
 
 scenario('a temp file of a live writer keeps cleanTemp false and is never what a later init removes while the writer lives', async (ctx) => {
@@ -82,6 +87,7 @@ scenario('an approval-pending.json temp file that is a hard link or a symlink is
   const victim = homeFile('victim.json');
   fs.writeFileSync(victim, '{"keep":"this content"}', { mode: 0o600 });
   fs.linkSync(victim, homeFile(`approval-pending.json.${DEAD}.${HEX}.tmp`));
+  writeTempIdentity(homeFile(`approval-pending.json.${DEAD}.${HEX}.tmp`), DEAD, HEX);
   const before = snapshot();
   const run = await ctx.courier('--request');
   assert.notEqual(run.code, 0, run.stderr);

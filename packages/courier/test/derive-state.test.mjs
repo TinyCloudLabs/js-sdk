@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { DEAD_PID } from './support/review-fixture.mjs';
+import { writeTempIdentity } from './support/lock-identity.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -11,7 +12,7 @@ import { classifyState, deriveState } from '../dist/state.js';
 // combination of those inputs (first matching row wins; `*` matches anything). Rows are written from the code paths
 // that write these files, not from deriveState's own rules.
 //
-// A stray rotation.json.<pid>.<hex>.tmp (0600, holds the new key) is what a death before the journal's rename leaves; deriveState reports it as `cleanTemp`.
+// A stray rotation.json.<pid>.<hex>.tmp (0600, holds the new key) is what a death before the journal's rename leaves; its `.identity` sidecar lets recovery establish which writer created it.
 // Crash-reachable writers (each file is replaced atomically, so a death leaves a prefix of these sequences):
 //   fresh init:      key.json -> profile.json(awaiting-grant) -> [approval-pending.json | pending-grant.json | grant.json]
 //   install:         grant.json -> profile.json(awaiting-space [+spacePending] | ready)
@@ -171,6 +172,8 @@ const put = (name, value, mode = 0o600) => {
   const file = path.join(home(), name);
   fs.writeFileSync(file, typeof value === 'string' ? value : JSON.stringify(value), { mode });
   fs.chmodSync(file, mode);
+  const temp = /^(?:rotation|key|approval-pending)\.json\.(\d+)\.([0-9a-f]{12})\.tmp$/.exec(name);
+  if (temp) writeTempIdentity(file, Number(temp[1]), temp[2]);
 };
 
 const APPROVAL = {

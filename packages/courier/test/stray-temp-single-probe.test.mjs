@@ -2,10 +2,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { recoverInterrupted } from '../dist/state.js';
 import { homeFile, scenario } from './support/approval-fixture.mjs';
+import { writeTempIdentity } from './support/lock-identity.mjs';
 
-// TC-2383: `recoverInterrupted` classifies the temp files once: one listing, one liveness probe per file. A process that dies (or whose pid is
-// handed to another process) between two probes can then never leave a file neither scrubbed nor reported, or reported as kept after it was
-// scrubbed.
+// TC-2383: `recoverInterrupted` classifies one directory snapshot; only a sidecar whose PID and nonce match its temp reaches the
+// identity-aware PID probe. A writer proven dead is scrubbed without a stale warning; an unknown writer is kept and reported.
 
 const PID = 4_999_997;
 const NAME = `key.json.${PID}.0a1b2c3d4e5f.tmp`;
@@ -29,26 +29,31 @@ scenario('each temp file is probed once per recovery', async (ctx) => {
   const state = probes(ctx.t, [true]);
   await ctx.request();
   fs.writeFileSync(homeFile(NAME), BODY, { mode: 0o600 });
+  writeTempIdentity(homeFile(NAME), PID, '0a1b2c3d4e5f');
   recoverInterrupted();
   assert.equal(state.count, 1);
 });
 
-scenario('a writer that dies after the first probe: the file is kept and reported, never silently left', async (ctx) => {
-  probes(ctx.t, [true, false]);
+scenario('a temp with a live writer is kept and reported', async (ctx) => {
+  const state = probes(ctx.t, [true]);
   await ctx.request();
   fs.writeFileSync(homeFile(NAME), BODY, { mode: 0o600 });
   ctx.errors.length = 0;
+  writeTempIdentity(homeFile(NAME), PID, '0a1b2c3d4e5f');
   recoverInterrupted();
   assert.equal(fs.readFileSync(homeFile(NAME), 'utf8'), BODY);
   assert.ok(ctx.errors.some((line) => line.includes(NAME)), 'reported');
+  assert.equal(state.count, 1);
 });
 
-scenario('a pid handed to another process after the first probe: the file that was scrubbed is not reported as kept', async (ctx) => {
-  probes(ctx.t, [false, true]);
+scenario('a temp proven dead is scrubbed and never reported as kept', async (ctx) => {
+  const state = probes(ctx.t, [false]);
   await ctx.request();
   fs.writeFileSync(homeFile(NAME), BODY, { mode: 0o600 });
   ctx.errors.length = 0;
+  writeTempIdentity(homeFile(NAME), PID, '0a1b2c3d4e5f');
   recoverInterrupted();
   assert.equal(fs.existsSync(homeFile(NAME)), false, 'scrubbed');
   assert.equal(ctx.errors.some((line) => line.includes(NAME)), false);
+  assert.equal(state.count, 1);
 });

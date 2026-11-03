@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { acquireLock, lockRefusal, machineIdentity } from '../dist/file-lock.js';
+import { acquireLock, formatRemovalCommand, lockRefusal, machineIdentity } from '../dist/file-lock.js';
 import { removalCommand } from './support/lock-identity.mjs';
 
 const HOME = process.env.COURIER_HOME;
@@ -167,8 +167,11 @@ test('the recovery command matches the platform: POSIX rm, or PowerShell Remove-
   assert.ok(lockRefusal({ ...info, file: "/tmp/it's.lock" }, 'darwin').endsWith("rm -f -- '/tmp/it'\\''s.lock'"));
   const win = lockRefusal({ ...info, file: "C:\\Users\\o'brien\\.courier\\profile.json.lock" }, 'win32');
   assert.ok(win.endsWith("Remove-Item -LiteralPath 'C:\\Users\\o''brien\\.courier\\profile.json.lock' -Force"), win);
+  assert.equal(formatRemovalCommand("/tmp/it's.lock", 'darwin'), "rm -f -- '/tmp/it'\\''s.lock'");
+  const quotedWinPath = "C:\\Users\\o'brien\\.courier\\\u2018file\u2019.json";
+  assert.equal(formatRemovalCommand(quotedWinPath, 'win32'), "Remove-Item -LiteralPath 'C:\\Users\\o''brien\\.courier\\\u2018\u2018file\u2019\u2019.json' -Force");
+  assert.ok(win.includes('only after confirming no Courier command is running anywhere'));
   assert.ok(!win.includes('rm -f'));
-  assert.match(win, /only after confirming no Courier command is running/);
 });
 
 test('a hostile host name in a lock record cannot break the one-line refusal', () => {
