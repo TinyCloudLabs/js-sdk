@@ -2581,5 +2581,33 @@
     "worker": { "delta": 22, "ceiling": 776561 },
     "replicaWorker": { "delta": 27, "ceiling": 770494 },
     "reason": "TC-2418 abort-listener cleanup (AbortSignal.any where present); exact SQLite and PostgreSQL CI measurements agree. First import and activation stay inside the ceilings carried from TC-2276."
+  },
+  "tc2379SignOutFence": {
+    "label": "sign out locally first, fence a signed-out session, clear only the own session (TC-2379)",
+    "ruling": "Exact canonical SQLite and PostgreSQL CI at source head b4f918a35a67cbcbb2d84b12379c1ba235fa9f22 measures 1,479,124/1,421,537 B, +409/+299 B over TC-2418. Bun 1.3.14; rustc 1.99.0 (b940084d7 2026-09-28).",
+    "base": "902e603101695438557d67a065ef5dc97f706325",
+    "sourceCommits": ["b4f918a35a67cbcbb2d84b12379c1ba235fa9f22"],
+    "canonicalCI": {
+      "run": "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41595761198",
+      "jobs": [
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41595761198/job/125782625804",
+        "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41595761198/job/125782625686"
+      ]
+    },
+    "root": {
+      "delta": { "index.mjs": 409, "index.cjs": 299 },
+      "ceiling": { "index.mjs": 1479124, "index.cjs": 1421537 }
+    },
+    "firstImport": {
+      "delta": { "replica.mjs": 0, "replica.cjs": 0 },
+      "ceiling": { "replica.mjs": 52757, "replica.cjs": 67957 }
+    },
+    "activation": {
+      "delta": { "activation.mjs": 0, "activation.cjs": 0 },
+      "ceiling": { "activation.mjs": 23412, "activation.cjs": 24981 }
+    },
+    "worker": { "delta": 0, "ceiling": 776561 },
+    "replicaWorker": { "delta": 0, "ceiling": 770494 },
+    "reason": "TC-2379 sign-out fence row; exact SQLite and PostgreSQL CI root gzip measurements agree. All non-root size buckets are carried unchanged from TC-2418."
   }
 }

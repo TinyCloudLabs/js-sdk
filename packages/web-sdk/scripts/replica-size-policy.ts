@@ -352,6 +352,8 @@ export type Tc2276SignedExpiry = HardeningRatchet & { replicaWorker: { delta: nu
 export type Tc2276TechnicalLimits = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
 /** Exact TC-2418 abort-listener cleanup admission (root, replica workers, first import, activation); the ceilings of the rows it follows carry where a bucket stays inside them. */
 export type Tc2418AbortListenerCleanup = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
+/** Exact TC-2379 sign-out fence root admission; non-root buckets carry TC-2418. */
+export type Tc2379SignOutFence = HardeningRatchet & { replicaWorker: { delta: number; ceiling: number } };
 export type Ledger = {
   allowance: GzipSizes;
   entries: LedgerEntry[];
@@ -420,6 +422,7 @@ export type Ledger = {
   tc2276SignedExpiry?: Tc2276SignedExpiry;
   tc2276TechnicalLimits?: Tc2276TechnicalLimits;
   tc2418AbortListenerCleanup?: Tc2418AbortListenerCleanup;
+  tc2379SignOutFence?: Tc2379SignOutFence;
 };
 
 const formats = ["index.mjs", "index.cjs"] as const;
@@ -1018,6 +1021,7 @@ export function ancestryPins(root: Ledger, hasGatedOnly: boolean): Array<{ row: 
   if (root.tc2276SignedExpiry !== undefined) pins.push({ row: "tc2276SignedExpiry", pin: root.tc2276SignedExpiry.sourceCommits.at(-1)! });
   if (root.tc2276TechnicalLimits !== undefined) pins.push({ row: "tc2276TechnicalLimits", pin: root.tc2276TechnicalLimits.sourceCommits.at(-1)! });
   if (root.tc2418AbortListenerCleanup !== undefined) pins.push({ row: "tc2418AbortListenerCleanup", pin: root.tc2418AbortListenerCleanup.sourceCommits.at(-1)! });
+  if (root.tc2379SignOutFence !== undefined) pins.push({ row: "tc2379SignOutFence", pin: root.tc2379SignOutFence.sourceCommits.at(-1)! });
   if (hasGatedOnly) pins.push({ row: "gatedOnlyRatchet", pin: approvedGatedOnlyRatchet.sourceCommit });
   return pins;
 }
@@ -1092,6 +1096,7 @@ export function rootCeilings(root: Ledger): Array<{ row: string; ceiling: GzipSi
     ["tc2276SignedExpiry", root.tc2276SignedExpiry?.root.ceiling],
     ["tc2276TechnicalLimits", root.tc2276TechnicalLimits?.root.ceiling],
     ["tc2418AbortListenerCleanup", root.tc2418AbortListenerCleanup?.root.ceiling],
+    ["tc2379SignOutFence", root.tc2379SignOutFence?.root.ceiling],
   ];
   return rows.flatMap(([row, ceiling]) => ceiling === undefined ? [] : [{ row, ceiling }]);
 }
@@ -2633,6 +2638,34 @@ export const approvedTc2418AbortListenerCleanup: Tc2418AbortListenerCleanup = {
   replicaWorker: { delta: 27, ceiling: 770494 },
   reason: "TC-2418 abort-listener cleanup (AbortSignal.any where present); exact SQLite and PostgreSQL CI measurements agree. First import and activation stay inside the ceilings carried from TC-2276.",
 };
+export const approvedTc2379SignOutFence: Tc2379SignOutFence = {
+  label: "sign out locally first, fence a signed-out session, clear only the own session (TC-2379)",
+  ruling: "Exact canonical SQLite and PostgreSQL CI at source head b4f918a35a67cbcbb2d84b12379c1ba235fa9f22 measures 1,479,124/1,421,537 B, +409/+299 B over TC-2418. Bun 1.3.14; rustc 1.99.0 (b940084d7 2026-09-28).",
+  base: "902e603101695438557d67a065ef5dc97f706325",
+  sourceCommits: ["b4f918a35a67cbcbb2d84b12379c1ba235fa9f22"],
+  canonicalCI: {
+    run: "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41595761198",
+    jobs: [
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41595761198/job/125782625804",
+      "https://github.com/TinyCloudLabs/js-sdk/actions/runs/41595761198/job/125782625686",
+    ],
+  },
+  root: {
+    delta: { "index.mjs": 409, "index.cjs": 299 },
+    ceiling: { "index.mjs": 1479124, "index.cjs": 1421537 },
+  },
+  firstImport: {
+    delta: { "replica.mjs": 0, "replica.cjs": 0 },
+    ceiling: { "replica.mjs": 52757, "replica.cjs": 67957 },
+  },
+  activation: {
+    delta: { "activation.mjs": 0, "activation.cjs": 0 },
+    ceiling: { "activation.mjs": 23412, "activation.cjs": 24981 },
+  },
+  worker: { delta: 0, ceiling: 776561 },
+  replicaWorker: { delta: 0, ceiling: 770494 },
+  reason: "TC-2379 sign-out fence row; exact SQLite and PostgreSQL CI root gzip measurements agree. All non-root size buckets are carried unchanged from TC-2418.",
+};
 
 export type GatedOnlyRatchet = {
   label: string;
@@ -2730,6 +2763,7 @@ export const approvedLedgerRows: Record<string, unknown> = {
   tc2276SignedExpiry: approvedTc2276SignedExpiry,
   tc2276TechnicalLimits: approvedTc2276TechnicalLimits,
   tc2418AbortListenerCleanup: approvedTc2418AbortListenerCleanup,
+  tc2379SignOutFence: approvedTc2379SignOutFence,
 };
 
 /** Only a git merge-base ledger may retain the pre-correction toolchain. */
@@ -3034,6 +3068,10 @@ export function validateLedger(value: Ledger, historicalBase = false): void {
   if (value.tc2418AbortListenerCleanup !== undefined &&
       (!value.tc2276TechnicalLimits || JSON.stringify(value.tc2418AbortListenerCleanup) !== JSON.stringify(approvedTc2418AbortListenerCleanup))) {
     throw new Error("Only Naomi's exact canonical TC-2418 abort-listener cleanup ratchet is approved.");
+  }
+  if (value.tc2379SignOutFence !== undefined &&
+      (!value.tc2418AbortListenerCleanup || JSON.stringify(value.tc2379SignOutFence) !== JSON.stringify(approvedTc2379SignOutFence))) {
+    throw new Error("Only the exact canonical TC-2379 sign-out fence ratchet is approved.");
   }
 }
 
@@ -3411,6 +3449,13 @@ export function validateTc2418AbortListenerCleanupTransition(base?: Tc2418AbortL
   if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2418AbortListenerCleanup) ||
       base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
     throw new Error("The TC-2418 abort-listener cleanup ratchet may be introduced once and cannot change later.");
+  }
+}
+/** The TC-2379 sign-out fence ratchet is introduced once and immutable afterwards. */
+export function validateTc2379SignOutFenceTransition(base?: Tc2379SignOutFence, current?: Tc2379SignOutFence): void {
+  if (current !== undefined && JSON.stringify(current) !== JSON.stringify(approvedTc2379SignOutFence) ||
+      base !== undefined && JSON.stringify(current) !== JSON.stringify(base)) {
+    throw new Error("The TC-2379 sign-out fence ratchet may be introduced once and cannot change later.");
   }
 }
 

@@ -78,6 +78,7 @@ import {
   defaultSignStrategy,
 } from "./strategies";
 import { MemorySessionStorage } from "../storage/MemorySessionStorage";
+import { clearPersistedSessionIfOwn } from "../storage/clearPersistedSessionIfOwn";
 import type { OpenKeyBridgeInput, NodeUserAuthorizationAuthorizeFn } from "./openKeyBridge";
 
 export type OpenKeyAuthorizeInput = OpenKeyBridgeInput;
@@ -2893,12 +2894,13 @@ export class NodeUserAuthorization implements IUserAuthorization {
   }
 
   /**
-   * Clear persisted session data.
+   * Clear persisted session data. With `ownSignature`, a stored session that provably has a different
+   * signature (a newer sign-in for the same address) is left alone.
    */
-  async clearPersistedSession(address?: string): Promise<void> {
+  async clearPersistedSession(address?: string, ownSignature?: string): Promise<void> {
     const targetAddress = address ?? this._address;
     if (targetAddress) {
-      await this.sessionStorage.clear(targetAddress);
+      await clearPersistedSessionIfOwn(this.sessionStorage, targetAddress, ownSignature);
     }
   }
 

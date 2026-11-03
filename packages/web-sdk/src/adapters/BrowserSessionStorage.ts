@@ -8,6 +8,7 @@ import type { PortableDelegation } from "@tinycloud/node-sdk/core";
 const STORAGE_PREFIX = "tinycloud:session:";
 const ACTIVE_ADDRESS_SUFFIX = "active-address";
 const GRANTS_SEGMENT = "runtime-grants:";
+const FENCE_SEGMENT = "signed-out:";
 
 /** A stored entry as a PortableDelegation, or undefined when it lacks the fields a restore needs. */
 function toRuntimeGrant(entry: unknown): PortableDelegation | undefined {
@@ -68,6 +69,23 @@ export class BrowserSessionStorage implements ISessionStorage {
     return this.keyPrefix + ACTIVE_ADDRESS_SUFFIX;
   }
 
+  private fenceKey(address: string): string {
+    return `${this.keyPrefix}${FENCE_SEGMENT}${address.toLowerCase()}`;
+  }
+
+  /**
+   * Fences the session with `signature` stored for `address`, for when removing its record fails: a restore
+   * checks {@link isSignedOut} and refuses it. A successful `clear` lifts the fence, and so does saving a
+   * different session.
+   */
+  markSignedOut(address: string, signature: string): void {
+    this.storage?.setItem(this.fenceKey(address), signature);
+  }
+
+  isSignedOut(address: string, signature: string): boolean {
+    return this.storage?.getItem(this.fenceKey(address)) === signature;
+  }
+
   private clearActiveAddress(address: string): void {
     if (this.storage?.getItem(this.activeAddressKey()) === address.toLowerCase()) {
       this.storage.removeItem(this.activeAddressKey());
@@ -102,6 +120,7 @@ export class BrowserSessionStorage implements ISessionStorage {
     this.storage.setItem(this.key(normalizedAddress), JSON.stringify(data));
     // A new session record has a new key; grants made to the previous key do not carry over.
     this.storage.removeItem(this.grantsKey(normalizedAddress));
+    if (!this.isSignedOut(normalizedAddress, data.signature)) this.storage.removeItem(this.fenceKey(normalizedAddress));
     this.storage.setItem(this.activeAddressKey(), normalizedAddress);
     return Promise.resolve();
   }
@@ -187,6 +206,7 @@ export class BrowserSessionStorage implements ISessionStorage {
     this.storage?.removeItem(this.key(address));
     this.storage?.removeItem(this.grantsKey(address));
     this.clearActiveAddress(address);
+    this.storage?.removeItem(this.fenceKey(address));
     return Promise.resolve();
   }
 
