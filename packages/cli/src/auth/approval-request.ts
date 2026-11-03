@@ -241,6 +241,18 @@ export async function dropRefusedApproval(profile: string, delegation: object): 
   if (entry) await forgetApproval(profile, entry);
 }
 
+/**
+ * Forget every pending request of this profile whose saved session key is `x` (an `auth rotate` that failed: its staged key
+ * exists only there). True when one of them already had an approval result (the owner approved, so a grant is live).
+ */
+export async function dropApprovalsHoldingKey(profile: string, x: unknown): Promise<boolean> {
+  if (typeof x !== "string") return false;
+  const held = (await activePending(profile)).filter((entry) => entry.signingKey?.x === x);
+  if (held.length === 0) return false;
+  await updatePending(profile, (items) => items.filter((item) => item.signingKey?.x !== x));
+  return held.some((entry) => entry.resultRef !== undefined);
+}
+
 /** Whether a pending request of this profile still holds the session key `x` (a first sign-in's key lives only there). */
 export async function approvalHoldsKey(profile: string, x: unknown): Promise<boolean> {
   return (await activePending(profile)).some((entry) => entry.signingKey?.x === x);

@@ -403,6 +403,28 @@ describe("auth rotate: a failure raised INSIDE the approval fetch (before the re
     expect((await readJson<Array<{ requestId: string }>>(otherFile))!.map((entry) => entry.requestId)).toEqual([requestId]);
   });
 
+  test("a permanent refusal on a rotation (NARROWER at the fetch) still prints exactly ONE notice and leaves no entry", async () => {
+    await arrange(3599);
+    await unfetched(await signedDelegation(["tinycloud.kv/list"]));
+    const { thrown, notices } = await withNotices(rotate);
+    expect(thrown).toMatchObject({ code: "OPENKEY_APPROVAL_NARROWER" });
+    expect(await entries()).toEqual([]);
+    expect(notices).toHaveLength(1);
+  });
+
+  test("a rotation that fails BEFORE any approval arrived (no result yet) drops its request but prints no notice", async () => {
+    await arrange(3599);
+    const [staged] = (await entries())!;
+    const { resultRef: _r, resultEnvelope: _e, resultExpiresAt: _x, ...waiting } = staged as Record<string, unknown>;
+    await writeJsonDurable(PENDING(), [waiting]);
+    const { thrown, notices } = await withNotices(() => refreshOpenKeySession("approval", host, {
+      rotation: { jwk: key, did }, openKeyAcquisition: (async () => { throw new Error("network went away"); }) as never,
+    }));
+    expect((thrown as Error).message).toBe("network went away");
+    expect(notices).toEqual([]);
+    expect(await entries()).toEqual([]);
+  });
+
   test("a PLAIN login with the clock behind KEEPS its entry, deletes nothing and prints no notice", async () => {
     await ProfileManager.setKey("approval", key);
     await unfetched(await signedDelegation(undefined, 3599));
