@@ -107,14 +107,14 @@ export async function moveApp(env: MoveEnv, app: string, dryRun: boolean): Promi
       const stranded = map.filter((item) => !present.has(item.to)).map((item) => item.from);
       return stranded.length === 0
         ? stop(empty, "already_moved", `${app} already lives in ${appRoot(app)}. Nothing was changed.`)
-        : stop(base, "already_moved", `${app} already lives in ${appRoot(app)}, but ${stranded.length} records written to the older place after the move are not in it. They were not copied and nothing was changed; ask the owner what to do with them.`, { drift: sample(stranded) });
+        : stop(base, "already_moved", `${app} already lives in ${appRoot(app)}, but ${stranded.length} older records are not in it: they were written to the older place after the move, or deleted from the new folder since. Nothing was copied or changed; never copy them back without telling the owner which of the two it is.`, { drift: sample(stranded) });
     }
   }
   if (!keys.includes(catalogKey("legacy", app))) {
     return stop(empty, "nothing_to_move", `The older layout has no catalog record for ${app}, so by the layout rule it is not an older app. Nothing was written.`);
   }
   if (problems.length > 0) return stop({ ...base, total: keys.length }, "NOT_SWITCHED", "Some older keys cannot be held by the new layout. Nothing was copied.", { problems: sample(problems) });
-  if (map.length > MAX_KEYS) return stop(base, "NOT_SWITCHED", `${app} has ${map.length} records; one move handles at most ${MAX_KEYS}. Nothing was copied and the app stays in the older layout.`);
+  if (map.length > MAX_KEYS) return stop(base, "NOT_SWITCHED", `${app} has ${map.length} records; one move handles at most ${MAX_KEYS}. Nothing was copied this run and the app stays in the older layout; a partial copy left by an earlier run is not in use.`);
   if (dryRun) return stop(base, "dry_run", `Would copy ${base.total} records (${base.catalog} catalog) from xyz.tinycloud.agent-data/ into ${appRoot(app)} and then add ${entryKey}. The older records stay as they are.`);
 
   const expected = new Set(map.map((item) => item.to));

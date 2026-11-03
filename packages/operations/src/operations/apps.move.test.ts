@@ -242,6 +242,7 @@ describe("moving an app: guards found in the security review", () => {
       applications.beforePut = undefined;
       const again = await move(context, false);
       expect(again.output).toMatchObject({ status: "already_moved", drift: [oldKey(9)] });
+      expect(again.output.message).toContain("deleted from the new folder since");
       untouched(kv);
     });
   });
